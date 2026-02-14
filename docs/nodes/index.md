@@ -19,6 +19,7 @@ Notes:
 
 - Nodes are **peripherals**, not gateways. They don’t run the gateway service.
 - Telegram/WhatsApp/etc. messages land on the **gateway**, not on nodes.
+- Troubleshooting runbook: [/nodes/troubleshooting](/nodes/troubleshooting)
 
 ## Pairing + status
 

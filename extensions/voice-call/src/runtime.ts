@@ -30,7 +30,7 @@ type Logger = {
   info: (message: string) => void;
   warn: (message: string) => void;
   error: (message: string) => void;
-  debug: (message: string) => void;
+  debug?: (message: string) => void;
 };
 
 function isLoopbackBind(bind: string | undefined): boolean {

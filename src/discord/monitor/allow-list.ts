@@ -22,6 +22,7 @@ export type DiscordGuildEntryResolved = {
   requireMention?: boolean;
   reactionNotifications?: "off" | "own" | "all" | "allowlist";
   users?: Array<string | number>;
+  roles?: Array<string | number>;
   channels?: Record<
     string,
     {
@@ -30,6 +31,7 @@ export type DiscordGuildEntryResolved = {
       skills?: string[];
       enabled?: boolean;
       users?: Array<string | number>;
+      roles?: Array<string | number>;
       systemPrompt?: string;
       includeThreadStarter?: boolean;
       autoThread?: boolean;
@@ -43,6 +45,7 @@ export type DiscordChannelConfigResolved = {
   skills?: string[];
   enabled?: boolean;
   users?: Array<string | number>;
+  roles?: Array<string | number>;
   systemPrompt?: string;
   includeThreadStarter?: boolean;
   autoThread?: boolean;
@@ -152,6 +155,51 @@ export function resolveDiscordUserAllowed(params: {
     name: params.userName,
     tag: params.userTag,
   });
+}
+
+export function resolveDiscordRoleAllowed(params: {
+  allowList?: Array<string | number>;
+  memberRoleIds: string[];
+}) {
+  // Role allowlists accept role IDs only (string or number). Names are ignored.
+  const allowList = normalizeDiscordAllowList(params.allowList, ["role:"]);
+  if (!allowList) {
+    return true;
+  }
+  if (allowList.allowAll) {
+    return true;
+  }
+  return params.memberRoleIds.some((roleId) => allowList.ids.has(roleId));
+}
+
+export function resolveDiscordMemberAllowed(params: {
+  userAllowList?: Array<string | number>;
+  roleAllowList?: Array<string | number>;
+  memberRoleIds: string[];
+  userId: string;
+  userName?: string;
+  userTag?: string;
+}) {
+  const hasUserRestriction = Array.isArray(params.userAllowList) && params.userAllowList.length > 0;
+  const hasRoleRestriction = Array.isArray(params.roleAllowList) && params.roleAllowList.length > 0;
+  if (!hasUserRestriction && !hasRoleRestriction) {
+    return true;
+  }
+  const userOk = hasUserRestriction
+    ? resolveDiscordUserAllowed({
+        allowList: params.userAllowList,
+        userId: params.userId,
+        userName: params.userName,
+        userTag: params.userTag,
+      })
+    : false;
+  const roleOk = hasRoleRestriction
+    ? resolveDiscordRoleAllowed({
+        allowList: params.roleAllowList,
+        memberRoleIds: params.memberRoleIds,
+      })
+    : false;
+  return userOk || roleOk;
 }
 
 export function resolveDiscordOwnerAllowFrom(params: {
@@ -269,6 +317,7 @@ function resolveDiscordChannelConfigEntry(
     skills: entry.skills,
     enabled: entry.enabled,
     users: entry.users,
+    roles: entry.roles,
     systemPrompt: entry.systemPrompt,
     includeThreadStarter: entry.includeThreadStarter,
     autoThread: entry.autoThread,

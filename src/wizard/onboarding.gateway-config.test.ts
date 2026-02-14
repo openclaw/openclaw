@@ -64,5 +64,62 @@ describe("configureGatewayForOnboarding", () => {
     });
 
     expect(result.settings.gatewayToken).toBe("generated-token");
+    expect(result.nextConfig.gateway?.nodes?.denyCommands).toEqual([
+      "camera.snap",
+      "camera.clip",
+      "screen.record",
+      "calendar.add",
+      "contacts.add",
+      "reminders.add",
+    ]);
+  });
+  it("does not set password to literal 'undefined' when prompt returns undefined", async () => {
+    mocks.randomToken.mockReturnValue("unused");
+
+    // Flow: loopback bind → password auth → tailscale off
+    const selectQueue = ["loopback", "password", "off"];
+    // Port prompt → OK, then password prompt → returns undefined
+    const textQueue = ["18789", undefined];
+    const prompter: WizardPrompter = {
+      intro: vi.fn(async () => {}),
+      outro: vi.fn(async () => {}),
+      note: vi.fn(async () => {}),
+      select: vi.fn(async () => selectQueue.shift() as string),
+      multiselect: vi.fn(async () => []),
+      text: vi.fn(async () => textQueue.shift() as string),
+      confirm: vi.fn(async () => false),
+      progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+    };
+
+    const runtime: RuntimeEnv = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+
+    const result = await configureGatewayForOnboarding({
+      flow: "advanced",
+      baseConfig: {},
+      nextConfig: {},
+      localPort: 18789,
+      quickstartGateway: {
+        hasExisting: false,
+        port: 18789,
+        bind: "loopback",
+        authMode: "password",
+        tailscaleMode: "off",
+        token: undefined,
+        password: undefined,
+        customBindHost: undefined,
+        tailscaleResetOnExit: false,
+      },
+      prompter,
+      runtime,
+    });
+
+    const authConfig = result.nextConfig.gateway?.auth as { mode?: string; password?: string };
+    expect(authConfig?.mode).toBe("password");
+    expect(authConfig?.password).toBe("");
+    expect(authConfig?.password).not.toBe("undefined");
   });
 });

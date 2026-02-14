@@ -22,8 +22,7 @@ import {
 } from "./reply-payloads.js";
 import { resolveReplyToMode } from "./reply-threading.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
-import { incrementCompactionCount } from "./session-updates.js";
-import { persistSessionUsageUpdate } from "./session-usage.js";
+import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { createTypingSignaler } from "./typing-mode.js";
 
 export function createFollowupRunner(params: {
@@ -140,6 +139,7 @@ export function createFollowupRunner(params: {
             return runEmbeddedPiAgent({
               sessionId: queued.run.sessionId,
               sessionKey: queued.run.sessionKey,
+              agentId: queued.run.agentId,
               messageProvider: queued.run.messageProvider,
               agentAccountId: queued.run.agentAccountId,
               messageTo: queued.originatingTo,
@@ -193,19 +193,22 @@ export function createFollowupRunner(params: {
         return;
       }
 
-      if (storePath && sessionKey) {
-        const usage = runResult.meta.agentMeta?.usage;
-        const modelUsed = runResult.meta.agentMeta?.model ?? fallbackModel ?? defaultModel;
-        const contextTokensUsed =
-          agentCfgContextTokens ??
-          lookupContextTokens(modelUsed) ??
-          sessionEntry?.contextTokens ??
-          DEFAULT_CONTEXT_TOKENS;
+      const usage = runResult.meta.agentMeta?.usage;
+      const promptTokens = runResult.meta.agentMeta?.promptTokens;
+      const modelUsed = runResult.meta.agentMeta?.model ?? fallbackModel ?? defaultModel;
+      const contextTokensUsed =
+        agentCfgContextTokens ??
+        lookupContextTokens(modelUsed) ??
+        sessionEntry?.contextTokens ??
+        DEFAULT_CONTEXT_TOKENS;
 
-        await persistSessionUsageUpdate({
+      if (storePath && sessionKey) {
+        await persistRunSessionUsage({
           storePath,
           sessionKey,
           usage,
+          lastCallUsage: runResult.meta.agentMeta?.lastCallUsage,
+          promptTokens,
           modelUsed,
           providerUsed: fallbackProvider,
           contextTokensUsed,
@@ -262,11 +265,13 @@ export function createFollowupRunner(params: {
       }
 
       if (autoCompactionCompleted) {
-        const count = await incrementCompactionCount({
+        const count = await incrementRunCompactionCount({
           sessionEntry,
           sessionStore,
           sessionKey,
           storePath,
+          lastCallUsage: runResult.meta.agentMeta?.lastCallUsage,
+          contextTokensUsed,
         });
         if (queued.run.verboseLevel && queued.run.verboseLevel !== "off") {
           const suffix = typeof count === "number" ? ` (count ${count})` : "";

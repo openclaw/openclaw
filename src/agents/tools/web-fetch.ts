@@ -3,7 +3,9 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { AnyAgentTool } from "./common.js";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
 import { SsrFBlockedError } from "../../infra/net/ssrf.js";
+import { logDebug } from "../../logger.js";
 import { wrapExternalContent, wrapWebContent } from "../../security/external-content.js";
+import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { stringEnum } from "../schema/typebox.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 import {
@@ -120,9 +122,9 @@ function resolveFirecrawlConfig(fetch?: WebFetchConfig): FirecrawlFetchConfig {
 function resolveFirecrawlApiKey(firecrawl?: FirecrawlFetchConfig): string | undefined {
   const fromConfig =
     firecrawl && "apiKey" in firecrawl && typeof firecrawl.apiKey === "string"
-      ? firecrawl.apiKey.trim()
+      ? normalizeSecretInput(firecrawl.apiKey)
       : "";
-  const fromEnv = (process.env.FIRECRAWL_API_KEY ?? "").trim();
+  const fromEnv = normalizeSecretInput(process.env.FIRECRAWL_API_KEY);
   return fromConfig || fromEnv || undefined;
 }
 
@@ -209,6 +211,15 @@ function formatWebFetchErrorDetail(params: {
   }
   const truncated = truncateText(text.trim(), maxChars);
   return truncated.text;
+}
+
+function redactUrlForDebugLog(rawUrl: string): string {
+  try {
+    const parsed = new URL(rawUrl);
+    return parsed.pathname && parsed.pathname !== "/" ? `${parsed.origin}/...` : parsed.origin;
+  } catch {
+    return "[invalid-url]";
+  }
 }
 
 const WEB_FETCH_WRAPPER_WITH_WARNING_OVERHEAD = wrapWebContent("", "web_fetch").length;
@@ -408,7 +419,7 @@ async function runWebFetch(params: {
       timeoutMs: params.timeoutSeconds * 1000,
       init: {
         headers: {
-          Accept: "*/*",
+          Accept: "text/markdown, text/html;q=0.9, */*;q=0.1",
           "User-Agent": params.userAgent,
           "Accept-Language": "en-US,en;q=0.9",
         },
@@ -417,6 +428,14 @@ async function runWebFetch(params: {
     res = result.response;
     finalUrl = result.finalUrl;
     release = result.release;
+
+    // Cloudflare Markdown for Agents — log token budget hint when present
+    const markdownTokens = res.headers.get("x-markdown-tokens");
+    if (markdownTokens) {
+      logDebug(
+        `[web-fetch] x-markdown-tokens: ${markdownTokens} (${redactUrlForDebugLog(finalUrl)})`,
+      );
+    }
   } catch (error) {
     if (error instanceof SsrFBlockedError) {
       throw error;
@@ -443,6 +462,11 @@ async function runWebFetch(params: {
         title: wrappedTitle,
         extractMode: params.extractMode,
         extractor: "firecrawl",
+        externalContent: {
+          untrusted: true,
+          source: "web_fetch",
+          wrapped: true,
+        },
         truncated: wrapped.truncated,
         length: wrapped.wrappedLength,
         rawLength: wrapped.rawLength, // Actual content length, not wrapped
@@ -482,6 +506,11 @@ async function runWebFetch(params: {
           title: wrappedTitle,
           extractMode: params.extractMode,
           extractor: "firecrawl",
+          externalContent: {
+            untrusted: true,
+            source: "web_fetch",
+            wrapped: true,
+          },
           truncated: wrapped.truncated,
           length: wrapped.wrappedLength,
           rawLength: wrapped.rawLength, // Actual content length, not wrapped
@@ -511,7 +540,13 @@ async function runWebFetch(params: {
     let title: string | undefined;
     let extractor = "raw";
     let text = body;
-    if (contentType.includes("text/html")) {
+    if (contentType.includes("text/markdown")) {
+      // Cloudflare Markdown for Agents: server returned pre-rendered markdown
+      extractor = "cf-markdown";
+      if (params.extractMode === "text") {
+        text = markdownToText(body);
+      }
+    } else if (contentType.includes("text/html")) {
       if (params.readabilityEnabled) {
         const readable = await extractReadableContent({
           html: body,
@@ -559,6 +594,11 @@ async function runWebFetch(params: {
       title: wrappedTitle,
       extractMode: params.extractMode,
       extractor,
+      externalContent: {
+        untrusted: true,
+        source: "web_fetch",
+        wrapped: true,
+      },
       truncated: wrapped.truncated,
       length: wrapped.wrappedLength,
       rawLength: wrapped.rawLength, // Actual content length, not wrapped

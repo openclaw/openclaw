@@ -4,6 +4,7 @@ import type { ModelDefinitionConfig } from "../../config/types.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { normalizeModelCompat } from "../model-compat.js";
+import { resolveForwardCompatModel } from "../model-forward-compat.js";
 import { normalizeProviderId } from "../model-selection.js";
 import {
   discoverAuthStorage,
@@ -84,6 +85,12 @@ export function resolveModel(
         authStorage,
         modelRegistry,
       };
+    }
+    // Forward-compat fallbacks must be checked BEFORE the generic providerCfg fallback.
+    // Otherwise, configured providers can default to a generic API and break specific transports.
+    const forwardCompat = resolveForwardCompatModel(provider, modelId, modelRegistry);
+    if (forwardCompat) {
+      return { model: forwardCompat, authStorage, modelRegistry };
     }
     const providerCfg = providers[provider];
     if (providerCfg || modelId.startsWith("mock-")) {

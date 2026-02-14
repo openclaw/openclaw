@@ -1,6 +1,8 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import crypto from "node:crypto";
+import { stripMarkdown } from "openclaw/plugin-sdk";
 import { resolveBlueBubblesAccount } from "./accounts.js";
+import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
 import {
   extractHandleFromChatGuid,
   normalizeBlueBubblesHandle,
@@ -332,6 +334,7 @@ async function createNewChatWithMessage(params: {
   const payload = {
     addresses: [params.address],
     message: params.message,
+    tempGuid: `temp-${crypto.randomUUID()}`,
   };
   const res = await blueBubblesFetchWithTimeout(
     url,
@@ -377,6 +380,11 @@ export async function sendMessageBlueBubbles(
   if (!trimmedText.trim()) {
     throw new Error("BlueBubbles send requires text");
   }
+  // Strip markdown early and validate - ensures messages like "***" or "---" don't become empty
+  const strippedText = stripMarkdown(trimmedText);
+  if (!strippedText.trim()) {
+    throw new Error("BlueBubbles send requires text (message was empty after markdown removal)");
+  }
 
   const account = resolveBlueBubblesAccount({
     cfg: opts.cfg ?? {},
@@ -390,6 +398,7 @@ export async function sendMessageBlueBubbles(
   if (!password) {
     throw new Error("BlueBubbles password is required");
   }
+  const privateApiStatus = getCachedBlueBubblesPrivateApiStatus(account.accountId);
 
   const target = resolveSendTarget(to);
   const chatGuid = await resolveChatGuidForTarget({
@@ -406,7 +415,7 @@ export async function sendMessageBlueBubbles(
         baseUrl,
         password,
         address: target.address,
-        message: trimmedText,
+        message: strippedText,
         timeoutMs: opts.timeoutMs,
       });
     }
@@ -415,18 +424,26 @@ export async function sendMessageBlueBubbles(
     );
   }
   const effectId = resolveEffectId(opts.effectId);
-  const needsPrivateApi = Boolean(opts.replyToMessageGuid || effectId);
+  const wantsReplyThread = Boolean(opts.replyToMessageGuid?.trim());
+  const wantsEffect = Boolean(effectId);
+  const needsPrivateApi = wantsReplyThread || wantsEffect;
+  const canUsePrivateApi = needsPrivateApi && privateApiStatus !== false;
+  if (wantsEffect && privateApiStatus === false) {
+    throw new Error(
+      "BlueBubbles send failed: reply/effect requires Private API, but it is disabled on the BlueBubbles server.",
+    );
+  }
   const payload: Record<string, unknown> = {
     chatGuid,
     tempGuid: crypto.randomUUID(),
-    message: trimmedText,
+    message: strippedText,
   };
-  if (needsPrivateApi) {
+  if (canUsePrivateApi) {
     payload.method = "private-api";
   }
 
   // Add reply threading support
-  if (opts.replyToMessageGuid) {
+  if (wantsReplyThread && canUsePrivateApi) {
     payload.selectedMessageGuid = opts.replyToMessageGuid;
     payload.partIndex = typeof opts.replyToPartIndex === "number" ? opts.replyToPartIndex : 0;
   }

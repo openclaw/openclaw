@@ -8,6 +8,7 @@ import {
   type ExecApprovalsAgent,
   type ExecApprovalsFile,
 } from "../infra/exec-approvals.js";
+import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { renderTable } from "../terminal/table.js";
@@ -30,23 +31,6 @@ type ExecApprovalsCliOpts = NodesRpcOpts & {
   stdin?: boolean;
   agent?: string;
 };
-
-function formatAge(msAgo: number) {
-  const s = Math.max(0, Math.floor(msAgo / 1000));
-  if (s < 60) {
-    return `${s}s`;
-  }
-  const m = Math.floor(s / 60);
-  if (m < 60) {
-    return `${m}m`;
-  }
-  const h = Math.floor(m / 60);
-  if (h < 24) {
-    return `${h}h`;
-  }
-  const d = Math.floor(h / 24);
-  return `${d}d`;
-}
 
 async function readStdin(): Promise<string> {
   const chunks: Buffer[] = [];
@@ -142,7 +126,7 @@ function renderApprovalsSnapshot(snapshot: ExecApprovalsSnapshot, targetLabel: s
         Target: targetLabel,
         Agent: agentId,
         Pattern: pattern,
-        LastUsed: lastUsedAt ? `${formatAge(Math.max(0, now - lastUsedAt))} ago` : muted("unknown"),
+        LastUsed: lastUsedAt ? formatTimeAgo(Math.max(0, now - lastUsedAt)) : muted("unknown"),
       });
     }
   }

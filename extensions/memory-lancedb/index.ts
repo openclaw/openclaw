@@ -6,12 +6,11 @@
  * Provides seamless auto-recall and auto-capture via lifecycle hooks.
  */
 
+import type * as LanceDB from "@lancedb/lancedb";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import * as lancedb from "@lancedb/lancedb";
 import { Type } from "@sinclair/typebox";
 import { randomUUID } from "node:crypto";
 import OpenAI from "openai";
-import { stringEnum } from "openclaw/plugin-sdk";
 import {
   MEMORY_CATEGORIES,
   type MemoryCategory,
@@ -22,6 +21,19 @@ import {
 // ============================================================================
 // Types
 // ============================================================================
+
+let lancedbImportPromise: Promise<typeof import("@lancedb/lancedb")> | null = null;
+const loadLanceDB = async (): Promise<typeof import("@lancedb/lancedb")> => {
+  if (!lancedbImportPromise) {
+    lancedbImportPromise = import("@lancedb/lancedb");
+  }
+  try {
+    return await lancedbImportPromise;
+  } catch (err) {
+    // Common on macOS today: upstream package may not ship darwin native bindings.
+    throw new Error(`memory-lancedb: failed to load LanceDB. ${String(err)}`, { cause: err });
+  }
+};
 
 type MemoryEntry = {
   id: string;
@@ -44,8 +56,8 @@ type MemorySearchResult = {
 const TABLE_NAME = "memories";
 
 class MemoryDB {
-  private db: lancedb.Connection | null = null;
-  private table: lancedb.Table | null = null;
+  private db: LanceDB.Connection | null = null;
+  private table: LanceDB.Table | null = null;
   private initPromise: Promise<void> | null = null;
 
   constructor(
@@ -66,6 +78,7 @@ class MemoryDB {
   }
 
   private async doInitialize(): Promise<void> {
+    const lancedb = await loadLanceDB();
     this.db = await lancedb.connect(this.dbPath);
     const tables = await this.db.tableNames();
 
@@ -181,7 +194,7 @@ const MEMORY_TRIGGERS = [
   /always|never|important/i,
 ];
 
-function shouldCapture(text: string): boolean {
+export function shouldCapture(text: string): boolean {
   if (text.length < 10 || text.length > 500) {
     return false;
   }
@@ -205,7 +218,7 @@ function shouldCapture(text: string): boolean {
   return MEMORY_TRIGGERS.some((r) => r.test(text));
 }
 
-function detectCategory(text: string): MemoryCategory {
+export function detectCategory(text: string): MemoryCategory {
   const lower = text.toLowerCase();
   if (/prefer|radši|like|love|hate|want/i.test(lower)) {
     return "preference";
@@ -303,7 +316,12 @@ const memoryPlugin = {
         parameters: Type.Object({
           text: Type.String({ description: "Information to remember" }),
           importance: Type.Optional(Type.Number({ description: "Importance 0-1 (default: 0.7)" })),
-          category: Type.Optional(stringEnum(MEMORY_CATEGORIES)),
+          category: Type.Optional(
+            Type.Unsafe<MemoryCategory>({
+              type: "string",
+              enum: [...MEMORY_CATEGORIES],
+            }),
+          ),
         }),
         async execute(_toolCallId, params) {
           const {

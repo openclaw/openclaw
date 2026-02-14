@@ -4,6 +4,7 @@ import type { CliDeps } from "../cli/deps.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import type { RuntimeEnv } from "../runtime.js";
+import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import type { ControlUiRootState } from "./control-ui.js";
@@ -37,6 +38,8 @@ export async function createGatewayRuntimeState(params: {
   openResponsesEnabled: boolean;
   openResponsesConfig?: import("../config/types.gateway.js").GatewayHttpResponsesConfig;
   resolvedAuth: ResolvedGatewayAuth;
+  /** Optional rate limiter for auth brute-force protection. */
+  rateLimiter?: AuthRateLimiter;
   gatewayTls?: GatewayTlsRuntime;
   hooksConfig: () => HooksConfigResolved | null;
   pluginRegistry: PluginRegistry;
@@ -107,6 +110,9 @@ export async function createGatewayRuntimeState(params: {
     }
   }
 
+  const clients = new Set<GatewayWsClient>();
+  const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({ clients });
+
   const handleHooksRequest = createGatewayHooksRequestHandler({
     deps: params.deps,
     getHooksConfig: params.hooksConfig,
@@ -126,6 +132,7 @@ export async function createGatewayRuntimeState(params: {
   for (const host of bindHosts) {
     const httpServer = createGatewayHttpServer({
       canvasHost,
+      clients,
       controlUiEnabled: params.controlUiEnabled,
       controlUiBasePath: params.controlUiBasePath,
       controlUiRoot: params.controlUiRoot,
@@ -135,6 +142,7 @@ export async function createGatewayRuntimeState(params: {
       handleHooksRequest,
       handlePluginRequest,
       resolvedAuth: params.resolvedAuth,
+      rateLimiter: params.rateLimiter,
       tlsOptions: params.gatewayTls?.enabled ? params.gatewayTls.tlsOptions : undefined,
     });
     try {
@@ -164,11 +172,16 @@ export async function createGatewayRuntimeState(params: {
     maxPayload: MAX_PAYLOAD_BYTES,
   });
   for (const server of httpServers) {
-    attachGatewayUpgradeHandler({ httpServer: server, wss, canvasHost });
+    attachGatewayUpgradeHandler({
+      httpServer: server,
+      wss,
+      canvasHost,
+      clients,
+      resolvedAuth: params.resolvedAuth,
+      rateLimiter: params.rateLimiter,
+    });
   }
 
-  const clients = new Set<GatewayWsClient>();
-  const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({ clients });
   const agentRunSeq = new Map<string, number>();
   const dedupe = new Map<string, DedupeEntry>();
   const chatRunState = createChatRunState();

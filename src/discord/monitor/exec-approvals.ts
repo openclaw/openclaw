@@ -5,6 +5,7 @@ import type { DiscordExecApprovalConfig } from "../../config/types.discord.js";
 import type { EventFrame } from "../../gateway/protocol/index.js";
 import type { ExecApprovalDecision } from "../../infra/exec-approvals.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { buildGatewayConnectionDetails } from "../../gateway/call.js";
 import { GatewayClient } from "../../gateway/client.js";
 import { logDebug, logError } from "../../logger.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
@@ -266,8 +267,13 @@ export class DiscordExecApprovalHandler {
 
     logDebug("discord exec approvals: starting handler");
 
+    const { url: gatewayUrl } = buildGatewayConnectionDetails({
+      config: this.opts.cfg,
+      url: this.opts.gatewayUrl,
+    });
+
     this.gatewayClient = new GatewayClient({
-      url: this.opts.gatewayUrl ?? "ws://127.0.0.1:18789",
+      url: gatewayUrl,
       clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
       clientDisplayName: "Discord Exec Approvals",
       mode: GATEWAY_CLIENT_MODES.BACKEND,
@@ -432,7 +438,7 @@ export class DiscordExecApprovalHandler {
 
     logDebug(`discord exec approvals: resolved ${resolved.id} with ${resolved.decision}`);
 
-    await this.updateMessage(
+    await this.finalizeMessage(
       pending.discordChannelId,
       pending.discordMessageId,
       formatResolvedEmbed(request, resolved.decision, resolved.resolvedBy),
@@ -456,11 +462,37 @@ export class DiscordExecApprovalHandler {
 
     logDebug(`discord exec approvals: timeout for ${approvalId}`);
 
-    await this.updateMessage(
+    await this.finalizeMessage(
       pending.discordChannelId,
       pending.discordMessageId,
       formatExpiredEmbed(request),
     );
+  }
+
+  private async finalizeMessage(
+    channelId: string,
+    messageId: string,
+    embed: ReturnType<typeof formatExpiredEmbed>,
+  ): Promise<void> {
+    if (!this.opts.config.cleanupAfterResolve) {
+      await this.updateMessage(channelId, messageId, embed);
+      return;
+    }
+
+    try {
+      const { rest, request: discordRequest } = createDiscordClient(
+        { token: this.opts.token, accountId: this.opts.accountId },
+        this.opts.cfg,
+      );
+
+      await discordRequest(
+        () => rest.delete(Routes.channelMessage(channelId, messageId)) as Promise<void>,
+        "delete-approval",
+      );
+    } catch (err) {
+      logError(`discord exec approvals: failed to delete message: ${String(err)}`);
+      await this.updateMessage(channelId, messageId, embed);
+    }
   }
 
   private async updateMessage(

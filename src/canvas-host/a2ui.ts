@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { SafeOpenError, openFileWithinRoot, type SafeOpenResult } from "../infra/fs-safe.js";
 import { detectMime } from "../media/mime.js";
 
 export const A2UI_PATH = "/__openclaw__/a2ui";
@@ -62,41 +63,42 @@ function normalizeUrlPath(rawPath: string): string {
   return normalized.startsWith("/") ? normalized : `/${normalized}`;
 }
 
-async function resolveA2uiFilePath(rootReal: string, urlPath: string) {
+async function resolveA2uiFile(rootReal: string, urlPath: string): Promise<SafeOpenResult | null> {
   const normalized = normalizeUrlPath(urlPath);
   const rel = normalized.replace(/^\/+/, "");
   if (rel.split("/").some((p) => p === "..")) {
     return null;
   }
 
-  let candidate = path.join(rootReal, rel);
+  const tryOpen = async (relative: string) => {
+    try {
+      return await openFileWithinRoot({ rootDir: rootReal, relativePath: relative });
+    } catch (err) {
+      if (err instanceof SafeOpenError) {
+        return null;
+      }
+      throw err;
+    }
+  };
+
   if (normalized.endsWith("/")) {
-    candidate = path.join(candidate, "index.html");
+    return await tryOpen(path.posix.join(rel, "index.html"));
   }
 
+  const candidate = path.join(rootReal, rel);
   try {
-    const st = await fs.stat(candidate);
+    const st = await fs.lstat(candidate);
+    if (st.isSymbolicLink()) {
+      return null;
+    }
     if (st.isDirectory()) {
-      candidate = path.join(candidate, "index.html");
+      return await tryOpen(path.posix.join(rel, "index.html"));
     }
   } catch {
     // ignore
   }
 
-  const rootPrefix = rootReal.endsWith(path.sep) ? rootReal : `${rootReal}${path.sep}`;
-  try {
-    const lstat = await fs.lstat(candidate);
-    if (lstat.isSymbolicLink()) {
-      return null;
-    }
-    const real = await fs.realpath(candidate);
-    if (!real.startsWith(rootPrefix)) {
-      return null;
-    }
-    return real;
-  } catch {
-    return null;
-  }
+  return await tryOpen(rel);
 }
 
 export function injectCanvasLiveReload(html: string): string {
@@ -190,29 +192,39 @@ export async function handleA2uiHttpRequest(
   }
 
   const rel = url.pathname.slice(basePath.length);
-  const filePath = await resolveA2uiFilePath(a2uiRootReal, rel || "/");
-  if (!filePath) {
+  const result = await resolveA2uiFile(a2uiRootReal, rel || "/");
+  if (!result) {
     res.statusCode = 404;
     res.setHeader("Content-Type", "text/plain; charset=utf-8");
     res.end("not found");
     return true;
   }
 
-  const lower = filePath.toLowerCase();
-  const mime =
-    lower.endsWith(".html") || lower.endsWith(".htm")
-      ? "text/html"
-      : ((await detectMime({ filePath })) ?? "application/octet-stream");
-  res.setHeader("Cache-Control", "no-store");
+  try {
+    const lower = result.realPath.toLowerCase();
+    const mime =
+      lower.endsWith(".html") || lower.endsWith(".htm")
+        ? "text/html"
+        : ((await detectMime({ filePath: result.realPath })) ?? "application/octet-stream");
+    res.setHeader("Cache-Control", "no-store");
 
-  if (mime === "text/html") {
-    const html = await fs.readFile(filePath, "utf8");
-    res.setHeader("Content-Type", "text/html; charset=utf-8");
-    res.end(injectCanvasLiveReload(html));
+    if (req.method === "HEAD") {
+      res.setHeader("Content-Type", mime === "text/html" ? "text/html; charset=utf-8" : mime);
+      res.end();
+      return true;
+    }
+
+    if (mime === "text/html") {
+      const buf = await result.handle.readFile({ encoding: "utf8" });
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.end(injectCanvasLiveReload(buf));
+      return true;
+    }
+
+    res.setHeader("Content-Type", mime);
+    res.end(await result.handle.readFile());
     return true;
+  } finally {
+    await result.handle.close().catch(() => {});
   }
-
-  res.setHeader("Content-Type", mime);
-  res.end(await fs.readFile(filePath));
-  return true;
 }

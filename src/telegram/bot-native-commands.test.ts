@@ -67,7 +67,7 @@ describe("registerTelegramNativeCommands", () => {
     });
   });
 
-  it("keeps skill commands unscoped without a matching binding", () => {
+  it("scopes skill commands to default agent without a matching binding (#15599)", () => {
     const cfg: OpenClawConfig = {
       agents: {
         list: [{ id: "main", default: true }, { id: "butler" }],
@@ -76,6 +76,46 @@ describe("registerTelegramNativeCommands", () => {
 
     registerTelegramNativeCommands(buildParams(cfg, "bot-a"));
 
-    expect(listSkillCommandsForAgents).toHaveBeenCalledWith({ cfg });
+    expect(listSkillCommandsForAgents).toHaveBeenCalledWith({
+      cfg,
+      agentIds: ["main"],
+    });
+  });
+
+  it("truncates Telegram command registration to 100 commands", () => {
+    const cfg: OpenClawConfig = {
+      commands: { native: false },
+    };
+    const customCommands = Array.from({ length: 120 }, (_, index) => ({
+      command: `cmd_${index}`,
+      description: `Command ${index}`,
+    }));
+    const setMyCommands = vi.fn().mockResolvedValue(undefined);
+    const runtimeLog = vi.fn();
+
+    registerTelegramNativeCommands({
+      ...buildParams(cfg),
+      bot: {
+        api: {
+          setMyCommands,
+          sendMessage: vi.fn().mockResolvedValue(undefined),
+        },
+        command: vi.fn(),
+      } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
+      runtime: { log: runtimeLog } as RuntimeEnv,
+      telegramCfg: { customCommands } as TelegramAccountConfig,
+      nativeEnabled: false,
+      nativeSkillsEnabled: false,
+    });
+
+    const registeredCommands = setMyCommands.mock.calls[0]?.[0] as Array<{
+      command: string;
+      description: string;
+    }>;
+    expect(registeredCommands).toHaveLength(100);
+    expect(registeredCommands).toEqual(customCommands.slice(0, 100));
+    expect(runtimeLog).toHaveBeenCalledWith(
+      "Telegram limits bots to 100 commands. 120 configured; registering first 100. Use channels.telegram.commands.native: false to disable, or reduce plugin/skill/custom commands.",
+    );
   });
 });

@@ -6,6 +6,7 @@ import {
   type MSTeamsReplyStyle,
   type ReplyPayload,
   SILENT_REPLY_TOKEN,
+  sleep,
 } from "openclaw/plugin-sdk";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import type { StoredConversationReference } from "./conversation-store.js";
@@ -18,6 +19,7 @@ import {
   uploadAndShareSharePoint,
 } from "./graph-upload.js";
 import { extractFilename, extractMessageId, getMimeType, isLocalPath } from "./media-helpers.js";
+import { parseMentions } from "./mentions.js";
 import { getMSTeamsRuntime } from "./runtime.js";
 
 /**
@@ -166,16 +168,6 @@ function clampMs(value: number, maxMs: number): number {
   return Math.min(value, maxMs);
 }
 
-async function sleep(ms: number): Promise<void> {
-  const delay = Math.max(0, ms);
-  if (delay === 0) {
-    return;
-  }
-  await new Promise<void>((resolve) => {
-    setTimeout(resolve, delay);
-  });
-}
-
 function resolveRetryOptions(
   retry: false | MSTeamsSendRetryOptions | undefined,
 ): Required<MSTeamsSendRetryOptions> & { enabled: boolean } {
@@ -278,7 +270,14 @@ async function buildActivity(
   const activity: Record<string, unknown> = { type: "message" };
 
   if (msg.text) {
-    activity.text = msg.text;
+    // Parse mentions from text (format: @[Name](id))
+    const { text: formattedText, entities } = parseMentions(msg.text);
+    activity.text = formattedText;
+
+    // Add mention entities if any mentions were found
+    if (entities.length > 0) {
+      activity.entities = entities;
+    }
   }
 
   if (msg.mediaUrl) {
@@ -359,7 +358,8 @@ async function buildActivity(
 
         // Bot Framework doesn't support "reference" attachment type for sending
         const fileLink = `📎 [${uploaded.name}](${uploaded.shareUrl})`;
-        activity.text = msg.text ? `${msg.text}\n\n${fileLink}` : fileLink;
+        const existingText = typeof activity.text === "string" ? activity.text : undefined;
+        activity.text = existingText ? `${existingText}\n\n${fileLink}` : fileLink;
         return activity;
       }
 

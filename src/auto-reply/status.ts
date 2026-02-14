@@ -13,11 +13,14 @@ import { derivePromptTokens, normalizeUsage, type UsageLike } from "../agents/us
 import {
   resolveMainSessionKey,
   resolveSessionFilePath,
+  resolveSessionFilePathOptions,
   type SessionEntry,
   type SessionScope,
 } from "../config/sessions.js";
+import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { resolveCommitHash } from "../infra/git-commit.js";
 import { listPluginCommands } from "../plugins/commands.js";
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import {
   getTtsMaxLength,
   getTtsProvider,
@@ -55,9 +58,11 @@ type QueueStatus = {
 type StatusArgs = {
   config?: OpenClawConfig;
   agent: AgentConfig;
+  agentId?: string;
   sessionEntry?: SessionEntry;
   sessionKey?: string;
   sessionScope?: SessionScope;
+  sessionStorePath?: string;
   groupActivation?: "mention" | "always";
   resolvedThink?: ThinkLevel;
   resolvedVerbose?: VerboseLevel;
@@ -134,25 +139,6 @@ export const formatContextUsageShort = (
   contextTokens: number | null | undefined,
 ) => `Context ${formatTokens(total, contextTokens ?? null)}`;
 
-const formatAge = (ms?: number | null) => {
-  if (!ms || ms < 0) {
-    return "unknown";
-  }
-  const minutes = Math.round(ms / 60_000);
-  if (minutes < 1) {
-    return "just now";
-  }
-  if (minutes < 60) {
-    return `${minutes}m ago`;
-  }
-  const hours = Math.round(minutes / 60);
-  if (hours < 48) {
-    return `${hours}h ago`;
-  }
-  const days = Math.round(hours / 24);
-  return `${days}d ago`;
-};
-
 const formatQueueDetails = (queue?: QueueStatus) => {
   if (!queue) {
     return "";
@@ -183,6 +169,9 @@ const formatQueueDetails = (queue?: QueueStatus) => {
 const readUsageFromSessionLog = (
   sessionId?: string,
   sessionEntry?: SessionEntry,
+  agentId?: string,
+  sessionKey?: string,
+  storePath?: string,
 ):
   | {
       input: number;
@@ -196,7 +185,18 @@ const readUsageFromSessionLog = (
   if (!sessionId) {
     return undefined;
   }
-  const logPath = resolveSessionFilePath(sessionId, sessionEntry);
+  let logPath: string;
+  try {
+    const resolvedAgentId =
+      agentId ?? (sessionKey ? resolveAgentIdFromSessionKey(sessionKey) : undefined);
+    logPath = resolveSessionFilePath(
+      sessionId,
+      sessionEntry,
+      resolveSessionFilePathOptions({ agentId: resolvedAgentId, storePath }),
+    );
+  } catch {
+    return undefined;
+  }
   if (!fs.existsSync(logPath)) {
     return undefined;
   }
@@ -351,7 +351,13 @@ export function buildStatusMessage(args: StatusArgs): string {
   // Prefer prompt-size tokens from the session transcript when it looks larger
   // (cached prompt tokens are often missing from agent meta/store).
   if (args.includeTranscriptUsage) {
-    const logUsage = readUsageFromSessionLog(entry?.sessionId, entry);
+    const logUsage = readUsageFromSessionLog(
+      entry?.sessionId,
+      entry,
+      args.agentId,
+      args.sessionKey,
+      args.sessionStorePath,
+    );
     if (logUsage) {
       const candidate = logUsage.promptTokens || logUsage.total;
       if (!totalTokens || totalTokens === 0 || candidate > totalTokens) {
@@ -386,7 +392,7 @@ export function buildStatusMessage(args: StatusArgs): string {
   const updatedAt = entry?.updatedAt;
   const sessionLine = [
     `Session: ${args.sessionKey ?? "unknown"}`,
-    typeof updatedAt === "number" ? `updated ${formatAge(now - updatedAt)}` : "no activity",
+    typeof updatedAt === "number" ? `updated ${formatTimeAgo(now - updatedAt)}` : "no activity",
   ]
     .filter(Boolean)
     .join(" • ");

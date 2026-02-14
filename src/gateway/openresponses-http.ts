@@ -11,10 +11,12 @@ import { randomUUID } from "node:crypto";
 import type { ClientToolDefinition } from "../agents/pi-embedded-runner/run/params.js";
 import type { ImageContent } from "../commands/agent/types.js";
 import type { GatewayHttpResponsesConfig } from "../config/types.gateway.js";
+import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import { buildHistoryContextFromEntries, type HistoryEntry } from "../auto-reply/reply/history.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommand } from "../commands/agent.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
+import { logWarn } from "../logger.js";
 import {
   DEFAULT_INPUT_FILE_MAX_BYTES,
   DEFAULT_INPUT_FILE_MAX_CHARS,
@@ -37,9 +39,9 @@ import { defaultRuntime } from "../runtime.js";
 import { authorizeGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
 import {
   readJsonBodyOrError,
+  sendGatewayAuthFailure,
   sendJson,
   sendMethodNotAllowed,
-  sendUnauthorized,
   setSseHeaders,
   writeDone,
 } from "./http-common.js";
@@ -60,9 +62,11 @@ type OpenResponsesHttpOptions = {
   maxBodyBytes?: number;
   config?: GatewayHttpResponsesConfig;
   trustedProxies?: string[];
+  rateLimiter?: AuthRateLimiter;
 };
 
 const DEFAULT_BODY_BYTES = 20 * 1024 * 1024;
+const DEFAULT_MAX_URL_PARTS = 8;
 
 function writeSseEvent(res: ServerResponse, event: StreamingEvent) {
   res.write(`event: ${event.type}\n`);
@@ -89,9 +93,18 @@ function extractTextContent(content: string | ContentPart[]): string {
 
 type ResolvedResponsesLimits = {
   maxBodyBytes: number;
+  maxUrlParts: number;
   files: InputFileLimits;
   images: InputImageLimits;
 };
+
+function normalizeHostnameAllowlist(values: string[] | undefined): string[] | undefined {
+  if (!values || values.length === 0) {
+    return undefined;
+  }
+  const normalized = values.map((value) => value.trim()).filter((value) => value.length > 0);
+  return normalized.length > 0 ? normalized : undefined;
+}
 
 function resolveResponsesLimits(
   config: GatewayHttpResponsesConfig | undefined,
@@ -100,8 +113,13 @@ function resolveResponsesLimits(
   const images = config?.images;
   return {
     maxBodyBytes: config?.maxBodyBytes ?? DEFAULT_BODY_BYTES,
+    maxUrlParts:
+      typeof config?.maxUrlParts === "number"
+        ? Math.max(0, Math.floor(config.maxUrlParts))
+        : DEFAULT_MAX_URL_PARTS,
     files: {
       allowUrl: files?.allowUrl ?? true,
+      urlAllowlist: normalizeHostnameAllowlist(files?.urlAllowlist),
       allowedMimes: normalizeMimeList(files?.allowedMimes, DEFAULT_INPUT_FILE_MIMES),
       maxBytes: files?.maxBytes ?? DEFAULT_INPUT_FILE_MAX_BYTES,
       maxChars: files?.maxChars ?? DEFAULT_INPUT_FILE_MAX_CHARS,
@@ -115,6 +133,7 @@ function resolveResponsesLimits(
     },
     images: {
       allowUrl: images?.allowUrl ?? true,
+      urlAllowlist: normalizeHostnameAllowlist(images?.urlAllowlist),
       allowedMimes: normalizeMimeList(images?.allowedMimes, DEFAULT_INPUT_IMAGE_MIMES),
       maxBytes: images?.maxBytes ?? DEFAULT_INPUT_IMAGE_MAX_BYTES,
       maxRedirects: images?.maxRedirects ?? DEFAULT_INPUT_MAX_REDIRECTS,
@@ -348,9 +367,10 @@ export async function handleOpenResponsesHttpRequest(
     connectAuth: { token, password: token },
     req,
     trustedProxies: opts.trustedProxies,
+    rateLimiter: opts.rateLimiter,
   });
   if (!authResult.ok) {
-    sendUnauthorized(res);
+    sendGatewayAuthFailure(res, authResult);
     return true;
   }
 
@@ -384,6 +404,15 @@ export async function handleOpenResponsesHttpRequest(
   // Extract images + files from input (Phase 2)
   let images: ImageContent[] = [];
   let fileContexts: string[] = [];
+  let urlParts = 0;
+  const markUrlPart = () => {
+    urlParts += 1;
+    if (urlParts > limits.maxUrlParts) {
+      throw new Error(
+        `Too many URL-based input sources: ${urlParts} (limit: ${limits.maxUrlParts})`,
+      );
+    }
+  };
   try {
     if (Array.isArray(payload.input)) {
       for (const item of payload.input) {
@@ -400,6 +429,9 @@ export async function handleOpenResponsesHttpRequest(
                 source.type === "base64" || source.type === "url" ? source.type : undefined;
               if (!sourceType) {
                 throw new Error("input_image must have 'source.url' or 'source.data'");
+              }
+              if (sourceType === "url") {
+                markUrlPart();
               }
               const imageSource: InputImageSource = {
                 type: sourceType,
@@ -424,6 +456,9 @@ export async function handleOpenResponsesHttpRequest(
                 source.type === "base64" || source.type === "url" ? source.type : undefined;
               if (!sourceType) {
                 throw new Error("input_file must have 'source.url' or 'source.data'");
+              }
+              if (sourceType === "url") {
+                markUrlPart();
               }
               const file = await extractFileContentFromSource({
                 source: {
@@ -451,8 +486,9 @@ export async function handleOpenResponsesHttpRequest(
       }
     }
   } catch (err) {
+    logWarn(`openresponses: request parsing failed: ${String(err)}`);
     sendJson(res, 400, {
-      error: { message: String(err), type: "invalid_request_error" },
+      error: { message: "invalid request", type: "invalid_request_error" },
     });
     return true;
   }
@@ -468,8 +504,9 @@ export async function handleOpenResponsesHttpRequest(
     resolvedClientTools = toolChoiceResult.tools;
     toolChoicePrompt = toolChoiceResult.extraSystemPrompt;
   } catch (err) {
+    logWarn(`openresponses: tool configuration failed: ${String(err)}`);
     sendJson(res, 400, {
-      error: { message: String(err), type: "invalid_request_error" },
+      error: { message: "invalid tool configuration", type: "invalid_request_error" },
     });
     return true;
   }
@@ -583,12 +620,13 @@ export async function handleOpenResponsesHttpRequest(
 
       sendJson(res, 200, response);
     } catch (err) {
+      logWarn(`openresponses: non-stream response failed: ${String(err)}`);
       const response = createResponseResource({
         id: responseId,
         model,
         status: "failed",
         output: [],
-        error: { code: "api_error", message: String(err) },
+        error: { code: "api_error", message: "internal error" },
       });
       sendJson(res, 500, response);
     }
@@ -878,6 +916,7 @@ export async function handleOpenResponsesHttpRequest(
         });
       }
     } catch (err) {
+      logWarn(`openresponses: streaming response failed: ${String(err)}`);
       if (closed) {
         return;
       }
@@ -888,7 +927,7 @@ export async function handleOpenResponsesHttpRequest(
         model,
         status: "failed",
         output: [],
-        error: { code: "api_error", message: String(err) },
+        error: { code: "api_error", message: "internal error" },
         usage: finalUsage,
       });
 

@@ -1,5 +1,5 @@
-import type { APIMessage } from "discord-api-types/v10";
-import { Routes } from "discord-api-types/v10";
+import type { APIChannel, APIMessage } from "discord-api-types/v10";
+import { ChannelType, Routes } from "discord-api-types/v10";
 import type {
   DiscordMessageEdit,
   DiscordMessageQuery,
@@ -105,7 +105,35 @@ export async function createThreadDiscord(
   if (payload.autoArchiveMinutes) {
     body.auto_archive_duration = payload.autoArchiveMinutes;
   }
-  const route = Routes.threads(channelId, payload.messageId);
+  if (!payload.messageId && payload.type !== undefined) {
+    body.type = payload.type;
+  }
+  let channelType: ChannelType | undefined;
+  if (!payload.messageId) {
+    // Only detect channel kind for route-less thread creation.
+    // If this lookup fails, keep prior behavior and let Discord validate.
+    try {
+      const channel = (await rest.get(Routes.channel(channelId))) as APIChannel | null | undefined;
+      channelType = channel?.type;
+    } catch {
+      channelType = undefined;
+    }
+  }
+  const isForumLike =
+    channelType === ChannelType.GuildForum || channelType === ChannelType.GuildMedia;
+  if (isForumLike) {
+    const starterContent = payload.content?.trim() ? payload.content : payload.name;
+    body.message = { content: starterContent };
+  }
+  // When creating a standalone thread (no messageId) in a non-forum channel,
+  // default to public thread (type 11). Discord defaults to private (type 12)
+  // which is unexpected for most users. (#14147)
+  if (!payload.messageId && !isForumLike && body.type === undefined) {
+    body.type = ChannelType.PublicThread;
+  }
+  const route = payload.messageId
+    ? Routes.threads(channelId, payload.messageId)
+    : Routes.threads(channelId);
   return await rest.post(route, { body });
 }
 

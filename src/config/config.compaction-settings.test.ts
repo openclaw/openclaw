@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { loadConfig } from "./config.js";
 import { withTempHome } from "./test-helpers.js";
 
 describe("config compaction settings", () => {
@@ -33,8 +34,6 @@ describe("config compaction settings", () => {
         "utf-8",
       );
 
-      vi.resetModules();
-      const { loadConfig } = await import("./config.js");
       const cfg = loadConfig();
 
       expect(cfg.agents?.defaults?.compaction?.reserveTokensFloor).toBe(12_345);
@@ -68,8 +67,6 @@ describe("config compaction settings", () => {
         "utf-8",
       );
 
-      vi.resetModules();
-      const { loadConfig } = await import("./config.js");
       const cfg = loadConfig();
 
       expect(cfg.agents?.defaults?.compaction?.mode).toBe("safeguard");

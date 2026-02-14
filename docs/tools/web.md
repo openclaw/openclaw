@@ -71,7 +71,7 @@ Example: switch to Perplexity Sonar (direct API):
 
 ## Getting a Brave API key
 
-1. Create a Brave Search API account at https://brave.com/search/api/
+1. Create a Brave Search API account at [https://brave.com/search/api/](https://brave.com/search/api/)
 2. In the dashboard, choose the **Data for Search** plan (not “Data for AI”) and generate an API key.
 3. Run `openclaw configure --section web` to store the key in config (recommended), or set `BRAVE_API_KEY` in your environment.
 
@@ -95,7 +95,7 @@ crypto/prepaid).
 
 ### Getting an OpenRouter API key
 
-1. Create an account at https://openrouter.ai/
+1. Create an account at [https://openrouter.ai/](https://openrouter.ai/)
 2. Add credits (supports crypto, prepaid, or credit card)
 3. Generate an API key in your account settings
 
@@ -175,7 +175,9 @@ Search the web using your configured provider.
 - `country` (optional): 2-letter country code for region-specific results (e.g., "DE", "US", "ALL"). If omitted, Brave chooses its default region.
 - `search_lang` (optional): ISO language code for search results (e.g., "de", "en", "fr")
 - `ui_lang` (optional): ISO language code for UI elements
-- `freshness` (optional, Brave only): filter by discovery time (`pd`, `pw`, `pm`, `py`, or `YYYY-MM-DDtoYYYY-MM-DD`)
+- `freshness` (optional): filter by discovery time
+  - Brave: `pd`, `pw`, `pm`, `py`, or `YYYY-MM-DDtoYYYY-MM-DD`
+  - Perplexity: `pd`, `pw`, `pm`, `py`
 
 **Examples:**
 
@@ -207,12 +209,12 @@ await web_search({
 
 Fetch a URL and extract readable content.
 
-### Requirements
+### web_fetch requirements
 
 - `tools.web.fetch.enabled` must not be `false` (default: enabled)
 - Optional Firecrawl fallback: set `tools.web.fetch.firecrawl.apiKey` or `FIRECRAWL_API_KEY`.
 
-### Config
+### web_fetch config
 
 ```json5
 {
@@ -241,7 +243,7 @@ Fetch a URL and extract readable content.
 }
 ```
 
-### Tool parameters
+### web_fetch tool parameters
 
 - `url` (required, http/https only)
 - `extractMode` (`markdown` | `text`)

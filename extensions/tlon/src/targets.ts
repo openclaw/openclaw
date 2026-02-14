@@ -1,5 +1,5 @@
 export type TlonTarget =
-  | { kind: "dm"; ship: string }
+  | { kind: "direct"; ship: string }
   | { kind: "group"; nest: string; hostShip: string; channelName: string };
 
 const SHIP_RE = /^~?[a-z-]+$/i;
@@ -32,7 +32,7 @@ export function parseTlonTarget(raw?: string | null): TlonTarget | null {
 
   const dmPrefix = withoutPrefix.match(/^dm[/:](.+)$/i);
   if (dmPrefix) {
-    return { kind: "dm", ship: normalizeShip(dmPrefix[1]) };
+    return { kind: "direct", ship: normalizeShip(dmPrefix[1]) };
   }
 
   const groupPrefix = withoutPrefix.match(/^(group|room)[/:](.+)$/i);
@@ -78,7 +78,7 @@ export function parseTlonTarget(raw?: string | null): TlonTarget | null {
   }
 
   if (SHIP_RE.test(withoutPrefix)) {
-    return { kind: "dm", ship: normalizeShip(withoutPrefix) };
+    return { kind: "direct", ship: normalizeShip(withoutPrefix) };
   }
 
   return null;

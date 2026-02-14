@@ -12,6 +12,8 @@ import { applyAuthChoiceMiniMax } from "./auth-choice.apply.minimax.js";
 import { applyAuthChoiceOAuth } from "./auth-choice.apply.oauth.js";
 import { applyAuthChoiceOpenAI } from "./auth-choice.apply.openai.js";
 import { applyAuthChoiceQwenPortal } from "./auth-choice.apply.qwen-portal.js";
+import { applyAuthChoiceVllm } from "./auth-choice.apply.vllm.js";
+import { applyAuthChoiceXAI } from "./auth-choice.apply.xai.js";
 
 export type ApplyAuthChoiceParams = {
   authChoice: AuthChoice;
@@ -27,6 +29,7 @@ export type ApplyAuthChoiceParams = {
     cloudflareAiGatewayAccountId?: string;
     cloudflareAiGatewayGatewayId?: string;
     cloudflareAiGatewayApiKey?: string;
+    xaiApiKey?: string;
   };
 };
 
@@ -40,6 +43,7 @@ export async function applyAuthChoice(
 ): Promise<ApplyAuthChoiceResult> {
   const handlers: Array<(p: ApplyAuthChoiceParams) => Promise<ApplyAuthChoiceResult | null>> = [
     applyAuthChoiceAnthropic,
+    applyAuthChoiceVllm,
     applyAuthChoiceOpenAI,
     applyAuthChoiceOAuth,
     applyAuthChoiceApiProviders,
@@ -49,6 +53,7 @@ export async function applyAuthChoice(
     applyAuthChoiceGoogleGeminiCli,
     applyAuthChoiceCopilotProxy,
     applyAuthChoiceQwenPortal,
+    applyAuthChoiceXAI,
   ];
 
   for (const handler of handlers) {

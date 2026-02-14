@@ -40,6 +40,11 @@ jobs:
                   "Please use [our support server](https://discord.gg/clawd) and ask in #help or #users-helping-users to resolve this, or follow the stuck FAQ at https://docs.openclaw.ai/help/faq#im-stuck-whats-the-fastest-way-to-get-unstuck.",
               },
               {
+                label: "r: testflight",
+                close: true,
+                message: "Not available, build from source.",
+              },
+              {
                 label: "r: third-party-extension",
                 close: true,
                 message:
@@ -55,39 +60,125 @@ jobs:
               },
             ];
 
+            const triggerLabel = "trigger-response";
+            const target = context.payload.issue ?? context.payload.pull_request;
+            if (!target) {
+              return;
+            }
+
+            const labelSet = new Set(
+              (target.labels ?? [])
+                .map((label) => (typeof label === "string" ? label : label?.name))
+                .filter((name) => typeof name === "string"),
+            );
+
+            const hasTriggerLabel = labelSet.has(triggerLabel);
+            if (hasTriggerLabel) {
+              labelSet.delete(triggerLabel);
+              try {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: target.number,
+                  name: triggerLabel,
+                });
+              } catch (error) {
+                if (error?.status !== 404) {
+                  throw error;
+                }
+              }
+            }
+
+            const isLabelEvent = context.payload.action === "labeled";
+            if (!hasTriggerLabel && !isLabelEvent) {
+              return;
+            }
+
             const issue = context.payload.issue;
             if (issue) {
               const title = issue.title ?? "";
               const body = issue.body ?? "";
               const haystack = `${title}\n${body}`.toLowerCase();
-              const hasLabel = (issue.labels ?? []).some((label) =>
-                typeof label === "string" ? label === "r: moltbook" : label?.name === "r: moltbook",
-              );
-              if (haystack.includes("moltbook") && !hasLabel) {
+              const hasMoltbookLabel = labelSet.has("r: moltbook");
+              const hasTestflightLabel = labelSet.has("r: testflight");
+              const hasSecurityLabel = labelSet.has("security");
+              if (title.toLowerCase().includes("security") && !hasSecurityLabel) {
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  labels: ["security"],
+                });
+                labelSet.add("security");
+              }
+              if (title.toLowerCase().includes("testflight") && !hasTestflightLabel) {
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  labels: ["r: testflight"],
+                });
+                labelSet.add("r: testflight");
+              }
+              if (haystack.includes("moltbook") && !hasMoltbookLabel) {
                 await github.rest.issues.addLabels({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                   issue_number: issue.number,
                   labels: ["r: moltbook"],
                 });
+                labelSet.add("r: moltbook");
+              }
+            }
+
+            const invalidLabel = "invalid";
+
+            const pullRequest = context.payload.pull_request;
+            if (pullRequest) {
+              const labelCount = labelSet.size;
+              if (labelCount > 20) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pullRequest.number,
+                  body: "Closing this PR because it has more than 20 labels, which usually means the branch is too noisy. Please recreate the PR from a clean branch.",
+                });
+                await github.rest.issues.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pullRequest.number,
+                  state: "closed",
+                });
+                return;
+              }
+              if (labelSet.has(invalidLabel)) {
+                await github.rest.issues.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pullRequest.number,
+                  state: "closed",
+                });
                 return;
               }
             }
 
-            const labelName = context.payload.label?.name;
-            if (!labelName) {
+            if (issue && labelSet.has(invalidLabel)) {
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                state: "closed",
+                state_reason: "not_planned",
+              });
               return;
             }
 
-            const rule = rules.find((item) => item.label === labelName);
+            const rule = rules.find((item) => labelSet.has(item.label));
             if (!rule) {
               return;
             }
 
-            const issueNumber = context.payload.issue?.number ?? context.payload.pull_request?.number;
-            if (!issueNumber) {
-              return;
-            }
+            const issueNumber = target.number;
 
             await github.rest.issues.createComment({
               owner: context.repo.owner,

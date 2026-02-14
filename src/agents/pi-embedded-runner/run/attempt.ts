@@ -10,7 +10,7 @@ import { resolveChannelCapabilities } from "../../../config/channel-capabilities
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
-import { isSubagentSessionKey } from "../../../routing/session-key.js";
+import { isSubagentSessionKey, normalizeAgentId } from "../../../routing/session-key.js";
 import { resolveSignalReactionLevel } from "../../../signal/reaction-level.js";
 import { resolveTelegramInlineButtonsScope } from "../../../telegram/inline-buttons.js";
 import { resolveTelegramReactionLevel } from "../../../telegram/reaction-level.js";
@@ -31,6 +31,7 @@ import { resolveOpenClawDocsPath } from "../../docs-path.js";
 import { isTimeoutError } from "../../failover-error.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { resolveDefaultModelForAgent } from "../../model-selection.js";
+import { createOllamaStreamFn, OLLAMA_NATIVE_BASE_URL } from "../../ollama-stream.js";
 import {
   isCloudCodeAssistFormatError,
   resolveBootstrapMaxChars,
@@ -48,7 +49,9 @@ import { resolveSandboxContext } from "../../sandbox.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import { repairSessionFileIfNeeded } from "../../session-file-repair.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
+import { sanitizeToolUseResultPairing } from "../../session-transcript-repair.js";
 import { acquireSessionWriteLock } from "../../session-write-lock.js";
+import { detectRuntimeShell } from "../../shell-utils.js";
 import {
   applySkillEnvOverrides,
   applySkillEnvOverridesFromSnapshot,
@@ -59,12 +62,13 @@ import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import { resolveTranscriptPolicy } from "../../transcript-policy.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
-import { isAbortError } from "../abort.js";
+import { isRunnerAbortError } from "../abort.js";
 import { appendCacheTtlTimestamp, isCacheTtlEligibleProvider } from "../cache-ttl.js";
 import { buildEmbeddedExtensionPaths } from "../extensions.js";
 import { applyExtraParamsToAgent } from "../extra-params.js";
 import {
   logToolSchemasForGoogle,
+  sanitizeAntigravityThinkingBlocks,
   sanitizeSessionHistory,
   sanitizeToolsForGoogle,
 } from "../google.js";
@@ -86,6 +90,7 @@ import {
 } from "../system-prompt.js";
 import { splitSdkTools } from "../tool-split.js";
 import { describeUnknownError, mapThinkingLevel } from "../utils.js";
+import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
 import { detectAndLoadPromptImages } from "./images.js";
 
 export function injectHistoryImagesIntoMessages(
@@ -134,6 +139,69 @@ export function injectHistoryImagesIntoMessages(
   }
 
   return didMutate;
+}
+
+function summarizeMessagePayload(msg: AgentMessage): { textChars: number; imageBlocks: number } {
+  const content = (msg as { content?: unknown }).content;
+  if (typeof content === "string") {
+    return { textChars: content.length, imageBlocks: 0 };
+  }
+  if (!Array.isArray(content)) {
+    return { textChars: 0, imageBlocks: 0 };
+  }
+
+  let textChars = 0;
+  let imageBlocks = 0;
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const typedBlock = block as { type?: unknown; text?: unknown };
+    if (typedBlock.type === "image") {
+      imageBlocks++;
+      continue;
+    }
+    if (typeof typedBlock.text === "string") {
+      textChars += typedBlock.text.length;
+    }
+  }
+
+  return { textChars, imageBlocks };
+}
+
+function summarizeSessionContext(messages: AgentMessage[]): {
+  roleCounts: string;
+  totalTextChars: number;
+  totalImageBlocks: number;
+  maxMessageTextChars: number;
+} {
+  const roleCounts = new Map<string, number>();
+  let totalTextChars = 0;
+  let totalImageBlocks = 0;
+  let maxMessageTextChars = 0;
+
+  for (const msg of messages) {
+    const role = typeof msg.role === "string" ? msg.role : "unknown";
+    roleCounts.set(role, (roleCounts.get(role) ?? 0) + 1);
+
+    const payload = summarizeMessagePayload(msg);
+    totalTextChars += payload.textChars;
+    totalImageBlocks += payload.imageBlocks;
+    if (payload.textChars > maxMessageTextChars) {
+      maxMessageTextChars = payload.textChars;
+    }
+  }
+
+  return {
+    roleCounts:
+      [...roleCounts.entries()]
+        .toSorted((a, b) => a[0].localeCompare(b[0]))
+        .map(([role, count]) => `${role}:${count}`)
+        .join(",") || "none",
+    totalTextChars,
+    totalImageBlocks,
+    maxMessageTextChars,
+  };
 }
 
 export async function runEmbeddedAttempt(
@@ -331,6 +399,7 @@ export async function runEmbeddedAttempt(
         node: process.version,
         model: `${params.provider}/${params.modelId}`,
         defaultModel: defaultModelLabel,
+        shell: detectRuntimeShell(),
         channel: runtimeChannel,
         capabilities: runtimeCapabilities,
         channelActions,
@@ -424,6 +493,7 @@ export async function runEmbeddedAttempt(
       sessionManager = guardSessionManager(SessionManager.open(params.sessionFile), {
         agentId: sessionAgentId,
         sessionKey: params.sessionKey,
+        inputProvenance: params.inputProvenance,
         allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
       });
       trackSessionManagerAccess(params.sessionFile);
@@ -450,6 +520,9 @@ export async function runEmbeddedAttempt(
         modelId: params.modelId,
         model: params.model,
       });
+
+      // Get hook runner early so it's available when creating tools
+      const hookRunner = getGlobalHookRunner();
 
       const { builtInTools, customTools } = splitSdkTools({
         tools,
@@ -512,8 +585,21 @@ export async function runEmbeddedAttempt(
         workspaceDir: params.workspaceDir,
       });
 
-      // Force a stable streamFn reference so vitest can reliably mock @mariozechner/pi-ai.
-      activeSession.agent.streamFn = streamSimple;
+      // Ollama native API: bypass SDK's streamSimple and use direct /api/chat calls
+      // for reliable streaming + tool calling support (#11828).
+      if (params.model.api === "ollama") {
+        // Use the resolved model baseUrl first so custom provider aliases work.
+        const providerConfig = params.config?.models?.providers?.[params.model.provider];
+        const modelBaseUrl =
+          typeof params.model.baseUrl === "string" ? params.model.baseUrl.trim() : "";
+        const providerBaseUrl =
+          typeof providerConfig?.baseUrl === "string" ? providerConfig.baseUrl.trim() : "";
+        const ollamaBaseUrl = modelBaseUrl || providerBaseUrl || OLLAMA_NATIVE_BASE_URL;
+        activeSession.agent.streamFn = createOllamaStreamFn(ollamaBaseUrl);
+      } else {
+        // Force a stable streamFn reference so vitest can reliably mock @mariozechner/pi-ai.
+        activeSession.agent.streamFn = streamSimple;
+      }
 
       applyExtraParamsToAgent(
         activeSession.agent,
@@ -554,16 +640,25 @@ export async function runEmbeddedAttempt(
         const validated = transcriptPolicy.validateAnthropicTurns
           ? validateAnthropicTurns(validatedGemini)
           : validatedGemini;
-        const limited = limitHistoryTurns(
+        const truncated = limitHistoryTurns(
           validated,
           getDmHistoryLimitFromSessionKey(params.sessionKey, params.config),
         );
+        // Re-run tool_use/tool_result pairing repair after truncation, since
+        // limitHistoryTurns can orphan tool_result blocks by removing the
+        // assistant message that contained the matching tool_use.
+        const limited = transcriptPolicy.repairToolUseResultPairing
+          ? sanitizeToolUseResultPairing(truncated)
+          : truncated;
         cacheTrace?.recordStage("session:limited", { messages: limited });
         if (limited.length > 0) {
           activeSession.agent.replaceMessages(limited);
         }
       } catch (err) {
-        sessionManager.flushPendingToolResults?.();
+        await flushPendingToolResultsAfterIdle({
+          agent: activeSession?.agent,
+          sessionManager,
+        });
         activeSession.dispose();
         throw err;
       }
@@ -622,6 +717,7 @@ export async function runEmbeddedAttempt(
       const subscription = subscribeEmbeddedPiSession({
         session: activeSession,
         runId: params.runId,
+        hookRunner: getGlobalHookRunner() ?? undefined,
         verboseLevel: params.verboseLevel,
         reasoningMode: params.reasoningLevel ?? "off",
         toolResultFormat: params.toolResultFormat,
@@ -648,6 +744,8 @@ export async function runEmbeddedAttempt(
         getMessagingToolSentTargets,
         didSendViaMessagingTool,
         getLastToolError,
+        getUsageTotals,
+        getCompactionCount,
       } = subscription;
 
       const queueHandle: EmbeddedPiQueueHandle = {
@@ -703,8 +801,14 @@ export async function runEmbeddedAttempt(
         }
       }
 
-      // Get hook runner once for both before_agent_start and agent_end hooks
-      const hookRunner = getGlobalHookRunner();
+      // Hook runner was already obtained earlier before tool creation
+      const hookAgentId =
+        typeof params.agentId === "string" && params.agentId.trim()
+          ? normalizeAgentId(params.agentId)
+          : resolveSessionAgentIds({
+              sessionKey: params.sessionKey,
+              config: params.config,
+            }).sessionAgentId;
 
       let promptError: unknown = null;
       try {
@@ -720,8 +824,9 @@ export async function runEmbeddedAttempt(
                 messages: activeSession.messages,
               },
               {
-                agentId: params.sessionKey?.split(":")[0] ?? "main",
+                agentId: hookAgentId,
                 sessionKey: params.sessionKey,
+                sessionId: params.sessionId,
                 workspaceDir: params.workspaceDir,
                 messageProvider: params.messageProvider ?? undefined,
               },
@@ -752,7 +857,10 @@ export async function runEmbeddedAttempt(
             sessionManager.resetLeaf();
           }
           const sessionContext = sessionManager.buildSessionContext();
-          activeSession.agent.replaceMessages(sessionContext.messages);
+          const sanitizedOrphan = transcriptPolicy.normalizeAntigravityThinkingBlocks
+            ? sanitizeAntigravityThinkingBlocks(sessionContext.messages)
+            : sessionContext.messages;
+          activeSession.agent.replaceMessages(sanitizedOrphan);
           log.warn(
             `Removed orphaned user message to prevent consecutive user turns. ` +
               `runId=${params.runId} sessionId=${params.sessionId}`,
@@ -772,7 +880,10 @@ export async function runEmbeddedAttempt(
             historyMessages: activeSession.messages,
             maxBytes: MAX_IMAGE_BYTES,
             // Enforce sandbox path restrictions when sandbox is enabled
-            sandboxRoot: sandbox?.enabled ? sandbox.workspaceDir : undefined,
+            sandbox:
+              sandbox?.enabled && sandbox?.fsBridge
+                ? { root: sandbox.workspaceDir, bridge: sandbox.fsBridge }
+                : undefined,
           });
 
           // Inject history images into their original message positions.
@@ -792,15 +903,23 @@ export async function runEmbeddedAttempt(
             note: `images: prompt=${imageResult.images.length} history=${imageResult.historyImagesByIndex.size}`,
           });
 
-          const shouldTrackCacheTtl =
-            params.config?.agents?.defaults?.contextPruning?.mode === "cache-ttl" &&
-            isCacheTtlEligibleProvider(params.provider, params.modelId);
-          if (shouldTrackCacheTtl) {
-            appendCacheTtlTimestamp(sessionManager, {
-              timestamp: Date.now(),
-              provider: params.provider,
-              modelId: params.modelId,
-            });
+          // Diagnostic: log context sizes before prompt to help debug early overflow errors.
+          if (log.isEnabled("debug")) {
+            const msgCount = activeSession.messages.length;
+            const systemLen = systemPromptText?.length ?? 0;
+            const promptLen = effectivePrompt.length;
+            const sessionSummary = summarizeSessionContext(activeSession.messages);
+            log.debug(
+              `[context-diag] pre-prompt: sessionKey=${params.sessionKey ?? params.sessionId} ` +
+                `messages=${msgCount} roleCounts=${sessionSummary.roleCounts} ` +
+                `historyTextChars=${sessionSummary.totalTextChars} ` +
+                `maxMessageTextChars=${sessionSummary.maxMessageTextChars} ` +
+                `historyImageBlocks=${sessionSummary.totalImageBlocks} ` +
+                `systemPromptChars=${systemLen} promptChars=${promptLen} ` +
+                `promptImages=${imageResult.images.length} ` +
+                `historyImageMessages=${imageResult.historyImagesByIndex.size} ` +
+                `provider=${params.provider}/${params.modelId} sessionFile=${params.sessionFile}`,
+            );
           }
 
           // Only pass images option if there are actually images to pass
@@ -821,13 +940,29 @@ export async function runEmbeddedAttempt(
         try {
           await waitForCompactionRetry();
         } catch (err) {
-          if (isAbortError(err)) {
+          if (isRunnerAbortError(err)) {
             if (!promptError) {
               promptError = err;
             }
           } else {
             throw err;
           }
+        }
+
+        // Append cache-TTL timestamp AFTER prompt + compaction retry completes.
+        // Previously this was before the prompt, which caused a custom entry to be
+        // inserted between compaction and the next prompt — breaking the
+        // prepareCompaction() guard that checks the last entry type, leading to
+        // double-compaction. See: https://github.com/openclaw/openclaw/issues/9282
+        const shouldTrackCacheTtl =
+          params.config?.agents?.defaults?.contextPruning?.mode === "cache-ttl" &&
+          isCacheTtlEligibleProvider(params.provider, params.modelId);
+        if (shouldTrackCacheTtl) {
+          appendCacheTtlTimestamp(sessionManager, {
+            timestamp: Date.now(),
+            provider: params.provider,
+            modelId: params.modelId,
+          });
         }
 
         messagesSnapshot = activeSession.messages.slice();
@@ -850,8 +985,9 @@ export async function runEmbeddedAttempt(
                 durationMs: Date.now() - promptStartedAt,
               },
               {
-                agentId: params.sessionKey?.split(":")[0] ?? "main",
+                agentId: hookAgentId,
                 sessionKey: params.sessionKey,
+                sessionId: params.sessionId,
                 workspaceDir: params.workspaceDir,
                 messageProvider: params.messageProvider ?? undefined,
               },
@@ -899,12 +1035,24 @@ export async function runEmbeddedAttempt(
         cloudCodeAssistFormatError: Boolean(
           lastAssistant?.errorMessage && isCloudCodeAssistFormatError(lastAssistant.errorMessage),
         ),
+        attemptUsage: getUsageTotals(),
+        compactionCount: getCompactionCount(),
         // Client tool call detected (OpenResponses hosted tools)
         clientToolCall: clientToolCallDetected ?? undefined,
       };
     } finally {
       // Always tear down the session (and release the lock) before we leave this attempt.
-      sessionManager?.flushPendingToolResults?.();
+      //
+      // BUGFIX: Wait for the agent to be truly idle before flushing pending tool results.
+      // pi-agent-core's auto-retry resolves waitForRetry() on assistant message receipt,
+      // *before* tool execution completes in the retried agent loop. Without this wait,
+      // flushPendingToolResults() fires while tools are still executing, inserting
+      // synthetic "missing tool result" errors and causing silent agent failures.
+      // See: https://github.com/openclaw/openclaw/issues/8643
+      await flushPendingToolResultsAfterIdle({
+        agent: session?.agent,
+        sessionManager,
+      });
       session?.dispose();
       await sessionLock.release();
     }

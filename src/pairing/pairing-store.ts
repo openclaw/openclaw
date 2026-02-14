@@ -2,10 +2,12 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import lockfile from "proper-lockfile";
 import type { ChannelId, ChannelPairingAdapter } from "../channels/plugins/types.js";
 import { getPairingAdapter } from "../channels/plugins/pairing.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
+import { withFileLock as withPathLock } from "../infra/file-lock.js";
+import { resolveRequiredHomeDir } from "../infra/home-dir.js";
+import { safeParseJson } from "../utils.js";
 
 const PAIRING_CODE_LENGTH = 8;
 const PAIRING_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -43,7 +45,7 @@ type AllowFromStore = {
 };
 
 function resolveCredentialsDir(env: NodeJS.ProcessEnv = process.env): string {
-  const stateDir = resolveStateDir(env, os.homedir);
+  const stateDir = resolveStateDir(env, () => resolveRequiredHomeDir(env, os.homedir));
   return resolveOAuthDir(env, stateDir);
 }
 
@@ -69,14 +71,6 @@ function resolveAllowFromPath(
   env: NodeJS.ProcessEnv = process.env,
 ): string {
   return path.join(resolveCredentialsDir(env), `${safeChannelKey(channel)}-allowFrom.json`);
-}
-
-function safeParseJson<T>(raw: string): T | null {
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    return null;
-  }
 }
 
 async function readJsonFile<T>(
@@ -124,19 +118,9 @@ async function withFileLock<T>(
   fn: () => Promise<T>,
 ): Promise<T> {
   await ensureJsonFile(filePath, fallback);
-  let release: (() => Promise<void>) | undefined;
-  try {
-    release = await lockfile.lock(filePath, PAIRING_STORE_LOCK_OPTIONS);
+  return await withPathLock(filePath, PAIRING_STORE_LOCK_OPTIONS, async () => {
     return await fn();
-  } finally {
-    if (release) {
-      try {
-        await release();
-      } catch {
-        // ignore unlock errors
-      }
-    }
-  }
+  });
 }
 
 function parseTimestamp(value: string | undefined): number | null {

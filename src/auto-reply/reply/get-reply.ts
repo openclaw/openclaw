@@ -78,8 +78,12 @@ export async function getReplyFromConfig(
   });
   let provider = defaultProvider;
   let model = defaultModel;
+  let hasResolvedHeartbeatModelOverride = false;
   if (opts?.isHeartbeat) {
-    const heartbeatRaw = agentCfg?.heartbeat?.model?.trim() ?? "";
+    // Prefer the resolved per-agent heartbeat model passed from the heartbeat runner,
+    // fall back to the global defaults heartbeat model for backward compatibility.
+    const heartbeatRaw =
+      opts.heartbeatModelOverride?.trim() ?? agentCfg?.heartbeat?.model?.trim() ?? "";
     const heartbeatRef = heartbeatRaw
       ? resolveModelRefFromString({
           raw: heartbeatRaw,
@@ -90,6 +94,7 @@ export async function getReplyFromConfig(
     if (heartbeatRef) {
       provider = heartbeatRef.ref.provider;
       model = heartbeatRef.ref.model;
+      hasResolvedHeartbeatModelOverride = true;
     }
   }
 
@@ -107,6 +112,7 @@ export async function getReplyFromConfig(
     typeof configuredTypingSeconds === "number" ? configuredTypingSeconds : 6;
   const typing = createTypingController({
     onReplyStart: opts?.onReplyStart,
+    onCleanup: opts?.onTypingCleanup,
     typingIntervalSeconds,
     silentToken: SILENT_REPLY_TOKEN,
     log: defaultRuntime.log,
@@ -195,6 +201,7 @@ export async function getReplyFromConfig(
     aliasIndex,
     provider,
     model,
+    hasResolvedHeartbeatModelOverride,
     typing,
     opts: resolvedOpts,
     skillFilter: mergedSkillFilter,

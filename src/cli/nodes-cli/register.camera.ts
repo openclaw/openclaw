@@ -10,6 +10,7 @@ import {
   parseCameraClipPayload,
   parseCameraSnapPayload,
   writeBase64ToFile,
+  writeUrlToFile,
 } from "../nodes-camera.js";
 import { parseDurationMs } from "../parse-duration.js";
 import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
@@ -155,7 +156,11 @@ export function registerNodesCameraCommands(nodes: Command) {
               facing,
               ext: payload.format === "jpeg" ? "jpg" : payload.format,
             });
-            await writeBase64ToFile(filePath, payload.base64);
+            if (payload.url) {
+              await writeUrlToFile(filePath, payload.url);
+            } else if (payload.base64) {
+              await writeBase64ToFile(filePath, payload.base64);
+            }
             results.push({
               facing,
               path: filePath,
@@ -223,7 +228,11 @@ export function registerNodesCameraCommands(nodes: Command) {
             facing,
             ext: payload.format,
           });
-          await writeBase64ToFile(filePath, payload.base64);
+          if (payload.url) {
+            await writeUrlToFile(filePath, payload.url);
+          } else if (payload.base64) {
+            await writeBase64ToFile(filePath, payload.base64);
+          }
 
           if (opts.json) {
             defaultRuntime.log(

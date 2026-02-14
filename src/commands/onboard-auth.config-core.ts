@@ -1,9 +1,16 @@
 import type { OpenClawConfig } from "../config/config.js";
+import type { ModelApi } from "../config/types.models.js";
 import {
-  buildCloudflareAiGatewayModelDefinition,
-  resolveCloudflareAiGatewayBaseUrl,
-} from "../agents/cloudflare-ai-gateway.js";
-import { buildXiaomiProvider, XIAOMI_DEFAULT_MODEL_ID } from "../agents/models-config.providers.js";
+  buildHuggingfaceModelDefinition,
+  HUGGINGFACE_BASE_URL,
+  HUGGINGFACE_MODEL_CATALOG,
+} from "../agents/huggingface-models.js";
+import {
+  buildQianfanProvider,
+  buildXiaomiProvider,
+  QIANFAN_DEFAULT_MODEL_ID,
+  XIAOMI_DEFAULT_MODEL_ID,
+} from "../agents/models-config.providers.js";
 import {
   buildSyntheticModelDefinition,
   SYNTHETIC_BASE_URL,
@@ -11,35 +18,106 @@ import {
   SYNTHETIC_MODEL_CATALOG,
 } from "../agents/synthetic-models.js";
 import {
+  buildTogetherModelDefinition,
+  TOGETHER_BASE_URL,
+  TOGETHER_MODEL_CATALOG,
+} from "../agents/together-models.js";
+import {
   buildVeniceModelDefinition,
   VENICE_BASE_URL,
   VENICE_DEFAULT_MODEL_REF,
   VENICE_MODEL_CATALOG,
 } from "../agents/venice-models.js";
 import {
-  CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
+  HUGGINGFACE_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
-  VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
+  TOGETHER_DEFAULT_MODEL_REF,
   XIAOMI_DEFAULT_MODEL_REF,
   ZAI_DEFAULT_MODEL_REF,
+  XAI_DEFAULT_MODEL_REF,
 } from "./onboard-auth.credentials.js";
+export {
+  applyCloudflareAiGatewayConfig,
+  applyCloudflareAiGatewayProviderConfig,
+  applyVercelAiGatewayConfig,
+  applyVercelAiGatewayProviderConfig,
+} from "./onboard-auth.config-gateways.js";
+export {
+  applyLitellmConfig,
+  applyLitellmProviderConfig,
+  LITELLM_BASE_URL,
+  LITELLM_DEFAULT_MODEL_ID,
+} from "./onboard-auth.config-litellm.js";
 import {
+  buildZaiModelDefinition,
   buildMoonshotModelDefinition,
+  buildXaiModelDefinition,
+  QIANFAN_BASE_URL,
+  QIANFAN_DEFAULT_MODEL_REF,
   KIMI_CODING_MODEL_REF,
   MOONSHOT_BASE_URL,
   MOONSHOT_CN_BASE_URL,
   MOONSHOT_DEFAULT_MODEL_ID,
   MOONSHOT_DEFAULT_MODEL_REF,
+  ZAI_DEFAULT_MODEL_ID,
+  resolveZaiBaseUrl,
+  XAI_BASE_URL,
+  XAI_DEFAULT_MODEL_ID,
 } from "./onboard-auth.models.js";
 
-export function applyZaiConfig(cfg: OpenClawConfig): OpenClawConfig {
+export function applyZaiProviderConfig(
+  cfg: OpenClawConfig,
+  params?: { endpoint?: string; modelId?: string },
+): OpenClawConfig {
+  const modelId = params?.modelId?.trim() || ZAI_DEFAULT_MODEL_ID;
+  const modelRef = `zai/${modelId}`;
+
   const models = { ...cfg.agents?.defaults?.models };
-  models[ZAI_DEFAULT_MODEL_REF] = {
-    ...models[ZAI_DEFAULT_MODEL_REF],
-    alias: models[ZAI_DEFAULT_MODEL_REF]?.alias ?? "GLM",
+  models[modelRef] = {
+    ...models[modelRef],
+    alias: models[modelRef]?.alias ?? "GLM",
   };
 
-  const existingModel = cfg.agents?.defaults?.model;
+  const providers = { ...cfg.models?.providers };
+  const existingProvider = providers.zai;
+  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
+
+  const defaultModels = [
+    buildZaiModelDefinition({ id: "glm-5" }),
+    buildZaiModelDefinition({ id: "glm-4.7" }),
+    buildZaiModelDefinition({ id: "glm-4.7-flash" }),
+    buildZaiModelDefinition({ id: "glm-4.7-flashx" }),
+  ];
+
+  const mergedModels = [...existingModels];
+  const seen = new Set(existingModels.map((m) => m.id));
+  for (const model of defaultModels) {
+    if (!seen.has(model.id)) {
+      mergedModels.push(model);
+      seen.add(model.id);
+    }
+  }
+
+  const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as Record<
+    string,
+    unknown
+  > as { apiKey?: string };
+  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
+  const normalizedApiKey = resolvedApiKey?.trim();
+
+  const baseUrl = params?.endpoint
+    ? resolveZaiBaseUrl(params.endpoint)
+    : (typeof existingProvider?.baseUrl === "string" ? existingProvider.baseUrl : "") ||
+      resolveZaiBaseUrl();
+
+  providers.zai = {
+    ...existingProviderRest,
+    baseUrl,
+    api: "openai-completions",
+    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
+    models: mergedModels.length > 0 ? mergedModels : defaultModels,
+  };
+
   return {
     ...cfg,
     agents: {
@@ -47,13 +125,37 @@ export function applyZaiConfig(cfg: OpenClawConfig): OpenClawConfig {
       defaults: {
         ...cfg.agents?.defaults,
         models,
+      },
+    },
+    models: {
+      mode: cfg.models?.mode ?? "merge",
+      providers,
+    },
+  };
+}
+
+export function applyZaiConfig(
+  cfg: OpenClawConfig,
+  params?: { endpoint?: string; modelId?: string },
+): OpenClawConfig {
+  const modelId = params?.modelId?.trim() || ZAI_DEFAULT_MODEL_ID;
+  const modelRef = modelId === ZAI_DEFAULT_MODEL_ID ? ZAI_DEFAULT_MODEL_REF : `zai/${modelId}`;
+  const next = applyZaiProviderConfig(cfg, params);
+
+  const existingModel = next.agents?.defaults?.model;
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
         model: {
           ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
             ? {
                 fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
               }
             : undefined),
-          primary: ZAI_DEFAULT_MODEL_REF,
+          primary: modelRef,
         },
       },
     },
@@ -74,139 +176,6 @@ export function applyOpenrouterProviderConfig(cfg: OpenClawConfig): OpenClawConf
       defaults: {
         ...cfg.agents?.defaults,
         models,
-      },
-    },
-  };
-}
-
-export function applyVercelAiGatewayProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
-  const models = { ...cfg.agents?.defaults?.models };
-  models[VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF] = {
-    ...models[VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF],
-    alias: models[VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF]?.alias ?? "Vercel AI Gateway",
-  };
-
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...cfg.agents?.defaults,
-        models,
-      },
-    },
-  };
-}
-
-export function applyCloudflareAiGatewayProviderConfig(
-  cfg: OpenClawConfig,
-  params?: { accountId?: string; gatewayId?: string },
-): OpenClawConfig {
-  const models = { ...cfg.agents?.defaults?.models };
-  models[CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF] = {
-    ...models[CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF],
-    alias: models[CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF]?.alias ?? "Cloudflare AI Gateway",
-  };
-
-  const providers = { ...cfg.models?.providers };
-  const existingProvider = providers["cloudflare-ai-gateway"];
-  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
-  const defaultModel = buildCloudflareAiGatewayModelDefinition();
-  const hasDefaultModel = existingModels.some((model) => model.id === defaultModel.id);
-  const mergedModels = hasDefaultModel ? existingModels : [...existingModels, defaultModel];
-  const baseUrl =
-    params?.accountId && params?.gatewayId
-      ? resolveCloudflareAiGatewayBaseUrl({
-          accountId: params.accountId,
-          gatewayId: params.gatewayId,
-        })
-      : existingProvider?.baseUrl;
-
-  if (!baseUrl) {
-    return {
-      ...cfg,
-      agents: {
-        ...cfg.agents,
-        defaults: {
-          ...cfg.agents?.defaults,
-          models,
-        },
-      },
-    };
-  }
-
-  const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as Record<
-    string,
-    unknown
-  > as { apiKey?: string };
-  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
-  const normalizedApiKey = resolvedApiKey?.trim();
-  providers["cloudflare-ai-gateway"] = {
-    ...existingProviderRest,
-    baseUrl,
-    api: "anthropic-messages",
-    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
-    models: mergedModels.length > 0 ? mergedModels : [defaultModel],
-  };
-
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...cfg.agents?.defaults,
-        models,
-      },
-    },
-    models: {
-      mode: cfg.models?.mode ?? "merge",
-      providers,
-    },
-  };
-}
-
-export function applyVercelAiGatewayConfig(cfg: OpenClawConfig): OpenClawConfig {
-  const next = applyVercelAiGatewayProviderConfig(cfg);
-  const existingModel = next.agents?.defaults?.model;
-  return {
-    ...next,
-    agents: {
-      ...next.agents,
-      defaults: {
-        ...next.agents?.defaults,
-        model: {
-          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
-            ? {
-                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
-              }
-            : undefined),
-          primary: VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
-        },
-      },
-    },
-  };
-}
-
-export function applyCloudflareAiGatewayConfig(
-  cfg: OpenClawConfig,
-  params?: { accountId?: string; gatewayId?: string },
-): OpenClawConfig {
-  const next = applyCloudflareAiGatewayProviderConfig(cfg, params);
-  const existingModel = next.agents?.defaults?.model;
-  return {
-    ...next,
-    agents: {
-      ...next.agents,
-      defaults: {
-        ...next.agents?.defaults,
-        model: {
-          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
-            ? {
-                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
-              }
-            : undefined),
-          primary: CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
-        },
       },
     },
   };
@@ -588,6 +557,221 @@ export function applyVeniceConfig(cfg: OpenClawConfig): OpenClawConfig {
   };
 }
 
+/**
+ * Apply Together provider configuration without changing the default model.
+ * Registers Together models and sets up the provider, but preserves existing model selection.
+ */
+export function applyTogetherProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[TOGETHER_DEFAULT_MODEL_REF] = {
+    ...models[TOGETHER_DEFAULT_MODEL_REF],
+    alias: models[TOGETHER_DEFAULT_MODEL_REF]?.alias ?? "Together AI",
+  };
+
+  const providers = { ...cfg.models?.providers };
+  const existingProvider = providers.together;
+  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
+  const togetherModels = TOGETHER_MODEL_CATALOG.map(buildTogetherModelDefinition);
+  const mergedModels = [
+    ...existingModels,
+    ...togetherModels.filter(
+      (model) => !existingModels.some((existing) => existing.id === model.id),
+    ),
+  ];
+  const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as Record<
+    string,
+    unknown
+  > as { apiKey?: string };
+  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
+  const normalizedApiKey = resolvedApiKey?.trim();
+  providers.together = {
+    ...existingProviderRest,
+    baseUrl: TOGETHER_BASE_URL,
+    api: "openai-completions",
+    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
+    models: mergedModels.length > 0 ? mergedModels : togetherModels,
+  };
+
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models,
+      },
+    },
+    models: {
+      mode: cfg.models?.mode ?? "merge",
+      providers,
+    },
+  };
+}
+
+/**
+ * Apply Together provider configuration AND set Together as the default model.
+ * Use this when Together is the primary provider choice during onboarding.
+ */
+export function applyTogetherConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyTogetherProviderConfig(cfg);
+  const existingModel = next.agents?.defaults?.model;
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
+            ? {
+                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
+              }
+            : undefined),
+          primary: TOGETHER_DEFAULT_MODEL_REF,
+        },
+      },
+    },
+  };
+}
+
+/**
+ * Apply Hugging Face (Inference Providers) provider configuration without changing the default model.
+ */
+export function applyHuggingfaceProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[HUGGINGFACE_DEFAULT_MODEL_REF] = {
+    ...models[HUGGINGFACE_DEFAULT_MODEL_REF],
+    alias: models[HUGGINGFACE_DEFAULT_MODEL_REF]?.alias ?? "Hugging Face",
+  };
+
+  const providers = { ...cfg.models?.providers };
+  const existingProvider = providers.huggingface;
+  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
+  const hfModels = HUGGINGFACE_MODEL_CATALOG.map(buildHuggingfaceModelDefinition);
+  const mergedModels = [
+    ...existingModels,
+    ...hfModels.filter((model) => !existingModels.some((existing) => existing.id === model.id)),
+  ];
+  const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as Record<
+    string,
+    unknown
+  > as { apiKey?: string };
+  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
+  const normalizedApiKey = resolvedApiKey?.trim();
+  providers.huggingface = {
+    ...existingProviderRest,
+    baseUrl: HUGGINGFACE_BASE_URL,
+    api: "openai-completions",
+    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
+    models: mergedModels.length > 0 ? mergedModels : hfModels,
+  };
+
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models,
+      },
+    },
+    models: {
+      mode: cfg.models?.mode ?? "merge",
+      providers,
+    },
+  };
+}
+
+/**
+ * Apply Hugging Face provider configuration AND set Hugging Face as the default model.
+ */
+export function applyHuggingfaceConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyHuggingfaceProviderConfig(cfg);
+  const existingModel = next.agents?.defaults?.model;
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
+            ? {
+                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
+              }
+            : undefined),
+          primary: HUGGINGFACE_DEFAULT_MODEL_REF,
+        },
+      },
+    },
+  };
+}
+
+export function applyXaiProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[XAI_DEFAULT_MODEL_REF] = {
+    ...models[XAI_DEFAULT_MODEL_REF],
+    alias: models[XAI_DEFAULT_MODEL_REF]?.alias ?? "Grok",
+  };
+
+  const providers = { ...cfg.models?.providers };
+  const existingProvider = providers.xai;
+  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
+  const defaultModel = buildXaiModelDefinition();
+  const hasDefaultModel = existingModels.some((model) => model.id === XAI_DEFAULT_MODEL_ID);
+  const mergedModels = hasDefaultModel ? existingModels : [...existingModels, defaultModel];
+  const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as Record<
+    string,
+    unknown
+  > as { apiKey?: string };
+  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
+  const normalizedApiKey = resolvedApiKey?.trim();
+  providers.xai = {
+    ...existingProviderRest,
+    baseUrl: XAI_BASE_URL,
+    api: "openai-completions",
+    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
+    models: mergedModels.length > 0 ? mergedModels : [defaultModel],
+  };
+
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models,
+      },
+    },
+    models: {
+      mode: cfg.models?.mode ?? "merge",
+      providers,
+    },
+  };
+}
+
+export function applyXaiConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyXaiProviderConfig(cfg);
+  const existingModel = next.agents?.defaults?.model;
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
+            ? {
+                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
+              }
+            : undefined),
+          primary: XAI_DEFAULT_MODEL_REF,
+        },
+      },
+    },
+  };
+}
+
 export function applyAuthProfileConfig(
   cfg: OpenClawConfig,
   params: {
@@ -633,6 +817,83 @@ export function applyAuthProfileConfig(
       ...cfg.auth,
       profiles,
       ...(order ? { order } : {}),
+    },
+  };
+}
+
+export function applyQianfanProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[QIANFAN_DEFAULT_MODEL_REF] = {
+    ...models[QIANFAN_DEFAULT_MODEL_REF],
+    alias: models[QIANFAN_DEFAULT_MODEL_REF]?.alias ?? "QIANFAN",
+  };
+
+  const providers = { ...cfg.models?.providers };
+  const existingProvider = providers.qianfan;
+  const defaultProvider = buildQianfanProvider();
+  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
+  const defaultModels = defaultProvider.models ?? [];
+  const hasDefaultModel = existingModels.some((model) => model.id === QIANFAN_DEFAULT_MODEL_ID);
+  const mergedModels =
+    existingModels.length > 0
+      ? hasDefaultModel
+        ? existingModels
+        : [...existingModels, ...defaultModels]
+      : defaultModels;
+  const {
+    apiKey: existingApiKey,
+    baseUrl: existingBaseUrl,
+    api: existingApi,
+    ...existingProviderRest
+  } = (existingProvider ?? {}) as Record<string, unknown> as {
+    apiKey?: string;
+    baseUrl?: string;
+    api?: ModelApi;
+  };
+  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
+  const normalizedApiKey = resolvedApiKey?.trim();
+  providers.qianfan = {
+    ...existingProviderRest,
+    baseUrl: existingBaseUrl ?? QIANFAN_BASE_URL,
+    api: existingApi ?? "openai-completions",
+    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
+    models: mergedModels.length > 0 ? mergedModels : defaultProvider.models,
+  };
+
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models,
+      },
+    },
+    models: {
+      mode: cfg.models?.mode ?? "merge",
+      providers,
+    },
+  };
+}
+
+export function applyQianfanConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyQianfanProviderConfig(cfg);
+  const existingModel = next.agents?.defaults?.model;
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
+            ? {
+                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
+              }
+            : undefined),
+          primary: QIANFAN_DEFAULT_MODEL_REF,
+        },
+      },
     },
   };
 }

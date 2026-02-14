@@ -59,16 +59,14 @@ function parseCommandLine(value: string): string[] {
   const args: string[] = [];
   let current = "";
   let inQuotes = false;
-  let escapeNext = false;
 
-  for (const char of value) {
-    if (escapeNext) {
-      current += char;
-      escapeNext = false;
-      continue;
-    }
-    if (char === "\\") {
-      escapeNext = true;
+  for (let i = 0; i < value.length; i++) {
+    const char = value[i];
+    // `buildTaskScript` only escapes quotes (`\"`).
+    // Keep all other backslashes literal so drive and UNC paths are preserved.
+    if (char === "\\" && i + 1 < value.length && value[i + 1] === '"') {
+      current += value[i + 1];
+      i++;
       continue;
     }
     if (char === '"') {

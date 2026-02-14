@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { fetchWithTimeout } from "../utils/fetch-timeout.js";
 import { parseSemver } from "./runtime-guard.js";
 import { channelToNpmTag, type UpdateChannel } from "./update-channels.js";
 
@@ -288,16 +289,6 @@ export async function checkDepsStatus(params: {
   };
 }
 
-async function fetchWithTimeout(url: string, timeoutMs: number): Promise<Response> {
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), Math.max(250, timeoutMs));
-  try {
-    return await fetch(url, { signal: ctrl.signal });
-  } finally {
-    clearTimeout(t);
-  }
-}
-
 export async function fetchNpmLatestVersion(params?: {
   timeoutMs?: number;
 }): Promise<RegistryStatus> {
@@ -317,7 +308,8 @@ export async function fetchNpmTagVersion(params: {
   try {
     const res = await fetchWithTimeout(
       `https://registry.npmjs.org/openclaw/${encodeURIComponent(tag)}`,
-      timeoutMs,
+      {},
+      Math.max(250, timeoutMs),
     );
     if (!res.ok) {
       return { tag, version: null, error: `HTTP ${res.status}` };

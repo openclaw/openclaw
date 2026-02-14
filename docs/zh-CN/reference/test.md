@@ -14,7 +14,7 @@ x-i18n:
 
 # 测试
 
-- 完整测试套件（测试集、实时测试、Docker）：[测试](/testing)
+- 完整测试套件（测试集、实时测试、Docker）：[测试](/help/testing)
 
 - `pnpm test:force`：终止任何占用默认控制端口的遗留 Gateway 网关进程，然后使用隔离的 Gateway 网关端口运行完整的 Vitest 套件，这样服务器测试不会与正在运行的实例冲突。当之前的 Gateway 网关运行占用了端口 18789 时使用此命令。
 - `pnpm test:coverage`：使用 V8 覆盖率运行 Vitest。全局阈值为 70% 的行/分支/函数/语句覆盖率。覆盖率排除了集成密集型入口点（CLI 连接、gateway/telegram 桥接、webchat 静态服务器），以保持目标集中在可单元测试的逻辑上。

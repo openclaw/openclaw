@@ -438,6 +438,41 @@ describe("sendMessageTelegram", () => {
 
     loadWebMedia.mockResolvedValueOnce({
       buffer: Buffer.from("audio"),
+      contentType: "audio/wav",
+      fileName: "clip.wav",
+    });
+
+    await sendMessageTelegram(chatId, "caption", {
+      token: "tok",
+      api,
+      mediaUrl: "https://example.com/clip.wav",
+      asVoice: true,
+    });
+
+    expect(sendAudio).toHaveBeenCalledWith(chatId, expect.anything(), {
+      caption: "caption",
+      parse_mode: "HTML",
+    });
+    expect(sendVoice).not.toHaveBeenCalled();
+  });
+
+  it("sends MP3 as voice when asVoice is true", async () => {
+    const chatId = "123";
+    const sendAudio = vi.fn().mockResolvedValue({
+      message_id: 16,
+      chat: { id: chatId },
+    });
+    const sendVoice = vi.fn().mockResolvedValue({
+      message_id: 17,
+      chat: { id: chatId },
+    });
+    const api = { sendAudio, sendVoice } as unknown as {
+      sendAudio: typeof sendAudio;
+      sendVoice: typeof sendVoice;
+    };
+
+    loadWebMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("audio"),
       contentType: "audio/mpeg",
       fileName: "clip.mp3",
     });
@@ -449,11 +484,11 @@ describe("sendMessageTelegram", () => {
       asVoice: true,
     });
 
-    expect(sendAudio).toHaveBeenCalledWith(chatId, expect.anything(), {
+    expect(sendVoice).toHaveBeenCalledWith(chatId, expect.anything(), {
       caption: "caption",
       parse_mode: "HTML",
     });
-    expect(sendVoice).not.toHaveBeenCalled();
+    expect(sendAudio).not.toHaveBeenCalled();
   });
 
   it("includes message_thread_id for forum topic messages", async () => {
@@ -476,6 +511,53 @@ describe("sendMessageTelegram", () => {
       parse_mode: "HTML",
       message_thread_id: 271,
     });
+  });
+
+  it("retries without message_thread_id when Telegram reports missing thread", async () => {
+    const chatId = "123";
+    const threadErr = new Error("400: Bad Request: message thread not found");
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(threadErr)
+      .mockResolvedValueOnce({
+        message_id: 58,
+        chat: { id: chatId },
+      });
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    const res = await sendMessageTelegram(chatId, "hello forum", {
+      token: "tok",
+      api,
+      messageThreadId: 271,
+    });
+
+    expect(sendMessage).toHaveBeenNthCalledWith(1, chatId, "hello forum", {
+      parse_mode: "HTML",
+      message_thread_id: 271,
+    });
+    expect(sendMessage).toHaveBeenNthCalledWith(2, chatId, "hello forum", {
+      parse_mode: "HTML",
+    });
+    expect(res.messageId).toBe("58");
+  });
+
+  it("does not retry thread-not-found when no message_thread_id was provided", async () => {
+    const chatId = "123";
+    const threadErr = new Error("400: Bad Request: message thread not found");
+    const sendMessage = vi.fn().mockRejectedValueOnce(threadErr);
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    await expect(
+      sendMessageTelegram(chatId, "hello forum", {
+        token: "tok",
+        api,
+      }),
+    ).rejects.toThrow("message thread not found");
+    expect(sendMessage).toHaveBeenCalledTimes(1);
   });
 
   it("sets disable_notification when silent is true", async () => {
@@ -566,6 +648,45 @@ describe("sendMessageTelegram", () => {
       reply_to_message_id: 500,
     });
   });
+
+  it("retries media sends without message_thread_id when thread is missing", async () => {
+    const chatId = "123";
+    const threadErr = new Error("400: Bad Request: message thread not found");
+    const sendPhoto = vi
+      .fn()
+      .mockRejectedValueOnce(threadErr)
+      .mockResolvedValueOnce({
+        message_id: 59,
+        chat: { id: chatId },
+      });
+    const api = { sendPhoto } as unknown as {
+      sendPhoto: typeof sendPhoto;
+    };
+
+    loadWebMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("fake-image"),
+      contentType: "image/jpeg",
+      fileName: "photo.jpg",
+    });
+
+    const res = await sendMessageTelegram(chatId, "photo", {
+      token: "tok",
+      api,
+      mediaUrl: "https://example.com/photo.jpg",
+      messageThreadId: 271,
+    });
+
+    expect(sendPhoto).toHaveBeenNthCalledWith(1, chatId, expect.anything(), {
+      caption: "photo",
+      parse_mode: "HTML",
+      message_thread_id: 271,
+    });
+    expect(sendPhoto).toHaveBeenNthCalledWith(2, chatId, expect.anything(), {
+      caption: "photo",
+      parse_mode: "HTML",
+    });
+    expect(res.messageId).toBe("59");
+  });
 });
 
 describe("sendStickerTelegram", () => {
@@ -624,6 +745,33 @@ describe("sendStickerTelegram", () => {
     expect(sendSticker).toHaveBeenCalledWith(chatId, fileId, {
       message_thread_id: 271,
     });
+  });
+
+  it("retries sticker sends without message_thread_id when thread is missing", async () => {
+    const chatId = "123";
+    const threadErr = new Error("400: Bad Request: message thread not found");
+    const sendSticker = vi
+      .fn()
+      .mockRejectedValueOnce(threadErr)
+      .mockResolvedValueOnce({
+        message_id: 109,
+        chat: { id: chatId },
+      });
+    const api = { sendSticker } as unknown as {
+      sendSticker: typeof sendSticker;
+    };
+
+    const res = await sendStickerTelegram(chatId, "fileId123", {
+      token: "tok",
+      api,
+      messageThreadId: 271,
+    });
+
+    expect(sendSticker).toHaveBeenNthCalledWith(1, chatId, "fileId123", {
+      message_thread_id: 271,
+    });
+    expect(sendSticker).toHaveBeenNthCalledWith(2, chatId, "fileId123", undefined);
+    expect(res.messageId).toBe("109");
   });
 
   it("includes reply_to_message_id for threaded replies", async () => {

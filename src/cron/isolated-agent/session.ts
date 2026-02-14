@@ -23,11 +23,15 @@ export function resolveCronSession(params: {
     thinkingLevel: entry?.thinkingLevel,
     verboseLevel: entry?.verboseLevel,
     model: entry?.model,
+    modelOverride: entry?.modelOverride,
+    providerOverride: entry?.providerOverride,
     contextTokens: entry?.contextTokens,
     sendPolicy: entry?.sendPolicy,
     lastChannel: entry?.lastChannel,
     lastTo: entry?.lastTo,
     lastAccountId: entry?.lastAccountId,
+    label: entry?.label,
+    displayName: entry?.displayName,
     skillsSnapshot: entry?.skillsSnapshot,
   };
   return { storePath, store, sessionEntry, systemSent, isNewSession: true };

@@ -278,7 +278,6 @@ export async function dispatchReplyFromConfig(params: {
       } else {
         queuedFinal = dispatcher.sendFinalReply(payload);
       }
-      await dispatcher.waitForIdle();
       const counts = dispatcher.getQueuedCounts();
       counts.final += routedFinalCount;
       recordProcessed("completed", { reason: "fast_abort" });
@@ -292,31 +291,32 @@ export async function dispatchReplyFromConfig(params: {
     let accumulatedBlockText = "";
     let blockCount = 0;
 
+    const shouldSendToolSummaries = ctx.ChatType !== "group" && ctx.CommandSource !== "native";
+
     const replyResult = await (params.replyResolver ?? getReplyFromConfig)(
       ctx,
       {
         ...params.replyOptions,
-        onToolResult:
-          ctx.ChatType !== "group" && ctx.CommandSource !== "native"
-            ? (payload: ReplyPayload) => {
-                const run = async () => {
-                  const ttsPayload = await maybeApplyTtsToPayload({
-                    payload,
-                    cfg,
-                    channel: ttsChannel,
-                    kind: "tool",
-                    inboundAudio,
-                    ttsAuto: sessionTtsAuto,
-                  });
-                  if (shouldRouteToOriginating) {
-                    await sendPayloadAsync(ttsPayload, undefined, false);
-                  } else {
-                    dispatcher.sendToolResult(ttsPayload);
-                  }
-                };
-                return run();
-              }
-            : undefined,
+        onToolResult: shouldSendToolSummaries
+          ? (payload: ReplyPayload) => {
+              const run = async () => {
+                const ttsPayload = await maybeApplyTtsToPayload({
+                  payload,
+                  cfg,
+                  channel: ttsChannel,
+                  kind: "tool",
+                  inboundAudio,
+                  ttsAuto: sessionTtsAuto,
+                });
+                if (shouldRouteToOriginating) {
+                  await sendPayloadAsync(ttsPayload, undefined, false);
+                } else {
+                  dispatcher.sendToolResult(ttsPayload);
+                }
+              };
+              return run();
+            }
+          : undefined,
         onBlockReply: (payload: ReplyPayload, context) => {
           const run = async () => {
             // Accumulate block text for TTS generation after streaming
@@ -441,8 +441,6 @@ export async function dispatchReplyFromConfig(params: {
         );
       }
     }
-
-    await dispatcher.waitForIdle();
 
     const counts = dispatcher.getQueuedCounts();
     counts.final += routedFinalCount;

@@ -102,7 +102,7 @@ Legacy `agents.default` entries are migrated to `agents.main` on load.
 
 Examples:
 
-- `~/Projects/**/bin/bird`
+- `~/Projects/**/bin/peekaboo`
 - `~/.local/bin/*`
 - `/opt/homebrew/bin/rg`
 

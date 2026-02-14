@@ -9,7 +9,9 @@ import {
   resolveArchiveKind,
   resolvePackedRootDir,
 } from "../infra/archive.js";
+import { validateRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import * as skillScanner from "../security/skill-scanner.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 
 type PluginInstallLogger = {
@@ -67,6 +69,22 @@ function validatePluginId(pluginId: string): string | null {
     return "invalid plugin name: path separators not allowed";
   }
   return null;
+}
+
+function isPathInside(basePath: string, candidatePath: string): boolean {
+  const base = path.resolve(basePath);
+  const candidate = path.resolve(candidatePath);
+  const rel = path.relative(base, candidate);
+  return rel === "" || (!rel.startsWith(`..${path.sep}`) && rel !== ".." && !path.isAbsolute(rel));
+}
+
+function extensionUsesSkippedScannerPath(entry: string): boolean {
+  const segments = entry.split(/[\\/]+/).filter(Boolean);
+  return segments.some(
+    (segment) =>
+      segment === "node_modules" ||
+      (segment.startsWith(".") && segment !== "." && segment !== ".."),
+  );
 }
 
 async function ensureOpenClawExtensions(manifest: PackageManifest) {
@@ -161,6 +179,46 @@ async function installPluginFromPackageDir(params: {
     };
   }
 
+  const packageDir = path.resolve(params.packageDir);
+  const forcedScanEntries: string[] = [];
+  for (const entry of extensions) {
+    const resolvedEntry = path.resolve(packageDir, entry);
+    if (!isPathInside(packageDir, resolvedEntry)) {
+      logger.warn?.(`extension entry escapes plugin directory and will not be scanned: ${entry}`);
+      continue;
+    }
+    if (extensionUsesSkippedScannerPath(entry)) {
+      logger.warn?.(
+        `extension entry is in a hidden/node_modules path and will receive targeted scan coverage: ${entry}`,
+      );
+    }
+    forcedScanEntries.push(resolvedEntry);
+  }
+
+  // Scan plugin source for dangerous code patterns (warn-only; never blocks install)
+  try {
+    const scanSummary = await skillScanner.scanDirectoryWithSummary(params.packageDir, {
+      includeFiles: forcedScanEntries,
+    });
+    if (scanSummary.critical > 0) {
+      const criticalDetails = scanSummary.findings
+        .filter((f) => f.severity === "critical")
+        .map((f) => `${f.message} (${f.file}:${f.line})`)
+        .join("; ");
+      logger.warn?.(
+        `WARNING: Plugin "${pluginId}" contains dangerous code patterns: ${criticalDetails}`,
+      );
+    } else if (scanSummary.warn > 0) {
+      logger.warn?.(
+        `Plugin "${pluginId}" has ${scanSummary.warn} suspicious code pattern(s). Run "openclaw security audit --deep" for details.`,
+      );
+    }
+  } catch (err) {
+    logger.warn?.(
+      `Plugin "${pluginId}" code safety scan failed (${String(err)}). Installation continues; run "openclaw security audit --deep" after install.`,
+    );
+  }
+
   const extensionsDir = params.extensionsDir
     ? resolveUserPath(params.extensionsDir)
     : path.join(CONFIG_DIR, "extensions");
@@ -208,6 +266,10 @@ async function installPluginFromPackageDir(params: {
 
   for (const entry of extensions) {
     const resolvedEntry = path.resolve(targetDir, entry);
+    if (!isPathInside(targetDir, resolvedEntry)) {
+      logger.warn?.(`extension entry escapes plugin directory: ${entry}`);
+      continue;
+    }
     if (!(await fileExists(resolvedEntry))) {
       logger.warn?.(`extension entry not found: ${entry}`);
     }
@@ -217,10 +279,13 @@ async function installPluginFromPackageDir(params: {
   const hasDeps = Object.keys(deps).length > 0;
   if (hasDeps) {
     logger.info?.("Installing plugin dependencies…");
-    const npmRes = await runCommandWithTimeout(["npm", "install", "--omit=dev", "--silent"], {
-      timeoutMs: Math.max(timeoutMs, 300_000),
-      cwd: targetDir,
-    });
+    const npmRes = await runCommandWithTimeout(
+      ["npm", "install", "--omit=dev", "--silent", "--ignore-scripts"],
+      {
+        timeoutMs: Math.max(timeoutMs, 300_000),
+        cwd: targetDir,
+      },
+    );
     if (npmRes.code !== 0) {
       if (backupDir) {
         await fs.rm(targetDir, { recursive: true, force: true }).catch(() => undefined);
@@ -270,37 +335,41 @@ export async function installPluginFromArchive(params: {
   }
 
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-plugin-"));
-  const extractDir = path.join(tmpDir, "extract");
-  await fs.mkdir(extractDir, { recursive: true });
-
-  logger.info?.(`Extracting ${archivePath}…`);
   try {
-    await extractArchive({
-      archivePath,
-      destDir: extractDir,
+    const extractDir = path.join(tmpDir, "extract");
+    await fs.mkdir(extractDir, { recursive: true });
+
+    logger.info?.(`Extracting ${archivePath}…`);
+    try {
+      await extractArchive({
+        archivePath,
+        destDir: extractDir,
+        timeoutMs,
+        logger,
+      });
+    } catch (err) {
+      return { ok: false, error: `failed to extract archive: ${String(err)}` };
+    }
+
+    let packageDir = "";
+    try {
+      packageDir = await resolvePackedRootDir(extractDir);
+    } catch (err) {
+      return { ok: false, error: String(err) };
+    }
+
+    return await installPluginFromPackageDir({
+      packageDir,
+      extensionsDir: params.extensionsDir,
       timeoutMs,
       logger,
+      mode,
+      dryRun: params.dryRun,
+      expectedPluginId: params.expectedPluginId,
     });
-  } catch (err) {
-    return { ok: false, error: `failed to extract archive: ${String(err)}` };
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
   }
-
-  let packageDir = "";
-  try {
-    packageDir = await resolvePackedRootDir(extractDir);
-  } catch (err) {
-    return { ok: false, error: String(err) };
-  }
-
-  return await installPluginFromPackageDir({
-    packageDir,
-    extensionsDir: params.extensionsDir,
-    timeoutMs,
-    logger,
-    mode,
-    dryRun: params.dryRun,
-    expectedPluginId: params.expectedPluginId,
-  });
 }
 
 export async function installPluginFromDir(params: {
@@ -404,43 +473,51 @@ export async function installPluginFromNpmSpec(params: {
   const dryRun = params.dryRun ?? false;
   const expectedPluginId = params.expectedPluginId;
   const spec = params.spec.trim();
-  if (!spec) {
-    return { ok: false, error: "missing npm spec" };
+  const specError = validateRegistryNpmSpec(spec);
+  if (specError) {
+    return { ok: false, error: specError };
   }
 
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-npm-pack-"));
-  logger.info?.(`Downloading ${spec}…`);
-  const res = await runCommandWithTimeout(["npm", "pack", spec], {
-    timeoutMs: Math.max(timeoutMs, 300_000),
-    cwd: tmpDir,
-    env: { COREPACK_ENABLE_DOWNLOAD_PROMPT: "0" },
-  });
-  if (res.code !== 0) {
-    return {
-      ok: false,
-      error: `npm pack failed: ${res.stderr.trim() || res.stdout.trim()}`,
-    };
-  }
+  try {
+    logger.info?.(`Downloading ${spec}…`);
+    const res = await runCommandWithTimeout(["npm", "pack", spec, "--ignore-scripts"], {
+      timeoutMs: Math.max(timeoutMs, 300_000),
+      cwd: tmpDir,
+      env: {
+        COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
+        NPM_CONFIG_IGNORE_SCRIPTS: "true",
+      },
+    });
+    if (res.code !== 0) {
+      return {
+        ok: false,
+        error: `npm pack failed: ${res.stderr.trim() || res.stdout.trim()}`,
+      };
+    }
 
-  const packed = (res.stdout || "")
-    .split("\n")
-    .map((l) => l.trim())
-    .filter(Boolean)
-    .pop();
-  if (!packed) {
-    return { ok: false, error: "npm pack produced no archive" };
-  }
+    const packed = (res.stdout || "")
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .pop();
+    if (!packed) {
+      return { ok: false, error: "npm pack produced no archive" };
+    }
 
-  const archivePath = path.join(tmpDir, packed);
-  return await installPluginFromArchive({
-    archivePath,
-    extensionsDir: params.extensionsDir,
-    timeoutMs,
-    logger,
-    mode,
-    dryRun,
-    expectedPluginId,
-  });
+    const archivePath = path.join(tmpDir, packed);
+    return await installPluginFromArchive({
+      archivePath,
+      extensionsDir: params.extensionsDir,
+      timeoutMs,
+      logger,
+      mode,
+      dryRun,
+      expectedPluginId,
+    });
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
+  }
 }
 
 export async function installPluginFromPath(params: {

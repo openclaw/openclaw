@@ -23,6 +23,67 @@ vi.mock("../pairing/pairing-store.js", () => ({
 }));
 
 describe("registerTelegramNativeCommands (plugin auth)", () => {
+  it("caps menu registration at 100 while leaving hidden plugin handlers available", () => {
+    const specs = Array.from({ length: 101 }, (_, i) => ({
+      name: `cmd_${i}`,
+      description: `Command ${i}`,
+    }));
+    getPluginCommandSpecs.mockReturnValue(specs);
+    matchPluginCommand.mockReset();
+    executePluginCommand.mockReset();
+    deliverReplies.mockReset();
+
+    const handlers: Record<string, (ctx: unknown) => Promise<void>> = {};
+    const setMyCommands = vi.fn().mockResolvedValue(undefined);
+    const log = vi.fn();
+    const bot = {
+      api: {
+        setMyCommands,
+        sendMessage: vi.fn(),
+      },
+      command: (name: string, handler: (ctx: unknown) => Promise<void>) => {
+        handlers[name] = handler;
+      },
+    } as const;
+
+    registerTelegramNativeCommands({
+      bot: bot as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
+      cfg: {} as OpenClawConfig,
+      runtime: { log } as RuntimeEnv,
+      accountId: "default",
+      telegramCfg: {} as TelegramAccountConfig,
+      allowFrom: [],
+      groupAllowFrom: [],
+      replyToMode: "off",
+      textLimit: 4000,
+      useAccessGroups: false,
+      nativeEnabled: false,
+      nativeSkillsEnabled: false,
+      nativeDisabledExplicit: false,
+      resolveGroupPolicy: () =>
+        ({
+          allowlistEnabled: false,
+          allowed: true,
+        }) as ChannelGroupPolicy,
+      resolveTelegramGroupConfig: () => ({
+        groupConfig: undefined,
+        topicConfig: undefined,
+      }),
+      shouldSkipUpdate: () => false,
+      opts: { token: "token" },
+    });
+
+    const registered = setMyCommands.mock.calls[0]?.[0] as Array<{
+      command: string;
+      description: string;
+    }>;
+    expect(registered).toHaveLength(100);
+    expect(registered[0]).toEqual({ command: "cmd_0", description: "Command 0" });
+    expect(registered[99]).toEqual({ command: "cmd_99", description: "Command 99" });
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("registering first 100"));
+    expect(Object.keys(handlers)).toHaveLength(101);
+  });
+
   it("allows requireAuth:false plugin command even when sender is unauthorized", async () => {
     const command = {
       name: "plugin",

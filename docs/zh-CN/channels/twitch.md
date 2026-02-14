@@ -32,7 +32,7 @@ openclaw plugins install @openclaw/twitch
 openclaw plugins install ./extensions/twitch
 ```
 
-详情：[插件](/plugin)
+详情：[插件](/tools/plugin)
 
 ## 快速设置（新手）
 

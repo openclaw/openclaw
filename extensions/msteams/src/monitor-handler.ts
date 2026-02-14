@@ -49,7 +49,7 @@ async function handleFileConsentInvoke(
 
   const consentResponse = parseFileConsentInvoke(activity);
   if (!consentResponse) {
-    log.debug("invalid file consent invoke", { value: activity.value });
+    log.debug?.("invalid file consent invoke", { value: activity.value });
     return false;
   }
 
@@ -61,7 +61,7 @@ async function handleFileConsentInvoke(
   if (consentResponse.action === "accept" && consentResponse.uploadInfo) {
     const pendingFile = getPendingUpload(uploadId);
     if (pendingFile) {
-      log.debug("user accepted file consent, uploading", {
+      log.debug?.("user accepted file consent, uploading", {
         uploadId,
         filename: pendingFile.filename,
         size: pendingFile.buffer.length,
@@ -94,20 +94,20 @@ async function handleFileConsentInvoke(
           uniqueId: consentResponse.uploadInfo.uniqueId,
         });
       } catch (err) {
-        log.debug("file upload failed", { uploadId, error: String(err) });
+        log.debug?.("file upload failed", { uploadId, error: String(err) });
         await context.sendActivity(`File upload failed: ${String(err)}`);
       } finally {
         removePendingUpload(uploadId);
       }
     } else {
-      log.debug("pending file not found for consent", { uploadId });
+      log.debug?.("pending file not found for consent", { uploadId });
       await context.sendActivity(
         "The file upload request has expired. Please try sending the file again.",
       );
     }
   } else {
     // User declined
-    log.debug("user declined file consent", { uploadId });
+    log.debug?.("user declined file consent", { uploadId });
     removePendingUpload(uploadId);
   }
 
@@ -151,7 +151,7 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
     const membersAdded = (context as MSTeamsTurnContext).activity?.membersAdded ?? [];
     for (const member of membersAdded) {
       if (member.id !== (context as MSTeamsTurnContext).activity?.recipient?.id) {
-        deps.log.debug("member added", { member: member.id });
+        deps.log.debug?.("member added", { member: member.id });
         // Don't send welcome message - let the user initiate conversation.
       }
     }

@@ -18,7 +18,12 @@ export default defineConfig([
     platform: "node",
   },
   {
-    dts: true,
+    entry: "src/infra/warning-filter.ts",
+    env,
+    fixedExtension: false,
+    platform: "node",
+  },
+  {
     entry: "src/plugin-sdk/index.ts",
     outDir: "dist/plugin-sdk",
     env,
@@ -26,7 +31,20 @@ export default defineConfig([
     platform: "node",
   },
   {
+    entry: "src/plugin-sdk/account-id.ts",
+    outDir: "dist/plugin-sdk",
+    env,
+    fixedExtension: false,
+    platform: "node",
+  },
+  {
     entry: "src/extensionAPI.ts",
+    env,
+    fixedExtension: false,
+    platform: "node",
+  },
+  {
+    entry: ["src/hooks/bundled/*/handler.ts", "src/hooks/llm-slug-generator.ts"],
     env,
     fixedExtension: false,
     platform: "node",

@@ -32,11 +32,17 @@ import { getTelegramRuntime } from "./runtime.js";
 const meta = getChatChannelMeta("telegram");
 
 const telegramMessageActions: ChannelMessageActionAdapter = {
-  listActions: (ctx) => getTelegramRuntime().channel.telegram.messageActions.listActions(ctx),
+  listActions: (ctx) =>
+    getTelegramRuntime().channel.telegram.messageActions?.listActions?.(ctx) ?? [],
   extractToolSend: (ctx) =>
-    getTelegramRuntime().channel.telegram.messageActions.extractToolSend(ctx),
-  handleAction: async (ctx) =>
-    await getTelegramRuntime().channel.telegram.messageActions.handleAction(ctx),
+    getTelegramRuntime().channel.telegram.messageActions?.extractToolSend?.(ctx) ?? null,
+  handleAction: async (ctx) => {
+    const ma = getTelegramRuntime().channel.telegram.messageActions;
+    if (!ma?.handleAction) {
+      throw new Error("Telegram message actions not available");
+    }
+    return ma.handleAction(ctx);
+  },
 };
 
 function parseReplyToMessageId(replyToId?: string | null) {
@@ -172,7 +178,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
     resolveToolPolicy: resolveTelegramGroupToolPolicy,
   },
   threading: {
-    resolveReplyToMode: ({ cfg }) => cfg.channels?.telegram?.replyToMode ?? "first",
+    resolveReplyToMode: ({ cfg }) => cfg.channels?.telegram?.replyToMode ?? "off",
   },
   messaging: {
     normalizeTarget: normalizeTelegramMessagingTarget,
@@ -408,6 +414,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
         webhookUrl: account.config.webhookUrl,
         webhookSecret: account.config.webhookSecret,
         webhookPath: account.config.webhookPath,
+        webhookHost: account.config.webhookHost,
       });
     },
     logoutAccount: async ({ accountId, cfg }) => {

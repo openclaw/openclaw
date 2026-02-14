@@ -1,3 +1,4 @@
+import type { DmPolicy } from "openclaw/plugin-sdk";
 import {
   addWildcardAllowFrom,
   formatDocsLink,
@@ -6,7 +7,7 @@ import {
   type ChannelOnboardingDmPolicy,
   type WizardPrompter,
 } from "openclaw/plugin-sdk";
-import type { CoreConfig, DmPolicy } from "./types.js";
+import type { CoreConfig } from "./types.js";
 import { listMatrixDirectoryGroupsLive } from "./directory-live.js";
 import { resolveMatrixAccount } from "./matrix/accounts.js";
 import { ensureMatrixSdkInstalled, isMatrixSdkAvailable } from "./matrix/deps.js";

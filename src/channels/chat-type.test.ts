@@ -15,4 +15,13 @@ describe("normalizeChatType", () => {
     expect(normalizeChatType("nope")).toBeUndefined();
     expect(normalizeChatType("room")).toBeUndefined();
   });
+
+  describe("backward compatibility", () => {
+    it("accepts legacy 'dm' value and normalizes to 'direct'", () => {
+      // Legacy config/input may use "dm" - ensure smooth upgrade path
+      expect(normalizeChatType("dm")).toBe("direct");
+      expect(normalizeChatType("DM")).toBe("direct");
+      expect(normalizeChatType(" dm ")).toBe("direct");
+    });
+  });
 });
