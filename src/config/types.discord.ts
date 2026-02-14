@@ -142,6 +142,11 @@ export type DiscordUiConfig = {
   components?: DiscordUiComponentsConfig;
 };
 
+export type DiscordSlashCommandConfig = {
+  /** Reply ephemerally (default: true). */
+  ephemeral?: boolean;
+};
+
 export type DiscordAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
@@ -226,6 +231,8 @@ export type DiscordAccountConfig = {
   agentComponents?: DiscordAgentComponentsConfig;
   /** Discord UI customization (components, modals, etc.). */
   ui?: DiscordUiConfig;
+  /** Slash command configuration. */
+  slashCommand?: DiscordSlashCommandConfig;
   /** Privileged Gateway Intents (must also be enabled in Discord Developer Portal). */
   intents?: DiscordIntentsConfig;
   /** Voice channel conversation settings. */
