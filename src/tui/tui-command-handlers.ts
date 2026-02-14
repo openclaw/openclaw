@@ -9,6 +9,7 @@ import type {
   TuiOptions,
   TuiStateAccess,
 } from "./tui-types.js";
+import { getOllamaStatus } from "../agents/ollama-health.js";
 import {
   formatThinkingLevels,
   normalizeUsageDisplay,
@@ -259,7 +260,21 @@ export function createCommandHandlers(context: CommandHandlerContext) {
             break;
           }
           if (status && typeof status === "object") {
-            const lines = formatStatusSummary(status as GatewayStatusSummary);
+            const summary = status as GatewayStatusSummary;
+            // Non-blocking Ollama health check — enrich status if provider looks like ollama
+            try {
+              const ollamaInfo = await getOllamaStatus();
+              summary.ollama = {
+                healthy: ollamaInfo.health.healthy,
+                version: ollamaInfo.health.healthy ? ollamaInfo.health.version : undefined,
+                error: !ollamaInfo.health.healthy ? ollamaInfo.health.error : undefined,
+                models: ollamaInfo.models.map((m) => ({ name: m.name, size: m.size })),
+                running: ollamaInfo.running.map((m) => ({ name: m.name, sizeVram: m.sizeVram })),
+              };
+            } catch {
+              /* Ollama check failed silently */
+            }
+            const lines = formatStatusSummary(summary);
             for (const line of lines) {
               chatLog.addSystem(line);
             }

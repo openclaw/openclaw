@@ -78,6 +78,33 @@ export function formatStatusSummary(summary: GatewayStatusSummary) {
     }
   }
 
+  // ── Ollama status ──────────────────────────────────────────────────────
+  if (summary.ollama) {
+    const o = summary.ollama;
+    lines.push("");
+    if (o.healthy) {
+      lines.push(`Ollama: connected (v${o.version})`);
+    } else {
+      lines.push(`Ollama: not reachable${o.error ? ` — ${o.error}` : ""}`);
+    }
+    if (o.models.length > 0) {
+      const names = o.models.map((m) => {
+        const gb = (m.size / 1e9).toFixed(1);
+        return `${m.name} (${gb}GB)`;
+      });
+      lines.push(`  Models: ${names.join(", ")}`);
+    } else if (o.healthy) {
+      lines.push("  Models: none pulled");
+    }
+    if (o.running.length > 0) {
+      const names = o.running.map((m) => {
+        const gb = (m.sizeVram / 1e9).toFixed(1);
+        return `${m.name} (${gb}GB VRAM)`;
+      });
+      lines.push(`  Loaded: ${names.join(", ")}`);
+    }
+  }
+
   const queued = Array.isArray(summary.queuedSystemEvents) ? summary.queuedSystemEvents : [];
   if (queued.length > 0) {
     const preview = queued.slice(0, 3).join(" | ");
