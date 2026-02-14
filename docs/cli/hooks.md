@@ -192,6 +192,9 @@ openclaw hooks install <path-or-spec>
 
 Install a hook pack from a local folder/archive or npm.
 
+Npm specs are **registry-only** (package name + optional version/tag). Git/URL/file
+specs are rejected. Dependency installs run with `--ignore-scripts` for safety.
+
 **What it does:**
 
 - Copies the hook pack into `~/.openclaw/hooks/<id>`
