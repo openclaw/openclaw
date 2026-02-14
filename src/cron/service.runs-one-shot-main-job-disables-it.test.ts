@@ -1,39 +1,18 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HeartbeatRunResult } from "../infra/heartbeat-wake.js";
 import type { CronJob } from "./types.js";
 import { CronService } from "./service.js";
+import {
+  createCronStoreHarness,
+  createNoopLogger,
+  installCronTestHooks,
+} from "./service.test-harness.js";
 
-const noopLogger = {
-  debug: vi.fn(),
-  info: vi.fn(),
-  warn: vi.fn(),
-  error: vi.fn(),
-};
-
-let fixtureRoot = "";
-let caseId = 0;
-
-beforeAll(async () => {
-  fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-"));
-});
-
-afterAll(async () => {
-  if (fixtureRoot) {
-    await fs.rm(fixtureRoot, { recursive: true, force: true });
-  }
-});
-
-async function makeStorePath() {
-  const dir = path.join(fixtureRoot, `case-${caseId++}`);
-  await fs.mkdir(dir, { recursive: true });
-  return {
-    storePath: path.join(dir, "cron", "jobs.json"),
-    cleanup: async () => {},
-  };
-}
+const noopLogger = createNoopLogger();
+const { makeStorePath } = createCronStoreHarness();
+installCronTestHooks({ logger: noopLogger });
 
 async function waitForJobs(cron: CronService, predicate: (jobs: CronJob[]) => boolean) {
   let latest: CronJob[] = [];
@@ -48,19 +27,6 @@ async function waitForJobs(cron: CronService, predicate: (jobs: CronJob[]) => bo
 }
 
 describe("CronService", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2025-12-13T00:00:00.000Z"));
-    noopLogger.debug.mockClear();
-    noopLogger.info.mockClear();
-    noopLogger.warn.mockClear();
-    noopLogger.error.mockClear();
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
   it("runs a one-shot main job and disables it after success when requested", async () => {
     const store = await makeStorePath();
     const enqueueSystemEvent = vi.fn();
