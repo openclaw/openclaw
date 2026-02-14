@@ -267,6 +267,7 @@ describe("resolveSlackMedia", () => {
     });
 
     expect(result).not.toBeNull();
+    expect(result).toHaveLength(1);
     // saveMediaBuffer should receive the overridden audio/mp4
     expect(saveMediaBufferMock).toHaveBeenCalledWith(
       expect.any(Buffer),
@@ -276,7 +277,7 @@ describe("resolveSlackMedia", () => {
     );
     // Returned contentType must be the overridden value, not the
     // re-detected video/mp4 from saveMediaBuffer
-    expect(result!.contentType).toBe("audio/mp4");
+    expect(result![0]?.contentType).toBe("audio/mp4");
   });
 
   it("preserves original MIME for non-voice Slack files", async () => {
@@ -304,12 +305,14 @@ describe("resolveSlackMedia", () => {
     });
 
     expect(result).not.toBeNull();
+    expect(result).toHaveLength(1);
     expect(saveMediaBufferMock).toHaveBeenCalledWith(
       expect.any(Buffer),
       "video/mp4",
       "inbound",
       16 * 1024 * 1024,
     );
+    expect(result![0]?.contentType).toBe("video/mp4");
   });
 
   it("falls through to next file when first file returns error", async () => {
@@ -343,15 +346,9 @@ describe("resolveSlackMedia", () => {
   });
 
   it("returns all successfully downloaded files as an array", async () => {
-    // Mock the store module
-    vi.doMock("../../media/store.js", () => ({
-      saveMediaBuffer: vi
-        .fn()
-        .mockResolvedValueOnce({ path: "/tmp/a.jpg", contentType: "image/jpeg" })
-        .mockResolvedValueOnce({ path: "/tmp/b.png", contentType: "image/png" }),
-    }));
-
-    const { resolveSlackMedia } = await import("./media.js");
+    vi.spyOn(mediaStore, "saveMediaBuffer")
+      .mockResolvedValueOnce({ path: "/tmp/a.jpg", contentType: "image/jpeg" })
+      .mockResolvedValueOnce({ path: "/tmp/b.png", contentType: "image/png" });
 
     const responseA = new Response(Buffer.from("image a"), {
       status: 200,
