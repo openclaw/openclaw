@@ -11,6 +11,9 @@ let fixtureRoot = "";
 let fixtureFileCount = 0;
 let largeJpegBuffer: Buffer;
 let tinyPngBuffer: Buffer;
+let alphaPngBuffer: Buffer;
+let fallbackPngBuffer: Buffer;
+let fallbackPngCap = 0;
 
 async function writeTempFile(buffer: Buffer, ext: string): Promise<string> {
   const file = path.join(fixtureRoot, `media-${fixtureFileCount++}${ext}`);
@@ -50,6 +53,29 @@ beforeAll(async () => {
   })
     .png()
     .toBuffer();
+  alphaPngBuffer = await sharp({
+    create: {
+      width: 64,
+      height: 64,
+      channels: 4,
+      background: { r: 255, g: 0, b: 0, alpha: 0.5 },
+    },
+  })
+    .png()
+    .toBuffer();
+  const size = 96;
+  const raw = buildDeterministicBytes(size * size * 4);
+  fallbackPngBuffer = await sharp(raw, { raw: { width: size, height: size, channels: 4 } })
+    .png()
+    .toBuffer();
+  const smallestPng = await optimizeImageToPng(fallbackPngBuffer, 1);
+  fallbackPngCap = Math.max(1, smallestPng.optimizedSize - 1);
+  const jpegOptimized = await optimizeImageToJpeg(fallbackPngBuffer, fallbackPngCap);
+  if (jpegOptimized.buffer.length >= smallestPng.optimizedSize) {
+    throw new Error(
+      `JPEG fallback did not shrink below PNG (jpeg=${jpegOptimized.buffer.length}, png=${smallestPng.optimizedSize})`,
+    );
+  }
 });
 
 afterAll(async () => {
@@ -260,18 +286,7 @@ describe("web media loading", () => {
   });
 
   it("preserves PNG alpha when under the cap", async () => {
-    const buffer = await sharp({
-      create: {
-        width: 64,
-        height: 64,
-        channels: 4,
-        background: { r: 255, g: 0, b: 0, alpha: 0.5 },
-      },
-    })
-      .png()
-      .toBuffer();
-
-    const file = await writeTempFile(buffer, ".png");
+    const file = await writeTempFile(alphaPngBuffer, ".png");
 
     const result = await loadWebMedia(file, 1024 * 1024);
 
@@ -282,28 +297,13 @@ describe("web media loading", () => {
   });
 
   it("falls back to JPEG when PNG alpha cannot fit under cap", async () => {
-    const size = 96;
-    const raw = buildDeterministicBytes(size * size * 4);
-    const pngBuffer = await sharp(raw, { raw: { width: size, height: size, channels: 4 } })
-      .png()
-      .toBuffer();
-    const smallestPng = await optimizeImageToPng(pngBuffer, 1);
-    const cap = Math.max(1, smallestPng.optimizedSize - 1);
-    const jpegOptimized = await optimizeImageToJpeg(pngBuffer, cap);
+    const file = await writeTempFile(fallbackPngBuffer, ".png");
 
-    if (jpegOptimized.buffer.length >= smallestPng.optimizedSize) {
-      throw new Error(
-        `JPEG fallback did not shrink below PNG (jpeg=${jpegOptimized.buffer.length}, png=${smallestPng.optimizedSize})`,
-      );
-    }
-
-    const file = await writeTempFile(pngBuffer, ".png");
-
-    const result = await loadWebMedia(file, cap);
+    const result = await loadWebMedia(file, fallbackPngCap);
 
     expect(result.kind).toBe("image");
     expect(result.contentType).toBe("image/jpeg");
-    expect(result.buffer.length).toBeLessThanOrEqual(cap);
+    expect(result.buffer.length).toBeLessThanOrEqual(fallbackPngCap);
   });
 });
 
