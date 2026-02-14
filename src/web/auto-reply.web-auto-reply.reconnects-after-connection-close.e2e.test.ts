@@ -1,6 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../test/helpers/envelope-timestamp.js";
-import { monitorWebChannel } from "./auto-reply.js";
 import {
   installWebAutoReplyTestHomeHooks,
   installWebAutoReplyUnitTestHooks,
@@ -12,6 +11,12 @@ installWebAutoReplyTestHomeHooks();
 
 describe("web auto-reply", () => {
   installWebAutoReplyUnitTestHooks();
+
+  // Ensure test-harness `vi.mock(...)` hooks are registered before importing the module under test.
+  let monitorWebChannel: typeof import("./auto-reply.js").monitorWebChannel;
+  beforeAll(async () => {
+    ({ monitorWebChannel } = await import("./auto-reply.js"));
+  });
 
   it("handles helper envelope timestamps with trimmed timezones (regression)", () => {
     const d = new Date("2025-01-01T00:00:00.000Z");
