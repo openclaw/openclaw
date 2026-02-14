@@ -13,7 +13,7 @@ export function resolveFinalAssistantText(params: {
   if (streamedText.trim()) {
     return streamedText;
   }
-  return "(no output)";
+  return "";
 }
 
 export function composeThinkingAndContent(params: {
