@@ -17,9 +17,16 @@ export const ModelCompatSchema = z
     supportsStore: z.boolean().optional(),
     supportsDeveloperRole: z.boolean().optional(),
     supportsReasoningEffort: z.boolean().optional(),
+    supportsUsageInStreaming: z.boolean().optional(),
+    supportsStrictMode: z.boolean().optional(),
     maxTokensField: z
       .union([z.literal("max_completion_tokens"), z.literal("max_tokens")])
       .optional(),
+    thinkingFormat: z.union([z.literal("openai"), z.literal("zai"), z.literal("qwen")]).optional(),
+    requiresToolResultName: z.boolean().optional(),
+    requiresAssistantAfterToolResult: z.boolean().optional(),
+    requiresThinkingAsText: z.boolean().optional(),
+    requiresMistralToolIds: z.boolean().optional(),
   })
   .strict()
   .optional();
