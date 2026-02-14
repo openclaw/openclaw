@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CronJob } from "./types.js";
 import { CronService } from "./service.js";
@@ -29,6 +28,16 @@ async function makeStorePath() {
       await fs.rm(dir, { recursive: true, force: true });
     },
   };
+}
+
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
 }
 
 function createDueIsolatedJob(params: {
@@ -211,7 +220,6 @@ describe("Cron issue regressions", () => {
   });
 
   it("skips forced manual runs while a timer-triggered run is in progress", async () => {
-    vi.useRealTimers();
     const store = await makeStorePath();
     let resolveRun:
       | ((value: { status: "ok" | "error" | "skipped"; summary?: string; error?: string }) => void)
@@ -225,6 +233,10 @@ describe("Cron issue regressions", () => {
         ),
     );
 
+    const started = createDeferred<void>();
+    const finished = createDeferred<void>();
+    let targetJobId = "";
+
     const cron = new CronService({
       cronEnabled: true,
       storePath: store.storePath,
@@ -232,6 +244,16 @@ describe("Cron issue regressions", () => {
       enqueueSystemEvent: vi.fn(),
       requestHeartbeatNow: vi.fn(),
       runIsolatedAgentJob,
+      onEvent: (evt: CronEvent) => {
+        if (evt.jobId !== targetJobId) {
+          return;
+        }
+        if (evt.action === "started") {
+          started.resolve();
+        } else if (evt.action === "finished" && evt.status === "ok") {
+          finished.resolve();
+        }
+      },
     });
     await cron.start();
 
@@ -246,9 +268,9 @@ describe("Cron issue regressions", () => {
       delivery: { mode: "none" },
     });
 
-    for (let i = 0; i < 20 && runIsolatedAgentJob.mock.calls.length === 0; i++) {
-      await delay(1);
-    }
+    targetJobId = job.id;
+    await vi.advanceTimersByTimeAsync(2);
+    await started.promise;
     expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
 
     const manualResult = await cron.run(job.id, "force");
@@ -256,13 +278,7 @@ describe("Cron issue regressions", () => {
     expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
 
     resolveRun?.({ status: "ok", summary: "done" });
-    for (let i = 0; i < 20; i++) {
-      const jobs = await cron.list({ includeDisabled: true });
-      if (jobs.some((j) => j.id === job.id && j.state.lastStatus === "ok")) {
-        break;
-      }
-      await delay(1);
-    }
+    await finished.promise;
 
     cron.stop();
     await store.cleanup();
