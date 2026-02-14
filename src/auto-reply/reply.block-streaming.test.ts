@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { getReplyFromConfig } from "./reply.js";
 
@@ -95,7 +94,12 @@ describe("block streaming", () => {
   });
 
   afterAll(async () => {
-    await fs.rm(fixtureRoot, { recursive: true, force: true });
+    await fs.rm(fixtureRoot, {
+      recursive: true,
+      force: true,
+      maxRetries: 10,
+      retryDelay: 50,
+    });
   });
 
   beforeEach(() => {
@@ -263,13 +267,9 @@ describe("block streaming", () => {
 
       expect(resStreamMode?.text).toBe("final");
       expect(onBlockReplyStreamMode).not.toHaveBeenCalled();
-    });
-  });
-
-  it("queues followups for collect + summarize modes", async () => {
-    vi.useFakeTimers();
-    await withTempHomeBase(
-      async (home) => {
+      vi.useFakeTimers();
+      try {
+        piEmbeddedMock.runEmbeddedPiAgent.mockReset();
         const prompts: string[] = [];
         piEmbeddedMock.runEmbeddedPiAgent.mockImplementation(async (params) => {
           prompts.push(params.prompt);
@@ -357,8 +357,9 @@ describe("block streaming", () => {
         await vi.advanceTimersByTimeAsync(50);
         await Promise.resolve();
         expect(prompts.some((p) => p.includes("[Queue overflow]"))).toBe(true);
-      },
-      { prefix: "openclaw-queue-" },
-    );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 });
