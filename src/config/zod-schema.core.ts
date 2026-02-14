@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
+import { createAllowDenyChannelRulesSchema } from "./zod-schema.allowdeny.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
 export const ModelApiSchema = z.union([
@@ -376,37 +377,7 @@ export const ExecutableTokenSchema = z
   .string()
   .refine(isSafeExecutableValue, "expected safe executable name or path");
 
-export const MediaUnderstandingScopeSchema = z
-  .object({
-    default: z.union([z.literal("allow"), z.literal("deny")]).optional(),
-    rules: z
-      .array(
-        z
-          .object({
-            action: z.union([z.literal("allow"), z.literal("deny")]),
-            match: z
-              .object({
-                channel: z.string().optional(),
-                chatType: z
-                  .union([
-                    z.literal("direct"),
-                    z.literal("group"),
-                    z.literal("channel"),
-                    /** @deprecated Use `direct` instead. Kept for backward compatibility. */
-                    z.literal("dm"),
-                  ])
-                  .optional(),
-                keyPrefix: z.string().optional(),
-              })
-              .strict()
-              .optional(),
-          })
-          .strict(),
-      )
-      .optional(),
-  })
-  .strict()
-  .optional();
+export const MediaUnderstandingScopeSchema = createAllowDenyChannelRulesSchema();
 
 export const MediaUnderstandingCapabilitiesSchema = z
   .array(z.union([z.literal("image"), z.literal("audio"), z.literal("video")]))
