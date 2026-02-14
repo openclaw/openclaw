@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { isReasoningTagProvider } from "./provider-utils.js";
 
 describe("isReasoningTagProvider", () => {
-  it("returns false for ollama — native reasoning field, no tags needed (#2279)", () => {
+  it("returns false for ollama - native reasoning field, no tags needed (#2279)", () => {
     expect(isReasoningTagProvider("ollama")).toBe(false);
     expect(isReasoningTagProvider("Ollama")).toBe(false);
   });
