@@ -240,15 +240,15 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
       }
 
       const optionIndexes = pollOptions.map((opt) => {
-        const idx = typeof opt === "number" ? opt : parseInt(String(opt), 10);
-        if (!Number.isFinite(idx) || idx < 0) {
+        const idx = Number(opt);
+        if (!Number.isFinite(idx) || !Number.isInteger(idx) || idx < 0) {
           throw new Error(`Invalid poll option index: ${opt}`);
         }
         return idx;
       });
 
-      const timestamp = parseInt(messageId, 10);
-      if (!Number.isFinite(timestamp) || timestamp <= 0) {
+      const timestamp = Number(messageId);
+      if (!Number.isFinite(timestamp) || !Number.isInteger(timestamp) || timestamp <= 0) {
         throw new Error(`Invalid messageId: ${messageId}. Expected positive numeric timestamp.`);
       }
 
