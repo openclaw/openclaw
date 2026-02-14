@@ -388,6 +388,18 @@ export const nodeHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    if (command === "system.execApprovals.get" || command === "system.execApprovals.set") {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "node.invoke does not allow system.execApprovals.*; use exec.approvals.node.*",
+          { details: { command } },
+        ),
+      );
+      return;
+    }
 
     await respondUnavailableOnThrow(respond, async () => {
       const nodeSession = context.nodeRegistry.get(nodeId);
