@@ -88,7 +88,7 @@ function createTelegramHttpLogger(cfg: ReturnType<typeof loadConfig>) {
   };
 }
 
-function resolveTelegramClientOptions(
+export function resolveTelegramClientOptions(
   account: ResolvedTelegramAccount,
 ): ApiClientOptions | undefined {
   const proxyUrl = account.config.proxy?.trim();
@@ -109,7 +109,10 @@ function resolveTelegramClientOptions(
     : undefined;
 }
 
-function resolveToken(explicit: string | undefined, params: { accountId: string; token: string }) {
+export function resolveToken(
+  explicit: string | undefined,
+  params: { accountId: string; token: string },
+) {
   if (explicit?.trim()) {
     return explicit.trim();
   }
@@ -121,7 +124,7 @@ function resolveToken(explicit: string | undefined, params: { accountId: string;
   return params.token.trim();
 }
 
-function normalizeChatId(to: string): string {
+export function normalizeChatId(to: string): string {
   const trimmed = to.trim();
   if (!trimmed) {
     throw new Error("Recipient is required for Telegram sends");
@@ -923,3 +926,6 @@ export async function sendStickerTelegram(
 
   return { messageId, chatId: resolvedChatId };
 }
+
+// Pin/unpin functions moved to ./pin.ts
+export { pinMessageTelegram, unpinMessageTelegram } from "./pin.js";

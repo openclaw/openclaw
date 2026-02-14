@@ -97,12 +97,14 @@ Name lookup:
   - Required: `--message-id`, `--target`
 
 - `pin` / `unpin`
-  - Channels: Discord/Slack
+  - Channels: Discord/Slack/Telegram
   - Required: `--message-id`, `--target`
+  - Telegram-specific: `--disable-notification` (optional, disable pin notification)
 
 - `pins` (list)
   - Channels: Discord/Slack
   - Required: `--target`
+  - Note: Telegram list-pins not yet supported (API limitation)
 
 - `permissions`
   - Channels: Discord

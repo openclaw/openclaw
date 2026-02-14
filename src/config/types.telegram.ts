@@ -18,6 +18,8 @@ export type TelegramActionConfig = {
   editMessage?: boolean;
   /** Enable sticker actions (send and search). */
   sticker?: boolean;
+  /** Enable pin/unpin message actions. */
+  pins?: boolean;
 };
 
 export type TelegramNetworkConfig = {
