@@ -409,13 +409,20 @@ export function writeClaudeCliKeychainCredentials(
 
     // Use execFileSync to avoid shell interpretation of user-controlled token values.
     // This prevents command injection via $() or backtick expansion in OAuth tokens.
-    execFileSyncImpl("security", [
-      "add-generic-password",
-      "-U",
-      "-s", CLAUDE_CLI_KEYCHAIN_SERVICE,
-      "-a", CLAUDE_CLI_KEYCHAIN_ACCOUNT,
-      "-w", newValue,
-    ], { encoding: "utf8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"] });
+    execFileSyncImpl(
+      "security",
+      [
+        "add-generic-password",
+        "-U",
+        "-s",
+        CLAUDE_CLI_KEYCHAIN_SERVICE,
+        "-a",
+        CLAUDE_CLI_KEYCHAIN_ACCOUNT,
+        "-w",
+        newValue,
+      ],
+      { encoding: "utf8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"] },
+    );
 
     log.info("wrote refreshed credentials to claude cli keychain", {
       expires: new Date(newCredentials.expires).toISOString(),
