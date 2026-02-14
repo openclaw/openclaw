@@ -39,6 +39,7 @@ type ZulipEventMessage = {
   sender_full_name?: string;
   sender_email?: string;
   display_recipient?: string;
+  stream_id?: number;
   subject?: string;
   content?: string;
   content_type?: string;
@@ -280,6 +281,54 @@ async function replyToDm(params: {
   }
 }
 
+async function sendTypingIndicator(params: {
+  auth: ZulipAuth;
+  streamId: number;
+  topic: string;
+  abortSignal?: AbortSignal;
+}): Promise<void> {
+  try {
+    await zulipRequest({
+      auth: params.auth,
+      method: "POST",
+      path: "/api/v1/typing",
+      form: {
+        op: "start",
+        type: "stream",
+        stream_id: params.streamId,
+        topic: params.topic,
+      },
+      abortSignal: params.abortSignal,
+    });
+  } catch {
+    // Best effort — typing indicators are non-critical.
+  }
+}
+
+async function stopTypingIndicator(params: {
+  auth: ZulipAuth;
+  streamId: number;
+  topic: string;
+  abortSignal?: AbortSignal;
+}): Promise<void> {
+  try {
+    await zulipRequest({
+      auth: params.auth,
+      method: "POST",
+      path: "/api/v1/typing",
+      form: {
+        op: "stop",
+        type: "stream",
+        stream_id: params.streamId,
+        topic: params.topic,
+      },
+      abortSignal: params.abortSignal,
+    });
+  } catch {
+    // Best effort — typing indicators are non-critical.
+  }
+}
+
 async function bestEffortReaction(params: {
   auth: ZulipAuth;
   messageId: number;
@@ -481,6 +530,13 @@ export async function monitorZulipProvider(
         });
       }
 
+      // Send typing indicator while the agent processes.
+      if (typeof msg.stream_id === "number") {
+        sendTypingIndicator({ auth, streamId: msg.stream_id, topic, abortSignal }).catch(
+          () => undefined,
+        );
+      }
+
       const inboundUploads = await downloadZulipUploads({
         cfg,
         accountId: account.accountId,
@@ -491,6 +547,20 @@ export async function monitorZulipProvider(
       const mediaPaths = inboundUploads.map((entry) => entry.path);
       const mediaUrls = inboundUploads.map((entry) => entry.url);
       const mediaTypes = inboundUploads.map((entry) => entry.contentType ?? "");
+
+      // Strip downloaded upload URLs from the content so the native image loader
+      // doesn't try to open raw /user_uploads/... paths as local files.
+      let cleanedContent = content;
+      for (const upload of inboundUploads) {
+        // Replace both the full URL and any relative /user_uploads/ path variants.
+        cleanedContent = cleanedContent.replaceAll(upload.url, upload.placeholder);
+        try {
+          const urlObj = new URL(upload.url);
+          cleanedContent = cleanedContent.replaceAll(urlObj.pathname, upload.placeholder);
+        } catch {
+          // Ignore URL parse errors.
+        }
+      }
 
       const route = core.channel.routing.resolveAgentRoute({
         cfg,
@@ -517,15 +587,15 @@ export async function monitorZulipProvider(
         channel: "Zulip",
         from: `${stream} (${topic || account.defaultTopic})`,
         timestamp: typeof msg.timestamp === "number" ? msg.timestamp * 1000 : undefined,
-        body: `${content}\n[zulip message id: ${msg.id} stream: ${stream} topic: ${topic}]`,
+        body: `${cleanedContent}\n[zulip message id: ${msg.id} stream: ${stream} topic: ${topic}]`,
         chatType: "channel",
         sender: { name: senderName, id: String(msg.sender_id) },
       });
 
       const ctxPayload = core.channel.reply.finalizeInboundContext({
         Body: body,
-        RawBody: content,
-        CommandBody: content,
+        RawBody: cleanedContent,
+        CommandBody: cleanedContent,
         From: from,
         To: to,
         SessionKey: sessionKey,
@@ -610,6 +680,12 @@ export async function monitorZulipProvider(
         runtime.error?.(`zulip dispatch failed: ${String(err)}`);
       } finally {
         markDispatchIdle();
+        // Stop typing indicator now that the reply has been sent.
+        if (typeof msg.stream_id === "number") {
+          stopTypingIndicator({ auth, streamId: msg.stream_id, topic, abortSignal }).catch(
+            () => undefined,
+          );
+        }
         if (account.reactions.enabled) {
           if (account.reactions.clearOnFinish) {
             await bestEffortReaction({

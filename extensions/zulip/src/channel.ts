@@ -18,6 +18,7 @@ import {
   resolveZulipAccount,
   type ResolvedZulipAccount,
 } from "./zulip/accounts.js";
+import { zulipMessageActions } from "./zulip/actions.js";
 import { monitorZulipProvider } from "./zulip/monitor.js";
 import { normalizeStreamName, normalizeTopic } from "./zulip/normalize.js";
 import { sendZulipStreamMessage } from "./zulip/send.js";
@@ -306,6 +307,7 @@ export const zulipPlugin: ChannelPlugin<ResolvedZulipAccount> = {
       lastOutboundAt: runtime?.lastOutboundAt ?? null,
     }),
   },
+  actions: zulipMessageActions,
   gateway: {
     startAccount: async (ctx) => {
       const accountId = normalizeAccountId(ctx.account.accountId ?? DEFAULT_ACCOUNT_ID);

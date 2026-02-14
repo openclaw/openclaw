@@ -65,7 +65,7 @@ async function readJson(res: Response): Promise<unknown> {
 
 export async function zulipRequest<T = unknown>(params: {
   auth: ZulipAuth;
-  method: "GET" | "POST" | "DELETE";
+  method: "GET" | "POST" | "DELETE" | "PATCH";
   path: string;
   query?: Record<string, string | number | boolean | undefined>;
   form?: Record<string, string | number | boolean | undefined>;
