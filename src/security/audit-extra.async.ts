@@ -3,7 +3,6 @@
  *
  * These functions perform I/O (filesystem, config reads) to detect security issues.
  */
-import JSON5 from "json5";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { SandboxToolPolicy } from "../agents/sandbox/types.js";
@@ -22,7 +21,7 @@ import { resolveToolProfilePolicy } from "../agents/tool-policy.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { resolveNativeSkillsEnabled } from "../config/commands.js";
 import { createConfigIO } from "../config/config.js";
-import { INCLUDE_KEY, MAX_INCLUDE_DEPTH } from "../config/includes.js";
+import { collectIncludePathsRecursive } from "../config/includes-scan.js";
 import { resolveOAuthDir } from "../config/paths.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -61,88 +60,6 @@ function expandTilde(p: string, env: NodeJS.ProcessEnv): string | null {
     return path.join(home, p.slice(2));
   }
   return null;
-}
-
-function resolveIncludePath(baseConfigPath: string, includePath: string): string {
-  return path.normalize(
-    path.isAbsolute(includePath)
-      ? includePath
-      : path.resolve(path.dirname(baseConfigPath), includePath),
-  );
-}
-
-function listDirectIncludes(parsed: unknown): string[] {
-  const out: string[] = [];
-  const visit = (value: unknown) => {
-    if (!value) {
-      return;
-    }
-    if (Array.isArray(value)) {
-      for (const item of value) {
-        visit(item);
-      }
-      return;
-    }
-    if (typeof value !== "object") {
-      return;
-    }
-    const rec = value as Record<string, unknown>;
-    const includeVal = rec[INCLUDE_KEY];
-    if (typeof includeVal === "string") {
-      out.push(includeVal);
-    } else if (Array.isArray(includeVal)) {
-      for (const item of includeVal) {
-        if (typeof item === "string") {
-          out.push(item);
-        }
-      }
-    }
-    for (const v of Object.values(rec)) {
-      visit(v);
-    }
-  };
-  visit(parsed);
-  return out;
-}
-
-async function collectIncludePathsRecursive(params: {
-  configPath: string;
-  parsed: unknown;
-}): Promise<string[]> {
-  const visited = new Set<string>();
-  const result: string[] = [];
-
-  const walk = async (basePath: string, parsed: unknown, depth: number): Promise<void> => {
-    if (depth > MAX_INCLUDE_DEPTH) {
-      return;
-    }
-    for (const raw of listDirectIncludes(parsed)) {
-      const resolved = resolveIncludePath(basePath, raw);
-      if (visited.has(resolved)) {
-        continue;
-      }
-      visited.add(resolved);
-      result.push(resolved);
-      const rawText = await fs.readFile(resolved, "utf-8").catch(() => null);
-      if (!rawText) {
-        continue;
-      }
-      const nestedParsed = (() => {
-        try {
-          return JSON5.parse(rawText);
-        } catch {
-          return null;
-        }
-      })();
-      if (nestedParsed) {
-        // eslint-disable-next-line no-await-in-loop
-        await walk(resolved, nestedParsed, depth + 1);
-      }
-    }
-  };
-
-  await walk(params.configPath, params.parsed, 0);
-  return result;
 }
 
 function isPathInside(basePath: string, candidatePath: string): boolean {
