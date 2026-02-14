@@ -78,7 +78,10 @@ const coreEntries: CoreCliEntry[] = [
     },
   },
   {
-    commands: [{ name: "agent", description: "Agent commands" }],
+    commands: [
+      { name: "agent", description: "Agent commands" },
+      { name: "agents", description: "Manage isolated agents" },
+    ],
     register: async ({ program, ctx }) => {
       const mod = await import("./register.agent.js");
       mod.registerAgentCommands(program, { agentChannelOptions: ctx.agentChannelOptions });
