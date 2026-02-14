@@ -6,6 +6,7 @@ import {
   resolvePairingPaths,
   writeJsonAtomic,
 } from "./pairing-files.js";
+import { generatePairingToken, verifyPairingToken } from "./pairing-token.js";
 
 export type NodePairingPendingRequest = {
   requestId: string;
@@ -87,7 +88,7 @@ function normalizeNodeId(nodeId: string) {
 }
 
 function newToken() {
-  return randomUUID().replaceAll("-", "");
+  return generatePairingToken();
 }
 
 export async function listNodePairing(baseDir?: string): Promise<NodePairingList> {
@@ -217,7 +218,7 @@ export async function verifyNodeToken(
   if (!node) {
     return { ok: false };
   }
-  return node.token === token ? { ok: true, node } : { ok: false };
+  return verifyPairingToken(token, node.token) ? { ok: true, node } : { ok: false };
 }
 
 export async function updatePairedNodeMetadata(
