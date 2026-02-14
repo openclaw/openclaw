@@ -77,13 +77,11 @@ export function renderTelegramCard(params: {
               <div class="status-list">
                 <div>
                   <span class="label">Configured</span>
-                  <span>${telegram?.configured ? "Yes" : "No"}</span>
+                  ${statusChip(telegram?.configured)}
                 </div>
                 <div>
                   <span class="label">Running</span>
-                  <span class="log-level ${telegram?.running ? "info" : "warn"}">
-                    ${telegram?.running ? "Yes" : "No"}
-                  </span>
+                  ${statusChip(telegram?.running)}
                 </div>
                 <div>
                   <span class="label">Mode</span>

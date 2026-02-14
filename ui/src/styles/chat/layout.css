@@ -413,6 +413,60 @@
   margin-top: 2px;
 }
 
+/* Queue tab and panel - compact collapsible queue */
+.chat-queue-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  cursor: pointer;
+  align-self: flex-start;
+  margin-left: 14px;
+  transition: color 0.15s ease;
+}
+
+.chat-queue-tab:hover {
+  color: var(--text);
+}
+
+.chat-queue-panel {
+  border: 1px solid var(--border);
+  border-radius: 0 var(--radius-md) 0 0;
+  background: var(--bg-elevated);
+  margin: 0 14px;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 120px;
+  overflow-y: auto;
+  animation: rise 0.15s ease backwards;
+}
+
+.chat-queue-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  font-size: 12px;
+  border-radius: var(--radius-sm);
+  background: var(--card);
+}
+
+.chat-queue-text {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* Chat controls - moved to content-header area, left aligned */
 .chat-controls {
   display: flex;
