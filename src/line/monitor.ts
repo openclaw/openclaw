@@ -323,14 +323,14 @@ export async function monitorLineProvider(
         const signature = req.headers["x-line-signature"];
 
         // LINE webhook verification sends POST {"events":[]} without a
-        // signature header.  Return 200 so the LINE Developers Console
+        // signature header. Return 200 so the LINE Developers Console
         // "Verify" button succeeds.
         if (!signature || typeof signature !== "string") {
           try {
             const verifyBody = JSON.parse(rawBody) as WebhookRequestBody;
             if (Array.isArray(verifyBody.events) && verifyBody.events.length === 0) {
               logVerbose(
-                "line: webhook verification request (empty events, no signature) — 200 OK",
+                "line: webhook verification request (empty events, no signature) - 200 OK",
               );
               res.statusCode = 200;
               res.setHeader("Content-Type", "application/json");

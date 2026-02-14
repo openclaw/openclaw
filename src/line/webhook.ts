@@ -48,7 +48,7 @@ export function createLineWebhookMiddleware(
         if (rawBody) {
           const body = parseWebhookBody(req, rawBody);
           if (body && Array.isArray(body.events) && body.events.length === 0) {
-            logVerbose("line: webhook verification request (empty events, no signature) — 200 OK");
+            logVerbose("line: webhook verification request (empty events, no signature) - 200 OK");
             res.status(200).json({ status: "ok" });
             return;
           }
