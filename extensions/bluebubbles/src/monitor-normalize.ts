@@ -638,6 +638,11 @@ function extractMessagePayload(payload: Record<string, unknown>): Record<string,
     asRecord(messageRaw) ??
     (typeof messageRaw === "string" ? (asRecord(JSON.parse(messageRaw)) ?? null) : null);
   if (!message) {
+    // Fallback: Check if payload itself contains message fields (BlueBubbles format)
+    // BlueBubbles sends message data directly at the top level
+    if (payload.guid || payload.text || payload.handle || payload.chatGuid) {
+      return payload;
+    }
     return null;
   }
   return message;
