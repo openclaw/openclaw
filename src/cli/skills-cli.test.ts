@@ -1,7 +1,8 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   buildWorkspaceSkillStatus,
   type SkillStatusEntry,
@@ -214,6 +215,18 @@ describe("skills-cli", () => {
   });
 
   describe("integration: loads real skills from bundled directory", () => {
+    let tempWorkspaceDir = "";
+
+    beforeAll(() => {
+      tempWorkspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-skills-test-"));
+    });
+
+    afterAll(() => {
+      if (tempWorkspaceDir) {
+        fs.rmSync(tempWorkspaceDir, { recursive: true, force: true });
+      }
+    });
+
     function resolveBundledSkillsDir(): string | undefined {
       const moduleDir = path.dirname(fileURLToPath(import.meta.url));
       const root = path.resolve(moduleDir, "..", "..");
@@ -231,7 +244,7 @@ describe("skills-cli", () => {
         return;
       }
 
-      const report = buildWorkspaceSkillStatus("/tmp", {
+      const report = buildWorkspaceSkillStatus(tempWorkspaceDir, {
         managedSkillsDir: "/nonexistent",
       });
 
@@ -257,7 +270,7 @@ describe("skills-cli", () => {
         return;
       }
 
-      const report = buildWorkspaceSkillStatus("/tmp", {
+      const report = buildWorkspaceSkillStatus(tempWorkspaceDir, {
         managedSkillsDir: "/nonexistent",
       });
 
