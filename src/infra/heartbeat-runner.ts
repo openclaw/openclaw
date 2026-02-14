@@ -1,5 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { ReplyPayload } from "../auto-reply/types.js";
+import type { ChannelHeartbeatDeps } from "../channels/plugins/types.js";
+import type { OpenClawConfig } from "../config/config.js";
+import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
+import type { OutboundSendDeps } from "./outbound/deliver.js";
 import {
   resolveAgentConfig,
   resolveAgentWorkspaceDir,
@@ -18,11 +23,8 @@ import {
 } from "../auto-reply/heartbeat.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
-import type { ReplyPayload } from "../auto-reply/types.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
-import type { ChannelHeartbeatDeps } from "../channels/plugins/types.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import {
   canonicalizeMainSessionAlias,
@@ -34,7 +36,6 @@ import {
   saveSessionStore,
   updateSessionStore,
 } from "../config/sessions.js";
-import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getQueueSize } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
@@ -56,7 +57,6 @@ import {
   requestHeartbeatNow,
   setHeartbeatWakeHandler,
 } from "./heartbeat-wake.js";
-import type { OutboundSendDeps } from "./outbound/deliver.js";
 import { deliverOutboundPayloads } from "./outbound/deliver.js";
 import {
   resolveHeartbeatDeliveryTarget,

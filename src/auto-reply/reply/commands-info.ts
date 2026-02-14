@@ -1,3 +1,4 @@
+import type { CommandHandler } from "./commands-types.js";
 import { logVerbose } from "../../globals.js";
 import { listSkillCommandsForAgents } from "../skill-commands.js";
 import {
@@ -8,7 +9,6 @@ import {
 import { buildContextReply } from "./commands-context-report.js";
 import { buildExportSessionReply } from "./commands-export-session.js";
 import { buildStatusReply } from "./commands-status.js";
-import type { CommandHandler } from "./commands-types.js";
 
 export const handleHelpCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {

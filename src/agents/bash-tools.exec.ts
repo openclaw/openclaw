@@ -1,7 +1,7 @@
+import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { OpenClawConfig } from "../config/types.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import { routeReply } from "../auto-reply/reply/route-reply.js";
@@ -56,7 +56,6 @@ import {
   type ExecProcessHandle,
   validateHostEnv,
 } from "./bash-tools.exec-runtime.js";
-import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import {
   buildSandboxEnv,
   clampWithDefault,
@@ -516,7 +515,7 @@ export function createExecTool(
           emitExecSystemEvent,
           notifyUserChannel,
         });
-        const rbRequiresApproval = false; // ALERT warns only; BLOCK throws above
+        const _rbRequiresApproval = false; // ALERT warns only; BLOCK throws above
         // === END RUBBERBAND ===
 
         const boundNode = defaults?.node?.trim();
@@ -804,7 +803,7 @@ export function createExecTool(
           emitExecSystemEvent,
           notifyUserChannel,
         });
-        const rbRequiresApproval = false; // ALERT warns only; BLOCK throws above
+        const _rbRequiresApproval = false; // ALERT warns only; BLOCK throws above
         // === END RUBBERBAND ===
 
         const allowlistEval = evaluateShellAllowlist({

@@ -1,5 +1,5 @@
-import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
 import type { EmbeddingProviderOptions } from "./embeddings.js";
+import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
 
 type RemoteEmbeddingProviderId = "openai" | "voyage";
 

@@ -1,8 +1,8 @@
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { getReplyFromConfig } from "./reply.js";
 
 vi.mock("../agents/pi-embedded.js", () => ({

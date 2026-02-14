@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import { WebSocket } from "ws";
+import type { GatewayServerOptions } from "./server.js";
 import { resolveMainSessionKeyFromConfig, type SessionEntry } from "../config/sessions.js";
 import { resetAgentRunContextForTest } from "../infra/agent-events.js";
 import {
@@ -20,7 +21,6 @@ import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { buildDeviceAuthPayload } from "./device-auth.js";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
-import type { GatewayServerOptions } from "./server.js";
 import {
   agentCommand,
   cronIsolatedRun,

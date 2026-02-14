@@ -1,3 +1,4 @@
+import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { DEFAULT_CHAT_CHANNEL } from "../../channels/registry.js";
@@ -19,7 +20,6 @@ import {
   validateSendParams,
 } from "../protocol/index.js";
 import { formatForLog } from "../ws-log.js";
-import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 
 type InflightResult = {
   ok: boolean;
