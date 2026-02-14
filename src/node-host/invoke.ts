@@ -135,33 +135,22 @@ function resolveExecAsk(value?: string): ExecAsk {
   return value === "off" || value === "on-miss" || value === "always" ? value : "on-miss";
 }
 
-function sanitizeEnv(
+export function sanitizeEnv(
   overrides?: Record<string, string> | null,
 ): Record<string, string> | undefined {
   if (!overrides) {
     return undefined;
   }
   const merged = { ...process.env } as Record<string, string>;
-  const basePath = process.env.PATH ?? DEFAULT_NODE_PATH;
   for (const [rawKey, value] of Object.entries(overrides)) {
     const key = rawKey.trim();
     if (!key) {
       continue;
     }
     const upper = key.toUpperCase();
+    // PATH is part of the security boundary (command resolution + safe-bin checks). Never allow
+    // request-scoped PATH overrides from agents/gateways.
     if (upper === "PATH") {
-      const trimmed = value.trim();
-      if (!trimmed) {
-        continue;
-      }
-      if (!basePath || trimmed === basePath) {
-        merged[key] = trimmed;
-        continue;
-      }
-      const suffix = `${path.delimiter}${basePath}`;
-      if (trimmed.endsWith(suffix)) {
-        merged[key] = trimmed;
-      }
       continue;
     }
     if (blockedEnvKeys.has(upper)) {
