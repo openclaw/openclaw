@@ -135,8 +135,8 @@ describe("stripHeartbeatToken", () => {
       }),
     ).toEqual({
       shouldSkip: false,
-      text: `I should not respond ${HEARTBEAT_TOKEN}.`,
-      didStrip: false,
+      text: `I should not respond.`,
+      didStrip: true,
     });
   });
 

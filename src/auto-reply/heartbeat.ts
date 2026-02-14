@@ -87,9 +87,9 @@ function stripTokenAtEdges(raw: string): { text: string; didStrip: boolean } {
     // (e.g. ".", "!!!", "---"), but only when the token is the entire remaining text
     // (^ anchor). This prevents mangling sentences like "I should not respond HEARTBEAT_OK."
     // where the punctuation belongs to the surrounding text.
-    if (next.endsWith(token) || new RegExp(`^${escapeRegExp(token)}[^\\w]{0,4}$`).test(next)) {
+    if (new RegExp(`${escapeRegExp(token)}[^\\w]{0,4}$`).test(next)) {
       const idx = next.lastIndexOf(token);
-      text = next.slice(0, idx).trimEnd();
+      text = `${next.slice(0, idx).trimEnd()}${next.slice(idx + token.length)}`.trimEnd();
       didStrip = true;
       changed = true;
     }
