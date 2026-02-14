@@ -204,7 +204,9 @@ export function registerSlackMonitorSlashCommands(params: {
       const effectiveAllowFrom = normalizeAllowList([...ctx.allowFrom, ...storeAllowFrom]);
       const effectiveAllowFromLower = normalizeAllowListLower(effectiveAllowFrom);
 
-      let commandAuthorized = true;
+      // Privileged command surface: compute CommandAuthorized, don't assume true.
+      // Keep this aligned with the Slack message path (message-handler/prepare.ts).
+      let commandAuthorized = false;
       let channelConfig: SlackChannelConfigResolved | null = null;
       if (isDirectMessage) {
         if (!ctx.dmEnabled || ctx.dmPolicy === "disabled") {
@@ -256,7 +258,6 @@ export function registerSlackMonitorSlashCommands(params: {
             }
             return;
           }
-          commandAuthorized = true;
         }
       }
 
@@ -322,6 +323,13 @@ export function registerSlackMonitorSlashCommands(params: {
         id: command.user_id,
         name: senderName,
       }).allowed;
+      // DMs: allow chatting in dmPolicy=open, but keep privileged command gating intact by setting
+      // CommandAuthorized based on allowlists/access-groups (downstream decides which commands need it).
+      commandAuthorized = resolveCommandAuthorizedFromAuthorizers({
+        useAccessGroups: ctx.useAccessGroups,
+        authorizers: [{ configured: effectiveAllowFromLower.length > 0, allowed: ownerAllowed }],
+        modeWhenAccessGroupsOff: "configured",
+      });
       if (isRoomish) {
         commandAuthorized = resolveCommandAuthorizedFromAuthorizers({
           useAccessGroups: ctx.useAccessGroups,
@@ -329,6 +337,7 @@ export function registerSlackMonitorSlashCommands(params: {
             { configured: effectiveAllowFromLower.length > 0, allowed: ownerAllowed },
             { configured: channelUsersAllowlistConfigured, allowed: channelUserAllowed },
           ],
+          modeWhenAccessGroupsOff: "configured",
         });
         if (ctx.useAccessGroups && !commandAuthorized) {
           await respond({
