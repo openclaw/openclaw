@@ -29,6 +29,17 @@ complete`,
     expect(results).toEqual([]);
   });
 
+  it("treats prefixed no-results marker output as an empty result set", () => {
+    expect(parseQmdQueryJson("warning: no results found", "")).toEqual([]);
+    expect(parseQmdQueryJson("", "[qmd] warning: no results found\n")).toEqual([]);
+  });
+
+  it("does not treat arbitrary non-marker text as no-results output", () => {
+    expect(() =>
+      parseQmdQueryJson("warning: search completed; no results found for this query", ""),
+    ).toThrow(/qmd query returned invalid JSON/i);
+  });
+
   it("throws when stdout cannot be interpreted as qmd JSON", () => {
     expect(() => parseQmdQueryJson("this is not json", "")).toThrow(
       /qmd query returned invalid JSON/i,
