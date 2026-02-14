@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { bluebubblesMessageActions } from "./actions.js";
+import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
 
 vi.mock("./accounts.js", () => ({
   resolveBlueBubblesAccount: vi.fn(({ cfg, accountId }) => {
@@ -41,9 +42,15 @@ vi.mock("./monitor.js", () => ({
   resolveBlueBubblesMessageId: vi.fn((id: string) => id),
 }));
 
+vi.mock("./probe.js", () => ({
+  isMacOS26OrHigher: vi.fn().mockReturnValue(false),
+  getCachedBlueBubblesPrivateApiStatus: vi.fn().mockReturnValue(null),
+}));
+
 describe("bluebubblesMessageActions", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(getCachedBlueBubblesPrivateApiStatus).mockReturnValue(null);
   });
 
   describe("listActions", () => {
@@ -93,6 +100,31 @@ describe("bluebubblesMessageActions", () => {
       // Other actions should still be present
       expect(actions).toContain("edit");
       expect(actions).toContain("unsend");
+    });
+
+    it("hides private-api actions when private API is disabled", () => {
+      vi.mocked(getCachedBlueBubblesPrivateApiStatus).mockReturnValueOnce(false);
+      const cfg: OpenClawConfig = {
+        channels: {
+          bluebubbles: {
+            enabled: true,
+            serverUrl: "http://localhost:1234",
+            password: "test-password",
+          },
+        },
+      };
+      const actions = bluebubblesMessageActions.listActions({ cfg });
+      expect(actions).toContain("sendAttachment");
+      expect(actions).not.toContain("react");
+      expect(actions).not.toContain("reply");
+      expect(actions).not.toContain("sendWithEffect");
+      expect(actions).not.toContain("edit");
+      expect(actions).not.toContain("unsend");
+      expect(actions).not.toContain("renameGroup");
+      expect(actions).not.toContain("setGroupIcon");
+      expect(actions).not.toContain("addParticipant");
+      expect(actions).not.toContain("removeParticipant");
+      expect(actions).not.toContain("leaveGroup");
     });
   });
 
@@ -187,6 +219,26 @@ describe("bluebubblesMessageActions", () => {
           accountId: null,
         }),
       ).rejects.toThrow(/emoji/i);
+    });
+
+    it("throws a private-api error for private-only actions when disabled", async () => {
+      vi.mocked(getCachedBlueBubblesPrivateApiStatus).mockReturnValueOnce(false);
+      const cfg: OpenClawConfig = {
+        channels: {
+          bluebubbles: {
+            serverUrl: "http://localhost:1234",
+            password: "test-password",
+          },
+        },
+      };
+      await expect(
+        bluebubblesMessageActions.handleAction({
+          action: "react",
+          params: { emoji: "❤️", messageId: "msg-123", chatGuid: "iMessage;-;+15551234567" },
+          cfg,
+          accountId: null,
+        }),
+      ).rejects.toThrow("requires Private API");
     });
 
     it("throws when messageId is missing", async () => {
