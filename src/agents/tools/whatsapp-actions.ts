@@ -62,9 +62,14 @@ export async function handleWhatsAppAction(
     }
     const name = readStringParam(params, "name", { required: true });
     const participantsRaw = params.participants;
+    // Also accept singular "participant" from the message tool schema
+    const singleParticipant =
+      typeof params.participant === "string" ? params.participant.trim() : "";
     const participants = Array.isArray(participantsRaw)
       ? participantsRaw.map((p) => String(p).trim()).filter(Boolean)
-      : [];
+      : singleParticipant
+        ? [singleParticipant]
+        : [];
 
     if (participants.length === 0) {
       throw new Error("participants array is required (phone numbers in E.164 format)");
@@ -383,6 +388,32 @@ export async function handleWhatsAppAction(
       ok: true,
       ...meta,
     });
+  }
+
+  if (action === "fetchHistory") {
+    const chatJid = readStringParam(params, "chatJid") || readStringParam(params, "target");
+    if (!chatJid) {
+      throw new Error("chatJid or target is required for fetchHistory action");
+    }
+    const count = typeof params.count === "number" ? params.count : 50;
+    const oldestMsgId = readStringParam(params, "oldestMsgId");
+    const oldestMsgFromMe = params.oldestMsgFromMe === true;
+    const oldestMsgTimestamp =
+      typeof params.oldestMsgTimestamp === "number" ? params.oldestMsgTimestamp : undefined;
+
+    const { requireActiveWebListener } = await import("../../web/active-listener.js");
+    const { listener } = requireActiveWebListener(accountId);
+    if (!listener.fetchMessageHistory) {
+      throw new Error("fetchMessageHistory not available on current listener");
+    }
+    const result = await listener.fetchMessageHistory(
+      chatJid,
+      count,
+      oldestMsgId,
+      oldestMsgFromMe,
+      oldestMsgTimestamp,
+    );
+    return jsonResult(result);
   }
 
   throw new Error(`Unsupported WhatsApp action: ${action}`);

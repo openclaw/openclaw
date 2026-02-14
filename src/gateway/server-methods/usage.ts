@@ -21,13 +21,8 @@ import {
   discoverAllSessions,
   type DiscoveredSession,
 } from "../../infra/session-cost-usage.js";
-import {
-  getTokenUsageSummaries,
-  getBudgetAwarenessContext,
-  setSubscriptionTier,
-  setMonthlyBudget,
-  type SubscriptionTier,
-} from "../../infra/token-usage-tracker.js";
+// token-usage-tracker removed (2026-02-10) — was applying API pricing to Max subscription.
+// Real usage tracking: Anthropic OAuth API via budget-panel plugin.
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   ErrorCodes,
@@ -41,29 +36,7 @@ import {
   loadSessionEntry,
 } from "../session-utils.js";
 
-// Initialize tracker settings from config env vars
-function initTrackerFromConfig(): void {
-  const config = loadConfig();
-  const env = config.env ?? {};
-
-  // Set subscription tier from ANTHROPIC_SUBSCRIPTION_TIER
-  const tier = env.ANTHROPIC_SUBSCRIPTION_TIER as string | undefined;
-  if (tier && ["free", "pro", "max_5x", "max_20x", "api"].includes(tier)) {
-    setSubscriptionTier(tier as SubscriptionTier);
-  }
-
-  // Set monthly budget from ANTHROPIC_MONTHLY_BUDGET_USD
-  const budgetStr = env.ANTHROPIC_MONTHLY_BUDGET_USD as string | undefined;
-  if (budgetStr) {
-    const budget = Number(budgetStr);
-    if (Number.isFinite(budget) && budget > 0) {
-      setMonthlyBudget(budget);
-    }
-  }
-}
-
-// Initialize on module load
-initTrackerFromConfig();
+// Token tracker init removed (2026-02-10).
 
 const COST_USAGE_CACHE_TTL_MS = 30_000;
 
@@ -850,10 +823,6 @@ export const usageHandlers: GatewayRequestHandlers = {
 
     respond(true, { logs: logs ?? [] }, undefined);
   },
-  "usage.budget": async ({ respond }) => {
-    // Return budget awareness context for the agent (Anthropic tracking)
-    const context = getBudgetAwarenessContext();
-    const tokenSummaries = getTokenUsageSummaries();
-    respond(true, { context, tokenSummaries }, undefined);
-  },
+  // usage.budget removed (2026-02-10) — fake API-pricing cost model.
+  // Real budget data served by budget-panel plugin via budget.usage endpoint.
 };

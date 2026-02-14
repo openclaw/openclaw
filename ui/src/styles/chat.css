@@ -2,4 +2,5 @@
 @import "./chat/text.css";
 @import "./chat/grouped.css";
 @import "./chat/tool-cards.css";
+@import "./chat/tool-compact.css"; /* fork: compact rows */
 @import "./chat/sidebar.css";

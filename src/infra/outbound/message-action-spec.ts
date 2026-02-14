@@ -54,6 +54,14 @@ export const MESSAGE_ACTION_TARGET_MODE: Record<ChannelMessageActionName, Messag
     kick: "none",
     ban: "none",
     "set-presence": "none",
+    "group-create": "none",
+    getGroupInfo: "to",
+    getInviteCode: "to",
+    revokeInviteCode: "to",
+    setGroupDescription: "to",
+    promoteParticipant: "to",
+    demoteParticipant: "to",
+    fetchHistory: "to",
   };
 
 const ACTION_TARGET_ALIASES: Partial<Record<ChannelMessageActionName, string[]>> = {

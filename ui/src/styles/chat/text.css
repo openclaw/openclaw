@@ -117,6 +117,16 @@
   border: 1px solid rgba(0, 0, 0, 0.1);
 }
 
+/* Jarvis voice transcript — purple italic */
+.chat-text .jarvis-voice {
+  color: #9b59b6;
+  font-style: italic;
+}
+
+:root[data-theme="light"] .chat-text .jarvis-voice {
+  color: #8e44ad;
+}
+
 .chat-text :where(hr) {
   border: none;
   border-top: 1px solid var(--border);

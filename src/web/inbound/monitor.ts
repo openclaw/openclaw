@@ -306,12 +306,14 @@ export async function monitorWebInbox(options: {
         try {
           // WhatsApp requires presence subscription before composing works in groups
           if (!presenceSubscribed && chatJid.endsWith("@g.us")) {
+            inboundLogger.info({ chatJid }, "[TYPING] Subscribing to group presence");
             await sock.presenceSubscribe(chatJid);
             presenceSubscribed = true;
           }
+          inboundLogger.info({ chatJid }, "[TYPING] Sending composing");
           await sock.sendPresenceUpdate("composing", chatJid);
         } catch (err) {
-          logVerbose(`Presence update failed: ${String(err)}`);
+          inboundLogger.warn({ chatJid, error: String(err) }, "[TYPING] Presence update failed");
         }
       };
       const reply = async (text: string) => {
@@ -456,6 +458,18 @@ export async function monitorWebInbox(options: {
       groupInviteCode: (jid: string) => sock.groupInviteCode(jid),
       groupRevokeInvite: (jid: string) => sock.groupRevokeInvite(jid),
       groupMetadata: (jid: string) => sock.groupMetadata(jid),
+      fetchMessageHistory: (count: number, oldestMsgKey: unknown, oldestMsgTimestamp: number) =>
+        (
+          sock as unknown as {
+            fetchMessageHistory: (count: number, key: unknown, ts: number) => Promise<string>;
+          }
+        ).fetchMessageHistory(count, oldestMsgKey, oldestMsgTimestamp),
+      requestPlaceholderResend: (messageKey: unknown) =>
+        (
+          sock as unknown as {
+            requestPlaceholderResend: (key: unknown) => Promise<string | undefined>;
+          }
+        ).requestPlaceholderResend(messageKey),
     },
     defaultAccountId: options.accountId,
   });

@@ -197,6 +197,9 @@ export async function runReplyAgent(params: {
     return undefined;
   }
 
+  defaultRuntime.log?.(
+    `[TYPING-DEBUG] signalRunStart mode=${typingMode} shouldStartImmediately=${typingSignals.shouldStartImmediately}`,
+  );
   await typingSignals.signalRunStart();
 
   activeSessionEntry = await runMemoryFlushIfNeeded({

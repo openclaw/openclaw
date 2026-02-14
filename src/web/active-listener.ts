@@ -91,6 +91,18 @@ export type ActiveWebListener = {
     description?: string;
     participants: Array<{ id: string; admin?: string }>;
   }>;
+  fetchMessageHistory?: (
+    chatJid: string,
+    count: number,
+    oldestMsgId?: string,
+    oldestMsgFromMe?: boolean,
+    oldestMsgTimestamp?: number,
+  ) => Promise<{ ok: boolean; requestId?: string; error?: string }>;
+  requestPlaceholderResend?: (
+    chatJid: string,
+    msgId: string,
+    fromMe?: boolean,
+  ) => Promise<{ ok: boolean; requestId?: string; error?: string }>;
   close?: () => Promise<void>;
 };
 

@@ -52,7 +52,7 @@ type ExecOverrides = Pick<
 >;
 
 const BARE_SESSION_RESET_PROMPT =
-  "New session started. Before greeting: 1) Read SOUL.md, USER.md, AGENTS.md, IDENTITY.md, MEMORY.md, TOOLS.md from workspace. 2) Read memory/YYYY-MM-DD.md for today and yesterday. 3) Create today's log if missing. 4) Then greet briefly (1-3 sentences) in your configured persona and ask what to work on. If runtime model differs from default_model, mention it. Do not narrate these steps to the user.";
+  'New session started. Before greeting: 1) Read SOUL.md, USER.md, AGENTS.md, IDENTITY.md, MEMORY.md, TOOLS.md from workspace. 2) Read memory/YYYY-MM-DD.md for today and yesterday. 3) Create today\'s log if missing. 4) Greet in your configured persona and ask what to work on. 5) MANDATORY LAST STEP: Speak your greeting aloud. On WEBCHAT use `exec jarvis "text"` (plays to speakers). On WHATSAPP use the `tts` tool (generates voice note MP3). NEVER use the tts tool on webchat — it just produces a useless file path. Also wrap spoken text with: **Jarvis:** <span class="jarvis-voice">text</span> for purple transcript. A greeting without voice is a FAILED greeting. If runtime model differs from default_model, mention it. Do not narrate these steps to the user.';
 
 type RunPreparedReplyParams = {
   ctx: MsgContext;

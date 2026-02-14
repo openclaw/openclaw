@@ -1,0 +1,229 @@
+/**
+ * Compact tool row rendering with security-level badges.
+ * Fork-local: kept separate from tool-cards.ts to minimize merge conflicts.
+ */
+import { html, nothing } from "lit";
+import type { ToolCard } from "../types/chat-types.ts";
+import { icons } from "../icons.ts";
+import { formatToolDetail, resolveToolDisplay } from "../tool-display.ts";
+import { formatToolOutputForSidebar } from "./tool-helpers.ts";
+
+/* ── Exec Security Classification (mirrors infra/exec-security-level.ts) ── */
+
+type SecurityLevel = "safe" | "low" | "medium" | "high" | "critical";
+
+const SECURITY_DISPLAY: Record<SecurityLevel, { emoji: string; label: string; css: string }> = {
+  safe: { emoji: "🟢", label: "SAFE", css: "security--safe" },
+  low: { emoji: "🔵", label: "LOW", css: "security--low" },
+  medium: { emoji: "🟡", label: "MEDIUM", css: "security--medium" },
+  high: { emoji: "🟠", label: "HIGH", css: "security--high" },
+  critical: { emoji: "🔴", label: "CRITICAL", css: "security--critical" },
+};
+
+const CRITICAL_PATTERNS = [
+  "sudo",
+  "rm -rf",
+  "rm -fr",
+  "mkfs",
+  "dd if=",
+  "dd of=",
+  "shred",
+  "shutdown",
+  "reboot",
+  "drop table",
+  "drop database",
+];
+const HIGH_PATTERNS = [
+  "systemctl",
+  "apt install",
+  "apt remove",
+  "apt-get",
+  "npm install -g",
+  "useradd",
+  "userdel",
+  "chmod -R",
+  "chown -R",
+  "iptables",
+  "ufw",
+];
+const MEDIUM_PATTERNS = [
+  "npm install",
+  "npm update",
+  "pnpm install",
+  "pip install",
+  "pip3 install",
+  "git push",
+  "git pull",
+  "git merge",
+  "git rebase",
+  "git reset",
+  "docker",
+  "kubectl",
+  "ssh ",
+  "scp ",
+  "rsync",
+  "npm run build",
+];
+const LOW_PATTERNS = [
+  "touch",
+  "mkdir",
+  "cp ",
+  "mv ",
+  "rm ",
+  "git add",
+  "git commit",
+  "git stash",
+  "git checkout",
+  "node ",
+  "python ",
+  "python3 ",
+  "make",
+  "npm run",
+  "sed -i",
+  "tar ",
+  "zip ",
+  "unzip ",
+];
+const SAFE_PATTERNS = [
+  "ls",
+  "cat ",
+  "head ",
+  "tail ",
+  "grep ",
+  "find ",
+  "which ",
+  "pwd",
+  "whoami",
+  "date",
+  "echo ",
+  "env",
+  "git status",
+  "git log",
+  "git diff",
+  "git show",
+  "tree",
+  "wc ",
+  "du ",
+  "df ",
+  "free",
+  "ps ",
+  "clawhub",
+  "openclaw",
+];
+
+function classifyExecCommand(command: string): SecurityLevel {
+  const lower = command.trim().toLowerCase();
+  for (const p of CRITICAL_PATTERNS) {
+    if (lower.includes(p)) {
+      return "critical";
+    }
+  }
+  for (const p of HIGH_PATTERNS) {
+    if (lower.includes(p)) {
+      return "high";
+    }
+  }
+  for (const p of MEDIUM_PATTERNS) {
+    if (lower.includes(p)) {
+      return "medium";
+    }
+  }
+  for (const p of LOW_PATTERNS) {
+    if (lower.includes(p)) {
+      return "low";
+    }
+  }
+  for (const p of SAFE_PATTERNS) {
+    if (lower.includes(p) || lower.startsWith(p.trim())) {
+      return "safe";
+    }
+  }
+  return "medium";
+}
+
+/** Tools that render as compact one-liner rows */
+const COMPACT_TOOLS = new Set([
+  "exec",
+  "read",
+  "write",
+  "edit",
+  "process",
+  "memory_search",
+  "memory_get",
+  "web_search",
+  "web_fetch",
+  "image",
+  "tts",
+  "whatsapp_history",
+  "session_status",
+]);
+
+/** Check if a tool should render compact */
+export function isCompactTool(name: string): boolean {
+  return COMPACT_TOOLS.has(name.toLowerCase());
+}
+
+/** Render a compact tool row with optional security badge */
+export function renderCompactToolRow(card: ToolCard, onOpenSidebar?: (content: string) => void) {
+  const display = resolveToolDisplay({ name: card.name, args: card.args });
+  const detail = formatToolDetail(display);
+  const hasText = Boolean(card.text?.trim());
+  const toolName = (card.name ?? "").toLowerCase();
+
+  const canClick = Boolean(onOpenSidebar);
+  const handleClick = canClick
+    ? () => {
+        if (hasText) {
+          onOpenSidebar!(formatToolOutputForSidebar(card.text!));
+          return;
+        }
+        const info = `## ${display.label}\n\n${
+          detail ? `**Command:** \`${detail}\`\n\n` : ""
+        }*No output — tool completed successfully.*`;
+        onOpenSidebar!(info);
+      }
+    : undefined;
+
+  const isExec = toolName === "exec";
+  const args = (card.args ?? {}) as Record<string, unknown>;
+  const command = typeof args.command === "string" ? args.command : "";
+  const sec = isExec ? classifyExecCommand(command) : undefined;
+  const secInfo = sec ? SECURITY_DISPLAY[sec] : undefined;
+
+  // Build one-liner detail
+  let rowDetail = detail ?? "";
+  if (isExec && command) {
+    rowDetail = command.replace(/\/home\/[^/]+/g, "~").replace(/\/Users\/[^/]+/g, "~");
+    if (rowDetail.length > 90) {
+      rowDetail = rowDetail.slice(0, 87) + "…";
+    }
+  }
+
+  const isResult = card.kind === "result";
+  const success = isResult && !card.text?.toLowerCase().includes('"error"');
+  const statusIcon = isResult ? (success ? "✓" : "✗") : "⋯";
+  const statusClass = isResult ? (success ? "status--ok" : "status--err") : "status--run";
+
+  return html`
+    <div
+      class="tool-row ${canClick ? "tool-row--clickable" : ""} ${secInfo?.css ?? ""}"
+      @click=${handleClick}
+      role=${canClick ? "button" : nothing}
+      tabindex=${canClick ? "0" : nothing}
+    >
+      <span class="tool-row__status ${statusClass}">${statusIcon}</span>
+      ${secInfo ? html`<span class="tool-row__sec">${secInfo.emoji}</span>` : html`<span class="tool-row__icon">${icons[display.icon]}</span>`}
+      <span class="tool-row__label">${display.label}</span>
+      ${display.verb ? html`<span class="tool-row__verb">${display.verb}</span>` : nothing}
+      <span class="tool-row__detail mono">${rowDetail}</span>
+      ${secInfo ? html`<span class="tool-row__level">${secInfo.label}</span>` : nothing}
+      ${
+        canClick && hasText
+          ? html`
+              <span class="tool-row__view">▸</span>
+            `
+          : nothing
+      }
+    </div>
+  `;
+}

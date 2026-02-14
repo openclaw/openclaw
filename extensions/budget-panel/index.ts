@@ -22,6 +22,7 @@ export default function register(api: OpenClawPluginApi) {
     claude: `${homeDir}/.openclaw/workspace/memory/claude-usage.json`,
     gemini: `${homeDir}/.openclaw/workspace/memory/gemini-usage.json`,
     manus: `${homeDir}/.openclaw/workspace/memory/manus-usage.json`,
+    chatgpt: `${homeDir}/.openclaw/workspace/memory/chatgpt-usage.json`,
   };
 
   const log = api.log?.info ?? console.log;
@@ -80,6 +81,7 @@ export default function register(api: OpenClawPluginApi) {
     const claudeData = readUsageFile(usageFiles.claude) as any;
     const geminiData = readUsageFile(usageFiles.gemini) as any;
     const manusData = readUsageFile(usageFiles.manus) as any;
+    const chatgptData = readUsageFile(usageFiles.chatgpt) as any;
 
     const result: Record<string, unknown> = {
       claude: claudeData
@@ -162,6 +164,31 @@ export default function register(api: OpenClawPluginApi) {
         };
       })(),
     };
+
+    // ChatGPT / OpenAI
+    result.chatgpt = (() => {
+      if (!chatgptData) return null;
+      const models: Record<string, any> = {};
+      for (const [key, val] of Object.entries(chatgptData.models || {}) as [string, any][]) {
+        const rl = val?.rate_limits || {};
+        const limitReq = parseInt(rl.limit_requests) || 0;
+        const remainReq = parseInt(rl.remaining_requests) || 0;
+        const limitTok = parseInt(rl.limit_tokens) || 0;
+        const remainTok = parseInt(rl.remaining_tokens) || 0;
+        models[key] = {
+          status: val?.status || "unknown",
+          utilization_pct: limitReq ? ((limitReq - remainReq) / limitReq) * 100 : 0,
+          requests: { used: limitReq - remainReq, limit: limitReq, remaining: remainReq },
+          tokens: { used: limitTok - remainTok, limit: limitTok, remaining: remainTok },
+        };
+      }
+      return {
+        fetchedAt: chatgptData.fetchedAt,
+        api_key_status: chatgptData.api_key_status,
+        models,
+        plus_limits: chatgptData.plus_subscription_limits || {},
+      };
+    })();
 
     respond(true, result, undefined);
   });

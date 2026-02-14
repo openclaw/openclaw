@@ -5,6 +5,7 @@ import { formatToolDetail, resolveToolDisplay } from "../tool-display.ts";
 import { TOOL_INLINE_THRESHOLD } from "./constants.ts";
 import { extractTextCached } from "./message-extract.ts";
 import { isToolResultMessage } from "./message-normalizer.ts";
+import { isCompactTool, renderCompactToolRow } from "./tool-compact.ts"; // fork: compact rows
 import { formatToolOutputForSidebar, getTruncatedPreview } from "./tool-helpers.ts";
 
 export function extractToolCards(message: unknown): ToolCard[] {
@@ -49,6 +50,11 @@ export function extractToolCards(message: unknown): ToolCard[] {
 }
 
 export function renderToolCardSidebar(card: ToolCard, onOpenSidebar?: (content: string) => void) {
+  // fork: compact rows for exec/read/write/edit etc.
+  if (isCompactTool(card.name ?? "")) {
+    return renderCompactToolRow(card, onOpenSidebar);
+  }
+
   const display = resolveToolDisplay({ name: card.name, args: card.args });
   const detail = formatToolDetail(display);
   const hasText = Boolean(card.text?.trim());

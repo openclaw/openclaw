@@ -24,6 +24,12 @@ type BaileysSock = {
   groupInviteCode: (jid: string) => Promise<string | undefined>;
   groupRevokeInvite: (jid: string) => Promise<string | undefined>;
   groupMetadata: (jid: string) => Promise<GroupMetadata>;
+  fetchMessageHistory?: (
+    count: number,
+    oldestMsgKey: unknown,
+    oldestMsgTimestamp: number,
+  ) => Promise<string>;
+  requestPlaceholderResend?: (messageKey: unknown) => Promise<string | undefined>;
 };
 
 export function createWebSendApi(params: { sock: BaileysSock; defaultAccountId: string }) {
@@ -275,7 +281,9 @@ export function createWebSendApi(params: { sock: BaileysSock; defaultAccountId: 
       const result = await params.sock.groupParticipantsUpdate(jid, participantJids, "add");
       const statusMap: { [jid: string]: string } = {};
       for (const r of result) {
-        if (r.jid) statusMap[r.jid] = r.status;
+        if (r.jid) {
+          statusMap[r.jid] = r.status;
+        }
       }
       return statusMap;
     },
@@ -289,7 +297,9 @@ export function createWebSendApi(params: { sock: BaileysSock; defaultAccountId: 
       const result = await params.sock.groupParticipantsUpdate(jid, participantJids, "remove");
       const statusMap: { [jid: string]: string } = {};
       for (const r of result) {
-        if (r.jid) statusMap[r.jid] = r.status;
+        if (r.jid) {
+          statusMap[r.jid] = r.status;
+        }
       }
       return statusMap;
     },
@@ -303,7 +313,9 @@ export function createWebSendApi(params: { sock: BaileysSock; defaultAccountId: 
       const result = await params.sock.groupParticipantsUpdate(jid, participantJids, "promote");
       const statusMap: { [jid: string]: string } = {};
       for (const r of result) {
-        if (r.jid) statusMap[r.jid] = r.status;
+        if (r.jid) {
+          statusMap[r.jid] = r.status;
+        }
       }
       return statusMap;
     },
@@ -317,7 +329,9 @@ export function createWebSendApi(params: { sock: BaileysSock; defaultAccountId: 
       const result = await params.sock.groupParticipantsUpdate(jid, participantJids, "demote");
       const statusMap: { [jid: string]: string } = {};
       for (const r of result) {
-        if (r.jid) statusMap[r.jid] = r.status;
+        if (r.jid) {
+          statusMap[r.jid] = r.status;
+        }
       }
       return statusMap;
     },
@@ -358,6 +372,49 @@ export function createWebSendApi(params: { sock: BaileysSock; defaultAccountId: 
           admin: p.admin ?? undefined,
         })),
       };
+    },
+
+    fetchMessageHistory: async (
+      chatJid: string,
+      count: number,
+      oldestMsgId?: string,
+      oldestMsgFromMe?: boolean,
+      oldestMsgTimestamp?: number,
+    ): Promise<{ ok: boolean; requestId?: string; error?: string }> => {
+      if (!params.sock.fetchMessageHistory) {
+        return { ok: false, error: "fetchMessageHistory not available on socket" };
+      }
+      const jid = toWhatsappJid(chatJid);
+      const msgKey = {
+        remoteJid: jid,
+        fromMe: oldestMsgFromMe ?? false,
+        id: oldestMsgId ?? "",
+      };
+      const ts = oldestMsgTimestamp ?? Math.floor(Date.now() / 1000);
+      try {
+        const requestId = await params.sock.fetchMessageHistory(count, msgKey, ts);
+        return { ok: true, requestId };
+      } catch (err) {
+        return { ok: false, error: String(err) };
+      }
+    },
+
+    requestPlaceholderResend: async (
+      chatJid: string,
+      msgId: string,
+      fromMe?: boolean,
+    ): Promise<{ ok: boolean; requestId?: string; error?: string }> => {
+      if (!params.sock.requestPlaceholderResend) {
+        return { ok: false, error: "requestPlaceholderResend not available on socket" };
+      }
+      const jid = toWhatsappJid(chatJid);
+      const msgKey = { remoteJid: jid, fromMe: fromMe ?? false, id: msgId };
+      try {
+        const requestId = await params.sock.requestPlaceholderResend(msgKey);
+        return { ok: true, requestId: requestId ?? undefined };
+      } catch (err) {
+        return { ok: false, error: String(err) };
+      }
     },
   } as const;
 }

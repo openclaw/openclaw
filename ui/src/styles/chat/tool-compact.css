@@ -1,0 +1,129 @@
+/* fork: Compact tool row styles with security-level badges */
+.tool-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  margin-top: 2px;
+  font-size: 12px;
+  line-height: 1.4;
+  border-radius: 4px;
+  background: var(--secondary);
+  border: 1px solid transparent;
+  transition:
+    background 120ms ease-out,
+    border-color 120ms ease-out;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.tool-row:first-child {
+  margin-top: 0;
+}
+.tool-row:hover {
+  background: var(--bg-hover);
+  border-color: var(--border);
+}
+.tool-row--clickable {
+  cursor: pointer;
+}
+
+.tool-row__status {
+  flex-shrink: 0;
+  font-weight: 700;
+  font-size: 13px;
+  width: 14px;
+  text-align: center;
+}
+.tool-row__status.status--ok {
+  color: #4ade80;
+}
+.tool-row__status.status--err {
+  color: #f87171;
+}
+.tool-row__status.status--run {
+  color: var(--muted);
+}
+
+.tool-row__sec {
+  flex-shrink: 0;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.tool-row__icon {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  width: 14px;
+  height: 14px;
+}
+.tool-row__icon svg {
+  width: 12px;
+  height: 12px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5px;
+}
+
+.tool-row__label {
+  flex-shrink: 0;
+  font-weight: 600;
+  color: var(--text);
+}
+.tool-row__verb {
+  flex-shrink: 0;
+  color: var(--muted);
+}
+
+.tool-row__detail {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.tool-row__level {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* Security level badge colors */
+.security--safe .tool-row__level {
+  color: #4ade80;
+  background: rgba(74, 222, 128, 0.12);
+}
+.security--low .tool-row__level {
+  color: #60a5fa;
+  background: rgba(96, 165, 250, 0.12);
+}
+.security--medium .tool-row__level {
+  color: #facc15;
+  background: rgba(250, 204, 21, 0.12);
+}
+.security--high .tool-row__level {
+  color: #fb923c;
+  background: rgba(251, 146, 60, 0.12);
+}
+.security--critical .tool-row__level {
+  color: #f87171;
+  background: rgba(248, 113, 113, 0.15);
+}
+
+.tool-row__view {
+  flex-shrink: 0;
+  color: var(--accent);
+  font-size: 11px;
+  opacity: 0;
+  transition: opacity 120ms ease-out;
+}
+.tool-row:hover .tool-row__view {
+  opacity: 1;
+}

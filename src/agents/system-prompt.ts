@@ -3,7 +3,8 @@ import type { MemoryCitationsMode } from "../config/types.memory.js";
 import type { ResolvedTimeFormat } from "./date-time.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
-import { getBudgetAwarenessContext } from "../infra/token-usage-tracker.js";
+// Budget awareness removed — was applying API pricing to Max subscription (wrong paradigm).
+// Real usage tracking is via Anthropic OAuth API (token-panel skill).
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 
 /**
@@ -606,31 +607,10 @@ export function buildAgentSystemPrompt(params: {
     `Reasoning: ${reasoningLevel} (hidden unless on/stream). Toggle /reasoning; /status shows Reasoning when enabled.`,
   );
 
-  // Add budget awareness context (only for main sessions, not subagents)
-  if (!isMinimal) {
-    const budgetCtx = getBudgetAwarenessContext();
-    lines.push("", "## Budget Awareness", `Status: ${budgetCtx.contextLine}`);
-    if (budgetCtx.alerts.length > 0) {
-      lines.push(`Alerts: ${budgetCtx.alerts.join("; ")}`);
-    }
-    if (budgetCtx.status !== "healthy") {
-      const guidelines: string[] = [];
-      if (budgetCtx.status === "critical") {
-        guidelines.push(
-          "⚠️ CRITICAL: Minimize token usage. Be extremely concise. Avoid extended thinking.",
-          "Prefer shorter responses. Skip verbose explanations unless explicitly requested.",
-        );
-      } else if (budgetCtx.status === "warning") {
-        guidelines.push(
-          "Budget warning: Be concise. Reduce thinking depth when possible.",
-          "Avoid unnecessary elaboration.",
-        );
-      } else if (budgetCtx.status === "caution") {
-        guidelines.push("Budget note: Be mindful of response length. Prioritize efficiency.");
-      }
-      lines.push(...guidelines);
-    }
-  }
+  // Budget awareness injection removed (2026-02-10).
+  // Was applying API pay-per-token pricing to a flat-rate Max subscription,
+  // producing false "critical" alerts that degraded response quality.
+  // Real usage: Anthropic OAuth API via token-panel skill.
 
   return lines.filter(Boolean).join("\n");
 }
