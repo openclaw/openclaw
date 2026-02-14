@@ -40,6 +40,14 @@ describe("memory embedding batches", () => {
   let managerLarge: MemoryIndexManager | null = null;
   let managerSmall: MemoryIndexManager | null = null;
 
+  function resetManagerForTest(manager: MemoryIndexManager | null) {
+    if (!manager) {
+      throw new Error("manager missing");
+    }
+    (manager as unknown as { resetIndex: () => void }).resetIndex();
+    (manager as unknown as { dirty: boolean }).dirty = true;
+  }
+
   function createCfg(params: { indexPath: string; tokens: number }) {
     return {
       agents: {
@@ -108,24 +116,15 @@ describe("memory embedding batches", () => {
 
     await fs.rm(memoryDir, { recursive: true, force: true });
     await fs.mkdir(memoryDir, { recursive: true });
-
-    const reset = (manager: MemoryIndexManager | null) => {
-      if (!manager) {
-        throw new Error("manager missing");
-      }
-      (manager as unknown as { resetIndex: () => void }).resetIndex();
-      (manager as unknown as { dirty: boolean }).dirty = true;
-    };
-    reset(managerLarge);
-    reset(managerSmall);
   });
 
   it("splits large files across multiple embedding batches", async () => {
     // Keep this small but above the embedding batch byte threshold (8k) so we
     // exercise multi-batch behavior without generating lots of chunks/DB rows.
-    const line = "a".repeat(5000);
+    const line = "a".repeat(4200);
     const content = [line, line].join("\n");
     await fs.writeFile(path.join(memoryDir, "2026-01-03.md"), content);
+    resetManagerForTest(managerLarge);
     if (!managerLarge) {
       throw new Error("manager missing");
     }
@@ -151,6 +150,7 @@ describe("memory embedding batches", () => {
     const line = "b".repeat(120);
     const content = Array.from({ length: 4 }, () => line).join("\n");
     await fs.writeFile(path.join(memoryDir, "2026-01-04.md"), content);
+    resetManagerForTest(managerSmall);
     if (!managerSmall) {
       throw new Error("manager missing");
     }
@@ -190,6 +190,7 @@ describe("memory embedding batches", () => {
       }
       return realSetTimeout(handler, delay, ...args);
     }) as typeof setTimeout);
+    resetManagerForTest(managerSmall);
     if (!managerSmall) {
       throw new Error("manager missing");
     }
@@ -204,6 +205,7 @@ describe("memory embedding batches", () => {
 
   it("skips empty chunks so embeddings input stays valid", async () => {
     await fs.writeFile(path.join(memoryDir, "2026-01-07.md"), "\n\n\n");
+    resetManagerForTest(managerSmall);
     if (!managerSmall) {
       throw new Error("manager missing");
     }
