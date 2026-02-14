@@ -73,4 +73,12 @@ describe("startBrowserBridgeServer auth", () => {
     });
     expect(authed.status).toBe(200);
   });
+
+  it("requires auth params", async () => {
+    await expect(
+      startBrowserBridgeServer({
+        resolved: buildResolvedConfig(),
+      }),
+    ).rejects.toThrow(/requires auth/i);
+  });
 });
