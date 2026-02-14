@@ -179,8 +179,8 @@ export async function launchOpenClawChrome(
   let userDataDir = profile.userDataDir;
   if (!userDataDir) {
     userDataDir = resolveOpenClawUserDataDir(profile.name);
-    fs.mkdirSync(userDataDir, { recursive: true });
   }
+  fs.mkdirSync(userDataDir, { recursive: true });
 
   const needsDecorate = !isProfileDecorated(
     userDataDir,
