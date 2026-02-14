@@ -155,6 +155,7 @@ export function renderOverview(props: OverviewProps) {
   })();
 
   const currentLocale = i18n.getLocale();
+  const connectionStatus = props.connected ? "ok" : "warn";
 
   return html`
     <section class="grid grid-cols-2">
@@ -276,8 +277,10 @@ export function renderOverview(props: OverviewProps) {
         <div class="stat-grid" style="margin-top: 16px;">
           <div class="stat">
             <div class="stat-label">${t("overview.snapshot.status")}</div>
-            <div class="stat-value ${props.connected ? "ok" : "warn"}">
-              ${props.connected ? t("common.ok") : t("common.offline")}
+            <div class="stat-value">
+              <span class="log-level ${connectionStatus}">
+                ${props.connected ? t("common.ok") : t("common.offline")}
+              </span>
             </div>
           </div>
           <div class="stat">
