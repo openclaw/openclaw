@@ -1,0 +1,11 @@
+[package]
+name = "calc-cli"
+version = "0.1.0"
+edition = "2021"
+description = "A simple calculator CLI for OpenClaw CLI Backend demo"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+panic = "abort"
