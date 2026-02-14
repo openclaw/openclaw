@@ -1,0 +1,39 @@
+<!doctype html>
+<html>
+  <head>
+    <title>Mermaid Test</title>
+  </head>
+  <body>
+    <h1>Mermaid Rendering Test</h1>
+    <div id="output"></div>
+
+    <script type="module">
+      import { toSanitizedMarkdownHtml } from "./src/ui/markdown.ts";
+
+      const testMarkdown = `
+# Test Mermaid
+    
+\`\`\`mermaid
+graph TD
+  A[Start] --> B{Decision}
+  B -->|Yes| C[Success]
+  B -->|No| D[Retry]
+\`\`\`
+
+Regular code:
+\`\`\`javascript
+console.log("hello");
+\`\`\`
+`;
+
+      (async () => {
+        const html = await toSanitizedMarkdownHtml(testMarkdown);
+        document.getElementById("output").innerHTML = html;
+
+        console.log("✅ Rendered HTML:", html);
+        console.log("Contains SVG:", html.includes("<svg"));
+        console.log("Contains mermaid-diagram:", html.includes("mermaid-diagram"));
+      })();
+    </script>
+  </body>
+</html>

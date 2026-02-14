@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import { until } from "lit/directives/until.js";
 import type { AssistantIdentity } from "../assistant-identity.ts";
 import type { MessageGroup } from "../types/chat-types.ts";
 import { toSanitizedMarkdownHtml } from "../markdown.ts";
@@ -265,14 +266,22 @@ function renderGroupedMessage(
       ${renderMessageImages(images)}
       ${
         reasoningMarkdown
-          ? html`<div class="chat-thinking">${unsafeHTML(
-              toSanitizedMarkdownHtml(reasoningMarkdown),
+          ? html`<div class="chat-thinking">${until(
+              toSanitizedMarkdownHtml(reasoningMarkdown).then((html) => unsafeHTML(html)),
+              html`
+                <span>Loading...</span>
+              `,
             )}</div>`
           : nothing
       }
       ${
         markdown
-          ? html`<div class="chat-text">${unsafeHTML(toSanitizedMarkdownHtml(markdown))}</div>`
+          ? html`<div class="chat-text">${until(
+              toSanitizedMarkdownHtml(markdown).then((html) => unsafeHTML(html)),
+              html`
+                <span>Loading...</span>
+              `,
+            )}</div>`
           : nothing
       }
       ${toolCards.map((card) => renderToolCardSidebar(card, onOpenSidebar))}

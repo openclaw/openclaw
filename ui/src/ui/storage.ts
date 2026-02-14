@@ -86,3 +86,37 @@ export function loadSettings(): UiSettings {
 export function saveSettings(next: UiSettings) {
   localStorage.setItem(KEY, JSON.stringify(next));
 }
+
+// Per-session workspace directory cache.
+// Survives page reloads so the project label renders immediately
+// without waiting for the async sessions.list RPC.
+const WORKSPACES_KEY = "openclaw.session.workspaces";
+
+export function saveSessionWorkspace(sessionKey: string, dir: string | null) {
+  try {
+    const raw = localStorage.getItem(WORKSPACES_KEY);
+    const map: Record<string, string> = raw ? JSON.parse(raw) : {};
+    if (dir) {
+      map[sessionKey] = dir;
+    } else {
+      delete map[sessionKey];
+    }
+    localStorage.setItem(WORKSPACES_KEY, JSON.stringify(map));
+  } catch {
+    // Best-effort; localStorage may be full or unavailable.
+  }
+}
+
+export function loadSessionWorkspace(sessionKey: string): string | null {
+  try {
+    const raw = localStorage.getItem(WORKSPACES_KEY);
+    if (!raw) {
+      return null;
+    }
+    const map = JSON.parse(raw) as Record<string, unknown>;
+    const val = map[sessionKey];
+    return typeof val === "string" ? val : null;
+  } catch {
+    return null;
+  }
+}

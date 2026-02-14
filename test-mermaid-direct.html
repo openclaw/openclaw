@@ -1,0 +1,37 @@
+<!doctype html>
+<html>
+  <head>
+    <title>Mermaid Test Direct</title>
+    <script type="module">
+      import mermaid from "./node_modules/mermaid/dist/mermaid.esm.min.mjs";
+
+      mermaid.initialize({
+        startOnLoad: false,
+        theme: "default",
+        securityLevel: "strict",
+      });
+
+      console.log("Mermaid initialized");
+
+      window.addEventListener("load", async () => {
+        const code = `graph TD
+  A[Start] --> B{Check}
+  B -->|Yes| C[OK]
+  B -->|No| D[Error]`;
+
+        try {
+          const { svg } = await mermaid.render("test-diagram", code);
+          document.getElementById("output").innerHTML = svg;
+          console.log("Mermaid rendered successfully");
+        } catch (error) {
+          console.error("Mermaid rendering failed:", error);
+          document.getElementById("output").innerHTML = `<pre>Error: ${error}</pre>`;
+        }
+      });
+    </script>
+  </head>
+  <body>
+    <h1>Mermaid Direct Test</h1>
+    <div id="output"></div>
+  </body>
+</html>

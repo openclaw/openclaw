@@ -14,6 +14,7 @@ import {
 } from "../chat/grouped-render.ts";
 import { normalizeMessage, normalizeRoleForGrouping } from "../chat/message-normalizer.ts";
 import { icons } from "../icons.ts";
+import { loadSessionWorkspace } from "../storage.ts";
 import { renderMarkdownSidebar } from "./markdown-sidebar.ts";
 import "../components/resizable-divider.ts";
 
@@ -516,11 +517,12 @@ function renderAttachmentPreview(props: ChatProps) {
   `;
 }
 
-function resolveSessionProjectLabel(activeSession?: {
-  workspaceDir?: string;
-  projectDir?: string;
-}) {
-  const dir = activeSession?.workspaceDir?.trim() || activeSession?.projectDir?.trim();
+function resolveSessionProjectLabel(
+  activeSession?: { workspaceDir?: string; projectDir?: string },
+  fallbackDir?: string | null,
+) {
+  const dir =
+    activeSession?.workspaceDir?.trim() || activeSession?.projectDir?.trim() || fallbackDir?.trim();
   if (!dir) {
     return "All projects";
   }
@@ -721,7 +723,11 @@ export function renderChat(props: ChatProps) {
   const projects = Array.isArray(props.projects) ? props.projects : [];
   const projectsRootDir = typeof props.projectsRootDir === "string" ? props.projectsRootDir : null;
   const projectsIncludeHidden = Boolean(props.projectsIncludeHidden);
-  const sessionProjectLabel = resolveSessionProjectLabel(activeSession ?? undefined);
+  const cachedWorkspaceDir = loadSessionWorkspace(props.sessionKey);
+  const sessionProjectLabel = resolveSessionProjectLabel(
+    activeSession ?? undefined,
+    cachedWorkspaceDir,
+  );
   let projectPathInput: HTMLInputElement | null = null;
 
   const sessionModelProvider =

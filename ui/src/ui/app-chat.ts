@@ -8,6 +8,7 @@ import { resetToolStream } from "./app-tool-stream.ts";
 import { abortChatRun, loadChatHistory, sendChatMessage } from "./controllers/chat.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import { normalizeBasePath } from "./navigation.ts";
+import { saveSessionWorkspace } from "./storage.ts";
 import { generateUUID } from "./uuid.ts";
 
 export type ChatHost = {
@@ -210,6 +211,15 @@ export async function refreshChat(host: ChatHost) {
     }),
     refreshChatAvatar(host),
   ]);
+  // Keep localStorage workspace cache in sync with server state.
+  const app = host as unknown as OpenClawApp;
+  const activeSession = app.sessionsResult?.sessions?.find(
+    (s: { key: string }) => s.key === host.sessionKey,
+  );
+  if (activeSession) {
+    const dir = activeSession.workspaceDir || activeSession.projectDir || null;
+    saveSessionWorkspace(host.sessionKey, dir);
+  }
   scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
 }
 

@@ -91,6 +91,7 @@ import {
 } from "./controllers/voice.ts";
 import { icons } from "./icons.ts";
 import { TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
+import { saveSessionWorkspace } from "./storage.ts";
 import { ConfigUiHints } from "./types.ts";
 import { renderAgentsHierarchy } from "./views/agents-hierarchy.ts";
 import { renderAgents } from "./views/agents.ts";
@@ -1339,6 +1340,8 @@ export function renderApp(state: AppViewState) {
                 onSessionProjectChange: (projectDir) => {
                   void (async () => {
                     try {
+                      // Cache in localStorage for immediate restoration on page reload.
+                      saveSessionWorkspace(state.sessionKey, projectDir);
                       // Persist workspace directory selection on the current session.
                       await patchSession(state, state.sessionKey, { workspaceDir: projectDir });
                       if (state.client && state.connected) {
@@ -1393,6 +1396,7 @@ export function renderApp(state: AppViewState) {
                       state.projectsBrowseRootDir = dir;
                       state.projectsIncludeHidden = true;
                       await loadProjects(state as unknown as Parameters<typeof loadProjects>[0]);
+                      saveSessionWorkspace(state.sessionKey, dir);
                       await patchSession(state, state.sessionKey, { workspaceDir: dir });
                       await state.client.request("chat.inject", {
                         sessionKey: state.sessionKey,
