@@ -42,11 +42,12 @@ export function resolveSessionFilePathOptions(params: {
   agentId?: string;
   storePath?: string;
 }): SessionFilePathOptions | undefined {
+  const agentId = params.agentId?.trim();
   const storePath = params.storePath?.trim();
   if (storePath) {
-    return { sessionsDir: path.dirname(path.resolve(storePath)) };
+    const sessionsDir = path.dirname(path.resolve(storePath));
+    return agentId ? { sessionsDir, agentId } : { sessionsDir };
   }
-  const agentId = params.agentId?.trim();
   if (agentId) {
     return { agentId };
   }
@@ -71,7 +72,51 @@ function resolveSessionsDir(opts?: SessionFilePathOptions): string {
   return resolveAgentSessionsDir(opts?.agentId);
 }
 
-function resolvePathWithinSessionsDir(sessionsDir: string, candidate: string): string {
+function resolvePathFromAgentSessionsDir(
+  agentSessionsDir: string,
+  candidateAbsPath: string,
+): string | undefined {
+  const agentBase = path.resolve(agentSessionsDir);
+  const relative = path.relative(agentBase, candidateAbsPath);
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+    return undefined;
+  }
+  return path.resolve(agentBase, relative);
+}
+
+function resolveSiblingAgentSessionsDir(
+  baseSessionsDir: string,
+  agentId: string,
+): string | undefined {
+  const resolvedBase = path.resolve(baseSessionsDir);
+  if (path.basename(resolvedBase) !== "sessions") {
+    return undefined;
+  }
+  const baseAgentDir = path.dirname(resolvedBase);
+  const baseAgentsDir = path.dirname(baseAgentDir);
+  if (path.basename(baseAgentsDir) !== "agents") {
+    return undefined;
+  }
+  const rootDir = path.dirname(baseAgentsDir);
+  return path.join(rootDir, "agents", normalizeAgentId(agentId), "sessions");
+}
+
+function extractAgentIdFromAbsoluteSessionPath(candidateAbsPath: string): string | undefined {
+  const normalized = path.normalize(path.resolve(candidateAbsPath));
+  const parts = normalized.split(path.sep).filter(Boolean);
+  const sessionsIndex = parts.lastIndexOf("sessions");
+  if (sessionsIndex < 2 || parts[sessionsIndex - 2] !== "agents") {
+    return undefined;
+  }
+  const agentId = parts[sessionsIndex - 1];
+  return agentId || undefined;
+}
+
+function resolvePathWithinSessionsDir(
+  sessionsDir: string,
+  candidate: string,
+  opts?: { agentId?: string },
+): string {
   const trimmed = candidate.trim();
   if (!trimmed) {
     throw new Error("Session file path must not be empty");
@@ -81,6 +126,34 @@ function resolvePathWithinSessionsDir(sessionsDir: string, candidate: string): s
   // Older versions stored absolute sessionFile paths in sessions.json;
   // convert them to relative so the containment check passes.
   const normalized = path.isAbsolute(trimmed) ? path.relative(resolvedBase, trimmed) : trimmed;
+  if (normalized.startsWith("..") && path.isAbsolute(trimmed)) {
+    const tryAgentFallback = (agentId: string): string | undefined => {
+      const normalizedAgentId = normalizeAgentId(agentId);
+      const siblingSessionsDir = resolveSiblingAgentSessionsDir(resolvedBase, normalizedAgentId);
+      if (siblingSessionsDir) {
+        const siblingResolved = resolvePathFromAgentSessionsDir(siblingSessionsDir, trimmed);
+        if (siblingResolved) {
+          return siblingResolved;
+        }
+      }
+      return resolvePathFromAgentSessionsDir(resolveAgentSessionsDir(normalizedAgentId), trimmed);
+    };
+
+    const explicitAgentId = opts?.agentId?.trim();
+    if (explicitAgentId) {
+      const resolvedFromAgent = tryAgentFallback(explicitAgentId);
+      if (resolvedFromAgent) {
+        return resolvedFromAgent;
+      }
+    }
+    const extractedAgentId = extractAgentIdFromAbsoluteSessionPath(trimmed);
+    if (extractedAgentId) {
+      const resolvedFromPath = tryAgentFallback(extractedAgentId);
+      if (resolvedFromPath) {
+        return resolvedFromPath;
+      }
+    }
+  }
   if (!normalized || normalized.startsWith("..") || path.isAbsolute(normalized)) {
     throw new Error("Session file path must be within sessions directory");
   }
@@ -122,7 +195,7 @@ export function resolveSessionFilePath(
   const sessionsDir = resolveSessionsDir(opts);
   const candidate = entry?.sessionFile?.trim();
   if (candidate) {
-    return resolvePathWithinSessionsDir(sessionsDir, candidate);
+    return resolvePathWithinSessionsDir(sessionsDir, candidate, { agentId: opts?.agentId });
   }
   return resolveSessionTranscriptPathInDir(sessionId, sessionsDir);
 }

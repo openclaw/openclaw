@@ -131,7 +131,9 @@ export function resolveSessionTranscriptCandidates(
   if (storePath) {
     const sessionsDir = path.dirname(storePath);
     if (sessionFile) {
-      pushCandidate(() => resolveSessionFilePath(sessionId, { sessionFile }, { sessionsDir }));
+      pushCandidate(() =>
+        resolveSessionFilePath(sessionId, { sessionFile }, { sessionsDir, agentId }),
+      );
     }
     pushCandidate(() => resolveSessionTranscriptPathInDir(sessionId, sessionsDir));
   } else if (sessionFile) {

@@ -230,10 +230,12 @@ async function buildSubagentStatsLine(params: {
   });
 
   const sessionId = entry?.sessionId;
+  const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
   let transcriptPath: string | undefined;
   if (sessionId && storePath) {
     try {
       transcriptPath = resolveSessionFilePath(sessionId, entry, {
+        agentId,
         sessionsDir: path.dirname(storePath),
       });
     } catch {

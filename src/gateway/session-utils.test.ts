@@ -70,6 +70,25 @@ describe("gateway session utils", () => {
     );
   });
 
+  test("resolveSessionStoreKey falls back to first list entry when no agent is marked default", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: { list: [{ id: "ops" }, { id: "review" }] },
+    } as OpenClawConfig;
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "main" })).toBe("agent:ops:main");
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "discord:group:123" })).toBe(
+      "agent:ops:discord:group:123",
+    );
+  });
+
+  test("resolveSessionStoreKey falls back to main when agents.list is missing", () => {
+    const cfg = {
+      session: { mainKey: "work" },
+    } as OpenClawConfig;
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "main" })).toBe("agent:main:work");
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "thread-1" })).toBe("agent:main:thread-1");
+  });
+
   test("resolveSessionStoreKey normalizes session key casing", () => {
     const cfg = {
       session: { mainKey: "main" },

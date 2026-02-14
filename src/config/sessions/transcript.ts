@@ -106,6 +106,7 @@ export async function appendAssistantMessageToSessionTranscript(params: {
   let sessionFile: string;
   try {
     sessionFile = resolveSessionFilePath(entry.sessionId, entry, {
+      agentId: params.agentId,
       sessionsDir: path.dirname(storePath),
     });
   } catch (err) {
