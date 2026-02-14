@@ -10,7 +10,7 @@ import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import { installUnhandledRejectionHandler } from "../infra/unhandled-rejections.js";
 import { enableConsoleCapture } from "../logging.js";
-import { getPrimaryCommand, hasHelpOrVersion } from "./argv.js";
+import { getCommandPath, getPrimaryCommand, hasHelpOrVersion } from "./argv.js";
 import { tryRouteCli } from "./route.js";
 
 export function rewriteUpdateFlagArgv(argv: string[]): string[] {
@@ -33,20 +33,42 @@ export function shouldSkipPluginCommandRegistration(params: {
   primary: string | null;
   hasBuiltinPrimary: boolean;
 }): boolean {
-  if (!hasHelpOrVersion(params.argv)) {
-    return false;
-  }
-  if (!params.primary) {
+  if (params.hasBuiltinPrimary) {
     return true;
   }
-  return params.hasBuiltinPrimary;
+  if (!params.primary) {
+    return hasHelpOrVersion(params.argv);
+  }
+  return false;
+}
+
+export function shouldEnsureCliPath(argv: string[]): boolean {
+  if (hasHelpOrVersion(argv)) {
+    return false;
+  }
+  const [primary, secondary] = getCommandPath(argv, 2);
+  if (!primary) {
+    return true;
+  }
+  if (primary === "status" || primary === "health" || primary === "sessions") {
+    return false;
+  }
+  if (primary === "config" && (secondary === "get" || secondary === "unset")) {
+    return false;
+  }
+  if (primary === "models" && (secondary === "list" || secondary === "status")) {
+    return false;
+  }
+  return true;
 }
 
 export async function runCli(argv: string[] = process.argv) {
   const normalizedArgv = stripWindowsNodeExec(argv);
   loadDotEnv({ quiet: true });
   normalizeEnv();
-  ensureOpenClawCliOnPath();
+  if (shouldEnsureCliPath(normalizedArgv)) {
+    ensureOpenClawCliOnPath();
+  }
 
   // Enforce the minimum supported runtime before doing any work.
   assertSupportedRuntime();
