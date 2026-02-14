@@ -90,7 +90,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
 
   const { statusThreadTs, isThreadReply } = resolveSlackThreadTargets({
     message,
-    replyToMode: ctx.replyToMode,
+    replyToMode: prepared.replyToMode,
   });
 
   const messageTs = message.ts ?? message.event_ts;
@@ -101,7 +101,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   // mark this to ensure only the first reply is threaded.
   const hasRepliedRef = { value: false };
   const replyPlan = createSlackReplyDeliveryPlan({
-    replyToMode: ctx.replyToMode,
+    replyToMode: prepared.replyToMode,
     incomingThreadTs,
     messageTs,
     hasRepliedRef,
@@ -413,8 +413,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
 
   const anyReplyDelivered = queuedFinal || (counts.block ?? 0) > 0 || (counts.final ?? 0) > 0;
 
-  if (anyReplyDelivered && ctx.stickyThreadTracker) {
-    const threadToRecord = incomingThreadTs ?? (ctx.replyToMode !== "off" ? messageTs : undefined);
+  if (anyReplyDelivered && ctx.stickyThreadTracker && !prepared.isDirectMessage) {
+    const threadToRecord =
+      incomingThreadTs ?? (prepared.replyToMode !== "off" ? messageTs : undefined);
     if (threadToRecord && message.channel) {
       ctx.stickyThreadTracker.record(message.channel, threadToRecord);
     }
