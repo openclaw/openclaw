@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import crypto from "node:crypto";
 import path from "node:path";
 import { resolveBlueBubblesAccount } from "./accounts.js";
+import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
 import { resolveChatGuidForTarget } from "./send.js";
 import { parseBlueBubblesTarget, normalizeBlueBubblesHandle } from "./targets.js";
 import {
@@ -64,7 +65,7 @@ function resolveAccount(params: BlueBubblesAttachmentOpts) {
   if (!password) {
     throw new Error("BlueBubbles password is required");
   }
-  return { baseUrl, password };
+  return { baseUrl, password, accountId: account.accountId };
 }
 
 export async function downloadBlueBubblesAttachment(
@@ -169,7 +170,8 @@ export async function sendBlueBubblesAttachment(params: {
   const fallbackName = wantsVoice ? "Audio Message" : "attachment";
   filename = sanitizeFilename(filename, fallbackName);
   contentType = contentType?.trim() || undefined;
-  const { baseUrl, password } = resolveAccount(opts);
+  const { baseUrl, password, accountId } = resolveAccount(opts);
+  const privateApiStatus = getCachedBlueBubblesPrivateApiStatus(accountId);
 
   // Validate voice memo format when requested (BlueBubbles converts MP3 -> CAF when isAudioMessage).
   const isAudioMessage = wantsVoice;
@@ -238,7 +240,9 @@ export async function sendBlueBubblesAttachment(params: {
   addField("chatGuid", chatGuid);
   addField("name", filename);
   addField("tempGuid", `temp-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`);
-  addField("method", "private-api");
+  if (privateApiStatus !== false) {
+    addField("method", "private-api");
+  }
 
   // Add isAudioMessage flag for voice memos
   if (isAudioMessage) {
@@ -246,7 +250,7 @@ export async function sendBlueBubblesAttachment(params: {
   }
 
   const trimmedReplyTo = replyToMessageGuid?.trim();
-  if (trimmedReplyTo) {
+  if (trimmedReplyTo && privateApiStatus !== false) {
     addField("selectedMessageGuid", trimmedReplyTo);
     addField("partIndex", typeof replyToPartIndex === "number" ? String(replyToPartIndex) : "0");
   }

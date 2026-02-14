@@ -32,12 +32,14 @@ import {
   resolveBlueBubblesMessageId,
   resolveReplyContextFromCache,
 } from "./monitor-reply-cache.js";
+import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
 import { normalizeBlueBubblesReactionInput, sendBlueBubblesReaction } from "./reactions.js";
 import { resolveChatGuidForTarget, sendMessageBlueBubbles } from "./send.js";
 import { formatBlueBubblesChatTarget, isAllowedBlueBubblesSender } from "./targets.js";
 
 const DEFAULT_TEXT_LIMIT = 4000;
 const invalidAckReactions = new Set<string>();
+const REPLY_DIRECTIVE_TAG_RE = /\[\[\s*(?:reply_to_current|reply_to\s*:\s*[^\]\n]+)\s*\]\]/gi;
 
 export function logVerbose(
   core: BlueBubblesCoreRuntime,
@@ -110,6 +112,7 @@ export async function processMessage(
   target: WebhookTarget,
 ): Promise<void> {
   const { account, config, runtime, core, statusSink } = target;
+  const privateApiEnabled = getCachedBlueBubblesPrivateApiStatus(account.accountId) !== false;
 
   const groupFlag = resolveGroupFlagFromChatGuid(message.chatGuid);
   const isGroup = typeof groupFlag === "boolean" ? groupFlag : message.isGroup;
@@ -639,6 +642,15 @@ export async function processMessage(
       contextKey: `bluebubbles:outbound:${outboundTarget}:${trimmed}`,
     });
   };
+  const sanitizeReplyDirectiveText = (value: string): string => {
+    if (privateApiEnabled) {
+      return value;
+    }
+    return value
+      .replace(REPLY_DIRECTIVE_TAG_RE, " ")
+      .replace(/[ \t]+/g, " ")
+      .trim();
+  };
 
   const ctxPayload = {
     Body: body,
@@ -721,7 +733,9 @@ export async function processMessage(
         ...prefixOptions,
         deliver: async (payload, info) => {
           const rawReplyToId =
-            typeof payload.replyToId === "string" ? payload.replyToId.trim() : "";
+            privateApiEnabled && typeof payload.replyToId === "string"
+              ? payload.replyToId.trim()
+              : "";
           // Resolve short ID (e.g., "5") to full UUID
           const replyToMessageGuid = rawReplyToId
             ? resolveBlueBubblesMessageId(rawReplyToId, { requireKnownShortId: true })
@@ -737,7 +751,9 @@ export async function processMessage(
               channel: "bluebubbles",
               accountId: account.accountId,
             });
-            const text = core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode);
+            const text = sanitizeReplyDirectiveText(
+              core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode),
+            );
             let first = true;
             for (const mediaUrl of mediaList) {
               const caption = first ? text : undefined;
@@ -771,7 +787,9 @@ export async function processMessage(
             channel: "bluebubbles",
             accountId: account.accountId,
           });
-          const text = core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode);
+          const text = sanitizeReplyDirectiveText(
+            core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode),
+          );
           const chunks =
             chunkMode === "newline"
               ? core.channel.text.chunkTextWithMode(text, textLimit, chunkMode)
