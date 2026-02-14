@@ -81,7 +81,9 @@ describe("applyPatch", () => {
 +escaped
 *** End Patch`;
 
-      await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(/Path escapes sandbox root/);
+      await expect(applyPatch(patch, { cwd: dir, workspaceOnly: true })).rejects.toThrow(
+        /Path escapes sandbox root/,
+      );
       await expect(fs.readFile(escapedPath, "utf8")).rejects.toBeDefined();
     });
   });
@@ -96,7 +98,9 @@ describe("applyPatch", () => {
 *** End Patch`;
 
       try {
-        await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(/Path escapes sandbox root/);
+        await expect(applyPatch(patch, { cwd: dir, workspaceOnly: true })).rejects.toThrow(
+          /Path escapes sandbox root/,
+        );
         await expect(fs.readFile(escapedPath, "utf8")).rejects.toBeDefined();
       } finally {
         await fs.rm(escapedPath, { force: true });
@@ -112,7 +116,7 @@ describe("applyPatch", () => {
 +inside
 *** End Patch`;
 
-      await applyPatch(patch, { cwd: dir });
+      await applyPatch(patch, { cwd: dir, workspaceOnly: true });
       const contents = await fs.readFile(target, "utf8");
       expect(contents).toBe("inside\n");
     });
@@ -132,10 +136,32 @@ describe("applyPatch", () => {
 +pwned
 *** End Patch`;
 
-      await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(/Symlink not allowed/);
+      await expect(applyPatch(patch, { cwd: dir, workspaceOnly: true })).rejects.toThrow(
+        /Symlink escapes sandbox root/,
+      );
       const outsideContents = await fs.readFile(outside, "utf8");
       expect(outsideContents).toBe("initial\n");
       await fs.rm(outside, { force: true });
+    });
+  });
+
+  it("allows symlinks that resolve within cwd", async () => {
+    await withTempDir(async (dir) => {
+      const target = path.join(dir, "target.txt");
+      const linkPath = path.join(dir, "link.txt");
+      await fs.writeFile(target, "initial\n", "utf8");
+      await fs.symlink(target, linkPath);
+
+      const patch = `*** Begin Patch
+*** Update File: link.txt
+@@
+-initial
++updated
+*** End Patch`;
+
+      await applyPatch(patch, { cwd: dir, workspaceOnly: true });
+      const contents = await fs.readFile(target, "utf8");
+      expect(contents).toBe("updated\n");
     });
   });
 });

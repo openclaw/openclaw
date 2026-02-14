@@ -32,7 +32,8 @@ The tool accepts a single `input` string that wraps one or more file operations:
 
 ## Notes
 
-- Paths are resolved relative to the workspace root.
+- Patch paths support relative paths (from the workspace directory) and absolute paths.
+- Optional: set `tools.exec.applyPatch.workspaceOnly: true` to restrict patch paths to the workspace directory (recommended when untrusted users can trigger tool execution).
 - Use `*** Move to:` within an `*** Update File:` hunk to rename files.
 - `*** End of File` marks an EOF-only insert when needed.
 - Experimental and disabled by default. Enable with `tools.exec.applyPatch.enabled`.
