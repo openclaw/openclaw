@@ -5,6 +5,23 @@ installBaseProgramMocks();
 
 const { buildProgram } = await import("./program.js");
 
+function formatRuntimeLogCallArg(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+    return String(value);
+  }
+  if (value == null) {
+    return "";
+  }
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return "[unserializable]";
+  }
+}
+
 describe("cli program (nodes basics)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -57,7 +74,7 @@ describe("cli program (nodes basics)", () => {
     await program.parseAsync(["nodes", "list", "--connected"], { from: "user" });
 
     expect(callGateway).toHaveBeenCalledWith(expect.objectContaining({ method: "node.list" }));
-    const output = runtime.log.mock.calls.map((c) => String(c[0] ?? "")).join("\n");
+    const output = runtime.log.mock.calls.map((c) => formatRuntimeLogCallArg(c[0])).join("\n");
     expect(output).toContain("One");
     expect(output).not.toContain("Two");
   });
@@ -92,7 +109,7 @@ describe("cli program (nodes basics)", () => {
     });
 
     expect(callGateway).toHaveBeenCalledWith(expect.objectContaining({ method: "node.pair.list" }));
-    const output = runtime.log.mock.calls.map((c) => String(c[0] ?? "")).join("\n");
+    const output = runtime.log.mock.calls.map((c) => formatRuntimeLogCallArg(c[0])).join("\n");
     expect(output).toContain("One");
     expect(output).not.toContain("Two");
   });
@@ -121,7 +138,7 @@ describe("cli program (nodes basics)", () => {
       expect.objectContaining({ method: "node.list", params: {} }),
     );
 
-    const output = runtime.log.mock.calls.map((c) => String(c[0] ?? "")).join("\n");
+    const output = runtime.log.mock.calls.map((c) => formatRuntimeLogCallArg(c[0])).join("\n");
     expect(output).toContain("Known: 1 · Paired: 1 · Connected: 1");
     expect(output).toContain("iOS Node");
     expect(output).toContain("Detail");
@@ -154,7 +171,7 @@ describe("cli program (nodes basics)", () => {
     runtime.log.mockClear();
     await program.parseAsync(["nodes", "status"], { from: "user" });
 
-    const output = runtime.log.mock.calls.map((c) => String(c[0] ?? "")).join("\n");
+    const output = runtime.log.mock.calls.map((c) => formatRuntimeLogCallArg(c[0])).join("\n");
     expect(output).toContain("Known: 1 · Paired: 0 · Connected: 1");
     expect(output).toContain("Peter's Tab");
     expect(output).toContain("S10 Ultra");
@@ -214,7 +231,7 @@ describe("cli program (nodes basics)", () => {
       }),
     );
 
-    const out = runtime.log.mock.calls.map((c) => String(c[0] ?? "")).join("\n");
+    const out = runtime.log.mock.calls.map((c) => formatRuntimeLogCallArg(c[0])).join("\n");
     expect(out).toContain("Commands");
     expect(out).toContain("canvas.eval");
   });

@@ -30,6 +30,25 @@ type WritableStdin = {
   end: () => void;
   destroyed?: boolean;
 };
+const DEFAULT_LOG_TAIL_LINES = 200;
+
+function resolveLogSliceWindow(offset?: number, limit?: number) {
+  const usingDefaultTail = offset === undefined && limit === undefined;
+  const effectiveLimit =
+    typeof limit === "number" && Number.isFinite(limit)
+      ? limit
+      : usingDefaultTail
+        ? DEFAULT_LOG_TAIL_LINES
+        : undefined;
+  return { effectiveOffset: offset, effectiveLimit, usingDefaultTail };
+}
+
+function defaultTailNote(totalLines: number, usingDefaultTail: boolean) {
+  if (!usingDefaultTail || totalLines <= DEFAULT_LOG_TAIL_LINES) {
+    return "";
+  }
+  return `\n\n[showing last ${DEFAULT_LOG_TAIL_LINES} of ${totalLines} lines; pass offset/limit to page]`;
+}
 
 const processSchema = Type.Object({
   action: Type.String({ description: "Process action" }),
@@ -294,13 +313,15 @@ export function createProcessTool(
                 details: { status: "failed" },
               };
             }
+            const window = resolveLogSliceWindow(params.offset, params.limit);
             const { slice, totalLines, totalChars } = sliceLogLines(
               scopedSession.aggregated,
-              params.offset,
-              params.limit,
+              window.effectiveOffset,
+              window.effectiveLimit,
             );
+            const logDefaultTailNote = defaultTailNote(totalLines, window.usingDefaultTail);
             return {
-              content: [{ type: "text", text: slice || "(no output yet)" }],
+              content: [{ type: "text", text: (slice || "(no output yet)") + logDefaultTailNote }],
               details: {
                 status: scopedSession.exited ? "completed" : "running",
                 sessionId: params.sessionId,
@@ -313,14 +334,18 @@ export function createProcessTool(
             };
           }
           if (scopedFinished) {
+            const window = resolveLogSliceWindow(params.offset, params.limit);
             const { slice, totalLines, totalChars } = sliceLogLines(
               scopedFinished.aggregated,
-              params.offset,
-              params.limit,
+              window.effectiveOffset,
+              window.effectiveLimit,
             );
             const status = scopedFinished.status === "completed" ? "completed" : "failed";
+            const logDefaultTailNote = defaultTailNote(totalLines, window.usingDefaultTail);
             return {
-              content: [{ type: "text", text: slice || "(no output recorded)" }],
+              content: [
+                { type: "text", text: (slice || "(no output recorded)") + logDefaultTailNote },
+              ],
               details: {
                 status,
                 sessionId: params.sessionId,

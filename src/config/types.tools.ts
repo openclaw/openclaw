@@ -183,6 +183,11 @@ export type ExecToolConfig = {
   cleanupMs?: number;
   /** Emit a system event and heartbeat when a backgrounded exec exits. */
   notifyOnExit?: boolean;
+  /**
+   * Also emit success exit notifications when a backgrounded exec has no output.
+   * Default false to reduce context noise.
+   */
+  notifyOnExitEmptySuccess?: boolean;
   /** apply_patch subtool configuration (experimental). */
   applyPatch?: {
     /** Enable apply_patch for OpenAI models (default: false). */

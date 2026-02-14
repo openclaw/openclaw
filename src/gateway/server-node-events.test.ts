@@ -83,6 +83,42 @@ describe("node exec events", () => {
     expect(requestHeartbeatNowMock).toHaveBeenCalledWith({ reason: "exec-event" });
   });
 
+  it("suppresses noisy exec.finished success events with empty output", async () => {
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-2", {
+      event: "exec.finished",
+      payloadJSON: JSON.stringify({
+        runId: "run-quiet",
+        exitCode: 0,
+        timedOut: false,
+        output: "   ",
+      }),
+    });
+
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+  });
+
+  it("truncates long exec.finished output in system events", async () => {
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-2", {
+      event: "exec.finished",
+      payloadJSON: JSON.stringify({
+        runId: "run-long",
+        exitCode: 0,
+        timedOut: false,
+        output: "x".repeat(600),
+      }),
+    });
+
+    const [[text]] = enqueueSystemEventMock.mock.calls;
+    expect(typeof text).toBe("string");
+    expect(text.startsWith("Exec finished (node=node-2 id=run-long, code 0)\n")).toBe(true);
+    expect(text.endsWith("…")).toBe(true);
+    expect(text.length).toBeLessThan(280);
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({ reason: "exec-event" });
+  });
+
   it("enqueues exec.denied events with reason", async () => {
     const ctx = buildCtx();
     await handleNodeEvent(ctx, "node-3", {
