@@ -899,7 +899,7 @@ describe("signal createSignalEventHandler inbound contract", () => {
 
     await handler(
       makeReceiveEvent({
-        sharedContacts: [
+        contacts: [
           {
             name: {
               display: "Jane Doe",
@@ -927,7 +927,7 @@ describe("signal createSignalEventHandler inbound contract", () => {
     await handler(
       makeReceiveEvent({
         message: "Here's John's info",
-        sharedContacts: [
+        contacts: [
           {
             name: {
               given: "John",

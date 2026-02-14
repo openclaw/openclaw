@@ -664,7 +664,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     ].filter((entry): entry is string => Boolean(entry));
     const linkPreviewContext =
       deps.injectLinkPreviews !== false ? buildSignalLinkPreviewContext(dataMessage?.previews) : [];
-    const contactContext = buildSignalContactContext(dataMessage?.sharedContacts);
+    const contactContext = buildSignalContactContext(dataMessage?.contacts);
     const attachments = dataMessage?.attachments ?? [];
     const allAttachments = sticker?.attachment ? [...attachments, sticker.attachment] : attachments;
     const voiceNoteIndices = allAttachments.flatMap((attachment, index) =>
@@ -1000,10 +1000,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       placeholder = `<media:${kind}>`;
     } else if (allAttachments.length) {
       placeholder = "<media:attachment>";
-    } else if (
-      Array.isArray(dataMessage?.sharedContacts) &&
-      dataMessage.sharedContacts.length > 0
-    ) {
+    } else if (Array.isArray(dataMessage?.contacts) && dataMessage.contacts.length > 0) {
       placeholder = "<media:contact>";
     }
 

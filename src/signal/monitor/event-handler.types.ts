@@ -35,7 +35,7 @@ export type SignalDataMessage = {
   previews?: Array<SignalLinkPreview> | null;
   textStyles?: Array<SignalTextStyleRange> | null;
   mentions?: Array<SignalMention> | null;
-  sharedContacts?: Array<SignalSharedContact> | null;
+  contacts?: Array<SignalSharedContact> | null;
   groupInfo?: {
     groupId?: string | null;
     groupName?: string | null;
