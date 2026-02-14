@@ -27,12 +27,20 @@ export function shouldRegisterPrimarySubcommand(argv: string[]): boolean {
   return !hasHelpOrVersion(argv);
 }
 
+// Builtin commands that plugins are known to extend with subcommands.
+// These must NOT skip plugin CLI registration even though they are builtins.
+const PLUGIN_EXTENSIBLE_COMMANDS = new Set(["memory"]);
+
 export function shouldSkipPluginCommandRegistration(params: {
   argv: string[];
   primary: string | null;
   hasBuiltinPrimary: boolean;
 }): boolean {
   if (params.hasBuiltinPrimary) {
+    // Some builtins are extended by plugins (e.g. "memory" gains "neo4j" subcommand).
+    if (params.primary && PLUGIN_EXTENSIBLE_COMMANDS.has(params.primary)) {
+      return false;
+    }
     return true;
   }
   if (!params.primary) {

@@ -103,6 +103,16 @@ describe("shouldSkipPluginCommandRegistration", () => {
       }),
     ).toBe(false);
   });
+
+  it("keeps plugin registration for plugin-extensible builtins like memory", () => {
+    expect(
+      shouldSkipPluginCommandRegistration({
+        argv: ["node", "openclaw", "memory", "neo4j", "sleep"],
+        primary: "memory",
+        hasBuiltinPrimary: true,
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("shouldEnsureCliPath", () => {
