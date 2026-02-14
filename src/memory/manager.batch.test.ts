@@ -7,6 +7,10 @@ import { getMemorySearchManager, type MemoryIndexManager } from "./index.js";
 const embedBatch = vi.fn(async () => []);
 const embedQuery = vi.fn(async () => [0.5, 0.5, 0.5]);
 
+vi.mock("./sqlite-vec.js", () => ({
+  loadSqliteVecExtension: async () => ({ ok: false, error: "sqlite-vec disabled in tests" }),
+}));
+
 vi.mock("./embeddings.js", () => ({
   createEmbeddingProvider: async () => ({
     requestedProvider: "openai",
@@ -289,6 +293,7 @@ describe("memory indexing with OpenAI batches", () => {
   });
 
   it("tracks batch failures, resets on success, and disables after repeated failures", async () => {
+    const restoreTimeouts = useFastShortTimeouts();
     const content = ["flaky", "batch"].join("\n\n");
     await fs.writeFile(path.join(workspaceDir, "memory", "2026-01-09.md"), content);
 
@@ -376,62 +381,66 @@ describe("memory indexing with OpenAI batches", () => {
       },
     };
 
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
-    expect(result.manager).not.toBeNull();
-    if (!result.manager) {
-      throw new Error("manager missing");
+    try {
+      const result = await getMemorySearchManager({ cfg, agentId: "main" });
+      expect(result.manager).not.toBeNull();
+      if (!result.manager) {
+        throw new Error("manager missing");
+      }
+      manager = result.manager;
+
+      // First failure: fallback to regular embeddings and increment failure count.
+      await manager.sync({ force: true });
+      expect(embedBatch).toHaveBeenCalled();
+      let status = manager.status();
+      expect(status.batch?.enabled).toBe(true);
+      expect(status.batch?.failures).toBe(1);
+
+      // Success should reset failure count.
+      embedBatch.mockClear();
+      mode = "ok";
+      await fs.writeFile(
+        path.join(workspaceDir, "memory", "2026-01-09.md"),
+        ["flaky", "batch", "recovery"].join("\n\n"),
+      );
+      await manager.sync({ force: true });
+      status = manager.status();
+      expect(status.batch?.enabled).toBe(true);
+      expect(status.batch?.failures).toBe(0);
+      expect(embedBatch).not.toHaveBeenCalled();
+
+      // Two more failures after reset should disable remote batching.
+      mode = "fail";
+      await fs.writeFile(
+        path.join(workspaceDir, "memory", "2026-01-09.md"),
+        ["flaky", "batch", "fail-a"].join("\n\n"),
+      );
+      await manager.sync({ force: true });
+      status = manager.status();
+      expect(status.batch?.enabled).toBe(true);
+      expect(status.batch?.failures).toBe(1);
+
+      await fs.writeFile(
+        path.join(workspaceDir, "memory", "2026-01-09.md"),
+        ["flaky", "batch", "fail-b"].join("\n\n"),
+      );
+      await manager.sync({ force: true });
+      status = manager.status();
+      expect(status.batch?.enabled).toBe(false);
+      expect(status.batch?.failures).toBeGreaterThanOrEqual(2);
+
+      // Once disabled, batch endpoints are skipped and fallback embeddings run directly.
+      const fetchCalls = fetchMock.mock.calls.length;
+      embedBatch.mockClear();
+      await fs.writeFile(
+        path.join(workspaceDir, "memory", "2026-01-09.md"),
+        ["flaky", "batch", "fallback"].join("\n\n"),
+      );
+      await manager.sync({ force: true });
+      expect(fetchMock.mock.calls.length).toBe(fetchCalls);
+      expect(embedBatch).toHaveBeenCalled();
+    } finally {
+      restoreTimeouts();
     }
-    manager = result.manager;
-
-    // First failure: fallback to regular embeddings and increment failure count.
-    await manager.sync({ force: true });
-    expect(embedBatch).toHaveBeenCalled();
-    let status = manager.status();
-    expect(status.batch?.enabled).toBe(true);
-    expect(status.batch?.failures).toBe(1);
-
-    // Success should reset failure count.
-    embedBatch.mockClear();
-    mode = "ok";
-    await fs.writeFile(
-      path.join(workspaceDir, "memory", "2026-01-09.md"),
-      ["flaky", "batch", "recovery"].join("\n\n"),
-    );
-    await manager.sync({ force: true });
-    status = manager.status();
-    expect(status.batch?.enabled).toBe(true);
-    expect(status.batch?.failures).toBe(0);
-    expect(embedBatch).not.toHaveBeenCalled();
-
-    // Two more failures after reset should disable remote batching.
-    mode = "fail";
-    await fs.writeFile(
-      path.join(workspaceDir, "memory", "2026-01-09.md"),
-      ["flaky", "batch", "fail-a"].join("\n\n"),
-    );
-    await manager.sync({ force: true });
-    status = manager.status();
-    expect(status.batch?.enabled).toBe(true);
-    expect(status.batch?.failures).toBe(1);
-
-    await fs.writeFile(
-      path.join(workspaceDir, "memory", "2026-01-09.md"),
-      ["flaky", "batch", "fail-b"].join("\n\n"),
-    );
-    await manager.sync({ force: true });
-    status = manager.status();
-    expect(status.batch?.enabled).toBe(false);
-    expect(status.batch?.failures).toBeGreaterThanOrEqual(2);
-
-    // Once disabled, batch endpoints are skipped and fallback embeddings run directly.
-    const fetchCalls = fetchMock.mock.calls.length;
-    embedBatch.mockClear();
-    await fs.writeFile(
-      path.join(workspaceDir, "memory", "2026-01-09.md"),
-      ["flaky", "batch", "fallback"].join("\n\n"),
-    );
-    await manager.sync({ force: true });
-    expect(fetchMock.mock.calls.length).toBe(fetchCalls);
-    expect(embedBatch).toHaveBeenCalled();
   });
 });

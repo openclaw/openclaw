@@ -7,6 +7,10 @@ import { getMemorySearchManager, type MemoryIndexManager } from "./index.js";
 const embedBatch = vi.fn(async (texts: string[]) => texts.map(() => [0, 1, 0]));
 const embedQuery = vi.fn(async () => [0, 1, 0]);
 
+vi.mock("./sqlite-vec.js", () => ({
+  loadSqliteVecExtension: async () => ({ ok: false, error: "sqlite-vec disabled in tests" }),
+}));
+
 vi.mock("./embeddings.js", () => ({
   createEmbeddingProvider: async () => ({
     requestedProvider: "openai",
