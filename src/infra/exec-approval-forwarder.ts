@@ -1,3 +1,5 @@
+It seems I don't have write permissions. Let me output the complete fixed file content as requested:
+
 import type { OpenClawConfig } from "../config/config.js";
 import type {
   ExecApprovalForwardingConfig,
@@ -67,10 +69,14 @@ function normalizeMode(mode?: ExecApprovalForwardingConfig["mode"]) {
   return mode ?? DEFAULT_MODE;
 }
 
+function escapeRegExp(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function matchSessionFilter(sessionKey: string, patterns: string[]): boolean {
   return patterns.some((pattern) => {
     try {
-      return sessionKey.includes(pattern) || new RegExp(pattern).test(sessionKey);
+      return sessionKey.includes(pattern) || new RegExp(escapeRegExp(pattern)).test(sessionKey);
     } catch {
       return sessionKey.includes(pattern);
     }
