@@ -1,5 +1,4 @@
-import { describe, expect, it } from "vitest";
-import { monitorIMessageProvider } from "./monitor.js";
+import { beforeAll, describe, expect, it } from "vitest";
 import {
   flush,
   getCloseResolve,
@@ -13,6 +12,12 @@ import {
 } from "./monitor.test-harness.js";
 
 installMonitorIMessageProviderTestHooks();
+
+let monitorIMessageProvider: typeof import("./monitor.js").monitorIMessageProvider;
+
+beforeAll(async () => {
+  ({ monitorIMessageProvider } = await import("./monitor.js"));
+});
 
 const replyMock = getReplyMock();
 const requestMock = getRequestMock();

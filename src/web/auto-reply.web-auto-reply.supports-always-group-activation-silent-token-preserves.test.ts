@@ -1,9 +1,8 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { expectInboundContextContract } from "../../test/helpers/inbound-contract.js";
 import { setLoggerOverride } from "../logging.js";
-import { monitorWebChannel, SILENT_REPLY_TOKEN } from "./auto-reply.js";
 import {
   installWebAutoReplyTestHomeHooks,
   installWebAutoReplyUnitTestHooks,
@@ -13,6 +12,13 @@ import {
 } from "./auto-reply.test-harness.js";
 
 installWebAutoReplyTestHomeHooks();
+
+let monitorWebChannel: typeof import("./auto-reply.js").monitorWebChannel;
+let SILENT_REPLY_TOKEN: typeof import("./auto-reply.js").SILENT_REPLY_TOKEN;
+
+beforeAll(async () => {
+  ({ monitorWebChannel, SILENT_REPLY_TOKEN } = await import("./auto-reply.js"));
+});
 
 describe("web auto-reply", () => {
   installWebAutoReplyUnitTestHooks();
