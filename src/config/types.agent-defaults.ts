@@ -280,8 +280,8 @@ export type MemoryContextAgentConfig = {
   enabled?: boolean;
   /** Hard cap on injected recalled-context tokens (default: 4000). */
   hardCapTokens?: number;
-  /** Embedding model: "hash" (fast, local) or "transformer" (semantic, needs ONNX). */
-  embeddingModel?: "hash" | "transformer";
+  /** Embedding model: "auto" (best available), "gemini", "transformer" (local ONNX), or "hash" (keyword). Cascading fallback: auto/gemini → openai → voyage → local → transformer → BM25. */
+  embeddingModel?: "auto" | "gemini" | "hash" | "transformer";
   /** Storage path for JSONL + vectors.bin (default: ~/.openclaw/memory/context). */
   storagePath?: string;
   /** Redact secrets before persisting (default: true). */

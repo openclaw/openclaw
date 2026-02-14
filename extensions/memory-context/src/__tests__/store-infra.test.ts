@@ -7,7 +7,7 @@ import { join } from "node:path";
  * Covers: deduplication, maxSegments cap, timeline eviction performance.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { HashEmbedding } from "../../../../src/agents/memory-context/embedding.js";
+import { createEmbeddingProvider } from "../../../../src/agents/memory-context/embedding.js";
 import { WarmStore } from "../../../../src/agents/memory-context/store.js";
 
 describe("store dedup", () => {
@@ -24,7 +24,7 @@ describe("store dedup", () => {
   it("same content + same session + same role is stored only once", async () => {
     const store = new WarmStore({
       sessionId: "sess1",
-      embedding: new HashEmbedding(16),
+      embedding: await createEmbeddingProvider(undefined, "hash"),
       coldStore: { path: tmpDir },
       maxSegments: 100,
     });
@@ -40,7 +40,7 @@ describe("store dedup", () => {
   it("same content but different role is stored as separate segments", async () => {
     const store = new WarmStore({
       sessionId: "sess1",
-      embedding: new HashEmbedding(16),
+      embedding: await createEmbeddingProvider(undefined, "hash"),
       coldStore: { path: tmpDir },
       maxSegments: 100,
     });
@@ -54,7 +54,7 @@ describe("store dedup", () => {
   it("different content is stored as separate segments", async () => {
     const store = new WarmStore({
       sessionId: "sess1",
-      embedding: new HashEmbedding(16),
+      embedding: await createEmbeddingProvider(undefined, "hash"),
       coldStore: { path: tmpDir },
       maxSegments: 100,
     });
@@ -80,7 +80,7 @@ describe("store maxSegments", () => {
   it("evicts oldest segments when exceeding maxSegments", async () => {
     const store = new WarmStore({
       sessionId: "sess1",
-      embedding: new HashEmbedding(16),
+      embedding: await createEmbeddingProvider(undefined, "hash"),
       coldStore: { path: tmpDir },
       maxSegments: 5,
     });
@@ -113,7 +113,7 @@ describe("store timeline performance", () => {
   it("eviction with many segments completes within reasonable time", async () => {
     const store = new WarmStore({
       sessionId: "sess1",
-      embedding: new HashEmbedding(16),
+      embedding: await createEmbeddingProvider(undefined, "hash"),
       coldStore: { path: tmpDir },
       maxSegments: 50,
       vectorPersist: false,

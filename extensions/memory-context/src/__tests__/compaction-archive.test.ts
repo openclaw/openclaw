@@ -14,7 +14,7 @@ import {
   scheduleKnowledgeExtraction,
   extractMessageText,
 } from "../../../../src/agents/memory-context/compaction-bridge.js";
-import { HashEmbedding } from "../../../../src/agents/memory-context/embedding.js";
+import { createEmbeddingProvider } from "../../../../src/agents/memory-context/embedding.js";
 import { KnowledgeStore } from "../../../../src/agents/memory-context/knowledge-store.js";
 import { WarmStore } from "../../../../src/agents/memory-context/store.js";
 
@@ -23,11 +23,11 @@ describe("compaction archive", () => {
   let rawStore: WarmStore;
   let knowledgeStore: KnowledgeStore;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     tmpDir = mkdtempSync(join(tmpdir(), "compact-"));
     rawStore = new WarmStore({
       sessionId: "test-session",
-      embedding: new HashEmbedding(16),
+      embedding: await createEmbeddingProvider(undefined, "hash"),
       coldStore: { path: join(tmpDir, "raw") },
       maxSegments: 1000,
       vectorPersist: false,

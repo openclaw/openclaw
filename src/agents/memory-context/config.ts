@@ -2,7 +2,7 @@ import fs from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-export type EmbeddingModelType = "hash" | "transformer";
+export type EmbeddingModelType = "auto" | "gemini" | "hash" | "transformer";
 export type IndexType = "brute" | "hnsw";
 
 export type SearchConfig = {
@@ -200,7 +200,7 @@ export const memoryContextConfigSchema = {
     const embeddingModel =
       cfg.embeddingModel === undefined
         ? DEFAULT_EMBEDDING_MODEL
-        : assertEnum(cfg.embeddingModel, ["hash", "transformer"], "embeddingModel");
+        : assertEnum(cfg.embeddingModel, ["auto", "gemini", "hash", "transformer"], "embeddingModel");
 
     const embeddingModelName =
       typeof cfg.embeddingModelName === "string"

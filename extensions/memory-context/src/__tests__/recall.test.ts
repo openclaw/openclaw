@@ -8,7 +8,7 @@ import { join } from "node:path";
  * recall-format output structure, code formatting preservation.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { HashEmbedding } from "../../../../src/agents/memory-context/embedding.js";
+import { createEmbeddingProvider } from "../../../../src/agents/memory-context/embedding.js";
 import { KnowledgeStore } from "../../../../src/agents/memory-context/knowledge-store.js";
 import { buildRecalledContextBlock } from "../../../../src/agents/memory-context/recall-format.js";
 import { WarmStore } from "../../../../src/agents/memory-context/store.js";
@@ -22,7 +22,7 @@ describe("recall + format", () => {
     tmpDir = mkdtempSync(join(tmpdir(), "recall-"));
     rawStore = new WarmStore({
       sessionId: "test",
-      embedding: new HashEmbedding(16),
+      embedding: await createEmbeddingProvider(undefined, "hash"),
       coldStore: { path: join(tmpDir, "raw") },
       maxSegments: 1000,
       vectorPersist: false,

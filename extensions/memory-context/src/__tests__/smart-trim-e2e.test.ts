@@ -7,7 +7,7 @@ import { join } from "node:path";
  * Simulates multi-round context events with trimming + archiving + recall.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { HashEmbedding } from "../../../../src/agents/memory-context/embedding.js";
+import { createEmbeddingProvider } from "../../../../src/agents/memory-context/embedding.js";
 import { KnowledgeStore } from "../../../../src/agents/memory-context/knowledge-store.js";
 import {
   smartTrim,
@@ -30,7 +30,7 @@ describe("smart-trim e2e", () => {
     tmpDir = mkdtempSync(join(tmpdir(), "st-e2e-"));
     rawStore = new WarmStore({
       sessionId: "e2e",
-      embedding: new HashEmbedding(16),
+      embedding: await createEmbeddingProvider(undefined, "hash"),
       coldStore: { path: join(tmpDir, "raw") },
       maxSegments: 10000,
       vectorPersist: false,

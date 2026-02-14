@@ -535,7 +535,7 @@ export async function compactEmbeddedPiSessionDirect(
         minReserveTokens: resolveCompactionReserveTokensFloor(params.config),
       });
       // Call for side effects (sets compaction/pruning runtime state) AND collect extension paths
-      const embeddedExtPaths = buildEmbeddedExtensionPaths({
+      const embeddedExtPaths = await buildEmbeddedExtensionPaths({
         cfg: params.config,
         sessionManager,
         provider,

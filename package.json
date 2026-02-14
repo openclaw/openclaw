@@ -132,6 +132,7 @@
     "@slack/bolt": "^4.6.0",
     "@slack/web-api": "^7.14.1",
     "@whiskeysockets/baileys": "7.0.0-rc.9",
+    "@xenova/transformers": "^2.17.2",
     "ajv": "^8.18.0",
     "chalk": "^5.6.2",
     "chokidar": "^5.0.0",

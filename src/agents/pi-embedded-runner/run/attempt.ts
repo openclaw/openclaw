@@ -552,7 +552,7 @@ export async function runEmbeddedAttempt(
 
       // Call for side effects (sets compaction/pruning/memory-context runtime state)
       // AND collect extension paths so Pi loads them via ResourceLoader.
-      const embeddedExtPaths = buildEmbeddedExtensionPaths({
+      const embeddedExtPaths = await buildEmbeddedExtensionPaths({
         cfg: params.config,
         sessionManager,
         provider: params.provider,

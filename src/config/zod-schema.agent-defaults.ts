@@ -110,7 +110,7 @@ export const AgentDefaultsSchema = z
       .object({
         enabled: z.boolean().optional(),
         hardCapTokens: z.number().int().min(500).optional(),
-        embeddingModel: z.union([z.literal("hash"), z.literal("transformer")]).optional(),
+        embeddingModel: z.union([z.literal("auto"), z.literal("gemini"), z.literal("hash"), z.literal("transformer")]).optional(),
         storagePath: z.string().optional(),
         redaction: z.boolean().optional(),
         knowledgeExtraction: z.boolean().optional(),
