@@ -203,8 +203,14 @@ export async function prepareSlackMessage(params: {
     },
   });
 
+  const chatType = isDirectMessage ? "direct" : isRoom ? "channel" : "group";
+  const chatTypeReplyOverride =
+    account.replyToModeByChatType?.[chatType] ??
+    (isDirectMessage ? account.dm?.replyToMode : undefined);
+  const replyToMode = chatTypeReplyOverride ?? ctx.replyToMode;
+
   const baseSessionKey = route.sessionKey;
-  const threadContext = resolveSlackThreadContext({ message, replyToMode: ctx.replyToMode });
+  const threadContext = resolveSlackThreadContext({ message, replyToMode });
   const threadTs = threadContext.incomingThreadTs;
   const isThreadReply = threadContext.isThreadReply;
   const threadKeys = resolveThreadSessionKeys({
@@ -696,6 +702,7 @@ export async function prepareSlackMessage(params: {
     channelConfig,
     replyTarget,
     ctxPayload,
+    replyToMode,
     isDirectMessage,
     isRoomish,
     historyKey,
