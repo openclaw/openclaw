@@ -3,6 +3,7 @@ import {
   flush,
   getCloseResolve,
   getConfigMock,
+  getReadAllowFromStoreMock,
   getNotificationHandler,
   getReplyMock,
   getSendMock,
@@ -40,7 +41,7 @@ describe("monitorIMessageProvider", () => {
     const run = monitorIMessageProvider();
     await waitForSubscribe();
 
-    notificationHandler?.({
+    getNotificationHandler()?.({
       method: "message",
       params: {
         message: {
@@ -52,7 +53,7 @@ describe("monitorIMessageProvider", () => {
     });
 
     await flush();
-    closeResolve?.();
+    getCloseResolve()?.();
     await run;
 
     expect(replyMock).not.toHaveBeenCalled();
@@ -396,7 +397,8 @@ describe("monitorIMessageProvider", () => {
   });
 
   it("does not allow group sender from pairing store when groupPolicy is allowlist", async () => {
-    config = {
+    const config = getConfig();
+    setConfigMock({
       ...config,
       channels: {
         ...config.channels,
@@ -408,12 +410,12 @@ describe("monitorIMessageProvider", () => {
           groupAllowFrom: [],
         },
       },
-    };
-    readAllowFromStoreMock.mockResolvedValue(["+15550003333"]);
+    });
+    getReadAllowFromStoreMock().mockResolvedValue(["+15550003333"]);
     const run = monitorIMessageProvider();
     await waitForSubscribe();
 
-    notificationHandler?.({
+    getNotificationHandler()?.({
       method: "message",
       params: {
         message: {
@@ -428,7 +430,7 @@ describe("monitorIMessageProvider", () => {
     });
 
     await flush();
-    closeResolve?.();
+    getCloseResolve()?.();
     await run;
 
     expect(replyMock).not.toHaveBeenCalled();
@@ -436,7 +438,8 @@ describe("monitorIMessageProvider", () => {
   });
 
   it("does not allow sender from pairing store when groupAllowFrom is restricted to a different chat_id", async () => {
-    config = {
+    const config = getConfig();
+    setConfigMock({
       ...config,
       channels: {
         ...config.channels,
@@ -448,12 +451,12 @@ describe("monitorIMessageProvider", () => {
           groupAllowFrom: ["chat_id:101"],
         },
       },
-    };
-    readAllowFromStoreMock.mockResolvedValue(["+15550003333"]);
+    });
+    getReadAllowFromStoreMock().mockResolvedValue(["+15550003333"]);
     const run = monitorIMessageProvider();
     await waitForSubscribe();
 
-    notificationHandler?.({
+    getNotificationHandler()?.({
       method: "message",
       params: {
         message: {
@@ -468,7 +471,7 @@ describe("monitorIMessageProvider", () => {
     });
 
     await flush();
-    closeResolve?.();
+    getCloseResolve()?.();
     await run;
 
     expect(replyMock).not.toHaveBeenCalled();
@@ -476,7 +479,8 @@ describe("monitorIMessageProvider", () => {
   });
 
   it("does not authorize control command via pairing-store sender in non-allowlisted chat", async () => {
-    config = {
+    const config = getConfig();
+    setConfigMock({
       ...config,
       channels: {
         ...config.channels,
@@ -488,12 +492,12 @@ describe("monitorIMessageProvider", () => {
           groupAllowFrom: ["chat_id:101"],
         },
       },
-    };
-    readAllowFromStoreMock.mockResolvedValue(["+15550003333"]);
+    });
+    getReadAllowFromStoreMock().mockResolvedValue(["+15550003333"]);
     const run = monitorIMessageProvider();
     await waitForSubscribe();
 
-    notificationHandler?.({
+    getNotificationHandler()?.({
       method: "message",
       params: {
         message: {
@@ -508,7 +512,7 @@ describe("monitorIMessageProvider", () => {
     });
 
     await flush();
-    closeResolve?.();
+    getCloseResolve()?.();
     await run;
 
     expect(replyMock).not.toHaveBeenCalled();
