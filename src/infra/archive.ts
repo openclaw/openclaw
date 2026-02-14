@@ -2,7 +2,7 @@ import JSZip from "jszip";
 import { createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { Transform } from "node:stream";
+import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import * as tar from "tar";
 
@@ -26,6 +26,21 @@ export type ArchiveExtractLimits = {
   /** Max extracted bytes for a single file entry. */
   maxEntryBytes?: number;
 };
+
+/** @internal */
+export const DEFAULT_MAX_ARCHIVE_BYTES_ZIP = 256 * 1024 * 1024;
+/** @internal */
+export const DEFAULT_MAX_ENTRIES = 50_000;
+/** @internal */
+export const DEFAULT_MAX_EXTRACTED_BYTES = 512 * 1024 * 1024;
+/** @internal */
+export const DEFAULT_MAX_ENTRY_BYTES = 256 * 1024 * 1024;
+
+const ERROR_ARCHIVE_SIZE_EXCEEDS_LIMIT = "archive size exceeds limit";
+const ERROR_ARCHIVE_ENTRY_COUNT_EXCEEDS_LIMIT = "archive entry count exceeds limit";
+const ERROR_ARCHIVE_ENTRY_EXTRACTED_SIZE_EXCEEDS_LIMIT =
+  "archive entry extracted size exceeds limit";
+const ERROR_ARCHIVE_EXTRACTED_SIZE_EXCEEDS_LIMIT = "archive extracted size exceeds limit";
 
 const TAR_SUFFIXES = [".tgz", ".tar.gz", ".tar"];
 
@@ -91,6 +106,7 @@ function resolveSafeBaseDir(destDir: string): string {
   return resolved.endsWith(path.sep) ? resolved : `${resolved}${path.sep}`;
 }
 
+// Path hygiene.
 function normalizeArchivePath(raw: string): string {
   // Archives may contain Windows separators; treat them as separators.
   return raw.replaceAll("\\", "/");
@@ -143,6 +159,8 @@ function resolveCheckedOutPath(destDir: string, relPath: string, original: strin
   return outPath;
 }
 
+type ResolvedArchiveExtractLimits = Required<ArchiveExtractLimits>;
+
 function clampLimit(value: number | undefined): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return undefined;
@@ -151,13 +169,61 @@ function clampLimit(value: number | undefined): number | undefined {
   return v > 0 ? v : undefined;
 }
 
-function resolveExtractLimits(limits?: ArchiveExtractLimits): Required<ArchiveExtractLimits> {
+function resolveExtractLimits(limits?: ArchiveExtractLimits): ResolvedArchiveExtractLimits {
   // Defaults: defensive, but should not break normal installs.
   return {
-    maxArchiveBytes: clampLimit(limits?.maxArchiveBytes) ?? 256 * 1024 * 1024,
-    maxEntries: clampLimit(limits?.maxEntries) ?? 50_000,
-    maxExtractedBytes: clampLimit(limits?.maxExtractedBytes) ?? 512 * 1024 * 1024,
-    maxEntryBytes: clampLimit(limits?.maxEntryBytes) ?? 256 * 1024 * 1024,
+    maxArchiveBytes: clampLimit(limits?.maxArchiveBytes) ?? DEFAULT_MAX_ARCHIVE_BYTES_ZIP,
+    maxEntries: clampLimit(limits?.maxEntries) ?? DEFAULT_MAX_ENTRIES,
+    maxExtractedBytes: clampLimit(limits?.maxExtractedBytes) ?? DEFAULT_MAX_EXTRACTED_BYTES,
+    maxEntryBytes: clampLimit(limits?.maxEntryBytes) ?? DEFAULT_MAX_ENTRY_BYTES,
+  };
+}
+
+function assertArchiveEntryCountWithinLimit(
+  entryCount: number,
+  limits: ResolvedArchiveExtractLimits,
+) {
+  if (entryCount > limits.maxEntries) {
+    throw new Error(ERROR_ARCHIVE_ENTRY_COUNT_EXCEEDS_LIMIT);
+  }
+}
+
+function createByteBudgetTracker(limits: ResolvedArchiveExtractLimits): {
+  startEntry: () => void;
+  addBytes: (bytes: number) => void;
+  addEntrySize: (size: number) => void;
+} {
+  let entryBytes = 0;
+  let extractedBytes = 0;
+
+  const addBytes = (bytes: number) => {
+    const b = Math.max(0, Math.floor(bytes));
+    if (b === 0) {
+      return;
+    }
+    entryBytes += b;
+    if (entryBytes > limits.maxEntryBytes) {
+      throw new Error(ERROR_ARCHIVE_ENTRY_EXTRACTED_SIZE_EXCEEDS_LIMIT);
+    }
+    extractedBytes += b;
+    if (extractedBytes > limits.maxExtractedBytes) {
+      throw new Error(ERROR_ARCHIVE_EXTRACTED_SIZE_EXCEEDS_LIMIT);
+    }
+  };
+
+  return {
+    startEntry() {
+      entryBytes = 0;
+    },
+    addBytes,
+    addEntrySize(size: number) {
+      const s = Math.max(0, Math.floor(size));
+      if (s > limits.maxEntryBytes) {
+        throw new Error(ERROR_ARCHIVE_ENTRY_EXTRACTED_SIZE_EXCEEDS_LIMIT);
+      }
+      // Note: tar budgets are based on the header-declared size.
+      addBytes(s);
+    },
   };
 }
 
@@ -177,6 +243,23 @@ function createExtractBudgetTransform(params: {
   });
 }
 
+type ZipEntry = {
+  name: string;
+  dir: boolean;
+  unixPermissions?: number;
+  nodeStream?: () => NodeJS.ReadableStream;
+  async: (type: "nodebuffer") => Promise<Buffer>;
+};
+
+async function readZipEntryStream(entry: ZipEntry): Promise<NodeJS.ReadableStream> {
+  if (typeof entry.nodeStream === "function") {
+    return entry.nodeStream();
+  }
+  // Old JSZip: fall back to buffering, but still extract via a stream.
+  const buf = await entry.async("nodebuffer");
+  return Readable.from(buf);
+}
+
 async function extractZip(params: {
   archivePath: string;
   destDir: string;
@@ -186,19 +269,17 @@ async function extractZip(params: {
   const limits = resolveExtractLimits(params.limits);
   const stat = await fs.stat(params.archivePath);
   if (stat.size > limits.maxArchiveBytes) {
-    throw new Error("archive size exceeds limit");
+    throw new Error(ERROR_ARCHIVE_SIZE_EXCEEDS_LIMIT);
   }
 
   const buffer = await fs.readFile(params.archivePath);
   const zip = await JSZip.loadAsync(buffer);
-  const entries = Object.values(zip.files);
+  const entries = Object.values(zip.files) as ZipEntry[];
   const strip = Math.max(0, Math.floor(params.stripComponents ?? 0));
 
-  if (entries.length > limits.maxEntries) {
-    throw new Error("archive entry count exceeds limit");
-  }
+  assertArchiveEntryCountWithinLimit(entries.length, limits);
 
-  let extractedBytes = 0;
+  const budget = createByteBudgetTracker(limits);
 
   for (const entry of entries) {
     validateArchiveEntryPath(entry.name);
@@ -216,34 +297,15 @@ async function extractZip(params: {
     }
 
     await fs.mkdir(path.dirname(outPath), { recursive: true });
-    let entryBytes = 0;
-    const onChunkBytes = (bytes: number) => {
-      entryBytes += bytes;
-      if (entryBytes > limits.maxEntryBytes) {
-        throw new Error("archive entry extracted size exceeds limit");
-      }
-      extractedBytes += bytes;
-      if (extractedBytes > limits.maxExtractedBytes) {
-        throw new Error("archive extracted size exceeds limit");
-      }
-    };
-
-    const readable =
-      typeof entry.nodeStream === "function"
-        ? (entry.nodeStream() as unknown)
-        : await entry.async("nodebuffer");
+    budget.startEntry();
+    const readable = await readZipEntryStream(entry);
 
     try {
-      if (readable instanceof Buffer) {
-        onChunkBytes(readable.byteLength);
-        await fs.writeFile(outPath, readable);
-      } else {
-        await pipeline(
-          readable as NodeJS.ReadableStream,
-          createExtractBudgetTransform({ onChunkBytes }),
-          createWriteStream(outPath),
-        );
-      }
+      await pipeline(
+        readable,
+        createExtractBudgetTransform({ onChunkBytes: budget.addBytes }),
+        createWriteStream(outPath),
+      );
     } catch (err) {
       await fs.unlink(outPath).catch(() => undefined);
       throw err;
@@ -257,6 +319,28 @@ async function extractZip(params: {
       }
     }
   }
+}
+
+type TarEntryInfo = { path: string; type: string; size: number };
+
+function readTarEntryInfo(entry: unknown): TarEntryInfo {
+  const p =
+    typeof entry === "object" && entry !== null && "path" in entry
+      ? String((entry as { path: unknown }).path)
+      : "";
+  const t =
+    typeof entry === "object" && entry !== null && "type" in entry
+      ? String((entry as { type: unknown }).type)
+      : "";
+  const s =
+    typeof entry === "object" &&
+    entry !== null &&
+    "size" in entry &&
+    typeof (entry as { size?: unknown }).size === "number" &&
+    Number.isFinite((entry as { size: number }).size)
+      ? Math.max(0, Math.floor((entry as { size: number }).size))
+      : 0;
+  return { path: p, type: t, size: s };
 }
 
 export async function extractArchive(params: {
@@ -279,7 +363,7 @@ export async function extractArchive(params: {
     const strip = Math.max(0, Math.floor(params.stripComponents ?? 0));
     const limits = resolveExtractLimits(params.limits);
     let entryCount = 0;
-    let extractedBytes = 0;
+    const budget = createByteBudgetTracker(limits);
     await withTimeout(
       tar.x({
         file: params.archivePath,
@@ -289,56 +373,32 @@ export async function extractArchive(params: {
         preservePaths: false,
         strict: true,
         onReadEntry(entry) {
-          const archiveEntryPath =
-            typeof entry === "object" && entry !== null && "path" in entry
-              ? String((entry as { path: unknown }).path)
-              : "";
-          const archiveEntryType =
-            typeof entry === "object" && entry !== null && "type" in entry
-              ? String((entry as { type: unknown }).type)
-              : "";
-          const archiveEntrySize =
-            typeof entry === "object" &&
-            entry !== null &&
-            "size" in entry &&
-            typeof (entry as { size?: unknown }).size === "number" &&
-            Number.isFinite((entry as { size: number }).size)
-              ? Math.max(0, Math.floor((entry as { size: number }).size))
-              : 0;
+          const info = readTarEntryInfo(entry);
 
           try {
-            validateArchiveEntryPath(archiveEntryPath);
+            validateArchiveEntryPath(info.path);
 
-            const relPath = stripArchivePath(archiveEntryPath, strip);
+            const relPath = stripArchivePath(info.path, strip);
             if (!relPath) {
               return;
             }
             validateArchiveEntryPath(relPath);
-            resolveCheckedOutPath(params.destDir, relPath, archiveEntryPath);
+            resolveCheckedOutPath(params.destDir, relPath, info.path);
 
             if (
-              archiveEntryType === "SymbolicLink" ||
-              archiveEntryType === "Link" ||
-              archiveEntryType === "BlockDevice" ||
-              archiveEntryType === "CharacterDevice" ||
-              archiveEntryType === "FIFO" ||
-              archiveEntryType === "Socket"
+              info.type === "SymbolicLink" ||
+              info.type === "Link" ||
+              info.type === "BlockDevice" ||
+              info.type === "CharacterDevice" ||
+              info.type === "FIFO" ||
+              info.type === "Socket"
             ) {
-              throw new Error(`tar entry is a link: ${archiveEntryPath}`);
+              throw new Error(`tar entry is a link: ${info.path}`);
             }
 
             entryCount += 1;
-            if (entryCount > limits.maxEntries) {
-              throw new Error("archive entry count exceeds limit");
-            }
-
-            if (archiveEntrySize > limits.maxEntryBytes) {
-              throw new Error("archive entry extracted size exceeds limit");
-            }
-            extractedBytes += archiveEntrySize;
-            if (extractedBytes > limits.maxExtractedBytes) {
-              throw new Error("archive extracted size exceeds limit");
-            }
+            assertArchiveEntryCountWithinLimit(entryCount, limits);
+            budget.addEntrySize(info.size);
           } catch (err) {
             const error = err instanceof Error ? err : new Error(String(err));
             // Node's EventEmitter calls listeners with `this` bound to the
