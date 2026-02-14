@@ -64,6 +64,11 @@ function normalizeToolName(name?: string): string {
       n = n.slice(secondSep + 2);
     }
   }
+  // Convert PascalCase to snake_case so "WebSearch" matches
+  // config key "web_search" after toLowerCase().
+  if (/^[A-Z][a-zA-Z]+$/.test(n) && !n.includes("_")) {
+    n = n.replace(/([a-z0-9])([A-Z])/g, "$1_$2");
+  }
   return n;
 }
 
