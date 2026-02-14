@@ -279,6 +279,8 @@ describe("Cron issue regressions", () => {
 
     resolveRun?.({ status: "ok", summary: "done" });
     await finished.promise;
+    // Barrier: ensure timer tick finished persisting state before cleanup.
+    await cron.list({ includeDisabled: true });
 
     cron.stop();
     await store.cleanup();
