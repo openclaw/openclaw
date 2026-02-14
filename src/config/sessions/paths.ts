@@ -38,15 +38,35 @@ export type SessionFilePathOptions = {
   sessionsDir?: string;
 };
 
+function isDefaultAgentSessionsDir(dir: string): boolean {
+  const normalized = path.normalize(path.resolve(dir));
+  const parts = normalized.split(path.sep).filter(Boolean);
+  if (parts.length < 3) {
+    return false;
+  }
+  const tail = parts.slice(-3);
+  return tail[0] === "agents" && Boolean(tail[1]) && tail[2] === "sessions";
+}
+
 export function resolveSessionFilePathOptions(params: {
   agentId?: string;
   storePath?: string;
 }): SessionFilePathOptions | undefined {
+  const agentId = params.agentId?.trim();
   const storePath = params.storePath?.trim();
   if (storePath) {
-    return { sessionsDir: path.dirname(path.resolve(storePath)) };
+    const sessionsDir = path.dirname(path.resolve(storePath));
+    if (agentId) {
+      const expectedForAgent = path.dirname(resolveDefaultSessionStorePath(agentId));
+      // If a default per-agent store path from a different agent leaked into this
+      // code path, prefer the explicit agentId to avoid cross-agent containment
+      // failures ("path must be within sessions directory").
+      if (isDefaultAgentSessionsDir(sessionsDir) && sessionsDir !== expectedForAgent) {
+        return { agentId };
+      }
+    }
+    return { sessionsDir };
   }
-  const agentId = params.agentId?.trim();
   if (agentId) {
     return { agentId };
   }
