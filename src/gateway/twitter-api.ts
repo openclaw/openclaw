@@ -41,6 +41,87 @@ async function getWhoami(): Promise<{ username: string; userId: string }> {
   };
 }
 
+interface TwitterUser {
+  id: string;
+  username: string;
+  name: string;
+  avatar: string;
+  followers: number;
+  following: number;
+  verified: boolean;
+  description?: string;
+}
+
+export async function getTwitterRelationships(limit = 50) {
+  const startTime = Date.now();
+
+  try {
+    const whoami = await getWhoami();
+
+    // Get following list
+    const followingData = await execX(`following @${whoami.username} -n ${limit}`);
+    const followingUsers: TwitterUser[] = (followingData.items || []).map((user: any) => ({
+      id: user.restId || user.id || "",
+      username: user.screenName || user.username || "",
+      name: user.name || "",
+      avatar: (user.profileImageUrl || user.avatarUrl || "")
+        .replace("_normal", "_bigger")
+        .replace("http://", "https://"),
+      followers: user.followersCount || 0,
+      following: user.followingCount || 0,
+      verified: user.verified || false,
+      description: user.description || "",
+    }));
+
+    // Get followers list (sample)
+    const followersData = await execX(`followers @${whoami.username} -n ${Math.min(limit, 30)}`);
+    const followersUsers: TwitterUser[] = (followersData.items || []).map((user: any) => ({
+      id: user.restId || user.id || "",
+      username: user.screenName || user.username || "",
+      name: user.name || "",
+      avatar: (user.profileImageUrl || user.avatarUrl || "")
+        .replace("_normal", "_bigger")
+        .replace("http://", "https://"),
+      followers: user.followersCount || 0,
+      following: user.followingCount || 0,
+      verified: user.verified || false,
+      description: user.description || "",
+    }));
+
+    // Detect mutual relationships
+    const followersSet = new Set(followersUsers.map((u) => u.id));
+    const relationships = followingUsers.map((user) => ({
+      ...user,
+      isMutual: followersSet.has(user.id),
+    }));
+
+    const responseTimeMs = Date.now() - startTime;
+
+    return {
+      success: true,
+      data: {
+        current_user: {
+          id: whoami.userId,
+          username: whoami.username,
+        },
+        following: relationships,
+        followers_sample: followersUsers,
+      },
+      timestamp: new Date().toISOString(),
+      responseTimeMs,
+    };
+  } catch (error: any) {
+    const responseTimeMs = Date.now() - startTime;
+
+    return {
+      success: false,
+      error: error.message || "Unknown error",
+      timestamp: new Date().toISOString(),
+      responseTimeMs,
+    };
+  }
+}
+
 export async function getTwitterDashboardData() {
   const startTime = Date.now();
 
