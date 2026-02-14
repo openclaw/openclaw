@@ -330,6 +330,38 @@ describe("signal createSignalEventHandler inbound contract", () => {
     expect(capturedCtxs[1]?.UntrustedContext).toContain("Poll vote on #1234567890: option(s) 0, 2");
   });
 
+  it("does not debounce poll creation and poll closed placeholder entries", async () => {
+    const handler = createTestHandler({
+      // oxlint-disable-next-line typescript/no-explicit-any
+      cfg: { messages: { inbound: { debounceMs: 50 } } } as any,
+    });
+
+    await handler(
+      makeReceiveEvent({
+        pollCreate: {
+          question: "Lunch?",
+          allowMultiple: false,
+          options: ["Pizza", "Sushi"],
+        },
+      }),
+    );
+    await handler(
+      makeReceiveEvent({
+        pollTerminate: {
+          targetSentTimestamp: 1234567890,
+        },
+      }),
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 90));
+
+    expect(capturedCtxs).toHaveLength(2);
+    expect(capturedCtxs[0]?.BodyForCommands).toBe("[Poll] Lunch?");
+    expect(capturedCtxs[0]?.UntrustedContext).toContain('Poll: "Lunch?" — Options: Pizza, Sushi');
+    expect(capturedCtxs[1]?.BodyForCommands).toBe("[Poll closed]");
+    expect(capturedCtxs[1]?.UntrustedContext).toContain("Poll #1234567890 closed");
+  });
+
   it("does not debounce shared contact placeholder entries", async () => {
     const handler = createTestHandler({
       // oxlint-disable-next-line typescript/no-explicit-any
@@ -355,6 +387,39 @@ describe("signal createSignalEventHandler inbound contract", () => {
     expect(capturedCtxs[1]?.BodyForCommands).toBe("<media:contact>");
     expect(capturedCtxs[1]?.UntrustedContext).toContain(
       "Shared contact: John Smith (+15557654321)",
+    );
+  });
+
+  it("merges plain text entries and preserves link preview metadata", async () => {
+    const handler = createTestHandler({
+      // oxlint-disable-next-line typescript/no-explicit-any
+      cfg: { messages: { inbound: { debounceMs: 50 } } } as any,
+    });
+
+    await handler(
+      makeReceiveEvent({
+        message: "first plain text",
+      }),
+    );
+    await handler(
+      makeReceiveEvent({
+        message: "second with preview",
+        previews: [
+          {
+            url: "https://example.com/post",
+            title: "Example Post",
+            description: "A useful summary",
+          },
+        ],
+      }),
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 90));
+
+    expect(capturedCtxs).toHaveLength(1);
+    expect(capturedCtx?.BodyForCommands).toBe("first plain text\\nsecond with preview");
+    expect(capturedCtx?.UntrustedContext).toContain(
+      "Link preview: Example Post - A useful summary (https://example.com/post)",
     );
   });
 
@@ -394,6 +459,44 @@ describe("signal createSignalEventHandler inbound contract", () => {
     expect(capturedCtxs).toHaveLength(1);
     expect(capturedCtx?.BodyForCommands).toBe("hey openclaw\\nfollow-up");
     expect(capturedCtx?.WasMentioned).toBe(true);
+  });
+
+  it("keeps wasMentioned falsey when no debounced entry mentions the bot", async () => {
+    const handler = createTestHandler({
+      // oxlint-disable-next-line typescript/no-explicit-any
+      cfg: {
+        messages: {
+          inbound: { debounceMs: 250 },
+          groupChat: { mentionPatterns: ["\\b@?openclaw\\b"] },
+        },
+        channels: {
+          signal: {
+            groups: {
+              "*": { requireMention: false },
+            },
+          },
+        },
+      } as any,
+    });
+
+    await handler(
+      makeReceiveEvent({
+        message: "hello team",
+        groupInfo: { groupId: "g1", groupName: "Test Group" },
+      }),
+    );
+    await handler(
+      makeReceiveEvent({
+        message: "follow-up without mention",
+        groupInfo: { groupId: "g1", groupName: "Test Group" },
+      }),
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 320));
+
+    expect(capturedCtxs).toHaveLength(1);
+    expect(capturedCtx?.BodyForCommands).toBe("hello team\\nfollow-up without mention");
+    expect([false, undefined]).toContain(capturedCtx?.WasMentioned);
   });
 
   it("handles sticker messages with sticker placeholder, downloaded media, and metadata", async () => {

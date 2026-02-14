@@ -565,8 +565,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         }
         return acc;
       }, []);
-      // Preserve reply context from the first entry that has one.
-      const replyEntry = entries.find((e) => e.replyToId != null);
+      // Replies never appear in debounced batches because shouldDebounce
+      // returns false whenever replyToId is present.
       const wasMentioned = entries.some((entry) => entry.wasMentioned === true);
       await handleSignalInboundMessage({
         ...last,
@@ -581,10 +581,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         mediaDimension: undefined,
         mediaDimensions: undefined,
         untrustedContext: mergedUntrustedContext.length > 0 ? mergedUntrustedContext : undefined,
-        replyToId: replyEntry?.replyToId,
-        replyToBody: replyEntry?.replyToBody,
-        replyToSender: replyEntry?.replyToSender,
-        replyToIsQuote: replyEntry?.replyToIsQuote,
+        replyToId: undefined,
+        replyToBody: undefined,
+        replyToSender: undefined,
+        replyToIsQuote: undefined,
         editTargetTimestamp: undefined,
         isEdit: undefined,
         wasMentioned,
