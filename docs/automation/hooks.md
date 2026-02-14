@@ -400,6 +400,8 @@ The old config format still works for backwards compatibility:
 }
 ```
 
+Note: `module` must be a workspace-relative path. Absolute paths and traversal outside the workspace are rejected.
+
 **Migration**: Use the new discovery-based system for new hooks. Legacy handlers are loaded after directory-based hooks.
 
 ## CLI Commands

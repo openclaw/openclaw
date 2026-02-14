@@ -116,10 +116,25 @@ export async function loadInternalHooks(
   const handlers = cfg.hooks.internal.handlers ?? [];
   for (const handlerConfig of handlers) {
     try {
-      // Resolve module path (absolute or relative to cwd)
-      const modulePath = path.isAbsolute(handlerConfig.module)
-        ? handlerConfig.module
-        : path.join(process.cwd(), handlerConfig.module);
+      // Legacy handler paths: keep them workspace-relative.
+      const rawModule = handlerConfig.module.trim();
+      if (!rawModule) {
+        log.error("Handler module path is empty");
+        continue;
+      }
+      if (path.isAbsolute(rawModule)) {
+        log.error(
+          `Handler module path must be workspace-relative (got absolute path): ${rawModule}`,
+        );
+        continue;
+      }
+      const baseDir = path.resolve(workspaceDir);
+      const modulePath = path.resolve(baseDir, rawModule);
+      const rel = path.relative(baseDir, modulePath);
+      if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) {
+        log.error(`Handler module path must stay within workspaceDir: ${rawModule}`);
+        continue;
+      }
 
       // Import the module with cache-busting to ensure fresh reload
       const url = pathToFileURL(modulePath).href;
