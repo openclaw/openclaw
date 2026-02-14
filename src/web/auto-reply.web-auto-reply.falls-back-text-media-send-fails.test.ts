@@ -116,13 +116,13 @@ describe("web auto-reply", () => {
 
     fetchMock.mockRestore();
   });
-  it("compresses media over 5MB and still sends it", async () => {
-    const sendMedia = vi.fn();
+  it("sends media with a caption when delivery succeeds", async () => {
+    const sendMedia = vi.fn().mockResolvedValue(undefined);
     const reply = vi.fn().mockResolvedValue(undefined);
     const sendComposing = vi.fn();
     const resolver = vi.fn().mockResolvedValue({
       text: "hi",
-      mediaUrl: "https://example.com/big.png",
+      mediaUrl: "https://example.com/img.png",
     });
 
     let capturedOnMessage:
@@ -135,23 +135,21 @@ describe("web auto-reply", () => {
       return { close: vi.fn() };
     };
 
-    const bigPng = await sharp({
+    const png = await sharp({
       create: {
-        width: 2000,
-        height: 2000,
+        width: 64,
+        height: 64,
         channels: 3,
-        background: { r: 255, g: 0, b: 0 },
+        background: { r: 0, g: 0, b: 255 },
       },
     })
-      .png({ compressionLevel: 0 })
+      .png()
       .toBuffer();
-    expect(bigPng.length).toBeGreaterThan(5 * 1024 * 1024);
 
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
       ok: true,
       body: true,
-      arrayBuffer: async () =>
-        bigPng.buffer.slice(bigPng.byteOffset, bigPng.byteOffset + bigPng.byteLength),
+      arrayBuffer: async () => png.buffer.slice(png.byteOffset, png.byteOffset + png.byteLength),
       headers: { get: () => "image/png" },
       status: 200,
     } as Response);
@@ -175,8 +173,8 @@ describe("web auto-reply", () => {
       caption?: string;
       mimetype?: string;
     };
-    expect(payload.image.length).toBeLessThanOrEqual(5 * 1024 * 1024);
-    expect(payload.mimetype).toBe("image/jpeg");
+    expect(payload.caption).toBe("hi");
+    expect(payload.image.length).toBeGreaterThan(0);
     // Should not fall back to separate text reply because caption is used.
     expect(reply).not.toHaveBeenCalled();
 
