@@ -172,7 +172,6 @@ describe("memory indexing with OpenAI batches", () => {
       manager = result.manager;
       const labels: string[] = [];
       await manager.sync({
-        force: true,
         progress: (update) => {
           if (update.label) {
             labels.push(update.label);
@@ -287,7 +286,7 @@ describe("memory indexing with OpenAI batches", () => {
         throw new Error("manager missing");
       }
       manager = result.manager;
-      await manager.sync({ force: true });
+      await manager.sync({ reason: "test" });
 
       const status = manager.status();
       expect(status.chunks).toBeGreaterThan(0);
@@ -300,7 +299,16 @@ describe("memory indexing with OpenAI batches", () => {
   it("tracks batch failures, resets on success, and disables after repeated failures", async () => {
     const restoreTimeouts = useFastShortTimeouts();
     const content = ["flaky", "batch"].join("\n\n");
-    await fs.writeFile(path.join(workspaceDir, "memory", "2026-01-09.md"), content);
+    const memoryFile = path.join(workspaceDir, "memory", "2026-01-09.md");
+    let mtimeMs = Date.now();
+    const touch = async () => {
+      mtimeMs += 1_000;
+      const date = new Date(mtimeMs);
+      await fs.utimes(memoryFile, date, date);
+    };
+
+    await fs.writeFile(memoryFile, content);
+    await touch();
 
     let uploadedRequests: Array<{ custom_id?: string }> = [];
     let mode: "fail" | "ok" = "fail";
@@ -395,20 +403,24 @@ describe("memory indexing with OpenAI batches", () => {
       manager = result.manager;
 
       // First failure: fallback to regular embeddings and increment failure count.
-      await manager.sync({ force: true });
+      await manager.sync({ reason: "test" });
       expect(embedBatch).toHaveBeenCalled();
       let status = manager.status();
       expect(status.batch?.enabled).toBe(true);
       expect(status.batch?.failures).toBe(1);
 
+      const markDirty = () => {
+        // `sync` only indexes when marked dirty (unless doing a full reindex).
+        (manager as unknown as { dirty: boolean }).dirty = true;
+      };
+
       // Success should reset failure count.
       embedBatch.mockClear();
       mode = "ok";
-      await fs.writeFile(
-        path.join(workspaceDir, "memory", "2026-01-09.md"),
-        ["flaky", "batch", "recovery"].join("\n\n"),
-      );
-      await manager.sync({ force: true });
+      await fs.writeFile(memoryFile, ["flaky", "batch", "recovery"].join("\n\n"));
+      await touch();
+      markDirty();
+      await manager.sync({ reason: "test" });
       status = manager.status();
       expect(status.batch?.enabled).toBe(true);
       expect(status.batch?.failures).toBe(0);
@@ -416,20 +428,18 @@ describe("memory indexing with OpenAI batches", () => {
 
       // Two more failures after reset should disable remote batching.
       mode = "fail";
-      await fs.writeFile(
-        path.join(workspaceDir, "memory", "2026-01-09.md"),
-        ["flaky", "batch", "fail-a"].join("\n\n"),
-      );
-      await manager.sync({ force: true });
+      await fs.writeFile(memoryFile, ["flaky", "batch", "fail-a"].join("\n\n"));
+      await touch();
+      markDirty();
+      await manager.sync({ reason: "test" });
       status = manager.status();
       expect(status.batch?.enabled).toBe(true);
       expect(status.batch?.failures).toBe(1);
 
-      await fs.writeFile(
-        path.join(workspaceDir, "memory", "2026-01-09.md"),
-        ["flaky", "batch", "fail-b"].join("\n\n"),
-      );
-      await manager.sync({ force: true });
+      await fs.writeFile(memoryFile, ["flaky", "batch", "fail-b"].join("\n\n"));
+      await touch();
+      markDirty();
+      await manager.sync({ reason: "test" });
       status = manager.status();
       expect(status.batch?.enabled).toBe(false);
       expect(status.batch?.failures).toBeGreaterThanOrEqual(2);
@@ -437,11 +447,10 @@ describe("memory indexing with OpenAI batches", () => {
       // Once disabled, batch endpoints are skipped and fallback embeddings run directly.
       const fetchCalls = fetchMock.mock.calls.length;
       embedBatch.mockClear();
-      await fs.writeFile(
-        path.join(workspaceDir, "memory", "2026-01-09.md"),
-        ["flaky", "batch", "fallback"].join("\n\n"),
-      );
-      await manager.sync({ force: true });
+      await fs.writeFile(memoryFile, ["flaky", "batch", "fallback"].join("\n\n"));
+      await touch();
+      markDirty();
+      await manager.sync({ reason: "test" });
       expect(fetchMock.mock.calls.length).toBe(fetchCalls);
       expect(embedBatch).toHaveBeenCalled();
     } finally {
