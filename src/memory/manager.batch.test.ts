@@ -38,8 +38,8 @@ vi.mock("./embeddings.js", () => ({
 
 describe("memory indexing with OpenAI batches", () => {
   let fixtureRoot: string;
-  let caseId = 0;
   let workspaceDir: string;
+  let memoryDir: string;
   let indexPath: string;
   let manager: MemoryIndexManager | null = null;
 
@@ -150,9 +150,24 @@ describe("memory indexing with OpenAI batches", () => {
 
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-batch-"));
+    workspaceDir = path.join(fixtureRoot, "workspace");
+    memoryDir = path.join(workspaceDir, "memory");
+    indexPath = path.join(fixtureRoot, "index.sqlite");
+    await fs.mkdir(memoryDir, { recursive: true });
+
+    const result = await getMemorySearchManager({ cfg: createBatchCfg(), agentId: "main" });
+    expect(result.manager).not.toBeNull();
+    if (!result.manager) {
+      throw new Error("manager missing");
+    }
+    manager = result.manager;
   });
 
   afterAll(async () => {
+    if (manager) {
+      await manager.close();
+      manager = null;
+    }
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
@@ -162,37 +177,40 @@ describe("memory indexing with OpenAI batches", () => {
     embedBatch.mockImplementation(async (texts: string[]) =>
       texts.map((_text, index) => [index + 1, 0, 0]),
     );
-    workspaceDir = path.join(fixtureRoot, `case-${++caseId}`);
-    indexPath = path.join(workspaceDir, "index.sqlite");
-    await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+
+    await fs.rm(memoryDir, { recursive: true, force: true });
+    await fs.mkdir(memoryDir, { recursive: true });
+
+    // Reuse one manager instance across tests; keep index state isolated.
+    if (!manager) {
+      throw new Error("manager missing");
+    }
+    (manager as unknown as { resetIndex: () => void }).resetIndex();
+    (manager as unknown as { dirty: boolean }).dirty = true;
+    (manager as unknown as { batchFailureCount: number }).batchFailureCount = 0;
+    (manager as unknown as { batchFailureLastError?: string }).batchFailureLastError = undefined;
+    (manager as unknown as { batchFailureLastProvider?: string }).batchFailureLastProvider =
+      undefined;
+    (manager as unknown as { batch: { enabled: boolean } }).batch.enabled = true;
   });
 
   afterEach(async () => {
     vi.unstubAllGlobals();
-    if (manager) {
-      await manager.close();
-      manager = null;
-    }
   });
 
   it("uses OpenAI batch uploads when enabled", async () => {
     const restoreTimeouts = useFastShortTimeouts();
     const content = ["hello", "from", "batch"].join("\n\n");
-    await fs.writeFile(path.join(workspaceDir, "memory", "2026-01-07.md"), content);
+    await fs.writeFile(path.join(memoryDir, "2026-01-07.md"), content);
 
     const { fetchMock } = createOpenAIBatchFetchMock();
 
     vi.stubGlobal("fetch", fetchMock);
 
-    const cfg = createBatchCfg();
-
     try {
-      const result = await getMemorySearchManager({ cfg, agentId: "main" });
-      expect(result.manager).not.toBeNull();
-      if (!result.manager) {
+      if (!manager) {
         throw new Error("manager missing");
       }
-      manager = result.manager;
       const labels: string[] = [];
       await manager.sync({
         progress: (update) => {
@@ -215,7 +233,7 @@ describe("memory indexing with OpenAI batches", () => {
   it("retries OpenAI batch create on transient failures", async () => {
     const restoreTimeouts = useFastShortTimeouts();
     const content = ["retry", "the", "batch"].join("\n\n");
-    await fs.writeFile(path.join(workspaceDir, "memory", "2026-01-08.md"), content);
+    await fs.writeFile(path.join(memoryDir, "2026-01-08.md"), content);
 
     const { fetchMock, state } = createOpenAIBatchFetchMock({
       onCreateBatch: ({ batchCreates }) => {
@@ -231,15 +249,10 @@ describe("memory indexing with OpenAI batches", () => {
 
     vi.stubGlobal("fetch", fetchMock);
 
-    const cfg = createBatchCfg();
-
     try {
-      const result = await getMemorySearchManager({ cfg, agentId: "main" });
-      expect(result.manager).not.toBeNull();
-      if (!result.manager) {
+      if (!manager) {
         throw new Error("manager missing");
       }
-      manager = result.manager;
       await manager.sync({ reason: "test" });
 
       const status = manager.status();
@@ -253,7 +266,7 @@ describe("memory indexing with OpenAI batches", () => {
   it("tracks batch failures, resets on success, and disables after repeated failures", async () => {
     const restoreTimeouts = useFastShortTimeouts();
     const content = ["flaky", "batch"].join("\n\n");
-    const memoryFile = path.join(workspaceDir, "memory", "2026-01-09.md");
+    const memoryFile = path.join(memoryDir, "2026-01-09.md");
     let mtimeMs = Date.now();
     const touch = async () => {
       mtimeMs += 1_000;
@@ -279,15 +292,10 @@ describe("memory indexing with OpenAI batches", () => {
 
     vi.stubGlobal("fetch", fetchMock);
 
-    const cfg = createBatchCfg();
-
     try {
-      const result = await getMemorySearchManager({ cfg, agentId: "main" });
-      expect(result.manager).not.toBeNull();
-      if (!result.manager) {
+      if (!manager) {
         throw new Error("manager missing");
       }
-      manager = result.manager;
 
       // First failure: fallback to regular embeddings and increment failure count.
       await manager.sync({ reason: "test" });
