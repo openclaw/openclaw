@@ -25,6 +25,47 @@ export type Tab =
   | "debug"
   | "logs";
 
+export type AppMode = "basic" | "advanced";
+
+// Tabs visible in Basic mode (simplified view for regular developers)
+const BASIC_TABS: Tab[] = [
+  "chat",
+  "overview",
+  "sessions",
+  "instances",
+  "config",
+];
+
+// Tabs visible in Advanced mode (full functionality for power users)
+const ADVANCED_TABS: Tab[] = [
+  "chat",
+  "overview",
+  "channels",
+  "instances",
+  "sessions",
+  "usage",
+  "cron",
+  "agents",
+  "skills",
+  "nodes",
+  "config",
+  "debug",
+  "logs",
+];
+
+/**
+ * Returns the tabs visible for the given mode.
+ * @param mode - The current app mode ("basic" or "advanced")
+ * @returns Array of visible tabs based on mode
+ */
+export function getVisibleTabs(mode: AppMode): readonly Tab[] {
+  const visibleSet = mode === "basic" ? BASIC_TABS : ADVANCED_TABS;
+  return TAB_GROUPS.map((group) => ({
+    ...group,
+    tabs: group.tabs.filter((tab) => visibleSet.includes(tab)),
+  })).filter((group) => group.tabs.length > 0);
+}
+
 const TAB_PATHS: Record<Tab, string> = {
   agents: "/agents",
   overview: "/overview",
