@@ -829,6 +829,71 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("prefers exact docid match before prefix fallback for qmd document lookups", async () => {
+    const prepareCalls: string[] = [];
+    const exactDocid = "abc123";
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "search") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(
+          child,
+          "stdout",
+          JSON.stringify([
+            { docid: exactDocid, score: 1, snippet: "@@ -5,2\nremember this\nnext line" },
+          ]),
+        );
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId });
+    const manager = await QmdMemoryManager.create({ cfg, agentId, resolved });
+    expect(manager).toBeTruthy();
+    if (!manager) {
+      throw new Error("manager missing");
+    }
+
+    const inner = manager as unknown as {
+      db: { prepare: (query: string) => { get: (arg: unknown) => unknown }; close: () => void };
+    };
+    inner.db = {
+      prepare: (query: string) => {
+        prepareCalls.push(query);
+        return {
+          get: (arg: unknown) => {
+            if (query.includes("hash = ?")) {
+              return undefined;
+            }
+            if (query.includes("hash LIKE ?")) {
+              expect(arg).toBe(`${exactDocid}%`);
+              return { collection: "workspace", path: "notes/welcome.md" };
+            }
+            throw new Error(`unexpected sqlite query: ${query}`);
+          },
+        };
+      },
+      close: () => {},
+    };
+
+    const results = await manager.search("test", { sessionKey: "agent:main:slack:dm:u123" });
+    expect(results).toEqual([
+      {
+        path: "notes/welcome.md",
+        startLine: 5,
+        endLine: 6,
+        score: 1,
+        snippet: "@@ -5,2\nremember this\nnext line",
+        source: "memory",
+      },
+    ]);
+
+    expect(prepareCalls).toHaveLength(2);
+    expect(prepareCalls[0]).toContain("hash = ?");
+    expect(prepareCalls[1]).toContain("hash LIKE ?");
+    await manager.close();
+  });
+
   it("errors when qmd output exceeds command output safety cap", async () => {
     const noisyPayload = "x".repeat(240_000);
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
