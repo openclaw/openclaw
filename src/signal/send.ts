@@ -4,12 +4,7 @@ import { mediaKindFromMime } from "../media/constants.js";
 import { saveMediaBuffer } from "../media/store.js";
 import { loadWebMedia } from "../web/media.js";
 import { resolveSignalAccount } from "./accounts.js";
-import {
-  type SignalApiMode,
-  sendMessageAdapter,
-  sendTypingAdapter,
-  sendReceiptAdapter,
-} from "./client-adapter.js";
+import { sendMessageAdapter, sendTypingAdapter, sendReceiptAdapter } from "./client-adapter.js";
 import { markdownToSignalText, type SignalTextStyleRange } from "./format.js";
 
 export type SignalSendOpts = {
@@ -21,7 +16,6 @@ export type SignalSendOpts = {
   timeoutMs?: number;
   textMode?: "markdown" | "plain";
   textStyles?: SignalTextStyleRange[];
-  apiMode?: SignalApiMode;
 };
 
 export type SignalSendResult = {
@@ -205,20 +199,18 @@ export async function sendMessageSignal(
     throw new Error("Signal recipient is required");
   }
 
-  const apiMode = opts.apiMode ?? "container";
-
   const recipients = targetParams.recipient ?? [];
   const groupId = targetParams.groupId;
 
   const result = await sendMessageAdapter({
     baseUrl,
     account: account ?? "",
+    accountId: opts.accountId,
     recipients,
     groupId,
     message,
     textStyles,
     attachments,
-    apiMode,
     timeoutMs: opts.timeoutMs,
   });
 
@@ -231,7 +223,7 @@ export async function sendMessageSignal(
 
 export async function sendTypingSignal(
   to: string,
-  opts: SignalRpcOpts & { stop?: boolean; apiMode?: SignalApiMode } = {},
+  opts: SignalRpcOpts & { stop?: boolean } = {},
 ): Promise<boolean> {
   const { baseUrl, account } = resolveSignalRpcContext(opts);
   const targetParams = buildTargetParams(parseTarget(to), {
@@ -247,15 +239,13 @@ export async function sendTypingSignal(
     return false;
   }
 
-  const apiMode = opts.apiMode ?? "container";
-
   return sendTypingAdapter({
     baseUrl,
     account,
+    accountId: opts.accountId,
     recipient,
     groupId: targetParams.groupId,
     stop: opts.stop,
-    apiMode,
     timeoutMs: opts.timeoutMs,
   });
 }
@@ -263,7 +253,7 @@ export async function sendTypingSignal(
 export async function sendReadReceiptSignal(
   to: string,
   targetTimestamp: number,
-  opts: SignalRpcOpts & { type?: SignalReceiptType; apiMode?: SignalApiMode } = {},
+  opts: SignalRpcOpts & { type?: SignalReceiptType } = {},
 ): Promise<boolean> {
   if (!Number.isFinite(targetTimestamp) || targetTimestamp <= 0) {
     return false;
@@ -281,15 +271,13 @@ export async function sendReadReceiptSignal(
     return false;
   }
 
-  const apiMode = opts.apiMode ?? "container";
-
   return sendReceiptAdapter({
     baseUrl,
     account,
+    accountId: opts.accountId,
     recipient,
     targetTimestamp,
     type: opts.type,
-    apiMode,
     timeoutMs: opts.timeoutMs,
   });
 }

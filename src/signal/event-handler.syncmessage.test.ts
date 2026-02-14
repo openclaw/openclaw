@@ -28,7 +28,6 @@ const createMockHandler = (account?: string) =>
     baseUrl: "http://localhost",
     accountId: "default",
     account,
-    apiMode: "native",
     historyLimit: 0,
     groupHistories: new Map(),
     textLimit: 4000,

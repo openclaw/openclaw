@@ -18,7 +18,7 @@ vi.mock("./accounts.js", () => ({
     enabled: true,
     baseUrl: "http://signal.local",
     configured: true,
-    config: { account: "+15550001111", apiMode: "native" },
+    config: { account: "+15550001111" },
   }),
 }));
 

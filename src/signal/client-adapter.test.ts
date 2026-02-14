@@ -27,6 +27,22 @@ vi.mock("./client-container.js", () => ({
   streamContainerEvents: vi.fn(),
 }));
 
+vi.mock("../config/config.js", () => ({
+  loadConfig: vi.fn(() => ({})),
+}));
+
+vi.mock("./accounts.js", () => ({
+  resolveSignalAccount: vi.fn(() => ({
+    accountId: "default",
+    baseUrl: "http://localhost:8080",
+    enabled: true,
+    configured: true,
+    name: "default",
+    config: { apiMode: "native" },
+  })),
+}));
+
+import { resolveSignalAccount } from "./accounts.js";
 import {
   containerCheck,
   containerSendMessage,
@@ -46,10 +62,23 @@ const mockContainerSendTyping = vi.mocked(containerSendTyping);
 const mockContainerSendReceipt = vi.mocked(containerSendReceipt);
 const mockContainerFetchAttachment = vi.mocked(containerFetchAttachment);
 const mockStreamContainerEvents = vi.mocked(streamContainerEvents);
+const mockResolveSignalAccount = vi.mocked(resolveSignalAccount);
+
+function setApiMode(mode: "native" | "container" | "auto") {
+  mockResolveSignalAccount.mockReturnValue({
+    accountId: "default",
+    baseUrl: "http://localhost:8080",
+    enabled: true,
+    configured: true,
+    name: "default",
+    config: { apiMode: mode },
+  } as ReturnType<typeof resolveSignalAccount>);
+}
 
 describe("detectSignalApiMode", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    setApiMode("native");
   });
 
   it("returns native when native endpoint responds", async () => {
@@ -107,6 +136,7 @@ describe("detectSignalApiMode", () => {
 describe("sendMessageAdapter", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    setApiMode("native");
   });
 
   it("uses native JSON-RPC for native mode", async () => {
@@ -117,7 +147,6 @@ describe("sendMessageAdapter", () => {
       account: "+14259798283",
       recipients: ["+15550001111"],
       message: "Hello world",
-      apiMode: "native",
     });
 
     expect(result).toEqual({ timestamp: 1700000000000 });
@@ -134,6 +163,7 @@ describe("sendMessageAdapter", () => {
   });
 
   it("uses container REST for container mode", async () => {
+    setApiMode("container");
     mockContainerSendMessage.mockResolvedValue({ timestamp: 1700000000000 });
 
     const result = await sendMessageAdapter({
@@ -141,7 +171,6 @@ describe("sendMessageAdapter", () => {
       account: "+14259798283",
       recipients: ["+15550001111"],
       message: "Hello world",
-      apiMode: "container",
     });
 
     expect(result).toEqual({ timestamp: 1700000000000 });
@@ -165,7 +194,6 @@ describe("sendMessageAdapter", () => {
       recipients: [],
       groupId: "group-123",
       message: "Hello group",
-      apiMode: "native",
     });
 
     expect(mockSignalRpcRequest).toHaveBeenCalledWith(
@@ -184,7 +212,6 @@ describe("sendMessageAdapter", () => {
       recipients: ["+15550001111"],
       message: "Bold text",
       textStyles: [{ start: 0, length: 4, style: "BOLD" }],
-      apiMode: "native",
     });
 
     expect(mockSignalRpcRequest).toHaveBeenCalledWith(
@@ -203,7 +230,6 @@ describe("sendMessageAdapter", () => {
       recipients: ["+15550001111"],
       message: "Photo",
       attachments: ["/path/to/image.jpg"],
-      apiMode: "native",
     });
 
     expect(mockSignalRpcRequest).toHaveBeenCalledWith(
@@ -217,6 +243,7 @@ describe("sendMessageAdapter", () => {
 describe("sendTypingAdapter", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    setApiMode("native");
   });
 
   it("uses native JSON-RPC for native mode", async () => {
@@ -226,7 +253,6 @@ describe("sendTypingAdapter", () => {
       baseUrl: "http://localhost:8080",
       account: "+14259798283",
       recipient: "+15550001111",
-      apiMode: "native",
     });
 
     expect(result).toBe(true);
@@ -241,13 +267,13 @@ describe("sendTypingAdapter", () => {
   });
 
   it("uses container REST for container mode", async () => {
+    setApiMode("container");
     mockContainerSendTyping.mockResolvedValue(true);
 
     const result = await sendTypingAdapter({
       baseUrl: "http://localhost:8080",
       account: "+14259798283",
       recipient: "+15550001111",
-      apiMode: "container",
     });
 
     expect(result).toBe(true);
@@ -262,7 +288,6 @@ describe("sendTypingAdapter", () => {
       account: "+14259798283",
       recipient: "+15550001111",
       stop: true,
-      apiMode: "native",
     });
 
     expect(mockSignalRpcRequest).toHaveBeenCalledWith(
@@ -276,6 +301,7 @@ describe("sendTypingAdapter", () => {
 describe("sendReceiptAdapter", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    setApiMode("native");
   });
 
   it("uses native JSON-RPC for native mode", async () => {
@@ -286,7 +312,6 @@ describe("sendReceiptAdapter", () => {
       account: "+14259798283",
       recipient: "+15550001111",
       targetTimestamp: 1700000000000,
-      apiMode: "native",
     });
 
     expect(result).toBe(true);
@@ -303,6 +328,7 @@ describe("sendReceiptAdapter", () => {
   });
 
   it("uses container REST for container mode", async () => {
+    setApiMode("container");
     mockContainerSendReceipt.mockResolvedValue(true);
 
     const result = await sendReceiptAdapter({
@@ -310,7 +336,6 @@ describe("sendReceiptAdapter", () => {
       account: "+14259798283",
       recipient: "+15550001111",
       targetTimestamp: 1700000000000,
-      apiMode: "container",
     });
 
     expect(result).toBe(true);
@@ -326,7 +351,6 @@ describe("sendReceiptAdapter", () => {
       recipient: "+15550001111",
       targetTimestamp: 1700000000000,
       type: "viewed",
-      apiMode: "native",
     });
 
     expect(mockSignalRpcRequest).toHaveBeenCalledWith(
@@ -340,6 +364,7 @@ describe("sendReceiptAdapter", () => {
 describe("fetchAttachmentAdapter", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    setApiMode("native");
   });
 
   it("uses native JSON-RPC for native mode with sender", async () => {
@@ -351,7 +376,6 @@ describe("fetchAttachmentAdapter", () => {
       account: "+14259798283",
       attachmentId: "attachment-123",
       sender: "+15550001111",
-      apiMode: "native",
     });
 
     expect(result).toBeInstanceOf(Buffer);
@@ -367,13 +391,13 @@ describe("fetchAttachmentAdapter", () => {
   });
 
   it("uses container REST for container mode", async () => {
+    setApiMode("container");
     const mockBuffer = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
     mockContainerFetchAttachment.mockResolvedValue(mockBuffer);
 
     const result = await fetchAttachmentAdapter({
       baseUrl: "http://localhost:8080",
       attachmentId: "attachment-123",
-      apiMode: "container",
     });
 
     expect(result).toBe(mockBuffer);
@@ -387,7 +411,6 @@ describe("fetchAttachmentAdapter", () => {
     const result = await fetchAttachmentAdapter({
       baseUrl: "http://localhost:8080",
       attachmentId: "attachment-123",
-      apiMode: "native",
     });
 
     expect(result).toBeNull();
@@ -401,7 +424,6 @@ describe("fetchAttachmentAdapter", () => {
       baseUrl: "http://localhost:8080",
       attachmentId: "attachment-123",
       groupId: "group-123",
-      apiMode: "native",
     });
 
     expect(mockSignalRpcRequest).toHaveBeenCalledWith(
@@ -418,7 +440,6 @@ describe("fetchAttachmentAdapter", () => {
       baseUrl: "http://localhost:8080",
       attachmentId: "attachment-123",
       sender: "+15550001111",
-      apiMode: "native",
     });
 
     expect(result).toBeNull();
@@ -428,6 +449,7 @@ describe("fetchAttachmentAdapter", () => {
 describe("checkAdapter", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    setApiMode("native");
   });
 
   it("uses native check for native mode", async () => {
@@ -462,6 +484,7 @@ describe("checkAdapter", () => {
 describe("streamSignalEventsAdapter", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    setApiMode("native");
   });
 
   it("uses native SSE for native mode", async () => {
@@ -471,7 +494,6 @@ describe("streamSignalEventsAdapter", () => {
     await streamSignalEventsAdapter({
       baseUrl: "http://localhost:8080",
       account: "+14259798283",
-      apiMode: "native",
       onEvent,
     });
 
@@ -485,13 +507,13 @@ describe("streamSignalEventsAdapter", () => {
   });
 
   it("uses container WebSocket for container mode", async () => {
+    setApiMode("container");
     mockStreamContainerEvents.mockResolvedValue();
 
     const onEvent = vi.fn();
     await streamSignalEventsAdapter({
       baseUrl: "http://localhost:8080",
       account: "+14259798283",
-      apiMode: "container",
       onEvent,
     });
 
@@ -513,7 +535,6 @@ describe("streamSignalEventsAdapter", () => {
     const events: unknown[] = [];
     await streamSignalEventsAdapter({
       baseUrl: "http://localhost:8080",
-      apiMode: "native",
       onEvent: (evt) => events.push(evt),
     });
 
@@ -522,6 +543,7 @@ describe("streamSignalEventsAdapter", () => {
   });
 
   it("passes container events directly to onEvent", async () => {
+    setApiMode("container");
     mockStreamContainerEvents.mockImplementation(async (params) => {
       // Simulate receiving an event
       params.onEvent({ envelope: { sourceNumber: "+1555000111" } });
@@ -530,7 +552,6 @@ describe("streamSignalEventsAdapter", () => {
     const events: unknown[] = [];
     await streamSignalEventsAdapter({
       baseUrl: "http://localhost:8080",
-      apiMode: "container",
       onEvent: (evt) => events.push(evt),
     });
 
@@ -544,7 +565,6 @@ describe("streamSignalEventsAdapter", () => {
     const abortController = new AbortController();
     await streamSignalEventsAdapter({
       baseUrl: "http://localhost:8080",
-      apiMode: "native",
       abortSignal: abortController.signal,
       onEvent: vi.fn(),
     });
@@ -560,9 +580,11 @@ describe("streamSignalEventsAdapter", () => {
 describe("sendMessageAdapter - additional cases", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    setApiMode("native");
   });
 
   it("uses groupId as recipient when recipients empty (container mode)", async () => {
+    setApiMode("container");
     mockContainerSendMessage.mockResolvedValue({ timestamp: 1700000000000 });
 
     await sendMessageAdapter({
@@ -571,7 +593,6 @@ describe("sendMessageAdapter - additional cases", () => {
       recipients: [],
       groupId: "group-123",
       message: "Hello group",
-      apiMode: "container",
     });
 
     // Group ID should be converted to container format: group.{base64(internal_id)}
@@ -583,6 +604,7 @@ describe("sendMessageAdapter - additional cases", () => {
   });
 
   it("converts internal_id to container group format (container mode)", async () => {
+    setApiMode("container");
     mockContainerSendMessage.mockResolvedValue({ timestamp: 1700000000000 });
 
     // Simulate real internal_id format from bbernhard container
@@ -595,7 +617,6 @@ describe("sendMessageAdapter - additional cases", () => {
       recipients: [],
       groupId: internalId,
       message: "Hello group",
-      apiMode: "container",
     });
 
     expect(mockContainerSendMessage).toHaveBeenCalledWith(
@@ -606,6 +627,7 @@ describe("sendMessageAdapter - additional cases", () => {
   });
 
   it("preserves already-formatted group IDs (container mode)", async () => {
+    setApiMode("container");
     mockContainerSendMessage.mockResolvedValue({ timestamp: 1700000000000 });
 
     // Already in correct format with group. prefix
@@ -617,7 +639,6 @@ describe("sendMessageAdapter - additional cases", () => {
       recipients: [],
       groupId: formattedGroupId,
       message: "Hello group",
-      apiMode: "container",
     });
 
     // Should pass through unchanged since it already has group. prefix
@@ -629,6 +650,7 @@ describe("sendMessageAdapter - additional cases", () => {
   });
 
   it("uses empty recipients when no recipients and no groupId (container mode)", async () => {
+    setApiMode("container");
     mockContainerSendMessage.mockResolvedValue({});
 
     await sendMessageAdapter({
@@ -636,7 +658,6 @@ describe("sendMessageAdapter - additional cases", () => {
       account: "+14259798283",
       recipients: [],
       message: "Hello",
-      apiMode: "container",
     });
 
     expect(mockContainerSendMessage).toHaveBeenCalledWith(
@@ -654,13 +675,13 @@ describe("sendMessageAdapter - additional cases", () => {
       account: "+14259798283",
       recipients: ["+15550001111"],
       message: "Hello",
-      apiMode: "native",
     });
 
     expect(result).toEqual({});
   });
 
   it("passes timeout to container send", async () => {
+    setApiMode("container");
     mockContainerSendMessage.mockResolvedValue({});
 
     await sendMessageAdapter({
@@ -668,7 +689,6 @@ describe("sendMessageAdapter - additional cases", () => {
       account: "+14259798283",
       recipients: ["+15550001111"],
       message: "Hello",
-      apiMode: "container",
       timeoutMs: 30000,
     });
 
@@ -683,6 +703,7 @@ describe("sendMessageAdapter - additional cases", () => {
 describe("sendTypingAdapter - additional cases", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    setApiMode("native");
   });
 
   it("sends to group when groupId provided (native mode)", async () => {
@@ -693,7 +714,6 @@ describe("sendTypingAdapter - additional cases", () => {
       account: "+14259798283",
       recipient: "+15550001111",
       groupId: "group-123",
-      apiMode: "native",
     });
 
     expect(mockSignalRpcRequest).toHaveBeenCalledWith(
@@ -709,6 +729,7 @@ describe("sendTypingAdapter - additional cases", () => {
   });
 
   it("passes stop flag to container", async () => {
+    setApiMode("container");
     mockContainerSendTyping.mockResolvedValue(true);
 
     await sendTypingAdapter({
@@ -716,7 +737,6 @@ describe("sendTypingAdapter - additional cases", () => {
       account: "+14259798283",
       recipient: "+15550001111",
       stop: true,
-      apiMode: "container",
     });
 
     expect(mockContainerSendTyping).toHaveBeenCalledWith(
@@ -730,9 +750,11 @@ describe("sendTypingAdapter - additional cases", () => {
 describe("sendReceiptAdapter - additional cases", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    setApiMode("native");
   });
 
   it("passes viewed type to container", async () => {
+    setApiMode("container");
     mockContainerSendReceipt.mockResolvedValue(true);
 
     await sendReceiptAdapter({
@@ -741,7 +763,6 @@ describe("sendReceiptAdapter - additional cases", () => {
       recipient: "+15550001111",
       targetTimestamp: 1700000000000,
       type: "viewed",
-      apiMode: "container",
     });
 
     expect(mockContainerSendReceipt).toHaveBeenCalledWith(
@@ -755,6 +776,7 @@ describe("sendReceiptAdapter - additional cases", () => {
 describe("fetchAttachmentAdapter - additional cases", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    setApiMode("native");
   });
 
   it("prefers groupId over sender when both provided (native mode)", async () => {
@@ -765,7 +787,6 @@ describe("fetchAttachmentAdapter - additional cases", () => {
       attachmentId: "attachment-123",
       sender: "+15550001111",
       groupId: "group-123",
-      apiMode: "native",
     });
 
     const callParams = mockSignalRpcRequest.mock.calls[0][1];
@@ -774,12 +795,12 @@ describe("fetchAttachmentAdapter - additional cases", () => {
   });
 
   it("passes timeout to container fetch", async () => {
+    setApiMode("container");
     mockContainerFetchAttachment.mockResolvedValue(Buffer.from([]));
 
     await fetchAttachmentAdapter({
       baseUrl: "http://localhost:8080",
       attachmentId: "attachment-123",
-      apiMode: "container",
       timeoutMs: 60000,
     });
 

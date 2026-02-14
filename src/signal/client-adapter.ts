@@ -2,12 +2,15 @@
  * Signal client adapter - unified interface for both native signal-cli and bbernhard container.
  *
  * This adapter provides a single API that routes to the appropriate implementation
- * based on the configured API mode, keeping the two implementations cleanly separated.
+ * based on the configured API mode. Mode resolution happens internally — callers
+ * never need to know or pass apiMode.
  */
 
 import type { SignalApiMode } from "../config/types.signal.js";
 import type { ContainerWebSocketMessage } from "./client-container.js";
 import type { SignalSseEvent } from "./client.js";
+import { loadConfig } from "../config/config.js";
+import { resolveSignalAccount } from "./accounts.js";
 import {
   containerCheck,
   containerFetchAttachment,
@@ -18,9 +21,36 @@ import {
 } from "./client-container.js";
 import { signalCheck, signalRpcRequest, streamSignalEvents } from "./client.js";
 
-export type { SignalApiMode };
-
 const DEFAULT_TIMEOUT_MS = 10_000;
+
+// Cache auto-detected modes per baseUrl to avoid repeated network probes.
+const detectedModeCache = new Map<string, "native" | "container">();
+
+/**
+ * Resolve the effective API mode for a given baseUrl + accountId.
+ * Reads config internally; callers never need to pass apiMode.
+ */
+async function resolveApiMode(
+  baseUrl: string,
+  accountId?: string,
+): Promise<"native" | "container"> {
+  const cfg = loadConfig();
+  const account = resolveSignalAccount({ cfg, accountId });
+  const configured = account.config.apiMode ?? "auto";
+
+  if (configured === "native" || configured === "container") {
+    return configured;
+  }
+
+  // "auto" — check cache first, then probe
+  const cached = detectedModeCache.get(baseUrl);
+  if (cached) {
+    return cached;
+  }
+  const detected = await detectSignalApiMode(baseUrl);
+  detectedModeCache.set(baseUrl, detected);
+  return detected;
+}
 
 /**
  * Convert a group internal_id to the container-expected format.
@@ -71,12 +101,14 @@ export type SignalAdapterEvent = SignalSseEvent | ContainerWebSocketMessage;
 export async function streamSignalEventsAdapter(params: {
   baseUrl: string;
   account?: string;
+  accountId?: string;
   abortSignal?: AbortSignal;
-  apiMode: SignalApiMode;
   onEvent: (event: SignalAdapterEvent) => void;
   logger?: { log?: (msg: string) => void; error?: (msg: string) => void };
 }): Promise<void> {
-  if (params.apiMode === "container") {
+  const mode = await resolveApiMode(params.baseUrl, params.accountId);
+
+  if (mode === "container") {
     return streamContainerEvents({
       baseUrl: params.baseUrl,
       account: params.account,
@@ -101,15 +133,17 @@ export async function streamSignalEventsAdapter(params: {
 export async function sendMessageAdapter(params: {
   baseUrl: string;
   account: string;
+  accountId?: string;
   recipients: string[];
   groupId?: string;
   message: string;
   textStyles?: Array<{ start: number; length: number; style: string }>;
   attachments?: string[];
-  apiMode: SignalApiMode;
   timeoutMs?: number;
 }): Promise<{ timestamp?: number }> {
-  if (params.apiMode === "container") {
+  const mode = await resolveApiMode(params.baseUrl, params.accountId);
+
+  if (mode === "container") {
     // For container mode, group IDs must be in format "group.{base64(internal_id)}"
     const formattedGroupId = params.groupId ? formatGroupIdForContainer(params.groupId) : undefined;
     const recipients =
@@ -162,13 +196,15 @@ export async function sendMessageAdapter(params: {
 export async function sendTypingAdapter(params: {
   baseUrl: string;
   account: string;
+  accountId?: string;
   recipient: string;
   groupId?: string;
   stop?: boolean;
-  apiMode: SignalApiMode;
   timeoutMs?: number;
 }): Promise<boolean> {
-  if (params.apiMode === "container") {
+  const mode = await resolveApiMode(params.baseUrl, params.accountId);
+
+  if (mode === "container") {
     return containerSendTyping({
       baseUrl: params.baseUrl,
       account: params.account,
@@ -207,13 +243,15 @@ export async function sendTypingAdapter(params: {
 export async function sendReceiptAdapter(params: {
   baseUrl: string;
   account: string;
+  accountId?: string;
   recipient: string;
   targetTimestamp: number;
   type?: "read" | "viewed";
-  apiMode: SignalApiMode;
   timeoutMs?: number;
 }): Promise<boolean> {
-  if (params.apiMode === "container") {
+  const mode = await resolveApiMode(params.baseUrl, params.accountId);
+
+  if (mode === "container") {
     return containerSendReceipt({
       baseUrl: params.baseUrl,
       account: params.account,
@@ -246,13 +284,15 @@ export async function sendReceiptAdapter(params: {
 export async function fetchAttachmentAdapter(params: {
   baseUrl: string;
   account?: string;
+  accountId?: string;
   attachmentId: string;
   sender?: string;
   groupId?: string;
-  apiMode: SignalApiMode;
   timeoutMs?: number;
 }): Promise<Buffer | null> {
-  if (params.apiMode === "container") {
+  const mode = await resolveApiMode(params.baseUrl, params.accountId);
+
+  if (mode === "container") {
     return containerFetchAttachment(params.attachmentId, {
       baseUrl: params.baseUrl,
       timeoutMs: params.timeoutMs,
@@ -290,13 +330,17 @@ export async function fetchAttachmentAdapter(params: {
 
 /**
  * Check Signal API availability.
+ * Accepts optional apiMode for diagnostic tools (e.g. probe);
+ * if omitted, resolves from config.
  */
 export async function checkAdapter(
   baseUrl: string,
-  apiMode: SignalApiMode,
+  apiMode?: SignalApiMode,
   timeoutMs = DEFAULT_TIMEOUT_MS,
+  accountId?: string,
 ): Promise<{ ok: boolean; status?: number | null; error?: string | null }> {
-  if (apiMode === "container") {
+  const mode = apiMode && apiMode !== "auto" ? apiMode : await resolveApiMode(baseUrl, accountId);
+  if (mode === "container") {
     return containerCheck(baseUrl, timeoutMs);
   }
   return signalCheck(baseUrl, timeoutMs);
@@ -308,15 +352,17 @@ export async function checkAdapter(
 export async function sendReactionAdapter(params: {
   baseUrl: string;
   account: string;
+  accountId?: string;
   recipient: string;
   emoji: string;
   targetAuthor: string;
   targetTimestamp: number;
   groupId?: string;
-  apiMode: SignalApiMode;
   timeoutMs?: number;
 }): Promise<{ timestamp?: number }> {
-  if (params.apiMode === "container") {
+  const mode = await resolveApiMode(params.baseUrl, params.accountId);
+
+  if (mode === "container") {
     const { containerSendReaction } = await import("./client-container.js");
     return containerSendReaction({
       baseUrl: params.baseUrl,
@@ -360,15 +406,17 @@ export async function sendReactionAdapter(params: {
 export async function removeReactionAdapter(params: {
   baseUrl: string;
   account: string;
+  accountId?: string;
   recipient: string;
   emoji: string;
   targetAuthor: string;
   targetTimestamp: number;
   groupId?: string;
-  apiMode: SignalApiMode;
   timeoutMs?: number;
 }): Promise<{ timestamp?: number }> {
-  if (params.apiMode === "container") {
+  const mode = await resolveApiMode(params.baseUrl, params.accountId);
+
+  if (mode === "container") {
     const { containerRemoveReaction } = await import("./client-container.js");
     return containerRemoveReaction({
       baseUrl: params.baseUrl,
