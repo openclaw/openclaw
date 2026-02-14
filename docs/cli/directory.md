@@ -33,6 +33,7 @@ openclaw message send --channel slack --target user:U012ABCDEF --message "hello"
 
 - WhatsApp: `+15551234567` (DM), `1234567890-1234567890@g.us` (group)
 - Telegram: `@username` or numeric chat id; groups are numeric ids
+- Signal: `+15551234567` (DM), `uuid:<id>` (UUID DM), `group:<groupId>` (group — Base64-encoded, case-sensitive)
 - Slack: `user:U…` and `channel:C…`
 - Discord: `user:<id>` and `channel:<id>`
 - Matrix (plugin): `user:@user:server`, `room:!roomId:server`, or `#alias:server`
