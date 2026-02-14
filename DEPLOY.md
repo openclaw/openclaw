@@ -172,6 +172,14 @@ podman run -d \
 | `HTTPS_PROXY` / `HTTP_PROXY` | 通过境外代理访问 OpenRouter API，绕过地区限制 |
 | `NO_PROXY` | 本地和容器网络内流量不走代理 |
 
+> **trustedProxies 配置**：Gateway 通过 nginx-proxy 反代时，需要在 `openclaw.json` 中配置 `gateway.trustedProxies`，否则日志会出现 `Proxy headers detected from untrusted address`，导致设备配对和认证异常。当前配置：
+>
+> ```json
+> "trustedProxies": ["10.89.0.0/16"]
+> ```
+>
+> 如果 onboard 生成的配置文件中 `gateway.bind` 为 `loopback`，需手动改为 `lan`（与启动命令一致）。
+
 ### 7. 验证
 
 ```bash
@@ -360,14 +368,30 @@ echo '/swapfile none swap sw 0 0' >> /etc/fstab
 
 ### 设备认证失败 (device token mismatch)
 
-1. 确认 Token 无多余空格
-2. 确认 `openclaw.json` 中的 `gateway.auth.token` 与输入的 Token 一致
-3. 清除浏览器 localStorage 后重试：
+此错误表示浏览器本地存储的**设备密钥对**与服务器端的配对记录不匹配，不是 Gateway Token 本身的问题。
+
+**快速修复**（浏览器端）：
+
+1. 用**无痕/隐私模式**打开 https://claw.leot.fun ，重新输入 Gateway Token
+2. 或在浏览器 F12 控制台执行：
    ```javascript
-   localStorage.removeItem('openclaw.device.auth.v1');
-   localStorage.removeItem('openclaw-device-identity-v1');
+   localStorage.clear();
    location.reload();
    ```
+
+**彻底修复**（服务器端，清除所有已配对设备，需要所有客户端重新配对）：
+
+```bash
+# 清空配对数据
+echo '{}' > /opt/leot_svr/data/openclaw/config/devices/paired.json
+echo '{}' > /opt/leot_svr/data/openclaw/config/devices/pending.json
+chown 1000:1000 /opt/leot_svr/data/openclaw/config/devices/*.json
+podman restart openclaw-gateway
+# 然后在浏览器清除 localStorage 后重新连接，触发配对流程
+# 用 devices list 查看并 approve 待批准设备
+```
+
+> **注意**：如果同时清除了服务器端的 `identity/device-auth.json`，CLI 工具自身也需要重新配对。
 
 ### HTTPS 502
 
@@ -400,6 +424,149 @@ firewall-cmd --list-rich-rules
 
 ---
 
+## 外部 CLI 工具挂载
+
+OpenClaw 支持通过 **CLI Backend** 机制调用外部 CLI 工具。推荐将所有工具放在宿主机统一目录，通过 Volume 挂载进容器，无需重新构建镜像。
+
+### 1. 宿主机准备工具目录
+
+```bash
+mkdir -p /opt/leot_svr/tools/bin
+```
+
+### 2. 放入工具
+
+以 `calc-cli`（Rust 静态二进制计算器）为例。源码在 `cli/calc-cli/`，功能：
+
+- 支持 `+ - * / % ^` 和括号，正确处理运算优先级
+- 输出 JSON 格式：`{"expression":"2+3*4","result":14}`
+- 纯静态编译，无任何运行时依赖，仅 ~460KB
+
+**本地交叉编译**（Windows → Linux 静态二进制）：
+
+```bash
+# 安装 musl target（仅首次）
+rustup target add x86_64-unknown-linux-musl
+
+# 交叉编译
+$env:CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER='rust-lld'
+cargo build --release --target x86_64-unknown-linux-musl --manifest-path cli/calc-cli/Cargo.toml
+
+# 产物：cli/calc-cli/target/x86_64-unknown-linux-musl/release/calc-cli (~460KB)
+```
+
+**上传到服务器**：
+
+```bash
+scp cli/calc-cli/target/x86_64-unknown-linux-musl/release/calc-cli root@c.leot.fun:/opt/leot_svr/tools/bin/
+ssh root@c.leot.fun chmod +x /opt/leot_svr/tools/bin/calc-cli
+```
+
+**用法示例**：
+
+```bash
+calc-cli '2 + 3 * 4'           # {"expression":"2 + 3 * 4","result":14}
+calc-cli '(1 + 2) ^ 3'         # {"expression":"(1 + 2) ^ 3","result":27}
+calc-cli '100 / 3'             # {"expression":"100 / 3","result":33.333...}
+calc-cli --expr '10 % 3'       # {"expression":"10 % 3","result":1}
+echo '2**10' | calc-cli --stdin # {"expression":"2**10","result":1024}
+```
+
+### 3. 启动命令加挂载
+
+在 `podman run` 命令中添加两行（对比步骤 6）：
+
+```bash
+OPENCLAW_TOKEN=$(cat /opt/leot_svr/data/openclaw/.gateway_token)
+
+podman run -d \
+  --name openclaw-gateway \
+  --restart unless-stopped \
+  --network proxy-network \
+  --memory 1g \
+  -v /opt/leot_svr/data/openclaw/config:/home/node/.openclaw \
+  -v /opt/leot_svr/data/openclaw/workspace:/home/node/.openclaw/workspace \
+  -v /opt/leot_svr/tools/bin:/opt/tools:ro \
+  -e PATH=/opt/tools:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  -e HOME=/home/node \
+  -e TERM=xterm-256color \
+  -e OPENCLAW_GATEWAY_TOKEN=$OPENCLAW_TOKEN \
+  -e OPENROUTER_API_KEY=<your-openrouter-key> \
+  -e HTTPS_PROXY=http://66.42.94.13:18888 \
+  -e HTTP_PROXY=http://66.42.94.13:18888 \
+  -e NO_PROXY=localhost,127.0.0.1,10.89.0.0/16 \
+  -e VIRTUAL_HOST=claw.leot.fun \
+  -e LETSENCRYPT_HOST=claw.leot.fun \
+  -e LETSENCRYPT_EMAIL=admin@leot.fun \
+  -e VIRTUAL_PORT=18789 \
+  registry.leot.fun/openclaw:latest \
+  node --max-old-space-size=768 dist/index.js gateway --bind lan --port 18789 --allow-unconfigured
+```
+
+新增部分说明：
+
+| 参数 | 作用 |
+|---|---|
+| `-v .../tools/bin:/opt/tools:ro` | 只读挂载工具目录，新增工具只需往宿主机目录放文件 |
+| `-e PATH=/opt/tools:...` | 让容器内直接找到挂载的工具 |
+
+### 4. 在 TOOLS.md 中告知 Agent
+
+Agent 通过内置的 `exec` 工具执行 shell 命令。要让 Agent 知道有哪些外部 CLI 可用，需要编辑工作区的 `TOOLS.md`。
+
+> **注意：** `cliBackends` 是 **模型后端**（把 prompt 发给另一个 AI CLI 获取回复），不是工具注册机制。
+> 不要把外部 CLI 工具注册到 `cliBackends` 里。
+>
+> 代码依据：`src/agents/cli-runner.ts` 中 CLI 后端运行时会注入
+> `"Tools are disabled in this session. Do not call tools."`，
+> 它只用于文本生成回退（如 claude-cli、codex-cli）。
+
+编辑 `/opt/leot_svr/data/openclaw/workspace/TOOLS.md`，添加工具说明：
+
+```markdown
+### 计算器 CLI
+
+系统中安装了 `calc-cli`，一个高精度数学表达式计算器。
+
+- 路径：`/opt/tools/calc-cli`（已在 PATH 中，可直接执行 `calc-cli`）
+- 支持运算符：`+ - * / % ^ **` 和括号 `()`
+- 输出格式：JSON `{"expression":"...","result":...}`
+- 支持负数、嵌套括号、运算优先级
+
+使用方式（通过 exec 工具调用）：
+
+    calc-cli '2 + 3 * 4'              # {"expression":"2 + 3 * 4","result":14}
+    calc-cli '(100 - 20) ^ 2 / 5'     # {"expression":"(100-20)^2/5","result":1280}
+    calc-cli --expr '10 % 3'           # {"expression":"10 % 3","result":1}
+
+当用户需要数学计算时，优先使用 calc-cli 而不是手动计算。
+```
+
+> Agent 在新对话开始时会加载 `TOOLS.md`，无需重启容器，开新对话即可生效。
+
+### 5. 验证工具可用
+
+```bash
+# 进容器测试 CLI 可执行
+podman exec openclaw-gateway calc-cli '2 + 3 * 4'
+# 输出: {"expression":"2 + 3 * 4","result":14}
+
+podman exec openclaw-gateway calc-cli '(1+2)^3'
+# 输出: {"expression":"(1+2)^3","result":27}
+
+# 然后在 Web UI 开新对话，问 Agent 计算问题即可
+```
+
+### 工具管理注意事项
+
+- **新增工具**：放入 `/opt/leot_svr/tools/bin/`，重启容器即可，无需重新构建镜像
+- **静态二进制**优先：避免动态链接库兼容问题（容器基于 Debian bookworm / node:22）
+- **脚本工具**：确保 shebang 正确（`#!/bin/bash`），且容器内有对应解释器
+- **依赖运行时的工具**：如 Python/Node 脚本，可额外挂载依赖目录或在 Dockerfile 中预装运行时
+- **权限**：挂载 `:ro` 防止容器内误改；工具文件需有可执行权限（`chmod +x`）
+
+---
+
 ## 关键文件路径
 
 | 路径 | 说明 |
@@ -408,4 +575,5 @@ firewall-cmd --list-rich-rules
 | `/opt/leot_svr/data/openclaw/.gateway_token` | Gateway Token |
 | `/opt/leot_svr/data/openclaw/workspace/` | Agent 工作目录 |
 | `/opt/leot_svr/data/openclaw/workspace/SOUL.md` | Agent 人格/语言设置 |
+| `/opt/leot_svr/tools/bin/` | 外部 CLI 工具目录（挂载到容器 `/opt/tools`） |
 | `/opt/leot_svr/secrets/registry.env` | Registry 凭据 |
