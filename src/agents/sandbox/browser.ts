@@ -90,6 +90,7 @@ export async function ensureSandboxBrowser(params: {
   agentWorkspaceDir: string;
   cfg: SandboxConfig;
   evaluateEnabled?: boolean;
+  bridgeAuth?: { token?: string; password?: string };
 }): Promise<SandboxBrowserContext | null> {
   if (!params.cfg.browser.enabled) {
     return null;
@@ -148,19 +149,29 @@ export async function ensureSandboxBrowser(params: {
       ? await readDockerPort(containerName, params.cfg.browser.noVncPort)
       : null;
 
+  const desiredAuthToken = params.bridgeAuth?.token?.trim() || undefined;
+  const desiredAuthPassword = params.bridgeAuth?.password?.trim() || undefined;
+
   const existing = BROWSER_BRIDGES.get(params.scopeKey);
   const existingProfile = existing
     ? resolveProfile(existing.bridge.state.resolved, DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME)
     : null;
   const shouldReuse =
     existing && existing.containerName === containerName && existingProfile?.cdpPort === mappedCdp;
+  const authMatches =
+    !existing ||
+    (existing.authToken === desiredAuthToken && existing.authPassword === desiredAuthPassword);
   if (existing && !shouldReuse) {
+    await stopBrowserBridgeServer(existing.bridge.server).catch(() => undefined);
+    BROWSER_BRIDGES.delete(params.scopeKey);
+  }
+  if (existing && shouldReuse && !authMatches) {
     await stopBrowserBridgeServer(existing.bridge.server).catch(() => undefined);
     BROWSER_BRIDGES.delete(params.scopeKey);
   }
 
   const bridge = (() => {
-    if (shouldReuse && existing) {
+    if (shouldReuse && authMatches && existing) {
       return existing.bridge;
     }
     return null;
@@ -196,15 +207,19 @@ export async function ensureSandboxBrowser(params: {
         headless: params.cfg.browser.headless,
         evaluateEnabled: params.evaluateEnabled ?? DEFAULT_BROWSER_EVALUATE_ENABLED,
       }),
+      authToken: desiredAuthToken,
+      authPassword: desiredAuthPassword,
       onEnsureAttachTarget,
     });
   };
 
   const resolvedBridge = await ensureBridge();
-  if (!shouldReuse) {
+  if (!shouldReuse || !authMatches) {
     BROWSER_BRIDGES.set(params.scopeKey, {
       bridge: resolvedBridge,
       containerName,
+      authToken: desiredAuthToken,
+      authPassword: desiredAuthPassword,
     });
   }
 
