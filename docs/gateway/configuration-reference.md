@@ -581,6 +581,16 @@ Max characters per workspace bootstrap file before truncation. Default: `20000`.
 }
 ```
 
+### `agents.defaults.bootstrapTotalMaxChars`
+
+Max total characters injected across all workspace bootstrap files. Default: `24000`.
+
+```json5
+{
+  agents: { defaults: { bootstrapTotalMaxChars: 24000 } },
+}
+```
+
 ### `agents.defaults.userTimezone`
 
 Timezone for system prompt context (not message timestamps). Falls back to host timezone.
@@ -1387,6 +1397,7 @@ Controls elevated (host) exec access:
       timeoutSec: 1800,
       cleanupMs: 1800000,
       notifyOnExit: true,
+      notifyOnExitEmptySuccess: false,
       applyPatch: {
         enabled: false,
         allowModels: ["gpt-5.2"],
