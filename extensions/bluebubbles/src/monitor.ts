@@ -398,23 +398,31 @@ export async function handleBlueBubblesWebhookRequest(
     return true;
   }
 
-  const matching = targets.filter((target) => {
-    const token = target.account.config.password?.trim();
+  const guidParam = url.searchParams.get("guid") ?? url.searchParams.get("password");
+  const headerToken =
+    req.headers["x-guid"] ??
+    req.headers["x-password"] ??
+    req.headers["x-bluebubbles-guid"] ??
+    req.headers["authorization"];
+  const guid = (Array.isArray(headerToken) ? headerToken[0] : headerToken) ?? guidParam ?? "";
+
+  const strictMatches: WebhookTarget[] = [];
+  const fallbackTargets: WebhookTarget[] = [];
+  for (const target of targets) {
+    const token = target.account.config.password?.trim() ?? "";
     if (!token) {
-      return true;
+      fallbackTargets.push(target);
+      continue;
     }
-    const guidParam = url.searchParams.get("guid") ?? url.searchParams.get("password");
-    const headerToken =
-      req.headers["x-guid"] ??
-      req.headers["x-password"] ??
-      req.headers["x-bluebubbles-guid"] ??
-      req.headers["authorization"];
-    const guid = (Array.isArray(headerToken) ? headerToken[0] : headerToken) ?? guidParam ?? "";
     if (guid && guid.trim() === token) {
-      return true;
+      strictMatches.push(target);
+      if (strictMatches.length > 1) {
+        break;
+      }
     }
-    return false;
-  });
+  }
+
+  const matching = strictMatches.length > 0 ? strictMatches : fallbackTargets;
 
   if (matching.length === 0) {
     res.statusCode = 401;
@@ -425,24 +433,30 @@ export async function handleBlueBubblesWebhookRequest(
     return true;
   }
 
-  for (const target of matching) {
-    target.statusSink?.({ lastInboundAt: Date.now() });
-    if (reaction) {
-      processReaction(reaction, target).catch((err) => {
-        target.runtime.error?.(
-          `[${target.account.accountId}] BlueBubbles reaction failed: ${String(err)}`,
-        );
-      });
-    } else if (message) {
-      // Route messages through debouncer to coalesce rapid-fire events
-      // (e.g., text message + URL balloon arriving as separate webhooks)
-      const debouncer = getOrCreateDebouncer(target);
-      debouncer.enqueue({ message, target }).catch((err) => {
-        target.runtime.error?.(
-          `[${target.account.accountId}] BlueBubbles webhook failed: ${String(err)}`,
-        );
-      });
-    }
+  if (matching.length > 1) {
+    res.statusCode = 401;
+    res.end("ambiguous webhook target");
+    console.warn(`[bluebubbles] webhook rejected: ambiguous target match path=${path}`);
+    return true;
+  }
+
+  const target = matching[0];
+  target.statusSink?.({ lastInboundAt: Date.now() });
+  if (reaction) {
+    processReaction(reaction, target).catch((err) => {
+      target.runtime.error?.(
+        `[${target.account.accountId}] BlueBubbles reaction failed: ${String(err)}`,
+      );
+    });
+  } else if (message) {
+    // Route messages through debouncer to coalesce rapid-fire events
+    // (e.g., text message + URL balloon arriving as separate webhooks)
+    const debouncer = getOrCreateDebouncer(target);
+    debouncer.enqueue({ message, target }).catch((err) => {
+      target.runtime.error?.(
+        `[${target.account.accountId}] BlueBubbles webhook failed: ${String(err)}`,
+      );
+    });
   }
 
   res.statusCode = 200;
