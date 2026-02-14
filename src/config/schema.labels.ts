@@ -7,6 +7,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "update.checkOnStart": "Update Check on Start",
   "diagnostics.enabled": "Diagnostics Enabled",
   "diagnostics.flags": "Diagnostics Flags",
+  "diagnostics.laneWaitWarnMs": "Lane Wait Warning Threshold (ms)",
   "diagnostics.otel.enabled": "OpenTelemetry Enabled",
   "diagnostics.otel.endpoint": "OpenTelemetry Endpoint",
   "diagnostics.otel.protocol": "OpenTelemetry Protocol",

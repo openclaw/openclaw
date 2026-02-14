@@ -1,5 +1,20 @@
 import { diagnosticLogger as diag, logLaneDequeue, logLaneEnqueue } from "../logging/diagnostic.js";
 import { CommandLane } from "./lanes.js";
+import { loadConfig } from "../config/config.js";
+
+// Global cache for diagnostics config to avoid repeated config loads
+let diagnosticsConfigCache: { laneWaitWarnMs?: number } | null = null;
+
+function getDiagnosticsConfig() {
+  if (!diagnosticsConfigCache) {
+    try {
+      diagnosticsConfigCache = loadConfig().diagnostics ?? {};
+    } catch {
+      diagnosticsConfigCache = {};
+    }
+  }
+  return diagnosticsConfigCache;
+}
 /**
  * Dedicated error type thrown when a queued command is rejected because
  * its lane was cleared.  Callers that fire-and-forget enqueued tasks can
@@ -133,7 +148,9 @@ export function enqueueCommandInLane<T>(
   },
 ): Promise<T> {
   const cleaned = lane.trim() || CommandLane.Main;
-  const warnAfterMs = opts?.warnAfterMs ?? 2_000;
+  // Use config value if warnAfterMs not explicitly provided
+  const configWarnMs = getDiagnosticsConfig().laneWaitWarnMs;
+  const warnAfterMs = opts?.warnAfterMs ?? configWarnMs ?? 2_000;
   const state = getLaneState(cleaned);
   return new Promise<T>((resolve, reject) => {
     state.queue.push({
