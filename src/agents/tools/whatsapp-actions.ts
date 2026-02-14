@@ -1,6 +1,7 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { OpenClawConfig } from "../../config/config.js";
 import { sendReactionWhatsApp } from "../../web/outbound.js";
+import { getActiveWebListener } from "../../web/active-listener.js";
 import { createActionGate, jsonResult, readReactionParams, readStringParam } from "./common.js";
 
 export async function handleWhatsAppAction(
@@ -34,6 +35,21 @@ export async function handleWhatsAppAction(
       return jsonResult({ ok: true, added: emoji });
     }
     return jsonResult({ ok: true, removed: true });
+  }
+
+  if (action === "list-groups") {
+    const accountId = readStringParam(params, "accountId");
+    const listener = getActiveWebListener(accountId ?? undefined);
+    if (!listener) {
+      throw new Error(
+        `No active WhatsApp Web listener${accountId ? ` (account: ${accountId})` : ""}. Start the gateway, then link WhatsApp with: openclaw channels login --channel whatsapp`,
+      );
+    }
+    if (!listener.listGroups) {
+      throw new Error("list-groups is not supported by the current WhatsApp Web listener.");
+    }
+    const groups = await listener.listGroups();
+    return jsonResult({ groups });
   }
 
   throw new Error(`Unsupported WhatsApp action: ${action}`);

@@ -401,6 +401,22 @@ export async function monitorWebInbox(options: {
     signalClose: (reason?: WebListenerCloseReason) => {
       resolveClose(reason ?? { status: undefined, isLoggedOut: false, error: "closed" });
     },
+    // List all WhatsApp groups the account is part of
+    listGroups: async () => {
+      try {
+        const groups = await sock.groupFetchAllParticipating();
+        const selfJid = sock.user?.id;
+        return Object.entries(groups).map(([jid, group]) => ({
+          id: jid,
+          name: group.subject ?? "Unknown",
+          memberCount: group.participants?.length ?? 0,
+          isMember: selfJid ? group.participants?.some((p) => p.id === selfJid) ?? false : true,
+        }));
+      } catch (err) {
+        logVerbose(`Failed to fetch groups: ${String(err)}`);
+        return [];
+      }
+    },
     // IPC surface (sendMessage/sendPoll/sendReaction/sendComposingTo)
     ...sendApi,
   } as const;
