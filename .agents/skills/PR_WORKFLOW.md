@@ -136,7 +136,7 @@ Use this for GHSA-linked fixes and private reports.
 4. In GitHub advisory UI, set package ranges in the structured fields:
    - `Affected versions`: `< fixed_version`
    - `Patched versions`: `>= fixed_version`
-   Do not rely on description text alone.
+     Do not rely on description text alone.
 5. If collaborator can edit text but cannot change advisory state, hand off to a Publisher to move triage -> accepted draft -> publish.
 6. Advisory comments are posted manually in UI when required by policy. Do not rely on `gh api` automation for advisory comments.
 
