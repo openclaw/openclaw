@@ -76,4 +76,46 @@ private func withUserDefaults<T>(_ updates: [String: Any?], _ body: () throws ->
             #expect(commands.contains(OpenClawLocationCommand.get.rawValue))
         }
     }
+    @Test @MainActor func currentCommandsExcludeDangerousSystemExecCommands() {
+        withUserDefaults([
+            "node.instanceId": "ios-test",
+            "camera.enabled": true,
+            "location.enabledMode": OpenClawLocationMode.whileUsing.rawValue,
+        ]) {
+            let appModel = NodeAppModel()
+            let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+            let commands = Set(controller._test_currentCommands())
+
+            // iOS should expose notify, but not host shell/exec-approval commands.
+            #expect(commands.contains(OpenClawSystemCommand.notify.rawValue))
+            #expect(!commands.contains(OpenClawSystemCommand.run.rawValue))
+            #expect(!commands.contains(OpenClawSystemCommand.which.rawValue))
+            #expect(!commands.contains(OpenClawSystemCommand.execApprovalsGet.rawValue))
+            #expect(!commands.contains(OpenClawSystemCommand.execApprovalsSet.rawValue))
+        }
+    }
+
+    @Test @MainActor func loadLastConnectionReadsSavedValues() {
+        withUserDefaults([
+            "gateway.lastHost": "gateway.example.com",
+            "gateway.lastPort": 443,
+            "gateway.lastTls": true,
+        ]) {
+            let loaded = GatewayConnectionController.loadLastConnection(defaults: .standard)
+            #expect(loaded?.host == "gateway.example.com")
+            #expect(loaded?.port == 443)
+            #expect(loaded?.useTLS == true)
+        }
+    }
+
+    @Test @MainActor func loadLastConnectionReturnsNilForInvalidData() {
+        withUserDefaults([
+            "gateway.lastHost": "",
+            "gateway.lastPort": 0,
+            "gateway.lastTls": false,
+        ]) {
+            let loaded = GatewayConnectionController.loadLastConnection(defaults: .standard)
+            #expect(loaded == nil)
+        }
+    }
 }
