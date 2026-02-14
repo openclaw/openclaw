@@ -81,6 +81,10 @@ Explicit listing of changes in this fork relative to upstream [OpenClaw](https:/
     - Stale `state.running` recovery when `onTimer` hangs.
     - **In-flight job persistence**: anti-zombie recovery scans for stale `runningAtMs` markers, clears them, and marks those jobs due again so mid-flight one-shot `--at` reminders are retried instead of silently dropped. Startup only clears obviously stale `runningAtMs` markers to avoid double-running fresh in-flight work.
     - Troubleshooting docs for "Cron stuck (zombie scheduler)" updated to describe anti-zombie recovery logs and in-flight job persistence.
+- **Cron "timer armed" log throttling**
+  - When many cron API calls occur in a short window (e.g. control UI or many clients calling `cron.list` / `cron.status` / `cron.update`), each call invoked `armTimer()` and the debug log "cron: timer armed" was emitted every time, producing dozens or hundreds of lines per second. Throttling in `src/cron/service/timer.ts`: we only log when at least 1s has passed since the last log or when the next wake time/delay changed, so bursts produce at most one line per second while schedule changes are still visible.
+- **Gateway lock (single-instance) documentation**
+  - `docs/gateway/gateway-lock.md` updated to describe both the file lock (primary) and port bind (backstop), where the lock file lives, when the lock is skipped (`OPENCLAW_ALLOW_MULTI_GATEWAY=1` or tests), and an "Ensuring a single gateway" section so operators can avoid multiple gateways and the resulting cron log storm from multiple cron service instances.
 
 ### Plugin CLI command registration
 

@@ -16,6 +16,10 @@ import { ensureLoaded, persist } from "./store.js";
 
 const MAX_TIMER_DELAY_MS = 60_000;
 
+/** Throttle "timer armed" debug log; bursts can be dozens/hundreds per second (e.g. cron.list/update storm from UI or many clients). */
+const ARM_LOG_DEBOUNCE_MS = 1_000;
+let lastArmLog: { nextAt: number; delayMs: number; atMs: number } | null = null;
+
 /**
  * Maximum wall-clock time for a single job execution. Acts as a safety net
  * on top of the per-provider / per-agent timeouts to prevent one stuck job
@@ -164,10 +168,19 @@ export function armTimer(state: CronServiceState) {
       armTimer(state); // Defensive: ensure next wake is scheduled
     }
   }, clampedDelay);
-  state.deps.log.debug(
-    { nextAt, delayMs: clampedDelay, clamped: delay > MAX_TIMER_DELAY_MS },
-    "cron: timer armed",
-  );
+  const nowForLog = state.deps.nowMs();
+  const skipLog =
+    lastArmLog &&
+    nowForLog - lastArmLog.atMs < ARM_LOG_DEBOUNCE_MS &&
+    lastArmLog.nextAt === nextAt &&
+    lastArmLog.delayMs === clampedDelay;
+  if (!skipLog) {
+    state.deps.log.debug(
+      { nextAt, delayMs: clampedDelay, clamped: delay > MAX_TIMER_DELAY_MS },
+      "cron: timer armed",
+    );
+    lastArmLog = { nextAt, delayMs: clampedDelay, atMs: nowForLog };
+  }
 }
 
 export async function onTimer(state: CronServiceState) {
