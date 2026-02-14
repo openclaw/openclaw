@@ -567,7 +567,7 @@ Docs: https://docs.openclaw.ai
 
 - Security: guard remote media fetches with SSRF protections (block private/localhost, DNS pinning).
 - Updates: clean stale global install rename dirs and extend gateway update timeouts to avoid npm ENOTEMPTY failures.
-- Plugins: validate plugin/hook install paths and reject traversal-like names.
+- Security/Plugins/Hooks: validate install paths and reject traversal-like names (prevents path traversal outside the state dir). Thanks @logicx24.
 - Telegram: add download timeouts for file fetches. (#6914) Thanks @hclsys.
 - Telegram: enforce thread specs for DM vs forum sends. (#6833) Thanks @obviyus.
 - Streaming: flush block streaming on paragraph boundaries for newline chunking. (#7014)
