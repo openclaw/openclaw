@@ -25,6 +25,7 @@ import {
   applySessionDefaults,
   applyTalkApiKey,
 } from "./defaults.js";
+import { restoreEnvVarRefs } from "./env-preserve.js";
 import {
   MissingEnvVarError,
   containsEnvVarReference,
@@ -70,6 +71,23 @@ const CONFIG_BACKUP_COUNT = 5;
 const loggedInvalidConfigs = new Set<string>();
 
 export type ParseConfigJson5Result = { ok: true; parsed: unknown } | { ok: false; error: string };
+export type ConfigWriteOptions = {
+  /**
+   * Read-time env snapshot used to validate `${VAR}` restoration decisions.
+   * If omitted, write falls back to current process env.
+   */
+  envSnapshotForRestore?: Record<string, string | undefined>;
+  /**
+   * Optional safety check: only use envSnapshotForRestore when writing the
+   * same config file path that produced the snapshot.
+   */
+  expectedConfigPath?: string;
+};
+
+export type ReadConfigFileSnapshotForWriteResult = {
+  snapshot: ConfigFileSnapshot;
+  writeOptions: ConfigWriteOptions;
+};
 
 function hashConfigRaw(raw: string | null): string {
   return crypto
@@ -399,6 +417,11 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
   const configPath =
     candidatePaths.find((candidate) => deps.fs.existsSync(candidate)) ?? requestedConfigPath;
 
+  // Snapshot of env vars captured after applyConfigEnv + resolveConfigEnvVars.
+  // Used by writeConfigFile to verify ${VAR} restoration against the env state
+  // that produced the resolved config, not the (possibly mutated) live env.
+  let envSnapshotForRestore: Record<string, string | undefined> | null = null;
+
   function loadConfig(): OpenClawConfig {
     try {
       maybeLoadDotEnvForConfig(deps.env);
@@ -430,6 +453,11 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
 
       // Substitute ${VAR} env var references
       const substituted = resolveConfigEnvVars(resolved, deps.env);
+
+      // Capture env snapshot after substitution for use by writeConfigFile.
+      // This ensures restoreEnvVarRefs verifies against the env that produced
+      // the resolved values, not a potentially mutated live env (TOCTOU fix).
+      envSnapshotForRestore = { ...deps.env } as Record<string, string | undefined>;
 
       const resolvedConfig = substituted;
       warnOnConfigMiskeys(resolvedConfig, deps.logger);
@@ -597,6 +625,8 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       let substituted: unknown;
       try {
         substituted = resolveConfigEnvVars(resolved, deps.env);
+        // Capture env snapshot (same as loadConfig — see TOCTOU comment above)
+        envSnapshotForRestore = { ...deps.env } as Record<string, string | undefined>;
       } catch (err) {
         const message =
           err instanceof MissingEnvVarError
@@ -681,9 +711,15 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
   async function writeConfigFile(cfg: OpenClawConfig) {
     clearConfigCache();
     let persistCandidate: unknown = cfg;
+    // Save the injected env snapshot before readConfigFileSnapshot() overwrites it
+    // with a new snapshot based on the (possibly mutated) live env.
+    const savedEnvSnapshot = envSnapshotForRestore;
     const snapshot = await readConfigFileSnapshot();
     let envRefMap: Map<string, string> | null = null;
     let changedPaths: Set<string> | null = null;
+    if (savedEnvSnapshot) {
+      envSnapshotForRestore = savedEnvSnapshot;
+    }
     if (snapshot.valid && snapshot.exists) {
       const patch = createMergePatch(snapshot.config, cfg);
       persistCandidate = applyMergePatch(snapshot.resolved, patch);
@@ -716,12 +752,43 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         .join("\n");
       deps.logger.warn(`Config warnings:\n${details}`);
     }
+
+    // Restore ${VAR} env var references that were resolved during config loading.
+    // Read the current file (pre-substitution) and restore any references whose
+    // resolved values match the incoming config — so we don't overwrite
+    // "${ANTHROPIC_API_KEY}" with "sk-ant-..." when the caller didn't change it.
+    //
+    // We use only the root file's parsed content (no $include resolution) to avoid
+    // pulling values from included files into the root config on write-back.
+    // Apply env restoration to validated.config (which has runtime defaults stripped
+    // per issue #6070) rather than the raw caller input.
+    let cfgToWrite = validated.config;
+    try {
+      if (deps.fs.existsSync(configPath)) {
+        const currentRaw = await deps.fs.promises.readFile(configPath, "utf-8");
+        const parsedRes = parseConfigJson5(currentRaw, deps.json5);
+        if (parsedRes.ok) {
+          // Use env snapshot from when config was loaded (if available) to avoid
+          // TOCTOU issues where env changes between load and write. Falls back to
+          // live env if no snapshot exists (e.g., first write before any load).
+          const envForRestore = envSnapshotForRestore ?? deps.env;
+          cfgToWrite = restoreEnvVarRefs(
+            cfgToWrite,
+            parsedRes.parsed,
+            envForRestore,
+          ) as OpenClawConfig;
+        }
+      }
+    } catch {
+      // If reading the current file fails, write cfg as-is (no env restoration)
+    }
+
     const dir = path.dirname(configPath);
     await deps.fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
     const outputConfig =
       envRefMap && changedPaths
-        ? (restoreEnvRefsFromMap(validated.config, "", envRefMap, changedPaths) as OpenClawConfig)
-        : validated.config;
+        ? (restoreEnvRefsFromMap(cfgToWrite, "", envRefMap, changedPaths) as OpenClawConfig)
+        : cfgToWrite;
     // Do NOT apply runtime defaults when writing — user config should only contain
     // explicitly set values. Runtime defaults are applied when loading (issue #6070).
     const json = JSON.stringify(stampConfigVersion(outputConfig), null, 2).trimEnd().concat("\n");
@@ -785,6 +852,14 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     loadConfig,
     readConfigFileSnapshot,
     writeConfigFile,
+    /** Return the env snapshot captured during the last loadConfig/readConfigFileSnapshot, or null. */
+    getEnvSnapshot(): Record<string, string | undefined> | null {
+      return envSnapshotForRestore;
+    },
+    /** Inject an env snapshot (e.g. from a prior IO instance) for use by writeConfigFile. */
+    setEnvSnapshot(snapshot: Record<string, string | undefined>): void {
+      envSnapshotForRestore = snapshot;
+    },
   };
 }
 
@@ -852,7 +927,28 @@ export async function readConfigFileSnapshot(): Promise<ConfigFileSnapshot> {
   return await createConfigIO().readConfigFileSnapshot();
 }
 
-export async function writeConfigFile(cfg: OpenClawConfig): Promise<void> {
+export async function readConfigFileSnapshotForWrite(): Promise<ReadConfigFileSnapshotForWriteResult> {
+  const io = createConfigIO();
+  const snapshot = await io.readConfigFileSnapshot();
+  return {
+    snapshot,
+    writeOptions: {
+      envSnapshotForRestore: io.getEnvSnapshot() ?? undefined,
+      expectedConfigPath: io.configPath,
+    },
+  };
+}
+
+export async function writeConfigFile(
+  cfg: OpenClawConfig,
+  options: ConfigWriteOptions = {},
+): Promise<void> {
   clearConfigCache();
-  await createConfigIO().writeConfigFile(cfg);
+  const io = createConfigIO();
+  const sameConfigPath =
+    options.expectedConfigPath === undefined || options.expectedConfigPath === io.configPath;
+  if (sameConfigPath && options.envSnapshotForRestore) {
+    io.setEnvSnapshot(options.envSnapshotForRestore);
+  }
+  await io.writeConfigFile(cfg);
 }
