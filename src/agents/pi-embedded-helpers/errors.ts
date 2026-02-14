@@ -527,7 +527,10 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
     }
   }
 
-  return collapseConsecutiveDuplicateBlocks(stripped).trimStart();
+  // Strip leading blank lines (including whitespace-only lines) without clobbering indentation on
+  // the first content line (e.g. markdown/code blocks).
+  const withoutLeadingEmptyLines = stripped.replace(/^(?:[ \t]*\r?\n)+/, "");
+  return collapseConsecutiveDuplicateBlocks(withoutLeadingEmptyLines);
 }
 
 export function isRateLimitAssistantError(msg: AssistantMessage | undefined): boolean {
