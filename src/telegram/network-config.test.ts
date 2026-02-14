@@ -35,9 +35,14 @@ describe("resolveTelegramAutoSelectFamilyDecision", () => {
     expect(decision).toEqual({ value: true, source: "config" });
   });
 
-  it("defaults to disable on Node 22", () => {
-    const decision = resolveTelegramAutoSelectFamilyDecision({ nodeMajor: 22 });
+  it("defaults to disable on Node 22 (linux)", () => {
+    const decision = resolveTelegramAutoSelectFamilyDecision({ nodeMajor: 22, platform: "linux" });
     expect(decision).toEqual({ value: false, source: "default-node22" });
+  });
+
+  it("skips Node 22 workaround on macOS (darwin)", () => {
+    const decision = resolveTelegramAutoSelectFamilyDecision({ nodeMajor: 22, platform: "darwin" });
+    expect(decision).toEqual({ value: null });
   });
 
   it("returns null when no decision applies", () => {

@@ -15,12 +15,14 @@ export function resolveTelegramAutoSelectFamilyDecision(params?: {
   network?: TelegramNetworkConfig;
   env?: NodeJS.ProcessEnv;
   nodeMajor?: number;
+  platform?: NodeJS.Platform;
 }): TelegramAutoSelectFamilyDecision {
   const env = params?.env ?? process.env;
   const nodeMajor =
     typeof params?.nodeMajor === "number"
       ? params.nodeMajor
       : Number(process.versions.node.split(".")[0]);
+  const platform = params?.platform ?? process.platform;
 
   if (isTruthyEnvValue(env[TELEGRAM_ENABLE_AUTO_SELECT_FAMILY_ENV])) {
     return { value: true, source: `env:${TELEGRAM_ENABLE_AUTO_SELECT_FAMILY_ENV}` };
@@ -31,7 +33,10 @@ export function resolveTelegramAutoSelectFamilyDecision(params?: {
   if (typeof params?.network?.autoSelectFamily === "boolean") {
     return { value: params.network.autoSelectFamily, source: "config" };
   }
-  if (Number.isFinite(nodeMajor) && nodeMajor >= 22) {
+  // On macOS (darwin), disabling autoSelectFamily causes fetch to fail with
+  // ConnectTimeoutError. The Happy Eyeballs workaround for Node 22
+  // (nodejs/node#54359) must be skipped on this platform.
+  if (Number.isFinite(nodeMajor) && nodeMajor >= 22 && platform !== "darwin") {
     return { value: false, source: "default-node22" };
   }
   return { value: null };
