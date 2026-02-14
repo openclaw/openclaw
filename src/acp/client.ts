@@ -29,6 +29,8 @@ const DANGEROUS_ACP_TOOLS = new Set([
   "apply_patch",
 ]);
 
+const SAFE_AUTO_APPROVE_KINDS = new Set(["read", "search"]);
+
 type PermissionOption = RequestPermissionRequest["options"][number];
 
 type PermissionResolverDeps = {
@@ -75,6 +77,48 @@ function parseToolNameFromTitle(title: string | undefined | null): string | unde
     return undefined;
   }
   return normalizeToolName(head);
+}
+
+function resolveToolKindForPermission(
+  params: RequestPermissionRequest,
+  toolName: string | undefined,
+): string | undefined {
+  const toolCall = params.toolCall as unknown as { kind?: unknown; title?: unknown } | undefined;
+  const kindRaw = typeof toolCall?.kind === "string" ? toolCall.kind.trim().toLowerCase() : "";
+  if (kindRaw) {
+    return kindRaw;
+  }
+  const name =
+    toolName ??
+    parseToolNameFromTitle(typeof toolCall?.title === "string" ? toolCall.title : undefined);
+  if (!name) {
+    return undefined;
+  }
+  const normalized = name.toLowerCase();
+
+  // Prefer a conservative classifier: if in doubt, return "other" (prompt-required).
+  if (normalized === "read" || normalized.includes("read")) {
+    return "read";
+  }
+  if (normalized === "search" || normalized.includes("search") || normalized.includes("find")) {
+    return "search";
+  }
+  if (normalized.includes("fetch") || normalized.includes("http")) {
+    return "fetch";
+  }
+  if (normalized.includes("write") || normalized.includes("edit") || normalized.includes("patch")) {
+    return "edit";
+  }
+  if (normalized.includes("delete") || normalized.includes("remove")) {
+    return "delete";
+  }
+  if (normalized.includes("move") || normalized.includes("rename")) {
+    return "move";
+  }
+  if (normalized.includes("exec") || normalized.includes("run") || normalized.includes("bash")) {
+    return "execute";
+  }
+  return "other";
 }
 
 function resolveToolNameForPermission(params: RequestPermissionRequest): string | undefined {
@@ -158,6 +202,7 @@ export async function resolvePermissionRequest(
   const options = params.options ?? [];
   const toolTitle = params.toolCall?.title ?? "tool";
   const toolName = resolveToolNameForPermission(params);
+  const toolKind = resolveToolKindForPermission(params, toolName);
 
   if (options.length === 0) {
     log(`[permission cancelled] ${toolName ?? "unknown"}: no options available`);
@@ -166,7 +211,8 @@ export async function resolvePermissionRequest(
 
   const allowOption = pickOption(options, ["allow_once", "allow_always"]);
   const rejectOption = pickOption(options, ["reject_once", "reject_always"]);
-  const promptRequired = !toolName || DANGEROUS_ACP_TOOLS.has(toolName);
+  const isSafeKind = Boolean(toolKind && SAFE_AUTO_APPROVE_KINDS.has(toolKind));
+  const promptRequired = !toolName || !isSafeKind || DANGEROUS_ACP_TOOLS.has(toolName);
 
   if (!promptRequired) {
     const option = allowOption ?? options[0];
@@ -174,11 +220,13 @@ export async function resolvePermissionRequest(
       log(`[permission cancelled] ${toolName}: no selectable options`);
       return cancelledPermission();
     }
-    log(`[permission auto-approved] ${toolName}`);
+    log(`[permission auto-approved] ${toolName} (${toolKind ?? "unknown"})`);
     return selectedPermission(option.optionId);
   }
 
-  log(`\n[permission requested] ${toolTitle}${toolName ? ` (${toolName})` : ""}`);
+  log(
+    `\n[permission requested] ${toolTitle}${toolName ? ` (${toolName})` : ""}${toolKind ? ` [${toolKind}]` : ""}`,
+  );
   const approved = await prompt(toolName, toolTitle);
 
   if (approved && allowOption) {
