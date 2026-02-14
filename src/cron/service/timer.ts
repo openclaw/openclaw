@@ -2,7 +2,6 @@ import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import type { CronJob } from "../types.js";
 import type { CronEvent, CronServiceState } from "./state.js";
 import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
-import { resolveCronDeliveryPlan } from "../delivery.js";
 import { sweepCronRunSessions } from "../session-reaper.js";
 import {
   computeJobNextRunAtMs,
@@ -483,18 +482,11 @@ async function executeJobCore(
     message: job.payload.message,
   });
 
-  // Post a short summary back to the main session.
-  const summaryText = res.summary?.trim();
-  const deliveryPlan = resolveCronDeliveryPlan(job);
-  if (summaryText && deliveryPlan.requested) {
-    const prefix = "Cron";
-    const label =
-      res.status === "error" ? `${prefix} (error): ${summaryText}` : `${prefix}: ${summaryText}`;
-    state.deps.enqueueSystemEvent(label, { agentId: job.agentId });
-    if (job.wakeMode === "now") {
-      state.deps.requestHeartbeatNow({ reason: `cron:${job.id}` });
-    }
-  }
+  // The isolated run handles its own delivery via runSubagentAnnounceFlow
+  // when delivery is requested (announce mode). Injecting a system event
+  // here would wake the main session and produce a duplicate message
+  // (#16139). When delivery is NOT requested the isolated run is
+  // fire-and-forget with no outbound relay, so skip the injection too.
 
   return {
     status: res.status,

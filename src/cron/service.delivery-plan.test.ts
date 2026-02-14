@@ -84,7 +84,79 @@ describe("CronService delivery plan consistency", () => {
 
     const result = await cron.run(job.id, "force");
     expect(result).toEqual({ ok: true, ran: true });
-    expect(enqueueSystemEvent).toHaveBeenCalledWith("Cron: done", { agentId: undefined });
+    // When delivery is requested (announce mode), the isolated run handles
+    // delivery via the announce flow — no main-session system event (#16139).
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+
+    cron.stop();
+    await store.cleanup();
+  });
+
+  it("skips main-session relay when delivery.mode=announce to prevent duplicate messages", async () => {
+    const store = await makeStorePath();
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeatNow = vi.fn();
+    const cron = new CronService({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      enqueueSystemEvent,
+      requestHeartbeatNow,
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok", summary: "weather is 22°C" })),
+    });
+    await cron.start();
+    const job = await cron.add({
+      name: "announce-test",
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: Date.now() },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: {
+        kind: "agentTurn",
+        message: "fetch weather",
+      },
+      delivery: { mode: "announce", channel: "telegram", to: "12345" },
+    });
+
+    const result = await cron.run(job.id, "force");
+    expect(result).toEqual({ ok: true, ran: true });
+    // The isolated run delivers via runSubagentAnnounceFlow; the timer
+    // must NOT inject a system event into the main session (#16139).
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(requestHeartbeatNow).not.toHaveBeenCalled();
+
+    cron.stop();
+    await store.cleanup();
+  });
+
+  it("does not post summary to main session even when delivery is not requested", async () => {
+    const store = await makeStorePath();
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeatNow = vi.fn();
+    const cron = new CronService({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      enqueueSystemEvent,
+      requestHeartbeatNow,
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok", summary: "done" })),
+    });
+    await cron.start();
+    const job = await cron.add({
+      name: "no-delivery-test",
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: Date.now() },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: {
+        kind: "agentTurn",
+        message: "hello",
+      },
+      delivery: { mode: "none" },
+    });
+
+    const result = await cron.run(job.id, "force");
+    expect(result).toEqual({ ok: true, ran: true });
+    // Isolated runs never inject into the main session (#16139).
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
 
     cron.stop();
     await store.cleanup();

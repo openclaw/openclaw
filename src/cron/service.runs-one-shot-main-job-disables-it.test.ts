@@ -321,10 +321,9 @@ describe("CronService", () => {
 
     await waitForJobs(cron, (items) => items.some((item) => item.state.lastStatus === "ok"));
     expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
-    expect(enqueueSystemEvent).toHaveBeenCalledWith("Cron: done", {
-      agentId: undefined,
-    });
-    expect(requestHeartbeatNow).toHaveBeenCalled();
+    // When delivery is requested (announce mode), the isolated run handles
+    // delivery via the announce flow — no main-session system event (#16139).
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
     cron.stop();
     await store.cleanup();
   });
@@ -469,10 +468,8 @@ describe("CronService", () => {
     await vi.runOnlyPendingTimersAsync();
     await waitForJobs(cron, (items) => items.some((item) => item.state.lastStatus === "error"));
 
-    expect(enqueueSystemEvent).toHaveBeenCalledWith("Cron (error): last output", {
-      agentId: undefined,
-    });
-    expect(requestHeartbeatNow).toHaveBeenCalled();
+    // Announce mode: isolated run handles delivery, no main-session relay (#16139).
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
     cron.stop();
     await store.cleanup();
   });
