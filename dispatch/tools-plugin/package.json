@@ -1,0 +1,14 @@
+{
+  "name": "@openclaw/dispatch-tools",
+  "version": "2026.2.6-3",
+  "description": "Real Dispatch closed-loop bridge plugin",
+  "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.48"
+  },
+  "openclaw": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  }
+}

@@ -13,7 +13,10 @@ describe("dispatch db migration 001_init", () => {
   it("creates required core tables", () => {
     expectSql(/CREATE TABLE IF NOT EXISTS tickets \(/, "tickets table missing");
     expectSql(/CREATE TABLE IF NOT EXISTS audit_events \(/, "audit_events table missing");
-    expectSql(/CREATE TABLE IF NOT EXISTS ticket_state_transitions \(/, "ticket_state_transitions table missing");
+    expectSql(
+      /CREATE TABLE IF NOT EXISTS ticket_state_transitions \(/,
+      "ticket_state_transitions table missing",
+    );
     expectSql(/CREATE TABLE IF NOT EXISTS idempotency_keys \(/, "idempotency_keys table missing");
     expectSql(/CREATE TABLE IF NOT EXISTS evidence_items \(/, "evidence_items table missing");
   });
@@ -35,15 +38,15 @@ describe("dispatch db migration 001_init", () => {
       "NEW transitions not constrained",
     );
     expectSql(
-      /from_state = 'TRIAGED'[\\s\\S]*to_state IN \('APPROVAL_REQUIRED', 'READY_TO_SCHEDULE', 'DISPATCHED'\)/,
+      /from_state = 'TRIAGED'[\s\S]*to_state IN \('APPROVAL_REQUIRED', 'READY_TO_SCHEDULE', 'DISPATCHED'\)/,
       "TRIAGED transitions do not include emergency dispatch path",
     );
     expectSql(
-      /from_state = 'APPROVAL_REQUIRED'[\\s\\S]*to_state IN \('READY_TO_SCHEDULE', 'TRIAGED', 'IN_PROGRESS'\)/,
+      /from_state = 'APPROVAL_REQUIRED'[\s\S]*to_state IN \('READY_TO_SCHEDULE', 'TRIAGED', 'IN_PROGRESS'\)/,
       "APPROVAL_REQUIRED transitions do not include in-progress return path",
     );
     expectSql(
-      /from_state = 'IN_PROGRESS'[\\s\\S]*to_state IN \('ON_HOLD', 'COMPLETED_PENDING_VERIFICATION', 'APPROVAL_REQUIRED'\)/,
+      /from_state = 'IN_PROGRESS'[\s\S]*to_state IN \('ON_HOLD', 'COMPLETED_PENDING_VERIFICATION', 'APPROVAL_REQUIRED'\)/,
       "IN_PROGRESS transitions do not include approval escalation path",
     );
     expectSql(/from_state = 'INVOICED' AND to_state = 'CLOSED'/, "terminal transition missing");

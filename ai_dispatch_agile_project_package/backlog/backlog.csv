@@ -1,2 +1,1 @@
 Rank,Epic,Item,Type,Priority,Status,DependsOn,OwnerRole,SprintTarget,Description,AcceptanceCriteria
-1,EPIC-MVP-07: Pilot Readiness,MVP-08: Pilot UAT and cutover readiness,Story,P1,READY,"MVP-03,MVP-04,MVP-05,MVP-06,MVP-07",Ops/Product/DevOps,Sprint M3,Execute ops SME UAT rollback rehearsal and release-candidate freeze for pilot cutover.,UAT signoff and production cutover checklist completed with rollback plan validated.

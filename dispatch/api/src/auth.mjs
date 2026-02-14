@@ -1,16 +1,15 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import {
-  HttpError,
-  isUuid,
-  lowerHeader,
-  requireHeader,
-} from "./http-utils.mjs";
-import {
   getCommandEndpointPolicy,
   getDispatchToolPolicy,
 } from "../../shared/authorization-policy.mjs";
+import { HttpError, isUuid, lowerHeader, requireHeader } from "./http-utils.mjs";
 
 const ACTOR_TYPES = new Set(["HUMAN", "AGENT", "SERVICE", "SYSTEM"]);
+const ACTOR_ROLE_ALIASES = {
+  assistant: "dispatcher",
+  bot: "dispatcher",
+};
 
 const READ_ENDPOINT_TOOL_NAMES = Object.freeze({
   "/tickets/{ticketId}": "ticket.get",
@@ -151,7 +150,8 @@ function normalizeRole(value, sourceLabel) {
   if (typeof value !== "string" || value.trim() === "") {
     throw new HttpError(401, "INVALID_AUTH_CLAIMS", `${sourceLabel} is required`);
   }
-  return value.trim().toLowerCase();
+  const normalized = value.trim().toLowerCase();
+  return ACTOR_ROLE_ALIASES[normalized] ?? normalized;
 }
 
 function normalizeActorId(value, sourceLabel) {
@@ -214,13 +214,14 @@ function normalizeScopeEntries(value, fieldName) {
 function normalizeClaimsScope(claims) {
   const scope = claims.scope;
   if (scope != null && (!scope || typeof scope !== "object" || Array.isArray(scope))) {
-    throw new HttpError(401, "INVALID_AUTH_CLAIMS", "JWT claim 'scope' must be an object when provided");
+    throw new HttpError(
+      401,
+      "INVALID_AUTH_CLAIMS",
+      "JWT claim 'scope' must be an object when provided",
+    );
   }
 
-  const scopeObject =
-    scope && typeof scope === "object" && !Array.isArray(scope)
-      ? scope
-      : {};
+  const scopeObject = scope && typeof scope === "object" && !Array.isArray(scope) ? scope : {};
 
   const accountIds = normalizeScopeEntries(
     scopeObject.account_ids ?? claims.account_ids ?? claims.account_id ?? null,
@@ -242,27 +243,35 @@ function normalizeHeaderScopeEntries(rawHeaderValue, fieldName) {
     return [];
   }
 
-  return rawHeaderValue
-    .split(",")
-    .map((entry, index) => {
-      const trimmed = entry.trim();
-      if (trimmed === "") {
-        throw new HttpError(400, "INVALID_ACTOR_CONTEXT", `${fieldName}[${index}] must be non-empty`);
-      }
-      const normalized = trimmed.toLowerCase();
-      if (normalized === "*") {
-        return "*";
-      }
-      if (!isUuid(normalized)) {
-        throw new HttpError(400, "INVALID_ACTOR_CONTEXT", `${fieldName}[${index}] must be UUID or '*'`);
-      }
-      return normalized;
-    });
+  return rawHeaderValue.split(",").map((entry, index) => {
+    const trimmed = entry.trim();
+    if (trimmed === "") {
+      throw new HttpError(400, "INVALID_ACTOR_CONTEXT", `${fieldName}[${index}] must be non-empty`);
+    }
+    const normalized = trimmed.toLowerCase();
+    if (normalized === "*") {
+      return "*";
+    }
+    if (!isUuid(normalized)) {
+      throw new HttpError(
+        400,
+        "INVALID_ACTOR_CONTEXT",
+        `${fieldName}[${index}] must be UUID or '*'`,
+      );
+    }
+    return normalized;
+  });
 }
 
 function normalizeDevHeaderScope(headers) {
-  const accountScope = normalizeHeaderScopeEntries(lowerHeader(headers, "x-account-scope"), "x-account-scope");
-  const siteScope = normalizeHeaderScopeEntries(lowerHeader(headers, "x-site-scope"), "x-site-scope");
+  const accountScope = normalizeHeaderScopeEntries(
+    lowerHeader(headers, "x-account-scope"),
+    "x-account-scope",
+  );
+  const siteScope = normalizeHeaderScopeEntries(
+    lowerHeader(headers, "x-site-scope"),
+    "x-site-scope",
+  );
   return {
     account_ids: accountScope.length > 0 ? accountScope : ["*"],
     site_ids: siteScope.length > 0 ? siteScope : ["*"],
@@ -319,7 +328,11 @@ function assertRoleAndToolAllowed(endpointPolicy, actorRole, toolName) {
 
 function parseActorFromClaims(token, headers, endpointPolicy, config) {
   if (!config.jwtSecret || config.jwtSecret.trim() === "") {
-    throw new HttpError(500, "AUTH_CONFIG_ERROR", "DISPATCH_AUTH_JWT_SECRET is required for claims auth");
+    throw new HttpError(
+      500,
+      "AUTH_CONFIG_ERROR",
+      "DISPATCH_AUTH_JWT_SECRET is required for claims auth",
+    );
   }
 
   const claims = verifyHs256Jwt(token, config.jwtSecret);
@@ -345,9 +358,7 @@ function parseActorFromClaims(token, headers, endpointPolicy, config) {
     const audienceMatch =
       (typeof audience === "string" && audience.trim() === config.jwtAudience) ||
       (Array.isArray(audience) &&
-        audience.some(
-          (entry) => typeof entry === "string" && entry.trim() === config.jwtAudience,
-        ));
+        audience.some((entry) => typeof entry === "string" && entry.trim() === config.jwtAudience));
     if (!audienceMatch) {
       throw new HttpError(401, "INVALID_AUTH_CLAIMS", "JWT audience claim is invalid");
     }
@@ -386,17 +397,18 @@ function parseActorFromDevHeaders(headers, endpointPolicy) {
     "x-actor-role",
     "MISSING_ACTOR_CONTEXT",
     "Header 'X-Actor-Role' is required",
-  ).toLowerCase();
+  );
+  const resolvedActorRole = normalizeRole(actorRole, "Header 'X-Actor-Role'");
   const actorTypeRaw = lowerHeader(headers, "x-actor-type");
   const actorType = normalizeActorType(actorTypeRaw, "Header 'X-Actor-Type'", "HUMAN");
   const toolNameHeader = lowerHeader(headers, "x-tool-name");
   const toolName = toolNameHeader?.trim() || endpointPolicy.default_tool_name;
 
-  assertRoleAndToolAllowed(endpointPolicy, actorRole, toolName);
+  assertRoleAndToolAllowed(endpointPolicy, resolvedActorRole, toolName);
 
   return {
     actorId,
-    actorRole,
+    actorRole: resolvedActorRole,
     actorType,
     toolName,
     scope: normalizeDevHeaderScope(headers),
@@ -430,7 +442,7 @@ export function createAuthRuntime(options = {}) {
   const nodeEnv =
     typeof options.nodeEnv === "string" && options.nodeEnv.trim() !== ""
       ? options.nodeEnv.trim()
-      : process.env.NODE_ENV ?? "";
+      : (process.env.NODE_ENV ?? "");
   const isProduction = nodeEnv.toLowerCase() === "production";
 
   let allowDevHeaders;
@@ -443,7 +455,7 @@ export function createAuthRuntime(options = {}) {
   const jwtSecret =
     typeof options.jwtSecret === "string"
       ? options.jwtSecret
-      : process.env.DISPATCH_AUTH_JWT_SECRET ?? "";
+      : (process.env.DISPATCH_AUTH_JWT_SECRET ?? "");
   const jwtIssuer =
     typeof options.jwtIssuer === "string"
       ? options.jwtIssuer.trim() || null
@@ -483,7 +495,11 @@ export function createAuthRuntime(options = {}) {
       const siteId = target?.siteId ?? target?.site_id;
 
       if (!isUuid(accountId) || !isUuid(siteId)) {
-        throw new HttpError(500, "INTERNAL_ERROR", "Scope target must include valid account_id and site_id");
+        throw new HttpError(
+          500,
+          "INTERNAL_ERROR",
+          "Scope target must include valid account_id and site_id",
+        );
       }
 
       const accountScope = actor?.scope?.account_ids ?? [];

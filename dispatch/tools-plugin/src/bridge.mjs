@@ -7,6 +7,10 @@ import {
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ACTOR_TYPES = new Set(["HUMAN", "AGENT", "SERVICE", "SYSTEM"]);
 const DEFAULT_TIMEOUT_MS = 10_000;
+const ACTOR_ROLE_ALIASES = {
+  assistant: "dispatcher",
+  bot: "dispatcher",
+};
 
 export const TOOL_SPECS = DISPATCH_TOOL_POLICIES;
 
@@ -125,13 +129,19 @@ function resolveTicketId(spec, ticketId) {
 
 function resolveActorRole(spec, actorRole) {
   const normalized = readNonEmptyString(actorRole, "actor_role").toLowerCase();
-  if (!spec.allowed_roles.includes(normalized)) {
-    throw new DispatchBridgeError(403, "TOOL_ROLE_FORBIDDEN", "Actor role is not allowed for tool", {
-      tool_name: spec.tool_name,
-      actor_role: normalized,
-    });
+  const mapped = ACTOR_ROLE_ALIASES[normalized] ?? normalized;
+  if (!spec.allowed_roles.includes(mapped)) {
+    throw new DispatchBridgeError(
+      403,
+      "TOOL_ROLE_FORBIDDEN",
+      "Actor role is not allowed for tool",
+      {
+        tool_name: spec.tool_name,
+        actor_role: mapped,
+      },
+    );
   }
-  return normalized;
+  return mapped;
 }
 
 function resolveEndpoint(spec, ticketId) {
@@ -186,11 +196,16 @@ export async function invokeDispatchAction(params) {
 
   const fetchImpl = params.fetchImpl ?? globalThis.fetch;
   if (typeof fetchImpl !== "function") {
-    throw new DispatchBridgeError(500, "DISPATCH_API_UNREACHABLE", "Fetch implementation is not available", {
-      tool_name: spec.tool_name,
-      request_id: requestId,
-      correlation_id: correlationId,
-    });
+    throw new DispatchBridgeError(
+      500,
+      "DISPATCH_API_UNREACHABLE",
+      "Fetch implementation is not available",
+      {
+        tool_name: spec.tool_name,
+        request_id: requestId,
+        correlation_id: correlationId,
+      },
+    );
   }
 
   const headers = {
@@ -257,13 +272,18 @@ export async function invokeDispatchAction(params) {
     });
 
     if (response.status >= 400) {
-      throw new DispatchBridgeError(response.status, "DISPATCH_API_ERROR", "dispatch-api rejected tool request", {
-        tool_name: spec.tool_name,
-        endpoint,
-        request_id: requestId,
-        correlation_id: correlationId,
-        dispatch_error: parsedBody,
-      });
+      throw new DispatchBridgeError(
+        response.status,
+        "DISPATCH_API_ERROR",
+        "dispatch-api rejected tool request",
+        {
+          tool_name: spec.tool_name,
+          endpoint,
+          request_id: requestId,
+          correlation_id: correlationId,
+          dispatch_error: parsedBody,
+        },
+      );
     }
 
     return {
@@ -292,12 +312,17 @@ export async function invokeDispatchAction(params) {
     }
 
     if (error?.name === "AbortError") {
-      const timeoutError = new DispatchBridgeError(504, "DISPATCH_API_TIMEOUT", "dispatch-api request timed out", {
-        tool_name: spec.tool_name,
-        endpoint,
-        request_id: requestId,
-        correlation_id: correlationId,
-      });
+      const timeoutError = new DispatchBridgeError(
+        504,
+        "DISPATCH_API_TIMEOUT",
+        "dispatch-api request timed out",
+        {
+          tool_name: spec.tool_name,
+          endpoint,
+          request_id: requestId,
+          correlation_id: correlationId,
+        },
+      );
       logError(logger, {
         level: "error",
         component: "dispatch-tool-bridge",
@@ -313,13 +338,18 @@ export async function invokeDispatchAction(params) {
       throw timeoutError;
     }
 
-    const unreachable = new DispatchBridgeError(502, "DISPATCH_API_UNREACHABLE", "dispatch-api request failed", {
-      tool_name: spec.tool_name,
-      endpoint,
-      request_id: requestId,
-      correlation_id: correlationId,
-      reason: error instanceof Error ? error.message : String(error),
-    });
+    const unreachable = new DispatchBridgeError(
+      502,
+      "DISPATCH_API_UNREACHABLE",
+      "dispatch-api request failed",
+      {
+        tool_name: spec.tool_name,
+        endpoint,
+        request_id: requestId,
+        correlation_id: correlationId,
+        reason: error instanceof Error ? error.message : String(error),
+      },
+    );
 
     logError(logger, {
       level: "error",

@@ -1,6 +1,6 @@
 import { Type } from "@sinclair/typebox";
-import { DispatchBridgeError, invokeDispatchAction } from "./bridge.mjs";
 import { DISPATCH_TOOL_POLICIES } from "../../shared/authorization-policy.mjs";
+import { DispatchBridgeError, invokeDispatchAction } from "./bridge.mjs";
 
 /**
  * Closed dispatch tool bridge plugin.
@@ -31,10 +31,11 @@ export default function register(api: {
     Type.Literal("SERVICE"),
     Type.Literal("SYSTEM"),
   ]);
+  const actorRoleSchema = Type.String({ minLength: 1 });
   const payloadSchema = Type.Object({}, { additionalProperties: true });
   const commonEnvelopeFields = {
     actor_id: Type.String({ minLength: 1 }),
-    actor_role: Type.String({ minLength: 1 }),
+    actor_role: Type.Optional(actorRoleSchema),
     actor_type: Type.Optional(actorTypeSchema),
     request_id: Type.Optional(Type.String({ minLength: 1 })),
     correlation_id: Type.Optional(Type.String({ minLength: 1 })),
@@ -56,14 +57,13 @@ export default function register(api: {
     "ticket.get": "Read ticket snapshot via dispatch-api.",
     "closeout.list_evidence": "Read evidence items via dispatch-api.",
     "ticket.timeline": "Read ordered audit timeline via dispatch-api.",
-    "dispatcher.cockpit": "Read dispatcher cockpit queue and mapped action surface via dispatch-api.",
-    "tech.job_packet": "Read technician packet, timeline, evidence, and closeout gate status via dispatch-api.",
+    "dispatcher.cockpit":
+      "Read dispatcher cockpit queue and mapped action surface via dispatch-api.",
+    "tech.job_packet":
+      "Read technician packet, timeline, evidence, and closeout gate status via dispatch-api.",
   } as const;
 
-  const buildToolParameters = (policy: {
-    mutating: boolean;
-    requires_ticket_id: boolean;
-  }) => {
+  const buildToolParameters = (policy: { mutating: boolean; requires_ticket_id: boolean }) => {
     const properties: Record<string, unknown> = { ...commonEnvelopeFields };
     if (policy.requires_ticket_id) {
       properties.ticket_id = Type.String({ minLength: 1 });
@@ -74,27 +74,39 @@ export default function register(api: {
     return Type.Object(properties, { additionalProperties: false });
   };
 
+  const asOpenAIFriendlyToolName = (toolName: string) => toolName.replace(/\./g, "_");
+
+  type ToolDefinition = {
+    name: string;
+    dispatchName: string;
+    description: string;
+    parameters: unknown;
+  };
+
   const toolDefinitions = Object.values(DISPATCH_TOOL_POLICIES)
-    .map((policy) => ({
-      name: policy.tool_name,
-      description:
-        toolDescriptions[policy.tool_name as keyof typeof toolDescriptions] ??
-        `Invoke ${policy.tool_name} via dispatch-api.`,
-      parameters: buildToolParameters(policy),
-    }))
-    .sort((left, right) => left.name.localeCompare(right.name));
+    .map(
+      (policy) =>
+        ({
+          name: asOpenAIFriendlyToolName(policy.tool_name),
+          dispatchName: policy.tool_name,
+          description:
+            toolDescriptions[policy.tool_name as keyof typeof toolDescriptions] ??
+            `Invoke ${policy.tool_name} via dispatch-api.`,
+          parameters: buildToolParameters(policy),
+        }) as ToolDefinition,
+    )
+    .toSorted((left, right) => left.name.localeCompare(right.name));
 
   const toolStatus = {
-    tool_names: toolDefinitions.map((tool) => tool.name),
+    tool_names: toolDefinitions.map((tool) => tool.dispatchName),
     plugin: "dispatch-tools",
   };
 
   const cfg = (api.pluginConfig ?? {}) as Record<string, unknown>;
   const baseUrl =
-    typeof cfg.baseUrl === "string" && cfg.baseUrl.trim() !== ""
-      ? cfg.baseUrl.trim()
-      : null;
-  const token = typeof cfg.token === "string" && cfg.token.trim() !== "" ? cfg.token.trim() : undefined;
+    typeof cfg.baseUrl === "string" && cfg.baseUrl.trim() !== "" ? cfg.baseUrl.trim() : null;
+  const token =
+    typeof cfg.token === "string" && cfg.token.trim() !== "" ? cfg.token.trim() : undefined;
   const timeoutMs =
     typeof cfg.timeoutMs === "number" && Number.isFinite(cfg.timeoutMs) ? cfg.timeoutMs : 10_000;
 
@@ -162,6 +174,7 @@ export default function register(api: {
   };
 
   for (const tool of toolDefinitions) {
+    const dispatchName = tool.dispatchName;
     api.registerTool(
       {
         name: tool.name,
@@ -170,13 +183,13 @@ export default function register(api: {
         async execute(_id: string, params: Record<string, unknown>) {
           try {
             const actorId = readString(params, "actor_id");
-            const actorRole = readString(params, "actor_role");
+            const actorRole = readString(params, "actor_role") ?? "dispatcher";
             const result = await invokeDispatchAction({
               baseUrl,
               token,
               timeoutMs,
               logger: api.logger,
-              toolName: tool.name,
+              toolName: dispatchName,
               actorId,
               actorRole,
               actorType: readString(params, "actor_type"),
@@ -188,7 +201,7 @@ export default function register(api: {
             });
             return toToolResult(result);
           } catch (error) {
-            return toToolError(error, tool.name);
+            return toToolError(error, dispatchName);
           }
         },
       },
