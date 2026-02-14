@@ -238,7 +238,10 @@ describe("monitorSignalProvider tool results", () => {
           },
         },
       };
-      await onEvent(payload);
+      await onEvent({
+        event: "receive",
+        data: JSON.stringify(payload),
+      });
       abortController.abort();
     });
 
@@ -280,7 +283,10 @@ describe("monitorSignalProvider tool results", () => {
           },
         },
       };
-      await onEvent(payload);
+      await onEvent({
+        event: "receive",
+        data: JSON.stringify(payload),
+      });
       abortController.abort();
     });
 
@@ -315,7 +321,10 @@ describe("monitorSignalProvider tool results", () => {
           },
         },
       };
-      await onEvent(payload);
+      await onEvent({
+        event: "receive",
+        data: JSON.stringify(payload),
+      });
       abortController.abort();
     });
 
@@ -351,7 +360,10 @@ describe("monitorSignalProvider tool results", () => {
           },
         },
       };
-      await onEvent(payload);
+      await onEvent({
+        event: "receive",
+        data: JSON.stringify(payload),
+      });
       abortController.abort();
     });
 
@@ -397,7 +409,10 @@ describe("monitorSignalProvider tool results", () => {
           },
         },
       };
-      await onEvent(payload);
+      await onEvent({
+        event: "receive",
+        data: JSON.stringify(payload),
+      });
       abortController.abort();
     });
 
@@ -450,7 +465,10 @@ describe("monitorSignalProvider tool results", () => {
           },
         },
       };
-      await onEvent(payload);
+      await onEvent({
+        event: "receive",
+        data: JSON.stringify(payload),
+      });
       abortController.abort();
     });
 
@@ -492,7 +510,10 @@ describe("monitorSignalProvider tool results", () => {
           },
         },
       };
-      await onEvent(payload);
+      await onEvent({
+        event: "receive",
+        data: JSON.stringify(payload),
+      });
       abortController.abort();
     });
 
@@ -537,10 +558,16 @@ describe("monitorSignalProvider tool results", () => {
           },
         },
       };
-      await onEvent(payload);
       await onEvent({
-        ...payload,
-        envelope: { ...payload.envelope, timestamp: 2 },
+        event: "receive",
+        data: JSON.stringify(payload),
+      });
+      await onEvent({
+        event: "receive",
+        data: JSON.stringify({
+          ...payload,
+          envelope: { ...payload.envelope, timestamp: 2 },
+        }),
       });
       abortController.abort();
     });

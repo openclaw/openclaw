@@ -54,16 +54,19 @@ describe("signal createSignalEventHandler inbound contract", () => {
     });
 
     await handler({
-      envelope: {
-        sourceNumber: "+15550001111",
-        sourceName: "Alice",
-        timestamp: 1700000000000,
-        dataMessage: {
-          message: "hi",
-          attachments: [],
-          groupInfo: { groupId: "g1", groupName: "Test Group" },
+      event: "receive",
+      data: JSON.stringify({
+        envelope: {
+          sourceNumber: "+15550001111",
+          sourceName: "Alice",
+          timestamp: 1700000000000,
+          dataMessage: {
+            message: "hi",
+            attachments: [],
+            groupInfo: { groupId: "g1", groupName: "Test Group" },
+          },
         },
-      },
+      }),
     });
 
     expect(capturedCtx).toBeTruthy();

@@ -313,28 +313,18 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     },
   });
 
-  return async (event: { event?: string; data?: string } | SignalReceivePayload | null) => {
-    let payload: SignalReceivePayload | null = null;
-    if (event && typeof event === "object" && ("envelope" in event || "exception" in event)) {
-      payload = event;
-    } else if (
-      event &&
-      typeof event === "object" &&
-      "event" in event &&
-      event.event === "receive" &&
-      "data" in event &&
-      typeof event.data === "string"
-    ) {
-      try {
-        payload = JSON.parse(event.data) as SignalReceivePayload;
-      } catch (err) {
-        deps.runtime.error?.(`failed to parse event: ${String(err)}`);
-        return;
-      }
-    } else {
+  return async (event: { event?: string; data?: string }) => {
+    if (event.event !== "receive" || !event.data) {
       return;
     }
 
+    let payload: SignalReceivePayload | null = null;
+    try {
+      payload = JSON.parse(event.data) as SignalReceivePayload;
+    } catch (err) {
+      deps.runtime.error?.(`failed to parse event: ${String(err)}`);
+      return;
+    }
     if (payload?.exception?.message) {
       deps.runtime.error?.(`receive exception: ${payload.exception.message}`);
     }
@@ -342,7 +332,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     if (!envelope) {
       return;
     }
-
     if (envelope.syncMessage) {
       return;
     }
@@ -351,7 +340,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     if (!sender) {
       return;
     }
-
     if (deps.account && sender.kind === "phone") {
       if (sender.e164 === normalizeE164(deps.account)) {
         return;
