@@ -47,9 +47,40 @@ export async function cleanupResumeProcesses(
   }
 
   try {
-    await runExec("pkill", ["-f", pattern]);
+    // Use wide output to reduce false negatives from argv truncation.
+    const { stdout } = await runExec("ps", ["-axww", "-o", "pid=,ppid=,command="]);
+    const patternRegex = new RegExp(pattern);
+    const toKill: number[] = [];
+
+    for (const line of stdout.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed) {
+        continue;
+      }
+      const match = /^(\d+)\s+(\d+)\s+(.*)$/.exec(trimmed);
+      if (!match) {
+        continue;
+      }
+      const pid = Number(match[1]);
+      const ppid = Number(match[2]);
+      const cmd = match[3] ?? "";
+      if (!Number.isFinite(pid)) {
+        continue;
+      }
+      if (ppid !== process.pid) {
+        continue;
+      }
+      if (!patternRegex.test(cmd)) {
+        continue;
+      }
+      toKill.push(pid);
+    }
+
+    if (toKill.length > 0) {
+      await runExec("kill", ["-9", ...toKill.map((pid) => String(pid))]);
+    }
   } catch {
-    // ignore missing pkill or no matches
+    // ignore errors - best effort cleanup
   }
 }
 
@@ -115,21 +146,26 @@ export async function cleanupSuspendedCliProcesses(
   }
 
   try {
-    const { stdout } = await runExec("ps", ["-ax", "-o", "pid=,stat=,command="]);
+    // Use wide output to reduce false negatives from argv truncation.
+    const { stdout } = await runExec("ps", ["-axww", "-o", "pid=,ppid=,stat=,command="]);
     const suspended: number[] = [];
     for (const line of stdout.split("\n")) {
       const trimmed = line.trim();
       if (!trimmed) {
         continue;
       }
-      const match = /^(\d+)\s+(\S+)\s+(.*)$/.exec(trimmed);
+      const match = /^(\d+)\s+(\d+)\s+(\S+)\s+(.*)$/.exec(trimmed);
       if (!match) {
         continue;
       }
       const pid = Number(match[1]);
-      const stat = match[2] ?? "";
-      const command = match[3] ?? "";
+      const ppid = Number(match[2]);
+      const stat = match[3] ?? "";
+      const command = match[4] ?? "";
       if (!Number.isFinite(pid)) {
+        continue;
+      }
+      if (ppid !== process.pid) {
         continue;
       }
       if (!stat.includes("T")) {
