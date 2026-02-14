@@ -3,6 +3,7 @@ import { type AddressInfo, createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
+import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 
 type HarnessState = {
   testPort: number;
@@ -22,23 +23,23 @@ const state: HarnessState = {
   prevGatewayPort: undefined,
 };
 
-export function getBrowserControlServerTestState() {
+export function getBrowserControlServerTestState(): HarnessState {
   return state;
 }
 
-export function getBrowserControlServerBaseUrl() {
+export function getBrowserControlServerBaseUrl(): string {
   return `http://127.0.0.1:${state.testPort}`;
 }
 
-export function setBrowserControlServerCreateTargetId(targetId: string | null) {
+export function setBrowserControlServerCreateTargetId(targetId: string | null): void {
   state.createTargetId = targetId;
 }
 
-export function setBrowserControlServerAttachOnly(attachOnly: boolean) {
+export function setBrowserControlServerAttachOnly(attachOnly: boolean): void {
   state.cfgAttachOnly = attachOnly;
 }
 
-export function setBrowserControlServerReachable(reachable: boolean) {
+export function setBrowserControlServerReachable(reachable: boolean): void {
   state.reachable = reachable;
 }
 
@@ -51,8 +52,8 @@ const cdpMocks = vi.hoisted(() => ({
   })),
 }));
 
-export function getCdpMocks() {
-  return cdpMocks;
+export function getCdpMocks(): { createTargetViaCdp: MockFn; snapshotAria: MockFn } {
+  return cdpMocks as unknown as { createTargetViaCdp: MockFn; snapshotAria: MockFn };
 }
 
 const pwMocks = vi.hoisted(() => ({
@@ -97,8 +98,8 @@ const pwMocks = vi.hoisted(() => ({
   waitForViaPlaywright: vi.fn(async () => {}),
 }));
 
-export function getPwMocks() {
-  return pwMocks;
+export function getPwMocks(): Record<string, MockFn> {
+  return pwMocks as unknown as Record<string, MockFn>;
 }
 
 const chromeUserDataDir = vi.hoisted(() => ({ dir: "/tmp/openclaw" }));

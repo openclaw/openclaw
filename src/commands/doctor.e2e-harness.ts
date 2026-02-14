@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, vi } from "vitest";
+import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 
 let originalIsTTY: boolean | undefined;
 let originalStateDir: string | undefined;
@@ -19,40 +20,40 @@ function setStdinTty(value: boolean | undefined) {
   }
 }
 
-export const readConfigFileSnapshot: ReturnType<typeof vi.fn> = vi.fn();
-export const confirm: ReturnType<typeof vi.fn> = vi.fn().mockResolvedValue(true);
-export const select: ReturnType<typeof vi.fn> = vi.fn().mockResolvedValue("node");
-export const note: ReturnType<typeof vi.fn> = vi.fn();
-export const writeConfigFile: ReturnType<typeof vi.fn> = vi.fn().mockResolvedValue(undefined);
-export const resolveOpenClawPackageRoot: ReturnType<typeof vi.fn> = vi.fn().mockResolvedValue(null);
-export const runGatewayUpdate: ReturnType<typeof vi.fn> = vi.fn().mockResolvedValue({
+export const readConfigFileSnapshot = vi.fn() as unknown as MockFn;
+export const confirm = vi.fn().mockResolvedValue(true) as unknown as MockFn;
+export const select = vi.fn().mockResolvedValue("node") as unknown as MockFn;
+export const note = vi.fn() as unknown as MockFn;
+export const writeConfigFile = vi.fn().mockResolvedValue(undefined) as unknown as MockFn;
+export const resolveOpenClawPackageRoot = vi.fn().mockResolvedValue(null) as unknown as MockFn;
+export const runGatewayUpdate = vi.fn().mockResolvedValue({
   status: "skipped",
   mode: "unknown",
   steps: [],
   durationMs: 0,
-});
-export const migrateLegacyConfig: ReturnType<typeof vi.fn> = vi.fn((raw: unknown) => ({
+}) as unknown as MockFn;
+export const migrateLegacyConfig = vi.fn((raw: unknown) => ({
   config: raw as Record<string, unknown>,
   changes: ["Moved routing.allowFrom → channels.whatsapp.allowFrom."],
-}));
+})) as unknown as MockFn;
 
-export const runExec: ReturnType<typeof vi.fn> = vi.fn().mockResolvedValue({
+export const runExec = vi.fn().mockResolvedValue({
   stdout: "",
   stderr: "",
-});
-export const runCommandWithTimeout: ReturnType<typeof vi.fn> = vi.fn().mockResolvedValue({
+}) as unknown as MockFn;
+export const runCommandWithTimeout = vi.fn().mockResolvedValue({
   stdout: "",
   stderr: "",
   code: 0,
   signal: null,
   killed: false,
-});
+}) as unknown as MockFn;
 
-export const ensureAuthProfileStore: ReturnType<typeof vi.fn> = vi
+export const ensureAuthProfileStore = vi
   .fn()
-  .mockReturnValue({ version: 1, profiles: {} });
+  .mockReturnValue({ version: 1, profiles: {} }) as unknown as MockFn;
 
-export const legacyReadConfigFileSnapshot: ReturnType<typeof vi.fn> = vi.fn().mockResolvedValue({
+export const legacyReadConfigFileSnapshot = vi.fn().mockResolvedValue({
   path: "/tmp/openclaw.json",
   exists: false,
   raw: null,
@@ -61,30 +62,28 @@ export const legacyReadConfigFileSnapshot: ReturnType<typeof vi.fn> = vi.fn().mo
   config: {},
   issues: [],
   legacyIssues: [],
-});
-export const createConfigIO: ReturnType<typeof vi.fn> = vi.fn(() => ({
+}) as unknown as MockFn;
+export const createConfigIO = vi.fn(() => ({
   readConfigFileSnapshot: legacyReadConfigFileSnapshot,
-}));
+})) as unknown as MockFn;
 
-export const findLegacyGatewayServices: ReturnType<typeof vi.fn> = vi.fn().mockResolvedValue([]);
-export const uninstallLegacyGatewayServices: ReturnType<typeof vi.fn> = vi
+export const findLegacyGatewayServices = vi.fn().mockResolvedValue([]) as unknown as MockFn;
+export const uninstallLegacyGatewayServices = vi.fn().mockResolvedValue([]) as unknown as MockFn;
+export const findExtraGatewayServices = vi.fn().mockResolvedValue([]) as unknown as MockFn;
+export const renderGatewayServiceCleanupHints = vi
   .fn()
-  .mockResolvedValue([]);
-export const findExtraGatewayServices: ReturnType<typeof vi.fn> = vi.fn().mockResolvedValue([]);
-export const renderGatewayServiceCleanupHints: ReturnType<typeof vi.fn> = vi
-  .fn()
-  .mockReturnValue(["cleanup"]);
-export const resolveGatewayProgramArguments: ReturnType<typeof vi.fn> = vi.fn().mockResolvedValue({
+  .mockReturnValue(["cleanup"]) as unknown as MockFn;
+export const resolveGatewayProgramArguments = vi.fn().mockResolvedValue({
   programArguments: ["node", "cli", "gateway", "--port", "18789"],
-});
-export const serviceInstall: ReturnType<typeof vi.fn> = vi.fn().mockResolvedValue(undefined);
-export const serviceIsLoaded: ReturnType<typeof vi.fn> = vi.fn().mockResolvedValue(false);
-export const serviceStop: ReturnType<typeof vi.fn> = vi.fn().mockResolvedValue(undefined);
-export const serviceRestart: ReturnType<typeof vi.fn> = vi.fn().mockResolvedValue(undefined);
-export const serviceUninstall: ReturnType<typeof vi.fn> = vi.fn().mockResolvedValue(undefined);
-export const callGateway: ReturnType<typeof vi.fn> = vi
+}) as unknown as MockFn;
+export const serviceInstall = vi.fn().mockResolvedValue(undefined) as unknown as MockFn;
+export const serviceIsLoaded = vi.fn().mockResolvedValue(false) as unknown as MockFn;
+export const serviceStop = vi.fn().mockResolvedValue(undefined) as unknown as MockFn;
+export const serviceRestart = vi.fn().mockResolvedValue(undefined) as unknown as MockFn;
+export const serviceUninstall = vi.fn().mockResolvedValue(undefined) as unknown as MockFn;
+export const callGateway = vi
   .fn()
-  .mockRejectedValue(new Error("gateway closed"));
+  .mockRejectedValue(new Error("gateway closed")) as unknown as MockFn;
 
 vi.mock("@clack/prompts", () => ({
   confirm,
