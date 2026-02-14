@@ -1,37 +1,17 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { checkInboundAccessControl } from "./access-control.js";
+import { beforeEach, describe, expect, it } from "vitest";
+import {
+  sendMessageMock,
+  setupAccessControlTestHarness,
+  upsertPairingRequestMock,
+} from "./access-control.test-harness.js";
 
-const sendMessageMock = vi.fn();
-const readAllowFromStoreMock = vi.fn();
-const upsertPairingRequestMock = vi.fn();
+type CheckInboundAccessControl = typeof import("./access-control.js").checkInboundAccessControl;
+let checkInboundAccessControl: CheckInboundAccessControl;
 
-let config: Record<string, unknown> = {};
+setupAccessControlTestHarness();
 
-vi.mock("../../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../config/config.js")>();
-  return {
-    ...actual,
-    loadConfig: () => config,
-  };
-});
-
-vi.mock("../../pairing/pairing-store.js", () => ({
-  readChannelAllowFromStore: (...args: unknown[]) => readAllowFromStoreMock(...args),
-  upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
-}));
-
-beforeEach(() => {
-  config = {
-    channels: {
-      whatsapp: {
-        dmPolicy: "pairing",
-        allowFrom: [],
-      },
-    },
-  };
-  sendMessageMock.mockReset().mockResolvedValue(undefined);
-  readAllowFromStoreMock.mockReset().mockResolvedValue([]);
-  upsertPairingRequestMock.mockReset().mockResolvedValue({ code: "PAIRCODE", created: true });
+beforeEach(async () => {
+  ({ checkInboundAccessControl } = await import("./access-control.js"));
 });
 
 describe("checkInboundAccessControl", () => {

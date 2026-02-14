@@ -1,37 +1,18 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { checkInboundAccessControl } from "./access-control.js";
+import { beforeEach, describe, expect, it } from "vitest";
+import {
+  sendMessageMock,
+  setAccessControlTestConfig,
+  setupAccessControlTestHarness,
+  upsertPairingRequestMock,
+} from "./access-control.test-harness.js";
 
-const sendMessageMock = vi.fn();
-const readAllowFromStoreMock = vi.fn();
-const upsertPairingRequestMock = vi.fn();
+type CheckInboundAccessControl = typeof import("./access-control.js").checkInboundAccessControl;
+let checkInboundAccessControl: CheckInboundAccessControl;
 
-let config: Record<string, unknown> = {};
+setupAccessControlTestHarness();
 
-vi.mock("../../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../config/config.js")>();
-  return {
-    ...actual,
-    loadConfig: () => config,
-  };
-});
-
-vi.mock("../../pairing/pairing-store.js", () => ({
-  readChannelAllowFromStore: (...args: unknown[]) => readAllowFromStoreMock(...args),
-  upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
-}));
-
-beforeEach(() => {
-  config = {
-    channels: {
-      whatsapp: {
-        dmPolicy: "pairing",
-        allowFrom: [],
-      },
-    },
-  };
-  sendMessageMock.mockReset().mockResolvedValue(undefined);
-  readAllowFromStoreMock.mockReset().mockResolvedValue([]);
-  upsertPairingRequestMock.mockReset().mockResolvedValue({ code: "PAIRCODE", created: true });
+beforeEach(async () => {
+  ({ checkInboundAccessControl } = await import("./access-control.js"));
 });
 
 describe("WhatsApp dmPolicy precedence", () => {
@@ -39,7 +20,7 @@ describe("WhatsApp dmPolicy precedence", () => {
     // Channel-level says "pairing" but the account-level says "allowlist".
     // The account-level override should take precedence, so an unauthorized
     // sender should be blocked silently (no pairing reply).
-    config = {
+    setAccessControlTestConfig({
       channels: {
         whatsapp: {
           dmPolicy: "pairing",
@@ -51,7 +32,7 @@ describe("WhatsApp dmPolicy precedence", () => {
           },
         },
       },
-    };
+    });
 
     const result = await checkInboundAccessControl({
       accountId: "work",
@@ -73,7 +54,7 @@ describe("WhatsApp dmPolicy precedence", () => {
   it("inherits channel-level dmPolicy when account-level dmPolicy is unset", async () => {
     // Account has allowFrom set, but no dmPolicy override. Should inherit the channel default.
     // With dmPolicy=allowlist, unauthorized senders are silently blocked.
-    config = {
+    setAccessControlTestConfig({
       channels: {
         whatsapp: {
           dmPolicy: "allowlist",
@@ -84,7 +65,7 @@ describe("WhatsApp dmPolicy precedence", () => {
           },
         },
       },
-    };
+    });
 
     const result = await checkInboundAccessControl({
       accountId: "work",
