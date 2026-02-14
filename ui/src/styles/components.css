@@ -1215,13 +1215,14 @@
   cursor: pointer;
   border: 1px solid var(--border);
   border-radius: var(--radius-full);
-  padding: 4px 14px;
+  padding: 6px 16px;
   font-size: 12px;
   font-weight: 500;
   color: var(--muted);
   background: var(--secondary);
   transition: all var(--duration-fast) var(--ease-out);
   user-select: none;
+  box-shadow: none;
 }
 
 .log-chip:hover {
@@ -1250,39 +1251,60 @@
   border-color: var(--danger-subtle);
 }
 
-/* Active states — solid color fills */
+/* Active states — outlined with color tint and glow ring */
 .log-chip.active.trace,
 .log-chip.active.debug {
-  background: var(--muted-strong);
-  border-color: var(--muted-strong);
-  color: var(--text-strong);
+  background: rgba(113, 113, 122, 0.12);
+  border-color: var(--muted);
+  color: var(--text);
+  box-shadow: 0 0 0 1px rgba(113, 113, 122, 0.3), 0 0 8px rgba(113, 113, 122, 0.15);
 }
 
 .log-chip.active.info {
-  background: var(--info);
+  background: rgba(59, 130, 246, 0.12);
   border-color: var(--info);
-  color: #fff;
+  color: var(--info);
+  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.3), 0 0 8px rgba(59, 130, 246, 0.15);
 }
 
 .log-chip.active.warn {
-  background: var(--warn);
+  background: rgba(245, 158, 11, 0.12);
   border-color: var(--warn);
-  color: #1a1a1a;
+  color: var(--warn);
+  box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.3), 0 0 8px rgba(245, 158, 11, 0.15);
 }
 
 .log-chip.active.error,
 .log-chip.active.fatal {
-  background: var(--danger);
+  background: rgba(239, 68, 68, 0.12);
   border-color: var(--danger);
-  color: #fff;
+  color: var(--danger);
+  box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.3), 0 0 8px rgba(239, 68, 68, 0.15);
 }
 
 /* Light mode active adjustments */
 :root[data-theme="light"] .log-chip.active.trace,
 :root[data-theme="light"] .log-chip.active.debug {
-  background: var(--muted);
+  background: rgba(113, 113, 122, 0.1);
   border-color: var(--muted);
-  color: #fff;
+  color: var(--muted-strong);
+  box-shadow: 0 0 0 1px rgba(113, 113, 122, 0.25);
+}
+
+:root[data-theme="light"] .log-chip.active.info {
+  background: rgba(59, 130, 246, 0.1);
+  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.25);
+}
+
+:root[data-theme="light"] .log-chip.active.warn {
+  background: rgba(245, 158, 11, 0.1);
+  box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.25);
+}
+
+:root[data-theme="light"] .log-chip.active.error,
+:root[data-theme="light"] .log-chip.active.fatal {
+  background: rgba(239, 68, 68, 0.1);
+  box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.25);
 }
 
 .log-subsystem {
