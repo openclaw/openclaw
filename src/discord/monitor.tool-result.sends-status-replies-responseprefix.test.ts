@@ -127,7 +127,7 @@ describe("discord tool result dispatch", () => {
       },
       session: { store: "/tmp/openclaw-sessions.json" },
       messages: { responsePrefix: "PFX" },
-      channels: { discord: { dm: { enabled: true, policy: "open" } } },
+      channels: { discord: { dmPolicy: "open", allowFrom: ["*"], dm: { enabled: true } } },
     } as ReturnType<typeof import("../config/config.js").loadConfig>;
 
     const runtimeError = vi.fn();
