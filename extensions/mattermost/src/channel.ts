@@ -169,6 +169,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
     chatTypes: ["direct", "channel", "group", "thread"],
     threads: true,
     media: true,
+    nativeCommands: true,
   },
   streaming: {
     blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },

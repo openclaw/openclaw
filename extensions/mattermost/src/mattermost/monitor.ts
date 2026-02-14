@@ -26,6 +26,7 @@ import {
   fetchMattermostChannel,
   fetchMattermostMe,
   fetchMattermostUser,
+  fetchMattermostUserTeams,
   normalizeMattermostBaseUrl,
   sendMattermostTyping,
   type MattermostChannel,
@@ -45,6 +46,19 @@ import {
 } from "./monitor-websocket.js";
 import { runWithReconnect } from "./reconnect.js";
 import { sendMessageMattermost } from "./send.js";
+import {
+  DEFAULT_COMMAND_SPECS,
+  cleanupSlashCommands,
+  isSlashCommandsEnabled,
+  registerSlashCommands,
+  resolveCallbackUrl,
+  resolveSlashCommandConfig,
+} from "./slash-commands.js";
+import {
+  activateSlashCommands,
+  deactivateSlashCommands,
+  getSlashCommandState,
+} from "./slash-state.js";
 
 export type MonitorMattermostOpts = {
   botToken?: string;
@@ -221,6 +235,52 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
   const botUserId = botUser.id;
   const botUsername = botUser.username?.trim() || undefined;
   runtime.log?.(`mattermost connected as ${botUsername ? `@${botUsername}` : botUserId}`);
+
+  // ─── Slash command registration ──────────────────────────────────────────
+  const commandsRaw = account.config.commands as
+    | Partial<import("./slash-commands.js").MattermostSlashCommandConfig>
+    | undefined;
+  const slashConfig = resolveSlashCommandConfig(commandsRaw);
+  const slashEnabled = isSlashCommandsEnabled(slashConfig);
+
+  if (slashEnabled) {
+    try {
+      const teams = await fetchMattermostUserTeams(client, botUserId);
+      const gatewayPort = cfg.gateway?.port ?? 3015;
+      const callbackUrl = resolveCallbackUrl({
+        config: slashConfig,
+        gatewayPort,
+        gatewayHost: cfg.gateway?.customBindHost ?? undefined,
+      });
+
+      const allRegistered: import("./slash-commands.js").MattermostRegisteredCommand[] = [];
+
+      for (const team of teams) {
+        const registered = await registerSlashCommands({
+          client,
+          teamId: team.id,
+          callbackUrl,
+          commands: DEFAULT_COMMAND_SPECS,
+          log: (msg) => runtime.log?.(msg),
+        });
+        allRegistered.push(...registered);
+      }
+
+      activateSlashCommands({
+        account,
+        commandTokens: allRegistered.map((cmd) => cmd.token).filter(Boolean),
+        registeredCommands: allRegistered,
+        api: { cfg, runtime },
+        log: (msg) => runtime.log?.(msg),
+      });
+
+      runtime.log?.(
+        `mattermost: slash commands registered (${allRegistered.length} commands across ${teams.length} teams, callback=${callbackUrl})`,
+      );
+    } catch (err) {
+      runtime.error?.(`mattermost: failed to register slash commands: ${String(err)}`);
+    }
+  }
 
   const channelCache = new Map<string, { value: MattermostChannel | null; expiresAt: number }>();
   const userCache = new Map<string, { value: MattermostUser | null; expiresAt: number }>();
@@ -1015,6 +1075,20 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       await handleReactionEvent(payload);
     },
   });
+
+  // Clean up slash commands on shutdown
+  if (slashEnabled) {
+    const onAbortCleanup = () => {
+      void cleanupSlashCommands({
+        client,
+        commands: getSlashCommandState().registeredCommands,
+        log: (msg) => runtime.log?.(msg),
+      })
+        .then(() => deactivateSlashCommands())
+        .catch((err) => runtime.error?.(`mattermost: slash cleanup failed: ${String(err)}`));
+    };
+    opts.abortSignal?.addEventListener("abort", onAbortCleanup, { once: true });
+  }
 
   await runWithReconnect(connectOnce, {
     abortSignal: opts.abortSignal,

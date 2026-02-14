@@ -49,6 +49,17 @@ export type MattermostAccountConfig = {
     /** Enable message reaction actions. Default: true. */
     reactions?: boolean;
   };
+  /** Native slash command configuration. */
+  commands?: {
+    /** Enable native slash commands. "auto" resolves to false (opt-in). */
+    native?: boolean | "auto";
+    /** Also register skill-based commands. */
+    nativeSkills?: boolean | "auto";
+    /** Path for the callback endpoint on the gateway HTTP server. */
+    callbackPath?: string;
+    /** Explicit callback URL (e.g. behind reverse proxy). */
+    callbackUrl?: string;
+  };
 };
 
 export type MattermostConfig = {
