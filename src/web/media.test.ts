@@ -282,7 +282,7 @@ describe("web media loading", () => {
   });
 
   it("falls back to JPEG when PNG alpha cannot fit under cap", async () => {
-    const sizes = [256, 320, 448];
+    const sizes = [224, 256, 320];
     let pngBuffer: Buffer | null = null;
     let smallestPng: Awaited<ReturnType<typeof optimizeImageToPng>> | null = null;
     let jpegOptimized: Awaited<ReturnType<typeof optimizeImageToJpeg>> | null = null;
