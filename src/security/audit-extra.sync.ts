@@ -921,7 +921,7 @@ export function collectSandboxModeFindings(params: {
       isToolAllowedByPolicies("web_search", policies)) ||
     (isWebFetchEnabled(params.cfg) && isToolAllowedByPolicies("web_fetch", policies)) ||
     (isBrowserEnabled(params.cfg) && isToolAllowedByPolicies("browser", policies));
-  const hasExecTools = isToolAvailable(params.cfg, "exec");
+  const hasExecTools = isToolAllowedByPolicies("exec", policies);
 
   findings.push({
     checkId: "sandbox.mode_not_all",
