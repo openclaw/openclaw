@@ -6,6 +6,8 @@ export const registryState: { registry: PluginRegistry } = {
   registry: {
     plugins: [],
     tools: [],
+    hooks: [],
+    typedHooks: [],
     channels: [],
     providers: [],
     gatewayHandlers: {},
@@ -13,6 +15,7 @@ export const registryState: { registry: PluginRegistry } = {
     httpRoutes: [],
     cliRegistrars: [],
     services: [],
+    commands: [],
     diagnostics: [],
   } as PluginRegistry,
 };
