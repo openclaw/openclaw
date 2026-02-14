@@ -789,6 +789,26 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("reads only requested line ranges without loading the whole file", async () => {
+    const readFileSpy = vi.spyOn(fs, "readFile");
+    const text = Array.from({ length: 50 }, (_, index) => `line-${index + 1}`).join("\n");
+    await fs.writeFile(path.join(workspaceDir, "window.md"), text, "utf-8");
+
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId });
+    const manager = await QmdMemoryManager.create({ cfg, agentId, resolved });
+    expect(manager).toBeTruthy();
+    if (!manager) {
+      throw new Error("manager missing");
+    }
+
+    const result = await manager.readFile({ relPath: "window.md", from: 10, lines: 3 });
+    expect(result.text).toBe("line-10\nline-11\nline-12");
+    expect(readFileSpy).not.toHaveBeenCalled();
+
+    await manager.close();
+    readFileSpy.mockRestore();
+  });
+
   it("throws when sqlite index is busy", async () => {
     const resolved = resolveMemoryBackendConfig({ cfg, agentId });
     const manager = await QmdMemoryManager.create({ cfg, agentId, resolved });

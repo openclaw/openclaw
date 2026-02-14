@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import readline from "node:readline";
 import type { OpenClawConfig } from "../config/config.js";
 import type {
   MemoryEmbeddingProbeResult,
@@ -353,6 +354,10 @@ export class QmdMemoryManager implements MemorySearchManager {
     if (stat.isSymbolicLink() || !stat.isFile()) {
       throw new Error("path required");
     }
+    if (params.from !== undefined || params.lines !== undefined) {
+      const text = await this.readPartialText(absPath, params.from, params.lines);
+      return { text, path: relPath };
+    }
     const content = await fs.readFile(absPath, "utf-8");
     if (!params.from && !params.lines) {
       return { text: content, path: relPath };
@@ -607,6 +612,35 @@ export class QmdMemoryManager implements MemorySearchManager {
         }
       });
     });
+  }
+
+  private async readPartialText(absPath: string, from?: number, lines?: number): Promise<string> {
+    const start = Math.max(1, from ?? 1);
+    const count = Math.max(1, lines ?? Number.POSITIVE_INFINITY);
+    const handle = await fs.open(absPath);
+    const stream = handle.createReadStream({ encoding: "utf-8" });
+    const rl = readline.createInterface({
+      input: stream,
+      crlfDelay: Infinity,
+    });
+    const selected: string[] = [];
+    let index = 0;
+    try {
+      for await (const line of rl) {
+        index += 1;
+        if (index < start) {
+          continue;
+        }
+        if (selected.length >= count) {
+          break;
+        }
+        selected.push(line);
+      }
+    } finally {
+      rl.close();
+      await handle.close();
+    }
+    return selected.slice(0, count).join("\n");
   }
 
   private ensureDb(): SqliteDatabase {
