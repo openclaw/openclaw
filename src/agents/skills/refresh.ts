@@ -1,4 +1,5 @@
 import chokidar, { type FSWatcher } from "chokidar";
+import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -59,8 +60,10 @@ function resolveWatchPaths(workspaceDir: string, config?: OpenClawConfig): strin
   const paths: string[] = [];
   if (workspaceDir.trim()) {
     paths.push(path.join(workspaceDir, "skills"));
+    paths.push(path.join(workspaceDir, ".agents", "skills"));
   }
   paths.push(path.join(CONFIG_DIR, "skills"));
+  paths.push(path.join(os.homedir(), ".agents", "skills"));
   const extraDirsRaw = config?.skills?.load?.extraDirs ?? [];
   const extraDirs = extraDirsRaw
     .map((d) => (typeof d === "string" ? d.trim() : ""))
@@ -72,17 +75,24 @@ function resolveWatchPaths(workspaceDir: string, config?: OpenClawConfig): strin
   return paths;
 }
 
+function toWatchGlobRoot(raw: string): string {
+  // Chokidar treats globs as POSIX-ish patterns. Normalize Windows separators
+  // so `*` works consistently across platforms.
+  return raw.replaceAll("\\", "/").replace(/\/+$/, "");
+}
+
 function resolveWatchTargets(workspaceDir: string, config?: OpenClawConfig): string[] {
   // Skills are defined by SKILL.md; watch only those files to avoid traversing
   // or watching unrelated large trees (e.g. datasets) that can exhaust FDs.
   const targets = new Set<string>();
   for (const root of resolveWatchPaths(workspaceDir, config)) {
+    const globRoot = toWatchGlobRoot(root);
     // Some configs point directly at a skill folder.
-    targets.add(path.join(root, "SKILL.md"));
+    targets.add(`${globRoot}/SKILL.md`);
     // Standard layout: <skillsRoot>/<skillName>/SKILL.md
-    targets.add(path.join(root, "*", "SKILL.md"));
+    targets.add(`${globRoot}/*/SKILL.md`);
   }
-  return Array.from(targets);
+  return Array.from(targets).toSorted();
 }
 
 export function registerSkillsChangeListener(listener: (event: SkillsChangeEvent) => void) {
