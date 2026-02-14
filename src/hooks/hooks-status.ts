@@ -8,7 +8,6 @@ import { loadWorkspaceHookEntries } from "./workspace.js";
 
 export type HookStatusConfigCheck = {
   path: string;
-  value: unknown;
   satisfied: boolean;
 };
 
@@ -124,7 +123,6 @@ function buildHookStatus(
     localPlatform: process.platform,
     remotePlatforms: eligibility?.remote?.platforms,
     isEnvSatisfied: (envName) => Boolean(process.env[envName] || hookConfig?.env?.[envName]),
-    resolveConfigValue: (pathStr) => resolveConfigPath(config, pathStr),
     isConfigSatisfied: (pathStr) => isConfigPathTruthy(config, pathStr),
   });
 
