@@ -82,4 +82,38 @@ describe("isBinaryMediaMime", () => {
       expect(isBinaryMediaMime(mime)).toBe(false);
     },
   );
+
+  // RFC 6839 structured syntax suffixes should be treated as text.
+  it.each([
+    "application/vnd.api+json",
+    "application/hal+json",
+    "application/geo+json",
+    "application/problem+json",
+    "application/vnd.github+json",
+    "application/atom+xml",
+    "application/rss+xml",
+    "application/soap+xml",
+    "application/vnd.custom+yaml",
+  ])("returns false for structured syntax suffix type %s", (mime) => {
+    expect(isBinaryMediaMime(mime)).toBe(false);
+  });
+
+  // Handles MIME types with parameters (charset, etc.) via normalization.
+  it.each([
+    "application/json; charset=utf-8",
+    "application/xml; charset=utf-8",
+    "text/plain; charset=iso-8859-1",
+    "image/png; name=photo.png",
+  ])("handles parameterized MIME type %s", (mime) => {
+    // After normalization, parameters are stripped — result should match the base type.
+    const base = mime.split(";")[0].trim();
+    expect(isBinaryMediaMime(mime)).toBe(isBinaryMediaMime(base));
+  });
+
+  // Handles case variations via normalization.
+  it("normalizes mixed-case MIME types", () => {
+    expect(isBinaryMediaMime("Application/JSON")).toBe(false);
+    expect(isBinaryMediaMime("IMAGE/PNG")).toBe(true);
+    expect(isBinaryMediaMime("Application/VND.MS-EXCEL")).toBe(true);
+  });
 });

@@ -338,18 +338,34 @@ const TEXT_APPLICATION_MIMES = new Set([
 
 /** @internal Exported for unit testing only. */
 export function isBinaryMediaMime(mime?: string): boolean {
-  if (!mime) {
+  const normalized = normalizeMimeType(mime);
+  if (!normalized) {
     return false;
   }
-  if (mime.startsWith("image/") || mime.startsWith("audio/") || mime.startsWith("video/")) {
+  if (
+    normalized.startsWith("image/") ||
+    normalized.startsWith("audio/") ||
+    normalized.startsWith("video/")
+  ) {
     return true;
   }
   // Treat application/* as binary unless it is a known text-like type.
   // This prevents ZIP-based formats (xlsx, docx, pptx) and other binary
   // payloads from passing the looksLikeUtf8Text heuristic and being
   // inlined as garbled text in the message body.
-  if (mime.startsWith("application/") && !TEXT_APPLICATION_MIMES.has(mime)) {
-    return true;
+  if (normalized.startsWith("application/")) {
+    // RFC 6839 structured syntax suffixes: +json, +xml, +yaml are text-based
+    // regardless of the specific subtype (e.g. application/vnd.api+json).
+    if (
+      normalized.endsWith("+json") ||
+      normalized.endsWith("+xml") ||
+      normalized.endsWith("+yaml")
+    ) {
+      return false;
+    }
+    if (!TEXT_APPLICATION_MIMES.has(normalized)) {
+      return true;
+    }
   }
   return false;
 }
