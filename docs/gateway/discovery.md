@@ -68,6 +68,12 @@ Troubleshooting and beacon details: [Bonjour](/gateway/bonjour).
   - `cliPath=<path>` (optional; absolute path to a runnable `openclaw` entrypoint or binary)
   - `tailnetDns=<magicdns>` (optional hint; auto-detected when Tailscale is available)
 
+Security notes:
+
+- Bonjour/mDNS TXT records are **unauthenticated**. Clients must treat TXT values as UX hints only.
+- Routing (host/port) should prefer the **resolved service endpoint** (SRV + A/AAAA) over TXT-provided `lanHost`, `tailnetDns`, or `gatewayPort`.
+- TLS pinning must never allow an advertised `gatewayTlsSha256` to override a previously stored pin. For first-time connections, require explicit user intent (TOFU or other out-of-band verification).
+
 Disable/override:
 
 - `OPENCLAW_DISABLE_BONJOUR=1` disables advertising.
