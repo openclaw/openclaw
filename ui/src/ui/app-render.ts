@@ -234,6 +234,7 @@ export function renderApp(state: AppViewState) {
         ${
           state.tab === "channels"
             ? renderChannels({
+                mode: state.mode,
                 connected: state.connected,
                 loading: state.channelsLoading,
                 snapshot: state.channelsSnapshot,

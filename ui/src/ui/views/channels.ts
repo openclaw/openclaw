@@ -27,6 +27,7 @@ import { renderTelegramCard } from "./channels.telegram.ts";
 import { renderWhatsAppCard } from "./channels.whatsapp.ts";
 
 export function renderChannels(props: ChannelsProps) {
+  const isBasic = props.mode === "basic";
   const channels = props.snapshot?.channels as Record<string, unknown> | null;
   const whatsapp = (channels?.whatsapp ?? undefined) as WhatsAppStatus | undefined;
   const telegram = (channels?.telegram ?? undefined) as TelegramStatus | undefined;
@@ -67,25 +68,31 @@ export function renderChannels(props: ChannelsProps) {
       )}
     </section>
 
-    <section class="card" style="margin-top: 18px;">
-      <div class="row" style="justify-content: space-between;">
-        <div>
-          <div class="card-title">Channel health</div>
-          <div class="card-sub">Channel status snapshots from the gateway.</div>
-        </div>
-        <div class="muted">${props.lastSuccessAt ? formatRelativeTimestamp(props.lastSuccessAt) : "n/a"}</div>
-      </div>
-      ${
-        props.lastError
-          ? html`<div class="callout danger" style="margin-top: 12px;">
-            ${props.lastError}
-          </div>`
-          : nothing
-      }
-      <pre class="code-block" style="margin-top: 12px;">
+    ${
+      !isBasic
+        ? html`
+            <section class="card" style="margin-top: 18px;">
+              <div class="row" style="justify-content: space-between;">
+                <div>
+                  <div class="card-title">Channel health</div>
+                  <div class="card-sub">Channel status snapshots from the gateway.</div>
+                </div>
+                <div class="muted">${props.lastSuccessAt ? formatRelativeTimestamp(props.lastSuccessAt) : "n/a"}</div>
+              </div>
+              ${
+                props.lastError
+                  ? html`<div class="callout danger" style="margin-top: 12px;">
+                    ${props.lastError}
+                  </div>`
+                  : nothing
+              }
+              <pre class="code-block" style="margin-top: 12px;">
 ${props.snapshot ? JSON.stringify(props.snapshot, null, 2) : "No snapshot yet."}
-      </pre>
-    </section>
+              </pre>
+            </section>
+          `
+        : nothing
+    }
   `;
 }
 
