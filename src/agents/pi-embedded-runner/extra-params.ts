@@ -36,14 +36,20 @@ type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
  *
  * Mapping: "5m" → "short", "1h" → "long"
  *
- * Only applies to Anthropic provider (OpenRouter uses openai-completions API
- * with hardcoded cache_control, not the cacheRetention stream option).
+ * Applies to Anthropic provider and Anthropic models accessed through
+ * OpenRouter/opencode (detected by modelId prefix "anthropic/").
  */
 function resolveCacheRetention(
   extraParams: Record<string, unknown> | undefined,
   provider: string,
+  modelId?: string,
 ): CacheRetention | undefined {
-  if (provider !== "anthropic") {
+  // Direct Anthropic provider always applies cacheRetention
+  // OpenRouter/opencode with Anthropic models also needs cacheRetention
+  const isOpenRouterOrOpenCode = provider === "openrouter" || provider === "opencode";
+  const isAnthropicModel = modelId?.startsWith("anthropic/") ?? false;
+
+  if (provider !== "anthropic" && !(isOpenRouterOrOpenCode && isAnthropicModel)) {
     return undefined;
   }
 
@@ -68,6 +74,7 @@ function createStreamFnWithExtraParams(
   baseStreamFn: StreamFn | undefined,
   extraParams: Record<string, unknown> | undefined,
   provider: string,
+  modelId: string,
 ): StreamFn | undefined {
   if (!extraParams || Object.keys(extraParams).length === 0) {
     return undefined;
@@ -80,7 +87,7 @@ function createStreamFnWithExtraParams(
   if (typeof extraParams.maxTokens === "number") {
     streamParams.maxTokens = extraParams.maxTokens;
   }
-  const cacheRetention = resolveCacheRetention(extraParams, provider);
+  const cacheRetention = resolveCacheRetention(extraParams, provider, modelId);
   if (cacheRetention) {
     streamParams.cacheRetention = cacheRetention;
   }
@@ -142,7 +149,7 @@ export function applyExtraParamsToAgent(
         )
       : undefined;
   const merged = Object.assign({}, extraParams, override);
-  const wrappedStreamFn = createStreamFnWithExtraParams(agent.streamFn, merged, provider);
+  const wrappedStreamFn = createStreamFnWithExtraParams(agent.streamFn, merged, provider, modelId);
 
   if (wrappedStreamFn) {
     log.debug(`applying extraParams to agent streamFn for ${provider}/${modelId}`);

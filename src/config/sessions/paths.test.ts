@@ -72,6 +72,32 @@ describe("session path safety", () => {
     expect(resolved).toBe(path.resolve(sessionsDir, "subdir/threaded-session.jsonl"));
   });
 
+  it("accepts absolute sessionFile paths within the sessions dir", () => {
+    const sessionsDir = "/tmp/openclaw/agents/main/sessions";
+    const absolutePath = path.resolve(sessionsDir, "sess-1.jsonl");
+
+    const resolved = resolveSessionFilePath(
+      "sess-1",
+      { sessionFile: absolutePath },
+      { sessionsDir },
+    );
+
+    expect(resolved).toBe(absolutePath);
+  });
+
+  it("accepts absolute sessionFile paths in subdirectories within sessions dir", () => {
+    const sessionsDir = "/tmp/openclaw/agents/main/sessions";
+    const absolutePath = path.resolve(sessionsDir, "subdir", "threaded-session.jsonl");
+
+    const resolved = resolveSessionFilePath(
+      "sess-1",
+      { sessionFile: absolutePath },
+      { sessionsDir },
+    );
+
+    expect(resolved).toBe(absolutePath);
+  });
+
   it("accepts absolute sessionFile paths that resolve within the sessions dir", () => {
     const sessionsDir = "/tmp/openclaw/agents/main/sessions";
 
@@ -99,13 +125,15 @@ describe("session path safety", () => {
   it("rejects absolute sessionFile paths outside the sessions dir", () => {
     const sessionsDir = "/tmp/openclaw/agents/main/sessions";
 
-    expect(() =>
-      resolveSessionFilePath(
-        "sess-1",
-        { sessionFile: "/tmp/openclaw/agents/work/sessions/abc-123.jsonl" },
-        { sessionsDir },
-      ),
-    ).toThrow(/within sessions directory/);
+    for (const outsidePath of [
+      "/etc/passwd",
+      "/tmp/openclaw/agents/other/sessions/sess-1.jsonl",
+      "/tmp/openclaw/agents/work/sessions/abc-123.jsonl",
+    ]) {
+      expect(() =>
+        resolveSessionFilePath("sess-1", { sessionFile: outsidePath }, { sessionsDir }),
+      ).toThrow(/within sessions directory/);
+    }
   });
 
   it("uses agent sessions dir fallback for transcript path", () => {
@@ -128,3 +156,4 @@ describe("session path safety", () => {
     expect(opts).toEqual({ agentId: "ops" });
   });
 });
+
