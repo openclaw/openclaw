@@ -3,4 +3,5 @@
 @import "./chat/grouped.css";
 @import "./chat/tool-cards.css";
 @import "./chat/tool-compact.css"; /* fork: compact rows */
+@import "./chat/fork-overrides.css"; /* fork: tighter spacing */
 @import "./chat/sidebar.css";

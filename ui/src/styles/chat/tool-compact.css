@@ -1,18 +1,14 @@
-/* fork: Compact tool row styles with security-level badges */
+/* fork: Compact tool row styles with security-level badges — NO boxes */
 .tool-row {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 8px;
-  margin-top: 2px;
+  padding: 1px 0;
+  margin: 0;
   font-size: 12px;
-  line-height: 1.4;
-  border-radius: 4px;
-  background: var(--secondary);
-  border: 1px solid transparent;
-  transition:
-    background 120ms ease-out,
-    border-color 120ms ease-out;
+  line-height: 1.3;
+  background: transparent;
+  border: none;
   overflow: hidden;
   white-space: nowrap;
 }
@@ -20,12 +16,11 @@
 .tool-row:first-child {
   margin-top: 0;
 }
-.tool-row:hover {
-  background: var(--bg-hover);
-  border-color: var(--border);
-}
 .tool-row--clickable {
   cursor: pointer;
+}
+.tool-row--clickable:hover {
+  opacity: 0.8;
 }
 
 .tool-row__status {

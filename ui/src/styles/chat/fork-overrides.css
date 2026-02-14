@@ -1,0 +1,44 @@
+/* fork: Tighter spacing and compact layout overrides */
+
+/* Reduce gap between message groups */
+.chat-group {
+  margin-bottom: 8px;
+  gap: 8px;
+}
+
+/* Tighter bubbles */
+.chat-bubble {
+  padding: 6px 10px;
+  border-radius: 8px;
+}
+
+.chat-bubble.has-copy {
+  padding-right: 28px;
+}
+
+/* Tighter gap between messages in a group */
+.chat-group-messages {
+  gap: 1px;
+}
+
+/* Smaller footer */
+.chat-group-footer {
+  margin-top: 2px;
+}
+
+/* Hide avatars — saves 48px horizontal + cleaner look */
+.chat-avatar {
+  display: none;
+}
+
+/* Without avatars, messages can use full width */
+.chat-group-messages {
+  max-width: 100%;
+}
+
+/* System messages: tighter */
+.chat-group.system .chat-bubble,
+.chat-group.other .chat-bubble {
+  padding: 4px 8px;
+  font-size: 12px;
+}
