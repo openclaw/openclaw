@@ -8,7 +8,6 @@ export type Requirements = {
 
 export type RequirementConfigCheck = {
   path: string;
-  value: unknown;
   satisfied: boolean;
 };
 
@@ -84,13 +83,11 @@ export function resolveMissingEnv(params: {
 
 export function buildConfigChecks(params: {
   required: string[];
-  resolveValue: (pathStr: string) => unknown;
   isSatisfied: (pathStr: string) => boolean;
 }): RequirementConfigCheck[] {
   return params.required.map((pathStr) => {
-    const value = params.resolveValue(pathStr);
     const satisfied = params.isSatisfied(pathStr);
-    return { path: pathStr, value, satisfied };
+    return { path: pathStr, satisfied };
   });
 }
 
@@ -103,7 +100,6 @@ export function evaluateRequirements(params: {
   localPlatform: string;
   remotePlatforms?: string[];
   isEnvSatisfied: (envName: string) => boolean;
-  resolveConfigValue: (pathStr: string) => unknown;
   isConfigSatisfied: (pathStr: string) => boolean;
 }): { missing: Requirements; eligible: boolean; configChecks: RequirementConfigCheck[] } {
   const missingBins = resolveMissingBins({
@@ -127,7 +123,6 @@ export function evaluateRequirements(params: {
   });
   const configChecks = buildConfigChecks({
     required: params.required.config,
-    resolveValue: params.resolveConfigValue,
     isSatisfied: params.isConfigSatisfied,
   });
   const missingConfig = configChecks.filter((check) => !check.satisfied).map((check) => check.path);
@@ -162,7 +157,6 @@ export function evaluateRequirementsFromMetadata(params: {
   localPlatform: string;
   remotePlatforms?: string[];
   isEnvSatisfied: (envName: string) => boolean;
-  resolveConfigValue: (pathStr: string) => unknown;
   isConfigSatisfied: (pathStr: string) => boolean;
 }): {
   required: Requirements;
@@ -187,7 +181,6 @@ export function evaluateRequirementsFromMetadata(params: {
     localPlatform: params.localPlatform,
     remotePlatforms: params.remotePlatforms,
     isEnvSatisfied: params.isEnvSatisfied,
-    resolveConfigValue: params.resolveConfigValue,
     isConfigSatisfied: params.isConfigSatisfied,
   });
   return { required, ...result };
