@@ -636,22 +636,34 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
             const sortedShiftPositions = Array.from(mentionResult.offsetShifts.keys()).toSorted(
               (a, b) => a - b,
             );
-            return dataMessage.textStyles.map((style) => {
-              if (typeof style.start !== "number") {
-                return style;
-              }
-              // Calculate cumulative shift up to this style's start position
+            const cumulativeShiftAtOffset = (offset: number): number => {
               let cumulativeShift = 0;
               for (const shiftPos of sortedShiftPositions) {
-                if (shiftPos <= style.start) {
+                if (shiftPos <= offset) {
                   cumulativeShift += mentionResult.offsetShifts.get(shiftPos) ?? 0;
                 } else {
                   break;
                 }
               }
+              return cumulativeShift;
+            };
+            return dataMessage.textStyles.map((style) => {
+              if (typeof style.start !== "number") {
+                return style;
+              }
+              const adjustedStart = style.start + cumulativeShiftAtOffset(style.start);
+              if (typeof style.length !== "number") {
+                return {
+                  ...style,
+                  start: adjustedStart,
+                };
+              }
+              const styleEnd = style.start + style.length;
+              const adjustedEnd = styleEnd + cumulativeShiftAtOffset(styleEnd);
               return {
                 ...style,
-                start: style.start + cumulativeShift,
+                start: adjustedStart,
+                length: Math.max(0, adjustedEnd - adjustedStart),
               };
             });
           })()

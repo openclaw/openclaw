@@ -28,8 +28,8 @@ function clampBounds(start: number, length: number, textLength: number) {
 export interface MentionRenderResult {
   text: string;
   /**
-   * Map from original character offset to cumulative shift caused by mention expansions.
-   * Used to adjust textStyle ranges that reference the original message offsets.
+   * Map from original mention end offset to the shift introduced by mention expansions.
+   * Used to adjust textStyle ranges that reference original message offsets.
    */
   offsetShifts: Map<number, number>;
 }
@@ -71,9 +71,9 @@ export function renderSignalMentions(
 
     normalized = normalized.slice(0, start) + replacement + normalized.slice(end);
 
-    // Track the shift at this position
+    // Track shift at the original mention end so offsets inside the mention are not shifted.
     if (shift !== 0) {
-      offsetShifts.set(start, shift);
+      offsetShifts.set(end, (offsetShifts.get(end) ?? 0) + shift);
     }
   }
 

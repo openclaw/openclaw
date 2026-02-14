@@ -800,6 +800,29 @@ describe("signal createSignalEventHandler inbound contract", () => {
     );
   });
 
+  it("keeps a style span aligned when it starts at a mention placeholder", async () => {
+    const handler = createTestHandler();
+
+    await handler(
+      makeReceiveEvent({
+        message: "\uFFFC check",
+        mentions: [
+          {
+            uuid: "550e8400-e29b-41d4-a716-446655440000",
+            start: 0,
+            length: 1,
+          },
+        ],
+        textStyles: [
+          { style: "BOLD", start: 0, length: 7 }, // entire raw message
+        ],
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    expect(capturedCtx?.BodyForCommands).toBe("**@550e8400-e29b-41d4-a716-446655440000 check**");
+  });
+
   it("adds shared contact metadata to untrusted context and uses contact placeholder", async () => {
     const handler = createTestHandler();
 
