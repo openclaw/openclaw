@@ -12,7 +12,7 @@ import type { OpenClawPluginApi } from "../../../src/plugins/types.js";
 type RunEmbeddedPiAgentFn = (params: Record<string, unknown>) => Promise<unknown>;
 
 async function loadRunEmbeddedPiAgent(): Promise<RunEmbeddedPiAgentFn> {
-  // Source checkout (tests/dev)
+  // Source checkout (tests/dev): direct import from src tree
   try {
     const mod = await import("../../../src/agents/pi-embedded-runner.js");
     // oxlint-disable-next-line typescript/no-explicit-any
@@ -21,15 +21,39 @@ async function loadRunEmbeddedPiAgent(): Promise<RunEmbeddedPiAgentFn> {
       return (mod as any).runEmbeddedPiAgent;
     }
   } catch {
-    // ignore
+    // src/ tree not available — fall through to extensionAPI
   }
 
-  // Bundled install (built)
-  const mod = await import("../../../src/agents/pi-embedded-runner.js");
-  if (typeof mod.runEmbeddedPiAgent !== "function") {
-    throw new Error("Internal error: runEmbeddedPiAgent not available");
+  // Bundled install: src/ does not exist; use extensionAPI which is a
+  // dedicated entry-point that survives the build (dist/extensionAPI.js).
+  // Try the source .ts first (jiti can transpile it), then the built .js.
+  try {
+    const mod = await import("../../../src/extensionAPI.ts");
+    // oxlint-disable-next-line typescript/no-explicit-any
+    if (typeof (mod as any).runEmbeddedPiAgent === "function") {
+      // oxlint-disable-next-line typescript/no-explicit-any
+      return (mod as any).runEmbeddedPiAgent;
+    }
+  } catch {
+    // continue
   }
-  return mod.runEmbeddedPiAgent as RunEmbeddedPiAgentFn;
+
+  // Final fallback: dist/extensionAPI.js (npm global install layout)
+  try {
+    const mod = await import("../../../dist/extensionAPI.js");
+    // oxlint-disable-next-line typescript/no-explicit-any
+    if (typeof (mod as any).runEmbeddedPiAgent === "function") {
+      // oxlint-disable-next-line typescript/no-explicit-any
+      return (mod as any).runEmbeddedPiAgent;
+    }
+  } catch {
+    // exhausted all paths
+  }
+
+  throw new Error(
+    "Internal error: runEmbeddedPiAgent not available. " +
+      "Ensure OpenClaw is installed correctly (src/ or dist/ must contain extensionAPI).",
+  );
 }
 
 function stripCodeFences(s: string): string {

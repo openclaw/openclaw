@@ -136,3 +136,32 @@ describe("llm-task tool (json-only)", () => {
     expect(call.disableTools).toBe(true);
   });
 });
+
+describe("loadRunEmbeddedPiAgent fallback chain (#16182)", () => {
+  it("import paths in source include distinct fallback to extensionAPI", () => {
+    const fs = require("node:fs");
+    const path = require("node:path");
+    const toolSource = fs.readFileSync(path.join(__dirname, "llm-task-tool.ts"), "utf-8");
+
+    // Extract all dynamic import paths
+    const importRegex = /await import\(["']([^"']+)["']\)/g;
+    const imports: string[] = [];
+    let match;
+    while ((match = importRegex.exec(toolSource)) !== null) {
+      imports.push(match[1]!);
+    }
+
+    // Must have at least 3 distinct import paths (source, extensionAPI.ts, dist fallback)
+    expect(imports.length).toBeGreaterThanOrEqual(3);
+
+    // All paths must be unique — no duplicate fallback bug
+    const unique = new Set(imports);
+    expect(unique.size).toBe(imports.length);
+
+    // Must include a dist/ fallback path
+    expect(imports.some((p) => p.includes("dist/"))).toBe(true);
+
+    // Must include extensionAPI as an intermediate fallback
+    expect(imports.some((p) => p.includes("extensionAPI"))).toBe(true);
+  });
+});
