@@ -42,6 +42,44 @@ You can override this behavior:
 - `envelopeTimestamp: "off"` removes absolute timestamps from envelope headers.
 - `envelopeElapsed: "off"` removes elapsed time suffixes (the `+2m` style).
 
+## Inbound metadata timestamps
+
+The `inbound_meta.v1` JSON payload (injected as system context on each message) can include a human-readable `t` field so agents always know the current time:
+
+```json
+{
+  "schema": "openclaw.inbound_meta.v1",
+  "t": "7:13am",
+  "channel": "whatsapp",
+  ...
+}
+```
+
+The format is tiered based on the gap since the last timestamp was sent:
+
+| Gap                                                           | Format                | Example                  |
+| ------------------------------------------------------------- | --------------------- | ------------------------ |
+| ≥ `envelopeInboundTimeDateMs` (default 2hrs) or first message | Full date + time + tz | `Sat 15 Feb 7:13am NZDT` |
+| ≥ `envelopeInboundTimeSkipMs` (default 90s)                   | Time only             | `7:13am`                 |
+| < `envelopeInboundTimeSkipMs`                                 | Omitted               | —                        |
+
+If no timestamp has been sent for `envelopeInboundTimeMaxGapMs` (default 15min), a time-only value is included regardless of the gap.
+
+```json5
+{
+  agents: {
+    defaults: {
+      envelopeInboundTime: "on", // "on" | "off" (default: "on")
+      envelopeInboundTimeSkipMs: 90000, // skip below this gap (default: 90s)
+      envelopeInboundTimeMaxGapMs: 900000, // ensure timestamp after this gap (default: 15min)
+      envelopeInboundTimeDateMs: 7200000, // full date after this gap (default: 2hrs)
+    },
+  },
+}
+```
+
+The timezone is resolved from `agents.defaults.userTimezone` (falls back to host timezone).
+
 ### Examples
 
 **Local (default):**
