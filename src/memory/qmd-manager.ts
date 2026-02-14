@@ -692,9 +692,17 @@ export class QmdMemoryManager implements MemorySearchManager {
     const db = this.ensureDb();
     let row: { collection: string; path: string } | undefined;
     try {
-      row = db
-        .prepare("SELECT collection, path FROM documents WHERE hash LIKE ? AND active = 1 LIMIT 1")
-        .get(`${normalized}%`) as { collection: string; path: string } | undefined;
+      const exact = db
+        .prepare("SELECT collection, path FROM documents WHERE hash = ? AND active = 1 LIMIT 1")
+        .get(normalized) as { collection: string; path: string } | undefined;
+      row = exact;
+      if (!row) {
+        row = db
+          .prepare(
+            "SELECT collection, path FROM documents WHERE hash LIKE ? AND active = 1 LIMIT 1",
+          )
+          .get(`${normalized}%`) as { collection: string; path: string } | undefined;
+      }
     } catch (err) {
       if (this.isSqliteBusyError(err)) {
         log.debug(`qmd index is busy while resolving doc path: ${String(err)}`);
