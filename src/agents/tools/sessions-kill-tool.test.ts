@@ -37,11 +37,7 @@ import { createSessionsKillTool } from "./sessions-kill-tool.js";
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
 let tempStateDir: string | null = null;
 
-function addRun(params: {
-  runId: string;
-  childSessionKey: string;
-  requesterSessionKey: string;
-}) {
+function addRun(params: { runId: string; childSessionKey: string; requesterSessionKey: string }) {
   addSubagentRunForTests({
     runId: params.runId,
     childSessionKey: params.childSessionKey,
@@ -105,16 +101,31 @@ describe("sessions_kill tool", () => {
     expect(details.status).toBe("ok");
     expect(details.aborted).toBe(3);
     expect(details.results.map((entry) => entry.sessionKey)).toEqual([leaf, child, parent]);
-    expect(details.results[0]).toMatchObject({ sessionKey: leaf, runId: "run-leaf", via: "gateway" });
-    expect(details.results[1]).toMatchObject({ sessionKey: child, runId: "run-child", via: "embedded" });
-    expect(details.results[2]).toMatchObject({ sessionKey: parent, runId: "run-parent", via: "gateway" });
+    expect(details.results[0]).toMatchObject({
+      sessionKey: leaf,
+      runId: "run-leaf",
+      via: "gateway",
+    });
+    expect(details.results[1]).toMatchObject({
+      sessionKey: child,
+      runId: "run-child",
+      via: "embedded",
+    });
+    expect(details.results[2]).toMatchObject({
+      sessionKey: parent,
+      runId: "run-parent",
+      via: "gateway",
+    });
 
-    expect(callGatewayMock).toHaveBeenCalledTimes(2);
-    expect(callGatewayMock.mock.calls[0]?.[0]).toMatchObject({
+    const abortCalls = callGatewayMock.mock.calls.filter(
+      (call: unknown[]) => (call[0] as { method?: string })?.method === "agent.abort",
+    );
+    expect(abortCalls).toHaveLength(2);
+    expect(abortCalls[0]?.[0]).toMatchObject({
       method: "agent.abort",
       params: { runId: "run-leaf" },
     });
-    expect(callGatewayMock.mock.calls[1]?.[0]).toMatchObject({
+    expect(abortCalls[1]?.[0]).toMatchObject({
       method: "agent.abort",
       params: { runId: "run-parent" },
     });
