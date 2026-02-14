@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Security: fix Chutes manual OAuth login state validation (thanks @aether-ai-agent). (#16058)
 - macOS: hard-limit unkeyed `openclaw://agent` deep links and ignore `deliver` / `to` / `channel` unless a valid unattended key is provided. Thanks @Cillian-Collins.
 
 ## 2026.2.14
