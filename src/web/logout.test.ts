@@ -13,9 +13,11 @@ const runtime = {
 describe("web logout", () => {
   let fixtureRoot = "";
   let caseId = 0;
+  let logoutWeb: typeof import("./auth-store.js").logoutWeb;
 
   beforeAll(async () => {
     fixtureRoot = await fsPromises.mkdtemp(path.join(os.tmpdir(), "openclaw-test-web-logout-"));
+    ({ logoutWeb } = await import("./auth-store.js"));
   });
 
   afterAll(async () => {
@@ -38,7 +40,6 @@ describe("web logout", () => {
 
   it("deletes cached credentials when present", { timeout: 60_000 }, async () => {
     const authDir = await makeCaseDir();
-    const { logoutWeb } = await import("./session.js");
     fs.writeFileSync(path.join(authDir, "creds.json"), "{}");
     const result = await logoutWeb({ authDir, runtime: runtime as never });
     expect(result).toBe(true);
@@ -47,7 +48,6 @@ describe("web logout", () => {
 
   it("no-ops when nothing to delete", { timeout: 60_000 }, async () => {
     const authDir = await makeCaseDir();
-    const { logoutWeb } = await import("./session.js");
     const result = await logoutWeb({ authDir, runtime: runtime as never });
     expect(result).toBe(false);
     expect(runtime.log).toHaveBeenCalled();
@@ -55,7 +55,6 @@ describe("web logout", () => {
 
   it("keeps shared oauth.json when using legacy auth dir", async () => {
     const credsDir = await makeCaseDir();
-    const { logoutWeb } = await import("./session.js");
     fs.writeFileSync(path.join(credsDir, "creds.json"), "{}");
     fs.writeFileSync(path.join(credsDir, "oauth.json"), '{"token":true}');
     fs.writeFileSync(path.join(credsDir, "session-abc.json"), "{}");
