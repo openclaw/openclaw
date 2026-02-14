@@ -23,7 +23,6 @@ export type SsrFPolicy = {
   hostnameAllowlist?: string[];
 };
 
-const PRIVATE_IPV6_PREFIXES = ["fe80:", "fec0:", "fc", "fd"];
 const BLOCKED_HOSTNAMES = new Set(["localhost", "metadata.google.internal"]);
 
 function normalizeHostname(hostname: string): string {
@@ -84,35 +83,85 @@ function parseIpv4(address: string): number[] | null {
   return numbers;
 }
 
-function parseIpv4FromMappedIpv6(mapped: string): number[] | null {
-  if (mapped.includes(".")) {
-    return parseIpv4(mapped);
+function stripIpv6ZoneId(address: string): string {
+  const index = address.indexOf("%");
+  return index >= 0 ? address.slice(0, index) : address;
+}
+
+function parseIpv6Hextets(address: string): number[] | null {
+  let input = stripIpv6ZoneId(address.trim().toLowerCase());
+  if (!input) {
+    return null;
   }
-  const parts = mapped.split(":").filter(Boolean);
-  if (parts.length === 1) {
-    const value = Number.parseInt(parts[0], 16);
-    if (Number.isNaN(value) || value < 0 || value > 0xffff_ffff) {
+
+  // Handle IPv4-embedded IPv6 like ::ffff:127.0.0.1 by converting the tail to 2 hextets.
+  if (input.includes(".")) {
+    const lastColon = input.lastIndexOf(":");
+    if (lastColon < 0) {
       return null;
     }
-    return [(value >>> 24) & 0xff, (value >>> 16) & 0xff, (value >>> 8) & 0xff, value & 0xff];
+    const ipv4 = parseIpv4(input.slice(lastColon + 1));
+    if (!ipv4) {
+      return null;
+    }
+    const high = (ipv4[0] << 8) + ipv4[1];
+    const low = (ipv4[2] << 8) + ipv4[3];
+    input = `${input.slice(0, lastColon)}:${high.toString(16)}:${low.toString(16)}`;
   }
-  if (parts.length !== 2) {
+
+  const doubleColonParts = input.split("::");
+  if (doubleColonParts.length > 2) {
     return null;
   }
-  const high = Number.parseInt(parts[0], 16);
-  const low = Number.parseInt(parts[1], 16);
-  if (
-    Number.isNaN(high) ||
-    Number.isNaN(low) ||
-    high < 0 ||
-    low < 0 ||
-    high > 0xffff ||
-    low > 0xffff
-  ) {
+
+  const headParts =
+    doubleColonParts[0]?.length > 0 ? doubleColonParts[0].split(":").filter(Boolean) : [];
+  const tailParts =
+    doubleColonParts.length === 2 && doubleColonParts[1]?.length > 0
+      ? doubleColonParts[1].split(":").filter(Boolean)
+      : [];
+
+  const missingParts = 8 - headParts.length - tailParts.length;
+  if (missingParts < 0) {
     return null;
   }
-  const value = (high << 16) + low;
-  return [(value >>> 24) & 0xff, (value >>> 16) & 0xff, (value >>> 8) & 0xff, value & 0xff];
+
+  const fullParts =
+    doubleColonParts.length === 1
+      ? input.split(":")
+      : [...headParts, ...Array.from({ length: missingParts }, () => "0"), ...tailParts];
+
+  if (fullParts.length !== 8) {
+    return null;
+  }
+
+  const hextets: number[] = [];
+  for (const part of fullParts) {
+    if (!part) {
+      return null;
+    }
+    const value = Number.parseInt(part, 16);
+    if (Number.isNaN(value) || value < 0 || value > 0xffff) {
+      return null;
+    }
+    hextets.push(value);
+  }
+  return hextets;
+}
+
+function extractIpv4FromEmbeddedIpv6(hextets: number[]): number[] | null {
+  // IPv4-mapped: ::ffff:a.b.c.d (and full-form variants)
+  // IPv4-compatible: ::a.b.c.d (deprecated, but still needs private-network blocking)
+  const zeroPrefix = hextets[0] === 0 && hextets[1] === 0 && hextets[2] === 0 && hextets[3] === 0;
+  if (!zeroPrefix || hextets[4] !== 0) {
+    return null;
+  }
+  if (hextets[5] !== 0xffff && hextets[5] !== 0) {
+    return null;
+  }
+  const high = hextets[6];
+  const low = hextets[7];
+  return [(high >>> 8) & 0xff, high & 0xff, (low >>> 8) & 0xff, low & 0xff];
 }
 
 function isPrivateIpv4(parts: number[]): boolean {
@@ -150,19 +199,54 @@ export function isPrivateIpAddress(address: string): boolean {
     return false;
   }
 
-  if (normalized.startsWith("::ffff:")) {
-    const mapped = normalized.slice("::ffff:".length);
-    const ipv4 = parseIpv4FromMappedIpv6(mapped);
-    if (ipv4) {
-      return isPrivateIpv4(ipv4);
-    }
-  }
-
   if (normalized.includes(":")) {
-    if (normalized === "::" || normalized === "::1") {
+    const hextets = parseIpv6Hextets(normalized);
+    if (!hextets) {
+      return false;
+    }
+
+    const isUnspecified =
+      hextets[0] === 0 &&
+      hextets[1] === 0 &&
+      hextets[2] === 0 &&
+      hextets[3] === 0 &&
+      hextets[4] === 0 &&
+      hextets[5] === 0 &&
+      hextets[6] === 0 &&
+      hextets[7] === 0;
+    const isLoopback =
+      hextets[0] === 0 &&
+      hextets[1] === 0 &&
+      hextets[2] === 0 &&
+      hextets[3] === 0 &&
+      hextets[4] === 0 &&
+      hextets[5] === 0 &&
+      hextets[6] === 0 &&
+      hextets[7] === 1;
+    if (isUnspecified || isLoopback) {
       return true;
     }
-    return PRIVATE_IPV6_PREFIXES.some((prefix) => normalized.startsWith(prefix));
+
+    const embeddedIpv4 = extractIpv4FromEmbeddedIpv6(hextets);
+    if (embeddedIpv4) {
+      return isPrivateIpv4(embeddedIpv4);
+    }
+
+    // IPv6 private/internal ranges
+    // - link-local: fe80::/10
+    // - site-local (deprecated, but internal): fec0::/10
+    // - unique local: fc00::/7
+    const first = hextets[0];
+    if ((first & 0xffc0) === 0xfe80) {
+      return true;
+    }
+    if ((first & 0xffc0) === 0xfec0) {
+      return true;
+    }
+    if ((first & 0xfe00) === 0xfc00) {
+      return true;
+    }
+    return false;
   }
 
   const ipv4 = parseIpv4(normalized);
