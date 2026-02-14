@@ -1,21 +1,21 @@
-import { vi } from "vitest";
+import { vi, type Mock } from "vitest";
 
-export const messageCommand = vi.fn();
-export const statusCommand = vi.fn();
-export const configureCommand = vi.fn();
-export const configureCommandWithSections = vi.fn();
-export const setupCommand = vi.fn();
-export const onboardCommand = vi.fn();
-export const callGateway = vi.fn();
-export const runChannelLogin = vi.fn();
-export const runChannelLogout = vi.fn();
-export const runTui = vi.fn();
+export const messageCommand: Mock = vi.fn();
+export const statusCommand: Mock = vi.fn();
+export const configureCommand: Mock = vi.fn();
+export const configureCommandWithSections: Mock = vi.fn();
+export const setupCommand: Mock = vi.fn();
+export const onboardCommand: Mock = vi.fn();
+export const callGateway: Mock = vi.fn();
+export const runChannelLogin: Mock = vi.fn();
+export const runChannelLogout: Mock = vi.fn();
+export const runTui: Mock = vi.fn();
 
-export const loadAndMaybeMigrateDoctorConfig = vi.fn();
-export const ensureConfigReady = vi.fn();
-export const ensurePluginRegistryLoaded = vi.fn();
+export const loadAndMaybeMigrateDoctorConfig: Mock = vi.fn();
+export const ensureConfigReady: Mock = vi.fn();
+export const ensurePluginRegistryLoaded: Mock = vi.fn();
 
-export const runtime = {
+export const runtime: { log: Mock; error: Mock; exit: Mock<() => never> } = {
   log: vi.fn(),
   error: vi.fn(),
   exit: vi.fn(() => {

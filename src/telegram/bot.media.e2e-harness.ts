@@ -1,15 +1,15 @@
-import { beforeEach, vi } from "vitest";
+import { beforeEach, vi, type Mock } from "vitest";
 import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
 
-export const useSpy = vi.fn();
-export const middlewareUseSpy = vi.fn();
-export const onSpy = vi.fn();
-export const stopSpy = vi.fn();
-export const sendChatActionSpy = vi.fn();
+export const useSpy: Mock = vi.fn();
+export const middlewareUseSpy: Mock = vi.fn();
+export const onSpy: Mock = vi.fn();
+export const stopSpy: Mock = vi.fn();
+export const sendChatActionSpy: Mock = vi.fn();
 
 type ApiStub = {
   config: { use: (arg: unknown) => void };
-  sendChatAction: typeof sendChatActionSpy;
+  sendChatAction: Mock;
   setMyCommands: (commands: Array<{ command: string; description: string }>) => Promise<void>;
 };
 
