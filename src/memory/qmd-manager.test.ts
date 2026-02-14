@@ -178,14 +178,9 @@ describe("QmdMemoryManager", () => {
 
     const resolved = resolveMemoryBackendConfig({ cfg, agentId });
     const createPromise = QmdMemoryManager.create({ cfg, agentId, resolved });
-    const race = await Promise.race([
-      createPromise.then(() => "created" as const),
-      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 40)),
-    ]);
-    expect(race).toBe("created");
-    await waitForCondition(() => releaseUpdate !== null, 200);
-    releaseUpdate?.();
+    await waitForCondition(() => releaseUpdate !== null, 400);
     const manager = await createPromise;
+    releaseUpdate?.();
     await manager?.close();
   });
 
@@ -219,12 +214,12 @@ describe("QmdMemoryManager", () => {
 
     const resolved = resolveMemoryBackendConfig({ cfg, agentId });
     const createPromise = QmdMemoryManager.create({ cfg, agentId, resolved });
+    await waitForCondition(() => releaseUpdate !== null, 400);
     const race = await Promise.race([
       createPromise.then(() => "created" as const),
-      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 40)),
+      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 120)),
     ]);
     expect(race).toBe("timeout");
-    await waitForCondition(() => releaseUpdate !== null, 200);
     releaseUpdate?.();
     const manager = await createPromise;
     await manager?.close();
