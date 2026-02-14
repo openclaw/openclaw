@@ -5,9 +5,9 @@
 
 const SECRET_PATTERNS: Array<{ name: string; pattern: RegExp }> = [
   // Provider-specific API keys
-  { name: "ANTHROPIC_API_KEY", pattern: /sk-ant-[a-zA-Z0-9_-]{20,}/gi },
   { name: "OPENAI_PROJECT_KEY", pattern: /sk-proj-[a-zA-Z0-9_-]{20,}/gi },
   { name: "OPENAI_API_KEY", pattern: /sk-[a-zA-Z0-9]{20,}/gi },
+  { name: "ANTHROPIC_API_KEY", pattern: /sk-ant-[a-zA-Z0-9_-]{20,}/gi },
   { name: "AWS_ACCESS_KEY", pattern: /AKIA[0-9A-Z]{16}/gi },
   { name: "GITHUB_TOKEN", pattern: /gh[pousr]_[A-Za-z0-9_]{36,}/gi },
   { name: "GITHUB_FINE_GRAINED", pattern: /github_pat_[A-Za-z0-9_]{22,}/gi },
