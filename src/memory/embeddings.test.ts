@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as authModule from "../agents/model-auth.js";
 import { DEFAULT_GEMINI_EMBEDDING_MODEL } from "./embeddings-gemini.js";
-import { createEmbeddingProvider } from "./embeddings.js";
+import { createEmbeddingProvider, DEFAULT_LOCAL_MODEL } from "./embeddings.js";
 
 vi.mock("../agents/model-auth.js", () => ({
   resolveApiKeyForProvider: vi.fn(),
@@ -303,6 +303,23 @@ describe("embedding provider local fallback", () => {
       }),
     ).rejects.toThrow(/optional dependency node-llama-cpp/i);
   });
+
+  it("mentions every remote provider in local setup guidance", async () => {
+    importNodeLlamaCppMock.mockRejectedValue(
+      Object.assign(new Error("Cannot find package 'node-llama-cpp'"), {
+        code: "ERR_MODULE_NOT_FOUND",
+      }),
+    );
+
+    await expect(
+      createEmbeddingProvider({
+        config: {} as never,
+        provider: "local",
+        model: "text-embedding-3-small",
+        fallback: "none",
+      }),
+    ).rejects.toThrow(/provider = "gemini"/i);
+  });
 });
 
 describe("local embedding normalization", () => {
@@ -341,10 +358,7 @@ describe("local embedding normalization", () => {
     const magnitude = Math.sqrt(embedding.reduce((sum, x) => sum + x * x, 0));
 
     expect(magnitude).toBeCloseTo(1.0, 5);
-    expect(resolveModelFileMock).toHaveBeenCalledWith(
-      "hf:ggml-org/embeddinggemma-300m-qat-q8_0-GGUF/embeddinggemma-300m-qat-Q8_0.gguf",
-      undefined,
-    );
+    expect(resolveModelFileMock).toHaveBeenCalledWith(DEFAULT_LOCAL_MODEL, undefined);
   });
 
   it("handles zero vector without division by zero", async () => {
