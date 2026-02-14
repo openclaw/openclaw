@@ -76,7 +76,32 @@ export type GatewayControlUiConfig = {
   dangerouslyDisableDeviceAuth?: boolean;
 };
 
-export type GatewayAuthMode = "token" | "password";
+export type GatewayAuthMode = "token" | "password" | "trusted-proxy";
+
+/**
+ * Configuration for trusted reverse proxy authentication.
+ * Used when Clawdbot runs behind an identity-aware proxy (Pomerium, Caddy + OAuth, etc.)
+ * that handles authentication and passes user identity via headers.
+ */
+export type GatewayTrustedProxyConfig = {
+  /**
+   * Header name containing the authenticated user identity (required).
+   * Common values: "x-forwarded-user", "x-remote-user", "x-pomerium-claim-email"
+   */
+  userHeader: string;
+  /**
+   * Additional headers that MUST be present for the request to be trusted.
+   * Use this to verify the request actually came through the proxy.
+   * Example: ["x-forwarded-proto", "x-forwarded-host"]
+   */
+  requiredHeaders?: string[];
+  /**
+   * Optional allowlist of user identities that can access the gateway.
+   * If empty or omitted, all authenticated users from the proxy are allowed.
+   * Example: ["nick@example.com", "admin@company.org"]
+   */
+  allowUsers?: string[];
+};
 
 export type GatewayAuthConfig = {
   /** Authentication mode for Gateway connections. Defaults to token when set. */
@@ -89,6 +114,11 @@ export type GatewayAuthConfig = {
   allowTailscale?: boolean;
   /** Rate-limit configuration for failed authentication attempts. */
   rateLimit?: GatewayAuthRateLimitConfig;
+  /**
+   * Configuration for trusted-proxy auth mode.
+   * Required when mode is "trusted-proxy".
+   */
+  trustedProxy?: GatewayTrustedProxyConfig;
 };
 
 export type GatewayAuthRateLimitConfig = {

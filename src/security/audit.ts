@@ -12,6 +12,7 @@ import { collectChannelSecurityFindings } from "./audit-channel.js";
 import {
   collectAttackSurfaceSummaryFindings,
   collectExposureMatrixFindings,
+  collectGatewayHttpSessionKeyOverrideFindings,
   collectHooksHardeningFindings,
   collectIncludeFilePermFindings,
   collectInstalledSkillsCodeSafetyFindings,
@@ -257,10 +258,7 @@ function collectGatewayConfigFindings(
     (auth.mode === "token" && hasToken) || (auth.mode === "password" && hasPassword);
   const hasTailscaleAuth = auth.allowTailscale && tailscaleMode === "serve";
   const hasGatewayAuth = hasSharedSecret || hasTailscaleAuth;
-  const remotelyExposed =
-    bind !== "loopback" || tailscaleMode === "serve" || tailscaleMode === "funnel";
-
-  if (bind !== "loopback" && !hasSharedSecret) {
+  if (bind !== "loopback" && !hasSharedSecret && auth.mode !== "trusted-proxy") {
     findings.push({
       checkId: "gateway.bind_no_auth",
       severity: "critical",
@@ -346,26 +344,66 @@ function collectGatewayConfigFindings(
     });
   }
 
-  const chatCompletionsEnabled = cfg.gateway?.http?.endpoints?.chatCompletions?.enabled === true;
-  const responsesEnabled = cfg.gateway?.http?.endpoints?.responses?.enabled === true;
-  if (chatCompletionsEnabled || responsesEnabled) {
-    const enabledEndpoints = [
-      chatCompletionsEnabled ? "/v1/chat/completions" : null,
-      responsesEnabled ? "/v1/responses" : null,
-    ].filter((value): value is string => Boolean(value));
+  if (auth.mode === "trusted-proxy") {
+    const trustedProxies = cfg.gateway?.trustedProxies ?? [];
+    const trustedProxyConfig = cfg.gateway?.auth?.trustedProxy;
+
     findings.push({
-      checkId: "gateway.http.session_key_override_enabled",
-      severity: remotelyExposed ? "warn" : "info",
-      title: "HTTP APIs accept explicit session key override headers",
+      checkId: "gateway.trusted_proxy_auth",
+      severity: "critical",
+      title: "Trusted-proxy auth mode enabled",
       detail:
-        `${enabledEndpoints.join(", ")} support x-openclaw-session-key. ` +
-        "Any authenticated caller can route requests into arbitrary sessions.",
+        'gateway.auth.mode="trusted-proxy" delegates authentication to a reverse proxy. ' +
+        "Ensure your proxy (Pomerium, Caddy, nginx) handles auth correctly and that gateway.trustedProxies " +
+        "only contains IPs of your actual proxy servers.",
       remediation:
-        "Treat HTTP API credentials as full-trust, disable unused endpoints, and avoid sharing tokens across tenants.",
+        "Verify: (1) Your proxy terminates TLS and authenticates users. " +
+        "(2) gateway.trustedProxies is restricted to proxy IPs only. " +
+        "(3) Direct access to the Gateway port is blocked by firewall. " +
+        "See /gateway/trusted-proxy-auth for setup guidance.",
     });
+
+    if (trustedProxies.length === 0) {
+      findings.push({
+        checkId: "gateway.trusted_proxy_no_proxies",
+        severity: "critical",
+        title: "Trusted-proxy auth enabled but no trusted proxies configured",
+        detail:
+          'gateway.auth.mode="trusted-proxy" but gateway.trustedProxies is empty. ' +
+          "All requests will be rejected.",
+        remediation: "Set gateway.trustedProxies to the IP(s) of your reverse proxy.",
+      });
+    }
+
+    if (!trustedProxyConfig?.userHeader) {
+      findings.push({
+        checkId: "gateway.trusted_proxy_no_user_header",
+        severity: "critical",
+        title: "Trusted-proxy auth missing userHeader config",
+        detail:
+          'gateway.auth.mode="trusted-proxy" but gateway.auth.trustedProxy.userHeader is not configured.',
+        remediation:
+          "Set gateway.auth.trustedProxy.userHeader to the header name your proxy uses " +
+          '(e.g., "x-forwarded-user", "x-pomerium-claim-email").',
+      });
+    }
+
+    const allowUsers = trustedProxyConfig?.allowUsers ?? [];
+    if (allowUsers.length === 0) {
+      findings.push({
+        checkId: "gateway.trusted_proxy_no_allowlist",
+        severity: "warn",
+        title: "Trusted-proxy auth allows all authenticated users",
+        detail:
+          "gateway.auth.trustedProxy.allowUsers is empty, so any user authenticated by your proxy can access the Gateway.",
+        remediation:
+          "Consider setting gateway.auth.trustedProxy.allowUsers to restrict access to specific users " +
+          '(e.g., ["nick@example.com"]).',
+      });
+    }
   }
 
-  if (bind !== "loopback" && !cfg.gateway?.auth?.rateLimit) {
+  if (bind !== "loopback" && auth.mode !== "trusted-proxy" && !cfg.gateway?.auth?.rateLimit) {
     findings.push({
       checkId: "gateway.auth_no_rate_limit",
       severity: "warn",
@@ -570,7 +608,8 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
   findings.push(...collectBrowserControlFindings(cfg, env));
   findings.push(...collectLoggingFindings(cfg));
   findings.push(...collectElevatedFindings(cfg));
-  findings.push(...collectHooksHardeningFindings(cfg));
+  findings.push(...collectHooksHardeningFindings(cfg, env));
+  findings.push(...collectGatewayHttpSessionKeyOverrideFindings(cfg));
   findings.push(...collectSandboxDockerNoopFindings(cfg));
   findings.push(...collectNodeDenyCommandPatternFindings(cfg));
   findings.push(...collectMinimalProfileOverrideFindings(cfg));
