@@ -1,19 +1,84 @@
 # Money Maker Bot
 
-> My personal fork of [Clawdbot](https://github.com/clawdbot/clawdbot) - a powerful AI assistant configured for automated trading insights and financial analysis.
+> A financial intelligence assistant built on [Clawdbot](https://github.com/clawdbot/clawdbot) - your AI-powered edge for sports betting, NFT trading, and portfolio analysis.
 
 <p align="center">
-  <a href="https://github.com/clawdbot/clawdbot"><img src="https://img.shields.io/badge/Fork%20of-Clawdbot-blue?style=for-the-badge" alt="Fork of Clawdbot"></a>
+  <a href="https://github.com/clawdbot/clawdbot"><img src="https://img.shields.io/badge/Built%20on-Clawdbot-blue?style=for-the-badge" alt="Built on Clawdbot"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="MIT License"></a>
 </p>
 
-## About This Fork
+## What Makes This Fork Different
 
-This is my customized version of Clawdbot, configured for financial market analysis and trading insights. I use it to monitor market conditions, analyze sports betting odds for value opportunities, track NFT floor prices, and generate data visualizations for portfolio analysis.
+Money Maker Bot transforms Clawdbot into a specialized financial analysis assistant. While Clawdbot is a general-purpose AI assistant, this fork adds custom skills and configurations specifically designed for finding alpha in sports betting markets, tracking NFT floor prices and whale movements, visualizing portfolio performance in your terminal, and receiving real-time alerts via Telegram when opportunities arise.
 
-### My Custom Configuration
+## Custom Financial Skills
 
-This fork includes personal workspace settings optimized for financial data integration with market data APIs, multi-channel alerts via Telegram for market movements, and custom skills for sports odds analysis and NFT tracking.
+This fork includes three custom skills not found in the upstream Clawdbot:
+
+### Sports Betting Odds Analyzer
+
+Compare betting lines across multiple sportsbooks to find value. Supports NFL, NBA, MLB, NHL, and MLS with real-time odds from The Odds API.
+
+```bash
+# Get NFL spreads across all books
+curl -s "https://api.the-odds-api.com/v4/sports/americanfootball_nfl/odds/?apiKey=$ODDS_API_KEY&regions=us&markets=spreads" | jq '.[] | {game: "\(.home_team) vs \(.away_team)", odds: .bookmakers[].markets[].outcomes}'
+```
+
+### NFT Price Tracker
+
+Monitor floor prices, sales volume, and whale activity for top Ethereum collections including BAYC, MAYC, CryptoPunks, Azuki, and more.
+
+```bash
+# Get BAYC floor price
+curl -s "https://api.reservoir.tools/collections/v6?slug=boredapeyachtclub" | jq '.collections[0] | {name: .name, floor: .floorAsk.price.amount.native, volume24h: .volume["1day"]}'
+```
+
+### Data Visualization
+
+Generate charts and graphs directly in your terminal from CSV/JSON data using YouPlot and termgraph.
+
+```bash
+# Visualize portfolio allocation
+echo "BTC,45\nETH,30\nSOL,15\nOther,10" | uplot bar -d, -t "Portfolio Allocation"
+```
+
+## Quick Start
+
+```bash
+# Clone this fork
+git clone https://github.com/ianalloway/Money-maker-bot.git
+cd Money-maker-bot
+
+# Install dependencies
+pnpm install
+pnpm build
+
+# Run the onboarding wizard
+pnpm clawdbot onboard --install-daemon
+
+# Start the gateway
+pnpm clawdbot gateway --port 18789 --verbose
+```
+
+## Configuration for Financial Analysis
+
+Add these environment variables to enable the financial skills:
+
+```bash
+# Sports betting odds (free tier: 500 requests/month)
+export ODDS_API_KEY="your-key-from-the-odds-api.com"
+
+# NFT tracking (optional, Reservoir API is free without key)
+export OPENSEA_API_KEY="your-opensea-api-key"
+```
+
+## Example Use Cases
+
+**Finding Value Bets**: Ask the bot to compare spreads across DraftKings, FanDuel, and BetMGM for tonight's NBA games and highlight any lines with 2+ point differences.
+
+**NFT Floor Alerts**: Set up a cron job to alert you via Telegram when MAYC floor drops below 5 ETH.
+
+**Portfolio Tracking**: Generate a weekly performance chart of your crypto holdings directly in your terminal.
 
 ---
 
