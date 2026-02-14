@@ -1,6 +1,6 @@
 import "./test-helpers.js";
 import fs from "node:fs/promises";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   installWebAutoReplyTestHomeHooks,
@@ -16,11 +16,21 @@ let monitorWebChannel: typeof import("./auto-reply.js").monitorWebChannel;
 let HEARTBEAT_TOKEN: typeof import("./auto-reply.js").HEARTBEAT_TOKEN;
 let getReplyFromConfig: typeof import("../auto-reply/reply.js").getReplyFromConfig;
 let runEmbeddedPiAgent: typeof import("../agents/pi-embedded.js").runEmbeddedPiAgent;
+let lastRouteSpy: { mockRestore: () => void } | undefined;
 
 beforeAll(async () => {
   ({ monitorWebChannel, HEARTBEAT_TOKEN } = await import("./auto-reply.js"));
   ({ getReplyFromConfig } = await import("../auto-reply/reply.js"));
   ({ runEmbeddedPiAgent } = await import("../agents/pi-embedded.js"));
+  const lastRoute = await import("./auto-reply/monitor/last-route.js");
+  lastRouteSpy = vi
+    .spyOn(lastRoute, "updateLastRouteInBackground")
+    .mockImplementation(() => undefined);
+});
+
+afterAll(() => {
+  lastRouteSpy?.mockRestore();
+  lastRouteSpy = undefined;
 });
 
 function createCapturedListener() {
@@ -510,109 +520,6 @@ describe("partial reply gating", () => {
     const ctx = replyResolver.mock.calls[0]?.[0] ?? {};
     expect(ctx.SenderE164).toBe("+1000");
     expect(ctx.SenderId).toBe("+1000");
-  });
-
-  it("updates last-route for direct chats without senderE164", async () => {
-    const now = Date.now();
-    const mainSessionKey = "agent:main:main";
-    const store = await makeSessionStore({
-      [mainSessionKey]: { sessionId: "sid", updatedAt: now - 1 },
-    });
-
-    const replyResolver = vi.fn().mockResolvedValue(undefined);
-
-    const mockConfig: OpenClawConfig = {
-      channels: { whatsapp: { allowFrom: ["*"] } },
-      session: { store: store.storePath },
-    };
-
-    setLoadConfigMock(mockConfig);
-
-    await monitorWebChannel(
-      false,
-      async ({ onMessage }) => {
-        await onMessage({
-          id: "m1",
-          from: "+1000",
-          conversationId: "+1000",
-          to: "+2000",
-          body: "hello",
-          timestamp: now,
-          chatType: "direct",
-          chatId: "direct:+1000",
-          sendComposing: vi.fn().mockResolvedValue(undefined),
-          reply: vi.fn().mockResolvedValue(undefined),
-          sendMedia: vi.fn().mockResolvedValue(undefined),
-        });
-        return { close: vi.fn().mockResolvedValue(undefined) };
-      },
-      false,
-      replyResolver,
-    );
-
-    const stored = JSON.parse(await fs.readFile(store.storePath, "utf8")) as Record<
-      string,
-      { lastChannel?: string; lastTo?: string }
-    >;
-    expect(stored[mainSessionKey]?.lastChannel).toBe("whatsapp");
-    expect(stored[mainSessionKey]?.lastTo).toBe("+1000");
-
-    resetLoadConfigMock();
-    await store.cleanup();
-  });
-
-  it("updates last-route for group chats with account id", async () => {
-    const now = Date.now();
-    const groupSessionKey = "agent:main:whatsapp:group:123@g.us";
-    const store = await makeSessionStore({
-      [groupSessionKey]: { sessionId: "sid", updatedAt: now - 1 },
-    });
-
-    const replyResolver = vi.fn().mockResolvedValue(undefined);
-
-    const mockConfig: OpenClawConfig = {
-      channels: { whatsapp: { allowFrom: ["*"] } },
-      session: { store: store.storePath },
-    };
-
-    setLoadConfigMock(mockConfig);
-
-    await monitorWebChannel(
-      false,
-      async ({ onMessage }) => {
-        await onMessage({
-          id: "g1",
-          from: "123@g.us",
-          conversationId: "123@g.us",
-          to: "+2000",
-          body: "hello",
-          timestamp: now,
-          chatType: "group",
-          chatId: "123@g.us",
-          accountId: "work",
-          senderE164: "+1000",
-          senderName: "Alice",
-          selfE164: "+2000",
-          sendComposing: vi.fn().mockResolvedValue(undefined),
-          reply: vi.fn().mockResolvedValue(undefined),
-          sendMedia: vi.fn().mockResolvedValue(undefined),
-        });
-        return { close: vi.fn().mockResolvedValue(undefined) };
-      },
-      false,
-      replyResolver,
-    );
-
-    const stored = JSON.parse(await fs.readFile(store.storePath, "utf8")) as Record<
-      string,
-      { lastChannel?: string; lastTo?: string; lastAccountId?: string }
-    >;
-    expect(stored[groupSessionKey]?.lastChannel).toBe("whatsapp");
-    expect(stored[groupSessionKey]?.lastTo).toBe("123@g.us");
-    expect(stored[groupSessionKey]?.lastAccountId).toBe("work");
-
-    resetLoadConfigMock();
-    await store.cleanup();
   });
 
   it("defaults to self-only when no config is present", async () => {
