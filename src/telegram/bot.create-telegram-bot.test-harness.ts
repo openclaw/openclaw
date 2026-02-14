@@ -1,15 +1,23 @@
-import { beforeEach, vi } from "vitest";
+import { beforeEach, vi, type Mock } from "vitest";
 import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
+
+type AnyMock = Mock<(...args: unknown[]) => unknown>;
+type AnyAsyncMock = Mock<(...args: unknown[]) => Promise<unknown>>;
+type ReplyOpts =
+  | {
+      onReplyStart?: () => void | Promise<void>;
+    }
+  | undefined;
 
 const { sessionStorePath } = vi.hoisted(() => ({
   sessionStorePath: `/tmp/openclaw-telegram-${Math.random().toString(16).slice(2)}.json`,
 }));
 
-const { loadWebMedia } = vi.hoisted(() => ({
+const { loadWebMedia } = vi.hoisted((): { loadWebMedia: AnyMock } => ({
   loadWebMedia: vi.fn(),
 }));
 
-export function getLoadWebMediaMock() {
+export function getLoadWebMediaMock(): AnyMock {
   return loadWebMedia;
 }
 
@@ -17,11 +25,11 @@ vi.mock("../web/media.js", () => ({
   loadWebMedia,
 }));
 
-const { loadConfig } = vi.hoisted(() => ({
+const { loadConfig } = vi.hoisted((): { loadConfig: AnyMock } => ({
   loadConfig: vi.fn(() => ({})),
 }));
 
-export function getLoadConfigMock() {
+export function getLoadConfigMock(): AnyMock {
   return loadConfig;
 }
 vi.mock("../config/config.js", async (importOriginal) => {
@@ -40,19 +48,24 @@ vi.mock("../config/sessions.js", async (importOriginal) => {
   };
 });
 
-const { readChannelAllowFromStore, upsertChannelPairingRequest } = vi.hoisted(() => ({
-  readChannelAllowFromStore: vi.fn(async () => [] as string[]),
-  upsertChannelPairingRequest: vi.fn(async () => ({
-    code: "PAIRCODE",
-    created: true,
-  })),
-}));
+const { readChannelAllowFromStore, upsertChannelPairingRequest } = vi.hoisted(
+  (): {
+    readChannelAllowFromStore: AnyAsyncMock;
+    upsertChannelPairingRequest: AnyAsyncMock;
+  } => ({
+    readChannelAllowFromStore: vi.fn(async () => [] as string[]),
+    upsertChannelPairingRequest: vi.fn(async () => ({
+      code: "PAIRCODE",
+      created: true,
+    })),
+  }),
+);
 
-export function getReadChannelAllowFromStoreMock() {
+export function getReadChannelAllowFromStoreMock(): AnyAsyncMock {
   return readChannelAllowFromStore;
 }
 
-export function getUpsertChannelPairingRequestMock() {
+export function getUpsertChannelPairingRequestMock(): AnyAsyncMock {
   return upsertChannelPairingRequest;
 }
 
@@ -61,24 +74,24 @@ vi.mock("../pairing/pairing-store.js", () => ({
   upsertChannelPairingRequest,
 }));
 
-export const useSpy = vi.fn();
-export const middlewareUseSpy = vi.fn();
-export const onSpy = vi.fn();
-export const stopSpy = vi.fn();
-export const commandSpy = vi.fn();
-export const botCtorSpy = vi.fn();
-export const answerCallbackQuerySpy = vi.fn(async () => undefined);
-export const sendChatActionSpy = vi.fn();
-export const setMessageReactionSpy = vi.fn(async () => undefined);
-export const setMyCommandsSpy = vi.fn(async () => undefined);
-export const deleteMyCommandsSpy = vi.fn(async () => undefined);
-export const getMeSpy = vi.fn(async () => ({
+export const useSpy: Mock<(arg: unknown) => void> = vi.fn();
+export const middlewareUseSpy: Mock<(...args: unknown[]) => unknown> = vi.fn();
+export const onSpy: Mock<(...args: unknown[]) => unknown> = vi.fn();
+export const stopSpy: Mock<(...args: unknown[]) => unknown> = vi.fn();
+export const commandSpy: Mock<(...args: unknown[]) => unknown> = vi.fn();
+export const botCtorSpy: Mock<(...args: unknown[]) => unknown> = vi.fn();
+export const answerCallbackQuerySpy: AnyAsyncMock = vi.fn(async () => undefined);
+export const sendChatActionSpy: AnyMock = vi.fn();
+export const setMessageReactionSpy: AnyAsyncMock = vi.fn(async () => undefined);
+export const setMyCommandsSpy: AnyAsyncMock = vi.fn(async () => undefined);
+export const deleteMyCommandsSpy: AnyAsyncMock = vi.fn(async () => undefined);
+export const getMeSpy: AnyAsyncMock = vi.fn(async () => ({
   username: "openclaw_bot",
   has_topics_enabled: true,
 }));
-export const sendMessageSpy = vi.fn(async () => ({ message_id: 77 }));
-export const sendAnimationSpy = vi.fn(async () => ({ message_id: 78 }));
-export const sendPhotoSpy = vi.fn(async () => ({ message_id: 79 }));
+export const sendMessageSpy: AnyAsyncMock = vi.fn(async () => ({ message_id: 77 }));
+export const sendAnimationSpy: AnyAsyncMock = vi.fn(async () => ({ message_id: 78 }));
+export const sendPhotoSpy: AnyAsyncMock = vi.fn(async () => ({ message_id: 79 }));
 
 type ApiStub = {
   config: { use: (arg: unknown) => void };
@@ -126,7 +139,7 @@ vi.mock("grammy", () => ({
 }));
 
 const sequentializeMiddleware = vi.fn();
-export const sequentializeSpy = vi.fn(() => sequentializeMiddleware);
+export const sequentializeSpy: AnyMock = vi.fn(() => sequentializeMiddleware);
 export let sequentializeKey: ((ctx: unknown) => string) | undefined;
 vi.mock("@grammyjs/runner", () => ({
   sequentialize: (keyFn: (ctx: unknown) => string) => {
@@ -135,16 +148,18 @@ vi.mock("@grammyjs/runner", () => ({
   },
 }));
 
-export const throttlerSpy = vi.fn(() => "throttler");
+export const throttlerSpy: AnyMock = vi.fn(() => "throttler");
 
 vi.mock("@grammyjs/transformer-throttler", () => ({
   apiThrottler: () => throttlerSpy(),
 }));
 
-export const replySpy = vi.fn(async (_ctx, opts) => {
-  await opts?.onReplyStart?.();
-  return undefined;
-});
+export const replySpy: Mock<(ctx: unknown, opts?: ReplyOpts) => Promise<void>> = vi.fn(
+  async (_ctx, opts) => {
+    await opts?.onReplyStart?.();
+    return undefined;
+  },
+);
 
 vi.mock("../auto-reply/reply.js", () => ({
   getReplyFromConfig: replySpy,
