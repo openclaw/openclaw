@@ -413,6 +413,13 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
 
   const anyReplyDelivered = queuedFinal || (counts.block ?? 0) > 0 || (counts.final ?? 0) > 0;
 
+  if (anyReplyDelivered && ctx.stickyThreadTracker) {
+    const threadToRecord = incomingThreadTs ?? (ctx.replyToMode !== "off" ? messageTs : undefined);
+    if (threadToRecord && message.channel) {
+      ctx.stickyThreadTracker.record(message.channel, threadToRecord);
+    }
+  }
+
   if (!anyReplyDelivered) {
     await draftStream.clear();
     if (prepared.isRoomish) {
