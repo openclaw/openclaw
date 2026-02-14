@@ -1,83 +1,21 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
-import { resetSystemEventsForTest } from "../infra/system-events.js";
+import { describe, expect, it, vi } from "vitest";
 import { monitorSignalProvider } from "./monitor.js";
+import {
+  config,
+  flush,
+  getSignalToolResultTestMocks,
+  installSignalToolResultTestHooks,
+  setSignalToolResultTestConfig,
+} from "./monitor.tool-result.test-harness.js";
 
-const sendMock = vi.fn();
-const replyMock = vi.fn();
-const updateLastRouteMock = vi.fn();
-let config: Record<string, unknown> = {};
-const readAllowFromStoreMock = vi.fn();
-const upsertPairingRequestMock = vi.fn();
+installSignalToolResultTestHooks();
 
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
-  return {
-    ...actual,
-    loadConfig: () => config,
-  };
-});
-
-vi.mock("../auto-reply/reply.js", () => ({
-  getReplyFromConfig: (...args: unknown[]) => replyMock(...args),
-}));
-
-vi.mock("./send.js", () => ({
-  sendMessageSignal: (...args: unknown[]) => sendMock(...args),
-  sendTypingSignal: vi.fn().mockResolvedValue(true),
-  sendReadReceiptSignal: vi.fn().mockResolvedValue(true),
-}));
-
-vi.mock("../pairing/pairing-store.js", () => ({
-  readChannelAllowFromStore: (...args: unknown[]) => readAllowFromStoreMock(...args),
-  upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
-}));
-
-vi.mock("../config/sessions.js", () => ({
-  resolveStorePath: vi.fn(() => "/tmp/openclaw-sessions.json"),
-  updateLastRoute: (...args: unknown[]) => updateLastRouteMock(...args),
-  readSessionUpdatedAt: vi.fn(() => undefined),
-  recordSessionMetaFromInbound: vi.fn().mockResolvedValue(undefined),
-}));
-
-const streamMock = vi.fn();
-const signalCheckMock = vi.fn();
-const signalRpcRequestMock = vi.fn();
-
-vi.mock("./client.js", () => ({
-  streamSignalEvents: (...args: unknown[]) => streamMock(...args),
-  signalCheck: (...args: unknown[]) => signalCheckMock(...args),
-  signalRpcRequest: (...args: unknown[]) => signalRpcRequestMock(...args),
-}));
-
-vi.mock("./daemon.js", () => ({
-  spawnSignalDaemon: vi.fn(() => ({ stop: vi.fn() })),
-}));
-
-const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
-
-beforeEach(() => {
-  resetInboundDedupe();
-  config = {
-    messages: { responsePrefix: "PFX" },
-    channels: {
-      signal: { autoStart: false, dmPolicy: "open", allowFrom: ["*"] },
-    },
-  };
-  sendMock.mockReset().mockResolvedValue(undefined);
-  replyMock.mockReset();
-  updateLastRouteMock.mockReset();
-  streamMock.mockReset();
-  signalCheckMock.mockReset().mockResolvedValue({});
-  signalRpcRequestMock.mockReset().mockResolvedValue({});
-  readAllowFromStoreMock.mockReset().mockResolvedValue([]);
-  upsertPairingRequestMock.mockReset().mockResolvedValue({ code: "PAIRCODE", created: true });
-  resetSystemEventsForTest();
-});
+const { replyMock, sendMock, streamMock, upsertPairingRequestMock } =
+  getSignalToolResultTestMocks();
 
 describe("monitorSignalProvider tool results", () => {
   it("pairs uuid-only senders with a uuid allowlist entry", async () => {
-    config = {
+    setSignalToolResultTestConfig({
       ...config,
       channels: {
         ...config.channels,
@@ -88,7 +26,7 @@ describe("monitorSignalProvider tool results", () => {
           allowFrom: [],
         },
       },
-    };
+    });
     const abortController = new AbortController();
     const uuid = "123e4567-e89b-12d3-a456-426614174000";
 
