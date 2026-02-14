@@ -67,6 +67,7 @@ export function applyToolPolicyPipeline(params: {
   toolMeta: (tool: AnyAgentTool) => { pluginId: string } | undefined;
   warn: (message: string) => void;
   steps: ToolPolicyPipelineStep[];
+  senderIsOwner?: boolean;
 }): AnyAgentTool[] {
   const coreToolNames = new Set(
     params.tools
@@ -102,7 +103,9 @@ export function applyToolPolicyPipeline(params: {
     }
 
     const expanded = expandPolicyWithPluginGroups(policy, pluginGroups);
-    filtered = expanded ? filterToolsByPolicy(filtered, expanded) : filtered;
+    filtered = expanded
+      ? filterToolsByPolicy(filtered, expanded, params.senderIsOwner)
+      : filtered;
   }
   return filtered;
 }

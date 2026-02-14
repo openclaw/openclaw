@@ -272,6 +272,11 @@ export async function resolveReplyDirectives(params: {
         hasModelDirective: false,
         hasQueueDirective: false,
         queueReset: false,
+        hasExecDirective: false,
+        execHost: undefined,
+        execSecurity: undefined,
+        execAsk: undefined,
+        execNode: undefined,
       };
   const existingBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
   let cleanedBody = (() => {

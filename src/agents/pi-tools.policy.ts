@@ -65,19 +65,23 @@ export function resolveSubagentToolPolicy(cfg?: OpenClawConfig): SandboxToolPoli
   return { allow, deny };
 }
 
-export function isToolAllowedByPolicyName(name: string, policy?: SandboxToolPolicy): boolean {
+export function isToolAllowedByPolicyName(
+  name: string,
+  policy?: SandboxToolPolicy,
+  senderIsOwner?: boolean,
+): boolean {
   if (!policy) {
-    return true;
+    return senderIsOwner === true;
   }
   return makeToolPolicyMatcher(policy)(name);
 }
 
-export function filterToolsByPolicy(tools: AnyAgentTool[], policy?: SandboxToolPolicy) {
-  if (!policy) {
-    return tools;
-  }
-  const matcher = makeToolPolicyMatcher(policy);
-  return tools.filter((tool) => matcher(tool.name));
+export function filterToolsByPolicy(
+  tools: AnyAgentTool[],
+  policy?: SandboxToolPolicy,
+  senderIsOwner?: boolean,
+) {
+  return tools.filter((tool) => isToolAllowedByPolicyName(tool.name, policy, senderIsOwner));
 }
 
 type ToolPolicyConfig = {
@@ -294,6 +298,7 @@ export function resolveGroupToolPolicy(params: {
 export function isToolAllowedByPolicies(
   name: string,
   policies: Array<SandboxToolPolicy | undefined>,
+  senderIsOwner?: boolean,
 ) {
-  return policies.every((policy) => isToolAllowedByPolicyName(name, policy));
+  return policies.every((policy) => isToolAllowedByPolicyName(name, policy, senderIsOwner));
 }

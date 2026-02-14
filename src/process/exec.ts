@@ -118,13 +118,17 @@ export async function runCommandWithTimeout(
   const stdio = resolveCommandStdio({ hasInput, preferInherit: true });
   const resolvedCommand = resolveCommand(argv[0] ?? "");
   const commandExt = path.extname(resolvedCommand).toLowerCase();
-  const useShell = process.platform === "win32" && commandExt !== ".exe";
-  const child = spawn(resolvedCommand, argv.slice(1), {
+  const isCmdBatch = process.platform === "win32" && (commandExt === ".cmd" || commandExt === ".bat");
+
+  const spawnArgs = isCmdBatch ? ["/c", resolvedCommand, ...argv.slice(1)] : argv.slice(1);
+  const spawnCmd = isCmdBatch ? "cmd.exe" : resolvedCommand;
+
+  const child = spawn(spawnCmd, spawnArgs, {
     stdio,
     cwd,
     env: resolvedEnv,
-    windowsVerbatimArguments,
-    shell: useShell,
+    windowsVerbatimArguments: isCmdBatch,
+    shell: false,
   });
   // Spawn with inherited stdin (TTY) so tools like `pi` stay interactive when needed.
   return await new Promise((resolve, reject) => {
