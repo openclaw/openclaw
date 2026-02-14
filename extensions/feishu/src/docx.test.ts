@@ -24,6 +24,7 @@ describe("feishu_doc image fetch hardening", () => {
   const blockListMock = vi.hoisted(() => vi.fn());
   const blockChildrenCreateMock = vi.hoisted(() => vi.fn());
   const driveUploadAllMock = vi.hoisted(() => vi.fn());
+  const permissionPublicGetMock = vi.hoisted(() => vi.fn());
   const blockPatchMock = vi.hoisted(() => vi.fn());
   const scopeListMock = vi.hoisted(() => vi.fn());
 
@@ -44,6 +45,9 @@ describe("feishu_doc image fetch hardening", () => {
         },
       },
       drive: {
+        permissionPublic: {
+          get: permissionPublicGetMock,
+        },
         media: {
           uploadAll: driveUploadAllMock,
         },
@@ -78,6 +82,16 @@ describe("feishu_doc image fetch hardening", () => {
     });
 
     driveUploadAllMock.mockResolvedValue({ file_token: "token_1" });
+    permissionPublicGetMock.mockResolvedValue({
+      code: 0,
+      data: {
+        permission_public: {
+          external_access: true,
+          link_share_entity: "anyone_readable",
+          share_entity: "anyone",
+        },
+      },
+    });
     blockPatchMock.mockResolvedValue({ code: 0 });
     scopeListMock.mockResolvedValue({ code: 0, data: { scopes: [] } });
   });
@@ -119,5 +133,42 @@ describe("feishu_doc image fetch hardening", () => {
     expect(result.details.images_processed).toBe(0);
     expect(consoleErrorSpy).toHaveBeenCalled();
     consoleErrorSpy.mockRestore();
+  });
+
+  it("returns current doc public permission", async () => {
+    const registerTool = vi.fn();
+    registerFeishuDocTools({
+      config: {
+        channels: {
+          feishu: {
+            appId: "app_id",
+            appSecret: "app_secret",
+          },
+        },
+      } as any,
+      logger: { debug: vi.fn(), info: vi.fn() } as any,
+      registerTool,
+    } as any);
+
+    const feishuDocTool = registerTool.mock.calls
+      .map((call) => call[0])
+      .find((tool) => tool.name === "feishu_doc");
+    expect(feishuDocTool).toBeDefined();
+
+    const result = await feishuDocTool.execute("tool-call", {
+      action: "get_public_permission",
+      doc_token: "doc_1",
+    });
+
+    expect(permissionPublicGetMock).toHaveBeenCalledTimes(1);
+    expect(permissionPublicGetMock.mock.calls[0]?.[0]).toMatchObject({
+      path: { token: "doc_1" },
+      params: { type: "docx" },
+    });
+    expect(result.details.doc_token).toBe("doc_1");
+    expect(result.details.permission_public).toMatchObject({
+      external_access: true,
+      link_share_entity: "anyone_readable",
+    });
   });
 });

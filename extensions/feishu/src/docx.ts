@@ -283,6 +283,20 @@ async function createDoc(client: Lark.Client, title: string, folderToken?: strin
   };
 }
 
+async function getDocPublicPermission(client: Lark.Client, docToken: string) {
+  const res = await client.drive.permissionPublic.get({
+    path: { token: docToken },
+    params: { type: "docx" },
+  });
+  if (res.code !== 0) {
+    throw new Error(res.msg);
+  }
+  return {
+    doc_token: docToken,
+    permission_public: res.data?.permission_public ?? null,
+  };
+}
+
 async function writeDoc(client: Lark.Client, docToken: string, markdown: string, maxBytes: number) {
   const deleted = await clearDocumentContent(client, docToken);
 
@@ -470,7 +484,7 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
         name: "feishu_doc",
         label: "Feishu Doc",
         description:
-          "Feishu document operations. Actions: read, write, append, create, list_blocks, get_block, update_block, delete_block",
+          "Feishu document operations. Actions: read, write, append, create, get_public_permission, list_blocks, get_block, update_block, delete_block",
         parameters: FeishuDocSchema,
         async execute(_toolCallId, params) {
           const p = params as FeishuDocParams;
@@ -485,6 +499,8 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
                 return json(await appendDoc(client, p.doc_token, p.content, mediaMaxBytes));
               case "create":
                 return json(await createDoc(client, p.title, p.folder_token));
+              case "get_public_permission":
+                return json(await getDocPublicPermission(client, p.doc_token));
               case "list_blocks":
                 return json(await listBlocks(client, p.doc_token));
               case "get_block":
