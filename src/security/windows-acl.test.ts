@@ -3,10 +3,16 @@ import type { WindowsAclEntry, WindowsAclSummary } from "./windows-acl.js";
 
 const MOCK_USERNAME = "MockUser";
 
-vi.mock("node:os", () => ({
-  default: { userInfo: () => ({ username: MOCK_USERNAME }) },
-  userInfo: () => ({ username: MOCK_USERNAME }),
-}));
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  const mockUserInfo = () => ({ username: MOCK_USERNAME });
+  return {
+    ...actual,
+    userInfo: mockUserInfo,
+    // Keep default import shape working (we use `import os from "node:os"` elsewhere).
+    default: { ...actual, userInfo: mockUserInfo },
+  };
+});
 
 const {
   createIcaclsResetCommand,

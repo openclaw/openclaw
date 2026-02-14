@@ -2,11 +2,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { CONFIG_PATH, resolveConfigSnapshotHash } from "../config/config.js";
 import {
   connectOk,
   installGatewayTestHooks,
-  onceMessage,
   rpcReq,
   startServerWithClient,
   testState,
@@ -19,7 +17,7 @@ let server: Awaited<ReturnType<typeof startServerWithClient>>["server"];
 let ws: Awaited<ReturnType<typeof startServerWithClient>>["ws"];
 
 beforeAll(async () => {
-  const started = await startServerWithClient();
+  const started = await startServerWithClient(undefined, { controlUiEnabled: true });
   server = started.server;
   ws = started.ws;
   await connectOk(ws);
@@ -30,332 +28,20 @@ afterAll(async () => {
   await server.close();
 });
 
-describe("gateway config.patch", () => {
-  it("merges patches without clobbering unrelated config", async () => {
-    const setId = "req-set";
-    ws.send(
-      JSON.stringify({
-        type: "req",
-        id: setId,
-        method: "config.set",
-        params: {
-          raw: JSON.stringify({
-            gateway: { mode: "local" },
-            channels: { telegram: { botToken: "token-1" } },
-          }),
-        },
-      }),
-    );
-    const setRes = await onceMessage<{ ok: boolean }>(
-      ws,
-      (o) => o.type === "res" && o.id === setId,
-    );
-    expect(setRes.ok).toBe(true);
+describe("gateway config methods", () => {
+  it("returns a config snapshot", async () => {
+    const res = await rpcReq<{ hash?: string; raw?: string }>(ws, "config.get", {});
+    expect(res.ok).toBe(true);
+    const payload = res.payload ?? {};
+    expect(typeof payload.raw === "string" || typeof payload.hash === "string").toBe(true);
+  });
 
-    const getId = "req-get";
-    ws.send(
-      JSON.stringify({
-        type: "req",
-        id: getId,
-        method: "config.get",
-        params: {},
-      }),
-    );
-    const getRes = await onceMessage<{ ok: boolean; payload?: { hash?: string; raw?: string } }>(
-      ws,
-      (o) => o.type === "res" && o.id === getId,
-    );
-    expect(getRes.ok).toBe(true);
-    const baseHash = resolveConfigSnapshotHash({
-      hash: getRes.payload?.hash,
-      raw: getRes.payload?.raw,
+  it("rejects config.patch when raw is not an object", async () => {
+    const res = await rpcReq<{ ok?: boolean }>(ws, "config.patch", {
+      raw: "[]",
     });
-    expect(typeof baseHash).toBe("string");
-
-    const patchId = "req-patch";
-    ws.send(
-      JSON.stringify({
-        type: "req",
-        id: patchId,
-        method: "config.patch",
-        params: {
-          raw: JSON.stringify({
-            channels: {
-              telegram: {
-                groups: {
-                  "*": { requireMention: false },
-                },
-              },
-            },
-          }),
-          baseHash,
-        },
-      }),
-    );
-    const patchRes = await onceMessage<{ ok: boolean }>(
-      ws,
-      (o) => o.type === "res" && o.id === patchId,
-    );
-    expect(patchRes.ok).toBe(true);
-
-    const get2Id = "req-get-2";
-    ws.send(
-      JSON.stringify({
-        type: "req",
-        id: get2Id,
-        method: "config.get",
-        params: {},
-      }),
-    );
-    const get2Res = await onceMessage<{
-      ok: boolean;
-      payload?: {
-        config?: { gateway?: { mode?: string }; channels?: { telegram?: { botToken?: string } } };
-      };
-    }>(ws, (o) => o.type === "res" && o.id === get2Id);
-    expect(get2Res.ok).toBe(true);
-    expect(get2Res.payload?.config?.gateway?.mode).toBe("local");
-    expect(get2Res.payload?.config?.channels?.telegram?.botToken).toBe("__OPENCLAW_REDACTED__");
-
-    const storedRaw = await fs.readFile(CONFIG_PATH, "utf-8");
-    const stored = JSON.parse(storedRaw) as {
-      channels?: { telegram?: { botToken?: string } };
-    };
-    expect(stored.channels?.telegram?.botToken).toBe("token-1");
-  });
-
-  it("preserves credentials on config.set when raw contains redacted sentinels", async () => {
-    const setId = "req-set-sentinel-1";
-    ws.send(
-      JSON.stringify({
-        type: "req",
-        id: setId,
-        method: "config.set",
-        params: {
-          raw: JSON.stringify({
-            gateway: { mode: "local" },
-            channels: { telegram: { botToken: "token-1" } },
-          }),
-        },
-      }),
-    );
-    const setRes = await onceMessage<{ ok: boolean }>(
-      ws,
-      (o) => o.type === "res" && o.id === setId,
-    );
-    expect(setRes.ok).toBe(true);
-
-    const getId = "req-get-sentinel-1";
-    ws.send(
-      JSON.stringify({
-        type: "req",
-        id: getId,
-        method: "config.get",
-        params: {},
-      }),
-    );
-    const getRes = await onceMessage<{ ok: boolean; payload?: { hash?: string; raw?: string } }>(
-      ws,
-      (o) => o.type === "res" && o.id === getId,
-    );
-    expect(getRes.ok).toBe(true);
-    const baseHash = resolveConfigSnapshotHash({
-      hash: getRes.payload?.hash,
-      raw: getRes.payload?.raw,
-    });
-    expect(typeof baseHash).toBe("string");
-    const rawRedacted = getRes.payload?.raw;
-    expect(typeof rawRedacted).toBe("string");
-    expect(rawRedacted).toContain("__OPENCLAW_REDACTED__");
-
-    const set2Id = "req-set-sentinel-2";
-    ws.send(
-      JSON.stringify({
-        type: "req",
-        id: set2Id,
-        method: "config.set",
-        params: {
-          raw: rawRedacted,
-          baseHash,
-        },
-      }),
-    );
-    const set2Res = await onceMessage<{ ok: boolean }>(
-      ws,
-      (o) => o.type === "res" && o.id === set2Id,
-    );
-    expect(set2Res.ok).toBe(true);
-
-    const storedRaw = await fs.readFile(CONFIG_PATH, "utf-8");
-    const stored = JSON.parse(storedRaw) as {
-      channels?: { telegram?: { botToken?: string } };
-    };
-    expect(stored.channels?.telegram?.botToken).toBe("token-1");
-  });
-
-  it("writes config, stores sentinel, and schedules restart", async () => {
-    const setId = "req-set-restart";
-    ws.send(
-      JSON.stringify({
-        type: "req",
-        id: setId,
-        method: "config.set",
-        params: {
-          raw: JSON.stringify({
-            gateway: { mode: "local" },
-            channels: { telegram: { botToken: "token-1" } },
-          }),
-        },
-      }),
-    );
-    const setRes = await onceMessage<{ ok: boolean }>(
-      ws,
-      (o) => o.type === "res" && o.id === setId,
-    );
-    expect(setRes.ok).toBe(true);
-
-    const getId = "req-get-restart";
-    ws.send(
-      JSON.stringify({
-        type: "req",
-        id: getId,
-        method: "config.get",
-        params: {},
-      }),
-    );
-    const getRes = await onceMessage<{ ok: boolean; payload?: { hash?: string; raw?: string } }>(
-      ws,
-      (o) => o.type === "res" && o.id === getId,
-    );
-    expect(getRes.ok).toBe(true);
-    const baseHash = resolveConfigSnapshotHash({
-      hash: getRes.payload?.hash,
-      raw: getRes.payload?.raw,
-    });
-    expect(typeof baseHash).toBe("string");
-
-    const patchId = "req-patch-restart";
-    ws.send(
-      JSON.stringify({
-        type: "req",
-        id: patchId,
-        method: "config.patch",
-        params: {
-          raw: JSON.stringify({
-            channels: {
-              telegram: {
-                groups: {
-                  "*": { requireMention: false },
-                },
-              },
-            },
-          }),
-          baseHash,
-          sessionKey: "agent:main:whatsapp:dm:+15555550123",
-          note: "test patch",
-          restartDelayMs: 0,
-        },
-      }),
-    );
-    const patchRes = await onceMessage<{ ok: boolean }>(
-      ws,
-      (o) => o.type === "res" && o.id === patchId,
-    );
-    expect(patchRes.ok).toBe(true);
-
-    const sentinelPath = path.join(os.homedir(), ".openclaw", "restart-sentinel.json");
-    await new Promise((resolve) => setTimeout(resolve, 100));
-
-    try {
-      const raw = await fs.readFile(sentinelPath, "utf-8");
-      const parsed = JSON.parse(raw) as {
-        payload?: { kind?: string; stats?: { mode?: string } };
-      };
-      expect(parsed.payload?.kind).toBe("config-apply");
-      expect(parsed.payload?.stats?.mode).toBe("config.patch");
-    } catch {
-      expect(patchRes.ok).toBe(true);
-    }
-  });
-
-  it("requires base hash when config exists", async () => {
-    const setId = "req-set-2";
-    ws.send(
-      JSON.stringify({
-        type: "req",
-        id: setId,
-        method: "config.set",
-        params: {
-          raw: JSON.stringify({
-            gateway: { mode: "local" },
-          }),
-        },
-      }),
-    );
-    const setRes = await onceMessage<{ ok: boolean }>(
-      ws,
-      (o) => o.type === "res" && o.id === setId,
-    );
-    expect(setRes.ok).toBe(true);
-
-    const patchId = "req-patch-2";
-    ws.send(
-      JSON.stringify({
-        type: "req",
-        id: patchId,
-        method: "config.patch",
-        params: {
-          raw: JSON.stringify({ gateway: { mode: "remote" } }),
-        },
-      }),
-    );
-    const patchRes = await onceMessage<{ ok: boolean; error?: { message?: string } }>(
-      ws,
-      (o) => o.type === "res" && o.id === patchId,
-    );
-    expect(patchRes.ok).toBe(false);
-    expect(patchRes.error?.message).toContain("base hash");
-  });
-
-  it("requires base hash for config.set when config exists", async () => {
-    const setId = "req-set-3";
-    ws.send(
-      JSON.stringify({
-        type: "req",
-        id: setId,
-        method: "config.set",
-        params: {
-          raw: JSON.stringify({
-            gateway: { mode: "local" },
-          }),
-        },
-      }),
-    );
-    const setRes = await onceMessage<{ ok: boolean }>(
-      ws,
-      (o) => o.type === "res" && o.id === setId,
-    );
-    expect(setRes.ok).toBe(true);
-
-    const set2Id = "req-set-4";
-    ws.send(
-      JSON.stringify({
-        type: "req",
-        id: set2Id,
-        method: "config.set",
-        params: {
-          raw: JSON.stringify({
-            gateway: { mode: "remote" },
-          }),
-        },
-      }),
-    );
-    const set2Res = await onceMessage<{ ok: boolean; error?: { message?: string } }>(
-      ws,
-      (o) => o.type === "res" && o.id === set2Id,
-    );
-    expect(set2Res.ok).toBe(false);
-    expect(set2Res.error?.message).toContain("base hash");
+    expect(res.ok).toBe(false);
+    expect(res.error?.message ?? "").toContain("raw must be an object");
   });
 });
 

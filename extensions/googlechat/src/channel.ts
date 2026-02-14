@@ -375,40 +375,23 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
     chunker: (text, limit) => getGoogleChatRuntime().channel.text.chunkMarkdownText(text, limit),
     chunkerMode: "markdown",
     textChunkLimit: 4000,
-    resolveTarget: ({ to, allowFrom, mode }) => {
+    resolveTarget: ({ to }) => {
       const trimmed = to?.trim() ?? "";
-      const allowListRaw = (allowFrom ?? []).map((entry) => String(entry).trim()).filter(Boolean);
-      const allowList = allowListRaw
-        .filter((entry) => entry !== "*")
-        .map((entry) => normalizeGoogleChatTarget(entry))
-        .filter((entry): entry is string => Boolean(entry));
 
       if (trimmed) {
         const normalized = normalizeGoogleChatTarget(trimmed);
         if (!normalized) {
-          if ((mode === "implicit" || mode === "heartbeat") && allowList.length > 0) {
-            return { ok: true, to: allowList[0] };
-          }
           return {
             ok: false,
-            error: missingTargetError(
-              "Google Chat",
-              "<spaces/{space}|users/{user}> or channels.googlechat.dm.allowFrom[0]",
-            ),
+            error: missingTargetError("Google Chat", "<spaces/{space}|users/{user}>"),
           };
         }
         return { ok: true, to: normalized };
       }
 
-      if (allowList.length > 0) {
-        return { ok: true, to: allowList[0] };
-      }
       return {
         ok: false,
-        error: missingTargetError(
-          "Google Chat",
-          "<spaces/{space}|users/{user}> or channels.googlechat.dm.allowFrom[0]",
-        ),
+        error: missingTargetError("Google Chat", "<spaces/{space}|users/{user}>"),
       };
     },
     sendText: async ({ cfg, to, text, accountId, replyToId, threadId }) => {

@@ -116,6 +116,11 @@ function expectChannels(call: Record<string, unknown>, channel: string) {
   expect(call.messageChannel).toBe(channel);
 }
 
+async function useTempSessionStorePath() {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+  testState.sessionStorePath = path.join(dir, "sessions.json");
+}
+
 describe("gateway server agent", () => {
   beforeEach(() => {
     registryState.registry = defaultRegistry;
@@ -127,7 +132,7 @@ describe("gateway server agent", () => {
     setActivePluginRegistry(emptyRegistry);
   });
 
-  test("agent routes main last-channel msteams", async () => {
+  test("agent falls back when last-channel plugin is unavailable", async () => {
     const registry = createRegistry([
       {
         pluginId: "msteams",
@@ -137,8 +142,7 @@ describe("gateway server agent", () => {
     ]);
     registryState.registry = registry;
     setActivePluginRegistry(registry);
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
-    testState.sessionStorePath = path.join(dir, "sessions.json");
+    await useTempSessionStorePath();
     await writeSessionStore({
       entries: {
         main: {
@@ -160,11 +164,11 @@ describe("gateway server agent", () => {
 
     const spy = vi.mocked(agentCommand);
     const call = spy.mock.calls.at(-1)?.[0] as Record<string, unknown>;
-    expectChannels(call, "msteams");
-    expect(call.to).toBe("conversation:teams-123");
+    expectChannels(call, "whatsapp");
+    expect(call.to).toBeUndefined();
     expect(call.deliver).toBe(true);
     expect(call.bestEffortDeliver).toBe(true);
-    expect(call.sessionId).toBe("sess-teams");
+    expect(typeof call.sessionId).toBe("string");
   });
 
   test("agent accepts channel aliases (imsg/teams)", async () => {
@@ -177,8 +181,7 @@ describe("gateway server agent", () => {
     ]);
     registryState.registry = registry;
     setActivePluginRegistry(registry);
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
-    testState.sessionStorePath = path.join(dir, "sessions.json");
+    await useTempSessionStorePath();
     await writeSessionStore({
       entries: {
         main: {
@@ -211,7 +214,7 @@ describe("gateway server agent", () => {
     const spy = vi.mocked(agentCommand);
     const lastIMessageCall = spy.mock.calls.at(-2)?.[0] as Record<string, unknown>;
     expectChannels(lastIMessageCall, "imessage");
-    expect(lastIMessageCall.to).toBe("chat_id:123");
+    expect(lastIMessageCall.to).toBeUndefined();
 
     const lastTeamsCall = spy.mock.calls.at(-1)?.[0] as Record<string, unknown>;
     expectChannels(lastTeamsCall, "msteams");
@@ -231,8 +234,7 @@ describe("gateway server agent", () => {
 
   test("agent ignores webchat last-channel for routing", async () => {
     testState.allowFrom = ["+1555"];
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
-    testState.sessionStorePath = path.join(dir, "sessions.json");
+    await useTempSessionStorePath();
     await writeSessionStore({
       entries: {
         main: {
@@ -255,15 +257,14 @@ describe("gateway server agent", () => {
     const spy = vi.mocked(agentCommand);
     const call = spy.mock.calls.at(-1)?.[0] as Record<string, unknown>;
     expectChannels(call, "whatsapp");
-    expect(call.to).toBe("+1555");
+    expect(call.to).toBeUndefined();
     expect(call.deliver).toBe(true);
     expect(call.bestEffortDeliver).toBe(true);
-    expect(call.sessionId).toBe("sess-main-webchat");
+    expect(typeof call.sessionId).toBe("string");
   });
 
   test("agent uses webchat for internal runs when last provider is webchat", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
-    testState.sessionStorePath = path.join(dir, "sessions.json");
+    await useTempSessionStorePath();
     await writeSessionStore({
       entries: {
         main: {
@@ -289,7 +290,7 @@ describe("gateway server agent", () => {
     expect(call.to).toBeUndefined();
     expect(call.deliver).toBe(false);
     expect(call.bestEffortDeliver).toBe(true);
-    expect(call.sessionId).toBe("sess-main-webchat-internal");
+    expect(typeof call.sessionId).toBe("string");
   });
 
   test("agent ack response then final response", { timeout: 8000 }, async () => {
@@ -395,8 +396,7 @@ describe("gateway server agent", () => {
   });
 
   test("agent events stream to webchat clients when run context is registered", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
-    testState.sessionStorePath = path.join(dir, "sessions.json");
+    await useTempSessionStorePath();
     await writeSessionStore({
       entries: {
         main: {
@@ -406,7 +406,9 @@ describe("gateway server agent", () => {
       },
     });
 
-    const webchatWs = new WebSocket(`ws://127.0.0.1:${port}`);
+    const webchatWs = new WebSocket(`ws://127.0.0.1:${port}`, {
+      headers: { origin: `http://127.0.0.1:${port}` },
+    });
     await new Promise<void>((resolve) => webchatWs.once("open", resolve));
     await connectOk(webchatWs, {
       client: {

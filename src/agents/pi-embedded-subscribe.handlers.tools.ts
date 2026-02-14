@@ -1,6 +1,8 @@
-import type { AgentEvent } from "@mariozechner/pi-agent-core";
+import type { AgentEvent, AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { normalizeTextForComparison } from "./pi-embedded-helpers.js";
 import { isMessagingTool, isMessagingToolSendAction } from "./pi-embedded-messaging.js";
 import {
@@ -11,8 +13,11 @@ import {
   sanitizeToolResult,
 } from "./pi-embedded-subscribe.tools.js";
 import { inferToolMetaFromArgs } from "./pi-embedded-utils.js";
+import { consumeAfterToolCallHookHandled } from "./pi-tools.before-tool-call.js";
 import { normalizeToolName } from "./tool-policy.js";
 
+/** Track tool execution start times and args for after_tool_call hook */
+const toolStartData = new Map<string, { startTime: number; args: unknown }>();
 function extendExecMeta(toolName: string, args: unknown, meta?: string): string | undefined {
   const normalized = toolName.trim().toLowerCase();
   if (normalized !== "exec" && normalized !== "bash") {
@@ -50,6 +55,9 @@ export async function handleToolExecutionStart(
   const toolName = normalizeToolName(rawToolName);
   const toolCallId = String(evt.toolCallId);
   const args = evt.args;
+
+  // Track start time and args for after_tool_call hook
+  toolStartData.set(toolCallId, { startTime: Date.now(), args });
 
   if (toolName === "read") {
     const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
@@ -145,7 +153,7 @@ export function handleToolExecutionUpdate(
   });
 }
 
-export function handleToolExecutionEnd(
+export async function handleToolExecutionEnd(
   ctx: EmbeddedPiSubscribeContext,
   evt: AgentEvent & {
     toolName: string;
@@ -225,5 +233,39 @@ export function handleToolExecutionEnd(
     if (outputText) {
       ctx.emitToolOutput(toolName, meta, outputText);
     }
+  }
+
+  // Run after_tool_call plugin hook (fire-and-forget)
+  const hookRunnerAfter = ctx.hookRunner ?? getGlobalHookRunner();
+  if (hookRunnerAfter?.hasHooks("after_tool_call")) {
+    if (consumeAfterToolCallHookHandled(toolCallId)) {
+      toolStartData.delete(toolCallId);
+      return;
+    }
+
+    const startData = toolStartData.get(toolCallId);
+    toolStartData.delete(toolCallId);
+    const durationMs = startData?.startTime != null ? Date.now() - startData.startTime : undefined;
+    const toolArgs = startData?.args;
+    const hookEvent: PluginHookAfterToolCallEvent = {
+      toolName,
+      toolCallId,
+      params: (toolArgs && typeof toolArgs === "object" ? toolArgs : {}) as Record<string, unknown>,
+      result: sanitizedResult as AgentToolResult<unknown>,
+      error: isToolError ? extractToolErrorMessage(sanitizedResult) : undefined,
+      durationMs,
+      messages: ctx.params.session?.messages ?? [],
+    };
+    void hookRunnerAfter
+      .runAfterToolCall(hookEvent, {
+        toolName,
+        agentId: undefined,
+        sessionKey: ctx.params.sessionKey,
+      })
+      .catch((err) => {
+        ctx.log.warn(`after_tool_call hook failed: tool=${toolName} error=${String(err)}`);
+      });
+  } else {
+    toolStartData.delete(toolCallId);
   }
 }

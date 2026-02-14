@@ -64,6 +64,10 @@ export function isEmbeddedPiRunStreaming(sessionId: string): boolean {
   return handle.isStreaming();
 }
 
+export function getActiveEmbeddedRunCount(): number {
+  return ACTIVE_EMBEDDED_RUNS.size;
+}
+
 export function waitForEmbeddedPiRunEnd(sessionId: string, timeoutMs = 15_000): Promise<boolean> {
   if (!sessionId || !ACTIVE_EMBEDDED_RUNS.has(sessionId)) {
     return Promise.resolve(true);

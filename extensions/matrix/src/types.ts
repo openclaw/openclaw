@@ -39,11 +39,16 @@ export type MatrixActionConfig = {
   channelInfo?: boolean;
 };
 
+/** Per-account Matrix config (excludes the accounts field to prevent recursion). */
+export type MatrixAccountConfig = Omit<MatrixConfig, "accounts">;
+
 export type MatrixConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
   /** If false, do not start Matrix. Default: true. */
   enabled?: boolean;
+  /** Multi-account configuration keyed by account ID. */
+  accounts?: Record<string, MatrixAccountConfig>;
   /** Matrix homeserver URL (https://matrix.example.org). */
   homeserver?: string;
   /** Matrix user id (@user:server). */

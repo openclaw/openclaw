@@ -6,6 +6,7 @@ import { loadWebMedia } from "../web/media.js";
 import { resolveSignalAccount } from "./accounts.js";
 import { signalRpcRequest } from "./client.js";
 import { markdownToSignalText, type SignalTextStyleRange } from "./format.js";
+import { resolveSignalRpcContext } from "./rpc-context.js";
 
 export type SignalSendOpts = {
   baseUrl?: string;
@@ -92,28 +93,6 @@ function buildTargetParams(
     return { username: [target.username] };
   }
   return null;
-}
-
-function resolveSignalRpcContext(
-  opts: SignalRpcOpts,
-  accountInfo?: ReturnType<typeof resolveSignalAccount>,
-) {
-  const hasBaseUrl = Boolean(opts.baseUrl?.trim());
-  const hasAccount = Boolean(opts.account?.trim());
-  const resolvedAccount =
-    accountInfo ||
-    (!hasBaseUrl || !hasAccount
-      ? resolveSignalAccount({
-          cfg: loadConfig(),
-          accountId: opts.accountId,
-        })
-      : undefined);
-  const baseUrl = opts.baseUrl?.trim() || resolvedAccount?.baseUrl;
-  if (!baseUrl) {
-    throw new Error("Signal base URL is required");
-  }
-  const account = opts.account?.trim() || resolvedAccount?.config.account?.trim();
-  return { baseUrl, account };
 }
 
 async function resolveAttachment(

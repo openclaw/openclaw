@@ -1,7 +1,6 @@
 import type { Command } from "commander";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
-import { createDefaultDeps } from "../deps.js";
 import {
   runDaemonInstall,
   runDaemonRestart,
@@ -83,7 +82,4 @@ export function registerDaemonCli(program: Command) {
     .action(async (opts) => {
       await runDaemonRestart(opts);
     });
-
-  // Build default deps (parity with other commands).
-  void createDefaultDeps();
 }

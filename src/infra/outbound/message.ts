@@ -36,6 +36,8 @@ type MessageSendParams = {
   mediaUrls?: string[];
   gifPlayback?: boolean;
   accountId?: string;
+  replyToId?: string;
+  threadId?: string | number;
   dryRun?: boolean;
   bestEffort?: boolean;
   deps?: OutboundSendDeps;
@@ -49,6 +51,7 @@ type MessageSendParams = {
     mediaUrls?: string[];
   };
   abortSignal?: AbortSignal;
+  silent?: boolean;
 };
 
 export type MessageSendResult = {
@@ -66,8 +69,13 @@ type MessagePollParams = {
   question: string;
   options: string[];
   maxSelections?: number;
+  durationSeconds?: number;
   durationHours?: number;
   channel?: string;
+  accountId?: string;
+  threadId?: string;
+  silent?: boolean;
+  isAnonymous?: boolean;
   dryRun?: boolean;
   cfg?: OpenClawConfig;
   gateway?: MessageGatewayOptions;
@@ -80,6 +88,7 @@ export type MessagePollResult = {
   question: string;
   options: string[];
   maxSelections: number;
+  durationSeconds: number | null;
   durationHours: number | null;
   via: "gateway";
   result?: {
@@ -165,10 +174,13 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       to: resolvedTarget.to,
       accountId: params.accountId,
       payloads: normalizedPayloads,
+      replyToId: params.replyToId,
+      threadId: params.threadId,
       gifPlayback: params.gifPlayback,
       deps: params.deps,
       bestEffort: params.bestEffort,
       abortSignal: params.abortSignal,
+      silent: params.silent,
       mirror: params.mirror
         ? {
             ...params.mirror,
@@ -233,6 +245,7 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
     question: params.question,
     options: params.options,
     maxSelections: params.maxSelections,
+    durationSeconds: params.durationSeconds,
     durationHours: params.durationHours,
   };
   const plugin = getChannelPlugin(channel);
@@ -251,6 +264,7 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
       question: normalized.question,
       options: normalized.options,
       maxSelections: normalized.maxSelections,
+      durationSeconds: normalized.durationSeconds ?? null,
       durationHours: normalized.durationHours ?? null,
       via: "gateway",
       dryRun: true,
@@ -273,8 +287,13 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
       question: normalized.question,
       options: normalized.options,
       maxSelections: normalized.maxSelections,
+      durationSeconds: normalized.durationSeconds,
       durationHours: normalized.durationHours,
+      threadId: params.threadId,
+      silent: params.silent,
+      isAnonymous: params.isAnonymous,
       channel,
+      accountId: params.accountId,
       idempotencyKey: params.idempotencyKey ?? randomIdempotencyKey(),
     },
     timeoutMs: gateway.timeoutMs,
@@ -289,6 +308,7 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
     question: normalized.question,
     options: normalized.options,
     maxSelections: normalized.maxSelections,
+    durationSeconds: normalized.durationSeconds ?? null,
     durationHours: normalized.durationHours ?? null,
     via: "gateway",
     result,

@@ -127,7 +127,13 @@ describe("gateway server auth/connect", () => {
 
       const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem, signDevicePayload } =
         await import("../infra/device-identity.js");
-      const identity = loadOrCreateDeviceIdentity();
+      const { randomUUID } = await import("node:crypto");
+      const os = await import("node:os");
+      const path = await import("node:path");
+      // Fresh identity: avoid leaking prior scopes (presence merges lists).
+      const identity = loadOrCreateDeviceIdentity(
+        path.join(os.tmpdir(), `openclaw-test-device-${randomUUID()}.json`),
+      );
       const signedAtMs = Date.now();
       const payload = buildDeviceAuthPayload({
         deviceId: identity.deviceId,
@@ -137,6 +143,18 @@ describe("gateway server auth/connect", () => {
         scopes: [],
         signedAtMs,
         token: token ?? null,
+      });
+
+      test("ignores requested scopes when device identity is omitted", async () => {
+        const ws = await openWs(port);
+        const res = await connectReq(ws, { device: null });
+        expect(res.ok).toBe(true);
+
+        const health = await rpcReq(ws, "health");
+        expect(health.ok).toBe(false);
+        expect(health.error?.message).toContain("missing scope");
+
+        ws.close();
       });
       const device = {
         id: identity.deviceId,
@@ -166,7 +184,7 @@ describe("gateway server auth/connect", () => {
           },
         }),
       );
-      const connectRes = await onceMessage<{ ok: boolean }>(ws, (o) => {
+      const connectRes = await onceMessage<{ ok: boolean; payload?: unknown }>(ws, (o) => {
         if (!o || typeof o !== "object" || Array.isArray(o)) {
           return false;
         }
@@ -174,6 +192,20 @@ describe("gateway server auth/connect", () => {
         return rec.type === "res" && rec.id === "c-no-scopes";
       });
       expect(connectRes.ok).toBe(true);
+      const helloOk = connectRes.payload as
+        | {
+            snapshot?: {
+              presence?: Array<{ deviceId?: unknown; scopes?: unknown }>;
+            };
+          }
+        | undefined;
+      const presence = helloOk?.snapshot?.presence;
+      expect(Array.isArray(presence)).toBe(true);
+      const mine = presence?.find((entry) => entry.deviceId === identity.deviceId);
+      expect(mine).toBeTruthy();
+      const presenceScopes = Array.isArray(mine?.scopes) ? mine?.scopes : [];
+      expect(presenceScopes).toEqual([]);
+      expect(presenceScopes).not.toContain("operator.admin");
 
       const health = await rpcReq(ws, "health");
       expect(health.ok).toBe(false);
@@ -473,6 +505,9 @@ describe("gateway server auth/connect", () => {
       const ws = await openTailscaleWs(port);
       const res = await connectReq(ws, { token: "secret", device: null });
       expect(res.ok).toBe(true);
+      const health = await rpcReq(ws, "health");
+      expect(health.ok).toBe(false);
+      expect(health.error?.message).toContain("missing scope");
       ws.close();
     });
   });
@@ -654,6 +689,124 @@ describe("gateway server auth/connect", () => {
       delete process.env.OPENCLAW_GATEWAY_TOKEN;
     } else {
       process.env.OPENCLAW_GATEWAY_TOKEN = prevToken;
+    }
+  });
+
+  test("keeps shared-secret lockout separate from device-token auth", async () => {
+    const { loadOrCreateDeviceIdentity } = await import("../infra/device-identity.js");
+    const { approveDevicePairing, getPairedDevice, listDevicePairing } =
+      await import("../infra/device-pairing.js");
+    testState.gatewayAuth = {
+      mode: "token",
+      token: "secret",
+      rateLimit: { maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000, exemptLoopback: false },
+      // oxlint-disable-next-line typescript/no-explicit-any
+    } as any;
+    const prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+    process.env.OPENCLAW_GATEWAY_TOKEN = "secret";
+    const port = await getFreePort();
+    const server = await startGatewayServer(port);
+    try {
+      const ws = await openWs(port);
+      const initial = await connectReq(ws, { token: "secret" });
+      if (!initial.ok) {
+        const list = await listDevicePairing();
+        const pending = list.pending.at(0);
+        expect(pending?.requestId).toBeDefined();
+        if (pending?.requestId) {
+          await approveDevicePairing(pending.requestId);
+        }
+      }
+      const identity = loadOrCreateDeviceIdentity();
+      const paired = await getPairedDevice(identity.deviceId);
+      const deviceToken = paired?.tokens?.operator?.token;
+      expect(deviceToken).toBeDefined();
+      ws.close();
+
+      const wsBadShared = await openWs(port);
+      const badShared = await connectReq(wsBadShared, { token: "wrong", device: null });
+      expect(badShared.ok).toBe(false);
+      wsBadShared.close();
+
+      const wsSharedLocked = await openWs(port);
+      const sharedLocked = await connectReq(wsSharedLocked, { token: "secret", device: null });
+      expect(sharedLocked.ok).toBe(false);
+      expect(sharedLocked.error?.message ?? "").toContain("retry later");
+      wsSharedLocked.close();
+
+      const wsDevice = await openWs(port);
+      const deviceOk = await connectReq(wsDevice, { token: deviceToken });
+      expect(deviceOk.ok).toBe(true);
+      wsDevice.close();
+    } finally {
+      await server.close();
+      if (prevToken === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      } else {
+        process.env.OPENCLAW_GATEWAY_TOKEN = prevToken;
+      }
+    }
+  });
+
+  test("keeps device-token lockout separate from shared-secret auth", async () => {
+    const { loadOrCreateDeviceIdentity } = await import("../infra/device-identity.js");
+    const { approveDevicePairing, getPairedDevice, listDevicePairing } =
+      await import("../infra/device-pairing.js");
+    testState.gatewayAuth = {
+      mode: "token",
+      token: "secret",
+      rateLimit: { maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000, exemptLoopback: false },
+      // oxlint-disable-next-line typescript/no-explicit-any
+    } as any;
+    const prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+    process.env.OPENCLAW_GATEWAY_TOKEN = "secret";
+    const port = await getFreePort();
+    const server = await startGatewayServer(port);
+    try {
+      const ws = await openWs(port);
+      const initial = await connectReq(ws, { token: "secret" });
+      if (!initial.ok) {
+        const list = await listDevicePairing();
+        const pending = list.pending.at(0);
+        expect(pending?.requestId).toBeDefined();
+        if (pending?.requestId) {
+          await approveDevicePairing(pending.requestId);
+        }
+      }
+      const identity = loadOrCreateDeviceIdentity();
+      const paired = await getPairedDevice(identity.deviceId);
+      const deviceToken = paired?.tokens?.operator?.token;
+      expect(deviceToken).toBeDefined();
+      ws.close();
+
+      const wsBadDevice = await openWs(port);
+      const badDevice = await connectReq(wsBadDevice, { token: "wrong" });
+      expect(badDevice.ok).toBe(false);
+      wsBadDevice.close();
+
+      const wsDeviceLocked = await openWs(port);
+      const deviceLocked = await connectReq(wsDeviceLocked, { token: "wrong" });
+      expect(deviceLocked.ok).toBe(false);
+      expect(deviceLocked.error?.message ?? "").toContain("retry later");
+      wsDeviceLocked.close();
+
+      const wsShared = await openWs(port);
+      const sharedOk = await connectReq(wsShared, { token: "secret", device: null });
+      expect(sharedOk.ok).toBe(true);
+      wsShared.close();
+
+      const wsDeviceReal = await openWs(port);
+      const deviceStillLocked = await connectReq(wsDeviceReal, { token: deviceToken });
+      expect(deviceStillLocked.ok).toBe(false);
+      expect(deviceStillLocked.error?.message ?? "").toContain("retry later");
+      wsDeviceReal.close();
+    } finally {
+      await server.close();
+      if (prevToken === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      } else {
+        process.env.OPENCLAW_GATEWAY_TOKEN = prevToken;
+      }
     }
   });
 

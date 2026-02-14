@@ -1,8 +1,8 @@
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import fs from "node:fs";
-import lockfile from "proper-lockfile";
 import type { AuthProfileCredential, AuthProfileStore, ProfileUsageStats } from "./types.js";
 import { resolveOAuthPath } from "../../config/paths.js";
+import { withFileLock } from "../../infra/file-lock.js";
 import { loadJsonFile, saveJsonFile } from "../../infra/json-file.js";
 import { AUTH_STORE_LOCK_OPTIONS, AUTH_STORE_VERSION, log } from "./constants.js";
 import { syncExternalCliCredentials } from "./external-cli-sync.js";
@@ -25,25 +25,17 @@ export async function updateAuthProfileStoreWithLock(params: {
   const authPath = resolveAuthStorePath(params.agentDir);
   ensureAuthStoreFile(authPath);
 
-  let release: (() => Promise<void>) | undefined;
   try {
-    release = await lockfile.lock(authPath, AUTH_STORE_LOCK_OPTIONS);
-    const store = ensureAuthProfileStore(params.agentDir);
-    const shouldSave = params.updater(store);
-    if (shouldSave) {
-      saveAuthProfileStore(store, params.agentDir);
-    }
-    return store;
+    return await withFileLock(authPath, AUTH_STORE_LOCK_OPTIONS, async () => {
+      const store = ensureAuthProfileStore(params.agentDir);
+      const shouldSave = params.updater(store);
+      if (shouldSave) {
+        saveAuthProfileStore(store, params.agentDir);
+      }
+      return store;
+    });
   } catch {
     return null;
-  } finally {
-    if (release) {
-      try {
-        await release();
-      } catch {
-        // ignore unlock errors
-      }
-    }
   }
 }
 

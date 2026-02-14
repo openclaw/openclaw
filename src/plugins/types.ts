@@ -303,6 +303,7 @@ export type PluginHookName =
   | "after_compaction"
   | "before_request"
   | "after_response"
+  | "before_reset"
   | "message_received"
   | "message_sending"
   | "message_sent"
@@ -318,6 +319,7 @@ export type PluginHookName =
 export type PluginHookAgentContext = {
   agentId?: string;
   sessionKey?: string;
+  sessionId?: string;
   workspaceDir?: string;
   messageProvider?: string;
 };
@@ -374,14 +376,33 @@ export type PluginHookAfterResponseResult = {
 
 // Compaction hooks
 export type PluginHookBeforeCompactionEvent = {
+  /** Total messages in the session before any truncation or compaction */
   messageCount: number;
+  /** Messages being fed to the compaction LLM (after history-limit truncation) */
+  compactingCount?: number;
   tokenCount?: number;
+  messages?: unknown[];
+  /** Path to the session JSONL transcript. All messages are already on disk
+   *  before compaction starts, so plugins can read this file asynchronously
+   *  and process in parallel with the compaction LLM call. */
+  sessionFile?: string;
+};
+
+// before_reset hook — fired when /new or /reset clears a session
+export type PluginHookBeforeResetEvent = {
+  sessionFile?: string;
+  messages?: unknown[];
+  reason?: string;
 };
 
 export type PluginHookAfterCompactionEvent = {
   messageCount: number;
   tokenCount?: number;
   compactedCount: number;
+  /** Path to the session JSONL transcript. All pre-compaction messages are
+   *  preserved on disk, so plugins can read and process them asynchronously
+   *  without blocking the compaction pipeline. */
+  sessionFile?: string;
 };
 
 // Message context
@@ -457,6 +478,10 @@ export type PluginHookAfterToolCallEvent = {
   toolCallId: string;
   params: Record<string, unknown>;
   result: AgentToolResult<unknown>;
+  /** Optional error string when tool execution failed. */
+  error?: string;
+  /** Optional wall-clock duration for the tool execution. */
+  durationMs?: number;
   messages: AgentMessage[];
   systemPrompt?: string;
 };
@@ -549,6 +574,10 @@ export type PluginHookHandlerMap = {
     event: PluginHookAfterResponseEvent,
     ctx: PluginHookAgentContext,
   ) => Promise<PluginHookAfterResponseResult | void> | PluginHookAfterResponseResult | void;
+  before_reset: (
+    event: PluginHookBeforeResetEvent,
+    ctx: PluginHookAgentContext,
+  ) => Promise<void> | void;
   message_received: (
     event: PluginHookMessageReceivedEvent,
     ctx: PluginHookMessageContext,

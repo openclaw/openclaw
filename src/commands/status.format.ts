@@ -22,8 +22,11 @@ export const shortenText = (value: string, maxLen: number) => {
 export const formatTokensCompact = (
   sess: Pick<SessionStatus, "totalTokens" | "contextTokens" | "percentUsed">,
 ) => {
-  const used = sess.totalTokens ?? 0;
+  const used = sess.totalTokens;
   const ctx = sess.contextTokens;
+  if (used == null) {
+    return ctx ? `unknown/${formatKTokens(ctx)} (?%)` : "unknown used";
+  }
   if (!ctx) {
     return `${formatKTokens(used)} used`;
   }

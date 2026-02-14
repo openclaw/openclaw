@@ -14,7 +14,7 @@ import type {
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolveStateDir } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
+import { deriveQmdScopeChannel, deriveQmdScopeChatType, isQmdScopeAllowed } from "./qmd-scope.js";
 import {
   listSessionFilesForAgent,
   buildSessionEntry,
@@ -262,9 +262,10 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
     const qmdSearchCommand = this.qmd.searchMode;
     const args = this.buildSearchArgs(qmdSearchCommand, trimmed, limit);
-    if (qmdSearchCommand === "query") {
-      args.push(...collectionFilterArgs);
-    }
+
+    // Always scope to managed collections (default + custom). Even for `search`/`vsearch`,
+    // pass collection filters; if a given QMD build rejects these flags, we fall back to `query`.
+    args.push(...collectionFilterArgs);
     let stdout: string;
     let stderr: string;
     try {
@@ -751,89 +752,17 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
   }
 
-  private isScopeAllowed(sessionKey?: string): boolean {
-    const scope = this.qmd.scope;
-    if (!scope) {
-      return true;
-    }
-    const channel = this.deriveChannelFromKey(sessionKey);
-    const chatType = this.deriveChatTypeFromKey(sessionKey);
-    const normalizedKey = sessionKey ?? "";
-    for (const rule of scope.rules ?? []) {
-      if (!rule) {
-        continue;
-      }
-      const match = rule.match ?? {};
-      if (match.channel && match.channel !== channel) {
-        continue;
-      }
-      if (match.chatType && match.chatType !== chatType) {
-        continue;
-      }
-      if (match.keyPrefix && !normalizedKey.startsWith(match.keyPrefix)) {
-        continue;
-      }
-      return rule.action === "allow";
-    }
-    const fallback = scope.default ?? "allow";
-    return fallback === "allow";
-  }
-
   private logScopeDenied(sessionKey?: string): void {
-    const channel = this.deriveChannelFromKey(sessionKey) ?? "unknown";
-    const chatType = this.deriveChatTypeFromKey(sessionKey) ?? "unknown";
+    const channel = deriveQmdScopeChannel(sessionKey) ?? "unknown";
+    const chatType = deriveQmdScopeChatType(sessionKey) ?? "unknown";
     const key = sessionKey?.trim() || "<none>";
     log.warn(
       `qmd search denied by scope (channel=${channel}, chatType=${chatType}, session=${key})`,
     );
   }
 
-  private deriveChannelFromKey(key?: string) {
-    if (!key) {
-      return undefined;
-    }
-    const normalized = this.normalizeSessionKey(key);
-    if (!normalized) {
-      return undefined;
-    }
-    const parts = normalized.split(":").filter(Boolean);
-    if (
-      parts.length >= 2 &&
-      (parts[1] === "group" || parts[1] === "channel" || parts[1] === "direct" || parts[1] === "dm")
-    ) {
-      return parts[0]?.toLowerCase();
-    }
-    return undefined;
-  }
-
-  private deriveChatTypeFromKey(key?: string) {
-    if (!key) {
-      return undefined;
-    }
-    const normalized = this.normalizeSessionKey(key);
-    if (!normalized) {
-      return undefined;
-    }
-    if (normalized.includes(":group:")) {
-      return "group";
-    }
-    if (normalized.includes(":channel:")) {
-      return "channel";
-    }
-    return "direct";
-  }
-
-  private normalizeSessionKey(key: string): string | undefined {
-    const trimmed = key.trim();
-    if (!trimmed) {
-      return undefined;
-    }
-    const parsed = parseAgentSessionKey(trimmed);
-    const normalized = (parsed?.rest ?? trimmed).toLowerCase();
-    if (normalized.startsWith("subagent:")) {
-      return undefined;
-    }
-    return normalized;
+  private isScopeAllowed(sessionKey?: string): boolean {
+    return isQmdScopeAllowed(this.qmd.scope, sessionKey);
   }
 
   private toDocLocation(

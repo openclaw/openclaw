@@ -933,6 +933,7 @@ Optional **Docker sandboxing** for the embedded agent. See [Sandboxing](/gateway
 **Sandboxed browser** (`sandbox.browser.enabled`): Chromium + CDP in a container. noVNC URL injected into system prompt. Does not require `browser.enabled` in main config.
 
 - `allowHostControl: false` (default) blocks sandboxed sessions from targeting the host browser.
+- `sandbox.browser.binds` mounts additional host directories into the sandbox browser container only. When set (including `[]`), it replaces `docker.binds` for the browser container.
 
 </Accordion>
 
@@ -1889,10 +1890,17 @@ See [Plugins](/tools/plugin).
     port: 18789,
     bind: "loopback",
     auth: {
-      mode: "token", // token | password
+      mode: "token", // token | password | trusted-proxy
       token: "your-token",
       // password: "your-password", // or OPENCLAW_GATEWAY_PASSWORD
+      // trustedProxy: { userHeader: "x-forwarded-user" }, // for mode=trusted-proxy; see /gateway/trusted-proxy-auth
       allowTailscale: true,
+      rateLimit: {
+        maxAttempts: 10,
+        windowMs: 60000,
+        lockoutMs: 300000,
+        exemptLoopback: true,
+      },
     },
     tailscale: {
       mode: "off", // off | serve | funnel
@@ -1912,6 +1920,12 @@ See [Plugins](/tools/plugin).
       // password: "your-password",
     },
     trustedProxies: ["10.0.0.1"],
+    tools: {
+      // Additional /tools/invoke HTTP denies
+      deny: ["browser"],
+      // Remove tools from the default HTTP deny list
+      allow: ["gateway"],
+    },
   },
 }
 ```
@@ -1922,11 +1936,16 @@ See [Plugins](/tools/plugin).
 - `port`: single multiplexed port for WS + HTTP. Precedence: `--port` > `OPENCLAW_GATEWAY_PORT` > `gateway.port` > `18789`.
 - `bind`: `auto`, `loopback` (default), `lan` (`0.0.0.0`), `tailnet` (Tailscale IP only), or `custom`.
 - **Auth**: required by default. Non-loopback binds require a shared token/password. Onboarding wizard generates a token by default.
+- `auth.mode: "trusted-proxy"`: delegate auth to an identity-aware reverse proxy and trust identity headers from `gateway.trustedProxies` (see [Trusted Proxy Auth](/gateway/trusted-proxy-auth)).
 - `auth.allowTailscale`: when `true`, Tailscale Serve identity headers satisfy auth (verified via `tailscale whois`). Defaults to `true` when `tailscale.mode = "serve"`.
+- `auth.rateLimit`: optional failed-auth limiter. Applies per client IP and per auth scope (shared-secret and device-token are tracked independently). Blocked attempts return `429` + `Retry-After`.
+  - `auth.rateLimit.exemptLoopback` defaults to `true`; set `false` when you intentionally want localhost traffic rate-limited too (for test setups or strict proxy deployments).
 - `tailscale.mode`: `serve` (tailnet only, loopback bind) or `funnel` (public, requires auth).
 - `remote.transport`: `ssh` (default) or `direct` (ws/wss). For `direct`, `remote.url` must be `ws://` or `wss://`.
 - `gateway.remote.token` is for remote CLI calls only; does not enable local gateway auth.
 - `trustedProxies`: reverse proxy IPs that terminate TLS. Only list proxies you control.
+- `gateway.tools.deny`: extra tool names blocked for HTTP `POST /tools/invoke` (extends default deny list).
+- `gateway.tools.allow`: remove tool names from the default HTTP deny list.
 
 </Accordion>
 
@@ -1934,6 +1953,10 @@ See [Plugins](/tools/plugin).
 
 - Chat Completions: disabled by default. Enable with `gateway.http.endpoints.chatCompletions.enabled: true`.
 - Responses API: `gateway.http.endpoints.responses.enabled`.
+- Responses URL-input hardening:
+  - `gateway.http.endpoints.responses.maxUrlParts`
+  - `gateway.http.endpoints.responses.files.urlAllowlist`
+  - `gateway.http.endpoints.responses.images.urlAllowlist`
 
 ### Multi-instance isolation
 
@@ -1960,9 +1983,12 @@ See [Multiple Gateways](/gateway/multiple-gateways).
     token: "shared-secret",
     path: "/hooks",
     maxBodyBytes: 262144,
+    defaultSessionKey: "hook:ingress",
+    allowRequestSessionKey: false,
+    allowedSessionKeyPrefixes: ["hook:"],
     allowedAgentIds: ["hooks", "main"],
     presets: ["gmail"],
-    transformsDir: "~/.openclaw/hooks",
+    transformsDir: "~/.openclaw/hooks/transforms",
     mappings: [
       {
         match: { path: "gmail" },
@@ -1987,6 +2013,7 @@ Auth: `Authorization: Bearer <token>` or `x-openclaw-token: <token>`.
 
 - `POST /hooks/wake` → `{ text, mode?: "now"|"next-heartbeat" }`
 - `POST /hooks/agent` → `{ message, name?, agentId?, sessionKey?, wakeMode?, deliver?, channel?, to?, model?, thinking?, timeoutSeconds? }`
+  - `sessionKey` from request payload is accepted only when `hooks.allowRequestSessionKey=true` (default: `false`).
 - `POST /hooks/<name>` → resolved via `hooks.mappings`
 
 <Accordion title="Mapping details">
@@ -1995,8 +2022,12 @@ Auth: `Authorization: Bearer <token>` or `x-openclaw-token: <token>`.
 - `match.source` matches a payload field for generic paths.
 - Templates like `{{messages[0].subject}}` read from the payload.
 - `transform` can point to a JS/TS module returning a hook action.
+  - `transform.module` must be a relative path and stays within `hooks.transformsDir` (absolute paths and traversal are rejected).
 - `agentId` routes to a specific agent; unknown IDs fall back to default.
 - `allowedAgentIds`: restricts explicit routing (`*` or omitted = allow all, `[]` = deny all).
+- `defaultSessionKey`: optional fixed session key for hook agent runs without explicit `sessionKey`.
+- `allowRequestSessionKey`: allow `/hooks/agent` callers to set `sessionKey` (default: `false`).
+- `allowedSessionKeyPrefixes`: optional prefix allowlist for explicit `sessionKey` values (request + mapping), e.g. `["hook:"]`.
 - `deliver: true` sends final reply to a channel; `channel` defaults to `last`.
 - `model` overrides LLM for this hook run (must be allowed if model catalog is set).
 
@@ -2036,14 +2067,18 @@ Auth: `Authorization: Bearer <token>` or `x-openclaw-token: <token>`.
 {
   canvasHost: {
     root: "~/.openclaw/workspace/canvas",
-    port: 18793,
     liveReload: true,
     // enabled: false, // or OPENCLAW_SKIP_CANVAS_HOST=1
   },
 }
 ```
 
-- Serves HTML/CSS/JS over HTTP for iOS/Android nodes.
+- Serves agent-editable HTML/CSS/JS and A2UI over HTTP under the Gateway port:
+  - `http://<gateway-host>:<gateway.port>/__openclaw__/canvas/`
+  - `http://<gateway-host>:<gateway.port>/__openclaw__/a2ui/`
+- Local-only: keep `gateway.bind: "loopback"` (default).
+- Non-loopback binds: canvas routes require Gateway auth (token/password/trusted-proxy), same as other Gateway HTTP surfaces.
+- Node WebViews typically don't send auth headers; after a node is paired and connected, the Gateway allows a private-IP fallback so the node can load canvas/A2UI without leaking secrets into URLs.
 - Injects live-reload client into served HTML.
 - Auto-creates starter `index.html` when empty.
 - Also serves A2UI at `/__openclaw__/a2ui/`.

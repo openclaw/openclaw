@@ -376,6 +376,7 @@ struct SettingsTab: View {
                 }
             }
         }
+        .gatewayTrustPromptAlert()
     }
 
     @ViewBuilder
@@ -388,11 +389,13 @@ struct SettingsTab: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
 
-                if let lastKnown = GatewaySettingsStore.loadLastGatewayConnection() {
+                if let lastKnown = GatewaySettingsStore.loadLastGatewayConnection(),
+                   case let .manual(host, port, _, _) = lastKnown
+                {
                     Button {
                         Task { await self.connectLastKnown() }
                     } label: {
-                        self.lastKnownButtonLabel(host: lastKnown.host, port: lastKnown.port)
+                        self.lastKnownButtonLabel(host: host, port: port)
                     }
                     .disabled(self.connectingGatewayID != nil)
                     .buttonStyle(.borderedProminent)

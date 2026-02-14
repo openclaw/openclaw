@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { buildModelAliasIndex } from "../../agents/model-selection.js";
+import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.ts";
 import { enqueueSystemEvent, resetSystemEventsForTest } from "../../infra/system-events.js";
 import { applyResetModelOverride } from "./session-reset-model.js";
 import { prependSystemEvents } from "./session-updates.js";
@@ -451,28 +452,234 @@ describe("applyResetModelOverride", () => {
   });
 });
 
+describe("initSessionState preserves behavior overrides across /new and /reset", () => {
+  async function createStorePath(prefix: string): Promise<string> {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+    return path.join(root, "sessions.json");
+  }
+
+  async function seedSessionStoreWithOverrides(params: {
+    storePath: string;
+    sessionKey: string;
+    sessionId: string;
+    overrides: Record<string, unknown>;
+  }): Promise<void> {
+    const { saveSessionStore } = await import("../../config/sessions.js");
+    await saveSessionStore(params.storePath, {
+      [params.sessionKey]: {
+        sessionId: params.sessionId,
+        updatedAt: Date.now(),
+        ...params.overrides,
+      },
+    });
+  }
+
+  it("/new preserves verboseLevel from previous session", async () => {
+    const storePath = await createStorePath("openclaw-reset-verbose-");
+    const sessionKey = "agent:main:telegram:dm:user1";
+    const existingSessionId = "existing-session-verbose";
+    await seedSessionStoreWithOverrides({
+      storePath,
+      sessionKey,
+      sessionId: existingSessionId,
+      overrides: { verboseLevel: "on" },
+    });
+
+    const cfg = {
+      session: { store: storePath, idleMinutes: 999 },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "/new",
+        RawBody: "/new",
+        CommandBody: "/new",
+        From: "user1",
+        To: "bot",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+        Provider: "telegram",
+        Surface: "telegram",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.resetTriggered).toBe(true);
+    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.sessionEntry.verboseLevel).toBe("on");
+  });
+
+  it("/reset preserves thinkingLevel and reasoningLevel from previous session", async () => {
+    const storePath = await createStorePath("openclaw-reset-thinking-");
+    const sessionKey = "agent:main:telegram:dm:user2";
+    const existingSessionId = "existing-session-thinking";
+    await seedSessionStoreWithOverrides({
+      storePath,
+      sessionKey,
+      sessionId: existingSessionId,
+      overrides: { thinkingLevel: "full", reasoningLevel: "high" },
+    });
+
+    const cfg = {
+      session: { store: storePath, idleMinutes: 999 },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "/reset",
+        RawBody: "/reset",
+        CommandBody: "/reset",
+        From: "user2",
+        To: "bot",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+        Provider: "telegram",
+        Surface: "telegram",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.resetTriggered).toBe(true);
+    expect(result.sessionEntry.thinkingLevel).toBe("full");
+    expect(result.sessionEntry.reasoningLevel).toBe("high");
+  });
+
+  it("/new preserves ttsAuto from previous session", async () => {
+    const storePath = await createStorePath("openclaw-reset-tts-");
+    const sessionKey = "agent:main:telegram:dm:user3";
+    const existingSessionId = "existing-session-tts";
+    await seedSessionStoreWithOverrides({
+      storePath,
+      sessionKey,
+      sessionId: existingSessionId,
+      overrides: { ttsAuto: "on" },
+    });
+
+    const cfg = {
+      session: { store: storePath, idleMinutes: 999 },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "/new",
+        RawBody: "/new",
+        CommandBody: "/new",
+        From: "user3",
+        To: "bot",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+        Provider: "telegram",
+        Surface: "telegram",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.sessionEntry.ttsAuto).toBe("on");
+  });
+
+  it("archives previous transcript file on /new reset", async () => {
+    const storePath = await createStorePath("openclaw-reset-archive-");
+    const sessionKey = "agent:main:telegram:dm:user-archive";
+    const existingSessionId = "existing-session-archive";
+    await seedSessionStoreWithOverrides({
+      storePath,
+      sessionKey,
+      sessionId: existingSessionId,
+      overrides: {},
+    });
+    const transcriptPath = path.join(path.dirname(storePath), `${existingSessionId}.jsonl`);
+    await fs.writeFile(
+      transcriptPath,
+      `${JSON.stringify({ message: { role: "user", content: "hello" } })}\n`,
+      "utf-8",
+    );
+
+    const cfg = {
+      session: { store: storePath, idleMinutes: 999 },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "/new",
+        RawBody: "/new",
+        CommandBody: "/new",
+        From: "user-archive",
+        To: "bot",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+        Provider: "telegram",
+        Surface: "telegram",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.resetTriggered).toBe(true);
+    const files = await fs.readdir(path.dirname(storePath));
+    expect(files.some((f) => f.startsWith(`${existingSessionId}.jsonl.reset.`))).toBe(true);
+  });
+
+  it("idle-based new session does NOT preserve overrides (no entry to read)", async () => {
+    const storePath = await createStorePath("openclaw-idle-no-preserve-");
+    const sessionKey = "agent:main:telegram:dm:new-user";
+
+    const cfg = {
+      session: { store: storePath, idleMinutes: 0 },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "hello",
+        RawBody: "hello",
+        CommandBody: "hello",
+        From: "new-user",
+        To: "bot",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+        Provider: "telegram",
+        Surface: "telegram",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.resetTriggered).toBe(false);
+    expect(result.sessionEntry.verboseLevel).toBeUndefined();
+    expect(result.sessionEntry.thinkingLevel).toBeUndefined();
+  });
+});
+
 describe("prependSystemEvents", () => {
   it("adds a local timestamp to queued system events by default", async () => {
     vi.useFakeTimers();
-    const originalTz = process.env.TZ;
-    process.env.TZ = "America/Los_Angeles";
-    const timestamp = new Date("2026-01-12T20:19:17Z");
-    vi.setSystemTime(timestamp);
+    try {
+      const timestamp = new Date("2026-01-12T20:19:17Z");
+      const expectedTimestamp = formatZonedTimestamp(timestamp, { displaySeconds: true });
+      vi.setSystemTime(timestamp);
 
-    enqueueSystemEvent("Model switched.", { sessionKey: "agent:main:main" });
+      enqueueSystemEvent("Model switched.", { sessionKey: "agent:main:main" });
 
-    const result = await prependSystemEvents({
-      cfg: {} as OpenClawConfig,
-      sessionKey: "agent:main:main",
-      isMainSession: false,
-      isNewSession: false,
-      prefixedBodyBase: "User: hi",
-    });
+      const result = await prependSystemEvents({
+        cfg: {} as OpenClawConfig,
+        sessionKey: "agent:main:main",
+        isMainSession: false,
+        isNewSession: false,
+        prefixedBodyBase: "User: hi",
+      });
 
-    expect(result).toMatch(/System: \[2026-01-12 12:19:17 [^\]]+\] Model switched\./);
-
-    resetSystemEventsForTest();
-    process.env.TZ = originalTz;
-    vi.useRealTimers();
+      expect(expectedTimestamp).toBeDefined();
+      expect(result).toContain(`System: [${expectedTimestamp}] Model switched.`);
+    } finally {
+      resetSystemEventsForTest();
+      vi.useRealTimers();
+    }
   });
 });

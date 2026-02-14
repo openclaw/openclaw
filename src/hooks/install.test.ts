@@ -1,32 +1,202 @@
 import JSZip from "jszip";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
+import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import * as tar from "tar";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const tempDirs: string[] = [];
+const fixtureRoot = path.join(os.tmpdir(), `openclaw-hook-install-${randomUUID()}`);
+let tempDirIndex = 0;
+
+let zipHooksBuffer: Buffer;
+let zipTraversalBuffer: Buffer;
+let tarHooksBuffer: Buffer;
+let tarTraversalBuffer: Buffer;
+let tarEvilIdBuffer: Buffer;
+let tarReservedIdBuffer: Buffer;
+let npmPackHooksBuffer: Buffer;
 
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: vi.fn(),
 }));
 
+async function packToArchive({
+  pkgDir,
+  outDir,
+  outName,
+}: {
+  pkgDir: string;
+  outDir: string;
+  outName: string;
+}) {
+  const dest = path.join(outDir, outName);
+  fs.rmSync(dest, { force: true });
+  await tar.c(
+    {
+      gzip: true,
+      file: dest,
+      cwd: path.dirname(pkgDir),
+    },
+    [path.basename(pkgDir)],
+  );
+  return dest;
+}
+
 function makeTempDir() {
-  const dir = path.join(os.tmpdir(), `openclaw-hook-install-${randomUUID()}`);
+  const dir = path.join(fixtureRoot, `case-${tempDirIndex++}`);
   fs.mkdirSync(dir, { recursive: true });
-  tempDirs.push(dir);
   return dir;
 }
 
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    try {
-      fs.rmSync(dir, { recursive: true, force: true });
-    } catch {
-      // ignore cleanup failures
-    }
+const { runCommandWithTimeout } = await import("../process/exec.js");
+const { installHooksFromArchive, installHooksFromNpmSpec, installHooksFromPath } =
+  await import("./install.js");
+
+beforeAll(async () => {
+  fs.mkdirSync(fixtureRoot, { recursive: true });
+
+  const zipHooks = new JSZip();
+  zipHooks.file(
+    "package/package.json",
+    JSON.stringify({
+      name: "@openclaw/zip-hooks",
+      version: "0.0.1",
+      openclaw: { hooks: ["./hooks/zip-hook"] },
+    }),
+  );
+  zipHooks.file(
+    "package/hooks/zip-hook/HOOK.md",
+    [
+      "---",
+      "name: zip-hook",
+      "description: Zip hook",
+      'metadata: {"openclaw":{"events":["command:new"]}}',
+      "---",
+      "",
+      "# Zip Hook",
+    ].join("\n"),
+  );
+  zipHooks.file("package/hooks/zip-hook/handler.ts", "export default async () => {};\n");
+  zipHooksBuffer = await zipHooks.generateAsync({ type: "nodebuffer" });
+
+  const zipTraversal = new JSZip();
+  zipTraversal.file("../pwned.txt", "nope\n");
+  zipTraversalBuffer = await zipTraversal.generateAsync({ type: "nodebuffer" });
+
+  const makeTarWithPackage = async (params: {
+    packageName: string;
+    hookName: string;
+  }): Promise<Buffer> => {
+    const workDir = makeTempDir();
+    const archivePath = path.join(workDir, "hooks.tar");
+    const pkgDir = path.join(workDir, "package");
+    fs.mkdirSync(path.join(pkgDir, "hooks", params.hookName), { recursive: true });
+    fs.writeFileSync(
+      path.join(pkgDir, "package.json"),
+      JSON.stringify({
+        name: params.packageName,
+        version: "0.0.1",
+        openclaw: { hooks: [`./hooks/${params.hookName}`] },
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pkgDir, "hooks", params.hookName, "HOOK.md"),
+      [
+        "---",
+        `name: ${params.hookName}`,
+        `description: ${params.hookName}`,
+        'metadata: {"openclaw":{"events":["command:new"]}}',
+        "---",
+        "",
+        "# Hook",
+      ].join("\n"),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pkgDir, "hooks", params.hookName, "handler.ts"),
+      "export default async () => {};\n",
+      "utf-8",
+    );
+    await tar.c({ cwd: workDir, file: archivePath }, ["package"]);
+    return await fsPromises.readFile(archivePath);
+  };
+
+  tarHooksBuffer = await makeTarWithPackage({
+    packageName: "@openclaw/tar-hooks",
+    hookName: "tar-hook",
+  });
+  tarEvilIdBuffer = await makeTarWithPackage({ packageName: "@evil/..", hookName: "evil-hook" });
+  tarReservedIdBuffer = await makeTarWithPackage({
+    packageName: "@evil/.",
+    hookName: "reserved-hook",
+  });
+
+  const makeTraversalTar = async (): Promise<Buffer> => {
+    const workDir = makeTempDir();
+    const insideDir = path.join(workDir, "inside");
+    fs.mkdirSync(insideDir, { recursive: true });
+    fs.writeFileSync(path.join(workDir, "outside.txt"), "nope\n", "utf-8");
+    const archivePath = path.join(workDir, "traversal.tar");
+    await tar.c({ cwd: insideDir, file: archivePath }, ["../outside.txt"]);
+    return await fsPromises.readFile(archivePath);
+  };
+
+  tarTraversalBuffer = await makeTraversalTar();
+
+  const makeNpmPackTgz = async (): Promise<Buffer> => {
+    const workDir = makeTempDir();
+    const packedName = "test-hooks-0.0.1.tgz";
+    const pkgDir = path.join(workDir, "package");
+    fs.mkdirSync(path.join(pkgDir, "hooks", "one-hook"), { recursive: true });
+    fs.writeFileSync(
+      path.join(pkgDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/test-hooks",
+        version: "0.0.1",
+        openclaw: { hooks: ["./hooks/one-hook"] },
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pkgDir, "hooks", "one-hook", "HOOK.md"),
+      [
+        "---",
+        "name: one-hook",
+        "description: One hook",
+        'metadata: {"openclaw":{"events":["command:new"]}}',
+        "---",
+        "",
+        "# One Hook",
+      ].join("\n"),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pkgDir, "hooks", "one-hook", "handler.ts"),
+      "export default async () => {};\n",
+      "utf-8",
+    );
+
+    const packTmpDir = makeTempDir();
+    const archivePath = await packToArchive({ pkgDir, outDir: packTmpDir, outName: packedName });
+    return await fsPromises.readFile(archivePath);
+  };
+
+  npmPackHooksBuffer = await makeNpmPackTgz();
+});
+
+afterAll(() => {
+  try {
+    fs.rmSync(fixtureRoot, { recursive: true, force: true });
+  } catch {
+    // ignore cleanup failures
   }
+});
+
+beforeEach(() => {
+  vi.clearAllMocks();
 });
 
 describe("installHooksFromArchive", () => {
@@ -34,34 +204,9 @@ describe("installHooksFromArchive", () => {
     const stateDir = makeTempDir();
     const workDir = makeTempDir();
     const archivePath = path.join(workDir, "hooks.zip");
-
-    const zip = new JSZip();
-    zip.file(
-      "package/package.json",
-      JSON.stringify({
-        name: "@openclaw/zip-hooks",
-        version: "0.0.1",
-        openclaw: { hooks: ["./hooks/zip-hook"] },
-      }),
-    );
-    zip.file(
-      "package/hooks/zip-hook/HOOK.md",
-      [
-        "---",
-        "name: zip-hook",
-        "description: Zip hook",
-        'metadata: {"openclaw":{"events":["command:new"]}}',
-        "---",
-        "",
-        "# Zip Hook",
-      ].join("\n"),
-    );
-    zip.file("package/hooks/zip-hook/handler.ts", "export default async () => {};\n");
-    const buffer = await zip.generateAsync({ type: "nodebuffer" });
-    fs.writeFileSync(archivePath, buffer);
+    fs.writeFileSync(archivePath, zipHooksBuffer);
 
     const hooksDir = path.join(stateDir, "hooks");
-    const { installHooksFromArchive } = await import("./install.js");
     const result = await installHooksFromArchive({ archivePath, hooksDir });
 
     expect(result.ok).toBe(true);
@@ -74,44 +219,30 @@ describe("installHooksFromArchive", () => {
     expect(fs.existsSync(path.join(result.targetDir, "hooks", "zip-hook", "HOOK.md"))).toBe(true);
   });
 
+  it("rejects zip archives with traversal entries", async () => {
+    const stateDir = makeTempDir();
+    const workDir = makeTempDir();
+    const archivePath = path.join(workDir, "traversal.zip");
+    fs.writeFileSync(archivePath, zipTraversalBuffer);
+
+    const hooksDir = path.join(stateDir, "hooks");
+    const result = await installHooksFromArchive({ archivePath, hooksDir });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.error).toContain("failed to extract archive");
+    expect(result.error).toContain("archive entry");
+  });
+
   it("installs hook packs from tar archives", async () => {
     const stateDir = makeTempDir();
     const workDir = makeTempDir();
     const archivePath = path.join(workDir, "hooks.tar");
-    const pkgDir = path.join(workDir, "package");
-
-    fs.mkdirSync(path.join(pkgDir, "hooks", "tar-hook"), { recursive: true });
-    fs.writeFileSync(
-      path.join(pkgDir, "package.json"),
-      JSON.stringify({
-        name: "@openclaw/tar-hooks",
-        version: "0.0.1",
-        openclaw: { hooks: ["./hooks/tar-hook"] },
-      }),
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(pkgDir, "hooks", "tar-hook", "HOOK.md"),
-      [
-        "---",
-        "name: tar-hook",
-        "description: Tar hook",
-        'metadata: {"openclaw":{"events":["command:new"]}}',
-        "---",
-        "",
-        "# Tar Hook",
-      ].join("\n"),
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(pkgDir, "hooks", "tar-hook", "handler.ts"),
-      "export default async () => {};\n",
-      "utf-8",
-    );
-    await tar.c({ cwd: workDir, file: archivePath }, ["package"]);
+    fs.writeFileSync(archivePath, tarHooksBuffer);
 
     const hooksDir = path.join(stateDir, "hooks");
-    const { installHooksFromArchive } = await import("./install.js");
     const result = await installHooksFromArchive({ archivePath, hooksDir });
 
     expect(result.ok).toBe(true);
@@ -123,44 +254,30 @@ describe("installHooksFromArchive", () => {
     expect(result.targetDir).toBe(path.join(stateDir, "hooks", "tar-hooks"));
   });
 
+  it("rejects tar archives with traversal entries", async () => {
+    const stateDir = makeTempDir();
+    const workDir = makeTempDir();
+    const archivePath = path.join(workDir, "traversal.tar");
+    fs.writeFileSync(archivePath, tarTraversalBuffer);
+
+    const hooksDir = path.join(stateDir, "hooks");
+    const result = await installHooksFromArchive({ archivePath, hooksDir });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.error).toContain("failed to extract archive");
+    expect(result.error).toContain("escapes destination");
+  });
+
   it("rejects hook packs with traversal-like ids", async () => {
     const stateDir = makeTempDir();
     const workDir = makeTempDir();
     const archivePath = path.join(workDir, "hooks.tar");
-    const pkgDir = path.join(workDir, "package");
-
-    fs.mkdirSync(path.join(pkgDir, "hooks", "evil-hook"), { recursive: true });
-    fs.writeFileSync(
-      path.join(pkgDir, "package.json"),
-      JSON.stringify({
-        name: "@evil/..",
-        version: "0.0.1",
-        openclaw: { hooks: ["./hooks/evil-hook"] },
-      }),
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(pkgDir, "hooks", "evil-hook", "HOOK.md"),
-      [
-        "---",
-        "name: evil-hook",
-        "description: Evil hook",
-        'metadata: {"openclaw":{"events":["command:new"]}}',
-        "---",
-        "",
-        "# Evil Hook",
-      ].join("\n"),
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(pkgDir, "hooks", "evil-hook", "handler.ts"),
-      "export default async () => {};\n",
-      "utf-8",
-    );
-    await tar.c({ cwd: workDir, file: archivePath }, ["package"]);
+    fs.writeFileSync(archivePath, tarEvilIdBuffer);
 
     const hooksDir = path.join(stateDir, "hooks");
-    const { installHooksFromArchive } = await import("./install.js");
     const result = await installHooksFromArchive({ archivePath, hooksDir });
 
     expect(result.ok).toBe(false);
@@ -174,40 +291,9 @@ describe("installHooksFromArchive", () => {
     const stateDir = makeTempDir();
     const workDir = makeTempDir();
     const archivePath = path.join(workDir, "hooks.tar");
-    const pkgDir = path.join(workDir, "package");
-
-    fs.mkdirSync(path.join(pkgDir, "hooks", "reserved-hook"), { recursive: true });
-    fs.writeFileSync(
-      path.join(pkgDir, "package.json"),
-      JSON.stringify({
-        name: "@evil/.",
-        version: "0.0.1",
-        openclaw: { hooks: ["./hooks/reserved-hook"] },
-      }),
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(pkgDir, "hooks", "reserved-hook", "HOOK.md"),
-      [
-        "---",
-        "name: reserved-hook",
-        "description: Reserved hook",
-        'metadata: {"openclaw":{"events":["command:new"]}}',
-        "---",
-        "",
-        "# Reserved Hook",
-      ].join("\n"),
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(pkgDir, "hooks", "reserved-hook", "handler.ts"),
-      "export default async () => {};\n",
-      "utf-8",
-    );
-    await tar.c({ cwd: workDir, file: archivePath }, ["package"]);
+    fs.writeFileSync(archivePath, tarReservedIdBuffer);
 
     const hooksDir = path.join(stateDir, "hooks");
-    const { installHooksFromArchive } = await import("./install.js");
     const result = await installHooksFromArchive({ archivePath, hooksDir });
 
     expect(result.ok).toBe(false);
@@ -253,11 +339,9 @@ describe("installHooksFromPath", () => {
       "utf-8",
     );
 
-    const { runCommandWithTimeout } = await import("../process/exec.js");
     const run = vi.mocked(runCommandWithTimeout);
     run.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
 
-    const { installHooksFromPath } = await import("./install.js");
     const res = await installHooksFromPath({
       path: pkgDir,
       hooksDir: path.join(stateDir, "hooks"),
@@ -301,7 +385,6 @@ describe("installHooksFromPath", () => {
     fs.writeFileSync(path.join(hookDir, "handler.ts"), "export default async () => {};\n");
 
     const hooksDir = path.join(stateDir, "hooks");
-    const { installHooksFromPath } = await import("./install.js");
     const result = await installHooksFromPath({ path: hookDir, hooksDir });
 
     expect(result.ok).toBe(true);
@@ -312,5 +395,60 @@ describe("installHooksFromPath", () => {
     expect(result.hooks).toEqual(["my-hook"]);
     expect(result.targetDir).toBe(path.join(stateDir, "hooks", "my-hook"));
     expect(fs.existsSync(path.join(result.targetDir, "HOOK.md"))).toBe(true);
+  });
+});
+
+describe("installHooksFromNpmSpec", () => {
+  it("uses --ignore-scripts for npm pack and cleans up temp dir", async () => {
+    const stateDir = makeTempDir();
+
+    const run = vi.mocked(runCommandWithTimeout);
+    let packTmpDir = "";
+    const packedName = "test-hooks-0.0.1.tgz";
+    run.mockImplementation(async (argv, opts) => {
+      if (argv[0] === "npm" && argv[1] === "pack") {
+        packTmpDir = String(opts?.cwd ?? "");
+        fs.writeFileSync(path.join(packTmpDir, packedName), npmPackHooksBuffer);
+        return { code: 0, stdout: `${packedName}\n`, stderr: "", signal: null, killed: false };
+      }
+      throw new Error(`unexpected command: ${argv.join(" ")}`);
+    });
+
+    const hooksDir = path.join(stateDir, "hooks");
+    const result = await installHooksFromNpmSpec({
+      spec: "@openclaw/test-hooks@0.0.1",
+      hooksDir,
+      logger: { info: () => {}, warn: () => {} },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(result.hookPackId).toBe("test-hooks");
+    expect(fs.existsSync(path.join(result.targetDir, "hooks", "one-hook", "HOOK.md"))).toBe(true);
+
+    const packCalls = run.mock.calls.filter(
+      (c) => Array.isArray(c[0]) && c[0][0] === "npm" && c[0][1] === "pack",
+    );
+    expect(packCalls.length).toBe(1);
+    const packCall = packCalls[0];
+    if (!packCall) {
+      throw new Error("expected npm pack call");
+    }
+    const [argv, options] = packCall;
+    expect(argv).toEqual(["npm", "pack", "@openclaw/test-hooks@0.0.1", "--ignore-scripts"]);
+    expect(options?.env).toMatchObject({ NPM_CONFIG_IGNORE_SCRIPTS: "true" });
+
+    expect(packTmpDir).not.toBe("");
+    expect(fs.existsSync(packTmpDir)).toBe(false);
+  });
+
+  it("rejects non-registry npm specs", async () => {
+    const result = await installHooksFromNpmSpec({ spec: "github:evil/evil" });
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.error).toContain("unsupported npm spec");
   });
 });

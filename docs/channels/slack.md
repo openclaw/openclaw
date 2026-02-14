@@ -127,6 +127,7 @@ openclaw gateway
 - Config tokens override env fallback.
 - `SLACK_BOT_TOKEN` / `SLACK_APP_TOKEN` env fallback applies only to the default account.
 - `userToken` (`xoxp-...`) is config-only (no env fallback) and defaults to read-only behavior (`userTokenReadOnly: true`).
+- Optional: add `chat:write.customize` if you want outgoing messages to use the active agent identity (custom `username` and icon). `icon_emoji` uses `:emoji_name:` syntax.
 
 <Tip>
 For actions/directory reads, user token can be preferred when configured. For writes, bot token remains preferred; user-token writes are only allowed when `userTokenReadOnly: false` and bot token is unavailable.
@@ -220,6 +221,7 @@ and still route command execution against the target conversation session (`Comm
 - Channel sessions: `agent:<agentId>:slack:channel:<channelId>`.
 - Thread replies can create thread session suffixes (`:thread:<threadTs>`) when applicable.
 - `channels.slack.thread.historyScope` default is `thread`; `thread.inheritParent` default is `false`.
+- `channels.slack.thread.initialHistoryLimit` controls how many existing thread messages are fetched when a new thread session starts (default `20`; set `0` to disable).
 
 Reply threading controls:
 
@@ -231,6 +233,8 @@ Manual reply tags are supported:
 
 - `[[reply_to_current]]`
 - `[[reply_to:<id>]]`
+
+Note: `replyToMode="off"` disables implicit reply threading. Explicit `[[reply_to_*]]` tags are still honored.
 
 ## Media, chunking, and delivery
 

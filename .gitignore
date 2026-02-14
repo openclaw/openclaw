@@ -73,6 +73,7 @@ docs/.local/
 IDENTITY.md
 USER.md
 .tgz
+.idea
 
 # local tooling
 .serena/
@@ -81,4 +82,5 @@ USER.md
 /memory/
 .agent/*.json
 !.agent/workflows/
-local/
+/local/
+package-lock.json

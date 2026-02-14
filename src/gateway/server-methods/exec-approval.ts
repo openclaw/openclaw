@@ -15,7 +15,7 @@ export function createExecApprovalHandlers(
   opts?: { forwarder?: ExecApprovalForwarder },
 ): GatewayRequestHandlers {
   return {
-    "exec.approval.request": async ({ params, respond, context }) => {
+    "exec.approval.request": async ({ params, respond, context, client }) => {
       if (!validateExecApprovalRequestParams(params)) {
         respond(
           false,
@@ -40,7 +40,9 @@ export function createExecApprovalHandlers(
         resolvedPath?: string;
         sessionKey?: string;
         timeoutMs?: number;
+        twoPhase?: boolean;
       };
+      const twoPhase = p.twoPhase === true;
       const timeoutMs = typeof p.timeoutMs === "number" ? p.timeoutMs : 120_000;
       const explicitId = typeof p.id === "string" && p.id.trim().length > 0 ? p.id.trim() : null;
       if (explicitId && manager.getSnapshot(explicitId)) {
@@ -62,7 +64,24 @@ export function createExecApprovalHandlers(
         sessionKey: p.sessionKey ?? null,
       };
       const record = manager.create(request, timeoutMs, explicitId);
-      const decisionPromise = manager.waitForDecision(record, timeoutMs);
+      record.requestedByConnId = client?.connId ?? null;
+      record.requestedByDeviceId = client?.connect?.device?.id ?? null;
+      record.requestedByClientId = client?.connect?.client?.id ?? null;
+      // Use register() to synchronously add to pending map before sending any response.
+      // This ensures the approval ID is valid immediately after the "accepted" response.
+      let decisionPromise: Promise<
+        import("../../infra/exec-approvals.js").ExecApprovalDecision | null
+      >;
+      try {
+        decisionPromise = manager.register(record, timeoutMs);
+      } catch (err) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, `registration failed: ${String(err)}`),
+        );
+        return;
+      }
       context.broadcast(
         "exec.approval.requested",
         {
@@ -83,7 +102,24 @@ export function createExecApprovalHandlers(
         .catch((err) => {
           context.logGateway?.error?.(`exec approvals: forward request failed: ${String(err)}`);
         });
+
+      // Only send immediate "accepted" response when twoPhase is requested.
+      // This preserves single-response semantics for existing callers.
+      if (twoPhase) {
+        respond(
+          true,
+          {
+            status: "accepted",
+            id: record.id,
+            createdAtMs: record.createdAtMs,
+            expiresAtMs: record.expiresAtMs,
+          },
+          undefined,
+        );
+      }
+
       const decision = await decisionPromise;
+      // Send final response with decision for callers using expectFinal:true.
       respond(
         true,
         {
@@ -91,6 +127,37 @@ export function createExecApprovalHandlers(
           decision,
           createdAtMs: record.createdAtMs,
           expiresAtMs: record.expiresAtMs,
+        },
+        undefined,
+      );
+    },
+    "exec.approval.waitDecision": async ({ params, respond }) => {
+      const p = params as { id?: string };
+      const id = typeof p.id === "string" ? p.id.trim() : "";
+      if (!id) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "id is required"));
+        return;
+      }
+      const decisionPromise = manager.awaitDecision(id);
+      if (!decisionPromise) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "approval expired or not found"),
+        );
+        return;
+      }
+      // Capture snapshot before await (entry may be deleted after grace period)
+      const snapshot = manager.getSnapshot(id);
+      const decision = await decisionPromise;
+      // Return decision (can be null on timeout) - let clients handle via askFallback
+      respond(
+        true,
+        {
+          id,
+          decision,
+          createdAtMs: snapshot?.createdAtMs,
+          expiresAtMs: snapshot?.expiresAtMs,
         },
         undefined,
       );

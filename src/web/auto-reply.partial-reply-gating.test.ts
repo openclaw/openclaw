@@ -35,7 +35,7 @@ const rmDirWithRetries = async (dir: string): Promise<void> => {
           ? String((err as { code?: unknown }).code)
           : null;
       if (code === "ENOTEMPTY" || code === "EBUSY" || code === "EPERM") {
-        await new Promise((resolve) => setTimeout(resolve, 25));
+        await new Promise((resolve) => setTimeout(resolve, 5));
         continue;
       }
       throw err;
@@ -79,7 +79,7 @@ const makeSessionStore = async (
             ? String((err as { code?: unknown }).code)
             : null;
         if (code === "ENOTEMPTY" || code === "EBUSY" || code === "EPERM") {
-          await new Promise((resolve) => setTimeout(resolve, 25));
+          await new Promise((resolve) => setTimeout(resolve, 5));
           continue;
         }
         throw err;
@@ -224,20 +224,11 @@ describe("partial reply gating", () => {
       replyResolver,
     );
 
-    let stored: Record<string, { lastChannel?: string; lastTo?: string }> | null = null;
-    for (let attempt = 0; attempt < 50; attempt += 1) {
-      stored = JSON.parse(await fs.readFile(store.storePath, "utf8")) as Record<
-        string,
-        { lastChannel?: string; lastTo?: string }
-      >;
-      if (stored[mainSessionKey]?.lastChannel && stored[mainSessionKey]?.lastTo) {
-        break;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 5));
-    }
-    if (!stored) {
-      throw new Error("store not loaded");
-    }
+    // `monitorWebChannel(..., keepAlive=false)` waits for background tasks, including last-route writes.
+    const stored = JSON.parse(await fs.readFile(store.storePath, "utf8")) as Record<
+      string,
+      { lastChannel?: string; lastTo?: string }
+    >;
     expect(stored[mainSessionKey]?.lastChannel).toBe("whatsapp");
     expect(stored[mainSessionKey]?.lastTo).toBe("+1000");
 
@@ -286,27 +277,10 @@ describe("partial reply gating", () => {
       replyResolver,
     );
 
-    let stored: Record<
+    const stored = JSON.parse(await fs.readFile(store.storePath, "utf8")) as Record<
       string,
       { lastChannel?: string; lastTo?: string; lastAccountId?: string }
-    > | null = null;
-    for (let attempt = 0; attempt < 50; attempt += 1) {
-      stored = JSON.parse(await fs.readFile(store.storePath, "utf8")) as Record<
-        string,
-        { lastChannel?: string; lastTo?: string; lastAccountId?: string }
-      >;
-      if (
-        stored[groupSessionKey]?.lastChannel &&
-        stored[groupSessionKey]?.lastTo &&
-        stored[groupSessionKey]?.lastAccountId
-      ) {
-        break;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 5));
-    }
-    if (!stored) {
-      throw new Error("store not loaded");
-    }
+    >;
     expect(stored[groupSessionKey]?.lastChannel).toBe("whatsapp");
     expect(stored[groupSessionKey]?.lastTo).toBe("123@g.us");
     expect(stored[groupSessionKey]?.lastAccountId).toBe("work");

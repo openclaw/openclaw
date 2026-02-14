@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { installRequestBodyLimitGuard } from "../infra/http-body.js";
 import {
   logWebhookError,
   logWebhookProcessed,
@@ -15,6 +16,9 @@ import { defaultRuntime } from "../runtime.js";
 import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { createTelegramBot } from "./bot.js";
+
+const TELEGRAM_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
+const TELEGRAM_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
 
 export async function startTelegramWebhook(opts: {
   token: string;
@@ -33,7 +37,7 @@ export async function startTelegramWebhook(opts: {
   const path = opts.path ?? "/telegram-webhook";
   const healthPath = opts.healthPath ?? "/healthz";
   const port = opts.port ?? 8787;
-  const host = opts.host ?? "0.0.0.0";
+  const host = opts.host ?? "127.0.0.1";
   const runtime = opts.runtime ?? defaultRuntime;
   const diagnosticsEnabled = isDiagnosticsEnabled(opts.config);
   const bot = createTelegramBot({
@@ -66,6 +70,14 @@ export async function startTelegramWebhook(opts: {
     if (diagnosticsEnabled) {
       logWebhookReceived({ channel: "telegram", updateType: "telegram-post" });
     }
+    const guard = installRequestBodyLimitGuard(req, res, {
+      maxBytes: TELEGRAM_WEBHOOK_MAX_BODY_BYTES,
+      timeoutMs: TELEGRAM_WEBHOOK_BODY_TIMEOUT_MS,
+      responseFormat: "text",
+    });
+    if (guard.isTripped()) {
+      return;
+    }
     const handled = handler(req, res);
     if (handled && typeof handled.catch === "function") {
       void handled
@@ -79,6 +91,9 @@ export async function startTelegramWebhook(opts: {
           }
         })
         .catch((err) => {
+          if (guard.isTripped()) {
+            return;
+          }
           const errMsg = formatErrorMessage(err);
           if (diagnosticsEnabled) {
             logWebhookError({
@@ -92,8 +107,13 @@ export async function startTelegramWebhook(opts: {
             res.writeHead(500);
           }
           res.end();
+        })
+        .finally(() => {
+          guard.dispose();
         });
+      return;
     }
+    guard.dispose();
   });
 
   const publicUrl =
