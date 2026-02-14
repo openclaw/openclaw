@@ -63,15 +63,16 @@ describe("runWithReconnect", () => {
     await runWithReconnect(connectFn, {
       abortSignal: abort.signal,
       onReconnect: (delayMs) => delays.push(delayMs),
-      initialDelayMs: 100,
-      maxDelayMs: 1000,
+      // Keep this test fast: validate the exponential pattern, not real-time waiting.
+      initialDelayMs: 1,
+      maxDelayMs: 10,
     });
 
     expect(connectFn).toHaveBeenCalledTimes(6);
-    // 5 errors produce delays: 100, 200, 400, 800, 1000(cap)
+    // 5 errors produce delays: 1, 2, 4, 8, 10(cap)
     // 6th succeeds -> delay resets to 100
     // But 6th also aborts → onReconnect NOT called (abort check fires first)
-    expect(delays).toEqual([100, 200, 400, 800, 1000]);
+    expect(delays).toEqual([1, 2, 4, 8, 10]);
   });
 
   it("resets backoff after successful connection", async () => {
@@ -95,16 +96,16 @@ describe("runWithReconnect", () => {
     await runWithReconnect(connectFn, {
       abortSignal: abort.signal,
       onReconnect: (delayMs) => delays.push(delayMs),
-      initialDelayMs: 100,
+      initialDelayMs: 1,
       maxDelayMs: 60_000,
     });
 
     expect(connectFn).toHaveBeenCalledTimes(4);
-    // call 1: fail -> delay 100
-    // call 2: success → delay resets to 100
-    // call 3: fail -> delay 100 (reset held)
+    // call 1: fail -> delay 1
+    // call 2: success → delay resets to 1
+    // call 3: fail -> delay 1 (reset held)
     // call 4: success + abort → no onReconnect
-    expect(delays).toEqual([100, 100, 100]);
+    expect(delays).toEqual([1, 1, 1]);
   });
 
   it("stops immediately when abort signal is pre-fired", async () => {
@@ -164,13 +165,13 @@ describe("runWithReconnect", () => {
     await runWithReconnect(connectFn, {
       abortSignal: abort.signal,
       onReconnect: (delayMs) => delays.push(delayMs),
-      initialDelayMs: 100,
+      initialDelayMs: 10,
       jitterRatio: 0.5,
       random: () => 1,
     });
 
     expect(connectFn).toHaveBeenCalledTimes(2);
-    expect(delays).toEqual([150]);
+    expect(delays).toEqual([15]);
   });
 
   it("supports strategy hook to stop reconnecting after failure", async () => {
