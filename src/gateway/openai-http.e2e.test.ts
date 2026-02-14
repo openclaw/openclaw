@@ -585,6 +585,30 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     await res.text();
   });
 
+  it("accepts image-only messages without text", async () => {
+    const port = enabledPort;
+    agentCommand.mockReset();
+    agentCommand.mockResolvedValueOnce({ payloads: [{ text: "I see it" }] } as never);
+
+    const res = await postChatCompletions(port, {
+      model: "openclaw",
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "image_url", image_url: { url: "data:image/png;base64,AAAA" } }],
+        },
+      ],
+    });
+    // Should NOT return 400 — image-only is valid
+    expect(res.status).toBe(200);
+
+    const [opts] = agentCommand.mock.calls[0] ?? [];
+    const typedOpts = opts as { images?: Array<{ data: string }> };
+    expect(typedOpts.images).toHaveLength(1);
+
+    await res.text();
+  });
+
   it("ignores non-data-url image_url entries", async () => {
     const port = enabledPort;
     agentCommand.mockReset();

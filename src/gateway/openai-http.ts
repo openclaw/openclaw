@@ -231,7 +231,7 @@ export async function handleOpenAiHttpRequest(
   const agentId = resolveAgentIdForRequest({ req, model });
   const sessionKey = resolveOpenAiSessionKey({ req, agentId, user });
   const prompt = buildAgentPrompt(payload.messages);
-  if (!prompt.message) {
+  if (!prompt.message && (!prompt.images || prompt.images.length === 0)) {
     sendJson(res, 400, {
       error: {
         message: "Missing user message in `messages`.",
