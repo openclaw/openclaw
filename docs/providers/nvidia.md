@@ -12,11 +12,12 @@ NVIDIA provides an OpenAI-compatible API at `https://integrate.api.nvidia.com/v1
 
 ## CLI setup
 
-Export the key once, then run onboarding without an inline secret:
+Export the key once, then run onboarding and set an NVIDIA model:
 
 ```bash
 export NVIDIA_API_KEY="nvapi-..."
-openclaw onboard --auth-choice apiKey --token-provider nvidia
+openclaw onboard --auth-choice skip
+openclaw models set nvidia/nvidia/llama-3.1-nemotron-70b-instruct
 ```
 
 If you still pass `--token`, remember it lands in shell history and `ps` output; prefer the env var when possible.
@@ -36,7 +37,7 @@ If you still pass `--token`, remember it lands in shell history and `ps` output;
   },
   agents: {
     defaults: {
-      model: { primary: "nvidia/llama-3.1-nemotron-70b-instruct" },
+      model: { primary: "nvidia/nvidia/llama-3.1-nemotron-70b-instruct" },
     },
   },
 }
@@ -45,7 +46,7 @@ If you still pass `--token`, remember it lands in shell history and `ps` output;
 ## Model IDs
 
 - `nvidia/llama-3.1-nemotron-70b-instruct` (default)
-- `nvidia/llama-3.3-70b-instruct`
+- `meta/llama-3.3-70b-instruct`
 - `nvidia/mistral-nemo-minitron-8b-8k-instruct`
 
 ## Notes
