@@ -2,6 +2,9 @@ import { afterAll, afterEach, beforeEach, vi } from "vitest";
 
 // Ensure Vitest environment is properly set
 process.env.VITEST = "true";
+// Config validation walks plugin manifests; keep an aggressive cache in tests to avoid
+// repeated filesystem discovery across suites/workers.
+process.env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS ??= "60000";
 // Vitest vm forks can load transitive lockfile helpers many times per worker.
 // Raise listener budget to avoid noisy MaxListeners warnings and warning-stack overhead.
 const TEST_PROCESS_MAX_LISTENERS = 128;

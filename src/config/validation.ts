@@ -195,30 +195,131 @@ function validateConfigObjectWithPluginsBase(
   const config = base.config;
   const issues: ConfigValidationIssue[] = [];
   const warnings: ConfigValidationIssue[] = [];
-  const pluginsConfig = config.plugins;
-  const normalizedPlugins = normalizePluginsConfig(pluginsConfig);
+  const hasExplicitPluginsConfig =
+    isRecord(raw) && Object.prototype.hasOwnProperty.call(raw, "plugins");
 
-  const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
-  const registry = loadPluginManifestRegistry({
-    config,
-    workspaceDir: workspaceDir ?? undefined,
-  });
+  type RegistryInfo = {
+    registry: ReturnType<typeof loadPluginManifestRegistry>;
+    knownIds: Set<string>;
+    normalizedPlugins: ReturnType<typeof normalizePluginsConfig>;
+  };
 
-  const knownIds = new Set(registry.plugins.map((record) => record.id));
+  let registryInfo: RegistryInfo | null = null;
 
-  for (const diag of registry.diagnostics) {
-    let path = diag.pluginId ? `plugins.entries.${diag.pluginId}` : "plugins";
-    if (!diag.pluginId && diag.message.includes("plugin path not found")) {
-      path = "plugins.load.paths";
+  const ensureRegistry = (): RegistryInfo => {
+    if (registryInfo) {
+      return registryInfo;
     }
-    const pluginLabel = diag.pluginId ? `plugin ${diag.pluginId}` : "plugin";
-    const message = `${pluginLabel}: ${diag.message}`;
-    if (diag.level === "error") {
-      issues.push({ path, message });
-    } else {
-      warnings.push({ path, message });
+
+    const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
+    const registry = loadPluginManifestRegistry({
+      config,
+      workspaceDir: workspaceDir ?? undefined,
+    });
+    const knownIds = new Set(registry.plugins.map((record) => record.id));
+    const normalizedPlugins = normalizePluginsConfig(config.plugins);
+
+    for (const diag of registry.diagnostics) {
+      let path = diag.pluginId ? `plugins.entries.${diag.pluginId}` : "plugins";
+      if (!diag.pluginId && diag.message.includes("plugin path not found")) {
+        path = "plugins.load.paths";
+      }
+      const pluginLabel = diag.pluginId ? `plugin ${diag.pluginId}` : "plugin";
+      const message = `${pluginLabel}: ${diag.message}`;
+      if (diag.level === "error") {
+        issues.push({ path, message });
+      } else {
+        warnings.push({ path, message });
+      }
+    }
+
+    registryInfo = { registry, knownIds, normalizedPlugins };
+    return registryInfo;
+  };
+
+  const allowedChannels = new Set<string>(["defaults", ...CHANNEL_IDS]);
+
+  if (config.channels && isRecord(config.channels)) {
+    for (const key of Object.keys(config.channels)) {
+      const trimmed = key.trim();
+      if (!trimmed) {
+        continue;
+      }
+      if (!allowedChannels.has(trimmed)) {
+        const { registry } = ensureRegistry();
+        for (const record of registry.plugins) {
+          for (const channelId of record.channels) {
+            allowedChannels.add(channelId);
+          }
+        }
+      }
+      if (!allowedChannels.has(trimmed)) {
+        issues.push({
+          path: `channels.${trimmed}`,
+          message: `unknown channel id: ${trimmed}`,
+        });
+      }
     }
   }
+
+  const heartbeatChannelIds = new Set<string>();
+  for (const channelId of CHANNEL_IDS) {
+    heartbeatChannelIds.add(channelId.toLowerCase());
+  }
+
+  const validateHeartbeatTarget = (target: string | undefined, path: string) => {
+    if (typeof target !== "string") {
+      return;
+    }
+    const trimmed = target.trim();
+    if (!trimmed) {
+      issues.push({ path, message: "heartbeat target must not be empty" });
+      return;
+    }
+    const normalized = trimmed.toLowerCase();
+    if (normalized === "last" || normalized === "none") {
+      return;
+    }
+    if (normalizeChatChannelId(trimmed)) {
+      return;
+    }
+    if (!heartbeatChannelIds.has(normalized)) {
+      const { registry } = ensureRegistry();
+      for (const record of registry.plugins) {
+        for (const channelId of record.channels) {
+          const pluginChannel = channelId.trim();
+          if (pluginChannel) {
+            heartbeatChannelIds.add(pluginChannel.toLowerCase());
+          }
+        }
+      }
+    }
+    if (heartbeatChannelIds.has(normalized)) {
+      return;
+    }
+    issues.push({ path, message: `unknown heartbeat target: ${target}` });
+  };
+
+  validateHeartbeatTarget(
+    config.agents?.defaults?.heartbeat?.target,
+    "agents.defaults.heartbeat.target",
+  );
+  if (Array.isArray(config.agents?.list)) {
+    for (const [index, entry] of config.agents.list.entries()) {
+      validateHeartbeatTarget(entry?.heartbeat?.target, `agents.list.${index}.heartbeat.target`);
+    }
+  }
+
+  if (!hasExplicitPluginsConfig) {
+    if (issues.length > 0) {
+      return { ok: false, issues, warnings };
+    }
+    return { ok: true, config, warnings };
+  }
+
+  const { registry, knownIds, normalizedPlugins } = ensureRegistry();
+
+  const pluginsConfig = config.plugins;
 
   const entries = pluginsConfig?.entries;
   if (entries && isRecord(entries)) {
@@ -264,73 +365,6 @@ function validateConfigObjectWithPluginsBase(
       path: "plugins.slots.memory",
       message: `plugin not found: ${memorySlot}`,
     });
-  }
-
-  const allowedChannels = new Set<string>(["defaults", ...CHANNEL_IDS]);
-  for (const record of registry.plugins) {
-    for (const channelId of record.channels) {
-      allowedChannels.add(channelId);
-    }
-  }
-
-  if (config.channels && isRecord(config.channels)) {
-    for (const key of Object.keys(config.channels)) {
-      const trimmed = key.trim();
-      if (!trimmed) {
-        continue;
-      }
-      if (!allowedChannels.has(trimmed)) {
-        issues.push({
-          path: `channels.${trimmed}`,
-          message: `unknown channel id: ${trimmed}`,
-        });
-      }
-    }
-  }
-
-  const heartbeatChannelIds = new Set<string>();
-  for (const channelId of CHANNEL_IDS) {
-    heartbeatChannelIds.add(channelId.toLowerCase());
-  }
-  for (const record of registry.plugins) {
-    for (const channelId of record.channels) {
-      const trimmed = channelId.trim();
-      if (trimmed) {
-        heartbeatChannelIds.add(trimmed.toLowerCase());
-      }
-    }
-  }
-
-  const validateHeartbeatTarget = (target: string | undefined, path: string) => {
-    if (typeof target !== "string") {
-      return;
-    }
-    const trimmed = target.trim();
-    if (!trimmed) {
-      issues.push({ path, message: "heartbeat target must not be empty" });
-      return;
-    }
-    const normalized = trimmed.toLowerCase();
-    if (normalized === "last" || normalized === "none") {
-      return;
-    }
-    if (normalizeChatChannelId(trimmed)) {
-      return;
-    }
-    if (heartbeatChannelIds.has(normalized)) {
-      return;
-    }
-    issues.push({ path, message: `unknown heartbeat target: ${target}` });
-  };
-
-  validateHeartbeatTarget(
-    config.agents?.defaults?.heartbeat?.target,
-    "agents.defaults.heartbeat.target",
-  );
-  if (Array.isArray(config.agents?.list)) {
-    for (const [index, entry] of config.agents.list.entries()) {
-      validateHeartbeatTarget(entry?.heartbeat?.target, `agents.list.${index}.heartbeat.target`);
-    }
   }
 
   let selectedMemoryPluginId: string | null = null;
