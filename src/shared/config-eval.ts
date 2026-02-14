@@ -52,8 +52,22 @@ function windowsPathExtensions(): string[] {
   return ["", ...list.filter(Boolean)];
 }
 
+let cachedHasBinaryPath: string | undefined;
+let cachedHasBinaryPathExt: string | undefined;
+const hasBinaryCache = new Map<string, boolean>();
+
 export function hasBinary(bin: string): boolean {
   const pathEnv = process.env.PATH ?? "";
+  const pathExt = process.platform === "win32" ? (process.env.PATHEXT ?? "") : "";
+  if (cachedHasBinaryPath !== pathEnv || cachedHasBinaryPathExt !== pathExt) {
+    cachedHasBinaryPath = pathEnv;
+    cachedHasBinaryPathExt = pathExt;
+    hasBinaryCache.clear();
+  }
+  if (hasBinaryCache.has(bin)) {
+    return hasBinaryCache.get(bin)!;
+  }
+
   const parts = pathEnv.split(path.delimiter).filter(Boolean);
   const extensions = process.platform === "win32" ? windowsPathExtensions() : [""];
   for (const part of parts) {
@@ -61,11 +75,13 @@ export function hasBinary(bin: string): boolean {
       const candidate = path.join(part, bin + ext);
       try {
         fs.accessSync(candidate, fs.constants.X_OK);
+        hasBinaryCache.set(bin, true);
         return true;
       } catch {
         // keep scanning
       }
     }
   }
+  hasBinaryCache.set(bin, false);
   return false;
 }
