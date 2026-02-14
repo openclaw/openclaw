@@ -11,7 +11,7 @@ export type ReplyReferencePlanner = {
 
 export function createReplyReferencePlanner(options: {
   replyToMode: ReplyToMode;
-  /** Existing thread/reference id (always used when present). */
+  /** Existing thread/reference id (used when present and replyToMode is not "off"). */
   existingId?: string;
   /** Id to start a new thread/reference when allowed (e.g., parent message id). */
   startId?: string;

@@ -200,14 +200,14 @@ describe("createReplyReferencePlanner", () => {
     expect(planner.use()).toBe("parent");
   });
 
-  it("prefers existing thread id regardless of mode", () => {
+  it("returns undefined for existing thread id when mode is off", () => {
     const planner = createReplyReferencePlanner({
       replyToMode: "off",
       existingId: "thread-1",
       startId: "parent",
     });
-    expect(planner.use()).toBe("thread-1");
-    expect(planner.hasReplied()).toBe(true);
+    expect(planner.use()).toBeUndefined();
+    expect(planner.hasReplied()).toBe(false);
   });
 
   it("honors allowReference=false", () => {
