@@ -1,4 +1,4 @@
-import { beforeEach, vi } from "vitest";
+import { beforeAll, beforeEach, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import type { TemplateContext } from "../templating.js";
@@ -14,11 +14,26 @@ const state = vi.hoisted(() => ({
   runEmbeddedPiAgentMock: vi.fn(),
 }));
 
+let runReplyAgentPromise:
+  | Promise<(typeof import("./agent-runner.js"))["runReplyAgent"]>
+  | undefined;
+
+async function getRunReplyAgent() {
+  if (!runReplyAgentPromise) {
+    runReplyAgentPromise = import("./agent-runner.js").then((m) => m.runReplyAgent);
+  }
+  return await runReplyAgentPromise;
+}
+
 export function getRunEmbeddedPiAgentMock(): AnyMock {
   return state.runEmbeddedPiAgentMock;
 }
 
 export function installRunReplyAgentTypingHeartbeatTestHooks() {
+  beforeAll(async () => {
+    // Avoid attributing the initial agent-runner import cost to the first test case.
+    await getRunReplyAgent();
+  });
   beforeEach(() => {
     state.runEmbeddedPiAgentMock.mockReset();
   });
@@ -103,7 +118,7 @@ export function createMinimalRun(params?: {
     typing,
     opts,
     run: async () => {
-      const { runReplyAgent } = await import("./agent-runner.js");
+      const runReplyAgent = await getRunReplyAgent();
       return runReplyAgent({
         commandBody: "hello",
         followupRun,
