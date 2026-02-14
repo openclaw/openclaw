@@ -102,7 +102,10 @@ type HookTransformFn = (
   ctx: HookMappingContext,
 ) => HookTransformResult | Promise<HookTransformResult>;
 
-export function resolveHookMappings(hooks?: HooksConfig): HookMappingResolved[] {
+export function resolveHookMappings(
+  hooks?: HooksConfig,
+  opts?: { configDir?: string },
+): HookMappingResolved[] {
   const presets = hooks?.presets ?? [];
   const gmailAllowUnsafe = hooks?.gmail?.allowUnsafeExternalContent;
   const mappings: HookMappingConfig[] = [];
@@ -129,10 +132,13 @@ export function resolveHookMappings(hooks?: HooksConfig): HookMappingResolved[] 
     return [];
   }
 
-  const configDir = path.dirname(CONFIG_PATH);
-  const transformsDir = hooks?.transformsDir
-    ? resolvePath(configDir, hooks.transformsDir)
-    : configDir;
+  const configDir = path.resolve(opts?.configDir ?? path.dirname(CONFIG_PATH));
+  const transformsRootDir = path.join(configDir, "hooks", "transforms");
+  const transformsDir = resolveOptionalContainedPath(
+    transformsRootDir,
+    hooks?.transformsDir,
+    "Hook transformsDir",
+  );
 
   return mappings.map((mapping, index) => normalizeHookMapping(mapping, index, transformsDir));
 }
@@ -187,7 +193,7 @@ function normalizeHookMapping(
   const wakeMode = mapping.wakeMode ?? "now";
   const transform = mapping.transform
     ? {
-        modulePath: resolvePath(transformsDir, mapping.transform.module),
+        modulePath: resolveContainedPath(transformsDir, mapping.transform.module, "Hook transform"),
         exportName: mapping.transform.export?.trim() || undefined,
       }
     : undefined;
@@ -340,12 +346,35 @@ function resolveTransformFn(mod: Record<string, unknown>, exportName?: string): 
 
 function resolvePath(baseDir: string, target: string): string {
   if (!target) {
-    return baseDir;
+    return path.resolve(baseDir);
   }
-  if (path.isAbsolute(target)) {
-    return target;
+  return path.isAbsolute(target) ? path.resolve(target) : path.resolve(baseDir, target);
+}
+
+function resolveContainedPath(baseDir: string, target: string, label: string): string {
+  const base = path.resolve(baseDir);
+  const trimmed = target?.trim();
+  if (!trimmed) {
+    throw new Error(`${label} module path is required`);
   }
-  return path.join(baseDir, target);
+  const resolved = resolvePath(base, trimmed);
+  const relative = path.relative(base, resolved);
+  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error(`${label} module path must be within ${base}: ${target}`);
+  }
+  return resolved;
+}
+
+function resolveOptionalContainedPath(
+  baseDir: string,
+  target: string | undefined,
+  label: string,
+): string {
+  const trimmed = target?.trim();
+  if (!trimmed) {
+    return path.resolve(baseDir);
+  }
+  return resolveContainedPath(baseDir, trimmed, label);
 }
 
 function normalizeMatchPath(raw?: string): string | undefined {
