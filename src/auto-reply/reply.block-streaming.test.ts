@@ -83,15 +83,23 @@ describe("block streaming", () => {
   });
 
   afterAll(async () => {
-    await fs.rm(fixtureRoot, {
-      recursive: true,
-      force: true,
-      maxRetries: 10,
-      retryDelay: 50,
-    });
+    if (process.platform === "win32") {
+      await fs.rm(fixtureRoot, {
+        recursive: true,
+        force: true,
+        maxRetries: 10,
+        retryDelay: 50,
+      });
+    } else {
+      await fs.rm(fixtureRoot, {
+        recursive: true,
+        force: true,
+      });
+    }
   });
 
   beforeEach(() => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     piEmbeddedMock.abortEmbeddedPiRun.mockReset().mockReturnValue(false);
     piEmbeddedMock.queueEmbeddedPiMessage.mockReset().mockReturnValue(false);
     piEmbeddedMock.isEmbeddedPiRunActive.mockReset().mockReturnValue(false);
