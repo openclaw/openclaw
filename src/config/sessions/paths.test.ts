@@ -112,11 +112,7 @@ describe("session path safety", () => {
     const sessionsDir = "/tmp/openclaw/agents/main/sessions";
 
     expect(() =>
-      resolveSessionFilePath(
-        "sess-1",
-        { sessionFile: "/etc/passwd" },
-        { sessionsDir },
-      ),
+      resolveSessionFilePath("sess-1", { sessionFile: "/etc/passwd" }, { sessionsDir }),
     ).toThrow(/within sessions directory/);
   });
 
