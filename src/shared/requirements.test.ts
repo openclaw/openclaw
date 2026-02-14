@@ -52,14 +52,13 @@ describe("requirements helpers", () => {
     ).toEqual(["A"]);
   });
 
-  it("buildConfigChecks includes value+status", () => {
+  it("buildConfigChecks includes status", () => {
     expect(
       buildConfigChecks({
         required: ["a.b"],
-        resolveValue: (p) => (p === "a.b" ? 1 : null),
         isSatisfied: (p) => p === "a.b",
       }),
-    ).toEqual([{ path: "a.b", value: 1, satisfied: true }]);
+    ).toEqual([{ path: "a.b", satisfied: true }]);
   });
 
   it("evaluateRequirementsFromMetadata derives required+missing", () => {
@@ -72,7 +71,6 @@ describe("requirements helpers", () => {
       hasLocalBin: (bin) => bin === "a",
       localPlatform: "linux",
       isEnvSatisfied: (name) => name === "E",
-      resolveConfigValue: () => "x",
       isConfigSatisfied: () => false,
     });
 
