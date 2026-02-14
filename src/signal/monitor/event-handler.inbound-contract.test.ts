@@ -1,13 +1,16 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../../auto-reply/templating.js";
+import type { SignalEventHandlerDeps } from "./event-handler.types.js";
 import { expectInboundContextContract } from "../../../test/helpers/inbound-contract.js";
 
 let capturedCtx: MsgContext | undefined;
+let capturedCtxs: MsgContext[] = [];
 
 vi.mock("../../auto-reply/dispatch.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../auto-reply/dispatch.js")>();
   const dispatchInboundMessage = vi.fn(async (params: { ctx: MsgContext }) => {
     capturedCtx = params.ctx;
+    capturedCtxs.push(params.ctx);
     return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
   });
   return {
@@ -20,54 +23,77 @@ vi.mock("../../auto-reply/dispatch.js", async (importOriginal) => {
 
 import { createSignalEventHandler } from "./event-handler.js";
 
+function createTestHandler(overrides: Partial<SignalEventHandlerDeps> = {}) {
+  return createSignalEventHandler({
+    // oxlint-disable-next-line typescript/no-explicit-any
+    runtime: { log: () => {}, error: () => {} } as any,
+    // oxlint-disable-next-line typescript/no-explicit-any
+    cfg: { messages: { inbound: { debounceMs: 0 } } } as any,
+    baseUrl: "http://localhost",
+    accountId: "default",
+    historyLimit: 0,
+    groupHistories: new Map(),
+    textLimit: 4000,
+    dmPolicy: "open",
+    allowFrom: ["*"],
+    groupAllowFrom: ["*"],
+    groupPolicy: "open",
+    reactionMode: "off",
+    reactionAllowlist: [],
+    mediaMaxBytes: 1024,
+    ignoreAttachments: true,
+    sendReadReceipts: false,
+    readReceiptsViaDaemon: false,
+    injectLinkPreviews: true,
+    preserveTextStyles: true,
+    fetchAttachment: async () => null,
+    deliverReplies: async () => {},
+    resolveSignalReactionTargets: () => [],
+    // oxlint-disable-next-line typescript/no-explicit-any
+    isSignalReactionMessage: () => false as any,
+    shouldEmitSignalReactionNotification: () => false,
+    buildSignalReactionSystemEventText: () => "reaction",
+    ...overrides,
+  });
+}
+
+function makeReceiveEvent(
+  dataMessage: Record<string, unknown>,
+  envelope: Record<string, unknown> = {},
+) {
+  return {
+    event: "receive",
+    data: JSON.stringify({
+      envelope: {
+        sourceNumber: "+15550001111",
+        sourceName: "Alice",
+        timestamp: 1700000000000,
+        dataMessage: {
+          message: "",
+          attachments: [],
+          ...dataMessage,
+        },
+        ...envelope,
+      },
+    }),
+  };
+}
+
+beforeEach(() => {
+  capturedCtx = undefined;
+  capturedCtxs = [];
+});
+
 describe("signal createSignalEventHandler inbound contract", () => {
   it("passes a finalized MsgContext to dispatchInboundMessage", async () => {
-    capturedCtx = undefined;
+    const handler = createTestHandler();
 
-    const handler = createSignalEventHandler({
-      // oxlint-disable-next-line typescript/no-explicit-any
-      runtime: { log: () => {}, error: () => {} } as any,
-      // oxlint-disable-next-line typescript/no-explicit-any
-      cfg: { messages: { inbound: { debounceMs: 0 } } } as any,
-      baseUrl: "http://localhost",
-      accountId: "default",
-      historyLimit: 0,
-      groupHistories: new Map(),
-      textLimit: 4000,
-      dmPolicy: "open",
-      allowFrom: ["*"],
-      groupAllowFrom: ["*"],
-      groupPolicy: "open",
-      reactionMode: "off",
-      reactionAllowlist: [],
-      mediaMaxBytes: 1024,
-      ignoreAttachments: true,
-      sendReadReceipts: false,
-      readReceiptsViaDaemon: false,
-      fetchAttachment: async () => null,
-      deliverReplies: async () => {},
-      resolveSignalReactionTargets: () => [],
-      // oxlint-disable-next-line typescript/no-explicit-any
-      isSignalReactionMessage: () => false as any,
-      shouldEmitSignalReactionNotification: () => false,
-      buildSignalReactionSystemEventText: () => "reaction",
-    });
-
-    await handler({
-      event: "receive",
-      data: JSON.stringify({
-        envelope: {
-          sourceNumber: "+15550001111",
-          sourceName: "Alice",
-          timestamp: 1700000000000,
-          dataMessage: {
-            message: "hi",
-            attachments: [],
-            groupInfo: { groupId: "g1", groupName: "Test Group" },
-          },
-        },
+    await handler(
+      makeReceiveEvent({
+        message: "hi",
+        groupInfo: { groupId: "g1", groupName: "Test Group" },
       }),
-    });
+    );
 
     expect(capturedCtx).toBeTruthy();
     expectInboundContextContract(capturedCtx!);
@@ -75,5 +101,530 @@ describe("signal createSignalEventHandler inbound contract", () => {
     expect(String(capturedCtx?.Body ?? "")).toContain("Alice");
     expect(String(capturedCtx?.Body ?? "")).toMatch(/Alice.*:/);
     expect(String(capturedCtx?.Body ?? "")).not.toContain("[from:");
+  });
+
+  it("maps all attachments to plural media fields and preserves first-item aliases", async () => {
+    const fetchAttachment = vi.fn(async (params: { attachment?: { id?: string | null } }) => {
+      const id = params.attachment?.id;
+      if (id === "att-1") {
+        return { path: "/tmp/signal-att-1.jpg", contentType: "image/jpeg" };
+      }
+      if (id === "att-2") {
+        return { path: "/tmp/signal-att-2.png", contentType: "image/png" };
+      }
+      return null;
+    });
+
+    const handler = createTestHandler({
+      ignoreAttachments: false,
+      fetchAttachment,
+    });
+
+    await handler(
+      makeReceiveEvent({
+        attachments: [
+          { id: "att-1", contentType: "image/jpeg" },
+          { id: "att-2", contentType: "image/png" },
+        ],
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    expectInboundContextContract(capturedCtx!);
+    expect(fetchAttachment).toHaveBeenCalledTimes(2);
+    expect(capturedCtx?.MediaPath).toBe("/tmp/signal-att-1.jpg");
+    expect(capturedCtx?.MediaType).toBe("image/jpeg");
+    expect(capturedCtx?.MediaUrl).toBe("/tmp/signal-att-1.jpg");
+    expect(capturedCtx?.MediaPaths).toEqual(["/tmp/signal-att-1.jpg", "/tmp/signal-att-2.png"]);
+    expect(capturedCtx?.MediaUrls).toEqual(["/tmp/signal-att-1.jpg", "/tmp/signal-att-2.png"]);
+    expect(capturedCtx?.MediaTypes).toEqual(["image/jpeg", "image/png"]);
+  });
+
+  it("keeps media type array aligned with media paths when content type is missing", async () => {
+    const fetchAttachment = vi.fn(async (params: { attachment?: { id?: string | null } }) => {
+      const id = params.attachment?.id;
+      if (id === "att-1") {
+        return { path: "/tmp/signal-att-1.bin" };
+      }
+      if (id === "att-2") {
+        return { path: "/tmp/signal-att-2.png", contentType: "image/png" };
+      }
+      return null;
+    });
+
+    const handler = createTestHandler({
+      ignoreAttachments: false,
+      fetchAttachment,
+    });
+
+    await handler(
+      makeReceiveEvent({
+        attachments: [{ id: "att-1" }, { id: "att-2", contentType: "image/png" }],
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    expect(capturedCtx?.MediaPaths).toEqual(["/tmp/signal-att-1.bin", "/tmp/signal-att-2.png"]);
+    expect(capturedCtx?.MediaTypes).toEqual(["application/octet-stream", "image/png"]);
+    expect(capturedCtx?.MediaType).toBe("application/octet-stream");
+  });
+
+  it("keeps successful attachments when one attachment fetch fails", async () => {
+    const fetchAttachment = vi.fn(async (params: { attachment?: { id?: string | null } }) => {
+      const id = params.attachment?.id;
+      if (id === "att-1") {
+        throw new Error("network timeout");
+      }
+      if (id === "att-2") {
+        return { path: "/tmp/signal-att-2.png", contentType: "image/png" };
+      }
+      return null;
+    });
+
+    const handler = createTestHandler({
+      ignoreAttachments: false,
+      fetchAttachment,
+    });
+
+    await handler(
+      makeReceiveEvent({
+        attachments: [
+          { id: "att-1", contentType: "image/jpeg" },
+          { id: "att-2", contentType: "image/png" },
+        ],
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    expect(fetchAttachment).toHaveBeenCalledTimes(2);
+    expect(capturedCtx?.MediaPaths).toEqual(["/tmp/signal-att-2.png"]);
+    expect(capturedCtx?.MediaPath).toBe("/tmp/signal-att-2.png");
+    expect(capturedCtx?.MediaType).toBe("image/png");
+  });
+
+  it("maps quote metadata to reply context fields", async () => {
+    const handler = createTestHandler();
+
+    await handler(
+      makeReceiveEvent({
+        message: "reply with quote",
+        quote: {
+          id: 9001,
+          text: "original message",
+          authorUuid: "123e4567-e89b-12d3-a456-426614174000",
+        },
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    expectInboundContextContract(capturedCtx!);
+    expect(capturedCtx?.ReplyToId).toBe("9001");
+    expect(capturedCtx?.ReplyToSender).toBe("123e4567-e89b-12d3-a456-426614174000");
+    expect(capturedCtx?.ReplyToBody).toBe("original message");
+    expect(capturedCtx?.ReplyToIsQuote).toBe(true);
+  });
+
+  it("falls back quote reply metadata to timestamp and author number", async () => {
+    const handler = createTestHandler();
+
+    await handler(
+      makeReceiveEvent({
+        message: "reply with quote",
+        quote: {
+          timestamp: 1700000000111,
+          text: "fallback author message",
+          authorNumber: "+15550002222",
+          author: "fallback",
+        },
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    expectInboundContextContract(capturedCtx!);
+    expect(capturedCtx?.ReplyToId).toBe("1700000000111");
+    expect(capturedCtx?.ReplyToSender).toBe("+15550002222");
+    expect(capturedCtx?.ReplyToBody).toBe("fallback author message");
+    expect(capturedCtx?.ReplyToIsQuote).toBe(true);
+  });
+
+  it("sets reply body to undefined when quoted text is missing", async () => {
+    const handler = createTestHandler();
+
+    await handler(
+      makeReceiveEvent({
+        message: "reply with empty quote",
+        quote: {
+          id: 9002,
+          text: "   ",
+          authorUuid: "123e4567-e89b-12d3-a456-426614174001",
+        },
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    expect(capturedCtx?.ReplyToId).toBe("9002");
+    expect(capturedCtx?.ReplyToSender).toBe("123e4567-e89b-12d3-a456-426614174001");
+    expect(capturedCtx?.ReplyToBody).toBeUndefined();
+    expect(capturedCtx?.ReplyToIsQuote).toBe(true);
+  });
+
+  it("clears quote and untrusted metadata when debounced entries are merged", async () => {
+    const handler = createTestHandler({
+      // oxlint-disable-next-line typescript/no-explicit-any
+      cfg: { messages: { inbound: { debounceMs: 50 } } } as any,
+    });
+
+    await handler(makeReceiveEvent({ message: "first message" }));
+    await handler(
+      makeReceiveEvent({
+        message: "second message",
+        quote: { id: 42, text: "quoted" },
+        previews: [{ url: "https://example.com", title: "Example", description: "Desc" }],
+      }),
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 90));
+
+    expect(capturedCtxs).toHaveLength(1);
+    expect(capturedCtx?.BodyForCommands).toBe("first message\\nsecond message");
+    expect(capturedCtx?.ReplyToId).toBeUndefined();
+    expect(capturedCtx?.ReplyToBody).toBeUndefined();
+    expect(capturedCtx?.ReplyToSender).toBeUndefined();
+    expect(capturedCtx?.ReplyToIsQuote).toBeUndefined();
+    expect(capturedCtx?.UntrustedContext).toBeUndefined();
+  });
+
+  it("handles sticker messages with sticker placeholder, downloaded media, and metadata", async () => {
+    const fetchAttachment = vi.fn(async (params: { attachment?: { id?: string | null } }) => {
+      const id = params.attachment?.id;
+      if (id === "sticker-att-1") {
+        return { path: "/tmp/signal-sticker-1.webp", contentType: "image/webp" };
+      }
+      return null;
+    });
+
+    const handler = createTestHandler({
+      ignoreAttachments: false,
+      fetchAttachment,
+    });
+
+    await handler(
+      makeReceiveEvent({
+        sticker: {
+          packId: "signal-pack-1",
+          stickerId: 42,
+          attachment: {
+            id: "sticker-att-1",
+            contentType: "image/webp",
+          },
+        },
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    expectInboundContextContract(capturedCtx!);
+    expect(fetchAttachment).toHaveBeenCalledTimes(1);
+    expect(capturedCtx?.BodyForCommands).toBe("<media:sticker>");
+    expect(capturedCtx?.MediaPath).toBe("/tmp/signal-sticker-1.webp");
+    expect(capturedCtx?.MediaType).toBe("image/webp");
+    expect(capturedCtx?.MediaUrl).toBe("/tmp/signal-sticker-1.webp");
+    expect(capturedCtx?.MediaPaths).toEqual(["/tmp/signal-sticker-1.webp"]);
+    expect(capturedCtx?.MediaUrls).toEqual(["/tmp/signal-sticker-1.webp"]);
+    expect(capturedCtx?.MediaTypes).toEqual(["image/webp"]);
+    expect(capturedCtx?.UntrustedContext).toContain("Signal sticker packId: signal-pack-1");
+    expect(capturedCtx?.UntrustedContext).toContain("Signal stickerId: 42");
+  });
+
+  it("annotates explicit voice notes and uses voice-aware audio placeholder", async () => {
+    const fetchAttachment = vi.fn(async (params: { attachment?: { id?: string | null } }) => {
+      if (params.attachment?.id === "voice-att-1") {
+        return { path: "/tmp/signal-voice-1.ogg", contentType: "audio/ogg" };
+      }
+      return null;
+    });
+
+    const handler = createTestHandler({
+      ignoreAttachments: false,
+      fetchAttachment,
+    });
+
+    await handler(
+      makeReceiveEvent({
+        attachments: [
+          {
+            id: "voice-att-1",
+            contentType: "audio/ogg",
+            filename: "voice-note.ogg",
+            voiceNote: true,
+          },
+        ],
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    expectInboundContextContract(capturedCtx!);
+    expect(capturedCtx?.BodyForCommands).toBe("<media:audio> (voice note)");
+    expect(capturedCtx?.UntrustedContext).toContain("Signal voice note attachment indexes: 1");
+  });
+
+  it("infers voice notes from filename hints when voiceNote flag is absent", async () => {
+    const fetchAttachment = vi.fn(async (params: { attachment?: { id?: string | null } }) => {
+      if (params.attachment?.id === "voice-att-2") {
+        return { path: "/tmp/signal-voice-2.ogg", contentType: "audio/ogg" };
+      }
+      return null;
+    });
+
+    const handler = createTestHandler({
+      ignoreAttachments: false,
+      fetchAttachment,
+    });
+
+    await handler(
+      makeReceiveEvent({
+        attachments: [
+          {
+            id: "voice-att-2",
+            contentType: "application/octet-stream",
+            filename: "ptt-00001.ogg",
+          },
+        ],
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    expectInboundContextContract(capturedCtx!);
+    expect(capturedCtx?.BodyForCommands).toBe("<media:audio> (voice note)");
+    expect(capturedCtx?.UntrustedContext).toContain("Signal voice note attachment indexes: 1");
+  });
+
+  it("does not classify plain audio/ogg as a voice note without explicit hints", async () => {
+    const fetchAttachment = vi.fn(async (params: { attachment?: { id?: string | null } }) => {
+      if (params.attachment?.id === "audio-att-1") {
+        return { path: "/tmp/signal-audio-1.ogg", contentType: "audio/ogg" };
+      }
+      return null;
+    });
+
+    const handler = createTestHandler({
+      ignoreAttachments: false,
+      fetchAttachment,
+    });
+
+    await handler(
+      makeReceiveEvent({
+        attachments: [
+          {
+            id: "audio-att-1",
+            contentType: "audio/ogg",
+            filename: "recording.ogg",
+          },
+        ],
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    expect(capturedCtx?.BodyForCommands).toBe("<media:audio>");
+    const untrusted = capturedCtx?.UntrustedContext?.join("\n") ?? "";
+    expect(untrusted).not.toContain("voice note");
+  });
+
+  it("passes attachment dimensions into media context fields", async () => {
+    const fetchAttachment = vi.fn(async (params: { attachment?: { id?: string | null } }) => {
+      if (params.attachment?.id === "img-att-1") {
+        return { path: "/tmp/signal-img-1.jpg", contentType: "image/jpeg" };
+      }
+      if (params.attachment?.id === "img-att-2") {
+        return { path: "/tmp/signal-img-2.png", contentType: "image/png" };
+      }
+      return null;
+    });
+
+    const handler = createTestHandler({
+      ignoreAttachments: false,
+      fetchAttachment,
+    });
+
+    await handler(
+      makeReceiveEvent({
+        attachments: [
+          {
+            id: "img-att-1",
+            contentType: "image/jpeg",
+            width: 4000,
+            height: 3000,
+          },
+          {
+            id: "img-att-2",
+            contentType: "image/png",
+            width: 1920,
+            height: 1080,
+          },
+        ],
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    expectInboundContextContract(capturedCtx!);
+    expect(capturedCtx?.MediaDimension).toEqual({ width: 4000, height: 3000 });
+    expect(capturedCtx?.MediaDimensions).toEqual([
+      { width: 4000, height: 3000 },
+      { width: 1920, height: 1080 },
+    ]);
+  });
+
+  it("threads attachment captions into media caption context fields", async () => {
+    const fetchAttachment = vi.fn(async (params: { attachment?: { id?: string | null } }) => {
+      if (params.attachment?.id === "img-cap-1") {
+        return { path: "/tmp/signal-cap-1.jpg", contentType: "image/jpeg" };
+      }
+      if (params.attachment?.id === "img-cap-2") {
+        return { path: "/tmp/signal-cap-2.png", contentType: "image/png" };
+      }
+      return null;
+    });
+
+    const handler = createTestHandler({
+      ignoreAttachments: false,
+      fetchAttachment,
+    });
+
+    await handler(
+      makeReceiveEvent({
+        attachments: [
+          {
+            id: "img-cap-1",
+            contentType: "image/jpeg",
+            caption: "sunset",
+          },
+          {
+            id: "img-cap-2",
+            contentType: "image/png",
+            caption: "mountain",
+          },
+        ],
+      }),
+    );
+
+    const ctx = capturedCtx as MsgContext & {
+      MediaCaption?: string;
+      MediaCaptions?: string[];
+    };
+    expect(ctx).toBeTruthy();
+    expect(ctx.MediaCaption).toBe("sunset");
+    expect(ctx.MediaCaptions).toEqual(["sunset", "mountain"]);
+  });
+
+  it("tracks edit target timestamp for edited messages", async () => {
+    const handler = createTestHandler();
+
+    await handler({
+      event: "receive",
+      data: JSON.stringify({
+        envelope: {
+          sourceNumber: "+15550001111",
+          sourceName: "Alice",
+          timestamp: 1700000000999,
+          editMessage: {
+            targetSentTimestamp: 1700000000111,
+            dataMessage: {
+              message: "edited text",
+              attachments: [],
+            },
+          },
+        },
+      }),
+    });
+
+    const ctx = capturedCtx as MsgContext & {
+      EditTargetTimestamp?: number;
+    };
+    expect(ctx).toBeTruthy();
+    expect(ctx.EditTargetTimestamp).toBe(1700000000111);
+    expect(ctx.BodyForCommands).toBe("edited text");
+  });
+
+  it("adds link preview metadata to untrusted context", async () => {
+    const handler = createTestHandler();
+
+    await handler(
+      makeReceiveEvent({
+        message: "check this",
+        previews: [
+          {
+            url: "https://example.com/post",
+            title: "Example Post",
+            description: "A useful summary",
+          },
+        ],
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    expect(capturedCtx?.UntrustedContext).toContain(
+      "Link preview: Example Post - A useful summary (https://example.com/post)",
+    );
+  });
+
+  it("formats signal text styles into markdown in the message body", async () => {
+    const handler = createTestHandler();
+
+    await handler(
+      makeReceiveEvent({
+        message: "hello world",
+        textStyles: [
+          { style: "BOLD", start: 0, length: 5 },
+          { style: "ITALIC", start: 6, length: 5 },
+        ],
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    expect(capturedCtx?.BodyForCommands).toBe("**hello** _world_");
+  });
+
+  it("skips link preview injection when injectLinkPreviews is false", async () => {
+    const handler = createTestHandler({
+      injectLinkPreviews: false,
+    });
+
+    await handler(
+      makeReceiveEvent({
+        message: "check this",
+        previews: [
+          {
+            url: "https://example.com/post",
+            title: "Example Post",
+            description: "A useful summary",
+          },
+        ],
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    const untrusted = capturedCtx?.UntrustedContext?.join("\n") ?? "";
+    expect(untrusted).not.toContain("Link preview");
+    expect(untrusted).not.toContain("https://example.com/post");
+  });
+
+  it("skips text style formatting when preserveTextStyles is false", async () => {
+    const handler = createTestHandler({
+      preserveTextStyles: false,
+    });
+
+    await handler(
+      makeReceiveEvent({
+        message: "hello world",
+        textStyles: [
+          { style: "BOLD", start: 0, length: 5 },
+          { style: "ITALIC", start: 6, length: 5 },
+        ],
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    expect(capturedCtx?.BodyForCommands).toBe("hello world");
+    expect(capturedCtx?.BodyForCommands).not.toContain("**");
+    expect(capturedCtx?.BodyForCommands).not.toContain("_");
   });
 });
