@@ -10,6 +10,7 @@ import {
   verifyNodeToken,
 } from "../../infra/node-pairing.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
+import { sanitizeNodeInvokeParamsForForwarding } from "../node-invoke-sanitize.js";
 import {
   ErrorCodes,
   errorShape,
@@ -361,7 +362,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
       );
     });
   },
-  "node.invoke": async ({ params, respond, context }) => {
+  "node.invoke": async ({ params, respond, context, client }) => {
     if (!validateNodeInvokeParams(params)) {
       respondInvalidParams({
         respond,
@@ -384,6 +385,18 @@ export const nodeHandlers: GatewayRequestHandlers = {
         false,
         undefined,
         errorShape(ErrorCodes.INVALID_REQUEST, "nodeId and command required"),
+      );
+      return;
+    }
+    if (command === "system.execApprovals.get" || command === "system.execApprovals.set") {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "node.invoke does not allow system.execApprovals.*; use exec.approvals.node.*",
+          { details: { command } },
+        ),
       );
       return;
     }
@@ -417,10 +430,26 @@ export const nodeHandlers: GatewayRequestHandlers = {
         );
         return;
       }
+      const forwardedParams = sanitizeNodeInvokeParamsForForwarding({
+        command,
+        rawParams: p.params,
+        client,
+        execApprovalManager: context.execApprovalManager,
+      });
+      if (!forwardedParams.ok) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, forwardedParams.message, {
+            details: forwardedParams.details ?? null,
+          }),
+        );
+        return;
+      }
       const res = await context.nodeRegistry.invoke({
         nodeId,
         command,
-        params: p.params,
+        params: forwardedParams.params,
         timeoutMs: p.timeoutMs,
         idempotencyKey: p.idempotencyKey,
       });

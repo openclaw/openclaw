@@ -5,7 +5,7 @@ import path from "node:path";
 
 const pnpm = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 
-const unitIsolatedFiles = [
+const unitIsolatedFilesRaw = [
   "src/plugins/loader.test.ts",
   "src/plugins/tools.optional.test.ts",
   "src/agents/session-tool-result-guard.tool-result-persist-hook.test.ts",
@@ -15,7 +15,10 @@ const unitIsolatedFiles = [
   "src/auto-reply/tool-meta.test.ts",
   "src/auto-reply/envelope.test.ts",
   "src/commands/auth-choice.test.ts",
+  "src/media/store.test.ts",
   "src/media/store.header-ext.test.ts",
+  "src/web/media.test.ts",
+  "src/web/auto-reply.web-auto-reply.falls-back-text-media-send-fails.test.ts",
   "src/browser/server.covers-additional-endpoint-branches.test.ts",
   "src/browser/server.post-tabs-open-profile-unknown-returns-404.test.ts",
   "src/browser/server.agent-contract-snapshot-endpoints.test.ts",
@@ -25,6 +28,7 @@ const unitIsolatedFiles = [
   "src/browser/server-context.remote-tab-ops.test.ts",
   "src/browser/server-context.ensure-tab-available.prefers-last-target.test.ts",
 ];
+const unitIsolatedFiles = unitIsolatedFilesRaw.filter((file) => fs.existsSync(file));
 
 const children = new Set();
 const isCI = process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true";
@@ -32,7 +36,10 @@ const isMacOS = process.platform === "darwin" || process.env.RUNNER_OS === "macO
 const isWindows = process.platform === "win32" || process.env.RUNNER_OS === "Windows";
 const isWindowsCi = isCI && isWindows;
 const nodeMajor = Number.parseInt(process.versions.node.split(".")[0] ?? "", 10);
-const supportsVmForks = Number.isFinite(nodeMajor) ? nodeMajor < 24 : true;
+// vmForks is a big win for transform/import heavy suites, but Node 24 had
+// regressions with Vitest's vm runtime in this repo. Keep it opt-out via
+// OPENCLAW_TEST_VM_FORKS=0, and let users force-enable with =1.
+const supportsVmForks = Number.isFinite(nodeMajor) ? nodeMajor !== 24 : true;
 const useVmForks =
   process.env.OPENCLAW_TEST_VM_FORKS === "1" ||
   (process.env.OPENCLAW_TEST_VM_FORKS !== "0" && !isWindows && supportsVmForks);
@@ -103,6 +110,11 @@ const silentArgs =
 const rawPassthroughArgs = process.argv.slice(2);
 const passthroughArgs =
   rawPassthroughArgs[0] === "--" ? rawPassthroughArgs.slice(1) : rawPassthroughArgs;
+const rawTestProfile = process.env.OPENCLAW_TEST_PROFILE?.trim().toLowerCase();
+const testProfile =
+  rawTestProfile === "low" || rawTestProfile === "max" || rawTestProfile === "normal"
+    ? rawTestProfile
+    : "normal";
 const overrideWorkers = Number.parseInt(process.env.OPENCLAW_TEST_WORKERS ?? "", 10);
 const resolvedOverride =
   Number.isFinite(overrideWorkers) && overrideWorkers > 0 ? overrideWorkers : null;
@@ -115,9 +127,29 @@ const keepGatewaySerial =
 const parallelRuns = keepGatewaySerial ? runs.filter((entry) => entry.name !== "gateway") : runs;
 const serialRuns = keepGatewaySerial ? runs.filter((entry) => entry.name === "gateway") : [];
 const localWorkers = Math.max(4, Math.min(16, os.cpus().length));
-const defaultUnitWorkers = localWorkers;
-const defaultExtensionsWorkers = Math.max(1, Math.min(4, Math.floor(localWorkers / 4)));
-const defaultGatewayWorkers = Math.max(1, Math.min(4, localWorkers));
+const defaultWorkerBudget =
+  testProfile === "low"
+    ? {
+        unit: 2,
+        unitIsolated: 1,
+        extensions: 1,
+        gateway: 1,
+      }
+    : testProfile === "max"
+      ? {
+          unit: localWorkers,
+          unitIsolated: Math.min(4, localWorkers),
+          extensions: Math.max(1, Math.min(6, Math.floor(localWorkers / 2))),
+          gateway: Math.max(1, Math.min(2, Math.floor(localWorkers / 4))),
+        }
+      : {
+          // Local `pnpm test` runs multiple vitest groups concurrently;
+          // keep per-group workers conservative to avoid pegging all cores.
+          unit: Math.max(2, Math.min(8, Math.floor(localWorkers / 2))),
+          unitIsolated: 1,
+          extensions: Math.max(1, Math.min(4, Math.floor(localWorkers / 4))),
+          gateway: 1,
+        };
 
 // Keep worker counts predictable for local runs; trim macOS CI workers to avoid worker crashes/OOM.
 // In CI on linux/windows, prefer Vitest defaults to avoid cross-test interference from lower worker counts.
@@ -132,15 +164,15 @@ const maxWorkersForRun = (name) => {
     return 1;
   }
   if (name === "unit-isolated") {
-    return 1;
+    return defaultWorkerBudget.unitIsolated;
   }
   if (name === "extensions") {
-    return defaultExtensionsWorkers;
+    return defaultWorkerBudget.extensions;
   }
   if (name === "gateway") {
-    return defaultGatewayWorkers;
+    return defaultWorkerBudget.gateway;
   }
-  return defaultUnitWorkers;
+  return defaultWorkerBudget.unit;
 };
 
 const WARNING_SUPPRESSION_FLAGS = [

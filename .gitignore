@@ -86,3 +86,5 @@ local/
 
 # Auto Claude data directory
 .auto-claude/
+/local/
+package-lock.json
