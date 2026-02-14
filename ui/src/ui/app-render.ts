@@ -708,6 +708,7 @@ export function renderApp(state: AppViewState) {
         ${
           state.tab === "nodes"
             ? renderNodes({
+                mode: state.mode,
                 loading: state.nodesLoading,
                 nodes: state.nodes,
                 devicesLoading: state.devicesLoading,

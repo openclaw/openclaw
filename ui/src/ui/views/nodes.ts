@@ -6,9 +6,11 @@ import type {
   PendingDevice,
 } from "../controllers/devices.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "../controllers/exec-approvals.ts";
+import type { AppMode } from "../navigation.ts";
 import { formatRelativeTimestamp, formatList } from "../format.ts";
 import { renderExecApprovals, resolveExecApprovalsState } from "./nodes-exec-approvals.ts";
 export type NodesProps = {
+  mode: AppMode;
   loading: boolean;
   nodes: Array<Record<string, unknown>>;
   devicesLoading: boolean;
@@ -46,11 +48,21 @@ export type NodesProps = {
 };
 
 export function renderNodes(props: NodesProps) {
+  const isBasic = props.mode === "basic";
   const bindingState = resolveBindingsState(props);
   const approvalsState = resolveExecApprovalsState(props);
+
+  // In Basic mode, show simplified view with just Nodes and Devices
+  // In Advanced mode, show all features including Exec approvals and bindings
   return html`
-    ${renderExecApprovals(approvalsState)}
-    ${renderBindings(bindingState)}
+    ${
+      !isBasic
+        ? html`
+            ${renderExecApprovals(approvalsState)}
+            ${renderBindings(bindingState)}
+          `
+        : nothing
+    }
     ${renderDevices(props)}
     <section class="card">
       <div class="row" style="justify-content: space-between;">
@@ -68,7 +80,7 @@ export function renderNodes(props: NodesProps) {
             ? html`
                 <div class="muted">No nodes found.</div>
               `
-            : props.nodes.map((n) => renderNode(n))
+            : props.nodes.map((n) => renderNode(n, isBasic))
         }
       </div>
     </section>
@@ -489,7 +501,7 @@ function resolveAgentBindings(config: Record<string, unknown> | null): {
   return { defaultBinding, agents };
 }
 
-function renderNode(node: Record<string, unknown>) {
+function renderNode(node: Record<string, unknown>, isBasic: boolean) {
   const connected = Boolean(node.connected);
   const paired = Boolean(node.paired);
   const title =
@@ -506,14 +518,27 @@ function renderNode(node: Record<string, unknown>) {
           ${typeof node.remoteIp === "string" ? ` · ${node.remoteIp}` : ""}
           ${typeof node.version === "string" ? ` · ${node.version}` : ""}
         </div>
-        <div class="chip-row" style="margin-top: 6px;">
-          <span class="chip">${paired ? "paired" : "unpaired"}</span>
-          <span class="chip ${connected ? "chip-ok" : "chip-warn"}">
-            ${connected ? "connected" : "offline"}
-          </span>
-          ${caps.slice(0, 12).map((c) => html`<span class="chip">${String(c)}</span>`)}
-          ${commands.slice(0, 8).map((c) => html`<span class="chip">${String(c)}</span>`)}
-        </div>
+        ${
+          isBasic
+            ? html`
+                <div class="chip-row" style="margin-top: 6px;">
+                  <span class="chip">${paired ? "paired" : "unpaired"}</span>
+                  <span class="chip ${connected ? "chip-ok" : "chip-warn"}">
+                    ${connected ? "connected" : "offline"}
+                  </span>
+                </div>
+              `
+            : html`
+                <div class="chip-row" style="margin-top: 6px;">
+                  <span class="chip">${paired ? "paired" : "unpaired"}</span>
+                  <span class="chip ${connected ? "chip-ok" : "chip-warn"}">
+                    ${connected ? "connected" : "offline"}
+                  </span>
+                  ${caps.slice(0, 12).map((c) => html`<span class="chip">${String(c)}</span>`)}
+                  ${commands.slice(0, 8).map((c) => html`<span class="chip">${String(c)}</span>`)}
+                </div>
+              `
+        }
       </div>
     </div>
   `;
