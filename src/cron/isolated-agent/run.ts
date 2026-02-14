@@ -121,6 +121,7 @@ export async function runCronIsolatedAgentTurn(params: {
   agentId?: string;
   lane?: string;
 }): Promise<RunCronAgentTurnResult> {
+  const isFastTestEnv = process.env.OPENCLAW_TEST_FAST === "1";
   const defaultAgentId = resolveDefaultAgentId(params.cfg);
   const requestedAgentId =
     typeof params.agentId === "string" && params.agentId.trim()
@@ -162,7 +163,7 @@ export async function runCronIsolatedAgentTurn(params: {
   const agentDir = resolveAgentDir(params.cfg, agentId);
   const workspace = await ensureAgentWorkspace({
     dir: workspaceDirRaw,
-    ensureBootstrapFiles: !agentCfg?.skipBootstrap,
+    ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
   });
   const workspaceDir = workspace.dir;
 
@@ -232,6 +233,9 @@ export async function runCronIsolatedAgentTurn(params: {
     ? `${agentSessionKey}:run:${runSessionId}`
     : agentSessionKey;
   const persistSessionEntry = async () => {
+    if (isFastTestEnv) {
+      return;
+    }
     cronSession.store[agentSessionKey] = cronSession.sessionEntry;
     if (runSessionKey !== agentSessionKey) {
       cronSession.store[runSessionKey] = cronSession.sessionEntry;
@@ -364,24 +368,30 @@ export async function runCronIsolatedAgentTurn(params: {
       `${commandBody}\n\nReturn your summary as plain text; it will be delivered automatically. If the task explicitly calls for messaging a specific external recipient, note who/where it should go instead of sending it yourself.`.trim();
   }
 
-  const existingSnapshot = cronSession.sessionEntry.skillsSnapshot;
-  const skillsSnapshotVersion = getSkillsSnapshotVersion(workspaceDir);
-  const needsSkillsSnapshot =
-    !existingSnapshot || existingSnapshot.version !== skillsSnapshotVersion;
-  const skillsSnapshot = needsSkillsSnapshot
-    ? buildWorkspaceSkillSnapshot(workspaceDir, {
+  let skillsSnapshot = cronSession.sessionEntry.skillsSnapshot;
+  if (isFastTestEnv) {
+    // Fast unit-test mode: avoid scanning the workspace and writing session stores.
+    skillsSnapshot = skillsSnapshot ?? { prompt: "", skills: [] };
+  } else {
+    const existingSnapshot = cronSession.sessionEntry.skillsSnapshot;
+    const skillsSnapshotVersion = getSkillsSnapshotVersion(workspaceDir);
+    const needsSkillsSnapshot =
+      !existingSnapshot || existingSnapshot.version !== skillsSnapshotVersion;
+    if (needsSkillsSnapshot) {
+      skillsSnapshot = buildWorkspaceSkillSnapshot(workspaceDir, {
         config: cfgWithAgentDefaults,
         eligibility: { remote: getRemoteSkillEligibility() },
         snapshotVersion: skillsSnapshotVersion,
-      })
-    : cronSession.sessionEntry.skillsSnapshot;
-  if (needsSkillsSnapshot && skillsSnapshot) {
-    cronSession.sessionEntry = {
-      ...cronSession.sessionEntry,
-      updatedAt: Date.now(),
-      skillsSnapshot,
-    };
-    await persistSessionEntry();
+      });
+      if (skillsSnapshot) {
+        cronSession.sessionEntry = {
+          ...cronSession.sessionEntry,
+          updatedAt: Date.now(),
+          skillsSnapshot,
+        };
+        await persistSessionEntry();
+      }
+    }
   }
 
   // Persist systemSent before the run, mirroring the inbound auto-reply behavior.
