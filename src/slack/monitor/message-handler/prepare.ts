@@ -32,6 +32,7 @@ import {
   resolveSessionResetPolicy,
   resolveSessionResetType,
   resolveStorePath,
+  updateSessionStore,
 } from "../../../config/sessions.js";
 import { logVerbose, shouldLogVerbose } from "../../../globals.js";
 import { enqueueSystemEvent } from "../../../infra/system-events.js";
@@ -543,6 +544,20 @@ export async function prepareSlackMessage(params: {
           resetOverride: resolveChannelResetConfig({ sessionCfg: cfg.session, channel: "slack" }),
         }),
       }).fresh;
+    // When the thread session is stale, clear the old sessionId from the store
+    // so that session.ts creates a fresh session instead of resuming the old one.
+    // Without this, the old JSONL file (with irrelevant prior context) is loaded
+    // alongside the freshly-fetched thread history, confusing the model.
+    if (threadSessionIsStale) {
+      void updateSessionStore(storePath, (store) => {
+        const entry = store[sessionKey];
+        if (entry) {
+          // Reset to force session.ts to create a fresh session.
+          entry.sessionId = crypto.randomUUID();
+          entry.updatedAt = 0;
+        }
+      }).catch(() => {});
+    }
     if (
       threadInitialHistoryLimit > 0 &&
       (!threadSessionPreviousTimestamp || threadSessionIsStale)
