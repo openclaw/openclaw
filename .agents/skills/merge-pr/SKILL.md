@@ -19,6 +19,7 @@ Merge a prepared PR only after deterministic validation.
 - Never use `gh pr merge --auto` in this flow.
 - Never run `git push` directly.
 - Require `--match-head-commit` during merge.
+- Wrapper commands are cwd-agnostic; you can run them from repo root or inside the PR worktree.
 
 ## Execution Contract
 

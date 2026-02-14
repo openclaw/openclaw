@@ -89,4 +89,47 @@ describe("CronService delivery plan consistency", () => {
     cron.stop();
     await store.cleanup();
   });
+
+  it("does not enqueue duplicate relay when isolated run marks delivery handled", async () => {
+    const store = await makeStorePath();
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeatNow = vi.fn();
+    const runIsolatedAgentJob = vi.fn(async () => ({
+      status: "ok" as const,
+      summary: "done",
+      delivered: true,
+    }));
+    const cron = new CronService({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      enqueueSystemEvent,
+      requestHeartbeatNow,
+      runIsolatedAgentJob,
+    });
+    await cron.start();
+    const job = await cron.add({
+      name: "announce-delivered",
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: Date.now() },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: {
+        kind: "agentTurn",
+        message: "hello",
+      },
+      delivery: { channel: "telegram", to: "123" } as unknown as {
+        mode: "none" | "announce";
+        channel?: string;
+        to?: string;
+      },
+    });
+
+    const result = await cron.run(job.id, "force");
+    expect(result).toEqual({ ok: true, ran: true });
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(requestHeartbeatNow).not.toHaveBeenCalled();
+
+    cron.stop();
+    await store.cleanup();
+  });
 });

@@ -102,10 +102,42 @@ export function resolveSessionTranscriptCandidates(
   return Array.from(new Set(candidates));
 }
 
-export function archiveFileOnDisk(filePath: string, reason: string): string {
+export type ArchiveFileReason = "bak" | "reset" | "deleted";
+
+export function archiveFileOnDisk(filePath: string, reason: ArchiveFileReason): string {
   const ts = new Date().toISOString().replaceAll(":", "-");
   const archived = `${filePath}.${reason}.${ts}`;
   fs.renameSync(filePath, archived);
+  return archived;
+}
+
+/**
+ * Archives all transcript files for a given session.
+ * Best-effort: silently skips files that don't exist or fail to rename.
+ */
+export function archiveSessionTranscripts(opts: {
+  sessionId: string;
+  storePath: string | undefined;
+  sessionFile?: string;
+  agentId?: string;
+  reason: "reset" | "deleted";
+}): string[] {
+  const archived: string[] = [];
+  for (const candidate of resolveSessionTranscriptCandidates(
+    opts.sessionId,
+    opts.storePath,
+    opts.sessionFile,
+    opts.agentId,
+  )) {
+    if (!fs.existsSync(candidate)) {
+      continue;
+    }
+    try {
+      archived.push(archiveFileOnDisk(candidate, opts.reason));
+    } catch {
+      // Best-effort.
+    }
+  }
   return archived;
 }
 

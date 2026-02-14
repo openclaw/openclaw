@@ -595,10 +595,12 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     - set `channels.telegram.webhookUrl`
     - set `channels.telegram.webhookSecret` (required when webhook URL is set)
     - optional `channels.telegram.webhookPath` (default `/telegram-webhook`)
+    - optional `channels.telegram.webhookHost` (default `127.0.0.1`)
 
-    Default local listener for webhook mode binds to `0.0.0.0:8787`.
+    Default local listener for webhook mode binds to `127.0.0.1:8787`.
 
     If your public endpoint differs, place a reverse proxy in front and point `webhookUrl` at the public URL.
+    Set `webhookHost` (for example `0.0.0.0`) when you intentionally need external ingress.
 
   </Accordion>
 
@@ -673,6 +675,45 @@ More help: [Channel troubleshooting](/channels/troubleshooting).
 
 Primary reference:
 
+- `channels.telegram.enabled`: enable/disable channel startup.
+- `channels.telegram.botToken`: bot token (BotFather).
+- `channels.telegram.tokenFile`: read token from file path.
+- `channels.telegram.dmPolicy`: `pairing | allowlist | open | disabled` (default: pairing).
+- `channels.telegram.allowFrom`: DM allowlist (ids/usernames). `open` requires `"*"`.
+- `channels.telegram.groupPolicy`: `open | allowlist | disabled` (default: allowlist).
+- `channels.telegram.groupAllowFrom`: group sender allowlist (ids/usernames).
+- `channels.telegram.groups`: per-group defaults + allowlist (use `"*"` for global defaults).
+  - `channels.telegram.groups.<id>.groupPolicy`: per-group override for groupPolicy (`open | allowlist | disabled`).
+  - `channels.telegram.groups.<id>.requireMention`: mention gating default.
+  - `channels.telegram.groups.<id>.skills`: skill filter (omit = all skills, empty = none).
+  - `channels.telegram.groups.<id>.allowFrom`: per-group sender allowlist override.
+  - `channels.telegram.groups.<id>.systemPrompt`: extra system prompt for the group.
+  - `channels.telegram.groups.<id>.enabled`: disable the group when `false`.
+  - `channels.telegram.groups.<id>.topics.<threadId>.*`: per-topic overrides (same fields as group).
+  - `channels.telegram.groups.<id>.topics.<threadId>.groupPolicy`: per-topic override for groupPolicy (`open | allowlist | disabled`).
+  - `channels.telegram.groups.<id>.topics.<threadId>.requireMention`: per-topic mention gating override.
+- `channels.telegram.capabilities.inlineButtons`: `off | dm | group | all | allowlist` (default: allowlist).
+- `channels.telegram.accounts.<account>.capabilities.inlineButtons`: per-account override.
+- `channels.telegram.replyToMode`: `off | first | all` (default: `first`).
+- `channels.telegram.textChunkLimit`: outbound chunk size (chars).
+- `channels.telegram.chunkMode`: `length` (default) or `newline` to split on blank lines (paragraph boundaries) before length chunking.
+- `channels.telegram.linkPreview`: toggle link previews for outbound messages (default: true).
+- `channels.telegram.streamMode`: `off | partial | block` (draft streaming).
+- `channels.telegram.mediaMaxMb`: inbound/outbound media cap (MB).
+- `channels.telegram.retry`: retry policy for outbound Telegram API calls (attempts, minDelayMs, maxDelayMs, jitter).
+- `channels.telegram.network.autoSelectFamily`: override Node autoSelectFamily (true=enable, false=disable). Defaults to disabled on Node 22 to avoid Happy Eyeballs timeouts.
+- `channels.telegram.proxy`: proxy URL for Bot API calls (SOCKS/HTTP).
+- `channels.telegram.webhookUrl`: enable webhook mode (requires `channels.telegram.webhookSecret`).
+- `channels.telegram.webhookSecret`: webhook secret (required when webhookUrl is set).
+- `channels.telegram.webhookPath`: local webhook path (default `/telegram-webhook`).
+- `channels.telegram.webhookHost`: local webhook bind host (default `127.0.0.1`).
+- `channels.telegram.actions.reactions`: gate Telegram tool reactions.
+- `channels.telegram.actions.sendMessage`: gate Telegram tool message sends.
+- `channels.telegram.actions.deleteMessage`: gate Telegram tool message deletes.
+- `channels.telegram.actions.sticker`: gate Telegram sticker actions — send and search (default: false).
+- `channels.telegram.reactionNotifications`: `off | own | all` — control which reactions trigger system events (default: `own` when not set).
+- `channels.telegram.reactionLevel`: `off | ack | minimal | extensive` — control agent's reaction capability (default: `minimal` when not set).
+
 - [Configuration reference - Telegram](/gateway/configuration-reference#telegram)
 
 Telegram-specific high-signal fields:
@@ -684,7 +725,7 @@ Telegram-specific high-signal fields:
 - streaming: `streamMode`, `draftChunk`, `blockStreaming`
 - formatting/delivery: `textChunkLimit`, `chunkMode`, `linkPreview`, `responsePrefix`
 - media/network: `mediaMaxMb`, `timeoutSeconds`, `retry`, `network.autoSelectFamily`, `proxy`
-- webhook: `webhookUrl`, `webhookSecret`, `webhookPath`
+- webhook: `webhookUrl`, `webhookSecret`, `webhookPath`, `webhookHost`
 - actions/capabilities: `capabilities.inlineButtons`, `actions.sendMessage|editMessage|deleteMessage|reactions|sticker`
 - reactions: `reactionNotifications`, `reactionLevel`
 - writes/history: `configWrites`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`

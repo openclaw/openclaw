@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import JSON5 from "json5";
+import type { RuntimeEnv } from "../runtime.js";
 import { readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
 import { danger, info } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
@@ -201,18 +202,79 @@ function unsetAtPath(root: Record<string, unknown>, path: PathSegment[]): boolea
   return true;
 }
 
-async function loadValidConfig() {
+async function loadValidConfig(runtime: RuntimeEnv = defaultRuntime) {
   const snapshot = await readConfigFileSnapshot();
   if (snapshot.valid) {
     return snapshot;
   }
-  defaultRuntime.error(`Config invalid at ${shortenHomePath(snapshot.path)}.`);
+  runtime.error(`Config invalid at ${shortenHomePath(snapshot.path)}.`);
   for (const issue of snapshot.issues) {
-    defaultRuntime.error(`- ${issue.path || "<root>"}: ${issue.message}`);
+    runtime.error(`- ${issue.path || "<root>"}: ${issue.message}`);
   }
-  defaultRuntime.error(`Run \`${formatCliCommand("openclaw doctor")}\` to repair, then retry.`);
-  defaultRuntime.exit(1);
+  runtime.error(`Run \`${formatCliCommand("openclaw doctor")}\` to repair, then retry.`);
+  runtime.exit(1);
   return snapshot;
+}
+
+function parseRequiredPath(path: string): PathSegment[] {
+  const parsedPath = parsePath(path);
+  if (parsedPath.length === 0) {
+    throw new Error("Path is empty.");
+  }
+  return parsedPath;
+}
+
+export async function runConfigGet(opts: { path: string; json?: boolean; runtime?: RuntimeEnv }) {
+  const runtime = opts.runtime ?? defaultRuntime;
+  try {
+    const parsedPath = parseRequiredPath(opts.path);
+    const snapshot = await loadValidConfig(runtime);
+    const res = getAtPath(snapshot.config, parsedPath);
+    if (!res.found) {
+      runtime.error(danger(`Config path not found: ${opts.path}`));
+      runtime.exit(1);
+      return;
+    }
+    if (opts.json) {
+      runtime.log(JSON.stringify(res.value ?? null, null, 2));
+      return;
+    }
+    if (
+      typeof res.value === "string" ||
+      typeof res.value === "number" ||
+      typeof res.value === "boolean"
+    ) {
+      runtime.log(String(res.value));
+      return;
+    }
+    runtime.log(JSON.stringify(res.value ?? null, null, 2));
+  } catch (err) {
+    runtime.error(danger(String(err)));
+    runtime.exit(1);
+  }
+}
+
+export async function runConfigUnset(opts: { path: string; runtime?: RuntimeEnv }) {
+  const runtime = opts.runtime ?? defaultRuntime;
+  try {
+    const parsedPath = parseRequiredPath(opts.path);
+    const snapshot = await loadValidConfig(runtime);
+    // Use snapshot.resolved (config after $include and ${ENV} resolution, but BEFORE runtime defaults)
+    // instead of snapshot.config (runtime-merged with defaults).
+    // This prevents runtime defaults from leaking into the written config file (issue #6070)
+    const next = structuredClone(snapshot.resolved) as Record<string, unknown>;
+    const removed = unsetAtPath(next, parsedPath);
+    if (!removed) {
+      runtime.error(danger(`Config path not found: ${opts.path}`));
+      runtime.exit(1);
+      return;
+    }
+    await writeConfigFile(next);
+    runtime.log(info(`Removed ${opts.path}. Restart the gateway to apply.`));
+  } catch (err) {
+    runtime.error(danger(String(err)));
+    runtime.exit(1);
+  }
 }
 
 export function registerConfigCli(program: Command) {
@@ -261,35 +323,7 @@ export function registerConfigCli(program: Command) {
     .argument("<path>", "Config path (dot or bracket notation)")
     .option("--json", "Output JSON", false)
     .action(async (path: string, opts) => {
-      try {
-        const parsedPath = parsePath(path);
-        if (parsedPath.length === 0) {
-          throw new Error("Path is empty.");
-        }
-        const snapshot = await loadValidConfig();
-        const res = getAtPath(snapshot.config, parsedPath);
-        if (!res.found) {
-          defaultRuntime.error(danger(`Config path not found: ${path}`));
-          defaultRuntime.exit(1);
-          return;
-        }
-        if (opts.json) {
-          defaultRuntime.log(JSON.stringify(res.value ?? null, null, 2));
-          return;
-        }
-        if (
-          typeof res.value === "string" ||
-          typeof res.value === "number" ||
-          typeof res.value === "boolean"
-        ) {
-          defaultRuntime.log(String(res.value));
-          return;
-        }
-        defaultRuntime.log(JSON.stringify(res.value ?? null, null, 2));
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-      }
+      await runConfigGet({ path, json: Boolean(opts.json) });
     });
 
   cmd
@@ -324,27 +358,6 @@ export function registerConfigCli(program: Command) {
     .description("Remove a config value by dot path")
     .argument("<path>", "Config path (dot or bracket notation)")
     .action(async (path: string) => {
-      try {
-        const parsedPath = parsePath(path);
-        if (parsedPath.length === 0) {
-          throw new Error("Path is empty.");
-        }
-        const snapshot = await loadValidConfig();
-        // Use snapshot.resolved (config after $include and ${ENV} resolution, but BEFORE runtime defaults)
-        // instead of snapshot.config (runtime-merged with defaults).
-        // This prevents runtime defaults from leaking into the written config file (issue #6070)
-        const next = structuredClone(snapshot.resolved) as Record<string, unknown>;
-        const removed = unsetAtPath(next, parsedPath);
-        if (!removed) {
-          defaultRuntime.error(danger(`Config path not found: ${path}`));
-          defaultRuntime.exit(1);
-          return;
-        }
-        await writeConfigFile(next);
-        defaultRuntime.log(info(`Removed ${path}. Restart the gateway to apply.`));
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-      }
+      await runConfigUnset({ path });
     });
 }

@@ -4,28 +4,29 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import * as tar from "tar";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 
-const tempDirs: string[] = [];
+const fixtureRoot = path.join(os.tmpdir(), `openclaw-hook-install-${randomUUID()}`);
+let tempDirIndex = 0;
 
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: vi.fn(),
 }));
 
 function makeTempDir() {
-  const dir = path.join(os.tmpdir(), `openclaw-hook-install-${randomUUID()}`);
+  const dir = path.join(fixtureRoot, `case-${tempDirIndex++}`);
   fs.mkdirSync(dir, { recursive: true });
-  tempDirs.push(dir);
   return dir;
 }
 
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    try {
-      fs.rmSync(dir, { recursive: true, force: true });
-    } catch {
-      // ignore cleanup failures
-    }
+const { runCommandWithTimeout } = await import("../process/exec.js");
+const { installHooksFromArchive, installHooksFromPath } = await import("./install.js");
+
+afterAll(() => {
+  try {
+    fs.rmSync(fixtureRoot, { recursive: true, force: true });
+  } catch {
+    // ignore cleanup failures
   }
 });
 
@@ -61,7 +62,6 @@ describe("installHooksFromArchive", () => {
     fs.writeFileSync(archivePath, buffer);
 
     const hooksDir = path.join(stateDir, "hooks");
-    const { installHooksFromArchive } = await import("./install.js");
     const result = await installHooksFromArchive({ archivePath, hooksDir });
 
     expect(result.ok).toBe(true);
@@ -111,7 +111,6 @@ describe("installHooksFromArchive", () => {
     await tar.c({ cwd: workDir, file: archivePath }, ["package"]);
 
     const hooksDir = path.join(stateDir, "hooks");
-    const { installHooksFromArchive } = await import("./install.js");
     const result = await installHooksFromArchive({ archivePath, hooksDir });
 
     expect(result.ok).toBe(true);
@@ -160,7 +159,6 @@ describe("installHooksFromArchive", () => {
     await tar.c({ cwd: workDir, file: archivePath }, ["package"]);
 
     const hooksDir = path.join(stateDir, "hooks");
-    const { installHooksFromArchive } = await import("./install.js");
     const result = await installHooksFromArchive({ archivePath, hooksDir });
 
     expect(result.ok).toBe(false);
@@ -207,7 +205,6 @@ describe("installHooksFromArchive", () => {
     await tar.c({ cwd: workDir, file: archivePath }, ["package"]);
 
     const hooksDir = path.join(stateDir, "hooks");
-    const { installHooksFromArchive } = await import("./install.js");
     const result = await installHooksFromArchive({ archivePath, hooksDir });
 
     expect(result.ok).toBe(false);
@@ -253,11 +250,9 @@ describe("installHooksFromPath", () => {
       "utf-8",
     );
 
-    const { runCommandWithTimeout } = await import("../process/exec.js");
     const run = vi.mocked(runCommandWithTimeout);
     run.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
 
-    const { installHooksFromPath } = await import("./install.js");
     const res = await installHooksFromPath({
       path: pkgDir,
       hooksDir: path.join(stateDir, "hooks"),
@@ -301,7 +296,6 @@ describe("installHooksFromPath", () => {
     fs.writeFileSync(path.join(hookDir, "handler.ts"), "export default async () => {};\n");
 
     const hooksDir = path.join(stateDir, "hooks");
-    const { installHooksFromPath } = await import("./install.js");
     const result = await installHooksFromPath({ path: hookDir, hooksDir });
 
     expect(result.ok).toBe(true);

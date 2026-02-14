@@ -409,8 +409,8 @@ Actions:
 - `openclaw browser scrollintoview e12`
 - `openclaw browser drag 10 11`
 - `openclaw browser select 9 OptionA OptionB`
-- `openclaw browser download e12 /tmp/report.pdf`
-- `openclaw browser waitfordownload /tmp/report.pdf`
+- `openclaw browser download e12 report.pdf`
+- `openclaw browser waitfordownload report.pdf`
 - `openclaw browser upload /tmp/file.pdf`
 - `openclaw browser fill --fields '[{"ref":"1","type":"text","value":"Ada"}]'`
 - `openclaw browser dialog --accept`
@@ -444,6 +444,9 @@ Notes:
 
 - `upload` and `dialog` are **arming** calls; run them before the click/press
   that triggers the chooser/dialog.
+- Download and trace output paths are constrained to OpenClaw temp roots:
+  - traces: `/tmp/openclaw` (fallback: `${os.tmpdir()}/openclaw`)
+  - downloads: `/tmp/openclaw/downloads` (fallback: `${os.tmpdir()}/openclaw/downloads`)
 - `upload` can also set file inputs directly via `--input-ref` or `--element`.
 - `snapshot`:
   - `--format ai` (default when Playwright is installed): returns an AI snapshot with numeric refs (`aria-ref="<n>"`).

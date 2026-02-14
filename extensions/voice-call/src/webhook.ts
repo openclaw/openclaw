@@ -1,6 +1,11 @@
 import { spawn } from "node:child_process";
 import http from "node:http";
 import { URL } from "node:url";
+import {
+  isRequestBodyLimitError,
+  readRequestBodyWithLimit,
+  requestBodyErrorToText,
+} from "openclaw/plugin-sdk";
 import type { VoiceCallConfig } from "./config.js";
 import type { CoreConfig } from "./core-bridge.js";
 import type { CallManager } from "./manager.js";
@@ -244,9 +249,14 @@ export class VoiceCallWebhookServer {
     try {
       body = await this.readBody(req, MAX_WEBHOOK_BODY_BYTES);
     } catch (err) {
-      if (err instanceof Error && err.message === "PayloadTooLarge") {
+      if (isRequestBodyLimitError(err, "PAYLOAD_TOO_LARGE")) {
         res.statusCode = 413;
         res.end("Payload Too Large");
+        return;
+      }
+      if (isRequestBodyLimitError(err, "REQUEST_BODY_TIMEOUT")) {
+        res.statusCode = 408;
+        res.end(requestBodyErrorToText("REQUEST_BODY_TIMEOUT"));
         return;
       }
       throw err;
@@ -303,42 +313,7 @@ export class VoiceCallWebhookServer {
     maxBytes: number,
     timeoutMs = 30_000,
   ): Promise<string> {
-    return new Promise((resolve, reject) => {
-      let done = false;
-      const finish = (fn: () => void) => {
-        if (done) {
-          return;
-        }
-        done = true;
-        clearTimeout(timer);
-        fn();
-      };
-
-      const timer = setTimeout(() => {
-        finish(() => {
-          const err = new Error("Request body timeout");
-          req.destroy(err);
-          reject(err);
-        });
-      }, timeoutMs);
-
-      const chunks: Buffer[] = [];
-      let totalBytes = 0;
-      req.on("data", (chunk: Buffer) => {
-        totalBytes += chunk.length;
-        if (totalBytes > maxBytes) {
-          finish(() => {
-            req.destroy();
-            reject(new Error("PayloadTooLarge"));
-          });
-          return;
-        }
-        chunks.push(chunk);
-      });
-      req.on("end", () => finish(() => resolve(Buffer.concat(chunks).toString("utf-8"))));
-      req.on("error", (err) => finish(() => reject(err)));
-      req.on("close", () => finish(() => reject(new Error("Connection closed"))));
-    });
+    return readRequestBodyWithLimit(req, { maxBytes, timeoutMs });
   }
 
   /**

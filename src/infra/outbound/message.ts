@@ -51,6 +51,7 @@ type MessageSendParams = {
     mediaUrls?: string[];
   };
   abortSignal?: AbortSignal;
+  silent?: boolean;
 };
 
 export type MessageSendResult = {
@@ -173,6 +174,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       deps: params.deps,
       bestEffort: params.bestEffort,
       abortSignal: params.abortSignal,
+      silent: params.silent,
       mirror: params.mirror
         ? {
             ...params.mirror,

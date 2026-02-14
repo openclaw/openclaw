@@ -7,8 +7,13 @@ import { safeEqualSecret } from "../security/secret-equal.js";
 import { resolveBrowserConfig, resolveProfile } from "./config.js";
 import { ensureBrowserControlAuth, resolveBrowserControlAuth } from "./control-auth.js";
 import { ensureChromeExtensionRelayServer } from "./extension-relay.js";
+import { isPwAiLoaded } from "./pw-ai-state.js";
 import { registerBrowserRoutes } from "./routes/index.js";
-import { type BrowserServerState, createBrowserRouteContext } from "./server-context.js";
+import {
+  type BrowserServerState,
+  createBrowserRouteContext,
+  listKnownProfileNames,
+} from "./server-context.js";
 
 let state: BrowserServerState | null = null;
 const log = createSubsystemLogger("browser");
@@ -124,6 +129,7 @@ export async function startBrowserControlServerFromConfig(): Promise<BrowserServ
 
   const ctx = createBrowserRouteContext({
     getState: () => state,
+    refreshConfigFromDisk: true,
   });
   registerBrowserRoutes(app as unknown as BrowserRouteRegistrar, ctx);
 
@@ -172,12 +178,13 @@ export async function stopBrowserControlServer(): Promise<void> {
 
   const ctx = createBrowserRouteContext({
     getState: () => state,
+    refreshConfigFromDisk: true,
   });
 
   try {
     const current = state;
     if (current) {
-      for (const name of Object.keys(current.resolved.profiles)) {
+      for (const name of listKnownProfileNames(current)) {
         try {
           await ctx.forProfile(name).stopRunningBrowser();
         } catch {
@@ -196,11 +203,13 @@ export async function stopBrowserControlServer(): Promise<void> {
   }
   state = null;
 
-  // Optional: Playwright is not always available (e.g. embedded gateway builds).
-  try {
-    const mod = await import("./pw-ai.js");
-    await mod.closePlaywrightBrowserConnection();
-  } catch {
-    // ignore
+  // Optional: avoid importing heavy Playwright bridge when this process never used it.
+  if (isPwAiLoaded()) {
+    try {
+      const mod = await import("./pw-ai.js");
+      await mod.closePlaywrightBrowserConnection();
+    } catch {
+      // ignore
+    }
   }
 }

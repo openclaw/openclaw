@@ -20,6 +20,11 @@ const hookMocks = vi.hoisted(() => ({
     runMessageSent: vi.fn(async () => {}),
   },
 }));
+const queueMocks = vi.hoisted(() => ({
+  enqueueDelivery: vi.fn(async () => "mock-queue-id"),
+  ackDelivery: vi.fn(async () => {}),
+  failDelivery: vi.fn(async () => {}),
+}));
 
 vi.mock("../../config/sessions.js", async () => {
   const actual = await vi.importActual<typeof import("../../config/sessions.js")>(
@@ -33,6 +38,11 @@ vi.mock("../../config/sessions.js", async () => {
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => hookMocks.runner,
 }));
+vi.mock("./delivery-queue.js", () => ({
+  enqueueDelivery: queueMocks.enqueueDelivery,
+  ackDelivery: queueMocks.ackDelivery,
+  failDelivery: queueMocks.failDelivery,
+}));
 
 const { deliverOutboundPayloads, normalizeOutboundPayloads } = await import("./deliver.js");
 
@@ -43,6 +53,12 @@ describe("deliverOutboundPayloads", () => {
     hookMocks.runner.hasHooks.mockReturnValue(false);
     hookMocks.runner.runMessageSent.mockReset();
     hookMocks.runner.runMessageSent.mockResolvedValue(undefined);
+    queueMocks.enqueueDelivery.mockReset();
+    queueMocks.enqueueDelivery.mockResolvedValue("mock-queue-id");
+    queueMocks.ackDelivery.mockReset();
+    queueMocks.ackDelivery.mockResolvedValue(undefined);
+    queueMocks.failDelivery.mockReset();
+    queueMocks.failDelivery.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -387,6 +403,57 @@ describe("deliverOutboundPayloads", () => {
     expect(sendWhatsApp).toHaveBeenCalledTimes(2);
     expect(onError).toHaveBeenCalledTimes(1);
     expect(results).toEqual([{ channel: "whatsapp", messageId: "w2", toJid: "jid" }]);
+  });
+
+  it("calls failDelivery instead of ackDelivery on bestEffort partial failure", async () => {
+    const sendWhatsApp = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("fail"))
+      .mockResolvedValueOnce({ messageId: "w2", toJid: "jid" });
+    const onError = vi.fn();
+    const cfg: OpenClawConfig = {};
+
+    await deliverOutboundPayloads({
+      cfg,
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "a" }, { text: "b" }],
+      deps: { sendWhatsApp },
+      bestEffort: true,
+      onError,
+    });
+
+    // onError was called for the first payload's failure.
+    expect(onError).toHaveBeenCalledTimes(1);
+
+    // Queue entry should NOT be acked — failDelivery should be called instead.
+    expect(queueMocks.ackDelivery).not.toHaveBeenCalled();
+    expect(queueMocks.failDelivery).toHaveBeenCalledWith(
+      "mock-queue-id",
+      "partial delivery failure (bestEffort)",
+    );
+  });
+
+  it("acks the queue entry when delivery is aborted", async () => {
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
+    const abortController = new AbortController();
+    abortController.abort();
+    const cfg: OpenClawConfig = {};
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg,
+        channel: "whatsapp",
+        to: "+1555",
+        payloads: [{ text: "a" }],
+        deps: { sendWhatsApp },
+        abortSignal: abortController.signal,
+      }),
+    ).rejects.toThrow("Operation aborted");
+
+    expect(queueMocks.ackDelivery).toHaveBeenCalledWith("mock-queue-id");
+    expect(queueMocks.failDelivery).not.toHaveBeenCalled();
+    expect(sendWhatsApp).not.toHaveBeenCalled();
   });
 
   it("passes normalized payload to onError", async () => {

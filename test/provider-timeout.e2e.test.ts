@@ -94,6 +94,7 @@ async function connectClient(params: { url: string; token: string }) {
     };
     const client = new GatewayClient({
       url: params.url,
+      connectDelayMs: 0,
       token: params.token,
       clientName: GATEWAY_CLIENT_NAMES.TEST,
       clientDisplayName: "vitest-timeout-fallback",

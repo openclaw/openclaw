@@ -43,6 +43,17 @@ import androidx.compose.ui.platform.LocalContext
 fun ChatMessageBubble(message: ChatMessage) {
   val isUser = message.role.lowercase() == "user"
 
+  // Filter to only displayable content parts (text with content, or base64 images)
+  val displayableContent = message.content.filter { part ->
+    when (part.type) {
+      "text" -> !part.text.isNullOrBlank()
+      else -> part.base64 != null
+    }
+  }
+
+  // Skip rendering entirely if no displayable content
+  if (displayableContent.isEmpty()) return
+
   Row(
     modifier = Modifier.fillMaxWidth(),
     horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
@@ -61,7 +72,7 @@ fun ChatMessageBubble(message: ChatMessage) {
             .padding(horizontal = 12.dp, vertical = 10.dp),
       ) {
         val textColor = textColorOverBubble(isUser)
-        ChatMessageBody(content = message.content, textColor = textColor)
+        ChatMessageBody(content = displayableContent, textColor = textColor)
       }
     }
   }

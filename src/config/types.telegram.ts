@@ -109,6 +109,8 @@ export type TelegramAccountConfig = {
   webhookUrl?: string;
   webhookSecret?: string;
   webhookPath?: string;
+  /** Local webhook listener bind host (default: 127.0.0.1). */
+  webhookHost?: string;
   /** Per-action tool gating (default: true for all). */
   actions?: TelegramActionConfig;
   /**

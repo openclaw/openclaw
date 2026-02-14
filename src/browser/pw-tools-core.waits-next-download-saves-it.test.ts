@@ -33,10 +33,7 @@ const tmpDirMocks = vi.hoisted(() => ({
   resolvePreferredOpenClawTmpDir: vi.fn(() => "/tmp/openclaw"),
 }));
 vi.mock("../infra/tmp-openclaw-dir.js", () => tmpDirMocks);
-
-async function importModule() {
-  return await import("./pw-tools-core.js");
-}
+const mod = await import("./pw-tools-core.js");
 
 describe("pw-tools-core", () => {
   beforeEach(() => {
@@ -75,7 +72,6 @@ describe("pw-tools-core", () => {
 
     currentPage = { on, off };
 
-    const mod = await importModule();
     const targetPath = path.resolve("/tmp/file.bin");
     const p = mod.waitForDownloadViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
@@ -113,7 +109,6 @@ describe("pw-tools-core", () => {
 
     currentPage = { on, off };
 
-    const mod = await importModule();
     const targetPath = path.resolve("/tmp/report.pdf");
     const p = mod.downloadViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
@@ -152,7 +147,6 @@ describe("pw-tools-core", () => {
     tmpDirMocks.resolvePreferredOpenClawTmpDir.mockReturnValue("/tmp/openclaw-preferred");
     currentPage = { on, off };
 
-    const mod = await importModule();
     const p = mod.waitForDownloadViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
       targetId: "T1",
@@ -194,7 +188,6 @@ describe("pw-tools-core", () => {
       text: async () => '{"ok":true,"value":123}',
     };
 
-    const mod = await importModule();
     const p = mod.responseBodyViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
       targetId: "T1",
@@ -218,7 +211,6 @@ describe("pw-tools-core", () => {
     currentRefLocator = { scrollIntoViewIfNeeded };
     currentPage = {};
 
-    const mod = await importModule();
     await mod.scrollIntoViewViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
       targetId: "T1",
@@ -232,7 +224,6 @@ describe("pw-tools-core", () => {
     currentRefLocator = { scrollIntoViewIfNeeded: vi.fn(async () => {}) };
     currentPage = {};
 
-    const mod = await importModule();
     await expect(
       mod.scrollIntoViewViaPlaywright({
         cdpUrl: "http://127.0.0.1:18792",

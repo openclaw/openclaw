@@ -107,7 +107,7 @@ Before any substantive review or prep work, **always rebase the PR branch onto c
 
 - In normal `prepare-pr` runs, commits are created via `scripts/committer "<msg>" <file...>`. Use it manually only when operating outside the skill flow; avoid manual `git add`/`git commit` so staging stays scoped.
 - Follow concise, action-oriented commit messages (e.g., `CLI: add verbose flag to send`).
-- During `prepare-pr`, use this commit subject format: `fix: <summary> (openclaw#<PR>) thanks @<pr-author>`.
+- During `prepare-pr`, use concise, action-oriented subjects **without** PR numbers or thanks; reserve `(#<PR>) thanks @<pr-author>` for the final merge/squash commit.
 - Group related changes; avoid bundling unrelated refactors.
 - Changelog workflow: keep the latest released version at the top (no `Unreleased`); after publishing, bump the version and start a new top section.
 - When working on a PR: add a changelog entry with the PR number and thank the contributor (mandatory in this workflow).

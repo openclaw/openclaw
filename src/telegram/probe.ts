@@ -26,6 +26,7 @@ export async function probeTelegram(
   const started = Date.now();
   const fetcher = proxyUrl ? makeProxyFetch(proxyUrl) : fetch;
   const base = `${TELEGRAM_API_BASE}/bot${token}`;
+  const retryDelayMs = Math.max(50, Math.min(1000, timeoutMs));
 
   const result: TelegramProbe = {
     ok: false,
@@ -46,7 +47,7 @@ export async function probeTelegram(
       } catch (err) {
         fetchError = err;
         if (i < 2) {
-          await new Promise((resolve) => setTimeout(resolve, 1000));
+          await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
         }
       }
     }

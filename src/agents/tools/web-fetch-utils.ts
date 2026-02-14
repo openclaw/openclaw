@@ -1,5 +1,32 @@
 export type ExtractMode = "markdown" | "text";
 
+let readabilityDepsPromise:
+  | Promise<{
+      Readability: typeof import("@mozilla/readability").Readability;
+      parseHTML: typeof import("linkedom").parseHTML;
+    }>
+  | undefined;
+
+async function loadReadabilityDeps(): Promise<{
+  Readability: typeof import("@mozilla/readability").Readability;
+  parseHTML: typeof import("linkedom").parseHTML;
+}> {
+  if (!readabilityDepsPromise) {
+    readabilityDepsPromise = Promise.all([import("@mozilla/readability"), import("linkedom")]).then(
+      ([readability, linkedom]) => ({
+        Readability: readability.Readability,
+        parseHTML: linkedom.parseHTML,
+      }),
+    );
+  }
+  try {
+    return await readabilityDepsPromise;
+  } catch (error) {
+    readabilityDepsPromise = undefined;
+    throw error;
+  }
+}
+
 function decodeEntities(value: string): string {
   return value
     .replace(/&nbsp;/gi, " ")
@@ -94,10 +121,7 @@ export async function extractReadableContent(params: {
     return rendered;
   };
   try {
-    const [{ Readability }, { parseHTML }] = await Promise.all([
-      import("@mozilla/readability"),
-      import("linkedom"),
-    ]);
+    const { Readability, parseHTML } = await loadReadabilityDeps();
     const { document } = parseHTML(params.html);
     try {
       (document as { baseURI?: string }).baseURI = params.url;

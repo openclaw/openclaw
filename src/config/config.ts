@@ -1,8 +1,10 @@
 export {
+  clearConfigCache,
   createConfigIO,
   loadConfig,
   parseConfigJson5,
   readConfigFileSnapshot,
+  readConfigFileSnapshotForWrite,
   resolveConfigSnapshotHash,
   writeConfigFile,
 } from "./io.js";

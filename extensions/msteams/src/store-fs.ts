@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { safeParseJson } from "openclaw/plugin-sdk";
-import lockfile from "proper-lockfile";
+import { withFileLock as withPathLock } from "./file-lock.js";
 
 const STORE_LOCK_OPTIONS = {
   retries: {
@@ -60,17 +60,7 @@ export async function withFileLock<T>(
   fn: () => Promise<T>,
 ): Promise<T> {
   await ensureJsonFile(filePath, fallback);
-  let release: (() => Promise<void>) | undefined;
-  try {
-    release = await lockfile.lock(filePath, STORE_LOCK_OPTIONS);
+  return await withPathLock(filePath, STORE_LOCK_OPTIONS, async () => {
     return await fn();
-  } finally {
-    if (release) {
-      try {
-        await release();
-      } catch {
-        // ignore unlock errors
-      }
-    }
-  }
+  });
 }

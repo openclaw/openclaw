@@ -123,6 +123,8 @@ export type DiscordAccountConfig = {
   /** If false, do not start this Discord account. Default: true. */
   enabled?: boolean;
   token?: string;
+  /** HTTP(S) proxy URL for Discord gateway WebSocket connections. */
+  proxy?: string;
   /** Allow bot-authored messages to trigger replies (default: false). */
   allowBots?: boolean;
   /**
@@ -173,6 +175,14 @@ export type DiscordAccountConfig = {
   pluralkit?: DiscordPluralKitConfig;
   /** Outbound response prefix override for this channel/account. */
   responsePrefix?: string;
+  /** Bot activity status text (e.g. "Watching X"). */
+  activity?: string;
+  /** Bot status (online|dnd|idle|invisible). Defaults to online when presence is configured. */
+  status?: "online" | "dnd" | "idle" | "invisible";
+  /** Activity type (0=Game, 1=Streaming, 2=Listening, 3=Watching, 4=Custom, 5=Competing). Defaults to 4 (Custom) when activity is set. */
+  activityType?: 0 | 1 | 2 | 3 | 4 | 5;
+  /** Streaming URL (Twitch/YouTube). Required when activityType=1. */
+  activityUrl?: string;
 };
 
 export type DiscordConfig = {

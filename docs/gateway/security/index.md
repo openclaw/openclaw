@@ -45,6 +45,7 @@ Start with the smallest access that still works, then widen it as you gain confi
 - **Browser control exposure** (remote nodes, relay ports, remote CDP endpoints).
 - **Local disk hygiene** (permissions, symlinks, config includes, “synced folder” paths).
 - **Plugins** (extensions exist without an explicit allowlist).
+- **Policy drift/misconfig** (sandbox docker settings configured but sandbox mode off; ineffective `gateway.nodes.denyCommands` patterns; global `tools.profile="minimal"` overridden by per-agent profiles; extension plugin tools reachable under permissive tool policy).
 - **Model hygiene** (warn when configured models look legacy; not a hard block).
 
 If you run `--deep`, OpenClaw also attempts a best-effort live Gateway probe.
