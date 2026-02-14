@@ -20,7 +20,7 @@
   "agents": {
     "defaults": {
       "model": {
-        "primary": "openrouter/minimax/minimax-m2.5"
+        "primary": "openrouter/minimax/minimax-m2.1"
       },
     "sandbox": {
             "mode": "non-main",
@@ -38,7 +38,6 @@
         "openrouter/auto": {
           "alias": "OpenRouter"
         },
-        "openrouter/minimax/minimax-m2.5": {},
         "openrouter/minimax/minimax-m2.1": {},
         "openrouter/moonshotai/kimi-k2.5": {},
         "openrouter/deepseek/deepseek-v3.2": {},
