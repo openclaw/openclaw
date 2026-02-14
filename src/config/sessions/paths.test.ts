@@ -1,6 +1,8 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  dotQuote,
+  dotUnquote,
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
   resolveSessionTranscriptPath,
@@ -192,5 +194,37 @@ describe("session path safety", () => {
   it("falls back to agentId when storePath is absent", () => {
     const opts = resolveSessionFilePathOptions({ agentId: "ops" });
     expect(opts).toEqual({ agentId: "ops" });
+  });
+});
+
+describe("validateSessionId with special characters", () => {
+  it("accepts WhatsApp-style IDs with colons and plus signs", () => {
+    expect(validateSessionId("agent:wa-relay:whatsapp:+15551234567")).toBe(
+      "agent:wa-relay:whatsapp:+15551234567",
+    );
+  });
+
+  it("rejects IDs with path traversal characters", () => {
+    expect(() => validateSessionId("../escape")).toThrow("Invalid session ID");
+    expect(() => validateSessionId("foo/bar")).toThrow("Invalid session ID");
+  });
+});
+
+describe("dotQuote / dotUnquote", () => {
+  it("encodes special characters", () => {
+    expect(dotQuote("agent:wa:+1234")).toBe("agent.3Awa.3A.2B1234");
+  });
+
+  it("encodes dots", () => {
+    expect(dotQuote("foo.bar")).toBe("foo.2Ebar");
+  });
+
+  it("roundtrips", () => {
+    const original = "agent:wa-relay:whatsapp:+15551234567";
+    expect(dotUnquote(dotQuote(original))).toBe(original);
+  });
+
+  it("leaves safe characters unchanged", () => {
+    expect(dotQuote("simple-id_123")).toBe("simple-id_123");
   });
 });
