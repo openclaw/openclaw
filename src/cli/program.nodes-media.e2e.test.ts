@@ -21,6 +21,36 @@ const runtime = {
   }),
 };
 
+const IOS_NODE = {
+  nodeId: "ios-node",
+  displayName: "iOS Node",
+  remoteIp: "192.168.0.88",
+  connected: true,
+} as const;
+
+function mockCameraGateway(
+  command: "camera.snap" | "camera.clip",
+  payload: Record<string, unknown>,
+) {
+  callGateway.mockImplementation(async (opts: { method?: string }) => {
+    if (opts.method === "node.list") {
+      return {
+        ts: Date.now(),
+        nodes: [IOS_NODE],
+      };
+    }
+    if (opts.method === "node.invoke") {
+      return {
+        ok: true,
+        nodeId: IOS_NODE.nodeId,
+        command,
+        payload,
+      };
+    }
+    return { ok: true };
+  });
+}
+
 vi.mock("../commands/message.js", () => ({ messageCommand }));
 vi.mock("../commands/status.js", () => ({ statusCommand }));
 vi.mock("../commands/configure.js", () => ({
@@ -62,30 +92,7 @@ describe("cli program (nodes media)", () => {
   });
 
   it("runs nodes camera snap and prints two MEDIA paths", async () => {
-    callGateway.mockImplementation(async (opts: { method?: string }) => {
-      if (opts.method === "node.list") {
-        return {
-          ts: Date.now(),
-          nodes: [
-            {
-              nodeId: "ios-node",
-              displayName: "iOS Node",
-              remoteIp: "192.168.0.88",
-              connected: true,
-            },
-          ],
-        };
-      }
-      if (opts.method === "node.invoke") {
-        return {
-          ok: true,
-          nodeId: "ios-node",
-          command: "camera.snap",
-          payload: { format: "jpg", base64: "aGk=", width: 1, height: 1 },
-        };
-      }
-      return { ok: true };
-    });
+    mockCameraGateway("camera.snap", { format: "jpg", base64: "aGk=", width: 1, height: 1 });
 
     const program = buildProgram();
     runtime.log.mockClear();
@@ -185,30 +192,7 @@ describe("cli program (nodes media)", () => {
   });
 
   it("runs nodes camera snap with facing front and passes params", async () => {
-    callGateway.mockImplementation(async (opts: { method?: string }) => {
-      if (opts.method === "node.list") {
-        return {
-          ts: Date.now(),
-          nodes: [
-            {
-              nodeId: "ios-node",
-              displayName: "iOS Node",
-              remoteIp: "192.168.0.88",
-              connected: true,
-            },
-          ],
-        };
-      }
-      if (opts.method === "node.invoke") {
-        return {
-          ok: true,
-          nodeId: "ios-node",
-          command: "camera.snap",
-          payload: { format: "jpg", base64: "aGk=", width: 1, height: 1 },
-        };
-      }
-      return { ok: true };
-    });
+    mockCameraGateway("camera.snap", { format: "jpg", base64: "aGk=", width: 1, height: 1 });
 
     const program = buildProgram();
     runtime.log.mockClear();
