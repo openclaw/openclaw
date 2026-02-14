@@ -201,6 +201,7 @@ export function renderApp(state: AppViewState) {
         ${
           state.tab === "overview"
             ? renderOverview({
+                mode: state.mode,
                 connected: state.connected,
                 hello: state.hello,
                 settings: state.settings,
