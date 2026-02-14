@@ -44,6 +44,9 @@ export function deriveQmdScopeChatType(key?: string): "channel" | "group" | "dir
 }
 
 function parseQmdSessionScope(key?: string): ParsedQmdSessionScope {
+  if (!key) {
+    return {};
+  }
   const normalized = normalizeQmdSessionKey(key);
   if (!normalized) {
     return {};
