@@ -138,7 +138,7 @@ export function loadPluginManifestRegistry(params: {
   const diagnostics: PluginDiagnostic[] = [...discovery.diagnostics];
   const candidates: PluginCandidate[] = discovery.candidates;
   const records: PluginManifestRecord[] = [];
-  const seenIds = new Set<string>();
+  const seenIds = new Map<string, PluginCandidate>();
 
   for (const candidate of candidates) {
     const manifestRes = loadPluginManifest(candidate.rootDir);
@@ -161,7 +161,21 @@ export function loadPluginManifestRegistry(params: {
       });
     }
 
-    if (seenIds.has(manifest.id)) {
+    const existingCandidate = seenIds.get(manifest.id);
+    if (existingCandidate) {
+      // Check whether both candidates point to the same physical directory
+      // (e.g. via symlinks or different path representations). If so, this
+      // is a false-positive duplicate and can be silently skipped.
+      let samePlugin = false;
+      try {
+        samePlugin =
+          fs.realpathSync(existingCandidate.rootDir) === fs.realpathSync(candidate.rootDir);
+      } catch {
+        // If either path is inaccessible, fall through to duplicate warning
+      }
+      if (samePlugin) {
+        continue;
+      }
       diagnostics.push({
         level: "warn",
         pluginId: manifest.id,
@@ -169,7 +183,7 @@ export function loadPluginManifestRegistry(params: {
         message: `duplicate plugin id detected; later plugin may be overridden (${candidate.source})`,
       });
     } else {
-      seenIds.add(manifest.id);
+      seenIds.set(manifest.id, candidate);
     }
 
     const configSchema = manifest.configSchema;
