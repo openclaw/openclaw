@@ -56,3 +56,29 @@ export function installDirectiveBehaviorE2EHooks() {
     vi.restoreAllMocks();
   });
 }
+
+export function makeRestrictedElevatedDisabledConfig(home: string) {
+  return {
+    agents: {
+      defaults: {
+        model: "anthropic/claude-opus-4-5",
+        workspace: path.join(home, "openclaw"),
+      },
+      list: [
+        {
+          id: "restricted",
+          tools: {
+            elevated: { enabled: false },
+          },
+        },
+      ],
+    },
+    tools: {
+      elevated: {
+        allowFrom: { whatsapp: ["+1222"] },
+      },
+    },
+    channels: { whatsapp: { allowFrom: ["+1222"] } },
+    session: { store: path.join(home, "sessions.json") },
+  } as const;
+}
