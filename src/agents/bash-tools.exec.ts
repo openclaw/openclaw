@@ -16,6 +16,7 @@ import {
   resolveExecApprovals,
   resolveExecApprovalsFromFile,
   buildSafeShellCommand,
+  buildSafeBinsShellCommand,
 } from "../infra/exec-approvals.js";
 import { buildNodeShellCommand } from "../infra/node-shell.js";
 import {
@@ -806,23 +807,41 @@ export function createExecTool(
           throw new Error("exec denied: allowlist miss");
         }
 
-        // If allowlist is satisfied only via safeBins (no explicit allowlist match),
-        // run a sanitized `shell -c` command that disables glob/var expansion by
-        // forcing every argv token to be literal via single-quoting.
+        // If allowlist uses safeBins, sanitize only those stdin-only segments:
+        // disable glob/var expansion by forcing argv tokens to be literal via single-quoting.
         if (
           hostSecurity === "allowlist" &&
           analysisOk &&
           allowlistSatisfied &&
-          allowlistMatches.length === 0
+          allowlistEval.segmentSatisfiedBy.some((by) => by === "safeBins")
         ) {
-          const safe = buildSafeShellCommand({
+          const safe = buildSafeBinsShellCommand({
             command: params.command,
+            segments: allowlistEval.segments,
+            segmentSatisfiedBy: allowlistEval.segmentSatisfiedBy,
             platform: process.platform,
           });
           if (!safe.ok || !safe.command) {
-            throw new Error(`exec denied: safeBins sanitize failed (${safe.reason ?? "unknown"})`);
+            // Fallback: quote everything (safe, but may change glob behavior).
+            const fallback = buildSafeShellCommand({
+              command: params.command,
+              platform: process.platform,
+            });
+            if (!fallback.ok || !fallback.command) {
+              throw new Error(
+                `exec denied: safeBins sanitize failed (${safe.reason ?? "unknown"})`,
+              );
+            }
+            warnings.push(
+              "Warning: safeBins hardening used fallback quoting due to parser mismatch.",
+            );
+            execCommandOverride = fallback.command;
+          } else {
+            warnings.push(
+              "Warning: safeBins hardening disabled glob/variable expansion for stdin-only segments.",
+            );
+            execCommandOverride = safe.command;
           }
-          execCommandOverride = safe.command;
         }
 
         if (allowlistMatches.length > 0) {
