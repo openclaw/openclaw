@@ -79,6 +79,9 @@ export type ChannelOutboundContext = {
   replyToId?: string | null;
   threadId?: string | number | null;
   accountId?: string | null;
+  username?: string;
+  icon_url?: string;
+  icon_emoji?: string;
   deps?: OutboundSendDeps;
   silent?: boolean;
 };
