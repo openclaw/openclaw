@@ -298,7 +298,9 @@ export function attachGatewayWsMessageHandler(params: {
           return;
         }
         // Default-deny: scopes must be explicit. Empty/missing scopes means no permissions.
-        const scopes = Array.isArray(connectParams.scopes) ? connectParams.scopes : [];
+        // Note: If the client does not present a device identity, we can't bind scopes to a paired
+        // device/token, so we will clear scopes after auth to avoid self-declared permissions.
+        let scopes = Array.isArray(connectParams.scopes) ? connectParams.scopes : [];
         connectParams.role = role;
         connectParams.scopes = scopes;
 
@@ -428,6 +430,10 @@ export function attachGatewayWsMessageHandler(params: {
           close(1008, truncateCloseReason(authMessage));
         };
         if (!device) {
+          if (scopes.length > 0) {
+            scopes = [];
+            connectParams.scopes = scopes;
+          }
           const canSkipDevice = sharedAuthOk;
 
           if (isControlUi && !allowControlUiBypass) {
