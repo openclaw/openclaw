@@ -485,12 +485,9 @@ export function validateProviderConfig(config: VoiceCallConfig): {
         "plugins.entries.voice-call.config.telnyx.connectionId is required (or set TELNYX_CONNECTION_ID env)",
       );
     }
-    if (
-      (config.inboundPolicy === "allowlist" || config.inboundPolicy === "pairing") &&
-      !config.telnyx?.publicKey
-    ) {
+    if (!config.skipSignatureVerification && !config.telnyx?.publicKey) {
       errors.push(
-        "plugins.entries.voice-call.config.telnyx.publicKey is required for inboundPolicy allowlist/pairing",
+        "plugins.entries.voice-call.config.telnyx.publicKey is required (or set TELNYX_PUBLIC_KEY env)",
       );
     }
   }
