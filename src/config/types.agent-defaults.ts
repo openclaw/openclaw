@@ -164,7 +164,7 @@ export type AgentDefaultsConfig = {
    */
   envelopeInboundTimeSkipMs?: number;
   /**
-   * Maximum gap (ms) without any `t` field before forcing a time-only inclusion (default: 900000 = 15min).
+   * Maximum gap (ms) without any `t` field before ensuring a time-only inclusion (default: 900000 = 15min).
    */
   envelopeInboundTimeMaxGapMs?: number;
   /**

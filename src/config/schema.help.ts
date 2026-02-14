@@ -176,7 +176,7 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.envelopeInboundTimeSkipMs":
     "Minimum gap (ms) before including a time-only timestamp (default: 90000). Messages faster than this omit the timestamp.",
   "agents.defaults.envelopeInboundTimeMaxGapMs":
-    "Maximum gap (ms) without any timestamp before forcing time-only inclusion (default: 900000 = 15min).",
+    "Maximum gap (ms) without any timestamp before ensuring time-only inclusion (default: 900000 = 15min).",
   "agents.defaults.envelopeInboundTimeDateMs":
     "Gap (ms) before including full date+time instead of time-only (default: 7200000 = 2hrs).",
   "agents.defaults.models": "Configured model catalog (keys are full provider/model IDs).",

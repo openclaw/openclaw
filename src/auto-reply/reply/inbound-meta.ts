@@ -138,18 +138,19 @@ export function resolveInboundTime(
     return { value: formatInboundDateTime(date, timeZone), isFullDate: true };
   }
 
-  // Gap >= skipMs → time only
-  if (gapSinceLastTime == null || gapSinceLastTime >= skipMs) {
+  // maxGap override: if too long without any timestamp, always include time-only
+  // (must be checked before skipMs since maxGapMs > skipMs by default)
+  if (gapSinceLastTime == null || gapSinceLastTime >= maxGapMs) {
     return { value: formatInboundTime(date, timeZone), isFullDate: false };
   }
 
-  // maxGap override: if too long without any timestamp, include time-only
-  if (gapSinceLastTime >= maxGapMs) {
-    return { value: formatInboundTime(date, timeZone), isFullDate: false };
+  // Gap < skipMs → rapid-fire, omit timestamp
+  if (gapSinceLastTime < skipMs) {
+    return { value: undefined, isFullDate: false };
   }
 
-  // Rapid-fire: omit
-  return { value: undefined, isFullDate: false };
+  // Gap between skipMs and maxGapMs → include time-only
+  return { value: formatInboundTime(date, timeZone), isFullDate: false };
 }
 
 // ── Inbound meta prompt builder ───────────────────────────────────────
