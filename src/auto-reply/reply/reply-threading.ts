@@ -54,9 +54,11 @@ export function createReplyToModeFilterForChannel(
   channel?: OriginatingChannelType,
 ) {
   const provider = normalizeChannelId(channel);
+  // Always honour explicit [[reply_to_*]] tags even when replyToMode is "off".
+  // Per-channel opt-out is possible but the safe default is to allow them.
   const allowTagsWhenOff = provider
-    ? Boolean(getChannelDock(provider)?.threading?.allowTagsWhenOff)
-    : false;
+    ? (getChannelDock(provider)?.threading?.allowTagsWhenOff ?? true)
+    : true;
   return createReplyToModeFilter(mode, {
     allowTagsWhenOff,
   });
