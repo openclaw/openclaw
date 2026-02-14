@@ -6,6 +6,7 @@ import {
   listSessionFilesForAgent,
   sessionPathForFile,
 } from "./session-files.js";
+import { deleteStaleIndexedPaths } from "./sync-stale.js";
 
 const log = createSubsystemLogger("memory");
 
@@ -99,33 +100,14 @@ export async function syncSessionFiles(params: {
   });
 
   await params.runWithConcurrency(tasks, params.concurrency);
-
-  const staleRows = params.db
-    .prepare(`SELECT path FROM files WHERE source = ?`)
-    .all("sessions") as Array<{ path: string }>;
-  for (const stale of staleRows) {
-    if (activePaths.has(stale.path)) {
-      continue;
-    }
-    params.db
-      .prepare(`DELETE FROM files WHERE path = ? AND source = ?`)
-      .run(stale.path, "sessions");
-    try {
-      params.db
-        .prepare(
-          `DELETE FROM ${params.vectorTable} WHERE id IN (SELECT id FROM chunks WHERE path = ? AND source = ?)`,
-        )
-        .run(stale.path, "sessions");
-    } catch {}
-    params.db
-      .prepare(`DELETE FROM chunks WHERE path = ? AND source = ?`)
-      .run(stale.path, "sessions");
-    if (params.ftsEnabled && params.ftsAvailable) {
-      try {
-        params.db
-          .prepare(`DELETE FROM ${params.ftsTable} WHERE path = ? AND source = ? AND model = ?`)
-          .run(stale.path, "sessions", params.model);
-      } catch {}
-    }
-  }
+  deleteStaleIndexedPaths({
+    db: params.db,
+    source: "sessions",
+    activePaths,
+    vectorTable: params.vectorTable,
+    ftsTable: params.ftsTable,
+    ftsEnabled: params.ftsEnabled,
+    ftsAvailable: params.ftsAvailable,
+    model: params.model,
+  });
 }
