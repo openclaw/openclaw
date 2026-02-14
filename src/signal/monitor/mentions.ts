@@ -34,7 +34,7 @@ export interface MentionRenderResult {
   offsetShifts: Map<number, number>;
 }
 
-export function renderSignalMentions(
+export function renderSignalMentionsWithShifts(
   message: string,
   mentions?: SignalMention[] | null,
 ): MentionRenderResult {
@@ -78,4 +78,8 @@ export function renderSignalMentions(
   }
 
   return { text: normalized, offsetShifts };
+}
+
+export function renderSignalMentions(message: string, mentions?: SignalMention[] | null): string {
+  return renderSignalMentionsWithShifts(message, mentions).text;
 }

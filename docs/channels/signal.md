@@ -240,6 +240,7 @@ Toggle with `channels.signal.injectLinkPreviews` (default: `true`). Set to `fals
 Signal supports rich text styles: **bold**, _italic_, `monospace`, ~~strikethrough~~, and spoiler. When enabled (default), OpenClaw applies these as markdown-style formatting to the message text.
 
 Toggle with `channels.signal.preserveTextStyles` (default: `true`). Set to `false` to receive plain text without formatting markers.
+This option is enabled by default and can change `Body` text for existing users by adding markdown markers such as `**` and `_`. To keep previous plain-text behavior, set `channels.signal.preserveTextStyles: false`.
 
 ### Quote/Reply Metadata
 

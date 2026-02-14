@@ -51,7 +51,7 @@ import {
   resolveSignalSender,
 } from "../identity.js";
 import { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } from "../send.js";
-import { renderSignalMentions } from "./mentions.js";
+import { renderSignalMentionsWithShifts } from "./mentions.js";
 
 function normalizeDimensionValue(value?: number | null): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
@@ -644,7 +644,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     // Replace ￼ (object replacement character) with @uuid or @phone from mentions
     // Signal encodes mentions as the object replacement character; hydrate them from metadata first.
     const rawMessage = dataMessage?.message ?? "";
-    const mentionResult = renderSignalMentions(rawMessage, dataMessage?.mentions);
+    const mentionResult = renderSignalMentionsWithShifts(rawMessage, dataMessage?.mentions);
     const normalizedMessage = mentionResult.text;
 
     // Adjust text style offsets to account for mention expansions
