@@ -21,6 +21,7 @@ export function buildInboundMetaSystemPrompt(ctx: TemplateContext): string {
     channel: safeTrim(ctx.OriginatingChannel) ?? safeTrim(ctx.Surface) ?? safeTrim(ctx.Provider),
     provider: safeTrim(ctx.Provider),
     surface: safeTrim(ctx.Surface),
+    platform_message_id: safeTrim(ctx.MessageSidFull) ?? safeTrim(ctx.MessageSid),
     chat_type: chatType ?? (isDirect ? "direct" : undefined),
     flags: {
       is_group_chat: !isDirect ? true : undefined,
