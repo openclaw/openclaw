@@ -248,7 +248,7 @@ export async function handleGoogleChatWebhookRequest(
     ? authHeaderNow.slice("bearer ".length)
     : bearer;
 
-  let selected: WebhookTarget | undefined;
+  const matchedTargets: WebhookTarget[] = [];
   for (const target of targets) {
     const audienceType = target.audienceType;
     const audience = target.audience;
@@ -258,17 +258,26 @@ export async function handleGoogleChatWebhookRequest(
       audience,
     });
     if (verification.ok) {
-      selected = target;
-      break;
+      matchedTargets.push(target);
+      if (matchedTargets.length > 1) {
+        break;
+      }
     }
   }
 
-  if (!selected) {
+  if (matchedTargets.length === 0) {
     res.statusCode = 401;
     res.end("unauthorized");
     return true;
   }
 
+  if (matchedTargets.length > 1) {
+    res.statusCode = 401;
+    res.end("ambiguous webhook target");
+    return true;
+  }
+
+  const selected = matchedTargets[0];
   selected.statusSink?.({ lastInboundAt: Date.now() });
   processGoogleChatEvent(event, selected).catch((err) => {
     selected?.runtime.error?.(
