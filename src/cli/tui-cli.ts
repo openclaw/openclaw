@@ -28,12 +28,13 @@ export function registerTuiCli(program: Command) {
       try {
         // Resolve theme mode before anything renders
         const themeMode = (opts.theme as string) ?? "auto";
-        if (themeMode !== "dark" && themeMode !== "light" && themeMode !== "auto") {
-          defaultRuntime.error(
-            `warning: invalid --theme "${themeMode}"; using "auto"`,
-          );
+        let validatedTheme: ThemeMode = "auto";
+        if (themeMode === "dark" || themeMode === "light" || themeMode === "auto") {
+          validatedTheme = themeMode;
+        } else {
+          defaultRuntime.error(`warning: invalid --theme "${themeMode}"; using "auto"`);
         }
-        resolveThemeMode(themeMode as ThemeMode);
+        resolveThemeMode(validatedTheme);
 
         const timeoutMs = parseTimeoutMs(opts.timeoutMs);
         if (opts.timeoutMs !== undefined && timeoutMs === undefined) {
