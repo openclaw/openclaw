@@ -8,6 +8,43 @@ import { createEchoTracker } from "./auto-reply/monitor/echo.js";
 import { awaitBackgroundTasks } from "./auto-reply/monitor/last-route.js";
 import { createWebOnMessageHandler } from "./auto-reply/monitor/on-message.js";
 
+function makeCfg(storePath: string): OpenClawConfig {
+  return {
+    channels: { whatsapp: { allowFrom: ["*"] } },
+    session: { store: storePath },
+  };
+}
+
+function makeReplyLogger() {
+  return {
+    warn: vi.fn(),
+    info: vi.fn(),
+    debug: vi.fn(),
+    error: vi.fn(),
+  } as unknown as Parameters<typeof createWebOnMessageHandler>[0]["replyLogger"];
+}
+
+function createHandlerForTest(opts: { cfg: OpenClawConfig; replyResolver: unknown }) {
+  const backgroundTasks = new Set<Promise<unknown>>();
+  const handler = createWebOnMessageHandler({
+    cfg: opts.cfg,
+    verbose: false,
+    connectionId: "test",
+    maxMediaBytes: 1024,
+    groupHistoryLimit: 3,
+    groupHistories: new Map(),
+    groupMemberNames: new Map(),
+    echoTracker: createEchoTracker({ maxItems: 10 }),
+    backgroundTasks,
+    replyResolver: opts.replyResolver,
+    replyLogger: makeReplyLogger(),
+    baseMentionConfig: buildMentionConfig(opts.cfg),
+    account: {},
+  });
+
+  return { handler, backgroundTasks };
+}
+
 describe("web auto-reply last-route", () => {
   installWebAutoReplyUnitTestHooks();
 
@@ -19,33 +56,8 @@ describe("web auto-reply last-route", () => {
     });
 
     const replyResolver = vi.fn().mockResolvedValue(undefined);
-
-    const mockConfig: OpenClawConfig = {
-      channels: { whatsapp: { allowFrom: ["*"] } },
-      session: { store: store.storePath },
-    };
-
-    const backgroundTasks = new Set<Promise<unknown>>();
-    const handler = createWebOnMessageHandler({
-      cfg: mockConfig,
-      verbose: false,
-      connectionId: "test",
-      maxMediaBytes: 1024,
-      groupHistoryLimit: 3,
-      groupHistories: new Map(),
-      groupMemberNames: new Map(),
-      echoTracker: createEchoTracker({ maxItems: 10 }),
-      backgroundTasks,
-      replyResolver,
-      replyLogger: {
-        warn: vi.fn(),
-        info: vi.fn(),
-        debug: vi.fn(),
-        error: vi.fn(),
-      } as unknown as Parameters<typeof createWebOnMessageHandler>[0]["replyLogger"],
-      baseMentionConfig: buildMentionConfig(mockConfig),
-      account: {},
-    });
+    const cfg = makeCfg(store.storePath);
+    const { handler, backgroundTasks } = createHandlerForTest({ cfg, replyResolver });
 
     await handler({
       id: "m1",
@@ -81,33 +93,8 @@ describe("web auto-reply last-route", () => {
     });
 
     const replyResolver = vi.fn().mockResolvedValue(undefined);
-
-    const mockConfig: OpenClawConfig = {
-      channels: { whatsapp: { allowFrom: ["*"] } },
-      session: { store: store.storePath },
-    };
-
-    const backgroundTasks = new Set<Promise<unknown>>();
-    const handler = createWebOnMessageHandler({
-      cfg: mockConfig,
-      verbose: false,
-      connectionId: "test",
-      maxMediaBytes: 1024,
-      groupHistoryLimit: 3,
-      groupHistories: new Map(),
-      groupMemberNames: new Map(),
-      echoTracker: createEchoTracker({ maxItems: 10 }),
-      backgroundTasks,
-      replyResolver,
-      replyLogger: {
-        warn: vi.fn(),
-        info: vi.fn(),
-        debug: vi.fn(),
-        error: vi.fn(),
-      } as unknown as Parameters<typeof createWebOnMessageHandler>[0]["replyLogger"],
-      baseMentionConfig: buildMentionConfig(mockConfig),
-      account: {},
-    });
+    const cfg = makeCfg(store.storePath);
+    const { handler, backgroundTasks } = createHandlerForTest({ cfg, replyResolver });
 
     await handler({
       id: "g1",
