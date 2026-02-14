@@ -23,16 +23,23 @@ async function setupPairedOperatorDevice(baseDir: string, scopes: string[]) {
   await approveDevicePairing(request.request.requestId, baseDir);
 }
 
+function requireToken(token: string | undefined): string {
+  expect(typeof token).toBe("string");
+  if (typeof token !== "string") {
+    throw new Error("expected operator token to be issued");
+  }
+  return token;
+}
+
 describe("device pairing tokens", () => {
   test("generates base64url device tokens with 256-bit entropy output length", async () => {
     const baseDir = await mkdtemp(join(tmpdir(), "openclaw-device-pairing-"));
     await setupPairedOperatorDevice(baseDir, ["operator.admin"]);
 
     const paired = await getPairedDevice("device-1", baseDir);
-    const token = paired?.tokens?.operator?.token;
-    expect(typeof token).toBe("string");
+    const token = requireToken(paired?.tokens?.operator?.token);
     expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/);
-    expect(Buffer.from(token as string, "base64url")).toHaveLength(32);
+    expect(Buffer.from(token, "base64url")).toHaveLength(32);
   });
 
   test("preserves existing token scopes when rotating without scopes", async () => {
@@ -62,12 +69,11 @@ describe("device pairing tokens", () => {
     const baseDir = await mkdtemp(join(tmpdir(), "openclaw-device-pairing-"));
     await setupPairedOperatorDevice(baseDir, ["operator.read"]);
     const paired = await getPairedDevice("device-1", baseDir);
-    const token = paired?.tokens?.operator?.token;
-    expect(typeof token).toBe("string");
+    const token = requireToken(paired?.tokens?.operator?.token);
 
     const ok = await verifyDeviceToken({
       deviceId: "device-1",
-      token: token as string,
+      token,
       role: "operator",
       scopes: ["operator.read"],
       baseDir,
@@ -76,7 +82,7 @@ describe("device pairing tokens", () => {
 
     const mismatch = await verifyDeviceToken({
       deviceId: "device-1",
-      token: "x".repeat((token as string).length),
+      token: "x".repeat(token.length),
       role: "operator",
       scopes: ["operator.read"],
       baseDir,
@@ -89,10 +95,9 @@ describe("device pairing tokens", () => {
     const baseDir = await mkdtemp(join(tmpdir(), "openclaw-device-pairing-"));
     await setupPairedOperatorDevice(baseDir, ["operator.read"]);
     const paired = await getPairedDevice("device-1", baseDir);
-    const token = paired?.tokens?.operator?.token;
-    expect(typeof token).toBe("string");
-    const multibyteToken = "é".repeat((token as string).length);
-    expect(Buffer.from(multibyteToken).length).not.toBe(Buffer.from(token as string).length);
+    const token = requireToken(paired?.tokens?.operator?.token);
+    const multibyteToken = "é".repeat(token.length);
+    expect(Buffer.from(multibyteToken).length).not.toBe(Buffer.from(token).length);
 
     await expect(
       verifyDeviceToken({
