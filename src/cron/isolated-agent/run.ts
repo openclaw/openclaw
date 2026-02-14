@@ -14,6 +14,8 @@ import { getCliSessionId, setCliSessionId } from "../../agents/cli-session.js";
 import { lookupContextTokens } from "../../agents/context.js";
 import { resolveCronStyleNow } from "../../agents/current-time.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
+import { resolveAgentAvatar } from "../../agents/identity-avatar.js";
+import { resolveAgentIdentity } from "../../agents/identity.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import {
@@ -555,21 +557,41 @@ export async function runCronIsolatedAgentTurn(params: {
       logWarn(`[cron:${params.job.id}] ${message}`);
       return withRunSession({ status: "ok", summary, outputText });
     }
-    // Shared subagent announce flow is text-based; keep direct outbound delivery
-    // for media/channel payloads so structured content is preserved.
-    if (deliveryPayloadHasStructuredContent) {
+    const agentIdentity = resolveAgentIdentity(cfgWithAgentDefaults, agentId);
+    const avatar = resolveAgentAvatar(cfgWithAgentDefaults, agentId);
+    const icon_url = avatar.kind === "remote" ? avatar.url : undefined;
+    const username = agentIdentity?.name?.trim() || undefined;
+    const rawEmoji = agentIdentity?.emoji?.trim();
+    // Slack `icon_emoji` requires :emoji_name: (not a Unicode emoji).
+    const icon_emoji =
+      !icon_url && rawEmoji && /^:[^:\\s]+:$/.test(rawEmoji) ? rawEmoji : undefined;
+
+    // Shared subagent announce flow is text-based. When we have an explicit sender
+    // identity to preserve, prefer direct outbound delivery even for plain-text payloads.
+    if (deliveryPayloadHasStructuredContent || username || icon_url || icon_emoji) {
       try {
-        const deliveryResults = await deliverOutboundPayloads({
-          cfg: cfgWithAgentDefaults,
-          channel: resolvedDelivery.channel,
-          to: resolvedDelivery.to,
-          accountId: resolvedDelivery.accountId,
-          threadId: resolvedDelivery.threadId,
-          payloads: deliveryPayloads,
-          bestEffort: deliveryBestEffort,
-          deps: createOutboundSendDeps(params.deps),
-        });
-        delivered = deliveryResults.length > 0;
+        const payloadsForDelivery =
+          deliveryPayloadHasStructuredContent && deliveryPayloads.length > 0
+            ? deliveryPayloads
+            : synthesizedText
+              ? [{ text: synthesizedText }]
+              : [];
+        if (payloadsForDelivery.length > 0) {
+          const deliveryResults = await deliverOutboundPayloads({
+            cfg: cfgWithAgentDefaults,
+            channel: resolvedDelivery.channel,
+            to: resolvedDelivery.to,
+            accountId: resolvedDelivery.accountId,
+            threadId: resolvedDelivery.threadId,
+            payloads: payloadsForDelivery,
+            username,
+            icon_url,
+            icon_emoji,
+            bestEffort: deliveryBestEffort,
+            deps: createOutboundSendDeps(params.deps),
+          });
+          delivered = deliveryResults.length > 0;
+        }
       } catch (err) {
         if (!deliveryBestEffort) {
           return withRunSession({ status: "error", summary, outputText, error: String(err) });
