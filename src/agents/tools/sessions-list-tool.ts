@@ -16,6 +16,7 @@ import {
   type SessionListRow,
   stripToolMessages,
 } from "./sessions-helpers.js";
+import { isInLineage } from "./sessions-lineage.js";
 
 const SessionsListToolSchema = Type.Object({
   kinds: Type.Optional(Type.Array(Type.String())),
@@ -93,6 +94,7 @@ export function createSessionsListTool(opts?: {
       const storePath = typeof list?.path === "string" ? list.path : undefined;
       const a2aPolicy = createAgentToAgentPolicy(cfg);
       const requesterAgentId = resolveAgentIdFromSessionKey(requesterInternalKey);
+      const callerIsSubagent = isSubagentSessionKey(requesterInternalKey ?? "");
       const rows: SessionListRow[] = [];
 
       for (const entry of sessions) {
@@ -104,10 +106,16 @@ export function createSessionsListTool(opts?: {
           continue;
         }
 
-        const entryAgentId = resolveAgentIdFromSessionKey(key);
-        const crossAgent = entryAgentId !== requesterAgentId;
-        if (crossAgent && !a2aPolicy.isAllowed(requesterAgentId, entryAgentId)) {
-          continue;
+        if (callerIsSubagent) {
+          if (!requesterInternalKey || !isInLineage(requesterInternalKey, key)) {
+            continue;
+          }
+        } else {
+          const entryAgentId = resolveAgentIdFromSessionKey(key);
+          const crossAgent = entryAgentId !== requesterAgentId;
+          if (crossAgent && !a2aPolicy.isAllowed(requesterAgentId, entryAgentId)) {
+            continue;
+          }
         }
 
         if (key === "unknown") {

@@ -14,6 +14,7 @@ import {
   SessionListRow,
   stripToolMessages,
 } from "./sessions-helpers.js";
+import { isInLineage } from "./sessions-lineage.js";
 
 const SessionsHistoryToolSchema = Type.Object({
   sessionKey: Type.String(),
@@ -228,11 +229,21 @@ export function createSessionsHistoryTool(opts?: {
         }
       }
 
+      const callerIsSubagent = isSubagentSessionKey(requesterInternalKey ?? "");
+      if (callerIsSubagent) {
+        if (!requesterInternalKey || !isInLineage(requesterInternalKey, resolvedKey)) {
+          return jsonResult({
+            status: "forbidden",
+            error: "Access restricted to your spawn lineage.",
+          });
+        }
+      }
+
       const a2aPolicy = createAgentToAgentPolicy(cfg);
       const requesterAgentId = resolveAgentIdFromSessionKey(requesterInternalKey);
       const targetAgentId = resolveAgentIdFromSessionKey(resolvedKey);
       const isCrossAgent = requesterAgentId !== targetAgentId;
-      if (isCrossAgent) {
+      if (!callerIsSubagent && isCrossAgent) {
         if (!a2aPolicy.enabled) {
           return jsonResult({
             status: "forbidden",

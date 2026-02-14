@@ -36,12 +36,7 @@ function makeToolPolicyMatcher(policy: SandboxToolPolicy) {
   };
 }
 
-const DEFAULT_SUBAGENT_TOOL_DENY = [
-  // Session management - main agent orchestrates
-  "sessions_list",
-  "sessions_history",
-  "sessions_send",
-  "sessions_spawn",
+const SUBAGENT_TOOL_DENY_ALWAYS = [
   // System admin - dangerous from subagent
   "gateway",
   "agents_list",
@@ -55,10 +50,21 @@ const DEFAULT_SUBAGENT_TOOL_DENY = [
   "memory_get",
 ];
 
+const SUBAGENT_TOOL_DENY_UNLESS_RECURSIVE = [
+  "sessions_list",
+  "sessions_history",
+  "sessions_send",
+  "sessions_spawn",
+];
+
 export function resolveSubagentToolPolicy(cfg?: OpenClawConfig): SandboxToolPolicy {
   const configured = cfg?.tools?.subagents?.tools;
+  const recursiveEnabled = cfg?.agents?.defaults?.subagents?.allowRecursiveSpawn === true;
+  const baseDeny = recursiveEnabled
+    ? [...SUBAGENT_TOOL_DENY_ALWAYS]
+    : [...SUBAGENT_TOOL_DENY_ALWAYS, ...SUBAGENT_TOOL_DENY_UNLESS_RECURSIVE];
   const deny = [
-    ...DEFAULT_SUBAGENT_TOOL_DENY,
+    ...baseDeny,
     ...(Array.isArray(configured?.deny) ? configured.deny : []),
   ];
   const allow = Array.isArray(configured?.allow) ? configured.allow : undefined;

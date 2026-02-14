@@ -23,6 +23,7 @@ import {
   resolveSessionReference,
   stripToolMessages,
 } from "./sessions-helpers.js";
+import { isInLineage } from "./sessions-lineage.js";
 import { buildAgentToAgentMessageContext, resolvePingPongTurns } from "./sessions-send-helpers.js";
 import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
 
@@ -59,11 +60,12 @@ export function createSessionsSendTool(opts?: {
               mainKey,
             })
           : undefined;
+      const callerIsSubagent = isSubagentSessionKey(requesterInternalKey ?? "");
       const restrictToSpawned =
         opts?.sandboxed === true &&
         visibility === "spawned" &&
         !!requesterInternalKey &&
-        !isSubagentSessionKey(requesterInternalKey);
+        !callerIsSubagent;
 
       const a2aPolicy = createAgentToAgentPolicy(cfg);
 
@@ -109,7 +111,12 @@ export function createSessionsSendTool(opts?: {
           });
         }
 
-        if (requesterAgentId && requestedAgentId && requestedAgentId !== requesterAgentId) {
+        if (
+          !callerIsSubagent &&
+          requesterAgentId &&
+          requestedAgentId &&
+          requestedAgentId !== requesterAgentId
+        ) {
           if (!a2aPolicy.enabled) {
             return jsonResult({
               runId: crypto.randomUUID(),
@@ -216,6 +223,17 @@ export function createSessionsSendTool(opts?: {
           });
         }
       }
+
+      if (callerIsSubagent) {
+        if (!requesterInternalKey || !isInLineage(requesterInternalKey, resolvedKey)) {
+          return jsonResult({
+            runId: crypto.randomUUID(),
+            status: "forbidden",
+            error: "Access restricted to your spawn lineage.",
+            sessionKey: displayKey,
+          });
+        }
+      }
       const timeoutSeconds =
         typeof params.timeoutSeconds === "number" && Number.isFinite(params.timeoutSeconds)
           ? Math.max(0, Math.floor(params.timeoutSeconds))
@@ -227,7 +245,7 @@ export function createSessionsSendTool(opts?: {
       const requesterAgentId = resolveAgentIdFromSessionKey(requesterInternalKey);
       const targetAgentId = resolveAgentIdFromSessionKey(resolvedKey);
       const isCrossAgent = requesterAgentId !== targetAgentId;
-      if (isCrossAgent) {
+      if (!callerIsSubagent && isCrossAgent) {
         if (!a2aPolicy.enabled) {
           return jsonResult({
             runId: crypto.randomUUID(),
