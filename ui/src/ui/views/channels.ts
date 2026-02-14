@@ -25,6 +25,8 @@ import { renderSignalCard } from "./channels.signal.ts";
 import { renderSlackCard } from "./channels.slack.ts";
 import { renderTelegramCard } from "./channels.telegram.ts";
 import { renderWhatsAppCard } from "./channels.whatsapp.ts";
+import { icons } from "../icons.ts";
+import { renderJsonBlock } from "./json-renderer.ts";
 
 export function renderChannels(props: ChannelsProps) {
   const isBasic = props.mode === "basic";
@@ -71,24 +73,26 @@ export function renderChannels(props: ChannelsProps) {
     ${
       !isBasic
         ? html`
-            <section class="card" style="margin-top: 18px;">
-              <div class="row" style="justify-content: space-between;">
-                <div>
-                  <div class="card-title">Channel health</div>
-                  <div class="card-sub">Channel status snapshots from the gateway.</div>
+            <section class="card" style="padding: 0; margin-top: 18px;">
+              <div style="padding: 12px 14px; border-bottom: 1px solid var(--border);">
+                <div class="row" style="justify-content: space-between;">
+                  <div>
+                    <div class="card-title" style="margin: 0;">Channel health</div>
+                    <div class="card-sub" style="margin: 0;">Channel status snapshots from the gateway.</div>
+                  </div>
+                  <div class="muted">${props.lastSuccessAt ? formatRelativeTimestamp(props.lastSuccessAt) : "n/a"}</div>
                 </div>
-                <div class="muted">${props.lastSuccessAt ? formatRelativeTimestamp(props.lastSuccessAt) : "n/a"}</div>
               </div>
-              ${
-                props.lastError
-                  ? html`<div class="callout danger" style="margin-top: 12px;">
-                    ${props.lastError}
-                  </div>`
-                  : nothing
-              }
-              <pre class="code-block" style="margin-top: 12px;">
-${props.snapshot ? JSON.stringify(props.snapshot, null, 2) : "No snapshot yet."}
-              </pre>
+              <div style="padding: 12px 14px;">
+                ${
+                  props.lastError
+                    ? html`<div class="callout danger" style="margin-bottom: 12px;">
+                      ${props.lastError}
+                    </div>`
+                    : nothing
+                }
+                ${props.snapshot ? renderJsonBlock(props.snapshot) : html`<div class="muted">No snapshot yet.</div>`}
+              </div>
             </section>
           `
         : nothing
@@ -199,45 +203,52 @@ function renderGenericChannelCard(
   const accountCountLabel = renderChannelAccountCount(key, channelAccounts);
 
   return html`
-    <div class="card">
-      <div class="card-title">${label}</div>
-      <div class="card-sub">Channel status and configuration.</div>
-      ${accountCountLabel}
+    <div class="card" style="padding: 0;">
+      <div style="padding: 12px 14px; border-bottom: 1px solid var(--border);">
+        <div class="card-title" style="margin: 0; display: flex; align-items: center; gap: 8px;">
+          <span class="icon" style="width: 16px; height: 16px;">${icons.plug}</span>
+          ${label}
+        </div>
+        <div class="card-sub" style="margin: 0;">Channel status and configuration.</div>
+        ${accountCountLabel}
+      </div>
 
-      ${
-        accounts.length > 0
-          ? html`
-            <div class="account-card-list">
-              ${accounts.map((account) => renderGenericAccount(account))}
-            </div>
-          `
-          : html`
-            <div class="status-list" style="margin-top: 16px;">
-              <div>
-                <span class="label">Configured</span>
-                <span>${configured == null ? "n/a" : configured ? "Yes" : "No"}</span>
+      <div style="padding: 12px 14px;">
+        ${
+          accounts.length > 0
+            ? html`
+              <div class="account-card-list">
+                ${accounts.map((account) => renderGenericAccount(account))}
               </div>
-              <div>
-                <span class="label">Running</span>
-                <span>${running == null ? "n/a" : running ? "Yes" : "No"}</span>
+            `
+            : html`
+              <div class="status-list">
+                <div>
+                  <span class="label">Configured</span>
+                  <span>${configured == null ? "n/a" : configured ? "Yes" : "No"}</span>
+                </div>
+                <div>
+                  <span class="label">Running</span>
+                  <span>${running == null ? "n/a" : running ? "Yes" : "No"}</span>
+                </div>
+                <div>
+                  <span class="label">Connected</span>
+                  <span>${connected == null ? "n/a" : connected ? "Yes" : "No"}</span>
+                </div>
               </div>
-              <div>
-                <span class="label">Connected</span>
-                <span>${connected == null ? "n/a" : connected ? "Yes" : "No"}</span>
-              </div>
-            </div>
-          `
-      }
+            `
+        }
 
-      ${
-        lastError
-          ? html`<div class="callout danger" style="margin-top: 12px;">
-            ${lastError}
-          </div>`
-          : nothing
-      }
+        ${
+          lastError
+            ? html`<div class="callout danger" style="margin-top: 12px;">
+              ${lastError}
+            </div>`
+            : nothing
+        }
 
-      ${renderChannelConfigSection({ channelId: key, props })}
+        ${renderChannelConfigSection({ channelId: key, props })}
+      </div>
     </div>
   `;
 }
