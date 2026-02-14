@@ -9,10 +9,13 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { OpenClawConfig } from "../config/config.js";
 import type { InternalHookHandler } from "./internal-hooks.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveHookConfig } from "./config.js";
 import { shouldIncludeHook } from "./config.js";
 import { registerInternalHook } from "./internal-hooks.js";
 import { loadWorkspaceHookEntries } from "./workspace.js";
+
+const log = createSubsystemLogger("hooks:loader");
 
 /**
  * Load and register all hook handlers
@@ -78,16 +81,14 @@ export async function loadInternalHooks(
         const handler = mod[exportName];
 
         if (typeof handler !== "function") {
-          console.error(
-            `Hook error: Handler '${exportName}' from ${entry.hook.name} is not a function`,
-          );
+          log.error(`Handler '${exportName}' from ${entry.hook.name} is not a function`);
           continue;
         }
 
         // Register for all events listed in metadata
         const events = entry.metadata?.events ?? [];
         if (events.length === 0) {
-          console.warn(`Hook warning: Hook '${entry.hook.name}' has no events defined in metadata`);
+          log.warn(`Hook '${entry.hook.name}' has no events defined in metadata`);
           continue;
         }
 
@@ -95,21 +96,19 @@ export async function loadInternalHooks(
           registerInternalHook(event, handler as InternalHookHandler);
         }
 
-        console.log(
+        log.info(
           `Registered hook: ${entry.hook.name} -> ${events.join(", ")}${exportName !== "default" ? ` (export: ${exportName})` : ""}`,
         );
         loadedCount++;
       } catch (err) {
-        console.error(
-          `Failed to load hook ${entry.hook.name}:`,
-          err instanceof Error ? err.message : String(err),
+        log.error(
+          `Failed to load hook ${entry.hook.name}: ${err instanceof Error ? err.message : String(err)}`,
         );
       }
     }
   } catch (err) {
-    console.error(
-      "Failed to load directory-based hooks:",
-      err instanceof Error ? err.message : String(err),
+    log.error(
+      `Failed to load directory-based hooks: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
 
@@ -132,20 +131,18 @@ export async function loadInternalHooks(
       const handler = mod[exportName];
 
       if (typeof handler !== "function") {
-        console.error(`Hook error: Handler '${exportName}' from ${modulePath} is not a function`);
+        log.error(`Handler '${exportName}' from ${modulePath} is not a function`);
         continue;
       }
 
-      // Register the handler
       registerInternalHook(handlerConfig.event, handler as InternalHookHandler);
-      console.log(
+      log.info(
         `Registered hook (legacy): ${handlerConfig.event} -> ${modulePath}${exportName !== "default" ? `#${exportName}` : ""}`,
       );
       loadedCount++;
     } catch (err) {
-      console.error(
-        `Failed to load hook handler from ${handlerConfig.module}:`,
-        err instanceof Error ? err.message : String(err),
+      log.error(
+        `Failed to load hook handler from ${handlerConfig.module}: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
   }
