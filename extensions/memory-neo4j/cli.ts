@@ -292,6 +292,7 @@ export function registerCli(api: OpenClawPluginApi, deps: CliDeps): void {
           "--skip-semantic",
           "Skip LLM-based semantic dedup (Phase 1b) and conflict detection (Phase 1c)",
         )
+        .option("--workspace <dir>", "Workspace directory for TASKS.md cleanup")
         .action(
           async (opts: {
             agent?: string;
@@ -305,23 +306,31 @@ export function registerCli(api: OpenClawPluginApi, deps: CliDeps): void {
             maxSemanticPairs?: string;
             concurrency?: string;
             skipSemantic?: boolean;
+            workspace?: string;
           }) => {
             console.log("\n🌙 Memory Sleep Cycle");
             console.log("═════════════════════════════════════════════════════════════");
-            console.log("Seven-phase memory consolidation (Pareto-based):\n");
-            console.log("  Phase 1:  Deduplication    — Merge near-duplicate memories");
+            console.log("Multi-phase memory consolidation (Pareto-based):\n");
+            console.log("  Phase 1:   Deduplication       — Merge near-duplicate memories");
             console.log(
-              "  Phase 1b: Semantic Dedup   — LLM-based paraphrase detection (0.75–0.95 band)",
+              "  Phase 1b:  Semantic Dedup      — LLM-based paraphrase detection (0.75–0.95 band)",
             );
-            console.log("  Phase 1c: Conflict Detection — Resolve contradictory memories");
+            console.log("  Phase 1c:  Conflict Detection  — Resolve contradictory memories");
+            console.log("  Phase 1d:  Entity Dedup        — Merge duplicate entity nodes");
             console.log(
-              "  Phase 2:  Pareto Scoring   — Calculate effective scores for all memories",
+              "  Phase 2:   Pareto Scoring      — Calculate effective scores for all memories",
             );
-            console.log("  Phase 3: Core Promotion   — Regular memories above threshold → core");
-            console.log("  Phase 4: Core Demotion    — Core memories below threshold → regular");
-            console.log("  Phase 5: Extraction       — Extract entities and categorize");
-            console.log("  Phase 6: Decay & Pruning  — Remove stale low-importance memories");
-            console.log("  Phase 7: Orphan Cleanup   — Remove disconnected nodes\n");
+            console.log(
+              "  Phase 3:   Core Promotion      — Regular memories above threshold → core",
+            );
+            console.log(
+              "  Phase 4:   Core Demotion       — Core memories below threshold → regular",
+            );
+            console.log("  Phase 5:   Extraction          — Extract entities and categorize");
+            console.log("  Phase 6:   Decay & Pruning     — Remove stale low-importance memories");
+            console.log("  Phase 7:   Orphan Cleanup      — Remove disconnected nodes");
+            console.log("  Phase 7b:  Credential Scan     — Remove memories with leaked secrets");
+            console.log("  Phase 8:   Task Ledger Cleanup  — Archive stale tasks in TASKS.md\n");
 
             try {
               // Validate sleep cycle CLI parameters before running
@@ -396,6 +405,9 @@ export function registerCli(api: OpenClawPluginApi, deps: CliDeps): void {
 
               await db.ensureInitialized();
 
+              // Resolve workspace dir for task ledger cleanup
+              const resolvedWorkspace = opts.workspace?.trim() || undefined;
+
               const result = await runSleepCycle(db, embeddings, extractionConfig, api.logger, {
                 agentId: opts.agent,
                 dedupThreshold: opts.dedupThreshold ? parseFloat(opts.dedupThreshold) : undefined,
@@ -409,18 +421,23 @@ export function registerCli(api: OpenClawPluginApi, deps: CliDeps): void {
                 decayCurves: Object.keys(cfg.decayCurves).length > 0 ? cfg.decayCurves : undefined,
                 extractionBatchSize: batchSize,
                 extractionDelayMs: delay,
+                workspaceDir: resolvedWorkspace,
                 onPhaseStart: (phase) => {
                   const phaseNames: Record<string, string> = {
                     dedup: "Phase 1: Deduplication",
                     semanticDedup: "Phase 1b: Semantic Deduplication",
                     conflict: "Phase 1c: Conflict Detection",
+                    entityDedup: "Phase 1d: Entity Deduplication",
                     pareto: "Phase 2: Pareto Scoring",
                     promotion: "Phase 3: Core Promotion",
                     extraction: "Phase 4: Extraction",
                     decay: "Phase 5: Decay & Pruning",
                     cleanup: "Phase 6: Orphan Cleanup",
+                    noiseCleanup: "Phase 7: Noise Cleanup",
+                    credentialScan: "Phase 7b: Credential Scan",
+                    taskLedger: "Phase 8: Task Ledger Cleanup",
                   };
-                  console.log(`\n▶ ${phaseNames[phase]}`);
+                  console.log(`\n▶ ${phaseNames[phase] ?? phase}`);
                   console.log("─────────────────────────────────────────────────────────────");
                 },
                 onProgress: (_phase, message) => {
@@ -456,6 +473,12 @@ export function registerCli(api: OpenClawPluginApi, deps: CliDeps): void {
               );
               console.log(
                 `   Cleanup:        ${result.cleanup.entitiesRemoved} entities, ${result.cleanup.tagsRemoved} tags removed`,
+              );
+              console.log(
+                `   Task Ledger:    ${result.taskLedger.archivedCount} stale tasks archived` +
+                  (result.taskLedger.archivedIds.length > 0
+                    ? ` (${result.taskLedger.archivedIds.join(", ")})`
+                    : ""),
               );
               if (result.aborted) {
                 console.log("\n⚠️  Sleep cycle was aborted before completion.");

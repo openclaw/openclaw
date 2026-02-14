@@ -50,6 +50,7 @@ import { resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
+import { markNeedsPostCompactionRecovery } from "./post-compaction-recovery.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { enqueueFollowupRun, type FollowupRun, type QueueSettings } from "./queue.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
@@ -676,6 +677,14 @@ export async function runReplyAgent(params: {
             // Silent failure — post-compaction context is best-effort
           });
       }
+
+      // P3: Mark session for post-compaction recovery on the next turn.
+      await markNeedsPostCompactionRecovery({
+        sessionEntry: activeSessionEntry,
+        sessionStore: activeSessionStore,
+        sessionKey,
+        storePath,
+      });
 
       if (verboseEnabled) {
         const suffix = typeof count === "number" ? ` (count ${count})` : "";
