@@ -19,6 +19,7 @@ import {
 import { resolveAwsSdkEnvVarName, resolveEnvApiKey } from "./model-auth.js";
 import { OLLAMA_NATIVE_BASE_URL } from "./ollama-stream.js";
 import { normalizeGoogleModelId } from "./provider-ids.js";
+export { normalizeGoogleModelId } from "./provider-ids.js";
 import {
   buildSyntheticModelDefinition,
   SYNTHETIC_BASE_URL,

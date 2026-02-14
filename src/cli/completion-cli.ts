@@ -238,8 +238,7 @@ export function registerCompletionCli(program: Command) {
       // Route logs to stderr so plugin loading messages do not corrupt
       // the completion script written to stdout.
       routeLogsToStderr();
-      const { registerProgramCommands } =
-        await import("./program/command-registry.js");
+      const { registerProgramCommands } = await import("./program/command-registry.js");
       const { getProgramContext } = await import("./program/program-context.js");
       const { getSubCliEntries, registerSubCliByName } =
         await import("./program/register.subclis.js");
