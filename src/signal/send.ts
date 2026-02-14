@@ -138,12 +138,13 @@ export async function sendMessageSignal(
     return 8 * 1024 * 1024;
   })();
 
+  const suppressMediaPlaceholders = cfg.messages?.suppressMediaPlaceholders ?? false;
   let attachments: string[] | undefined;
   if (opts.mediaUrl?.trim()) {
     const resolved = await resolveAttachment(opts.mediaUrl.trim(), maxBytes);
     attachments = [resolved.path];
     const kind = mediaKindFromMime(resolved.contentType ?? undefined);
-    if (!message && kind) {
+    if (!message && kind && !suppressMediaPlaceholders) {
       // Avoid sending an empty body when only attachments exist.
       message = kind === "image" ? "<media:image>" : `<media:${kind}>`;
       messageFromPlaceholder = true;

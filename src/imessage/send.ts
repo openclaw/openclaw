@@ -86,6 +86,7 @@ export async function sendMessageIMessage(
       : typeof account.config.mediaMaxMb === "number"
         ? account.config.mediaMaxMb * 1024 * 1024
         : 16 * 1024 * 1024;
+  const suppressMediaPlaceholders = cfg.messages?.suppressMediaPlaceholders ?? false;
   let message = text ?? "";
   let filePath: string | undefined;
 
@@ -93,7 +94,7 @@ export async function sendMessageIMessage(
     const resolveAttachmentFn = opts.resolveAttachmentImpl ?? resolveAttachment;
     const resolved = await resolveAttachmentFn(opts.mediaUrl.trim(), maxBytes);
     filePath = resolved.path;
-    if (!message.trim()) {
+    if (!message.trim() && !suppressMediaPlaceholders) {
       const kind = mediaKindFromMime(resolved.contentType ?? undefined);
       if (kind) {
         message = kind === "image" ? "<media:image>" : `<media:${kind}>`;

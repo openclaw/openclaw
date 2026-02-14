@@ -82,6 +82,18 @@ export type MessagesConfig = {
   ackReactionScope?: "group-mentions" | "group-all" | "direct" | "all";
   /** Remove ack reaction after reply is sent (default: false). */
   removeAckAfterReply?: boolean;
+  /**
+   * Suppress automatic media placeholder text (e.g., `<media:audio>`) when sending
+   * media-only messages through messaging channels.
+   *
+   * When false (default): Media-only messages include a placeholder like `<media:audio>`
+   * as fallback text for accessibility and failed media delivery scenarios.
+   *
+   * When true: Media-only messages are sent without placeholder text (empty body).
+   *
+   * Default: false
+   */
+  suppressMediaPlaceholders?: boolean;
   /** Text-to-speech settings for outbound replies. */
   tts?: TtsConfig;
 };
