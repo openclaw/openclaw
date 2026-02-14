@@ -4,7 +4,6 @@ import { Routes } from "discord-api-types/v10";
 import { inspect } from "node:util";
 import type { HistoryEntry } from "../../auto-reply/reply/history.js";
 import type { OpenClawConfig, ReplyToMode } from "../../config/config.js";
-import type { RuntimeEnv } from "../../runtime.js";
 import { resolveTextChunkLimit } from "../../auto-reply/chunk.js";
 import { listNativeCommandSpecsForConfig } from "../../auto-reply/commands-registry.js";
 import { listSkillCommandsForAgents } from "../../auto-reply/skill-commands.js";
@@ -19,6 +18,7 @@ import { danger, logVerbose, shouldLogVerbose, warn } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createDiscordRetryRunner } from "../../infra/retry-policy.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { createNonExitingRuntime, type RuntimeEnv } from "../../runtime.js";
 import { resolveDiscordAccount } from "../accounts.js";
 import { attachDiscordGatewayLogging } from "../gateway-logging.js";
 import { getDiscordGatewayEmitter, waitForDiscordGatewayStop } from "../monitor.gateway.js";
@@ -137,13 +137,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     );
   }
 
-  const runtime: RuntimeEnv = opts.runtime ?? {
-    log: console.log,
-    error: console.error,
-    exit: (code: number): never => {
-      throw new Error(`exit ${code}`);
-    },
-  };
+  const runtime: RuntimeEnv = opts.runtime ?? createNonExitingRuntime();
 
   const discordCfg = account.config;
   const dmConfig = discordCfg.dm;
