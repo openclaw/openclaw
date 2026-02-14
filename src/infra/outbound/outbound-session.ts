@@ -21,7 +21,7 @@ import { parseSlackTarget } from "../../slack/targets.js";
 import { buildTelegramGroupPeerId } from "../../telegram/bot/helpers.js";
 import { resolveTelegramTargetChatType } from "../../telegram/inline-buttons.js";
 import { parseTelegramTarget } from "../../telegram/targets.js";
-import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "../../whatsapp/normalize.js";
+import { isWhatsAppGroupJid, isWhatsAppNewsletterJid, normalizeWhatsAppTarget } from "../../whatsapp/normalize.js";
 
 export type OutboundSessionRoute = {
   sessionKey: string;
@@ -338,8 +338,9 @@ function resolveWhatsAppSession(
     return null;
   }
   const isGroup = isWhatsAppGroupJid(normalized);
+  const isNewsletter = isWhatsAppNewsletterJid(normalized);
   const peer: RoutePeer = {
-    kind: isGroup ? "group" : "direct",
+    kind: isGroup || isNewsletter ? "group" : "direct",
     id: normalized,
   };
   const baseSessionKey = buildBaseSessionKey({
@@ -353,7 +354,7 @@ function resolveWhatsAppSession(
     sessionKey: baseSessionKey,
     baseSessionKey,
     peer,
-    chatType: isGroup ? "group" : "direct",
+    chatType: isGroup || isNewsletter ? "group" : "direct",
     from: normalized,
     to: normalized,
   };

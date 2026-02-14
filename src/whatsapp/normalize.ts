@@ -14,6 +14,14 @@ function stripWhatsAppTargetPrefixes(value: string): string {
   }
 }
 
+/**
+ * Check if value looks like a WhatsApp Newsletter/Channel JID (e.g. "120363xxx@newsletter").
+ */
+export function isWhatsAppNewsletterJid(value: string): boolean {
+  const candidate = stripWhatsAppTargetPrefixes(value);
+  return /^\d+@newsletter$/i.test(candidate);
+}
+
 export function isWhatsAppGroupJid(value: string): boolean {
   const candidate = stripWhatsAppTargetPrefixes(value);
   const lower = candidate.toLowerCase();
@@ -69,6 +77,10 @@ export function normalizeWhatsAppTarget(value: string): string | null {
     }
     const normalized = normalizeE164(phone);
     return normalized.length > 1 ? normalized : null;
+  }
+  // Pass through newsletter JIDs (e.g. "120363xxx@newsletter") for WhatsApp Channels.
+  if (isWhatsAppNewsletterJid(candidate)) {
+    return candidate;
   }
   // If the caller passed a JID-ish string that we don't understand, fail fast.
   // Otherwise normalizeE164 would happily treat "group:120@g.us" as a phone number.

@@ -3,7 +3,7 @@ import { chunkText } from "../../../auto-reply/chunk.js";
 import { shouldLogVerbose } from "../../../globals.js";
 import { missingTargetError } from "../../../infra/outbound/target-errors.js";
 import { sendPollWhatsApp } from "../../../web/outbound.js";
-import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "../../../whatsapp/normalize.js";
+import { isWhatsAppGroupJid, isWhatsAppNewsletterJid, normalizeWhatsAppTarget } from "../../../whatsapp/normalize.js";
 
 export const whatsappOutbound: ChannelOutboundAdapter = {
   deliveryMode: "gateway",
@@ -25,10 +25,10 @@ export const whatsappOutbound: ChannelOutboundAdapter = {
       if (!normalizedTo) {
         return {
           ok: false,
-          error: missingTargetError("WhatsApp", "<E.164|group JID>"),
+          error: missingTargetError("WhatsApp", "<E.164|group JID|newsletter JID>"),
         };
       }
-      if (isWhatsAppGroupJid(normalizedTo)) {
+      if (isWhatsAppGroupJid(normalizedTo) || isWhatsAppNewsletterJid(normalizedTo)) {
         return { ok: true, to: normalizedTo };
       }
       if (mode === "implicit" || mode === "heartbeat") {
@@ -40,7 +40,7 @@ export const whatsappOutbound: ChannelOutboundAdapter = {
         }
         return {
           ok: false,
-          error: missingTargetError("WhatsApp", "<E.164|group JID>"),
+          error: missingTargetError("WhatsApp", "<E.164|group JID|newsletter JID>"),
         };
       }
       return { ok: true, to: normalizedTo };
@@ -48,7 +48,7 @@ export const whatsappOutbound: ChannelOutboundAdapter = {
 
     return {
       ok: false,
-      error: missingTargetError("WhatsApp", "<E.164|group JID>"),
+      error: missingTargetError("WhatsApp", "<E.164|group JID|newsletter JID>"),
     };
   },
   sendText: async ({ to, text, accountId, deps, gifPlayback }) => {
