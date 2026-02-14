@@ -253,8 +253,9 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
   }> = [];
 
   for (const agentId of agentIds) {
+    const managerPurpose = opts.index ? "default" : "status";
     await withManager<MemoryManager>({
-      getManager: () => getMemorySearchManager({ cfg, agentId }),
+      getManager: () => getMemorySearchManager({ cfg, agentId, purpose: managerPurpose }),
       onMissing: (error) => defaultRuntime.log(error ?? "Memory search disabled."),
       onCloseError: (err) =>
         defaultRuntime.error(`Memory manager close failed: ${formatErrorMessage(err)}`),

@@ -189,6 +189,26 @@ describe("QmdMemoryManager", () => {
     await manager?.close();
   });
 
+  it("skips qmd command side effects in status mode initialization", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "5m", debounceMs: 60_000, onBoot: true },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId });
+    const manager = await QmdMemoryManager.create({ cfg, agentId, resolved, mode: "status" });
+    expect(manager).toBeTruthy();
+    expect(spawnMock).not.toHaveBeenCalled();
+    await manager?.close();
+  });
+
   it("can be configured to block startup on boot update", async () => {
     cfg = {
       ...cfg,
