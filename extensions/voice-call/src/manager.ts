@@ -44,6 +44,7 @@ export class CallManager {
   private activeCalls = new Map<CallId, CallRecord>();
   private providerCallIdMap = new Map<string, CallId>(); // providerCallId -> internal callId
   private processedEventIds = new Set<string>();
+  private rejectedProviderCallIds = new Set<string>();
   private provider: VoiceCallProvider | null = null;
   private config: VoiceCallConfig;
   private storePath: string;
@@ -659,16 +660,21 @@ export class CallManager {
     if (!this.provider || !event.providerCallId) {
       return;
     }
-    const callId = event.callId || event.providerCallId;
+    const pid = event.providerCallId;
+    if (this.rejectedProviderCallIds.has(pid)) {
+      return;
+    }
+    this.rejectedProviderCallIds.add(pid);
+    const callId = event.callId || pid;
     try {
       await this.provider.hangupCall({
         callId,
-        providerCallId: event.providerCallId,
+        providerCallId: pid,
         reason: "hangup-bot",
       });
     } catch (err) {
       console.warn(
-        `[voice-call] Failed to reject inbound call ${event.providerCallId}:`,
+        `[voice-call] Failed to reject inbound call ${pid}:`,
         err instanceof Error ? err.message : err,
       );
     }
