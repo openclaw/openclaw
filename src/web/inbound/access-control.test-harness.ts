@@ -1,8 +1,15 @@
 import { beforeEach, vi } from "vitest";
 
-export const sendMessageMock = vi.fn();
-export const readAllowFromStoreMock = vi.fn();
-export const upsertPairingRequestMock = vi.fn();
+type AsyncMock<TArgs extends unknown[] = unknown[], TResult = unknown> = {
+  (...args: TArgs): Promise<TResult>;
+  mockReset: () => AsyncMock<TArgs, TResult>;
+  mockResolvedValue: (value: TResult) => AsyncMock<TArgs, TResult>;
+  mockResolvedValueOnce: (value: TResult) => AsyncMock<TArgs, TResult>;
+};
+
+export const sendMessageMock = vi.fn() as AsyncMock;
+export const readAllowFromStoreMock = vi.fn() as AsyncMock;
+export const upsertPairingRequestMock = vi.fn() as AsyncMock;
 
 let config: Record<string, unknown> = {};
 
