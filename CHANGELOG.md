@@ -26,6 +26,7 @@ Docs: https://docs.openclaw.ai
 - Security/Zalo: reject ambiguous shared-path webhook routing when multiple webhook targets match the same secret.
 - Security/BlueBubbles: reject ambiguous shared-path webhook routing when multiple webhook targets match the same guid/password.
 - Cron/Slack: preserve agent identity (name and icon) when cron jobs deliver outbound messages. (#16242) Thanks @robbyczgw-cla.
+- Discord: prefer gateway guild id when logging inbound messages so cached-miss guilds do not appear as `guild=dm`. Thanks @thewilloftheshadow.
 
 ## 2026.2.14
 
