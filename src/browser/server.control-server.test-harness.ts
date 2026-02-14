@@ -10,6 +10,7 @@ type HarnessState = {
   cdpBaseUrl: string;
   reachable: boolean;
   cfgAttachOnly: boolean;
+  cfgEvaluateEnabled: boolean;
   createTargetId: string | null;
   prevGatewayPort: string | undefined;
 };
@@ -19,6 +20,7 @@ const state: HarnessState = {
   cdpBaseUrl: "",
   reachable: false,
   cfgAttachOnly: false,
+  cfgEvaluateEnabled: true,
   createTargetId: null,
   prevGatewayPort: undefined,
 };
@@ -37,6 +39,10 @@ export function setBrowserControlServerCreateTargetId(targetId: string | null): 
 
 export function setBrowserControlServerAttachOnly(attachOnly: boolean): void {
   state.cfgAttachOnly = attachOnly;
+}
+
+export function setBrowserControlServerEvaluateEnabled(enabled: boolean): void {
+  state.cfgEvaluateEnabled = enabled;
 }
 
 export function setBrowserControlServerReachable(reachable: boolean): void {
@@ -86,6 +92,7 @@ const pwMocks = vi.hoisted(() => ({
   selectOptionViaPlaywright: vi.fn(async () => {}),
   setInputFilesViaPlaywright: vi.fn(async () => {}),
   snapshotAiViaPlaywright: vi.fn(async () => ({ snapshot: "ok" })),
+  traceStopViaPlaywright: vi.fn(async () => {}),
   takeScreenshotViaPlaywright: vi.fn(async () => ({
     buffer: Buffer.from("png"),
   })),
@@ -142,6 +149,7 @@ vi.mock("../config/config.js", async (importOriginal) => {
     loadConfig: () => ({
       browser: {
         enabled: true,
+        evaluateEnabled: state.cfgEvaluateEnabled,
         color: "#FF4500",
         attachOnly: state.cfgAttachOnly,
         headless: true,
