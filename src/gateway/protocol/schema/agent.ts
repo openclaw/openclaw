@@ -80,6 +80,8 @@ export const AgentParamsSchema = Type.Object(
           sourceSessionKey: Type.Optional(Type.String()),
           sourceChannel: Type.Optional(Type.String()),
           sourceTool: Type.Optional(Type.String()),
+          skill: Type.Optional(Type.String()),
+          mode: Type.Optional(Type.String()),
         },
         { additionalProperties: false },
       ),
