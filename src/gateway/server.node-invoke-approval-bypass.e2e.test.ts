@@ -124,6 +124,41 @@ describe("node.invoke approval bypass", () => {
     return client;
   };
 
+  test("rejects rawCommand/command mismatch before forwarding to node", async () => {
+    let sawInvoke = false;
+    const node = await connectLinuxNode(() => {
+      sawInvoke = true;
+    });
+    const ws = await connectOperator(["operator.write"]);
+
+    const nodes = await rpcReq<{ nodes?: Array<{ nodeId: string; connected?: boolean }> }>(
+      ws,
+      "node.list",
+      {},
+    );
+    expect(nodes.ok).toBe(true);
+    const nodeId = nodes.payload?.nodes?.find((n) => n.connected)?.nodeId ?? "";
+    expect(nodeId).toBeTruthy();
+
+    const res = await rpcReq(ws, "node.invoke", {
+      nodeId,
+      command: "system.run",
+      params: {
+        command: ["uname", "-a"],
+        rawCommand: "echo hi",
+      },
+      idempotencyKey: crypto.randomUUID(),
+    });
+    expect(res.ok).toBe(false);
+    expect(res.error?.message ?? "").toContain("rawCommand does not match command");
+
+    await sleep(50);
+    expect(sawInvoke).toBe(false);
+
+    ws.close();
+    node.stop();
+  });
+
   test("rejects injecting approved/approvalDecision without approval id", async () => {
     let sawInvoke = false;
     const node = await connectLinuxNode(() => {
