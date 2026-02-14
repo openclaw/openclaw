@@ -59,9 +59,18 @@ function parsePattern(raw: string): RegExp | null {
   }
 }
 
+let cachedDefaultPatterns: RegExp[] | null = null;
+
 function resolvePatterns(value?: string[]): RegExp[] {
-  const source = value?.length ? value : DEFAULT_REDACT_PATTERNS;
-  return source.map(parsePattern).filter((re): re is RegExp => Boolean(re));
+  if (!value?.length) {
+    if (!cachedDefaultPatterns) {
+      cachedDefaultPatterns = DEFAULT_REDACT_PATTERNS.map(parsePattern).filter((re): re is RegExp =>
+        Boolean(re),
+      );
+    }
+    return cachedDefaultPatterns;
+  }
+  return value.map(parsePattern).filter((re): re is RegExp => Boolean(re));
 }
 
 function maskToken(token: string): string {
