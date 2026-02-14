@@ -143,6 +143,29 @@ function buildVoiceSection(params: { isMinimal: boolean; ttsHint?: string }) {
   return ["## Voice (TTS)", hint, ""];
 }
 
+function buildContactsSection(params: {
+  isMinimal: boolean;
+  availableTools: Set<string>;
+  hasContactsFile: boolean;
+}) {
+  if (params.isMinimal || !params.availableTools.has("message")) {
+    return [];
+  }
+  return [
+    "## Contacts (CONTACTS.md)",
+    "For messaging, check CONTACTS.md for saved phone numbers before asking the user.",
+    "- If contact exists: use the saved number directly",
+    "- If contact not found: ask user for the number, then save it",
+    "- FIRST contact: use WRITE tool to create CONTACTS.md with template + contact row",
+    "- NEW contacts: use EDIT tool to APPEND a row (never overwrite existing contacts!)",
+    "- Format: | Name | +E164Number | Notes |",
+    params.hasContactsFile
+      ? "CONTACTS.md is loaded in Project Context below."
+      : "CONTACTS.md does not exist yet; create it on first messaging use.",
+    "",
+  ];
+}
+
 function buildDocsSection(params: { docsPath?: string; isMinimal: boolean; readToolName: string }) {
   const docsPath = params.docsPath?.trim();
   if (!docsPath || params.isMinimal) {
@@ -514,6 +537,13 @@ export function buildAgentSystemPrompt(params: {
       messageToolHints: params.messageToolHints,
     }),
     ...buildVoiceSection({ isMinimal, ttsHint: params.ttsHint }),
+    ...buildContactsSection({
+      isMinimal,
+      availableTools,
+      hasContactsFile: (params.contextFiles ?? []).some((f) =>
+        f.path.toLowerCase().endsWith("contacts.md"),
+      ),
+    }),
   ];
 
   if (extraSystemPrompt) {
