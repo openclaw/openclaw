@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
-import { ensureOpenClawModelsJson } from "./models-config.js";
+import { ensureOpenClawModelsJson, REDACTED_PLACEHOLDER } from "./models-config.js";
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   return withTempHomeBase(fn, { prefix: "openclaw-models-" });
@@ -159,7 +159,7 @@ describe("models-config", () => {
           >;
         };
         expect(parsed.providers.minimax?.baseUrl).toBe("https://api.minimax.chat/v1");
-        expect(parsed.providers.minimax?.apiKey).toBe("MINIMAX_API_KEY");
+        expect(parsed.providers.minimax?.apiKey).toBe(REDACTED_PLACEHOLDER);
         const ids = parsed.providers.minimax?.models?.map((model) => model.id);
         expect(ids).toContain("MiniMax-M2.1");
         expect(ids).toContain("MiniMax-VL-01");
@@ -192,7 +192,7 @@ describe("models-config", () => {
           >;
         };
         expect(parsed.providers.synthetic?.baseUrl).toBe("https://api.synthetic.new/anthropic");
-        expect(parsed.providers.synthetic?.apiKey).toBe("SYNTHETIC_API_KEY");
+        expect(parsed.providers.synthetic?.apiKey).toBe(REDACTED_PLACEHOLDER);
         const ids = parsed.providers.synthetic?.models?.map((model) => model.id);
         expect(ids).toContain("hf:MiniMaxAI/MiniMax-M2.1");
       } finally {
