@@ -700,7 +700,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 			savedMessageIdsRef.current.clear();
 			isFirstFileMessageRef.current = true;
 
-			(async () => {
+			void (async () => {
 				const sessions =
 					(await fetchFileSessionsRef.current?.()) ?? [];
 				if (cancelled) {
@@ -799,15 +799,15 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 					savedMessageIdsRef.current.add(m.id);
 				}
 
-				if (filePath) {
-					fetchFileSessionsRef.current?.().then(
-						(sessions) => {
-							setFileSessions(sessions);
-						},
-					);
-				}
+			if (filePath) {
+				void fetchFileSessionsRef.current?.().then(
+					(sessions) => {
+						setFileSessions(sessions);
+					},
+				);
+			}
 
-				if (filePath && onFileChanged) {
+			if (filePath && onFileChanged) {
 					fetch(
 						`/api/workspace/file?path=${encodeURIComponent(filePath)}`,
 					)
@@ -877,13 +877,13 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 					onActiveSessionChange?.(sessionId);
 					onSessionsChange?.();
 
-					if (filePath) {
-						fetchFileSessionsRef.current?.().then(
-							(sessions) => {
-								setFileSessions(sessions);
-							},
-						);
-					}
+				if (filePath) {
+					void fetchFileSessionsRef.current?.().then(
+						(sessions) => {
+							setFileSessions(sessions);
+						},
+					);
+				}
 				}
 
 				// Build message with optional attachment prefix
@@ -907,8 +907,8 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 					isFirstFileMessageRef.current = false;
 				}
 
-				sendMessage({ text: messageText });
-			},
+			void sendMessage({ text: messageText });
+		},
 			[
 				attachedFiles,
 				isStreaming,
@@ -929,9 +929,9 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 					return;
 				}
 
-				// Stop any active stream/reconnection for the old session.
-				reconnectAbortRef.current?.abort();
-				stop();
+			// Stop any active stream/reconnection for the old session.
+			reconnectAbortRef.current?.abort();
+			void stop();
 
 				setLoadingSession(true);
 				setCurrentSessionId(sessionId);
@@ -1006,9 +1006,9 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 			],
 		);
 
-		const handleNewSession = useCallback(async () => {
-			reconnectAbortRef.current?.abort();
-			stop();
+	const handleNewSession = useCallback(async () => {
+		reconnectAbortRef.current?.abort();
+		void stop();
 			setIsReconnecting(false);
 			setCurrentSessionId(null);
 			sessionIdRef.current = null;
@@ -1066,9 +1066,9 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 			reconnectAbortRef.current?.abort();
 			setIsReconnecting(false);
 
-			// Stop the useChat transport stream
-			stop();
-		}, [currentSessionId, stop]);
+		// Stop the useChat transport stream
+		void stop();
+	}, [currentSessionId, stop]);
 
 		// ── Attachment handlers ──
 
@@ -1378,7 +1378,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 					style={{ background: "var(--color-bg)" }}
 				>
 					<div
-						className={`${compact ? "" : "max-w-3xl mx-auto"}`}
+						className={compact ? "" : "max-w-3xl mx-auto"}
 					>
 						<div
 							className="rounded-2xl overflow-hidden"

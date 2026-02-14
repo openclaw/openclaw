@@ -74,7 +74,7 @@ function ChatBubbleIcon() {
 export function ChatSessionsSidebar({
 	sessions,
 	activeSessionId,
-	activeSessionTitle,
+	activeSessionTitle: _activeSessionTitle,
 	onSelectSession,
 	onNewSession,
 }: ChatSessionsSidebarProps) {
