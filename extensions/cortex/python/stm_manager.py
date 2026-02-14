@@ -92,6 +92,12 @@ def get_recent(limit=10, category=None, categories=None):
     return result
 
 
+def delete_stm_batch(memory_ids):
+    """Delete multiple STM entries by ID. Returns count deleted."""
+    b = _get_brain()
+    return b.delete_stm_batch(memory_ids)
+
+
 def cleanup_expired():
     """No-op — brain.db doesn't auto-expire. Kept for backward compat."""
     return 0

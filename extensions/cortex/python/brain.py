@@ -859,6 +859,29 @@ class UnifiedBrain:
         conn.close()
         return results
 
+    def delete_stm(self, memory_id: str) -> bool:
+        """Delete an STM entry by ID."""
+        conn = self._conn(immediate=True)
+        c = conn.cursor()
+        c.execute("DELETE FROM stm WHERE id = ?", (memory_id,))
+        deleted = c.rowcount > 0
+        conn.commit()
+        conn.close()
+        return deleted
+
+    def delete_stm_batch(self, memory_ids: list) -> int:
+        """Delete multiple STM entries by ID. Returns count deleted."""
+        if not memory_ids:
+            return 0
+        conn = self._conn(immediate=True)
+        c = conn.cursor()
+        placeholders = ",".join("?" * len(memory_ids))
+        c.execute(f"DELETE FROM stm WHERE id IN ({placeholders})", memory_ids)
+        deleted = c.rowcount
+        conn.commit()
+        conn.close()
+        return deleted
+
     def edit_stm(self, memory_id: str, content: str) -> bool:
         """Edit an STM entry's content."""
         conn = self._conn(immediate=True)

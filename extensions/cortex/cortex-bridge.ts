@@ -1314,6 +1314,42 @@ print(result or "OK")
   /**
    * Load STM directly from JSON file
    */
+  async updateSTM(memoryId: string, importance?: number, categories?: string[]): Promise<boolean> {
+    const impArg = importance !== undefined ? String(importance) : "None";
+    const catArg = categories ? JSON.stringify(categories) : "None";
+    const code = `
+import json
+import sys
+sys.path.insert(0, '${this.pythonScriptsDir}')
+from brain import UnifiedBrain
+b = UnifiedBrain()
+result = b.update_stm('${memoryId}', importance=${impArg}, categories=${catArg})
+print(json.dumps(result))
+`;
+    const result = await this.runPython(code);
+    this.stmCache = null;
+    this.stmCacheTime = 0;
+    return result === true;
+  }
+
+  async deleteSTMBatch(memoryIds: string[]): Promise<number> {
+    if (memoryIds.length === 0) return 0;
+    const idsJson = JSON.stringify(memoryIds);
+    const code = `
+import json
+import sys
+sys.path.insert(0, '${this.pythonScriptsDir}')
+from stm_manager import delete_stm_batch
+result = delete_stm_batch(${idsJson})
+print(json.dumps(result))
+`;
+    const result = await this.runPython(code);
+    // Invalidate STM cache
+    this.stmCache = null;
+    this.stmCacheTime = 0;
+    return typeof result === "number" ? result : 0;
+  }
+
   async loadSTMDirect(): Promise<{ short_term_memory: STMItem[]; capacity: number; auto_expire_days: number }> {
     const stmPath = join(this.memoryDir, "stm.json");
     try {

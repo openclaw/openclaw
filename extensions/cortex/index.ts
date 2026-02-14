@@ -995,10 +995,8 @@ const cortexPlugin: OpenClawPlugin = {
             }
 
             if (p.action === "merge" || p.action === "delete_older") {
-              // Load full STM for modification
-              const stmData = await bridge.loadSTMDirect();
-              const allItems = stmData.short_term_memory;
-              let removed = 0;
+              // Collect IDs to delete from brain.db directly
+              const idsToDelete: string[] = [];
 
               for (const group of duplicateGroups) {
                 // Sort by timestamp (newest first)
@@ -1007,29 +1005,26 @@ const cortexPlugin: OpenClawPlugin = {
                 const toRemove = group.slice(1);
 
                 if (p.action === "merge") {
-                  // Sum access counts into keeper
+                  // Update keeper with merged metadata
                   const totalAccess = group.reduce((sum, item) => sum + (item.access_count || 0), 0);
                   const maxImportance = Math.max(...group.map(item => item.importance || 1));
-                  keeper.access_count = totalAccess;
-                  keeper.importance = maxImportance;
+                  if (keeper.id) {
+                    // Update keeper in brain.db
+                    // Update keeper importance via cortex_update mechanism
+                    await bridge.updateSTM(keeper.id, maxImportance);
+                  }
                 }
 
-                // Remove older duplicates
+                // Collect IDs to remove
                 for (const item of toRemove) {
-                  const idx = allItems.findIndex(
-                    i => i.content === item.content && i.timestamp === item.timestamp
-                  );
-                  if (idx !== -1) {
-                    allItems.splice(idx, 1);
-                    removed++;
+                  if (item.id) {
+                    idsToDelete.push(item.id);
                   }
                 }
               }
 
-              // Save modified STM
-              stmData.short_term_memory = allItems;
-              const stmPath = join(homedir(), ".openclaw", "workspace", "memory", "stm.json");
-              await writeFile(stmPath, JSON.stringify(stmData, null, 2));
+              // Batch delete from brain.db
+              const removed = await bridge.deleteSTMBatch(idsToDelete);
 
               return {
                 content: [{ type: "text", text: `${p.action === "merge" ? "Merged" : "Deleted"} ${removed} duplicate memories from ${duplicateGroups.length} groups.` }],

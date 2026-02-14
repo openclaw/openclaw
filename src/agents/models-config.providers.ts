@@ -1,4 +1,3 @@
-import { getModels } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import {
@@ -395,56 +394,6 @@ async function buildOllamaProvider(): Promise<ProviderConfig> {
   };
 }
 
-const ANTHROPIC_BASE_URL = "https://api.anthropic.com";
-const OPUS_46_MODEL_ID = "claude-opus-4-6";
-
-/**
- * Build an anthropic provider that includes all pi-ai built-in models plus
- * claude-opus-4-6 (not yet in the pi-ai SDK). This replaces the built-in
- * anthropic models in the ModelRegistry so that the new model is discoverable.
- * Remove once the pi-ai SDK ships the model natively.
- */
-function buildAnthropicProviderWithOpus46(): ProviderConfig | null {
-  const builtIn = getModels("anthropic") as Array<{
-    id: string;
-    name: string;
-    api: string;
-    reasoning: boolean;
-    input: Array<"text" | "image">;
-    cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
-    contextWindow: number;
-    maxTokens: number;
-  }>;
-  if (builtIn.some((m) => m.id === OPUS_46_MODEL_ID)) {
-    return null;
-  }
-  const models: ModelDefinitionConfig[] = builtIn.map((m) => ({
-    id: m.id,
-    name: m.name,
-    api: m.api as ModelDefinitionConfig["api"],
-    reasoning: m.reasoning,
-    input: m.input,
-    cost: m.cost,
-    contextWindow: m.contextWindow,
-    maxTokens: m.maxTokens,
-  }));
-  models.unshift({
-    id: OPUS_46_MODEL_ID,
-    name: "Claude Opus 4.6 (latest)",
-    api: "anthropic-messages",
-    reasoning: true,
-    input: ["text", "image"],
-    cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
-    contextWindow: 200000,
-    maxTokens: 128000,
-  });
-  return {
-    baseUrl: ANTHROPIC_BASE_URL,
-    api: "anthropic-messages",
-    models,
-  };
-}
-
 export async function resolveImplicitProviders(params: {
   agentDir: string;
 }): Promise<ModelsConfig["providers"]> {
@@ -452,22 +401,6 @@ export async function resolveImplicitProviders(params: {
   const authStore = ensureAuthProfileStore(params.agentDir, {
     allowKeychainPrompt: false,
   });
-
-  // Inject claude-opus-4-6 into the anthropic model list when not yet in pi-ai.
-  // Gate on having anthropic auth (env key, api_key/token profile, or OAuth profile)
-  // and include the apiKey so pi-coding-agent's ModelRegistry validation passes.
-  const anthropicPatch = buildAnthropicProviderWithOpus46();
-  if (anthropicPatch) {
-    const anthropicKey =
-      resolveEnvApiKeyVarName("anthropic") ??
-      resolveApiKeyFromProfiles({ provider: "anthropic", store: authStore });
-    const hasAnthropicOAuth = listProfilesForProvider(authStore, "anthropic").some(
-      (id) => authStore.profiles[id]?.type === "oauth",
-    );
-    if (anthropicKey || hasAnthropicOAuth) {
-      providers.anthropic = { ...anthropicPatch, apiKey: anthropicKey ?? "anthropic-oauth" };
-    }
-  }
 
   const minimaxKey =
     resolveEnvApiKeyVarName("minimax") ??
