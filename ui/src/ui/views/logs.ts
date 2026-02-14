@@ -1,5 +1,5 @@
 import { html, nothing } from "lit";
-import type { AppMode } from "../app.ts";
+import type { AppMode } from "../navigation.ts";
 import type { LogEntry, LogLevel } from "../types.ts";
 import { tryParseJson, renderJsonTree } from "./json-renderer.ts";
 import { icons } from "../icons.ts";

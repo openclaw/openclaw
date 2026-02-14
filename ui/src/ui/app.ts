@@ -70,6 +70,7 @@ import {
   setTab as setTabInternal,
   setTheme as setThemeInternal,
   setMode as setModeInternal,
+  setTabVisibility as setTabVisibilityInternal,
   onPopState as onPopStateInternal,
 } from "./app-settings.ts";
 import {
@@ -112,7 +113,8 @@ export class OpenClawApp extends LitElement {
   @state() connected = false;
   @state() theme: ThemeMode = this.settings.theme ?? "system";
   @state() themeResolved: ResolvedTheme = "dark";
-  @state() mode: "basic" | "advanced" = this.settings.mode ?? "basic";
+  @state() mode: "basic" | "advanced" | "configure" = this.settings.mode ?? "basic";
+  @state() tabVisibility: Record<string, boolean> = this.settings.tabVisibility ?? {};
   @state() hello: GatewayHelloOk | null = null;
   @state() lastError: string | null = null;
   @state() eventLog: EventLogEntry[] = [];
@@ -423,8 +425,13 @@ export class OpenClawApp extends LitElement {
     setThemeInternal(this as unknown as Parameters<typeof setThemeInternal>[0], next, context);
   }
 
-  setMode(next: "basic" | "advanced") {
+  setMode(next: "basic" | "advanced" | "configure") {
     setModeInternal(this as unknown as Parameters<typeof setModeInternal>[0], next);
+  }
+
+  setTabVisibility(tab: string, visible: boolean) {
+    setTabVisibilityInternal(this as unknown as Parameters<typeof setTabVisibilityInternal>[0], tab, visible);
+    this.tabVisibility = { ...this.tabVisibility, [tab]: visible };
   }
 
   async loadOverview() {

@@ -207,7 +207,7 @@ export type TimeSeriesPoint = {
 };
 
 export type UsageProps = {
-  mode: "basic" | "advanced";
+  mode: "basic" | "advanced" | "configure";
   loading: boolean;
   error: string | null;
   startDate: string;

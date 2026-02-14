@@ -39,7 +39,7 @@ type SettingsHost = {
   password?: string;
   theme: ThemeMode;
   themeResolved: ResolvedTheme;
-  mode: "basic" | "advanced";
+  mode: "basic" | "advanced" | "configure";
   applySessionKey: string;
   sessionKey: string;
   tab: Tab;
@@ -189,11 +189,17 @@ export function setTheme(host: SettingsHost, next: ThemeMode, context?: ThemeTra
   });
 }
 
-export function setMode(host: SettingsHost, next: "basic" | "advanced") {
+export function setMode(host: SettingsHost, next: "basic" | "advanced" | "configure") {
   if (host.mode !== next) {
     host.mode = next;
     applySettings(host, { ...host.settings, mode: next });
   }
+}
+
+export function setTabVisibility(host: SettingsHost, tab: string, visible: boolean) {
+  const current = host.settings.tabVisibility || {};
+  const updated = { ...current, [tab]: visible };
+  applySettings(host, { ...host.settings, tabVisibility: updated });
 }
 
 export async function refreshActiveTab(host: SettingsHost) {

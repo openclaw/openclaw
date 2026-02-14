@@ -294,7 +294,7 @@
 .mode-toggle__track {
   position: relative;
   display: grid;
-  grid-template-columns: repeat(2, var(--mode-item));
+  grid-template-columns: repeat(3, var(--mode-item));
   gap: var(--mode-gap);
   padding: var(--mode-pad);
   border-radius: var(--radius-full);
@@ -351,6 +351,42 @@
   stroke-width: 1.5px;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+/* ===========================================
+   Mini iOS toggle switch (for configure mode)
+   =========================================== */
+
+.mini-toggle {
+  position: relative;
+  width: 28px;
+  height: 16px;
+  border-radius: 8px;
+  background: var(--border-strong);
+  cursor: pointer;
+  transition: background 0.2s ease;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.mini-toggle.active {
+  background: var(--accent);
+}
+
+.mini-toggle::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: white;
+  transition: transform 0.2s ease;
+}
+
+.mini-toggle.active::after {
+  transform: translateX(12px);
 }
 
 /* ===========================================
