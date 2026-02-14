@@ -168,6 +168,8 @@ export type AgentDefaultsConfig = {
   memorySearch?: MemorySearchConfig;
   /** Default thinking level when no /think directive is present. */
   thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+  /** Automatic thinking level escalation based on context window usage. */
+  thinkingEscalation?: AgentThinkingEscalationConfig;
   /** Default verbose level when no /verbose directive is present. */
   verboseDefault?: "off" | "on" | "full";
   /** Default elevated level when no /elevated directive is present. */
@@ -303,4 +305,18 @@ export type AgentCompactionMemoryFlushConfig = {
   prompt?: string;
   /** System prompt appended for the memory flush turn. */
   systemPrompt?: string;
+};
+
+export type AgentThinkingEscalationThreshold = {
+  /** Context window usage percentage that triggers this threshold (0-100). */
+  atContextPercent: number;
+  /** Thinking level to escalate to when this threshold is reached. */
+  thinking: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+};
+
+export type AgentThinkingEscalationConfig = {
+  /** Enable automatic thinking level escalation based on context window usage. */
+  enabled?: boolean;
+  /** Thresholds for escalating thinking level as context fills up. */
+  thresholds?: AgentThinkingEscalationThreshold[];
 };
