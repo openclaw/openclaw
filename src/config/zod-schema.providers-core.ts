@@ -314,6 +314,7 @@ export const DiscordAccountSchema = z
         agentFilter: z.array(z.string()).optional(),
         sessionFilter: z.array(z.string()).optional(),
         cleanupAfterResolve: z.boolean().optional(),
+        target: z.enum(["dm", "channel", "both"]).optional(),
       })
       .strict()
       .optional(),

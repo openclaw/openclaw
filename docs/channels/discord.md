@@ -442,13 +442,16 @@ See [Slash commands](/tools/slash-commands) for command catalog and behavior.
   </Accordion>
 
   <Accordion title="Exec approvals in Discord">
-    Discord supports button-based exec approvals in DMs.
+    Discord supports button-based exec approvals in DMs and can optionally post approval prompts in the originating channel.
 
     Config path:
 
     - `channels.discord.execApprovals.enabled`
     - `channels.discord.execApprovals.approvers`
+    - `channels.discord.execApprovals.target` (`dm` | `channel` | `both`, default: `dm`)
     - `agentFilter`, `sessionFilter`, `cleanupAfterResolve`
+
+    When `target` is `channel` or `both`, the approval prompt is visible in the channel. Only configured approvers can use the buttons; other users receive an ephemeral denial. Approval prompts include the command text, so only enable channel delivery in trusted channels. If the channel ID cannot be derived from the session key, OpenClaw falls back to DM delivery.
 
     If approvals fail with unknown approval IDs, verify approver list and feature enablement.
 
