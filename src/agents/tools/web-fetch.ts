@@ -56,6 +56,13 @@ const WebFetchSchema = Type.Object({
       minimum: 100,
     }),
   ),
+  preferMarkdown: Type.Optional(
+    Type.Boolean({
+      description:
+        'Send "Accept: text/markdown" header to request markdown from sites supporting Cloudflare Markdown for Agents.',
+      default: false,
+    }),
+  ),
 });
 
 type WebFetchConfig = NonNullable<OpenClawConfig["tools"]>["web"] extends infer Web
@@ -381,6 +388,7 @@ async function runWebFetch(params: {
   cacheTtlMs: number;
   userAgent: string;
   readabilityEnabled: boolean;
+  preferMarkdown: boolean;
   firecrawlEnabled: boolean;
   firecrawlApiKey?: string;
   firecrawlBaseUrl: string;
@@ -391,7 +399,7 @@ async function runWebFetch(params: {
   firecrawlTimeoutSeconds: number;
 }): Promise<Record<string, unknown>> {
   const cacheKey = normalizeCacheKey(
-    `fetch:${params.url}:${params.extractMode}:${params.maxChars}`,
+    `fetch:${params.url}:${params.extractMode}:${params.maxChars}:${params.preferMarkdown}`,
   );
   const cached = readCache(FETCH_CACHE, cacheKey);
   if (cached) {
@@ -419,7 +427,7 @@ async function runWebFetch(params: {
       timeoutMs: params.timeoutSeconds * 1000,
       init: {
         headers: {
-          Accept: "text/markdown, text/html;q=0.9, */*;q=0.1",
+          Accept: params.preferMarkdown ? "text/markdown, text/html;q=0.9, */*;q=0.1" : "*/*",
           "User-Agent": params.userAgent,
           "Accept-Language": "en-US,en;q=0.9",
         },
@@ -675,6 +683,8 @@ export function createWebFetchTool(options?: {
     return null;
   }
   const readabilityEnabled = resolveFetchReadabilityEnabled(fetch);
+  const preferMarkdownDefault =
+    typeof fetch?.preferMarkdown === "boolean" ? fetch.preferMarkdown : false;
   const firecrawl = resolveFirecrawlConfig(fetch);
   const firecrawlApiKey = resolveFirecrawlApiKey(firecrawl);
   const firecrawlEnabled = resolveFirecrawlEnabled({ firecrawl, apiKey: firecrawlApiKey });
@@ -700,6 +710,8 @@ export function createWebFetchTool(options?: {
       const extractMode = readStringParam(params, "extractMode") === "text" ? "text" : "markdown";
       const maxChars = readNumberParam(params, "maxChars", { integer: true });
       const maxCharsCap = resolveFetchMaxCharsCap(fetch);
+      const preferMarkdown =
+        typeof params.preferMarkdown === "boolean" ? params.preferMarkdown : preferMarkdownDefault;
       const result = await runWebFetch({
         url,
         extractMode,
@@ -713,6 +725,7 @@ export function createWebFetchTool(options?: {
         cacheTtlMs: resolveCacheTtlMs(fetch?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
         userAgent,
         readabilityEnabled,
+        preferMarkdown,
         firecrawlEnabled,
         firecrawlApiKey,
         firecrawlBaseUrl,
