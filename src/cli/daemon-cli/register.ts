@@ -45,7 +45,7 @@ export function registerDaemonCli(program: Command) {
     .option("--port <port>", "Gateway port")
     .option("--runtime <runtime>", "Daemon runtime (node|bun). Default: node")
     .option("--token <token>", "Gateway token (token auth)")
-    .option("--force", "Reinstall/overwrite if already installed", false)
+    .option("--force", "Reinstall/overwrite if already installed")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runDaemonInstall(opts);

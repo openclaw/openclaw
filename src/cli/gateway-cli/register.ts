@@ -119,19 +119,23 @@ function renderCostUsageSummary(summary: CostUsageSummary, days: number, rich: b
 }
 
 export function registerGatewayCli(program: Command) {
-  const gateway = addGatewayRunCommand(
-    program
-      .command("gateway")
-      .description("Run the WebSocket Gateway")
-      .addHelpText(
-        "after",
-        () =>
-          `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/gateway", "docs.openclaw.ai/cli/gateway")}\n`,
-      ),
-  );
+  // Create parent 'gateway' command WITHOUT run-specific options.
+  // This avoids option conflicts (e.g., parent --force vs install --force).
+  // Users who want run options must use 'gateway run --force' explicitly.
+  const gateway = program
+    .command("gateway")
+    .description("Run the WebSocket Gateway")
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/gateway", "docs.openclaw.ai/cli/gateway")}\n`,
+    );
 
+  // 'gateway run' is the primary run command with all options
   addGatewayRunCommand(
-    gateway.command("run").description("Run the WebSocket Gateway (foreground)"),
+    gateway
+      .command("run", { isDefault: true })
+      .description("Run the WebSocket Gateway (foreground)"),
   );
 
   gateway
@@ -159,7 +163,11 @@ export function registerGatewayCli(program: Command) {
     .option("--port <port>", "Gateway port")
     .option("--runtime <runtime>", "Daemon runtime (node|bun). Default: node")
     .option("--token <token>", "Gateway token (token auth)")
-    .option("--force", "Reinstall/overwrite if already installed", false)
+    // NOTE: No default value for --force. This allows distinguishing between
+    // "user passed --force" (true) vs "user didn't pass --force" (undefined).
+    // The parent gateway command also has --force with default=false, so if we
+    // set default=false here too, Commander inherits the parent's false.
+    .option("--force", "Reinstall/overwrite if already installed")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runDaemonInstall(opts);

@@ -430,6 +430,9 @@ export async function installLaunchAgent({
   });
   await fs.writeFile(plistPath, plist, "utf8");
 
+  // Bootout by label first (catches services loaded from different paths, e.g., old npm installs).
+  // Then bootout by plist path as fallback. Both are best-effort; bootstrap will fail if still loaded.
+  await execLaunchctl(["bootout", `${domain}/${label}`]);
   await execLaunchctl(["bootout", domain, plistPath]);
   await execLaunchctl(["unload", plistPath]);
   // launchd can persist "disabled" state even after bootout + plist removal; clear it before bootstrap.

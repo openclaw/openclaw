@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import type { DaemonInstallOptions } from "./types.js";
 import { buildGatewayInstallPlan } from "../../commands/daemon-install-helpers.js";
 import {
@@ -81,23 +82,47 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     fail(`Gateway service check failed: ${String(err)}`);
     return;
   }
-  if (loaded) {
-    if (!opts.force) {
-      emit({
-        ok: true,
-        result: "already-installed",
-        message: `Gateway service already ${service.loadedText}.`,
-        service: buildDaemonServiceSnapshot(service, loaded),
-        warnings: warnings.length ? warnings : undefined,
-      });
-      if (!json) {
-        defaultRuntime.log(`Gateway service already ${service.loadedText}.`);
-        defaultRuntime.log(
-          `Reinstall with: ${formatCliCommand("openclaw gateway install --force")}`,
-        );
-      }
-      return;
+  if (loaded && !opts.force) {
+    // Validate that the currently configured entrypoint actually exists.
+    // This catches stale LaunchAgent/systemd configs pointing to removed npm installs,
+    // moved git checkouts, or outdated pnpm store paths.
+    let currentConfig: Awaited<ReturnType<typeof service.readCommand>> | undefined;
+    try {
+      currentConfig = await service.readCommand(process.env);
+    } catch {
+      // Can't read service config - proceed with reinstall to be safe
+      loaded = false;
     }
+    if (loaded && currentConfig?.programArguments && currentConfig.programArguments.length >= 2) {
+      const entrypoint = currentConfig.programArguments[1];
+      try {
+        await fs.access(entrypoint);
+      } catch {
+        // Entrypoint doesn't exist - service config is stale, force reinstall
+        const msg = `Configured entrypoint ${entrypoint} not found; reinstalling...`;
+        if (json) {
+          warnings.push(msg);
+        } else {
+          defaultRuntime.log(msg);
+        }
+        loaded = false;
+      }
+    }
+  }
+
+  if (loaded && !opts.force) {
+    emit({
+      ok: true,
+      result: "already-installed",
+      message: `Gateway service already ${service.loadedText}.`,
+      service: buildDaemonServiceSnapshot(service, loaded),
+      warnings: warnings.length ? warnings : undefined,
+    });
+    if (!json) {
+      defaultRuntime.log(`Gateway service already ${service.loadedText}.`);
+      defaultRuntime.log(`Reinstall with: ${formatCliCommand("openclaw gateway install --force")}`);
+    }
+    return;
   }
 
   // Resolve effective auth mode to determine if token auto-generation is needed.
