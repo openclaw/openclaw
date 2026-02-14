@@ -3,10 +3,16 @@ import crypto from "node:crypto";
 import type { RuntimeEnv } from "../runtime.js";
 import { AGENT_LANE_SUBAGENT } from "../agents/lanes.js";
 import { extractAssistantText, stripToolMessages } from "../agents/tools/sessions-helpers.js";
+import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { callGateway } from "../gateway/call.js";
 import { danger, logVerbose } from "../globals.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
-import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
+import {
+  buildTelegramThreadParams,
+  buildTypingThreadParams,
+  type TelegramThreadSpec,
+} from "./bot/helpers.js";
+import { markdownToTelegramHtml } from "./format.js";
 import {
   appendTelegramQueueTurn,
   buildTelegramChatKey,
@@ -19,6 +25,8 @@ const MAX_PER_CHAT_INFLIGHT = 3;
 const WAIT_STEP_TIMEOUT_MS = 1200;
 const STREAM_POLL_INTERVAL_MS = 850;
 const STREAM_TEXT_MAX_CHARS = 3800;
+const TYPING_HEARTBEAT_MS = 4000;
+const PROGRESS_SNIPPET_MAX_CHARS = 900;
 
 type GatewayHistory = { messages?: unknown[] };
 
@@ -59,6 +67,43 @@ function sanitizeMessageText(text: string): string {
     return "(no response)";
   }
   return clampText(cleaned);
+}
+
+function formatClock(ms: number): string {
+  const dt = new Date(ms);
+  const hh = String(dt.getHours()).padStart(2, "0");
+  const mm = String(dt.getMinutes()).padStart(2, "0");
+  const ss = String(dt.getSeconds()).padStart(2, "0");
+  return `${hh}:${mm}:${ss}`;
+}
+
+function sanitizeProgressSnippet(text?: string): string | undefined {
+  if (!text) {
+    return undefined;
+  }
+  const cleaned = text.split("\u0000").join("").trim();
+  if (!cleaned) {
+    return undefined;
+  }
+  if (cleaned.length <= PROGRESS_SNIPPET_MAX_CHARS) {
+    return cleaned;
+  }
+  return `${cleaned.slice(0, PROGRESS_SNIPPET_MAX_CHARS - 1)}…`;
+}
+
+function isNonThinkingProgressSnippet(text: string): boolean {
+  const firstLine = text.split("\n")[0]?.trim() ?? "";
+  if (!firstLine) {
+    return true;
+  }
+  // Ignore tool/event-like snippets so progress card stays on user-meaningful thinking text.
+  return /^(?:⚡|🔧|📖|✏️|🛠️)\s|^(?:exec|read|write|edit)\b/i.test(firstLine);
+}
+
+function buildProcessingStatusMessage(params: { timestampMs: number; snippet?: string }): string {
+  const snippet = sanitizeProgressSnippet(params.snippet);
+  const body = snippet || "思考中，正在處理你的問題...";
+  return `💬 ${formatClock(params.timestampMs)}\n${body}`;
 }
 
 function toInt(value: string | number | undefined): number | undefined {
@@ -279,14 +324,79 @@ export class TelegramInboundSubagentQueue {
     }).catch(() => undefined);
   }
 
+  private async sendTyping(task: TelegramInboundTask): Promise<void> {
+    const api = this.bot.api as unknown as {
+      sendChatAction?: (
+        chatId: number | string,
+        action: "typing",
+        other?: { message_thread_id?: number },
+      ) => Promise<void>;
+    };
+    const sendChatActionApi =
+      typeof api.sendChatAction === "function" ? api.sendChatAction.bind(api) : null;
+    if (!sendChatActionApi) {
+      return;
+    }
+    await withTelegramApiErrorLogging({
+      operation: "sendChatAction",
+      runtime: this.runtime,
+      fn: async () =>
+        await sendChatActionApi(
+          task.chatId,
+          "typing",
+          buildTypingThreadParams(task.threadSpec?.id),
+        ),
+    }).catch(() => undefined);
+  }
+
   private async runTask(task: TelegramInboundTask): Promise<void> {
     const taskStartMs = Date.now();
     const queueWaitMs = Math.max(0, taskStartMs - task.enqueuedAtMs);
     const threadParams = buildTelegramThreadParams(task.threadSpec);
-    await this.setReaction(task, "⏳");
+    let statusMessageId: number | undefined;
     let replyMessageId: number | undefined;
+    const sendStatus = async (text: string): Promise<void> => {
+      const sent = await withTelegramApiErrorLogging({
+        operation: "sendMessage",
+        runtime: this.runtime,
+        fn: async () =>
+          await this.bot.api.sendMessage(task.chatId, text, {
+            ...threadParams,
+            reply_to_message_id: task.messageId,
+          }),
+      }).catch(() => undefined);
+      statusMessageId = sent?.message_id;
+    };
+    const editStatus = async (text: string): Promise<boolean> => {
+      if (statusMessageId == null) {
+        return false;
+      }
+      const targetMessageId = statusMessageId;
+      await withTelegramApiErrorLogging({
+        operation: "editMessageText",
+        runtime: this.runtime,
+        fn: async () => await this.bot.api.editMessageText(task.chatId, targetMessageId, text),
+      });
+      return true;
+    };
+    const editFinalHtml = async (html: string): Promise<boolean> => {
+      if (statusMessageId == null) {
+        return false;
+      }
+      const targetMessageId = statusMessageId;
+      await withTelegramApiErrorLogging({
+        operation: "editMessageText",
+        runtime: this.runtime,
+        fn: async () =>
+          await this.bot.api.editMessageText(task.chatId, targetMessageId, html, {
+            parse_mode: "HTML",
+          }),
+      });
+      return true;
+    };
 
     try {
+      await sendStatus("訊息列隊中");
       const memory = await loadTelegramQueueMemory({
         storePath: task.storePath,
         sessionKey: task.sessionKey,
@@ -316,14 +426,42 @@ export class TelegramInboundSubagentQueue {
       logVerbose(
         `telegram queue timing: chatId=${String(task.chatId)} messageId=${String(task.messageId)} queueWaitMs=${String(queueWaitMs)} toAgentDispatchMs=${String(toAgentDispatchMs)} mode=prefork`,
       );
-      const response = await Promise.all([
-        callGateway<{ runId?: string }>({
-          method: "agent",
-          params: agentParams,
-          timeoutMs: 10_000,
-        }),
-        this.setReaction(task, "👀"),
-      ]).then(([agent]) => agent);
+      const response = await callGateway<{ runId?: string }>({
+        method: "agent",
+        params: agentParams,
+        timeoutMs: 10_000,
+      });
+      let lastProgressRendered = "";
+      let stickyProgressSnippet: string | undefined;
+      let lastProgressAt = 0;
+      const maybeRefreshProgress = async (force = false): Promise<void> => {
+        const now = Date.now();
+        if (!force && now - lastProgressAt < TYPING_HEARTBEAT_MS) {
+          return;
+        }
+        lastProgressAt = now;
+        await this.sendTyping(task);
+        const latestSnippet = await readLatestAssistantReply(childSessionKey).catch(
+          () => undefined,
+        );
+        const sanitized = sanitizeProgressSnippet(latestSnippet);
+        if (sanitized && !isNonThinkingProgressSnippet(sanitized)) {
+          // Keep the latest real snippet once available; avoid regressing to placeholder.
+          stickyProgressSnippet = sanitized;
+        }
+        const progressText = buildProcessingStatusMessage({
+          timestampMs: now,
+          snippet: stickyProgressSnippet,
+        });
+        if (progressText === lastProgressRendered) {
+          return;
+        }
+        const updated = await editStatus(progressText).catch(() => false);
+        if (updated) {
+          lastProgressRendered = progressText;
+        }
+      };
+      await maybeRefreshProgress(true);
       const runId =
         typeof response?.runId === "string" && response.runId.trim()
           ? response.runId
@@ -333,6 +471,7 @@ export class TelegramInboundSubagentQueue {
       let failed = false;
       let finalText = "";
       while (!done) {
+        await maybeRefreshProgress();
         const waited = await callGateway<{ status?: string; error?: string }>({
           method: "agent.wait",
           params: { runId, timeoutMs: WAIT_STEP_TIMEOUT_MS },
@@ -358,16 +497,27 @@ export class TelegramInboundSubagentQueue {
         finalText = failed ? "Subagent failed." : "(no response)";
       }
       const renderedFinal = sanitizeMessageText(finalText);
-      const sent = await withTelegramApiErrorLogging({
-        operation: "sendMessage",
-        runtime: this.runtime,
-        fn: async () =>
-          await this.bot.api.sendMessage(task.chatId, renderedFinal, {
-            ...threadParams,
-            reply_to_message_id: task.messageId,
-          }),
-      }).catch(() => undefined);
-      replyMessageId = sent?.message_id;
+      const tableMode = resolveMarkdownTableMode({
+        channel: "telegram",
+        accountId: task.accountId,
+      });
+      const htmlFinal = markdownToTelegramHtml(renderedFinal, { tableMode });
+      const updatedInPlace = await editFinalHtml(htmlFinal).catch(() => false);
+      if (updatedInPlace && statusMessageId != null) {
+        replyMessageId = statusMessageId;
+      } else {
+        const sent = await withTelegramApiErrorLogging({
+          operation: "sendMessage",
+          runtime: this.runtime,
+          fn: async () =>
+            await this.bot.api.sendMessage(task.chatId, htmlFinal, {
+              ...threadParams,
+              reply_to_message_id: task.messageId,
+              parse_mode: "HTML",
+            }),
+        }).catch(() => undefined);
+        replyMessageId = sent?.message_id;
+      }
 
       await appendTelegramQueueTurn({
         storePath: task.storePath,
@@ -388,15 +538,18 @@ export class TelegramInboundSubagentQueue {
         ),
       );
       const fallbackText = "⚠️ Failed to process queued message. Please try again.";
-      await withTelegramApiErrorLogging({
-        operation: "sendMessage",
-        runtime: this.runtime,
-        fn: async () =>
-          await this.bot.api.sendMessage(task.chatId, fallbackText, {
-            ...threadParams,
-            reply_to_message_id: task.messageId,
-          }),
-      }).catch(() => undefined);
+      const updatedInPlace = await editStatus(fallbackText).catch(() => false);
+      if (!updatedInPlace) {
+        await withTelegramApiErrorLogging({
+          operation: "sendMessage",
+          runtime: this.runtime,
+          fn: async () =>
+            await this.bot.api.sendMessage(task.chatId, fallbackText, {
+              ...threadParams,
+              reply_to_message_id: task.messageId,
+            }),
+        }).catch(() => undefined);
+      }
       await this.setReaction(task, "⚠️");
     }
   }

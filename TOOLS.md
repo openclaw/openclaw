@@ -43,3 +43,5 @@ Add whatever helps you do your job. This is your cheat sheet.
 
 - **Search**: `rg` is missing. Use `grep` instead.
 - **Messaging**: When sending a new message (not a reply), you **must** provide `target` or `channelId`.
+- **Reactions**: Use only standard emojis (👍, 👎, ❤️, 🔥, 🎉, 💩). Custom or obscure emojis may cause `REACTION_INVALID` errors.
+- **Telegram tables**: The system auto-wraps markdown tables in `<pre><code>` via `tableMode: "code"`. Just write normal markdown tables — do NOT manually wrap them in triple backticks (that prevents the table parser from detecting them).
