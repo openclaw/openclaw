@@ -154,7 +154,22 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
     };
   }
 
-  if (snapshot.requestedByConnId && snapshot.requestedByConnId !== (opts.client?.connId ?? null)) {
+  // Prefer binding by device identity (stable across reconnects / per-call clients like callGateway()).
+  // Fallback to connId only when device identity is not available.
+  const snapshotDeviceId = snapshot.requestedByDeviceId ?? null;
+  const clientDeviceId = opts.client?.connect?.device?.id ?? null;
+  if (snapshotDeviceId) {
+    if (snapshotDeviceId !== clientDeviceId) {
+      return {
+        ok: false,
+        message: "approval id not valid for this device",
+        details: { code: "APPROVAL_DEVICE_MISMATCH", runId },
+      };
+    }
+  } else if (
+    snapshot.requestedByConnId &&
+    snapshot.requestedByConnId !== (opts.client?.connId ?? null)
+  ) {
     return {
       ok: false,
       message: "approval id not valid for this client",

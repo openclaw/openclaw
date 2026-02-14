@@ -136,6 +136,7 @@ describe("node.invoke approval bypass", () => {
     });
 
     const ws = await connectOperator(["operator.write", "operator.approvals"]);
+    const ws2 = await connectOperator(["operator.write"]);
 
     const nodes = await rpcReq<{ nodes?: Array<{ nodeId: string; connected?: boolean }> }>(
       ws,
@@ -159,7 +160,9 @@ describe("node.invoke approval bypass", () => {
     const requested = await requestP;
     expect(requested.ok).toBe(true);
 
-    const invoke = await rpcReq(ws, "node.invoke", {
+    // Use a second WebSocket connection to simulate per-call clients (callGatewayTool/callGatewayCli).
+    // Approval binding should be based on device identity, not the ephemeral connId.
+    const invoke = await rpcReq(ws2, "node.invoke", {
       nodeId,
       command: "system.run",
       params: {
@@ -179,6 +182,7 @@ describe("node.invoke approval bypass", () => {
     expect(lastInvokeParams?.approvalDecision).toBe("allow-once");
 
     ws.close();
+    ws2.close();
     node.stop();
   });
 });
