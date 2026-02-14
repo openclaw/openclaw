@@ -63,6 +63,11 @@ export function buildTelegramThreadParams(thread?: TelegramThreadSpec | null) {
   if (!thread?.id) {
     return undefined;
   }
+  // Private DM chats do not support message_thread_id — Telegram rejects it
+  // with "message thread not found" (400). Only include it for forum topics.
+  if (thread.scope === "dm") {
+    return undefined;
+  }
   const normalized = Math.trunc(thread.id);
   if (normalized === TELEGRAM_GENERAL_TOPIC_ID && thread.scope === "forum") {
     return undefined;
