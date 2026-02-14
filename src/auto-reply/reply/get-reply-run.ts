@@ -38,14 +38,24 @@ import {
 } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { runReplyAgent } from "./agent-runner.js";
-import { applySessionHints } from "./body.js";
+import { extractSessionHintParts } from "./body.js";
+import { buildContextAtoms } from "./context-atoms.js";
+import {
+  type ContextSegment,
+  findSegment,
+  renderSegments,
+  trimSegmentsToBudget,
+} from "./context-segments.js";
 import { buildGroupIntro } from "./groups.js";
 import { buildInboundMetaSystemPrompt, buildInboundUserContextPrefix } from "./inbound-meta.js";
+import { buildNarrativeGuide } from "./narrative-engine.js";
+import { buildProactiveRecall } from "./proactive-recall.js";
 import { resolveQueueSettings } from "./queue.js";
 import { routeReply } from "./route-reply.js";
-import { ensureSkillSnapshot, prependSystemEvents } from "./session-updates.js";
+import { buildSystemEventsBlock, ensureSkillSnapshot } from "./session-updates.js";
 import { resolveTypingMode } from "./typing-mode.js";
-import { appendUntrustedContext } from "./untrusted-context.js";
+import { buildUntrustedContextBlock } from "./untrusted-context.js";
+import { buildWarroomBriefing } from "./warroom-briefing.js";
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
 type ExecOverrides = Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
@@ -221,10 +231,7 @@ export async function runPreparedReply(
     ? baseBodyFinal
     : [inboundUserContext, baseBodyFinal].filter(Boolean).join("\n\n");
   const baseBodyTrimmed = baseBodyForPrompt.trim();
-  const hasMediaAttachment = Boolean(
-    sessionCtx.MediaPath || (sessionCtx.MediaPaths && sessionCtx.MediaPaths.length > 0),
-  );
-  if (!baseBodyTrimmed && !hasMediaAttachment) {
+  if (!baseBodyTrimmed) {
     await typing.onReplyStart();
     logVerbose("Inbound body empty after normalization; skipping agent run");
     typing.cleanup();
@@ -232,13 +239,8 @@ export async function runPreparedReply(
       text: "I didn't receive any text in your message. Please resend or add a caption.",
     };
   }
-  // When the user sends media without text, provide a minimal body so the agent
-  // run proceeds and the image/document is injected by the embedded runner.
-  const effectiveBaseBody = baseBodyTrimmed
-    ? baseBodyForPrompt
-    : "[User sent media without caption]";
-  let prefixedBodyBase = await applySessionHints({
-    baseBody: effectiveBaseBody,
+  // --- Structured context segment assembly ---
+  const hintParts = await extractSessionHintParts({
     abortedLastRun,
     sessionEntry,
     sessionStore,
@@ -248,14 +250,13 @@ export async function runPreparedReply(
   });
   const isGroupSession = sessionEntry?.chatType === "group" || sessionEntry?.chatType === "channel";
   const isMainSession = !isGroupSession && sessionKey === normalizeMainKey(sessionCfg?.mainKey);
-  prefixedBodyBase = await prependSystemEvents({
+  const systemEventsBlock = await buildSystemEventsBlock({
     cfg,
     sessionKey,
     isMainSession,
     isNewSession,
-    prefixedBodyBase,
   });
-  prefixedBodyBase = appendUntrustedContext(prefixedBodyBase, sessionCtx.UntrustedContext);
+  const untrustedBlock = buildUntrustedContextBlock(sessionCtx.UntrustedContext);
   const threadStarterBody = ctx.ThreadStarterBody?.trim();
   const threadHistoryBody = ctx.ThreadHistoryBody?.trim();
   const threadContextNote =
@@ -278,22 +279,62 @@ export async function runPreparedReply(
   sessionEntry = skillResult.sessionEntry ?? sessionEntry;
   currentSystemSent = skillResult.systemSent;
   const skillsSnapshot = skillResult.skillsSnapshot;
-  const prefixedBody = [threadContextNote, prefixedBodyBase].filter(Boolean).join("\n\n");
   const mediaNote = buildInboundMediaNote(ctx);
   const mediaReplyHint = mediaNote
     ? "To send an image back, prefer the message tool (media/path/filePath). If you must inline, use MEDIA:https://example.com/image.jpg (spaces ok, quote if needed) or a safe relative path like MEDIA:./image.jpg. Avoid absolute paths (MEDIA:/...) and ~ paths — they are blocked for security. Keep caption in the text body."
     : undefined;
-  let prefixedCommandBody = mediaNote
-    ? [mediaNote, mediaReplyHint, prefixedBody ?? ""].filter(Boolean).join("\n").trim()
-    : prefixedBody;
-  if (!resolvedThinkLevel && prefixedCommandBody) {
-    const parts = prefixedCommandBody.split(/\s+/);
+
+  // Warroom briefing (cached, ~5 min TTL; directives are chat-specific)
+  const warroomBriefing = await buildWarroomBriefing(workspaceDir, sessionKey);
+  // Narrative guide (cached, field-specific talking points + forbidden words)
+  const narrativeGuide = await buildNarrativeGuide(workspaceDir, sessionKey, ctx.GroupSubject);
+  // Proactive recall (cached, ~3 min TTL; queries Time Tunnel for relevant history)
+  const recallContext = await buildProactiveRecall(
+    workspaceDir,
+    baseBodyFinal,
+    sessionCtx.SenderName,
+    ctx.GroupSubject,
+  );
+  // Context atoms (cached, ~3 min TTL; vector-retrieved workspace knowledge)
+  const contextAtomsText = await buildContextAtoms(
+    workspaceDir,
+    baseBodyFinal,
+    sessionCtx.SenderName,
+  );
+
+  // Build segments in canonical order
+  const contextSegments: ContextSegment[] = [
+    ...(mediaNote ? [{ kind: "media-note" as const, content: mediaNote }] : []),
+    ...(mediaReplyHint ? [{ kind: "media-hint" as const, content: mediaReplyHint }] : []),
+    ...(warroomBriefing ? [{ kind: "warroom-briefing" as const, content: warroomBriefing }] : []),
+    ...(narrativeGuide ? [{ kind: "narrative-guide" as const, content: narrativeGuide }] : []),
+    ...(recallContext ? [{ kind: "recall" as const, content: recallContext }] : []),
+    ...(contextAtomsText ? [{ kind: "context-atoms" as const, content: contextAtomsText }] : []),
+    ...(threadContextNote ? [{ kind: "thread-starter" as const, content: threadContextNote }] : []),
+    ...(systemEventsBlock ? [{ kind: "system-event" as const, content: systemEventsBlock }] : []),
+    ...(hintParts.abortHint ? [{ kind: "abort-hint" as const, content: hintParts.abortHint }] : []),
+    { kind: "message-body" as const, content: baseBodyFinal },
+    ...(hintParts.messageIdHint
+      ? [{ kind: "message-id-hint" as const, content: hintParts.messageIdHint }]
+      : []),
+    ...(untrustedBlock ? [{ kind: "untrusted-context" as const, content: untrustedBlock }] : []),
+  ];
+
+  // Budget guard: drop non-essential segments before they cause context overflow
+  const trimmedSegments = trimSegmentsToBudget(contextSegments);
+
+  // Think-level extraction: target the message-body segment specifically
+  const bodySegment = findSegment(trimmedSegments, "message-body");
+  if (!resolvedThinkLevel && bodySegment?.content) {
+    const parts = bodySegment.content.split(/\s+/);
     const maybeLevel = normalizeThinkLevel(parts[0]);
     if (maybeLevel && (maybeLevel !== "xhigh" || supportsXHighThinking(provider, model))) {
       resolvedThinkLevel = maybeLevel;
-      prefixedCommandBody = parts.slice(1).join(" ").trim();
+      bodySegment.content = parts.slice(1).join(" ").trim();
     }
   }
+
+  let prefixedCommandBody = renderSegments(trimmedSegments);
   if (!resolvedThinkLevel) {
     resolvedThinkLevel = await modelState.resolveDefaultThinkingLevel();
   }
@@ -345,7 +386,7 @@ export async function runPreparedReply(
     sessionEntry,
     resolveSessionFilePathOptions({ agentId, storePath }),
   );
-  const queueBodyBase = [threadContextNote, effectiveBaseBody].filter(Boolean).join("\n\n");
+  const queueBodyBase = [threadContextNote, baseBodyForPrompt].filter(Boolean).join("\n\n");
   const queuedBody = mediaNote
     ? [mediaNote, mediaReplyHint, queueBodyBase].filter(Boolean).join("\n").trim()
     : queueBodyBase;

@@ -23,7 +23,7 @@ type GroupMentionParams = {
   senderE164?: string | null;
 };
 
-function normalizeDiscordSlug(value?: string | null) {
+export function normalizeDiscordSlug(value?: string | null) {
   if (!value) {
     return "";
   }
@@ -38,7 +38,7 @@ function normalizeDiscordSlug(value?: string | null) {
   return text;
 }
 
-function normalizeSlackSlug(raw?: string | null) {
+export function normalizeSlackSlug(raw?: string | null) {
   const trimmed = raw?.trim().toLowerCase() ?? "";
   if (!trimmed) {
     return "";
@@ -48,7 +48,7 @@ function normalizeSlackSlug(raw?: string | null) {
   return cleaned.replace(/-{2,}/g, "-").replace(/^[-.]+|[-.]+$/g, "");
 }
 
-function parseTelegramGroupId(value?: string | null) {
+export function parseTelegramGroupId(value?: string | null) {
   const raw = value?.trim() ?? "";
   if (!raw) {
     return { chatId: undefined, topicId: undefined };

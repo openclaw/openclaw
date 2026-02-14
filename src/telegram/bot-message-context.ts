@@ -22,6 +22,8 @@ import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { buildMentionRegexes, matchesMentionWithExplicit } from "../auto-reply/reply/mentions.js";
 import { shouldAckReaction as shouldAckReactionGate } from "../channels/ack-reactions.js";
 import { resolveControlCommandGate } from "../channels/command-gating.js";
+import { checkConversationContext } from "../channels/conversation-context.js";
+import { buildCrossChannelContext } from "../channels/cross-channel-context.js";
 import { formatLocationText, toLocationContext } from "../channels/location.js";
 import { logInboundDrop } from "../channels/logging.js";
 import { resolveMentionGatingWithBypass } from "../channels/mention-gating.js";
@@ -471,21 +473,47 @@ export const buildTelegramMessageContext = async ({
   const effectiveWasMentioned = mentionGate.effectiveWasMentioned;
   if (isGroup && requireMention && canDetectMention) {
     if (mentionGate.shouldSkip) {
-      logger.info({ chatId, reason: "no-mention" }, "skipping group message");
-      recordPendingHistoryEntryIfEnabled({
-        historyMap: groupHistories,
-        historyKey: historyKey ?? "",
-        limit: historyLimit,
-        entry: historyKey
-          ? {
-              sender: buildSenderLabel(msg, senderId || chatId),
-              body: rawBody,
-              timestamp: msg.date ? msg.date * 1000 : undefined,
-              messageId: typeof msg.message_id === "number" ? String(msg.message_id) : undefined,
-            }
-          : null,
-      });
-      return null;
+      // Level 102: 對話脈絡救濟檢查
+      // 在決定跳過消息之前，檢查是否在活躍對話中
+      const conversationCheck = await checkConversationContext(
+        chatId,
+        rawBody,
+        senderId,
+        buildSenderName(msg),
+        "telegram",
+        false, // 使用快速規則判斷，不調用 LLM（避免延遲）
+      );
+
+      if (conversationCheck.shouldRespond) {
+        // 對話脈絡判斷應該回應，覆蓋跳過決定
+        logger.info(
+          {
+            chatId,
+            reason: "conversation-context-override",
+            confidence: conversationCheck.confidence,
+            contextReason: conversationCheck.reason,
+          },
+          "overriding skip due to active conversation context",
+        );
+        // 不返回 null，繼續處理消息
+      } else {
+        // 原有邏輯：跳過消息
+        logger.info({ chatId, reason: "no-mention" }, "skipping group message");
+        recordPendingHistoryEntryIfEnabled({
+          historyMap: groupHistories,
+          historyKey: historyKey ?? "",
+          limit: historyLimit,
+          entry: historyKey
+            ? {
+                sender: buildSenderLabel(msg, senderId || chatId),
+                body: rawBody,
+                timestamp: msg.date ? msg.date * 1000 : undefined,
+                messageId: typeof msg.message_id === "number" ? String(msg.message_id) : undefined,
+              }
+            : null,
+        });
+        return null;
+      }
     }
   }
 
@@ -590,6 +618,15 @@ export const buildTelegramMessageContext = async ({
           envelope: envelopeOptions,
         }),
     });
+  }
+
+  // Level 105: inject cross-channel context (other channels handled by the same agent)
+  const crossChannelCtx = await buildCrossChannelContext({
+    currentChannel: "telegram",
+    agentId: route.agentId,
+  });
+  if (crossChannelCtx) {
+    combinedBody = `${crossChannelCtx}\n\n${combinedBody}`;
   }
 
   const skillFilter = firstDefined(topicConfig?.skills, groupConfig?.skills);

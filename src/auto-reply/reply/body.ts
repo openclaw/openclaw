@@ -42,3 +42,49 @@ export async function applySessionHints(params: {
 
   return prefixedBodyBase;
 }
+
+/**
+ * Extract session hint parts as separate strings (for segment-based assembly).
+ * Same side effects as applySessionHints (clears abort flag).
+ */
+export async function extractSessionHintParts(params: {
+  abortedLastRun: boolean;
+  sessionEntry?: SessionEntry;
+  sessionStore?: Record<string, SessionEntry>;
+  sessionKey?: string;
+  storePath?: string;
+  abortKey?: string;
+  messageId?: string;
+}): Promise<{ abortHint: string; messageIdHint: string }> {
+  const abortHint = params.abortedLastRun
+    ? "Note: The previous agent run was aborted by the user. Resume carefully or ask for clarification."
+    : "";
+
+  if (abortHint) {
+    if (params.sessionEntry && params.sessionStore && params.sessionKey) {
+      params.sessionEntry.abortedLastRun = false;
+      params.sessionEntry.updatedAt = Date.now();
+      params.sessionStore[params.sessionKey] = params.sessionEntry;
+      if (params.storePath) {
+        const sessionKey = params.sessionKey;
+        await updateSessionStore(params.storePath, (store) => {
+          const entry = store[sessionKey] ?? params.sessionEntry;
+          if (!entry) {
+            return;
+          }
+          store[sessionKey] = {
+            ...entry,
+            abortedLastRun: false,
+            updatedAt: Date.now(),
+          };
+        });
+      }
+    } else if (params.abortKey) {
+      setAbortMemory(params.abortKey, false);
+    }
+  }
+
+  const messageIdHint = params.messageId?.trim() ? `[message_id: ${params.messageId.trim()}]` : "";
+
+  return { abortHint, messageIdHint };
+}

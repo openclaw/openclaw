@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { ResolvedLineAccount } from "./types.js";
 import { formatInboundEnvelope, resolveEnvelopeFormatOptions } from "../auto-reply/envelope.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
+import { buildCrossChannelContext } from "../channels/cross-channel-context.js";
 import { formatLocationText, toLocationContext } from "../channels/location.js";
 import {
   readSessionUpdatedAt,
@@ -13,6 +14,8 @@ import {
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
+import { getUserProfile } from "./send.js";
+import { resolveLineSenderName, resolveLineSenderNameAsync } from "./sender-name-cache.js";
 
 interface MediaRef {
   path: string;
@@ -176,8 +179,13 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
     return null;
   }
 
-  // Build sender info
+  // Build sender info — 快取優先，miss 時打 LINE API 自動學習
   const senderId = userId ?? "unknown";
+  const senderName =
+    resolveLineSenderName(senderId, groupId ?? roomId) ??
+    (await resolveLineSenderNameAsync(senderId, groupId ?? roomId, {
+      getUserProfile: (uid) => getUserProfile(uid, { accountId: account.accountId }),
+    }));
   const senderLabel = userId ? `user:${userId}` : "unknown";
 
   // Build conversation label
@@ -206,6 +214,7 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
     body: rawBody,
     chatType: isGroup ? "group" : "direct",
     sender: {
+      name: senderName,
       id: senderId,
     },
     previousTimestamp,
@@ -234,8 +243,18 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
   const toAddress = isGroup ? fromAddress : `line:${userId ?? peerId}`;
   const originatingTo = isGroup ? fromAddress : `line:${userId ?? peerId}`;
 
+  // Level 105: inject cross-channel context (other channels handled by the same agent)
+  let combinedBody = body;
+  const crossChannelCtx = await buildCrossChannelContext({
+    currentChannel: "line",
+    agentId: route.agentId,
+  });
+  if (crossChannelCtx) {
+    combinedBody = `${crossChannelCtx}\n\n${combinedBody}`;
+  }
+
   const ctxPayload = finalizeInboundContext({
-    Body: body,
+    Body: combinedBody,
     BodyForAgent: rawBody,
     RawBody: rawBody,
     CommandBody: rawBody,
@@ -246,6 +265,7 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
     ChatType: isGroup ? "group" : "direct",
     ConversationLabel: conversationLabel,
     GroupSubject: isGroup ? (groupId ?? roomId) : undefined,
+    SenderName: senderName,
     SenderId: senderId,
     Provider: "line",
     Surface: "line",
@@ -348,6 +368,11 @@ export async function buildLinePostbackContext(params: {
   }
 
   const senderId = userId ?? "unknown";
+  const senderName =
+    resolveLineSenderName(senderId, groupId ?? roomId) ??
+    (await resolveLineSenderNameAsync(senderId, groupId ?? roomId, {
+      getUserProfile: (uid) => getUserProfile(uid, { accountId: account.accountId }),
+    }));
   const senderLabel = userId ? `user:${userId}` : "unknown";
 
   const conversationLabel = isGroup
@@ -375,6 +400,7 @@ export async function buildLinePostbackContext(params: {
     body: rawBody,
     chatType: isGroup ? "group" : "direct",
     sender: {
+      name: senderName,
       id: senderId,
     },
     previousTimestamp,
@@ -403,6 +429,7 @@ export async function buildLinePostbackContext(params: {
     ChatType: isGroup ? "group" : "direct",
     ConversationLabel: conversationLabel,
     GroupSubject: isGroup ? (groupId ?? roomId) : undefined,
+    SenderName: senderName,
     SenderId: senderId,
     Provider: "line",
     Surface: "line",

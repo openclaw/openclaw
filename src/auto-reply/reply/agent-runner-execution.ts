@@ -148,11 +148,20 @@ export async function runAgentTurnWithFallback(params: {
       };
       const blockReplyPipeline = params.blockReplyPipeline;
       const onToolResult = params.opts?.onToolResult;
+
+      // Import task classifier for smart routing
+      const { classifyTask, estimateTokenCount } = await import("../../agents/task-classifier.js");
+      const taskHint = classifyTask(params.commandBody);
+      const contextLength = estimateTokenCount(params.commandBody);
+
       const fallbackResult = await runWithModelFallback({
         cfg: params.followupRun.run.config,
         provider: params.followupRun.run.provider,
         model: params.followupRun.run.model,
         agentDir: params.followupRun.run.agentDir,
+        sessionKey: params.sessionKey,
+        taskHint,
+        contextLength,
         fallbacksOverride: resolveAgentModelFallbacksOverride(
           params.followupRun.run.config,
           resolveAgentIdFromSessionKey(params.followupRun.run.sessionKey),
@@ -598,6 +607,20 @@ export async function runAgentTurnWithFallback(params: {
         continue;
       }
 
+      // Auto-recover from context overflow by resetting session (last resort after compaction failed)
+      if (
+        isContextOverflow &&
+        !didResetAfterCompactionFailure &&
+        (await params.resetSessionAfterCompactionFailure(message))
+      ) {
+        didResetAfterCompactionFailure = true;
+        return {
+          kind: "final",
+          payload: {
+            text: "⚠️ Context limit exceeded. I've reset our conversation to start fresh - please try again!",
+          },
+        };
+      }
       defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
       const safeMessage = isTransientHttp
         ? sanitizeUserFacingText(message, { errorContext: true })
