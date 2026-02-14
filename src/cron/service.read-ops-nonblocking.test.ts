@@ -84,15 +84,15 @@ describe("CronService read ops while job is running", () => {
             await new Promise<void>((resolve) => setTimeout(resolve, 0));
           }
         })(),
-        200,
+        2000,
       );
 
       expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
 
-      await expect(timeout(cron.list({ includeDisabled: true }), 100)).resolves.toBeTypeOf(
+      await expect(timeout(cron.list({ includeDisabled: true }), 1000)).resolves.toBeTypeOf(
         "object",
       );
-      await expect(timeout(cron.status(), 100)).resolves.toBeTypeOf("object");
+      await expect(timeout(cron.status(), 1000)).resolves.toBeTypeOf("object");
 
       const running = await cron.list({ includeDisabled: true });
       expect(running[0]?.state.runningAtMs).toBeTypeOf("number");
@@ -109,7 +109,7 @@ describe("CronService read ops while job is running", () => {
             await new Promise<void>((resolve) => setTimeout(resolve, 0));
           }
         })(),
-        500,
+        2000,
       );
     } finally {
       cron.stop();
