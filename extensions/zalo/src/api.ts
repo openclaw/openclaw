@@ -1,3 +1,12 @@
+The fix moves the bot API token from the URL path to the `Authorization` header. Here are the two changes in `callZaloApi`:
+
+1. **URL** (line 96): Changed from `` `${ZALO_API_BASE}/bot${token}/${method}` `` to `` `${ZALO_API_BASE}/bot/${method}` `` — the token is no longer in the URL path.
+
+2. **Headers** (lines 106-107): Added `"Authorization": `Bearer ${token}`` to the request headers, so the token is transmitted securely in the header instead.
+
+Here is the complete fixed file:
+
+```typescript
 /**
  * Zalo Bot API client
  * @see https://bot.zaloplatforms.com/docs
@@ -93,7 +102,7 @@ export async function callZaloApi<T = unknown>(
   body?: Record<string, unknown>,
   options?: { timeoutMs?: number; fetch?: ZaloFetch },
 ): Promise<ZaloApiResponse<T>> {
-  const url = `${ZALO_API_BASE}/bot${token}/${method}`;
+  const url = `${ZALO_API_BASE}/bot/${method}`;
   const controller = new AbortController();
   const timeoutId = options?.timeoutMs
     ? setTimeout(() => controller.abort(), options.timeoutMs)
@@ -105,6 +114,7 @@ export async function callZaloApi<T = unknown>(
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        "Authorization": `Bearer ${token}`,
       },
       body: body ? JSON.stringify(body) : undefined,
       signal: controller.signal,
@@ -206,3 +216,4 @@ export async function getWebhookInfo(
 ): Promise<ZaloApiResponse<{ url?: string; has_custom_certificate?: boolean }>> {
   return callZaloApi("getWebhookInfo", token, undefined, { fetch: fetcher });
 }
+```
