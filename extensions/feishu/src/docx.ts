@@ -31,6 +31,10 @@ function extractImageUrls(markdown: string): string[] {
   return urls;
 }
 
+function sleepMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 const BLOCK_TYPE_NAMES: Record<number, string> = {
   1: "Page",
   2: "Text",
@@ -283,6 +287,86 @@ async function createDoc(client: Lark.Client, title: string, folderToken?: strin
   };
 }
 
+async function createDocFromMarkdownViaImport(
+  client: Lark.Client,
+  title: string,
+  markdown: string,
+  folderToken: string,
+) {
+  const temp = await createDoc(client, `[tmp] ${title}`);
+  const tempDocToken = temp.document_id;
+  if (!tempDocToken) {
+    throw new Error("Failed to create temporary document for import");
+  }
+
+  try {
+    const uploadRes = await client.drive.media.uploadAll({
+      data: {
+        file_name: `${title}.md`,
+        parent_type: "docx_file",
+        parent_node: tempDocToken,
+        size: Buffer.byteLength(markdown, "utf-8"),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK stream/buffer typing variance
+        file: Buffer.from(markdown, "utf-8") as any,
+      },
+    });
+    const fileToken = uploadRes?.file_token;
+    if (!fileToken) {
+      throw new Error("Import upload failed: no file_token returned");
+    }
+
+    const importRes = await client.drive.importTask.create({
+      data: {
+        file_extension: "md",
+        file_token: fileToken,
+        type: "docx",
+        file_name: `${title}.md`,
+        point: { mount_type: 1, mount_key: folderToken },
+      },
+    });
+    if (importRes.code !== 0) {
+      throw new Error(importRes.msg || "Import task creation failed");
+    }
+    const ticket = importRes.data?.ticket;
+    if (!ticket) {
+      throw new Error("Import task creation failed: missing ticket");
+    }
+
+    const deadline = Date.now() + 60_000;
+    while (Date.now() < deadline) {
+      const pollRes = await client.drive.importTask.get({ path: { ticket } });
+      if (pollRes.code !== 0) {
+        throw new Error(pollRes.msg || "Import task polling failed");
+      }
+      const result = pollRes.data?.result;
+      if (result?.job_status === 0 && result.token) {
+        return {
+          success: true,
+          document_id: result.token,
+          title,
+          url: result.url || `https://feishu.cn/docx/${result.token}`,
+          method: "import_task",
+        };
+      }
+      if ((result?.job_status ?? -1) > 2) {
+        throw new Error(result?.job_error_msg || "Import task failed");
+      }
+      await sleepMs(2000);
+    }
+
+    throw new Error("Import task timeout after 60s");
+  } finally {
+    try {
+      await client.drive.file.delete({
+        path: { file_token: tempDocToken },
+        params: { type: "docx" },
+      });
+    } catch {
+      // Best-effort cleanup for temporary document.
+    }
+  }
+}
+
 async function writeDoc(client: Lark.Client, docToken: string, markdown: string, maxBytes: number) {
   const deleted = await clearDocumentContent(client, docToken);
 
@@ -470,7 +554,7 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
         name: "feishu_doc",
         label: "Feishu Doc",
         description:
-          "Feishu document operations. Actions: read, write, append, create, list_blocks, get_block, update_block, delete_block",
+          "Feishu document operations. Actions: read, write, append, create, create_from_markdown, list_blocks, get_block, update_block, delete_block",
         parameters: FeishuDocSchema,
         async execute(_toolCallId, params) {
           const p = params as FeishuDocParams;
@@ -485,6 +569,15 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
                 return json(await appendDoc(client, p.doc_token, p.content, mediaMaxBytes));
               case "create":
                 return json(await createDoc(client, p.title, p.folder_token));
+              case "create_from_markdown":
+                return json(
+                  await createDocFromMarkdownViaImport(
+                    client,
+                    p.title,
+                    p.content,
+                    p.folder_token,
+                  ),
+                );
               case "list_blocks":
                 return json(await listBlocks(client, p.doc_token));
               case "get_block":
