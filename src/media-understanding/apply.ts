@@ -317,11 +317,21 @@ function resolveTextMimeFromName(name?: string): string | undefined {
   return TEXT_EXT_MIME.get(ext);
 }
 
-function isBinaryMediaMime(mime?: string): boolean {
+export function isBinaryMediaMime(mime?: string): boolean {
   if (!mime) {
     return false;
   }
-  return mime.startsWith("image/") || mime.startsWith("audio/") || mime.startsWith("video/");
+  return (
+    mime.startsWith("image/") ||
+    mime.startsWith("audio/") ||
+    mime.startsWith("video/") ||
+    mime.startsWith("application/vnd.") ||
+    mime.startsWith("application/x-") ||
+    mime === "application/zip" ||
+    mime === "application/octet-stream" ||
+    mime === "application/pdf" ||
+    mime === "application/gzip"
+  );
 }
 
 async function extractFileBlocks(params: {
