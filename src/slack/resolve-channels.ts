@@ -26,7 +26,7 @@ type SlackListResponse = {
   response_metadata?: { next_cursor?: string };
 };
 
-function parseSlackChannelMention(raw: string): { id?: string; name?: string } {
+export function parseSlackChannelMention(raw: string): { id?: string; name?: string } {
   const trimmed = raw.trim();
   if (!trimmed) {
     return {};
@@ -45,7 +45,7 @@ function parseSlackChannelMention(raw: string): { id?: string; name?: string } {
   return name ? { name } : {};
 }
 
-async function listSlackChannels(client: WebClient): Promise<SlackChannelLookup[]> {
+export async function listSlackChannels(client: WebClient): Promise<SlackChannelLookup[]> {
   const channels: SlackChannelLookup[] = [];
   let cursor: string | undefined;
   do {
@@ -74,7 +74,7 @@ async function listSlackChannels(client: WebClient): Promise<SlackChannelLookup[
   return channels;
 }
 
-function resolveByName(
+export function resolveByName(
   name: string,
   channels: SlackChannelLookup[],
 ): SlackChannelLookup | undefined {
