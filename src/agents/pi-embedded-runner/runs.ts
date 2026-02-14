@@ -8,6 +8,7 @@ type EmbeddedPiQueueHandle = {
   queueMessage: (text: string) => Promise<void>;
   isStreaming: () => boolean;
   isCompacting: () => boolean;
+  isToolRunning?: () => boolean;
   abort: () => void;
 };
 
@@ -30,6 +31,16 @@ export function queueEmbeddedPiMessage(sessionId: string, text: string): boolean
   }
   if (handle.isCompacting()) {
     diag.debug(`queue message failed: sessionId=${sessionId} reason=compacting`);
+    return false;
+  }
+  // Prevent steering messages while tools are executing.
+  // Injecting a user message between tool_use and tool_result breaks
+  // Anthropic's strict pairing requirement, causing API rejection.
+  // Returning false lets the caller fall through to the queue path
+  // (enqueueAnnounce), which will deliver the message after the
+  // current tool loop completes.
+  if (handle.isToolRunning?.()) {
+    diag.debug(`queue message failed: sessionId=${sessionId} reason=tool_running`);
     return false;
   }
   logMessageQueued({ sessionId, source: "pi-embedded-runner" });

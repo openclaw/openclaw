@@ -607,6 +607,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     toolMetas,
     unsubscribe,
     isCompacting: () => state.compactionInFlight || state.pendingCompactionRetry > 0,
+    isToolRunning: () => state.toolMetaById.size > 0,
     getMessagingToolSentTexts: () => messagingToolSentTexts.slice(),
     getMessagingToolSentTargets: () => messagingToolSentTargets.slice(),
     // Returns true if any messaging tool successfully sent a message.

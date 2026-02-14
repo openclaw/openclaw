@@ -754,6 +754,7 @@ export async function runEmbeddedAttempt(
         },
         isStreaming: () => activeSession.isStreaming,
         isCompacting: () => subscription.isCompacting(),
+        isToolRunning: () => subscription.isToolRunning(),
         abort: abortRun,
       };
       setActiveEmbeddedRun(params.sessionId, queueHandle);
