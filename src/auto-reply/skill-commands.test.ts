@@ -1,8 +1,50 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
-import { listSkillCommandsForAgents, resolveSkillCommandInvocation } from "./skill-commands.js";
+import { beforeAll, describe, expect, it, vi } from "vitest";
+
+// Avoid importing/parsing the full skills loader + user home skills during unit tests.
+vi.mock("@mariozechner/pi-coding-agent", () => ({
+  formatSkillsForPrompt: () => "",
+  loadSkillsFromDir: ({ dir, source }: { dir: string; source: string }) => {
+    try {
+      const entries = fsSync.readdirSync(dir, { withFileTypes: true });
+      const skills = entries
+        .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
+        .map((entry) => {
+          const baseDir = path.join(dir, entry.name);
+          const filePath = path.join(baseDir, "SKILL.md");
+          if (!fsSync.existsSync(filePath)) {
+            return null;
+          }
+          let raw = "";
+          try {
+            raw = fsSync.readFileSync(filePath, "utf-8");
+          } catch {
+            return null;
+          }
+          const nameMatch = raw.match(/^\s*name:\s*(.+)\s*$/m);
+          const descriptionMatch = raw.match(/^\s*description:\s*(.+)\s*$/m);
+          const name = (nameMatch?.[1] ?? entry.name).trim();
+          const description = (descriptionMatch?.[1] ?? "").trim();
+          return { name, description, source, filePath, baseDir };
+        })
+        .filter(Boolean);
+      return { skills };
+    } catch {
+      return { skills: [] };
+    }
+  },
+}));
+
+let listSkillCommandsForAgents: typeof import("./skill-commands.js").listSkillCommandsForAgents;
+let resolveSkillCommandInvocation: typeof import("./skill-commands.js").resolveSkillCommandInvocation;
+
+beforeAll(async () => {
+  ({ listSkillCommandsForAgents, resolveSkillCommandInvocation } =
+    await import("./skill-commands.js"));
+});
 
 async function writeSkill(params: {
   workspaceDir: string;
