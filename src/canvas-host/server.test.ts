@@ -10,6 +10,43 @@ import { defaultRuntime } from "../runtime.js";
 import { A2UI_PATH, CANVAS_HOST_PATH, CANVAS_WS_PATH, injectCanvasLiveReload } from "./a2ui.js";
 import { createCanvasHostHandler, startCanvasHost } from "./server.js";
 
+const chokidarMockState = vi.hoisted(() => ({
+  watchers: [] as Array<{
+    on: (event: string, cb: (...args: unknown[]) => void) => unknown;
+    close: () => Promise<void>;
+    __emit: (event: string, ...args: unknown[]) => void;
+  }>,
+}));
+
+// Tests: avoid chokidar polling/fsevents; trigger "all" events manually.
+vi.mock("chokidar", () => {
+  const createWatcher = () => {
+    const handlers = new Map<string, Array<(...args: unknown[]) => void>>();
+    const api = {
+      on: (event: string, cb: (...args: unknown[]) => void) => {
+        const list = handlers.get(event) ?? [];
+        list.push(cb);
+        handlers.set(event, list);
+        return api;
+      },
+      close: async () => {},
+      __emit: (event: string, ...args: unknown[]) => {
+        for (const cb of handlers.get(event) ?? []) {
+          cb(...args);
+        }
+      },
+    };
+    chokidarMockState.watchers.push(api);
+    return api;
+  };
+
+  const watch = () => createWatcher();
+  return {
+    default: { watch },
+    watch,
+  };
+});
+
 describe("canvas host", () => {
   const quietRuntime = {
     ...defaultRuntime,
@@ -162,6 +199,7 @@ describe("canvas host", () => {
     const index = path.join(dir, "index.html");
     await fs.writeFile(index, "<html><body>v1</body></html>", "utf8");
 
+    const watcherStart = chokidarMockState.watchers.length;
     const server = await startCanvasHost({
       runtime: quietRuntime,
       rootDir: dir,
@@ -171,6 +209,9 @@ describe("canvas host", () => {
     });
 
     try {
+      const watcher = chokidarMockState.watchers[watcherStart];
+      expect(watcher).toBeTruthy();
+
       const res = await fetch(`http://127.0.0.1:${server.port}${CANVAS_HOST_PATH}/`);
       const html = await res.text();
       expect(res.status).toBe(200);
@@ -199,6 +240,7 @@ describe("canvas host", () => {
       });
 
       await fs.writeFile(index, "<html><body>v2</body></html>", "utf8");
+      watcher.__emit("all", "change", index);
       expect(await msg).toBe("reload");
       ws.close();
     } finally {
