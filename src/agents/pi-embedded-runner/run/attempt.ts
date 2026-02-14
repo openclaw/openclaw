@@ -91,6 +91,10 @@ import {
 import { splitSdkTools } from "../tool-split.js";
 import { describeUnknownError, mapThinkingLevel } from "../utils.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
+import {
+  selectCompactionTimeoutSnapshot,
+  shouldFlagCompactionTimeout,
+} from "./compaction-timeout.js";
 import { detectAndLoadPromptImages } from "./images.js";
 
 export function injectHistoryImagesIntoMessages(
@@ -770,9 +774,13 @@ export async function runEmbeddedAttempt(
               `embedded run timeout: runId=${params.runId} sessionId=${params.sessionId} timeoutMs=${params.timeoutMs}`,
             );
           }
-          // Check full compaction lifecycle (in-flight + pending retry) to avoid penalizing
-          // auth profiles for infrastructure timeouts during compaction.
-          if (subscription.isCompacting() || activeSession.isCompacting) {
+          if (
+            shouldFlagCompactionTimeout({
+              isTimeout: true,
+              isCompactionPendingOrRetrying: subscription.isCompacting(),
+              isCompactionInFlight: activeSession.isCompacting,
+            })
+          ) {
             timedOutDuringCompaction = true;
           }
           abortRun(true);
@@ -797,7 +805,13 @@ export async function runEmbeddedAttempt(
       const onAbort = () => {
         const reason = params.abortSignal ? getAbortReason(params.abortSignal) : undefined;
         const timeout = reason ? isTimeoutError(reason) : false;
-        if (timeout && (subscription.isCompacting() || activeSession.isCompacting)) {
+        if (
+          shouldFlagCompactionTimeout({
+            isTimeout: timeout,
+            isCompactionPendingOrRetrying: subscription.isCompacting(),
+            isCompactionInFlight: activeSession.isCompacting,
+          })
+        ) {
           timedOutDuringCompaction = true;
         }
         abortRun(timeout, reason);
@@ -994,28 +1008,24 @@ export async function runEmbeddedAttempt(
           }
         }
 
-        // If timeout occurred during compaction, use pre-compaction snapshot
-        // (compaction doesn't add messages, just restructures them)
-        // Note: timedOutDuringCompaction is set in timeout handler to avoid race condition
+        // If timeout occurred during compaction, use pre-compaction snapshot when available
+        // (compaction restructures messages but does not add user/assistant turns).
+        const snapshotSelection = selectCompactionTimeoutSnapshot({
+          timedOutDuringCompaction,
+          preCompactionSnapshot,
+          preCompactionSessionId,
+          currentSnapshot: activeSession.messages.slice(),
+          currentSessionId: activeSession.sessionId,
+        });
         if (timedOutDuringCompaction) {
           if (!isProbeSession) {
             log.warn(
-              `using ${preCompactionSnapshot ? "pre-compaction" : "current"} snapshot: timed out during compaction runId=${params.runId} sessionId=${params.sessionId}`,
+              `using ${snapshotSelection.source} snapshot: timed out during compaction runId=${params.runId} sessionId=${params.sessionId}`,
             );
           }
-          // Use pre-compaction snapshot if available (captured when not compacting), otherwise current
-          // Keep sessionId consistent with whichever snapshot source is used
-          if (preCompactionSnapshot) {
-            messagesSnapshot = preCompactionSnapshot;
-            sessionIdUsed = preCompactionSessionId;
-          } else {
-            messagesSnapshot = activeSession.messages.slice();
-            sessionIdUsed = activeSession.sessionId;
-          }
-        } else {
-          messagesSnapshot = activeSession.messages.slice();
-          sessionIdUsed = activeSession.sessionId;
         }
+        messagesSnapshot = snapshotSelection.messagesSnapshot;
+        sessionIdUsed = snapshotSelection.sessionIdUsed;
         cacheTrace?.recordStage("session:after", {
           messages: messagesSnapshot,
           note: timedOutDuringCompaction
