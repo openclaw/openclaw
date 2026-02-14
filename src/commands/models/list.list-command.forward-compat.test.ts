@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 describe("modelsListCommand forward-compat", () => {
-  it("marks configured codex spark as missing when absent from the loaded registry", async () => {
+  it("does not mark configured codex spark as missing when fallback resolution is available", async () => {
     vi.resetModules();
     const printModelTable = vi.fn();
     const loadModelRegistry = vi
@@ -58,7 +58,7 @@ describe("modelsListCommand forward-compat", () => {
 
     const spark = rows.find((r) => r.key === "openai-codex/gpt-5.3-codex-spark");
     expect(spark).toBeTruthy();
-    expect(spark?.missing).toBe(true);
-    expect(spark?.tags).toContain("missing");
+    expect(spark?.missing).toBe(false);
+    expect(spark?.tags).not.toContain("missing");
   });
 });
