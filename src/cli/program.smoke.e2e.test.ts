@@ -1,68 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-
-const messageCommand = vi.fn();
-const statusCommand = vi.fn();
-const configureCommand = vi.fn();
-const configureCommandWithSections = vi.fn();
-const setupCommand = vi.fn();
-const onboardCommand = vi.fn();
-const callGateway = vi.fn();
-const runChannelLogin = vi.fn();
-const runChannelLogout = vi.fn();
-const runTui = vi.fn();
-const loadAndMaybeMigrateDoctorConfig = vi.fn();
-const ensureConfigReady = vi.fn();
-const ensurePluginRegistryLoaded = vi.fn();
-
-const runtime = {
-  log: vi.fn(),
-  error: vi.fn(),
-  exit: vi.fn(() => {
-    throw new Error("exit");
-  }),
-};
-
-vi.mock("./plugin-registry.js", () => ({
-  ensurePluginRegistryLoaded: () => undefined,
-}));
-
-vi.mock("../commands/message.js", () => ({ messageCommand }));
-vi.mock("../commands/status.js", () => ({ statusCommand }));
-vi.mock("../commands/configure.js", () => ({
-  CONFIGURE_WIZARD_SECTIONS: [
-    "workspace",
-    "model",
-    "web",
-    "gateway",
-    "daemon",
-    "channels",
-    "skills",
-    "health",
-  ],
+import {
   configureCommand,
-  configureCommandWithSections,
-}));
-vi.mock("../commands/setup.js", () => ({ setupCommand }));
-vi.mock("../commands/onboard.js", () => ({ onboardCommand }));
-vi.mock("../commands/doctor-config-flow.js", () => ({
-  loadAndMaybeMigrateDoctorConfig,
-}));
-vi.mock("../runtime.js", () => ({ defaultRuntime: runtime }));
-vi.mock("./channel-auth.js", () => ({ runChannelLogin, runChannelLogout }));
-vi.mock("../tui/tui.js", () => ({ runTui }));
-vi.mock("./plugin-registry.js", () => ({ ensurePluginRegistryLoaded }));
-vi.mock("./program/config-guard.js", () => ({ ensureConfigReady }));
-vi.mock("../gateway/call.js", () => ({
-  callGateway,
-  randomIdempotencyKey: () => "idem-test",
-  buildGatewayConnectionDetails: () => ({
-    url: "ws://127.0.0.1:1234",
-    urlSource: "test",
-    message: "Gateway target: ws://127.0.0.1:1234",
-  }),
-}));
-vi.mock("./deps.js", () => ({ createDefaultDeps: () => ({}) }));
-vi.mock("./preaction.js", () => ({ registerPreActionHooks: () => {} }));
+  ensureConfigReady,
+  installBaseProgramMocks,
+  installSmokeProgramMocks,
+  messageCommand,
+  onboardCommand,
+  runChannelLogin,
+  runChannelLogout,
+  runTui,
+  runtime,
+  setupCommand,
+  statusCommand,
+} from "./program.test-mocks.js";
+
+installBaseProgramMocks();
+installSmokeProgramMocks();
 
 const { buildProgram } = await import("./program.js");
 
