@@ -31,7 +31,9 @@ describe("ensureAgentWorkspace", () => {
     const result = await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
 
     await expect(fs.access(path.join(tempDir, DEFAULT_AGENTS_FILENAME))).resolves.toBeUndefined();
-    await expect(fs.access(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME))).resolves.toBeUndefined();
+    await expect(
+      fs.access(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME)),
+    ).resolves.toBeUndefined();
     await expect(fs.access(path.join(tempDir, DEFAULT_HEARTBEAT_FILENAME))).rejects.toThrow();
     expect("heartbeatPath" in result).toBe(false);
   });
