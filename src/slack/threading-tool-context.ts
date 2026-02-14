@@ -18,6 +18,7 @@ export function buildSlackThreadingToolContext(params: {
   const configuredReplyToMode = resolveSlackReplyToMode(account, params.context.ChatType);
   const effectiveReplyToMode = params.context.ThreadLabel ? "all" : configuredReplyToMode;
   const threadId = params.context.MessageThreadId ?? params.context.ReplyToId;
+  const messageId = params.context.MessageSidFull ?? params.context.MessageSid;
   return {
     currentChannelId: params.context.To?.startsWith("channel:")
       ? params.context.To.slice("channel:".length)
@@ -25,5 +26,6 @@ export function buildSlackThreadingToolContext(params: {
     currentThreadTs: threadId != null ? String(threadId) : undefined,
     replyToMode: effectiveReplyToMode,
     hasRepliedRef: params.hasRepliedRef,
+    message_id: messageId,
   };
 }

@@ -108,4 +108,38 @@ describe("buildSlackThreadingToolContext", () => {
     });
     expect(result.replyToMode).toBe("off");
   });
+
+  it("includes message_id when MessageSid is provided", () => {
+    const result = buildSlackThreadingToolContext({
+      cfg: emptyCfg,
+      accountId: null,
+      context: {
+        ChatType: "channel",
+        MessageSid: "1234567890.123456",
+      },
+    });
+    expect(result.message_id).toBe("1234567890.123456");
+  });
+
+  it("prefers MessageSidFull over MessageSid", () => {
+    const result = buildSlackThreadingToolContext({
+      cfg: emptyCfg,
+      accountId: null,
+      context: {
+        ChatType: "channel",
+        MessageSid: "short-id",
+        MessageSidFull: "1234567890.123456",
+      },
+    });
+    expect(result.message_id).toBe("1234567890.123456");
+  });
+
+  it("omits message_id when no MessageSid is provided", () => {
+    const result = buildSlackThreadingToolContext({
+      cfg: emptyCfg,
+      accountId: null,
+      context: { ChatType: "channel" },
+    });
+    expect(result.message_id).toBeUndefined();
+  });
 });

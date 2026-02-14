@@ -40,6 +40,11 @@ export type SlackActionContext = {
   replyToMode?: "off" | "first" | "all";
   /** Mutable ref to track if a reply was sent (for "first" mode). */
   hasRepliedRef?: { value: boolean };
+  /**
+   * The message ID of the current inbound message (e.g., message.ts for Slack).
+   * Tools like react, pin, etc. can use this to target the correct message.
+   */
+  message_id?: string;
 };
 
 /**
