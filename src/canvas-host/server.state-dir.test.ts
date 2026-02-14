@@ -1,13 +1,14 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { defaultRuntime } from "../runtime.js";
 import {
   restoreStateDirEnv,
   setStateDirEnv,
   snapshotStateDirEnv,
 } from "../test-helpers/state-dir-env.js";
+import { createCanvasHostHandler } from "./server.js";
 
 describe("canvas host state dir defaults", () => {
   let envSnapshot: ReturnType<typeof snapshotStateDirEnv>;
@@ -17,7 +18,6 @@ describe("canvas host state dir defaults", () => {
   });
 
   afterEach(() => {
-    vi.resetModules();
     restoreStateDirEnv(envSnapshot);
   });
 
@@ -25,9 +25,6 @@ describe("canvas host state dir defaults", () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-canvas-state-"));
     const stateDir = path.join(tempRoot, "state");
     setStateDirEnv(stateDir);
-    vi.resetModules();
-
-    const { createCanvasHostHandler } = await import("./server.js");
     const handler = await createCanvasHostHandler({
       runtime: defaultRuntime,
       allowInTests: true,

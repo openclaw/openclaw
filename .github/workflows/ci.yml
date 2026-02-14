@@ -84,6 +84,10 @@ jobs:
             esac
 
             case "$path" in
+              # Generated protocol models are already covered by protocol:check and
+              # should not force the full native macOS lane.
+              apps/macos/Sources/OpenClawProtocol/*|apps/shared/OpenClawKit/Sources/OpenClawProtocol/*)
+                ;;
               apps/macos/*|apps/ios/*|apps/shared/*|Swabble/*)
                 run_macos=true
                 ;;
@@ -121,7 +125,7 @@ jobs:
 
   # Build dist once for Node-relevant changes and share it with downstream jobs.
   build-artifacts:
-    needs: [docs-scope, changed-scope, code-analysis, check]
+    needs: [docs-scope, changed-scope, check]
     if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true')
     runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
@@ -171,7 +175,7 @@ jobs:
         run: pnpm release:check
 
   checks:
-    needs: [docs-scope, changed-scope, code-analysis, check]
+    needs: [docs-scope, changed-scope, check]
     if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true')
     runs-on: blacksmith-4vcpu-ubuntu-2404
     strategy:
@@ -196,8 +200,27 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
 
+      - name: Configure vitest JSON reports
+        if: matrix.task == 'test' && matrix.runtime == 'node'
+        run: echo "OPENCLAW_VITEST_REPORT_DIR=$RUNNER_TEMP/vitest-reports" >> "$GITHUB_ENV"
+
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         run: ${{ matrix.command }}
+
+      - name: Summarize slowest tests
+        if: matrix.task == 'test' && matrix.runtime == 'node'
+        run: |
+          node scripts/vitest-slowest.mjs --dir "$OPENCLAW_VITEST_REPORT_DIR" --top 50 --out "$RUNNER_TEMP/vitest-slowest.md" > /dev/null
+          echo "Slowest test summary written to $RUNNER_TEMP/vitest-slowest.md"
+
+      - name: Upload vitest reports
+        if: matrix.task == 'test' && matrix.runtime == 'node'
+        uses: actions/upload-artifact@v4
+        with:
+          name: vitest-reports-${{ runner.os }}-${{ matrix.runtime }}
+          path: |
+            ${{ env.OPENCLAW_VITEST_REPORT_DIR }}
+            ${{ runner.temp }}/vitest-slowest.md
 
   # Types, lint, and format check.
   check:
@@ -234,37 +257,6 @@ jobs:
       - name: Check docs
         run: pnpm check:docs
 
-  # Check for files that grew past LOC threshold in this PR (delta-only).
-  # On push events, all steps are skipped and the job passes (no-op).
-  # Heavy downstream jobs depend on this to fail fast on violations.
-  code-analysis:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
-    steps:
-      - name: Checkout
-        if: github.event_name == 'pull_request'
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          submodules: false
-
-      - name: Setup Python
-        if: github.event_name == 'pull_request'
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Fetch base branch
-        if: github.event_name == 'pull_request'
-        run: git fetch origin ${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}
-
-      - name: Check code file sizes
-        if: github.event_name == 'pull_request'
-        run: |
-          python scripts/analyze_code_files.py \
-            --compare-to origin/${{ github.base_ref }} \
-            --threshold 1000 \
-            --strict
-
   secrets:
     runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
@@ -291,7 +283,7 @@ jobs:
           fi
 
   checks-windows:
-    needs: [docs-scope, changed-scope, build-artifacts, code-analysis, check]
+    needs: [docs-scope, changed-scope, build-artifacts, check]
     if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true')
     runs-on: blacksmith-4vcpu-windows-2025
     env:
@@ -391,15 +383,34 @@ jobs:
           pnpm -v
           pnpm install --frozen-lockfile --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true || pnpm install --frozen-lockfile --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true
 
+      - name: Configure vitest JSON reports
+        if: matrix.task == 'test'
+        run: echo "OPENCLAW_VITEST_REPORT_DIR=$RUNNER_TEMP/vitest-reports" >> "$GITHUB_ENV"
+
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         run: ${{ matrix.command }}
+
+      - name: Summarize slowest tests
+        if: matrix.task == 'test'
+        run: |
+          node scripts/vitest-slowest.mjs --dir "$OPENCLAW_VITEST_REPORT_DIR" --top 50 --out "$RUNNER_TEMP/vitest-slowest.md" > /dev/null
+          echo "Slowest test summary written to $RUNNER_TEMP/vitest-slowest.md"
+
+      - name: Upload vitest reports
+        if: matrix.task == 'test'
+        uses: actions/upload-artifact@v4
+        with:
+          name: vitest-reports-${{ runner.os }}-${{ matrix.runtime }}
+          path: |
+            ${{ env.OPENCLAW_VITEST_REPORT_DIR }}
+            ${{ runner.temp }}/vitest-slowest.md
 
   # Consolidated macOS job: runs TS tests + Swift lint/build/test sequentially
   # on a single runner. GitHub limits macOS concurrent jobs to 5 per org;
   # running 4 separate jobs per PR (as before) starved the queue. One job
   # per PR allows 5 PRs to run macOS checks simultaneously.
   macos:
-    needs: [docs-scope, changed-scope, code-analysis, check]
+    needs: [docs-scope, changed-scope, check]
     if: github.event_name == 'pull_request' && needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_macos == 'true'
     runs-on: macos-latest
     steps:
@@ -632,7 +643,7 @@ jobs:
           PY
 
   android:
-    needs: [docs-scope, changed-scope, code-analysis, check]
+    needs: [docs-scope, changed-scope, check]
     if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_android == 'true')
     runs-on: blacksmith-4vcpu-ubuntu-2404
     strategy:

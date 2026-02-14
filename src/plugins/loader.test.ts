@@ -2,19 +2,19 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { loadOpenClawPlugins } from "./loader.js";
 
 type TempPlugin = { dir: string; file: string; id: string };
 
-const tempDirs: string[] = [];
+const fixtureRoot = path.join(os.tmpdir(), `openclaw-plugin-${randomUUID()}`);
+let tempDirIndex = 0;
 const prevBundledDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 const EMPTY_PLUGIN_SCHEMA = { type: "object", additionalProperties: false, properties: {} };
 
 function makeTempDir() {
-  const dir = path.join(os.tmpdir(), `openclaw-plugin-${randomUUID()}`);
+  const dir = path.join(fixtureRoot, `case-${tempDirIndex++}`);
   fs.mkdirSync(dir, { recursive: true });
-  tempDirs.push(dir);
   return dir;
 }
 
@@ -44,17 +44,18 @@ function writePlugin(params: {
 }
 
 afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    try {
-      fs.rmSync(dir, { recursive: true, force: true });
-    } catch {
-      // ignore cleanup failures
-    }
-  }
   if (prevBundledDir === undefined) {
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
   } else {
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = prevBundledDir;
+  }
+});
+
+afterAll(() => {
+  try {
+    fs.rmSync(fixtureRoot, { recursive: true, force: true });
+  } catch {
+    // ignore cleanup failures
   }
 });
 

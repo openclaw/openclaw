@@ -136,6 +136,47 @@ When E2EE is enabled, the bot will request verification from your other sessions
 Open Element (or another client) and approve the verification request to establish trust.
 Once verified, the bot can decrypt messages in encrypted rooms.
 
+## Multi-account
+
+Multi-account support: use `channels.matrix.accounts` with per-account credentials and optional `name`. See [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) for the shared pattern.
+
+Each account runs as a separate Matrix user on any homeserver. Per-account config
+inherits from the top-level `channels.matrix` settings and can override any option
+(DM policy, groups, encryption, etc.).
+
+```json5
+{
+  channels: {
+    matrix: {
+      enabled: true,
+      dm: { policy: "pairing" },
+      accounts: {
+        assistant: {
+          name: "Main assistant",
+          homeserver: "https://matrix.example.org",
+          accessToken: "syt_assistant_***",
+          encryption: true,
+        },
+        alerts: {
+          name: "Alerts bot",
+          homeserver: "https://matrix.example.org",
+          accessToken: "syt_alerts_***",
+          dm: { policy: "allowlist", allowFrom: ["@admin:example.org"] },
+        },
+      },
+    },
+  },
+}
+```
+
+Notes:
+
+- Account startup is serialized to avoid race conditions with concurrent module imports.
+- Env variables (`MATRIX_HOMESERVER`, `MATRIX_ACCESS_TOKEN`, etc.) only apply to the **default** account.
+- Base channel settings (DM policy, group policy, mention gating, etc.) apply to all accounts unless overridden per account.
+- Use `bindings[].match.accountId` to route each account to a different agent.
+- Crypto state is stored per account + access token (separate key stores per account).
+
 ## Routing model
 
 - Replies always go back to Matrix.
@@ -256,4 +297,5 @@ Provider options:
 - `channels.matrix.mediaMaxMb`: inbound/outbound media cap (MB).
 - `channels.matrix.autoJoin`: invite handling (`always | allowlist | off`, default: always).
 - `channels.matrix.autoJoinAllowlist`: allowed room IDs/aliases for auto-join.
+- `channels.matrix.accounts`: multi-account configuration keyed by account ID (each account inherits top-level settings).
 - `channels.matrix.actions`: per-action tool gating (reactions/messages/pins/memberInfo/channelInfo).

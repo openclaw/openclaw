@@ -1,5 +1,5 @@
-export const MAX_PAYLOAD_BYTES = 512 * 1024; // cap incoming frame size
-export const MAX_BUFFERED_BYTES = 1.5 * 1024 * 1024; // per-connection send buffer limit
+export const MAX_PAYLOAD_BYTES = 8 * 1024 * 1024; // cap incoming frame size (~8 MiB; fits ~5,000,000 decoded bytes as base64 + JSON overhead)
+export const MAX_BUFFERED_BYTES = 16 * 1024 * 1024; // per-connection send buffer limit (2x max payload)
 
 const DEFAULT_MAX_CHAT_HISTORY_MESSAGES_BYTES = 6 * 1024 * 1024; // keep history responses comfortably under client WS limits
 let maxChatHistoryMessagesBytes = DEFAULT_MAX_CHAT_HISTORY_MESSAGES_BYTES;

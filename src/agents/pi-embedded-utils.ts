@@ -1,7 +1,12 @@
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { stripReasoningTagsFromText } from "../shared/text/reasoning-tags.js";
 import { sanitizeUserFacingText } from "./pi-embedded-helpers.js";
 import { formatToolDetail, resolveToolDisplay } from "./tool-display.js";
+
+export function isAssistantMessage(msg: AgentMessage | undefined): msg is AssistantMessage {
+  return msg?.role === "assistant";
+}
 
 /**
  * Strip malformed Minimax tool invocations that leak into text content.
@@ -37,7 +42,7 @@ export function stripDowngradedToolCallText(text: string): string {
   if (!text) {
     return text;
   }
-  if (!/\[Tool (?:Call|Result)/i.test(text)) {
+  if (!/\[Tool (?:Call|Result)/i.test(text) && !/\[Historical context/i.test(text)) {
     return text;
   }
 
@@ -185,6 +190,9 @@ export function stripDowngradedToolCallText(text: string): string {
 
   // Remove [Tool Result for ID ...] blocks and their content.
   cleaned = cleaned.replace(/\[Tool Result for ID[^\]]*\]\n?[\s\S]*?(?=\n*\[Tool |\n*$)/gi, "");
+
+  // Remove [Historical context: ...] markers (self-contained within brackets).
+  cleaned = cleaned.replace(/\[Historical context:[^\]]*\]\n?/gi, "");
 
   return cleaned.trim();
 }

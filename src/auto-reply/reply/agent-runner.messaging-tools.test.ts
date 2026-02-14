@@ -151,7 +151,7 @@ describe("runReplyAgent messaging tool suppression", () => {
     expect(result).toMatchObject({ text: "hello world!" });
   });
 
-  it("persists usage even when replies are suppressed", async () => {
+  it("persists usage fields even when replies are suppressed", async () => {
     const storePath = path.join(
       await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-store-")),
       "sessions.json",
@@ -177,7 +177,42 @@ describe("runReplyAgent messaging tool suppression", () => {
 
     expect(result).toBeUndefined();
     const store = loadSessionStore(storePath, { skipCache: true });
-    expect(store[sessionKey]?.totalTokens ?? 0).toBeGreaterThan(0);
+    expect(store[sessionKey]?.inputTokens).toBe(10);
+    expect(store[sessionKey]?.outputTokens).toBe(5);
+    expect(store[sessionKey]?.totalTokens).toBeUndefined();
+    expect(store[sessionKey]?.totalTokensFresh).toBe(false);
+    expect(store[sessionKey]?.model).toBe("claude-opus-4-5");
+  });
+
+  it("persists totalTokens from promptTokens when snapshot is available", async () => {
+    const storePath = path.join(
+      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-store-")),
+      "sessions.json",
+    );
+    const sessionKey = "main";
+    const entry: SessionEntry = { sessionId: "session", updatedAt: Date.now() };
+    await saveSessionStore(storePath, { [sessionKey]: entry });
+
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello world!" }],
+      messagingToolSentTexts: ["different message"],
+      messagingToolSentTargets: [{ tool: "slack", provider: "slack", to: "channel:C1" }],
+      meta: {
+        agentMeta: {
+          usage: { input: 10, output: 5 },
+          promptTokens: 42_000,
+          model: "claude-opus-4-5",
+          provider: "anthropic",
+        },
+      },
+    });
+
+    const result = await createRun("slack", { storePath, sessionKey });
+
+    expect(result).toBeUndefined();
+    const store = loadSessionStore(storePath, { skipCache: true });
+    expect(store[sessionKey]?.totalTokens).toBe(42_000);
+    expect(store[sessionKey]?.totalTokensFresh).toBe(true);
     expect(store[sessionKey]?.model).toBe("claude-opus-4-5");
   });
 });

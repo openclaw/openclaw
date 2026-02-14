@@ -35,6 +35,18 @@ import Testing
         #expect(VoiceWakeRuntime._testHasContentAfterTrigger(text, triggers: triggers))
     }
 
+    @Test func trimsAfterChineseTriggerKeepsPostSpeech() {
+        let triggers = ["小爪", "openclaw"]
+        let text = "嘿 小爪 帮我打开设置"
+        #expect(VoiceWakeRuntime._testTrimmedAfterTrigger(text, triggers: triggers) == "帮我打开设置")
+    }
+
+    @Test func trimsAfterTriggerHandlesWidthInsensitiveForms() {
+        let triggers = ["openclaw"]
+        let text = "ＯｐｅｎＣｌａｗ 请帮我"
+        #expect(VoiceWakeRuntime._testTrimmedAfterTrigger(text, triggers: triggers) == "请帮我")
+    }
+
     @Test func gateRequiresGapBetweenTriggerAndCommand() {
         let transcript = "hey openclaw do thing"
         let segments = makeSegments(

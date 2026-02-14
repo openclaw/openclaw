@@ -45,6 +45,7 @@ Start with the smallest access that still works, then widen it as you gain confi
 - **Browser control exposure** (remote nodes, relay ports, remote CDP endpoints).
 - **Local disk hygiene** (permissions, symlinks, config includes, “synced folder” paths).
 - **Plugins** (extensions exist without an explicit allowlist).
+- **Policy drift/misconfig** (sandbox docker settings configured but sandbox mode off; ineffective `gateway.nodes.denyCommands` patterns; global `tools.profile="minimal"` overridden by per-agent profiles; extension plugin tools reachable under permissive tool policy).
 - **Model hygiene** (warn when configured models look legacy; not a hard block).
 
 If you run `--deep`, OpenClaw also attempts a best-effort live Gateway probe.
@@ -265,6 +266,9 @@ tool calls. Reduce the blast radius by:
 - Using a read-only or tool-disabled **reader agent** to summarize untrusted content,
   then pass the summary to your main agent.
 - Keeping `web_search` / `web_fetch` / `browser` off for tool-enabled agents unless needed.
+- For OpenResponses URL inputs (`input_file` / `input_image`), set tight
+  `gateway.http.endpoints.responses.files.urlAllowlist` and
+  `gateway.http.endpoints.responses.images.urlAllowlist`, and keep `maxUrlParts` low.
 - Enabling sandboxing and strict tool allowlists for any agent that touches untrusted input.
 - Keeping secrets out of prompts; pass them via env/config on the gateway host instead.
 
@@ -342,6 +346,16 @@ The Gateway multiplexes **WebSocket + HTTP** on a single port:
 
 - Default: `18789`
 - Config/flags/env: `gateway.port`, `--port`, `OPENCLAW_GATEWAY_PORT`
+
+This HTTP surface includes the Control UI and the canvas host:
+
+- Control UI (SPA assets) (default base path `/`)
+- Canvas host: `/__openclaw__/canvas/` and `/__openclaw__/a2ui/` (arbitrary HTML/JS; treat as untrusted content)
+
+If you load canvas content in a normal browser, treat it like any other untrusted web page:
+
+- Don't expose the canvas host to untrusted networks/users.
+- Don't make canvas content share the same origin as privileged web surfaces unless you fully understand the implications.
 
 Bind mode controls where the Gateway listens:
 
@@ -435,6 +449,7 @@ Auth modes:
 
 - `gateway.auth.mode: "token"`: shared bearer token (recommended for most setups).
 - `gateway.auth.mode: "password"`: password auth (prefer setting via env: `OPENCLAW_GATEWAY_PASSWORD`).
+- `gateway.auth.mode: "trusted-proxy"`: trust an identity-aware reverse proxy to authenticate users and pass identity via headers (see [Trusted Proxy Auth](/gateway/trusted-proxy-auth)).
 
 Rotation checklist (token/password):
 
@@ -455,7 +470,7 @@ injected by Tailscale.
 
 **Security rule:** do not forward these headers from your own reverse proxy. If
 you terminate TLS or proxy in front of the gateway, disable
-`gateway.auth.allowTailscale` and use token/password auth instead.
+`gateway.auth.allowTailscale` and use token/password auth (or [Trusted Proxy Auth](/gateway/trusted-proxy-auth)) instead.
 
 Trusted proxies:
 
@@ -798,22 +813,6 @@ Commit the updated `.secrets.baseline` once it reflects the intended state.
 ## The Trust Hierarchy
 
 ```mermaid
-%%{init: {
-  'theme': 'base',
-  'themeVariables': {
-    'primaryColor': '#ffffff',
-    'primaryTextColor': '#000000',
-    'primaryBorderColor': '#000000',
-    'lineColor': '#000000',
-    'secondaryColor': '#f9f9fb',
-    'tertiaryColor': '#ffffff',
-    'clusterBkg': '#f9f9fb',
-    'clusterBorder': '#000000',
-    'nodeBorder': '#000000',
-    'mainBkg': '#ffffff',
-    'edgeLabelBackground': '#ffffff'
-  }
-}}%%
 flowchart TB
     A["Owner (Peter)"] -- Full trust --> B["AI (Clawd)"]
     B -- Trust but verify --> C["Friends in allowlist"]

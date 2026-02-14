@@ -24,6 +24,14 @@
     "dark": "#FF5A36",
     "light": "#FF8A6B"
   },
+  "styling": {
+    "codeblocks": {
+      "theme": {
+        "dark": "min-dark",
+        "light": "min-light"
+      }
+    }
+  },
   "navbar": {
     "links": [
       {
@@ -310,6 +318,10 @@
     {
       "source": "/docker",
       "destination": "/install/docker"
+    },
+    {
+      "source": "/podman",
+      "destination": "/install/podman"
     },
     {
       "source": "/doctor",
@@ -778,6 +790,10 @@
     {
       "source": "/platforms/northflank",
       "destination": "/install/northflank"
+    },
+    {
+      "source": "/gateway/trusted-proxy",
+      "destination": "/gateway/trusted-proxy-auth"
     }
   ],
   "navigation": {
@@ -824,7 +840,13 @@
               },
               {
                 "group": "Other install methods",
-                "pages": ["install/docker", "install/nix", "install/ansible", "install/bun"]
+                "pages": [
+                  "install/docker",
+                  "install/podman",
+                  "install/nix",
+                  "install/ansible",
+                  "install/bun"
+                ]
               },
               {
                 "group": "Maintenance",
@@ -861,8 +883,8 @@
                 "pages": [
                   "channels/whatsapp",
                   "channels/telegram",
-                  "channels/grammy",
                   "channels/discord",
+                  "channels/irc",
                   "channels/slack",
                   "channels/feishu",
                   "channels/googlechat",
@@ -996,10 +1018,6 @@
                 ]
               },
               {
-                "group": "Hooks",
-                "pages": ["hooks/soul-evil"]
-              },
-              {
                 "group": "Media and devices",
                 "pages": [
                   "nodes/index",
@@ -1035,6 +1053,7 @@
                   "providers/anthropic",
                   "providers/openai",
                   "providers/openrouter",
+                  "providers/litellm",
                   "providers/bedrock",
                   "providers/vercel-ai-gateway",
                   "providers/moonshot",
@@ -1098,8 +1117,10 @@
                     "group": "Configuration and operations",
                     "pages": [
                       "gateway/configuration",
+                      "gateway/configuration-reference",
                       "gateway/configuration-examples",
                       "gateway/authentication",
+                      "gateway/trusted-proxy-auth",
                       "gateway/health",
                       "gateway/heartbeat",
                       "gateway/doctor",
@@ -1218,7 +1239,7 @@
               },
               {
                 "group": "Technical reference",
-                "pages": ["reference/wizard", "reference/token-use"]
+                "pages": ["reference/wizard", "reference/token-use", "channels/grammy"]
               },
               {
                 "group": "Concept internals",
@@ -1279,7 +1300,7 @@
               },
               {
                 "group": "Contributing",
-                "pages": ["help/submitting-a-pr", "help/submitting-an-issue", "ci"]
+                "pages": ["ci"]
               },
               {
                 "group": "Docs meta",
@@ -1376,7 +1397,6 @@
                 "pages": [
                   "zh-CN/channels/whatsapp",
                   "zh-CN/channels/telegram",
-                  "zh-CN/channels/grammy",
                   "zh-CN/channels/discord",
                   "zh-CN/channels/slack",
                   "zh-CN/channels/feishu",
@@ -1513,10 +1533,6 @@
                   "zh-CN/automation/poll",
                   "zh-CN/automation/auth-monitoring"
                 ]
-              },
-              {
-                "group": "Hooks",
-                "pages": ["zh-CN/hooks/soul-evil"]
               },
               {
                 "group": "媒体与设备",
@@ -1810,10 +1826,6 @@
               {
                 "group": "开发者设置",
                 "pages": ["zh-CN/start/setup"]
-              },
-              {
-                "group": "贡献",
-                "pages": ["zh-CN/help/submitting-a-pr", "zh-CN/help/submitting-an-issue"]
               },
               {
                 "group": "文档元信息",

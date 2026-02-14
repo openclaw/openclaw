@@ -6,6 +6,7 @@ import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { formatToolAggregate } from "../../../auto-reply/tool-meta.js";
 import {
+  BILLING_ERROR_USER_MESSAGE,
   formatAssistantErrorText,
   formatRawAssistantErrorForUi,
   getApiErrorPayloadFingerprint,
@@ -27,6 +28,7 @@ export function buildEmbeddedRunPayloads(params: {
   lastToolError?: { toolName: string; meta?: string; error?: string };
   config?: OpenClawConfig;
   sessionKey: string;
+  provider?: string;
   verboseLevel?: VerboseLevel;
   reasoningLevel?: ReasoningLevel;
   toolResultFormat?: ToolResultFormat;
@@ -57,6 +59,7 @@ export function buildEmbeddedRunPayloads(params: {
     ? formatAssistantErrorText(params.lastAssistant, {
         cfg: params.config,
         sessionKey: params.sessionKey,
+        provider: params.provider,
       })
     : undefined;
   const rawErrorMessage = lastAssistantErrored
@@ -75,6 +78,7 @@ export function buildEmbeddedRunPayloads(params: {
     ? normalizeTextForComparison(rawErrorMessage)
     : null;
   const normalizedErrorText = errorText ? normalizeTextForComparison(errorText) : null;
+  const normalizedGenericBillingErrorText = normalizeTextForComparison(BILLING_ERROR_USER_MESSAGE);
   const genericErrorText = "The AI service returned an error. Please try again.";
   if (errorText) {
     replyItems.push({ text: errorText, isError: true });
@@ -131,6 +135,13 @@ export function buildEmbeddedRunPayloads(params: {
         return true;
       }
       if (trimmed === genericErrorText) {
+        return true;
+      }
+      if (
+        normalized &&
+        normalizedGenericBillingErrorText &&
+        normalized === normalizedGenericBillingErrorText
+      ) {
         return true;
       }
     }

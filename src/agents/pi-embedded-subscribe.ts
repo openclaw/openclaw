@@ -1,3 +1,4 @@
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { InlineCodeState } from "../markdown/code-spans.js";
 import type {
   EmbeddedPiSubscribeContext,
@@ -7,6 +8,7 @@ import type { SubscribeEmbeddedPiSessionParams } from "./pi-embedded-subscribe.t
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
+import { emitAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { buildCodeSpanIndex, createInlineCodeState } from "../markdown/code-spans.js";
 import { EmbeddedBlockChunker } from "./pi-embedded-block-chunker.js";
@@ -15,7 +17,7 @@ import {
   normalizeTextForComparison,
 } from "./pi-embedded-helpers.js";
 import { createEmbeddedPiSessionEventHandler } from "./pi-embedded-subscribe.handlers.js";
-import { formatReasoningMessage } from "./pi-embedded-utils.js";
+import { formatReasoningMessage, stripDowngradedToolCallText } from "./pi-embedded-utils.js";
 import { hasNonzeroUsage, normalizeUsage, type UsageLike } from "./usage.js";
 
 const THINKING_TAG_SCAN_RE = /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\s*>/gi;
@@ -449,7 +451,8 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       return;
     }
     // Strip <think> and <final> blocks across chunk boundaries to avoid leaking reasoning.
-    const chunk = stripBlockTags(text, state.blockState).trimEnd();
+    // Also strip downgraded tool call text ([Tool Call: ...], [Historical context: ...], etc.).
+    const chunk = stripDowngradedToolCallText(stripBlockTags(text, state.blockState)).trimEnd();
     if (!chunk) {
       return;
     }
@@ -532,7 +535,22 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     if (formatted === state.lastStreamedReasoning) {
       return;
     }
+    // Compute delta: new text since the last emitted reasoning.
+    // Guard against non-prefix changes (e.g. trim/format altering earlier content).
+    const prior = state.lastStreamedReasoning ?? "";
+    const delta = formatted.startsWith(prior) ? formatted.slice(prior.length) : formatted;
     state.lastStreamedReasoning = formatted;
+
+    // Broadcast thinking event to WebSocket clients in real-time
+    emitAgentEvent({
+      runId: params.runId,
+      stream: "thinking",
+      data: {
+        text: formatted,
+        delta,
+      },
+    });
+
     void params.onReasoningStream({
       text: formatted,
     });
@@ -552,12 +570,20 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     resetAssistantMessageState(0);
   };
 
+  const noteLastAssistant = (msg: AgentMessage) => {
+    if (msg?.role === "assistant") {
+      state.lastAssistant = msg;
+    }
+  };
+
   const ctx: EmbeddedPiSubscribeContext = {
     params,
     state,
     log,
     blockChunking,
     blockChunker,
+    hookRunner: params.hookRunner,
+    noteLastAssistant,
     shouldEmitToolResult,
     shouldEmitToolOutput,
     emitToolSummary,

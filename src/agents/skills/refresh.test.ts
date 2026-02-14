@@ -1,3 +1,4 @@
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 const watchMock = vi.fn(() => ({
@@ -17,9 +18,17 @@ describe("ensureSkillsWatcher", () => {
     mod.ensureSkillsWatcher({ workspaceDir: "/tmp/workspace" });
 
     expect(watchMock).toHaveBeenCalledTimes(1);
+    const targets = watchMock.mock.calls[0]?.[0] as string[];
     const opts = watchMock.mock.calls[0]?.[1] as { ignored?: unknown };
 
     expect(opts.ignored).toBe(mod.DEFAULT_SKILLS_WATCH_IGNORED);
+    expect(targets).toEqual(
+      expect.arrayContaining([
+        path.join("/tmp/workspace", "skills", "SKILL.md"),
+        path.join("/tmp/workspace", "skills", "*", "SKILL.md"),
+      ]),
+    );
+    expect(targets.every((target) => target.includes("SKILL.md"))).toBe(true);
     const ignored = mod.DEFAULT_SKILLS_WATCH_IGNORED;
 
     // Node/JS paths

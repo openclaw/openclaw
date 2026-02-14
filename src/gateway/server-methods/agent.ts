@@ -17,6 +17,7 @@ import {
 } from "../../infra/outbound/agent-delivery.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
+import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
 import {
@@ -37,7 +38,12 @@ import {
   validateAgentParams,
   validateAgentWaitParams,
 } from "../protocol/index.js";
-import { loadSessionEntry } from "../session-utils.js";
+import {
+  canonicalizeSpawnedByForAgent,
+  loadSessionEntry,
+  pruneLegacyStoreKeys,
+  resolveGatewaySessionStoreTarget,
+} from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import { waitForAgentJob } from "./agent-job.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
@@ -85,6 +91,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       timeout?: number;
       label?: string;
       spawnedBy?: string;
+      inputProvenance?: InputProvenance;
     };
     const cfg = loadConfig();
     const idem = request.idempotencyKey;
@@ -97,6 +104,7 @@ export const agentHandlers: GatewayRequestHandlers = {
     let resolvedGroupSpace: string | undefined = groupSpaceRaw || undefined;
     let spawnedByValue =
       typeof request.spawnedBy === "string" ? request.spawnedBy.trim() : undefined;
+    const inputProvenance = normalizeInputProvenance(request.inputProvenance);
     const cached = context.dedupe.get(`agent:${idem}`);
     if (cached) {
       respond(cached.ok, cached.payload, cached.error, {
@@ -210,6 +218,7 @@ export const agentHandlers: GatewayRequestHandlers = {
     let sessionEntry: SessionEntry | undefined;
     let bestEffortDeliver = false;
     let cfgForAgent: ReturnType<typeof loadConfig> | undefined;
+    let resolvedSessionKey = requestedSessionKey;
 
     if (requestedSessionKey) {
       const { cfg, storePath, entry, canonicalKey } = loadSessionEntry(requestedSessionKey);
@@ -217,7 +226,12 @@ export const agentHandlers: GatewayRequestHandlers = {
       const now = Date.now();
       const sessionId = entry?.sessionId ?? randomUUID();
       const labelValue = request.label?.trim() || entry?.label;
-      spawnedByValue = spawnedByValue || entry?.spawnedBy;
+      const sessionAgent = resolveAgentIdFromSessionKey(canonicalKey);
+      spawnedByValue = canonicalizeSpawnedByForAgent(
+        cfg,
+        sessionAgent,
+        spawnedByValue || entry?.spawnedBy,
+      );
       let inheritedGroup:
         | { groupId?: string; groupChannel?: string; groupSpace?: string }
         | undefined;
@@ -265,7 +279,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       const sendPolicy = resolveSendPolicy({
         cfg,
         entry,
-        sessionKey: requestedSessionKey,
+        sessionKey: canonicalKey,
         channel: entry?.channel,
         chatType: entry?.chatType,
       });
@@ -279,21 +293,32 @@ export const agentHandlers: GatewayRequestHandlers = {
       }
       resolvedSessionId = sessionId;
       const canonicalSessionKey = canonicalKey;
+      resolvedSessionKey = canonicalSessionKey;
       const agentId = resolveAgentIdFromSessionKey(canonicalSessionKey);
       const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId });
       if (storePath) {
         await updateSessionStore(storePath, (store) => {
+          const target = resolveGatewaySessionStoreTarget({
+            cfg,
+            key: requestedSessionKey,
+            store,
+          });
+          pruneLegacyStoreKeys({
+            store,
+            canonicalKey: target.canonicalKey,
+            candidates: target.storeKeys,
+          });
           store[canonicalSessionKey] = nextEntry;
         });
       }
       if (canonicalSessionKey === mainSessionKey || canonicalSessionKey === "global") {
         context.addChatRun(idem, {
-          sessionKey: requestedSessionKey,
+          sessionKey: canonicalSessionKey,
           clientRunId: idem,
         });
         bestEffortDeliver = true;
       }
-      registerAgentRunContext(idem, { sessionKey: requestedSessionKey });
+      registerAgentRunContext(idem, { sessionKey: canonicalSessionKey });
     }
 
     const runId = idem;
@@ -304,6 +329,14 @@ export const agentHandlers: GatewayRequestHandlers = {
     );
     if (connId && wantsToolEvents) {
       context.registerToolEventRecipient(runId, connId);
+      // Register for any other active runs *in the same session* so
+      // late-joining clients (e.g. page refresh mid-response) receive
+      // in-progress tool events without leaking cross-session data.
+      for (const [activeRunId, active] of context.chatAbortControllers) {
+        if (activeRunId !== runId && active.sessionKey === requestedSessionKey) {
+          context.registerToolEventRecipient(activeRunId, connId);
+        }
+      }
     }
 
     const wantsDelivery = request.deliver === true;
@@ -367,7 +400,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         images,
         to: resolvedTo,
         sessionId: resolvedSessionId,
-        sessionKey: requestedSessionKey,
+        sessionKey: resolvedSessionKey,
         thinking: request.thinking,
         deliver,
         deliveryTargetMode,
@@ -392,6 +425,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         runId,
         lane: request.lane,
         extraSystemPrompt: request.extraSystemPrompt,
+        inputProvenance,
       },
       defaultRuntime,
       context.deps,

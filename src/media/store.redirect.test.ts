@@ -1,45 +1,44 @@
 import JSZip from "jszip";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { saveMediaSource, setMediaStoreNetworkDepsForTest } from "./store.js";
 
-const realOs = await vi.importActual<typeof import("node:os")>("node:os");
-const HOME = path.join(realOs.tmpdir(), "openclaw-home-redirect");
+const HOME = path.join(os.tmpdir(), "openclaw-home-redirect");
+const previousStateDir = process.env.OPENCLAW_STATE_DIR;
 const mockRequest = vi.fn();
-
-vi.doMock("node:os", () => ({
-  default: { homedir: () => HOME, tmpdir: () => realOs.tmpdir() },
-  homedir: () => HOME,
-  tmpdir: () => realOs.tmpdir(),
-}));
-
-vi.doMock("node:https", () => ({
-  request: (...args: unknown[]) => mockRequest(...args),
-}));
-vi.doMock("node:dns/promises", () => ({
-  lookup: async () => [{ address: "93.184.216.34", family: 4 }],
-}));
-
-const loadStore = async () => await import("./store.js");
 
 describe("media store redirects", () => {
   beforeAll(async () => {
     await fs.rm(HOME, { recursive: true, force: true });
+    process.env.OPENCLAW_STATE_DIR = HOME;
   });
 
   beforeEach(() => {
     mockRequest.mockReset();
-    vi.resetModules();
+    setMediaStoreNetworkDepsForTest({
+      httpRequest: (...args) => mockRequest(...args),
+      httpsRequest: (...args) => mockRequest(...args),
+      resolvePinnedHostname: async () => ({
+        lookup: async () => [{ address: "93.184.216.34", family: 4 }],
+      }),
+    });
   });
 
   afterAll(async () => {
     await fs.rm(HOME, { recursive: true, force: true });
+    if (previousStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previousStateDir;
+    }
+    setMediaStoreNetworkDepsForTest();
     vi.clearAllMocks();
   });
 
   it("follows redirects and keeps detected mime/extension", async () => {
-    const { saveMediaSource } = await loadStore();
     let call = 0;
     mockRequest.mockImplementation((_url, _opts, cb) => {
       call += 1;
@@ -84,7 +83,6 @@ describe("media store redirects", () => {
   });
 
   it("sniffs xlsx from zip content when headers and url extension are missing", async () => {
-    const { saveMediaSource } = await loadStore();
     mockRequest.mockImplementationOnce((_url, _opts, cb) => {
       const res = new PassThrough();
       const req = {
