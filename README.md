@@ -95,6 +95,17 @@ pnpm dispatch:stack:status
 pnpm dispatch:stack:down
 ```
 
+Dispatch CI parity gate (same command used by blocking CI):
+
+```bash
+pnpm dispatch:test:ci
+```
+
+Dispatch gate passing criteria:
+- TAP output includes `dispatch/tests/001_init_migration.node.test.mjs`.
+- TAP output includes `dispatch/tests/story_08_e2e_canonical.node.test.mjs`.
+- Test summary includes `fail 0`.
+
 ## Status
 
 This repository is intentionally in active scaffold-to-product migration.

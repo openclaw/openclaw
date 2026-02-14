@@ -419,12 +419,22 @@ test("MVP-01 endpoint parity path succeeds end-to-end with audit/idempotency gua
   assert.equal(invoice.status, 200);
   assert.equal(invoice.body.state, "INVOICED");
 
-  const ticket = await get(`/tickets/${ticketId}`);
+  const ticket = await get(`/tickets/${ticketId}`, {
+    "X-Actor-Id": "dispatcher-mvp01",
+    "X-Actor-Role": "dispatcher",
+    "X-Tool-Name": "ticket.get",
+    "X-Correlation-Id": "corr-mvp01",
+  });
   assert.equal(ticket.status, 200);
   assert.equal(ticket.body.id, ticketId);
   assert.equal(ticket.body.state, "INVOICED");
 
-  const invalidTicket = await get("/tickets/not-a-uuid");
+  const invalidTicket = await get("/tickets/not-a-uuid", {
+    "X-Actor-Id": "dispatcher-mvp01",
+    "X-Actor-Role": "dispatcher",
+    "X-Tool-Name": "ticket.get",
+    "X-Correlation-Id": "corr-mvp01",
+  });
   assert.equal(invalidTicket.status, 400);
   assert.equal(invalidTicket.body.error.code, "INVALID_TICKET_ID");
 
@@ -455,7 +465,12 @@ test("MVP-01 endpoint parity path succeeds end-to-end with audit/idempotency gua
     "ON_SITE->IN_PROGRESS:1",
   ]);
 
-  const timeline = await get(`/tickets/${ticketId}/timeline`);
+  const timeline = await get(`/tickets/${ticketId}/timeline`, {
+    "X-Actor-Id": "dispatcher-mvp01",
+    "X-Actor-Role": "dispatcher",
+    "X-Tool-Name": "ticket.timeline",
+    "X-Correlation-Id": "corr-mvp01",
+  });
   assert.equal(timeline.status, 200);
   assert.equal(Array.isArray(timeline.body.events), true);
   assert.equal(timeline.body.events.length >= 12, true);

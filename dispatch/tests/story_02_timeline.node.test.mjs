@@ -92,6 +92,15 @@ async function get(pathname, headers = {}) {
   };
 }
 
+function timelineReadHeaders(correlationId) {
+  return {
+    "X-Actor-Id": "dispatcher-2",
+    "X-Actor-Role": "dispatcher",
+    "X-Tool-Name": "ticket.timeline",
+    "X-Correlation-Id": correlationId,
+  };
+}
+
 function assertTimelineOrdered(events) {
   for (let i = 0; i < events.length - 1; i += 1) {
     const current = events[i];
@@ -240,7 +249,10 @@ test("timeline returns ordered complete audit events for each successful mutatio
   assert.equal(dispatch.status, 200);
   assert.equal(dispatch.body.state, "DISPATCHED");
 
-  const timeline = await get(`/tickets/${ticketId}/timeline`);
+  const timeline = await get(
+    `/tickets/${ticketId}/timeline`,
+    timelineReadHeaders("corr-story-02-timeline"),
+  );
   assert.equal(timeline.status, 200);
   assert.equal(timeline.body.ticket_id, ticketId);
   assert.equal(Array.isArray(timeline.body.events), true);
@@ -298,13 +310,19 @@ test("timeline returns ordered complete audit events for each successful mutatio
 });
 
 test("timeline returns 404 for unknown ticket id", async () => {
-  const response = await get("/tickets/ffffffff-ffff-4fff-8fff-ffffffffffff/timeline");
+  const response = await get(
+    "/tickets/ffffffff-ffff-4fff-8fff-ffffffffffff/timeline",
+    timelineReadHeaders("corr-story-02-timeline-404"),
+  );
   assert.equal(response.status, 404);
   assert.equal(response.body.error.code, "TICKET_NOT_FOUND");
 });
 
 test("timeline returns 400 for invalid ticket id format", async () => {
-  const response = await get("/tickets/not-a-uuid/timeline");
+  const response = await get(
+    "/tickets/not-a-uuid/timeline",
+    timelineReadHeaders("corr-story-02-timeline-400"),
+  );
   assert.equal(response.status, 400);
   assert.equal(response.body.error.code, "INVALID_TICKET_ID");
 });

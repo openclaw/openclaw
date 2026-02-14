@@ -52,6 +52,7 @@
     "dispatch:stack:down": "docker compose --env-file .env -f dispatch/ops/docker/docker-compose.dispatch.yml down --remove-orphans",
     "dispatch:stack:status": "docker compose --env-file .env -f dispatch/ops/docker/docker-compose.dispatch.yml ps",
     "dispatch:stack:logs": "docker compose --env-file .env -f dispatch/ops/docker/docker-compose.dispatch.yml logs -f",
+    "dispatch:test:ci": "node --test --test-concurrency=1 dispatch/tests/*.mjs",
     "dispatch:test:story01": "node --test dispatch/tests/story_01_idempotency.node.test.mjs",
     "docs:bin": "node scripts/build-docs-list.mjs",
     "docs:build": "cd docs && pnpm dlx --reporter append-only mint broken-links",

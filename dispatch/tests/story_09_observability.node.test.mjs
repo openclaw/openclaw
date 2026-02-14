@@ -262,6 +262,9 @@ test("structured logs include request/correlation fields and metrics counters ex
   assert.equal(conflict.body.error.code, "IDEMPOTENCY_PAYLOAD_MISMATCH");
 
   const invalidTimeline = await get("/tickets/not-a-uuid/timeline", {
+    "X-Actor-Id": "dispatcher-story09",
+    "X-Actor-Role": "dispatcher",
+    "X-Tool-Name": "ticket.timeline",
     "X-Correlation-Id": "corr-story09-invalid",
   });
   assert.equal(invalidTimeline.status, 400);

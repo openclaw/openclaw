@@ -944,3 +944,152 @@ Note on test execution:
 
 Next:
 - Start `MVP-03` production authn/authz claims integration and remove production reliance on actor headers.
+
+## 2026-02-14 04:36 PST
+
+### MVP-03
+Summary:
+Completed `MVP-03` by replacing production header-trust auth with signed claims validation, enforcing claim-bound role/tool authorization, and applying account/site scope checks across ticket read and write operations.
+
+Files Modified:
+- `dispatch/api/src/auth.mjs`
+- `dispatch/api/src/server.mjs`
+- `dispatch/tools-plugin/src/bridge.mjs`
+- `dispatch/api/README.md`
+- `dispatch/tools-plugin/README.md`
+- `dispatch/tests/mvp_03_auth_claims.node.test.mjs`
+- `dispatch/tests/mvp_01_api_parity.node.test.mjs`
+- `dispatch/tests/story_02_timeline.node.test.mjs`
+- `dispatch/tests/story_07_evidence_api.node.test.mjs`
+- `dispatch/tests/story_09_observability.node.test.mjs`
+- `dispatch/logs/backlog_status.md`
+- `dispatch/logs/current_work_item.md`
+- `dispatch/logs/next_story_recommendation.md`
+- `dispatch/logs/progress_log.md`
+
+Auth/Security Hardening Delivered:
+- Added claims auth runtime (`HS256` JWT verification) with fail-closed validation for:
+  - signature integrity
+  - expiry (`exp`)
+  - optional issuer/audience checks
+  - required `sub`/`role` claims
+- Production mode now rejects header-only actor context when dev-header fallback is disabled.
+- Added endpoint-level role/tool authorization for claims and dev-header paths.
+- Enforced account/site scope checks on:
+  - `POST /tickets` (create request scope)
+  - all ticket-bound command endpoints
+  - ticket read endpoints (`GET /tickets/{ticketId}`, `/timeline`, `/evidence`)
+
+Bridge/Read-Path Alignment:
+- Bridge now forwards actor and tool headers for read operations as well as mutating commands.
+- Read-path tests updated to provide explicit actor/tool context.
+
+Tests Added:
+- `dispatch/tests/mvp_03_auth_claims.node.test.mjs`
+  - production rejects header-only auth
+  - valid signed claims pass in-scope create/read
+  - forged/expired claims fail closed
+  - role and account/site scope enforcement blocks out-of-scope operations
+
+Validation Commands + Results:
+- `node --test --test-concurrency=1 dispatch/tests/mvp_03_auth_claims.node.test.mjs` -> PASS (4/4)
+- `node --test --test-concurrency=1 dispatch/tests/story_02_timeline.node.test.mjs dispatch/tests/story_04_tool_bridge.node.test.mjs dispatch/tests/story_07_evidence_api.node.test.mjs dispatch/tests/story_09_observability.node.test.mjs dispatch/tests/mvp_01_api_parity.node.test.mjs` -> PASS (13/13)
+- `node --test --test-concurrency=1 dispatch/tests/*.mjs` -> PASS (40/40)
+
+Outcome:
+- `MVP-03` is complete and validated.
+- Active item advanced to `MVP-04` (evidence/signature hardening).
+
+## 2026-02-14 06:13 PST
+
+### MVP-04
+Summary:
+Completed `MVP-04` by hardening closeout signature gating and evidence-reference validation so completion/verification fail closed when signature confirmation is missing or evidence references are not object-store resolvable.
+
+Files Modified:
+- `dispatch/api/src/server.mjs`
+- `dispatch/api/README.md`
+- `dispatch/tests/mvp_04_evidence_hardening.node.test.mjs`
+- `dispatch/tests/story_07_evidence_api.node.test.mjs`
+- `dispatch/tests/story_08_e2e_canonical.node.test.mjs`
+- `ai_dispatch_agile_project_package/backlog/backlog.csv`
+- `dispatch/logs/backlog_status.md`
+- `dispatch/logs/current_work_item.md`
+- `dispatch/logs/next_story_recommendation.md`
+- `dispatch/logs/progress_log.md`
+
+Evidence/Closeout Hardening Delivered:
+- `tech.complete` now enforces signature confirmation fail-closed:
+  - valid signature evidence present, or
+  - explicit `no_signature_reason` provided.
+- Added object-store evidence reference validation (`s3://`/`minio://` by default) on:
+  - `tech.complete`
+  - `qa.verify` (re-validates before state transition).
+- Added deterministic closeout errors for:
+  - `MISSING_SIGNATURE_CONFIRMATION`
+  - `INVALID_EVIDENCE_REFERENCE`
+- `qa.verify` now re-evaluates closeout readiness using latest completion context and persisted evidence.
+
+Tests Added/Updated:
+- Added `dispatch/tests/mvp_04_evidence_hardening.node.test.mjs`:
+  - missing signature + no reason fails closed
+  - explicit `no_signature_reason` path succeeds
+  - invalid evidence references fail on complete
+  - invalid references fail on verify re-check
+- Updated `dispatch/tests/story_07_evidence_api.node.test.mjs` for explicit no-signature-reason in missing-evidence path.
+- Updated `dispatch/tests/story_08_e2e_canonical.node.test.mjs` expected fail-closed code for pre-evidence completion attempt.
+
+Validation Commands + Results:
+- `node --test --test-concurrency=1 dispatch/tests/mvp_04_evidence_hardening.node.test.mjs` -> PASS (4/4)
+- `node --test --test-concurrency=1 dispatch/tests/story_08_e2e_canonical.node.test.mjs` -> PASS (1/1)
+- `node --test --test-concurrency=1 dispatch/tests/*.mjs` -> PASS (44/44)
+
+Outcome:
+- `MVP-04` is complete and validated.
+- Active item advanced to `MVP-05` (CI blocking quality gates).
+
+## 2026-02-14 06:17 PST
+
+### MVP-05
+Summary:
+Completed `MVP-05` by wiring a single deterministic dispatch gate command into CI as a blocking check and documenting release checklist criteria tied to explicit pass/fail outputs.
+
+Files Modified:
+- `.github/workflows/ci.yml`
+- `package.json`
+- `README.md`
+- `docs/reference/RELEASING.md`
+- `ai_dispatch_agile_project_package/backlog/backlog.csv`
+- `dispatch/logs/backlog_status.md`
+- `dispatch/logs/current_work_item.md`
+- `dispatch/logs/next_story_recommendation.md`
+- `dispatch/logs/progress_log.md`
+
+CI/Quality Gate Delivery:
+- Added one-command parity gate:
+  - `pnpm dispatch:test:ci` -> `node --test --test-concurrency=1 dispatch/tests/*.mjs`.
+- Added blocking CI matrix lane in `checks`:
+  - `task: dispatch-gates`
+  - `command: pnpm dispatch:test:ci`
+- Gate now fails PR validation on dispatch regressions across:
+  - migration contract checks
+  - auth and scope enforcement
+  - lifecycle state-machine transitions
+  - evidence and closeout fail-closed policies
+  - tool-bridge policy enforcement
+  - canonical emergency E2E chain
+  - observability and UX artifact contract tests
+
+Release Checklist/Operator Documentation:
+- Added dispatch CI parity gate usage and passing criteria to root `README.md`.
+- Added required `pnpm dispatch:test:ci` release blocker step to `docs/reference/RELEASING.md`.
+
+Validation Commands + Results:
+- `node --test --test-concurrency=1 dispatch/tests/*.mjs` -> PASS (44/44), summary includes `fail 0`.
+
+Environment note:
+- `pnpm`/`corepack` are unavailable in this local shell; validation used the exact command behind `pnpm dispatch:test:ci`.
+
+Outcome:
+- `MVP-05` is complete and validated.
+- Active item advanced to `MVP-06` (durable observability and runbook readiness).

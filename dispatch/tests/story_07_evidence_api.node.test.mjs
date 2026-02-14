@@ -93,6 +93,15 @@ async function get(pathname, headers = {}) {
   };
 }
 
+function evidenceReadHeaders(correlationId) {
+  return {
+    "X-Actor-Id": "tech-story07",
+    "X-Actor-Role": "tech",
+    "X-Tool-Name": "closeout.list_evidence",
+    "X-Correlation-Id": correlationId,
+  };
+}
+
 function nextRequestId() {
   const suffix = String(requestCounter).padStart(12, "0");
   requestCounter += 1;
@@ -197,7 +206,16 @@ async function addEvidence(ticketId, evidenceKey, index) {
   );
 }
 
-async function completeTicket(ticketId, checklistStatus) {
+async function completeTicket(ticketId, checklistStatus, options = {}) {
+  const payload = {
+    checklist_status: checklistStatus,
+  };
+  if (typeof options.no_signature_reason === "string" && options.no_signature_reason.trim() !== "") {
+    payload.no_signature_reason = options.no_signature_reason.trim();
+  }
+  if (Array.isArray(options.evidence_refs)) {
+    payload.evidence_refs = options.evidence_refs;
+  }
   return post(
     `/tickets/${ticketId}/tech/complete`,
     {
@@ -207,9 +225,7 @@ async function completeTicket(ticketId, checklistStatus) {
       "X-Tool-Name": "tech.complete",
       "X-Correlation-Id": `corr-story07-complete-${requestCounter}`,
     },
-    {
-      checklist_status: checklistStatus,
-    },
+    payload,
   );
 }
 
@@ -300,7 +316,10 @@ test("evidence can be attached/listed deterministically and writes audit events"
   const secondEvidence = await addEvidence(ticketId, "photo_after_latched_alignment", 2);
   assert.equal(secondEvidence.status, 201);
 
-  const listed = await get(`/tickets/${ticketId}/evidence`);
+  const listed = await get(
+    `/tickets/${ticketId}/evidence`,
+    evidenceReadHeaders("corr-story07-evidence-list"),
+  );
   assert.equal(listed.status, 200);
   assert.equal(listed.body.ticket_id, ticketId);
   assert.equal(Array.isArray(listed.body.evidence), true);
@@ -352,21 +371,24 @@ test("tech.complete fails closed when required evidence keys are missing", async
   const secondEvidence = await addEvidence(ticketId, "photo_after_latched_alignment", 12);
   assert.equal(secondEvidence.status, 201);
 
-  const complete = await completeTicket(ticketId, {
-    work_performed: true,
-    parts_used_or_needed: true,
-    resolution_status: true,
-    onsite_photos_after: true,
-    billing_authorization: true,
-  });
+  const complete = await completeTicket(
+    ticketId,
+    {
+      work_performed: true,
+      parts_used_or_needed: true,
+      resolution_status: true,
+      onsite_photos_after: true,
+      billing_authorization: true,
+    },
+    {
+      no_signature_reason: "Customer unavailable at time of completion",
+    },
+  );
 
   assert.equal(complete.status, 409);
   assert.equal(complete.body.error.code, "CLOSEOUT_REQUIREMENTS_INCOMPLETE");
   assert.equal(complete.body.error.requirement_code, "MISSING_EVIDENCE");
-  assert.deepEqual(complete.body.error.missing_evidence_keys, [
-    "note_adjustments_and_test_cycles",
-    "signature_or_no_signature_reason",
-  ]);
+  assert.deepEqual(complete.body.error.missing_evidence_keys, ["note_adjustments_and_test_cycles"]);
   assert.deepEqual(complete.body.error.missing_checklist_keys, []);
 
   assert.equal(psql(`SELECT state FROM tickets WHERE id = '${ticketId}';`), "IN_PROGRESS");
@@ -431,13 +453,19 @@ test("tech.complete succeeds when persisted evidence and checklist are complete"
 });
 
 test("evidence list rejects invalid ticket id format", async () => {
-  const listed = await get("/tickets/not-a-uuid/evidence");
+  const listed = await get(
+    "/tickets/not-a-uuid/evidence",
+    evidenceReadHeaders("corr-story07-evidence-list-400"),
+  );
   assert.equal(listed.status, 400);
   assert.equal(listed.body.error.code, "INVALID_TICKET_ID");
 });
 
 test("evidence list returns 404 for unknown ticket id", async () => {
-  const listed = await get("/tickets/ffffffff-ffff-4fff-8fff-ffffffffffff/evidence");
+  const listed = await get(
+    "/tickets/ffffffff-ffff-4fff-8fff-ffffffffffff/evidence",
+    evidenceReadHeaders("corr-story07-evidence-list-404"),
+  );
   assert.equal(listed.status, 404);
   assert.equal(listed.body.error.code, "TICKET_NOT_FOUND");
 });

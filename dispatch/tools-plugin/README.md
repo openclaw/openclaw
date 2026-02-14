@@ -28,3 +28,8 @@ This plugin is the control-plane bridge. It should expose only the closed dispat
 - `ticket.timeline` -> `GET /tickets/{ticketId}/timeline`
 
 Unknown tools and role/tool mismatches are rejected fail closed by the bridge before calling dispatch-api.
+
+Bridge forwarding behavior:
+
+- forwards `X-Actor-*` and `X-Tool-Name` headers for both mutating and read calls
+- forwards `Authorization: Bearer ...` when configured (for claims-based auth)

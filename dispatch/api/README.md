@@ -34,12 +34,18 @@ node dispatch/api/src/server.mjs
 - `GET /tickets/{ticketId}/evidence`
 - `GET /metrics`
 
-Each command endpoint currently requires deterministic dev headers:
+Each command endpoint requires:
 
 - `Idempotency-Key` (UUID, required)
-- `X-Actor-Id` (required)
-- `X-Actor-Role` (required)
-- `X-Tool-Name` (optional; default is endpoint tool mapping)
+
+Authentication/authorization:
+
+- Production path: `Authorization: Bearer <JWT>` signed with `HS256` (`DISPATCH_AUTH_JWT_SECRET`).
+- Required JWT claims: `sub`, `role`, `exp`, and account/site scope (`account_ids`, `site_ids`, or `scope.account_ids`/`scope.site_ids`).
+- Optional issuer/audience checks: `DISPATCH_AUTH_JWT_ISSUER`, `DISPATCH_AUTH_JWT_AUDIENCE`.
+- Development fallback (disabled by default in production): `X-Actor-Id`, `X-Actor-Role`, optional `X-Actor-Type`, optional `X-Tool-Name`.
+
+Ticket read endpoints (`GET /tickets/{ticketId}`, `GET /tickets/{ticketId}/timeline`, `GET /tickets/{ticketId}/evidence`) also enforce role/tool auth and account/site scope.
 
 ## Guarantees
 
@@ -49,7 +55,10 @@ Each command endpoint currently requires deterministic dev headers:
 - ticket mutation + audit event + state transition row on success
 - structured request logs for success/error paths with `request_id`, `correlation_id`, and `trace_id`
 - in-memory metrics snapshot export for requests/errors/transitions (`GET /metrics`)
+- closeout hardening:
+  - `tech.complete` requires signature evidence or explicit `no_signature_reason`
+  - completion/verification reject non-object-store or unresolvable evidence references
 
 ## Current gaps
 
-- production authn/authz claims middleware
+- external key management / JWKS support (current MVP uses shared `HS256` secret)

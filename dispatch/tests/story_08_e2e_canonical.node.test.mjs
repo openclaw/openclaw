@@ -285,11 +285,11 @@ test("canonical emergency scenario passes command-only with fail-closed missing-
         error.details.dispatch_error.error.code,
         "CLOSEOUT_REQUIREMENTS_INCOMPLETE",
       );
-      assert.equal(error.details.dispatch_error.error.requirement_code, "MISSING_EVIDENCE");
+      assert.equal(
+        error.details.dispatch_error.error.requirement_code,
+        "MISSING_SIGNATURE_CONFIRMATION",
+      );
       assert.deepEqual(error.details.dispatch_error.error.missing_evidence_keys, [
-        "note_risk_mitigation_and_customer_handoff",
-        "photo_after_temporary_or_permanent_securement",
-        "photo_before_security_risk",
         "signature_or_no_signature_reason",
       ]);
       return true;

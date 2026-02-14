@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 import { canonicalJsonHash } from "./canonical-json.mjs";
 import { closePool, getPool } from "./db.mjs";
+import { createAuthRuntime } from "./auth.mjs";
 import {
   HttpError,
   buildCorrelationId,
@@ -12,18 +13,16 @@ import {
   lowerHeader,
   nowIso,
   parseJsonBody,
-  requireHeader,
   requireUuidField,
   sendJson,
 } from "./http-utils.mjs";
 import {
   getCommandEndpointPolicy,
-  isRoleAllowedForCommandEndpoint,
-  isToolAllowedForCommandEndpoint,
 } from "../../shared/authorization-policy.mjs";
 import {
   IncidentTemplatePolicyError,
   evaluateCloseoutRequirements,
+  getIncidentTemplate,
 } from "../../workflow-engine/rules/closeout-required-evidence.mjs";
 
 const ticketRouteRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -206,48 +205,6 @@ function getCommandPolicy(endpoint) {
     throw new HttpError(500, "INTERNAL_ERROR", "Missing command authorization policy");
   }
   return policy;
-}
-
-function parseActorFromHeaders(headers, endpoint) {
-  const policy = getCommandPolicy(endpoint);
-  const actorId = requireHeader(
-    headers,
-    "x-actor-id",
-    "MISSING_ACTOR_CONTEXT",
-    "Header 'X-Actor-Id' is required",
-  );
-  const actorRole = requireHeader(
-    headers,
-    "x-actor-role",
-    "MISSING_ACTOR_CONTEXT",
-    "Header 'X-Actor-Role' is required",
-  ).toLowerCase();
-  const actorTypeRaw = lowerHeader(headers, "x-actor-type");
-  const actorType = actorTypeRaw ? actorTypeRaw.trim().toUpperCase() : "HUMAN";
-  const toolNameHeader = lowerHeader(headers, "x-tool-name");
-  const toolName = toolNameHeader?.trim() || policy.default_tool_name;
-
-  if (!["HUMAN", "AGENT", "SERVICE", "SYSTEM"].includes(actorType)) {
-    throw new HttpError(400, "INVALID_ACTOR_CONTEXT", "Header 'X-Actor-Type' must be valid");
-  }
-
-  if (!isRoleAllowedForCommandEndpoint(endpoint, actorRole)) {
-    throw new HttpError(403, "FORBIDDEN", `Actor role '${actorRole}' is not allowed for endpoint`);
-  }
-
-  if (!isToolAllowedForCommandEndpoint(endpoint, toolName)) {
-    throw new HttpError(403, "TOOL_NOT_ALLOWED", `Tool '${toolName}' is not allowed for endpoint`, {
-      endpoint,
-      tool_name: toolName,
-    });
-  }
-
-  return {
-    actorId,
-    actorRole,
-    actorType,
-    toolName,
-  };
 }
 
 function parseIdempotencyKey(headers) {
@@ -557,6 +514,177 @@ function parseIsoDate(value, fieldName) {
   return parsed.toISOString();
 }
 
+function assertTicketScope(authRuntime, actor, ticketLike) {
+  authRuntime.assertActorScopeForTarget(actor, {
+    accountId: ticketLike.account_id,
+    siteId: ticketLike.site_id,
+  });
+}
+
+function parseObjectStoreSchemes(value) {
+  const raw =
+    typeof value === "string" && value.trim() !== ""
+      ? value
+      : "s3,minio";
+  const entries = raw
+    .split(",")
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+  if (entries.length === 0) {
+    return new Set(["s3", "minio"]);
+  }
+  return new Set(entries);
+}
+
+function isObjectStoreResolvableUri(uri, objectStoreSchemes) {
+  if (typeof uri !== "string" || uri.trim() === "") {
+    return false;
+  }
+  try {
+    const parsed = new URL(uri.trim());
+    const protocol = parsed.protocol.endsWith(":")
+      ? parsed.protocol.slice(0, -1).toLowerCase()
+      : parsed.protocol.toLowerCase();
+    if (!objectStoreSchemes.has(protocol)) {
+      return false;
+    }
+    if (typeof parsed.hostname !== "string" || parsed.hostname.trim() === "") {
+      return false;
+    }
+    if (typeof parsed.pathname !== "string" || parsed.pathname.trim() === "" || parsed.pathname === "/") {
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function buildEvidenceLookup(rows) {
+  const byId = new Map();
+  const byUri = new Map();
+  const byEvidenceKey = new Map();
+
+  for (const row of rows) {
+    const rowId = String(row.id);
+    const rowUri = typeof row.uri === "string" ? row.uri.trim() : "";
+    byId.set(rowId, row);
+
+    if (rowUri !== "") {
+      if (!byUri.has(rowUri)) {
+        byUri.set(rowUri, []);
+      }
+      byUri.get(rowUri).push(row);
+    }
+
+    const evidenceKey = readEvidenceKeyFromMetadata(row.metadata);
+    if (evidenceKey) {
+      if (!byEvidenceKey.has(evidenceKey)) {
+        byEvidenceKey.set(evidenceKey, []);
+      }
+      byEvidenceKey.get(evidenceKey).push(row);
+    }
+  }
+
+  return {
+    byId,
+    byUri,
+    byEvidenceKey,
+  };
+}
+
+function resolveEvidenceReferenceCandidate(reference, lookup) {
+  if (isUuid(reference)) {
+    return lookup.byId.get(reference) ?? null;
+  }
+  const byUriMatches = lookup.byUri.get(reference);
+  if (Array.isArray(byUriMatches) && byUriMatches.length > 0) {
+    return byUriMatches[0];
+  }
+  return null;
+}
+
+function uniqueSorted(values) {
+  return [...new Set(values)].sort((left, right) => left.localeCompare(right));
+}
+
+function resolveCloseoutValidationContext(params) {
+  const {
+    incidentType,
+    noSignatureReason,
+    explicitEvidenceRefs,
+    evidenceRows,
+    objectStoreSchemes,
+  } = params;
+
+  const lookup = buildEvidenceLookup(evidenceRows);
+  const invalidEvidenceRefs = [];
+
+  const signatureEvidenceRows = evidenceRows.filter((row) => {
+    const kind = typeof row.kind === "string" ? row.kind.trim().toUpperCase() : "";
+    const evidenceKey = readEvidenceKeyFromMetadata(row.metadata);
+    return kind === "SIGNATURE" || evidenceKey === "signature_or_no_signature_reason";
+  });
+
+  if (signatureEvidenceRows.length === 0 && noSignatureReason === null) {
+    throw new HttpError(409, "CLOSEOUT_REQUIREMENTS_INCOMPLETE", "Closeout requirements are incomplete", {
+      requirement_code: "MISSING_SIGNATURE_CONFIRMATION",
+      incident_type: String(incidentType).trim().toUpperCase(),
+      template_version: null,
+      missing_evidence_keys: ["signature_or_no_signature_reason"],
+      missing_checklist_keys: [],
+      invalid_evidence_refs: [],
+    });
+  }
+
+  const template = getIncidentTemplate(incidentType);
+  const requiredEvidenceKeys = template ? template.required_evidence_keys : [];
+
+  for (const evidenceKey of requiredEvidenceKeys) {
+    if (
+      evidenceKey === "signature_or_no_signature_reason" &&
+      noSignatureReason !== null &&
+      signatureEvidenceRows.length === 0
+    ) {
+      continue;
+    }
+
+    const matchingRows = lookup.byEvidenceKey.get(evidenceKey) ?? [];
+    for (const row of matchingRows) {
+      const candidateUri = typeof row.uri === "string" ? row.uri.trim() : "";
+      if (!isObjectStoreResolvableUri(candidateUri, objectStoreSchemes)) {
+        invalidEvidenceRefs.push(candidateUri || String(row.id));
+      }
+    }
+  }
+
+  const referencesToValidate =
+    Array.isArray(explicitEvidenceRefs) && explicitEvidenceRefs.length > 0
+      ? explicitEvidenceRefs
+      : evidenceRows.map((row) => String(row.uri).trim()).filter((value) => value !== "");
+
+  for (const reference of referencesToValidate) {
+    const resolved = resolveEvidenceReferenceCandidate(reference, lookup);
+    if (!resolved) {
+      invalidEvidenceRefs.push(reference);
+      continue;
+    }
+    const resolvedUri = typeof resolved.uri === "string" ? resolved.uri.trim() : "";
+    if (!isObjectStoreResolvableUri(resolvedUri, objectStoreSchemes)) {
+      invalidEvidenceRefs.push(reference);
+    }
+  }
+
+  const invalidEvidenceRefsSorted = uniqueSorted(
+    invalidEvidenceRefs.filter((entry) => typeof entry === "string" && entry.trim() !== ""),
+  );
+
+  return {
+    signature_satisfied: signatureEvidenceRows.length > 0 || noSignatureReason !== null,
+    invalid_evidence_refs: invalidEvidenceRefsSorted,
+  };
+}
+
 async function runWithIdempotency(params) {
   const {
     pool,
@@ -661,7 +789,7 @@ async function runWithIdempotency(params) {
 }
 
 async function createTicketMutation(client, context) {
-  const { body, actor, requestId, correlationId, traceId, metrics } = context;
+  const { body, actor, requestId, correlationId, traceId, metrics, authRuntime } = context;
   ensureObject(body);
   requireUuidField(body.account_id, "account_id");
   requireUuidField(body.site_id, "site_id");
@@ -669,6 +797,10 @@ async function createTicketMutation(client, context) {
     requireUuidField(body.asset_id, "asset_id");
   }
   ensureString(body.summary, "summary");
+  authRuntime.assertActorScopeForTarget(actor, {
+    accountId: body.account_id,
+    siteId: body.site_id,
+  });
 
   const insertResult = await client.query(
     `
@@ -743,7 +875,7 @@ function resolveTriageTargetState(body) {
 }
 
 async function triageTicketMutation(client, context) {
-  const { ticketId, body, actor, requestId, correlationId, traceId, metrics } = context;
+  const { ticketId, body, actor, requestId, correlationId, traceId, metrics, authRuntime } = context;
   ensureObject(body);
   ensureString(body.priority, "priority");
   ensureString(body.incident_type, "incident_type");
@@ -758,6 +890,7 @@ async function triageTicketMutation(client, context) {
   const targetState = resolveTriageTargetState(body);
 
   const existing = await getTicketForUpdate(client, ticketId);
+  assertTicketScope(authRuntime, actor, existing);
   assertCommandStateAllowed("/tickets/{ticketId}/triage", existing.state, body);
 
   const update = await client.query(
@@ -880,7 +1013,7 @@ async function triageTicketMutation(client, context) {
 }
 
 async function proposeScheduleMutation(client, context) {
-  const { ticketId, body, actor, requestId, correlationId, traceId, metrics } = context;
+  const { ticketId, body, actor, requestId, correlationId, traceId, metrics, authRuntime } = context;
   ensureObject(body);
   ensureArrayField(body.options, "options");
   if (body.options.length === 0) {
@@ -904,6 +1037,7 @@ async function proposeScheduleMutation(client, context) {
   });
 
   const existing = await getTicketForUpdate(client, ticketId);
+  assertTicketScope(authRuntime, actor, existing);
   assertCommandStateAllowed("/tickets/{ticketId}/schedule/propose", existing.state, body);
 
   const firstWindow = options[0];
@@ -950,7 +1084,7 @@ async function proposeScheduleMutation(client, context) {
 }
 
 async function confirmScheduleMutation(client, context) {
-  const { ticketId, body, actor, requestId, correlationId, traceId, metrics } = context;
+  const { ticketId, body, actor, requestId, correlationId, traceId, metrics, authRuntime } = context;
   ensureObject(body);
   const start = parseIsoDate(body.start, "start");
   const end = parseIsoDate(body.end, "end");
@@ -960,6 +1094,7 @@ async function confirmScheduleMutation(client, context) {
   }
 
   const existing = await getTicketForUpdate(client, ticketId);
+  assertTicketScope(authRuntime, actor, existing);
   assertCommandStateAllowed("/tickets/{ticketId}/schedule/confirm", existing.state, body);
 
   const update = await client.query(
@@ -1003,7 +1138,7 @@ async function confirmScheduleMutation(client, context) {
 }
 
 async function dispatchAssignmentMutation(client, context) {
-  const { ticketId, body, actor, requestId, correlationId, traceId, metrics } = context;
+  const { ticketId, body, actor, requestId, correlationId, traceId, metrics, authRuntime } = context;
   ensureObject(body);
   requireUuidField(body.tech_id, "tech_id");
   if (body.provider_id != null) {
@@ -1011,6 +1146,7 @@ async function dispatchAssignmentMutation(client, context) {
   }
 
   const existing = await getTicketForUpdate(client, ticketId);
+  assertTicketScope(authRuntime, actor, existing);
   const dispatchMode = typeof body.dispatch_mode === "string" ? body.dispatch_mode.trim() : null;
   assertCommandStateAllowed("/tickets/{ticketId}/assignment/dispatch", existing.state, body);
 
@@ -1056,7 +1192,7 @@ async function dispatchAssignmentMutation(client, context) {
 }
 
 async function techCheckInMutation(client, context) {
-  const { ticketId, body, actor, requestId, correlationId, traceId, metrics } = context;
+  const { ticketId, body, actor, requestId, correlationId, traceId, metrics, authRuntime } = context;
   ensureObject(body);
   const timestamp = parseIsoDate(body.timestamp, "timestamp");
   if (body.location != null) {
@@ -1064,6 +1200,7 @@ async function techCheckInMutation(client, context) {
   }
 
   const existing = await getTicketForUpdate(client, ticketId);
+  assertTicketScope(authRuntime, actor, existing);
   assertCommandStateAllowed("/tickets/{ticketId}/tech/check-in", existing.state, body);
 
   const update = await client.query(
@@ -1121,7 +1258,7 @@ async function techCheckInMutation(client, context) {
 }
 
 async function techRequestChangeMutation(client, context) {
-  const { ticketId, body, actor, requestId, correlationId, traceId, metrics } = context;
+  const { ticketId, body, actor, requestId, correlationId, traceId, metrics, authRuntime } = context;
   ensureObject(body);
   ensureString(body.approval_type, "approval_type");
   ensureString(body.reason, "reason");
@@ -1150,6 +1287,7 @@ async function techRequestChangeMutation(client, context) {
   const evidenceRefs = normalizeOptionalStringArray(body.evidence_refs, "evidence_refs");
 
   const existing = await getTicketForUpdate(client, ticketId);
+  assertTicketScope(authRuntime, actor, existing);
   assertCommandStateAllowed("/tickets/{ticketId}/tech/request-change", existing.state, body);
 
   const approvalInsert = await client.query(
@@ -1233,7 +1371,7 @@ async function techRequestChangeMutation(client, context) {
 }
 
 async function approvalDecideMutation(client, context) {
-  const { ticketId, body, actor, requestId, correlationId, traceId, metrics } = context;
+  const { ticketId, body, actor, requestId, correlationId, traceId, metrics, authRuntime } = context;
   ensureObject(body);
   requireUuidField(body.approval_id, "approval_id");
   ensureString(body.decision, "decision");
@@ -1245,6 +1383,7 @@ async function approvalDecideMutation(client, context) {
   const notes = normalizeOptionalString(body.notes, "notes");
 
   const existing = await getTicketForUpdate(client, ticketId);
+  assertTicketScope(authRuntime, actor, existing);
   assertCommandStateAllowed("/tickets/{ticketId}/approval/decide", existing.state, body);
 
   const approvalResult = await client.query(
@@ -1343,7 +1482,17 @@ async function approvalDecideMutation(client, context) {
 }
 
 async function qaVerifyMutation(client, context) {
-  const { ticketId, body, actor, requestId, correlationId, traceId, metrics } = context;
+  const {
+    ticketId,
+    body,
+    actor,
+    requestId,
+    correlationId,
+    traceId,
+    metrics,
+    authRuntime,
+    objectStoreSchemes,
+  } = context;
   ensureObject(body);
   const verifiedAt = parseIsoDate(body.timestamp, "timestamp");
   ensureString(body.result, "result");
@@ -1354,12 +1503,136 @@ async function qaVerifyMutation(client, context) {
   }
 
   const existing = await getTicketForUpdate(client, ticketId);
+  assertTicketScope(authRuntime, actor, existing);
   assertCommandStateAllowed("/tickets/{ticketId}/qa/verify", existing.state, body);
 
   if (result === "FAIL") {
     throw new HttpError(409, "QA_VERIFICATION_FAILED", "QA verification failed", {
       ticket_id: ticketId,
       notes,
+    });
+  }
+
+  if (typeof existing.incident_type !== "string" || existing.incident_type.trim() === "") {
+    throw new HttpError(409, "CLOSEOUT_REQUIREMENTS_INCOMPLETE", "Closeout requirements are incomplete", {
+      requirement_code: "TEMPLATE_NOT_FOUND",
+      incident_type: null,
+      template_version: null,
+      missing_evidence_keys: [],
+      missing_checklist_keys: [],
+      invalid_evidence_refs: [],
+    });
+  }
+
+  const latestCompletion = await client.query(
+    `
+      SELECT payload
+      FROM audit_events
+      WHERE ticket_id = $1
+        AND tool_name = 'tech.complete'
+        AND after_state = 'COMPLETED_PENDING_VERIFICATION'
+      ORDER BY created_at DESC, id DESC
+      LIMIT 1
+    `,
+    [ticketId],
+  );
+
+  if (latestCompletion.rowCount === 0) {
+    throw new HttpError(409, "CLOSEOUT_REQUIREMENTS_INCOMPLETE", "Closeout requirements are incomplete", {
+      requirement_code: "MISSING_COMPLETION_CONTEXT",
+      incident_type: existing.incident_type ? existing.incident_type.trim().toUpperCase() : null,
+      template_version: null,
+      missing_evidence_keys: [],
+      missing_checklist_keys: [],
+      invalid_evidence_refs: [],
+    });
+  }
+
+  const completionPayload = latestCompletion.rows[0].payload;
+  const completionRequest =
+    completionPayload &&
+    typeof completionPayload === "object" &&
+    !Array.isArray(completionPayload) &&
+    completionPayload.request &&
+    typeof completionPayload.request === "object" &&
+    !Array.isArray(completionPayload.request)
+      ? completionPayload.request
+      : {};
+
+  const completionChecklist =
+    completionRequest.checklist_status &&
+    typeof completionRequest.checklist_status === "object" &&
+    !Array.isArray(completionRequest.checklist_status)
+      ? completionRequest.checklist_status
+      : {};
+
+  const completionNoSignatureReason =
+    typeof completionRequest.no_signature_reason === "string" &&
+    completionRequest.no_signature_reason.trim() !== ""
+      ? completionRequest.no_signature_reason.trim()
+      : null;
+
+  const completionEvidenceRefs = normalizeOptionalStringArray(
+    completionRequest.evidence_refs,
+    "completion_context.evidence_refs",
+  );
+
+  const evidenceResult = await client.query(
+    `
+      SELECT id, kind, uri, metadata
+      FROM evidence_items
+      WHERE ticket_id = $1
+      ORDER BY created_at ASC, id ASC
+    `,
+    [ticketId],
+  );
+
+  const verificationEvidenceValidation = resolveCloseoutValidationContext({
+    incidentType: existing.incident_type.trim(),
+    noSignatureReason: completionNoSignatureReason,
+    explicitEvidenceRefs: completionEvidenceRefs,
+    evidenceRows: evidenceResult.rows,
+    objectStoreSchemes,
+  });
+
+  if (verificationEvidenceValidation.invalid_evidence_refs.length > 0) {
+    throw new HttpError(409, "CLOSEOUT_REQUIREMENTS_INCOMPLETE", "Closeout requirements are incomplete", {
+      requirement_code: "INVALID_EVIDENCE_REFERENCE",
+      incident_type: existing.incident_type.trim().toUpperCase(),
+      template_version: null,
+      missing_evidence_keys: [],
+      missing_checklist_keys: [],
+      invalid_evidence_refs: verificationEvidenceValidation.invalid_evidence_refs,
+    });
+  }
+
+  const evidenceKeys = [];
+  for (const row of evidenceResult.rows) {
+    const evidenceKey = readEvidenceKeyFromMetadata(row.metadata);
+    if (evidenceKey) {
+      evidenceKeys.push(evidenceKey);
+    }
+  }
+  if (
+    verificationEvidenceValidation.signature_satisfied &&
+    !evidenceKeys.includes("signature_or_no_signature_reason")
+  ) {
+    evidenceKeys.push("signature_or_no_signature_reason");
+  }
+
+  const verifyCloseout = evaluateCloseoutRequirements({
+    incident_type: existing.incident_type.trim(),
+    evidence_items: evidenceKeys,
+    checklist_status: completionChecklist,
+  });
+  if (!verifyCloseout.ready) {
+    throw new HttpError(409, "CLOSEOUT_REQUIREMENTS_INCOMPLETE", "Closeout requirements are incomplete", {
+      requirement_code: verifyCloseout.code,
+      incident_type: verifyCloseout.incident_type,
+      template_version: verifyCloseout.template_version,
+      missing_evidence_keys: verifyCloseout.missing_evidence_keys,
+      missing_checklist_keys: verifyCloseout.missing_checklist_keys,
+      invalid_evidence_refs: [],
     });
   }
 
@@ -1395,6 +1668,8 @@ async function qaVerifyMutation(client, context) {
       verification_result: result,
       verified_at: verifiedAt,
       notes,
+      verification_closeout_check: verifyCloseout,
+      verification_evidence_refs: completionEvidenceRefs,
     },
   });
 
@@ -1405,10 +1680,11 @@ async function qaVerifyMutation(client, context) {
 }
 
 async function billingGenerateInvoiceMutation(client, context) {
-  const { ticketId, body, actor, requestId, correlationId, traceId, metrics } = context;
+  const { ticketId, body, actor, requestId, correlationId, traceId, metrics, authRuntime } = context;
   ensureObject(body);
 
   const existing = await getTicketForUpdate(client, ticketId);
+  assertTicketScope(authRuntime, actor, existing);
   assertCommandStateAllowed("/tickets/{ticketId}/billing/generate-invoice", existing.state, body);
 
   const update = await client.query(
@@ -1451,7 +1727,7 @@ async function billingGenerateInvoiceMutation(client, context) {
 }
 
 async function addEvidenceMutation(client, context) {
-  const { ticketId, body, actor, requestId, correlationId, traceId } = context;
+  const { ticketId, body, actor, requestId, correlationId, traceId, authRuntime } = context;
   ensureObject(body);
   ensureString(body.kind, "kind");
   ensureString(body.uri, "uri");
@@ -1469,6 +1745,7 @@ async function addEvidenceMutation(client, context) {
   }
 
   const existing = await getTicketForUpdate(client, ticketId);
+  assertTicketScope(authRuntime, actor, existing);
   assertCommandStateAllowed("/tickets/{ticketId}/evidence", existing.state, body);
 
   const insert = await client.query(
@@ -1514,11 +1791,24 @@ async function addEvidenceMutation(client, context) {
 }
 
 async function techCompleteMutation(client, context) {
-  const { ticketId, body, actor, requestId, correlationId, traceId, metrics } = context;
+  const {
+    ticketId,
+    body,
+    actor,
+    requestId,
+    correlationId,
+    traceId,
+    metrics,
+    authRuntime,
+    objectStoreSchemes,
+  } = context;
   ensureObject(body);
   ensureObjectField(body.checklist_status, "checklist_status");
+  const noSignatureReason = normalizeOptionalString(body.no_signature_reason, "no_signature_reason");
+  const explicitEvidenceRefs = normalizeOptionalStringArray(body.evidence_refs, "evidence_refs");
 
   const existing = await getTicketForUpdate(client, ticketId);
+  assertTicketScope(authRuntime, actor, existing);
   assertCommandStateAllowed("/tickets/{ticketId}/tech/complete", existing.state, body);
 
   if (typeof existing.incident_type !== "string" || existing.incident_type.trim() === "") {
@@ -1533,7 +1823,7 @@ async function techCompleteMutation(client, context) {
 
   const evidenceResult = await client.query(
     `
-      SELECT id, metadata
+      SELECT id, kind, uri, metadata
       FROM evidence_items
       WHERE ticket_id = $1
       ORDER BY created_at ASC, id ASC
@@ -1541,12 +1831,34 @@ async function techCompleteMutation(client, context) {
     [ticketId],
   );
 
+  const evidenceValidation = resolveCloseoutValidationContext({
+    incidentType: existing.incident_type.trim(),
+    noSignatureReason,
+    explicitEvidenceRefs,
+    evidenceRows: evidenceResult.rows,
+    objectStoreSchemes,
+  });
+
+  if (evidenceValidation.invalid_evidence_refs.length > 0) {
+    throw new HttpError(409, "CLOSEOUT_REQUIREMENTS_INCOMPLETE", "Closeout requirements are incomplete", {
+      requirement_code: "INVALID_EVIDENCE_REFERENCE",
+      incident_type: existing.incident_type.trim().toUpperCase(),
+      template_version: null,
+      missing_evidence_keys: [],
+      missing_checklist_keys: [],
+      invalid_evidence_refs: evidenceValidation.invalid_evidence_refs,
+    });
+  }
+
   const evidenceKeys = [];
   for (const row of evidenceResult.rows) {
     const evidenceKey = readEvidenceKeyFromMetadata(row.metadata);
     if (evidenceKey) {
       evidenceKeys.push(evidenceKey);
     }
+  }
+  if (evidenceValidation.signature_satisfied && !evidenceKeys.includes("signature_or_no_signature_reason")) {
+    evidenceKeys.push("signature_or_no_signature_reason");
   }
 
   let closeoutEvaluation;
@@ -1609,6 +1921,8 @@ async function techCompleteMutation(client, context) {
       requested_at: nowIso(),
       request: body,
       closeout_check: closeoutEvaluation,
+      no_signature_reason: noSignatureReason,
+      evidence_refs: explicitEvidenceRefs,
       persisted_evidence_count: evidenceResult.rowCount,
     },
   });
@@ -1794,6 +2108,10 @@ export function createDispatchApiServer(options = {}) {
   const port = Number(options.port ?? process.env.DISPATCH_API_PORT ?? "8080");
   const logger = options.logger ?? console;
   const metrics = options.metrics ?? createMetricsRegistry();
+  const authRuntime = createAuthRuntime(options.auth ?? {});
+  const objectStoreSchemes = parseObjectStoreSchemes(
+    options.objectStoreSchemes ?? process.env.DISPATCH_OBJECT_STORE_SCHEMES,
+  );
 
   const server = createServer(async (request, response) => {
     const requestStart = Date.now();
@@ -1887,7 +2205,12 @@ export function createDispatchApiServer(options = {}) {
     let actor = null;
     try {
       if (route.kind === "ticket") {
+        actor = authRuntime.resolveActor(request.headers, route);
         const ticket = await getTicket(pool, route.ticketId);
+        authRuntime.assertActorScopeForTarget(actor, {
+          accountId: ticket.account_id,
+          siteId: ticket.site_id,
+        });
         sendJson(response, 200, ticket);
         metrics.incrementRequest(requestMethod, route.endpoint, 200);
         emitStructuredLog(logger, "info", {
@@ -1897,10 +2220,10 @@ export function createDispatchApiServer(options = {}) {
           request_id: null,
           correlation_id: correlationId,
           trace_id: traceId,
-          actor_type: null,
-          actor_id: null,
-          actor_role: null,
-          tool_name: null,
+          actor_type: actor.actorType,
+          actor_id: actor.actorId,
+          actor_role: actor.actorRole,
+          tool_name: actor.toolName,
           ticket_id: route.ticketId,
           replay: false,
           status: 200,
@@ -1910,6 +2233,12 @@ export function createDispatchApiServer(options = {}) {
       }
 
       if (route.kind === "timeline") {
+        actor = authRuntime.resolveActor(request.headers, route);
+        const ticket = await getTicket(pool, route.ticketId);
+        authRuntime.assertActorScopeForTarget(actor, {
+          accountId: ticket.account_id,
+          siteId: ticket.site_id,
+        });
         const timeline = await getTicketTimeline(pool, route.ticketId);
         sendJson(response, 200, timeline);
         metrics.incrementRequest(requestMethod, route.endpoint, 200);
@@ -1920,10 +2249,10 @@ export function createDispatchApiServer(options = {}) {
           request_id: null,
           correlation_id: correlationId,
           trace_id: traceId,
-          actor_type: null,
-          actor_id: null,
-          actor_role: null,
-          tool_name: null,
+          actor_type: actor.actorType,
+          actor_id: actor.actorId,
+          actor_role: actor.actorRole,
+          tool_name: actor.toolName,
           ticket_id: route.ticketId,
           replay: false,
           status: 200,
@@ -1933,6 +2262,12 @@ export function createDispatchApiServer(options = {}) {
       }
 
       if (route.kind === "evidence") {
+        actor = authRuntime.resolveActor(request.headers, route);
+        const ticket = await getTicket(pool, route.ticketId);
+        authRuntime.assertActorScopeForTarget(actor, {
+          accountId: ticket.account_id,
+          siteId: ticket.site_id,
+        });
         const evidence = await getTicketEvidence(pool, route.ticketId);
         sendJson(response, 200, evidence);
         metrics.incrementRequest(requestMethod, route.endpoint, 200);
@@ -1943,10 +2278,10 @@ export function createDispatchApiServer(options = {}) {
           request_id: null,
           correlation_id: correlationId,
           trace_id: traceId,
-          actor_type: null,
-          actor_id: null,
-          actor_role: null,
-          tool_name: null,
+          actor_type: actor.actorType,
+          actor_id: actor.actorId,
+          actor_role: actor.actorRole,
+          tool_name: actor.toolName,
           ticket_id: route.ticketId,
           replay: false,
           status: 200,
@@ -1961,7 +2296,7 @@ export function createDispatchApiServer(options = {}) {
 
       const body = await parseJsonBody(request);
       requestId = parseIdempotencyKey(request.headers);
-      actor = parseActorFromHeaders(request.headers, route.endpoint);
+      actor = authRuntime.resolveActor(request.headers, route);
 
       const result = await runWithIdempotency({
         pool,
@@ -1978,6 +2313,8 @@ export function createDispatchApiServer(options = {}) {
             correlationId,
             traceId,
             metrics,
+            authRuntime,
+            objectStoreSchemes,
           }),
       });
 

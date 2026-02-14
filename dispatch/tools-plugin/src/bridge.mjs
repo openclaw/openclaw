@@ -196,6 +196,10 @@ export async function invokeDispatchAction(params) {
   const headers = {
     accept: "application/json",
     "x-correlation-id": correlationId,
+    "x-actor-id": actorId,
+    "x-actor-role": actorRole,
+    "x-actor-type": actorType,
+    "x-tool-name": spec.tool_name,
   };
 
   if (traceId) {
@@ -211,10 +215,6 @@ export async function invokeDispatchAction(params) {
     ensureObject(params.payload, "payload");
     headers["content-type"] = "application/json";
     headers["idempotency-key"] = requestId;
-    headers["x-actor-id"] = actorId;
-    headers["x-actor-role"] = actorRole;
-    headers["x-actor-type"] = actorType;
-    headers["x-tool-name"] = spec.tool_name;
     body = JSON.stringify(params.payload);
   }
 
