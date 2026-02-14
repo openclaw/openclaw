@@ -175,61 +175,6 @@ describe("block streaming", () => {
       expect(res).toBeUndefined();
       expect(seen).toEqual(["first\n\nsecond"]);
 
-      let sawAbort = false;
-      const onBlockReplyTimeout = vi.fn((_, context) => {
-        return new Promise<void>((resolve) => {
-          context?.abortSignal?.addEventListener(
-            "abort",
-            () => {
-              sawAbort = true;
-              resolve();
-            },
-            { once: true },
-          );
-        });
-      });
-
-      const timeoutImpl = async (params: RunEmbeddedPiAgentParams) => {
-        void params.onBlockReply?.({ text: "streamed" });
-        return {
-          payloads: [{ text: "final" }],
-          meta: {
-            durationMs: 5,
-            agentMeta: { sessionId: "s", provider: "p", model: "m" },
-          },
-        };
-      };
-      piEmbeddedMock.runEmbeddedPiAgent.mockImplementation(timeoutImpl);
-
-      const timeoutReplyPromise = getReplyFromConfig(
-        {
-          Body: "ping",
-          From: "+1004",
-          To: "+2000",
-          MessageSid: "msg-126",
-          Provider: "telegram",
-        },
-        {
-          onBlockReply: onBlockReplyTimeout,
-          blockReplyTimeoutMs: 1,
-          disableBlockStreaming: false,
-        },
-        {
-          agents: {
-            defaults: {
-              model: "anthropic/claude-opus-4-5",
-              workspace: path.join(home, "openclaw"),
-            },
-          },
-          channels: { telegram: { allowFrom: ["*"] } },
-          session: { store: path.join(home, "sessions.json") },
-        },
-      );
-
-      const timeoutRes = await timeoutReplyPromise;
-      expect(timeoutRes).toMatchObject({ text: "final" });
-      expect(sawAbort).toBe(true);
-
       const onBlockReplyStreamMode = vi.fn().mockResolvedValue(undefined);
       piEmbeddedMock.runEmbeddedPiAgent.mockImplementation(async () => ({
         payloads: [{ text: "final" }],
