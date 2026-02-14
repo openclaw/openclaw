@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ReplyPayload } from "../types.js";
 import { createBlockReplyCoalescer } from "./block-reply-coalescer.js";
 
 describe("BlockReplyCoalescer hold/resume behavior", () => {
@@ -167,5 +166,101 @@ describe("BlockReplyCoalescer hold/resume behavior", () => {
     await vi.advanceTimersByTimeAsync(1100);
     expect(onFlush).toHaveBeenCalledTimes(1);
     expect(onFlush).toHaveBeenCalledWith({ text: "Third" });
+  });
+
+  it("enqueue during hold accumulates text for later flush", async () => {
+    const onFlush = vi.fn();
+    const coalescer = createBlockReplyCoalescer({
+      config: { minChars: 1, maxChars: 1000, idleMs: 1000, joiner: "" },
+      shouldAbort: () => false,
+      onFlush,
+    });
+
+    // Enqueue first text
+    coalescer.enqueue({ text: "text_1" });
+    expect(onFlush).not.toHaveBeenCalled();
+
+    // Hold
+    coalescer.hold();
+
+    // Enqueue second text while held
+    coalescer.enqueue({ text: "text_2" });
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(onFlush).not.toHaveBeenCalled();
+
+    // Resume and wait for flush
+    coalescer.resume();
+    await vi.advanceTimersByTimeAsync(1100);
+
+    // Should have flushed coalesced text
+    expect(onFlush).toHaveBeenCalledTimes(1);
+    expect(onFlush).toHaveBeenCalledWith({ text: "text_1text_2" });
+  });
+
+  it("parallel holds require matching resumes", async () => {
+    const onFlush = vi.fn();
+    const coalescer = createBlockReplyCoalescer({
+      config: { minChars: 1, maxChars: 1000, idleMs: 1000, joiner: "" },
+      shouldAbort: () => false,
+      onFlush,
+    });
+
+    // Enqueue text
+    coalescer.enqueue({ text: "Hello" });
+
+    // Two parallel holds
+    coalescer.hold();
+    coalescer.hold();
+
+    // First resume (holdCount=1, still held)
+    coalescer.resume();
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(onFlush).not.toHaveBeenCalled();
+
+    // Second resume (holdCount=0, no longer held)
+    coalescer.resume();
+    await vi.advanceTimersByTimeAsync(1100);
+
+    // Should have flushed after both resumes
+    expect(onFlush).toHaveBeenCalledTimes(1);
+    expect(onFlush).toHaveBeenCalledWith({ text: "Hello" });
+  });
+
+  it("media enqueue during hold does not reset hold state", async () => {
+    const onFlush = vi.fn();
+    const coalescer = createBlockReplyCoalescer({
+      config: { minChars: 1, maxChars: 1000, idleMs: 1000, joiner: "" },
+      shouldAbort: () => false,
+      onFlush,
+    });
+
+    // Enqueue text
+    coalescer.enqueue({ text: "Hello" });
+    expect(onFlush).not.toHaveBeenCalled();
+
+    // Hold
+    coalescer.hold();
+
+    // Enqueue media (triggers internal force flush)
+    coalescer.enqueue({ mediaUrl: "http://example.com/image.jpg" });
+
+    // Media should have flushed text, then media
+    expect(onFlush).toHaveBeenCalledTimes(2);
+    expect(onFlush).toHaveBeenNthCalledWith(1, { text: "Hello" });
+    expect(onFlush).toHaveBeenNthCalledWith(2, { mediaUrl: "http://example.com/image.jpg" });
+
+    // Enqueue more text after media
+    onFlush.mockClear();
+    coalescer.enqueue({ text: "World" });
+
+    // Advance time - should NOT flush because still held
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(onFlush).not.toHaveBeenCalled();
+
+    // Resume should allow flush
+    coalescer.resume();
+    await vi.advanceTimersByTimeAsync(1100);
+    expect(onFlush).toHaveBeenCalledTimes(1);
+    expect(onFlush).toHaveBeenCalledWith({ text: "World" });
   });
 });

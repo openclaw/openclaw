@@ -26,7 +26,7 @@ export function createBlockReplyCoalescer(params: {
   let bufferReplyToId: ReplyPayload["replyToId"];
   let bufferAudioAsVoice: ReplyPayload["audioAsVoice"];
   let idleTimer: NodeJS.Timeout | undefined;
-  let held = false;
+  let holdCount = 0;
 
   const clearIdleTimer = () => {
     if (!idleTimer) {
@@ -43,7 +43,7 @@ export function createBlockReplyCoalescer(params: {
   };
 
   const scheduleIdleFlush = () => {
-    if (idleMs <= 0 || held) {
+    if (idleMs <= 0 || holdCount > 0) {
       return;
     }
     clearIdleTimer();
@@ -71,10 +71,6 @@ export function createBlockReplyCoalescer(params: {
       audioAsVoice: bufferAudioAsVoice,
     };
     resetBuffer();
-    // Reset held state on force flush for safety
-    if (options?.force) {
-      held = false;
-    }
     await onFlush(payload);
   };
 
@@ -148,13 +144,13 @@ export function createBlockReplyCoalescer(params: {
   };
 
   const hold = () => {
-    held = true;
+    holdCount++;
     clearIdleTimer();
   };
 
   const resume = () => {
-    held = false;
-    if (bufferText) {
+    holdCount = Math.max(0, holdCount - 1);
+    if (holdCount === 0 && bufferText) {
       scheduleIdleFlush();
     }
   };
