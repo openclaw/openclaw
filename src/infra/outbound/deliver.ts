@@ -85,6 +85,9 @@ async function createChannelHandler(params: {
   accountId?: string;
   replyToId?: string | null;
   threadId?: string | number | null;
+  username?: string;
+  icon_url?: string;
+  icon_emoji?: string;
   deps?: OutboundSendDeps;
   gifPlayback?: boolean;
   silent?: boolean;
@@ -101,6 +104,9 @@ async function createChannelHandler(params: {
     accountId: params.accountId,
     replyToId: params.replyToId,
     threadId: params.threadId,
+    username: params.username,
+    icon_url: params.icon_url,
+    icon_emoji: params.icon_emoji,
     deps: params.deps,
     gifPlayback: params.gifPlayback,
     silent: params.silent,
@@ -119,6 +125,9 @@ function createPluginHandler(params: {
   accountId?: string;
   replyToId?: string | null;
   threadId?: string | number | null;
+  username?: string;
+  icon_url?: string;
+  icon_emoji?: string;
   deps?: OutboundSendDeps;
   gifPlayback?: boolean;
   silent?: boolean;
@@ -145,6 +154,9 @@ function createPluginHandler(params: {
             accountId: params.accountId,
             replyToId: params.replyToId,
             threadId: params.threadId,
+            username: params.username,
+            icon_url: params.icon_url,
+            icon_emoji: params.icon_emoji,
             gifPlayback: params.gifPlayback,
             deps: params.deps,
             silent: params.silent,
@@ -159,6 +171,9 @@ function createPluginHandler(params: {
         accountId: params.accountId,
         replyToId: params.replyToId,
         threadId: params.threadId,
+        username: params.username,
+        icon_url: params.icon_url,
+        icon_emoji: params.icon_emoji,
         gifPlayback: params.gifPlayback,
         deps: params.deps,
         silent: params.silent,
@@ -172,6 +187,9 @@ function createPluginHandler(params: {
         accountId: params.accountId,
         replyToId: params.replyToId,
         threadId: params.threadId,
+        username: params.username,
+        icon_url: params.icon_url,
+        icon_emoji: params.icon_emoji,
         gifPlayback: params.gifPlayback,
         deps: params.deps,
         silent: params.silent,
@@ -189,6 +207,9 @@ export async function deliverOutboundPayloads(params: {
   payloads: ReplyPayload[];
   replyToId?: string | null;
   threadId?: string | number | null;
+  username?: string;
+  icon_url?: string;
+  icon_emoji?: string;
   deps?: OutboundSendDeps;
   gifPlayback?: boolean;
   abortSignal?: AbortSignal;
@@ -271,6 +292,9 @@ async function deliverOutboundPayloadsCore(params: {
   payloads: ReplyPayload[];
   replyToId?: string | null;
   threadId?: string | number | null;
+  username?: string;
+  icon_url?: string;
+  icon_emoji?: string;
   deps?: OutboundSendDeps;
   gifPlayback?: boolean;
   abortSignal?: AbortSignal;
@@ -299,6 +323,9 @@ async function deliverOutboundPayloadsCore(params: {
     accountId,
     replyToId: params.replyToId,
     threadId: params.threadId,
+    username: params.username,
+    icon_url: params.icon_url,
+    icon_emoji: params.icon_emoji,
     gifPlayback: params.gifPlayback,
     silent: params.silent,
   });
