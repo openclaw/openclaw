@@ -1,0 +1,10 @@
+{
+  "name": "@openclaw/response-verifier",
+  "version": "1.0.0",
+  "description": "Verifies agent completion claims against audit log before delivery",
+  "type": "module",
+  "exports": {
+    ".": "./index.ts"
+  },
+  "dependencies": {}
+}

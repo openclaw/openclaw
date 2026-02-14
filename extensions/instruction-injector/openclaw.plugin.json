@@ -1,0 +1,36 @@
+{
+  "id": "instruction-injector",
+  "name": "Instruction Injector",
+  "version": "1.0.0",
+  "description": "Inject custom instructions into every agent session via system prompt",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "instructions": {
+        "type": "string",
+        "description": "Instructions to inject (inline string)"
+      },
+      "file": {
+        "type": "string",
+        "description": "Path to markdown file containing instructions (overrides inline)"
+      },
+      "position": {
+        "type": "string",
+        "enum": ["prepend", "append"],
+        "description": "Where to inject instructions",
+        "default": "prepend"
+      },
+      "wrapWithHeader": {
+        "type": "boolean",
+        "description": "Wrap instructions with a header comment",
+        "default": true
+      },
+      "headerTitle": {
+        "type": "string",
+        "description": "Title for the header wrapper",
+        "default": "Custom Instructions"
+      }
+    }
+  }
+}

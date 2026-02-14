@@ -15,6 +15,9 @@ import type {
   PluginHookBeforeAgentStartResult,
   PluginHookBeforeCompactionEvent,
   PluginHookBeforeResetEvent,
+  PluginHookBeforeResponseContext,
+  PluginHookBeforeResponseEvent,
+  PluginHookBeforeResponseResult,
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
   PluginHookGatewayContext,
@@ -57,6 +60,9 @@ export type {
   PluginHookToolResultPersistContext,
   PluginHookToolResultPersistEvent,
   PluginHookToolResultPersistResult,
+  PluginHookBeforeResponseContext,
+  PluginHookBeforeResponseEvent,
+  PluginHookBeforeResponseResult,
   PluginHookSessionContext,
   PluginHookSessionStartEvent,
   PluginHookSessionEndEvent,
@@ -386,6 +392,40 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   }
 
   // =========================================================================
+  // Response Hooks
+  // =========================================================================
+
+  /**
+   * Run before_response hook.
+   * Allows plugins to inspect, modify, or block assistant responses before delivery.
+   * Runs sequentially, merging results from all handlers.
+   *
+   * Use cases:
+   * - Audit verification: Check if claimed actions match audit log
+   * - Content filtering: Block or modify inappropriate responses
+   * - Response enhancement: Add warnings or disclaimers
+   */
+  async function runBeforeResponse(
+    event: PluginHookBeforeResponseEvent,
+    ctx: PluginHookBeforeResponseContext,
+  ): Promise<PluginHookBeforeResponseResult | undefined> {
+    return runModifyingHook<"before_response", PluginHookBeforeResponseResult>(
+      "before_response",
+      event,
+      ctx,
+      (acc, next) => ({
+        text: next.text ?? acc?.text,
+        block: next.block ?? acc?.block,
+        blockReason: next.blockReason ?? acc?.blockReason,
+        prependWarning:
+          acc?.prependWarning && next.prependWarning
+            ? `${acc.prependWarning}\n${next.prependWarning}`
+            : (next.prependWarning ?? acc?.prependWarning),
+      }),
+    );
+  }
+
+  // =========================================================================
   // Session Hooks
   // =========================================================================
 
@@ -470,6 +510,8 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     runBeforeToolCall,
     runAfterToolCall,
     runToolResultPersist,
+    // Response hooks
+    runBeforeResponse,
     // Session hooks
     runSessionStart,
     runSessionEnd,

@@ -1,0 +1,40 @@
+{
+  "id": "task-accountability",
+  "name": "Task Accountability",
+  "version": "1.1.0",
+  "description": "Enforces task accountability by requiring GitHub issues for all work",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "strictMode": {
+        "type": "boolean",
+        "description": "If true, block responses without GitHub issue references. If false, just warn.",
+        "default": false
+      },
+      "issuePatterns": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Additional patterns that indicate GitHub issue references"
+      },
+      "exemptPatterns": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Patterns for responses that don't require GitHub issues (e.g., simple questions)"
+      },
+      "minTaskDurationSeconds": {
+        "type": "number",
+        "description": "Only require issues for tasks longer than this (based on tool calls)",
+        "default": 30
+      },
+      "instructions": {
+        "oneOf": [{ "type": "string" }, { "type": "boolean", "const": false }],
+        "description": "Custom instructions to inject (string), or false to disable instruction injection"
+      },
+      "instructionsFile": {
+        "type": "string",
+        "description": "Path to markdown file containing custom instructions (overrides inline)"
+      }
+    }
+  }
+}

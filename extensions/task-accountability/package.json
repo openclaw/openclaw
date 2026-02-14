@@ -1,0 +1,10 @@
+{
+  "name": "@openclaw/task-accountability",
+  "version": "1.0.0",
+  "description": "Enforces task accountability via GitHub issues",
+  "type": "module",
+  "exports": {
+    ".": "./index.ts"
+  },
+  "dependencies": {}
+}

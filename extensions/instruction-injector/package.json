@@ -1,0 +1,10 @@
+{
+  "name": "@openclaw/instruction-injector",
+  "version": "1.0.0",
+  "description": "Inject custom instructions into every agent session",
+  "type": "module",
+  "exports": {
+    ".": "./index.ts"
+  },
+  "dependencies": {}
+}

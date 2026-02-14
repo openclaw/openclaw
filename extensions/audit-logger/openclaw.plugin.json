@@ -1,0 +1,21 @@
+{
+  "id": "audit-logger",
+  "name": "Audit Logger",
+  "version": "1.0.0",
+  "description": "Logs all tool calls and messages to an audit trail for independent verification",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "redactPatterns": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Additional patterns to redact from logs (besides default sensitive keys)"
+      },
+      "logPath": {
+        "type": "string",
+        "description": "Custom path for audit log (default: ~/.openclaw/logs/audit.jsonl)"
+      }
+    }
+  }
+}

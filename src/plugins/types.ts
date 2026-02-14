@@ -307,6 +307,7 @@ export type PluginHookName =
   | "before_tool_call"
   | "after_tool_call"
   | "tool_result_persist"
+  | "before_response"
   | "session_start"
   | "session_end"
   | "gateway_start"
@@ -458,6 +459,37 @@ export type PluginHookToolResultPersistResult = {
   message?: AgentMessage;
 };
 
+// before_response hook - fires before assistant response is delivered
+export type PluginHookBeforeResponseContext = {
+  agentId?: string;
+  sessionKey?: string;
+};
+
+export type PluginHookBeforeResponseEvent = {
+  /** The response text about to be sent */
+  text: string;
+  /** Tool calls that were made during this response */
+  toolCalls?: Array<{
+    tool: string;
+    params: Record<string, unknown>;
+    success: boolean;
+    error?: string;
+  }>;
+  /** Media URLs included in the response */
+  mediaUrls?: string[];
+};
+
+export type PluginHookBeforeResponseResult = {
+  /** Modified response text (if changed) */
+  text?: string;
+  /** If true, block the response from being sent */
+  block?: boolean;
+  /** Reason for blocking (logged/shown to user) */
+  blockReason?: string;
+  /** Prepend this warning to the response */
+  prependWarning?: string;
+};
+
 // Session context
 export type PluginHookSessionContext = {
   agentId?: string;
@@ -535,6 +567,10 @@ export type PluginHookHandlerMap = {
     event: PluginHookToolResultPersistEvent,
     ctx: PluginHookToolResultPersistContext,
   ) => PluginHookToolResultPersistResult | void;
+  before_response: (
+    event: PluginHookBeforeResponseEvent,
+    ctx: PluginHookBeforeResponseContext,
+  ) => Promise<PluginHookBeforeResponseResult | void> | PluginHookBeforeResponseResult | void;
   session_start: (
     event: PluginHookSessionStartEvent,
     ctx: PluginHookSessionContext,

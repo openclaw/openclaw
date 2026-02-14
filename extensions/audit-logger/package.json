@@ -1,0 +1,10 @@
+{
+  "name": "@openclaw/audit-logger",
+  "version": "1.0.0",
+  "description": "Audit trail plugin for tool calls and messages",
+  "type": "module",
+  "exports": {
+    ".": "./index.ts"
+  },
+  "dependencies": {}
+}
