@@ -85,6 +85,18 @@ describe("resolvePermissionRequest", () => {
     expect(res).toEqual({ outcome: { outcome: "selected", optionId: "reject" } });
   });
 
+  it("prompts when tool name contains read/search substrings but isn't a safe kind", async () => {
+    const prompt = vi.fn(async () => false);
+    const res = await resolvePermissionRequest(
+      makePermissionRequest({
+        toolCall: { toolCallId: "tool-t", title: "thread: reply", status: "pending" },
+      }),
+      { prompt, log: () => {} },
+    );
+    expect(prompt).toHaveBeenCalledTimes(1);
+    expect(res).toEqual({ outcome: { outcome: "selected", optionId: "reject" } });
+  });
+
   it("uses allow_always and reject_always when once options are absent", async () => {
     const options: RequestPermissionRequest["options"] = [
       { kind: "allow_always", name: "Always allow", optionId: "allow-always" },
