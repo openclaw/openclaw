@@ -103,6 +103,8 @@ Hook packs are standard npm packages that export one or more hooks via `openclaw
 openclaw hooks install <path-or-spec>
 ```
 
+Npm specs are registry-only (package name + optional version/tag). Git/URL/file specs are rejected.
+
 Example `package.json`:
 
 ```json
@@ -117,6 +119,10 @@ Example `package.json`:
 
 Each entry points to a hook directory containing `HOOK.md` and `handler.ts` (or `index.ts`).
 Hook packs can ship dependencies; they will be installed under `~/.openclaw/hooks/<id>`.
+
+Security note: `openclaw hooks install` installs dependencies with `npm install --ignore-scripts`
+(no lifecycle scripts). Keep hook pack dependency trees "pure JS/TS" and avoid packages that rely
+on `postinstall` builds.
 
 ## Hook Structure
 
