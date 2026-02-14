@@ -600,14 +600,14 @@ export async function runHeartbeatOnce(opts: {
         sessionKey,
         updatedAt: previousUpdatedAt,
       });
-      const okSent = await maybeSendHeartbeatOk();
+      // HEARTBEAT_OK from the model is an internal ack token and should be discarded, even when showOk is enabled.
       emitHeartbeatEvent({
         status: "ok-token",
         reason: opts.reason,
         durationMs: Date.now() - startedAt,
         channel: delivery.channel !== "none" ? delivery.channel : undefined,
         accountId: delivery.accountId,
-        silent: !okSent,
+        silent: true,
         indicatorType: visibility.useIndicator ? resolveIndicatorType("ok-token") : undefined,
       });
       return { status: "ran", durationMs: Date.now() - startedAt };

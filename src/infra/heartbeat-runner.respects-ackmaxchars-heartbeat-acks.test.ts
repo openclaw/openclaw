@@ -29,7 +29,7 @@ beforeEach(() => {
   );
 });
 
-describe("resolveHeartbeatIntervalMs", () => {
+describe("runHeartbeatOnce", () => {
   it("respects ackMaxChars for heartbeat acks", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hb-"));
     const storePath = path.join(tmpDir, "sessions.json");
@@ -92,7 +92,7 @@ describe("resolveHeartbeatIntervalMs", () => {
     }
   });
 
-  it("sends HEARTBEAT_OK when visibility.showOk is true", async () => {
+  it("does not relay HEARTBEAT_OK token even when visibility.showOk is true", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hb-"));
     const storePath = path.join(tmpDir, "sessions.json");
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
@@ -146,8 +146,7 @@ describe("resolveHeartbeatIntervalMs", () => {
         },
       });
 
-      expect(sendWhatsApp).toHaveBeenCalledTimes(1);
-      expect(sendWhatsApp).toHaveBeenCalledWith("+1555", "HEARTBEAT_OK", expect.any(Object));
+      expect(sendWhatsApp).not.toHaveBeenCalled();
     } finally {
       replySpy.mockRestore();
       await fs.rm(tmpDir, { recursive: true, force: true });
