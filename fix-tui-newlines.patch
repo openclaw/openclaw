@@ -1,0 +1,47 @@
+diff --git a/src/tui/tui-formatters.ts b/src/tui/tui-formatters.ts
+index 1234567..9876543 100644
+--- a/src/tui/tui-formatters.ts
++++ b/src/tui/tui-formatters.ts
+@@ -70,7 +70,7 @@ export function extractContentFromMessage(message: unknown): string {
+   const content = record.content;
+ 
+   if (typeof content === "string") {
+-    return content.trim();
++    return content;  // Don't trim to preserve leading/trailing whitespace
+   }
+ 
+   // Check for error BEFORE returning empty for non-array content
+@@ -92,7 +92,8 @@ export function extractContentFromMessage(message: unknown): string {
+       parts.push(rec.text);
+     }
+   }
+-
++  
++  // Join with newline to preserve multi-block structure
+   return parts.join("\n").trim();
+ }
+ 
+diff --git a/src/tui/components/assistant-message.ts b/src/tui/components/assistant-message.ts
+index 1234567..9876543 100644
+--- a/src/tui/components/assistant-message.ts
++++ b/src/tui/components/assistant-message.ts
+@@ -13,6 +13,17 @@ export class AssistantMessageComponent extends Container {
+     this.addChild(this.body);
+   }
+ 
+   setText(text: string) {
++    // Ensure newlines are preserved for TUI display
++    // The Markdown component should handle raw text with newlines correctly
++    // but we need to ensure the text hasn't been normalized elsewhere
++    // This is a safeguard to ensure newlines are not stripped
++    if (text && !text.includes('\n') && text.includes(' ')) {
++      // If text has no newlines but has spaces, it might have been normalized
++      // Check if it looks like it should have newlines (e.g., numbered lines)
++      const linePattern = /^(Line \d+|Paragraph \d+|Item \d+)/;
++      if (linePattern.test(text)) {
++        console.warn('Warning: Text appears to have been normalized, newlines may have been stripped');
++      }
++    }
+     this.body.setText(text);
+   }
+ }

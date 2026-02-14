@@ -6,12 +6,11 @@ export function resolveFinalAssistantText(params: {
   streamedText?: string | null;
 }) {
   const finalText = params.finalText ?? "";
-  // Remove trim() to preserve whitespace and formatting
-  if (finalText) {
+  if (finalText.trim()) {
     return finalText;
   }
   const streamedText = params.streamedText ?? "";
-  if (streamedText) {
+  if (streamedText.trim()) {
     return streamedText;
   }
   return "(no output)";
@@ -22,9 +21,8 @@ export function composeThinkingAndContent(params: {
   contentText?: string;
   showThinking?: boolean;
 }) {
-  // Preserve original text without trimming to maintain formatting
-  const thinkingText = params.thinkingText ?? "";
-  const contentText = params.contentText ?? "";
+  const thinkingText = params.thinkingText?.trim() ?? "";
+  const contentText = params.contentText?.trim() ?? "";
   const parts: string[] = [];
 
   if (params.showThinking && thinkingText) {
@@ -34,8 +32,7 @@ export function composeThinkingAndContent(params: {
     parts.push(contentText);
   }
 
-  // Join with double newline but don't trim the result
-  return parts.join("\n\n");
+  return parts.join("\n\n").trim();
 }
 
 /**
@@ -65,14 +62,12 @@ export function extractThinkingFromMessage(message: unknown): string {
       parts.push(rec.thinking);
     }
   }
-  // Preserve newlines when joining thinking blocks
-  return parts.join("\n");
+  return parts.join("\n").trim();
 }
 
 /**
  * Extract ONLY text content blocks from message (excludes thinking).
  * Model-agnostic: works for any model with text content blocks.
- * IMPORTANT: Preserves all formatting including newlines for TUI display.
  */
 export function extractContentFromMessage(message: unknown): string {
   if (!message || typeof message !== "object") {
@@ -82,8 +77,7 @@ export function extractContentFromMessage(message: unknown): string {
   const content = record.content;
 
   if (typeof content === "string") {
-    // Return content as-is without trimming to preserve all formatting
-    return content;
+    return content.trim();
   }
 
   // Check for error BEFORE returning empty for non-array content
@@ -103,7 +97,6 @@ export function extractContentFromMessage(message: unknown): string {
     }
     const rec = block as Record<string, unknown>;
     if (rec.type === "text" && typeof rec.text === "string") {
-      // Preserve text blocks exactly as they are
       parts.push(rec.text);
     }
   }
@@ -117,17 +110,12 @@ export function extractContentFromMessage(message: unknown): string {
     }
   }
 
-  // Join with newline to preserve structure between blocks
-  // Only trim the final result lightly to remove excessive trailing space
-  const result = parts.join("\n");
-  // Only trim trailing whitespace, preserve leading whitespace and all newlines
-  return result.replace(/[ \t]+$/gm, "");
+  return parts.join("\n").trim();
 }
 
-// Rest of the file remains the same...
 function extractTextBlocks(content: unknown, opts?: { includeThinking?: boolean }): string {
   if (typeof content === "string") {
-    return content;
+    return content.trim();
   }
   if (!Array.isArray(content)) {
     return "";
@@ -154,8 +142,8 @@ function extractTextBlocks(content: unknown, opts?: { includeThinking?: boolean 
   }
 
   return composeThinkingAndContent({
-    thinkingText: thinkingParts.join("\n"),
-    contentText: textParts.join("\n"),
+    thinkingText: thinkingParts.join("\n").trim(),
+    contentText: textParts.join("\n").trim(),
     showThinking: opts?.includeThinking ?? false,
   });
 }

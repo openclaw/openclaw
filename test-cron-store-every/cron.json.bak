@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "2da49129-d738-498f-a07e-e27204361aa9",
+      "name": "Test Every Job",
+      "enabled": true,
+      "createdAtMs": 1770691833699,
+      "updatedAtMs": 1770691848711,
+      "schedule": {
+        "kind": "every",
+        "everyMs": 5000,
+        "anchorMs": 1770691833699
+      },
+      "sessionTarget": "main",
+      "payload": {
+        "kind": "systemEvent",
+        "text": "Test cron job fired!"
+      },
+      "state": {
+        "nextRunAtMs": 1770691858699,
+        "lastRunAtMs": 1770691848710,
+        "lastStatus": "ok",
+        "lastDurationMs": 1,
+        "consecutiveErrors": 0,
+        "runningAtMs": 1770691853701
+      }
+    }
+  ]
+}
