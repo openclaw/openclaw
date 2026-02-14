@@ -4,7 +4,8 @@ export type ModelApi =
   | "anthropic-messages"
   | "google-generative-ai"
   | "github-copilot"
-  | "bedrock-converse-stream";
+  | "bedrock-converse-stream"
+  | "ollama";
 
 export type ModelCompatConfig = {
   supportsStore?: boolean;
