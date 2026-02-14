@@ -74,6 +74,7 @@ export async function runAgentTurnWithFallback(params: {
   applyReplyToMode: (payload: ReplyPayload) => ReplyPayload;
   shouldEmitToolResult: () => boolean;
   shouldEmitToolOutput: () => boolean;
+  suppressToolErrorFallback?: boolean;
   pendingToolTasks: Set<Promise<void>>;
   resetSessionAfterCompactionFailure: (reason: string) => Promise<boolean>;
   resetSessionAfterRoleOrderingConflict: (reason: string) => Promise<boolean>;
@@ -308,6 +309,7 @@ export async function runAgentTurnWithFallback(params: {
             runId,
             images: params.opts?.images,
             abortSignal: params.opts?.abortSignal,
+            suppressToolErrorFallback: params.suppressToolErrorFallback,
             blockReplyBreak: params.resolvedBlockStreamingBreak,
             blockReplyChunking: params.blockReplyChunking,
             onPartialReply: allowPartialStream

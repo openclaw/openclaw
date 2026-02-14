@@ -30,6 +30,7 @@ vi.mock("../../process/command-queue.js", () => ({
 
 vi.mock("../../routing/session-key.js", () => ({
   normalizeMainKey: vi.fn().mockReturnValue("main"),
+  normalizeAccountId: vi.fn().mockReturnValue("default"),
 }));
 
 vi.mock("../../utils/provider-utils.js", () => ({
@@ -173,6 +174,7 @@ describe("runPreparedReply media-only handling", () => {
     const result = await runPreparedReply(
       baseParams({
         ctx: {
+          ChatType: "direct",
           Body: "",
           RawBody: "",
           CommandBody: "",
@@ -189,5 +191,59 @@ describe("runPreparedReply media-only handling", () => {
       text: "I didn't receive any text in your message. Please resend or add a caption.",
     });
     expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
+  });
+
+  it("suppresses tool error fallback when no tool-result callback is provided", async () => {
+    const result = await runPreparedReply(baseParams());
+    expect(result).toEqual({ text: "ok" });
+
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call?.suppressToolErrorFallback).toBe(true);
+  });
+
+  it("does not suppress tool error fallback when a tool-result callback is provided", async () => {
+    const onToolResult = vi.fn();
+    const result = await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "",
+          RawBody: "",
+          CommandBody: "",
+          OriginatingChannel: "slack",
+          OriginatingTo: "C123",
+        },
+        sessionCtx: {
+          Body: "",
+          BodyStripped: "",
+          MediaPath: "/tmp/input.png",
+          Provider: "slack",
+          ChatType: "direct",
+          OriginatingChannel: "slack",
+          OriginatingTo: "C123",
+        },
+        opts: {
+          onToolResult,
+        } as never,
+      }),
+    );
+    expect(result).toEqual({ text: "ok" });
+
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call?.suppressToolErrorFallback).toBe(false);
+  });
+
+  it("suppresses tool error fallback in group chats even when a tool-result callback exists", async () => {
+    const onToolResult = vi.fn();
+    const result = await runPreparedReply(
+      baseParams({
+        opts: {
+          onToolResult,
+        } as never,
+      }),
+    );
+
+    expect(result).toEqual({ text: "ok" });
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call?.suppressToolErrorFallback).toBe(true);
   });
 });

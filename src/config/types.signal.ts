@@ -6,6 +6,7 @@ import type {
 } from "./types.base.js";
 import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
 import type { DmConfig } from "./types.messages.js";
+import type { GroupToolPolicyBySenderConfig } from "./types.tools.js";
 
 export type SignalReactionNotificationMode = "off" | "own" | "all" | "allowlist";
 export type SignalReactionLevel = "off" | "ack" | "minimal" | "extensive";
@@ -15,6 +16,8 @@ export type SignalAccountConfig = {
   name?: string;
   /** Optional provider capability tags used for agent/runtime guidance. */
   capabilities?: string[];
+  /** Whether sender identities are cryptographically/verifiably trusted for DM tool policies. */
+  verified?: boolean;
   /** Markdown formatting overrides (tables). */
   markdown?: MarkdownConfig;
   /** Allow channel-initiated config writes (default: true). */
@@ -82,6 +85,8 @@ export type SignalAccountConfig = {
    * - "extensive": Agent can react liberally
    */
   reactionLevel?: SignalReactionLevel;
+  /** DM sender-specific tool policy map (applies to direct chats). */
+  toolsBySender?: GroupToolPolicyBySenderConfig;
   /** Heartbeat visibility settings for this channel. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
   /** Outbound response prefix override for this channel/account. */

@@ -119,6 +119,7 @@ export async function runReplyAgent(params: {
   sessionCtx: TemplateContext;
   shouldInjectGroupIntro: boolean;
   typingMode: TypingMode;
+  suppressToolErrorFallback?: boolean;
 }): Promise<ReplyPayload | ReplyPayload[] | undefined> {
   const {
     commandBody,
@@ -145,6 +146,7 @@ export async function runReplyAgent(params: {
     sessionCtx,
     shouldInjectGroupIntro,
     typingMode,
+    suppressToolErrorFallback,
   } = params;
 
   let activeSessionEntry = sessionEntry;
@@ -358,6 +360,7 @@ export async function runReplyAgent(params: {
       applyReplyToMode,
       shouldEmitToolResult,
       shouldEmitToolOutput,
+      suppressToolErrorFallback,
       pendingToolTasks,
       resetSessionAfterCompactionFailure,
       resetSessionAfterRoleOrderingConflict,

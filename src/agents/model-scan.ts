@@ -151,6 +151,10 @@ function parseOpenRouterPricing(value: unknown): OpenRouterModelPricing | null {
   };
 }
 
+function normalizeContentBlocks(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
 function isFreeOpenRouterModel(entry: OpenRouterModelMeta): boolean {
   if (entry.id.endsWith(":free")) {
     return true;
@@ -269,7 +273,13 @@ async function probeTool(
       } satisfies OpenAICompletionsOptions),
     );
 
-    const hasToolCall = message.content.some((block) => block.type === "toolCall");
+    const blocks = normalizeContentBlocks((message as { content?: unknown }).content);
+    const hasToolCall = blocks.some(
+      (block) =>
+        typeof block === "object" &&
+        block !== null &&
+        (block as { type?: unknown }).type === "toolCall",
+    );
     if (!hasToolCall) {
       return {
         ok: false,
