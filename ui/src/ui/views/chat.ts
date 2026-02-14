@@ -92,6 +92,21 @@ export type ChatProps = {
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
 
+/** Detect system-role messages that should render as dividers instead of bubbles */
+function detectSystemDivider(msg: { role: string; content: string }): string | null {
+  if (msg.role.toLowerCase() !== "system") return null;
+  const text = (msg.content ?? "").toLowerCase().trim();
+  if (/new\s+session/i.test(text)) return "NEW SESSION";
+  if (/session\s+(reset|cleared|started)/i.test(text)) return "SESSION RESET";
+  if (/heartbeat/i.test(text) && text.length < 40) return "HEARTBEAT";
+  if (/context\s+(window|limit|truncat)/i.test(text)) return "CONTEXT LIMIT";
+  if (/compaction/i.test(text)) return "COMPACTION";
+  if (/model\s+change/i.test(text)) return "MODEL CHANGE";
+  if (/resumed/i.test(text) && text.length < 40) return "RESUMED";
+  if (/connected/i.test(text) && text.length < 40) return "CONNECTED";
+  return null;
+}
+
 function adjustTextareaHeight(el: HTMLTextAreaElement) {
   el.style.height = "auto";
   el.style.height = `${el.scrollHeight}px`;
@@ -746,7 +761,19 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
           typeof marker.id === "string"
             ? `divider:compaction:${marker.id}`
             : `divider:compaction:${normalized.timestamp}:${i}`,
-        label: "Compaction",
+        label: "COMPACTION",
+        timestamp: normalized.timestamp ?? Date.now(),
+      });
+      continue;
+    }
+
+    // Detect system events and render as dividers
+    const systemDividerLabel = detectSystemDivider(normalized);
+    if (systemDividerLabel) {
+      items.push({
+        kind: "divider",
+        key: `divider:system:${normalized.timestamp}:${i}`,
+        label: systemDividerLabel,
         timestamp: normalized.timestamp ?? Date.now(),
       });
       continue;
