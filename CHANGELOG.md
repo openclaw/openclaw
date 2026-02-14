@@ -72,6 +72,7 @@ Docs: https://docs.openclaw.ai
 - Sessions: archive previous transcript files on `/new` and `/reset` session resets (including gateway `sessions.reset`) so stale transcripts do not accumulate on disk. (#14869) Thanks @mcaxtr.
 - Status/Sessions: stop clamping derived `totalTokens` to context-window size, keep prompt-token snapshots wired through session accounting, and surface context usage as unknown when fresh snapshot data is missing to avoid false 100% reports. (#15114) Thanks @echoVic.
 - Gateway/Routing: speed up hot paths for session listing (derived titles + previews), WS broadcast, and binding resolution.
+- Gateway/Sessions: cache derived title + last-message transcript reads to speed up repeated sessions list refreshes.
 - CLI/Completion: route plugin-load logs to stderr and write generated completion scripts directly to stdout to avoid `source <(openclaw completion ...)` corruption. (#15481) Thanks @arosstale.
 - CLI: lazily load outbound provider dependencies and remove forced success-path exits so commands terminate naturally without killing intentional long-running foreground actions. (#12906) Thanks @DrCrinkle.
 - CLI: speed up startup by lazily registering core commands (keeps rich `--help` while reducing cold-start overhead).
