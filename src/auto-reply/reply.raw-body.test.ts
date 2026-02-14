@@ -2,22 +2,35 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { loadModelCatalog } from "../agents/model-catalog.js";
-import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
-import { saveSessionStore } from "../config/sessions.js";
-import { getReplyFromConfig } from "./reply.js";
+
+const agentMocks = vi.hoisted(() => ({
+  runEmbeddedPiAgent: vi.fn(),
+  loadModelCatalog: vi.fn(),
+  webAuthExists: vi.fn().mockResolvedValue(true),
+  getWebAuthAgeMs: vi.fn().mockReturnValue(120_000),
+  readWebSelfId: vi.fn().mockReturnValue({ e164: "+1999" }),
+}));
 
 vi.mock("../agents/pi-embedded.js", () => ({
   abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
-  runEmbeddedPiAgent: vi.fn(),
+  runEmbeddedPiAgent: agentMocks.runEmbeddedPiAgent,
   queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
   resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
   isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
   isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
 }));
+
 vi.mock("../agents/model-catalog.js", () => ({
-  loadModelCatalog: vi.fn(),
+  loadModelCatalog: agentMocks.loadModelCatalog,
 }));
+
+vi.mock("../web/session.js", () => ({
+  webAuthExists: agentMocks.webAuthExists,
+  getWebAuthAgeMs: agentMocks.getWebAuthAgeMs,
+  readWebSelfId: agentMocks.readWebSelfId,
+}));
+
+import { getReplyFromConfig } from "./reply.js";
 
 type HomeEnvSnapshot = {
   HOME: string | undefined;
@@ -89,8 +102,9 @@ describe("RawBody directive parsing", () => {
   });
 
   beforeEach(() => {
-    vi.mocked(runEmbeddedPiAgent).mockReset();
-    vi.mocked(loadModelCatalog).mockResolvedValue([
+    agentMocks.runEmbeddedPiAgent.mockReset();
+    agentMocks.loadModelCatalog.mockReset();
+    agentMocks.loadModelCatalog.mockResolvedValue([
       { id: "claude-opus-4-5", name: "Opus 4.5", provider: "anthropic" },
     ]);
   });
@@ -101,7 +115,7 @@ describe("RawBody directive parsing", () => {
 
   it("handles directives, history, and non-default agent session files", async () => {
     await withTempHome(async (home) => {
-      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+      agentMocks.runEmbeddedPiAgent.mockResolvedValue({
         payloads: [{ text: "ok" }],
         meta: {
           durationMs: 1,
@@ -140,8 +154,10 @@ describe("RawBody directive parsing", () => {
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toBe("ok");
-      expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
-      const prompt = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0]?.prompt ?? "";
+      expect(agentMocks.runEmbeddedPiAgent).toHaveBeenCalledOnce();
+      const prompt =
+        (agentMocks.runEmbeddedPiAgent.mock.calls[0]?.[0] as { prompt?: string } | undefined)
+          ?.prompt ?? "";
       expect(prompt).toContain("Chat history since last reply (untrusted, for context):");
       expect(prompt).toContain('"sender": "Peter"');
       expect(prompt).toContain('"body": "hello"');
@@ -155,16 +171,24 @@ describe("RawBody directive parsing", () => {
       const storePath = path.join(sessionsDir, "sessions.json");
       await fs.mkdir(sessionsDir, { recursive: true });
       await fs.writeFile(sessionFile, "", "utf-8");
-      await saveSessionStore(storePath, {
-        [sessionKey]: {
-          sessionId,
-          sessionFile,
-          updatedAt: Date.now(),
-        },
-      });
+      await fs.writeFile(
+        storePath,
+        JSON.stringify(
+          {
+            [sessionKey]: {
+              sessionId,
+              sessionFile,
+              updatedAt: Date.now(),
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
 
-      vi.mocked(runEmbeddedPiAgent).mockReset();
-      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+      agentMocks.runEmbeddedPiAgent.mockReset();
+      agentMocks.runEmbeddedPiAgent.mockResolvedValue({
         payloads: [{ text: "ok" }],
         meta: {
           durationMs: 1,
@@ -195,8 +219,11 @@ describe("RawBody directive parsing", () => {
 
       const textWorker = Array.isArray(resWorker) ? resWorker[0]?.text : resWorker?.text;
       expect(textWorker).toBe("ok");
-      expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
-      expect(vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0]?.sessionFile).toBe(sessionFile);
+      expect(agentMocks.runEmbeddedPiAgent).toHaveBeenCalledOnce();
+      expect(
+        (agentMocks.runEmbeddedPiAgent.mock.calls[0]?.[0] as { sessionFile?: string } | undefined)
+          ?.sessionFile,
+      ).toBe(sessionFile);
     });
   });
 });
