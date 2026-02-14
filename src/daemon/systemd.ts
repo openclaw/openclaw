@@ -30,6 +30,35 @@ const formatLine = (label: string, value: string) => {
   return `${colorize(rich, theme.muted, `${label}:`)} ${colorize(rich, theme.command, value)}`;
 };
 
+/**
+ * Safely writes to stdout, preventing EPIPE errors when the consumer has disconnected.
+ * During rapid restarts (e.g., SIGUSR1 config reloads), the stdout pipe may be closed
+ * before the write completes, causing uncaught exceptions.
+ *
+ * Handles both synchronous throws and asynchronous error events from stream.write().
+ */
+function safeWriteToStdout(stream: NodeJS.WritableStream, data: string): void {
+  // Check if stream is writable and not already closed
+  if (!stream.writable) {
+    return;
+  }
+
+  try {
+    // Use callback form to catch async errors
+    stream.write(data, (err) => {
+      // Silently ignore write errors - the consumer is gone but the operation
+      // (restart/stop/install) has already succeeded. Logging would require
+      // another write, creating recursion risk.
+      if (err) {
+        // EPIPE, ECONNRESET, etc. - ignore
+      }
+    });
+  } catch {
+    // Catch synchronous errors (e.g., if write() throws immediately)
+    // Silently ignore - same reasoning as above
+  }
+}
+
 function resolveSystemdUnitPathForName(
   env: Record<string, string | undefined>,
   name: string,
@@ -263,8 +292,8 @@ export async function installSystemdService({
   }
 
   // Ensure we don't end up writing to a clack spinner line (wizards show progress without a newline).
-  stdout.write("\n");
-  stdout.write(`${formatLine("Installed systemd service", unitPath)}\n`);
+  safeWriteToStdout(stdout, "\n");
+  safeWriteToStdout(stdout, `${formatLine("Installed systemd service", unitPath)}\n`);
   return { unitPath };
 }
 
@@ -283,9 +312,9 @@ export async function uninstallSystemdService({
   const unitPath = resolveSystemdUnitPath(env);
   try {
     await fs.unlink(unitPath);
-    stdout.write(`${formatLine("Removed systemd service", unitPath)}\n`);
+    safeWriteToStdout(stdout, `${formatLine("Removed systemd service", unitPath)}\n`);
   } catch {
-    stdout.write(`Systemd service not found at ${unitPath}\n`);
+    safeWriteToStdout(stdout, `Systemd service not found at ${unitPath}\n`);
   }
 }
 
@@ -303,7 +332,7 @@ export async function stopSystemdService({
   if (res.code !== 0) {
     throw new Error(`systemctl stop failed: ${res.stderr || res.stdout}`.trim());
   }
-  stdout.write(`${formatLine("Stopped systemd service", unitName)}\n`);
+  safeWriteToStdout(stdout, `${formatLine("Stopped systemd service", unitName)}\n`);
 }
 
 export async function restartSystemdService({
@@ -320,7 +349,7 @@ export async function restartSystemdService({
   if (res.code !== 0) {
     throw new Error(`systemctl restart failed: ${res.stderr || res.stdout}`.trim());
   }
-  stdout.write(`${formatLine("Restarted systemd service", unitName)}\n`);
+  safeWriteToStdout(stdout, `${formatLine("Restarted systemd service", unitName)}\n`);
 }
 
 export async function isSystemdServiceEnabled(args: {
@@ -434,14 +463,17 @@ export async function uninstallLegacySystemdUnits({
     if (systemctlAvailable) {
       await execSystemctl(["--user", "disable", "--now", `${unit.name}.service`]);
     } else {
-      stdout.write(`systemctl unavailable; removed legacy unit file only: ${unit.name}.service\n`);
+      safeWriteToStdout(
+        stdout,
+        `systemctl unavailable; removed legacy unit file only: ${unit.name}.service\n`,
+      );
     }
 
     try {
       await fs.unlink(unit.unitPath);
-      stdout.write(`${formatLine("Removed legacy systemd service", unit.unitPath)}\n`);
+      safeWriteToStdout(stdout, `${formatLine("Removed legacy systemd service", unit.unitPath)}\n`);
     } catch {
-      stdout.write(`Legacy systemd unit not found at ${unit.unitPath}\n`);
+      safeWriteToStdout(stdout, `Legacy systemd unit not found at ${unit.unitPath}\n`);
     }
   }
 
