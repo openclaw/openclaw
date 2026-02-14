@@ -2,7 +2,7 @@
 
 ## Story ID
 
-`None` (no active story)
+`GLZ-01`
 
 ## Canonical Backlog
 
@@ -14,7 +14,7 @@
 
 ## Epic
 
-`EPIC-MVP-07: Pilot Readiness`
+`EPIC-GZ-01: Blind Intake Readiness`
 
 ## Completion Status
 
@@ -22,4 +22,9 @@
 
 ## Suggested Focus Area
 
-Await the next backlog intake and dependency-qualified scheduling. No sprint item is currently active.
+Start with the commercial rollout sequence in `ai_dispatch_agile_project_package/docs/12_Sprint_Plan.md`.
+Sprint 1 focus:
+
+- `GLZ-01`: Blind intake endpoint and required-field policy
+- `GLZ-02`: Address/site dedupe and identity key
+- `GLZ-03`: Triaged to schedulable guardrails

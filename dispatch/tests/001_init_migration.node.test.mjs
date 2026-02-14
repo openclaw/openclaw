@@ -3,10 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 
-const migrationPath = path.resolve(
-  process.cwd(),
-  "dispatch/db/migrations/001_init.sql",
-);
+const migrationPath = path.resolve(process.cwd(), "dispatch/db/migrations/001_init.sql");
 const migrationSql = fs.readFileSync(migrationPath, "utf8");
 
 const expectSql = (pattern, message) => {
@@ -20,14 +17,8 @@ test("creates required core tables", () => {
     /CREATE TABLE IF NOT EXISTS ticket_state_transitions \(/,
     "ticket_state_transitions table missing",
   );
-  expectSql(
-    /CREATE TABLE IF NOT EXISTS idempotency_keys \(/,
-    "idempotency_keys table missing",
-  );
-  expectSql(
-    /CREATE TABLE IF NOT EXISTS evidence_items \(/,
-    "evidence_items table missing",
-  );
+  expectSql(/CREATE TABLE IF NOT EXISTS idempotency_keys \(/, "idempotency_keys table missing");
+  expectSql(/CREATE TABLE IF NOT EXISTS evidence_items \(/, "evidence_items table missing");
 });
 
 test("enforces idempotency uniqueness by actor endpoint request", () => {
@@ -47,6 +38,10 @@ test("includes fail-closed state transition constraint matrix", () => {
     "NEW transitions not constrained",
   );
   expectSql(
+    /from_state IS NULL[\s\S]*to_state IN \('TRIAGED', 'READY_TO_SCHEDULE'\)/,
+    "NULL-origin transitions for blind intake bootstraps missing",
+  );
+  expectSql(
     /from_state = 'TRIAGED'[\s\S]*to_state IN \('APPROVAL_REQUIRED', 'READY_TO_SCHEDULE', 'DISPATCHED'\)/,
     "TRIAGED transitions do not include emergency dispatch path",
   );
@@ -58,10 +53,7 @@ test("includes fail-closed state transition constraint matrix", () => {
     /from_state = 'IN_PROGRESS'[\s\S]*to_state IN \('ON_HOLD', 'COMPLETED_PENDING_VERIFICATION', 'APPROVAL_REQUIRED'\)/,
     "IN_PROGRESS transitions do not include approval escalation path",
   );
-  expectSql(
-    /from_state = 'INVOICED' AND to_state = 'CLOSED'/,
-    "terminal transition missing",
-  );
+  expectSql(/from_state = 'INVOICED' AND to_state = 'CLOSED'/, "terminal transition missing");
 });
 
 test("creates queue-oriented ticket indexes", () => {
@@ -72,5 +64,24 @@ test("creates queue-oriented ticket indexes", () => {
   expectSql(
     /CREATE INDEX IF NOT EXISTS idx_tickets_state_schedule ON tickets\(state, scheduled_start\);/,
     "state-schedule index missing",
+  );
+});
+
+test("persists blind-intake policy fields on ticket schema", () => {
+  expectSql(/customer_name/, "customer_name column missing");
+  expectSql(/customer_phone/, "customer_phone column missing");
+  expectSql(/customer_email/, "customer_email column missing");
+  expectSql(/identity_signature/, "identity_signature column missing");
+  expectSql(/identity_confidence/, "identity_confidence column missing");
+  expectSql(/classification_confidence/, "classification_confidence column missing");
+  expectSql(/sop_handoff_required/, "sop_handoff_required column missing");
+  expectSql(/sop_handoff_acknowledged/, "sop_handoff_acknowledged column missing");
+  expectSql(/sop_handoff_prompt/, "sop_handoff_prompt column missing");
+});
+
+test("adds blind-intake dedupe index", () => {
+  expectSql(
+    /CREATE INDEX IF NOT EXISTS idx_tickets_blind_intake_signature_created ON tickets\(/,
+    "blind-intake dedupe index missing",
   );
 });

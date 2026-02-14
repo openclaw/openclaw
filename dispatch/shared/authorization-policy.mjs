@@ -9,6 +9,16 @@ const TOOL_POLICIES_RAW = {
     expected_to_state: "NEW",
     allowed_from_states: null,
   },
+  "ticket.blind_intake": {
+    tool_name: "ticket.blind_intake",
+    method: "POST",
+    endpoint: "/tickets/intake",
+    mutating: true,
+    requires_ticket_id: false,
+    allowed_roles: ["dispatcher", "agent"],
+    expected_to_state: null,
+    allowed_from_states: null,
+  },
   "ticket.triage": {
     tool_name: "ticket.triage",
     method: "POST",
@@ -193,17 +203,15 @@ function buildEndpointPolicyMap(toolPolicies) {
       continue;
     }
 
-    const current =
-      mutable[policy.endpoint] ??
-      {
-        endpoint: policy.endpoint,
-        method: policy.method,
-        default_tool_name: policy.tool_name,
-        allowed_tool_names: [],
-        allowed_roles: new Set(),
-        expected_to_state: policy.expected_to_state,
-        allowed_from_states: policy.allowed_from_states,
-      };
+    const current = mutable[policy.endpoint] ?? {
+      endpoint: policy.endpoint,
+      method: policy.method,
+      default_tool_name: policy.tool_name,
+      allowed_tool_names: [],
+      allowed_roles: new Set(),
+      expected_to_state: policy.expected_to_state,
+      allowed_from_states: policy.allowed_from_states,
+    };
 
     current.allowed_tool_names.push(policy.tool_name);
     for (const role of policy.allowed_roles) {

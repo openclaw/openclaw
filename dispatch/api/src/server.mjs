@@ -1,10 +1,19 @@
-import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
+import { createServer } from "node:http";
 import path from "node:path";
+import {
+  getDispatchToolPolicy,
+  getCommandEndpointPolicy,
+} from "../../shared/authorization-policy.mjs";
+import {
+  IncidentTemplatePolicyError,
+  evaluateCloseoutRequirements,
+  getIncidentTemplate,
+} from "../../workflow-engine/rules/closeout-required-evidence.mjs";
+import { createAuthRuntime } from "./auth.mjs";
 import { canonicalJsonHash } from "./canonical-json.mjs";
 import { closePool, getPool } from "./db.mjs";
-import { createAuthRuntime } from "./auth.mjs";
 import {
   HttpError,
   buildCorrelationId,
@@ -18,15 +27,6 @@ import {
   requireUuidField,
   sendJson,
 } from "./http-utils.mjs";
-import {
-  getDispatchToolPolicy,
-  getCommandEndpointPolicy,
-} from "../../shared/authorization-policy.mjs";
-import {
-  IncidentTemplatePolicyError,
-  evaluateCloseoutRequirements,
-  getIncidentTemplate,
-} from "../../workflow-engine/rules/closeout-required-evidence.mjs";
 
 const ticketRouteRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SCHEDULING_STATES = Object.freeze(["READY_TO_SCHEDULE", "SCHEDULE_PROPOSED", "SCHEDULED"]);
@@ -83,6 +83,11 @@ const POLICY_ERROR_DIMENSION_BY_CODE = Object.freeze({
   CLOSEOUT_REQUIREMENTS_INCOMPLETE: "evidence",
   INVALID_EVIDENCE_REFERENCE: "evidence",
   MISSING_SIGNATURE_CONFIRMATION: "evidence",
+  DUPLICATE_INTAKE: "identity",
+  LOW_IDENTITY_CONFIDENCE: "identity",
+  LOW_CLASSIFICATION_CONFIDENCE: "identity",
+  SOP_HANDOFF_REQUIRED: "policy",
+  BLIND_INTAKE_VALIDATION_FAILED: "identity",
 });
 const DISPATCHER_QUEUE_ACTION_BLUEPRINTS = Object.freeze([
   Object.freeze({ action_id: "schedule_propose", tool_name: "schedule.propose" }),
@@ -99,6 +104,12 @@ const TECH_PACKET_ACTION_BLUEPRINTS = Object.freeze([
   Object.freeze({ action_id: "open_timeline", tool_name: "ticket.timeline" }),
   Object.freeze({ action_id: "open_evidence", tool_name: "closeout.list_evidence" }),
 ]);
+const BLIND_INTAKE_DEFAULTS = Object.freeze({
+  IDENTITY_CONFIDENCE_THRESHOLD: 85,
+  CLASSIFICATION_CONFIDENCE_THRESHOLD: 85,
+  DUPLICATE_WINDOW_MINUTES: 120,
+  SOP_HANDOFF_PROMPT: "Confirm onsite access and completion scope before scheduling.",
+});
 
 function normalizeOptionalFilePath(value) {
   if (typeof value !== "string") {
@@ -143,6 +154,40 @@ function parseNonNegativeInteger(value, fallbackValue) {
     return fallbackValue;
   }
   return parsed;
+}
+
+function parseConfidencePercent(value, fallbackValue) {
+  if (value == null || value === "") {
+    return fallbackValue;
+  }
+  const parsed = Number.parseInt(String(value), 10);
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 100) {
+    return fallbackValue;
+  }
+  return parsed;
+}
+
+function resolveBlindIntakePolicy(config = {}) {
+  return Object.freeze({
+    identityConfidenceThreshold: parseConfidencePercent(
+      config.identityConfidenceThreshold ??
+        process.env.DISPATCH_INTAKE_IDENTITY_CONFIDENCE_THRESHOLD,
+      BLIND_INTAKE_DEFAULTS.IDENTITY_CONFIDENCE_THRESHOLD,
+    ),
+    classificationConfidenceThreshold: parseConfidencePercent(
+      config.classificationConfidenceThreshold ??
+        process.env.DISPATCH_INTAKE_CLASSIFICATION_CONFIDENCE_THRESHOLD,
+      BLIND_INTAKE_DEFAULTS.CLASSIFICATION_CONFIDENCE_THRESHOLD,
+    ),
+    duplicateWindowMinutes: parseNonNegativeInteger(
+      config.duplicateWindowMinutes ?? process.env.DISPATCH_INTAKE_DUPLICATE_WINDOW_MINUTES,
+      BLIND_INTAKE_DEFAULTS.DUPLICATE_WINDOW_MINUTES,
+    ),
+    sopHandoffPrompt:
+      typeof config.sopHandoffPrompt === "string" && config.sopHandoffPrompt.trim() !== ""
+        ? config.sopHandoffPrompt.trim()
+        : BLIND_INTAKE_DEFAULTS.SOP_HANDOFF_PROMPT,
+  });
 }
 
 function resolveAlertThresholds(config = {}) {
@@ -238,7 +283,7 @@ function createMetricsRegistry(options = {}) {
           count,
         };
       })
-      .sort(
+      .toSorted(
         (left, right) =>
           left.method.localeCompare(right.method) ||
           left.endpoint.localeCompare(right.endpoint) ||
@@ -250,7 +295,7 @@ function createMetricsRegistry(options = {}) {
         code,
         count,
       }))
-      .sort((left, right) => left.code.localeCompare(right.code));
+      .toSorted((left, right) => left.code.localeCompare(right.code));
 
     const transitions = Array.from(transitionsTotal.entries())
       .map(([key, count]) => {
@@ -261,7 +306,7 @@ function createMetricsRegistry(options = {}) {
           count,
         };
       })
-      .sort((left, right) => {
+      .toSorted((left, right) => {
         const leftFrom = left.from_state ?? "";
         const rightFrom = right.from_state ?? "";
         const fromOrder = leftFrom.localeCompare(rightFrom);
@@ -312,7 +357,8 @@ function createMetricsRegistry(options = {}) {
       publishSnapshot();
     },
     incrementError(code) {
-      const normalized = typeof code === "string" && code.trim() !== "" ? code.trim() : "UNKNOWN_ERROR";
+      const normalized =
+        typeof code === "string" && code.trim() !== "" ? code.trim() : "UNKNOWN_ERROR";
       incrementCounter(errorsTotal, normalized);
       publishSnapshot();
     },
@@ -373,15 +419,17 @@ async function queryStuckSchedulingCount(pool, staleMinutes) {
 }
 
 async function buildOperationalAlertsSnapshot(params) {
-  const {
-    pool,
-    metrics,
-    alertThresholds,
-  } = params;
+  const { pool, metrics, alertThresholds } = params;
 
   const metricsSnapshot = metrics.snapshot();
-  const stuckSchedulingCount = await queryStuckSchedulingCount(pool, alertThresholds.stuck_scheduling_minutes);
-  const completionRejectionCount = findErrorCounterCount(metricsSnapshot, "CLOSEOUT_REQUIREMENTS_INCOMPLETE");
+  const stuckSchedulingCount = await queryStuckSchedulingCount(
+    pool,
+    alertThresholds.stuck_scheduling_minutes,
+  );
+  const completionRejectionCount = findErrorCounterCount(
+    metricsSnapshot,
+    "CLOSEOUT_REQUIREMENTS_INCOMPLETE",
+  );
   const idempotencyConflictCount = Number(metricsSnapshot.counters.idempotency_conflict_total ?? 0);
   const authPolicyFailureCount = sumAuthPolicyFailureCount(metricsSnapshot);
 
@@ -485,9 +533,19 @@ function serializeTicket(row) {
     incident_type: row.incident_type,
     summary: row.summary,
     description: row.description,
+    customer_name: row.customer_name,
+    customer_phone: row.customer_phone,
+    customer_email: row.customer_email,
     nte_cents: Number(row.nte_cents),
     scheduled_start: row.scheduled_start ? new Date(row.scheduled_start).toISOString() : null,
     scheduled_end: row.scheduled_end ? new Date(row.scheduled_end).toISOString() : null,
+    identity_signature: row.identity_signature,
+    identity_confidence: row.identity_confidence == null ? 0 : Number(row.identity_confidence),
+    classification_confidence:
+      row.classification_confidence == null ? 0 : Number(row.classification_confidence),
+    sop_handoff_required: Boolean(row.sop_handoff_required ?? false),
+    sop_handoff_acknowledged: Boolean(row.sop_handoff_acknowledged ?? false),
+    sop_handoff_prompt: row.sop_handoff_prompt ?? null,
     assigned_provider_id: row.assigned_provider_id,
     assigned_tech_id: row.assigned_tech_id,
     version: Number(row.version),
@@ -608,13 +666,7 @@ async function insertAuditEvent(client, params) {
 }
 
 async function insertTransitionRow(client, params) {
-  const {
-    ticketId,
-    fromState,
-    toState,
-    auditEventId,
-    metrics,
-  } = params;
+  const { ticketId, fromState, toState, auditEventId, metrics } = params;
 
   await client.query(
     `
@@ -635,12 +687,7 @@ async function insertTransitionRow(client, params) {
 }
 
 async function insertAuditAndTransition(client, params) {
-  const {
-    ticketId,
-    beforeState,
-    afterState,
-    metrics,
-  } = params;
+  const { ticketId, beforeState, afterState, metrics } = params;
   const auditEventId = await insertAuditEvent(client, params);
   await insertTransitionRow(client, {
     ticketId,
@@ -897,8 +944,11 @@ function computeSlaSnapshot(ticketRow, nowAt = new Date()) {
     typeof ticketRow.priority === "string" && VALID_PRIORITIES.includes(ticketRow.priority)
       ? ticketRow.priority
       : "ROUTINE";
-  const targetMinutes = SLA_TARGET_MINUTES_BY_PRIORITY[priority] ?? SLA_TARGET_MINUTES_BY_PRIORITY.ROUTINE;
-  const baseDate = ticketRow.scheduled_start ? new Date(ticketRow.scheduled_start) : new Date(ticketRow.created_at);
+  const targetMinutes =
+    SLA_TARGET_MINUTES_BY_PRIORITY[priority] ?? SLA_TARGET_MINUTES_BY_PRIORITY.ROUTINE;
+  const baseDate = ticketRow.scheduled_start
+    ? new Date(ticketRow.scheduled_start)
+    : new Date(ticketRow.created_at);
   const deadlineMs = baseDate.getTime() + targetMinutes * 60_000;
   const remainingMinutes = Math.floor((deadlineMs - nowAt.getTime()) / 60_000);
   const slaStatus =
@@ -942,7 +992,9 @@ function buildActionDescriptor(params) {
     throw new HttpError(500, "INTERNAL_ERROR", `Missing action tool policy '${toolName}'`);
   }
 
-  const endpoint = policy.requires_ticket_id ? policy.endpoint.replace("{ticketId}", String(ticketId ?? "")) : policy.endpoint;
+  const endpoint = policy.requires_ticket_id
+    ? policy.endpoint.replace("{ticketId}", String(ticketId ?? ""))
+    : policy.endpoint;
   let policyError = null;
 
   if (!policy.allowed_roles.includes(actorRole)) {
@@ -954,7 +1006,11 @@ function buildActionDescriptor(params) {
         allowed_roles: policy.allowed_roles,
       },
     );
-  } else if (Array.isArray(policy.allowed_from_states) && ticketState && !policy.allowed_from_states.includes(ticketState)) {
+  } else if (
+    Array.isArray(policy.allowed_from_states) &&
+    ticketState &&
+    !policy.allowed_from_states.includes(ticketState)
+  ) {
     policyError = createActionPolicyError(
       "INVALID_STATE_TRANSITION",
       "Ticket state does not allow this action",
@@ -977,6 +1033,311 @@ function buildActionDescriptor(params) {
     enabled: policyError == null,
     policy_error: policyError,
   };
+}
+
+function normalizeStringTrimmed(value, fieldName, { required = false, fallback = null } = {}) {
+  if (value == null || value === "") {
+    if (required) {
+      throw new HttpError(400, "INVALID_REQUEST", `Field '${fieldName}' is required`);
+    }
+    return fallback;
+  }
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new HttpError(400, "INVALID_REQUEST", `Field '${fieldName}' must be a non-empty string`);
+  }
+  return value.trim();
+}
+
+function normalizeBoolean(value, fieldName, { required = false, fallback = null } = {}) {
+  if (value == null) {
+    if (required) {
+      throw new HttpError(400, "INVALID_REQUEST", `Field '${fieldName}' is required`);
+    }
+    return fallback;
+  }
+  if (typeof value !== "boolean") {
+    throw new HttpError(400, "INVALID_REQUEST", `Field '${fieldName}' must be a boolean`);
+  }
+  return value;
+}
+
+function normalizeConfidence(value, fieldName) {
+  if (value == null) {
+    throw new HttpError(400, "INVALID_REQUEST", `Field '${fieldName}' is required`);
+  }
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 100) {
+    throw new HttpError(
+      400,
+      "INVALID_REQUEST",
+      `Field '${fieldName}' must be a confidence number from 0 to 100`,
+    );
+  }
+  return Math.trunc(parsed);
+}
+
+function normalizePhone(value, fieldName) {
+  if (value == null) {
+    return null;
+  }
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new HttpError(400, "INVALID_REQUEST", `Field '${fieldName}' must be a non-empty string`);
+  }
+  const digits = value.replace(/\D/g, "");
+  if (digits.length < 7 || digits.length > 16) {
+    throw new HttpError(400, "INVALID_REQUEST", `Field '${fieldName}' must include 7-16 digits`);
+  }
+  return digits;
+}
+
+function normalizeEmail(value, fieldName) {
+  if (value == null) {
+    return null;
+  }
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new HttpError(400, "INVALID_REQUEST", `Field '${fieldName}' must be a non-empty string`);
+  }
+  const normalized = value.trim().toLowerCase();
+  if (!normalized.includes("@") || normalized.includes(" ")) {
+    throw new HttpError(400, "INVALID_REQUEST", `Field '${fieldName}' must be a valid email`);
+  }
+  return normalized;
+}
+
+function isPriorityAllowed(value) {
+  return value && VALID_PRIORITIES.includes(value);
+}
+
+function evaluateBlindIntakeReadiness(intake, policy) {
+  const reasons = [];
+  if (intake.identity_confidence < policy.identityConfidenceThreshold) {
+    reasons.push("IDENTITY_CONFIDENCE");
+  }
+  if (intake.classification_confidence < policy.classificationConfidenceThreshold) {
+    reasons.push("CLASSIFICATION_CONFIDENCE");
+  }
+  if (!intake.sop_handoff_acknowledged) {
+    reasons.push("SOP_HANDOFF_REQUIRED");
+  }
+
+  return {
+    ready: reasons.length === 0,
+    readiness_reasons: reasons,
+  };
+}
+
+function parseBlindIntakePayload(body, policy) {
+  const accountId = normalizeStringTrimmed(body.account_id, "account_id", { required: true });
+  const siteId = normalizeStringTrimmed(body.site_id, "site_id", { required: true });
+  if (!isUuid(accountId)) {
+    throw new HttpError(400, "INVALID_REQUEST", "Field 'account_id' must be a valid UUID");
+  }
+  if (!isUuid(siteId)) {
+    throw new HttpError(400, "INVALID_REQUEST", "Field 'site_id' must be a valid UUID");
+  }
+  const summary = normalizeStringTrimmed(body.summary, "summary", { required: true });
+  const incidentType = normalizeStringTrimmed(body.incident_type, "incident_type", {
+    required: true,
+  });
+  const customerName = normalizeStringTrimmed(body.customer_name, "customer_name", {
+    required: true,
+  });
+  const customerPhone = normalizePhone(body.contact_phone, "contact_phone");
+  const customerEmail = normalizeEmail(body.contact_email, "contact_email");
+  if (customerPhone == null && customerEmail == null) {
+    throw new HttpError(
+      400,
+      "BLIND_INTAKE_VALIDATION_FAILED",
+      "Either 'contact_phone' or 'contact_email' is required",
+      {
+        missing_contact_channel: true,
+      },
+    );
+  }
+
+  const priorityRaw = normalizeStringTrimmed(body.priority, "priority", {
+    required: true,
+  }).toUpperCase();
+  if (!isPriorityAllowed(priorityRaw)) {
+    throw new HttpError(
+      400,
+      "INVALID_REQUEST",
+      "Field 'priority' must be EMERGENCY, URGENT, or ROUTINE",
+    );
+  }
+
+  const description = normalizeStringTrimmed(body.description, "description", {
+    required: false,
+    fallback: null,
+  });
+  const nteCents = body.nte_cents == null ? 0 : Number(body.nte_cents);
+  if (!Number.isFinite(nteCents) || nteCents < 0) {
+    throw new HttpError(400, "INVALID_REQUEST", "Field 'nte_cents' must be a non-negative number");
+  }
+  const identityConfidence = normalizeConfidence(body.identity_confidence, "identity_confidence");
+  const classificationConfidence = normalizeConfidence(
+    body.classification_confidence,
+    "classification_confidence",
+  );
+  const sopHandoffAcknowledged = normalizeBoolean(
+    body.sop_handoff_acknowledged,
+    "sop_handoff_acknowledged",
+    {
+      fallback: false,
+    },
+  );
+  const contactPhone = customerPhone;
+  const readiness = evaluateBlindIntakeReadiness(
+    {
+      identity_confidence: identityConfidence,
+      classification_confidence: classificationConfidence,
+      sop_handoff_acknowledged: sopHandoffAcknowledged,
+    },
+    policy,
+  );
+
+  const requestedSopPrompt = normalizeStringTrimmed(body.sop_handoff_prompt, "sop_handoff_prompt", {
+    required: false,
+    fallback: null,
+  });
+
+  return {
+    accountId,
+    siteId,
+    summary,
+    incidentType,
+    description,
+    customerName,
+    customerPhone: contactPhone,
+    customerEmail,
+    priority: priorityRaw,
+    nteCents,
+    identityConfidence,
+    classificationConfidence,
+    sopHandoffAcknowledged,
+    readiness,
+    sopHandoffPrompt: requestedSopPrompt ?? policy.sopHandoffPrompt,
+  };
+}
+
+function buildIntakeIdentitySignature(payload) {
+  return canonicalJsonHash({
+    account_id: payload.accountId.toLowerCase(),
+    site_id: payload.siteId.toLowerCase(),
+    incident_type: payload.incidentType.trim().toUpperCase(),
+    summary: payload.summary.trim().toLowerCase(),
+    customer_name: payload.customerName.trim().toLowerCase(),
+    contact_phone: payload.customerPhone || null,
+    contact_email: payload.customerEmail || null,
+  });
+}
+
+function toBlindIntakeEligibilityPayload(ticketRow, policy) {
+  const identityConfidence = Number(ticketRow.identity_confidence ?? 0);
+  const classificationConfidence = Number(ticketRow.classification_confidence ?? 0);
+  return {
+    identity_confidence: identityConfidence,
+    classification_confidence: classificationConfidence,
+    identity_threshold: policy.identityConfidenceThreshold,
+    classification_threshold: policy.classificationConfidenceThreshold,
+    sop_handoff_required: Boolean(ticketRow.sop_handoff_required ?? false),
+    sop_handoff_acknowledged: Boolean(ticketRow.sop_handoff_acknowledged ?? false),
+  };
+}
+
+function assertReadyToScheduleGuard(ticket, body, policy) {
+  const requestedSopAck = normalizeBoolean(
+    body.sop_handoff_acknowledged,
+    "sop_handoff_acknowledged",
+    { fallback: false },
+  );
+  const context = toBlindIntakeEligibilityPayload(ticket, policy);
+  if (context.identity_confidence < policy.identityConfidenceThreshold) {
+    throw new HttpError(
+      409,
+      "LOW_IDENTITY_CONFIDENCE",
+      "Identity confidence is below schedulability threshold",
+      {
+        evidence: "identity_confidence_below_threshold",
+        identity_confidence: context.identity_confidence,
+        identity_threshold: context.identity_threshold,
+      },
+    );
+  }
+  if (context.classification_confidence < policy.classificationConfidenceThreshold) {
+    throw new HttpError(
+      409,
+      "LOW_CLASSIFICATION_CONFIDENCE",
+      "Classification confidence is below schedulability threshold",
+      {
+        evidence: "classification_confidence_below_threshold",
+        classification_confidence: context.classification_confidence,
+        classification_threshold: context.classification_threshold,
+      },
+    );
+  }
+  if (context.sop_handoff_required && !requestedSopAck && !context.sop_handoff_acknowledged) {
+    throw new HttpError(
+      409,
+      "SOP_HANDOFF_REQUIRED",
+      "SOP handoff acknowledgment is required before scheduling",
+      {
+        evidence: "sop_handoff_acknowledgment_missing",
+      },
+    );
+  }
+}
+
+async function findOpenIntakeDuplicate(client, payload) {
+  const result = await client.query(
+    `
+      SELECT id, state, created_at
+      FROM tickets
+      WHERE account_id = $1
+        AND site_id = $2
+        AND identity_signature = $3
+        AND state <> 'CLOSED'
+        AND created_at >= (now() - ($4::int * interval '1 minute'))
+      ORDER BY created_at DESC, id DESC
+      LIMIT 1
+    `,
+    [
+      payload.accountId,
+      payload.siteId,
+      payload.identity_signature,
+      payload.duplicate_window_minutes,
+    ],
+  );
+  if (result.rowCount === 0) {
+    return null;
+  }
+  return result.rows[0];
+}
+
+async function linkDuplicateIntakeAttempt(client, context) {
+  const { payload, existingTicket, actor, requestId, correlationId, traceId, blindIntakePolicy } =
+    context;
+  await insertAuditEvent(client, {
+    ticketId: existingTicket.id,
+    beforeState: existingTicket.state,
+    afterState: existingTicket.state,
+    actorType: actor.actorType,
+    actorId: actor.actorId,
+    actorRole: actor.actorRole,
+    toolName: actor.toolName,
+    requestId,
+    correlationId,
+    traceId,
+    payload: {
+      endpoint: "/tickets/intake",
+      requested_at: nowIso(),
+      error_code: "DUPLICATE_INTAKE",
+      duplicate_window_minutes: blindIntakePolicy.duplicateWindowMinutes,
+      identity_signature: payload.identity_signature,
+      request: payload.request,
+      duplicate_ticket_id: existingTicket.id,
+    },
+  });
 }
 
 function parseCompletionChecklistStatus(payload) {
@@ -1014,13 +1375,8 @@ async function getLatestCompletionPayload(pool, ticketId) {
 }
 
 function evaluatePacketCloseoutGate(params) {
-  const {
-    incidentType,
-    evidenceRows,
-    checklistStatus,
-    noSignatureReason,
-    objectStoreSchemes,
-  } = params;
+  const { incidentType, evidenceRows, checklistStatus, noSignatureReason, objectStoreSchemes } =
+    params;
 
   if (typeof incidentType !== "string" || incidentType.trim() === "") {
     return {
@@ -1084,7 +1440,10 @@ function evaluatePacketCloseoutGate(params) {
       evidenceKeys.push(evidenceKey);
     }
   }
-  if (evidenceValidation.signature_satisfied && !evidenceKeys.includes("signature_or_no_signature_reason")) {
+  if (
+    evidenceValidation.signature_satisfied &&
+    !evidenceKeys.includes("signature_or_no_signature_reason")
+  ) {
     evidenceKeys.push("signature_or_no_signature_reason");
   }
 
@@ -1126,11 +1485,7 @@ function evaluatePacketCloseoutGate(params) {
 }
 
 async function buildDispatcherCockpitView(params) {
-  const {
-    pool,
-    actor,
-    searchParams,
-  } = params;
+  const { pool, actor, searchParams } = params;
   const scopeFilter = resolveActorScopeFilter(actor);
   const stateFilter = parseEnumSearchFilter(searchParams, "state", VALID_TICKET_STATES, {
     uppercase: true,
@@ -1144,7 +1499,10 @@ async function buildDispatcherCockpitView(params) {
   const assignedTechFilter = parseUuidSearchFilter(searchParams, "assigned_tech_id");
   const incidentTypeFilter = parseSearchValues(searchParams, "incident_type", { uppercase: true });
   const selectedTicketIdRaw = searchParams.get("ticket_id");
-  const selectedTicketId = selectedTicketIdRaw == null || selectedTicketIdRaw.trim() === "" ? null : selectedTicketIdRaw.trim();
+  const selectedTicketId =
+    selectedTicketIdRaw == null || selectedTicketIdRaw.trim() === ""
+      ? null
+      : selectedTicketIdRaw.trim();
   if (selectedTicketId && !isUuid(selectedTicketId)) {
     throw new HttpError(400, "INVALID_QUERY", "Query 'ticket_id' must be a valid UUID");
   }
@@ -1250,7 +1608,9 @@ async function buildDispatcherCockpitView(params) {
         actions,
       };
     })
-    .filter((row) => (slaStatusFilter.length > 0 ? slaStatusFilter.includes(row.sla_status) : true));
+    .filter((row) =>
+      slaStatusFilter.length > 0 ? slaStatusFilter.includes(row.sla_status) : true,
+    );
 
   queueRows.sort((left, right) => {
     const leftBreach = left.sla_status === "breach" ? 0 : left.sla_status === "warning" ? 1 : 2;
@@ -1282,7 +1642,8 @@ async function buildDispatcherCockpitView(params) {
   if (selectedTicketId) {
     const ticket = await getTicket(pool, selectedTicketId);
     const withinScope =
-      (scopeFilter.account_wildcard || scopeFilter.account_ids.includes(ticket.account_id.toLowerCase())) &&
+      (scopeFilter.account_wildcard ||
+        scopeFilter.account_ids.includes(ticket.account_id.toLowerCase())) &&
       (scopeFilter.site_wildcard || scopeFilter.site_ids.includes(ticket.site_id.toLowerCase()));
     if (!withinScope) {
       throw new HttpError(403, "FORBIDDEN_SCOPE", "Actor scope does not include selected ticket", {
@@ -1325,13 +1686,7 @@ async function buildDispatcherCockpitView(params) {
 }
 
 async function buildTechnicianJobPacketView(params) {
-  const {
-    pool,
-    actor,
-    authRuntime,
-    ticketId,
-    objectStoreSchemes,
-  } = params;
+  const { pool, actor, authRuntime, ticketId, objectStoreSchemes } = params;
   validateTicketId(ticketId);
 
   const ticketResult = await pool.query(
@@ -1398,7 +1753,9 @@ async function buildTechnicianJobPacketView(params) {
     typeof noSignatureReasonRaw === "string" && noSignatureReasonRaw.trim() !== ""
       ? noSignatureReasonRaw.trim()
       : null;
-  const template = ticketRow.incident_type ? getIncidentTemplate(ticketRow.incident_type.trim()) : null;
+  const template = ticketRow.incident_type
+    ? getIncidentTemplate(ticketRow.incident_type.trim())
+    : null;
   const requiredEvidenceKeys = template?.required_evidence_keys ?? [];
   const requiredChecklistKeys = template?.required_checklist_keys ?? [];
   const checklistStatusRaw = parseCompletionChecklistStatus(latestCompletionPayload);
@@ -1472,7 +1829,9 @@ async function buildTechnicianJobPacketView(params) {
         incident_type: ticketRow.incident_type,
         current_state: ticketRow.state,
         scheduled_window: {
-          start: ticketRow.scheduled_start ? new Date(ticketRow.scheduled_start).toISOString() : null,
+          start: ticketRow.scheduled_start
+            ? new Date(ticketRow.scheduled_start).toISOString()
+            : null,
           end: ticketRow.scheduled_end ? new Date(ticketRow.scheduled_end).toISOString() : null,
         },
         assigned_provider_id: ticketRow.assigned_provider_id,
@@ -1605,10 +1964,7 @@ function assertTicketScope(authRuntime, actor, ticketLike) {
 }
 
 function parseObjectStoreSchemes(value) {
-  const raw =
-    typeof value === "string" && value.trim() !== ""
-      ? value
-      : "s3,minio";
+  const raw = typeof value === "string" && value.trim() !== "" ? value : "s3,minio";
   const entries = raw
     .split(",")
     .map((item) => item.trim().toLowerCase())
@@ -1634,7 +1990,11 @@ function isObjectStoreResolvableUri(uri, objectStoreSchemes) {
     if (typeof parsed.hostname !== "string" || parsed.hostname.trim() === "") {
       return false;
     }
-    if (typeof parsed.pathname !== "string" || parsed.pathname.trim() === "" || parsed.pathname === "/") {
+    if (
+      typeof parsed.pathname !== "string" ||
+      parsed.pathname.trim() === "" ||
+      parsed.pathname === "/"
+    ) {
       return false;
     }
     return true;
@@ -1688,7 +2048,7 @@ function resolveEvidenceReferenceCandidate(reference, lookup) {
 }
 
 function uniqueSorted(values) {
-  return [...new Set(values)].sort((left, right) => left.localeCompare(right));
+  return [...new Set(values)].toSorted((left, right) => left.localeCompare(right));
 }
 
 function resolveCloseoutValidationContext(params) {
@@ -1710,14 +2070,19 @@ function resolveCloseoutValidationContext(params) {
   });
 
   if (signatureEvidenceRows.length === 0 && noSignatureReason === null) {
-    throw new HttpError(409, "CLOSEOUT_REQUIREMENTS_INCOMPLETE", "Closeout requirements are incomplete", {
-      requirement_code: "MISSING_SIGNATURE_CONFIRMATION",
-      incident_type: String(incidentType).trim().toUpperCase(),
-      template_version: null,
-      missing_evidence_keys: ["signature_or_no_signature_reason"],
-      missing_checklist_keys: [],
-      invalid_evidence_refs: [],
-    });
+    throw new HttpError(
+      409,
+      "CLOSEOUT_REQUIREMENTS_INCOMPLETE",
+      "Closeout requirements are incomplete",
+      {
+        requirement_code: "MISSING_SIGNATURE_CONFIRMATION",
+        incident_type: String(incidentType).trim().toUpperCase(),
+        template_version: null,
+        missing_evidence_keys: ["signature_or_no_signature_reason"],
+        missing_checklist_keys: [],
+        invalid_evidence_refs: [],
+      },
+    );
   }
 
   const template = getIncidentTemplate(incidentType);
@@ -1769,14 +2134,7 @@ function resolveCloseoutValidationContext(params) {
 }
 
 async function runWithIdempotency(params) {
-  const {
-    pool,
-    actorId,
-    endpoint,
-    requestId,
-    requestBody,
-    runMutation,
-  } = params;
+  const { pool, actorId, endpoint, requestId, requestBody, runMutation } = params;
   const requestHash = canonicalJsonHash(requestBody);
   const client = await pool.connect();
 
@@ -1934,6 +2292,136 @@ async function createTicketMutation(client, context) {
   };
 }
 
+async function blindIntakeMutation(client, context) {
+  const {
+    body,
+    actor,
+    requestId,
+    correlationId,
+    traceId,
+    metrics,
+    authRuntime,
+    blindIntakePolicy,
+  } = context;
+  ensureObject(body);
+  const payload = parseBlindIntakePayload(body, blindIntakePolicy);
+  authRuntime.assertActorScopeForTarget(actor, {
+    accountId: payload.accountId,
+    siteId: payload.siteId,
+  });
+
+  payload.identity_signature = buildIntakeIdentitySignature(payload);
+  payload.duplicate_window_minutes = blindIntakePolicy.duplicateWindowMinutes;
+  payload.request = body;
+
+  const existingOpenTicket = await findOpenIntakeDuplicate(client, payload);
+  if (existingOpenTicket) {
+    await linkDuplicateIntakeAttempt({
+      payload,
+      existingTicket: existingOpenTicket,
+      actor,
+      requestId,
+      correlationId,
+      traceId,
+      blindIntakePolicy,
+    });
+
+    throw new HttpError(409, "DUPLICATE_INTAKE", "Duplicate blind intake request detected", {
+      duplicate_ticket_id: existingOpenTicket.id,
+      duplicate_ticket_state: existingOpenTicket.state,
+      duplicate_created_at: new Date(existingOpenTicket.created_at).toISOString(),
+      identity_signature: payload.identity_signature,
+      duplicate_within_minutes: blindIntakePolicy.duplicateWindowMinutes,
+    });
+  }
+
+  if (payload.readiness.ready === false) {
+    if (payload.readiness.readiness_reasons.includes("SOP_HANDOFF_REQUIRED")) {
+      payload.sop_handoff_prompt = payload.sopHandoffPrompt;
+    }
+  }
+
+  const targetState = payload.readiness.ready ? "READY_TO_SCHEDULE" : "TRIAGED";
+  const insertResult = await client.query(
+    `
+      INSERT INTO tickets (
+        account_id,
+        site_id,
+        state,
+        summary,
+        description,
+        incident_type,
+        priority,
+        nte_cents,
+        customer_name,
+        customer_phone,
+        customer_email,
+        identity_signature,
+        identity_confidence,
+        classification_confidence,
+        sop_handoff_required,
+        sop_handoff_acknowledged,
+        sop_handoff_prompt
+      )
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+      RETURNING *
+    `,
+    [
+      payload.accountId,
+      payload.siteId,
+      targetState,
+      payload.summary,
+      payload.description,
+      payload.incidentType,
+      payload.priority,
+      payload.nteCents,
+      payload.customerName,
+      payload.customerPhone,
+      payload.customerEmail,
+      payload.identity_signature,
+      payload.identityConfidence,
+      payload.classificationConfidence,
+      targetState === "TRIAGED",
+      payload.readiness.ready,
+      targetState === "TRIAGED" ? payload.sopHandoffPrompt : null,
+    ],
+  );
+  const ticket = insertResult.rows[0];
+
+  await insertAuditAndTransition(client, {
+    ticketId: ticket.id,
+    beforeState: null,
+    afterState: targetState,
+    metrics,
+    actorType: actor.actorType,
+    actorId: actor.actorId,
+    actorRole: actor.actorRole,
+    toolName: actor.toolName,
+    requestId,
+    correlationId,
+    traceId,
+    payload: {
+      endpoint: "/tickets/intake",
+      requested_at: nowIso(),
+      request: body,
+      state_recommendation: targetState,
+      readiness: payload.readiness,
+      identity_signature: payload.identity_signature,
+      policy: {
+        identity_confidence_threshold: blindIntakePolicy.identityConfidenceThreshold,
+        classification_confidence_threshold: blindIntakePolicy.classificationConfidenceThreshold,
+      },
+      sop_handoff_required: targetState === "TRIAGED",
+      sop_handoff_acknowledged: payload.sopHandoffAcknowledged,
+    },
+  });
+
+  return {
+    status: 201,
+    body: serializeTicket(ticket),
+  };
+}
+
 function resolveTriageTargetState(body) {
   const explicitOutcome =
     typeof body.workflow_outcome === "string" ? body.workflow_outcome.trim().toUpperCase() : null;
@@ -1958,7 +2446,17 @@ function resolveTriageTargetState(body) {
 }
 
 async function triageTicketMutation(client, context) {
-  const { ticketId, body, actor, requestId, correlationId, traceId, metrics, authRuntime } = context;
+  const {
+    ticketId,
+    body,
+    actor,
+    requestId,
+    correlationId,
+    traceId,
+    metrics,
+    authRuntime,
+    blindIntakePolicy,
+  } = context;
   ensureObject(body);
   ensureString(body.priority, "priority");
   ensureString(body.incident_type, "incident_type");
@@ -1971,10 +2469,17 @@ async function triageTicketMutation(client, context) {
     throw new HttpError(400, "INVALID_REQUEST", "Field 'nte_cents' must be a non-negative number");
   }
   const targetState = resolveTriageTargetState(body);
+  const resolvedBlindIntakePolicy = resolveBlindIntakePolicy(blindIntakePolicy ?? {});
 
   const existing = await getTicketForUpdate(client, ticketId);
+  const isBlindIntakeTicket =
+    typeof existing.identity_signature === "string" && existing.identity_signature.trim() !== "";
   assertTicketScope(authRuntime, actor, existing);
   assertCommandStateAllowed("/tickets/{ticketId}/triage", existing.state, body);
+
+  if (isBlindIntakeTicket && targetState === "READY_TO_SCHEDULE") {
+    assertReadyToScheduleGuard(existing, body, resolvedBlindIntakePolicy);
+  }
 
   const update = await client.query(
     `
@@ -1984,6 +2489,8 @@ async function triageTicketMutation(client, context) {
         priority = $3,
         incident_type = $4,
         nte_cents = COALESCE($5, nte_cents),
+        sop_handoff_acknowledged = CASE WHEN $2 = 'READY_TO_SCHEDULE' THEN true ELSE sop_handoff_acknowledged END,
+        sop_handoff_required = CASE WHEN $2 = 'READY_TO_SCHEDULE' THEN false ELSE sop_handoff_required END,
         version = version + 1
       WHERE id = $1
       RETURNING *
@@ -2066,10 +2573,7 @@ async function triageTicketMutation(client, context) {
         requested_at: nowIso(),
         request: body,
         workflow_outcome: targetState,
-        derived_transitions: [
-          `${existing.state}->TRIAGED`,
-          `TRIAGED->${targetState}`,
-        ],
+        derived_transitions: [`${existing.state}->TRIAGED`, `TRIAGED->${targetState}`],
       },
     });
 
@@ -2096,7 +2600,8 @@ async function triageTicketMutation(client, context) {
 }
 
 async function proposeScheduleMutation(client, context) {
-  const { ticketId, body, actor, requestId, correlationId, traceId, metrics, authRuntime } = context;
+  const { ticketId, body, actor, requestId, correlationId, traceId, metrics, authRuntime } =
+    context;
   ensureObject(body);
   ensureArrayField(body.options, "options");
   if (body.options.length === 0) {
@@ -2167,7 +2672,8 @@ async function proposeScheduleMutation(client, context) {
 }
 
 async function confirmScheduleMutation(client, context) {
-  const { ticketId, body, actor, requestId, correlationId, traceId, metrics, authRuntime } = context;
+  const { ticketId, body, actor, requestId, correlationId, traceId, metrics, authRuntime } =
+    context;
   ensureObject(body);
   const start = parseIsoDate(body.start, "start");
   const end = parseIsoDate(body.end, "end");
@@ -2221,7 +2727,8 @@ async function confirmScheduleMutation(client, context) {
 }
 
 async function dispatchAssignmentMutation(client, context) {
-  const { ticketId, body, actor, requestId, correlationId, traceId, metrics, authRuntime } = context;
+  const { ticketId, body, actor, requestId, correlationId, traceId, metrics, authRuntime } =
+    context;
   ensureObject(body);
   requireUuidField(body.tech_id, "tech_id");
   if (body.provider_id != null) {
@@ -2275,7 +2782,8 @@ async function dispatchAssignmentMutation(client, context) {
 }
 
 async function techCheckInMutation(client, context) {
-  const { ticketId, body, actor, requestId, correlationId, traceId, metrics, authRuntime } = context;
+  const { ticketId, body, actor, requestId, correlationId, traceId, metrics, authRuntime } =
+    context;
   ensureObject(body);
   const timestamp = parseIsoDate(body.timestamp, "timestamp");
   if (body.location != null) {
@@ -2341,7 +2849,8 @@ async function techCheckInMutation(client, context) {
 }
 
 async function techRequestChangeMutation(client, context) {
-  const { ticketId, body, actor, requestId, correlationId, traceId, metrics, authRuntime } = context;
+  const { ticketId, body, actor, requestId, correlationId, traceId, metrics, authRuntime } =
+    context;
   ensureObject(body);
   ensureString(body.approval_type, "approval_type");
   ensureString(body.reason, "reason");
@@ -2454,7 +2963,8 @@ async function techRequestChangeMutation(client, context) {
 }
 
 async function approvalDecideMutation(client, context) {
-  const { ticketId, body, actor, requestId, correlationId, traceId, metrics, authRuntime } = context;
+  const { ticketId, body, actor, requestId, correlationId, traceId, metrics, authRuntime } =
+    context;
   ensureObject(body);
   requireUuidField(body.approval_id, "approval_id");
   ensureString(body.decision, "decision");
@@ -2597,14 +3107,19 @@ async function qaVerifyMutation(client, context) {
   }
 
   if (typeof existing.incident_type !== "string" || existing.incident_type.trim() === "") {
-    throw new HttpError(409, "CLOSEOUT_REQUIREMENTS_INCOMPLETE", "Closeout requirements are incomplete", {
-      requirement_code: "TEMPLATE_NOT_FOUND",
-      incident_type: null,
-      template_version: null,
-      missing_evidence_keys: [],
-      missing_checklist_keys: [],
-      invalid_evidence_refs: [],
-    });
+    throw new HttpError(
+      409,
+      "CLOSEOUT_REQUIREMENTS_INCOMPLETE",
+      "Closeout requirements are incomplete",
+      {
+        requirement_code: "TEMPLATE_NOT_FOUND",
+        incident_type: null,
+        template_version: null,
+        missing_evidence_keys: [],
+        missing_checklist_keys: [],
+        invalid_evidence_refs: [],
+      },
+    );
   }
 
   const latestCompletion = await client.query(
@@ -2621,14 +3136,19 @@ async function qaVerifyMutation(client, context) {
   );
 
   if (latestCompletion.rowCount === 0) {
-    throw new HttpError(409, "CLOSEOUT_REQUIREMENTS_INCOMPLETE", "Closeout requirements are incomplete", {
-      requirement_code: "MISSING_COMPLETION_CONTEXT",
-      incident_type: existing.incident_type ? existing.incident_type.trim().toUpperCase() : null,
-      template_version: null,
-      missing_evidence_keys: [],
-      missing_checklist_keys: [],
-      invalid_evidence_refs: [],
-    });
+    throw new HttpError(
+      409,
+      "CLOSEOUT_REQUIREMENTS_INCOMPLETE",
+      "Closeout requirements are incomplete",
+      {
+        requirement_code: "MISSING_COMPLETION_CONTEXT",
+        incident_type: existing.incident_type ? existing.incident_type.trim().toUpperCase() : null,
+        template_version: null,
+        missing_evidence_keys: [],
+        missing_checklist_keys: [],
+        invalid_evidence_refs: [],
+      },
+    );
   }
 
   const completionPayload = latestCompletion.rows[0].payload;
@@ -2679,14 +3199,19 @@ async function qaVerifyMutation(client, context) {
   });
 
   if (verificationEvidenceValidation.invalid_evidence_refs.length > 0) {
-    throw new HttpError(409, "CLOSEOUT_REQUIREMENTS_INCOMPLETE", "Closeout requirements are incomplete", {
-      requirement_code: "INVALID_EVIDENCE_REFERENCE",
-      incident_type: existing.incident_type.trim().toUpperCase(),
-      template_version: null,
-      missing_evidence_keys: [],
-      missing_checklist_keys: [],
-      invalid_evidence_refs: verificationEvidenceValidation.invalid_evidence_refs,
-    });
+    throw new HttpError(
+      409,
+      "CLOSEOUT_REQUIREMENTS_INCOMPLETE",
+      "Closeout requirements are incomplete",
+      {
+        requirement_code: "INVALID_EVIDENCE_REFERENCE",
+        incident_type: existing.incident_type.trim().toUpperCase(),
+        template_version: null,
+        missing_evidence_keys: [],
+        missing_checklist_keys: [],
+        invalid_evidence_refs: verificationEvidenceValidation.invalid_evidence_refs,
+      },
+    );
   }
 
   const evidenceKeys = [];
@@ -2709,14 +3234,19 @@ async function qaVerifyMutation(client, context) {
     checklist_status: completionChecklist,
   });
   if (!verifyCloseout.ready) {
-    throw new HttpError(409, "CLOSEOUT_REQUIREMENTS_INCOMPLETE", "Closeout requirements are incomplete", {
-      requirement_code: verifyCloseout.code,
-      incident_type: verifyCloseout.incident_type,
-      template_version: verifyCloseout.template_version,
-      missing_evidence_keys: verifyCloseout.missing_evidence_keys,
-      missing_checklist_keys: verifyCloseout.missing_checklist_keys,
-      invalid_evidence_refs: [],
-    });
+    throw new HttpError(
+      409,
+      "CLOSEOUT_REQUIREMENTS_INCOMPLETE",
+      "Closeout requirements are incomplete",
+      {
+        requirement_code: verifyCloseout.code,
+        incident_type: verifyCloseout.incident_type,
+        template_version: verifyCloseout.template_version,
+        missing_evidence_keys: verifyCloseout.missing_evidence_keys,
+        missing_checklist_keys: verifyCloseout.missing_checklist_keys,
+        invalid_evidence_refs: [],
+      },
+    );
   }
 
   const update = await client.query(
@@ -2763,7 +3293,8 @@ async function qaVerifyMutation(client, context) {
 }
 
 async function billingGenerateInvoiceMutation(client, context) {
-  const { ticketId, body, actor, requestId, correlationId, traceId, metrics, authRuntime } = context;
+  const { ticketId, body, actor, requestId, correlationId, traceId, metrics, authRuntime } =
+    context;
   ensureObject(body);
 
   const existing = await getTicketForUpdate(client, ticketId);
@@ -2887,7 +3418,10 @@ async function techCompleteMutation(client, context) {
   } = context;
   ensureObject(body);
   ensureObjectField(body.checklist_status, "checklist_status");
-  const noSignatureReason = normalizeOptionalString(body.no_signature_reason, "no_signature_reason");
+  const noSignatureReason = normalizeOptionalString(
+    body.no_signature_reason,
+    "no_signature_reason",
+  );
   const explicitEvidenceRefs = normalizeOptionalStringArray(body.evidence_refs, "evidence_refs");
 
   const existing = await getTicketForUpdate(client, ticketId);
@@ -2895,13 +3429,18 @@ async function techCompleteMutation(client, context) {
   assertCommandStateAllowed("/tickets/{ticketId}/tech/complete", existing.state, body);
 
   if (typeof existing.incident_type !== "string" || existing.incident_type.trim() === "") {
-    throw new HttpError(409, "CLOSEOUT_REQUIREMENTS_INCOMPLETE", "Closeout requirements are incomplete", {
-      requirement_code: "TEMPLATE_NOT_FOUND",
-      incident_type: null,
-      template_version: null,
-      missing_evidence_keys: [],
-      missing_checklist_keys: [],
-    });
+    throw new HttpError(
+      409,
+      "CLOSEOUT_REQUIREMENTS_INCOMPLETE",
+      "Closeout requirements are incomplete",
+      {
+        requirement_code: "TEMPLATE_NOT_FOUND",
+        incident_type: null,
+        template_version: null,
+        missing_evidence_keys: [],
+        missing_checklist_keys: [],
+      },
+    );
   }
 
   const evidenceResult = await client.query(
@@ -2923,14 +3462,19 @@ async function techCompleteMutation(client, context) {
   });
 
   if (evidenceValidation.invalid_evidence_refs.length > 0) {
-    throw new HttpError(409, "CLOSEOUT_REQUIREMENTS_INCOMPLETE", "Closeout requirements are incomplete", {
-      requirement_code: "INVALID_EVIDENCE_REFERENCE",
-      incident_type: existing.incident_type.trim().toUpperCase(),
-      template_version: null,
-      missing_evidence_keys: [],
-      missing_checklist_keys: [],
-      invalid_evidence_refs: evidenceValidation.invalid_evidence_refs,
-    });
+    throw new HttpError(
+      409,
+      "CLOSEOUT_REQUIREMENTS_INCOMPLETE",
+      "Closeout requirements are incomplete",
+      {
+        requirement_code: "INVALID_EVIDENCE_REFERENCE",
+        incident_type: existing.incident_type.trim().toUpperCase(),
+        template_version: null,
+        missing_evidence_keys: [],
+        missing_checklist_keys: [],
+        invalid_evidence_refs: evidenceValidation.invalid_evidence_refs,
+      },
+    );
   }
 
   const evidenceKeys = [];
@@ -2940,7 +3484,10 @@ async function techCompleteMutation(client, context) {
       evidenceKeys.push(evidenceKey);
     }
   }
-  if (evidenceValidation.signature_satisfied && !evidenceKeys.includes("signature_or_no_signature_reason")) {
+  if (
+    evidenceValidation.signature_satisfied &&
+    !evidenceKeys.includes("signature_or_no_signature_reason")
+  ) {
     evidenceKeys.push("signature_or_no_signature_reason");
   }
 
@@ -2953,25 +3500,35 @@ async function techCompleteMutation(client, context) {
     });
   } catch (error) {
     if (error instanceof IncidentTemplatePolicyError) {
-      throw new HttpError(409, "CLOSEOUT_REQUIREMENTS_INCOMPLETE", "Closeout requirements are incomplete", {
-        requirement_code: "TEMPLATE_NOT_FOUND",
-        incident_type: existing.incident_type.trim().toUpperCase(),
-        template_version: null,
-        missing_evidence_keys: [],
-        missing_checklist_keys: [],
-      });
+      throw new HttpError(
+        409,
+        "CLOSEOUT_REQUIREMENTS_INCOMPLETE",
+        "Closeout requirements are incomplete",
+        {
+          requirement_code: "TEMPLATE_NOT_FOUND",
+          incident_type: existing.incident_type.trim().toUpperCase(),
+          template_version: null,
+          missing_evidence_keys: [],
+          missing_checklist_keys: [],
+        },
+      );
     }
     throw error;
   }
 
   if (!closeoutEvaluation.ready) {
-    throw new HttpError(409, "CLOSEOUT_REQUIREMENTS_INCOMPLETE", "Closeout requirements are incomplete", {
-      requirement_code: closeoutEvaluation.code,
-      incident_type: closeoutEvaluation.incident_type,
-      template_version: closeoutEvaluation.template_version,
-      missing_evidence_keys: closeoutEvaluation.missing_evidence_keys,
-      missing_checklist_keys: closeoutEvaluation.missing_checklist_keys,
-    });
+    throw new HttpError(
+      409,
+      "CLOSEOUT_REQUIREMENTS_INCOMPLETE",
+      "Closeout requirements are incomplete",
+      {
+        requirement_code: closeoutEvaluation.code,
+        incident_type: closeoutEvaluation.incident_type,
+        template_version: closeoutEvaluation.template_version,
+        missing_evidence_keys: closeoutEvaluation.missing_evidence_keys,
+        missing_checklist_keys: closeoutEvaluation.missing_checklist_keys,
+      },
+    );
   }
 
   const update = await client.query(
@@ -3091,6 +3648,15 @@ function resolveRoute(method, pathname) {
     };
   }
 
+  if (method === "POST" && pathname === "/tickets/intake") {
+    return {
+      kind: "command",
+      endpoint: "/tickets/intake",
+      handler: blindIntakeMutation,
+      ticketId: null,
+    };
+  }
+
   const triageMatch = pathname.match(/^\/tickets\/([^/]+)\/triage$/);
   if (method === "POST" && triageMatch && ticketRouteRegex.test(triageMatch[1])) {
     return {
@@ -3142,7 +3708,11 @@ function resolveRoute(method, pathname) {
   }
 
   const techRequestChangeMatch = pathname.match(/^\/tickets\/([^/]+)\/tech\/request-change$/);
-  if (method === "POST" && techRequestChangeMatch && ticketRouteRegex.test(techRequestChangeMatch[1])) {
+  if (
+    method === "POST" &&
+    techRequestChangeMatch &&
+    ticketRouteRegex.test(techRequestChangeMatch[1])
+  ) {
     return {
       kind: "command",
       endpoint: "/tickets/{ticketId}/tech/request-change",
@@ -3224,6 +3794,7 @@ export function createDispatchApiServer(options = {}) {
     options.alertsSinkPath ?? process.env.DISPATCH_ALERTS_SINK_PATH,
   );
   const alertThresholds = resolveAlertThresholds(options.alertThresholds ?? {});
+  const blindIntakePolicy = resolveBlindIntakePolicy(options.blindIntakePolicy ?? {});
   const metrics =
     options.metrics ??
     createMetricsRegistry({
@@ -3533,6 +4104,7 @@ export function createDispatchApiServer(options = {}) {
             metrics,
             authRuntime,
             objectStoreSchemes,
+            blindIntakePolicy,
           }),
       });
 

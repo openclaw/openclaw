@@ -103,6 +103,18 @@ CREATE TABLE IF NOT EXISTS tickets (
   summary text NOT NULL CHECK (length(trim(summary)) > 0),
   description text,
   nte_cents bigint NOT NULL DEFAULT 0 CHECK (nte_cents >= 0),
+  customer_name text,
+  customer_phone text,
+  customer_email text,
+  identity_signature text,
+  identity_confidence int CHECK (identity_confidence IS NULL OR (identity_confidence >= 0 AND identity_confidence <= 100)),
+  classification_confidence int CHECK (
+    classification_confidence IS NULL OR
+    (classification_confidence >= 0 AND classification_confidence <= 100)
+  ),
+  sop_handoff_required boolean NOT NULL DEFAULT false,
+  sop_handoff_acknowledged boolean NOT NULL DEFAULT false,
+  sop_handoff_prompt text,
   currency text NOT NULL DEFAULT 'USD' CHECK (length(trim(currency)) = 3),
   scheduled_start timestamptz,
   scheduled_end timestamptz,
@@ -121,6 +133,12 @@ CREATE TABLE IF NOT EXISTS tickets (
 CREATE INDEX IF NOT EXISTS idx_tickets_state ON tickets(state);
 CREATE INDEX IF NOT EXISTS idx_tickets_site ON tickets(site_id);
 CREATE INDEX IF NOT EXISTS idx_tickets_account ON tickets(account_id);
+CREATE INDEX IF NOT EXISTS idx_tickets_blind_intake_signature_created ON tickets(
+  account_id,
+  site_id,
+  identity_signature,
+  created_at
+);
 CREATE INDEX IF NOT EXISTS idx_tickets_state_priority_created ON tickets(state, priority, created_at);
 CREATE INDEX IF NOT EXISTS idx_tickets_state_schedule ON tickets(state, scheduled_start);
 
@@ -153,6 +171,7 @@ CREATE TABLE IF NOT EXISTS ticket_state_transitions (
   created_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT chk_ticket_state_transition_valid CHECK (
     (from_state IS NULL AND to_state = 'NEW')
+    OR (from_state IS NULL AND to_state IN ('TRIAGED', 'READY_TO_SCHEDULE'))
     OR (from_state = 'NEW' AND to_state IN ('NEEDS_INFO', 'TRIAGED'))
     OR (from_state = 'NEEDS_INFO' AND to_state = 'TRIAGED')
     OR (

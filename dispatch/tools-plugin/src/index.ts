@@ -44,6 +44,7 @@ export default function register(api: {
 
   const toolDescriptions = {
     "ticket.create": "Create a ticket via dispatch-api.",
+    "ticket.blind_intake": "Create a blind intake ticket via dispatch-api.",
     "ticket.triage": "Triage a ticket via dispatch-api.",
     "schedule.propose": "Propose schedule windows via dispatch-api.",
     "schedule.confirm": "Confirm a schedule window via dispatch-api.",

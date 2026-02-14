@@ -12,5 +12,10 @@ Backlog hygiene rules:
 
 Current active item:
 
-- None. The canonical backlog is currently empty.
+- `GLZ-01` (new commercial rollout phase, Sprint G1).
 - Last completed work: `MVP-08` (Pilot UAT and cutover readiness), with readiness gates signed off in the progress log.
+
+Current planning cadence:
+
+- Active sprint focus: `Sprint G1`.
+- Active epic family: `EPIC-GZ-01` (Blind Intake Readiness) and `EPIC-GZ-02` (Scheduling and Commitment) bridge.

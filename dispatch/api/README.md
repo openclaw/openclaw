@@ -15,6 +15,7 @@ node dispatch/api/src/server.mjs
 ## Implemented command endpoints
 
 - `POST /tickets`
+- `POST /tickets/intake`
 - `POST /tickets/{ticketId}/triage`
 - `POST /tickets/{ticketId}/schedule/propose`
 - `POST /tickets/{ticketId}/schedule/confirm`

@@ -12,11 +12,13 @@ This directory is the Real Dispatch product scaffold.
 `new -> triaged -> schedulable -> scheduled -> dispatched -> onsite -> closeout_pending -> closed`
 
 Detailed dispatch-api enforcement state mapping is defined in:
+
 - `dispatch/contracts/case-lifecycle-v1.md`
 
 ## Closed dispatch action surface
 
 - `ticket.create`
+- `ticket.blind_intake`
 - `ticket.triage`
 - `schedule.propose`
 - `schedule.confirm`
