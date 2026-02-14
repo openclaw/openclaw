@@ -168,7 +168,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
   it("suppresses typing in never mode", async () => {
     runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
-      params.onPartialReply?.({ text: "hi" });
+      await params.onPartialReply?.({ text: "hi" });
       return { payloads: [{ text: "final" }], meta: {} };
     });
 
