@@ -1424,6 +1424,62 @@
   overflow-y: auto;
 }
 
+.log-detail-view-toggle {
+  display: flex;
+  gap: 4px;
+}
+
+.log-detail-json {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  line-height: 1.6;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.json-row {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.json-key {
+  color: var(--info);
+  font-weight: 500;
+}
+
+.json-str {
+  color: var(--ok);
+}
+
+.json-num {
+  color: var(--warn);
+}
+
+.json-bool {
+  color: var(--accent);
+}
+
+.json-null {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.json-idx {
+  color: var(--muted);
+  margin-right: 6px;
+  font-size: 10px;
+}
+
+.json-bracket {
+  color: var(--muted);
+}
+
 /* ===========================================
    Chat
    =========================================== */

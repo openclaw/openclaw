@@ -11,6 +11,33 @@ type SortDir = "asc" | "desc";
 let currentSortField: SortField = "time";
 let currentSortDir: SortDir = "desc";
 let selectedEntryIndex: number | null = null;
+let detailViewMode: "structured" | "raw" = "structured";
+
+function tryParseJson(raw: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(raw);
+    return typeof parsed === "object" && parsed !== null ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function renderJsonTree(obj: unknown, depth = 0): unknown {
+  if (obj === null || obj === undefined) return html`<span class="json-null">null</span>`;
+  if (typeof obj === "boolean") return html`<span class="json-bool">${String(obj)}</span>`;
+  if (typeof obj === "number") return html`<span class="json-num">${obj}</span>`;
+  if (typeof obj === "string") return html`<span class="json-str">"${obj}"</span>`;
+  if (Array.isArray(obj)) {
+    if (obj.length === 0) return html`<span class="json-bracket">[]</span>`;
+    return html`<div class="json-array" style="padding-left:${depth > 0 ? 14 : 0}px">${obj.map((item, i) => html`<div class="json-row"><span class="json-idx">${i}</span>${renderJsonTree(item, depth + 1)}</div>`)}</div>`;
+  }
+  if (typeof obj === "object") {
+    const entries = Object.entries(obj as Record<string, unknown>);
+    if (entries.length === 0) return html`<span class="json-bracket">{}</span>`;
+    return html`<div class="json-obj" style="padding-left:${depth > 0 ? 14 : 0}px">${entries.map(([k, v]) => html`<div class="json-row"><span class="json-key">${k}:</span> ${renderJsonTree(v, depth + 1)}</div>`)}</div>`;
+  }
+  return html`${String(obj)}`;
+}
 
 export type LogsProps = {
   mode: AppMode;
@@ -73,12 +100,15 @@ function toggleSort(field: SortField, requestUpdate: () => void) {
   requestUpdate();
 }
 
-function renderDetailPanel(entry: LogEntry) {
+function renderDetailPanel(entry: LogEntry, requestUpdate: () => void) {
+  const parsed = tryParseJson(entry.raw);
+  const hasJson = parsed !== null;
+
   return html`
     <div class="log-detail">
       <div class="log-detail-header">
         <div class="card-title" style="font-size: 13px;">Log Entry Detail</div>
-        <button class="btn btn--sm" @click=${() => { selectedEntryIndex = null; }}>✕</button>
+        <button class="btn btn--sm" @click=${() => { selectedEntryIndex = null; requestUpdate(); }}>✕</button>
       </div>
       <div class="log-detail-fields">
         <div class="log-detail-field">
@@ -100,8 +130,23 @@ function renderDetailPanel(entry: LogEntry) {
           <div class="log-detail-value mono" style="white-space: pre-wrap; word-break: break-word;">${entry.message ?? ""}</div>
         </div>
         <div class="log-detail-field">
-          <div class="log-detail-label">Raw</div>
-          <pre class="log-detail-raw">${entry.raw}</pre>
+          <div class="log-detail-label" style="display: flex; align-items: center; justify-content: space-between;">
+            <span>Data</span>
+            ${hasJson ? html`
+              <div class="log-detail-view-toggle">
+                <button class="log-chip ${detailViewMode === "structured" ? "active info" : ""}"
+                  style="padding: 2px 8px; font-size: 10px;"
+                  @click=${() => { detailViewMode = "structured"; requestUpdate(); }}>Structured</button>
+                <button class="log-chip ${detailViewMode === "raw" ? "active info" : ""}"
+                  style="padding: 2px 8px; font-size: 10px;"
+                  @click=${() => { detailViewMode = "raw"; requestUpdate(); }}>Raw</button>
+              </div>
+            ` : nothing}
+          </div>
+          ${hasJson && detailViewMode === "structured"
+            ? html`<div class="log-detail-json">${renderJsonTree(parsed)}</div>`
+            : html`<pre class="log-detail-raw">${entry.raw}</pre>`
+          }
         </div>
       </div>
     </div>
@@ -191,7 +236,7 @@ export function renderLogs(props: LogsProps) {
           }
         </div>
       </section>
-      ${selectedEntry ? renderDetailPanel(selectedEntry) : nothing}
+      ${selectedEntry ? renderDetailPanel(selectedEntry, requestUpdate) : nothing}
     </div>
   `;
 }
