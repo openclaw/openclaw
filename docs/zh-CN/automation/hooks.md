@@ -206,7 +206,7 @@ export default myHandler;
 
 ```typescript
 {
-  type: 'command' | 'session' | 'agent' | 'gateway',
+  type: 'command' | 'session' | 'agent' | 'gateway' | 'message',
   action: string,              // e.g., 'new', 'reset', 'stop'
   sessionKey: string,          // Session identifier
   timestamp: Date,             // When the event occurred
@@ -245,6 +245,130 @@ export default myHandler;
 
 - **`gateway:startup`**：在渠道启动和 hooks 加载之后
 
+### 消息事件
+
+在消息生命周期中触发。这些事件桥接到工作区 hook 系统，使 hooks 可以观察和修改智能体对话。
+
+- **`message:received`**（即发即弃）：当入站消息到达时触发，在任何处理之前。适用于日志记录、分析或触发副作用。
+- **`message:before`**（可修改）：在智能体提示发送之前触发。处理器可以返回 `prependContext` 和/或 `systemPrompt` 来修改智能体的输入。多个 `prependContext` 值用双换行符合并；最后一个 `systemPrompt` 生效。
+- **`message:sent`**（即发即弃）：在智能体完成响应后触发。适用于后处理、日志记录或触发后续操作。
+
+#### 上下文字段
+
+**`message:received`**：
+
+| 字段            | 类型                  | 描述                         |
+| --------------- | --------------------- | ---------------------------- |
+| `from`          | `string`              | 发送者标识（电话号码、邮箱） |
+| `content`       | `string`              | 消息正文                     |
+| `channel`       | `string`              | 来源渠道（如 `"telegram"`）  |
+| `senderId`      | `string \| undefined` | 平台特定的发送者 ID          |
+| `senderName`    | `string \| undefined` | 发送者显示名称               |
+| `commandSource` | `string`              | 接收消息的表面/提供者        |
+
+**`message:before`**：
+
+| 字段            | 类型                  | 描述               |
+| --------------- | --------------------- | ------------------ |
+| `prompt`        | `string`              | 即将发送的有效提示 |
+| `messages`      | `AgentMessage[]`      | 当前对话历史       |
+| `agentId`       | `string`              | 解析后的智能体 ID  |
+| `sessionId`     | `string`              | 会话标识符         |
+| `commandSource` | `string \| undefined` | 消息提供者/渠道    |
+
+**`message:sent`**：
+
+| 字段        | 类型             | 描述                     |
+| ----------- | ---------------- | ------------------------ |
+| `messages`  | `AgentMessage[]` | 最终对话快照（包含回复） |
+| `sessionId` | `string`         | 会话标识符               |
+| `success`   | `boolean`        | 智能体是否无错误完成     |
+
+#### 返回值（仅 `message:before`）
+
+为 `message:before` 注册的处理器可以返回 `InternalHookResult`：
+
+```typescript
+interface InternalHookResult {
+  prependContext?: string; // 前置到提示中
+  systemPrompt?: string; // 覆盖系统提示
+}
+```
+
+多个处理器会被合并：`prependContext` 值用 `\n\n` 连接，最后一个非 undefined 的 `systemPrompt` 生效。返回 `undefined` 或 `void` 为无操作。
+
+#### HOOK.md 示例
+
+```markdown
+---
+name: message-context-injector
+description: "Inject extra context before each agent turn"
+metadata: { "openclaw": { "emoji": "💉", "events": ["message:before"] } }
+---
+
+# Message Context Injector
+
+为每次智能体提示添加额外上下文。
+```
+
+#### 处理器示例
+
+**即发即弃日志记录（`message:received`）**：
+
+```typescript
+import type { HookHandler } from "../../src/hooks/hooks.js";
+
+const handler: HookHandler = async (event) => {
+  if (event.type !== "message" || event.action !== "received") {
+    return;
+  }
+
+  console.log(`[msg-log] from=${event.context.from} channel=${event.context.channel}`);
+};
+
+export default handler;
+```
+
+**可修改 hook（`message:before`）**：
+
+```typescript
+import type { HookHandler } from "../../src/hooks/hooks.js";
+
+const handler: HookHandler = async (event) => {
+  if (event.type !== "message" || event.action !== "before") {
+    return;
+  }
+
+  return {
+    prependContext: `Current user timezone: America/New_York`,
+  };
+};
+
+export default handler;
+```
+
+**响应后 hook（`message:sent`）**：
+
+```typescript
+import type { HookHandler } from "../../src/hooks/hooks.js";
+
+const handler: HookHandler = async (event) => {
+  if (event.type !== "message" || event.action !== "sent") {
+    return;
+  }
+
+  const { success, sessionId } = event.context as {
+    success: boolean;
+    sessionId: string;
+  };
+  if (!success) {
+    console.warn(`[msg-sent] Agent failed for session ${sessionId}`);
+  }
+};
+
+export default handler;
+```
+
 ### 工具结果 Hooks（插件 API）
 
 这些 hooks 不是事件流监听器；它们让插件在 OpenClaw 持久化工具结果之前同步调整它们。
@@ -258,8 +382,6 @@ export default myHandler;
 - **`session:start`**：当新会话开始时
 - **`session:end`**：当会话结束时
 - **`agent:error`**：当智能体遇到错误时
-- **`message:sent`**：当消息被发送时
-- **`message:received`**：当消息被接收时
 
 ## 创建自定义 Hooks
 
