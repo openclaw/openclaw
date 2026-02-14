@@ -1,4 +1,0 @@
-{
-  "task_description": "- upgrade the macOS and iOS apps to support the latest liquid glass of Tahoe as well as 26.x while remainging compatible with other versions\n- improve the look and feel of the UI by estblaihing a proper design guide for screens, layouts, panels, buttons and UI components\n- complete changes to the native apps (NOT ELECTRON) so they comply witih the new design consistency",
-  "workflow_type": "feature"
-}
