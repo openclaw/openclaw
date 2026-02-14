@@ -49,10 +49,6 @@ export function normalizeLegacyConfigValues(cfg: OpenClawConfig): {
           dmChanged = true;
           changes.push(`Removed ${params.pathPrefix}.dm.policy (dmPolicy already set).`);
         }
-      } else {
-        changes.push(
-          `Kept ${params.pathPrefix}.dm.policy (conflicts with ${params.pathPrefix}.dmPolicy).`,
-        );
       }
     }
 
@@ -73,10 +69,6 @@ export function normalizeLegacyConfigValues(cfg: OpenClawConfig): {
           dmChanged = true;
           changes.push(`Removed ${params.pathPrefix}.dm.allowFrom (allowFrom already set).`);
         }
-      } else {
-        changes.push(
-          `Kept ${params.pathPrefix}.dm.allowFrom (conflicts with ${params.pathPrefix}.allowFrom).`,
-        );
       }
     }
 
