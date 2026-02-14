@@ -7,6 +7,7 @@ import { resolveStateDir } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveUserPath } from "../utils.js";
 import { parseBooleanValue } from "../utils/boolean.js";
+import { safeJsonStringify } from "../utils/safe-json.js";
 
 type PayloadLogStage = "request" | "usage";
 
@@ -70,28 +71,6 @@ function getWriter(filePath: string): PayloadLogWriter {
 
   writers.set(filePath, writer);
   return writer;
-}
-
-function safeJsonStringify(value: unknown): string | null {
-  try {
-    return JSON.stringify(value, (_key, val) => {
-      if (typeof val === "bigint") {
-        return val.toString();
-      }
-      if (typeof val === "function") {
-        return "[Function]";
-      }
-      if (val instanceof Error) {
-        return { name: val.name, message: val.message, stack: val.stack };
-      }
-      if (val instanceof Uint8Array) {
-        return { type: "Uint8Array", data: Buffer.from(val).toString("base64") };
-      }
-      return val;
-    });
-  } catch {
-    return null;
-  }
 }
 
 function formatError(error: unknown): string | undefined {
