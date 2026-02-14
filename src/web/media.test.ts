@@ -10,9 +10,14 @@ import { loadWebMedia, loadWebMediaRaw, optimizeImageToJpeg } from "./media.js";
 let fixtureRoot = "";
 let fixtureFileCount = 0;
 let largeJpegBuffer: Buffer;
+let largeJpegFile = "";
 let tinyPngBuffer: Buffer;
+let tinyPngFile = "";
+let tinyPngWrongExtFile = "";
 let alphaPngBuffer: Buffer;
+let alphaPngFile = "";
 let fallbackPngBuffer: Buffer;
+let fallbackPngFile = "";
 let fallbackPngCap = 0;
 
 async function writeTempFile(buffer: Buffer, ext: string): Promise<string> {
@@ -32,8 +37,7 @@ function buildDeterministicBytes(length: number): Buffer {
 }
 
 async function createLargeTestJpeg(): Promise<{ buffer: Buffer; file: string }> {
-  const file = await writeTempFile(largeJpegBuffer, ".jpg");
-  return { buffer: largeJpegBuffer, file };
+  return { buffer: largeJpegBuffer, file: largeJpegFile };
 }
 
 beforeAll(async () => {
@@ -48,11 +52,14 @@ beforeAll(async () => {
   })
     .jpeg({ quality: 95 })
     .toBuffer();
+  largeJpegFile = await writeTempFile(largeJpegBuffer, ".jpg");
   tinyPngBuffer = await sharp({
     create: { width: 10, height: 10, channels: 3, background: "#00ff00" },
   })
     .png()
     .toBuffer();
+  tinyPngFile = await writeTempFile(tinyPngBuffer, ".png");
+  tinyPngWrongExtFile = await writeTempFile(tinyPngBuffer, ".bin");
   alphaPngBuffer = await sharp({
     create: {
       width: 64,
@@ -63,11 +70,13 @@ beforeAll(async () => {
   })
     .png()
     .toBuffer();
+  alphaPngFile = await writeTempFile(alphaPngBuffer, ".png");
   const size = 72;
   const raw = buildDeterministicBytes(size * size * 4);
   fallbackPngBuffer = await sharp(raw, { raw: { width: size, height: size, channels: 4 } })
     .png()
     .toBuffer();
+  fallbackPngFile = await writeTempFile(fallbackPngBuffer, ".png");
   const smallestPng = await optimizeImageToPng(fallbackPngBuffer, 1);
   fallbackPngCap = Math.max(1, smallestPng.optimizedSize - 1);
   const jpegOptimized = await optimizeImageToJpeg(fallbackPngBuffer, fallbackPngCap);
@@ -130,9 +139,7 @@ describe("web media loading", () => {
   });
 
   it("sniffs mime before extension when loading local files", async () => {
-    const wrongExt = await writeTempFile(tinyPngBuffer, ".bin");
-
-    const result = await loadWebMedia(wrongExt, 1024 * 1024);
+    const result = await loadWebMedia(tinyPngWrongExtFile, 1024 * 1024);
 
     expect(result.kind).toBe("image");
     expect(result.contentType).toBe("image/jpeg");
@@ -224,9 +231,7 @@ describe("web media loading", () => {
   });
 
   it("preserves PNG alpha when under the cap", async () => {
-    const file = await writeTempFile(alphaPngBuffer, ".png");
-
-    const result = await loadWebMedia(file, 1024 * 1024);
+    const result = await loadWebMedia(alphaPngFile, 1024 * 1024);
 
     expect(result.kind).toBe("image");
     expect(result.contentType).toBe("image/png");
@@ -235,9 +240,7 @@ describe("web media loading", () => {
   });
 
   it("falls back to JPEG when PNG alpha cannot fit under cap", async () => {
-    const file = await writeTempFile(fallbackPngBuffer, ".png");
-
-    const result = await loadWebMedia(file, fallbackPngCap);
+    const result = await loadWebMedia(fallbackPngFile, fallbackPngCap);
 
     expect(result.kind).toBe("image");
     expect(result.contentType).toBe("image/jpeg");
@@ -247,25 +250,19 @@ describe("web media loading", () => {
 
 describe("local media root guard", () => {
   it("rejects local paths outside allowed roots", async () => {
-    const file = await writeTempFile(tinyPngBuffer, ".png");
-
     // Explicit roots that don't contain the temp file.
     await expect(
-      loadWebMedia(file, 1024 * 1024, { localRoots: ["/nonexistent-root"] }),
+      loadWebMedia(tinyPngFile, 1024 * 1024, { localRoots: ["/nonexistent-root"] }),
     ).rejects.toThrow(/not under an allowed directory/i);
   });
 
   it("allows local paths under an explicit root", async () => {
-    const file = await writeTempFile(tinyPngBuffer, ".png");
-
-    const result = await loadWebMedia(file, 1024 * 1024, { localRoots: [os.tmpdir()] });
+    const result = await loadWebMedia(tinyPngFile, 1024 * 1024, { localRoots: [os.tmpdir()] });
     expect(result.kind).toBe("image");
   });
 
   it("allows any path when localRoots is 'any'", async () => {
-    const file = await writeTempFile(tinyPngBuffer, ".png");
-
-    const result = await loadWebMedia(file, 1024 * 1024, { localRoots: "any" });
+    const result = await loadWebMedia(tinyPngFile, 1024 * 1024, { localRoots: "any" });
     expect(result.kind).toBe("image");
   });
 });
