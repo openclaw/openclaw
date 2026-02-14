@@ -4,6 +4,51 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 
 const TEST_GATEWAY_TOKEN = "test-gateway-token-1234567890";
 
+let cfg: Record<string, unknown> = {};
+
+// Perf: keep this suite pure unit. Mock heavyweight config/session modules.
+vi.mock("../config/config.js", () => ({
+  loadConfig: () => cfg,
+}));
+
+vi.mock("../config/sessions.js", () => ({
+  resolveMainSessionKey: (params?: {
+    session?: { scope?: string; mainKey?: string };
+    agents?: { list?: Array<{ id?: string; default?: boolean }> };
+  }) => {
+    if (params?.session?.scope === "global") {
+      return "global";
+    }
+    const agents = params?.agents?.list ?? [];
+    const rawDefault = agents.find((agent) => agent?.default)?.id ?? agents[0]?.id ?? "main";
+    const agentId =
+      String(rawDefault ?? "main")
+        .trim()
+        .toLowerCase() || "main";
+    const mainKeyRaw = String(params?.session?.mainKey ?? "main")
+      .trim()
+      .toLowerCase();
+    const mainKey = mainKeyRaw || "main";
+    return `agent:${agentId}:${mainKey}`;
+  },
+}));
+
+vi.mock("./auth.js", () => ({
+  authorizeGatewayConnect: async () => ({ ok: true }),
+}));
+
+vi.mock("../logger.js", () => ({
+  logWarn: () => {},
+}));
+
+vi.mock("../plugins/config-state.js", () => ({
+  isTestDefaultMemorySlotDisabled: () => false,
+}));
+
+vi.mock("../plugins/tools.js", () => ({
+  getPluginToolMeta: () => undefined,
+}));
+
 // Perf: the real tool factory instantiates many tools per request; for these HTTP
 // routing/policy tests we only need a small set of tool names.
 vi.mock("../agents/openclaw-tools.js", () => {
@@ -69,8 +114,6 @@ vi.mock("../agents/openclaw-tools.js", () => {
   };
 });
 
-const { testState } = await import("./test-helpers.mocks.js");
-const { clearConfigCache, writeConfigFile } = await import("../config/config.js");
 const { handleToolsInvokeHttpRequest } = await import("./tools-invoke-http.js");
 
 let pluginHttpHandlers: Array<(req: IncomingMessage, res: ServerResponse) => Promise<boolean>> = [];
@@ -119,40 +162,30 @@ afterAll(async () => {
   sharedServer = undefined;
 });
 
-beforeEach(async () => {
-  // Ensure these tests are not affected by host env vars.
+beforeEach(() => {
   delete process.env.OPENCLAW_GATEWAY_TOKEN;
   delete process.env.OPENCLAW_GATEWAY_PASSWORD;
-
   pluginHttpHandlers = [];
-  testState.agentConfig = undefined;
-  testState.agentsConfig = undefined;
-  testState.sessionConfig = undefined;
-  testState.gatewayAuth = { mode: "token", token: TEST_GATEWAY_TOKEN };
-  await writeConfigFile({});
-  clearConfigCache();
+  cfg = {};
 });
 
-const resolveGatewayToken = (): string => {
-  const token = (testState.gatewayAuth as { token?: string } | undefined)?.token;
-  if (!token) {
-    throw new Error("test gateway token missing");
-  }
-  return token;
-};
+const resolveGatewayToken = (): string => TEST_GATEWAY_TOKEN;
 
 const allowAgentsListForMain = () => {
-  testState.agentsConfig = {
-    list: [
-      {
-        id: "main",
-        tools: {
-          allow: ["agents_list"],
+  cfg = {
+    ...cfg,
+    agents: {
+      list: [
+        {
+          id: "main",
+          default: true,
+          tools: {
+            allow: ["agents_list"],
+          },
         },
-      },
-    ],
-    // oxlint-disable-next-line typescript/no-explicit-any
-  } as any;
+      ],
+    },
+  };
 };
 
 const invokeAgentsList = async (params: {
@@ -214,16 +247,12 @@ describe("POST /tools/invoke", () => {
   });
 
   it("supports tools.alsoAllow in profile and implicit modes", async () => {
-    testState.agentsConfig = {
-      list: [{ id: "main" }],
-      // oxlint-disable-next-line typescript/no-explicit-any
-    } as any;
-
-    await writeConfigFile({
+    cfg = {
+      ...cfg,
+      agents: { list: [{ id: "main", default: true }] },
       tools: { profile: "minimal", alsoAllow: ["agents_list"] },
-      // oxlint-disable-next-line typescript/no-explicit-any
-    } as any);
-    clearConfigCache();
+    };
+
     const token = resolveGatewayToken();
 
     const resProfile = await invokeAgentsList({
@@ -236,11 +265,11 @@ describe("POST /tools/invoke", () => {
     const profileBody = await resProfile.json();
     expect(profileBody.ok).toBe(true);
 
-    await writeConfigFile({
+    cfg = {
+      ...cfg,
       tools: { alsoAllow: ["agents_list"] },
-      // oxlint-disable-next-line typescript/no-explicit-any
-    } as any);
-    clearConfigCache();
+    };
+
     const resImplicit = await invokeAgentsList({
       port: sharedPort,
       headers: { authorization: `Bearer ${token}` },
@@ -272,17 +301,20 @@ describe("POST /tools/invoke", () => {
   });
 
   it("returns 404 when denylisted or blocked by tools.profile", async () => {
-    testState.agentsConfig = {
-      list: [
-        {
-          id: "main",
-          tools: {
-            deny: ["agents_list"],
+    cfg = {
+      ...cfg,
+      agents: {
+        list: [
+          {
+            id: "main",
+            default: true,
+            tools: {
+              deny: ["agents_list"],
+            },
           },
-        },
-      ],
-      // oxlint-disable-next-line typescript/no-explicit-any
-    } as any;
+        ],
+      },
+    };
     const token = resolveGatewayToken();
 
     const denyRes = await invokeAgentsList({
@@ -293,12 +325,10 @@ describe("POST /tools/invoke", () => {
     expect(denyRes.status).toBe(404);
 
     allowAgentsListForMain();
-
-    await writeConfigFile({
+    cfg = {
+      ...cfg,
       tools: { profile: "minimal" },
-      // oxlint-disable-next-line typescript/no-explicit-any
-    } as any);
-    clearConfigCache();
+    };
 
     const profileRes = await invokeAgentsList({
       port: sharedPort,
@@ -309,15 +339,18 @@ describe("POST /tools/invoke", () => {
   });
 
   it("denies sessions_spawn via HTTP even when agent policy allows", async () => {
-    testState.agentsConfig = {
-      list: [
-        {
-          id: "main",
-          tools: { allow: ["sessions_spawn"] },
-        },
-      ],
-      // oxlint-disable-next-line typescript/no-explicit-any
-    } as any;
+    cfg = {
+      ...cfg,
+      agents: {
+        list: [
+          {
+            id: "main",
+            default: true,
+            tools: { allow: ["sessions_spawn"] },
+          },
+        ],
+      },
+    };
 
     const token = resolveGatewayToken();
 
@@ -336,10 +369,12 @@ describe("POST /tools/invoke", () => {
   });
 
   it("denies sessions_send via HTTP gateway", async () => {
-    testState.agentsConfig = {
-      list: [{ id: "main", tools: { allow: ["sessions_send"] } }],
-      // oxlint-disable-next-line typescript/no-explicit-any
-    } as any;
+    cfg = {
+      ...cfg,
+      agents: {
+        list: [{ id: "main", default: true, tools: { allow: ["sessions_send"] } }],
+      },
+    };
 
     const token = resolveGatewayToken();
 
@@ -354,10 +389,12 @@ describe("POST /tools/invoke", () => {
   });
 
   it("denies gateway tool via HTTP", async () => {
-    testState.agentsConfig = {
-      list: [{ id: "main", tools: { allow: ["gateway"] } }],
-      // oxlint-disable-next-line typescript/no-explicit-any
-    } as any;
+    cfg = {
+      ...cfg,
+      agents: {
+        list: [{ id: "main", default: true, tools: { allow: ["gateway"] } }],
+      },
+    };
 
     const token = resolveGatewayToken();
 
@@ -372,89 +409,73 @@ describe("POST /tools/invoke", () => {
   });
 
   it("allows gateway tool via HTTP when explicitly enabled in gateway.tools.allow", async () => {
-    testState.agentsConfig = {
-      list: [{ id: "main", tools: { allow: ["gateway"] } }],
-      // oxlint-disable-next-line typescript/no-explicit-any
-    } as any;
-    await writeConfigFile({
+    cfg = {
+      ...cfg,
+      agents: {
+        list: [{ id: "main", default: true, tools: { allow: ["gateway"] } }],
+      },
       gateway: { tools: { allow: ["gateway"] } },
-      // oxlint-disable-next-line typescript/no-explicit-any
-    } as any);
-    clearConfigCache();
+    };
 
     const token = resolveGatewayToken();
 
-    try {
-      const res = await invokeTool({
-        port: sharedPort,
-        tool: "gateway",
-        headers: { authorization: `Bearer ${token}` },
-        sessionKey: "main",
-      });
+    const res = await invokeTool({
+      port: sharedPort,
+      tool: "gateway",
+      headers: { authorization: `Bearer ${token}` },
+      sessionKey: "main",
+    });
 
-      // Ensure we didn't hit the HTTP deny list (404). Invalid args should map to 400.
-      expect(res.status).toBe(400);
-      const body = await res.json();
-      expect(body.ok).toBe(false);
-      expect(body.error?.type).toBe("tool_error");
-    } finally {
-      await writeConfigFile({
-        // oxlint-disable-next-line typescript/no-explicit-any
-      } as any);
-      clearConfigCache();
-    }
+    // Ensure we didn't hit the HTTP deny list (404). Invalid args should map to 400.
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.ok).toBe(false);
+    expect(body.error?.type).toBe("tool_error");
   });
 
   it("treats gateway.tools.deny as higher priority than gateway.tools.allow", async () => {
-    testState.agentsConfig = {
-      list: [{ id: "main", tools: { allow: ["gateway"] } }],
-      // oxlint-disable-next-line typescript/no-explicit-any
-    } as any;
-    await writeConfigFile({
+    cfg = {
+      ...cfg,
+      agents: {
+        list: [{ id: "main", default: true, tools: { allow: ["gateway"] } }],
+      },
       gateway: { tools: { allow: ["gateway"], deny: ["gateway"] } },
-      // oxlint-disable-next-line typescript/no-explicit-any
-    } as any);
-    clearConfigCache();
+    };
 
     const token = resolveGatewayToken();
 
-    try {
-      const res = await invokeTool({
-        port: sharedPort,
-        tool: "gateway",
-        headers: { authorization: `Bearer ${token}` },
-        sessionKey: "main",
-      });
+    const res = await invokeTool({
+      port: sharedPort,
+      tool: "gateway",
+      headers: { authorization: `Bearer ${token}` },
+      sessionKey: "main",
+    });
 
-      expect(res.status).toBe(404);
-    } finally {
-      await writeConfigFile({
-        // oxlint-disable-next-line typescript/no-explicit-any
-      } as any);
-      clearConfigCache();
-    }
+    expect(res.status).toBe(404);
   });
 
   it("uses the configured main session key when sessionKey is missing or main", async () => {
-    testState.agentsConfig = {
-      list: [
-        {
-          id: "main",
-          tools: {
-            deny: ["agents_list"],
+    cfg = {
+      ...cfg,
+      agents: {
+        list: [
+          {
+            id: "main",
+            tools: {
+              deny: ["agents_list"],
+            },
           },
-        },
-        {
-          id: "ops",
-          default: true,
-          tools: {
-            allow: ["agents_list"],
+          {
+            id: "ops",
+            default: true,
+            tools: {
+              allow: ["agents_list"],
+            },
           },
-        },
-      ],
-      // oxlint-disable-next-line typescript/no-explicit-any
-    } as any;
-    testState.sessionConfig = { mainKey: "primary" };
+        ],
+      },
+      session: { mainKey: "primary" },
+    };
 
     const token = resolveGatewayToken();
 
@@ -473,10 +494,12 @@ describe("POST /tools/invoke", () => {
   });
 
   it("maps tool input errors to 400 and unexpected execution errors to 500", async () => {
-    testState.agentsConfig = {
-      list: [{ id: "main", tools: { allow: ["tools_invoke_test"] } }],
-      // oxlint-disable-next-line typescript/no-explicit-any
-    } as any;
+    cfg = {
+      ...cfg,
+      agents: {
+        list: [{ id: "main", default: true, tools: { allow: ["tools_invoke_test"] } }],
+      },
+    };
 
     const token = resolveGatewayToken();
 
