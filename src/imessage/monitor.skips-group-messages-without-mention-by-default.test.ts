@@ -31,6 +31,29 @@ function getConfig(): TestConfig {
 }
 
 describe("monitorIMessageProvider", () => {
+  it("ignores malformed rpc message payloads", async () => {
+    const run = monitorIMessageProvider();
+    await waitForSubscribe();
+
+    notificationHandler?.({
+      method: "message",
+      params: {
+        message: {
+          id: 1,
+          sender: { nested: "not-a-string" },
+          text: "hello",
+        },
+      },
+    });
+
+    await flush();
+    closeResolve?.();
+    await run;
+
+    expect(replyMock).not.toHaveBeenCalled();
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+
   it("skips group messages without a mention by default", async () => {
     const run = monitorIMessageProvider();
     await waitForSubscribe();
@@ -364,6 +387,127 @@ describe("monitorIMessageProvider", () => {
     await run;
 
     expect(replyMock).not.toHaveBeenCalled();
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  it("does not allow group sender from pairing store when groupPolicy is allowlist", async () => {
+    config = {
+      ...config,
+      channels: {
+        ...config.channels,
+        imessage: {
+          ...config.channels?.imessage,
+          dmPolicy: "pairing",
+          allowFrom: [],
+          groupPolicy: "allowlist",
+          groupAllowFrom: [],
+        },
+      },
+    };
+    readAllowFromStoreMock.mockResolvedValue(["+15550003333"]);
+    const run = monitorIMessageProvider();
+    await waitForSubscribe();
+
+    notificationHandler?.({
+      method: "message",
+      params: {
+        message: {
+          id: 30,
+          chat_id: 909,
+          sender: "+15550003333",
+          is_from_me: false,
+          text: "@openclaw hi from paired sender",
+          is_group: true,
+        },
+      },
+    });
+
+    await flush();
+    closeResolve?.();
+    await run;
+
+    expect(replyMock).not.toHaveBeenCalled();
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  it("does not allow sender from pairing store when groupAllowFrom is restricted to a different chat_id", async () => {
+    config = {
+      ...config,
+      channels: {
+        ...config.channels,
+        imessage: {
+          ...config.channels?.imessage,
+          dmPolicy: "pairing",
+          allowFrom: [],
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["chat_id:101"],
+        },
+      },
+    };
+    readAllowFromStoreMock.mockResolvedValue(["+15550003333"]);
+    const run = monitorIMessageProvider();
+    await waitForSubscribe();
+
+    notificationHandler?.({
+      method: "message",
+      params: {
+        message: {
+          id: 31,
+          chat_id: 202,
+          sender: "+15550003333",
+          is_from_me: false,
+          text: "@openclaw hi from paired sender",
+          is_group: true,
+        },
+      },
+    });
+
+    await flush();
+    closeResolve?.();
+    await run;
+
+    expect(replyMock).not.toHaveBeenCalled();
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  it("does not authorize control command via pairing-store sender in non-allowlisted chat", async () => {
+    config = {
+      ...config,
+      channels: {
+        ...config.channels,
+        imessage: {
+          ...config.channels?.imessage,
+          dmPolicy: "pairing",
+          allowFrom: [],
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["chat_id:101"],
+        },
+      },
+    };
+    readAllowFromStoreMock.mockResolvedValue(["+15550003333"]);
+    const run = monitorIMessageProvider();
+    await waitForSubscribe();
+
+    notificationHandler?.({
+      method: "message",
+      params: {
+        message: {
+          id: 32,
+          chat_id: 202,
+          sender: "+15550003333",
+          is_from_me: false,
+          text: "/status",
+          is_group: true,
+        },
+      },
+    });
+
+    await flush();
+    closeResolve?.();
+    await run;
+
+    expect(replyMock).not.toHaveBeenCalled();
+    expect(sendMock).not.toHaveBeenCalled();
   });
 
   it("blocks group messages when groupPolicy is disabled", async () => {
