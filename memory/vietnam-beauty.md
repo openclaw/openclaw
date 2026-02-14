@@ -9,6 +9,7 @@
 - **아이디어 도구:** Google NotebookLM
 
 ### 개발 환경
+
 - **로컬 워크스페이스:** `C:\TEST\MAIBEAUTY`
 - **GitHub:** https://github.com/jini92/MAIBEAUTY
 - **개발 도구:** Claude Code
@@ -22,28 +23,32 @@
 ## AI 6대 모델 (블루프린트)
 
 ### Phase 1. Discovery (발견)
-| 모델 | 설명 | 상태 |
-|------|------|------|
-| Model 01 — Faceless Salesman | AI 아바타 + TikTok Symphony, 베트남어 영상 하루 3~5개 자동 생성 | 🟢 파이프라인 완성 (512px GFPGAN, T007) |
-| Model 02 — Viral Content Factory | FFmpeg 씬 감지 + 바이럴 스코어 (Ollama) | 🟢 구현 완료 |
+
+| 모델                             | 설명                                                            | 상태                                    |
+| -------------------------------- | --------------------------------------------------------------- | --------------------------------------- |
+| Model 01 — Faceless Salesman     | AI 아바타 + TikTok Symphony, 베트남어 영상 하루 3~5개 자동 생성 | 🟢 파이프라인 완성 (512px GFPGAN, T007) |
+| Model 02 — Viral Content Factory | FFmpeg 씬 감지 + 바이럴 스코어 (Ollama)                         | 🟢 구현 완료                            |
 
 ### Phase 2. Search (검색/비교)
-| 모델 | 설명 | 상태 |
-|------|------|------|
-| Model 06 — Ecommerce Agent | Shopee/Lazada 가격 모니터링 + AI 방어 (Ollama) | 🟢 구현 완료 |
-| Model 04 — AI Product Photography | 배경 제거 + 프롬프트 생성 + 멀티 해상도 | 🟢 구현 완료 |
+
+| 모델                              | 설명                                           | 상태         |
+| --------------------------------- | ---------------------------------------------- | ------------ |
+| Model 06 — Ecommerce Agent        | Shopee/Lazada 가격 모니터링 + AI 방어 (Ollama) | 🟢 구현 완료 |
+| Model 04 — AI Product Photography | 배경 제거 + 프롬프트 생성 + 멀티 해상도        | 🟢 구현 완료 |
 
 ### Phase 3. Loyalty (관계/재구매)
-| 모델 | 설명 | 상태 |
-|------|------|------|
-| Model 05 — AI Mediator (n8n) | TikTok→Zalo→CRM 전체 파이프라인 자동화 | 🟡 인프라 구축 완료 |
-| Model 03 — AI Copywriting | Dead Lead Reactivator, Zalo 초개인화 메시지 자동 발송 | 🟡 PoC 워크플로우 준비 완료 |
+
+| 모델                         | 설명                                                  | 상태                        |
+| ---------------------------- | ----------------------------------------------------- | --------------------------- |
+| Model 05 — AI Mediator (n8n) | TikTok→Zalo→CRM 전체 파이프라인 자동화                | 🟡 인프라 구축 완료         |
+| Model 03 — AI Copywriting    | Dead Lead Reactivator, Zalo 초개인화 메시지 자동 발송 | 🟡 PoC 워크플로우 준비 완료 |
 
 ---
 
 ## 회사 정보
 
 ### 원청 — (주)뷰티앤팩토리 (BeautyNFactory Co., Ltd.)
+
 - **역할:** 화장품 제조·유통 (원청)
 - **설립:** 2015년 10월
 - **CEO:** 오창렬
@@ -53,6 +58,7 @@
 - **베트남 경험:** 2015 합작법인 설립 → 2023 페리페라/구달 공급 → 2024 KBS JOY 라이브 방송
 
 ### 판매 — 러브 투 러브 (Lov2Luv)
+
 - **역할:** 전자상거래 소매·중개 (베트남 시장 판매)
 - **대표자:** 김미정
 - **사업자번호:** 315-20-72461
@@ -65,34 +71,36 @@
 
 ## 인프라 현황
 
-| 컴포넌트 | 상태 | 상세 |
-|----------|------|------|
-| Ollama v0.15.2 | ✅ 정상 | RTX 4070 Super 12GB, CUDA 12.6 |
-| qwen3:8b | ✅ 사용 가능 | Chat API 확인, 추론 ~225ms |
-| llama3.1:8b | ✅ 설치됨 | 4.9GB |
-| qwen2.5:14b | ✅ 설치됨 | 9.0GB (VRAM 제한 주의) |
-| deepseek-r1:7b | ✅ 설치됨 | 4.7GB |
-| n8n Docker | ✅ 실행중 | v2.4.8, localhost:5678, `maibeauty-n8n` |
-| Cloudflare Tunnel | ✅ 설치됨 | cloudflared 2026.1.2, Quick Tunnel 모드 |
-| Google Sheets API | ✅ 활성화 | 프로젝트: `maibeauty` |
-| Google Drive API | ✅ 활성화 | 프로젝트: `maibeauty` |
-| 서비스 계정 | ✅ 생성 | `maibeauty-crm@maibeauty.iam.gserviceaccount.com` |
-| CRM 스프레드시트 | ✅ 생성 | [링크](https://docs.google.com/spreadsheets/d/1r_CSTQDPdZtiPTqPdXjYvpRmtZe0oH6cGoMaoboBFO4/edit) — 4탭 |
-| 카카오 앱 (BnF AI Sales) | ✅ 설정 완료 | ID 1379417, REST API Key + Client Secret 활성화 |
-| 카카오 OAuth 토큰 | ✅ 발급됨 | `~/.maibeauty/kakao-tokens.json`, 6시간 만료 + 자동 갱신 |
-| WF-POC-01 | ✅ import | n8n에 배포됨 (Chat API 버전) |
+| 컴포넌트                 | 상태         | 상세                                                                                                   |
+| ------------------------ | ------------ | ------------------------------------------------------------------------------------------------------ |
+| Ollama v0.15.2           | ✅ 정상      | RTX 4070 Super 12GB, CUDA 12.6                                                                         |
+| qwen3:8b                 | ✅ 사용 가능 | Chat API 확인, 추론 ~225ms                                                                             |
+| llama3.1:8b              | ✅ 설치됨    | 4.9GB                                                                                                  |
+| qwen2.5:14b              | ✅ 설치됨    | 9.0GB (VRAM 제한 주의)                                                                                 |
+| deepseek-r1:7b           | ✅ 설치됨    | 4.7GB                                                                                                  |
+| n8n Docker               | ✅ 실행중    | v2.4.8, localhost:5678, `maibeauty-n8n`                                                                |
+| Cloudflare Tunnel        | ✅ 설치됨    | cloudflared 2026.1.2, Quick Tunnel 모드                                                                |
+| Google Sheets API        | ✅ 활성화    | 프로젝트: `maibeauty`                                                                                  |
+| Google Drive API         | ✅ 활성화    | 프로젝트: `maibeauty`                                                                                  |
+| 서비스 계정              | ✅ 생성      | `maibeauty-crm@maibeauty.iam.gserviceaccount.com`                                                      |
+| CRM 스프레드시트         | ✅ 생성      | [링크](https://docs.google.com/spreadsheets/d/1r_CSTQDPdZtiPTqPdXjYvpRmtZe0oH6cGoMaoboBFO4/edit) — 4탭 |
+| 카카오 앱 (BnF AI Sales) | ✅ 설정 완료 | ID 1379417, REST API Key + Client Secret 활성화                                                        |
+| 카카오 OAuth 토큰        | ✅ 발급됨    | `~/.maibeauty/kakao-tokens.json`, 6시간 만료 + 자동 갱신                                               |
+| WF-POC-01                | ✅ import    | n8n에 배포됨 (Chat API 버전)                                                                           |
 
 ---
 
 ## 진행 기록
 
 ### 2026-01-30
+
 - [x] 프로젝트 자료 폴더 확인 및 분석
 - [x] PT 15페이지 (AI 기반 베트남 뷰티 세일즈 오토메이션) 전체 분석 완료
 - [x] 전략 분석 문서 (BeautyNFactory_Vietnam_Strategy_Analysis.md) 확인
 - [x] 프로젝트 관리 구조 생성 (MEMORY.md + memory/)
 
 ### 2026-01-31
+
 - [x] A004 — 문서 리뷰 분석 (강점·약점·보안 감사)
 - [x] A005 — 약점 보완 계획 (24건 상세 대응)
 - [x] D001~D005 — A005 보완사항 반영 (웹훅 HMAC, 관측성, GPU 스케줄링 등)
@@ -100,6 +108,7 @@
 - [x] n8n Cloud 인스턴스 설정 (`https://mai-n8n.app.n8n.cloud`)
 
 ### 2026-02-01
+
 - [x] 멀티 LLM 전략 결정 및 문서화
 - [x] On-Premise 환경 구축 (Ollama + 4개 모델)
 - [x] On-Premise 착수 모델 결정: M05 + M03-PoC 2트랙
@@ -115,6 +124,7 @@
 - [x] git push 완료 (`7e0e4fa`, `69f21cb`, `3a378c7`)
 
 ### 2026-02-02 (저녁~)
+
 - [x] M01 파이프라인 통합 (T007)
   - Step 1: Ollama qwen3:8b → 베트남어 TikTok 스크립트 (13초)
   - Step 1.5: Phonetic 후처리 (숫자/영어→베트남어 자동 변환)
@@ -127,6 +137,7 @@
   - 파이프라인 기본값: Size=256 + Enhancer=gfpgan
 
 ### 2026-02-02 (오전~오후)
+
 - [x] WF-POC-02 설계 (D008 — CRM ↔ 카피 생성 연동)
 - [x] Google Sheets 인증 라이브러리 구현 (SA JWT + ADC)
 - [x] Sheets 클라이언트 구현 (read/write/append/addSheet)
@@ -170,28 +181,32 @@
 ## MAIBEAUTY Admin (통합 관리 시스템) — 2026-02-05 NEW
 
 ### 개요
+
 - **목적**: 판매 관리자용 프로덕션 레벨 관리 사이트
 - **기술**: Next.js 14 + FastAPI + PostgreSQL
 - **배포**: GitHub Pages + GitHub Actions (Frontend) + Railway (Backend) — 2026-02-05 확정
 - **설계 문서**: D015 (PRD), D016 (시스템 설계), D017 (개발 계획)
 
 ### 4대 모듈
+
 1. **CRM 리드 관리** — 리드 CRUD, 상태 관리, 히스토리, Sheets 동기화
 2. **콘텐츠 관리** — TikTok 영상 생성/미리보기/발행, M01 파이프라인 연동
 3. **마케팅 메시지** — AI 카피 생성, 발송, A/B 테스트, WF-POC 연동
 4. **가격 모니터링** — 경쟁사 현황, 알림, 차트, M06 Agent 연동
 
 ### 개발 일정 (5주)
-| Phase | 기간 | 내용 | 시간 | 상태 |
-|-------|------|------|------|------|
-| Phase 1 | Week 1 | 프로젝트 기반 + 인증 | 20h | ✅ 완료 |
-| Phase 2 | Week 2 | CRM + 대시보드 (MVP) | 29h | ✅ 완료 |
-| Phase 3 | Week 3 | 콘텐츠 모듈 | 30h | ✅ 완료 (2026-02-07) |
-| Phase 4 | Week 4 | 마케팅 모듈 | 35h | ✅ 완료 (2026-02-07) |
-| Phase 5 | Week 5 | 가격 모니터링 + 완성 | 34h | ✅ 완료 (2026-02-07) |
-| **Total** | **5주** | **전체 Admin** | **148h** | **🎊 5/5 완료! v1.0.0** |
+
+| Phase     | 기간    | 내용                 | 시간     | 상태                    |
+| --------- | ------- | -------------------- | -------- | ----------------------- |
+| Phase 1   | Week 1  | 프로젝트 기반 + 인증 | 20h      | ✅ 완료                 |
+| Phase 2   | Week 2  | CRM + 대시보드 (MVP) | 29h      | ✅ 완료                 |
+| Phase 3   | Week 3  | 콘텐츠 모듈          | 30h      | ✅ 완료 (2026-02-07)    |
+| Phase 4   | Week 4  | 마케팅 모듈          | 35h      | ✅ 완료 (2026-02-07)    |
+| Phase 5   | Week 5  | 가격 모니터링 + 완성 | 34h      | ✅ 완료 (2026-02-07)    |
+| **Total** | **5주** | **전체 Admin**       | **148h** | **🎊 5/5 완료! v1.0.0** |
 
 ### n8n 연동
+
 - 기존 워크플로우(WF-POC-01~03) 100% 재활용
 - Admin이 "예쁜 버튼", n8n이 실제 자동화 처리
 - Webhook으로 양방향 통신
@@ -201,6 +216,7 @@
 ## 다음 액션
 
 ### 🔴 즉시 가능 (마이봇)
+
 - [x] ~~WF-POC-01 파이프라인 실행 테스트~~ → 2회 PASS (T001)
 - [x] ~~베트남어 카피 품질 검증~~ → 10/10 체크리스트 통과 (T001)
 - [x] ~~WF-POC-02 설계 + 구현 + 테스트~~ → 4/4 PASS (D008, I006, T002)
@@ -210,6 +226,7 @@
 - [x] ~~Zalo OA API 리서치~~ → 연동 설계 완료 (A006)
 
 ### 🟡 지니 액션 필요
+
 - [x] ~~카카오 디벨로퍼스 앱 설정~~ → 마이봇이 브라우저로 직접 완료 (앱 ID: 1379417, REST API Key 설정됨)
 - [x] ~~OAuth 토큰 발급~~ → `setup:kakao` 실행 완료 (토큰 `~/.maibeauty/kakao-tokens.json` 저장)
 - [x] ~~카카오 테스트 발송~~ → 3/3 PASS 확인 (지니님 카카오톡에서 메시지 확인 완료)
@@ -219,6 +236,7 @@
 - [ ] Zalo Developer App 생성 → `ZALO_APP_ID`, `ZALO_APP_SECRET`, `ZALO_OA_ID`
 
 ### 🟢 다음 단계
+
 - [x] ~~전체 파이프라인 검증~~ → T004 PASS (카피 생성 + 카카오 발송 3/3)
 - [x] ~~n8n 외부 접근 설정~~ → I010 완료 (Cloudflare Tunnel)
 - [ ] M03-PoC MVP 완성 (**Zalo 전환만 남음** — +84 번호 확보 시)
@@ -232,6 +250,7 @@
 - [ ] Zalo OA API 연동 설계
 
 ### 2026-02-03 (추가)
+
 - [x] M06 Ecommerce Agent 전체 구현 (scraper/comparator/defender/scheduler)
   - Shopee/Lazada 스크래핑 (httpx + HTML 파싱)
   - 가격 비교 (5%/15% 알럿), AI 방어 (Ollama qwen3:8b)
@@ -248,7 +267,21 @@
   - 4 프리셋 (tiktok/reels/shorts/square)
   - 테스트 18/18, 문서 4종 (A011, D014, I015, T010)
 
+### 2026-02-10 (추가)
+
+- [x] D032 콘텐츠 대량 생산 테스트
+  - 5 BnF 제품 × 4 스타일 = 20개 TikTok 영상 배치 생산
+  - 성공률 100% (20/20), 리트라이 0건
+  - 총 123.5분 (평균 6.2분/건), 비용 $0
+  - 총 용량 59.1MB (평균 3.0MB/건)
+  - 병목: Avatar 렌더링 87% (SadTalker+GFPGAN 324초)
+  - Python 배치 스크립트(m01-batch.py) — PS1 이모지 인코딩 문제로 전환
+  - edge-tts 설치 (Microsoft Edge TTS API)
+  - 문서: D032 (플랜), T023 (리포트)
+  - git push (`cca2199`)
+
 ### 🔵 완료 (2026-02-03)
+
 - [x] M06 Ecommerce Agent — 24/24 테스트 PASS (`5373c16`)
 - [x] M04 AI Product Photography — 20/20 테스트 PASS (`50780e6`)
 - [x] M02 Viral Content Factory — 18/18 테스트 PASS (`3e15c9a`)
@@ -259,98 +292,98 @@
 
 **원칙: "비싼 모델은 두뇌, 싼 모델은 근육"**
 
-| 용도 | 추천 모델 | 이유 |
-|------|----------|------|
-| 전략/분석/코딩 | Claude | 품질 우선 |
-| 고객 챗봇 (Zalo) | Qwen3 on-premise | 대량 처리 + 비용 절감 + 베트남어 |
-| TikTok 스크립트 대량생산 | LLaMA / Qwen3 | 반복 작업은 로컬 |
-| AI Copywriting (고품질) | GPT-4o or Claude | 핵심 마케팅 카피 |
-| 가격/재고 모니터링 | 소형 오픈모델 | 단순 판단 |
+| 용도                     | 추천 모델        | 이유                             |
+| ------------------------ | ---------------- | -------------------------------- |
+| 전략/분석/코딩           | Claude           | 품질 우선                        |
+| 고객 챗봇 (Zalo)         | Qwen3 on-premise | 대량 처리 + 비용 절감 + 베트남어 |
+| TikTok 스크립트 대량생산 | LLaMA / Qwen3    | 반복 작업은 로컬                 |
+| AI Copywriting (고품질)  | GPT-4o or Claude | 핵심 마케팅 카피                 |
+| 가격/재고 모니터링       | 소형 오픈모델    | 단순 판단                        |
 
 ---
 
 ## 결정 사항
 
-| 날짜 | 결정 | 근거 |
-|------|------|------|
-| 2026-01-30 | 블루프린트 6대 AI 모델 확정 | PT_Vietnam_AI_Sales_AutoPilot.pdf |
-| 2026-01-31 | n8n MCP 연동 방향 A 채택 | Claude Code → n8n, 설정 간편 |
-| 2026-02-01 | 멀티 LLM 전략 채택 | Claude + ChatGPT + On-Premise 병용 |
-| 2026-02-01 | On-Premise 착수: M05+M03-PoC | M05는 인프라 전제, M03은 LLM 가치 검증 |
-| 2026-02-01 | n8n 로컬 Docker 채택 | On-Premise 일관성 + Ollama 직접 연동 + 비용 $0 |
-| 2026-02-02 | 품질 채점 v2 (9단계) | v1 변별력 부족 → 세분화 |
-| 2026-02-02 | Friendly 톤 > Expert 톤 (qwen3:8b) | A/B 테스트 결과 78 vs 20 |
-| 2026-02-02 | Dead Lead에 Zalo Promotion 필요 | 48시간 규칙 때문에 CS Message 불가 |
-| 2026-02-02 | Zalo OA 생성: +84 번호 필수 | 한국 번호(+82) 계정은 OA 생성 권한 없음 → BnF 현지 스탭 요청 또는 eSIM |
-| 2026-02-02 | qwen3:8b `/no_think` 사용 금지 | 4/5 확률로 content 비고 thinking에만 응답 → 폴백 로직 추가 (T004-LL) |
-| 2026-02-02 | Cloudflare Quick Tunnel 채택 | 무료, 계정 불필요, 즉시 사용. 프로덕션은 Named Tunnel로 업그레이드 |
-| 2026-02-07 | 개발 방식 변경: MAIBOT 직접 구현 | 하이브리드(Claude Code CLI) MCP/plugins 충돌로 hang → 직접 구현이 안정적 |
-| 2026-02-07 | 파이프라인 7→10단계 확장 | TikTok 영상 생성/검수/발행 3단계 추가 (D021) |
-| 2026-02-07 | VideoJob 큐 + Worker 아키텍처 | Railway(서버) → DB Job → 로컬 Worker(GPU) 분리 |
-| 2026-02-07 | TikTok 발행은 계정 생성 후 | 지니님 결정 — Phase C 보류 |
-| 2026-02-07 | Worker E2E 테스트 성공 | DERMAEL 마스크 → 720x1280 TikTok 영상 ~3분13초, $0 |
+| 날짜       | 결정                               | 근거                                                                     |
+| ---------- | ---------------------------------- | ------------------------------------------------------------------------ |
+| 2026-01-30 | 블루프린트 6대 AI 모델 확정        | PT_Vietnam_AI_Sales_AutoPilot.pdf                                        |
+| 2026-01-31 | n8n MCP 연동 방향 A 채택           | Claude Code → n8n, 설정 간편                                             |
+| 2026-02-01 | 멀티 LLM 전략 채택                 | Claude + ChatGPT + On-Premise 병용                                       |
+| 2026-02-01 | On-Premise 착수: M05+M03-PoC       | M05는 인프라 전제, M03은 LLM 가치 검증                                   |
+| 2026-02-01 | n8n 로컬 Docker 채택               | On-Premise 일관성 + Ollama 직접 연동 + 비용 $0                           |
+| 2026-02-02 | 품질 채점 v2 (9단계)               | v1 변별력 부족 → 세분화                                                  |
+| 2026-02-02 | Friendly 톤 > Expert 톤 (qwen3:8b) | A/B 테스트 결과 78 vs 20                                                 |
+| 2026-02-02 | Dead Lead에 Zalo Promotion 필요    | 48시간 규칙 때문에 CS Message 불가                                       |
+| 2026-02-02 | Zalo OA 생성: +84 번호 필수        | 한국 번호(+82) 계정은 OA 생성 권한 없음 → BnF 현지 스탭 요청 또는 eSIM   |
+| 2026-02-02 | qwen3:8b `/no_think` 사용 금지     | 4/5 확률로 content 비고 thinking에만 응답 → 폴백 로직 추가 (T004-LL)     |
+| 2026-02-02 | Cloudflare Quick Tunnel 채택       | 무료, 계정 불필요, 즉시 사용. 프로덕션은 Named Tunnel로 업그레이드       |
+| 2026-02-07 | 개발 방식 변경: MAIBOT 직접 구현   | 하이브리드(Claude Code CLI) MCP/plugins 충돌로 hang → 직접 구현이 안정적 |
+| 2026-02-07 | 파이프라인 7→10단계 확장           | TikTok 영상 생성/검수/발행 3단계 추가 (D021)                             |
+| 2026-02-07 | VideoJob 큐 + Worker 아키텍처      | Railway(서버) → DB Job → 로컬 Worker(GPU) 분리                           |
+| 2026-02-07 | TikTok 발행은 계정 생성 후         | 지니님 결정 — Phase C 보류                                               |
+| 2026-02-07 | Worker E2E 테스트 성공             | DERMAEL 마스크 → 720x1280 TikTok 영상 ~3분13초, $0                       |
 
 ---
 
 ## 문서 목록
 
-| 코드 | 제목 | 상태 |
-|------|------|------|
-| A001 | PRD: BnF AI 세일즈 오토메이션 | Draft |
-| A002 | 기술 스택 서베이 2026 | Draft |
-| A003 | 리스크·문제점 분석 (SWOT) | Draft |
-| A004 | 문서 리뷰 분석 | Complete |
-| A005 | 약점 보완 계획 (24건) | Complete |
-| D001~D005 | 시스템 아키텍처~인프라 설정 | Draft |
-| D006 | n8n MCP 연동 설계 | Draft |
-| D007 | On-Premise 착수 + WF-POC-01 설계 | Complete |
-| I001 | 지니 설정 요청서 | 진행중 |
-| I002 | 구현 진행 (2/1 오전) | Complete |
-| I003 | 구현 진행 (2/1 오후) | Complete |
-| I004 | Ollama GPU 복구 + Chat API 전환 | Complete |
-| I005 | Google Sheets API 설정 + CRM 스프레드시트 | Complete |
-| T001 | WF-POC-01 파이프라인 2회 PASS | Complete |
-| D008 | WF-POC-02 CRM ↔ 카피 생성 연동 설계 | Complete |
-| I006 | WF-POC-02 구현 기록 | Complete |
-| T002 | WF-POC-02 파이프라인 4건 전체 PASS | Complete |
-| D009 | WF-POC-03 Dead Lead Reactivator 설계 | Complete |
-| D010 | A/B 프롬프트 테스트 프레임워크 설계 | Complete |
-| A006 | Zalo OA API 리서치 | Complete |
-| T003 | WF-POC-03 + A/B 테스트 결과 | Complete |
-| T004 | 파이프라인 통합 테스트 (CRM→Ollama→카카오) | Complete |
-| I007 | 마이봇 단독 기능 구현 기록 | Complete |
-| I008 | Zalo OA 등록 차단 이슈 + 대책 | ⚠️ Blocked |
-| I009 | 카카오톡 채널 테스트 환경 구축 | ✅ Complete |
-| I010 | n8n 외부 접근 터널 설정 (Cloudflare Tunnel) | ✅ Complete |
-| D011 | 프로덕션 전환 가이드 (Production Transition Reference) | ✅ Complete |
-| A007 | M01 Faceless Salesman 기술 리서치 (TikTok + TTS + Avatar) | ✅ Complete |
-| T005 | MMS-TTS-vie 벤치마크 결과 (20/20, CER 23.3%) | ✅ Complete |
-| T006 | SadTalker 아바타 PoC — 첫 토킹헤드 생성 | ✅ Complete |
-| T007 | M01 파이프라인 통합 테스트 (스크립트→TTS→아바타) | ✅ Complete |
-| I011 | M01 커스텀 AI 아바타 이미지 생성 (SD Turbo) | ✅ Complete |
-| I012 | M01 후처리 — BGM + 자막 + 세로 변환 (FFmpeg) | ✅ Complete |
-| A008 | TikTok Content Posting API 리서치 | ✅ Complete |
-| T004-LL | Lessons Learned: qwen3 /no_think 버그 | Complete |
-| T022 | 제품 등록 + AI 콘텐츠 + 영상 생성 E2E (2026-02-09) | ✅ Complete |
-| I037 | TTS 여성 음성 전환 + 자막 토글 기능 | ✅ Complete |
+| 코드      | 제목                                                      | 상태        |
+| --------- | --------------------------------------------------------- | ----------- |
+| A001      | PRD: BnF AI 세일즈 오토메이션                             | Draft       |
+| A002      | 기술 스택 서베이 2026                                     | Draft       |
+| A003      | 리스크·문제점 분석 (SWOT)                                 | Draft       |
+| A004      | 문서 리뷰 분석                                            | Complete    |
+| A005      | 약점 보완 계획 (24건)                                     | Complete    |
+| D001~D005 | 시스템 아키텍처~인프라 설정                               | Draft       |
+| D006      | n8n MCP 연동 설계                                         | Draft       |
+| D007      | On-Premise 착수 + WF-POC-01 설계                          | Complete    |
+| I001      | 지니 설정 요청서                                          | 진행중      |
+| I002      | 구현 진행 (2/1 오전)                                      | Complete    |
+| I003      | 구현 진행 (2/1 오후)                                      | Complete    |
+| I004      | Ollama GPU 복구 + Chat API 전환                           | Complete    |
+| I005      | Google Sheets API 설정 + CRM 스프레드시트                 | Complete    |
+| T001      | WF-POC-01 파이프라인 2회 PASS                             | Complete    |
+| D008      | WF-POC-02 CRM ↔ 카피 생성 연동 설계                       | Complete    |
+| I006      | WF-POC-02 구현 기록                                       | Complete    |
+| T002      | WF-POC-02 파이프라인 4건 전체 PASS                        | Complete    |
+| D009      | WF-POC-03 Dead Lead Reactivator 설계                      | Complete    |
+| D010      | A/B 프롬프트 테스트 프레임워크 설계                       | Complete    |
+| A006      | Zalo OA API 리서치                                        | Complete    |
+| T003      | WF-POC-03 + A/B 테스트 결과                               | Complete    |
+| T004      | 파이프라인 통합 테스트 (CRM→Ollama→카카오)                | Complete    |
+| I007      | 마이봇 단독 기능 구현 기록                                | Complete    |
+| I008      | Zalo OA 등록 차단 이슈 + 대책                             | ⚠️ Blocked  |
+| I009      | 카카오톡 채널 테스트 환경 구축                            | ✅ Complete |
+| I010      | n8n 외부 접근 터널 설정 (Cloudflare Tunnel)               | ✅ Complete |
+| D011      | 프로덕션 전환 가이드 (Production Transition Reference)    | ✅ Complete |
+| A007      | M01 Faceless Salesman 기술 리서치 (TikTok + TTS + Avatar) | ✅ Complete |
+| T005      | MMS-TTS-vie 벤치마크 결과 (20/20, CER 23.3%)              | ✅ Complete |
+| T006      | SadTalker 아바타 PoC — 첫 토킹헤드 생성                   | ✅ Complete |
+| T007      | M01 파이프라인 통합 테스트 (스크립트→TTS→아바타)          | ✅ Complete |
+| I011      | M01 커스텀 AI 아바타 이미지 생성 (SD Turbo)               | ✅ Complete |
+| I012      | M01 후처리 — BGM + 자막 + 세로 변환 (FFmpeg)              | ✅ Complete |
+| A008      | TikTok Content Posting API 리서치                         | ✅ Complete |
+| T004-LL   | Lessons Learned: qwen3 /no_think 버그                     | Complete    |
+| T022      | 제품 등록 + AI 콘텐츠 + 영상 생성 E2E (2026-02-09)        | ✅ Complete |
+| I037      | TTS 여성 음성 전환 + 자막 토글 기능                       | ✅ Complete |
 
 ---
 
 ## 주요 결정사항
 
-| 날짜 | 결정 | 사유 |
-|------|------|------|
-| 2026-02-02 | Zalo OA +84 필수 확정 | 공식 정책 확인 |
-| 2026-02-02 | 카카오톡을 테스트 발송 채널로 채택 | +82 즉시 가능, Dispatcher 추상화로 Zalo 교체 용이 |
-| 2026-02-02 | 카카오 앱: BnF AI Sales (ID 1379417) | REST API Key + Client Secret 활성화, 마이봇이 브라우저로 직접 설정 |
-| 2026-02-02 | 전체 파이프라인 E2E 검증 완료 | CRM→Ollama→카카오 3/3 PASS, M03-PoC는 Zalo 전환만 남음 |
+| 날짜       | 결정                                               | 사유                                                                        |
+| ---------- | -------------------------------------------------- | --------------------------------------------------------------------------- |
+| 2026-02-02 | Zalo OA +84 필수 확정                              | 공식 정책 확인                                                              |
+| 2026-02-02 | 카카오톡을 테스트 발송 채널로 채택                 | +82 즉시 가능, Dispatcher 추상화로 Zalo 교체 용이                           |
+| 2026-02-02 | 카카오 앱: BnF AI Sales (ID 1379417)               | REST API Key + Client Secret 활성화, 마이봇이 브라우저로 직접 설정          |
+| 2026-02-02 | 전체 파이프라인 E2E 검증 완료                      | CRM→Ollama→카카오 3/3 PASS, M03-PoC는 Zalo 전환만 남음                      |
 | 2026-02-05 | Zalo OA: 베트남 현지 방문 시 +84 번호 개통 후 진행 | 회사 전용 번호로 Zalo 계정+Developer+OA 생성 예정, 직원 계정 의존 없이 진행 |
-| 2026-02-02 | M01 파이프라인 통합 성공 | 스크립트→TTS→아바타 ~2분14초, $0 비용, 일일5건 ~11분 |
-| 2026-02-02 | 512px 체크포인트 손상 확인 | 256px 폴백 사용, 재다운로드 필요 |
-| 2026-02-03 | 512px 재다운로드 성공 (725MB) | GitHub Releases에서 정상 파일 확보 |
-| 2026-02-03 | 512px + 긴오디오 = OOM | 64초(~1600프레임) 512px 렌더링 시 시스템 RAM 고갈 → 256px 유지 |
-| 2026-02-03 | Phonetic 후처리 모듈 구축 | 숫자/영어/약어 80+종 자동 변환, 파이프라인 통합 |
-| 2026-02-03 | GFPGAN enhancer 채택 | 256px+GFPGAN→512px 출력, 340초/건, OOM 문제 우회 |
+| 2026-02-02 | M01 파이프라인 통합 성공                           | 스크립트→TTS→아바타 ~2분14초, $0 비용, 일일5건 ~11분                        |
+| 2026-02-02 | 512px 체크포인트 손상 확인                         | 256px 폴백 사용, 재다운로드 필요                                            |
+| 2026-02-03 | 512px 재다운로드 성공 (725MB)                      | GitHub Releases에서 정상 파일 확보                                          |
+| 2026-02-03 | 512px + 긴오디오 = OOM                             | 64초(~1600프레임) 512px 렌더링 시 시스템 RAM 고갈 → 256px 유지              |
+| 2026-02-03 | Phonetic 후처리 모듈 구축                          | 숫자/영어/약어 80+종 자동 변환, 파이프라인 통합                             |
+| 2026-02-03 | GFPGAN enhancer 채택                               | 256px+GFPGAN→512px 출력, 340초/건, OOM 문제 우회                            |
 
 ---
 
@@ -362,6 +395,7 @@
 - `01.분석/! 02_PT-*_n8n.pdf` — n8n 통합 전략
 
 ### 2026-02-05
+
 - [x] MAIBEAUTY Admin 설계 문서 작성 (D015 PRD, D016 시스템설계, D017 개발계획)
 - [x] Phase 1 Frontend 완료 (`edba7fc`)
   - Next.js 14 + TypeScript + Tailwind CSS + shadcn/ui
@@ -380,6 +414,7 @@
   - ✅ I018 문서화 완료
 
 ### 2026-02-06
+
 - [x] **Phase 2 Step 1: CRM 모듈 심화** (`a5994a6`)
   - 리드 상태 변경 히스토리 API + UI
   - 리드 필터링 (상태별)
@@ -394,6 +429,7 @@
   - Frontend API 함수 (sheetsSyncApi) 추가
 
 ### 2026-02-06 (오후)
+
 - [x] **T013 D018 판매 시나리오 API E2E 재검증** (`5c4e75f`)
   - Python HTTP 직접 호출 방식으로 전체 판매 프로세스 검증
   - 54/54 ALL PASS (44.7초)
@@ -403,6 +439,7 @@
   - T012(UI 33건) → T013(API 54건): 검증 범위 63% 확대
 
 ### 2026-02-06 (오전)
+
 - [x] **n8n 연동 테스트 전체 완료**
   - n8n Cloud (`mai-n8n.app.n8n.cloud`) healthz OK, 워크플로우 5개 활성 확인
   - MAIBEAUTY API 시뮬레이션: 새 리드 조회 → 상태 업데이트 → 복원 성공
@@ -420,13 +457,15 @@
   - Settings 페이지: 연결됨 (MAIBEAUTY CRM - Vietnam Beauty Sales)
 
 ### Railway 인프라 현황
-| 서비스 | URL | 상태 |
-|--------|-----|------|
+
+| 서비스        | URL                                     | 상태      |
+| ------------- | --------------------------------------- | --------- |
 | maibeauty-api | maibeauty-api-production.up.railway.app | 🟢 Online |
-| Postgres-qWem | postgres-qwem.railway.internal:5432 | 🟢 Online |
-| n8n Cloud | mai-n8n.app.n8n.cloud | 🟢 Online |
+| Postgres-qWem | postgres-qwem.railway.internal:5432     | 🟢 Online |
+| n8n Cloud     | mai-n8n.app.n8n.cloud                   | 🟢 Online |
 
 ### Railway 배포 방법 (2026-02-07 확인)
+
 - **⚠️ 중요:** `railway up`은 반드시 `C:\TEST\MAIBEAUTY\api\` 디렉토리에서 실행해야 함
   - 프로젝트 루트에서 실행하면 `package.json`(프론트엔드) 감지 → Node.js로 빌드 → 실패
   - `api/` 폴더에 `railway.toml`, `requirements.txt`, `start.sh` 있음
@@ -444,18 +483,20 @@
 - **GitHub 자동배포:** Railway 서비스의 root directory가 `api/`로 설정되어 있어야 함
 
 ### Admin 로그인 계정 (2026-02-06 지니님 확인)
-| 항목 | 값 |
-|------|-----|
-| URL | https://jini92.github.io/MAIBEAUTY/ |
-| 이메일 | `admin@maibeauty.com` |
-| 비밀번호 | `Maibeauty2026!` |
-| 권한 | admin |
+
+| 항목     | 값                                  |
+| -------- | ----------------------------------- |
+| URL      | https://jini92.github.io/MAIBEAUTY/ |
+| 이메일   | `admin@maibeauty.com`               |
+| 비밀번호 | `Maibeauty2026!`                    |
+| 권한     | admin                               |
 
 ### Railway 환경변수 (2026-02-06 추가)
-| 변수 | 용도 |
-|------|------|
-| `CRM_SPREADSHEET_ID` | Google Sheets CRM 스프레드시트 ID |
-| `GOOGLE_SERVICE_ACCOUNT_JSON_B64` | SA JSON Base64 인코딩 |
+
+| 변수                              | 용도                              |
+| --------------------------------- | --------------------------------- |
+| `CRM_SPREADSHEET_ID`              | Google Sheets CRM 스프레드시트 ID |
+| `GOOGLE_SERVICE_ACCOUNT_JSON_B64` | SA JSON Base64 인코딩             |
 
 ### 프론트엔드 ↔ 백엔드 API 매핑 (2026-02-07 검증 완료)
 
@@ -463,21 +504,22 @@
 **백엔드 라우터:** `api/app/routers/` (stats.py, products.py, product_ai.py 등)
 **Main 등록:** `api/app/main.py` — 모든 라우터 `/api/v1` prefix
 
-| 기능 | 프론트엔드 호출 경로 | 백엔드 라우터 경로 | 상태 |
-|------|---------------------|-------------------|------|
-| T18 대시보드 위젯 | `/stats/products-summary` | stats.py `@router.get("/products-summary")` | ✅ 일치 |
-| T17 제품-리드 연동 | `/products/{id}/leads` | products.py `@router.get("/{product_id}/leads")` | ✅ 일치 |
-| AI Jobs 목록 | `/products/{id}/ai/jobs` | product_ai.py `@router.get("/jobs")` | ✅ 일치 |
-| AI Job 상태 | `/products/{id}/ai/jobs/{jobId}` | product_ai.py `@router.get("/jobs/{job_id}")` | ✅ 일치 |
-| AI 생성 5종 | generate-all/photos/copy/translate/suggest-usp | 동일 | ✅ 전부 일치 |
-| 리드 CRUD | `/leads` | leads.py | ✅ 일치 |
-| 제품 CRUD | `/products` | products.py | ✅ 일치 |
-| 대시보드 통계 | `/stats/summary` | stats.py | ✅ 일치 |
-| 리드 통계 3종 | leads-by-status/source/trend | stats.py | ✅ 전부 일치 |
+| 기능               | 프론트엔드 호출 경로                           | 백엔드 라우터 경로                               | 상태         |
+| ------------------ | ---------------------------------------------- | ------------------------------------------------ | ------------ |
+| T18 대시보드 위젯  | `/stats/products-summary`                      | stats.py `@router.get("/products-summary")`      | ✅ 일치      |
+| T17 제품-리드 연동 | `/products/{id}/leads`                         | products.py `@router.get("/{product_id}/leads")` | ✅ 일치      |
+| AI Jobs 목록       | `/products/{id}/ai/jobs`                       | product_ai.py `@router.get("/jobs")`             | ✅ 일치      |
+| AI Job 상태        | `/products/{id}/ai/jobs/{jobId}`               | product_ai.py `@router.get("/jobs/{job_id}")`    | ✅ 일치      |
+| AI 생성 5종        | generate-all/photos/copy/translate/suggest-usp | 동일                                             | ✅ 전부 일치 |
+| 리드 CRUD          | `/leads`                                       | leads.py                                         | ✅ 일치      |
+| 제품 CRUD          | `/products`                                    | products.py                                      | ✅ 일치      |
+| 대시보드 통계      | `/stats/summary`                               | stats.py                                         | ✅ 일치      |
+| 리드 통계 3종      | leads-by-status/source/trend                   | stats.py                                         | ✅ 전부 일치 |
 
 **⚠️ 참고:** `product_id`는 UUID 타입. 잘못된 형식 전달 시 FastAPI 라우트 매칭 실패로 404 반환 (422가 아님)
 
 ### 2026-02-07
+
 - [x] **Railway CLI 배포 (T17/T18/AI Jobs 엔드포인트 반영)**
   - 첫 시도: 프로젝트 루트에서 `railway up` → Node.js로 인식 → 빌드 실패
   - 해결: `api/` 디렉토리에서 `railway up` → Python Nixpacks 빌드 성공 (93초)
@@ -516,12 +558,14 @@
 - [x] **문서화**: T016 (Phase 5 테스트), I028 (Phase 5 구현 기록)
 
 ### 🎊 MAIBEAUTY Admin v1.0.0 — Feature Complete (2026-02-07)
+
 - **Phase 1~5 전체 완료**
 - **URL**: https://jini92.github.io/MAIBEAUTY/
 - **API**: https://maibeauty-api-production.up.railway.app
 - **7개 모듈**: 대시보드, CRM 리드, 제품 관리, 콘텐츠, 마케팅, 가격 모니터링, 설정
 
 ### 2026-02-07 (오후) — 파이프라인 뷰어 + TikTok 영상 파이프라인
+
 - [x] **I029 — 파이프라인 결과 뷰어 구현** (5 태스크 전량 완료)
   - React Query 훅 + API 함수 (aiResultsApi 6개)
   - PipelineTimeline 컴포넌트 (7단계 타임라인, 색상 코딩)
@@ -558,18 +602,21 @@
 - [ ] **Phase D — 영상 스토리지** (Cloudflare R2 검토중)
 
 ### Worker 테스트 계정 (2026-02-07 생성)
-| 항목 | 값 |
-|------|-----|
-| 이메일 | `worker-test@maibeauty.com` |
-| 비밀번호 | `WorkerTest2026!` |
-| 용도 | API 테스트용 |
+
+| 항목     | 값                          |
+| -------- | --------------------------- |
+| 이메일   | `worker-test@maibeauty.com` |
+| 비밀번호 | `WorkerTest2026!`           |
+| 용도     | API 테스트용                |
 
 ### Railway 환경변수 추가 (2026-02-07)
-| 변수 | 용도 |
-|------|------|
+
+| 변수               | 용도                                                      |
+| ------------------ | --------------------------------------------------------- |
 | `VIDEO_WORKER_KEY` | 로컬 GPU Worker 인증 (`0aP87uilc4OH93kTwjYbXpNnhBgrQx6e`) |
 
 ### Worker 실행 명령 (로컬 GPU)
+
 ```powershell
 cd C:\TEST\MAIBEAUTY
 python src/workers/video_worker.py --api-url https://maibeauty-api-production.up.railway.app --worker-key 0aP87uilc4OH93kTwjYbXpNnhBgrQx6e
@@ -578,7 +625,8 @@ python src/workers/video_worker.py --api-url https://maibeauty-api-production.up
 ---
 
 ### 2026-02-08 — Google UCP (Universal Commerce Protocol) 통합
-- [x] **A012 — Google UCP 서베이 및 분석** 
+
+- [x] **A012 — Google UCP 서베이 및 분석**
   - UCP 기술 분석 (Discovery, Capabilities, Payment, Transport)
   - MAIBEAUTY 적용 분석 (기존 인프라 매핑, 경쟁 우위, 리스크)
   - 베트남 시장 특수 고려 (MoMo/VNPay, 얼리 어답터 전략)
@@ -610,18 +658,21 @@ python src/workers/video_worker.py --api-url https://maibeauty-api-production.up
 - [x] **STATUS 업데이트** (`3b5ce76`)
 
 ### UCP 엔드포인트 (2026-02-08 추가)
-| 엔드포인트 | 설명 | 인증 |
-|-----------|------|------|
-| `GET /.well-known/ucp` | UCP Discovery 매니페스트 | 없음 (공개) |
-| `GET /ucp/v1/products` | 상품 목록 (필터/페이지네이션) | 없음 (공개) |
-| `GET /ucp/v1/products/{id}` | 상품 상세 | 없음 (공개) |
-| `POST /ucp/v1/products/search` | 자연어 검색 | 없음 (공개) |
+
+| 엔드포인트                     | 설명                          | 인증        |
+| ------------------------------ | ----------------------------- | ----------- |
+| `GET /.well-known/ucp`         | UCP Discovery 매니페스트      | 없음 (공개) |
+| `GET /ucp/v1/products`         | 상품 목록 (필터/페이지네이션) | 없음 (공개) |
+| `GET /ucp/v1/products/{id}`    | 상품 상세                     | 없음 (공개) |
+| `POST /ucp/v1/products/search` | 자연어 검색                   | 없음 (공개) |
 
 ### UCP 다음 단계
+
 - [x] ~~**Phase 2**: Checkout + Payment Handler + 재고 동기화~~ → ✅ 완료 (2026-02-08)
 - [x] ~~**Phase 3**: Merchant Center Feed + Structured Data + Conversational~~ → ✅ 완료 (2026-02-08)
 
 ### UCP Phase 3 구현 (2026-02-08)
+
 - `GET /ucp/v1/feed/products.json` — Merchant Center JSON 피드
 - `GET /ucp/v1/feed/products.xml` — Google Shopping RSS 2.0 XML
 - `GET /ucp/v1/feed/products.tsv` — TSV 직접 업로드용
@@ -633,6 +684,7 @@ python src/workers/video_worker.py --api-url https://maibeauty-api-production.up
 - 문서: D023 (Merchant Center 가이드), I033 (구현 기록)
 
 ### UCP Admin 모듈 구현 (2026-02-08) — Phase A~C 전체 완료
+
 - **Phase A** (3 서브에이전트 병렬): 백엔드 API 3개 + 주문 모듈 + 대시보드 위젯 (13 커밋)
 - **Phase B** (서브에이전트): Feed 관리 페이지 — Overview/Preview/StructuredData/HealthCheck/Conversational (6 커밋)
 - **Phase C** (서브에이전트): UCP 설정 탭 + I034 문서 + STATUS 업데이트 (4 커밋)
@@ -641,6 +693,7 @@ python src/workers/video_worker.py --api-url https://maibeauty-api-production.up
 - 문서: D024 (PRD), D025 (설계), D026 (개발계획), I034 (구현 기록)
 
 ### 지니 액션 필요 (Merchant Center)
+
 - [ ] Google Merchant Center 계정 생성 (베트남 시장)
 - [ ] 상품 피드 URL 등록: `https://maibeauty-api-production.up.railway.app/ucp/v1/feed/products.xml`
 - [ ] Brand Profile 생성
@@ -651,6 +704,7 @@ python src/workers/video_worker.py --api-url https://maibeauty-api-production.up
 ### 2026-02-08 (오후) — R2 스토리지 + 코드 품질 + 판매 전략 + 테스트 스위트
 
 #### Cloudflare R2 스토리지 구축
+
 - [x] `maibeauty-media` 버킷 생성 (APAC, Public Access ON)
 - [x] R2 Access Key + `.env` 설정 (`R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`)
 - [x] `src/storage/r2.ts` — S3 호환 클라이언트 (AWS SDK v3)
@@ -663,15 +717,18 @@ python src/workers/video_worker.py --api-url https://maibeauty-api-production.up
 - Public URL: `https://pub-256514584116411a85e99da201cfc4a6.r2.dev`
 
 #### D031 — UCP 제품등록 및 판매 프로세스 가이드 (574줄)
+
 - [x] Admin 등록 → DB 저장 → UCP Discovery → AI 상담 → 장바구니 → 결제 전체 플로우
 - [x] 이미지 업로드 3경로 + Cloudflare R2 반영
 
 #### 판매 전략 문서 3건
+
 - [x] D027 — 🇻🇳 베트남 시장 판매 전략 (시장분석, 채널전략, AI 6대 모델 ROI, 3개월 로드맵)
 - [x] D028 — 🇺🇸 미주 시장 진출 전략 (FDA 규제, Amazon FBA, D2C+UCP, 6개월 로드맵)
 - [x] D029 — 🌏 글로벌 확장 로드맵 (7개국 우선순위, 다국가 UCP, 12개월 실행계획)
 
 #### A013 코드 품질 개선 (MAIBOT 직접)
+
 - [x] T4: CORS `*` → 명시적 origin 화이트리스트 (`c4ffda2`)
 - [x] T5: `api.ts` 1,383줄 → 10개 도메인별 API 모듈 분할 (`4620854`)
 - [x] T6: USE_MOCK 7개 훅 환경변수 통일 (`4620854`)
@@ -679,6 +736,7 @@ python src/workers/video_worker.py --api-url https://maibeauty-api-production.up
 - [x] I037 — 구현 기록 문서 (`438741a`)
 
 #### 보안 수정 + 테스트 스위트 (Claude Code Agent Teams)
+
 - [x] Register API `require_role(["admin"])` — 비인증 사용자 등록 차단
 - [x] asyncpg UTF-8 `client_encoding` — 한글 인코딩 수정
 - [x] UCP stats GROUP BY SQL — `func.coalesce` 제거
@@ -687,28 +745,31 @@ python src/workers/video_worker.py --api-url https://maibeauty-api-production.up
 - 커밋: `0a1b7b4`, `a13de35`
 
 #### 배포 (2026-02-08)
+
 - [x] Frontend (GitHub Pages) → ✅ SUCCESS (`4620854`)
 - [x] Backend (Railway) → ✅ SUCCESS (`c2ac1167`)
 - [x] R2 (Cloudflare) → ✅ Public Access 정상
 
 #### 결정사항 추가
-| 날짜 | 결정 | 사유 |
-|------|------|------|
-| 2026-02-08 | Cloudflare R2 스토리지 도입 | 상품 이미지/TikTok 영상 클라우드 저장 + 퍼블릭 URL |
-| 2026-02-08 | A013 코드 품질 개선 4건 실행 | 보안(CORS) + 유지보수성(분할) + 안정성(cleanup) |
-| 2026-02-08 | 테스트 스위트 754건 도입 | Claude Code Agent Teams 병렬 테스트 자동화 |
-| 2026-02-09 | 제품→AI콘텐츠→영상 E2E 13/13 PASS | 전체 파이프라인 정상 동작 확인 |
-| 2026-02-09 | Worker 수동 기동 방식 유지 | 자동 기동은 다음 단계 (Task Scheduler 검토) |
-| 2026-02-09 | R2 Public Access 활성화 (API 방식) | `r2.dev` subdomain 공개 접근 활성화 → Worker R2 업로드 → Public URL 서빙 확인 |
-| 2026-02-09 | R2 E2E 테스트 PASS | Worker→R2 업로드→Public URL→API 저장 전체 흐름 성공 (Job fc59515b, 2분46초, 2.6MB) |
-| 2026-02-09 | TTS 엔진 edge-tts 전환 | MMS-TTS-vie(남성) → edge-tts vi-VN-HoaiMyNeural(여성), 아바타(happy.png 여성)와 음성 일치 |
-| 2026-02-09 | 자막 모드 srt-only 기본값 | burn-in 제거, SRT 별도 R2 업로드, 프론트엔드 토글 |
-| 2026-02-09 | 서비스 키/토큰 `.env` 통합 관리 | API 로그인, Cloudflare Token, Worker Key 등 `.env`에 정리 → 마이봇 원클릭 접근 |
-| 2026-02-09 | 자율 진행 + 노티 방식 채택 | 구현/테스트/문서화/배포는 확인 없이 진행 후 결과 보고. 확인 필요: 비용, 방향성, 외부 가입, 삭제/롤백 |
+
+| 날짜       | 결정                               | 사유                                                                                                 |
+| ---------- | ---------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| 2026-02-08 | Cloudflare R2 스토리지 도입        | 상품 이미지/TikTok 영상 클라우드 저장 + 퍼블릭 URL                                                   |
+| 2026-02-08 | A013 코드 품질 개선 4건 실행       | 보안(CORS) + 유지보수성(분할) + 안정성(cleanup)                                                      |
+| 2026-02-08 | 테스트 스위트 754건 도입           | Claude Code Agent Teams 병렬 테스트 자동화                                                           |
+| 2026-02-09 | 제품→AI콘텐츠→영상 E2E 13/13 PASS  | 전체 파이프라인 정상 동작 확인                                                                       |
+| 2026-02-09 | Worker 수동 기동 방식 유지         | 자동 기동은 다음 단계 (Task Scheduler 검토)                                                          |
+| 2026-02-09 | R2 Public Access 활성화 (API 방식) | `r2.dev` subdomain 공개 접근 활성화 → Worker R2 업로드 → Public URL 서빙 확인                        |
+| 2026-02-09 | R2 E2E 테스트 PASS                 | Worker→R2 업로드→Public URL→API 저장 전체 흐름 성공 (Job fc59515b, 2분46초, 2.6MB)                   |
+| 2026-02-09 | TTS 엔진 edge-tts 전환             | MMS-TTS-vie(남성) → edge-tts vi-VN-HoaiMyNeural(여성), 아바타(happy.png 여성)와 음성 일치            |
+| 2026-02-09 | 자막 모드 srt-only 기본값          | burn-in 제거, SRT 별도 R2 업로드, 프론트엔드 토글                                                    |
+| 2026-02-09 | 서비스 키/토큰 `.env` 통합 관리    | API 로그인, Cloudflare Token, Worker Key 등 `.env`에 정리 → 마이봇 원클릭 접근                       |
+| 2026-02-09 | 자율 진행 + 노티 방식 채택         | 구현/테스트/문서화/배포는 확인 없이 진행 후 결과 보고. 확인 필요: 비용, 방향성, 외부 가입, 삭제/롤백 |
 
 ---
 
 ### 2026-02-09 — 제품 등록 + AI 콘텐츠 + 영상 생성 E2E 테스트
+
 - [x] **T022 — 제품 등록 + AI 콘텐츠 생성 E2E 테스트 (8/8 PASS)**
   - API 로그인 (admin@maibeauty.com)
   - DERMAEL 어성초 마스크 28매 제품 등록 (ID: `87b5017a-fb0d-4b28-943c-8bd1a73efa22`)
@@ -724,6 +785,7 @@ python src/workers/video_worker.py --api-url https://maibeauty-api-production.up
 - [x] **문서화**: T022 테스트 문서, Obsidian Daily Note, memory 업데이트
 
 #### Worker 기동 방법 (2026-02-09 재확인)
+
 ```powershell
 # 1. VIDEO_WORKER_KEY 확인
 cd C:\TEST\MAIBEAUTY
@@ -737,12 +799,14 @@ python src/workers/video_worker.py --api-url https://maibeauty-api-production.up
 ---
 
 ### 최근 커밋 (자동 동기화)
+
 <!-- AUTO:subrepo-commits:START -->
-- `ce0588c docs: add I037 TTS female voice and subtitle toggle (02-09)`
-- `97fed6c feat: subtitle toggle - default hidden, SRT track on demand (02-09)`
-- `21213e1 feat: switch TTS to edge-tts female voice (vi-VN-HoaiMyNeural) (02-09)`
-- `ce556d0 docs: update I036 with R2 public access setup and E2E test results (02-09)`
-- `2ea5be1 feat: add R2 upload to video worker pipeline (I036) (02-09)`
+
+- `274f6c2 feat: add alembic migrations 012-014 (subscriptions, users multibrand, orders extension) (02-12)`
+- `61d4aed feat(sprint3): 통합 대시보드 + KPI - 구독/주문 KPI, 매출 추이, 브랜드 비교, 최근 주문 (02-12)`
+- `5f2a9bb Sprint 3: 배포 준비 - 마이그레이션 통합 스크립트, migrate.py, 배포 가이드, requirements/env 업데이트 (02-12)`
+- `7849882 feat(orders): Sprint 3 - ecommerce order extensions (shipping, refund, analytics, timeline) (02-12)`
+- `e7c3209 docs: update STATUS, CHANGELOG, README for Admin v2.0 (02-12)`
 <!-- AUTO:subrepo-commits:END -->
 
-*Last updated: 2026-02-09*
+_Last updated: 2026-02-12_

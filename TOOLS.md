@@ -1,12 +1,13 @@
 # TOOLS.md - Local Notes
 
-Skills define *how* tools work. This file is for *your* specifics — the stuff that's unique to your setup.
+Skills define _how_ tools work. This file is for _your_ specifics — the stuff that's unique to your setup.
 
 ## What Goes Here
 
 Things like:
+
 - Camera names and locations
-- SSH hosts and aliases  
+- SSH hosts and aliases
 - Preferred voices for TTS
 - Speaker/room names
 - Device nicknames
@@ -16,13 +17,16 @@ Things like:
 
 ```markdown
 ### Cameras
+
 - living-room → Main area, 180° wide angle
 - front-door → Entrance, motion-triggered
 
 ### SSH
+
 - home-server → 192.168.1.100, user: admin
 
 ### TTS
+
 - Preferred voice: "Nova" (warm, slightly British)
 - Default speaker: Kitchen HomePod
 ```
@@ -42,16 +46,19 @@ Add whatever helps you do your job. This is your cheat sheet.
 ### Development Commands
 
 **Full Build**:
+
 ```bash
 pnpm build  # TypeScript compile + canvas bundle + metadata copy
 ```
 
 **Development Run**:
+
 ```bash
 pnpm dev  # or: pnpm moltbot
 ```
 
 **Gateway Development**:
+
 ```bash
 pnpm gateway:dev  # with CLAWDBOT_SKIP_CHANNELS=1
 ```
@@ -59,21 +66,25 @@ pnpm gateway:dev  # with CLAWDBOT_SKIP_CHANNELS=1
 ### Testing
 
 **Quick Test**:
+
 ```bash
 pnpm test
 ```
 
 **Coverage Check**:
+
 ```bash
 pnpm test:coverage  # 70% threshold enforced
 ```
 
 **Live Tests** (requires credentials):
+
 ```bash
 CLAWDBOT_LIVE_TEST=1 pnpm test:live
 ```
 
 **Docker E2E**:
+
 ```bash
 pnpm test:docker:all
 ```
@@ -81,11 +92,13 @@ pnpm test:docker:all
 ### Useful Shortcuts
 
 **Pre-commit Validation**:
+
 ```bash
 prek install && pnpm build && pnpm test
 ```
 
 **Gateway Restart** (production via SSH):
+
 ```bash
 pkill -9 -f moltbot-gateway || true; \
 nohup moltbot gateway run --bind loopback --port 18789 --force \
@@ -93,6 +106,7 @@ nohup moltbot gateway run --bind loopback --port 18789 --force \
 ```
 
 **Gateway Status Check**:
+
 ```bash
 moltbot channels status --probe
 ss -ltnp | rg 18789
@@ -144,6 +158,7 @@ MAIBOT (직접 구현)
 | 메모리 관리 | ✅ |
 
 **이전 방식 (폐기):** 하이브리드 (MAIBOT + Claude Code CLI)
+
 - 2026-02-06 도입 → 2026-02-07 폐기
 - 폐기 사유: Claude Code CLI의 MCP 서버/plugins 로딩 충돌로 hang 발생
 - .claude/agents/, .mcp.json, CLAUDE.md 파일은 프로젝트에 남아있음 (향후 재활용 가능)
@@ -153,6 +168,7 @@ MAIBOT (직접 구현)
 ### MAIBEAUTY 개발 환경
 
 **프로젝트:** 베트남 화장품 사업 (BnF AI Sales Automation)
+
 ```
 - 로컬: C:\TEST\MAIBEAUTY
 - GitHub: https://github.com/jini92/MAIBEAUTY
@@ -161,6 +177,7 @@ MAIBOT (직접 구현)
 ```
 
 **Claude Code 실행:**
+
 ```bash
 # 단발 작업
 claude 'task description' (workdir: C:\TEST\MAIBEAUTY)
@@ -170,6 +187,7 @@ claude 'task' (background + pty)
 ```
 
 **개발 후 push:**
+
 ```bash
 cd C:\TEST\MAIBEAUTY
 git add -A
@@ -211,18 +229,19 @@ gcloud iam service-accounts create maibeauty-crm --display-name="MAIBEAUTY CRM"
 
 모든 키/토큰은 `C:\TEST\MAIBEAUTY\.env`에 저장 (git 무시됨).
 
-| 서비스 | 접근 방법 | .env 키 |
-|--------|----------|---------|
-| **MAIBEAUTY API** | REST API (JWT 인증) | `MAIBEAUTY_API_URL`, `MAIBEAUTY_ADMIN_EMAIL`, `MAIBEAUTY_ADMIN_PASSWORD` |
-| **Cloudflare R2** | boto3 S3 호환 | `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_ENDPOINT`, `R2_PUBLIC_URL` |
-| **Cloudflare API** | REST API (Bearer Token) | `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` |
-| **Video Worker** | Worker key 인증 | `VIDEO_WORKER_KEY` |
-| **Railway** | CLI 로그인 상태 | `railway variables` (MAIBEAUTY 프로젝트) |
-| **GitHub** | git credential 저장 | `jini92/MAIBEAUTY`, `jini92/MAIBOT` |
-| **Ollama** | 로컬 LLM | `OLLAMA_BASE_URL` (localhost:11434) |
-| **Google Sheets** | Service Account JSON | `GOOGLE_SERVICE_ACCOUNT_JSON`, `CRM_SPREADSHEET_ID` |
+| 서비스             | 접근 방법               | .env 키                                                                                     |
+| ------------------ | ----------------------- | ------------------------------------------------------------------------------------------- |
+| **MAIBEAUTY API**  | REST API (JWT 인증)     | `MAIBEAUTY_API_URL`, `MAIBEAUTY_ADMIN_EMAIL`, `MAIBEAUTY_ADMIN_PASSWORD`                    |
+| **Cloudflare R2**  | boto3 S3 호환           | `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_ENDPOINT`, `R2_PUBLIC_URL` |
+| **Cloudflare API** | REST API (Bearer Token) | `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`                                             |
+| **Video Worker**   | Worker key 인증         | `VIDEO_WORKER_KEY`                                                                          |
+| **Railway**        | CLI 로그인 상태         | `railway variables` (MAIBEAUTY 프로젝트)                                                    |
+| **GitHub**         | git credential 저장     | `jini92/MAIBEAUTY`, `jini92/MAIBOT`                                                         |
+| **Ollama**         | 로컬 LLM                | `OLLAMA_BASE_URL` (localhost:11434)                                                         |
+| **Google Sheets**  | Service Account JSON    | `GOOGLE_SERVICE_ACCOUNT_JSON`, `CRM_SPREADSHEET_ID`                                         |
 
 **자주 쓰는 명령:**
+
 ```powershell
 # API 로그인 (토큰 발급)
 $login = Invoke-RestMethod -Uri "$env:MAIBEAUTY_API_URL/api/v1/auth/login" -Method POST -ContentType "application/json" -Body '{"email":"jini@maibeauty.vn","password":"BnF@2026!Admin"}'
@@ -240,15 +259,46 @@ Invoke-RestMethod -Uri "https://api.cloudflare.com/client/v4/accounts/$env:CLOUD
 ```
 
 ### Discord 노티 규칙
+
 - **절대 금지**: `#일반` 채널(1466615738512179394)에 메시지 전송 금지 (보안 위험)
 - **DM 전용**: 지니님 DM 채널(1466624220632059934)으로만 전송
 - **민감 정보 제거**: 규정 문서 번호, 내부 시스템명, 제어기 정보 등 비공개 정보 포함 금지
 
 ### Obsidian 볼트
-- **경로:** `C:\Users\jini9\OneDrive\Documents\JINI_SYNC`
-- **구조:** PARA 기반 (00.DAILY, 01.PROJECT, 02.AREA, 03.RESOURCES, 04.ARCHIVE)
-- **기타 폴더:** AI, chatGPT, DAILY, TEMPLATES, 05.DEBUGGING, skills
-- **CLI:** obsidian-cli 미지원 (Windows) → 직접 파일 읽기/쓰기로 연동
-- **동기화:** OneDrive
 
-*Last updated: 2026-02-09*
+- **경로:** `C:\Users\jini9\OneDrive\Documents\JINI_SYNC`
+- **구조:** PARA 기반
+- **CLI:** obsidian-cli 미지원 (Windows) → 직접 파일 읽기/쓰기로 연동
+- **동기화:** OneDrive → 아이패드 Obsidian (풀 기능) 실시간 반영
+- **아이패드:** Obsidian 풀 기능 사용 중 (편집/확인 가능)
+
+**폴더 구조:**
+
+```
+JINI_SYNC/
+├── 00.DAILY/          ← 데일리 노트, 브리핑
+├── 01.PROJECT/        ← 프로젝트별 폴더 (★ 프로젝트 문서는 여기)
+│   ├── 00.MAIBOT
+│   ├── 01.MAITCAD
+│   ├── 02.MAIPnID
+│   ├── 03.MAIAX
+│   ├── 04.MAIOSS
+│   ├── 05.MAITB
+│   ├── 06.MAITHINK
+│   ├── 07.MAIBEAUTY
+│   ├── 08.MAISTAR7
+│   └── 09.MAICON     ← docs/ 심볼릭 링크 → C:\TEST\MAICON\docs
+├── 02.AREA/           ← 영역별 (지속적 관심사)
+├── 03.RESOURCES/      ← 리소스/참고자료
+├── 04.ARCHIVE/        ← 아카이브
+├── 05.DEBUGGING/      ← 디버깅 노트
+├── AI/
+├── chatGPT/
+├── DAILY/
+├── TEMPLATES/
+└── skills/
+```
+
+**규칙:** 새 프로젝트 → `01.PROJECT/XX.프로젝트명/` 에 생성 (루트 X)
+
+_Last updated: 2026-02-09_
