@@ -419,7 +419,7 @@ export async function preflightDiscordMessage(
         message.attachments
           ?.filter((att: DiscordAudioAttachmentCandidate) => isDiscordAudioAttachment(att))
           .map((att: DiscordAudioAttachmentCandidate) => att.url)
-          .filter((url): url is string => Boolean(url)) ?? [];
+          .filter((url: string | null | undefined): url is string => Boolean(url)) ?? [];
       if (audioPaths.length > 0) {
         const tempCtx = {
           MediaUrls: audioPaths,
