@@ -90,7 +90,7 @@ ok "Lint check passed"
 
 # --- pnpm link ---
 log "Linking globally..."
-pnpm link --global --ignore-scripts 2>&1 || fail "pnpm link --global failed"
+pnpm link --global 2>&1 || fail "pnpm link --global failed"
 ok "Linked globally"
 
 log "Built commit: ${BUILT_SHORT} (${BUILT_SHA})"
