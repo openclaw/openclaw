@@ -362,6 +362,22 @@ export async function runExecProcess(opts: {
   let stdin: SessionStdin | undefined;
   const execCommand = opts.execCommand ?? opts.command;
 
+  // `exec` does not currently accept tool-provided stdin content. For non-PTY runs,
+  // keeping stdin open can cause commands like `wc -l` (or safeBins-hardened segments)
+  // to block forever waiting for input, leading to accidental backgrounding.
+  // For interactive flows, callers should use `pty: true` (stdin kept open).
+  const maybeCloseNonPtyStdin = () => {
+    if (opts.usePty) {
+      return;
+    }
+    try {
+      // Signal EOF immediately so stdin-only commands can terminate.
+      child?.stdin?.end();
+    } catch {
+      // ignore stdin close errors
+    }
+  };
+
   if (opts.sandbox) {
     const { child: spawned } = await spawnWithFallback({
       argv: [
@@ -396,6 +412,7 @@ export async function runExecProcess(opts: {
     });
     child = spawned as ChildProcessWithoutNullStreams;
     stdin = child.stdin;
+    maybeCloseNonPtyStdin();
   } else if (opts.usePty) {
     const { shell, args: shellArgs } = getShellConfig();
     try {
@@ -489,6 +506,7 @@ export async function runExecProcess(opts: {
     });
     child = spawned as ChildProcessWithoutNullStreams;
     stdin = child.stdin;
+    maybeCloseNonPtyStdin();
   }
 
   const session = {
