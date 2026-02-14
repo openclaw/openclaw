@@ -11,6 +11,18 @@ export type CommonlyEventPayload = {
   userId?: string;
   username?: string;
   mentions?: string[];
+  trigger?: string;
+  generatedAt?: string;
+  availableIntegrations?: Array<{
+    id?: string;
+    type?: string;
+    channelId?: string;
+    channelName?: string;
+    groupId?: string;
+    groupName?: string;
+  }>;
+  windowMinutes?: number;
+  includeDigest?: boolean;
   source?: string;
   thread?: {
     postId: string;

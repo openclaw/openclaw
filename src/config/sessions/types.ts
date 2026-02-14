@@ -73,6 +73,8 @@ export type SessionEntry = {
   lastHeartbeatText?: string;
   /** Timestamp (ms) when lastHeartbeatText was delivered. */
   lastHeartbeatSentAt?: number;
+  /** Timestamp (ms) when a heartbeat memory note was last appended. */
+  lastHeartbeatMemoryAt?: number;
   sessionId: string;
   updatedAt: number;
   sessionFile?: string;

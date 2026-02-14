@@ -115,6 +115,27 @@ const sanitizeOutboundText = (text: string | undefined): string => {
   return parseInlineDirectives(text, { stripReplyTags: true, stripAudioTag: true }).text;
 };
 
+const scrubNoReplyAndRepeats = (text: string, maxChars = 1600): string => {
+  const normalized = text.replace(/\r\n/g, "\n");
+  const withoutNoReply = normalized.replace(/(^|\n)\s*NO_REPLY\s*(?=\n|$)/g, "$1");
+  const paragraphs = withoutNoReply
+    .split(/\n{2,}/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+  const deduped: string[] = [];
+  for (const paragraph of paragraphs) {
+    const last = deduped[deduped.length - 1];
+    if (last !== paragraph) {
+      deduped.push(paragraph);
+    }
+  }
+  let cleaned = deduped.join("\n\n").trim();
+  if (cleaned.length > maxChars) {
+    cleaned = `${cleaned.slice(0, maxChars).trimEnd()}...`;
+  }
+  return cleaned;
+};
+
 export const commonlyPlugin: ChannelPlugin<ResolvedCommonlyAccount> = {
   id: "commonly",
   meta: {
@@ -194,6 +215,13 @@ export const commonlyPlugin: ChannelPlugin<ResolvedCommonlyAccount> = {
       }
       await client.postMessage(podId, message);
       return { channel: "commonly", messageId: `${podId}:${Date.now()}` };
+    },
+  },
+  messaging: {
+    normalizeTarget: (raw) => normalizePodId(raw).toLowerCase(),
+    targetResolver: {
+      looksLikeId: (raw) => /^[a-f0-9]{24}$/i.test(normalizePodId(raw)),
+      hint: "<podId>",
     },
   },
 
@@ -294,6 +322,11 @@ export const commonlyPlugin: ChannelPlugin<ResolvedCommonlyAccount> = {
         if (ctx.abortSignal.aborted) return;
         const podId = event.podId;
         if (!podId) return;
+        const eventId = event._id || "n/a";
+        const eventTrigger = event.payload?.trigger || "n/a";
+        ctx.log?.info?.(
+          `[${connectionKey}] event received id=${eventId} type=${event.type} pod=${podId} trigger=${eventTrigger}`,
+        );
 
         ctx.setStatus({
           accountId: connectionKey,
@@ -305,17 +338,23 @@ export const commonlyPlugin: ChannelPlugin<ResolvedCommonlyAccount> = {
           const summaryText = buildSummaryMessage(event.payload?.summary);
           if (summaryText) {
             await client.postMessage(podId, summaryText);
+            ctx.log?.info?.(
+              `[${connectionKey}] summary.request posted id=${eventId} pod=${podId} chars=${summaryText.length}`,
+            );
           }
           if (event._id) {
             await client.ackEvent(event._id);
+            ctx.log?.info?.(`[${connectionKey}] summary.request acked id=${eventId}`);
           }
           return;
         }
 
         const rawContent = resolveInboundBody(event);
         if (!rawContent) {
+          ctx.log?.info?.(`[${connectionKey}] event skipped (empty body) id=${eventId} type=${event.type}`);
           if (event._id) {
             await client.ackEvent(event._id);
+            ctx.log?.info?.(`[${connectionKey}] empty-body acked id=${eventId}`);
           }
           return;
         }
@@ -386,14 +425,30 @@ export const commonlyPlugin: ChannelPlugin<ResolvedCommonlyAccount> = {
             responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
             humanDelay: runtime.channel.reply.resolveHumanDelayConfig(cfg, route.agentId),
             deliver: async (payload: ReplyPayload) => {
-              const text = sanitizeOutboundText(payload.text ?? "");
+              const text = scrubNoReplyAndRepeats(sanitizeOutboundText(payload.text ?? ""));
               const mediaUrl = payload.mediaUrl;
               const message = [text.trim(), mediaUrl?.trim() || ""].filter(Boolean).join("\n");
-              if (!message) return;
+              if (!message) {
+                ctx.log?.info?.(
+                  `[${connectionKey}] outbound skipped (empty) id=${eventId} type=${event.type}`,
+                );
+                return;
+              }
               if (threadId) {
                 await client.postThreadComment(String(threadId), message);
+                ctx.log?.info?.(
+                  `[${connectionKey}] thread comment posted id=${eventId} pod=${podId} thread=${threadId} chars=${message.length}`,
+                );
               } else {
-                const posted = await client.postMessage(podId, message);
+                const posted = await client.postMessage(podId, message, {
+                  sourceEventType: event.type,
+                  sourceEventId: event._id,
+                  heartbeatTrigger: event.payload?.trigger,
+                });
+                ctx.log?.info?.(
+                  `[${connectionKey}] message posted id=${eventId} pod=${podId} chars=${message.length} `
+                  + `postedId=${String(posted?.id || "n/a")}`,
+                );
                 if (event.type === "ensemble.turn" && !ensembleResponseSent) {
                   const ensembleId = event.payload?.ensembleId;
                   if (ensembleId) {
@@ -403,6 +458,9 @@ export const commonlyPlugin: ChannelPlugin<ResolvedCommonlyAccount> = {
                       ensembleId,
                       message,
                       posted?.id ? String(posted.id) : undefined,
+                    );
+                    ctx.log?.info?.(
+                      `[${connectionKey}] ensemble response reported id=${eventId} ensemble=${ensembleId}`,
                     );
                   }
                 }
@@ -420,6 +478,7 @@ export const commonlyPlugin: ChannelPlugin<ResolvedCommonlyAccount> = {
 
         if (event._id) {
           await client.ackEvent(event._id);
+          ctx.log?.info?.(`[${connectionKey}] event acked id=${eventId} type=${event.type}`);
         }
       });
 

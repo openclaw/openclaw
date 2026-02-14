@@ -450,4 +450,39 @@ describe("applySkillEnvOverrides", () => {
       }
     });
   });
+
+  it("falls back to TAVILY_API_KEY when primaryEnv metadata is missing", async () => {
+    const workspaceDir = await makeWorkspace();
+    const skillDir = path.join(workspaceDir, "skills", "tavily");
+    await writeSkill({
+      dir: skillDir,
+      name: "tavily",
+      description: "Web search",
+      // Intentionally no metadata block with primaryEnv.
+      body: "# Tavily\n",
+    });
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, {
+      managedSkillsDir: path.join(workspaceDir, ".managed"),
+    });
+
+    const originalEnv = process.env.TAVILY_API_KEY;
+    delete process.env.TAVILY_API_KEY;
+
+    const restore = applySkillEnvOverrides({
+      skills: entries,
+      config: { skills: { entries: { tavily: { apiKey: "tvly-test-key" } } } },
+    });
+
+    try {
+      expect(process.env.TAVILY_API_KEY).toBe("tvly-test-key");
+    } finally {
+      restore();
+      if (originalEnv === undefined) {
+        expect(process.env.TAVILY_API_KEY).toBeUndefined();
+      } else {
+        expect(process.env.TAVILY_API_KEY).toBe(originalEnv);
+      }
+    }
+  });
 });

@@ -1,0 +1,108 @@
+FROM node:22-bookworm
+
+# Install Bun (required for build scripts)
+RUN curl -fsSL https://bun.sh/install | bash
+ENV PATH="/root/.bun/bin:${PATH}"
+
+RUN corepack enable
+
+WORKDIR /app
+
+ARG OPENCLAW_DOCKER_APT_PACKAGES=""
+RUN if [ -n "$OPENCLAW_DOCKER_APT_PACKAGES" ]; then \
+      apt-get update && \
+      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $OPENCLAW_DOCKER_APT_PACKAGES && \
+      apt-get clean && \
+      rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*; \
+    fi
+
+# Commonly-specific extras for skill runners:
+# - Core CLI/shell tooling used by many skills
+# - Media/build toolchains for wider compatibility
+# - Python venv with tavily + uv
+RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      bash \
+      ca-certificates \
+      coreutils \
+      curl \
+      file \
+      findutils \
+      ffmpeg \
+      git \
+      gh \
+      grep \
+      iputils-ping \
+      jq \
+      less \
+      lsof \
+      netcat-openbsd \
+      openssh-client \
+      postgresql-client \
+      procps \
+      pkg-config \
+      python3 \
+      python3-venv \
+      ripgrep \
+      sed \
+      sqlite3 \
+      tmux \
+      unzip \
+      wget \
+      gawk \
+      yq \
+      zip \
+      dnsutils \
+      build-essential \
+      golang-go \
+      rustc \
+      cargo && \
+    arch="$(dpkg --print-architecture)" && \
+    case "$arch" in \
+      amd64) goarch='amd64' ;; \
+      arm64) goarch='arm64' ;; \
+      *) echo "Unsupported architecture for Go toolchain: $arch" && exit 1 ;; \
+    esac && \
+    curl -fsSL "https://go.dev/dl/go1.24.0.linux-${goarch}.tar.gz" -o /tmp/go.tgz && \
+    rm -rf /usr/local/go && \
+    tar -C /usr/local -xzf /tmp/go.tgz && \
+    ln -sf /usr/local/go/bin/go /usr/local/bin/go && \
+    ln -sf /usr/local/go/bin/gofmt /usr/local/bin/gofmt && \
+    rm -f /tmp/go.tgz && \
+    python3 -m venv /opt/venv && \
+    /opt/venv/bin/pip install --no-cache-dir --upgrade pip && \
+    /opt/venv/bin/pip install --no-cache-dir tavily-python && \
+    /opt/venv/bin/pip install --no-cache-dir uv && \
+    GOBIN=/usr/local/bin go install github.com/Hyaxia/blogwatcher/cmd/blogwatcher@latest && \
+    ln -sf /opt/venv/bin/python3 /usr/local/bin/python3 && \
+    ln -sf /opt/venv/bin/pip /usr/local/bin/pip && \
+    ln -sf /opt/venv/bin/uv /usr/local/bin/uv && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
+
+ENV PATH="/opt/venv/bin:${PATH}"
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
+COPY ui/package.json ./ui/package.json
+COPY patches ./patches
+COPY scripts ./scripts
+
+ENV NODE_OPTIONS="--max_old_space_size=1024"
+ENV PNPM_NETWORK_CONCURRENCY=2
+ENV PNPM_CHILD_CONCURRENCY=1
+RUN pnpm install --frozen-lockfile
+
+COPY . .
+RUN OPENCLAW_A2UI_SKIP_MISSING=1 pnpm build
+# Force pnpm for UI build (Bun may fail on ARM/Synology architectures)
+ENV OPENCLAW_PREFER_PNPM=1
+RUN pnpm ui:build
+
+ENV NODE_ENV=production
+
+# Security hardening: Run as non-root user
+# The node:22-bookworm image includes a 'node' user (uid 1000)
+# This reduces the attack surface by preventing container escape via root privileges
+USER node
+
+CMD ["node", "dist/index.js"]

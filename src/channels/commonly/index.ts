@@ -195,6 +195,31 @@ export class CommonlyChannel {
             context: payload.context,
           },
         };
+      case 'heartbeat':
+        return {
+          ...base,
+          type: 'message',
+          content: payload.content
+            || 'System heartbeat from Commonly scheduler. Check pod context and act only if useful.',
+          metadata: {
+            trigger: payload.trigger,
+            generatedAt: payload.generatedAt,
+            availableIntegrations: payload.availableIntegrations,
+          },
+        };
+      case 'summary.request':
+        return {
+          ...base,
+          type: 'summary',
+          content: payload.content
+            || 'Summary requested by Commonly scheduler. Summarize recent pod activity.',
+          metadata: {
+            source: payload.source,
+            trigger: payload.trigger,
+            windowMinutes: payload.windowMinutes,
+            includeDigest: payload.includeDigest,
+          },
+        };
 
       default:
         console.log(`[commonly] Unknown event type: ${type}`);
