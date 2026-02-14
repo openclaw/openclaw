@@ -8,7 +8,7 @@ title: "System Prompt"
 
 # System Prompt
 
-OpenClaw builds a custom system prompt for every agent run. The prompt is **OpenClaw-owned** and does not use the p-coding-agent default prompt.
+OpenClaw builds a custom system prompt for every agent run. The prompt is **OpenClaw-owned** and does not use the pi-coding-agent default prompt.
 
 The prompt is assembled by OpenClaw and injected into each agent run.
 
