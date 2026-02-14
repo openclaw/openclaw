@@ -14,6 +14,14 @@ export type MessageCliHelpers = {
   runMessageAction: (action: string, opts: Record<string, unknown>) => Promise<void>;
 };
 
+function normalizeMessageOptions(opts: Record<string, unknown>): Record<string, unknown> {
+  const { account, ...rest } = opts;
+  return {
+    ...rest,
+    accountId: typeof account === "string" ? account : undefined,
+  };
+}
+
 export function createMessageCliHelpers(
   message: Command,
   messageChannelOptions: string,
@@ -35,18 +43,13 @@ export function createMessageCliHelpers(
     setVerbose(Boolean(opts.verbose));
     ensurePluginRegistryLoaded();
     const deps = createDefaultDeps();
+    let failed = false;
     await runCommandWithRuntime(
       defaultRuntime,
       async () => {
         await messageCommand(
           {
-            ...(() => {
-              const { account, ...rest } = opts;
-              return {
-                ...rest,
-                accountId: typeof account === "string" ? account : undefined,
-              };
-            })(),
+            ...normalizeMessageOptions(opts),
             action,
           },
           deps,
@@ -54,10 +57,15 @@ export function createMessageCliHelpers(
         );
       },
       (err) => {
+        failed = true;
         defaultRuntime.error(danger(String(err)));
         defaultRuntime.exit(1);
       },
     );
+    if (failed) {
+      return;
+    }
+    defaultRuntime.exit(0);
   };
 
   // `message` is only used for `message.help({ error: true })`, keep the
