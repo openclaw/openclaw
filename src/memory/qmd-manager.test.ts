@@ -68,7 +68,13 @@ vi.mock("../logging/subsystem.js", () => ({
   },
 }));
 
-vi.mock("node:child_process", () => ({ spawn: vi.fn() }));
+vi.mock(import("node:child_process"), async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    spawn: vi.fn(),
+  };
+});
 
 import { spawn as mockedSpawn } from "node:child_process";
 import type { OpenClawConfig } from "../config/config.js";
