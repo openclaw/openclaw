@@ -152,10 +152,8 @@ function containsTraversalSequence(pathStr: string): boolean {
   const normalized = pathStr.replace(/\\/g, "/");
 
   const traversalPatterns = [
-    /\.\.\//, // ../
-    /\.\.\\/, // ..\
+    /\.\.\//, // ../ (also covers ..\ after normalization)
     /\.\.$/, // ends with ..
-    /^\.\.$/, // just ..
     /%2e%2e/i, // URL-encoded
     /%252e%252e/i, // double-encoded
     /\.%2e/i, // mixed encoding
@@ -166,6 +164,7 @@ function containsTraversalSequence(pathStr: string): boolean {
   ];
 
   return traversalPatterns.some((pattern) => pattern.test(normalized));
+}
 }
 
 /**
