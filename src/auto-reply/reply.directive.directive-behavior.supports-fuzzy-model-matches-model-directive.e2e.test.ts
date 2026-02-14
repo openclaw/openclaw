@@ -1,68 +1,19 @@
+import "./reply.directive.directive-behavior.e2e-mocks.js";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
-import { loadModelCatalog } from "../agents/model-catalog.js";
-import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
-import { loadSessionStore } from "../config/sessions.js";
+import { describe, expect, it } from "vitest";
+import {
+  assertModelSelection,
+  installDirectiveBehaviorE2EHooks,
+  runEmbeddedPiAgent,
+  withTempHome,
+} from "./reply.directive.directive-behavior.e2e-harness.js";
 import { getReplyFromConfig } from "./reply.js";
 
-const MAIN_SESSION_KEY = "agent:main:main";
-
-vi.mock("../agents/pi-embedded.js", () => ({
-  abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
-  runEmbeddedPiAgent: vi.fn(),
-  queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
-  resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
-  isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
-  isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
-}));
-vi.mock("../agents/model-catalog.js", () => ({
-  loadModelCatalog: vi.fn(),
-}));
-
-async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  return withTempHomeBase(
-    async (home) => {
-      return await fn(home);
-    },
-    {
-      env: {
-        OPENCLAW_AGENT_DIR: (home) => path.join(home, ".openclaw", "agent"),
-        PI_CODING_AGENT_DIR: (home) => path.join(home, ".openclaw", "agent"),
-      },
-      prefix: "openclaw-reply-",
-    },
-  );
-}
-
-function assertModelSelection(
-  storePath: string,
-  selection: { model?: string; provider?: string } = {},
-) {
-  const store = loadSessionStore(storePath);
-  const entry = store[MAIN_SESSION_KEY];
-  expect(entry).toBeDefined();
-  expect(entry?.modelOverride).toBe(selection.model);
-  expect(entry?.providerOverride).toBe(selection.provider);
-}
-
 describe("directive behavior", () => {
-  beforeEach(() => {
-    vi.mocked(runEmbeddedPiAgent).mockReset();
-    vi.mocked(loadModelCatalog).mockResolvedValue([
-      { id: "claude-opus-4-5", name: "Opus 4.5", provider: "anthropic" },
-      { id: "claude-sonnet-4-1", name: "Sonnet 4.1", provider: "anthropic" },
-      { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
-    ]);
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
+  installDirectiveBehaviorE2EHooks();
 
   it("supports fuzzy model matches on /model directive", async () => {
     await withTempHome(async (home) => {
-      vi.mocked(runEmbeddedPiAgent).mockReset();
       const storePath = path.join(home, "sessions.json");
 
       const res = await getReplyFromConfig(
@@ -105,7 +56,6 @@ describe("directive behavior", () => {
   });
   it("resolves provider-less exact model ids via fuzzy matching when unambiguous", async () => {
     await withTempHome(async (home) => {
-      vi.mocked(runEmbeddedPiAgent).mockReset();
       const storePath = path.join(home, "sessions.json");
 
       const res = await getReplyFromConfig(
@@ -153,7 +103,6 @@ describe("directive behavior", () => {
   });
   it("supports fuzzy matches within a provider on /model provider/model", async () => {
     await withTempHome(async (home) => {
-      vi.mocked(runEmbeddedPiAgent).mockReset();
       const storePath = path.join(home, "sessions.json");
 
       const res = await getReplyFromConfig(
@@ -196,7 +145,6 @@ describe("directive behavior", () => {
   });
   it("picks the best fuzzy match when multiple models match", async () => {
     await withTempHome(async (home) => {
-      vi.mocked(runEmbeddedPiAgent).mockReset();
       const storePath = path.join(home, "sessions.json");
 
       await getReplyFromConfig(
@@ -241,7 +189,6 @@ describe("directive behavior", () => {
   });
   it("picks the best fuzzy match within a provider", async () => {
     await withTempHome(async (home) => {
-      vi.mocked(runEmbeddedPiAgent).mockReset();
       const storePath = path.join(home, "sessions.json");
 
       await getReplyFromConfig(
