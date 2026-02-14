@@ -21,6 +21,9 @@ beforeAll(async () => {
   ({ monitorIMessageProvider } = await import("./monitor.js"));
 });
 
+function startMonitor() {
+  return monitorIMessageProvider();
+}
 const replyMock = getReplyMock();
 const sendMock = getSendMock();
 const readAllowFromStoreMock = getReadAllowFromStoreMock();
@@ -56,10 +59,6 @@ async function closeMonitor() {
   throw new Error("imessage test harness: closeResolve not set");
 }
 
-function startMonitor() {
-  return monitorIMessageProvider();
-}
-
 describe("monitorIMessageProvider", () => {
   it("ignores malformed rpc message payloads", async () => {
     const run = startMonitor();
@@ -80,7 +79,7 @@ describe("monitorIMessageProvider", () => {
   });
 
   it("skips group messages without a mention by default", async () => {
-    const run = monitorIMessageProvider();
+    const run = startMonitor();
     await waitForSubscribe();
 
     getNotificationHandler()?.({
@@ -98,7 +97,7 @@ describe("monitorIMessageProvider", () => {
     });
 
     await flush();
-    getCloseResolve()?.();
+    await closeMonitor();
     await run;
 
     expect(replyMock).not.toHaveBeenCalled();
@@ -118,7 +117,7 @@ describe("monitorIMessageProvider", () => {
         },
       },
     });
-    const run = monitorIMessageProvider();
+    const run = startMonitor();
     await waitForSubscribe();
 
     getNotificationHandler()?.({
@@ -136,7 +135,7 @@ describe("monitorIMessageProvider", () => {
     });
 
     await flush();
-    getCloseResolve()?.();
+    await closeMonitor();
     await run;
 
     expect(replyMock).toHaveBeenCalled();
@@ -156,7 +155,7 @@ describe("monitorIMessageProvider", () => {
         },
       },
     });
-    const run = monitorIMessageProvider();
+    const run = startMonitor();
     await waitForSubscribe();
 
     getNotificationHandler()?.({
@@ -174,7 +173,7 @@ describe("monitorIMessageProvider", () => {
     });
 
     await flush();
-    getCloseResolve()?.();
+    await closeMonitor();
     await run;
 
     expect(replyMock).toHaveBeenCalled();
@@ -192,7 +191,7 @@ describe("monitorIMessageProvider", () => {
         },
       },
     });
-    const run = monitorIMessageProvider();
+    const run = startMonitor();
     await waitForSubscribe();
 
     getNotificationHandler()?.({
@@ -210,7 +209,7 @@ describe("monitorIMessageProvider", () => {
     });
 
     await flush();
-    getCloseResolve()?.();
+    await closeMonitor();
     await run;
 
     expect(replyMock).not.toHaveBeenCalled();
@@ -232,7 +231,7 @@ describe("monitorIMessageProvider", () => {
       },
     });
 
-    const run = monitorIMessageProvider();
+    const run = startMonitor();
     await waitForSubscribe();
 
     getNotificationHandler()?.({
@@ -250,7 +249,7 @@ describe("monitorIMessageProvider", () => {
     });
 
     await flush();
-    getCloseResolve()?.();
+    await closeMonitor();
     await run;
 
     expect(replyMock).toHaveBeenCalled();
@@ -269,7 +268,7 @@ describe("monitorIMessageProvider", () => {
       messages: { responsePrefix: "PFX" },
     });
     replyMock.mockResolvedValue({ text: "final reply" });
-    const run = monitorIMessageProvider();
+    const run = startMonitor();
     await waitForSubscribe();
 
     getNotificationHandler()?.({
@@ -287,7 +286,7 @@ describe("monitorIMessageProvider", () => {
     });
 
     await flush();
-    getCloseResolve()?.();
+    await closeMonitor();
     await run;
 
     expect(sendMock).toHaveBeenCalledTimes(1);
@@ -308,7 +307,7 @@ describe("monitorIMessageProvider", () => {
         },
       },
     });
-    const run = monitorIMessageProvider();
+    const run = startMonitor();
     await waitForSubscribe();
 
     getNotificationHandler()?.({
@@ -326,7 +325,7 @@ describe("monitorIMessageProvider", () => {
     });
 
     await flush();
-    getCloseResolve()?.();
+    await closeMonitor();
     await run;
 
     expect(replyMock).not.toHaveBeenCalled();
@@ -340,7 +339,7 @@ describe("monitorIMessageProvider", () => {
 
   it("delivers group replies when mentioned", async () => {
     replyMock.mockResolvedValueOnce({ text: "yo" });
-    const run = monitorIMessageProvider();
+    const run = startMonitor();
     await waitForSubscribe();
 
     getNotificationHandler()?.({
@@ -360,7 +359,7 @@ describe("monitorIMessageProvider", () => {
     });
 
     await flush();
-    getCloseResolve()?.();
+    await closeMonitor();
     await run;
 
     expect(replyMock).toHaveBeenCalledOnce();
@@ -390,7 +389,7 @@ describe("monitorIMessageProvider", () => {
         },
       },
     });
-    const run = monitorIMessageProvider();
+    const run = startMonitor();
     await waitForSubscribe();
 
     getNotificationHandler()?.({
@@ -408,7 +407,7 @@ describe("monitorIMessageProvider", () => {
     });
 
     await flush();
-    getCloseResolve()?.();
+    await closeMonitor();
     await run;
 
     expect(replyMock).not.toHaveBeenCalled();
@@ -535,7 +534,7 @@ describe("monitorIMessageProvider", () => {
         },
       },
     });
-    const run = monitorIMessageProvider();
+    const run = startMonitor();
     await waitForSubscribe();
 
     getNotificationHandler()?.({
@@ -553,14 +552,14 @@ describe("monitorIMessageProvider", () => {
     });
 
     await flush();
-    getCloseResolve()?.();
+    await closeMonitor();
     await run;
 
     expect(replyMock).not.toHaveBeenCalled();
   });
 
   it("prefixes group message bodies with sender", async () => {
-    const run = monitorIMessageProvider();
+    const run = startMonitor();
     await waitForSubscribe();
 
     getNotificationHandler()?.({
@@ -580,7 +579,7 @@ describe("monitorIMessageProvider", () => {
     });
 
     await flush();
-    getCloseResolve()?.();
+    await closeMonitor();
     await run;
 
     expect(replyMock).toHaveBeenCalled();
@@ -591,7 +590,7 @@ describe("monitorIMessageProvider", () => {
   });
 
   it("includes reply context when imessage reply metadata is present", async () => {
-    const run = monitorIMessageProvider();
+    const run = startMonitor();
     await waitForSubscribe();
 
     getNotificationHandler()?.({
@@ -612,7 +611,7 @@ describe("monitorIMessageProvider", () => {
     });
 
     await flush();
-    getCloseResolve()?.();
+    await closeMonitor();
     await run;
 
     expect(replyMock).toHaveBeenCalled();
