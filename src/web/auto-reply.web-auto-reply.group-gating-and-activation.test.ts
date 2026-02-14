@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { expectInboundContextContract } from "../../test/helpers/inbound-contract.js";
 import { setLoggerOverride } from "../logging.js";
 import {
@@ -18,9 +18,19 @@ installWebAutoReplyTestHomeHooks();
 
 let monitorWebChannel: typeof import("./auto-reply.js").monitorWebChannel;
 let SILENT_REPLY_TOKEN: typeof import("./auto-reply.js").SILENT_REPLY_TOKEN;
+let lastRouteSpy: { mockRestore: () => void } | undefined;
 
 beforeAll(async () => {
   ({ monitorWebChannel, SILENT_REPLY_TOKEN } = await import("./auto-reply.js"));
+  const lastRoute = await import("./auto-reply/monitor/last-route.js");
+  lastRouteSpy = vi
+    .spyOn(lastRoute, "updateLastRouteInBackground")
+    .mockImplementation(() => undefined);
+});
+
+afterAll(() => {
+  lastRouteSpy?.mockRestore();
+  lastRouteSpy = undefined;
 });
 
 describe("web auto-reply", () => {
