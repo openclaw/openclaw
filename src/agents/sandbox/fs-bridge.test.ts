@@ -107,6 +107,24 @@ describe("sandbox fs bridge shell compatibility", () => {
     expect(args.at(-1)).toBe("/workspace-two/README.md");
   });
 
+  it("allows writes when workspaceAccess is none", async () => {
+    const sandbox = createSandbox({
+      workspaceAccess: "none",
+      workspaceDir: "/tmp/sandbox-workspace",
+      agentWorkspaceDir: "/tmp/agent-workspace",
+    });
+    const bridge = createSandboxFsBridge({ sandbox });
+
+    await bridge.writeFile({
+      filePath: "/workspace/src/data/content.ts",
+      data: "export default {}",
+    });
+
+    expect(mockedExecDockerRaw).toHaveBeenCalled();
+    const lastArgs = mockedExecDockerRaw.mock.calls.at(-1)?.[0] ?? [];
+    expect(lastArgs.at(-1)).toBe("/workspace/src/data/content.ts");
+  });
+
   it("blocks writes into read-only bind mounts", async () => {
     const sandbox = createSandbox({
       docker: {
