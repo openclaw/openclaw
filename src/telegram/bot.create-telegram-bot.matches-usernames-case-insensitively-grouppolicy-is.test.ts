@@ -159,7 +159,7 @@ describe("createTelegramBot", () => {
 
   // groupPolicy tests
 
-  it("matches usernames case-insensitively when groupPolicy is 'allowlist'", async () => {
+  it("blocks @username allowFrom entries when groupPolicy is 'allowlist' (numeric IDs required)", async () => {
     onSpy.mockReset();
     const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
     replySpy.mockReset();
@@ -187,7 +187,7 @@ describe("createTelegramBot", () => {
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
-    expect(replySpy).toHaveBeenCalledTimes(1);
+    expect(replySpy).toHaveBeenCalledTimes(0);
   });
   it("allows direct messages regardless of groupPolicy", async () => {
     onSpy.mockReset();

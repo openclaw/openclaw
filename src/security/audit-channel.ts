@@ -14,6 +14,18 @@ function normalizeAllowFromList(list: Array<string | number> | undefined | null)
   return list.map((v) => String(v).trim()).filter(Boolean);
 }
 
+function normalizeTelegramAllowFromEntry(raw: unknown): string {
+  const base = typeof raw === "string" ? raw : typeof raw === "number" ? String(raw) : "";
+  return base
+    .trim()
+    .replace(/^(telegram|tg):/i, "")
+    .trim();
+}
+
+function isNumericTelegramUserId(raw: string): boolean {
+  return /^\d+$/.test(raw);
+}
+
 function classifyChannelWarningSeverity(message: string): SecurityAuditSeverity {
   const s = message.toLowerCase();
   if (
@@ -353,10 +365,39 @@ export async function collectChannelSecurityFindings(params: {
 
       const storeAllowFrom = await readChannelAllowFromStore("telegram").catch(() => []);
       const storeHasWildcard = storeAllowFrom.some((v) => String(v).trim() === "*");
+      const invalidTelegramAllowFromEntries = new Set<string>();
+      for (const entry of storeAllowFrom) {
+        const normalized = normalizeTelegramAllowFromEntry(entry);
+        if (!normalized || normalized === "*") {
+          continue;
+        }
+        if (!isNumericTelegramUserId(normalized)) {
+          invalidTelegramAllowFromEntries.add(normalized);
+        }
+      }
       const groupAllowFrom = Array.isArray(telegramCfg.groupAllowFrom)
         ? telegramCfg.groupAllowFrom
         : [];
       const groupAllowFromHasWildcard = groupAllowFrom.some((v) => String(v).trim() === "*");
+      for (const entry of groupAllowFrom) {
+        const normalized = normalizeTelegramAllowFromEntry(entry);
+        if (!normalized || normalized === "*") {
+          continue;
+        }
+        if (!isNumericTelegramUserId(normalized)) {
+          invalidTelegramAllowFromEntries.add(normalized);
+        }
+      }
+      const dmAllowFrom = Array.isArray(telegramCfg.allowFrom) ? telegramCfg.allowFrom : [];
+      for (const entry of dmAllowFrom) {
+        const normalized = normalizeTelegramAllowFromEntry(entry);
+        if (!normalized || normalized === "*") {
+          continue;
+        }
+        if (!isNumericTelegramUserId(normalized)) {
+          invalidTelegramAllowFromEntries.add(normalized);
+        }
+      }
       const anyGroupOverride = Boolean(
         groups &&
         Object.values(groups).some((value) => {
@@ -366,6 +407,15 @@ export async function collectChannelSecurityFindings(params: {
           const group = value as Record<string, unknown>;
           const allowFrom = Array.isArray(group.allowFrom) ? group.allowFrom : [];
           if (allowFrom.length > 0) {
+            for (const entry of allowFrom) {
+              const normalized = normalizeTelegramAllowFromEntry(entry);
+              if (!normalized || normalized === "*") {
+                continue;
+              }
+              if (!isNumericTelegramUserId(normalized)) {
+                invalidTelegramAllowFromEntries.add(normalized);
+              }
+            }
             return true;
           }
           const topics = group.topics;
@@ -378,6 +428,15 @@ export async function collectChannelSecurityFindings(params: {
             }
             const topic = topicValue as Record<string, unknown>;
             const topicAllow = Array.isArray(topic.allowFrom) ? topic.allowFrom : [];
+            for (const entry of topicAllow) {
+              const normalized = normalizeTelegramAllowFromEntry(entry);
+              if (!normalized || normalized === "*") {
+                continue;
+              }
+              if (!isNumericTelegramUserId(normalized)) {
+                invalidTelegramAllowFromEntries.add(normalized);
+              }
+            }
             return topicAllow.length > 0;
           });
         }),
@@ -385,6 +444,24 @@ export async function collectChannelSecurityFindings(params: {
 
       const hasAnySenderAllowlist =
         storeAllowFrom.length > 0 || groupAllowFrom.length > 0 || anyGroupOverride;
+
+      if (invalidTelegramAllowFromEntries.size > 0) {
+        const examples = Array.from(invalidTelegramAllowFromEntries).slice(0, 5);
+        const more =
+          invalidTelegramAllowFromEntries.size > examples.length
+            ? ` (+${invalidTelegramAllowFromEntries.size - examples.length} more)`
+            : "";
+        findings.push({
+          checkId: "channels.telegram.allowFrom.invalid_entries",
+          severity: "warn",
+          title: "Telegram allowlist contains non-numeric entries",
+          detail:
+            "Telegram sender authorization requires numeric Telegram user IDs. " +
+            `Found non-numeric allowFrom entries: ${examples.join(", ")}${more}.`,
+          remediation:
+            "Replace @username entries with numeric Telegram user IDs (use onboarding to resolve), then re-run the audit.",
+        });
+      }
 
       if (storeHasWildcard || groupAllowFromHasWildcard) {
         findings.push({
@@ -394,7 +471,7 @@ export async function collectChannelSecurityFindings(params: {
           detail:
             'Telegram group sender allowlist contains "*", which allows any group member to run /… commands and control directives.',
           remediation:
-            'Remove "*" from channels.telegram.groupAllowFrom and pairing store; prefer explicit user ids/usernames.',
+            'Remove "*" from channels.telegram.groupAllowFrom and pairing store; prefer explicit numeric Telegram user IDs.',
         });
         continue;
       }
