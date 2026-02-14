@@ -405,8 +405,11 @@ class NodeRuntime(context: Context) {
     scope.launch(Dispatchers.Default) {
       gateways.collect { list ->
         if (list.isNotEmpty()) {
-          // Persist the last discovered gateway (best-effort UX parity with iOS).
-          prefs.setLastDiscoveredStableId(list.last().stableId)
+          // Security: don't let an unauthenticated discovery feed continuously steer autoconnect.
+          // UX parity with iOS: only set once when unset.
+          if (lastDiscoveredStableId.value.trim().isEmpty()) {
+            prefs.setLastDiscoveredStableId(list.first().stableId)
+          }
         }
 
         if (didAutoConnect) return@collect
@@ -425,6 +428,11 @@ class NodeRuntime(context: Context) {
         val targetStableId = lastDiscoveredStableId.value.trim()
         if (targetStableId.isEmpty()) return@collect
         val target = list.firstOrNull { it.stableId == targetStableId } ?: return@collect
+
+        // Security: autoconnect only to previously trusted gateways (stored TLS pin).
+        val storedFingerprint = prefs.loadGatewayTlsFingerprint(target.stableId)?.trim().orEmpty()
+        if (storedFingerprint.isEmpty()) return@collect
+
         didAutoConnect = true
         connect(target)
       }
