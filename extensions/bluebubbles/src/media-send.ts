@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveChannelMediaMaxBytes, type OpenClawConfig } from "openclaw/plugin-sdk";
@@ -8,6 +9,33 @@ import { sendMessageBlueBubbles } from "./send.js";
 
 const HTTP_URL_RE = /^https?:\/\//i;
 const MB = 1024 * 1024;
+
+// Path traversal protection for non-sandboxed (gateway) execution where
+// normalizeSandboxMediaList skips validation due to absent sandboxRoot.
+// Uses the same resolve+relative pattern as resolveSandboxPath in sandbox-paths.ts.
+async function assertSafeMediaPath(localPath: string): Promise<string> {
+  const resolved = path.resolve(localPath);
+  const root = process.cwd();
+  const relative = path.relative(root, resolved);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error(`Media path outside working directory: ${path.basename(localPath)}`);
+  }
+  // Resolve symlinks and re-check to prevent symlink escapes.
+  let realPath: string;
+  try {
+    realPath = await fs.realpath(resolved);
+  } catch (err: any) {
+    if (err.code === "ENOENT") {
+      throw new Error(`Media file not found: ${path.basename(localPath)}`);
+    }
+    throw err;
+  }
+  const realRelative = path.relative(root, realPath);
+  if (realRelative.startsWith("..") || path.isAbsolute(realRelative)) {
+    throw new Error(`Media path resolves outside working directory: ${path.basename(localPath)}`);
+  }
+  return realPath;
+}
 
 function assertMediaWithinLimit(sizeBytes: number, maxBytes?: number): void {
   if (typeof maxBytes !== "number" || maxBytes <= 0) {
@@ -122,12 +150,12 @@ export async function sendBlueBubblesMedia(params: {
       resolvedFilename = resolvedFilename ?? fetched.fileName;
     } else {
       const localPath = resolveLocalMediaPath(source);
-      const fs = await import("node:fs/promises");
+      const safePath = await assertSafeMediaPath(localPath);
       if (typeof maxBytes === "number" && maxBytes > 0) {
-        const stats = await fs.stat(localPath);
+        const stats = await fs.stat(safePath);
         assertMediaWithinLimit(stats.size, maxBytes);
       }
-      const data = await fs.readFile(localPath);
+      const data = await fs.readFile(safePath);
       assertMediaWithinLimit(data.byteLength, maxBytes);
       buffer = new Uint8Array(data);
       if (!resolvedContentType) {
