@@ -46,7 +46,28 @@ It answers you on the channels you already use (WhatsApp, Telegram, Slack, Disco
 
 ## Quick Start (5 minutes)
 
-**System requirements:** Node.js 22.12+, pnpm 10.x, Python 3.12+ (for skills)
+**System requirements:** Node.js 22.12+ (one-liner auto-installs if missing), Python 3.12+ (for skills)
+
+### One-liner (recommended)
+
+```bash
+curl -fsSL https://qveris.ai/qverisbot/install.sh | bash
+```
+
+### npm (global package)
+
+```bash
+npm i -g @qverisai/qverisbot
+qverisbot onboard
+```
+
+Backward-compatible command alias is also available:
+
+```bash
+openclaw onboard
+```
+
+### Hackable (from source)
 
 ```bash
 git clone https://github.com/QVerisAI/QVerisBot.git
@@ -55,6 +76,12 @@ pnpm install
 pnpm ui:build   # first run only
 pnpm build
 pnpm openclaw onboard --install-daemon
+```
+
+### Windows PowerShell
+
+```powershell
+irm https://qveris.ai/qverisbot/install.ps1 | iex
 ```
 
 The onboarding wizard guides you through: model/auth, **QVeris API key**, `web_search` (defaults to QVeris Smart Search), **X (Twitter) credentials**, channels, and skills. For Feishu/飞书, see [QVerisBot Source Guide](docs/qverisbot-from-source.md).

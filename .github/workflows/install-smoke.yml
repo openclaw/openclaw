@@ -50,12 +50,17 @@ jobs:
       - name: Install pnpm deps (minimal)
         run: pnpm install --ignore-scripts --frozen-lockfile
 
+      - name: Validate local installer scripts
+        run: |
+          bash scripts/install.sh --help
+          bash scripts/install-cli.sh --help
+
       - name: Run installer docker tests
         env:
-          CLAWDBOT_INSTALL_URL: https://openclaw.ai/install.sh
-          CLAWDBOT_INSTALL_CLI_URL: https://openclaw.ai/install-cli.sh
+          QVERISBOT_INSTALL_URL: https://qveris.ai/qverisbot/install.sh
+          QVERISBOT_INSTALL_CLI_URL: https://qveris.ai/qverisbot/install-cli.sh
           CLAWDBOT_NO_ONBOARD: "1"
-          CLAWDBOT_INSTALL_SMOKE_SKIP_CLI: "1"
-          CLAWDBOT_INSTALL_SMOKE_SKIP_NONROOT: ${{ github.event_name == 'pull_request' && '1' || '0' }}
-          CLAWDBOT_INSTALL_SMOKE_SKIP_PREVIOUS: "1"
+          QVERISBOT_INSTALL_SMOKE_SKIP_CLI: "1"
+          QVERISBOT_INSTALL_SMOKE_SKIP_NONROOT: ${{ github.event_name == 'pull_request' && '1' || '0' }}
+          QVERISBOT_INSTALL_SMOKE_SKIP_PREVIOUS: "1"
         run: pnpm test:install:smoke

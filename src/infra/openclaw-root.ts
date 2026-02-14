@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const CORE_PACKAGE_NAMES = new Set(["openclaw"]);
+const CORE_PACKAGE_NAMES = new Set(["openclaw", "qverisbot", "@qverisai/qverisbot"]);
 
 async function readPackageName(dir: string): Promise<string | null> {
   try {

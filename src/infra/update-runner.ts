@@ -80,8 +80,14 @@ const DEFAULT_TIMEOUT_MS = 20 * 60_000;
 const MAX_LOG_CHARS = 8000;
 const PREFLIGHT_MAX_COMMITS = 10;
 const START_DIRS = ["cwd", "argv1", "process"];
-const DEFAULT_PACKAGE_NAME = "openclaw";
-const CORE_PACKAGE_NAMES = new Set([DEFAULT_PACKAGE_NAME]);
+const DEFAULT_PACKAGE_NAME = "@qverisai/qverisbot";
+const LEGACY_PACKAGE_NAME = "openclaw";
+const LEGACY_PACKAGE_NAME_UNSCOPED = "qverisbot";
+const CORE_PACKAGE_NAMES = new Set([
+  DEFAULT_PACKAGE_NAME,
+  LEGACY_PACKAGE_NAME,
+  LEGACY_PACKAGE_NAME_UNSCOPED,
+]);
 
 function normalizeDir(value?: string | null) {
   if (!value) {
@@ -355,8 +361,11 @@ function normalizeTag(tag?: string) {
   if (!trimmed) {
     return "latest";
   }
-  if (trimmed.startsWith("openclaw@")) {
-    return trimmed.slice("openclaw@".length);
+  if (trimmed.startsWith(`${LEGACY_PACKAGE_NAME}@`)) {
+    return trimmed.slice(`${LEGACY_PACKAGE_NAME}@`.length);
+  }
+  if (trimmed.startsWith(`${LEGACY_PACKAGE_NAME_UNSCOPED}@`)) {
+    return trimmed.slice(`${LEGACY_PACKAGE_NAME_UNSCOPED}@`.length);
   }
   if (trimmed.startsWith(`${DEFAULT_PACKAGE_NAME}@`)) {
     return trimmed.slice(`${DEFAULT_PACKAGE_NAME}@`.length);

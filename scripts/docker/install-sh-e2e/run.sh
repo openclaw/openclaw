@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-INSTALL_URL="${OPENCLAW_INSTALL_URL:-${CLAWDBOT_INSTALL_URL:-https://openclaw.bot/install.sh}}"
+INSTALL_URL="${QVERISBOT_INSTALL_URL:-${OPENCLAW_INSTALL_URL:-${CLAWDBOT_INSTALL_URL:-https://qveris.ai/qverisbot/install.sh}}}"
 MODELS_MODE="${OPENCLAW_E2E_MODELS:-${CLAWDBOT_E2E_MODELS:-both}}" # both|openai|anthropic
 INSTALL_TAG="${OPENCLAW_INSTALL_TAG:-${CLAWDBOT_INSTALL_TAG:-latest}}"
 E2E_PREVIOUS_VERSION="${OPENCLAW_INSTALL_E2E_PREVIOUS:-${CLAWDBOT_INSTALL_E2E_PREVIOUS:-}}"
 SKIP_PREVIOUS="${OPENCLAW_INSTALL_E2E_SKIP_PREVIOUS:-${CLAWDBOT_INSTALL_E2E_SKIP_PREVIOUS:-0}}"
+PACKAGE_NAME="${QVERISBOT_INSTALL_PACKAGE:-${OPENCLAW_INSTALL_PACKAGE:-@qverisai/qverisbot}}"
+CLI_NAME="${QVERISBOT_INSTALL_CLI:-${OPENCLAW_INSTALL_CLI:-qverisbot}}"
 OPENAI_API_KEY="${OPENAI_API_KEY:-}"
 ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
 ANTHROPIC_API_TOKEN="${ANTHROPIC_API_TOKEN:-}"
@@ -33,17 +35,18 @@ elif [[ "$MODELS_MODE" == "anthropic" && -z "$ANTHROPIC_API_TOKEN" && -z "$ANTHR
 fi
 
 echo "==> Resolve npm versions"
-EXPECTED_VERSION="$(npm view "openclaw@${INSTALL_TAG}" version)"
+EXPECTED_VERSION="$(npm view "${PACKAGE_NAME}@${INSTALL_TAG}" version)"
 if [[ -z "$EXPECTED_VERSION" || "$EXPECTED_VERSION" == "undefined" || "$EXPECTED_VERSION" == "null" ]]; then
-  echo "ERROR: unable to resolve openclaw@${INSTALL_TAG} version" >&2
+  echo "ERROR: unable to resolve ${PACKAGE_NAME}@${INSTALL_TAG} version" >&2
   exit 2
 fi
 if [[ -n "$E2E_PREVIOUS_VERSION" ]]; then
   PREVIOUS_VERSION="$E2E_PREVIOUS_VERSION"
 else
-  PREVIOUS_VERSION="$(node - <<'NODE'
+  PREVIOUS_VERSION="$(PACKAGE_NAME="$PACKAGE_NAME" node - <<'NODE'
 const { execSync } = require("node:child_process");
-const versions = JSON.parse(execSync("npm view openclaw versions --json", { encoding: "utf8" }));
+const packageName = process.env.PACKAGE_NAME || "@qverisai/qverisbot";
+const versions = JSON.parse(execSync(`npm view ${packageName} versions --json`, { encoding: "utf8" }));
 if (!Array.isArray(versions) || versions.length === 0) process.exit(1);
 process.stdout.write(versions.length >= 2 ? versions[versions.length - 2] : versions[0]);
 NODE
@@ -55,23 +58,23 @@ if [[ "$SKIP_PREVIOUS" == "1" ]]; then
   echo "==> Skip preinstall previous (OPENCLAW_INSTALL_E2E_SKIP_PREVIOUS=1)"
 else
   echo "==> Preinstall previous (forces installer upgrade path; avoids read() prompt)"
-  npm install -g "openclaw@${PREVIOUS_VERSION}"
+  npm install -g "${PACKAGE_NAME}@${PREVIOUS_VERSION}"
 fi
 
 echo "==> Run official installer one-liner"
 if [[ "$INSTALL_TAG" == "beta" ]]; then
   OPENCLAW_BETA=1 CLAWDBOT_BETA=1 curl -fsSL "$INSTALL_URL" | bash
 elif [[ "$INSTALL_TAG" != "latest" ]]; then
-  OPENCLAW_VERSION="$INSTALL_TAG" CLAWDBOT_VERSION="$INSTALL_TAG" curl -fsSL "$INSTALL_URL" | bash
+  QVERISBOT_VERSION="$INSTALL_TAG" OPENCLAW_VERSION="$INSTALL_TAG" CLAWDBOT_VERSION="$INSTALL_TAG" curl -fsSL "$INSTALL_URL" | bash
 else
   curl -fsSL "$INSTALL_URL" | bash
 fi
 
 echo "==> Verify installed version"
-INSTALLED_VERSION="$(openclaw --version 2>/dev/null | head -n 1 | tr -d '\r')"
+INSTALLED_VERSION="$("$CLI_NAME" --version 2>/dev/null | head -n 1 | tr -d '\r')"
 echo "installed=$INSTALLED_VERSION expected=$EXPECTED_VERSION"
 if [[ "$INSTALLED_VERSION" != "$EXPECTED_VERSION" ]]; then
-  echo "ERROR: expected openclaw@$EXPECTED_VERSION, got openclaw@$INSTALLED_VERSION" >&2
+  echo "ERROR: expected ${PACKAGE_NAME}@$EXPECTED_VERSION, got ${CLI_NAME}@$INSTALLED_VERSION" >&2
   exit 1
 fi
 
@@ -80,7 +83,7 @@ set_image_model() {
   shift
   local candidate
   for candidate in "$@"; do
-    if openclaw --profile "$profile" models set-image "$candidate" >/dev/null 2>&1; then
+    if "$CLI_NAME" --profile "$profile" models set-image "$candidate" >/dev/null 2>&1; then
       echo "$candidate"
       return 0
     fi
@@ -94,7 +97,7 @@ set_agent_model() {
   local candidate
   shift
   for candidate in "$@"; do
-    if openclaw --profile "$profile" models set "$candidate" >/dev/null 2>&1; then
+    if "$CLI_NAME" --profile "$profile" models set "$candidate" >/dev/null 2>&1; then
       echo "$candidate"
       return 0
     fi
@@ -177,7 +180,7 @@ run_agent_turn() {
   local session_id="$2"
   local prompt="$3"
   local out_json="$4"
-  openclaw --profile "$profile" agent \
+  "$CLI_NAME" --profile "$profile" agent \
     --session-id "$session_id" \
     --message "$prompt" \
     --thinking off \
@@ -339,7 +342,7 @@ run_profile() {
 
 	  echo "==> Onboard ($profile)"
 	  if [[ "$agent_model_provider" == "openai" ]]; then
-	    openclaw --profile "$profile" onboard \
+	    "$CLI_NAME" --profile "$profile" onboard \
 	      --non-interactive \
 	      --accept-risk \
 	      --flow quickstart \
@@ -351,7 +354,7 @@ run_profile() {
       --workspace "$workspace" \
       --skip-health
 	  elif [[ -n "$ANTHROPIC_API_TOKEN" ]]; then
-	    openclaw --profile "$profile" onboard \
+	    "$CLI_NAME" --profile "$profile" onboard \
 	      --non-interactive \
 	      --accept-risk \
 	      --flow quickstart \
@@ -364,7 +367,7 @@ run_profile() {
       --workspace "$workspace" \
       --skip-health
 	  else
-	    openclaw --profile "$profile" onboard \
+	    "$CLI_NAME" --profile "$profile" onboard \
 	      --non-interactive \
 	      --accept-risk \
 	      --flow quickstart \
@@ -429,7 +432,7 @@ run_profile() {
 
   echo "==> Start gateway ($profile)"
   GATEWAY_LOG="$workspace/gateway.log"
-  openclaw --profile "$profile" gateway --port "$port" --bind loopback >"$GATEWAY_LOG" 2>&1 &
+  "$CLI_NAME" --profile "$profile" gateway --port "$port" --bind loopback >"$GATEWAY_LOG" 2>&1 &
   GATEWAY_PID="$!"
   cleanup_profile() {
     if kill -0 "$GATEWAY_PID" 2>/dev/null; then
@@ -441,12 +444,12 @@ run_profile() {
 
   echo "==> Wait for health ($profile)"
   for _ in $(seq 1 60); do
-    if openclaw --profile "$profile" health --timeout 2000 --json >/dev/null 2>&1; then
+    if "$CLI_NAME" --profile "$profile" health --timeout 2000 --json >/dev/null 2>&1; then
       break
     fi
     sleep 0.25
   done
-  openclaw --profile "$profile" health --timeout 10000 --json >/dev/null
+  "$CLI_NAME" --profile "$profile" health --timeout 10000 --json >/dev/null
 
   echo "==> Agent turns ($profile)"
   TURN1_JSON="/tmp/agent-${profile}-1.json"

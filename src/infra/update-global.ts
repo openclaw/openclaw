@@ -10,8 +10,14 @@ export type CommandRunner = (
   options: { timeoutMs: number; cwd?: string; env?: NodeJS.ProcessEnv },
 ) => Promise<{ stdout: string; stderr: string; code: number | null }>;
 
-const PRIMARY_PACKAGE_NAME = "openclaw";
-const ALL_PACKAGE_NAMES = [PRIMARY_PACKAGE_NAME] as const;
+const PRIMARY_PACKAGE_NAME = "@qverisai/qverisbot";
+const LEGACY_PACKAGE_NAME = "openclaw";
+const LEGACY_PACKAGE_NAME_UNSCOPED = "qverisbot";
+const ALL_PACKAGE_NAMES = [
+  PRIMARY_PACKAGE_NAME,
+  LEGACY_PACKAGE_NAME,
+  LEGACY_PACKAGE_NAME_UNSCOPED,
+] as const;
 const GLOBAL_RENAME_PREFIX = ".";
 
 async function tryRealpath(targetPath: string): Promise<string> {

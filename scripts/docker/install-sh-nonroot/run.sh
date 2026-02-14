@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-INSTALL_URL="${OPENCLAW_INSTALL_URL:-https://openclaw.bot/install.sh}"
-DEFAULT_PACKAGE="openclaw"
-PACKAGE_NAME="${OPENCLAW_INSTALL_PACKAGE:-$DEFAULT_PACKAGE}"
+INSTALL_URL="${QVERISBOT_INSTALL_URL:-${OPENCLAW_INSTALL_URL:-${CLAWDBOT_INSTALL_URL:-https://qveris.ai/qverisbot/install.sh}}}"
+DEFAULT_PACKAGE="@qverisai/qverisbot"
+DEFAULT_CLI_NAME="qverisbot"
+PACKAGE_NAME="${QVERISBOT_INSTALL_PACKAGE:-${OPENCLAW_INSTALL_PACKAGE:-$DEFAULT_PACKAGE}}"
+CLI_NAME="${QVERISBOT_INSTALL_CLI:-${OPENCLAW_INSTALL_CLI:-$DEFAULT_CLI_NAME}}"
 
 echo "==> Pre-flight: ensure git absent"
 if command -v git >/dev/null; then
@@ -20,17 +22,15 @@ export PATH="$HOME/.npm-global/bin:$PATH"
 echo "==> Verify git installed"
 command -v git >/dev/null
 
-EXPECTED_VERSION="${OPENCLAW_INSTALL_EXPECT_VERSION:-}"
+EXPECTED_VERSION="${QVERISBOT_INSTALL_EXPECT_VERSION:-${OPENCLAW_INSTALL_EXPECT_VERSION:-}}"
 if [[ -n "$EXPECTED_VERSION" ]]; then
   LATEST_VERSION="$EXPECTED_VERSION"
 else
   LATEST_VERSION="$(npm view "$PACKAGE_NAME" version)"
 fi
-CLI_NAME="$PACKAGE_NAME"
 CMD_PATH="$(command -v "$CLI_NAME" || true)"
-if [[ -z "$CMD_PATH" && -x "$HOME/.npm-global/bin/$PACKAGE_NAME" ]]; then
-  CLI_NAME="$PACKAGE_NAME"
-  CMD_PATH="$HOME/.npm-global/bin/$PACKAGE_NAME"
+if [[ -z "$CMD_PATH" && -x "$HOME/.npm-global/bin/$CLI_NAME" ]]; then
+  CMD_PATH="$HOME/.npm-global/bin/$CLI_NAME"
 fi
 if [[ -z "$CMD_PATH" ]]; then
   echo "$PACKAGE_NAME is not on PATH" >&2

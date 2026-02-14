@@ -2,8 +2,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-IMAGE_NAME="${OPENCLAW_INSTALL_E2E_IMAGE:-${CLAWDBOT_INSTALL_E2E_IMAGE:-openclaw-install-e2e:local}}"
-INSTALL_URL="${OPENCLAW_INSTALL_URL:-${CLAWDBOT_INSTALL_URL:-https://openclaw.bot/install.sh}}"
+IMAGE_NAME="${QVERISBOT_INSTALL_E2E_IMAGE:-${OPENCLAW_INSTALL_E2E_IMAGE:-${CLAWDBOT_INSTALL_E2E_IMAGE:-qverisbot-install-e2e:local}}}"
+INSTALL_URL="${QVERISBOT_INSTALL_URL:-${OPENCLAW_INSTALL_URL:-${CLAWDBOT_INSTALL_URL:-https://qveris.ai/qverisbot/install.sh}}}"
 
 OPENAI_API_KEY="${OPENAI_API_KEY:-}"
 ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
@@ -18,6 +18,7 @@ docker build \
 
 echo "==> Run E2E installer test"
 docker run --rm \
+  -e QVERISBOT_INSTALL_URL="$INSTALL_URL" \
   -e OPENCLAW_INSTALL_URL="$INSTALL_URL" \
   -e OPENCLAW_INSTALL_TAG="${OPENCLAW_INSTALL_TAG:-${CLAWDBOT_INSTALL_TAG:-latest}}" \
   -e OPENCLAW_E2E_MODELS="$OPENCLAW_E2E_MODELS" \

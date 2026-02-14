@@ -1,12 +1,21 @@
 {
-  "name": "openclaw",
-  "version": "2026.2.13",
-  "description": "Multi-channel AI gateway with extensible messaging integrations",
+  "name": "@qverisai/qverisbot",
+  "version": "2026.2.14",
+  "description": "QVerisBot - OpenClaw-based professional AI assistant with QVeris toolbox integrations",
   "keywords": [],
+  "homepage": "https://qveris.ai",
+  "bugs": {
+    "url": "https://github.com/QVerisAI/QVerisBot/issues"
+  },
   "license": "MIT",
   "author": "",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/QVerisAI/QVerisBot.git"
+  },
   "bin": {
-    "openclaw": "openclaw.mjs"
+    "openclaw": "openclaw.mjs",
+    "qverisbot": "openclaw.mjs"
   },
   "files": [
     "CHANGELOG.md",
@@ -29,6 +38,9 @@
       "default": "./dist/plugin-sdk/index.js"
     },
     "./cli-entry": "./openclaw.mjs"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "android:assemble": "cd apps/android && ./gradlew :app:assembleDebug",

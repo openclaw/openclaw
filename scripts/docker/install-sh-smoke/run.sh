@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-INSTALL_URL="${OPENCLAW_INSTALL_URL:-https://openclaw.bot/install.sh}"
-SMOKE_PREVIOUS_VERSION="${OPENCLAW_INSTALL_SMOKE_PREVIOUS:-}"
-SKIP_PREVIOUS="${OPENCLAW_INSTALL_SMOKE_SKIP_PREVIOUS:-0}"
-DEFAULT_PACKAGE="openclaw"
-PACKAGE_NAME="${OPENCLAW_INSTALL_PACKAGE:-$DEFAULT_PACKAGE}"
+INSTALL_URL="${QVERISBOT_INSTALL_URL:-${OPENCLAW_INSTALL_URL:-${CLAWDBOT_INSTALL_URL:-https://qveris.ai/qverisbot/install.sh}}}"
+SMOKE_PREVIOUS_VERSION="${QVERISBOT_INSTALL_SMOKE_PREVIOUS:-${OPENCLAW_INSTALL_SMOKE_PREVIOUS:-${CLAWDBOT_INSTALL_SMOKE_PREVIOUS:-}}}"
+SKIP_PREVIOUS="${QVERISBOT_INSTALL_SMOKE_SKIP_PREVIOUS:-${OPENCLAW_INSTALL_SMOKE_SKIP_PREVIOUS:-${CLAWDBOT_INSTALL_SMOKE_SKIP_PREVIOUS:-0}}}"
+DEFAULT_PACKAGE="@qverisai/qverisbot"
+DEFAULT_CLI_NAME="qverisbot"
+PACKAGE_NAME="${QVERISBOT_INSTALL_PACKAGE:-${OPENCLAW_INSTALL_PACKAGE:-$DEFAULT_PACKAGE}}"
+CLI_NAME="${QVERISBOT_INSTALL_CLI:-${OPENCLAW_INSTALL_CLI:-$DEFAULT_CLI_NAME}}"
 
 echo "==> Resolve npm versions"
 LATEST_VERSION="$(npm view "$PACKAGE_NAME" version)"
@@ -41,7 +43,7 @@ fi
 echo "package=$PACKAGE_NAME latest=$LATEST_VERSION previous=$PREVIOUS_VERSION"
 
 if [[ "$SKIP_PREVIOUS" == "1" ]]; then
-  echo "==> Skip preinstall previous (OPENCLAW_INSTALL_SMOKE_SKIP_PREVIOUS=1)"
+  echo "==> Skip preinstall previous (QVERISBOT_INSTALL_SMOKE_SKIP_PREVIOUS=1)"
 else
   echo "==> Preinstall previous (forces installer upgrade path)"
   npm install -g "${PACKAGE_NAME}@${PREVIOUS_VERSION}"
@@ -51,13 +53,13 @@ echo "==> Run official installer one-liner"
 curl -fsSL "$INSTALL_URL" | bash
 
 echo "==> Verify installed version"
-CLI_NAME="$PACKAGE_NAME"
 if ! command -v "$CLI_NAME" >/dev/null 2>&1; then
   echo "ERROR: $PACKAGE_NAME is not on PATH" >&2
   exit 1
 fi
-if [[ -n "${OPENCLAW_INSTALL_LATEST_OUT:-}" ]]; then
-  printf "%s" "$LATEST_VERSION" > "${OPENCLAW_INSTALL_LATEST_OUT:-}"
+LATEST_OUT_PATH="${QVERISBOT_INSTALL_LATEST_OUT:-${OPENCLAW_INSTALL_LATEST_OUT:-}}"
+if [[ -n "$LATEST_OUT_PATH" ]]; then
+  printf "%s" "$LATEST_VERSION" > "$LATEST_OUT_PATH"
 fi
 INSTALLED_VERSION="$("$CLI_NAME" --version 2>/dev/null | head -n 1 | tr -d '\r')"
 echo "cli=$CLI_NAME installed=$INSTALLED_VERSION expected=$LATEST_VERSION"

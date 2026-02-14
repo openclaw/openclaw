@@ -1,0 +1,56 @@
+name: npm Publish
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Run dry-run without publishing"
+        required: false
+        default: true
+        type: boolean
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+
+      - name: Verify tag is on main
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+        run: |
+          git fetch origin main
+          git merge-base --is-ancestor ${{ github.sha }} origin/main || {
+            echo "::error::Tagged commit must be on main branch. Merge to main first, then tag."
+            exit 1
+          }
+
+      - name: Build package artifacts
+        run: pnpm build && pnpm ui:build
+
+      - name: Validate npm pack contents
+        run: pnpm release:check
+
+      - name: Publish package
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.dry_run }}" == "true" ]]; then
+            npm publish --access public --provenance --dry-run
+            exit 0
+          fi
+          npm publish --access public --provenance

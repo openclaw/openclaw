@@ -1,0 +1,165 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PACKAGE_NAME="${QVERISBOT_INSTALL_PACKAGE:-@qverisai/qverisbot}"
+INSTALL_METHOD="npm"
+VERSION="${QVERISBOT_VERSION:-latest}"
+NO_ONBOARD="${QVERISBOT_NO_ONBOARD:-${OPENCLAW_NO_ONBOARD:-0}}"
+SET_NPM_PREFIX=0
+
+usage() {
+  cat <<'EOF'
+Usage: install.sh [options]
+
+Options:
+  --install-method <npm|git>   Installation method (default: npm)
+  --version <version|tag>       npm version/tag (default: latest)
+  --set-npm-prefix              Set npm global prefix to ~/.npm-global
+  --no-onboard                  Skip onboarding wizard
+  -h, --help                    Show this help message
+EOF
+}
+
+command_exists() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+parse_args() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --install-method)
+        INSTALL_METHOD="${2:-}"
+        shift 2
+        ;;
+      --version)
+        VERSION="${2:-}"
+        shift 2
+        ;;
+      --set-npm-prefix)
+        SET_NPM_PREFIX=1
+        shift
+        ;;
+      --no-onboard)
+        NO_ONBOARD=1
+        shift
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      *)
+        echo "Unknown argument: $1" >&2
+        usage >&2
+        exit 2
+        ;;
+    esac
+  done
+}
+
+ensure_node() {
+  if command_exists node; then
+    local major
+    major="$(node -p 'process.versions.node.split(".")[0]')"
+    if [[ "${major:-0}" -ge 22 ]]; then
+      return 0
+    fi
+  fi
+
+  echo "Node.js 22+ not found. Installing it via fnm (Fast Node Manager)."
+  echo "fnm may modify your shell profile (e.g., ~/.bashrc, ~/.zshrc) to be available in new terminal sessions."
+  if ! command_exists curl; then
+    echo "curl is required to install Node.js." >&2
+    exit 1
+  fi
+
+  curl -fsSL https://fnm.vercel.app/install | bash
+  export PATH="$HOME/.local/share/fnm:$PATH"
+  eval "$(fnm env --use-on-cd)"
+  fnm install 22
+  fnm use 22
+}
+
+ensure_pnpm() {
+  if command_exists pnpm; then
+    return 0
+  fi
+  corepack enable
+  corepack prepare pnpm@10.23.0 --activate
+}
+
+configure_npm_prefix_if_requested() {
+  if [[ "$SET_NPM_PREFIX" != "1" ]]; then
+    return 0
+  fi
+  mkdir -p "$HOME/.npm-global"
+  npm config set prefix "$HOME/.npm-global"
+  export PATH="$HOME/.npm-global/bin:$PATH"
+}
+
+run_onboard_after_npm_install() {
+  if [[ "$NO_ONBOARD" == "1" ]]; then
+    return 0
+  fi
+
+  if command_exists qverisbot; then
+    qverisbot onboard
+    return 0
+  fi
+  if command_exists openclaw; then
+    openclaw onboard
+    return 0
+  fi
+
+  echo "Warning: install finished but no CLI command found in PATH." >&2
+}
+
+install_from_npm() {
+  configure_npm_prefix_if_requested
+  echo "Installing ${PACKAGE_NAME}@${VERSION}..."
+  npm i -g "${PACKAGE_NAME}@${VERSION}"
+  run_onboard_after_npm_install
+}
+
+install_from_git() {
+  local repo_url="${QVERISBOT_GIT_REPO:-https://github.com/QVerisAI/QVerisBot.git}"
+  local target_dir="${QVERISBOT_GIT_DIR:-QVerisBot}"
+
+  if [[ -e "$target_dir" ]]; then
+    echo "Target directory already exists: $target_dir" >&2
+    exit 1
+  fi
+
+  ensure_pnpm
+  git clone "$repo_url" "$target_dir"
+  (
+    cd "$target_dir"
+    pnpm install
+    pnpm ui:build
+    pnpm build
+    if [[ "$NO_ONBOARD" != "1" ]]; then
+      pnpm openclaw onboard
+    fi
+  )
+}
+
+main() {
+  parse_args "$@"
+  if [[ "$INSTALL_METHOD" != "npm" && "$INSTALL_METHOD" != "git" ]]; then
+    echo "Unsupported install method: $INSTALL_METHOD" >&2
+    exit 2
+  fi
+
+  ensure_node
+  if ! command_exists npm; then
+    echo "npm not found after Node.js setup." >&2
+    exit 1
+  fi
+
+  if [[ "$INSTALL_METHOD" == "git" ]]; then
+    install_from_git
+  else
+    install_from_npm
+  fi
+}
+
+main "$@"
