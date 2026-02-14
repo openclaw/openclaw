@@ -35,6 +35,43 @@ vi.mock("../web/auth-store.js", () => ({
   logoutWeb: vi.fn(),
 }));
 
+function stubTelegramFetchOk(calls: string[]) {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      calls.push(url);
+      if (url.includes("/getMe")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            ok: true,
+            result: { id: 1, username: "bot" },
+          }),
+        } as unknown as Response;
+      }
+      if (url.includes("/getWebhookInfo")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            ok: true,
+            result: {
+              url: "https://example.com/h",
+              has_custom_certificate: false,
+            },
+          }),
+        } as unknown as Response;
+      }
+      return {
+        ok: false,
+        status: 404,
+        json: async () => ({ ok: false, description: "nope" }),
+      } as unknown as Response;
+    }),
+  );
+}
+
 describe("getHealthSnapshot", () => {
   beforeEach(async () => {
     setActivePluginRegistry(
@@ -80,40 +117,7 @@ describe("getHealthSnapshot", () => {
     vi.stubEnv("DISCORD_BOT_TOKEN", "");
 
     const calls: string[] = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string) => {
-        calls.push(url);
-        if (url.includes("/getMe")) {
-          return {
-            ok: true,
-            status: 200,
-            json: async () => ({
-              ok: true,
-              result: { id: 1, username: "bot" },
-            }),
-          } as unknown as Response;
-        }
-        if (url.includes("/getWebhookInfo")) {
-          return {
-            ok: true,
-            status: 200,
-            json: async () => ({
-              ok: true,
-              result: {
-                url: "https://example.com/h",
-                has_custom_certificate: false,
-              },
-            }),
-          } as unknown as Response;
-        }
-        return {
-          ok: false,
-          status: 404,
-          json: async () => ({ ok: false, description: "nope" }),
-        } as unknown as Response;
-      }),
-    );
+    stubTelegramFetchOk(calls);
 
     const snap = await getHealthSnapshot({ timeoutMs: 25 });
     const telegram = snap.channels.telegram as {
@@ -141,40 +145,7 @@ describe("getHealthSnapshot", () => {
     vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
 
     const calls: string[] = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string) => {
-        calls.push(url);
-        if (url.includes("/getMe")) {
-          return {
-            ok: true,
-            status: 200,
-            json: async () => ({
-              ok: true,
-              result: { id: 1, username: "bot" },
-            }),
-          } as unknown as Response;
-        }
-        if (url.includes("/getWebhookInfo")) {
-          return {
-            ok: true,
-            status: 200,
-            json: async () => ({
-              ok: true,
-              result: {
-                url: "https://example.com/h",
-                has_custom_certificate: false,
-              },
-            }),
-          } as unknown as Response;
-        }
-        return {
-          ok: false,
-          status: 404,
-          json: async () => ({ ok: false, description: "nope" }),
-        } as unknown as Response;
-      }),
-    );
+    stubTelegramFetchOk(calls);
 
     const snap = await getHealthSnapshot({ timeoutMs: 25 });
     const telegram = snap.channels.telegram as {
