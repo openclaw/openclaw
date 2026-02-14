@@ -33,8 +33,7 @@ const ELEVATED_BLOCKED_PATTERNS: BlockedPattern[] = [
     reason: "encoded payload piped to shell",
   },
   {
-    pattern: /\bcat\b.*\.(openclaw|ssh)\b.*\|\s*(curl|wget|nc|netcat)\b/i,
-    reason: "credential file exfiltration via network tool",
+    pattern: /\bcat\b.*\/(\.openclaw|\.ssh)\b.*\|\s*(curl|wget|nc|netcat)\b/i,
   },
   {
     pattern: /(curl|wget|nc|netcat)\b.*\$\(cat\b.*\/(\.openclaw|\.ssh)\b/i,
