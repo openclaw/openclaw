@@ -1053,6 +1053,7 @@
     "plugin-sdk:facades:gen": "node scripts/generate-plugin-sdk-facades.mjs --write",
     "plugin-sdk:sync-exports": "node scripts/sync-plugin-sdk-exports.mjs",
     "plugins:sync": "node --import tsx scripts/sync-plugin-versions.ts",
+    "postinstall": "node scripts/patch-esm-exports.cjs",
     "prepack": "pnpm build && pnpm ui:build",
     "prepare": "command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1 && git config core.hooksPath git-hooks || exit 0",
     "protocol:check": "pnpm protocol:gen && pnpm protocol:gen:swift && git diff --exit-code -- dist/protocol.schema.json apps/macos/Sources/OpenClawProtocol/GatewayModels.swift apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
