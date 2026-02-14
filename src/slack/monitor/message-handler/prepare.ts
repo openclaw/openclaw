@@ -561,9 +561,6 @@ export async function prepareSlackMessage(params: {
   // Use thread starter media if current message has none
   const effectiveMedia = media ?? threadStarterMedia;
   const firstMedia = effectiveMedia?.[0];
-  const firstMediaType = firstMedia
-    ? (firstMedia.contentType ?? "application/octet-stream")
-    : undefined;
 
   const inboundHistory =
     isRoomish && ctx.historyLimit > 0
@@ -606,7 +603,7 @@ export async function prepareSlackMessage(params: {
     Timestamp: message.ts ? Math.round(Number(message.ts) * 1000) : undefined,
     WasMentioned: isRoomish ? effectiveWasMentioned : undefined,
     MediaPath: firstMedia?.path,
-    MediaType: firstMediaType,
+    MediaType: firstMedia?.contentType,
     MediaUrl: firstMedia?.path,
     MediaPaths:
       effectiveMedia && effectiveMedia.length > 0 ? effectiveMedia.map((m) => m.path) : undefined,
@@ -614,7 +611,7 @@ export async function prepareSlackMessage(params: {
       effectiveMedia && effectiveMedia.length > 0 ? effectiveMedia.map((m) => m.path) : undefined,
     MediaTypes:
       effectiveMedia && effectiveMedia.length > 0
-        ? effectiveMedia.map((m) => m.contentType ?? "application/octet-stream")
+        ? effectiveMedia.map((m) => m.contentType ?? "")
         : undefined,
     CommandAuthorized: commandAuthorized,
     OriginatingChannel: "slack" as const,
