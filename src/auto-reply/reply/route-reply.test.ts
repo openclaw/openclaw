@@ -9,11 +9,8 @@ import { slackOutbound } from "../../channels/plugins/outbound/slack.js";
 import { telegramOutbound } from "../../channels/plugins/outbound/telegram.js";
 import { whatsappOutbound } from "../../channels/plugins/outbound/whatsapp.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import {
-  createIMessageTestPlugin,
-  createOutboundTestPlugin,
-  createTestRegistry,
-} from "../../test-utils/channel-plugins.js";
+import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { createIMessageTestPlugin } from "../../test-utils/imessage-test-plugin.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 
 const mocks = vi.hoisted(() => ({
