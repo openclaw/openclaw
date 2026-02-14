@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
-import { buildAuthChoiceOptions, formatAuthChoiceChoicesForCli } from "./auth-choice-options.js";
+import {
+  buildAuthChoiceGroups,
+  buildAuthChoiceOptions,
+  formatAuthChoiceChoicesForCli,
+} from "./auth-choice-options.js";
 
 describe("buildAuthChoiceOptions", () => {
   it("includes GitHub Copilot", () => {
@@ -171,5 +175,17 @@ describe("buildAuthChoiceOptions", () => {
     expect(cliChoices).toContain("oauth");
     expect(cliChoices).toContain("claude-cli");
     expect(cliChoices).toContain("codex-cli");
+  });
+
+  it("shows Chutes in grouped provider selection", () => {
+    const store: AuthProfileStore = { version: 1, profiles: {} };
+    const { groups } = buildAuthChoiceGroups({
+      store,
+      includeSkip: false,
+    });
+    const chutesGroup = groups.find((group) => group.value === "chutes");
+
+    expect(chutesGroup).toBeDefined();
+    expect(chutesGroup?.options.some((opt) => opt.value === "chutes")).toBe(true);
   });
 });
