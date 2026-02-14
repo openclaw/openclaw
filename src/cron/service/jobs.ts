@@ -121,6 +121,16 @@ export function recomputeNextRuns(state: CronServiceState): boolean {
       job.state.runningAtMs = undefined;
       changed = true;
     }
+    // Skip recomputing nextRunAtMs for jobs that are currently running.
+    // Without this guard, a concurrent operation (list, status, add) can
+    // trigger recomputeNextRuns while a job is executing.  Because the
+    // job's nextRunAtMs is still the *old* (past-due) value, the recompute
+    // advances it to the next period (e.g. tomorrow), effectively skipping
+    // the current execution's post-run scheduling in applyJobResult.
+    // This is the root cause of the 48-hour gap reported in #13739.
+    if (typeof job.state.runningAtMs === "number") {
+      continue;
+    }
     // Only recompute if nextRunAtMs is missing or already past-due.
     // Preserving a still-future nextRunAtMs avoids accidentally advancing
     // a job that hasn't fired yet (e.g. during restart recovery).
