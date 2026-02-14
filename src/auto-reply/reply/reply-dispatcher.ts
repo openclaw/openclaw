@@ -6,6 +6,31 @@ import { sleep } from "../../utils.js";
 import { registerDispatcher } from "./dispatcher-registry.js";
 import { normalizeReplyPayload, type NormalizeReplySkipReason } from "./normalize-reply.js";
 
+/** Default timeout for deliver calls (30 seconds). */
+const DEFAULT_DELIVER_TIMEOUT_MS = 30_000;
+
+/** Race a promise against a timeout; rejects with the provided error on expiry. */
+const withDeliverTimeout = async <T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  timeoutError: Error,
+): Promise<T> => {
+  if (!timeoutMs || timeoutMs <= 0) {
+    return promise;
+  }
+  let timer: NodeJS.Timeout | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(timeoutError), timeoutMs);
+  });
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+};
+
 export type ReplyDispatchKind = "tool" | "block" | "final";
 
 type ReplyDispatchErrorHandler = (err: unknown, info: { kind: ReplyDispatchKind }) => void;
@@ -54,6 +79,10 @@ export type ReplyDispatcherOptions = {
   onSkip?: ReplyDispatchSkipHandler;
   /** Human-like delay between block replies for natural rhythm. */
   humanDelay?: HumanDelayConfig;
+  /** Timeout in ms for each deliver call. Defaults to 30 000 ms.
+   * Set to 0 or undefined to disable. When a deliver call times out,
+   * the error flows through onError and the next queued message proceeds. */
+  deliverTimeoutMs?: number;
 };
 
 export type ReplyDispatcherWithTypingOptions = Omit<ReplyDispatcherOptions, "onIdle"> & {
@@ -101,6 +130,7 @@ function normalizeReplyPayloadInternal(
 }
 
 export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDispatcher {
+  const deliverTimeoutMs = options.deliverTimeoutMs ?? DEFAULT_DELIVER_TIMEOUT_MS;
   let sendChain: Promise<void> = Promise.resolve();
   // Track in-flight deliveries so we can emit a reliable "idle" signal.
   // Start with pending=1 as a "reservation" to prevent premature gateway restart.
@@ -153,7 +183,16 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         }
         // Safe: deliver is called inside an async .then() callback, so even a synchronous
         // throw becomes a rejection that flows through .catch()/.finally(), ensuring cleanup.
-        await options.deliver(normalized, { kind });
+        const deliverPromise = options.deliver(normalized, { kind });
+        if (deliverTimeoutMs > 0) {
+          await withDeliverTimeout(
+            deliverPromise,
+            deliverTimeoutMs,
+            new Error(`reply deliver timed out after ${deliverTimeoutMs}ms (kind=${kind})`),
+          );
+        } else {
+          await deliverPromise;
+        }
       })
       .catch((err) => {
         options.onError?.(err, { kind });
