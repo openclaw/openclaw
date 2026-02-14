@@ -395,6 +395,7 @@ export function formatToolFeedbackDiscord(display: ToolDisplay): string {
 }
 
 const MAX_PREVIEW_LINES = 10;
+const MAX_COL_WIDTH = 80;
 
 export type ToolResultInfo = {
   outputPreview?: string;
@@ -530,23 +531,38 @@ function buildToolHeader(display: ToolDisplay): string {
 }
 
 /**
+ * Truncate a line to MAX_COL_WIDTH, appending "..." if needed.
+ */
+function truncateColumn(line: string): string {
+  if (line.length <= MAX_COL_WIDTH) {
+    return line;
+  }
+  return `${line.slice(0, MAX_COL_WIDTH - 3)}...`;
+}
+
+/**
  * Format a completed tool call for Discord with a rich output preview.
  * Shows tool name, args, and a truncated code block of the output.
+ *
+ * Blank lines are stripped from the preview. Non-blank lines are
+ * truncated at MAX_COL_WIDTH columns. If there are more than
+ * MAX_PREVIEW_LINES visible lines, an 11th line shows
+ * `...(N lines remaining)` inside the code fence. The remaining
+ * count includes blank lines from the undisplayed portion.
  *
  * Example output:
  *   *Read* (`~/src/config.ts`)
  *   ```ts
  *   export const config = {
  *     port: 3000,
- *   ...
+ *   };
+ *   ...(47 lines remaining)
  *   ```
- *   *(50 lines)*
  */
 export function formatToolResultBlockDiscord(display: ToolDisplay, result: ToolResultInfo): string {
   const key = display.name.toLowerCase();
   const header = buildToolHeader(display);
 
-  // No output: just the header
   if (!result.outputPreview) {
     if (result.isError) {
       return `${header} *(error)*`;
@@ -554,23 +570,40 @@ export function formatToolResultBlockDiscord(display: ToolDisplay, result: ToolR
     return header;
   }
 
-  const lines = result.outputPreview.split("\n");
-  const previewLines = lines.slice(0, MAX_PREVIEW_LINES);
-  const totalLines = result.lineCount ?? lines.length;
-  const wasTruncated = totalLines > MAX_PREVIEW_LINES;
+  const allLines = result.outputPreview.split("\n");
+  const totalLines = result.lineCount ?? allLines.length;
 
-  const lang = inferCodeLang(key, display.detail);
-  const codeBlock = `\`\`\`${lang}\n${previewLines.join("\n")}\n\`\`\``;
+  // Walk through preview lines: skip blanks, truncate wide lines,
+  // collect up to MAX_PREVIEW_LINES non-blank lines.
+  const visibleLines: string[] = [];
+  let linesConsumed = 0;
 
-  const parts = [header, codeBlock];
-
-  if (wasTruncated) {
-    const shown = previewLines.length;
-    parts.push(`*(${totalLines} lines, showing first ${shown})*`);
-  } else if (totalLines > 0) {
-    const noun = totalLines === 1 ? "line" : "lines";
-    parts.push(`*(${totalLines} ${noun})*`);
+  for (const line of allLines) {
+    if (line.trim() === "") {
+      linesConsumed++;
+      continue;
+    }
+    if (visibleLines.length >= MAX_PREVIEW_LINES) {
+      break;
+    }
+    linesConsumed++;
+    visibleLines.push(truncateColumn(line));
   }
 
-  return parts.join("\n");
+  // Nothing visible (all blank or empty)
+  if (visibleLines.length === 0) {
+    return header;
+  }
+
+  const remaining = totalLines - linesConsumed;
+  const codeLines = [...visibleLines];
+  if (remaining > 0) {
+    const noun = remaining === 1 ? "line" : "lines";
+    codeLines.push(`...(${remaining} ${noun} remaining)`);
+  }
+
+  const lang = inferCodeLang(key, display.detail);
+  const codeBlock = `\`\`\`${lang}\n${codeLines.join("\n")}\n\`\`\``;
+
+  return `${header}\n${codeBlock}`;
 }
