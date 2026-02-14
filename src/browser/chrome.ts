@@ -176,8 +176,11 @@ export async function launchOpenClawChrome(
     );
   }
 
-  const userDataDir = resolveOpenClawUserDataDir(profile.name);
-  fs.mkdirSync(userDataDir, { recursive: true });
+  let userDataDir = profile.userDataDir;
+  if (!userDataDir) {
+    userDataDir = resolveOpenClawUserDataDir(profile.name);
+    fs.mkdirSync(userDataDir, { recursive: true });
+  }
 
   const needsDecorate = !isProfileDecorated(
     userDataDir,

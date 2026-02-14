@@ -42,6 +42,7 @@ export type ResolvedBrowserProfile = {
   cdpIsLoopback: boolean;
   color: string;
   driver: "openclaw" | "extension";
+  userDataDir?: string;
 };
 
 function normalizeHexColor(raw: string | undefined) {
@@ -251,6 +252,8 @@ export function resolveProfile(
     throw new Error(`Profile "${profileName}" must define cdpPort or cdpUrl.`);
   }
 
+  const userDataDir = profile.userDataDir?.trim() || undefined;
+
   return {
     name: profileName,
     cdpPort,
@@ -259,6 +262,7 @@ export function resolveProfile(
     cdpIsLoopback: isLoopbackHost(cdpHost),
     color: profile.color,
     driver,
+    userDataDir,
   };
 }
 
