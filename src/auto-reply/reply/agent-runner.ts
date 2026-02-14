@@ -49,6 +49,7 @@ import {
   readSessionMessages,
 } from "./post-compaction-audit.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
+import { markNeedsPostCompactionRecovery } from "./post-compaction-recovery.js";
 import { enqueueFollowupRun, type FollowupRun, type QueueSettings } from "./queue.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
@@ -686,6 +687,14 @@ export async function runReplyAgent(params: {
         // Set pending audit flag for Layer 3 (post-compaction read audit)
         pendingPostCompactionAudits.set(sessionKey, true);
       }
+
+      // P3: Mark session for post-compaction recovery on the next turn.
+      await markNeedsPostCompactionRecovery({
+        sessionEntry: activeSessionEntry,
+        sessionStore: activeSessionStore,
+        sessionKey,
+        storePath,
+      });
 
       if (verboseEnabled) {
         const suffix = typeof count === "number" ? ` (count ${count})` : "";

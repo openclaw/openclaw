@@ -21,6 +21,7 @@ import {
   resolveMemoryFlushSettings,
   shouldRunMemoryFlush,
 } from "./memory-flush.js";
+import { markNeedsPostCompactionRecovery } from "./post-compaction-recovery.js";
 import type { FollowupRun } from "./queue.js";
 import { incrementCompactionCount } from "./session-updates.js";
 
@@ -146,6 +147,16 @@ export async function runMemoryFlushIfNeeded(params: {
       if (typeof nextCount === "number") {
         memoryFlushCompactionCount = nextCount;
       }
+      // P3: Mark session for post-compaction recovery on the next turn.
+      // This path handles flush-triggered compaction (memory flush forces a compact).
+      // The main path in agent-runner.ts handles SDK auto-compaction.
+      // These are mutually exclusive; setting true is idempotent.
+      await markNeedsPostCompactionRecovery({
+        sessionEntry: activeSessionEntry,
+        sessionStore: activeSessionStore,
+        sessionKey: params.sessionKey,
+        storePath: params.storePath,
+      });
     }
     if (params.storePath && params.sessionKey) {
       try {

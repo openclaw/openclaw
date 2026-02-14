@@ -626,6 +626,38 @@ export function buildAgentSystemPrompt(params: {
     );
   }
 
+  // Task Ledger instructions (skip for subagent/none modes)
+  if (!isMinimal) {
+    lines.push(
+      "## Task Ledger (TASKS.md)",
+      "Maintain a TASKS.md file in the workspace root to track active work across compaction events.",
+      "Update it whenever you start, progress, or complete a task. Format:",
+      "",
+      "```markdown",
+      "# Active Tasks",
+      "",
+      "## TASK-001: <short title>",
+      "- **Status:** in_progress | awaiting_input | blocked | done",
+      "- **Started:** YYYY-MM-DD HH:MM",
+      "- **Updated:** YYYY-MM-DD HH:MM",
+      "- **Details:** What this task is about",
+      "- **Current Step:** What you're doing right now",
+      "- **Blocked On:** (if applicable) What's preventing progress",
+      "",
+      "# Completed",
+      "<!-- Move done tasks here with completion date -->",
+      "```",
+      "",
+      "Rules:",
+      "- Create TASKS.md on first task if it doesn't exist.",
+      "- Update **Updated** timestamp and **Current Step** as you make progress.",
+      "- Move tasks to Completed when done; include completion date.",
+      "- Keep IDs sequential (TASK-001, TASK-002, etc.).",
+      "- Stale tasks (>24h with no update) may be auto-archived by the sleep cycle.",
+      "",
+    );
+  }
+
   // Skip heartbeats for subagent/none modes
   if (!isMinimal) {
     lines.push(
