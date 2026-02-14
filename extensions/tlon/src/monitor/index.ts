@@ -113,10 +113,12 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
 
   let api: UrbitSSEClient | null = null;
   try {
+    const ssrfPolicy = account.allowPrivateNetwork ? { allowPrivateNetwork: true } : undefined;
     runtime.log?.(`[tlon] Attempting authentication to ${account.url}...`);
-    const cookie = await authenticate(account.url, account.code);
+    const cookie = await authenticate(account.url, account.code, { ssrfPolicy });
     api = new UrbitSSEClient(account.url, cookie, {
       ship: botShipName,
+      ssrfPolicy,
       logger: {
         log: (message) => runtime.log?.(message),
         error: (message) => runtime.error?.(message),
