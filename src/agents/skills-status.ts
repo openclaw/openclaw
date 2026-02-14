@@ -1,5 +1,12 @@
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  buildConfigChecks,
+  resolveMissingAnyBins,
+  resolveMissingBins,
+  resolveMissingEnv,
+  resolveMissingOs,
+} from "../shared/requirements.js";
 import { CONFIG_DIR } from "../utils.js";
 import {
   hasBinary,
@@ -202,48 +209,36 @@ function buildSkillStatus(
   const requiredConfig = entry.metadata?.requires?.config ?? [];
   const requiredOs = entry.metadata?.os ?? [];
 
-  const missingBins = requiredBins.filter((bin) => {
-    if (hasBinary(bin)) {
-      return false;
-    }
-    if (eligibility?.remote?.hasBin?.(bin)) {
-      return false;
-    }
-    return true;
+  const missingBins = resolveMissingBins({
+    required: requiredBins,
+    hasLocalBin: hasBinary,
+    hasRemoteBin: eligibility?.remote?.hasBin,
   });
-  const missingAnyBins =
-    requiredAnyBins.length > 0 &&
-    !(
-      requiredAnyBins.some((bin) => hasBinary(bin)) ||
-      eligibility?.remote?.hasAnyBin?.(requiredAnyBins)
-    )
-      ? requiredAnyBins
-      : [];
-  const missingOs =
-    requiredOs.length > 0 &&
-    !requiredOs.includes(process.platform) &&
-    !eligibility?.remote?.platforms?.some((platform) => requiredOs.includes(platform))
-      ? requiredOs
-      : [];
+  const missingAnyBins = resolveMissingAnyBins({
+    required: requiredAnyBins,
+    hasLocalBin: hasBinary,
+    hasRemoteAnyBin: eligibility?.remote?.hasAnyBin,
+  });
+  const missingOs = resolveMissingOs({
+    required: requiredOs,
+    localPlatform: process.platform,
+    remotePlatforms: eligibility?.remote?.platforms,
+  });
 
-  const missingEnv: string[] = [];
-  for (const envName of requiredEnv) {
-    if (process.env[envName]) {
-      continue;
-    }
-    if (skillConfig?.env?.[envName]) {
-      continue;
-    }
-    if (skillConfig?.apiKey && entry.metadata?.primaryEnv === envName) {
-      continue;
-    }
-    missingEnv.push(envName);
-  }
+  const missingEnv = resolveMissingEnv({
+    required: requiredEnv,
+    isSatisfied: (envName) =>
+      Boolean(
+        process.env[envName] ||
+        skillConfig?.env?.[envName] ||
+        (skillConfig?.apiKey && entry.metadata?.primaryEnv === envName),
+      ),
+  });
 
-  const configChecks: SkillStatusConfigCheck[] = requiredConfig.map((pathStr) => {
-    const value = resolveConfigPath(config, pathStr);
-    const satisfied = isConfigPathTruthy(config, pathStr);
-    return { path: pathStr, value, satisfied };
+  const configChecks: SkillStatusConfigCheck[] = buildConfigChecks({
+    required: requiredConfig,
+    resolveValue: (pathStr) => resolveConfigPath(config, pathStr),
+    isSatisfied: (pathStr) => isConfigPathTruthy(config, pathStr),
   });
   const missingConfig = configChecks.filter((check) => !check.satisfied).map((check) => check.path);
 
