@@ -1,40 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { sleep } from "../utils.ts";
-
-const callGatewayMock = vi.fn();
-vi.mock("../gateway/call.js", () => ({
-  callGateway: (opts: unknown) => callGatewayMock(opts),
-}));
-
-let configOverride: ReturnType<(typeof import("../config/config.js"))["loadConfig"]> = {
-  session: {
-    mainKey: "main",
-    scope: "per-sender",
-  },
-};
-
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
-  return {
-    ...actual,
-    loadConfig: () => configOverride,
-    resolveGatewayPort: () => 18789,
-  };
-});
-
 import { emitAgentEvent } from "../infra/agent-events.js";
-import "./test-helpers/fast-core-tools.js";
+import { sleep } from "../utils.ts";
 import { createOpenClawTools } from "./openclaw-tools.js";
+import "./test-helpers/fast-core-tools.js";
+import {
+  callGatewayMock,
+  resetConfigOverride,
+} from "./openclaw-tools.subagents.sessions-spawn.mocks.js";
 import { resetSubagentRegistryForTests } from "./subagent-registry.js";
 
 describe("openclaw-tools: subagents", () => {
   beforeEach(() => {
-    configOverride = {
-      session: {
-        mainKey: "main",
-        scope: "per-sender",
-      },
-    };
+    resetConfigOverride();
   });
 
   it("sessions_spawn runs cleanup flow after subagent completion", async () => {
