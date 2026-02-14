@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
-import { describe, expect, it } from "vitest";
-import { getReplyFromConfig } from "./reply.js";
+import { beforeAll, describe, expect, it } from "vitest";
 import {
   getRunEmbeddedPiAgentMock,
   installTriggerHandlingE2eTestHooks,
@@ -8,6 +7,11 @@ import {
   makeCfg,
   withTempHome,
 } from "./reply.triggers.trigger-handling.test-harness.js";
+
+let getReplyFromConfig: typeof import("./reply.js").getReplyFromConfig;
+beforeAll(async () => {
+  ({ getReplyFromConfig } = await import("./reply.js"));
+});
 
 installTriggerHandlingE2eTestHooks();
 
