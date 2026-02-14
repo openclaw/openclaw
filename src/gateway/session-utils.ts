@@ -19,6 +19,7 @@ import {
   buildGroupDisplayName,
   canonicalizeMainSessionAlias,
   loadSessionStore,
+  resolveAgentMainSessionKey,
   resolveFreshSessionTotalTokens,
   resolveMainSessionKey,
   resolveStorePath,
@@ -32,16 +33,15 @@ import {
 } from "../routing/session-key.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { normalizeSessionDeliveryFields } from "../utils/delivery-context.js";
-import {
-  readFirstUserMessageFromTranscript,
-  readLastMessagePreviewFromTranscript,
-} from "./session-utils.fs.js";
+import { readSessionTitleFieldsFromTranscript } from "./session-utils.fs.js";
 
 export {
   archiveFileOnDisk,
+  archiveSessionTranscripts,
   capArrayByJsonBytes,
   readFirstUserMessageFromTranscript,
   readLastMessagePreviewFromTranscript,
+  readSessionTitleFieldsFromTranscript,
   readSessionPreviewItemsFromTranscript,
   readSessionMessages,
   resolveSessionTranscriptCandidates,
@@ -189,8 +189,81 @@ export function loadSessionEntry(sessionKey: string) {
   const agentId = resolveSessionStoreAgentId(cfg, canonicalKey);
   const storePath = resolveStorePath(sessionCfg?.store, { agentId });
   const store = loadSessionStore(storePath);
-  const entry = store[canonicalKey];
-  return { cfg, storePath, store, entry, canonicalKey };
+  const match = findStoreMatch(store, canonicalKey, sessionKey.trim());
+  const legacyKey = match?.key !== canonicalKey ? match?.key : undefined;
+  return { cfg, storePath, store, entry: match?.entry, canonicalKey, legacyKey };
+}
+
+/**
+ * Find a session entry by exact or case-insensitive key match.
+ * Returns both the entry and the actual store key it was found under,
+ * so callers can clean up legacy mixed-case keys when they differ from canonicalKey.
+ */
+function findStoreMatch(
+  store: Record<string, SessionEntry>,
+  ...candidates: string[]
+): { entry: SessionEntry; key: string } | undefined {
+  // Exact match first.
+  for (const candidate of candidates) {
+    if (candidate && store[candidate]) {
+      return { entry: store[candidate], key: candidate };
+    }
+  }
+  // Case-insensitive scan for ALL candidates.
+  const loweredSet = new Set(candidates.filter(Boolean).map((c) => c.toLowerCase()));
+  for (const key of Object.keys(store)) {
+    if (loweredSet.has(key.toLowerCase())) {
+      return { entry: store[key], key };
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Find all on-disk store keys that match the given key case-insensitively.
+ * Returns every key from the store whose lowercased form equals the target's lowercased form.
+ */
+export function findStoreKeysIgnoreCase(
+  store: Record<string, unknown>,
+  targetKey: string,
+): string[] {
+  const lowered = targetKey.toLowerCase();
+  const matches: string[] = [];
+  for (const key of Object.keys(store)) {
+    if (key.toLowerCase() === lowered) {
+      matches.push(key);
+    }
+  }
+  return matches;
+}
+
+/**
+ * Remove legacy key variants for one canonical session key.
+ * Candidates can include aliases (for example, "agent:ops:main" when canonical is "agent:ops:work").
+ */
+export function pruneLegacyStoreKeys(params: {
+  store: Record<string, unknown>;
+  canonicalKey: string;
+  candidates: Iterable<string>;
+}) {
+  const keysToDelete = new Set<string>();
+  for (const candidate of params.candidates) {
+    const trimmed = String(candidate ?? "").trim();
+    if (!trimmed) {
+      continue;
+    }
+    if (trimmed !== params.canonicalKey) {
+      keysToDelete.add(trimmed);
+    }
+    for (const match of findStoreKeysIgnoreCase(params.store, trimmed)) {
+      if (match !== params.canonicalKey) {
+        keysToDelete.add(match);
+      }
+    }
+  }
+  for (const key of keysToDelete) {
+    delete params.store[key];
+  }
 }
 
 export function classifySessionKey(key: string, entry?: SessionEntry): GatewaySessionRow["kind"] {
@@ -319,7 +392,7 @@ export function listAgentsForGateway(cfg: OpenClawConfig): {
   let agentIds = listConfiguredAgentIds(cfg).filter((id) =>
     allowedIds ? allowedIds.has(id) : true,
   );
-  if (mainKey && !agentIds.includes(mainKey)) {
+  if (mainKey && !agentIds.includes(mainKey) && (!allowedIds || allowedIds.has(mainKey))) {
     agentIds = [...agentIds, mainKey];
   }
   const agents = agentIds.map((id) => {
@@ -334,13 +407,14 @@ export function listAgentsForGateway(cfg: OpenClawConfig): {
 }
 
 function canonicalizeSessionKeyForAgent(agentId: string, key: string): string {
-  if (key === "global" || key === "unknown") {
-    return key;
+  const lowered = key.toLowerCase();
+  if (lowered === "global" || lowered === "unknown") {
+    return lowered;
   }
-  if (key.startsWith("agent:")) {
-    return key;
+  if (lowered.startsWith("agent:")) {
+    return lowered;
   }
-  return `agent:${normalizeAgentId(agentId)}:${key}`;
+  return `agent:${normalizeAgentId(agentId)}:${lowered}`;
 }
 
 function resolveDefaultStoreAgentId(cfg: OpenClawConfig): string {
@@ -355,30 +429,33 @@ export function resolveSessionStoreKey(params: {
   if (!raw) {
     return raw;
   }
-  if (raw === "global" || raw === "unknown") {
-    return raw;
+  const rawLower = raw.toLowerCase();
+  if (rawLower === "global" || rawLower === "unknown") {
+    return rawLower;
   }
 
   const parsed = parseAgentSessionKey(raw);
   if (parsed) {
     const agentId = normalizeAgentId(parsed.agentId);
+    const lowered = raw.toLowerCase();
     const canonical = canonicalizeMainSessionAlias({
       cfg: params.cfg,
       agentId,
-      sessionKey: raw,
+      sessionKey: lowered,
     });
-    if (canonical !== raw) {
+    if (canonical !== lowered) {
       return canonical;
     }
-    return raw;
+    return lowered;
   }
 
+  const lowered = raw.toLowerCase();
   const rawMainKey = normalizeMainKey(params.cfg.session?.mainKey);
-  if (raw === "main" || raw === rawMainKey) {
+  if (lowered === "main" || lowered === rawMainKey) {
     return resolveMainSessionKey(params.cfg);
   }
   const agentId = resolveDefaultStoreAgentId(params.cfg);
-  return canonicalizeSessionKeyForAgent(agentId, raw);
+  return canonicalizeSessionKeyForAgent(agentId, lowered);
 }
 
 function resolveSessionStoreAgentId(cfg: OpenClawConfig, canonicalKey: string): string {
@@ -392,21 +469,37 @@ function resolveSessionStoreAgentId(cfg: OpenClawConfig, canonicalKey: string): 
   return resolveDefaultStoreAgentId(cfg);
 }
 
-function canonicalizeSpawnedByForAgent(agentId: string, spawnedBy?: string): string | undefined {
+export function canonicalizeSpawnedByForAgent(
+  cfg: OpenClawConfig,
+  agentId: string,
+  spawnedBy?: string,
+): string | undefined {
   const raw = spawnedBy?.trim();
   if (!raw) {
     return undefined;
   }
-  if (raw === "global" || raw === "unknown") {
-    return raw;
+  const lower = raw.toLowerCase();
+  if (lower === "global" || lower === "unknown") {
+    return lower;
   }
-  if (raw.startsWith("agent:")) {
-    return raw;
+  let result: string;
+  if (raw.toLowerCase().startsWith("agent:")) {
+    result = raw.toLowerCase();
+  } else {
+    result = `agent:${normalizeAgentId(agentId)}:${lower}`;
   }
-  return `agent:${normalizeAgentId(agentId)}:${raw}`;
+  // Resolve main-alias references (e.g. agent:ops:main → configured main key).
+  const parsed = parseAgentSessionKey(result);
+  const resolvedAgent = parsed?.agentId ? normalizeAgentId(parsed.agentId) : agentId;
+  return canonicalizeMainSessionAlias({ cfg, agentId: resolvedAgent, sessionKey: result });
 }
 
-export function resolveGatewaySessionStoreTarget(params: { cfg: OpenClawConfig; key: string }): {
+export function resolveGatewaySessionStoreTarget(params: {
+  cfg: OpenClawConfig;
+  key: string;
+  scanLegacyKeys?: boolean;
+  store?: Record<string, SessionEntry>;
+}): {
   agentId: string;
   storePath: string;
   canonicalKey: string;
@@ -431,6 +524,23 @@ export function resolveGatewaySessionStoreTarget(params: { cfg: OpenClawConfig; 
   if (key && key !== canonicalKey) {
     storeKeys.add(key);
   }
+  if (params.scanLegacyKeys !== false) {
+    // Build a set of scan targets: all known keys plus the main alias key so we
+    // catch legacy entries stored under "agent:{id}:MAIN" when mainKey != "main".
+    const scanTargets = new Set(storeKeys);
+    const agentMainKey = resolveAgentMainSessionKey({ cfg: params.cfg, agentId });
+    if (canonicalKey === agentMainKey) {
+      scanTargets.add(`agent:${agentId}:main`);
+    }
+    // Scan the on-disk store for case variants of every target to find
+    // legacy mixed-case entries (e.g. "agent:ops:MAIN" when canonical is "agent:ops:work").
+    const store = params.store ?? loadSessionStore(storePath);
+    for (const seed of scanTargets) {
+      for (const legacyKey of findStoreKeysIgnoreCase(store, seed)) {
+        storeKeys.add(legacyKey);
+      }
+    }
+  }
   return {
     agentId,
     storePath,
@@ -441,25 +551,30 @@ export function resolveGatewaySessionStoreTarget(params: { cfg: OpenClawConfig; 
 
 // Merge with existing entry based on latest timestamp to ensure data consistency and avoid overwriting with less complete data.
 function mergeSessionEntryIntoCombined(params: {
+  cfg: OpenClawConfig;
   combined: Record<string, SessionEntry>;
   entry: SessionEntry;
   agentId: string;
   canonicalKey: string;
 }) {
-  const { combined, entry, agentId, canonicalKey } = params;
+  const { cfg, combined, entry, agentId, canonicalKey } = params;
   const existing = combined[canonicalKey];
 
   if (existing && (existing.updatedAt ?? 0) > (entry.updatedAt ?? 0)) {
     combined[canonicalKey] = {
       ...entry,
       ...existing,
-      spawnedBy: canonicalizeSpawnedByForAgent(agentId, existing.spawnedBy ?? entry.spawnedBy),
+      spawnedBy: canonicalizeSpawnedByForAgent(cfg, agentId, existing.spawnedBy ?? entry.spawnedBy),
     };
   } else {
     combined[canonicalKey] = {
       ...existing,
       ...entry,
-      spawnedBy: canonicalizeSpawnedByForAgent(agentId, entry.spawnedBy ?? existing?.spawnedBy),
+      spawnedBy: canonicalizeSpawnedByForAgent(
+        cfg,
+        agentId,
+        entry.spawnedBy ?? existing?.spawnedBy,
+      ),
     };
   }
 }
@@ -477,6 +592,7 @@ export function loadCombinedSessionStoreForGateway(cfg: OpenClawConfig): {
     for (const [key, entry] of Object.entries(store)) {
       const canonicalKey = canonicalizeSessionKeyForAgent(defaultAgentId, key);
       mergeSessionEntryIntoCombined({
+        cfg,
         combined,
         entry,
         agentId: defaultAgentId,
@@ -494,6 +610,7 @@ export function loadCombinedSessionStoreForGateway(cfg: OpenClawConfig): {
     for (const [key, entry] of Object.entries(store)) {
       const canonicalKey = canonicalizeSessionKeyForAgent(agentId, key);
       mergeSessionEntryIntoCombined({
+        cfg,
         combined,
         entry,
         agentId,
@@ -698,22 +815,21 @@ export function listSessionsFromStore(params: {
     let derivedTitle: string | undefined;
     let lastMessagePreview: string | undefined;
     if (entry?.sessionId) {
-      if (includeDerivedTitles) {
-        const firstUserMsg = readFirstUserMessageFromTranscript(
+      if (includeDerivedTitles || includeLastMessage) {
+        const parsed = parseAgentSessionKey(s.key);
+        const agentId =
+          parsed && parsed.agentId ? normalizeAgentId(parsed.agentId) : resolveDefaultAgentId(cfg);
+        const fields = readSessionTitleFieldsFromTranscript(
           entry.sessionId,
           storePath,
           entry.sessionFile,
+          agentId,
         );
-        derivedTitle = deriveSessionTitle(entry, firstUserMsg);
-      }
-      if (includeLastMessage) {
-        const lastMsg = readLastMessagePreviewFromTranscript(
-          entry.sessionId,
-          storePath,
-          entry.sessionFile,
-        );
-        if (lastMsg) {
-          lastMessagePreview = lastMsg;
+        if (includeDerivedTitles) {
+          derivedTitle = deriveSessionTitle(entry, fields.firstUserMessage);
+        }
+        if (includeLastMessage && fields.lastMessagePreview) {
+          lastMessagePreview = fields.lastMessagePreview;
         }
       }
     }

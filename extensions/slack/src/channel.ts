@@ -177,7 +177,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
   threading: {
     resolveReplyToMode: ({ cfg, accountId, chatType }) =>
       resolveSlackReplyToMode(resolveSlackAccount({ cfg, accountId }), chatType),
-    allowTagsWhenOff: true,
+    allowExplicitReplyTagsWhenOff: true,
     buildToolContext: (params) => buildSlackThreadingToolContext(params),
   },
   messaging: {
@@ -426,8 +426,9 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
       }
 
       if (action === "emoji-list") {
+        const limit = readNumberParam(params, "limit", { integer: true });
         return await getSlackRuntime().channel.slack.handleSlackAction(
-          { action: "emojiList", accountId: accountId ?? undefined },
+          { action: "emojiList", limit, accountId: accountId ?? undefined },
           cfg,
         );
       }

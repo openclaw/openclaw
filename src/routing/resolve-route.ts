@@ -135,51 +135,153 @@ function matchesChannel(
   return key === channel;
 }
 
-function matchesPeer(
-  match: { peer?: { kind?: string; id?: string } | undefined } | undefined,
-  peer: RoutePeer,
-): boolean {
-  const m = match?.peer;
-  if (!m) {
-    return false;
+type NormalizedPeerConstraint =
+  | { state: "none" }
+  | { state: "invalid" }
+  | { state: "valid"; kind: ChatType; id: string };
+
+type NormalizedBindingMatch = {
+  accountPattern: string;
+  peer: NormalizedPeerConstraint;
+  guildId: string | null;
+  teamId: string | null;
+  roles: string[] | null;
+};
+
+type EvaluatedBinding = {
+  binding: ReturnType<typeof listBindings>[number];
+  match: NormalizedBindingMatch;
+};
+
+type BindingScope = {
+  peer: RoutePeer | null;
+  guildId: string;
+  teamId: string;
+  memberRoleIds: Set<string>;
+};
+
+type EvaluatedBindingsCache = {
+  bindingsRef: OpenClawConfig["bindings"];
+  byChannelAccount: Map<string, EvaluatedBinding[]>;
+};
+
+const evaluatedBindingsCacheByCfg = new WeakMap<OpenClawConfig, EvaluatedBindingsCache>();
+const MAX_EVALUATED_BINDINGS_CACHE_KEYS = 2000;
+
+function getEvaluatedBindingsForChannelAccount(
+  cfg: OpenClawConfig,
+  channel: string,
+  accountId: string,
+): EvaluatedBinding[] {
+  const bindingsRef = cfg.bindings;
+  const existing = evaluatedBindingsCacheByCfg.get(cfg);
+  const cache =
+    existing && existing.bindingsRef === bindingsRef
+      ? existing
+      : { bindingsRef, byChannelAccount: new Map<string, EvaluatedBinding[]>() };
+  if (cache !== existing) {
+    evaluatedBindingsCacheByCfg.set(cfg, cache);
   }
-  // Backward compat: normalize "dm" to "direct" in config match rules
-  const kind = normalizeChatType(m.kind);
-  const id = normalizeId(m.id);
+
+  const cacheKey = `${channel}\t${accountId}`;
+  const hit = cache.byChannelAccount.get(cacheKey);
+  if (hit) {
+    return hit;
+  }
+
+  const evaluated: EvaluatedBinding[] = listBindings(cfg).flatMap((binding) => {
+    if (!binding || typeof binding !== "object") {
+      return [];
+    }
+    if (!matchesChannel(binding.match, channel)) {
+      return [];
+    }
+    if (!matchesAccountId(binding.match?.accountId, accountId)) {
+      return [];
+    }
+    return [{ binding, match: normalizeBindingMatch(binding.match) }];
+  });
+
+  cache.byChannelAccount.set(cacheKey, evaluated);
+  if (cache.byChannelAccount.size > MAX_EVALUATED_BINDINGS_CACHE_KEYS) {
+    cache.byChannelAccount.clear();
+    cache.byChannelAccount.set(cacheKey, evaluated);
+  }
+
+  return evaluated;
+}
+
+function normalizePeerConstraint(
+  peer: { kind?: string; id?: string } | undefined,
+): NormalizedPeerConstraint {
+  if (!peer) {
+    return { state: "none" };
+  }
+  const kind = normalizeChatType(peer.kind);
+  const id = normalizeId(peer.id);
   if (!kind || !id) {
-    return false;
+    return { state: "invalid" };
   }
-  return kind === peer.kind && id === peer.id;
+  return { state: "valid", kind, id };
 }
 
-function matchesGuild(
-  match: { guildId?: string | undefined } | undefined,
-  guildId: string,
-): boolean {
-  const id = normalizeId(match?.guildId);
-  if (!id) {
-    return false;
-  }
-  return id === guildId;
+function normalizeBindingMatch(
+  match:
+    | {
+        accountId?: string | undefined;
+        peer?: { kind?: string; id?: string } | undefined;
+        guildId?: string | undefined;
+        teamId?: string | undefined;
+        roles?: string[] | undefined;
+      }
+    | undefined,
+): NormalizedBindingMatch {
+  const rawRoles = match?.roles;
+  return {
+    accountPattern: (match?.accountId ?? "").trim(),
+    peer: normalizePeerConstraint(match?.peer),
+    guildId: normalizeId(match?.guildId) || null,
+    teamId: normalizeId(match?.teamId) || null,
+    roles: Array.isArray(rawRoles) && rawRoles.length > 0 ? rawRoles : null,
+  };
 }
 
-function matchesTeam(match: { teamId?: string | undefined } | undefined, teamId: string): boolean {
-  const id = normalizeId(match?.teamId);
-  if (!id) {
-    return false;
-  }
-  return id === teamId;
+function hasGuildConstraint(match: NormalizedBindingMatch): boolean {
+  return Boolean(match.guildId);
 }
 
-function matchesRoles(
-  match: { roles?: string[] | undefined } | undefined,
-  memberRoleIds: string[],
-): boolean {
-  const roles = match?.roles;
-  if (!Array.isArray(roles) || roles.length === 0) {
+function hasTeamConstraint(match: NormalizedBindingMatch): boolean {
+  return Boolean(match.teamId);
+}
+
+function hasRolesConstraint(match: NormalizedBindingMatch): boolean {
+  return Boolean(match.roles);
+}
+
+function matchesBindingScope(match: NormalizedBindingMatch, scope: BindingScope): boolean {
+  if (match.peer.state === "invalid") {
     return false;
   }
-  return roles.some((role) => memberRoleIds.includes(role));
+  if (match.peer.state === "valid") {
+    if (!scope.peer || scope.peer.kind !== match.peer.kind || scope.peer.id !== match.peer.id) {
+      return false;
+    }
+  }
+  if (match.guildId && match.guildId !== scope.guildId) {
+    return false;
+  }
+  if (match.teamId && match.teamId !== scope.teamId) {
+    return false;
+  }
+  if (match.roles) {
+    for (const role of match.roles) {
+      if (scope.memberRoleIds.has(role)) {
+        return true;
+      }
+    }
+    return false;
+  }
+  return true;
 }
 
 export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentRoute {
@@ -189,16 +291,9 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
   const guildId = normalizeId(input.guildId);
   const teamId = normalizeId(input.teamId);
   const memberRoleIds = input.memberRoleIds ?? [];
+  const memberRoleIdSet = new Set(memberRoleIds);
 
-  const bindings = listBindings(input.cfg).filter((binding) => {
-    if (!binding || typeof binding !== "object") {
-      return false;
-    }
-    if (!matchesChannel(binding.match, channel)) {
-      return false;
-    }
-    return matchesAccountId(binding.match?.accountId, accountId);
-  });
+  const bindings = getEvaluatedBindingsForChannelAccount(input.cfg, channel, accountId);
 
   const dmScope = input.cfg.session?.dmScope ?? "main";
   const identityLinks = input.cfg.session?.identityLinks;
@@ -227,65 +322,83 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
     };
   };
 
-  if (peer) {
-    const peerMatch = bindings.find((b) => matchesPeer(b.match, peer));
-    if (peerMatch) {
-      return choose(peerMatch.agentId, "binding.peer");
-    }
-  }
-
   // Thread parent inheritance: if peer (thread) didn't match, check parent peer binding
   const parentPeer = input.parentPeer
     ? { kind: input.parentPeer.kind, id: normalizeId(input.parentPeer.id) }
     : null;
-  if (parentPeer && parentPeer.id) {
-    const parentPeerMatch = bindings.find((b) => matchesPeer(b.match, parentPeer));
-    if (parentPeerMatch) {
-      return choose(parentPeerMatch.agentId, "binding.peer.parent");
-    }
-  }
+  const baseScope = {
+    guildId,
+    teamId,
+    memberRoleIds: memberRoleIdSet,
+  };
 
-  if (guildId && memberRoleIds.length > 0) {
-    const guildRolesMatch = bindings.find(
-      (b) => matchesGuild(b.match, guildId) && matchesRoles(b.match, memberRoleIds),
+  const tiers: Array<{
+    matchedBy: Exclude<ResolvedAgentRoute["matchedBy"], "default">;
+    enabled: boolean;
+    scopePeer: RoutePeer | null;
+    predicate: (candidate: EvaluatedBinding) => boolean;
+  }> = [
+    {
+      matchedBy: "binding.peer",
+      enabled: Boolean(peer),
+      scopePeer: peer,
+      predicate: (candidate) => candidate.match.peer.state === "valid",
+    },
+    {
+      matchedBy: "binding.peer.parent",
+      enabled: Boolean(parentPeer && parentPeer.id),
+      scopePeer: parentPeer && parentPeer.id ? parentPeer : null,
+      predicate: (candidate) => candidate.match.peer.state === "valid",
+    },
+    {
+      matchedBy: "binding.guild+roles",
+      enabled: Boolean(guildId && memberRoleIds.length > 0),
+      scopePeer: peer,
+      predicate: (candidate) =>
+        hasGuildConstraint(candidate.match) && hasRolesConstraint(candidate.match),
+    },
+    {
+      matchedBy: "binding.guild",
+      enabled: Boolean(guildId),
+      scopePeer: peer,
+      predicate: (candidate) =>
+        hasGuildConstraint(candidate.match) && !hasRolesConstraint(candidate.match),
+    },
+    {
+      matchedBy: "binding.team",
+      enabled: Boolean(teamId),
+      scopePeer: peer,
+      predicate: (candidate) => hasTeamConstraint(candidate.match),
+    },
+    {
+      matchedBy: "binding.account",
+      enabled: true,
+      scopePeer: peer,
+      predicate: (candidate) => candidate.match.accountPattern !== "*",
+    },
+    {
+      matchedBy: "binding.channel",
+      enabled: true,
+      scopePeer: peer,
+      predicate: (candidate) => candidate.match.accountPattern === "*",
+    },
+  ];
+
+  for (const tier of tiers) {
+    if (!tier.enabled) {
+      continue;
+    }
+    const matched = bindings.find(
+      (candidate) =>
+        tier.predicate(candidate) &&
+        matchesBindingScope(candidate.match, {
+          ...baseScope,
+          peer: tier.scopePeer,
+        }),
     );
-    if (guildRolesMatch) {
-      return choose(guildRolesMatch.agentId, "binding.guild+roles");
+    if (matched) {
+      return choose(matched.binding.agentId, tier.matchedBy);
     }
-  }
-
-  if (guildId) {
-    const guildMatch = bindings.find(
-      (b) =>
-        matchesGuild(b.match, guildId) &&
-        (!Array.isArray(b.match?.roles) || b.match.roles.length === 0),
-    );
-    if (guildMatch) {
-      return choose(guildMatch.agentId, "binding.guild");
-    }
-  }
-
-  if (teamId) {
-    const teamMatch = bindings.find((b) => matchesTeam(b.match, teamId));
-    if (teamMatch) {
-      return choose(teamMatch.agentId, "binding.team");
-    }
-  }
-
-  const accountMatch = bindings.find(
-    (b) =>
-      b.match?.accountId?.trim() !== "*" && !b.match?.peer && !b.match?.guildId && !b.match?.teamId,
-  );
-  if (accountMatch) {
-    return choose(accountMatch.agentId, "binding.account");
-  }
-
-  const anyAccountMatch = bindings.find(
-    (b) =>
-      b.match?.accountId?.trim() === "*" && !b.match?.peer && !b.match?.guildId && !b.match?.teamId,
-  );
-  if (anyAccountMatch) {
-    return choose(anyAccountMatch.agentId, "binding.channel");
   }
 
   return choose(resolveDefaultAgentId(input.cfg), "default");

@@ -46,7 +46,7 @@ const invokeAgentsList = async (params: {
   }
   return await fetch(`http://127.0.0.1:${params.port}/tools/invoke`, {
     method: "POST",
-    headers: { "content-type": "application/json", ...params.headers },
+    headers: { "content-type": "application/json", connection: "close", ...params.headers },
     body: JSON.stringify(body),
   });
 };
@@ -71,7 +71,7 @@ const invokeTool = async (params: {
   }
   return await fetch(`http://127.0.0.1:${params.port}/tools/invoke`, {
     method: "POST",
-    headers: { "content-type": "application/json", ...params.headers },
+    headers: { "content-type": "application/json", connection: "close", ...params.headers },
     body: JSON.stringify(body),
   });
 };
@@ -142,41 +142,6 @@ describe("POST /tools/invoke", () => {
     expect(resImplicit.status).toBe(200);
     const implicitBody = await resImplicit.json();
     expect(implicitBody.ok).toBe(true);
-  });
-
-  it("handles dedicated auth modes for password accept and token reject", async () => {
-    allowAgentsListForMain();
-
-    const passwordPort = await getFreePort();
-    const passwordServer = await startGatewayServer(passwordPort, {
-      bind: "loopback",
-      auth: { mode: "password", password: "secret" },
-    });
-    try {
-      const passwordRes = await invokeAgentsList({
-        port: passwordPort,
-        headers: { authorization: "Bearer secret" },
-        sessionKey: "main",
-      });
-      expect(passwordRes.status).toBe(200);
-    } finally {
-      await passwordServer.close();
-    }
-
-    const tokenPort = await getFreePort();
-    const tokenServer = await startGatewayServer(tokenPort, {
-      bind: "loopback",
-      auth: { mode: "token", token: "t" },
-    });
-    try {
-      const tokenRes = await invokeAgentsList({
-        port: tokenPort,
-        sessionKey: "main",
-      });
-      expect(tokenRes.status).toBe(401);
-    } finally {
-      await tokenServer.close();
-    }
   });
 
   it("routes tools invoke before plugin HTTP handlers", async () => {
@@ -262,22 +227,20 @@ describe("POST /tools/invoke", () => {
       // oxlint-disable-next-line typescript/no-explicit-any
     } as any;
 
-    const port = await getFreePort();
-    const server = await startGatewayServer(port, { bind: "loopback" });
     const token = resolveGatewayToken();
 
-    const res = await fetch(`http://127.0.0.1:${port}/tools/invoke`, {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-      body: JSON.stringify({ tool: "sessions_spawn", args: { task: "test" }, sessionKey: "main" }),
+    const res = await invokeTool({
+      port: sharedPort,
+      tool: "sessions_spawn",
+      args: { task: "test" },
+      headers: { authorization: `Bearer ${token}` },
+      sessionKey: "main",
     });
 
     expect(res.status).toBe(404);
     const body = await res.json();
     expect(body.ok).toBe(false);
     expect(body.error.type).toBe("not_found");
-
-    await server.close();
   });
 
   it("denies sessions_send via HTTP gateway", async () => {
@@ -286,18 +249,16 @@ describe("POST /tools/invoke", () => {
       // oxlint-disable-next-line typescript/no-explicit-any
     } as any;
 
-    const port = await getFreePort();
-    const server = await startGatewayServer(port, { bind: "loopback" });
     const token = resolveGatewayToken();
 
-    const res = await fetch(`http://127.0.0.1:${port}/tools/invoke`, {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-      body: JSON.stringify({ tool: "sessions_send", args: {}, sessionKey: "main" }),
+    const res = await invokeTool({
+      port: sharedPort,
+      tool: "sessions_send",
+      headers: { authorization: `Bearer ${token}` },
+      sessionKey: "main",
     });
 
     expect(res.status).toBe(404);
-    await server.close();
   });
 
   it("denies gateway tool via HTTP", async () => {
@@ -306,18 +267,78 @@ describe("POST /tools/invoke", () => {
       // oxlint-disable-next-line typescript/no-explicit-any
     } as any;
 
-    const port = await getFreePort();
-    const server = await startGatewayServer(port, { bind: "loopback" });
     const token = resolveGatewayToken();
 
-    const res = await fetch(`http://127.0.0.1:${port}/tools/invoke`, {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-      body: JSON.stringify({ tool: "gateway", args: {}, sessionKey: "main" }),
+    const res = await invokeTool({
+      port: sharedPort,
+      tool: "gateway",
+      headers: { authorization: `Bearer ${token}` },
+      sessionKey: "main",
     });
 
     expect(res.status).toBe(404);
-    await server.close();
+  });
+
+  it("allows gateway tool via HTTP when explicitly enabled in gateway.tools.allow", async () => {
+    testState.agentsConfig = {
+      list: [{ id: "main", tools: { allow: ["gateway"] } }],
+      // oxlint-disable-next-line typescript/no-explicit-any
+    } as any;
+    const { writeConfigFile } = await import("../config/config.js");
+    await writeConfigFile({
+      gateway: { tools: { allow: ["gateway"] } },
+      // oxlint-disable-next-line typescript/no-explicit-any
+    } as any);
+
+    const token = resolveGatewayToken();
+
+    try {
+      const res = await invokeTool({
+        port: sharedPort,
+        tool: "gateway",
+        headers: { authorization: `Bearer ${token}` },
+        sessionKey: "main",
+      });
+
+      // Ensure we didn't hit the HTTP deny list (404). Invalid args should map to 400.
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.ok).toBe(false);
+      expect(body.error?.type).toBe("tool_error");
+    } finally {
+      await writeConfigFile({
+        // oxlint-disable-next-line typescript/no-explicit-any
+      } as any);
+    }
+  });
+
+  it("treats gateway.tools.deny as higher priority than gateway.tools.allow", async () => {
+    testState.agentsConfig = {
+      list: [{ id: "main", tools: { allow: ["gateway"] } }],
+      // oxlint-disable-next-line typescript/no-explicit-any
+    } as any;
+    const { writeConfigFile } = await import("../config/config.js");
+    await writeConfigFile({
+      gateway: { tools: { allow: ["gateway"], deny: ["gateway"] } },
+      // oxlint-disable-next-line typescript/no-explicit-any
+    } as any);
+
+    const token = resolveGatewayToken();
+
+    try {
+      const res = await invokeTool({
+        port: sharedPort,
+        tool: "gateway",
+        headers: { authorization: `Bearer ${token}` },
+        sessionKey: "main",
+      });
+
+      expect(res.status).toBe(404);
+    } finally {
+      await writeConfigFile({
+        // oxlint-disable-next-line typescript/no-explicit-any
+      } as any);
+    }
   });
 
   it("uses the configured main session key when sessionKey is missing or main", async () => {

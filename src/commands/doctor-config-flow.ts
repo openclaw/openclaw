@@ -11,6 +11,7 @@ import {
   readConfigFileSnapshot,
 } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
+import { listTelegramAccountIds, resolveTelegramAccount } from "../telegram/accounts.js";
 import { note } from "../terminal/note.js";
 import { isRecord, resolveHomeDir } from "../utils.js";
 import { normalizeLegacyConfigValues } from "./doctor-legacy-config.js";
@@ -142,6 +143,273 @@ function noteOpencodeProviderOverrides(cfg: OpenClawConfig) {
   note(lines.join("\n"), "OpenCode Zen");
 }
 
+function normalizeTelegramAllowFromEntry(raw: unknown): string {
+  const base = typeof raw === "string" ? raw : typeof raw === "number" ? String(raw) : "";
+  return base
+    .trim()
+    .replace(/^(telegram|tg):/i, "")
+    .trim();
+}
+
+function isNumericTelegramUserId(raw: string): boolean {
+  return /^\d+$/.test(raw);
+}
+
+type TelegramAllowFromUsernameHit = { path: string; entry: string };
+
+function scanTelegramAllowFromUsernameEntries(cfg: OpenClawConfig): TelegramAllowFromUsernameHit[] {
+  const hits: TelegramAllowFromUsernameHit[] = [];
+  const telegram = cfg.channels?.telegram;
+  if (!telegram) {
+    return hits;
+  }
+
+  const scanList = (pathLabel: string, list: unknown) => {
+    if (!Array.isArray(list)) {
+      return;
+    }
+    for (const entry of list) {
+      const normalized = normalizeTelegramAllowFromEntry(entry);
+      if (!normalized || normalized === "*") {
+        continue;
+      }
+      if (isNumericTelegramUserId(normalized)) {
+        continue;
+      }
+      hits.push({ path: pathLabel, entry: String(entry).trim() });
+    }
+  };
+
+  const scanAccount = (prefix: string, account: Record<string, unknown>) => {
+    scanList(`${prefix}.allowFrom`, account.allowFrom);
+    scanList(`${prefix}.groupAllowFrom`, account.groupAllowFrom);
+    const groups = account.groups;
+    if (!groups || typeof groups !== "object" || Array.isArray(groups)) {
+      return;
+    }
+    const groupsRecord = groups as Record<string, unknown>;
+    for (const groupId of Object.keys(groupsRecord)) {
+      const group = groupsRecord[groupId];
+      if (!group || typeof group !== "object" || Array.isArray(group)) {
+        continue;
+      }
+      const groupRec = group as Record<string, unknown>;
+      scanList(`${prefix}.groups.${groupId}.allowFrom`, groupRec.allowFrom);
+      const topics = groupRec.topics;
+      if (!topics || typeof topics !== "object" || Array.isArray(topics)) {
+        continue;
+      }
+      const topicsRecord = topics as Record<string, unknown>;
+      for (const topicId of Object.keys(topicsRecord)) {
+        const topic = topicsRecord[topicId];
+        if (!topic || typeof topic !== "object" || Array.isArray(topic)) {
+          continue;
+        }
+        scanList(
+          `${prefix}.groups.${groupId}.topics.${topicId}.allowFrom`,
+          (topic as Record<string, unknown>).allowFrom,
+        );
+      }
+    }
+  };
+
+  scanAccount("channels.telegram", telegram as unknown as Record<string, unknown>);
+
+  const accounts = telegram.accounts;
+  if (!accounts || typeof accounts !== "object" || Array.isArray(accounts)) {
+    return hits;
+  }
+  for (const key of Object.keys(accounts)) {
+    const account = accounts[key];
+    if (!account || typeof account !== "object" || Array.isArray(account)) {
+      continue;
+    }
+    scanAccount(`channels.telegram.accounts.${key}`, account as Record<string, unknown>);
+  }
+
+  return hits;
+}
+
+async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig): Promise<{
+  config: OpenClawConfig;
+  changes: string[];
+}> {
+  const hits = scanTelegramAllowFromUsernameEntries(cfg);
+  if (hits.length === 0) {
+    return { config: cfg, changes: [] };
+  }
+
+  const tokens = Array.from(
+    new Set(
+      listTelegramAccountIds(cfg)
+        .map((accountId) => resolveTelegramAccount({ cfg, accountId }))
+        .map((account) => (account.tokenSource === "none" ? "" : account.token))
+        .map((token) => token.trim())
+        .filter(Boolean),
+    ),
+  );
+
+  if (tokens.length === 0) {
+    return {
+      config: cfg,
+      changes: [
+        `- Telegram allowFrom contains @username entries, but no Telegram bot token is configured; cannot auto-resolve (run onboarding or replace with numeric sender IDs).`,
+      ],
+    };
+  }
+
+  const resolveUserId = async (raw: string): Promise<string | null> => {
+    const trimmed = raw.trim();
+    if (!trimmed) {
+      return null;
+    }
+    const stripped = normalizeTelegramAllowFromEntry(trimmed);
+    if (!stripped || stripped === "*") {
+      return null;
+    }
+    if (isNumericTelegramUserId(stripped)) {
+      return stripped;
+    }
+    if (/\s/.test(stripped)) {
+      return null;
+    }
+    const username = stripped.startsWith("@") ? stripped : `@${stripped}`;
+    for (const token of tokens) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 4000);
+      try {
+        const url = `https://api.telegram.org/bot${token}/getChat?chat_id=${encodeURIComponent(username)}`;
+        const res = await fetch(url, { signal: controller.signal }).catch(() => null);
+        if (!res || !res.ok) {
+          continue;
+        }
+        const data = (await res.json().catch(() => null)) as {
+          ok?: boolean;
+          result?: { id?: number | string };
+        } | null;
+        const id = data?.ok ? data?.result?.id : undefined;
+        if (typeof id === "number" || typeof id === "string") {
+          return String(id);
+        }
+      } catch {
+        // ignore and try next token
+      } finally {
+        clearTimeout(timeout);
+      }
+    }
+    return null;
+  };
+
+  const changes: string[] = [];
+  const next = structuredClone(cfg);
+
+  const repairList = async (pathLabel: string, holder: Record<string, unknown>, key: string) => {
+    const raw = holder[key];
+    if (!Array.isArray(raw)) {
+      return;
+    }
+    const out: Array<string | number> = [];
+    const replaced: Array<{ from: string; to: string }> = [];
+    for (const entry of raw) {
+      const normalized = normalizeTelegramAllowFromEntry(entry);
+      if (!normalized) {
+        continue;
+      }
+      if (normalized === "*") {
+        out.push("*");
+        continue;
+      }
+      if (isNumericTelegramUserId(normalized)) {
+        out.push(normalized);
+        continue;
+      }
+      const resolved = await resolveUserId(String(entry));
+      if (resolved) {
+        out.push(resolved);
+        replaced.push({ from: String(entry).trim(), to: resolved });
+      } else {
+        out.push(String(entry).trim());
+      }
+    }
+    const deduped: Array<string | number> = [];
+    const seen = new Set<string>();
+    for (const entry of out) {
+      const k = String(entry).trim();
+      if (!k || seen.has(k)) {
+        continue;
+      }
+      seen.add(k);
+      deduped.push(entry);
+    }
+    holder[key] = deduped;
+    if (replaced.length > 0) {
+      for (const rep of replaced.slice(0, 5)) {
+        changes.push(`- ${pathLabel}: resolved ${rep.from} -> ${rep.to}`);
+      }
+      if (replaced.length > 5) {
+        changes.push(`- ${pathLabel}: resolved ${replaced.length - 5} more @username entries`);
+      }
+    }
+  };
+
+  const repairAccount = async (prefix: string, account: Record<string, unknown>) => {
+    await repairList(`${prefix}.allowFrom`, account, "allowFrom");
+    await repairList(`${prefix}.groupAllowFrom`, account, "groupAllowFrom");
+    const groups = account.groups;
+    if (!groups || typeof groups !== "object" || Array.isArray(groups)) {
+      return;
+    }
+    const groupsRecord = groups as Record<string, unknown>;
+    for (const groupId of Object.keys(groupsRecord)) {
+      const group = groupsRecord[groupId];
+      if (!group || typeof group !== "object" || Array.isArray(group)) {
+        continue;
+      }
+      const groupRec = group as Record<string, unknown>;
+      await repairList(`${prefix}.groups.${groupId}.allowFrom`, groupRec, "allowFrom");
+      const topics = groupRec.topics;
+      if (!topics || typeof topics !== "object" || Array.isArray(topics)) {
+        continue;
+      }
+      const topicsRecord = topics as Record<string, unknown>;
+      for (const topicId of Object.keys(topicsRecord)) {
+        const topic = topicsRecord[topicId];
+        if (!topic || typeof topic !== "object" || Array.isArray(topic)) {
+          continue;
+        }
+        await repairList(
+          `${prefix}.groups.${groupId}.topics.${topicId}.allowFrom`,
+          topic as Record<string, unknown>,
+          "allowFrom",
+        );
+      }
+    }
+  };
+
+  const telegram = next.channels?.telegram;
+  if (telegram && typeof telegram === "object" && !Array.isArray(telegram)) {
+    await repairAccount("channels.telegram", telegram as unknown as Record<string, unknown>);
+    const accounts = (telegram as Record<string, unknown>).accounts;
+    if (accounts && typeof accounts === "object" && !Array.isArray(accounts)) {
+      for (const key of Object.keys(accounts as Record<string, unknown>)) {
+        const account = (accounts as Record<string, unknown>)[key];
+        if (!account || typeof account !== "object" || Array.isArray(account)) {
+          continue;
+        }
+        await repairAccount(
+          `channels.telegram.accounts.${key}`,
+          account as Record<string, unknown>,
+        );
+      }
+    }
+  }
+
+  if (changes.length === 0) {
+    return { config: cfg, changes: [] };
+  }
+  return { config: next, changes };
+}
+
 async function maybeMigrateLegacyConfig(): Promise<string[]> {
   const changes: string[] = [];
   const home = resolveHomeDir();
@@ -160,7 +428,6 @@ async function maybeMigrateLegacyConfig(): Promise<string[]> {
 
   const legacyCandidates = [
     path.join(home, ".clawdbot", "clawdbot.json"),
-    path.join(home, ".moltbot", "moltbot.json"),
     path.join(home, ".moldbot", "moldbot.json"),
   ];
 
@@ -269,6 +536,27 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       cfg = autoEnable.config;
     } else {
       fixHints.push(`Run "${formatCliCommand("openclaw doctor --fix")}" to apply these changes.`);
+    }
+  }
+
+  if (shouldRepair) {
+    const repair = await maybeRepairTelegramAllowFromUsernames(candidate);
+    if (repair.changes.length > 0) {
+      note(repair.changes.join("\n"), "Doctor changes");
+      candidate = repair.config;
+      pendingChanges = true;
+      cfg = repair.config;
+    }
+  } else {
+    const hits = scanTelegramAllowFromUsernameEntries(candidate);
+    if (hits.length > 0) {
+      note(
+        [
+          `- Telegram allowFrom contains ${hits.length} non-numeric entries (e.g. ${hits[0]?.entry ?? "@"}); Telegram authorization requires numeric sender IDs.`,
+          `- Run "${formatCliCommand("openclaw doctor --fix")}" to auto-resolve @username entries to numeric IDs (requires a Telegram bot token).`,
+        ].join("\n"),
+        "Doctor warnings",
+      );
     }
   }
 

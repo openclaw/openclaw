@@ -1,6 +1,10 @@
+import fs from "node:fs/promises";
 import { type AddressInfo, createServer } from "node:net";
+import os from "node:os";
+import path from "node:path";
 import { fetch as realFetch } from "undici";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_UPLOAD_DIR } from "./paths.js";
 
 let testPort = 0;
 let cdpBaseUrl = "";
@@ -49,6 +53,7 @@ const pwMocks = vi.hoisted(() => ({
   selectOptionViaPlaywright: vi.fn(async () => {}),
   setInputFilesViaPlaywright: vi.fn(async () => {}),
   snapshotAiViaPlaywright: vi.fn(async () => ({ snapshot: "ok" })),
+  traceStopViaPlaywright: vi.fn(async () => {}),
   takeScreenshotViaPlaywright: vi.fn(async () => ({
     buffer: Buffer.from("png"),
   })),
@@ -60,6 +65,16 @@ const pwMocks = vi.hoisted(() => ({
   })),
   waitForViaPlaywright: vi.fn(async () => {}),
 }));
+
+const chromeUserDataDir = vi.hoisted(() => ({ dir: "/tmp/openclaw" }));
+
+beforeAll(async () => {
+  chromeUserDataDir.dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-chrome-user-data-"));
+});
+
+afterAll(async () => {
+  await fs.rm(chromeUserDataDir.dir, { recursive: true, force: true });
+});
 
 function makeProc(pid = 123) {
   const handlers = new Map<string, Array<(...args: unknown[]) => void>>();
@@ -115,13 +130,13 @@ vi.mock("./chrome.js", () => ({
     return {
       pid: 123,
       exe: { kind: "chrome", path: "/fake/chrome" },
-      userDataDir: "/tmp/openclaw",
+      userDataDir: chromeUserDataDir.dir,
       cdpPort: profile.cdpPort,
       startedAt: Date.now(),
       proc,
     };
   }),
-  resolveOpenClawUserDataDir: vi.fn(() => "/tmp/openclaw"),
+  resolveOpenClawUserDataDir: vi.fn(() => chromeUserDataDir.dir),
   stopOpenClawChrome: vi.fn(async () => {
     reachable = false;
   }),
@@ -154,6 +169,9 @@ vi.mock("./screenshot.js", () => ({
     contentType: "image/png",
   })),
 }));
+
+const { startBrowserControlServerFromConfig, stopBrowserControlServer } =
+  await import("./server.js");
 
 async function getFreePort(): Promise<number> {
   while (true) {
@@ -273,12 +291,10 @@ describe("browser control server", () => {
     } else {
       process.env.OPENCLAW_GATEWAY_PORT = prevGatewayPort;
     }
-    const { stopBrowserControlServer } = await import("./server.js");
     await stopBrowserControlServer();
   });
 
   const startServerAndBase = async () => {
-    const { startBrowserControlServerFromConfig } = await import("./server.js");
     await startBrowserControlServerFromConfig();
     const base = `http://127.0.0.1:${testPort}`;
     await realFetch(`${base}/start`, { method: "POST" }).then((r) => r.json());
@@ -398,31 +414,32 @@ describe("browser control server", () => {
     const base = await startServerAndBase();
 
     const upload = await postJson(`${base}/hooks/file-chooser`, {
-      paths: ["/tmp/a.txt"],
+      paths: ["a.txt"],
       timeoutMs: 1234,
     });
     expect(upload).toMatchObject({ ok: true });
     expect(pwMocks.armFileUploadViaPlaywright).toHaveBeenCalledWith({
       cdpUrl: cdpBaseUrl,
       targetId: "abcd1234",
-      paths: ["/tmp/a.txt"],
+      // The server resolves paths (which adds a drive letter on Windows for `\\tmp\\...` style roots).
+      paths: [path.resolve(DEFAULT_UPLOAD_DIR, "a.txt")],
       timeoutMs: 1234,
     });
 
     const uploadWithRef = await postJson(`${base}/hooks/file-chooser`, {
-      paths: ["/tmp/b.txt"],
+      paths: ["b.txt"],
       ref: "e12",
     });
     expect(uploadWithRef).toMatchObject({ ok: true });
 
     const uploadWithInputRef = await postJson(`${base}/hooks/file-chooser`, {
-      paths: ["/tmp/c.txt"],
+      paths: ["c.txt"],
       inputRef: "e99",
     });
     expect(uploadWithInputRef).toMatchObject({ ok: true });
 
     const uploadWithElement = await postJson(`${base}/hooks/file-chooser`, {
-      paths: ["/tmp/d.txt"],
+      paths: ["d.txt"],
       element: "input[type=file]",
     });
     expect(uploadWithElement).toMatchObject({ ok: true });
@@ -434,14 +451,14 @@ describe("browser control server", () => {
     expect(dialog).toMatchObject({ ok: true });
 
     const waitDownload = await postJson(`${base}/wait/download`, {
-      path: "/tmp/report.pdf",
+      path: "report.pdf",
       timeoutMs: 1111,
     });
     expect(waitDownload).toMatchObject({ ok: true });
 
     const download = await postJson(`${base}/download`, {
       ref: "e12",
-      path: "/tmp/report.pdf",
+      path: "report.pdf",
     });
     expect(download).toMatchObject({ ok: true });
 
@@ -479,5 +496,84 @@ describe("browser control server", () => {
     }).then((r) => r.json())) as { ok: boolean; stopped?: boolean };
     expect(stopped.ok).toBe(true);
     expect(stopped.stopped).toBe(true);
+  });
+
+  it("trace stop rejects traversal path outside trace dir", async () => {
+    const base = await startServerAndBase();
+    const res = await postJson<{ error?: string }>(`${base}/trace/stop`, {
+      path: "../../pwned.zip",
+    });
+    expect(res.error).toContain("Invalid path");
+    expect(pwMocks.traceStopViaPlaywright).not.toHaveBeenCalled();
+  });
+
+  it("trace stop accepts in-root relative output path", async () => {
+    const base = await startServerAndBase();
+    const res = await postJson<{ ok?: boolean; path?: string }>(`${base}/trace/stop`, {
+      path: "safe-trace.zip",
+    });
+    expect(res.ok).toBe(true);
+    expect(res.path).toContain("safe-trace.zip");
+    expect(pwMocks.traceStopViaPlaywright).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cdpUrl: cdpBaseUrl,
+        targetId: "abcd1234",
+        path: expect.stringContaining("safe-trace.zip"),
+      }),
+    );
+  });
+
+  it("wait/download rejects traversal path outside downloads dir", async () => {
+    const base = await startServerAndBase();
+    const waitRes = await postJson<{ error?: string }>(`${base}/wait/download`, {
+      path: "../../pwned.pdf",
+    });
+    expect(waitRes.error).toContain("Invalid path");
+    expect(pwMocks.waitForDownloadViaPlaywright).not.toHaveBeenCalled();
+  });
+
+  it("download rejects traversal path outside downloads dir", async () => {
+    const base = await startServerAndBase();
+    const downloadRes = await postJson<{ error?: string }>(`${base}/download`, {
+      ref: "e12",
+      path: "../../pwned.pdf",
+    });
+    expect(downloadRes.error).toContain("Invalid path");
+    expect(pwMocks.downloadViaPlaywright).not.toHaveBeenCalled();
+  });
+
+  it("wait/download accepts in-root relative output path", async () => {
+    const base = await startServerAndBase();
+    const res = await postJson<{ ok?: boolean; download?: { path?: string } }>(
+      `${base}/wait/download`,
+      {
+        path: "safe-wait.pdf",
+      },
+    );
+    expect(res.ok).toBe(true);
+    expect(pwMocks.waitForDownloadViaPlaywright).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cdpUrl: cdpBaseUrl,
+        targetId: "abcd1234",
+        path: expect.stringContaining("safe-wait.pdf"),
+      }),
+    );
+  });
+
+  it("download accepts in-root relative output path", async () => {
+    const base = await startServerAndBase();
+    const res = await postJson<{ ok?: boolean; download?: { path?: string } }>(`${base}/download`, {
+      ref: "e12",
+      path: "safe-download.pdf",
+    });
+    expect(res.ok).toBe(true);
+    expect(pwMocks.downloadViaPlaywright).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cdpUrl: cdpBaseUrl,
+        targetId: "abcd1234",
+        ref: "e12",
+        path: expect.stringContaining("safe-download.pdf"),
+      }),
+    );
   });
 });

@@ -41,6 +41,11 @@ import { normalizeAgentId, toAgentStoreSessionKey } from "../routing/session-key
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { formatErrorMessage } from "./errors.js";
 import { isWithinActiveHours } from "./heartbeat-active-hours.js";
+import {
+  buildCronEventPrompt,
+  isCronSystemEvent,
+  isExecCompletionEvent,
+} from "./heartbeat-events-filter.js";
 import { emitHeartbeatEvent, resolveIndicatorType } from "./heartbeat-events.js";
 import { resolveHeartbeatVisibility } from "./heartbeat-visibility.js";
 import {
@@ -95,67 +100,7 @@ const EXEC_EVENT_PROMPT =
   "An async command you ran earlier has completed. The result is shown in the system messages above. " +
   "Please relay the command output to the user in a helpful way. If the command succeeded, share the relevant output. " +
   "If it failed, explain what went wrong.";
-
-// Build a dynamic prompt for cron events by embedding the actual event content.
-// This ensures the model sees the reminder text directly instead of relying on
-// "shown in the system messages above" which may not be visible in context.
-function buildCronEventPrompt(pendingEvents: string[]): string {
-  const eventText = pendingEvents.join("\n").trim();
-  if (!eventText) {
-    return (
-      "A scheduled cron event was triggered, but no event content was found. " +
-      "Reply HEARTBEAT_OK."
-    );
-  }
-  return (
-    "A scheduled reminder has been triggered. The reminder content is:\n\n" +
-    eventText +
-    "\n\nPlease relay this reminder to the user in a helpful and friendly way."
-  );
-}
-
-const HEARTBEAT_OK_PREFIX = HEARTBEAT_TOKEN.toLowerCase();
-
-// Detect heartbeat-specific noise so cron reminders don't trigger on non-reminder events.
-function isHeartbeatAckEvent(evt: string): boolean {
-  const trimmed = evt.trim();
-  if (!trimmed) {
-    return false;
-  }
-  const lower = trimmed.toLowerCase();
-  if (!lower.startsWith(HEARTBEAT_OK_PREFIX)) {
-    return false;
-  }
-  const suffix = lower.slice(HEARTBEAT_OK_PREFIX.length);
-  if (suffix.length === 0) {
-    return true;
-  }
-  return !/[a-z0-9_]/.test(suffix[0]);
-}
-
-function isHeartbeatNoiseEvent(evt: string): boolean {
-  const lower = evt.trim().toLowerCase();
-  if (!lower) {
-    return false;
-  }
-  return (
-    isHeartbeatAckEvent(lower) ||
-    lower.includes("heartbeat poll") ||
-    lower.includes("heartbeat wake")
-  );
-}
-
-function isExecCompletionEvent(evt: string): boolean {
-  return evt.toLowerCase().includes("exec finished");
-}
-
-// Returns true when a system event should be treated as real cron reminder content.
-export function isCronSystemEvent(evt: string) {
-  if (!evt.trim()) {
-    return false;
-  }
-  return !isHeartbeatNoiseEvent(evt) && !isExecCompletionEvent(evt);
-}
+export { isCronSystemEvent };
 
 type HeartbeatAgentState = {
   agentId: string;
@@ -481,10 +426,11 @@ export async function runHeartbeatOnce(opts: {
 
   // Skip heartbeat if HEARTBEAT.md exists but has no actionable content.
   // This saves API calls/costs when the file is effectively empty (only comments/headers).
-  // EXCEPTION: Don't skip for exec events or cron events - they have pending system events
-  // to process regardless of HEARTBEAT.md content.
+  // EXCEPTION: Don't skip for exec events, cron events, or explicit wake requests -
+  // they have pending system events to process regardless of HEARTBEAT.md content.
   const isExecEventReason = opts.reason === "exec-event";
   const isCronEventReason = Boolean(opts.reason?.startsWith("cron:"));
+  const isWakeReason = opts.reason === "wake" || Boolean(opts.reason?.startsWith("hook:"));
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
   const heartbeatFilePath = path.join(workspaceDir, DEFAULT_HEARTBEAT_FILENAME);
   try {
@@ -492,7 +438,8 @@ export async function runHeartbeatOnce(opts: {
     if (
       isHeartbeatContentEffectivelyEmpty(heartbeatFileContent) &&
       !isExecEventReason &&
-      !isCronEventReason
+      !isCronEventReason &&
+      !isWakeReason
     ) {
       emitHeartbeatEvent({
         status: "skipped",

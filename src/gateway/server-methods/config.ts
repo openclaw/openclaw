@@ -6,6 +6,7 @@ import {
   loadConfig,
   parseConfigJson5,
   readConfigFileSnapshot,
+  readConfigFileSnapshotForWrite,
   resolveConfigSnapshotHash,
   validateConfigObjectWithPlugins,
   writeConfigFile,
@@ -18,6 +19,7 @@ import {
   restoreRedactedValues,
 } from "../../config/redact-snapshot.js";
 import { buildConfigSchema, type ConfigSchemaResponse } from "../../config/schema.js";
+import { extractDeliveryInfo } from "../../config/sessions.js";
 import {
   formatDoctorNonInteractiveHint,
   type RestartSentinelPayload,
@@ -169,7 +171,7 @@ export const configHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const snapshot = await readConfigFileSnapshot();
+    const { snapshot, writeOptions } = await readConfigFileSnapshotForWrite();
     if (!requireConfigBaseHash(params, snapshot, respond)) {
       return;
     }
@@ -208,7 +210,7 @@ export const configHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    await writeConfigFile(validated.config);
+    await writeConfigFile(validated.config, writeOptions);
     respond(
       true,
       {
@@ -231,7 +233,7 @@ export const configHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const snapshot = await readConfigFileSnapshot();
+    const { snapshot, writeOptions } = await readConfigFileSnapshotForWrite();
     if (!requireConfigBaseHash(params, snapshot, respond)) {
       return;
     }
@@ -299,7 +301,7 @@ export const configHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    await writeConfigFile(validated.config);
+    await writeConfigFile(validated.config, writeOptions);
 
     const sessionKey =
       typeof (params as { sessionKey?: unknown }).sessionKey === "string"
@@ -315,11 +317,17 @@ export const configHandlers: GatewayRequestHandlers = {
         ? Math.max(0, Math.floor(restartDelayMsRaw))
         : undefined;
 
+    // Extract deliveryContext + threadId for routing after restart
+    // Supports both :thread: (most channels) and :topic: (Telegram)
+    const { deliveryContext, threadId } = extractDeliveryInfo(sessionKey);
+
     const payload: RestartSentinelPayload = {
-      kind: "config-apply",
+      kind: "config-patch",
       status: "ok",
       ts: Date.now(),
       sessionKey,
+      deliveryContext,
+      threadId,
       message: note ?? null,
       doctorHint: formatDoctorNonInteractiveHint(),
       stats: {
@@ -364,7 +372,7 @@ export const configHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const snapshot = await readConfigFileSnapshot();
+    const { snapshot, writeOptions } = await readConfigFileSnapshotForWrite();
     if (!requireConfigBaseHash(params, snapshot, respond)) {
       return;
     }
@@ -406,7 +414,7 @@ export const configHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    await writeConfigFile(validated.config);
+    await writeConfigFile(validated.config, writeOptions);
 
     const sessionKey =
       typeof (params as { sessionKey?: unknown }).sessionKey === "string"
@@ -422,11 +430,18 @@ export const configHandlers: GatewayRequestHandlers = {
         ? Math.max(0, Math.floor(restartDelayMsRaw))
         : undefined;
 
+    // Extract deliveryContext + threadId for routing after restart
+    // Supports both :thread: (most channels) and :topic: (Telegram)
+    const { deliveryContext: deliveryContextApply, threadId: threadIdApply } =
+      extractDeliveryInfo(sessionKey);
+
     const payload: RestartSentinelPayload = {
       kind: "config-apply",
       status: "ok",
       ts: Date.now(),
       sessionKey,
+      deliveryContext: deliveryContextApply,
+      threadId: threadIdApply,
       message: note ?? null,
       doctorHint: formatDoctorNonInteractiveHint(),
       stats: {

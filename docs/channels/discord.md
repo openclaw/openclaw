@@ -173,7 +173,7 @@ Token resolution is account-aware. Config token values win over env fallback. `D
 
 ### Role-based agent routing
 
-Use `bindings[].match.roles` to route Discord guild members to different agents by role ID. Role-based bindings accept role IDs only and are evaluated after peer or parent-peer bindings and before guild-only bindings.
+Use `bindings[].match.roles` to route Discord guild members to different agents by role ID. Role-based bindings accept role IDs only and are evaluated after peer or parent-peer bindings and before guild-only bindings. If a binding also sets other match fields (for example `peer` + `guildId` + `roles`), all configured fields must match.
 
 ```json5
 {
@@ -273,6 +273,8 @@ See [Slash commands](/tools/slash-commands) for command catalog and behavior.
     - `first`
     - `all`
 
+    Note: `off` disables implicit reply threading. Explicit `[[reply_to_*]]` tags are still honored.
+
     Message IDs are surfaced in context/history so agents can target specific messages.
 
   </Accordion>
@@ -330,6 +332,37 @@ See [Slash commands](/tools/slash-commands) for command catalog and behavior.
 
   </Accordion>
 
+  <Accordion title="Gateway proxy">
+    Route Discord gateway WebSocket traffic through an HTTP(S) proxy with `channels.discord.proxy`.
+
+```json5
+{
+  channels: {
+    discord: {
+      proxy: "http://proxy.example:8080",
+    },
+  },
+}
+```
+
+    Per-account override:
+
+```json5
+{
+  channels: {
+    discord: {
+      accounts: {
+        primary: {
+          proxy: "http://proxy.example:8080",
+        },
+      },
+    },
+  },
+}
+```
+
+  </Accordion>
+
   <Accordion title="PluralKit support">
     Enable PluralKit resolution to map proxied messages to system member identity:
 
@@ -352,6 +385,59 @@ See [Slash commands](/tools/slash-commands) for command catalog and behavior.
     - member display names are matched by name/slug
     - lookups use original message ID and are time-window constrained
     - if lookup fails, proxied messages are treated as bot messages and dropped unless `allowBots=true`
+
+  </Accordion>
+
+  <Accordion title="Presence configuration">
+    Presence updates are applied only when you set a status or activity field.
+
+    Status only example:
+
+```json5
+{
+  channels: {
+    discord: {
+      status: "idle",
+    },
+  },
+}
+```
+
+    Activity example (custom status is the default activity type):
+
+```json5
+{
+  channels: {
+    discord: {
+      activity: "Focus time",
+      activityType: 4,
+    },
+  },
+}
+```
+
+    Streaming example:
+
+```json5
+{
+  channels: {
+    discord: {
+      activity: "Live coding",
+      activityType: 1,
+      activityUrl: "https://twitch.tv/openclaw",
+    },
+  },
+}
+```
+
+    Activity type map:
+
+    - 0: Playing
+    - 1: Streaming (requires `activityUrl`)
+    - 2: Listening
+    - 3: Watching
+    - 4: Custom (uses the activity text as the status state; emoji is optional)
+    - 5: Competing
 
   </Accordion>
 
@@ -392,6 +478,22 @@ Default gate behavior:
 | roles                                                                                                                                                                    | disabled |
 | moderation                                                                                                                                                               | disabled |
 | presence                                                                                                                                                                 | disabled |
+
+## Voice messages
+
+Discord voice messages show a waveform preview and require OGG/Opus audio plus metadata. OpenClaw generates the waveform automatically, but it needs `ffmpeg` and `ffprobe` available on the gateway host to inspect and convert audio files.
+
+Requirements and constraints:
+
+- Provide a **local file path** (URLs are rejected).
+- Omit text content (Discord does not allow text + voice message in the same payload).
+- Any audio format is accepted; OpenClaw converts to OGG/Opus when needed.
+
+Example:
+
+```bash
+message(action="send", channel="discord", target="channel:123", path="/path/to/audio.mp3", asVoice=true)
+```
 
 ## Troubleshooting
 
@@ -468,6 +570,7 @@ High-signal Discord fields:
 - delivery: `textChunkLimit`, `chunkMode`, `maxLinesPerMessage`
 - media/retry: `mediaMaxMb`, `retry`
 - actions: `actions.*`
+- presence: `activity`, `status`, `activityType`, `activityUrl`
 - features: `pluralkit`, `execApprovals`, `intents`, `agentComponents`, `heartbeat`, `responsePrefix`
 
 ## Safety and operations

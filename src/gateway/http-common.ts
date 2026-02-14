@@ -58,6 +58,18 @@ export async function readJsonBodyOrError(
 ): Promise<unknown> {
   const body = await readJsonBody(req, maxBytes);
   if (!body.ok) {
+    if (body.error === "payload too large") {
+      sendJson(res, 413, {
+        error: { message: "Payload too large", type: "invalid_request_error" },
+      });
+      return undefined;
+    }
+    if (body.error === "request body timeout") {
+      sendJson(res, 408, {
+        error: { message: "Request body timeout", type: "invalid_request_error" },
+      });
+      return undefined;
+    }
     sendInvalidRequest(res, body.error);
     return undefined;
   }

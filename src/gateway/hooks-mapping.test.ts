@@ -62,24 +62,28 @@ describe("hooks mapping", () => {
   });
 
   it("runs transform module", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hooks-"));
-    const modPath = path.join(dir, "transform.mjs");
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-"));
+    const transformsRoot = path.join(configDir, "hooks", "transforms");
+    fs.mkdirSync(transformsRoot, { recursive: true });
+    const modPath = path.join(transformsRoot, "transform.mjs");
     const placeholder = "${payload.name}";
     fs.writeFileSync(
       modPath,
       `export default ({ payload }) => ({ kind: "wake", text: \`Ping ${placeholder}\` });`,
     );
 
-    const mappings = resolveHookMappings({
-      transformsDir: dir,
-      mappings: [
-        {
-          match: { path: "custom" },
-          action: "agent",
-          transform: { module: "transform.mjs" },
-        },
-      ],
-    });
+    const mappings = resolveHookMappings(
+      {
+        mappings: [
+          {
+            match: { path: "custom" },
+            action: "agent",
+            transform: { module: "transform.mjs" },
+          },
+        ],
+      },
+      { configDir },
+    );
 
     const result = await applyHookMappings(mappings, {
       payload: { name: "Ada" },
@@ -97,21 +101,141 @@ describe("hooks mapping", () => {
     }
   });
 
+  it("rejects transform module traversal outside transformsDir", () => {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-traversal-"));
+    const transformsRoot = path.join(configDir, "hooks", "transforms");
+    fs.mkdirSync(transformsRoot, { recursive: true });
+    expect(() =>
+      resolveHookMappings(
+        {
+          mappings: [
+            {
+              match: { path: "custom" },
+              action: "agent",
+              transform: { module: "../evil.mjs" },
+            },
+          ],
+        },
+        { configDir },
+      ),
+    ).toThrow(/must be within/);
+  });
+
+  it("rejects absolute transform module path outside transformsDir", () => {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-abs-"));
+    const transformsRoot = path.join(configDir, "hooks", "transforms");
+    fs.mkdirSync(transformsRoot, { recursive: true });
+    const outside = path.join(os.tmpdir(), "evil.mjs");
+    expect(() =>
+      resolveHookMappings(
+        {
+          mappings: [
+            {
+              match: { path: "custom" },
+              action: "agent",
+              transform: { module: outside },
+            },
+          ],
+        },
+        { configDir },
+      ),
+    ).toThrow(/must be within/);
+  });
+
+  it("rejects transformsDir traversal outside the transforms root", () => {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-xformdir-trav-"));
+    const transformsRoot = path.join(configDir, "hooks", "transforms");
+    fs.mkdirSync(transformsRoot, { recursive: true });
+    expect(() =>
+      resolveHookMappings(
+        {
+          transformsDir: "..",
+          mappings: [
+            {
+              match: { path: "custom" },
+              action: "agent",
+              transform: { module: "transform.mjs" },
+            },
+          ],
+        },
+        { configDir },
+      ),
+    ).toThrow(/Hook transformsDir/);
+  });
+
+  it("rejects transformsDir absolute path outside the transforms root", () => {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-xformdir-abs-"));
+    const transformsRoot = path.join(configDir, "hooks", "transforms");
+    fs.mkdirSync(transformsRoot, { recursive: true });
+    expect(() =>
+      resolveHookMappings(
+        {
+          transformsDir: os.tmpdir(),
+          mappings: [
+            {
+              match: { path: "custom" },
+              action: "agent",
+              transform: { module: "transform.mjs" },
+            },
+          ],
+        },
+        { configDir },
+      ),
+    ).toThrow(/Hook transformsDir/);
+  });
+
+  it("accepts transformsDir subdirectory within the transforms root", async () => {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-xformdir-ok-"));
+    const transformsSubdir = path.join(configDir, "hooks", "transforms", "subdir");
+    fs.mkdirSync(transformsSubdir, { recursive: true });
+    fs.writeFileSync(path.join(transformsSubdir, "transform.mjs"), "export default () => null;");
+
+    const mappings = resolveHookMappings(
+      {
+        transformsDir: "subdir",
+        mappings: [
+          {
+            match: { path: "skip" },
+            action: "agent",
+            transform: { module: "transform.mjs" },
+          },
+        ],
+      },
+      { configDir },
+    );
+
+    const result = await applyHookMappings(mappings, {
+      payload: {},
+      headers: {},
+      url: new URL("http://127.0.0.1:18789/hooks/skip"),
+      path: "skip",
+    });
+
+    expect(result?.ok).toBe(true);
+    if (result?.ok) {
+      expect(result.action).toBeNull();
+      expect("skipped" in result).toBe(true);
+    }
+  });
   it("treats null transform as a handled skip", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hooks-skip-"));
-    const modPath = path.join(dir, "transform.mjs");
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-skip-"));
+    const transformsRoot = path.join(configDir, "hooks", "transforms");
+    fs.mkdirSync(transformsRoot, { recursive: true });
+    const modPath = path.join(transformsRoot, "transform.mjs");
     fs.writeFileSync(modPath, "export default () => null;");
 
-    const mappings = resolveHookMappings({
-      transformsDir: dir,
-      mappings: [
-        {
-          match: { path: "skip" },
-          action: "agent",
-          transform: { module: "transform.mjs" },
-        },
-      ],
-    });
+    const mappings = resolveHookMappings(
+      {
+        mappings: [
+          {
+            match: { path: "skip" },
+            action: "agent",
+            transform: { module: "transform.mjs" },
+          },
+        ],
+      },
+      { configDir },
+    );
 
     const result = await applyHookMappings(mappings, {
       payload: {},

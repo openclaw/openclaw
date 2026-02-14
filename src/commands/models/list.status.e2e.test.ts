@@ -115,7 +115,7 @@ vi.mock("../../config/config.js", async (importOriginal) => {
   };
 });
 
-import { modelsStatusCommand } from "./list.js";
+import { modelsStatusCommand } from "./list.status-command.js";
 
 const runtime = {
   log: vi.fn(),

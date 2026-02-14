@@ -59,9 +59,11 @@ vi.mock("../infra/exec-approvals.js", async () => {
   };
 });
 
+const { registerExecApprovalsCli } = await import("./exec-approvals-cli.js");
+const execApprovals = await import("../infra/exec-approvals.js");
+
 describe("exec approvals CLI", () => {
-  const createProgram = async () => {
-    const { registerExecApprovalsCli } = await import("./exec-approvals-cli.js");
+  const createProgram = () => {
     const program = new Command();
     program.exitOverride();
     registerExecApprovalsCli(program);
@@ -73,21 +75,21 @@ describe("exec approvals CLI", () => {
     runtimeErrors.length = 0;
     callGatewayFromCli.mockClear();
 
-    const localProgram = await createProgram();
+    const localProgram = createProgram();
     await localProgram.parseAsync(["approvals", "get"], { from: "user" });
 
     expect(callGatewayFromCli).not.toHaveBeenCalled();
     expect(runtimeErrors).toHaveLength(0);
     callGatewayFromCli.mockClear();
 
-    const gatewayProgram = await createProgram();
+    const gatewayProgram = createProgram();
     await gatewayProgram.parseAsync(["approvals", "get", "--gateway"], { from: "user" });
 
     expect(callGatewayFromCli).toHaveBeenCalledWith("exec.approvals.get", expect.anything(), {});
     expect(runtimeErrors).toHaveLength(0);
     callGatewayFromCli.mockClear();
 
-    const nodeProgram = await createProgram();
+    const nodeProgram = createProgram();
     await nodeProgram.parseAsync(["approvals", "get", "--node", "macbook"], { from: "user" });
 
     expect(callGatewayFromCli).toHaveBeenCalledWith("exec.approvals.node.get", expect.anything(), {
@@ -101,11 +103,9 @@ describe("exec approvals CLI", () => {
     runtimeErrors.length = 0;
     callGatewayFromCli.mockClear();
 
-    const execApprovals = await import("../infra/exec-approvals.js");
     const saveExecApprovals = vi.mocked(execApprovals.saveExecApprovals);
     saveExecApprovals.mockClear();
 
-    const { registerExecApprovalsCli } = await import("./exec-approvals-cli.js");
     const program = new Command();
     program.exitOverride();
     registerExecApprovalsCli(program);

@@ -2,9 +2,24 @@ import { describe, expect, it } from "vitest";
 import "./test-helpers/fast-coding-tools.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SandboxDockerConfig } from "./sandbox.js";
+import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import { createOpenClawCodingTools } from "./pi-tools.js";
 
 describe("Agent-specific tool filtering", () => {
+  const sandboxFsBridgeStub: SandboxFsBridge = {
+    resolvePath: () => ({
+      hostPath: "/tmp/sandbox",
+      relativePath: "",
+      containerPath: "/workspace",
+    }),
+    readFile: async () => Buffer.from(""),
+    writeFile: async () => {},
+    mkdirp: async () => {},
+    remove: async () => {},
+    rename: async () => {},
+    stat: async () => null,
+  };
+
   it("should apply global tool policy when no agent-specific policy exists", () => {
     const cfg: OpenClawConfig = {
       tools: {
@@ -483,6 +498,7 @@ describe("Agent-specific tool filtering", () => {
           allow: ["read", "write", "exec"],
           deny: [],
         },
+        fsBridge: sandboxFsBridgeStub,
         browserAllowHostControl: false,
       },
     });
@@ -518,5 +534,60 @@ describe("Agent-specific tool filtering", () => {
     });
 
     expect(result?.details.status).toBe("completed");
+  });
+
+  it("should apply agent-specific exec host defaults over global defaults", async () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        exec: {
+          host: "sandbox",
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "main",
+            tools: {
+              exec: {
+                host: "gateway",
+              },
+            },
+          },
+          {
+            id: "helper",
+          },
+        ],
+      },
+    };
+
+    const mainTools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey: "agent:main:main",
+      workspaceDir: "/tmp/test-main-exec-defaults",
+      agentDir: "/tmp/agent-main-exec-defaults",
+    });
+    const mainExecTool = mainTools.find((tool) => tool.name === "exec");
+    expect(mainExecTool).toBeDefined();
+    await expect(
+      mainExecTool!.execute("call-main", {
+        command: "echo done",
+        host: "sandbox",
+      }),
+    ).rejects.toThrow("exec host not allowed");
+
+    const helperTools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey: "agent:helper:main",
+      workspaceDir: "/tmp/test-helper-exec-defaults",
+      agentDir: "/tmp/agent-helper-exec-defaults",
+    });
+    const helperExecTool = helperTools.find((tool) => tool.name === "exec");
+    expect(helperExecTool).toBeDefined();
+    const helperResult = await helperExecTool!.execute("call-helper", {
+      command: "echo done",
+      host: "sandbox",
+      yieldMs: 10,
+    });
+    expect(helperResult?.details.status).toBe("completed");
   });
 });

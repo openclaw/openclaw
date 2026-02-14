@@ -294,7 +294,9 @@ export async function resolveDiscordAutoThreadReplyPlan(params: {
   agentId: string;
   channel: string;
 }): Promise<DiscordAutoThreadReplyPlan> {
-  const originalReplyTarget = `channel:${params.message.channelId}`;
+  // Prefer the resolved thread channel ID when available so replies stay in-thread.
+  const targetChannelId = params.threadChannel?.id ?? params.message.channelId;
+  const originalReplyTarget = `channel:${targetChannelId}`;
   const createdThreadId = await maybeCreateDiscordAutoThread({
     client: params.client,
     message: params.message,
@@ -358,8 +360,24 @@ export async function maybeCreateDiscordAutoThread(params: {
     return createdId || undefined;
   } catch (err) {
     logVerbose(
-      `discord: autoThread failed for ${params.message.channelId}/${params.message.id}: ${String(err)}`,
+      `discord: autoThread creation failed for ${params.message.channelId}/${params.message.id}: ${String(err)}`,
     );
+    // Race condition: another agent may have already created a thread on this
+    // message. Re-fetch the message to check for an existing thread.
+    try {
+      const msg = (await params.client.rest.get(
+        Routes.channelMessage(params.message.channelId, params.message.id),
+      )) as { thread?: { id?: string } };
+      const existingThreadId = msg?.thread?.id ? String(msg.thread.id) : "";
+      if (existingThreadId) {
+        logVerbose(
+          `discord: autoThread reusing existing thread ${existingThreadId} on ${params.message.channelId}/${params.message.id}`,
+        );
+        return existingThreadId;
+      }
+    } catch {
+      // If the refetch also fails, fall through to return undefined.
+    }
     return undefined;
   }
 }
@@ -374,6 +392,8 @@ export function resolveDiscordReplyDeliveryPlan(params: {
   const originalReplyTarget = params.replyTarget;
   let deliverTarget = originalReplyTarget;
   let replyTarget = originalReplyTarget;
+
+  // When a new thread was created, route to the new thread.
   if (params.createdThreadId) {
     deliverTarget = `channel:${params.createdThreadId}`;
     replyTarget = deliverTarget;
