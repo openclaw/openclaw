@@ -15,6 +15,22 @@ import { detectTextDirection } from "../text-direction.ts";
 import { renderMarkdownSidebar } from "./markdown-sidebar.ts";
 import "../components/resizable-divider.ts";
 
+// Module-level state for autosuggest
+let showSlashMenu = false;
+let showAtMenu = false;
+let menuFilter = "";
+
+// Slash commands
+const SLASH_COMMANDS = [
+  { cmd: "/status", desc: "Show session status" },
+  { cmd: "/clear", desc: "Clear chat history" },
+  { cmd: "/model", desc: "Change model" },
+  { cmd: "/thinking", desc: "Toggle thinking level" },
+  { cmd: "/verbose", desc: "Toggle verbose mode" },
+  { cmd: "/reasoning", desc: "Toggle reasoning" },
+  { cmd: "/help", desc: "Show available commands" },
+];
+
 export type CompactionIndicatorStatus = {
   active: boolean;
   startedAt: number | null;
@@ -76,6 +92,120 @@ const COMPACTION_TOAST_DURATION_MS = 5000;
 function adjustTextareaHeight(el: HTMLTextAreaElement) {
   el.style.height = "auto";
   el.style.height = `${el.scrollHeight}px`;
+}
+
+function renderSessionTabs(props: ChatProps) {
+  const sessions = props.sessions?.sessions ?? [];
+  const subAgentSessions = sessions.filter((s) => s.key.includes("subagent:"));
+  
+  if (subAgentSessions.length === 0) {
+    return nothing;
+  }
+
+  const mainSessionKey = sessions.find((s) => !s.key.includes("subagent:"))?.key ?? "agent:main:main";
+  const isMainActive = props.sessionKey === mainSessionKey || !props.sessionKey.includes("subagent:");
+
+  return html`
+    <div class="chat-session-tabs">
+      <button
+        class="chat-session-chip ${isMainActive ? "active" : ""}"
+        @click=${() => props.onSessionKeyChange(mainSessionKey)}
+      >
+        main
+      </button>
+      ${subAgentSessions.map((session) => {
+        const shortName = session.key.split(":").pop() ?? session.key;
+        const isActive = props.sessionKey === session.key;
+        return html`
+          <button
+            class="chat-session-chip ${isActive ? "active" : ""}"
+            @click=${() => props.onSessionKeyChange(session.key)}
+          >
+            ${shortName}
+          </button>
+        `;
+      })}
+    </div>
+  `;
+}
+
+function renderAutosuggestMenu(props: ChatProps, textareaEl: HTMLTextAreaElement | null) {
+  if (!showSlashMenu && !showAtMenu) {
+    return nothing;
+  }
+
+  if (showSlashMenu) {
+    const filtered = SLASH_COMMANDS.filter((cmd) =>
+      cmd.cmd.toLowerCase().includes(menuFilter.toLowerCase())
+    );
+
+    if (filtered.length === 0) {
+      return nothing;
+    }
+
+    return html`
+      <div class="rpc-suggestions">
+        ${filtered.map((cmd) => html`
+          <div
+            class="rpc-suggestion"
+            @click=${() => {
+              if (textareaEl) {
+                props.onDraftChange(cmd.cmd + " ");
+                showSlashMenu = false;
+                menuFilter = "";
+                textareaEl.focus();
+              }
+            }}
+          >
+            <div class="rpc-suggestion__name">${cmd.cmd}</div>
+            <div class="rpc-suggestion__desc">${cmd.desc}</div>
+          </div>
+        `)}
+      </div>
+    `;
+  }
+
+  if (showAtMenu) {
+    const sessions = props.sessions?.sessions ?? [];
+    const subAgents = sessions.filter((s) => s.key.includes("subagent:"));
+    
+    if (subAgents.length === 0) {
+      return nothing;
+    }
+
+    const filtered = subAgents.filter((s) =>
+      s.key.toLowerCase().includes(menuFilter.toLowerCase())
+    );
+
+    return html`
+      <div class="rpc-suggestions">
+        ${filtered.map((session) => {
+          const shortName = session.key.split(":").pop() ?? session.key;
+          return html`
+            <div
+              class="rpc-suggestion"
+              @click=${() => {
+                if (textareaEl) {
+                  const cursorPos = textareaEl.selectionStart;
+                  const text = props.draft;
+                  const beforeAt = text.lastIndexOf("@", cursorPos - 1);
+                  const newText = text.substring(0, beforeAt) + `@${shortName} ` + text.substring(cursorPos);
+                  props.onDraftChange(newText);
+                  showAtMenu = false;
+                  menuFilter = "";
+                  textareaEl.focus();
+                }
+              }}
+            >
+              <div class="rpc-suggestion__name">@${shortName}</div>
+            </div>
+          `;
+        })}
+      </div>
+    `;
+  }
+
+  return nothing;
 }
 
 function renderCompactionIndicator(status: CompactionIndicatorStatus | null | undefined) {
@@ -285,6 +415,8 @@ export function renderChat(props: ChatProps) {
           : nothing
       }
 
+      ${renderSessionTabs(props)}
+
       <div
         class="chat-split-container ${sidebarOpen ? "chat-split-container--open" : ""}"
       >
@@ -374,11 +506,40 @@ export function renderChat(props: ChatProps) {
           <label class="field chat-compose__field">
             <span>Message</span>
             <textarea
-              ${ref((el) => el && adjustTextareaHeight(el as HTMLTextAreaElement))}
+              ${ref((el) => {
+                if (el) {
+                  adjustTextareaHeight(el as HTMLTextAreaElement);
+                  (el as any)._textareaRef = el;
+                }
+              })}
               .value=${props.draft}
               dir=${detectTextDirection(props.draft)}
               ?disabled=${!props.connected}
               @keydown=${(e: KeyboardEvent) => {
+                const target = e.target as HTMLTextAreaElement;
+                
+                // Tab completion for autosuggest
+                if (e.key === "Tab" && (showSlashMenu || showAtMenu)) {
+                  e.preventDefault();
+                  const firstSuggestion = showSlashMenu 
+                    ? SLASH_COMMANDS.filter((cmd) => cmd.cmd.toLowerCase().includes(menuFilter.toLowerCase()))[0]
+                    : null;
+                  if (firstSuggestion && showSlashMenu) {
+                    props.onDraftChange(firstSuggestion.cmd + " ");
+                    showSlashMenu = false;
+                    menuFilter = "";
+                  }
+                  return;
+                }
+
+                // Escape closes menu
+                if (e.key === "Escape" && (showSlashMenu || showAtMenu)) {
+                  showSlashMenu = false;
+                  showAtMenu = false;
+                  menuFilter = "";
+                  return;
+                }
+
                 if (e.key !== "Enter") {
                   return;
                 }
@@ -399,26 +560,55 @@ export function renderChat(props: ChatProps) {
               @input=${(e: Event) => {
                 const target = e.target as HTMLTextAreaElement;
                 adjustTextareaHeight(target);
-                props.onDraftChange(target.value);
+                const newValue = target.value;
+                props.onDraftChange(newValue);
+
+                // Detect slash command
+                if (newValue.startsWith("/")) {
+                  showSlashMenu = true;
+                  showAtMenu = false;
+                  menuFilter = newValue.substring(1);
+                } else {
+                  showSlashMenu = false;
+                }
+
+                // Detect @ mention
+                const cursorPos = target.selectionStart;
+                const textBeforeCursor = newValue.substring(0, cursorPos);
+                const lastAtIndex = textBeforeCursor.lastIndexOf("@");
+                
+                if (lastAtIndex !== -1) {
+                  const afterAt = textBeforeCursor.substring(lastAtIndex + 1);
+                  if (!afterAt.includes(" ")) {
+                    showAtMenu = true;
+                    showSlashMenu = false;
+                    menuFilter = afterAt;
+                  } else {
+                    showAtMenu = false;
+                  }
+                } else {
+                  showAtMenu = false;
+                }
               }}
               @paste=${(e: ClipboardEvent) => handlePaste(e, props)}
               placeholder=${composePlaceholder}
             ></textarea>
+            ${renderAutosuggestMenu(props, (document.querySelector(".chat-compose__field textarea") as HTMLTextAreaElement))}
           </label>
           <div class="chat-compose__actions">
-            <button
-              class="btn"
-              ?disabled=${!props.connected || (!canAbort && props.sending)}
-              @click=${canAbort ? props.onAbort : props.onNewSession}
-            >
-              ${canAbort ? "Stop" : "New session"}
-            </button>
             <button
               class="btn primary"
               ?disabled=${!props.connected}
               @click=${props.onSend}
             >
               ${isBusy ? "Queue" : "Send"}<kbd class="btn-kbd">↵</kbd>
+            </button>
+            <button
+              class="btn"
+              ?disabled=${!props.connected || (!canAbort && props.sending)}
+              @click=${canAbort ? props.onAbort : props.onNewSession}
+            >
+              ${canAbort ? "Stop" : "New session"}
             </button>
           </div>
         </div>

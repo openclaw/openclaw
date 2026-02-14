@@ -12,6 +12,7 @@ import {
 } from "./message-extract.ts";
 import { isToolResultMessage, normalizeRoleForGrouping } from "./message-normalizer.ts";
 import { extractToolCards, renderToolCardSidebar } from "./tool-cards.ts";
+import { icons } from "../icons.ts";
 
 type ImageBlock = {
   url: string;
@@ -164,7 +165,7 @@ function renderAvatar(role: string, assistant?: Pick<AssistantIdentity, "name" |
       : normalized === "assistant"
         ? assistantName.charAt(0).toUpperCase() || "A"
         : normalized === "tool"
-          ? "⚙"
+          ? html`<span class="icon-sm" style="width:14px;height:14px;">${icons.wrench}</span>`
           : "?";
   const className =
     normalized === "user"
