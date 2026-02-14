@@ -34,11 +34,29 @@ export async function loadHookModule(filePath: string): Promise<Record<string, u
 }
 
 /**
- * Get the handler function from a loaded module. Handles CJS module.exports = fn.
+ * Get the handler function from a loaded module.
+ * - CJS module.exports = fn: mod is the function.
+ * - ESM export default fn: mod.default is the function.
+ * - Object with .handle (e.g. Foundry-style): wrap so (event) => obj.handle(event.context ?? {}).
  */
 export function getHandlerFromModule(mod: Record<string, unknown>, exportName: string): unknown {
   if (exportName === "default" && typeof mod === "function") {
     return mod;
   }
-  return mod[exportName];
+  const value = mod[exportName];
+  if (typeof value === "function") {
+    return value;
+  }
+  // Accept default export that is an object with .handle (Foundry-style); wrap for internal (event) => handler.handle(event.context)
+  if (
+    exportName === "default" &&
+    value &&
+    typeof value === "object" &&
+    typeof (value as Record<string, unknown>).handle === "function"
+  ) {
+    const obj = value as { handle: (ctx: unknown) => void | Promise<void> };
+    return (event: { context?: Record<string, unknown> }) =>
+      Promise.resolve(obj.handle(event.context ?? {}));
+  }
+  return value;
 }

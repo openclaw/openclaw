@@ -160,9 +160,8 @@ describe("loader", () => {
         JSON.stringify({ name: "cjs-hook" }),
         "utf-8",
       );
-      const handlerPath = path.join(cjsDir, "handler.js");
       await fs.writeFile(
-        handlerPath,
+        path.join(cjsDir, "handler.js"),
         "module.exports = async function () { return 'cjs'; };",
         "utf-8",
       );
@@ -171,7 +170,7 @@ describe("loader", () => {
         hooks: {
           internal: {
             enabled: true,
-            handlers: [{ event: "command:new", module: handlerPath }],
+            handlers: [{ event: "command:new", module: "cjs-handler/handler.js" }],
           },
         },
       };
