@@ -235,7 +235,7 @@ describe("Cron issue regressions", () => {
     });
     await cron.start();
 
-    const runAt = Date.now() + 5;
+    const runAt = Date.now() + 1;
     const job = await cron.add({
       name: "timer-overlap",
       enabled: true,
@@ -246,8 +246,8 @@ describe("Cron issue regressions", () => {
       delivery: { mode: "none" },
     });
 
-    for (let i = 0; i < 30 && runIsolatedAgentJob.mock.calls.length === 0; i++) {
-      await delay(5);
+    for (let i = 0; i < 20 && runIsolatedAgentJob.mock.calls.length === 0; i++) {
+      await delay(1);
     }
     expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
 
@@ -256,12 +256,12 @@ describe("Cron issue regressions", () => {
     expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
 
     resolveRun?.({ status: "ok", summary: "done" });
-    for (let i = 0; i < 30; i++) {
+    for (let i = 0; i < 20; i++) {
       const jobs = await cron.list({ includeDisabled: true });
       if (jobs.some((j) => j.id === job.id && j.state.lastStatus === "ok")) {
         break;
       }
-      await delay(5);
+      await delay(1);
     }
 
     cron.stop();

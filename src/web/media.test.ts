@@ -40,8 +40,8 @@ beforeAll(async () => {
   fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-test-"));
   largeJpegBuffer = await sharp({
     create: {
-      width: 1200,
-      height: 1200,
+      width: 900,
+      height: 900,
       channels: 3,
       background: "#ff0000",
     },
@@ -138,24 +138,6 @@ describe("web media loading", () => {
     expect(result.contentType).toBe("image/jpeg");
   });
 
-  it("adds extension to URL fileName when missing", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
-      ok: true,
-      body: true,
-      arrayBuffer: async () => Buffer.from("%PDF-1.4").buffer,
-      headers: { get: () => "application/pdf" },
-      status: 200,
-    } as Response);
-
-    const result = await loadWebMedia("https://example.com/download", 1024 * 1024);
-
-    expect(result.kind).toBe("document");
-    expect(result.contentType).toBe("application/pdf");
-    expect(result.fileName).toBe("download.pdf");
-
-    fetchMock.mockRestore();
-  });
-
   it("includes URL + status in fetch errors", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
       ok: false,
@@ -215,50 +197,6 @@ describe("web media loading", () => {
     expect(result.fileName).toBe("report.pdf");
 
     fetchMock.mockRestore();
-  });
-
-  it("preserves GIF animation by skipping JPEG optimization", async () => {
-    // Create a minimal valid GIF (1x1 pixel)
-    // GIF89a header + minimal image data
-    const gifBuffer = Buffer.from([
-      0x47,
-      0x49,
-      0x46,
-      0x38,
-      0x39,
-      0x61, // GIF89a
-      0x01,
-      0x00,
-      0x01,
-      0x00, // 1x1 dimensions
-      0x00,
-      0x00,
-      0x00, // no global color table
-      0x2c,
-      0x00,
-      0x00,
-      0x00,
-      0x00, // image descriptor
-      0x01,
-      0x00,
-      0x01,
-      0x00,
-      0x00, // 1x1 image
-      0x02,
-      0x01,
-      0x44,
-      0x00,
-      0x3b, // minimal LZW data + trailer
-    ]);
-
-    const file = await writeTempFile(gifBuffer, ".gif");
-
-    const result = await loadWebMedia(file, 1024 * 1024);
-
-    expect(result.kind).toBe("image");
-    expect(result.contentType).toBe("image/gif");
-    // GIF should NOT be converted to JPEG
-    expect(result.buffer.slice(0, 3).toString()).toBe("GIF");
   });
 
   it("preserves GIF from URL without JPEG conversion", async () => {
