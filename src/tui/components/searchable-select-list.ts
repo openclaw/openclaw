@@ -219,20 +219,28 @@ export class SearchableSelectList implements Component {
     const displayValue = this.getItemLabel(item);
 
     if (item.description && width > 40) {
-      const maxValueWidth = Math.min(30, width - prefixWidth - 4);
-      const truncatedValue = truncateToWidth(displayValue, maxValueWidth, "");
-      const valueText = this.highlightMatch(truncatedValue, query);
-      const spacingWidth = Math.max(1, 32 - visibleWidth(valueText));
-      const spacing = " ".repeat(spacingWidth);
-      const descriptionStart = prefixWidth + visibleWidth(valueText) + spacing.length;
-      const remainingWidth = width - descriptionStart - 2;
-      if (remainingWidth > 10) {
-        const truncatedDesc = truncateToWidth(item.description, remainingWidth, "");
-        // Highlight plain text first, then apply theme styling to avoid corrupting ANSI codes
-        const highlightedDesc = this.highlightMatch(truncatedDesc, query);
-        const descText = isSelected ? highlightedDesc : this.theme.description(highlightedDesc);
-        const line = `${prefix}${valueText}${spacing}${descText}`;
-        return isSelected ? this.theme.selectedText(line) : line;
+      const minDescriptionWidth = 12;
+      const spacingWidth = 2;
+      const availableWidth = Math.max(1, width - prefixWidth - 2);
+
+      if (availableWidth > minDescriptionWidth + spacingWidth + 1) {
+        const maxValueWidth = availableWidth - minDescriptionWidth - spacingWidth;
+        const truncatedValue = truncateToWidth(displayValue, maxValueWidth, "");
+        const valueText = this.highlightMatch(truncatedValue, query);
+
+        const usedByValue = visibleWidth(valueText);
+        const remainingWidth = availableWidth - usedByValue;
+
+        if (remainingWidth > spacingWidth + 1) {
+          const descriptionWidth = remainingWidth - spacingWidth;
+          const spacing = " ".repeat(spacingWidth);
+          const truncatedDesc = truncateToWidth(item.description, descriptionWidth, "");
+          // Highlight plain text first, then apply theme styling to avoid corrupting ANSI codes
+          const highlightedDesc = this.highlightMatch(truncatedDesc, query);
+          const descText = isSelected ? highlightedDesc : this.theme.description(highlightedDesc);
+          const line = `${prefix}${valueText}${spacing}${descText}`;
+          return isSelected ? this.theme.selectedText(line) : line;
+        }
       }
     }
 

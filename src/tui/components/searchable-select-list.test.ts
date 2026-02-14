@@ -38,6 +38,16 @@ describe("SearchableSelectList", () => {
     expect(output[0]).toContain("search");
   });
 
+  it("does not truncate long labels on wide terminals when description is present", () => {
+    const tail = "__TAIL__";
+    const longLabel = `session-${"x".repeat(40)}${tail}`; // > 30 chars; tail would be lost before PR
+    const items = [{ value: longLabel, label: longLabel, description: "desc" }];
+    const list = new SearchableSelectList(items, 5, mockTheme);
+
+    const output = list.render(120).join("\n");
+    expect(output).toContain(tail);
+  });
+
   it("filters items when typing", () => {
     const list = new SearchableSelectList(testItems, 5, mockTheme);
 
