@@ -85,7 +85,11 @@ export const BrowserToolSchema = Type.Object({
   target: optionalStringEnum(BROWSER_TARGETS),
   node: Type.Optional(Type.String()),
   profile: Type.Optional(Type.String()),
-  targetUrl: Type.Optional(Type.String()),
+  targetUrl: Type.Optional(
+    Type.String({
+      description: "URL to open or navigate to. Required for open and navigate actions.",
+    }),
+  ),
   targetId: Type.Optional(Type.String()),
   limit: Type.Optional(Type.Number()),
   maxChars: Type.Optional(Type.Number()),
