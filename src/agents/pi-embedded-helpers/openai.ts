@@ -9,13 +9,19 @@ type OpenAIThinkingBlock = {
 type OpenAIReasoningSignature = {
   id: string;
   type: string;
+  hasEncryptedContent: boolean;
 };
 
 function parseOpenAIReasoningSignature(value: unknown): OpenAIReasoningSignature | null {
   if (!value) {
     return null;
   }
-  let candidate: { id?: unknown; type?: unknown } | null = null;
+  let candidate: {
+    id?: unknown;
+    type?: unknown;
+    encrypted_content?: unknown;
+    encryptedContent?: unknown;
+  } | null = null;
   if (typeof value === "string") {
     const trimmed = value.trim();
     if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
@@ -34,11 +40,17 @@ function parseOpenAIReasoningSignature(value: unknown): OpenAIReasoningSignature
   }
   const id = typeof candidate.id === "string" ? candidate.id : "";
   const type = typeof candidate.type === "string" ? candidate.type : "";
+  const encryptedContent =
+    typeof candidate.encrypted_content === "string"
+      ? candidate.encrypted_content
+      : typeof candidate.encryptedContent === "string"
+        ? candidate.encryptedContent
+        : "";
   if (!id.startsWith("rs_")) {
     return null;
   }
   if (type === "reasoning" || type.startsWith("reasoning.")) {
-    return { id, type };
+    return { id, type, hasEncryptedContent: encryptedContent.length > 0 };
   }
   return null;
 }
@@ -63,8 +75,9 @@ function hasFollowingNonThinkingBlock(
  * OpenAI Responses API can reject transcripts that contain a standalone `reasoning` item id
  * without the required following item.
  *
- * OpenClaw persists provider-specific reasoning metadata in `thinkingSignature`; if that metadata
- * is incomplete, drop the block to keep history usable.
+ * OpenClaw persists provider-specific reasoning metadata in `thinkingSignature`. Keep only
+ * replay-safe signatures (with encrypted content), and drop incomplete reasoning blocks to keep
+ * history usable.
  */
 export function downgradeOpenAIReasoningBlocks(messages: AgentMessage[]): AgentMessage[] {
   const out: AgentMessage[] = [];
@@ -105,6 +118,10 @@ export function downgradeOpenAIReasoningBlocks(messages: AgentMessage[]): AgentM
       const signature = parseOpenAIReasoningSignature(record.thinkingSignature);
       if (!signature) {
         nextContent.push(block);
+        continue;
+      }
+      if (!signature.hasEncryptedContent) {
+        changed = true;
         continue;
       }
       if (hasFollowingNonThinkingBlock(assistantMsg.content, i)) {

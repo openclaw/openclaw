@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { downgradeOpenAIReasoningBlocks } from "./pi-embedded-helpers.js";
 
 describe("downgradeOpenAIReasoningBlocks", () => {
-  it("keeps reasoning signatures when followed by content", () => {
+  it("keeps reasoning signatures with encrypted content when followed by content", () => {
     const input = [
       {
         role: "assistant",
@@ -10,7 +10,11 @@ describe("downgradeOpenAIReasoningBlocks", () => {
           {
             type: "thinking",
             thinking: "internal reasoning",
-            thinkingSignature: JSON.stringify({ id: "rs_123", type: "reasoning" }),
+            thinkingSignature: JSON.stringify({
+              id: "rs_123",
+              type: "reasoning",
+              encrypted_content: "enc_123",
+            }),
           },
           { type: "text", text: "answer" },
         ],
@@ -19,6 +23,33 @@ describe("downgradeOpenAIReasoningBlocks", () => {
 
     // oxlint-disable-next-line typescript/no-explicit-any
     expect(downgradeOpenAIReasoningBlocks(input as any)).toEqual(input);
+  });
+
+  it("drops signatures without encrypted content even when followed by content", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinkingSignature: JSON.stringify({
+              id: "rs_123",
+              type: "reasoning",
+              summary: [],
+            }),
+          },
+          { type: "text", text: "answer" },
+        ],
+      },
+    ];
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    expect(downgradeOpenAIReasoningBlocks(input as any)).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "answer" }],
+      },
+    ]);
   });
 
   it("drops orphaned reasoning blocks without following content", () => {
