@@ -1770,6 +1770,8 @@ describe("runSleepCycle", () => {
       findOrphanTags: vi.fn().mockResolvedValue([]),
       deleteOrphanTags: vi.fn().mockResolvedValue(0),
       updateExtractionStatus: vi.fn().mockResolvedValue(undefined),
+      findDuplicateEntityPairs: vi.fn().mockResolvedValue([]),
+      mergeEntityPair: vi.fn().mockResolvedValue(true),
     };
   });
 
@@ -2193,6 +2195,7 @@ describe("runSleepCycle", () => {
       mockDb.promoteToCore.mockResolvedValue(1);
 
       const result = await runSleepCycle(mockDb, mockEmbeddings, mockConfig, mockLogger, {
+        skipPromotion: false,
         paretoPercentile: 0.2,
         promotionMinAgeDays: 7,
       });
@@ -2219,6 +2222,7 @@ describe("runSleepCycle", () => {
       mockDb.calculateParetoThreshold.mockReturnValue(0.5);
 
       const result = await runSleepCycle(mockDb, mockEmbeddings, mockConfig, mockLogger, {
+        skipPromotion: false,
         promotionMinAgeDays: 7,
       });
 
@@ -2544,8 +2548,8 @@ describe("runSleepCycle", () => {
       expect(onPhaseStart).toHaveBeenCalledWith("dedup");
       expect(onPhaseStart).toHaveBeenCalledWith("conflict");
       expect(onPhaseStart).toHaveBeenCalledWith("semanticDedup");
+      expect(onPhaseStart).toHaveBeenCalledWith("entityDedup");
       expect(onPhaseStart).toHaveBeenCalledWith("pareto");
-      expect(onPhaseStart).toHaveBeenCalledWith("promotion");
       expect(onPhaseStart).toHaveBeenCalledWith("extraction");
       expect(onPhaseStart).toHaveBeenCalledWith("decay");
       expect(onPhaseStart).toHaveBeenCalledWith("cleanup");
@@ -2579,6 +2583,7 @@ describe("runSleepCycle", () => {
       expect(result).toHaveProperty("dedup");
       expect(result).toHaveProperty("conflict");
       expect(result).toHaveProperty("semanticDedup");
+      expect(result).toHaveProperty("entityDedup");
       expect(result).toHaveProperty("pareto");
       expect(result).toHaveProperty("promotion");
       expect(result).toHaveProperty("decay");

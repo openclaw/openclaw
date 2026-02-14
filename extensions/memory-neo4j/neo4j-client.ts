@@ -1526,6 +1526,39 @@ export class Neo4jMemoryClient {
     }
   }
 
+  /**
+   * Find tags with exactly 1 TAGGED relationship, older than minAgeDays.
+   * Single-use tags add noise without providing useful cross-memory connections.
+   * Only prunes tags that have had enough time to accrue additional references.
+   */
+  async findSingleUseTags(
+    minAgeDays: number = 14,
+    limit: number = 500,
+  ): Promise<Array<{ id: string; name: string }>> {
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      const cutoffDate = new Date(Date.now() - minAgeDays * 24 * 60 * 60 * 1000).toISOString();
+      const result = await session.run(
+        `MATCH (t:Tag)
+         WHERE t.createdAt < $cutoffDate
+         WITH t
+         MATCH (t)<-[:TAGGED]-(m:Memory)
+         WITH t, count(m) AS usageCount
+         WHERE usageCount = 1
+         RETURN t.id AS id, t.name AS name
+         LIMIT $limit`,
+        { cutoffDate, limit: neo4j.int(limit) },
+      );
+      return result.records.map((r) => ({
+        id: r.get("id") as string,
+        name: r.get("name") as string,
+      }));
+    } finally {
+      await session.close();
+    }
+  }
+
   // --------------------------------------------------------------------------
   // Sleep Cycle: Conflict Detection
   // --------------------------------------------------------------------------
@@ -1863,5 +1896,130 @@ export class Neo4jMemoryClient {
       }
     }
     throw lastError;
+  }
+
+  // --------------------------------------------------------------------------
+  // Sleep Cycle: Entity Deduplication
+  // --------------------------------------------------------------------------
+
+  /**
+   * Find entity pairs that are likely duplicates based on name containment.
+   * Returns pairs where one entity name is a substring of another (same type),
+   * which catches the most common dedup patterns:
+   *   - "fish speech" → "fish speech s1 mini"
+   *   - "aaditya" → "aaditya sukhani"
+   *   - "abundent" → "abundent academy"
+   */
+  async findDuplicateEntityPairs(
+    agentId?: string,
+    limit: number = 200,
+  ): Promise<
+    Array<{
+      keepId: string;
+      keepName: string;
+      removeId: string;
+      removeName: string;
+      keepMentions: number;
+      removeMentions: number;
+    }>
+  > {
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      // Find pairs where one name contains the other (same type),
+      // OR one entity's alias matches the other's name.
+      // Keep the entity with more mentions, or the shorter/more canonical name
+      // if mention counts are equal.
+      const result = await session.run(
+        `MATCH (e1:Entity), (e2:Entity)
+         WHERE e1.name < e2.name
+           AND e1.type = e2.type
+           AND size(e1.name) > 2
+           AND size(e2.name) > 2
+           AND (
+             e1.name CONTAINS e2.name
+             OR e2.name CONTAINS e1.name
+             OR ANY(alias IN coalesce(e1.aliases, []) WHERE toLower(alias) = e2.name)
+             OR ANY(alias IN coalesce(e2.aliases, []) WHERE toLower(alias) = e1.name)
+           )
+         WITH e1, e2,
+              coalesce(e1.mentionCount, 0) AS mc1,
+              coalesce(e2.mentionCount, 0) AS mc2
+         RETURN e1.id AS id1, e1.name AS name1, mc1,
+                e2.id AS id2, e2.name AS name2, mc2
+         LIMIT $limit`,
+        { limit: neo4j.int(limit) },
+      );
+
+      return result.records.map((r) => {
+        const name1 = r.get("name1") as string;
+        const name2 = r.get("name2") as string;
+        const mc1 = (r.get("mc1") as number) ?? 0;
+        const mc2 = (r.get("mc2") as number) ?? 0;
+        const id1 = r.get("id1") as string;
+        const id2 = r.get("id2") as string;
+
+        // Keep the entity with more mentions; if tied, keep the shorter (more canonical) name
+        const keepFirst = mc1 > mc2 || (mc1 === mc2 && name1.length <= name2.length);
+        return {
+          keepId: keepFirst ? id1 : id2,
+          keepName: keepFirst ? name1 : name2,
+          removeId: keepFirst ? id2 : id1,
+          removeName: keepFirst ? name2 : name1,
+          keepMentions: keepFirst ? mc1 : mc2,
+          removeMentions: keepFirst ? mc2 : mc1,
+        };
+      });
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
+   * Merge two entities: transfer MENTIONS relationships from source to target,
+   * update mention count, then delete the source entity.
+   * Inter-entity relationships on the source are dropped (they'll be
+   * re-created by future extractions against the canonical entity).
+   */
+  async mergeEntityPair(keepId: string, removeId: string): Promise<boolean> {
+    await this.ensureInitialized();
+    return this.retryOnTransient(async () => {
+      const session = this.driver!.session();
+      try {
+        const result = await session.executeWrite(async (tx) => {
+          // Transfer MENTIONS relationships from removed entity to kept entity
+          const transferred = await tx.run(
+            `MATCH (remove:Entity {id: $removeId})<-[r:MENTIONS]-(m:Memory)
+             MATCH (keep:Entity {id: $keepId})
+             MERGE (m)-[:MENTIONS]->(keep)
+             DELETE r
+             RETURN count(*) AS transferred`,
+            { removeId, keepId },
+          );
+          const transferCount = (transferred.records[0]?.get("transferred") as number) ?? 0;
+
+          // Update kept entity's mention count
+          if (transferCount > 0) {
+            await tx.run(
+              `MATCH (e:Entity {id: $keepId})
+               SET e.mentionCount = coalesce(e.mentionCount, 0) + $count,
+                   e.lastSeen = $now`,
+              { keepId, count: neo4j.int(transferCount), now: new Date().toISOString() },
+            );
+          }
+
+          // Delete the removed entity (DETACH removes all remaining relationships)
+          await tx.run(`MATCH (e:Entity {id: $removeId}) DETACH DELETE e`, { removeId });
+
+          return transferCount;
+        });
+
+        return true;
+      } catch {
+        return false;
+      } finally {
+        await session.close();
+      }
+    });
   }
 }
