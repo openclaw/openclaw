@@ -31,7 +31,7 @@ async function assertSafeMediaPath(localPath: string): Promise<string> {
     throw err;
   }
   const realRelative = path.relative(root, realPath);
-  if (realRelative.startsWith("..") || path.isAbsolute(realRelative)) {
+  if (realRelative.startsWith("..")) {
     throw new Error(`Media path resolves outside working directory: ${path.basename(localPath)}`);
   }
   return realPath;
