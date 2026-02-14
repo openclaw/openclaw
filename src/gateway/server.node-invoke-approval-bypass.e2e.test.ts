@@ -1,9 +1,15 @@
 import crypto from "node:crypto";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
+import {
+  deriveDeviceIdFromPublicKey,
+  publicKeyRawBase64UrlFromPem,
+  signDevicePayload,
+} from "../infra/device-identity.js";
 import { sleep } from "../utils.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
+import { buildDeviceAuthPayload } from "./device-auth.js";
 import {
   connectReq,
   installGatewayTestHooks,
@@ -31,6 +37,39 @@ describe("node.invoke approval bypass", () => {
     const ws = new WebSocket(`ws://127.0.0.1:${port}`);
     await new Promise<void>((resolve) => ws.once("open", resolve));
     const res = await connectReq(ws, { token: "secret", scopes });
+    expect(res.ok).toBe(true);
+    return ws;
+  };
+
+  const connectOperatorWithNewDevice = async (scopes: string[]) => {
+    const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
+    const publicKeyPem = publicKey.export({ type: "spki", format: "pem" }).toString();
+    const privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+    const publicKeyRaw = publicKeyRawBase64UrlFromPem(publicKeyPem);
+    const deviceId = deriveDeviceIdFromPublicKey(publicKeyRaw);
+    expect(deviceId).toBeTruthy();
+    const signedAtMs = Date.now();
+    const payload = buildDeviceAuthPayload({
+      deviceId: deviceId!,
+      clientId: GATEWAY_CLIENT_NAMES.TEST,
+      clientMode: GATEWAY_CLIENT_MODES.TEST,
+      role: "operator",
+      scopes,
+      signedAtMs,
+      token: "secret",
+    });
+    const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+    await new Promise<void>((resolve) => ws.once("open", resolve));
+    const res = await connectReq(ws, {
+      token: "secret",
+      scopes,
+      device: {
+        id: deviceId!,
+        publicKey: publicKeyRaw,
+        signature: signDevicePayload(privateKeyPem, payload),
+        signedAt: signedAtMs,
+      },
+    });
     expect(res.ok).toBe(true);
     return ws;
   };
@@ -172,6 +211,7 @@ describe("node.invoke approval bypass", () => {
         approved: true,
         // Try to escalate to allow-always; gateway should clamp to allow-once from record.
         approvalDecision: "allow-always",
+        injected: "nope",
       },
       idempotencyKey: crypto.randomUUID(),
     });
@@ -180,9 +220,62 @@ describe("node.invoke approval bypass", () => {
     expect(lastInvokeParams).toBeTruthy();
     expect(lastInvokeParams?.approved).toBe(true);
     expect(lastInvokeParams?.approvalDecision).toBe("allow-once");
+    expect(lastInvokeParams?.injected).toBeUndefined();
 
     ws.close();
     ws2.close();
+    node.stop();
+  });
+
+  test("rejects replaying approval id from another device", async () => {
+    let sawInvoke = false;
+    const node = await connectLinuxNode(() => {
+      sawInvoke = true;
+    });
+
+    const ws = await connectOperator(["operator.write", "operator.approvals"]);
+    const wsOtherDevice = await connectOperatorWithNewDevice(["operator.write"]);
+
+    const nodes = await rpcReq<{ nodes?: Array<{ nodeId: string; connected?: boolean }> }>(
+      ws,
+      "node.list",
+      {},
+    );
+    expect(nodes.ok).toBe(true);
+    const nodeId = nodes.payload?.nodes?.find((n) => n.connected)?.nodeId ?? "";
+    expect(nodeId).toBeTruthy();
+
+    const approvalId = crypto.randomUUID();
+    const requestP = rpcReq(ws, "exec.approval.request", {
+      id: approvalId,
+      command: "echo hi",
+      cwd: null,
+      host: "node",
+      timeoutMs: 30_000,
+    });
+    await rpcReq(ws, "exec.approval.resolve", { id: approvalId, decision: "allow-once" });
+    const requested = await requestP;
+    expect(requested.ok).toBe(true);
+
+    const invoke = await rpcReq(wsOtherDevice, "node.invoke", {
+      nodeId,
+      command: "system.run",
+      params: {
+        command: ["echo", "hi"],
+        rawCommand: "echo hi",
+        runId: approvalId,
+        approved: true,
+        approvalDecision: "allow-once",
+      },
+      idempotencyKey: crypto.randomUUID(),
+    });
+    expect(invoke.ok).toBe(false);
+    expect(invoke.error?.message ?? "").toContain("not valid for this device");
+    await sleep(50);
+    expect(sawInvoke).toBe(false);
+
+    ws.close();
+    wsOtherDevice.close();
     node.stop();
   });
 });

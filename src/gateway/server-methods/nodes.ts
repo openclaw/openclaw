@@ -10,7 +10,7 @@ import {
   verifyNodeToken,
 } from "../../infra/node-pairing.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
-import { sanitizeSystemRunParamsForForwarding } from "../node-invoke-system-run-approval.js";
+import { sanitizeNodeInvokeParamsForForwarding } from "../node-invoke-sanitize.js";
 import {
   ErrorCodes,
   errorShape,
@@ -418,14 +418,12 @@ export const nodeHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      const forwardedParams =
-        command === "system.run"
-          ? sanitizeSystemRunParamsForForwarding({
-              rawParams: p.params,
-              client,
-              execApprovalManager: context.execApprovalManager,
-            })
-          : ({ ok: true, params: p.params } as const);
+      const forwardedParams = sanitizeNodeInvokeParamsForForwarding({
+        command,
+        rawParams: p.params,
+        client,
+        execApprovalManager: context.execApprovalManager,
+      });
       if (!forwardedParams.ok) {
         respond(
           false,
