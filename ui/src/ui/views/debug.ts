@@ -121,6 +121,21 @@ export function renderDebug(props: DebugProps) {
             }}
             @focus=${() => { showMethodSuggestions = true; requestUpdate(); }}
             @blur=${() => { setTimeout(() => { showMethodSuggestions = false; requestUpdate(); }, 150); }}
+            @keydown=${(e: KeyboardEvent) => {
+              if (e.key === "Tab" && showMethodSuggestions) {
+                const needle = props.callMethod.toLowerCase();
+                const match = RPC_METHODS.find((m) =>
+                  !needle || m.method.toLowerCase().includes(needle) || m.description.toLowerCase().includes(needle)
+                );
+                if (match) {
+                  e.preventDefault();
+                  props.onCallMethodChange(match.method);
+                  props.onCallParamsChange(match.params);
+                  showMethodSuggestions = false;
+                  requestUpdate();
+                }
+              }
+            }}
             placeholder="system-presence"
             autocomplete="off"
           />

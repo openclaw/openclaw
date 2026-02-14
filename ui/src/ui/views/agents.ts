@@ -487,6 +487,24 @@ function renderAgentOverview(params: {
               }}
               @focus=${() => { showFallbackSuggestions = true; }}
               @blur=${() => { setTimeout(() => { showFallbackSuggestions = false; }, 150); }}
+              @keydown=${(e: KeyboardEvent) => {
+                if (e.key === "Tab" && showFallbackSuggestions) {
+                  const allModels = resolveConfiguredModels(configForm);
+                  const currentFallbacks = fallbackText.split(",").map((s: string) => s.trim()).filter(Boolean);
+                  const lastSegment = fallbackText.includes(",") ? fallbackText.split(",").pop()?.trim() ?? "" : fallbackText.trim();
+                  const needle = lastSegment.toLowerCase();
+                  const match = allModels.find((m) =>
+                    (!needle || m.value.toLowerCase().includes(needle) || m.label.toLowerCase().includes(needle))
+                    && !currentFallbacks.slice(0, -1).includes(m.value)
+                  );
+                  if (match) {
+                    e.preventDefault();
+                    const prefix = currentFallbacks.slice(0, -1);
+                    onModelFallbacksChange(agent.id, [...prefix, match.value]);
+                    showFallbackSuggestions = false;
+                  }
+                }
+              }}
             />
             ${showFallbackSuggestions ? (() => {
               const allModels = resolveConfiguredModels(configForm);
