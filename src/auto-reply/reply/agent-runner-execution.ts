@@ -661,11 +661,11 @@ export async function runAgentTurnWithFallback(params: {
           }
         }
 
-        // Return empty payload - no message sent to customer
+        // Return silent reply - no message sent to customer, no transcript entry
         return {
           kind: "final",
           payload: {
-            text: "",
+            text: SILENT_REPLY_TOKEN,
           },
         };
       }
