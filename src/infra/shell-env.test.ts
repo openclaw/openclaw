@@ -106,8 +106,9 @@ describe("buildEnvDumpCommand", () => {
     expect(buildEnvDumpCommand("/bin/csh")).toBe("source ~/.cshrc >& /dev/null; env -0");
   });
 
-  it("returns ENV-sourcing command for dash and ash", () => {
-    const expected = '{ [ -n "$ENV" ] && . "$ENV"; } >/dev/null 2>&1 || true; env -0';
+  it("falls through to default for dash and ash", () => {
+    const expected =
+      'for f in "$HOME/.bashrc" "$HOME/.zshrc"; do [ -f "$f" ] && . "$f" >/dev/null 2>&1 || true; done; env -0';
     expect(buildEnvDumpCommand("/bin/dash")).toBe(expected);
     expect(buildEnvDumpCommand("/bin/ash")).toBe(expected);
   });
