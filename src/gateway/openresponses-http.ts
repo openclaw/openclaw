@@ -11,6 +11,7 @@ import { randomUUID } from "node:crypto";
 import type { ClientToolDefinition } from "../agents/pi-embedded-runner/run/params.js";
 import type { ImageContent } from "../commands/agent/types.js";
 import type { GatewayHttpResponsesConfig } from "../config/types.gateway.js";
+import type { GatewayRateLimiter } from "./rate-limiter.js";
 import { buildHistoryContextFromEntries, type HistoryEntry } from "../auto-reply/reply/history.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommand } from "../commands/agent.js";
@@ -60,6 +61,7 @@ type OpenResponsesHttpOptions = {
   maxBodyBytes?: number;
   config?: GatewayHttpResponsesConfig;
   trustedProxies?: string[];
+  rateLimiter?: GatewayRateLimiter;
 };
 
 const DEFAULT_BODY_BYTES = 20 * 1024 * 1024;
@@ -348,6 +350,7 @@ export async function handleOpenResponsesHttpRequest(
     connectAuth: { token, password: token },
     req,
     trustedProxies: opts.trustedProxies,
+    rateLimiter: opts.rateLimiter,
   });
   if (!authResult.ok) {
     sendUnauthorized(res);

@@ -14,6 +14,7 @@ import type { GatewayWsClient } from "./server/ws-types.js";
 import { CANVAS_HOST_PATH } from "../canvas-host/a2ui.js";
 import { type CanvasHostHandler, createCanvasHostHandler } from "../canvas-host/server.js";
 import { resolveGatewayListenHosts } from "./net.js";
+import { createGatewayRateLimiterFromConfig } from "./rate-limiter-config.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import {
   type ChatRunEntry,
@@ -85,6 +86,7 @@ export async function createGatewayRuntimeState(params: {
   ) => ChatRunEntry | undefined;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   toolEventRecipients: ReturnType<typeof createToolEventRecipientRegistry>;
+  rateLimiter: import("./rate-limiter.js").GatewayRateLimiter | undefined;
 }> {
   let canvasHost: CanvasHostHandler | null = null;
   if (params.canvasHostEnabled) {
@@ -123,6 +125,8 @@ export async function createGatewayRuntimeState(params: {
     log: params.logPlugins,
   });
 
+  const rateLimiter = createGatewayRateLimiterFromConfig(params.cfg);
+
   const bindHosts = await resolveGatewayListenHosts(params.bindHost);
   const httpServers: HttpServer[] = [];
   const httpBindHosts: string[] = [];
@@ -140,6 +144,7 @@ export async function createGatewayRuntimeState(params: {
       handlePluginRequest,
       resolvedAuth: params.resolvedAuth,
       tlsOptions: params.gatewayTls?.enabled ? params.gatewayTls.tlsOptions : undefined,
+      rateLimiter,
     });
     try {
       await listenGatewayHttpServer({
@@ -206,5 +211,6 @@ export async function createGatewayRuntimeState(params: {
     removeChatRun,
     chatAbortControllers,
     toolEventRecipients,
+    rateLimiter,
   };
 }

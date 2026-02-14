@@ -193,8 +193,41 @@ export type GatewayHttpEndpointsConfig = {
   responses?: GatewayHttpResponsesConfig;
 };
 
+export type GatewayRateLimitConfig = {
+  /** Maximum requests per window */
+  maxRequests?: number;
+  /** Window duration in milliseconds */
+  windowMs?: number;
+  /** Exponential backoff multiplier for failed auth attempts */
+  backoffMultiplier?: number;
+  /** Maximum backoff duration in milliseconds */
+  maxBackoffMs?: number;
+};
+
+export type GatewayRateLimitEndpointsConfig = {
+  /** Rate limits for authentication endpoints */
+  auth?: GatewayRateLimitConfig;
+  /** Rate limits for chat completions endpoint */
+  chatCompletions?: GatewayRateLimitConfig;
+  /** Rate limits for tools invoke endpoint */
+  toolsInvoke?: GatewayRateLimitConfig;
+  /** Rate limits for responses endpoint */
+  responses?: GatewayRateLimitConfig;
+  /** Rate limits for webhook endpoints */
+  hooks?: GatewayRateLimitConfig;
+  /** Default rate limits for other endpoints */
+  default?: GatewayRateLimitConfig;
+};
+
 export type GatewayHttpConfig = {
   endpoints?: GatewayHttpEndpointsConfig;
+  /** Rate limiting configuration for HTTP requests */
+  rateLimit?: {
+    /** Enable rate limiting (default: true) */
+    enabled?: boolean;
+    /** Per-endpoint rate limit configuration */
+    endpoints?: GatewayRateLimitEndpointsConfig;
+  };
 };
 
 export type GatewayNodesConfig = {

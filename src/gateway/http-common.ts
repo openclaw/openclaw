@@ -24,6 +24,19 @@ export function sendUnauthorized(res: ServerResponse) {
   });
 }
 
+export function sendRateLimited(res: ServerResponse, retryAfter?: number, reason?: string) {
+  if (retryAfter) {
+    res.setHeader("Retry-After", retryAfter.toString());
+  }
+  const message =
+    reason === "auth_backoff"
+      ? "Too many failed authentication attempts. Please try again later."
+      : "Rate limit exceeded. Please try again later.";
+  sendJson(res, 429, {
+    error: { message, type: "rate_limit_exceeded" },
+  });
+}
+
 export function sendInvalidRequest(res: ServerResponse, message: string) {
   sendJson(res, 400, {
     error: { message, type: "invalid_request_error" },

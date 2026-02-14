@@ -38,11 +38,12 @@ import {
   resolveHookChannel,
   resolveHookDeliver,
 } from "./hooks.js";
-import { sendUnauthorized } from "./http-common.js";
+import { sendUnauthorized, sendRateLimited } from "./http-common.js";
 import { getBearerToken, getHeader } from "./http-utils.js";
 import { resolveGatewayClientIp } from "./net.js";
 import { handleOpenAiHttpRequest } from "./openai-http.js";
 import { handleOpenResponsesHttpRequest } from "./openresponses-http.js";
+import { GatewayRateLimiter, type RateLimitEndpointConfig } from "./rate-limiter.js";
 import { handleToolsInvokeHttpRequest } from "./tools-invoke-http.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
@@ -87,6 +88,26 @@ function hasAuthorizedWsClientForIp(clients: Set<GatewayWsClient>, clientIp: str
     }
   }
   return false;
+}
+
+function determineRateLimitEndpoint(req: IncomingMessage): keyof RateLimitEndpointConfig {
+  const url = new URL(req.url ?? "/", "http://localhost");
+  const pathname = url.pathname;
+
+  if (pathname === "/v1/chat/completions") {
+    return "chatCompletions";
+  }
+  if (pathname === "/tools/invoke") {
+    return "toolsInvoke";
+  }
+  if (pathname === "/v1/responses") {
+    return "responses";
+  }
+  if (pathname.startsWith("/hooks/") || pathname.startsWith("/plugins/")) {
+    return "hooks";
+  }
+
+  return "default";
 }
 
 async function authorizeCanvasRequest(params: {
@@ -286,6 +307,7 @@ export function createGatewayHttpServer(opts: {
   handlePluginRequest?: HooksRequestHandler;
   resolvedAuth: ResolvedGatewayAuth;
   tlsOptions?: TlsOptions;
+  rateLimiter?: GatewayRateLimiter;
 }): HttpServer {
   const {
     canvasHost,
@@ -299,6 +321,7 @@ export function createGatewayHttpServer(opts: {
     handleHooksRequest,
     handlePluginRequest,
     resolvedAuth,
+    rateLimiter,
   } = opts;
   const httpServer: HttpServer = opts.tlsOptions
     ? createHttpsServer(opts.tlsOptions, (req, res) => {
@@ -317,6 +340,23 @@ export function createGatewayHttpServer(opts: {
     try {
       const configSnapshot = loadConfig();
       const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
+
+      // Apply rate limiting before processing requests
+      if (rateLimiter) {
+        // Check auth backoff first (no counter increment, just backoff state)
+        const backoff = rateLimiter.checkAuthBackoff({ req, trustedProxies });
+        if (!backoff.allowed) {
+          sendRateLimited(res, backoff.retryAfter, backoff.reason);
+          return;
+        }
+
+        const endpoint = determineRateLimitEndpoint(req);
+        const rateLimitResult = rateLimiter.checkRateLimit({ req, trustedProxies, endpoint });
+        if (!rateLimitResult.allowed) {
+          sendRateLimited(res, rateLimitResult.retryAfter, rateLimitResult.reason);
+          return;
+        }
+      }
       if (await handleHooksRequest(req, res)) {
         return;
       }
@@ -324,6 +364,7 @@ export function createGatewayHttpServer(opts: {
         await handleToolsInvokeHttpRequest(req, res, {
           auth: resolvedAuth,
           trustedProxies,
+          rateLimiter,
         })
       ) {
         return;
@@ -340,6 +381,7 @@ export function createGatewayHttpServer(opts: {
             auth: resolvedAuth,
             config: openResponsesConfig,
             trustedProxies,
+            rateLimiter,
           })
         ) {
           return;
@@ -350,6 +392,7 @@ export function createGatewayHttpServer(opts: {
           await handleOpenAiHttpRequest(req, res, {
             auth: resolvedAuth,
             trustedProxies,
+            rateLimiter,
           })
         ) {
           return;

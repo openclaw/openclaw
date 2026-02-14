@@ -227,8 +227,12 @@ export async function authorizeGatewayConnect(params: {
   req?: IncomingMessage;
   trustedProxies?: string[];
   tailscaleWhois?: TailscaleWhoisLookup;
+  rateLimiter?: {
+    recordFailedAuth: (params: { req: IncomingMessage; trustedProxies?: string[] }) => void;
+    resetFailedAuth: (params: { req: IncomingMessage; trustedProxies?: string[] }) => void;
+  };
 }): Promise<GatewayAuthResult> {
-  const { auth, connectAuth, req, trustedProxies } = params;
+  const { auth, connectAuth, req, trustedProxies, rateLimiter } = params;
   const tailscaleWhois = params.tailscaleWhois ?? readTailscaleWhoisIdentity;
   const localDirect = isLocalDirectRequest(req, trustedProxies);
 
@@ -238,6 +242,10 @@ export async function authorizeGatewayConnect(params: {
       tailscaleWhois,
     });
     if (tailscaleCheck.ok) {
+      // Reset auth backoff on successful Tailscale auth
+      if (req && rateLimiter) {
+        rateLimiter.resetFailedAuth({ req, trustedProxies });
+      }
       return {
         ok: true,
         method: "tailscale",
@@ -254,7 +262,15 @@ export async function authorizeGatewayConnect(params: {
       return { ok: false, reason: "token_missing" };
     }
     if (!safeEqual(connectAuth.token, auth.token)) {
+      // Record failed authentication attempt for rate limiting
+      if (req && rateLimiter) {
+        rateLimiter.recordFailedAuth({ req, trustedProxies });
+      }
       return { ok: false, reason: "token_mismatch" };
+    }
+    // Reset auth backoff on successful token auth
+    if (req && rateLimiter) {
+      rateLimiter.resetFailedAuth({ req, trustedProxies });
     }
     return { ok: true, method: "token" };
   }
@@ -268,7 +284,15 @@ export async function authorizeGatewayConnect(params: {
       return { ok: false, reason: "password_missing" };
     }
     if (!safeEqual(password, auth.password)) {
+      // Record failed authentication attempt for rate limiting
+      if (req && rateLimiter) {
+        rateLimiter.recordFailedAuth({ req, trustedProxies });
+      }
       return { ok: false, reason: "password_mismatch" };
+    }
+    // Reset auth backoff on successful password auth
+    if (req && rateLimiter) {
+      rateLimiter.resetFailedAuth({ req, trustedProxies });
     }
     return { ok: true, method: "password" };
   }
