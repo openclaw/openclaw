@@ -408,6 +408,43 @@ export function parseConfigJson5(
   }
 }
 
+type ConfigReadResolution = {
+  resolvedConfigRaw: unknown;
+  envSnapshotForRestore: Record<string, string | undefined>;
+};
+
+function resolveConfigIncludesForRead(
+  parsed: unknown,
+  configPath: string,
+  deps: Required<ConfigIoDeps>,
+): unknown {
+  return resolveConfigIncludes(parsed, configPath, {
+    readFile: (candidate) => deps.fs.readFileSync(candidate, "utf-8"),
+    parseJson: (raw) => deps.json5.parse(raw),
+  });
+}
+
+function resolveConfigForRead(
+  resolvedIncludes: unknown,
+  env: NodeJS.ProcessEnv,
+): ConfigReadResolution {
+  // Apply config.env to process.env BEFORE substitution so ${VAR} can reference config-defined vars.
+  if (resolvedIncludes && typeof resolvedIncludes === "object" && "env" in resolvedIncludes) {
+    applyConfigEnv(resolvedIncludes as OpenClawConfig, env);
+  }
+
+  return {
+    resolvedConfigRaw: resolveConfigEnvVars(resolvedIncludes, env),
+    // Capture env snapshot after substitution for write-time ${VAR} restoration.
+    envSnapshotForRestore: { ...env } as Record<string, string | undefined>,
+  };
+}
+
+type ReadConfigFileSnapshotInternalResult = {
+  snapshot: ConfigFileSnapshot;
+  envSnapshotForRestore?: Record<string, string | undefined>;
+};
+
 export function createConfigIO(overrides: ConfigIoDeps = {}) {
   const deps = normalizeDeps(overrides);
   const requestedConfigPath = resolveConfigPathForDeps(deps);
@@ -416,11 +453,6 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     : resolveDefaultConfigCandidates(deps.env, deps.homedir);
   const configPath =
     candidatePaths.find((candidate) => deps.fs.existsSync(candidate)) ?? requestedConfigPath;
-
-  // Snapshot of env vars captured after applyConfigEnv + resolveConfigEnvVars.
-  // Used by writeConfigFile to verify ${VAR} restoration against the env state
-  // that produced the resolved config, not the (possibly mutated) live env.
-  let envSnapshotForRestore: Record<string, string | undefined> | null = null;
 
   function loadConfig(): OpenClawConfig {
     try {
@@ -439,27 +471,10 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       }
       const raw = deps.fs.readFileSync(configPath, "utf-8");
       const parsed = deps.json5.parse(raw);
-
-      // Resolve $include directives before validation
-      const resolved = resolveConfigIncludes(parsed, configPath, {
-        readFile: (p) => deps.fs.readFileSync(p, "utf-8"),
-        parseJson: (raw) => deps.json5.parse(raw),
-      });
-
-      // Apply config.env to process.env BEFORE substitution so ${VAR} can reference config-defined vars
-      if (resolved && typeof resolved === "object" && "env" in resolved) {
-        applyConfigEnv(resolved as OpenClawConfig, deps.env);
-      }
-
-      // Substitute ${VAR} env var references
-      const substituted = resolveConfigEnvVars(resolved, deps.env);
-
-      // Capture env snapshot after substitution for use by writeConfigFile.
-      // This ensures restoreEnvVarRefs verifies against the env that produced
-      // the resolved values, not a potentially mutated live env (TOCTOU fix).
-      envSnapshotForRestore = { ...deps.env } as Record<string, string | undefined>;
-
-      const resolvedConfig = substituted;
+      const { resolvedConfigRaw: resolvedConfig } = resolveConfigForRead(
+        resolveConfigIncludesForRead(parsed, configPath, deps),
+        deps.env,
+      );
       warnOnConfigMiskeys(resolvedConfig, deps.logger);
       if (typeof resolvedConfig !== "object" || resolvedConfig === null) {
         return {};
@@ -539,7 +554,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     }
   }
 
-  async function readConfigFileSnapshot(): Promise<ConfigFileSnapshot> {
+  async function readConfigFileSnapshotInternal(): Promise<ReadConfigFileSnapshotInternalResult> {
     maybeLoadDotEnvForConfig(deps.env);
     const exists = deps.fs.existsSync(configPath);
     if (!exists) {
@@ -555,17 +570,19 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       );
       const legacyIssues: LegacyConfigIssue[] = [];
       return {
-        path: configPath,
-        exists: false,
-        raw: null,
-        parsed: {},
-        resolved: {},
-        valid: true,
-        config,
-        hash,
-        issues: [],
-        warnings: [],
-        legacyIssues,
+        snapshot: {
+          path: configPath,
+          exists: false,
+          raw: null,
+          parsed: {},
+          resolved: {},
+          valid: true,
+          config,
+          hash,
+          issues: [],
+          warnings: [],
+          legacyIssues,
+        },
       };
     }
 
@@ -575,151 +592,165 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       const parsedRes = parseConfigJson5(raw, deps.json5);
       if (!parsedRes.ok) {
         return {
-          path: configPath,
-          exists: true,
-          raw,
-          parsed: {},
-          resolved: {},
-          valid: false,
-          config: {},
-          hash,
-          issues: [{ path: "", message: `JSON5 parse failed: ${parsedRes.error}` }],
-          warnings: [],
-          legacyIssues: [],
+          snapshot: {
+            path: configPath,
+            exists: true,
+            raw,
+            parsed: {},
+            resolved: {},
+            valid: false,
+            config: {},
+            hash,
+            issues: [{ path: "", message: `JSON5 parse failed: ${parsedRes.error}` }],
+            warnings: [],
+            legacyIssues: [],
+          },
         };
       }
 
       // Resolve $include directives
       let resolved: unknown;
       try {
-        resolved = resolveConfigIncludes(parsedRes.parsed, configPath, {
-          readFile: (p) => deps.fs.readFileSync(p, "utf-8"),
-          parseJson: (raw) => deps.json5.parse(raw),
-        });
+        resolved = resolveConfigIncludesForRead(parsedRes.parsed, configPath, deps);
       } catch (err) {
         const message =
           err instanceof ConfigIncludeError
             ? err.message
             : `Include resolution failed: ${String(err)}`;
         return {
-          path: configPath,
-          exists: true,
-          raw,
-          parsed: parsedRes.parsed,
-          resolved: coerceConfig(parsedRes.parsed),
-          valid: false,
-          config: coerceConfig(parsedRes.parsed),
-          hash,
-          issues: [{ path: "", message }],
-          warnings: [],
-          legacyIssues: [],
+          snapshot: {
+            path: configPath,
+            exists: true,
+            raw,
+            parsed: parsedRes.parsed,
+            resolved: coerceConfig(parsedRes.parsed),
+            valid: false,
+            config: coerceConfig(parsedRes.parsed),
+            hash,
+            issues: [{ path: "", message }],
+            warnings: [],
+            legacyIssues: [],
+          },
         };
       }
 
-      // Apply config.env to process.env BEFORE substitution so ${VAR} can reference config-defined vars
-      if (resolved && typeof resolved === "object" && "env" in resolved) {
-        applyConfigEnv(resolved as OpenClawConfig, deps.env);
-      }
-
-      // Substitute ${VAR} env var references
-      let substituted: unknown;
+      let readResolution: ConfigReadResolution;
       try {
-        substituted = resolveConfigEnvVars(resolved, deps.env);
-        // Capture env snapshot (same as loadConfig — see TOCTOU comment above)
-        envSnapshotForRestore = { ...deps.env } as Record<string, string | undefined>;
+        readResolution = resolveConfigForRead(resolved, deps.env);
       } catch (err) {
         const message =
           err instanceof MissingEnvVarError
             ? err.message
             : `Env var substitution failed: ${String(err)}`;
         return {
-          path: configPath,
-          exists: true,
-          raw,
-          parsed: parsedRes.parsed,
-          resolved: coerceConfig(resolved),
-          valid: false,
-          config: coerceConfig(resolved),
-          hash,
-          issues: [{ path: "", message }],
-          warnings: [],
-          legacyIssues: [],
+          snapshot: {
+            path: configPath,
+            exists: true,
+            raw,
+            parsed: parsedRes.parsed,
+            resolved: coerceConfig(resolved),
+            valid: false,
+            config: coerceConfig(resolved),
+            hash,
+            issues: [{ path: "", message }],
+            warnings: [],
+            legacyIssues: [],
+          },
         };
       }
 
-      const resolvedConfigRaw = substituted;
+      const resolvedConfigRaw = readResolution.resolvedConfigRaw;
       const legacyIssues = findLegacyConfigIssues(resolvedConfigRaw);
 
       const validated = validateConfigObjectWithPlugins(resolvedConfigRaw);
       if (!validated.ok) {
         return {
-          path: configPath,
-          exists: true,
-          raw,
-          parsed: parsedRes.parsed,
-          resolved: coerceConfig(resolvedConfigRaw),
-          valid: false,
-          config: coerceConfig(resolvedConfigRaw),
-          hash,
-          issues: validated.issues,
-          warnings: validated.warnings,
-          legacyIssues,
+          snapshot: {
+            path: configPath,
+            exists: true,
+            raw,
+            parsed: parsedRes.parsed,
+            resolved: coerceConfig(resolvedConfigRaw),
+            valid: false,
+            config: coerceConfig(resolvedConfigRaw),
+            hash,
+            issues: validated.issues,
+            warnings: validated.warnings,
+            legacyIssues,
+          },
         };
       }
 
       warnIfConfigFromFuture(validated.config, deps.logger);
       return {
-        path: configPath,
-        exists: true,
-        raw,
-        parsed: parsedRes.parsed,
-        // Use resolvedConfigRaw (after $include and ${ENV} substitution but BEFORE runtime defaults)
-        // for config set/unset operations (issue #6070)
-        resolved: coerceConfig(resolvedConfigRaw),
-        valid: true,
-        config: normalizeConfigPaths(
-          applyTalkApiKey(
-            applyModelDefaults(
-              applyAgentDefaults(
-                applySessionDefaults(applyLoggingDefaults(applyMessageDefaults(validated.config))),
+        snapshot: {
+          path: configPath,
+          exists: true,
+          raw,
+          parsed: parsedRes.parsed,
+          // Use resolvedConfigRaw (after $include and ${ENV} substitution but BEFORE runtime defaults)
+          // for config set/unset operations (issue #6070)
+          resolved: coerceConfig(resolvedConfigRaw),
+          valid: true,
+          config: normalizeConfigPaths(
+            applyTalkApiKey(
+              applyModelDefaults(
+                applyAgentDefaults(
+                  applySessionDefaults(
+                    applyLoggingDefaults(applyMessageDefaults(validated.config)),
+                  ),
+                ),
               ),
             ),
           ),
-        ),
-        hash,
-        issues: [],
-        warnings: validated.warnings,
-        legacyIssues,
+          hash,
+          issues: [],
+          warnings: validated.warnings,
+          legacyIssues,
+        },
+        envSnapshotForRestore: readResolution.envSnapshotForRestore,
       };
     } catch (err) {
       return {
-        path: configPath,
-        exists: true,
-        raw: null,
-        parsed: {},
-        resolved: {},
-        valid: false,
-        config: {},
-        hash: hashConfigRaw(null),
-        issues: [{ path: "", message: `read failed: ${String(err)}` }],
-        warnings: [],
-        legacyIssues: [],
+        snapshot: {
+          path: configPath,
+          exists: true,
+          raw: null,
+          parsed: {},
+          resolved: {},
+          valid: false,
+          config: {},
+          hash: hashConfigRaw(null),
+          issues: [{ path: "", message: `read failed: ${String(err)}` }],
+          warnings: [],
+          legacyIssues: [],
+        },
       };
     }
   }
 
-  async function writeConfigFile(cfg: OpenClawConfig) {
+  async function readConfigFileSnapshot(): Promise<ConfigFileSnapshot> {
+    const result = await readConfigFileSnapshotInternal();
+    return result.snapshot;
+  }
+
+  async function readConfigFileSnapshotForWrite(): Promise<ReadConfigFileSnapshotForWriteResult> {
+    const result = await readConfigFileSnapshotInternal();
+    return {
+      snapshot: result.snapshot,
+      writeOptions: {
+        envSnapshotForRestore: result.envSnapshotForRestore,
+        expectedConfigPath: configPath,
+      },
+    };
+  }
+
+  async function writeConfigFile(cfg: OpenClawConfig, options: ConfigWriteOptions = {}) {
     clearConfigCache();
     let persistCandidate: unknown = cfg;
-    // Save the injected env snapshot before readConfigFileSnapshot() overwrites it
-    // with a new snapshot based on the (possibly mutated) live env.
-    const savedEnvSnapshot = envSnapshotForRestore;
-    const snapshot = await readConfigFileSnapshot();
+    const { snapshot } = await readConfigFileSnapshotInternal();
     let envRefMap: Map<string, string> | null = null;
     let changedPaths: Set<string> | null = null;
-    if (savedEnvSnapshot) {
-      envSnapshotForRestore = savedEnvSnapshot;
-    }
     if (snapshot.valid && snapshot.exists) {
       const patch = createMergePatch(snapshot.config, cfg);
       persistCandidate = applyMergePatch(snapshot.resolved, patch);
@@ -771,7 +802,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           // Use env snapshot from when config was loaded (if available) to avoid
           // TOCTOU issues where env changes between load and write. Falls back to
           // live env if no snapshot exists (e.g., first write before any load).
-          const envForRestore = envSnapshotForRestore ?? deps.env;
+          const envForRestore = options.envSnapshotForRestore ?? deps.env;
           cfgToWrite = restoreEnvVarRefs(
             cfgToWrite,
             parsedRes.parsed,
@@ -851,15 +882,8 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     configPath,
     loadConfig,
     readConfigFileSnapshot,
+    readConfigFileSnapshotForWrite,
     writeConfigFile,
-    /** Return the env snapshot captured during the last loadConfig/readConfigFileSnapshot, or null. */
-    getEnvSnapshot(): Record<string, string | undefined> | null {
-      return envSnapshotForRestore;
-    },
-    /** Inject an env snapshot (e.g. from a prior IO instance) for use by writeConfigFile. */
-    setEnvSnapshot(snapshot: Record<string, string | undefined>): void {
-      envSnapshotForRestore = snapshot;
-    },
   };
 }
 
@@ -928,27 +952,17 @@ export async function readConfigFileSnapshot(): Promise<ConfigFileSnapshot> {
 }
 
 export async function readConfigFileSnapshotForWrite(): Promise<ReadConfigFileSnapshotForWriteResult> {
-  const io = createConfigIO();
-  const snapshot = await io.readConfigFileSnapshot();
-  return {
-    snapshot,
-    writeOptions: {
-      envSnapshotForRestore: io.getEnvSnapshot() ?? undefined,
-      expectedConfigPath: io.configPath,
-    },
-  };
+  return await createConfigIO().readConfigFileSnapshotForWrite();
 }
 
 export async function writeConfigFile(
   cfg: OpenClawConfig,
   options: ConfigWriteOptions = {},
 ): Promise<void> {
-  clearConfigCache();
   const io = createConfigIO();
   const sameConfigPath =
     options.expectedConfigPath === undefined || options.expectedConfigPath === io.configPath;
-  if (sameConfigPath && options.envSnapshotForRestore) {
-    io.setEnvSnapshot(options.envSnapshotForRestore);
-  }
-  await io.writeConfigFile(cfg);
+  await io.writeConfigFile(cfg, {
+    envSnapshotForRestore: sameConfigPath ? options.envSnapshotForRestore : undefined,
+  });
 }
