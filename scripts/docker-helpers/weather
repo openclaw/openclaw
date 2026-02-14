@@ -1,0 +1,16 @@
+#!/bin/bash
+# OpenClaw Weather Wrapper (wttr.in + Open-Meteo fallback + Locking)
+LOCATION="${1:-Jefferson,GA}"
+LOCATION="${LOCATION/ /}"
+LOCKFILE="/tmp/weather-tool.lock"
+exec 200>$LOCKFILE
+if ! flock -x -w 10 200; then echo "Weather service busy"; exit 1; fi
+OUT=$(curl -s -m 2 "wttr.in/${LOCATION// /+}?format=3&u")
+if [ -n "$OUT" ] && [[ "$OUT" != *"Error"* ]]; then
+echo "$OUT"
+else
+# Fallback for Phil's location
+DATA=$(curl -s --connect-timeout 3 "https://api.open-meteo.com/v1/forecast?latitude=34.116&longitude=-83.572&current_weather=true&temperature_unit=fahrenheit")
+TEMP=$(echo "$DATA" | grep -oP '"temperature":\K[-0-9.]+')
+echo "Jefferson, GA: $TEMP°F (Open-Meteo fallback)"
+fi

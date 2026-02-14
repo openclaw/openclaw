@@ -1,0 +1,11 @@
+#!/bin/bash
+# Himalaya v1.1.0 Command Compatibility Shim
+REAL_HIMALAYA=$(which himalaya-real 2>/dev/null || echo "/usr/local/bin/himalaya")
+CMD="$1"
+shift
+case "$CMD" in
+list) exec "$REAL_HIMALAYA" envelope list "$@" ;;
+read) exec "$REAL_HIMALAYA" message read "$@" ;;
+envelope) [[ "$1" == "read" ]] && { shift; exec "$REAL_HIMALAYA" message read "$@"; } || exec "$REAL_HIMALAYA" envelope "$@" ;;
+*) exec "$REAL_HIMALAYA" "$CMD" "$@" ;;
+esac

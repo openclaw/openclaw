@@ -1,0 +1,6 @@
+#!/bin/bash
+# Safe Docker health check script
+if ! command -v docker &> /dev/null; then exit 127; fi
+CONTAINERS=$(docker ps -a -q)
+if [ -z "$CONTAINERS" ]; then echo "No containers found."; exit 0; fi
+docker inspect --format='{{.Name}}: {{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' $CONTAINERS | sed 's/^\///'
