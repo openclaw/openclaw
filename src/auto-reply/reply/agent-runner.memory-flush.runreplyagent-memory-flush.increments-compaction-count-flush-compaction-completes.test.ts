@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { runReplyAgent } from "./agent-runner.js";
 import {
   createBaseRun,
   getRunEmbeddedPiAgentMock,
@@ -13,6 +12,7 @@ import { DEFAULT_MEMORY_FLUSH_PROMPT } from "./memory-flush.js";
 
 describe("runReplyAgent memory flush", () => {
   it("increments compaction count when flush compaction completes", async () => {
+    const { runReplyAgent } = await import("./agent-runner.js");
     const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
     runEmbeddedPiAgentMock.mockReset();
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-flush-"));

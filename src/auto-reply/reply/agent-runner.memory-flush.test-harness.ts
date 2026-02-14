@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { vi } from "vitest";
+import { type MockInstance, vi } from "vitest";
 import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { createMockTypingController } from "./test-helpers.js";
@@ -16,11 +16,11 @@ const state = vi.hoisted(() => ({
   runCliAgentMock: vi.fn(),
 }));
 
-export function getRunEmbeddedPiAgentMock() {
+export function getRunEmbeddedPiAgentMock(): MockInstance {
   return state.runEmbeddedPiAgentMock;
 }
 
-export function getRunCliAgentMock() {
+export function getRunCliAgentMock(): MockInstance {
   return state.runCliAgentMock;
 }
 

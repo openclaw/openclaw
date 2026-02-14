@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { afterEach, vi } from "vitest";
+import { afterEach, type MockInstance, vi } from "vitest";
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 
 const piEmbeddedMocks = vi.hoisted(() => ({
@@ -11,19 +11,19 @@ const piEmbeddedMocks = vi.hoisted(() => ({
   isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
 }));
 
-export function getAbortEmbeddedPiRunMock() {
+export function getAbortEmbeddedPiRunMock(): MockInstance {
   return piEmbeddedMocks.abortEmbeddedPiRun;
 }
 
-export function getCompactEmbeddedPiSessionMock() {
+export function getCompactEmbeddedPiSessionMock(): MockInstance {
   return piEmbeddedMocks.compactEmbeddedPiSession;
 }
 
-export function getRunEmbeddedPiAgentMock() {
+export function getRunEmbeddedPiAgentMock(): MockInstance {
   return piEmbeddedMocks.runEmbeddedPiAgent;
 }
 
-export function getQueueEmbeddedPiMessageMock() {
+export function getQueueEmbeddedPiMessageMock(): MockInstance {
   return piEmbeddedMocks.queueEmbeddedPiMessage;
 }
 
@@ -49,7 +49,7 @@ const providerUsageMocks = vi.hoisted(() => ({
   resolveUsageProviderId: vi.fn((provider: string) => provider.split("/")[0]),
 }));
 
-export function getProviderUsageMocks() {
+export function getProviderUsageMocks(): Record<string, MockInstance> {
   return providerUsageMocks;
 }
 
@@ -77,7 +77,7 @@ const modelCatalogMocks = vi.hoisted(() => ({
   resetModelCatalogCacheForTest: vi.fn(),
 }));
 
-export function getModelCatalogMocks() {
+export function getModelCatalogMocks(): Record<string, MockInstance> {
   return modelCatalogMocks;
 }
 
@@ -89,7 +89,7 @@ const webSessionMocks = vi.hoisted(() => ({
   readWebSelfId: vi.fn().mockReturnValue({ e164: "+1999" }),
 }));
 
-export function getWebSessionMocks() {
+export function getWebSessionMocks(): Record<string, MockInstance> {
   return webSessionMocks;
 }
 
