@@ -106,17 +106,19 @@ const VALID_BOOTSTRAP_NAMES: ReadonlySet<string> = new Set([
   DEFAULT_MEMORY_ALT_FILENAME,
 ]);
 
-async function writeFileIfMissing(filePath: string, content: string) {
+async function writeFileIfMissing(filePath: string, content: string): Promise<boolean> {
   try {
     await fs.writeFile(filePath, content, {
       encoding: "utf-8",
       flag: "wx",
     });
+    return true;
   } catch (err) {
     const anyErr = err as { code?: string };
     if (anyErr.code !== "EEXIST") {
       throw err;
     }
+    return false;
   }
 }
 
@@ -215,13 +217,19 @@ export async function ensureAgentWorkspace(params?: {
   const heartbeatTemplate = await loadTemplate(DEFAULT_HEARTBEAT_FILENAME);
   const bootstrapTemplate = await loadTemplate(DEFAULT_BOOTSTRAP_FILENAME);
 
-  await writeFileIfMissing(agentsPath, agentsTemplate);
-  await writeFileIfMissing(soulPath, soulTemplate);
-  await writeFileIfMissing(toolsPath, toolsTemplate);
-  await writeFileIfMissing(identityPath, identityTemplate);
-  await writeFileIfMissing(userPath, userTemplate);
-  await writeFileIfMissing(heartbeatPath, heartbeatTemplate);
-  if (isBrandNewWorkspace) {
+  const wroteAgents = await writeFileIfMissing(agentsPath, agentsTemplate);
+  const wroteSoul = await writeFileIfMissing(soulPath, soulTemplate);
+  const wroteTools = await writeFileIfMissing(toolsPath, toolsTemplate);
+  const wroteIdentity = await writeFileIfMissing(identityPath, identityTemplate);
+  const wroteUser = await writeFileIfMissing(userPath, userTemplate);
+  const wroteHeartbeat = await writeFileIfMissing(heartbeatPath, heartbeatTemplate);
+  const wroteAnyCoreBootstrapFile =
+    wroteAgents || wroteSoul || wroteTools || wroteIdentity || wroteUser || wroteHeartbeat;
+
+  // If another process started workspace initialization first, we may no longer
+  // look "brand new" by the time this call runs. Still seed BOOTSTRAP.md when
+  // we are creating any of the core bootstrap files in this invocation.
+  if (isBrandNewWorkspace || wroteAnyCoreBootstrapFile) {
     await writeFileIfMissing(bootstrapPath, bootstrapTemplate);
   }
   await ensureGitRepo(dir, isBrandNewWorkspace);
