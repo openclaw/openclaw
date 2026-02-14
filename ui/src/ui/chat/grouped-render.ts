@@ -253,7 +253,12 @@ function renderGroupedMessage(
     .filter(Boolean)
     .join(" ");
 
-  if (!markdown && hasToolCards && isToolResult) {
+  // Tool results: show only the compact card, full output via sidebar "View"
+  if (isToolResult && hasToolCards) {
+    return html`${toolCards.map((card) => renderToolCardSidebar(card, onOpenSidebar))}`;
+  }
+
+  if (!markdown && hasToolCards) {
     return html`${toolCards.map((card) => renderToolCardSidebar(card, onOpenSidebar))}`;
   }
 
