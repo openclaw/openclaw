@@ -1,59 +1,14 @@
 import { randomUUID } from "node:crypto";
+import {
+  DISPATCH_TOOL_POLICIES,
+  getDispatchToolPolicy,
+} from "../../shared/authorization-policy.mjs";
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ACTOR_TYPES = new Set(["HUMAN", "AGENT", "SERVICE", "SYSTEM"]);
 const DEFAULT_TIMEOUT_MS = 10_000;
 
-export const TOOL_SPECS = Object.freeze({
-  "ticket.create": Object.freeze({
-    tool_name: "ticket.create",
-    method: "POST",
-    endpoint: "/tickets",
-    requires_ticket_id: false,
-    mutating: true,
-    allowed_roles: Object.freeze(["dispatcher", "agent"]),
-  }),
-  "ticket.triage": Object.freeze({
-    tool_name: "ticket.triage",
-    method: "POST",
-    endpoint: "/tickets/{ticketId}/triage",
-    requires_ticket_id: true,
-    mutating: true,
-    allowed_roles: Object.freeze(["dispatcher", "agent"]),
-  }),
-  "schedule.confirm": Object.freeze({
-    tool_name: "schedule.confirm",
-    method: "POST",
-    endpoint: "/tickets/{ticketId}/schedule/confirm",
-    requires_ticket_id: true,
-    mutating: true,
-    allowed_roles: Object.freeze(["dispatcher", "customer"]),
-  }),
-  "assignment.dispatch": Object.freeze({
-    tool_name: "assignment.dispatch",
-    method: "POST",
-    endpoint: "/tickets/{ticketId}/assignment/dispatch",
-    requires_ticket_id: true,
-    mutating: true,
-    allowed_roles: Object.freeze(["dispatcher"]),
-  }),
-  "ticket.timeline": Object.freeze({
-    tool_name: "ticket.timeline",
-    method: "GET",
-    endpoint: "/tickets/{ticketId}/timeline",
-    requires_ticket_id: true,
-    mutating: false,
-    allowed_roles: Object.freeze([
-      "dispatcher",
-      "agent",
-      "customer",
-      "tech",
-      "qa",
-      "approver",
-      "finance",
-    ]),
-  }),
-});
+export const TOOL_SPECS = DISPATCH_TOOL_POLICIES;
 
 export class DispatchBridgeError extends Error {
   constructor(status, code, message, details = {}) {
@@ -146,7 +101,7 @@ function resolveTraceId(traceId) {
 
 function resolveToolSpec(toolName) {
   const normalized = readNonEmptyString(toolName, "tool_name");
-  const spec = TOOL_SPECS[normalized];
+  const spec = getDispatchToolPolicy(normalized);
   if (!spec) {
     throw new DispatchBridgeError(400, "UNKNOWN_TOOL", "Tool is not allowlisted", {
       tool_name: normalized,

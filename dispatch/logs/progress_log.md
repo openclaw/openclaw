@@ -307,3 +307,71 @@ Validation Commands + Results:
 Caveats / Risks:
 - Bridge currently covers only dispatch-api endpoints implemented to date; remaining v0 tools should be added incrementally as corresponding endpoints land.
 - Plugin returns structured `isError` tool payloads for deterministic failures; downstream agent policies should continue treating `isError=true` as terminal for that tool attempt.
+
+## 2026-02-13 17:45 PST
+
+### STORY-05
+Summary:
+Started STORY-05 implementation for server-side role/tool/state authorization hardening and bridge/API policy alignment.
+
+Plan:
+- Introduce a shared authorization policy module consumed by both dispatch-api and the dispatch tool bridge to reduce policy drift.
+- Enforce server-side tool-to-endpoint allowlisting (reject mismatched `X-Tool-Name` even when role is otherwise valid).
+- Centralize command state-context authorization checks and keep fail-closed deterministic errors.
+- Add node-native integration test covering API-side role/tool/state authorization failures and bridge/API policy alignment.
+
+Planned File Changes:
+- `dispatch/shared/authorization-policy.mjs`
+- `dispatch/api/src/server.mjs`
+- `dispatch/tools-plugin/src/bridge.mjs`
+- `dispatch/tests/story_05_authorization.node.test.mjs`
+- `dispatch/logs/story_05_contract.md`
+- `dispatch/logs/backlog_status.md`
+- `dispatch/logs/current_work_item.md`
+- `dispatch/logs/next_story_recommendation.md`
+
+## 2026-02-13 17:49 PST
+
+### STORY-05
+Summary:
+Completed server-side role/tool/state authorization hardening with shared policy synchronization between dispatch-api and dispatch tool bridge.
+
+Files Modified:
+- `dispatch/shared/authorization-policy.mjs`
+- `dispatch/api/src/server.mjs`
+- `dispatch/tools-plugin/src/bridge.mjs`
+- `dispatch/tools-plugin/src/index.ts`
+- `dispatch/tests/story_05_authorization.node.test.mjs`
+- `dispatch/logs/story_05_contract.md`
+- `dispatch/logs/progress_log.md`
+- `dispatch/logs/backlog_status.md`
+- `dispatch/logs/current_work_item.md`
+- `dispatch/logs/next_story_recommendation.md`
+
+Authorization Hardening Delivered:
+- Introduced shared policy module (`dispatch/shared/authorization-policy.mjs`) as single source for:
+  - tool -> endpoint mapping
+  - endpoint role allowlists
+  - command endpoint expected state context metadata
+- dispatch-api now enforces tool-to-endpoint authorization for command routes:
+  - rejects mismatched `X-Tool-Name` with `403 TOOL_NOT_ALLOWED`
+  - still enforces role authorization with `403 FORBIDDEN`
+- Centralized state-context authorization checks for command endpoints with deterministic `409 INVALID_STATE_TRANSITION` details (`from_state`, `to_state`).
+- dispatch tool bridge now consumes the same shared policy map to prevent bridge/API drift.
+
+Tests Added:
+- `dispatch/tests/story_05_authorization.node.test.mjs`
+  - server rejects endpoint tool mismatch fail-closed
+  - server rejects forbidden role and preserves ticket state/audit integrity
+  - server rejects invalid state-context deterministically
+  - bridge and API policy maps remain synchronized
+
+Validation Commands + Results:
+- `node --test dispatch/tests/story_05_authorization.node.test.mjs` -> PASS (4/4)
+- `node --test dispatch/tests/story_01_idempotency.node.test.mjs` -> PASS (4/4)
+- `node --test dispatch/tests/story_02_timeline.node.test.mjs` -> PASS (3/3)
+- `node --test dispatch/tests/story_04_tool_bridge.node.test.mjs` -> PASS (3/3)
+- `node --test dispatch/tests/001_init_migration.node.test.mjs` -> PASS (4/4)
+
+Notes:
+- Parallel execution of docker-backed story tests can transiently conflict on container lifecycle; authoritative regression status above is based on clean passing runs.

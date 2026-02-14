@@ -1,5 +1,6 @@
 import { Type } from "@sinclair/typebox";
 import { DispatchBridgeError, invokeDispatchAction } from "./bridge.mjs";
+import { DISPATCH_TOOL_POLICIES } from "../../shared/authorization-policy.mjs";
 
 /**
  * Closed dispatch tool bridge plugin.
@@ -40,58 +41,37 @@ export default function register(api: {
     trace_id: Type.Optional(Type.String({ minLength: 1 })),
   };
 
-  const ticketCreateParameters = Type.Object(
-    {
-      ...commonEnvelopeFields,
-      payload: payloadSchema,
-    },
-    { additionalProperties: false },
-  );
+  const toolDescriptions = {
+    "ticket.create": "Create a ticket via dispatch-api.",
+    "ticket.triage": "Triage a ticket via dispatch-api.",
+    "schedule.confirm": "Confirm a schedule window via dispatch-api.",
+    "assignment.dispatch": "Dispatch assignment via dispatch-api.",
+    "ticket.timeline": "Read ordered audit timeline via dispatch-api.",
+  } as const;
 
-  const ticketScopedMutationParameters = Type.Object(
-    {
-      ...commonEnvelopeFields,
-      ticket_id: Type.String({ minLength: 1 }),
-      payload: payloadSchema,
-    },
-    { additionalProperties: false },
-  );
+  const buildToolParameters = (policy: {
+    mutating: boolean;
+    requires_ticket_id: boolean;
+  }) => {
+    const properties: Record<string, unknown> = { ...commonEnvelopeFields };
+    if (policy.requires_ticket_id) {
+      properties.ticket_id = Type.String({ minLength: 1 });
+    }
+    if (policy.mutating) {
+      properties.payload = payloadSchema;
+    }
+    return Type.Object(properties, { additionalProperties: false });
+  };
 
-  const timelineParameters = Type.Object(
-    {
-      ...commonEnvelopeFields,
-      ticket_id: Type.String({ minLength: 1 }),
-    },
-    { additionalProperties: false },
-  );
-
-  const toolDefinitions = [
-    {
-      name: "ticket.create",
-      description: "Create a ticket via dispatch-api.",
-      parameters: ticketCreateParameters,
-    },
-    {
-      name: "ticket.triage",
-      description: "Triage a ticket via dispatch-api.",
-      parameters: ticketScopedMutationParameters,
-    },
-    {
-      name: "schedule.confirm",
-      description: "Confirm a schedule window via dispatch-api.",
-      parameters: ticketScopedMutationParameters,
-    },
-    {
-      name: "assignment.dispatch",
-      description: "Dispatch assignment via dispatch-api.",
-      parameters: ticketScopedMutationParameters,
-    },
-    {
-      name: "ticket.timeline",
-      description: "Read ordered audit timeline via dispatch-api.",
-      parameters: timelineParameters,
-    },
-  ];
+  const toolDefinitions = Object.values(DISPATCH_TOOL_POLICIES)
+    .map((policy) => ({
+      name: policy.tool_name,
+      description:
+        toolDescriptions[policy.tool_name as keyof typeof toolDescriptions] ??
+        `Invoke ${policy.tool_name} via dispatch-api.`,
+      parameters: buildToolParameters(policy),
+    }))
+    .sort((left, right) => left.name.localeCompare(right.name));
 
   const toolStatus = {
     tool_names: toolDefinitions.map((tool) => tool.name),

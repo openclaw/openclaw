@@ -16,21 +16,13 @@ import {
   requireUuidField,
   sendJson,
 } from "./http-utils.mjs";
+import {
+  getCommandEndpointPolicy,
+  isRoleAllowedForCommandEndpoint,
+  isToolAllowedForCommandEndpoint,
+} from "../../shared/authorization-policy.mjs";
 
 const ticketRouteRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const roleAllowlist = {
-  "/tickets": ["dispatcher", "agent"],
-  "/tickets/{ticketId}/triage": ["dispatcher", "agent"],
-  "/tickets/{ticketId}/schedule/confirm": ["dispatcher", "customer"],
-  "/tickets/{ticketId}/assignment/dispatch": ["dispatcher"],
-};
-
-const endpointToolDefaults = {
-  "/tickets": "ticket.create",
-  "/tickets/{ticketId}/triage": "ticket.triage",
-  "/tickets/{ticketId}/schedule/confirm": "schedule.confirm",
-  "/tickets/{ticketId}/assignment/dispatch": "assignment.dispatch",
-};
 
 function serializeTicket(row) {
   return {
@@ -72,14 +64,16 @@ function serializeAuditEvent(row) {
   };
 }
 
-function assertRoleAllowed(actorRole, endpoint) {
-  const allowed = roleAllowlist[endpoint] ?? [];
-  if (!allowed.includes(actorRole)) {
-    throw new HttpError(403, "FORBIDDEN", `Actor role '${actorRole}' is not allowed for endpoint`);
+function getCommandPolicy(endpoint) {
+  const policy = getCommandEndpointPolicy(endpoint);
+  if (!policy) {
+    throw new HttpError(500, "INTERNAL_ERROR", "Missing command authorization policy");
   }
+  return policy;
 }
 
 function parseActorFromHeaders(headers, endpoint) {
+  const policy = getCommandPolicy(endpoint);
   const actorId = requireHeader(
     headers,
     "x-actor-id",
@@ -95,13 +89,22 @@ function parseActorFromHeaders(headers, endpoint) {
   const actorTypeRaw = lowerHeader(headers, "x-actor-type");
   const actorType = actorTypeRaw ? actorTypeRaw.trim().toUpperCase() : "HUMAN";
   const toolNameHeader = lowerHeader(headers, "x-tool-name");
-  const toolName = toolNameHeader?.trim() || endpointToolDefaults[endpoint] || endpoint;
+  const toolName = toolNameHeader?.trim() || policy.default_tool_name;
 
   if (!["HUMAN", "AGENT", "SERVICE", "SYSTEM"].includes(actorType)) {
     throw new HttpError(400, "INVALID_ACTOR_CONTEXT", "Header 'X-Actor-Type' must be valid");
   }
 
-  assertRoleAllowed(actorRole, endpoint);
+  if (!isRoleAllowedForCommandEndpoint(endpoint, actorRole)) {
+    throw new HttpError(403, "FORBIDDEN", `Actor role '${actorRole}' is not allowed for endpoint`);
+  }
+
+  if (!isToolAllowedForCommandEndpoint(endpoint, toolName)) {
+    throw new HttpError(403, "TOOL_NOT_ALLOWED", `Tool '${toolName}' is not allowed for endpoint`, {
+      endpoint,
+      tool_name: toolName,
+    });
+  }
 
   return {
     actorId,
@@ -201,6 +204,33 @@ async function getTicketForUpdate(client, ticketId) {
     throw new HttpError(404, "TICKET_NOT_FOUND", "Ticket not found");
   }
   return result.rows[0];
+}
+
+function assertCommandStateAllowed(endpoint, fromState, body) {
+  const policy = getCommandPolicy(endpoint);
+  const allowedFromStates = policy.allowed_from_states;
+
+  if (Array.isArray(allowedFromStates) && !allowedFromStates.includes(fromState)) {
+    throw new HttpError(409, "INVALID_STATE_TRANSITION", "Transition is not allowed", {
+      from_state: fromState,
+      to_state: policy.expected_to_state,
+    });
+  }
+
+  if (endpoint === "/tickets/{ticketId}/assignment/dispatch" && fromState === "TRIAGED") {
+    const dispatchMode = typeof body.dispatch_mode === "string" ? body.dispatch_mode.trim() : null;
+    if (dispatchMode !== "EMERGENCY_BYPASS") {
+      throw new HttpError(
+        409,
+        "INVALID_STATE_TRANSITION",
+        "TRIAGED -> DISPATCHED requires explicit emergency bypass reason",
+        {
+          from_state: fromState,
+          to_state: policy.expected_to_state,
+        },
+      );
+    }
+  }
 }
 
 function validateTicketId(ticketId) {
@@ -437,12 +467,7 @@ async function triageTicketMutation(client, context) {
   }
 
   const existing = await getTicketForUpdate(client, ticketId);
-  if (!["NEW", "NEEDS_INFO"].includes(existing.state)) {
-    throw new HttpError(409, "INVALID_STATE_TRANSITION", "Transition is not allowed", {
-      from_state: existing.state,
-      to_state: "TRIAGED",
-    });
-  }
+  assertCommandStateAllowed("/tickets/{ticketId}/triage", existing.state, body);
 
   const update = await client.query(
     `
@@ -496,12 +521,7 @@ async function confirmScheduleMutation(client, context) {
   }
 
   const existing = await getTicketForUpdate(client, ticketId);
-  if (existing.state !== "SCHEDULE_PROPOSED") {
-    throw new HttpError(409, "INVALID_STATE_TRANSITION", "Transition is not allowed", {
-      from_state: existing.state,
-      to_state: "SCHEDULED",
-    });
-  }
+  assertCommandStateAllowed("/tickets/{ticketId}/schedule/confirm", existing.state, body);
 
   const update = await client.query(
     `
@@ -552,25 +572,7 @@ async function dispatchAssignmentMutation(client, context) {
 
   const existing = await getTicketForUpdate(client, ticketId);
   const dispatchMode = typeof body.dispatch_mode === "string" ? body.dispatch_mode.trim() : null;
-
-  if (existing.state === "TRIAGED") {
-    if (dispatchMode !== "EMERGENCY_BYPASS") {
-      throw new HttpError(
-        409,
-        "INVALID_STATE_TRANSITION",
-        "TRIAGED -> DISPATCHED requires explicit emergency bypass reason",
-        {
-          from_state: existing.state,
-          to_state: "DISPATCHED",
-        },
-      );
-    }
-  } else if (existing.state !== "SCHEDULED") {
-    throw new HttpError(409, "INVALID_STATE_TRANSITION", "Transition is not allowed", {
-      from_state: existing.state,
-      to_state: "DISPATCHED",
-    });
-  }
+  assertCommandStateAllowed("/tickets/{ticketId}/assignment/dispatch", existing.state, body);
 
   const update = await client.query(
     `
