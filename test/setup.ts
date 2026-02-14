@@ -163,11 +163,18 @@ const createDefaultRegistry = () =>
     },
   ]);
 
+// Creating a fresh registry before every single test was measurable overhead.
+// The registry is treated as immutable by production code; tests that need a
+// custom registry set it explicitly.
+const DEFAULT_PLUGIN_REGISTRY = createDefaultRegistry();
+
 beforeEach(() => {
-  setActivePluginRegistry(createDefaultRegistry());
+  setActivePluginRegistry(DEFAULT_PLUGIN_REGISTRY);
 });
 
 afterEach(() => {
   // Guard against leaked fake timers across test files/workers.
-  vi.useRealTimers();
+  if (vi.isFakeTimers()) {
+    vi.useRealTimers();
+  }
 });
