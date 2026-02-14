@@ -25,6 +25,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   val statusText: StateFlow<String> = runtime.statusText
   val serverName: StateFlow<String?> = runtime.serverName
   val remoteAddress: StateFlow<String?> = runtime.remoteAddress
+  val pendingGatewayTrust: StateFlow<NodeRuntime.GatewayTrustPrompt?> = runtime.pendingGatewayTrust
   val isForeground: StateFlow<Boolean> = runtime.isForeground
   val seamColorArgb: StateFlow<Long> = runtime.seamColorArgb
   val mainSessionKey: StateFlow<String> = runtime.mainSessionKey
@@ -143,6 +144,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
   fun disconnect() {
     runtime.disconnect()
+  }
+
+  fun acceptGatewayTrustPrompt() {
+    runtime.acceptGatewayTrustPrompt()
+  }
+
+  fun declineGatewayTrustPrompt() {
+    runtime.declineGatewayTrustPrompt()
   }
 
   fun handleCanvasA2UIActionFromWebView(payloadJson: String) {
