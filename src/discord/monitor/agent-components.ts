@@ -35,6 +35,108 @@ type DiscordUser = Parameters<typeof formatDiscordUserTag>[0];
 
 type AgentComponentInteraction = ButtonInteraction | StringSelectMenuInteraction;
 
+type DiscordChannelContext = {
+  channelName: string | undefined;
+  channelSlug: string;
+  channelType: number | undefined;
+  isThread: boolean;
+  parentId: string | undefined;
+  parentName: string | undefined;
+  parentSlug: string;
+};
+
+function resolveDiscordChannelContext(
+  interaction: AgentComponentInteraction,
+): DiscordChannelContext {
+  const channel = interaction.channel;
+  const channelName = channel && "name" in channel ? (channel.name as string) : undefined;
+  const channelSlug = channelName ? normalizeDiscordSlug(channelName) : "";
+  const channelType = channel && "type" in channel ? (channel.type as number) : undefined;
+  const isThread = isThreadChannelType(channelType);
+
+  let parentId: string | undefined;
+  let parentName: string | undefined;
+  let parentSlug = "";
+  if (isThread && channel && "parentId" in channel) {
+    parentId = (channel.parentId as string) ?? undefined;
+    if ("parent" in channel) {
+      const parent = (channel as { parent?: { name?: string } }).parent;
+      if (parent?.name) {
+        parentName = parent.name;
+        parentSlug = normalizeDiscordSlug(parentName);
+      }
+    }
+  }
+
+  return { channelName, channelSlug, channelType, isThread, parentId, parentName, parentSlug };
+}
+
+async function ensureGuildComponentMemberAllowed(params: {
+  interaction: AgentComponentInteraction;
+  guildInfo: ReturnType<typeof resolveDiscordGuildEntry>;
+  channelId: string;
+  rawGuildId: string | undefined;
+  channelCtx: DiscordChannelContext;
+  memberRoleIds: string[];
+  user: DiscordUser;
+  replyOpts: { ephemeral?: boolean };
+  componentLabel: string;
+  unauthorizedReply: string;
+}): Promise<boolean> {
+  const {
+    interaction,
+    guildInfo,
+    channelId,
+    rawGuildId,
+    channelCtx,
+    memberRoleIds,
+    user,
+    replyOpts,
+    componentLabel,
+    unauthorizedReply,
+  } = params;
+
+  if (!rawGuildId) {
+    return true;
+  }
+
+  const channelConfig = resolveDiscordChannelConfigWithFallback({
+    guildInfo,
+    channelId,
+    channelName: channelCtx.channelName,
+    channelSlug: channelCtx.channelSlug,
+    parentId: channelCtx.parentId,
+    parentName: channelCtx.parentName,
+    parentSlug: channelCtx.parentSlug,
+    scope: channelCtx.isThread ? "thread" : "channel",
+  });
+
+  const channelUsers = channelConfig?.users ?? guildInfo?.users;
+  const channelRoles = channelConfig?.roles ?? guildInfo?.roles;
+  const memberAllowed = resolveDiscordMemberAllowed({
+    userAllowList: channelUsers,
+    roleAllowList: channelRoles,
+    memberRoleIds,
+    userId: user.id,
+    userName: user.username,
+    userTag: user.discriminator ? `${user.username}#${user.discriminator}` : undefined,
+  });
+  if (memberAllowed) {
+    return true;
+  }
+
+  logVerbose(`agent ${componentLabel}: blocked user ${user.id} (not in users/roles allowlist)`);
+  try {
+    await interaction.reply({
+      content: unauthorizedReply,
+      ...replyOpts,
+    });
+  } catch {
+    // Interaction may have expired
+  }
+  return false;
+}
+
 export type AgentComponentContext = {
   cfg: OpenClawConfig;
   accountId: string;
@@ -265,73 +367,26 @@ export class AgentComponentButton extends Button {
 
     // P2 FIX: Check user allowlist before processing component interaction
     // This prevents unauthorized users from injecting system events
-    const guild = interaction.guild;
     const guildInfo = resolveDiscordGuildEntry({
-      guild: guild ?? undefined,
+      guild: interaction.guild ?? undefined,
       guildEntries: this.ctx.guildEntries,
     });
-
-    // Resolve channel info for thread detection and allowlist inheritance
-    const channel = interaction.channel;
-    const channelName = channel && "name" in channel ? (channel.name as string) : undefined;
-    const channelSlug = channelName ? normalizeDiscordSlug(channelName) : "";
-    const channelType = channel && "type" in channel ? (channel.type as number) : undefined;
-    const isThread = isThreadChannelType(channelType);
-
-    // Resolve thread parent for allowlist inheritance
-    // Note: We can get parentId from channel but cannot fetch parent name without a client.
-    // The parentId alone enables ID-based parent config matching. Name-based matching
-    // requires the channel cache to have parent info available.
-    let parentId: string | undefined;
-    let parentName: string | undefined;
-    let parentSlug = "";
-    if (isThread && channel && "parentId" in channel) {
-      parentId = (channel.parentId as string) ?? undefined;
-      // Try to get parent name from channel's parent if available
-      if ("parent" in channel) {
-        const parent = (channel as { parent?: { name?: string } }).parent;
-        if (parent?.name) {
-          parentName = parent.name;
-          parentSlug = normalizeDiscordSlug(parentName);
-        }
-      }
-    }
-
-    // Only check guild allowlists if this is a guild interaction
-    if (rawGuildId) {
-      const channelConfig = resolveDiscordChannelConfigWithFallback({
-        guildInfo,
-        channelId,
-        channelName,
-        channelSlug,
-        parentId,
-        parentName,
-        parentSlug,
-        scope: isThread ? "thread" : "channel",
-      });
-
-      const channelUsers = channelConfig?.users ?? guildInfo?.users;
-      const channelRoles = channelConfig?.roles ?? guildInfo?.roles;
-      const memberAllowed = resolveDiscordMemberAllowed({
-        userAllowList: channelUsers,
-        roleAllowList: channelRoles,
-        memberRoleIds,
-        userId,
-        userName: user.username,
-        userTag: user.discriminator ? `${user.username}#${user.discriminator}` : undefined,
-      });
-      if (!memberAllowed) {
-        logVerbose(`agent button: blocked user ${userId} (not in users/roles allowlist)`);
-        try {
-          await interaction.reply({
-            content: "You are not authorized to use this button.",
-            ...replyOpts,
-          });
-        } catch {
-          // Interaction may have expired
-        }
-        return;
-      }
+    const channelCtx = resolveDiscordChannelContext(interaction);
+    const { parentId } = channelCtx;
+    const memberAllowed = await ensureGuildComponentMemberAllowed({
+      interaction,
+      guildInfo,
+      channelId,
+      rawGuildId,
+      channelCtx,
+      memberRoleIds,
+      user,
+      replyOpts,
+      componentLabel: "button",
+      unauthorizedReply: "You are not authorized to use this button.",
+    });
+    if (!memberAllowed) {
+      return;
     }
 
     // Resolve route with full context (guildId, proper peer kind, parentPeer)
@@ -448,70 +503,26 @@ export class AgentSelectMenu extends StringSelectMenu {
     }
 
     // Check user allowlist before processing component interaction
-    const guild = interaction.guild;
     const guildInfo = resolveDiscordGuildEntry({
-      guild: guild ?? undefined,
+      guild: interaction.guild ?? undefined,
       guildEntries: this.ctx.guildEntries,
     });
-
-    // Resolve channel info for thread detection and allowlist inheritance
-    const channel = interaction.channel;
-    const channelName = channel && "name" in channel ? (channel.name as string) : undefined;
-    const channelSlug = channelName ? normalizeDiscordSlug(channelName) : "";
-    const channelType = channel && "type" in channel ? (channel.type as number) : undefined;
-    const isThread = isThreadChannelType(channelType);
-
-    // Resolve thread parent for allowlist inheritance
-    let parentId: string | undefined;
-    let parentName: string | undefined;
-    let parentSlug = "";
-    if (isThread && channel && "parentId" in channel) {
-      parentId = (channel.parentId as string) ?? undefined;
-      // Try to get parent name from channel's parent if available
-      if ("parent" in channel) {
-        const parent = (channel as { parent?: { name?: string } }).parent;
-        if (parent?.name) {
-          parentName = parent.name;
-          parentSlug = normalizeDiscordSlug(parentName);
-        }
-      }
-    }
-
-    // Only check guild allowlists if this is a guild interaction
-    if (rawGuildId) {
-      const channelConfig = resolveDiscordChannelConfigWithFallback({
-        guildInfo,
-        channelId,
-        channelName,
-        channelSlug,
-        parentId,
-        parentName,
-        parentSlug,
-        scope: isThread ? "thread" : "channel",
-      });
-
-      const channelUsers = channelConfig?.users ?? guildInfo?.users;
-      const channelRoles = channelConfig?.roles ?? guildInfo?.roles;
-      const memberAllowed = resolveDiscordMemberAllowed({
-        userAllowList: channelUsers,
-        roleAllowList: channelRoles,
-        memberRoleIds,
-        userId,
-        userName: user.username,
-        userTag: user.discriminator ? `${user.username}#${user.discriminator}` : undefined,
-      });
-      if (!memberAllowed) {
-        logVerbose(`agent select: blocked user ${userId} (not in users/roles allowlist)`);
-        try {
-          await interaction.reply({
-            content: "You are not authorized to use this select menu.",
-            ...replyOpts,
-          });
-        } catch {
-          // Interaction may have expired
-        }
-        return;
-      }
+    const channelCtx = resolveDiscordChannelContext(interaction);
+    const { parentId } = channelCtx;
+    const memberAllowed = await ensureGuildComponentMemberAllowed({
+      interaction,
+      guildInfo,
+      channelId,
+      rawGuildId,
+      channelCtx,
+      memberRoleIds,
+      user,
+      replyOpts,
+      componentLabel: "select",
+      unauthorizedReply: "You are not authorized to use this select menu.",
+    });
+    if (!memberAllowed) {
+      return;
     }
 
     // Extract selected values
