@@ -56,7 +56,7 @@ describe("extractTextFromMessage", () => {
       { includeThinking: true },
     );
 
-    expect(text).toBe("[thinking]\nponder\n\nhello");
+    expect(text).toBe("[thinking]\nponder\n[thinking_end]\n\nhello");
   });
 });
 

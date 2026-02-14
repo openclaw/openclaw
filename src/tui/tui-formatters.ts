@@ -16,6 +16,8 @@ export function resolveFinalAssistantText(params: {
   return "(no output)";
 }
 
+const THINKING_END_MARKER = "[thinking_end]";
+
 export function composeThinkingAndContent(params: {
   thinkingText?: string;
   contentText?: string;
@@ -26,7 +28,7 @@ export function composeThinkingAndContent(params: {
   const parts: string[] = [];
 
   if (params.showThinking && thinkingText) {
-    parts.push(`[thinking]\n${thinkingText}`);
+    parts.push(`[thinking]\n${thinkingText}\n${THINKING_END_MARKER}`);
   }
   if (contentText) {
     parts.push(contentText);

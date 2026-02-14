@@ -1,7 +1,12 @@
 import type { TUI } from "@mariozechner/pi-tui";
 import type { ChatLog } from "./components/chat-log.js";
 import type { AgentEvent, ChatEvent, TuiStateAccess } from "./tui-types.js";
-import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
+import {
+  asString,
+  extractTextFromMessage,
+  extractThinkingFromMessage,
+  isCommandMessage,
+} from "./tui-formatters.js";
 import { TuiStreamAssembler } from "./tui-stream-assembler.js";
 
 type EventHandlerContext = {
@@ -14,6 +19,8 @@ type EventHandlerContext = {
   isLocalRunId?: (runId: string) => boolean;
   forgetLocalRunId?: (runId: string) => void;
   clearLocalRunIds?: () => void;
+  setThinkingPreview?: (text: string) => void;
+  setActiveToolName?: (toolName: string) => void;
 };
 
 export function createEventHandlers(context: EventHandlerContext) {
@@ -27,6 +34,8 @@ export function createEventHandlers(context: EventHandlerContext) {
     isLocalRunId,
     forgetLocalRunId,
     clearLocalRunIds,
+    setThinkingPreview,
+    setActiveToolName,
   } = context;
   const finalizedRuns = new Map<string, number>();
   const sessionRuns = new Map<string, number>();
@@ -65,6 +74,8 @@ export function createEventHandlers(context: EventHandlerContext) {
     sessionRuns.clear();
     streamAssembler = new TuiStreamAssembler();
     clearLocalRunIds?.();
+    setThinkingPreview?.("");
+    setActiveToolName?.("");
   };
 
   const noteSessionRun = (runId: string) => {
@@ -105,6 +116,10 @@ export function createEventHandlers(context: EventHandlerContext) {
       if (!displayText) {
         return;
       }
+      const thinkingPreview = extractThinkingFromMessage(evt.message);
+      if (thinkingPreview) {
+        setThinkingPreview?.(thinkingPreview);
+      }
       chatLog.updateAssistant(displayText, evt.runId);
       setActivityStatus("streaming");
     }
@@ -135,6 +150,8 @@ export function createEventHandlers(context: EventHandlerContext) {
         }
         streamAssembler.drop(evt.runId);
         noteFinalizedRun(evt.runId);
+        setThinkingPreview?.("");
+        setActiveToolName?.("");
         state.activeChatRunId = null;
         setActivityStatus("idle");
         void refreshSessionInfo?.();
@@ -156,6 +173,8 @@ export function createEventHandlers(context: EventHandlerContext) {
       const finalText = streamAssembler.finalize(evt.runId, evt.message, state.showThinking);
       chatLog.finalizeAssistant(finalText, evt.runId);
       noteFinalizedRun(evt.runId);
+      setThinkingPreview?.("");
+      setActiveToolName?.("");
       state.activeChatRunId = null;
       setActivityStatus(stopReason === "error" ? "error" : "idle");
       // Refresh session info to update token counts in footer
@@ -165,6 +184,8 @@ export function createEventHandlers(context: EventHandlerContext) {
       chatLog.addSystem("run aborted");
       streamAssembler.drop(evt.runId);
       sessionRuns.delete(evt.runId);
+      setThinkingPreview?.("");
+      setActiveToolName?.("");
       state.activeChatRunId = null;
       setActivityStatus("aborted");
       void refreshSessionInfo?.();
@@ -178,6 +199,8 @@ export function createEventHandlers(context: EventHandlerContext) {
       chatLog.addSystem(`run error: ${evt.errorMessage ?? "unknown"}`);
       streamAssembler.drop(evt.runId);
       sessionRuns.delete(evt.runId);
+      setThinkingPreview?.("");
+      setActiveToolName?.("");
       state.activeChatRunId = null;
       setActivityStatus("error");
       void refreshSessionInfo?.();
@@ -220,6 +243,8 @@ export function createEventHandlers(context: EventHandlerContext) {
       }
       if (phase === "start") {
         chatLog.startTool(toolCallId, toolName, data.args);
+        setActiveToolName?.(toolName);
+        setActivityStatus("running");
       } else if (phase === "update") {
         if (!allowToolOutput) {
           return;
@@ -235,6 +260,10 @@ export function createEventHandlers(context: EventHandlerContext) {
         } else {
           chatLog.updateToolResult(toolCallId, { content: [] }, { isError: Boolean(data.isError) });
         }
+        setActiveToolName?.("");
+        if (state.activeChatRunId === evt.runId) {
+          setActivityStatus("streaming");
+        }
       }
       tui.requestRender();
       return;
@@ -249,9 +278,11 @@ export function createEventHandlers(context: EventHandlerContext) {
       }
       if (phase === "end") {
         setActivityStatus("idle");
+        setActiveToolName?.("");
       }
       if (phase === "error") {
         setActivityStatus("error");
+        setActiveToolName?.("");
       }
       tui.requestRender();
     }

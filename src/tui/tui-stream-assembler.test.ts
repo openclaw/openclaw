@@ -22,7 +22,7 @@ describe("TuiStreamAssembler", () => {
       },
       true,
     );
-    expect(second).toBe("[thinking]\nBrain\n\nHello");
+    expect(second).toBe("[thinking]\nBrain\n[thinking_end]\n\nHello");
   });
 
   it("omits thinking when showThinking is false", () => {
