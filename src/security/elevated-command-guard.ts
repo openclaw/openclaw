@@ -15,9 +15,7 @@ const ELEVATED_BLOCKED_PATTERNS: BlockedPattern[] = [
     reason: "network fetch piped to shell execution",
   },
   {
-    pattern: /\b(curl|wget)\b.*\|\s*(source|\.)\b/i,
-    reason: "network fetch piped to source",
-  },
+    pattern: /\b(curl|wget)\b.*\|\s*(source|\\.)\b/i,
   {
     pattern: /\brm\s+(-[a-zA-Z]*r[a-zA-Z]*f|-[a-zA-Z]*f[a-zA-Z]*r)\s+[/~]/,
     reason: "recursive forced deletion of root or home directory",
