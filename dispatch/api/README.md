@@ -16,13 +16,20 @@ node dispatch/api/src/server.mjs
 
 - `POST /tickets`
 - `POST /tickets/{ticketId}/triage`
+- `POST /tickets/{ticketId}/schedule/propose`
 - `POST /tickets/{ticketId}/schedule/confirm`
 - `POST /tickets/{ticketId}/assignment/dispatch`
+- `POST /tickets/{ticketId}/tech/check-in`
+- `POST /tickets/{ticketId}/tech/request-change`
+- `POST /tickets/{ticketId}/approval/decide`
 - `POST /tickets/{ticketId}/evidence`
 - `POST /tickets/{ticketId}/tech/complete`
+- `POST /tickets/{ticketId}/qa/verify`
+- `POST /tickets/{ticketId}/billing/generate-invoice`
 
 ## Implemented read endpoints
 
+- `GET /tickets/{ticketId}`
 - `GET /tickets/{ticketId}/timeline`
 - `GET /tickets/{ticketId}/evidence`
 - `GET /metrics`
@@ -46,4 +53,3 @@ Each command endpoint currently requires deterministic dev headers:
 ## Current gaps
 
 - production authn/authz claims middleware
-- remaining command/read endpoints from full v0 OpenAPI

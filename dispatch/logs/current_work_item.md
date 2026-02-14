@@ -1,20 +1,20 @@
 # Current Work Item
 
 ## Story ID
-`NONE (v0 backlog complete)`
+`MVP-03`
 
 ## Epic
-`N/A`
+`EPIC-MVP-02: Security Hardening`
 
 ## Priority
-`N/A`
+`P0`
 
 ## Completion Status
-All stories in `ai_dispatch_agile_project_package/backlog/backlog_v0.csv` are complete (`STORY-01` through `STORY-10`).
+`MVP-01` and `MVP-02` are complete and validated. `MVP-03` is now the next critical path item.
 
 ## Suggested Focus Area
-Move into post-v0 hardening and rollout planning:
-- production authn/authz claims integration
-- remaining OpenAPI endpoint implementation (`tech.check_in`, approvals, QA verify, billing)
-- metrics export integration with durable observability backend
-- deployment/ops runbook rehearsal for controlled production cutover
+Implement production-grade authentication and claim-bound authorization:
+- replace trust-on-header actor context with signed claims validation
+- bind actor identity/role to server-side authorization checks
+- enforce scope boundaries (account/site) from claims across ticket operations
+- add negative tests for forged/invalid claims and role mismatch

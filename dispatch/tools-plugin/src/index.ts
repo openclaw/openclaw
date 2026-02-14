@@ -44,8 +44,16 @@ export default function register(api: {
   const toolDescriptions = {
     "ticket.create": "Create a ticket via dispatch-api.",
     "ticket.triage": "Triage a ticket via dispatch-api.",
+    "schedule.propose": "Propose schedule windows via dispatch-api.",
     "schedule.confirm": "Confirm a schedule window via dispatch-api.",
     "assignment.dispatch": "Dispatch assignment via dispatch-api.",
+    "tech.check_in": "Record technician check-in via dispatch-api.",
+    "tech.request_change": "Submit technician change request via dispatch-api.",
+    "approval.decide": "Approve or deny a change request via dispatch-api.",
+    "qa.verify": "Verify closeout package via dispatch-api.",
+    "billing.generate_invoice": "Generate invoice state transition via dispatch-api.",
+    "ticket.get": "Read ticket snapshot via dispatch-api.",
+    "closeout.list_evidence": "Read evidence items via dispatch-api.",
     "ticket.timeline": "Read ordered audit timeline via dispatch-api.",
   } as const;
 

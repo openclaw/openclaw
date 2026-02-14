@@ -39,8 +39,12 @@ describe("dispatch db migration 001_init", () => {
       "TRIAGED transitions do not include emergency dispatch path",
     );
     expectSql(
-      /from_state = 'IN_PROGRESS' AND to_state IN \('ON_HOLD', 'COMPLETED_PENDING_VERIFICATION'\)/,
-      "IN_PROGRESS transitions not constrained",
+      /from_state = 'APPROVAL_REQUIRED'[\\s\\S]*to_state IN \('READY_TO_SCHEDULE', 'TRIAGED', 'IN_PROGRESS'\)/,
+      "APPROVAL_REQUIRED transitions do not include in-progress return path",
+    );
+    expectSql(
+      /from_state = 'IN_PROGRESS'[\\s\\S]*to_state IN \('ON_HOLD', 'COMPLETED_PENDING_VERIFICATION', 'APPROVAL_REQUIRED'\)/,
+      "IN_PROGRESS transitions do not include approval escalation path",
     );
     expectSql(/from_state = 'INVOICED' AND to_state = 'CLOSED'/, "terminal transition missing");
   });

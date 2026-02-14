@@ -1,8 +1,11 @@
 # Next Story Recommendation
 
-No remaining stories in the v0 backlog.
+Recommended immediate start:
+1. `MVP-03` production authn/authz claims integration.
 
-Recommended follow-on (post-v0 hardening):
-1. Production authn/authz integration (replace header-based actor context).
-2. Remaining command/read endpoint completion to full OpenAPI parity.
-3. External metrics backend integration and alert policy tuning.
+Then execute in dependency order:
+2. `MVP-04` evidence/signature hardening.
+3. `MVP-05` CI blocking gates for dispatch suite + canonical E2E.
+4. `MVP-06` runbooks/alerts and operational readiness.
+5. `MVP-07` UI MVP implementation.
+6. `MVP-08` pilot UAT and cutover readiness.

@@ -159,13 +159,19 @@ CREATE TABLE IF NOT EXISTS ticket_state_transitions (
       from_state = 'TRIAGED'
       AND to_state IN ('APPROVAL_REQUIRED', 'READY_TO_SCHEDULE', 'DISPATCHED')
     )
-    OR (from_state = 'APPROVAL_REQUIRED' AND to_state IN ('READY_TO_SCHEDULE', 'TRIAGED'))
+    OR (
+      from_state = 'APPROVAL_REQUIRED'
+      AND to_state IN ('READY_TO_SCHEDULE', 'TRIAGED', 'IN_PROGRESS')
+    )
     OR (from_state = 'READY_TO_SCHEDULE' AND to_state = 'SCHEDULE_PROPOSED')
     OR (from_state = 'SCHEDULE_PROPOSED' AND to_state = 'SCHEDULED')
     OR (from_state = 'SCHEDULED' AND to_state = 'DISPATCHED')
     OR (from_state = 'DISPATCHED' AND to_state = 'ON_SITE')
     OR (from_state = 'ON_SITE' AND to_state = 'IN_PROGRESS')
-    OR (from_state = 'IN_PROGRESS' AND to_state IN ('ON_HOLD', 'COMPLETED_PENDING_VERIFICATION'))
+    OR (
+      from_state = 'IN_PROGRESS'
+      AND to_state IN ('ON_HOLD', 'COMPLETED_PENDING_VERIFICATION', 'APPROVAL_REQUIRED')
+    )
     OR (from_state = 'ON_HOLD' AND to_state IN ('READY_TO_SCHEDULE', 'IN_PROGRESS'))
     OR (from_state = 'COMPLETED_PENDING_VERIFICATION' AND to_state = 'VERIFIED')
     OR (from_state = 'VERIFIED' AND to_state = 'INVOICED')

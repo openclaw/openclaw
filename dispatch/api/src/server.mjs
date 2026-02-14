@@ -322,14 +322,15 @@ async function insertAuditEvent(client, params) {
   return auditResult.rows[0].id;
 }
 
-async function insertAuditAndTransition(client, params) {
+async function insertTransitionRow(client, params) {
   const {
     ticketId,
-    beforeState,
-    afterState,
+    fromState,
+    toState,
+    auditEventId,
     metrics,
   } = params;
-  const auditEventId = await insertAuditEvent(client, params);
+
   await client.query(
     `
       INSERT INTO ticket_state_transitions (
@@ -340,12 +341,29 @@ async function insertAuditAndTransition(client, params) {
       )
       VALUES ($1,$2,$3,$4)
     `,
-    [ticketId, beforeState, afterState, auditEventId],
+    [ticketId, fromState, toState, auditEventId],
   );
 
   if (metrics && typeof metrics.incrementTransition === "function") {
-    metrics.incrementTransition(beforeState, afterState);
+    metrics.incrementTransition(fromState, toState);
   }
+}
+
+async function insertAuditAndTransition(client, params) {
+  const {
+    ticketId,
+    beforeState,
+    afterState,
+    metrics,
+  } = params;
+  const auditEventId = await insertAuditEvent(client, params);
+  await insertTransitionRow(client, {
+    ticketId,
+    fromState: beforeState,
+    toState: afterState,
+    auditEventId,
+    metrics,
+  });
 }
 
 async function getTicketForUpdate(client, ticketId) {
@@ -394,6 +412,15 @@ async function assertTicketExists(pool, ticketId) {
   if (ticketExists.rowCount === 0) {
     throw new HttpError(404, "TICKET_NOT_FOUND", "Ticket not found");
   }
+}
+
+async function getTicket(pool, ticketId) {
+  validateTicketId(ticketId);
+  const result = await pool.query("SELECT * FROM tickets WHERE id = $1", [ticketId]);
+  if (result.rowCount === 0) {
+    throw new HttpError(404, "TICKET_NOT_FOUND", "Ticket not found");
+  }
+  return serializeTicket(result.rows[0]);
 }
 
 async function getTicketTimeline(pool, ticketId) {
@@ -469,6 +496,12 @@ function ensureObjectField(value, fieldName) {
   }
 }
 
+function ensureArrayField(value, fieldName) {
+  if (!Array.isArray(value)) {
+    throw new HttpError(400, "INVALID_REQUEST", `Field '${fieldName}' must be an array`);
+  }
+}
+
 function normalizeOptionalString(value, fieldName) {
   if (value == null) {
     return null;
@@ -481,6 +514,26 @@ function normalizeOptionalString(value, fieldName) {
     );
   }
   return value.trim();
+}
+
+function normalizeOptionalStringArray(value, fieldName) {
+  if (value == null) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    throw new HttpError(400, "INVALID_REQUEST", `Field '${fieldName}' must be an array`);
+  }
+
+  return value.map((entry, index) => {
+    if (typeof entry !== "string" || entry.trim() === "") {
+      throw new HttpError(
+        400,
+        "INVALID_REQUEST",
+        `Field '${fieldName}[${index}]' must be a non-empty string`,
+      );
+    }
+    return entry.trim();
+  });
 }
 
 function readEvidenceKeyFromMetadata(metadata) {
@@ -666,6 +719,29 @@ async function createTicketMutation(client, context) {
   };
 }
 
+function resolveTriageTargetState(body) {
+  const explicitOutcome =
+    typeof body.workflow_outcome === "string" ? body.workflow_outcome.trim().toUpperCase() : null;
+  if (explicitOutcome) {
+    if (!["TRIAGED", "READY_TO_SCHEDULE", "APPROVAL_REQUIRED"].includes(explicitOutcome)) {
+      throw new HttpError(
+        400,
+        "INVALID_REQUEST",
+        "Field 'workflow_outcome' must be TRIAGED, READY_TO_SCHEDULE, or APPROVAL_REQUIRED",
+      );
+    }
+    return explicitOutcome;
+  }
+
+  if (body.requires_approval === true) {
+    return "APPROVAL_REQUIRED";
+  }
+  if (body.ready_to_schedule === true) {
+    return "READY_TO_SCHEDULE";
+  }
+  return "TRIAGED";
+}
+
 async function triageTicketMutation(client, context) {
   const { ticketId, body, actor, requestId, correlationId, traceId, metrics } = context;
   ensureObject(body);
@@ -679,6 +755,7 @@ async function triageTicketMutation(client, context) {
   if (body.nte_cents != null && (typeof body.nte_cents !== "number" || body.nte_cents < 0)) {
     throw new HttpError(400, "INVALID_REQUEST", "Field 'nte_cents' must be a non-negative number");
   }
+  const targetState = resolveTriageTargetState(body);
 
   const existing = await getTicketForUpdate(client, ticketId);
   assertCommandStateAllowed("/tickets/{ticketId}/triage", existing.state, body);
@@ -687,23 +764,168 @@ async function triageTicketMutation(client, context) {
     `
       UPDATE tickets
       SET
-        state = 'TRIAGED',
-        priority = $2,
-        incident_type = $3,
-        nte_cents = COALESCE($4, nte_cents),
+        state = $2,
+        priority = $3,
+        incident_type = $4,
+        nte_cents = COALESCE($5, nte_cents),
         version = version + 1
       WHERE id = $1
       RETURNING *
     `,
-    [ticketId, priority, body.incident_type.trim(), body.nte_cents ?? null],
+    [ticketId, targetState, priority, body.incident_type.trim(), body.nte_cents ?? null],
   );
 
+  const ticket = update.rows[0];
+
+  if (targetState === "APPROVAL_REQUIRED") {
+    const approvalReason =
+      typeof body.approval_reason === "string" && body.approval_reason.trim() !== ""
+        ? body.approval_reason.trim()
+        : "TRIAGE_REQUIRES_APPROVAL";
+    const amountDelta =
+      typeof body.approval_amount_delta_cents === "number" && body.approval_amount_delta_cents >= 0
+        ? Math.floor(body.approval_amount_delta_cents)
+        : null;
+    await client.query(
+      `
+        INSERT INTO approvals (
+          ticket_id,
+          status,
+          requested_by,
+          approval_type,
+          amount_delta_cents,
+          reason,
+          evidence
+        )
+        VALUES ($1,'PENDING',$2,$3,$4,$5,$6)
+      `,
+      [
+        ticketId,
+        actor.actorId,
+        "NTE_INCREASE",
+        amountDelta,
+        approvalReason,
+        {
+          source: "ticket.triage",
+          return_state: "READY_TO_SCHEDULE",
+        },
+      ],
+    );
+  }
+
+  if (targetState === "TRIAGED") {
+    await insertAuditAndTransition(client, {
+      ticketId,
+      beforeState: existing.state,
+      afterState: targetState,
+      metrics,
+      actorType: actor.actorType,
+      actorId: actor.actorId,
+      actorRole: actor.actorRole,
+      toolName: actor.toolName,
+      requestId,
+      correlationId,
+      traceId,
+      payload: {
+        endpoint: "/tickets/{ticketId}/triage",
+        requested_at: nowIso(),
+        request: body,
+        workflow_outcome: targetState,
+      },
+    });
+  } else {
+    const auditEventId = await insertAuditEvent(client, {
+      ticketId,
+      beforeState: existing.state,
+      afterState: targetState,
+      actorType: actor.actorType,
+      actorId: actor.actorId,
+      actorRole: actor.actorRole,
+      toolName: actor.toolName,
+      requestId,
+      correlationId,
+      traceId,
+      payload: {
+        endpoint: "/tickets/{ticketId}/triage",
+        requested_at: nowIso(),
+        request: body,
+        workflow_outcome: targetState,
+        derived_transitions: [
+          `${existing.state}->TRIAGED`,
+          `TRIAGED->${targetState}`,
+        ],
+      },
+    });
+
+    await insertTransitionRow(client, {
+      ticketId,
+      fromState: existing.state,
+      toState: "TRIAGED",
+      auditEventId,
+      metrics,
+    });
+    await insertTransitionRow(client, {
+      ticketId,
+      fromState: "TRIAGED",
+      toState: targetState,
+      auditEventId,
+      metrics,
+    });
+  }
+
+  return {
+    status: 200,
+    body: serializeTicket(ticket),
+  };
+}
+
+async function proposeScheduleMutation(client, context) {
+  const { ticketId, body, actor, requestId, correlationId, traceId, metrics } = context;
+  ensureObject(body);
+  ensureArrayField(body.options, "options");
+  if (body.options.length === 0) {
+    throw new HttpError(400, "INVALID_REQUEST", "Field 'options' must include at least one window");
+  }
+
+  const options = body.options.map((entry, index) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new HttpError(400, "INVALID_REQUEST", `Field 'options[${index}]' must be an object`);
+    }
+    const start = parseIsoDate(entry.start, `options[${index}].start`);
+    const end = parseIsoDate(entry.end, `options[${index}].end`);
+    if (new Date(end).getTime() <= new Date(start).getTime()) {
+      throw new HttpError(
+        400,
+        "INVALID_REQUEST",
+        `Field 'options[${index}]' end must be after start`,
+      );
+    }
+    return { start, end };
+  });
+
+  const existing = await getTicketForUpdate(client, ticketId);
+  assertCommandStateAllowed("/tickets/{ticketId}/schedule/propose", existing.state, body);
+
+  const firstWindow = options[0];
+  const update = await client.query(
+    `
+      UPDATE tickets
+      SET
+        state = 'SCHEDULE_PROPOSED',
+        scheduled_start = $2,
+        scheduled_end = $3,
+        version = version + 1
+      WHERE id = $1
+      RETURNING *
+    `,
+    [ticketId, firstWindow.start, firstWindow.end],
+  );
   const ticket = update.rows[0];
 
   await insertAuditAndTransition(client, {
     ticketId,
     beforeState: existing.state,
-    afterState: "TRIAGED",
+    afterState: "SCHEDULE_PROPOSED",
     metrics,
     actorType: actor.actorType,
     actorId: actor.actorId,
@@ -713,9 +935,11 @@ async function triageTicketMutation(client, context) {
     correlationId,
     traceId,
     payload: {
-      endpoint: "/tickets/{ticketId}/triage",
+      endpoint: "/tickets/{ticketId}/schedule/propose",
       requested_at: nowIso(),
       request: body,
+      options,
+      selected_window_hint: firstWindow,
     },
   });
 
@@ -822,6 +1046,401 @@ async function dispatchAssignmentMutation(client, context) {
       requested_at: nowIso(),
       request: body,
       dispatch_mode: dispatchMode,
+    },
+  });
+
+  return {
+    status: 200,
+    body: serializeTicket(ticket),
+  };
+}
+
+async function techCheckInMutation(client, context) {
+  const { ticketId, body, actor, requestId, correlationId, traceId, metrics } = context;
+  ensureObject(body);
+  const timestamp = parseIsoDate(body.timestamp, "timestamp");
+  if (body.location != null) {
+    ensureObjectField(body.location, "location");
+  }
+
+  const existing = await getTicketForUpdate(client, ticketId);
+  assertCommandStateAllowed("/tickets/{ticketId}/tech/check-in", existing.state, body);
+
+  const update = await client.query(
+    `
+      UPDATE tickets
+      SET
+        state = 'IN_PROGRESS',
+        version = version + 1
+      WHERE id = $1
+      RETURNING *
+    `,
+    [ticketId],
+  );
+  const ticket = update.rows[0];
+
+  const auditEventId = await insertAuditEvent(client, {
+    ticketId,
+    beforeState: existing.state,
+    afterState: "IN_PROGRESS",
+    actorType: actor.actorType,
+    actorId: actor.actorId,
+    actorRole: actor.actorRole,
+    toolName: actor.toolName,
+    requestId,
+    correlationId,
+    traceId,
+    payload: {
+      endpoint: "/tickets/{ticketId}/tech/check-in",
+      requested_at: nowIso(),
+      request: body,
+      check_in_timestamp: timestamp,
+      derived_transitions: ["DISPATCHED->ON_SITE", "ON_SITE->IN_PROGRESS"],
+    },
+  });
+
+  await insertTransitionRow(client, {
+    ticketId,
+    fromState: "DISPATCHED",
+    toState: "ON_SITE",
+    auditEventId,
+    metrics,
+  });
+  await insertTransitionRow(client, {
+    ticketId,
+    fromState: "ON_SITE",
+    toState: "IN_PROGRESS",
+    auditEventId,
+    metrics,
+  });
+
+  return {
+    status: 200,
+    body: serializeTicket(ticket),
+  };
+}
+
+async function techRequestChangeMutation(client, context) {
+  const { ticketId, body, actor, requestId, correlationId, traceId, metrics } = context;
+  ensureObject(body);
+  ensureString(body.approval_type, "approval_type");
+  ensureString(body.reason, "reason");
+
+  const approvalType = body.approval_type.trim().toUpperCase();
+  if (!["NTE_INCREASE", "PROPOSAL"].includes(approvalType)) {
+    throw new HttpError(400, "INVALID_REQUEST", "Field 'approval_type' is invalid");
+  }
+
+  let amountDeltaCents = null;
+  if (body.amount_delta_cents != null) {
+    if (
+      typeof body.amount_delta_cents !== "number" ||
+      !Number.isFinite(body.amount_delta_cents) ||
+      body.amount_delta_cents < 0
+    ) {
+      throw new HttpError(
+        400,
+        "INVALID_REQUEST",
+        "Field 'amount_delta_cents' must be a non-negative number",
+      );
+    }
+    amountDeltaCents = Math.floor(body.amount_delta_cents);
+  }
+
+  const evidenceRefs = normalizeOptionalStringArray(body.evidence_refs, "evidence_refs");
+
+  const existing = await getTicketForUpdate(client, ticketId);
+  assertCommandStateAllowed("/tickets/{ticketId}/tech/request-change", existing.state, body);
+
+  const approvalInsert = await client.query(
+    `
+      INSERT INTO approvals (
+        ticket_id,
+        status,
+        requested_by,
+        approval_type,
+        amount_delta_cents,
+        reason,
+        evidence
+      )
+      VALUES ($1,'PENDING',$2,$3,$4,$5,$6)
+      RETURNING id, status::text, approval_type, amount_delta_cents, reason, requested_at
+    `,
+    [
+      ticketId,
+      actor.actorId,
+      approvalType,
+      amountDeltaCents,
+      body.reason.trim(),
+      {
+        source: "tech.request_change",
+        return_state: "IN_PROGRESS",
+        evidence_refs: evidenceRefs,
+      },
+    ],
+  );
+  const approval = approvalInsert.rows[0];
+
+  const update = await client.query(
+    `
+      UPDATE tickets
+      SET
+        state = 'APPROVAL_REQUIRED',
+        version = version + 1
+      WHERE id = $1
+      RETURNING *
+    `,
+    [ticketId],
+  );
+  const ticket = update.rows[0];
+
+  await insertAuditAndTransition(client, {
+    ticketId,
+    beforeState: existing.state,
+    afterState: "APPROVAL_REQUIRED",
+    metrics,
+    actorType: actor.actorType,
+    actorId: actor.actorId,
+    actorRole: actor.actorRole,
+    toolName: actor.toolName,
+    requestId,
+    correlationId,
+    traceId,
+    payload: {
+      endpoint: "/tickets/{ticketId}/tech/request-change",
+      requested_at: nowIso(),
+      request: body,
+      approval_id: approval.id,
+      approval_status: approval.status,
+    },
+  });
+
+  return {
+    status: 200,
+    body: {
+      ticket: serializeTicket(ticket),
+      approval: {
+        id: approval.id,
+        status: approval.status,
+        approval_type: approval.approval_type,
+        amount_delta_cents:
+          approval.amount_delta_cents == null ? null : Number(approval.amount_delta_cents),
+        reason: approval.reason,
+        requested_at: approval.requested_at ? new Date(approval.requested_at).toISOString() : null,
+      },
+    },
+  };
+}
+
+async function approvalDecideMutation(client, context) {
+  const { ticketId, body, actor, requestId, correlationId, traceId, metrics } = context;
+  ensureObject(body);
+  requireUuidField(body.approval_id, "approval_id");
+  ensureString(body.decision, "decision");
+
+  const decision = body.decision.trim().toUpperCase();
+  if (!["APPROVED", "DENIED"].includes(decision)) {
+    throw new HttpError(400, "INVALID_REQUEST", "Field 'decision' is invalid");
+  }
+  const notes = normalizeOptionalString(body.notes, "notes");
+
+  const existing = await getTicketForUpdate(client, ticketId);
+  assertCommandStateAllowed("/tickets/{ticketId}/approval/decide", existing.state, body);
+
+  const approvalResult = await client.query(
+    `
+      SELECT id, status::text, evidence
+      FROM approvals
+      WHERE id = $1
+        AND ticket_id = $2
+      FOR UPDATE
+    `,
+    [body.approval_id, ticketId],
+  );
+  if (approvalResult.rowCount === 0) {
+    throw new HttpError(404, "APPROVAL_NOT_FOUND", "Approval not found for ticket");
+  }
+
+  const approval = approvalResult.rows[0];
+  if (approval.status !== "PENDING") {
+    throw new HttpError(409, "APPROVAL_NOT_PENDING", "Approval has already been decided");
+  }
+
+  let targetState = "TRIAGED";
+  if (decision === "APPROVED") {
+    const returnStateRaw =
+      approval.evidence && typeof approval.evidence === "object"
+        ? approval.evidence.return_state
+        : null;
+    const returnState =
+      typeof returnStateRaw === "string" && returnStateRaw.trim() !== ""
+        ? returnStateRaw.trim().toUpperCase()
+        : "READY_TO_SCHEDULE";
+    if (!["READY_TO_SCHEDULE", "IN_PROGRESS"].includes(returnState)) {
+      throw new HttpError(
+        409,
+        "INVALID_APPROVAL_TARGET_STATE",
+        "Approval return state is invalid",
+        { return_state: returnState },
+      );
+    }
+    targetState = returnState;
+  }
+
+  await client.query(
+    `
+      UPDATE approvals
+      SET
+        status = $2::approval_status,
+        decided_by = $3,
+        decided_at = now(),
+        reason = COALESCE($4, reason)
+      WHERE id = $1
+    `,
+    [body.approval_id, decision, actor.actorId, notes],
+  );
+
+  const update = await client.query(
+    `
+      UPDATE tickets
+      SET
+        state = $2,
+        version = version + 1
+      WHERE id = $1
+      RETURNING *
+    `,
+    [ticketId, targetState],
+  );
+  const ticket = update.rows[0];
+
+  await insertAuditAndTransition(client, {
+    ticketId,
+    beforeState: existing.state,
+    afterState: targetState,
+    metrics,
+    actorType: actor.actorType,
+    actorId: actor.actorId,
+    actorRole: actor.actorRole,
+    toolName: actor.toolName,
+    requestId,
+    correlationId,
+    traceId,
+    payload: {
+      endpoint: "/tickets/{ticketId}/approval/decide",
+      requested_at: nowIso(),
+      request: body,
+      approval_id: body.approval_id,
+      decision,
+      target_state: targetState,
+      notes,
+    },
+  });
+
+  return {
+    status: 200,
+    body: serializeTicket(ticket),
+  };
+}
+
+async function qaVerifyMutation(client, context) {
+  const { ticketId, body, actor, requestId, correlationId, traceId, metrics } = context;
+  ensureObject(body);
+  const verifiedAt = parseIsoDate(body.timestamp, "timestamp");
+  ensureString(body.result, "result");
+  const notes = normalizeOptionalString(body.notes, "notes");
+  const result = body.result.trim().toUpperCase();
+  if (!["PASS", "FAIL"].includes(result)) {
+    throw new HttpError(400, "INVALID_REQUEST", "Field 'result' is invalid");
+  }
+
+  const existing = await getTicketForUpdate(client, ticketId);
+  assertCommandStateAllowed("/tickets/{ticketId}/qa/verify", existing.state, body);
+
+  if (result === "FAIL") {
+    throw new HttpError(409, "QA_VERIFICATION_FAILED", "QA verification failed", {
+      ticket_id: ticketId,
+      notes,
+    });
+  }
+
+  const update = await client.query(
+    `
+      UPDATE tickets
+      SET
+        state = 'VERIFIED',
+        version = version + 1
+      WHERE id = $1
+      RETURNING *
+    `,
+    [ticketId],
+  );
+  const ticket = update.rows[0];
+
+  await insertAuditAndTransition(client, {
+    ticketId,
+    beforeState: existing.state,
+    afterState: "VERIFIED",
+    metrics,
+    actorType: actor.actorType,
+    actorId: actor.actorId,
+    actorRole: actor.actorRole,
+    toolName: actor.toolName,
+    requestId,
+    correlationId,
+    traceId,
+    payload: {
+      endpoint: "/tickets/{ticketId}/qa/verify",
+      requested_at: nowIso(),
+      request: body,
+      verification_result: result,
+      verified_at: verifiedAt,
+      notes,
+    },
+  });
+
+  return {
+    status: 200,
+    body: serializeTicket(ticket),
+  };
+}
+
+async function billingGenerateInvoiceMutation(client, context) {
+  const { ticketId, body, actor, requestId, correlationId, traceId, metrics } = context;
+  ensureObject(body);
+
+  const existing = await getTicketForUpdate(client, ticketId);
+  assertCommandStateAllowed("/tickets/{ticketId}/billing/generate-invoice", existing.state, body);
+
+  const update = await client.query(
+    `
+      UPDATE tickets
+      SET
+        state = 'INVOICED',
+        version = version + 1
+      WHERE id = $1
+      RETURNING *
+    `,
+    [ticketId],
+  );
+  const ticket = update.rows[0];
+
+  await insertAuditAndTransition(client, {
+    ticketId,
+    beforeState: existing.state,
+    afterState: "INVOICED",
+    metrics,
+    actorType: actor.actorType,
+    actorId: actor.actorId,
+    actorRole: actor.actorRole,
+    toolName: actor.toolName,
+    requestId,
+    correlationId,
+    traceId,
+    payload: {
+      endpoint: "/tickets/{ticketId}/billing/generate-invoice",
+      requested_at: nowIso(),
+      request: body,
+      invoice_generated: true,
     },
   });
 
@@ -1015,6 +1634,15 @@ function resolveRoute(method, pathname) {
     };
   }
 
+  const ticketMatch = pathname.match(/^\/tickets\/([^/]+)$/);
+  if (method === "GET" && ticketMatch) {
+    return {
+      kind: "ticket",
+      endpoint: "/tickets/{ticketId}",
+      ticketId: ticketMatch[1],
+    };
+  }
+
   const timelineMatch = pathname.match(/^\/tickets\/([^/]+)\/timeline$/);
   if (method === "GET" && timelineMatch) {
     return {
@@ -1052,6 +1680,16 @@ function resolveRoute(method, pathname) {
     };
   }
 
+  const scheduleProposeMatch = pathname.match(/^\/tickets\/([^/]+)\/schedule\/propose$/);
+  if (method === "POST" && scheduleProposeMatch && ticketRouteRegex.test(scheduleProposeMatch[1])) {
+    return {
+      kind: "command",
+      endpoint: "/tickets/{ticketId}/schedule/propose",
+      handler: proposeScheduleMutation,
+      ticketId: scheduleProposeMatch[1],
+    };
+  }
+
   const scheduleConfirmMatch = pathname.match(/^\/tickets\/([^/]+)\/schedule\/confirm$/);
   if (method === "POST" && scheduleConfirmMatch && ticketRouteRegex.test(scheduleConfirmMatch[1])) {
     return {
@@ -1072,6 +1710,36 @@ function resolveRoute(method, pathname) {
     };
   }
 
+  const techCheckInMatch = pathname.match(/^\/tickets\/([^/]+)\/tech\/check-in$/);
+  if (method === "POST" && techCheckInMatch && ticketRouteRegex.test(techCheckInMatch[1])) {
+    return {
+      kind: "command",
+      endpoint: "/tickets/{ticketId}/tech/check-in",
+      handler: techCheckInMutation,
+      ticketId: techCheckInMatch[1],
+    };
+  }
+
+  const techRequestChangeMatch = pathname.match(/^\/tickets\/([^/]+)\/tech\/request-change$/);
+  if (method === "POST" && techRequestChangeMatch && ticketRouteRegex.test(techRequestChangeMatch[1])) {
+    return {
+      kind: "command",
+      endpoint: "/tickets/{ticketId}/tech/request-change",
+      handler: techRequestChangeMutation,
+      ticketId: techRequestChangeMatch[1],
+    };
+  }
+
+  const approvalDecideMatch = pathname.match(/^\/tickets\/([^/]+)\/approval\/decide$/);
+  if (method === "POST" && approvalDecideMatch && ticketRouteRegex.test(approvalDecideMatch[1])) {
+    return {
+      kind: "command",
+      endpoint: "/tickets/{ticketId}/approval/decide",
+      handler: approvalDecideMutation,
+      ticketId: approvalDecideMatch[1],
+    };
+  }
+
   if (method === "POST" && evidenceMatch && ticketRouteRegex.test(evidenceMatch[1])) {
     return {
       kind: "command",
@@ -1088,6 +1756,32 @@ function resolveRoute(method, pathname) {
       endpoint: "/tickets/{ticketId}/tech/complete",
       handler: techCompleteMutation,
       ticketId: techCompleteMatch[1],
+    };
+  }
+
+  const qaVerifyMatch = pathname.match(/^\/tickets\/([^/]+)\/qa\/verify$/);
+  if (method === "POST" && qaVerifyMatch && ticketRouteRegex.test(qaVerifyMatch[1])) {
+    return {
+      kind: "command",
+      endpoint: "/tickets/{ticketId}/qa/verify",
+      handler: qaVerifyMutation,
+      ticketId: qaVerifyMatch[1],
+    };
+  }
+
+  const billingGenerateInvoiceMatch = pathname.match(
+    /^\/tickets\/([^/]+)\/billing\/generate-invoice$/,
+  );
+  if (
+    method === "POST" &&
+    billingGenerateInvoiceMatch &&
+    ticketRouteRegex.test(billingGenerateInvoiceMatch[1])
+  ) {
+    return {
+      kind: "command",
+      endpoint: "/tickets/{ticketId}/billing/generate-invoice",
+      handler: billingGenerateInvoiceMutation,
+      ticketId: billingGenerateInvoiceMatch[1],
     };
   }
 
@@ -1192,6 +1886,29 @@ export function createDispatchApiServer(options = {}) {
     let requestId = null;
     let actor = null;
     try {
+      if (route.kind === "ticket") {
+        const ticket = await getTicket(pool, route.ticketId);
+        sendJson(response, 200, ticket);
+        metrics.incrementRequest(requestMethod, route.endpoint, 200);
+        emitStructuredLog(logger, "info", {
+          method: requestMethod,
+          path: url.pathname,
+          endpoint: route.endpoint,
+          request_id: null,
+          correlation_id: correlationId,
+          trace_id: traceId,
+          actor_type: null,
+          actor_id: null,
+          actor_role: null,
+          tool_name: null,
+          ticket_id: route.ticketId,
+          replay: false,
+          status: 200,
+          duration_ms: Date.now() - requestStart,
+        });
+        return;
+      }
+
       if (route.kind === "timeline") {
         const timeline = await getTicketTimeline(pool, route.ticketId);
         sendJson(response, 200, timeline);

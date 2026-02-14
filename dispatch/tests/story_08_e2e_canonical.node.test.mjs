@@ -27,12 +27,15 @@ const requestIds = {
   create: "81000000-0000-4000-8000-000000000001",
   triage: "81000000-0000-4000-8000-000000000002",
   dispatch: "81000000-0000-4000-8000-000000000003",
+  checkIn: "81000000-0000-4000-8000-000000000010",
   completeFail: "81000000-0000-4000-8000-000000000004",
   evidence1: "81000000-0000-4000-8000-000000000005",
   evidence2: "81000000-0000-4000-8000-000000000006",
   evidence3: "81000000-0000-4000-8000-000000000007",
   evidence4: "81000000-0000-4000-8000-000000000008",
   completeSuccess: "81000000-0000-4000-8000-000000000009",
+  verify: "81000000-0000-4000-8000-000000000011",
+  invoice: "81000000-0000-4000-8000-000000000012",
 };
 
 let app;
@@ -173,7 +176,7 @@ test.after(async () => {
   spawnSync("docker", ["rm", "-f", postgresContainer], { encoding: "utf8" });
 });
 
-test("canonical emergency scenario passes with fail-closed missing-evidence branch", async () => {
+test("canonical emergency scenario passes command-only with fail-closed missing-evidence branch", async () => {
   const create = await invokeDispatchAction({
     baseUrl: dispatchApiBaseUrl,
     toolName: "ticket.create",
@@ -233,12 +236,26 @@ test("canonical emergency scenario passes with fail-closed missing-evidence bran
   assert.equal(dispatch.status, 200);
   assert.equal(dispatch.data.state, "DISPATCHED");
 
-  psql(`
-    UPDATE tickets
-    SET state = 'IN_PROGRESS', version = version + 1
-    WHERE id = '${ticketId}';
-  `);
-  assert.equal(psql(`SELECT state FROM tickets WHERE id = '${ticketId}';`), "IN_PROGRESS");
+  const checkIn = await invokeDispatchAction({
+    baseUrl: dispatchApiBaseUrl,
+    toolName: "tech.check_in",
+    actorId: "tech-story08",
+    actorRole: "tech",
+    actorType: "AGENT",
+    requestId: requestIds.checkIn,
+    correlationId,
+    ticketId,
+    payload: {
+      timestamp: "2026-02-15T15:25:00.000Z",
+      location: {
+        lat: 47.6097,
+        lon: -122.3331,
+      },
+    },
+  });
+
+  assert.equal(checkIn.status, 200);
+  assert.equal(checkIn.data.state, "IN_PROGRESS");
 
   await assert.rejects(
     invokeDispatchAction({
@@ -449,6 +466,56 @@ test("canonical emergency scenario passes with fail-closed missing-evidence bran
   assert.equal(complete.data.id, ticketId);
   assert.equal(complete.data.state, "COMPLETED_PENDING_VERIFICATION");
 
+  const verify = await invokeDispatchAction({
+    baseUrl: dispatchApiBaseUrl,
+    toolName: "qa.verify",
+    actorId: "qa-story08",
+    actorRole: "qa",
+    actorType: "AGENT",
+    requestId: requestIds.verify,
+    correlationId,
+    ticketId,
+    payload: {
+      timestamp: "2026-02-15T16:15:00.000Z",
+      result: "PASS",
+      notes: "QA verified emergency mitigation package",
+    },
+  });
+
+  assert.equal(verify.status, 200);
+  assert.equal(verify.data.id, ticketId);
+  assert.equal(verify.data.state, "VERIFIED");
+
+  const invoice = await invokeDispatchAction({
+    baseUrl: dispatchApiBaseUrl,
+    toolName: "billing.generate_invoice",
+    actorId: "finance-story08",
+    actorRole: "finance",
+    actorType: "AGENT",
+    requestId: requestIds.invoice,
+    correlationId,
+    ticketId,
+    payload: {},
+  });
+
+  assert.equal(invoice.status, 200);
+  assert.equal(invoice.data.id, ticketId);
+  assert.equal(invoice.data.state, "INVOICED");
+
+  const finalTicket = await invokeDispatchAction({
+    baseUrl: dispatchApiBaseUrl,
+    toolName: "ticket.get",
+    actorId: "dispatcher-story08",
+    actorRole: "dispatcher",
+    actorType: "AGENT",
+    correlationId,
+    ticketId,
+  });
+
+  assert.equal(finalTicket.status, 200);
+  assert.equal(finalTicket.data.id, ticketId);
+  assert.equal(finalTicket.data.state, "INVOICED");
+
   const timeline = await invokeDispatchAction({
     baseUrl: dispatchApiBaseUrl,
     toolName: "ticket.timeline",
@@ -462,7 +529,7 @@ test("canonical emergency scenario passes with fail-closed missing-evidence bran
   assert.equal(timeline.status, 200);
   assert.equal(timeline.data.ticket_id, ticketId);
   assert.equal(Array.isArray(timeline.data.events), true);
-  assert.equal(timeline.data.events.length, 8);
+  assert.equal(timeline.data.events.length, 11);
 
   assertOrderedByCreatedAtAndId(timeline.data.events);
 
@@ -472,11 +539,14 @@ test("canonical emergency scenario passes with fail-closed missing-evidence bran
       "ticket.create",
       "ticket.triage",
       "assignment.dispatch",
+      "tech.check_in",
       "closeout.add_evidence",
       "closeout.add_evidence",
       "closeout.add_evidence",
       "closeout.add_evidence",
       "tech.complete",
+      "qa.verify",
+      "billing.generate_invoice",
     ],
   );
 
@@ -491,7 +561,7 @@ test("canonical emergency scenario passes with fail-closed missing-evidence bran
   const transitionCount = Number(
     psql(`SELECT count(*) FROM ticket_state_transitions WHERE ticket_id = '${ticketId}';`),
   );
-  assert.equal(transitionCount, 4);
+  assert.equal(transitionCount, 8);
 
   const completionTransitionCount = Number(
     psql(`
@@ -503,4 +573,22 @@ test("canonical emergency scenario passes with fail-closed missing-evidence bran
     `),
   );
   assert.equal(completionTransitionCount, 1);
+
+  const checkInTransitions = psql(`
+    SELECT from_state::text || '->' || to_state::text || ':' || count(*)::text
+    FROM ticket_state_transitions
+    WHERE ticket_id = '${ticketId}'
+      AND (
+        (from_state = 'DISPATCHED' AND to_state = 'ON_SITE')
+        OR (from_state = 'ON_SITE' AND to_state = 'IN_PROGRESS')
+      )
+    GROUP BY from_state, to_state
+    ORDER BY from_state, to_state;
+  `)
+    .split("\n")
+    .filter(Boolean);
+  assert.deepEqual(checkInTransitions, [
+    "DISPATCHED->ON_SITE:1",
+    "ON_SITE->IN_PROGRESS:1",
+  ]);
 });

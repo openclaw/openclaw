@@ -14,17 +14,20 @@ This directory is the Real Dispatch product scaffold.
 ## Closed dispatch action surface
 
 - `ticket.create`
-- `ticket.add_message`
-- `ticket.set_priority`
-- `schedule.propose_slots`
+- `ticket.triage`
+- `schedule.propose`
 - `schedule.confirm`
-- `dispatch.assign_tech`
-- `dispatch.set_eta`
-- `closeout.add_note`
-- `closeout.add_photo`
-- `closeout.checklist_complete`
-- `billing.generate_invoice_draft`
-- `billing.compile_closeout_packet`
+- `assignment.dispatch`
+- `tech.check_in`
+- `tech.request_change`
+- `approval.decide`
+- `closeout.add_evidence`
+- `tech.complete`
+- `qa.verify`
+- `billing.generate_invoice`
+- `ticket.get`
+- `closeout.list_evidence`
+- `ticket.timeline`
 
 ## Directory map
 

@@ -26,17 +26,20 @@ Role policies and transition boundaries are defined in `/AGENTS.md`.
 ## Closed toolset (v0)
 
 - `ticket.create`
-- `ticket.add_message`
-- `ticket.set_priority`
-- `schedule.propose_slots`
+- `ticket.triage`
+- `schedule.propose`
 - `schedule.confirm`
-- `dispatch.assign_tech`
-- `dispatch.set_eta`
-- `closeout.add_note`
-- `closeout.add_photo`
-- `closeout.checklist_complete`
-- `billing.generate_invoice_draft`
-- `billing.compile_closeout_packet`
+- `assignment.dispatch`
+- `tech.check_in`
+- `tech.request_change`
+- `approval.decide`
+- `closeout.add_evidence`
+- `tech.complete`
+- `qa.verify`
+- `billing.generate_invoice`
+- `ticket.get`
+- `closeout.list_evidence`
+- `ticket.timeline`
 
 ## Architecture
 
