@@ -458,6 +458,7 @@ export {
   resolveLinqAccount,
   type ResolvedLinqAccount,
 } from "../linq/accounts.js";
+export { linqOnboardingAdapter } from "../channels/plugins/onboarding/linq.js";
 export type { LinqProbe } from "../linq/types.js";
 
 // Media utilities
