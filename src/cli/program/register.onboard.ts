@@ -7,6 +7,8 @@ import type {
   NodeManagerChoice,
   TailscaleMode,
 } from "../../commands/onboard-types.js";
+import { formatAuthChoiceChoicesForCli } from "../../commands/auth-choice-options.js";
+import { ONBOARD_PROVIDER_AUTH_FLAGS } from "../../commands/onboard-provider-auth-flags.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
 
@@ -34,8 +36,13 @@ function resolveInstallDaemonFlag(
   return undefined;
 }
 
+const AUTH_CHOICE_HELP = formatAuthChoiceChoicesForCli({
+  includeLegacyAliases: true,
+  includeSkip: true,
+});
+
 export function registerOnboardCommand(program: Command) {
-  program
+  const command = program
     .command("onboard")
     .description("Interactive wizard to set up the gateway, workspace, and skills")
     .addHelpText(
@@ -53,10 +60,7 @@ export function registerOnboardCommand(program: Command) {
     )
     .option("--flow <flow>", "Wizard flow: quickstart|advanced|manual")
     .option("--mode <mode>", "Wizard mode: local|remote")
-    .option(
-      "--auth-choice <choice>",
-      "Auth: setup-token|token|chutes|vllm|openai-codex|openai-api-key|xai-api-key|qianfan-api-key|openrouter-api-key|litellm-api-key|ai-gateway-api-key|cloudflare-ai-gateway-api-key|moonshot-api-key|moonshot-api-key-cn|kimi-code-api-key|synthetic-api-key|venice-api-key|gemini-api-key|zai-api-key|zai-coding-global|zai-coding-cn|zai-global|zai-cn|xiaomi-api-key|apiKey|minimax-api|minimax-api-lightning|opencode-zen|custom-api-key|skip|together-api-key|huggingface-api-key",
-    )
+    .option("--auth-choice <choice>", `Auth: ${AUTH_CHOICE_HELP}`)
     .option(
       "--token-provider <id>",
       "Token provider id (non-interactive; used with --auth-choice token)",
@@ -67,27 +71,14 @@ export function registerOnboardCommand(program: Command) {
       "Auth profile id (non-interactive; default: <provider>:manual)",
     )
     .option("--token-expires-in <duration>", "Optional token expiry duration (e.g. 365d, 12h)")
-    .option("--anthropic-api-key <key>", "Anthropic API key")
-    .option("--openai-api-key <key>", "OpenAI API key")
-    .option("--openrouter-api-key <key>", "OpenRouter API key")
-    .option("--ai-gateway-api-key <key>", "Vercel AI Gateway API key")
     .option("--cloudflare-ai-gateway-account-id <id>", "Cloudflare Account ID")
-    .option("--cloudflare-ai-gateway-gateway-id <id>", "Cloudflare AI Gateway ID")
-    .option("--cloudflare-ai-gateway-api-key <key>", "Cloudflare AI Gateway API key")
-    .option("--moonshot-api-key <key>", "Moonshot API key")
-    .option("--kimi-code-api-key <key>", "Kimi Coding API key")
-    .option("--gemini-api-key <key>", "Gemini API key")
-    .option("--zai-api-key <key>", "Z.AI API key")
-    .option("--xiaomi-api-key <key>", "Xiaomi API key")
-    .option("--minimax-api-key <key>", "MiniMax API key")
-    .option("--synthetic-api-key <key>", "Synthetic API key")
-    .option("--venice-api-key <key>", "Venice API key")
-    .option("--together-api-key <key>", "Together AI API key")
-    .option("--huggingface-api-key <key>", "Hugging Face API key (HF token)")
-    .option("--opencode-zen-api-key <key>", "OpenCode Zen API key")
-    .option("--xai-api-key <key>", "xAI API key")
-    .option("--litellm-api-key <key>", "LiteLLM API key")
-    .option("--qianfan-api-key <key>", "QIANFAN API key")
+    .option("--cloudflare-ai-gateway-gateway-id <id>", "Cloudflare AI Gateway ID");
+
+  for (const providerFlag of ONBOARD_PROVIDER_AUTH_FLAGS) {
+    command.option(providerFlag.cliOption, providerFlag.description);
+  }
+
+  command
     .option("--custom-base-url <url>", "Custom provider base URL")
     .option("--custom-api-key <key>", "Custom provider API key (optional)")
     .option("--custom-model-id <id>", "Custom provider model ID")
@@ -115,12 +106,12 @@ export function registerOnboardCommand(program: Command) {
     .option("--skip-ui", "Skip Control UI/TUI prompts")
     .option("--node-manager <name>", "Node manager for skills: npm|pnpm|bun")
     .option("--json", "Output JSON summary", false)
-    .action(async (opts, command) => {
+    .action(async (opts, commandRuntime) => {
       const { defaultRuntime } = await import("../../runtime.js");
       const { runCommandWithRuntime } = await import("../cli-utils.js");
       const { onboardCommand } = await import("../../commands/onboard.js");
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const installDaemon = resolveInstallDaemonFlag(command, {
+        const installDaemon = resolveInstallDaemonFlag(commandRuntime, {
           installDaemon: Boolean(opts.installDaemon),
         });
         const gatewayPort =
