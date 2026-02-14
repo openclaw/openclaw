@@ -62,17 +62,21 @@ describe("env snapshot TOCTOU via createConfigIO", () => {
     await withTempConfig(configJson, async (configPath) => {
       // Instance A: read config (captures env snapshot)
       const ioA = createConfigIO({ configPath, env: env as unknown as NodeJS.ProcessEnv });
-      const firstRead = await ioA.readConfigFileSnapshotForWrite();
-      expect(firstRead.snapshot.config.gateway?.remote?.token).toBe("original-key-123");
+      const snapshot = await ioA.readConfigFileSnapshot();
+      const envSnap = ioA.getEnvSnapshot();
+      expect(snapshot.config.gateway?.remote?.token).toBe("original-key-123");
 
       // Mutate env between read and write
       env.MY_API_KEY = "mutated-key-456";
 
-      // Instance B: write config using explicit read context from A
+      // Instance B: write config using explicit env snapshot from A
       const ioB = createConfigIO({ configPath, env: env as unknown as NodeJS.ProcessEnv });
+      if (envSnap) {
+        ioB.setEnvSnapshot(envSnap);
+      }
 
       // Write the resolved config back — should restore ${MY_API_KEY}
-      await ioB.writeConfigFile(firstRead.snapshot.config, firstRead.writeOptions);
+      await ioB.writeConfigFile(snapshot.config);
 
       // Verify the written file still has ${MY_API_KEY}, not the resolved value
       const written = await fs.readFile(configPath, "utf-8");
