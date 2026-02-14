@@ -96,11 +96,17 @@ function resolveToolKindForPermission(
   }
   const normalized = name.toLowerCase();
 
-  // Prefer a conservative classifier: if in doubt, return "other" (prompt-required).
-  if (normalized === "read" || normalized.includes("read")) {
+  const hasToken = (token: string) => {
+    // Tool names tend to be snake_case. Avoid substring heuristics (ex: "thread" contains "read").
+    const re = new RegExp(`(?:^|[._-])${token}(?:$|[._-])`);
+    return re.test(normalized);
+  };
+
+  // Prefer a conservative classifier: only classify safe kinds when confident.
+  if (normalized === "read" || hasToken("read")) {
     return "read";
   }
-  if (normalized === "search" || normalized.includes("search") || normalized.includes("find")) {
+  if (normalized === "search" || hasToken("search") || hasToken("find")) {
     return "search";
   }
   if (normalized.includes("fetch") || normalized.includes("http")) {
