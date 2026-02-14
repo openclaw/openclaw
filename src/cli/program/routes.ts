@@ -1,3 +1,4 @@
+import { defaultRuntime } from "../../runtime.js";
 import { getFlagValue, getPositiveIntFlagValue, getVerboseFlag, hasFlag } from "../argv.js";
 
 export type RouteSpec = {
@@ -16,10 +17,7 @@ const routeHealth: RouteSpec = {
     if (timeoutMs === null) {
       return false;
     }
-    const [{ healthCommand }, { defaultRuntime }] = await Promise.all([
-      import("../../commands/health.js"),
-      import("../../runtime.js"),
-    ]);
+    const { healthCommand } = await import("../../commands/health.js");
     await healthCommand({ json, timeoutMs, verbose }, defaultRuntime);
     return true;
   },
@@ -38,10 +36,7 @@ const routeStatus: RouteSpec = {
     if (timeoutMs === null) {
       return false;
     }
-    const [{ statusCommand }, { defaultRuntime }] = await Promise.all([
-      import("../../commands/status.js"),
-      import("../../runtime.js"),
-    ]);
+    const { statusCommand } = await import("../../commands/status.js");
     await statusCommand({ json, deep, all, usage, timeoutMs, verbose }, defaultRuntime);
     return true;
   },
@@ -59,10 +54,7 @@ const routeSessions: RouteSpec = {
     if (active === null) {
       return false;
     }
-    const [{ sessionsCommand }, { defaultRuntime }] = await Promise.all([
-      import("../../commands/sessions.js"),
-      import("../../runtime.js"),
-    ]);
+    const { sessionsCommand } = await import("../../commands/sessions.js");
     await sessionsCommand({ json, store, active }, defaultRuntime);
     return true;
   },
@@ -73,10 +65,7 @@ const routeAgentsList: RouteSpec = {
   run: async (argv) => {
     const json = hasFlag(argv, "--json");
     const bindings = hasFlag(argv, "--bindings");
-    const [{ agentsListCommand }, { defaultRuntime }] = await Promise.all([
-      import("../../commands/agents.js"),
-      import("../../runtime.js"),
-    ]);
+    const { agentsListCommand } = await import("../../commands/agents.js");
     await agentsListCommand({ json, bindings }, defaultRuntime);
     return true;
   },
