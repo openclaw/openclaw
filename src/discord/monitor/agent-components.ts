@@ -108,15 +108,16 @@ async function ensureDmComponentAuthorized(params: {
   interaction: AgentComponentInteraction;
   user: DiscordUser;
   componentLabel: string;
+  replyOpts: { ephemeral?: boolean };
 }): Promise<boolean> {
-  const { ctx, interaction, user, componentLabel } = params;
+  const { ctx, interaction, user, componentLabel, replyOpts } = params;
   const dmPolicy = ctx.dmPolicy ?? "pairing";
   if (dmPolicy === "disabled") {
     logVerbose(`agent ${componentLabel}: blocked (DM policy disabled)`);
     try {
       await interaction.reply({
         content: "DM interactions are disabled.",
-        ephemeral: true,
+        ...replyOpts,
       });
     } catch {
       // Interaction may have expired
@@ -162,7 +163,7 @@ async function ensureDmComponentAuthorized(params: {
               code,
             })
           : "Pairing already requested. Ask the bot owner to approve your code.",
-        ephemeral: true,
+        ...replyOpts,
       });
     } catch {
       // Interaction may have expired
@@ -174,7 +175,7 @@ async function ensureDmComponentAuthorized(params: {
   try {
     await interaction.reply({
       content: `You are not authorized to use this ${componentLabel}.`,
-      ephemeral: true,
+      ...replyOpts,
     });
   } catch {
     // Interaction may have expired
@@ -226,6 +227,18 @@ export class AgentComponentButton extends Button {
       return;
     }
 
+    let didDefer = false;
+    // Defer immediately to satisfy Discord's 3-second interaction ACK requirement.
+    // We use an ephemeral deferred reply so subsequent interaction.reply() calls
+    // can safely edit the original deferred response.
+    try {
+      await interaction.defer({ ephemeral: true });
+      didDefer = true;
+    } catch (err) {
+      logError(`agent button: failed to defer interaction: ${String(err)}`);
+    }
+    const replyOpts = didDefer ? {} : { ephemeral: true };
+
     const username = formatUsername(user);
     const userId = user.id;
 
@@ -243,6 +256,7 @@ export class AgentComponentButton extends Button {
         interaction,
         user,
         componentLabel: "button",
+        replyOpts,
       });
       if (!authorized) {
         return;
@@ -311,7 +325,7 @@ export class AgentComponentButton extends Button {
         try {
           await interaction.reply({
             content: "You are not authorized to use this button.",
-            ephemeral: true,
+            ...replyOpts,
           });
         } catch {
           // Interaction may have expired
@@ -347,7 +361,7 @@ export class AgentComponentButton extends Button {
     try {
       await interaction.reply({
         content: "✓",
-        ephemeral: true,
+        ...replyOpts,
       });
     } catch (err) {
       logError(`agent button: failed to acknowledge interaction: ${String(err)}`);
@@ -397,6 +411,18 @@ export class AgentSelectMenu extends StringSelectMenu {
       return;
     }
 
+    let didDefer = false;
+    // Defer immediately to satisfy Discord's 3-second interaction ACK requirement.
+    // We use an ephemeral deferred reply so subsequent interaction.reply() calls
+    // can safely edit the original deferred response.
+    try {
+      await interaction.defer({ ephemeral: true });
+      didDefer = true;
+    } catch (err) {
+      logError(`agent select: failed to defer interaction: ${String(err)}`);
+    }
+    const replyOpts = didDefer ? {} : { ephemeral: true };
+
     const username = formatUsername(user);
     const userId = user.id;
 
@@ -414,6 +440,7 @@ export class AgentSelectMenu extends StringSelectMenu {
         interaction,
         user,
         componentLabel: "select menu",
+        replyOpts,
       });
       if (!authorized) {
         return;
@@ -478,7 +505,7 @@ export class AgentSelectMenu extends StringSelectMenu {
         try {
           await interaction.reply({
             content: "You are not authorized to use this select menu.",
-            ephemeral: true,
+            ...replyOpts,
           });
         } catch {
           // Interaction may have expired
@@ -518,7 +545,7 @@ export class AgentSelectMenu extends StringSelectMenu {
     try {
       await interaction.reply({
         content: "✓",
-        ephemeral: true,
+        ...replyOpts,
       });
     } catch (err) {
       logError(`agent select: failed to acknowledge interaction: ${String(err)}`);
