@@ -58,6 +58,10 @@ function hasToolCallInput(block: ToolCallBlock): boolean {
   return hasInput || hasArguments;
 }
 
+function hasToolCallName(block: ToolCallBlock): boolean {
+  return typeof block.name === "string" && block.name.trim().length > 0;
+}
+
 function extractToolResultId(msg: Extract<AgentMessage, { role: "toolResult" }>): string | null {
   const toolCallId = (msg as { toolCallId?: unknown }).toolCallId;
   if (typeof toolCallId === "string" && toolCallId) {
@@ -118,7 +122,7 @@ export function repairToolCallInputs(messages: AgentMessage[]): ToolCallInputRep
     let droppedInMessage = 0;
 
     for (const block of msg.content) {
-      if (isToolCallBlock(block) && !hasToolCallInput(block)) {
+      if (isToolCallBlock(block) && (!hasToolCallInput(block) || !hasToolCallName(block))) {
         droppedToolCalls += 1;
         droppedInMessage += 1;
         changed = true;
