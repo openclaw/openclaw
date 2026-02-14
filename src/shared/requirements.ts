@@ -88,3 +88,62 @@ export function buildConfigChecks(params: {
     return { path: pathStr, value, satisfied };
   });
 }
+
+export function evaluateRequirements(params: {
+  always: boolean;
+  required: Requirements;
+  hasLocalBin: (bin: string) => boolean;
+  hasRemoteBin?: (bin: string) => boolean;
+  hasRemoteAnyBin?: (bins: string[]) => boolean;
+  localPlatform: string;
+  remotePlatforms?: string[];
+  isEnvSatisfied: (envName: string) => boolean;
+  resolveConfigValue: (pathStr: string) => unknown;
+  isConfigSatisfied: (pathStr: string) => boolean;
+}): { missing: Requirements; eligible: boolean; configChecks: RequirementConfigCheck[] } {
+  const missingBins = resolveMissingBins({
+    required: params.required.bins,
+    hasLocalBin: params.hasLocalBin,
+    hasRemoteBin: params.hasRemoteBin,
+  });
+  const missingAnyBins = resolveMissingAnyBins({
+    required: params.required.anyBins,
+    hasLocalBin: params.hasLocalBin,
+    hasRemoteAnyBin: params.hasRemoteAnyBin,
+  });
+  const missingOs = resolveMissingOs({
+    required: params.required.os,
+    localPlatform: params.localPlatform,
+    remotePlatforms: params.remotePlatforms,
+  });
+  const missingEnv = resolveMissingEnv({
+    required: params.required.env,
+    isSatisfied: params.isEnvSatisfied,
+  });
+  const configChecks = buildConfigChecks({
+    required: params.required.config,
+    resolveValue: params.resolveConfigValue,
+    isSatisfied: params.isConfigSatisfied,
+  });
+  const missingConfig = configChecks.filter((check) => !check.satisfied).map((check) => check.path);
+
+  const missing = params.always
+    ? { bins: [], anyBins: [], env: [], config: [], os: [] }
+    : {
+        bins: missingBins,
+        anyBins: missingAnyBins,
+        env: missingEnv,
+        config: missingConfig,
+        os: missingOs,
+      };
+
+  const eligible =
+    params.always ||
+    (missing.bins.length === 0 &&
+      missing.anyBins.length === 0 &&
+      missing.env.length === 0 &&
+      missing.config.length === 0 &&
+      missing.os.length === 0);
+
+  return { missing, eligible, configChecks };
+}

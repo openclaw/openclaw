@@ -1,13 +1,7 @@
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import type { HookEligibilityContext, HookEntry, HookInstallSpec } from "./types.js";
-import {
-  buildConfigChecks,
-  resolveMissingAnyBins,
-  resolveMissingBins,
-  resolveMissingEnv,
-  resolveMissingOs,
-} from "../shared/requirements.js";
+import { evaluateRequirements } from "../shared/requirements.js";
 import { CONFIG_DIR } from "../utils.js";
 import { hasBinary, isConfigPathTruthy, resolveConfigPath, resolveHookConfig } from "./config.js";
 import { loadWorkspaceHookEntries } from "./workspace.js";
@@ -122,51 +116,30 @@ function buildHookStatus(
   const requiredConfig = entry.metadata?.requires?.config ?? [];
   const requiredOs = entry.metadata?.os ?? [];
 
-  const missingBins = resolveMissingBins({
-    required: requiredBins,
+  const {
+    missing,
+    eligible: requirementsSatisfied,
+    configChecks,
+  } = evaluateRequirements({
+    always,
+    required: {
+      bins: requiredBins,
+      anyBins: requiredAnyBins,
+      env: requiredEnv,
+      config: requiredConfig,
+      os: requiredOs,
+    },
     hasLocalBin: hasBinary,
     hasRemoteBin: eligibility?.remote?.hasBin,
-  });
-  const missingAnyBins = resolveMissingAnyBins({
-    required: requiredAnyBins,
-    hasLocalBin: hasBinary,
     hasRemoteAnyBin: eligibility?.remote?.hasAnyBin,
-  });
-  const missingOs = resolveMissingOs({
-    required: requiredOs,
     localPlatform: process.platform,
     remotePlatforms: eligibility?.remote?.platforms,
-  });
-  const missingEnv = resolveMissingEnv({
-    required: requiredEnv,
-    isSatisfied: (envName) => Boolean(process.env[envName] || hookConfig?.env?.[envName]),
+    isEnvSatisfied: (envName) => Boolean(process.env[envName] || hookConfig?.env?.[envName]),
+    resolveConfigValue: (pathStr) => resolveConfigPath(config, pathStr),
+    isConfigSatisfied: (pathStr) => isConfigPathTruthy(config, pathStr),
   });
 
-  const configChecks: HookStatusConfigCheck[] = buildConfigChecks({
-    required: requiredConfig,
-    resolveValue: (pathStr) => resolveConfigPath(config, pathStr),
-    isSatisfied: (pathStr) => isConfigPathTruthy(config, pathStr),
-  });
-  const missingConfig = configChecks.filter((check) => !check.satisfied).map((check) => check.path);
-
-  const missing = always
-    ? { bins: [], anyBins: [], env: [], config: [], os: [] }
-    : {
-        bins: missingBins,
-        anyBins: missingAnyBins,
-        env: missingEnv,
-        config: missingConfig,
-        os: missingOs,
-      };
-
-  const eligible =
-    !disabled &&
-    (always ||
-      (missing.bins.length === 0 &&
-        missing.anyBins.length === 0 &&
-        missing.env.length === 0 &&
-        missing.config.length === 0 &&
-        missing.os.length === 0));
+  const eligible = !disabled && requirementsSatisfied;
 
   return {
     name: entry.hook.name,
