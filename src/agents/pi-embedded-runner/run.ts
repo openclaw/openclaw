@@ -601,11 +601,11 @@ export async function runEmbeddedPiAgent(
               }
             }
             const kind = isCompactionFailure ? "compaction_failure" : "context_overflow";
-            const contextLimit = typeof ctxInfo.tokens === "number" ? ctxInfo.tokens : 0;
+            const contextLimit = ctxInfo.tokens ?? "unknown";
 
             const header = isCompactionFailure
               ? `Compaction failure (${provider}/${modelId})`
-              : `Context overflow (${provider}/${modelId}, limit: ${contextLimit ? contextLimit.toLocaleString() : "unknown"} tokens)`;
+              : `Context overflow (${provider}/${modelId}, limit: ${typeof contextLimit === "number" ? contextLimit.toLocaleString() : contextLimit} tokens)`;
 
             const actions = isCompactionFailure
               ? [
