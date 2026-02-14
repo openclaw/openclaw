@@ -329,7 +329,7 @@ export async function finalizeOnboardingWizard(
     });
 
     if (hatchChoice === "tui") {
-      restoreTerminalState("pre-onboarding tui");
+      restoreTerminalState("pre-onboarding tui", { resumeStdin: true });
       await runTui({
         url: links.wsUrl,
         token: settings.authMode === "token" ? settings.gatewayToken : undefined,

@@ -11,15 +11,21 @@ export async function runInteractiveOnboarding(
   runtime: RuntimeEnv = defaultRuntime,
 ) {
   const prompter = createClackPrompter();
+  let exitCode: number | null = null;
   try {
     await runOnboardingWizard(opts, runtime, prompter);
   } catch (err) {
     if (err instanceof WizardCancelledError) {
-      runtime.exit(1);
+      // Best practice: cancellation is not a successful completion.
+      exitCode = 1;
       return;
     }
     throw err;
   } finally {
-    restoreTerminalState("onboarding finish");
+    // Keep stdin paused so non-daemon runs can exit cleanly (e.g. Docker setup).
+    restoreTerminalState("onboarding finish", { resumeStdin: false });
+    if (exitCode !== null) {
+      runtime.exit(exitCode);
+    }
   }
 }
