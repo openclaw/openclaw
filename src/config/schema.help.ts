@@ -273,6 +273,14 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.model.primary": "Primary model (provider/model).",
   "agents.defaults.model.fallbacks":
     "Ordered fallback models (provider/model). Used when the primary model fails.",
+  "agents.defaults.heartbeat.model":
+    "Heartbeat model override (provider/model). Deprecated — use `primary` instead.",
+  "agents.defaults.heartbeat.primary":
+    "Primary model for heartbeat runs (provider/model). Takes precedence over legacy `model`.",
+  "agents.defaults.heartbeat.fallbacks":
+    "Ordered fallback models for heartbeat (provider/model). Tried in sequence when the primary fails.",
+  "agents.defaults.heartbeat.fallbackMode":
+    'Fallback behavior when the primary heartbeat model fails: "immediate" retries in the same poll; "next_heartbeat" waits until the next interval. Default: "immediate".',
   "agents.defaults.imageModel.primary":
     "Optional image model (provider/model) used when the primary model lacks image input.",
   "agents.defaults.imageModel.fallbacks": "Ordered fallback image models (provider/model).",

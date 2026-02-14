@@ -41,19 +41,6 @@ function newStateDir(homedir: () => string = resolveDefaultHomeDir): string {
   return path.join(homedir(), NEW_STATE_DIRNAME);
 }
 
-/** Ensure the OpenClaw state directory exists, creating it if necessary.
- * Returns the path to the directory.
- */
-export async function ensureOpenClawDir(): Promise<string> {
-  const dir = newStateDir();
-  try {
-    await fsPromises.mkdir(dir, { recursive: true });
-  } catch {
-    // Directory may already exist or can't be created
-  }
-  return dir;
-}
-
 export function resolveLegacyStateDir(homedir: () => string = resolveDefaultHomeDir): string {
   return legacyStateDirs(homedir)[0] ?? newStateDir(homedir);
 }

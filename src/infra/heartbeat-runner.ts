@@ -62,8 +62,6 @@ import {
 } from "./outbound/targets.js";
 import { peekSystemEventEntries } from "./system-events.js";
 import { isFailoverError } from "../agents/failover-error.js";
-import { ensureOpenClawDir } from "../config/paths.js";
-
 
 type HeartbeatDeps = OutboundSendDeps &
   ChannelHeartbeatDeps & {
@@ -282,56 +280,45 @@ type HeartbeatState = {
   agents: Record<string, HeartbeatModelState>;
 };
 
-async function getHeartbeatStatePath(): Promise<string> {
-  const dir = await ensureOpenClawDir();
-  return path.join(dir, HEARTBEAT_STATE_FILENAME);
+function getHeartbeatStatePath(workspaceDir: string): string {
+  return path.join(workspaceDir, HEARTBEAT_STATE_FILENAME);
 }
 
-async function loadHeartbeatState(): Promise<HeartbeatState> {
+async function loadHeartbeatAgentModelState(
+  workspaceDir: string,
+): Promise<HeartbeatModelState | null> {
   try {
-    const statePath = await getHeartbeatStatePath();
+    const statePath = getHeartbeatStatePath(workspaceDir);
     const content = await fs.readFile(statePath, "utf-8");
-    const parsed = JSON.parse(content) as HeartbeatState;
-    // Validate basic structure
-    if (typeof parsed.version !== "number" || typeof parsed.agents !== "object") {
-      return { agents: {}, version: HEARTBEAT_STATE_VERSION };
+    const parsed = JSON.parse(content) as HeartbeatModelState;
+    if (typeof parsed.currentFallbackIndex !== "number") {
+      return null;
     }
     return parsed;
   } catch {
-    // File doesn't exist or is corrupted - return default state
-    return { agents: {}, version: HEARTBEAT_STATE_VERSION };
+    return null;
   }
 }
 
-async function saveHeartbeatState(state: HeartbeatState): Promise<void> {
-  try {
-    const statePath = await getHeartbeatStatePath();
-    await fs.writeFile(statePath, JSON.stringify(state, null, 2));
-  } catch (err) {
-    log.warn("Failed to save heartbeat state", { error: formatErrorMessage(err) });
-  }
-}
-
-async function getHeartbeatModelState(agentId: string): Promise<HeartbeatModelState | null> {
-  const state = await loadHeartbeatState();
-  return state.agents[agentId] ?? null;
-}
-
-async function updateHeartbeatModelState(
-  agentId: string,
+async function saveHeartbeatAgentModelState(
+  workspaceDir: string,
   update: Partial<HeartbeatModelState>,
 ): Promise<void> {
-  const state = await loadHeartbeatState();
-  const existing = state.agents[agentId];
-  state.agents[agentId] = {
-    currentFallbackIndex: 0,
-    lastUpdated: Date.now(),
-    agentId,
-    ...existing,
-    ...update,
-    agentId, // Ensure agentId is always set correctly
-  };
-  await saveHeartbeatState(state);
+  try {
+    const statePath = getHeartbeatStatePath(workspaceDir);
+    const existing = await loadHeartbeatAgentModelState(workspaceDir);
+    const next: HeartbeatModelState = {
+      currentFallbackIndex: 0,
+      lastUpdated: Date.now(),
+      agentId: existing?.agentId ?? "",
+      ...existing,
+      ...update,
+      lastUpdated: Date.now(),
+    };
+    await fs.writeFile(statePath, JSON.stringify(next, null, 2));
+  } catch (err) {
+    log.warn("heartbeat: failed to save model state", { error: formatErrorMessage(err) });
+  }
 }
 
 /**
@@ -660,7 +647,8 @@ export async function runHeartbeatOnce(opts: {
     return true;
   };
 
-  const agentModelState = await getHeartbeatModelState(agentId);
+  const agentWorkspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+  const agentModelState = await loadHeartbeatAgentModelState(agentWorkspaceDir);
   const { models: modelChain, fallbackMode } = resolveHeartbeatModelChain(heartbeat, agentModelState);
   const ackMaxChars = resolveHeartbeatAckMaxChars(cfg, heartbeat);
 
@@ -687,14 +675,14 @@ export async function runHeartbeatOnce(opts: {
       try {
         replyResult = await runWithModel(model);
         // Success: reset to primary
-        await updateHeartbeatModelState(agentId, { currentFallbackIndex: 0 });
+        await saveHeartbeatAgentModelState(agentWorkspaceDir, { currentFallbackIndex: 0, agentId });
       } catch (err) {
         if (isFailoverError(err)) {
           // Advance to next model for next heartbeat
           const currentIdx = agentModelState?.currentFallbackIndex ?? 0;
           const allModels = resolveHeartbeatModelChain(heartbeat, null).models;
           const nextIdx = (currentIdx + 1) % allModels.length;
-          await updateHeartbeatModelState(agentId, { currentFallbackIndex: nextIdx });
+          await saveHeartbeatAgentModelState(agentWorkspaceDir, { currentFallbackIndex: nextIdx, agentId });
           log.warn(`heartbeat: model ${model} failed, will try ${allModels[nextIdx]} next heartbeat`);
         }
         throw err;
