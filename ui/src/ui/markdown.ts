@@ -33,9 +33,15 @@ const allowedTags = [
   "thead",
   "tr",
   "ul",
+  "img",
 ];
 
-const allowedAttrs = ["class", "href", "rel", "target", "title", "start"];
+const allowedAttrs = ["class", "href", "rel", "target", "title", "start", "src", "alt"];
+const sanitizeOptions = {
+  ALLOWED_TAGS: allowedTags,
+  ALLOWED_ATTR: allowedAttrs,
+  ADD_DATA_URI_TAGS: ["img"],
+};
 
 let hooksInstalled = false;
 const MARKDOWN_CHAR_LIMIT = 140_000;
@@ -103,10 +109,7 @@ export function toSanitizedMarkdownHtml(markdown: string): string {
   if (truncated.text.length > MARKDOWN_PARSE_LIMIT) {
     const escaped = escapeHtml(`${truncated.text}${suffix}`);
     const html = `<pre class="code-block">${escaped}</pre>`;
-    const sanitized = DOMPurify.sanitize(html, {
-      ALLOWED_TAGS: allowedTags,
-      ALLOWED_ATTR: allowedAttrs,
-    });
+    const sanitized = DOMPurify.sanitize(html, sanitizeOptions);
     if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
       setCachedMarkdown(input, sanitized);
     }
@@ -115,10 +118,7 @@ export function toSanitizedMarkdownHtml(markdown: string): string {
   const rendered = marked.parse(`${truncated.text}${suffix}`, {
     renderer: htmlEscapeRenderer,
   }) as string;
-  const sanitized = DOMPurify.sanitize(rendered, {
-    ALLOWED_TAGS: allowedTags,
-    ALLOWED_ATTR: allowedAttrs,
-  });
+  const sanitized = DOMPurify.sanitize(rendered, sanitizeOptions);
   if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
     setCachedMarkdown(input, sanitized);
   }

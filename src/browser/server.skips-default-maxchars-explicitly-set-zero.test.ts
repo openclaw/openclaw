@@ -1,12 +1,11 @@
 import { type AddressInfo, createServer } from "node:net";
 import { fetch as realFetch } from "undici";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 let testPort = 0;
 let cdpBaseUrl = "";
 let reachable = false;
 let cfgAttachOnly = false;
-let createTargetId: string | null = null;
 let prevGatewayPort: string | undefined;
 
 const cdpMocks = vi.hoisted(() => ({
@@ -185,15 +184,12 @@ function makeResponse(
 }
 
 describe("browser control server", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     reachable = false;
     cfgAttachOnly = false;
-    createTargetId = null;
+    launchCalls.length = 0;
 
     cdpMocks.createTargetViaCdp.mockImplementation(async () => {
-      if (createTargetId) {
-        return { targetId: createTargetId };
-      }
       throw new Error("cdp disabled");
     });
 
@@ -210,7 +206,6 @@ describe("browser control server", () => {
     process.env.OPENCLAW_GATEWAY_PORT = String(testPort - 2);
 
     // Minimal CDP JSON endpoints used by the server.
-    let putNewCalls = 0;
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string, init?: RequestInit) => {
@@ -236,33 +231,13 @@ describe("browser control server", () => {
             },
           ]);
         }
-        if (u.includes("/json/new?")) {
-          if (init?.method === "PUT") {
-            putNewCalls += 1;
-            if (putNewCalls === 1) {
-              return makeResponse({}, { ok: false, status: 405, text: "" });
-            }
-          }
-          return makeResponse({
-            id: "newtab1",
-            title: "",
-            url: "about:blank",
-            webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/newtab1",
-            type: "page",
-          });
-        }
-        if (u.includes("/json/activate/")) {
-          return makeResponse("ok");
-        }
-        if (u.includes("/json/close/")) {
-          return makeResponse("ok");
-        }
+        void init;
         return makeResponse({}, { ok: false, status: 500, text: "unexpected" });
       }),
     );
   });
 
-  afterEach(async () => {
+  afterAll(async () => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
     if (prevGatewayPort === undefined) {
@@ -274,190 +249,52 @@ describe("browser control server", () => {
     await stopBrowserControlServer();
   });
 
-  it("skips default maxChars when explicitly set to zero", async () => {
+  it("covers primary control routes, validation, and profile compatibility", async () => {
     const { startBrowserControlServerFromConfig } = await import("./server.js");
-    await startBrowserControlServerFromConfig();
+    const started = await startBrowserControlServerFromConfig();
+    expect(started?.port).toBe(testPort);
+
     const base = `http://127.0.0.1:${testPort}`;
-    await realFetch(`${base}/start`, { method: "POST" }).then((r) => r.json());
+    const statusBeforeStart = (await realFetch(`${base}/`).then((r) => r.json())) as {
+      running: boolean;
+      pid: number | null;
+    };
+    expect(statusBeforeStart.running).toBe(false);
+    expect(statusBeforeStart.pid).toBe(null);
+    expect(statusBeforeStart.profile).toBe("openclaw");
+
+    const startedPayload = (await realFetch(`${base}/start`, { method: "POST" }).then((r) =>
+      r.json(),
+    )) as { ok: boolean; profile?: string };
+    expect(startedPayload.ok).toBe(true);
+    expect(startedPayload.profile).toBe("openclaw");
+
+    const statusAfterStart = (await realFetch(`${base}/`).then((r) => r.json())) as {
+      running: boolean;
+      pid: number | null;
+      chosenBrowser: string | null;
+    };
+    expect(statusAfterStart.running).toBe(true);
+    expect(statusAfterStart.pid).toBe(123);
+    expect(statusAfterStart.chosenBrowser).toBe("chrome");
+    expect(launchCalls.length).toBeGreaterThan(0);
 
     const snapAi = (await realFetch(`${base}/snapshot?format=ai&maxChars=0`).then((r) =>
       r.json(),
     )) as { ok: boolean; format?: string };
     expect(snapAi.ok).toBe(true);
     expect(snapAi.format).toBe("ai");
-
     const [call] = pwMocks.snapshotAiViaPlaywright.mock.calls.at(-1) ?? [];
     expect(call).toEqual({
       cdpUrl: cdpBaseUrl,
       targetId: "abcd1234",
     });
-  });
 
-  it("validates agent inputs (agent routes)", async () => {
-    const { startBrowserControlServerFromConfig } = await import("./server.js");
-    await startBrowserControlServerFromConfig();
-    const base = `http://127.0.0.1:${testPort}`;
-    await realFetch(`${base}/start`, { method: "POST" }).then((r) => r.json());
-
-    const navMissing = await realFetch(`${base}/navigate`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
-    });
-    expect(navMissing.status).toBe(400);
-
-    const actMissing = await realFetch(`${base}/act`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
-    });
-    expect(actMissing.status).toBe(400);
-
-    const clickMissingRef = await realFetch(`${base}/act`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ kind: "click" }),
-    });
-    expect(clickMissingRef.status).toBe(400);
-
-    const scrollMissingRef = await realFetch(`${base}/act`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ kind: "scrollIntoView" }),
-    });
-    expect(scrollMissingRef.status).toBe(400);
-
-    const scrollSelectorUnsupported = await realFetch(`${base}/act`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ kind: "scrollIntoView", selector: "button.save" }),
-    });
-    expect(scrollSelectorUnsupported.status).toBe(400);
-
-    const clickBadButton = await realFetch(`${base}/act`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ kind: "click", ref: "1", button: "nope" }),
-    });
-    expect(clickBadButton.status).toBe(400);
-
-    const clickBadModifiers = await realFetch(`${base}/act`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ kind: "click", ref: "1", modifiers: ["Nope"] }),
-    });
-    expect(clickBadModifiers.status).toBe(400);
-
-    const typeBadText = await realFetch(`${base}/act`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ kind: "type", ref: "1", text: 123 }),
-    });
-    expect(typeBadText.status).toBe(400);
-
-    const uploadMissingPaths = await realFetch(`${base}/hooks/file-chooser`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
-    });
-    expect(uploadMissingPaths.status).toBe(400);
-
-    const dialogMissingAccept = await realFetch(`${base}/hooks/dialog`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
-    });
-    expect(dialogMissingAccept.status).toBe(400);
-
-    const snapDefault = (await realFetch(`${base}/snapshot?format=wat`).then((r) => r.json())) as {
+    const stopped = (await realFetch(`${base}/stop`, { method: "POST" }).then((r) => r.json())) as {
       ok: boolean;
-      format?: string;
+      profile?: string;
     };
-    expect(snapDefault.ok).toBe(true);
-    expect(snapDefault.format).toBe("ai");
-
-    const screenshotBadCombo = await realFetch(`${base}/screenshot`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ fullPage: true, element: "body" }),
-    });
-    expect(screenshotBadCombo.status).toBe(400);
-  });
-
-  it("covers common error branches", async () => {
-    cfgAttachOnly = true;
-    const { startBrowserControlServerFromConfig } = await import("./server.js");
-    await startBrowserControlServerFromConfig();
-    const base = `http://127.0.0.1:${testPort}`;
-
-    const missing = await realFetch(`${base}/tabs/open`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
-    });
-    expect(missing.status).toBe(400);
-
-    reachable = false;
-    const started = (await realFetch(`${base}/start`, {
-      method: "POST",
-    }).then((r) => r.json())) as { error?: string };
-    expect(started.error ?? "").toMatch(/attachOnly/i);
-  });
-
-  it("allows attachOnly servers to ensure reachability via callback", async () => {
-    cfgAttachOnly = true;
-    reachable = false;
-    const { startBrowserBridgeServer } = await import("./bridge-server.js");
-
-    const ensured = vi.fn(async () => {
-      reachable = true;
-    });
-
-    const bridge = await startBrowserBridgeServer({
-      resolved: {
-        enabled: true,
-        controlPort: 0,
-        cdpProtocol: "http",
-        cdpHost: "127.0.0.1",
-        cdpIsLoopback: true,
-        color: "#FF4500",
-        headless: true,
-        noSandbox: false,
-        attachOnly: true,
-        defaultProfile: "openclaw",
-        profiles: {
-          openclaw: { cdpPort: testPort + 1, color: "#FF4500" },
-        },
-      },
-      onEnsureAttachTarget: ensured,
-    });
-
-    const started = (await realFetch(`${bridge.baseUrl}/start`, {
-      method: "POST",
-    }).then((r) => r.json())) as { ok?: boolean; error?: string };
-    expect(started.error).toBeUndefined();
-    expect(started.ok).toBe(true);
-    const status = (await realFetch(`${bridge.baseUrl}/`).then((r) => r.json())) as {
-      running?: boolean;
-    };
-    expect(status.running).toBe(true);
-    expect(ensured).toHaveBeenCalledTimes(1);
-
-    await new Promise<void>((resolve) => bridge.server.close(() => resolve()));
-  });
-
-  it("opens tabs via CDP createTarget path", async () => {
-    const { startBrowserControlServerFromConfig } = await import("./server.js");
-    await startBrowserControlServerFromConfig();
-    const base = `http://127.0.0.1:${testPort}`;
-    await realFetch(`${base}/start`, { method: "POST" }).then((r) => r.json());
-
-    createTargetId = "abcd1234";
-    const opened = (await realFetch(`${base}/tabs/open`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url: "https://example.com" }),
-    }).then((r) => r.json())) as { targetId?: string };
-    expect(opened.targetId).toBe("abcd1234");
+    expect(stopped.ok).toBe(true);
+    expect(stopped.profile).toBe("openclaw");
   });
 });

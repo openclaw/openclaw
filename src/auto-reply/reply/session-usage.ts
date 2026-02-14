@@ -36,11 +36,13 @@ export async function persistSessionUsageUpdate(params: {
   }
 
   const label = params.logLabel ? `${params.logLabel} ` : "";
-  // Check if either accumulated usage or lastCallUsage has valid data
+
+  // Check if either accumulated usage or lastCallUsage has valid data.
   // This ensures totalTokens gets updated even when the final request fails
-  // but we have valid lastCallUsage from a previous successful request in the run
+  // but we have valid lastCallUsage from a previous successful request in the run.
   const hasAccumulatedUsage = hasNonzeroUsage(params.usage);
   const hasLastCallUsage = hasNonzeroUsage(params.lastCallUsage);
+
   if (hasAccumulatedUsage || hasLastCallUsage) {
     try {
       await updateSessionStoreEntry({
@@ -48,11 +50,30 @@ export async function persistSessionUsageUpdate(params: {
         sessionKey,
         update: async (entry) => {
           const resolvedContextTokens = params.contextTokensUsed ?? entry.contextTokens;
+
+          const hasPromptTokens =
+            typeof params.promptTokens === "number" &&
+            Number.isFinite(params.promptTokens) &&
+            params.promptTokens > 0;
+
+          const hasFreshContextSnapshot = Boolean(params.lastCallUsage) || hasPromptTokens;
+
           // Use last-call usage for totalTokens when available. The accumulated
           // `usage.input` sums input tokens from every API call in the run
           // (tool-use loops, compaction retries), overstating actual context.
           // `lastCallUsage` reflects only the final API call — the true context.
           const usageForContext = params.lastCallUsage ?? params.usage;
+
+          // Only compute totalTokens when we have a fresh context snapshot:
+          // either lastCallUsage exists, or promptTokens was explicitly provided.
+          const totalTokens = hasFreshContextSnapshot
+            ? deriveSessionTotalTokens({
+                usage: usageForContext,
+                contextTokens: resolvedContextTokens,
+                promptTokens: params.promptTokens,
+              })
+            : undefined;
+
           const patch: Partial<SessionEntry> = {
             // Only update inputTokens/outputTokens when we have accumulated usage data.
             // When only lastCallUsage is available (final request failed), preserve
@@ -63,18 +84,18 @@ export async function persistSessionUsageUpdate(params: {
                   outputTokens: params.usage?.output ?? 0,
                 }
               : {}),
-            totalTokens:
-              deriveSessionTotalTokens({
-                usage: usageForContext,
-                contextTokens: resolvedContextTokens,
-                promptTokens: params.promptTokens,
-              }) ?? params.usage?.input,
+
+            // Missing a last-call snapshot means context utilization is stale/unknown.
+            totalTokens,
+            totalTokensFresh: typeof totalTokens === "number",
+
             modelProvider: params.providerUsed ?? entry.modelProvider,
             model: params.modelUsed ?? entry.model,
             contextTokens: resolvedContextTokens,
             systemPromptReport: params.systemPromptReport ?? entry.systemPromptReport,
             updatedAt: Date.now(),
           };
+
           const cliProvider = params.providerUsed ?? entry.modelProvider;
           if (params.cliSessionId && cliProvider) {
             const nextEntry = { ...entry, ...patch };
@@ -85,6 +106,7 @@ export async function persistSessionUsageUpdate(params: {
               claudeCliSessionId: nextEntry.claudeCliSessionId,
             };
           }
+
           return patch;
         },
       });
@@ -107,6 +129,7 @@ export async function persistSessionUsageUpdate(params: {
             systemPromptReport: params.systemPromptReport ?? entry.systemPromptReport,
             updatedAt: Date.now(),
           };
+
           const cliProvider = params.providerUsed ?? entry.modelProvider;
           if (params.cliSessionId && cliProvider) {
             const nextEntry = { ...entry, ...patch };
@@ -117,6 +140,7 @@ export async function persistSessionUsageUpdate(params: {
               claudeCliSessionId: nextEntry.claudeCliSessionId,
             };
           }
+
           return patch;
         },
       });

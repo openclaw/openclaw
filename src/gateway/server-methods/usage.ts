@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import path from "node:path";
 import type { SessionEntry, SessionSystemPromptReport } from "../../config/sessions/types.js";
 import type {
   CostUsageSummary,
@@ -13,7 +12,10 @@ import type {
 } from "../../infra/session-cost-usage.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { loadConfig } from "../../config/config.js";
-import { resolveSessionFilePath } from "../../config/sessions/paths.js";
+import {
+  resolveSessionFilePath,
+  resolveSessionFilePathOptions,
+} from "../../config/sessions/paths.js";
 import { loadProviderUsageSummary } from "../../infra/provider-usage.js";
 import {
   loadCostUsageSummary,
@@ -334,10 +336,10 @@ export const usageHandlers: GatewayRequestHandlers = {
       // Resolve the session file path
       let sessionFile: string;
       try {
-        const pathOpts =
-          storePath && storePath !== "(multiple)"
-            ? { sessionsDir: path.dirname(storePath) }
-            : { agentId: agentIdFromKey };
+        const pathOpts = resolveSessionFilePathOptions({
+          storePath: storePath !== "(multiple)" ? storePath : undefined,
+          agentId: agentIdFromKey,
+        });
         sessionFile = resolveSessionFilePath(sessionId, storeEntry, pathOpts);
       } catch {
         respond(
@@ -494,11 +496,13 @@ export const usageHandlers: GatewayRequestHandlers = {
     };
 
     for (const merged of limitedEntries) {
+      const agentId = parseAgentSessionKey(merged.key)?.agentId;
       const usage = await loadSessionCostSummary({
         sessionId: merged.sessionId,
         sessionEntry: merged.storeEntry,
         sessionFile: merged.sessionFile,
         config,
+        agentId,
         startMs,
         endMs,
       });
@@ -517,7 +521,6 @@ export const usageHandlers: GatewayRequestHandlers = {
         aggregateTotals.missingCostEntries += usage.missingCostEntries;
       }
 
-      const agentId = parseAgentSessionKey(merged.key)?.agentId;
       const channel = merged.storeEntry?.channel ?? merged.storeEntry?.origin?.provider;
       const chatType = merged.storeEntry?.chatType ?? merged.storeEntry?.origin?.chatType;
 
@@ -778,7 +781,7 @@ export const usageHandlers: GatewayRequestHandlers = {
     const sessionId = entry?.sessionId ?? rawSessionId;
     let sessionFile: string;
     try {
-      const pathOpts = storePath ? { sessionsDir: path.dirname(storePath) } : { agentId };
+      const pathOpts = resolveSessionFilePathOptions({ storePath, agentId });
       sessionFile = resolveSessionFilePath(sessionId, entry, pathOpts);
     } catch {
       respond(
@@ -794,6 +797,7 @@ export const usageHandlers: GatewayRequestHandlers = {
       sessionEntry: entry,
       sessionFile,
       config,
+      agentId,
       maxPoints: 200,
     });
 
@@ -830,7 +834,7 @@ export const usageHandlers: GatewayRequestHandlers = {
     const sessionId = entry?.sessionId ?? rawSessionId;
     let sessionFile: string;
     try {
-      const pathOpts = storePath ? { sessionsDir: path.dirname(storePath) } : { agentId };
+      const pathOpts = resolveSessionFilePathOptions({ storePath, agentId });
       sessionFile = resolveSessionFilePath(sessionId, entry, pathOpts);
     } catch {
       respond(
@@ -847,6 +851,7 @@ export const usageHandlers: GatewayRequestHandlers = {
       sessionEntry: entry,
       sessionFile,
       config,
+      agentId,
       limit,
     });
 

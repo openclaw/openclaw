@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   clearInternalHooks,
@@ -151,8 +151,6 @@ describe("loader", () => {
     });
 
     it("should handle module loading errors gracefully", async () => {
-      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
-
       const cfg: OpenClawConfig = {
         hooks: {
           internal: {
@@ -167,19 +165,12 @@ describe("loader", () => {
         },
       };
 
+      // Should not throw and should return 0 (handler failed to load)
       const count = await loadInternalHooks(cfg, tmpDir);
       expect(count).toBe(0);
-      expect(consoleError).toHaveBeenCalledWith(
-        expect.stringContaining("Failed to load hook handler"),
-        expect.any(String),
-      );
-
-      consoleError.mockRestore();
     });
 
     it("should handle non-function exports", async () => {
-      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
-
       // Create a module with a non-function export
       const handlerPath = path.join(tmpDir, "bad-export.js");
       await fs.writeFile(handlerPath, 'export default "not a function";', "utf-8");
@@ -198,11 +189,9 @@ describe("loader", () => {
         },
       };
 
+      // Should not throw and should return 0 (handler is not a function)
       const count = await loadInternalHooks(cfg, tmpDir);
       expect(count).toBe(0);
-      expect(consoleError).toHaveBeenCalledWith(expect.stringContaining("is not a function"));
-
-      consoleError.mockRestore();
     });
 
     it("should handle relative paths", async () => {

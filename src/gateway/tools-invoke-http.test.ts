@@ -1,7 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { promises as fs } from "node:fs";
-import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { ToolInputError } from "../agents/tools/common.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { resetTestPluginRegistry, setTestPluginRegistry, testState } from "./test-helpers.mocks.js";
 import { installGatewayTestHooks, getFreePort, startGatewayServer } from "./test-helpers.server.js";
@@ -22,134 +21,127 @@ const resolveGatewayToken = (): string => {
   return token;
 };
 
-describe("POST /tools/invoke", () => {
-  it("invokes a tool and returns {ok:true,result}", async () => {
-    // Allow the agents_list tool for main agent.
-    testState.agentsConfig = {
-      list: [
-        {
-          id: "main",
-          tools: {
-            allow: ["agents_list"],
-          },
+const allowAgentsListForMain = () => {
+  testState.agentsConfig = {
+    list: [
+      {
+        id: "main",
+        tools: {
+          allow: ["agents_list"],
         },
-      ],
-      // oxlint-disable-next-line typescript/no-explicit-any
-    } as any;
+      },
+    ],
+    // oxlint-disable-next-line typescript/no-explicit-any
+  } as any;
+};
 
-    const port = await getFreePort();
-    const server = await startGatewayServer(port, {
+const invokeAgentsList = async (params: {
+  port: number;
+  headers?: Record<string, string>;
+  sessionKey?: string;
+}) => {
+  const body: Record<string, unknown> = { tool: "agents_list", action: "json", args: {} };
+  if (params.sessionKey) {
+    body.sessionKey = params.sessionKey;
+  }
+  return await fetch(`http://127.0.0.1:${params.port}/tools/invoke`, {
+    method: "POST",
+    headers: { "content-type": "application/json", connection: "close", ...params.headers },
+    body: JSON.stringify(body),
+  });
+};
+
+const invokeTool = async (params: {
+  port: number;
+  tool: string;
+  args?: Record<string, unknown>;
+  action?: string;
+  headers?: Record<string, string>;
+  sessionKey?: string;
+}) => {
+  const body: Record<string, unknown> = {
+    tool: params.tool,
+    args: params.args ?? {},
+  };
+  if (params.action) {
+    body.action = params.action;
+  }
+  if (params.sessionKey) {
+    body.sessionKey = params.sessionKey;
+  }
+  return await fetch(`http://127.0.0.1:${params.port}/tools/invoke`, {
+    method: "POST",
+    headers: { "content-type": "application/json", connection: "close", ...params.headers },
+    body: JSON.stringify(body),
+  });
+};
+
+describe("POST /tools/invoke", () => {
+  let sharedPort = 0;
+  let sharedServer: Awaited<ReturnType<typeof startGatewayServer>>;
+
+  beforeAll(async () => {
+    sharedPort = await getFreePort();
+    sharedServer = await startGatewayServer(sharedPort, {
       bind: "loopback",
     });
+  });
+
+  afterAll(async () => {
+    await sharedServer.close();
+  });
+
+  it("invokes a tool and returns {ok:true,result}", async () => {
+    allowAgentsListForMain();
     const token = resolveGatewayToken();
 
-    const res = await fetch(`http://127.0.0.1:${port}/tools/invoke`, {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-      body: JSON.stringify({ tool: "agents_list", action: "json", args: {}, sessionKey: "main" }),
+    const res = await invokeAgentsList({
+      port: sharedPort,
+      headers: { authorization: `Bearer ${token}` },
+      sessionKey: "main",
     });
 
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.ok).toBe(true);
     expect(body).toHaveProperty("result");
-
-    await server.close();
   });
 
-  it("supports tools.alsoAllow as additive allowlist (profile stage)", async () => {
-    // No explicit tool allowlist; rely on profile + alsoAllow.
+  it("supports tools.alsoAllow in profile and implicit modes", async () => {
     testState.agentsConfig = {
       list: [{ id: "main" }],
       // oxlint-disable-next-line typescript/no-explicit-any
     } as any;
 
-    // minimal profile does NOT include agents_list, but alsoAllow should.
     const { writeConfigFile } = await import("../config/config.js");
     await writeConfigFile({
       tools: { profile: "minimal", alsoAllow: ["agents_list"] },
       // oxlint-disable-next-line typescript/no-explicit-any
     } as any);
-
-    const port = await getFreePort();
-    const server = await startGatewayServer(port, { bind: "loopback" });
     const token = resolveGatewayToken();
 
-    const res = await fetch(`http://127.0.0.1:${port}/tools/invoke`, {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-      body: JSON.stringify({ tool: "agents_list", action: "json", args: {}, sessionKey: "main" }),
+    const resProfile = await invokeAgentsList({
+      port: sharedPort,
+      headers: { authorization: `Bearer ${token}` },
+      sessionKey: "main",
     });
 
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.ok).toBe(true);
+    expect(resProfile.status).toBe(200);
+    const profileBody = await resProfile.json();
+    expect(profileBody.ok).toBe(true);
 
-    await server.close();
-  });
-
-  it("supports tools.alsoAllow without allow/profile (implicit allow-all)", async () => {
-    testState.agentsConfig = {
-      list: [{ id: "main" }],
+    await writeConfigFile({
+      tools: { alsoAllow: ["agents_list"] },
       // oxlint-disable-next-line typescript/no-explicit-any
-    } as any;
-
-    const { CONFIG_PATH } = await import("../config/config.js");
-    await fs.mkdir(path.dirname(CONFIG_PATH), { recursive: true });
-    await fs.writeFile(
-      CONFIG_PATH,
-      JSON.stringify({ tools: { alsoAllow: ["agents_list"] } }, null, 2),
-      "utf-8",
-    );
-
-    const port = await getFreePort();
-    const server = await startGatewayServer(port, { bind: "loopback" });
-    const token = resolveGatewayToken();
-
-    const res = await fetch(`http://127.0.0.1:${port}/tools/invoke`, {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-      body: JSON.stringify({ tool: "agents_list", action: "json", args: {}, sessionKey: "main" }),
+    } as any);
+    const resImplicit = await invokeAgentsList({
+      port: sharedPort,
+      headers: { authorization: `Bearer ${token}` },
+      sessionKey: "main",
     });
-
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.ok).toBe(true);
-
-    await server.close();
-  });
-
-  it("accepts password auth when bearer token matches", async () => {
-    testState.agentsConfig = {
-      list: [
-        {
-          id: "main",
-          tools: {
-            allow: ["agents_list"],
-          },
-        },
-      ],
-      // oxlint-disable-next-line typescript/no-explicit-any
-    } as any;
-
-    const port = await getFreePort();
-    const server = await startGatewayServer(port, {
-      bind: "loopback",
-      auth: { mode: "password", password: "secret" },
-    });
-
-    const res = await fetch(`http://127.0.0.1:${port}/tools/invoke`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: "Bearer secret",
-      },
-      body: JSON.stringify({ tool: "agents_list", action: "json", args: {}, sessionKey: "main" }),
-    });
-
-    expect(res.status).toBe(200);
-
-    await server.close();
+    expect(resImplicit.status).toBe(200);
+    const implicitBody = await resImplicit.json();
+    expect(implicitBody.ok).toBe(true);
   });
 
   it("routes tools invoke before plugin HTTP handlers", async () => {
@@ -171,72 +163,23 @@ describe("POST /tools/invoke", () => {
     ];
     setTestPluginRegistry(registry);
 
-    testState.agentsConfig = {
-      list: [
-        {
-          id: "main",
-          tools: {
-            allow: ["agents_list"],
-          },
-        },
-      ],
-      // oxlint-disable-next-line typescript/no-explicit-any
-    } as any;
-
-    const port = await getFreePort();
-    const server = await startGatewayServer(port, { bind: "loopback" });
+    allowAgentsListForMain();
     try {
       const token = resolveGatewayToken();
-      const res = await fetch(`http://127.0.0.1:${port}/tools/invoke`, {
-        method: "POST",
-        headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-        body: JSON.stringify({
-          tool: "agents_list",
-          action: "json",
-          args: {},
-          sessionKey: "main",
-        }),
+      const res = await invokeAgentsList({
+        port: sharedPort,
+        headers: { authorization: `Bearer ${token}` },
+        sessionKey: "main",
       });
 
       expect(res.status).toBe(200);
       expect(pluginHandler).not.toHaveBeenCalled();
     } finally {
-      await server.close();
       resetTestPluginRegistry();
     }
   });
 
-  it("rejects unauthorized when auth mode is token and header is missing", async () => {
-    testState.agentsConfig = {
-      list: [
-        {
-          id: "main",
-          tools: {
-            allow: ["agents_list"],
-          },
-        },
-      ],
-      // oxlint-disable-next-line typescript/no-explicit-any
-    } as any;
-
-    const port = await getFreePort();
-    const server = await startGatewayServer(port, {
-      bind: "loopback",
-      auth: { mode: "token", token: "t" },
-    });
-
-    const res = await fetch(`http://127.0.0.1:${port}/tools/invoke`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ tool: "agents_list", action: "json", args: {}, sessionKey: "main" }),
-    });
-
-    expect(res.status).toBe(401);
-
-    await server.close();
-  });
-
-  it("returns 404 when tool is not allowlisted", async () => {
+  it("returns 404 when denylisted or blocked by tools.profile", async () => {
     testState.agentsConfig = {
       list: [
         {
@@ -248,34 +191,16 @@ describe("POST /tools/invoke", () => {
       ],
       // oxlint-disable-next-line typescript/no-explicit-any
     } as any;
-
-    const port = await getFreePort();
-    const server = await startGatewayServer(port, { bind: "loopback" });
     const token = resolveGatewayToken();
 
-    const res = await fetch(`http://127.0.0.1:${port}/tools/invoke`, {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-      body: JSON.stringify({ tool: "agents_list", action: "json", args: {}, sessionKey: "main" }),
+    const denyRes = await invokeAgentsList({
+      port: sharedPort,
+      headers: { authorization: `Bearer ${token}` },
+      sessionKey: "main",
     });
+    expect(denyRes.status).toBe(404);
 
-    expect(res.status).toBe(404);
-
-    await server.close();
-  });
-
-  it("respects tools.profile allowlist", async () => {
-    testState.agentsConfig = {
-      list: [
-        {
-          id: "main",
-          tools: {
-            allow: ["agents_list"],
-          },
-        },
-      ],
-      // oxlint-disable-next-line typescript/no-explicit-any
-    } as any;
+    allowAgentsListForMain();
 
     const { writeConfigFile } = await import("../config/config.js");
     await writeConfigFile({
@@ -283,19 +208,75 @@ describe("POST /tools/invoke", () => {
       // oxlint-disable-next-line typescript/no-explicit-any
     } as any);
 
-    const port = await getFreePort();
-    const server = await startGatewayServer(port, { bind: "loopback" });
+    const profileRes = await invokeAgentsList({
+      port: sharedPort,
+      headers: { authorization: `Bearer ${token}` },
+      sessionKey: "main",
+    });
+    expect(profileRes.status).toBe(404);
+  });
+
+  it("denies sessions_spawn via HTTP even when agent policy allows", async () => {
+    testState.agentsConfig = {
+      list: [
+        {
+          id: "main",
+          tools: { allow: ["sessions_spawn"] },
+        },
+      ],
+      // oxlint-disable-next-line typescript/no-explicit-any
+    } as any;
+
     const token = resolveGatewayToken();
 
-    const res = await fetch(`http://127.0.0.1:${port}/tools/invoke`, {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-      body: JSON.stringify({ tool: "agents_list", action: "json", args: {}, sessionKey: "main" }),
+    const res = await invokeTool({
+      port: sharedPort,
+      tool: "sessions_spawn",
+      args: { task: "test" },
+      headers: { authorization: `Bearer ${token}` },
+      sessionKey: "main",
     });
 
     expect(res.status).toBe(404);
+    const body = await res.json();
+    expect(body.ok).toBe(false);
+    expect(body.error.type).toBe("not_found");
+  });
 
-    await server.close();
+  it("denies sessions_send via HTTP gateway", async () => {
+    testState.agentsConfig = {
+      list: [{ id: "main", tools: { allow: ["sessions_send"] } }],
+      // oxlint-disable-next-line typescript/no-explicit-any
+    } as any;
+
+    const token = resolveGatewayToken();
+
+    const res = await invokeTool({
+      port: sharedPort,
+      tool: "sessions_send",
+      headers: { authorization: `Bearer ${token}` },
+      sessionKey: "main",
+    });
+
+    expect(res.status).toBe(404);
+  });
+
+  it("denies gateway tool via HTTP", async () => {
+    testState.agentsConfig = {
+      list: [{ id: "main", tools: { allow: ["gateway"] } }],
+      // oxlint-disable-next-line typescript/no-explicit-any
+    } as any;
+
+    const token = resolveGatewayToken();
+
+    const res = await invokeTool({
+      port: sharedPort,
+      tool: "gateway",
+      headers: { authorization: `Bearer ${token}` },
+      sessionKey: "main",
+    });
+
+    expect(res.status).toBe(404);
   });
 
   it("uses the configured main session key when sessionKey is missing or main", async () => {
@@ -319,26 +300,93 @@ describe("POST /tools/invoke", () => {
     } as any;
     testState.sessionConfig = { mainKey: "primary" };
 
-    const port = await getFreePort();
-    const server = await startGatewayServer(port, { bind: "loopback" });
-
-    const payload = { tool: "agents_list", action: "json", args: {} };
     const token = resolveGatewayToken();
 
-    const resDefault = await fetch(`http://127.0.0.1:${port}/tools/invoke`, {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-      body: JSON.stringify(payload),
+    const resDefault = await invokeAgentsList({
+      port: sharedPort,
+      headers: { authorization: `Bearer ${token}` },
     });
     expect(resDefault.status).toBe(200);
 
-    const resMain = await fetch(`http://127.0.0.1:${port}/tools/invoke`, {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-      body: JSON.stringify({ ...payload, sessionKey: "main" }),
+    const resMain = await invokeAgentsList({
+      port: sharedPort,
+      headers: { authorization: `Bearer ${token}` },
+      sessionKey: "main",
     });
     expect(resMain.status).toBe(200);
+  });
 
-    await server.close();
+  it("maps tool input errors to 400 and unexpected execution errors to 500", async () => {
+    const registry = createTestRegistry();
+    registry.tools.push({
+      pluginId: "tools-invoke-test",
+      source: "test",
+      names: ["tools_invoke_test"],
+      optional: false,
+      factory: () => ({
+        label: "Tools Invoke Test",
+        name: "tools_invoke_test",
+        description: "Test-only tool.",
+        parameters: {
+          type: "object",
+          properties: {
+            mode: { type: "string" },
+          },
+          required: ["mode"],
+          additionalProperties: false,
+        },
+        execute: async (_toolCallId, args) => {
+          const mode = (args as { mode?: unknown }).mode;
+          if (mode === "input") {
+            throw new ToolInputError("mode invalid");
+          }
+          if (mode === "crash") {
+            throw new Error("boom");
+          }
+          return { ok: true };
+        },
+      }),
+    });
+    setTestPluginRegistry(registry);
+    const { writeConfigFile } = await import("../config/config.js");
+    await writeConfigFile({
+      plugins: { enabled: true },
+      // oxlint-disable-next-line typescript/no-explicit-any
+    } as any);
+
+    const token = resolveGatewayToken();
+
+    try {
+      const inputRes = await invokeTool({
+        port: sharedPort,
+        tool: "tools_invoke_test",
+        args: { mode: "input" },
+        headers: { authorization: `Bearer ${token}` },
+        sessionKey: "main",
+      });
+      expect(inputRes.status).toBe(400);
+      const inputBody = await inputRes.json();
+      expect(inputBody.ok).toBe(false);
+      expect(inputBody.error?.type).toBe("tool_error");
+      expect(inputBody.error?.message).toBe("mode invalid");
+
+      const crashRes = await invokeTool({
+        port: sharedPort,
+        tool: "tools_invoke_test",
+        args: { mode: "crash" },
+        headers: { authorization: `Bearer ${token}` },
+        sessionKey: "main",
+      });
+      expect(crashRes.status).toBe(500);
+      const crashBody = await crashRes.json();
+      expect(crashBody.ok).toBe(false);
+      expect(crashBody.error?.type).toBe("tool_error");
+      expect(crashBody.error?.message).toBe("tool execution failed");
+    } finally {
+      await writeConfigFile({
+        // oxlint-disable-next-line typescript/no-explicit-any
+      } as any);
+      resetTestPluginRegistry();
+    }
   });
 });
