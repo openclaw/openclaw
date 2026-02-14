@@ -17,8 +17,8 @@ import {
   MSTeamsReplyStyleSchema,
   ProviderCommandsSchema,
   ReplyToModeSchema,
-  RetryConfigSchema,
   requireOpenAllowFrom,
+  RetryConfigSchema,
 } from "./zod-schema.core.js";
 
 const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional();
@@ -138,6 +138,14 @@ export const TelegramAccountSchemaBase = z
     heartbeat: ChannelHeartbeatVisibilitySchema,
     linkPreview: z.boolean().optional(),
     responsePrefix: z.string().optional(),
+    execApprovals: z
+      .object({
+        enabled: z.boolean().optional(),
+        approvers: z.array(z.union([z.string(), z.number()])).optional(),
+        agentFilter: z.array(z.string()).optional(),
+        sessionFilter: z.array(z.string()).optional(),
+      })
+      .optional(),
   })
   .strict();
 

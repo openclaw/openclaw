@@ -71,6 +71,8 @@ type TelegramCommandAuthResult = {
   commandAuthorized: boolean;
 };
 
+import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
+
 export type RegisterTelegramHandlerParams = {
   cfg: OpenClawConfig;
   accountId: string;
@@ -97,7 +99,7 @@ export type RegisterTelegramHandlerParams = {
   ) => Promise<void>;
   logger: ReturnType<typeof getChildLogger>;
   execApprovalHandler?: {
-    resolveApproval: (approvalId: string, decision: string) => Promise<boolean>;
+    resolveApproval: (approvalId: string, decision: ExecApprovalDecision) => Promise<boolean>;
   };
 };
 

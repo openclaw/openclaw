@@ -21,6 +21,7 @@ import {
   resolveChannelGroupRequireMention,
 } from "../config/group-policy.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
+import { buildGatewayConnectionDetails } from "../gateway/call.js";
 import { danger, logVerbose, shouldLogVerbose } from "../globals.js";
 import { formatUncaughtError } from "../infra/errors.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
@@ -475,7 +476,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       api: bot.api,
       accountId: account.accountId,
       config: telegramCfg.execApprovals,
-      gatewayUrl: cfg.gateway?.url,
+      gatewayUrl: buildGatewayConnectionDetails({ config: cfg }).url,
       cfg,
       runtime,
     });

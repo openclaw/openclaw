@@ -6,9 +6,21 @@ import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { GatewayClient } from "../gateway/client.js";
 import { logDebug, logError } from "../logger.js";
+import { resolveTelegramInlineButtonsScope } from "./inline-buttons.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 
-const EXEC_APPROVAL_KEY = "execapproval";
+// Short prefix so callback_data stays under Telegram 64-byte limit
+const EXEC_APPROVAL_KEY = "ea";
+const ACTION_CODES: Record<ExecApprovalDecision, string> = {
+  "allow-once": "o",
+  "allow-always": "a",
+  deny: "d",
+};
+const CODE_TO_ACTION: Record<string, ExecApprovalDecision> = {
+  o: "allow-once",
+  a: "allow-always",
+  d: "deny",
+};
 
 export type ExecApprovalRequest = {
   id: string;
@@ -34,8 +46,7 @@ export type ExecApprovalResolved = {
 };
 
 type PendingApproval = {
-  telegramMessageId: number;
-  telegramChatId: number;
+  messages: Array<{ telegramMessageId: number; telegramChatId: number }>;
   timeoutId: NodeJS.Timeout;
 };
 
@@ -55,11 +66,11 @@ export function buildExecApprovalCallbackData(
   approvalId: string,
   action: ExecApprovalDecision,
 ): string {
-  // Telegram callback_data max is 64 bytes
-  // Pattern: execapproval:id={id};action={decision}
-  return [`${EXEC_APPROVAL_KEY}:id=${encodeCustomIdValue(approvalId)}`, `action=${action}`].join(
-    ";",
-  );
+  // Telegram callback_data max is 64 bytes. Short format: ea:id={id};a={o|a|d}
+  return [
+    `${EXEC_APPROVAL_KEY}:id=${encodeCustomIdValue(approvalId)}`,
+    `a=${ACTION_CODES[action]}`,
+  ].join(";");
 }
 
 export function parseExecApprovalCallbackData(
@@ -69,30 +80,29 @@ export function parseExecApprovalCallbackData(
     return null;
   }
 
-  // Check if it's an exec approval callback
+  // Format: ea:id={id};a={o|a|d}
   if (!callbackData.startsWith(`${EXEC_APPROVAL_KEY}:`)) {
     return null;
   }
 
-  // Parse: execapproval:id={id};action={decision}
   const parts = callbackData.split(";");
   let rawId = "";
-  let rawAction = "";
+  let rawCode = "";
 
   for (const part of parts) {
     if (part.startsWith(`${EXEC_APPROVAL_KEY}:id=`)) {
       rawId = part.slice(`${EXEC_APPROVAL_KEY}:id=`.length);
-    } else if (part.startsWith("action=")) {
-      rawAction = part.slice("action=".length);
+    } else if (part.startsWith("a=")) {
+      rawCode = part.slice(2);
     }
   }
 
-  if (!rawId || !rawAction) {
+  if (!rawId || !rawCode) {
     return null;
   }
 
-  const action = rawAction as ExecApprovalDecision;
-  if (action !== "allow-once" && action !== "allow-always" && action !== "deny") {
+  const action = CODE_TO_ACTION[rawCode];
+  if (!action) {
     return null;
   }
 
@@ -193,6 +203,15 @@ export class TelegramExecApprovalHandler {
       return false;
     }
     if (!config.approvers || config.approvers.length === 0) {
+      return false;
+    }
+
+    // Fallback: when inlineButtons is "off", do not send button UI (forwarder will send plain text)
+    const inlineButtonsScope = resolveTelegramInlineButtonsScope({
+      cfg: this.opts.cfg,
+      accountId: this.opts.accountId,
+    });
+    if (inlineButtonsScope === "off") {
       return false;
     }
 
@@ -303,6 +322,12 @@ export class TelegramExecApprovalHandler {
 
     logDebug(`telegram exec approvals: received request ${request.id}`);
 
+    // Idempotency: if we already have this request (e.g. duplicate gateway event), do not send again
+    if (this.pending.has(request.id)) {
+      logDebug(`telegram exec approvals: skipping duplicate request ${request.id}`);
+      return;
+    }
+
     this.requestCache.set(request.id, request);
 
     const message = formatExecApprovalMessage(request);
@@ -327,15 +352,30 @@ export class TelegramExecApprovalHandler {
       ],
     };
 
-    const approvers = this.opts.config.approvers ?? [];
-
-    for (const approver of approvers) {
+    // Deduplicate by chat ID so we send at most one message per chat (avoids duplicate blocks for same ID)
+    const rawApprovers = this.opts.config.approvers ?? [];
+    const seenChatIds = new Set<number>();
+    const approvers: number[] = [];
+    for (const approver of rawApprovers) {
       const chatId = Number(approver);
       if (Number.isNaN(chatId)) {
         logError(`telegram exec approvals: invalid approver ID ${approver}`);
         continue;
       }
+      if (seenChatIds.has(chatId)) {
+        continue;
+      }
+      seenChatIds.add(chatId);
+      approvers.push(chatId);
+    }
 
+    const timeoutMs = Math.max(0, request.expiresAtMs - Date.now());
+    const timeoutId = setTimeout(() => {
+      void this.handleApprovalTimeout(request.id);
+    }, timeoutMs);
+    const messages: Array<{ telegramMessageId: number; telegramChatId: number }> = [];
+
+    for (const chatId of approvers) {
       try {
         // Send message with inline keyboard to approver
         const sentMessage = await this.opts.api.sendMessage(chatId, message, {
@@ -348,22 +388,21 @@ export class TelegramExecApprovalHandler {
           continue;
         }
 
-        // Set up timeout
-        const timeoutMs = Math.max(0, request.expiresAtMs - Date.now());
-        const timeoutId = setTimeout(() => {
-          void this.handleApprovalTimeout(request.id);
-        }, timeoutMs);
-
-        this.pending.set(request.id, {
+        messages.push({
           telegramMessageId: sentMessage.message_id,
           telegramChatId: chatId,
-          timeoutId,
         });
 
         logDebug(`telegram exec approvals: sent approval ${request.id} to ${chatId}`);
       } catch (err) {
         logError(`telegram exec approvals: failed to notify ${chatId}: ${String(err)}`);
       }
+    }
+
+    if (messages.length > 0) {
+      this.pending.set(request.id, { messages, timeoutId });
+    } else {
+      clearTimeout(timeoutId);
     }
   }
 
@@ -385,11 +424,10 @@ export class TelegramExecApprovalHandler {
 
     logDebug(`telegram exec approvals: resolved ${resolved.id} with ${resolved.decision}`);
 
-    await this.updateMessage(
-      pending.telegramChatId,
-      pending.telegramMessageId,
-      formatResolvedMessage(request, resolved.decision, resolved.resolvedBy),
-    );
+    const text = formatResolvedMessage(request, resolved.decision, resolved.resolvedBy);
+    for (const { telegramChatId, telegramMessageId } of pending.messages) {
+      await this.updateMessage(telegramChatId, telegramMessageId, text);
+    }
   }
 
   private async handleApprovalTimeout(approvalId: string): Promise<void> {
@@ -409,11 +447,10 @@ export class TelegramExecApprovalHandler {
 
     logDebug(`telegram exec approvals: timeout for ${approvalId}`);
 
-    await this.updateMessage(
-      pending.telegramChatId,
-      pending.telegramMessageId,
-      formatExpiredMessage(request),
-    );
+    const text = formatExpiredMessage(request);
+    for (const { telegramChatId, telegramMessageId } of pending.messages) {
+      await this.updateMessage(telegramChatId, telegramMessageId, text);
+    }
   }
 
   private async updateMessage(chatId: number, messageId: number, text: string): Promise<void> {

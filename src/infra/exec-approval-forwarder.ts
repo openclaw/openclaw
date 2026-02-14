@@ -9,6 +9,7 @@ import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
+import { resolveTelegramInlineButtonsScope } from "../telegram/inline-buttons.js";
 import { deliverOutboundPayloads } from "./outbound/deliver.js";
 import { resolveSessionDeliveryTarget } from "./outbound/targets.js";
 
@@ -115,6 +116,50 @@ function buildTargetKey(target: ExecApprovalForwardTarget): string {
   return [channel, target.to, accountId, threadId].join(":");
 }
 
+/** Skip plain-text delivery when this channel/account uses button-based exec approvals (avoids duplicate request messages). */
+function shouldSkipPlainTextForTarget(
+  cfg: OpenClawConfig,
+  target: ExecApprovalForwardTarget,
+): boolean {
+  const channel = normalizeMessageChannel(target.channel) ?? target.channel;
+  if (channel === "telegram") {
+    const telegram = cfg.channels?.telegram as
+      | {
+          execApprovals?: { enabled?: boolean };
+          accounts?: Record<string, { execApprovals?: { enabled?: boolean } }>;
+        }
+      | undefined;
+    if (!telegram) {
+      return false;
+    }
+    const accountId = target.accountId ?? "default";
+    const account = telegram.accounts?.[accountId];
+    const enabled = account?.execApprovals?.enabled ?? telegram.execApprovals?.enabled;
+    if (enabled !== true) {
+      return false;
+    }
+    // Only skip when inline buttons are on; otherwise forwarder delivers plain text (fallback)
+    const inlineButtonsScope = resolveTelegramInlineButtonsScope({ cfg, accountId });
+    return inlineButtonsScope !== "off";
+  }
+  if (channel === "discord") {
+    const discord = cfg.channels?.discord as
+      | {
+          execApprovals?: { enabled?: boolean };
+          accounts?: Record<string, { execApprovals?: { enabled?: boolean } }>;
+        }
+      | undefined;
+    if (!discord) {
+      return false;
+    }
+    const accountId = target.accountId ?? "default";
+    const account = discord.accounts?.[accountId];
+    const enabled = account?.execApprovals?.enabled ?? discord.execApprovals?.enabled;
+    return enabled === true;
+  }
+  return false;
+}
+
 function buildRequestMessage(request: ExecApprovalRequest, nowMs: number) {
   const lines: string[] = ["🔒 Exec approval required", `ID: ${request.id}`];
   lines.push(`Command: ${request.request.command}`);
@@ -203,6 +248,10 @@ async function deliverToTargets(params: {
     }
     const channel = normalizeMessageChannel(target.channel) ?? target.channel;
     if (!isDeliverableMessageChannel(channel)) {
+      return;
+    }
+    // Skip plain-text when this channel has button-based exec approvals (Telegram/Discord)
+    if (shouldSkipPlainTextForTarget(params.cfg, target)) {
       return;
     }
     try {
