@@ -207,11 +207,8 @@ function buildSignalPollContext(params: {
     options?: string[] | null;
   } | null;
   pollVote?: {
-    authorNumber?: string | null;
-    authorUuid?: string | null;
     targetSentTimestamp?: number | null;
     optionIndexes?: number[] | null;
-    voteCount?: number | null;
   } | null;
   pollTerminate?: { targetSentTimestamp?: number | null } | null;
 }): string[] {
@@ -235,13 +232,11 @@ function buildSignalPollContext(params: {
   if (params.pollVote) {
     const targetTimestamp = params.pollVote.targetSentTimestamp;
     const indexes = params.pollVote.optionIndexes?.filter((idx) => typeof idx === "number") ?? [];
-    const author = params.pollVote.authorNumber?.trim() || params.pollVote.authorUuid?.trim();
 
     if (targetTimestamp != null) {
       const timestampText = `#${targetTimestamp}`;
       const indexesText = indexes.length > 0 ? indexes.join(", ") : "unknown";
-      const authorText = author ? ` (by ${author})` : "";
-      context.push(`Poll vote on ${timestampText}: option(s) ${indexesText}${authorText}`);
+      context.push(`Poll vote on ${timestampText}: option(s) ${indexesText}`);
     }
   }
 
@@ -549,6 +544,16 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       if (!combinedText.trim()) {
         return;
       }
+      // Merge untrustedContext arrays from all entries so poll vote metadata,
+      // link previews, sticker context etc. survive debounce concatenation.
+      const mergedUntrustedContext = entries.reduce<string[]>((acc, entry) => {
+        if (Array.isArray(entry.untrustedContext)) {
+          acc.push(...entry.untrustedContext);
+        }
+        return acc;
+      }, []);
+      // Preserve reply context from the first entry that has one.
+      const replyEntry = entries.find((e) => e.replyToId != null);
       await handleSignalInboundMessage({
         ...last,
         bodyText: combinedText,
@@ -561,11 +566,11 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         mediaCaptions: undefined,
         mediaDimension: undefined,
         mediaDimensions: undefined,
-        untrustedContext: undefined,
-        replyToId: undefined,
-        replyToBody: undefined,
-        replyToSender: undefined,
-        replyToIsQuote: undefined,
+        untrustedContext: mergedUntrustedContext.length > 0 ? mergedUntrustedContext : undefined,
+        replyToId: replyEntry?.replyToId,
+        replyToBody: replyEntry?.replyToBody,
+        replyToSender: replyEntry?.replyToSender,
+        replyToIsQuote: replyEntry?.replyToIsQuote,
         editTargetTimestamp: undefined,
         isEdit: undefined,
       });
