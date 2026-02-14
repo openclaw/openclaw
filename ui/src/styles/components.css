@@ -381,8 +381,8 @@
   align-items: center;
   justify-content: center;
   gap: 8px;
-  border: 1px solid var(--border);
-  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  background: var(--secondary);
   padding: 9px 16px;
   border-radius: var(--radius-md);
   font-size: 13px;
@@ -513,7 +513,7 @@
 .field textarea,
 .field select {
   border: 1px solid var(--input);
-  background: var(--card);
+  background: var(--bg);
   border-radius: var(--radius-md);
   padding: 8px 12px;
   outline: none;

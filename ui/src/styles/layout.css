@@ -190,6 +190,17 @@
   height: 12px;
 }
 
+.topbar-status .mode-toggle {
+  --mode-item: 24px;
+  --mode-gap: 2px;
+  --mode-pad: 3px;
+}
+
+.topbar-status .mode-icon {
+  width: 12px;
+  height: 12px;
+}
+
 /* ===========================================
    Navigation Sidebar
    =========================================== */
@@ -279,7 +290,7 @@
 
 /* Nav groups */
 .nav-group {
-  margin-bottom: 20px;
+  margin-bottom: 12px;
   display: grid;
   gap: 2px;
 }
@@ -304,7 +315,7 @@
   justify-content: space-between;
   gap: 8px;
   width: 100%;
-  padding: 6px 10px;
+  padding: 4px 10px;
   font-size: 11px;
   font-weight: 500;
   color: var(--muted);
@@ -354,7 +365,7 @@
   align-items: center;
   justify-content: flex-start;
   gap: 10px;
-  padding: 8px 10px;
+  padding: 6px 10px;
   border-radius: var(--radius-md);
   border: 1px solid transparent;
   background: transparent;
@@ -368,8 +379,8 @@
 }
 
 .nav-item__icon {
-  width: 16px;
-  height: 16px;
+  width: 18px;
+  height: 18px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -379,8 +390,8 @@
 }
 
 .nav-item__icon svg {
-  width: 16px;
-  height: 16px;
+  width: 18px;
+  height: 18px;
   stroke: currentColor;
   fill: none;
   stroke-width: 1.5px;
@@ -389,7 +400,7 @@
 }
 
 .nav-item__text {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 500;
   white-space: nowrap;
 }

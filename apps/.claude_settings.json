@@ -1,0 +1,34 @@
+{
+  "sandbox": {
+    "enabled": true,
+    "autoAllowBashIfSandboxed": true
+  },
+  "permissions": {
+    "defaultMode": "acceptEdits",
+    "allow": [
+      "Read(./**)",
+      "Write(./**)",
+      "Edit(./**)",
+      "Glob(./**)",
+      "Grep(./**)",
+      "Read(/Users/jkneen/Documents/GitHub/atomicbot/apps/**)",
+      "Write(/Users/jkneen/Documents/GitHub/atomicbot/apps/**)",
+      "Edit(/Users/jkneen/Documents/GitHub/atomicbot/apps/**)",
+      "Glob(/Users/jkneen/Documents/GitHub/atomicbot/apps/**)",
+      "Grep(/Users/jkneen/Documents/GitHub/atomicbot/apps/**)",
+      "Read(/Users/jkneen/Documents/GitHub/atomicbot/apps/.auto-claude/specs/002-redesign-gateway-web-dashboard/**)",
+      "Write(/Users/jkneen/Documents/GitHub/atomicbot/apps/.auto-claude/specs/002-redesign-gateway-web-dashboard/**)",
+      "Edit(/Users/jkneen/Documents/GitHub/atomicbot/apps/.auto-claude/specs/002-redesign-gateway-web-dashboard/**)",
+      "Bash(*)",
+      "WebFetch(*)",
+      "WebSearch(*)",
+      "mcp__context7__resolve-library-id(*)",
+      "mcp__context7__query-docs(*)",
+      "mcp__graphiti-memory__search_nodes(*)",
+      "mcp__graphiti-memory__search_facts(*)",
+      "mcp__graphiti-memory__add_episode(*)",
+      "mcp__graphiti-memory__get_episodes(*)",
+      "mcp__graphiti-memory__get_entity_edge(*)"
+    ]
+  }
+}
