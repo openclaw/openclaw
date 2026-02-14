@@ -9,10 +9,6 @@ export {
   handleAutoCompactionStart,
 } from "./pi-embedded-subscribe.handlers.compaction.js";
 
-function getSessionMessageCount(ctx: EmbeddedPiSubscribeContext): number {
-  return Array.isArray(ctx.params.session?.messages) ? ctx.params.session.messages.length : 0;
-}
-
 export function handleAgentStart(ctx: EmbeddedPiSubscribeContext) {
   ctx.log.debug(`embedded run agent start: runId=${ctx.params.runId}`);
   emitAgentEvent({
