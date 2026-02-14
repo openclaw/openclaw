@@ -38,6 +38,9 @@ jobs:
             exit 1
           }
 
+      - name: Sync plugin versions
+        run: pnpm plugins:sync
+
       - name: Build package artifacts
         run: pnpm build && pnpm ui:build
 
