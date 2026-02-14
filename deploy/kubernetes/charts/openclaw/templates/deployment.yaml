@@ -1,0 +1,182 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "openclaw.fullname" . }}
+  labels:
+    {{- include "openclaw.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "openclaw.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "openclaw.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "openclaw.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.initContainers.enabled }}
+      initContainers:
+        - name: init-openclaw-state
+          image: {{ .Values.initContainers.image }}
+          {{- with .Values.initContainers.command }}
+          command:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.initContainers.args }}
+          args:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            {{- if .Values.persistence.config.enabled }}
+            - name: config
+              mountPath: /config
+            {{- end }}
+            {{- if .Values.persistence.workspace.enabled }}
+            - name: workspace
+              mountPath: /workspace
+            {{- end }}
+        {{- with .Values.initContainers.extra }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- end }}
+      containers:
+        - name: openclaw
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- with .Values.gateway.command }}
+          command:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.gateway.args }}
+          args:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          env:
+            - name: HOME
+              value: /home/node
+            - name: TERM
+              value: xterm-256color
+            {{- range .Values.gateway.env }}
+            - name: {{ .name }}
+              value: {{ .value | quote }}
+            {{- end }}
+            {{- range .Values.gateway.extraEnv }}
+            - name: {{ .name }}
+              value: {{ .value | quote }}
+            {{- end }}
+          {{- if or .Values.gateway.envFrom .Values.gateway.extraEnvFrom (or .Values.secret.create .Values.secret.name) }}
+          envFrom:
+            {{- if or .Values.secret.create .Values.secret.name }}
+            - secretRef:
+                name: {{ include "openclaw.secretName" . }}
+            {{- end }}
+            {{- with .Values.gateway.envFrom }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+            {{- with .Values.gateway.extraEnvFrom }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- end }}
+          ports:
+            - containerPort: {{ .Values.service.ports.gateway }}
+              name: gateway
+            - containerPort: {{ .Values.service.ports.bridge }}
+              name: bridge
+          {{- if .Values.gateway.livenessProbe.enabled }}
+          livenessProbe:
+            {{- $lp := omit .Values.gateway.livenessProbe "enabled" }}
+            {{- toYaml $lp | nindent 12 }}
+          {{- end }}
+          {{- if .Values.gateway.readinessProbe.enabled }}
+          readinessProbe:
+            {{- $rp := omit .Values.gateway.readinessProbe "enabled" }}
+            {{- toYaml $rp | nindent 12 }}
+          {{- end }}
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- $hasMounts := or .Values.persistence.config.enabled .Values.persistence.workspace.enabled }}
+          {{- if or $hasMounts .Values.extraVolumeMounts }}
+          volumeMounts:
+            {{- if .Values.persistence.config.enabled }}
+            - name: config
+              mountPath: /home/node/.openclaw
+            {{- end }}
+            {{- if .Values.persistence.workspace.enabled }}
+            - name: workspace
+              mountPath: /home/node/.openclaw/workspace
+            {{- end }}
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- end }}
+        {{- with .Values.extraContainers }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      volumes:
+        {{- if .Values.persistence.config.enabled }}
+        - name: config
+          {{- if .Values.persistence.config.existingClaim }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.config.existingClaim }}
+          {{- else }}
+          persistentVolumeClaim:
+            claimName: {{ printf "%s-config" (include "openclaw.fullname" .) | trunc 63 | trimSuffix "-" }}
+          {{- end }}
+        {{- else }}
+        - name: config
+          emptyDir: {}
+        {{- end }}
+        {{- if .Values.persistence.workspace.enabled }}
+        - name: workspace
+          {{- if .Values.persistence.workspace.existingClaim }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.workspace.existingClaim }}
+          {{- else }}
+          persistentVolumeClaim:
+            claimName: {{ printf "%s-workspace" (include "openclaw.fullname" .) | trunc 63 | trimSuffix "-" }}
+          {{- end }}
+        {{- else }}
+        - name: workspace
+          emptyDir: {}
+        {{- end }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

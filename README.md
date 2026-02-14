@@ -104,6 +104,15 @@ pnpm gateway:watch
 
 Note: `pnpm openclaw ...` runs TypeScript directly (via `tsx`). `pnpm build` produces `dist/` for running via Node / the packaged `openclaw` binary.
 
+## Kubernetes / GitOps
+
+Need to run OpenClaw in a cluster? A first-party Helm chart plus Flux/Argo-ready Kustomize
+overlays now live under [`deploy/kubernetes`](deploy/kubernetes). The chart deploys the
+`ghcr.io/openclaw/openclaw` image, PVCs for `/home/node/.openclaw` + `/home/node/.openclaw/workspace`,
+and optional ingress/secret scaffolding. Render it directly with Helm or let Flux/Argo CD
+track the overlays in `deploy/kubernetes/kustomize/overlays/*`. Full docs (with diagrams)
+are available in [`docs/kubernetes.md`](docs/kubernetes.md).
+
 ## Security defaults (DM access)
 
 OpenClaw connects to real messaging surfaces. Treat inbound DMs as **untrusted input**.
