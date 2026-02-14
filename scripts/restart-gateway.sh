@@ -2,6 +2,9 @@
 # Restart OpenClaw gateway (ops-safe, no rebuild)
 # Use this for daily ops when gateway is dead or WhatsApp is disconnected.
 # For dev work after code changes, use restart-mac.sh instead.
+#
+# NOTE: If running from dev checkout, UI assets may be missing.
+# Run `pnpm ui:build && npm i -g .` first if you see "Control UI assets not found."
 
 set -euo pipefail
 
