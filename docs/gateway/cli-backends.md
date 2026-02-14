@@ -2,7 +2,7 @@
 summary: "CLI backends: text-only fallback via local AI CLIs"
 read_when:
   - You want a reliable fallback when API providers fail
-  - You are running Claude Code CLI or other local AI CLIs and want to reuse them
+  - You are running Claude Code CLI, OpenCode CLI, or other local AI CLIs and want to reuse them
   - You need a text-only, tool-free path that still supports sessions and images
 title: "CLI Backends"
 ---
@@ -32,6 +32,12 @@ Codex CLI also works out of the box:
 
 ```bash
 openclaw agent --message "hi" --model codex-cli/gpt-5.3-codex
+```
+
+OpenCode CLI is also supported:
+
+```bash
+openclaw agent --message "hi" --model opencode-cli/anthropic/claude-sonnet-4-5
 ```
 
 If your gateway runs under launchd/systemd and PATH is minimal, add just the
@@ -203,6 +209,23 @@ OpenClaw also ships a default for `codex-cli`:
 - `modelArg: "--model"`
 - `imageArg: "--image"`
 - `sessionMode: "existing"`
+
+OpenClaw also ships a default for `opencode-cli`:
+
+- `command: "opencode"`
+- `args: ["run", "--format", "json"]`
+- `resumeArgs: ["run", "--format", "json", "--session", "{sessionId}"]`
+- `output: "jsonl"`
+- `modelArg: "--model"`
+- `sessionArg: "--session"`
+- `sessionMode: "existing"`
+- `imageArg: "--file"`
+- `systemPromptArg: "--prompt"`
+- `systemPromptWhen: "first"`
+
+OpenCode CLI supports multiple providers (Anthropic, OpenAI, Google, DeepSeek, etc.).
+Use the full model path: `opencode-cli/anthropic/claude-sonnet-4-5`, `opencode-cli/openai/gpt-4o`,
+or `opencode-cli/gemini/gemini-2.5-pro`.
 
 Override only if needed (common: absolute `command` path).
 

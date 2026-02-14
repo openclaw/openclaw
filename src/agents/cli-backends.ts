@@ -76,6 +76,56 @@ const DEFAULT_CODEX_BACKEND: CliBackendConfig = {
   serialize: true,
 };
 
+const OPENCODE_MODEL_ALIASES: Record<string, string> = {
+  // Anthropic models
+  "claude-sonnet-4": "anthropic/claude-sonnet-4",
+  "claude-sonnet-4-5": "anthropic/claude-sonnet-4-5",
+  "claude-opus-4": "anthropic/claude-opus-4",
+  "claude-opus-4-5": "anthropic/claude-opus-4-5",
+  // OpenAI models
+  "gpt-4o": "openai/gpt-4o",
+  "gpt-4o-mini": "openai/gpt-4o-mini",
+  "gpt-4-turbo": "openai/gpt-4-turbo",
+  // Google models
+  "gemini-2.5-pro": "gemini/gemini-2.5-pro",
+  "gemini-2.0-flash": "gemini/gemini-2.0-flash",
+  // DeepSeek models
+  "deepseek-chat": "deepseek/deepseek-chat",
+  "deepseek-reasoner": "deepseek/deepseek-reasoner",
+};
+
+const DEFAULT_OPENCODE_BACKEND: CliBackendConfig = {
+  command: "opencode",
+  args: ["run", "--format", "json"],
+  resumeArgs: ["run", "--format", "json", "--session", "{sessionId}"],
+  output: "jsonl",
+  input: "arg",
+  modelArg: "--model",
+  modelAliases: OPENCODE_MODEL_ALIASES,
+  sessionArg: "--session",
+  sessionMode: "existing",
+  sessionIdFields: ["sessionID"],
+  systemPromptArg: "--prompt",
+  systemPromptMode: "append",
+  systemPromptWhen: "first",
+  imageArg: "--file",
+  imageMode: "repeat",
+  clearEnv: [
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "GOOGLE_API_KEY",
+    "AZURE_OPENAI_API_KEY",
+    "OPENROUTER_API_KEY",
+    "GROQ_API_KEY",
+    "MISTRAL_API_KEY",
+    "PERPLEXITY_API_KEY",
+    "TOGETHER_API_KEY",
+    "XAI_API_KEY",
+    "DEEPSEEK_API_KEY",
+  ],
+  serialize: true,
+};
+
 function normalizeBackendKey(key: string): string {
   return normalizeProviderId(key);
 }
@@ -113,6 +163,7 @@ export function resolveCliBackendIds(cfg?: OpenClawConfig): Set<string> {
   const ids = new Set<string>([
     normalizeBackendKey("claude-cli"),
     normalizeBackendKey("codex-cli"),
+    normalizeBackendKey("opencode-cli"),
   ]);
   const configured = cfg?.agents?.defaults?.cliBackends ?? {};
   for (const key of Object.keys(configured)) {
@@ -139,6 +190,14 @@ export function resolveCliBackendConfig(
   }
   if (normalized === "codex-cli") {
     const merged = mergeBackendConfig(DEFAULT_CODEX_BACKEND, override);
+    const command = merged.command?.trim();
+    if (!command) {
+      return null;
+    }
+    return { id: normalized, config: { ...merged, command } };
+  }
+  if (normalized === "opencode-cli") {
+    const merged = mergeBackendConfig(DEFAULT_OPENCODE_BACKEND, override);
     const command = merged.command?.trim();
     if (!command) {
       return null;
