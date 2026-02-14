@@ -6,6 +6,7 @@ vi.mock("../pi-model-discovery.js", () => ({
 }));
 
 import type { OpenClawConfig } from "../../config/config.js";
+import { discoverModels } from "../pi-model-discovery.js";
 import { buildInlineProviderModels, resolveModel } from "./model.js";
 import {
   makeModel,
