@@ -1,6 +1,13 @@
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import type { HookEligibilityContext, HookEntry, HookInstallSpec } from "./types.js";
+import {
+  buildConfigChecks,
+  resolveMissingAnyBins,
+  resolveMissingBins,
+  resolveMissingEnv,
+  resolveMissingOs,
+} from "../shared/requirements.js";
 import { CONFIG_DIR } from "../utils.js";
 import { hasBinary, isConfigPathTruthy, resolveConfigPath, resolveHookConfig } from "./config.js";
 import { loadWorkspaceHookEntries } from "./workspace.js";
@@ -115,49 +122,31 @@ function buildHookStatus(
   const requiredConfig = entry.metadata?.requires?.config ?? [];
   const requiredOs = entry.metadata?.os ?? [];
 
-  const missingBins = requiredBins.filter((bin) => {
-    if (hasBinary(bin)) {
-      return false;
-    }
-    if (eligibility?.remote?.hasBin?.(bin)) {
-      return false;
-    }
-    return true;
+  const missingBins = resolveMissingBins({
+    required: requiredBins,
+    hasLocalBin: hasBinary,
+    hasRemoteBin: eligibility?.remote?.hasBin,
+  });
+  const missingAnyBins = resolveMissingAnyBins({
+    required: requiredAnyBins,
+    hasLocalBin: hasBinary,
+    hasRemoteAnyBin: eligibility?.remote?.hasAnyBin,
+  });
+  const missingOs = resolveMissingOs({
+    required: requiredOs,
+    localPlatform: process.platform,
+    remotePlatforms: eligibility?.remote?.platforms,
+  });
+  const missingEnv = resolveMissingEnv({
+    required: requiredEnv,
+    isSatisfied: (envName) => Boolean(process.env[envName] || hookConfig?.env?.[envName]),
   });
 
-  const missingAnyBins =
-    requiredAnyBins.length > 0 &&
-    !(
-      requiredAnyBins.some((bin) => hasBinary(bin)) ||
-      eligibility?.remote?.hasAnyBin?.(requiredAnyBins)
-    )
-      ? requiredAnyBins
-      : [];
-
-  const missingOs =
-    requiredOs.length > 0 &&
-    !requiredOs.includes(process.platform) &&
-    !eligibility?.remote?.platforms?.some((platform) => requiredOs.includes(platform))
-      ? requiredOs
-      : [];
-
-  const missingEnv: string[] = [];
-  for (const envName of requiredEnv) {
-    if (process.env[envName]) {
-      continue;
-    }
-    if (hookConfig?.env?.[envName]) {
-      continue;
-    }
-    missingEnv.push(envName);
-  }
-
-  const configChecks: HookStatusConfigCheck[] = requiredConfig.map((pathStr) => {
-    const value = resolveConfigPath(config, pathStr);
-    const satisfied = isConfigPathTruthy(config, pathStr);
-    return { path: pathStr, value, satisfied };
+  const configChecks: HookStatusConfigCheck[] = buildConfigChecks({
+    required: requiredConfig,
+    resolveValue: (pathStr) => resolveConfigPath(config, pathStr),
+    isSatisfied: (pathStr) => isConfigPathTruthy(config, pathStr),
   });
-
   const missingConfig = configChecks.filter((check) => !check.satisfied).map((check) => check.path);
 
   const missing = always
