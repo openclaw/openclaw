@@ -66,6 +66,9 @@ export class WarmStore {
   private readonly dedupSet = new Map<string, string>(); // dedupKey -> segmentId
   private initPromise: Promise<void> | null = null;
   private opChain: Promise<void> = Promise.resolve();
+  /** When true, vectors.bin contains higher-quality vectors from a provider that
+   *  is currently unavailable. We must not overwrite it with lower-quality vectors. */
+  private preserveVectorCache = false;
 
   constructor(private readonly opts: WarmStoreOptions) {
     this.cold = new ColdStore(opts.coldStore.path);
@@ -94,16 +97,38 @@ export class WarmStore {
 
     // Try loading persisted vectors for fast restart
     const vectorCache = new Map<string, number[]>();
+    let cachedDim = 0;
     if (this.opts.vectorPersist !== false) {
       const vp = loadVectors(getVectorPath(this.opts.coldStore.path));
       if (vp) {
+        cachedDim = vp.dim;
         for (const entry of vp.entries) {
           vectorCache.set(entry.id, entry.vector);
         }
       }
     }
 
+    // Detect provider downgrade vs upgrade when dim changes.
+    // Downgrade: cached vectors are higher-quality (e.g. Gemini 3072) but current
+    //   provider is a fallback (e.g. hash 384) because the real provider is unavailable.
+    //   → Skip re-embedding, use BM25-only, preserve vectors.bin for when provider returns.
+    // Upgrade: cached vectors are lower-quality (e.g. hash 384) and current provider
+    //   is better (e.g. Gemini 3072). → Re-embed all segments with the better provider.
+    const currentDim = this.opts.embedding.dim;
+    const providerName = this.opts.embedding.name ?? "";
+    const isFallbackProvider = providerName === "hash" || providerName === "none" || providerName === "noop";
+    const isDowngrade = cachedDim > 0 && cachedDim !== currentDim && isFallbackProvider;
+
+    if (isDowngrade) {
+      console.info(
+        `[memory-context] dim mismatch (cached=${cachedDim}, current=${currentDim}) ` +
+        `with fallback provider "${providerName}" — preserving vector cache, using BM25-only`,
+      );
+      this.preserveVectorCache = true;
+    }
+
     const eviction = this.opts.eviction ?? DEFAULT_EVICTION;
+    let reEmbeddedCount = 0;
 
     for await (const seg of this.cold.loadAll()) {
       // Cross-session: load all; otherwise filter to our session
@@ -125,19 +150,55 @@ export class WarmStore {
         continue;
       }
 
-      const cachedVec = vectorCache.get(seg.id);
-      const restored = await this.restoreSegment(seg, cachedVec);
-      this.segments.set(restored.id, restored);
-      this.timeline.push(restored.id);
-      this.dedupSet.set(dk, restored.id);
-      if (restored.embedding) {
-        this.index.add(restored.id, restored.embedding);
+      if (isDowngrade) {
+        // Downgrade mode: load for BM25 only, skip vector embedding entirely.
+        // This avoids expensive re-embedding with a fallback provider and
+        // preserves the higher-quality vectors.bin for when the real provider returns.
+        const restored: ConversationSegment = {
+          id: seg.id,
+          sessionId: seg.sessionId,
+          sessionKey: seg.sessionKey,
+          timestamp: seg.timestamp,
+          role: seg.role,
+          content: seg.content,
+          tokens: seg.tokens,
+          metadata: {
+            topics: extractTopics(seg.content),
+            entities: extractEntities(seg.content),
+          },
+          // No embedding — vector search disabled for existing segments
+        };
+        this.segments.set(restored.id, restored);
+        this.timeline.push(restored.id);
+        this.dedupSet.set(dk, restored.id);
+        this.bm25.add(restored.id, restored.content);
+      } else {
+        const cachedVec = vectorCache.get(seg.id);
+        const usedCache = cachedVec && cachedVec.length === currentDim;
+        const restored = await this.restoreSegment(seg, cachedVec);
+        if (!usedCache && restored.embedding) {
+          reEmbeddedCount++;
+        }
+        this.segments.set(restored.id, restored);
+        this.timeline.push(restored.id);
+        this.dedupSet.set(dk, restored.id);
+        if (restored.embedding) {
+          this.index.add(restored.id, restored.embedding);
+        }
+        this.bm25.add(restored.id, restored.content);
       }
-      this.bm25.add(restored.id, restored.content);
     }
 
     // Enforce maxSegments on startup
     this.evictIfNeeded();
+
+    // Persist vectors immediately if any were re-embedded (dim mismatch or missing cache).
+    // This ensures subsequent inits can use the cache instead of re-embedding again.
+    // Skip if preserving higher-quality vector cache from a temporarily unavailable provider.
+    if (reEmbeddedCount > 0 && this.opts.vectorPersist !== false && !this.preserveVectorCache) {
+      console.info(`[memory-context] persisting ${reEmbeddedCount} re-embedded vectors`);
+      this.persistVectorsNow();
+    }
   }
 
   private async restoreSegment(
@@ -312,6 +373,10 @@ export class WarmStore {
   }
 
   persistVectorsNow(): void {
+    // Don't overwrite higher-quality cached vectors when running with a fallback provider.
+    if (this.preserveVectorCache) {
+      return;
+    }
     const entries: VectorEntry[] = [];
     for (const seg of this.segments.values()) {
       if (seg.embedding) {

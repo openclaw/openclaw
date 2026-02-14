@@ -14,7 +14,7 @@ import type { WarmStore } from "./store.js";
 export type MemoryContextConfig = {
   enabled: boolean;
   hardCapTokens: number;
-  embeddingModel: "hash" | "transformer";
+  embeddingModel: "auto" | "gemini" | "hash" | "transformer";
   storagePath: string;
   redaction: boolean;
   knowledgeExtraction: boolean;

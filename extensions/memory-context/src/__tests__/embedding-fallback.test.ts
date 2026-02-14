@@ -4,9 +4,13 @@ import { join } from "node:path";
 /**
  * Phase 0 — embedding-fallback.test.ts
  *
- * Verifies that when TransformerEmbedding fails to initialize,
- * the system gracefully falls back to HashEmbedding with consistent dimensions,
+ * Verifies that when the unified embedding system fails to find
+ * a suitable remote/local/transformer provider, the memory-context
+ * adapter gracefully degrades to hash or noop,
  * and the WarmStore remains functional (at least BM25 search works).
+ *
+ * Updated to use the new createEmbeddingProvider(cfg, type, logger)
+ * adapter API that wraps the unified src/memory/embeddings.ts system.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
@@ -21,45 +25,51 @@ describe("embedding fallback", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("HashEmbedding works standalone as a reliable fallback", async () => {
-    const { HashEmbedding } = await import("../../../../src/agents/memory-context/embedding.js");
-    const emb = new HashEmbedding(384);
-    const vec = await emb.embed("test input");
+  it("hash embedding works standalone as a reliable fallback", async () => {
+    const { createEmbeddingProvider } =
+      await import("../../../../src/agents/memory-context/embedding.js");
 
+    // "hash" type goes straight to the local hash implementation
+    const provider = await createEmbeddingProvider(undefined, "hash");
+    expect(provider.name).toBe("hash");
+
+    const vec = await provider.embed("test input");
     expect(vec).toHaveLength(384);
-    expect(emb.dim).toBe(384);
+    expect(provider.dim).toBe(384);
+
     // Should be unit-normalized (L2 norm ~1)
     const norm = Math.sqrt(vec.reduce((s, v) => s + v * v, 0));
     expect(norm).toBeCloseTo(1.0, 1);
   });
 
-  it("createEmbeddingProvider falls back to hash when transformer fails", async () => {
+  it("createEmbeddingProvider falls back gracefully when providers unavailable", async () => {
     const { createEmbeddingProvider } =
       await import("../../../../src/agents/memory-context/embedding.js");
     const warnSpy = vi.fn();
 
-    // "transformer" mode with a non-existent model should fail and fall back
-    const provider = await createEmbeddingProvider("transformer", 384, "nonexistent/model", {
-      warn: warnSpy,
-    });
+    // "auto" with no providers available → unified system returns noop → adapter
+    // converts to dim=1 zero-vector or falls back to hash
+    const provider = await createEmbeddingProvider(undefined, "auto", { warn: warnSpy });
 
-    // Should have fallen back to HashEmbedding
-    expect(provider.dim).toBe(384);
-    expect(warnSpy).toHaveBeenCalledTimes(1);
-    expect(warnSpy.mock.calls[0][0]).toMatch(/falling back/i);
+    // Should have a valid provider regardless of fallback path
+    expect(provider.dim).toBeGreaterThan(0);
 
     // Should still produce valid embeddings
     const vec = await provider.embed("hello world");
-    expect(vec).toHaveLength(384);
+    expect(vec).toHaveLength(provider.dim);
   });
 
   it("WarmStore remains functional with hash fallback (BM25 search works)", async () => {
-    const { HashEmbedding } = await import("../../../../src/agents/memory-context/embedding.js");
+    const { createEmbeddingProvider } =
+      await import("../../../../src/agents/memory-context/embedding.js");
     const { WarmStore } = await import("../../../../src/agents/memory-context/store.js");
+
+    // Use hash provider directly as a reliable embedding source
+    const hashProvider = await createEmbeddingProvider(undefined, "hash");
 
     const store = new WarmStore({
       sessionId: "test",
-      embedding: new HashEmbedding(64),
+      embedding: hashProvider,
       coldStore: { path: tmpDir },
       maxSegments: 100,
     });
@@ -82,9 +92,8 @@ describe("embedding fallback", () => {
     const { createVectorIndex } =
       await import("../../../../src/agents/memory-context/vector-index.js");
 
-    const provider = await createEmbeddingProvider("transformer", 384, "nonexistent/model", {
-      warn: () => {},
-    });
+    // hash type is always stable → dim = 384
+    const provider = await createEmbeddingProvider(undefined, "hash");
 
     // Index dim must match provider dim
     const index = createVectorIndex("brute", provider.dim);
@@ -93,5 +102,26 @@ describe("embedding fallback", () => {
     // Should not throw — dimensions match
     expect(() => index.add("t1", vec)).not.toThrow();
     expect(index.size).toBe(1);
+  });
+
+  it("hash embedding is deterministic for same input", async () => {
+    const { createEmbeddingProvider } =
+      await import("../../../../src/agents/memory-context/embedding.js");
+
+    const provider = await createEmbeddingProvider(undefined, "hash");
+    const v1 = await provider.embed("deterministic test");
+    const v2 = await provider.embed("deterministic test");
+    expect(v1).toEqual(v2);
+  });
+
+  it("hash embedding handles CJK/Unicode text", async () => {
+    const { createEmbeddingProvider } =
+      await import("../../../../src/agents/memory-context/embedding.js");
+
+    const provider = await createEmbeddingProvider(undefined, "hash");
+    const vec = await provider.embed("你好世界 こんにちは 🎉");
+    expect(vec).toHaveLength(384);
+    const norm = Math.sqrt(vec.reduce((s, v) => s + v * v, 0));
+    expect(norm).toBeCloseTo(1.0, 1);
   });
 });

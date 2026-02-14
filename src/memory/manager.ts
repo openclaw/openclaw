@@ -717,7 +717,11 @@ export class MemoryIndexManager implements MemorySearchManager {
     const dir = path.dirname(dbPath);
     ensureDir(dir);
     const { DatabaseSync } = requireNodeSqlite();
-    return new DatabaseSync(dbPath, { allowExtension: this.settings.store.vector.enabled });
+    // Enable extension loading when vector search OR hybrid/fts search is active
+    // (both may need loadable SQLite extensions: sqlite-vec and/or fts5)
+    const needsExtensions =
+      this.settings.store.vector.enabled || this.settings.query.hybrid.enabled;
+    return new DatabaseSync(dbPath, { allowExtension: needsExtensions });
   }
 
   private seedEmbeddingCache(sourceDb: DatabaseSync): void {

@@ -15,7 +15,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import {
   archiveCompactedMessages,
 } from "../../../../src/agents/memory-context/compaction-bridge.js";
-import { HashEmbedding } from "../../../../src/agents/memory-context/embedding.js";
+import { createEmbeddingProvider } from "../../../../src/agents/memory-context/embedding.js";
 import { KnowledgeStore } from "../../../../src/agents/memory-context/knowledge-store.js";
 import { buildRecalledContextBlock } from "../../../../src/agents/memory-context/recall-format.js";
 import {
@@ -63,7 +63,7 @@ describe("e2e compaction-recall", () => {
   });
 
   it("full lifecycle: archive 60 messages, recall by topic", async () => {
-    const embedding = new HashEmbedding(64);
+    const embedding = await createEmbeddingProvider(undefined, "hash");
     const rawStore = new WarmStore({
       sessionId: "e2e-session",
       embedding,
@@ -139,7 +139,7 @@ describe("e2e compaction-recall", () => {
     {
       const store = new WarmStore({
         sessionId: "persist-test",
-        embedding: new HashEmbedding(64),
+        embedding: await createEmbeddingProvider(undefined, "hash"),
         coldStore: { path: rawPath },
         maxSegments: 1000,
         vectorPersist: true,
@@ -155,7 +155,7 @@ describe("e2e compaction-recall", () => {
     {
       const store2 = new WarmStore({
         sessionId: "persist-test",
-        embedding: new HashEmbedding(64),
+        embedding: await createEmbeddingProvider(undefined, "hash"),
         coldStore: { path: rawPath },
         maxSegments: 1000,
         vectorPersist: true,
@@ -175,7 +175,7 @@ describe("e2e compaction-recall", () => {
   });
 
   it("multiple compactions: memory accumulates correctly", async () => {
-    const embedding = new HashEmbedding(64);
+    const embedding = await createEmbeddingProvider(undefined, "hash");
     const rawStore = new WarmStore({
       sessionId: "multi-compact",
       embedding,
@@ -203,7 +203,7 @@ describe("e2e compaction-recall", () => {
   });
 
   it("hardcap prevents excessive context injection", async () => {
-    const embedding = new HashEmbedding(64);
+    const embedding = await createEmbeddingProvider(undefined, "hash");
     const rawStore = new WarmStore({
       sessionId: "hardcap-test",
       embedding,
@@ -236,7 +236,7 @@ describe("e2e compaction-recall", () => {
   it("stats/observability: stores report useful metrics", async () => {
     const rawStore = new WarmStore({
       sessionId: "stats-test",
-      embedding: new HashEmbedding(16),
+      embedding: await createEmbeddingProvider(undefined, "hash"),
       coldStore: { path: join(tmpDir, "raw-stats") },
       maxSegments: 1000,
       vectorPersist: false,

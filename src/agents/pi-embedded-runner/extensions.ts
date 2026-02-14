@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
-import { HashEmbedding, TransformerEmbedding, type EmbeddingProvider } from "../memory-context/embedding.js";
+import { createEmbeddingProvider, type EmbeddingProvider } from "../memory-context/embedding.js";
 import {
   setGlobalMemoryRuntime,
   type MemoryContextConfig,
@@ -93,13 +93,22 @@ function resolveCompactionMode(cfg?: OpenClawConfig): "default" | "safeguard" {
   return cfg?.agents?.defaults?.compaction?.mode === "safeguard" ? "safeguard" : "default";
 }
 
-export function buildEmbeddedExtensionPaths(params: {
+/**
+ * Per-session cache for memory-context resources.
+ * Avoids re-creating WarmStore / KnowledgeStore / embedding on every message.
+ */
+const memoryContextCache = new Map<
+  string,
+  { rawStore: WarmStore; knowledgeStore: KnowledgeStore; embedding: EmbeddingProvider }
+>();
+
+export async function buildEmbeddedExtensionPaths(params: {
   cfg: OpenClawConfig | undefined;
   sessionManager: SessionManager;
   provider: string;
   modelId: string;
   model: Model<Api> | undefined;
-}): string[] {
+}): Promise<string[]> {
   const paths: string[] = [];
   if (resolveCompactionMode(params.cfg) === "safeguard") {
     const compactionCfg = params.cfg?.agents?.defaults?.compaction;
@@ -136,7 +145,7 @@ export function buildEmbeddedExtensionPaths(params: {
     const config: MemoryContextConfig = {
       enabled: true,
       hardCapTokens: memCtxCfg.hardCapTokens ?? 4000,
-      embeddingModel: memCtxCfg.embeddingModel ?? "hash",
+      embeddingModel: memCtxCfg.embeddingModel ?? "auto",
       storagePath: resolvedPath,
       redaction: memCtxCfg.redaction !== false,
       knowledgeExtraction: memCtxCfg.knowledgeExtraction !== false,
@@ -146,38 +155,41 @@ export function buildEmbeddedExtensionPaths(params: {
       evictionDays: memCtxCfg.evictionDays ?? 90,
     };
 
-    // Honor embeddingModel config: TransformerEmbedding inits lazily on first embed() call.
-    // If transformer model fails to load at runtime, it throws at embed time.
-    let embedding: EmbeddingProvider;
-    if (config.embeddingModel === "transformer") {
-      try {
-        embedding = new TransformerEmbedding();
-      } catch {
-        console.warn("[memory-context] TransformerEmbedding unavailable, falling back to HashEmbedding");
-        embedding = new HashEmbedding(384);
-      }
-    } else {
-      embedding = new HashEmbedding(384);
-    }
-    const rawStore = new WarmStore({
-      sessionId:
-        (params.sessionManager as unknown as { sessionId?: string }).sessionId ?? "default",
-      embedding,
-      coldStore: { path: resolvedPath },
-      maxSegments: config.maxSegments,
-      crossSession: config.crossSession,
-      eviction: {
-        enabled: config.evictionDays > 0,
-        maxAgeDays: config.evictionDays,
-      },
-      vectorPersist: true,
-    });
-    // KnowledgeStore and WarmStore share the same directory intentionally:
-    // KnowledgeStore writes knowledge.jsonl, WarmStore writes segments.jsonl — no collision.
-    const knowledgeStore = new KnowledgeStore(resolvedPath);
-
+    // Session-level caching: reuse WarmStore / embedding across messages.
     const sessionId =
       (params.sessionManager as unknown as { sessionId?: string }).sessionId ?? "default";
+    let cached = memoryContextCache.get(sessionId);
+    if (!cached) {
+      // Unified embedding with cascading fallback:
+      //   gemini/auto → openai → voyage → local → transformer → noop (BM25)
+      const embedding: EmbeddingProvider = await createEmbeddingProvider(
+        params.cfg,
+        (config.embeddingModel as "gemini" | "transformer" | "hash" | "auto") ?? "auto",
+        { warn: (msg) => console.warn(msg), info: (msg) => console.info(msg) },
+      );
+      const rawStore = new WarmStore({
+        sessionId,
+        embedding,
+        coldStore: { path: resolvedPath },
+        maxSegments: config.maxSegments,
+        crossSession: config.crossSession,
+        eviction: {
+          enabled: config.evictionDays > 0,
+          maxAgeDays: config.evictionDays,
+        },
+        vectorPersist: true,
+      });
+      // KnowledgeStore and WarmStore share the same directory intentionally:
+      // KnowledgeStore writes knowledge.jsonl, WarmStore writes segments.jsonl — no collision.
+      const knowledgeStore = new KnowledgeStore(resolvedPath);
+      cached = { rawStore, knowledgeStore, embedding };
+      memoryContextCache.set(sessionId, cached);
+      console.info(`[memory-context] created new WarmStore for session=${sessionId}`);
+    } else {
+      console.info(`[memory-context] reusing cached WarmStore for session=${sessionId}`);
+    }
+    const { rawStore, knowledgeStore } = cached;
+
     // Resolve subagent model for knowledge extraction (faster than main model).
     const subagentModelCfg = params.cfg?.agents?.defaults?.subagents?.model;
     const subagentPrimary =

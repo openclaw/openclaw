@@ -1,188 +1,192 @@
-import { createHash } from "node:crypto";
+import type { OpenClawConfig } from "../../config/config.js";
+import {
+  createEmbeddingProvider as createUnifiedEmbeddingProvider,
+  type EmbeddingProvider as UnifiedEmbeddingProvider,
+  type EmbeddingProviderResult,
+} from "../../memory/embeddings.js";
 
+/**
+ * memory-context embedding provider interface.
+ *
+ * Wraps the unified embedding system (src/memory/embeddings.ts) via adapter.
+ * Both memory-search and memory-context share the same provider infrastructure.
+ */
 export type EmbeddingProvider = {
+  /** Embedding dimension. 0 = noop (BM25-only). */
   dim: number;
   embed(text: string): Promise<number[]>;
   init?(): Promise<void>;
+  /** Provider name for logging. */
+  readonly name?: string;
 };
 
 /**
- * Simple local embedding using hashed character n-grams.
+ * Adapter: wrap a unified EmbeddingProvider (memory-search interface) into
+ * the memory-context EmbeddingProvider interface ({ dim, embed }).
  *
- * Goals:
- * - deterministic
- * - no external API keys
- * - similar text -> similar vectors (keyword overlap)
+ * Detects dim by probing the provider once on first embed call.
+ * For noop providers (id="none"), returns dim=0 and empty vectors
+ * so the store correctly falls back to BM25-only search.
  */
-export class HashEmbedding implements EmbeddingProvider {
-  constructor(
-    public readonly dim: number,
-    private readonly ngram = 3,
-  ) {
-    if (!Number.isInteger(dim) || dim <= 0) {
-      throw new Error(`HashEmbedding: invalid dim ${dim}`);
-    }
-    if (!Number.isInteger(ngram) || ngram <= 0 || ngram > 10) {
-      throw new Error(`HashEmbedding: invalid ngram ${ngram}`);
-    }
+function wrapUnifiedProvider(
+  provider: UnifiedEmbeddingProvider,
+  logger?: { warn: (msg: string) => void; info?: (msg: string) => void },
+): EmbeddingProvider {
+  // Noop provider (all remote+local+transformer failed → BM25 only)
+  if (provider.id === "none") {
+    logger?.info?.("[memory-context] embedding: noop (BM25-only, no vector search)");
+    return {
+      // Use dim=1 so VectorIndex constructor doesn't throw (requires dim > 0).
+      // All vectors are zero → cosine similarity = 0 → BM25 dominates ranking.
+      dim: 1,
+      name: "none",
+      async embed() {
+        return [0];
+      },
+    };
   }
 
-  async embed(text: string): Promise<number[]> {
-    const normalized = normalizeText(text);
-    const vec = new Array<number>(this.dim).fill(0);
+  let cachedDim = 0;
+  let dimDetected = false;
 
-    const grams = charNgrams(normalized, this.ngram);
-    if (grams.length === 0) {
-      return vec;
-    }
-
-    for (const g of grams) {
-      // Use sha256 for stable hashing across node versions.
-      const digest = createHash("sha256").update(g).digest();
-      const idx = digest.readUInt32LE(0) % this.dim;
-      // signed-ish contribution
-      const sign = (digest[4] & 1) === 0 ? 1 : -1;
-      vec[idx] += sign;
-    }
-
-    // Normalize to unit length for cosine similarity.
-    let norm = 0;
-    for (const v of vec) {
-      norm += v * v;
-    }
-    norm = Math.sqrt(norm);
-    if (norm > 0) {
-      for (let i = 0; i < vec.length; i++) {
-        vec[i] = vec[i] / norm;
+  return {
+    get dim() {
+      return cachedDim;
+    },
+    name: provider.id,
+    async embed(text: string): Promise<number[]> {
+      const vec = await provider.embedQuery(text);
+      if (!dimDetected && vec.length > 0) {
+        cachedDim = vec.length;
+        dimDetected = true;
       }
-    }
-
-    return vec;
-  }
+      return vec;
+    },
+    async init(): Promise<void> {
+      // Probe once to detect dim
+      if (!dimDetected) {
+        try {
+          const probe = await provider.embedQuery("dim-probe");
+          if (probe.length > 0) {
+            cachedDim = probe.length;
+            dimDetected = true;
+            logger?.info?.(
+              `[memory-context] embedding: using ${provider.id} (${cachedDim}-dim, model=${provider.model})`,
+            );
+          }
+        } catch (err) {
+          logger?.warn?.(
+            `[memory-context] embedding probe failed for ${provider.id}: ${String(err)}`,
+          );
+        }
+      }
+    },
+  };
 }
 
 /**
- * Semantic embedding using @xenova/transformers (ONNX runtime).
+ * Map memory-context embedding model names to the unified provider system.
  *
- * Uses sentence-transformers models like all-MiniLM-L6-v2 for true semantic similarity.
- * Model is downloaded on first use and cached in ~/.cache/
- */
-export class TransformerEmbedding implements EmbeddingProvider {
-  readonly dim = 384;
-  private pipeline: any = null;
-  private initPromise: Promise<void> | null = null;
-  private modelName: string;
-
-  constructor(modelName = "Xenova/all-MiniLM-L6-v2") {
-    this.modelName = modelName;
-  }
-
-  async init(): Promise<void> {
-    if (this.pipeline) {
-      return;
-    }
-    if (this.initPromise) {
-      return this.initPromise;
-    }
-    this.initPromise = this.doInit();
-    return this.initPromise;
-  }
-
-  private async doInit(): Promise<void> {
-    try {
-      const {
-        pipeline,
-        env,
-      } = // @ts-ignore optional dependency
-        await import("@xenova/transformers");
-      // Disable local model check to allow downloading
-      env.allowLocalModels = true;
-      env.useBrowserCache = false;
-
-      this.pipeline = await pipeline("feature-extraction", this.modelName, {
-        quantized: true, // Use quantized model for smaller size
-      });
-    } catch (err) {
-      this.initPromise = null;
-      throw new Error(
-        `TransformerEmbedding: failed to load model ${this.modelName}: ${String(err)}`,
-        { cause: err },
-      );
-    }
-  }
-
-  async embed(text: string): Promise<number[]> {
-    await this.init();
-
-    if (!this.pipeline) {
-      throw new Error("TransformerEmbedding: pipeline not initialized");
-    }
-
-    // Truncate to ~512 tokens (rough estimate: 4 chars per token)
-    const maxChars = 512 * 4;
-    const truncated = text.length > maxChars ? text.slice(0, maxChars) : text;
-
-    // Get embeddings - output is a Tensor with shape [1, seq_len, dim]
-    const output = await this.pipeline(truncated, {
-      pooling: "mean",
-      normalize: true,
-    });
-
-    // Convert to flat array
-    const data = output.data;
-    const result: number[] = [];
-    for (let i = 0; i < this.dim; i++) {
-      result.push(data[i] ?? 0);
-    }
-
-    return result;
-  }
-}
-
-/**
- * Factory function to create an embedding provider with fallback.
- * Returns TransformerEmbedding if available, otherwise HashEmbedding.
+ * Fallback chain (auto / gemini):
+ *   Gemini API → OpenAI → Voyage → Local (EmbeddingGemma) → Transformer (MiniLM) → noop (BM25)
+ *
+ * When "transformer" is requested explicitly:
+ *   Transformer (MiniLM) → noop (BM25)
  */
 export async function createEmbeddingProvider(
-  type: "hash" | "transformer",
-  dim: number,
-  modelName?: string,
-  logger?: { warn: (msg: string) => void },
+  cfg: OpenClawConfig | undefined,
+  type: "gemini" | "transformer" | "hash" | "auto",
+  logger?: { warn: (msg: string) => void; info?: (msg: string) => void },
 ): Promise<EmbeddingProvider> {
+  // Map memory-context types to unified provider types
+  const providerMap: Record<string, "auto" | "gemini" | "transformer"> = {
+    gemini: "auto", // "gemini" in memory-context means "best available" — use auto
+    auto: "auto",
+    transformer: "transformer",
+  };
+
+  // Hash is a special case — not part of the unified system.
+  // Kept as a trivial deterministic fallback (no semantic search).
   if (type === "hash") {
-    return new HashEmbedding(dim);
+    logger?.info?.("[memory-context] embedding: using hash (keyword overlap, no semantic search)");
+    return createHashEmbedding(384);
   }
 
-  // Try transformer, fall back to hash
-  const transformer = new TransformerEmbedding(modelName);
+  const unifiedProvider = providerMap[type] ?? "auto";
+
   try {
-    await transformer.init();
-    return transformer;
+    const result: EmbeddingProviderResult = await createUnifiedEmbeddingProvider({
+      config: cfg ?? ({} as OpenClawConfig),
+      provider: unifiedProvider,
+      model: "", // auto-detect
+      fallback: unifiedProvider === "transformer" ? "none" : "transformer",
+      transformer: {},
+    });
+
+    if (result.fallbackReason) {
+      logger?.warn?.(`[memory-context] embedding fallback: ${result.fallbackReason}`);
+    }
+
+    // If unified system exhausted all providers → noop, use hash instead.
+    // Hash provides n-gram vector similarity which is better than noop (BM25-only).
+    if (result.provider.id === "none") {
+      logger?.info?.("[memory-context] embedding: using hash (keyword overlap, no semantic search)");
+      return createHashEmbedding(384);
+    }
+
+    const adapter = wrapUnifiedProvider(result.provider, logger);
+    await adapter.init?.();
+    return adapter;
   } catch (err) {
-    logger?.warn(`TransformerEmbedding failed, falling back to HashEmbedding: ${String(err)}`);
-    return new HashEmbedding(dim);
+    logger?.warn?.(
+      `[memory-context] unified embedding failed (${String(err)}), using hash fallback`,
+    );
+    return createHashEmbedding(384);
   }
 }
 
-function normalizeText(input: string): string {
-  return input
-    .toLowerCase()
-    .replace(/\s+/g, " ")
-    .replace(/[^\p{L}\p{N}\s@.+-]/gu, " ")
-    .trim();
-}
+// --- Minimal hash embedding kept as last-resort fallback ---
 
-function charNgrams(text: string, n: number): string[] {
-  if (!text) {
-    return [];
-  }
-  if (text.length <= n) {
-    return [text];
-  }
-  const padded = ` ${text} `;
-  const out: string[] = [];
-  for (let i = 0; i <= padded.length - n; i++) {
-    out.push(padded.slice(i, i + n));
-  }
-  return out;
+import { createHash } from "node:crypto";
+
+function createHashEmbedding(dim: number): EmbeddingProvider {
+  return {
+    dim,
+    name: "hash",
+    async embed(text: string): Promise<number[]> {
+      const normalized = text
+        .toLowerCase()
+        .replace(/\s+/g, " ")
+        .replace(/[^\p{L}\p{N}\s@.+-]/gu, " ")
+        .trim();
+      const vec = new Array<number>(dim).fill(0);
+      const ngram = 3;
+
+      // Generate character n-grams
+      if (!normalized || normalized.length <= ngram) {
+        if (normalized) {
+          const digest = createHash("sha256").update(normalized).digest();
+          const idx = digest.readUInt32LE(0) % dim;
+          vec[idx] += (digest[4] & 1) === 0 ? 1 : -1;
+        }
+      } else {
+        const padded = ` ${normalized} `;
+        for (let i = 0; i <= padded.length - ngram; i++) {
+          const g = padded.slice(i, i + ngram);
+          const digest = createHash("sha256").update(g).digest();
+          const idx = digest.readUInt32LE(0) % dim;
+          vec[idx] += (digest[4] & 1) === 0 ? 1 : -1;
+        }
+      }
+
+      // Normalize to unit length
+      let norm = 0;
+      for (const v of vec) norm += v * v;
+      norm = Math.sqrt(norm);
+      if (norm > 0) {
+        for (let i = 0; i < vec.length; i++) vec[i] /= norm;
+      }
+      return vec;
+    },
+  };
 }

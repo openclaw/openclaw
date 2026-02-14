@@ -40,8 +40,8 @@ function createNoopEmbeddingProvider(): EmbeddingProvider {
 
 export type EmbeddingProviderResult = {
   provider: EmbeddingProvider;
-  requestedProvider: "openai" | "local" | "gemini" | "voyage" | "auto";
-  fallbackFrom?: "openai" | "local" | "gemini" | "voyage";
+  requestedProvider: "openai" | "local" | "gemini" | "voyage" | "transformer" | "auto";
+  fallbackFrom?: "openai" | "local" | "gemini" | "voyage" | "transformer";
   fallbackReason?: string;
   openAi?: OpenAiEmbeddingClient;
   gemini?: GeminiEmbeddingClient;
@@ -51,21 +51,74 @@ export type EmbeddingProviderResult = {
 export type EmbeddingProviderOptions = {
   config: OpenClawConfig;
   agentDir?: string;
-  provider: "openai" | "local" | "gemini" | "voyage" | "auto";
+  provider: "openai" | "local" | "gemini" | "voyage" | "transformer" | "auto";
   remote?: {
     baseUrl?: string;
     apiKey?: string;
     headers?: Record<string, string>;
   };
   model: string;
-  fallback: "openai" | "gemini" | "local" | "voyage" | "none";
+  fallback: "openai" | "gemini" | "local" | "voyage" | "transformer" | "none";
   local?: {
     modelPath?: string;
     modelCacheDir?: string;
   };
+  transformer?: {
+    modelName?: string;
+  };
 };
 
 const DEFAULT_LOCAL_MODEL = "hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M-Q8_0.gguf";
+
+const DEFAULT_TRANSFORMER_MODEL = "Xenova/all-MiniLM-L6-v2";
+const TRANSFORMER_DIM = 384;
+
+/**
+ * Lightweight semantic embedding using @xenova/transformers (ONNX runtime).
+ *
+ * Uses sentence-transformers models like all-MiniLM-L6-v2 for true semantic similarity.
+ * Always available (no API keys needed), model is downloaded on first use.
+ * Better than keyword-only but weaker than Gemini for non-English text.
+ */
+async function createTransformerEmbeddingProvider(
+  options: EmbeddingProviderOptions,
+): Promise<EmbeddingProvider> {
+  const modelName = options.transformer?.modelName?.trim() || DEFAULT_TRANSFORMER_MODEL;
+
+  // Lazy-load @xenova/transformers to keep startup light.
+  const {
+    pipeline,
+    env,
+  } = // @ts-ignore optional dependency
+    await import("@xenova/transformers");
+  env.allowLocalModels = true;
+  env.useBrowserCache = false;
+
+  const pipe = await pipeline("feature-extraction", modelName, {
+    quantized: true,
+  });
+
+  return {
+    id: "transformer",
+    model: modelName,
+    embedQuery: async (text) => {
+      const maxChars = 512 * 4;
+      const truncated = text.length > maxChars ? text.slice(0, maxChars) : text;
+      const output = await pipe(truncated, { pooling: "mean", normalize: true });
+      return sanitizeAndNormalizeEmbedding(Array.from(output.data).slice(0, TRANSFORMER_DIM) as number[]);
+    },
+    embedBatch: async (texts) => {
+      const maxChars = 512 * 4;
+      return Promise.all(
+        texts.map(async (text) => {
+          const truncated = text.length > maxChars ? text.slice(0, maxChars) : text;
+          const output = await pipe(truncated, { pooling: "mean", normalize: true });
+          return sanitizeAndNormalizeEmbedding(Array.from(output.data).slice(0, TRANSFORMER_DIM) as number[]);
+        }),
+      );
+    },
+  };
+}
 
 function canAutoSelectLocal(options: EmbeddingProviderOptions): boolean {
   const modelPath = options.local?.modelPath?.trim();
@@ -142,7 +195,7 @@ export async function createEmbeddingProvider(
   const requestedProvider = options.provider;
   const fallback = options.fallback;
 
-  const createProvider = async (id: "openai" | "local" | "gemini" | "voyage") => {
+  const createProvider = async (id: "openai" | "local" | "gemini" | "voyage" | "transformer") => {
     if (id === "local") {
       const provider = await createLocalEmbeddingProvider(options);
       return { provider };
@@ -155,11 +208,15 @@ export async function createEmbeddingProvider(
       const { provider, client } = await createVoyageEmbeddingProvider(options);
       return { provider, voyage: client };
     }
+    if (id === "transformer") {
+      const provider = await createTransformerEmbeddingProvider(options);
+      return { provider };
+    }
     const { provider, client } = await createOpenAiEmbeddingProvider(options);
     return { provider, openAi: client };
   };
 
-  const formatPrimaryError = (err: unknown, provider: "openai" | "local" | "gemini" | "voyage") =>
+  const formatPrimaryError = (err: unknown, provider: "openai" | "local" | "gemini" | "voyage" | "transformer") =>
     provider === "local" ? formatLocalSetupError(err) : formatErrorMessage(err);
 
   if (requestedProvider === "auto") {
@@ -189,7 +246,16 @@ export async function createEmbeddingProvider(
       }
     }
 
-    const details = [...missingKeyErrors, localError].filter(Boolean) as string[];
+    // Tier: try TransformerEmbedding (local ONNX, always available without API keys)
+    let transformerError: string | null = null;
+    try {
+      const transformer = await createProvider("transformer");
+      return { ...transformer, requestedProvider };
+    } catch (err) {
+      transformerError = formatErrorMessage(err);
+    }
+
+    const details = [...missingKeyErrors, localError, transformerError].filter(Boolean) as string[];
     // No embeddings provider is available. Fall back to keyword-only (FTS/BM25)
     // so memory_search remains usable without remote API keys.
     const reason = details.length > 0 ? details.join("\n\n") : "No embeddings provider available.";
