@@ -258,7 +258,7 @@ export function renderChat(props: ChatProps) {
             });
           }
 
-          return nothing;
+          return html``;
         },
       })}
     </div>
