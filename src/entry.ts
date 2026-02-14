@@ -48,6 +48,20 @@ function ensureExperimentalWarningSuppressed(): boolean {
 
   // Respawn guard (and keep recursion bounded if something goes wrong).
   process.env.OPENCLAW_NODE_OPTIONS_READY = "1";
+
+  // Set parent shim title based on the subcommand (e.g. "openclaw-gateway-shim").
+  // We normalize argv first because on Windows, raw process.argv can contain
+  // duplicate execPath entries, UNC prefixes (\\?\), and control characters
+  // injected by profile wrappers or the OS. Without normalization, the shim
+  // title could end up as something like "openclaw-C:\path\node.exe-shim"
+  // instead of the intended "openclaw-gateway-shim". On macOS/Linux this is
+  // a no-op passthrough — normalizeWindowsArgv is hoisted and safe to call here.
+  const normalizedArgv = normalizeWindowsArgv(process.argv);
+  const subcommand = normalizedArgv.slice(2).find((arg) => !arg.startsWith("-"));
+  if (subcommand) {
+    process.title = `openclaw-${subcommand}-shim`;
+  }
+
   // Pass flag as a Node CLI option, not via NODE_OPTIONS (--disable-warning is disallowed in NODE_OPTIONS).
   const child = spawn(
     process.execPath,
