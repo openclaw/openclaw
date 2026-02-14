@@ -28,7 +28,7 @@ export function applyReplyTagsToPayload(
     return {
       ...payload,
       replyToId: currentMessageId?.trim() || undefined,
-      replyToTag: payload.replyToTag ?? true,
+      replyToTag: payload.replyToTag,
     };
   }
   const { cleaned, replyToId, replyToCurrent, hasTag } = extractReplyToTag(

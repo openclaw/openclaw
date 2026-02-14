@@ -60,6 +60,21 @@ describe("resolveSlackThreadTargets", () => {
     expect(context.replyToId).toBe("123");
   });
 
+  it("sets replyToId to undefined for top-level messages when replyToMode is off", () => {
+    const context = resolveSlackThreadContext({
+      replyToMode: "off",
+      message: {
+        type: "message",
+        channel: "C1",
+        ts: "123",
+      },
+    });
+
+    expect(context.isThreadReply).toBe(false);
+    expect(context.messageThreadId).toBeUndefined();
+    expect(context.replyToId).toBeUndefined();
+  });
+
   it("prefers thread_ts as messageThreadId for replies", () => {
     const context = resolveSlackThreadContext({
       replyToMode: "off",
@@ -74,5 +89,20 @@ describe("resolveSlackThreadTargets", () => {
     expect(context.isThreadReply).toBe(true);
     expect(context.messageThreadId).toBe("456");
     expect(context.replyToId).toBe("456");
+  });
+
+  it("does not thread parent message where thread_ts === ts", () => {
+    const { replyThreadTs, statusThreadTs } = resolveSlackThreadTargets({
+      replyToMode: "off",
+      message: {
+        type: "message",
+        channel: "C1",
+        ts: "123.456",
+        thread_ts: "123.456",
+      },
+    });
+
+    expect(replyThreadTs).toBeUndefined();
+    expect(statusThreadTs).toBe("123.456");
   });
 });
