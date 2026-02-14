@@ -1,4 +1,4 @@
-import { beforeEach, type MockInstance, vi } from "vitest";
+import { beforeEach, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import type { TemplateContext } from "../templating.js";
@@ -6,11 +6,15 @@ import type { GetReplyOptions } from "../types.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { createMockTypingController } from "./test-helpers.js";
 
+// Avoid exporting vitest mock types (TS2742 under pnpm + d.ts emit).
+// oxlint-disable-next-line typescript/no-explicit-any
+type AnyMock = any;
+
 const state = vi.hoisted(() => ({
   runEmbeddedPiAgentMock: vi.fn(),
 }));
 
-export function getRunEmbeddedPiAgentMock(): MockInstance {
+export function getRunEmbeddedPiAgentMock(): AnyMock {
   return state.runEmbeddedPiAgentMock;
 }
 

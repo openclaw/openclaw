@@ -14,6 +14,10 @@ import {
 
 export { resetBaileysMocks, resetLoadConfigMock, setLoadConfigMock } from "./test-helpers.js";
 
+// Avoid exporting inferred vitest mock types (TS2742 under pnpm + d.ts emit).
+// oxlint-disable-next-line typescript/no-explicit-any
+type AnyExport = any;
+
 export const TEST_NET_IP = "203.0.113.10";
 
 vi.mock("../agents/pi-embedded.js", () => ({
@@ -119,7 +123,7 @@ export function installWebAutoReplyUnitTestHooks(opts?: { pinDns?: boolean }) {
   });
 }
 
-export function createWebListenerFactoryCapture() {
+export function createWebListenerFactoryCapture(): AnyExport {
   let capturedOnMessage: ((msg: WebInboundMessage) => Promise<void>) | undefined;
   const listenerFactory = async (opts: {
     onMessage: (msg: WebInboundMessage) => Promise<void>;
@@ -134,7 +138,7 @@ export function createWebListenerFactoryCapture() {
   };
 }
 
-export function createWebInboundDeliverySpies() {
+export function createWebInboundDeliverySpies(): AnyExport {
   return {
     sendMedia: vi.fn(),
     reply: vi.fn().mockResolvedValue(undefined),

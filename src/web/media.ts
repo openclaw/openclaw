@@ -173,6 +173,9 @@ async function loadWebMediaInternal(
     localRoots,
     readFile: readFileOverride,
   } = options;
+  // Strip MEDIA: prefix used by agent tools (e.g. TTS) to tag media paths.
+  // Be lenient: LLM output may add extra whitespace (e.g. "  MEDIA :  /tmp/x.png").
+  mediaUrl = mediaUrl.replace(/^\s*MEDIA\s*:\s*/i, "");
   // Use fileURLToPath for proper handling of file:// URLs (handles file://localhost/path, etc.)
   if (mediaUrl.startsWith("file://")) {
     try {
