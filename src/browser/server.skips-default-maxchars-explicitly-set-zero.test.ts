@@ -274,6 +274,59 @@ describe("browser control server", () => {
     await stopBrowserControlServer();
   });
 
+  it("serves status + starts browser when requested", async () => {
+    const { startBrowserControlServerFromConfig } = await import("./server.js");
+    const started = await startBrowserControlServerFromConfig();
+    expect(started?.port).toBe(testPort);
+
+    const base = `http://127.0.0.1:${testPort}`;
+    const s1 = (await realFetch(`${base}/`).then((r) => r.json())) as {
+      running: boolean;
+      pid: number | null;
+    };
+    expect(s1.running).toBe(false);
+    expect(s1.pid).toBe(null);
+
+    await realFetch(`${base}/start`, { method: "POST" }).then((r) => r.json());
+    const s2 = (await realFetch(`${base}/`).then((r) => r.json())) as {
+      running: boolean;
+      pid: number | null;
+      chosenBrowser: string | null;
+    };
+    expect(s2.running).toBe(true);
+    expect(s2.pid).toBe(123);
+    expect(s2.chosenBrowser).toBe("chrome");
+    expect(launchCalls.length).toBeGreaterThan(0);
+  });
+
+  it("handles tabs: list, open, focus conflict on ambiguous prefix", async () => {
+    const { startBrowserControlServerFromConfig } = await import("./server.js");
+    await startBrowserControlServerFromConfig();
+    const base = `http://127.0.0.1:${testPort}`;
+
+    await realFetch(`${base}/start`, { method: "POST" }).then((r) => r.json());
+    const tabs = (await realFetch(`${base}/tabs`).then((r) => r.json())) as {
+      running: boolean;
+      tabs: Array<{ targetId: string }>;
+    };
+    expect(tabs.running).toBe(true);
+    expect(tabs.tabs.length).toBeGreaterThan(0);
+
+    const opened = await realFetch(`${base}/tabs/open`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: "https://example.com" }),
+    }).then((r) => r.json());
+    expect(opened).toMatchObject({ targetId: "newtab1" });
+
+    const focus = await realFetch(`${base}/tabs/focus`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ targetId: "abc" }),
+    });
+    expect(focus.status).toBe(409);
+  });
+
   it("skips default maxChars when explicitly set to zero", async () => {
     const { startBrowserControlServerFromConfig } = await import("./server.js");
     await startBrowserControlServerFromConfig();

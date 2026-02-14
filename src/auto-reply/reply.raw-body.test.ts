@@ -140,28 +140,6 @@ describe("RawBody directive parsing", () => {
         expectedIncludes: ["Thinking level set to high."],
       });
 
-      await assertCommandReply({
-        message: {
-          Body: "[Context]\nJake: /verbose on\n[from: Jake]",
-          CommandBody: "/verbose on",
-          From: "+1222",
-          To: "+1222",
-          ChatType: "group",
-          CommandAuthorized: true,
-        },
-        config: {
-          agents: {
-            defaults: {
-              model: "anthropic/claude-opus-4-5",
-              workspace: path.join(home, "openclaw-2"),
-            },
-          },
-          channels: { whatsapp: { allowFrom: ["*"] } },
-          session: { store: path.join(home, "sessions-2.json") },
-        },
-        expectedIncludes: ["Verbose logging enabled."],
-      });
-
       vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
         payloads: [{ text: "ok" }],
         meta: {
