@@ -152,6 +152,12 @@ export async function update(state: CronServiceState, id: string, patch: CronJob
       }
     }
 
+    // Defensive: recompute all next-run times to ensure consistency after any
+    // mutation (mirrors the add() path). This catches edge cases where a
+    // non-schedule patch (e.g. delivery target) leaves stale nextRunAtMs values
+    // on other jobs, or where the updated job's nextRunAtMs was missing/corrupt.
+    recomputeNextRuns(state);
+
     await persist(state);
     armTimer(state);
     emit(state, {
