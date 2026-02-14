@@ -61,6 +61,7 @@ describe("memory plugin e2e", () => {
     expect(config).toBeDefined();
     expect(config?.embedding?.apiKey).toBe(OPENAI_API_KEY);
     expect(config?.dbPath).toBe(dbPath);
+    expect(config?.captureMaxChars).toBe(1500);
   });
 
   test("config schema resolves env vars", async () => {
@@ -92,6 +93,18 @@ describe("memory plugin e2e", () => {
     }).toThrow("embedding.apiKey is required");
   });
 
+  test("config schema validates captureMaxChars range", async () => {
+    const { default: memoryPlugin } = await import("./index.js");
+
+    expect(() => {
+      memoryPlugin.configSchema?.parse?.({
+        embedding: { apiKey: OPENAI_API_KEY },
+        dbPath,
+        captureMaxChars: 99,
+      });
+    }).toThrow("captureMaxChars must be between 100 and 10000");
+  });
+
   test("shouldCapture applies real capture rules", async () => {
     const { shouldCapture } = await import("./index.js");
 
@@ -104,6 +117,10 @@ describe("memory plugin e2e", () => {
     expect(shouldCapture("<relevant-memories>injected</relevant-memories>")).toBe(false);
     expect(shouldCapture("<system>status</system>")).toBe(false);
     expect(shouldCapture("Here is a short **summary**\n- bullet")).toBe(false);
+    const longButAllowed = `I always prefer this style. ${"x".repeat(1200)}`;
+    const tooLong = `I always prefer this style. ${"x".repeat(1600)}`;
+    expect(shouldCapture(longButAllowed, { maxChars: 1500 })).toBe(true);
+    expect(shouldCapture(tooLong, { maxChars: 1500 })).toBe(false);
   });
 
   test("detectCategory classifies using production logic", async () => {
