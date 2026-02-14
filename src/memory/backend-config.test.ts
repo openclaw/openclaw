@@ -25,7 +25,7 @@ describe("resolveMemoryBackendConfig", () => {
     expect(resolved.backend).toBe("qmd");
     expect(resolved.qmd?.collections.length).toBeGreaterThanOrEqual(3);
     expect(resolved.qmd?.command).toBe("qmd");
-    expect(resolved.qmd?.searchMode).toBe("query");
+    expect(resolved.qmd?.searchMode).toBe("search");
     expect(resolved.qmd?.update.intervalMs).toBeGreaterThan(0);
     expect(resolved.qmd?.update.waitForBootSync).toBe(false);
     expect(resolved.qmd?.update.commandTimeoutMs).toBe(30_000);

@@ -177,9 +177,8 @@ describe("QmdMemoryManager", () => {
     });
 
     const resolved = resolveMemoryBackendConfig({ cfg, agentId });
-    const createPromise = QmdMemoryManager.create({ cfg, agentId, resolved });
-    await waitForCondition(() => releaseUpdate !== null, 400);
-    const manager = await createPromise;
+    const manager = await QmdMemoryManager.create({ cfg, agentId, resolved });
+    expect(releaseUpdate).not.toBeNull();
     releaseUpdate?.();
     await manager?.close();
   });
@@ -215,11 +214,12 @@ describe("QmdMemoryManager", () => {
     const resolved = resolveMemoryBackendConfig({ cfg, agentId });
     const createPromise = QmdMemoryManager.create({ cfg, agentId, resolved });
     await waitForCondition(() => releaseUpdate !== null, 400);
-    const race = await Promise.race([
-      createPromise.then(() => "created" as const),
-      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 120)),
-    ]);
-    expect(race).toBe("timeout");
+    let created = false;
+    void createPromise.then(() => {
+      created = true;
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(created).toBe(false);
     releaseUpdate?.();
     const manager = await createPromise;
     await manager?.close();
@@ -334,7 +334,7 @@ describe("QmdMemoryManager", () => {
     ).resolves.toEqual([]);
 
     const searchCall = spawnMock.mock.calls.find((call) => call[1]?.[0] === "search");
-    expect(searchCall?.[1]).toEqual(["search", "test", "--json"]);
+    expect(searchCall?.[1]).toEqual(["search", "test", "--json", "-c", "workspace"]);
     expect(spawnMock.mock.calls.some((call) => call[1]?.[0] === "query")).toBe(false);
     expect(maxResults).toBeGreaterThan(0);
     await manager.close();
@@ -388,7 +388,7 @@ describe("QmdMemoryManager", () => {
         (args): args is string[] => Array.isArray(args) && ["search", "query"].includes(args[0]),
       );
     expect(searchAndQueryCalls).toEqual([
-      ["search", "test", "--json"],
+      ["search", "test", "--json", "-c", "workspace"],
       ["query", "test", "--json", "-n", String(maxResults), "-c", "workspace"],
     ]);
     await manager.close();
@@ -535,7 +535,7 @@ describe("QmdMemoryManager", () => {
     } as OpenClawConfig;
 
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
-      if (args[0] === "query") {
+      if (args[0] === "search") {
         const child = createMockChild({ autoClose: false });
         emitAndClose(child, "stdout", "[]");
         return child;
@@ -549,24 +549,10 @@ describe("QmdMemoryManager", () => {
     if (!manager) {
       throw new Error("manager missing");
     }
-    const maxResults = resolved.qmd?.limits.maxResults;
-    if (!maxResults) {
-      throw new Error("qmd maxResults missing");
-    }
 
     await manager.search("test", { sessionKey: "agent:main:slack:dm:u123" });
-    const queryCall = spawnMock.mock.calls.find((call) => call[1]?.[0] === "query");
-    expect(queryCall?.[1]).toEqual([
-      "query",
-      "test",
-      "--json",
-      "-n",
-      String(maxResults),
-      "-c",
-      "workspace",
-      "-c",
-      "notes",
-    ]);
+    const searchCall = spawnMock.mock.calls.find((call) => call[1]?.[0] === "search");
+    expect(searchCall?.[1]).toEqual(["search", "test", "--json", "-c", "workspace", "-c", "notes"]);
     await manager.close();
   });
 
@@ -802,7 +788,7 @@ describe("QmdMemoryManager", () => {
 
   it("fails search when sqlite index is busy so caller can fallback", async () => {
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
-      if (args[0] === "query") {
+      if (args[0] === "search") {
         const child = createMockChild({ autoClose: false });
         emitAndClose(
           child,
@@ -839,7 +825,7 @@ describe("QmdMemoryManager", () => {
 
   it("treats plain-text no-results stdout as an empty result set", async () => {
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
-      if (args[0] === "query") {
+      if (args[0] === "search") {
         const child = createMockChild({ autoClose: false });
         emitAndClose(child, "stdout", "No results found.");
         return child;
@@ -862,7 +848,7 @@ describe("QmdMemoryManager", () => {
 
   it("treats plain-text no-results stdout without punctuation as empty", async () => {
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
-      if (args[0] === "query") {
+      if (args[0] === "search") {
         const child = createMockChild({ autoClose: false });
         emitAndClose(child, "stdout", "No results found\n\n");
         return child;
@@ -885,7 +871,7 @@ describe("QmdMemoryManager", () => {
 
   it("treats plain-text no-results stderr as an empty result set", async () => {
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
-      if (args[0] === "query") {
+      if (args[0] === "search") {
         const child = createMockChild({ autoClose: false });
         emitAndClose(child, "stderr", "No results found.\n");
         return child;
@@ -1022,7 +1008,7 @@ async function waitForCondition(check: () => boolean, timeoutMs: number): Promis
     if (check()) {
       return;
     }
-    await new Promise((resolve) => setTimeout(resolve, 2));
+    await new Promise<void>((resolve) => setImmediate(resolve));
   }
   throw new Error("condition was not met in time");
 }
