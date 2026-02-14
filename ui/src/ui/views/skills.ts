@@ -186,7 +186,7 @@ export function renderSkills(props: SkillsProps) {
       <div class="logs-split ${selectedSkill ? "logs-split--open" : ""}">
         <div style="flex: 1; min-width: 0; overflow: hidden;">
           <div class="log-stream" style="max-height: 600px;">
-            <div class="log-header" style="grid-template-columns: 24px minmax(140px, 200px) minmax(0, 1fr) 80px 70px;">
+            <div class="log-header" style="grid-template-columns: 20px minmax(140px, 200px) minmax(0, 1fr) 80px 70px;">
               <div class="log-header-cell"></div>
               <div class="log-header-cell">Name</div>
               <div class="log-header-cell">Description</div>
@@ -202,9 +202,9 @@ export function renderSkills(props: SkillsProps) {
                   </div>
                   ${group.skills.map((skill) => html`
                     <div class="log-row ${selectedSkillKey === skill.skillKey ? "selected" : ""}"
-                      style="grid-template-columns: 24px minmax(140px, 200px) minmax(0, 1fr) 80px 70px;"
+                      style="grid-template-columns: 20px minmax(140px, 200px) minmax(0, 1fr) 80px 70px;"
                       @click=${() => { selectedSkillKey = skill.skillKey; requestUpdate(); }}>
-                      <div class="icon" style="width: 14px; height: 14px; color: var(--muted);">${icons.puzzle}</div>
+                      <div style="width: 14px; height: 14px; flex-shrink: 0; color: var(--muted); display: flex; align-items: center; justify-content: center;">${icons.puzzle}</div>
                       <div style="font-weight: 500; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${skill.name}</div>
                       <div class="log-message mono">${clampText(skill.description, 80)}</div>
                       <div class="mono" style="font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${skill.source.replace("openclaw-", "")}</div>
