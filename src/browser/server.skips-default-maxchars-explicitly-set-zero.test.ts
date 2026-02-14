@@ -457,6 +457,111 @@ describe("browser control server", () => {
     expect(started.error ?? "").toMatch(/attachOnly/i);
   });
 
+  it("covers additional endpoint branches", async () => {
+    const { startBrowserControlServerFromConfig } = await import("./server.js");
+    await startBrowserControlServerFromConfig();
+    const base = `http://127.0.0.1:${testPort}`;
+
+    const tabsWhenStopped = (await realFetch(`${base}/tabs`).then((r) => r.json())) as {
+      running: boolean;
+      tabs: unknown[];
+    };
+    expect(tabsWhenStopped.running).toBe(false);
+    expect(Array.isArray(tabsWhenStopped.tabs)).toBe(true);
+
+    const focusStopped = await realFetch(`${base}/tabs/focus`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ targetId: "abcd" }),
+    });
+    expect(focusStopped.status).toBe(409);
+
+    await realFetch(`${base}/start`, { method: "POST" }).then((r) => r.json());
+
+    const focusMissing = await realFetch(`${base}/tabs/focus`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ targetId: "zzz" }),
+    });
+    expect(focusMissing.status).toBe(404);
+
+    const delAmbiguous = await realFetch(`${base}/tabs/abc`, {
+      method: "DELETE",
+    });
+    expect(delAmbiguous.status).toBe(409);
+
+    const snapAmbiguous = await realFetch(`${base}/snapshot?format=aria&targetId=abc`);
+    expect(snapAmbiguous.status).toBe(409);
+  });
+
+  it("handles backward-compatible profile routes", async () => {
+    const { startBrowserControlServerFromConfig } = await import("./server.js");
+    await startBrowserControlServerFromConfig();
+    const base = `http://127.0.0.1:${testPort}`;
+
+    const status = (await realFetch(`${base}/`).then((r) => r.json())) as {
+      running: boolean;
+      profile?: string;
+    };
+    expect(status.running).toBe(false);
+    expect(status.profile).toBe("openclaw");
+
+    const started = (await realFetch(`${base}/start`, { method: "POST" }).then((r) =>
+      r.json(),
+    )) as { ok: boolean; profile?: string };
+    expect(started.ok).toBe(true);
+    expect(started.profile).toBe("openclaw");
+
+    const stopped = (await realFetch(`${base}/stop`, { method: "POST" }).then((r) => r.json())) as {
+      ok: boolean;
+      profile?: string;
+    };
+    expect(stopped.ok).toBe(true);
+    expect(stopped.profile).toBe("openclaw");
+
+    await realFetch(`${base}/start`, { method: "POST" });
+
+    const tabsDefault = (await realFetch(`${base}/tabs`).then((r) => r.json())) as {
+      running: boolean;
+      tabs: unknown[];
+    };
+    expect(tabsDefault.running).toBe(true);
+    expect(Array.isArray(tabsDefault.tabs)).toBe(true);
+
+    const openDefault = (await realFetch(`${base}/tabs/open`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: "https://example.com" }),
+    }).then((r) => r.json())) as { targetId?: string };
+    expect(openDefault.targetId).toBe("newtab1");
+
+    const profiles = (await realFetch(`${base}/profiles`).then((r) => r.json())) as {
+      profiles: Array<{ name: string }>;
+    };
+    expect(profiles.profiles.some((profile) => profile.name === "openclaw")).toBe(true);
+
+    const tabsByProfile = (await realFetch(`${base}/tabs?profile=openclaw`).then((r) =>
+      r.json(),
+    )) as {
+      running: boolean;
+      tabs: unknown[];
+    };
+    expect(tabsByProfile.running).toBe(true);
+    expect(Array.isArray(tabsByProfile.tabs)).toBe(true);
+
+    const openByProfile = (await realFetch(`${base}/tabs/open?profile=openclaw`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: "https://example.com" }),
+    }).then((r) => r.json())) as { targetId?: string };
+    expect(openByProfile.targetId).toBe("newtab1");
+
+    const unknownProfile = await realFetch(`${base}/tabs?profile=unknown`);
+    expect(unknownProfile.status).toBe(404);
+    const unknownPayload = (await unknownProfile.json()) as { error: string };
+    expect(unknownPayload.error).toContain("not found");
+  });
+
   it("allows attachOnly servers to ensure reachability via callback", async () => {
     cfgAttachOnly = true;
     reachable = false;
