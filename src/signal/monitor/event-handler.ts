@@ -512,6 +512,19 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       if (entry.isEdit) {
         return false;
       }
+      if (entry.replyToId != null) {
+        return false;
+      }
+      if (
+        entry.bodyText.includes("<media:contact>") ||
+        entry.bodyText.trimStart().startsWith("[Poll") ||
+        entry.untrustedContext?.some((ctx) => {
+          const normalized = ctx.trimStart();
+          return normalized.startsWith("[Poll") || normalized.startsWith("Poll");
+        })
+      ) {
+        return false;
+      }
       if (
         entry.mediaPath ||
         entry.mediaType ||
@@ -554,6 +567,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       }, []);
       // Preserve reply context from the first entry that has one.
       const replyEntry = entries.find((e) => e.replyToId != null);
+      const wasMentioned = entries.some((entry) => entry.wasMentioned === true);
       await handleSignalInboundMessage({
         ...last,
         bodyText: combinedText,
@@ -573,6 +587,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         replyToIsQuote: replyEntry?.replyToIsQuote,
         editTargetTimestamp: undefined,
         isEdit: undefined,
+        wasMentioned,
       });
     },
     onError: (err) => {

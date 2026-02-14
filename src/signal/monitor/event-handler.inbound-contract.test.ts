@@ -268,42 +268,7 @@ describe("signal createSignalEventHandler inbound contract", () => {
     expect(capturedCtx?.ReplyToIsQuote).toBe(true);
   });
 
-  it("preserves reply context and untrusted context when debounced entries are merged", async () => {
-    const handler = createTestHandler({
-      // oxlint-disable-next-line typescript/no-explicit-any
-      cfg: { messages: { inbound: { debounceMs: 50 } } } as any,
-    });
-
-    await handler(
-      makeReceiveEvent({
-        message: "reply text",
-        quote: { id: 42, text: "quoted", author: "+15559990000" },
-      }),
-    );
-    await handler(
-      makeReceiveEvent({
-        message: "follow-up",
-        previews: [{ url: "https://example.com", title: "Example", description: "Desc" }],
-      }),
-    );
-
-    await new Promise((resolve) => setTimeout(resolve, 90));
-
-    expect(capturedCtxs).toHaveLength(1);
-    expect(capturedCtx?.BodyForCommands).toBe("reply text\\nfollow-up");
-    // Reply context from the first entry survives the merge
-    expect(capturedCtx?.ReplyToId).toBe("42");
-    expect(capturedCtx?.ReplyToBody).toBe("quoted");
-    expect(capturedCtx?.ReplyToSender).toBe("+15559990000");
-    expect(capturedCtx?.ReplyToIsQuote).toBe(true);
-    // Untrusted context is merged from all entries (link preview from second message survives)
-    expect(capturedCtx?.UntrustedContext).toBeDefined();
-    expect(capturedCtx?.UntrustedContext).toContain(
-      "Link preview: Example - Desc (https://example.com)",
-    );
-  });
-
-  it("uses later reply context when first debounced entry has no reply", async () => {
+  it("does not debounce a reply when it arrives after plain text", async () => {
     const handler = createTestHandler({
       // oxlint-disable-next-line typescript/no-explicit-any
       cfg: { messages: { inbound: { debounceMs: 50 } } } as any,
@@ -313,20 +278,23 @@ describe("signal createSignalEventHandler inbound contract", () => {
     await handler(
       makeReceiveEvent({
         message: "reply text",
-        quote: { id: 99, text: "original" },
+        quote: { id: 42, text: "quoted", author: "+15559990000" },
       }),
     );
 
     await new Promise((resolve) => setTimeout(resolve, 90));
 
-    expect(capturedCtxs).toHaveLength(1);
-    expect(capturedCtx?.BodyForCommands).toBe("plain text\\nreply text");
-    // Reply context from the second entry is preserved
-    expect(capturedCtx?.ReplyToId).toBe("99");
-    expect(capturedCtx?.ReplyToBody).toBe("original");
+    expect(capturedCtxs).toHaveLength(2);
+    expect(capturedCtxs[0]?.BodyForCommands).toBe("plain text");
+    expect(capturedCtxs[0]?.ReplyToId).toBeUndefined();
+    expect(capturedCtxs[1]?.BodyForCommands).toBe("reply text");
+    expect(capturedCtxs[1]?.ReplyToId).toBe("42");
+    expect(capturedCtxs[1]?.ReplyToBody).toBe("quoted");
+    expect(capturedCtxs[1]?.ReplyToSender).toBe("+15559990000");
+    expect(capturedCtxs[1]?.ReplyToIsQuote).toBe(true);
   });
 
-  it("merges untrusted context from multiple debounced poll vote entries", async () => {
+  it("does not debounce poll vote entries", async () => {
     const handler = createTestHandler({
       // oxlint-disable-next-line typescript/no-explicit-any
       cfg: { messages: { inbound: { debounceMs: 50 } } } as any,
@@ -355,12 +323,77 @@ describe("signal createSignalEventHandler inbound contract", () => {
 
     await new Promise((resolve) => setTimeout(resolve, 90));
 
+    expect(capturedCtxs).toHaveLength(2);
+    expect(capturedCtxs[0]?.BodyForCommands).toBe("[Poll vote]");
+    expect(capturedCtxs[0]?.UntrustedContext).toContain("Poll vote on #1234567890: option(s) 0");
+    expect(capturedCtxs[1]?.BodyForCommands).toBe("[Poll vote]");
+    expect(capturedCtxs[1]?.UntrustedContext).toContain("Poll vote on #1234567890: option(s) 0, 2");
+  });
+
+  it("does not debounce shared contact placeholder entries", async () => {
+    const handler = createTestHandler({
+      // oxlint-disable-next-line typescript/no-explicit-any
+      cfg: { messages: { inbound: { debounceMs: 50 } } } as any,
+    });
+
+    await handler(
+      makeReceiveEvent({
+        contacts: [{ name: { display: "Jane Doe" }, phone: [{ value: "+15551234567" }] }],
+      }),
+    );
+    await handler(
+      makeReceiveEvent({
+        contacts: [{ name: { display: "John Smith" }, phone: [{ value: "+15557654321" }] }],
+      }),
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 90));
+
+    expect(capturedCtxs).toHaveLength(2);
+    expect(capturedCtxs[0]?.BodyForCommands).toBe("<media:contact>");
+    expect(capturedCtxs[0]?.UntrustedContext).toContain("Shared contact: Jane Doe (+15551234567)");
+    expect(capturedCtxs[1]?.BodyForCommands).toBe("<media:contact>");
+    expect(capturedCtxs[1]?.UntrustedContext).toContain(
+      "Shared contact: John Smith (+15557654321)",
+    );
+  });
+
+  it("OR-merges wasMentioned when debounced entries are flushed", async () => {
+    const handler = createTestHandler({
+      // oxlint-disable-next-line typescript/no-explicit-any
+      cfg: {
+        messages: {
+          inbound: { debounceMs: 250 },
+          groupChat: { mentionPatterns: ["\\b@?openclaw\\b"] },
+        },
+        channels: {
+          signal: {
+            groups: {
+              "*": { requireMention: false },
+            },
+          },
+        },
+      } as any,
+    });
+
+    await handler(
+      makeReceiveEvent({
+        message: "hey openclaw",
+        groupInfo: { groupId: "g1", groupName: "Test Group" },
+      }),
+    );
+    await handler(
+      makeReceiveEvent({
+        message: "follow-up",
+        groupInfo: { groupId: "g1", groupName: "Test Group" },
+      }),
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 320));
+
     expect(capturedCtxs).toHaveLength(1);
-    expect(capturedCtx?.BodyForCommands).toBe("[Poll vote]\\n[Poll vote]");
-    // Both poll vote contexts should survive the merge
-    expect(capturedCtx?.UntrustedContext).toBeDefined();
-    expect(capturedCtx?.UntrustedContext).toContain("Poll vote on #1234567890: option(s) 0");
-    expect(capturedCtx?.UntrustedContext).toContain("Poll vote on #1234567890: option(s) 0, 2");
+    expect(capturedCtx?.BodyForCommands).toBe("hey openclaw\\nfollow-up");
+    expect(capturedCtx?.WasMentioned).toBe(true);
   });
 
   it("handles sticker messages with sticker placeholder, downloaded media, and metadata", async () => {
