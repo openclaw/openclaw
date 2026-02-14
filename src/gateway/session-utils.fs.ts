@@ -12,6 +12,60 @@ import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
 import { extractToolCallNames, hasToolCall } from "../utils/transcript-tools.js";
 import { stripEnvelope } from "./chat-sanitize.js";
 
+type SessionTitleFields = {
+  firstUserMessage: string | null;
+  lastMessagePreview: string | null;
+};
+
+type SessionTitleFieldsCacheEntry = SessionTitleFields & {
+  mtimeMs: number;
+  size: number;
+};
+
+const sessionTitleFieldsCache = new Map<string, SessionTitleFieldsCacheEntry>();
+const MAX_SESSION_TITLE_FIELDS_CACHE_ENTRIES = 5000;
+
+function readSessionTitleFieldsCacheKey(
+  filePath: string,
+  opts?: { includeInterSession?: boolean },
+) {
+  const includeInterSession = opts?.includeInterSession === true ? "1" : "0";
+  return `${filePath}\t${includeInterSession}`;
+}
+
+function getCachedSessionTitleFields(cacheKey: string, stat: fs.Stats): SessionTitleFields | null {
+  const cached = sessionTitleFieldsCache.get(cacheKey);
+  if (!cached) {
+    return null;
+  }
+  if (cached.mtimeMs !== stat.mtimeMs || cached.size !== stat.size) {
+    sessionTitleFieldsCache.delete(cacheKey);
+    return null;
+  }
+  // LRU bump
+  sessionTitleFieldsCache.delete(cacheKey);
+  sessionTitleFieldsCache.set(cacheKey, cached);
+  return {
+    firstUserMessage: cached.firstUserMessage,
+    lastMessagePreview: cached.lastMessagePreview,
+  };
+}
+
+function setCachedSessionTitleFields(cacheKey: string, stat: fs.Stats, value: SessionTitleFields) {
+  sessionTitleFieldsCache.set(cacheKey, {
+    ...value,
+    mtimeMs: stat.mtimeMs,
+    size: stat.size,
+  });
+  while (sessionTitleFieldsCache.size > MAX_SESSION_TITLE_FIELDS_CACHE_ENTRIES) {
+    const oldestKey = sessionTitleFieldsCache.keys().next().value;
+    if (typeof oldestKey !== "string" || !oldestKey) {
+      break;
+    }
+    sessionTitleFieldsCache.delete(oldestKey);
+  }
+}
+
 export function readSessionMessages(
   sessionId: string,
   storePath: string | undefined,
@@ -181,21 +235,36 @@ export function readSessionTitleFieldsFromTranscript(
   sessionFile?: string,
   agentId?: string,
   opts?: { includeInterSession?: boolean },
-): { firstUserMessage: string | null; lastMessagePreview: string | null } {
+): SessionTitleFields {
   const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile, agentId);
   const filePath = candidates.find((p) => fs.existsSync(p));
   if (!filePath) {
     return { firstUserMessage: null, lastMessagePreview: null };
   }
 
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(filePath);
+  } catch {
+    return { firstUserMessage: null, lastMessagePreview: null };
+  }
+
+  const cacheKey = readSessionTitleFieldsCacheKey(filePath, opts);
+  const cached = getCachedSessionTitleFields(cacheKey, stat);
+  if (cached) {
+    return cached;
+  }
+
+  if (stat.size === 0) {
+    const empty = { firstUserMessage: null, lastMessagePreview: null };
+    setCachedSessionTitleFields(cacheKey, stat, empty);
+    return empty;
+  }
+
   let fd: number | null = null;
   try {
     fd = fs.openSync(filePath, "r");
-    const stat = fs.fstatSync(fd);
     const size = stat.size;
-    if (size === 0) {
-      return { firstUserMessage: null, lastMessagePreview: null };
-    }
 
     // Head (first user message)
     let firstUserMessage: string | null = null;
@@ -265,7 +334,9 @@ export function readSessionTitleFieldsFromTranscript(
       // ignore tail read errors
     }
 
-    return { firstUserMessage, lastMessagePreview };
+    const result = { firstUserMessage, lastMessagePreview };
+    setCachedSessionTitleFields(cacheKey, stat, result);
+    return result;
   } catch {
     return { firstUserMessage: null, lastMessagePreview: null };
   } finally {
