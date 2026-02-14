@@ -52,7 +52,9 @@ describe("ensureAgentWorkspace", () => {
 
     await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
 
-    await expect(fs.access(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME))).rejects.toThrow();
+    await expect(fs.access(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 });
 
