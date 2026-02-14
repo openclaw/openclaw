@@ -188,6 +188,7 @@ export async function dispatchReplyFromConfig(params: {
             parentId: (ctx as Record<string, unknown>).ParentId,
             msgType: (ctx as Record<string, unknown>).MsgType,
             mentionsJson: (ctx as Record<string, unknown>).MentionsJson,
+            hookSource: "dispatch_from_config",
           },
         },
         {

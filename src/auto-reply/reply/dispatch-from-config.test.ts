@@ -355,6 +355,7 @@ describe("dispatchReplyFromConfig", () => {
         content: "/search hello",
         timestamp: 1710000000000,
         metadata: expect.objectContaining({
+          hookSource: "dispatch_from_config",
           originatingChannel: "Telegram",
           originatingTo: "telegram:999",
           messageId: "sid-full",
