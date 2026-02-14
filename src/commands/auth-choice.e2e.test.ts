@@ -253,18 +253,18 @@ describe("applyAuthChoice", () => {
     expect(text).toHaveBeenCalledWith(
       expect.objectContaining({ message: "Enter MiniMax China API key" }),
     );
-    expect(result.config.auth?.profiles?.["minimax:default"]).toMatchObject({
-      provider: "minimax",
+    expect(result.config.auth?.profiles?.["minimax-cn:default"]).toMatchObject({
+      provider: "minimax-cn",
       mode: "api_key",
     });
-    expect(result.config.models?.providers?.minimax?.baseUrl).toBe(MINIMAX_CN_API_BASE_URL);
+    expect(result.config.models?.providers?.["minimax-cn"]?.baseUrl).toBe(MINIMAX_CN_API_BASE_URL);
 
     const authProfilePath = authProfilePathFor(requireAgentDir());
     const raw = await fs.readFile(authProfilePath, "utf8");
     const parsed = JSON.parse(raw) as {
       profiles?: Record<string, { key?: string }>;
     };
-    expect(parsed.profiles?.["minimax:default"]?.key).toBe("sk-minimax-test");
+    expect(parsed.profiles?.["minimax-cn:default"]?.key).toBe("sk-minimax-test");
   });
 
   it("prompts and writes Synthetic API key when selecting synthetic-api-key", async () => {
