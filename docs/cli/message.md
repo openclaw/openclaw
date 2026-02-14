@@ -97,6 +97,11 @@ Name lookup:
   - Channels: Discord/Slack/Telegram
   - Required: `--message-id`, `--target`
 
+- `unsend`
+  - Channels: Signal
+  - Required: `--message-id`, `--target` (recipient E.164, UUID, or group)
+  - Note: Deletes a message you sent (remote delete)
+
 - `pin` / `unpin`
   - Channels: Discord/Slack
   - Required: `--message-id`, `--target`

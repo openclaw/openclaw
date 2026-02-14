@@ -240,6 +240,26 @@ Config:
   - `minimal`/`extensive` enables agent reactions and sets the guidance level.
 - Per-account overrides: `channels.signal.accounts.<id>.actions.reactions`, `channels.signal.accounts.<id>.reactionLevel`.
 
+## Unsend (message tool)
+
+- Use `message action=unsend` with `channel=signal` to delete a message you sent.
+- Targets: recipient E.164, UUID, or group (same format as reactions).
+- `messageId` is the Signal timestamp of the message to delete.
+- Works for both DMs and groups.
+
+Examples:
+
+```
+message action=unsend channel=signal target=+15551234567 messageId=1737630212345
+message action=unsend channel=signal target=uuid:123e4567-e89b-12d3-a456-426614174000 messageId=1737630212345
+message action=unsend channel=signal target=signal:group:<groupId> messageId=1737630212345
+```
+
+Config:
+
+- `channels.signal.actions.unsend`: enable/disable unsend actions (default true).
+- Per-account override: `channels.signal.accounts.<id>.actions.unsend`.
+
 ## Delivery targets (CLI/cron)
 
 - DMs: `signal:+15551234567` (or plain E.164).

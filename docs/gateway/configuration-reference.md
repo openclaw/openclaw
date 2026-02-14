@@ -365,12 +365,20 @@ Chat modes: `oncall` (respond on @-mention, default), `onmessage` (every message
       reactionNotifications: "own", // off | own | all | allowlist
       reactionAllowlist: ["+15551234567", "uuid:123e4567-e89b-12d3-a456-426614174000"],
       historyLimit: 50,
+      actions: {
+        reactions: true, // enable/disable reaction actions (default: true)
+        unsend: true, // enable/disable unsend/remote delete (default: true)
+        pollVote: true, // enable/disable poll voting (default: true)
+        pollClose: true, // enable/disable poll closing (default: true)
+      },
     },
   },
 }
 ```
 
 **Reaction notification modes:** `off`, `own` (default), `all`, `allowlist` (from `reactionAllowlist`).
+
+**Action toggles:** `actions.reactions`, `actions.unsend`, `actions.pollVote`, `actions.pollClose` — all default to `true`. Per-account overrides: `channels.signal.accounts.<id>.actions.*`.
 
 ### iMessage
 
