@@ -1,11 +1,26 @@
 {
   "name": "@openclaw/x",
-  "version": "2026.2.13",
+  "version": "2026.2.14",
   "description": "OpenClaw X (Twitter) channel plugin",
   "type": "module",
   "openclaw": {
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "channel": {
+      "id": "x",
+      "label": "X (Twitter)",
+      "selectionLabel": "X (Twitter)",
+      "docsPath": "/channels/x",
+      "docsLabel": "x",
+      "blurb": "Monitor mentions, reply to tweets, and run x-actions via the X API.",
+      "order": 50,
+      "quickstartAllowFrom": true
+    },
+    "install": {
+      "npmSpec": "@openclaw/x",
+      "localPath": "extensions/x",
+      "defaultChoice": "local"
+    }
   }
 }
