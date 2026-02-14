@@ -1,0 +1,20 @@
+{
+  "name": "@openclaw/config-builder",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite",
+    "preview": "vite preview",
+    "test": "vitest run --config vitest.config.ts"
+  },
+  "dependencies": {
+    "json5": "^2.2.3",
+    "lit": "^3.3.2",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "vite": "7.3.1",
+    "vitest": "4.0.18"
+  }
+}

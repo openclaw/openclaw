@@ -1,0 +1,11 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["vite/client"],
+    "paths": {
+      "@openclaw/config/*": ["../../src/config/*"]
+    }
+  },
+  "include": ["src/**/*", "vite.config.ts"]
+}
