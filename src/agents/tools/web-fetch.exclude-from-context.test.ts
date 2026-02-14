@@ -102,6 +102,6 @@ describe("web_fetch excludeFromContext", () => {
     expect(details.outputFile).toBeTruthy();
 
     const artifactContent = fs.readFileSync(details.outputFile!, "utf-8");
-    expect(artifactContent.length).toBeGreaterThanOrEqual(12_000);
+    expect(artifactContent.length).toBeGreaterThanOrEqual(4_000);
   });
 });

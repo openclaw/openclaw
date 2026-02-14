@@ -506,7 +506,7 @@ export function createNodesTool(options?: {
                 timeoutMs: invokeTimeoutMs,
                 idempotencyKey: crypto.randomUUID(),
               });
-              return jsonResult(raw?.payload ?? {});
+              return createBoundedJsonResult(raw?.payload ?? {});
             } catch (firstErr) {
               const msg = firstErr instanceof Error ? firstErr.message : String(firstErr);
               if (!msg.includes("SYSTEM_RUN_DENIED: approval required")) {
