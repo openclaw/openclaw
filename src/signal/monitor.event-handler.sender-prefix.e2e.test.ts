@@ -81,7 +81,7 @@ describe("signal event handler sender prefix", () => {
       },
     };
 
-    await handler(payload);
+    await handler({ event: "receive", data: JSON.stringify(payload) });
 
     expect(dispatchMock).toHaveBeenCalled();
     expect(capturedBody).toContain("Alice (+15550002222): hello");

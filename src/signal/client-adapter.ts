@@ -8,7 +8,6 @@
 
 import type { SignalApiMode } from "../config/types.signal.js";
 import type { SignalRpcOptions } from "./client.js";
-import type { SignalSseEvent } from "./client.js";
 import { loadConfig } from "../config/config.js";
 import {
   containerCheck,
@@ -23,6 +22,11 @@ import {
 import { signalCheck, signalRpcRequest, streamSignalEvents } from "./client.js";
 
 const DEFAULT_TIMEOUT_MS = 10_000;
+
+export type SignalAdapterEvent = {
+  event?: string;
+  data?: string;
+};
 
 // Cache auto-detected modes per baseUrl to avoid repeated network probes.
 const detectedModeCache = new Map<string, "native" | "container">();
@@ -216,7 +220,7 @@ export async function streamSignalEventsAdapter(params: {
   account?: string;
   accountId?: string;
   abortSignal?: AbortSignal;
-  onEvent: (event: SignalSseEvent) => void;
+  onEvent: (event: SignalAdapterEvent) => void;
   logger?: { log?: (msg: string) => void; error?: (msg: string) => void };
 }): Promise<void> {
   const mode = await resolveApiMode(params.baseUrl, params.accountId);
