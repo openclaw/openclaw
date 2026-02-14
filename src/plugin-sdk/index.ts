@@ -451,3 +451,6 @@ export type { ProcessedLineMessage } from "../line/markdown-to-line.js";
 
 // Media utilities
 export { loadWebMedia, type WebMediaResult } from "../web/media.js";
+
+// QR code utilities
+export { renderQrPngBase64 } from "../web/qr-image.js";
