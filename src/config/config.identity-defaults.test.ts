@@ -1,19 +1,53 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { DEFAULT_AGENT_MAX_CONCURRENT, DEFAULT_SUBAGENT_MAX_CONCURRENT } from "./agent-limits.js";
 import { loadConfig } from "./config.js";
-import { withTempHome } from "./test-helpers.js";
+
+type HomeEnvSnapshot = {
+  home: string | undefined;
+  userProfile: string | undefined;
+  homeDrive: string | undefined;
+  homePath: string | undefined;
+  stateDir: string | undefined;
+};
+
+function snapshotHomeEnv(): HomeEnvSnapshot {
+  return {
+    home: process.env.HOME,
+    userProfile: process.env.USERPROFILE,
+    homeDrive: process.env.HOMEDRIVE,
+    homePath: process.env.HOMEPATH,
+    stateDir: process.env.OPENCLAW_STATE_DIR,
+  };
+}
+
+function restoreHomeEnv(snapshot: HomeEnvSnapshot) {
+  const restoreKey = (key: string, value: string | undefined) => {
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  };
+  restoreKey("HOME", snapshot.home);
+  restoreKey("USERPROFILE", snapshot.userProfile);
+  restoreKey("HOMEDRIVE", snapshot.homeDrive);
+  restoreKey("HOMEPATH", snapshot.homePath);
+  restoreKey("OPENCLAW_STATE_DIR", snapshot.stateDir);
+}
 
 describe("config identity defaults", () => {
-  let previousHome: string | undefined;
+  let fixtureRoot = "";
+  let fixtureCount = 0;
 
-  beforeEach(() => {
-    previousHome = process.env.HOME;
+  beforeAll(async () => {
+    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-config-identity-"));
   });
 
-  afterEach(() => {
-    process.env.HOME = previousHome;
+  afterAll(async () => {
+    await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
   const writeAndLoadConfig = async (home: string, config: Record<string, unknown>) => {
@@ -25,6 +59,30 @@ describe("config identity defaults", () => {
       "utf-8",
     );
     return loadConfig();
+  };
+
+  const withTempHome = async <T>(fn: (home: string) => Promise<T>): Promise<T> => {
+    const home = path.join(fixtureRoot, `home-${fixtureCount++}`);
+    await fs.mkdir(path.join(home, ".openclaw"), { recursive: true });
+
+    const snapshot = snapshotHomeEnv();
+    process.env.HOME = home;
+    process.env.USERPROFILE = home;
+    process.env.OPENCLAW_STATE_DIR = path.join(home, ".openclaw");
+
+    if (process.platform === "win32") {
+      const match = home.match(/^([A-Za-z]:)(.*)$/);
+      if (match) {
+        process.env.HOMEDRIVE = match[1];
+        process.env.HOMEPATH = match[2] || "\\";
+      }
+    }
+
+    try {
+      return await fn(home);
+    } finally {
+      restoreHomeEnv(snapshot);
+    }
   };
 
   it("does not derive mention defaults and only sets ackReactionScope when identity is present", async () => {

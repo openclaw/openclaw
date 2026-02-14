@@ -3,6 +3,7 @@ import { loadAndMaybeMigrateDoctorConfig } from "../../commands/doctor-config-fl
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { colorize, isRich, theme } from "../../terminal/theme.js";
 import { shortenHomePath } from "../../utils.js";
+import { shouldMigrateStateFromPath } from "../argv.js";
 import { formatCliCommand } from "../command-format.js";
 
 const ALLOWED_INVALID_COMMANDS = new Set(["doctor", "logs", "health", "help", "status"]);
@@ -28,7 +29,8 @@ export async function ensureConfigReady(params: {
   runtime: RuntimeEnv;
   commandPath?: string[];
 }): Promise<void> {
-  if (!didRunDoctorConfigFlow) {
+  const commandPath = params.commandPath ?? [];
+  if (!didRunDoctorConfigFlow && shouldMigrateStateFromPath(commandPath)) {
     didRunDoctorConfigFlow = true;
     await loadAndMaybeMigrateDoctorConfig({
       options: { nonInteractive: true },
@@ -37,8 +39,8 @@ export async function ensureConfigReady(params: {
   }
 
   const snapshot = await readConfigFileSnapshot();
-  const commandName = params.commandPath?.[0];
-  const subcommandName = params.commandPath?.[1];
+  const commandName = commandPath[0];
+  const subcommandName = commandPath[1];
   const allowInvalid = commandName
     ? ALLOWED_INVALID_COMMANDS.has(commandName) ||
       (commandName === "gateway" &&

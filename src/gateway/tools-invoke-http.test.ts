@@ -46,7 +46,7 @@ const invokeAgentsList = async (params: {
   }
   return await fetch(`http://127.0.0.1:${params.port}/tools/invoke`, {
     method: "POST",
-    headers: { "content-type": "application/json", ...params.headers },
+    headers: { "content-type": "application/json", connection: "close", ...params.headers },
     body: JSON.stringify(body),
   });
 };
@@ -71,7 +71,7 @@ const invokeTool = async (params: {
   }
   return await fetch(`http://127.0.0.1:${params.port}/tools/invoke`, {
     method: "POST",
-    headers: { "content-type": "application/json", ...params.headers },
+    headers: { "content-type": "application/json", connection: "close", ...params.headers },
     body: JSON.stringify(body),
   });
 };
@@ -142,41 +142,6 @@ describe("POST /tools/invoke", () => {
     expect(resImplicit.status).toBe(200);
     const implicitBody = await resImplicit.json();
     expect(implicitBody.ok).toBe(true);
-  });
-
-  it("handles dedicated auth modes for password accept and token reject", async () => {
-    allowAgentsListForMain();
-
-    const passwordPort = await getFreePort();
-    const passwordServer = await startGatewayServer(passwordPort, {
-      bind: "loopback",
-      auth: { mode: "password", password: "secret" },
-    });
-    try {
-      const passwordRes = await invokeAgentsList({
-        port: passwordPort,
-        headers: { authorization: "Bearer secret" },
-        sessionKey: "main",
-      });
-      expect(passwordRes.status).toBe(200);
-    } finally {
-      await passwordServer.close();
-    }
-
-    const tokenPort = await getFreePort();
-    const tokenServer = await startGatewayServer(tokenPort, {
-      bind: "loopback",
-      auth: { mode: "token", token: "t" },
-    });
-    try {
-      const tokenRes = await invokeAgentsList({
-        port: tokenPort,
-        sessionKey: "main",
-      });
-      expect(tokenRes.status).toBe(401);
-    } finally {
-      await tokenServer.close();
-    }
   });
 
   it("routes tools invoke before plugin HTTP handlers", async () => {

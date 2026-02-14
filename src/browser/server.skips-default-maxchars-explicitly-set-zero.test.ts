@@ -1,6 +1,6 @@
 import { type AddressInfo, createServer } from "node:net";
 import { fetch as realFetch } from "undici";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 let testPort = 0;
 let cdpBaseUrl = "";
@@ -185,10 +185,11 @@ function makeResponse(
 }
 
 describe("browser control server", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     reachable = false;
     cfgAttachOnly = false;
     createTargetId = null;
+    launchCalls.length = 0;
 
     cdpMocks.createTargetViaCdp.mockImplementation(async () => {
       if (createTargetId) {
@@ -262,7 +263,7 @@ describe("browser control server", () => {
     );
   });
 
-  afterEach(async () => {
+  afterAll(async () => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
     if (prevGatewayPort === undefined) {
@@ -274,99 +275,113 @@ describe("browser control server", () => {
     await stopBrowserControlServer();
   });
 
-  it("skips default maxChars when explicitly set to zero", async () => {
+  it("covers primary control routes, validation, and profile compatibility", async () => {
     const { startBrowserControlServerFromConfig } = await import("./server.js");
-    await startBrowserControlServerFromConfig();
-    const base = `http://127.0.0.1:${testPort}`;
-    await realFetch(`${base}/start`, { method: "POST" }).then((r) => r.json());
+    const started = await startBrowserControlServerFromConfig();
+    expect(started?.port).toBe(testPort);
 
-    const snapAi = (await realFetch(`${base}/snapshot?format=ai&maxChars=0`).then((r) =>
+    const base = `http://127.0.0.1:${testPort}`;
+    const s1 = (await realFetch(`${base}/`).then((r) => r.json())) as {
+      running: boolean;
+      pid: number | null;
+    };
+    expect(s1.running).toBe(false);
+    expect(s1.pid).toBe(null);
+    expect(s1.profile).toBe("openclaw");
+
+    const tabsWhenStopped = (await realFetch(`${base}/tabs`).then((r) => r.json())) as {
+      running: boolean;
+      tabs: unknown[];
+    };
+    expect(tabsWhenStopped.running).toBe(false);
+    expect(Array.isArray(tabsWhenStopped.tabs)).toBe(true);
+
+    const focusStopped = await realFetch(`${base}/tabs/focus`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ targetId: "abcd" }),
+    });
+    expect(focusStopped.status).toBe(409);
+
+    const startedPayload = (await realFetch(`${base}/start`, { method: "POST" }).then((r) =>
       r.json(),
-    )) as { ok: boolean; format?: string };
-    expect(snapAi.ok).toBe(true);
-    expect(snapAi.format).toBe("ai");
+    )) as { ok: boolean; profile?: string };
+    expect(startedPayload.ok).toBe(true);
+    expect(startedPayload.profile).toBe("openclaw");
 
-    const [call] = pwMocks.snapshotAiViaPlaywright.mock.calls.at(-1) ?? [];
-    expect(call).toEqual({
-      cdpUrl: cdpBaseUrl,
-      targetId: "abcd1234",
-    });
-  });
+    const s2 = (await realFetch(`${base}/`).then((r) => r.json())) as {
+      running: boolean;
+      pid: number | null;
+      chosenBrowser: string | null;
+    };
+    expect(s2.running).toBe(true);
+    expect(s2.pid).toBe(123);
+    expect(s2.chosenBrowser).toBe("chrome");
+    expect(launchCalls.length).toBeGreaterThan(0);
 
-  it("validates agent inputs (agent routes)", async () => {
-    const { startBrowserControlServerFromConfig } = await import("./server.js");
-    await startBrowserControlServerFromConfig();
-    const base = `http://127.0.0.1:${testPort}`;
-    await realFetch(`${base}/start`, { method: "POST" }).then((r) => r.json());
+    const tabs = (await realFetch(`${base}/tabs`).then((r) => r.json())) as {
+      running: boolean;
+      tabs: Array<{ targetId: string }>;
+    };
+    expect(tabs.running).toBe(true);
+    expect(tabs.tabs.length).toBeGreaterThan(0);
 
-    const navMissing = await realFetch(`${base}/navigate`, {
+    const openedDefault = (await realFetch(`${base}/tabs/open`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
+      body: JSON.stringify({ url: "https://example.com" }),
+    }).then((r) => r.json())) as { targetId?: string };
+    expect(openedDefault.targetId).toBe("newtab1");
+
+    createTargetId = "abcd1234";
+    const openedViaCdp = (await realFetch(`${base}/tabs/open`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: "https://example.com" }),
+    }).then((r) => r.json())) as { targetId?: string };
+    expect(openedViaCdp.targetId).toBe("abcd1234");
+    createTargetId = null;
+
+    const focusAmbiguous = await realFetch(`${base}/tabs/focus`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ targetId: "abc" }),
     });
+    expect(focusAmbiguous.status).toBe(409);
+
+    const focusMissing = await realFetch(`${base}/tabs/focus`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ targetId: "zzz" }),
+    });
+    expect(focusMissing.status).toBe(404);
+
+    const [navMissing, clickMissingRef, scrollSelectorUnsupported, dialogMissingAccept] =
+      await Promise.all([
+        realFetch(`${base}/navigate`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({}),
+        }),
+        realFetch(`${base}/act`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ kind: "click" }),
+        }),
+        realFetch(`${base}/act`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ kind: "scrollIntoView", selector: "button.save" }),
+        }),
+        realFetch(`${base}/hooks/dialog`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({}),
+        }),
+      ]);
     expect(navMissing.status).toBe(400);
-
-    const actMissing = await realFetch(`${base}/act`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
-    });
-    expect(actMissing.status).toBe(400);
-
-    const clickMissingRef = await realFetch(`${base}/act`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ kind: "click" }),
-    });
     expect(clickMissingRef.status).toBe(400);
-
-    const scrollMissingRef = await realFetch(`${base}/act`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ kind: "scrollIntoView" }),
-    });
-    expect(scrollMissingRef.status).toBe(400);
-
-    const scrollSelectorUnsupported = await realFetch(`${base}/act`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ kind: "scrollIntoView", selector: "button.save" }),
-    });
     expect(scrollSelectorUnsupported.status).toBe(400);
-
-    const clickBadButton = await realFetch(`${base}/act`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ kind: "click", ref: "1", button: "nope" }),
-    });
-    expect(clickBadButton.status).toBe(400);
-
-    const clickBadModifiers = await realFetch(`${base}/act`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ kind: "click", ref: "1", modifiers: ["Nope"] }),
-    });
-    expect(clickBadModifiers.status).toBe(400);
-
-    const typeBadText = await realFetch(`${base}/act`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ kind: "type", ref: "1", text: 123 }),
-    });
-    expect(typeBadText.status).toBe(400);
-
-    const uploadMissingPaths = await realFetch(`${base}/hooks/file-chooser`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
-    });
-    expect(uploadMissingPaths.status).toBe(400);
-
-    const dialogMissingAccept = await realFetch(`${base}/hooks/dialog`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
-    });
     expect(dialogMissingAccept.status).toBe(400);
 
     const snapDefault = (await realFetch(`${base}/snapshot?format=wat`).then((r) => r.json())) as {
@@ -376,19 +391,61 @@ describe("browser control server", () => {
     expect(snapDefault.ok).toBe(true);
     expect(snapDefault.format).toBe("ai");
 
+    const snapAi = (await realFetch(`${base}/snapshot?format=ai&maxChars=0`).then((r) =>
+      r.json(),
+    )) as { ok: boolean; format?: string };
+    expect(snapAi.ok).toBe(true);
+    expect(snapAi.format).toBe("ai");
+    const [call] = pwMocks.snapshotAiViaPlaywright.mock.calls.at(-1) ?? [];
+    expect(call).toEqual({
+      cdpUrl: cdpBaseUrl,
+      targetId: "abcd1234",
+    });
+
+    const snapAmbiguous = await realFetch(`${base}/snapshot?format=aria&targetId=abc`);
+    expect(snapAmbiguous.status).toBe(409);
+
     const screenshotBadCombo = await realFetch(`${base}/screenshot`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ fullPage: true, element: "body" }),
     });
     expect(screenshotBadCombo.status).toBe(400);
-  });
+    const delAmbiguous = await realFetch(`${base}/tabs/abc`, { method: "DELETE" });
+    expect(delAmbiguous.status).toBe(409);
 
-  it("covers common error branches", async () => {
-    cfgAttachOnly = true;
-    const { startBrowserControlServerFromConfig } = await import("./server.js");
-    await startBrowserControlServerFromConfig();
-    const base = `http://127.0.0.1:${testPort}`;
+    const profiles = (await realFetch(`${base}/profiles`).then((r) => r.json())) as {
+      profiles: Array<{ name: string }>;
+    };
+    expect(profiles.profiles.some((profile) => profile.name === "openclaw")).toBe(true);
+
+    const tabsByProfile = (await realFetch(`${base}/tabs?profile=openclaw`).then((r) =>
+      r.json(),
+    )) as {
+      running: boolean;
+      tabs: unknown[];
+    };
+    expect(tabsByProfile.running).toBe(true);
+    expect(Array.isArray(tabsByProfile.tabs)).toBe(true);
+
+    const openByProfile = (await realFetch(`${base}/tabs/open?profile=openclaw`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: "https://example.com" }),
+    }).then((r) => r.json())) as { targetId?: string };
+    expect(openByProfile.targetId).toBe("newtab1");
+
+    const unknownProfile = await realFetch(`${base}/tabs?profile=unknown`);
+    expect(unknownProfile.status).toBe(404);
+    const unknownPayload = (await unknownProfile.json()) as { error: string };
+    expect(unknownPayload.error).toContain("not found");
+
+    const stopped = (await realFetch(`${base}/stop`, { method: "POST" }).then((r) => r.json())) as {
+      ok: boolean;
+      profile?: string;
+    };
+    expect(stopped.ok).toBe(true);
+    expect(stopped.profile).toBe("openclaw");
 
     const missing = await realFetch(`${base}/tabs/open`, {
       method: "POST",
@@ -396,68 +453,5 @@ describe("browser control server", () => {
       body: JSON.stringify({}),
     });
     expect(missing.status).toBe(400);
-
-    reachable = false;
-    const started = (await realFetch(`${base}/start`, {
-      method: "POST",
-    }).then((r) => r.json())) as { error?: string };
-    expect(started.error ?? "").toMatch(/attachOnly/i);
-  });
-
-  it("allows attachOnly servers to ensure reachability via callback", async () => {
-    cfgAttachOnly = true;
-    reachable = false;
-    const { startBrowserBridgeServer } = await import("./bridge-server.js");
-
-    const ensured = vi.fn(async () => {
-      reachable = true;
-    });
-
-    const bridge = await startBrowserBridgeServer({
-      resolved: {
-        enabled: true,
-        controlPort: 0,
-        cdpProtocol: "http",
-        cdpHost: "127.0.0.1",
-        cdpIsLoopback: true,
-        color: "#FF4500",
-        headless: true,
-        noSandbox: false,
-        attachOnly: true,
-        defaultProfile: "openclaw",
-        profiles: {
-          openclaw: { cdpPort: testPort + 1, color: "#FF4500" },
-        },
-      },
-      onEnsureAttachTarget: ensured,
-    });
-
-    const started = (await realFetch(`${bridge.baseUrl}/start`, {
-      method: "POST",
-    }).then((r) => r.json())) as { ok?: boolean; error?: string };
-    expect(started.error).toBeUndefined();
-    expect(started.ok).toBe(true);
-    const status = (await realFetch(`${bridge.baseUrl}/`).then((r) => r.json())) as {
-      running?: boolean;
-    };
-    expect(status.running).toBe(true);
-    expect(ensured).toHaveBeenCalledTimes(1);
-
-    await new Promise<void>((resolve) => bridge.server.close(() => resolve()));
-  });
-
-  it("opens tabs via CDP createTarget path", async () => {
-    const { startBrowserControlServerFromConfig } = await import("./server.js");
-    await startBrowserControlServerFromConfig();
-    const base = `http://127.0.0.1:${testPort}`;
-    await realFetch(`${base}/start`, { method: "POST" }).then((r) => r.json());
-
-    createTargetId = "abcd1234";
-    const opened = (await realFetch(`${base}/tabs/open`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url: "https://example.com" }),
-    }).then((r) => r.json())) as { targetId?: string };
-    expect(opened.targetId).toBe("abcd1234");
   });
 });

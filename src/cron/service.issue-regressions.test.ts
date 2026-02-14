@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CronJob } from "./types.js";
 import { CronService } from "./service.js";
 import { createCronServiceState, type CronEvent } from "./service/state.js";
@@ -16,8 +16,12 @@ const noopLogger = {
   trace: vi.fn(),
 };
 
+let fixtureRoot = "";
+let fixtureCount = 0;
+
 async function makeStorePath() {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cron-issues-"));
+  const dir = path.join(fixtureRoot, `case-${fixtureCount++}`);
+  await fs.mkdir(dir, { recursive: true });
   const storePath = path.join(dir, "jobs.json");
   return {
     storePath,
@@ -50,9 +54,17 @@ function createDueIsolatedJob(params: {
 }
 
 describe("Cron issue regressions", () => {
+  beforeAll(async () => {
+    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cron-issues-"));
+  });
+
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-02-06T10:05:00.000Z"));
+  });
+
+  afterAll(async () => {
+    await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
   afterEach(() => {
@@ -60,13 +72,14 @@ describe("Cron issue regressions", () => {
     vi.clearAllMocks();
   });
 
-  it("recalculates nextRunAtMs when schedule changes", async () => {
+  it("covers schedule updates, force runs, isolated wake scheduling, and payload patching", async () => {
     const store = await makeStorePath();
+    const enqueueSystemEvent = vi.fn();
     const cron = new CronService({
       cronEnabled: true,
       storePath: store.storePath,
       log: noopLogger,
-      enqueueSystemEvent: vi.fn(),
+      enqueueSystemEvent,
       requestHeartbeatNow: vi.fn(),
       runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "ok" }),
     });
@@ -86,50 +99,17 @@ describe("Cron issue regressions", () => {
 
     expect(updated.state.nextRunAtMs).toBe(Date.parse("2026-02-06T12:00:00.000Z"));
 
-    cron.stop();
-    await store.cleanup();
-  });
-
-  it("runs immediately with force mode even when not due", async () => {
-    const store = await makeStorePath();
-    const enqueueSystemEvent = vi.fn();
-    const cron = new CronService({
-      cronEnabled: true,
-      storePath: store.storePath,
-      log: noopLogger,
-      enqueueSystemEvent,
-      requestHeartbeatNow: vi.fn(),
-      runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "ok" }),
-    });
-    await cron.start();
-
-    const created = await cron.add({
+    const forceNow = await cron.add({
       name: "force-now",
       schedule: { kind: "every", everyMs: 60_000, anchorMs: Date.now() },
       sessionTarget: "main",
       payload: { kind: "systemEvent", text: "force" },
     });
 
-    const result = await cron.run(created.id, "force");
+    const result = await cron.run(forceNow.id, "force");
 
     expect(result).toEqual({ ok: true, ran: true });
     expect(enqueueSystemEvent).toHaveBeenCalledWith("force", { agentId: undefined });
-
-    cron.stop();
-    await store.cleanup();
-  });
-
-  it("schedules isolated jobs with next wake time", async () => {
-    const store = await makeStorePath();
-    const cron = new CronService({
-      cronEnabled: true,
-      storePath: store.storePath,
-      log: noopLogger,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeatNow: vi.fn(),
-      runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "ok" }),
-    });
-    await cron.start();
 
     const job = await cron.add({
       name: "isolated",
@@ -142,37 +122,21 @@ describe("Cron issue regressions", () => {
     expect(typeof job.state.nextRunAtMs).toBe("number");
     expect(typeof status.nextWakeAtMs).toBe("number");
 
-    cron.stop();
-    await store.cleanup();
-  });
-
-  it("persists allowUnsafeExternalContent on agentTurn payload patches", async () => {
-    const store = await makeStorePath();
-    const cron = new CronService({
-      cronEnabled: true,
-      storePath: store.storePath,
-      log: noopLogger,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeatNow: vi.fn(),
-      runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "ok" }),
-    });
-    await cron.start();
-
-    const created = await cron.add({
+    const unsafeToggle = await cron.add({
       name: "unsafe toggle",
       schedule: { kind: "every", everyMs: 60_000, anchorMs: Date.now() },
       sessionTarget: "isolated",
       payload: { kind: "agentTurn", message: "hi" },
     });
 
-    const updated = await cron.update(created.id, {
+    const patched = await cron.update(unsafeToggle.id, {
       payload: { kind: "agentTurn", allowUnsafeExternalContent: true },
     });
 
-    expect(updated.payload.kind).toBe("agentTurn");
-    if (updated.payload.kind === "agentTurn") {
-      expect(updated.payload.allowUnsafeExternalContent).toBe(true);
-      expect(updated.payload.message).toBe("hi");
+    expect(patched.payload.kind).toBe("agentTurn");
+    if (patched.payload.kind === "agentTurn") {
+      expect(patched.payload.allowUnsafeExternalContent).toBe(true);
+      expect(patched.payload.message).toBe("hi");
     }
 
     cron.stop();
@@ -304,14 +268,10 @@ describe("Cron issue regressions", () => {
     await store.cleanup();
   });
 
-  it("#13845: one-shot job with lastStatus=skipped does not re-fire on restart", async () => {
+  it("#13845: one-shot jobs with terminal statuses do not re-fire on restart", async () => {
     const store = await makeStorePath();
     const pastAt = Date.parse("2026-02-06T09:00:00.000Z");
-    // Simulate a one-shot job that was previously skipped (e.g. main session busy).
-    // On the old code, runMissedJobs only checked lastStatus === "ok", so a
-    // skipped job would pass through and fire again on every restart.
-    const skippedJob: CronJob = {
-      id: "oneshot-skipped",
+    const baseJob = {
       name: "reminder",
       enabled: true,
       deleteAfterRun: true,
@@ -321,79 +281,46 @@ describe("Cron issue regressions", () => {
       sessionTarget: "main",
       wakeMode: "now",
       payload: { kind: "systemEvent", text: "⏰ Reminder" },
-      state: {
-        nextRunAtMs: pastAt,
-        lastStatus: "skipped",
-        lastRunAtMs: pastAt,
-      },
-    };
-    await fs.writeFile(
-      store.storePath,
-      JSON.stringify({ version: 1, jobs: [skippedJob] }, null, 2),
-      "utf-8",
-    );
+    } as const;
+    for (const [id, state] of [
+      [
+        "oneshot-skipped",
+        {
+          nextRunAtMs: pastAt,
+          lastStatus: "skipped" as const,
+          lastRunAtMs: pastAt,
+        },
+      ],
+      [
+        "oneshot-errored",
+        {
+          nextRunAtMs: pastAt,
+          lastStatus: "error" as const,
+          lastRunAtMs: pastAt,
+          lastError: "heartbeat failed",
+        },
+      ],
+    ]) {
+      const job: CronJob = { id, ...baseJob, state };
+      await fs.writeFile(
+        store.storePath,
+        JSON.stringify({ version: 1, jobs: [job] }, null, 2),
+        "utf-8",
+      );
+      const enqueueSystemEvent = vi.fn();
+      const cron = new CronService({
+        cronEnabled: true,
+        storePath: store.storePath,
+        log: noopLogger,
+        enqueueSystemEvent,
+        requestHeartbeatNow: vi.fn(),
+        runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok" }),
+      });
 
-    const enqueueSystemEvent = vi.fn();
-    const cron = new CronService({
-      cronEnabled: true,
-      storePath: store.storePath,
-      log: noopLogger,
-      enqueueSystemEvent,
-      requestHeartbeatNow: vi.fn(),
-      runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok" }),
-    });
-
-    // start() calls runMissedJobs internally
-    await cron.start();
-
-    // The skipped one-shot job must NOT be re-enqueued
-    expect(enqueueSystemEvent).not.toHaveBeenCalled();
-
-    cron.stop();
-    await store.cleanup();
-  });
-
-  it("#13845: one-shot job with lastStatus=error does not re-fire on restart", async () => {
-    const store = await makeStorePath();
-    const pastAt = Date.parse("2026-02-06T09:00:00.000Z");
-    const errorJob: CronJob = {
-      id: "oneshot-errored",
-      name: "reminder",
-      enabled: true,
-      deleteAfterRun: true,
-      createdAtMs: pastAt - 60_000,
-      updatedAtMs: pastAt,
-      schedule: { kind: "at", at: new Date(pastAt).toISOString() },
-      sessionTarget: "main",
-      wakeMode: "now",
-      payload: { kind: "systemEvent", text: "⏰ Reminder" },
-      state: {
-        nextRunAtMs: pastAt,
-        lastStatus: "error",
-        lastRunAtMs: pastAt,
-        lastError: "heartbeat failed",
-      },
-    };
-    await fs.writeFile(
-      store.storePath,
-      JSON.stringify({ version: 1, jobs: [errorJob] }, null, 2),
-      "utf-8",
-    );
-
-    const enqueueSystemEvent = vi.fn();
-    const cron = new CronService({
-      cronEnabled: true,
-      storePath: store.storePath,
-      log: noopLogger,
-      enqueueSystemEvent,
-      requestHeartbeatNow: vi.fn(),
-      runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok" }),
-    });
-
-    await cron.start();
-    expect(enqueueSystemEvent).not.toHaveBeenCalled();
-
-    cron.stop();
+      await cron.start();
+      expect(enqueueSystemEvent).not.toHaveBeenCalled();
+      cron.stop();
+    }
     await store.cleanup();
   });
 

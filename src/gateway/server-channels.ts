@@ -180,8 +180,12 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
 
   const stopChannel = async (channelId: ChannelId, accountId?: string) => {
     const plugin = getChannelPlugin(channelId);
-    const cfg = loadConfig();
     const store = getStore(channelId);
+    // Fast path: nothing running and no explicit plugin shutdown hook to run.
+    if (!plugin?.gateway?.stopAccount && store.aborts.size === 0 && store.tasks.size === 0) {
+      return;
+    }
+    const cfg = loadConfig();
     const knownIds = new Set<string>([
       ...store.aborts.keys(),
       ...store.tasks.keys(),

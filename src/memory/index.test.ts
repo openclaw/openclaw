@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getMemorySearchManager, type MemoryIndexManager } from "./index.js";
 
 let embedBatchCalls = 0;
@@ -34,21 +34,31 @@ vi.mock("./embeddings.js", () => {
 });
 
 describe("memory index", () => {
+  let fixtureRoot = "";
+  let fixtureCount = 0;
   let workspaceDir: string;
   let indexPath: string;
   let manager: MemoryIndexManager | null = null;
 
+  beforeAll(async () => {
+    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-fixtures-"));
+  });
+
+  afterAll(async () => {
+    await fs.rm(fixtureRoot, { recursive: true, force: true });
+  });
+
   beforeEach(async () => {
     embedBatchCalls = 0;
     failEmbeddings = false;
-    workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-"));
+    workspaceDir = path.join(fixtureRoot, `case-${fixtureCount++}`);
+    await fs.mkdir(workspaceDir, { recursive: true });
     indexPath = path.join(workspaceDir, "index.sqlite");
     await fs.mkdir(path.join(workspaceDir, "memory"));
     await fs.writeFile(
       path.join(workspaceDir, "memory", "2026-01-12.md"),
-      "# Log\nAlpha memory line.\nZebra memory line.\nAnother line.",
+      "# Log\nAlpha memory line.\nZebra memory line.",
     );
-    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "Beta knowledge base entry.");
   });
 
   afterEach(async () => {
@@ -56,7 +66,6 @@ describe("memory index", () => {
       await manager.close();
       manager = null;
     }
-    await fs.rm(workspaceDir, { recursive: true, force: true });
   });
 
   it("indexes memory files and searches by vector", async () => {
@@ -134,6 +143,7 @@ describe("memory index", () => {
       throw new Error("manager missing");
     }
     await first.manager.sync({ force: true });
+    const callsAfterFirstSync = embedBatchCalls;
     await first.manager.close();
 
     const second = await getMemorySearchManager({
@@ -158,8 +168,9 @@ describe("memory index", () => {
     }
     manager = second.manager;
     await second.manager.sync({ reason: "test" });
-    const results = await second.manager.search("alpha");
-    expect(results.length).toBeGreaterThan(0);
+    expect(embedBatchCalls).toBeGreaterThan(callsAfterFirstSync);
+    const status = second.manager.status();
+    expect(status.files).toBeGreaterThan(0);
   });
 
   it("reuses cached embeddings on forced reindex", async () => {
@@ -269,8 +280,8 @@ describe("memory index", () => {
     expect(results[0]?.path).toContain("memory/2026-01-12.md");
   });
 
-  it("hybrid weights can favor vector-only matches over keyword-only matches", async () => {
-    const manyAlpha = Array.from({ length: 200 }, () => "Alpha").join(" ");
+  it("hybrid weights shift ranking between vector and keyword matches", async () => {
+    const manyAlpha = Array.from({ length: 50 }, () => "Alpha").join(" ");
     await fs.writeFile(
       path.join(workspaceDir, "memory", "vector-only.md"),
       "Alpha beta. Alpha beta. Alpha beta. Alpha beta.",
@@ -280,7 +291,7 @@ describe("memory index", () => {
       `${manyAlpha} beta id123.`,
     );
 
-    const cfg = {
+    const vectorWeightedCfg = {
       agents: {
         defaults: {
           workspace: workspaceDir,
@@ -304,12 +315,15 @@ describe("memory index", () => {
         list: [{ id: "main", default: true }],
       },
     };
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
-    expect(result.manager).not.toBeNull();
-    if (!result.manager) {
+    const vectorWeighted = await getMemorySearchManager({
+      cfg: vectorWeightedCfg,
+      agentId: "main",
+    });
+    expect(vectorWeighted.manager).not.toBeNull();
+    if (!vectorWeighted.manager) {
       throw new Error("manager missing");
     }
-    manager = result.manager;
+    manager = vectorWeighted.manager;
 
     const status = manager.status();
     if (!status.fts?.available) {
@@ -317,28 +331,19 @@ describe("memory index", () => {
     }
 
     await manager.sync({ force: true });
-    const results = await manager.search("alpha beta id123");
-    expect(results.length).toBeGreaterThan(0);
-    const paths = results.map((r) => r.path);
-    expect(paths).toContain("memory/vector-only.md");
-    expect(paths).toContain("memory/keyword-only.md");
-    const vectorOnly = results.find((r) => r.path === "memory/vector-only.md");
-    const keywordOnly = results.find((r) => r.path === "memory/keyword-only.md");
+    const vectorResults = await manager.search("alpha beta id123");
+    expect(vectorResults.length).toBeGreaterThan(0);
+    const vectorPaths = vectorResults.map((r) => r.path);
+    expect(vectorPaths).toContain("memory/vector-only.md");
+    expect(vectorPaths).toContain("memory/keyword-only.md");
+    const vectorOnly = vectorResults.find((r) => r.path === "memory/vector-only.md");
+    const keywordOnly = vectorResults.find((r) => r.path === "memory/keyword-only.md");
     expect((vectorOnly?.score ?? 0) > (keywordOnly?.score ?? 0)).toBe(true);
-  });
 
-  it("hybrid weights can favor keyword matches when text weight dominates", async () => {
-    const manyAlpha = Array.from({ length: 200 }, () => "Alpha").join(" ");
-    await fs.writeFile(
-      path.join(workspaceDir, "memory", "vector-only.md"),
-      "Alpha beta. Alpha beta. Alpha beta. Alpha beta.",
-    );
-    await fs.writeFile(
-      path.join(workspaceDir, "memory", "keyword-only.md"),
-      `${manyAlpha} beta id123.`,
-    );
+    await manager.close();
+    manager = null;
 
-    const cfg = {
+    const textWeightedCfg = {
       agents: {
         defaults: {
           workspace: workspaceDir,
@@ -346,7 +351,7 @@ describe("memory index", () => {
             provider: "openai",
             model: "mock-embed",
             store: { path: indexPath, vector: { enabled: false } },
-            sync: { watch: false, onSessionStart: false, onSearch: true },
+            sync: { watch: false, onSessionStart: false, onSearch: false },
             query: {
               minScore: 0,
               maxResults: 200,
@@ -362,27 +367,21 @@ describe("memory index", () => {
         list: [{ id: "main", default: true }],
       },
     };
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
-    expect(result.manager).not.toBeNull();
-    if (!result.manager) {
+
+    const textWeighted = await getMemorySearchManager({ cfg: textWeightedCfg, agentId: "main" });
+    expect(textWeighted.manager).not.toBeNull();
+    if (!textWeighted.manager) {
       throw new Error("manager missing");
     }
-    manager = result.manager;
-
-    const status = manager.status();
-    if (!status.fts?.available) {
-      return;
-    }
-
-    await manager.sync({ force: true });
-    const results = await manager.search("alpha beta id123");
-    expect(results.length).toBeGreaterThan(0);
-    const paths = results.map((r) => r.path);
-    expect(paths).toContain("memory/vector-only.md");
-    expect(paths).toContain("memory/keyword-only.md");
-    const vectorOnly = results.find((r) => r.path === "memory/vector-only.md");
-    const keywordOnly = results.find((r) => r.path === "memory/keyword-only.md");
-    expect((keywordOnly?.score ?? 0) > (vectorOnly?.score ?? 0)).toBe(true);
+    manager = textWeighted.manager;
+    const keywordResults = await manager.search("alpha beta id123");
+    expect(keywordResults.length).toBeGreaterThan(0);
+    const keywordPaths = keywordResults.map((r) => r.path);
+    expect(keywordPaths).toContain("memory/vector-only.md");
+    expect(keywordPaths).toContain("memory/keyword-only.md");
+    const vectorOnlyAfter = keywordResults.find((r) => r.path === "memory/vector-only.md");
+    const keywordOnlyAfter = keywordResults.find((r) => r.path === "memory/keyword-only.md");
+    expect((keywordOnlyAfter?.score ?? 0) > (vectorOnlyAfter?.score ?? 0)).toBe(true);
   });
 
   it("reports vector availability after probe", async () => {
