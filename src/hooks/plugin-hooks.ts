@@ -4,6 +4,7 @@ import type { OpenClawPluginApi } from "../plugins/types.js";
 import type { InternalHookHandler } from "./internal-hooks.js";
 import type { HookEntry } from "./types.js";
 import { shouldIncludeHook } from "./config.js";
+import { validateModulePath, getErrorDescription } from "./security.js";
 import { loadHookEntriesFromDir } from "./workspace.js";
 
 export type PluginHookLoadResult = {
@@ -41,7 +42,22 @@ async function loadHookHandler(
   api: OpenClawPluginApi,
 ): Promise<InternalHookHandler | null> {
   try {
-    const url = pathToFileURL(entry.hook.handlerPath).href;
+    // SECURITY: Validate the plugin hook path before dynamic import
+    // Plugin hooks should be contained within the plugin directory
+    const pluginDir = path.dirname(api.source);
+    const validation = validateModulePath(entry.hook.handlerPath, {
+      allowedBaseDirs: [pluginDir],
+      resolveSymlinks: true,
+    });
+
+    if (!validation.valid) {
+      const errorMsg = `Invalid plugin hook path for '${entry.hook.name}': ${getErrorDescription(validation.reason)}`;
+      api.logger.warn?.(`[security] ${errorMsg}`);
+      return null;
+    }
+
+    // Path is validated - safe to import with cache busting
+    const url = pathToFileURL(validation.path).href;
     const cacheBustedUrl = `${url}?t=${Date.now()}`;
     const mod = (await import(cacheBustedUrl)) as Record<string, unknown>;
     const exportName = entry.metadata?.export ?? "default";

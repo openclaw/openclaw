@@ -9,10 +9,76 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { OpenClawConfig } from "../config/config.js";
 import type { InternalHookHandler } from "./internal-hooks.js";
+import { CONFIG_DIR } from "../utils.js";
+import { resolveBundledHooksDir } from "./bundled-dir.js";
 import { resolveHookConfig } from "./config.js";
 import { shouldIncludeHook } from "./config.js";
 import { registerInternalHook } from "./internal-hooks.js";
+import { validateModulePath, validateExtraHooksDir, getErrorDescription } from "./security.js";
 import { loadWorkspaceHookEntries } from "./workspace.js";
+
+/**
+ * Builds the allowlist of base directories for hook module loading.
+ */
+function buildAllowedBaseDirs(cfg: OpenClawConfig, workspaceDir: string): string[] {
+  const allowedDirs: string[] = [];
+
+  try {
+    const bundledDir = resolveBundledHooksDir();
+    if (bundledDir) {
+      allowedDirs.push(bundledDir);
+    }
+  } catch {
+    // bundled dir not found - continue without it
+  }
+
+  allowedDirs.push(path.join(CONFIG_DIR, "hooks"));
+
+  if (workspaceDir) {
+    allowedDirs.push(path.join(workspaceDir, "hooks"));
+  }
+
+  const extraDirs = cfg.hooks?.internal?.load?.extraDirs ?? [];
+  for (const extraDir of extraDirs) {
+    if (typeof extraDir === "string" && extraDir.trim()) {
+      const validation = validateExtraHooksDir(extraDir.trim());
+      if (validation.valid) {
+        allowedDirs.push(validation.path);
+      } else {
+        console.warn(
+          `[security] Rejected invalid extra hooks directory: ${getErrorDescription(validation.reason)}`,
+        );
+      }
+    }
+  }
+
+  return allowedDirs;
+}
+
+/**
+ * Validates a handler path and imports it as a module.
+ * Rejects paths outside the allowed directories to prevent CWE-94 code injection.
+ */
+async function secureImportHookModule(
+  handlerPath: string,
+  allowedBaseDirs: string[],
+  hookName: string,
+): Promise<Record<string, unknown>> {
+  const validation = validateModulePath(handlerPath, {
+    allowedBaseDirs,
+    resolveSymlinks: true,
+  });
+
+  if (!validation.valid) {
+    const errorMsg = `Invalid hook path for '${hookName}': ${getErrorDescription(validation.reason)}`;
+    console.error(`[security] ${errorMsg}`);
+    throw new Error(errorMsg);
+  }
+
+  const url = pathToFileURL(validation.path).href;
+  const cacheBustedUrl = `${url}?t=${Date.now()}`;
+  return (await import(cacheBustedUrl)) as Record<string, unknown>;
+}
 
 /**
  * Load and register all hook handlers
@@ -37,12 +103,12 @@ export async function loadInternalHooks(
   cfg: OpenClawConfig,
   workspaceDir: string,
 ): Promise<number> {
-  // Check if hooks are enabled
   if (!cfg.hooks?.internal?.enabled) {
     return 0;
   }
 
   let loadedCount = 0;
+  const allowedBaseDirs = buildAllowedBaseDirs(cfg, workspaceDir);
 
   // 1. Load hooks from directories (new system)
   try {
@@ -60,10 +126,11 @@ export async function loadInternalHooks(
       }
 
       try {
-        // Import handler module with cache-busting
-        const url = pathToFileURL(entry.hook.handlerPath).href;
-        const cacheBustedUrl = `${url}?t=${Date.now()}`;
-        const mod = (await import(cacheBustedUrl)) as Record<string, unknown>;
+        const mod = await secureImportHookModule(
+          entry.hook.handlerPath,
+          allowedBaseDirs,
+          entry.hook.name,
+        );
 
         // Get handler function (default or named export)
         const exportName = entry.metadata?.export ?? "default";
@@ -109,34 +176,32 @@ export async function loadInternalHooks(
   const handlers = cfg.hooks.internal.handlers ?? [];
   for (const handlerConfig of handlers) {
     try {
-      // Resolve module path (absolute or relative to cwd)
       const modulePath = path.isAbsolute(handlerConfig.module)
         ? handlerConfig.module
-        : path.join(process.cwd(), handlerConfig.module);
+        : path.join(CONFIG_DIR, "hooks", handlerConfig.module);
 
-      // Import the module with cache-busting to ensure fresh reload
-      const url = pathToFileURL(modulePath).href;
-      const cacheBustedUrl = `${url}?t=${Date.now()}`;
-      const mod = (await import(cacheBustedUrl)) as Record<string, unknown>;
+      const mod = await secureImportHookModule(
+        modulePath,
+        allowedBaseDirs,
+        `legacy-${handlerConfig.event}`,
+      );
 
-      // Get the handler function
       const exportName = handlerConfig.export ?? "default";
       const handler = mod[exportName];
 
       if (typeof handler !== "function") {
-        console.error(`Hook error: Handler '${exportName}' from ${modulePath} is not a function`);
+        console.error(`Hook error: Handler '${exportName}' from legacy config is not a function`);
         continue;
       }
 
-      // Register the handler
       registerInternalHook(handlerConfig.event, handler as InternalHookHandler);
       console.log(
-        `Registered hook (legacy): ${handlerConfig.event} -> ${modulePath}${exportName !== "default" ? `#${exportName}` : ""}`,
+        `Registered hook (legacy): ${handlerConfig.event} -> ${path.basename(handlerConfig.module)}${exportName !== "default" ? `#${exportName}` : ""}`,
       );
       loadedCount++;
     } catch (err) {
       console.error(
-        `Failed to load hook handler from ${handlerConfig.module}:`,
+        `Failed to load legacy hook handler from ${path.basename(handlerConfig.module)}:`,
         err instanceof Error ? err.message : String(err),
       );
     }

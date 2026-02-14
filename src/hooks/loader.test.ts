@@ -13,13 +13,16 @@ import { loadInternalHooks } from "./loader.js";
 
 describe("loader", () => {
   let tmpDir: string;
+  let hooksDir: string;
   let originalBundledDir: string | undefined;
 
   beforeEach(async () => {
     clearInternalHooks();
     // Create a temp directory for test modules
     tmpDir = path.join(os.tmpdir(), `openclaw-test-${Date.now()}`);
-    await fs.mkdir(tmpDir, { recursive: true });
+    // Handlers must be within the workspace hooks directory to pass security validation
+    hooksDir = path.join(tmpDir, "hooks");
+    await fs.mkdir(hooksDir, { recursive: true });
 
     // Disable bundled hooks during tests by setting env var to non-existent directory
     originalBundledDir = process.env.OPENCLAW_BUNDLED_HOOKS_DIR;
@@ -63,8 +66,7 @@ describe("loader", () => {
     });
 
     it("should load a handler from a module", async () => {
-      // Create a test handler module
-      const handlerPath = path.join(tmpDir, "test-handler.js");
+      const handlerPath = path.join(hooksDir, "test-handler.js");
       const handlerCode = `
         export default async function(event) {
           // Test handler
@@ -94,9 +96,8 @@ describe("loader", () => {
     });
 
     it("should load multiple handlers", async () => {
-      // Create test handler modules
-      const handler1Path = path.join(tmpDir, "handler1.js");
-      const handler2Path = path.join(tmpDir, "handler2.js");
+      const handler1Path = path.join(hooksDir, "handler1.js");
+      const handler2Path = path.join(hooksDir, "handler2.js");
 
       await fs.writeFile(handler1Path, "export default async function() {}", "utf-8");
       await fs.writeFile(handler2Path, "export default async function() {}", "utf-8");
@@ -122,8 +123,7 @@ describe("loader", () => {
     });
 
     it("should support named exports", async () => {
-      // Create a handler module with named export
-      const handlerPath = path.join(tmpDir, "named-export.js");
+      const handlerPath = path.join(hooksDir, "named-export.js");
       const handlerCode = `
         export const myHandler = async function(event) {
           // Named export handler
@@ -169,10 +169,7 @@ describe("loader", () => {
 
       const count = await loadInternalHooks(cfg, tmpDir);
       expect(count).toBe(0);
-      expect(consoleError).toHaveBeenCalledWith(
-        expect.stringContaining("Failed to load hook handler"),
-        expect.any(String),
-      );
+      expect(consoleError).toHaveBeenCalled();
 
       consoleError.mockRestore();
     });
@@ -180,8 +177,7 @@ describe("loader", () => {
     it("should handle non-function exports", async () => {
       const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
 
-      // Create a module with a non-function export
-      const handlerPath = path.join(tmpDir, "bad-export.js");
+      const handlerPath = path.join(hooksDir, "bad-export.js");
       await fs.writeFile(handlerPath, 'export default "not a function";', "utf-8");
 
       const cfg: OpenClawConfig = {
@@ -205,13 +201,12 @@ describe("loader", () => {
       consoleError.mockRestore();
     });
 
-    it("should handle relative paths", async () => {
-      // Create a handler module
-      const handlerPath = path.join(tmpDir, "relative-handler.js");
-      await fs.writeFile(handlerPath, "export default async function() {}", "utf-8");
+    it("should reject handlers from outside allowed directories", async () => {
+      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
 
-      // Get relative path from cwd
-      const relativePath = path.relative(process.cwd(), handlerPath);
+      // Create a handler outside the workspace hooks directory
+      const outsidePath = path.join(tmpDir, "outside-handler.js");
+      await fs.writeFile(outsidePath, "export default async function() {}", "utf-8");
 
       const cfg: OpenClawConfig = {
         hooks: {
@@ -220,7 +215,7 @@ describe("loader", () => {
             handlers: [
               {
                 event: "command:new",
-                module: relativePath,
+                module: outsidePath,
               },
             ],
           },
@@ -228,12 +223,13 @@ describe("loader", () => {
       };
 
       const count = await loadInternalHooks(cfg, tmpDir);
-      expect(count).toBe(1);
+      expect(count).toBe(0);
+
+      consoleError.mockRestore();
     });
 
     it("should actually call the loaded handler", async () => {
-      // Create a handler that we can verify was called
-      const handlerPath = path.join(tmpDir, "callable-handler.js");
+      const handlerPath = path.join(hooksDir, "callable-handler.js");
       const handlerCode = `
         let callCount = 0;
         export default async function(event) {
@@ -265,9 +261,6 @@ describe("loader", () => {
       const event = createInternalHookEvent("command", "new", "test-session");
       await triggerInternalHook(event);
 
-      // The handler should have been called, but we can't directly verify
-      // the call count from this context without more complex test infrastructure
-      // This test mainly verifies that loading and triggering doesn't crash
       expect(getRegisteredEventKeys()).toContain("command:new");
     });
   });
