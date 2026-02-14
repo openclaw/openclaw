@@ -44,44 +44,50 @@ export async function updateSessionStoreAfterAgentRun(params: {
   const contextTokens =
     params.contextTokensOverride ?? lookupContextTokens(modelUsed) ?? DEFAULT_CONTEXT_TOKENS;
 
-  const entry = sessionStore[sessionKey] ?? {
-    sessionId,
-    updatedAt: Date.now(),
-  };
-  const next: SessionEntry = {
-    ...entry,
-    sessionId,
-    updatedAt: Date.now(),
-    modelProvider: providerUsed,
-    model: modelUsed,
-    contextTokens,
-  };
-  if (isCliProvider(providerUsed, cfg)) {
-    const cliSessionId = result.meta.agentMeta?.sessionId?.trim();
-    if (cliSessionId) {
-      setCliSessionId(next, providerUsed, cliSessionId);
-    }
-  }
-  next.abortedLastRun = result.meta.aborted ?? false;
-  if (hasNonzeroUsage(usage)) {
-    const input = usage.input ?? 0;
-    const output = usage.output ?? 0;
-    const totalTokens =
-      deriveSessionTotalTokens({
-        usage,
-        contextTokens,
-        promptTokens,
-      }) ?? input;
-    next.inputTokens = input;
-    next.outputTokens = output;
-    next.totalTokens = totalTokens;
-    next.totalTokensFresh = true;
-  }
-  if (compactionsThisRun > 0) {
-    next.compactionCount = (entry.compactionCount ?? 0) + compactionsThisRun;
-  }
-  sessionStore[sessionKey] = next;
+  // Build the updated entry inside the lock's mutator callback so we always
+  // merge against the latest on-disk state.  Previously `next` was computed
+  // outside the lock using a potentially-stale `sessionStore` snapshot, which
+  // could silently overwrite concurrent writes from other agents sharing the
+  // same store file.
   await updateSessionStore(storePath, (store) => {
+    const entry = store[sessionKey] ?? {
+      sessionId,
+      updatedAt: Date.now(),
+    };
+    const next: SessionEntry = {
+      ...entry,
+      sessionId,
+      updatedAt: Date.now(),
+      modelProvider: providerUsed,
+      model: modelUsed,
+      contextTokens,
+    };
+    if (isCliProvider(providerUsed, cfg)) {
+      const cliSessionId = result.meta.agentMeta?.sessionId?.trim();
+      if (cliSessionId) {
+        setCliSessionId(next, providerUsed, cliSessionId);
+      }
+    }
+    next.abortedLastRun = result.meta.aborted ?? false;
+    if (hasNonzeroUsage(usage)) {
+      const input = usage.input ?? 0;
+      const output = usage.output ?? 0;
+      const totalTokens =
+        deriveSessionTotalTokens({
+          usage,
+          contextTokens,
+          promptTokens,
+        }) ?? input;
+      next.inputTokens = input;
+      next.outputTokens = output;
+      next.totalTokens = totalTokens;
+      next.totalTokensFresh = true;
+    }
+    if (compactionsThisRun > 0) {
+      next.compactionCount = (entry.compactionCount ?? 0) + compactionsThisRun;
+    }
     store[sessionKey] = next;
+    // Keep the caller's in-memory snapshot consistent.
+    sessionStore[sessionKey] = next;
   });
 }
