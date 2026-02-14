@@ -111,6 +111,20 @@ function authorizeGatewayMethod(method: string, client: GatewayRequestOptions["c
   if (role === "node") {
     return errorShape(ErrorCodes.INVALID_REQUEST, `unauthorized role: ${role}`);
   }
+  if (role === "collaborator") {
+    // Collaborators are agent-scoped. Start permissive only for agent list/files;
+    // agent-targeted RPCs must additionally enforce scopes in their handlers.
+    if (
+      method === "agents.list" ||
+      method === "agents.create" ||
+      method === "agents.update" ||
+      method === "agents.delete" ||
+      method.startsWith("agents.files.")
+    ) {
+      return null;
+    }
+    return errorShape(ErrorCodes.INVALID_REQUEST, `unauthorized role: ${role}`);
+  }
   if (role !== "operator") {
     return errorShape(ErrorCodes.INVALID_REQUEST, `unauthorized role: ${role}`);
   }

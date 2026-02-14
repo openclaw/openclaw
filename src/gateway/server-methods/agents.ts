@@ -41,6 +41,11 @@ import {
   validateAgentsListParams,
   validateAgentsUpdateParams,
 } from "../protocol/index.js";
+import {
+  connectionHasAgentAccess,
+  connectionIsOwner,
+  filterAgentsForConnection,
+} from "../scope-utils.js";
 import { listAgentsForGateway } from "../session-utils.js";
 
 const BOOTSTRAP_FILE_NAMES = [
@@ -165,7 +170,7 @@ async function moveToTrashBestEffort(pathname: string): Promise<void> {
 }
 
 export const agentsHandlers: GatewayRequestHandlers = {
-  "agents.list": ({ params, respond }) => {
+  "agents.list": ({ params, respond, client }) => {
     if (!validateAgentsListParams(params)) {
       respond(
         false,
@@ -180,9 +185,31 @@ export const agentsHandlers: GatewayRequestHandlers = {
 
     const cfg = loadConfig();
     const result = listAgentsForGateway(cfg);
-    respond(true, result, undefined);
+    const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+    const filteredAgents = filterAgentsForConnection(result.agents, scopes);
+    const hasDefault = filteredAgents.some((agent) => agent.id === result.defaultId);
+    const nextDefaultId = hasDefault
+      ? result.defaultId
+      : filteredAgents.length > 0
+        ? filteredAgents[0].id
+        : result.defaultId;
+    const hasMainKey = filteredAgents.some((agent) => agent.id === result.mainKey);
+    const nextMainKey =
+      result.mainKey && !hasMainKey && filteredAgents.length > 0
+        ? filteredAgents[0].id
+        : result.mainKey;
+    respond(
+      true,
+      { ...result, defaultId: nextDefaultId, mainKey: nextMainKey, agents: filteredAgents },
+      undefined,
+    );
   },
-  "agents.create": async ({ params, respond }) => {
+  "agents.create": async ({ params, respond, client }) => {
+    const role = typeof client?.connect?.role === "string" ? client.connect.role : undefined;
+    if (!connectionIsOwner(role)) {
+      respond(false, undefined, errorShape(ErrorCodes.FORBIDDEN, "forbidden"));
+      return;
+    }
     if (!validateAgentsCreateParams(params)) {
       respond(
         false,
@@ -254,7 +281,12 @@ export const agentsHandlers: GatewayRequestHandlers = {
 
     respond(true, { ok: true, agentId, name: rawName, workspace: workspaceDir }, undefined);
   },
-  "agents.update": async ({ params, respond }) => {
+  "agents.update": async ({ params, respond, client }) => {
+    const role = typeof client?.connect?.role === "string" ? client.connect.role : undefined;
+    if (!connectionIsOwner(role)) {
+      respond(false, undefined, errorShape(ErrorCodes.FORBIDDEN, "forbidden"));
+      return;
+    }
     if (!validateAgentsUpdateParams(params)) {
       respond(
         false,
@@ -313,7 +345,12 @@ export const agentsHandlers: GatewayRequestHandlers = {
 
     respond(true, { ok: true, agentId }, undefined);
   },
-  "agents.delete": async ({ params, respond }) => {
+  "agents.delete": async ({ params, respond, client }) => {
+    const role = typeof client?.connect?.role === "string" ? client.connect.role : undefined;
+    if (!connectionIsOwner(role)) {
+      respond(false, undefined, errorShape(ErrorCodes.FORBIDDEN, "forbidden"));
+      return;
+    }
     if (!validateAgentsDeleteParams(params)) {
       respond(
         false,
@@ -365,7 +402,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
 
     respond(true, { ok: true, agentId, removedBindings: result.removedBindings }, undefined);
   },
-  "agents.files.list": async ({ params, respond }) => {
+  "agents.files.list": async ({ params, respond, client }) => {
     if (!validateAgentsFilesListParams(params)) {
       respond(
         false,
@@ -385,11 +422,16 @@ export const agentsHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown agent id"));
       return;
     }
+    const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+    if (!connectionHasAgentAccess(scopes, agentId)) {
+      respond(false, undefined, errorShape(ErrorCodes.FORBIDDEN, "forbidden"));
+      return;
+    }
     const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
     const files = await listAgentFiles(workspaceDir);
     respond(true, { agentId, workspace: workspaceDir, files }, undefined);
   },
-  "agents.files.get": async ({ params, respond }) => {
+  "agents.files.get": async ({ params, respond, client }) => {
     if (!validateAgentsFilesGetParams(params)) {
       respond(
         false,
@@ -407,6 +449,11 @@ export const agentsHandlers: GatewayRequestHandlers = {
     const agentId = resolveAgentIdOrError(String(params.agentId ?? ""), cfg);
     if (!agentId) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown agent id"));
+      return;
+    }
+    const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+    if (!connectionHasAgentAccess(scopes, agentId)) {
+      respond(false, undefined, errorShape(ErrorCodes.FORBIDDEN, "forbidden"));
       return;
     }
     const name = String(params.name ?? "").trim();
@@ -451,7 +498,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
       undefined,
     );
   },
-  "agents.files.set": async ({ params, respond }) => {
+  "agents.files.set": async ({ params, respond, client }) => {
     if (!validateAgentsFilesSetParams(params)) {
       respond(
         false,
@@ -469,6 +516,11 @@ export const agentsHandlers: GatewayRequestHandlers = {
     const agentId = resolveAgentIdOrError(String(params.agentId ?? ""), cfg);
     if (!agentId) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown agent id"));
+      return;
+    }
+    const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+    if (!connectionHasAgentAccess(scopes, agentId)) {
+      respond(false, undefined, errorShape(ErrorCodes.FORBIDDEN, "forbidden"));
       return;
     }
     const name = String(params.name ?? "").trim();
