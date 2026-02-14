@@ -786,6 +786,10 @@
     {
       "source": "/platforms/northflank",
       "destination": "/install/northflank"
+    },
+    {
+      "source": "/gateway/trusted-proxy",
+      "destination": "/gateway/trusted-proxy-auth"
     }
   ],
   "navigation": {
@@ -1106,6 +1110,7 @@
                       "gateway/configuration-reference",
                       "gateway/configuration-examples",
                       "gateway/authentication",
+                      "gateway/trusted-proxy-auth",
                       "gateway/health",
                       "gateway/heartbeat",
                       "gateway/doctor",
@@ -1285,7 +1290,7 @@
               },
               {
                 "group": "Contributing",
-                "pages": ["help/submitting-a-pr", "help/submitting-an-issue", "ci"]
+                "pages": ["ci"]
               },
               {
                 "group": "Docs meta",
@@ -1811,10 +1816,6 @@
               {
                 "group": "开发者设置",
                 "pages": ["zh-CN/start/setup"]
-              },
-              {
-                "group": "贡献",
-                "pages": ["zh-CN/help/submitting-a-pr", "zh-CN/help/submitting-an-issue"]
               },
               {
                 "group": "文档元信息",

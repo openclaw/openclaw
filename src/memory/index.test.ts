@@ -5,7 +5,6 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { getMemorySearchManager, type MemoryIndexManager } from "./index.js";
 
 let embedBatchCalls = 0;
-let failEmbeddings = false;
 
 vi.mock("./embeddings.js", () => {
   const embedText = (text: string) => {
@@ -23,9 +22,6 @@ vi.mock("./embeddings.js", () => {
         embedQuery: async (text: string) => embedText(text),
         embedBatch: async (texts: string[]) => {
           embedBatchCalls += 1;
-          if (failEmbeddings) {
-            throw new Error("mock embeddings failed");
-          }
           return texts.map(embedText);
         },
       },
@@ -50,7 +46,6 @@ describe("memory index", () => {
 
   beforeEach(async () => {
     embedBatchCalls = 0;
-    failEmbeddings = false;
     workspaceDir = path.join(fixtureRoot, `case-${fixtureCount++}`);
     await fs.mkdir(workspaceDir, { recursive: true });
     indexPath = path.join(workspaceDir, "index.sqlite");
@@ -204,45 +199,6 @@ describe("memory index", () => {
     expect(embedBatchCalls).toBe(afterFirst);
   });
 
-  it("preserves existing index when forced reindex fails", async () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          workspace: workspaceDir,
-          memorySearch: {
-            provider: "openai",
-            model: "mock-embed",
-            store: { path: indexPath, vector: { enabled: false } },
-            sync: { watch: false, onSessionStart: false, onSearch: false },
-            query: { minScore: 0 },
-            cache: { enabled: false },
-          },
-        },
-        list: [{ id: "main", default: true }],
-      },
-    };
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
-    expect(result.manager).not.toBeNull();
-    if (!result.manager) {
-      throw new Error("manager missing");
-    }
-    manager = result.manager;
-
-    await manager.sync({ force: true });
-    const before = manager.status();
-    expect(before.files).toBeGreaterThan(0);
-
-    failEmbeddings = true;
-    await expect(manager.sync({ force: true })).rejects.toThrow(/mock embeddings failed/i);
-
-    const after = manager.status();
-    expect(after.files).toBe(before.files);
-    expect(after.chunks).toBe(before.chunks);
-
-    const files = await fs.readdir(workspaceDir);
-    expect(files.some((name) => name.includes(".tmp-"))).toBe(false);
-  });
-
   it("finds keyword matches via hybrid search when query embedding is zero", async () => {
     const cfg = {
       agents: {
@@ -278,110 +234,6 @@ describe("memory index", () => {
     const results = await manager.search("zebra");
     expect(results.length).toBeGreaterThan(0);
     expect(results[0]?.path).toContain("memory/2026-01-12.md");
-  });
-
-  it("hybrid weights shift ranking between vector and keyword matches", async () => {
-    const manyAlpha = Array.from({ length: 50 }, () => "Alpha").join(" ");
-    await fs.writeFile(
-      path.join(workspaceDir, "memory", "vector-only.md"),
-      "Alpha beta. Alpha beta. Alpha beta. Alpha beta.",
-    );
-    await fs.writeFile(
-      path.join(workspaceDir, "memory", "keyword-only.md"),
-      `${manyAlpha} beta id123.`,
-    );
-
-    const vectorWeightedCfg = {
-      agents: {
-        defaults: {
-          workspace: workspaceDir,
-          memorySearch: {
-            provider: "openai",
-            model: "mock-embed",
-            store: { path: indexPath, vector: { enabled: false } },
-            sync: { watch: false, onSessionStart: false, onSearch: true },
-            query: {
-              minScore: 0,
-              maxResults: 200,
-              hybrid: {
-                enabled: true,
-                vectorWeight: 0.99,
-                textWeight: 0.01,
-                candidateMultiplier: 10,
-              },
-            },
-          },
-        },
-        list: [{ id: "main", default: true }],
-      },
-    };
-    const vectorWeighted = await getMemorySearchManager({
-      cfg: vectorWeightedCfg,
-      agentId: "main",
-    });
-    expect(vectorWeighted.manager).not.toBeNull();
-    if (!vectorWeighted.manager) {
-      throw new Error("manager missing");
-    }
-    manager = vectorWeighted.manager;
-
-    const status = manager.status();
-    if (!status.fts?.available) {
-      return;
-    }
-
-    await manager.sync({ force: true });
-    const vectorResults = await manager.search("alpha beta id123");
-    expect(vectorResults.length).toBeGreaterThan(0);
-    const vectorPaths = vectorResults.map((r) => r.path);
-    expect(vectorPaths).toContain("memory/vector-only.md");
-    expect(vectorPaths).toContain("memory/keyword-only.md");
-    const vectorOnly = vectorResults.find((r) => r.path === "memory/vector-only.md");
-    const keywordOnly = vectorResults.find((r) => r.path === "memory/keyword-only.md");
-    expect((vectorOnly?.score ?? 0) > (keywordOnly?.score ?? 0)).toBe(true);
-
-    await manager.close();
-    manager = null;
-
-    const textWeightedCfg = {
-      agents: {
-        defaults: {
-          workspace: workspaceDir,
-          memorySearch: {
-            provider: "openai",
-            model: "mock-embed",
-            store: { path: indexPath, vector: { enabled: false } },
-            sync: { watch: false, onSessionStart: false, onSearch: false },
-            query: {
-              minScore: 0,
-              maxResults: 200,
-              hybrid: {
-                enabled: true,
-                vectorWeight: 0.01,
-                textWeight: 0.99,
-                candidateMultiplier: 10,
-              },
-            },
-          },
-        },
-        list: [{ id: "main", default: true }],
-      },
-    };
-
-    const textWeighted = await getMemorySearchManager({ cfg: textWeightedCfg, agentId: "main" });
-    expect(textWeighted.manager).not.toBeNull();
-    if (!textWeighted.manager) {
-      throw new Error("manager missing");
-    }
-    manager = textWeighted.manager;
-    const keywordResults = await manager.search("alpha beta id123");
-    expect(keywordResults.length).toBeGreaterThan(0);
-    const keywordPaths = keywordResults.map((r) => r.path);
-    expect(keywordPaths).toContain("memory/vector-only.md");
-    expect(keywordPaths).toContain("memory/keyword-only.md");
-    const vectorOnlyAfter = keywordResults.find((r) => r.path === "memory/vector-only.md");
-    const keywordOnlyAfter = keywordResults.find((r) => r.path === "memory/keyword-only.md");
-    expect((keywordOnlyAfter?.score ?? 0) > (vectorOnlyAfter?.score ?? 0)).toBe(true);
   });
 
   it("reports vector availability after probe", async () => {

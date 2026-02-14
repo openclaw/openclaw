@@ -30,7 +30,22 @@ describe("memory indexing with OpenAI batches", () => {
   let workspaceDir: string;
   let indexPath: string;
   let manager: MemoryIndexManager | null = null;
-  let setTimeoutSpy: ReturnType<typeof vi.spyOn>;
+
+  function useFastShortTimeouts() {
+    const realSetTimeout = setTimeout;
+    const spy = vi.spyOn(global, "setTimeout").mockImplementation(((
+      handler: TimerHandler,
+      timeout?: number,
+      ...args: unknown[]
+    ) => {
+      const delay = typeof timeout === "number" ? timeout : 0;
+      if (delay > 0 && delay <= 2000) {
+        return realSetTimeout(handler, 0, ...args);
+      }
+      return realSetTimeout(handler, delay, ...args);
+    }) as typeof setTimeout);
+    return () => spy.mockRestore();
+  }
 
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-batch-"));
@@ -46,18 +61,6 @@ describe("memory indexing with OpenAI batches", () => {
     embedBatch.mockImplementation(async (texts: string[]) =>
       texts.map((_text, index) => [index + 1, 0, 0]),
     );
-    const realSetTimeout = setTimeout;
-    setTimeoutSpy = vi.spyOn(global, "setTimeout").mockImplementation(((
-      handler: TimerHandler,
-      timeout?: number,
-      ...args: unknown[]
-    ) => {
-      const delay = typeof timeout === "number" ? timeout : 0;
-      if (delay > 0 && delay <= 2000) {
-        return realSetTimeout(handler, 0, ...args);
-      }
-      return realSetTimeout(handler, delay, ...args);
-    }) as typeof setTimeout);
     workspaceDir = path.join(fixtureRoot, `case-${++caseId}`);
     indexPath = path.join(workspaceDir, "index.sqlite");
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
@@ -65,7 +68,6 @@ describe("memory indexing with OpenAI batches", () => {
 
   afterEach(async () => {
     vi.unstubAllGlobals();
-    setTimeoutSpy.mockRestore();
     if (manager) {
       await manager.close();
       manager = null;
@@ -146,9 +148,9 @@ describe("memory indexing with OpenAI batches", () => {
           memorySearch: {
             provider: "openai",
             model: "text-embedding-3-small",
-            store: { path: indexPath },
+            store: { path: indexPath, vector: { enabled: false } },
             sync: { watch: false, onSessionStart: false, onSearch: false },
-            query: { minScore: 0 },
+            query: { minScore: 0, hybrid: { enabled: false } },
             remote: { batch: { enabled: true, wait: true, pollIntervalMs: 1 } },
           },
         },
@@ -180,6 +182,7 @@ describe("memory indexing with OpenAI batches", () => {
   });
 
   it("retries OpenAI batch create on transient failures", async () => {
+    const restoreTimeouts = useFastShortTimeouts();
     const content = ["retry", "the", "batch"].join("\n\n");
     await fs.writeFile(path.join(workspaceDir, "memory", "2026-01-08.md"), content);
 
@@ -258,9 +261,9 @@ describe("memory indexing with OpenAI batches", () => {
           memorySearch: {
             provider: "openai",
             model: "text-embedding-3-small",
-            store: { path: indexPath },
+            store: { path: indexPath, vector: { enabled: false } },
             sync: { watch: false, onSessionStart: false, onSearch: false },
-            query: { minScore: 0 },
+            query: { minScore: 0, hybrid: { enabled: false } },
             remote: { batch: { enabled: true, wait: true, pollIntervalMs: 1 } },
           },
         },
@@ -268,17 +271,21 @@ describe("memory indexing with OpenAI batches", () => {
       },
     };
 
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
-    expect(result.manager).not.toBeNull();
-    if (!result.manager) {
-      throw new Error("manager missing");
-    }
-    manager = result.manager;
-    await manager.sync({ force: true });
+    try {
+      const result = await getMemorySearchManager({ cfg, agentId: "main" });
+      expect(result.manager).not.toBeNull();
+      if (!result.manager) {
+        throw new Error("manager missing");
+      }
+      manager = result.manager;
+      await manager.sync({ force: true });
 
-    const status = manager.status();
-    expect(status.chunks).toBeGreaterThan(0);
-    expect(batchCreates).toBe(2);
+      const status = manager.status();
+      expect(status.chunks).toBeGreaterThan(0);
+      expect(batchCreates).toBe(2);
+    } finally {
+      restoreTimeouts();
+    }
   });
 
   it("tracks batch failures, resets on success, and disables after repeated failures", async () => {
@@ -319,7 +326,7 @@ describe("memory indexing with OpenAI batches", () => {
       }
       if (url.endsWith("/batches")) {
         if (mode === "fail") {
-          return new Response("batch failed", { status: 500 });
+          return new Response("batch failed", { status: 400 });
         }
         return new Response(JSON.stringify({ id: "batch_1", status: "in_progress" }), {
           status: 200,
@@ -359,9 +366,9 @@ describe("memory indexing with OpenAI batches", () => {
           memorySearch: {
             provider: "openai",
             model: "text-embedding-3-small",
-            store: { path: indexPath },
+            store: { path: indexPath, vector: { enabled: false } },
             sync: { watch: false, onSessionStart: false, onSearch: false },
-            query: { minScore: 0 },
+            query: { minScore: 0, hybrid: { enabled: false } },
             remote: { batch: { enabled: true, wait: true, pollIntervalMs: 1 } },
           },
         },

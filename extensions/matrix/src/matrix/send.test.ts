@@ -2,6 +2,12 @@ import type { PluginRuntime } from "openclaw/plugin-sdk";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { setMatrixRuntime } from "../runtime.js";
 
+vi.mock("music-metadata", () => ({
+  // `resolveMediaDurationMs` lazily imports `music-metadata`; in tests we don't
+  // need real duration parsing and the real module is expensive to load.
+  parseBuffer: vi.fn().mockResolvedValue({ format: {} }),
+}));
+
 vi.mock("@vector-im/matrix-bot-sdk", () => ({
   ConsoleLogger: class {
     trace = vi.fn();
@@ -65,12 +71,12 @@ const makeClient = () => {
   return { client, sendMessage, uploadContent };
 };
 
-describe("sendMessageMatrix media", () => {
-  beforeAll(async () => {
-    setMatrixRuntime(runtimeStub);
-    ({ sendMessageMatrix } = await import("./send.js"));
-  });
+beforeAll(async () => {
+  setMatrixRuntime(runtimeStub);
+  ({ sendMessageMatrix } = await import("./send.js"));
+});
 
+describe("sendMessageMatrix media", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mediaKindFromMimeMock.mockReturnValue("image");
@@ -200,11 +206,6 @@ describe("sendMessageMatrix media", () => {
 });
 
 describe("sendMessageMatrix threads", () => {
-  beforeAll(async () => {
-    setMatrixRuntime(runtimeStub);
-    ({ sendMessageMatrix } = await import("./send.js"));
-  });
-
   beforeEach(() => {
     vi.clearAllMocks();
     setMatrixRuntime(runtimeStub);
