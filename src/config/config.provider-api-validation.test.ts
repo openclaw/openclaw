@@ -25,7 +25,14 @@ describe("ModelProviderSchema api field validation", () => {
         (i) => i.path.includes("api") && i.message.includes('Missing "api" field'),
       );
       expect(apiIssue).toBeDefined();
+      // Verify all valid API types are listed (pulled from ModelApiSchema at runtime)
       expect(apiIssue!.message).toContain("openai-completions");
+      expect(apiIssue!.message).toContain("openai-responses");
+      expect(apiIssue!.message).toContain("anthropic-messages");
+      expect(apiIssue!.message).toContain("google-generative-ai");
+      expect(apiIssue!.message).toContain("github-copilot");
+      expect(apiIssue!.message).toContain("bedrock-converse-stream");
+      expect(apiIssue!.message).toContain("ollama");
     }
   });
 

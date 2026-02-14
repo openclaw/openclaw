@@ -97,7 +97,7 @@ export function resolveModel(
       const fallbackModel: Model<Api> = normalizeModelCompat({
         id: modelId,
         name: modelId,
-        api: providerCfg?.api ?? "openai-responses",
+        api: providerCfg?.api ?? "openai-completions",
         provider,
         baseUrl: providerCfg?.baseUrl,
         reasoning: false,
