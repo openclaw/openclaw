@@ -21,7 +21,6 @@ async function runMonitorWithMocks(
   const { monitorSignalProvider } = await import("./monitor.js");
   return monitorSignalProvider(opts);
 }
-
 describe("monitorSignalProvider tool results", () => {
   it("pairs uuid-only senders with a uuid allowlist entry", async () => {
     setSignalToolResultTestConfig({
