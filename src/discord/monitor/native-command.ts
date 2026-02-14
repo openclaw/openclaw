@@ -543,11 +543,10 @@ async function dispatchDiscordCommandInteraction(params: {
   const memberRoleIds = Array.isArray(interaction.rawData.member?.roles)
     ? interaction.rawData.member.roles.map((roleId: string) => String(roleId))
     : [];
-  const ownerAllowList = normalizeDiscordAllowList(discordConfig?.dm?.allowFrom ?? [], [
-    "discord:",
-    "user:",
-    "pk:",
-  ]);
+  const ownerAllowList = normalizeDiscordAllowList(
+    discordConfig?.allowFrom ?? discordConfig?.dm?.allowFrom ?? [],
+    ["discord:", "user:", "pk:"],
+  );
   const ownerOk =
     ownerAllowList && user
       ? allowListMatches(ownerAllowList, {
@@ -616,7 +615,7 @@ async function dispatchDiscordCommandInteraction(params: {
     }
   }
   const dmEnabled = discordConfig?.dm?.enabled ?? true;
-  const dmPolicy = discordConfig?.dm?.policy ?? "pairing";
+  const dmPolicy = discordConfig?.dmPolicy ?? discordConfig?.dm?.policy ?? "pairing";
   let commandAuthorized = true;
   if (isDirectMessage) {
     if (!dmEnabled || dmPolicy === "disabled") {
@@ -625,7 +624,10 @@ async function dispatchDiscordCommandInteraction(params: {
     }
     if (dmPolicy !== "open") {
       const storeAllowFrom = await readChannelAllowFromStore("discord").catch(() => []);
-      const effectiveAllowFrom = [...(discordConfig?.dm?.allowFrom ?? []), ...storeAllowFrom];
+      const effectiveAllowFrom = [
+        ...(discordConfig?.allowFrom ?? discordConfig?.dm?.allowFrom ?? []),
+        ...storeAllowFrom,
+      ];
       const allowList = normalizeDiscordAllowList(effectiveAllowFrom, ["discord:", "user:", "pk:"]);
       const permitted = allowList
         ? allowListMatches(allowList, {
