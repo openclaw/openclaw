@@ -146,8 +146,8 @@ describe("web auto-reply", () => {
 
     const smallPng = await sharp({
       create: {
-        width: 200,
-        height: 200,
+        width: 64,
+        height: 64,
         channels: 3,
         background: { r: 0, g: 255, b: 0 },
       },
@@ -251,8 +251,8 @@ describe("web auto-reply", () => {
 
     const bigPng = await sharp({
       create: {
-        width: 3200,
-        height: 3200,
+        width: 2000,
+        height: 2000,
         channels: 3,
         background: { r: 255, g: 0, b: 0 },
       },
