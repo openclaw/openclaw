@@ -176,10 +176,9 @@ async function invokeAgentSkill(params: {
       extraSystemPrompt: agentContext,
       // Include skill invocation hint in provenance
       inputProvenance: {
-        kind: "tool_invocation" as const,
+        kind: "inter_session" as const,
+        sourceSessionKey: params.requesterSessionKey,
         sourceTool: "debate_call",
-        skill: params.skill,
-        mode: params.mode,
       },
     },
     timeoutMs: 10_000,
