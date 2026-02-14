@@ -203,7 +203,11 @@ export async function prepareSlackMessage(params: {
   const isThreadReply = threadContext.isThreadReply;
   const threadKeys = resolveThreadSessionKeys({
     baseSessionKey,
-    threadId: isThreadReply ? threadTs : undefined,
+    threadId: isThreadReply
+      ? threadTs
+      : ctx.replyToMode === "all"
+        ? threadContext.messageTs
+        : undefined,
     parentSessionKey: isThreadReply && ctx.threadInheritParent ? baseSessionKey : undefined,
   });
   const sessionKey = threadKeys.sessionKey;

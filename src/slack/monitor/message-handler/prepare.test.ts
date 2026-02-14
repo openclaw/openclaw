@@ -467,6 +467,126 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared!.ctxPayload.Body).not.toContain("thread_ts");
   });
 
+  it("uses per-thread session key for top-level DMs when replyToMode=all", async () => {
+    const slackCtx = createThreadSlackCtx({
+      cfg: {
+        channels: { slack: { enabled: true, replyToMode: "all" } },
+      } as OpenClawConfig,
+      replies: vi.fn(),
+    });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
+    const account = createThreadAccount();
+
+    const prepared1 = await prepareSlackMessage({
+      ctx: slackCtx,
+      account,
+      message: {
+        channel: "D123",
+        channel_type: "im",
+        user: "U1",
+        text: "What is the weather?",
+        ts: "1770865253.355799",
+      } as SlackMessageEvent,
+      opts: { source: "message" },
+    });
+
+    const prepared2 = await prepareSlackMessage({
+      ctx: slackCtx,
+      account,
+      message: {
+        channel: "D123",
+        channel_type: "im",
+        user: "U1",
+        text: "Check my Amazon orders",
+        ts: "1770866000.000000",
+      } as SlackMessageEvent,
+      opts: { source: "message" },
+    });
+
+    expect(prepared1).toBeTruthy();
+    expect(prepared2).toBeTruthy();
+
+    const sessionKey1 = prepared1!.ctxPayload.SessionKey;
+    const sessionKey2 = prepared2!.ctxPayload.SessionKey;
+    expect(sessionKey1).not.toBe(sessionKey2);
+    expect(sessionKey1).toContain(":thread:1770865253.355799");
+    expect(sessionKey2).toContain(":thread:1770866000.000000");
+  });
+
+  it("shares session key between top-level message and its thread reply when replyToMode=all", async () => {
+    const replies = vi.fn().mockResolvedValue({
+      messages: [{ text: "What is the weather?", user: "U1", ts: "1770865253.355799" }],
+    });
+    const slackCtx = createThreadSlackCtx({
+      cfg: {
+        channels: { slack: { enabled: true, replyToMode: "all" } },
+      } as OpenClawConfig,
+      replies,
+    });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
+    const account = createThreadAccount();
+
+    const preparedTop = await prepareSlackMessage({
+      ctx: slackCtx,
+      account,
+      message: {
+        channel: "D123",
+        channel_type: "im",
+        user: "U1",
+        text: "What is the weather?",
+        ts: "1770865253.355799",
+      } as SlackMessageEvent,
+      opts: { source: "message" },
+    });
+
+    const preparedReply = await prepareSlackMessage({
+      ctx: slackCtx,
+      account,
+      message: {
+        channel: "D123",
+        channel_type: "im",
+        user: "U1",
+        text: "What about tomorrow?",
+        ts: "1770865400.000000",
+        thread_ts: "1770865253.355799",
+        parent_user_id: "B1",
+      } as SlackMessageEvent,
+      opts: { source: "message" },
+    });
+
+    expect(preparedTop).toBeTruthy();
+    expect(preparedReply).toBeTruthy();
+
+    expect(preparedTop!.ctxPayload.SessionKey).toBe(preparedReply!.ctxPayload.SessionKey);
+    expect(preparedTop!.ctxPayload.SessionKey).toContain(":thread:1770865253.355799");
+  });
+
+  it("does not use per-thread session key when replyToMode is off", async () => {
+    const prepared1 = await prepareWithDefaultCtx({
+      channel: "D123",
+      channel_type: "im",
+      user: "U1",
+      text: "first question",
+      ts: "1.000",
+    } as SlackMessageEvent);
+
+    const prepared2 = await prepareWithDefaultCtx({
+      channel: "D123",
+      channel_type: "im",
+      user: "U1",
+      text: "second question",
+      ts: "2.000",
+    } as SlackMessageEvent);
+
+    expect(prepared1).toBeTruthy();
+    expect(prepared2).toBeTruthy();
+
+    expect(prepared1!.ctxPayload.SessionKey).toBe(prepared2!.ctxPayload.SessionKey);
+    expect(prepared1!.ctxPayload.SessionKey).not.toContain(":thread:");
+  });
+
   it("excludes thread metadata when thread_ts equals ts without parent_user_id", async () => {
     const message: SlackMessageEvent = {
       channel: "D123",
