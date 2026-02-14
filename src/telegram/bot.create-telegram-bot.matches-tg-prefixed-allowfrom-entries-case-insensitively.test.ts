@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   getLoadConfigMock,
   getOnHandler,
+  makeForumGroupMessageCtx,
   onSpy,
   replySpy,
   sendChatActionSpy,
@@ -118,23 +119,7 @@ describe("createTelegramBot", () => {
     createTelegramBot({ token: "tok" });
     const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
 
-    await handler({
-      message: {
-        chat: {
-          id: -1001234567890,
-          type: "supergroup",
-          title: "Forum Group",
-          is_forum: true,
-        },
-        from: { id: 12345, username: "testuser" },
-        text: "hello",
-        date: 1736380800,
-        message_id: 42,
-        message_thread_id: 99,
-      },
-      me: { username: "openclaw_bot" },
-      getFile: async () => ({ download: async () => new Uint8Array() }),
-    });
+    await handler(makeForumGroupMessageCtx({ threadId: 99 }));
 
     expect(replySpy).toHaveBeenCalledTimes(1);
     const payload = replySpy.mock.calls[0][0];
@@ -163,22 +148,7 @@ describe("createTelegramBot", () => {
     createTelegramBot({ token: "tok" });
     const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
 
-    await handler({
-      message: {
-        chat: {
-          id: -1001234567890,
-          type: "supergroup",
-          title: "Forum Group",
-          is_forum: true,
-        },
-        from: { id: 12345, username: "testuser" },
-        text: "hello",
-        date: 1736380800,
-        message_id: 42,
-      },
-      me: { username: "openclaw_bot" },
-      getFile: async () => ({ download: async () => new Uint8Array() }),
-    });
+    await handler(makeForumGroupMessageCtx({ threadId: undefined }));
 
     expect(replySpy).toHaveBeenCalledTimes(1);
     expect(sendChatActionSpy).toHaveBeenCalledWith(-1001234567890, "typing", {
