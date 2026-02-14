@@ -7,5 +7,9 @@ export function resolveTelegramAllowedUpdates(): ReadonlyArray<TelegramUpdateTyp
   if (!updates.includes("message_reaction")) {
     updates.push("message_reaction");
   }
+  // Explicitly allow edited_message updates
+  if (!updates.includes("edited_message")) {
+    updates.push("edited_message");
+  }
   return updates;
 }
