@@ -16,6 +16,8 @@ export type ChatEvent = {
   state: "delta" | "final" | "aborted" | "error";
   message?: unknown;
   errorMessage?: string;
+  /** When true, the assistant reply was a silent token (NO_REPLY) and should not be displayed. */
+  silent?: boolean;
 };
 
 export type AgentEvent = {

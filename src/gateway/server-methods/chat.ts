@@ -8,6 +8,7 @@ import { resolveThinkingDefault } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
+import { isSilentReplyText } from "../../auto-reply/tokens.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
@@ -232,7 +233,29 @@ export const chatHandlers: GatewayRequestHandlers = {
     const requested = typeof limit === "number" ? limit : defaultLimit;
     const max = Math.min(hardMax, requested);
     const sliced = rawMessages.length > max ? rawMessages.slice(-max) : rawMessages;
-    const sanitized = stripEnvelopeFromMessages(sliced);
+    const sanitized = stripEnvelopeFromMessages(sliced).filter((msg) => {
+      if (!msg || typeof msg !== "object") {
+        return true;
+      }
+      const m = msg as Record<string, unknown>;
+      if (m.role !== "assistant") {
+        return true;
+      }
+      const content = m.content;
+      if (typeof content === "string") {
+        return !isSilentReplyText(content.trim());
+      }
+      if (Array.isArray(content)) {
+        const textBlocks = content.filter(
+          (b): b is { type: string; text: string } =>
+            !!b && typeof b === "object" && (b as Record<string, unknown>).type === "text",
+        );
+        if (textBlocks.length === 1 && isSilentReplyText(textBlocks[0].text.trim())) {
+          return false;
+        }
+      }
+      return true;
+    });
     const capped = capArrayByJsonBytes(sanitized, getMaxChatHistoryMessagesBytes()).items;
     let thinkingLevel = entry?.thinkingLevel;
     if (!thinkingLevel) {

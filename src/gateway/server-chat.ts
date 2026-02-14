@@ -1,4 +1,5 @@
 import { normalizeVerboseLevel } from "../auto-reply/thinking.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { loadConfig } from "../config/config.js";
 import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-events.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
@@ -235,6 +236,8 @@ export function createAgentEventHandler({
       return;
     }
     chatRunState.deltaSentAt.set(clientRunId, now);
+    // No delta filtering for silent tokens — partial text ("NO") can't be
+    // reliably detected. Silent replies are handled at finalize time.
     const payload = {
       runId: clientRunId,
       sessionKey,
@@ -264,18 +267,33 @@ export function createAgentEventHandler({
     chatRunState.buffers.delete(clientRunId);
     chatRunState.deltaSentAt.delete(clientRunId);
     if (jobState === "done") {
+      // The streaming buffer may only capture a partial prefix of the full
+      // silent token (e.g. "NO_" instead of "NO_REPLY") because the model
+      // finished before all deltas were buffered. Check both the full token
+      // and prefix matches.
+      const trimmed = text.trim();
+      const silent =
+        isSilentReplyText(trimmed) ||
+        (trimmed.length > 0 &&
+          trimmed.length < SILENT_REPLY_TOKEN.length &&
+          SILENT_REPLY_TOKEN.startsWith(trimmed));
       const payload = {
         runId: clientRunId,
         sessionKey,
         seq,
         state: "final" as const,
-        message: text
-          ? {
-              role: "assistant",
-              content: [{ type: "text", text }],
-              timestamp: Date.now(),
-            }
-          : undefined,
+        // When the reply is a silent token, send an empty message so the TUI
+        // can clear the streamed bubble without rendering any text.
+        message:
+          text && !silent
+            ? {
+                role: "assistant",
+                content: [{ type: "text", text }],
+                timestamp: Date.now(),
+              }
+            : undefined,
+        // Signal to TUI clients that this run should be visually removed
+        ...(silent ? { silent: true } : {}),
       };
       // Suppress webchat broadcast for heartbeat runs when showOk is false
       if (!shouldSuppressHeartbeatBroadcast(clientRunId)) {
