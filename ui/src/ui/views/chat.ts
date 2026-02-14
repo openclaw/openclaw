@@ -96,32 +96,69 @@ function adjustTextareaHeight(el: HTMLTextAreaElement) {
 
 function renderSessionTabs(props: ChatProps) {
   const sessions = props.sessions?.sessions ?? [];
-  const subAgentSessions = sessions.filter((s) => s.key.includes("subagent:"));
   
-  if (subAgentSessions.length === 0) {
+  if (sessions.length === 0) {
     return nothing;
   }
 
-  const mainSessionKey = sessions.find((s) => !s.key.includes("subagent:"))?.key ?? "agent:main:main";
-  const isMainActive = props.sessionKey === mainSessionKey || !props.sessionKey.includes("subagent:");
+  // Find main session
+  const mainSession = sessions.find((s) => s.key === "agent:main:main" || !s.key.includes(":")) 
+    ?? sessions.find((s) => !s.key.includes("subagent:"));
+  
+  // Get all other sessions, sorted by updatedAt descending
+  const otherSessions = sessions
+    .filter((s) => s.key !== mainSession?.key)
+    .sort((a, b) => {
+      const aTime = typeof a.updatedAt === "number" ? a.updatedAt : 0;
+      const bTime = typeof b.updatedAt === "number" ? b.updatedAt : 0;
+      return bTime - aTime;
+    })
+    .slice(0, 7); // Limit to 7 recent (plus main = 8 total)
+
+  // If only main session exists, don't show the bar
+  if (otherSessions.length === 0) {
+    return nothing;
+  }
+
+  const getSessionDisplayName = (session: any): string => {
+    // Use label or displayName if available
+    if (session.label?.trim()) return session.label.trim();
+    if (session.displayName?.trim()) return session.displayName.trim();
+    
+    // Extract last meaningful segment from key
+    const key = session.key ?? "";
+    const parts = key.split(":");
+    const lastPart = parts[parts.length - 1];
+    
+    // If it's a subagent UUID, truncate to first 8 chars
+    if (lastPart.length > 20) {
+      return lastPart.substring(0, 8);
+    }
+    
+    return lastPart || key;
+  };
 
   return html`
     <div class="chat-session-tabs">
-      <button
-        class="chat-session-chip ${isMainActive ? "active" : ""}"
-        @click=${() => props.onSessionKeyChange(mainSessionKey)}
-      >
-        main
-      </button>
-      ${subAgentSessions.map((session) => {
-        const shortName = session.key.split(":").pop() ?? session.key;
+      <div class="chat-session-tabs__label">Recent</div>
+      ${mainSession ? html`
+        <button
+          class="chat-session-chip ${props.sessionKey === mainSession.key ? "active" : ""}"
+          @click=${() => props.onSessionKeyChange(mainSession.key)}
+        >
+          main
+        </button>
+      ` : nothing}
+      ${otherSessions.map((session) => {
+        const displayName = getSessionDisplayName(session);
         const isActive = props.sessionKey === session.key;
         return html`
           <button
             class="chat-session-chip ${isActive ? "active" : ""}"
             @click=${() => props.onSessionKeyChange(session.key)}
+            title=${session.key}
           >
-            ${shortName}
+            ${displayName}
           </button>
         `;
       })}

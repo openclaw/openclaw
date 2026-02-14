@@ -329,10 +329,21 @@
 /* Session tabs - chip bar */
 .chat-session-tabs {
   display: flex;
+  align-items: center;
   gap: 6px;
   padding: 8px 14px;
   overflow-x: auto;
   border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.chat-session-tabs__label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  margin-right: 4px;
   flex-shrink: 0;
 }
 
@@ -349,6 +360,7 @@
   cursor: pointer;
   white-space: nowrap;
   transition: all 0.15s ease;
+  flex-shrink: 0;
 }
 
 .chat-session-chip:hover {
