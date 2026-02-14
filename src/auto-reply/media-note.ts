@@ -118,7 +118,10 @@ export function buildInboundMediaNote(ctx: MsgContext): string | undefined {
     Array.isArray(ctx.MediaCaptions) && ctx.MediaCaptions.length === paths.length
       ? ctx.MediaCaptions
       : undefined;
-  const dimensions = Array.isArray(ctx.MediaDimensions) ? ctx.MediaDimensions : undefined;
+  const dimensions =
+    Array.isArray(ctx.MediaDimensions) && ctx.MediaDimensions.length === paths.length
+      ? ctx.MediaDimensions
+      : undefined;
   const hasTranscript = Boolean(ctx.Transcript?.trim());
   // Transcript alone does not identify an attachment index; only use it as a fallback
   // when there is a single attachment to avoid stripping unrelated audio files.

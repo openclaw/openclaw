@@ -861,4 +861,36 @@ describe("signal createSignalEventHandler inbound contract", () => {
     expect(untrusted).not.toContain("Link preview");
     expect(untrusted).not.toContain("https://blocked.com");
   });
+
+  it("applies text styles correctly when message contains mentions", async () => {
+    const handler = createTestHandler();
+
+    // Message: "\uFFFC check this out" (16 chars)
+    // After mention expansion: "@550e8400-e29b-41d4-a716-446655440000 check this out" (52 chars)
+    // Original textStyle BOLD at {start: 2, length: 5} should target "check" in the expanded text
+    // After expansion, "check" starts at position 38 (mention is 37 chars: @ + 36-char UUID)
+    await handler(
+      makeReceiveEvent({
+        message: "\uFFFC check this out",
+        mentions: [
+          {
+            uuid: "550e8400-e29b-41d4-a716-446655440000",
+            start: 0,
+            length: 1,
+          },
+        ],
+        textStyles: [
+          { style: "BOLD", start: 2, length: 5 }, // "check" in original message
+        ],
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    // The mention should be expanded and the BOLD style should apply to "check"
+    expect(capturedCtx?.BodyForCommands).toContain("@550e8400-e29b-41d4-a716-446655440000");
+    expect(capturedCtx?.BodyForCommands).toContain("**check**");
+    expect(capturedCtx?.BodyForCommands).toBe(
+      "@550e8400-e29b-41d4-a716-446655440000 **check** this out",
+    );
+  });
 });

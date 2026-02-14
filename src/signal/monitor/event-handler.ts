@@ -193,6 +193,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     groupName?: string;
     isGroup: boolean;
     bodyText: string;
+    bodyTextPlain: string;
     timestamp?: number;
     messageId?: string;
     editTargetTimestamp?: number;
@@ -452,7 +453,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       ) {
         return false;
       }
-      return !hasControlCommand(entry.bodyText, deps.cfg);
+      return !hasControlCommand(entry.bodyTextPlain, deps.cfg);
     },
     onFlush: async (entries) => {
       const last = entries.at(-1);
@@ -544,10 +545,40 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     // Replace ￼ (object replacement character) with @uuid or @phone from mentions
     // Signal encodes mentions as the object replacement character; hydrate them from metadata first.
     const rawMessage = dataMessage?.message ?? "";
-    const normalizedMessage = renderSignalMentions(rawMessage, dataMessage?.mentions);
+    const mentionResult = renderSignalMentions(rawMessage, dataMessage?.mentions);
+    const normalizedMessage = mentionResult.text;
+
+    // Adjust text style offsets to account for mention expansions
+    // textStyles from Signal reference the original message offsets, but we need them
+    // to reference the expanded message (after @uuid replacements)
+    const adjustedTextStyles =
+      dataMessage?.textStyles && mentionResult.offsetShifts.size > 0
+        ? dataMessage.textStyles.map((style) => {
+            if (typeof style.start !== "number") {
+              return style;
+            }
+            // Calculate cumulative shift up to this style's start position
+            let cumulativeShift = 0;
+            const sortedShiftPositions = Array.from(mentionResult.offsetShifts.keys()).toSorted(
+              (a, b) => a - b,
+            );
+            for (const shiftPos of sortedShiftPositions) {
+              if (shiftPos <= style.start) {
+                cumulativeShift += mentionResult.offsetShifts.get(shiftPos) ?? 0;
+              } else {
+                break;
+              }
+            }
+            return {
+              ...style,
+              start: style.start + cumulativeShift,
+            };
+          })
+        : dataMessage?.textStyles;
+
     const styledMessage =
       deps.preserveTextStyles !== false
-        ? applySignalTextStyles(normalizedMessage, dataMessage?.textStyles)
+        ? applySignalTextStyles(normalizedMessage, adjustedTextStyles)
         : normalizedMessage;
     const messageTextPlain = normalizedMessage.trim();
     const messageText = styledMessage.trim();
@@ -972,6 +1003,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       groupName,
       isGroup,
       bodyText,
+      bodyTextPlain: messageTextPlain,
       timestamp: envelope.timestamp ?? undefined,
       messageId,
       editTargetTimestamp,
