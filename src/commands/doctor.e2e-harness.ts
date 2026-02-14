@@ -256,7 +256,12 @@ vi.mock("./doctor-state-migrations.js", () => ({
   runLegacyStateMigrations,
 }));
 
-export async function arrangeLegacyStateMigrationTest() {
+export async function arrangeLegacyStateMigrationTest(): Promise<{
+  doctorCommand: unknown;
+  runtime: { log: MockFn; error: MockFn; exit: MockFn };
+  detectLegacyStateMigrations: MockFn;
+  runLegacyStateMigrations: MockFn;
+}> {
   readConfigFileSnapshot.mockResolvedValue({
     path: "/tmp/openclaw.json",
     exists: true,
@@ -270,9 +275,9 @@ export async function arrangeLegacyStateMigrationTest() {
 
   const { doctorCommand } = await import("./doctor.js");
   const runtime = {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
+    log: vi.fn() as unknown as MockFn,
+    error: vi.fn() as unknown as MockFn,
+    exit: vi.fn() as unknown as MockFn,
   };
 
   detectLegacyStateMigrations.mockClear();

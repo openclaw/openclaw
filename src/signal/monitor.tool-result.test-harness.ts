@@ -1,18 +1,31 @@
 import { beforeEach, vi } from "vitest";
+import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
 import { resetSystemEventsForTest } from "../infra/system-events.js";
 
-const waitForTransportReadyMock = vi.hoisted(() => vi.fn());
-const sendMock = vi.hoisted(() => vi.fn());
-const replyMock = vi.hoisted(() => vi.fn());
-const updateLastRouteMock = vi.hoisted(() => vi.fn());
-const readAllowFromStoreMock = vi.hoisted(() => vi.fn());
-const upsertPairingRequestMock = vi.hoisted(() => vi.fn());
-const streamMock = vi.hoisted(() => vi.fn());
-const signalCheckMock = vi.hoisted(() => vi.fn());
-const signalRpcRequestMock = vi.hoisted(() => vi.fn());
+type SignalToolResultTestMocks = {
+  waitForTransportReadyMock: MockFn;
+  sendMock: MockFn;
+  replyMock: MockFn;
+  updateLastRouteMock: MockFn;
+  readAllowFromStoreMock: MockFn;
+  upsertPairingRequestMock: MockFn;
+  streamMock: MockFn;
+  signalCheckMock: MockFn;
+  signalRpcRequestMock: MockFn;
+};
 
-export function getSignalToolResultTestMocks() {
+const waitForTransportReadyMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
+const sendMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
+const replyMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
+const updateLastRouteMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
+const readAllowFromStoreMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
+const upsertPairingRequestMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
+const streamMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
+const signalCheckMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
+const signalRpcRequestMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
+
+export function getSignalToolResultTestMocks(): SignalToolResultTestMocks {
   return {
     waitForTransportReadyMock,
     sendMock,
