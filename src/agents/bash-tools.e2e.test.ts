@@ -342,6 +342,29 @@ describe("exec notifyOnExit", () => {
     expect(status).toBe("completed");
     expect(peekSystemEvents("agent:main:main")).toEqual([]);
   });
+
+  it("can re-enable no-op completion events via notifyOnExitEmptySuccess", async () => {
+    const tool = createExecTool({
+      allowBackground: true,
+      backgroundMs: 0,
+      notifyOnExit: true,
+      notifyOnExitEmptySuccess: true,
+      sessionKey: "agent:main:main",
+    });
+
+    const result = await tool.execute("call3", {
+      command: shortDelayCmd,
+      background: true,
+    });
+
+    expect(result.details.status).toBe("running");
+    const sessionId = (result.details as { sessionId: string }).sessionId;
+    const status = await waitForCompletion(sessionId);
+    expect(status).toBe("completed");
+    const events = peekSystemEvents("agent:main:main");
+    expect(events.length).toBeGreaterThan(0);
+    expect(events.some((event) => event.includes("Exec completed"))).toBe(true);
+  });
 });
 
 describe("exec PATH handling", () => {

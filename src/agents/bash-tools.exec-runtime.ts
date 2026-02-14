@@ -316,7 +316,7 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
   const output = compactNotifyOutput(
     tail(session.tail || session.aggregated || "", DEFAULT_NOTIFY_TAIL_CHARS),
   );
-  if (status === "completed" && !output) {
+  if (status === "completed" && !output && session.notifyOnExitEmptySuccess !== true) {
     return;
   }
   const summary = output
@@ -366,6 +366,7 @@ export async function runExecProcess(opts: {
   maxOutput: number;
   pendingMaxOutput: number;
   notifyOnExit: boolean;
+  notifyOnExitEmptySuccess?: boolean;
   scopeKey?: string;
   sessionKey?: string;
   timeoutSec: number;
@@ -531,6 +532,7 @@ export async function runExecProcess(opts: {
     scopeKey: opts.scopeKey,
     sessionKey: opts.sessionKey,
     notifyOnExit: opts.notifyOnExit,
+    notifyOnExitEmptySuccess: opts.notifyOnExitEmptySuccess === true,
     exitNotified: false,
     child: child ?? undefined,
     stdin,
