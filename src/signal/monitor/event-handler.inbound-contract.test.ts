@@ -893,4 +893,57 @@ describe("signal createSignalEventHandler inbound contract", () => {
       "@550e8400-e29b-41d4-a716-446655440000 **check** this out",
     );
   });
+
+  it("adds shared contact metadata to untrusted context and uses contact placeholder", async () => {
+    const handler = createTestHandler();
+
+    await handler(
+      makeReceiveEvent({
+        sharedContacts: [
+          {
+            name: {
+              display: "Jane Doe",
+              given: "Jane",
+              family: "Doe",
+            },
+            phone: [{ value: "+15551234567", type: "mobile" }],
+            email: [{ value: "jane@example.com", type: "work" }],
+            organization: "Acme Corp",
+          },
+        ],
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    expect(capturedCtx?.UntrustedContext).toContain(
+      "Shared contact: Jane Doe (+15551234567, jane@example.com, Acme Corp)",
+    );
+    expect(capturedCtx?.BodyForCommands).toBe("<media:contact>");
+  });
+
+  it("includes both message text and contact context when contact has message", async () => {
+    const handler = createTestHandler();
+
+    await handler(
+      makeReceiveEvent({
+        message: "Here's John's info",
+        sharedContacts: [
+          {
+            name: {
+              given: "John",
+              family: "Smith",
+            },
+            phone: [{ value: "+15559876543" }],
+            email: [{ value: "john@example.org" }],
+          },
+        ],
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    expect(capturedCtx?.BodyForCommands).toBe("Here's John's info");
+    expect(capturedCtx?.UntrustedContext).toContain(
+      "Shared contact: John Smith (+15559876543, john@example.org)",
+    );
+  });
 });

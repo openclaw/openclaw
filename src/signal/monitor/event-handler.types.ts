@@ -35,6 +35,7 @@ export type SignalDataMessage = {
   previews?: Array<SignalLinkPreview> | null;
   textStyles?: Array<SignalTextStyleRange> | null;
   mentions?: Array<SignalMention> | null;
+  sharedContacts?: Array<SignalSharedContact> | null;
   groupInfo?: {
     groupId?: string | null;
     groupName?: string | null;
@@ -90,6 +91,13 @@ export type SignalTextStyleRange = {
   style?: string | null;
   start?: number | null;
   length?: number | null;
+};
+
+export type SignalSharedContact = {
+  name?: { display?: string | null; given?: string | null; family?: string | null } | null;
+  phone?: Array<{ value?: string | null; type?: string | null }> | null;
+  email?: Array<{ value?: string | null; type?: string | null }> | null;
+  organization?: string | null;
 };
 
 export type SignalReactionTarget = {

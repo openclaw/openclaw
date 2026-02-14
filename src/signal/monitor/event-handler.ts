@@ -181,6 +181,39 @@ function buildSignalLinkPreviewContext(
   return context;
 }
 
+function buildSignalContactContext(
+  contacts?: Array<{
+    name?: { display?: string | null; given?: string | null; family?: string | null } | null;
+    phone?: Array<{ value?: string | null; type?: string | null }> | null;
+    email?: Array<{ value?: string | null; type?: string | null }> | null;
+    organization?: string | null;
+  }> | null,
+): string[] {
+  if (!Array.isArray(contacts) || contacts.length === 0) {
+    return [];
+  }
+
+  const context: string[] = [];
+  for (const contact of contacts) {
+    const displayName =
+      contact.name?.display?.trim() ||
+      `${contact.name?.given?.trim() ?? ""} ${contact.name?.family?.trim() ?? ""}`.trim() ||
+      "Unknown";
+    const phone = contact.phone?.[0]?.value?.trim();
+    const email = contact.email?.[0]?.value?.trim();
+    const organization = contact.organization?.trim();
+
+    const details = [phone, email, organization].filter(Boolean).join(", ");
+    if (!details && displayName === "Unknown") {
+      continue;
+    }
+
+    const label = details ? `${displayName} (${details})` : displayName;
+    context.push(`Shared contact: ${label}`);
+  }
+  return context;
+}
+
 export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
   const inboundDebounceMs = resolveInboundDebounceMs({ cfg: deps.cfg, channel: "signal" });
 
@@ -631,6 +664,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     ].filter((entry): entry is string => Boolean(entry));
     const linkPreviewContext =
       deps.injectLinkPreviews !== false ? buildSignalLinkPreviewContext(dataMessage?.previews) : [];
+    const contactContext = buildSignalContactContext(dataMessage?.sharedContacts);
     const attachments = dataMessage?.attachments ?? [];
     const allAttachments = sticker?.attachment ? [...attachments, sticker.attachment] : attachments;
     const voiceNoteIndices = allAttachments.flatMap((attachment, index) =>
@@ -962,10 +996,15 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       placeholder = "<media:sticker>";
     } else if (firstAttachmentIsVoiceNote) {
       placeholder = "<media:audio> (voice note)";
-    } else if (kind) {
+    } else if (kind && kind !== "unknown") {
       placeholder = `<media:${kind}>`;
     } else if (allAttachments.length) {
       placeholder = "<media:attachment>";
+    } else if (
+      Array.isArray(dataMessage?.sharedContacts) &&
+      dataMessage.sharedContacts.length > 0
+    ) {
+      placeholder = "<media:contact>";
     }
 
     const bodyText = messageText || placeholder || quoteText;
@@ -1024,8 +1063,11 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       mediaDimension,
       mediaDimensions,
       untrustedContext:
-        stickerContext.length > 0 || voiceContext.length > 0 || linkPreviewContext.length > 0
-          ? [...stickerContext, ...voiceContext, ...linkPreviewContext]
+        stickerContext.length > 0 ||
+        voiceContext.length > 0 ||
+        linkPreviewContext.length > 0 ||
+        contactContext.length > 0
+          ? [...stickerContext, ...voiceContext, ...linkPreviewContext, ...contactContext]
           : undefined,
       replyToId: quoteReplyId,
       replyToBody: quoteText || undefined,
