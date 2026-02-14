@@ -406,6 +406,8 @@ export type PluginHookMessageSentEvent = {
   error?: string;
   /** Platform message ID returned by the channel (e.g. Feishu message_id). */
   messageId?: string;
+  /** Optional channel-specific send metadata (e.g. msgType/msg_type). */
+  metadata?: Record<string, unknown>;
 };
 
 // Tool context

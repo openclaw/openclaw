@@ -592,9 +592,13 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     }
   };
 
-  const notifyMessageSent = (content: string, messageId?: string) => {
+  const notifyMessageSent = (
+    content: string,
+    messageId?: string,
+    metadata?: { msgType?: "text" | "post" | "interactive" },
+  ) => {
     emitMessageSent(
-      { to: chatId, content, success: true, messageId },
+      { to: chatId, content, success: true, messageId, metadata },
       { channelId: "feishu", accountId: account.accountId, conversationId: chatId },
     );
   };
@@ -644,7 +648,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               params.runtime.log?.(
                 `feishu[${account.accountId}] streaming status: used=${streamEverUpdated}, backend=${streamBackend}, partials=${streamPartialCount}, flushes=${streamFlushCount}, updates=${streamUpdateCount}`,
               );
-              notifyMessageSent(text, streamMessageId ?? undefined);
+              notifyMessageSent(text, streamMessageId ?? undefined, {
+                msgType: streamRenderMode === "card" ? "interactive" : "post",
+              });
               return;
             }
           }
@@ -731,7 +737,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             }
           }
           if (blockSentMessageId) {
-            notifyMessageSent(text, blockSentMessageId);
+            notifyMessageSent(text, blockSentMessageId, { msgType: "interactive" });
           }
           return;
         }
@@ -779,7 +785,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             isFirstChunk = false;
           }
         }
-        notifyMessageSent(text, firstMessageId);
+        notifyMessageSent(text, firstMessageId, { msgType: useCard ? "interactive" : "post" });
       },
       onError: (err, info) => {
         params.runtime.error?.(

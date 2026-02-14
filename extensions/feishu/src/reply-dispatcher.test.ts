@@ -147,6 +147,7 @@ describe("createFeishuReplyDispatcher message_sent hooks", () => {
         content: "hello world",
         success: true,
         messageId: "om_first",
+        metadata: { msgType: "post" },
       },
       {
         channelId: "feishu",
@@ -191,6 +192,7 @@ describe("createFeishuReplyDispatcher message_sent hooks", () => {
         content: "first block",
         success: true,
         messageId: "om_card",
+        metadata: { msgType: "interactive" },
       },
       {
         channelId: "feishu",
