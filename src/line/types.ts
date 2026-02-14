@@ -81,6 +81,12 @@ export interface LineWebhookContext {
   roomId?: string;
 }
 
+export type LineWebhookEnvelope = {
+  events?: unknown[];
+  destination?: string;
+  [key: string]: unknown;
+};
+
 export interface LineSendResult {
   messageId: string;
   chatId: string;

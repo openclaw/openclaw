@@ -31,8 +31,9 @@ import {
   createImageMessage,
   createLocationMessage,
 } from "./send.js";
-import { validateLineSignature } from "./signature.js";
+import { hasLineSignatureHeader, validateLineSignature } from "./signature.js";
 import { buildTemplateMessageFromPayload } from "./template-messages.js";
+import { isLineVerificationProbe, parseLineWebhookBody } from "./webhook-verification.js";
 
 export interface MonitorLineProviderOptions {
   channelAccessToken: string;
@@ -320,10 +321,24 @@ export async function monitorLineProvider(
 
       try {
         const rawBody = await readLineWebhookRequestBody(req, LINE_WEBHOOK_MAX_BODY_BYTES);
-        const signature = req.headers["x-line-signature"];
+        const body = parseLineWebhookBody(rawBody);
+        if (!body) {
+          res.statusCode = 400;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ error: "Invalid webhook payload" }));
+          return;
+        }
+
+        if (isLineVerificationProbe(body)) {
+          res.statusCode = 200;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ status: "ok" }));
+          return;
+        }
 
         // Validate signature
-        if (!signature || typeof signature !== "string") {
+        const signature = req.headers["x-line-signature"];
+        if (!hasLineSignatureHeader(signature)) {
           logVerbose("line: webhook missing X-Line-Signature header");
           res.statusCode = 400;
           res.setHeader("Content-Type", "application/json");
@@ -338,9 +353,6 @@ export async function monitorLineProvider(
           res.end(JSON.stringify({ error: "Invalid signature" }));
           return;
         }
-
-        // Parse and process the webhook body
-        const body = JSON.parse(rawBody) as WebhookRequestBody;
 
         // Respond immediately with 200 to avoid LINE timeout
         res.statusCode = 200;

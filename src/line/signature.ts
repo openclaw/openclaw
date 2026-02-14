@@ -1,5 +1,11 @@
 import crypto from "node:crypto";
 
+export function hasLineSignatureHeader(
+  signature: string | string[] | undefined,
+): signature is string {
+  return typeof signature === "string" && signature.trim().length > 0;
+}
+
 export function validateLineSignature(
   body: string,
   signature: string,

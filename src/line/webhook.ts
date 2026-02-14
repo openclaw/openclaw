@@ -2,7 +2,8 @@ import type { WebhookRequestBody } from "@line/bot-sdk";
 import type { Request, Response, NextFunction } from "express";
 import type { RuntimeEnv } from "../runtime.js";
 import { logVerbose, danger } from "../globals.js";
-import { validateLineSignature } from "./signature.js";
+import { hasLineSignatureHeader, validateLineSignature } from "./signature.js";
+import { isLineVerificationProbe, parseLineWebhookBody } from "./webhook-verification.js";
 
 export interface LineWebhookOptions {
   channelSecret: string;
@@ -20,15 +21,14 @@ function readRawBody(req: Request): string | null {
   return Buffer.isBuffer(rawBody) ? rawBody.toString("utf-8") : rawBody;
 }
 
-function parseWebhookBody(req: Request, rawBody: string): WebhookRequestBody | null {
+function parseWebhookBody(req: Request, rawBody?: string | null): WebhookRequestBody | null {
   if (req.body && typeof req.body === "object" && !Buffer.isBuffer(req.body)) {
     return req.body as WebhookRequestBody;
   }
-  try {
-    return JSON.parse(rawBody) as WebhookRequestBody;
-  } catch {
+  if (!rawBody) {
     return null;
   }
+  return parseLineWebhookBody(rawBody);
 }
 
 export function createLineWebhookMiddleware(
@@ -38,14 +38,24 @@ export function createLineWebhookMiddleware(
 
   return async (req: Request, res: Response, _next: NextFunction): Promise<void> => {
     try {
-      const signature = req.headers["x-line-signature"];
+      const rawBody = readRawBody(req);
+      const body = parseWebhookBody(req, rawBody);
+      if (!body) {
+        res.status(400).json({ error: "Invalid webhook payload" });
+        return;
+      }
 
-      if (!signature || typeof signature !== "string") {
+      if (isLineVerificationProbe(body)) {
+        res.status(200).json({ status: "ok" });
+        return;
+      }
+
+      const signature = req.headers["x-line-signature"];
+      if (!hasLineSignatureHeader(signature)) {
         res.status(400).json({ error: "Missing X-Line-Signature header" });
         return;
       }
 
-      const rawBody = readRawBody(req);
       if (!rawBody) {
         res.status(400).json({ error: "Missing raw request body for signature verification" });
         return;
@@ -54,12 +64,6 @@ export function createLineWebhookMiddleware(
       if (!validateLineSignature(rawBody, signature, channelSecret)) {
         logVerbose("line: webhook signature validation failed");
         res.status(401).json({ error: "Invalid signature" });
-        return;
-      }
-
-      const body = parseWebhookBody(req, rawBody);
-      if (!body) {
-        res.status(400).json({ error: "Invalid webhook payload" });
         return;
       }
 
