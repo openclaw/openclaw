@@ -139,4 +139,4 @@ Note: Moonshot and Kimi Coding are separate providers. Keys are not interchangea
 - Override pricing and context metadata in `models.providers` if needed.
 - If Moonshot publishes different context limits for a model, adjust
   `contextWindow` accordingly.
-- Use `https://api.moonshot.cn/v1` if you need the China endpoint.
+- Use `https://api.moonshot.ai/v1` for the international endpoint, and `https://api.moonshot.cn/v1` for the China endpoint.
