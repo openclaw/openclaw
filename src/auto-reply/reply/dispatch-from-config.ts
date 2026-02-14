@@ -121,7 +121,7 @@ export function toCanonicalAddress(
   }
 
   const parsed = parseRoutingAddress(trimmed);
-  const source = (parsed.source ?? context.source ?? "unknown").toLowerCase();
+  const source = (parsed.source || context.source || "unknown").toLowerCase();
   const method = (parsed.method ?? chatTypeToMethod(context.chatType)).toLowerCase();
   const id = parsed.id;
 
@@ -287,7 +287,7 @@ export async function dispatchReplyFromConfig(params: {
     void hookRunner
       .runMessageReceived(
         {
-          from: ctx.From ? (toCanonicalAddress(ctx.From, canonicalCtx) ?? "") : "",
+          from: ctx.From ? (toCanonicalAddress(ctx.From, canonicalCtx) ?? ctx.From) : "",
           content,
           timestamp,
           metadata: {
