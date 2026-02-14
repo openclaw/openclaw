@@ -28,7 +28,7 @@ echo ""
 echo "📋 Running unit tests..."
 # Use --pool=forks on low-memory machines to avoid VM overhead
 if [ "$TOTAL_RAM_MB" -lt 12000 ]; then
-  POOL_FLAG="--pool=forks --poolOptions.forks.maxForks=2"
+  POOL_FLAG="--pool=forks --maxWorkers=2"
 else
   POOL_FLAG=""
 fi

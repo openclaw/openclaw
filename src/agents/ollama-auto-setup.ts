@@ -1,6 +1,7 @@
 import { DEFAULT_MODEL } from "./defaults.js";
+import { listOllamaModels } from "./ollama-health.js";
 import { pullOllamaModel, type PullOptions } from "./ollama-model-pull.js";
-import { OLLAMA_NATIVE_BASE_URL } from "./ollama-stream.js";
+import { OLLAMA_BASE_URL } from "./ollama-shared.js";
 
 export interface EnsureModelResult {
   alreadyAvailable: boolean;
@@ -9,39 +10,21 @@ export interface EnsureModelResult {
   error?: string;
 }
 
-interface OllamaTagsResponse {
-  models: Array<{ name: string }>;
-}
-
 export async function ensureDefaultModel(opts?: PullOptions): Promise<EnsureModelResult> {
-  const baseUrl = (opts?.baseUrl ?? OLLAMA_NATIVE_BASE_URL).replace(/\/+$/, "");
+  const baseUrl = (opts?.baseUrl ?? OLLAMA_BASE_URL).replace(/\/+$/, "");
   const model = DEFAULT_MODEL;
 
-  // Check if model is already available
-  let tags: OllamaTagsResponse;
   try {
-    const response = await fetch(`${baseUrl}/api/tags`, { signal: opts?.signal });
-    if (!response.ok) {
-      const text = await response.text().catch(() => "unknown error");
-      return {
-        alreadyAvailable: false,
-        pulled: false,
-        model,
-        error: `HTTP ${response.status}: ${text}`,
-      };
+    const models = await listOllamaModels(baseUrl);
+    const available = models.some((m) => m.name === model || m.name === `${model}:latest`);
+    if (available) {
+      return { alreadyAvailable: true, pulled: false, model };
     }
-    tags = (await response.json()) as OllamaTagsResponse;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return { alreadyAvailable: false, pulled: false, model, error: msg };
   }
 
-  const available = tags.models?.some((m) => m.name === model || m.name === `${model}:latest`);
-  if (available) {
-    return { alreadyAvailable: true, pulled: false, model };
-  }
-
-  // Pull the model
   const result = await pullOllamaModel(model, {
     baseUrl,
     onProgress: opts?.onProgress,

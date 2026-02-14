@@ -1,4 +1,4 @@
-import { OLLAMA_NATIVE_BASE_URL } from "./ollama-stream.js";
+import { OLLAMA_BASE_URL } from "./ollama-shared.js";
 
 export interface PullProgress {
   status: string;
@@ -19,7 +19,7 @@ export interface PullOptions {
 }
 
 export async function pullOllamaModel(modelName: string, opts?: PullOptions): Promise<PullResult> {
-  const baseUrl = (opts?.baseUrl ?? OLLAMA_NATIVE_BASE_URL).replace(/\/+$/, "");
+  const baseUrl = (opts?.baseUrl ?? OLLAMA_BASE_URL).replace(/\/+$/, "");
   const url = `${baseUrl}/api/pull`;
 
   let response: Response;

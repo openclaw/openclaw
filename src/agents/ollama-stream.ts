@@ -12,8 +12,10 @@ import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
 import { randomUUID } from "node:crypto";
 import { extractMetrics, formatMetrics } from "./ollama-metrics.js";
 import { ollamaFetch } from "./ollama-retry.js";
+import { OLLAMA_BASE_URL } from "./ollama-shared.js";
 
-export const OLLAMA_NATIVE_BASE_URL = "http://127.0.0.1:11434";
+/** @deprecated Use OLLAMA_BASE_URL from ollama-shared.ts */
+export const OLLAMA_NATIVE_BASE_URL = OLLAMA_BASE_URL;
 
 // ── Ollama /api/chat request types ──────────────────────────────────────────
 

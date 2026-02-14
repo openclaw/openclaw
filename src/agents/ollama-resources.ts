@@ -1,5 +1,5 @@
-import os from "node:os";
 import { execFile } from "node:child_process";
+import os from "node:os";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
@@ -14,8 +14,8 @@ export interface SystemResources {
 }
 
 export async function getSystemResources(): Promise<SystemResources> {
-  const totalRamGB = os.totalmem() / (1024 ** 3);
-  const availableRamGB = os.freemem() / (1024 ** 3);
+  const totalRamGB = os.totalmem() / 1024 ** 3;
+  const availableRamGB = os.freemem() / 1024 ** 3;
   const cpus = os.cpus();
   const cpuCores = cpus.length;
   const cpuModel = cpus[0]?.model ?? "unknown";
@@ -65,9 +65,7 @@ export function canFitModel(
   };
 }
 
-export function suggestOllamaOptions(
-  resources: SystemResources,
-): Record<string, unknown> {
+export function suggestOllamaOptions(resources: SystemResources): Record<string, unknown> {
   const opts: Record<string, unknown> = {};
 
   // Context window based on available RAM
@@ -115,12 +113,16 @@ export async function unloadModel(
   }
 }
 
-export async function getMemoryPressure(): Promise<
-  "low" | "medium" | "high" | "critical"
-> {
-  const freeGB = os.freemem() / (1024 ** 3);
-  if (freeGB < 1) return "critical";
-  if (freeGB < 2) return "high";
-  if (freeGB < 4) return "medium";
+export async function getMemoryPressure(): Promise<"low" | "medium" | "high" | "critical"> {
+  const freeGB = os.freemem() / 1024 ** 3;
+  if (freeGB < 1) {
+    return "critical";
+  }
+  if (freeGB < 2) {
+    return "high";
+  }
+  if (freeGB < 4) {
+    return "medium";
+  }
   return "low";
 }

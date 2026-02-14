@@ -22,6 +22,32 @@ describe("tui-waiting", () => {
     expect(pickWaitingPhrase(30, phrases)).toBe("a");
   });
 
+  it("uses loading phrases when ollamaStatus.stage is loading", () => {
+    const msg = buildWaitingStatusMessage({
+      theme,
+      tick: 0,
+      elapsed: "5s",
+      connectionStatus: "connected",
+      ollamaStatus: { stage: "loading" },
+    });
+    // Should use one of the ollama loading phrases
+    const usedPhrase = ollamaLoadingPhrases[0];
+    for (const ch of usedPhrase) {
+      expect(msg).toContain(ch);
+    }
+  });
+
+  it("shows tok/s when ollamaStatus.stage is generating", () => {
+    const msg = buildWaitingStatusMessage({
+      theme,
+      tick: 0,
+      elapsed: "5s",
+      connectionStatus: "connected",
+      ollamaStatus: { stage: "generating", tokPerSec: 42.5 },
+    });
+    expect(msg).toContain("42.5 tok/s");
+  });
+
   it("buildWaitingStatusMessage includes shimmer markup and metadata", () => {
     const msg = buildWaitingStatusMessage({
       theme,

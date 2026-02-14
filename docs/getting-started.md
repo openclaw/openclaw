@@ -61,6 +61,21 @@ gclaw onboard
 
 Open the web UI at `http://localhost:3000` (default) or connect via any supported channel (Discord, Telegram, etc.).
 
+## Running Tests
+
+gclaw includes a local CI script designed for small machines:
+
+```bash
+./scripts/local-ci.sh          # Quick: unit tests only (~1 min)
+./scripts/local-ci.sh --full   # Full: tests + lint + types (~5-10 min)
+```
+
+For pre-push checks that only test changed files:
+
+```bash
+./scripts/pre-push-check.sh
+```
+
 ## Troubleshooting
 
 - **"Ollama not found"** — Make sure `ollama serve` is running

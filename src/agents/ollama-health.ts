@@ -1,6 +1,4 @@
-import { OLLAMA_NATIVE_BASE_URL } from "./ollama-stream.js";
-
-// ── Types ───────────────────────────────────────────────────────────────────
+import { OLLAMA_BASE_URL, ollamaGet } from "./ollama-shared.js";
 
 export type OllamaHealthStatus =
   | { healthy: true; version: string }
@@ -27,51 +25,28 @@ export type OllamaStatusInfo = {
   running: OllamaRunningModel[];
 };
 
-const TIMEOUT_MS = 3000;
-
-async function ollamaFetch(url: string): Promise<unknown> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
-  try {
-    const res = await fetch(url, { signal: controller.signal });
-    if (!res.ok) {
-      throw new Error(`HTTP ${res.status}`);
-    }
-    return await res.json();
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 export async function checkOllamaHealth(
-  baseUrl: string = OLLAMA_NATIVE_BASE_URL,
+  baseUrl: string = OLLAMA_BASE_URL,
 ): Promise<OllamaHealthStatus> {
   try {
-    const data = await ollamaFetch(`${baseUrl}/api/version`);
-    if (
-      data &&
-      typeof data === "object" &&
-      "version" in data &&
-      typeof (data as any).version === "string"
-    ) {
-      return { healthy: true, version: (data as any).version };
+    const data = (await ollamaGet(`${baseUrl}/api/version`)) as Record<string, unknown>;
+    if (typeof data?.version === "string") {
+      return { healthy: true, version: data.version };
     }
     return { healthy: false, error: "Unexpected response from /api/version" };
   } catch (err: any) {
-    const msg = err?.name === "AbortError" ? "Connection timed out" : String(err?.message ?? err);
+    const msg =
+      err?.name === "AbortError" || err?.name === "TimeoutError"
+        ? "Connection timed out"
+        : String(err?.message ?? err);
     return { healthy: false, error: msg };
   }
 }
 
-export async function listOllamaModels(
-  baseUrl: string = OLLAMA_NATIVE_BASE_URL,
-): Promise<OllamaModel[]> {
+export async function listOllamaModels(baseUrl: string = OLLAMA_BASE_URL): Promise<OllamaModel[]> {
   try {
-    const data = await ollamaFetch(`${baseUrl}/api/tags`);
-    if (!data || typeof data !== "object" || !Array.isArray((data as any).models)) {
-      return [];
-    }
-    return ((data as any).models as any[]).map((m) => ({
+    const data = (await ollamaGet(`${baseUrl}/api/tags`)) as { models?: any[] };
+    return (data.models ?? []).map((m: any) => ({
       name: String(m.name ?? ""),
       size: Number(m.size ?? 0),
       modifiedAt: String(m.modified_at ?? m.modifiedAt ?? ""),
@@ -83,14 +58,11 @@ export async function listOllamaModels(
 }
 
 export async function getOllamaRunningModels(
-  baseUrl: string = OLLAMA_NATIVE_BASE_URL,
+  baseUrl: string = OLLAMA_BASE_URL,
 ): Promise<OllamaRunningModel[]> {
   try {
-    const data = await ollamaFetch(`${baseUrl}/api/ps`);
-    if (!data || typeof data !== "object" || !Array.isArray((data as any).models)) {
-      return [];
-    }
-    return ((data as any).models as any[]).map((m) => ({
+    const data = (await ollamaGet(`${baseUrl}/api/ps`)) as { models?: any[] };
+    return (data.models ?? []).map((m: any) => ({
       name: String(m.name ?? ""),
       size: Number(m.size ?? 0),
       sizeVram: Number(m.size_vram ?? m.sizeVram ?? 0),
@@ -103,7 +75,7 @@ export async function getOllamaRunningModels(
 }
 
 export async function getOllamaStatus(
-  baseUrl: string = OLLAMA_NATIVE_BASE_URL,
+  baseUrl: string = OLLAMA_BASE_URL,
 ): Promise<OllamaStatusInfo> {
   const [health, models, running] = await Promise.all([
     checkOllamaHealth(baseUrl),
