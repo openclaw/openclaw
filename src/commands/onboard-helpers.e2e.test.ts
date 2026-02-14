@@ -107,6 +107,15 @@ describe("resolveControlUiLinks", () => {
     expect(links.httpUrl).toBe("http://127.0.0.1:18789/");
     expect(links.wsUrl).toBe("ws://127.0.0.1:18789");
   });
+
+  it("returns localhost for lan bind to satisfy browser secure context", () => {
+    const links = resolveControlUiLinks({
+      port: 18789,
+      bind: "lan",
+    });
+    expect(links.httpUrl).toBe("http://127.0.0.1:18789/");
+    expect(links.wsUrl).toBe("ws://127.0.0.1:18789");
+  });
 });
 
 describe("normalizeGatewayTokenInput", () => {
