@@ -430,7 +430,9 @@ export function attachGatewayWsMessageHandler(params: {
           // When dangerouslyDisableDeviceAuth is enabled, preserve scopes so
           // the Control UI can actually operate (read, write, approve, etc.).
           // Without this, scopes get cleared and the connection is useless.
-          if (allowControlUiBypass) {
+          // Note: only for dangerouslyDisableDeviceAuth, NOT allowInsecureAuth
+          // (which permits insecure transport but should not auto-grant scopes).
+          if (disableControlUiDeviceAuth) {
             if (scopes.length === 0) {
               scopes = [
                 "operator.admin",
