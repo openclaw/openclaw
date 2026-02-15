@@ -303,9 +303,10 @@ export function attachGatewayWsMessageHandler(params: {
         let scopes = Array.isArray(connectParams.scopes) ? connectParams.scopes : [];
         const isControlUi = connectParams.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI;
         const isWebchat = isWebchatConnect(connectParams);
-        // For Control UI and webchat, default to full operator scopes if no scopes provided.
-        // This fixes token-only auth where scopes would be empty, breaking the dashboard.
-        if ((isControlUi || isWebchat) && scopes.length === 0) {
+        // For Control UI and webchat, always enforce full operator scopes.
+        // This ensures auto-paired devices get all necessary scopes, even if the client
+        // provides incomplete scopes (e.g., only admin/approvals/pairing from old config).
+        if (isControlUi || isWebchat) {
           scopes = [
             "operator.read",
             "operator.write",
