@@ -1,10 +1,13 @@
 import { html } from "lit";
 import type { GatewayHelloOk } from "../gateway.ts";
+import type { AppMode } from "../navigation.ts";
 import type { UiSettings } from "../storage.ts";
 import { formatRelativeTimestamp, formatDurationHuman } from "../format.ts";
+import { icons } from "../icons.ts";
 import { formatNextRun } from "../presenter.ts";
 
 export type OverviewProps = {
+  mode: AppMode;
   connected: boolean;
   hello: GatewayHelloOk | null;
   settings: UiSettings;
@@ -24,16 +27,10 @@ export type OverviewProps = {
 
 export function renderOverview(props: OverviewProps) {
   const snapshot = props.hello?.snapshot as
-    | {
-        uptimeMs?: number;
-        policy?: { tickIntervalMs?: number };
-        authMode?: "none" | "token" | "password" | "trusted-proxy";
-      }
+    | { uptimeMs?: number; policy?: { tickIntervalMs?: number } }
     | undefined;
   const uptime = snapshot?.uptimeMs ? formatDurationHuman(snapshot.uptimeMs) : "n/a";
   const tick = snapshot?.policy?.tickIntervalMs ? `${snapshot.policy.tickIntervalMs}ms` : "n/a";
-  const authMode = snapshot?.authMode;
-  const isTrustedProxy = authMode === "trusted-proxy";
   const authHint = (() => {
     if (props.connected || !props.lastError) {
       return null;
@@ -125,11 +122,11 @@ export function renderOverview(props: OverviewProps) {
     `;
   })();
 
-  return html`
-    <section class="grid grid-cols-2">
-      <div class="card">
-        <div class="card-title">Gateway Access</div>
-        <div class="card-sub">Where the dashboard connects and how it authenticates.</div>
+  const isBasic = props.mode === "basic";
+
+  // Simplified form fields for Basic mode
+  const gatewayAccessForm = isBasic
+    ? html`
         <div class="form-grid" style="margin-top: 16px;">
           <label class="field">
             <span>WebSocket URL</span>
@@ -142,35 +139,55 @@ export function renderOverview(props: OverviewProps) {
               placeholder="ws://100.x.y.z:18789"
             />
           </label>
-          ${
-            isTrustedProxy
-              ? ""
-              : html`
-                <label class="field">
-                  <span>Gateway Token</span>
-                  <input
-                    .value=${props.settings.token}
-                    @input=${(e: Event) => {
-                      const v = (e.target as HTMLInputElement).value;
-                      props.onSettingsChange({ ...props.settings, token: v });
-                    }}
-                    placeholder="OPENCLAW_GATEWAY_TOKEN"
-                  />
-                </label>
-                <label class="field">
-                  <span>Password (not stored)</span>
-                  <input
-                    type="password"
-                    .value=${props.password}
-                    @input=${(e: Event) => {
-                      const v = (e.target as HTMLInputElement).value;
-                      props.onPasswordChange(v);
-                    }}
-                    placeholder="system or shared password"
-                  />
-                </label>
-              `
-          }
+          <label class="field">
+            <span>Gateway Token</span>
+            <input
+              .value=${props.settings.token}
+              @input=${(e: Event) => {
+                const v = (e.target as HTMLInputElement).value;
+                props.onSettingsChange({ ...props.settings, token: v });
+              }}
+              placeholder="OPENCLAW_GATEWAY_TOKEN"
+            />
+          </label>
+        </div>
+      `
+    : html`
+        <div class="form-grid" style="margin-top: 16px;">
+          <label class="field">
+            <span>WebSocket URL</span>
+            <input
+              .value=${props.settings.gatewayUrl}
+              @input=${(e: Event) => {
+                const v = (e.target as HTMLInputElement).value;
+                props.onSettingsChange({ ...props.settings, gatewayUrl: v });
+              }}
+              placeholder="ws://100.x.y.z:18789"
+            />
+          </label>
+          <label class="field">
+            <span>Gateway Token</span>
+            <input
+              .value=${props.settings.token}
+              @input=${(e: Event) => {
+                const v = (e.target as HTMLInputElement).value;
+                props.onSettingsChange({ ...props.settings, token: v });
+              }}
+              placeholder="OPENCLAW_GATEWAY_TOKEN"
+            />
+          </label>
+          <label class="field">
+            <span>Password (not stored)</span>
+            <input
+              type="password"
+              .value=${props.password}
+              @input=${(e: Event) => {
+                const v = (e.target as HTMLInputElement).value;
+                props.onPasswordChange(v);
+              }}
+              placeholder="system or shared password"
+            />
+          </label>
           <label class="field">
             <span>Default Session Key</span>
             <input
@@ -182,21 +199,33 @@ export function renderOverview(props: OverviewProps) {
             />
           </label>
         </div>
-        <div class="row" style="margin-top: 14px;">
-          <button class="btn" @click=${() => props.onConnect()}>Connect</button>
-          <button class="btn" @click=${() => props.onRefresh()}>Refresh</button>
-          <span class="muted">${isTrustedProxy ? "Authenticated via trusted proxy." : "Click Connect to apply connection changes."}</span>
-        </div>
-      </div>
+      `;
 
-      <div class="card">
-        <div class="card-title">Snapshot</div>
-        <div class="card-sub">Latest gateway handshake information.</div>
+  const connectionStatus = props.connected ? "ok" : "warn";
+  const connectionText = props.connected ? "Connected" : "Disconnected";
+
+  // Simplified snapshot stats for Basic mode
+  const snapshotStats = isBasic
+    ? html`
         <div class="stat-grid" style="margin-top: 16px;">
           <div class="stat">
             <div class="stat-label">Status</div>
-            <div class="stat-value ${props.connected ? "ok" : "warn"}">
-              ${props.connected ? "Connected" : "Disconnected"}
+            <div class="stat-value">
+              <span class="log-level ${connectionStatus}">${connectionText}</span>
+            </div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">Uptime</div>
+            <div class="stat-value">${uptime}</div>
+          </div>
+        </div>
+      `
+    : html`
+        <div class="stat-grid" style="margin-top: 16px;">
+          <div class="stat">
+            <div class="stat-label">Status</div>
+            <div class="stat-value">
+              <span class="log-level ${connectionStatus}">${connectionText}</span>
             </div>
           </div>
           <div class="stat">
@@ -214,6 +243,90 @@ export function renderOverview(props: OverviewProps) {
             </div>
           </div>
         </div>
+      `;
+
+  const cronStatus = props.cronEnabled == null ? "n/a" : props.cronEnabled ? "info" : "warn";
+  const cronText = props.cronEnabled == null ? "n/a" : props.cronEnabled ? "Enabled" : "Disabled";
+
+  // Simplified stats row for Basic mode
+  const statsRow = isBasic
+    ? html`
+        <section class="grid grid-cols-2" style="margin-top: 18px;">
+          <div class="card stat-card" style="padding: 12px 14px;">
+            <div class="stat-label">Instances</div>
+            <div class="stat-value">${props.presenceCount}</div>
+            <div class="muted">Presence beacons in the last 5 minutes.</div>
+          </div>
+          <div class="card stat-card" style="padding: 12px 14px;">
+            <div class="stat-label">Sessions</div>
+            <div class="stat-value">${props.sessionsCount ?? "n/a"}</div>
+            <div class="muted">Recent session keys tracked by the gateway.</div>
+          </div>
+        </section>
+      `
+    : html`
+        <section class="grid grid-cols-3" style="margin-top: 18px;">
+          <div class="card stat-card" style="padding: 12px 14px;">
+            <div class="stat-label">Instances</div>
+            <div class="stat-value">${props.presenceCount}</div>
+            <div class="muted">Presence beacons in the last 5 minutes.</div>
+          </div>
+          <div class="card stat-card" style="padding: 12px 14px;">
+            <div class="stat-label">Sessions</div>
+            <div class="stat-value">${props.sessionsCount ?? "n/a"}</div>
+            <div class="muted">Recent session keys tracked by the gateway.</div>
+          </div>
+          <div class="card stat-card" style="padding: 12px 14px;">
+            <div class="stat-label">Cron</div>
+            <div class="stat-value">
+              ${props.cronEnabled == null ? "n/a" : html`<span class="log-level ${cronStatus}">${cronText}</span>`}
+            </div>
+            <div class="muted">Next wake ${formatNextRun(props.cronNext)}</div>
+          </div>
+        </section>
+      `;
+
+  // Notes section only in Advanced mode
+  const notesSection = isBasic
+    ? null
+    : html`
+        <section class="card" style="margin-top: 18px">
+          <div class="card-title">Notes</div>
+          <div class="card-sub">Quick reminders for remote control setups.</div>
+          <div class="note-grid" style="margin-top: 14px">
+            <div>
+              <div class="note-title">Tailscale serve</div>
+              <div class="muted">Prefer serve mode to keep the gateway on loopback with tailnet auth.</div>
+            </div>
+            <div>
+              <div class="note-title">Session hygiene</div>
+              <div class="muted">Use /new or sessions.patch to reset context.</div>
+            </div>
+            <div>
+              <div class="note-title">Cron reminders</div>
+              <div class="muted">Use isolated sessions for recurring runs.</div>
+            </div>
+          </div>
+        </section>
+      `;
+
+  return html`
+    <section class="grid grid-cols-2">
+      <div class="card">
+        <div class="card-title">Gateway Access</div>
+        <div class="card-sub">Where the dashboard connects and how it authenticates.</div>
+        ${gatewayAccessForm}
+        <div class="row" style="margin-top: 14px;">
+          <button class="btn" @click=${() => props.onConnect()}>Connect</button>
+          <button class="btn" @click=${() => props.onRefresh()}>Refresh</button>
+          <span class="muted">Click Connect to apply connection changes.</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Snapshot</div>
+        <div class="card-sub">Latest gateway handshake information.</div>
+        ${snapshotStats}
         ${
           props.lastError
             ? html`<div class="callout danger" style="margin-top: 14px;">
@@ -221,54 +334,18 @@ export function renderOverview(props: OverviewProps) {
               ${authHint ?? ""}
               ${insecureContextHint ?? ""}
             </div>`
-            : html`
-                <div class="callout" style="margin-top: 14px">
-                  Use Channels to link WhatsApp, Telegram, Discord, Signal, or iMessage.
-                </div>
-              `
+            : isBasic
+              ? null
+              : html`
+                  <div class="callout" style="margin-top: 14px">
+                    Use Channels to link WhatsApp, Telegram, Discord, Signal, or iMessage.
+                  </div>
+                `
         }
       </div>
     </section>
 
-    <section class="grid grid-cols-3" style="margin-top: 18px;">
-      <div class="card stat-card">
-        <div class="stat-label">Instances</div>
-        <div class="stat-value">${props.presenceCount}</div>
-        <div class="muted">Presence beacons in the last 5 minutes.</div>
-      </div>
-      <div class="card stat-card">
-        <div class="stat-label">Sessions</div>
-        <div class="stat-value">${props.sessionsCount ?? "n/a"}</div>
-        <div class="muted">Recent session keys tracked by the gateway.</div>
-      </div>
-      <div class="card stat-card">
-        <div class="stat-label">Cron</div>
-        <div class="stat-value">
-          ${props.cronEnabled == null ? "n/a" : props.cronEnabled ? "Enabled" : "Disabled"}
-        </div>
-        <div class="muted">Next wake ${formatNextRun(props.cronNext)}</div>
-      </div>
-    </section>
-
-    <section class="card" style="margin-top: 18px;">
-      <div class="card-title">Notes</div>
-      <div class="card-sub">Quick reminders for remote control setups.</div>
-      <div class="note-grid" style="margin-top: 14px;">
-        <div>
-          <div class="note-title">Tailscale serve</div>
-          <div class="muted">
-            Prefer serve mode to keep the gateway on loopback with tailnet auth.
-          </div>
-        </div>
-        <div>
-          <div class="note-title">Session hygiene</div>
-          <div class="muted">Use /new or sessions.patch to reset context.</div>
-        </div>
-        <div>
-          <div class="note-title">Cron reminders</div>
-          <div class="muted">Use isolated sessions for recurring runs.</div>
-        </div>
-      </div>
-    </section>
+    ${statsRow}
+    ${notesSection}
   `;
 }

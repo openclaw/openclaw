@@ -2,12 +2,14 @@ import { html, nothing } from "lit";
 import type { ChannelAccountSnapshot, NostrStatus } from "../types.ts";
 import type { ChannelsProps } from "./channels.types.ts";
 import { formatRelativeTimestamp } from "../format.ts";
+import { icons } from "../icons.ts";
 import { renderChannelConfigSection } from "./channels.config.ts";
 import {
   renderNostrProfileForm,
   type NostrProfileFormState,
   type NostrProfileFormCallbacks,
 } from "./channels.nostr-profile-form.ts";
+import { statusChip } from "./channels.shared.ts";
 
 /**
  * Truncate a pubkey for display (shows first and last 8 chars)
@@ -67,11 +69,11 @@ export function renderNostrCard(params: {
         <div class="status-list account-card-status">
           <div>
             <span class="label">Running</span>
-            <span>${account.running ? "Yes" : "No"}</span>
+            ${statusChip(account.running)}
           </div>
           <div>
             <span class="label">Configured</span>
-            <span>${account.configured ? "Yes" : "No"}</span>
+            ${statusChip(account.configured)}
           </div>
           <div>
             <span class="label">Public Key</span>
@@ -183,54 +185,61 @@ export function renderNostrCard(params: {
   };
 
   return html`
-    <div class="card">
-      <div class="card-title">Nostr</div>
-      <div class="card-sub">Decentralized DMs via Nostr relays (NIP-04).</div>
-      ${accountCountLabel}
+    <div class="card" style="padding: 0;">
+      <div style="padding: 12px 14px; border-bottom: 1px solid var(--border);">
+        <div class="card-title" style="margin: 0; display: flex; align-items: center; gap: 8px;">
+          <span class="icon" style="width: 16px; height: 16px;">${icons.radio}</span>
+          Nostr
+        </div>
+        <div class="card-sub" style="margin: 0;">Decentralized DMs via Nostr relays (NIP-04).</div>
+        ${accountCountLabel}
+      </div>
 
-      ${
-        hasMultipleAccounts
-          ? html`
-            <div class="account-card-list">
-              ${nostrAccounts.map((account) => renderAccountCard(account))}
-            </div>
-          `
-          : html`
-            <div class="status-list" style="margin-top: 16px;">
-              <div>
-                <span class="label">Configured</span>
-                <span>${summaryConfigured ? "Yes" : "No"}</span>
+      <div style="padding: 12px 14px;">
+        ${
+          hasMultipleAccounts
+            ? html`
+              <div class="account-card-list">
+                ${nostrAccounts.map((account) => renderAccountCard(account))}
               </div>
-              <div>
-                <span class="label">Running</span>
-                <span>${summaryRunning ? "Yes" : "No"}</span>
+            `
+            : html`
+              <div class="status-list">
+                <div>
+                  <span class="label">Configured</span>
+                  ${statusChip(summaryConfigured)}
+                </div>
+                <div>
+                  <span class="label">Running</span>
+                  ${statusChip(summaryRunning)}
+                </div>
+                <div>
+                  <span class="label">Public Key</span>
+                  <span class="monospace" title="${summaryPublicKey ?? ""}"
+                    >${truncatePubkey(summaryPublicKey)}</span
+                  >
+                </div>
+                <div>
+                  <span class="label">Last start</span>
+                  <span>${summaryLastStartAt ? formatRelativeTimestamp(summaryLastStartAt) : "n/a"}</span>
+                </div>
               </div>
-              <div>
-                <span class="label">Public Key</span>
-                <span class="monospace" title="${summaryPublicKey ?? ""}"
-                  >${truncatePubkey(summaryPublicKey)}</span
-                >
-              </div>
-              <div>
-                <span class="label">Last start</span>
-                <span>${summaryLastStartAt ? formatRelativeTimestamp(summaryLastStartAt) : "n/a"}</span>
-              </div>
-            </div>
-          `
-      }
+            `
+        }
 
-      ${
-        summaryLastError
-          ? html`<div class="callout danger" style="margin-top: 12px;">${summaryLastError}</div>`
-          : nothing
-      }
+        ${
+          summaryLastError
+            ? html`<div class="callout danger" style="margin-top: 12px;">${summaryLastError}</div>`
+            : nothing
+        }
 
-      ${renderProfileSection()}
+        ${renderProfileSection()}
 
-      ${renderChannelConfigSection({ channelId: "nostr", props })}
+        ${renderChannelConfigSection({ channelId: "nostr", props })}
 
-      <div class="row" style="margin-top: 12px;">
-        <button class="btn" @click=${() => props.onRefresh(false)}>Refresh</button>
+        <div class="row" style="margin-top: 12px;">
+          <button class="btn" @click=${() => props.onRefresh(false)}>Refresh</button>
+        </div>
       </div>
     </div>
   `;
