@@ -1,7 +1,5 @@
-import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import {
   formatGatewayServiceDescription,
@@ -9,6 +7,7 @@ import {
   resolveGatewayLaunchAgentLabel,
   resolveLegacyGatewayLaunchAgentLabels,
 } from "./constants.js";
+import { execFileUtf8 } from "./exec-file.js";
 import {
   buildLaunchAgentPlist as buildLaunchAgentPlistImpl,
   readLaunchAgentProgramArgumentsFromFile,
@@ -16,8 +15,6 @@ import {
 import { formatLine, toPosixPath } from "./output.js";
 import { resolveGatewayStateDir, resolveHomeDir } from "./paths.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
-
-const execFileAsync = promisify(execFile);
 
 function resolveLaunchAgentLabel(args?: { env?: Record<string, string | undefined> }): string {
   const envLabel = args?.env?.OPENCLAW_LAUNCHD_LABEL?.trim();
@@ -98,30 +95,10 @@ export function buildLaunchAgentPlist({
 async function execLaunchctl(
   args: string[],
 ): Promise<{ stdout: string; stderr: string; code: number }> {
-  try {
-    const isWindows = process.platform === "win32";
-    const file = isWindows ? (process.env.ComSpec ?? "cmd.exe") : "launchctl";
-    const fileArgs = isWindows ? ["/d", "/s", "/c", "launchctl", ...args] : args;
-    const { stdout, stderr } = await execFileAsync(file, fileArgs, { encoding: "utf8" });
-    return {
-      stdout: String(stdout ?? ""),
-      stderr: String(stderr ?? ""),
-      code: 0,
-    };
-  } catch (error) {
-    const e = error as {
-      stdout?: unknown;
-      stderr?: unknown;
-      code?: unknown;
-      message?: unknown;
-    };
-    return {
-      stdout: typeof e.stdout === "string" ? e.stdout : "",
-      stderr:
-        typeof e.stderr === "string" ? e.stderr : typeof e.message === "string" ? e.message : "",
-      code: typeof e.code === "number" ? e.code : 1,
-    };
-  }
+  const isWindows = process.platform === "win32";
+  const file = isWindows ? (process.env.ComSpec ?? "cmd.exe") : "launchctl";
+  const fileArgs = isWindows ? ["/d", "/s", "/c", "launchctl", ...args] : args;
+  return await execFileUtf8(file, fileArgs, isWindows ? { windowsHide: true } : {});
 }
 
 function resolveGuiDomain(): string {
