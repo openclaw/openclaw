@@ -53,7 +53,7 @@ const BOOTSTRAP_FILE_NAMES = [
   DEFAULT_HEARTBEAT_FILENAME,
   DEFAULT_BOOTSTRAP_FILENAME,
 ] as const;
-const BOOTSTRAP_FILE_NAMES_WITHOUT_ONBOARDING = BOOTSTRAP_FILE_NAMES.filter(
+const BOOTSTRAP_FILE_NAMES_POST_ONBOARDING = BOOTSTRAP_FILE_NAMES.filter(
   (name) => name !== DEFAULT_BOOTSTRAP_FILENAME,
 );
 
@@ -122,7 +122,7 @@ async function listAgentFiles(workspaceDir: string, options?: { hideBootstrap?: 
   }> = [];
 
   const bootstrapFileNames = options?.hideBootstrap
-    ? BOOTSTRAP_FILE_NAMES_WITHOUT_ONBOARDING
+    ? BOOTSTRAP_FILE_NAMES_POST_ONBOARDING
     : BOOTSTRAP_FILE_NAMES;
   for (const name of bootstrapFileNames) {
     const filePath = path.join(workspaceDir, name);

@@ -119,6 +119,12 @@ function createEnoentError() {
   return err;
 }
 
+function createErrnoError(code: string) {
+  const err = new Error(code) as NodeJS.ErrnoException;
+  err.code = code;
+  return err;
+}
+
 beforeEach(() => {
   mocks.fsReadFile.mockImplementation(async () => {
     throw createEnoentError();
@@ -422,5 +428,21 @@ describe("agents.files.list", () => {
     const [, result] = respond.mock.calls[0] ?? [];
     const files = (result as { files: Array<{ name: string }> }).files;
     expect(files.some((file) => file.name === "BOOTSTRAP.md")).toBe(false);
+  });
+
+  it("falls back to showing BOOTSTRAP.md when workspace state cannot be read", async () => {
+    mocks.fsReadFile.mockImplementation(async (filePath: string | URL | number) => {
+      if (String(filePath).endsWith("workspace-state.json")) {
+        throw createErrnoError("EACCES");
+      }
+      throw createEnoentError();
+    });
+
+    const { respond, promise } = makeCall("agents.files.list", { agentId: "main" });
+    await promise;
+
+    const [, result] = respond.mock.calls[0] ?? [];
+    const files = (result as { files: Array<{ name: string }> }).files;
+    expect(files.some((file) => file.name === "BOOTSTRAP.md")).toBe(true);
   });
 });
