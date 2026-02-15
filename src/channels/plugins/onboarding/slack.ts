@@ -124,10 +124,10 @@ async function noteSlackTokenHelp(prompter: WizardPrompter, botName: string): Pr
   );
 }
 
-function setSlackGroupPolicy(
+function patchSlackConfigForAccount(
   cfg: OpenClawConfig,
   accountId: string,
-  groupPolicy: "open" | "allowlist" | "disabled",
+  patch: Record<string, unknown>,
 ): OpenClawConfig {
   if (accountId === DEFAULT_ACCOUNT_ID) {
     return {
@@ -137,7 +137,7 @@ function setSlackGroupPolicy(
         slack: {
           ...cfg.channels?.slack,
           enabled: true,
-          groupPolicy,
+          ...patch,
         },
       },
     };
@@ -154,12 +154,20 @@ function setSlackGroupPolicy(
           [accountId]: {
             ...cfg.channels?.slack?.accounts?.[accountId],
             enabled: cfg.channels?.slack?.accounts?.[accountId]?.enabled ?? true,
-            groupPolicy,
+            ...patch,
           },
         },
       },
     },
   };
+}
+
+function setSlackGroupPolicy(
+  cfg: OpenClawConfig,
+  accountId: string,
+  groupPolicy: "open" | "allowlist" | "disabled",
+): OpenClawConfig {
+  return patchSlackConfigForAccount(cfg, accountId, { groupPolicy });
 }
 
 function setSlackChannelAllowlist(
@@ -168,37 +176,7 @@ function setSlackChannelAllowlist(
   channelKeys: string[],
 ): OpenClawConfig {
   const channels = Object.fromEntries(channelKeys.map((key) => [key, { allow: true }]));
-  if (accountId === DEFAULT_ACCOUNT_ID) {
-    return {
-      ...cfg,
-      channels: {
-        ...cfg.channels,
-        slack: {
-          ...cfg.channels?.slack,
-          enabled: true,
-          channels,
-        },
-      },
-    };
-  }
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      slack: {
-        ...cfg.channels?.slack,
-        enabled: true,
-        accounts: {
-          ...cfg.channels?.slack?.accounts,
-          [accountId]: {
-            ...cfg.channels?.slack?.accounts?.[accountId],
-            enabled: cfg.channels?.slack?.accounts?.[accountId]?.enabled ?? true,
-            channels,
-          },
-        },
-      },
-    },
-  };
+  return patchSlackConfigForAccount(cfg, accountId, { channels });
 }
 
 function setSlackAllowFrom(cfg: OpenClawConfig, allowFrom: string[]): OpenClawConfig {
