@@ -14,6 +14,27 @@ export type WhatsAppActionConfig = {
   polls?: boolean;
 };
 
+export type WhatsAppGroupConfig = {
+  requireMention?: boolean;
+  tools?: GroupToolPolicyConfig;
+  toolsBySender?: GroupToolPolicyBySenderConfig;
+};
+
+export type WhatsAppAckReactionConfig = {
+  /** Emoji to use for acknowledgment (e.g., "👀"). Empty = disabled. */
+  emoji?: string;
+  /** Send reactions in direct chats. Default: true. */
+  direct?: boolean;
+  /**
+   * Send reactions in group chats:
+   * - "always": react to all group messages
+   * - "mentions": react only when bot is mentioned
+   * - "never": never react in groups
+   * Default: "mentions"
+   */
+  group?: "always" | "mentions" | "never";
+};
+
 export type WhatsAppConfig = {
   /** Optional per-account WhatsApp configuration (multi-account). */
   accounts?: Record<string, WhatsAppAccountConfig>;
@@ -73,29 +94,9 @@ export type WhatsAppConfig = {
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
   /** Per-action tool gating (default: true for all). */
   actions?: WhatsAppActionConfig;
-  groups?: Record<
-    string,
-    {
-      requireMention?: boolean;
-      tools?: GroupToolPolicyConfig;
-      toolsBySender?: GroupToolPolicyBySenderConfig;
-    }
-  >;
+  groups?: Record<string, WhatsAppGroupConfig>;
   /** Acknowledgment reaction sent immediately upon message receipt. */
-  ackReaction?: {
-    /** Emoji to use for acknowledgment (e.g., "👀"). Empty = disabled. */
-    emoji?: string;
-    /** Send reactions in direct chats. Default: true. */
-    direct?: boolean;
-    /**
-     * Send reactions in group chats:
-     * - "always": react to all group messages
-     * - "mentions": react only when bot is mentioned
-     * - "never": never react in groups
-     * Default: "mentions"
-     */
-    group?: "always" | "mentions" | "never";
-  };
+  ackReaction?: WhatsAppAckReactionConfig;
   /** Debounce window (ms) for batching rapid consecutive messages from the same sender (0 to disable). */
   debounceMs?: number;
   /** Heartbeat visibility settings for this channel. */
@@ -141,29 +142,9 @@ export type WhatsAppAccountConfig = {
   blockStreaming?: boolean;
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
-  groups?: Record<
-    string,
-    {
-      requireMention?: boolean;
-      tools?: GroupToolPolicyConfig;
-      toolsBySender?: GroupToolPolicyBySenderConfig;
-    }
-  >;
+  groups?: Record<string, WhatsAppGroupConfig>;
   /** Acknowledgment reaction sent immediately upon message receipt. */
-  ackReaction?: {
-    /** Emoji to use for acknowledgment (e.g., "👀"). Empty = disabled. */
-    emoji?: string;
-    /** Send reactions in direct chats. Default: true. */
-    direct?: boolean;
-    /**
-     * Send reactions in group chats:
-     * - "always": react to all group messages
-     * - "mentions": react only when bot is mentioned
-     * - "never": never react in groups
-     * Default: "mentions"
-     */
-    group?: "always" | "mentions" | "never";
-  };
+  ackReaction?: WhatsAppAckReactionConfig;
   /** Debounce window (ms) for batching rapid consecutive messages from the same sender (0 to disable). */
   debounceMs?: number;
   /** Heartbeat visibility settings for this account. */
