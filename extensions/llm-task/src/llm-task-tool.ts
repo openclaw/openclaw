@@ -10,6 +10,58 @@ import path from "node:path";
 import type { OpenClawPluginApi } from "../../../src/plugins/types.js";
 
 type RunEmbeddedPiAgentFn = (params: Record<string, unknown>) => Promise<unknown>;
+type ThinkingHelpers = {
+  formatThinkingLevels: (
+    provider?: string | null,
+    model?: string | null,
+    separator?: string,
+  ) => string;
+  formatXHighModelHint: () => string;
+  normalizeThinkLevel: (
+    raw?: string | null,
+  ) => "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | undefined;
+  supportsXHighThinking: (provider?: string | null, model?: string | null) => boolean;
+};
+
+async function loadThinkingHelpers(): Promise<ThinkingHelpers> {
+  // Source checkout (tests/dev)
+  try {
+    const mod = await import("../../../src/auto-reply/thinking.js");
+    if (
+      typeof mod.formatThinkingLevels === "function" &&
+      typeof mod.formatXHighModelHint === "function" &&
+      typeof mod.normalizeThinkLevel === "function" &&
+      typeof mod.supportsXHighThinking === "function"
+    ) {
+      return {
+        formatThinkingLevels: mod.formatThinkingLevels,
+        formatXHighModelHint: mod.formatXHighModelHint,
+        normalizeThinkLevel: mod.normalizeThinkLevel,
+        supportsXHighThinking: mod.supportsXHighThinking,
+      };
+    }
+  } catch {
+    // ignore
+  }
+
+  // Bundled install (built)
+  const builtThinkingPath = "../../../auto-reply/thinking.js";
+  const mod = await import(builtThinkingPath);
+  if (
+    typeof mod.formatThinkingLevels !== "function" ||
+    typeof mod.formatXHighModelHint !== "function" ||
+    typeof mod.normalizeThinkLevel !== "function" ||
+    typeof mod.supportsXHighThinking !== "function"
+  ) {
+    throw new Error("Internal error: thinking helpers not available");
+  }
+  return {
+    formatThinkingLevels: mod.formatThinkingLevels,
+    formatXHighModelHint: mod.formatXHighModelHint,
+    normalizeThinkLevel: mod.normalizeThinkLevel,
+    supportsXHighThinking: mod.supportsXHighThinking,
+  };
+}
 
 async function loadRunEmbeddedPiAgent(): Promise<RunEmbeddedPiAgentFn> {
   // Source checkout (tests/dev)
@@ -25,7 +77,8 @@ async function loadRunEmbeddedPiAgent(): Promise<RunEmbeddedPiAgentFn> {
   }
 
   // Bundled install (built)
-  const mod = await import("../../../src/agents/pi-embedded-runner.js");
+  const builtRunnerPath = "../../../agents/pi-embedded-runner.js";
+  const mod = await import(builtRunnerPath);
   if (typeof mod.runEmbeddedPiAgent !== "function") {
     throw new Error("Internal error: runEmbeddedPiAgent not available");
   }
@@ -82,6 +135,7 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
         Type.String({ description: "Provider override (e.g. openai-codex, anthropic)." }),
       ),
       model: Type.Optional(Type.String({ description: "Model id override." })),
+      thinking: Type.Optional(Type.String({ description: "Thinking level override." })),
       authProfileId: Type.Optional(Type.String({ description: "Auth profile override." })),
       temperature: Type.Optional(Type.Number({ description: "Best-effort temperature override." })),
       maxTokens: Type.Optional(Type.Number({ description: "Best-effort maxTokens override." })),
@@ -133,6 +187,21 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
       if (allowed && allowed.length > 0 && !allowed.includes(modelKey)) {
         throw new Error(
           `Model not allowed by llm-task plugin config: ${modelKey}. Allowed models: ${allowed.join(", ")}`,
+        );
+      }
+
+      const thinkingHelpers = await loadThinkingHelpers();
+      const thinkingRaw =
+        typeof params.thinking === "string" && params.thinking.trim() ? params.thinking : undefined;
+      const thinkLevel = thinkingRaw ? thinkingHelpers.normalizeThinkLevel(thinkingRaw) : undefined;
+      if (thinkingRaw && !thinkLevel) {
+        throw new Error(
+          `Invalid thinking level "${thinkingRaw}". Use one of: ${thinkingHelpers.formatThinkingLevels(provider, model)}.`,
+        );
+      }
+      if (thinkLevel === "xhigh" && !thinkingHelpers.supportsXHighThinking(provider, model)) {
+        throw new Error(
+          `Thinking level "xhigh" is only supported for ${thinkingHelpers.formatXHighModelHint()}.`,
         );
       }
 
@@ -194,6 +263,7 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
           model,
           authProfileId,
           authProfileIdSource: authProfileId ? "user" : "auto",
+          thinkLevel,
           streamParams,
           disableTools: true,
         });
