@@ -298,11 +298,16 @@ export function attachGatewayWsMessageHandler(params: {
         // Note: If the client does not present a device identity, we can't bind scopes to a paired
         // device/token, so we will clear scopes after auth to avoid self-declared permissions.
         let scopes = Array.isArray(connectParams.scopes) ? connectParams.scopes : [];
+        const isControlUi = connectParams.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI;
+        const isWebchat = isWebchatConnect(connectParams);
+        // For Control UI and webchat, default to operator.read scope if no scopes provided.
+        // This fixes token-only auth where scopes would be empty, breaking the dashboard.
+        if ((isControlUi || isWebchat) && scopes.length === 0) {
+          scopes = ["operator.read"];
+        }
         connectParams.role = role;
         connectParams.scopes = scopes;
 
-        const isControlUi = connectParams.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI;
-        const isWebchat = isWebchatConnect(connectParams);
         if (isControlUi || isWebchat) {
           const originCheck = checkBrowserOrigin({
             requestHost,
