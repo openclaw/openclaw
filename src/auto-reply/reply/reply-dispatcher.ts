@@ -69,9 +69,17 @@ type ReplyDispatcherWithTypingResult = {
   markDispatchIdle: () => void;
 };
 
+export type ReplyDispatchEnqueueResult = {
+  enqueued: boolean;
+  /** Resolves when the delivery completes; rejects on delivery error. */
+  delivered: Promise<void>;
+};
+
 export type ReplyDispatcher = {
   sendToolResult: (payload: ReplyPayload) => boolean;
   sendBlockReply: (payload: ReplyPayload) => boolean;
+  /** Enqueue a block reply and return a Promise that tracks actual delivery outcome. */
+  sendBlockReplyAsync: (payload: ReplyPayload) => ReplyDispatchEnqueueResult;
   sendFinalReply: (payload: ReplyPayload) => boolean;
   waitForIdle: () => Promise<void>;
   getQueuedCounts: () => Record<ReplyDispatchKind, number>;
@@ -122,7 +130,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     waitForIdle: () => sendChain,
   });
 
-  const enqueue = (kind: ReplyDispatchKind, payload: ReplyPayload) => {
+  const enqueue = (kind: ReplyDispatchKind, payload: ReplyPayload): ReplyDispatchEnqueueResult => {
     const normalized = normalizeReplyPayloadInternal(payload, {
       responsePrefix: options.responsePrefix,
       responsePrefixContext: options.responsePrefixContext,
@@ -131,7 +139,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
       onSkip: (reason) => options.onSkip?.(payload, { kind, reason }),
     });
     if (!normalized) {
-      return false;
+      return { enqueued: false, delivered: Promise.resolve() };
     }
     queuedCounts[kind] += 1;
     pending += 1;
@@ -141,6 +149,14 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     if (kind === "block") {
       sentFirstBlock = true;
     }
+
+    // Per-delivery Promise so callers can await the actual delivery outcome.
+    let resolveDelivery!: () => void;
+    let rejectDelivery!: (err: unknown) => void;
+    const deliveryPromise = new Promise<void>((resolve, reject) => {
+      resolveDelivery = resolve;
+      rejectDelivery = reject;
+    });
 
     sendChain = sendChain
       .then(async () => {
@@ -154,9 +170,11 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         // Safe: deliver is called inside an async .then() callback, so even a synchronous
         // throw becomes a rejection that flows through .catch()/.finally(), ensuring cleanup.
         await options.deliver(normalized, { kind });
+        resolveDelivery();
       })
       .catch((err) => {
         options.onError?.(err, { kind });
+        rejectDelivery(err);
       })
       .finally(() => {
         pending -= 1;
@@ -173,7 +191,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
           options.onIdle?.();
         }
       });
-    return true;
+    return { enqueued: true, delivered: deliveryPromise };
   };
 
   const markComplete = () => {
@@ -197,9 +215,23 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
   };
 
   return {
-    sendToolResult: (payload) => enqueue("tool", payload),
-    sendBlockReply: (payload) => enqueue("block", payload),
-    sendFinalReply: (payload) => enqueue("final", payload),
+    sendToolResult: (payload) => {
+      const r = enqueue("tool", payload);
+      // Suppress unhandled rejection — errors handled by onError callback.
+      r.delivered.catch(() => {});
+      return r.enqueued;
+    },
+    sendBlockReply: (payload) => {
+      const r = enqueue("block", payload);
+      r.delivered.catch(() => {});
+      return r.enqueued;
+    },
+    sendBlockReplyAsync: (payload) => enqueue("block", payload),
+    sendFinalReply: (payload) => {
+      const r = enqueue("final", payload);
+      r.delivered.catch(() => {});
+      return r.enqueued;
+    },
     waitForIdle: () => sendChain,
     getQueuedCounts: () => ({ ...queuedCounts }),
     markComplete,

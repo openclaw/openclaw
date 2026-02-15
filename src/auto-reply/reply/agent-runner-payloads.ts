@@ -75,12 +75,6 @@ export function buildReplyPayloads(params: {
     )
     .filter(isRenderablePayload);
 
-  // Drop final payloads only when block streaming succeeded end-to-end.
-  // If streaming aborted (e.g., timeout), fall back to final payloads.
-  const shouldDropFinalPayloads =
-    params.blockStreamingEnabled &&
-    Boolean(params.blockReplyPipeline?.didStream()) &&
-    !params.blockReplyPipeline?.isAborted();
   const messagingToolSentTexts = params.messagingToolSentTexts ?? [];
   const messagingToolSentTargets = params.messagingToolSentTargets ?? [];
   const suppressMessagingToolReplies = shouldSuppressMessagingToolReplies({
@@ -93,11 +87,13 @@ export function buildReplyPayloads(params: {
     payloads: replyTaggedPayloads,
     sentTexts: messagingToolSentTexts,
   });
-  // Filter out payloads already sent via pipeline or directly during tool flush.
-  const filteredPayloads = shouldDropFinalPayloads
-    ? []
-    : params.blockStreamingEnabled
-      ? dedupedPayloads.filter((payload) => !params.blockReplyPipeline?.hasSentPayload(payload))
+  // Filter out payloads already delivered via block streaming pipeline or tool flush.
+  // Always use per-payload hasSentPayload check instead of blanket-dropping all payloads.
+  // This ensures payloads whose block delivery failed are preserved as final payloads
+  // (fallback), preventing silent message loss when individual deliveries fail.
+  const filteredPayloads =
+    params.blockStreamingEnabled && params.blockReplyPipeline
+      ? dedupedPayloads.filter((payload) => !params.blockReplyPipeline!.hasSentPayload(payload))
       : params.directlySentBlockKeys?.size
         ? dedupedPayloads.filter(
             (payload) => !params.directlySentBlockKeys!.has(createBlockReplyPayloadKey(payload)),
