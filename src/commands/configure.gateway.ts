@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveGatewayPort } from "../config/config.js";
 import { findTailscaleBinary } from "../infra/tailscale.js";
+import { validateIPv4AddressInput } from "../shared/net/ipv4.js";
 import { note } from "../terminal/note.js";
 import { buildGatewayAuthConfig } from "./configure.gateway-auth.js";
 import { confirm, select, text } from "./configure.shared.js";
@@ -72,25 +73,7 @@ export async function promptGatewayConfig(
       await text({
         message: "Custom IP address",
         placeholder: "192.168.1.100",
-        validate: (value) => {
-          if (!value) {
-            return "IP address is required for custom bind mode";
-          }
-          const trimmed = value.trim();
-          const parts = trimmed.split(".");
-          if (parts.length !== 4) {
-            return "Invalid IPv4 address (e.g., 192.168.1.100)";
-          }
-          if (
-            parts.every((part) => {
-              const n = parseInt(part, 10);
-              return !Number.isNaN(n) && n >= 0 && n <= 255 && part === String(n);
-            })
-          ) {
-            return undefined;
-          }
-          return "Invalid IPv4 address (each octet must be 0-255)";
-        },
+        validate: validateIPv4AddressInput,
       }),
       runtime,
     );

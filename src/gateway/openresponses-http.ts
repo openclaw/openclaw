@@ -40,14 +40,8 @@ import {
   buildAgentMessageFromConversationEntries,
   type ConversationEntry,
 } from "./agent-prompt.js";
-import { authorizeGatewayBearerRequestOrReply } from "./http-auth-helpers.js";
-import {
-  readJsonBodyOrError,
-  sendJson,
-  sendMethodNotAllowed,
-  setSseHeaders,
-  writeDone,
-} from "./http-common.js";
+import { sendJson, setSseHeaders, writeDone } from "./http-common.js";
+import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 import { resolveAgentIdForRequest, resolveSessionKey } from "./http-utils.js";
 import {
   CreateResponseBodySchema,
@@ -319,45 +313,61 @@ function createAssistantOutputItem(params: {
   };
 }
 
+async function runResponsesAgentCommand(params: {
+  message: string;
+  images: ImageContent[];
+  clientTools: ClientToolDefinition[];
+  extraSystemPrompt: string;
+  streamParams: { maxTokens: number } | undefined;
+  sessionKey: string;
+  runId: string;
+  deps: ReturnType<typeof createDefaultDeps>;
+}) {
+  return agentCommand(
+    {
+      message: params.message,
+      images: params.images.length > 0 ? params.images : undefined,
+      clientTools: params.clientTools.length > 0 ? params.clientTools : undefined,
+      extraSystemPrompt: params.extraSystemPrompt || undefined,
+      streamParams: params.streamParams ?? undefined,
+      sessionKey: params.sessionKey,
+      runId: params.runId,
+      deliver: false,
+      messageChannel: "webchat",
+      bestEffortDeliver: false,
+    },
+    defaultRuntime,
+    params.deps,
+  );
+}
+
 export async function handleOpenResponsesHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
   opts: OpenResponsesHttpOptions,
 ): Promise<boolean> {
-  const url = new URL(req.url ?? "/", `http://${req.headers.host || "localhost"}`);
-  if (url.pathname !== "/v1/responses") {
-    return false;
-  }
-
-  if (req.method !== "POST") {
-    sendMethodNotAllowed(res);
-    return true;
-  }
-
-  const authorized = await authorizeGatewayBearerRequestOrReply({
-    req,
-    res,
-    auth: opts.auth,
-    trustedProxies: opts.trustedProxies,
-    rateLimiter: opts.rateLimiter,
-  });
-  if (!authorized) {
-    return true;
-  }
-
   const limits = resolveResponsesLimits(opts.config);
   const maxBodyBytes =
     opts.maxBodyBytes ??
     (opts.config?.maxBodyBytes
       ? limits.maxBodyBytes
       : Math.max(limits.maxBodyBytes, limits.files.maxBytes * 2, limits.images.maxBytes * 2));
-  const body = await readJsonBodyOrError(req, res, maxBodyBytes);
-  if (body === undefined) {
+  const handled = await handleGatewayPostJsonEndpoint(req, res, {
+    pathname: "/v1/responses",
+    auth: opts.auth,
+    trustedProxies: opts.trustedProxies,
+    rateLimiter: opts.rateLimiter,
+    maxBodyBytes,
+  });
+  if (handled === false) {
+    return false;
+  }
+  if (!handled) {
     return true;
   }
 
   // Validate request body with Zod
-  const parseResult = CreateResponseBodySchema.safeParse(body);
+  const parseResult = CreateResponseBodySchema.safeParse(handled.body);
   if (!parseResult.success) {
     const issue = parseResult.error.issues[0];
     const message = issue ? `${issue.path.join(".")}: ${issue.message}` : "Invalid request body";
@@ -520,22 +530,16 @@ export async function handleOpenResponsesHttpRequest(
 
   if (!stream) {
     try {
-      const result = await agentCommand(
-        {
-          message: prompt.message,
-          images: images.length > 0 ? images : undefined,
-          clientTools: resolvedClientTools.length > 0 ? resolvedClientTools : undefined,
-          extraSystemPrompt: extraSystemPrompt || undefined,
-          streamParams: streamParams ?? undefined,
-          sessionKey,
-          runId: responseId,
-          deliver: false,
-          messageChannel: "webchat",
-          bestEffortDeliver: false,
-        },
-        defaultRuntime,
+      const result = await runResponsesAgentCommand({
+        message: prompt.message,
+        images,
+        clientTools: resolvedClientTools,
+        extraSystemPrompt,
+        streamParams,
+        sessionKey,
+        runId: responseId,
         deps,
-      );
+      });
 
       const payloads = (result as { payloads?: Array<{ text?: string }> } | null)?.payloads;
       const usage = extractUsageFromResult(result);
@@ -760,22 +764,16 @@ export async function handleOpenResponsesHttpRequest(
 
   void (async () => {
     try {
-      const result = await agentCommand(
-        {
-          message: prompt.message,
-          images: images.length > 0 ? images : undefined,
-          clientTools: resolvedClientTools.length > 0 ? resolvedClientTools : undefined,
-          extraSystemPrompt: extraSystemPrompt || undefined,
-          streamParams: streamParams ?? undefined,
-          sessionKey,
-          runId: responseId,
-          deliver: false,
-          messageChannel: "webchat",
-          bestEffortDeliver: false,
-        },
-        defaultRuntime,
+      const result = await runResponsesAgentCommand({
+        message: prompt.message,
+        images,
+        clientTools: resolvedClientTools,
+        extraSystemPrompt,
+        streamParams,
+        sessionKey,
+        runId: responseId,
         deps,
-      );
+      });
 
       finalUsage = extractUsageFromResult(result);
       maybeFinalize();

@@ -107,6 +107,20 @@ export type FileLockHandle = {
   release: () => Promise<void>;
 };
 
+async function releaseHeldLock(normalizedFile: string): Promise<void> {
+  const current = HELD_LOCKS.get(normalizedFile);
+  if (!current) {
+    return;
+  }
+  current.count -= 1;
+  if (current.count > 0) {
+    return;
+  }
+  HELD_LOCKS.delete(normalizedFile);
+  await current.handle.close().catch(() => undefined);
+  await fs.rm(current.lockPath, { force: true }).catch(() => undefined);
+}
+
 export async function acquireFileLock(
   filePath: string,
   options: FileLockOptions,
@@ -118,19 +132,7 @@ export async function acquireFileLock(
     held.count += 1;
     return {
       lockPath,
-      release: async () => {
-        const current = HELD_LOCKS.get(normalizedFile);
-        if (!current) {
-          return;
-        }
-        current.count -= 1;
-        if (current.count > 0) {
-          return;
-        }
-        HELD_LOCKS.delete(normalizedFile);
-        await current.handle.close().catch(() => undefined);
-        await fs.rm(current.lockPath, { force: true }).catch(() => undefined);
-      },
+      release: () => releaseHeldLock(normalizedFile),
     };
   }
 
@@ -145,19 +147,7 @@ export async function acquireFileLock(
       HELD_LOCKS.set(normalizedFile, { count: 1, handle, lockPath });
       return {
         lockPath,
-        release: async () => {
-          const current = HELD_LOCKS.get(normalizedFile);
-          if (!current) {
-            return;
-          }
-          current.count -= 1;
-          if (current.count > 0) {
-            return;
-          }
-          HELD_LOCKS.delete(normalizedFile);
-          await current.handle.close().catch(() => undefined);
-          await fs.rm(current.lockPath, { force: true }).catch(() => undefined);
-        },
+        release: () => releaseHeldLock(normalizedFile),
       };
     } catch (err) {
       const code = (err as { code?: string }).code;
