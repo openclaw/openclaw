@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserRouteContext, BrowserServerState } from "./server-context.js";
 import { resolveBrowserConfig } from "./config.js";
 import { createBrowserProfilesService } from "./profiles-service.js";
@@ -46,6 +46,10 @@ function createCtx(resolved: BrowserServerState["resolved"]) {
 }
 
 describe("BrowserProfilesService", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("allocates next local port for new profiles", async () => {
     const resolved = resolveBrowserConfig({});
     const { ctx, state } = createCtx(resolved);
@@ -87,6 +91,51 @@ describe("BrowserProfilesService", () => {
         }),
       }),
     );
+  });
+
+  it("persists browser-use profiles with explicit driver", async () => {
+    const resolved = resolveBrowserConfig({});
+    const { ctx, state } = createCtx(resolved);
+
+    vi.mocked(loadConfig).mockReturnValue({ browser: { profiles: {} } });
+
+    const service = createBrowserProfilesService(ctx);
+    const result = await service.createProfile({
+      name: "browser-use",
+      driver: "browser-use",
+      cdpUrl: "http://127.0.0.1:9222",
+    });
+
+    expect(result.profile).toBe("browser-use");
+    expect(state.resolved.profiles["browser-use"]?.driver).toBe("browser-use");
+    expect(writeConfigFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        browser: expect.objectContaining({
+          profiles: expect.objectContaining({
+            "browser-use": expect.objectContaining({
+              driver: "browser-use",
+              cdpUrl: "http://127.0.0.1:9222",
+            }),
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("requires cdpUrl for browser-use profiles", async () => {
+    const resolved = resolveBrowserConfig({});
+    const { ctx } = createCtx(resolved);
+
+    vi.mocked(loadConfig).mockReturnValue({ browser: { profiles: {} } });
+
+    const service = createBrowserProfilesService(ctx);
+    await expect(
+      service.createProfile({
+        name: "browser-use",
+        driver: "browser-use",
+      }),
+    ).rejects.toThrow(/require cdpUrl/i);
+    expect(writeConfigFile).not.toHaveBeenCalled();
   });
 
   it("deletes remote profiles without stopping or removing local data", async () => {

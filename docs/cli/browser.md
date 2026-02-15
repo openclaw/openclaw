@@ -39,10 +39,12 @@ Profiles are named browser routing configs. In practice:
 
 - `openclaw`: launches/attaches to a dedicated OpenClaw-managed Chrome instance (isolated user data dir).
 - `chrome`: controls your existing Chrome tab(s) via the Chrome extension relay.
+- `browser-use` (optional): direct CDP attach to an existing browser (no extension relay attach).
 
 ```bash
 openclaw browser profiles
 openclaw browser create-profile --name work --color "#FF5A36"
+openclaw browser create-profile --name browser-use --driver browser-use --cdp-url http://127.0.0.1:9222
 openclaw browser delete-profile --name work
 ```
 

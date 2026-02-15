@@ -124,6 +124,24 @@ describe("browser config", () => {
     expect(remote?.cdpIsLoopback).toBe(false);
   });
 
+  it("resolves browser-use driver profiles", () => {
+    const resolved = resolveBrowserConfig({
+      profiles: {
+        "browser-use": {
+          driver: "browser-use",
+          cdpUrl: "http://127.0.0.1:9222",
+          color: "#4A90E2",
+        },
+      },
+    });
+
+    const profile = resolveProfile(resolved, "browser-use");
+    expect(profile?.driver).toBe("browser-use");
+    expect(profile?.cdpUrl).toBe("http://127.0.0.1:9222");
+    expect(profile?.cdpPort).toBe(9222);
+    expect(profile?.cdpIsLoopback).toBe(true);
+  });
+
   it("uses base protocol for profiles with only cdpPort", () => {
     const resolved = resolveBrowserConfig({
       cdpUrl: "https://example.com:9443",

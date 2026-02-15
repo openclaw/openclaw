@@ -129,6 +129,7 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
     const driver = toStringOrEmpty((req.body as { driver?: unknown })?.driver) as
       | "openclaw"
       | "extension"
+      | "browser-use"
       | "";
 
     if (!name) {
@@ -141,7 +142,12 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
         name,
         color: color || undefined,
         cdpUrl: cdpUrl || undefined,
-        driver: driver === "extension" ? "extension" : undefined,
+        driver:
+          driver === "extension"
+            ? "extension"
+            : driver === "browser-use"
+              ? "browser-use"
+              : undefined,
       });
       res.json(result);
     } catch (err) {

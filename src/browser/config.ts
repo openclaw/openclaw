@@ -40,7 +40,7 @@ export type ResolvedBrowserProfile = {
   cdpHost: string;
   cdpIsLoopback: boolean;
   color: string;
-  driver: "openclaw" | "extension";
+  driver: "openclaw" | "extension" | "browser-use";
 };
 
 function normalizeHexColor(raw: string | undefined) {
@@ -232,7 +232,12 @@ export function resolveProfile(
   let cdpHost = resolved.cdpHost;
   let cdpPort = profile.cdpPort ?? 0;
   let cdpUrl = "";
-  const driver = profile.driver === "extension" ? "extension" : "openclaw";
+  const driver =
+    profile.driver === "extension"
+      ? "extension"
+      : profile.driver === "browser-use"
+        ? "browser-use"
+        : "openclaw";
 
   if (rawProfileUrl) {
     const parsed = parseHttpUrl(rawProfileUrl, `browser.profiles.${profileName}.cdpUrl`);

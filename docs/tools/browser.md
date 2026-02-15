@@ -43,13 +43,16 @@ openclaw browser --browser-profile openclaw snapshot
 If you get “Browser disabled”, enable it in config (see below) and restart the
 Gateway.
 
-## Profiles: `openclaw` vs `chrome`
+## Profiles: `openclaw`, `chrome`, and `browser-use`
 
 - `openclaw`: managed, isolated browser (no extension required).
 - `chrome`: extension relay to your **system browser** (requires the OpenClaw
   extension to be attached to a tab).
+- `browser-use` (optional): attaches directly to an existing CDP endpoint (no
+  extension relay attachment required).
 
-Set `browser.defaultProfile: "openclaw"` if you want managed mode by default.
+Set `browser.defaultProfile: "openclaw"` or `"browser-use"` if you do not want
+extension-relay mode as the default.
 
 ## Configuration
 
@@ -72,6 +75,11 @@ Browser settings live in `~/.openclaw/openclaw.json`.
       openclaw: { cdpPort: 18800, color: "#FF4500" },
       work: { cdpPort: 18801, color: "#0066CC" },
       remote: { cdpUrl: "http://10.0.0.42:9222", color: "#00AA00" },
+      "browser-use": {
+        driver: "browser-use",
+        cdpUrl: "http://127.0.0.1:9222",
+        color: "#4A90E2",
+      },
     },
   },
 }
@@ -87,8 +95,9 @@ Notes:
 - `remoteCdpTimeoutMs` applies to remote (non-loopback) CDP reachability checks.
 - `remoteCdpHandshakeTimeoutMs` applies to remote CDP WebSocket reachability checks.
 - `attachOnly: true` means “never launch a local browser; only attach if it is already running.”
+- `driver: "browser-use"` profiles require an explicit `cdpUrl` and never launch/stop Chrome for you.
 - `color` + per-profile `color` tint the browser UI so you can see which profile is active.
-- Default profile is `chrome` (extension relay). Use `defaultProfile: "openclaw"` for the managed browser.
+- Default profile is `chrome` (extension relay). Use `defaultProfile: "openclaw"` or `"browser-use"` for no-relay defaults.
 - Auto-detect order: system default browser if Chromium-based; otherwise Chrome → Brave → Edge → Chromium → Chrome Canary.
 - Local `openclaw` profiles auto-assign `cdpPort`/`cdpUrl` — set those only for remote CDP.
 
@@ -207,6 +216,7 @@ OpenClaw supports multiple named profiles (routing configs). Profiles can be:
 
 - **openclaw-managed**: a dedicated Chromium-based browser instance with its own user data directory + CDP port
 - **remote**: an explicit CDP URL (Chromium-based browser running elsewhere)
+- **browser-use**: direct CDP attach to an existing browser (no extension relay/tab attach)
 - **extension relay**: your existing Chrome tab(s) via the local relay + Chrome extension
 
 Defaults:
@@ -272,6 +282,35 @@ Notes:
 
 - This mode relies on Playwright-on-CDP for most operations (screenshots/snapshots/actions).
 - Detach by clicking the extension icon again.
+
+## Browser-use no-relay backend (direct CDP)
+
+Use this when you already run Chrome/Chromium with a debug port (for example
+`--remote-debugging-port=9222`) and want OpenClaw to attach directly, without
+Chrome extension relay attachment.
+
+Create a profile:
+
+```bash
+openclaw browser create-profile \
+  --name browser-use \
+  --driver browser-use \
+  --cdp-url http://127.0.0.1:9222 \
+  --color "#4A90E2"
+```
+
+Then select it:
+
+- CLI: `openclaw browser --browser-profile browser-use tabs`
+- Tool: `browser` with `profile="browser-use"`
+- Optional default: `browser.defaultProfile = "browser-use"`
+
+Security notes:
+
+- This profile can act with whatever sessions are already logged into that CDP
+  browser/profile.
+- Keep CDP endpoints loopback/private.
+- Do not commit CDP URLs that embed tokens.
 
 ## Isolation guarantees
 
