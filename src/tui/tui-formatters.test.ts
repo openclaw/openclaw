@@ -132,6 +132,14 @@ describe("sanitizeRenderableText", () => {
     const sanitized = sanitizeRenderableText(input);
     const longestSegment = Math.max(...sanitized.split(/\s+/).map((segment) => segment.length));
 
-    expect(longestSegment).toBeLessThanOrEqual(64);
+    expect(longestSegment).toBeLessThanOrEqual(32);
+  });
+
+  it("breaks moderately long unbroken tokens to protect narrow terminals", () => {
+    const input = "b".repeat(90);
+    const sanitized = sanitizeRenderableText(input);
+    const longestSegment = Math.max(...sanitized.split(/\s+/).map((segment) => segment.length));
+
+    expect(longestSegment).toBeLessThanOrEqual(32);
   });
 });
