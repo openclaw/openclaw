@@ -31,6 +31,15 @@ export type DiscordMessageHandler = (data: DiscordMessageEvent, client: Client) 
 
 type DiscordReactionEvent = Parameters<MessageReactionAddListener["handle"]>[0];
 
+type DiscordReactionListenerParams = {
+  cfg: LoadedConfig;
+  accountId: string;
+  runtime: RuntimeEnv;
+  botUserId?: string;
+  guildEntries?: Record<string, import("./allow-list.js").DiscordGuildEntryResolved>;
+  logger: Logger;
+};
+
 const DISCORD_SLOW_LISTENER_THRESHOLD_MS = 30_000;
 const discordEventQueueLog = createSubsystemLogger("discord/event-queue");
 
@@ -94,16 +103,7 @@ export class DiscordMessageListener extends MessageCreateListener {
 }
 
 export class DiscordReactionListener extends MessageReactionAddListener {
-  constructor(
-    private params: {
-      cfg: LoadedConfig;
-      accountId: string;
-      runtime: RuntimeEnv;
-      botUserId?: string;
-      guildEntries?: Record<string, import("./allow-list.js").DiscordGuildEntryResolved>;
-      logger: Logger;
-    },
-  ) {
+  constructor(private params: DiscordReactionListenerParams) {
     super();
   }
 
@@ -120,16 +120,7 @@ export class DiscordReactionListener extends MessageReactionAddListener {
 }
 
 export class DiscordReactionRemoveListener extends MessageReactionRemoveListener {
-  constructor(
-    private params: {
-      cfg: LoadedConfig;
-      accountId: string;
-      runtime: RuntimeEnv;
-      botUserId?: string;
-      guildEntries?: Record<string, import("./allow-list.js").DiscordGuildEntryResolved>;
-      logger: Logger;
-    },
-  ) {
+  constructor(private params: DiscordReactionListenerParams) {
     super();
   }
 
@@ -149,14 +140,7 @@ async function runDiscordReactionHandler(params: {
   data: DiscordReactionEvent;
   client: Client;
   action: "added" | "removed";
-  handlerParams: {
-    cfg: LoadedConfig;
-    accountId: string;
-    runtime: RuntimeEnv;
-    botUserId?: string;
-    guildEntries?: Record<string, import("./allow-list.js").DiscordGuildEntryResolved>;
-    logger: Logger;
-  };
+  handlerParams: DiscordReactionListenerParams;
   listener: string;
   event: string;
 }): Promise<void> {
