@@ -107,7 +107,16 @@ export async function deliverReplies(params: {
         ? [reply.mediaUrl]
         : [];
     const telegramData = reply.channelData?.telegram as
-      | { buttons?: Array<Array<{ text: string; callback_data: string }>> }
+      | {
+          buttons?: Array<
+            Array<{
+              text: string;
+              callback_data: string;
+              style?: "primary" | "success" | "danger";
+              icon_custom_emoji_id?: string;
+            }>
+          >;
+        }
       | undefined;
     const replyMarkup = buildInlineKeyboard(telegramData?.buttons);
     if (mediaList.length === 0) {

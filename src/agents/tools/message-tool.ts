@@ -89,6 +89,14 @@ function buildSendSchema(options: { includeButtons: boolean; includeCards: boole
           Type.Object({
             text: Type.String(),
             callback_data: Type.String(),
+            style: Type.Optional(
+              Type.Union([
+                Type.Literal("primary"),
+                Type.Literal("success"),
+                Type.Literal("danger"),
+              ]),
+            ),
+            icon_custom_emoji_id: Type.Optional(Type.String()),
           }),
         ),
         {
