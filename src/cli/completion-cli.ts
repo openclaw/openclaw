@@ -92,13 +92,17 @@ async function writeCompletionCache(params: {
 
 function formatCompletionSourceLine(
   shell: CompletionShell,
-  binName: string,
+  _binName: string,
   cachePath: string,
 ): string {
+  const escapedCachePath = cachePath.replaceAll('"', '\\"');
   if (shell === "fish") {
-    return `source "${cachePath}"`;
+    return `test -r "${escapedCachePath}"; and source "${escapedCachePath}"`;
   }
-  return `source "${cachePath}"`;
+  if (shell === "powershell") {
+    return `if (Test-Path "${escapedCachePath}") { . "${escapedCachePath}" }`;
+  }
+  return `[ -r "${escapedCachePath}" ] && source "${escapedCachePath}"`;
 }
 
 function isCompletionProfileHeader(line: string): boolean {
@@ -110,6 +114,15 @@ function isCompletionProfileLine(line: string, binName: string, cachePath: strin
     return true;
   }
   if (cachePath && line.includes(cachePath)) {
+    return true;
+  }
+  const basename = sanitizeCompletionBasename(binName);
+  if (
+    line.includes(`${basename}.zsh`) ||
+    line.includes(`${basename}.bash`) ||
+    line.includes(`${basename}.fish`) ||
+    line.includes(`${basename}.ps1`)
+  ) {
     return true;
   }
   return false;
@@ -124,12 +137,11 @@ function isSlowDynamicCompletionLine(line: string, binName: string): boolean {
   );
 }
 
-function updateCompletionProfile(
+function filterCompletionProfileLines(
   content: string,
   binName: string,
   cachePath: string | null,
-  sourceLine: string,
-): { next: string; changed: boolean; hadExisting: boolean } {
+): { filtered: string[]; hadExisting: boolean } {
   const lines = content.split("\n");
   const filtered: string[] = [];
   let hadExisting = false;
@@ -148,9 +160,30 @@ function updateCompletionProfile(
     filtered.push(line);
   }
 
+  return { filtered, hadExisting };
+}
+
+function updateCompletionProfile(
+  content: string,
+  binName: string,
+  cachePath: string | null,
+  sourceLine: string,
+): { next: string; changed: boolean; hadExisting: boolean } {
+  const { filtered, hadExisting } = filterCompletionProfileLines(content, binName, cachePath);
   const trimmed = filtered.join("\n").trimEnd();
   const block = `# OpenClaw Completion\n${sourceLine}`;
   const next = trimmed ? `${trimmed}\n\n${block}\n` : `${block}\n`;
+  return { next, changed: next !== content, hadExisting };
+}
+
+function removeCompletionProfile(
+  content: string,
+  binName: string,
+  cachePath: string | null,
+): { next: string; changed: boolean; hadExisting: boolean } {
+  const { filtered, hadExisting } = filterCompletionProfileLines(content, binName, cachePath);
+  const trimmed = filtered.join("\n").trimEnd();
+  const next = trimmed ? `${trimmed}\n` : "";
   return { next, changed: next !== content, hadExisting };
 }
 
@@ -363,6 +396,41 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
   } catch (err) {
     console.error(`Failed to install completion: ${err as string}`);
   }
+}
+
+export async function uninstallCompletionFromProfile(
+  shell: string,
+  binName = "openclaw",
+): Promise<boolean> {
+  if (!isCompletionShell(shell)) {
+    return false;
+  }
+
+  const profilePath = getShellProfilePath(shell);
+  if (!(await pathExists(profilePath))) {
+    return false;
+  }
+
+  const cachePath = resolveCompletionCachePath(shell, binName);
+  const content = await fs.readFile(profilePath, "utf-8");
+  const update = removeCompletionProfile(content, binName, cachePath);
+  if (!update.changed) {
+    return false;
+  }
+  await fs.writeFile(profilePath, update.next, "utf-8");
+  return true;
+}
+
+export async function uninstallCompletionFromAllProfiles(
+  binName = "openclaw",
+): Promise<CompletionShell[]> {
+  const removed: CompletionShell[] = [];
+  for (const shell of COMPLETION_SHELLS) {
+    if (await uninstallCompletionFromProfile(shell, binName)) {
+      removed.push(shell);
+    }
+  }
+  return removed;
 }
 
 function generateZshCompletion(program: Command): string {
