@@ -158,4 +158,22 @@ describe("cron view", () => {
     expect(summaries[0]).toBe("newer run");
     expect(summaries[1]).toBe("older run");
   });
+
+  it("shows notify chip for webhook-enabled jobs", () => {
+    const container = document.createElement("div");
+    const job = { ...createJob("job-2"), notify: true };
+    render(
+      renderCron(
+        createProps({
+          jobs: [job],
+        }),
+      ),
+      container,
+    );
+
+    const chips = Array.from(container.querySelectorAll(".chip")).map((el) =>
+      (el.textContent ?? "").trim(),
+    );
+    expect(chips).toContain("notify");
+  });
 });

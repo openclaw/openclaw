@@ -256,6 +256,7 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
     name: normalizeRequiredName(input.name),
     description: normalizeOptionalText(input.description),
     enabled,
+    notify: typeof input.notify === "boolean" ? input.notify : undefined,
     deleteAfterRun,
     createdAtMs: now,
     updatedAtMs: now,
@@ -283,6 +284,9 @@ export function applyJobPatch(job: CronJob, patch: CronJobPatch) {
   }
   if (typeof patch.enabled === "boolean") {
     job.enabled = patch.enabled;
+  }
+  if (typeof patch.notify === "boolean") {
+    job.notify = patch.notify;
   }
   if (typeof patch.deleteAfterRun === "boolean") {
     job.deleteAfterRun = patch.deleteAfterRun;

@@ -93,6 +93,18 @@ export function buildGatewayCronService(params: {
     onEvent: (evt) => {
       params.broadcast("cron", evt, { dropIfSlow: true });
       if (evt.action === "finished") {
+        const webhookUrl = params.cfg.cron?.webhook;
+        const job = cron.getJob(evt.jobId);
+        if (webhookUrl && evt.summary && job?.notify === true) {
+          void fetch(webhookUrl, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${params.cfg.gateway?.auth?.token ?? ""}`,
+            },
+            body: JSON.stringify(evt),
+          }).catch(() => {});
+        }
         const logPath = resolveCronRunLogPath({
           storePath,
           jobId: evt.jobId,

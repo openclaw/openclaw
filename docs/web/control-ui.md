@@ -83,6 +83,8 @@ Cron jobs panel notes:
 
 - For isolated jobs, delivery defaults to announce summary. You can switch to none if you want internal-only runs.
 - Channel/target fields appear when announce is selected.
+- New job form includes a **Notify webhook** toggle (`notify` on the job).
+- Gateway webhook posting requires both `notify: true` on the job and `cron.webhook` in config.
 
 ## Chat behavior
 
