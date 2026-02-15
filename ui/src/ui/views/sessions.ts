@@ -30,6 +30,7 @@ export type SessionsProps = {
     },
   ) => void;
   onDelete: (key: string) => void;
+  onSendMessage?: (sessionKey: string, message: string) => void;
 };
 
 const THINK_LEVELS = ["", "off", "minimal", "low", "medium", "high", "xhigh"] as const;
@@ -206,7 +207,14 @@ export function renderSessions(props: SessionsProps) {
                 <div class="muted">No sessions found.</div>
               `
             : rows.map((row) =>
-                renderRow(row, props.basePath, props.onPatch, props.onDelete, props.loading),
+                renderRow(
+                  row,
+                  props.basePath,
+                  props.onPatch,
+                  props.onDelete,
+                  props.loading,
+                  props.onSendMessage,
+                ),
               )
         }
       </div>
@@ -220,6 +228,7 @@ function renderRow(
   onPatch: SessionsProps["onPatch"],
   onDelete: SessionsProps["onDelete"],
   disabled: boolean,
+  onSendMessage?: SessionsProps["onSendMessage"],
 ) {
   const updated = row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : "n/a";
   const rawThinking = row.thinkingLevel ?? "";
@@ -311,7 +320,26 @@ function renderRow(
           )}
         </select>
       </div>
-      <div>
+      <div style="display: flex; gap: 8px;">
+        ${
+          onSendMessage
+            ? html`
+          <button 
+            class="btn" 
+            ?disabled=${disabled} 
+            @click=${() => {
+              const message = prompt("Enter message to send to this session:");
+              if (message && message.trim()) {
+                onSendMessage(row.key, message.trim());
+              }
+            }}
+            title="Send message to this session"
+          >
+            Send Message
+          </button>
+        `
+            : nothing
+        }
         <button class="btn danger" ?disabled=${disabled} @click=${() => onDelete(row.key)}>
           Delete
         </button>

@@ -11,6 +11,7 @@ import {
   formatReasoningMarkdown,
 } from "./message-extract.ts";
 import { isToolResultMessage, normalizeRoleForGrouping } from "./message-normalizer.ts";
+import { renderQuoteReplyButton } from "./quote-reply-button.ts";
 import { extractToolCards, renderToolCardSidebar } from "./tool-cards.ts";
 
 type ImageBlock = {
@@ -108,6 +109,7 @@ export function renderMessageGroup(
   group: MessageGroup,
   opts: {
     onOpenSidebar?: (content: string) => void;
+    onQuote?: (quoted: string) => void;
     showReasoning: boolean;
     assistantName?: string;
     assistantAvatar?: string | null;
@@ -143,6 +145,7 @@ export function renderMessageGroup(
               showReasoning: opts.showReasoning,
             },
             opts.onOpenSidebar,
+            opts.onQuote,
           ),
         )}
         <div class="chat-group-footer">
@@ -220,6 +223,7 @@ function renderGroupedMessage(
   message: unknown,
   opts: { isStreaming: boolean; showReasoning: boolean },
   onOpenSidebar?: (content: string) => void,
+  onQuote?: (quoted: string) => void,
 ) {
   const m = message as Record<string, unknown>;
   const role = typeof m.role === "string" ? m.role : "unknown";
@@ -243,9 +247,10 @@ function renderGroupedMessage(
   const markdown = markdownBase;
   const canCopyMarkdown = role === "assistant" && Boolean(markdown?.trim());
 
+  const canQuote = role === "assistant" && Boolean(markdown?.trim()) && onQuote;
   const bubbleClasses = [
     "chat-bubble",
-    canCopyMarkdown ? "has-copy" : "",
+    canCopyMarkdown || canQuote ? "has-copy" : "",
     opts.isStreaming ? "streaming" : "",
     "fade-in",
   ]
@@ -263,6 +268,7 @@ function renderGroupedMessage(
   return html`
     <div class="${bubbleClasses}">
       ${canCopyMarkdown ? renderCopyAsMarkdownButton(markdown!) : nothing}
+      ${canQuote ? renderQuoteReplyButton(markdown!, onQuote) : nothing}
       ${renderMessageImages(images)}
       ${
         reasoningMarkdown
