@@ -78,6 +78,9 @@ export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 export type { OpenClawConfig } from "../config/config.js";
 /** @deprecated Use OpenClawConfig instead */
 export type { OpenClawConfig as ClawdbotConfig } from "../config/config.js";
+
+export type { FileLockHandle, FileLockOptions } from "./file-lock.js";
+export { acquireFileLock, withFileLock } from "./file-lock.js";
 export type { ChannelDock } from "../channels/dock.js";
 export { getChatChannelMeta } from "../channels/registry.js";
 export type {
