@@ -1,0 +1,9 @@
+{
+  "id": "poe",
+  "providers": ["poe"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/poe",
+  "version": "2026.2.10",
+  "private": true,
+  "description": "OpenClaw Poe provider plugin",
+  "type": "module",
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
