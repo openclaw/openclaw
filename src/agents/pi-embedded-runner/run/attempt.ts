@@ -447,6 +447,13 @@ export async function runEmbeddedAttempt(
         minReserveTokens: resolveCompactionReserveTokensFloor(params.config),
       });
 
+      // When rolling compaction is active, disable the SDK's built-in auto-compaction.
+      // Context overflow errors will be caught by our overflow handler which calls
+      // compactEmbeddedPiSessionDirect → rolling eviction path.
+      if (params.config?.agents?.defaults?.compaction?.mode === "rolling") {
+        settingsManager.applyOverrides({ compaction: { enabled: false } });
+      }
+
       // Call for side effects (sets compaction/pruning runtime state)
       buildEmbeddedExtensionPaths({
         cfg: params.config,
