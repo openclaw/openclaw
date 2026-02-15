@@ -31,10 +31,17 @@ import { getDiscordRuntime } from "./runtime.js";
 const meta = getChatChannelMeta("discord");
 
 const discordMessageActions: ChannelMessageActionAdapter = {
-  listActions: (ctx) => getDiscordRuntime().channel.discord.messageActions.listActions(ctx),
-  extractToolSend: (ctx) => getDiscordRuntime().channel.discord.messageActions.extractToolSend(ctx),
-  handleAction: async (ctx) =>
-    await getDiscordRuntime().channel.discord.messageActions.handleAction(ctx),
+  listActions: (ctx) =>
+    getDiscordRuntime().channel.discord.messageActions?.listActions?.(ctx) ?? [],
+  extractToolSend: (ctx) =>
+    getDiscordRuntime().channel.discord.messageActions?.extractToolSend?.(ctx) ?? null,
+  handleAction: async (ctx) => {
+    const ma = getDiscordRuntime().channel.discord.messageActions;
+    if (!ma?.handleAction) {
+      throw new Error("Discord message actions not available");
+    }
+    return ma.handleAction(ctx);
+  },
 };
 
 export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
@@ -278,28 +285,31 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
     chunker: null,
     textChunkLimit: 2000,
     pollMaxOptions: 10,
-    sendText: async ({ to, text, accountId, deps, replyToId }) => {
+    sendText: async ({ to, text, accountId, deps, replyToId, silent }) => {
       const send = deps?.sendDiscord ?? getDiscordRuntime().channel.discord.sendMessageDiscord;
       const result = await send(to, text, {
         verbose: false,
         replyTo: replyToId ?? undefined,
         accountId: accountId ?? undefined,
+        silent: silent ?? undefined,
       });
       return { channel: "discord", ...result };
     },
-    sendMedia: async ({ to, text, mediaUrl, accountId, deps, replyToId }) => {
+    sendMedia: async ({ to, text, mediaUrl, accountId, deps, replyToId, silent }) => {
       const send = deps?.sendDiscord ?? getDiscordRuntime().channel.discord.sendMessageDiscord;
       const result = await send(to, text, {
         verbose: false,
         mediaUrl,
         replyTo: replyToId ?? undefined,
         accountId: accountId ?? undefined,
+        silent: silent ?? undefined,
       });
       return { channel: "discord", ...result };
     },
-    sendPoll: async ({ to, poll, accountId }) =>
+    sendPoll: async ({ to, poll, accountId, silent }) =>
       await getDiscordRuntime().channel.discord.sendPollDiscord(to, poll, {
         accountId: accountId ?? undefined,
+        silent: silent ?? undefined,
       }),
   },
   status: {

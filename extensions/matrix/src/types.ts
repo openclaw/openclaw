@@ -1,4 +1,5 @@
-export type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk";
+import type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk";
+export type { DmPolicy, GroupPolicy };
 
 export type ReplyToMode = "off" | "first" | "all";
 
@@ -38,11 +39,16 @@ export type MatrixActionConfig = {
   channelInfo?: boolean;
 };
 
+/** Per-account Matrix config (excludes the accounts field to prevent recursion). */
+export type MatrixAccountConfig = Omit<MatrixConfig, "accounts">;
+
 export type MatrixConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
   /** If false, do not start Matrix. Default: true. */
   enabled?: boolean;
+  /** Multi-account configuration keyed by account ID. */
+  accounts?: Record<string, MatrixAccountConfig>;
   /** Matrix homeserver URL (https://matrix.example.org). */
   homeserver?: string;
   /** Matrix user id (@user:server). */
@@ -92,6 +98,19 @@ export type MatrixConfig = {
 export type CoreConfig = {
   channels?: {
     matrix?: MatrixConfig;
+    defaults?: {
+      groupPolicy?: "open" | "allowlist" | "disabled";
+    };
+  };
+  commands?: {
+    useAccessGroups?: boolean;
+  };
+  session?: {
+    store?: string;
+  };
+  messages?: {
+    ackReaction?: string;
+    ackReactionScope?: "group-mentions" | "group-all" | "direct" | "all";
   };
   [key: string]: unknown;
 };

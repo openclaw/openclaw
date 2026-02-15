@@ -34,6 +34,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
@@ -42,6 +43,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -82,12 +84,14 @@ fun SettingsSheet(viewModel: MainViewModel) {
   val manualHost by viewModel.manualHost.collectAsState()
   val manualPort by viewModel.manualPort.collectAsState()
   val manualTls by viewModel.manualTls.collectAsState()
+  val gatewayToken by viewModel.gatewayToken.collectAsState()
   val canvasDebugStatusEnabled by viewModel.canvasDebugStatusEnabled.collectAsState()
   val statusText by viewModel.statusText.collectAsState()
   val serverName by viewModel.serverName.collectAsState()
   val remoteAddress by viewModel.remoteAddress.collectAsState()
   val gateways by viewModel.gateways.collectAsState()
   val discoveryStatusText by viewModel.discoveryStatusText.collectAsState()
+  val pendingTrust by viewModel.pendingGatewayTrust.collectAsState()
 
   val listState = rememberLazyListState()
   val (wakeWordsText, setWakeWordsText) = remember { mutableStateOf("") }
@@ -110,6 +114,31 @@ fun SettingsSheet(viewModel: MainViewModel) {
         versionName
       }
     }
+
+  if (pendingTrust != null) {
+    val prompt = pendingTrust!!
+    AlertDialog(
+      onDismissRequest = { viewModel.declineGatewayTrustPrompt() },
+      title = { Text("Trust this gateway?") },
+      text = {
+        Text(
+          "First-time TLS connection.\n\n" +
+            "Verify this SHA-256 fingerprint out-of-band before trusting:\n" +
+            prompt.fingerprintSha256,
+        )
+      },
+      confirmButton = {
+        TextButton(onClick = { viewModel.acceptGatewayTrustPrompt() }) {
+          Text("Trust and connect")
+        }
+      },
+      dismissButton = {
+        TextButton(onClick = { viewModel.declineGatewayTrustPrompt() }) {
+          Text("Cancel")
+        }
+      },
+    )
+  }
 
   LaunchedEffect(wakeWords) { setWakeWordsText(wakeWords.joinToString(", ")) }
   val commitWakeWords = {
@@ -402,6 +431,14 @@ fun SettingsSheet(viewModel: MainViewModel) {
             label = { Text("Port") },
             modifier = Modifier.fillMaxWidth(),
             enabled = manualEnabled,
+          )
+          OutlinedTextField(
+            value = gatewayToken,
+            onValueChange = viewModel::setGatewayToken,
+            label = { Text("Gateway Token") },
+            modifier = Modifier.fillMaxWidth(),
+            enabled = manualEnabled,
+            singleLine = true,
           )
           ListItem(
             headlineContent = { Text("Require TLS") },

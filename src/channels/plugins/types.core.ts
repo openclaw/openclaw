@@ -125,6 +125,7 @@ export type ChannelAccountSnapshot = {
   botTokenSource?: string;
   appTokenSource?: string;
   credentialSource?: string;
+  secretSource?: string;
   audienceType?: string;
   audience?: string;
   webhookPath?: string;
@@ -139,6 +140,10 @@ export type ChannelAccountSnapshot = {
   audit?: unknown;
   application?: unknown;
   bot?: unknown;
+  publicKey?: string | null;
+  profile?: unknown;
+  channelAccessToken?: string;
+  channelSecret?: string;
 };
 
 export type ChannelLogSink = {
@@ -218,6 +223,16 @@ export type ChannelThreadingAdapter = {
     accountId?: string | null;
     chatType?: string | null;
   }) => "off" | "first" | "all";
+  /**
+   * When replyToMode is "off", allow explicit reply tags/directives to keep replyToId.
+   *
+   * Default in shared reply flow: true for known providers; per-channel opt-out supported.
+   */
+  allowExplicitReplyTagsWhenOff?: boolean;
+  /**
+   * Deprecated alias for allowExplicitReplyTagsWhenOff.
+   * Kept for compatibility with older extensions/docks.
+   */
   allowTagsWhenOff?: boolean;
   buildToolContext?: (params: {
     cfg: OpenClawConfig;
@@ -328,4 +343,7 @@ export type ChannelPollContext = {
   to: string;
   poll: PollInput;
   accountId?: string | null;
+  threadId?: string | null;
+  silent?: boolean;
+  isAnonymous?: boolean;
 };

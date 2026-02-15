@@ -32,4 +32,27 @@ describe("handleDiscordMessageAction", () => {
       expect.any(Object),
     );
   });
+
+  it("forwards thread edit fields for channel-edit", async () => {
+    await handleDiscordMessageAction({
+      action: "channel-edit",
+      params: {
+        channelId: "123456789",
+        archived: true,
+        locked: false,
+        autoArchiveDuration: 1440,
+      },
+      cfg: {},
+    });
+    expect(handleDiscordAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "channelEdit",
+        channelId: "123456789",
+        archived: true,
+        locked: false,
+        autoArchiveDuration: 1440,
+      }),
+      expect.any(Object),
+    );
+  });
 });

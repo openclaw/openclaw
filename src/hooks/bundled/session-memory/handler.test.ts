@@ -161,6 +161,58 @@ describe("session-memory hook", () => {
     expect(memoryContent).not.toContain("search");
   });
 
+  it("filters out inter-session user messages", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-session-memory-");
+    const sessionsDir = path.join(tempDir, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const sessionContent = [
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content: "Forwarded internal instruction",
+          provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "assistant", content: "Acknowledged" },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "user", content: "External follow-up" },
+      }),
+    ].join("\n");
+    const sessionFile = await writeWorkspaceFile({
+      dir: sessionsDir,
+      name: "test-session.jsonl",
+      content: sessionContent,
+    });
+
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { workspace: tempDir } },
+    };
+
+    const event = createHookEvent("command", "new", "agent:main:main", {
+      cfg,
+      previousSessionEntry: {
+        sessionId: "test-123",
+        sessionFile,
+      },
+    });
+
+    await handler(event);
+
+    const memoryDir = path.join(tempDir, "memory");
+    const files = await fs.readdir(memoryDir);
+    const memoryContent = await fs.readFile(path.join(memoryDir, files[0]), "utf-8");
+
+    expect(memoryContent).not.toContain("Forwarded internal instruction");
+    expect(memoryContent).toContain("assistant: Acknowledged");
+    expect(memoryContent).toContain("user: External follow-up");
+  });
+
   it("filters out command messages starting with /", async () => {
     const tempDir = await makeTempWorkspace("openclaw-session-memory-");
     const sessionsDir = path.join(tempDir, "sessions");

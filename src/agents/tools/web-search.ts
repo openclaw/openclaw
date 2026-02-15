@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { AnyAgentTool } from "./common.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { wrapWebContent } from "../../security/external-content.js";
+import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 import {
   CacheEntry,
@@ -63,7 +64,7 @@ const WebSearchSchema = Type.Object({
   freshness: Type.Optional(
     Type.String({
       description:
-        "Filter results by discovery time (Brave only). Values: 'pd' (past 24h), 'pw' (past week), 'pm' (past month), 'py' (past year), or date range 'YYYY-MM-DDtoYYYY-MM-DD'.",
+        "Filter results by discovery time. Brave supports 'pd', 'pw', 'pm', 'py', and date range 'YYYY-MM-DDtoYYYY-MM-DD'. Perplexity supports 'pd', 'pw', 'pm', and 'py'.",
     }),
   ),
 });
@@ -102,7 +103,21 @@ type GrokConfig = {
 };
 
 type GrokSearchResponse = {
-  output_text?: string;
+  output?: Array<{
+    type?: string;
+    role?: string;
+    content?: Array<{
+      type?: string;
+      text?: string;
+      annotations?: Array<{
+        type?: string;
+        url?: string;
+        start_index?: number;
+        end_index?: number;
+      }>;
+    }>;
+  }>;
+  output_text?: string; // deprecated field - kept for backwards compatibility
   citations?: string[];
   inline_citations?: Array<{
     start_index: number;
@@ -121,6 +136,30 @@ type PerplexitySearchResponse = {
 };
 
 type PerplexityBaseUrlHint = "direct" | "openrouter";
+
+function extractGrokContent(data: GrokSearchResponse): {
+  text: string | undefined;
+  annotationCitations: string[];
+} {
+  // xAI Responses API format: find the message output with text content
+  for (const output of data.output ?? []) {
+    if (output.type !== "message") {
+      continue;
+    }
+    for (const block of output.content ?? []) {
+      if (block.type === "output_text" && typeof block.text === "string" && block.text) {
+        // Extract url_citation annotations from this content block
+        const urls = (block.annotations ?? [])
+          .filter((a) => a.type === "url_citation" && typeof a.url === "string")
+          .map((a) => a.url as string);
+        return { text: block.text, annotationCitations: [...new Set(urls)] };
+      }
+    }
+  }
+  // Fallback: deprecated output_text field
+  const text = typeof data.output_text === "string" ? data.output_text : undefined;
+  return { text, annotationCitations: [] };
+}
 
 function resolveSearchConfig(cfg?: OpenClawConfig): WebSearchConfig {
   const search = cfg?.tools?.web?.search;
@@ -142,8 +181,10 @@ function resolveSearchEnabled(params: { search?: WebSearchConfig; sandboxed?: bo
 
 function resolveSearchApiKey(search?: WebSearchConfig): string | undefined {
   const fromConfig =
-    search && "apiKey" in search && typeof search.apiKey === "string" ? search.apiKey.trim() : "";
-  const fromEnv = (process.env.BRAVE_API_KEY ?? "").trim();
+    search && "apiKey" in search && typeof search.apiKey === "string"
+      ? normalizeSecretInput(search.apiKey)
+      : "";
+  const fromEnv = normalizeSecretInput(process.env.BRAVE_API_KEY);
   return fromConfig || fromEnv || undefined;
 }
 
@@ -222,7 +263,7 @@ function resolvePerplexityApiKey(perplexity?: PerplexityConfig): {
 }
 
 function normalizeApiKey(key: unknown): string {
-  return typeof key === "string" ? key.trim() : "";
+  return normalizeSecretInput(key);
 }
 
 function inferPerplexityBaseUrlFromApiKey(apiKey?: string): PerplexityBaseUrlHint | undefined {
@@ -275,6 +316,25 @@ function resolvePerplexityModel(perplexity?: PerplexityConfig): string {
       ? perplexity.model.trim()
       : "";
   return fromConfig || DEFAULT_PERPLEXITY_MODEL;
+}
+
+function isDirectPerplexityBaseUrl(baseUrl: string): boolean {
+  const trimmed = baseUrl.trim();
+  if (!trimmed) {
+    return false;
+  }
+  try {
+    return new URL(trimmed).hostname.toLowerCase() === "api.perplexity.ai";
+  } catch {
+    return false;
+  }
+}
+
+function resolvePerplexityRequestModel(baseUrl: string, model: string): string {
+  if (!isDirectPerplexityBaseUrl(baseUrl)) {
+    return model;
+  }
+  return model.startsWith("perplexity/") ? model.slice("perplexity/".length) : model;
 }
 
 function resolveGrokConfig(search?: WebSearchConfig): GrokConfig {
@@ -343,6 +403,23 @@ function normalizeFreshness(value: string | undefined): string | undefined {
   return `${start}to${end}`;
 }
 
+/**
+ * Map normalized freshness values (pd/pw/pm/py) to Perplexity's
+ * search_recency_filter values (day/week/month/year).
+ */
+function freshnessToPerplexityRecency(freshness: string | undefined): string | undefined {
+  if (!freshness) {
+    return undefined;
+  }
+  const map: Record<string, string> = {
+    pd: "day",
+    pw: "week",
+    pm: "month",
+    py: "year",
+  };
+  return map[freshness] ?? undefined;
+}
+
 function isValidIsoDate(value: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
     return false;
@@ -375,8 +452,26 @@ async function runPerplexitySearch(params: {
   baseUrl: string;
   model: string;
   timeoutSeconds: number;
+  freshness?: string;
 }): Promise<{ content: string; citations: string[] }> {
-  const endpoint = `${params.baseUrl.replace(/\/$/, "")}/chat/completions`;
+  const baseUrl = params.baseUrl.trim().replace(/\/$/, "");
+  const endpoint = `${baseUrl}/chat/completions`;
+  const model = resolvePerplexityRequestModel(baseUrl, params.model);
+
+  const body: Record<string, unknown> = {
+    model,
+    messages: [
+      {
+        role: "user",
+        content: params.query,
+      },
+    ],
+  };
+
+  const recencyFilter = freshnessToPerplexityRecency(params.freshness);
+  if (recencyFilter) {
+    body.search_recency_filter = recencyFilter;
+  }
 
   const res = await fetch(endpoint, {
     method: "POST",
@@ -386,15 +481,7 @@ async function runPerplexitySearch(params: {
       "HTTP-Referer": "https://openclaw.ai",
       "X-Title": "OpenClaw Web Search",
     },
-    body: JSON.stringify({
-      model: params.model,
-      messages: [
-        {
-          role: "user",
-          content: params.query,
-        },
-      ],
-    }),
+    body: JSON.stringify(body),
     signal: withTimeout(undefined, params.timeoutSeconds * 1000),
   });
 
@@ -432,9 +519,10 @@ async function runGrokSearch(params: {
     tools: [{ type: "web_search" }],
   };
 
-  if (params.inlineCitations) {
-    body.include = ["inline_citations"];
-  }
+  // Note: xAI's /v1/responses endpoint does not support the `include`
+  // parameter (returns 400 "Argument not supported: include"). Inline
+  // citations are returned automatically when available — we just parse
+  // them from the response without requesting them explicitly (#12910).
 
   const res = await fetch(XAI_API_ENDPOINT, {
     method: "POST",
@@ -452,8 +540,10 @@ async function runGrokSearch(params: {
   }
 
   const data = (await res.json()) as GrokSearchResponse;
-  const content = data.output_text ?? "No response";
-  const citations = data.citations ?? [];
+  const { text: extractedText, annotationCitations } = extractGrokContent(data);
+  const content = extractedText ?? "No response";
+  // Prefer top-level citations; fall back to annotation-derived ones
+  const citations = (data.citations ?? []).length > 0 ? data.citations! : annotationCitations;
   const inlineCitations = data.inline_citations;
 
   return { content, citations, inlineCitations };
@@ -479,7 +569,7 @@ async function runWebSearch(params: {
     params.provider === "brave"
       ? `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || "default"}:${params.ui_lang || "default"}:${params.freshness || "default"}`
       : params.provider === "perplexity"
-        ? `${params.provider}:${params.query}:${params.perplexityBaseUrl ?? DEFAULT_PERPLEXITY_BASE_URL}:${params.perplexityModel ?? DEFAULT_PERPLEXITY_MODEL}`
+        ? `${params.provider}:${params.query}:${params.perplexityBaseUrl ?? DEFAULT_PERPLEXITY_BASE_URL}:${params.perplexityModel ?? DEFAULT_PERPLEXITY_MODEL}:${params.freshness || "default"}`
         : `${params.provider}:${params.query}:${params.grokModel ?? DEFAULT_GROK_MODEL}:${String(params.grokInlineCitations ?? false)}`,
   );
   const cached = readCache(SEARCH_CACHE, cacheKey);
@@ -496,6 +586,7 @@ async function runWebSearch(params: {
       baseUrl: params.perplexityBaseUrl ?? DEFAULT_PERPLEXITY_BASE_URL,
       model: params.perplexityModel ?? DEFAULT_PERPLEXITY_MODEL,
       timeoutSeconds: params.timeoutSeconds,
+      freshness: params.freshness,
     });
 
     const payload = {
@@ -503,6 +594,12 @@ async function runWebSearch(params: {
       provider: params.provider,
       model: params.perplexityModel ?? DEFAULT_PERPLEXITY_MODEL,
       tookMs: Date.now() - start,
+      externalContent: {
+        untrusted: true,
+        source: "web_search",
+        provider: params.provider,
+        wrapped: true,
+      },
       content: wrapWebContent(content),
       citations,
     };
@@ -524,7 +621,13 @@ async function runWebSearch(params: {
       provider: params.provider,
       model: params.grokModel ?? DEFAULT_GROK_MODEL,
       tookMs: Date.now() - start,
-      content,
+      externalContent: {
+        untrusted: true,
+        source: "web_search",
+        provider: params.provider,
+        wrapped: true,
+      },
+      content: wrapWebContent(content),
       citations,
       inlineCitations,
     };
@@ -587,6 +690,12 @@ async function runWebSearch(params: {
     provider: params.provider,
     count: mapped.length,
     tookMs: Date.now() - start,
+    externalContent: {
+      untrusted: true,
+      source: "web_search",
+      provider: params.provider,
+      wrapped: true,
+    },
     results: mapped,
   };
   writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
@@ -639,10 +748,10 @@ export function createWebSearchTool(options?: {
       const search_lang = readStringParam(params, "search_lang");
       const ui_lang = readStringParam(params, "ui_lang");
       const rawFreshness = readStringParam(params, "freshness");
-      if (rawFreshness && provider !== "brave") {
+      if (rawFreshness && provider !== "brave" && provider !== "perplexity") {
         return jsonResult({
           error: "unsupported_freshness",
-          message: "freshness is only supported by the Brave web_search provider.",
+          message: "freshness is only supported by the Brave and Perplexity web_search providers.",
           docs: "https://docs.openclaw.ai/tools/web",
         });
       }
@@ -683,8 +792,12 @@ export function createWebSearchTool(options?: {
 export const __testing = {
   inferPerplexityBaseUrlFromApiKey,
   resolvePerplexityBaseUrl,
+  isDirectPerplexityBaseUrl,
+  resolvePerplexityRequestModel,
   normalizeFreshness,
+  freshnessToPerplexityRecency,
   resolveGrokApiKey,
   resolveGrokModel,
   resolveGrokInlineCitations,
+  extractGrokContent,
 } as const;
