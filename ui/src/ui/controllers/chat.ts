@@ -17,6 +17,7 @@ export type ChatState = {
   chatStream: string | null;
   chatStreamStartedAt: number | null;
   lastError: string | null;
+    pendingMessages: unknown[];
 };
 
 export type ChatEventPayload = {
@@ -41,8 +42,9 @@ export async function loadChatHistory(state: ChatState) {
         limit: 200,
       },
     );
-    state.chatMessages = Array.isArray(res.messages) ? res.messages : [];
-    state.chatThinkingLevel = res.thinkingLevel ?? null;
+    // Merge server messages with pending local messages
+    const serverMessages = Array.isArray(res.messages) ? res.messages : [];
+    state.chatMessages = [...serverMessages, ...state.pendingMessages];    state.chatThinkingLevel = res.thinkingLevel ?? null;
   } catch (err) {
     state.lastError = String(err);
   } finally {
@@ -89,9 +91,9 @@ export async function sendChatMessage(
     }
   }
 
-  state.chatMessages = [
-    ...state.chatMessages,
-    {
+  // Add to pending messages (will be merged with server history)
+    state.pendingMessages =[
+    ......state.pendingMessages,{
       role: "user",
       content: contentBlocks,
       timestamp: now,
@@ -100,6 +102,8 @@ export async function sendChatMessage(
 
   state.chatSending = true;
   state.lastError = null;
+    // Also update chatMessages for immediate display
+  state.chatMessages = [...state.chatMessages, ...state.pendingMessages];
   const runId = generateUUID();
   state.chatRunId = runId;
   state.chatStream = "";
@@ -130,6 +134,8 @@ export async function sendChatMessage(
       idempotencyKey: runId,
       attachments: apiAttachments,
     });
+        // Message sent successfully, clear pending
+    state.pendingMessages = [];
     return runId;
   } catch (err) {
     const error = String(err);
@@ -137,6 +143,8 @@ export async function sendChatMessage(
     state.chatStream = null;
     state.chatStreamStartedAt = null;
     state.lastError = error;
+        // Clear pending messages on error
+    state.pendingMessages = [];
     state.chatMessages = [
       ...state.chatMessages,
       {
