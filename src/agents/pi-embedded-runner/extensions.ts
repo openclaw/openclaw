@@ -3,6 +3,7 @@ import type { SessionManager } from "@mariozechner/pi-coding-agent";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { OpenClawConfig } from "../../config/config.js";
+import { resolveStorePath } from "../../config/sessions/paths.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { setCompactionSafeguardRuntime } from "../pi-extensions/compaction-safeguard-runtime.js";
@@ -41,6 +42,9 @@ function buildContextPruningExtension(params: {
   provider: string;
   modelId: string;
   model: Model<Api> | undefined;
+  sessionKey?: string;
+  storePath?: string;
+  agentId?: string;
 }): { additionalExtensionPaths?: string[] } {
   const raw = params.cfg?.agents?.defaults?.contextPruning;
   if (raw?.mode !== "cache-ttl") {
@@ -55,11 +59,16 @@ function buildContextPruningExtension(params: {
     return {};
   }
 
+  const effectiveStorePath =
+    params.storePath ?? resolveStorePath(undefined, { agentId: params.agentId });
+
   setContextPruningRuntime(params.sessionManager, {
     settings,
     contextWindowTokens: resolveContextWindowTokens(params),
     isToolPrunable: makeToolPrunablePredicate(settings.tools),
     lastCacheTouchAt: readLastCacheTtlTimestamp(params.sessionManager),
+    sessionKey: params.sessionKey,
+    storePath: effectiveStorePath,
   });
 
   return {
@@ -77,6 +86,9 @@ export function buildEmbeddedExtensionPaths(params: {
   provider: string;
   modelId: string;
   model: Model<Api> | undefined;
+  sessionKey?: string;
+  storePath?: string;
+  agentId?: string;
 }): string[] {
   const paths: string[] = [];
   if (resolveCompactionMode(params.cfg) === "safeguard") {
