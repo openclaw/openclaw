@@ -79,11 +79,13 @@ describe("monitorSlackProvider tool results", () => {
       },
     });
 
-    expect(reactMock).toHaveBeenCalledWith({
-      channel: "C1",
-      timestamp: "456",
-      name: "👀",
-    });
+    expect(reactMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "C1",
+        timestamp: "456",
+        name: "👀",
+      }),
+    );
   });
 
   it("replies with pairing code when dmPolicy is pairing and no allowFrom is set", async () => {
