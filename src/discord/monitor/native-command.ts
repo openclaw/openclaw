@@ -596,7 +596,9 @@ async function dispatchDiscordCommandInteraction(params: {
     await respond("This channel is disabled.");
     return;
   }
-  if (interaction.guild && channelConfig?.allowed === false) {
+  const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
+  const effectiveGroupPolicy = discordConfig?.groupPolicy ?? defaultGroupPolicy ?? "open";
+  if (interaction.guild && channelConfig?.allowed === false && effectiveGroupPolicy !== "open") {
     await respond("This channel is not allowed.");
     return;
   }
@@ -605,7 +607,7 @@ async function dispatchDiscordCommandInteraction(params: {
       Boolean(guildInfo?.channels) && Object.keys(guildInfo?.channels ?? {}).length > 0;
     const channelAllowed = channelConfig?.allowed !== false;
     const allowByPolicy = isDiscordGroupAllowedByPolicy({
-      groupPolicy: discordConfig?.groupPolicy ?? "open",
+      groupPolicy: effectiveGroupPolicy,
       guildAllowlisted: Boolean(guildInfo),
       channelAllowlistConfigured,
       channelAllowed,

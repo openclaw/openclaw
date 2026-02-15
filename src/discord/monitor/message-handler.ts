@@ -37,7 +37,8 @@ export function createDiscordMessageHandler(params: {
   allowFrom?: Array<string | number>;
   guildEntries?: Record<string, DiscordGuildEntryResolved>;
 }): DiscordMessageHandler {
-  const groupPolicy = params.discordConfig?.groupPolicy ?? "open";
+  const defaultGroupPolicy = params.cfg.channels?.defaults?.groupPolicy;
+  const groupPolicy = params.discordConfig?.groupPolicy ?? defaultGroupPolicy ?? "open";
   const ackReactionScope = params.cfg.messages?.ackReactionScope ?? "group-mentions";
   const debounceMs = resolveInboundDebounceMs({ cfg: params.cfg, channel: "discord" });
 

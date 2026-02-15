@@ -233,7 +233,10 @@ async function handleDiscordReactionEvent(params: {
       parentSlug,
       scope: isThreadChannel ? "thread" : "channel",
     });
-    if (channelConfig?.allowed === false) {
+    const defaultGroupPolicy = params.cfg.channels?.defaults?.groupPolicy;
+    const discordGroupPolicy = params.cfg.channels?.["discord"]?.groupPolicy;
+    const groupPolicy = discordGroupPolicy ?? defaultGroupPolicy ?? "open";
+    if (channelConfig?.allowed === false && groupPolicy !== "open") {
       return;
     }
 

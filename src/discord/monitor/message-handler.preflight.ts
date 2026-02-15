@@ -369,7 +369,7 @@ export async function preflightDiscordMessage(
     return null;
   }
 
-  if (isGuildMessage && channelConfig?.allowed === false) {
+  if (isGuildMessage && channelConfig?.allowed === false && params.groupPolicy !== "open") {
     logDebug(`[discord-preflight] drop: channelConfig.allowed===false`);
     logVerbose(
       `Blocked discord channel ${message.channelId} not in guild channel allowlist (${channelMatchMeta})`,
