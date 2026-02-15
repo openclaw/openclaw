@@ -261,4 +261,54 @@ describe("block streaming", () => {
       expect(seen).toEqual(["Hello from stream"]);
     });
   });
+
+  it("still parses media directives for direct block payloads", async () => {
+    await withTempHome(async (home) => {
+      const onBlockReply = vi.fn();
+
+      piEmbeddedMock.runEmbeddedPiAgent.mockImplementation(
+        async (params: RunEmbeddedPiAgentParams) => {
+          void params.onBlockReply?.({ text: "Result\nMEDIA: ./image.png" });
+          return {
+            payloads: [{ text: "Result\nMEDIA: ./image.png" }],
+            meta: {
+              durationMs: 5,
+              agentMeta: { sessionId: "s", provider: "p", model: "m" },
+            },
+          };
+        },
+      );
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "ping",
+          From: "+1004",
+          To: "+2000",
+          MessageSid: "msg-129",
+          Provider: "telegram",
+        },
+        {
+          onBlockReply,
+          disableBlockStreaming: false,
+        },
+        {
+          agents: {
+            defaults: {
+              model: "anthropic/claude-opus-4-5",
+              workspace: path.join(home, "openclaw"),
+            },
+          },
+          channels: { telegram: { allowFrom: ["*"] } },
+          session: { store: path.join(home, "sessions.json") },
+        },
+      );
+
+      expect(res).toBeUndefined();
+      expect(onBlockReply).toHaveBeenCalledTimes(1);
+      expect(onBlockReply.mock.calls[0][0]).toMatchObject({
+        text: "Result",
+        mediaUrls: ["./image.png"],
+      });
+    });
+  });
 });
