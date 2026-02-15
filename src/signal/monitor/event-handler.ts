@@ -46,6 +46,7 @@ import {
   resolveSignalRecipient,
   resolveSignalSender,
 } from "../identity.js";
+import { recordSignalReactionTarget } from "../reaction-target-cache.js";
 import { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } from "../send.js";
 import { renderSignalMentions } from "./mentions.js";
 export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
@@ -127,6 +128,17 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       });
     }
     const signalTo = entry.isGroup ? `group:${entry.groupId}` : `signal:${entry.senderRecipient}`;
+    const senderE164 = /^\+?[0-9][0-9\s().-]*$/.test(entry.senderRecipient)
+      ? normalizeE164(entry.senderRecipient)
+      : undefined;
+    if (entry.isGroup) {
+      recordSignalReactionTarget({
+        groupId: entry.groupId,
+        messageId: entry.messageId,
+        senderId: entry.senderPeerId,
+        senderE164,
+      });
+    }
     const inboundHistory =
       entry.isGroup && historyKey && deps.historyLimit > 0
         ? (deps.groupHistories.get(historyKey) ?? []).map((historyEntry) => ({

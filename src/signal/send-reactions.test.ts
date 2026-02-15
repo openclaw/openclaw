@@ -49,9 +49,21 @@ describe("sendReactionSignal", () => {
     });
 
     const params = rpcMock.mock.calls[0]?.[1] as Record<string, unknown>;
-    expect(params.recipients).toBeUndefined();
+    expect(params.recipients).toEqual(["123e4567-e89b-12d3-a456-426614174000"]);
     expect(params.groupIds).toEqual(["group-id"]);
     expect(params.targetAuthor).toBe("123e4567-e89b-12d3-a456-426614174000");
+  });
+
+  it("prefers targetAuthorUuid over targetAuthor when both are provided", async () => {
+    await sendReactionSignal("", 123, "✅", {
+      groupId: "group-id",
+      targetAuthor: "+15551230000",
+      targetAuthorUuid: "uuid:123e4567-e89b-12d3-a456-426614174000",
+    });
+
+    const params = rpcMock.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(params.targetAuthor).toBe("123e4567-e89b-12d3-a456-426614174000");
+    expect(params.recipients).toEqual(["123e4567-e89b-12d3-a456-426614174000"]);
   });
 
   it("defaults targetAuthor to recipient for removals", async () => {
@@ -61,5 +73,17 @@ describe("sendReactionSignal", () => {
     expect(params.recipients).toEqual(["+15551230000"]);
     expect(params.targetAuthor).toBe("+15551230000");
     expect(params.remove).toBe(true);
+  });
+
+  it("uses targetAuthor for group removals when recipient is empty", async () => {
+    await removeReactionSignal("", 456, "❌", {
+      groupId: "group-id",
+      targetAuthorUuid: "uuid:123e4567-e89b-12d3-a456-426614174000",
+    });
+
+    const params = rpcMock.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(params.recipients).toEqual(["123e4567-e89b-12d3-a456-426614174000"]);
+    expect(params.targetAuthor).toBe("123e4567-e89b-12d3-a456-426614174000");
+    expect(params.groupIds).toEqual(["group-id"]);
   });
 });

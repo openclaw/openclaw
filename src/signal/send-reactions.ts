@@ -53,7 +53,7 @@ function resolveTargetAuthorParams(params: {
   targetAuthorUuid?: string;
   fallback?: string;
 }): { targetAuthor?: string } {
-  const candidates = [params.targetAuthor, params.targetAuthorUuid, params.fallback];
+  const candidates = [params.targetAuthorUuid, params.targetAuthor, params.fallback];
   for (const candidate of candidates) {
     const raw = candidate?.trim();
     if (!raw) {
@@ -109,8 +109,10 @@ async function sendReactionSignalCore(params: {
     ...(params.remove ? { remove: true } : {}),
     ...targetAuthorParams,
   };
-  if (normalizedRecipient) {
-    requestParams.recipients = [normalizedRecipient];
+  const recipients =
+    normalizedRecipient || (groupId ? targetAuthorParams.targetAuthor?.trim() : undefined);
+  if (recipients) {
+    requestParams.recipients = [recipients];
   }
   if (groupId) {
     requestParams.groupIds = [groupId];

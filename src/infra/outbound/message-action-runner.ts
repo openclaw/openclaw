@@ -15,6 +15,7 @@ import {
 } from "../../agents/tools/common.js";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-actions.js";
+import { resolveSignalReactionTarget } from "../../signal/reaction-target-cache.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
@@ -59,6 +60,19 @@ export type MessageActionRunnerGateway = {
   clientDisplayName?: string;
   mode: GatewayClientMode;
 };
+
+function parseSignalGroupIdFromTarget(raw: string | undefined): string | undefined {
+  const value = raw?.trim();
+  if (!value) {
+    return undefined;
+  }
+  const stripped = value.replace(/^signal:/i, "").trim();
+  if (!stripped.toLowerCase().startsWith("group:")) {
+    return undefined;
+  }
+  const groupId = stripped.slice("group:".length).trim();
+  return groupId || undefined;
+}
 
 function resolveAndApplyOutboundThreadId(
   params: Record<string, unknown>,
@@ -741,6 +755,30 @@ export async function runMessageAction(
   }
 
   const channel = await resolveChannel(cfg, params);
+  if (channel === "signal" && action === "react") {
+    if (readStringParam(params, "messageId") == null && input.toolContext?.currentThreadTs) {
+      params.messageId = input.toolContext.currentThreadTs;
+    }
+    const toRaw =
+      readStringParam(params, "to") ??
+      readStringParam(params, "recipient") ??
+      readStringParam(params, "target");
+    const groupId = parseSignalGroupIdFromTarget(toRaw);
+    const messageId = readStringParam(params, "messageId");
+    if (
+      groupId &&
+      messageId &&
+      readStringParam(params, "targetAuthor") == null &&
+      readStringParam(params, "targetAuthorUuid") == null
+    ) {
+      const cachedTarget = resolveSignalReactionTarget({ groupId, messageId });
+      if (cachedTarget?.targetAuthorUuid) {
+        params.targetAuthorUuid = cachedTarget.targetAuthorUuid;
+      } else if (cachedTarget?.targetAuthor) {
+        params.targetAuthor = cachedTarget.targetAuthor;
+      }
+    }
+  }
   const accountId = readStringParam(params, "accountId") ?? input.defaultAccountId;
   if (accountId) {
     params.accountId = accountId;
