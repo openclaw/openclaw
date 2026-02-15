@@ -396,6 +396,25 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
           });
         }
 
+        if (lineData.location) {
+          lastResult = await sendLocation(to, lineData.location, {
+            verbose: false,
+            accountId: accountId ?? undefined,
+          });
+        }
+
+        // Send markdown table flex messages BEFORE template/button messages
+        // so users see details before pagination/buttons
+        for (const flexMsg of processed.flexMessages) {
+          // LINE SDK expects FlexContainer but we receive contents as unknown
+          const flexContents = flexMsg.contents as Parameters<typeof sendFlex>[2];
+          lastResult = await sendFlex(to, flexMsg.altText, flexContents, {
+            verbose: false,
+            accountId: accountId ?? undefined,
+          });
+        }
+
+        // Send template/button messages AFTER table flex messages
         if (lineData.templateMessage) {
           const template = buildTemplate(lineData.templateMessage);
           if (template) {
@@ -404,22 +423,6 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
               accountId: accountId ?? undefined,
             });
           }
-        }
-
-        if (lineData.location) {
-          lastResult = await sendLocation(to, lineData.location, {
-            verbose: false,
-            accountId: accountId ?? undefined,
-          });
-        }
-
-        for (const flexMsg of processed.flexMessages) {
-          // LINE SDK expects FlexContainer but we receive contents as unknown
-          const flexContents = flexMsg.contents as Parameters<typeof sendFlex>[2];
-          lastResult = await sendFlex(to, flexMsg.altText, flexContents, {
-            verbose: false,
-            accountId: accountId ?? undefined,
-          });
         }
       }
 
