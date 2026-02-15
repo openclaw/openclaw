@@ -98,19 +98,49 @@ async function createLocalEmbeddingProvider(
   let llama: Llama | null = null;
   let embeddingModel: LlamaModel | null = null;
   let embeddingContext: LlamaEmbeddingContext | null = null;
+  let initPromise: Promise<LlamaEmbeddingContext> | null = null;
+  let initError: Error | null = null;
 
-  const ensureContext = async () => {
-    if (!llama) {
-      llama = await getLlama({ logLevel: LlamaLogLevel.error });
+  const ensureContext = async (): Promise<LlamaEmbeddingContext> => {
+    // If a previous initialization failed, throw the cached error
+    if (initError) {
+      throw initError;
     }
-    if (!embeddingModel) {
-      const resolved = await resolveModelFile(modelPath, modelCacheDir || undefined);
-      embeddingModel = await llama.loadModel({ modelPath: resolved });
+
+    // If already initialized, return immediately
+    if (embeddingContext) {
+      return embeddingContext;
     }
-    if (!embeddingContext) {
-      embeddingContext = await embeddingModel.createEmbeddingContext();
+
+    // Serialize initialization to prevent concurrent llama/model loading
+    // which can hang or deadlock on Windows.
+    if (initPromise) {
+      return initPromise;
     }
-    return embeddingContext;
+
+    initPromise = (async () => {
+      try {
+        if (!llama) {
+          llama = await getLlama({ logLevel: LlamaLogLevel.error });
+        }
+        if (!embeddingModel) {
+          const resolved = await resolveModelFile(modelPath, modelCacheDir || undefined);
+          embeddingModel = await llama.loadModel({ modelPath: resolved });
+        }
+        if (!embeddingContext) {
+          embeddingContext = await embeddingModel.createEmbeddingContext();
+        }
+        return embeddingContext;
+      } catch (err) {
+        // Cache the error so subsequent calls fail fast
+        initError = err instanceof Error ? err : new Error(String(err));
+        throw initError;
+      } finally {
+        initPromise = null;
+      }
+    })();
+
+    return initPromise;
   };
 
   return {
@@ -123,12 +153,13 @@ async function createLocalEmbeddingProvider(
     },
     embedBatch: async (texts) => {
       const ctx = await ensureContext();
-      const embeddings = await Promise.all(
-        texts.map(async (text) => {
-          const embedding = await ctx.getEmbeddingFor(text);
-          return sanitizeAndNormalizeEmbedding(Array.from(embedding.vector));
-        }),
-      );
+      // Process embeddings sequentially to avoid deadlocks/hangs with node-llama-cpp
+      // which can't safely handle concurrent getEmbeddingFor() calls.
+      const embeddings: number[][] = [];
+      for (const text of texts) {
+        const embedding = await ctx.getEmbeddingFor(text);
+        embeddings.push(sanitizeAndNormalizeEmbedding(Array.from(embedding.vector)));
+      }
       return embeddings;
     },
   };
