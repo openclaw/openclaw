@@ -31,6 +31,26 @@ const fsp = fs.promises;
 const skillsLogger = createSubsystemLogger("skills");
 const skillCommandDebugOnce = new Set<string>();
 
+/**
+ * Replace the user's home directory prefix with `~` in skill file paths
+ * to reduce system prompt token usage. Models understand `~` expansion,
+ * and the read tool resolves `~` to the home directory.
+ *
+ * Example: `/Users/alice/.bun/.../skills/github/SKILL.md`
+ *       → `~/.bun/.../skills/github/SKILL.md`
+ *
+ * Saves ~5–6 tokens per skill path × N skills ≈ 400–600 tokens total.
+ */
+function compactSkillPaths(skills: Skill[]): Skill[] {
+  const home = os.homedir();
+  if (!home) return skills;
+  const prefix = home.endsWith(path.sep) ? home : home + path.sep;
+  return skills.map((s) => ({
+    ...s,
+    filePath: s.filePath.startsWith(prefix) ? "~/" + s.filePath.slice(prefix.length) : s.filePath,
+  }));
+}
+
 function debugSkillCommandOnce(
   messageKey: string,
   message: string,
@@ -231,7 +251,9 @@ export function buildWorkspaceSkillSnapshot(
   );
   const resolvedSkills = promptEntries.map((entry) => entry.skill);
   const remoteNote = opts?.eligibility?.remote?.note?.trim();
-  const prompt = [remoteNote, formatSkillsForPrompt(resolvedSkills)].filter(Boolean).join("\n");
+  const prompt = [remoteNote, formatSkillsForPrompt(compactSkillPaths(resolvedSkills))]
+    .filter(Boolean)
+    .join("\n");
   return {
     prompt,
     skills: eligible.map((entry) => ({
@@ -266,7 +288,7 @@ export function buildWorkspaceSkillsPrompt(
     (entry) => entry.invocation?.disableModelInvocation !== true,
   );
   const remoteNote = opts?.eligibility?.remote?.note?.trim();
-  return [remoteNote, formatSkillsForPrompt(promptEntries.map((entry) => entry.skill))]
+  return [remoteNote, formatSkillsForPrompt(compactSkillPaths(promptEntries.map((entry) => entry.skill)))]
     .filter(Boolean)
     .join("\n");
 }
