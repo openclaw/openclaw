@@ -22,7 +22,7 @@ vi.mock("../../../auto-reply/reply/provider-dispatcher.js", () => ({
 vi.mock("./last-route.js", () => ({
   trackBackgroundTask: (tasks: Set<Promise<unknown>>, task: Promise<unknown>) => {
     tasks.add(task);
-    task.finally(() => {
+    void task.finally(() => {
       tasks.delete(task);
     });
   },
