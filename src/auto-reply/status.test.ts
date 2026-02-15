@@ -87,6 +87,120 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("Queue: collect");
   });
 
+  it("falls back to sessionEntry.thinkingLevel when resolvedThink is omitted", () => {
+    const text = buildStatusMessage({
+      agent: { model: "anthropic/claude-opus-4-6", thinkingDefault: "low" },
+      sessionEntry: {
+        sessionId: "think-fallback",
+        updatedAt: 0,
+        thinkingLevel: "high",
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+    });
+    expect(normalizeTestText(text)).toContain("Think: high");
+  });
+
+  it("falls back to sessionEntry.verboseLevel when resolvedVerbose is omitted", () => {
+    const text = buildStatusMessage({
+      agent: { model: "anthropic/claude-opus-4-6", verboseDefault: "off" },
+      sessionEntry: {
+        sessionId: "verbose-fallback",
+        updatedAt: 0,
+        verboseLevel: "full",
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+    });
+    expect(normalizeTestText(text)).toContain("verbose:full");
+  });
+
+  it("falls back to sessionEntry.reasoningLevel when resolvedReasoning is omitted", () => {
+    const text = buildStatusMessage({
+      agent: { model: "anthropic/claude-opus-4-6" },
+      sessionEntry: {
+        sessionId: "reasoning-fallback",
+        updatedAt: 0,
+        reasoningLevel: "on",
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+    });
+    expect(normalizeTestText(text)).toContain("Reasoning: on");
+  });
+
+  it("prefers resolvedThink over sessionEntry.thinkingLevel", () => {
+    const text = buildStatusMessage({
+      agent: { model: "anthropic/claude-opus-4-6" },
+      sessionEntry: {
+        sessionId: "think-prefer",
+        updatedAt: 0,
+        thinkingLevel: "low",
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      resolvedThink: "high",
+      queue: { mode: "collect", depth: 0 },
+    });
+    expect(normalizeTestText(text)).toContain("Think: high");
+  });
+
+  it("falls back to thinkingDefault when neither resolvedThink nor sessionEntry.thinkingLevel is set", () => {
+    const text = buildStatusMessage({
+      agent: { model: "anthropic/claude-opus-4-6", thinkingDefault: "medium" },
+      sessionEntry: {
+        sessionId: "think-default",
+        updatedAt: 0,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+    });
+    expect(normalizeTestText(text)).toContain("Think: medium");
+  });
+
+  it("shows sessionEntry.thinkingLevel even when resolvedThink is a stale pre-directive value (#10867)", () => {
+    // Regression: when /think high /status is sent together, the directive updates
+    // sessionEntry.thinkingLevel but the pre-computed resolvedThink still holds the
+    // old value. The caller (get-reply-directives-apply) must re-read sessionEntry
+    // after directives are applied. This test verifies the post-fix behavior.
+    const sessionEntry = {
+      sessionId: "think-directive-status",
+      updatedAt: 0,
+      thinkingLevel: "high" as const,
+    };
+    const text = buildStatusMessage({
+      agent: { model: "anthropic/claude-opus-4-6", thinkingDefault: "low" },
+      sessionEntry,
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      resolvedThink: sessionEntry.thinkingLevel,
+      queue: { mode: "collect", depth: 0 },
+    });
+    expect(normalizeTestText(text)).toContain("Think: high");
+    expect(normalizeTestText(text)).not.toContain("Think: low");
+  });
+
+  it("does not show stale default when session overrides thinking level (#10867)", () => {
+    // Simulates the pre-fix bug scenario: resolvedThink omitted, but
+    // sessionEntry.thinkingLevel was updated to "high" by a directive.
+    const text = buildStatusMessage({
+      agent: { model: "anthropic/claude-opus-4-6", thinkingDefault: "low" },
+      sessionEntry: {
+        sessionId: "think-stale-bug",
+        updatedAt: 0,
+        thinkingLevel: "high",
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+    });
+    expect(normalizeTestText(text)).toContain("Think: high");
+  });
+
   it("uses per-agent sandbox config when config and session key are provided", () => {
     const text = buildStatusMessage({
       config: {

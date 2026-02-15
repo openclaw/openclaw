@@ -1,4 +1,10 @@
 import { Type } from "@sinclair/typebox";
+import type {
+  ElevatedLevel,
+  ReasoningLevel,
+  ThinkLevel,
+  VerboseLevel,
+} from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { AnyAgentTool } from "./common.js";
 import { normalizeGroupActivation } from "../../auto-reply/group-activation.js";
@@ -39,6 +45,7 @@ import {
   normalizeProviderId,
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
+  resolveThinkingDefault,
 } from "../model-selection.js";
 import { readStringParam } from "./common.js";
 import {
@@ -430,6 +437,28 @@ export function createSessionStatusTool(opts?: {
         typeof agentDefaults.model === "object" && agentDefaults.model
           ? { ...agentDefaults.model, primary: defaultLabel }
           : { primary: defaultLabel };
+
+      // Resolve thinking level from session entry, then config default, then model catalog.
+      // This mirrors the resolution chain used by the runtime header builder.
+      const modelForCard = resolved.entry.modelOverride?.trim() || configured.model;
+      const resolvedThink: ThinkLevel =
+        (resolved.entry.thinkingLevel as ThinkLevel | undefined) ??
+        resolveThinkingDefault({
+          cfg,
+          provider: providerForCard,
+          model: modelForCard,
+        });
+      const resolvedVerbose: VerboseLevel =
+        (resolved.entry.verboseLevel as VerboseLevel | undefined) ??
+        (agentDefaults.verboseDefault as VerboseLevel | undefined) ??
+        "off";
+      const resolvedReasoning: ReasoningLevel =
+        (resolved.entry.reasoningLevel as ReasoningLevel | undefined) ?? "off";
+      const resolvedElevated: ElevatedLevel =
+        (resolved.entry.elevatedLevel as ElevatedLevel | undefined) ??
+        (agentDefaults.elevatedDefault as ElevatedLevel | undefined) ??
+        "on";
+
       const statusText = buildStatusMessage({
         config: cfg,
         agent: {
@@ -441,6 +470,10 @@ export function createSessionStatusTool(opts?: {
         sessionKey: resolved.key,
         sessionStorePath: storePath,
         groupActivation,
+        resolvedThink,
+        resolvedVerbose,
+        resolvedReasoning,
+        resolvedElevated,
         modelAuth: resolveModelAuthLabel({
           provider: providerForCard,
           cfg,

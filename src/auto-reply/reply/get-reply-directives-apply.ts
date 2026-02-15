@@ -164,6 +164,17 @@ export async function applyInlineDirectiveOverrides(params: {
     });
     let statusReply: ReplyPayload | undefined;
     if (directives.hasStatusDirective && allowTextCommands && command.isAuthorizedSender) {
+      // Re-resolve levels after handleDirectiveOnly may have mutated sessionEntry
+      const postDirectiveThinkLevel =
+        (sessionEntry?.thinkingLevel as ThinkLevel | undefined) ?? resolvedDefaultThinkLevel;
+      const postDirectiveVerboseLevel =
+        (sessionEntry?.verboseLevel as VerboseLevel | undefined) ?? currentVerboseLevel ?? "off";
+      const postDirectiveReasoningLevel =
+        (sessionEntry?.reasoningLevel as ReasoningLevel | undefined) ??
+        currentReasoningLevel ??
+        "off";
+      const postDirectiveElevatedLevel =
+        (sessionEntry?.elevatedLevel as ElevatedLevel | undefined) ?? resolvedElevatedLevel;
       statusReply = await buildStatusReply({
         cfg,
         command,
@@ -173,11 +184,11 @@ export async function applyInlineDirectiveOverrides(params: {
         provider,
         model,
         contextTokens,
-        resolvedThinkLevel: resolvedDefaultThinkLevel,
-        resolvedVerboseLevel: currentVerboseLevel ?? "off",
-        resolvedReasoningLevel: currentReasoningLevel ?? "off",
-        resolvedElevatedLevel,
-        resolveDefaultThinkingLevel: async () => resolvedDefaultThinkLevel,
+        resolvedThinkLevel: postDirectiveThinkLevel,
+        resolvedVerboseLevel: postDirectiveVerboseLevel,
+        resolvedReasoningLevel: postDirectiveReasoningLevel,
+        resolvedElevatedLevel: postDirectiveElevatedLevel,
+        resolveDefaultThinkingLevel: async () => postDirectiveThinkLevel,
         isGroup,
         defaultGroupActivation: defaultActivation,
         mediaDecisions: ctx.MediaUnderstandingDecisions,
