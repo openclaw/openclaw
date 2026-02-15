@@ -200,4 +200,164 @@ describe("handleLineWebhookEvents", () => {
     expect(processMessage).not.toHaveBeenCalled();
     expect(buildLineMessageContextMock).not.toHaveBeenCalled();
   });
+
+  it("blocks direct messages when dmPolicy is disabled", async () => {
+    const processMessage = vi.fn();
+    const event = {
+      type: "message",
+      message: { id: "dm1", type: "text", text: "hi" },
+      replyToken: "reply-token",
+      timestamp: Date.now(),
+      source: { type: "user", userId: "user-dm-1" },
+      mode: "active",
+      webhookEventId: "evt-dm-1",
+      deliveryContext: { isRedelivery: false },
+    } as MessageEvent;
+
+    await handleLineWebhookEvents([event], {
+      cfg: { channels: { line: { dmPolicy: "disabled" } } },
+      account: {
+        accountId: "default",
+        enabled: true,
+        channelAccessToken: "token",
+        channelSecret: "secret",
+        tokenSource: "config",
+        config: { dmPolicy: "disabled" },
+      },
+      runtime: { error: vi.fn() },
+      mediaMaxBytes: 1,
+      processMessage,
+    });
+
+    expect(processMessage).not.toHaveBeenCalled();
+    expect(buildLineMessageContextMock).not.toHaveBeenCalled();
+    expect(upsertPairingRequestMock).not.toHaveBeenCalled();
+  });
+
+  it("allows direct messages when dmPolicy is open", async () => {
+    const processMessage = vi.fn();
+    const event = {
+      type: "message",
+      message: { id: "dm2", type: "text", text: "hi" },
+      replyToken: "reply-token",
+      timestamp: Date.now(),
+      source: { type: "user", userId: "user-dm-2" },
+      mode: "active",
+      webhookEventId: "evt-dm-2",
+      deliveryContext: { isRedelivery: false },
+    } as MessageEvent;
+
+    await handleLineWebhookEvents([event], {
+      cfg: { channels: { line: { dmPolicy: "open" } } },
+      account: {
+        accountId: "default",
+        enabled: true,
+        channelAccessToken: "token",
+        channelSecret: "secret",
+        tokenSource: "config",
+        config: { dmPolicy: "open" },
+      },
+      runtime: { error: vi.fn() },
+      mediaMaxBytes: 1,
+      processMessage,
+    });
+
+    expect(buildLineMessageContextMock).toHaveBeenCalledTimes(1);
+    expect(processMessage).toHaveBeenCalledTimes(1);
+    expect(upsertPairingRequestMock).not.toHaveBeenCalled();
+  });
+
+  it("enforces dmPolicy allowlist deterministically", async () => {
+    const allowedProcessMessage = vi.fn();
+    const blockedProcessMessage = vi.fn();
+
+    const allowedEvent = {
+      type: "message",
+      message: { id: "dm3", type: "text", text: "hi" },
+      replyToken: "reply-token",
+      timestamp: Date.now(),
+      source: { type: "user", userId: "allowed-user" },
+      mode: "active",
+      webhookEventId: "evt-dm-3",
+      deliveryContext: { isRedelivery: false },
+    } as MessageEvent;
+
+    const blockedEvent = {
+      type: "message",
+      message: { id: "dm4", type: "text", text: "hi" },
+      replyToken: "reply-token",
+      timestamp: Date.now(),
+      source: { type: "user", userId: "blocked-user" },
+      mode: "active",
+      webhookEventId: "evt-dm-4",
+      deliveryContext: { isRedelivery: false },
+    } as MessageEvent;
+
+    await handleLineWebhookEvents([allowedEvent], {
+      cfg: { channels: { line: { dmPolicy: "allowlist", allowFrom: ["allowed-user"] } } },
+      account: {
+        accountId: "default",
+        enabled: true,
+        channelAccessToken: "token",
+        channelSecret: "secret",
+        tokenSource: "config",
+        config: { dmPolicy: "allowlist", allowFrom: ["allowed-user"] },
+      },
+      runtime: { error: vi.fn() },
+      mediaMaxBytes: 1,
+      processMessage: allowedProcessMessage,
+    });
+
+    await handleLineWebhookEvents([blockedEvent], {
+      cfg: { channels: { line: { dmPolicy: "allowlist", allowFrom: ["allowed-user"] } } },
+      account: {
+        accountId: "default",
+        enabled: true,
+        channelAccessToken: "token",
+        channelSecret: "secret",
+        tokenSource: "config",
+        config: { dmPolicy: "allowlist", allowFrom: ["allowed-user"] },
+      },
+      runtime: { error: vi.fn() },
+      mediaMaxBytes: 1,
+      processMessage: blockedProcessMessage,
+    });
+
+    expect(allowedProcessMessage).toHaveBeenCalledTimes(1);
+    expect(blockedProcessMessage).not.toHaveBeenCalled();
+    expect(upsertPairingRequestMock).not.toHaveBeenCalled();
+  });
+
+  it("blocks and triggers pairing flow when dmPolicy is pairing", async () => {
+    const processMessage = vi.fn();
+    const event = {
+      type: "message",
+      message: { id: "dm5", type: "text", text: "hi" },
+      replyToken: "reply-token",
+      timestamp: Date.now(),
+      source: { type: "user", userId: "unknown-user" },
+      mode: "active",
+      webhookEventId: "evt-dm-5",
+      deliveryContext: { isRedelivery: false },
+    } as MessageEvent;
+
+    await handleLineWebhookEvents([event], {
+      cfg: { channels: { line: { dmPolicy: "pairing", allowFrom: [] } } },
+      account: {
+        accountId: "default",
+        enabled: true,
+        channelAccessToken: "token",
+        channelSecret: "secret",
+        tokenSource: "config",
+        config: { dmPolicy: "pairing", allowFrom: [] },
+      },
+      runtime: { error: vi.fn() },
+      mediaMaxBytes: 1,
+      processMessage,
+    });
+
+    expect(processMessage).not.toHaveBeenCalled();
+    expect(buildLineMessageContextMock).not.toHaveBeenCalled();
+    expect(upsertPairingRequestMock).toHaveBeenCalledTimes(1);
+  });
 });
