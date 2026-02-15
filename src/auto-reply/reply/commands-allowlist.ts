@@ -254,7 +254,8 @@ function resolveChannelAllowFromPaths(
   }
   if (scope === "dm") {
     if (channelId === "slack" || channelId === "discord") {
-      return ["dm", "allowFrom"];
+      // Canonical DM allowlist location for Slack/Discord. Legacy: dm.allowFrom.
+      return ["allowFrom"];
     }
     if (
       channelId === "telegram" ||
@@ -404,7 +405,7 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
       groupPolicy = account.config.groupPolicy;
     } else if (channelId === "slack") {
       const account = resolveSlackAccount({ cfg: params.cfg, accountId });
-      dmAllowFrom = (account.dm?.allowFrom ?? []).map(String);
+      dmAllowFrom = (account.config.allowFrom ?? account.config.dm?.allowFrom ?? []).map(String);
       groupPolicy = account.groupPolicy;
       const channels = account.channels ?? {};
       groupOverrides = Object.entries(channels)
@@ -415,7 +416,7 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
         .filter(Boolean) as Array<{ label: string; entries: string[] }>;
     } else if (channelId === "discord") {
       const account = resolveDiscordAccount({ cfg: params.cfg, accountId });
-      dmAllowFrom = (account.config.dm?.allowFrom ?? []).map(String);
+      dmAllowFrom = (account.config.allowFrom ?? account.config.dm?.allowFrom ?? []).map(String);
       groupPolicy = account.config.groupPolicy;
       const guilds = account.config.guilds ?? {};
       for (const [guildKey, guildCfg] of Object.entries(guilds)) {
@@ -567,10 +568,25 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
       pathPrefix,
       accountId: normalizedAccountId,
     } = resolveAccountTarget(parsedConfig, channelId, accountId);
-    const existingRaw = getNestedValue(target, allowlistPath);
-    const existing = Array.isArray(existingRaw)
-      ? existingRaw.map((entry) => String(entry).trim()).filter(Boolean)
-      : [];
+    const existing: string[] = [];
+    const existingPaths =
+      scope === "dm" && (channelId === "slack" || channelId === "discord")
+        ? // Read both while legacy alias may still exist; write canonical below.
+          [allowlistPath, ["dm", "allowFrom"]]
+        : [allowlistPath];
+    for (const path of existingPaths) {
+      const existingRaw = getNestedValue(target, path);
+      if (!Array.isArray(existingRaw)) {
+        continue;
+      }
+      for (const entry of existingRaw) {
+        const value = String(entry).trim();
+        if (!value || existing.includes(value)) {
+          continue;
+        }
+        existing.push(value);
+      }
+    }
 
     const normalizedEntry = normalizeAllowFrom({
       cfg: params.cfg,
@@ -627,6 +643,10 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
         deleteNestedValue(target, allowlistPath);
       } else {
         setNestedValue(target, allowlistPath, next);
+      }
+      if (scope === "dm" && (channelId === "slack" || channelId === "discord")) {
+        // Remove legacy DM allowlist alias to prevent drift.
+        deleteNestedValue(target, ["dm", "allowFrom"]);
       }
     }
 
