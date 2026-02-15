@@ -216,6 +216,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/llm-task/**"
+"extensions: mindsdb":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/mindsdb/**"
 "extensions: lobster":
   - changed-files:
       - any-glob-to-any-file:

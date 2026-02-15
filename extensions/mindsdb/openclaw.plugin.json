@@ -1,0 +1,77 @@
+{
+  "id": "mindsdb",
+  "name": "MindsDB",
+  "description": "MindsDB Federated Query Engine tool for querying connected databases.",
+  "skills": ["./skills"],
+  "uiHints": {
+    "baseUrl": {
+      "label": "Base URL",
+      "help": "MindsDB HTTP endpoint (default: http://127.0.0.1:47334)."
+    },
+    "token": {
+      "label": "API Token",
+      "sensitive": true,
+      "help": "Bearer token used for Authorization header."
+    },
+    "username": {
+      "label": "Username",
+      "help": "Used to fetch a token from /api/login when token is not set."
+    },
+    "password": {
+      "label": "Password",
+      "sensitive": true,
+      "help": "Used with username for /api/login token retrieval."
+    },
+    "allowMutatingQueries": {
+      "label": "Allow Mutating Queries",
+      "help": "When false, blocks CREATE/INSERT/UPDATE/DELETE/DROP/ALTER/TRUNCATE-style statements."
+    },
+    "requestTimeoutMs": {
+      "label": "Request Timeout (ms)",
+      "advanced": true
+    },
+    "maxRows": {
+      "label": "Max Rows",
+      "advanced": true
+    },
+    "maxChars": {
+      "label": "Max Output Characters",
+      "advanced": true
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "baseUrl": {
+        "type": "string"
+      },
+      "token": {
+        "type": "string"
+      },
+      "username": {
+        "type": "string"
+      },
+      "password": {
+        "type": "string"
+      },
+      "allowMutatingQueries": {
+        "type": "boolean"
+      },
+      "requestTimeoutMs": {
+        "type": "integer",
+        "minimum": 1000
+      },
+      "maxRows": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 1000
+      },
+      "maxChars": {
+        "type": "integer",
+        "minimum": 1000,
+        "maximum": 300000
+      }
+    }
+  }
+}
