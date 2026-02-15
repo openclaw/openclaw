@@ -531,6 +531,18 @@ export async function runEmbeddedAttempt(
         params.streamParams,
       );
 
+      // Strip unsigned thinking blocks between tool-call iterations.
+      // Antigravity returns thinking blocks without signatures; pi-ai's agent loop
+      // accumulates them in context.messages and replays them on the next API call.
+      if (transcriptPolicy.normalizeAntigravityThinkingBlocks) {
+        (
+          activeSession.agent as unknown as {
+            transformContext: (msgs: AgentMessage[]) => Promise<AgentMessage[]>;
+          }
+        ).transformContext = async (messages: AgentMessage[]) =>
+          sanitizeAntigravityThinkingBlocks(messages);
+      }
+
       if (cacheTrace) {
         cacheTrace.recordStage("session:loaded", {
           messages: activeSession.messages,
