@@ -6,6 +6,7 @@ import { WebSocket } from "ws";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { whatsappPlugin } from "../../extensions/whatsapp/src/channel.js";
+import { BARE_SESSION_RESET_PROMPT } from "../auto-reply/reply/session-reset-prompt.js";
 import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { setRegistry } from "./server.agent.gateway-server-agent.mocks.js";
@@ -259,6 +260,32 @@ describe("gateway server agent", () => {
     expect(call.deliver).toBe(false);
     expect(call.bestEffortDeliver).toBe(true);
     expect(typeof call.sessionId).toBe("string");
+  });
+
+  test("agent routes bare /new through session reset before running greeting prompt", async () => {
+    await useTempSessionStorePath();
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main-before-reset",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+    const spy = vi.mocked(agentCommand);
+    const callsBefore = spy.mock.calls.length;
+    const res = await rpcReq(ws, "agent", {
+      message: "/new",
+      sessionKey: "main",
+      idempotencyKey: "idem-agent-new",
+    });
+    expect(res.ok).toBe(true);
+
+    await vi.waitFor(() => expect(spy.mock.calls.length).toBeGreaterThan(callsBefore));
+    const call = spy.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(call.message).toBe(BARE_SESSION_RESET_PROMPT);
+    expect(typeof call.sessionId).toBe("string");
+    expect(call.sessionId).not.toBe("sess-main-before-reset");
   });
 
   test("agent ack response then final response", { timeout: 8000 }, async () => {
