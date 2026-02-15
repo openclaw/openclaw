@@ -991,6 +991,35 @@ describe("QmdMemoryManager", () => {
     writeFileSpy.mockRestore();
   });
 
+  it("closes cached sqlite connection after update so WAL readers see new rows", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 0, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    const { manager } = await createManager();
+    const inner = manager as unknown as {
+      db: { close: () => void } | null;
+    };
+
+    const closeSpy = vi.fn();
+    inner.db = { close: closeSpy };
+
+    await manager.sync({ reason: "manual" });
+
+    expect(closeSpy).toHaveBeenCalledOnce();
+    expect(inner.db).toBeNull();
+
+    await manager.close();
+  });
+
   it("throws when sqlite index is busy", async () => {
     const { manager } = await createManager();
     const inner = manager as unknown as {
