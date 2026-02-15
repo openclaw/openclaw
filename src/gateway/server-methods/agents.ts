@@ -17,6 +17,7 @@ import {
   DEFAULT_TOOLS_FILENAME,
   DEFAULT_USER_FILENAME,
   ensureAgentWorkspace,
+  isWorkspaceOnboardingCompleted,
 } from "../../agents/workspace.js";
 import { movePathToTrash } from "../../browser/trash.js";
 import {
@@ -52,6 +53,9 @@ const BOOTSTRAP_FILE_NAMES = [
   DEFAULT_HEARTBEAT_FILENAME,
   DEFAULT_BOOTSTRAP_FILENAME,
 ] as const;
+const BOOTSTRAP_FILE_NAMES_POST_ONBOARDING = BOOTSTRAP_FILE_NAMES.filter(
+  (name) => name !== DEFAULT_BOOTSTRAP_FILENAME,
+);
 
 const MEMORY_FILE_NAMES = [DEFAULT_MEMORY_FILENAME, DEFAULT_MEMORY_ALT_FILENAME] as const;
 
@@ -108,7 +112,7 @@ async function statFile(filePath: string): Promise<FileMeta | null> {
   }
 }
 
-async function listAgentFiles(workspaceDir: string) {
+async function listAgentFiles(workspaceDir: string, options?: { hideBootstrap?: boolean }) {
   const files: Array<{
     name: string;
     path: string;
@@ -117,7 +121,10 @@ async function listAgentFiles(workspaceDir: string) {
     updatedAtMs?: number;
   }> = [];
 
-  for (const name of BOOTSTRAP_FILE_NAMES) {
+  const bootstrapFileNames = options?.hideBootstrap
+    ? BOOTSTRAP_FILE_NAMES_POST_ONBOARDING
+    : BOOTSTRAP_FILE_NAMES;
+  for (const name of bootstrapFileNames) {
     const filePath = path.join(workspaceDir, name);
     const meta = await statFile(filePath);
     if (meta) {
@@ -417,7 +424,13 @@ export const agentsHandlers: GatewayRequestHandlers = {
       return;
     }
     const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-    const files = await listAgentFiles(workspaceDir);
+    let hideBootstrap = false;
+    try {
+      hideBootstrap = await isWorkspaceOnboardingCompleted(workspaceDir);
+    } catch {
+      // Fall back to showing BOOTSTRAP if workspace state cannot be read.
+    }
+    const files = await listAgentFiles(workspaceDir, { hideBootstrap });
     respond(true, { agentId, workspace: workspaceDir, files }, undefined);
   },
   "agents.files.get": async ({ params, respond }) => {
