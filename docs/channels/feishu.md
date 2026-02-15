@@ -414,6 +414,69 @@ openclaw pairing list feishu
 2. Ensure the app is published
 3. Check logs for detailed errors
 
+### Multi-agent: Gateway device token mismatch (A2A communication fails)
+
+When using multiple agents with Feishu, you may see:
+```
+gateway closed (1008): unauthorized: device token mismatch
+```
+
+This happens when the CLI device identity and Gateway authentication state become inconsistent.
+
+**Symptoms:**
+- `openclaw gateway status` shows `RPC probe: failed`
+- Agent-to-agent communication (`sessions_send`) fails
+- Tools return "unauthorized" errors
+
+**Quick fix:**
+```bash
+systemctl --user restart openclaw-gateway
+sleep 3
+openclaw gateway status  # Should show "RPC probe: ok"
+```
+
+**Root cause:** The Gateway service cached an old device token. Restarting refreshes the authentication state.
+
+### Multi-agent: Agent does not reply in group chats (deliveryContext missing)
+
+When running multiple Feishu bots (e.g., `main_bot` and `pulse_bot`), an agent may:
+- Reply normally in DMs
+- Reply when @mentioned in groups
+- **Fail to reply** when speaking directly in groups
+
+**Root cause:** The agent's group chat session is missing the `deliveryContext.to` field.
+
+**Diagnosis:**
+Check the agent's sessions file:
+```bash
+cat ~/.openclaw/agents/<agent_id>/sessions/sessions.json | jq '.["agent:<agent_id>:feishu:group:<group_id>"].deliveryContext'
+```
+
+**Problem:** Missing fields:
+```json
+{
+  "channel": "feishu"
+  // Missing: "to", "accountId", "lastTo", "lastAccountId"
+}
+```
+
+**Fix:** Manually add the missing fields:
+```json
+{
+  "deliveryContext": {
+    "channel": "feishu",
+    "to": "chat:oc_xxx",           // Group chat ID
+    "accountId": "pulse_bot"       // Your bot account ID
+  },
+  "lastTo": "chat:oc_xxx",
+  "lastAccountId": "pulse_bot"
+}
+```
+
+**Note:** Group chats use `"chat:oc_xxx"` format, not `"user:ou_xxx"` (which is for DMs).
+
+**Prevention:** When setting up multi-agent Feishu bots, ensure each bot is properly paired and has sent at least one message in the group to initialize the session correctly.
+
 ---
 
 ## Advanced configuration
