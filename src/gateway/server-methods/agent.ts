@@ -127,8 +127,9 @@ async function runSessionResetFromAgent(params: {
       respond,
     });
 
-    void Promise.resolve(resetResult)
-      .then(() => {
+    void (async () => {
+      try {
+        await resetResult;
         if (!settled) {
           settle({
             ok: false,
@@ -138,13 +139,13 @@ async function runSessionResetFromAgent(params: {
             ),
           });
         }
-      })
-      .catch((err: unknown) => {
+      } catch (err: unknown) {
         settle({
           ok: false,
           error: errorShape(ErrorCodes.UNAVAILABLE, String(err)),
         });
-      });
+      }
+    })();
   });
 }
 
