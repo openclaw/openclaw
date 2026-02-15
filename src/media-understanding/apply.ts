@@ -317,33 +317,55 @@ function resolveTextMimeFromName(name?: string): string | undefined {
   return TEXT_EXT_MIME.get(ext);
 }
 
-function isBinaryMediaMime(mime?: string): boolean {
-  if (!mime) {
+/** Known text-like application/ MIME types that should NOT be treated as binary. */
+const TEXT_APPLICATION_MIMES = new Set([
+  "application/json",
+  "application/xml",
+  "application/x-yaml",
+  "application/yaml",
+  "application/javascript",
+  "application/x-sh",
+  "application/x-httpd-php",
+  "application/x-perl",
+  "application/x-python",
+  "application/x-ruby",
+  "application/sql",
+  "application/graphql",
+  "application/ld+json",
+  "application/xhtml+xml",
+  "application/x-ndjson",
+]);
+
+/** @internal Exported for unit testing only. */
+export function isBinaryMediaMime(mime?: string): boolean {
+  const normalized = normalizeMimeType(mime);
+  if (!normalized) {
     return false;
   }
-  if (mime.startsWith("image/") || mime.startsWith("audio/") || mime.startsWith("video/")) {
-    return true;
-  }
-  if (mime === "application/octet-stream") {
-    return true;
-  }
   if (
-    mime === "application/zip" ||
-    mime === "application/x-zip-compressed" ||
-    mime === "application/gzip" ||
-    mime === "application/x-gzip" ||
-    mime === "application/x-rar-compressed" ||
-    mime === "application/x-7z-compressed"
+    normalized.startsWith("image/") ||
+    normalized.startsWith("audio/") ||
+    normalized.startsWith("video/")
   ) {
     return true;
   }
-  if (mime.startsWith("application/vnd.")) {
-    // Keep vendor +json/+xml payloads eligible for text extraction while
-    // treating the common binary vendor family (Office, archives, etc.) as binary.
-    if (mime.endsWith("+json") || mime.endsWith("+xml")) {
+  // Treat application/* as binary unless it is a known text-like type.
+  // This prevents ZIP-based formats (xlsx, docx, pptx) and other binary
+  // payloads from passing the looksLikeUtf8Text heuristic and being
+  // inlined as garbled text in the message body.
+  if (normalized.startsWith("application/")) {
+    // RFC 6839 structured syntax suffixes: +json, +xml, +yaml are text-based
+    // regardless of the specific subtype (e.g. application/vnd.api+json).
+    if (
+      normalized.endsWith("+json") ||
+      normalized.endsWith("+xml") ||
+      normalized.endsWith("+yaml")
+    ) {
       return false;
     }
-    return true;
+    if (!TEXT_APPLICATION_MIMES.has(normalized)) {
+      return true;
+    }
   }
   return false;
 }
