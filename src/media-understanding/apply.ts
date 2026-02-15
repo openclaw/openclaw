@@ -410,8 +410,13 @@ async function extractFileBlocks(params: {
       !forcedTextMimeResolved && normalizedRawMime === "application/pdf"
         ? sanitizeMimeType(normalizedRawMime)
         : sanitizeMimeType(textHint ?? normalizeMimeType(rawMime));
-    // Log when MIME type is overridden from non-text to text for auditability
-    if (textHint && rawMime && !rawMime.startsWith("text/")) {
+    // Log when MIME type is actually overridden from non-text to text for auditability
+    if (
+      textHint &&
+      rawMime &&
+      !rawMime.startsWith("text/") &&
+      mimeType === sanitizeMimeType(textHint)
+    ) {
       logVerbose(
         `media: MIME override from "${rawMime}" to "${textHint}" for index=${attachment.index}`,
       );
