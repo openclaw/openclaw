@@ -194,6 +194,14 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
       }
     }
   } else if (payload.state === "final") {
+    // Append the final message immediately so the user sees no gap between
+    // the streamed text disappearing and loadChatHistory completing.
+    if (payload.message) {
+      state.chatMessages = [
+        ...state.chatMessages,
+        payload.message,
+      ];
+    }
     state.chatStream = null;
     state.chatRunId = null;
     state.chatStreamStartedAt = null;
