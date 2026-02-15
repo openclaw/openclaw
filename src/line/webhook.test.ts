@@ -18,6 +18,27 @@ const createRes = () => {
 };
 
 describe("createLineWebhookMiddleware", () => {
+  it("responds 200 to LINE verification request with empty events and no signature", async () => {
+    const onEvents = vi.fn(async () => {});
+    const secret = "secret";
+    const rawBody = JSON.stringify({ events: [] });
+    const middleware = createLineWebhookMiddleware({ channelSecret: secret, onEvents });
+
+    const req = {
+      headers: {},
+      body: rawBody,
+      // oxlint-disable-next-line typescript/no-explicit-any
+    } as any;
+    const res = createRes();
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    await middleware(req, res, {} as any);
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith({ status: "ok" });
+    expect(onEvents).not.toHaveBeenCalled();
+  });
+
   it("parses JSON from raw string body", async () => {
     const onEvents = vi.fn(async () => {});
     const secret = "secret";
