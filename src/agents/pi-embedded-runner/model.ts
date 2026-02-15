@@ -18,6 +18,7 @@ type InlineModelEntry = ModelDefinitionConfig & { provider: string; baseUrl?: st
 type InlineProviderConfig = {
   baseUrl?: string;
   api?: ModelDefinitionConfig["api"];
+  headers?: Record<string, string>;
   models?: ModelDefinitionConfig[];
 };
 
@@ -36,6 +37,8 @@ export function buildInlineProviderModels(
       provider: trimmed,
       baseUrl: entry?.baseUrl,
       api: model.api ?? entry?.api,
+      headers:
+        entry?.headers || model.headers ? { ...entry?.headers, ...model.headers } : undefined,
     }));
   });
 }
