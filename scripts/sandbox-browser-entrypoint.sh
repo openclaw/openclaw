@@ -107,12 +107,16 @@ CHROME_ARGS=(
   "--no-default-browser-check"
   "--disable-dev-shm-usage"
   "--disable-background-networking"
+  "--disable-features=AutomationControlled,BackForwardCache,TranslateUI"
+  "--enable-features=NetworkService,NetworkServiceInProcess"
+  "--disable-blink-features=AutomationControlled"
   "--disable-breakpad"
   "--disable-crash-reporter"
   "--no-zygote"
   "--metrics-recording-only"
   "--password-store=basic"
   "--use-mock-keychain"
+  "--window-size=1280,800"
 )
 
 if [[ "${HEADLESS}" == "1" ]]; then
