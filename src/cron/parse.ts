@@ -15,6 +15,11 @@ function normalizeUtcIso(raw: string) {
   return raw;
 }
 
+// Threshold to distinguish seconds from milliseconds:
+// 10_000_000_000 ms = Sat Apr 26 1970 17:46:40 UTC (clearly seconds)
+// Any timestamp smaller than this is assumed to be in seconds.
+const MS_THRESHOLD = 10_000_000_000;
+
 export function parseAbsoluteTimeMs(input: string): number | null {
   const raw = input.trim();
   if (!raw) {
@@ -23,7 +28,10 @@ export function parseAbsoluteTimeMs(input: string): number | null {
   if (/^\d+$/.test(raw)) {
     const n = Number(raw);
     if (Number.isFinite(n) && n > 0) {
-      return Math.floor(n);
+      // If the number looks like seconds (< threshold), convert to milliseconds.
+      // This handles Unix timestamps in seconds (e.g., 1739470800) which need
+      // to be multiplied by 1000 for JavaScript Date operations.
+      return n > MS_THRESHOLD ? Math.floor(n) : Math.floor(n * 1000);
     }
   }
   const parsed = Date.parse(normalizeUtcIso(raw));
