@@ -4,12 +4,12 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
-import type { PluginRegistry } from "../plugins/registry.js";
 import { whatsappPlugin } from "../../extensions/whatsapp/src/channel.js";
 import { BARE_SESSION_RESET_PROMPT } from "../auto-reply/reply/session-reset-prompt.js";
 import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { setRegistry } from "./server.agent.gateway-server-agent.mocks.js";
+import { createRegistry } from "./server.e2e-registry-helpers.js";
 import {
   agentCommand,
   connectOk,
@@ -40,22 +40,6 @@ beforeAll(async () => {
 afterAll(async () => {
   ws.close();
   await server.close();
-});
-
-const _BASE_IMAGE_PNG =
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+X3mIAAAAASUVORK5CYII=";
-
-const createRegistry = (channels: PluginRegistry["channels"]): PluginRegistry => ({
-  plugins: [],
-  tools: [],
-  channels,
-  providers: [],
-  gatewayHandlers: {},
-  httpHandlers: [],
-  httpRoutes: [],
-  cliRegistrars: [],
-  services: [],
-  diagnostics: [],
 });
 
 const createMSTeamsPlugin = (params?: { aliases?: string[] }): ChannelPlugin => ({
