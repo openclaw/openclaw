@@ -86,6 +86,8 @@ If pairing is fine but `system.run` fails, fix exec approvals/allowlist.
 - `LOCATION_BACKGROUND_UNAVAILABLE` → app is backgrounded but only While Using permission exists.
 - `SYSTEM_RUN_DENIED: approval required` → exec request needs explicit approval.
 - `SYSTEM_RUN_DENIED: allowlist miss` → command blocked by allowlist mode.
+- `Exec cwd does not exist: <path>` → the `cwd` passed to `nodes.run` doesn't exist on the node. Verify the path exists on the remote node (not the gateway host). Remove the `cwd` parameter to use the node's default working directory.
+- `Exec cwd is not a directory: <path>` → the `cwd` path exists but is a file, not a directory. Use the parent directory instead.
 
 ## Fast recovery loop
 
