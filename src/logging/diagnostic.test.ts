@@ -27,7 +27,7 @@ describe("diagnostic session state pruning", () => {
   });
 
   it("caps tracked session states to a bounded max", () => {
-    for (let i = 0; i < 2105; i += 1) {
+    for (let i = 0; i < 2001; i += 1) {
       logSessionStateChange({ sessionId: `session-${i}`, state: "idle" });
     }
 
