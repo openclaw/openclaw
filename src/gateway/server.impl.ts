@@ -370,6 +370,7 @@ export async function startGatewayServer(
     controlUiEnabled,
     controlUiBasePath,
     controlUiRoot: controlUiRootState,
+    strictLoopback: cfgAtStart.gateway?.controlUi?.strictLoopback,
     openAiChatCompletionsEnabled,
     openResponsesEnabled,
     openResponsesConfig,

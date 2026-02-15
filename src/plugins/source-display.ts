@@ -24,7 +24,7 @@ function tryRelative(root: string, filePath: string): string | null {
     return null;
   }
   // Normalize to forward slashes for display (path.relative uses backslashes on Windows)
-  return rel.replaceAll("\\", "/");
+  return rel.split(path.sep).join("/");
 }
 
 export function resolvePluginSourceRoots(params: { workspaceDir?: string }): PluginSourceRoots {
@@ -41,7 +41,6 @@ export function formatPluginSourceForTable(
   roots: PluginSourceRoots,
 ): { value: string; rootKey?: keyof PluginSourceRoots } {
   const raw = plugin.source;
-
   if (plugin.origin === "bundled" && roots.stock) {
     const rel = tryRelative(roots.stock, raw);
     if (rel) {
@@ -60,7 +59,6 @@ export function formatPluginSourceForTable(
       return { value: `global:${rel}`, rootKey: "global" };
     }
   }
-
   // Keep this stable/pasteable; only ~-shorten.
   return { value: shortenHomeInString(raw) };
 }
