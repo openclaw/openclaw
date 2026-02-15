@@ -53,6 +53,8 @@ When patching a GHSA via `gh api`, include `X-GitHub-Api-Version: 2022-11-28` (o
 
 For threat model + hardening guidance (including `openclaw security audit --deep` and `--fix`), see:
 
+- `https://docs.molt.bot/gateway/security`
+- [Hardball Security Framework (MFA-protected Integrity)](https://docs.molt.bot/concepts/hardball-security)
 - `https://docs.openclaw.ai/gateway/security`
 
 ### Tool filesystem hardening
