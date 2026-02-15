@@ -13,6 +13,7 @@ export function buildEmbeddedSandboxInfo(
   return {
     enabled: true,
     workspaceDir: sandbox.workspaceDir,
+    containerWorkspaceDir: sandbox.containerWorkdir,
     workspaceAccess: sandbox.workspaceAccess,
     agentWorkspaceMount: sandbox.workspaceAccess === "ro" ? "/agent" : undefined,
     browserBridgeUrl: sandbox.browser?.bridgeUrl,
