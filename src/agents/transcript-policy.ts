@@ -102,9 +102,14 @@ export function resolveTranscriptPolicy(params: {
       ? "strict"
       : undefined;
   const repairToolUseResultPairing = isGoogle || isAnthropic;
-  const sanitizeThoughtSignatures = isOpenRouterGemini
-    ? { allowBase64Only: true, includeCamelCase: true }
-    : undefined;
+  // IMPORTANT (OpenAI Responses API): if we include stored reasoning item references (rs_...)
+  // in multi-turn transcripts while the upstream call used store=false, OpenAI can 404 when
+  // attempting to resolve those ids. We therefore strip thought/reasoning signatures for OpenAI.
+  const sanitizeThoughtSignatures = isOpenAi
+    ? { allowBase64Only: false, includeCamelCase: true }
+    : isOpenRouterGemini
+      ? { allowBase64Only: true, includeCamelCase: true }
+      : undefined;
   const normalizeAntigravityThinkingBlocks = isAntigravityClaudeModel;
 
   return {
