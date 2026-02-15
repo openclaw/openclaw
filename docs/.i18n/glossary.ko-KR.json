@@ -1,0 +1,6 @@
+[
+  { "source": "gateway", "target": "gateway" },
+  { "source": "onboarding", "target": "온보딩" },
+  { "source": "workspace", "target": "워크스페이스" },
+  { "source": "allowlist", "target": "허용 목록" }
+]

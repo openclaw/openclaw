@@ -1836,6 +1836,547 @@
         ]
       },
       {
+        "language": "ko",
+        "tabs": [
+          {
+            "tab": "Get started",
+            "groups": [
+              {
+                "group": "Home",
+                "pages": ["ko-KR/index"]
+              },
+              {
+                "group": "Overview",
+                "pages": ["ko-KR/start/showcase"]
+              },
+              {
+                "group": "Core concepts",
+                "pages": ["ko-KR/concepts/features"]
+              },
+              {
+                "group": "First steps",
+                "pages": [
+                  "ko-KR/start/getting-started",
+                  "ko-KR/start/onboarding-overview",
+                  "ko-KR/start/wizard",
+                  "ko-KR/start/onboarding"
+                ]
+              },
+              {
+                "group": "Guides",
+                "pages": ["ko-KR/start/openclaw"]
+              }
+            ]
+          },
+          {
+            "tab": "Install",
+            "groups": [
+              {
+                "group": "Install overview",
+                "pages": ["ko-KR/install/index", "ko-KR/install/installer"]
+              },
+              {
+                "group": "Other install methods",
+                "pages": [
+                  "ko-KR/install/docker",
+                  "ko-KR/install/nix",
+                  "ko-KR/install/ansible",
+                  "ko-KR/install/bun"
+                ]
+              },
+              {
+                "group": "Maintenance",
+                "pages": [
+                  "ko-KR/install/updating",
+                  "ko-KR/install/migrating",
+                  "ko-KR/install/uninstall"
+                ]
+              },
+              {
+                "group": "Hosting and deployment",
+                "pages": [
+                  "ko-KR/install/fly",
+                  "ko-KR/install/hetzner",
+                  "ko-KR/install/gcp",
+                  "ko-KR/install/macos-vm",
+                  "ko-KR/install/exe-dev",
+                  "ko-KR/install/railway",
+                  "ko-KR/install/render",
+                  "ko-KR/install/northflank"
+                ]
+              },
+              {
+                "group": "Advanced",
+                "pages": ["ko-KR/install/development-channels"]
+              }
+            ]
+          },
+          {
+            "tab": "Channels",
+            "groups": [
+              {
+                "group": "Overview",
+                "pages": ["ko-KR/channels/index"]
+              },
+              {
+                "group": "Messaging platforms",
+                "pages": [
+                  "ko-KR/channels/whatsapp",
+                  "ko-KR/channels/telegram",
+                  "ko-KR/channels/discord",
+                  "ko-KR/channels/irc",
+                  "ko-KR/channels/slack",
+                  "ko-KR/channels/feishu",
+                  "ko-KR/channels/googlechat",
+                  "ko-KR/channels/mattermost",
+                  "ko-KR/channels/signal",
+                  "ko-KR/channels/imessage",
+                  "ko-KR/channels/msteams",
+                  "ko-KR/channels/line",
+                  "ko-KR/channels/matrix",
+                  "ko-KR/channels/zalo",
+                  "ko-KR/channels/zalouser"
+                ]
+              },
+              {
+                "group": "Configuration",
+                "pages": [
+                  "ko-KR/channels/pairing",
+                  "ko-KR/channels/group-messages",
+                  "ko-KR/channels/groups",
+                  "ko-KR/channels/broadcast-groups",
+                  "ko-KR/channels/channel-routing",
+                  "ko-KR/channels/location",
+                  "ko-KR/channels/troubleshooting"
+                ]
+              }
+            ]
+          },
+          {
+            "tab": "Agents",
+            "groups": [
+              {
+                "group": "Fundamentals",
+                "pages": [
+                  "ko-KR/concepts/architecture",
+                  "ko-KR/concepts/agent",
+                  "ko-KR/concepts/agent-loop",
+                  "ko-KR/concepts/system-prompt",
+                  "ko-KR/concepts/context",
+                  "ko-KR/concepts/agent-workspace",
+                  "ko-KR/concepts/oauth"
+                ]
+              },
+              {
+                "group": "Bootstrapping",
+                "pages": ["ko-KR/start/bootstrapping"]
+              },
+              {
+                "group": "Sessions and memory",
+                "pages": [
+                  "ko-KR/concepts/session",
+                  "ko-KR/concepts/sessions",
+                  "ko-KR/concepts/session-pruning",
+                  "ko-KR/concepts/session-tool",
+                  "ko-KR/concepts/memory",
+                  "ko-KR/concepts/compaction"
+                ]
+              },
+              {
+                "group": "Multi-agent",
+                "pages": ["ko-KR/concepts/multi-agent", "ko-KR/concepts/presence"]
+              },
+              {
+                "group": "Messages and delivery",
+                "pages": [
+                  "ko-KR/concepts/messages",
+                  "ko-KR/concepts/streaming",
+                  "ko-KR/concepts/retry",
+                  "ko-KR/concepts/queue"
+                ]
+              }
+            ]
+          },
+          {
+            "tab": "Tools",
+            "groups": [
+              {
+                "group": "Overview",
+                "pages": ["ko-KR/tools/index"]
+              },
+              {
+                "group": "Built-in tools",
+                "pages": [
+                  "ko-KR/tools/lobster",
+                  "ko-KR/tools/llm-task",
+                  "ko-KR/tools/exec",
+                  "ko-KR/tools/web",
+                  "ko-KR/tools/apply-patch",
+                  "ko-KR/tools/elevated",
+                  "ko-KR/tools/thinking",
+                  "ko-KR/tools/reactions"
+                ]
+              },
+              {
+                "group": "Browser",
+                "pages": [
+                  "ko-KR/tools/browser",
+                  "ko-KR/tools/browser-login",
+                  "ko-KR/tools/chrome-extension",
+                  "ko-KR/tools/browser-linux-troubleshooting"
+                ]
+              },
+              {
+                "group": "Agent coordination",
+                "pages": [
+                  "ko-KR/tools/agent-send",
+                  "ko-KR/tools/subagents",
+                  "ko-KR/tools/multi-agent-sandbox-tools"
+                ]
+              },
+              {
+                "group": "Skills",
+                "pages": [
+                  "ko-KR/tools/slash-commands",
+                  "ko-KR/tools/skills",
+                  "ko-KR/tools/skills-config",
+                  "ko-KR/tools/clawhub",
+                  "ko-KR/tools/plugin"
+                ]
+              },
+              {
+                "group": "Extensions",
+                "pages": ["ko-KR/plugins/voice-call", "ko-KR/plugins/zalouser"]
+              },
+              {
+                "group": "Automation",
+                "pages": [
+                  "ko-KR/automation/hooks",
+                  "ko-KR/automation/cron-jobs",
+                  "ko-KR/automation/cron-vs-heartbeat",
+                  "ko-KR/automation/troubleshooting",
+                  "ko-KR/automation/webhook",
+                  "ko-KR/automation/gmail-pubsub",
+                  "ko-KR/automation/poll",
+                  "ko-KR/automation/auth-monitoring"
+                ]
+              },
+              {
+                "group": "Media and devices",
+                "pages": [
+                  "ko-KR/nodes/index",
+                  "ko-KR/nodes/troubleshooting",
+                  "ko-KR/nodes/images",
+                  "ko-KR/nodes/audio",
+                  "ko-KR/nodes/camera",
+                  "ko-KR/nodes/talk",
+                  "ko-KR/nodes/voicewake",
+                  "ko-KR/nodes/location-command"
+                ]
+              }
+            ]
+          },
+          {
+            "tab": "Models",
+            "groups": [
+              {
+                "group": "Overview",
+                "pages": ["ko-KR/providers/index", "ko-KR/providers/models"]
+              },
+              {
+                "group": "Model concepts",
+                "pages": ["ko-KR/concepts/models"]
+              },
+              {
+                "group": "Configuration",
+                "pages": ["ko-KR/concepts/model-providers", "ko-KR/concepts/model-failover"]
+              },
+              {
+                "group": "Providers",
+                "pages": [
+                  "ko-KR/providers/anthropic",
+                  "ko-KR/providers/openai",
+                  "ko-KR/providers/openrouter",
+                  "ko-KR/providers/litellm",
+                  "ko-KR/providers/bedrock",
+                  "ko-KR/providers/vercel-ai-gateway",
+                  "ko-KR/providers/moonshot",
+                  "ko-KR/providers/minimax",
+                  "ko-KR/providers/opencode",
+                  "ko-KR/providers/glm",
+                  "ko-KR/providers/zai",
+                  "ko-KR/providers/synthetic",
+                  "ko-KR/providers/qianfan"
+                ]
+              }
+            ]
+          },
+          {
+            "tab": "Platforms",
+            "groups": [
+              {
+                "group": "Platforms overview",
+                "pages": [
+                  "ko-KR/platforms/index",
+                  "ko-KR/platforms/macos",
+                  "ko-KR/platforms/linux",
+                  "ko-KR/platforms/windows",
+                  "ko-KR/platforms/android",
+                  "ko-KR/platforms/ios"
+                ]
+              },
+              {
+                "group": "macOS companion app",
+                "pages": [
+                  "ko-KR/platforms/mac/dev-setup",
+                  "ko-KR/platforms/mac/menu-bar",
+                  "ko-KR/platforms/mac/voicewake",
+                  "ko-KR/platforms/mac/voice-overlay",
+                  "ko-KR/platforms/mac/webchat",
+                  "ko-KR/platforms/mac/canvas",
+                  "ko-KR/platforms/mac/child-process",
+                  "ko-KR/platforms/mac/health",
+                  "ko-KR/platforms/mac/icon",
+                  "ko-KR/platforms/mac/logging",
+                  "ko-KR/platforms/mac/permissions",
+                  "ko-KR/platforms/mac/remote",
+                  "ko-KR/platforms/mac/signing",
+                  "ko-KR/platforms/mac/release",
+                  "ko-KR/platforms/mac/bundled-gateway",
+                  "ko-KR/platforms/mac/xpc",
+                  "ko-KR/platforms/mac/skills",
+                  "ko-KR/platforms/mac/peekaboo"
+                ]
+              }
+            ]
+          },
+          {
+            "tab": "Gateway & Ops",
+            "groups": [
+              {
+                "group": "Gateway",
+                "pages": [
+                  "ko-KR/gateway/index",
+                  {
+                    "group": "Configuration and operations",
+                    "pages": [
+                      "ko-KR/gateway/configuration",
+                      "ko-KR/gateway/configuration-reference",
+                      "ko-KR/gateway/configuration-examples",
+                      "ko-KR/gateway/authentication",
+                      "ko-KR/gateway/health",
+                      "ko-KR/gateway/heartbeat",
+                      "ko-KR/gateway/doctor",
+                      "ko-KR/gateway/logging",
+                      "ko-KR/gateway/gateway-lock",
+                      "ko-KR/gateway/background-process",
+                      "ko-KR/gateway/multiple-gateways",
+                      "ko-KR/gateway/troubleshooting"
+                    ]
+                  },
+                  {
+                    "group": "Security and sandboxing",
+                    "pages": [
+                      "ko-KR/gateway/security/index",
+                      "ko-KR/gateway/sandboxing",
+                      "ko-KR/gateway/sandbox-vs-tool-policy-vs-elevated"
+                    ]
+                  },
+                  {
+                    "group": "Protocols and APIs",
+                    "pages": [
+                      "ko-KR/gateway/protocol",
+                      "ko-KR/gateway/bridge-protocol",
+                      "ko-KR/gateway/openai-http-api",
+                      "ko-KR/gateway/tools-invoke-http-api",
+                      "ko-KR/gateway/cli-backends",
+                      "ko-KR/gateway/local-models"
+                    ]
+                  },
+                  {
+                    "group": "Networking and discovery",
+                    "pages": [
+                      "ko-KR/gateway/network-model",
+                      "ko-KR/gateway/pairing",
+                      "ko-KR/gateway/discovery",
+                      "ko-KR/gateway/bonjour"
+                    ]
+                  }
+                ]
+              },
+              {
+                "group": "Remote access",
+                "pages": [
+                  "ko-KR/gateway/remote",
+                  "ko-KR/gateway/remote-gateway-readme",
+                  "ko-KR/gateway/tailscale"
+                ]
+              },
+              {
+                "group": "Security",
+                "pages": ["ko-KR/security/formal-verification"]
+              },
+              {
+                "group": "Web interfaces",
+                "pages": [
+                  "ko-KR/web/index",
+                  "ko-KR/web/control-ui",
+                  "ko-KR/web/dashboard",
+                  "ko-KR/web/webchat",
+                  "ko-KR/web/tui"
+                ]
+              }
+            ]
+          },
+          {
+            "tab": "Reference",
+            "groups": [
+              {
+                "group": "CLI commands",
+                "pages": [
+                  "ko-KR/cli/index",
+                  "ko-KR/cli/agent",
+                  "ko-KR/cli/agents",
+                  "ko-KR/cli/approvals",
+                  "ko-KR/cli/browser",
+                  "ko-KR/cli/channels",
+                  "ko-KR/cli/configure",
+                  "ko-KR/cli/cron",
+                  "ko-KR/cli/dashboard",
+                  "ko-KR/cli/directory",
+                  "ko-KR/cli/dns",
+                  "ko-KR/cli/docs",
+                  "ko-KR/cli/doctor",
+                  "ko-KR/cli/gateway",
+                  "ko-KR/cli/health",
+                  "ko-KR/cli/hooks",
+                  "ko-KR/cli/logs",
+                  "ko-KR/cli/memory",
+                  "ko-KR/cli/message",
+                  "ko-KR/cli/models",
+                  "ko-KR/cli/nodes",
+                  "ko-KR/cli/onboard",
+                  "ko-KR/cli/pairing",
+                  "ko-KR/cli/plugins",
+                  "ko-KR/cli/reset",
+                  "ko-KR/cli/sandbox",
+                  "ko-KR/cli/security",
+                  "ko-KR/cli/sessions",
+                  "ko-KR/cli/setup",
+                  "ko-KR/cli/skills",
+                  "ko-KR/cli/status",
+                  "ko-KR/cli/system",
+                  "ko-KR/cli/tui",
+                  "ko-KR/cli/uninstall",
+                  "ko-KR/cli/update",
+                  "ko-KR/cli/voicecall"
+                ]
+              },
+              {
+                "group": "RPC and API",
+                "pages": ["ko-KR/reference/rpc", "ko-KR/reference/device-models"]
+              },
+              {
+                "group": "Templates",
+                "pages": [
+                  "ko-KR/reference/AGENTS.default",
+                  "ko-KR/reference/templates/AGENTS",
+                  "ko-KR/reference/templates/BOOT",
+                  "ko-KR/reference/templates/BOOTSTRAP",
+                  "ko-KR/reference/templates/HEARTBEAT",
+                  "ko-KR/reference/templates/IDENTITY",
+                  "ko-KR/reference/templates/SOUL",
+                  "ko-KR/reference/templates/TOOLS",
+                  "ko-KR/reference/templates/USER"
+                ]
+              },
+              {
+                "group": "Technical reference",
+                "pages": [
+                  "ko-KR/reference/wizard",
+                  "ko-KR/reference/token-use",
+                  "ko-KR/channels/grammy"
+                ]
+              },
+              {
+                "group": "Concept internals",
+                "pages": [
+                  "ko-KR/concepts/typebox",
+                  "ko-KR/concepts/markdown-formatting",
+                  "ko-KR/concepts/typing-indicators",
+                  "ko-KR/concepts/usage-tracking",
+                  "ko-KR/concepts/timezone"
+                ]
+              },
+              {
+                "group": "Project",
+                "pages": ["ko-KR/reference/credits"]
+              },
+              {
+                "group": "Release notes",
+                "pages": ["ko-KR/reference/RELEASING", "ko-KR/reference/test"]
+              },
+              {
+                "group": "Experiments",
+                "pages": [
+                  "ko-KR/experiments/onboarding-config-protocol",
+                  "ko-KR/experiments/plans/cron-add-hardening",
+                  "ko-KR/experiments/plans/group-policy-hardening",
+                  "ko-KR/experiments/research/memory",
+                  "ko-KR/experiments/proposals/model-config"
+                ]
+              }
+            ]
+          },
+          {
+            "tab": "Help",
+            "groups": [
+              {
+                "group": "Help",
+                "pages": ["ko-KR/help/index", "ko-KR/help/troubleshooting", "ko-KR/help/faq"]
+              },
+              {
+                "group": "Community",
+                "pages": ["ko-KR/start/lore"]
+              },
+              {
+                "group": "Environment and debugging",
+                "pages": [
+                  "ko-KR/help/environment",
+                  "ko-KR/help/debugging",
+                  "ko-KR/help/testing",
+                  "ko-KR/help/scripts"
+                ]
+              },
+              {
+                "group": "Node runtime",
+                "pages": ["ko-KR/install/node"]
+              },
+              {
+                "group": "Compaction internals",
+                "pages": ["ko-KR/reference/session-management-compaction"]
+              },
+              {
+                "group": "Developer setup",
+                "pages": ["ko-KR/start/setup"]
+              },
+              {
+                "group": "Contributing",
+                "pages": [
+                  "ko-KR/help/submitting-a-pr",
+                  "ko-KR/help/submitting-an-issue",
+                  "ko-KR/ci"
+                ]
+              },
+              {
+                "group": "Docs meta",
+                "pages": ["ko-KR/start/hubs", "ko-KR/start/docs-directory"]
+              }
+            ]
+          }
+        ]
+      },
+      {
         "language": "ja",
         "tabs": [
           {
