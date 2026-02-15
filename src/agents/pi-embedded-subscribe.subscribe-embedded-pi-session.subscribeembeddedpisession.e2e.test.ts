@@ -317,4 +317,229 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(payloads[0]?.text).toBe("");
     expect(payloads[0]?.mediaUrls).toEqual(["https://example.com/a.png"]);
   });
+
+  it("keeps unresolved mutating failure when an unrelated tool succeeds", () => {
+    let handler: ((evt: unknown) => void) | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
+
+    const subscription = subscribeEmbeddedPiSession({
+      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
+      runId: "run-tools-1",
+      sessionKey: "test-session",
+    });
+
+    handler?.({
+      type: "tool_execution_start",
+      toolName: "write",
+      toolCallId: "w1",
+      args: { path: "/tmp/demo.txt", content: "next" },
+    });
+    handler?.({
+      type: "tool_execution_end",
+      toolName: "write",
+      toolCallId: "w1",
+      isError: true,
+      result: { error: "disk full" },
+    });
+    expect(subscription.getLastToolError()?.toolName).toBe("write");
+
+    handler?.({
+      type: "tool_execution_start",
+      toolName: "read",
+      toolCallId: "r1",
+      args: { path: "/tmp/demo.txt" },
+    });
+    handler?.({
+      type: "tool_execution_end",
+      toolName: "read",
+      toolCallId: "r1",
+      isError: false,
+      result: { text: "ok" },
+    });
+
+    expect(subscription.getLastToolError()?.toolName).toBe("write");
+  });
+
+  it("clears unresolved mutating failure when the same action succeeds", () => {
+    let handler: ((evt: unknown) => void) | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
+
+    const subscription = subscribeEmbeddedPiSession({
+      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
+      runId: "run-tools-2",
+      sessionKey: "test-session",
+    });
+
+    handler?.({
+      type: "tool_execution_start",
+      toolName: "write",
+      toolCallId: "w1",
+      args: { path: "/tmp/demo.txt", content: "next" },
+    });
+    handler?.({
+      type: "tool_execution_end",
+      toolName: "write",
+      toolCallId: "w1",
+      isError: true,
+      result: { error: "disk full" },
+    });
+    expect(subscription.getLastToolError()?.toolName).toBe("write");
+
+    handler?.({
+      type: "tool_execution_start",
+      toolName: "write",
+      toolCallId: "w2",
+      args: { path: "/tmp/demo.txt", content: "retry" },
+    });
+    handler?.({
+      type: "tool_execution_end",
+      toolName: "write",
+      toolCallId: "w2",
+      isError: false,
+      result: { ok: true },
+    });
+
+    expect(subscription.getLastToolError()).toBeUndefined();
+  });
+
+  it("keeps unresolved mutating failure when same tool succeeds on a different target", () => {
+    let handler: ((evt: unknown) => void) | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
+
+    const subscription = subscribeEmbeddedPiSession({
+      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
+      runId: "run-tools-3",
+      sessionKey: "test-session",
+    });
+
+    handler?.({
+      type: "tool_execution_start",
+      toolName: "write",
+      toolCallId: "w1",
+      args: { path: "/tmp/a.txt", content: "first" },
+    });
+    handler?.({
+      type: "tool_execution_end",
+      toolName: "write",
+      toolCallId: "w1",
+      isError: true,
+      result: { error: "disk full" },
+    });
+
+    handler?.({
+      type: "tool_execution_start",
+      toolName: "write",
+      toolCallId: "w2",
+      args: { path: "/tmp/b.txt", content: "second" },
+    });
+    handler?.({
+      type: "tool_execution_end",
+      toolName: "write",
+      toolCallId: "w2",
+      isError: false,
+      result: { ok: true },
+    });
+
+    expect(subscription.getLastToolError()?.toolName).toBe("write");
+  });
+
+  it("keeps unresolved session_status model-mutation failure on later read-only status success", () => {
+    let handler: ((evt: unknown) => void) | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
+
+    const subscription = subscribeEmbeddedPiSession({
+      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
+      runId: "run-tools-4",
+      sessionKey: "test-session",
+    });
+
+    handler?.({
+      type: "tool_execution_start",
+      toolName: "session_status",
+      toolCallId: "s1",
+      args: { sessionKey: "agent:main:main", model: "openai/gpt-4o" },
+    });
+    handler?.({
+      type: "tool_execution_end",
+      toolName: "session_status",
+      toolCallId: "s1",
+      isError: true,
+      result: { error: "Model not allowed." },
+    });
+
+    handler?.({
+      type: "tool_execution_start",
+      toolName: "session_status",
+      toolCallId: "s2",
+      args: { sessionKey: "agent:main:main" },
+    });
+    handler?.({
+      type: "tool_execution_end",
+      toolName: "session_status",
+      toolCallId: "s2",
+      isError: false,
+      result: { ok: true },
+    });
+
+    expect(subscription.getLastToolError()?.toolName).toBe("session_status");
+  });
+
+  it("emits lifecycle:error event on agent_end when last assistant message was an error", async () => {
+    let handler: ((evt: unknown) => void) | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
+
+    const onAgentEvent = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
+      runId: "run-error",
+      onAgentEvent,
+      sessionKey: "test-session",
+    });
+
+    const assistantMessage = {
+      role: "assistant",
+      stopReason: "error",
+      errorMessage: "429 Rate limit exceeded",
+    } as AssistantMessage;
+
+    // Simulate message update to set lastAssistant
+    handler?.({ type: "message_update", message: assistantMessage });
+
+    // Trigger agent_end
+    handler?.({ type: "agent_end" });
+
+    // Look for lifecycle:error event
+    const lifecycleError = onAgentEvent.mock.calls.find(
+      (call) => call[0]?.stream === "lifecycle" && call[0]?.data?.phase === "error",
+    );
+
+    expect(lifecycleError).toBeDefined();
+    expect(lifecycleError[0].data.error).toContain("API rate limit reached");
+  });
 });

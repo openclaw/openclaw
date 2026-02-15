@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
+import { MINIMAX_API_BASE_URL, MINIMAX_CN_API_BASE_URL } from "./onboard-auth.js";
 import { OPENAI_DEFAULT_MODEL } from "./openai-model-default.js";
 
 type RuntimeMock = {
@@ -155,6 +156,72 @@ async function expectApiKeyProfile(params: {
 }
 
 describe("onboard (non-interactive): provider auth", () => {
+  it("stores MiniMax API key and uses global baseUrl by default", async () => {
+    await withOnboardEnv("openclaw-onboard-minimax-", async ({ configPath, runtime }) => {
+      await runNonInteractive(
+        {
+          nonInteractive: true,
+          authChoice: "minimax-api",
+          minimaxApiKey: "sk-minimax-test",
+          skipHealth: true,
+          skipChannels: true,
+          skipSkills: true,
+          json: true,
+        },
+        runtime,
+      );
+
+      const cfg = await readJsonFile<{
+        auth?: { profiles?: Record<string, { provider?: string; mode?: string }> };
+        agents?: { defaults?: { model?: { primary?: string } } };
+        models?: { providers?: Record<string, { baseUrl?: string }> };
+      }>(configPath);
+
+      expect(cfg.auth?.profiles?.["minimax:default"]?.provider).toBe("minimax");
+      expect(cfg.auth?.profiles?.["minimax:default"]?.mode).toBe("api_key");
+      expect(cfg.models?.providers?.minimax?.baseUrl).toBe(MINIMAX_API_BASE_URL);
+      expect(cfg.agents?.defaults?.model?.primary).toBe("minimax/MiniMax-M2.5");
+      await expectApiKeyProfile({
+        profileId: "minimax:default",
+        provider: "minimax",
+        key: "sk-minimax-test",
+      });
+    });
+  }, 60_000);
+
+  it("supports MiniMax CN API endpoint auth choice", async () => {
+    await withOnboardEnv("openclaw-onboard-minimax-cn-", async ({ configPath, runtime }) => {
+      await runNonInteractive(
+        {
+          nonInteractive: true,
+          authChoice: "minimax-api-key-cn",
+          minimaxApiKey: "sk-minimax-test",
+          skipHealth: true,
+          skipChannels: true,
+          skipSkills: true,
+          json: true,
+        },
+        runtime,
+      );
+
+      const cfg = await readJsonFile<{
+        auth?: { profiles?: Record<string, { provider?: string; mode?: string }> };
+        agents?: { defaults?: { model?: { primary?: string } } };
+        models?: { providers?: Record<string, { baseUrl?: string }> };
+      }>(configPath);
+
+      expect(cfg.auth?.profiles?.["minimax-cn:default"]?.provider).toBe("minimax-cn");
+      expect(cfg.auth?.profiles?.["minimax-cn:default"]?.mode).toBe("api_key");
+      expect(cfg.models?.providers?.["minimax-cn"]?.baseUrl).toBe(MINIMAX_CN_API_BASE_URL);
+      expect(cfg.agents?.defaults?.model?.primary).toBe("minimax-cn/MiniMax-M2.5");
+      await expectApiKeyProfile({
+        profileId: "minimax-cn:default",
+        provider: "minimax-cn",
+        key: "sk-minimax-test",
+      });
+    });
+  }, 60_000);
+
   it("stores Z.AI API key and uses global baseUrl by default", async () => {
     await withOnboardEnv("openclaw-onboard-zai-", async ({ configPath, runtime }) => {
       await runNonInteractive(
@@ -379,76 +446,60 @@ describe("onboard (non-interactive): provider auth", () => {
     });
   }, 60_000);
 
-  it("stores Cloudflare AI Gateway API key and metadata", async () => {
-    await withOnboardEnv("openclaw-onboard-cf-gateway-", async ({ configPath, runtime }) => {
-      await runNonInteractive(
-        {
-          nonInteractive: true,
-          authChoice: "cloudflare-ai-gateway-api-key",
-          cloudflareAiGatewayAccountId: "cf-account-id",
-          cloudflareAiGatewayGatewayId: "cf-gateway-id",
-          cloudflareAiGatewayApiKey: "cf-gateway-test-key",
-          skipHealth: true,
-          skipChannels: true,
-          skipSkills: true,
-          json: true,
-        },
-        runtime,
-      );
+  it.each([
+    {
+      name: "stores Cloudflare AI Gateway API key and metadata",
+      prefix: "openclaw-onboard-cf-gateway-",
+      options: {
+        authChoice: "cloudflare-ai-gateway-api-key",
+      },
+    },
+    {
+      name: "infers Cloudflare auth choice from API key flags",
+      prefix: "openclaw-onboard-cf-gateway-infer-",
+      options: {},
+    },
+  ])(
+    "$name",
+    async ({ prefix, options }) => {
+      await withOnboardEnv(prefix, async ({ configPath, runtime }) => {
+        await runNonInteractive(
+          {
+            nonInteractive: true,
+            cloudflareAiGatewayAccountId: "cf-account-id",
+            cloudflareAiGatewayGatewayId: "cf-gateway-id",
+            cloudflareAiGatewayApiKey: "cf-gateway-test-key",
+            skipHealth: true,
+            skipChannels: true,
+            skipSkills: true,
+            json: true,
+            ...options,
+          },
+          runtime,
+        );
 
-      const cfg = await readJsonFile<{
-        auth?: { profiles?: Record<string, { provider?: string; mode?: string }> };
-        agents?: { defaults?: { model?: { primary?: string } } };
-      }>(configPath);
+        const cfg = await readJsonFile<{
+          auth?: { profiles?: Record<string, { provider?: string; mode?: string }> };
+          agents?: { defaults?: { model?: { primary?: string } } };
+        }>(configPath);
 
-      expect(cfg.auth?.profiles?.["cloudflare-ai-gateway:default"]?.provider).toBe(
-        "cloudflare-ai-gateway",
-      );
-      expect(cfg.auth?.profiles?.["cloudflare-ai-gateway:default"]?.mode).toBe("api_key");
-      expect(cfg.agents?.defaults?.model?.primary).toBe("cloudflare-ai-gateway/claude-sonnet-4-5");
-      await expectApiKeyProfile({
-        profileId: "cloudflare-ai-gateway:default",
-        provider: "cloudflare-ai-gateway",
-        key: "cf-gateway-test-key",
-        metadata: { accountId: "cf-account-id", gatewayId: "cf-gateway-id" },
+        expect(cfg.auth?.profiles?.["cloudflare-ai-gateway:default"]?.provider).toBe(
+          "cloudflare-ai-gateway",
+        );
+        expect(cfg.auth?.profiles?.["cloudflare-ai-gateway:default"]?.mode).toBe("api_key");
+        expect(cfg.agents?.defaults?.model?.primary).toBe(
+          "cloudflare-ai-gateway/claude-sonnet-4-5",
+        );
+        await expectApiKeyProfile({
+          profileId: "cloudflare-ai-gateway:default",
+          provider: "cloudflare-ai-gateway",
+          key: "cf-gateway-test-key",
+          metadata: { accountId: "cf-account-id", gatewayId: "cf-gateway-id" },
+        });
       });
-    });
-  }, 60_000);
-
-  it("infers Cloudflare auth choice from API key flags", async () => {
-    await withOnboardEnv("openclaw-onboard-cf-gateway-infer-", async ({ configPath, runtime }) => {
-      await runNonInteractive(
-        {
-          nonInteractive: true,
-          cloudflareAiGatewayAccountId: "cf-account-id",
-          cloudflareAiGatewayGatewayId: "cf-gateway-id",
-          cloudflareAiGatewayApiKey: "cf-gateway-test-key",
-          skipHealth: true,
-          skipChannels: true,
-          skipSkills: true,
-          json: true,
-        },
-        runtime,
-      );
-
-      const cfg = await readJsonFile<{
-        auth?: { profiles?: Record<string, { provider?: string; mode?: string }> };
-        agents?: { defaults?: { model?: { primary?: string } } };
-      }>(configPath);
-
-      expect(cfg.auth?.profiles?.["cloudflare-ai-gateway:default"]?.provider).toBe(
-        "cloudflare-ai-gateway",
-      );
-      expect(cfg.auth?.profiles?.["cloudflare-ai-gateway:default"]?.mode).toBe("api_key");
-      expect(cfg.agents?.defaults?.model?.primary).toBe("cloudflare-ai-gateway/claude-sonnet-4-5");
-      await expectApiKeyProfile({
-        profileId: "cloudflare-ai-gateway:default",
-        provider: "cloudflare-ai-gateway",
-        key: "cf-gateway-test-key",
-        metadata: { accountId: "cf-account-id", gatewayId: "cf-gateway-id" },
-      });
-    });
-  }, 60_000);
+    },
+    60_000,
+  );
 
   it("infers Together auth choice from --together-api-key and sets default model", async () => {
     await withOnboardEnv("openclaw-onboard-together-infer-", async ({ configPath, runtime }) => {

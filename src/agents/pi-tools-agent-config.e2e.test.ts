@@ -586,7 +586,7 @@ describe("Agent-specific tool filtering", () => {
     const helperResult = await helperExecTool!.execute("call-helper", {
       command: "echo done",
       host: "sandbox",
-      yieldMs: 10,
+      yieldMs: 1000,
     });
     expect(helperResult?.details.status).toBe("completed");
   });

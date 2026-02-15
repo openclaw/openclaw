@@ -139,6 +139,7 @@ export const SandboxBrowserSchema = z
     allowHostControl: z.boolean().optional(),
     autoStart: z.boolean().optional(),
     autoStartTimeoutMs: z.number().int().positive().optional(),
+    binds: z.array(z.string()).optional(),
   })
   .strict()
   .optional();
@@ -287,13 +288,21 @@ export const AgentToolsSchema = z
         approvalRunningNoticeMs: z.number().int().nonnegative().optional(),
         cleanupMs: z.number().int().positive().optional(),
         notifyOnExit: z.boolean().optional(),
+        notifyOnExitEmptySuccess: z.boolean().optional(),
         applyPatch: z
           .object({
             enabled: z.boolean().optional(),
+            workspaceOnly: z.boolean().optional(),
             allowModels: z.array(z.string()).optional(),
           })
           .strict()
           .optional(),
+      })
+      .strict()
+      .optional(),
+    fs: z
+      .object({
+        workspaceOnly: z.boolean().optional(),
       })
       .strict()
       .optional(),
@@ -538,13 +547,21 @@ export const ToolsSchema = z
         timeoutSec: z.number().int().positive().optional(),
         cleanupMs: z.number().int().positive().optional(),
         notifyOnExit: z.boolean().optional(),
+        notifyOnExitEmptySuccess: z.boolean().optional(),
         applyPatch: z
           .object({
             enabled: z.boolean().optional(),
+            workspaceOnly: z.boolean().optional(),
             allowModels: z.array(z.string()).optional(),
           })
           .strict()
           .optional(),
+      })
+      .strict()
+      .optional(),
+    fs: z
+      .object({
+        workspaceOnly: z.boolean().optional(),
       })
       .strict()
       .optional(),

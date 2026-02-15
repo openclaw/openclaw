@@ -6,7 +6,12 @@ import { createEventHandlers } from "./tui-event-handlers.js";
 
 type MockChatLog = Pick<
   ChatLog,
-  "startTool" | "updateToolResult" | "addSystem" | "updateAssistant" | "finalizeAssistant"
+  | "startTool"
+  | "updateToolResult"
+  | "addSystem"
+  | "updateAssistant"
+  | "finalizeAssistant"
+  | "dropAssistant"
 >;
 type MockTui = Pick<TUI, "requestRender">;
 
@@ -41,6 +46,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       addSystem: vi.fn(),
       updateAssistant: vi.fn(),
       finalizeAssistant: vi.fn(),
+      dropAssistant: vi.fn(),
     };
     const tui: MockTui = { requestRender: vi.fn() };
     const setActivityStatus = vi.fn();
@@ -356,5 +362,34 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     });
 
     expect(loadHistory).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops streaming assistant when chat final has no message", () => {
+    const state = makeState({ activeChatRunId: null });
+    const { chatLog, tui, setActivityStatus } = makeContext(state);
+    const { handleChatEvent } = createEventHandlers({
+      chatLog,
+      tui,
+      state,
+      setActivityStatus,
+    });
+
+    handleChatEvent({
+      runId: "run-silent",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "hello" },
+    });
+    chatLog.dropAssistant.mockClear();
+    chatLog.finalizeAssistant.mockClear();
+
+    handleChatEvent({
+      runId: "run-silent",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+    });
+
+    expect(chatLog.dropAssistant).toHaveBeenCalledWith("run-silent");
+    expect(chatLog.finalizeAssistant).not.toHaveBeenCalled();
   });
 });

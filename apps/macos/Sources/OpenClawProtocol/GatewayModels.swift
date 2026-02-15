@@ -295,6 +295,7 @@ public struct Snapshot: Codable, Sendable {
     public let configpath: String?
     public let statedir: String?
     public let sessiondefaults: [String: AnyCodable]?
+    public let authmode: AnyCodable?
 
     public init(
         presence: [PresenceEntry],
@@ -303,7 +304,8 @@ public struct Snapshot: Codable, Sendable {
         uptimems: Int,
         configpath: String?,
         statedir: String?,
-        sessiondefaults: [String: AnyCodable]?
+        sessiondefaults: [String: AnyCodable]?,
+        authmode: AnyCodable?
     ) {
         self.presence = presence
         self.health = health
@@ -312,6 +314,7 @@ public struct Snapshot: Codable, Sendable {
         self.configpath = configpath
         self.statedir = statedir
         self.sessiondefaults = sessiondefaults
+        self.authmode = authmode
     }
     private enum CodingKeys: String, CodingKey {
         case presence
@@ -321,6 +324,7 @@ public struct Snapshot: Codable, Sendable {
         case configpath = "configPath"
         case statedir = "stateDir"
         case sessiondefaults = "sessionDefaults"
+        case authmode = "authMode"
     }
 }
 
@@ -432,7 +436,11 @@ public struct PollParams: Codable, Sendable {
     public let question: String
     public let options: [String]
     public let maxselections: Int?
+    public let durationseconds: Int?
     public let durationhours: Int?
+    public let silent: Bool?
+    public let isanonymous: Bool?
+    public let threadid: String?
     public let channel: String?
     public let accountid: String?
     public let idempotencykey: String
@@ -442,7 +450,11 @@ public struct PollParams: Codable, Sendable {
         question: String,
         options: [String],
         maxselections: Int?,
+        durationseconds: Int?,
         durationhours: Int?,
+        silent: Bool?,
+        isanonymous: Bool?,
+        threadid: String?,
         channel: String?,
         accountid: String?,
         idempotencykey: String
@@ -451,7 +463,11 @@ public struct PollParams: Codable, Sendable {
         self.question = question
         self.options = options
         self.maxselections = maxselections
+        self.durationseconds = durationseconds
         self.durationhours = durationhours
+        self.silent = silent
+        self.isanonymous = isanonymous
+        self.threadid = threadid
         self.channel = channel
         self.accountid = accountid
         self.idempotencykey = idempotencykey
@@ -461,7 +477,11 @@ public struct PollParams: Codable, Sendable {
         case question
         case options
         case maxselections = "maxSelections"
+        case durationseconds = "durationSeconds"
         case durationhours = "durationHours"
+        case silent
+        case isanonymous = "isAnonymous"
+        case threadid = "threadId"
         case channel
         case accountid = "accountId"
         case idempotencykey = "idempotencyKey"
@@ -1079,14 +1099,18 @@ public struct SessionsPatchParams: Codable, Sendable {
 
 public struct SessionsResetParams: Codable, Sendable {
     public let key: String
+    public let reason: AnyCodable?
 
     public init(
-        key: String
+        key: String,
+        reason: AnyCodable?
     ) {
         self.key = key
+        self.reason = reason
     }
     private enum CodingKeys: String, CodingKey {
         case key
+        case reason
     }
 }
 

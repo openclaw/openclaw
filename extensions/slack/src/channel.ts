@@ -1,12 +1,12 @@
 import {
   applyAccountNameToChannelSection,
   buildChannelConfigSchema,
-  createActionGate,
   DEFAULT_ACCOUNT_ID,
   deleteAccountFromConfigSection,
+  extractSlackToolSend,
   formatPairingApproveHint,
   getChatChannelMeta,
-  listEnabledSlackAccounts,
+  listSlackMessageActions,
   listSlackAccountIds,
   listSlackDirectoryGroupsFromConfig,
   listSlackDirectoryPeersFromConfig,
@@ -26,7 +26,6 @@ import {
   setAccountEnabledInConfigSection,
   slackOnboardingAdapter,
   SlackConfigSchema,
-  type ChannelMessageActionName,
   type ChannelPlugin,
   type ResolvedSlackAccount,
 } from "openclaw/plugin-sdk";
@@ -177,7 +176,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
   threading: {
     resolveReplyToMode: ({ cfg, accountId, chatType }) =>
       resolveSlackReplyToMode(resolveSlackAccount({ cfg, accountId }), chatType),
-    allowTagsWhenOff: true,
+    allowExplicitReplyTagsWhenOff: true,
     buildToolContext: (params) => buildSlackThreadingToolContext(params),
   },
   messaging: {
@@ -233,63 +232,8 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
     },
   },
   actions: {
-    listActions: ({ cfg }) => {
-      const accounts = listEnabledSlackAccounts(cfg).filter(
-        (account) => account.botTokenSource !== "none",
-      );
-      if (accounts.length === 0) {
-        return [];
-      }
-      const isActionEnabled = (key: string, defaultValue = true) => {
-        for (const account of accounts) {
-          const gate = createActionGate(
-            (account.actions ?? cfg.channels?.slack?.actions) as Record<
-              string,
-              boolean | undefined
-            >,
-          );
-          if (gate(key, defaultValue)) {
-            return true;
-          }
-        }
-        return false;
-      };
-
-      const actions = new Set<ChannelMessageActionName>(["send"]);
-      if (isActionEnabled("reactions")) {
-        actions.add("react");
-        actions.add("reactions");
-      }
-      if (isActionEnabled("messages")) {
-        actions.add("read");
-        actions.add("edit");
-        actions.add("delete");
-      }
-      if (isActionEnabled("pins")) {
-        actions.add("pin");
-        actions.add("unpin");
-        actions.add("list-pins");
-      }
-      if (isActionEnabled("memberInfo")) {
-        actions.add("member-info");
-      }
-      if (isActionEnabled("emojiList")) {
-        actions.add("emoji-list");
-      }
-      return Array.from(actions);
-    },
-    extractToolSend: ({ args }) => {
-      const action = typeof args.action === "string" ? args.action.trim() : "";
-      if (action !== "sendMessage") {
-        return null;
-      }
-      const to = typeof args.to === "string" ? args.to : undefined;
-      if (!to) {
-        return null;
-      }
-      const accountId = typeof args.accountId === "string" ? args.accountId.trim() : undefined;
-      return { to, accountId };
-    },
+    listActions: ({ cfg }) => listSlackMessageActions(cfg),
+    extractToolSend: ({ args }) => extractSlackToolSend(args),
     handleAction: async ({ action, params, cfg, accountId, toolContext }) => {
       const resolveChannelId = () =>
         readStringParam(params, "channelId") ?? readStringParam(params, "to", { required: true });
