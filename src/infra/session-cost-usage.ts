@@ -238,7 +238,12 @@ async function scanTranscriptFile(params: {
           model: entry.model,
           config: params.config,
         });
-        entry.costTotal = estimateUsageCost({ usage: entry.usage, cost });
+        entry.costTotal = estimateUsageCost({
+          usage: entry.usage,
+          cost,
+          provider: entry.provider,
+          model: entry.model
+        });
       }
 
       params.onEntry(entry);
@@ -951,7 +956,12 @@ export async function loadSessionLogs(params: {
               model: message.model as string | undefined,
               config: params.config,
             });
-            cost = estimateUsageCost({ usage, cost: costConfig });
+            cost = estimateUsageCost({
+              usage,
+              cost: costConfig,
+              provider: message.provider as string | undefined,
+              model: message.model as string | undefined
+            });
           }
         }
       }
