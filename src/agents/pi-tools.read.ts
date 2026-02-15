@@ -108,7 +108,10 @@ type RequiredParamGroup = {
 
 export const CLAUDE_PARAM_GROUPS = {
   read: [{ keys: ["path", "file_path"], label: "path (path or file_path)" }],
-  write: [{ keys: ["path", "file_path"], label: "path (path or file_path)" }],
+  write: [
+    { keys: ["path", "file_path"], label: "path (path or file_path)" },
+    { keys: ["content"], label: "content" },
+  ],
   edit: [
     { keys: ["path", "file_path"], label: "path (path or file_path)" },
     {
@@ -121,6 +124,56 @@ export const CLAUDE_PARAM_GROUPS = {
     },
   ],
 } as const;
+
+function extractStructuredText(value: unknown, depth = 0): string | undefined {
+  if (depth > 6) {
+    return undefined;
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    const parts = value
+      .map((entry) => extractStructuredText(entry, depth + 1))
+      .filter((entry): entry is string => typeof entry === "string");
+    return parts.length > 0 ? parts.join("") : undefined;
+  }
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  if (typeof record.text === "string") {
+    return record.text;
+  }
+  if (typeof record.content === "string") {
+    return record.content;
+  }
+  if (Array.isArray(record.content)) {
+    return extractStructuredText(record.content, depth + 1);
+  }
+  if (Array.isArray(record.parts)) {
+    return extractStructuredText(record.parts, depth + 1);
+  }
+  if (typeof record.value === "string" && record.value.length > 0) {
+    const type = typeof record.type === "string" ? record.type.toLowerCase() : "";
+    const kind = typeof record.kind === "string" ? record.kind.toLowerCase() : "";
+    if (type.includes("text") || kind === "text") {
+      return record.value;
+    }
+  }
+  return undefined;
+}
+
+function normalizeTextLikeParam(record: Record<string, unknown>, key: string) {
+  const value = record[key];
+  if (typeof value === "string") {
+    return;
+  }
+  const extracted = extractStructuredText(value);
+  if (typeof extracted === "string") {
+    record[key] = extracted;
+  }
+}
 
 // Normalize tool parameters from Claude Code conventions to pi-coding-agent conventions.
 // Claude Code uses file_path/old_string/new_string while pi-coding-agent uses path/oldText/newText.
@@ -146,6 +199,11 @@ export function normalizeToolParams(params: unknown): Record<string, unknown> | 
     normalized.newText = normalized.new_string;
     delete normalized.new_string;
   }
+  // Some providers/models emit text payloads as structured blocks instead of raw strings.
+  // Normalize these for write/edit so content matching and writes stay deterministic.
+  normalizeTextLikeParam(normalized, "content");
+  normalizeTextLikeParam(normalized, "oldText");
+  normalizeTextLikeParam(normalized, "newText");
   return normalized;
 }
 
