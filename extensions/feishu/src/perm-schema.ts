@@ -26,11 +26,16 @@ const Permission = Type.Union([
   Type.Literal("full_access"),
 ]);
 
+const AccountField = Type.Optional(
+  Type.String({ description: "Feishu account ID. Omit to use the default account." }),
+);
+
 export const FeishuPermSchema = Type.Union([
   Type.Object({
     action: Type.Literal("list"),
     token: Type.String({ description: "File token" }),
     type: TokenType,
+    account: AccountField,
   }),
   Type.Object({
     action: Type.Literal("add"),
@@ -39,6 +44,7 @@ export const FeishuPermSchema = Type.Union([
     member_type: MemberType,
     member_id: Type.String({ description: "Member ID (email, open_id, user_id, etc.)" }),
     perm: Permission,
+    account: AccountField,
   }),
   Type.Object({
     action: Type.Literal("remove"),
@@ -46,6 +52,7 @@ export const FeishuPermSchema = Type.Union([
     type: TokenType,
     member_type: MemberType,
     member_id: Type.String({ description: "Member ID to remove" }),
+    account: AccountField,
   }),
 ]);
 
