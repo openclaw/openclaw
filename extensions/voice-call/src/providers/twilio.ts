@@ -1,5 +1,7 @@
 import crypto from "node:crypto";
 import type { TwilioConfig, WebhookSecurityConfig } from "../config.js";
+import type { ElevenLabsStreamConfig } from "../elevenlabs-stream.js";
+import { streamTts } from "../elevenlabs-stream.js";
 import type { MediaStreamHandler } from "../media-stream.js";
 import type { TelephonyTtsProvider } from "../telephony-tts.js";
 import type {
@@ -59,6 +61,9 @@ export class TwilioProvider implements VoiceCallProvider {
 
   /** Optional media stream handler for sending audio */
   private mediaStreamHandler: MediaStreamHandler | null = null;
+
+  /** Optional ElevenLabs streaming config for low-latency TTS */
+  private elevenLabsStreamConfig: ElevenLabsStreamConfig | null = null;
 
   /** Map of call SID to stream SID for media streams */
   private callStreamMap = new Map<string, string>();
@@ -133,6 +138,10 @@ export class TwilioProvider implements VoiceCallProvider {
 
   setMediaStreamHandler(handler: MediaStreamHandler): void {
     this.mediaStreamHandler = handler;
+  }
+
+  setElevenLabsStreamConfig(config: ElevenLabsStreamConfig): void {
+    this.elevenLabsStreamConfig = config;
   }
 
   registerCallStream(callSid: string, streamSid: string): void {
@@ -518,7 +527,7 @@ export class TwilioProvider implements VoiceCallProvider {
   async playTts(input: PlayTtsInput): Promise<void> {
     // Try telephony TTS via media stream first (if configured)
     const streamSid = this.callStreamMap.get(input.providerCallId);
-    if (this.ttsProvider && this.mediaStreamHandler && streamSid) {
+    if ((this.ttsProvider || this.elevenLabsStreamConfig) && this.mediaStreamHandler && streamSid) {
       try {
         await this.playTtsViaStream(input.text, streamSid);
         return;
@@ -561,15 +570,71 @@ export class TwilioProvider implements VoiceCallProvider {
    * Uses a queue to serialize playback and prevent overlapping audio.
    */
   private async playTtsViaStream(text: string, streamSid: string): Promise<void> {
-    if (!this.ttsProvider || !this.mediaStreamHandler) {
-      throw new Error("TTS provider and media stream handler required");
+    if (!this.mediaStreamHandler) {
+      throw new Error("Media stream handler required");
+    }
+
+    const handler = this.mediaStreamHandler;
+
+    // ── ElevenLabs WebSocket streaming (preferred, low-latency) ──
+    if (this.elevenLabsStreamConfig) {
+      const elConfig = this.elevenLabsStreamConfig;
+      console.debug(
+        `[voice-call] Starting ElevenLabs streaming TTS for: "${text.slice(0, 80)}..."`,
+      );
+      await handler.queueTts(streamSid, async (signal) => {
+        const doStream = async () => {
+          const result = await streamTts(
+            text,
+            elConfig,
+            (base64Audio: string) => {
+              if (signal.aborted) return;
+              const audioBuffer = Buffer.from(base64Audio, "base64");
+              handler.sendAudio(streamSid, audioBuffer);
+            },
+            signal,
+          );
+
+          if (!signal.aborted) {
+            handler.sendMark(streamSid, `tts-${Date.now()}`);
+            console.debug(
+              `[voice-call] ElevenLabs streaming TTS complete: ${result.chunkCount} chunks, ` +
+                `${result.totalBytes} bytes, TTFB ${result.ttfbMs}ms, total ${result.totalMs}ms`,
+            );
+          }
+        };
+
+        try {
+          await doStream();
+        } catch (err: any) {
+          // On timeout/connection errors, retry once with a fresh WebSocket
+          if (
+            !signal.aborted &&
+            (err.message?.includes("input_timeout") ||
+              err.message?.includes("WebSocket") ||
+              err.message?.includes("closed without"))
+          ) {
+            console.debug(
+              `[voice-call] ElevenLabs first attempt failed (${err.message}), retrying with fresh connection...`,
+            );
+            await doStream();
+          } else {
+            throw err;
+          }
+        }
+      });
+      return;
+    }
+
+    // ── Batch TTS fallback (existing path) ──
+    if (!this.ttsProvider) {
+      throw new Error("TTS provider required for batch TTS streaming");
     }
 
     // Stream audio in 20ms chunks (160 bytes at 8kHz mu-law)
     const CHUNK_SIZE = 160;
     const CHUNK_DELAY_MS = 20;
 
-    const handler = this.mediaStreamHandler;
     const ttsProvider = this.ttsProvider;
     await handler.queueTts(streamSid, async (signal) => {
       // Generate audio with core TTS (returns mu-law at 8kHz)

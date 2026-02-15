@@ -1,5 +1,6 @@
 import type { VoiceCallConfig } from "./config.js";
 import type { CoreConfig } from "./core-bridge.js";
+import type { ElevenLabsStreamConfig } from "./elevenlabs-stream.js";
 import type { VoiceCallProvider } from "./providers/base.js";
 import type { TelephonyTtsRuntime } from "./telephony-tts.js";
 import { resolveVoiceCallConfig, validateProviderConfig } from "./config.js";
@@ -162,6 +163,31 @@ export async function createVoiceCallRuntime(params: {
 
   if (provider.name === "twilio" && config.streaming?.enabled) {
     const twilioProvider = provider as TwilioProvider;
+
+    // ── ElevenLabs WebSocket streaming TTS (low-latency, preferred) ──
+    const elApiKey =
+      (config.tts as Record<string, unknown>)?.elevenlabs &&
+      typeof (config.tts as Record<string, Record<string, unknown>>).elevenlabs === "object"
+        ? ((config.tts as Record<string, Record<string, string>>).elevenlabs.apiKey ?? undefined)
+        : undefined;
+    const elVoiceId =
+      (config.tts as Record<string, unknown>)?.elevenlabs &&
+      typeof (config.tts as Record<string, Record<string, unknown>>).elevenlabs === "object"
+        ? ((config.tts as Record<string, Record<string, string>>).elevenlabs.voiceId ?? undefined)
+        : undefined;
+
+    if (elApiKey && elVoiceId) {
+      const elevenlabsTts = (config.tts as Record<string, Record<string, unknown>>).elevenlabs;
+      const elConfig: ElevenLabsStreamConfig = {
+        apiKey: elApiKey,
+        voiceId: elVoiceId,
+        modelId: (elevenlabsTts.modelId as string) ?? "eleven_flash_v2_5",
+        voiceSettings: elevenlabsTts.voiceSettings as ElevenLabsStreamConfig["voiceSettings"],
+      };
+      twilioProvider.setElevenLabsStreamConfig(elConfig);
+      log.info("[voice-call] ElevenLabs WebSocket streaming TTS configured (low-latency mode)");
+    }
+
     if (ttsRuntime?.textToSpeechTelephony) {
       try {
         const ttsProvider = createTelephonyTtsProvider({
