@@ -416,4 +416,53 @@ describe("gateway server chat", () => {
       }, FAST_WAIT_OPTS);
     });
   });
+
+  test("chat.history resolves thinking precedence as per-agent > per-model > global", async () => {
+    const tempDirs: string[] = [];
+    const { server, ws } = await startServerWithClient();
+
+    try {
+      await connectOk(ws);
+
+      const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+      tempDirs.push(sessionDir);
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+
+      await writeSessionStore({
+        entries: {
+          main: { sessionId: "sess-main", updatedAt: Date.now() },
+        },
+      });
+
+      testState.agentConfig = {
+        thinkingDefault: "high",
+        models: {
+          "anthropic/claude-opus-4-6": { thinkingDefault: "low" },
+        },
+      };
+
+      const perModelRes = await rpcReq<{ thinkingLevel?: string }>(ws, "chat.history", {
+        sessionKey: "main",
+      });
+      expect(perModelRes.ok).toBe(true);
+      expect(perModelRes.payload?.thinkingLevel).toBe("low");
+
+      testState.agentsConfig = {
+        list: [{ id: "main", default: true, thinkingDefault: "xhigh" }],
+      };
+
+      const perAgentRes = await rpcReq<{ thinkingLevel?: string }>(ws, "chat.history", {
+        sessionKey: "main",
+      });
+      expect(perAgentRes.ok).toBe(true);
+      expect(perAgentRes.payload?.thinkingLevel).toBe("xhigh");
+    } finally {
+      testState.agentConfig = undefined;
+      testState.agentsConfig = undefined;
+      testState.sessionStorePath = undefined;
+      ws.close();
+      server.close();
+      for (const d of tempDirs) await fs.rm(d, { recursive: true, force: true });
+    }
+  });
 });
