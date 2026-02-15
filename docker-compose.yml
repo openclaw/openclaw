@@ -1,46 +1,85 @@
 services:
   openclaw-gateway:
-    image: ${OPENCLAW_IMAGE:-openclaw:local}
+    image: ${OPENCLAW_IMAGE:-ghcr.io/openclaw/openclaw:main}
     environment:
       HOME: /home/node
       TERM: xterm-256color
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
-      CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY}
-      CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY}
-      CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE}
+      # AI provider keys (configure the ones you use)
+      CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY:-}
+      CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY:-}
+      CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
+      # Browser: point to the sidecar CDP endpoint
+      OPENCLAW_BROWSER_CDP_ENDPOINT: ws://openclaw-browser:9222
     volumes:
-      - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
-      - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
+      - ${OPENCLAW_CONFIG_DIR:-./data/openclaw}:/home/node/.openclaw
+      - ${OPENCLAW_WORKSPACE_DIR:-./data/workspace}:/home/node/.openclaw/workspace
     ports:
       - "${OPENCLAW_GATEWAY_PORT:-18789}:18789"
       - "${OPENCLAW_BRIDGE_PORT:-18790}:18790"
     init: true
     restart: unless-stopped
+    depends_on:
+      openclaw-browser:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://localhost:18789').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     command:
       [
         "node",
         "dist/index.js",
         "gateway",
+        "--allow-unconfigured",
         "--bind",
         "${OPENCLAW_GATEWAY_BIND:-lan}",
         "--port",
         "18789",
       ]
 
+  openclaw-browser:
+    build:
+      context: .
+      dockerfile: Dockerfile.sandbox-browser
+    environment:
+      OPENCLAW_BROWSER_HEADLESS: ${OPENCLAW_BROWSER_HEADLESS:-1}
+      OPENCLAW_BROWSER_ENABLE_NOVNC: ${OPENCLAW_BROWSER_ENABLE_NOVNC:-0}
+    ports:
+      # CDP port (optional, for debugging)
+      - "${OPENCLAW_BROWSER_CDP_PORT:-9222}:9222"
+      # noVNC web UI (optional, disabled by default)
+      - "${OPENCLAW_BROWSER_NOVNC_PORT:-6080}:6080"
+    init: true
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9222/json/version"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
   openclaw-cli:
-    image: ${OPENCLAW_IMAGE:-openclaw:local}
+    image: ${OPENCLAW_IMAGE:-ghcr.io/openclaw/openclaw:main}
     environment:
       HOME: /home/node
       TERM: xterm-256color
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
       BROWSER: echo
-      CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY}
-      CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY}
-      CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE}
     volumes:
-      - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
-      - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
+      - ${OPENCLAW_CONFIG_DIR:-./data/openclaw}:/home/node/.openclaw
+      - ${OPENCLAW_WORKSPACE_DIR:-./data/workspace}:/home/node/.openclaw/workspace
     stdin_open: true
     tty: true
     init: true
+    profiles:
+      - cli
     entrypoint: ["node", "dist/index.js"]
