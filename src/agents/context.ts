@@ -25,6 +25,21 @@ const loadPromise = (async () => {
         MODEL_CACHE.set(m.id, m.contextWindow);
       }
     }
+
+    // Override MODEL_CACHE with contextWindow values from config. Operator-set
+    // values take precedence over API-discovered values (e.g., correcting a
+    // provider that reports the wrong context window).
+    const providers = cfg.models?.providers;
+    if (providers) {
+      for (const provider of Object.values(providers)) {
+        if (!provider?.models) continue;
+        for (const model of provider.models) {
+          if (model?.id && typeof model.contextWindow === "number" && model.contextWindow > 0) {
+            MODEL_CACHE.set(model.id, model.contextWindow);
+          }
+        }
+      }
+    }
   } catch {
     // If pi-ai isn't available, leave cache empty; lookup will fall back.
   }
