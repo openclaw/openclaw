@@ -33,6 +33,8 @@ export type GatewayRequestContext = {
   execApprovalManager?: ExecApprovalManager;
   loadGatewayModelCatalog: () => Promise<ModelCatalogEntry[]>;
   getHealthCache: () => HealthSummary | null;
+  getCurrentChannelBeingProbed: () => string | null;
+  isHealthRefreshInProgress: () => boolean;
   refreshHealthSnapshot: (opts?: { probe?: boolean }) => Promise<HealthSummary>;
   logHealth: { error: (message: string) => void };
   logGateway: SubsystemLogger;
