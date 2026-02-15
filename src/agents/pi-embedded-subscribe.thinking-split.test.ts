@@ -1,4 +1,3 @@
-
 import { describe, expect, it, vi } from "vitest";
 import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
 
@@ -44,7 +43,7 @@ describe("subscribeEmbeddedPiSession - split thinking tags", () => {
       message: { role: "assistant" },
       assistantMessageEvent: {
         type: "text_delta",
-        delta: " id=\"trace-123\">Hidden thinking",
+        delta: ' id="trace-123">Hidden thinking',
       },
     });
 
@@ -62,17 +61,19 @@ describe("subscribeEmbeddedPiSession - split thinking tags", () => {
       type: "message_end",
       message: {
         role: "assistant",
-        content: [{ type: "text", text: "Start <think id=\"trace-123\">Hidden thinking</think> End" }],
+        content: [
+          { type: "text", text: 'Start <think id="trace-123">Hidden thinking</think> End' },
+        ],
       },
     });
 
     // Collect all emitted text
     const emittedTexts = onBlockReply.mock.calls.map((c) => c[0].text).join("");
-    
-    // With current implementation (stateless), "Start <think" is emitted in chunk 1, 
+
+    // With current implementation (stateless), "Start <think" is emitted in chunk 1,
     // and " id=...>Hidden..." is emitted in chunk 2.
     // So full text will be "Start <think id=...>Hidden...</think> End" (FAIL)
-    
+
     // We want "Start End" (PASS)
     expect(emittedTexts).not.toContain("Hidden thinking");
     expect(emittedTexts.replace(/\s+/g, " ").trim()).toBe("Start End");

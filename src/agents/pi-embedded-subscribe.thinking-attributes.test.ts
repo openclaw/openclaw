@@ -1,4 +1,3 @@
-
 import { describe, expect, it, vi } from "vitest";
 import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
 
@@ -54,10 +53,10 @@ describe("subscribeEmbeddedPiSession - thinking with attributes", () => {
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
     const replyText = onBlockReply.mock.calls[0][0].text;
-    
+
     // IF the regex is weak, it won't stripped, so we expect "Internal reasoning" to be present (FAIL)
     // IF the regex is strong, it will be stripped, so we expect only "Final answer" (PASS)
-    
+
     // We assert what we WANT (that it IS stripped).
     // So this test SHOULD FAIL with current code.
     expect(replyText).not.toContain("Internal reasoning");
