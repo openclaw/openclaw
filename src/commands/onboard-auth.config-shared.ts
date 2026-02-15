@@ -17,6 +17,29 @@ function extractAgentDefaultModelFallbacks(model: unknown): string[] | undefined
   return Array.isArray(fallbacks) ? fallbacks.map((v) => String(v)) : undefined;
 }
 
+export function applyOnboardAuthAgentModelsAndProviders(
+  cfg: OpenClawConfig,
+  params: {
+    agentModels: Record<string, AgentModelEntryConfig>;
+    providers: Record<string, ModelProviderConfig>;
+  },
+): OpenClawConfig {
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models: params.agentModels,
+      },
+    },
+    models: {
+      mode: cfg.models?.mode ?? "merge",
+      providers: params.providers,
+    },
+  };
+}
+
 export function applyAgentDefaultModelPrimary(
   cfg: OpenClawConfig,
   primary: string,
@@ -81,20 +104,10 @@ export function applyProviderConfigWithDefaultModels(
     models: mergedModels.length > 0 ? mergedModels : defaultModels,
   };
 
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...cfg.agents?.defaults,
-        models: params.agentModels,
-      },
-    },
-    models: {
-      mode: cfg.models?.mode ?? "merge",
-      providers,
-    },
-  };
+  return applyOnboardAuthAgentModelsAndProviders(cfg, {
+    agentModels: params.agentModels,
+    providers,
+  });
 }
 
 export function applyProviderConfigWithDefaultModel(
@@ -159,18 +172,8 @@ export function applyProviderConfigWithModelCatalog(
     models: mergedModels.length > 0 ? mergedModels : catalogModels,
   };
 
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...cfg.agents?.defaults,
-        models: params.agentModels,
-      },
-    },
-    models: {
-      mode: cfg.models?.mode ?? "merge",
-      providers,
-    },
-  };
+  return applyOnboardAuthAgentModelsAndProviders(cfg, {
+    agentModels: params.agentModels,
+    providers,
+  });
 }
