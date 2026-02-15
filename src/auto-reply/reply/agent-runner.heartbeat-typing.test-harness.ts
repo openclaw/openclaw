@@ -4,11 +4,6 @@ import type { TypingMode } from "../../config/types.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
-import {
-  embeddedPiMockFactory,
-  modelFallbackMockFactory,
-  queueMockFactory,
-} from "./agent-runner.test-harness.mocks.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 // Avoid exporting vitest mock types (TS2742 under pnpm + d.ts emit).
@@ -44,15 +39,20 @@ export function installRunReplyAgentTypingHeartbeatTestHooks() {
   });
 }
 
-vi.mock("../../agents/model-fallback.js", () => ({
-  ...modelFallbackMockFactory(),
-}));
+vi.mock("../../agents/model-fallback.js", async () => {
+  const { modelFallbackMockFactory } = await import("./agent-runner.test-harness.mocks.js");
+  return modelFallbackMockFactory();
+});
 
-vi.mock("../../agents/pi-embedded.js", () => ({
-  ...embeddedPiMockFactory(state),
-}));
+vi.mock("../../agents/pi-embedded.js", async () => {
+  const { embeddedPiMockFactory } = await import("./agent-runner.test-harness.mocks.js");
+  return embeddedPiMockFactory(state);
+});
 
-vi.mock("./queue.js", queueMockFactory);
+vi.mock("./queue.js", async () => {
+  const { queueMockFactory } = await import("./agent-runner.test-harness.mocks.js");
+  return await queueMockFactory();
+});
 
 export function createMinimalRun(params?: {
   opts?: GetReplyOptions;
