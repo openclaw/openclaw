@@ -91,6 +91,8 @@ export type SessionConfig = {
   /** Map platform-prefixed identities (e.g. "telegram:123") to canonical DM peers. */
   identityLinks?: Record<string, string[]>;
   resetTriggers?: string[];
+  /** Custom prompt injected when a bare /new or /reset starts a new session. Overrides the built-in greeting prompt. */
+  greetingPrompt?: string;
   idleMinutes?: number;
   reset?: SessionResetConfig;
   resetByType?: SessionResetByTypeConfig;
