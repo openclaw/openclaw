@@ -36,6 +36,8 @@ type SlashHttpHandlerParams = {
   runtime: RuntimeEnv;
   /** Expected token from registered commands (for validation). */
   commandTokens: Set<string>;
+  /** Map from trigger to original command name (for skill commands that start with oc_). */
+  triggerMap?: ReadonlyMap<string, string>;
   log?: (msg: string) => void;
 };
 
@@ -361,7 +363,7 @@ async function authorizeSlashInvocation(params: {
  * from the Mattermost server when a user invokes a registered slash command.
  */
 export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
-  const { account, cfg, runtime, commandTokens, log } = params;
+  const { account, cfg, runtime, commandTokens, triggerMap, log } = params;
 
   const MAX_BODY_BYTES = 64 * 1024; // 64KB
 
@@ -404,7 +406,7 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
 
     // Extract command info
     const trigger = payload.command.replace(/^\//, "").trim();
-    const commandText = resolveCommandText(trigger, payload.text);
+    const commandText = resolveCommandText(trigger, payload.text, triggerMap);
     const channelId = payload.channel_id;
     const senderId = payload.user_id;
     const senderName = payload.user_name ?? senderId;

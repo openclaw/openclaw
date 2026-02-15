@@ -26,6 +26,8 @@ type SlashCommandAccountState = {
   handler: ((req: IncomingMessage, res: ServerResponse) => Promise<void>) | null;
   /** The account that activated slash commands. */
   account: ResolvedMattermostAccount;
+  /** Map from trigger to original command name (for skill commands that start with oc_). */
+  triggerMap: Map<string, string>;
 };
 
 /** Map from accountId → per-account slash command state. */
@@ -53,13 +55,14 @@ export function activateSlashCommands(params: {
   account: ResolvedMattermostAccount;
   commandTokens: string[];
   registeredCommands: MattermostRegisteredCommand[];
+  triggerMap?: Map<string, string>;
   api: {
     cfg: import("openclaw/plugin-sdk").OpenClawConfig;
     runtime: import("openclaw/plugin-sdk").RuntimeEnv;
   };
   log?: (msg: string) => void;
 }) {
-  const { account, commandTokens, registeredCommands, api, log } = params;
+  const { account, commandTokens, registeredCommands, triggerMap, api, log } = params;
   const accountId = account.accountId;
 
   const tokenSet = new Set(commandTokens);
@@ -69,6 +72,7 @@ export function activateSlashCommands(params: {
     cfg: api.cfg,
     runtime: api.runtime,
     commandTokens: tokenSet,
+    triggerMap,
     log,
   });
 
@@ -77,6 +81,7 @@ export function activateSlashCommands(params: {
     registeredCommands,
     handler,
     account,
+    triggerMap: triggerMap ?? new Map(),
   });
 
   log?.(
