@@ -545,6 +545,10 @@ export class QmdMemoryManager implements MemorySearchManager {
         }
       }
       this.lastUpdateAt = Date.now();
+      if (this.db) {
+        this.db.close();
+        this.db = null;
+      }
       this.docPathCache.clear();
     };
     this.pendingUpdate = run().finally(() => {
