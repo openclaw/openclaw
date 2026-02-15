@@ -6,7 +6,7 @@ import type { SandboxFsBridge } from "../sandbox/fs-bridge.js";
 import type { AnyAgentTool } from "./common.js";
 import { setRuntimeApiKeyWithCopilotExchange } from "../../providers/github-copilot-token.js";
 import { resolveUserPath } from "../../utils.js";
-import { loadWebMedia } from "../../web/media.js";
+import { getDefaultLocalRoots, loadWebMedia } from "../../web/media.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "../auth-profiles.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { minimaxUnderstandImage } from "../minimax-vlm.js";
@@ -15,6 +15,7 @@ import { runWithImageModelFallback } from "../model-fallback.js";
 import { resolveConfiguredModelRef } from "../model-selection.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import { discoverAuthStorage, discoverModels } from "../pi-model-discovery.js";
+import { normalizeWorkspaceDir } from "../workspace-dir.js";
 import {
   coerceImageAssistantText,
   coerceImageModelConfig,
@@ -330,6 +331,7 @@ async function runImagePrompt(params: {
 export function createImageTool(options?: {
   config?: OpenClawConfig;
   agentDir?: string;
+  workspaceDir?: string;
   sandbox?: ImageSandboxConfig;
   /** If true, the model has native vision capability and images in the prompt are auto-injected */
   modelHasVision?: boolean;
@@ -355,6 +357,15 @@ export function createImageTool(options?: {
   const description = options?.modelHasVision
     ? "Analyze an image with a vision model. Only use this tool when the image was NOT already provided in the user's message. Images mentioned in the prompt are automatically visible to you."
     : "Analyze an image with the configured image model (agents.defaults.imageModel). Provide a prompt and image path or URL.";
+
+  const localRoots = (() => {
+    const roots = getDefaultLocalRoots();
+    const workspaceDir = normalizeWorkspaceDir(options?.workspaceDir);
+    if (!workspaceDir) {
+      return roots;
+    }
+    return Array.from(new Set([...roots, workspaceDir]));
+  })();
 
   return {
     label: "Image",
@@ -446,10 +457,14 @@ export function createImageTool(options?: {
         : sandboxConfig
           ? await loadWebMedia(resolvedPath ?? resolvedImage, {
               maxBytes,
+              sandboxValidated: true,
               readFile: (filePath) =>
                 sandboxConfig.bridge.readFile({ filePath, cwd: sandboxConfig.root }),
             })
-          : await loadWebMedia(resolvedPath ?? resolvedImage, maxBytes);
+          : await loadWebMedia(resolvedPath ?? resolvedImage, {
+              maxBytes,
+              localRoots,
+            });
       if (media.kind !== "image") {
         throw new Error(`Unsupported media type: ${media.kind}`);
       }

@@ -1,9 +1,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { buildModelAliasIndex } from "../../agents/model-selection.js";
+import { saveSessionStore } from "../../config/sessions.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.ts";
 import { enqueueSystemEvent, resetSystemEventsForTest } from "../../infra/system-events.js";
 import { applyResetModelOverride } from "./session-reset-model.js";
@@ -17,18 +18,31 @@ vi.mock("../../agents/model-catalog.js", () => ({
   ]),
 }));
 
-describe("initSessionState reset triggers in WhatsApp groups", () => {
-  async function createStorePath(prefix: string): Promise<string> {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-    return path.join(root, "sessions.json");
-  }
+let suiteRoot = "";
+let suiteCase = 0;
 
+beforeAll(async () => {
+  suiteRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-resets-suite-"));
+});
+
+afterAll(async () => {
+  await fs.rm(suiteRoot, { recursive: true, force: true });
+  suiteRoot = "";
+  suiteCase = 0;
+});
+
+async function createStorePath(prefix: string): Promise<string> {
+  const root = path.join(suiteRoot, `${prefix}${++suiteCase}`);
+  await fs.mkdir(root);
+  return path.join(root, "sessions.json");
+}
+
+describe("initSessionState reset triggers in WhatsApp groups", () => {
   async function seedSessionStore(params: {
     storePath: string;
     sessionKey: string;
     sessionId: string;
   }): Promise<void> {
-    const { saveSessionStore } = await import("../../config/sessions.js");
     await saveSessionStore(params.storePath, {
       [params.sessionKey]: {
         sessionId: params.sessionId,
@@ -257,11 +271,6 @@ describe("initSessionState reset triggers in WhatsApp groups", () => {
 });
 
 describe("initSessionState reset triggers in Slack channels", () => {
-  async function createStorePath(prefix: string): Promise<string> {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-    return path.join(root, "sessions.json");
-  }
-
   async function seedSessionStore(params: {
     storePath: string;
     sessionKey: string;
@@ -453,11 +462,6 @@ describe("applyResetModelOverride", () => {
 });
 
 describe("initSessionState preserves behavior overrides across /new and /reset", () => {
-  async function createStorePath(prefix: string): Promise<string> {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-    return path.join(root, "sessions.json");
-  }
-
   async function seedSessionStoreWithOverrides(params: {
     storePath: string;
     sessionKey: string;

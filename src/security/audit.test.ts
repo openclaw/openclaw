@@ -1099,6 +1099,50 @@ describe("security audit", () => {
     }
   });
 
+  it("warns when Telegram allowFrom entries are non-numeric (legacy @username configs)", async () => {
+    const prevStateDir = process.env.OPENCLAW_STATE_DIR;
+    const tmp = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-security-audit-telegram-invalid-allowfrom-"),
+    );
+    process.env.OPENCLAW_STATE_DIR = tmp;
+    await fs.mkdir(path.join(tmp, "credentials"), { recursive: true, mode: 0o700 });
+    try {
+      const cfg: OpenClawConfig = {
+        channels: {
+          telegram: {
+            enabled: true,
+            botToken: "t",
+            groupPolicy: "allowlist",
+            groupAllowFrom: ["@TrustedOperator"],
+            groups: { "-100123": {} },
+          },
+        },
+      };
+
+      const res = await runSecurityAudit({
+        config: cfg,
+        includeFilesystem: false,
+        includeChannelSecurity: true,
+        plugins: [telegramPlugin],
+      });
+
+      expect(res.findings).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            checkId: "channels.telegram.allowFrom.invalid_entries",
+            severity: "warn",
+          }),
+        ]),
+      );
+    } finally {
+      if (prevStateDir == null) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = prevStateDir;
+      }
+    }
+  });
+
   it("adds a warning when deep probe fails", async () => {
     const cfg: OpenClawConfig = { gateway: { mode: "local" } };
 

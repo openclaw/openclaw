@@ -6,7 +6,12 @@ import { createEventHandlers } from "./tui-event-handlers.js";
 
 type MockChatLog = Pick<
   ChatLog,
-  "startTool" | "updateToolResult" | "addSystem" | "updateAssistant" | "finalizeAssistant"
+  | "startTool"
+  | "updateToolResult"
+  | "addSystem"
+  | "updateAssistant"
+  | "finalizeAssistant"
+  | "dropAssistant"
 >;
 type MockTui = Pick<TUI, "requestRender">;
 
@@ -41,6 +46,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       addSystem: vi.fn(),
       updateAssistant: vi.fn(),
       finalizeAssistant: vi.fn(),
+      dropAssistant: vi.fn(),
     };
     const tui: MockTui = { requestRender: vi.fn() };
     const setActivityStatus = vi.fn();
@@ -356,5 +362,117 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     });
 
     expect(loadHistory).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not reload history or clear active run when another run final arrives mid-stream", () => {
+    const state = makeState({ activeChatRunId: "run-active" });
+    const { chatLog, tui, setActivityStatus, loadHistory, isLocalRunId, forgetLocalRunId } =
+      makeContext(state);
+    const { handleChatEvent } = createEventHandlers({
+      chatLog,
+      tui,
+      state,
+      setActivityStatus,
+      loadHistory,
+      isLocalRunId,
+      forgetLocalRunId,
+    });
+
+    handleChatEvent({
+      runId: "run-active",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "partial" },
+    });
+
+    loadHistory.mockClear();
+    setActivityStatus.mockClear();
+
+    handleChatEvent({
+      runId: "run-other",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "other final" }] },
+    });
+
+    expect(loadHistory).not.toHaveBeenCalled();
+    expect(state.activeChatRunId).toBe("run-active");
+    expect(setActivityStatus).not.toHaveBeenCalledWith("idle");
+
+    handleChatEvent({
+      runId: "run-active",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "continued" },
+    });
+
+    expect(chatLog.updateAssistant).toHaveBeenLastCalledWith("continued", "run-active");
+  });
+
+  it("suppresses non-local empty final placeholders during concurrent runs", () => {
+    const state = makeState({ activeChatRunId: "run-active" });
+    const { chatLog, tui, setActivityStatus, loadHistory, isLocalRunId, forgetLocalRunId } =
+      makeContext(state);
+    const { handleChatEvent } = createEventHandlers({
+      chatLog,
+      tui,
+      state,
+      setActivityStatus,
+      loadHistory,
+      isLocalRunId,
+      forgetLocalRunId,
+    });
+
+    handleChatEvent({
+      runId: "run-active",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "local stream" },
+    });
+
+    loadHistory.mockClear();
+    chatLog.finalizeAssistant.mockClear();
+    chatLog.dropAssistant.mockClear();
+
+    handleChatEvent({
+      runId: "run-other",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [] },
+    });
+
+    expect(chatLog.finalizeAssistant).not.toHaveBeenCalledWith("(no output)", "run-other");
+    expect(chatLog.dropAssistant).toHaveBeenCalledWith("run-other");
+    expect(loadHistory).not.toHaveBeenCalled();
+    expect(state.activeChatRunId).toBe("run-active");
+  });
+
+  it("drops streaming assistant when chat final has no message", () => {
+    const state = makeState({ activeChatRunId: null });
+    const { chatLog, tui, setActivityStatus } = makeContext(state);
+    const { handleChatEvent } = createEventHandlers({
+      chatLog,
+      tui,
+      state,
+      setActivityStatus,
+    });
+
+    handleChatEvent({
+      runId: "run-silent",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "hello" },
+    });
+    chatLog.dropAssistant.mockClear();
+    chatLog.finalizeAssistant.mockClear();
+
+    handleChatEvent({
+      runId: "run-silent",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+    });
+
+    expect(chatLog.dropAssistant).toHaveBeenCalledWith("run-silent");
+    expect(chatLog.finalizeAssistant).not.toHaveBeenCalled();
   });
 });

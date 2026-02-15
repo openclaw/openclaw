@@ -6,7 +6,6 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveBrowserConfig, resolveProfile } from "./config.js";
 import { ensureBrowserControlAuth, resolveBrowserControlAuth } from "./control-auth.js";
 import { ensureChromeExtensionRelayServer } from "./extension-relay.js";
-import { isAuthorizedBrowserRequest } from "./http-auth.js";
 import { isPwAiLoaded } from "./pw-ai-state.js";
 import { registerBrowserRoutes } from "./routes/index.js";
 import {
@@ -14,6 +13,10 @@ import {
   createBrowserRouteContext,
   listKnownProfileNames,
 } from "./server-context.js";
+import {
+  installBrowserAuthMiddleware,
+  installBrowserCommonMiddleware,
+} from "./server-middleware.js";
 
 let state: BrowserServerState | null = null;
 const log = createSubsystemLogger("browser");
@@ -42,29 +45,8 @@ export async function startBrowserControlServerFromConfig(): Promise<BrowserServ
   }
 
   const app = express();
-  app.use((req, res, next) => {
-    const ctrl = new AbortController();
-    const abort = () => ctrl.abort(new Error("request aborted"));
-    req.once("aborted", abort);
-    res.once("close", () => {
-      if (!res.writableEnded) {
-        abort();
-      }
-    });
-    // Make the signal available to browser route handlers (best-effort).
-    (req as unknown as { signal?: AbortSignal }).signal = ctrl.signal;
-    next();
-  });
-  app.use(express.json({ limit: "1mb" }));
-
-  if (browserAuth.token || browserAuth.password) {
-    app.use((req, res, next) => {
-      if (isAuthorizedBrowserRequest(req, browserAuth)) {
-        return next();
-      }
-      res.status(401).send("Unauthorized");
-    });
-  }
+  installBrowserCommonMiddleware(app);
+  installBrowserAuthMiddleware(app, browserAuth);
 
   const ctx = createBrowserRouteContext({
     getState: () => state,
