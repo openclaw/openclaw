@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import {
   listAgentIds,
   resolveAgentDir,
@@ -56,6 +56,30 @@ const BOOTSTRAP_FILE_NAMES = [
 const MEMORY_FILE_NAMES = [DEFAULT_MEMORY_FILENAME, DEFAULT_MEMORY_ALT_FILENAME] as const;
 
 const ALLOWED_FILE_NAMES = new Set<string>([...BOOTSTRAP_FILE_NAMES, ...MEMORY_FILE_NAMES]);
+
+function resolveAgentWorkspaceFileOrRespondError(
+  params: Record<string, unknown>,
+  respond: RespondFn,
+): {
+  cfg: ReturnType<typeof loadConfig>;
+  agentId: string;
+  workspaceDir: string;
+  name: string;
+} | null {
+  const cfg = loadConfig();
+  const agentId = resolveAgentIdOrError(String(params.agentId ?? ""), cfg);
+  if (!agentId) {
+    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown agent id"));
+    return null;
+  }
+  const name = String(params.name ?? "").trim();
+  if (!ALLOWED_FILE_NAMES.has(name)) {
+    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `unsupported file "${name}"`));
+    return null;
+  }
+  const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+  return { cfg, agentId, workspaceDir, name };
+}
 
 type FileMeta = {
   size: number;
@@ -403,22 +427,11 @@ export const agentsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const cfg = loadConfig();
-    const agentId = resolveAgentIdOrError(String(params.agentId ?? ""), cfg);
-    if (!agentId) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown agent id"));
+    const resolved = resolveAgentWorkspaceFileOrRespondError(params, respond);
+    if (!resolved) {
       return;
     }
-    const name = String(params.name ?? "").trim();
-    if (!ALLOWED_FILE_NAMES.has(name)) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `unsupported file "${name}"`),
-      );
-      return;
-    }
-    const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+    const { agentId, workspaceDir, name } = resolved;
     const filePath = path.join(workspaceDir, name);
     const meta = await statFile(filePath);
     if (!meta) {
@@ -465,22 +478,11 @@ export const agentsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const cfg = loadConfig();
-    const agentId = resolveAgentIdOrError(String(params.agentId ?? ""), cfg);
-    if (!agentId) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown agent id"));
+    const resolved = resolveAgentWorkspaceFileOrRespondError(params, respond);
+    if (!resolved) {
       return;
     }
-    const name = String(params.name ?? "").trim();
-    if (!ALLOWED_FILE_NAMES.has(name)) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `unsupported file "${name}"`),
-      );
-      return;
-    }
-    const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+    const { agentId, workspaceDir, name } = resolved;
     await fs.mkdir(workspaceDir, { recursive: true });
     const filePath = path.join(workspaceDir, name);
     const content = String(params.content ?? "");
