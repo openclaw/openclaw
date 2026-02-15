@@ -5,7 +5,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { SandboxFsBridge } from "../sandbox/fs-bridge.js";
 import type { AnyAgentTool } from "./common.js";
 import { resolveUserPath } from "../../utils.js";
-import { loadWebMedia } from "../../web/media.js";
+import { getDefaultLocalRoots, loadWebMedia } from "../../web/media.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "../auth-profiles.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { minimaxUnderstandImage } from "../minimax-vlm.js";
@@ -325,6 +325,7 @@ async function runImagePrompt(params: {
 export function createImageTool(options?: {
   config?: OpenClawConfig;
   agentDir?: string;
+  workspaceDir?: string;
   sandbox?: ImageSandboxConfig;
   /** If true, the model has native vision capability and images in the prompt are auto-injected */
   modelHasVision?: boolean;
@@ -350,6 +351,19 @@ export function createImageTool(options?: {
   const description = options?.modelHasVision
     ? "Analyze an image with a vision model. Only use this tool when the image was NOT already provided in the user's message. Images mentioned in the prompt are automatically visible to you."
     : "Analyze an image with the configured image model (agents.defaults.imageModel). Provide a prompt and image path or URL.";
+
+  const localRoots = (() => {
+    const roots = getDefaultLocalRoots();
+    const workspaceDir = options?.workspaceDir?.trim();
+    if (!workspaceDir) {
+      return roots;
+    }
+    const normalized = workspaceDir.startsWith("~") ? resolveUserPath(workspaceDir) : workspaceDir;
+    if (!roots.includes(normalized)) {
+      roots.push(normalized);
+    }
+    return roots;
+  })();
 
   return {
     label: "Image",
@@ -441,10 +455,14 @@ export function createImageTool(options?: {
         : sandboxConfig
           ? await loadWebMedia(resolvedPath ?? resolvedImage, {
               maxBytes,
+              localRoots: "any",
               readFile: (filePath) =>
                 sandboxConfig.bridge.readFile({ filePath, cwd: sandboxConfig.root }),
             })
-          : await loadWebMedia(resolvedPath ?? resolvedImage, maxBytes);
+          : await loadWebMedia(resolvedPath ?? resolvedImage, {
+              maxBytes,
+              localRoots,
+            });
       if (media.kind !== "image") {
         throw new Error(`Unsupported media type: ${media.kind}`);
       }

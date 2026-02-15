@@ -64,6 +64,7 @@ export function createOpenClawTools(options?: {
     ? createImageTool({
         config: options?.config,
         agentDir: options.agentDir,
+        workspaceDir: options?.workspaceDir,
         sandbox:
           options?.sandboxRoot && options?.sandboxFsBridge
             ? { root: options.sandboxRoot, bridge: options.sandboxFsBridge }
