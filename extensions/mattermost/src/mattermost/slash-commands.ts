@@ -251,6 +251,10 @@ export async function registerSlashCommands(params: {
     existing = await listMattermostCommands(client, teamId);
   } catch (err) {
     log?.(`mattermost: failed to list existing commands: ${String(err)}`);
+    // Fail closed: if we can't list existing commands, we should not attempt to
+    // create/update anything because we may create duplicates and end up with an
+    // empty/partial token set (causing callbacks to be rejected until restart).
+    throw err;
   }
 
   const existingByTrigger = new Map(existing.map((cmd) => [cmd.trigger, cmd]));
