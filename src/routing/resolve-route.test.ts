@@ -555,6 +555,29 @@ describe("backward compatibility: peer.kind dm → direct", () => {
     expect(route.agentId).toBe("alex");
     expect(route.matchedBy).toBe("binding.peer");
   });
+
+  test("runtime dm peer matches config direct binding", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "alex",
+          match: {
+            channel: "whatsapp",
+            peer: { kind: "direct", id: "+15551234567" },
+          },
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "whatsapp",
+      accountId: null,
+      // Runtime uses legacy "dm" — should be normalized to "direct"
+      peer: { kind: "dm" as ChatType, id: "+15551234567" },
+    });
+    expect(route.agentId).toBe("alex");
+    expect(route.matchedBy).toBe("binding.peer");
+  });
 });
 
 describe("role-based agent routing", () => {
