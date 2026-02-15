@@ -239,6 +239,8 @@ export type TelegramReplyTarget = {
   sender: string;
   body: string;
   kind: "reply" | "quote";
+  /** Forward context if the reply target was itself a forwarded message (issue #9619). */
+  forwardedFrom?: TelegramForwardedContext;
 };
 
 export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
@@ -284,11 +286,23 @@ export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
   const sender = replyLike ? buildSenderName(replyLike) : undefined;
   const senderLabel = sender ?? "unknown sender";
 
+  // Extract forward context from reply target if present (issue #9619)
+  // This happens when user forwards a message with a comment - the comment has
+  // reply_to_message pointing to the forwarded content.
+  let forwardedFrom: TelegramForwardedContext | undefined;
+  if (reply?.forward_origin) {
+    const forwardCtx = resolveForwardOrigin(reply.forward_origin);
+    if (forwardCtx) {
+      forwardedFrom = forwardCtx;
+    }
+  }
+
   return {
     id: replyLike?.message_id ? String(replyLike.message_id) : undefined,
     sender: senderLabel,
     body,
     kind,
+    forwardedFrom,
   };
 }
 
