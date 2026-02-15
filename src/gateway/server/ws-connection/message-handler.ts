@@ -25,6 +25,7 @@ import { upsertPresence } from "../../../infra/system-presence.js";
 import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";
 import { rawDataToString } from "../../../infra/ws.js";
 import { isGatewayCliClient, isWebchatClient } from "../../../utils/message-channel.js";
+import { VERSION } from "../../../version.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
   AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
@@ -827,7 +828,7 @@ export function attachGatewayWsMessageHandler(params: {
           type: "hello-ok",
           protocol: PROTOCOL_VERSION,
           server: {
-            version: process.env.OPENCLAW_VERSION ?? process.env.npm_package_version ?? "dev",
+            version: VERSION,
             commit: process.env.GIT_COMMIT,
             host: os.hostname(),
             connId,
