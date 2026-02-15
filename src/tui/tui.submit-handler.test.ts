@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { createEditorSubmitHandler } from "./tui.js";
+import {
+  createEditorSubmitHandler,
+  createSubmitBurstCoalescer,
+  shouldEnableWindowsGitBashPasteFallback,
+} from "./tui.js";
 
 describe("createEditorSubmitHandler", () => {
   it("routes lines starting with ! to handleBangLine", () => {
@@ -116,5 +120,72 @@ describe("createEditorSubmitHandler", () => {
     expect(editor.addToHistory).toHaveBeenCalledWith("Line 1\nLine 2\nLine 3");
     expect(handleCommand).not.toHaveBeenCalled();
     expect(handleBangLine).not.toHaveBeenCalled();
+  });
+});
+
+describe("createSubmitBurstCoalescer", () => {
+  it("coalesces rapid single-line submits into one multiline submit when enabled", () => {
+    vi.useFakeTimers();
+    const submit = vi.fn();
+    let now = 1_000;
+    const onSubmit = createSubmitBurstCoalescer({
+      submit,
+      enabled: true,
+      burstWindowMs: 50,
+      now: () => now,
+    });
+
+    onSubmit("Line 1");
+    now += 10;
+    onSubmit("Line 2");
+    now += 10;
+    onSubmit("Line 3");
+
+    expect(submit).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(50);
+
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(submit).toHaveBeenCalledWith("Line 1\nLine 2\nLine 3");
+    vi.useRealTimers();
+  });
+
+  it("passes through immediately when disabled", () => {
+    const submit = vi.fn();
+    const onSubmit = createSubmitBurstCoalescer({
+      submit,
+      enabled: false,
+    });
+
+    onSubmit("Line 1");
+    onSubmit("Line 2");
+
+    expect(submit).toHaveBeenCalledTimes(2);
+    expect(submit).toHaveBeenNthCalledWith(1, "Line 1");
+    expect(submit).toHaveBeenNthCalledWith(2, "Line 2");
+  });
+});
+
+describe("shouldEnableWindowsGitBashPasteFallback", () => {
+  it("enables fallback on Windows Git Bash env", () => {
+    expect(
+      shouldEnableWindowsGitBashPasteFallback({
+        platform: "win32",
+        env: {
+          MSYSTEM: "MINGW64",
+        } as NodeJS.ProcessEnv,
+      }),
+    ).toBe(true);
+  });
+
+  it("disables fallback outside Windows", () => {
+    expect(
+      shouldEnableWindowsGitBashPasteFallback({
+        platform: "darwin",
+        env: {
+          MSYSTEM: "MINGW64",
+        } as NodeJS.ProcessEnv,
+      }),
+    ).toBe(false);
   });
 });

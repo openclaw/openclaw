@@ -77,6 +77,99 @@ export function createEditorSubmitHandler(params: {
   };
 }
 
+export function shouldEnableWindowsGitBashPasteFallback(params?: {
+  platform?: string;
+  env?: NodeJS.ProcessEnv;
+}): boolean {
+  const platform = params?.platform ?? process.platform;
+  if (platform !== "win32") {
+    return false;
+  }
+  const env = params?.env ?? process.env;
+  const msystem = (env.MSYSTEM ?? "").toUpperCase();
+  const shell = env.SHELL ?? "";
+  const termProgram = (env.TERM_PROGRAM ?? "").toLowerCase();
+  if (msystem.startsWith("MINGW") || msystem.startsWith("MSYS")) {
+    return true;
+  }
+  if (shell.toLowerCase().includes("bash")) {
+    return true;
+  }
+  return termProgram.includes("mintty");
+}
+
+export function createSubmitBurstCoalescer(params: {
+  submit: (value: string) => void;
+  enabled: boolean;
+  burstWindowMs?: number;
+  now?: () => number;
+  setTimer?: typeof setTimeout;
+  clearTimer?: typeof clearTimeout;
+}) {
+  const windowMs = Math.max(1, params.burstWindowMs ?? 50);
+  const now = params.now ?? (() => Date.now());
+  const setTimer = params.setTimer ?? setTimeout;
+  const clearTimer = params.clearTimer ?? clearTimeout;
+  let pending: string | null = null;
+  let pendingAt = 0;
+  let flushTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const clearFlushTimer = () => {
+    if (!flushTimer) {
+      return;
+    }
+    clearTimer(flushTimer);
+    flushTimer = null;
+  };
+
+  const flushPending = () => {
+    if (pending === null) {
+      return;
+    }
+    const value = pending;
+    pending = null;
+    pendingAt = 0;
+    clearFlushTimer();
+    params.submit(value);
+  };
+
+  const scheduleFlush = () => {
+    clearFlushTimer();
+    flushTimer = setTimer(() => {
+      flushPending();
+    }, windowMs);
+  };
+
+  return (value: string) => {
+    if (!params.enabled) {
+      params.submit(value);
+      return;
+    }
+    if (value.includes("\n")) {
+      flushPending();
+      params.submit(value);
+      return;
+    }
+    const ts = now();
+    if (pending === null) {
+      pending = value;
+      pendingAt = ts;
+      scheduleFlush();
+      return;
+    }
+    if (ts - pendingAt <= windowMs) {
+      pending = `${pending}\n${value}`;
+      pendingAt = ts;
+      scheduleFlush();
+      return;
+    }
+    flushPending();
+    pending = value;
+    pendingAt = ts;
+    scheduleFlush();
+  };
+}
+
 export function resolveTuiSessionKey(params: {
   raw?: string;
   sessionScope: SessionScope;
@@ -612,11 +705,15 @@ export async function runTui(opts: TuiOptions) {
     closeOverlay,
   });
   updateAutocompleteProvider();
-  editor.onSubmit = createEditorSubmitHandler({
+  const submitHandler = createEditorSubmitHandler({
     editor,
     handleCommand,
     sendMessage,
     handleBangLine: runLocalShellLine,
+  });
+  editor.onSubmit = createSubmitBurstCoalescer({
+    submit: submitHandler,
+    enabled: shouldEnableWindowsGitBashPasteFallback(),
   });
 
   editor.onEscape = () => {
