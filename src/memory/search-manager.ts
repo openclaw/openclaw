@@ -33,10 +33,14 @@ export async function getMemorySearchManager(params: {
     }
     try {
       const { QmdMemoryManager } = await import("./qmd-manager.js");
+      // Clone the resolved config to prevent state pollution across agents.
+      // QmdManager constructor mutates resolved.collections, which can cause
+      // subsequence agents to inherit the previous agent's session collection
+      // if the resolved object is inadvertently shared or cached upstream.
       const primary = await QmdMemoryManager.create({
         cfg: params.cfg,
         agentId: params.agentId,
-        resolved,
+        resolved: structuredClone(resolved),
         mode: statusOnly ? "status" : "full",
       });
       if (primary) {
