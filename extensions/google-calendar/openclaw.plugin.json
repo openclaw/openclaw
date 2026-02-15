@@ -1,0 +1,21 @@
+{
+  "id": "google-calendar",
+  "name": "Google Calendar",
+  "description": "Query and manage Google Calendar events from your AI assistant.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "calendarId": { "type": "string" },
+      "accessToken": { "type": "string" }
+    }
+  },
+  "uiHints": {
+    "calendarId": { "label": "Calendar ID", "placeholder": "primary" },
+    "accessToken": {
+      "label": "Access Token",
+      "sensitive": true,
+      "help": "OAuth2 access token for Google Calendar API"
+    }
+  }
+}
