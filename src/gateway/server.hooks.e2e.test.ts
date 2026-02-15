@@ -14,15 +14,23 @@ installGatewayTestHooks({ scope: "suite" });
 
 const resolveMainKey = () => resolveMainSessionKeyFromConfig();
 
+async function withGatewayServer<T>(fn: (ctx: { port: number }) => Promise<T>): Promise<T> {
+  const port = await getFreePort();
+  const server = await startGatewayServer(port);
+  try {
+    return await fn({ port });
+  } finally {
+    await server.close();
+  }
+}
+
 describe("gateway server hooks", () => {
   test("handles auth, wake, and agent flows", async () => {
     testState.hooksConfig = { enabled: true, token: "hook-secret" };
     testState.agentsConfig = {
       list: [{ id: "main", default: true }, { id: "hooks" }],
     };
-    const port = await getFreePort();
-    const server = await startGatewayServer(port);
-    try {
+    await withGatewayServer(async ({ port }) => {
       const resNoAuth = await fetch(`http://127.0.0.1:${port}/hooks/wake`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -194,16 +202,12 @@ describe("gateway server hooks", () => {
         body: "{",
       });
       expect(resBadJson.status).toBe(400);
-    } finally {
-      await server.close();
-    }
+    });
   });
 
   test("rejects request sessionKey unless hooks.allowRequestSessionKey is enabled", async () => {
     testState.hooksConfig = { enabled: true, token: "hook-secret" };
-    const port = await getFreePort();
-    const server = await startGatewayServer(port);
-    try {
+    await withGatewayServer(async ({ port }) => {
       const denied = await fetch(`http://127.0.0.1:${port}/hooks/agent`, {
         method: "POST",
         headers: {
@@ -218,9 +222,7 @@ describe("gateway server hooks", () => {
       expect(denied.status).toBe(400);
       const deniedBody = (await denied.json()) as { error?: string };
       expect(deniedBody.error).toContain("hooks.allowRequestSessionKey");
-    } finally {
-      await server.close();
-    }
+    });
   });
 
   test("respects hooks session policy for request + mapping session keys", async () => {
@@ -245,9 +247,7 @@ describe("gateway server hooks", () => {
         },
       ],
     };
-    const port = await getFreePort();
-    const server = await startGatewayServer(port);
-    try {
+    await withGatewayServer(async ({ port }) => {
       cronIsolatedRun.mockReset();
       cronIsolatedRun.mockResolvedValue({ status: "ok", summary: "done" });
 
@@ -303,9 +303,7 @@ describe("gateway server hooks", () => {
         body: JSON.stringify({ subject: "hello" }),
       });
       expect(mappedBadPrefix.status).toBe(400);
-    } finally {
-      await server.close();
-    }
+    });
   });
 
   test("enforces hooks.allowedAgentIds for explicit agent routing", async () => {
@@ -325,9 +323,7 @@ describe("gateway server hooks", () => {
     testState.agentsConfig = {
       list: [{ id: "main", default: true }, { id: "hooks" }],
     };
-    const port = await getFreePort();
-    const server = await startGatewayServer(port);
-    try {
+    await withGatewayServer(async ({ port }) => {
       cronIsolatedRun.mockReset();
       cronIsolatedRun.mockResolvedValueOnce({
         status: "ok",
@@ -394,9 +390,7 @@ describe("gateway server hooks", () => {
       const mappedDeniedBody = (await resMappedDenied.json()) as { error?: string };
       expect(mappedDeniedBody.error).toContain("hooks.allowedAgentIds");
       expect(peekSystemEvents(resolveMainKey()).length).toBe(0);
-    } finally {
-      await server.close();
-    }
+    });
   });
 
   test("denies explicit agentId when hooks.allowedAgentIds is empty", async () => {
@@ -408,9 +402,7 @@ describe("gateway server hooks", () => {
     testState.agentsConfig = {
       list: [{ id: "main", default: true }, { id: "hooks" }],
     };
-    const port = await getFreePort();
-    const server = await startGatewayServer(port);
-    try {
+    await withGatewayServer(async ({ port }) => {
       const resDenied = await fetch(`http://127.0.0.1:${port}/hooks/agent`, {
         method: "POST",
         headers: {
@@ -423,16 +415,12 @@ describe("gateway server hooks", () => {
       const deniedBody = (await resDenied.json()) as { error?: string };
       expect(deniedBody.error).toContain("hooks.allowedAgentIds");
       expect(peekSystemEvents(resolveMainKey()).length).toBe(0);
-    } finally {
-      await server.close();
-    }
+    });
   });
 
   test("throttles repeated hook auth failures and resets after success", async () => {
     testState.hooksConfig = { enabled: true, token: "hook-secret" };
-    const port = await getFreePort();
-    const server = await startGatewayServer(port);
-    try {
+    await withGatewayServer(async ({ port }) => {
       const firstFail = await fetch(`http://127.0.0.1:${port}/hooks/wake`, {
         method: "POST",
         headers: {
@@ -478,8 +466,6 @@ describe("gateway server hooks", () => {
         body: JSON.stringify({ text: "blocked" }),
       });
       expect(failAfterSuccess.status).toBe(401);
-    } finally {
-      await server.close();
-    }
+    });
   });
 });
