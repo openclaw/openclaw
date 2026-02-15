@@ -1,0 +1,60 @@
+{
+  "id": "chia-watcher",
+  "description": "Chia blockchain wallet monitoring via P2P peer connection. Read-only: cannot spend coins or access keys.",
+  "securityNotice": "This extension opens P2P connections to Chia full nodes and stores transaction data locally. Review SECURITY.md before enabling.",
+  "uiHints": {
+    "network": {
+      "label": "Chia Network",
+      "help": "mainnet or testnet11"
+    },
+    "wallets": {
+      "label": "Wallet Addresses",
+      "help": "Array of xch1... addresses to monitor"
+    },
+    "autoStart": {
+      "label": "Auto-start on Gateway boot"
+    },
+    "notifyChannel": {
+      "label": "Notification Channel",
+      "help": "Channel to deliver alerts (telegram, discord, etc.)"
+    },
+    "notifyTo": {
+      "label": "Notification Recipient",
+      "help": "Target user/chat ID for notifications"
+    },
+    "dbPath": {
+      "label": "Database Path",
+      "advanced": true
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": { "type": "boolean" },
+      "network": { "type": "string", "enum": ["mainnet", "testnet11"], "default": "mainnet" },
+      "wallets": { "type": "array", "items": { "type": "string", "pattern": "^xch1[a-z0-9]{58}$" }, "maxItems": 50 },
+      "autoStart": { "type": "boolean", "default": true },
+      "notifyChannel": { "type": "string" },
+      "notifyTo": { "type": "string" },
+      "dbPath": { "type": "string" },
+      "memoHandlers": {
+        "type": "array",
+        "maxItems": 20,
+        "items": {
+          "type": "object",
+          "properties": {
+            "name": { "type": "string" },
+            "pattern": { "type": "string", "maxLength": 200 },
+            "template": { "type": "string", "maxLength": 500 },
+            "enabled": { "type": "boolean", "default": true }
+          },
+          "required": ["name", "pattern", "template"]
+        }
+      },
+      "minAmountXch": { "type": "number", "default": 0 },
+      "includeCATs": { "type": "boolean", "default": true },
+      "pollIntervalMs": { "type": "integer", "default": 30000, "minimum": 5000 }
+    }
+  }
+}
