@@ -69,6 +69,21 @@ async function touchSessionStore(params: {
   });
 }
 
+function parseSessionKeyFromPayloadJSON(payloadJSON: string): string | null {
+  let payload: unknown;
+  try {
+    payload = JSON.parse(payloadJSON) as unknown;
+  } catch {
+    return null;
+  }
+  if (typeof payload !== "object" || payload === null) {
+    return null;
+  }
+  const obj = payload as Record<string, unknown>;
+  const sessionKey = typeof obj.sessionKey === "string" ? obj.sessionKey.trim() : "";
+  return sessionKey.length > 0 ? sessionKey : null;
+}
+
 export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt: NodeEvent) => {
   switch (evt.event) {
     case "voice.transcript": {
@@ -187,15 +202,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       if (!evt.payloadJSON) {
         return;
       }
-      let payload: unknown;
-      try {
-        payload = JSON.parse(evt.payloadJSON) as unknown;
-      } catch {
-        return;
-      }
-      const obj =
-        typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>) : {};
-      const sessionKey = typeof obj.sessionKey === "string" ? obj.sessionKey.trim() : "";
+      const sessionKey = parseSessionKeyFromPayloadJSON(evt.payloadJSON);
       if (!sessionKey) {
         return;
       }
@@ -206,15 +213,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       if (!evt.payloadJSON) {
         return;
       }
-      let payload: unknown;
-      try {
-        payload = JSON.parse(evt.payloadJSON) as unknown;
-      } catch {
-        return;
-      }
-      const obj =
-        typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>) : {};
-      const sessionKey = typeof obj.sessionKey === "string" ? obj.sessionKey.trim() : "";
+      const sessionKey = parseSessionKeyFromPayloadJSON(evt.payloadJSON);
       if (!sessionKey) {
         return;
       }
