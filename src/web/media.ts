@@ -2,8 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
-import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { STATE_DIR } from "../config/paths.js";
+import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { type MediaKind, maxBytesForKind, mediaKindFromMime } from "../media/constants.js";
 import { fetchRemoteMedia } from "../media/fetch.js";
 import {
@@ -79,10 +79,7 @@ async function assertLocalMediaAllowed(
     }
     if (resolved === resolvedRoot || resolved.startsWith(resolvedRoot + path.sep)) {
       // It matches an allowed root. Check for the STATE_DIR trap.
-      if (
-        resolved === stateDirResolved ||
-        resolved.startsWith(stateDirResolved + path.sep)
-      ) {
+      if (resolved === stateDirResolved || resolved.startsWith(stateDirResolved + path.sep)) {
         // If the allowed root itself is inside (or is) STATE_DIR, then this is an explicit allowance.
         if (
           resolvedRoot === stateDirResolved ||
