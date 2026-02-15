@@ -146,11 +146,13 @@ async function authorizeSlashInvocation(params: {
 
   const channelType = channelInfo?.type ?? undefined;
   const isDirectMessage = channelType?.toUpperCase() === "D";
-  const kind = isDirectMessage
+  const kind: SlashInvocationAuth["kind"] = isDirectMessage
     ? "direct"
-    : channelType?.toUpperCase() === "G"
-      ? "group"
-      : "channel";
+    : channelInfo
+      ? channelType?.toUpperCase() === "G"
+        ? "group"
+        : "channel"
+      : "direct";
 
   const chatType = kind === "direct" ? "direct" : kind === "group" ? "group" : "channel";
 
