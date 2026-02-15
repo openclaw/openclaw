@@ -1,6 +1,10 @@
 import type { OpenClawConfig } from "../config/config.js";
 
-export const DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR = 20_000;
+// Increased from 20_000 to 40_000 to fix auto-compaction triggering too late
+// See: https://github.com/openclaw/openclaw/issues/7294
+// With 200k context window, this triggers at 160k (80%) instead of 183k (91.8%)
+// Provides ~20% buffer for system prompt, tool definitions, and project context overhead
+export const DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR = 40_000;
 
 type PiSettingsManagerLike = {
   getCompactionReserveTokens: () => number;
