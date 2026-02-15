@@ -49,6 +49,15 @@ describe("resolveTranscriptPolicy", () => {
     expect(policy.stripCompletionsReasoningFieldSignatures).toBe(true);
   });
 
+  it("enables stripCompletionsReasoningFieldSignatures for Copilot openai-responses", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "github-copilot",
+      modelId: "claude-opus-4.6-fast",
+      modelApi: "openai-responses",
+    });
+    expect(policy.stripCompletionsReasoningFieldSignatures).toBe(true);
+  });
+
   it("disables stripCompletionsReasoningFieldSignatures for native OpenAI provider", () => {
     const policy = resolveTranscriptPolicy({
       provider: "openai",

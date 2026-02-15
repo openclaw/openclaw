@@ -108,11 +108,11 @@ export function resolveTranscriptPolicy(params: {
     : undefined;
   const normalizeAntigravityThinkingBlocks = isAntigravityClaudeModel;
 
-  // openai-completions providers that proxy to Anthropic (e.g. GitHub Copilot → Claude)
-  // can receive thinking blocks where pi-ai stored the reasoning field name as
-  // the thinkingSignature. Strip those to prevent 400s on Anthropic.
+  // Providers using OpenAI-compatible APIs that proxy to Anthropic (e.g. GitHub
+  // Copilot → Claude) can receive thinking blocks where pi-ai stored the
+  // reasoning field name as the thinkingSignature. Strip those to prevent 400s.
   const stripCompletionsFieldSignatures =
-    params.modelApi === "openai-completions" && !isOpenAi && !isGoogle && !isAnthropic;
+    isOpenAiApi(params.modelApi) && !isOpenAi && !isGoogle && !isAnthropic;
 
   return {
     sanitizeMode: isOpenAi ? "images-only" : needsNonImageSanitize ? "full" : "images-only",
