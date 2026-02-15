@@ -35,22 +35,21 @@ export type SkillScanOptions = {
 // Scannable extensions
 // ---------------------------------------------------------------------------
 
-const SCANNABLE_EXTENSIONS = new Set([
-  ".js",
-  ".ts",
-  ".mjs",
-  ".cjs",
-  ".mts",
-  ".cts",
-  ".jsx",
-  ".tsx",
-]);
+const CODE_EXTENSIONS = new Set([".js", ".ts", ".mjs", ".cjs", ".mts", ".cts", ".jsx", ".tsx"]);
+
+/** Extensions scanned for invisible Unicode only (no code rules). */
+const TEXT_EXTENSIONS = new Set([".md", ".txt", ".yaml", ".yml", ".json"]);
 
 const DEFAULT_MAX_SCAN_FILES = 500;
 const DEFAULT_MAX_FILE_BYTES = 1024 * 1024;
 
 export function isScannable(filePath: string): boolean {
-  return SCANNABLE_EXTENSIONS.has(path.extname(filePath).toLowerCase());
+  const ext = path.extname(filePath).toLowerCase();
+  return CODE_EXTENSIONS.has(ext) || TEXT_EXTENSIONS.has(ext);
+}
+
+function isCodeFile(filePath: string): boolean {
+  return CODE_EXTENSIONS.has(path.extname(filePath).toLowerCase());
 }
 
 // ---------------------------------------------------------------------------
@@ -75,6 +74,206 @@ type SourceRule = {
   /** Secondary context pattern; both must match for the rule to fire. */
   requiresContext?: RegExp;
 };
+
+// ---------------------------------------------------------------------------
+// Unicode safety helpers
+// ---------------------------------------------------------------------------
+
+type InvisibleUnicodeFileSummary = {
+  renderedEvidence: string;
+  evidenceLine: number;
+  uniqueCodePoints: string[];
+  total: number;
+  tags: number;
+  variationSelectors: number;
+  bidi: number;
+  other: number;
+  longestConsecutiveRun: number;
+  severity: SkillScanSeverity;
+};
+
+const INVISIBLE_UNICODE_PATTERN =
+  /[\u061C\u200B\u200C\u200D\u200E\u200F\u2060\u202A-\u202E\u2066-\u2069\uFE00-\uFE0F\uFEFF\u{E0000}-\u{E007F}\u{E0100}-\u{E01EF}]/u;
+
+function isInvisibleUnicodeCodePoint(codePoint: number): boolean {
+  return (
+    codePoint === 0x061c ||
+    (codePoint >= 0x200b && codePoint <= 0x200f) ||
+    codePoint === 0x2060 ||
+    (codePoint >= 0x202a && codePoint <= 0x202e) ||
+    (codePoint >= 0x2066 && codePoint <= 0x2069) ||
+    (codePoint >= 0xfe00 && codePoint <= 0xfe0f) ||
+    codePoint === 0xfeff ||
+    (codePoint >= 0xe0000 && codePoint <= 0xe007f) ||
+    (codePoint >= 0xe0100 && codePoint <= 0xe01ef)
+  );
+}
+
+function isBidiControlCodePoint(codePoint: number): boolean {
+  return (
+    codePoint === 0x061c ||
+    codePoint === 0x200e ||
+    codePoint === 0x200f ||
+    (codePoint >= 0x202a && codePoint <= 0x202e) ||
+    (codePoint >= 0x2066 && codePoint <= 0x2069)
+  );
+}
+
+function formatUnicodeCodePoint(codePoint: number): string {
+  const hex = codePoint.toString(16).toUpperCase();
+  const padded = hex.padStart(4, "0");
+  return `U+${padded}`;
+}
+
+function isTagCodePoint(codePoint: number): boolean {
+  return codePoint >= 0xe0000 && codePoint <= 0xe007f;
+}
+
+function isVariationSelectorCodePoint(codePoint: number): boolean {
+  return (
+    (codePoint >= 0xfe00 && codePoint <= 0xfe0f) || (codePoint >= 0xe0100 && codePoint <= 0xe01ef)
+  );
+}
+
+function describeInvisibleUnicodeCodePoint(codePoint: number): string {
+  switch (codePoint) {
+    case 0x061c:
+      return `${formatUnicodeCodePoint(codePoint)} ARABIC LETTER MARK`;
+    case 0x200b:
+      return `${formatUnicodeCodePoint(codePoint)} ZERO WIDTH SPACE`;
+    case 0x200c:
+      return `${formatUnicodeCodePoint(codePoint)} ZERO WIDTH NON-JOINER`;
+    case 0x200d:
+      return `${formatUnicodeCodePoint(codePoint)} ZERO WIDTH JOINER`;
+    case 0x200e:
+      return `${formatUnicodeCodePoint(codePoint)} LEFT-TO-RIGHT MARK`;
+    case 0x200f:
+      return `${formatUnicodeCodePoint(codePoint)} RIGHT-TO-LEFT MARK`;
+    case 0x202a:
+      return `${formatUnicodeCodePoint(codePoint)} LEFT-TO-RIGHT EMBEDDING`;
+    case 0x202b:
+      return `${formatUnicodeCodePoint(codePoint)} RIGHT-TO-LEFT EMBEDDING`;
+    case 0x202c:
+      return `${formatUnicodeCodePoint(codePoint)} POP DIRECTIONAL FORMATTING`;
+    case 0x202d:
+      return `${formatUnicodeCodePoint(codePoint)} LEFT-TO-RIGHT OVERRIDE`;
+    case 0x202e:
+      return `${formatUnicodeCodePoint(codePoint)} RIGHT-TO-LEFT OVERRIDE`;
+    case 0x2060:
+      return `${formatUnicodeCodePoint(codePoint)} WORD JOINER`;
+    case 0x2066:
+      return `${formatUnicodeCodePoint(codePoint)} LEFT-TO-RIGHT ISOLATE`;
+    case 0x2067:
+      return `${formatUnicodeCodePoint(codePoint)} RIGHT-TO-LEFT ISOLATE`;
+    case 0x2068:
+      return `${formatUnicodeCodePoint(codePoint)} FIRST STRONG ISOLATE`;
+    case 0x2069:
+      return `${formatUnicodeCodePoint(codePoint)} POP DIRECTIONAL ISOLATE`;
+    case 0xfeff:
+      return `${formatUnicodeCodePoint(codePoint)} ZERO WIDTH NO-BREAK SPACE (BOM)`;
+    default: {
+      if (codePoint >= 0xfe00 && codePoint <= 0xfe0f) {
+        return `${formatUnicodeCodePoint(codePoint)} VARIATION SELECTOR`;
+      }
+      if (codePoint >= 0xe0100 && codePoint <= 0xe01ef) {
+        return `${formatUnicodeCodePoint(codePoint)} VARIATION SELECTOR (SUPPLEMENT)`;
+      }
+      if (codePoint >= 0xe0000 && codePoint <= 0xe007f) {
+        return `${formatUnicodeCodePoint(codePoint)} TAG CHARACTER`;
+      }
+      return formatUnicodeCodePoint(codePoint);
+    }
+  }
+}
+
+function scanInvisibleUnicodeInFile(source: string): InvisibleUnicodeFileSummary | null {
+  if (!INVISIBLE_UNICODE_PATTERN.test(source)) {
+    return null;
+  }
+
+  const unique = new Map<number, string>();
+  const lines = source.split("\n");
+  let evidenceLine = 0;
+  let renderedEvidence = "";
+
+  let total = 0;
+  let tags = 0;
+  let variationSelectors = 0;
+  let bidi = 0;
+  let other = 0;
+  let longestConsecutiveRun = 0;
+  let currentRun = 0;
+
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+    const line = lines[lineIndex].replace(/\r$/, "");
+    if (!INVISIBLE_UNICODE_PATTERN.test(line)) {
+      currentRun = 0;
+      continue;
+    }
+
+    const parts: string[] = [];
+    for (const ch of line) {
+      const codePoint = ch.codePointAt(0);
+      if (codePoint === undefined || !isInvisibleUnicodeCodePoint(codePoint)) {
+        if (currentRun > longestConsecutiveRun) {
+          longestConsecutiveRun = currentRun;
+        }
+        currentRun = 0;
+        parts.push(ch);
+        continue;
+      }
+
+      total += 1;
+      currentRun += 1;
+      if (isBidiControlCodePoint(codePoint)) {
+        bidi += 1;
+      } else if (isTagCodePoint(codePoint)) {
+        tags += 1;
+      } else if (isVariationSelectorCodePoint(codePoint)) {
+        variationSelectors += 1;
+      } else {
+        other += 1;
+      }
+
+      if (!unique.has(codePoint)) {
+        unique.set(codePoint, describeInvisibleUnicodeCodePoint(codePoint));
+      }
+
+      if (evidenceLine === 0) {
+        parts.push(`<${unique.get(codePoint) ?? formatUnicodeCodePoint(codePoint)}>`);
+      }
+    }
+
+    if (currentRun > longestConsecutiveRun) {
+      longestConsecutiveRun = currentRun;
+    }
+    currentRun = 0;
+
+    if (evidenceLine === 0) {
+      evidenceLine = lineIndex + 1;
+      renderedEvidence = parts.length > 0 ? parts.join("") : line;
+    }
+  }
+
+  if (total === 0) {
+    return null;
+  }
+
+  const severity: SkillScanSeverity = "warn";
+
+  return {
+    renderedEvidence,
+    evidenceLine: evidenceLine || 1,
+    uniqueCodePoints: [...unique.values()],
+    total,
+    tags,
+    variationSelectors,
+    bidi,
+    other,
+    longestConsecutiveRun,
+    severity,
+  };
+}
 
 const LINE_RULES: LineRule[] = [
   {
@@ -101,6 +300,13 @@ const LINE_RULES: LineRule[] = [
     severity: "warn",
     message: "WebSocket connection to non-standard port",
     pattern: /new\s+WebSocket\s*\(\s*["']wss?:\/\/[^"']*:(\d+)/,
+  },
+  {
+    ruleId: "invisible-unicode",
+    severity: "warn",
+    message:
+      "Invisible Unicode formatting/tag characters detected (possible obfuscation or Trojan Source)",
+    pattern: INVISIBLE_UNICODE_PATTERN,
   },
 ];
 
@@ -152,9 +358,16 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
   const lines = source.split("\n");
   const matchedLineRules = new Set<string>();
 
+  const codeFile = isCodeFile(filePath);
+
   // --- Line rules ---
   for (const rule of LINE_RULES) {
     if (matchedLineRules.has(rule.ruleId)) {
+      continue;
+    }
+
+    // Non-code files (e.g. .md) only get the invisible-unicode check
+    if (!codeFile && rule.ruleId !== "invisible-unicode") {
       continue;
     }
 
@@ -178,6 +391,58 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
         }
       }
 
+      if (rule.ruleId === "invisible-unicode") {
+        const summary = scanInvisibleUnicodeInFile(source);
+        if (!summary) {
+          continue;
+        }
+
+        // Skip files with only isolated invisible chars (e.g. emoji variation
+        // selectors). Report only when there are 10+ consecutive invisible
+        // code points (likely ASCII smuggling / hidden prompt injection) or
+        // any bidi controls (Trojan Source risk even in small numbers).
+        if (summary.longestConsecutiveRun < 10 && summary.bidi === 0) {
+          continue;
+        }
+        const uniqueList =
+          summary.uniqueCodePoints.length > 4
+            ? `${summary.uniqueCodePoints.slice(0, 4).join(", ")} (+${
+                summary.uniqueCodePoints.length - 4
+              } more)`
+            : summary.uniqueCodePoints.join(", ");
+
+        const parts: string[] = [
+          `${summary.total} invisible char(s)`,
+          `longest consecutive run: ${summary.longestConsecutiveRun}`,
+        ];
+        if (summary.tags > 0) {
+          parts.push(`tags=${summary.tags}`);
+        }
+        if (summary.variationSelectors > 0) {
+          parts.push(`vs=${summary.variationSelectors}`);
+        }
+        if (summary.bidi > 0) {
+          parts.push(`bidi=${summary.bidi}`);
+        }
+        parts.push(uniqueList);
+
+        const hint =
+          summary.longestConsecutiveRun >= 10
+            ? " — long consecutive sequences are suspicious and may indicate ASCII smuggling or hidden prompt injection"
+            : " — bidi controls can flip displayed code direction (Trojan Source risk)";
+
+        findings.push({
+          ruleId: rule.ruleId,
+          severity: summary.severity,
+          file: filePath,
+          line: summary.evidenceLine,
+          message: `${rule.message} (${parts.join("; ")}${hint})`,
+          evidence: truncateEvidence(summary.renderedEvidence),
+        });
+        matchedLineRules.add(rule.ruleId);
+        break; // one finding per line-rule per file
+      }
+
       findings.push({
         ruleId: rule.ruleId,
         severity: rule.severity,
@@ -191,7 +456,10 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
     }
   }
 
-  // --- Source rules ---
+  // --- Source rules (code files only) ---
+  if (!codeFile) {
+    return findings;
+  }
   const matchedSourceRules = new Set<string>();
   for (const rule of SOURCE_RULES) {
     // Allow multiple findings for different messages with the same ruleId
