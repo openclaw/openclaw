@@ -342,12 +342,17 @@ if (passthroughArgs.length > 0) {
     (acc, flag) => (acc.includes(flag) ? acc : `${acc} ${flag}`.trim()),
     nodeOptions,
   );
+  const heapFlag =
+    maxOldSpaceSizeMb && !nextNodeOptions.includes("--max-old-space-size=")
+      ? `--max-old-space-size=${maxOldSpaceSizeMb}`
+      : null;
+  const resolvedNodeOptions = heapFlag ? `${nextNodeOptions} ${heapFlag}`.trim() : nextNodeOptions;
   const code = await new Promise((resolve) => {
     let child;
     try {
       child = spawn(pnpm, args, {
         stdio: "inherit",
-        env: { ...process.env, NODE_OPTIONS: nextNodeOptions },
+        env: { ...process.env, NODE_OPTIONS: resolvedNodeOptions },
         shell: isWindows,
       });
     } catch (err) {

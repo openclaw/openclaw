@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import { resolveStateDir } from "../config/paths.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { type MediaKind, maxBytesForKind, mediaKindFromMime } from "../media/constants.js";
 import { fetchRemoteMedia } from "../media/fetch.js";
@@ -53,22 +54,17 @@ async function assertLocalMediaAllowed(
     resolved = path.resolve(mediaPath);
   }
 
-  // Hardening: the default allowlist includes `os.tmpdir()`, and tests/CI may
-  // override the state dir into tmp. Avoid accidentally allowing per-agent
-  // `workspace-*` state roots via the tmpdir prefix match; require explicit
-  // localRoots for those.
-  if (localRoots === undefined) {
-    const workspaceRoot = roots.find((root) => path.basename(root) === "workspace");
-    if (workspaceRoot) {
-      const stateDir = path.dirname(workspaceRoot);
-      const rel = path.relative(stateDir, resolved);
-      if (rel && !rel.startsWith("..") && !path.isAbsolute(rel)) {
-        const firstSegment = rel.split(path.sep)[0] ?? "";
-        if (firstSegment.startsWith("workspace-")) {
-          throw new Error(`Local media path is not under an allowed directory: ${mediaPath}`);
-        }
-      }
-    }
+  // Security hardening: If the path is inside STATE_DIR, we must ensure it is either:
+  // 1. Explicitly allowed by a specific localRoot that is also inside STATE_DIR.
+  // 2. Inside one of the standard allowed subdirectories (media, agents, workspace, sandboxes).
+  // This prevents broader roots (like /tmp, if STATE_DIR is in /tmp) from accidentally exposing
+  // restricted STATE_DIR subdirectories (like workspace-*).
+  let stateDirResolved: string;
+  const stateDir = resolveStateDir();
+  try {
+    stateDirResolved = await fs.realpath(stateDir);
+  } catch {
+    stateDirResolved = path.resolve(stateDir);
   }
   for (const root of roots) {
     let resolvedRoot: string;
@@ -83,6 +79,33 @@ async function assertLocalMediaAllowed(
       );
     }
     if (resolved === resolvedRoot || resolved.startsWith(resolvedRoot + path.sep)) {
+      // It matches an allowed root. Check for the STATE_DIR trap.
+      if (resolved === stateDirResolved || resolved.startsWith(stateDirResolved + path.sep)) {
+        // If the allowed root itself is inside (or is) STATE_DIR, then this is an explicit allowance.
+        if (
+          resolvedRoot === stateDirResolved ||
+          resolvedRoot.startsWith(stateDirResolved + path.sep)
+        ) {
+          return;
+        }
+
+        // Otherwise, the root is outside (e.g. /tmp). We must verify the subdirectory.
+        const allowedSubdirs = ["media", "agents", "workspace", "sandboxes"];
+        const isAllowedSubdir = allowedSubdirs.some((sub) => {
+          const subPath = path.join(stateDirResolved, sub);
+          return resolved === subPath || resolved.startsWith(subPath + path.sep);
+        });
+
+        if (isAllowedSubdir) {
+          return;
+        }
+
+        // Matched a broad root but failed STATE_DIR restriction.
+        // Continue searching for a more specific root?
+        // If we don't find one, we will correctly throw at the end.
+        continue;
+      }
+
       return;
     }
   }
