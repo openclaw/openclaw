@@ -15,7 +15,17 @@ type SignalToolResultTestMocks = {
   signalRpcRequestMock: MockFn;
 };
 
-export function getSignalToolResultTestMocks(): unknown {
+const waitForTransportReadyMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
+const sendMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
+const replyMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
+const updateLastRouteMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
+const readAllowFromStoreMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
+const upsertPairingRequestMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
+const streamMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
+const signalCheckMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
+const signalRpcRequestMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
+
+export function getSignalToolResultTestMocks(): SignalToolResultTestMocks {
   return {
     waitForTransportReadyMock,
     sendMock,
