@@ -143,9 +143,22 @@ export const buildTelegramMessageContext = async ({
   logger,
   resolveGroupActivation,
   resolveGroupRequireMention,
+
   resolveTelegramGroupConfig,
 }: BuildTelegramMessageContextParams) => {
   const msg = primaryCtx.message;
+  // Sanity check: Ensure we are starting with a numeric ID as expected.
+  if (typeof msg.chat.id === "number" && !Number.isSafeInteger(msg.chat.id)) {
+    logger.info(
+      { chatId: String(msg.chat.id) },
+      "telegram context warning: potentially unsafe integer chat_id",
+    );
+  } else if (typeof msg.chat.id !== "number") {
+    logger.info(
+      { chatId: String(msg.chat.id), type: typeof msg.chat.id },
+      "telegram context warning: non-numeric chat_id",
+    );
+  }
   recordChannelActivity({
     channel: "telegram",
     accountId: account.accountId,
