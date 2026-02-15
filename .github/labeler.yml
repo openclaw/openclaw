@@ -109,6 +109,11 @@
       - any-glob-to-any-file:
           - "extensions/zalouser/**"
           - "docs/channels/zalouser.md"
+"channel: infoflow":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/infoflow/**"
+          - "docs/channels/infoflow.md"
 
 "app: android":
   - changed-files:
