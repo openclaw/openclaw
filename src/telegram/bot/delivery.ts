@@ -1,3 +1,4 @@
+import type { MessageEntity } from "@grammyjs/types";
 import { type Bot, GrammyError, InputFile } from "grammy";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { ReplyToMode } from "../../config/config.js";
@@ -32,6 +33,56 @@ import {
 
 const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
 const VOICE_FORBIDDEN_RE = /VOICE_MESSAGES_FORBIDDEN/;
+
+/**
+ * Split text + entities into chunks that fit within the Telegram character limit
+ * without breaking any entity across chunk boundaries.
+ */
+function splitTextWithEntities(
+  text: string,
+  entities: MessageEntity[],
+  limit: number,
+): Array<{ text: string; entities: MessageEntity[] }> {
+  if (text.length <= limit) {
+    return [{ text, entities }];
+  }
+  const sorted = [...entities].toSorted((a, b) => a.offset - b.offset);
+  const chunks: Array<{ text: string; entities: MessageEntity[] }> = [];
+  let offset = 0;
+  while (offset < text.length) {
+    let end = Math.min(offset + limit, text.length);
+    if (end < text.length) {
+      // Move split point before any entity that would be bisected.
+      for (const e of sorted) {
+        if (e.offset < end && e.offset + e.length > end) {
+          end = e.offset;
+          break;
+        }
+      }
+      // Prefer splitting at a newline (if one exists after offset).
+      const nl = text.lastIndexOf("\n", end - 1);
+      if (nl > offset) {
+        const nlSafe = sorted.every((e) => !(e.offset <= nl && e.offset + e.length > nl));
+        if (nlSafe) {
+          end = nl + 1;
+        }
+      }
+      // Safeguard: ensure forward progress.
+      if (end <= offset) {
+        end = Math.min(offset + limit, text.length);
+      }
+    }
+    const chunkEntities: MessageEntity[] = [];
+    for (const e of sorted) {
+      if (e.offset >= offset && e.offset + e.length <= end) {
+        chunkEntities.push({ ...e, offset: e.offset - offset });
+      }
+    }
+    chunks.push({ text: text.slice(offset, end), entities: chunkEntities });
+    offset = end;
+  }
+  return chunks;
+}
 
 export async function deliverReplies(params: {
   replies: ReplyPayload[];
@@ -107,31 +158,56 @@ export async function deliverReplies(params: {
         ? [reply.mediaUrl]
         : [];
     const telegramData = reply.channelData?.telegram as
-      | { buttons?: Array<Array<{ text: string; callback_data: string }>> }
+      | {
+          buttons?: Array<Array<{ text: string; callback_data: string }>>;
+          entities?: MessageEntity[];
+        }
       | undefined;
     const replyMarkup = buildInlineKeyboard(telegramData?.buttons);
+    const telegramEntities = telegramData?.entities;
     if (mediaList.length === 0) {
-      const chunks = chunkText(reply.text || "");
-      for (let i = 0; i < chunks.length; i += 1) {
-        const chunk = chunks[i];
-        if (!chunk) {
-          continue;
+      // When entities are provided, send raw text with entities (entity-aware chunking).
+      if (telegramEntities?.length) {
+        const entityChunks = splitTextWithEntities(reply.text || "", telegramEntities, textLimit);
+        for (let i = 0; i < entityChunks.length; i += 1) {
+          const chunk = entityChunks[i];
+          await sendTelegramText(bot, chatId, chunk.text, runtime, {
+            replyToMessageId:
+              replyToId && (replyToMode === "all" || !hasReplied) ? replyToId : undefined,
+            replyQuoteText,
+            thread,
+            linkPreview,
+            replyMarkup: i === 0 ? (replyMarkup ?? undefined) : undefined,
+            entities: chunk.entities,
+          });
+          markDelivered();
+          if (replyToId && !hasReplied) {
+            hasReplied = true;
+          }
         }
-        // Only attach buttons to the first chunk.
-        const shouldAttachButtons = i === 0 && replyMarkup;
-        await sendTelegramText(bot, chatId, chunk.html, runtime, {
-          replyToMessageId:
-            replyToId && (replyToMode === "all" || !hasReplied) ? replyToId : undefined,
-          replyQuoteText,
-          thread,
-          textMode: "html",
-          plainText: chunk.text,
-          linkPreview,
-          replyMarkup: shouldAttachButtons ? replyMarkup : undefined,
-        });
-        markDelivered();
-        if (replyToId && !hasReplied) {
-          hasReplied = true;
+      } else {
+        const chunks = chunkText(reply.text || "");
+        for (let i = 0; i < chunks.length; i += 1) {
+          const chunk = chunks[i];
+          if (!chunk) {
+            continue;
+          }
+          // Only attach buttons to the first chunk.
+          const shouldAttachButtons = i === 0 && replyMarkup;
+          await sendTelegramText(bot, chatId, chunk.html, runtime, {
+            replyToMessageId:
+              replyToId && (replyToMode === "all" || !hasReplied) ? replyToId : undefined,
+            replyQuoteText,
+            thread,
+            textMode: "html",
+            plainText: chunk.text,
+            linkPreview,
+            replyMarkup: shouldAttachButtons ? replyMarkup : undefined,
+          });
+          markDelivered();
+          if (replyToId && !hasReplied) {
+            hasReplied = true;
+          }
         }
       }
       continue;
@@ -512,6 +588,7 @@ async function sendTelegramText(
     plainText?: string;
     linkPreview?: boolean;
     replyMarkup?: ReturnType<typeof buildInlineKeyboard>;
+    entities?: MessageEntity[];
   },
 ): Promise<number | undefined> {
   const baseParams = buildTelegramSendParams({
@@ -521,6 +598,23 @@ async function sendTelegramText(
   // Add link_preview_options when link preview is disabled.
   const linkPreviewEnabled = opts?.linkPreview ?? true;
   const linkPreviewOptions = linkPreviewEnabled ? undefined : { is_disabled: true };
+
+  // When entities are provided, send with entities instead of parse_mode.
+  if (opts?.entities?.length) {
+    const res = await withTelegramApiErrorLogging({
+      operation: "sendMessage",
+      runtime,
+      fn: () =>
+        bot.api.sendMessage(chatId, text, {
+          entities: opts.entities,
+          ...(linkPreviewOptions ? { link_preview_options: linkPreviewOptions } : {}),
+          ...(opts?.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
+          ...baseParams,
+        }),
+    });
+    return res.message_id;
+  }
+
   const textMode = opts?.textMode ?? "markdown";
   const htmlText = textMode === "html" ? text : markdownToTelegramHtml(text);
   try {
