@@ -364,6 +364,51 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(loadHistory).toHaveBeenCalledTimes(1);
   });
 
+  it("does not reload history or clear active run when another run final arrives mid-stream", () => {
+    const state = makeState({ activeChatRunId: "run-active" });
+    const { chatLog, tui, setActivityStatus, loadHistory, isLocalRunId, forgetLocalRunId } =
+      makeContext(state);
+    const { handleChatEvent } = createEventHandlers({
+      chatLog,
+      tui,
+      state,
+      setActivityStatus,
+      loadHistory,
+      isLocalRunId,
+      forgetLocalRunId,
+    });
+
+    handleChatEvent({
+      runId: "run-active",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "partial" },
+    });
+
+    loadHistory.mockClear();
+    setActivityStatus.mockClear();
+
+    handleChatEvent({
+      runId: "run-other",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "other final" }] },
+    });
+
+    expect(loadHistory).not.toHaveBeenCalled();
+    expect(state.activeChatRunId).toBe("run-active");
+    expect(setActivityStatus).not.toHaveBeenCalledWith("idle");
+
+    handleChatEvent({
+      runId: "run-active",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "continued" },
+    });
+
+    expect(chatLog.updateAssistant).toHaveBeenLastCalledWith("continued", "run-active");
+  });
+
   it("drops streaming assistant when chat final has no message", () => {
     const state = makeState({ activeChatRunId: null });
     const { chatLog, tui, setActivityStatus } = makeContext(state);
