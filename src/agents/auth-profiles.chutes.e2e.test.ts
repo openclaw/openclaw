@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { captureEnv } from "../test-utils/env.js";
 import {
   type AuthProfileStore,
   ensureAuthProfileStore,
@@ -10,10 +11,7 @@ import {
 import { CHUTES_TOKEN_ENDPOINT, type ChutesStoredOAuth } from "./chutes-oauth.js";
 
 describe("auth-profiles (chutes)", () => {
-  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-  const previousAgentDir = process.env.OPENCLAW_AGENT_DIR;
-  const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
-  const previousChutesClientId = process.env.CHUTES_CLIENT_ID;
+  let envSnapshot: ReturnType<typeof captureEnv> | undefined;
   let tempDir: string | null = null;
 
   afterEach(async () => {
@@ -22,29 +20,17 @@ describe("auth-profiles (chutes)", () => {
       await fs.rm(tempDir, { recursive: true, force: true });
       tempDir = null;
     }
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    }
-    if (previousAgentDir === undefined) {
-      delete process.env.OPENCLAW_AGENT_DIR;
-    } else {
-      process.env.OPENCLAW_AGENT_DIR = previousAgentDir;
-    }
-    if (previousPiAgentDir === undefined) {
-      delete process.env.PI_CODING_AGENT_DIR;
-    } else {
-      process.env.PI_CODING_AGENT_DIR = previousPiAgentDir;
-    }
-    if (previousChutesClientId === undefined) {
-      delete process.env.CHUTES_CLIENT_ID;
-    } else {
-      process.env.CHUTES_CLIENT_ID = previousChutesClientId;
-    }
+    envSnapshot?.restore();
+    envSnapshot = undefined;
   });
 
   it("refreshes expired Chutes OAuth credentials", async () => {
+    envSnapshot = captureEnv([
+      "OPENCLAW_STATE_DIR",
+      "OPENCLAW_AGENT_DIR",
+      "PI_CODING_AGENT_DIR",
+      "CHUTES_CLIENT_ID",
+    ]);
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-chutes-"));
     process.env.OPENCLAW_STATE_DIR = tempDir;
     process.env.OPENCLAW_AGENT_DIR = path.join(tempDir, "agents", "main", "agent");
