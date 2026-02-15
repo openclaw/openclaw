@@ -10,12 +10,7 @@ import {
 } from "../config/config.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { stylePromptHint, stylePromptMessage, stylePromptTitle } from "../terminal/prompt-style.js";
-import {
-  collectWorkspaceDirs,
-  isPathWithin,
-  listAgentSessionDirs,
-  removePath,
-} from "./cleanup-utils.js";
+import { buildCleanupPlan, listAgentSessionDirs, removePath } from "./cleanup-utils.js";
 
 export type ResetScope = "config" | "config+creds+sessions" | "full";
 
@@ -123,9 +118,12 @@ export async function resetCommand(runtime: RuntimeEnv, opts: ResetOptions) {
   const stateDir = resolveStateDir();
   const configPath = resolveConfigPath();
   const oauthDir = resolveOAuthDir();
-  const configInsideState = isPathWithin(configPath, stateDir);
-  const oauthInsideState = isPathWithin(oauthDir, stateDir);
-  const workspaceDirs = collectWorkspaceDirs(cfg);
+  const { configInsideState, oauthInsideState, workspaceDirs } = buildCleanupPlan({
+    cfg,
+    stateDir,
+    configPath,
+    oauthDir,
+  });
 
   if (scope !== "config") {
     if (dryRun) {
