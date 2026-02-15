@@ -418,12 +418,19 @@ describe("buildAgentSystemPrompt", () => {
       sandboxInfo: {
         enabled: true,
         workspaceDir: "/tmp/sandbox",
+        containerWorkspaceDir: "/workspace",
         workspaceAccess: "ro",
         agentWorkspaceMount: "/agent",
         elevated: { allowed: true, defaultLevel: "on" },
       },
     });
 
+    expect(prompt).toContain("Your working directory is: /workspace");
+    expect(prompt).toContain(
+      "For read/write/edit/apply_patch, file paths resolve against host workspace: /tmp/openclaw.",
+    );
+    expect(prompt).toContain("Sandbox container workdir: /workspace");
+    expect(prompt).toContain("Sandbox host workspace: /tmp/sandbox");
     expect(prompt).toContain("You are running in a sandboxed runtime");
     expect(prompt).toContain("Sub-agents stay sandboxed");
     expect(prompt).toContain("User can toggle with /elevated on|off|ask|full.");
