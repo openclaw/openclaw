@@ -1,3 +1,4 @@
+import type { Bot } from "grammy";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getTelegramSendTestMocks,
@@ -8,8 +9,14 @@ import {
 installTelegramSendTestHooks();
 
 const { botApi, botCtorSpy, loadConfig, loadWebMedia } = getTelegramSendTestMocks();
-const { buildInlineKeyboard, sendMessageTelegram, sendStickerTelegram } =
-  await importTelegramSendModule();
+const {
+  buildInlineKeyboard,
+  editMessageTelegram,
+  reactMessageTelegram,
+  sendMessageTelegram,
+  sendPollTelegram,
+  sendStickerTelegram,
+} = await importTelegramSendModule();
 
 describe("buildInlineKeyboard", () => {
   it("returns undefined for empty input", () => {
@@ -227,6 +234,322 @@ describe("sendMessageTelegram", () => {
     await expect(sendMessageTelegram(chatId, "hi", { token: "tok", api })).rejects.toThrow(
       /chat_id=123/,
     );
+  });
+
+  it("preserves thread params in plain text fallback", async () => {
+    const chatId = "-1001234567890";
+    const parseErr = new Error(
+      "400: Bad Request: can't parse entities: Can't find end of the entity",
+    );
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(parseErr)
+      .mockResolvedValueOnce({
+        message_id: 60,
+        chat: { id: chatId },
+      });
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    const res = await sendMessageTelegram(chatId, "_bad markdown_", {
+      token: "tok",
+      api,
+      messageThreadId: 271,
+      replyToMessageId: 100,
+    });
+
+    expect(sendMessage).toHaveBeenNthCalledWith(1, chatId, "<i>bad markdown</i>", {
+      parse_mode: "HTML",
+      message_thread_id: 271,
+      reply_to_message_id: 100,
+    });
+    expect(sendMessage).toHaveBeenNthCalledWith(2, chatId, "_bad markdown_", {
+      message_thread_id: 271,
+      reply_to_message_id: 100,
+    });
+    expect(res.messageId).toBe("60");
+  });
+
+  it("includes thread params in media messages", async () => {
+    const chatId = "-1001234567890";
+    const sendPhoto = vi.fn().mockResolvedValue({
+      message_id: 58,
+      chat: { id: chatId },
+    });
+    const api = { sendPhoto } as unknown as {
+      sendPhoto: typeof sendPhoto;
+    };
+
+    loadWebMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("fake-image"),
+      contentType: "image/jpeg",
+      fileName: "photo.jpg",
+    });
+
+    await sendMessageTelegram(chatId, "photo in topic", {
+      token: "tok",
+      api,
+      mediaUrl: "https://example.com/photo.jpg",
+      messageThreadId: 99,
+    });
+
+    expect(sendPhoto).toHaveBeenCalledWith(chatId, expect.anything(), {
+      caption: "photo in topic",
+      parse_mode: "HTML",
+      message_thread_id: 99,
+    });
+  });
+
+  it("splits long captions into media + text messages when text exceeds 1024 chars", async () => {
+    const chatId = "123";
+    const longText = "A".repeat(1100);
+
+    const sendPhoto = vi.fn().mockResolvedValue({
+      message_id: 70,
+      chat: { id: chatId },
+    });
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 71,
+      chat: { id: chatId },
+    });
+    const api = { sendPhoto, sendMessage } as unknown as {
+      sendPhoto: typeof sendPhoto;
+      sendMessage: typeof sendMessage;
+    };
+
+    loadWebMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("fake-image"),
+      contentType: "image/jpeg",
+      fileName: "photo.jpg",
+    });
+
+    const res = await sendMessageTelegram(chatId, longText, {
+      token: "tok",
+      api,
+      mediaUrl: "https://example.com/photo.jpg",
+    });
+
+    expect(sendPhoto).toHaveBeenCalledWith(chatId, expect.anything(), {
+      caption: undefined,
+    });
+    expect(sendMessage).toHaveBeenCalledWith(chatId, longText, {
+      parse_mode: "HTML",
+    });
+    expect(res.messageId).toBe("71");
+  });
+
+  it("uses caption when text is within 1024 char limit", async () => {
+    const chatId = "123";
+    const shortText = "B".repeat(1024);
+
+    const sendPhoto = vi.fn().mockResolvedValue({
+      message_id: 72,
+      chat: { id: chatId },
+    });
+    const sendMessage = vi.fn();
+    const api = { sendPhoto, sendMessage } as unknown as {
+      sendPhoto: typeof sendPhoto;
+      sendMessage: typeof sendMessage;
+    };
+
+    loadWebMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("fake-image"),
+      contentType: "image/jpeg",
+      fileName: "photo.jpg",
+    });
+
+    const res = await sendMessageTelegram(chatId, shortText, {
+      token: "tok",
+      api,
+      mediaUrl: "https://example.com/photo.jpg",
+    });
+
+    expect(sendPhoto).toHaveBeenCalledWith(chatId, expect.anything(), {
+      caption: shortText,
+      parse_mode: "HTML",
+    });
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(res.messageId).toBe("72");
+  });
+
+  it("renders markdown in media captions", async () => {
+    const chatId = "123";
+    const caption = "hi **boss**";
+
+    const sendPhoto = vi.fn().mockResolvedValue({
+      message_id: 90,
+      chat: { id: chatId },
+    });
+    const api = { sendPhoto } as unknown as {
+      sendPhoto: typeof sendPhoto;
+    };
+
+    loadWebMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("fake-image"),
+      contentType: "image/jpeg",
+      fileName: "photo.jpg",
+    });
+
+    await sendMessageTelegram(chatId, caption, {
+      token: "tok",
+      api,
+      mediaUrl: "https://example.com/photo.jpg",
+    });
+
+    expect(sendPhoto).toHaveBeenCalledWith(chatId, expect.anything(), {
+      caption: "hi <b>boss</b>",
+      parse_mode: "HTML",
+    });
+  });
+
+  it("sends video as video note when asVideoNote is true", async () => {
+    const chatId = "123";
+    const text = "ignored caption context";
+
+    const sendVideoNote = vi.fn().mockResolvedValue({
+      message_id: 101,
+      chat: { id: chatId },
+    });
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 102,
+      chat: { id: chatId },
+    });
+    const api = { sendVideoNote, sendMessage } as unknown as {
+      sendVideoNote: typeof sendVideoNote;
+      sendMessage: typeof sendMessage;
+    };
+
+    loadWebMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("fake-video"),
+      contentType: "video/mp4",
+      fileName: "video.mp4",
+    });
+
+    const res = await sendMessageTelegram(chatId, text, {
+      token: "tok",
+      api,
+      mediaUrl: "https://example.com/video.mp4",
+      asVideoNote: true,
+    });
+
+    expect(sendVideoNote).toHaveBeenCalledWith(chatId, expect.anything(), {});
+    expect(sendMessage).toHaveBeenCalledWith(chatId, text, {
+      parse_mode: "HTML",
+    });
+    expect(res.messageId).toBe("102");
+  });
+
+  it("sends regular video when asVideoNote is false", async () => {
+    const chatId = "123";
+    const text = "my caption";
+
+    const sendVideo = vi.fn().mockResolvedValue({
+      message_id: 201,
+      chat: { id: chatId },
+    });
+    const api = { sendVideo } as unknown as {
+      sendVideo: typeof sendVideo;
+    };
+
+    loadWebMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("fake-video"),
+      contentType: "video/mp4",
+      fileName: "video.mp4",
+    });
+
+    const res = await sendMessageTelegram(chatId, text, {
+      token: "tok",
+      api,
+      mediaUrl: "https://example.com/video.mp4",
+      asVideoNote: false,
+    });
+
+    expect(sendVideo).toHaveBeenCalledWith(chatId, expect.anything(), {
+      caption: expect.any(String),
+      parse_mode: "HTML",
+    });
+    expect(res.messageId).toBe("201");
+  });
+
+  it("adds reply_markup to separate text message for video notes", async () => {
+    const chatId = "123";
+    const text = "Check this out";
+
+    const sendVideoNote = vi.fn().mockResolvedValue({
+      message_id: 301,
+      chat: { id: chatId },
+    });
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 302,
+      chat: { id: chatId },
+    });
+    const api = { sendVideoNote, sendMessage } as unknown as {
+      sendVideoNote: typeof sendVideoNote;
+      sendMessage: typeof sendMessage;
+    };
+
+    loadWebMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("fake-video"),
+      contentType: "video/mp4",
+      fileName: "video.mp4",
+    });
+
+    await sendMessageTelegram(chatId, text, {
+      token: "tok",
+      api,
+      mediaUrl: "https://example.com/video.mp4",
+      asVideoNote: true,
+      buttons: [[{ text: "Btn", callback_data: "dat" }]],
+    });
+
+    expect(sendVideoNote).toHaveBeenCalledWith(chatId, expect.anything(), {});
+    expect(sendMessage).toHaveBeenCalledWith(chatId, text, {
+      parse_mode: "HTML",
+      reply_markup: {
+        inline_keyboard: [[{ text: "Btn", callback_data: "dat" }]],
+      },
+    });
+  });
+
+  it("threads video note and text message correctly", async () => {
+    const chatId = "123";
+    const text = "Threaded reply";
+
+    const sendVideoNote = vi.fn().mockResolvedValue({
+      message_id: 401,
+      chat: { id: chatId },
+    });
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 402,
+      chat: { id: chatId },
+    });
+    const api = { sendVideoNote, sendMessage } as unknown as {
+      sendVideoNote: typeof sendVideoNote;
+      sendMessage: typeof sendMessage;
+    };
+
+    loadWebMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("fake-video"),
+      contentType: "video/mp4",
+      fileName: "video.mp4",
+    });
+
+    await sendMessageTelegram(chatId, text, {
+      token: "tok",
+      api,
+      mediaUrl: "https://example.com/video.mp4",
+      asVideoNote: true,
+      replyToMessageId: 999,
+    });
+
+    expect(sendVideoNote).toHaveBeenCalledWith(chatId, expect.anything(), {
+      reply_to_message_id: 999,
+    });
+    expect(sendMessage).toHaveBeenCalledWith(chatId, text, {
+      parse_mode: "HTML",
+      reply_to_message_id: 999,
+    });
   });
 
   it("retries on transient errors with retry_after", async () => {
@@ -647,6 +970,51 @@ describe("sendMessageTelegram", () => {
   });
 });
 
+describe("reactMessageTelegram", () => {
+  it("sends emoji reactions", async () => {
+    const setMessageReaction = vi.fn().mockResolvedValue(undefined);
+    const api = { setMessageReaction } as unknown as {
+      setMessageReaction: typeof setMessageReaction;
+    };
+
+    await reactMessageTelegram("telegram:123", "456", "✅", {
+      token: "tok",
+      api,
+    });
+
+    expect(setMessageReaction).toHaveBeenCalledWith("123", 456, [{ type: "emoji", emoji: "✅" }]);
+  });
+
+  it("removes reactions when emoji is empty", async () => {
+    const setMessageReaction = vi.fn().mockResolvedValue(undefined);
+    const api = { setMessageReaction } as unknown as {
+      setMessageReaction: typeof setMessageReaction;
+    };
+
+    await reactMessageTelegram("123", 456, "", {
+      token: "tok",
+      api,
+    });
+
+    expect(setMessageReaction).toHaveBeenCalledWith("123", 456, []);
+  });
+
+  it("removes reactions when remove flag is set", async () => {
+    const setMessageReaction = vi.fn().mockResolvedValue(undefined);
+    const api = { setMessageReaction } as unknown as {
+      setMessageReaction: typeof setMessageReaction;
+    };
+
+    await reactMessageTelegram("123", 456, "✅", {
+      token: "tok",
+      api,
+      remove: true,
+    });
+
+    expect(setMessageReaction).toHaveBeenCalledWith("123", 456, []);
+  });
+});
+
 describe("sendStickerTelegram", () => {
   beforeEach(() => {
     loadConfig.mockReturnValue({});
@@ -847,5 +1215,158 @@ describe("sendStickerTelegram", () => {
     });
 
     expect(sendSticker).toHaveBeenCalledWith(chatId, "fileId123", undefined);
+  });
+});
+
+describe("editMessageTelegram", () => {
+  beforeEach(() => {
+    botApi.editMessageText.mockReset();
+    botCtorSpy.mockReset();
+  });
+
+  it("keeps existing buttons when buttons is undefined (no reply_markup)", async () => {
+    botApi.editMessageText.mockResolvedValue({ message_id: 1, chat: { id: "123" } });
+
+    await editMessageTelegram("123", 1, "hi", {
+      token: "tok",
+      cfg: {},
+    });
+
+    expect(botCtorSpy).toHaveBeenCalledTimes(1);
+    expect(botCtorSpy.mock.calls[0]?.[0]).toBe("tok");
+    expect(botApi.editMessageText).toHaveBeenCalledTimes(1);
+    const params = (botApi.editMessageText.mock.calls[0] ?? [])[3] as Record<string, unknown>;
+    expect(params).toEqual(expect.objectContaining({ parse_mode: "HTML" }));
+    expect(params).not.toHaveProperty("reply_markup");
+  });
+
+  it("removes buttons when buttons is empty (reply_markup.inline_keyboard = [])", async () => {
+    botApi.editMessageText.mockResolvedValue({ message_id: 1, chat: { id: "123" } });
+
+    await editMessageTelegram("123", 1, "hi", {
+      token: "tok",
+      cfg: {},
+      buttons: [],
+    });
+
+    expect(botApi.editMessageText).toHaveBeenCalledTimes(1);
+    const params = (botApi.editMessageText.mock.calls[0] ?? [])[3] as Record<string, unknown>;
+    expect(params).toEqual(
+      expect.objectContaining({
+        parse_mode: "HTML",
+        reply_markup: { inline_keyboard: [] },
+      }),
+    );
+  });
+
+  it("falls back to plain text when Telegram HTML parse fails (and preserves reply_markup)", async () => {
+    botApi.editMessageText
+      .mockRejectedValueOnce(new Error("400: Bad Request: can't parse entities"))
+      .mockResolvedValueOnce({ message_id: 1, chat: { id: "123" } });
+
+    await editMessageTelegram("123", 1, "<bad> html", {
+      token: "tok",
+      cfg: {},
+      buttons: [],
+    });
+
+    expect(botApi.editMessageText).toHaveBeenCalledTimes(2);
+
+    const firstParams = (botApi.editMessageText.mock.calls[0] ?? [])[3] as Record<string, unknown>;
+    expect(firstParams).toEqual(
+      expect.objectContaining({
+        parse_mode: "HTML",
+        reply_markup: { inline_keyboard: [] },
+      }),
+    );
+
+    const secondParams = (botApi.editMessageText.mock.calls[1] ?? [])[3] as Record<string, unknown>;
+    expect(secondParams).toEqual(
+      expect.objectContaining({
+        reply_markup: { inline_keyboard: [] },
+      }),
+    );
+  });
+
+  it("disables link previews when linkPreview is false", async () => {
+    botApi.editMessageText.mockResolvedValue({ message_id: 1, chat: { id: "123" } });
+
+    await editMessageTelegram("123", 1, "https://example.com", {
+      token: "tok",
+      cfg: {},
+      linkPreview: false,
+    });
+
+    expect(botApi.editMessageText).toHaveBeenCalledTimes(1);
+    const params = (botApi.editMessageText.mock.calls[0] ?? [])[3] as Record<string, unknown>;
+    expect(params).toEqual(
+      expect.objectContaining({
+        parse_mode: "HTML",
+        link_preview_options: { is_disabled: true },
+      }),
+    );
+  });
+});
+
+describe("sendPollTelegram", () => {
+  it("maps durationSeconds to open_period", async () => {
+    const api = {
+      sendPoll: vi.fn(async () => ({ message_id: 123, chat: { id: 555 }, poll: { id: "p1" } })),
+    };
+
+    const res = await sendPollTelegram(
+      "123",
+      { question: " Q ", options: [" A ", "B "], durationSeconds: 60 },
+      { token: "t", api: api as unknown as Bot["api"] },
+    );
+
+    expect(res).toEqual({ messageId: "123", chatId: "555", pollId: "p1" });
+    expect(api.sendPoll).toHaveBeenCalledTimes(1);
+    expect(api.sendPoll.mock.calls[0]?.[0]).toBe("123");
+    expect(api.sendPoll.mock.calls[0]?.[1]).toBe("Q");
+    expect(api.sendPoll.mock.calls[0]?.[2]).toEqual(["A", "B"]);
+    expect(api.sendPoll.mock.calls[0]?.[3]).toMatchObject({ open_period: 60 });
+  });
+
+  it("retries without message_thread_id on thread-not-found", async () => {
+    const api = {
+      sendPoll: vi.fn(
+        async (_chatId: string, _question: string, _options: string[], params: unknown) => {
+          const p = params as { message_thread_id?: unknown } | undefined;
+          if (p?.message_thread_id) {
+            throw new Error("400: Bad Request: message thread not found");
+          }
+          return { message_id: 1, chat: { id: 2 }, poll: { id: "p2" } };
+        },
+      ),
+    };
+
+    const res = await sendPollTelegram(
+      "123",
+      { question: "Q", options: ["A", "B"] },
+      { token: "t", api: api as unknown as Bot["api"], messageThreadId: 99 },
+    );
+
+    expect(res).toEqual({ messageId: "1", chatId: "2", pollId: "p2" });
+    expect(api.sendPoll).toHaveBeenCalledTimes(2);
+    expect(api.sendPoll.mock.calls[0]?.[3]).toMatchObject({ message_thread_id: 99 });
+    expect(
+      (api.sendPoll.mock.calls[1]?.[3] as { message_thread_id?: unknown } | undefined)
+        ?.message_thread_id,
+    ).toBeUndefined();
+  });
+
+  it("rejects durationHours for Telegram polls", async () => {
+    const api = { sendPoll: vi.fn() };
+
+    await expect(
+      sendPollTelegram(
+        "123",
+        { question: "Q", options: ["A", "B"], durationHours: 1 },
+        { token: "t", api: api as unknown as Bot["api"] },
+      ),
+    ).rejects.toThrow(/durationHours is not supported/i);
+
+    expect(api.sendPoll).not.toHaveBeenCalled();
   });
 });
