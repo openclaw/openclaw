@@ -265,4 +265,52 @@ describe("sanitizeSessionHistory", () => {
 
     expect(result).toEqual([]);
   });
+
+  it("drops orphaned toolResult entries when switching from openai history to anthropic", async () => {
+    const sessionEntries = [
+      makeModelSnapshotEntry({
+        provider: "openai",
+        modelApi: "openai-responses",
+        modelId: "gpt-5.2",
+      }),
+    ];
+    const sessionManager = makeInMemorySessionManager(sessionEntries);
+    const messages: AgentMessage[] = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "tool_abc123", name: "read", arguments: {} }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "tool_abc123",
+        toolName: "read",
+        content: [{ type: "text", text: "ok" }],
+      } as unknown as AgentMessage,
+      { role: "user", content: "continue" },
+      {
+        role: "toolResult",
+        toolCallId: "tool_01VihkDRptyLpX1ApUPe7ooU",
+        toolName: "read",
+        content: [{ type: "text", text: "stale result" }],
+      } as unknown as AgentMessage,
+    ];
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "anthropic-messages",
+      provider: "anthropic",
+      modelId: "claude-opus-4-6",
+      sessionManager,
+      sessionId: "test-session",
+    });
+
+    expect(result.map((msg) => msg.role)).toEqual(["assistant", "toolResult", "user"]);
+    expect(
+      result.some(
+        (msg) =>
+          msg.role === "toolResult" &&
+          (msg as { toolCallId?: string }).toolCallId === "tool_01VihkDRptyLpX1ApUPe7ooU",
+      ),
+    ).toBe(false);
+  });
 });
