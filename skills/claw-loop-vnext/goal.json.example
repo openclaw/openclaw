@@ -1,0 +1,38 @@
+{
+  "title": "Example Feature",
+  "workdir": "/path/to/repo/or/worktree",
+  "tool": "codex",
+  "status": "pending",
+  "phases": [
+    {
+      "id": "P1",
+      "name": "Plan",
+      "status": "pending",
+      "passes": false
+    },
+    {
+      "id": "P2",
+      "name": "Implement",
+      "status": "pending",
+      "passes": false,
+      "requiresApproval": true
+    },
+    {
+      "id": "P3",
+      "name": "Test",
+      "status": "pending",
+      "passes": false
+    },
+    {
+      "id": "P4",
+      "name": "PR",
+      "status": "pending",
+      "passes": false
+    }
+  ],
+  "orchestration": {
+    "mode": "sdk-first",
+    "ackTimeoutMs": 15000,
+    "maxRetries": 2
+  }
+}
