@@ -404,37 +404,47 @@ export async function monitorWebChannel(
     reconnectAttempts += 1;
     status.reconnectAttempts = reconnectAttempts;
     emitStatus();
-    if (reconnectPolicy.maxAttempts > 0 && reconnectAttempts >= reconnectPolicy.maxAttempts) {
+
+    // Determine retry delay: use normal backoff until max attempts reached,
+    // then switch to periodic recovery attempts to avoid permanently giving up.
+    const maxAttemptsReached =
+      reconnectPolicy.maxAttempts > 0 && reconnectAttempts >= reconnectPolicy.maxAttempts;
+    let delay: number;
+    if (maxAttemptsReached) {
+      // After max initial attempts, continue with periodic recovery attempts
+      // using a fixed interval (heartbeat interval) to allow for automatic recovery
+      // without requiring manual gateway restart.
+      delay = heartbeatSeconds * 1000;
       reconnectLogger.warn(
         {
           connectionId,
           status: statusCode,
           reconnectAttempts,
           maxAttempts: reconnectPolicy.maxAttempts,
+          delayMs: delay,
         },
-        "web reconnect: max attempts reached; continuing in degraded mode",
+        "web reconnect: max attempts reached; continuing with periodic recovery attempts",
       );
       runtime.error(
-        `WhatsApp Web reconnect: max attempts reached (${reconnectAttempts}/${reconnectPolicy.maxAttempts}). Stopping web monitoring.`,
+        `WhatsApp Web reconnect: max attempts reached (${reconnectAttempts}/${reconnectPolicy.maxAttempts}). Continuing with periodic recovery attempts every ${heartbeatSeconds}s… (${errorStr})`,
       );
-      await closeListener();
-      break;
+    } else {
+      delay = computeBackoff(reconnectPolicy, reconnectAttempts);
+      reconnectLogger.info(
+        {
+          connectionId,
+          status: statusCode,
+          reconnectAttempts,
+          maxAttempts: reconnectPolicy.maxAttempts || "unlimited",
+          delayMs: delay,
+        },
+        "web reconnect: scheduling retry",
+      );
+      runtime.error(
+        `WhatsApp Web connection closed (status ${statusCode}). Retry ${reconnectAttempts}/${reconnectPolicy.maxAttempts || "∞"} in ${formatDurationPrecise(delay)}… (${errorStr})`,
+      );
     }
 
-    const delay = computeBackoff(reconnectPolicy, reconnectAttempts);
-    reconnectLogger.info(
-      {
-        connectionId,
-        status: statusCode,
-        reconnectAttempts,
-        maxAttempts: reconnectPolicy.maxAttempts || "unlimited",
-        delayMs: delay,
-      },
-      "web reconnect: scheduling retry",
-    );
-    runtime.error(
-      `WhatsApp Web connection closed (status ${statusCode}). Retry ${reconnectAttempts}/${reconnectPolicy.maxAttempts || "∞"} in ${formatDurationPrecise(delay)}… (${errorStr})`,
-    );
     await closeListener();
     try {
       await sleep(delay, abortSignal);
