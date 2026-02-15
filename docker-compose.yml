@@ -69,7 +69,7 @@ services:
     ports:
       - "3002:3000"
     restart: unless-stopped
-    command: sh -c "apt-get update -qq && apt-get install -y -qq openssl > /dev/null 2>&1 && npx prisma migrate deploy && npm run build && npm start"
+    command: sh -c "apt-get update -qq && apt-get install -y -qq openssl > /dev/null 2>&1 && npx prisma migrate deploy && rm -rf .next && npm run build && npm start"
 
   mission-control-db:
     image: postgres:16
