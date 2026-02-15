@@ -1,51 +1,103 @@
 ---
 name: openhue
-description: Control Philips Hue lights/scenes via the OpenHue CLI.
-homepage: https://www.openhue.io/cli
-metadata:
-  {
-    "openclaw":
-      {
-        "emoji": "💡",
-        "requires": { "bins": ["openhue"] },
-        "install":
-          [
-            {
-              "id": "brew",
-              "kind": "brew",
-              "formula": "openhue/cli/openhue-cli",
-              "bins": ["openhue"],
-              "label": "Install OpenHue CLI (brew)",
-            },
-          ],
-      },
-  }
+description: Control Philips Hue lights and scenes via the OpenHue CLI.
 ---
 
-# OpenHue CLI
+# OpenHue - Philips Hue Control
 
-Use `openhue` to control Hue lights and scenes via a Hue Bridge.
+Control Blake's Philips Hue lights via the OpenHue CLI.
 
-Setup
+## When to Use
 
-- Discover bridges: `openhue discover`
-- Guided setup: `openhue setup`
+✅ **USE this skill when:**
+- "Turn on/off the lights"
+- "Dim the bedroom lights"
+- "Set a scene" or "movie mode"
+- Controlling specific rooms: Bedroom, KJS Office, Kitchen/Living
+- Adjusting brightness, color, or color temperature
 
-Read
+## When NOT to Use
 
-- `openhue get light --json`
-- `openhue get room --json`
-- `openhue get scene --json`
+❌ **DON'T use this skill when:**
+- Non-Hue smart devices (other brands) → not supported
+- HomeKit scenes or Shortcuts → use Apple's ecosystem
+- TV or entertainment system control
+- Thermostat or HVAC
+- Smart plugs (unless Hue smart plugs)
 
-Write
+## Blake's Hue Setup (8 lights, 3 rooms)
 
-- Turn on: `openhue set light <id-or-name> --on`
-- Turn off: `openhue set light <id-or-name> --off`
-- Brightness: `openhue set light <id> --on --brightness 50`
-- Color: `openhue set light <id> --on --rgb #3399FF`
-- Scene: `openhue set scene <scene-id>`
+### Bedroom
+- Behind bed (lightstrip)
+- Bedroom lamp (floor shade)
+- Katie Bed Side
+- Blake Bed Side
 
-Notes
+### KJS Office
+- KJS Desk Lamp (flexible)
+- Book like strip first shelf (lightstrip)
 
-- You may need to press the Hue Bridge button during setup.
-- Use `--room "Room Name"` when light names are ambiguous.
+### Kitchen/Living
+- Mushroom Lamp (table shade)
+- Downstairs big lamp (sultan bulb)
+
+## Common Commands
+
+### List Resources
+```bash
+openhue lights          # List all lights
+openhue rooms           # List all rooms
+openhue scenes          # List all scenes
+```
+
+### Control Lights
+```bash
+# Turn on/off
+openhue light "Bedroom lamp" on
+openhue light "Bedroom lamp" off
+
+# Brightness (0-100)
+openhue light "Bedroom lamp" --brightness 50
+
+# Color temperature (warm to cool: 153-500 mirek)
+openhue light "Bedroom lamp" --ct 300
+
+# Color (by name or hex)
+openhue light "Behind bed" --color red
+openhue light "Behind bed" --color "#FF5500"
+```
+
+### Control Rooms
+```bash
+# Turn off entire room
+openhue room "Bedroom" off
+
+# Set room brightness
+openhue room "Bedroom" --brightness 30
+```
+
+### Scenes
+```bash
+# Activate scene
+openhue scene "Relax" --room "Bedroom"
+openhue scene "Concentrate" --room "KJS Office"
+```
+
+## Quick Presets
+
+```bash
+# Bedtime (dim warm)
+openhue room "Bedroom" --brightness 20 --ct 450
+
+# Work mode (bright cool)
+openhue room "KJS Office" --brightness 100 --ct 250
+
+# Movie mode (dim)
+openhue room "Kitchen/Living" --brightness 10
+```
+
+## Notes
+
+- Bridge must be on local network
+- First run requires button press on Hue bridge to pair
+- Colors only work on color-capable bulbs (not white-only)
