@@ -12,7 +12,7 @@ describe("describeReplyContext (WhatsApp)", () => {
         throw new Error("missing");
       }
       // eslint-disable-next-line @typescript-eslint/no-unsafe-return
-      return original(...(args as Parameters<typeof fs.readFileSync>));
+      return original(...args);
     });
 
     try {
