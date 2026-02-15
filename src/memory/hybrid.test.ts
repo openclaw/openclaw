@@ -12,7 +12,11 @@ describe("memory hybrid helpers", () => {
     expect(bm25RankToScore(0)).toBeCloseTo(1);
     expect(bm25RankToScore(1)).toBeCloseTo(0.5);
     expect(bm25RankToScore(10)).toBeLessThan(bm25RankToScore(1));
-    expect(bm25RankToScore(-100)).toBeCloseTo(1);
+    // FTS5 bm25() returns negative values (more negative = more relevant).
+    // Math.abs converts them so the scoring function works correctly.
+    expect(bm25RankToScore(-1)).toBeCloseTo(0.5);
+    expect(bm25RankToScore(-10)).toBeLessThan(bm25RankToScore(-1));
+    expect(bm25RankToScore(-100)).toBeLessThan(bm25RankToScore(-10));
   });
 
   it("mergeHybridResults unions by id and combines weighted scores", () => {

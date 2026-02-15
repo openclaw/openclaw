@@ -34,7 +34,7 @@ export function buildFtsQuery(raw: string): string | null {
 }
 
 export function bm25RankToScore(rank: number): number {
-  const normalized = Number.isFinite(rank) ? Math.max(0, rank) : 999;
+  const normalized = Number.isFinite(rank) ? Math.abs(rank) : 999;
   return 1 / (1 + normalized);
 }
 
