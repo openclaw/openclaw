@@ -12,6 +12,7 @@ const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN?.trim() ?? "";
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID?.trim() ?? "";
 const CHECK_INTERVAL_MS = resolveCheckIntervalMs(process.env.RSS_CHECK_INTERVAL_MS);
 const HEALTH_PORT = toNumberOrUndefined(process.env.PORT) ?? 8080;
+const RSS_DISABLE_HEALTH_SERVER = process.env.RSS_DISABLE_HEALTH_SERVER === "1";
 
 type FeedItem = {
   id: string;
@@ -402,22 +403,24 @@ async function pollTelegramForCommands(): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  const healthServer = createServer((req, res) => {
-    if (req.url === "/health") {
-      res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
-      res.end(JSON.stringify({ ok: true }));
-      return;
-    }
-    res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
-    res.end("not found");
-  });
-  await new Promise<void>((resolve, reject) => {
-    healthServer.once("error", reject);
-    healthServer.listen(HEALTH_PORT, "0.0.0.0", () => {
-      console.log(`[rss] health server listening on http://0.0.0.0:${HEALTH_PORT}/health`);
-      resolve();
+  if (!RSS_DISABLE_HEALTH_SERVER) {
+    const healthServer = createServer((req, res) => {
+      if (req.url === "/health") {
+        res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+        res.end(JSON.stringify({ ok: true }));
+        return;
+      }
+      res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+      res.end("not found");
     });
-  });
+    await new Promise<void>((resolve, reject) => {
+      healthServer.once("error", reject);
+      healthServer.listen(HEALTH_PORT, "0.0.0.0", () => {
+        console.log(`[rss] health server listening on http://0.0.0.0:${HEALTH_PORT}/health`);
+        resolve();
+      });
+    });
+  }
 
   console.log(
     `RSS watcher boot: ETSY_SHOP_RSS_URL present=${ETSY_SHOP_RSS_URL ? "yes" : "no"}, state_path=${STATE_PATH}`,

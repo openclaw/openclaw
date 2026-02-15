@@ -7,7 +7,7 @@
   "deploy": {
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 10,
-    "startCommand": "node dist/rss-watcher.js",
+    "startCommand": "gateway",
     "healthcheckPath": "/health",
     "healthcheckTimeout": 100,
     "healthcheckInterval": 15
