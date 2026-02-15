@@ -390,7 +390,7 @@ function buildMessageToolDescription(options?: {
       }
       if (crossChannelActions.length > 0) {
         parts.push(
-          `Cross-channel actions also available: ${crossChannelActions.toSorted().join(", ")}`,
+          `Cross-channel actions also available (these are automatically routed to the correct channel): ${crossChannelActions.toSorted().join(", ")}`,
         );
       }
       return `${baseDescription} ${parts.join(". ")}.`;

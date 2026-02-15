@@ -95,6 +95,7 @@
     "protocol:gen:swift": "node --import tsx scripts/protocol-gen-swift.ts",
     "qverisbot": "node scripts/run-node.mjs",
     "release:check": "node --import tsx scripts/release-check.ts",
+    "release:npm": "bash scripts/release-npm.sh",
     "start": "node scripts/run-node.mjs",
     "test": "node scripts/test-parallel.mjs",
     "test:all": "pnpm lint && pnpm build && pnpm test && pnpm test:e2e && pnpm test:live && pnpm test:docker:all",

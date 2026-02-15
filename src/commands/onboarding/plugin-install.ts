@@ -6,6 +6,7 @@ import type { RuntimeEnv } from "../../runtime.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { resolveBundledPluginsDir } from "../../plugins/bundled-dir.js";
 import { enablePluginInConfig } from "../../plugins/enable.js";
 import { installPluginFromNpmSpec } from "../../plugins/install.js";
 import { recordPluginInstall } from "../../plugins/installs.js";
@@ -55,6 +56,21 @@ function resolveLocalPath(
     }
   }
   return null;
+}
+
+/**
+ * Check if the given plugin path is already inside the bundled extensions
+ * directory. If so, the plugin system discovers it automatically and adding
+ * it to plugins.load.paths would create a duplicate.
+ */
+function isBundledPluginPath(pluginPath: string): boolean {
+  const bundledDir = resolveBundledPluginsDir();
+  if (!bundledDir) {
+    return false;
+  }
+  const resolved = path.resolve(pluginPath);
+  const bundled = path.resolve(bundledDir);
+  return resolved.startsWith(bundled + path.sep) || resolved === bundled;
 }
 
 function addPluginLoadPath(cfg: OpenClawConfig, pluginPath: string): OpenClawConfig {
@@ -125,6 +141,24 @@ function resolveInstallDefaultChoice(params: {
   return localPath ? "local" : "npm";
 }
 
+/**
+ * Check if a catalog entry corresponds to a bundled extension that ships
+ * with the package. Bundled extensions are auto-discovered by the plugin
+ * system and do not need an explicit install step.
+ */
+function isBundledCatalogEntry(entry: ChannelPluginCatalogEntry, workspaceDir?: string): boolean {
+  const raw = entry.install.localPath?.trim();
+  if (!raw) {
+    return false;
+  }
+  // Check if the local path resolves to a directory inside the bundled dir.
+  const candidates = [path.resolve(process.cwd(), raw)];
+  if (workspaceDir && workspaceDir !== process.cwd()) {
+    candidates.push(path.resolve(workspaceDir, raw));
+  }
+  return candidates.some((candidate) => fs.existsSync(candidate) && isBundledPluginPath(candidate));
+}
+
 export async function ensureOnboardingPluginInstalled(params: {
   cfg: OpenClawConfig;
   entry: ChannelPluginCatalogEntry;
@@ -134,6 +168,14 @@ export async function ensureOnboardingPluginInstalled(params: {
 }): Promise<InstallResult> {
   const { entry, prompter, runtime, workspaceDir } = params;
   let next = params.cfg;
+
+  // Bundled extensions already ship with the package — skip the install
+  // prompt entirely and just enable the plugin in config.
+  if (isBundledCatalogEntry(entry, workspaceDir)) {
+    next = enablePluginInConfig(next, entry.id).config;
+    return { cfg: next, installed: true };
+  }
+
   const allowLocal = hasGitWorkspace(workspaceDir);
   const localPath = resolveLocalPath(entry, workspaceDir, allowLocal);
   const defaultChoice = resolveInstallDefaultChoice({

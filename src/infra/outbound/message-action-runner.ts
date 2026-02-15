@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { OutboundSendDeps } from "./deliver.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveActionOwningChannel } from "../../agents/channel-tools.js";
 import {
   readNumberParam,
   readStringArrayParam,
@@ -729,6 +730,21 @@ export async function runMessageAction(
     const inferredChannel = normalizeMessageChannel(input.toolContext?.currentChannelProvider);
     if (inferredChannel && isDeliverableMessageChannel(inferredChannel)) {
       params.channel = inferredChannel;
+    }
+  }
+
+  // Cross-channel action routing: when the inferred channel doesn't own the action
+  // (e.g. x-post invoked from Feishu), resolve the correct owning channel so the
+  // rest of the pipeline (target resolution, policy, dispatch) uses the right one.
+  if (action !== "send" && action !== "poll") {
+    const currentChannel = typeof params.channel === "string" ? params.channel.trim() : "";
+    const owningChannel = resolveActionOwningChannel({
+      action,
+      currentChannel,
+      cfg,
+    });
+    if (owningChannel && isDeliverableMessageChannel(owningChannel)) {
+      params.channel = owningChannel;
     }
   }
 

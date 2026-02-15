@@ -73,6 +73,32 @@ export function listCrossChannelActions(params: {
   return Array.from(actions);
 }
 
+/**
+ * Resolve the channel that owns a given action.
+ * Returns the channel ID if exactly one loaded plugin claims the action, otherwise undefined.
+ * Used to route cross-channel actions (e.g. x-post from Feishu → "x").
+ */
+export function resolveActionOwningChannel(params: {
+  action: string;
+  currentChannel?: string;
+  cfg?: OpenClawConfig;
+}): string | undefined {
+  const cfg = params.cfg ?? ({} as OpenClawConfig);
+  for (const plugin of listChannelPlugins()) {
+    if (plugin.id === params.currentChannel) {
+      continue;
+    }
+    if (!plugin.actions?.listActions) {
+      continue;
+    }
+    const actions = runPluginListActions(plugin, cfg);
+    if (actions.includes(params.action as ChannelMessageActionName)) {
+      return plugin.id;
+    }
+  }
+  return undefined;
+}
+
 export function listChannelAgentTools(params: { cfg?: OpenClawConfig }): ChannelAgentTool[] {
   // Channel docking: aggregate channel-owned tools (login, etc.).
   const tools: ChannelAgentTool[] = [];

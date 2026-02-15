@@ -39,11 +39,32 @@ export async function dispatchChannelMessageAction(
   ctx: ChannelMessageActionContext,
 ): Promise<AgentToolResult<unknown> | null> {
   const plugin = getChannelPlugin(ctx.channel);
-  if (!plugin?.actions?.handleAction) {
-    return null;
+  if (plugin?.actions?.handleAction) {
+    const supported =
+      !plugin.actions.supportsAction || plugin.actions.supportsAction({ action: ctx.action });
+    if (supported) {
+      return await plugin.actions.handleAction(ctx);
+    }
   }
-  if (plugin.actions.supportsAction && !plugin.actions.supportsAction({ action: ctx.action })) {
-    return null;
+
+  // Cross-channel fallback: the inferred channel doesn't support this action.
+  // Try other loaded channel plugins (e.g. X actions invoked from Feishu).
+  for (const candidate of listChannelPlugins()) {
+    if (candidate.id === ctx.channel) {
+      continue;
+    }
+    if (!candidate.actions?.handleAction) {
+      continue;
+    }
+    if (
+      candidate.actions.supportsAction &&
+      !candidate.actions.supportsAction({ action: ctx.action })
+    ) {
+      continue;
+    }
+    // Found a plugin that supports the action — dispatch with corrected channel.
+    return await candidate.actions.handleAction({ ...ctx, channel: candidate.id });
   }
-  return await plugin.actions.handleAction(ctx);
+
+  return null;
 }
