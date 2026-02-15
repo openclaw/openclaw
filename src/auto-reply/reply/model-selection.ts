@@ -274,6 +274,10 @@ export async function createModelSelectionState(params: {
   /** True when heartbeat.model was explicitly resolved for this run.
    *  In that case, skip session-stored overrides so the heartbeat selection wins. */
   hasResolvedHeartbeatModelOverride?: boolean;
+  /** User message for dynamic thinking routing (optional). */
+  message?: string;
+  /** Session type for thinking routing context (optional). */
+  sessionType?: "main" | "subagent" | "cron";
 }): Promise<ModelSelectionState> {
   const {
     cfg,
@@ -391,6 +395,8 @@ export async function createModelSelectionState(params: {
       provider,
       model,
       catalog: catalogForThinking,
+      message: params.message,
+      sessionType: params.sessionType,
     });
     defaultThinkingLevel =
       resolved ?? (agentCfg?.thinkingDefault as ThinkLevel | undefined) ?? "off";
