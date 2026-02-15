@@ -8,12 +8,15 @@ services:
       CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY}
       CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY}
       CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE}
+#      SIGNAL_ACCOUNT: "+15550001111"
+#      SIGNAL_REST_URL: "http://signal:8080"
     volumes:
       - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
       - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
     ports:
-      - "${OPENCLAW_GATEWAY_PORT:-18789}:18789"
-      - "${OPENCLAW_BRIDGE_PORT:-18790}:18790"
+      - "127.0.0.1:${OPENCLAW_GATEWAY_PORT:-18789}:18789"
+      - "127.0.0.1:${OPENCLAW_BRIDGE_PORT:-18790}:18790"
+#    network_mode: host
     init: true
     restart: unless-stopped
     command:
@@ -44,3 +47,12 @@ services:
     tty: true
     init: true
     entrypoint: ["node", "dist/index.js"]
+
+  signal:
+    image: bbernhard/signal-cli-rest-api:latest
+    environment:
+      - MODE=normal
+#      - AUTO_RECEIVE_SCHEDULE=0 0/1 * 1/1 * ? *
+    volumes:
+      - ${OPENCLAW_CONFIG_DIR}/signal:/home/signal/.local/share/signal-cli
+    restart: unless-stopped
