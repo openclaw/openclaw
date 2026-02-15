@@ -308,6 +308,66 @@ describe("hooks mapping", () => {
     }
   });
 
+  it("caches transform functions by module path and export name", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hooks-export-"));
+    const modPath = path.join(dir, "multi-export.mjs");
+    fs.writeFileSync(
+      modPath,
+      [
+        'export function transformA() { return { kind: "wake", text: "from-A" }; }',
+        'export function transformB() { return { kind: "wake", text: "from-B" }; }',
+      ].join("\n"),
+    );
+
+    const mappingsA = resolveHookMappings({
+      transformsDir: dir,
+      mappings: [
+        {
+          match: { path: "testA" },
+          action: "agent",
+          messageTemplate: "unused",
+          transform: { module: "multi-export.mjs", export: "transformA" },
+        },
+      ],
+    });
+
+    const mappingsB = resolveHookMappings({
+      transformsDir: dir,
+      mappings: [
+        {
+          match: { path: "testB" },
+          action: "agent",
+          messageTemplate: "unused",
+          transform: { module: "multi-export.mjs", export: "transformB" },
+        },
+      ],
+    });
+
+    const resultA = await applyHookMappings(mappingsA, {
+      payload: {},
+      headers: {},
+      url: new URL("http://127.0.0.1:18789/hooks/testA"),
+      path: "testA",
+    });
+
+    const resultB = await applyHookMappings(mappingsB, {
+      payload: {},
+      headers: {},
+      url: new URL("http://127.0.0.1:18789/hooks/testB"),
+      path: "testB",
+    });
+
+    expect(resultA?.ok).toBe(true);
+    if (resultA?.ok && resultA.action?.kind === "wake") {
+      expect(resultA.action.text).toBe("from-A");
+    }
+
+    expect(resultB?.ok).toBe(true);
+    if (resultB?.ok && resultB.action?.kind === "wake") {
+      expect(resultB.action.text).toBe("from-B");
+    }
+  });
+
   it("rejects missing message", async () => {
     const mappings = resolveHookMappings({
       mappings: [{ match: { path: "noop" }, action: "agent" }],
