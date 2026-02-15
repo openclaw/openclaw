@@ -2,6 +2,7 @@ import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { logWarn } from "../logger.js";
 import { estimateBase64DecodedBytes } from "./base64.js";
+import { readResponseWithLimit } from "./read-response-with-limit.js";
 
 type CanvasModule = typeof import("@napi-rs/canvas");
 type PdfJsModule = typeof import("pdfjs-dist/legacy/build/pdf.mjs");
@@ -192,48 +193,6 @@ export async function fetchWithGuard(params: {
   } finally {
     await release();
   }
-}
-
-async function readResponseWithLimit(res: Response, maxBytes: number): Promise<Buffer> {
-  const body = res.body;
-  if (!body || typeof body.getReader !== "function") {
-    const fallback = Buffer.from(await res.arrayBuffer());
-    if (fallback.byteLength > maxBytes) {
-      throw new Error(`Content too large: ${fallback.byteLength} bytes (limit: ${maxBytes} bytes)`);
-    }
-    return fallback;
-  }
-
-  const reader = body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-      if (value?.length) {
-        total += value.length;
-        if (total > maxBytes) {
-          try {
-            await reader.cancel();
-          } catch {}
-          throw new Error(`Content too large: ${total} bytes (limit: ${maxBytes} bytes)`);
-        }
-        chunks.push(value);
-      }
-    }
-  } finally {
-    try {
-      reader.releaseLock();
-    } catch {}
-  }
-
-  return Buffer.concat(
-    chunks.map((chunk) => Buffer.from(chunk)),
-    total,
-  );
 }
 
 function decodeTextContent(buffer: Buffer, charset: string | undefined): string {
