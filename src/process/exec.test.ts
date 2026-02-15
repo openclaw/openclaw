@@ -1,7 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { runCommandWithTimeout } from "./exec.js";
+import { runCommandWithTimeout, shouldSpawnWithShell } from "./exec.js";
 
 describe("runCommandWithTimeout", () => {
+  it("never enables shell execution (Windows cmd.exe injection hardening)", () => {
+    expect(
+      shouldSpawnWithShell({
+        resolvedCommand: "npm.cmd",
+        platform: "win32",
+      }),
+    ).toBe(false);
+  });
+
   it("passes env overrides to child", async () => {
     const result = await runCommandWithTimeout(
       [process.execPath, "-e", 'process.stdout.write(process.env.OPENCLAW_TEST_ENV ?? "")'],
