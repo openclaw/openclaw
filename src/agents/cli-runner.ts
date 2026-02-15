@@ -54,6 +54,9 @@ export async function runCliAgent(params: {
 }): Promise<EmbeddedPiRunResult> {
   // Copilot SDK has its own client/session lifecycle — intercept before generic CLI path.
   if (params.provider === "copilot-cli") {
+    if (params.images && params.images.length > 0) {
+      log.warn("copilot-cli does not support image input — images will be dropped");
+    }
     return runCopilotCliAgent({
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,

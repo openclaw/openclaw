@@ -5,7 +5,8 @@ import { resolveHeartbeatPrompt } from "../auto-reply/heartbeat.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveSessionAgentIds } from "./agent-scope.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "./bootstrap-files.js";
-import { buildSystemPrompt } from "./cli-runner/helpers.js";
+import { resolveCliBackendConfig } from "./cli-backends.js";
+import { buildSystemPrompt, normalizeCliModel } from "./cli-runner/helpers.js";
 import { checkCopilotAvailable, runCopilotAgent } from "./copilot-sdk.js";
 import { resolveOpenClawDocsPath } from "./docs-path.js";
 import { FailoverError, resolveFailoverStatus } from "./failover-error.js";
@@ -61,7 +62,9 @@ export async function runCopilotCliAgent(params: {
     );
   }
 
-  const modelId = (params.model ?? "default").trim() || "default";
+  const rawModelId = (params.model ?? "default").trim() || "default";
+  const backendConfig = resolveCliBackendConfig("copilot-cli", params.config);
+  const modelId = backendConfig ? normalizeCliModel(rawModelId, backendConfig.config) : rawModelId;
   const modelDisplay = `copilot-cli/${modelId}`;
 
   const extraSystemPrompt = [

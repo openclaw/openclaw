@@ -32,17 +32,29 @@ export type CopilotAvailability = {
   reason?: string;
 };
 
+let cachedAvailability: CopilotAvailability | undefined;
+
 /**
  * Check whether the Copilot CLI binary is installed (sync, fast).
+ * Result is cached for the lifetime of the process.
  * Auth is validated later via the SDK's `getAuthStatus()` during client startup.
  */
 export function checkCopilotAvailable(options?: {
   execFileSync?: typeof execFileSync;
 }): CopilotAvailability {
-  if (!isCopilotCliInstalled(options)) {
-    return { available: false, reason: "copilot CLI not found on PATH" };
+  if (options) {
+    // Custom execFileSync — skip cache (used in tests)
+    return isCopilotCliInstalled(options)
+      ? { available: true }
+      : { available: false, reason: "copilot CLI not found on PATH" };
   }
-  return { available: true };
+  if (cachedAvailability) {
+    return cachedAvailability;
+  }
+  cachedAvailability = isCopilotCliInstalled()
+    ? { available: true }
+    : { available: false, reason: "copilot CLI not found on PATH" };
+  return cachedAvailability;
 }
 
 /**
