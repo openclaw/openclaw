@@ -35,6 +35,14 @@ const DEFAULT_GROK_MODEL = "grok-4-1-fast";
 const SEARCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
 const BRAVE_FRESHNESS_SHORTCUTS = new Set(["pd", "pw", "pm", "py"]);
 const BRAVE_FRESHNESS_RANGE = /^(\d{4}-\d{2}-\d{2})to(\d{4}-\d{2}-\d{2})$/;
+const BRAVE_SEARCH_LANG_MAP: Record<string, string> = {
+  zh: "zh-hans",
+};
+const BRAVE_UI_LANG_MAP: Record<string, string> = {
+  zh: "zh-CN",
+  "zh-hans": "zh-CN",
+  "zh-hant": "zh-TW",
+};
 
 const WebSearchSchema = Type.Object({
   query: Type.String({ description: "Search query string." }),
@@ -403,6 +411,20 @@ function normalizeFreshness(value: string | undefined): string | undefined {
   return `${start}to${end}`;
 }
 
+function normalizeBraveLangParams(params: {
+  search_lang?: string;
+  ui_lang?: string;
+}): { search_lang?: string; ui_lang?: string } {
+  const searchRaw = params.search_lang?.trim();
+  const uiRaw = params.ui_lang?.trim();
+  const searchKey = searchRaw?.toLowerCase();
+  const uiKey = uiRaw?.toLowerCase();
+  return {
+    search_lang: searchKey ? (BRAVE_SEARCH_LANG_MAP[searchKey] ?? searchRaw) : searchRaw,
+    ui_lang: uiKey ? (BRAVE_UI_LANG_MAP[uiKey] ?? uiRaw) : uiRaw,
+  };
+}
+
 /**
  * Map normalized freshness values (pd/pw/pm/py) to Perplexity's
  * search_recency_filter values (day/week/month/year).
@@ -645,11 +667,15 @@ async function runWebSearch(params: {
   if (params.country) {
     url.searchParams.set("country", params.country);
   }
-  if (params.search_lang) {
-    url.searchParams.set("search_lang", params.search_lang);
+  const langParams = normalizeBraveLangParams({
+    search_lang: params.search_lang,
+    ui_lang: params.ui_lang,
+  });
+  if (langParams.search_lang) {
+    url.searchParams.set("search_lang", langParams.search_lang);
   }
-  if (params.ui_lang) {
-    url.searchParams.set("ui_lang", params.ui_lang);
+  if (langParams.ui_lang) {
+    url.searchParams.set("ui_lang", langParams.ui_lang);
   }
   if (params.freshness) {
     url.searchParams.set("freshness", params.freshness);

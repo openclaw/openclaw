@@ -71,6 +71,23 @@ describe("web_search country and language parameters", () => {
     expect(url.searchParams.get("search_lang")).toBe("de");
   });
 
+  it("normalizes search_lang zh to zh-hans for Brave API", async () => {
+    const mockFetch = vi.fn(() =>
+      Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ web: { results: [] } }),
+      } as Response),
+    );
+    // @ts-expect-error mock fetch
+    global.fetch = mockFetch;
+
+    const tool = createWebSearchTool({ config: undefined, sandboxed: true });
+    await tool?.execute?.(1, { query: "test", search_lang: "zh" });
+
+    const url = new URL(mockFetch.mock.calls[0][0] as string);
+    expect(url.searchParams.get("search_lang")).toBe("zh-hans");
+  });
+
   it("should pass ui_lang parameter to Brave API", async () => {
     const mockFetch = vi.fn(() =>
       Promise.resolve({
@@ -86,6 +103,23 @@ describe("web_search country and language parameters", () => {
 
     const url = new URL(mockFetch.mock.calls[0][0] as string);
     expect(url.searchParams.get("ui_lang")).toBe("de");
+  });
+
+  it("normalizes ui_lang zh-hans to zh-CN for Brave API", async () => {
+    const mockFetch = vi.fn(() =>
+      Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ web: { results: [] } }),
+      } as Response),
+    );
+    // @ts-expect-error mock fetch
+    global.fetch = mockFetch;
+
+    const tool = createWebSearchTool({ config: undefined, sandboxed: true });
+    await tool?.execute?.(1, { query: "test", ui_lang: "zh-hans" });
+
+    const url = new URL(mockFetch.mock.calls[0][0] as string);
+    expect(url.searchParams.get("ui_lang")).toBe("zh-CN");
   });
 
   it("should pass freshness parameter to Brave API", async () => {
