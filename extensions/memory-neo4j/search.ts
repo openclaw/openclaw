@@ -273,7 +273,7 @@ export async function hybridSearch(
 
   // 6. Record retrieval events (fire-and-forget for latency)
   // This tracks which memories are actually being used, enabling
-  // retrieval-based importance adjustment and promotion criteria.
+  // retrieval-based importance adjustment.
   if (results.length > 0) {
     const memoryIds = results.map((r) => r.id);
     db.recordRetrievals(memoryIds).catch(() => {

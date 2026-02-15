@@ -1756,9 +1756,6 @@ describe("runSleepCycle", () => {
       mergeMemoryCluster: vi.fn().mockResolvedValue({ survivorId: "s1", deletedCount: 0 }),
       findConflictingMemories: vi.fn().mockResolvedValue([]),
       invalidateMemory: vi.fn().mockResolvedValue(undefined),
-      calculateAllEffectiveScores: vi.fn().mockResolvedValue([]),
-      calculateParetoThreshold: vi.fn().mockReturnValue(0.5),
-      promoteToCore: vi.fn().mockResolvedValue(0),
       findDecayedMemories: vi.fn().mockResolvedValue([]),
       pruneMemories: vi.fn().mockResolvedValue(0),
       countByExtractionStatus: vi
@@ -2082,178 +2079,7 @@ describe("runSleepCycle", () => {
     });
   });
 
-  // Phase 2: Pareto Scoring
-  describe("Phase 2: Pareto Scoring", () => {
-    it("should calculate correct threshold for top 20%", async () => {
-      const scores = [
-        {
-          id: "m1",
-          text: "test",
-          category: "fact",
-          importance: 0.9,
-          retrievalCount: 10,
-          ageDays: 5,
-          effectiveScore: 0.95,
-        },
-        {
-          id: "m2",
-          text: "test",
-          category: "fact",
-          importance: 0.5,
-          retrievalCount: 5,
-          ageDays: 10,
-          effectiveScore: 0.5,
-        },
-        {
-          id: "m3",
-          text: "test",
-          category: "core",
-          importance: 0.3,
-          retrievalCount: 2,
-          ageDays: 20,
-          effectiveScore: 0.3,
-        },
-      ];
-      mockDb.calculateAllEffectiveScores.mockResolvedValue(scores);
-      mockDb.calculateParetoThreshold.mockReturnValue(0.8);
-
-      const result = await runSleepCycle(mockDb, mockEmbeddings, mockConfig, mockLogger);
-
-      expect(mockDb.calculateAllEffectiveScores).toHaveBeenCalled();
-      expect(mockDb.calculateParetoThreshold).toHaveBeenCalledWith(scores, 0.8); // 1 - paretoPercentile (default 0.2)
-      expect(result.pareto.totalMemories).toBe(3);
-      expect(result.pareto.coreMemories).toBe(1);
-      expect(result.pareto.regularMemories).toBe(2);
-      expect(result.pareto.threshold).toBe(0.8);
-    });
-
-    it("should handle empty database", async () => {
-      mockDb.calculateAllEffectiveScores.mockResolvedValue([]);
-      mockDb.calculateParetoThreshold.mockReturnValue(0); // Empty array returns 0
-
-      const result = await runSleepCycle(mockDb, mockEmbeddings, mockConfig, mockLogger);
-
-      expect(result.pareto.totalMemories).toBe(0);
-      expect(result.pareto.threshold).toBe(0);
-    });
-
-    it("should handle single memory", async () => {
-      mockDb.calculateAllEffectiveScores.mockResolvedValue([
-        {
-          id: "m1",
-          text: "test",
-          category: "fact",
-          importance: 0.9,
-          retrievalCount: 10,
-          ageDays: 5,
-          effectiveScore: 0.95,
-        },
-      ]);
-      mockDb.calculateParetoThreshold.mockReturnValue(0.95);
-
-      const result = await runSleepCycle(mockDb, mockEmbeddings, mockConfig, mockLogger);
-
-      expect(result.pareto.totalMemories).toBe(1);
-      expect(result.pareto.threshold).toBe(0.95);
-    });
-  });
-
-  // Phase 3: Promotion
-  describe("Phase 3: Core Promotion", () => {
-    it("should promote regular memories above threshold", async () => {
-      const scores = [
-        {
-          id: "m1",
-          text: "test",
-          category: "fact",
-          importance: 0.9,
-          retrievalCount: 10,
-          ageDays: 10,
-          effectiveScore: 0.95,
-        },
-        {
-          id: "m2",
-          text: "test",
-          category: "fact",
-          importance: 0.5,
-          retrievalCount: 5,
-          ageDays: 8,
-          effectiveScore: 0.6,
-        },
-        {
-          id: "m3",
-          text: "test",
-          category: "core",
-          importance: 0.8,
-          retrievalCount: 8,
-          ageDays: 5,
-          effectiveScore: 0.85,
-        },
-      ];
-      mockDb.calculateAllEffectiveScores.mockResolvedValue(scores);
-      mockDb.calculateParetoThreshold.mockReturnValue(0.7); // threshold
-      mockDb.promoteToCore.mockResolvedValue(1);
-
-      const result = await runSleepCycle(mockDb, mockEmbeddings, mockConfig, mockLogger, {
-        skipPromotion: false,
-        paretoPercentile: 0.2,
-        promotionMinAgeDays: 7,
-      });
-
-      // m1 should be promoted (category=fact, score=0.95 > 0.70, age=10 >= 7)
-      expect(mockDb.promoteToCore).toHaveBeenCalledWith(["m1"]);
-      expect(result.promotion.candidatesFound).toBe(1);
-      expect(result.promotion.promoted).toBe(1);
-    });
-
-    it("should respect promotionMinAgeDays", async () => {
-      const scores = [
-        {
-          id: "m1",
-          text: "test",
-          category: "fact",
-          importance: 0.9,
-          retrievalCount: 10,
-          ageDays: 5,
-          effectiveScore: 0.95,
-        },
-      ];
-      mockDb.calculateAllEffectiveScores.mockResolvedValue(scores);
-      mockDb.calculateParetoThreshold.mockReturnValue(0.5);
-
-      const result = await runSleepCycle(mockDb, mockEmbeddings, mockConfig, mockLogger, {
-        skipPromotion: false,
-        promotionMinAgeDays: 7,
-      });
-
-      // m1 age=5 < 7, should not be promoted
-      expect(result.promotion.candidatesFound).toBe(0);
-      expect(mockDb.promoteToCore).not.toHaveBeenCalled();
-    });
-
-    it("should not promote core memories again", async () => {
-      const scores = [
-        {
-          id: "m1",
-          text: "test",
-          category: "core",
-          importance: 0.9,
-          retrievalCount: 10,
-          ageDays: 10,
-          effectiveScore: 0.95,
-        },
-      ];
-      mockDb.calculateAllEffectiveScores.mockResolvedValue(scores);
-      mockDb.calculateParetoThreshold.mockReturnValue(0.5);
-
-      const result = await runSleepCycle(mockDb, mockEmbeddings, mockConfig, mockLogger);
-
-      expect(result.promotion.candidatesFound).toBe(0);
-      expect(mockDb.promoteToCore).not.toHaveBeenCalled();
-    });
-  });
-
-  // Phase 4: Extraction
+  // Phase 2: Extraction
   describe("Phase 5: Entity Extraction", () => {
     it("should process pending extractions in batches", async () => {
       mockDb.countByExtractionStatus.mockResolvedValue({
@@ -2499,8 +2325,8 @@ describe("runSleepCycle", () => {
 
       const result = await runSleepCycle(mockDb, mockEmbeddings, mockConfig, mockLogger);
 
-      // Phase 2 should still run
-      expect(mockDb.calculateAllEffectiveScores).toHaveBeenCalled();
+      // Phase 2 (extraction) should still run
+      expect(mockDb.countByExtractionStatus).toHaveBeenCalled();
       expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining("Phase 1 error"));
     });
 
@@ -2519,7 +2345,7 @@ describe("runSleepCycle", () => {
       // Should not crash, conflict resolution returns "skip"
       expect(result.conflict.resolved).toBe(0);
       // Other phases should continue
-      expect(mockDb.calculateAllEffectiveScores).toHaveBeenCalled();
+      expect(mockDb.countByExtractionStatus).toHaveBeenCalled();
     });
 
     it("should handle Neo4j transient error retries", async () => {
@@ -2549,7 +2375,6 @@ describe("runSleepCycle", () => {
       expect(onPhaseStart).toHaveBeenCalledWith("conflict");
       expect(onPhaseStart).toHaveBeenCalledWith("semanticDedup");
       expect(onPhaseStart).toHaveBeenCalledWith("entityDedup");
-      expect(onPhaseStart).toHaveBeenCalledWith("pareto");
       expect(onPhaseStart).toHaveBeenCalledWith("extraction");
       expect(onPhaseStart).toHaveBeenCalledWith("decay");
       expect(onPhaseStart).toHaveBeenCalledWith("cleanup");
@@ -2584,8 +2409,6 @@ describe("runSleepCycle", () => {
       expect(result).toHaveProperty("conflict");
       expect(result).toHaveProperty("semanticDedup");
       expect(result).toHaveProperty("entityDedup");
-      expect(result).toHaveProperty("pareto");
-      expect(result).toHaveProperty("promotion");
       expect(result).toHaveProperty("decay");
       expect(result).toHaveProperty("extraction");
       expect(result).toHaveProperty("cleanup");

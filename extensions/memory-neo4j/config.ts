@@ -42,7 +42,6 @@ export type MemoryNeo4jConfig = {
   autoRecallSkipPattern?: RegExp;
   coreMemory: {
     enabled: boolean;
-    maxEntries: number;
     /**
      * Re-inject core memories when context usage reaches this percentage (0-100).
      * Helps counter "lost in the middle" phenomenon by refreshing core memories
@@ -63,6 +62,10 @@ export type MemoryNeo4jConfig = {
    * Categories not listed use the sleep cycle's default (30 days).
    */
   decayCurves: Record<string, { halfLifeDays: number }>;
+  sleepCycle: {
+    auto: boolean;
+    autoIntervalMs: number;
+  };
 };
 
 /**
@@ -157,8 +160,7 @@ export function resolveExtractionConfig(
   cfgExtraction?: MemoryNeo4jConfig["extraction"],
 ): ExtractionConfig {
   const apiKey = cfgExtraction?.apiKey ?? process.env.OPENROUTER_API_KEY ?? "";
-  const model =
-    cfgExtraction?.model ?? process.env.EXTRACTION_MODEL ?? "google/gemini-2.0-flash-001";
+  const model = cfgExtraction?.model ?? process.env.EXTRACTION_MODEL ?? "anthropic/claude-opus-4-6";
   const baseUrl =
     cfgExtraction?.baseUrl ?? process.env.EXTRACTION_BASE_URL ?? "https://openrouter.ai/api/v1";
   // Enabled when an API key is set (cloud provider) or baseUrl was explicitly
@@ -215,6 +217,7 @@ export const memoryNeo4jConfigSchema = {
         "extraction",
         "graphSearchDepth",
         "decayCurves",
+        "sleepCycle",
       ],
       "memory-neo4j config",
     );
@@ -285,15 +288,10 @@ export const memoryNeo4jConfigSchema = {
     const coreMemoryRaw = cfg.coreMemory as Record<string, unknown> | undefined;
     assertAllowedKeys(
       coreMemoryRaw ?? {},
-      ["enabled", "maxEntries", "refreshAtContextPercent"],
+      ["enabled", "refreshAtContextPercent"],
       "coreMemory config",
     );
     const coreMemoryEnabled = coreMemoryRaw?.enabled !== false; // enabled by default
-    const coreMemoryMaxEntries =
-      typeof coreMemoryRaw?.maxEntries === "number" ? coreMemoryRaw.maxEntries : 50;
-    if (coreMemoryMaxEntries <= 0) {
-      throw new Error(`coreMemory.maxEntries must be greater than 0, got: ${coreMemoryMaxEntries}`);
-    }
     // refreshAtContextPercent: number between 1-99 to be effective, or undefined to disable.
     // Values at 0 or below are ignored (disables refresh). Values above 100 are invalid.
     if (
@@ -325,7 +323,7 @@ export const memoryNeo4jConfigSchema = {
       if (exApiKey || exModel || exBaseUrl) {
         extraction = {
           apiKey: exApiKey,
-          model: exModel ?? (process.env.EXTRACTION_MODEL || "google/gemini-2.0-flash-001"),
+          model: exModel ?? (process.env.EXTRACTION_MODEL || "anthropic/claude-opus-4-6"),
           baseUrl: exBaseUrl ?? (process.env.EXTRACTION_BASE_URL || "https://openrouter.ai/api/v1"),
         };
       }
@@ -357,6 +355,20 @@ export const memoryNeo4jConfigSchema = {
       graphSearchDepth = rawDepth;
     }
 
+    // Parse sleepCycle section (optional with defaults)
+    const sleepCycleRaw = cfg.sleepCycle as Record<string, unknown> | undefined;
+    assertAllowedKeys(sleepCycleRaw ?? {}, ["auto", "autoIntervalMs"], "sleepCycle config");
+    const sleepCycleAuto = sleepCycleRaw?.auto !== false; // enabled by default
+    const sleepCycleAutoIntervalMs =
+      typeof sleepCycleRaw?.autoIntervalMs === "number"
+        ? sleepCycleRaw.autoIntervalMs
+        : 6 * 60 * 60 * 1000; // 6 hours
+    if (sleepCycleAutoIntervalMs <= 0) {
+      throw new Error(
+        `sleepCycle.autoIntervalMs must be positive, got: ${sleepCycleAutoIntervalMs}`,
+      );
+    }
+
     return {
       neo4j: {
         uri: neo4jUri,
@@ -383,11 +395,14 @@ export const memoryNeo4jConfigSchema = {
           : undefined,
       coreMemory: {
         enabled: coreMemoryEnabled,
-        maxEntries: coreMemoryMaxEntries,
         refreshAtContextPercent,
       },
       graphSearchDepth,
       decayCurves,
+      sleepCycle: {
+        auto: sleepCycleAuto,
+        autoIntervalMs: sleepCycleAutoIntervalMs,
+      },
     };
   },
 };

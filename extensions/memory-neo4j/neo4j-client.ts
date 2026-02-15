@@ -148,7 +148,7 @@ export class Neo4jMemoryClient {
         "CREATE INDEX entity_name_index IF NOT EXISTS FOR (e:Entity) ON (e.name)",
       );
       // Composite index for queries that filter by both agentId and category
-      // (e.g. listByCategory, promotion filtering in sleep cycle)
+      // (e.g. listByCategory)
       await this.runSafe(
         session,
         "CREATE INDEX memory_agent_category_index IF NOT EXISTS FOR (m:Memory) ON (m.agentId, m.category)",
@@ -245,14 +245,12 @@ export class Neo4jMemoryClient {
             agentId: $agentId, sessionKey: $sessionKey,
             createdAt: $createdAt, updatedAt: $updatedAt,
             retrievalCount: $retrievalCount, lastRetrievedAt: $lastRetrievedAt,
-            extractionRetries: $extractionRetries,
-            userPinned: $userPinned
+            extractionRetries: $extractionRetries
           })
           RETURN m.id AS id`,
           {
             ...input,
             sessionKey: input.sessionKey ?? null,
-            userPinned: input.userPinned ?? false,
             createdAt: now,
             updatedAt: now,
             retrievalCount: 0,
@@ -389,13 +387,13 @@ export class Neo4jMemoryClient {
   }
 
   /**
-   * Load core memories for injection: ALL user-pinned core memories (no limit)
-   * plus up to maxRegular non-pinned core memories ordered by importance.
+   * Load all core memories for context injection.
    *
-   * Total returned = (all userPinned core) + (top maxRegular non-pinned core).
+   * Core memories are user-curated (created via explicit "remember" requests)
+   * with importance locked at 1.0, so there is no meaningful ordering.
+   * All core memories are returned — the user manages the size.
    */
   async listCoreForInjection(
-    maxRegular: number,
     agentId?: string,
   ): Promise<{ id: string; text: string; category: string; importance: number }[]> {
     await this.ensureInitialized();
@@ -405,17 +403,8 @@ export class Neo4jMemoryClient {
       const result = await session.run(
         `MATCH (m:Memory)
          WHERE m.category = 'core' ${agentFilter}
-         WITH m, coalesce(m.userPinned, false) AS pinned
-         ORDER BY m.importance DESC
-         WITH collect({id: m.id, text: m.text, category: m.category, importance: m.importance, pinned: pinned}) AS all
-         WITH [x IN all WHERE x.pinned] AS pinnedList,
-              [x IN all WHERE NOT x.pinned][0..$maxRegular] AS regularList
-         UNWIND (pinnedList + regularList) AS mem
-         RETURN mem.id AS id, mem.text AS text, mem.category AS category, mem.importance AS importance`,
-        {
-          maxRegular: neo4j.int(Math.floor(maxRegular)),
-          ...(agentId ? { agentId } : {}),
-        },
+         RETURN m.id AS id, m.text AS text, m.category AS category, m.importance AS importance`,
+        agentId ? { agentId } : {},
       );
 
       return result.records.map((r) => ({
@@ -1346,7 +1335,6 @@ export class Neo4jMemoryClient {
         `MATCH (m:Memory)
          WHERE m.createdAt IS NOT NULL
            AND m.category <> 'core'
-           AND coalesce(m.userPinned, false) = false
            ${agentFilter}
          WITH m,
               duration.between(datetime(m.createdAt), datetime()).days AS ageDays,
@@ -1566,7 +1554,7 @@ export class Neo4jMemoryClient {
   /**
    * Find memory pairs that share at least one entity (via MENTIONS relationships).
    * These are candidates for conflict resolution — the LLM decides if they truly conflict.
-   * Excludes core memories (conflicts there are handled by promotion).
+   * Excludes core memories (those are user-curated).
    */
   async findConflictingMemories(agentId?: string): Promise<
     Array<{
@@ -1623,121 +1611,6 @@ export class Neo4jMemoryClient {
          SET m.importance = 0.01, m.updatedAt = $now`,
         { id, now: new Date().toISOString() },
       );
-    } finally {
-      await session.close();
-    }
-  }
-
-  // --------------------------------------------------------------------------
-  // Sleep Cycle: Core Memory Promotion
-  // --------------------------------------------------------------------------
-
-  /**
-   * Calculate effective scores for all memories to determine Pareto threshold.
-   *
-   * Uses: importance × freq_boost × recency for ALL memories (including core).
-   * User-pinned core memories are excluded — they have fixed importance=1.0
-   * and should not influence the Pareto threshold calculation.
-   */
-  async calculateAllEffectiveScores(agentId?: string): Promise<
-    Array<{
-      id: string;
-      text: string;
-      category: string;
-      importance: number;
-      retrievalCount: number;
-      ageDays: number;
-      effectiveScore: number;
-    }>
-  > {
-    await this.ensureInitialized();
-    const session = this.driver!.session();
-    try {
-      const agentFilter = agentId
-        ? "WHERE m.agentId = $agentId AND m.createdAt IS NOT NULL AND coalesce(m.userPinned, false) = false"
-        : "WHERE m.createdAt IS NOT NULL AND coalesce(m.userPinned, false) = false";
-      const result = await session.run(
-        `MATCH (m:Memory)
-         ${agentFilter}
-         WITH m,
-              coalesce(m.retrievalCount, 0) AS retrievalCount,
-              duration.between(datetime(m.createdAt), datetime()).days AS ageDays,
-              CASE
-                WHEN m.lastRetrievedAt IS NULL THEN null
-                ELSE duration.between(datetime(m.lastRetrievedAt), datetime()).days
-              END AS daysSinceRetrieval
-         WITH m, retrievalCount, ageDays, daysSinceRetrieval,
-              // Effective score: importance × freq_boost × recency
-              // This is used for global ranking (promotion threshold)
-              m.importance * (1 + log(1 + retrievalCount) * 0.3) *
-                CASE
-                  WHEN daysSinceRetrieval IS NULL THEN 0.1
-                  ELSE 2.0 ^ (-1.0 * daysSinceRetrieval / 14.0)
-                END AS effectiveScore
-         RETURN m.id AS id, m.text AS text, m.category AS category,
-                m.importance AS importance, retrievalCount, ageDays, effectiveScore
-         ORDER BY effectiveScore DESC`,
-        agentId ? { agentId } : {},
-      );
-
-      return result.records.map((r) => ({
-        id: r.get("id") as string,
-        text: r.get("text") as string,
-        category: r.get("category") as string,
-        importance: r.get("importance") as number,
-        retrievalCount: r.get("retrievalCount") as number,
-        ageDays: r.get("ageDays") as number,
-        effectiveScore: r.get("effectiveScore") as number,
-      }));
-    } finally {
-      await session.close();
-    }
-  }
-
-  /**
-   * Calculate the Pareto threshold (80th percentile) for promotion.
-   * Returns the effective score that separates top 20% from bottom 80%.
-   */
-  calculateParetoThreshold(
-    scores: Array<{ effectiveScore: number }>,
-    percentile: number = 0.8,
-  ): number {
-    if (scores.length === 0) {
-      return 0;
-    }
-
-    // Scores should already be sorted descending, but ensure it
-    const sorted = [...scores].sort((a, b) => b.effectiveScore - a.effectiveScore);
-
-    // Find the index at the percentile boundary
-    // For top 20%, we want the score at index = 20% of total
-    const topPercent = 1 - percentile; // 0.2 for top 20%
-    const boundaryIndex = Math.floor(sorted.length * topPercent);
-
-    // Return the score at that boundary (or 0 if empty)
-    return sorted[boundaryIndex]?.effectiveScore ?? 0;
-  }
-
-  /**
-   * Promote memories to core status.
-   */
-  async promoteToCore(memoryIds: string[]): Promise<number> {
-    if (memoryIds.length === 0) {
-      return 0;
-    }
-
-    await this.ensureInitialized();
-    const session = this.driver!.session();
-    try {
-      const result = await session.run(
-        `UNWIND $ids AS memId
-         MATCH (m:Memory {id: memId})
-         SET m.category = 'core', m.promotedAt = $now, m.updatedAt = $now
-         RETURN count(*) AS promoted`,
-        { ids: memoryIds, now: new Date().toISOString() },
-      );
-
-      return (result.records[0]?.get("promoted") as number) ?? 0;
     } finally {
       await session.close();
     }
@@ -2037,7 +1910,6 @@ export class Neo4jMemoryClient {
       const result = await session.run(
         `MATCH (m:Memory)
          WHERE m.text =~ $pattern
-           AND coalesce(m.userPinned, false) = false
            AND m.category <> 'core'
            ${agentFilter}
          WITH m LIMIT ${limit}
@@ -2052,18 +1924,19 @@ export class Neo4jMemoryClient {
   }
 
   /**
-   * Fetch all non-core memories (id + text) for a given agent, or all agents.
-   * Used by the sleep cycle credential scanner.
+   * Fetch all memories (id + text) for a given agent, or all agents.
+   * Used by the sleep cycle credential scanner — scans every memory
+   * including core, since credentials must never be persisted regardless
+   * of category or pin status.
    */
-  async fetchNonCoreMemories(agentId?: string): Promise<Array<{ id: string; text: string }>> {
+  async fetchAllMemoriesForScan(agentId?: string): Promise<Array<{ id: string; text: string }>> {
     await this.ensureInitialized();
     const session = this.driver!.session();
     try {
-      const agentFilter = agentId ? "AND m.agentId = $agentId" : "";
+      const agentFilter = agentId ? "WHERE m.agentId = $agentId" : "";
       const result = await session.run(
         `MATCH (m:Memory)
-         WHERE m.category <> 'core'
-           ${agentFilter}
+         ${agentFilter}
          RETURN m.id AS id, m.text AS text`,
         agentId ? { agentId } : {},
       );

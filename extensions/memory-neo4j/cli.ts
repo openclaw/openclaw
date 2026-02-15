@@ -5,8 +5,7 @@
  * - list: List memory counts by agent and category
  * - search: Search memories via hybrid search
  * - stats: Show memory statistics and configuration
- * - sleep: Run sleep cycle (seven-phase memory consolidation)
- * - promote: Manually promote a memory to core
+ * - sleep: Run sleep cycle (six-phase memory consolidation)
  * - index: Re-embed all memories after changing embedding model
  * - cleanup: Retroactively apply attention gate to stored memories
  */
@@ -277,11 +276,9 @@ export function registerCli(api: OpenClawPluginApi, deps: CliDeps): void {
 
       memory
         .command("sleep")
-        .description("Run sleep cycle — consolidate memories with Pareto-based promotion")
+        .description("Run sleep cycle — consolidate memories")
         .option("--agent <id>", "Agent id (default: all agents)")
         .option("--dedup-threshold <n>", "Vector similarity threshold for dedup (default: 0.95)")
-        .option("--pareto <n>", "Top N% for core memory (default: 0.2 = top 20%)")
-        .option("--promotion-min-age <days>", "Min age in days before promotion (default: 7)")
         .option("--decay-threshold <n>", "Decay score threshold for pruning (default: 0.1)")
         .option("--decay-half-life <days>", "Base half-life in days (default: 30)")
         .option("--batch-size <n>", "Extraction batch size (default: 50)")
@@ -297,8 +294,6 @@ export function registerCli(api: OpenClawPluginApi, deps: CliDeps): void {
           async (opts: {
             agent?: string;
             dedupThreshold?: string;
-            pareto?: string;
-            promotionMinAge?: string;
             decayThreshold?: string;
             decayHalfLife?: string;
             batchSize?: string;
@@ -310,27 +305,19 @@ export function registerCli(api: OpenClawPluginApi, deps: CliDeps): void {
           }) => {
             console.log("\n🌙 Memory Sleep Cycle");
             console.log("═════════════════════════════════════════════════════════════");
-            console.log("Multi-phase memory consolidation (Pareto-based):\n");
+            console.log("Multi-phase memory consolidation:\n");
             console.log("  Phase 1:   Deduplication       — Merge near-duplicate memories");
             console.log(
               "  Phase 1b:  Semantic Dedup      — LLM-based paraphrase detection (0.75–0.95 band)",
             );
             console.log("  Phase 1c:  Conflict Detection  — Resolve contradictory memories");
             console.log("  Phase 1d:  Entity Dedup        — Merge duplicate entity nodes");
-            console.log(
-              "  Phase 2:   Pareto Scoring      — Calculate effective scores for all memories",
-            );
-            console.log(
-              "  Phase 3:   Core Promotion      — Regular memories above threshold → core",
-            );
-            console.log(
-              "  Phase 4:   Core Demotion       — Core memories below threshold → regular",
-            );
-            console.log("  Phase 5:   Extraction          — Extract entities and categorize");
-            console.log("  Phase 6:   Decay & Pruning     — Remove stale low-importance memories");
-            console.log("  Phase 7:   Orphan Cleanup      — Remove disconnected nodes");
-            console.log("  Phase 7b:  Credential Scan     — Remove memories with leaked secrets");
-            console.log("  Phase 8:   Task Ledger Cleanup  — Archive stale tasks in TASKS.md\n");
+            console.log("  Phase 2:   Extraction          — Extract entities and categorize");
+            console.log("  Phase 3:   Decay & Pruning     — Remove stale low-importance memories");
+            console.log("  Phase 4:   Orphan Cleanup      — Remove disconnected nodes");
+            console.log("  Phase 5:   Noise Cleanup       — Remove dangerous pattern memories");
+            console.log("  Phase 5b:  Credential Scan     — Remove memories with leaked secrets");
+            console.log("  Phase 6:   Task Ledger Cleanup  — Archive stale tasks in TASKS.md\n");
 
             try {
               // Validate sleep cycle CLI parameters before running
@@ -341,10 +328,6 @@ export function registerCli(api: OpenClawPluginApi, deps: CliDeps): void {
                 : undefined;
               const decayThreshold = opts.decayThreshold
                 ? parseFloat(opts.decayThreshold)
-                : undefined;
-              const pareto = opts.pareto ? parseFloat(opts.pareto) : undefined;
-              const promotionMinAge = opts.promotionMinAge
-                ? parseInt(opts.promotionMinAge, 10)
                 : undefined;
 
               if (batchSize != null && (Number.isNaN(batchSize) || batchSize <= 0)) {
@@ -367,19 +350,6 @@ export function registerCli(api: OpenClawPluginApi, deps: CliDeps): void {
                 (Number.isNaN(decayThreshold) || decayThreshold < 0 || decayThreshold > 1)
               ) {
                 console.error("Error: --decay-threshold must be between 0 and 1");
-                process.exitCode = 1;
-                return;
-              }
-              if (pareto != null && (Number.isNaN(pareto) || pareto < 0 || pareto > 1)) {
-                console.error("Error: --pareto must be between 0 and 1");
-                process.exitCode = 1;
-                return;
-              }
-              if (
-                promotionMinAge != null &&
-                (Number.isNaN(promotionMinAge) || promotionMinAge < 0)
-              ) {
-                console.error("Error: --promotion-min-age must be >= 0");
                 process.exitCode = 1;
                 return;
               }
@@ -414,8 +384,6 @@ export function registerCli(api: OpenClawPluginApi, deps: CliDeps): void {
                 skipSemanticDedup: opts.skipSemantic === true,
                 maxSemanticDedupPairs: maxSemanticPairs,
                 llmConcurrency: concurrency,
-                paretoPercentile: pareto,
-                promotionMinAgeDays: promotionMinAge,
                 decayRetentionThreshold: decayThreshold,
                 decayBaseHalfLifeDays: decayHalfLife,
                 decayCurves: Object.keys(cfg.decayCurves).length > 0 ? cfg.decayCurves : undefined,
@@ -428,14 +396,12 @@ export function registerCli(api: OpenClawPluginApi, deps: CliDeps): void {
                     semanticDedup: "Phase 1b: Semantic Deduplication",
                     conflict: "Phase 1c: Conflict Detection",
                     entityDedup: "Phase 1d: Entity Deduplication",
-                    pareto: "Phase 2: Pareto Scoring",
-                    promotion: "Phase 3: Core Promotion",
-                    extraction: "Phase 4: Extraction",
-                    decay: "Phase 5: Decay & Pruning",
-                    cleanup: "Phase 6: Orphan Cleanup",
-                    noiseCleanup: "Phase 7: Noise Cleanup",
-                    credentialScan: "Phase 7b: Credential Scan",
-                    taskLedger: "Phase 8: Task Ledger Cleanup",
+                    extraction: "Phase 2: Extraction",
+                    decay: "Phase 3: Decay & Pruning",
+                    cleanup: "Phase 4: Orphan Cleanup",
+                    noiseCleanup: "Phase 5: Noise Cleanup",
+                    credentialScan: "Phase 5b: Credential Scan",
+                    taskLedger: "Phase 6: Task Ledger Cleanup",
                   };
                   console.log(`\n▶ ${phaseNames[phase] ?? phase}`);
                   console.log("─────────────────────────────────────────────────────────────");
@@ -456,15 +422,6 @@ export function registerCli(api: OpenClawPluginApi, deps: CliDeps): void {
               );
               console.log(
                 `   Semantic Dedup: ${result.semanticDedup.pairsChecked} pairs checked, ${result.semanticDedup.duplicatesMerged} merged`,
-              );
-              console.log(
-                `   Pareto:         ${result.pareto.totalMemories} total (${result.pareto.coreMemories} core, ${result.pareto.regularMemories} regular)`,
-              );
-              console.log(
-                `                   Threshold: ${result.pareto.threshold.toFixed(4)} (top 20%)`,
-              );
-              console.log(
-                `   Promotion:      ${result.promotion.promoted}/${result.promotion.candidatesFound} promoted to core`,
               );
               console.log(`   Decay/Pruning:  ${result.decay.memoriesPruned} memories pruned`);
               console.log(
@@ -492,26 +449,6 @@ export function registerCli(api: OpenClawPluginApi, deps: CliDeps): void {
             }
           },
         );
-
-      memory
-        .command("promote")
-        .description("Manually promote a memory to core status")
-        .argument("<id>", "Memory ID to promote")
-        .action(async (id: string) => {
-          try {
-            await db.ensureInitialized();
-            const promoted = await db.promoteToCore([id]);
-            if (promoted > 0) {
-              console.log(`✅ Memory ${id} promoted to core.`);
-            } else {
-              console.log(`❌ Memory ${id} not found.`);
-              process.exitCode = 1;
-            }
-          } catch (err) {
-            console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
-            process.exitCode = 1;
-          }
-        });
 
       memory
         .command("index")
