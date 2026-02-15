@@ -73,6 +73,9 @@ export function wrapToolWithBeforeToolCallHook(
   if (!execute) {
     return tool;
   }
+  if (isToolWrappedWithBeforeToolCallHook(tool)) {
+    return tool;
+  }
   const toolName = tool.name || "tool";
   const wrappedTool: AnyAgentTool = {
     ...tool,
@@ -100,7 +103,7 @@ export function wrapToolWithBeforeToolCallHook(
   };
   Object.defineProperty(wrappedTool, BEFORE_TOOL_CALL_WRAPPED, {
     value: true,
-    enumerable: false,
+    enumerable: true,
   });
   return wrappedTool;
 }
