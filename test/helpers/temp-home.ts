@@ -11,6 +11,8 @@ type EnvSnapshot = {
   homePath: string | undefined;
   openclawHome: string | undefined;
   stateDir: string | undefined;
+  agentDir: string | undefined;
+  piCodingAgentDir: string | undefined;
 };
 
 function snapshotEnv(): EnvSnapshot {
@@ -21,6 +23,8 @@ function snapshotEnv(): EnvSnapshot {
     homePath: process.env.HOMEPATH,
     openclawHome: process.env.OPENCLAW_HOME,
     stateDir: process.env.OPENCLAW_STATE_DIR,
+    agentDir: process.env.OPENCLAW_AGENT_DIR,
+    piCodingAgentDir: process.env.PI_CODING_AGENT_DIR,
   };
 }
 
@@ -38,6 +42,8 @@ function restoreEnv(snapshot: EnvSnapshot) {
   restoreKey("HOMEPATH", snapshot.homePath);
   restoreKey("OPENCLAW_HOME", snapshot.openclawHome);
   restoreKey("OPENCLAW_STATE_DIR", snapshot.stateDir);
+  restoreKey("OPENCLAW_AGENT_DIR", snapshot.agentDir);
+  restoreKey("PI_CODING_AGENT_DIR", snapshot.piCodingAgentDir);
 }
 
 function snapshotExtraEnv(keys: string[]): Record<string, string | undefined> {
@@ -61,8 +67,10 @@ function restoreExtraEnv(snapshot: Record<string, string | undefined>) {
 function setTempHome(base: string) {
   process.env.HOME = base;
   process.env.USERPROFILE = base;
-  // Ensure tests using HOME isolation aren't affected by leaked OPENCLAW_HOME.
+  // Ensure tests using HOME isolation aren't affected by leaked OpenClaw env overrides.
   delete process.env.OPENCLAW_HOME;
+  delete process.env.OPENCLAW_AGENT_DIR;
+  delete process.env.PI_CODING_AGENT_DIR;
   process.env.OPENCLAW_STATE_DIR = path.join(base, ".openclaw");
 
   if (process.platform !== "win32") {
