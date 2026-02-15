@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import {
+  isWorkspaceSharedByOtherAgent,
   listAgentIds,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -387,8 +388,9 @@ export const agentsHandlers: GatewayRequestHandlers = {
     await writeConfigFile(result.config);
 
     if (deleteFiles) {
+      const { shared } = isWorkspaceSharedByOtherAgent(cfg, agentId);
       await Promise.all([
-        moveToTrashBestEffort(workspaceDir),
+        shared ? Promise.resolve() : moveToTrashBestEffort(workspaceDir),
         moveToTrashBestEffort(agentDir),
         moveToTrashBestEffort(sessionsDir),
       ]);

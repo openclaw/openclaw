@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
     scope: "global",
     agents: [],
   })),
+  isWorkspaceSharedByOtherAgent: vi.fn(() => ({ shared: false, sharedWith: [] as string[] })),
   movePathToTrash: vi.fn(async () => "/trashed"),
   fsAccess: vi.fn(async () => {}),
   fsMkdir: vi.fn(async () => undefined),
@@ -43,6 +44,7 @@ vi.mock("../../agents/agent-scope.js", () => ({
   listAgentIds: () => ["main"],
   resolveAgentDir: mocks.resolveAgentDir,
   resolveAgentWorkspaceDir: mocks.resolveAgentWorkspaceDir,
+  isWorkspaceSharedByOtherAgent: mocks.isWorkspaceSharedByOtherAgent,
 }));
 
 vi.mock("../../agents/workspace.js", async () => {
@@ -369,5 +371,46 @@ describe("agents.delete", () => {
       undefined,
       expect.objectContaining({ message: expect.stringContaining("invalid") }),
     );
+  });
+
+  it("skips workspace deletion when workspace is shared with another agent", async () => {
+    mocks.isWorkspaceSharedByOtherAgent.mockReturnValue({
+      shared: true,
+      sharedWith: ["other-agent"],
+    });
+    mocks.movePathToTrash.mockClear();
+    mocks.fsAccess.mockClear();
+
+    const { respond, promise } = makeCall("agents.delete", {
+      agentId: "test-agent",
+    });
+    await promise;
+
+    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true }), undefined);
+    // movePathToTrash should be called for agentDir and sessionsDir, but NOT workspace
+    const trashedPaths = mocks.movePathToTrash.mock.calls.map((call: [string]) => call[0]);
+    expect(trashedPaths).not.toContain("/workspace/test-agent");
+    expect(trashedPaths).toContain("/agents/test-agent");
+    expect(trashedPaths).toContain("/transcripts/test-agent");
+  });
+
+  it("deletes workspace when workspace is not shared", async () => {
+    mocks.isWorkspaceSharedByOtherAgent.mockReturnValue({
+      shared: false,
+      sharedWith: [],
+    });
+    mocks.movePathToTrash.mockClear();
+    mocks.fsAccess.mockClear();
+
+    const { respond, promise } = makeCall("agents.delete", {
+      agentId: "test-agent",
+    });
+    await promise;
+
+    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true }), undefined);
+    const trashedPaths = mocks.movePathToTrash.mock.calls.map((call: [string]) => call[0]);
+    expect(trashedPaths).toContain("/workspace/test-agent");
+    expect(trashedPaths).toContain("/agents/test-agent");
+    expect(trashedPaths).toContain("/transcripts/test-agent");
   });
 });

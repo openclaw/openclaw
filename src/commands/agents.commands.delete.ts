@@ -1,5 +1,9 @@
 import type { RuntimeEnv } from "../runtime.js";
-import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import {
+  isWorkspaceSharedByOtherAgent,
+  resolveAgentDir,
+  resolveAgentWorkspaceDir,
+} from "../agents/agent-scope.js";
 import { writeConfigFile } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions.js";
@@ -76,7 +80,14 @@ export async function agentsDeleteCommand(
   }
 
   const quietRuntime = opts.json ? createQuietRuntime(runtime) : runtime;
-  await moveToTrash(workspaceDir, quietRuntime);
+  const { shared, sharedWith } = isWorkspaceSharedByOtherAgent(cfg, agentId);
+  if (shared) {
+    (opts.json ? quietRuntime : runtime).log(
+      `Skipping workspace deletion — shared with: ${sharedWith.join(", ")}`,
+    );
+  } else {
+    await moveToTrash(workspaceDir, quietRuntime);
+  }
   await moveToTrash(agentDir, quietRuntime);
   await moveToTrash(sessionsDir, quietRuntime);
 
