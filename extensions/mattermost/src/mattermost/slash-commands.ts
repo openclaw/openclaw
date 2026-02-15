@@ -301,7 +301,32 @@ export function parseSlashCommandPayload(
 
   try {
     if (contentType?.includes("application/json")) {
-      return JSON.parse(body) as MattermostSlashCommandPayload;
+      const parsed = JSON.parse(body) as Record<string, unknown>;
+
+      // Validate required fields (same checks as the form-encoded branch)
+      const token = typeof parsed.token === "string" ? parsed.token : "";
+      const teamId = typeof parsed.team_id === "string" ? parsed.team_id : "";
+      const channelId = typeof parsed.channel_id === "string" ? parsed.channel_id : "";
+      const userId = typeof parsed.user_id === "string" ? parsed.user_id : "";
+      const command = typeof parsed.command === "string" ? parsed.command : "";
+
+      if (!token || !teamId || !channelId || !userId || !command) {
+        return null;
+      }
+
+      return {
+        token,
+        team_id: teamId,
+        team_domain: typeof parsed.team_domain === "string" ? parsed.team_domain : undefined,
+        channel_id: channelId,
+        channel_name: typeof parsed.channel_name === "string" ? parsed.channel_name : undefined,
+        user_id: userId,
+        user_name: typeof parsed.user_name === "string" ? parsed.user_name : undefined,
+        command,
+        text: typeof parsed.text === "string" ? parsed.text : "",
+        trigger_id: typeof parsed.trigger_id === "string" ? parsed.trigger_id : undefined,
+        response_url: typeof parsed.response_url === "string" ? parsed.response_url : undefined,
+      };
     }
 
     // Default: application/x-www-form-urlencoded
@@ -349,13 +374,23 @@ export function resolveCommandText(trigger: string, text: string): string {
 
 const DEFAULT_CALLBACK_PATH = "/api/channels/mattermost/command";
 
+/**
+ * Ensure the callback path starts with a leading `/` to prevent
+ * malformed URLs like `http://host:portapi/...`.
+ */
+function normalizeCallbackPath(path: string): string {
+  const trimmed = path.trim();
+  if (!trimmed) return DEFAULT_CALLBACK_PATH;
+  return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+}
+
 export function resolveSlashCommandConfig(
   raw?: Partial<MattermostSlashCommandConfig>,
 ): MattermostSlashCommandConfig {
   return {
     native: raw?.native ?? "auto",
     nativeSkills: raw?.nativeSkills ?? "auto",
-    callbackPath: raw?.callbackPath?.trim() || DEFAULT_CALLBACK_PATH,
+    callbackPath: normalizeCallbackPath(raw?.callbackPath ?? DEFAULT_CALLBACK_PATH),
     callbackUrl: raw?.callbackUrl?.trim() || undefined,
   };
 }
@@ -383,6 +418,6 @@ export function resolveCallbackUrl(params: {
     return params.config.callbackUrl;
   }
   const host = params.gatewayHost || "localhost";
-  const path = params.config.callbackPath;
+  const path = normalizeCallbackPath(params.config.callbackPath);
   return `http://${host}:${params.gatewayPort}${path}`;
 }
