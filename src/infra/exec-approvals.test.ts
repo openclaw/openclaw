@@ -439,28 +439,34 @@ describe("exec approvals allowlist evaluation", () => {
   });
 
   it("satisfies allowlist via safe bins", () => {
-    const analysis = {
-      ok: true,
-      segments: [
-        {
-          raw: "jq .foo",
-          argv: ["jq", ".foo"],
-          resolution: {
-            rawExecutable: "jq",
-            resolvedPath: "/usr/bin/jq",
-            executableName: "jq",
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "linux" });
+    try {
+      const analysis = {
+        ok: true,
+        segments: [
+          {
+            raw: "jq .foo",
+            argv: ["jq", ".foo"],
+            resolution: {
+              rawExecutable: "jq",
+              resolvedPath: "/usr/bin/jq",
+              executableName: "jq",
+            },
           },
-        },
-      ],
-    };
-    const result = evaluateExecAllowlist({
-      analysis,
-      allowlist: [],
-      safeBins: normalizeSafeBins(["jq"]),
-      cwd: "/tmp",
-    });
-    expect(result.allowlistSatisfied).toBe(true);
-    expect(result.allowlistMatches).toEqual([]);
+        ],
+      };
+      const result = evaluateExecAllowlist({
+        analysis,
+        allowlist: [],
+        safeBins: normalizeSafeBins(["jq"]),
+        cwd: "/tmp",
+      });
+      expect(result.allowlistSatisfied).toBe(true);
+      expect(result.allowlistMatches).toEqual([]);
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform });
+    }
   });
 
   it("satisfies allowlist via auto-allow skills", () => {
@@ -634,24 +640,30 @@ describe("exec approvals node host allowlist check", () => {
   });
 
   it("satisfies via safeBins even when not in allowlist", () => {
-    const resolution = {
-      rawExecutable: "jq",
-      resolvedPath: "/usr/bin/jq",
-      executableName: "jq",
-    };
-    // Not in allowlist
-    const entries: ExecAllowlistEntry[] = [{ pattern: "/usr/bin/python3" }];
-    const match = matchAllowlist(entries, resolution);
-    expect(match).toBeNull();
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "linux" });
+    try {
+      const resolution = {
+        rawExecutable: "jq",
+        resolvedPath: "/usr/bin/jq",
+        executableName: "jq",
+      };
+      // Not in allowlist
+      const entries: ExecAllowlistEntry[] = [{ pattern: "/usr/bin/python3" }];
+      const match = matchAllowlist(entries, resolution);
+      expect(match).toBeNull();
 
-    // But is a safe bin with non-file args
-    const safe = isSafeBinUsage({
-      argv: ["jq", ".foo"],
-      resolution,
-      safeBins: normalizeSafeBins(["jq"]),
-      cwd: "/tmp",
-    });
-    expect(safe).toBe(true);
+      // But is a safe bin with non-file args
+      const safe = isSafeBinUsage({
+        argv: ["jq", ".foo"],
+        resolution,
+        safeBins: normalizeSafeBins(["jq"]),
+        cwd: "/tmp",
+      });
+      expect(safe).toBe(true);
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform });
+    }
   });
 });
 
