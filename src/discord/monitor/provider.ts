@@ -11,6 +11,7 @@ import {
   buildAllowlistResolutionSummary,
   mergeAllowlist,
   resolveAllowlistIdAdditions,
+  patchAllowlistUsersInConfigEntries,
   summarizeMapping,
 } from "../../channels/allowlists/resolve-utils.js";
 import {
@@ -352,25 +353,10 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
             }
             const channels = (guildConfig as { channels?: Record<string, unknown> }).channels ?? {};
             if (channels && typeof channels === "object") {
-              const nextChannels: Record<string, unknown> = { ...channels };
-              for (const [channelKey, channelConfig] of Object.entries(channels)) {
-                if (!channelConfig || typeof channelConfig !== "object") {
-                  continue;
-                }
-                const channelUsers = (channelConfig as { users?: Array<string | number> }).users;
-                if (!Array.isArray(channelUsers) || channelUsers.length === 0) {
-                  continue;
-                }
-                const additions = resolveAllowlistIdAdditions({
-                  existing: channelUsers,
-                  resolvedMap,
-                });
-                nextChannels[channelKey] = {
-                  ...channelConfig,
-                  users: mergeAllowlist({ existing: channelUsers, additions }),
-                };
-              }
-              nextGuild.channels = nextChannels;
+              nextGuild.channels = patchAllowlistUsersInConfigEntries({
+                entries: channels,
+                resolvedMap,
+              });
             }
             nextGuilds[guildKey] = nextGuild;
           }
