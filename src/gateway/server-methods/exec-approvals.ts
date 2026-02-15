@@ -1,9 +1,9 @@
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import {
   ensureExecApprovals,
+  mergeExecApprovalsSocketDefaults,
   normalizeExecApprovals,
   readExecApprovalsSnapshot,
-  resolveExecApprovalsSocketPath,
   saveExecApprovals,
   type ExecApprovalsFile,
   type ExecApprovalsSnapshot,
@@ -134,18 +134,7 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
       return;
     }
     const normalized = normalizeExecApprovals(incoming as ExecApprovalsFile);
-    const currentSocketPath = snapshot.file.socket?.path?.trim();
-    const currentToken = snapshot.file.socket?.token?.trim();
-    const socketPath =
-      normalized.socket?.path?.trim() ?? currentSocketPath ?? resolveExecApprovalsSocketPath();
-    const token = normalized.socket?.token?.trim() ?? currentToken ?? "";
-    const next: ExecApprovalsFile = {
-      ...normalized,
-      socket: {
-        path: socketPath,
-        token,
-      },
-    };
+    const next = mergeExecApprovalsSocketDefaults({ normalized, current: snapshot.file });
     saveExecApprovals(next);
     const nextSnapshot = readExecApprovalsSnapshot();
     respond(

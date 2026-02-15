@@ -5,8 +5,11 @@ import { logConfigUpdated } from "../../config/logging.js";
 import {
   DEFAULT_PROVIDER,
   ensureFlagCompatibility,
+  mergePrimaryFallbackConfig,
+  type PrimaryFallbackConfig,
   modelKey,
   resolveModelTarget,
+  resolveModelKeysFromEntries,
   updateConfig,
 } from "./shared.js";
 
@@ -47,29 +50,12 @@ export async function modelsFallbacksAddCommand(modelRaw: string, runtime: Runti
     if (!nextModels[targetKey]) {
       nextModels[targetKey] = {};
     }
-    const aliasIndex = buildModelAliasIndex({
-      cfg,
-      defaultProvider: DEFAULT_PROVIDER,
-    });
     const existing = cfg.agents?.defaults?.model?.fallbacks ?? [];
-    const existingKeys = existing
-      .map((entry) =>
-        resolveModelRefFromString({
-          raw: String(entry ?? ""),
-          defaultProvider: DEFAULT_PROVIDER,
-          aliasIndex,
-        }),
-      )
-      .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
-      .map((entry) => modelKey(entry.ref.provider, entry.ref.model));
+    const existingKeys = resolveModelKeysFromEntries({ cfg, entries: existing });
 
     if (existingKeys.includes(targetKey)) {
       return cfg;
     }
-
-    const existingModel = cfg.agents?.defaults?.model as
-      | { primary?: string; fallbacks?: string[] }
-      | undefined;
 
     return {
       ...cfg,
@@ -77,10 +63,10 @@ export async function modelsFallbacksAddCommand(modelRaw: string, runtime: Runti
         ...cfg.agents,
         defaults: {
           ...cfg.agents?.defaults,
-          model: {
-            ...(existingModel?.primary ? { primary: existingModel.primary } : undefined),
-            fallbacks: [...existing, targetKey],
-          },
+          model: mergePrimaryFallbackConfig(
+            cfg.agents?.defaults?.model as unknown as PrimaryFallbackConfig | undefined,
+            { fallbacks: [...existing, targetKey] },
+          ),
           models: nextModels,
         },
       },
@@ -116,20 +102,16 @@ export async function modelsFallbacksRemoveCommand(modelRaw: string, runtime: Ru
       throw new Error(`Fallback not found: ${targetKey}`);
     }
 
-    const existingModel = cfg.agents?.defaults?.model as
-      | { primary?: string; fallbacks?: string[] }
-      | undefined;
-
     return {
       ...cfg,
       agents: {
         ...cfg.agents,
         defaults: {
           ...cfg.agents?.defaults,
-          model: {
-            ...(existingModel?.primary ? { primary: existingModel.primary } : undefined),
-            fallbacks: filtered,
-          },
+          model: mergePrimaryFallbackConfig(
+            cfg.agents?.defaults?.model as unknown as PrimaryFallbackConfig | undefined,
+            { fallbacks: filtered },
+          ),
         },
       },
     };
@@ -141,19 +123,16 @@ export async function modelsFallbacksRemoveCommand(modelRaw: string, runtime: Ru
 
 export async function modelsFallbacksClearCommand(runtime: RuntimeEnv) {
   await updateConfig((cfg) => {
-    const existingModel = cfg.agents?.defaults?.model as
-      | { primary?: string; fallbacks?: string[] }
-      | undefined;
     return {
       ...cfg,
       agents: {
         ...cfg.agents,
         defaults: {
           ...cfg.agents?.defaults,
-          model: {
-            ...(existingModel?.primary ? { primary: existingModel.primary } : undefined),
-            fallbacks: [],
-          },
+          model: mergePrimaryFallbackConfig(
+            cfg.agents?.defaults?.model as unknown as PrimaryFallbackConfig | undefined,
+            { fallbacks: [] },
+          ),
         },
       },
     };
