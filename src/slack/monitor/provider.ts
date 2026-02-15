@@ -7,7 +7,7 @@ import { DEFAULT_GROUP_HISTORY_LIMIT } from "../../auto-reply/reply/history.js";
 import {
   buildAllowlistResolutionSummary,
   mergeAllowlist,
-  resolveAllowlistIdAdditions,
+  patchAllowlistUsersInConfigEntries,
   summarizeMapping,
 } from "../../channels/allowlists/resolve-utils.js";
 import { loadConfig } from "../../config/config.js";
@@ -330,24 +330,10 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
             const { resolvedMap, mapping, unresolved } =
               buildAllowlistResolutionSummary(resolvedUsers);
 
-            const nextChannels = { ...channelsConfig };
-            for (const [channelKey, channelConfig] of Object.entries(channelsConfig)) {
-              if (!channelConfig || typeof channelConfig !== "object") {
-                continue;
-              }
-              const channelUsers = (channelConfig as { users?: Array<string | number> }).users;
-              if (!Array.isArray(channelUsers) || channelUsers.length === 0) {
-                continue;
-              }
-              const additions = resolveAllowlistIdAdditions({
-                existing: channelUsers,
-                resolvedMap,
-              });
-              nextChannels[channelKey] = {
-                ...channelConfig,
-                users: mergeAllowlist({ existing: channelUsers, additions }),
-              };
-            }
+            const nextChannels = patchAllowlistUsersInConfigEntries({
+              entries: channelsConfig,
+              resolvedMap,
+            });
             channelsConfig = nextChannels;
             ctx.channelsConfig = nextChannels;
             summarizeMapping("slack channel users", mapping, unresolved, runtime);

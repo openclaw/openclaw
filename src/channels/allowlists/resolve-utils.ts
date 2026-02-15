@@ -63,6 +63,31 @@ export function resolveAllowlistIdAdditions<T extends AllowlistUserResolutionLik
   return additions;
 }
 
+export function patchAllowlistUsersInConfigEntries<
+  T extends AllowlistUserResolutionLike,
+  TEntries extends Record<string, unknown>,
+>(params: { entries: TEntries; resolvedMap: Map<string, T> }): TEntries {
+  const nextEntries: Record<string, unknown> = { ...params.entries };
+  for (const [entryKey, entryConfig] of Object.entries(params.entries)) {
+    if (!entryConfig || typeof entryConfig !== "object") {
+      continue;
+    }
+    const users = (entryConfig as { users?: Array<string | number> }).users;
+    if (!Array.isArray(users) || users.length === 0) {
+      continue;
+    }
+    const additions = resolveAllowlistIdAdditions({
+      existing: users,
+      resolvedMap: params.resolvedMap,
+    });
+    nextEntries[entryKey] = {
+      ...entryConfig,
+      users: mergeAllowlist({ existing: users, additions }),
+    };
+  }
+  return nextEntries as TEntries;
+}
+
 export function summarizeMapping(
   label: string,
   mapping: string[],
