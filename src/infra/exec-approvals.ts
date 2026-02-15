@@ -1,9 +1,9 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
-import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
+import { requestJsonlSocket } from "./jsonl-socket.js";
 export * from "./exec-approvals-analysis.js";
 export * from "./exec-approvals-allowlist.js";
 
@@ -500,56 +500,23 @@ export async function requestExecApprovalViaSocket(params: {
     return null;
   }
   const timeoutMs = params.timeoutMs ?? 15_000;
-  return await new Promise((resolve) => {
-    const client = new net.Socket();
-    let settled = false;
-    let buffer = "";
-    const finish = (value: ExecApprovalDecision | null) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      try {
-        client.destroy();
-      } catch {
-        // ignore
-      }
-      resolve(value);
-    };
+  const payload = JSON.stringify({
+    type: "request",
+    token,
+    id: crypto.randomUUID(),
+    request,
+  });
 
-    const timer = setTimeout(() => finish(null), timeoutMs);
-    const payload = JSON.stringify({
-      type: "request",
-      token,
-      id: crypto.randomUUID(),
-      request,
-    });
-
-    client.on("error", () => finish(null));
-    client.connect(socketPath, () => {
-      client.write(`${payload}\n`);
-    });
-    client.on("data", (data) => {
-      buffer += data.toString("utf8");
-      let idx = buffer.indexOf("\n");
-      while (idx !== -1) {
-        const line = buffer.slice(0, idx).trim();
-        buffer = buffer.slice(idx + 1);
-        idx = buffer.indexOf("\n");
-        if (!line) {
-          continue;
-        }
-        try {
-          const msg = JSON.parse(line) as { type?: string; decision?: ExecApprovalDecision };
-          if (msg?.type === "decision" && msg.decision) {
-            clearTimeout(timer);
-            finish(msg.decision);
-            return;
-          }
-        } catch {
-          // ignore
-        }
+  return await requestJsonlSocket({
+    socketPath,
+    payload,
+    timeoutMs,
+    accept: (value) => {
+      const msg = value as { type?: string; decision?: ExecApprovalDecision };
+      if (msg?.type === "decision" && msg.decision) {
+        return msg.decision;
       }
-    });
+      return undefined;
+    },
   });
 }
