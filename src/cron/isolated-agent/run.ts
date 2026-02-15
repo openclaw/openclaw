@@ -37,6 +37,7 @@ import { readLatestAssistantReply } from "../../agents/tools/agent-step.js";
 import { deriveSessionTotalTokens, hasNonzeroUsage } from "../../agents/usage.js";
 import { ensureAgentWorkspace } from "../../agents/workspace.js";
 import {
+  formatXHighModelHint,
   normalizeThinkLevel,
   normalizeVerboseLevel,
   supportsXHighThinking,
@@ -454,11 +455,9 @@ export async function runCronIsolatedAgentTurn(params: {
       catalog: await loadCatalog(),
     });
   }
+  const xHighHint = formatXHighModelHint();
   if (thinkLevel === "xhigh" && !supportsXHighThinking(provider, model)) {
-    logWarn(
-      `[cron:${params.job.id}] Thinking level "xhigh" is not supported for ${provider}/${model}; downgrading to "high".`,
-    );
-    thinkLevel = "high";
+    throw new Error(`Thinking level "xhigh" is only supported for ${xHighHint}.`);
   }
 
   const timeoutMs = resolveAgentTimeoutMs({
