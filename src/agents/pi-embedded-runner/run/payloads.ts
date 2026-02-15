@@ -4,11 +4,7 @@ import type { OpenClawConfig } from "../../../config/config.js";
 import type { ToolResultFormat } from "../../pi-embedded-subscribe.js";
 import { stripHeartbeatToken } from "../../../auto-reply/heartbeat.js";
 import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives.js";
-import {
-  HEARTBEAT_TOKEN,
-  isSilentReplyText,
-  SILENT_REPLY_TOKEN,
-} from "../../../auto-reply/tokens.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { formatToolAggregate } from "../../../auto-reply/tool-meta.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
@@ -299,7 +295,7 @@ export function buildEmbeddedRunPayloads(params: {
       const mediaUrl = item.media?.[0];
       const hasMedia = Boolean(mediaUrl || (mediaUrls?.length ?? 0) > 0);
 
-      if (text && text.includes(HEARTBEAT_TOKEN)) {
+      if (text) {
         const stripped = stripHeartbeatToken(text, { mode: "message" });
         if (stripped.shouldSkip && !hasMedia) {
           text = undefined;
