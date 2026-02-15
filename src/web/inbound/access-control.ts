@@ -49,8 +49,7 @@ export async function checkInboundAccessControl(params: {
     combinedAllowFrom.length === 0 && params.selfE164 ? [params.selfE164] : undefined;
   const allowFrom = combinedAllowFrom.length > 0 ? combinedAllowFrom : defaultAllowFrom;
   const groupAllowFrom =
-    account.groupAllowFrom ??
-    (configuredAllowFrom && configuredAllowFrom.length > 0 ? configuredAllowFrom : undefined);
+    account.groupAllowFrom ?? (combinedAllowFrom.length > 0 ? combinedAllowFrom : undefined);
   const isSamePhone = params.from === params.selfE164;
   const isSelfChat = isSelfChatMode(params.selfE164, configuredAllowFrom);
   const pairingGraceMs =
