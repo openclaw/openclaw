@@ -13,6 +13,7 @@ import {
   isDirectiveOnly,
   persistInlineDirectives,
 } from "./directive-handling.js";
+import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
 
@@ -104,31 +105,7 @@ export async function applyInlineDirectiveOverrides(params: {
   let directiveAck: ReplyPayload | undefined;
 
   if (!command.isAuthorizedSender) {
-    directives = {
-      ...directives,
-      hasThinkDirective: false,
-      hasVerboseDirective: false,
-      hasReasoningDirective: false,
-      hasElevatedDirective: false,
-      hasExecDirective: false,
-      execHost: undefined,
-      execSecurity: undefined,
-      execAsk: undefined,
-      execNode: undefined,
-      rawExecHost: undefined,
-      rawExecSecurity: undefined,
-      rawExecAsk: undefined,
-      rawExecNode: undefined,
-      hasExecOptions: false,
-      invalidExecHost: false,
-      invalidExecSecurity: false,
-      invalidExecAsk: false,
-      invalidExecNode: false,
-      hasStatusDirective: false,
-      hasModelDirective: false,
-      hasQueueDirective: false,
-      queueReset: false,
-    };
+    directives = clearInlineDirectives(directives.cleaned);
   }
 
   if (

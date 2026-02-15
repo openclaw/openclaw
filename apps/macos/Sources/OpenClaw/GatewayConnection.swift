@@ -68,6 +68,7 @@ actor GatewayConnection {
         case wizardNext = "wizard.next"
         case wizardCancel = "wizard.cancel"
         case wizardStatus = "wizard.status"
+        case talkConfig = "talk.config"
         case talkMode = "talk.mode"
         case webLoginStart = "web.login.start"
         case webLoginWait = "web.login.wait"

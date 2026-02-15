@@ -200,14 +200,35 @@ describe("createReplyReferencePlanner", () => {
     expect(planner.use()).toBe("parent");
   });
 
-  it("prefers existing thread id regardless of mode", () => {
+  it("respects replyToMode off even with existingId", () => {
     const planner = createReplyReferencePlanner({
       replyToMode: "off",
       existingId: "thread-1",
       startId: "parent",
     });
+    expect(planner.use()).toBeUndefined();
+    expect(planner.hasReplied()).toBe(false);
+  });
+
+  it("uses existingId once when mode is first", () => {
+    const planner = createReplyReferencePlanner({
+      replyToMode: "first",
+      existingId: "thread-1",
+      startId: "parent",
+    });
     expect(planner.use()).toBe("thread-1");
     expect(planner.hasReplied()).toBe(true);
+    expect(planner.use()).toBeUndefined();
+  });
+
+  it("uses existingId on every call when mode is all", () => {
+    const planner = createReplyReferencePlanner({
+      replyToMode: "all",
+      existingId: "thread-1",
+      startId: "parent",
+    });
+    expect(planner.use()).toBe("thread-1");
+    expect(planner.use()).toBe("thread-1");
   });
 
   it("honors allowReference=false", () => {

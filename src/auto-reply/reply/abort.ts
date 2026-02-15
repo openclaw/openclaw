@@ -2,7 +2,10 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { FinalizedMsgContext, MsgContext } from "../templating.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { abortEmbeddedPiRun } from "../../agents/pi-embedded.js";
-import { listSubagentRunsForRequester } from "../../agents/subagent-registry.js";
+import {
+  listSubagentRunsForRequester,
+  markSubagentRunTerminated,
+} from "../../agents/subagent-registry.js";
 import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
@@ -22,6 +25,7 @@ import { clearSessionQueues } from "./queue.js";
 
 const ABORT_TRIGGERS = new Set(["stop", "esc", "abort", "wait", "exit", "interrupt"]);
 const ABORT_MEMORY = new Map<string, boolean>();
+const ABORT_MEMORY_MAX = 2000;
 
 export function isAbortTrigger(text?: string): boolean {
   if (!text) {
@@ -32,11 +36,51 @@ export function isAbortTrigger(text?: string): boolean {
 }
 
 export function getAbortMemory(key: string): boolean | undefined {
-  return ABORT_MEMORY.get(key);
+  const normalized = key.trim();
+  if (!normalized) {
+    return undefined;
+  }
+  return ABORT_MEMORY.get(normalized);
+}
+
+function pruneAbortMemory(): void {
+  if (ABORT_MEMORY.size <= ABORT_MEMORY_MAX) {
+    return;
+  }
+  const excess = ABORT_MEMORY.size - ABORT_MEMORY_MAX;
+  let removed = 0;
+  for (const entryKey of ABORT_MEMORY.keys()) {
+    ABORT_MEMORY.delete(entryKey);
+    removed += 1;
+    if (removed >= excess) {
+      break;
+    }
+  }
 }
 
 export function setAbortMemory(key: string, value: boolean): void {
-  ABORT_MEMORY.set(key, value);
+  const normalized = key.trim();
+  if (!normalized) {
+    return;
+  }
+  if (!value) {
+    ABORT_MEMORY.delete(normalized);
+    return;
+  }
+  // Refresh insertion order so active keys are less likely to be evicted.
+  if (ABORT_MEMORY.has(normalized)) {
+    ABORT_MEMORY.delete(normalized);
+  }
+  ABORT_MEMORY.set(normalized, true);
+  pruneAbortMemory();
+}
+
+export function getAbortMemorySizeForTest(): number {
+  return ABORT_MEMORY.size;
+}
+
+export function resetAbortMemoryForTest(): void {
+  ABORT_MEMORY.clear();
 }
 
 export function formatAbortReplyText(stoppedSubagents?: number): string {
@@ -100,30 +144,42 @@ export function stopSubagentsForRequester(params: {
   let stopped = 0;
 
   for (const run of runs) {
-    if (run.endedAt) {
-      continue;
-    }
     const childKey = run.childSessionKey?.trim();
     if (!childKey || seenChildKeys.has(childKey)) {
       continue;
     }
     seenChildKeys.add(childKey);
 
-    const cleared = clearSessionQueues([childKey]);
-    const parsed = parseAgentSessionKey(childKey);
-    const storePath = resolveStorePath(params.cfg.session?.store, { agentId: parsed?.agentId });
-    let store = storeCache.get(storePath);
-    if (!store) {
-      store = loadSessionStore(storePath);
-      storeCache.set(storePath, store);
-    }
-    const entry = store[childKey];
-    const sessionId = entry?.sessionId;
-    const aborted = sessionId ? abortEmbeddedPiRun(sessionId) : false;
+    if (!run.endedAt) {
+      const cleared = clearSessionQueues([childKey]);
+      const parsed = parseAgentSessionKey(childKey);
+      const storePath = resolveStorePath(params.cfg.session?.store, { agentId: parsed?.agentId });
+      let store = storeCache.get(storePath);
+      if (!store) {
+        store = loadSessionStore(storePath);
+        storeCache.set(storePath, store);
+      }
+      const entry = store[childKey];
+      const sessionId = entry?.sessionId;
+      const aborted = sessionId ? abortEmbeddedPiRun(sessionId) : false;
+      const markedTerminated =
+        markSubagentRunTerminated({
+          runId: run.runId,
+          childSessionKey: childKey,
+          reason: "killed",
+        }) > 0;
 
-    if (aborted || cleared.followupCleared > 0 || cleared.laneCleared > 0) {
-      stopped += 1;
+      if (markedTerminated || aborted || cleared.followupCleared > 0 || cleared.laneCleared > 0) {
+        stopped += 1;
+      }
     }
+
+    // Cascade: also stop any sub-sub-agents spawned by this child.
+    const cascadeResult = stopSubagentsForRequester({
+      cfg: params.cfg,
+      requesterSessionKey: childKey,
+    });
+    stopped += cascadeResult.stopped;
   }
 
   if (stopped > 0) {

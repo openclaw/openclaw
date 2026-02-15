@@ -1,3 +1,4 @@
+import type { SandboxFsBridge } from "./fs-bridge.js";
 import type { SandboxDockerConfig } from "./types.docker.js";
 
 export type { SandboxDockerConfig } from "./types.docker.js";
@@ -39,6 +40,7 @@ export type SandboxBrowserConfig = {
   allowHostControl: boolean;
   autoStart: boolean;
   autoStartTimeoutMs: number;
+  binds?: string[];
 };
 
 export type SandboxPruneConfig = {
@@ -77,6 +79,7 @@ export type SandboxContext = {
   tools: SandboxToolPolicy;
   browserAllowHostControl: boolean;
   browser?: SandboxBrowserContext;
+  fsBridge?: SandboxFsBridge;
 };
 
 export type SandboxWorkspaceInfo = {

@@ -13,10 +13,40 @@ type HeldLock = {
   lockPath: string;
 };
 
-const HELD_LOCKS = new Map<string, HeldLock>();
 const CLEANUP_SIGNALS = ["SIGINT", "SIGTERM", "SIGQUIT", "SIGABRT"] as const;
 type CleanupSignal = (typeof CLEANUP_SIGNALS)[number];
-const cleanupHandlers = new Map<CleanupSignal, () => void>();
+const CLEANUP_STATE_KEY = Symbol.for("openclaw.sessionWriteLockCleanupState");
+const HELD_LOCKS_KEY = Symbol.for("openclaw.sessionWriteLockHeldLocks");
+
+type CleanupState = {
+  registered: boolean;
+  cleanupHandlers: Map<CleanupSignal, () => void>;
+};
+
+function resolveHeldLocks(): Map<string, HeldLock> {
+  const proc = process as NodeJS.Process & {
+    [HELD_LOCKS_KEY]?: Map<string, HeldLock>;
+  };
+  if (!proc[HELD_LOCKS_KEY]) {
+    proc[HELD_LOCKS_KEY] = new Map<string, HeldLock>();
+  }
+  return proc[HELD_LOCKS_KEY];
+}
+
+const HELD_LOCKS = resolveHeldLocks();
+
+function resolveCleanupState(): CleanupState {
+  const proc = process as NodeJS.Process & {
+    [CLEANUP_STATE_KEY]?: CleanupState;
+  };
+  if (!proc[CLEANUP_STATE_KEY]) {
+    proc[CLEANUP_STATE_KEY] = {
+      registered: false,
+      cleanupHandlers: new Map<CleanupSignal, () => void>(),
+    };
+  }
+  return proc[CLEANUP_STATE_KEY];
+}
 
 function isAlive(pid: number): boolean {
   if (!Number.isFinite(pid) || pid <= 0) {
@@ -52,15 +82,15 @@ function releaseAllLocksSync(): void {
   }
 }
 
-let cleanupRegistered = false;
-
 function handleTerminationSignal(signal: CleanupSignal): void {
   releaseAllLocksSync();
+  const cleanupState = resolveCleanupState();
   const shouldReraise = process.listenerCount(signal) === 1;
   if (shouldReraise) {
-    const handler = cleanupHandlers.get(signal);
+    const handler = cleanupState.cleanupHandlers.get(signal);
     if (handler) {
       process.off(signal, handler);
+      cleanupState.cleanupHandlers.delete(signal);
     }
     try {
       process.kill(process.pid, signal);
@@ -71,21 +101,23 @@ function handleTerminationSignal(signal: CleanupSignal): void {
 }
 
 function registerCleanupHandlers(): void {
-  if (cleanupRegistered) {
-    return;
+  const cleanupState = resolveCleanupState();
+  if (!cleanupState.registered) {
+    cleanupState.registered = true;
+    // Cleanup on normal exit and process.exit() calls
+    process.on("exit", () => {
+      releaseAllLocksSync();
+    });
   }
-  cleanupRegistered = true;
-
-  // Cleanup on normal exit and process.exit() calls
-  process.on("exit", () => {
-    releaseAllLocksSync();
-  });
 
   // Handle termination signals
   for (const signal of CLEANUP_SIGNALS) {
+    if (cleanupState.cleanupHandlers.has(signal)) {
+      continue;
+    }
     try {
       const handler = () => handleTerminationSignal(signal);
-      cleanupHandlers.set(signal, handler);
+      cleanupState.cleanupHandlers.set(signal, handler);
       process.on(signal, handler);
     } catch {
       // Ignore unsupported signals on this platform.
@@ -130,24 +162,25 @@ export async function acquireSessionWriteLock(params: {
   }
   const normalizedSessionFile = path.join(normalizedDir, path.basename(sessionFile));
   const lockPath = `${normalizedSessionFile}.lock`;
+  const release = async () => {
+    const current = HELD_LOCKS.get(normalizedSessionFile);
+    if (!current) {
+      return;
+    }
+    current.count -= 1;
+    if (current.count > 0) {
+      return;
+    }
+    HELD_LOCKS.delete(normalizedSessionFile);
+    await current.handle.close();
+    await fs.rm(current.lockPath, { force: true });
+  };
 
   const held = HELD_LOCKS.get(normalizedSessionFile);
   if (held) {
     held.count += 1;
     return {
-      release: async () => {
-        const current = HELD_LOCKS.get(normalizedSessionFile);
-        if (!current) {
-          return;
-        }
-        current.count -= 1;
-        if (current.count > 0) {
-          return;
-        }
-        HELD_LOCKS.delete(normalizedSessionFile);
-        await current.handle.close();
-        await fs.rm(current.lockPath, { force: true });
-      },
+      release,
     };
   }
 
@@ -163,19 +196,7 @@ export async function acquireSessionWriteLock(params: {
       );
       HELD_LOCKS.set(normalizedSessionFile, { count: 1, handle, lockPath });
       return {
-        release: async () => {
-          const current = HELD_LOCKS.get(normalizedSessionFile);
-          if (!current) {
-            return;
-          }
-          current.count -= 1;
-          if (current.count > 0) {
-            return;
-          }
-          HELD_LOCKS.delete(normalizedSessionFile);
-          await current.handle.close();
-          await fs.rm(current.lockPath, { force: true });
-        },
+        release,
       };
     } catch (err) {
       const code = (err as { code?: unknown }).code;

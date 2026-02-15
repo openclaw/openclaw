@@ -1,5 +1,4 @@
 import type { WebhookRequestBody } from "@line/bot-sdk";
-import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { LineChannelData, ResolvedLineAccount } from "./types.js";
@@ -26,8 +25,8 @@ import {
   createImageMessage,
   createLocationMessage,
 } from "./send.js";
-import { validateLineSignature } from "./signature.js";
 import { buildTemplateMessageFromPayload } from "./template-messages.js";
+import { createLineNodeWebhookHandler } from "./webhook-node.js";
 
 export interface MonitorLineProviderOptions {
   channelAccessToken: string;
@@ -83,15 +82,6 @@ function recordChannelRuntimeState(params: {
 
 export function getLineRuntimeState(accountId: string) {
   return runtimeState.get(`line:${accountId}`);
-}
-
-async function readRequestBody(req: IncomingMessage): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    req.on("data", (chunk) => chunks.push(chunk));
-    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf-8")));
-    req.on("error", reject);
-  });
 }
 
 function startLineLoadingKeepalive(params: {
@@ -291,69 +281,7 @@ export async function monitorLineProvider(
     pluginId: "line",
     accountId: resolvedAccountId,
     log: (msg) => logVerbose(msg),
-    handler: async (req: IncomingMessage, res: ServerResponse) => {
-      // Handle GET requests for webhook verification
-      if (req.method === "GET") {
-        res.statusCode = 200;
-        res.setHeader("Content-Type", "text/plain");
-        res.end("OK");
-        return;
-      }
-
-      // Only accept POST requests
-      if (req.method !== "POST") {
-        res.statusCode = 405;
-        res.setHeader("Allow", "GET, POST");
-        res.setHeader("Content-Type", "application/json");
-        res.end(JSON.stringify({ error: "Method Not Allowed" }));
-        return;
-      }
-
-      try {
-        const rawBody = await readRequestBody(req);
-        const signature = req.headers["x-line-signature"];
-
-        // Validate signature
-        if (!signature || typeof signature !== "string") {
-          logVerbose("line: webhook missing X-Line-Signature header");
-          res.statusCode = 400;
-          res.setHeader("Content-Type", "application/json");
-          res.end(JSON.stringify({ error: "Missing X-Line-Signature header" }));
-          return;
-        }
-
-        if (!validateLineSignature(rawBody, signature, channelSecret)) {
-          logVerbose("line: webhook signature validation failed");
-          res.statusCode = 401;
-          res.setHeader("Content-Type", "application/json");
-          res.end(JSON.stringify({ error: "Invalid signature" }));
-          return;
-        }
-
-        // Parse and process the webhook body
-        const body = JSON.parse(rawBody) as WebhookRequestBody;
-
-        // Respond immediately with 200 to avoid LINE timeout
-        res.statusCode = 200;
-        res.setHeader("Content-Type", "application/json");
-        res.end(JSON.stringify({ status: "ok" }));
-
-        // Process events asynchronously
-        if (body.events && body.events.length > 0) {
-          logVerbose(`line: received ${body.events.length} webhook events`);
-          await bot.handleWebhook(body).catch((err) => {
-            runtime.error?.(danger(`line webhook handler failed: ${String(err)}`));
-          });
-        }
-      } catch (err) {
-        runtime.error?.(danger(`line webhook error: ${String(err)}`));
-        if (!res.headersSent) {
-          res.statusCode = 500;
-          res.setHeader("Content-Type", "application/json");
-          res.end(JSON.stringify({ error: "Internal server error" }));
-        }
-      }
-    },
+    handler: createLineNodeWebhookHandler({ channelSecret, bot, runtime }),
   });
 
   logVerbose(`line: registered webhook handler at ${normalizedPath}`);

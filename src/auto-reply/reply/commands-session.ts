@@ -167,6 +167,7 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
       sessionEntry: params.sessionEntry,
       sessionFile: params.sessionEntry?.sessionFile,
       config: params.cfg,
+      agentId: params.agentId,
     });
     const summary = await loadCostUsageSummary({ days: 30, config: params.cfg });
 

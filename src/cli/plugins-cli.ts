@@ -1,21 +1,25 @@
 import type { Command } from "commander";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginRecord } from "../plugins/registry.js";
 import { loadConfig, writeConfigFile } from "../config/config.js";
+import { resolveStateDir } from "../config/paths.js";
 import { resolveArchiveKind } from "../infra/archive.js";
 import { installPluginFromNpmSpec, installPluginFromPath } from "../plugins/install.js";
 import { recordPluginInstall } from "../plugins/installs.js";
 import { applyExclusiveSlotSelection } from "../plugins/slots.js";
 import { resolvePluginSourceRoots, formatPluginSourceForTable } from "../plugins/source-display.js";
 import { buildPluginStatusReport } from "../plugins/status.js";
+import { resolveUninstallDirectoryTarget, uninstallPlugin } from "../plugins/uninstall.js";
 import { updateNpmInstalledPlugins } from "../plugins/update.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
 import { resolveUserPath, shortenHomeInString, shortenHomePath } from "../utils.js";
+import { promptYesNo } from "./prompt.js";
 
 export type PluginsListOptions = {
   json?: boolean;
@@ -31,6 +35,41 @@ export type PluginUpdateOptions = {
   all?: boolean;
   dryRun?: boolean;
 };
+
+export type PluginUninstallOptions = {
+  keepFiles?: boolean;
+  keepConfig?: boolean;
+  force?: boolean;
+  dryRun?: boolean;
+};
+
+function resolveFileNpmSpecToLocalPath(
+  raw: string,
+): { ok: true; path: string } | { ok: false; error: string } | null {
+  const trimmed = raw.trim();
+  if (!trimmed.toLowerCase().startsWith("file:")) {
+    return null;
+  }
+  const rest = trimmed.slice("file:".length);
+  if (!rest) {
+    return { ok: false, error: "unsupported file: spec: missing path" };
+  }
+  if (rest.startsWith("///")) {
+    // file:///abs/path -> /abs/path
+    return { ok: true, path: rest.slice(2) };
+  }
+  if (rest.startsWith("//localhost/")) {
+    // file://localhost/abs/path -> /abs/path
+    return { ok: true, path: rest.slice("//localhost".length) };
+  }
+  if (rest.startsWith("//")) {
+    return {
+      ok: false,
+      error: 'unsupported file: URL host (expected "file:<path>" or "file:///abs/path")',
+    };
+  }
+  return { ok: true, path: rest };
+}
 
 function formatPluginLine(plugin: PluginRecord, verbose = false): string {
   const status =
@@ -86,6 +125,29 @@ function applySlotSelectionForPlugin(
     registry: report,
   });
   return { config: result.config, warnings: result.warnings };
+}
+
+function createPluginInstallLogger(): { info: (msg: string) => void; warn: (msg: string) => void } {
+  return {
+    info: (msg) => defaultRuntime.log(msg),
+    warn: (msg) => defaultRuntime.log(theme.warn(msg)),
+  };
+}
+
+function enablePluginInConfig(config: OpenClawConfig, pluginId: string): OpenClawConfig {
+  return {
+    ...config,
+    plugins: {
+      ...config.plugins,
+      entries: {
+        ...config.plugins?.entries,
+        [pluginId]: {
+          ...(config.plugins?.entries?.[pluginId] as object | undefined),
+          enabled: true,
+        },
+      },
+    },
+  };
 }
 
 function logSlotWarnings(warnings: string[]) {
@@ -333,12 +395,153 @@ export function registerPluginsCli(program: Command) {
     });
 
   plugins
+    .command("uninstall")
+    .description("Uninstall a plugin")
+    .argument("<id>", "Plugin id")
+    .option("--keep-files", "Keep installed files on disk", false)
+    .option("--keep-config", "Deprecated alias for --keep-files", false)
+    .option("--force", "Skip confirmation prompt", false)
+    .option("--dry-run", "Show what would be removed without making changes", false)
+    .action(async (id: string, opts: PluginUninstallOptions) => {
+      const cfg = loadConfig();
+      const report = buildPluginStatusReport({ config: cfg });
+      const extensionsDir = path.join(resolveStateDir(process.env, os.homedir), "extensions");
+      const keepFiles = Boolean(opts.keepFiles || opts.keepConfig);
+
+      if (opts.keepConfig) {
+        defaultRuntime.log(theme.warn("`--keep-config` is deprecated, use `--keep-files`."));
+      }
+
+      // Find plugin by id or name
+      const plugin = report.plugins.find((p) => p.id === id || p.name === id);
+      const pluginId = plugin?.id ?? id;
+
+      // Check if plugin exists in config
+      const hasEntry = pluginId in (cfg.plugins?.entries ?? {});
+      const hasInstall = pluginId in (cfg.plugins?.installs ?? {});
+
+      if (!hasEntry && !hasInstall) {
+        if (plugin) {
+          defaultRuntime.error(
+            `Plugin "${pluginId}" is not managed by plugins config/install records and cannot be uninstalled.`,
+          );
+        } else {
+          defaultRuntime.error(`Plugin not found: ${id}`);
+        }
+        process.exit(1);
+      }
+
+      const install = cfg.plugins?.installs?.[pluginId];
+      const isLinked = install?.source === "path";
+
+      // Build preview of what will be removed
+      const preview: string[] = [];
+      if (hasEntry) {
+        preview.push("config entry");
+      }
+      if (hasInstall) {
+        preview.push("install record");
+      }
+      if (cfg.plugins?.allow?.includes(pluginId)) {
+        preview.push("allowlist entry");
+      }
+      if (
+        isLinked &&
+        install?.sourcePath &&
+        cfg.plugins?.load?.paths?.includes(install.sourcePath)
+      ) {
+        preview.push("load path");
+      }
+      if (cfg.plugins?.slots?.memory === pluginId) {
+        preview.push(`memory slot (will reset to "memory-core")`);
+      }
+      const deleteTarget = !keepFiles
+        ? resolveUninstallDirectoryTarget({
+            pluginId,
+            hasInstall,
+            installRecord: install,
+            extensionsDir,
+          })
+        : null;
+      if (deleteTarget) {
+        preview.push(`directory: ${shortenHomePath(deleteTarget)}`);
+      }
+
+      const pluginName = plugin?.name || pluginId;
+      defaultRuntime.log(
+        `Plugin: ${theme.command(pluginName)}${pluginName !== pluginId ? theme.muted(` (${pluginId})`) : ""}`,
+      );
+      defaultRuntime.log(`Will remove: ${preview.length > 0 ? preview.join(", ") : "(nothing)"}`);
+
+      if (opts.dryRun) {
+        defaultRuntime.log(theme.muted("Dry run, no changes made."));
+        return;
+      }
+
+      if (!opts.force) {
+        const confirmed = await promptYesNo(`Uninstall plugin "${pluginId}"?`);
+        if (!confirmed) {
+          defaultRuntime.log("Cancelled.");
+          return;
+        }
+      }
+
+      const result = await uninstallPlugin({
+        config: cfg,
+        pluginId,
+        deleteFiles: !keepFiles,
+        extensionsDir,
+      });
+
+      if (!result.ok) {
+        defaultRuntime.error(result.error);
+        process.exit(1);
+      }
+      for (const warning of result.warnings) {
+        defaultRuntime.log(theme.warn(warning));
+      }
+
+      await writeConfigFile(result.config);
+
+      const removed: string[] = [];
+      if (result.actions.entry) {
+        removed.push("config entry");
+      }
+      if (result.actions.install) {
+        removed.push("install record");
+      }
+      if (result.actions.allowlist) {
+        removed.push("allowlist");
+      }
+      if (result.actions.loadPath) {
+        removed.push("load path");
+      }
+      if (result.actions.memorySlot) {
+        removed.push("memory slot");
+      }
+      if (result.actions.directory) {
+        removed.push("directory");
+      }
+
+      defaultRuntime.log(
+        `Uninstalled plugin "${pluginId}". Removed: ${removed.length > 0 ? removed.join(", ") : "nothing"}.`,
+      );
+      defaultRuntime.log("Restart the gateway to apply changes.");
+    });
+
+  plugins
     .command("install")
     .description("Install a plugin (path, archive, or npm spec)")
     .argument("<path-or-spec>", "Path (.ts/.js/.zip/.tgz/.tar.gz) or an npm package spec")
     .option("-l, --link", "Link a local path instead of copying", false)
     .action(async (raw: string, opts: { link?: boolean }) => {
-      const resolved = resolveUserPath(raw);
+      const fileSpec = resolveFileNpmSpecToLocalPath(raw);
+      if (fileSpec && !fileSpec.ok) {
+        defaultRuntime.error(fileSpec.error);
+        process.exit(1);
+      }
+      const normalized = fileSpec && fileSpec.ok ? fileSpec.path : raw;
+      const resolved = resolveUserPath(normalized);
       const cfg = loadConfig();
 
       if (fs.existsSync(resolved)) {
@@ -351,23 +554,19 @@ export function registerPluginsCli(program: Command) {
             process.exit(1);
           }
 
-          let next: OpenClawConfig = {
-            ...cfg,
-            plugins: {
-              ...cfg.plugins,
-              load: {
-                ...cfg.plugins?.load,
-                paths: merged,
-              },
-              entries: {
-                ...cfg.plugins?.entries,
-                [probe.pluginId]: {
-                  ...(cfg.plugins?.entries?.[probe.pluginId] as object | undefined),
-                  enabled: true,
+          let next: OpenClawConfig = enablePluginInConfig(
+            {
+              ...cfg,
+              plugins: {
+                ...cfg.plugins,
+                load: {
+                  ...cfg.plugins?.load,
+                  paths: merged,
                 },
               },
             },
-          };
+            probe.pluginId,
+          );
           next = recordPluginInstall(next, {
             pluginId: probe.pluginId,
             source: "path",
@@ -386,29 +585,14 @@ export function registerPluginsCli(program: Command) {
 
         const result = await installPluginFromPath({
           path: resolved,
-          logger: {
-            info: (msg) => defaultRuntime.log(msg),
-            warn: (msg) => defaultRuntime.log(theme.warn(msg)),
-          },
+          logger: createPluginInstallLogger(),
         });
         if (!result.ok) {
           defaultRuntime.error(result.error);
           process.exit(1);
         }
 
-        let next: OpenClawConfig = {
-          ...cfg,
-          plugins: {
-            ...cfg.plugins,
-            entries: {
-              ...cfg.plugins?.entries,
-              [result.pluginId]: {
-                ...(cfg.plugins?.entries?.[result.pluginId] as object | undefined),
-                enabled: true,
-              },
-            },
-          },
-        };
+        let next = enablePluginInConfig(cfg, result.pluginId);
         const source: "archive" | "path" = resolveArchiveKind(resolved) ? "archive" : "path";
         next = recordPluginInstall(next, {
           pluginId: result.pluginId,
@@ -450,29 +634,14 @@ export function registerPluginsCli(program: Command) {
 
       const result = await installPluginFromNpmSpec({
         spec: raw,
-        logger: {
-          info: (msg) => defaultRuntime.log(msg),
-          warn: (msg) => defaultRuntime.log(theme.warn(msg)),
-        },
+        logger: createPluginInstallLogger(),
       });
       if (!result.ok) {
         defaultRuntime.error(result.error);
         process.exit(1);
       }
 
-      let next: OpenClawConfig = {
-        ...cfg,
-        plugins: {
-          ...cfg.plugins,
-          entries: {
-            ...cfg.plugins?.entries,
-            [result.pluginId]: {
-              ...(cfg.plugins?.entries?.[result.pluginId] as object | undefined),
-              enabled: true,
-            },
-          },
-        },
-      };
+      let next = enablePluginInConfig(cfg, result.pluginId);
       next = recordPluginInstall(next, {
         pluginId: result.pluginId,
         source: "npm",

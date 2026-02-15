@@ -1,4 +1,3 @@
-import { loginOpenAICodex } from "@mariozechner/pi-ai";
 import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { resolveEnvApiKey } from "../agents/model-auth.js";
 import { upsertSharedEnvVar } from "../infra/env-file.js";
@@ -9,13 +8,13 @@ import {
 } from "./auth-choice.api-key.js";
 import { applyDefaultModelChoice } from "./auth-choice.default-model.js";
 import { isRemoteEnvironment } from "./oauth-env.js";
-import { createVpsAwareOAuthHandlers } from "./oauth-flow.js";
 import { applyAuthProfileConfig, writeOAuthCredentials } from "./onboard-auth.js";
 import { openUrl } from "./onboard-helpers.js";
 import {
   applyOpenAICodexModelDefault,
   OPENAI_CODEX_DEFAULT_MODEL,
 } from "./openai-codex-model-default.js";
+import { loginOpenAICodexOAuth } from "./openai-codex-oauth.js";
 import {
   applyOpenAIConfig,
   applyOpenAIProviderConfig,
@@ -43,6 +42,22 @@ export async function applyAuthChoiceOpenAI(
       );
     };
 
+    const applyOpenAiDefaultModelChoice = async (): Promise<ApplyAuthChoiceResult> => {
+      const applied = await applyDefaultModelChoice({
+        config: nextConfig,
+        setDefaultModel: params.setDefaultModel,
+        defaultModel: OPENAI_DEFAULT_MODEL,
+        applyDefaultConfig: applyOpenAIConfig,
+        applyProviderConfig: applyOpenAIProviderConfig,
+        noteDefault: OPENAI_DEFAULT_MODEL,
+        noteAgentModel,
+        prompter: params.prompter,
+      });
+      nextConfig = applied.config;
+      agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
+      return { config: nextConfig, agentModelOverride };
+    };
+
     const envKey = resolveEnvApiKey("openai");
     if (envKey) {
       const useExisting = await params.prompter.confirm({
@@ -61,19 +76,7 @@ export async function applyAuthChoiceOpenAI(
           `Copied OPENAI_API_KEY to ${result.path} for launchd compatibility.`,
           "OpenAI API key",
         );
-        const applied = await applyDefaultModelChoice({
-          config: nextConfig,
-          setDefaultModel: params.setDefaultModel,
-          defaultModel: OPENAI_DEFAULT_MODEL,
-          applyDefaultConfig: applyOpenAIConfig,
-          applyProviderConfig: applyOpenAIProviderConfig,
-          noteDefault: OPENAI_DEFAULT_MODEL,
-          noteAgentModel,
-          prompter: params.prompter,
-        });
-        nextConfig = applied.config;
-        agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
-        return { config: nextConfig, agentModelOverride };
+        return await applyOpenAiDefaultModelChoice();
       }
     }
 
@@ -97,19 +100,7 @@ export async function applyAuthChoiceOpenAI(
       `Saved OPENAI_API_KEY to ${result.path} for launchd compatibility.`,
       "OpenAI API key",
     );
-    const applied = await applyDefaultModelChoice({
-      config: nextConfig,
-      setDefaultModel: params.setDefaultModel,
-      defaultModel: OPENAI_DEFAULT_MODEL,
-      applyDefaultConfig: applyOpenAIConfig,
-      applyProviderConfig: applyOpenAIProviderConfig,
-      noteDefault: OPENAI_DEFAULT_MODEL,
-      noteAgentModel,
-      prompter: params.prompter,
-    });
-    nextConfig = applied.config;
-    agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
-    return { config: nextConfig, agentModelOverride };
+    return await applyOpenAiDefaultModelChoice();
   }
 
   if (params.authChoice === "openai-codex") {
@@ -125,66 +116,42 @@ export async function applyAuthChoiceOpenAI(
       );
     };
 
-    const isRemote = isRemoteEnvironment();
-    await params.prompter.note(
-      isRemote
-        ? [
-            "You are running in a remote/VPS environment.",
-            "A URL will be shown for you to open in your LOCAL browser.",
-            "After signing in, paste the redirect URL back here.",
-          ].join("\n")
-        : [
-            "Browser will open for OpenAI authentication.",
-            "If the callback doesn't auto-complete, paste the redirect URL.",
-            "OpenAI OAuth uses localhost:1455 for the callback.",
-          ].join("\n"),
-      "OpenAI Codex OAuth",
-    );
-    const spin = params.prompter.progress("Starting OAuth flow…");
+    let creds;
     try {
-      const { onAuth, onPrompt } = createVpsAwareOAuthHandlers({
-        isRemote,
+      creds = await loginOpenAICodexOAuth({
         prompter: params.prompter,
         runtime: params.runtime,
-        spin,
-        openUrl,
+        isRemote: isRemoteEnvironment(),
+        openUrl: async (url) => {
+          await openUrl(url);
+        },
         localBrowserMessage: "Complete sign-in in browser…",
       });
-
-      const creds = await loginOpenAICodex({
-        onAuth,
-        onPrompt,
-        onProgress: (msg) => spin.update(msg),
+    } catch {
+      // The helper already surfaces the error to the user.
+      // Keep onboarding flow alive and return unchanged config.
+      return { config: nextConfig, agentModelOverride };
+    }
+    if (creds) {
+      await writeOAuthCredentials("openai-codex", creds, params.agentDir);
+      nextConfig = applyAuthProfileConfig(nextConfig, {
+        profileId: "openai-codex:default",
+        provider: "openai-codex",
+        mode: "oauth",
       });
-      spin.stop("OpenAI OAuth complete");
-      if (creds) {
-        await writeOAuthCredentials("openai-codex", creds, params.agentDir);
-        nextConfig = applyAuthProfileConfig(nextConfig, {
-          profileId: "openai-codex:default",
-          provider: "openai-codex",
-          mode: "oauth",
-        });
-        if (params.setDefaultModel) {
-          const applied = applyOpenAICodexModelDefault(nextConfig);
-          nextConfig = applied.next;
-          if (applied.changed) {
-            await params.prompter.note(
-              `Default model set to ${OPENAI_CODEX_DEFAULT_MODEL}`,
-              "Model configured",
-            );
-          }
-        } else {
-          agentModelOverride = OPENAI_CODEX_DEFAULT_MODEL;
-          await noteAgentModel(OPENAI_CODEX_DEFAULT_MODEL);
+      if (params.setDefaultModel) {
+        const applied = applyOpenAICodexModelDefault(nextConfig);
+        nextConfig = applied.next;
+        if (applied.changed) {
+          await params.prompter.note(
+            `Default model set to ${OPENAI_CODEX_DEFAULT_MODEL}`,
+            "Model configured",
+          );
         }
+      } else {
+        agentModelOverride = OPENAI_CODEX_DEFAULT_MODEL;
+        await noteAgentModel(OPENAI_CODEX_DEFAULT_MODEL);
       }
-    } catch (err) {
-      spin.stop("OpenAI OAuth failed");
-      params.runtime.error(String(err));
-      await params.prompter.note(
-        "Trouble with OAuth? See https://docs.openclaw.ai/start/faq",
-        "OAuth help",
-      );
     }
     return { config: nextConfig, agentModelOverride };
   }

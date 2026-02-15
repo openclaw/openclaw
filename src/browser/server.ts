@@ -4,9 +4,19 @@ import type { BrowserRouteRegistrar } from "./routes/types.js";
 import { loadConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveBrowserConfig, resolveProfile } from "./config.js";
+import { ensureBrowserControlAuth, resolveBrowserControlAuth } from "./control-auth.js";
 import { ensureChromeExtensionRelayServer } from "./extension-relay.js";
+import { isPwAiLoaded } from "./pw-ai-state.js";
 import { registerBrowserRoutes } from "./routes/index.js";
-import { type BrowserServerState, createBrowserRouteContext } from "./server-context.js";
+import {
+  type BrowserServerState,
+  createBrowserRouteContext,
+  listKnownProfileNames,
+} from "./server-context.js";
+import {
+  installBrowserAuthMiddleware,
+  installBrowserCommonMiddleware,
+} from "./server-middleware.js";
 
 let state: BrowserServerState | null = null;
 const log = createSubsystemLogger("browser");
@@ -23,24 +33,24 @@ export async function startBrowserControlServerFromConfig(): Promise<BrowserServ
     return null;
   }
 
+  let browserAuth = resolveBrowserControlAuth(cfg);
+  try {
+    const ensured = await ensureBrowserControlAuth({ cfg });
+    browserAuth = ensured.auth;
+    if (ensured.generatedToken) {
+      logServer.info("No browser auth configured; generated gateway.auth.token automatically.");
+    }
+  } catch (err) {
+    logServer.warn(`failed to auto-configure browser auth: ${String(err)}`);
+  }
+
   const app = express();
-  app.use((req, res, next) => {
-    const ctrl = new AbortController();
-    const abort = () => ctrl.abort(new Error("request aborted"));
-    req.once("aborted", abort);
-    res.once("close", () => {
-      if (!res.writableEnded) {
-        abort();
-      }
-    });
-    // Make the signal available to browser route handlers (best-effort).
-    (req as unknown as { signal?: AbortSignal }).signal = ctrl.signal;
-    next();
-  });
-  app.use(express.json({ limit: "1mb" }));
+  installBrowserCommonMiddleware(app);
+  installBrowserAuthMiddleware(app, browserAuth);
 
   const ctx = createBrowserRouteContext({
     getState: () => state,
+    refreshConfigFromDisk: true,
   });
   registerBrowserRoutes(app as unknown as BrowserRouteRegistrar, ctx);
 
@@ -76,7 +86,8 @@ export async function startBrowserControlServerFromConfig(): Promise<BrowserServ
     });
   }
 
-  logServer.info(`Browser control listening on http://127.0.0.1:${port}/`);
+  const authMode = browserAuth.token ? "token" : browserAuth.password ? "password" : "off";
+  logServer.info(`Browser control listening on http://127.0.0.1:${port}/ (auth=${authMode})`);
   return state;
 }
 
@@ -88,12 +99,13 @@ export async function stopBrowserControlServer(): Promise<void> {
 
   const ctx = createBrowserRouteContext({
     getState: () => state,
+    refreshConfigFromDisk: true,
   });
 
   try {
     const current = state;
     if (current) {
-      for (const name of Object.keys(current.resolved.profiles)) {
+      for (const name of listKnownProfileNames(current)) {
         try {
           await ctx.forProfile(name).stopRunningBrowser();
         } catch {
@@ -112,11 +124,13 @@ export async function stopBrowserControlServer(): Promise<void> {
   }
   state = null;
 
-  // Optional: Playwright is not always available (e.g. embedded gateway builds).
-  try {
-    const mod = await import("./pw-ai.js");
-    await mod.closePlaywrightBrowserConnection();
-  } catch {
-    // ignore
+  // Optional: avoid importing heavy Playwright bridge when this process never used it.
+  if (isPwAiLoaded()) {
+    try {
+      const mod = await import("./pw-ai.js");
+      await mod.closePlaywrightBrowserConnection();
+    } catch {
+      // ignore
+    }
   }
 }

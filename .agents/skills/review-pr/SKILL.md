@@ -18,6 +18,7 @@ Perform a read-only review and produce both human and machine-readable outputs.
 
 - Never push, merge, or modify code intended to keep.
 - Work only in `.worktrees/pr-<PR>`.
+- Wrapper commands are cwd-agnostic; you can run them from repo root or inside the PR worktree.
 
 ## Execution Contract
 

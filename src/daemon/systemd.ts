@@ -1,14 +1,13 @@
-import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
-import { colorize, isRich, theme } from "../terminal/theme.js";
 import {
   formatGatewayServiceDescription,
   LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES,
   resolveGatewaySystemdServiceName,
 } from "./constants.js";
+import { execFileUtf8 } from "./exec-file.js";
+import { formatLine, toPosixPath } from "./output.js";
 import { resolveHomeDir } from "./paths.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
 import {
@@ -22,24 +21,12 @@ import {
   parseSystemdExecStart,
 } from "./systemd-unit.js";
 
-const execFileAsync = promisify(execFile);
-const toPosixPath = (value: string) => value.replace(/\\/g, "/");
-
-const formatLine = (label: string, value: string) => {
-  const rich = isRich();
-  return `${colorize(rich, theme.muted, `${label}:`)} ${colorize(rich, theme.command, value)}`;
-};
-
 function resolveSystemdUnitPathForName(
   env: Record<string, string | undefined>,
   name: string,
 ): string {
   const home = toPosixPath(resolveHomeDir(env));
   return path.posix.join(home, ".config", "systemd", "user", `${name}.service`);
-}
-
-function resolveSystemdSystemUnitPathForName(name: string): string {
-  return `/etc/systemd/system/${name}.service`;
 }
 
 function resolveSystemdServiceName(env: Record<string, string | undefined>): string {
@@ -52,10 +39,6 @@ function resolveSystemdServiceName(env: Record<string, string | undefined>): str
 
 function resolveSystemdUnitPath(env: Record<string, string | undefined>): string {
   return resolveSystemdUnitPathForName(env, resolveSystemdServiceName(env));
-}
-
-function resolveSystemdSystemUnitPath(env: Record<string, string | undefined>): string {
-  return resolveSystemdSystemUnitPathForName(resolveSystemdServiceName(env));
 }
 
 export function resolveSystemdUserUnitPath(env: Record<string, string | undefined>): string {
@@ -75,48 +58,42 @@ export async function readSystemdServiceExecStart(
   environment?: Record<string, string>;
   sourcePath?: string;
 } | null> {
-  // Try user service first, then system service
-  const userUnitPath = resolveSystemdUnitPath(env);
-  const systemUnitPath = resolveSystemdSystemUnitPath(env);
-
-  for (const unitPath of [userUnitPath, systemUnitPath]) {
-    try {
-      const content = await fs.readFile(unitPath, "utf8");
-      let execStart = "";
-      let workingDirectory = "";
-      const environment: Record<string, string> = {};
-      for (const rawLine of content.split("\n")) {
-        const line = rawLine.trim();
-        if (!line || line.startsWith("#")) {
-          continue;
-        }
-        if (line.startsWith("ExecStart=")) {
-          execStart = line.slice("ExecStart=".length).trim();
-        } else if (line.startsWith("WorkingDirectory=")) {
-          workingDirectory = line.slice("WorkingDirectory=".length).trim();
-        } else if (line.startsWith("Environment=")) {
-          const raw = line.slice("Environment=".length).trim();
-          const parsed = parseSystemdEnvAssignment(raw);
-          if (parsed) {
-            environment[parsed.key] = parsed.value;
-          }
-        }
-      }
-      if (!execStart) {
+  const unitPath = resolveSystemdUnitPath(env);
+  try {
+    const content = await fs.readFile(unitPath, "utf8");
+    let execStart = "";
+    let workingDirectory = "";
+    const environment: Record<string, string> = {};
+    for (const rawLine of content.split("\n")) {
+      const line = rawLine.trim();
+      if (!line || line.startsWith("#")) {
         continue;
       }
-      const programArguments = parseSystemdExecStart(execStart);
-      return {
-        programArguments,
-        ...(workingDirectory ? { workingDirectory } : {}),
-        ...(Object.keys(environment).length > 0 ? { environment } : {}),
-        sourcePath: unitPath,
-      };
-    } catch {
-      // Continue to next path
+      if (line.startsWith("ExecStart=")) {
+        execStart = line.slice("ExecStart=".length).trim();
+      } else if (line.startsWith("WorkingDirectory=")) {
+        workingDirectory = line.slice("WorkingDirectory=".length).trim();
+      } else if (line.startsWith("Environment=")) {
+        const raw = line.slice("Environment=".length).trim();
+        const parsed = parseSystemdEnvAssignment(raw);
+        if (parsed) {
+          environment[parsed.key] = parsed.value;
+        }
+      }
     }
+    if (!execStart) {
+      return null;
+    }
+    const programArguments = parseSystemdExecStart(execStart);
+    return {
+      programArguments,
+      ...(workingDirectory ? { workingDirectory } : {}),
+      ...(Object.keys(environment).length > 0 ? { environment } : {}),
+      sourcePath: unitPath,
+    };
+  } catch {
+    return null;
   }
-  return null;
 }
 
 export type SystemdServiceInfo = {
@@ -163,32 +140,10 @@ async function execSystemctl(
   args: string[],
   options?: { useSudo?: boolean },
 ): Promise<{ stdout: string; stderr: string; code: number }> {
-  try {
-    const cmd = options?.useSudo ? "sudo" : "systemctl";
-    // Security: use non-interactive sudo (-n) to avoid hanging on password prompts
-    const cmdArgs = options?.useSudo ? ["-n", "systemctl", ...args] : args;
-    const { stdout, stderr } = await execFileAsync(cmd, cmdArgs, {
-      encoding: "utf8",
-    });
-    return {
-      stdout: String(stdout ?? ""),
-      stderr: String(stderr ?? ""),
-      code: 0,
-    };
-  } catch (error) {
-    const e = error as {
-      stdout?: unknown;
-      stderr?: unknown;
-      code?: unknown;
-      message?: unknown;
-    };
-    return {
-      stdout: typeof e.stdout === "string" ? e.stdout : "",
-      stderr:
-        typeof e.stderr === "string" ? e.stderr : typeof e.message === "string" ? e.message : "",
-      code: typeof e.code === "number" ? e.code : 1,
-    };
+  if (options?.useSudo) {
+    return await execFileUtf8("sudo", ["-n", "systemctl", ...args]);
   }
+  return await execFileUtf8("systemctl", args);
 }
 
 export async function isSystemdUserServiceAvailable(): Promise<boolean> {
@@ -222,7 +177,7 @@ export async function isSystemdSystemServiceAvailable(): Promise<boolean> {
   // Check if we can run systemctl (may require sudo)
   // Note: we don't use useSudo: true here to avoid permission-denied false positives
   const res = await execSystemctl(["status"]);
-  // If it doesn't error with \"command not found\", systemd is available
+  // If it doesn't error with "command not found", systemd is available
   const detail = `${res.stderr} ${res.stdout}`.toLowerCase();
   if (detail.includes("not found")) {
     return false;
@@ -329,7 +284,6 @@ export async function stopSystemdService({
   stdout: NodeJS.WritableStream;
   env?: Record<string, string | undefined>;
 }): Promise<void> {
-  // Check if user service exists first, otherwise try system service
   const serviceName = resolveSystemdServiceName(env ?? {});
   const unitName = `${serviceName}.service`;
 
@@ -425,7 +379,6 @@ export async function readSystemdServiceRuntime(
       pid: parsed.mainPid,
       lastExitStatus: parsed.execMainStatus,
       lastExitReason: parsed.execMainCode,
-      lastRunResult: parsed.execMainCode,
     };
   }
 
@@ -465,7 +418,6 @@ export async function readSystemdServiceRuntime(
     missingUnit: missing,
   };
 }
-
 export type LegacySystemdUnit = {
   name: string;
   unitPath: string;

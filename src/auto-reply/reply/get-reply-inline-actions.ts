@@ -272,16 +272,11 @@ export async function handleInlineActions(params: {
     directives = { ...directives, hasStatusDirective: false };
   }
 
-  if (inlineCommand) {
-    const inlineCommandContext = {
-      ...command,
-      rawBodyNormalized: inlineCommand.command,
-      commandBodyNormalized: inlineCommand.command,
-    };
-    const inlineResult = await handleCommands({
+  const runCommands = (commandInput: typeof command) =>
+    handleCommands({
       ctx,
       cfg,
-      command: inlineCommandContext,
+      command: commandInput,
       agentId,
       directives,
       elevated: {
@@ -308,6 +303,14 @@ export async function handleInlineActions(params: {
       isGroup,
       skillCommands,
     });
+
+  if (inlineCommand) {
+    const inlineCommandContext = {
+      ...command,
+      rawBodyNormalized: inlineCommand.command,
+      commandBodyNormalized: inlineCommand.command,
+    };
+    const inlineResult = await runCommands(inlineCommandContext);
     if (inlineResult.reply) {
       if (!inlineCommand.cleaned) {
         typing.cleanup();
@@ -341,36 +344,7 @@ export async function handleInlineActions(params: {
     abortedLastRun = getAbortMemory(command.abortKey) ?? false;
   }
 
-  const commandResult = await handleCommands({
-    ctx,
-    cfg,
-    command,
-    agentId,
-    directives,
-    elevated: {
-      enabled: elevatedEnabled,
-      allowed: elevatedAllowed,
-      failures: elevatedFailures,
-    },
-    sessionEntry,
-    previousSessionEntry,
-    sessionStore,
-    sessionKey,
-    storePath,
-    sessionScope,
-    workspaceDir,
-    defaultGroupActivation: defaultActivation,
-    resolvedThinkLevel,
-    resolvedVerboseLevel: resolvedVerboseLevel ?? "off",
-    resolvedReasoningLevel,
-    resolvedElevatedLevel,
-    resolveDefaultThinkingLevel,
-    provider,
-    model,
-    contextTokens,
-    isGroup,
-    skillCommands,
-  });
+  const commandResult = await runCommands(command);
   if (!commandResult.shouldContinue) {
     typing.cleanup();
     return { kind: "reply", reply: commandResult.reply };

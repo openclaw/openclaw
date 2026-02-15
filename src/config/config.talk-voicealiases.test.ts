@@ -1,9 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { validateConfigObject } from "./config.js";
 
 describe("talk.voiceAliases", () => {
-  it("accepts a string map of voice aliases", async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
+  it("accepts a string map of voice aliases", () => {
     const res = validateConfigObject({
       talk: {
         voiceAliases: {
@@ -15,9 +14,7 @@ describe("talk.voiceAliases", () => {
     expect(res.ok).toBe(true);
   });
 
-  it("rejects non-string voice alias values", async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
+  it("rejects non-string voice alias values", () => {
     const res = validateConfigObject({
       talk: {
         voiceAliases: {

@@ -8,6 +8,7 @@ import {
   isJobDue,
   nextWakeAtMs,
   recomputeNextRuns,
+  recomputeNextRunsForMaintenance,
 } from "./jobs.js";
 import { locked } from "./locked.js";
 import { ensureLoaded, persist, warnIfDisabled } from "./store.js";
@@ -21,6 +22,7 @@ export async function start(state: CronServiceState) {
     }
     await ensureLoaded(state, { skipRecompute: true });
     const jobs = state.store?.jobs ?? [];
+    const startupInterruptedJobIds = new Set<string>();
     for (const job of jobs) {
       if (typeof job.state.runningAtMs === "number") {
         state.deps.log.warn(
@@ -28,9 +30,10 @@ export async function start(state: CronServiceState) {
           "cron: clearing stale running marker on startup",
         );
         job.state.runningAtMs = undefined;
+        startupInterruptedJobIds.add(job.id);
       }
     }
-    await runMissedJobs(state);
+    await runMissedJobs(state, { skipJobIds: startupInterruptedJobIds });
     recomputeNextRuns(state);
     await persist(state);
     armTimer(state);
@@ -53,7 +56,9 @@ export async function status(state: CronServiceState) {
   return await locked(state, async () => {
     await ensureLoaded(state, { skipRecompute: true });
     if (state.store) {
-      const changed = recomputeNextRuns(state);
+      // Use the maintenance-only version so that read-only operations never
+      // advance a past-due nextRunAtMs without executing the job (#16156).
+      const changed = recomputeNextRunsForMaintenance(state);
       if (changed) {
         await persist(state);
       }
@@ -71,7 +76,9 @@ export async function list(state: CronServiceState, opts?: { includeDisabled?: b
   return await locked(state, async () => {
     await ensureLoaded(state, { skipRecompute: true });
     if (state.store) {
-      const changed = recomputeNextRuns(state);
+      // Use the maintenance-only version so that read-only operations never
+      // advance a past-due nextRunAtMs without executing the job (#16156).
+      const changed = recomputeNextRunsForMaintenance(state);
       if (changed) {
         await persist(state);
       }
@@ -119,7 +126,7 @@ export async function add(state: CronServiceState, input: CronJobCreate) {
 export async function update(state: CronServiceState, id: string, patch: CronJobPatch) {
   return await locked(state, async () => {
     warnIfDisabled(state, "update");
-    await ensureLoaded(state);
+    await ensureLoaded(state, { skipRecompute: true });
     const job = findJobOrThrow(state, id);
     const now = state.deps.nowMs();
     applyJobPatch(job, patch);
@@ -149,6 +156,13 @@ export async function update(state: CronServiceState, id: string, patch: CronJob
       } else {
         job.state.nextRunAtMs = undefined;
         job.state.runningAtMs = undefined;
+      }
+    } else if (job.enabled) {
+      // Non-schedule edits should not mutate other jobs, but still repair a
+      // missing/corrupt nextRunAtMs for the updated job.
+      const nextRun = job.state.nextRunAtMs;
+      if (typeof nextRun !== "number" || !Number.isFinite(nextRun)) {
+        job.state.nextRunAtMs = computeJobNextRunAtMs(job, now);
       }
     }
 

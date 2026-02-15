@@ -22,19 +22,20 @@ import { addWildcardAllowFrom, promptAccountId } from "./helpers.js";
 const channel = "discord" as const;
 
 function setDiscordDmPolicy(cfg: OpenClawConfig, dmPolicy: DmPolicy) {
-  const allowFrom =
-    dmPolicy === "open" ? addWildcardAllowFrom(cfg.channels?.discord?.dm?.allowFrom) : undefined;
+  const existingAllowFrom =
+    cfg.channels?.discord?.allowFrom ?? cfg.channels?.discord?.dm?.allowFrom;
+  const allowFrom = dmPolicy === "open" ? addWildcardAllowFrom(existingAllowFrom) : undefined;
   return {
     ...cfg,
     channels: {
       ...cfg.channels,
       discord: {
         ...cfg.channels?.discord,
+        dmPolicy,
+        ...(allowFrom ? { allowFrom } : {}),
         dm: {
           ...cfg.channels?.discord?.dm,
           enabled: cfg.channels?.discord?.dm?.enabled ?? true,
-          policy: dmPolicy,
-          ...(allowFrom ? { allowFrom } : {}),
         },
       },
     },
@@ -54,10 +55,10 @@ async function noteDiscordTokenHelp(prompter: WizardPrompter): Promise<void> {
   );
 }
 
-function setDiscordGroupPolicy(
+function patchDiscordConfigForAccount(
   cfg: OpenClawConfig,
   accountId: string,
-  groupPolicy: "open" | "allowlist" | "disabled",
+  patch: Record<string, unknown>,
 ): OpenClawConfig {
   if (accountId === DEFAULT_ACCOUNT_ID) {
     return {
@@ -67,7 +68,7 @@ function setDiscordGroupPolicy(
         discord: {
           ...cfg.channels?.discord,
           enabled: true,
-          groupPolicy,
+          ...patch,
         },
       },
     };
@@ -84,12 +85,20 @@ function setDiscordGroupPolicy(
           [accountId]: {
             ...cfg.channels?.discord?.accounts?.[accountId],
             enabled: cfg.channels?.discord?.accounts?.[accountId]?.enabled ?? true,
-            groupPolicy,
+            ...patch,
           },
         },
       },
     },
   };
+}
+
+function setDiscordGroupPolicy(
+  cfg: OpenClawConfig,
+  accountId: string,
+  groupPolicy: "open" | "allowlist" | "disabled",
+): OpenClawConfig {
+  return patchDiscordConfigForAccount(cfg, accountId, { groupPolicy });
 }
 
 function setDiscordGuildChannelAllowlist(
@@ -116,37 +125,7 @@ function setDiscordGuildChannelAllowlist(
       guilds[guildKey] = existing;
     }
   }
-  if (accountId === DEFAULT_ACCOUNT_ID) {
-    return {
-      ...cfg,
-      channels: {
-        ...cfg.channels,
-        discord: {
-          ...cfg.channels?.discord,
-          enabled: true,
-          guilds,
-        },
-      },
-    };
-  }
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      discord: {
-        ...cfg.channels?.discord,
-        enabled: true,
-        accounts: {
-          ...cfg.channels?.discord?.accounts,
-          [accountId]: {
-            ...cfg.channels?.discord?.accounts?.[accountId],
-            enabled: cfg.channels?.discord?.accounts?.[accountId]?.enabled ?? true,
-            guilds,
-          },
-        },
-      },
-    },
-  };
+  return patchDiscordConfigForAccount(cfg, accountId, { guilds });
 }
 
 function setDiscordAllowFrom(cfg: OpenClawConfig, allowFrom: string[]): OpenClawConfig {
@@ -156,10 +135,10 @@ function setDiscordAllowFrom(cfg: OpenClawConfig, allowFrom: string[]): OpenClaw
       ...cfg.channels,
       discord: {
         ...cfg.channels?.discord,
+        allowFrom,
         dm: {
           ...cfg.channels?.discord?.dm,
           enabled: cfg.channels?.discord?.dm?.enabled ?? true,
-          allowFrom,
         },
       },
     },
@@ -184,7 +163,8 @@ async function promptDiscordAllowFrom(params: {
       : resolveDefaultDiscordAccountId(params.cfg);
   const resolved = resolveDiscordAccount({ cfg: params.cfg, accountId });
   const token = resolved.token;
-  const existing = params.cfg.channels?.discord?.dm?.allowFrom ?? [];
+  const existing =
+    params.cfg.channels?.discord?.allowFrom ?? params.cfg.channels?.discord?.dm?.allowFrom ?? [];
   await params.prompter.note(
     [
       "Allowlist Discord DMs by username (we resolve to user ids).",
@@ -263,9 +243,10 @@ async function promptDiscordAllowFrom(params: {
 const dmPolicy: ChannelOnboardingDmPolicy = {
   label: "Discord",
   channel,
-  policyKey: "channels.discord.dm.policy",
-  allowFromKey: "channels.discord.dm.allowFrom",
-  getCurrent: (cfg) => cfg.channels?.discord?.dm?.policy ?? "pairing",
+  policyKey: "channels.discord.dmPolicy",
+  allowFromKey: "channels.discord.allowFrom",
+  getCurrent: (cfg) =>
+    cfg.channels?.discord?.dmPolicy ?? cfg.channels?.discord?.dm?.policy ?? "pairing",
   setPolicy: (cfg, policy) => setDiscordDmPolicy(cfg, policy),
   promptAllowFrom: promptDiscordAllowFrom,
 };
@@ -394,7 +375,8 @@ export const discordOnboardingAdapter: ChannelOnboardingAdapter = {
         const channels = value?.channels ?? {};
         const channelKeys = Object.keys(channels);
         if (channelKeys.length === 0) {
-          return [guildKey];
+          const input = /^\d+$/.test(guildKey) ? `guild:${guildKey}` : guildKey;
+          return [input];
         }
         return channelKeys.map((channelKey) => `${guildKey}/${channelKey}`);
       },

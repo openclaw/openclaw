@@ -18,6 +18,15 @@ export type ActionGate<T extends Record<string, boolean | undefined>> = (
   defaultValue?: boolean,
 ) => boolean;
 
+export class ToolInputError extends Error {
+  readonly status = 400;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "ToolInputError";
+  }
+}
+
 export function createActionGate<T extends Record<string, boolean | undefined>>(
   actions: T | undefined,
 ): ActionGate<T> {
@@ -49,14 +58,14 @@ export function readStringParam(
   const raw = params[key];
   if (typeof raw !== "string") {
     if (required) {
-      throw new Error(`${label} required`);
+      throw new ToolInputError(`${label} required`);
     }
     return undefined;
   }
   const value = trim ? raw.trim() : raw;
   if (!value && !allowEmpty) {
     if (required) {
-      throw new Error(`${label} required`);
+      throw new ToolInputError(`${label} required`);
     }
     return undefined;
   }
@@ -80,7 +89,7 @@ export function readStringOrNumberParam(
     }
   }
   if (required) {
-    throw new Error(`${label} required`);
+    throw new ToolInputError(`${label} required`);
   }
   return undefined;
 }
@@ -106,7 +115,7 @@ export function readNumberParam(
   }
   if (value === undefined) {
     if (required) {
-      throw new Error(`${label} required`);
+      throw new ToolInputError(`${label} required`);
     }
     return undefined;
   }
@@ -137,7 +146,7 @@ export function readStringArrayParam(
       .filter(Boolean);
     if (values.length === 0) {
       if (required) {
-        throw new Error(`${label} required`);
+        throw new ToolInputError(`${label} required`);
       }
       return undefined;
     }
@@ -147,14 +156,14 @@ export function readStringArrayParam(
     const value = raw.trim();
     if (!value) {
       if (required) {
-        throw new Error(`${label} required`);
+        throw new ToolInputError(`${label} required`);
       }
       return undefined;
     }
     return [value];
   }
   if (required) {
-    throw new Error(`${label} required`);
+    throw new ToolInputError(`${label} required`);
   }
   return undefined;
 }
@@ -181,7 +190,7 @@ export function readReactionParams(
     allowEmpty: true,
   });
   if (remove && !emoji) {
-    throw new Error(options.removeErrorMessage);
+    throw new ToolInputError(options.removeErrorMessage);
   }
   return { emoji, remove, isEmpty: !emoji };
 }

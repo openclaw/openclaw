@@ -7,7 +7,9 @@ export class AssistantMessageComponent extends Container {
   constructor(text: string) {
     super();
     this.body = new Markdown(text, 1, 0, markdownTheme, {
-      color: (line) => theme.fg(line),
+      // Keep assistant body text in terminal default foreground so contrast
+      // follows the user's terminal theme (dark or light).
+      color: (line) => theme.assistantText(line),
     });
     this.addChild(new Spacer(1));
     this.addChild(this.body);

@@ -35,6 +35,8 @@ export type SessionEntry = {
   sessionFile?: string;
   /** Parent session key that spawned this session (used for sandbox session-tool scoping). */
   spawnedBy?: string;
+  /** Subagent spawn depth (0 = main, 1 = sub-agent, 2 = sub-sub-agent). */
+  spawnDepth?: number;
   systemSent?: boolean;
   abortedLastRun?: boolean;
   chatType?: SessionChatType;
@@ -70,6 +72,12 @@ export type SessionEntry = {
   inputTokens?: number;
   outputTokens?: number;
   totalTokens?: number;
+  /**
+   * Whether totalTokens reflects a fresh context snapshot for the latest run.
+   * Undefined means legacy/unknown freshness; false forces consumers to treat
+   * totalTokens as stale/unknown for context-utilization displays.
+   */
+  totalTokensFresh?: boolean;
   modelProvider?: string;
   model?: string;
   contextTokens?: number;
@@ -105,6 +113,25 @@ export function mergeSessionEntry(
     return { ...patch, sessionId, updatedAt };
   }
   return { ...existing, ...patch, sessionId, updatedAt };
+}
+
+export function resolveFreshSessionTotalTokens(
+  entry?: Pick<SessionEntry, "totalTokens" | "totalTokensFresh"> | null,
+): number | undefined {
+  const total = entry?.totalTokens;
+  if (typeof total !== "number" || !Number.isFinite(total) || total < 0) {
+    return undefined;
+  }
+  if (entry?.totalTokensFresh === false) {
+    return undefined;
+  }
+  return total;
+}
+
+export function isSessionTotalTokensFresh(
+  entry?: Pick<SessionEntry, "totalTokens" | "totalTokensFresh"> | null,
+): boolean {
+  return resolveFreshSessionTotalTokens(entry) !== undefined;
 }
 
 export type GroupKeyResolution = {

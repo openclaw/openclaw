@@ -5,6 +5,7 @@ import { resolveConfiguredModelRef } from "../agents/model-selection.js";
 import { loadConfig } from "../config/config.js";
 import {
   loadSessionStore,
+  resolveFreshSessionTotalTokens,
   resolveMainSessionKey,
   resolveStorePath,
   type SessionEntry,
@@ -66,7 +67,30 @@ const buildFlags = (entry?: SessionEntry): string[] => {
   return flags;
 };
 
-export async function getStatusSummary(): Promise<StatusSummary> {
+export function redactSensitiveStatusSummary(summary: StatusSummary): StatusSummary {
+  return {
+    ...summary,
+    sessions: {
+      ...summary.sessions,
+      paths: [],
+      defaults: {
+        model: null,
+        contextTokens: null,
+      },
+      recent: [],
+      byAgent: summary.sessions.byAgent.map((entry) => ({
+        ...entry,
+        path: "[redacted]",
+        recent: [],
+      })),
+    },
+  };
+}
+
+export async function getStatusSummary(
+  options: { includeSensitive?: boolean } = {},
+): Promise<StatusSummary> {
+  const { includeSensitive = true } = options;
   const cfg = loadConfig();
   const linkContext = await resolveLinkChannelContext(cfg);
   const agentList = listAgentsForGateway(cfg);
@@ -120,12 +144,13 @@ export async function getStatusSummary(): Promise<StatusSummary> {
         const model = entry?.model ?? configModel ?? null;
         const contextTokens =
           entry?.contextTokens ?? lookupContextTokens(model) ?? configContextTokens ?? null;
-        const input = entry?.inputTokens ?? 0;
-        const output = entry?.outputTokens ?? 0;
-        const total = entry?.totalTokens ?? input + output;
-        const remaining = contextTokens != null ? Math.max(0, contextTokens - total) : null;
+        const total = resolveFreshSessionTotalTokens(entry);
+        const totalTokensFresh =
+          typeof entry?.totalTokens === "number" ? entry?.totalTokensFresh !== false : false;
+        const remaining =
+          contextTokens != null && total !== undefined ? Math.max(0, contextTokens - total) : null;
         const pct =
-          contextTokens && contextTokens > 0
+          contextTokens && contextTokens > 0 && total !== undefined
             ? Math.min(999, Math.round((total / contextTokens) * 100))
             : null;
         const parsedAgentId = parseAgentSessionKey(key)?.agentId;
@@ -147,6 +172,7 @@ export async function getStatusSummary(): Promise<StatusSummary> {
           inputTokens: entry?.inputTokens,
           outputTokens: entry?.outputTokens,
           totalTokens: total ?? null,
+          totalTokensFresh,
           remainingTokens: remaining,
           percentUsed: pct,
           model,
@@ -176,7 +202,7 @@ export async function getStatusSummary(): Promise<StatusSummary> {
   const recent = allSessions.slice(0, 10);
   const totalSessions = allSessions.length;
 
-  return {
+  const summary: StatusSummary = {
     linkChannel: linkContext
       ? {
           id: linkContext.plugin.id,
@@ -202,4 +228,5 @@ export async function getStatusSummary(): Promise<StatusSummary> {
       byAgent,
     },
   };
+  return includeSensitive ? summary : redactSensitiveStatusSummary(summary);
 }

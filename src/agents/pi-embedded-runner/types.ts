@@ -6,6 +6,7 @@ export type EmbeddedPiAgentMeta = {
   provider: string;
   model: string;
   compactionCount?: number;
+  promptTokens?: number;
   usage?: {
     input?: number;
     output?: number;
@@ -82,6 +83,7 @@ export type EmbeddedPiCompactResult = {
 export type EmbeddedSandboxInfo = {
   enabled: boolean;
   workspaceDir?: string;
+  containerWorkspaceDir?: string;
   workspaceAccess?: "none" | "ro" | "rw";
   agentWorkspaceMount?: string;
   browserBridgeUrl?: string;

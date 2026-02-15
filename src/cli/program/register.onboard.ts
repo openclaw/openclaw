@@ -7,6 +7,8 @@ import type {
   NodeManagerChoice,
   TailscaleMode,
 } from "../../commands/onboard-types.js";
+import { formatAuthChoiceChoicesForCli } from "../../commands/auth-choice-options.js";
+import { ONBOARD_PROVIDER_AUTH_FLAGS } from "../../commands/onboard-provider-auth-flags.js";
 import { onboardCommand } from "../../commands/onboard.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatDocsLink } from "../../terminal/links.js";
@@ -37,8 +39,13 @@ function resolveInstallDaemonFlag(
   return undefined;
 }
 
+const AUTH_CHOICE_HELP = formatAuthChoiceChoicesForCli({
+  includeLegacyAliases: true,
+  includeSkip: true,
+});
+
 export function registerOnboardCommand(program: Command) {
-  program
+  const command = program
     .command("onboard")
     .description("Interactive wizard to set up the gateway, workspace, and skills")
     .addHelpText(
@@ -56,10 +63,7 @@ export function registerOnboardCommand(program: Command) {
     )
     .option("--flow <flow>", "Wizard flow: quickstart|advanced|manual")
     .option("--mode <mode>", "Wizard mode: local|remote")
-    .option(
-      "--auth-choice <choice>",
-      "Auth: setup-token|token|chutes|openai-codex|openai-api-key|xai-api-key|qianfan-api-key|openrouter-api-key|litellm-api-key|ai-gateway-api-key|cloudflare-ai-gateway-api-key|moonshot-api-key|moonshot-api-key-cn|kimi-code-api-key|synthetic-api-key|venice-api-key|gemini-api-key|zai-api-key|zai-coding-global|zai-coding-cn|zai-global|zai-cn|xiaomi-api-key|apiKey|minimax-api|minimax-api-lightning|opencode-zen|custom-api-key|skip|together-api-key",
-    )
+    .option("--auth-choice <choice>", `Auth: ${AUTH_CHOICE_HELP}`)
     .option(
       "--token-provider <id>",
       "Token provider id (non-interactive; used with --auth-choice token)",
@@ -70,26 +74,14 @@ export function registerOnboardCommand(program: Command) {
       "Auth profile id (non-interactive; default: <provider>:manual)",
     )
     .option("--token-expires-in <duration>", "Optional token expiry duration (e.g. 365d, 12h)")
-    .option("--anthropic-api-key <key>", "Anthropic API key")
-    .option("--openai-api-key <key>", "OpenAI API key")
-    .option("--openrouter-api-key <key>", "OpenRouter API key")
-    .option("--ai-gateway-api-key <key>", "Vercel AI Gateway API key")
     .option("--cloudflare-ai-gateway-account-id <id>", "Cloudflare Account ID")
-    .option("--cloudflare-ai-gateway-gateway-id <id>", "Cloudflare AI Gateway ID")
-    .option("--cloudflare-ai-gateway-api-key <key>", "Cloudflare AI Gateway API key")
-    .option("--moonshot-api-key <key>", "Moonshot API key")
-    .option("--kimi-code-api-key <key>", "Kimi Coding API key")
-    .option("--gemini-api-key <key>", "Gemini API key")
-    .option("--zai-api-key <key>", "Z.AI API key")
-    .option("--xiaomi-api-key <key>", "Xiaomi API key")
-    .option("--minimax-api-key <key>", "MiniMax API key")
-    .option("--synthetic-api-key <key>", "Synthetic API key")
-    .option("--venice-api-key <key>", "Venice API key")
-    .option("--together-api-key <key>", "Together AI API key")
-    .option("--opencode-zen-api-key <key>", "OpenCode Zen API key")
-    .option("--xai-api-key <key>", "xAI API key")
-    .option("--litellm-api-key <key>", "LiteLLM API key")
-    .option("--qianfan-api-key <key>", "QIANFAN API key")
+    .option("--cloudflare-ai-gateway-gateway-id <id>", "Cloudflare AI Gateway ID");
+
+  for (const providerFlag of ONBOARD_PROVIDER_AUTH_FLAGS) {
+    command.option(providerFlag.cliOption, providerFlag.description);
+  }
+
+  command
     .option("--custom-base-url <url>", "Custom provider base URL")
     .option("--custom-api-key <key>", "Custom provider API key (optional)")
     .option("--custom-model-id <id>", "Custom provider model ID")
@@ -116,75 +108,77 @@ export function registerOnboardCommand(program: Command) {
     .option("--skip-health", "Skip health check")
     .option("--skip-ui", "Skip Control UI/TUI prompts")
     .option("--node-manager <name>", "Node manager for skills: npm|pnpm|bun")
-    .option("--json", "Output JSON summary", false)
-    .action(async (opts, command) => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const installDaemon = resolveInstallDaemonFlag(command, {
-          installDaemon: Boolean(opts.installDaemon),
-        });
-        const gatewayPort =
-          typeof opts.gatewayPort === "string" ? Number.parseInt(opts.gatewayPort, 10) : undefined;
-        await onboardCommand(
-          {
-            workspace: opts.workspace as string | undefined,
-            nonInteractive: Boolean(opts.nonInteractive),
-            acceptRisk: Boolean(opts.acceptRisk),
-            flow: opts.flow as "quickstart" | "advanced" | "manual" | undefined,
-            mode: opts.mode as "local" | "remote" | undefined,
-            authChoice: opts.authChoice as AuthChoice | undefined,
-            tokenProvider: opts.tokenProvider as string | undefined,
-            token: opts.token as string | undefined,
-            tokenProfileId: opts.tokenProfileId as string | undefined,
-            tokenExpiresIn: opts.tokenExpiresIn as string | undefined,
-            anthropicApiKey: opts.anthropicApiKey as string | undefined,
-            openaiApiKey: opts.openaiApiKey as string | undefined,
-            openrouterApiKey: opts.openrouterApiKey as string | undefined,
-            aiGatewayApiKey: opts.aiGatewayApiKey as string | undefined,
-            cloudflareAiGatewayAccountId: opts.cloudflareAiGatewayAccountId as string | undefined,
-            cloudflareAiGatewayGatewayId: opts.cloudflareAiGatewayGatewayId as string | undefined,
-            cloudflareAiGatewayApiKey: opts.cloudflareAiGatewayApiKey as string | undefined,
-            moonshotApiKey: opts.moonshotApiKey as string | undefined,
-            kimiCodeApiKey: opts.kimiCodeApiKey as string | undefined,
-            geminiApiKey: opts.geminiApiKey as string | undefined,
-            zaiApiKey: opts.zaiApiKey as string | undefined,
-            xiaomiApiKey: opts.xiaomiApiKey as string | undefined,
-            qianfanApiKey: opts.qianfanApiKey as string | undefined,
-            minimaxApiKey: opts.minimaxApiKey as string | undefined,
-            syntheticApiKey: opts.syntheticApiKey as string | undefined,
-            veniceApiKey: opts.veniceApiKey as string | undefined,
-            togetherApiKey: opts.togetherApiKey as string | undefined,
-            opencodeZenApiKey: opts.opencodeZenApiKey as string | undefined,
-            xaiApiKey: opts.xaiApiKey as string | undefined,
-            litellmApiKey: opts.litellmApiKey as string | undefined,
-            customBaseUrl: opts.customBaseUrl as string | undefined,
-            customApiKey: opts.customApiKey as string | undefined,
-            customModelId: opts.customModelId as string | undefined,
-            customProviderId: opts.customProviderId as string | undefined,
-            customCompatibility: opts.customCompatibility as "openai" | "anthropic" | undefined,
-            gatewayPort:
-              typeof gatewayPort === "number" && Number.isFinite(gatewayPort)
-                ? gatewayPort
-                : undefined,
-            gatewayBind: opts.gatewayBind as GatewayBind | undefined,
-            gatewayAuth: opts.gatewayAuth as GatewayAuthChoice | undefined,
-            gatewayToken: opts.gatewayToken as string | undefined,
-            gatewayPassword: opts.gatewayPassword as string | undefined,
-            remoteUrl: opts.remoteUrl as string | undefined,
-            remoteToken: opts.remoteToken as string | undefined,
-            tailscale: opts.tailscale as TailscaleMode | undefined,
-            tailscaleResetOnExit: Boolean(opts.tailscaleResetOnExit),
-            reset: Boolean(opts.reset),
-            installDaemon,
-            daemonRuntime: opts.daemonRuntime as GatewayDaemonRuntime | undefined,
-            skipChannels: Boolean(opts.skipChannels),
-            skipSkills: Boolean(opts.skipSkills),
-            skipHealth: Boolean(opts.skipHealth),
-            skipUi: Boolean(opts.skipUi),
-            nodeManager: opts.nodeManager as NodeManagerChoice | undefined,
-            json: Boolean(opts.json),
-          },
-          defaultRuntime,
-        );
+    .option("--json", "Output JSON summary", false);
+
+  command.action(async (opts, commandRuntime) => {
+    await runCommandWithRuntime(defaultRuntime, async () => {
+      const installDaemon = resolveInstallDaemonFlag(commandRuntime, {
+        installDaemon: Boolean(opts.installDaemon),
       });
+      const gatewayPort =
+        typeof opts.gatewayPort === "string" ? Number.parseInt(opts.gatewayPort, 10) : undefined;
+      await onboardCommand(
+        {
+          workspace: opts.workspace as string | undefined,
+          nonInteractive: Boolean(opts.nonInteractive),
+          acceptRisk: Boolean(opts.acceptRisk),
+          flow: opts.flow as "quickstart" | "advanced" | "manual" | undefined,
+          mode: opts.mode as "local" | "remote" | undefined,
+          authChoice: opts.authChoice as AuthChoice | undefined,
+          tokenProvider: opts.tokenProvider as string | undefined,
+          token: opts.token as string | undefined,
+          tokenProfileId: opts.tokenProfileId as string | undefined,
+          tokenExpiresIn: opts.tokenExpiresIn as string | undefined,
+          anthropicApiKey: opts.anthropicApiKey as string | undefined,
+          openaiApiKey: opts.openaiApiKey as string | undefined,
+          openrouterApiKey: opts.openrouterApiKey as string | undefined,
+          aiGatewayApiKey: opts.aiGatewayApiKey as string | undefined,
+          cloudflareAiGatewayAccountId: opts.cloudflareAiGatewayAccountId as string | undefined,
+          cloudflareAiGatewayGatewayId: opts.cloudflareAiGatewayGatewayId as string | undefined,
+          cloudflareAiGatewayApiKey: opts.cloudflareAiGatewayApiKey as string | undefined,
+          moonshotApiKey: opts.moonshotApiKey as string | undefined,
+          kimiCodeApiKey: opts.kimiCodeApiKey as string | undefined,
+          geminiApiKey: opts.geminiApiKey as string | undefined,
+          zaiApiKey: opts.zaiApiKey as string | undefined,
+          xiaomiApiKey: opts.xiaomiApiKey as string | undefined,
+          qianfanApiKey: opts.qianfanApiKey as string | undefined,
+          minimaxApiKey: opts.minimaxApiKey as string | undefined,
+          syntheticApiKey: opts.syntheticApiKey as string | undefined,
+          veniceApiKey: opts.veniceApiKey as string | undefined,
+          togetherApiKey: opts.togetherApiKey as string | undefined,
+          huggingfaceApiKey: opts.huggingfaceApiKey as string | undefined,
+          opencodeZenApiKey: opts.opencodeZenApiKey as string | undefined,
+          xaiApiKey: opts.xaiApiKey as string | undefined,
+          litellmApiKey: opts.litellmApiKey as string | undefined,
+          customBaseUrl: opts.customBaseUrl as string | undefined,
+          customApiKey: opts.customApiKey as string | undefined,
+          customModelId: opts.customModelId as string | undefined,
+          customProviderId: opts.customProviderId as string | undefined,
+          customCompatibility: opts.customCompatibility as "openai" | "anthropic" | undefined,
+          gatewayPort:
+            typeof gatewayPort === "number" && Number.isFinite(gatewayPort)
+              ? gatewayPort
+              : undefined,
+          gatewayBind: opts.gatewayBind as GatewayBind | undefined,
+          gatewayAuth: opts.gatewayAuth as GatewayAuthChoice | undefined,
+          gatewayToken: opts.gatewayToken as string | undefined,
+          gatewayPassword: opts.gatewayPassword as string | undefined,
+          remoteUrl: opts.remoteUrl as string | undefined,
+          remoteToken: opts.remoteToken as string | undefined,
+          tailscale: opts.tailscale as TailscaleMode | undefined,
+          tailscaleResetOnExit: Boolean(opts.tailscaleResetOnExit),
+          reset: Boolean(opts.reset),
+          installDaemon,
+          daemonRuntime: opts.daemonRuntime as GatewayDaemonRuntime | undefined,
+          skipChannels: Boolean(opts.skipChannels),
+          skipSkills: Boolean(opts.skipSkills),
+          skipHealth: Boolean(opts.skipHealth),
+          skipUi: Boolean(opts.skipUi),
+          nodeManager: opts.nodeManager as NodeManagerChoice | undefined,
+          json: Boolean(opts.json),
+        },
+        defaultRuntime,
+      );
     });
+  });
 }

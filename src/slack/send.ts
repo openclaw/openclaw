@@ -27,13 +27,93 @@ type SlackRecipient =
       id: string;
     };
 
+export type SlackSendIdentity = {
+  username?: string;
+  iconUrl?: string;
+  iconEmoji?: string;
+};
+
 type SlackSendOpts = {
   token?: string;
   accountId?: string;
   mediaUrl?: string;
+  mediaLocalRoots?: readonly string[];
   client?: WebClient;
   threadTs?: string;
+  identity?: SlackSendIdentity;
 };
+
+function hasCustomIdentity(identity?: SlackSendIdentity): boolean {
+  return Boolean(identity?.username || identity?.iconUrl || identity?.iconEmoji);
+}
+
+function isSlackCustomizeScopeError(err: unknown): boolean {
+  if (!(err instanceof Error)) {
+    return false;
+  }
+  const maybeData = err as Error & {
+    data?: {
+      error?: string;
+      needed?: string;
+      response_metadata?: { scopes?: string[]; acceptedScopes?: string[] };
+    };
+  };
+  const code = maybeData.data?.error?.toLowerCase();
+  if (code !== "missing_scope") {
+    return false;
+  }
+  const needed = maybeData.data?.needed?.toLowerCase();
+  if (needed?.includes("chat:write.customize")) {
+    return true;
+  }
+  const scopes = [
+    ...(maybeData.data?.response_metadata?.scopes ?? []),
+    ...(maybeData.data?.response_metadata?.acceptedScopes ?? []),
+  ].map((scope) => scope.toLowerCase());
+  return scopes.includes("chat:write.customize");
+}
+
+async function postSlackMessageBestEffort(params: {
+  client: WebClient;
+  channelId: string;
+  text: string;
+  threadTs?: string;
+  identity?: SlackSendIdentity;
+}) {
+  const basePayload = {
+    channel: params.channelId,
+    text: params.text,
+    thread_ts: params.threadTs,
+  };
+  try {
+    // Slack Web API types model icon_url and icon_emoji as mutually exclusive.
+    // Build payloads in explicit branches so TS and runtime stay aligned.
+    if (params.identity?.iconUrl) {
+      return await params.client.chat.postMessage({
+        ...basePayload,
+        ...(params.identity.username ? { username: params.identity.username } : {}),
+        icon_url: params.identity.iconUrl,
+      });
+    }
+    if (params.identity?.iconEmoji) {
+      return await params.client.chat.postMessage({
+        ...basePayload,
+        ...(params.identity.username ? { username: params.identity.username } : {}),
+        icon_emoji: params.identity.iconEmoji,
+      });
+    }
+    return await params.client.chat.postMessage({
+      ...basePayload,
+      ...(params.identity?.username ? { username: params.identity.username } : {}),
+    });
+  } catch (err) {
+    if (!hasCustomIdentity(params.identity) || !isSlackCustomizeScopeError(err)) {
+      throw err;
+    }
+    logVerbose("slack send: missing chat:write.customize, retrying without custom identity");
+    return params.client.chat.postMessage(basePayload);
+  }
+}
 
 export type SlackSendResult = {
   messageId: string;
@@ -91,6 +171,7 @@ async function uploadSlackFile(params: {
   client: WebClient;
   channelId: string;
   mediaUrl: string;
+  mediaLocalRoots?: readonly string[];
   caption?: string;
   threadTs?: string;
   maxBytes?: number;
@@ -99,7 +180,10 @@ async function uploadSlackFile(params: {
     buffer,
     contentType: _contentType,
     fileName,
-  } = await loadWebMedia(params.mediaUrl, params.maxBytes);
+  } = await loadWebMedia(params.mediaUrl, {
+    maxBytes: params.maxBytes,
+    localRoots: params.mediaLocalRoots,
+  });
   const basePayload = {
     channel_id: params.channelId,
     file: buffer,
@@ -177,24 +261,29 @@ export async function sendMessageSlack(
       client,
       channelId,
       mediaUrl: opts.mediaUrl,
+      mediaLocalRoots: opts.mediaLocalRoots,
       caption: firstChunk,
       threadTs: opts.threadTs,
       maxBytes: mediaMaxBytes,
     });
     for (const chunk of rest) {
-      const response = await client.chat.postMessage({
-        channel: channelId,
+      const response = await postSlackMessageBestEffort({
+        client,
+        channelId,
         text: chunk,
-        thread_ts: opts.threadTs,
+        threadTs: opts.threadTs,
+        identity: opts.identity,
       });
       lastMessageId = response.ts ?? lastMessageId;
     }
   } else {
     for (const chunk of chunks.length ? chunks : [""]) {
-      const response = await client.chat.postMessage({
-        channel: channelId,
+      const response = await postSlackMessageBestEffort({
+        client,
+        channelId,
         text: chunk,
-        thread_ts: opts.threadTs,
+        threadTs: opts.threadTs,
+        identity: opts.identity,
       });
       lastMessageId = response.ts ?? lastMessageId;
     }
