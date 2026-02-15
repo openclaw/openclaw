@@ -47,12 +47,17 @@ export async function ensureCopilotSdkClient(): Promise<SdkClient> {
   }
 
   clientStartPromise = (async () => {
-    const { CopilotClient } = await loadSdk();
-    const client = new CopilotClient();
-    await client.start();
-    sharedClient = client;
-    clientStartPromise = undefined;
-    return client;
+    try {
+      const { CopilotClient } = await loadSdk();
+      const client = new CopilotClient();
+      await client.start();
+      sharedClient = client;
+      clientStartPromise = undefined;
+      return client;
+    } catch (err) {
+      clientStartPromise = undefined;
+      throw err;
+    }
   })();
 
   return clientStartPromise;

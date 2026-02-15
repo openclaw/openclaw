@@ -352,6 +352,10 @@ export async function runEmbeddedPiAgent(
             if (envToken) {
               const copilotToken = await resolveCopilotApiToken({ githubToken: envToken });
               authStorage.setRuntimeApiKey(model.provider, copilotToken.token);
+            } else {
+              log.warn(
+                "SDK-managed Copilot auth has no env token (COPILOT_GITHUB_TOKEN, GH_TOKEN, or GITHUB_TOKEN) — REST API calls may fail",
+              );
             }
           } else {
             const copilotToken = await resolveCopilotApiToken({

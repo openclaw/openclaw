@@ -307,9 +307,11 @@ export async function compactEmbeddedPiSessionDirect(
         if (envToken) {
           const copilotToken = await resolveCopilotApiToken({ githubToken: envToken });
           authStorage.setRuntimeApiKey(model.provider, copilotToken.token);
+        } else {
+          log.warn(
+            "SDK-managed Copilot auth has no env token (COPILOT_GITHUB_TOKEN, GH_TOKEN, or GITHUB_TOKEN) — REST API calls may fail",
+          );
         }
-        // If no env token, the SDK handles auth internally — pi-ai will
-        // receive auth via Copilot-specific headers set by the SDK.
       } else {
         const copilotToken = await resolveCopilotApiToken({
           githubToken: apiKeyInfo.apiKey,
