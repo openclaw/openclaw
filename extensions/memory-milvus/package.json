@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/memory-milvus",
-  "version": "2026.2.1",
+  "version": "2026.2.15",
   "private": true,
   "description": "OpenClaw Milvus/Zilliz-backed long-term memory plugin with auto-recall/capture",
   "type": "module",

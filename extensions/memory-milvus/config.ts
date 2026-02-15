@@ -82,7 +82,7 @@ export const memoryConfigSchema = {
 
     const address = milvus.address;
     // Auto-detect SSL from https:// prefix
-    const ssl = typeof milvus.ssl === "boolean" ? milvus.ssl : address.startsWith("https");
+    const ssl = typeof milvus.ssl === "boolean" ? milvus.ssl : address.startsWith("https://");
 
     return {
       embedding: {
