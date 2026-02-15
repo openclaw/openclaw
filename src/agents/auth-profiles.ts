@@ -26,6 +26,7 @@ export type {
   AuthProfileFailureReason,
   AuthProfileIdRepairResult,
   AuthProfileStore,
+  ModelCooldownStats,
   OAuthCredential,
   ProfileUsageStats,
   TokenCredential,

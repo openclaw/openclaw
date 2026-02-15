@@ -259,6 +259,7 @@ export async function runEmbeddedPiAgent(
         store: authStore,
         provider,
         preferredProfile: preferredProfileId,
+        modelId,
       });
       if (lockedProfileId && !profileOrder.includes(lockedProfileId)) {
         throw new Error(`Auth profile "${lockedProfileId}" is not configured for ${provider}.`);
@@ -358,7 +359,7 @@ export async function runEmbeddedPiAgent(
         let nextIndex = profileIndex + 1;
         while (nextIndex < profileCandidates.length) {
           const candidate = profileCandidates[nextIndex];
-          if (candidate && isProfileInCooldown(authStore, candidate)) {
+          if (candidate && isProfileInCooldown(authStore, candidate, modelId)) {
             nextIndex += 1;
             continue;
           }
@@ -384,7 +385,7 @@ export async function runEmbeddedPiAgent(
           if (
             candidate &&
             candidate !== lockedProfileId &&
-            isProfileInCooldown(authStore, candidate)
+            isProfileInCooldown(authStore, candidate, modelId)
           ) {
             profileIndex += 1;
             continue;
@@ -751,6 +752,7 @@ export async function runEmbeddedPiAgent(
                 reason: promptFailoverReason,
                 cfg: params.config,
                 agentDir: params.agentDir,
+                modelId, // Pass model ID for per-model cooldown tracking
               });
             }
             if (
@@ -841,6 +843,7 @@ export async function runEmbeddedPiAgent(
                 reason,
                 cfg: params.config,
                 agentDir: params.agentDir,
+                modelId, // Pass model ID for per-model cooldown tracking
               });
               if (timedOut && !isProbeSession) {
                 log.warn(
@@ -963,6 +966,7 @@ export async function runEmbeddedPiAgent(
               store: authStore,
               profileId: lastProfileId,
               agentDir: params.agentDir,
+              modelId, // Pass model ID to clear model-specific cooldown
             });
           }
           return {

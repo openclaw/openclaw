@@ -246,15 +246,19 @@ export async function runWithModelFallback<T>(params: {
         cfg: params.cfg,
         store: authStore,
         provider: candidate.provider,
+        modelId: candidate.model,
       });
-      const isAnyProfileAvailable = profileIds.some((id) => !isProfileInCooldown(authStore, id));
+      // Check cooldown with model ID to enable per-model cooldown tracking
+      const isAnyProfileAvailable = profileIds.some(
+        (id) => !isProfileInCooldown(authStore, id, candidate.model),
+      );
 
       if (profileIds.length > 0 && !isAnyProfileAvailable) {
-        // All profiles for this provider are in cooldown; skip without attempting
+        // All profiles for this provider/model are in cooldown; skip without attempting
         attempts.push({
           provider: candidate.provider,
           model: candidate.model,
-          error: `Provider ${candidate.provider} is in cooldown (all profiles unavailable)`,
+          error: `Provider ${candidate.provider} model ${candidate.model} is in cooldown (all profiles unavailable)`,
           reason: "rate_limit",
         });
         continue;
