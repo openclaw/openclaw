@@ -2,6 +2,7 @@ import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { AnyAgentTool } from "./common.js";
 import { formatCliCommand } from "../../cli/command-format.js";
+import { defaultRuntime } from "../../runtime.js";
 import { wrapWebContent } from "../../security/external-content.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
@@ -275,6 +276,43 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
   if (raw === "brave") {
     return "brave";
   }
+
+  // Auto-detect provider from available API keys (priority order)
+  if (raw === "") {
+    // 1. Brave
+    if (resolveSearchApiKey(search)) {
+      defaultRuntime.info(
+        'web_search: no provider configured, auto-detected "brave" from available API keys',
+      );
+      return "brave";
+    }
+    // 2. Gemini
+    const geminiConfig = resolveGeminiConfig(search);
+    if (resolveGeminiApiKey(geminiConfig)) {
+      defaultRuntime.info(
+        'web_search: no provider configured, auto-detected "gemini" from available API keys',
+      );
+      return "gemini";
+    }
+    // 3. Perplexity
+    const perplexityConfig = resolvePerplexityConfig(search);
+    const { apiKey: perplexityKey } = resolvePerplexityApiKey(perplexityConfig);
+    if (perplexityKey) {
+      defaultRuntime.info(
+        'web_search: no provider configured, auto-detected "perplexity" from available API keys',
+      );
+      return "perplexity";
+    }
+    // 4. Grok
+    const grokConfig = resolveGrokConfig(search);
+    if (resolveGrokApiKey(grokConfig)) {
+      defaultRuntime.info(
+        'web_search: no provider configured, auto-detected "grok" from available API keys',
+      );
+      return "grok";
+    }
+  }
+
   return "brave";
 }
 
@@ -985,6 +1023,10 @@ export function createWebSearchTool(options?: {
     },
   };
 }
+
+export const __testing_provider = {
+  resolveSearchProvider,
+} as const;
 
 export const __testing = {
   inferPerplexityBaseUrlFromApiKey,
