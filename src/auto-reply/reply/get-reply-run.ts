@@ -322,7 +322,7 @@ export async function runPreparedReply(
     // oxlint-disable-next-line typescript/no-explicit-any
     const channel = ctx.OriginatingChannel || (command.channel as any);
     const to = ctx.OriginatingTo || command.from || command.to;
-    if (channel && to) {
+    if (channel && to && sessionCtx.ChatType === "direct") {
       const modelLabel = `${provider}/${model}`;
       const defaultLabel = `${defaultProvider}/${defaultModel}`;
       const text =
