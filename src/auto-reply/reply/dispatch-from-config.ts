@@ -5,6 +5,7 @@ import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { loadSessionStore, resolveStorePath } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
+import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import {
   logMessageProcessed,
@@ -439,6 +440,53 @@ export async function dispatchReplyFromConfig(params: {
         logVerbose(
           `dispatch-from-config: accumulated block TTS failed: ${err instanceof Error ? err.message : String(err)}`,
         );
+      }
+    }
+
+    await dispatcher.waitForIdle();
+
+    // Note: message_sent plugin hook is already emitted per-payload in
+    // deliverOutboundPayloads() with accurate delivery success/error status.
+
+    // Emit agent:response on internal hook bus.
+    {
+      const allReplyText = replies.map((r) => r.text ?? "").join("\n");
+      if (allReplyText.trim()) {
+        // Resolve session stats for hook consumers.
+        let sessionStats: Record<string, unknown> | undefined;
+        const sessionKey = ctx.SessionKey ?? "";
+        if (sessionKey) {
+          try {
+            const resolvedAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
+            const storePath = resolveStorePath(cfg.session?.store, { agentId: resolvedAgentId });
+            const store = loadSessionStore(storePath);
+            const entry = store[sessionKey.toLowerCase()] ?? store[sessionKey];
+            if (entry) {
+              sessionStats = {
+                contextTokens: entry.contextTokens,
+                inputTokens: entry.inputTokens,
+                outputTokens: entry.outputTokens,
+                totalTokens: entry.totalTokens,
+                compactionCount: entry.compactionCount,
+                model: entry.model,
+                modelProvider: entry.modelProvider,
+              };
+            }
+          } catch {
+            // Non-critical — hooks still fire without stats.
+          }
+        }
+        void triggerInternalHook(
+          createInternalHookEvent("agent", "response", sessionKey, {
+            to: ctx.To ?? ctx.From ?? "",
+            channel,
+            content: allReplyText,
+            replyCount: replies.length,
+            ...(sessionStats ? { session: sessionStats } : {}),
+          }),
+        ).catch((err) => {
+          logVerbose(`dispatch-from-config: agent:response internal hook failed: ${String(err)}`);
+        });
       }
     }
 
