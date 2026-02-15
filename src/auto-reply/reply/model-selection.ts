@@ -4,6 +4,7 @@ import { clearSessionAuthProfileOverride } from "../../agents/auth-profiles/sess
 import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
+import { resolveThinkingAwareModelRef } from "../../agents/model-selection-thinking.js";
 import {
   buildAllowedModelSet,
   type ModelAliasIndex,
@@ -271,6 +272,7 @@ export async function createModelSelectionState(params: {
   provider: string;
   model: string;
   hasModelDirective: boolean;
+  thinkingLevel?: ThinkLevel;
   /** True when heartbeat.model was explicitly resolved for this run.
    *  In that case, skip session-stored overrides so the heartbeat selection wins. */
   hasResolvedHeartbeatModelOverride?: boolean;
@@ -358,6 +360,15 @@ export async function createModelSelectionState(params: {
       model = storedOverride.model;
     }
   }
+
+  const thinkingAwareRef = resolveThinkingAwareModelRef({
+    provider,
+    model,
+    thinkingLevel: params.thinkingLevel,
+    allowedModelKeys,
+  });
+  provider = thinkingAwareRef.provider;
+  model = thinkingAwareRef.model;
 
   if (sessionEntry && sessionStore && sessionKey && sessionEntry.authProfileOverride) {
     const { ensureAuthProfileStore } = await import("../../agents/auth-profiles.js");

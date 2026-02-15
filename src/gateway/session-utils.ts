@@ -9,10 +9,12 @@ import type {
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { lookupContextTokens } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { resolveThinkingAwareModelRef } from "../agents/model-selection-thinking.js";
 import {
   resolveConfiguredModelRef,
   resolveDefaultModelForAgent,
 } from "../agents/model-selection.js";
+import { normalizeThinkLevel } from "../auto-reply/thinking.js";
 import { type OpenClawConfig, loadConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
@@ -660,7 +662,10 @@ export function resolveSessionModelRef(
     provider = entry?.providerOverride?.trim() || provider;
     model = storedModelOverride;
   }
-  return { provider, model };
+  const thinkingLevel = normalizeThinkLevel(
+    entry?.thinkingLevel ?? cfg.agents?.defaults?.thinkingDefault,
+  );
+  return resolveThinkingAwareModelRef({ provider, model, thinkingLevel });
 }
 
 export function listSessionsFromStore(params: {

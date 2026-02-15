@@ -7,6 +7,13 @@ vi.mock("../../agents/model-catalog.js", () => ({
     { provider: "inferencer", id: "deepseek-v3-4bit-mlx", name: "DeepSeek V3" },
     { provider: "kimi-coding", id: "k2p5", name: "Kimi K2.5" },
     { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus 4.5" },
+    { provider: "xai", id: "grok-4-1-fast", name: "Grok 4.1 Fast" },
+    { provider: "xai", id: "grok-4-1-fast-reasoning", name: "Grok 4.1 Fast Reasoning" },
+    {
+      provider: "xai",
+      id: "grok-4-1-fast-non-reasoning",
+      name: "Grok 4.1 Fast Non-Reasoning",
+    },
   ]),
 }));
 
@@ -128,5 +135,41 @@ describe("createModelSelectionState respects session model override", () => {
 
     expect(state.provider).toBe(defaultProvider);
     expect(state.model).toBe("deepseek-v3-4bit-mlx");
+  });
+
+  it("maps xai fast model to reasoning variant when thinking is enabled", async () => {
+    const cfg = {} as OpenClawConfig;
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: undefined,
+      defaultProvider: "xai",
+      defaultModel: "grok-4-1-fast",
+      provider: "xai",
+      model: "grok-4-1-fast",
+      thinkingLevel: "high",
+      hasModelDirective: false,
+    });
+
+    expect(state.provider).toBe("xai");
+    expect(state.model).toBe("grok-4-1-fast-reasoning");
+  });
+
+  it("maps xai fast model to non-reasoning variant when thinking is off", async () => {
+    const cfg = {} as OpenClawConfig;
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: undefined,
+      defaultProvider: "xai",
+      defaultModel: "grok-4-1-fast",
+      provider: "xai",
+      model: "grok-4-1-fast",
+      thinkingLevel: "off",
+      hasModelDirective: false,
+    });
+
+    expect(state.provider).toBe("xai");
+    expect(state.model).toBe("grok-4-1-fast-non-reasoning");
   });
 });
