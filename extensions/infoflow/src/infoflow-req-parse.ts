@@ -1,17 +1,20 @@
 import type { IncomingMessage } from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { createHash, createDecipheriv } from "node:crypto";
+import { createDedupeCache } from "openclaw/plugin-sdk";
 import type { ResolvedInfoflowAccount } from "./channel.js";
-import { handlePrivateChatMessage, handleGroupChatMessage } from "./bot.js";
-
 // ---------------------------------------------------------------------------
 // Message deduplication
 // ---------------------------------------------------------------------------
+import { handlePrivateChatMessage, handleGroupChatMessage } from "./bot.js";
 
 const DEDUP_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const DEDUP_MAX_SIZE = 1000;
 
-const messageCache = new Map<string, number>(); // key → timestamp
+const messageCache = createDedupeCache({
+  ttlMs: DEDUP_TTL_MS,
+  maxSize: DEDUP_MAX_SIZE,
+});
 
 /**
  * Extracts a dedup key from the decrypted message data.
@@ -43,41 +46,13 @@ function extractDedupeKey(msgData: Record<string, unknown>): string | null {
 
 /**
  * Returns true if the message is a duplicate (already seen within TTL).
- * If new, records it in cache. Prunes expired + oversized entries.
+ * Uses shared dedupe cache implementation.
  */
 function isDuplicateMessage(msgData: Record<string, unknown>): boolean {
   const key = extractDedupeKey(msgData);
   if (!key) return false; // Cannot extract key, allow through
 
-  const now = Date.now();
-
-  // Check existing
-  const existing = messageCache.get(key);
-  if (existing !== undefined && now - existing < DEDUP_TTL_MS) {
-    return true;
-  }
-
-  // Record new
-  messageCache.delete(key); // Ensure insertion at Map tail
-  messageCache.set(key, now);
-
-  // Prune expired
-  for (const [k, ts] of messageCache) {
-    if (now - ts >= DEDUP_TTL_MS) {
-      messageCache.delete(k);
-    } else {
-      break; // Map is insertion-ordered, later entries are newer
-    }
-  }
-
-  // Prune oversized
-  while (messageCache.size > DEDUP_MAX_SIZE) {
-    const oldest = messageCache.keys().next().value;
-    if (oldest) messageCache.delete(oldest);
-    else break;
-  }
-
-  return false;
+  return messageCache.check(key);
 }
 
 /**
@@ -87,18 +62,7 @@ function isDuplicateMessage(msgData: Record<string, unknown>): boolean {
  */
 export function recordSentMessageId(messageId: string | number): void {
   if (messageId == null) return;
-  const key = String(messageId);
-  const now = Date.now();
-
-  messageCache.delete(key);
-  messageCache.set(key, now);
-
-  // Prune oversized
-  while (messageCache.size > DEDUP_MAX_SIZE) {
-    const oldest = messageCache.keys().next().value;
-    if (oldest) messageCache.delete(oldest);
-    else break;
-  }
+  messageCache.check(String(messageId)); // Will record if not duplicate
 }
 
 // ---------------------------------------------------------------------------
