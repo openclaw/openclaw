@@ -14,6 +14,16 @@ const makeFile = (overrides: Partial<WorkspaceBootstrapFile>): WorkspaceBootstra
   ...overrides,
 });
 describe("buildBootstrapContextFiles", () => {
+  it("skips malformed bootstrap file entries at runtime", () => {
+    let warned = false;
+    const result = buildBootstrapContextFiles(
+      [{ name: DEFAULT_AGENTS_FILENAME, missing: false } as any],
+      { warn: () => (warned = true) },
+    );
+    expect(result).toEqual([]);
+    expect(warned).toBe(true);
+  });
+
   it("keeps missing markers", () => {
     const files = [makeFile({ missing: true, content: undefined })];
     expect(buildBootstrapContextFiles(files)).toEqual([
