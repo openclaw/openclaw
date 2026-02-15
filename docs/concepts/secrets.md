@@ -66,6 +66,18 @@ Or via the GCP Console:
 4. Add role: **Secret Manager Secret Accessor**
 5. Save
 
+**For per-agent isolation** (setting IAM policies on individual secrets), the compute service account also needs **Secret Manager Admin** (`roles/secretmanager.admin`):
+
+```bash
+gcloud projects add-iam-policy-binding <project-id> \
+  --member="serviceAccount:<service-account-email>" \
+  --role="roles/secretmanager.admin"
+```
+
+Or via the Console: same steps, add **Secret Manager Admin** role.
+
+> **Note:** After per-agent IAM bindings are configured, you can optionally downgrade the compute SA back to just Secret Accessor if you don't need to manage bindings anymore.
+
 ### 2. Bootstrap
 
 ```bash
