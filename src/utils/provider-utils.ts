@@ -24,6 +24,10 @@ export function isReasoningTagProvider(provider: string | undefined | null): boo
 
   // Handle google-antigravity and its model variations (e.g. google-antigravity/gemini-3)
   if (normalized.includes("google-antigravity")) {
+    // PATCH: Disable reasoning tags for gemini-3-pro-low due to tool call format issues
+    if (normalized.includes("gemini-3-pro-low") || normalized.includes("gemini-3-pro")) {
+      return false;
+    }
     return true;
   }
 
