@@ -87,7 +87,11 @@ export function createBrowserRouteDispatcher(ctx: BrowserRouteContext) {
         for (const [idx, name] of match.paramNames.entries()) {
           const value = exec[idx + 1];
           if (typeof value === "string") {
-            params[name] = decodeURIComponent(value);
+            try {
+              params[name] = decodeURIComponent(value);
+            } catch {
+              return { status: 400, body: { error: "invalid percent-encoding in path parameter" } };
+            }
           }
         }
       }
