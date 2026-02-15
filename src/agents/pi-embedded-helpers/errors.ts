@@ -632,6 +632,10 @@ const ERROR_PATTERNS = {
     "messages.1.content.1.tool_use.id",
     "invalid request format",
   ],
+  routing: [
+    "no endpoints found",
+    /no endpoints (?:found )?(?:that )?support/i,
+  ] as readonly ErrorPattern[],
 } as const;
 
 const TOOL_CALL_INPUT_MISSING_RE =
@@ -759,6 +763,10 @@ export function isCloudCodeAssistFormatError(raw: string): boolean {
   return !isImageDimensionErrorMessage(raw) && matchesErrorPatterns(raw, ERROR_PATTERNS.format);
 }
 
+export function isRoutingErrorMessage(raw: string): boolean {
+  return matchesErrorPatterns(raw, ERROR_PATTERNS.routing);
+}
+
 export function isAuthAssistantError(msg: AssistantMessage | undefined): boolean {
   if (!msg || msg.stopReason !== "error") {
     return false;
@@ -794,6 +802,9 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
   }
   if (isAuthErrorMessage(raw)) {
     return "auth";
+  }
+  if (isRoutingErrorMessage(raw)) {
+    return "format";
   }
   return null;
 }

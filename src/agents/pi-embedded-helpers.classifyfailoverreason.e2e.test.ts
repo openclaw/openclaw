@@ -44,4 +44,16 @@ describe("classifyFailoverReason", () => {
       "rate_limit",
     );
   });
+  it("classifies OpenRouter routing errors as format for failover", () => {
+    expect(classifyFailoverReason("404 No endpoints found that support image input")).toBe(
+      "format",
+    );
+    expect(classifyFailoverReason("No endpoints found that support image input")).toBe("format");
+    expect(
+      classifyFailoverReason(
+        '{"error":{"message":"No endpoints found that support image input","code":404}}',
+      ),
+    ).toBe("format");
+    expect(classifyFailoverReason("no endpoints found")).toBe("format");
+  });
 });
