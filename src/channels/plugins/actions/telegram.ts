@@ -9,6 +9,7 @@ import {
 import { handleTelegramAction } from "../../../agents/tools/telegram-actions.js";
 import { listEnabledTelegramAccounts } from "../../../telegram/accounts.js";
 import { isTelegramInlineButtonsEnabled } from "../../../telegram/inline-buttons.js";
+import { normalizePollInput } from "../../../polls.js";
 
 const providerId = "telegram";
 
@@ -59,6 +60,9 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     if (gate("sticker", false)) {
       actions.add("sticker");
       actions.add("sticker-search");
+    }
+    if (gate("polls")) {
+      actions.add("poll");
     }
     return Array.from(actions);
   },
@@ -193,6 +197,41 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
           action: "searchSticker",
           query,
           limit: limit ?? undefined,
+          accountId: accountId ?? undefined,
+        },
+        cfg,
+      );
+    }
+
+    if (action === "poll") {
+      const to = readStringParam(params, "to", { required: true });
+      const question = readStringParam(params, "pollQuestion", { required: true });
+      const options = readStringArrayParam(params, "pollOption", { required: true });
+      const pollMulti = typeof params.pollMulti === "boolean" ? params.pollMulti : false;
+      const durationSeconds = readNumberParam(params, "pollDurationSeconds", { integer: true });
+      const threadId = readStringParam(params, "threadId");
+      const silent = typeof params.silent === "boolean" ? params.silent : undefined;
+      const isAnonymous = typeof params.pollAnonymous === "boolean" ? params.pollAnonymous : undefined;
+
+      // Normalize poll input with Telegram constraints (2-10 options)
+      const normalizedPoll = normalizePollInput(
+        {
+          question,
+          options,
+          maxSelections: pollMulti ? options.length : 1,
+          durationSeconds: durationSeconds ?? undefined,
+        },
+        { maxOptions: 10 },
+      );
+
+      return await handleTelegramAction(
+        {
+          action: "sendPoll",
+          to,
+          poll: normalizedPoll,
+          messageThreadId: threadId ?? undefined,
+          silent,
+          isAnonymous,
           accountId: accountId ?? undefined,
         },
         cfg,
