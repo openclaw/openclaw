@@ -27,7 +27,7 @@ function resolveOpSecret(ref: string, deps: ResolveDeps): string {
     });
     return out.trim();
   } catch (err) {
-    throw new Error(`1Password secret read failed: ${String(err)}`);
+    throw new Error(`1Password secret read failed: ${String(err)}`, { cause: err });
   }
 }
 
@@ -47,7 +47,7 @@ function resolveVaultSecret(ref: string, deps: ResolveDeps): string {
     });
     return out.trim();
   } catch (err) {
-    throw new Error(`Vault secret read failed: ${String(err)}`);
+    throw new Error(`Vault secret read failed: ${String(err)}`, { cause: err });
   }
 }
 
@@ -90,4 +90,3 @@ function resolveAny(value: unknown, configPath: string, deps: ResolveDeps): unkn
 export function resolveConfigSecrets(obj: unknown, deps: ResolveDeps = {}): unknown {
   return resolveAny(obj, "", deps);
 }
-

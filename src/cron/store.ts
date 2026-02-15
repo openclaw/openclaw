@@ -78,12 +78,18 @@ async function renameWithRetry(from: string, to: string) {
       await fs.promises.rename(from, to);
       return;
     } catch (err) {
-      const code =
-        err && typeof err === "object" && "code" in err ? String(err.code) : undefined;
-      if (!code || !ATOMIC_RENAME_RETRY_CODES.has(code) || attempt >= ATOMIC_RENAME_RETRY_DELAYS_MS.length) {
+      const code = err && typeof err === "object" && "code" in err ? String(err.code) : undefined;
+      if (
+        !code ||
+        !ATOMIC_RENAME_RETRY_CODES.has(code) ||
+        attempt >= ATOMIC_RENAME_RETRY_DELAYS_MS.length
+      ) {
         throw err;
       }
-      const delayMs = ATOMIC_RENAME_RETRY_DELAYS_MS[attempt]!;
+      const delayMs = ATOMIC_RENAME_RETRY_DELAYS_MS[attempt];
+      if (delayMs === undefined) {
+        throw err;
+      }
       attempt += 1;
       await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
     }

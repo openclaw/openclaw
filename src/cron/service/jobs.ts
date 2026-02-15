@@ -103,7 +103,9 @@ export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | und
       }
       const atSchedule = schedule as { at?: string; atMs?: number | string };
       const atMs =
-        typeof atSchedule.atMs === "number" && Number.isFinite(atSchedule.atMs) && atSchedule.atMs > 0
+        typeof atSchedule.atMs === "number" &&
+        Number.isFinite(atSchedule.atMs) &&
+        atSchedule.atMs > 0
           ? atSchedule.atMs
           : typeof atSchedule.atMs === "string"
             ? parseAbsoluteTimeMs(atSchedule.atMs)
@@ -286,7 +288,10 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
     throw new Error("cron job requires at least one schedule");
   }
   const schedules = ensureScheduleAnchors(rawSchedules, now);
-  const schedule = schedules[0]!;
+  const schedule = schedules[0];
+  if (!schedule) {
+    throw new Error("cron job requires at least one schedule");
+  }
   const deleteAfterRun =
     typeof input.deleteAfterRun === "boolean"
       ? input.deleteAfterRun
@@ -333,12 +338,16 @@ export function applyJobPatch(job: CronJob, patch: CronJobPatch) {
     job.deleteAfterRun = patch.deleteAfterRun;
   }
   if (patch.schedule) {
-    const normalized = ensureScheduleAnchors(
+    const normalizedSchedules = ensureScheduleAnchors(
       [patch.schedule],
       typeof job.createdAtMs === "number" && Number.isFinite(job.createdAtMs)
         ? job.createdAtMs
         : Date.now(),
-    )[0]!;
+    );
+    const normalized = normalizedSchedules[0];
+    if (!normalized) {
+      throw new Error("cron.update schedule normalization failed");
+    }
     job.schedule = normalized;
     if (Array.isArray(job.schedules) && job.schedules.length > 0) {
       job.schedules = [normalized, ...job.schedules.slice(1)];
@@ -355,7 +364,11 @@ export function applyJobPatch(job: CronJob, patch: CronJobPatch) {
     );
     if (schedules.length > 0) {
       job.schedules = schedules;
-      job.schedule = schedules[0]!;
+      const firstSchedule = schedules[0];
+      if (!firstSchedule) {
+        throw new Error("cron.update schedules normalization failed");
+      }
+      job.schedule = firstSchedule;
     }
   }
   if (patch.sessionTarget) {
