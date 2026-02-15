@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const hookMocks = vi.hoisted(() => ({
   runner: {
     hasHooks: vi.fn(() => false),
+    runBeforeToolCall: vi.fn(async () => {}),
     runAfterToolCall: vi.fn(async () => {}),
   },
 }));
@@ -23,6 +24,8 @@ describe("after_tool_call hook wiring", () => {
   beforeEach(() => {
     hookMocks.runner.hasHooks.mockReset();
     hookMocks.runner.hasHooks.mockReturnValue(false);
+    hookMocks.runner.runBeforeToolCall.mockReset();
+    hookMocks.runner.runBeforeToolCall.mockResolvedValue(undefined);
     hookMocks.runner.runAfterToolCall.mockReset();
     hookMocks.runner.runAfterToolCall.mockResolvedValue(undefined);
   });
@@ -84,6 +87,7 @@ describe("after_tool_call hook wiring", () => {
     );
 
     expect(hookMocks.runner.runAfterToolCall).toHaveBeenCalledTimes(1);
+    expect(hookMocks.runner.runBeforeToolCall).not.toHaveBeenCalled();
 
     const [event, context] = hookMocks.runner.runAfterToolCall.mock.calls[0];
     expect(event.toolName).toBe("read");

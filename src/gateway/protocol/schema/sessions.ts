@@ -72,6 +72,7 @@ export const SessionsPatchParamsSchema = Type.Object(
     model: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     authProfile: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     spawnedBy: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+    spawnDepth: Type.Optional(Type.Union([Type.Integer({ minimum: 0 }), Type.Null()])),
     sendPolicy: Type.Optional(
       Type.Union([Type.Literal("allow"), Type.Literal("deny"), Type.Null()]),
     ),
@@ -83,7 +84,10 @@ export const SessionsPatchParamsSchema = Type.Object(
 );
 
 export const SessionsResetParamsSchema = Type.Object(
-  { key: NonEmptyString },
+  {
+    key: NonEmptyString,
+    reason: Type.Optional(Type.Union([Type.Literal("new"), Type.Literal("reset")])),
+  },
   { additionalProperties: false },
 );
 

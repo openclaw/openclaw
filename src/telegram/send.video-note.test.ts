@@ -1,61 +1,16 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import {
+  getTelegramSendTestMocks,
+  importTelegramSendModule,
+  installTelegramSendTestHooks,
+} from "./send.test-harness.js";
 
-const { botApi, botCtorSpy } = vi.hoisted(() => ({
-  botApi: {
-    sendMessage: vi.fn(),
-    sendVideo: vi.fn(),
-    sendVideoNote: vi.fn(),
-  },
-  botCtorSpy: vi.fn(),
-}));
+installTelegramSendTestHooks();
 
-const { loadWebMedia } = vi.hoisted(() => ({
-  loadWebMedia: vi.fn(),
-}));
-
-vi.mock("../web/media.js", () => ({
-  loadWebMedia,
-}));
-
-vi.mock("grammy", () => ({
-  Bot: class {
-    api = botApi;
-    catch = vi.fn();
-    constructor(
-      public token: string,
-      public options?: {
-        client?: { fetch?: typeof fetch; timeoutSeconds?: number };
-      },
-    ) {
-      botCtorSpy(token, options);
-    }
-  },
-  InputFile: class {},
-}));
-
-const { loadConfig } = vi.hoisted(() => ({
-  loadConfig: vi.fn(() => ({})),
-}));
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
-  return {
-    ...actual,
-    loadConfig,
-  };
-});
-
-import { sendMessageTelegram } from "./send.js";
+const { loadWebMedia } = getTelegramSendTestMocks();
+const { sendMessageTelegram } = await importTelegramSendModule();
 
 describe("sendMessageTelegram video notes", () => {
-  beforeEach(() => {
-    loadConfig.mockReturnValue({});
-    loadWebMedia.mockReset();
-    botApi.sendMessage.mockReset();
-    botApi.sendVideo.mockReset();
-    botApi.sendVideoNote.mockReset();
-    botCtorSpy.mockReset();
-  });
-
   it("sends video as video note when asVideoNote is true", async () => {
     const chatId = "123";
     const text = "ignored caption context"; // Should be sent separately

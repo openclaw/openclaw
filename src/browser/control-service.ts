@@ -3,7 +3,11 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveBrowserConfig, resolveProfile } from "./config.js";
 import { ensureBrowserControlAuth } from "./control-auth.js";
 import { ensureChromeExtensionRelayServer } from "./extension-relay.js";
-import { type BrowserServerState, createBrowserRouteContext } from "./server-context.js";
+import {
+  type BrowserServerState,
+  createBrowserRouteContext,
+  listKnownProfileNames,
+} from "./server-context.js";
 
 let state: BrowserServerState | null = null;
 const log = createSubsystemLogger("browser");
@@ -16,6 +20,7 @@ export function getBrowserControlState(): BrowserServerState | null {
 export function createBrowserControlContext() {
   return createBrowserRouteContext({
     getState: () => state,
+    refreshConfigFromDisk: true,
   });
 }
 
@@ -71,10 +76,11 @@ export async function stopBrowserControlService(): Promise<void> {
 
   const ctx = createBrowserRouteContext({
     getState: () => state,
+    refreshConfigFromDisk: true,
   });
 
   try {
-    for (const name of Object.keys(current.resolved.profiles)) {
+    for (const name of listKnownProfileNames(current)) {
       try {
         await ctx.forProfile(name).stopRunningBrowser();
       } catch {

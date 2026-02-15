@@ -1,34 +1,61 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { HttpsProxyAgent, getLastAgent, proxyAgentSpy, resetLastAgent, webSocketSpy } = vi.hoisted(
-  () => {
-    const proxyAgentSpy = vi.fn();
-    const webSocketSpy = vi.fn();
+const {
+  GatewayIntents,
+  GatewayPlugin,
+  HttpsProxyAgent,
+  getLastAgent,
+  proxyAgentSpy,
+  resetLastAgent,
+  webSocketSpy,
+} = vi.hoisted(() => {
+  const proxyAgentSpy = vi.fn();
+  const webSocketSpy = vi.fn();
 
-    class HttpsProxyAgent {
-      static lastCreated: HttpsProxyAgent | undefined;
-      proxyUrl: string;
-      constructor(proxyUrl: string) {
-        if (proxyUrl === "bad-proxy") {
-          throw new Error("bad proxy");
-        }
-        this.proxyUrl = proxyUrl;
-        HttpsProxyAgent.lastCreated = this;
-        proxyAgentSpy(proxyUrl);
+  const GatewayIntents = {
+    Guilds: 1 << 0,
+    GuildMessages: 1 << 1,
+    MessageContent: 1 << 2,
+    DirectMessages: 1 << 3,
+    GuildMessageReactions: 1 << 4,
+    DirectMessageReactions: 1 << 5,
+    GuildPresences: 1 << 6,
+    GuildMembers: 1 << 7,
+  } as const;
+
+  class GatewayPlugin {}
+
+  class HttpsProxyAgent {
+    static lastCreated: HttpsProxyAgent | undefined;
+    proxyUrl: string;
+    constructor(proxyUrl: string) {
+      if (proxyUrl === "bad-proxy") {
+        throw new Error("bad proxy");
       }
+      this.proxyUrl = proxyUrl;
+      HttpsProxyAgent.lastCreated = this;
+      proxyAgentSpy(proxyUrl);
     }
+  }
 
-    return {
-      HttpsProxyAgent,
-      getLastAgent: () => HttpsProxyAgent.lastCreated,
-      proxyAgentSpy,
-      resetLastAgent: () => {
-        HttpsProxyAgent.lastCreated = undefined;
-      },
-      webSocketSpy,
-    };
-  },
-);
+  return {
+    GatewayIntents,
+    GatewayPlugin,
+    HttpsProxyAgent,
+    getLastAgent: () => HttpsProxyAgent.lastCreated,
+    proxyAgentSpy,
+    resetLastAgent: () => {
+      HttpsProxyAgent.lastCreated = undefined;
+    },
+    webSocketSpy,
+  };
+});
+
+// Unit test: don't import Carbon just to check the prototype chain.
+vi.mock("@buape/carbon/gateway", () => ({
+  GatewayIntents,
+  GatewayPlugin,
+}));
 
 vi.mock("https-proxy-agent", () => ({
   HttpsProxyAgent,
@@ -50,8 +77,7 @@ describe("createDiscordGatewayPlugin", () => {
   });
 
   it("uses proxy agent for gateway WebSocket when configured", async () => {
-    const { __testing } = await import("./provider.js");
-    const { GatewayPlugin } = await import("@buape/carbon/gateway");
+    const { createDiscordGatewayPlugin } = await import("./gateway-plugin.js");
 
     const runtime = {
       log: vi.fn(),
@@ -61,7 +87,7 @@ describe("createDiscordGatewayPlugin", () => {
       }),
     };
 
-    const plugin = __testing.createDiscordGatewayPlugin({
+    const plugin = createDiscordGatewayPlugin({
       discordConfig: { proxy: "http://proxy.test:8080" },
       runtime,
     });
@@ -82,8 +108,7 @@ describe("createDiscordGatewayPlugin", () => {
   });
 
   it("falls back to the default gateway plugin when proxy is invalid", async () => {
-    const { __testing } = await import("./provider.js");
-    const { GatewayPlugin } = await import("@buape/carbon/gateway");
+    const { createDiscordGatewayPlugin } = await import("./gateway-plugin.js");
 
     const runtime = {
       log: vi.fn(),
@@ -93,7 +118,7 @@ describe("createDiscordGatewayPlugin", () => {
       }),
     };
 
-    const plugin = __testing.createDiscordGatewayPlugin({
+    const plugin = createDiscordGatewayPlugin({
       discordConfig: { proxy: "bad-proxy" },
       runtime,
     });

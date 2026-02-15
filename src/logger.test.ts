@@ -67,7 +67,7 @@ describe("logger helpers", () => {
 
   it("uses daily rolling default log file and prunes old ones", () => {
     resetLogger();
-    setLoggerOverride({}); // force defaults regardless of user config
+    setLoggerOverride({ level: "info" }); // force default file path with enabled file logging
     const today = localDateString(new Date());
     const todayPath = path.join(DEFAULT_LOG_DIR, `openclaw-${today}.log`);
 

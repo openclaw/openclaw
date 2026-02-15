@@ -4,14 +4,59 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { discordPlugin } from "../../extensions/discord/src/channel.js";
-import { slackPlugin } from "../../extensions/slack/src/channel.js";
-import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
 import { collectPluginsCodeSafetyFindings } from "./audit-extra.js";
 import { runSecurityAudit } from "./audit.js";
 import * as skillScanner from "./skill-scanner.js";
 
 const isWindows = process.platform === "win32";
+
+function stubChannelPlugin(params: {
+  id: "discord" | "slack" | "telegram";
+  label: string;
+  resolveAccount: (cfg: OpenClawConfig) => unknown;
+}): ChannelPlugin {
+  return {
+    id: params.id,
+    meta: {
+      id: params.id,
+      label: params.label,
+      selectionLabel: params.label,
+      docsPath: "/docs/testing",
+      blurb: "test stub",
+    },
+    capabilities: {
+      chatTypes: ["dm", "group"],
+    },
+    security: {},
+    config: {
+      listAccountIds: (cfg) => {
+        const enabled = Boolean((cfg.channels as Record<string, unknown> | undefined)?.[params.id]);
+        return enabled ? ["default"] : [];
+      },
+      resolveAccount: (cfg) => params.resolveAccount(cfg),
+      isEnabled: () => true,
+      isConfigured: () => true,
+    },
+  };
+}
+
+const discordPlugin = stubChannelPlugin({
+  id: "discord",
+  label: "Discord",
+  resolveAccount: (cfg) => ({ config: cfg.channels?.discord ?? {} }),
+});
+
+const slackPlugin = stubChannelPlugin({
+  id: "slack",
+  label: "Slack",
+  resolveAccount: (cfg) => ({ config: cfg.channels?.slack ?? {} }),
+});
+
+const telegramPlugin = stubChannelPlugin({
+  id: "telegram",
+  label: "Telegram",
+  resolveAccount: (cfg) => ({ config: cfg.channels?.telegram ?? {} }),
+});
 
 function successfulProbeResult(url: string) {
   return {
@@ -50,23 +95,42 @@ describe("security audit", () => {
   });
 
   it("flags non-loopback bind without auth as critical", async () => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        bind: "lan",
-        auth: {},
-      },
-    };
+    // Clear env tokens so resolveGatewayAuth defaults to mode=none
+    const prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+    const prevPassword = process.env.OPENCLAW_GATEWAY_PASSWORD;
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.OPENCLAW_GATEWAY_PASSWORD;
 
-    const res = await runSecurityAudit({
-      config: cfg,
-      env: {},
-      includeFilesystem: false,
-      includeChannelSecurity: false,
-    });
+    try {
+      const cfg: OpenClawConfig = {
+        gateway: {
+          bind: "lan",
+          auth: {},
+        },
+      };
 
-    expect(
-      res.findings.some((f) => f.checkId === "gateway.bind_no_auth" && f.severity === "critical"),
-    ).toBe(true);
+      const res = await runSecurityAudit({
+        config: cfg,
+        includeFilesystem: false,
+        includeChannelSecurity: false,
+      });
+
+      expect(
+        res.findings.some((f) => f.checkId === "gateway.bind_no_auth" && f.severity === "critical"),
+      ).toBe(true);
+    } finally {
+      // Restore env
+      if (prevToken === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      } else {
+        process.env.OPENCLAW_GATEWAY_TOKEN = prevToken;
+      }
+      if (prevPassword === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+      } else {
+        process.env.OPENCLAW_GATEWAY_PASSWORD = prevPassword;
+      }
+    }
   });
 
   it("warns when non-loopback bind has auth but no auth rate limit", async () => {
@@ -86,6 +150,53 @@ describe("security audit", () => {
 
     expect(
       res.findings.some((f) => f.checkId === "gateway.auth_no_rate_limit" && f.severity === "warn"),
+    ).toBe(true);
+  });
+
+  it("warns when gateway.tools.allow re-enables dangerous HTTP /tools/invoke tools (loopback)", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        bind: "loopback",
+        auth: { token: "secret" },
+        tools: { allow: ["sessions_spawn"] },
+      },
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      env: {},
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    expect(
+      res.findings.some(
+        (f) => f.checkId === "gateway.tools_invoke_http.dangerous_allow" && f.severity === "warn",
+      ),
+    ).toBe(true);
+  });
+
+  it("flags dangerous gateway.tools.allow over HTTP as critical when gateway binds beyond loopback", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        bind: "lan",
+        auth: { token: "secret" },
+        tools: { allow: ["sessions_spawn", "gateway"] },
+      },
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      env: {},
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    expect(
+      res.findings.some(
+        (f) =>
+          f.checkId === "gateway.tools_invoke_http.dangerous_allow" && f.severity === "critical",
+      ),
     ).toBe(true);
   });
 
@@ -548,6 +659,127 @@ describe("security audit", () => {
     );
   });
 
+  it("flags trusted-proxy auth mode without generic shared-secret findings", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        bind: "lan",
+        trustedProxies: ["10.0.0.1"],
+        auth: {
+          mode: "trusted-proxy",
+          trustedProxy: {
+            userHeader: "x-forwarded-user",
+          },
+        },
+      },
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    expect(res.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "gateway.trusted_proxy_auth",
+          severity: "critical",
+        }),
+      ]),
+    );
+    expect(res.findings.some((f) => f.checkId === "gateway.bind_no_auth")).toBe(false);
+    expect(res.findings.some((f) => f.checkId === "gateway.auth_no_rate_limit")).toBe(false);
+  });
+
+  it("flags trusted-proxy auth without trustedProxies configured", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        bind: "lan",
+        trustedProxies: [],
+        auth: {
+          mode: "trusted-proxy",
+          trustedProxy: {
+            userHeader: "x-forwarded-user",
+          },
+        },
+      },
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    expect(res.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "gateway.trusted_proxy_no_proxies",
+          severity: "critical",
+        }),
+      ]),
+    );
+  });
+
+  it("flags trusted-proxy auth without userHeader configured", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        bind: "lan",
+        trustedProxies: ["10.0.0.1"],
+        auth: {
+          mode: "trusted-proxy",
+          trustedProxy: {} as never,
+        },
+      },
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    expect(res.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "gateway.trusted_proxy_no_user_header",
+          severity: "critical",
+        }),
+      ]),
+    );
+  });
+
+  it("warns when trusted-proxy auth allows all users", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        bind: "lan",
+        trustedProxies: ["10.0.0.1"],
+        auth: {
+          mode: "trusted-proxy",
+          trustedProxy: {
+            userHeader: "x-forwarded-user",
+            allowUsers: [],
+          },
+        },
+      },
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    expect(res.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "gateway.trusted_proxy_no_allowlist",
+          severity: "warn",
+        }),
+      ]),
+    );
+  });
+
   it("warns when multiple DM senders share the main session", async () => {
     const cfg: OpenClawConfig = { session: { dmScope: "main" } };
     const plugins: ChannelPlugin[] = [
@@ -855,6 +1087,50 @@ describe("security audit", () => {
           expect.objectContaining({
             checkId: "channels.telegram.groups.allowFrom.missing",
             severity: "critical",
+          }),
+        ]),
+      );
+    } finally {
+      if (prevStateDir == null) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = prevStateDir;
+      }
+    }
+  });
+
+  it("warns when Telegram allowFrom entries are non-numeric (legacy @username configs)", async () => {
+    const prevStateDir = process.env.OPENCLAW_STATE_DIR;
+    const tmp = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-security-audit-telegram-invalid-allowfrom-"),
+    );
+    process.env.OPENCLAW_STATE_DIR = tmp;
+    await fs.mkdir(path.join(tmp, "credentials"), { recursive: true, mode: 0o700 });
+    try {
+      const cfg: OpenClawConfig = {
+        channels: {
+          telegram: {
+            enabled: true,
+            botToken: "t",
+            groupPolicy: "allowlist",
+            groupAllowFrom: ["@TrustedOperator"],
+            groups: { "-100123": {} },
+          },
+        },
+      };
+
+      const res = await runSecurityAudit({
+        config: cfg,
+        includeFilesystem: false,
+        includeChannelSecurity: true,
+        plugins: [telegramPlugin],
+      });
+
+      expect(res.findings).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            checkId: "channels.telegram.allowFrom.invalid_entries",
+            severity: "warn",
           }),
         ]),
       );

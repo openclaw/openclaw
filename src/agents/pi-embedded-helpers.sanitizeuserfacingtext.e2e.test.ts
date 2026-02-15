@@ -53,10 +53,33 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText(text)).toBe(text);
   });
 
+  it("does not rewrite conversational billing/help text without errorContext", () => {
+    const text =
+      "If your API billing is low, top up credits in your provider dashboard and retry payment verification.";
+    expect(sanitizeUserFacingText(text)).toBe(text);
+  });
+
+  it("does not rewrite normal text that mentions billing and plan", () => {
+    const text =
+      "Firebase downgraded us to the free Spark plan; check whether we need to re-enable billing.";
+    expect(sanitizeUserFacingText(text)).toBe(text);
+  });
+
+  it("rewrites billing error-shaped text", () => {
+    const text = "billing: please upgrade your plan";
+    expect(sanitizeUserFacingText(text)).toContain("billing error");
+  });
+
   it("sanitizes raw API error payloads", () => {
     const raw = '{"type":"error","error":{"message":"Something exploded","type":"server_error"}}';
     expect(sanitizeUserFacingText(raw, { errorContext: true })).toBe(
       "LLM error server_error: Something exploded",
+    );
+  });
+
+  it("returns a friendly message for rate limit errors in Error: prefixed payloads", () => {
+    expect(sanitizeUserFacingText("Error: 429 Rate limit exceeded", { errorContext: true })).toBe(
+      "⚠️ API rate limit reached. Please try again later.",
     );
   });
 
@@ -68,5 +91,26 @@ describe("sanitizeUserFacingText", () => {
   it("does not collapse distinct paragraphs", () => {
     const text = "Hello there!\n\nDifferent line.";
     expect(sanitizeUserFacingText(text)).toBe(text);
+  });
+
+  it("strips leading newlines from LLM output", () => {
+    expect(sanitizeUserFacingText("\n\nHello there!")).toBe("Hello there!");
+    expect(sanitizeUserFacingText("\nHello there!")).toBe("Hello there!");
+    expect(sanitizeUserFacingText("\n\n\nMultiple newlines")).toBe("Multiple newlines");
+  });
+
+  it("strips leading whitespace and newlines combined", () => {
+    expect(sanitizeUserFacingText("\n \nHello")).toBe("Hello");
+    expect(sanitizeUserFacingText("  \n\nHello")).toBe("Hello");
+  });
+
+  it("preserves trailing whitespace and internal newlines", () => {
+    expect(sanitizeUserFacingText("Hello\n\nWorld\n")).toBe("Hello\n\nWorld\n");
+    expect(sanitizeUserFacingText("Line 1\nLine 2")).toBe("Line 1\nLine 2");
+  });
+
+  it("returns empty for whitespace-only input", () => {
+    expect(sanitizeUserFacingText("\n\n")).toBe("");
+    expect(sanitizeUserFacingText("  \n  ")).toBe("");
   });
 });

@@ -66,6 +66,7 @@ const connectNodeClient = async (params: {
   });
   const client = new GatewayClient({
     url: `ws://127.0.0.1:${params.port}`,
+    connectDelayMs: 0,
     token,
     role: "node",
     clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
@@ -206,6 +207,7 @@ describe("gateway update.run", () => {
     process.on("SIGUSR1", sigusr1);
 
     try {
+      await fs.mkdir(path.dirname(CONFIG_PATH), { recursive: true });
       await fs.writeFile(CONFIG_PATH, JSON.stringify({ update: { channel: "beta" } }, null, 2));
       const updateMock = vi.mocked(runGatewayUpdate);
       updateMock.mockClear();

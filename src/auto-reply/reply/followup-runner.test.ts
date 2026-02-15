@@ -81,7 +81,7 @@ describe("createFollowupRunner compaction", () => {
       }) => {
         params.onAgentEvent?.({
           stream: "compaction",
-          data: { phase: "end", willRetry: false },
+          data: { phase: "end", willRetry: true },
         });
         return { payloads: [{ text: "final" }], meta: {} };
       },

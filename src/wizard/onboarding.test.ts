@@ -175,119 +175,77 @@ describe("runOnboardingWizard", () => {
     expect(runTui).not.toHaveBeenCalled();
   });
 
-  it("launches TUI without auto-delivery when hatching", async () => {
+  async function runTuiHatchTest(params: {
+    writeBootstrapFile: boolean;
+    expectedMessage: string | undefined;
+  }) {
     runTui.mockClear();
 
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-onboard-"));
-    await fs.writeFile(path.join(workspaceDir, DEFAULT_BOOTSTRAP_FILENAME), "{}");
-
-    const select: WizardPrompter["select"] = vi.fn(async (opts) => {
-      if (opts.message === "How do you want to hatch your bot?") {
-        return "tui";
+    try {
+      if (params.writeBootstrapFile) {
+        await fs.writeFile(path.join(workspaceDir, DEFAULT_BOOTSTRAP_FILENAME), "{}");
       }
-      return "quickstart";
-    });
 
-    const prompter: WizardPrompter = {
-      intro: vi.fn(async () => {}),
-      outro: vi.fn(async () => {}),
-      note: vi.fn(async () => {}),
-      select,
-      multiselect: vi.fn(async () => []),
-      text: vi.fn(async () => ""),
-      confirm: vi.fn(async () => false),
-      progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
-    };
+      const select: WizardPrompter["select"] = vi.fn(async (opts) => {
+        if (opts.message === "How do you want to hatch your bot?") {
+          return "tui";
+        }
+        return "quickstart";
+      });
 
-    const runtime: RuntimeEnv = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn((code: number) => {
-        throw new Error(`exit:${code}`);
-      }),
-    };
+      const prompter: WizardPrompter = {
+        intro: vi.fn(async () => {}),
+        outro: vi.fn(async () => {}),
+        note: vi.fn(async () => {}),
+        select,
+        multiselect: vi.fn(async () => []),
+        text: vi.fn(async () => ""),
+        confirm: vi.fn(async () => false),
+        progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+      };
 
-    await runOnboardingWizard(
-      {
-        acceptRisk: true,
-        flow: "quickstart",
-        mode: "local",
-        workspace: workspaceDir,
-        authChoice: "skip",
-        skipProviders: true,
-        skipSkills: true,
-        skipHealth: true,
-        installDaemon: false,
-      },
-      runtime,
-      prompter,
-    );
+      const runtime: RuntimeEnv = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn((code: number) => {
+          throw new Error(`exit:${code}`);
+        }),
+      };
 
-    expect(runTui).toHaveBeenCalledWith(
-      expect.objectContaining({
-        deliver: false,
-        message: "Wake up, my friend!",
-      }),
-    );
+      await runOnboardingWizard(
+        {
+          acceptRisk: true,
+          flow: "quickstart",
+          mode: "local",
+          workspace: workspaceDir,
+          authChoice: "skip",
+          skipProviders: true,
+          skipSkills: true,
+          skipHealth: true,
+          installDaemon: false,
+        },
+        runtime,
+        prompter,
+      );
 
-    await fs.rm(workspaceDir, { recursive: true, force: true });
+      expect(runTui).toHaveBeenCalledWith(
+        expect.objectContaining({
+          deliver: false,
+          message: params.expectedMessage,
+        }),
+      );
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  }
+
+  it("launches TUI without auto-delivery when hatching", async () => {
+    await runTuiHatchTest({ writeBootstrapFile: true, expectedMessage: "Wake up, my friend!" });
   });
 
   it("offers TUI hatch even without BOOTSTRAP.md", async () => {
-    runTui.mockClear();
-
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-onboard-"));
-
-    const select: WizardPrompter["select"] = vi.fn(async (opts) => {
-      if (opts.message === "How do you want to hatch your bot?") {
-        return "tui";
-      }
-      return "quickstart";
-    });
-
-    const prompter: WizardPrompter = {
-      intro: vi.fn(async () => {}),
-      outro: vi.fn(async () => {}),
-      note: vi.fn(async () => {}),
-      select,
-      multiselect: vi.fn(async () => []),
-      text: vi.fn(async () => ""),
-      confirm: vi.fn(async () => false),
-      progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
-    };
-
-    const runtime: RuntimeEnv = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn((code: number) => {
-        throw new Error(`exit:${code}`);
-      }),
-    };
-
-    await runOnboardingWizard(
-      {
-        acceptRisk: true,
-        flow: "quickstart",
-        mode: "local",
-        workspace: workspaceDir,
-        authChoice: "skip",
-        skipProviders: true,
-        skipSkills: true,
-        skipHealth: true,
-        installDaemon: false,
-      },
-      runtime,
-      prompter,
-    );
-
-    expect(runTui).toHaveBeenCalledWith(
-      expect.objectContaining({
-        deliver: false,
-        message: undefined,
-      }),
-    );
-
-    await fs.rm(workspaceDir, { recursive: true, force: true });
+    await runTuiHatchTest({ writeBootstrapFile: false, expectedMessage: undefined });
   });
 
   it("shows the web search hint at the end of onboarding", async () => {
