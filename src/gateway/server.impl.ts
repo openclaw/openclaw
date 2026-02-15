@@ -5,6 +5,7 @@ import type { PluginServicesHandle } from "../plugins/services.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { ControlUiRootState } from "./control-ui.js";
 import type { startBrowserControlServerIfEnabled } from "./server-browser.js";
+import type { GatewayRequestHandlers } from "./server-methods/types.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/runs.js";
 import { registerSkillsChangeListener } from "../agents/skills/refresh.js";
@@ -23,6 +24,7 @@ import {
 } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
+import { createAgentShieldApprovalForwarder } from "../infra/agentshield-approval-forwarder.js";
 import {
   ensureControlUiAssetsBuilt,
   resolveControlUiRootOverrideSync,
@@ -47,6 +49,7 @@ import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js
 import { getGlobalHookRunner, runGlobalGatewayStopSafely } from "../plugins/hook-runner-global.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
 import { runOnboardingWizard } from "../wizard/onboarding.js";
+import { AgentShieldApprovalManager } from "./agentshield-approval-manager.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { startGatewayConfigReloader } from "./config-reload.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
@@ -60,6 +63,7 @@ import { applyGatewayLaneConcurrency } from "./server-lanes.js";
 import { startGatewayMaintenanceTimers } from "./server-maintenance.js";
 import { GATEWAY_EVENTS, listGatewayMethods } from "./server-methods-list.js";
 import { coreGatewayHandlers } from "./server-methods.js";
+import { createAgentShieldApprovalHandlers } from "./server-methods/agentshield-approval.js";
 import { createExecApprovalHandlers } from "./server-methods/exec-approval.js";
 import { safeParseJson } from "./server-methods/nodes.helpers.js";
 import { hasConnectedMobileNode } from "./server-mobile-nodes.js";
@@ -270,7 +274,19 @@ export async function startGatewayServer(
     Object.entries(channelLogs).map(([id, logger]) => [id, runtimeForLogger(logger)]),
   ) as Record<ChannelId, RuntimeEnv>;
   const channelMethods = listChannelPlugins().flatMap((plugin) => plugin.gatewayMethods ?? []);
-  const gatewayMethods = Array.from(new Set([...baseGatewayMethods, ...channelMethods]));
+  const allGatewayMethods = Array.from(new Set([...baseGatewayMethods, ...channelMethods]));
+
+  const agentShieldApprovalsEnabled = process.env.AGENTSHIELD_APPROVALS_ENABLED === "1";
+
+  const gatewayMethods = agentShieldApprovalsEnabled
+    ? allGatewayMethods
+    : allGatewayMethods.filter(
+        (m) =>
+          m !== "agentshield.approval.request" &&
+          m !== "agentshield.approval.resolve" &&
+          m !== "agentshield.approval.list",
+      );
+
   let pluginServices: PluginServicesHandle | null = null;
   const runtimeConfig = await resolveGatewayRuntimeConfig({
     cfg: cfgAtStart,
@@ -540,6 +556,12 @@ export async function startGatewayServer(
     forwarder: execApprovalForwarder,
   });
 
+  const agentShieldApprovalHandlers: GatewayRequestHandlers = agentShieldApprovalsEnabled
+    ? createAgentShieldApprovalHandlers(new AgentShieldApprovalManager(), {
+        forwarder: createAgentShieldApprovalForwarder(),
+      })
+    : {};
+
   const canvasHostServerPort = (canvasHostServer as CanvasHostServer | null)?.port;
 
   attachGatewayWsHandlers({
@@ -559,6 +581,7 @@ export async function startGatewayServer(
     extraHandlers: {
       ...pluginRegistry.gatewayHandlers,
       ...execApprovalHandlers,
+      ...agentShieldApprovalHandlers,
     },
     broadcast,
     context: {

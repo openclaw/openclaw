@@ -20,9 +20,18 @@ const ExecApprovalForwardingSchema = z
   .strict()
   .optional();
 
+const AgentShieldApprovalForwardingSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    targets: z.array(ExecApprovalForwardTargetSchema).optional(),
+  })
+  .strict()
+  .optional();
+
 export const ApprovalsSchema = z
   .object({
     exec: ExecApprovalForwardingSchema,
+    agentshield: AgentShieldApprovalForwardingSchema,
   })
   .strict()
   .optional();
