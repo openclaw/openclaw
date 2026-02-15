@@ -8,7 +8,12 @@ import {
   normalizeMainKey,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
-import { asString, extractTextFromMessage, isCommandMessage, stripInboundMetaEnvelope } from "./tui-formatters.js";
+import {
+  asString,
+  extractTextFromMessage,
+  isCommandMessage,
+  stripInboundMetaEnvelope,
+} from "./tui-formatters.js";
 
 type SessionActionContext = {
   client: GatewayChatClient;
