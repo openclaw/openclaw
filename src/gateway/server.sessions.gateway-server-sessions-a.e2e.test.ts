@@ -21,6 +21,10 @@ const sessionCleanupMocks = vi.hoisted(() => ({
   stopSubagentsForRequester: vi.fn(() => ({ stopped: 0 })),
 }));
 
+const sessionHookMocks = vi.hoisted(() => ({
+  triggerInternalHook: vi.fn(async () => {}),
+}));
+
 vi.mock("../auto-reply/reply/queue.js", async () => {
   const actual = await vi.importActual<typeof import("../auto-reply/reply/queue.js")>(
     "../auto-reply/reply/queue.js",
@@ -38,6 +42,16 @@ vi.mock("../auto-reply/reply/abort.js", async () => {
   return {
     ...actual,
     stopSubagentsForRequester: sessionCleanupMocks.stopSubagentsForRequester,
+  };
+});
+
+vi.mock("../hooks/internal-hooks.js", async () => {
+  const actual = await vi.importActual<typeof import("../hooks/internal-hooks.js")>(
+    "../hooks/internal-hooks.js",
+  );
+  return {
+    ...actual,
+    triggerInternalHook: sessionHookMocks.triggerInternalHook,
   };
 });
 
@@ -74,6 +88,7 @@ describe("gateway server sessions", () => {
   beforeEach(() => {
     sessionCleanupMocks.clearSessionQueues.mockClear();
     sessionCleanupMocks.stopSubagentsForRequester.mockClear();
+    sessionHookMocks.triggerInternalHook.mockClear();
   });
 
   test("lists and patches session store via sessions.* RPC", async () => {
@@ -640,6 +655,43 @@ describe("gateway server sessions", () => {
     expect(embeddedRunMock.abortCalls).toEqual(["sess-main"]);
     expect(embeddedRunMock.waitCalls).toEqual(["sess-main"]);
 
+    ws.close();
+  });
+
+  test("sessions.reset emits internal command hook with reason", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-"));
+    const storePath = path.join(dir, "sessions.json");
+    testState.sessionStorePath = storePath;
+
+    await fs.writeFile(
+      path.join(dir, "sess-main.jsonl"),
+      `${JSON.stringify({ role: "user", content: "hello" })}\n`,
+      "utf-8",
+    );
+
+    await writeSessionStore({
+      entries: {
+        main: { sessionId: "sess-main", updatedAt: Date.now() },
+      },
+    });
+
+    const { ws } = await openClient();
+    const reset = await rpcReq<{ ok: true; key: string }>(ws, "sessions.reset", {
+      key: "main",
+      reason: "new",
+    });
+    expect(reset.ok).toBe(true);
+    expect(sessionHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
+    const [event] = sessionHookMocks.triggerInternalHook.mock.calls[0] ?? [];
+    expect(event).toMatchObject({
+      type: "command",
+      action: "new",
+      sessionKey: "agent:main:main",
+      context: {
+        commandSource: "gateway:sessions.reset",
+      },
+    });
+    expect(event.context.previousSessionEntry).toMatchObject({ sessionId: "sess-main" });
     ws.close();
   });
 

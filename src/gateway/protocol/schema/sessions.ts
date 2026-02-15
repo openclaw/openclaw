@@ -82,7 +82,10 @@ export const SessionsPatchParamsSchema = Type.Object(
 );
 
 export const SessionsResetParamsSchema = Type.Object(
-  { key: NonEmptyString },
+  {
+    key: NonEmptyString,
+    reason: Type.Optional(Type.Union([Type.Literal("new"), Type.Literal("reset")])),
+  },
   { additionalProperties: false },
 );
 
