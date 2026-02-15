@@ -197,6 +197,41 @@ export function resolveAgentWorkspaceDir(cfg: OpenClawConfig, agentId: string) {
   return path.join(stateDir, `workspace-${id}`);
 }
 
+/**
+ * Check whether the workspace for the given agent is shared with any other
+ * registered agent (or the default agent).  Used by the delete command to
+ * prevent accidental deletion of a workspace that is still in use.
+ */
+export function isWorkspaceSharedByOtherAgent(
+  cfg: OpenClawConfig,
+  agentId: string,
+): { shared: boolean; sharedWith: string[] } {
+  const id = normalizeAgentId(agentId);
+  const targetWorkspace = resolveAgentWorkspaceDir(cfg, id);
+  const sharedWith: string[] = [];
+
+  for (const otherId of listAgentIds(cfg)) {
+    if (otherId === id) {
+      continue;
+    }
+    if (resolveAgentWorkspaceDir(cfg, otherId) === targetWorkspace) {
+      sharedWith.push(otherId);
+    }
+  }
+
+  // Also check the default workspace when no agents are explicitly listed,
+  // since the default agent always exists implicitly.
+  const defaultId = resolveDefaultAgentId(cfg);
+  if (defaultId !== id && !sharedWith.includes(defaultId)) {
+    const defaultWorkspace = resolveAgentWorkspaceDir(cfg, defaultId);
+    if (defaultWorkspace === targetWorkspace) {
+      sharedWith.push(defaultId);
+    }
+  }
+
+  return { shared: sharedWith.length > 0, sharedWith };
+}
+
 export function resolveAgentDir(cfg: OpenClawConfig, agentId: string) {
   const id = normalizeAgentId(agentId);
   const configured = resolveAgentConfig(cfg, id)?.agentDir?.trim();
