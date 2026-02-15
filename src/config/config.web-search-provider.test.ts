@@ -21,4 +21,56 @@ describe("web search provider config", () => {
 
     expect(res.ok).toBe(true);
   });
+
+  it("accepts searxng provider and config", () => {
+    const res = validateConfigObject({
+      tools: {
+        web: {
+          search: {
+            enabled: true,
+            provider: "searxng",
+            searxng: {
+              baseUrl: "http://searxng:8181",
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts searxng provider without searxng config block", () => {
+    const res = validateConfigObject({
+      tools: {
+        web: {
+          search: {
+            enabled: true,
+            provider: "searxng",
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects unknown keys in searxng config", () => {
+    const res = validateConfigObject({
+      tools: {
+        web: {
+          search: {
+            enabled: true,
+            provider: "searxng",
+            searxng: {
+              baseUrl: "http://searxng:8181",
+              apiKey: "should-not-exist",
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+  });
 });

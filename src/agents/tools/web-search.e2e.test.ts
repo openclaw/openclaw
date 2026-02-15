@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { __testing } from "./web-search.js";
 
 function withEnv<T>(env: Record<string, string | undefined>, fn: () => T): T {
@@ -30,6 +30,7 @@ const {
   resolvePerplexityBaseUrl,
   isDirectPerplexityBaseUrl,
   resolvePerplexityRequestModel,
+  resolveSearxngBaseUrl,
   normalizeFreshness,
   freshnessToPerplexityRecency,
   resolveGrokApiKey,
@@ -241,5 +242,38 @@ describe("web_search grok response parsing", () => {
     const result = extractGrokContent({});
     expect(result.text).toBeUndefined();
     expect(result.annotationCitations).toEqual([]);
+  });
+});
+
+describe("web_search searxng baseUrl resolution", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("uses config baseUrl when provided", () => {
+    expect(resolveSearxngBaseUrl({ baseUrl: "http://searxng:8181" })).toBe("http://searxng:8181");
+  });
+
+  it("falls back to SEARXNG_BASE_URL env var", () => {
+    vi.stubEnv("SEARXNG_BASE_URL", "http://env-searxng:9090");
+    expect(resolveSearxngBaseUrl({})).toBe("http://env-searxng:9090");
+  });
+
+  it("falls back to default when no config and no env", () => {
+    vi.stubEnv("SEARXNG_BASE_URL", "");
+    expect(resolveSearxngBaseUrl(undefined)).toBe("http://localhost:8888");
+  });
+
+  it("prefers config baseUrl over env var", () => {
+    vi.stubEnv("SEARXNG_BASE_URL", "http://env-searxng:9090");
+    expect(resolveSearxngBaseUrl({ baseUrl: "http://config-searxng:8181" })).toBe(
+      "http://config-searxng:8181",
+    );
+  });
+
+  it("trims whitespace from config baseUrl", () => {
+    expect(resolveSearxngBaseUrl({ baseUrl: "  http://searxng:8181  " })).toBe(
+      "http://searxng:8181",
+    );
   });
 });
