@@ -17,7 +17,7 @@ export async function postMultipartFormData(params: {
   parts: Uint8Array[];
   timeoutMs: number;
 }): Promise<Response> {
-  const body = concatUint8Arrays(params.parts);
+  const body = Buffer.from(concatUint8Arrays(params.parts));
   return await blueBubblesFetchWithTimeout(
     params.url,
     {
