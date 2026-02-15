@@ -8,12 +8,21 @@ services:
       CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY}
       CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY}
       CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE}
+      DATABASE_URL: postgresql://postgres:claw@mission-control-db:5432/mission_control
+      GMAIL_CLIENT_ID: ${GMAIL_CLIENT_ID}
+      GMAIL_CLIENT_SECRET: ${GMAIL_CLIENT_SECRET}
+      GMAIL_REFRESH_TOKEN: ${GMAIL_REFRESH_TOKEN}
+      GITHUB_PAT: ${GITHUB_PAT}
     volumes:
       - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
       - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
+      - playwright-cache:/home/node/.cache/ms-playwright
+    depends_on:
+      - mission-control-db
     ports:
       - "${OPENCLAW_GATEWAY_PORT:-18789}:18789"
       - "${OPENCLAW_BRIDGE_PORT:-18790}:18790"
+      - "3002:3000"
     init: true
     restart: unless-stopped
     command:
@@ -40,7 +49,21 @@ services:
     volumes:
       - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
       - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
+      - playwright-cache:/home/node/.cache/ms-playwright
     stdin_open: true
     tty: true
     init: true
     entrypoint: ["node", "dist/index.js"]
+
+  mission-control-db:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: claw
+      POSTGRES_DB: mission_control
+    volumes:
+      - mission-control-data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+volumes:
+  playwright-cache:
+  mission-control-data:
