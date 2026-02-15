@@ -43,6 +43,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
   id: "signal",
   meta: {
     ...meta,
+    preferSessionLookupForAnnounceTarget: true,
   },
   onboarding: signalOnboardingAdapter,
   pairing: {

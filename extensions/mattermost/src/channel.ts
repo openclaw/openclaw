@@ -62,6 +62,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
   id: "mattermost",
   meta: {
     ...meta,
+    preferSessionLookupForAnnounceTarget: true,
   },
   onboarding: mattermostOnboardingAdapter,
   pairing: {
