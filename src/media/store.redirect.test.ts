@@ -82,6 +82,108 @@ describe("media store redirects", () => {
     expect(await fs.readFile(saved.path, "utf8")).toBe("redirected");
   });
 
+  it("strips Authorization header on cross-origin redirect", async () => {
+    let call = 0;
+    const capturedHeaders: Array<Record<string, string> | undefined> = [];
+    mockRequest.mockImplementation((_url, opts, cb) => {
+      call += 1;
+      capturedHeaders.push(opts?.headers);
+      const res = new PassThrough();
+      const req = {
+        on: (event: string, handler: (...args: unknown[]) => void) => {
+          if (event === "error") {
+            res.on("error", handler);
+          }
+          return req;
+        },
+        end: () => undefined,
+        destroy: () => res.destroy(),
+      } as const;
+
+      if (call === 1) {
+        res.statusCode = 302;
+        // Redirect to a different origin
+        res.headers = { location: "https://evil.com/steal" };
+        setImmediate(() => {
+          cb(res as unknown);
+          res.end();
+        });
+      } else {
+        res.statusCode = 200;
+        res.headers = { "content-type": "text/plain" };
+        setImmediate(() => {
+          cb(res as unknown);
+          res.write("ok");
+          res.end();
+        });
+      }
+
+      return req;
+    });
+
+    await saveMediaSource("https://example.com/start", {
+      Authorization: "Bearer secret",
+      "User-Agent": "test-agent",
+    });
+
+    expect(mockRequest).toHaveBeenCalledTimes(2);
+    // First request should include Authorization
+    expect(capturedHeaders[0]).toEqual(expect.objectContaining({ Authorization: "Bearer secret" }));
+    // Second request (cross-origin) should NOT include Authorization
+    expect(capturedHeaders[1]).not.toHaveProperty("Authorization");
+    // But should keep non-sensitive headers
+    expect(capturedHeaders[1]).toEqual(expect.objectContaining({ "User-Agent": "test-agent" }));
+  });
+
+  it("preserves Authorization header on same-origin redirect", async () => {
+    let call = 0;
+    const capturedHeaders: Array<Record<string, string> | undefined> = [];
+    mockRequest.mockImplementation((_url, opts, cb) => {
+      call += 1;
+      capturedHeaders.push(opts?.headers);
+      const res = new PassThrough();
+      const req = {
+        on: (event: string, handler: (...args: unknown[]) => void) => {
+          if (event === "error") {
+            res.on("error", handler);
+          }
+          return req;
+        },
+        end: () => undefined,
+        destroy: () => res.destroy(),
+      } as const;
+
+      if (call === 1) {
+        res.statusCode = 302;
+        // Redirect to the same origin
+        res.headers = { location: "https://example.com/other-path" };
+        setImmediate(() => {
+          cb(res as unknown);
+          res.end();
+        });
+      } else {
+        res.statusCode = 200;
+        res.headers = { "content-type": "text/plain" };
+        setImmediate(() => {
+          cb(res as unknown);
+          res.write("ok");
+          res.end();
+        });
+      }
+
+      return req;
+    });
+
+    await saveMediaSource("https://example.com/start", {
+      Authorization: "Bearer secret",
+    });
+
+    expect(mockRequest).toHaveBeenCalledTimes(2);
+    // Both requests should include Authorization (same origin)
+    expect(capturedHeaders[0]).toEqual(expect.objectContaining({ Authorization: "Bearer secret" }));
+    expect(capturedHeaders[1]).toEqual(expect.objectContaining({ Authorization: "Bearer secret" }));
+  });
+
   it("sniffs xlsx from zip content when headers and url extension are missing", async () => {
     mockRequest.mockImplementationOnce((_url, _opts, cb) => {
       const res = new PassThrough();
