@@ -86,6 +86,54 @@ const GATEWAY_PROBE_STATUS_BY_PATH = new Map<string, "live" | "ready">([
 ]);
 const MATTERMOST_SLASH_CALLBACK_PATH = "/api/channels/mattermost/command";
 
+function resolveMattermostSlashCallbackPaths(
+  configSnapshot: ReturnType<typeof loadConfig>,
+): Set<string> {
+  const callbackPaths = new Set<string>([MATTERMOST_SLASH_CALLBACK_PATH]);
+
+  const normalizeCallbackPath = (value: unknown): string => {
+    const trimmed = typeof value === "string" ? value.trim() : "";
+    if (!trimmed) {
+      return MATTERMOST_SLASH_CALLBACK_PATH;
+    }
+    return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+  };
+
+  const tryAddCallbackUrlPath = (rawUrl: unknown) => {
+    if (typeof rawUrl !== "string") {
+      return;
+    }
+    const trimmed = rawUrl.trim();
+    if (!trimmed) {
+      return;
+    }
+    try {
+      const pathname = new URL(trimmed).pathname;
+      if (pathname) {
+        callbackPaths.add(pathname);
+      }
+    } catch {
+      // Ignore invalid callback URLs in config and keep default path behavior.
+    }
+  };
+
+  const mmRaw = configSnapshot.channels?.mattermost as Record<string, unknown> | undefined;
+  const addMmCommands = (raw: unknown) => {
+    const commands = raw as Record<string, unknown> | undefined;
+    callbackPaths.add(normalizeCallbackPath(commands?.callbackPath));
+    tryAddCallbackUrlPath(commands?.callbackUrl);
+  };
+
+  addMmCommands(mmRaw?.commands);
+  const accountsRaw = (mmRaw?.accounts ?? {}) as Record<string, unknown>;
+  for (const accountId of Object.keys(accountsRaw)) {
+    const accountCfg = accountsRaw[accountId] as Record<string, unknown> | undefined;
+    addMmCommands(accountCfg?.commands);
+  }
+
+  return callbackPaths;
+}
+
 function shouldEnforceDefaultPluginGatewayAuth(pathContext: PluginRoutePathContext): boolean {
   return (
     pathContext.malformedEncoding ||
@@ -175,6 +223,7 @@ function buildPluginRequestStages(params: {
   req: IncomingMessage;
   res: ServerResponse;
   requestPath: string;
+  mattermostSlashCallbackPaths: ReadonlySet<string>;
   pluginPathContext: PluginRoutePathContext | null;
   handlePluginRequest?: PluginHttpRequestHandler;
   shouldEnforcePluginGatewayAuth?: (pathContext: PluginRoutePathContext) => boolean;
@@ -190,7 +239,7 @@ function buildPluginRequestStages(params: {
     {
       name: "plugin-auth",
       run: async () => {
-        if (params.requestPath === MATTERMOST_SLASH_CALLBACK_PATH) {
+        if (params.mattermostSlashCallbackPaths.has(params.requestPath)) {
           return false;
         }
         const pathContext =
@@ -510,6 +559,7 @@ export function createGatewayHttpServer(opts: {
         req.url = scopedCanvas.rewrittenUrl;
       }
       const requestPath = new URL(req.url ?? "/", "http://localhost").pathname;
+      const mattermostSlashCallbackPaths = resolveMattermostSlashCallbackPaths(configSnapshot);
       const pluginPathContext = handlePluginRequest
         ? resolvePluginRoutePathContext(requestPath)
         : null;
@@ -599,6 +649,7 @@ export function createGatewayHttpServer(opts: {
           req,
           res,
           requestPath,
+          mattermostSlashCallbackPaths,
           pluginPathContext,
           handlePluginRequest,
           shouldEnforcePluginGatewayAuth,
