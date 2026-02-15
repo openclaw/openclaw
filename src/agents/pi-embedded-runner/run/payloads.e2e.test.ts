@@ -278,6 +278,42 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads).toHaveLength(0);
   });
 
+  it("suppresses non-mutating non-recoverable tool errors when messages.suppressToolErrors is enabled", () => {
+    const payloads = buildEmbeddedRunPayloads({
+      assistantTexts: [],
+      toolMetas: [],
+      lastAssistant: undefined,
+      lastToolError: { toolName: "browser", error: "connection timeout" },
+      config: { messages: { suppressToolErrors: true } },
+      sessionKey: "session:telegram",
+      inlineToolResultsAllowed: false,
+      verboseLevel: "off",
+      reasoningLevel: "off",
+      toolResultFormat: "plain",
+    });
+
+    expect(payloads).toHaveLength(0);
+  });
+
+  it("still shows mutating tool errors when messages.suppressToolErrors is enabled", () => {
+    const payloads = buildEmbeddedRunPayloads({
+      assistantTexts: [],
+      toolMetas: [],
+      lastAssistant: undefined,
+      lastToolError: { toolName: "write", error: "connection timeout" },
+      config: { messages: { suppressToolErrors: true } },
+      sessionKey: "session:telegram",
+      inlineToolResultsAllowed: false,
+      verboseLevel: "off",
+      reasoningLevel: "off",
+      toolResultFormat: "plain",
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.isError).toBe(true);
+    expect(payloads[0]?.text).toContain("connection timeout");
+  });
+
   it("shows recoverable tool errors for mutating tools", () => {
     const payloads = buildEmbeddedRunPayloads({
       assistantTexts: [],

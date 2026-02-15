@@ -233,7 +233,9 @@ export function buildEmbeddedRunPayloads(params: {
     const isMutatingToolError =
       params.lastToolError.mutatingAction ??
       isLikelyMutatingToolName(params.lastToolError.toolName);
-    const shouldShowToolError = isMutatingToolError || (!hasUserFacingReply && !isRecoverableError);
+    const shouldShowToolError =
+      isMutatingToolError ||
+      (!hasUserFacingReply && !isRecoverableError && !params.config?.messages?.suppressToolErrors);
 
     // Always surface mutating tool failures so we do not silently confirm actions that did not happen.
     // Otherwise, keep the previous behavior and only surface non-recoverable failures when no reply exists.
