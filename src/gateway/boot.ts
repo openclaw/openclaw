@@ -6,6 +6,9 @@ import type { OpenClawConfig } from "../config/config.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { agentCommand } from "../commands/agent.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
+import { resolveAgentIdFromSessionKey } from "../config/sessions/main-session.js";
+import { resolveStorePath } from "../config/sessions/paths.js";
+import { loadSessionStore } from "../config/sessions/store.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { type RuntimeEnv, defaultRuntime } from "../runtime.js";
 
@@ -14,6 +17,39 @@ function generateBootSessionId(): string {
   const ts = now.toISOString().replace(/[:.]/g, "-").replace("T", "_").replace("Z", "");
   const suffix = crypto.randomUUID().slice(0, 8);
   return `boot-${ts}-${suffix}`;
+}
+
+/**
+ * Resolve the session ID for the boot message.
+ * If there's an existing session mapped to the main session key, reuse it to avoid orphaning.
+ * Otherwise, generate a new ephemeral boot session ID.
+ */
+function resolveBootSessionId(cfg: OpenClawConfig): string {
+  const sessionKey = resolveMainSessionKey(cfg);
+  const agentId = resolveAgentIdFromSessionKey(sessionKey);
+  const storePath = resolveStorePath(cfg.session?.store, { agentId });
+
+  try {
+    const sessionStore = loadSessionStore(storePath);
+    const existingEntry = sessionStore[sessionKey];
+
+    if (existingEntry?.sessionId) {
+      log.info("reusing existing session for boot message", {
+        sessionKey,
+        sessionId: existingEntry.sessionId,
+      });
+      return existingEntry.sessionId;
+    }
+  } catch (err) {
+    // If we can't load the session store (e.g., first boot), fall through to generate new ID
+    log.debug("could not load session store for boot; generating new session ID", {
+      error: String(err),
+    });
+  }
+
+  const newSessionId = generateBootSessionId();
+  log.info("generating new boot session", { sessionKey, sessionId: newSessionId });
+  return newSessionId;
 }
 
 const log = createSubsystemLogger("gateway/boot");
@@ -83,7 +119,7 @@ export async function runBootOnce(params: {
 
   const sessionKey = resolveMainSessionKey(params.cfg);
   const message = buildBootPrompt(result.content ?? "");
-  const sessionId = generateBootSessionId();
+  const sessionId = resolveBootSessionId(params.cfg);
 
   try {
     await agentCommand(
