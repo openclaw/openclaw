@@ -281,7 +281,7 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
   if (raw === "") {
     // 1. Brave
     if (resolveSearchApiKey(search)) {
-      defaultRuntime.debug(
+      defaultRuntime.log(
         'web_search: no provider configured, auto-detected "brave" from available API keys',
       );
       return "brave";
@@ -289,7 +289,7 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
     // 2. Gemini
     const geminiConfig = resolveGeminiConfig(search);
     if (resolveGeminiApiKey(geminiConfig)) {
-      defaultRuntime.debug(
+      defaultRuntime.log(
         'web_search: no provider configured, auto-detected "gemini" from available API keys',
       );
       return "gemini";
@@ -298,7 +298,7 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
     const perplexityConfig = resolvePerplexityConfig(search);
     const { apiKey: perplexityKey } = resolvePerplexityApiKey(perplexityConfig);
     if (perplexityKey) {
-      defaultRuntime.debug(
+      defaultRuntime.log(
         'web_search: no provider configured, auto-detected "perplexity" from available API keys',
       );
       return "perplexity";
@@ -306,7 +306,7 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
     // 4. Grok
     const grokConfig = resolveGrokConfig(search);
     if (resolveGrokApiKey(grokConfig)) {
-      defaultRuntime.debug(
+      defaultRuntime.log(
         'web_search: no provider configured, auto-detected "grok" from available API keys',
       );
       return "grok";

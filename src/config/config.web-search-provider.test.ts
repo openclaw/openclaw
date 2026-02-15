@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { validateConfigObject } from "./config.js";
 
 vi.mock("../runtime.js", () => ({
-  defaultRuntime: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+  defaultRuntime: { log: vi.fn(), error: vi.fn() },
 }));
 
 const { __testing } = await import("../agents/tools/web-search.js");
