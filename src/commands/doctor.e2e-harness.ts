@@ -256,7 +256,7 @@ vi.mock("./doctor-state-migrations.js", () => ({
   runLegacyStateMigrations,
 }));
 
-export async function arrangeLegacyStateMigrationTest() {
+export async function arrangeLegacyStateMigrationTest(): Promise<unknown> {
   readConfigFileSnapshot.mockResolvedValue({
     path: "/tmp/openclaw.json",
     exists: true,
