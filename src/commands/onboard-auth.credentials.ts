@@ -191,18 +191,6 @@ export async function setCloudflareAiGatewayConfig(
   });
 }
 
-export async function setLitellmApiKey(key: string, agentDir?: string) {
-  upsertAuthProfile({
-    profileId: "litellm:default",
-    credential: {
-      type: "api_key",
-      provider: "litellm",
-      key,
-    },
-    agentDir: resolveAuthAgentDir(agentDir),
-  });
-}
-
 export async function setVercelAiGatewayApiKey(key: string, agentDir?: string) {
   upsertAuthProfile({
     profileId: "vercel-ai-gateway:default",
@@ -270,6 +258,19 @@ export function setXaiApiKey(key: string, agentDir?: string) {
       type: "api_key",
       provider: "xai",
       key,
+    },
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}
+
+export async function setLitellmApiKey(key: string, agentDir?: string, baseUrl?: string) {
+  upsertAuthProfile({
+    profileId: "litellm:default",
+    credential: {
+      type: "api_key",
+      provider: "litellm",
+      key,
+      ...(baseUrl ? { metadata: { baseUrl: baseUrl.trim() } } : {}),
     },
     agentDir: resolveAuthAgentDir(agentDir),
   });

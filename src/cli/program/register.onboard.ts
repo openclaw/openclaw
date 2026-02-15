@@ -82,6 +82,8 @@ export function registerOnboardCommand(program: Command) {
   }
 
   command
+    .option("--litellm-base-url <url>", "LiteLLM base URL (default: http://localhost:4000)")
+    .option("--litellm-model <model>", "LiteLLM model name")
     .option("--custom-base-url <url>", "Custom provider base URL")
     .option("--custom-api-key <key>", "Custom provider API key (optional)")
     .option("--custom-model-id <id>", "Custom provider model ID")
@@ -150,6 +152,8 @@ export function registerOnboardCommand(program: Command) {
           opencodeZenApiKey: opts.opencodeZenApiKey as string | undefined,
           xaiApiKey: opts.xaiApiKey as string | undefined,
           litellmApiKey: opts.litellmApiKey as string | undefined,
+          litellmBaseUrl: opts.litellmBaseUrl as string | undefined,
+          litellmModel: opts.litellmModel as string | undefined,
           customBaseUrl: opts.customBaseUrl as string | undefined,
           customApiKey: opts.customApiKey as string | undefined,
           customModelId: opts.customModelId as string | undefined,

@@ -120,6 +120,8 @@ export type OnboardOptions = {
   opencodeZenApiKey?: string;
   xaiApiKey?: string;
   qianfanApiKey?: string;
+  litellmBaseUrl?: string;
+  litellmModel?: string;
   customBaseUrl?: string;
   customApiKey?: string;
   customModelId?: string;

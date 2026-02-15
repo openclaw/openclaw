@@ -17,6 +17,10 @@ export function isCacheTtlEligibleProvider(provider: string, modelId: string): b
   if (normalizedProvider === "openrouter" && normalizedModelId.startsWith("anthropic/")) {
     return true;
   }
+  // LiteLLM proxying to Anthropic models (claude-*)
+  if (normalizedProvider === "litellm" && normalizedModelId.startsWith("claude-")) {
+    return true;
+  }
   return false;
 }
 

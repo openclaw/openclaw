@@ -1062,6 +1062,7 @@
                   "providers/glm",
                   "providers/zai",
                   "providers/synthetic",
+                  "providers/litellm",
                   "providers/qianfan"
                 ]
               }

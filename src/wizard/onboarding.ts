@@ -1,4 +1,5 @@
 import type {
+  AuthChoice,
   GatewayAuthChoice,
   OnboardMode,
   OnboardOptions,
@@ -359,34 +360,56 @@ export async function runOnboardingWizard(
     allowKeychainPrompt: false,
   });
   const authChoiceFromPrompt = opts.authChoice === undefined;
-  const authChoice =
-    opts.authChoice ??
-    (await promptAuthChoiceGrouped({
-      prompter,
-      store: authStore,
-      includeSkip: true,
-    }));
+  let authChoice: AuthChoice;
+  let authChoiceOverride: AuthChoice | undefined = opts.authChoice;
 
-  if (authChoice === "custom-api-key") {
-    const customResult = await promptCustomApiConfig({
-      prompter,
-      runtime,
-      config: nextConfig,
-    });
-    nextConfig = customResult.config;
-  } else {
-    const authResult = await applyAuthChoice({
-      authChoice,
-      config: nextConfig,
-      prompter,
-      runtime,
-      setDefaultModel: true,
-      opts: {
-        tokenProvider: opts.tokenProvider,
-        token: opts.authChoice === "apiKey" && opts.token ? opts.token : undefined,
-      },
-    });
-    nextConfig = authResult.config;
+  let customPreferredProvider: string | undefined;
+
+  // Loop to allow retrying auth choice if user cancels during configuration
+  while (true) {
+    authChoice =
+      authChoiceOverride ??
+      (await promptAuthChoiceGrouped({
+        prompter,
+        store: authStore,
+        includeSkip: true,
+      }));
+
+    if (authChoice === "custom-api-key") {
+      const customResult = await promptCustomApiConfig({
+        prompter,
+        runtime,
+        config: nextConfig,
+      });
+      nextConfig = customResult.config;
+      customPreferredProvider = customResult.providerId;
+      break;
+    }
+
+    try {
+      const authResult = await applyAuthChoice({
+        authChoice,
+        config: nextConfig,
+        prompter,
+        runtime,
+        setDefaultModel: true,
+        opts: {
+          tokenProvider: opts.tokenProvider,
+          token: authChoiceOverride === "apiKey" && opts.token ? opts.token : undefined,
+        },
+      });
+      nextConfig = authResult.config;
+      break; // Success - exit the loop
+    } catch (error) {
+      // If user cancelled to go back to auth selection, loop again
+      if (error instanceof Error && error.message === "AUTH_CHOICE_CANCELLED") {
+        // Clear override so we prompt again (without mutating opts)
+        authChoiceOverride = undefined;
+        continue;
+      }
+      // Re-throw other errors
+      throw error;
+    }
   }
 
   if (authChoiceFromPrompt && authChoice !== "custom-api-key") {

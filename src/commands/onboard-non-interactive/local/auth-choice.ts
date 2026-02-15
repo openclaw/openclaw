@@ -389,7 +389,10 @@ export async function applyNonInteractiveAuthChoice(params: {
       provider: "litellm",
       mode: "api_key",
     });
-    return applyLitellmConfig(nextConfig);
+    return applyLitellmConfig(nextConfig, {
+      baseUrl: opts.litellmBaseUrl?.trim() || "http://localhost:4000",
+      modelId: opts.litellmModel?.trim() || "gpt-4",
+    });
   }
 
   if (authChoice === "ai-gateway-api-key") {
