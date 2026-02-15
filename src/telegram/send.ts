@@ -36,6 +36,7 @@ type TelegramSendOpts = {
   accountId?: string;
   verbose?: boolean;
   mediaUrl?: string;
+  mediaLocalRoots?: readonly string[];
   maxBytes?: number;
   api?: Bot["api"];
   retry?: RetryConfig;
@@ -384,7 +385,10 @@ export async function sendMessageTelegram(
   };
 
   if (mediaUrl) {
-    const media = await loadWebMedia(mediaUrl, opts.maxBytes);
+    const media = await loadWebMedia(mediaUrl, {
+      maxBytes: opts.maxBytes,
+      localRoots: opts.mediaLocalRoots,
+    });
     const kind = mediaKindFromMime(media.contentType ?? undefined);
     const isGif = isGifMedia({
       contentType: media.contentType,
@@ -696,6 +700,8 @@ type TelegramEditOpts = {
   api?: Bot["api"];
   retry?: RetryConfig;
   textMode?: "markdown" | "html";
+  /** Controls whether link previews are shown in the edited message. */
+  linkPreview?: boolean;
   /** Inline keyboard buttons (reply markup). Pass empty array to remove buttons. */
   buttons?: Array<Array<{ text: string; callback_data: string }>>;
   /** Optional config injection to avoid global loadConfig() (improves testability). */
@@ -752,6 +758,9 @@ export async function editMessageTelegram(
   const editParams: Record<string, unknown> = {
     parse_mode: "HTML",
   };
+  if (opts.linkPreview === false) {
+    editParams.link_preview_options = { is_disabled: true };
+  }
   if (replyMarkup !== undefined) {
     editParams.reply_markup = replyMarkup;
   }
@@ -767,6 +776,9 @@ export async function editMessageTelegram(
         console.warn(`telegram HTML parse failed, retrying as plain text: ${errText}`);
       }
       const plainParams: Record<string, unknown> = {};
+      if (opts.linkPreview === false) {
+        plainParams.link_preview_options = { is_disabled: true };
+      }
       if (replyMarkup !== undefined) {
         plainParams.reply_markup = replyMarkup;
       }

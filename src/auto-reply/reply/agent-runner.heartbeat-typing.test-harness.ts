@@ -39,34 +39,21 @@ export function installRunReplyAgentTypingHeartbeatTestHooks() {
   });
 }
 
-vi.mock("../../agents/model-fallback.js", () => ({
-  runWithModelFallback: async ({
-    provider,
-    model,
-    run,
-  }: {
-    provider: string;
-    model: string;
-    run: (provider: string, model: string) => Promise<unknown>;
-  }) => ({
-    result: await run(provider, model),
-    provider,
-    model,
-  }),
-}));
+async function loadHarnessMocks() {
+  const { loadAgentRunnerHarnessMockBundle } = await import("./agent-runner.test-harness.mocks.js");
+  return await loadAgentRunnerHarnessMockBundle(state);
+}
 
-vi.mock("../../agents/pi-embedded.js", () => ({
-  queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
-  runEmbeddedPiAgent: (params: unknown) => state.runEmbeddedPiAgentMock(params),
-}));
+vi.mock("../../agents/model-fallback.js", async () => {
+  return (await loadHarnessMocks()).modelFallback;
+});
+
+vi.mock("../../agents/pi-embedded.js", async () => {
+  return (await loadHarnessMocks()).embeddedPi;
+});
 
 vi.mock("./queue.js", async () => {
-  const actual = await vi.importActual<typeof import("./queue.js")>("./queue.js");
-  return {
-    ...actual,
-    enqueueFollowupRun: vi.fn(),
-    scheduleFollowupDrain: vi.fn(),
-  };
+  return (await loadHarnessMocks()).queue;
 });
 
 export function createMinimalRun(params?: {

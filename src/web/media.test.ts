@@ -19,6 +19,7 @@ let alphaPngFile = "";
 let fallbackPngBuffer: Buffer;
 let fallbackPngFile = "";
 let fallbackPngCap = 0;
+let previousStateDir: string | undefined;
 
 async function writeTempFile(buffer: Buffer, ext: string): Promise<string> {
   const file = path.join(fixtureRoot, `media-${fixtureFileCount++}${ext}`);
@@ -96,6 +97,26 @@ afterEach(() => {
 });
 
 describe("web media loading", () => {
+  beforeAll(() => {
+    // Ensure state dir is stable and not influenced by other tests that stub OPENCLAW_STATE_DIR.
+    // Also keep it outside os.tmpdir() so tmpdir localRoots doesn't accidentally make all state readable.
+    previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = path.join(
+      path.parse(os.tmpdir()).root,
+      "var",
+      "lib",
+      "openclaw-media-state-test",
+    );
+  });
+
+  afterAll(() => {
+    if (previousStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previousStateDir;
+    }
+  });
+
   beforeAll(() => {
     vi.spyOn(ssrf, "resolvePinnedHostname").mockImplementation(async (hostname) => {
       const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
@@ -346,11 +367,12 @@ describe("local media root guard", () => {
   });
 
   it("allows default OpenClaw state workspace and sandbox roots", async () => {
-    const { STATE_DIR } = await import("../config/paths.js");
+    const { resolveStateDir } = await import("../config/paths.js");
+    const stateDir = resolveStateDir();
     const readFile = vi.fn(async () => Buffer.from("generated-media"));
 
     await expect(
-      loadWebMedia(path.join(STATE_DIR, "workspace", "tmp", "render.bin"), {
+      loadWebMedia(path.join(stateDir, "workspace", "tmp", "render.bin"), {
         maxBytes: 1024 * 1024,
         readFile,
       }),
@@ -361,8 +383,40 @@ describe("local media root guard", () => {
     );
 
     await expect(
-      loadWebMedia(path.join(STATE_DIR, "sandboxes", "session-1", "frame.bin"), {
+      loadWebMedia(path.join(stateDir, "sandboxes", "session-1", "frame.bin"), {
         maxBytes: 1024 * 1024,
+        readFile,
+      }),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        kind: "unknown",
+      }),
+    );
+  });
+
+  it("rejects default OpenClaw state per-agent workspace-* roots without explicit local roots", async () => {
+    const { resolveStateDir } = await import("../config/paths.js");
+    const stateDir = resolveStateDir();
+    const readFile = vi.fn(async () => Buffer.from("generated-media"));
+
+    await expect(
+      loadWebMedia(path.join(stateDir, "workspace-clawdy", "tmp", "render.bin"), {
+        maxBytes: 1024 * 1024,
+        readFile,
+      }),
+    ).rejects.toThrow(/not under an allowed directory/i);
+  });
+
+  it("allows per-agent workspace-* paths with explicit local roots", async () => {
+    const { resolveStateDir } = await import("../config/paths.js");
+    const stateDir = resolveStateDir();
+    const readFile = vi.fn(async () => Buffer.from("generated-media"));
+    const agentWorkspaceDir = path.join(stateDir, "workspace-clawdy");
+
+    await expect(
+      loadWebMedia(path.join(agentWorkspaceDir, "tmp", "render.bin"), {
+        maxBytes: 1024 * 1024,
+        localRoots: [agentWorkspaceDir],
         readFile,
       }),
     ).resolves.toEqual(

@@ -502,7 +502,10 @@ export const buildTelegramMessageContext = async ({
   }
 
   // ACK reactions
-  const ackReaction = resolveAckReaction(cfg, route.agentId);
+  const ackReaction = resolveAckReaction(cfg, route.agentId, {
+    channel: "telegram",
+    accountId: account.accountId,
+  });
   const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
   const shouldAckReaction = () =>
     Boolean(
