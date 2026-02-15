@@ -113,6 +113,15 @@ export type DiscordAgentComponentsConfig = {
   enabled?: boolean;
 };
 
+export type DiscordUiComponentsConfig = {
+  /** Accent color used by Discord component containers (hex). */
+  accentColor?: string;
+};
+
+export type DiscordUiConfig = {
+  components?: DiscordUiComponentsConfig;
+};
+
 export type DiscordAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
@@ -183,6 +192,8 @@ export type DiscordAccountConfig = {
   execApprovals?: DiscordExecApprovalConfig;
   /** Agent-controlled interactive components (buttons, select menus). */
   agentComponents?: DiscordAgentComponentsConfig;
+  /** Discord UI customization (components, modals, etc.). */
+  ui?: DiscordUiConfig;
   /** Privileged Gateway Intents (must also be enabled in Discord Developer Portal). */
   intents?: DiscordIntentsConfig;
   /** PluralKit identity resolution for proxied messages. */

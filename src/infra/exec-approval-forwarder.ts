@@ -98,6 +98,15 @@ function buildTargetKey(target: ExecApprovalForwardTarget): string {
   return [channel, target.to, accountId, threadId].join(":");
 }
 
+function shouldSkipDiscordForwarding(cfg: OpenClawConfig): boolean {
+  const discordConfig = cfg.channels?.discord?.execApprovals;
+  if (!discordConfig?.enabled) {
+    return false;
+  }
+  const target = discordConfig.target ?? "dm";
+  return target === "channel" || target === "both";
+}
+
 function formatApprovalCommand(command: string): { inline: boolean; text: string } {
   if (!command.includes("\n") && !command.includes("`")) {
     return { inline: true, text: `\`${command}\`` };
@@ -265,7 +274,11 @@ export function createExecApprovalForwarder(
       }
     }
 
-    if (targets.length === 0) {
+    const filteredTargets = shouldSkipDiscordForwarding(cfg)
+      ? targets.filter((target) => normalizeMessageChannel(target.channel) !== "discord")
+      : targets;
+
+    if (filteredTargets.length === 0) {
       return;
     }
 
@@ -283,7 +296,7 @@ export function createExecApprovalForwarder(
     }, expiresInMs);
     timeoutId.unref?.();
 
-    const pendingEntry: PendingApproval = { request, targets, timeoutId };
+    const pendingEntry: PendingApproval = { request, targets: filteredTargets, timeoutId };
     pending.set(request.id, pendingEntry);
 
     if (pending.get(request.id) !== pendingEntry) {
@@ -293,7 +306,7 @@ export function createExecApprovalForwarder(
     const text = buildRequestMessage(request, nowMs());
     await deliverToTargets({
       cfg,
-      targets,
+      targets: filteredTargets,
       text,
       deliver,
       shouldSend: () => pending.get(request.id) === pendingEntry,

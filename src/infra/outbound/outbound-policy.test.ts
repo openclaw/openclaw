@@ -70,7 +70,7 @@ describe("outbound policy", () => {
     ).toThrow(/Cross-context messaging denied/);
   });
 
-  it("uses embeds when available and preferred", async () => {
+  it("uses components when available and preferred", async () => {
     const decoration = await buildCrossContextDecoration({
       cfg: discordConfig,
       channel: "discord",
@@ -82,11 +82,12 @@ describe("outbound policy", () => {
     const applied = applyCrossContextDecoration({
       message: "hello",
       decoration: decoration!,
-      preferEmbeds: true,
+      preferComponents: true,
     });
 
-    expect(applied.usedEmbeds).toBe(true);
-    expect(applied.embeds?.length).toBeGreaterThan(0);
+    expect(applied.usedComponents).toBe(true);
+    expect(applied.componentsBuilder).toBeDefined();
+    expect(applied.componentsBuilder?.("hello").length).toBeGreaterThan(0);
     expect(applied.message).toBe("hello");
   });
 });

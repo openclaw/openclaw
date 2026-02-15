@@ -16,6 +16,12 @@ Use the `message` tool. No provider-specific `discord` tool exposed to the agent
 - Prefer explicit ids: `guildId`, `channelId`, `messageId`, `userId`.
 - Multi-account: optional `accountId`.
 
+## Guidelines
+
+- Avoid Markdown tables in outbound Discord messages.
+- Mention users as `<@USER_ID>`.
+- Prefer Discord components v2 (`components`) for rich UI; use legacy `embeds` only when you must.
+
 ## Targets
 
 - Send-like actions: `to: "channel:<id>"` or `to: "user:<id>"`.
@@ -46,6 +52,37 @@ Send with media:
   "media": "file:///tmp/example.png"
 }
 ```
+
+- Optional `silent: true` to suppress Discord notifications.
+
+Send with components v2 (recommended for rich UI):
+
+```json
+{
+  "action": "send",
+  "channel": "discord",
+  "to": "channel:123",
+  "message": "Status update",
+  "components": "[Carbon v2 components]"
+}
+```
+
+- `components` expects Carbon component instances (Container, TextDisplay, etc.) from JS/TS integrations.
+- Do not combine `components` with `embeds` (Discord rejects v2 + embeds).
+
+Legacy embeds (not recommended):
+
+```json
+{
+  "action": "send",
+  "channel": "discord",
+  "to": "channel:123",
+  "message": "Status update",
+  "embeds": [{ "title": "Legacy", "description": "Embeds are legacy." }]
+}
+```
+
+- `embeds` are ignored when components v2 are present.
 
 React:
 
@@ -157,4 +194,4 @@ Presence (often gated):
 
 - Short, conversational, low ceremony.
 - No markdown tables.
-- Prefer multiple small replies over one wall of text.
+- Mention users as `<@USER_ID>`.
