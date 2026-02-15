@@ -10,9 +10,8 @@ function computeTargetThinkingLevel(params: {
   totalTokens: number;
   contextTokens: number;
   allowedLevels: ThinkLevel[];
-  currentLevel: ThinkLevel | undefined;
 }): ThinkLevel | undefined {
-  const { escalation, totalTokens, contextTokens, allowedLevels, currentLevel } = params;
+  const { escalation, totalTokens, contextTokens, allowedLevels } = params;
 
   if (!escalation?.enabled || !escalation.thresholds || escalation.thresholds.length === 0) {
     return undefined;
@@ -61,7 +60,6 @@ describe("computeTargetThinkingLevel", () => {
       totalTokens: 60000,
       contextTokens: 100000,
       allowedLevels: ["off", "low", "medium", "high"],
-      currentLevel: "off",
     });
     expect(result).toBeUndefined();
   });
@@ -72,7 +70,6 @@ describe("computeTargetThinkingLevel", () => {
       totalTokens: 60000,
       contextTokens: 100000,
       allowedLevels: ["off", "low", "medium", "high"],
-      currentLevel: "off",
     });
     expect(result).toBeUndefined();
   });
@@ -89,7 +86,6 @@ describe("computeTargetThinkingLevel", () => {
       totalTokens: 30000,
       contextTokens: 100000,
       allowedLevels: ["off", "low", "medium", "high"],
-      currentLevel: "off",
     });
     expect(result).toBeUndefined();
   });
@@ -106,7 +102,6 @@ describe("computeTargetThinkingLevel", () => {
       totalTokens: 50000,
       contextTokens: 100000,
       allowedLevels: ["off", "low", "medium", "high"],
-      currentLevel: "low",
     });
     expect(result).toBe("medium");
   });
@@ -123,7 +118,6 @@ describe("computeTargetThinkingLevel", () => {
       totalTokens: 75000,
       contextTokens: 100000,
       allowedLevels: ["off", "low", "medium", "high"],
-      currentLevel: "medium",
     });
     expect(result).toBe("high");
   });
@@ -140,7 +134,6 @@ describe("computeTargetThinkingLevel", () => {
       totalTokens: 90000,
       contextTokens: 100000,
       allowedLevels: ["off", "low", "medium", "high"],
-      currentLevel: "medium",
     });
     expect(result).toBe("high");
   });
@@ -154,7 +147,6 @@ describe("computeTargetThinkingLevel", () => {
       totalTokens: 80000,
       contextTokens: 100000,
       allowedLevels: ["off", "low", "medium"], // no "high" support
-      currentLevel: "low",
     });
     expect(result).toBe("medium");
   });
@@ -168,7 +160,6 @@ describe("computeTargetThinkingLevel", () => {
       totalTokens: 60000,
       contextTokens: 100000,
       allowedLevels: ["off"], // only "off" supported
-      currentLevel: "off",
     });
     expect(result).toBe("off");
   });
@@ -182,7 +173,6 @@ describe("computeTargetThinkingLevel", () => {
       totalTokens: 60000,
       contextTokens: 100000,
       allowedLevels: ["off", "low"], // binary-like provider
-      currentLevel: "off",
     });
     expect(result).toBe("low");
   });
@@ -200,7 +190,6 @@ describe("computeTargetThinkingLevel", () => {
       totalTokens: 95000,
       contextTokens: 100000,
       allowedLevels: ["off", "minimal", "low", "medium", "high", "xhigh"],
-      currentLevel: "high",
     });
     expect(result).toBe("xhigh");
   });
@@ -214,7 +203,6 @@ describe("computeTargetThinkingLevel", () => {
       totalTokens: -100,
       contextTokens: 100000,
       allowedLevels: ["off", "low", "medium", "high"],
-      currentLevel: "off",
     });
     expect(result).toBeUndefined();
   });
@@ -228,7 +216,6 @@ describe("computeTargetThinkingLevel", () => {
       totalTokens: 50000,
       contextTokens: 0,
       allowedLevels: ["off", "low", "medium", "high"],
-      currentLevel: "off",
     });
     expect(result).toBeUndefined();
   });

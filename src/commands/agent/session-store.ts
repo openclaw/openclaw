@@ -28,9 +28,8 @@ function computeTargetThinkingLevel(params: {
   contextTokens: number;
   provider: string;
   model: string;
-  currentLevel: ThinkLevel | undefined;
 }): ThinkLevel | undefined {
-  const { escalation, totalTokens, contextTokens, provider, model, currentLevel } = params;
+  const { escalation, totalTokens, contextTokens, provider, model } = params;
 
   if (!escalation?.enabled || !escalation.thresholds || escalation.thresholds.length === 0) {
     return undefined;
@@ -153,7 +152,6 @@ export async function updateSessionStoreAfterAgentRun(params: {
         contextTokens,
         provider: providerUsed,
         model: modelUsed,
-        currentLevel,
       });
 
       if (targetLevel) {
