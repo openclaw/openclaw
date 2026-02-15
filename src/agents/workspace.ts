@@ -102,6 +102,11 @@ type WorkspaceOnboardingState = {
   onboardingCompletedAt?: string;
 };
 
+export type WorkspaceOnboardingStateSnapshot = {
+  bootstrapSeededAt?: string;
+  onboardingCompletedAt?: string;
+};
+
 /** Set of recognized bootstrap filenames for runtime validation */
 const VALID_BOOTSTRAP_NAMES: ReadonlySet<string> = new Set([
   DEFAULT_AGENTS_FILENAME,
@@ -182,6 +187,24 @@ async function readWorkspaceOnboardingState(statePath: string): Promise<Workspac
       version: WORKSPACE_STATE_VERSION,
     };
   }
+}
+
+export async function readWorkspaceOnboardingStateForDir(
+  dir: string,
+): Promise<WorkspaceOnboardingStateSnapshot> {
+  const statePath = resolveWorkspaceStatePath(resolveUserPath(dir));
+  const state = await readWorkspaceOnboardingState(statePath);
+  return {
+    bootstrapSeededAt: state.bootstrapSeededAt,
+    onboardingCompletedAt: state.onboardingCompletedAt,
+  };
+}
+
+export async function isWorkspaceOnboardingCompleted(dir: string): Promise<boolean> {
+  const state = await readWorkspaceOnboardingStateForDir(dir);
+  return (
+    typeof state.onboardingCompletedAt === "string" && state.onboardingCompletedAt.trim().length > 0
+  );
 }
 
 async function writeWorkspaceOnboardingState(
