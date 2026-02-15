@@ -1,6 +1,7 @@
 import type { HealthSummary } from "../commands/health.js";
 import type { ChatRunEntry } from "./server-chat.js";
 import type { DedupeEntry } from "./server-shared.js";
+import { notifyWatchdog } from "../infra/systemd-notify.js";
 import { abortChatRunById, type ChatAbortControllerEntry } from "./chat-abort.js";
 import {
   DEDUPE_MAX,
@@ -54,6 +55,7 @@ export function startGatewayMaintenanceTimers(params: {
 
   // periodic keepalive
   const tickInterval = setInterval(() => {
+    notifyWatchdog();
     const payload = { ts: Date.now() };
     params.broadcast("tick", payload, { dropIfSlow: true });
     params.nodeSendToAllSubscribed("tick", payload);
