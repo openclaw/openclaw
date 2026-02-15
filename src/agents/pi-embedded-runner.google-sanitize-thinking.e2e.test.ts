@@ -86,7 +86,7 @@ describe("sanitizeSessionHistory (google thinking)", () => {
     expect(assistant.content?.[0]?.thinking).toBe("reasoning");
   });
 
-  it("drops unsigned thinking blocks for Antigravity Claude", async () => {
+  it("converts unsigned thinking blocks to text for Antigravity Claude", async () => {
     const sessionManager = SessionManager.inMemory();
     const input = [
       {
@@ -107,8 +107,12 @@ describe("sanitizeSessionHistory (google thinking)", () => {
       sessionId: "session:antigravity-claude",
     });
 
-    const assistant = out.find((msg) => (msg as { role?: string }).role === "assistant");
-    expect(assistant).toBeUndefined();
+    const assistant = out.find((msg) => (msg as { role?: string }).role === "assistant") as {
+      content?: Array<{ type?: string; text?: string }>;
+    };
+    expect(assistant).toBeDefined();
+    expect(assistant.content?.map((block) => block.type)).toEqual(["text"]);
+    expect(assistant.content?.[0]?.text).toBe("reasoning");
   });
 
   it("maps base64 signatures to thinkingSignature for Antigravity Claude", async () => {
@@ -354,5 +358,151 @@ describe("sanitizeSessionHistory (google thinking)", () => {
       (msg) => (msg as { role?: unknown }).role === "toolResult",
     ) as Extract<AgentMessage, { role: "toolResult" }>;
     expect(toolResult.toolCallId).toBe(toolCall.id);
+  });
+});
+
+describe("sanitizeAntigravityThinkingBlocks (text conversion)", () => {
+  it("converts unsigned thinking block to text for Antigravity Claude", async () => {
+    const sessionManager = SessionManager.inMemory();
+    const input = [
+      {
+        role: "user",
+        content: "hi",
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "internal reasoning" },
+          { type: "text", text: "hello" },
+        ],
+      },
+    ] satisfies AgentMessage[];
+
+    const out = await sanitizeSessionHistory({
+      messages: input,
+      modelApi: "google-antigravity",
+      modelId: "anthropic/claude-3.5-sonnet",
+      sessionManager,
+      sessionId: "session:antigravity-text-convert",
+    });
+
+    const assistant = out.find((msg) => (msg as { role?: string }).role === "assistant") as {
+      content?: Array<{ type?: string; text?: string; thinking?: string }>;
+    };
+    expect(assistant).toBeDefined();
+    expect(assistant.content?.map((block) => block.type)).toEqual(["text", "text"]);
+    expect(assistant.content?.[0]?.text).toBe("internal reasoning");
+    expect(assistant.content?.[1]?.text).toBe("hello");
+  });
+
+  it("keeps signed thinking block for Antigravity Claude", async () => {
+    const sessionManager = SessionManager.inMemory();
+    const input = [
+      {
+        role: "user",
+        content: "hi",
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "signed thought", thinkingSignature: "c2ln" },
+          { type: "text", text: "hello" },
+        ],
+      },
+    ] satisfies AgentMessage[];
+
+    const out = await sanitizeSessionHistory({
+      messages: input,
+      modelApi: "google-antigravity",
+      modelId: "anthropic/claude-3.5-sonnet",
+      sessionManager,
+      sessionId: "session:antigravity-signed",
+    });
+
+    const assistant = out.find((msg) => (msg as { role?: string }).role === "assistant") as {
+      content?: Array<{
+        type?: string;
+        text?: string;
+        thinking?: string;
+        thinkingSignature?: string;
+      }>;
+    };
+    expect(assistant).toBeDefined();
+    expect(assistant.content?.map((block) => block.type)).toEqual(["thinking", "text"]);
+    expect(assistant.content?.[0]?.thinking).toBe("signed thought");
+    expect(assistant.content?.[0]?.thinkingSignature).toBe("c2ln");
+  });
+
+  it("handles mixed signed and unsigned thinking blocks for Antigravity Claude", async () => {
+    const sessionManager = SessionManager.inMemory();
+    const input = [
+      {
+        role: "user",
+        content: "hi",
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "signed", thinkingSignature: "AQID" },
+          { type: "thinking", thinking: "unsigned thought" },
+          { type: "text", text: "response" },
+        ],
+      },
+    ] satisfies AgentMessage[];
+
+    const out = await sanitizeSessionHistory({
+      messages: input,
+      modelApi: "google-antigravity",
+      modelId: "anthropic/claude-3.5-sonnet",
+      sessionManager,
+      sessionId: "session:antigravity-mixed",
+    });
+
+    const assistant = out.find((msg) => (msg as { role?: string }).role === "assistant") as {
+      content?: Array<{
+        type?: string;
+        text?: string;
+        thinking?: string;
+        thinkingSignature?: string;
+      }>;
+    };
+    expect(assistant).toBeDefined();
+    expect(assistant.content?.map((block) => block.type)).toEqual(["thinking", "text", "text"]);
+    expect(assistant.content?.[0]?.thinking).toBe("signed");
+    expect(assistant.content?.[0]?.thinkingSignature).toBe("AQID");
+    expect(assistant.content?.[1]?.text).toBe("unsigned thought");
+    expect(assistant.content?.[2]?.text).toBe("response");
+  });
+
+  it("drops empty unsigned thinking blocks for Antigravity Claude", async () => {
+    const sessionManager = SessionManager.inMemory();
+    const input = [
+      {
+        role: "user",
+        content: "hi",
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "   " },
+          { type: "text", text: "hello" },
+        ],
+      },
+    ] satisfies AgentMessage[];
+
+    const out = await sanitizeSessionHistory({
+      messages: input,
+      modelApi: "google-antigravity",
+      modelId: "anthropic/claude-3.5-sonnet",
+      sessionManager,
+      sessionId: "session:antigravity-empty-thinking",
+    });
+
+    const assistant = out.find((msg) => (msg as { role?: string }).role === "assistant") as {
+      content?: Array<{ type?: string; text?: string }>;
+    };
+    expect(assistant).toBeDefined();
+    expect(assistant.content?.map((block) => block.type)).toEqual(["text"]);
+    expect(assistant.content?.[0]?.text).toBe("hello");
   });
 });

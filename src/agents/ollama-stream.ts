@@ -58,6 +58,7 @@ interface OllamaChatResponse {
   };
   done: boolean;
   done_reason?: string;
+  error?: string;
   total_duration?: number;
   load_duration?: number;
   prompt_eval_count?: number;
@@ -345,6 +346,11 @@ export function createOllamaStreamFn(baseUrl: string): StreamFn {
         let finalResponse: OllamaChatResponse | undefined;
 
         for await (const chunk of parseNdjsonStream(reader)) {
+          // Surface Ollama-level errors (e.g. model doesn't support tools)
+          if (chunk.error) {
+            throw new Error(`Ollama model error: ${chunk.error}`);
+          }
+
           if (chunk.message?.content) {
             accumulatedContent += chunk.message.content;
           }
@@ -368,6 +374,20 @@ export function createOllamaStreamFn(baseUrl: string): StreamFn {
         finalResponse.message.content = accumulatedContent;
         if (accumulatedToolCalls.length > 0) {
           finalResponse.message.tool_calls = accumulatedToolCalls;
+        }
+
+        // Detect empty response when tools were sent — likely means the model
+        // does not support tool calling. Surface a helpful error instead of
+        // returning an empty assistant message ("(no output)").
+        if (
+          !accumulatedContent.trim() &&
+          accumulatedToolCalls.length === 0 &&
+          ollamaTools.length > 0
+        ) {
+          throw new Error(
+            `Ollama model "${model.id}" returned an empty response. This usually means the model does not support tool/function calling. ` +
+              `Set compat.supportsTools=false in the model config to run without tools.`,
+          );
         }
 
         const assistantMessage = buildAssistantMessage(finalResponse, {

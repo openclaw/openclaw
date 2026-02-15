@@ -13,6 +13,8 @@ export type ModelCompatConfig = {
   supportsReasoningEffort?: boolean;
   supportsUsageInStreaming?: boolean;
   supportsStrictMode?: boolean;
+  /** Whether the model supports tool/function calling. When false, tools are omitted from API requests. Default: true. */
+  supportsTools?: boolean;
   maxTokensField?: "max_completion_tokens" | "max_tokens";
   thinkingFormat?: "openai" | "zai" | "qwen";
   requiresToolResultName?: boolean;

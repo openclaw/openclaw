@@ -288,3 +288,134 @@ describe("createOllamaStreamFn", () => {
     }
   });
 });
+
+describe("createOllamaStreamFn — error surfacing", () => {
+  it("surfaces Ollama error field from streamed response", async () => {
+    const originalFetch = globalThis.fetch;
+    const fetchMock = vi.fn(async () => {
+      // Ollama may return a JSON object with an error field on model-level errors
+      const payload = '{"error":"model does not support tools"}';
+      return new Response(`${payload}\n`, {
+        status: 200,
+        headers: { "Content-Type": "application/x-ndjson" },
+      });
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    try {
+      const streamFn = createOllamaStreamFn("http://127.0.0.1:11434");
+      const stream = streamFn(
+        {
+          id: "tinyllama",
+          api: "ollama",
+          provider: "ollama",
+          contextWindow: 4096,
+        } as unknown as Parameters<typeof streamFn>[0],
+        {
+          messages: [{ role: "user", content: "hello" }],
+          tools: [{ name: "bash", description: "Run a command", parameters: {} }],
+        } as unknown as Parameters<typeof streamFn>[1],
+        {} as unknown as Parameters<typeof streamFn>[2],
+      );
+
+      const events = [];
+      for await (const event of stream) {
+        events.push(event);
+      }
+
+      const errorEvent = events.find((e) => e.type === "error");
+      expect(errorEvent).toBeDefined();
+      expect(errorEvent?.error?.errorMessage).toContain("model does not support tools");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("surfaces helpful error when model returns empty response with tools", async () => {
+    const originalFetch = globalThis.fetch;
+    const fetchMock = vi.fn(async () => {
+      // Model returns empty content — tools were sent but model ignores them
+      const payload = [
+        '{"model":"tinyllama","created_at":"t","message":{"role":"assistant","content":""},"done":false}',
+        '{"model":"tinyllama","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":10,"eval_count":0}',
+      ].join("\n");
+      return new Response(`${payload}\n`, {
+        status: 200,
+        headers: { "Content-Type": "application/x-ndjson" },
+      });
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    try {
+      const streamFn = createOllamaStreamFn("http://127.0.0.1:11434");
+      const stream = streamFn(
+        {
+          id: "tinyllama",
+          api: "ollama",
+          provider: "ollama",
+          contextWindow: 4096,
+        } as unknown as Parameters<typeof streamFn>[0],
+        {
+          messages: [{ role: "user", content: "hello" }],
+          tools: [{ name: "bash", description: "Run a command", parameters: {} }],
+        } as unknown as Parameters<typeof streamFn>[1],
+        {} as unknown as Parameters<typeof streamFn>[2],
+      );
+
+      const events = [];
+      for await (const event of stream) {
+        events.push(event);
+      }
+
+      const errorEvent = events.find((e) => e.type === "error");
+      expect(errorEvent).toBeDefined();
+      expect(errorEvent?.error?.errorMessage).toContain("does not support tool/function calling");
+      expect(errorEvent?.error?.errorMessage).toContain("supportsTools=false");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("does NOT error on empty response when no tools were sent", async () => {
+    const originalFetch = globalThis.fetch;
+    const fetchMock = vi.fn(async () => {
+      const payload = [
+        '{"model":"tinyllama","created_at":"t","message":{"role":"assistant","content":""},"done":false}',
+        '{"model":"tinyllama","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":10,"eval_count":0}',
+      ].join("\n");
+      return new Response(`${payload}\n`, {
+        status: 200,
+        headers: { "Content-Type": "application/x-ndjson" },
+      });
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    try {
+      const streamFn = createOllamaStreamFn("http://127.0.0.1:11434");
+      const stream = streamFn(
+        {
+          id: "tinyllama",
+          api: "ollama",
+          provider: "ollama",
+          contextWindow: 4096,
+        } as unknown as Parameters<typeof streamFn>[0],
+        {
+          messages: [{ role: "user", content: "hello" }],
+          // No tools — should not trigger empty-response error
+        } as unknown as Parameters<typeof streamFn>[1],
+        {} as unknown as Parameters<typeof streamFn>[2],
+      );
+
+      const events = [];
+      for await (const event of stream) {
+        events.push(event);
+      }
+
+      const doneEvent = events.find((e) => e.type === "done");
+      expect(doneEvent).toBeDefined();
+      expect(events.find((e) => e.type === "error")).toBeUndefined();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});

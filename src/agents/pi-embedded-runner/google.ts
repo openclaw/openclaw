@@ -100,6 +100,16 @@ export function sanitizeAntigravityThinkingBlocks(messages: AgentMessage[]): Age
         rec.thinkingSignature ?? rec.signature ?? rec.thought_signature ?? rec.thoughtSignature;
       if (!isValidAntigravitySignature(candidate)) {
         contentChanged = true;
+        const thinkingText =
+          typeof (block as { thinking?: unknown }).thinking === "string"
+            ? ((block as { thinking?: unknown }).thinking as string)
+            : "";
+        if (thinkingText.trim()) {
+          nextContent.push({
+            type: "text",
+            text: thinkingText,
+          } as AssistantContentBlock);
+        }
         continue;
       }
       if (rec.thinkingSignature !== candidate) {
