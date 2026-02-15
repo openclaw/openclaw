@@ -242,15 +242,18 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       try {
         const mmHost = new URL(baseUrl).hostname;
         const callbackHost = new URL(callbackUrl).hostname;
+
+        // NOTE: We cannot infer network reachability from hostnames alone.
+        // Mattermost might be accessed via a public domain while still running on the same
+        // machine as the gateway (where http://localhost:<port> is valid).
+        // So treat loopback callback URLs as an advisory warning only.
         if (isLoopbackHost(callbackHost) && !isLoopbackHost(mmHost)) {
           runtime.error?.(
-            `mattermost: slash commands callbackUrl resolved to ${callbackUrl} (loopback). This is unreachable from Mattermost at ${baseUrl}. Set channels.mattermost.commands.callbackUrl to a reachable URL (e.g. your public reverse proxy URL). Skipping slash command registration.`,
+            `mattermost: slash commands callbackUrl resolved to ${callbackUrl} (loopback) while baseUrl is ${baseUrl}. This MAY be unreachable depending on your deployment. If native slash commands don't work, set channels.mattermost.commands.callbackUrl to a URL reachable from the Mattermost server (e.g. your public reverse proxy URL).`,
           );
-          throw new Error("unreachable callbackUrl (loopback)");
         }
-      } catch (err) {
-        // If URL parsing fails or callback is loopback/unreachable, skip registration.
-        throw err;
+      } catch {
+        // URL parse failed; ignore and continue (we'll fail naturally if registration requests break).
       }
 
       const commandsToRegister: import("./slash-commands.js").MattermostCommandSpec[] = [
