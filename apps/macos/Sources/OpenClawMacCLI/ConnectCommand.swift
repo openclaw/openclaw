@@ -1,6 +1,6 @@
+import Foundation
 import OpenClawKit
 import OpenClawProtocol
-import Foundation
 #if canImport(Darwin)
 import Darwin
 #endif

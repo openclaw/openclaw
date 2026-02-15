@@ -8,7 +8,9 @@ enum ExecSecurity: String, CaseIterable, Codable, Identifiable {
     case allowlist
     case full
 
-    var id: String { self.rawValue }
+    var id: String {
+        self.rawValue
+    }
 
     var title: String {
         switch self {
@@ -24,7 +26,9 @@ enum ExecApprovalQuickMode: String, CaseIterable, Identifiable {
     case ask
     case allow
 
-    var id: String { self.rawValue }
+    var id: String {
+        self.rawValue
+    }
 
     var title: String {
         switch self {
@@ -67,7 +71,9 @@ enum ExecAsk: String, CaseIterable, Codable, Identifiable {
     case onMiss = "on-miss"
     case always
 
-    var id: String { self.rawValue }
+    var id: String {
+        self.rawValue
+    }
 
     var title: String {
         switch self {

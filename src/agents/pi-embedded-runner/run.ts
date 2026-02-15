@@ -907,6 +907,31 @@ export async function runEmbeddedPiAgent(
             inlineToolResultsAllowed: false,
           });
 
+          // Timeout aborts can leave the run without any assistant payloads.
+          // Emit an explicit timeout error instead of silently completing, so
+          // callers do not lose the turn as an orphaned user message.
+          if (timedOut && !timedOutDuringCompaction && payloads.length === 0) {
+            return {
+              payloads: [
+                {
+                  text:
+                    "Request timed out before a response was generated. " +
+                    "Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
+                  isError: true,
+                },
+              ],
+              meta: {
+                durationMs: Date.now() - started,
+                agentMeta,
+                aborted,
+                systemPromptReport: attempt.systemPromptReport,
+              },
+              didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+              messagingToolSentTexts: attempt.messagingToolSentTexts,
+              messagingToolSentTargets: attempt.messagingToolSentTargets,
+            };
+          }
+
           log.debug(
             `embedded run done: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - started} aborted=${aborted}`,
           );
