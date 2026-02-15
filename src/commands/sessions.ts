@@ -153,7 +153,8 @@ function toRows(store: Record<string, SessionEntry>): SessionRow[] {
         totalTokens: entry?.totalTokens,
         totalTokensFresh: entry?.totalTokensFresh,
         model: entry?.model,
-        contextTokens: entry?.contextTokens,
+        // Prefer fresh catalog value over stale cached value (fixes #8937)
+        contextTokens: lookupContextTokens(entry?.model) ?? entry?.contextTokens,
       } satisfies SessionRow;
     })
     .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
