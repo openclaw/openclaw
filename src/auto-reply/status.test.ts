@@ -162,6 +162,45 @@ describe("buildStatusMessage", () => {
     expect(normalizeTestText(text)).toContain("Think: medium");
   });
 
+  it("shows sessionEntry.thinkingLevel even when resolvedThink is a stale pre-directive value (#10867)", () => {
+    // Regression: when /think high /status is sent together, the directive updates
+    // sessionEntry.thinkingLevel but the pre-computed resolvedThink still holds the
+    // old value. The caller (get-reply-directives-apply) must re-read sessionEntry
+    // after directives are applied. This test verifies the post-fix behavior.
+    const sessionEntry = {
+      sessionId: "think-directive-status",
+      updatedAt: 0,
+      thinkingLevel: "high" as const,
+    };
+    const text = buildStatusMessage({
+      agent: { model: "anthropic/claude-opus-4-6", thinkingDefault: "low" },
+      sessionEntry,
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      resolvedThink: sessionEntry.thinkingLevel,
+      queue: { mode: "collect", depth: 0 },
+    });
+    expect(normalizeTestText(text)).toContain("Think: high");
+    expect(normalizeTestText(text)).not.toContain("Think: low");
+  });
+
+  it("does not show stale default when session overrides thinking level (#10867)", () => {
+    // Simulates the pre-fix bug scenario: resolvedThink omitted, but
+    // sessionEntry.thinkingLevel was updated to "high" by a directive.
+    const text = buildStatusMessage({
+      agent: { model: "anthropic/claude-opus-4-6", thinkingDefault: "low" },
+      sessionEntry: {
+        sessionId: "think-stale-bug",
+        updatedAt: 0,
+        thinkingLevel: "high",
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+    });
+    expect(normalizeTestText(text)).toContain("Think: high");
+  });
+
   it("uses per-agent sandbox config when config and session key are provided", () => {
     const text = buildStatusMessage({
       config: {
