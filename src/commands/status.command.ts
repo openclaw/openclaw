@@ -119,7 +119,7 @@ export async function statusCommand(
             method: "health",
             params: { probe: true },
             timeoutMs: opts.timeoutMs,
-          }),
+          }).catch(() => undefined),
       )
     : undefined;
   const lastHeartbeat =
