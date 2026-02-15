@@ -154,6 +154,22 @@ class MemoryDB {
     await this.ensureInitialized();
     return this.table!.countRows();
   }
+
+  async findByIdPrefix(prefix: string): Promise<{ id: string } | { ambiguous: string[] } | null> {
+    await this.ensureInitialized();
+    // Only fetch id and text columns (skip vectors) for efficiency
+    const results = await this.table!.query().select(["id", "text"]).toArray();
+    const matches = results.filter((row) => (row.id as string).startsWith(prefix));
+
+    if (matches.length === 0) {
+      return null;
+    }
+    if (matches.length > 1) {
+      // Ambiguous prefix - return all matching IDs for user to choose
+      return { ambiguous: matches.map((m) => `${m.id}: ${(m.text as string).slice(0, 50)}...`) };
+    }
+    return { id: matches[0].id as string };
+  }
 }
 
 // ============================================================================
@@ -427,10 +443,47 @@ const memoryPlugin = {
           const { query, memoryId } = params as { query?: string; memoryId?: string };
 
           if (memoryId) {
-            await db.delete(memoryId);
+            let targetId = memoryId;
+
+            // Support partial ID matching (prefix)
+            if (memoryId.length < 36) {
+              // Validate as hex UUID prefix (must be hex chars/dashes, min 4 chars)
+              if (!/^[0-9a-f-]{4,}$/i.test(memoryId)) {
+                return {
+                  content: [
+                    {
+                      type: "text",
+                      text: `Invalid memory ID: "${memoryId}". Use a valid UUID or hex prefix (min 4 chars).`,
+                    },
+                  ],
+                  details: { error: "invalid_id", memoryId },
+                };
+              }
+              const match = await db.findByIdPrefix(memoryId);
+              if (!match) {
+                return {
+                  content: [{ type: "text", text: `No memory found with ID prefix: ${memoryId}` }],
+                  details: { error: "not_found", prefix: memoryId },
+                };
+              }
+              if ("ambiguous" in match) {
+                return {
+                  content: [
+                    {
+                      type: "text",
+                      text: `Ambiguous prefix "${memoryId}" matches multiple memories:\n${match.ambiguous.join("\n")}\n\nPlease use a longer prefix.`,
+                    },
+                  ],
+                  details: { error: "ambiguous", matches: match.ambiguous },
+                };
+              }
+              targetId = match.id;
+            }
+
+            await db.delete(targetId);
             return {
-              content: [{ type: "text", text: `Memory ${memoryId} forgotten.` }],
-              details: { action: "deleted", id: memoryId },
+              content: [{ type: "text", text: `Memory ${targetId} forgotten.` }],
+              details: { action: "deleted", id: targetId },
             };
           }
 
@@ -454,7 +507,7 @@ const memoryPlugin = {
             }
 
             const list = results
-              .map((r) => `- [${r.entry.id.slice(0, 8)}] ${r.entry.text.slice(0, 60)}...`)
+              .map((r) => `- [${r.entry.id}] ${r.entry.text.slice(0, 60)}...`)
               .join("\n");
 
             // Strip vector data for serialization
