@@ -72,6 +72,7 @@ export function buildGatewayCronService(params: {
       const agentId = opts?.agentId ? resolveCronAgent(opts.agentId).agentId : undefined;
       return await runHeartbeatOnce({
         cfg: runtimeConfig,
+        agentId: opts?.agentId,
         reason: opts?.reason,
         agentId,
         deps: { ...params.deps, runtime: defaultRuntime },
