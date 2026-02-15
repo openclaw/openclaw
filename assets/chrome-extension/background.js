@@ -26,6 +26,10 @@ const childSessionToTab = new Map()
 /** @type {Map<number, {resolve:(v:any)=>void, reject:(e:Error)=>void}>} */
 const pending = new Map()
 
+// ===== FIX #1 & #2: Auto-reconnect state =====
+let reconnectAttempt = 0
+let reconnectTimer = null
+
 function nowStack() {
   try {
     return new Error().stack || ''
@@ -93,6 +97,13 @@ async function ensureRelayConnection() {
       chrome.debugger.onEvent.addListener(onDebuggerEvent)
       chrome.debugger.onDetach.addListener(onDebuggerDetach)
     }
+
+    // ===== FIX #2: Reset reconnect counter on successful connection =====
+    reconnectAttempt = 0
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer)
+      reconnectTimer = null
+    }
   })()
 
   try {
@@ -104,22 +115,222 @@ async function ensureRelayConnection() {
 
 function onRelayClosed(reason) {
   relayWs = null
+
+  // Reject all pending requests
   for (const [id, p] of pending.entries()) {
     pending.delete(id)
     p.reject(new Error(`Relay disconnected (${reason})`))
   }
 
-  for (const tabId of tabs.keys()) {
-    void chrome.debugger.detach({ tabId }).catch(() => {})
-    setBadge(tabId, 'connecting')
-    void chrome.action.setTitle({
-      tabId,
-      title: 'OpenClaw Browser Relay: disconnected (click to re-attach)',
-    })
+  // ===== FIX #1: DON'T detach debugger sessions on WS drop =====
+  // Keep debugger attached — only update badge to show disconnected state.
+  // When we reconnect, we'll re-announce existing sessions.
+  for (const [tabId, tab] of tabs.entries()) {
+    if (tab.state === 'connected') {
+      setBadge(tabId, 'connecting')
+      void chrome.action.setTitle({
+        tabId,
+        title: 'OpenClaw Browser Relay: reconnecting…',
+      })
+    }
   }
-  tabs.clear()
-  tabBySession.clear()
-  childSessionToTab.clear()
+  // DON'T: tabs.clear(), tabBySession.clear(), childSessionToTab.clear()
+  // DON'T: chrome.debugger.detach()
+
+  // ===== FIX #2: Schedule auto-reconnect =====
+  scheduleReconnect()
+}
+
+function scheduleReconnect() {
+  if (reconnectTimer) return // already scheduled
+
+  const delay = Math.min(1000 * Math.pow(2, reconnectAttempt), 30000) + Math.random() * 500
+  reconnectAttempt++
+
+  console.log(`[OpenClaw Relay] Scheduling reconnect attempt ${reconnectAttempt} in ${Math.round(delay)}ms`)
+
+  reconnectTimer = setTimeout(async () => {
+    reconnectTimer = null
+    try {
+      await ensureRelayConnection()
+      console.log('[OpenClaw Relay] Reconnected successfully')
+
+      // Re-announce all still-attached tabs
+      for (const [tabId, tab] of tabs.entries()) {
+        if (tab.state === 'connected' && tab.sessionId && tab.targetId) {
+          // Verify tab still exists
+          const chromeTab = await chrome.tabs.get(tabId).catch(() => null)
+          if (!chromeTab) {
+            // Tab was closed while disconnected — clean up
+            cleanupTab(tabId)
+            continue
+          }
+
+          // Verify debugger still attached by sending a harmless command
+          try {
+            await chrome.debugger.sendCommand({ tabId }, 'Runtime.evaluate', {
+              expression: '1',
+              returnByValue: true,
+            })
+          } catch {
+            // Debugger was detached (e.g., user dismissed the bar)
+            cleanupTab(tabId)
+            continue
+          }
+
+          // Re-announce to the relay server
+          try {
+            const info = /** @type {any} */ (
+              await chrome.debugger.sendCommand({ tabId }, 'Target.getTargetInfo')
+            )
+            const targetInfo = info?.targetInfo
+            // Update targetId in case it changed (e.g., page navigated)
+            const newTargetId = String(targetInfo?.targetId || '').trim() || tab.targetId
+
+            tab.targetId = newTargetId
+
+            sendToRelay({
+              method: 'forwardCDPEvent',
+              params: {
+                method: 'Target.attachedToTarget',
+                params: {
+                  sessionId: tab.sessionId,
+                  targetInfo: { ...targetInfo, attached: true },
+                  waitingForDebugger: false,
+                },
+              },
+            })
+
+            setBadge(tabId, 'on')
+            void chrome.action.setTitle({
+              tabId,
+              title: 'OpenClaw Browser Relay: attached (click to detach)',
+            })
+            console.log(`[OpenClaw Relay] Re-announced tab ${tabId} (session: ${tab.sessionId})`)
+          } catch (err) {
+            console.warn(`[OpenClaw Relay] Failed to re-announce tab ${tabId}:`, err)
+            cleanupTab(tabId)
+          }
+        }
+      }
+    } catch (err) {
+      console.log(`[OpenClaw Relay] Reconnect failed: ${err instanceof Error ? err.message : err}`)
+      scheduleReconnect()
+    }
+  }, delay)
+}
+
+// ===== FIX #3: Persist state to chrome.storage.session for MV3 worker restarts =====
+async function persistState() {
+  try {
+    const tabEntries = []
+    for (const [tabId, tab] of tabs.entries()) {
+      if (tab.state === 'connected' && tab.sessionId && tab.targetId) {
+        tabEntries.push({ tabId, sessionId: tab.sessionId, targetId: tab.targetId, attachOrder: tab.attachOrder })
+      }
+    }
+    await chrome.storage.session.set({ relayTabs: tabEntries, nextSession })
+  } catch {
+    // chrome.storage.session may not be available in all contexts
+  }
+}
+
+async function restoreState() {
+  try {
+    const stored = await chrome.storage.session.get(['relayTabs', 'nextSession'])
+    if (!stored.relayTabs?.length) return false
+
+    if (stored.nextSession) nextSession = stored.nextSession
+
+    let restored = 0
+    for (const entry of stored.relayTabs) {
+      const { tabId, sessionId, targetId, attachOrder } = entry
+
+      // Verify tab still exists
+      const chromeTab = await chrome.tabs.get(tabId).catch(() => null)
+      if (!chromeTab) continue
+
+      // Verify debugger is still attached, re-attach if needed
+      try {
+        await chrome.debugger.sendCommand({ tabId }, 'Runtime.evaluate', {
+          expression: '1',
+          returnByValue: true,
+        })
+      } catch {
+        // Debugger not attached — try to re-attach
+        console.log(`[OpenClaw Relay] Tab ${tabId} debugger lost — attempting re-attach`)
+        try {
+          await chrome.debugger.attach({ tabId }, '1.3')
+          await chrome.debugger.sendCommand({ tabId }, 'Runtime.enable')
+          await chrome.debugger.sendCommand({ tabId }, 'Network.enable')
+          console.log(`[OpenClaw Relay] Tab ${tabId} re-attached successfully`)
+        } catch (reattachErr) {
+          console.warn(`[OpenClaw Relay] Tab ${tabId} re-attach failed:`, reattachErr)
+          setBadge(tabId, 'off')
+          continue
+        }
+      }
+
+      // Restore in-memory state
+      tabs.set(tabId, { state: 'connected', sessionId, targetId, attachOrder })
+      tabBySession.set(sessionId, tabId)
+      setBadge(tabId, 'on')
+      restored++
+    }
+
+    if (restored > 0) {
+      console.log(`[OpenClaw Relay] Restored ${restored} tab(s) from session storage`)
+
+      // Install debugger listeners
+      if (!debuggerListenersInstalled) {
+        debuggerListenersInstalled = true
+        chrome.debugger.onEvent.addListener(onDebuggerEvent)
+        chrome.debugger.onDetach.addListener(onDebuggerDetach)
+      }
+
+      // Try to reconnect WS and re-announce
+      try {
+        await ensureRelayConnection()
+        for (const [tabId, tab] of tabs.entries()) {
+          if (tab.state === 'connected' && tab.sessionId && tab.targetId) {
+            const info = /** @type {any} */ (
+              await chrome.debugger.sendCommand({ tabId }, 'Target.getTargetInfo')
+            )
+            sendToRelay({
+              method: 'forwardCDPEvent',
+              params: {
+                method: 'Target.attachedToTarget',
+                params: {
+                  sessionId: tab.sessionId,
+                  targetInfo: { ...(info?.targetInfo || {}), attached: true },
+                  waitingForDebugger: false,
+                },
+              },
+            })
+          }
+        }
+      } catch {
+        // WS not available yet — will reconnect later
+        scheduleReconnect()
+      }
+
+      return true
+    }
+  } catch (err) {
+    console.warn('[OpenClaw Relay] Failed to restore state:', err)
+  }
+  return false
+}
+
+function cleanupTab(tabId) {
+  const tab = tabs.get(tabId)
+  if (tab?.sessionId) tabBySession.delete(tab.sessionId)
+  tabs.delete(tabId)
+  for (const [childSessionId, parentTabId] of childSessionToTab.entries()) {
+    if (parentTabId === tabId) childSessionToTab.delete(childSessionId)
+  }
+  setBadge(tabId, 'off')
+  void persistState()
 }
 
 function sendToRelay(payload) {
@@ -243,6 +454,10 @@ async function attachTab(tabId, opts = {}) {
   }
 
   setBadge(tabId, 'on')
+
+  // ===== FIX #3: Persist state after attach =====
+  void persistState()
+
   return { sessionId, targetId }
 }
 
@@ -280,6 +495,9 @@ async function detachTab(tabId, reason) {
     tabId,
     title: 'OpenClaw Browser Relay (click to attach/detach)',
   })
+
+  // ===== FIX #3: Persist state after detach =====
+  void persistState()
 }
 
 async function connectOrToggleForActiveTab() {
@@ -430,9 +648,60 @@ function onDebuggerDetach(source, reason) {
   void detachTab(tabId, reason)
 }
 
+// ===== FIX #4: Tab lifecycle cleanup =====
+chrome.tabs.onRemoved.addListener((tabId) => {
+  if (!tabs.has(tabId)) return
+  console.log(`[OpenClaw Relay] Tab ${tabId} closed — cleaning up`)
+  void detachTab(tabId, 'tab_closed')
+})
+
+chrome.tabs.onReplaced.addListener((addedTabId, removedTabId) => {
+  if (!tabs.has(removedTabId)) return
+  console.log(`[OpenClaw Relay] Tab ${removedTabId} replaced by ${addedTabId} — cleaning up`)
+  void detachTab(removedTabId, 'tab_replaced')
+})
+
 chrome.action.onClicked.addListener(() => void connectOrToggleForActiveTab())
 
 chrome.runtime.onInstalled.addListener(() => {
   // Useful: first-time instructions.
   void chrome.runtime.openOptionsPage()
+  // Start keepalive alarm
+  chrome.alarms.create('relay-keepalive', { periodInMinutes: 4 })
+})
+
+// ===== FIX #5: Keepalive via chrome.alarms =====
+// Prevents MV3 service worker from being terminated, preserving debugger sessions
+chrome.alarms.create('relay-keepalive', { periodInMinutes: 4 })
+
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name !== 'relay-keepalive') return
+
+  // Check if we have any attached tabs
+  if (tabs.size === 0) return
+
+  console.log(`[OpenClaw Relay] Keepalive ping — ${tabs.size} tab(s) attached`)
+
+  // Ping each attached tab to keep debugger alive
+  for (const [tabId, tab] of tabs.entries()) {
+    if (tab.state !== 'connected') continue
+    try {
+      await chrome.debugger.sendCommand({ tabId }, 'Runtime.evaluate', {
+        expression: '"keepalive"',
+        returnByValue: true,
+      })
+    } catch {
+      console.warn(`[OpenClaw Relay] Keepalive: tab ${tabId} debugger lost — triggering restore`)
+      void restoreState()
+      break
+    }
+  }
+})
+
+// ===== FIX #3: Restore state on service worker startup =====
+// MV3 service workers can die and restart — restore our state from session storage
+void restoreState().then((restored) => {
+  if (restored) {
+    console.log('[OpenClaw Relay] Service worker restarted — state restored from session storage')
+  }
 })
