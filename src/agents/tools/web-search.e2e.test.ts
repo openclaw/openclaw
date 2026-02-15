@@ -231,6 +231,33 @@ describe("web_search grok response parsing", () => {
     expect(result.annotationCitations).toEqual(["https://example.com/a", "https://example.com/b"]);
   });
 
+  it("extracts content from direct output_text blocks (grok-4 + server-side tools)", () => {
+    const result = extractGrokContent({
+      output: [
+        {
+          type: "web_search_call",
+          id: "ws_1",
+          status: "completed",
+          action: { type: "search", query: "test" },
+        },
+        {
+          type: "output_text",
+          text: "hello from direct output_text",
+          annotations: [
+            {
+              type: "url_citation",
+              url: "https://example.com/direct",
+              start_index: 0,
+              end_index: 5,
+            },
+          ],
+        },
+      ],
+    });
+    expect(result.text).toBe("hello from direct output_text");
+    expect(result.annotationCitations).toEqual(["https://example.com/direct"]);
+  });
+
   it("falls back to deprecated output_text", () => {
     const result = extractGrokContent({ output_text: "hello from output_text" });
     expect(result.text).toBe("hello from output_text");
