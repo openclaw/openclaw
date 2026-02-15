@@ -6,16 +6,16 @@ import type {
   RuntimeEnv,
 } from "openclaw/plugin-sdk";
 import {
-  createReplyPrefixOptions,
-  createTypingCallbacks,
-  logInboundDrop,
-  logTypingFailure,
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
+  createReplyPrefixOptions,
+  createTypingCallbacks,
   DEFAULT_GROUP_HISTORY_LIMIT,
+  logInboundDrop,
+  logTypingFailure,
   recordPendingHistoryEntryIfEnabled,
-  resolveControlCommandGate,
   resolveChannelMediaMaxBytes,
+  resolveControlCommandGate,
   type HistoryEntry,
 } from "openclaw/plugin-sdk";
 import { getMattermostRuntime } from "../runtime.js";
@@ -516,7 +516,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     });
 
     const baseSessionKey = route.sessionKey;
-    const threadRootId = post.root_id?.trim() || undefined;
+    const threadRootId = post.root_id?.trim() || (kind !== "direct" ? post.id : undefined);
     const threadKeys = resolveThreadSessionKeys({
       baseSessionKey,
       threadId: threadRootId,
@@ -833,7 +833,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       if (!channelId) {
         return null;
       }
-      const threadId = entry.post.root_id?.trim();
+      const channelType = entry.payload.data?.channel_type;
+      const kind = channelKind(channelType);
+      const threadId =
+        entry.post.root_id?.trim() || (kind !== "direct" ? entry.post.id : undefined);
       const threadKey = threadId ? `thread:${threadId}` : "channel";
       return `mattermost:${account.accountId}:${channelId}:${threadKey}`;
     },
