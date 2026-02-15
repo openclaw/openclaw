@@ -136,3 +136,5 @@ Mattermost supports multiple accounts under `channels.mattermost.accounts`:
 - No replies in channels: ensure the bot is in the channel and mention it (oncall), use a trigger prefix (onchar), or set `chatmode: "onmessage"`.
 - Auth errors: check the bot token, base URL, and whether the account is enabled.
 - Multi-account issues: env vars only apply to the `default` account.
+- Attachments not showing up: update the Mattermost plugin. Some Mattermost servers return `404` for `HEAD /api/v4/files/{file_id}`; OpenClaw must download attachments via `GET` instead.
+- Attachments not showing up on private networks (LAN / VPN / Tailscale): ensure you're on the latest plugin; older builds could block media downloads when the Mattermost host resolves to a private IP.
