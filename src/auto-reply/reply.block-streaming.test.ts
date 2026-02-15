@@ -211,4 +211,54 @@ describe("block streaming", () => {
       expect(onBlockReplyStreamMode).not.toHaveBeenCalled();
     });
   });
+
+  it("trims leading whitespace in block-streamed replies", async () => {
+    await withTempHome(async (home) => {
+      const seen: string[] = [];
+      const onBlockReply = vi.fn(async (payload) => {
+        seen.push(payload.text ?? "");
+      });
+
+      piEmbeddedMock.runEmbeddedPiAgent.mockImplementation(
+        async (params: RunEmbeddedPiAgentParams) => {
+          void params.onBlockReply?.({ text: "\n\n  Hello from stream" });
+          return {
+            payloads: [{ text: "\n\n  Hello from stream" }],
+            meta: {
+              durationMs: 5,
+              agentMeta: { sessionId: "s", provider: "p", model: "m" },
+            },
+          };
+        },
+      );
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "ping",
+          From: "+1004",
+          To: "+2000",
+          MessageSid: "msg-128",
+          Provider: "telegram",
+        },
+        {
+          onBlockReply,
+          disableBlockStreaming: false,
+        },
+        {
+          agents: {
+            defaults: {
+              model: "anthropic/claude-opus-4-5",
+              workspace: path.join(home, "openclaw"),
+            },
+          },
+          channels: { telegram: { allowFrom: ["*"] } },
+          session: { store: path.join(home, "sessions.json") },
+        },
+      );
+
+      expect(res).toBeUndefined();
+      expect(onBlockReply).toHaveBeenCalledTimes(1);
+      expect(seen).toEqual(["Hello from stream"]);
+    });
+  });
 });
