@@ -349,6 +349,22 @@ export async function dispatchReplyFromConfig(params: {
 
     const replies = replyResult ? (Array.isArray(replyResult) ? replyResult : [replyResult]) : [];
 
+    // Smart Reply Suppression: Check if the response matches [NO_REPLY]
+    const shouldSuppress = replies.some((r) => {
+      const text = r.text?.trim().toLowerCase();
+      // Only match if the text is exactly or contains only the token
+      return text === "[no_reply]" || text === "[no_reply].";
+    });
+
+    if (shouldSuppress) {
+      if (diagnosticsEnabled && canTrackSession) {
+        // Log as skipped but completed processing
+        recordProcessed("skipped", { reason: "smart-reply-suppressed" });
+        markIdle("smart_reply_suppressed");
+      }
+      return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
+    }
+
     let queuedFinal = false;
     let routedFinalCount = 0;
     for (const reply of replies) {
