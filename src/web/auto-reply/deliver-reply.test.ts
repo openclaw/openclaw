@@ -2,6 +2,15 @@ import { describe, expect, it, vi } from "vitest";
 import type { WebInboundMsg } from "./types.js";
 import { deliverWebReply } from "./deliver-reply.js";
 
+vi.mock("../../globals.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../globals.js")>();
+  return {
+    ...actual,
+    shouldLogVerbose: vi.fn(() => true),
+    logVerbose: vi.fn(),
+  };
+});
+
 vi.mock("../media.js", () => ({
   loadWebMedia: vi.fn(),
 }));
@@ -16,6 +25,7 @@ vi.mock("../../utils.js", async (importOriginal) => {
 
 const { loadWebMedia } = await import("../media.js");
 const { sleep } = await import("../../utils.js");
+const { logVerbose } = await import("../../globals.js");
 
 function makeMsg(): WebInboundMsg {
   return {
@@ -101,6 +111,7 @@ describe("deliverWebReply", () => {
     );
     expect(msg.reply).toHaveBeenCalledWith("aaa");
     expect(replyLogger.info).toHaveBeenCalledWith(expect.any(Object), "auto-reply sent (media)");
+    expect(logVerbose).toHaveBeenCalled();
   });
 
   it("retries media send on transient failure", async () => {
@@ -161,6 +172,93 @@ describe("deliverWebReply", () => {
     expect(replyLogger.warn).toHaveBeenCalledWith(
       expect.objectContaining({ mediaUrl: "http://example.com/img.jpg" }),
       "failed to send web media reply",
+    );
+  });
+
+  it("sends audio media as ptt voice note", async () => {
+    const msg = makeMsg();
+    (
+      loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
+    ).mockResolvedValueOnce({
+      buffer: Buffer.from("aud"),
+      contentType: "audio/ogg",
+      kind: "audio",
+    });
+
+    await deliverWebReply({
+      replyResult: { text: "cap", mediaUrl: "http://example.com/a.ogg" },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 200,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(msg.sendMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        audio: expect.any(Buffer),
+        ptt: true,
+        mimetype: "audio/ogg",
+        caption: "cap",
+      }),
+    );
+  });
+
+  it("sends video media", async () => {
+    const msg = makeMsg();
+    (
+      loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
+    ).mockResolvedValueOnce({
+      buffer: Buffer.from("vid"),
+      contentType: "video/mp4",
+      kind: "video",
+    });
+
+    await deliverWebReply({
+      replyResult: { text: "cap", mediaUrl: "http://example.com/v.mp4" },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 200,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(msg.sendMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        video: expect.any(Buffer),
+        caption: "cap",
+        mimetype: "video/mp4",
+      }),
+    );
+  });
+
+  it("sends non-audio/image/video media as document", async () => {
+    const msg = makeMsg();
+    (
+      loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
+    ).mockResolvedValueOnce({
+      buffer: Buffer.from("bin"),
+      contentType: undefined,
+      kind: "file",
+      fileName: "x.bin",
+    });
+
+    await deliverWebReply({
+      replyResult: { text: "cap", mediaUrl: "http://example.com/x.bin" },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 200,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(msg.sendMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        document: expect.any(Buffer),
+        fileName: "x.bin",
+        caption: "cap",
+        mimetype: "application/octet-stream",
+      }),
     );
   });
 });
