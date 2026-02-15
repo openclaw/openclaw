@@ -93,6 +93,74 @@ function requireConfigBaseHash(
   return true;
 }
 
+function resolveConfigRestartRequest(params: unknown): {
+  sessionKey: string | undefined;
+  note: string | undefined;
+  restartDelayMs: number | undefined;
+  deliveryContext: ReturnType<typeof extractDeliveryInfo>["deliveryContext"];
+  threadId: ReturnType<typeof extractDeliveryInfo>["threadId"];
+} {
+  const sessionKey =
+    typeof (params as { sessionKey?: unknown }).sessionKey === "string"
+      ? (params as { sessionKey?: string }).sessionKey?.trim() || undefined
+      : undefined;
+  const note =
+    typeof (params as { note?: unknown }).note === "string"
+      ? (params as { note?: string }).note?.trim() || undefined
+      : undefined;
+  const restartDelayMsRaw = (params as { restartDelayMs?: unknown }).restartDelayMs;
+  const restartDelayMs =
+    typeof restartDelayMsRaw === "number" && Number.isFinite(restartDelayMsRaw)
+      ? Math.max(0, Math.floor(restartDelayMsRaw))
+      : undefined;
+
+  // Extract deliveryContext + threadId for routing after restart
+  // Supports both :thread: (most channels) and :topic: (Telegram)
+  const { deliveryContext, threadId } = extractDeliveryInfo(sessionKey);
+
+  return {
+    sessionKey,
+    note,
+    restartDelayMs,
+    deliveryContext,
+    threadId,
+  };
+}
+
+function buildConfigRestartSentinelPayload(params: {
+  kind: RestartSentinelPayload["kind"];
+  mode: string;
+  sessionKey: string | undefined;
+  deliveryContext: ReturnType<typeof extractDeliveryInfo>["deliveryContext"];
+  threadId: ReturnType<typeof extractDeliveryInfo>["threadId"];
+  note: string | undefined;
+}): RestartSentinelPayload {
+  return {
+    kind: params.kind,
+    status: "ok",
+    ts: Date.now(),
+    sessionKey: params.sessionKey,
+    deliveryContext: params.deliveryContext,
+    threadId: params.threadId,
+    message: params.note ?? null,
+    doctorHint: formatDoctorNonInteractiveHint(),
+    stats: {
+      mode: params.mode,
+      root: CONFIG_PATH,
+    },
+  };
+}
+
+async function tryWriteRestartSentinelPayload(
+  payload: RestartSentinelPayload,
+): Promise<string | null> {
+  try {
+    return await writeRestartSentinel(payload);
+  } catch {
+    return null;
+  }
+}
+
 function loadSchemaWithPlugins(): ConfigSchemaResponse {
   const cfg = loadConfig();
   const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
@@ -303,44 +371,17 @@ export const configHandlers: GatewayRequestHandlers = {
     }
     await writeConfigFile(validated.config, writeOptions);
 
-    const sessionKey =
-      typeof (params as { sessionKey?: unknown }).sessionKey === "string"
-        ? (params as { sessionKey?: string }).sessionKey?.trim() || undefined
-        : undefined;
-    const note =
-      typeof (params as { note?: unknown }).note === "string"
-        ? (params as { note?: string }).note?.trim() || undefined
-        : undefined;
-    const restartDelayMsRaw = (params as { restartDelayMs?: unknown }).restartDelayMs;
-    const restartDelayMs =
-      typeof restartDelayMsRaw === "number" && Number.isFinite(restartDelayMsRaw)
-        ? Math.max(0, Math.floor(restartDelayMsRaw))
-        : undefined;
-
-    // Extract deliveryContext + threadId for routing after restart
-    // Supports both :thread: (most channels) and :topic: (Telegram)
-    const { deliveryContext, threadId } = extractDeliveryInfo(sessionKey);
-
-    const payload: RestartSentinelPayload = {
+    const { sessionKey, note, restartDelayMs, deliveryContext, threadId } =
+      resolveConfigRestartRequest(params);
+    const payload = buildConfigRestartSentinelPayload({
       kind: "config-patch",
-      status: "ok",
-      ts: Date.now(),
+      mode: "config.patch",
       sessionKey,
       deliveryContext,
       threadId,
-      message: note ?? null,
-      doctorHint: formatDoctorNonInteractiveHint(),
-      stats: {
-        mode: "config.patch",
-        root: CONFIG_PATH,
-      },
-    };
-    let sentinelPath: string | null = null;
-    try {
-      sentinelPath = await writeRestartSentinel(payload);
-    } catch {
-      sentinelPath = null;
-    }
+      note,
+    });
+    const sentinelPath = await tryWriteRestartSentinelPayload(payload);
     const restart = scheduleGatewaySigusr1Restart({
       delayMs: restartDelayMs,
       reason: "config.patch",
@@ -416,45 +457,17 @@ export const configHandlers: GatewayRequestHandlers = {
     }
     await writeConfigFile(validated.config, writeOptions);
 
-    const sessionKey =
-      typeof (params as { sessionKey?: unknown }).sessionKey === "string"
-        ? (params as { sessionKey?: string }).sessionKey?.trim() || undefined
-        : undefined;
-    const note =
-      typeof (params as { note?: unknown }).note === "string"
-        ? (params as { note?: string }).note?.trim() || undefined
-        : undefined;
-    const restartDelayMsRaw = (params as { restartDelayMs?: unknown }).restartDelayMs;
-    const restartDelayMs =
-      typeof restartDelayMsRaw === "number" && Number.isFinite(restartDelayMsRaw)
-        ? Math.max(0, Math.floor(restartDelayMsRaw))
-        : undefined;
-
-    // Extract deliveryContext + threadId for routing after restart
-    // Supports both :thread: (most channels) and :topic: (Telegram)
-    const { deliveryContext: deliveryContextApply, threadId: threadIdApply } =
-      extractDeliveryInfo(sessionKey);
-
-    const payload: RestartSentinelPayload = {
+    const { sessionKey, note, restartDelayMs, deliveryContext, threadId } =
+      resolveConfigRestartRequest(params);
+    const payload = buildConfigRestartSentinelPayload({
       kind: "config-apply",
-      status: "ok",
-      ts: Date.now(),
+      mode: "config.apply",
       sessionKey,
-      deliveryContext: deliveryContextApply,
-      threadId: threadIdApply,
-      message: note ?? null,
-      doctorHint: formatDoctorNonInteractiveHint(),
-      stats: {
-        mode: "config.apply",
-        root: CONFIG_PATH,
-      },
-    };
-    let sentinelPath: string | null = null;
-    try {
-      sentinelPath = await writeRestartSentinel(payload);
-    } catch {
-      sentinelPath = null;
-    }
+      deliveryContext,
+      threadId,
+      note,
+    });
+    const sentinelPath = await tryWriteRestartSentinelPayload(payload);
     const restart = scheduleGatewaySigusr1Restart({
       delayMs: restartDelayMs,
       reason: "config.apply",
