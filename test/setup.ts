@@ -1,5 +1,25 @@
 import { afterAll, afterEach, beforeEach, vi } from "vitest";
 
+// Default mock for @google-cloud/secret-manager so secrets-related tests
+// don't require real GCP credentials. GCP Provider tests override this
+// per-test via vi.doMock() which takes precedence for that test scope.
+vi.mock("@google-cloud/secret-manager", () => ({
+  SecretManagerServiceClient: class MockSecretManagerServiceClient {
+    async accessSecretVersion() {
+      return [{ payload: { data: Buffer.from("resolved-value") } }];
+    }
+    async createSecret() {
+      return [{}];
+    }
+    async addSecretVersion() {
+      return [{}];
+    }
+    async listSecrets() {
+      return [[]];
+    }
+  },
+}));
+
 // Ensure Vitest environment is properly set
 process.env.VITEST = "true";
 // Config validation walks plugin manifests; keep an aggressive cache in tests to avoid
