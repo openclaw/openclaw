@@ -100,7 +100,7 @@ export function wrapToolWithBeforeToolCallHook(
   };
   Object.defineProperty(wrappedTool, BEFORE_TOOL_CALL_WRAPPED, {
     value: true,
-    enumerable: false,
+    enumerable: true,
   });
   return wrappedTool;
 }
