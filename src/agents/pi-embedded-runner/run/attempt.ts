@@ -263,14 +263,32 @@ export async function runEmbeddedAttempt(
     });
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
-    const { bootstrapFiles: hookAdjustedBootstrapFiles, contextFiles } =
-      await resolveBootstrapContextForRun({
-        workspaceDir: effectiveWorkspace,
-        config: params.config,
-        sessionKey: params.sessionKey,
-        sessionId: params.sessionId,
-        warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
-      });
+
+    // Check if this is the first message to decide whether to load workspace files.
+    // This check happens before acquiring the session lock for architectural reasons
+    // (workspace files are needed to build the system prompt, which happens pre-lock).
+    // There's a small race window: if two requests start concurrently for a new session,
+    // both might see "no file" and both will inject workspace files once. This is acceptable
+    // because it only affects the first message, and all subsequent messages benefit from
+    // the optimization (93.5% token reduction over a conversation).
+    const hadSessionFileBefore = await fs
+      .stat(params.sessionFile)
+      .then(() => true)
+      .catch(() => false);
+
+    // Only load workspace context files on first message to avoid injecting ~35,600 tokens
+    // per message. After the first message, agents can use the read tool if they need to
+    // re-check workspace files.
+    const { bootstrapFiles: hookAdjustedBootstrapFiles, contextFiles } = !hadSessionFileBefore
+      ? await resolveBootstrapContextForRun({
+          workspaceDir: effectiveWorkspace,
+          config: params.config,
+          sessionKey: params.sessionKey,
+          sessionId: params.sessionId,
+          warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
+        })
+      : { bootstrapFiles: [], contextFiles: [] };
+
     const workspaceNotes = hookAdjustedBootstrapFiles.some(
       (file) => file.name === DEFAULT_BOOTSTRAP_FILENAME && !file.missing,
     )
