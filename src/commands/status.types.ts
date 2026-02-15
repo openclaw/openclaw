@@ -1,4 +1,5 @@
 import type { ChannelId } from "../channels/plugins/types.js";
+import type { SessionSystemPromptReport } from "../config/sessions/types.js";
 
 export type SessionStatus = {
   agentId?: string;
@@ -22,6 +23,7 @@ export type SessionStatus = {
   model: string | null;
   contextTokens: number | null;
   flags: string[];
+  systemPromptReport?: SessionSystemPromptReport;
 };
 
 export type HeartbeatStatus = {

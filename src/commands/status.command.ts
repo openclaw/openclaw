@@ -28,6 +28,7 @@ import { statusAllCommand } from "./status-all.js";
 import { formatGatewayAuthUsed } from "./status-all/format.js";
 import { getDaemonStatusSummary, getNodeDaemonStatusSummary } from "./status.daemon.js";
 import {
+  formatContextBreakdown,
   formatDuration,
   formatKTokens,
   formatTokensCompact,
@@ -533,6 +534,20 @@ export async function statusCommand(
             ],
     }).trimEnd(),
   );
+
+  // Context overhead breakdown (deep mode only)
+  if (opts.deep) {
+    const mostRecent = summary.sessions.recent[0];
+    const report = mostRecent?.systemPromptReport;
+    const breakdownLines = formatContextBreakdown(report);
+    if (breakdownLines.length > 0) {
+      runtime.log("");
+      runtime.log(theme.heading("Context breakdown"));
+      for (const line of breakdownLines) {
+        runtime.log(line);
+      }
+    }
+  }
 
   if (summary.queuedSystemEvents.length > 0) {
     runtime.log("");
