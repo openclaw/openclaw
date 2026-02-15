@@ -4,6 +4,7 @@ import {
   extractThinkingFromMessage,
   resolveFinalAssistantText,
 } from "./tui-formatters.js";
+import { processLatexForTerminal } from "./tui-math.js";
 
 type RunStreamState = {
   thinkingText: string;
@@ -159,10 +160,11 @@ export class TuiStreamAssembler {
         streamedTextBlocks,
         finalTextBlocks: state.contentBlocks,
       });
-    const finalText = resolveFinalAssistantText({
+    const resolvedText = resolveFinalAssistantText({
       finalText: shouldKeepStreamedText ? streamedDisplayText : finalComposed,
       streamedText: streamedDisplayText,
     });
+    const finalText = processLatexForTerminal(resolvedText);
 
     this.runs.delete(runId);
     return finalText;
