@@ -91,6 +91,18 @@ type MattermostCommandCreate = {
   creator_id?: string;
 };
 
+type MattermostCommandUpdate = {
+  id: string;
+  team_id: string;
+  trigger: string;
+  method: "P" | "G";
+  url: string;
+  description?: string;
+  auto_complete: boolean;
+  auto_complete_desc?: string;
+  auto_complete_hint?: string;
+};
+
 type MattermostCommandResponse = {
   id: string;
   token: string;
@@ -195,6 +207,22 @@ export async function deleteMattermostCommand(
 }
 
 /**
+ * Update an existing custom slash command.
+ */
+export async function updateMattermostCommand(
+  client: MattermostClient,
+  params: MattermostCommandUpdate,
+): Promise<MattermostCommandResponse> {
+  return await client.request<MattermostCommandResponse>(
+    `/commands/${encodeURIComponent(params.id)}`,
+    {
+      method: "PUT",
+      body: JSON.stringify(params),
+    },
+  );
+}
+
+/**
  * Register all OpenClaw slash commands for a given team.
  * Skips commands that are already registered with the same trigger + callback URL.
  * Returns the list of newly created command IDs.
@@ -216,16 +244,15 @@ export async function registerSlashCommands(params: {
     log?.(`mattermost: failed to list existing commands: ${String(err)}`);
   }
 
-  const existingByTrigger = new Map(
-    existing.filter((cmd) => cmd.url === callbackUrl).map((cmd) => [cmd.trigger, cmd]),
-  );
+  const existingByTrigger = new Map(existing.map((cmd) => [cmd.trigger, cmd]));
 
   const registered: MattermostRegisteredCommand[] = [];
 
   for (const spec of commands) {
-    // Skip if already registered with same callback URL
     const existingCmd = existingByTrigger.get(spec.trigger);
-    if (existingCmd) {
+
+    // Already registered with the correct callback URL
+    if (existingCmd && existingCmd.url === callbackUrl) {
       log?.(`mattermost: command /${spec.trigger} already registered (id=${existingCmd.id})`);
       registered.push({
         id: existingCmd.id,
@@ -235,6 +262,51 @@ export async function registerSlashCommands(params: {
         managed: false,
       });
       continue;
+    }
+
+    // Exists but points to a different URL: attempt to reconcile by updating
+    // (useful during callback URL migrations).
+    if (existingCmd && existingCmd.url !== callbackUrl) {
+      log?.(
+        `mattermost: command /${spec.trigger} exists with different callback URL; updating (id=${existingCmd.id})`,
+      );
+      try {
+        const updated = await updateMattermostCommand(client, {
+          id: existingCmd.id,
+          team_id: teamId,
+          trigger: spec.trigger,
+          method: "P",
+          url: callbackUrl,
+          description: spec.description,
+          auto_complete: spec.autoComplete,
+          auto_complete_desc: spec.description,
+          auto_complete_hint: spec.autoCompleteHint,
+        });
+        registered.push({
+          id: updated.id,
+          trigger: spec.trigger,
+          teamId,
+          token: updated.token,
+          managed: false,
+        });
+        continue;
+      } catch (err) {
+        log?.(
+          `mattermost: failed to update command /${spec.trigger} (id=${existingCmd.id}): ${String(err)}`,
+        );
+        // Fallback: try delete+recreate (safe for the oc_* namespace).
+        try {
+          await deleteMattermostCommand(client, existingCmd.id);
+          log?.(`mattermost: deleted stale command /${spec.trigger} (id=${existingCmd.id})`);
+        } catch (deleteErr) {
+          log?.(
+            `mattermost: failed to delete stale command /${spec.trigger} (id=${existingCmd.id}): ${String(deleteErr)}`,
+          );
+          // Can't reconcile; skip this command.
+          continue;
+        }
+        // Continue on to create below.
+      }
     }
 
     try {
