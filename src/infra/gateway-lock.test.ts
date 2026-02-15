@@ -83,44 +83,31 @@ describe("gateway lock", () => {
   });
 
   it("blocks concurrent acquisition until release", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-02-06T10:05:00.000Z"));
+    // Vitest fake timers can fail to drive this polling loop reliably across Node/Vitest/pool
+    // combinations (observed hang). Use real timers with small budgets instead.
+    vi.useRealTimers();
     const { env, cleanup } = await makeEnv();
     const lock = await acquireGatewayLock({
       env,
       allowInTests: true,
-      timeoutMs: 20,
+      timeoutMs: 100,
       pollIntervalMs: 1,
     });
     expect(lock).not.toBeNull();
 
-    let settled = false;
     const pending = acquireGatewayLock({
       env,
       allowInTests: true,
-      timeoutMs: 20,
+      timeoutMs: 100,
       pollIntervalMs: 1,
     });
-    void pending.then(
-      () => {
-        settled = true;
-      },
-      () => {
-        settled = true;
-      },
-    );
-    // Drive the retry loop without real sleeping.
-    for (let i = 0; i < 20 && !settled; i += 1) {
-      await vi.advanceTimersByTimeAsync(5);
-      await Promise.resolve();
-    }
     await expect(pending).rejects.toBeInstanceOf(GatewayLockError);
 
     await lock?.release();
     const lock2 = await acquireGatewayLock({
       env,
       allowInTests: true,
-      timeoutMs: 20,
+      timeoutMs: 100,
       pollIntervalMs: 1,
     });
     await lock2?.release();
