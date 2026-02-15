@@ -352,7 +352,8 @@ export function createGatewayHttpServer(opts: {
         // Channel HTTP endpoints are gateway-auth protected by default.
         // Non-channel plugin routes remain plugin-owned and must enforce
         // their own auth when exposing sensitive functionality.
-        if (requestPath.startsWith("/api/channels/")) {
+        const isMattermostSlashCommandCallback = requestPath === "/api/channels/mattermost/command";
+        if (requestPath.startsWith("/api/channels/") && !isMattermostSlashCommandCallback) {
           const token = getBearerToken(req);
           const authResult = await authorizeGatewayConnect({
             auth: resolvedAuth,
