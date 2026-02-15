@@ -162,24 +162,25 @@ export async function acquireSessionWriteLock(params: {
   }
   const normalizedSessionFile = path.join(normalizedDir, path.basename(sessionFile));
   const lockPath = `${normalizedSessionFile}.lock`;
+  const release = async () => {
+    const current = HELD_LOCKS.get(normalizedSessionFile);
+    if (!current) {
+      return;
+    }
+    current.count -= 1;
+    if (current.count > 0) {
+      return;
+    }
+    HELD_LOCKS.delete(normalizedSessionFile);
+    await current.handle.close();
+    await fs.rm(current.lockPath, { force: true });
+  };
 
   const held = HELD_LOCKS.get(normalizedSessionFile);
   if (held) {
     held.count += 1;
     return {
-      release: async () => {
-        const current = HELD_LOCKS.get(normalizedSessionFile);
-        if (!current) {
-          return;
-        }
-        current.count -= 1;
-        if (current.count > 0) {
-          return;
-        }
-        HELD_LOCKS.delete(normalizedSessionFile);
-        await current.handle.close();
-        await fs.rm(current.lockPath, { force: true });
-      },
+      release,
     };
   }
 
@@ -195,19 +196,7 @@ export async function acquireSessionWriteLock(params: {
       );
       HELD_LOCKS.set(normalizedSessionFile, { count: 1, handle, lockPath });
       return {
-        release: async () => {
-          const current = HELD_LOCKS.get(normalizedSessionFile);
-          if (!current) {
-            return;
-          }
-          current.count -= 1;
-          if (current.count > 0) {
-            return;
-          }
-          HELD_LOCKS.delete(normalizedSessionFile);
-          await current.handle.close();
-          await fs.rm(current.lockPath, { force: true });
-        },
+        release,
       };
     } catch (err) {
       const code = (err as { code?: unknown }).code;
