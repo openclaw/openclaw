@@ -16,6 +16,9 @@ import { attachGatewayWsMessageHandler } from "./ws-connection/message-handler.j
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
+const PING_INTERVAL_MS = 20_000;
+const PING_TIMEOUT_MS = 45_000;
+
 export function attachGatewayWsConnectionHandler(params: {
   wss: WebSocketServer;
   clients: Set<GatewayWsClient>;
@@ -91,6 +94,8 @@ export function attachGatewayWsConnectionHandler(params: {
     let lastFrameType: string | undefined;
     let lastFrameMethod: string | undefined;
     let lastFrameId: string | undefined;
+    let pingTimer: NodeJS.Timeout | null = null;
+    let lastPongAt = Date.now();
 
     const setCloseCause = (cause: string, meta?: Record<string, unknown>) => {
       if (!closeCause) {
@@ -130,6 +135,10 @@ export function attachGatewayWsConnectionHandler(params: {
       }
       closed = true;
       clearTimeout(handshakeTimer);
+      if (pingTimer) {
+        clearInterval(pingTimer);
+        pingTimer = null;
+      }
       if (client) {
         clients.delete(client);
       }
@@ -143,6 +152,10 @@ export function attachGatewayWsConnectionHandler(params: {
     socket.once("error", (err) => {
       logWsControl.warn(`error conn=${connId} remote=${remoteAddr ?? "?"}: ${formatError(err)}`);
       close();
+    });
+
+    socket.on("pong", () => {
+      lastPongAt = Date.now();
     });
 
     const isNoisySwiftPmHelperClose = (userAgent: string | undefined, remote: string | undefined) =>
@@ -250,6 +263,22 @@ export function attachGatewayWsConnectionHandler(params: {
       clearHandshakeTimer: () => clearTimeout(handshakeTimer),
       getClient: () => client,
       setClient: (next) => {
+        if (isWebchatClient(next.connect.client) && next.connect.client.instanceId) {
+          const instanceId = next.connect.client.instanceId.trim();
+          for (const existing of clients) {
+            if (
+              existing.connId !== next.connId &&
+              isWebchatClient(existing.connect.client) &&
+              existing.connect.client.instanceId === instanceId
+            ) {
+              try {
+                existing.socket.close(4000, "superseded by newer webchat connection");
+              } catch {
+                /* ignore */
+              }
+            }
+          }
+        }
         client = next;
         clients.add(next);
       },
@@ -262,5 +291,22 @@ export function attachGatewayWsConnectionHandler(params: {
       logHealth,
       logWsControl,
     });
+
+    pingTimer = setInterval(() => {
+      if (closed || socket.readyState !== WebSocket.OPEN) {
+        return;
+      }
+      const now = Date.now();
+      if (now - lastPongAt > PING_TIMEOUT_MS) {
+        setCloseCause("ping-timeout", { sinceMs: now - lastPongAt });
+        close(1001, "ping timeout");
+        return;
+      }
+      try {
+        socket.ping();
+      } catch {
+        /* ignore */
+      }
+    }, PING_INTERVAL_MS);
   });
 }

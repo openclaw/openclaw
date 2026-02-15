@@ -44,6 +44,7 @@ import {
   writeDone,
 } from "./http-common.js";
 import { getBearerToken, resolveAgentIdForRequest, resolveSessionKey } from "./http-utils.js";
+import { resolveTrustedProxies } from "./net.js";
 import {
   CreateResponseBodySchema,
   type ContentPart,
@@ -347,7 +348,7 @@ export async function handleOpenResponsesHttpRequest(
     auth: opts.auth,
     connectAuth: { token, password: token },
     req,
-    trustedProxies: opts.trustedProxies,
+    trustedProxies: resolveTrustedProxies(opts.trustedProxies, process.env),
   });
   if (!authResult.ok) {
     sendUnauthorized(res);

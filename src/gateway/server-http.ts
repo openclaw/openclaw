@@ -41,7 +41,7 @@ import {
 } from "./hooks.js";
 import { sendUnauthorized } from "./http-common.js";
 import { getBearerToken, getHeader } from "./http-utils.js";
-import { resolveGatewayClientIp } from "./net.js";
+import { resolveGatewayClientIp, resolveTrustedProxies } from "./net.js";
 import { handleOpenAiHttpRequest } from "./openai-http.js";
 import { handleOpenResponsesHttpRequest } from "./openresponses-http.js";
 import { handleRemotePairingRequest, resolveRemotePairingConfig } from "./remote-pairing.js";
@@ -359,7 +359,10 @@ export function createGatewayHttpServer(opts: {
 
     try {
       const configSnapshot = loadConfig();
-      const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
+      const trustedProxies = resolveTrustedProxies(
+        configSnapshot.gateway?.trustedProxies,
+        process.env,
+      );
       // Handle remote pairing API (for Railway/cloud deployments)
       const remotePairingConfig = resolveRemotePairingConfig(configSnapshot);
       if (remotePairingConfig) {
@@ -475,7 +478,10 @@ export function attachGatewayUpgradeHandler(opts: {
         const url = new URL(req.url ?? "/", "http://localhost");
         if (url.pathname === CANVAS_WS_PATH) {
           const configSnapshot = loadConfig();
-          const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
+          const trustedProxies = resolveTrustedProxies(
+            configSnapshot.gateway?.trustedProxies,
+            process.env,
+          );
           const ok = await authorizeCanvasRequest({
             req,
             auth: resolvedAuth,

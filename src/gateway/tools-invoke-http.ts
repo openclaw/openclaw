@@ -30,6 +30,7 @@ import {
   sendUnauthorized,
 } from "./http-common.js";
 import { getBearerToken, getHeader } from "./http-utils.js";
+import { resolveTrustedProxies } from "./net.js";
 
 const DEFAULT_BODY_BYTES = 2 * 1024 * 1024;
 const MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
@@ -120,7 +121,10 @@ export async function handleToolsInvokeHttpRequest(
     auth: opts.auth,
     connectAuth: token ? { token, password: token } : null,
     req,
-    trustedProxies: opts.trustedProxies ?? cfg.gateway?.trustedProxies,
+    trustedProxies: resolveTrustedProxies(
+      opts.trustedProxies ?? cfg.gateway?.trustedProxies,
+      process.env,
+    ),
   });
   if (!authResult.ok) {
     sendUnauthorized(res);

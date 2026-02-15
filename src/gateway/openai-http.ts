@@ -15,6 +15,7 @@ import {
   writeDone,
 } from "./http-common.js";
 import { getBearerToken, resolveAgentIdForRequest, resolveSessionKey } from "./http-utils.js";
+import { resolveTrustedProxies } from "./net.js";
 
 type OpenAiHttpOptions = {
   auth: ResolvedGatewayAuth;
@@ -188,7 +189,7 @@ export async function handleOpenAiHttpRequest(
     auth: opts.auth,
     connectAuth: { token, password: token },
     req,
-    trustedProxies: opts.trustedProxies,
+    trustedProxies: resolveTrustedProxies(opts.trustedProxies, process.env),
   });
   if (!authResult.ok) {
     sendUnauthorized(res);

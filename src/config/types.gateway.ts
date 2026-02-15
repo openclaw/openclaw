@@ -253,7 +253,7 @@ export type GatewayConfig = {
   http?: GatewayHttpConfig;
   nodes?: GatewayNodesConfig;
   /**
-   * IPs of trusted reverse proxies (e.g. Traefik, nginx). When a connection
+   * IPs (or CIDR ranges) of trusted reverse proxies (e.g. Traefik, nginx). When a connection
    * arrives from one of these IPs, the Gateway trusts `x-forwarded-for` (or
    * `x-real-ip`) to determine the client IP for local pairing and HTTP checks.
    */

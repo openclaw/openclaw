@@ -192,6 +192,18 @@ cfg.gateway.bind = 'lan';
 cfg.gateway.mode = 'local';
 cfg.gateway.auth = cfg.gateway.auth || {};
 cfg.gateway.auth.token = gatewayToken;
+
+const trustedProxiesRaw = (
+  process.env.OPENCLAW_GATEWAY_TRUSTED_PROXIES ||
+  process.env.CLAWDBOT_GATEWAY_TRUSTED_PROXIES ||
+  ''
+).trim();
+if (trustedProxiesRaw) {
+  cfg.gateway.trustedProxies = trustedProxiesRaw
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
 // Remove invalid key from previous deployment
 delete cfg.gateway.customBindHost;
 
@@ -311,7 +323,7 @@ console.log('[entrypoint] Config written');
 if (cfg.browser && cfg.browser.profiles) {
   console.log('[entrypoint] Browser profiles:', Object.keys(cfg.browser.profiles).join(', '));
 }
-if (googleStatePath) {
+if (googleStatePath && fs.existsSync(googleStatePath)) {
   console.log('[entrypoint] Playwright storageState set from:', googleStatePath);
 }
 NODE

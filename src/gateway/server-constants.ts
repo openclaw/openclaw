@@ -32,3 +32,10 @@ export const TICK_INTERVAL_MS = 30_000;
 export const HEALTH_REFRESH_INTERVAL_MS = 60_000;
 export const DEDUPE_TTL_MS = 5 * 60_000;
 export const DEDUPE_MAX = 1000;
+
+// WebSocket send queue/backpressure tuning
+export const WS_MAX_QUEUE = 500;
+export const WS_BATCH_FLUSH_MS = 300;
+export const WS_MAX_FRAME_BYTES = 64 * 1024; // outgoing frame hard cap (64KB)
+export const WS_TRUNCATE_PREVIEW_BYTES = 2 * 1024;
+export const WS_SLOW_BUFFER_STRIKES = 3;

@@ -27,7 +27,12 @@ import { rawDataToString } from "../../../infra/ws.js";
 import { isGatewayCliClient, isWebchatClient } from "../../../utils/message-channel.js";
 import { authorizeGatewayConnect, isLocalDirectRequest } from "../../auth.js";
 import { buildDeviceAuthPayload } from "../../device-auth.js";
-import { isLoopbackAddress, isTrustedProxyAddress, resolveGatewayClientIp } from "../../net.js";
+import {
+  isLoopbackAddress,
+  isTrustedProxyAddress,
+  resolveGatewayClientIp,
+  resolveTrustedProxies,
+} from "../../net.js";
 import { resolveNodeCommandAllowlist } from "../../node-command-policy.js";
 import { checkBrowserOrigin } from "../../origin-check.js";
 import { GATEWAY_CLIENT_IDS } from "../../protocol/client-info.js";
@@ -57,6 +62,19 @@ import {
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
 const DEVICE_SIGNATURE_SKEW_MS = 10 * 60 * 1000;
+const CONNECT_RATE_WINDOW_MS = 5_000;
+const CONNECT_RATE_MAX = 6;
+const connectAttempts = new Map<string, number[]>();
+let warnedUntrustedProxyHeaders = false;
+
+function recordConnectAttempt(key: string): number {
+  const now = Date.now();
+  const windowStart = now - CONNECT_RATE_WINDOW_MS;
+  const attempts = (connectAttempts.get(key) ?? []).filter((ts) => ts >= windowStart);
+  attempts.push(now);
+  connectAttempts.set(key, attempts);
+  return attempts.length;
+}
 
 function resolveHostName(hostHeader?: string): string {
   const host = (hostHeader ?? "").trim().toLowerCase();
@@ -192,7 +210,7 @@ export function attachGatewayWsMessageHandler(params: {
   } = params;
 
   const configSnapshot = loadConfig();
-  const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
+  const trustedProxies = resolveTrustedProxies(configSnapshot.gateway?.trustedProxies, process.env);
   const clientIp = resolveGatewayClientIp({ remoteAddr, forwardedFor, realIp, trustedProxies });
 
   // If proxy headers are present but the remote address isn't trusted, don't treat
@@ -215,11 +233,23 @@ export function attachGatewayWsMessageHandler(params: {
         : undefined;
 
   if (hasUntrustedProxyHeaders) {
-    logWsControl.warn(
-      "Proxy headers detected from untrusted address. " +
-        "Connection will not be treated as local. " +
-        "Configure gateway.trustedProxies to restore local client detection behind your proxy.",
-    );
+    if (!warnedUntrustedProxyHeaders) {
+      warnedUntrustedProxyHeaders = true;
+      logWsControl.warn(
+        "Proxy headers detected from untrusted address. " +
+          "Connection will not be treated as local. " +
+          "Configure gateway.trustedProxies to restore local client detection behind your proxy.",
+        {
+          remoteAddr,
+          forwardedFor,
+          realIp,
+        },
+      );
+    } else {
+      logWsControl.debug(
+        `Proxy headers ignored for remote=${remoteAddr ?? "?"} origin=${requestOrigin ?? "n/a"}`,
+      );
+    }
   }
   if (!hostIsLocalish && isLoopbackAddress(remoteAddr) && !hasProxyHeaders) {
     logWsControl.warn(
@@ -396,6 +426,35 @@ export function attachGatewayWsMessageHandler(params: {
             close(1008, truncateCloseReason(errorMessage));
             return;
           }
+        }
+
+        const clientInstance =
+          typeof connectParams.client.instanceId === "string"
+            ? connectParams.client.instanceId.trim()
+            : "";
+        const clientKey = [
+          connectParams.client.id || "unknown",
+          connectParams.client.mode || "unknown",
+          clientInstance,
+          reportedClientIp ?? remoteAddr ?? "unknown",
+        ]
+          .filter(Boolean)
+          .join("|");
+        const attemptCount = recordConnectAttempt(clientKey);
+        if (attemptCount > CONNECT_RATE_MAX) {
+          setHandshakeState("failed");
+          setCloseCause("connect-rate-limit", { attempts: attemptCount, clientKey });
+          send({
+            type: "res",
+            id: frame.id,
+            ok: false,
+            error: errorShape(
+              ErrorCodes.UNAVAILABLE,
+              "too many reconnect attempts; please wait a moment",
+            ),
+          });
+          close(1013, "connect rate limit");
+          return;
         }
 
         const deviceRaw = connectParams.device;

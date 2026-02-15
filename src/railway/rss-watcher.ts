@@ -13,6 +13,7 @@ const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID?.trim() ?? "";
 const CHECK_INTERVAL_MS = resolveCheckIntervalMs(process.env.RSS_CHECK_INTERVAL_MS);
 const HEALTH_PORT = toNumberOrUndefined(process.env.PORT) ?? 8080;
 const RSS_DISABLE_HEALTH_SERVER = process.env.RSS_DISABLE_HEALTH_SERVER === "1";
+let alertsEnabledMemo: boolean | null = null;
 
 type FeedItem = {
   id: string;
@@ -183,15 +184,22 @@ async function saveState(state: WatcherState): Promise<void> {
 }
 
 function alertsEnabled(): boolean {
+  if (alertsEnabledMemo !== null) {
+    return alertsEnabledMemo;
+  }
   if (!TELEGRAM_BOT_TOKEN) {
-    console.log("[rss] TELEGRAM_BOT_TOKEN missing; alerts disabled.");
-    return false;
+    alertsEnabledMemo = false;
+    console.info("[rss] TELEGRAM_BOT_TOKEN missing; alerts disabled.");
+    return alertsEnabledMemo;
   }
   if (!TELEGRAM_CHAT_ID) {
-    console.log("[rss] TELEGRAM_CHAT_ID missing; alerts disabled.");
-    return false;
+    alertsEnabledMemo = false;
+    console.info("[rss] TELEGRAM_CHAT_ID missing; alerts disabled.");
+    return alertsEnabledMemo;
   }
-  return true;
+  alertsEnabledMemo = true;
+  console.info("[rss] Telegram alerts enabled.");
+  return alertsEnabledMemo;
 }
 
 async function sendTelegramText(text: string): Promise<boolean> {

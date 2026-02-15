@@ -70,7 +70,13 @@ export class GatewayBrowserClient {
   private connectNonce: string | null = null;
   private connectSent = false;
   private connectTimer: number | null = null;
-  private backoffMs = 800;
+  private reconnectTimer: number | null = null;
+  private heartbeatTimer: number | null = null;
+  private lastMessageAt = 0;
+  private connecting = false;
+  private backoffMs = 250;
+  private readonly maxBackoffMs = 5_000;
+  private readonly baseBackoffMs = 250;
 
   constructor(private opts: GatewayBrowserClientOptions) {}
 
@@ -81,6 +87,18 @@ export class GatewayBrowserClient {
 
   stop() {
     this.closed = true;
+    if (this.connectTimer !== null) {
+      window.clearTimeout(this.connectTimer);
+      this.connectTimer = null;
+    }
+    if (this.reconnectTimer !== null) {
+      window.clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    if (this.heartbeatTimer !== null) {
+      window.clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
     this.ws?.close();
     this.ws = null;
     this.flushPending(new Error("gateway client stopped"));
@@ -94,12 +112,37 @@ export class GatewayBrowserClient {
     if (this.closed) {
       return;
     }
+    if (this.connecting) {
+      return;
+    }
+    if (
+      this.ws &&
+      (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)
+    ) {
+      this.ws.close(4000, "restarting connection");
+      return;
+    }
+    this.connecting = true;
+    if (this.reconnectTimer !== null) {
+      window.clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
     this.ws = new WebSocket(this.opts.url);
-    this.ws.addEventListener("open", () => this.queueConnect());
+    this.ws.addEventListener("open", () => {
+      this.connecting = false;
+      this.lastMessageAt = Date.now();
+      this.startHeartbeat();
+      this.queueConnect();
+    });
     this.ws.addEventListener("message", (ev) => this.handleMessage(String(ev.data ?? "")));
     this.ws.addEventListener("close", (ev) => {
+      this.connecting = false;
       const reason = String(ev.reason ?? "");
       this.ws = null;
+      if (this.heartbeatTimer !== null) {
+        window.clearInterval(this.heartbeatTimer);
+        this.heartbeatTimer = null;
+      }
       this.flushPending(new Error(`gateway closed (${ev.code}): ${reason}`));
       this.opts.onClose?.({ code: ev.code, reason });
       this.scheduleReconnect();
@@ -109,13 +152,35 @@ export class GatewayBrowserClient {
     });
   }
 
+  private startHeartbeat() {
+    if (this.heartbeatTimer !== null) {
+      return;
+    }
+    this.heartbeatTimer = window.setInterval(() => {
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+        return;
+      }
+      const now = Date.now();
+      if (now - this.lastMessageAt > 45_000) {
+        this.ws.close(4001, "stale connection");
+      }
+    }, 15_000);
+  }
+
   private scheduleReconnect() {
     if (this.closed) {
       return;
     }
-    const delay = this.backoffMs;
-    this.backoffMs = Math.min(this.backoffMs * 1.7, 15_000);
-    window.setTimeout(() => this.connect(), delay);
+    if (this.reconnectTimer !== null) {
+      return;
+    }
+    const jitter = 0.7 + Math.random() * 0.6;
+    const delay = Math.min(this.backoffMs * jitter, this.maxBackoffMs);
+    this.backoffMs = Math.min(this.backoffMs * 2, this.maxBackoffMs);
+    this.reconnectTimer = window.setTimeout(() => {
+      this.reconnectTimer = null;
+      this.connect();
+    }, delay);
   }
 
   private flushPending(err: Error) {
@@ -224,7 +289,7 @@ export class GatewayBrowserClient {
             scopes: hello.auth.scopes ?? [],
           });
         }
-        this.backoffMs = 800;
+        this.backoffMs = this.baseBackoffMs;
         this.opts.onHello?.(hello);
       })
       .catch(() => {
@@ -236,6 +301,7 @@ export class GatewayBrowserClient {
   }
 
   private handleMessage(raw: string) {
+    this.lastMessageAt = Date.now();
     let parsed: unknown;
     try {
       parsed = JSON.parse(raw);
