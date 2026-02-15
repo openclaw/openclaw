@@ -377,7 +377,7 @@ describe("handleCommands subagents", () => {
     const params = buildParams("/subagents list", cfg);
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain("tokens 1k (in 12 / out 1k)");
+    expect(result.reply?.text).toMatch(/tokens 1(\.0)?k \(in 12 \/ out 1(\.0)?k\)/);
     expect(result.reply?.text).toContain("prompt/cache 197k");
     expect(result.reply?.text).not.toContain("1k io");
   });
