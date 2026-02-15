@@ -235,6 +235,56 @@ function resolveAntigravityOpus46ForwardCompatModel(
   });
 }
 
+// Generic opus-4-6 catch-all for any provider whose pi-ai catalog has opus-4-5
+// but not opus-4-6 yet (e.g. bedrock, vertex, custom Anthropic proxies).
+// Provider-specific handlers above take priority; this covers everything else.
+const GENERIC_OPUS_46_STEMS = ["claude-opus-4-6", "claude-opus-4.6"] as const;
+const GENERIC_OPUS_45_TEMPLATES = [
+  "claude-opus-4-5-thinking",
+  "claude-opus-4.5-thinking",
+  "claude-opus-4-5",
+  "claude-opus-4.5",
+] as const;
+
+function resolveGenericOpus46ForwardCompatModel(
+  provider: string,
+  modelId: string,
+  modelRegistry: ModelRegistry,
+): Model<Api> | undefined {
+  const normalizedProvider = normalizeProviderId(provider);
+  const trimmedModelId = modelId.trim();
+  const lower = trimmedModelId.toLowerCase();
+  const isOpus46 = GENERIC_OPUS_46_STEMS.some(
+    (stem) => lower === stem || lower.startsWith(`${stem}-`),
+  );
+  if (!isOpus46) {
+    return undefined;
+  }
+
+  const templateIds: string[] = [];
+  for (const stem of GENERIC_OPUS_46_STEMS) {
+    if (lower.startsWith(stem)) {
+      const replacement = stem.replace("4-6", "4-5").replace("4.6", "4.5");
+      templateIds.push(lower.replace(stem, replacement));
+    }
+  }
+  templateIds.push(...GENERIC_OPUS_45_TEMPLATES);
+
+  for (const templateId of [...new Set(templateIds)].filter(Boolean)) {
+    const template = modelRegistry.find(normalizedProvider, templateId) as Model<Api> | null;
+    if (!template) {
+      continue;
+    }
+    return normalizeModelCompat({
+      ...template,
+      id: trimmedModelId,
+      name: trimmedModelId,
+    } as Model<Api>);
+  }
+
+  return undefined;
+}
+
 export function resolveForwardCompatModel(
   provider: string,
   modelId: string,
@@ -244,6 +294,7 @@ export function resolveForwardCompatModel(
     resolveOpenAICodexGpt53FallbackModel(provider, modelId, modelRegistry) ??
     resolveAnthropicOpus46ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveZaiGlm5ForwardCompatModel(provider, modelId, modelRegistry) ??
-    resolveAntigravityOpus46ForwardCompatModel(provider, modelId, modelRegistry)
+    resolveAntigravityOpus46ForwardCompatModel(provider, modelId, modelRegistry) ??
+    resolveGenericOpus46ForwardCompatModel(provider, modelId, modelRegistry)
   );
 }
