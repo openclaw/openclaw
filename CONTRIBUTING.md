@@ -41,6 +41,12 @@ Welcome to the lobster tank! 🦞
 - **Gustavo Madeira Santana** - Multi-agents, CLI, web UI
   - GitHub: [@gumadeiras](https://github.com/gumadeiras) · X: [@gumadeiras](https://x.com/gumadeiras)
 
+
+## Developer Reference
+
+For an in-depth guide to the codebase architecture, module dependencies, critical paths, and common pitfalls, see [`docs/DEVELOPER-REFERENCE.md`](docs/DEVELOPER-REFERENCE.md). Useful for both human contributors and AI agents.
+
+
 ## How to Contribute
 
 1. **Bugs & small fixes** → Open a PR!
