@@ -23,10 +23,9 @@ import {
   readStringParam,
 } from "./common.js";
 
-type TelegramButton = {
-  text: string;
-  callback_data: string;
-};
+type TelegramButton =
+  | { text: string; callback_data: string }
+  | { text: string; url: string };
 
 export function readTelegramButtons(
   params: Record<string, unknown>,
@@ -54,15 +53,37 @@ export function readTelegramButtons(
         typeof (button as { callback_data?: unknown }).callback_data === "string"
           ? (button as { callback_data: string }).callback_data.trim()
           : "";
-      if (!text || !callbackData) {
-        throw new Error(`buttons[${rowIndex}][${buttonIndex}] requires text and callback_data`);
+      const url =
+        typeof (button as { url?: unknown }).url === "string"
+          ? (button as { url: string }).url.trim()
+          : "";
+      
+      if (!text) {
+        throw new Error(`buttons[${rowIndex}][${buttonIndex}] requires text`);
       }
-      if (callbackData.length > 64) {
+      
+      // Button must have either callback_data or url, but not both
+      if (!callbackData && !url) {
         throw new Error(
-          `buttons[${rowIndex}][${buttonIndex}] callback_data too long (max 64 chars)`,
+          `buttons[${rowIndex}][${buttonIndex}] requires either callback_data or url`
         );
       }
-      return { text, callback_data: callbackData };
+      if (callbackData && url) {
+        throw new Error(
+          `buttons[${rowIndex}][${buttonIndex}] cannot have both callback_data and url`
+        );
+      }
+      
+      if (callbackData) {
+        if (callbackData.length > 64) {
+          throw new Error(
+            `buttons[${rowIndex}][${buttonIndex}] callback_data too long (max 64 chars)`,
+          );
+        }
+        return { text, callback_data: callbackData };
+      }
+      
+      return { text, url };
     });
   });
   const filtered = rows.filter((row) => row.length > 0);
