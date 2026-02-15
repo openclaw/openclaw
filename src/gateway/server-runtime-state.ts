@@ -1,6 +1,7 @@
 import type { Server as HttpServer } from "node:http";
 import { WebSocketServer } from "ws";
 import type { CliDeps } from "../cli/deps.js";
+import { onDiagnosticEvent } from "../infra/diagnostic-events.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -112,6 +113,11 @@ export async function createGatewayRuntimeState(params: {
 
   const clients = new Set<GatewayWsClient>();
   const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({ clients });
+
+  // Subscribe to diagnostic events and broadcast them to WebSocket clients
+  onDiagnosticEvent((evt) => {
+    broadcast("diagnostic", evt);
+  });
 
   const handleHooksRequest = createGatewayHooksRequestHandler({
     deps: params.deps,
