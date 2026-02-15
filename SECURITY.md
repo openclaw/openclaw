@@ -34,6 +34,17 @@ Reports without reproduction steps, demonstrated impact, and remediation advice 
 
 **Jamieson O'Reilly** ([@theonejvo](https://twitter.com/theonejvo)) is Security & Trust at OpenClaw. Jamieson is the founder of [Dvuln](https://dvuln.com) and brings extensive experience in offensive security, penetration testing, and security program development.
 
+### Redaction (secrets + personal data)
+
+If you include logs, screenshots, configs, or command output, **redact anything sensitive**. This includes:
+
+- **Secrets:** tokens, API keys, cookies/session IDs, Authorization headers, pairing codes
+- **Personal data (PII):** phone numbers, emails, names, addresses, account IDs/handles
+
+If you are unsure whether something is sensitive, assume it is and redact it.
+
+If you already posted sensitive data publicly, **rotate the exposed credentials immediately** and contact us so we can help reduce further exposure.
+
 ## Bug Bounties
 
 OpenClaw is a labor of love. There is no bug bounty program and no budget for paid reports. Please still disclose responsibly so we can fix issues quickly.
@@ -53,7 +64,15 @@ When patching a GHSA via `gh api`, include `X-GitHub-Api-Version: 2022-11-28` (o
 
 For threat model + hardening guidance (including `openclaw security audit --deep` and `--fix`), see:
 
-- `https://docs.openclaw.ai/gateway/security`
+- `docs/gateway/security/index.md` (published in the docs site at `/gateway/security`)
+
+### Quick hardening checklist
+
+- Keep the web UI bound to localhost only (or behind a trusted VPN).
+- Use least-privilege credentials (separate bot accounts; minimal channel permissions).
+- Store secrets in a proper secret manager or OS keychain (avoid plaintext `.env` files when possible).
+- Treat chat inputs as untrusted: review/confirm before running destructive commands or enabling powerful tools.
+- Rotate tokens if you suspect exposure (especially after pasting logs/config into public issues).
 
 ### Tool filesystem hardening
 
