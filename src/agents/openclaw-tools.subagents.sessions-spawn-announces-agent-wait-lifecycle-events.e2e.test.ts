@@ -1,12 +1,55 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { sleep } from "../utils.js";
-import "./test-helpers/fast-core-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
-import {
-  callGatewayMock,
-  resetConfigOverride,
-} from "./openclaw-tools.subagents.sessions-spawn.mocks.js";
+import "./test-helpers/fast-core-tools.js";
 import { resetSubagentRegistryForTests } from "./subagent-registry.js";
+
+type SessionsSpawnTestConfig = ReturnType<(typeof import("../config/config.js"))["loadConfig"]>;
+
+const hoisted = vi.hoisted(() => {
+  const callGatewayMock = vi.fn();
+  const defaultConfigOverride = {
+    session: {
+      mainKey: "main",
+      scope: "per-sender",
+    },
+  } as SessionsSpawnTestConfig;
+  const state = { configOverride: defaultConfigOverride };
+  return { callGatewayMock, defaultConfigOverride, state };
+});
+
+const callGatewayMock = hoisted.callGatewayMock;
+
+function resetConfigOverride() {
+  hoisted.state.configOverride = hoisted.defaultConfigOverride;
+}
+
+vi.mock("../gateway/call.js", () => ({
+  callGateway: (opts: unknown) => hoisted.callGatewayMock(opts),
+}));
+// Some tools import callGateway via "../../gateway/call.js" (from nested folders). Mock that too.
+vi.mock("../../gateway/call.js", () => ({
+  callGateway: (opts: unknown) => hoisted.callGatewayMock(opts),
+}));
+
+vi.mock("../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  return {
+    ...actual,
+    loadConfig: () => hoisted.state.configOverride,
+    resolveGatewayPort: () => 18789,
+  };
+});
+
+// Same module, different specifier (used by tools under src/agents/tools/*).
+vi.mock("../../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  return {
+    ...actual,
+    loadConfig: () => hoisted.state.configOverride,
+    resolveGatewayPort: () => 18789,
+  };
+});
 
 describe("openclaw-tools: subagents", () => {
   beforeEach(() => {
