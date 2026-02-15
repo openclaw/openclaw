@@ -108,6 +108,7 @@ jobs:
 
       - name: Comment on PR (informational)
         if: steps.drift.outputs.drift == 'true'
+        continue-on-error: true
         uses: actions/github-script@v7
         with:
           script: |
