@@ -24,6 +24,7 @@ import {
 import { listChannelAgentTools } from "./channel-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { wrapToolWithAbortSignal } from "./pi-tools.abort.js";
+import { wrapToolWithAfterToolCallHook } from "./pi-tools.after-tool-call.js";
 import { wrapToolWithBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
 import {
   isToolAllowedByPolicies,
@@ -447,12 +448,14 @@ export function createOpenClawCodingTools(options?: {
   // Always normalize tool JSON Schemas before handing them to pi-agent/pi-ai.
   // Without this, some providers (notably OpenAI) will reject root-level union schemas.
   const normalized = subagentFiltered.map(normalizeToolParameters);
-  const withHooks = normalized.map((tool) =>
-    wrapToolWithBeforeToolCallHook(tool, {
-      agentId,
-      sessionKey: options?.sessionKey,
-    }),
-  );
+  const hookCtx = {
+    agentId,
+    sessionKey: options?.sessionKey,
+  };
+  // Order matters: after wraps inner execute, before wraps outer.
+  // This way after_tool_call only fires for calls that pass the before gate.
+  const withAfterHooks = normalized.map((tool) => wrapToolWithAfterToolCallHook(tool, hookCtx));
+  const withHooks = withAfterHooks.map((tool) => wrapToolWithBeforeToolCallHook(tool, hookCtx));
   const withAbort = options?.abortSignal
     ? withHooks.map((tool) => wrapToolWithAbortSignal(tool, options.abortSignal))
     : withHooks;
