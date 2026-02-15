@@ -4,7 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { resolveOAuthDir } from "../config/paths.js";
-import { listChannelPairingRequests, upsertChannelPairingRequest } from "./pairing-store.js";
+import {
+  approveChannelPairingCode,
+  listChannelPairingRequests,
+  resetAllPairingRateLimits,
+  upsertChannelPairingRequest,
+} from "./pairing-store.js";
 
 let fixtureRoot = "";
 let caseId = 0;
@@ -142,6 +147,102 @@ describe("pairing store", () => {
       expect(listIds).toContain("+15550000002");
       expect(listIds).toContain("+15550000003");
       expect(listIds).not.toContain("+15550000004");
+    });
+  });
+});
+
+// Aether AI Agent — OC-100 rate limiting tests
+describe("pairing code rate limiting (OC-100)", () => {
+  beforeAll(() => {
+    resetAllPairingRateLimits();
+  });
+
+  afterAll(() => {
+    resetAllPairingRateLimits();
+  });
+
+  it("allows pairing attempts below the rate limit threshold", async () => {
+    resetAllPairingRateLimits();
+    await withTempStateDir(async () => {
+      await upsertChannelPairingRequest({ channel: "discord", id: "rate-test-1" });
+
+      // 9 wrong attempts should all return null without throwing
+      for (let i = 0; i < 9; i++) {
+        const result = await approveChannelPairingCode({
+          channel: "discord",
+          code: "WRONGCODE",
+        });
+        expect(result).toBeNull();
+      }
+    });
+  });
+
+  it("throws after exceeding max failed attempts", async () => {
+    resetAllPairingRateLimits();
+    await withTempStateDir(async () => {
+      await upsertChannelPairingRequest({ channel: "discord", id: "rate-test-2" });
+
+      // Exhaust the 10 allowed attempts
+      for (let i = 0; i < 10; i++) {
+        await approveChannelPairingCode({ channel: "discord", code: "BADCODE00" });
+      }
+
+      // 11th attempt should throw
+      await expect(
+        approveChannelPairingCode({ channel: "discord", code: "BADCODE00" }),
+      ).rejects.toThrow("Too many failed pairing attempts");
+    });
+  });
+
+  it("resets rate limit after successful pairing", async () => {
+    resetAllPairingRateLimits();
+    await withTempStateDir(async () => {
+      const { code } = await upsertChannelPairingRequest({
+        channel: "telegram",
+        id: "rate-test-3",
+      });
+
+      // Accumulate 9 failures
+      for (let i = 0; i < 9; i++) {
+        await approveChannelPairingCode({ channel: "telegram", code: "WRONGCODE" });
+      }
+
+      // Successful approval resets counter
+      const result = await approveChannelPairingCode({ channel: "telegram", code });
+      expect(result).not.toBeNull();
+      expect(result?.id).toBe("rate-test-3");
+
+      // Should be able to attempt again without rate limit
+      const afterReset = await approveChannelPairingCode({
+        channel: "telegram",
+        code: "WRONGCODE",
+      });
+      expect(afterReset).toBeNull(); // null, not throw
+    });
+  });
+
+  it("rate limits are per-channel", async () => {
+    resetAllPairingRateLimits();
+    await withTempStateDir(async () => {
+      await upsertChannelPairingRequest({ channel: "discord", id: "chan-a" });
+      await upsertChannelPairingRequest({ channel: "signal", id: "chan-b" });
+
+      // Exhaust discord rate limit
+      for (let i = 0; i < 10; i++) {
+        await approveChannelPairingCode({ channel: "discord", code: "WRONGCODE" });
+      }
+
+      // Discord should be locked out
+      await expect(
+        approveChannelPairingCode({ channel: "discord", code: "WRONGCODE" }),
+      ).rejects.toThrow("Too many failed pairing attempts");
+
+      // Signal should still work fine
+      const signalResult = await approveChannelPairingCode({
+        channel: "signal",
+        code: "WRONGCODE",
+      });
+      expect(signalResult).toBeNull();
     });
   });
 });

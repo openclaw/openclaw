@@ -13,6 +13,57 @@ const PAIRING_CODE_LENGTH = 8;
 const PAIRING_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const PAIRING_PENDING_TTL_MS = 60 * 60 * 1000;
 const PAIRING_PENDING_MAX = 3;
+
+// Rate limiting for pairing code attempts (Aether AI Agent — OC-100 remediation)
+const PAIRING_MAX_FAILED_ATTEMPTS = 10;
+const PAIRING_RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
+
+type RateLimitEntry = {
+  failedAttempts: number;
+  firstFailureAt: number;
+};
+
+// In-memory rate limit tracker keyed by channel
+const pairingRateLimitMap = new Map<string, RateLimitEntry>();
+
+/**
+ * Check if a channel is currently rate-limited for pairing code attempts.
+ * Returns true if locked out.
+ */
+function isPairingRateLimited(channelKey: string, nowMs: number): boolean {
+  const entry = pairingRateLimitMap.get(channelKey);
+  if (!entry) {
+    return false;
+  }
+
+  // Window expired — reset and allow
+  if (nowMs - entry.firstFailureAt > PAIRING_RATE_LIMIT_WINDOW_MS) {
+    pairingRateLimitMap.delete(channelKey);
+    return false;
+  }
+
+  return entry.failedAttempts >= PAIRING_MAX_FAILED_ATTEMPTS;
+}
+
+/** Record a failed pairing code attempt for rate limiting. */
+function recordFailedPairingAttempt(channelKey: string, nowMs: number): void {
+  const entry = pairingRateLimitMap.get(channelKey);
+  if (!entry || nowMs - entry.firstFailureAt > PAIRING_RATE_LIMIT_WINDOW_MS) {
+    pairingRateLimitMap.set(channelKey, { failedAttempts: 1, firstFailureAt: nowMs });
+    return;
+  }
+  entry.failedAttempts += 1;
+}
+
+/** Reset rate limit tracking on successful pairing. */
+function resetPairingRateLimit(channelKey: string): void {
+  pairingRateLimitMap.delete(channelKey);
+}
+
+/** Clear all rate limit state (exposed for testing). */
+export function resetAllPairingRateLimits(): void {
+  pairingRateLimitMap.clear();
+}
 const PAIRING_STORE_LOCK_OPTIONS = {
   retries: {
     retries: 10,
@@ -464,20 +515,29 @@ export async function approveChannelPairingCode(params: {
     return null;
   }
 
+  const channelKey = safeChannelKey(params.channel);
+
   const filePath = resolvePairingPath(params.channel, env);
   return await withFileLock(
     filePath,
     { version: 1, requests: [] } satisfies PairingStore,
     async () => {
+      const nowMs = Date.now();
+
+      // Rate limit check inside lock to prevent concurrent bypass (OC-100)
+      if (isPairingRateLimited(channelKey, nowMs)) {
+        throw new Error("Too many failed pairing attempts. Try again later.");
+      }
+
       const { value } = await readJsonFile<PairingStore>(filePath, {
         version: 1,
         requests: [],
       });
       const reqs = Array.isArray(value.requests) ? value.requests : [];
-      const nowMs = Date.now();
       const { requests: pruned, removed } = pruneExpiredRequests(reqs, nowMs);
       const idx = pruned.findIndex((r) => String(r.code ?? "").toUpperCase() === code);
       if (idx < 0) {
+        recordFailedPairingAttempt(channelKey, nowMs);
         if (removed) {
           await writeJsonFile(filePath, {
             version: 1,
@@ -490,6 +550,7 @@ export async function approveChannelPairingCode(params: {
       if (!entry) {
         return null;
       }
+      resetPairingRateLimit(channelKey);
       pruned.splice(idx, 1);
       await writeJsonFile(filePath, {
         version: 1,
