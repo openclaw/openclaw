@@ -5,6 +5,8 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createConfigIO } from "./io.js";
 
+const isWindows = process.platform === "win32";
+
 async function withTempDir(run: (dir: string) => Promise<void>): Promise<void> {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "openclaw-io-perm-"));
   try {
@@ -15,7 +17,7 @@ async function withTempDir(run: (dir: string) => Promise<void>): Promise<void> {
 }
 
 describe("writeConfigFile permissions", () => {
-  it("writes config file with 0o600 permissions", async () => {
+  it.skipIf(isWindows)("writes config file with 0o600 permissions", async () => {
     await withTempDir(async (home) => {
       const configDir = path.join(home, ".openclaw");
       await fsp.mkdir(configDir, { recursive: true });

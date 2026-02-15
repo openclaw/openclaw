@@ -4,6 +4,8 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { saveJsonFile } from "./json-file.js";
 
+const isWindows = process.platform === "win32";
+
 describe("saveJsonFile", () => {
   const tmpFiles: string[] = [];
 
@@ -24,7 +26,7 @@ describe("saveJsonFile", () => {
     tmpFiles.length = 0;
   });
 
-  it("creates file with 0o600 permissions", () => {
+  it.skipIf(isWindows)("creates file with 0o600 permissions", () => {
     const filePath = tmpPath("perms");
     saveJsonFile(filePath, { key: "secret" });
 
@@ -43,7 +45,7 @@ describe("saveJsonFile", () => {
     expect(JSON.parse(raw)).toEqual(data);
   });
 
-  it("overwrites existing file and keeps 0o600 permissions", () => {
+  it.skipIf(isWindows)("overwrites existing file and keeps 0o600 permissions", () => {
     const filePath = tmpPath("overwrite");
 
     // Create file with wider permissions first
@@ -56,7 +58,7 @@ describe("saveJsonFile", () => {
     expect(perms).toBe(0o600);
   });
 
-  it("creates parent directories with 0o700 permissions", () => {
+  it.skipIf(isWindows)("creates parent directories with 0o700 permissions", () => {
     const dir = path.join(os.tmpdir(), `openclaw-json-test-${Date.now()}-nested`);
     const filePath = path.join(dir, "deep", "file.json");
     tmpFiles.push(filePath);
