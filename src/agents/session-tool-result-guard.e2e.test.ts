@@ -459,6 +459,7 @@ describe("installSessionToolResultGuard", () => {
     });
   });
 
+  describe("persistence-layer redaction", () => {
     it("keeps secrets in memory but redacts them on disk (xoxb token)", () => {
       const { sm, getSessionFile } = createTrackedDiskSM();
       installSessionToolResultGuard(sm);
