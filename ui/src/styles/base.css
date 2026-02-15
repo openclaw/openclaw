@@ -196,10 +196,13 @@
 html,
 body {
   height: 100%;
+  overflow: hidden;
 }
 
 body {
   margin: 0;
+  position: fixed;
+  width: 100%;
   font: 400 14px/1.55 var(--font-body);
   letter-spacing: -0.02em;
   background: var(--bg);
