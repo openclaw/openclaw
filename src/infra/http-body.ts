@@ -182,7 +182,7 @@ export async function readRequestBodyWithLimit(
 }
 
 export type ReadJsonBodyResult =
-  | { ok: true; value: unknown }
+  | { ok: true; value: unknown; rawBody: string }
   | { ok: false; error: string; code: RequestBodyLimitErrorCode | "INVALID_JSON" };
 
 export type ReadJsonBodyOptions = ReadRequestBodyOptions & {
@@ -194,16 +194,16 @@ export async function readJsonBodyWithLimit(
   options: ReadJsonBodyOptions,
 ): Promise<ReadJsonBodyResult> {
   try {
-    const raw = await readRequestBodyWithLimit(req, options);
-    const trimmed = raw.trim();
+    const rawBody = await readRequestBodyWithLimit(req, options);
+    const trimmed = rawBody.trim();
     if (!trimmed) {
       if (options.emptyObjectOnEmpty === false) {
         return { ok: false, code: "INVALID_JSON", error: "empty payload" };
       }
-      return { ok: true, value: {} };
+      return { ok: true, value: {}, rawBody };
     }
     try {
-      return { ok: true, value: JSON.parse(trimmed) as unknown };
+      return { ok: true, value: JSON.parse(trimmed) as unknown, rawBody };
     } catch (error) {
       return {
         ok: false,
