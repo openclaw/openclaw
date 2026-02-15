@@ -19,7 +19,7 @@ vi.mock("../../config/config.js", async () => {
 
 vi.mock("../../channels/plugins/index.js", () => ({
   getChannelPlugin: () => ({ outbound: {} }),
-  normalizeChannelId: (value: string) => value,
+  normalizeChannelId: (value: string) => (value === "webchat" ? null : value),
 }));
 
 vi.mock("../../infra/outbound/targets.js", () => ({
@@ -104,6 +104,39 @@ describe("gateway send mirroring", () => {
       undefined,
       expect.objectContaining({
         message: expect.stringContaining("text or media is required"),
+      }),
+    );
+  });
+
+  it("returns actionable guidance when channel is internal webchat", async () => {
+    const respond = vi.fn();
+    await sendHandlers.send({
+      params: {
+        to: "x",
+        message: "hi",
+        channel: "webchat",
+        idempotencyKey: "idem-webchat",
+      },
+      respond,
+      context: makeContext(),
+      req: { type: "req", id: "1", method: "send" },
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("unsupported channel: webchat"),
+      }),
+    );
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("Use `chat.send`"),
       }),
     );
   });
