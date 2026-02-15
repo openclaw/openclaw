@@ -13,14 +13,14 @@ import { updateSessionStore } from "../../config/sessions.js";
 import * as internalHooks from "../../hooks/internal-hooks.js";
 import { clearPluginCommands, registerPluginCommand } from "../../plugins/commands.js";
 import { resetBashChatCommandForTests } from "./bash-command.js";
-import { parseInlineDirectives } from "./directive-handling.js";
+import { buildCommandTestParams } from "./commands.test-harness.js";
 
 const callGatewayMock = vi.fn();
 vi.mock("../../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
 
-import { buildCommandContext, handleCommands } from "./commands.js";
+import { handleCommands } from "./commands.js";
 
 // Avoid expensive workspace scans during /context tests.
 vi.mock("./commands-context-report.js", () => ({
@@ -48,41 +48,7 @@ afterAll(async () => {
 });
 
 function buildParams(commandBody: string, cfg: OpenClawConfig, ctxOverrides?: Partial<MsgContext>) {
-  const ctx = {
-    Body: commandBody,
-    CommandBody: commandBody,
-    CommandSource: "text",
-    CommandAuthorized: true,
-    Provider: "whatsapp",
-    Surface: "whatsapp",
-    ...ctxOverrides,
-  } as MsgContext;
-
-  const command = buildCommandContext({
-    ctx,
-    cfg,
-    isGroup: false,
-    triggerBodyNormalized: commandBody.trim().toLowerCase(),
-    commandAuthorized: true,
-  });
-
-  return {
-    ctx,
-    cfg,
-    command,
-    directives: parseInlineDirectives(commandBody),
-    elevated: { enabled: true, allowed: true, failures: [] },
-    sessionKey: "agent:main:main",
-    workspaceDir: testWorkspaceDir,
-    defaultGroupActivation: () => "mention",
-    resolvedVerboseLevel: "off" as const,
-    resolvedReasoningLevel: "off" as const,
-    resolveDefaultThinkingLevel: async () => undefined,
-    provider: "whatsapp",
-    model: "test-model",
-    contextTokens: 0,
-    isGroup: false,
-  };
+  return buildCommandTestParams(commandBody, cfg, ctxOverrides, { workspaceDir: testWorkspaceDir });
 }
 
 describe("handleCommands gating", () => {
@@ -377,7 +343,7 @@ describe("handleCommands subagents", () => {
     const params = buildParams("/subagents list", cfg);
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain("tokens 1k (in 12 / out 1k)");
+    expect(result.reply?.text).toMatch(/tokens 1(\.0)?k \(in 12 \/ out 1(\.0)?k\)/);
     expect(result.reply?.text).toContain("prompt/cache 197k");
     expect(result.reply?.text).not.toContain("1k io");
   });

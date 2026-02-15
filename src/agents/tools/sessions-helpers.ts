@@ -1,6 +1,10 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
-import { isAcpSessionKey, normalizeMainKey } from "../../routing/session-key.js";
+import {
+  isAcpSessionKey,
+  isSubagentSessionKey,
+  normalizeMainKey,
+} from "../../routing/session-key.js";
 import { sanitizeUserFacingText } from "../pi-embedded-helpers.js";
 import {
   stripDowngradedToolCallText,
@@ -67,6 +71,39 @@ export function resolveInternalSessionKey(params: { key: string; alias: string; 
     return params.alias;
   }
   return params.key;
+}
+
+export function resolveSandboxSessionToolsVisibility(cfg: OpenClawConfig): "spawned" | "all" {
+  return cfg.agents?.defaults?.sandbox?.sessionToolsVisibility ?? "spawned";
+}
+
+export function resolveSandboxedSessionToolContext(params: {
+  cfg: OpenClawConfig;
+  agentSessionKey?: string;
+  sandboxed?: boolean;
+}): {
+  mainKey: string;
+  alias: string;
+  visibility: "spawned" | "all";
+  requesterInternalKey: string | undefined;
+  restrictToSpawned: boolean;
+} {
+  const { mainKey, alias } = resolveMainSessionAlias(params.cfg);
+  const visibility = resolveSandboxSessionToolsVisibility(params.cfg);
+  const requesterInternalKey =
+    typeof params.agentSessionKey === "string" && params.agentSessionKey.trim()
+      ? resolveInternalSessionKey({
+          key: params.agentSessionKey,
+          alias,
+          mainKey,
+        })
+      : undefined;
+  const restrictToSpawned =
+    params.sandboxed === true &&
+    visibility === "spawned" &&
+    !!requesterInternalKey &&
+    !isSubagentSessionKey(requesterInternalKey);
+  return { mainKey, alias, visibility, requesterInternalKey, restrictToSpawned };
 }
 
 export type AgentToAgentPolicy = {

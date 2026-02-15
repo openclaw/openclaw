@@ -155,7 +155,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 
 - Bot token: `channels.telegram.botToken` or `channels.telegram.tokenFile`, with `TELEGRAM_BOT_TOKEN` as fallback for the default account.
 - `configWrites: false` blocks Telegram-initiated config writes (supergroup ID migrations, `/config set|unset`).
-- Draft streaming uses Telegram `sendMessageDraft` (requires private chat topics).
+- Telegram stream previews use `sendMessage` + `editMessageText` (works in direct and group chats).
 - Retry policy: see [Retry policy](/concepts/retry).
 
 ### Discord
@@ -211,6 +211,11 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
       textChunkLimit: 2000,
       chunkMode: "length", // length | newline
       maxLinesPerMessage: 17,
+      ui: {
+        components: {
+          accentColor: "#5865F2",
+        },
+      },
       retry: {
         attempts: 3,
         minDelayMs: 500,
@@ -227,6 +232,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 - Guild slugs are lowercase with spaces replaced by `-`; channel keys use the slugged name (no `#`). Prefer guild IDs.
 - Bot-authored messages are ignored by default. `allowBots: true` enables them (own messages still filtered).
 - `maxLinesPerMessage` (default 17) splits tall messages even when under 2000 chars.
+- `channels.discord.ui.components.accentColor` sets the accent color for Discord components v2 containers.
 
 **Reaction notification modes:** `off` (none), `own` (bot's messages, default), `all` (all messages), `allowlist` (from `guilds.<id>.users` on all messages).
 
@@ -1232,6 +1238,8 @@ Variables are case-insensitive. `{think}` is an alias for `{thinkingLevel}`.
 ### Ack reaction
 
 - Defaults to active agent's `identity.emoji`, otherwise `"👀"`. Set `""` to disable.
+- Per-channel overrides: `channels.<channel>.ackReaction`, `channels.<channel>.accounts.<id>.ackReaction`.
+- Resolution order: account → channel → `messages.ackReaction` → identity fallback.
 - Scope: `group-mentions` (default), `group-all`, `direct`, `all`.
 - `removeAckAfterReply`: removes ack after reply (Slack/Discord/Telegram/Google Chat only).
 

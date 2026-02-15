@@ -1,7 +1,29 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
+import { defaultRuntime } from "../../runtime.js";
 import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
+
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+let previousRuntimeError: typeof defaultRuntime.error;
+
+beforeAll(() => {
+  previousRuntimeError = defaultRuntime.error;
+  defaultRuntime.error = undefined;
+});
+
+afterAll(() => {
+  defaultRuntime.error = previousRuntimeError;
+});
 
 function createRun(params: {
   prompt: string;
@@ -38,8 +60,13 @@ describe("followup queue deduplication", () => {
   it("deduplicates messages with same Discord message_id", async () => {
     const key = `test-dedup-message-id-${Date.now()}`;
     const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const expectedCalls = 1;
     const runFollowup = async (run: FollowupRun) => {
       calls.push(run);
+      if (calls.length >= expectedCalls) {
+        done.resolve();
+      }
     };
     const settings: QueueSettings = {
       mode: "collect",
@@ -88,7 +115,7 @@ describe("followup queue deduplication", () => {
     expect(third).toBe(true);
 
     scheduleFollowupDrain(key, runFollowup);
-    await expect.poll(() => calls.length).toBe(1);
+    await done.promise;
     // Should collect both unique messages
     expect(calls[0]?.prompt).toContain("[Queued messages while agent was busy]");
   });
@@ -210,8 +237,13 @@ describe("followup queue collect routing", () => {
   it("does not collect when destinations differ", async () => {
     const key = `test-collect-diff-to-${Date.now()}`;
     const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const expectedCalls = 2;
     const runFollowup = async (run: FollowupRun) => {
       calls.push(run);
+      if (calls.length >= expectedCalls) {
+        done.resolve();
+      }
     };
     const settings: QueueSettings = {
       mode: "collect",
@@ -240,7 +272,7 @@ describe("followup queue collect routing", () => {
     );
 
     scheduleFollowupDrain(key, runFollowup);
-    await expect.poll(() => calls.length).toBe(2);
+    await done.promise;
     expect(calls[0]?.prompt).toBe("one");
     expect(calls[1]?.prompt).toBe("two");
   });
@@ -248,8 +280,13 @@ describe("followup queue collect routing", () => {
   it("collects when channel+destination match", async () => {
     const key = `test-collect-same-to-${Date.now()}`;
     const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const expectedCalls = 1;
     const runFollowup = async (run: FollowupRun) => {
       calls.push(run);
+      if (calls.length >= expectedCalls) {
+        done.resolve();
+      }
     };
     const settings: QueueSettings = {
       mode: "collect",
@@ -278,7 +315,7 @@ describe("followup queue collect routing", () => {
     );
 
     scheduleFollowupDrain(key, runFollowup);
-    await expect.poll(() => calls.length).toBe(1);
+    await done.promise;
     expect(calls[0]?.prompt).toContain("[Queued messages while agent was busy]");
     expect(calls[0]?.originatingChannel).toBe("slack");
     expect(calls[0]?.originatingTo).toBe("channel:A");
@@ -287,8 +324,13 @@ describe("followup queue collect routing", () => {
   it("collects Slack messages in same thread and preserves string thread id", async () => {
     const key = `test-collect-slack-thread-same-${Date.now()}`;
     const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const expectedCalls = 1;
     const runFollowup = async (run: FollowupRun) => {
       calls.push(run);
+      if (calls.length >= expectedCalls) {
+        done.resolve();
+      }
     };
     const settings: QueueSettings = {
       mode: "collect",
@@ -319,7 +361,7 @@ describe("followup queue collect routing", () => {
     );
 
     scheduleFollowupDrain(key, runFollowup);
-    await expect.poll(() => calls.length).toBe(1);
+    await done.promise;
     expect(calls[0]?.prompt).toContain("[Queued messages while agent was busy]");
     expect(calls[0]?.originatingThreadId).toBe("1706000000.000001");
   });
@@ -327,8 +369,13 @@ describe("followup queue collect routing", () => {
   it("does not collect Slack messages when thread ids differ", async () => {
     const key = `test-collect-slack-thread-diff-${Date.now()}`;
     const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const expectedCalls = 2;
     const runFollowup = async (run: FollowupRun) => {
       calls.push(run);
+      if (calls.length >= expectedCalls) {
+        done.resolve();
+      }
     };
     const settings: QueueSettings = {
       mode: "collect",
@@ -359,7 +406,7 @@ describe("followup queue collect routing", () => {
     );
 
     scheduleFollowupDrain(key, runFollowup);
-    await expect.poll(() => calls.length).toBe(2);
+    await done.promise;
     expect(calls[0]?.prompt).toBe("one");
     expect(calls[1]?.prompt).toBe("two");
     expect(calls[0]?.originatingThreadId).toBe("1706000000.000001");
@@ -369,6 +416,8 @@ describe("followup queue collect routing", () => {
   it("retries collect-mode batches without losing queued items", async () => {
     const key = `test-collect-retry-${Date.now()}`;
     const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const expectedCalls = 1;
     let attempt = 0;
     const runFollowup = async (run: FollowupRun) => {
       attempt += 1;
@@ -376,6 +425,9 @@ describe("followup queue collect routing", () => {
         throw new Error("transient failure");
       }
       calls.push(run);
+      if (calls.length >= expectedCalls) {
+        done.resolve();
+      }
     };
     const settings: QueueSettings = {
       mode: "collect",
@@ -388,7 +440,7 @@ describe("followup queue collect routing", () => {
     enqueueFollowupRun(key, createRun({ prompt: "two" }), settings);
 
     scheduleFollowupDrain(key, runFollowup);
-    await expect.poll(() => calls.length).toBe(1);
+    await done.promise;
     expect(calls[0]?.prompt).toContain("Queued #1\none");
     expect(calls[0]?.prompt).toContain("Queued #2\ntwo");
   });
@@ -396,6 +448,8 @@ describe("followup queue collect routing", () => {
   it("retries overflow summary delivery without losing dropped previews", async () => {
     const key = `test-overflow-summary-retry-${Date.now()}`;
     const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const expectedCalls = 1;
     let attempt = 0;
     const runFollowup = async (run: FollowupRun) => {
       attempt += 1;
@@ -403,6 +457,9 @@ describe("followup queue collect routing", () => {
         throw new Error("transient failure");
       }
       calls.push(run);
+      if (calls.length >= expectedCalls) {
+        done.resolve();
+      }
     };
     const settings: QueueSettings = {
       mode: "followup",
@@ -415,7 +472,7 @@ describe("followup queue collect routing", () => {
     enqueueFollowupRun(key, createRun({ prompt: "second" }), settings);
 
     scheduleFollowupDrain(key, runFollowup);
-    await expect.poll(() => calls.length).toBe(1);
+    await done.promise;
     expect(calls[0]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
     expect(calls[0]?.prompt).toContain("- first");
   });
