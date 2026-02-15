@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { startHeartbeatRunner } from "./heartbeat-runner.js";
+import * as wake from "./heartbeat-wake.js";
 
 describe("startHeartbeatRunner", () => {
   afterEach(() => {
@@ -164,6 +165,37 @@ describe("startHeartbeatRunner", () => {
 
     // Timer should be rescheduled; next heartbeat should still fire
     await vi.advanceTimersByTimeAsync(30 * 60_000 + 1_000);
+    expect(runSpy).toHaveBeenCalledTimes(2);
+
+    runner.stop();
+  });
+
+  it("preserves requests-in-flight skip reason for wake retries", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+
+    let callCount = 0;
+    const runSpy = vi.fn().mockImplementation(async () => {
+      callCount += 1;
+      if (callCount === 1) {
+        return { status: "skipped", reason: "requests-in-flight" };
+      }
+      return { status: "ran", durationMs: 1 };
+    });
+
+    const runner = startHeartbeatRunner({
+      cfg: {
+        agents: { defaults: { heartbeat: { every: "30m" } } },
+      } as OpenClawConfig,
+      runOnce: runSpy,
+    });
+
+    wake.requestHeartbeatNow({ reason: "manual", coalesceMs: 0 });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(runSpy).toHaveBeenCalledTimes(1);
+    expect(runSpy.mock.calls[0]?.[0]).toEqual(expect.objectContaining({ reason: "manual" }));
+
+    await vi.advanceTimersByTimeAsync(1_000);
     expect(runSpy).toHaveBeenCalledTimes(2);
 
     runner.stop();
