@@ -1164,3 +1164,98 @@ describe("runReplyAgent transient HTTP retry", () => {
     expect(payload?.text).toContain("Recovered response");
   });
 });
+
+describe("runReplyAgent tool-result dispatch timing", () => {
+  it("dispatches tool-result callbacks before awaiting typing signals", async () => {
+    let resolveTyping: (() => void) | undefined;
+    const typingGate = new Promise<void>((resolve) => {
+      resolveTyping = resolve;
+    });
+
+    const typing = {
+      onReplyStart: vi.fn(async () => {}),
+      startTypingLoop: vi.fn(async () => {}),
+      startTypingOnText: vi.fn(async () => {
+        await typingGate;
+      }),
+      refreshTypingTtl: vi.fn(() => {}),
+      isActive: vi.fn(() => false),
+      markRunComplete: vi.fn(() => {}),
+      markDispatchIdle: vi.fn(() => {}),
+      cleanup: vi.fn(() => {}),
+    };
+
+    const onToolResult = vi.fn(async () => {});
+
+    runEmbeddedPiAgentMock.mockImplementation(
+      async (params: { onToolResult?: (payload: { text?: string }) => void }) => {
+        params.onToolResult?.({ text: "progress 1" });
+        return {
+          payloads: [{ text: "final" }],
+          meta: {},
+        };
+      },
+    );
+
+    const sessionCtx = {
+      Provider: "telegram",
+      MessageSid: "msg",
+    } as unknown as TemplateContext;
+    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
+    const followupRun = {
+      prompt: "hello",
+      summaryLine: "hello",
+      enqueuedAt: Date.now(),
+      run: {
+        sessionId: "session",
+        sessionKey: "main",
+        messageProvider: "telegram",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        config: {},
+        skillsSnapshot: {},
+        provider: "anthropic",
+        model: "claude",
+        thinkLevel: "low",
+        verboseLevel: "off",
+        elevatedLevel: "off",
+        bashElevated: {
+          enabled: false,
+          allowed: false,
+          defaultLevel: "off",
+        },
+        timeoutMs: 1_000,
+        blockReplyBreak: "message_end",
+      },
+    } as unknown as FollowupRun;
+
+    const runPromise = runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: "main",
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      opts: { onToolResult },
+      sessionCtx,
+      defaultModel: "anthropic/claude-opus-4-5",
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "message",
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(onToolResult).toHaveBeenCalledWith({ text: "progress 1", mediaUrls: undefined });
+
+    resolveTyping?.();
+    await runPromise;
+  });
+});

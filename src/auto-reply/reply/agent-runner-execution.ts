@@ -395,11 +395,14 @@ export async function runAgentTurnWithFallback(params: {
                     if (skip) {
                       return;
                     }
-                    await params.typingSignals.signalTextDelta(text);
-                    await onToolResult({
+                    // Dispatch tool updates first so channel messages are emitted immediately,
+                    // even if typing emitters are slow or blocked.
+                    const delivery = onToolResult({
                       text,
                       mediaUrls: payload.mediaUrls,
                     });
+                    await params.typingSignals.signalTextDelta(text);
+                    await delivery;
                   })()
                     .catch((err) => {
                       logVerbose(`tool result delivery failed: ${String(err)}`);
