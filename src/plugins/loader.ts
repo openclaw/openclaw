@@ -13,6 +13,7 @@ import type {
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { emitSecurityEvent } from "../security/event-logger.js";
 import { resolveUserPath } from "../utils.js";
+import { resolveEffectiveCapabilities } from "./capabilities.js";
 import { clearPluginCommands } from "./commands.js";
 import {
   applyTestPluginDefaults,
@@ -457,9 +458,26 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       continue;
     }
 
+    const effectiveCapabilities = resolveEffectiveCapabilities({
+      capabilities: manifestRecord.capabilities,
+      channels: manifestRecord.channels,
+      providers: manifestRecord.providers,
+    });
+
+    if (effectiveCapabilities === null) {
+      registry.diagnostics.push({
+        level: "warn",
+        pluginId: record.id,
+        source: record.source,
+        message:
+          "plugin does not declare capabilities in manifest; granting full access (deprecated, will be required in future)",
+      });
+    }
+
     const api = createApi(record, {
       config: cfg,
       pluginConfig: validatedConfig.value,
+      capabilities: effectiveCapabilities,
     });
 
     try {

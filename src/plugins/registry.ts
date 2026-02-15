@@ -31,6 +31,7 @@ import type {
 } from "./types.js";
 import { registerInternalHook } from "../hooks/internal-hooks.js";
 import { resolveUserPath } from "../utils.js";
+import { createCapabilityScopedApi, type PluginCapability } from "./capabilities.js";
 import { registerPluginCommand } from "./commands.js";
 import { normalizePluginHttpPath } from "./http-path.js";
 
@@ -474,9 +475,10 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     params: {
       config: OpenClawPluginApi["config"];
       pluginConfig?: Record<string, unknown>;
+      capabilities?: Set<PluginCapability> | null;
     },
   ): OpenClawPluginApi => {
-    return {
+    const fullApi: OpenClawPluginApi = {
       id: record.id,
       name: record.name,
       version: record.version,
@@ -500,6 +502,10 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       resolvePath: (input: string) => resolveUserPath(input),
       on: (hookName, handler, opts) => registerTypedHook(record, hookName, handler, opts),
     };
+    if (params.capabilities) {
+      return createCapabilityScopedApi(fullApi, params.capabilities, record.id);
+    }
+    return fullApi;
   };
 
   return {

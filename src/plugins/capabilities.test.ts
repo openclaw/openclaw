@@ -6,9 +6,18 @@ import {
   type PluginCapability,
 } from "./capabilities.js";
 
-vi.mock("../security/event-logger.js", () => ({
-  emitSecurityEvent: vi.fn(),
+// Mock the logging subsystem so emitSecurityEvent doesn't try to log
+vi.mock("../logging/subsystem.js", () => ({
+  createSubsystemLogger: () => ({
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  }),
 }));
+
+import * as eventLogger from "../security/event-logger.js";
+const emitSpy = vi.spyOn(eventLogger, "emitSecurityEvent");
 
 function createMockApi(overrides?: Partial<OpenClawPluginApi>): OpenClawPluginApi {
   return {
@@ -170,14 +179,14 @@ describe("createCapabilityScopedApi", () => {
     expect(scoped.runtime.channel).toBe(api.runtime.channel);
   });
 
-  it("emits security event when undeclared method is called", async () => {
-    const { emitSecurityEvent } = await import("../security/event-logger.js");
+  it("emits security event when undeclared method is called", () => {
+    emitSpy.mockClear();
     const api = createMockApi();
     const capabilities = new Set<PluginCapability>(["hooks"]);
     const scoped = createCapabilityScopedApi(api, capabilities, "test-plugin");
 
     expect(() => scoped.registerTool({} as never)).toThrow();
-    expect(emitSecurityEvent).toHaveBeenCalledWith(
+    expect(emitSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         eventType: "plugin.capability.denied",
         meta: expect.objectContaining({ pluginId: "test-plugin" }),
@@ -185,16 +194,15 @@ describe("createCapabilityScopedApi", () => {
     );
   });
 
-  it("emits security event when undeclared property is accessed", async () => {
-    const { emitSecurityEvent } = await import("../security/event-logger.js");
-    vi.mocked(emitSecurityEvent).mockClear();
+  it("emits security event when undeclared property is accessed", () => {
+    emitSpy.mockClear();
     const api = createMockApi();
     const capabilities = new Set<PluginCapability>(["tools"]);
     const scoped = createCapabilityScopedApi(api, capabilities, "test-plugin");
 
     // Access undeclared config property
     const _result = scoped.config;
-    expect(emitSecurityEvent).toHaveBeenCalledWith(
+    expect(emitSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         eventType: "plugin.capability.denied",
         meta: expect.objectContaining({ pluginId: "test-plugin" }),

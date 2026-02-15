@@ -49,6 +49,7 @@ export type PluginManifestRecord = {
   manifestPath: string;
   schemaCacheKey?: string;
   configSchema?: Record<string, unknown>;
+  capabilities?: string[];
   configUiHints?: Record<string, PluginConfigUiHint>;
 };
 
@@ -129,6 +130,7 @@ function buildRecord(params: {
     channels: params.manifest.channels ?? [],
     providers: params.manifest.providers ?? [],
     skills: params.manifest.skills ?? [],
+    capabilities: params.manifest.capabilities,
     origin: params.candidate.origin,
     workspaceDir: params.candidate.workspaceDir,
     rootDir: params.candidate.rootDir,
