@@ -1893,6 +1893,7 @@ MiniMax 认证：设置 `MINIMAX_API_KEY`（环境变量）或配置 `models.pro
 旧版默认值：
 
 - `memoryFlush.enabled`：`true`
+- `memoryFlush.onManualCompact`：`false`（为 true 时，在手动 `/compact` 前先运行一次记忆刷新）
 - `memoryFlush.softThresholdTokens`：`4000`
 - `memoryFlush.prompt` / `memoryFlush.systemPrompt`：带 `NO_REPLY` 的内置默认值
 - 注意：当会话工作区为只读时跳过记忆刷新（`agents.defaults.sandbox.workspaceAccess: "ro"` 或 `"none"`）。
@@ -1908,6 +1909,7 @@ MiniMax 认证：设置 `MINIMAX_API_KEY`（环境变量）或配置 `models.pro
         reserveTokensFloor: 24000,
         memoryFlush: {
           enabled: true,
+          onManualCompact: true,
           softThresholdTokens: 6000,
           systemPrompt: "Session nearing compaction. Store durable memories now.",
           prompt: "Write any lasting notes to memory/YYYY-MM-DD.md; reply with NO_REPLY if nothing to store.",

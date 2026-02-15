@@ -1,11 +1,15 @@
+import { randomUUID } from "node:crypto";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { CommandHandler } from "./commands-types.js";
+import { isCliProvider } from "../../agents/model-selection.js";
 import {
   abortEmbeddedPiRun,
   compactEmbeddedPiSession,
   isEmbeddedPiRunActive,
+  runEmbeddedPiAgent,
   waitForEmbeddedPiRunEnd,
 } from "../../agents/pi-embedded.js";
+import { resolveSandboxConfigForAgent, resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import {
   resolveFreshSessionTotalTokens,
   resolveSessionFilePath,
@@ -14,6 +18,7 @@ import {
 import { logVerbose } from "../../globals.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { formatContextUsageShort, formatTokenCount } from "../status.js";
+import { resolveMemoryFlushSettings } from "./memory-flush.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import { incrementCompactionCount } from "./session-updates.js";
 
@@ -68,6 +73,67 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     abortEmbeddedPiRun(sessionId);
     await waitForEmbeddedPiRunEnd(sessionId, 15_000);
   }
+
+  // Optional: run a manual memory flush turn before /compact.
+  // This is more general than auto memory flush (which triggers near the context window limit).
+  const memoryFlushSettings = resolveMemoryFlushSettings(params.cfg);
+  if (memoryFlushSettings?.onManualCompact) {
+    const memoryFlushWritable = (() => {
+      if (!params.sessionKey) {
+        return true;
+      }
+      const runtime = resolveSandboxRuntimeStatus({
+        cfg: params.cfg,
+        sessionKey: params.sessionKey,
+      });
+      if (!runtime.sandboxed) {
+        return true;
+      }
+      const sandboxCfg = resolveSandboxConfigForAgent(params.cfg, runtime.agentId);
+      return sandboxCfg.workspaceAccess === "rw";
+    })();
+
+    const usingCliProvider = params.provider ? isCliProvider(params.provider, params.cfg) : false;
+
+    if (!memoryFlushWritable) {
+      logVerbose("Skipping manual /compact memory flush: workspace is read-only.");
+    } else if (usingCliProvider) {
+      logVerbose("Skipping manual /compact memory flush: CLI providers do not support tool runs.");
+    } else {
+      try {
+        await runEmbeddedPiAgent({
+          sessionId,
+          sessionKey: params.sessionKey,
+          agentId: params.agentId,
+          messageChannel: params.command.channel,
+          messageProvider: params.ctx.Provider?.trim().toLowerCase() || undefined,
+          agentAccountId: params.ctx.AccountId,
+          messageTo: params.ctx.OriginatingTo ?? params.ctx.To,
+          messageThreadId: params.ctx.MessageThreadId ?? undefined,
+          groupId: params.sessionEntry.groupId,
+          groupChannel: params.sessionEntry.groupChannel,
+          groupSpace: params.sessionEntry.space,
+          spawnedBy: params.sessionEntry.spawnedBy,
+          senderIsOwner: params.command.senderIsOwner,
+          ownerNumbers: params.command.ownerList.length > 0 ? params.command.ownerList : undefined,
+          sessionFile: resolveSessionFilePath(sessionId, params.sessionEntry),
+          workspaceDir: params.workspaceDir,
+          config: params.cfg,
+          skillsSnapshot: params.sessionEntry.skillsSnapshot,
+          prompt: memoryFlushSettings.prompt,
+          extraSystemPrompt: memoryFlushSettings.systemPrompt,
+          provider: params.provider,
+          model: params.model,
+          thinkLevel: params.resolvedThinkLevel ?? (await params.resolveDefaultThinkingLevel()),
+          timeoutMs: 120_000,
+          runId: randomUUID(),
+        });
+      } catch (err) {
+        logVerbose(`manual /compact memory flush failed: ${String(err)}`);
+      }
+    }
+  }
+
   const customInstructions = extractCompactInstructions({
     rawBody: params.ctx.CommandBody ?? params.ctx.RawBody ?? params.ctx.Body,
     ctx: params.ctx,
