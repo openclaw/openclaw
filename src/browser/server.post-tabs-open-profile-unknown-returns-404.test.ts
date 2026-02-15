@@ -123,7 +123,7 @@ describe("profile CRUD endpoints", () => {
     const createBadRemote = await realFetch(`${base}/profiles/create`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: "badremote", cdpUrl: "ws://bad" }),
+      body: JSON.stringify({ name: "badremote", cdpUrl: "ftp://bad" }),
     });
     expect(createBadRemote.status).toBe(400);
     const createBadRemoteBody = (await createBadRemote.json()) as { error: string };

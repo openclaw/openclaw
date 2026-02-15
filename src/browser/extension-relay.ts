@@ -108,8 +108,13 @@ function parseBaseUrl(raw: string): {
   baseUrl: string;
 } {
   const parsed = new URL(raw.trim().replace(/\/$/, ""));
+  if (parsed.protocol === "ws:") {
+    parsed.protocol = "http:";
+  } else if (parsed.protocol === "wss:") {
+    parsed.protocol = "https:";
+  }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    throw new Error(`extension relay cdpUrl must be http(s), got ${parsed.protocol}`);
+    throw new Error(`extension relay cdpUrl must be http(s) or ws(s), got ${parsed.protocol}`);
   }
   const host = parsed.hostname;
   const port =

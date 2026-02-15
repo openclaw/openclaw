@@ -137,7 +137,21 @@ describe("browser config", () => {
   });
 
   it("rejects unsupported protocols", () => {
-    expect(() => resolveBrowserConfig({ cdpUrl: "ws://127.0.0.1:18791" })).toThrow(/must be http/i);
+    expect(() => resolveBrowserConfig({ cdpUrl: "ftp://127.0.0.1:18791" })).toThrow(
+      /must be http/i,
+    );
+  });
+
+  it("accepts ws:// and wss:// cdpUrl and normalizes to http/https", () => {
+    const wsResolved = resolveBrowserConfig({ cdpUrl: "ws://127.0.0.1:18791" });
+    const wsProfile = resolveProfile(wsResolved, "openclaw");
+    expect(wsProfile?.cdpUrl).toBe("http://127.0.0.1:18791");
+    expect(wsResolved.cdpProtocol).toBe("http");
+
+    const wssResolved = resolveBrowserConfig({ cdpUrl: "wss://example.com:9443" });
+    const wssProfile = resolveProfile(wssResolved, "openclaw");
+    expect(wssProfile?.cdpUrl).toBe("https://example.com:9443");
+    expect(wssResolved.cdpProtocol).toBe("https");
   });
 
   it("does not add the built-in chrome extension profile if the derived relay port is already used", () => {
