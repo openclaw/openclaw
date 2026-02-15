@@ -48,6 +48,25 @@ export type AgentContextPruningConfig = {
   };
 };
 
+export type ContextDecayConfig = {
+  /** Remove thinking blocks from assistant messages after N turns. */
+  stripThinkingAfterTurns?: number;
+  /** Replace tool results with LLM summary after N turns. */
+  summarizeToolResultsAfterTurns?: number;
+  /** Group-summarize a window of turns after N turns of age. */
+  summarizeWindowAfterTurns?: number;
+  /** Number of turns per group-summarization window (default: 4). */
+  summarizeWindowSize?: number;
+  /** Replace tool results with placeholder after N turns. */
+  stripToolResultsAfterTurns?: number;
+  /** Hard cap on total messages in context. */
+  maxContextMessages?: number;
+  /** Model ref for summarization (e.g., "haiku", "anthropic/claude-haiku-4-5"). */
+  summarizationModel?: string;
+  /** Model for group summaries (falls back to summarizationModel if unset). */
+  groupSummarizationModel?: string;
+};
+
 export type CliBackendConfig = {
   /** CLI command to execute (absolute path or on PATH). */
   command: string;
@@ -160,6 +179,8 @@ export type AgentDefaultsConfig = {
   cliBackends?: Record<string, CliBackendConfig>;
   /** Opt-in: prune old tool results from the LLM context to reduce token usage. */
   contextPruning?: AgentContextPruningConfig;
+  /** Context decay settings (strip thinking, summarize/strip tool results after N turns). */
+  contextDecay?: ContextDecayConfig;
   /** Compaction tuning and pre-compaction memory flush behavior. */
   compaction?: AgentCompactionConfig;
   /** Vector memory search configuration (per-agent overrides supported). */

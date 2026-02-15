@@ -1,3 +1,4 @@
+import type { ContextDecayConfig } from "./types.agent-defaults.js";
 import type {
   BlockStreamingCoalesceConfig,
   DmPolicy,
@@ -80,6 +81,8 @@ export type WhatsAppConfig = {
   historyLimit?: number;
   /** Max DM turns to keep as history context. */
   dmHistoryLimit?: number;
+  /** Context decay settings for this account. */
+  contextDecay?: ContextDecayConfig;
   /** Per-DM config overrides keyed by user ID. */
   dms?: Record<string, DmConfig>;
   /** Outbound text chunk size (chars). Default: 4000. */
@@ -133,6 +136,8 @@ export type WhatsAppAccountConfig = {
   historyLimit?: number;
   /** Max DM turns to keep as history context. */
   dmHistoryLimit?: number;
+  /** Context decay settings for this account. */
+  contextDecay?: ContextDecayConfig;
   /** Per-DM config overrides keyed by user ID. */
   dms?: Record<string, DmConfig>;
   textChunkLimit?: number;

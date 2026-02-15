@@ -536,7 +536,8 @@ export async function compactEmbeddedPiSessionDirect(
         settingsManager,
         minReserveTokens: resolveCompactionReserveTokensFloor(params.config),
       });
-      // Call for side effects (sets compaction/pruning runtime state)
+      // Call for side effects (sets compaction/pruning runtime state).
+      // Context decay is not active during compaction (no sessionKey/sessionFile).
       buildEmbeddedExtensionPaths({
         cfg: params.config,
         sessionManager,
