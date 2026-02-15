@@ -1,6 +1,6 @@
 import { lookup as dnsLookupCb, type LookupAddress } from "node:dns";
 import { lookup as dnsLookup } from "node:dns/promises";
-import { Agent, type Dispatcher } from "undici";
+import { Agent, ProxyAgent, type Dispatcher } from "undici";
 
 type LookupCallback = (
   err: NodeJS.ErrnoException | null,
@@ -396,6 +396,23 @@ export async function resolvePinnedHostname(
 }
 
 export function createPinnedDispatcher(pinned: PinnedHostname): Dispatcher {
+  const proxyUrl =
+    process.env.HTTPS_PROXY ||
+    process.env.https_proxy ||
+    process.env.HTTP_PROXY ||
+    process.env.http_proxy;
+
+  if (proxyUrl) {
+    // SSRF protection: Even with a proxy, ensure we aren't trying to reach a blocked or private destination.
+    // resolvePinnedHostname already performs these checks, but we double-check here to satisfy
+    // the invariant that this dispatcher only targets validated public destinations.
+    if (isBlockedHostname(pinned.hostname) || pinned.addresses.some(isPrivateIpAddress)) {
+      throw new SsrFBlockedError(`SSRF protection: blocked destination ${pinned.hostname}`);
+    }
+
+    return new ProxyAgent(proxyUrl);
+  }
+
   return new Agent({
     connect: {
       lookup: pinned.lookup,
