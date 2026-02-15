@@ -391,15 +391,34 @@ function createProfileContext(
         );
       }
       await openTab("about:blank");
+      // Small delay to allow the new tab to be fully initialized and appear in the tab list
+      await new Promise((r) => setTimeout(r, 100));
     }
 
-    const tabs = await listTabs();
-    // For remote profiles using Playwright's persistent connection, we don't need wsUrl
-    // because we access pages directly through Playwright, not via individual WebSocket URLs.
-    const candidates =
-      profile.driver === "extension" || !profile.cdpIsLoopback
-        ? tabs
-        : tabs.filter((t) => Boolean(t.wsUrl));
+    // Retry logic: for loopback profiles, we need tabs with valid wsUrl
+    // If no valid candidates exist after opening a tab, retry a few times
+    const getCandidates = (tabList: BrowserTab[]) => {
+      // For remote profiles using Playwright's persistent connection, we don't need wsUrl
+      // because we access pages directly through Playwright, not via individual WebSocket URLs.
+      return profile.driver === "extension" || !profile.cdpIsLoopback
+        ? tabList
+        : tabList.filter((t) => Boolean(t.wsUrl));
+    };
+
+    let tabs = await listTabs();
+    let candidates = getCandidates(tabs);
+    const isLoopbackWithNoCandidates =
+      profile.cdpIsLoopback && candidates.length === 0 && tabs.length > 0;
+
+    // If we have tabs but none have valid wsUrl (for loopback profiles), wait and retry
+    if (isLoopbackWithNoCandidates) {
+      const deadline = Date.now() + 2000;
+      while (Date.now() < deadline && candidates.length === 0) {
+        await new Promise((r) => setTimeout(r, 100));
+        tabs = await listTabs();
+        candidates = getCandidates(tabs);
+      }
+    }
 
     const resolveById = (raw: string) => {
       const resolved = resolveTargetIdFromTabs(raw, candidates);
