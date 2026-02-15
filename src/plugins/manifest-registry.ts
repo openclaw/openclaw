@@ -89,7 +89,14 @@ function buildCacheKey(params: {
   plugins: NormalizedPluginsConfig;
 }): string {
   const workspaceKey = params.workspaceDir ? resolveUserPath(params.workspaceDir) : "";
-  return `${workspaceKey}::${JSON.stringify(params.plugins)}`;
+  // The manifest registry only depends on where plugins are discovered from (workspace + load paths).
+  // It does not depend on allow/deny/entries enable-state, so exclude those for higher cache hit rates.
+  const loadPaths = params.plugins.loadPaths
+    .map((p) => resolveUserPath(p))
+    .map((p) => p.trim())
+    .filter(Boolean)
+    .toSorted();
+  return `${workspaceKey}::${JSON.stringify(loadPaths)}`;
 }
 
 function safeStatMtimeMs(filePath: string): number | null {
