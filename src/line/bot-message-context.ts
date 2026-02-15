@@ -26,12 +26,14 @@ interface BuildLineMessageContextParams {
   account: ResolvedLineAccount;
 }
 
-function getSourceInfo(source: EventSource): {
+export type LineSourceInfo = {
   userId?: string;
   groupId?: string;
   roomId?: string;
   isGroup: boolean;
-} {
+};
+
+export function getLineSourceInfo(source: EventSource): LineSourceInfo {
   const userId =
     source.type === "user"
       ? source.userId
@@ -78,7 +80,7 @@ function resolveLineInboundRoute(params: {
     direction: "inbound",
   });
 
-  const { userId, groupId, roomId, isGroup } = getSourceInfo(params.source);
+  const { userId, groupId, roomId, isGroup } = getLineSourceInfo(params.source);
   const peerId = buildPeerId(params.source);
   const route = resolveAgentRoute({
     cfg: params.cfg,
