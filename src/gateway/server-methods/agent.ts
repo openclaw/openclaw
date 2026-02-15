@@ -111,7 +111,7 @@ async function runSessionResetFromAgent(params: {
       settle({ ok: true, key, sessionId });
     };
 
-    void sessionsHandlers["sessions.reset"]({
+    const resetResult = sessionsHandlers["sessions.reset"]({
       req: {
         type: "req",
         id: `${params.idempotencyKey}:reset`,
@@ -125,7 +125,9 @@ async function runSessionResetFromAgent(params: {
       client: params.client,
       isWebchatConnect: params.isWebchatConnect,
       respond,
-    })
+    });
+
+    void Promise.resolve(resetResult)
       .then(() => {
         if (!settled) {
           settle({
@@ -137,7 +139,7 @@ async function runSessionResetFromAgent(params: {
           });
         }
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
         settle({
           ok: false,
           error: errorShape(ErrorCodes.UNAVAILABLE, String(err)),
