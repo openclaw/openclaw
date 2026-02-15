@@ -495,12 +495,32 @@ export async function runAgentTurnWithFallback(params: {
 
         try {
           // Delete transcript file if it exists
+          // Clean up non-thread-scoped transcript, and thread-scoped if applicable
           if (corruptedSessionId) {
-            const transcriptPath = resolveSessionTranscriptPath(corruptedSessionId);
-            try {
-              fs.unlinkSync(transcriptPath);
-            } catch {
-              // Ignore if file doesn't exist
+            const agentId = resolveAgentIdFromSessionKey(sessionKey);
+            const transcriptCandidates = [
+              resolveSessionTranscriptPath(corruptedSessionId, agentId),
+            ];
+            // Add thread-scoped path if MessageThreadId is present and non-empty
+            let threadId = params.sessionCtx.MessageThreadId;
+            if (typeof threadId === "string") {
+              threadId = threadId.trim() || undefined;
+            }
+            if (threadId != null && threadId !== "") {
+              transcriptCandidates.push(
+                resolveSessionTranscriptPath(corruptedSessionId, agentId, threadId),
+              );
+            }
+            for (const candidate of transcriptCandidates) {
+              try {
+                await fs.promises.unlink(candidate);
+              } catch (err) {
+                // Ignore if file doesn't exist, but log other errors
+                const errCode = (err as NodeJS.ErrnoException).code;
+                if (errCode !== "ENOENT") {
+                  defaultRuntime.error(`Failed to delete transcript ${candidate}: ${String(err)}`);
+                }
+              }
             }
           }
 
