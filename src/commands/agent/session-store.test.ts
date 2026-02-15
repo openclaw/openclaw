@@ -12,7 +12,13 @@ function computeTargetThinkingLevel(params: {
   allowedLevels: ThinkLevel[];
   currentLevel: ThinkLevel | undefined;
 }): ThinkLevel | undefined {
-  const { escalation, totalTokens, contextTokens, allowedLevels, currentLevel } = params;
+  const {
+    escalation,
+    totalTokens,
+    contextTokens,
+    allowedLevels,
+    currentLevel: _currentLevel,
+  } = params;
 
   if (!escalation?.enabled || !escalation.thresholds || escalation.thresholds.length === 0) {
     return undefined;
