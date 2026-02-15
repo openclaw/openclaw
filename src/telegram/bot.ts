@@ -1,8 +1,10 @@
+import type { ApiClientOptions } from "grammy";
 import { sequentialize } from "@grammyjs/runner";
 import { apiThrottler } from "@grammyjs/transformer-throttler";
 import { type Message, type UserFromGetMe } from "@grammyjs/types";
-import type { ApiClientOptions } from "grammy";
 import { Bot, webhookCallback } from "grammy";
+import type { OpenClawConfig, ReplyToMode } from "../config/config.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import { isAbortRequestText } from "../auto-reply/reply/abort.js";
@@ -12,7 +14,6 @@ import {
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
 } from "../config/commands.js";
-import type { OpenClawConfig, ReplyToMode } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import {
   resolveChannelGroupPolicy,
@@ -23,8 +24,8 @@ import { danger, logVerbose, shouldLogVerbose } from "../globals.js";
 import { formatUncaughtError } from "../infra/errors.js";
 import { getChildLogger } from "../logging.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { resolveTelegramAccount } from "./accounts.js";
+import { getTelegramApiBase, isCustomTelegramApi } from "./api-base.js";
 import { registerTelegramHandlers } from "./bot-handlers.js";
 import { createTelegramMessageProcessor } from "./bot-message.js";
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
@@ -146,7 +147,13 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         }
       : undefined;
 
-  const bot = new Bot(opts.token, client ? { client } : undefined);
+  const apiRoot = getTelegramApiBase(telegramCfg.apiRoot);
+  const clientWithApiRoot: ApiClientOptions = {
+    ...client,
+    ...(isCustomTelegramApi(apiRoot) ? { apiRoot } : {}),
+  };
+  const hasClientOpts = Object.keys(clientWithApiRoot).length > 0;
+  const bot = new Bot(opts.token, hasClientOpts ? { client: clientWithApiRoot } : undefined);
   bot.api.config.use(apiThrottler());
   bot.use(sequentialize(getTelegramSequentialKey));
   // Catch all errors from bot middleware to prevent unhandled rejections
