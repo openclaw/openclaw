@@ -182,6 +182,7 @@ export function createSessionsListTool(opts?: {
           systemSent: typeof entry.systemSent === "boolean" ? entry.systemSent : undefined,
           abortedLastRun:
             typeof entry.abortedLastRun === "boolean" ? entry.abortedLastRun : undefined,
+          isProcessing: typeof entry.isProcessing === "boolean" ? entry.isProcessing : undefined,
           sendPolicy: typeof entry.sendPolicy === "string" ? entry.sendPolicy : undefined,
           lastChannel,
           lastTo: deliveryTo ?? (typeof entry.lastTo === "string" ? entry.lastTo : undefined),

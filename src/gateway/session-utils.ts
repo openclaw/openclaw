@@ -668,8 +668,9 @@ export function listSessionsFromStore(params: {
   storePath: string;
   store: Record<string, SessionEntry>;
   opts: import("./protocol/index.js").SessionsListParams;
+  activeSessionKeys?: ReadonlySet<string>;
 }): SessionsListResult {
-  const { cfg, storePath, store, opts } = params;
+  const { cfg, storePath, store, opts, activeSessionKeys } = params;
   const now = Date.now();
 
   const includeGlobal = opts.includeGlobal === true;
@@ -772,6 +773,7 @@ export function listSessionsFromStore(params: {
         sessionId: entry?.sessionId,
         systemSent: entry?.systemSent,
         abortedLastRun: entry?.abortedLastRun,
+        isProcessing: activeSessionKeys ? activeSessionKeys.has(key) : undefined,
         thinkingLevel: entry?.thinkingLevel,
         verboseLevel: entry?.verboseLevel,
         reasoningLevel: entry?.reasoningLevel,

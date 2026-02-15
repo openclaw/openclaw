@@ -117,7 +117,7 @@ async function ensureSessionRuntimeCleanup(params: {
 }
 
 export const sessionsHandlers: GatewayRequestHandlers = {
-  "sessions.list": ({ params, respond }) => {
+  "sessions.list": ({ params, respond, context }) => {
     if (!validateSessionsListParams(params)) {
       respond(
         false,
@@ -132,11 +132,16 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const p = params;
     const cfg = loadConfig();
     const { storePath, store } = loadCombinedSessionStoreForGateway(cfg);
+    const activeSessionKeys = new Set<string>();
+    for (const entry of context.chatAbortControllers.values()) {
+      activeSessionKeys.add(entry.sessionKey);
+    }
     const result = listSessionsFromStore({
       cfg,
       storePath,
       store,
       opts: p,
+      activeSessionKeys,
     });
     respond(true, result, undefined);
   },

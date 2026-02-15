@@ -36,6 +36,7 @@ export type SessionListRow = {
   verboseLevel?: string;
   systemSent?: boolean;
   abortedLastRun?: boolean;
+  isProcessing?: boolean;
   sendPolicy?: string;
   lastChannel?: string;
   lastTo?: string;
