@@ -1,0 +1,42 @@
+{
+    "name": "@haiyanfengli-llc/webhook-server",
+    "version": "1.0.0",
+    "description": "Clawdbot plugin that exposes a webhook server for external integrations",
+    "main": "dist/index.js",
+    "types": "dist/index.d.ts",
+    "scripts": {
+        "build": "tsc",
+        "dev": "tsc -w",
+        "test": "vitest run",
+        "prepublishOnly": "npm run build"
+    },
+    "files": [
+        "dist",
+        "clawdbot.plugin.json"
+    ],
+    "keywords": [
+        "clawdbot",
+        "plugin",
+        "webhook",
+        "wechat"
+    ],
+    "author": "",
+    "license": "MIT",
+    "clawdbot": {
+        "extensions": [
+            "dist/index.js"
+        ]
+    },
+    "dependencies": {
+        "fastify": "^4.26.1",
+        "axios": "^1.6.7"
+    },
+    "devDependencies": {
+        "@types/node": "^20.11.19",
+        "typescript": "^5.3.3",
+        "vitest": "^1.3.1"
+    },
+    "peerDependencies": {
+        "clawdbot": ">=1.0.0"
+    }
+}
