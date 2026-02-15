@@ -7,6 +7,7 @@ import { convertMarkdownTables } from "../markdown/tables.js";
 import { markdownToWhatsApp } from "../markdown/whatsapp.js";
 import { normalizePollInput, type PollInput } from "../polls.js";
 import { toWhatsappJid } from "../utils.js";
+import { resolveWhatsAppAccount } from "./accounts.js";
 import { type ActiveWebSendOptions, requireActiveWebListener } from "./active-listener.js";
 import { loadWebMedia } from "./media.js";
 
@@ -71,7 +72,13 @@ export async function sendMessageWhatsApp(
     }
     outboundLog.info(`Sending message -> ${jid}${options.mediaUrl ? " (media)" : ""}`);
     logger.info({ jid, hasMedia: Boolean(options.mediaUrl) }, "sending message");
-    await active.sendComposingTo(to);
+    const whatsappAccount = resolveWhatsAppAccount({
+      cfg,
+      accountId: resolvedAccountId ?? options.accountId,
+    });
+    if (whatsappAccount.typingIndicator !== "none") {
+      await active.sendComposingTo(to);
+    }
     const hasExplicitAccountId = Boolean(options.accountId?.trim());
     const accountId = hasExplicitAccountId ? resolvedAccountId : undefined;
     const sendOptions: ActiveWebSendOptions | undefined =

@@ -35,6 +35,13 @@ export type WhatsAppAckReactionConfig = {
   group?: "always" | "mentions" | "never";
 };
 
+/**
+ * Controls typing indicator sent before outbound messages.
+ * - "none": do not send typing indicator
+ * - "composing": send "is typing" indicator before each message (default)
+ */
+export type WhatsAppTypingIndicatorConfig = "none" | "composing";
+
 export type WhatsAppConfig = {
   /** Optional per-account WhatsApp configuration (multi-account). */
   accounts?: Record<string, WhatsAppAccountConfig>;
@@ -46,6 +53,8 @@ export type WhatsAppConfig = {
   configWrites?: boolean;
   /** Send read receipts for incoming messages (default true). */
   sendReadReceipts?: boolean;
+  /** Typing indicator sent before outbound messages. Set to "none" to disable (helps avoid rate limits with new accounts). Default: "composing". */
+  typingIndicator?: WhatsAppTypingIndicatorConfig;
   /**
    * Inbound message prefix (WhatsApp only).
    * Default: `[{agents.list[].identity.name}]` (or `[openclaw]`) when allowFrom is empty, else `""`.
@@ -116,6 +125,8 @@ export type WhatsAppAccountConfig = {
   enabled?: boolean;
   /** Send read receipts for incoming messages (default true). */
   sendReadReceipts?: boolean;
+  /** Typing indicator sent before outbound messages. Set to "none" to disable (helps avoid rate limits with new accounts). Default: "composing". */
+  typingIndicator?: WhatsAppTypingIndicatorConfig;
   /** Inbound message prefix override for this account (WhatsApp only). */
   messagePrefix?: string;
   /** Per-account outbound response prefix override (takes precedence over channel and global). */
