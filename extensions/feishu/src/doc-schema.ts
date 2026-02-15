@@ -11,6 +11,15 @@ export const FeishuDocSchema = Type.Union([
     content: Type.String({
       description: "Markdown content to write (replaces entire document content)",
     }),
+    mode: Type.Optional(
+      Type.Union([Type.Literal("blocks"), Type.Literal("import")], {
+        description: "Write mode. `blocks` keeps current behavior; `import` creates a new doc via Import Task.",
+      }),
+    ),
+    title: Type.Optional(Type.String({ description: "Document title (required when mode=import)" })),
+    folder_token: Type.Optional(
+      Type.String({ description: "Target folder token (required when mode=import)" }),
+    ),
   }),
   Type.Object({
     action: Type.Literal("append"),

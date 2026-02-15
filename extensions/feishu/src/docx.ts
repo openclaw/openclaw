@@ -283,6 +283,85 @@ async function createDoc(client: Lark.Client, title: string, folderToken?: strin
   };
 }
 
+async function createDocFromMarkdownViaImport(
+  client: Lark.Client,
+  title: string,
+  markdown: string,
+  folderToken: string,
+) {
+  const temp = await createDoc(client, `[tmp] ${title}`);
+  const tempDocToken = temp.document_id;
+  if (!tempDocToken) {
+    throw new Error("Failed to create temporary document for import");
+  }
+
+  try {
+    const uploadRes = await client.drive.media.uploadAll({
+      data: {
+        file_name: `${title}.md`,
+        parent_type: "docx_file",
+        parent_node: tempDocToken,
+        size: Buffer.byteLength(markdown, "utf-8"),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK stream/buffer typing variance
+        file: Buffer.from(markdown, "utf-8") as any,
+      },
+    });
+    const fileToken = uploadRes?.file_token;
+    if (!fileToken) {
+      throw new Error("Import upload failed: no file_token returned");
+    }
+
+    const importRes = await client.drive.importTask.create({
+      data: {
+        file_extension: "md",
+        file_token: fileToken,
+        type: "docx",
+        file_name: `${title}.md`,
+        point: { mount_type: 1, mount_key: folderToken },
+      },
+    });
+    if (importRes.code !== 0) {
+      throw new Error(importRes.msg || "Import task creation failed");
+    }
+
+    const ticket = importRes.data?.ticket;
+    if (!ticket) {
+      throw new Error("Import task creation failed: missing ticket");
+    }
+
+    for (let i = 0; i < 5; i++) {
+      const pollRes = await client.drive.importTask.get({ path: { ticket } });
+      if (pollRes.code !== 0) {
+        throw new Error(pollRes.msg || "Import task polling failed");
+      }
+      const result = pollRes.data?.result;
+      if (result?.job_status === 0 && result.token) {
+        return {
+          success: true,
+          document_id: result.token,
+          title,
+          url: result.url || `https://feishu.cn/docx/${result.token}`,
+          method: "import_task",
+        };
+      }
+      if ((result?.job_status ?? -1) > 2) {
+        throw new Error(result?.job_error_msg || "Import task failed");
+      }
+    }
+
+    throw new Error("Import task did not complete within retry window");
+  } finally {
+    try {
+      await client.drive.file.delete({
+        path: { file_token: tempDocToken },
+        params: { type: "docx" },
+      });
+    } catch {
+      // Best-effort cleanup for temporary document.
+    }
+  }
+}
+
 async function writeDoc(client: Lark.Client, docToken: string, markdown: string, maxBytes: number) {
   const deleted = await clearDocumentContent(client, docToken);
 
@@ -480,6 +559,23 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
               case "read":
                 return json(await readDoc(client, p.doc_token));
               case "write":
+                if (p.mode === "import") {
+                  if (!p.title || !p.folder_token) {
+                    return json({
+                      error: "write mode=import requires both title and folder_token",
+                    });
+                  }
+                  return json({
+                    ...(await createDocFromMarkdownViaImport(
+                      client,
+                      p.title,
+                      p.content,
+                      p.folder_token,
+                    )),
+                    old_doc_token: p.doc_token,
+                    note: "Created a new document via import mode. Continue with the returned document_id.",
+                  });
+                }
                 return json(await writeDoc(client, p.doc_token, p.content, mediaMaxBytes));
               case "append":
                 return json(await appendDoc(client, p.doc_token, p.content, mediaMaxBytes));
