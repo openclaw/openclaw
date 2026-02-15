@@ -37,14 +37,11 @@ export async function handleDiscordMessageAction(
     const asVoice = params.asVoice === true;
     const rawComponents = params.components;
     const components =
-      rawComponents &&
-      (Array.isArray(rawComponents) ||
-        typeof rawComponents === "function" ||
-        (typeof rawComponents === "object" && !Array.isArray(rawComponents)))
+      rawComponents && (Array.isArray(rawComponents) || typeof rawComponents === "function")
         ? rawComponents
         : undefined;
     const content = readStringParam(params, "message", {
-      required: !asVoice && !components,
+      required: !asVoice,
       allowEmpty: true,
     });
     // Support media, path, and filePath for media URL
