@@ -1032,7 +1032,13 @@ export async function sendPollTelegram(
     opts.verbose,
     async (effectiveParams, label) =>
       requestWithDiag(
-        () => api.sendPoll(chatId, normalizedPoll.question, pollOptions, effectiveParams as any),
+        () =>
+          api.sendPoll(
+            chatId,
+            normalizedPoll.question,
+            pollOptions,
+            effectiveParams as Parameters<typeof api.sendPoll>[2],
+          ),
         label,
       ).catch((err) => {
         throw wrapChatNotFoundError(err, chatId, to);
