@@ -1,5 +1,8 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
 
@@ -289,6 +292,55 @@ describe("installSessionToolResultGuard", () => {
 
     const messages = getPersistedMessages(sm);
     expect(messages.map((m) => m.role)).toEqual(["assistant"]);
+  });
+
+  it("externalizes oversized tool payloads to file refs for persisted sessions", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-tool-output-ref-"));
+    const sessionFile = path.join(dir, "session.jsonl");
+    const sm = SessionManager.open(sessionFile);
+    installSessionToolResultGuard(sm);
+
+    sm.appendMessage(toolCallMessage);
+    sm.appendMessage(
+      asAppendMessage({
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "exec",
+        content: [{ type: "text", text: "x".repeat(150_000) }],
+        details: {
+          status: "completed",
+          exitCode: 0,
+          stdout: "y".repeat(50_000),
+        },
+        isError: false,
+        timestamp: Date.now(),
+      }),
+    );
+
+    const entries = sm
+      .getEntries()
+      .filter((e) => e.type === "message")
+      .map((e) => (e as { message: AgentMessage }).message);
+    const toolResult = entries.find((m) => m.role === "toolResult") as {
+      details?: Record<string, unknown>;
+      content?: Array<{ type?: string; text?: string }>;
+    };
+
+    const details = toolResult.details as {
+      outputRef?: { path?: string; contains?: { details?: boolean; text?: boolean } };
+    };
+    expect(details?.outputRef?.path).toBeTruthy();
+    expect(details?.outputRef?.contains).toEqual({ details: true, text: true });
+
+    const preview = toolResult.content?.find((block) => block.type === "text")?.text ?? "";
+    expect(preview).toContain("[openclaw] Full tool output saved to");
+    expect(preview.length).toBeLessThan(20_000);
+
+    const refPath = path.join(path.dirname(sessionFile), String(details.outputRef?.path));
+    expect(fs.existsSync(refPath)).toBe(true);
+    const payload = fs.readFileSync(refPath, "utf-8");
+    expect(payload).toContain('"toolCallId": "call_1"');
+    expect(payload).toContain('"status": "completed"');
   });
 
   it("applies message persistence transform to user messages", () => {
