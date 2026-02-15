@@ -271,7 +271,9 @@ describe("openclaw-tools: subagents (sessions_spawn model + thinking)", () => {
       modelApplied: true,
     });
 
-    const patchCall = calls.find((call) => call.method === "sessions.patch");
+    const patchCall = calls.find(
+      (call) => call.method === "sessions.patch" && (call.params as { model?: string })?.model,
+    );
     expect(patchCall?.params).toMatchObject({
       model: "opencode/claude",
     });
@@ -287,7 +289,11 @@ describe("openclaw-tools: subagents (sessions_spawn model + thinking)", () => {
       const request = opts as { method?: string; params?: unknown };
       calls.push(request);
       if (request.method === "sessions.patch") {
-        throw new Error("invalid model: bad-model");
+        const params = request.params as { model?: unknown } | undefined;
+        if (typeof params?.model === "string" && params.model.trim()) {
+          throw new Error("invalid model: bad-model");
+        }
+        return { ok: true };
       }
       if (request.method === "agent") {
         agentCallCount += 1;
