@@ -256,7 +256,9 @@ export function createOpenClawCodingTools(options?: {
   const workspaceRoot = options?.workspaceDir ?? process.cwd();
   const workspaceOnly = fsConfig.workspaceOnly === true;
   const applyPatchConfig = execConfig.applyPatch;
-  const applyPatchWorkspaceOnly = workspaceOnly || applyPatchConfig?.workspaceOnly === true;
+  // Secure by default: apply_patch is workspace-contained unless explicitly disabled.
+  // (tools.fs.workspaceOnly is a separate umbrella flag for read/write/edit/apply_patch.)
+  const applyPatchWorkspaceOnly = workspaceOnly || applyPatchConfig?.workspaceOnly !== false;
   const applyPatchEnabled =
     !!applyPatchConfig?.enabled &&
     isOpenAIProvider(options?.modelProvider) &&

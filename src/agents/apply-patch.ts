@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import { applyUpdateHunk } from "./apply-patch-update.js";
-import { assertSandboxPath, resolveSandboxPath } from "./sandbox-paths.js";
+import { assertSandboxPath } from "./sandbox-paths.js";
 
 const BEGIN_PATCH_MARKER = "*** Begin Patch";
 const END_PATCH_MARKER = "*** End Patch";
@@ -67,7 +67,7 @@ type SandboxApplyPatchConfig = {
 type ApplyPatchOptions = {
   cwd: string;
   sandbox?: SandboxApplyPatchConfig;
-  /** When true, restrict patch paths to the workspace root (cwd). Default: false. */
+  /** Restrict patch paths to the workspace root (cwd). Default: true. Set false to opt out. */
   workspaceOnly?: boolean;
   signal?: AbortSignal;
 };
@@ -83,7 +83,7 @@ export function createApplyPatchTool(
 ): AgentTool<typeof applyPatchSchema, ApplyPatchToolDetails> {
   const cwd = options.cwd ?? process.cwd();
   const sandbox = options.sandbox;
-  const workspaceOnly = options.workspaceOnly === true;
+  const workspaceOnly = options.workspaceOnly !== false;
 
   return {
     name: "apply_patch",
@@ -155,7 +155,7 @@ export async function applyPatch(
     }
 
     if (hunk.kind === "delete") {
-      const target = await resolvePatchPath(hunk.path, options, "unlink");
+      const target = await resolvePatchPath(hunk.path, options);
       await fileOps.remove(target.resolved);
       recordSummary(summary, seen, "deleted", target.display);
       continue;
@@ -254,7 +254,6 @@ async function ensureDir(filePath: string, ops: PatchFileOps) {
 async function resolvePatchPath(
   filePath: string,
   options: ApplyPatchOptions,
-  purpose: "readWrite" | "unlink" = "readWrite",
 ): Promise<{ resolved: string; display: string }> {
   if (options.sandbox) {
     const resolved = options.sandbox.bridge.resolvePath({
@@ -267,16 +266,15 @@ async function resolvePatchPath(
     };
   }
 
-  const resolved = options.workspaceOnly
-    ? purpose === "unlink"
-      ? resolveSandboxPath({ filePath, cwd: options.cwd, root: options.cwd }).resolved
-      : (
-          await assertSandboxPath({
-            filePath,
-            cwd: options.cwd,
-            root: options.cwd,
-          })
-        ).resolved
+  const workspaceOnly = options.workspaceOnly !== false;
+  const resolved = workspaceOnly
+    ? (
+        await assertSandboxPath({
+          filePath,
+          cwd: options.cwd,
+          root: options.cwd,
+        })
+      ).resolved
     : resolvePathFromCwd(filePath, options.cwd);
   return {
     resolved,
