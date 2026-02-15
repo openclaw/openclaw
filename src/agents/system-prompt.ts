@@ -623,7 +623,7 @@ export function buildAgentSystemPrompt(params: {
     }
     lines.push("");
     for (const file of validContextFiles) {
-      lines.push(`## ${file.path}`, "", file.content, "");
+      lines.push(`## ${file.path ?? "(unnamed)"}`, "", file.content, "");
     }
   }
 
