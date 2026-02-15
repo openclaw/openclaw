@@ -29,6 +29,19 @@ function resolveCommand(command: string): string {
   return command;
 }
 
+export function shouldSpawnWithShell(params: {
+  resolvedCommand: string;
+  platform: NodeJS.Platform;
+}): boolean {
+  // SECURITY: never enable `shell` for argv-based execution.
+  // `shell` routes through cmd.exe on Windows, which turns untrusted argv values
+  // (like chat prompts passed as CLI args) into command-injection primitives.
+  // If you need a shell, use an explicit shell-wrapper argv (e.g. `cmd.exe /c ...`)
+  // and validate/escape at the call site.
+  void params;
+  return false;
+}
+
 // Simple promise-wrapped execFile with optional verbosity logging.
 export async function runExec(
   command: string,
@@ -117,14 +130,14 @@ export async function runCommandWithTimeout(
 
   const stdio = resolveCommandStdio({ hasInput, preferInherit: true });
   const resolvedCommand = resolveCommand(argv[0] ?? "");
-  const commandExt = path.extname(resolvedCommand).toLowerCase();
-  const useShell = process.platform === "win32" && commandExt !== ".exe";
   const child = spawn(resolvedCommand, argv.slice(1), {
     stdio,
     cwd,
     env: resolvedEnv,
     windowsVerbatimArguments,
-    shell: useShell,
+    ...(shouldSpawnWithShell({ resolvedCommand, platform: process.platform })
+      ? { shell: true }
+      : {}),
   });
   // Spawn with inherited stdin (TTY) so tools like `pi` stay interactive when needed.
   return await new Promise((resolve, reject) => {
