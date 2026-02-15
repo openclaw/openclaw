@@ -322,7 +322,7 @@ export function describeReplyContext(rawMessage: proto.IMessage | undefined): {
   // IMPORTANT: don't fall back to the raw sender JID in senderE164.
   // If senderJid is a LID JID (e.g. 123@lid), treating it as an E.164 later can
   // produce bogus numbers and break reply-to-bot implicit mention detection.
-  const senderE164 = senderJid ? jidToE164(senderJid) ?? undefined : undefined;
+  const senderE164 = senderJid ? (jidToE164(senderJid) ?? undefined) : undefined;
   const sender = senderE164 ?? senderJid ?? "unknown sender";
   return {
     id: contextInfo?.stanzaId ? String(contextInfo.stanzaId) : undefined,
