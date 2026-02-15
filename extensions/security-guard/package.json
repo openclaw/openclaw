@@ -8,11 +8,11 @@
     "name": "Miloud Belarebia",
     "url": "https://2pidata.com"
   },
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/miloudbelarebia/openclaw-security-guard"
   },
-  "license": "MIT",
   "devDependencies": {
     "openclaw": "workspace:*"
   },
@@ -20,6 +20,8 @@
     "openclaw": ">=2026.1.26"
   },
   "openclaw": {
-    "extensions": ["./index.ts"]
+    "extensions": [
+      "./index.ts"
+    ]
   }
 }

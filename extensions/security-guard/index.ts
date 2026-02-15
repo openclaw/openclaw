@@ -17,8 +17,8 @@
  */
 
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { detectInjection } from "./src/injection-patterns.js";
 import { auditConfig } from "./src/config-auditor.js";
+import { detectInjection } from "./src/injection-patterns.js";
 
 // ── Timer storage (module-level, avoids type-casting ctx) ──────────────────
 

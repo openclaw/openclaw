@@ -44,8 +44,7 @@ const SECURITY_RULES: AuditRule[] = [
       return bind === "loopback" || bind === "127.0.0.1" || !bind;
     },
     message: "Gateway should bind to loopback only",
-    detail:
-      "Binding to 0.0.0.0 or a public IP exposes the gateway to the network",
+    detail: "Binding to 0.0.0.0 or a public IP exposes the gateway to the network",
     fix: 'Set gateway.bind to "loopback"',
   },
   {
@@ -106,8 +105,7 @@ const SECURITY_RULES: AuditRule[] = [
     id: "elevated-disabled",
     category: "tools",
     severity: "high",
-    check: (c) =>
-      asAny(c).agents?.defaults?.tools?.elevated?.enabled !== true,
+    check: (c) => asAny(c).agents?.defaults?.tools?.elevated?.enabled !== true,
     message: "Elevated mode should be disabled by default",
     detail: "Elevated mode grants additional system permissions",
     fix: "Set agents.defaults.tools.elevated.enabled to false",
