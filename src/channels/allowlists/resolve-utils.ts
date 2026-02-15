@@ -1,5 +1,11 @@
 import type { RuntimeEnv } from "../../runtime.js";
 
+export type AllowlistUserResolutionLike = {
+  input: string;
+  resolved: boolean;
+  id?: string;
+};
+
 export function mergeAllowlist(params: {
   existing?: Array<string | number>;
   additions: string[];
@@ -25,6 +31,36 @@ export function mergeAllowlist(params: {
     push(entry);
   }
   return merged;
+}
+
+export function buildAllowlistResolutionSummary<T extends AllowlistUserResolutionLike>(
+  resolvedUsers: T[],
+): {
+  resolvedMap: Map<string, T>;
+  mapping: string[];
+  unresolved: string[];
+} {
+  const resolvedMap = new Map(resolvedUsers.map((entry) => [entry.input, entry]));
+  const mapping = resolvedUsers
+    .filter((entry) => entry.resolved && entry.id)
+    .map((entry) => `${entry.input}→${entry.id}`);
+  const unresolved = resolvedUsers.filter((entry) => !entry.resolved).map((entry) => entry.input);
+  return { resolvedMap, mapping, unresolved };
+}
+
+export function resolveAllowlistIdAdditions<T extends AllowlistUserResolutionLike>(params: {
+  existing: Array<string | number>;
+  resolvedMap: Map<string, T>;
+}): string[] {
+  const additions: string[] = [];
+  for (const entry of params.existing) {
+    const trimmed = String(entry).trim();
+    const resolved = params.resolvedMap.get(trimmed);
+    if (resolved?.resolved && resolved.id) {
+      additions.push(resolved.id);
+    }
+  }
+  return additions;
 }
 
 export function summarizeMapping(
