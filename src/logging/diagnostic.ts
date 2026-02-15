@@ -104,11 +104,13 @@ export function logWebhookReceived(params: {
 }) {
   webhookStats.received += 1;
   webhookStats.lastReceived = Date.now();
-  diag.debug(
-    `webhook received: channel=${params.channel} type=${params.updateType ?? "unknown"} chatId=${
-      params.chatId ?? "unknown"
-    } total=${webhookStats.received}`,
-  );
+  if (diag.isEnabled("debug")) {
+    diag.debug(
+      `webhook received: channel=${params.channel} type=${params.updateType ?? "unknown"} chatId=${
+        params.chatId ?? "unknown"
+      } total=${webhookStats.received}`,
+    );
+  }
   emitDiagnosticEvent({
     type: "webhook.received",
     channel: params.channel,
@@ -125,13 +127,15 @@ export function logWebhookProcessed(params: {
   durationMs?: number;
 }) {
   webhookStats.processed += 1;
-  diag.debug(
-    `webhook processed: channel=${params.channel} type=${
-      params.updateType ?? "unknown"
-    } chatId=${params.chatId ?? "unknown"} duration=${params.durationMs ?? 0}ms processed=${
-      webhookStats.processed
-    }`,
-  );
+  if (diag.isEnabled("debug")) {
+    diag.debug(
+      `webhook processed: channel=${params.channel} type=${
+        params.updateType ?? "unknown"
+      } chatId=${params.chatId ?? "unknown"} duration=${params.durationMs ?? 0}ms processed=${
+        webhookStats.processed
+      }`,
+    );
+  }
   emitDiagnosticEvent({
     type: "webhook.processed",
     channel: params.channel,
@@ -173,11 +177,13 @@ export function logMessageQueued(params: {
   const state = getSessionState(params);
   state.queueDepth += 1;
   state.lastActivity = Date.now();
-  diag.debug(
-    `message queued: sessionId=${state.sessionId ?? "unknown"} sessionKey=${
-      state.sessionKey ?? "unknown"
-    } source=${params.source} queueDepth=${state.queueDepth} sessionState=${state.state}`,
-  );
+  if (diag.isEnabled("debug")) {
+    diag.debug(
+      `message queued: sessionId=${state.sessionId ?? "unknown"} sessionKey=${
+        state.sessionKey ?? "unknown"
+      } source=${params.source} queueDepth=${state.queueDepth} sessionState=${state.state}`,
+    );
+  }
   emitDiagnosticEvent({
     type: "message.queued",
     sessionId: state.sessionId,
@@ -200,21 +206,22 @@ export function logMessageProcessed(params: {
   reason?: string;
   error?: string;
 }) {
-  const payload = `message processed: channel=${params.channel} chatId=${
-    params.chatId ?? "unknown"
-  } messageId=${params.messageId ?? "unknown"} sessionId=${
-    params.sessionId ?? "unknown"
-  } sessionKey=${params.sessionKey ?? "unknown"} outcome=${params.outcome} duration=${
-    params.durationMs ?? 0
-  }ms${params.reason ? ` reason=${params.reason}` : ""}${
-    params.error ? ` error="${params.error}"` : ""
-  }`;
-  if (params.outcome === "error") {
-    diag.error(payload);
-  } else if (params.outcome === "skipped") {
-    diag.debug(payload);
-  } else {
-    diag.debug(payload);
+  const wantsLog = params.outcome === "error" ? diag.isEnabled("error") : diag.isEnabled("debug");
+  if (wantsLog) {
+    const payload = `message processed: channel=${params.channel} chatId=${
+      params.chatId ?? "unknown"
+    } messageId=${params.messageId ?? "unknown"} sessionId=${
+      params.sessionId ?? "unknown"
+    } sessionKey=${params.sessionKey ?? "unknown"} outcome=${params.outcome} duration=${
+      params.durationMs ?? 0
+    }ms${params.reason ? ` reason=${params.reason}` : ""}${
+      params.error ? ` error="${params.error}"` : ""
+    }`;
+    if (params.outcome === "error") {
+      diag.error(payload);
+    } else {
+      diag.debug(payload);
+    }
   }
   emitDiagnosticEvent({
     type: "message.processed",
@@ -245,7 +252,7 @@ export function logSessionStateChange(
   if (params.state === "idle") {
     state.queueDepth = Math.max(0, state.queueDepth - 1);
   }
-  if (!isProbeSession) {
+  if (!isProbeSession && diag.isEnabled("debug")) {
     diag.debug(
       `session state: sessionId=${state.sessionId ?? "unknown"} sessionKey=${
         state.sessionKey ?? "unknown"
