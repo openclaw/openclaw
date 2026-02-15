@@ -141,7 +141,7 @@ export type AgentComponentContext = {
   cfg: OpenClawConfig;
   accountId: string;
   guildEntries?: Record<string, DiscordGuildEntryResolved>;
-  /** DM allowlist (from dm.allowFrom config) */
+  /** DM allowlist (from allowFrom config; legacy: dm.allowFrom) */
   allowFrom?: Array<string | number>;
   /** DM policy (default: "pairing") */
   dmPolicy?: "open" | "pairing" | "allowlist" | "disabled";
