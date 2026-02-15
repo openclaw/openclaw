@@ -1,5 +1,7 @@
 import type { Bot } from "grammy";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { STATE_DIR } from "../config/paths.js";
 
 const createTelegramDraftStream = vi.hoisted(() => vi.fn());
 const dispatchReplyWithBufferedBlockDispatcher = vi.hoisted(() => vi.fn());
@@ -137,7 +139,11 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
     deliverReplies.mockResolvedValue({ delivered: true });
 
-    const context = createContext();
+    const context = createContext({
+      route: {
+        agentId: "work",
+      } as unknown as TelegramMessageContext["route"],
+    });
     await dispatchWithContext({ context });
 
     expect(createTelegramDraftStream).toHaveBeenCalledWith(
@@ -150,6 +156,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
         thread: { id: 777, scope: "dm" },
+        mediaLocalRoots: expect.arrayContaining([path.join(STATE_DIR, "workspace-work")]),
       }),
     );
     expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(

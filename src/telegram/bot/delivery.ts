@@ -39,6 +39,7 @@ export async function deliverReplies(params: {
   token: string;
   runtime: RuntimeEnv;
   bot: Bot;
+  mediaLocalRoots?: readonly string[];
   replyToMode: ReplyToMode;
   textLimit: number;
   thread?: TelegramThreadSpec | null;
@@ -142,7 +143,9 @@ export async function deliverReplies(params: {
     let pendingFollowUpText: string | undefined;
     for (const mediaUrl of mediaList) {
       const isFirstMedia = first;
-      const media = await loadWebMedia(mediaUrl);
+      const media = await loadWebMedia(mediaUrl, {
+        localRoots: params.mediaLocalRoots,
+      });
       const kind = mediaKindFromMime(media.contentType ?? undefined);
       const isGif = isGifMedia({
         contentType: media.contentType,
