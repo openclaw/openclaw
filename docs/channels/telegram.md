@@ -628,6 +628,22 @@ openclaw message send --channel telegram --target 123456789 --message "hi"
 openclaw message send --channel telegram --target @name --message "hi"
 ```
 
+    CLI poll send (Telegram):
+
+```bash
+openclaw message poll --channel telegram --target 123456789 \
+  --poll-question "Deploy tonight?" \
+  --poll-option "Yes" --poll-option "No" \
+  --poll-duration-seconds 300 \
+  --poll-anonymous --silent
+```
+
+    Poll constraints (Telegram):
+
+    - `--poll-option` supports 2-12 options
+    - `--poll-duration-seconds` supports 5-600
+    - use `--poll-public` to make the poll non-anonymous
+
   </Accordion>
 </AccordionGroup>
 
