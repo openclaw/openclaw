@@ -153,10 +153,12 @@ export function createCostTracker(): CostTracker {
     },
 
     checkBudget(config: CostGuardConfig): BudgetStatus {
-      const dailyUsed = sumTotal(todayEntries());
-      const monthlyUsed = sumTotal(monthEntries());
-      const todayProviders = sumByProvider(todayEntries());
-      const monthProviders = sumByProvider(monthEntries());
+      const today = todayEntries();
+      const month = monthEntries();
+      const dailyUsed = sumTotal(today);
+      const monthlyUsed = sumTotal(month);
+      const todayProviders = sumByProvider(today);
+      const monthProviders = sumByProvider(month);
 
       const dailyPercent = config.dailyBudgetUsd > 0 ? dailyUsed / config.dailyBudgetUsd : 0;
       const monthlyPercent =
@@ -215,11 +217,13 @@ export function createCostTracker(): CostTracker {
     },
 
     summary(): CostSummary {
+      const today = todayEntries();
+      const month = monthEntries();
       return {
-        todayUsd: sumTotal(todayEntries()),
-        monthUsd: sumTotal(monthEntries()),
-        todayByProvider: sumByProvider(todayEntries()),
-        monthByProvider: sumByProvider(monthEntries()),
+        todayUsd: sumTotal(today),
+        monthUsd: sumTotal(month),
+        todayByProvider: sumByProvider(today),
+        monthByProvider: sumByProvider(month),
         entryCount: entries.length,
       };
     },

@@ -74,6 +74,7 @@ export function createCostGuardService(
       pruneTimer = setInterval(() => {
         tracker.pruneOldEntries();
       }, PRUNE_INTERVAL_MS);
+      pruneTimer.unref();
     },
 
     async stop() {
