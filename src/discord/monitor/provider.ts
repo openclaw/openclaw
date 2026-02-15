@@ -278,17 +278,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
           token,
           entries: allowEntries.map((entry) => String(entry)),
         });
-        const mapping: string[] = [];
-        const unresolved: string[] = [];
-        const additions: string[] = [];
-        for (const entry of resolvedUsers) {
-          if (entry.resolved && entry.id) {
-            mapping.push(`${entry.input}→${entry.id}`);
-            additions.push(entry.id);
-          } else {
-            unresolved.push(entry.input);
-          }
-        }
+        const { mapping, unresolved, additions } = buildAllowlistResolutionSummary(resolvedUsers);
         allowFrom = mergeAllowlist({ existing: allowFrom, additions });
         summarizeMapping("discord users", mapping, unresolved, runtime);
       } catch (err) {
