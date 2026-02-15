@@ -52,7 +52,9 @@ describe("memory index", () => {
   let indexVectorPath = "";
   let indexExtraPath = "";
 
-  const persistentManagers = new Set<MemoryIndexManager>();
+  // Perf: keep managers open across tests, but only reset the one a test uses.
+  const managersByStorePath = new Map<string, MemoryIndexManager>();
+  const managersForCleanup = new Set<MemoryIndexManager>();
 
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-fixtures-"));
@@ -69,7 +71,7 @@ describe("memory index", () => {
   });
 
   afterAll(async () => {
-    await Promise.all(Array.from(persistentManagers).map((manager) => manager.close()));
+    await Promise.all(Array.from(managersForCleanup).map((manager) => manager.close()));
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
@@ -88,10 +90,6 @@ describe("memory index", () => {
 
     // Clean additional paths that may have been created by earlier cases.
     await fs.rm(extraDir, { recursive: true, force: true });
-
-    for (const manager of persistentManagers) {
-      resetManagerForTest(manager);
-    }
   });
 
   function resetManagerForTest(manager: MemoryIndexManager) {
@@ -108,13 +106,25 @@ describe("memory index", () => {
   type TestCfg = Parameters<typeof getMemorySearchManager>[0]["cfg"];
 
   async function getPersistentManager(cfg: TestCfg): Promise<MemoryIndexManager> {
+    const storePath = cfg.agents?.defaults?.memorySearch?.store?.path;
+    if (!storePath) {
+      throw new Error("store path missing");
+    }
+    const cached = managersByStorePath.get(storePath);
+    if (cached) {
+      resetManagerForTest(cached);
+      return cached;
+    }
+
     const result = await getMemorySearchManager({ cfg, agentId: "main" });
     expect(result.manager).not.toBeNull();
     if (!result.manager) {
       throw new Error("manager missing");
     }
     const manager = result.manager as MemoryIndexManager;
-    persistentManagers.add(manager);
+    managersByStorePath.set(storePath, manager);
+    managersForCleanup.add(manager);
+    resetManagerForTest(manager);
     return manager;
   }
 
@@ -149,6 +159,51 @@ describe("memory index", () => {
         }),
       ]),
     );
+  });
+
+  it("keeps dirty false in status-only manager after prior indexing", async () => {
+    const indexStatusPath = path.join(workspaceDir, "index-status.sqlite");
+    await fs.rm(indexStatusPath, { force: true });
+    await fs.rm(`${indexStatusPath}-shm`, { force: true });
+    await fs.rm(`${indexStatusPath}-wal`, { force: true });
+
+    const cfg = {
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          memorySearch: {
+            provider: "openai",
+            model: "mock-embed",
+            store: { path: indexStatusPath, vector: { enabled: false } },
+            sync: { watch: false, onSessionStart: false, onSearch: true },
+            query: { minScore: 0, hybrid: { enabled: false } },
+          },
+        },
+        list: [{ id: "main", default: true }],
+      },
+    };
+
+    const first = await getMemorySearchManager({ cfg, agentId: "main" });
+    expect(first.manager).not.toBeNull();
+    if (!first.manager) {
+      throw new Error("manager missing");
+    }
+    await first.manager.sync?.({ reason: "test" });
+    await first.manager.close?.();
+
+    const statusOnly = await getMemorySearchManager({
+      cfg,
+      agentId: "main",
+      purpose: "status",
+    });
+    expect(statusOnly.manager).not.toBeNull();
+    if (!statusOnly.manager) {
+      throw new Error("status manager missing");
+    }
+
+    const status = statusOnly.manager.status();
+    expect(status.dirty).toBe(false);
+    await statusOnly.manager.close?.();
   });
 
   it("reindexes when the embedding model changes", async () => {

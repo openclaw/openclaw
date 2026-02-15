@@ -2,8 +2,16 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
+import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 
-export function createNoopLogger() {
+export type NoopLogger = {
+  debug: MockFn;
+  info: MockFn;
+  warn: MockFn;
+  error: MockFn;
+};
+
+export function createNoopLogger(): NoopLogger {
   return {
     debug: vi.fn(),
     info: vi.fn(),

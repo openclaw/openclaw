@@ -3,7 +3,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-const pnpm = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
+// On Windows, `.cmd` launchers can fail with `spawn EINVAL` when invoked without a shell
+// (especially under GitHub Actions + Git Bash). Use `shell: true` and let the shell resolve pnpm.
+const pnpm = "pnpm";
 
 const unitIsolatedFilesRaw = [
   "src/plugins/loader.test.ts",
@@ -27,6 +29,8 @@ const unitIsolatedFilesRaw = [
   "src/browser/server.auth-token-gates-http.test.ts",
   "src/browser/server-context.remote-tab-ops.test.ts",
   "src/browser/server-context.ensure-tab-available.prefers-last-target.test.ts",
+  // Uses process-level unhandledRejection listeners; keep it off vmForks to avoid cross-file leakage.
+  "src/imessage/monitor.skips-group-messages-without-mention-by-default.test.ts",
 ];
 const unitIsolatedFiles = unitIsolatedFilesRaw.filter((file) => fs.existsSync(file));
 
@@ -161,6 +165,20 @@ const WARNING_SUPPRESSION_FLAGS = [
   "--disable-warning=MaxListenersExceededWarning",
 ];
 
+const DEFAULT_CI_MAX_OLD_SPACE_SIZE_MB = 4096;
+const maxOldSpaceSizeMb = (() => {
+  // CI can hit Node heap limits (especially on large suites). Allow override, default to 4GB.
+  const raw = process.env.OPENCLAW_TEST_MAX_OLD_SPACE_SIZE_MB ?? "";
+  const parsed = Number.parseInt(raw, 10);
+  if (Number.isFinite(parsed) && parsed > 0) {
+    return parsed;
+  }
+  if (isCI && !isWindows) {
+    return DEFAULT_CI_MAX_OLD_SPACE_SIZE_MB;
+  }
+  return null;
+})();
+
 function resolveReportDir() {
   const raw = process.env.OPENCLAW_VITEST_REPORT_DIR?.trim();
   if (!raw) {
@@ -220,12 +238,29 @@ const runOnce = (entry, extraArgs = []) =>
       (acc, flag) => (acc.includes(flag) ? acc : `${acc} ${flag}`.trim()),
       nodeOptions,
     );
-    const child = spawn(pnpm, args, {
-      stdio: "inherit",
-      env: { ...process.env, VITEST_GROUP: entry.name, NODE_OPTIONS: nextNodeOptions },
-      shell: process.platform === "win32",
-    });
+    const heapFlag =
+      maxOldSpaceSizeMb && !nextNodeOptions.includes("--max-old-space-size=")
+        ? `--max-old-space-size=${maxOldSpaceSizeMb}`
+        : null;
+    const resolvedNodeOptions = heapFlag
+      ? `${nextNodeOptions} ${heapFlag}`.trim()
+      : nextNodeOptions;
+    let child;
+    try {
+      child = spawn(pnpm, args, {
+        stdio: "inherit",
+        env: { ...process.env, VITEST_GROUP: entry.name, NODE_OPTIONS: resolvedNodeOptions },
+        shell: isWindows,
+      });
+    } catch (err) {
+      console.error(`[test-parallel] spawn failed: ${String(err)}`);
+      resolve(1);
+      return;
+    }
     children.add(child);
+    child.on("error", (err) => {
+      console.error(`[test-parallel] child error: ${String(err)}`);
+    });
     child.on("exit", (code, signal) => {
       children.delete(child);
       resolve(code ?? (signal ? 1 : 0));
@@ -274,12 +309,22 @@ if (passthroughArgs.length > 0) {
     nodeOptions,
   );
   const code = await new Promise((resolve) => {
-    const child = spawn(pnpm, args, {
-      stdio: "inherit",
-      env: { ...process.env, NODE_OPTIONS: nextNodeOptions },
-      shell: process.platform === "win32",
-    });
+    let child;
+    try {
+      child = spawn(pnpm, args, {
+        stdio: "inherit",
+        env: { ...process.env, NODE_OPTIONS: nextNodeOptions },
+        shell: isWindows,
+      });
+    } catch (err) {
+      console.error(`[test-parallel] spawn failed: ${String(err)}`);
+      resolve(1);
+      return;
+    }
     children.add(child);
+    child.on("error", (err) => {
+      console.error(`[test-parallel] child error: ${String(err)}`);
+    });
     child.on("exit", (exitCode, signal) => {
       children.delete(child);
       resolve(exitCode ?? (signal ? 1 : 0));

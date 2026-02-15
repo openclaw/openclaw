@@ -85,6 +85,8 @@ export function resolveSendPolicy(params: {
     normalizeChatType(deriveChatTypeFromKey(params.sessionKey));
   const rawSessionKey = params.sessionKey ?? "";
   const strippedSessionKey = stripAgentSessionKeyPrefix(rawSessionKey) ?? "";
+  const rawSessionKeyNorm = rawSessionKey.toLowerCase();
+  const strippedSessionKeyNorm = strippedSessionKey.toLowerCase();
 
   let allowedMatch = false;
   for (const rule of policy.rules ?? []) {
@@ -96,6 +98,7 @@ export function resolveSendPolicy(params: {
     const matchChannel = normalizeMatchValue(match.channel);
     const matchChatType = normalizeChatType(match.chatType);
     const matchPrefix = normalizeMatchValue(match.keyPrefix);
+    const matchRawPrefix = normalizeMatchValue(match.rawKeyPrefix);
 
     if (matchChannel && matchChannel !== channel) {
       continue;
@@ -103,10 +106,13 @@ export function resolveSendPolicy(params: {
     if (matchChatType && matchChatType !== chatType) {
       continue;
     }
+    if (matchRawPrefix && !rawSessionKeyNorm.startsWith(matchRawPrefix)) {
+      continue;
+    }
     if (
       matchPrefix &&
-      !rawSessionKey.startsWith(matchPrefix) &&
-      !strippedSessionKey.startsWith(matchPrefix)
+      !rawSessionKeyNorm.startsWith(matchPrefix) &&
+      !strippedSessionKeyNorm.startsWith(matchPrefix)
     ) {
       continue;
     }

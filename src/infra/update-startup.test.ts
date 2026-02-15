@@ -9,11 +9,23 @@ vi.mock("./openclaw-root.js", () => ({
 }));
 
 vi.mock("./update-check.js", async () => {
-  const actual = await vi.importActual<typeof import("./update-check.js")>("./update-check.js");
+  const parse = (value: string) => value.split(".").map((part) => Number.parseInt(part, 10));
+  const compareSemverStrings = (a: string, b: string) => {
+    const left = parse(a);
+    const right = parse(b);
+    for (let idx = 0; idx < 3; idx += 1) {
+      const l = left[idx] ?? 0;
+      const r = right[idx] ?? 0;
+      if (l !== r) {
+        return l < r ? -1 : 1;
+      }
+    }
+    return 0;
+  };
+
   return {
-    ...actual,
     checkUpdateStatus: vi.fn(),
-    fetchNpmTagVersion: vi.fn(),
+    compareSemverStrings,
     resolveNpmChannelTag: vi.fn(),
   };
 });
@@ -23,10 +35,15 @@ vi.mock("../version.js", () => ({
 }));
 
 describe("update-startup", () => {
-  const originalEnv = { ...process.env };
   let suiteRoot = "";
   let suiteCase = 0;
   let tempDir: string;
+  let prevStateDir: string | undefined;
+  let prevNodeEnv: string | undefined;
+  let prevVitest: string | undefined;
+  let hadStateDir = false;
+  let hadNodeEnv = false;
+  let hadVitest = false;
 
   let resolveOpenClawPackageRoot: (typeof import("./openclaw-root.js"))["resolveOpenClawPackageRoot"];
   let checkUpdateStatus: (typeof import("./update-check.js"))["checkUpdateStatus"];
@@ -42,10 +59,19 @@ describe("update-startup", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-17T10:00:00Z"));
     tempDir = path.join(suiteRoot, `case-${++suiteCase}`);
-    await fs.mkdir(tempDir, { recursive: true });
+    await fs.mkdir(tempDir);
+    hadStateDir = Object.prototype.hasOwnProperty.call(process.env, "OPENCLAW_STATE_DIR");
+    prevStateDir = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_STATE_DIR = tempDir;
-    delete process.env.VITEST;
+
+    hadNodeEnv = Object.prototype.hasOwnProperty.call(process.env, "NODE_ENV");
+    prevNodeEnv = process.env.NODE_ENV;
     process.env.NODE_ENV = "test";
+
+    // Ensure update checks don't short-circuit in test mode.
+    hadVitest = Object.prototype.hasOwnProperty.call(process.env, "VITEST");
+    prevVitest = process.env.VITEST;
+    delete process.env.VITEST;
 
     // Perf: load mocked modules once (after timers/env are set up).
     if (!loaded) {
@@ -58,8 +84,21 @@ describe("update-startup", () => {
 
   afterEach(async () => {
     vi.useRealTimers();
-    process.env = { ...originalEnv };
-    await fs.rm(tempDir, { recursive: true, force: true });
+    if (hadStateDir) {
+      process.env.OPENCLAW_STATE_DIR = prevStateDir;
+    } else {
+      delete process.env.OPENCLAW_STATE_DIR;
+    }
+    if (hadNodeEnv) {
+      process.env.NODE_ENV = prevNodeEnv;
+    } else {
+      delete process.env.NODE_ENV;
+    }
+    if (hadVitest) {
+      process.env.VITEST = prevVitest;
+    } else {
+      delete process.env.VITEST;
+    }
   });
 
   afterAll(async () => {

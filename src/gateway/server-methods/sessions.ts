@@ -13,6 +13,7 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
+import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   ErrorCodes,
@@ -306,6 +307,19 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const cfg = loadConfig();
     const target = resolveGatewaySessionStoreTarget({ cfg, key });
     const { entry } = loadSessionEntry(key);
+    const commandReason = p.reason === "new" ? "new" : "reset";
+    const hookEvent = createInternalHookEvent(
+      "command",
+      commandReason,
+      target.canonicalKey ?? key,
+      {
+        sessionEntry: entry,
+        previousSessionEntry: entry,
+        commandSource: "gateway:sessions.reset",
+        cfg,
+      },
+    );
+    await triggerInternalHook(hookEvent);
     const sessionId = entry?.sessionId;
     const cleanupError = await ensureSessionRuntimeCleanup({ cfg, key, target, sessionId });
     if (cleanupError) {

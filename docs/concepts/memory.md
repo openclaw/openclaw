@@ -189,6 +189,12 @@ out to QMD for retrieval. Key points:
 - `scope`: same schema as [`session.sendPolicy`](/gateway/configuration#session).
   Default is DM-only (`deny` all, `allow` direct chats); loosen it to surface QMD
   hits in groups/channels.
+  - `match.keyPrefix` matches the **normalized** session key (lowercased, with any
+    leading `agent:<id>:` stripped). Example: `discord:channel:`.
+  - `match.rawKeyPrefix` matches the **raw** session key (lowercased), including
+    `agent:<id>:`. Example: `agent:main:discord:`.
+  - Legacy: `match.keyPrefix: "agent:..."` is still treated as a raw-key prefix,
+    but prefer `rawKeyPrefix` for clarity.
 - When `scope` denies a search, OpenClaw logs a warning with the derived
   `channel`/`chatType` so empty results are easier to debug.
 - Snippets sourced outside the workspace show up as
@@ -216,7 +222,13 @@ memory: {
     limits: { maxResults: 6, timeoutMs: 4000 },
     scope: {
       default: "deny",
-      rules: [{ action: "allow", match: { chatType: "direct" } }]
+      rules: [
+        { action: "allow", match: { chatType: "direct" } },
+        // Normalized session-key prefix (strips `agent:<id>:`).
+        { action: "deny", match: { keyPrefix: "discord:channel:" } },
+        // Raw session-key prefix (includes `agent:<id>:`).
+        { action: "deny", match: { rawKeyPrefix: "agent:main:discord:" } },
+      ]
     },
     paths: [
       { name: "docs", path: "~/notes", pattern: "**/*.md" }
