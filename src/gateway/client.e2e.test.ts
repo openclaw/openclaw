@@ -3,7 +3,7 @@ import { createServer } from "node:net";
 import { afterEach, describe, expect, test } from "vitest";
 import { WebSocketServer } from "ws";
 import { rawDataToString } from "../infra/ws.js";
-import { GatewayClient } from "./client.js";
+import { GatewayClient, GatewayClientRequestTimeoutError } from "./client.js";
 
 // Find a free localhost port for ad-hoc WS servers.
 async function getFreePort(): Promise<number> {
@@ -14,6 +14,26 @@ async function getFreePort(): Promise<number> {
       server.close((err) => (err ? reject(err) : resolve(port)));
     });
   });
+}
+
+function buildHelloOk(tickIntervalMs = 30_000) {
+  return {
+    type: "hello-ok",
+    protocol: 2,
+    server: { version: "dev", connId: "c1" },
+    features: { methods: [], events: [] },
+    snapshot: {
+      presence: [],
+      health: {},
+      stateVersion: { presence: 1, health: 1 },
+      uptimeMs: 1,
+    },
+    policy: {
+      maxPayload: 512 * 1024,
+      maxBufferedBytes: 1024 * 1024,
+      tickIntervalMs,
+    },
+  };
 }
 
 describe("GatewayClient", () => {
@@ -45,24 +65,7 @@ describe("GatewayClient", () => {
         const first = JSON.parse(rawDataToString(data)) as { id?: string };
         const id = first.id ?? "connect";
         // Respond with tiny tick interval to trigger watchdog quickly.
-        const helloOk = {
-          type: "hello-ok",
-          protocol: 2,
-          server: { version: "dev", connId: "c1" },
-          features: { methods: [], events: [] },
-          snapshot: {
-            presence: [],
-            health: {},
-            stateVersion: { presence: 1, health: 1 },
-            uptimeMs: 1,
-          },
-          policy: {
-            maxPayload: 512 * 1024,
-            maxBufferedBytes: 1024 * 1024,
-            tickIntervalMs: 5,
-          },
-        };
-        socket.send(JSON.stringify({ type: "res", id, ok: true, payload: helloOk }));
+        socket.send(JSON.stringify({ type: "res", id, ok: true, payload: buildHelloOk(5) }));
       });
     });
 
@@ -80,6 +83,103 @@ describe("GatewayClient", () => {
     expect(res.code).toBe(4000);
     expect(res.reason).toContain("tick timeout");
   }, 4000);
+
+  test("uses shutdown restartExpectedMs for fast reconnect on close 1012", async () => {
+    const port = await getFreePort();
+    wss = new WebSocketServer({ port, host: "127.0.0.1" });
+
+    let connections = 0;
+    let firstCloseAt: number | null = null;
+    const reconnectDelayMs = new Promise<number>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error("timeout waiting for reconnect"));
+      }, 3000);
+      wss?.on("connection", (socket) => {
+        connections += 1;
+        const connNo = connections;
+        if (connNo === 1) {
+          socket.on("close", () => {
+            firstCloseAt = Date.now();
+          });
+        }
+        socket.on("message", (data) => {
+          const frame = JSON.parse(rawDataToString(data)) as { id?: string; method?: string };
+          const id = frame.id ?? "req";
+          if (frame.method !== "connect") {
+            return;
+          }
+          socket.send(JSON.stringify({ type: "res", id, ok: true, payload: buildHelloOk(60_000) }));
+          if (connNo === 1) {
+            setTimeout(() => {
+              socket.send(
+                JSON.stringify({
+                  type: "event",
+                  event: "shutdown",
+                  payload: { reason: "restart", restartExpectedMs: 40 },
+                }),
+              );
+              socket.close(1012, "service restart");
+            }, 10);
+            return;
+          }
+          if (connNo === 2) {
+            clearTimeout(timeout);
+            resolve(Date.now() - (firstCloseAt ?? Date.now()));
+          }
+        });
+      });
+    });
+
+    const client = new GatewayClient({
+      url: `ws://127.0.0.1:${port}`,
+      connectDelayMs: 0,
+    });
+    client.start();
+
+    const delay = await reconnectDelayMs;
+    client.stop();
+
+    expect(delay).toBeGreaterThanOrEqual(0);
+    expect(delay).toBeLessThan(500);
+  }, 5000);
+
+  test("times out pending requests", async () => {
+    const port = await getFreePort();
+    wss = new WebSocketServer({ port, host: "127.0.0.1" });
+
+    wss.on("connection", (socket) => {
+      socket.on("message", (data) => {
+        const frame = JSON.parse(rawDataToString(data)) as { id?: string; method?: string };
+        const id = frame.id ?? "req";
+        if (frame.method === "connect") {
+          socket.send(JSON.stringify({ type: "res", id, ok: true, payload: buildHelloOk(60_000) }));
+        }
+      });
+    });
+
+    let client: GatewayClient | null = null;
+    const ready = new Promise<void>((resolve, reject) => {
+      client = new GatewayClient({
+        url: `ws://127.0.0.1:${port}`,
+        connectDelayMs: 0,
+        onHelloOk: () => resolve(),
+        onConnectError: (err) => reject(err),
+      });
+      client.start();
+    });
+
+    await ready;
+    if (!client) {
+      throw new Error("client unavailable");
+    }
+    const err = await client
+      .request("never.responds", undefined, { timeoutMs: 25 })
+      .catch((e) => e);
+    client.stop();
+
+    expect(err).toBeInstanceOf(GatewayClientRequestTimeoutError);
+    expect((err as GatewayClientRequestTimeoutError).timeoutMs).toBe(25);
+  });
 
   test("rejects mismatched tls fingerprint", async () => {
     const key = `-----BEGIN PRIVATE KEY-----

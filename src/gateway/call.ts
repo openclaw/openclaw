@@ -277,6 +277,7 @@ export async function callGateway<T = Record<string, unknown>>(
         try {
           const result = await client.request<T>(opts.method, opts.params, {
             expectFinal: opts.expectFinal,
+            timeoutMs,
           });
           ignoreClose = true;
           stop(undefined, result);

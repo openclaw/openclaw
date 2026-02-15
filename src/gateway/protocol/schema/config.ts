@@ -45,6 +45,18 @@ export const UpdateRunParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const GatewayRestartParamsSchema = Type.Object(
+  {
+    mode: Type.Optional(Type.Union([Type.Literal("soft"), Type.Literal("hard")])),
+    delayMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    reason: Type.Optional(Type.String()),
+    note: Type.Optional(Type.String()),
+    sessionKey: Type.Optional(Type.String()),
+    restartExpectedMs: Type.Optional(Type.Integer({ minimum: 0 })),
+  },
+  { additionalProperties: false },
+);
+
 export const ConfigUiHintSchema = Type.Object(
   {
     label: Type.Optional(Type.String()),

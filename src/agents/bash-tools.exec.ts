@@ -117,6 +117,16 @@ export type ExecToolDetails =
       nodeId?: string;
     };
 
+function rewriteGatewayRestartCommand(command: string): string {
+  if (!/\bopenclaw\s+gateway\s+restart\b/i.test(command)) {
+    return command;
+  }
+  if (/\s--(?:soft|hard)\b/i.test(command)) {
+    return command;
+  }
+  return command.replace(/\bopenclaw\s+gateway\s+restart\b/i, "$& --soft");
+}
+
 export function createExecTool(
   defaults?: ExecToolDefaults,
   // oxlint-disable-next-line typescript/no-explicit-any
@@ -172,6 +182,13 @@ export function createExecTool(
       const maxOutput = DEFAULT_MAX_OUTPUT;
       const pendingMaxOutput = DEFAULT_PENDING_MAX_OUTPUT;
       const warnings: string[] = [];
+      const rewrittenCommand = rewriteGatewayRestartCommand(params.command);
+      if (rewrittenCommand !== params.command) {
+        warnings.push(
+          "Warning: rewritten `openclaw gateway restart` to `openclaw gateway restart --soft` to avoid hard restart data loss.",
+        );
+        params.command = rewrittenCommand;
+      }
       let execCommandOverride: string | undefined;
       const backgroundRequested = params.background === true;
       const yieldRequested = typeof params.yieldMs === "number";

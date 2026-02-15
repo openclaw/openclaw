@@ -32,10 +32,13 @@ import {
   validateResponseFrame,
 } from "./protocol/index.js";
 
+const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+
 type Pending = {
   resolve: (value: unknown) => void;
   reject: (err: unknown) => void;
   expectFinal: boolean;
+  timeoutTimer: NodeJS.Timeout | null;
 };
 
 export type GatewayClientOptions = {
@@ -78,6 +81,20 @@ export function describeGatewayCloseCode(code: number): string | undefined {
   return GATEWAY_CLOSE_CODE_HINTS[code];
 }
 
+export class GatewayClientRequestTimeoutError extends Error {
+  readonly method: string;
+  readonly requestId: string;
+  readonly timeoutMs: number;
+
+  constructor(opts: { method: string; requestId: string; timeoutMs: number }) {
+    super(`gateway request timed out after ${opts.timeoutMs}ms: ${opts.method}`);
+    this.name = "GatewayClientRequestTimeoutError";
+    this.method = opts.method;
+    this.requestId = opts.requestId;
+    this.timeoutMs = opts.timeoutMs;
+  }
+}
+
 export class GatewayClient {
   private ws: WebSocket | null = null;
   private opts: GatewayClientOptions;
@@ -92,6 +109,7 @@ export class GatewayClient {
   private lastTick: number | null = null;
   private tickIntervalMs = 30_000;
   private tickTimer: NodeJS.Timeout | null = null;
+  private shutdownRestartExpectedMs: number | null = null;
 
   constructor(opts: GatewayClientOptions) {
     this.opts = {
@@ -155,7 +173,7 @@ export class GatewayClient {
       const reasonText = rawDataToString(reason);
       this.ws = null;
       this.flushPendingErrors(new Error(`gateway closed (${code}): ${reasonText}`));
-      this.scheduleReconnect();
+      this.scheduleReconnect(code);
       this.opts.onClose?.(code, reasonText);
     });
     this.ws.on("error", (err) => {
@@ -261,6 +279,7 @@ export class GatewayClient {
           });
         }
         this.backoffMs = 1000;
+        this.shutdownRestartExpectedMs = null;
         this.tickIntervalMs =
           typeof helloOk.policy?.tickIntervalMs === "number"
             ? helloOk.policy.tickIntervalMs
@@ -311,6 +330,9 @@ export class GatewayClient {
         if (evt.event === "tick") {
           this.lastTick = Date.now();
         }
+        if (evt.event === "shutdown") {
+          this.shutdownRestartExpectedMs = this.parseRestartExpectedMs(evt.payload);
+        }
         this.opts.onEvent?.(evt);
         return;
       }
@@ -326,6 +348,7 @@ export class GatewayClient {
           return;
         }
         this.pending.delete(parsed.id);
+        this.clearPendingTimer(pending);
         if (parsed.ok) {
           pending.resolve(parsed.payload);
         } else {
@@ -353,7 +376,7 @@ export class GatewayClient {
     }, connectDelayMs);
   }
 
-  private scheduleReconnect() {
+  private scheduleReconnect(code?: number) {
     if (this.closed) {
       return;
     }
@@ -361,16 +384,50 @@ export class GatewayClient {
       clearInterval(this.tickTimer);
       this.tickTimer = null;
     }
-    const delay = this.backoffMs;
-    this.backoffMs = Math.min(this.backoffMs * 2, 30_000);
+    let delay = this.backoffMs;
+    const restartDelay = code === 1012 ? this.shutdownRestartExpectedMs : null;
+    if (typeof restartDelay === "number") {
+      delay = restartDelay;
+      this.shutdownRestartExpectedMs = null;
+    } else {
+      this.shutdownRestartExpectedMs = null;
+      this.backoffMs = Math.min(this.backoffMs * 2, 30_000);
+    }
     setTimeout(() => this.start(), delay).unref();
   }
 
   private flushPendingErrors(err: Error) {
     for (const [, p] of this.pending) {
+      this.clearPendingTimer(p);
       p.reject(err);
     }
     this.pending.clear();
+  }
+
+  private clearPendingTimer(pending: Pending) {
+    if (!pending.timeoutTimer) {
+      return;
+    }
+    clearTimeout(pending.timeoutTimer);
+    pending.timeoutTimer = null;
+  }
+
+  private parseRestartExpectedMs(payload: unknown): number | null {
+    if (!payload || typeof payload !== "object") {
+      return null;
+    }
+    const restartExpectedMs = (payload as { restartExpectedMs?: unknown }).restartExpectedMs;
+    if (typeof restartExpectedMs !== "number" || !Number.isFinite(restartExpectedMs)) {
+      return null;
+    }
+    return Math.max(0, Math.floor(restartExpectedMs));
+  }
+
+  private normalizeRequestTimeoutMs(rawTimeoutMs: number | undefined): number {
+    if (typeof rawTimeoutMs !== "number" || !Number.isFinite(rawTimeoutMs)) {
+      return DEFAULT_REQUEST_TIMEOUT_MS;
+    }
+    return Math.max(0, Math.floor(rawTimeoutMs));
   }
 
   private startTickWatch() {
@@ -427,7 +484,7 @@ export class GatewayClient {
   async request<T = Record<string, unknown>>(
     method: string,
     params?: unknown,
-    opts?: { expectFinal?: boolean },
+    opts?: { expectFinal?: boolean; timeoutMs?: number },
   ): Promise<T> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       throw new Error("gateway not connected");
@@ -440,11 +497,29 @@ export class GatewayClient {
       );
     }
     const expectFinal = opts?.expectFinal === true;
+    const timeoutMs = this.normalizeRequestTimeoutMs(opts?.timeoutMs);
     const p = new Promise<T>((resolve, reject) => {
+      const timeoutTimer = setTimeout(() => {
+        const pending = this.pending.get(id);
+        if (!pending) {
+          return;
+        }
+        this.pending.delete(id);
+        pending.timeoutTimer = null;
+        pending.reject(
+          new GatewayClientRequestTimeoutError({
+            method,
+            requestId: id,
+            timeoutMs,
+          }),
+        );
+      }, timeoutMs);
+      timeoutTimer.unref();
       this.pending.set(id, {
         resolve: (value) => resolve(value as T),
         reject,
         expectFinal,
+        timeoutTimer,
       });
     });
     this.ws.send(JSON.stringify(frame));

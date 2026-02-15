@@ -162,6 +162,8 @@ export async function startGatewayServer(
   port = 18789,
   opts: GatewayServerOptions = {},
 ): Promise<GatewayServer> {
+  process.env.OPENCLAW_IN_GATEWAY = "1";
+
   const minimalTestGateway =
     process.env.VITEST === "1" && process.env.OPENCLAW_TEST_MINIMAL_GATEWAY === "1";
 
@@ -542,6 +544,45 @@ export async function startGatewayServer(
 
   const canvasHostServerPort = (canvasHostServer as CanvasHostServer | null)?.port;
 
+  let closeGatewayServer: GatewayServer["close"] | null = null;
+  const requestGatewayShutdown = (shutdownOpts: {
+    reason: string;
+    restartExpectedMs?: number | null;
+    exitAfterClose?: boolean;
+  }) => {
+    let attempts = 0;
+    const tryShutdown = () => {
+      const closeFn = closeGatewayServer;
+      if (!closeFn) {
+        if (attempts < 20) {
+          attempts += 1;
+          setTimeout(tryShutdown, 250);
+          return;
+        }
+        log.error("gateway shutdown requested but close handler never initialized");
+        if (shutdownOpts.exitAfterClose) {
+          process.exit(1);
+        }
+        return;
+      }
+
+      void closeFn({
+        reason: shutdownOpts.reason,
+        restartExpectedMs: shutdownOpts.restartExpectedMs ?? null,
+      })
+        .catch((err) => {
+          log.error(`gateway shutdown failed: ${String(err)}`);
+        })
+        .finally(() => {
+          if (shutdownOpts.exitAfterClose) {
+            process.exit(0);
+          }
+        });
+    };
+
+    tryShutdown();
+  };
+
   attachGatewayWsHandlers({
     wss,
     clients,
@@ -600,6 +641,7 @@ export async function startGatewayServer(
       markChannelLoggedOut,
       wizardRunner,
       broadcastVoiceWakeChanged,
+      requestGatewayShutdown,
     },
   });
   logGatewayStartup({
@@ -717,32 +759,31 @@ export async function startGatewayServer(
     httpServers,
   });
 
-  return {
-    close: async (opts) => {
-      // Run gateway_stop plugin hook before shutdown
-      {
-        const hookRunner = getGlobalHookRunner();
-        if (hookRunner?.hasHooks("gateway_stop")) {
-          try {
-            await hookRunner.runGatewayStop(
-              { reason: opts?.reason ?? "gateway stopping" },
-              { port },
-            );
-          } catch (err) {
-            log.warn(`gateway_stop hook failed: ${String(err)}`);
-          }
+  closeGatewayServer = async (opts) => {
+    // Run gateway_stop plugin hook before shutdown
+    {
+      const hookRunner = getGlobalHookRunner();
+      if (hookRunner?.hasHooks("gateway_stop")) {
+        try {
+          await hookRunner.runGatewayStop({ reason: opts?.reason ?? "gateway stopping" }, { port });
+        } catch (err) {
+          log.warn(`gateway_stop hook failed: ${String(err)}`);
         }
       }
-      if (diagnosticsEnabled) {
-        stopDiagnosticHeartbeat();
-      }
-      if (skillsRefreshTimer) {
-        clearTimeout(skillsRefreshTimer);
-        skillsRefreshTimer = null;
-      }
-      skillsChangeUnsub();
-      authRateLimiter?.dispose();
-      await close(opts);
-    },
+    }
+    if (diagnosticsEnabled) {
+      stopDiagnosticHeartbeat();
+    }
+    if (skillsRefreshTimer) {
+      clearTimeout(skillsRefreshTimer);
+      skillsRefreshTimer = null;
+    }
+    skillsChangeUnsub();
+    authRateLimiter?.dispose();
+    await close(opts);
+  };
+
+  return {
+    close: closeGatewayServer,
   };
 }

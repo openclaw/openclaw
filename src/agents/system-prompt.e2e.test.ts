@@ -99,7 +99,9 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("## OpenClaw CLI Quick Reference");
-    expect(prompt).toContain("openclaw gateway restart");
+    expect(prompt).toContain("openclaw gateway restart --soft");
+    expect(prompt).toContain("Prefer the gateway tool restart action when available.");
+    expect(prompt).toContain("Do not run a hard gateway restart via exec");
     expect(prompt).toContain("Do not invent commands");
   });
 
@@ -250,6 +252,8 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("## OpenClaw Self-Update");
     expect(prompt).toContain("config.apply");
     expect(prompt).toContain("update.run");
+    expect(prompt).toContain("openclaw gateway restart --soft");
+    expect(prompt).toContain("Do not run a hard gateway restart via exec");
   });
 
   it("includes skills guidance when skills prompt is present", () => {

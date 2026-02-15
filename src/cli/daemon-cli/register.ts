@@ -78,6 +78,10 @@ export function registerDaemonCli(program: Command) {
   daemon
     .command("restart")
     .description("Restart the Gateway service (launchd/systemd/schtasks)")
+    .option("--soft", "Request an in-process soft restart via gateway RPC", false)
+    .option("--hard", "Force a hard restart (shutdown/exit via gateway RPC)", false)
+    .option("--delay <ms>", "Restart delay in milliseconds")
+    .option("--reason <text>", "Human-readable restart reason")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runDaemonRestart(opts);

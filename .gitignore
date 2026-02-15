@@ -92,3 +92,4 @@ IMPLEMENTATION_PLAN_FINAL.md
 !.agent/workflows/
 /local/
 package-lock.json
+.git-rewrite/

@@ -52,6 +52,7 @@ import {
   ConfigSchemaParamsSchema,
   ConfigSchemaResponseSchema,
   ConfigSetParamsSchema,
+  GatewayRestartParamsSchema,
   UpdateRunParamsSchema,
 } from "./config.js";
 import {
@@ -184,6 +185,7 @@ export const ProtocolSchemas: Record<string, TSchema> = {
   ConfigPatchParams: ConfigPatchParamsSchema,
   ConfigSchemaParams: ConfigSchemaParamsSchema,
   ConfigSchemaResponse: ConfigSchemaResponseSchema,
+  GatewayRestartParams: GatewayRestartParamsSchema,
   WizardStartParams: WizardStartParamsSchema,
   WizardNextParams: WizardNextParamsSchema,
   WizardCancelParams: WizardCancelParamsSchema,
