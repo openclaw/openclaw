@@ -1,0 +1,27 @@
+{
+  "description": "Output has web_search_call entries but no message entry (incomplete response)",
+  "response": {
+    "id": "search-only-1",
+    "model": "grok-4-1-fast-reasoning",
+    "object": "response",
+    "output": [
+      {
+        "id": "ws_call_1",
+        "type": "web_search_call",
+        "status": "completed",
+        "action": { "type": "search", "query": "some query", "sources": [] }
+      },
+      {
+        "id": "ws_call_2",
+        "type": "web_search_call",
+        "status": "completed",
+        "action": { "type": "search", "query": "another query", "sources": [] }
+      }
+    ],
+    "status": "completed"
+  },
+  "expect": {
+    "contentsLength": 0,
+    "citationsLength": 0
+  }
+}

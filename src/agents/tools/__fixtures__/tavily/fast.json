@@ -1,0 +1,99 @@
+{
+  "description": "Tavily search with fast results",
+  "response": {
+    "query": "What are the latest model releases from Anthropic?",
+    "follow_up_questions": null,
+    "answer": null,
+    "images": [],
+    "results": [
+      {
+        "url": "https://www.wizcase.com/news/anthropic-releases-claude-4-with-warnings",
+        "title": "Anthropic Releases Its Latest Model Claude 4 With Safety Warnings",
+        "content": "value for users. # Anthropic Releases Its Latest Model Claude 4 With Safety Warnings. The AI startup Anthropic released its latest and most powerful generation of AI models, Claude 4, this Thrusday. The tech company introduced two models, Claude Sonnet 4 and Claude Opus 4, including a safety protection layer for the latest and labeling it Safety Level 3 due to deceptive behaviour and potential risks.  Anthropic introduced Claude Sonnet 4 and Claude Opus 4, the company’s most advanced AI models. [...] Anthropic Releases Its Latest Model Claude 4 With Safety Warnings [...] advanced AI models. > Claude Opus 4 is our most powerful model yet, and the world’s best coding model. Along with the new models announcement, Anthropic also released a safety note about Claude Opus 4, highlighting that a layer of safety has been included with the model and they have activated the AI Safety Level 3 (ASL-3)—a high-risk classification according to standard safety protocols. Learn moreWizcase was established in 2018 as an independent site reviewing VPN services and covering",
+        "score": 0.9191869,
+        "raw_content": null,
+        "favicon": "https://www.wizcase.com/favicon.ico"
+      },
+      {
+        "url": "https://www.pymnts.com/artificial-intelligence-2/2025/anthropic-targets-coding-and-agents-markets-with-latest-ai-model/",
+        "title": "Anthropic Targets Coding and Agents Markets With Latest AI Model",
+        "content": "# Anthropic Targets Coding and Agents Markets With Latest AI Model. Anthropic released its latest artificial intelligence (AI) model, Claude Opus 4.5, on Monday (Nov. 24), together with several other new products and features. Claude Opus 4.5 performs especially well when applied to coding, agents and computer use, the company said in a Monday press release. “Opus 4.5 is a step forward in what AI systems can do, and a preview of larger changes to how work gets done,” Anthropic said in the [...] said in the release. The model is now available on the company’s app and application programming interface (API), and on major cloud platforms, per the release. Anthropic also released updates to the Claude Developer Platform, Claude Code and the company’s consumer apps, according to the release. Among the changes: the Claude Developer Platform now includes an effort parameter that lets developers decide how much time the model spends thinking about a problem; Claude Code now includes a Plan [...] models to fuel that growth, The Information reported at the time, citing a source familiar with the company’s financials. Big Tech Broadens AI Footprint from Local PC Agents to Super Factories. Mistral Releases New Family of AI Models, Promoting Performance-to-Cost Ratio. See More In: AI, Anthropic, Claude Opus 4.5, News, PYMNTS News, What's Hot.",
+        "score": 0.8965509,
+        "raw_content": null,
+        "favicon": "https://www.pymnts.com/wp-content/uploads/2022/08/favicon-180.jpg"
+      },
+      {
+        "url": "https://www.livemint.com/technology/anthropic-unveils-latest-ai-model-as-openai-rivalry-intensifies-11770313716067.html",
+        "title": "Anthropic unveils latest AI model as OpenAI rivalry intensifies | Mint",
+        "content": "Anthropic says its latest model, Claude Opus 4.6, represents a fundamental shift in how AI handles complex workplace tasks. The company highlighted use cases including financial modeling that synthesizes complicated regulatory filings and market data, plus document and presentation outputs that require minimal refinement. \"Claude Opus 4.6 gets much closer to production-ready quality on the first try than what we've seen with any model,\" Anthropic said, adding that deliverables will require [...] # Anthropic unveils latest AI model as OpenAI rivalry intensifies. ## Anthropic unveils latest AI model as OpenAI rivalry intensifies. Anthropic on Thursday released its latest high-performing artificial intelligence model, escalating its challenge to OpenAI and Google in the intensifying AI race. Founded by former OpenAI staffers in 2021, Anthropic has gained significant momentum in recent months with a series of product releases that have impressed Silicon Valley -- and rattled Wall Street. [...] Wall Street. Releases including an AI automation tool and a legal field product contributed this week to a broad selloff in software stocks, as they exacerbated concerns that AI models can replace the utility of stand-alone business apps and platforms. While its archrival OpenAI targets consumers directly with the hugely popular ChatGPT, Anthropic appeals to computer coders and enterprises seeking AI products that prioritize data security and predictability alongside raw performance. Anthropic",
+        "score": 0.8896154,
+        "raw_content": null,
+        "favicon": "https://www.livemint.com/lm-img/icons/img/apple/icon-normal.png"
+      },
+      {
+        "url": "https://medium.com/modelmind/gpt-5-3-codex-vs-claude-opus-4-6-the-latest-model-releases-from-openai-and-anthropic-5c82b81fa8e9",
+        "title": "GPT-5.3 Codex vs Claude Opus 4.6 — The latest model releases from OpenAI and Anthropic | by Nikhil | Neural Notions | Feb, 2026 | Medium",
+        "content": "## Neural Notions. AI, LLM and technology views. # GPT-5.3 Codex vs Claude Opus 4.6 — The latest model releases from OpenAI and Anthropic. The first months of 2026 have already delivered another round of escalation in the frontier-model race. OpenAI released GPT-5.3 Codex, the latest evolution of its developer-focused coding agent, while Anthropic launched Claude Opus 4.6, a broader reasoning- and enterprise-workflow model pushing scale and context limits. Although they are often compared as [...] a story to preserve and a story still unfolding. ## No responses yet. [...] AI that works alongside developers or independently executes engineering tasks. Codex models are optimized specifically for software engineering workflows, rather than general reasoning. GPT-5-Codex variants are trained for real-world development work, capable of both interactive editing and long autonomous execution on complex projects. ## Published in Neural Notions. ·Last published 2 days ago. AI, LLM and technology views. ## Written by Nikhil. Human with a story to tell, a story to preserve",
+        "score": 0.8773195,
+        "raw_content": null,
+        "favicon": "https://miro.medium.com/v2/resize:fill:152:152/10fd5c419ac61637245384e7099e131627900034828f4f386bdaa47a74eae156"
+      },
+      {
+        "url": "https://www.livemint.com/technology/anthropic-unveils-latest-ai-model-as-openai-rivalry-intensifies/amp-11770313716067.html",
+        "title": "Anthropic unveils latest AI model as OpenAI rivalry intensifies | Mint",
+        "content": "While its archrival OpenAI targets consumers directly with the hugely popular ChatGPT, Anthropic appeals to computer coders and enterprises seeking AI products that prioritize data security and predictability alongside raw performance. Anthropic says its latest model, Claude Opus 4.6, represents a fundamental shift in how AI handles complex workplace tasks. The company highlighted use cases including financial modeling that synthesizes complicated regulatory filings and market data, plus [...] to OpenAI and Google in the intensifying AI race. Founded by former OpenAI staffers in 2021, Anthropic has gained significant momentum in recent months with a series of product releases that have impressed Silicon Valley -- and rattled Wall Street. Releases including an AI automation tool and a legal field product contributed this week to a broad selloff in software stocks, as they exacerbated concerns that AI models can replace the utility of stand-alone business apps and platforms. While its [...] + Oracle CXO Leaders DialogueCXO Leaders Dialogue. + Oracle CXO Leaders Dialogue Hyderabad. + Mirae Asset MF Winning Over Volatility. + PGIM India MF Amend, Adjust, Adapt. # Anthropic unveils latest AI model as OpenAI rivalry intensifies. ## Anthropic unveils latest AI model as OpenAI rivalry intensifies. Anthropic unveils latest AI model as OpenAI rivalry intensifies. Anthropic on Thursday released its latest high-performing artificial intelligence model, escalating its challenge to OpenAI and",
+        "score": 0.8742601,
+        "raw_content": null,
+        "favicon": "https://www.livemint.com/lm-img/icons/img/apple/icon-normal.png"
+      },
+      {
+        "url": "https://m.economictimes.com/tech/artificial-intelligence/anthropic-unveils-latest-ai-model-as-openai-rivalry-intensifies/articleshow/127948207.cms",
+        "title": "Anthropic unveils latest AI model as OpenAI rivalry intensifies - The Economic Times",
+        "content": "Business NewsTechAIAnthropic unveils latest AI model as OpenAI rivalry intensifies. # Anthropic unveils latest AI model as OpenAI rivalry intensifies. Anthropic on Thursday released its latest high-performing artificial intelligence model, escalating its challenge to OpenAI and Google in the intensifying AI race. Anthropic says its latest model, Claude Opus 4.6, represents a fundamental shift in how AI handles complex workplace tasks. Anthropic on Thursday released its latest high-performing [...] that AI models can replace the utility of stand-alone business apps and platforms. While its archrival OpenAI targets consumers directly with the hugely popular ChatGPT, Anthropic appeals to computer coders and enterprises seeking AI products that prioritize data security and predictability alongside raw performance. Anthropic says its latest model, Claude Opus 4.6, represents a fundamental shift in how AI handles complex workplace tasks. \"Claude Opus 4.6 gets much closer to production-ready [...] high-performing artificial intelligence model, escalating its challenge to OpenAI and Google in the intensifying AI race. Founded by former OpenAI staffers in 2021, Anthropic has gained significant momentum in recent months with a series of product releases that have impressed Silicon Valley -- and rattled Wall Street. Releases including an AI automation tool and a legal field product contributed this week to a broad selloff in software stocks, as they exacerbated concerns that AI models can",
+        "score": 0.87348515,
+        "raw_content": null,
+        "favicon": "https://img.etimg.com/thumb/width-120,height-120,msid-75267040/et.jpg"
+      },
+      {
+        "url": "https://economictimes.indiatimes.com/topic/anthropic-ai-latest-news",
+        "title": "anthropic ai latest news: Latest News & Videos, Photos about anthropic ai latest news  | The Economic Times - Page 1",
+        "content": "advanced artificial intelligence model. The release follows Anthropic's earlier legal automation tool, which raised concerns about AI's impact on software businesses. Anthropic says its latest model, Claude Opus 4.6, represents a fundamental shift in how AI handles complex workplace tasks. How Anthropic's new AI tool Claude could impact IT jobs? ## How Anthropic's new AI tool Claude could impact IT jobs? Anthropic’s launch of Claude Cowork, an AI tool for collaborative work, sparked a global [...] Anthropic unveils new AI model Claude Opus 4.6 as OpenAI rivalry heats up. ## Anthropic unveils new AI model Claude Opus 4.6 as OpenAI rivalry heats up. Claude Opus 4.6 launched days after Claude Cowork crashed software stocks - here's what Anthropic’s most powerful AI can do. ## Claude Opus 4.6 launched days after Claude Cowork crashed software stocks - here's what Anthropic’s most powerful AI can do. Opus 4.6: AI firm Anthropic has launched Claude Opus 4.6, its most advanced artificial [...] legal AI tool and why investors are dumping software stocks. ## What is Anthropic’s new legal AI tool and why investors are dumping software stocks. Anthropic new AI tool: Anthropic has launched a new AI tool for legal tasks. Data service stocks plunge up to 10% as Anthropic releases AI in legal space. ## Data service stocks plunge up to 10% as Anthropic releases AI in legal space.",
+        "score": 0.8627572,
+        "raw_content": null,
+        "favicon": "https://img.etimg.com/thumb/width-120,height-120,msid-75267040/et.jpg"
+      },
+      {
+        "url": "https://www.marktechpost.com/2024/06/05/latest-releases-from-snowflake-anthropic-ai-databricks-and-mistral-ai/",
+        "title": "Latest Releases from Snowflake, Anthropic AI, Databricks, and Mistral AI - MarkTechPost",
+        "content": "Mistral AI’s commitment to open-source development is evident in its release of models under the Apache 2.0 license, enabling unrestricted use and customization. ### Conclusion The latest releases from Snowflake, Anthropic AI, Databricks, and Mistral AI showcase the relentless pursuit of innovation in the AI and data sectors.  Aswin Ak HPC-AI Tech Releases Open-Sora 2.0: An Open-Source SOTA-Level Video Generation Model Trained for Just $200K  Aswin Ak From Sparse Rewards to Precise Mastery: How [...] Mastery: How DEMO3 is Revolutionizing Robotic Manipulation  Aswin Ak Hugging Face Releases OlympicCoder: A Series of Open Reasoning AI Models that can Solve Olympiad-Level Programming Problems  Aswin Ak From Genes to Genius: Evolving Large Language Models with Nature’s Blueprint Previous articleSnowflake Releases Polaris Catalog: Transforming Data Interoperability with Open Source Apache Iceberg Integration Next article18 Data Profiling Tools Every Developer Must Know #### RELATED ARTICLESMORE [...] Latest Releases from Snowflake, Anthropic AI, Databricks, and Mistral AI - MarkTechPost",
+        "score": 0.80698997,
+        "raw_content": null,
+        "favicon": "https://www.marktechpost.com/wp-content/uploads/2022/04/cropped-Favicon-512-x-512-1-1-180x180.png"
+      },
+      {
+        "url": "https://techxplore.com/news/2025-02-anthropic-smartest-ai.html",
+        "title": "Anthropic releases its 'smartest' AI model",
+        "content": "the latest iteration of Claude has a \"hybrid\" reasoning model that lets users get quick answers to questions or have it spend time mulling complex queries and share steps in the process, according to Kaplan. The new AI model makes its debut as Anthropic works on finalizing a $3.5 billion funding round that values the startup at $61.5 billion in a huge leap from its prior valuation, according to a Wall Street Journal report. AI models have moved beyond generating images, videos or written works [...] Anthropic releases its 'smartest' AI model. Anthropic releases its 'smartest' AI model. OpenAI rival Anthropic on Monday released what it said is its smartest artificial intelligence model to date, particularly when it comes to computer coding. Anthropic's new model is \"much stronger at coding, and particularly at taking over and doing really complicated coding tests,\" Anthropic co-founder and chief science officer Jared Kaplan told AFP. Aside from overall improved intelligence, the latest [...] in Europe May 14, 2024 ##### ChatGPT-rival Anthropic releases more powerful AI Mar 4, 2024 ##### OpenAI unveils 'Operator' agent that handles web tasks Jan 24, 2025 ##### Amazon to invest an additional $4 billion in AI startup Anthropic Nov 22, 2024 ##### Alibaba launches advanced AI model to rival GPT-4 Jan 29, 2025 ##### Amazon steps up AI race with $4 bn Anthropic investment Sep 25, 2023. Anthropic has released its most advanced AI model, Claude 3.7 Sonnet, with a focus on computer coding.",
+        "score": 0.783542,
+        "raw_content": null,
+        "favicon": "https://techx.b-cdn.net/tmpl/v2/img/favicons/apple-touch-icon.png"
+      },
+      {
+        "url": "https://www.spacedaily.com/reports/Anthropic_releases_its_smartest_AI_model_999.html",
+        "title": "Anthropic releases its 'smartest' AI model",
+        "content": "Anthropic releases its 'smartest' AI model. Anthropic releases its 'smartest' AI model. OpenAI rival Anthropic on Monday released what it said is its smartest artificial intelligence model to date, particularly when it comes to computer coding. Along with Claude 3.7 Sonnet, the San Francisco-based company is making available in a limited research preview a digital \"agent\" called Claude Code tailored to be a tool for software developers. The release comes as AI companies are pushing out new [...] are pushing out new products at a fast pace and with innovations quickly reproduced by rivals, often at a lower cost, raising concerns about finding a return on the massive investments. Anthropic's new model is \"much stronger at coding, and particularly at taking over and doing really complicated coding tests,\" Anthropic co-founder and chief science officer Jared Kaplan told AFP. The new AI model makes its debut as Anthropic works on finalizing a $3.5 billion funding round that values the [...] that values the startup at $61.5 billion in a huge leap from its prior valuation, according to a Wall Street Journal report. OpenAI released a version of ChatGPT about six months ago that shared its \"thinking\" process, but Anthropic followed that by enabling its Claude model to command computers as people do. \"We try very hard to make model improvements grounded in customer problems,\" said Anthropic chief product officer Mike Krieger. Chinese tech companies shrugged off foreign scrutiny of",
+        "score": 0.752468,
+        "raw_content": null,
+        "favicon": "https://www.spacedaily.com/favicon.ico"
+      }
+    ],
+    "response_time": 0.47,
+    "request_id": "a5366ed4-7472-4bef-bda0-bdd7de46d0e1"
+  },
+  "expect": {
+    "resultsLength": 10,
+    "firstTitle": "Anthropic Releases Its Latest Model Claude 4 With Safety Warnings",
+    "firstUrl": "https://www.wizcase.com/news/anthropic-releases-claude-4-with-warnings",
+    "firstScore": 0.9191869
+  }
+}

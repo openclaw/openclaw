@@ -126,18 +126,48 @@ async function promptChannelMode(runtime: RuntimeEnv): Promise<ChannelsWizardMod
   ) as ChannelsWizardMode;
 }
 
+const SEARCH_PROVIDER_META = {
+  brave: {
+    label: "Brave Search",
+    envVars: ["BRAVE_API_KEY"],
+    placeholder: "BSA...",
+  },
+  perplexity: {
+    label: "Perplexity (via OpenRouter)",
+    envVars: ["PERPLEXITY_API_KEY", "OPENROUTER_API_KEY"],
+    placeholder: "pplx-...",
+  },
+  grok: {
+    label: "Grok (xAI)",
+    envVars: ["XAI_API_KEY"],
+    placeholder: "xai-...",
+  },
+  tavily: {
+    label: "Tavily",
+    envVars: ["TAVILY_API_KEY"],
+    placeholder: "tvly-...",
+  },
+} as const;
+
+type SearchProvider = keyof typeof SEARCH_PROVIDER_META;
+
 async function promptWebToolsConfig(
   nextConfig: OpenClawConfig,
   runtime: RuntimeEnv,
 ): Promise<OpenClawConfig> {
   const existingSearch = nextConfig.tools?.web?.search;
   const existingFetch = nextConfig.tools?.web?.fetch;
-  const hasSearchKey = Boolean(existingSearch?.apiKey);
+  const hasSearchKey = Boolean(
+    existingSearch?.brave?.apiKey ||
+    existingSearch?.perplexity?.apiKey ||
+    existingSearch?.grok?.apiKey ||
+    existingSearch?.tavily?.apiKey,
+  );
 
   note(
     [
       "Web search lets your agent look things up online using the `web_search` tool.",
-      "It requires a Brave Search API key (you can store it in the config or set BRAVE_API_KEY in the Gateway environment).",
+      "Supported providers: Brave Search, Perplexity, Grok (xAI), and Tavily.",
       "Docs: https://docs.openclaw.ai/tools/web",
     ].join("\n"),
     "Web search",
@@ -145,35 +175,65 @@ async function promptWebToolsConfig(
 
   const enableSearch = guardCancel(
     await confirm({
-      message: "Enable web_search (Brave Search)?",
+      message: "Enable web_search?",
       initialValue: existingSearch?.enabled ?? hasSearchKey,
     }),
     runtime,
   );
 
-  let nextSearch = {
+  let nextSearch: typeof existingSearch = {
     ...existingSearch,
     enabled: enableSearch,
   };
 
   if (enableSearch) {
-    const keyInput = guardCancel(
-      await text({
-        message: hasSearchKey
-          ? "Brave Search API key (leave blank to keep current or use BRAVE_API_KEY)"
-          : "Brave Search API key (paste it here; leave blank to use BRAVE_API_KEY)",
-        placeholder: hasSearchKey ? "Leave blank to keep current" : "BSA...",
+    const provider = guardCancel(
+      await select<SearchProvider>({
+        message: "Search provider",
+        options: (
+          Object.entries(SEARCH_PROVIDER_META) as [
+            SearchProvider,
+            (typeof SEARCH_PROVIDER_META)[SearchProvider],
+          ][]
+        ).map(([value, meta]) => ({
+          value,
+          label: meta.label,
+          hint: meta.envVars.join(" / "),
+        })),
+        initialValue: existingSearch?.provider ?? "brave",
       }),
       runtime,
     );
+
+    const meta = SEARCH_PROVIDER_META[provider];
+    const existingProviderKey = existingSearch?.[provider]?.apiKey;
+    const hasProviderKey = Boolean(existingProviderKey);
+    const envHint = meta.envVars.join(" or ");
+
+    const keyInput = guardCancel(
+      await text({
+        message: hasProviderKey
+          ? `${meta.label} API key (leave blank to keep current or use ${envHint})`
+          : `${meta.label} API key (paste it here; leave blank to use ${envHint})`,
+        placeholder: hasProviderKey ? "Leave blank to keep current" : meta.placeholder,
+      }),
+      runtime,
+    );
+
     const key = String(keyInput ?? "").trim();
+
+    nextSearch = { ...nextSearch, provider, enabled: true };
+
     if (key) {
-      nextSearch = { ...nextSearch, apiKey: key };
-    } else if (!hasSearchKey) {
+      nextSearch = {
+        ...nextSearch,
+        [provider]: { ...existingSearch?.[provider], apiKey: key },
+      };
+    } else if (!hasProviderKey) {
       note(
         [
           "No key stored yet, so web_search will stay unavailable.",
-          "Store a key here or set BRAVE_API_KEY in the Gateway environment.",
+          `Store a key here or set ${envHint} in the Gateway environment.`,
           "Docs: https://docs.openclaw.ai/tools/web",
         ].join("\n"),
         "Web search",

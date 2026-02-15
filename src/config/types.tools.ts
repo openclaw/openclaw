@@ -356,10 +356,13 @@ export type ToolsConfig = {
     search?: {
       /** Enable web search tool (default: true when API key is present). */
       enabled?: boolean;
-      /** Search provider ("brave", "perplexity", or "grok"). */
-      provider?: "brave" | "perplexity" | "grok";
-      /** Brave Search API key (optional; defaults to BRAVE_API_KEY env var). */
-      apiKey?: string;
+      /** Search provider ("brave", "perplexity", "grok", or "tavily"). */
+      provider?: "brave" | "perplexity" | "grok" | "tavily";
+      /** Brave-specific configuration (used when provider="brave"). */
+      brave?: {
+        /** Brave Search API key (defaults to BRAVE_API_KEY env var). */
+        apiKey?: string;
+      };
       /** Default search results count (1-10). */
       maxResults?: number;
       /** Timeout in seconds for search requests. */
@@ -379,10 +382,15 @@ export type ToolsConfig = {
       grok?: {
         /** API key for xAI (defaults to XAI_API_KEY env var). */
         apiKey?: string;
-        /** Model to use (defaults to "grok-4-1-fast"). */
+        /** Model to use (defaults to "grok-4-1-fast-reasoning"). */
         model?: string;
-        /** Include inline citations in response text as markdown links (default: false). */
-        inlineCitations?: boolean;
+      };
+      /** Tavily-specific configuration (used when provider="tavily"). */
+      tavily?: {
+        /** API key for Tavily (defaults to TAVILY_API_KEY env var). */
+        apiKey?: string;
+        /** Search depth ("basic", "advanced", "fast", or "ultra-fast"; defaults to "advanced"). */
+        searchDepth?: string;
       };
     };
     fetch?: {

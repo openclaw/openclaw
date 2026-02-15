@@ -23,6 +23,7 @@ const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
 
 const BRAVE_SEARCH_ENDPOINT = "https://api.search.brave.com/res/v1/web/search";
+
 const DEFAULT_PERPLEXITY_BASE_URL = "https://openrouter.ai/api/v1";
 const PERPLEXITY_DIRECT_BASE_URL = "https://api.perplexity.ai";
 const DEFAULT_PERPLEXITY_MODEL = "perplexity/sonar-pro";
@@ -30,7 +31,7 @@ const PERPLEXITY_KEY_PREFIXES = ["pplx-"];
 const OPENROUTER_KEY_PREFIXES = ["sk-or-"];
 
 const XAI_API_ENDPOINT = "https://api.x.ai/v1/responses";
-const DEFAULT_GROK_MODEL = "grok-4-1-fast";
+const DEFAULT_GROK_MODEL = "grok-4-1-fast-reasoning";
 
 const SEARCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
 const BRAVE_FRESHNESS_SHORTCUTS = new Set(["pd", "pw", "pm", "py"]);
@@ -99,31 +100,27 @@ type PerplexityApiKeySource = "config" | "perplexity_env" | "openrouter_env" | "
 type GrokConfig = {
   apiKey?: string;
   model?: string;
-  inlineCitations?: boolean;
 };
 
-type GrokSearchResponse = {
-  output?: Array<{
-    type?: string;
-    role?: string;
-    content?: Array<{
-      type?: string;
-      text?: string;
-      annotations?: Array<{
-        type?: string;
-        url?: string;
-        start_index?: number;
-        end_index?: number;
-      }>;
-    }>;
-  }>;
-  output_text?: string; // deprecated field - kept for backwards compatibility
-  citations?: string[];
-  inline_citations?: Array<{
-    start_index: number;
-    end_index: number;
-    url: string;
-  }>;
+type GrokSearchResult = {
+  output?: GrokOutputWrapper[];
+};
+
+type GrokOutputWrapper = {
+  type: string;
+  status: string;
+  content?: GrokSearchContent[];
+};
+
+type GrokSearchAnnotation = {
+  start_index: number;
+  end_index: number;
+  url: string;
+};
+
+type GrokSearchContent = {
+  text?: string;
+  annotations?: GrokSearchAnnotation[];
 };
 
 type PerplexitySearchResponse = {
@@ -136,30 +133,6 @@ type PerplexitySearchResponse = {
 };
 
 type PerplexityBaseUrlHint = "direct" | "openrouter";
-
-function extractGrokContent(data: GrokSearchResponse): {
-  text: string | undefined;
-  annotationCitations: string[];
-} {
-  // xAI Responses API format: find the message output with text content
-  for (const output of data.output ?? []) {
-    if (output.type !== "message") {
-      continue;
-    }
-    for (const block of output.content ?? []) {
-      if (block.type === "output_text" && typeof block.text === "string" && block.text) {
-        // Extract url_citation annotations from this content block
-        const urls = (block.annotations ?? [])
-          .filter((a) => a.type === "url_citation" && typeof a.url === "string")
-          .map((a) => a.url as string);
-        return { text: block.text, annotationCitations: [...new Set(urls)] };
-      }
-    }
-  }
-  // Fallback: deprecated output_text field
-  const text = typeof data.output_text === "string" ? data.output_text : undefined;
-  return { text, annotationCitations: [] };
-}
 
 function resolveSearchConfig(cfg?: OpenClawConfig): WebSearchConfig {
   const search = cfg?.tools?.web?.search;
@@ -181,8 +154,8 @@ function resolveSearchEnabled(params: { search?: WebSearchConfig; sandboxed?: bo
 
 function resolveSearchApiKey(search?: WebSearchConfig): string | undefined {
   const fromConfig =
-    search && "apiKey" in search && typeof search.apiKey === "string"
-      ? normalizeSecretInput(search.apiKey)
+    search?.brave && "apiKey" in search.brave && typeof search.brave.apiKey === "string"
+      ? normalizeSecretInput(search.brave.apiKey)
       : "";
   const fromEnv = normalizeSecretInput(process.env.BRAVE_API_KEY);
   return fromConfig || fromEnv || undefined;
@@ -363,10 +336,6 @@ function resolveGrokModel(grok?: GrokConfig): string {
   return fromConfig || DEFAULT_GROK_MODEL;
 }
 
-function resolveGrokInlineCitations(grok?: GrokConfig): boolean {
-  return grok?.inlineCitations === true;
-}
-
 function resolveSearchCount(value: unknown, fallback: number): number {
   const parsed = typeof value === "number" && Number.isFinite(value) ? value : fallback;
   const clamped = Math.max(1, Math.min(MAX_SEARCH_COUNT, Math.floor(parsed)));
@@ -502,11 +471,13 @@ async function runGrokSearch(params: {
   apiKey: string;
   model: string;
   timeoutSeconds: number;
-  inlineCitations: boolean;
 }): Promise<{
-  content: string;
-  citations: string[];
-  inlineCitations?: GrokSearchResponse["inline_citations"];
+  contents: string[];
+  citations: {
+    url: string;
+    start_index: number;
+    end_index: number;
+  }[];
 }> {
   const body: Record<string, unknown> = {
     model: params.model,
@@ -518,11 +489,6 @@ async function runGrokSearch(params: {
     ],
     tools: [{ type: "web_search" }],
   };
-
-  // Note: xAI's /v1/responses endpoint does not support the `include`
-  // parameter (returns 400 "Argument not supported: include"). Inline
-  // citations are returned automatically when available — we just parse
-  // them from the response without requesting them explicitly (#12910).
 
   const res = await fetch(XAI_API_ENDPOINT, {
     method: "POST",
@@ -539,14 +505,34 @@ async function runGrokSearch(params: {
     throw new Error(`xAI API error (${res.status}): ${detail || res.statusText}`);
   }
 
-  const data = (await res.json()) as GrokSearchResponse;
-  const { text: extractedText, annotationCitations } = extractGrokContent(data);
-  const content = extractedText ?? "No response";
-  // Prefer top-level citations; fall back to annotation-derived ones
-  const citations = (data.citations ?? []).length > 0 ? data.citations! : annotationCitations;
-  const inlineCitations = data.inline_citations;
+  const { output } = (await res.json()) as GrokSearchResult;
+  const empty = {
+    contents: [] as string[],
+    citations: [] as { url: string; start_index: number; end_index: number }[],
+  };
 
-  return { content, citations, inlineCitations };
+  if (!output?.length) {
+    return empty;
+  }
+
+  const messages = output.filter((e) => e.type === "message" && e.status === "completed");
+  if (!messages.length) {
+    return empty;
+  }
+
+  const parts = messages.flatMap((m) => m.content ?? []);
+
+  const contents = parts.filter((p) => p.text).map((p) => wrapWebContent(p.text!, "web_search"));
+
+  const citations = parts
+    .flatMap((p) => p.annotations ?? [])
+    .map((ann) => ({
+      url: ann.url,
+      start_index: ann.start_index,
+      end_index: ann.end_index,
+    }));
+
+  return { contents, citations };
 }
 
 async function runWebSearch(params: {
@@ -563,14 +549,13 @@ async function runWebSearch(params: {
   perplexityBaseUrl?: string;
   perplexityModel?: string;
   grokModel?: string;
-  grokInlineCitations?: boolean;
 }): Promise<Record<string, unknown>> {
   const cacheKey = normalizeCacheKey(
     params.provider === "brave"
       ? `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || "default"}:${params.ui_lang || "default"}:${params.freshness || "default"}`
       : params.provider === "perplexity"
         ? `${params.provider}:${params.query}:${params.perplexityBaseUrl ?? DEFAULT_PERPLEXITY_BASE_URL}:${params.perplexityModel ?? DEFAULT_PERPLEXITY_MODEL}:${params.freshness || "default"}`
-        : `${params.provider}:${params.query}:${params.grokModel ?? DEFAULT_GROK_MODEL}:${String(params.grokInlineCitations ?? false)}`,
+        : `${params.provider}:${params.query}:${params.grokModel ?? DEFAULT_GROK_MODEL}`,
   );
   const cached = readCache(SEARCH_CACHE, cacheKey);
   if (cached) {
@@ -608,12 +593,11 @@ async function runWebSearch(params: {
   }
 
   if (params.provider === "grok") {
-    const { content, citations, inlineCitations } = await runGrokSearch({
+    const { contents, citations } = await runGrokSearch({
       query: params.query,
       apiKey: params.apiKey,
       model: params.grokModel ?? DEFAULT_GROK_MODEL,
       timeoutSeconds: params.timeoutSeconds,
-      inlineCitations: params.grokInlineCitations ?? false,
     });
 
     const payload = {
@@ -621,15 +605,8 @@ async function runWebSearch(params: {
       provider: params.provider,
       model: params.grokModel ?? DEFAULT_GROK_MODEL,
       tookMs: Date.now() - start,
-      externalContent: {
-        untrusted: true,
-        source: "web_search",
-        provider: params.provider,
-        wrapped: true,
-      },
-      content: wrapWebContent(content),
+      results: contents,
       citations,
-      inlineCitations,
     };
     writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
     return payload;
@@ -782,7 +759,6 @@ export function createWebSearchTool(options?: {
         ),
         perplexityModel: resolvePerplexityModel(perplexityConfig),
         grokModel: resolveGrokModel(grokConfig),
-        grokInlineCitations: resolveGrokInlineCitations(grokConfig),
       });
       return jsonResult(result);
     },
@@ -798,6 +774,5 @@ export const __testing = {
   freshnessToPerplexityRecency,
   resolveGrokApiKey,
   resolveGrokModel,
-  resolveGrokInlineCitations,
-  extractGrokContent,
+  runGrokSearch,
 } as const;

@@ -1,0 +1,298 @@
+{
+  "description": "Searching for latest openclaw news",
+  "response": {
+    "created_at": 1770707669,
+    "completed_at": 1770707698,
+    "id": "73f0da4d-b934-630c-2b2d-7cbf70d960ee",
+    "max_output_tokens": null,
+    "model": "grok-4-1-fast-reasoning",
+    "object": "response",
+    "output": [
+      {
+        "id": "ws_73f0da4d-b934-630c-2b2d-7cbf70d960ee_call_57698952",
+        "type": "web_search_call",
+        "status": "completed",
+        "action": {
+          "type": "search",
+          "query": "openclaw latest news",
+          "sources": []
+        }
+      },
+      {
+        "id": "ws_73f0da4d-b934-630c-2b2d-7cbf70d960ee_call_11100281",
+        "type": "web_search_call",
+        "status": "completed",
+        "action": {
+          "type": "search",
+          "query": "openclaw",
+          "sources": []
+        }
+      },
+      {
+        "id": "ws_73f0da4d-b934-630c-2b2d-7cbf70d960ee_call_64507200",
+        "type": "web_search_call",
+        "status": "completed",
+        "action": {
+          "type": "search",
+          "query": "\"openclaw\" OR openclaw site:news.ycombinator.com OR site:reddit.com",
+          "sources": []
+        }
+      },
+      {
+        "id": "ws_73f0da4d-b934-630c-2b2d-7cbf70d960ee_call_12010255",
+        "type": "web_search_call",
+        "status": "completed",
+        "action": {
+          "type": "open_page",
+          "url": "https://siliconangle.com/2026/02/09/tens-thousands-openclaw-systems-exposed-due-misconfiguration-known-exploits"
+        }
+      },
+      {
+        "id": "ws_73f0da4d-b934-630c-2b2d-7cbf70d960ee_call_22353204",
+        "type": "web_search_call",
+        "status": "completed",
+        "action": {
+          "type": "open_page",
+          "url": "https://www.infosecurity-magazine.com/news/researchers-40000-exposed-openclaw"
+        }
+      },
+      {
+        "id": "ws_73f0da4d-b934-630c-2b2d-7cbf70d960ee_call_94812990",
+        "type": "web_search_call",
+        "status": "completed",
+        "action": {
+          "type": "open_page",
+          "url": "https://cisoseries.com/cybersecurity-news-openclaw-embraces-virustotal-cisa-eol-deadline-ransomware-hits-bridgepay"
+        }
+      },
+      {
+        "id": "ws_73f0da4d-b934-630c-2b2d-7cbf70d960ee_call_73790764",
+        "type": "web_search_call",
+        "status": "completed",
+        "action": {
+          "type": "open_page",
+          "url": "https://github.com/openclaw/openclaw"
+        }
+      },
+      {
+        "id": "ws_73f0da4d-b934-630c-2b2d-7cbf70d960ee_call_24270942",
+        "type": "web_search_call",
+        "status": "completed",
+        "action": {
+          "type": "open_page",
+          "url": "https://openclaw.ai/"
+        }
+      },
+      {
+        "content": [
+          {
+            "type": "output_text",
+            "text": "**OpenClaw Overview**  \nOpenClaw (formerly Clawdbot and Moltbot) is a free, open-source, self-hosted AI assistant that runs on Mac, Windows, or Linux machines. It performs real-world tasks like managing emails, calendars, flights, and more via chat apps (WhatsApp, Telegram, etc.), with full system access, browser control, and extensible \"skills.\"[[1]](https://openclaw.ai/)[[2]](https://github.com/openclaw/openclaw) It has exploded in popularity, boasting 181k GitHub stars just 19 days after major updates.[[2]](https://github.com/openclaw/openclaw)\n\n**Latest News (as of February 10, 2026):**  \n- **Major Security Exposures Reported (Feb 9):** SecurityScorecard's STRIKE team identified over 40,000 publicly exposed OpenClaw instances across 28,663 unique IPs in 76 countries, many due to misconfigurations like internet-exposed control panels and unsafe defaults. 63% are vulnerable, including 12,812 to remote code execution via three high-severity CVEs (CVSS 7.8-8.8) with public exploits, risking full host takeover, API key theft, and stealthy attacks masked as normal AI activity. Most exposures are in China, US, and Singapore; outdated versions are common despite patches.[[3]](https://siliconangle.com/2026/02/09/tens-thousands-openclaw-systems-exposed-due-misconfiguration-known-exploits)[[4]](https://www.infosecurity-magazine.com/news/researchers-40000-exposed-openclaw) Recommendations include zero-trust access, least privilege, and monitoring agent prompts.[[4]](https://www.infosecurity-magazine.com/news/researchers-40000-exposed-openclaw)  \n- **VirusTotal Partnership for Skill Scanning (Feb 9-10):** In response to malware and prompt injection in ClawHub skills, OpenClaw integrated VirusTotal scanning for all uploaded skills via SHA-256 hashes, though not foolproof against clever payloads.[[5]](https://cisoseries.com/cybersecurity-news-openclaw-embraces-virustotal-cisa-eol-deadline-ransomware-hits-bridgepay)[[1]](https://openclaw.ai/)  \n- **New Release (Feb 9):** Version 2026.2.9 was released, with security features like sandboxing via Docker and DM access controls emphasized.[[2]](https://github.com/openclaw/openclaw)  \n- **Community Buzz:** Hacker News and Reddit threads highlight both life-changing utility and architectural security risks (e.g., root access needs), with warnings about malware-laced skills and a \"security disaster\" from rapid 100k+ dev adoption.[[6]](https://news.ycombinator.com/item?id=46931805)[[7]](https://www.reddit.com/r/programming/comments/1qz6hgp/the_openclaw_security_disaster_what_happens_when)[[8]](https://www.reddit.com/r/LocalLLaMA/comments/1qxrogr/a_topdownloaded_openclaw_skill_is_actually_a) Earlier Jan vulnerabilities were patched, but exposures persist.[[9]](https://security.utoronto.ca/advisories/openclaw-vulnerability-notification)\n\nSecurity teams urge caution: treat agents as privileged identities and avoid public exposure.[[4]](https://www.infosecurity-magazine.com/news/researchers-40000-exposed-openclaw) For more, check the GitHub repo or official site.[[2]](https://github.com/openclaw/openclaw)[[1]](https://openclaw.ai/)",
+            "logprobs": [],
+            "annotations": [
+              {
+                "type": "url_citation",
+                "url": "https://openclaw.ai/",
+                "start_index": 348,
+                "end_index": 375,
+                "title": "1"
+              },
+              {
+                "type": "url_citation",
+                "url": "https://github.com/openclaw/openclaw",
+                "start_index": 375,
+                "end_index": 418,
+                "title": "2"
+              },
+              {
+                "type": "url_citation",
+                "url": "https://github.com/openclaw/openclaw",
+                "start_index": 510,
+                "end_index": 553,
+                "title": "2"
+              },
+              {
+                "type": "url_citation",
+                "url": "https://siliconangle.com/2026/02/09/tens-thousands-openclaw-systems-exposed-due-misconfiguration-known-exploits",
+                "start_index": 1185,
+                "end_index": 1303,
+                "title": "3"
+              },
+              {
+                "type": "url_citation",
+                "url": "https://www.infosecurity-magazine.com/news/researchers-40000-exposed-openclaw",
+                "start_index": 1303,
+                "end_index": 1387,
+                "title": "4"
+              },
+              {
+                "type": "url_citation",
+                "url": "https://www.infosecurity-magazine.com/news/researchers-40000-exposed-openclaw",
+                "start_index": 1477,
+                "end_index": 1561,
+                "title": "4"
+              },
+              {
+                "type": "url_citation",
+                "url": "https://cisoseries.com/cybersecurity-news-openclaw-embraces-virustotal-cisa-eol-deadline-ransomware-hits-bridgepay",
+                "start_index": 1816,
+                "end_index": 1937,
+                "title": "5"
+              },
+              {
+                "type": "url_citation",
+                "url": "https://openclaw.ai/",
+                "start_index": 1937,
+                "end_index": 1964,
+                "title": "1"
+              },
+              {
+                "type": "url_citation",
+                "url": "https://github.com/openclaw/openclaw",
+                "start_index": 2109,
+                "end_index": 2152,
+                "title": "2"
+              },
+              {
+                "type": "url_citation",
+                "url": "https://news.ycombinator.com/item?id=46931805",
+                "start_index": 2402,
+                "end_index": 2454,
+                "title": "6"
+              },
+              {
+                "type": "url_citation",
+                "url": "https://www.reddit.com/r/programming/comments/1qz6hgp/the_openclaw_security_disaster_what_happens_when",
+                "start_index": 2454,
+                "end_index": 2563,
+                "title": "7"
+              },
+              {
+                "type": "url_citation",
+                "url": "https://www.reddit.com/r/LocalLLaMA/comments/1qxrogr/a_topdownloaded_openclaw_skill_is_actually_a",
+                "start_index": 2563,
+                "end_index": 2667,
+                "title": "8"
+              },
+              {
+                "type": "url_citation",
+                "url": "https://security.utoronto.ca/advisories/openclaw-vulnerability-notification",
+                "start_index": 2732,
+                "end_index": 2814,
+                "title": "9"
+              },
+              {
+                "type": "url_citation",
+                "url": "https://www.infosecurity-magazine.com/news/researchers-40000-exposed-openclaw",
+                "start_index": 2909,
+                "end_index": 2993,
+                "title": "4"
+              },
+              {
+                "type": "url_citation",
+                "url": "https://github.com/openclaw/openclaw",
+                "start_index": 3043,
+                "end_index": 3086,
+                "title": "2"
+              },
+              {
+                "type": "url_citation",
+                "url": "https://openclaw.ai/",
+                "start_index": 3086,
+                "end_index": 3113,
+                "title": "1"
+              }
+            ]
+          }
+        ],
+        "id": "msg_73f0da4d-b934-630c-2b2d-7cbf70d960ee",
+        "role": "assistant",
+        "type": "message",
+        "status": "completed"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "previous_response_id": null,
+    "reasoning": {
+      "effort": null,
+      "summary": null
+    },
+    "temperature": 0.7,
+    "text": {
+      "format": {
+        "type": "text"
+      }
+    },
+    "tool_choice": "auto",
+    "tools": [
+      {
+        "type": "web_search",
+        "search_context_size": "medium"
+      }
+    ],
+    "top_p": 0.95,
+    "usage": {
+      "input_tokens": 11433,
+      "input_tokens_details": {
+        "cached_tokens": 6189
+      },
+      "output_tokens": 3066,
+      "output_tokens_details": {
+        "reasoning_tokens": 1581
+      },
+      "total_tokens": 14499,
+      "num_sources_used": 0,
+      "num_server_side_tools_used": 8,
+      "cost_in_usd_ticks": 428912500,
+      "server_side_tool_usage_details": {
+        "web_search_calls": 8,
+        "x_search_calls": 0,
+        "code_interpreter_calls": 0,
+        "file_search_calls": 0,
+        "mcp_calls": 0,
+        "document_search_calls": 0
+      }
+    },
+    "user": null,
+    "incomplete_details": null,
+    "status": "completed",
+    "store": true,
+    "metadata": {},
+    "background": false,
+    "service_tier": "default",
+    "truncation": "disabled",
+    "top_logprobs": 0,
+    "presence_penalty": 0.0,
+    "frequency_penalty": 0.0,
+    "prompt_cache_key": null,
+    "max_tool_calls": null,
+    "safety_identifier": null,
+    "error": null,
+    "instructions": null
+  },
+  "expect": {
+    "contentsLength": 1,
+    "contentsContains": [
+      "OpenClaw (formerly Clawdbot and Moltbot) is a free, open-source, self-hosted AI assistant that runs on Mac"
+    ],
+    "citationsLength": 16,
+    "citationUrls": [
+      "https://openclaw.ai/",
+      "https://github.com/openclaw/openclaw",
+      "https://github.com/openclaw/openclaw",
+      "https://siliconangle.com/2026/02/09/tens-thousands-openclaw-systems-exposed-due-misconfiguration-known-exploits",
+      "https://www.infosecurity-magazine.com/news/researchers-40000-exposed-openclaw",
+      "https://www.infosecurity-magazine.com/news/researchers-40000-exposed-openclaw",
+      "https://cisoseries.com/cybersecurity-news-openclaw-embraces-virustotal-cisa-eol-deadline-ransomware-hits-bridgepay",
+      "https://openclaw.ai/",
+      "https://github.com/openclaw/openclaw",
+      "https://news.ycombinator.com/item?id=46931805",
+      "https://www.reddit.com/r/programming/comments/1qz6hgp/the_openclaw_security_disaster_what_happens_when",
+      "https://www.reddit.com/r/LocalLLaMA/comments/1qxrogr/a_topdownloaded_openclaw_skill_is_actually_a",
+      "https://security.utoronto.ca/advisories/openclaw-vulnerability-notification",
+      "https://www.infosecurity-magazine.com/news/researchers-40000-exposed-openclaw",
+      "https://github.com/openclaw/openclaw",
+      "https://openclaw.ai/"
+    ]
+  }
+}

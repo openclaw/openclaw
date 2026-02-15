@@ -1,0 +1,83 @@
+{
+  "description": "Simple search response with 1 web_search_call entry",
+  "response": {
+    "created_at": 1770707576,
+    "completed_at": 1770707579,
+    "id": "0452cecd-37af-a733-759a-10b7c107f2e1",
+    "max_output_tokens": null,
+    "model": "grok-4-1-fast-reasoning",
+    "object": "response",
+    "output": [
+      {
+        "content": [
+          {
+            "type": "output_text",
+            "text": "**Paris**\n\nParis is the capital and largest city of France, located in the north-central part of the country along the Seine River.",
+            "logprobs": [],
+            "annotations": []
+          }
+        ],
+        "id": "msg_0452cecd-37af-a733-759a-10b7c107f2e1",
+        "role": "assistant",
+        "type": "message",
+        "status": "completed"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "previous_response_id": null,
+    "reasoning": {
+      "effort": null,
+      "summary": null
+    },
+    "temperature": 0.7,
+    "text": {
+      "format": {
+        "type": "text"
+      }
+    },
+    "tool_choice": "auto",
+    "tools": [
+      {
+        "type": "web_search",
+        "search_context_size": "medium"
+      }
+    ],
+    "top_p": 0.95,
+    "usage": {
+      "input_tokens": 1069,
+      "input_tokens_details": {
+        "cached_tokens": 147
+      },
+      "output_tokens": 264,
+      "output_tokens_details": {
+        "reasoning_tokens": 181
+      },
+      "total_tokens": 1333,
+      "num_sources_used": 0,
+      "num_server_side_tools_used": 0,
+      "cost_in_usd_ticks": 3237500
+    },
+    "user": null,
+    "incomplete_details": null,
+    "status": "completed",
+    "store": true,
+    "metadata": {},
+    "background": false,
+    "service_tier": "default",
+    "truncation": "disabled",
+    "top_logprobs": 0,
+    "presence_penalty": 0.0,
+    "frequency_penalty": 0.0,
+    "prompt_cache_key": null,
+    "max_tool_calls": null,
+    "safety_identifier": null,
+    "error": null,
+    "instructions": null
+  },
+  "expect": {
+    "contentsLength": 1,
+    "contentsContains": ["Paris is the capital"],
+    "citationsLength": 0,
+    "citationUrls": []
+  }
+}

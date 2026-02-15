@@ -1,0 +1,82 @@
+{
+  "description": "Real response for 'latest financial news India' — multiple web_search_call entries followed by a message with 17 citations",
+  "response": {
+    "created_at": 1770701725,
+    "completed_at": 1770701740,
+    "id": "5b62ae3e-2e45-bc09-708d-a35a05ed619a",
+    "model": "grok-4-1-fast-reasoning",
+    "object": "response",
+    "output": [
+      {
+        "id": "ws_5b62ae3e-2e45-bc09-708d-a35a05ed619a_call_95943818",
+        "type": "web_search_call",
+        "status": "completed",
+        "action": { "type": "search", "query": "latest financial news India", "sources": [] }
+      },
+      {
+        "id": "ws_5b62ae3e-2e45-bc09-708d-a35a05ed619a_call_94119481",
+        "type": "web_search_call",
+        "status": "completed",
+        "action": { "type": "search", "query": "India stock market latest news", "sources": [] }
+      },
+      {
+        "id": "ws_5b62ae3e-2e45-bc09-708d-a35a05ed619a_call_30712737",
+        "type": "web_search_call",
+        "status": "completed",
+        "action": { "type": "search", "query": "India economy news February 2026", "sources": [] }
+      },
+      {
+        "id": "ws_5b62ae3e-2e45-bc09-708d-a35a05ed619a_call_32332779",
+        "type": "web_search_call",
+        "status": "completed",
+        "action": { "type": "search", "query": "RBI latest news", "sources": [] }
+      },
+      {
+        "content": [
+          {
+            "type": "output_text",
+            "text": "### Latest Financial News from India (as of February 10, 2026)\n\n#### Stock Market Updates\n- Indian benchmark indices opened higher today amid optimism from the recent India-US interim trade deal and foreign institutional investor (FII) inflows. The BSE Sensex climbed 247 points (0.29%) to 84,312, while the NSE Nifty rose 80 points (0.31%) above 25,900.",
+            "annotations": [
+              {
+                "type": "url_citation",
+                "url": "https://www.ndtv.com/india-news/stock-market-live-updates-nifty50-sensex-today-sensex-rises-247-points-in-early-trade-nifty-up-80-points-10979139",
+                "start_index": 354,
+                "end_index": 506,
+                "title": "1"
+              },
+              {
+                "type": "url_citation",
+                "url": "https://timesofindia.indiatimes.com/business/india-business/stock-market-today-nifty50-bse-sensex-february-10-2026-dalal-street-indian-equities-india-us-trade-deal/articleshow/128139766.cms",
+                "start_index": 506,
+                "end_index": 702,
+                "title": "2"
+              },
+              {
+                "type": "url_citation",
+                "url": "https://www.thehindubusinessline.com/markets/share-market-nifty-sensex-live-updates-10th-february-2026/article70610658.ece",
+                "start_index": 702,
+                "end_index": 831,
+                "title": "3"
+              }
+            ]
+          }
+        ],
+        "id": "msg_5b62ae3e-2e45-bc09-708d-a35a05ed619a",
+        "role": "assistant",
+        "type": "message",
+        "status": "completed"
+      }
+    ],
+    "status": "completed"
+  },
+  "expect": {
+    "contentsLength": 1,
+    "contentsContains": ["Sensex climbed 247 points"],
+    "citationsLength": 3,
+    "citationUrls": [
+      "https://www.ndtv.com/india-news/stock-market-live-updates-nifty50-sensex-today-sensex-rises-247-points-in-early-trade-nifty-up-80-points-10979139",
+      "https://timesofindia.indiatimes.com/business/india-business/stock-market-today-nifty50-bse-sensex-february-10-2026-dalal-street-indian-equities-india-us-trade-deal/articleshow/128139766.cms",
+      "https://www.thehindubusinessline.com/markets/share-market-nifty-sensex-live-updates-10th-february-2026/article70610658.ece"
+    ]
+  }
+}

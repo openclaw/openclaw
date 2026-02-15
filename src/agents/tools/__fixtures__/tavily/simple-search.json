@@ -1,0 +1,26 @@
+{
+  "description": "Basic Tavily search with two results",
+  "response": {
+    "query": "capital of France",
+    "results": [
+      {
+        "title": "Paris - Wikipedia",
+        "url": "https://en.wikipedia.org/wiki/Paris",
+        "content": "Paris is the capital and largest city of France.",
+        "score": 0.98
+      },
+      {
+        "title": "France - Capital City",
+        "url": "https://www.france.fr/capital",
+        "content": "The capital of France is Paris, known for the Eiffel Tower.",
+        "score": 0.91
+      }
+    ]
+  },
+  "expect": {
+    "resultsLength": 2,
+    "firstTitle": "Paris - Wikipedia",
+    "firstUrl": "https://en.wikipedia.org/wiki/Paris",
+    "firstScore": 0.98
+  }
+}

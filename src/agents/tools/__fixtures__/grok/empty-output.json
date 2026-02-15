@@ -1,0 +1,14 @@
+{
+  "description": "Response with no output array",
+  "response": {
+    "id": "empty-1",
+    "model": "grok-4-1-fast-reasoning",
+    "object": "response",
+    "output": [],
+    "status": "completed"
+  },
+  "expect": {
+    "contentsLength": 0,
+    "citationsLength": 0
+  }
+}

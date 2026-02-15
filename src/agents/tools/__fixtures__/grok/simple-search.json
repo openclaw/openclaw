@@ -1,0 +1,83 @@
+{
+  "description": "Simple search response with 1 web_search_call entry",
+  "response": {
+    "created_at": 1770707471,
+    "completed_at": 1770707472,
+    "id": "7d5f4674-331e-637c-56c8-4c93f7144146",
+    "max_output_tokens": null,
+    "model": "grok-4-1-fast-reasoning",
+    "object": "response",
+    "output": [
+      {
+        "content": [
+          {
+            "type": "output_text",
+            "text": "**London** is the capital of England. It's the largest city in England and the United Kingdom, serving as the political, cultural, and economic center.",
+            "logprobs": [],
+            "annotations": []
+          }
+        ],
+        "id": "msg_7d5f4674-331e-637c-56c8-4c93f7144146",
+        "role": "assistant",
+        "type": "message",
+        "status": "completed"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "previous_response_id": null,
+    "reasoning": {
+      "effort": null,
+      "summary": null
+    },
+    "temperature": 0.7,
+    "text": {
+      "format": {
+        "type": "text"
+      }
+    },
+    "tool_choice": "auto",
+    "tools": [
+      {
+        "type": "web_search",
+        "search_context_size": "medium"
+      }
+    ],
+    "top_p": 0.95,
+    "usage": {
+      "input_tokens": 1070,
+      "input_tokens_details": {
+        "cached_tokens": 1052
+      },
+      "output_tokens": 186,
+      "output_tokens_details": {
+        "reasoning_tokens": 99
+      },
+      "total_tokens": 1256,
+      "num_sources_used": 0,
+      "num_server_side_tools_used": 0,
+      "cost_in_usd_ticks": 1492000
+    },
+    "user": null,
+    "incomplete_details": null,
+    "status": "completed",
+    "store": true,
+    "metadata": {},
+    "background": false,
+    "service_tier": "default",
+    "truncation": "disabled",
+    "top_logprobs": 0,
+    "presence_penalty": 0.0,
+    "frequency_penalty": 0.0,
+    "prompt_cache_key": null,
+    "max_tool_calls": null,
+    "safety_identifier": null,
+    "error": null,
+    "instructions": null
+  },
+  "expect": {
+    "contentsLength": 1,
+    "contentsContains": ["**London** is the capital of England."],
+    "citationsLength": 0,
+    "citationUrls": []
+  }
+}

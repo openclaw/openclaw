@@ -1,0 +1,28 @@
+{
+  "description": "Message with text but no annotations/citations",
+  "response": {
+    "id": "no-ann-1",
+    "model": "grok-4-1-fast-reasoning",
+    "object": "response",
+    "output": [
+      {
+        "content": [
+          {
+            "type": "output_text",
+            "text": "This is a simple answer with no web sources."
+          }
+        ],
+        "id": "msg_no_ann",
+        "role": "assistant",
+        "type": "message",
+        "status": "completed"
+      }
+    ],
+    "status": "completed"
+  },
+  "expect": {
+    "contentsLength": 1,
+    "contentsContains": ["simple answer with no web sources"],
+    "citationsLength": 0
+  }
+}
