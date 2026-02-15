@@ -84,4 +84,19 @@ describe("noteMemorySearchHealth", () => {
     });
     expect(note).not.toHaveBeenCalled();
   });
+
+  it("skips embedding-provider warnings when memory backend is qmd", async () => {
+    const qmdCfg = {
+      memory: {
+        backend: "qmd",
+        qmd: {},
+      },
+    } as OpenClawConfig;
+
+    await noteMemorySearchHealth(qmdCfg);
+
+    expect(note).not.toHaveBeenCalled();
+    expect(resolveDefaultAgentId).not.toHaveBeenCalled();
+    expect(resolveMemorySearchConfig).not.toHaveBeenCalled();
+  });
 });
