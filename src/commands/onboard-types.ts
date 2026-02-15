@@ -71,6 +71,7 @@ export type AuthChoiceGroupId =
   | "together"
   | "huggingface"
   | "qianfan"
+  | "aisa"
   | "xai"
   | "custom";
 export type GatewayAuthChoice = "token" | "password";

@@ -302,6 +302,11 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
     label: "MiniMax M2.5 Lightning",
     hint: "Faster, higher output cost",
   },
+  {
+    value: "aisa-api-key",
+    label: "AIsa API key",
+    hint: "China AI models (Qwen, DeepSeek, Kimi)",
+  },
   { value: "custom-api-key", label: "Custom Provider" },
 ];
 
