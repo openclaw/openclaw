@@ -420,14 +420,15 @@ const EXT_TO_LANG: Record<string, string> = {
 
 /**
  * Infer a code fence language hint from the tool name and detail.
- * For file-backed tools (Read, Write, Edit) the hint is derived
- * from the file extension so Discord applies syntax highlighting.
- * Bash output stays plaintext to avoid false-positive coloring.
+ * Only Read output contains actual file content that benefits from
+ * syntax highlighting. Write/Edit return status messages like
+ * "Successfully replaced text in ..." which get false-positive
+ * keyword coloring when wrapped in a language-hinted code fence.
  */
 function inferCodeLang(key: string, detail?: string): string {
   if (!detail) return "";
-  // Only infer language for file-backed tools
-  if (key !== "read" && key !== "write" && key !== "edit") return "";
+  // Only Read returns actual file content worth highlighting
+  if (key !== "read") return "";
 
   // Strip trailing line range (e.g., ":530-580") added by Read
   const path = detail.replace(/:\d+[-–]\d+$/, "");

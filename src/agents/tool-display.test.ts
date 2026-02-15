@@ -289,18 +289,18 @@ describe("formatToolResultBlockDiscord", () => {
     expect(result).toContain("On branch main");
   });
 
-  it("formats Edit with language-hinted code fence", () => {
+  it("formats Edit with plaintext code fence", () => {
     const display = resolveToolDisplay({
       name: "Edit",
       args: { path: "/src/types.ts" },
     });
     const result = formatToolResultBlockDiscord(display, {
-      outputPreview: "- old line\n+ new line",
-      lineCount: 2,
+      outputPreview: "Successfully replaced text in /src/types.ts.",
+      lineCount: 1,
       isError: false,
     });
     expect(result).toContain("*Edit* (`/src/types.ts`)");
-    expect(result).toContain("```ts\n");
+    expect(result).toContain("```\n");
   });
 
   it("formats Grep with detail", () => {
