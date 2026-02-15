@@ -1,5 +1,83 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 
+/**
+ * pi-ai's openai-completions provider stores the reasoning field name
+ * (e.g. "reasoning_text") as `thinkingSignature` instead of a real cryptographic
+ * signature. When this history is replayed through a proxy that routes to
+ * Anthropic (e.g. GitHub Copilot → Claude), Anthropic rejects the block:
+ * `Invalid 'signature' in 'thinking' block`.
+ *
+ * This set lists the field names pi-ai may store as signatures.
+ */
+const COMPLETIONS_REASONING_FIELD_NAMES = new Set([
+  "reasoning_content",
+  "reasoning",
+  "reasoning_text",
+]);
+
+/**
+ * Strip thinking blocks whose `thinkingSignature` is a reasoning field name
+ * rather than a real signature. These originate from the openai-completions
+ * streaming path in pi-ai and cause 400s when replayed through providers
+ * that route to Anthropic's API.
+ */
+export function stripCompletionsReasoningFieldSignatures(messages: AgentMessage[]): AgentMessage[] {
+  const out: AgentMessage[] = [];
+
+  for (const msg of messages) {
+    if (!msg || typeof msg !== "object") {
+      out.push(msg);
+      continue;
+    }
+
+    if ((msg as { role?: unknown }).role !== "assistant") {
+      out.push(msg);
+      continue;
+    }
+
+    const assistantMsg = msg as Extract<AgentMessage, { role: "assistant" }>;
+    if (!Array.isArray(assistantMsg.content)) {
+      out.push(msg);
+      continue;
+    }
+
+    let changed = false;
+    type ContentBlock = (typeof assistantMsg.content)[number];
+    const nextContent: ContentBlock[] = [];
+
+    for (const block of assistantMsg.content) {
+      if (!block || typeof block !== "object") {
+        nextContent.push(block as ContentBlock);
+        continue;
+      }
+      const rec = block as { type?: unknown; thinkingSignature?: unknown };
+      if (rec.type !== "thinking") {
+        nextContent.push(block);
+        continue;
+      }
+      if (
+        typeof rec.thinkingSignature === "string" &&
+        COMPLETIONS_REASONING_FIELD_NAMES.has(rec.thinkingSignature)
+      ) {
+        changed = true;
+        continue; // drop this block
+      }
+      nextContent.push(block);
+    }
+
+    if (!changed) {
+      out.push(msg);
+      continue;
+    }
+    if (nextContent.length === 0) {
+      continue;
+    }
+    out.push({ ...assistantMsg, content: nextContent } as AgentMessage);
+  }
+
+  return out;
+}
+
 type OpenAIThinkingBlock = {
   type?: unknown;
   thinking?: unknown;

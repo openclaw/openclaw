@@ -28,6 +28,9 @@ importers:
       '@clack/prompts':
         specifier: ^1.0.1
         version: 1.0.1
+      '@github/copilot-sdk':
+        specifier: 0.1.22
+        version: 0.1.22
       '@grammyjs/runner':
         specifier: ^2.0.3
         version: 2.0.3(grammy@1.40.0)
@@ -1050,6 +1053,50 @@ packages:
 
   '@eshaz/web-worker@1.2.2':
     resolution: {integrity: sha512-WxXiHFmD9u/owrzempiDlBB1ZYqiLnm9s6aPc8AlFQalq2tKmqdmMr9GXOupDgzXtqnBipj8Un0gkIm7Sjf8mw==}
+
+  '@github/copilot-darwin-arm64@0.0.403':
+    resolution: {integrity: sha512-dOw8IleA0d1soHnbr/6wc6vZiYWNTKMgfTe/NET1nCfMzyKDt/0F0I7PT5y+DLujJknTla/ZeEmmBUmliTW4Cg==}
+    cpu: [arm64]
+    os: [darwin]
+    hasBin: true
+
+  '@github/copilot-darwin-x64@0.0.403':
+    resolution: {integrity: sha512-aK2jSNWgY8eiZ+TmrvGhssMCPDTKArc0ip6Ul5OaslpytKks8hyXoRbxGD0N9sKioSUSbvKUf+1AqavbDpJO+w==}
+    cpu: [x64]
+    os: [darwin]
+    hasBin: true
+
+  '@github/copilot-linux-arm64@0.0.403':
+    resolution: {integrity: sha512-KhoR2iR70O6vCkzf0h8/K+p82qAgOvMTgAPm9bVEHvbdGFR7Py9qL5v03bMbPxsA45oNaZAkzDhfTAqWhIAZsQ==}
+    cpu: [arm64]
+    os: [linux]
+    hasBin: true
+
+  '@github/copilot-linux-x64@0.0.403':
+    resolution: {integrity: sha512-eoswUc9vo4TB+/9PgFJLVtzI4dPjkpJXdCsAioVuoqPdNxHxlIHFe9HaVcqMRZxUNY1YHEBZozy+IpUEGjgdfQ==}
+    cpu: [x64]
+    os: [linux]
+    hasBin: true
+
+  '@github/copilot-sdk@0.1.22':
+    resolution: {integrity: sha512-ZGOEBmYOfu/vLXKjjoiw4lO3Cb8QBUuAWXcW/qzmPPsM9+Qe00qVr2AuDTU/Gft9Dm/yZcPK2QuTZc7LVeom9w==}
+    engines: {node: '>=18.0.0'}
+
+  '@github/copilot-win32-arm64@0.0.403':
+    resolution: {integrity: sha512-djWjzCsp2xPNafMyOZ/ivU328/WvWhdroGie/DugiJBTgQL2SP0quWW1fhTlDwE81a3g9CxfJonaRgOpFTJTcg==}
+    cpu: [arm64]
+    os: [win32]
+    hasBin: true
+
+  '@github/copilot-win32-x64@0.0.403':
+    resolution: {integrity: sha512-lju8cHy2E6Ux7R7tWyLZeksYC2MVZu9i9ocjiBX/qfG2/pNJs7S5OlkwKJ0BSXSbZEHQYq7iHfEWp201bVfk9A==}
+    cpu: [x64]
+    os: [win32]
+    hasBin: true
+
+  '@github/copilot@0.0.403':
+    resolution: {integrity: sha512-v5jUdtGJReLmE1rmff/LZf+50nzmYQYAaSRNtVNr9g0j0GkCd/noQExe31i1+PudvWU0ZJjltR0B8pUfDRdA9Q==}
+    hasBin: true
 
   '@google/genai@1.41.0':
     resolution: {integrity: sha512-S4WGil+PG0NBQRAx+0yrQuM/TWOLn2gGEy5wn4IsoOI6ouHad0P61p3OWdhJ3aqr9kfj8o904i/jevfaGoGuIQ==}
@@ -5661,6 +5708,10 @@ packages:
       jsdom:
         optional: true
 
+  vscode-jsonrpc@8.2.1:
+    resolution: {integrity: sha512-kdjOSJ2lLIn7r1rtrMbbNCHjyMPfRnowdKjBQ+mGq6NAW5QY2bEZC/khaC5OR8svbbjvLEaIXkOq45e2X9BIbQ==}
+    engines: {node: '>=14.0.0'}
+
   web-streams-polyfill@3.3.3:
     resolution: {integrity: sha512-d2JWLCivmZYTSIoge9MsgFCZrt571BikcWGYkjC1khllbTeDlGqZ2D8vD8E/lJa8WGWbb7Plm8/XJYV7IJHZZw==}
     engines: {node: '>= 8'}
@@ -6528,6 +6579,39 @@ snapshots:
   '@eshaz/web-worker@1.2.2':
     optional: true
 
+  '@github/copilot-darwin-arm64@0.0.403':
+    optional: true
+
+  '@github/copilot-darwin-x64@0.0.403':
+    optional: true
+
+  '@github/copilot-linux-arm64@0.0.403':
+    optional: true
+
+  '@github/copilot-linux-x64@0.0.403':
+    optional: true
+
+  '@github/copilot-sdk@0.1.22':
+    dependencies:
+      '@github/copilot': 0.0.403
+      vscode-jsonrpc: 8.2.1
+      zod: 4.3.6
+
+  '@github/copilot-win32-arm64@0.0.403':
+    optional: true
+
+  '@github/copilot-win32-x64@0.0.403':
+    optional: true
+
+  '@github/copilot@0.0.403':
+    optionalDependencies:
+      '@github/copilot-darwin-arm64': 0.0.403
+      '@github/copilot-darwin-x64': 0.0.403
+      '@github/copilot-linux-arm64': 0.0.403
+      '@github/copilot-linux-x64': 0.0.403
+      '@github/copilot-win32-arm64': 0.0.403
+      '@github/copilot-win32-x64': 0.0.403
+
   '@google/genai@1.41.0':
     dependencies:
       google-auth-library: 10.5.0
@@ -6764,7 +6848,7 @@ snapshots:
 
   '@larksuiteoapi/node-sdk@1.59.0':
     dependencies:
-      axios: 1.13.5(debug@4.4.3)
+      axios: 1.13.5
       lodash.identity: 3.0.0
       lodash.merge: 4.6.2
       lodash.pickby: 4.6.0
@@ -6780,7 +6864,7 @@ snapshots:
     dependencies:
       '@types/node': 24.10.13
     optionalDependencies:
-      axios: 1.13.5(debug@4.4.3)
+      axios: 1.13.5
     transitivePeerDependencies:
       - debug
 
@@ -6983,7 +7067,7 @@ snapshots:
       '@azure/core-auth': 1.10.1
       '@azure/msal-node': 3.8.7
       '@microsoft/agents-activity': 1.2.3
-      axios: 1.13.5(debug@4.4.3)
+      axios: 1.13.5
       jsonwebtoken: 9.0.3
       jwks-rsa: 3.2.2
       object-path: 0.11.8
@@ -7882,7 +7966,7 @@ snapshots:
       '@slack/types': 2.20.0
       '@slack/web-api': 7.14.1
       '@types/express': 5.0.6
-      axios: 1.13.5(debug@4.4.3)
+      axios: 1.13.5
       express: 5.2.1
       path-to-regexp: 8.3.0
       raw-body: 3.0.2
@@ -7928,7 +8012,7 @@ snapshots:
       '@slack/types': 2.20.0
       '@types/node': 25.2.3
       '@types/retry': 0.12.0
-      axios: 1.13.5(debug@4.4.3)
+      axios: 1.13.5
       eventemitter3: 5.0.4
       form-data: 2.5.4
       is-electron: 2.2.2
@@ -8816,6 +8900,14 @@ snapshots:
 
   aws4@1.13.2: {}
 
+  axios@1.13.5:
+    dependencies:
+      follow-redirects: 1.15.11
+      form-data: 2.5.4
+      proxy-from-env: 1.1.0
+    transitivePeerDependencies:
+      - debug
+
   axios@1.13.5(debug@4.4.3):
     dependencies:
       follow-redirects: 1.15.11(debug@4.4.3)
@@ -9394,6 +9486,8 @@ snapshots:
       array-back: 3.1.0
 
   flatbuffers@24.12.23: {}
+
+  follow-redirects@1.15.11: {}
 
   follow-redirects@1.15.11(debug@4.4.3):
     optionalDependencies:
@@ -11448,6 +11542,8 @@ snapshots:
       - terser
       - tsx
       - yaml
+
+  vscode-jsonrpc@8.2.1: {}
 
   web-streams-polyfill@3.3.3: {}
 
