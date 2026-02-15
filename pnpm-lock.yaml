@@ -419,6 +419,16 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/memory-openviking:
+    dependencies:
+      '@sinclair/typebox':
+        specifier: 0.34.48
+        version: 0.34.48
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/minimax-portal-auth:
     devDependencies:
       openclaw:

@@ -1,0 +1,17 @@
+{
+  "name": "@openclaw/memory-openviking",
+  "version": "2026.2.6-3",
+  "description": "OpenClaw OpenViking-backed long-term memory plugin with auto-recall/capture",
+  "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.48"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

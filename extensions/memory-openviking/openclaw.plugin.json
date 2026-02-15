@@ -1,0 +1,75 @@
+{
+  "id": "memory-openviking",
+  "kind": "memory",
+  "uiHints": {
+    "baseUrl": {
+      "label": "OpenViking Base URL",
+      "placeholder": "http://127.0.0.1:1933",
+      "help": "HTTP URL of OpenViking server (or use ${OPENVIKING_BASE_URL})"
+    },
+    "apiKey": {
+      "label": "OpenViking API Key",
+      "sensitive": true,
+      "placeholder": "${OPENVIKING_API_KEY}",
+      "help": "Optional API key for OpenViking server"
+    },
+    "targetUri": {
+      "label": "Search Target URI",
+      "placeholder": "viking://",
+      "help": "Default OpenViking target URI for memory search"
+    },
+    "timeoutMs": {
+      "label": "Request Timeout (ms)",
+      "placeholder": "15000",
+      "advanced": true
+    },
+    "autoCapture": {
+      "label": "Auto-Capture",
+      "help": "Extract memories from recent conversation messages via OpenViking sessions"
+    },
+    "autoRecall": {
+      "label": "Auto-Recall",
+      "help": "Inject relevant OpenViking memories into agent context"
+    },
+    "recallLimit": {
+      "label": "Recall Limit",
+      "placeholder": "6",
+      "advanced": true
+    },
+    "recallScoreThreshold": {
+      "label": "Recall Score Threshold",
+      "placeholder": "0.01",
+      "advanced": true
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "baseUrl": {
+        "type": "string"
+      },
+      "apiKey": {
+        "type": "string"
+      },
+      "targetUri": {
+        "type": "string"
+      },
+      "timeoutMs": {
+        "type": "number"
+      },
+      "autoCapture": {
+        "type": "boolean"
+      },
+      "autoRecall": {
+        "type": "boolean"
+      },
+      "recallLimit": {
+        "type": "number"
+      },
+      "recallScoreThreshold": {
+        "type": "number"
+      }
+    }
+  }
+}
