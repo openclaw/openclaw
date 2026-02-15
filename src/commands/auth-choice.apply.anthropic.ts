@@ -1,21 +1,51 @@
 import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { upsertAuthProfile } from "../agents/auth-profiles.js";
+import { loginAnthropicOAuth } from "./anthropic-oauth.js";
 import {
   formatApiKeyPreview,
   normalizeApiKeyInput,
   validateApiKeyInput,
 } from "./auth-choice.api-key.js";
 import { buildTokenProfileId, validateAnthropicSetupToken } from "./auth-token.js";
-import { applyAuthProfileConfig, setAnthropicApiKey } from "./onboard-auth.js";
+import { isRemoteEnvironment } from "./oauth-env.js";
+import { applyAuthProfileConfig, setAnthropicApiKey, writeOAuthCredentials } from "./onboard-auth.js";
+import { openUrl } from "./onboard-helpers.js";
 
 export async function applyAuthChoiceAnthropic(
   params: ApplyAuthChoiceParams,
 ): Promise<ApplyAuthChoiceResult | null> {
-  if (
-    params.authChoice === "setup-token" ||
-    params.authChoice === "oauth" ||
-    params.authChoice === "token"
-  ) {
+  // True OAuth flow — performs browser-based login and persists the refresh
+  // token so credentials can be renewed automatically.
+  if (params.authChoice === "oauth") {
+    let nextConfig = params.config;
+    let creds;
+    try {
+      creds = await loginAnthropicOAuth({
+        prompter: params.prompter,
+        runtime: params.runtime,
+        isRemote: isRemoteEnvironment(),
+        openUrl: async (url) => {
+          await openUrl(url);
+        },
+        localBrowserMessage: "Complete sign-in in browser…",
+      });
+    } catch {
+      // The helper already surfaces the error to the user.
+      return { config: nextConfig };
+    }
+    if (creds) {
+      await writeOAuthCredentials("anthropic", creds, params.agentDir);
+      nextConfig = applyAuthProfileConfig(nextConfig, {
+        profileId: "anthropic:default",
+        provider: "anthropic",
+        mode: "oauth",
+      });
+    }
+    return { config: nextConfig };
+  }
+
+  // Setup-token / static token flow (unchanged).
+  if (params.authChoice === "setup-token" || params.authChoice === "token") {
     let nextConfig = params.config;
     await params.prompter.note(
       ["Run `claude setup-token` in your terminal.", "Then paste the generated token below."].join(
