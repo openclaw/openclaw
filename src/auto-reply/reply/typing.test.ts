@@ -91,6 +91,53 @@ describe("typing controller", () => {
     vi.advanceTimersByTime(5_000);
     expect(onReplyStart).toHaveBeenCalledTimes(1);
   });
+
+  it("stops typing after TTL expires", async () => {
+    vi.useFakeTimers();
+    const onReplyStart = vi.fn(async () => {});
+    const typing = createTypingController({
+      onReplyStart,
+      typingIntervalSeconds: 1,
+      typingTtlMs: 5_000,
+    });
+
+    await typing.startTypingLoop();
+    expect(typing.isActive()).toBe(true);
+
+    // Advance to before TTL - should still be active
+    vi.advanceTimersByTime(4_000);
+    expect(typing.isActive()).toBe(true);
+
+    // Advance past TTL - should now be inactive
+    vi.advanceTimersByTime(2_000);
+    expect(typing.isActive()).toBe(false);
+
+    // Typing should no longer continue after TTL
+    const callCountAfterTtl = onReplyStart.mock.calls.length;
+    vi.advanceTimersByTime(5_000);
+    expect(onReplyStart.mock.calls.length).toBe(callCountAfterTtl);
+  });
+
+  it("respects custom TTL values", async () => {
+    vi.useFakeTimers();
+    const onReplyStart = vi.fn(async () => {});
+    const typing = createTypingController({
+      onReplyStart,
+      typingIntervalSeconds: 1,
+      typingTtlMs: 10_000,
+    });
+
+    await typing.startTypingLoop();
+    expect(typing.isActive()).toBe(true);
+
+    // Should still be active well before TTL
+    vi.advanceTimersByTime(8_000);
+    expect(typing.isActive()).toBe(true);
+
+    // Should be inactive after TTL expires
+    vi.advanceTimersByTime(3_000);
+    expect(typing.isActive()).toBe(false);
+  });
 });
 
 describe("resolveTypingMode", () => {

@@ -39,9 +39,12 @@ Order of “how early it fires”:
 
 ```json5
 {
-  agent: {
-    typingMode: "thinking",
-    typingIntervalSeconds: 6,
+  agents: {
+    defaults: {
+      typingMode: "thinking",
+      typingIntervalSeconds: 6,
+      typingTtlSeconds: 120,
+    },
   },
 }
 ```
@@ -53,16 +56,29 @@ You can override mode or cadence per session:
   session: {
     typingMode: "message",
     typingIntervalSeconds: 4,
+    typingTtlSeconds: 300,
   },
 }
 ```
 
+### Options
+
+| Option                  | Default        | Description                                  |
+| ----------------------- | -------------- | -------------------------------------------- |
+| `typingMode`            | (see Defaults) | When to start the typing indicator           |
+| `typingIntervalSeconds` | 6              | How often to refresh the typing indicator    |
+| `typingTtlSeconds`      | 120            | Max duration before the indicator auto-stops |
+
 ## Notes
 
-- `message` mode won’t show typing for silent-only replies (e.g. the `NO_REPLY`
+- `message` mode won't show typing for silent-only replies (e.g. the `NO_REPLY`
   token used to suppress output).
 - `thinking` only fires if the run streams reasoning (`reasoningLevel: "stream"`).
-  If the model doesn’t emit reasoning deltas, typing won’t start.
+  If the model doesn't emit reasoning deltas, typing won't start.
 - Heartbeats never show typing, regardless of mode.
 - `typingIntervalSeconds` controls the **refresh cadence**, not the start time.
   The default is 6 seconds.
+- `typingTtlSeconds` sets a maximum duration for the typing indicator. If a run
+  takes longer than this (e.g. slow LLM responses or complex tool chains), the
+  indicator stops to avoid appearing stuck. The default is 120 seconds (2 minutes).
+  For long-running operations, consider increasing this value.
