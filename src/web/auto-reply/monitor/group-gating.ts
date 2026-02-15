@@ -19,6 +19,49 @@ export type GroupHistoryEntry = {
   senderJid?: string;
 };
 
+// WhatsApp audio preflight transcription for group mention detection
+async function maybeTranscribeAudioForMention(
+  msg: WebInboundMsg,
+  cfg: ReturnType<typeof loadConfig>,
+  authDir?: string,
+): Promise<string | undefined> {
+  // Only for WhatsApp groups with audio and no text
+  const hasAudio = Boolean(msg.mediaPath || msg.mediaUrl);
+  const hasMediaType = msg.mediaType?.startsWith("audio/");
+  const hasText = msg.body && msg.body.trim().length > 0 && !msg.body.startsWith("<");
+  if (!hasAudio || !hasMediaType || hasText) {
+    return undefined;
+  }
+
+  // Check if mention gating is enabled
+  const activation = resolveGroupActivationFor({
+    cfg,
+    agentId: "main",
+    sessionKey: "",
+    conversationId: msg.conversationId ?? msg.from,
+  });
+  if (activation === "always") {
+    return undefined; // No mention required
+  }
+
+  try {
+    const { transcribeFirstAudio } = await import("../../../media-understanding/audio-preflight.js");
+    const tempCtx = {
+      mediaPath: msg.mediaPath,
+      mediaUrl: msg.mediaUrl,
+      mediaType: msg.mediaType,
+    };
+    const transcript = await transcribeFirstAudio({
+      ctx: tempCtx,
+      cfg,
+      agentDir: authDir,
+    });
+    return transcript;
+  } catch {
+    return undefined; // Transcription failed, skip
+  }
+}
+
 function isOwnerSender(baseMentionConfig: MentionConfig, msg: WebInboundMsg) {
   const sender = normalizeE164(msg.senderE164 ?? "");
   if (!sender) {
@@ -88,6 +131,27 @@ export function applyGroupGating(params: {
   }
 
   const mentionDebug = debugMention(params.msg, mentionConfig, params.authDir);
+  
+  // Audio preflight transcription for WhatsApp group mention detection
+  // If message has audio but no text, transcribe to check for mention in speech
+  let wasMentioned = mentionDebug.wasMentioned;
+  if (!wasMentioned && params.msg.chatType === "group") {
+    const preflightTranscript = await maybeTranscribeAudioForMention(
+      params.msg,
+      params.cfg,
+      params.authDir,
+    );
+    if (preflightTranscript) {
+      // Check if transcript contains mention patterns
+      const transcriptText = preflightTranscript.toLowerCase();
+      const mentionedInAudio = mentionConfig.mentionRegexes.some((re) => re.test(transcriptText));
+      if (mentionedInAudio) {
+        wasMentioned = true;
+        params.logVerbose(`WhatsApp: mention detected in audio transcript`);
+      }
+    }
+  }
+  
   params.replyLogger.debug(
     {
       conversationId: params.conversationId,
