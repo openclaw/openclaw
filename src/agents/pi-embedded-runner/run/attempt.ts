@@ -450,8 +450,11 @@ export async function runEmbeddedAttempt(
       // When rolling compaction is active, disable the SDK's built-in auto-compaction.
       // Context overflow errors will be caught by our overflow handler which calls
       // compactEmbeddedPiSessionDirect → rolling eviction path.
+      // NOTE: Must use setCompactionEnabled() not applyOverrides() — applyOverrides
+      // only writes to this.settings which gets dropped on any save() re-merge.
+      // setCompactionEnabled writes to globalSettings and persists correctly.
       if (params.config?.agents?.defaults?.compaction?.mode === "rolling") {
-        settingsManager.applyOverrides({ compaction: { enabled: false } });
+        settingsManager.setCompactionEnabled(false);
       }
 
       // Call for side effects (sets compaction/pruning runtime state)
