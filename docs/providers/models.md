@@ -15,8 +15,8 @@ model as `provider/model`.
 
 Venice is our recommended Venice AI setup for privacy-first inference with an option to use Opus for the hardest tasks.
 
-- Default: `venice/llama-3.3-70b`
-- Best overall: `venice/claude-opus-45` (Opus remains the strongest)
+- Default: `venice/kimi-k2-5` (strong reasoning + vision, fully private)
+- Best overall: `venice/claude-opus-4-6` (Opus 4.6 is the strongest)
 
 See [Venice AI](/providers/venice).
 
