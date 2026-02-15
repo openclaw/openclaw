@@ -1,6 +1,8 @@
 node_modules
 **/node_modules/
 .env
+.env.*
+!.env.example
 docker-compose.extra.yml
 dist
 pnpm-lock.yaml
@@ -86,3 +88,11 @@ USER.md
 !.agent/workflows/
 /local/
 package-lock.json
+
+# Secrets and credentials (NEVER COMMIT)
+.claude/
+*.pem
+*.key
+*.pfx
+*.p12
+credentials.json

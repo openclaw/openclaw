@@ -1,0 +1,54 @@
+name: PR Triage
+
+on:
+  pull_request_target:
+    types: [opened, reopened]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "Triage a specific PR number (0 = latest)"
+        required: false
+        default: "0"
+
+permissions: {}
+
+jobs:
+  triage:
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: read
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            scripts/pr-triage.mjs
+            scripts/pr-triage-github.mjs
+            scripts/pr-triage-labels.mjs
+            CONTRIBUTING.md
+          sparse-checkout-cone-mode: false
+
+      - name: Snapshot cache key
+        id: snapshot-key
+        run: echo "key=$(date -u '+%Y-%m-%d-%H')" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@v4
+        with:
+          path: .pr-triage-snapshot.json
+          key: pr-triage-snapshot-${{ steps.snapshot-key.outputs.key }}
+          save-always: true
+
+      - uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+        id: app-token
+        with:
+          app-id: "2729701"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+
+      - name: Triage PR
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number || '0' }}
+          REPO: ${{ github.repository }}
+        run: node scripts/pr-triage.mjs
