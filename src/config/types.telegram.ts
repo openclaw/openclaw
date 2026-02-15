@@ -1,3 +1,4 @@
+import type { ContextDecayConfig } from "./types.agent-defaults.js";
 import type {
   BlockStreamingChunkConfig,
   BlockStreamingCoalesceConfig,
@@ -85,6 +86,8 @@ export type TelegramAccountConfig = {
   historyLimit?: number;
   /** Max DM turns to keep as history context. */
   dmHistoryLimit?: number;
+  /** Context decay settings for this account. */
+  contextDecay?: ContextDecayConfig;
   /** Per-DM config overrides keyed by user ID. */
   dms?: Record<string, DmConfig>;
   /** Outbound text chunk size (chars). Default: 4000. */
@@ -160,6 +163,8 @@ export type TelegramTopicConfig = {
   allowFrom?: Array<string | number>;
   /** Optional system prompt snippet for this topic. */
   systemPrompt?: string;
+  /** Context decay settings for this topic. */
+  contextDecay?: ContextDecayConfig;
 };
 
 export type TelegramGroupConfig = {
@@ -179,6 +184,8 @@ export type TelegramGroupConfig = {
   allowFrom?: Array<string | number>;
   /** Optional system prompt snippet for this group. */
   systemPrompt?: string;
+  /** Context decay settings for this group. */
+  contextDecay?: ContextDecayConfig;
 };
 
 export type TelegramConfig = {

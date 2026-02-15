@@ -3,9 +3,16 @@ import type { SessionManager } from "@mariozechner/pi-coding-agent";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { ContextDecayConfig } from "../../config/types.agent-defaults.js";
+import {
+  resolveContextDecayConfig,
+  isContextDecayActive,
+} from "../context-decay/resolve-config.js";
+import { loadGroupSummaryStoreSync, loadSummaryStoreSync } from "../context-decay/summary-store.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { setCompactionSafeguardRuntime } from "../pi-extensions/compaction-safeguard-runtime.js";
+import { setContextDecayRuntime } from "../pi-extensions/context-decay/runtime.js";
 import { setContextPruningRuntime } from "../pi-extensions/context-pruning/runtime.js";
 import { computeEffectiveSettings } from "../pi-extensions/context-pruning/settings.js";
 import { makeToolPrunablePredicate } from "../pi-extensions/context-pruning/tools.js";
@@ -67,6 +74,32 @@ function buildContextPruningExtension(params: {
   };
 }
 
+function buildContextDecayExtension(params: {
+  cfg: OpenClawConfig | undefined;
+  sessionManager: SessionManager;
+  sessionKey?: string;
+  sessionFile?: string;
+}): { additionalExtensionPaths?: string[]; resolvedConfig?: ContextDecayConfig } {
+  const config = resolveContextDecayConfig(params.sessionKey, params.cfg);
+  if (!isContextDecayActive(config)) {
+    return {};
+  }
+
+  const summaryStore = params.sessionFile ? loadSummaryStoreSync(params.sessionFile) : {};
+  const groupSummaryStore = params.sessionFile ? loadGroupSummaryStoreSync(params.sessionFile) : [];
+
+  setContextDecayRuntime(params.sessionManager, {
+    config: config!,
+    summaryStore,
+    groupSummaryStore,
+  });
+
+  return {
+    additionalExtensionPaths: [resolvePiExtensionPath("context-decay")],
+    resolvedConfig: config,
+  };
+}
+
 function resolveCompactionMode(cfg?: OpenClawConfig): "default" | "safeguard" {
   return cfg?.agents?.defaults?.compaction?.mode === "safeguard" ? "safeguard" : "default";
 }
@@ -77,7 +110,9 @@ export function buildEmbeddedExtensionPaths(params: {
   provider: string;
   modelId: string;
   model: Model<Api> | undefined;
-}): string[] {
+  sessionKey?: string;
+  sessionFile?: string;
+}): { paths: string[]; contextDecayConfig?: ContextDecayConfig } {
   const paths: string[] = [];
   if (resolveCompactionMode(params.cfg) === "safeguard") {
     const compactionCfg = params.cfg?.agents?.defaults?.compaction;
@@ -98,7 +133,16 @@ export function buildEmbeddedExtensionPaths(params: {
   if (pruning.additionalExtensionPaths) {
     paths.push(...pruning.additionalExtensionPaths);
   }
-  return paths;
+  const decay = buildContextDecayExtension({
+    cfg: params.cfg,
+    sessionManager: params.sessionManager,
+    sessionKey: params.sessionKey,
+    sessionFile: params.sessionFile,
+  });
+  if (decay.additionalExtensionPaths) {
+    paths.push(...decay.additionalExtensionPaths);
+  }
+  return { paths, contextDecayConfig: decay.resolvedConfig };
 }
 
 export { ensurePiCompactionReserveTokens };

@@ -9,6 +9,7 @@ import { ChannelHeartbeatVisibilitySchema } from "./zod-schema.channels.js";
 import {
   BlockStreamingChunkSchema,
   BlockStreamingCoalesceSchema,
+  ContextDecaySchema,
   DmConfigSchema,
   DmPolicySchema,
   ExecutableTokenSchema,
@@ -44,6 +45,7 @@ export const TelegramTopicSchema = z
     enabled: z.boolean().optional(),
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     systemPrompt: z.string().optional(),
+    contextDecay: ContextDecaySchema,
   })
   .strict();
 
@@ -57,6 +59,7 @@ export const TelegramGroupSchema = z
     enabled: z.boolean().optional(),
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     systemPrompt: z.string().optional(),
+    contextDecay: ContextDecaySchema,
     topics: z.record(z.string(), TelegramTopicSchema.optional()).optional(),
   })
   .strict();
@@ -108,6 +111,7 @@ export const TelegramAccountSchemaBase = z
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
     historyLimit: z.number().int().min(0).optional(),
     dmHistoryLimit: z.number().int().min(0).optional(),
+    contextDecay: ContextDecaySchema,
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
     textChunkLimit: z.number().int().positive().optional(),
     chunkMode: z.enum(["length", "newline"]).optional(),
@@ -232,6 +236,7 @@ export const DiscordGuildChannelSchema = z
     roles: z.array(z.union([z.string(), z.number()])).optional(),
     systemPrompt: z.string().optional(),
     includeThreadStarter: z.boolean().optional(),
+    contextDecay: ContextDecaySchema,
     autoThread: z.boolean().optional(),
   })
   .strict();
@@ -275,6 +280,7 @@ export const DiscordAccountSchema = z
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
     historyLimit: z.number().int().min(0).optional(),
     dmHistoryLimit: z.number().int().min(0).optional(),
+    contextDecay: ContextDecaySchema,
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
     textChunkLimit: z.number().int().positive().optional(),
     chunkMode: z.enum(["length", "newline"]).optional(),
@@ -494,6 +500,7 @@ export const SlackChannelSchema = z
     users: z.array(z.union([z.string(), z.number()])).optional(),
     skills: z.array(z.string()).optional(),
     systemPrompt: z.string().optional(),
+    contextDecay: ContextDecaySchema,
   })
   .strict();
 
@@ -533,6 +540,7 @@ export const SlackAccountSchema = z
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
     historyLimit: z.number().int().min(0).optional(),
     dmHistoryLimit: z.number().int().min(0).optional(),
+    contextDecay: ContextDecaySchema,
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
     textChunkLimit: z.number().int().positive().optional(),
     chunkMode: z.enum(["length", "newline"]).optional(),

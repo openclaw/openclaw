@@ -1,3 +1,4 @@
+import type { ContextDecayConfig } from "./types.agent-defaults.js";
 import type {
   BlockStreamingCoalesceConfig,
   DmPolicy,
@@ -42,6 +43,8 @@ export type SlackChannelConfig = {
   skills?: string[];
   /** Optional system prompt for this channel. */
   systemPrompt?: string;
+  /** Context decay settings for this channel. */
+  contextDecay?: ContextDecayConfig;
 };
 
 export type SlackReactionNotificationMode = "off" | "own" | "all" | "allowlist";
@@ -116,6 +119,8 @@ export type SlackAccountConfig = {
   historyLimit?: number;
   /** Max DM turns to keep as history context. */
   dmHistoryLimit?: number;
+  /** Context decay settings for this account. */
+  contextDecay?: ContextDecayConfig;
   /** Per-DM config overrides keyed by user ID. */
   dms?: Record<string, DmConfig>;
   textChunkLimit?: number;

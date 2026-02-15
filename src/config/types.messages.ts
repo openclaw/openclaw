@@ -1,3 +1,4 @@
+import type { ContextDecayConfig } from "./types.agent-defaults.js";
 import type { QueueDropPolicy, QueueMode, QueueModeByProvider } from "./types.queue.js";
 import type { TtsConfig } from "./types.tts.js";
 
@@ -8,6 +9,7 @@ export type GroupChatConfig = {
 
 export type DmConfig = {
   historyLimit?: number;
+  contextDecay?: ContextDecayConfig;
 };
 
 export type QueueConfig = {
