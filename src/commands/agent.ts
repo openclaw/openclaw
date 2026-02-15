@@ -9,6 +9,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 const log = createSubsystemLogger("commands/agent");
 import {
   listAgentIds,
+  resolveAgentConfig,
   resolveAgentDir,
   resolveEffectiveModelFallbacks,
   resolveSessionAgentId,
@@ -630,6 +631,9 @@ async function prepareAgentCommandExecution(
     agentId: sessionAgentId,
     sessionKey,
   });
+  const agentThinkingDefault = sessionAgentId
+    ? resolveAgentConfig(cfg, sessionAgentId)?.thinkingDefault
+    : undefined;
   // Internal callers (for example subagent spawns) may pin workspace inheritance.
   const workspaceDirRaw =
     normalizedSpawned.workspaceDir ?? resolveAgentWorkspaceDir(cfg, sessionAgentId);
@@ -667,6 +671,7 @@ async function prepareAgentCommandExecution(
     persistedVerbose,
     sessionAgentId,
     outboundSession,
+    agentThinkingDefault,
     workspaceDir,
     agentDir,
     runId,
@@ -699,6 +704,7 @@ async function agentCommandInternal(
     persistedVerbose,
     sessionAgentId,
     outboundSession,
+    agentThinkingDefault,
     workspaceDir,
     agentDir,
     runId,
@@ -862,7 +868,11 @@ async function agentCommandInternal(
       });
     }
 
-    let resolvedThinkLevel = thinkOnce ?? thinkOverride ?? persistedThinking;
+    let resolvedThinkLevel =
+      thinkOnce ??
+      thinkOverride ??
+      persistedThinking ??
+      (agentThinkingDefault as ThinkLevel | undefined);
     const resolvedVerboseLevel =
       verboseOverride ?? persistedVerbose ?? (agentCfg?.verboseDefault as VerboseLevel | undefined);
 
