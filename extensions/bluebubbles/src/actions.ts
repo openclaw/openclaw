@@ -75,7 +75,6 @@ const PRIVATE_API_ACTIONS = new Set<ChannelMessageActionName>([
   "react",
   "edit",
   "unsend",
-  "reply",
   "sendWithEffect",
   "renameGroup",
   "setGroupIcon",
