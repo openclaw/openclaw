@@ -40,22 +40,25 @@ export function looksLikeSignalTargetId(raw: string): boolean {
   if (!trimmed) {
     return false;
   }
-  if (/^(signal:)?(group:|username:|u:)/i.test(trimmed)) {
+  // Strip optional signal: provider prefix so that signal:<bare-uuid> and
+  // signal:+E.164 are recognised in the same way as their unprefixed forms.
+  const withoutProvider = trimmed.replace(/^signal:/i, "").trim();
+  if (!withoutProvider) {
+    return false;
+  }
+  if (/^(group:|username:|u:)/i.test(withoutProvider)) {
     return true;
   }
-  if (/^(signal:)?uuid:/i.test(trimmed)) {
-    const stripped = trimmed
-      .replace(/^signal:/i, "")
-      .replace(/^uuid:/i, "")
-      .trim();
+  if (/^uuid:/i.test(withoutProvider)) {
+    const stripped = withoutProvider.replace(/^uuid:/i, "").trim();
     if (!stripped) {
       return false;
     }
     return UUID_PATTERN.test(stripped) || UUID_COMPACT_PATTERN.test(stripped);
   }
   // Accept UUIDs (used by signal-cli for reactions)
-  if (UUID_PATTERN.test(trimmed) || UUID_COMPACT_PATTERN.test(trimmed)) {
+  if (UUID_PATTERN.test(withoutProvider) || UUID_COMPACT_PATTERN.test(withoutProvider)) {
     return true;
   }
-  return /^\+?\d{3,}$/.test(trimmed);
+  return /^\+?\d{3,}$/.test(withoutProvider);
 }

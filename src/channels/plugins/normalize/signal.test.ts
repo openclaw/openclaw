@@ -30,6 +30,15 @@ describe("signal target normalization", () => {
     expect(looksLikeSignalTargetId("uuid:123e4567e89b12d3a456426614174000")).toBe(true);
   });
 
+  it("accepts signal:<bare-uuid> (inferred from currentChannelId)", () => {
+    expect(looksLikeSignalTargetId("signal:da2f7ce5-3545-4597-bc4a-04dc5340c2af")).toBe(true);
+    expect(looksLikeSignalTargetId("signal:123e4567e89b12d3a456426614174000")).toBe(true);
+  });
+
+  it("accepts signal:<phone> targets", () => {
+    expect(looksLikeSignalTargetId("signal:+4915114438023")).toBe(true);
+  });
+
   it("rejects invalid uuid prefixes", () => {
     expect(looksLikeSignalTargetId("uuid:")).toBe(false);
     expect(looksLikeSignalTargetId("uuid:not-a-uuid")).toBe(false);
