@@ -115,7 +115,8 @@ export function toSanitizedMarkdownHtml(markdown: string): string {
     }
     return sanitized;
   }
-  const rendered = marked.parse(`${truncated.text}${suffix}`, {
+  const escapedText = truncated.text.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const rendered = marked.parse(`${escapedText}${suffix}`, {
     renderer: htmlEscapeRenderer,
   }) as string;
   const sanitized = DOMPurify.sanitize(rendered, sanitizeOptions);
