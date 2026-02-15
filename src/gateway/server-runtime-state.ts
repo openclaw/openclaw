@@ -15,7 +15,11 @@ import type { GatewayWsClient } from "./server/ws-types.js";
 import { CANVAS_HOST_PATH } from "../canvas-host/a2ui.js";
 import { type CanvasHostHandler, createCanvasHostHandler } from "../canvas-host/server.js";
 import { resolveGatewayListenHosts } from "./net.js";
-import { createGatewayBroadcaster } from "./server-broadcast.js";
+import {
+  createGatewayBroadcaster,
+  type GatewayBroadcastFn,
+  type GatewayBroadcastToConnIdsFn,
+} from "./server-broadcast.js";
 import {
   type ChatRunEntry,
   createChatRunState,
@@ -58,23 +62,8 @@ export async function createGatewayRuntimeState(params: {
   httpBindHosts: string[];
   wss: WebSocketServer;
   clients: Set<GatewayWsClient>;
-  broadcast: (
-    event: string,
-    payload: unknown,
-    opts?: {
-      dropIfSlow?: boolean;
-      stateVersion?: { presence?: number; health?: number };
-    },
-  ) => void;
-  broadcastToConnIds: (
-    event: string,
-    payload: unknown,
-    connIds: ReadonlySet<string>,
-    opts?: {
-      dropIfSlow?: boolean;
-      stateVersion?: { presence?: number; health?: number };
-    },
-  ) => void;
+  broadcast: GatewayBroadcastFn;
+  broadcastToConnIds: GatewayBroadcastToConnIdsFn;
   agentRunSeq: Map<string, number>;
   dedupe: Map<string, DedupeEntry>;
   chatRunState: ReturnType<typeof createChatRunState>;
