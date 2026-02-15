@@ -40,6 +40,7 @@ See [Venice AI](/providers/venice).
 - [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway)
 - [Moonshot AI (Kimi + Kimi Coding)](/providers/moonshot)
 - [Synthetic](/providers/synthetic)
+- [Together AI](/providers/together)
 - [OpenCode Zen](/providers/opencode)
 - [Z.AI](/providers/zai)
 - [GLM models](/providers/glm)
