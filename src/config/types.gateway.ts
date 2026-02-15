@@ -122,6 +122,8 @@ export type GatewayAuthConfig = {
 };
 
 export type GatewayAuthRateLimitConfig = {
+  /** Whether auth rate limiting is enabled.  @default true */
+  enabled?: boolean;
   /** Maximum failed attempts per IP before blocking.  @default 10 */
   maxAttempts?: number;
   /** Sliding window duration in milliseconds.  @default 60000 (1 min) */
