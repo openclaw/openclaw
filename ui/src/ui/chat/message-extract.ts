@@ -4,12 +4,25 @@ import { stripThinkingTags } from "../format.ts";
 const textCache = new WeakMap<object, string | null>();
 const thinkingCache = new WeakMap<object, string | null>();
 
+// Strip openclaw.inbound_meta context blocks injected by buildInboundMetaSystemPrompt
+// and buildInboundUserContextPrefix.  These are metadata for the LLM, not for display.
+const INBOUND_META_BLOCK =
+  /(?:^|\n)(?:#{1,3}\s+Inbound Context\b|(?:Conversation info|Sender|Thread starter|Replied message|Forwarded message context|Chat history[^(]*)\s*\([^)]*(?:metadata|for context)\):?)[\s\S]*?```[\s\S]*?```\s*/g;
+
+function stripInboundMeta(text: string): string {
+  return text.replace(INBOUND_META_BLOCK, "\n").trim();
+}
+
+function stripInbound(text: string): string {
+  return stripInboundMeta(stripEnvelope(text));
+}
+
 export function extractText(message: unknown): string | null {
   const m = message as Record<string, unknown>;
   const role = typeof m.role === "string" ? m.role : "";
   const content = m.content;
   if (typeof content === "string") {
-    const processed = role === "assistant" ? stripThinkingTags(content) : stripEnvelope(content);
+    const processed = role === "assistant" ? stripThinkingTags(content) : stripInbound(content);
     return processed;
   }
   if (Array.isArray(content)) {
@@ -24,12 +37,12 @@ export function extractText(message: unknown): string | null {
       .filter((v): v is string => typeof v === "string");
     if (parts.length > 0) {
       const joined = parts.join("\n");
-      const processed = role === "assistant" ? stripThinkingTags(joined) : stripEnvelope(joined);
+      const processed = role === "assistant" ? stripThinkingTags(joined) : stripInbound(joined);
       return processed;
     }
   }
   if (typeof m.text === "string") {
-    const processed = role === "assistant" ? stripThinkingTags(m.text) : stripEnvelope(m.text);
+    const processed = role === "assistant" ? stripThinkingTags(m.text) : stripInbound(m.text);
     return processed;
   }
   return null;
