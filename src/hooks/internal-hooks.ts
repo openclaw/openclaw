@@ -3,6 +3,15 @@
  *
  * Provides an extensible event-driven hook system for agent events
  * like command processing, session lifecycle, etc.
+ *
+ * IMPORTANT: The hook handler registry uses `globalThis` instead of a
+ * module-level variable. This is necessary because the bundler (tsdown/Rollup)
+ * may split this module into multiple output chunks, each with its own
+ * module-level scope. Without `globalThis`, each chunk would have an
+ * independent `handlers` Map, causing hooks registered in one chunk to be
+ * invisible when triggered from another chunk.
+ *
+ * See: https://github.com/openclaw/openclaw/issues/14270
  */
 
 import type { WorkspaceBootstrapFile } from "../agents/workspace.js";
@@ -42,8 +51,28 @@ export interface InternalHookEvent {
 
 export type InternalHookHandler = (event: InternalHookEvent) => Promise<void> | void;
 
-/** Registry of hook handlers by event key */
-const handlers = new Map<string, InternalHookHandler[]>();
+/**
+ * Stable key used to store the hook handler registry on `globalThis`.
+ * Prefixed with `__openclaw_` to avoid collisions with other libraries.
+ */
+const HOOK_REGISTRY_KEY = "__openclaw_internal_hook_handlers__";
+
+/**
+ * Registry of hook handlers by event key.
+ *
+ * Stored on `globalThis` so that all bundler-generated copies of this module
+ * share the same Map instance. This prevents the bug where hooks registered
+ * via one chunk's `registerInternalHook()` are invisible to another chunk's
+ * `triggerInternalHook()`.
+ */
+const handlers: Map<string, InternalHookHandler[]> =
+  ((globalThis as Record<string, unknown>)[HOOK_REGISTRY_KEY] as
+    | Map<string, InternalHookHandler[]>
+    | undefined) ??
+  ((globalThis as Record<string, unknown>)[HOOK_REGISTRY_KEY] = new Map<
+    string,
+    InternalHookHandler[]
+  >());
 
 /**
  * Register a hook handler for a specific event type or event:action combination
