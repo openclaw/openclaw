@@ -23,6 +23,7 @@ const DEFAULT_REDACT_PATTERNS: string[] = [
   // PEM blocks.
   String.raw`-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]+?-----END [A-Z ]*PRIVATE KEY-----`,
   // Common token prefixes.
+  String.raw`\b(mk[_-][A-Za-z0-9_-]{8,})\b`,
   String.raw`\b(sk-[A-Za-z0-9_-]{8,})\b`,
   String.raw`\b(ghp_[A-Za-z0-9]{20,})\b`,
   String.raw`\b(github_pat_[A-Za-z0-9_]{20,})\b`,

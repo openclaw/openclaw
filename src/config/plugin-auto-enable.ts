@@ -348,7 +348,16 @@ function resolveConfiguredPlugins(
 
 function isPluginExplicitlyDisabled(cfg: OpenClawConfig, pluginId: string): boolean {
   const entry = cfg.plugins?.entries?.[pluginId];
-  return entry?.enabled === false;
+  if (entry?.enabled === false) {
+    // If the channel config explicitly says enabled: true, the channel config wins
+    // (user intent is clear — they want this channel on)
+    const channelConfig = resolveChannelConfig(cfg, pluginId);
+    if (channelConfig?.enabled === true) {
+      return false;
+    }
+    return true;
+  }
+  return false;
 }
 
 function isPluginDenied(cfg: OpenClawConfig, pluginId: string): boolean {
@@ -403,11 +412,15 @@ function ensureAllowlisted(cfg: OpenClawConfig, pluginId: string): OpenClawConfi
 }
 
 function registerPluginEntry(cfg: OpenClawConfig, pluginId: string): OpenClawConfig {
+  // If the channel is explicitly enabled in channels config, respect that
+  const channelConfig = resolveChannelConfig(cfg, pluginId);
+  const channelExplicitlyEnabled = channelConfig?.enabled === true;
+
   const entries = {
     ...cfg.plugins?.entries,
     [pluginId]: {
       ...(cfg.plugins?.entries?.[pluginId] as Record<string, unknown> | undefined),
-      enabled: true,
+      enabled: !!channelExplicitlyEnabled,
     },
   };
   return {
