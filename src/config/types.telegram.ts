@@ -106,6 +106,8 @@ export type TelegramAccountConfig = {
   retry?: OutboundRetryConfig;
   /** Network transport overrides for Telegram. */
   network?: TelegramNetworkConfig;
+  /** Optional custom Telegram Bot API server URL (e.g., for local Bot API server or proxy). */
+  apiRoot?: string;
   proxy?: string;
   webhookUrl?: string;
   webhookSecret?: string;

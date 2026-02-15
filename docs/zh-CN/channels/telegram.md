@@ -732,6 +732,7 @@ Telegram 反应作为**单独的 `message_reaction` 事件**到达，而不是�
 - `channels.telegram.mediaMaxMb`：入站/出站媒体上限（MB）。
 - `channels.telegram.retry`：出站 Telegram API 调用的重试策略（attempts、minDelayMs、maxDelayMs、jitter）。
 - `channels.telegram.network.autoSelectFamily`：覆盖 Node autoSelectFamily（true=启用，false=禁用）。在 Node 22 上默认禁用以避免 Happy Eyeballs 超时。
+- `channels.telegram.apiRoot`：自定义 Telegram Bot API 服务器 URL（例如，`http://localhost:8081` 用于本地 Bot API 服务器或自定义代理）。默认为 `https://api.telegram.org`。
 - `channels.telegram.proxy`：Bot API 调用的代理 URL（SOCKS/HTTP）。
 - `channels.telegram.webhookUrl`：启用 webhook 模式（需要 `channels.telegram.webhookSecret`）。
 - `channels.telegram.webhookSecret`：webhook 密钥（设置 webhookUrl 时必需）。
