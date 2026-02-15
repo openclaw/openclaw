@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { applyProviderConfigWithDefaultModel } from "./onboard-auth.config-shared.js";
 import { LITELLM_DEFAULT_MODEL_REF } from "./onboard-auth.credentials.js";
 
 export const LITELLM_BASE_URL = "http://localhost:4000";
@@ -39,42 +40,20 @@ export function applyLitellmProviderConfig(cfg: OpenClawConfig): OpenClawConfig 
     alias: models[LITELLM_DEFAULT_MODEL_REF]?.alias ?? "LiteLLM",
   };
 
-  const providers = { ...cfg.models?.providers };
-  const existingProvider = providers.litellm;
-  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
   const defaultModel = buildLitellmModelDefinition();
-  const hasDefaultModel = existingModels.some((model) => model.id === LITELLM_DEFAULT_MODEL_ID);
-  const mergedModels = hasDefaultModel ? existingModels : [...existingModels, defaultModel];
-  const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as Record<
-    string,
-    unknown
-  > as { apiKey?: string };
+
+  const existingProvider = cfg.models?.providers?.litellm as { baseUrl?: unknown } | undefined;
   const resolvedBaseUrl =
     typeof existingProvider?.baseUrl === "string" ? existingProvider.baseUrl.trim() : "";
-  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
-  const normalizedApiKey = resolvedApiKey?.trim();
-  providers.litellm = {
-    ...existingProviderRest,
-    baseUrl: resolvedBaseUrl || LITELLM_BASE_URL,
-    api: "openai-completions",
-    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
-    models: mergedModels.length > 0 ? mergedModels : [defaultModel],
-  };
 
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...cfg.agents?.defaults,
-        models,
-      },
-    },
-    models: {
-      mode: cfg.models?.mode ?? "merge",
-      providers,
-    },
-  };
+  return applyProviderConfigWithDefaultModel(cfg, {
+    agentModels: models,
+    providerId: "litellm",
+    api: "openai-completions",
+    baseUrl: resolvedBaseUrl || LITELLM_BASE_URL,
+    defaultModel,
+    defaultModelId: LITELLM_DEFAULT_MODEL_ID,
+  });
 }
 
 export function applyLitellmConfig(cfg: OpenClawConfig): OpenClawConfig {
