@@ -628,6 +628,26 @@ export function parseTapbackText(params: {
   return null;
 }
 
+// Checks if a record looks like a BlueBubbles message (has typical message fields)
+function looksLikeMessage(record: Record<string, unknown> | null): boolean {
+  if (!record) {
+    return false;
+  }
+  // Check for common message fields that indicate this is a message payload
+  const messageFieldIndicators = [
+    "text",
+    "body",
+    "handle",
+    "sender",
+    "isFromMe",
+    "is_from_me",
+    "chatGuid",
+    "chat_guid",
+    "guid",
+  ];
+  return messageFieldIndicators.some((field) => record[field] !== undefined);
+}
+
 function extractMessagePayload(payload: Record<string, unknown>): Record<string, unknown> | null {
   const dataRaw = payload.data ?? payload.payload ?? payload.event;
   const data =
@@ -637,10 +657,18 @@ function extractMessagePayload(payload: Record<string, unknown>): Record<string,
   const message =
     asRecord(messageRaw) ??
     (typeof messageRaw === "string" ? (asRecord(JSON.parse(messageRaw)) ?? null) : null);
-  if (!message) {
-    return null;
+  if (message) {
+    return message;
   }
-  return message;
+
+  // Fallback: BlueBubbles may send message fields directly at the top level
+  // without a wrapper (data/payload/event/message). Check if the payload itself
+  // looks like a message and use it directly.
+  if (looksLikeMessage(payload)) {
+    return payload;
+  }
+
+  return null;
 }
 
 export function normalizeWebhookMessage(
