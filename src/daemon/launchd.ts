@@ -107,7 +107,6 @@ async function execLaunchctl(
   try {
     const { stdout, stderr } = await execFileAsync("launchctl", args, {
       encoding: "utf8",
-      shell: process.platform === "win32",
     });
     return {
       stdout: String(stdout ?? ""),
