@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,7 +16,12 @@ let cachedA2uiRootReal: string | null | undefined;
 let resolvingA2uiRoot: Promise<string | null> | null = null;
 
 async function resolveA2uiRoot(): Promise<string | null> {
-  const here = path.dirname(fileURLToPath(import.meta.url));
+  let here = path.dirname(fileURLToPath(import.meta.url));
+  try {
+    here = fsSync.realpathSync(here);
+  } catch {
+    // keep original if realpathSync fails
+  }
   const candidates = [
     // Running from source (bun) or dist (tsc + copied assets).
     path.resolve(here, "a2ui"),
