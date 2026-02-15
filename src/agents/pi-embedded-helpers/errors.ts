@@ -183,14 +183,29 @@ function stripFinalTagsFromText(text: string): string {
   return text.replace(FINAL_TAG_RE, "");
 }
 
+/**
+ * Detect and remove same-line duplicates that appear when tags like `</final>`
+ * are stripped, leaving the same text concatenated with itself.
+ * For example: "Hello there!Hello there!More text" → "Hello there!More text"
+ */
+function collapseSameLineDuplicates(text: string): string {
+  // Only try this for lines that might have duplicated content (at least 10 chars
+  // to avoid false positives on short strings like "ok ok" or "no no").
+  return text.replace(/(.{10,}?[.!?])\1/g, "$1");
+}
+
 function collapseConsecutiveDuplicateBlocks(text: string): string {
   const trimmed = text.trim();
   if (!trimmed) {
     return text;
   }
-  const blocks = trimmed.split(/\n{2,}/);
+
+  // First pass: same-line duplicate sentences (from stripped tags joining text)
+  const deinlined = collapseSameLineDuplicates(trimmed);
+
+  const blocks = deinlined.split(/\n{2,}/);
   if (blocks.length < 2) {
-    return text;
+    return deinlined;
   }
 
   const normalizeBlock = (value: string) => value.trim().replace(/\s+/g, " ");
@@ -207,7 +222,7 @@ function collapseConsecutiveDuplicateBlocks(text: string): string {
   }
 
   if (result.length === blocks.length) {
-    return text;
+    return deinlined;
   }
   return result.join("\n\n");
 }
