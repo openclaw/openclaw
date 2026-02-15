@@ -276,7 +276,6 @@ describe("Cron issue regressions", () => {
     expect(updated.state.nextRunAtMs).toBeGreaterThan(now);
 
     cron.stop();
-    await store.cleanup();
   });
 
   it("treats persisted due jobs with missing enabled as runnable", async () => {
@@ -327,7 +326,6 @@ describe("Cron issue regressions", () => {
     );
 
     cron.stop();
-    await store.cleanup();
   });
 
   it("caps timer delay to 60s for far-future schedules", async () => {
