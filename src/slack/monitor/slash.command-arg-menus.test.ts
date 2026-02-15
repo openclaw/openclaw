@@ -27,6 +27,17 @@ vi.mock("../../agents/identity.js", async (importOriginal) => {
   };
 });
 
+beforeEach(() => {
+  dispatchMock.mockReset().mockResolvedValue({ counts: { final: 1, tool: 0, block: 0 } });
+  readAllowFromStoreMock.mockReset().mockResolvedValue([]);
+  upsertPairingRequestMock.mockReset().mockResolvedValue({ code: "PAIRCODE", created: true });
+  resolveAgentRouteMock.mockReset().mockReturnValue({
+    agentId: "main",
+    sessionKey: "session:1",
+    accountId: "acct",
+  });
+});
+
 function encodeValue(parts: { command: string; arg: string; value: string; userId: string }) {
   return [
     "cmdarg",
@@ -84,17 +95,6 @@ function createHarness() {
 
   return { commands, actions, postEphemeral, ctx, account };
 }
-
-beforeEach(() => {
-  dispatchMock.mockReset().mockResolvedValue({ counts: { final: 1, tool: 0, block: 0 } });
-  readAllowFromStoreMock.mockReset().mockResolvedValue([]);
-  upsertPairingRequestMock.mockReset().mockResolvedValue({ code: "PAIRCODE", created: true });
-  resolveAgentRouteMock.mockReset().mockReturnValue({
-    agentId: "main",
-    sessionKey: "session:1",
-    accountId: "acct",
-  });
-});
 
 describe("Slack native command argument menus", () => {
   it("shows a button menu when required args are omitted", async () => {
