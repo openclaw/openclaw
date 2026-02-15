@@ -1,5 +1,11 @@
 import { listAgentIds } from "../../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
+import { loadModelCatalog } from "../../agents/model-catalog.js";
+import {
+  buildCatalogKeySet,
+  sanitizeConfiguredModelIds,
+  sanitizeSingleModelId,
+} from "../../agents/model-sanitization.js";
 import {
   buildModelAliasIndex,
   modelKey,
@@ -68,8 +74,130 @@ export async function updateConfig(
     throw new Error(`Invalid config at ${snapshot.path}\n${issues}`);
   }
   const next = mutator(snapshot.config);
-  await writeConfigFile(next);
-  return next;
+
+  // Sanitize configured model IDs before persisting
+  const sanitized = await sanitizeConfigModelIds(next);
+  await writeConfigFile(sanitized);
+  return sanitized;
+}
+
+/**
+ * Sanitize configured model IDs in the config against the current catalog.
+ * This ensures stale/nonexistent model IDs are never persisted.
+ */
+async function sanitizeConfigModelIds(cfg: OpenClawConfig): Promise<OpenClawConfig> {
+  const catalog = await loadModelCatalog({ config: cfg, useCache: true });
+  if (catalog.length === 0) {
+    return cfg;
+  }
+
+  const catalogKeys = buildCatalogKeySet(catalog);
+  let result = cfg;
+
+  // Sanitize agents.defaults.models (allowlist keys)
+  const models = cfg.agents?.defaults?.models;
+  if (models && Object.keys(models).length > 0) {
+    const keys = Object.keys(models);
+    const sanitizeResult = sanitizeConfiguredModelIds(keys, catalogKeys);
+
+    if (sanitizeResult.removed.length > 0 || sanitizeResult.repaired.length > 0) {
+      const newModels: typeof models = {};
+
+      for (const key of sanitizeResult.configured) {
+        const repairedEntry = sanitizeResult.repaired.find((r) => r.to === key);
+        const originalKey = repairedEntry?.from ?? key;
+        const value = models[originalKey];
+        if (value !== undefined) {
+          newModels[key] = value;
+        }
+      }
+
+      result = {
+        ...result,
+        agents: {
+          ...result.agents,
+          defaults: {
+            ...result.agents?.defaults,
+            models: newModels,
+          },
+        },
+      };
+
+      for (const repair of sanitizeResult.repaired) {
+        console.warn(`[model-sanitization] Repaired model ID: ${repair.from} -> ${repair.to}`);
+      }
+      for (const removed of sanitizeResult.removed) {
+        console.warn(`[model-sanitization] Removed stale model ID: ${removed}`);
+      }
+    }
+  }
+
+  // Sanitize agents.defaults.model.primary
+  const modelConfig = cfg.agents?.defaults?.model as
+    | { primary?: string; fallbacks?: string[] }
+    | undefined;
+  if (modelConfig?.primary) {
+    const primaryResult = sanitizeSingleModelId(modelConfig.primary, catalogKeys);
+    if (primaryResult.id !== modelConfig.primary) {
+      if (primaryResult.repaired) {
+        console.warn(
+          `[model-sanitization] Repaired primary model: ${primaryResult.repaired.from} -> ${primaryResult.repaired.to}`,
+        );
+      } else if (primaryResult.id === null) {
+        console.warn(`[model-sanitization] Removed stale primary model: ${modelConfig.primary}`);
+      }
+
+      result = {
+        ...result,
+        agents: {
+          ...result.agents,
+          defaults: {
+            ...result.agents?.defaults,
+            model: {
+              ...modelConfig,
+              primary: primaryResult.id ?? undefined,
+            },
+          },
+        },
+      };
+    }
+  }
+
+  // Sanitize agents.defaults.model.fallbacks
+  if (modelConfig?.fallbacks && modelConfig.fallbacks.length > 0) {
+    const fallbacksResult = sanitizeConfiguredModelIds(modelConfig.fallbacks, catalogKeys);
+    if (fallbacksResult.removed.length > 0 || fallbacksResult.repaired.length > 0) {
+      for (const repair of fallbacksResult.repaired) {
+        console.warn(
+          `[model-sanitization] Repaired fallback model: ${repair.from} -> ${repair.to}`,
+        );
+      }
+      for (const removed of fallbacksResult.removed) {
+        console.warn(`[model-sanitization] Removed stale fallback model: ${removed}`);
+      }
+
+      const currentModel = result.agents?.defaults?.model as
+        | { primary?: string; fallbacks?: string[] }
+        | undefined;
+
+      result = {
+        ...result,
+        agents: {
+          ...result.agents,
+          defaults: {
+            ...result.agents?.defaults,
+            model: {
+              ...currentModel,
+              fallbacks:
+                fallbacksResult.configured.length > 0 ? fallbacksResult.configured : undefined,
+            },
+          },
+        },
+      };
+    }
+  }
+
+  return result;
 }
 
 export function resolveModelTarget(params: { raw: string; cfg: OpenClawConfig }): {
