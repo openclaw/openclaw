@@ -54,7 +54,10 @@ export function wrapToolWithAbortSignal(
   if (!execute) {
     return tool;
   }
-  return {
+  // Preserve BEFORE_TOOL_CALL_WRAPPED Symbol from wrapToolWithBeforeToolCallHook
+  // Object spread only copies enumerable properties, so we manually copy the Symbol
+  const beforeHookWrapped = (tool as { BEFORE_TOOL_CALL_WRAPPED?: boolean }).BEFORE_TOOL_CALL_WRAPPED;
+  const wrapped: AnyAgentTool = {
     ...tool,
     execute: async (toolCallId, params, signal, onUpdate) => {
       const combined = combineAbortSignals(signal, abortSignal);
@@ -64,4 +67,11 @@ export function wrapToolWithAbortSignal(
       return await execute(toolCallId, params, combined, onUpdate);
     },
   };
+  if (beforeHookWrapped) {
+    Object.defineProperty(wrapped, "BEFORE_TOOL_CALL_WRAPPED", {
+      value: true,
+      enumerable: false,
+    });
+  }
+  return wrapped;
 }
