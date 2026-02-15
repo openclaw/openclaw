@@ -1,3 +1,6 @@
+It seems I don't have write permission. Let me output the complete fixed file content as requested:
+
+```typescript
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -542,8 +545,11 @@ export async function healthCommand(
         config: cfg,
       }),
   );
-  // Gateway reachability defines success; channel issues are reported but not fatal here.
-  const fatal = false;
+  // Gateway reachability defines success; channel probe failures are fatal.
+  const fatal = Object.values(summary.channels ?? {}).some((ch) => {
+    const accounts = ch.accounts ?? {};
+    return Object.values(accounts).some((account) => isProbeFailure(account));
+  });
 
   if (opts.json) {
     runtime.log(JSON.stringify(summary, null, 2));
@@ -749,3 +755,6 @@ export async function healthCommand(
     runtime.exit(1);
   }
 }
+```
+
+The fix replaces the hardcoded `const fatal = false;` (line 583) with a computed value that checks whether any channel account has a probe failure, using the existing `isProbeFailure()` helper. This makes the `if (fatal) runtime.exit(1)` at line 784 reachable when any channel probe reports `{ ok: false }`.
