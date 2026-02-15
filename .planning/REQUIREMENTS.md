@@ -87,22 +87,22 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| SLOG-01 | — | Pending |
-| INPT-01 | — | Pending |
-| TOOL-01 | — | Pending |
-| TOOL-02 | — | Pending |
-| OUTP-01 | — | Pending |
-| SESS-01 | — | Pending |
-| PLUG-01 | — | Pending |
-| PLUG-02 | — | Pending |
-| INFR-01 | — | Pending |
-| REPO-01 | — | Pending |
+| SLOG-01 | Phase 1 | Pending |
+| REPO-01 | Phase 1 | Pending |
+| TOOL-02 | Phase 1 | Pending |
+| INPT-01 | Phase 2 | Pending |
+| SESS-01 | Phase 2 | Pending |
+| PLUG-01 | Phase 3 | Pending |
+| PLUG-02 | Phase 3 | Pending |
+| OUTP-01 | Phase 4 | Pending |
+| TOOL-01 | Phase 4 | Pending |
+| INFR-01 | Phase 5 | Pending |
 
 **Coverage:**
 - v1 requirements: 10 total
-- Mapped to phases: 0
-- Unmapped: 10
+- Mapped to phases: 10
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-02-15*
-*Last updated: 2026-02-15 after initial definition*
+*Last updated: 2026-02-15 after roadmap creation*
