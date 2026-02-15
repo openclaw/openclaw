@@ -1,5 +1,4 @@
 import { type Api, getEnvApiKey, type Model } from "@mariozechner/pi-ai";
-import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -222,12 +221,19 @@ export async function resolveApiKeyForProvider(params: {
   }
 
   const authStorePath = resolveAuthStorePathForDisplay(params.agentDir);
-  const resolvedAgentDir = path.dirname(authStorePath);
+  const providers = cfg?.models?.providers ?? {};
+  const normalizedProvider = normalizeProviderId(provider);
+  const configKey = Object.keys(providers).find(
+    (key) => key === provider || normalizeProviderId(key) === normalizedProvider,
+  );
+  const providerConfigHint = configKey
+    ? `models.providers.${configKey} exists but apiKey is empty`
+    : `provider "${provider}" not configured in models.providers`;
   throw new Error(
     [
       `No API key found for provider "${provider}".`,
-      `Auth store: ${authStorePath} (agentDir: ${resolvedAgentDir}).`,
-      `Configure auth for this agent (${formatCliCommand("openclaw agents add <id>")}) or copy auth-profiles.json from the main agentDir.`,
+      `Checked: auth-profiles (${authStorePath}), env, config (${providerConfigHint}).`,
+      `Fix: add apiKey to models.providers.${configKey ?? provider} in openclaw.json, or ${formatCliCommand("openclaw agents add <id>")}.`,
     ].join(" "),
   );
 }
