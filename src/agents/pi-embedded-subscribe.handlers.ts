@@ -21,6 +21,7 @@ import type {
 
 export function createEmbeddedPiSessionEventHandler(ctx: EmbeddedPiSubscribeContext) {
   return (evt: EmbeddedPiSubscribeEvent) => {
+    ctx.params.onStreamActivity?.();
     switch (evt.type) {
       case "message_start":
         handleMessageStart(ctx, evt as never);
