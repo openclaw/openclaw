@@ -19,7 +19,7 @@ metadata:
             },
             {
               "id": "termgraph-pip",
-              "kind": "shell", 
+              "kind": "shell",
               "command": "pip install termgraph",
               "bins": ["termgraph"],
               "label": "Install termgraph (Python)",

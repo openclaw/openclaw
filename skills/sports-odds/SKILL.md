@@ -39,6 +39,7 @@ curl -s "https://api.the-odds-api.com/v4/sports?apiKey=$ODDS_API_KEY" | jq '.[] 
 ```
 
 Common sport keys:
+
 - `americanfootball_nfl` - NFL
 - `basketball_nba` - NBA
 - `baseball_mlb` - MLB
@@ -86,7 +87,7 @@ Find the best available line for a game:
 ```bash
 # Get best moneyline odds
 curl -s "https://api.the-odds-api.com/v4/sports/basketball_nba/odds?apiKey=$ODDS_API_KEY&regions=us&markets=h2h" | jq '
-  .[] | 
+  .[] |
   {
     game: "\(.away_team) @ \(.home_team)",
     best_home: (.bookmakers | map(.markets[0].outcomes[] | select(.name == .home_team)) | max_by(.price)),

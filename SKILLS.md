@@ -6,18 +6,20 @@ This document describes the custom financial skills included in this fork of Cla
 
 Money Maker Bot includes three specialized skills for financial analysis:
 
-| Skill | Purpose | API Required |
-|-------|---------|--------------|
-| `sports-odds` | Compare betting lines across sportsbooks | The Odds API (free tier available) |
-| `nft-tracker` | Monitor NFT floor prices and whale activity | Reservoir API (free) |
-| `data-viz` | Generate terminal charts from data | None |
+| Skill         | Purpose                                     | API Required                       |
+| ------------- | ------------------------------------------- | ---------------------------------- |
+| `sports-odds` | Compare betting lines across sportsbooks    | The Odds API (free tier available) |
+| `nft-tracker` | Monitor NFT floor prices and whale activity | Reservoir API (free)               |
+| `data-viz`    | Generate terminal charts from data          | None                               |
 
 ## Sports Odds Analyzer
 
 ### Description
+
 Compare betting lines across multiple sportsbooks to find value bets. Supports NFL, NBA, MLB, NHL, and MLS with real-time odds.
 
 ### Setup
+
 ```bash
 export ODDS_API_KEY="your-key-from-the-odds-api.com"
 ```
@@ -27,21 +29,25 @@ Get a free API key at [the-odds-api.com](https://the-odds-api.com) (500 requests
 ### Usage Examples
 
 **Get NFL spreads:**
+
 ```
 "Show me NFL spreads for this week"
 ```
 
 **Find value bets:**
+
 ```
 "Compare the Lakers vs Celtics line across DraftKings, FanDuel, and BetMGM"
 ```
 
 **Track line movement:**
+
 ```
 "Has the Chiefs spread moved in the last hour?"
 ```
 
 ### Supported Sports
+
 - NFL (americanfootball_nfl)
 - NBA (basketball_nba)
 - MLB (baseball_mlb)
@@ -51,9 +57,11 @@ Get a free API key at [the-odds-api.com](https://the-odds-api.com) (500 requests
 ## NFT Price Tracker
 
 ### Description
+
 Monitor floor prices, sales volume, and whale activity for top Ethereum NFT collections.
 
 ### Setup
+
 ```bash
 # Optional - Reservoir API works without a key for basic requests
 export RESERVOIR_API_KEY="your-reservoir-api-key"
@@ -62,21 +70,25 @@ export RESERVOIR_API_KEY="your-reservoir-api-key"
 ### Usage Examples
 
 **Check floor price:**
+
 ```
 "What's the BAYC floor price right now?"
 ```
 
 **Track whale activity:**
+
 ```
 "Show me large MAYC sales in the last 24 hours"
 ```
 
 **Compare collections:**
+
 ```
 "Compare floor prices for BAYC, MAYC, and Azuki"
 ```
 
 ### Supported Collections
+
 - Bored Ape Yacht Club (BAYC)
 - Mutant Ape Yacht Club (MAYC)
 - CryptoPunks
@@ -88,9 +100,11 @@ export RESERVOIR_API_KEY="your-reservoir-api-key"
 ## Data Visualization
 
 ### Description
+
 Generate charts and graphs directly in your terminal from CSV/JSON data.
 
 ### Setup
+
 ```bash
 # Install visualization tools
 brew install youplot  # macOS
@@ -101,21 +115,25 @@ pip install termgraph
 ### Usage Examples
 
 **Bar chart:**
+
 ```
 "Create a bar chart of my portfolio allocation: BTC 45%, ETH 30%, SOL 15%, Other 10%"
 ```
 
 **Line chart:**
+
 ```
 "Plot my daily P&L for the last week"
 ```
 
 **Histogram:**
+
 ```
 "Show distribution of my bet sizes"
 ```
 
 ### Supported Chart Types
+
 - Bar charts
 - Line charts
 - Histograms
@@ -133,10 +151,10 @@ models:
   fallback:
     - claude-3-haiku
     - gpt-4-turbo
-  
+
   # Use specialized models for specific tasks
-  research: perplexity  # For web search and market research
-  analysis: claude-3-5-sonnet  # For detailed financial analysis
+  research: perplexity # For web search and market research
+  analysis: claude-3-5-sonnet # For detailed financial analysis
 ```
 
 ## Tips for Financial Analysis
