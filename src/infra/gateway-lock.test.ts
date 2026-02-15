@@ -175,7 +175,8 @@ describe("gateway lock", () => {
   });
 
   it("keeps lock on linux when proc access fails unless stale", async () => {
-    vi.useFakeTimers();
+    // Use real timers — fake timers + real file I/O is unreliable on Windows
+    // because async I/O produces more microtask turns than fake timer steps can drain.
     const { env, cleanup } = await makeEnv();
     const { lockPath, configPath } = resolveLockPath(env);
     const payload = {
@@ -194,19 +195,16 @@ describe("gateway lock", () => {
       return readFileSync(filePath as never, encoding as never) as never;
     });
 
-    const pending = acquireGatewayLock({
-      env,
-      allowInTests: true,
-      timeoutMs: 50,
-      pollIntervalMs: 5,
-      staleMs: 10_000,
-      platform: "linux",
-    });
-    const settlement = await settleWithFakeTimers(pending, { stepMs: 5, maxSteps: 30 });
-    expect(settlement.status).toBe("rejected");
-    expect((settlement as { status: "rejected"; reason: unknown }).reason).toBeInstanceOf(
-      GatewayLockError,
-    );
+    await expect(
+      acquireGatewayLock({
+        env,
+        allowInTests: true,
+        timeoutMs: 50,
+        pollIntervalMs: 5,
+        staleMs: 10_000,
+        platform: "linux",
+      }),
+    ).rejects.toBeInstanceOf(GatewayLockError);
 
     spy.mockRestore();
 
