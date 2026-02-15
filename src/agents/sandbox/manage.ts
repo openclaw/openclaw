@@ -49,7 +49,7 @@ async function listSandboxRegistryItems<
         // ignore
       }
     }
-    const agentId = resolveSandboxAgentId(entry.sessionKey);
+    const agentId = resolveSandboxAgentId(entry.sessionKey) ?? "";
     const configuredImage = params.resolveConfiguredImage(agentId);
     results.push({
       ...entry,
