@@ -439,9 +439,6 @@ importers:
       express:
         specifier: ^5.2.1
         version: 5.2.1
-      proper-lockfile:
-        specifier: ^4.1.2
-        version: 4.1.2
     devDependencies:
       openclaw:
         specifier: workspace:*
