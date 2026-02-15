@@ -18,10 +18,31 @@ export const MOONSHOT_DEFAULT_MAX_TOKENS = 8192;
 export const KIMI_CODING_MODEL_ID = "k2p5";
 export const KIMI_CODING_MODEL_REF = `kimi-coding/${KIMI_CODING_MODEL_ID}`;
 export const STEPFUN_BASE_URL = "https://api.stepfun.ai/v1";
+export const STEPFUN_CN_BASE_URL = "https://api.stepfun.com/v1";
+export const STEPFUN_ENDPOINT_BASE_URLS = {
+  global: STEPFUN_BASE_URL,
+  cn: STEPFUN_CN_BASE_URL,
+} as const;
+export type StepfunEndpointId = keyof typeof STEPFUN_ENDPOINT_BASE_URLS;
 export const STEPFUN_DEFAULT_MODEL_ID = "step-3.5-flash";
 export const STEPFUN_DEFAULT_MODEL_REF = `stepfun/${STEPFUN_DEFAULT_MODEL_ID}`;
 export const STEPFUN_DEFAULT_CONTEXT_WINDOW = 256000;
 export const STEPFUN_DEFAULT_MAX_TOKENS = 8192;
+
+export function resolveStepfunBaseUrl(params?: {
+  endpoint?: StepfunEndpointId;
+  existingBaseUrl?: string;
+  preferExistingBaseUrl?: boolean;
+}): string {
+  if (params?.endpoint) {
+    return STEPFUN_ENDPOINT_BASE_URLS[params.endpoint];
+  }
+  const existingBaseUrl = params?.existingBaseUrl?.trim();
+  if ((params?.preferExistingBaseUrl ?? true) && existingBaseUrl) {
+    return existingBaseUrl;
+  }
+  return STEPFUN_ENDPOINT_BASE_URLS.global;
+}
 
 export { QIANFAN_BASE_URL, QIANFAN_DEFAULT_MODEL_ID };
 export const QIANFAN_DEFAULT_MODEL_REF = `qianfan/${QIANFAN_DEFAULT_MODEL_ID}`;

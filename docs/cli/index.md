@@ -318,6 +318,7 @@ Options:
 - `--moonshot-api-key <key>`
 - `--kimi-code-api-key <key>`
 - `--stepfun-api-key <key>`
+- `--stepfun-endpoint <global|cn>` (optional; StepFun endpoint preset)
 - `--gemini-api-key <key>`
 - `--zai-api-key <key>`
 - `--xiaomi-api-key <key>`

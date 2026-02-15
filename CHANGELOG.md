@@ -7,6 +7,7 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - Subagents: nested sub-agents (sub-sub-agents) with configurable depth. Set `agents.defaults.subagents.maxSpawnDepth: 2` to allow sub-agents to spawn their own children. Includes `maxChildrenPerAgent` limit (default 5), depth-aware tool policy, and proper announce chain routing. (#14447) Thanks @tyler6204.
+- Onboarding/Providers: add `--stepfun-endpoint <global|cn>` support for StepFun onboarding, default to global, and preserve existing `models.providers.stepfun.baseUrl` on reruns unless endpoint is explicitly overridden. (#10857) Thanks @hengm3467.
 
 ### Fixes
 

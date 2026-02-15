@@ -65,9 +65,10 @@ import {
   MOONSHOT_CN_BASE_URL,
   MOONSHOT_DEFAULT_MODEL_ID,
   MOONSHOT_DEFAULT_MODEL_REF,
-  STEPFUN_BASE_URL,
   STEPFUN_DEFAULT_MODEL_ID,
   STEPFUN_DEFAULT_MODEL_REF,
+  resolveStepfunBaseUrl,
+  type StepfunEndpointId,
   ZAI_DEFAULT_MODEL_ID,
   resolveZaiBaseUrl,
   XAI_BASE_URL,
@@ -252,69 +253,42 @@ export function applyMoonshotConfigCn(cfg: OpenClawConfig): OpenClawConfig {
   return applyAgentDefaultModelPrimary(next, MOONSHOT_DEFAULT_MODEL_REF);
 }
 
-export function applyStepfunProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+export function applyStepfunProviderConfig(
+  cfg: OpenClawConfig,
+  params?: { endpoint?: StepfunEndpointId },
+): OpenClawConfig {
   const models = { ...cfg.agents?.defaults?.models };
   models[STEPFUN_DEFAULT_MODEL_REF] = {
     ...models[STEPFUN_DEFAULT_MODEL_REF],
     alias: models[STEPFUN_DEFAULT_MODEL_REF]?.alias ?? "Step 3.5",
   };
 
-  const providers = { ...cfg.models?.providers };
-  const existingProvider = providers.stepfun;
-  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
   const defaultModel = buildStepfunModelDefinition();
-  const hasDefaultModel = existingModels.some((model) => model.id === STEPFUN_DEFAULT_MODEL_ID);
-  const mergedModels = hasDefaultModel ? existingModels : [...existingModels, defaultModel];
-  const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as Record<
-    string,
-    unknown
-  > as { apiKey?: string };
-  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
-  const normalizedApiKey = resolvedApiKey?.trim();
-  providers.stepfun = {
-    ...existingProviderRest,
-    baseUrl: STEPFUN_BASE_URL,
-    api: "openai-completions",
-    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
-    models: mergedModels.length > 0 ? mergedModels : [defaultModel],
-  };
+  const existingProvider = cfg.models?.providers?.stepfun;
+  const existingBaseUrl =
+    typeof existingProvider?.baseUrl === "string" ? existingProvider.baseUrl : undefined;
+  const baseUrl = resolveStepfunBaseUrl({
+    endpoint: params?.endpoint,
+    existingBaseUrl,
+    preferExistingBaseUrl: true,
+  });
 
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...cfg.agents?.defaults,
-        models,
-      },
-    },
-    models: {
-      mode: cfg.models?.mode ?? "merge",
-      providers,
-    },
-  };
+  return applyProviderConfigWithDefaultModel(cfg, {
+    agentModels: models,
+    providerId: "stepfun",
+    api: "openai-completions",
+    baseUrl,
+    defaultModel,
+    defaultModelId: STEPFUN_DEFAULT_MODEL_ID,
+  });
 }
 
-export function applyStepfunConfig(cfg: OpenClawConfig): OpenClawConfig {
-  const next = applyStepfunProviderConfig(cfg);
-  const existingModel = next.agents?.defaults?.model;
-  return {
-    ...next,
-    agents: {
-      ...next.agents,
-      defaults: {
-        ...next.agents?.defaults,
-        model: {
-          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
-            ? {
-                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
-              }
-            : undefined),
-          primary: STEPFUN_DEFAULT_MODEL_REF,
-        },
-      },
-    },
-  };
+export function applyStepfunConfig(
+  cfg: OpenClawConfig,
+  params?: { endpoint?: StepfunEndpointId },
+): OpenClawConfig {
+  const next = applyStepfunProviderConfig(cfg, params);
+  return applyAgentDefaultModelPrimary(next, STEPFUN_DEFAULT_MODEL_REF);
 }
 
 export function applyKimiCodeProviderConfig(cfg: OpenClawConfig): OpenClawConfig {

@@ -4,7 +4,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 describe("onboard (non-interactive): StepFun", () => {
-  it("stores the API key and configures the default model", async () => {
+  async function runStepfunOnboarding(params?: { endpoint?: "global" | "cn" }) {
     const prev = {
       home: process.env.HOME,
       stateDir: process.env.OPENCLAW_STATE_DIR,
@@ -47,6 +47,7 @@ describe("onboard (non-interactive): StepFun", () => {
           nonInteractive: true,
           authChoice: "stepfun-api-key",
           stepfunApiKey: "sk-stepfun-test",
+          ...(params?.endpoint ? { stepfunEndpoint: params.endpoint } : {}),
           skipHealth: true,
           skipChannels: true,
           skipSkills: true,
@@ -61,11 +62,15 @@ describe("onboard (non-interactive): StepFun", () => {
           profiles?: Record<string, { provider?: string; mode?: string }>;
         };
         agents?: { defaults?: { model?: { primary?: string } } };
+        models?: { providers?: { stepfun?: { baseUrl?: string } } };
       };
 
       expect(cfg.auth?.profiles?.["stepfun:default"]?.provider).toBe("stepfun");
       expect(cfg.auth?.profiles?.["stepfun:default"]?.mode).toBe("api_key");
       expect(cfg.agents?.defaults?.model?.primary).toBe("stepfun/step-3.5-flash");
+      expect(cfg.models?.providers?.stepfun?.baseUrl).toBe(
+        params?.endpoint === "cn" ? "https://api.stepfun.com/v1" : "https://api.stepfun.ai/v1",
+      );
 
       const { ensureAuthProfileStore } = await import("../agents/auth-profiles.js");
       const store = ensureAuthProfileStore();
@@ -87,5 +92,13 @@ describe("onboard (non-interactive): StepFun", () => {
       process.env.OPENCLAW_GATEWAY_TOKEN = prev.token;
       process.env.OPENCLAW_GATEWAY_PASSWORD = prev.password;
     }
+  }
+
+  it("stores the API key and configures the default model", async () => {
+    await runStepfunOnboarding();
+  }, 60_000);
+
+  it("uses CN endpoint when --stepfun-endpoint cn is provided", async () => {
+    await runStepfunOnboarding({ endpoint: "cn" });
   }, 60_000);
 });

@@ -92,6 +92,7 @@ Add `--json` for a machine-readable summary.
       --mode local \
       --auth-choice stepfun-api-key \
       --stepfun-api-key "$STEPFUN_API_KEY" \
+      --stepfun-endpoint cn \
       --gateway-port 18789 \
       --gateway-bind loopback
     ```

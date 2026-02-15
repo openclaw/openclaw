@@ -151,4 +151,90 @@ describe("applyAuthChoice (stepfun)", () => {
     };
     expect(parsed.profiles?.["stepfun:default"]?.key).toBe("sk-stepfun-test");
   });
+
+  it("uses CN baseUrl when stepfunEndpoint is cn", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-"));
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+    process.env.OPENCLAW_AGENT_DIR = path.join(tempStateDir, "agent");
+    process.env.PI_CODING_AGENT_DIR = process.env.OPENCLAW_AGENT_DIR;
+    delete process.env.STEPFUN_API_KEY;
+
+    const text = vi.fn().mockResolvedValue("sk-stepfun-test");
+    const prompter: WizardPrompter = {
+      intro: vi.fn(noopAsync),
+      outro: vi.fn(noopAsync),
+      note: vi.fn(noopAsync),
+      select: vi.fn(async () => "" as never),
+      multiselect: vi.fn(async () => []),
+      text,
+      confirm: vi.fn(async () => false),
+      progress: vi.fn(() => ({ update: noop, stop: noop })),
+    };
+    const runtime: RuntimeEnv = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn((code: number) => {
+        throw new Error(`exit:${code}`);
+      }),
+    };
+
+    const result = await applyAuthChoice({
+      authChoice: "stepfun-api-key",
+      config: {},
+      prompter,
+      runtime,
+      setDefaultModel: true,
+      opts: { stepfunEndpoint: "cn" },
+    });
+
+    expect(result.config.models?.providers?.stepfun?.baseUrl).toBe("https://api.stepfun.com/v1");
+    expect(result.config.agents?.defaults?.model?.primary).toBe("stepfun/step-3.5-flash");
+  });
+
+  it("keeps existing StepFun baseUrl when endpoint is not specified", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-"));
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+    process.env.OPENCLAW_AGENT_DIR = path.join(tempStateDir, "agent");
+    process.env.PI_CODING_AGENT_DIR = process.env.OPENCLAW_AGENT_DIR;
+    delete process.env.STEPFUN_API_KEY;
+
+    const text = vi.fn().mockResolvedValue("sk-stepfun-test");
+    const prompter: WizardPrompter = {
+      intro: vi.fn(noopAsync),
+      outro: vi.fn(noopAsync),
+      note: vi.fn(noopAsync),
+      select: vi.fn(async () => "" as never),
+      multiselect: vi.fn(async () => []),
+      text,
+      confirm: vi.fn(async () => false),
+      progress: vi.fn(() => ({ update: noop, stop: noop })),
+    };
+    const runtime: RuntimeEnv = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn((code: number) => {
+        throw new Error(`exit:${code}`);
+      }),
+    };
+
+    const result = await applyAuthChoice({
+      authChoice: "stepfun-api-key",
+      config: {
+        models: {
+          providers: {
+            stepfun: {
+              baseUrl: "https://api.stepfun.com/v1",
+              api: "openai-completions",
+              models: [],
+            },
+          },
+        },
+      },
+      prompter,
+      runtime,
+      setDefaultModel: false,
+    });
+
+    expect(result.config.models?.providers?.stepfun?.baseUrl).toBe("https://api.stepfun.com/v1");
+  });
 });

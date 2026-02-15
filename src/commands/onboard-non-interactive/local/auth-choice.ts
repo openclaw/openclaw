@@ -531,7 +531,7 @@ export async function applyNonInteractiveAuthChoice(params: {
       provider: "stepfun",
       mode: "api_key",
     });
-    return applyStepfunConfig(nextConfig);
+    return applyStepfunConfig(nextConfig, { endpoint: opts.stepfunEndpoint });
   }
 
   if (authChoice === "synthetic-api-key") {

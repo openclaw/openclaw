@@ -320,6 +320,11 @@ describe("applyStepfunConfig", () => {
     expect(cfg.agents?.defaults?.model?.primary).toBe(STEPFUN_DEFAULT_MODEL_REF);
   });
 
+  it("supports CN endpoint when endpoint is cn", () => {
+    const cfg = applyStepfunConfig({}, { endpoint: "cn" });
+    expect(cfg.models?.providers?.stepfun?.baseUrl).toBe("https://api.stepfun.com/v1");
+  });
+
   it("preserves existing model fallbacks", () => {
     const cfg = applyStepfunConfig({
       agents: {
@@ -362,13 +367,18 @@ describe("applyStepfunProviderConfig", () => {
       },
     });
 
-    expect(cfg.models?.providers?.stepfun?.baseUrl).toBe("https://api.stepfun.ai/v1");
+    expect(cfg.models?.providers?.stepfun?.baseUrl).toBe("https://old.example.com");
     expect(cfg.models?.providers?.stepfun?.api).toBe("openai-completions");
     expect(cfg.models?.providers?.stepfun?.apiKey).toBe("old-key");
     expect(cfg.models?.providers?.stepfun?.models.map((m) => m.id)).toEqual([
       "custom-model",
       "step-3.5-flash",
     ]);
+  });
+
+  it("applies CN baseUrl when endpoint is cn", () => {
+    const cfg = applyStepfunProviderConfig({}, { endpoint: "cn" });
+    expect(cfg.models?.providers?.stepfun?.baseUrl).toBe("https://api.stepfun.com/v1");
   });
 });
 
