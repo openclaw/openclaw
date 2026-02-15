@@ -33,4 +33,6 @@ export type CronFormState = {
   deliveryChannel: string;
   deliveryTo: string;
   timeoutSeconds: string;
+  /** When non-null the form is in edit mode for this job id. */
+  editingJobId: string | null;
 };

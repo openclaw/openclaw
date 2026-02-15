@@ -21,6 +21,9 @@ export type CronProps = {
   onFormChange: (patch: Partial<CronFormState>) => void;
   onRefresh: () => void;
   onAdd: () => void;
+  onEdit: (job: CronJob) => void;
+  onSaveEdit: () => void;
+  onCancelEdit: () => void;
   onToggle: (job: CronJob, enabled: boolean) => void;
   onRun: (job: CronJob) => void;
   onRemove: (job: CronJob) => void;
@@ -90,8 +93,8 @@ export function renderCron(props: CronProps) {
       </div>
 
       <div class="card">
-        <div class="card-title">New Job</div>
-        <div class="card-sub">Create a scheduled wakeup or agent run.</div>
+        <div class="card-title">${props.form.editingJobId ? "Edit Job" : "New Job"}</div>
+        <div class="card-sub">${props.form.editingJobId ? "Editing an existing scheduled job." : "Create a scheduled wakeup or agent run."}</div>
         <div class="form-grid" style="margin-top: 16px;">
           <label class="field">
             <span>Name</span>
@@ -264,10 +267,23 @@ export function renderCron(props: CronProps) {
               `
             : nothing
         }
-        <div class="row" style="margin-top: 14px;">
-          <button class="btn primary" ?disabled=${props.busy} @click=${props.onAdd}>
-            ${props.busy ? "Saving…" : "Add job"}
-          </button>
+        <div class="row" style="margin-top: 14px; gap: 8px;">
+          ${
+            props.form.editingJobId
+              ? html`
+                <button class="btn primary" ?disabled=${props.busy} @click=${props.onSaveEdit}>
+                  ${props.busy ? "Saving…" : "Save changes"}
+                </button>
+                <button class="btn" ?disabled=${props.busy} @click=${props.onCancelEdit}>
+                  Cancel
+                </button>
+              `
+              : html`
+                <button class="btn primary" ?disabled=${props.busy} @click=${props.onAdd}>
+                  ${props.busy ? "Saving…" : "Add job"}
+                </button>
+              `
+          }
         </div>
       </div>
     </section>
@@ -402,6 +418,16 @@ function renderJob(job: CronJob, props: CronProps) {
           <span class="chip">${job.wakeMode}</span>
         </div>
         <div class="row cron-job-actions">
+          <button
+            class="btn"
+            ?disabled=${props.busy}
+            @click=${(event: Event) => {
+              event.stopPropagation();
+              props.onEdit(job);
+            }}
+          >
+            Edit
+          </button>
           <button
             class="btn"
             ?disabled=${props.busy}

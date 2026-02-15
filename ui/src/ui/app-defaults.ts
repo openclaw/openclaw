@@ -29,4 +29,5 @@ export const DEFAULT_CRON_FORM: CronFormState = {
   deliveryChannel: "last",
   deliveryTo: "",
   timeoutSeconds: "",
+  editingJobId: null,
 };

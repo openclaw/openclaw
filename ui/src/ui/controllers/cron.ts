@@ -137,6 +137,111 @@ export async function addCronJob(state: CronState) {
       name: "",
       description: "",
       payloadText: "",
+      editingJobId: null,
+    };
+    await loadCronJobs(state);
+    await loadCronStatus(state);
+  } catch (err) {
+    state.cronError = String(err);
+  } finally {
+    state.cronBusy = false;
+  }
+}
+
+/**
+ * Populate the form with an existing job's values for editing.
+ */
+export function startEditCronJob(state: CronState, job: CronJob) {
+  const schedule = job.schedule;
+  const form: CronFormState = {
+    name: job.name,
+    description: job.description ?? "",
+    agentId: job.agentId ?? "",
+    enabled: job.enabled,
+    scheduleKind: schedule.kind,
+    scheduleAt: schedule.kind === "at" ? schedule.at : "",
+    everyAmount: schedule.kind === "every" ? String(Math.round(schedule.everyMs / 60_000)) : "30",
+    everyUnit:
+      schedule.kind === "every"
+        ? schedule.everyMs >= 86_400_000
+          ? "days"
+          : schedule.everyMs >= 3_600_000
+            ? "hours"
+            : "minutes"
+        : "minutes",
+    cronExpr: schedule.kind === "cron" ? schedule.expr : "0 7 * * *",
+    cronTz: schedule.kind === "cron" ? (schedule.tz ?? "") : "",
+    sessionTarget: job.sessionTarget,
+    wakeMode: job.wakeMode,
+    payloadKind: job.payload.kind,
+    payloadText: job.payload.kind === "systemEvent" ? job.payload.text : job.payload.message,
+    deliveryMode: job.delivery?.mode ?? "announce",
+    deliveryChannel: job.delivery?.channel ?? "last",
+    deliveryTo: job.delivery?.to ?? "",
+    timeoutSeconds:
+      job.payload.kind === "agentTurn" && job.payload.timeoutSeconds
+        ? String(job.payload.timeoutSeconds)
+        : "",
+    editingJobId: job.id,
+  };
+  state.cronForm = form;
+}
+
+/**
+ * Cancel editing and reset form.
+ */
+export function cancelEditCronJob(state: CronState, defaults: CronFormState) {
+  state.cronForm = { ...defaults };
+}
+
+/**
+ * Save edits to an existing cron job via cron.update.
+ */
+export async function editCronJob(state: CronState) {
+  if (!state.client || !state.connected || state.cronBusy) {
+    return;
+  }
+  const jobId = state.cronForm.editingJobId;
+  if (!jobId) {
+    return;
+  }
+  state.cronBusy = true;
+  state.cronError = null;
+  try {
+    const schedule = buildCronSchedule(state.cronForm);
+    const payload = buildCronPayload(state.cronForm);
+    const delivery =
+      state.cronForm.sessionTarget === "isolated" &&
+      state.cronForm.payloadKind === "agentTurn" &&
+      state.cronForm.deliveryMode
+        ? {
+            mode: state.cronForm.deliveryMode === "announce" ? "announce" : "none",
+            channel: state.cronForm.deliveryChannel.trim() || "last",
+            to: state.cronForm.deliveryTo.trim() || undefined,
+          }
+        : undefined;
+    const agentId = state.cronForm.agentId.trim();
+    const patch = {
+      name: state.cronForm.name.trim(),
+      description: state.cronForm.description.trim() || undefined,
+      agentId: agentId || undefined,
+      enabled: state.cronForm.enabled,
+      schedule,
+      sessionTarget: state.cronForm.sessionTarget,
+      wakeMode: state.cronForm.wakeMode,
+      payload,
+      delivery,
+    };
+    if (!patch.name) {
+      throw new Error("Name required.");
+    }
+    await state.client.request("cron.update", { id: jobId, patch });
+    state.cronForm = {
+      ...state.cronForm,
+      editingJobId: null,
+      name: "",
+      description: "",
+      payloadText: "",
     };
     await loadCronJobs(state);
     await loadCronStatus(state);
