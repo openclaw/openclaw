@@ -18,7 +18,7 @@ import {
   writeCache,
 } from "./web-shared.js";
 
-const SEARCH_PROVIDERS = ["brave", "perplexity", "grok"] as const;
+const SEARCH_PROVIDERS = ["brave", "perplexity", "grok", "duckduckgo"] as const;
 const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
 
@@ -137,6 +137,13 @@ type PerplexitySearchResponse = {
 
 type PerplexityBaseUrlHint = "direct" | "openrouter";
 
+type DuckDuckGoConfig = {
+  proxy?: string; // "tor" or full proxy URL like "socks5://127.0.0.1:9050"
+  region?: string; // us-en, wt-wt, etc.
+  safesearch?: string; // on, moderate, off
+  timelimit?: string; // d, w, m, y
+};
+
 function extractGrokContent(data: GrokSearchResponse): {
   text: string | undefined;
   annotationCitations: string[];
@@ -222,6 +229,9 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
   }
   if (raw === "grok") {
     return "grok";
+  }
+  if (raw === "duckduckgo") {
+    return "duckduckgo";
   }
   if (raw === "brave") {
     return "brave";
@@ -365,6 +375,29 @@ function resolveGrokModel(grok?: GrokConfig): string {
 
 function resolveGrokInlineCitations(grok?: GrokConfig): boolean {
   return grok?.inlineCitations === true;
+}
+
+function resolveDuckDuckGoConfig(search?: WebSearchConfig): DuckDuckGoConfig {
+  if (!search || typeof search !== "object") {
+    return {};
+  }
+  const duckduckgo = "duckduckgo" in search ? search.duckduckgo : undefined;
+  if (!duckduckgo || typeof duckduckgo !== "object") {
+    return {};
+  }
+  return duckduckgo as DuckDuckGoConfig;
+}
+
+function resolveDuckDuckGoProxy(duckduckgo?: DuckDuckGoConfig): string | undefined {
+  const proxy = duckduckgo?.proxy;
+  if (!proxy || typeof proxy !== "string") {
+    return undefined;
+  }
+  // "tor" is a convenience alias for Tor daemon
+  if (proxy.toLowerCase() === "tor") {
+    return "socks5://127.0.0.1:9050";
+  }
+  return proxy;
 }
 
 function resolveSearchCount(value: unknown, fallback: number): number {
@@ -549,10 +582,110 @@ async function runGrokSearch(params: {
   return { content, citations, inlineCitations };
 }
 
+async function findDdgsCli(): Promise<string | null> {
+  const { access } = await import("node:fs/promises");
+  const { constants } = await import("node:fs");
+
+  // Search common installation locations
+  const searchPaths = [
+    `${process.env.HOME}/.local/bin/ddgs`,
+    `${process.env.HOME}/.openclaw/.venv/bin/ddgs`,
+    "/usr/local/bin/ddgs",
+    "/usr/bin/ddgs",
+  ];
+
+  for (const path of searchPaths) {
+    try {
+      await access(path, constants.X_OK);
+      return path;
+    } catch {
+      // Continue searching
+    }
+  }
+
+  return null;
+}
+
+async function runDuckDuckGoSearch(params: {
+  query: string;
+  count: number;
+  timeoutSeconds: number;
+  proxy?: string;
+  region?: string;
+  safesearch?: string;
+  timelimit?: string;
+}): Promise<{ results: Array<{ title: string; url: string; description: string }> }> {
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const { unlink } = await import("node:fs/promises");
+  const execFileAsync = promisify(execFile);
+
+  // Find ddgs CLI
+  const ddgsPath = await findDdgsCli();
+  if (!ddgsPath) {
+    throw new Error(
+      "ddgs CLI not found. Install with: pip install --user ddgs OR pipx install ddgs",
+    );
+  }
+
+  // Use temporary JSON file for output
+  const outputFile = `/tmp/ddgs-${Date.now()}.json`;
+  const args = ["text", "-q", params.query, "-m", String(params.count), "-o", outputFile];
+
+  if (params.proxy) {
+    args.push("-pr", params.proxy); // Note: -pr not -p
+  }
+  if (params.region) {
+    args.push("-r", params.region);
+  }
+  if (params.safesearch) {
+    args.push("-s", params.safesearch);
+  }
+  if (params.timelimit) {
+    args.push("-t", params.timelimit);
+  }
+
+  try {
+    await execFileAsync(ddgsPath, args, {
+      timeout: (params.timeoutSeconds + 5) * 1000,
+      maxBuffer: 1024 * 1024,
+    });
+
+    // Read JSON output
+    const { readFile } = await import("node:fs/promises");
+    const jsonData = await readFile(outputFile, "utf-8");
+    const data = JSON.parse(jsonData) as Array<{
+      title: string;
+      href: string;
+      body: string;
+    }>;
+
+    // Cleanup temp file
+    await unlink(outputFile).catch(() => {});
+
+    // Map to expected format
+    return {
+      results: data.map((r) => ({
+        title: r.title,
+        url: r.href,
+        description: r.body,
+      })),
+    };
+  } catch (error) {
+    // Cleanup temp file on error
+    await unlink(outputFile).catch(() => {});
+
+    if (error instanceof Error && error.message.includes("ENOENT")) {
+      throw new Error(`ddgs CLI not found at ${ddgsPath}`, { cause: error });
+    }
+    throw error;
+  }
+}
+
 async function runWebSearch(params: {
   query: string;
   count: number;
-  apiKey: string;
+  apiKey: string | undefined;
   timeoutSeconds: number;
   cacheTtlMs: number;
   provider: (typeof SEARCH_PROVIDERS)[number];
@@ -564,13 +697,19 @@ async function runWebSearch(params: {
   perplexityModel?: string;
   grokModel?: string;
   grokInlineCitations?: boolean;
+  duckduckgoProxy?: string;
+  duckduckgoRegion?: string;
+  duckduckgoSafesearch?: string;
+  duckduckgoTimelimit?: string;
 }): Promise<Record<string, unknown>> {
   const cacheKey = normalizeCacheKey(
     params.provider === "brave"
       ? `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || "default"}:${params.ui_lang || "default"}:${params.freshness || "default"}`
       : params.provider === "perplexity"
         ? `${params.provider}:${params.query}:${params.perplexityBaseUrl ?? DEFAULT_PERPLEXITY_BASE_URL}:${params.perplexityModel ?? DEFAULT_PERPLEXITY_MODEL}:${params.freshness || "default"}`
-        : `${params.provider}:${params.query}:${params.grokModel ?? DEFAULT_GROK_MODEL}:${String(params.grokInlineCitations ?? false)}`,
+        : params.provider === "duckduckgo"
+          ? `${params.provider}:${params.query}:${params.count}:${params.duckduckgoProxy || "none"}:${params.duckduckgoRegion || "default"}:${params.duckduckgoSafesearch || "moderate"}:${params.duckduckgoTimelimit || "none"}`
+          : `${params.provider}:${params.query}:${params.grokModel ?? DEFAULT_GROK_MODEL}:${String(params.grokInlineCitations ?? false)}`,
   );
   const cached = readCache(SEARCH_CACHE, cacheKey);
   if (cached) {
@@ -582,7 +721,7 @@ async function runWebSearch(params: {
   if (params.provider === "perplexity") {
     const { content, citations } = await runPerplexitySearch({
       query: params.query,
-      apiKey: params.apiKey,
+      apiKey: params.apiKey!, // non-null assertion: checked in execute()
       baseUrl: params.perplexityBaseUrl ?? DEFAULT_PERPLEXITY_BASE_URL,
       model: params.perplexityModel ?? DEFAULT_PERPLEXITY_MODEL,
       timeoutSeconds: params.timeoutSeconds,
@@ -610,7 +749,7 @@ async function runWebSearch(params: {
   if (params.provider === "grok") {
     const { content, citations, inlineCitations } = await runGrokSearch({
       query: params.query,
-      apiKey: params.apiKey,
+      apiKey: params.apiKey!, // non-null assertion: checked in execute()
       model: params.grokModel ?? DEFAULT_GROK_MODEL,
       timeoutSeconds: params.timeoutSeconds,
       inlineCitations: params.grokInlineCitations ?? false,
@@ -630,6 +769,35 @@ async function runWebSearch(params: {
       content: wrapWebContent(content),
       citations,
       inlineCitations,
+    };
+    writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+    return payload;
+  }
+
+  if (params.provider === "duckduckgo") {
+    const { results } = await runDuckDuckGoSearch({
+      query: params.query,
+      count: params.count,
+      timeoutSeconds: params.timeoutSeconds,
+      proxy: params.duckduckgoProxy,
+      region: params.duckduckgoRegion,
+      safesearch: params.duckduckgoSafesearch,
+      timelimit: params.duckduckgoTimelimit,
+    });
+
+    const mapped = results.map((entry) => ({
+      title: entry.title ? wrapWebContent(entry.title, "web_search") : "",
+      url: entry.url, // Keep raw for tool chaining
+      description: entry.description ? wrapWebContent(entry.description, "web_search") : "",
+      siteName: entry.url ? resolveSiteName(entry.url) : undefined,
+    }));
+
+    const payload = {
+      query: params.query,
+      provider: params.provider,
+      count: mapped.length,
+      tookMs: Date.now() - start,
+      results: mapped,
     };
     writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
     return payload;
@@ -659,7 +827,7 @@ async function runWebSearch(params: {
     method: "GET",
     headers: {
       Accept: "application/json",
-      "X-Subscription-Token": params.apiKey,
+      "X-Subscription-Token": params.apiKey!, // non-null assertion: checked in execute()
     },
     signal: withTimeout(undefined, params.timeoutSeconds * 1000),
   });
@@ -714,13 +882,16 @@ export function createWebSearchTool(options?: {
   const provider = resolveSearchProvider(search);
   const perplexityConfig = resolvePerplexityConfig(search);
   const grokConfig = resolveGrokConfig(search);
+  const duckduckgoConfig = resolveDuckDuckGoConfig(search);
 
   const description =
     provider === "perplexity"
       ? "Search the web using Perplexity Sonar (direct or via OpenRouter). Returns AI-synthesized answers with citations from real-time web search."
       : provider === "grok"
         ? "Search the web using xAI Grok. Returns AI-synthesized answers with citations from real-time web search."
-        : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
+        : provider === "duckduckgo"
+          ? "Search the web using DuckDuckGo (no API key required). Supports Tor proxy for anonymous searching. Returns titles, URLs, and snippets."
+          : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
 
   return {
     label: "Web Search",
@@ -735,9 +906,11 @@ export function createWebSearchTool(options?: {
           ? perplexityAuth?.apiKey
           : provider === "grok"
             ? resolveGrokApiKey(grokConfig)
-            : resolveSearchApiKey(search);
+            : provider === "duckduckgo"
+              ? "" // DuckDuckGo doesn't need an API key
+              : resolveSearchApiKey(search);
 
-      if (!apiKey) {
+      if (!apiKey && provider !== "duckduckgo") {
         return jsonResult(missingSearchKeyPayload(provider));
       }
       const params = args as Record<string, unknown>;
@@ -783,6 +956,10 @@ export function createWebSearchTool(options?: {
         perplexityModel: resolvePerplexityModel(perplexityConfig),
         grokModel: resolveGrokModel(grokConfig),
         grokInlineCitations: resolveGrokInlineCitations(grokConfig),
+        duckduckgoProxy: resolveDuckDuckGoProxy(duckduckgoConfig),
+        duckduckgoRegion: duckduckgoConfig?.region,
+        duckduckgoSafesearch: duckduckgoConfig?.safesearch,
+        duckduckgoTimelimit: duckduckgoConfig?.timelimit,
       });
       return jsonResult(result);
     },

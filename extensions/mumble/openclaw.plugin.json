@@ -1,0 +1,155 @@
+{
+  "id": "mumble",
+  "name": "Mumble Voice Chat",
+  "description": "Voice conversation with OpenClaw agents via Mumble VoIP",
+  "version": "1.0.0",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": true,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "description": "Enable Mumble voice chat extension",
+        "default": false
+      },
+      "mumble": {
+        "type": "object",
+        "description": "Mumble server connection settings",
+        "properties": {
+          "host": {
+            "type": "string",
+            "description": "Mumble server hostname or IP"
+          },
+          "port": {
+            "type": "number",
+            "description": "Mumble server port",
+            "default": 64738
+          },
+          "username": {
+            "type": "string",
+            "description": "Bot username"
+          },
+          "password": {
+            "type": "string",
+            "description": "Server password (optional)"
+          },
+          "channel": {
+            "type": "string",
+            "description": "Channel to join (optional)"
+          }
+        }
+      },
+      "agent": {
+        "type": "object",
+        "description": "Voice agent configuration",
+        "properties": {
+          "sessionKey": {
+            "type": "string",
+            "description": "Agent session key to route voice messages to"
+          }
+        }
+      },
+      "audio": {
+        "type": "object",
+        "description": "Audio service endpoints",
+        "properties": {
+          "whisperUrl": {
+            "type": "string",
+            "description": "Whisper STT API endpoint"
+          },
+          "kokoroUrl": {
+            "type": "string",
+            "description": "Kokoro TTS API endpoint"
+          },
+          "kokoroVoice": {
+            "type": "string",
+            "description": "Kokoro voice ID"
+          }
+        }
+      },
+      "processing": {
+        "type": "object",
+        "description": "Audio processing settings",
+        "properties": {
+          "minSpeechDurationMs": {
+            "type": "number",
+            "description": "Minimum speech duration in milliseconds",
+            "default": 500
+          },
+          "silenceTimeoutMs": {
+            "type": "number",
+            "description": "Silence timeout in milliseconds",
+            "default": 500
+          },
+          "allowFrom": {
+            "type": "array",
+            "description": "Mumble usernames allowed to trigger the bot (empty = allow all)",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "gateway": {
+        "type": "object",
+        "description": "OpenClaw gateway connection",
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "Gateway base URL",
+            "default": "http://localhost:18789"
+          },
+          "token": {
+            "type": "string",
+            "description": "Gateway authentication token"
+          }
+        }
+      }
+    }
+  },
+  "uiHints": {
+    "enabled": {
+      "label": "Enable Mumble Voice Chat"
+    },
+    "mumble.host": {
+      "label": "Mumble Server",
+      "placeholder": "192.168.1.128"
+    },
+    "mumble.port": {
+      "label": "Port",
+      "placeholder": "64738"
+    },
+    "mumble.username": {
+      "label": "Bot Username",
+      "placeholder": "OpenClaw-Bot"
+    },
+    "mumble.password": {
+      "label": "Server Password",
+      "sensitive": true
+    },
+    "mumble.channel": {
+      "label": "Channel",
+      "placeholder": "Leave empty for root channel"
+    },
+    "audio.whisperUrl": {
+      "label": "Whisper STT URL",
+      "placeholder": "http://localhost:8200/v1"
+    },
+    "audio.kokoroUrl": {
+      "label": "Kokoro TTS URL",
+      "placeholder": "http://localhost:8102/v1"
+    },
+    "audio.kokoroVoice": {
+      "label": "Voice ID",
+      "placeholder": "af_nova+jf_alpha"
+    },
+    "processing.allowFrom": {
+      "label": "Allowed Users",
+      "placeholder": "Leave empty to allow all users"
+    },
+    "gateway.token": {
+      "label": "Gateway Token",
+      "sensitive": true
+    }
+  }
+}
