@@ -152,6 +152,84 @@ describe("Cron issue regressions", () => {
     await store.cleanup();
   });
 
+  it("repairs missing nextRunAtMs on non-schedule updates without touching other jobs", async () => {
+    const store = await makeStorePath();
+    const cron = new CronService({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "ok" }),
+    });
+    await cron.start();
+
+    const created = await cron.add({
+      name: "repair-target",
+      schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC" },
+      sessionTarget: "main",
+      payload: { kind: "systemEvent", text: "tick" },
+    });
+    const updated = await cron.update(created.id, {
+      payload: { kind: "systemEvent", text: "tick-2" },
+      state: { nextRunAtMs: undefined },
+    });
+
+    expect(updated.payload.kind).toBe("systemEvent");
+    expect(typeof updated.state.nextRunAtMs).toBe("number");
+    expect(updated.state.nextRunAtMs).toBe(created.state.nextRunAtMs);
+
+    cron.stop();
+    await store.cleanup();
+  });
+
+  it("does not advance unrelated due jobs when updating another job", async () => {
+    const store = await makeStorePath();
+    const now = Date.parse("2026-02-06T10:05:00.000Z");
+    vi.setSystemTime(now);
+    const cron = new CronService({
+      cronEnabled: false,
+      storePath: store.storePath,
+      log: noopLogger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "ok" }),
+    });
+    await cron.start();
+
+    const dueJob = await cron.add({
+      name: "due-preserved",
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: now },
+      sessionTarget: "main",
+      payload: { kind: "systemEvent", text: "due-preserved" },
+    });
+    const otherJob = await cron.add({
+      name: "other-job",
+      schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC" },
+      sessionTarget: "main",
+      payload: { kind: "systemEvent", text: "other" },
+    });
+
+    const originalDueNextRunAtMs = dueJob.state.nextRunAtMs;
+    expect(typeof originalDueNextRunAtMs).toBe("number");
+
+    // Make dueJob past-due without running timer callbacks.
+    vi.setSystemTime(now + 5 * 60_000);
+
+    await cron.update(otherJob.id, {
+      payload: { kind: "systemEvent", text: "other-updated" },
+    });
+
+    const storeData = JSON.parse(await fs.readFile(store.storePath, "utf8")) as {
+      jobs: Array<{ id: string; state?: { nextRunAtMs?: number } }>;
+    };
+    const persistedDueJob = storeData.jobs.find((job) => job.id === dueJob.id);
+    expect(persistedDueJob?.state?.nextRunAtMs).toBe(originalDueNextRunAtMs);
+
+    cron.stop();
+    await store.cleanup();
+  });
+
   it("caps timer delay to 60s for far-future schedules", async () => {
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const store = await makeStorePath();

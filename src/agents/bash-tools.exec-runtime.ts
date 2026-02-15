@@ -84,13 +84,14 @@ export const DEFAULT_MAX_OUTPUT = clampWithDefault(
 );
 export const DEFAULT_PENDING_MAX_OUTPUT = clampWithDefault(
   readEnvInt("OPENCLAW_BASH_PENDING_MAX_OUTPUT_CHARS"),
-  200_000,
+  30_000,
   1_000,
   200_000,
 );
 export const DEFAULT_PATH =
   process.env.PATH ?? "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 export const DEFAULT_NOTIFY_TAIL_CHARS = 400;
+const DEFAULT_NOTIFY_SNIPPET_CHARS = 180;
 export const DEFAULT_APPROVAL_TIMEOUT_MS = 120_000;
 export const DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS = 130_000;
 const DEFAULT_APPROVAL_RUNNING_NOTICE_MS = 10_000;
@@ -214,6 +215,18 @@ export function normalizeNotifyOutput(value: string) {
   return value.replace(/\s+/g, " ").trim();
 }
 
+function compactNotifyOutput(value: string, maxChars = DEFAULT_NOTIFY_SNIPPET_CHARS) {
+  const normalized = normalizeNotifyOutput(value);
+  if (!normalized) {
+    return "";
+  }
+  if (normalized.length <= maxChars) {
+    return normalized;
+  }
+  const safe = Math.max(1, maxChars - 1);
+  return `${normalized.slice(0, safe)}…`;
+}
+
 export function normalizePathPrepend(entries?: string[]) {
   if (!Array.isArray(entries)) {
     return [];
@@ -300,9 +313,12 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
   const exitLabel = session.exitSignal
     ? `signal ${session.exitSignal}`
     : `code ${session.exitCode ?? 0}`;
-  const output = normalizeNotifyOutput(
+  const output = compactNotifyOutput(
     tail(session.tail || session.aggregated || "", DEFAULT_NOTIFY_TAIL_CHARS),
   );
+  if (status === "completed" && !output && session.notifyOnExitEmptySuccess !== true) {
+    return;
+  }
   const summary = output
     ? `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel}) :: ${output}`
     : `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel})`;
@@ -338,6 +354,9 @@ export function emitExecSystemEvent(
 
 export async function runExecProcess(opts: {
   command: string;
+  // Execute this instead of `command` (which is kept for display/session/logging).
+  // Used to sanitize safeBins execution while preserving the original user input.
+  execCommand?: string;
   workdir: string;
   env: Record<string, string>;
   sandbox?: BashSandboxConfig;
@@ -347,6 +366,7 @@ export async function runExecProcess(opts: {
   maxOutput: number;
   pendingMaxOutput: number;
   notifyOnExit: boolean;
+  notifyOnExitEmptySuccess?: boolean;
   scopeKey?: string;
   sessionKey?: string;
   timeoutSec: number;
@@ -357,6 +377,23 @@ export async function runExecProcess(opts: {
   let child: ChildProcessWithoutNullStreams | null = null;
   let pty: PtyHandle | null = null;
   let stdin: SessionStdin | undefined;
+  const execCommand = opts.execCommand ?? opts.command;
+
+  // `exec` does not currently accept tool-provided stdin content. For non-PTY runs,
+  // keeping stdin open can cause commands like `wc -l` (or safeBins-hardened segments)
+  // to block forever waiting for input, leading to accidental backgrounding.
+  // For interactive flows, callers should use `pty: true` (stdin kept open).
+  const maybeCloseNonPtyStdin = () => {
+    if (opts.usePty) {
+      return;
+    }
+    try {
+      // Signal EOF immediately so stdin-only commands can terminate.
+      child?.stdin?.end();
+    } catch {
+      // ignore stdin close errors
+    }
+  };
 
   if (opts.sandbox) {
     const { child: spawned } = await spawnWithFallback({
@@ -364,7 +401,7 @@ export async function runExecProcess(opts: {
         "docker",
         ...buildDockerExecArgs({
           containerName: opts.sandbox.containerName,
-          command: opts.command,
+          command: execCommand,
           workdir: opts.containerWorkdir ?? opts.sandbox.containerWorkdir,
           env: opts.env,
           tty: opts.usePty,
@@ -392,6 +429,7 @@ export async function runExecProcess(opts: {
     });
     child = spawned as ChildProcessWithoutNullStreams;
     stdin = child.stdin;
+    maybeCloseNonPtyStdin();
   } else if (opts.usePty) {
     const { shell, args: shellArgs } = getShellConfig();
     try {
@@ -403,7 +441,7 @@ export async function runExecProcess(opts: {
       if (!spawnPty) {
         throw new Error("PTY support is unavailable (node-pty spawn not found).");
       }
-      pty = spawnPty(shell, [...shellArgs, opts.command], {
+      pty = spawnPty(shell, [...shellArgs, execCommand], {
         cwd: opts.workdir,
         env: opts.env,
         name: process.env.TERM ?? "xterm-256color",
@@ -435,7 +473,7 @@ export async function runExecProcess(opts: {
       logWarn(`exec: PTY spawn failed (${errText}); retrying without PTY for "${opts.command}".`);
       opts.warnings.push(warning);
       const { child: spawned } = await spawnWithFallback({
-        argv: [shell, ...shellArgs, opts.command],
+        argv: [shell, ...shellArgs, execCommand],
         options: {
           cwd: opts.workdir,
           env: opts.env,
@@ -462,7 +500,7 @@ export async function runExecProcess(opts: {
   } else {
     const { shell, args: shellArgs } = getShellConfig();
     const { child: spawned } = await spawnWithFallback({
-      argv: [shell, ...shellArgs, opts.command],
+      argv: [shell, ...shellArgs, execCommand],
       options: {
         cwd: opts.workdir,
         env: opts.env,
@@ -485,6 +523,7 @@ export async function runExecProcess(opts: {
     });
     child = spawned as ChildProcessWithoutNullStreams;
     stdin = child.stdin;
+    maybeCloseNonPtyStdin();
   }
 
   const session = {
@@ -493,6 +532,7 @@ export async function runExecProcess(opts: {
     scopeKey: opts.scopeKey,
     sessionKey: opts.sessionKey,
     notifyOnExit: opts.notifyOnExit,
+    notifyOnExitEmptySuccess: opts.notifyOnExitEmptySuccess === true,
     exitNotified: false,
     child: child ?? undefined,
     stdin,

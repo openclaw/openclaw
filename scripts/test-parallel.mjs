@@ -5,7 +5,7 @@ import path from "node:path";
 
 const pnpm = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 
-const unitIsolatedFiles = [
+const unitIsolatedFilesRaw = [
   "src/plugins/loader.test.ts",
   "src/plugins/tools.optional.test.ts",
   "src/agents/session-tool-result-guard.tool-result-persist-hook.test.ts",
@@ -28,6 +28,7 @@ const unitIsolatedFiles = [
   "src/browser/server-context.remote-tab-ops.test.ts",
   "src/browser/server-context.ensure-tab-available.prefers-last-target.test.ts",
 ];
+const unitIsolatedFiles = unitIsolatedFilesRaw.filter((file) => fs.existsSync(file));
 
 const children = new Set();
 const isCI = process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true";
@@ -35,7 +36,10 @@ const isMacOS = process.platform === "darwin" || process.env.RUNNER_OS === "macO
 const isWindows = process.platform === "win32" || process.env.RUNNER_OS === "Windows";
 const isWindowsCi = isCI && isWindows;
 const nodeMajor = Number.parseInt(process.versions.node.split(".")[0] ?? "", 10);
-const supportsVmForks = Number.isFinite(nodeMajor) ? nodeMajor < 24 : true;
+// vmForks is a big win for transform/import heavy suites, but Node 24 had
+// regressions with Vitest's vm runtime in this repo. Keep it opt-out via
+// OPENCLAW_TEST_VM_FORKS=0, and let users force-enable with =1.
+const supportsVmForks = Number.isFinite(nodeMajor) ? nodeMajor !== 24 : true;
 const useVmForks =
   process.env.OPENCLAW_TEST_VM_FORKS === "1" ||
   (process.env.OPENCLAW_TEST_VM_FORKS !== "0" && !isWindows && supportsVmForks);
@@ -90,7 +94,9 @@ const runs = [
       "run",
       "--config",
       "vitest.gateway.config.ts",
-      ...(useVmForks ? ["--pool=vmForks"] : []),
+      // Gateway tests are sensitive to vmForks behavior (global state + env stubs).
+      // Keep them on process forks for determinism even when other suites use vmForks.
+      "--pool=forks",
     ],
   },
 ];
@@ -119,8 +125,9 @@ const parallelRuns = keepGatewaySerial ? runs.filter((entry) => entry.name !== "
 const serialRuns = keepGatewaySerial ? runs.filter((entry) => entry.name === "gateway") : [];
 const localWorkers = Math.max(4, Math.min(16, os.cpus().length));
 const defaultUnitWorkers = localWorkers;
-const defaultExtensionsWorkers = Math.max(1, Math.min(4, Math.floor(localWorkers / 4)));
-const defaultGatewayWorkers = Math.max(1, Math.min(4, localWorkers));
+// Local perf: extensions tend to be the critical path under parallel vitest runs; give them more headroom.
+const defaultExtensionsWorkers = Math.max(1, Math.min(6, Math.floor(localWorkers / 2)));
+const defaultGatewayWorkers = Math.max(1, Math.min(2, Math.floor(localWorkers / 4)));
 
 // Keep worker counts predictable for local runs; trim macOS CI workers to avoid worker crashes/OOM.
 // In CI on linux/windows, prefer Vitest defaults to avoid cross-test interference from lower worker counts.
@@ -135,7 +142,8 @@ const maxWorkersForRun = (name) => {
     return 1;
   }
   if (name === "unit-isolated") {
-    return 1;
+    // Local: allow a bit of parallelism while keeping this run stable.
+    return Math.min(4, localWorkers);
   }
   if (name === "extensions") {
     return defaultExtensionsWorkers;
@@ -215,7 +223,6 @@ const runOnce = (entry, extraArgs = []) =>
     const child = spawn(pnpm, args, {
       stdio: "inherit",
       env: { ...process.env, VITEST_GROUP: entry.name, NODE_OPTIONS: nextNodeOptions },
-      shell: process.platform === "win32",
     });
     children.add(child);
     child.on("exit", (code, signal) => {
@@ -269,7 +276,6 @@ if (passthroughArgs.length > 0) {
     const child = spawn(pnpm, args, {
       stdio: "inherit",
       env: { ...process.env, NODE_OPTIONS: nextNodeOptions },
-      shell: process.platform === "win32",
     });
     children.add(child);
     child.on("exit", (exitCode, signal) => {

@@ -1,6 +1,7 @@
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { logWarn } from "../logger.js";
+import { estimateBase64DecodedBytes } from "./base64.js";
 
 type CanvasModule = typeof import("@napi-rs/canvas");
 type PdfJsModule = typeof import("pdfjs-dist/legacy/build/pdf.mjs");
@@ -110,6 +111,19 @@ export const DEFAULT_INPUT_PDF_MAX_PAGES = 4;
 export const DEFAULT_INPUT_PDF_MAX_PIXELS = 4_000_000;
 export const DEFAULT_INPUT_PDF_MIN_TEXT_CHARS = 200;
 
+function rejectOversizedBase64Payload(params: {
+  data: string;
+  maxBytes: number;
+  label: "Image" | "File";
+}): void {
+  const estimated = estimateBase64DecodedBytes(params.data);
+  if (estimated > params.maxBytes) {
+    throw new Error(
+      `${params.label} too large: ${estimated} bytes (limit: ${params.maxBytes} bytes)`,
+    );
+  }
+}
+
 export function normalizeMimeType(value: string | undefined): string | undefined {
   if (!value) {
     return undefined;
@@ -163,18 +177,13 @@ export async function fetchWithGuard(params: {
 
     const contentLength = response.headers.get("content-length");
     if (contentLength) {
-      const size = parseInt(contentLength, 10);
-      if (size > params.maxBytes) {
+      const size = Number(contentLength);
+      if (Number.isFinite(size) && size > params.maxBytes) {
         throw new Error(`Content too large: ${size} bytes (limit: ${params.maxBytes} bytes)`);
       }
     }
 
-    const buffer = Buffer.from(await response.arrayBuffer());
-    if (buffer.byteLength > params.maxBytes) {
-      throw new Error(
-        `Content too large: ${buffer.byteLength} bytes (limit: ${params.maxBytes} bytes)`,
-      );
-    }
+    const buffer = await readResponseWithLimit(response, params.maxBytes);
 
     const contentType = response.headers.get("content-type") || undefined;
     const parsed = parseContentType(contentType);
@@ -183,6 +192,48 @@ export async function fetchWithGuard(params: {
   } finally {
     await release();
   }
+}
+
+async function readResponseWithLimit(res: Response, maxBytes: number): Promise<Buffer> {
+  const body = res.body;
+  if (!body || typeof body.getReader !== "function") {
+    const fallback = Buffer.from(await res.arrayBuffer());
+    if (fallback.byteLength > maxBytes) {
+      throw new Error(`Content too large: ${fallback.byteLength} bytes (limit: ${maxBytes} bytes)`);
+    }
+    return fallback;
+  }
+
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      if (value?.length) {
+        total += value.length;
+        if (total > maxBytes) {
+          try {
+            await reader.cancel();
+          } catch {}
+          throw new Error(`Content too large: ${total} bytes (limit: ${maxBytes} bytes)`);
+        }
+        chunks.push(value);
+      }
+    }
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {}
+  }
+
+  return Buffer.concat(
+    chunks.map((chunk) => Buffer.from(chunk)),
+    total,
+  );
 }
 
 function decodeTextContent(buffer: Buffer, charset: string | undefined): string {
@@ -268,6 +319,7 @@ export async function extractImageContentFromSource(
     if (!source.data) {
       throw new Error("input_image base64 source missing 'data' field");
     }
+    rejectOversizedBase64Payload({ data: source.data, maxBytes: limits.maxBytes, label: "Image" });
     const mimeType = normalizeMimeType(source.mediaType) ?? "image/png";
     if (!limits.allowedMimes.has(mimeType)) {
       throw new Error(`Unsupported image MIME type: ${mimeType}`);
@@ -320,6 +372,7 @@ export async function extractFileContentFromSource(params: {
     if (!source.data) {
       throw new Error("input_file base64 source missing 'data' field");
     }
+    rejectOversizedBase64Payload({ data: source.data, maxBytes: limits.maxBytes, label: "File" });
     const parsed = parseContentType(source.mediaType);
     mimeType = parsed.mimeType;
     charset = parsed.charset;

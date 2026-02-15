@@ -83,8 +83,9 @@ USER.md
 .agent/*.json
 !.agent/workflows/
 
+
 # External plugins (deployed via scripts, not tracked in fork)
 extensions/memory-beanstalk/
 
-local/
+/local/
 package-lock.json

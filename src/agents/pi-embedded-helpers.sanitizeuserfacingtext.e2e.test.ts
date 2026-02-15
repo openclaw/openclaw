@@ -60,6 +60,12 @@ describe("sanitizeUserFacingText", () => {
     );
   });
 
+  it("returns a friendly message for rate limit errors in Error: prefixed payloads", () => {
+    expect(sanitizeUserFacingText("Error: 429 Rate limit exceeded", { errorContext: true })).toBe(
+      "⚠️ API rate limit reached. Please try again later.",
+    );
+  });
+
   it("collapses consecutive duplicate paragraphs", () => {
     const text = "Hello there!\n\nHello there!";
     expect(sanitizeUserFacingText(text)).toBe("Hello there!");
@@ -68,5 +74,26 @@ describe("sanitizeUserFacingText", () => {
   it("does not collapse distinct paragraphs", () => {
     const text = "Hello there!\n\nDifferent line.";
     expect(sanitizeUserFacingText(text)).toBe(text);
+  });
+
+  it("strips leading newlines from LLM output", () => {
+    expect(sanitizeUserFacingText("\n\nHello there!")).toBe("Hello there!");
+    expect(sanitizeUserFacingText("\nHello there!")).toBe("Hello there!");
+    expect(sanitizeUserFacingText("\n\n\nMultiple newlines")).toBe("Multiple newlines");
+  });
+
+  it("strips leading whitespace and newlines combined", () => {
+    expect(sanitizeUserFacingText("\n \nHello")).toBe("Hello");
+    expect(sanitizeUserFacingText("  \n\nHello")).toBe("Hello");
+  });
+
+  it("preserves trailing whitespace and internal newlines", () => {
+    expect(sanitizeUserFacingText("Hello\n\nWorld\n")).toBe("Hello\n\nWorld\n");
+    expect(sanitizeUserFacingText("Line 1\nLine 2")).toBe("Line 1\nLine 2");
+  });
+
+  it("returns empty for whitespace-only input", () => {
+    expect(sanitizeUserFacingText("\n\n")).toBe("");
+    expect(sanitizeUserFacingText("  \n  ")).toBe("");
   });
 });

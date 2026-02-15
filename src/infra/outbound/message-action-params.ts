@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type {
@@ -168,6 +169,62 @@ function normalizeBase64Payload(params: { base64?: string; contentType?: string 
   };
 }
 
+async function hydrateAttachmentPayload(params: {
+  cfg: OpenClawConfig;
+  channel: ChannelId;
+  accountId?: string | null;
+  args: Record<string, unknown>;
+  dryRun?: boolean;
+  contentTypeParam?: string | null;
+  mediaHint?: string | null;
+  fileHint?: string | null;
+}) {
+  const contentTypeParam = params.contentTypeParam ?? undefined;
+  const rawBuffer = readStringParam(params.args, "buffer", { trim: false });
+  const normalized = normalizeBase64Payload({
+    base64: rawBuffer,
+    contentType: contentTypeParam ?? undefined,
+  });
+  if (normalized.base64 !== rawBuffer && normalized.base64) {
+    params.args.buffer = normalized.base64;
+    if (normalized.contentType && !contentTypeParam) {
+      params.args.contentType = normalized.contentType;
+    }
+  }
+
+  const filename = readStringParam(params.args, "filename");
+  const mediaSource = (params.mediaHint ?? undefined) || (params.fileHint ?? undefined);
+
+  if (!params.dryRun && !readStringParam(params.args, "buffer", { trim: false }) && mediaSource) {
+    const maxBytes = resolveAttachmentMaxBytes({
+      cfg: params.cfg,
+      channel: params.channel,
+      accountId: params.accountId,
+    });
+    // mediaSource already validated by normalizeSandboxMediaList; allow bypass but force explicit readFile.
+    const media = await loadWebMedia(mediaSource, {
+      maxBytes,
+      sandboxValidated: true,
+      readFile: (filePath: string) => fs.readFile(filePath),
+    });
+    params.args.buffer = media.buffer.toString("base64");
+    if (!contentTypeParam && media.contentType) {
+      params.args.contentType = media.contentType;
+    }
+    if (!filename) {
+      params.args.filename = inferAttachmentFilename({
+        mediaHint: media.fileName ?? mediaSource,
+        contentType: media.contentType ?? contentTypeParam ?? undefined,
+      });
+    }
+  } else if (!filename) {
+    params.args.filename = inferAttachmentFilename({
+      mediaHint: mediaSource,
+      contentType: contentTypeParam ?? undefined,
+    });
+  }
+}
+
 export async function normalizeSandboxMediaParams(params: {
   args: Record<string, unknown>;
   sandboxRoot?: string;
@@ -233,46 +290,16 @@ export async function hydrateSetGroupIconParams(params: {
     readStringParam(params.args, "filePath", { trim: false });
   const contentTypeParam =
     readStringParam(params.args, "contentType") ?? readStringParam(params.args, "mimeType");
-
-  const rawBuffer = readStringParam(params.args, "buffer", { trim: false });
-  const normalized = normalizeBase64Payload({
-    base64: rawBuffer,
-    contentType: contentTypeParam ?? undefined,
+  await hydrateAttachmentPayload({
+    cfg: params.cfg,
+    channel: params.channel,
+    accountId: params.accountId,
+    args: params.args,
+    dryRun: params.dryRun,
+    contentTypeParam,
+    mediaHint,
+    fileHint,
   });
-  if (normalized.base64 !== rawBuffer && normalized.base64) {
-    params.args.buffer = normalized.base64;
-    if (normalized.contentType && !contentTypeParam) {
-      params.args.contentType = normalized.contentType;
-    }
-  }
-
-  const filename = readStringParam(params.args, "filename");
-  const mediaSource = mediaHint ?? fileHint;
-
-  if (!params.dryRun && !readStringParam(params.args, "buffer", { trim: false }) && mediaSource) {
-    const maxBytes = resolveAttachmentMaxBytes({
-      cfg: params.cfg,
-      channel: params.channel,
-      accountId: params.accountId,
-    });
-    // localRoots: "any" — media paths are already validated by normalizeSandboxMediaList above.
-    const media = await loadWebMedia(mediaSource, maxBytes, { localRoots: "any" });
-    params.args.buffer = media.buffer.toString("base64");
-    if (!contentTypeParam && media.contentType) {
-      params.args.contentType = media.contentType;
-    }
-    if (!filename) {
-      params.args.filename = inferAttachmentFilename({
-        mediaHint: media.fileName ?? mediaSource,
-        contentType: media.contentType ?? contentTypeParam ?? undefined,
-      });
-    }
-  } else if (!filename) {
-    params.args.filename = inferAttachmentFilename({
-      mediaHint: mediaSource,
-      contentType: contentTypeParam ?? undefined,
-    });
-  }
 }
 
 export async function hydrateSendAttachmentParams(params: {
@@ -298,46 +325,16 @@ export async function hydrateSendAttachmentParams(params: {
   if (!caption && message) {
     params.args.caption = message;
   }
-
-  const rawBuffer = readStringParam(params.args, "buffer", { trim: false });
-  const normalized = normalizeBase64Payload({
-    base64: rawBuffer,
-    contentType: contentTypeParam ?? undefined,
+  await hydrateAttachmentPayload({
+    cfg: params.cfg,
+    channel: params.channel,
+    accountId: params.accountId,
+    args: params.args,
+    dryRun: params.dryRun,
+    contentTypeParam,
+    mediaHint,
+    fileHint,
   });
-  if (normalized.base64 !== rawBuffer && normalized.base64) {
-    params.args.buffer = normalized.base64;
-    if (normalized.contentType && !contentTypeParam) {
-      params.args.contentType = normalized.contentType;
-    }
-  }
-
-  const filename = readStringParam(params.args, "filename");
-  const mediaSource = mediaHint ?? fileHint;
-
-  if (!params.dryRun && !readStringParam(params.args, "buffer", { trim: false }) && mediaSource) {
-    const maxBytes = resolveAttachmentMaxBytes({
-      cfg: params.cfg,
-      channel: params.channel,
-      accountId: params.accountId,
-    });
-    // localRoots: "any" — media paths are already validated by normalizeSandboxMediaList above.
-    const media = await loadWebMedia(mediaSource, maxBytes, { localRoots: "any" });
-    params.args.buffer = media.buffer.toString("base64");
-    if (!contentTypeParam && media.contentType) {
-      params.args.contentType = media.contentType;
-    }
-    if (!filename) {
-      params.args.filename = inferAttachmentFilename({
-        mediaHint: media.fileName ?? mediaSource,
-        contentType: media.contentType ?? contentTypeParam ?? undefined,
-      });
-    }
-  } else if (!filename) {
-    params.args.filename = inferAttachmentFilename({
-      mediaHint: mediaSource,
-      contentType: contentTypeParam ?? undefined,
-    });
-  }
 }
 
 export function parseButtonsParam(params: Record<string, unknown>): void {

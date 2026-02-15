@@ -2,6 +2,7 @@ import { createInterface } from "node:readline";
 import { Readable } from "node:stream";
 import type { VoyageEmbeddingClient } from "./embeddings-voyage.js";
 import { retryAsync } from "../infra/retry.js";
+import { applyEmbeddingBatchOutputLine } from "./batch-output.js";
 import { hashText, runWithConcurrency } from "./internal.js";
 
 /**
@@ -322,32 +323,7 @@ export async function runVoyageEmbeddingBatches(params: {
           continue;
         }
         const line = JSON.parse(rawLine) as VoyageBatchOutputLine;
-        const customId = line.custom_id;
-        if (!customId) {
-          continue;
-        }
-        remaining.delete(customId);
-        if (line.error?.message) {
-          errors.push(`${customId}: ${line.error.message}`);
-          continue;
-        }
-        const response = line.response;
-        const statusCode = response?.status_code ?? 0;
-        if (statusCode >= 400) {
-          const message =
-            response?.body?.error?.message ??
-            (typeof response?.body === "string" ? response.body : undefined) ??
-            "unknown error";
-          errors.push(`${customId}: ${message}`);
-          continue;
-        }
-        const data = response?.body?.data ?? [];
-        const embedding = data[0]?.embedding ?? [];
-        if (embedding.length === 0) {
-          errors.push(`${customId}: empty embedding`);
-          continue;
-        }
-        byCustomId.set(customId, embedding);
+        applyEmbeddingBatchOutputLine({ line, remaining, errors, byCustomId });
       }
     }
 

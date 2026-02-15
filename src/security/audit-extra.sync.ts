@@ -449,7 +449,10 @@ export function collectSecretsInConfigFindings(cfg: OpenClawConfig): SecurityAud
   return findings;
 }
 
-export function collectHooksHardeningFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
+export function collectHooksHardeningFindings(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv = process.env,
+): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   if (cfg.hooks?.enabled !== true) {
     return findings;
@@ -468,13 +471,20 @@ export function collectHooksHardeningFindings(cfg: OpenClawConfig): SecurityAudi
   const gatewayAuth = resolveGatewayAuth({
     authConfig: cfg.gateway?.auth,
     tailscaleMode: cfg.gateway?.tailscale?.mode ?? "off",
+    env,
   });
+  const openclawGatewayToken =
+    typeof env.OPENCLAW_GATEWAY_TOKEN === "string" && env.OPENCLAW_GATEWAY_TOKEN.trim()
+      ? env.OPENCLAW_GATEWAY_TOKEN.trim()
+      : null;
   const gatewayToken =
     gatewayAuth.mode === "token" &&
     typeof gatewayAuth.token === "string" &&
     gatewayAuth.token.trim()
       ? gatewayAuth.token.trim()
-      : null;
+      : openclawGatewayToken
+        ? openclawGatewayToken
+        : null;
   if (token && gatewayToken && token === gatewayToken) {
     findings.push({
       checkId: "hooks.token_reuse_gateway_token",
@@ -541,6 +551,33 @@ export function collectHooksHardeningFindings(cfg: OpenClawConfig): SecurityAudi
         'Set hooks.allowedSessionKeyPrefixes (for example, ["hook:"]) or disable request overrides.',
     });
   }
+
+  return findings;
+}
+
+export function collectGatewayHttpSessionKeyOverrideFindings(
+  cfg: OpenClawConfig,
+): SecurityAuditFinding[] {
+  const findings: SecurityAuditFinding[] = [];
+  const chatCompletionsEnabled = cfg.gateway?.http?.endpoints?.chatCompletions?.enabled === true;
+  const responsesEnabled = cfg.gateway?.http?.endpoints?.responses?.enabled === true;
+  if (!chatCompletionsEnabled && !responsesEnabled) {
+    return findings;
+  }
+
+  const enabledEndpoints = [
+    chatCompletionsEnabled ? "/v1/chat/completions" : null,
+    responsesEnabled ? "/v1/responses" : null,
+  ].filter((entry): entry is string => Boolean(entry));
+
+  findings.push({
+    checkId: "gateway.http.session_key_override_enabled",
+    severity: "info",
+    title: "HTTP API session-key override is enabled",
+    detail:
+      `${enabledEndpoints.join(", ")} accept x-openclaw-session-key for per-request session routing. ` +
+      "Treat API credential holders as trusted principals.",
+  });
 
   return findings;
 }
