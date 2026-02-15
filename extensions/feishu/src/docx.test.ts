@@ -120,4 +120,74 @@ describe("feishu_doc image fetch hardening", () => {
     expect(consoleErrorSpy).toHaveBeenCalled();
     consoleErrorSpy.mockRestore();
   });
+
+  it("inserts converted blocks sequentially to preserve order", async () => {
+    convertMock.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        blocks: [
+          { block_id: "b1", block_type: 2, text: { elements: [{ text_run: { content: "one" } }] } },
+          { block_id: "b2", block_type: 2, text: { elements: [{ text_run: { content: "two" } }] } },
+        ],
+        first_level_block_ids: ["b1", "b2"],
+      },
+    });
+    blockChildrenCreateMock
+      .mockResolvedValueOnce({
+        code: 0,
+        data: {
+          children: [{ block_type: 2, block_id: "ins_1" }],
+        },
+      })
+      .mockResolvedValueOnce({
+        code: 0,
+        data: {
+          children: [{ block_type: 2, block_id: "ins_2" }],
+        },
+      });
+
+    const registerTool = vi.fn();
+    registerFeishuDocTools({
+      config: {
+        channels: {
+          feishu: {
+            appId: "app_id",
+            appSecret: "app_secret",
+          },
+        },
+      } as any,
+      logger: { debug: vi.fn(), info: vi.fn() } as any,
+      registerTool,
+    } as any);
+
+    const feishuDocTool = registerTool.mock.calls
+      .map((call) => call[0])
+      .find((tool) => tool.name === "feishu_doc");
+    expect(feishuDocTool).toBeDefined();
+
+    const result = await feishuDocTool.execute("tool-call", {
+      action: "write",
+      doc_token: "doc_1",
+      content: "line1\nline2",
+    });
+
+    expect(blockChildrenCreateMock).toHaveBeenCalledTimes(2);
+    expect(blockChildrenCreateMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        data: {
+          children: [expect.objectContaining({ block_id: "b1" })],
+        },
+      }),
+    );
+    expect(blockChildrenCreateMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        data: {
+          children: [expect.objectContaining({ block_id: "b2" })],
+        },
+      }),
+    );
+    expect(result.details.blocks_added).toBe(2);
+  });
 });
