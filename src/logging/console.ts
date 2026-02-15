@@ -99,12 +99,18 @@ export function routeLogsToStderr(): void {
   loggingState.forceConsoleToStderr = true;
 }
 
-export function setConsoleSubsystemFilter(filters?: string[] | null): void {
-  if (!filters || filters.length === 0) {
+export function setConsoleSubsystemFilter(filters?: string[] | string | null): void {
+  if (!filters) {
     loggingState.consoleSubsystemFilter = null;
     return;
   }
-  const normalized = filters.map((value) => value.trim()).filter((value) => value.length > 0);
+  // Convert string to array by splitting on comma
+  const filterArray = typeof filters === "string" ? filters.split(",") : filters;
+  if (filterArray.length === 0) {
+    loggingState.consoleSubsystemFilter = null;
+    return;
+  }
+  const normalized = filterArray.map((value) => value.trim()).filter((value) => value.length > 0);
   loggingState.consoleSubsystemFilter = normalized.length > 0 ? normalized : null;
 }
 
