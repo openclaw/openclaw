@@ -68,6 +68,7 @@ export function buildEmbeddedRunPayloads(params: {
   config?: OpenClawConfig;
   sessionKey: string;
   provider?: string;
+  model?: string;
   verboseLevel?: VerboseLevel;
   reasoningLevel?: ReasoningLevel;
   toolResultFormat?: ToolResultFormat;
@@ -99,6 +100,7 @@ export function buildEmbeddedRunPayloads(params: {
         cfg: params.config,
         sessionKey: params.sessionKey,
         provider: params.provider,
+        model: params.model,
       })
     : undefined;
   const rawErrorMessage = lastAssistantErrored

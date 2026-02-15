@@ -501,6 +501,7 @@ export async function runEmbeddedPiAgent(
                 cfg: params.config,
                 sessionKey: params.sessionKey ?? params.sessionId,
                 provider,
+                model: modelId,
               })
             : undefined;
           const assistantErrorText =
@@ -867,6 +868,7 @@ export async function runEmbeddedPiAgent(
                       cfg: params.config,
                       sessionKey: params.sessionKey ?? params.sessionId,
                       provider,
+                      model: modelId,
                     })
                   : undefined) ||
                 lastAssistant?.errorMessage?.trim() ||
@@ -875,7 +877,7 @@ export async function runEmbeddedPiAgent(
                   : rateLimitFailure
                     ? "LLM request rate limited."
                     : billingFailure
-                      ? formatBillingErrorMessage(provider)
+                      ? formatBillingErrorMessage(provider, modelId)
                       : authFailure
                         ? "LLM request unauthorized."
                         : "LLM request failed.");
@@ -918,6 +920,7 @@ export async function runEmbeddedPiAgent(
             config: params.config,
             sessionKey: params.sessionKey ?? params.sessionId,
             provider,
+            model: modelId,
             verboseLevel: params.verboseLevel,
             reasoningLevel: params.reasoningLevel,
             toolResultFormat: resolvedToolResultFormat,
