@@ -17,6 +17,11 @@ export const MOONSHOT_DEFAULT_CONTEXT_WINDOW = 256000;
 export const MOONSHOT_DEFAULT_MAX_TOKENS = 8192;
 export const KIMI_CODING_MODEL_ID = "k2p5";
 export const KIMI_CODING_MODEL_REF = `kimi-coding/${KIMI_CODING_MODEL_ID}`;
+export const NEBIUS_TOKEN_FACTORY_BASE_URL = "https://api.tokenfactory.nebius.com/v1";
+export const NEBIUS_TOKEN_FACTORY_DEFAULT_MODEL_ID = "zai-org/GLM-4.7-FP8";
+export const NEBIUS_TOKEN_FACTORY_DEFAULT_MODEL_REF = `nebius-token-factory/${NEBIUS_TOKEN_FACTORY_DEFAULT_MODEL_ID}`;
+export const NEBIUS_TOKEN_FACTORY_DEFAULT_CONTEXT_WINDOW = 131072;
+export const NEBIUS_TOKEN_FACTORY_DEFAULT_MAX_TOKENS = 8192;
 
 export { QIANFAN_BASE_URL, QIANFAN_DEFAULT_MODEL_ID };
 export const QIANFAN_DEFAULT_MODEL_REF = `qianfan/${QIANFAN_DEFAULT_MODEL_ID}`;
@@ -62,6 +67,12 @@ export const MINIMAX_LM_STUDIO_COST = {
   cacheWrite: 0,
 };
 export const MOONSHOT_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+export const NEBIUS_TOKEN_FACTORY_DEFAULT_COST = {
   input: 0,
   output: 0,
   cacheRead: 0,
@@ -134,6 +145,18 @@ export function buildMoonshotModelDefinition(): ModelDefinitionConfig {
     cost: MOONSHOT_DEFAULT_COST,
     contextWindow: MOONSHOT_DEFAULT_CONTEXT_WINDOW,
     maxTokens: MOONSHOT_DEFAULT_MAX_TOKENS,
+  };
+}
+
+export function buildNebiusTokenFactoryModelDefinition(): ModelDefinitionConfig {
+  return {
+    id: NEBIUS_TOKEN_FACTORY_DEFAULT_MODEL_ID,
+    name: "GLM 4.7 FP8",
+    reasoning: false,
+    input: ["text"],
+    cost: NEBIUS_TOKEN_FACTORY_DEFAULT_COST,
+    contextWindow: NEBIUS_TOKEN_FACTORY_DEFAULT_CONTEXT_WINDOW,
+    maxTokens: NEBIUS_TOKEN_FACTORY_DEFAULT_MAX_TOKENS,
   };
 }
 

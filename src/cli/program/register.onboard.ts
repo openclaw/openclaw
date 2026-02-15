@@ -137,6 +137,7 @@ export function registerOnboardCommand(program: Command) {
           cloudflareAiGatewayGatewayId: opts.cloudflareAiGatewayGatewayId as string | undefined,
           cloudflareAiGatewayApiKey: opts.cloudflareAiGatewayApiKey as string | undefined,
           moonshotApiKey: opts.moonshotApiKey as string | undefined,
+          nebiusTokenFactoryApiKey: opts.nebiusTokenFactoryApiKey as string | undefined,
           kimiCodeApiKey: opts.kimiCodeApiKey as string | undefined,
           geminiApiKey: opts.geminiApiKey as string | undefined,
           zaiApiKey: opts.zaiApiKey as string | undefined,

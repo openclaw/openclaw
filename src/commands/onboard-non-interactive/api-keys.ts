@@ -45,6 +45,7 @@ export async function resolveNonInteractiveApiKey(params: {
   flagValue?: string;
   flagName: string;
   envVar: string;
+  envVarFallbacks?: string[];
   envVarName?: string;
   runtime: RuntimeEnv;
   agentDir?: string;
@@ -66,6 +67,15 @@ export async function resolveNonInteractiveApiKey(params: {
     const explicitEnvKey = normalizeOptionalSecretInput(process.env[explicitEnvVar]);
     if (explicitEnvKey) {
       return { key: explicitEnvKey, source: "env" };
+    }
+  }
+
+  if (params.envVarFallbacks?.length) {
+    for (const fallbackVar of params.envVarFallbacks) {
+      const value = normalizeOptionalSecretInput(process.env[fallbackVar]);
+      if (value) {
+        return { key: value, source: "env" };
+      }
     }
   }
 
