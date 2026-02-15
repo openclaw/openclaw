@@ -238,6 +238,11 @@ export function handleMessageEnd(
     ctx.state.includeReasoning || ctx.state.streamReasoning
       ? extractAssistantThinking(assistantMessage) || extractThinkingFromTaggedText(rawText)
       : "";
+  // Accumulate thinking from ALL assistant messages in this run so the final
+  // payloads can include the full reasoning chain, not just the last message's.
+  if (rawThinking) {
+    ctx.state.assistantThinkingTexts.push(rawThinking);
+  }
   const formattedReasoning = rawThinking ? formatReasoningMessage(rawThinking) : "";
   const trimmedText = text.trim();
   const parsedText = trimmedText ? parseReplyDirectives(stripTrailingDirective(trimmedText)) : null;

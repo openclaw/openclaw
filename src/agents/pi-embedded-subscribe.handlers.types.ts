@@ -67,6 +67,9 @@ export type EmbeddedPiSubscribeState = {
   compactionRetryPromise: Promise<void> | null;
   unsubscribed: boolean;
 
+  /** Raw thinking texts accumulated across all assistant messages in this run. */
+  assistantThinkingTexts: string[];
+
   messagingToolSentTexts: string[];
   messagingToolSentTextsNormalized: string[];
   messagingToolSentTargets: MessagingToolSend[];

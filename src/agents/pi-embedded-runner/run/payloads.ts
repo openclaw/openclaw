@@ -70,6 +70,8 @@ export function buildEmbeddedRunPayloads(params: {
   provider?: string;
   verboseLevel?: VerboseLevel;
   reasoningLevel?: ReasoningLevel;
+  /** Pre-accumulated thinking from all assistant messages in the run. */
+  accumulatedReasoning?: string;
   toolResultFormat?: ToolResultFormat;
   inlineToolResultsAllowed: boolean;
 }): Array<{
@@ -151,9 +153,15 @@ export function buildEmbeddedRunPayloads(params: {
     }
   }
 
+  // Use accumulated thinking from ALL assistant messages in the run (not just
+  // the last). In multi-tool-call sequences, intermediate messages contain
+  // [thinking, tool_use] blocks whose reasoning would otherwise be lost.
   const reasoningText =
-    params.lastAssistant && params.reasoningLevel === "on"
-      ? formatReasoningMessage(extractAssistantThinking(params.lastAssistant))
+    params.reasoningLevel === "on"
+      ? formatReasoningMessage(
+          params.accumulatedReasoning ??
+            (params.lastAssistant ? extractAssistantThinking(params.lastAssistant) : ""),
+        )
       : "";
   if (reasoningText) {
     replyItems.push({ text: reasoningText });

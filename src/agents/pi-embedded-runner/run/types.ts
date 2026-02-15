@@ -44,6 +44,8 @@ export type EmbeddedRunAttemptResult = {
   messagingToolSentTexts: string[];
   messagingToolSentTargets: MessagingToolSend[];
   cloudCodeAssistFormatError: boolean;
+  /** Combined raw thinking from all assistant messages in this run. */
+  accumulatedReasoning?: string;
   attemptUsage?: NormalizedUsage;
   compactionCount?: number;
   /** Client tool call detected (OpenResponses hosted tools). */

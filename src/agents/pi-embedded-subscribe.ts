@@ -68,6 +68,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     compactionRetryReject: undefined,
     compactionRetryPromise: null,
     unsubscribed: false,
+    assistantThinkingTexts: [],
     messagingToolSentTexts: [],
     messagingToolSentTextsNormalized: [],
     messagingToolSentTargets: [],
@@ -569,6 +570,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
 
   const resetForCompactionRetry = () => {
     assistantTexts.length = 0;
+    state.assistantThinkingTexts.length = 0;
     toolMetas.length = 0;
     toolMetaById.clear();
     toolSummaryById.clear();
@@ -667,6 +669,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     // which is generated AFTER the tool sends the actual answer.
     didSendViaMessagingTool: () => messagingToolSentTexts.length > 0,
     getLastToolError: () => (state.lastToolError ? { ...state.lastToolError } : undefined),
+    getAccumulatedThinking: () => state.assistantThinkingTexts.filter(Boolean).join("\n\n"),
     getUsageTotals,
     getCompactionCount: () => compactionCount,
     waitForCompactionRetry: () => {

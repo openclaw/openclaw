@@ -920,6 +920,7 @@ export async function runEmbeddedPiAgent(
             provider,
             verboseLevel: params.verboseLevel,
             reasoningLevel: params.reasoningLevel,
+            accumulatedReasoning: attempt.accumulatedReasoning,
             toolResultFormat: resolvedToolResultFormat,
             inlineToolResultsAllowed: false,
           });
