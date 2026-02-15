@@ -120,6 +120,37 @@ describe("TuiStreamAssembler", () => {
     expect(finalText).toBe("Before tool call\nAfter tool call");
   });
 
+  it("does not regress streamed text when a delta drops boundary blocks after tool calls", () => {
+    const assembler = new TuiStreamAssembler();
+    const first = assembler.ingestDelta(
+      "run-5-stream",
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Before tool call" },
+          { type: "tool_use", name: "search" },
+          { type: "text", text: "After tool call" },
+        ],
+      },
+      false,
+    );
+    expect(first).toBe("Before tool call\nAfter tool call");
+
+    const second = assembler.ingestDelta(
+      "run-5-stream",
+      {
+        role: "assistant",
+        content: [
+          { type: "tool_use", name: "search" },
+          { type: "text", text: "After tool call" },
+        ],
+      },
+      false,
+    );
+
+    expect(second).toBeNull();
+  });
+
   it("keeps non-empty final text for plain text prefix/suffix updates", () => {
     const assembler = new TuiStreamAssembler();
     assembler.ingestDelta(
