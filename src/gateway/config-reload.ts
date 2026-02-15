@@ -45,6 +45,7 @@ const DEFAULT_RELOAD_SETTINGS: GatewayReloadSettings = {
 };
 
 const BASE_RELOAD_RULES: ReloadRule[] = [
+  { prefix: "meta", kind: "none" },
   { prefix: "gateway.remote", kind: "none" },
   { prefix: "gateway.reload", kind: "none" },
   { prefix: "hooks.gmail", kind: "hot", actions: ["restart-gmail-watcher"] },
