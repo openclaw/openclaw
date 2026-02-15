@@ -90,13 +90,19 @@ Docs: [Lume Installation](https://cua.ai/docs/lume/guide/getting-started/install
 lume create openclaw --os macos --ipsw latest
 ```
 
-This downloads macOS and creates the VM. A VNC window opens automatically.
+This downloads macOS and creates the VM.
 
 Note: The download can take a while depending on your connection.
 
 ---
 
 ## 3) Complete Setup Assistant
+
+```bash
+lume run openclaw
+```
+
+This opens a VNC window to the VM's display.
 
 In the VNC window:
 
@@ -137,7 +143,7 @@ Replace `youruser` with the account you created, and the IP with your VM's IP.
 Inside the VM:
 
 ```bash
-npm install -g openclaw@latest
+curl -fsSL https://openclaw.ai/install.sh | bash
 openclaw onboard --install-daemon
 ```
 
