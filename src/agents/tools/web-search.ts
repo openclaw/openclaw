@@ -43,12 +43,20 @@ function resolveSearchProxyUrl(): string | undefined {
   );
 }
 
+let cachedDispatcher: ProxyAgent | undefined;
+let cachedProxyUrl: string | undefined;
+
 function resolveSearchDispatcher(): ProxyAgent | undefined {
   const proxyUrl = resolveSearchProxyUrl();
   if (!proxyUrl) {
     return undefined;
   }
-  return new ProxyAgent(proxyUrl);
+  if (cachedDispatcher && cachedProxyUrl === proxyUrl) {
+    return cachedDispatcher;
+  }
+  cachedProxyUrl = proxyUrl;
+  cachedDispatcher = new ProxyAgent(proxyUrl);
+  return cachedDispatcher;
 }
 
 const SEARCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
