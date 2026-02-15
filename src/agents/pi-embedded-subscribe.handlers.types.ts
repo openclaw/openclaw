@@ -37,6 +37,10 @@ export type EmbeddedPiSubscribeState = {
   toolSummaryById: Set<string>;
   lastToolError?: ToolErrorSummary;
 
+  // Defense: track consecutive tool misuse to prevent infinite loops
+  toolMisuseCount: Map<string, number>; // toolName -> consecutive misuse count
+  lastToolMisuseWarned?: string; // toolName that was last warned
+
   blockReplyBreak: "text_end" | "message_end";
   reasoningMode: ReasoningLevel;
   includeReasoning: boolean;
