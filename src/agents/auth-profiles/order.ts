@@ -4,19 +4,6 @@ import { normalizeProviderId } from "../model-selection.js";
 import { listProfilesForProvider } from "./profiles.js";
 import { isProfileInCooldown } from "./usage.js";
 
-function resolveProfileUnusableUntil(stats: {
-  cooldownUntil?: number;
-  disabledUntil?: number;
-}): number | null {
-  const values = [stats.cooldownUntil, stats.disabledUntil]
-    .filter((value): value is number => typeof value === "number")
-    .filter((value) => Number.isFinite(value) && value > 0);
-  if (values.length === 0) {
-    return null;
-  }
-  return Math.max(...values);
-}
-
 /**
  * Resolve when a profile becomes usable for a specific model.
  * Considers both profile-level cooldowns (auth/billing) and model-specific cooldowns (rate_limit).
