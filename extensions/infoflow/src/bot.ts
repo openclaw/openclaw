@@ -6,6 +6,7 @@ import type {
   HandleGroupChatParams,
 } from "./types.js";
 import { resolveInfoflowAccount } from "./accounts.js";
+import { getInfoflowBotLog } from "./logging.js";
 import { createInfoflowReplyDispatcher } from "./reply-dispatcher.js";
 import { getInfoflowRuntime } from "./runtime.js";
 
@@ -73,7 +74,9 @@ export async function handlePrivateChatMessage(params: HandlePrivateChatParams):
   const timestamp = createTime != null ? Number(createTime) * 1000 : Date.now();
 
   if (verbose) {
-    console.log(`[infoflow] private chat: fromuser=${fromuser}, senderName=${senderName}`);
+    getInfoflowBotLog().debug?.(
+      `[infoflow] private chat: fromuser=${fromuser}, senderName=${senderName}`,
+    );
   }
 
   if (!fromuser || !mes.trim()) {
@@ -204,16 +207,9 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
   const verbose = core.logging.shouldLogVerbose();
 
   if (verbose) {
-    console.log(`[infoflow] handleInfoflowMessage invoked:`, {
-      accountId,
-      chatType: event.chatType,
-      fromuser: event.fromuser,
-      groupId: event.groupId,
-      senderName: event.senderName,
-      messageId: event.messageId,
-      timestamp: event.timestamp,
-      wasMentioned: event.wasMentioned,
-    });
+    getInfoflowBotLog().debug?.(
+      `[infoflow] handleInfoflowMessage invoked: accountId=${accountId}, chatType=${event.chatType}, fromuser=${event.fromuser}, groupId=${event.groupId}`,
+    );
   }
 
   const isGroup = chatType === "group";
@@ -246,7 +242,9 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
   const toAddress = isGroup ? `infoflow:${groupId}` : `infoflow:${account.accountId}`;
 
   if (verbose) {
-    console.log(`[infoflow] dispatch: chatType=${chatType}, agentId=${route.agentId}`);
+    getInfoflowBotLog().debug?.(
+      `[infoflow] dispatch: chatType=${chatType}, agentId=${route.agentId}`,
+    );
   }
 
   const body = core.channel.reply.formatAgentEnvelope({
@@ -287,7 +285,7 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
     sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
     ctx: ctxPayload,
     onRecordError: (err) => {
-      console.error(`[infoflow] failed updating session meta: ${String(err)}`);
+      getInfoflowBotLog().error(`[infoflow] failed updating session meta: ${String(err)}`);
     },
   });
 
@@ -322,6 +320,6 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
   });
 
   if (verbose) {
-    console.log(`[infoflow] dispatch complete: ${chatType} from ${fromuser}`);
+    getInfoflowBotLog().debug?.(`[infoflow] dispatch complete: ${chatType} from ${fromuser}`);
   }
 }

@@ -4,6 +4,7 @@ import {
   type ReplyPayload,
 } from "openclaw/plugin-sdk";
 import type { InfoflowAtOptions, InfoflowMessageContentItem } from "./types.js";
+import { getInfoflowSendLog } from "./logging.js";
 import { getInfoflowRuntime } from "./runtime.js";
 import { sendInfoflowMessage } from "./send.js";
 
@@ -65,13 +66,13 @@ export function createInfoflowReplyDispatcher(params: CreateInfoflowReplyDispatc
       if (result.ok) {
         statusSink?.({ lastOutboundAt: Date.now() });
       } else if (result.error) {
-        console.error(`[infoflow] Failed to send message: ${result.error}`);
+        getInfoflowSendLog().error(`[infoflow] Failed to send message: ${result.error}`);
       }
     }
   };
 
   const onError = (err: unknown) => {
-    console.error(`[infoflow] reply failed: ${String(err)}`);
+    getInfoflowSendLog().error(`[infoflow] reply failed: ${String(err)}`);
   };
 
   return {

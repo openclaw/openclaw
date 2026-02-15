@@ -6,6 +6,7 @@ import {
   loadRawBody,
   type WebhookTarget,
 } from "./infoflow-req-parse.js";
+import { getInfoflowWebhookLog } from "./logging.js";
 import { getInfoflowRuntime } from "./runtime.js";
 
 // ---------------------------------------------------------------------------
@@ -95,7 +96,7 @@ export async function handleInfoflowWebhookRequest(
 
   if (verbose) {
     // 记录url全部内容
-    console.log(`[infoflow] request: url=${url}`);
+    getInfoflowWebhookLog().debug?.(`[infoflow] request: url=${url}`);
   }
 
   // Check if path matches Infoflow webhook pattern
@@ -119,7 +120,7 @@ export async function handleInfoflowWebhookRequest(
   // Load raw body once
   const bodyResult = await loadRawBody(req);
   if (!bodyResult.ok) {
-    console.error(`[infoflow] failed to read body: ${bodyResult.error}`);
+    getInfoflowWebhookLog().error(`[infoflow] failed to read body: ${bodyResult.error}`);
     res.statusCode = bodyResult.error === "payload too large" ? 413 : 400;
     res.end(bodyResult.error);
     return true;
@@ -129,14 +130,15 @@ export async function handleInfoflowWebhookRequest(
   try {
     result = await parseAndDispatchInfoflowRequest(req, bodyResult.raw, targets);
   } catch (err) {
-    console.error(`[infoflow] webhook handler error:`, err);
+    const errMsg = err instanceof Error ? err.message : String(err);
+    getInfoflowWebhookLog().error(`[infoflow] webhook handler error: ${errMsg}`);
     res.statusCode = 500;
     res.end("internal error");
     return true;
   }
 
   if (verbose) {
-    console.log(
+    getInfoflowWebhookLog().debug?.(
       `[infoflow] dispatch result: handled=${result.handled}, status=${result.handled ? result.statusCode : "N/A"}`,
     );
   }

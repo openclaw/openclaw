@@ -12,6 +12,7 @@ import type {
 } from "./types.js";
 import { resolveInfoflowAccount } from "./accounts.js";
 import { recordSentMessageId } from "./infoflow-req-parse.js";
+import { getInfoflowSendLog } from "./logging.js";
 import { getInfoflowRuntime } from "./runtime.js";
 
 const DEFAULT_TIMEOUT_MS = 30_000; // 30 seconds
@@ -198,7 +199,7 @@ export async function sendInfoflowPrivateMessage(params: {
   // Get token first
   const tokenResult = await getAppAccessToken({ apiHost, appKey, appSecret, timeoutMs });
   if (!tokenResult.ok || !tokenResult.token) {
-    console.error(`[infoflow:sendPrivate] token error: ${tokenResult.error}`);
+    getInfoflowSendLog().error(`[infoflow:sendPrivate] token error: ${tokenResult.error}`);
     return { ok: false, error: tokenResult.error ?? "failed to get token" };
   }
 
@@ -287,7 +288,7 @@ export async function sendInfoflowPrivateMessage(params: {
     const code = typeof data.code === "string" ? data.code : "";
     if (code !== "ok") {
       const errMsg = String(data.message ?? data.errmsg ?? `code=${code || "unknown"}`);
-      console.error(`[infoflow:sendPrivate] failed: ${errMsg}`);
+      getInfoflowSendLog().error(`[infoflow:sendPrivate] failed: ${errMsg}`);
       return { ok: false, error: errMsg };
     }
 
@@ -296,7 +297,7 @@ export async function sendInfoflowPrivateMessage(params: {
     const errcode = innerData?.errcode;
     if (errcode != null && errcode !== 0) {
       const errMsg = String(innerData?.errmsg ?? `errcode ${errcode}`);
-      console.error(`[infoflow:sendPrivate] failed: ${errMsg}`);
+      getInfoflowSendLog().error(`[infoflow:sendPrivate] failed: ${errMsg}`);
       return {
         ok: false,
         error: errMsg,
@@ -313,7 +314,7 @@ export async function sendInfoflowPrivateMessage(params: {
     return { ok: true, invaliduser: innerData?.invaliduser as string | undefined, msgkey };
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
-    console.error(`[infoflow:sendPrivate] <<< EXCEPTION: ${errMsg}`);
+    getInfoflowSendLog().error(`[infoflow:sendPrivate] exception: ${errMsg}`);
     return { ok: false, error: errMsg };
   }
 }
@@ -384,7 +385,7 @@ export async function sendInfoflowGroupMessage(params: {
   // Get token first
   const tokenResult = await getAppAccessToken({ apiHost, appKey, appSecret, timeoutMs });
   if (!tokenResult.ok || !tokenResult.token) {
-    console.error(`[infoflow:sendGroup] token error: ${tokenResult.error}`);
+    getInfoflowSendLog().error(`[infoflow:sendGroup] token error: ${tokenResult.error}`);
     return { ok: false, error: tokenResult.error ?? "failed to get token" };
   }
 
@@ -428,7 +429,7 @@ export async function sendInfoflowGroupMessage(params: {
     const code = typeof data.code === "string" ? data.code : "";
     if (code !== "ok") {
       const errMsg = String(data.message ?? data.errmsg ?? `code=${code || "unknown"}`);
-      console.error(`[infoflow:sendGroup] failed: ${errMsg}`);
+      getInfoflowSendLog().error(`[infoflow:sendGroup] failed: ${errMsg}`);
       return { ok: false, error: errMsg };
     }
 
@@ -437,7 +438,7 @@ export async function sendInfoflowGroupMessage(params: {
     const errcode = innerData?.errcode;
     if (errcode != null && errcode !== 0) {
       const errMsg = String(innerData?.errmsg ?? `errcode ${errcode}`);
-      console.error(`[infoflow:sendGroup] failed: ${errMsg}`);
+      getInfoflowSendLog().error(`[infoflow:sendGroup] failed: ${errMsg}`);
       return { ok: false, error: errMsg };
     }
 
@@ -451,7 +452,7 @@ export async function sendInfoflowGroupMessage(params: {
     return { ok: true, messageid };
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
-    console.error(`[infoflow:sendGroup] exception: ${errMsg}`);
+    getInfoflowSendLog().error(`[infoflow:sendGroup] exception: ${errMsg}`);
     return { ok: false, error: errMsg };
   }
 }
