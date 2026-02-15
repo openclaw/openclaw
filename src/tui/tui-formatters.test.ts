@@ -148,7 +148,9 @@ describe("sanitizeRenderableText", () => {
   it("breaks very long unbroken tokens to avoid overflow", () => {
     const input = "a".repeat(140);
     const sanitized = sanitizeRenderableText(input);
-    const longestSegment = Math.max(...sanitized.split(/\s+/).map((segment) => segment.length));
+    const longestSegment = Math.max(
+      ...sanitized.split(/[\s\u200B]+/).map((segment) => segment.length),
+    );
 
     expect(longestSegment).toBeLessThanOrEqual(32);
   });
@@ -156,8 +158,18 @@ describe("sanitizeRenderableText", () => {
   it("breaks moderately long unbroken tokens to protect narrow terminals", () => {
     const input = "b".repeat(90);
     const sanitized = sanitizeRenderableText(input);
-    const longestSegment = Math.max(...sanitized.split(/\s+/).map((segment) => segment.length));
+    const longestSegment = Math.max(
+      ...sanitized.split(/[\s\u200B]+/).map((segment) => segment.length),
+    );
 
     expect(longestSegment).toBeLessThanOrEqual(32);
+  });
+
+  it("does not insert visible spaces into long tokens (#17282)", () => {
+    const path = "/Users/pia/.openclaw/workspace/skills/briefing/Briefing-Agenda.md";
+    const sanitized = sanitizeRenderableText(path);
+
+    expect(sanitized).not.toContain(" ");
+    expect(sanitized.replace(/\u200B/g, "")).toBe(path);
   });
 });

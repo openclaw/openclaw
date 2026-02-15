@@ -80,7 +80,7 @@ export function sanitizeRenderableText(text: string): string {
         .join("\n")
     : withoutControlChars;
   return LONG_TOKEN_TEST_RE.test(redacted)
-    ? redacted.replace(LONG_TOKEN_RE, (token) => chunkToken(token, MAX_TOKEN_CHARS).join(" "))
+    ? redacted.replace(LONG_TOKEN_RE, (token) => chunkToken(token, MAX_TOKEN_CHARS).join("\u200B"))
     : redacted;
 }
 
