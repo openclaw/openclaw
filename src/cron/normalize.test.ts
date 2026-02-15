@@ -320,4 +320,33 @@ describe("normalizeCronJobPatch", () => {
     expect(payload.channel).toBe("telegram");
     expect(payload.to).toBe("+15550001111");
   });
+
+  it("defaults enabled to true when omitted", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "no-enabled",
+      schedule: { kind: "cron", expr: "* * * * *" },
+      sessionTarget: "main",
+      payload: {
+        kind: "systemEvent",
+        text: "test",
+      },
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.enabled).toBe(true);
+  });
+
+  it("respects explicit enabled: false", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "disabled",
+      enabled: false,
+      schedule: { kind: "cron", expr: "* * * * *" },
+      sessionTarget: "main",
+      payload: {
+        kind: "systemEvent",
+        text: "test",
+      },
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.enabled).toBe(false);
+  });
 });
