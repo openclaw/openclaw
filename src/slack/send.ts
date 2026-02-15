@@ -198,7 +198,7 @@ async function uploadSlackFile(params: {
   // Upload the file content to the presigned URL
   const uploadResp = await fetch(uploadUrlResp.upload_url, {
     method: "POST",
-    body: new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength),
+    body: new Uint8Array(buffer) as BodyInit,
   });
   if (!uploadResp.ok) {
     throw new Error(`Failed to upload file: HTTP ${uploadResp.status}`);
