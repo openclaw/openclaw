@@ -1,4 +1,4 @@
-import { vi } from "vitest";
+import { vi, type MockInstance } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   dispatchMock: vi.fn(),
@@ -36,13 +36,13 @@ vi.mock("../../channels/reply-prefix.js", () => ({
 }));
 
 type SlashHarnessMocks = {
-  dispatchMock: ReturnType<typeof vi.fn>;
-  readAllowFromStoreMock: ReturnType<typeof vi.fn>;
-  upsertPairingRequestMock: ReturnType<typeof vi.fn>;
-  resolveAgentRouteMock: ReturnType<typeof vi.fn>;
-  finalizeInboundContextMock: ReturnType<typeof vi.fn>;
-  resolveConversationLabelMock: ReturnType<typeof vi.fn>;
-  createReplyPrefixOptionsMock: ReturnType<typeof vi.fn>;
+  dispatchMock: MockInstance;
+  readAllowFromStoreMock: MockInstance;
+  upsertPairingRequestMock: MockInstance;
+  resolveAgentRouteMock: MockInstance;
+  finalizeInboundContextMock: MockInstance;
+  resolveConversationLabelMock: MockInstance;
+  createReplyPrefixOptionsMock: MockInstance;
 };
 
 export function getSlackSlashMocks(): SlashHarnessMocks {
