@@ -542,6 +542,11 @@ export async function executeJob(
   job.state.lastError = undefined;
   emit(state, { jobId: job.id, action: "started", runAtMs: startedAt });
 
+  const jobTimeoutMs =
+    job.payload.kind === "agentTurn" && typeof job.payload.timeoutSeconds === "number"
+      ? job.payload.timeoutSeconds * 1_000
+      : DEFAULT_JOB_TIMEOUT_MS;
+
   let coreResult: {
     status: "ok" | "error" | "skipped";
     error?: string;
@@ -550,7 +555,16 @@ export async function executeJob(
     sessionKey?: string;
   };
   try {
-    coreResult = await executeJobCore(state, job);
+    let timeoutId: NodeJS.Timeout;
+    coreResult = await Promise.race([
+      executeJobCore(state, job),
+      new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(
+          () => reject(new Error("cron: job execution timed out")),
+          jobTimeoutMs,
+        );
+      }),
+    ]).finally(() => clearTimeout(timeoutId!));
   } catch (err) {
     coreResult = { status: "error", error: String(err) };
   }
