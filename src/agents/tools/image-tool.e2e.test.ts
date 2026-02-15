@@ -16,6 +16,52 @@ async function writeAuthProfiles(agentDir: string, profiles: unknown) {
   );
 }
 
+const ONE_PIXEL_PNG_B64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+
+async function withTempWorkspacePng(
+  cb: (args: { workspaceDir: string; imagePath: string }) => Promise<void>,
+) {
+  const workspaceParent = await fs.mkdtemp(path.join(process.cwd(), ".openclaw-workspace-image-"));
+  try {
+    const workspaceDir = path.join(workspaceParent, "workspace");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    const imagePath = path.join(workspaceDir, "photo.png");
+    await fs.writeFile(imagePath, Buffer.from(ONE_PIXEL_PNG_B64, "base64"));
+    await cb({ workspaceDir, imagePath });
+  } finally {
+    await fs.rm(workspaceParent, { recursive: true, force: true });
+  }
+}
+
+function stubMinimaxOkFetch() {
+  const fetch = vi.fn().mockResolvedValue({
+    ok: true,
+    status: 200,
+    statusText: "OK",
+    headers: new Headers(),
+    json: async () => ({
+      content: "ok",
+      base_resp: { status_code: 0, status_msg: "" },
+    }),
+  });
+  // @ts-expect-error partial global
+  global.fetch = fetch;
+  vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
+  return fetch;
+}
+
+function createMinimaxImageConfig(): OpenClawConfig {
+  return {
+    agents: {
+      defaults: {
+        model: { primary: "minimax/MiniMax-M2.1" },
+        imageModel: { primary: "minimax/MiniMax-VL-01" },
+      },
+    },
+  };
+}
+
 describe("image tool implicit imageModel config", () => {
   const priorFetch = global.fetch;
 
@@ -152,130 +198,74 @@ describe("image tool implicit imageModel config", () => {
   });
 
   it("allows workspace images outside default local media roots", async () => {
-    const workspaceParent = await fs.mkdtemp(
-      path.join(process.cwd(), ".openclaw-workspace-image-"),
-    );
-    try {
-      const workspaceDir = path.join(workspaceParent, "workspace");
-      await fs.mkdir(workspaceDir, { recursive: true });
-      const imagePath = path.join(workspaceDir, "photo.png");
-      const pngB64 =
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
-      await fs.writeFile(imagePath, Buffer.from(pngB64, "base64"));
-
-      const fetch = vi.fn().mockResolvedValue({
-        ok: true,
-        status: 200,
-        statusText: "OK",
-        headers: new Headers(),
-        json: async () => ({
-          content: "ok",
-          base_resp: { status_code: 0, status_msg: "" },
-        }),
-      });
-      // @ts-expect-error partial global
-      global.fetch = fetch;
-      vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
-
+    await withTempWorkspacePng(async ({ workspaceDir, imagePath }) => {
+      const fetch = stubMinimaxOkFetch();
       const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-image-"));
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: {
-            model: { primary: "minimax/MiniMax-M2.1" },
-            imageModel: { primary: "minimax/MiniMax-VL-01" },
-          },
-        },
-      };
+      try {
+        const cfg = createMinimaxImageConfig();
 
-      const withoutWorkspace = createImageTool({ config: cfg, agentDir });
-      expect(withoutWorkspace).not.toBeNull();
-      if (!withoutWorkspace) {
-        throw new Error("expected image tool");
+        const withoutWorkspace = createImageTool({ config: cfg, agentDir });
+        expect(withoutWorkspace).not.toBeNull();
+        if (!withoutWorkspace) {
+          throw new Error("expected image tool");
+        }
+        await expect(
+          withoutWorkspace.execute("t0", {
+            prompt: "Describe the image.",
+            image: imagePath,
+          }),
+        ).rejects.toThrow(/Local media path is not under an allowed directory/i);
+
+        const withWorkspace = createImageTool({ config: cfg, agentDir, workspaceDir });
+        expect(withWorkspace).not.toBeNull();
+        if (!withWorkspace) {
+          throw new Error("expected image tool");
+        }
+
+        await expect(
+          withWorkspace.execute("t1", {
+            prompt: "Describe the image.",
+            image: imagePath,
+          }),
+        ).resolves.toMatchObject({
+          content: [{ type: "text", text: "ok" }],
+        });
+
+        expect(fetch).toHaveBeenCalledTimes(1);
+      } finally {
+        await fs.rm(agentDir, { recursive: true, force: true });
       }
-      await expect(
-        withoutWorkspace.execute("t0", {
-          prompt: "Describe the image.",
-          image: imagePath,
-        }),
-      ).rejects.toThrow(/Local media path is not under an allowed directory/i);
-
-      const withWorkspace = createImageTool({ config: cfg, agentDir, workspaceDir });
-      expect(withWorkspace).not.toBeNull();
-      if (!withWorkspace) {
-        throw new Error("expected image tool");
-      }
-
-      await expect(
-        withWorkspace.execute("t1", {
-          prompt: "Describe the image.",
-          image: imagePath,
-        }),
-      ).resolves.toMatchObject({
-        content: [{ type: "text", text: "ok" }],
-      });
-
-      expect(fetch).toHaveBeenCalledTimes(1);
-    } finally {
-      await fs.rm(workspaceParent, { recursive: true, force: true });
-    }
+    });
   });
 
   it("allows workspace images via createOpenClawCodingTools default workspace root", async () => {
-    const workspaceParent = await fs.mkdtemp(
-      path.join(process.cwd(), ".openclaw-workspace-image-"),
-    );
-    try {
-      const workspaceDir = path.join(workspaceParent, "workspace");
-      await fs.mkdir(workspaceDir, { recursive: true });
-      const imagePath = path.join(workspaceDir, "photo.png");
-      const pngB64 =
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
-      await fs.writeFile(imagePath, Buffer.from(pngB64, "base64"));
-
-      const fetch = vi.fn().mockResolvedValue({
-        ok: true,
-        status: 200,
-        statusText: "OK",
-        headers: new Headers(),
-        json: async () => ({
-          content: "ok",
-          base_resp: { status_code: 0, status_msg: "" },
-        }),
-      });
-      // @ts-expect-error partial global
-      global.fetch = fetch;
-      vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
-
+    await withTempWorkspacePng(async ({ imagePath }) => {
+      const fetch = stubMinimaxOkFetch();
       const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-image-"));
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: {
-            model: { primary: "minimax/MiniMax-M2.1" },
-            imageModel: { primary: "minimax/MiniMax-VL-01" },
-          },
-        },
-      };
+      try {
+        const cfg = createMinimaxImageConfig();
 
-      const tools = createOpenClawCodingTools({ config: cfg, agentDir });
-      const tool = tools.find((candidate) => candidate.name === "image");
-      expect(tool).not.toBeNull();
-      if (!tool) {
-        throw new Error("expected image tool");
+        const tools = createOpenClawCodingTools({ config: cfg, agentDir });
+        const tool = tools.find((candidate) => candidate.name === "image");
+        expect(tool).not.toBeNull();
+        if (!tool) {
+          throw new Error("expected image tool");
+        }
+
+        await expect(
+          tool.execute("t1", {
+            prompt: "Describe the image.",
+            image: imagePath,
+          }),
+        ).resolves.toMatchObject({
+          content: [{ type: "text", text: "ok" }],
+        });
+
+        expect(fetch).toHaveBeenCalledTimes(1);
+      } finally {
+        await fs.rm(agentDir, { recursive: true, force: true });
       }
-
-      await expect(
-        tool.execute("t1", {
-          prompt: "Describe the image.",
-          image: imagePath,
-        }),
-      ).resolves.toMatchObject({
-        content: [{ type: "text", text: "ok" }],
-      });
-
-      expect(fetch).toHaveBeenCalledTimes(1);
-    } finally {
-      await fs.rm(workspaceParent, { recursive: true, force: true });
-    }
+    });
   });
 
   it("sandboxes image paths like the read tool", async () => {
