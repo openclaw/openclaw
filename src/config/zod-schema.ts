@@ -406,13 +406,14 @@ export const OpenClawSchema = z
             allowTailscale: z.boolean().optional(),
             rateLimit: z
               .object({
-                maxAttempts: z.number().optional(),
-                windowMs: z.number().optional(),
-                lockoutMs: z.number().optional(),
-                exemptLoopback: z.boolean().optional(),
+                maxAttempts: z.number().optional().default(5),
+                windowMs: z.number().optional().default(60000),
+                lockoutMs: z.number().optional().default(300000),
+                exemptLoopback: z.boolean().optional().default(true),
               })
               .strict()
-              .optional(),
+              .optional()
+              .default({}),
             trustedProxy: z
               .object({
                 userHeader: z.string().min(1, "userHeader is required for trusted-proxy mode"),
