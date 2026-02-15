@@ -91,6 +91,10 @@ import {
 import { splitSdkTools } from "../tool-split.js";
 import { describeUnknownError, mapThinkingLevel } from "../utils.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
+import {
+  selectCompactionTimeoutSnapshot,
+  shouldFlagCompactionTimeout,
+} from "./compaction-timeout.js";
 import { shouldUseImagePreAnalysis, analyzeImagesWithImageModel } from "./image-pre-analysis.js";
 import { detectAndLoadPromptImages, modelSupportsImages } from "./images.js";
 
