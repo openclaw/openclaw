@@ -6,6 +6,9 @@ const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "agent-default"));
 const resolveAgentDir = vi.hoisted(() => vi.fn(() => "/tmp/agent-default"));
 const resolveMemorySearchConfig = vi.hoisted(() => vi.fn());
 const resolveApiKeyForProvider = vi.hoisted(() => vi.fn());
+const resolveMemoryBackendConfig = vi.hoisted(() =>
+  vi.fn(() => ({ backend: "builtin", citations: "auto" })),
+);
 
 vi.mock("../terminal/note.js", () => ({
   note,
@@ -24,6 +27,10 @@ vi.mock("../agents/model-auth.js", () => ({
   resolveApiKeyForProvider,
 }));
 
+vi.mock("../memory/backend-config.js", () => ({
+  resolveMemoryBackendConfig,
+}));
+
 import { noteMemorySearchHealth } from "./doctor-memory-search.js";
 
 describe("noteMemorySearchHealth", () => {
@@ -35,6 +42,8 @@ describe("noteMemorySearchHealth", () => {
     resolveAgentDir.mockClear();
     resolveMemorySearchConfig.mockReset();
     resolveApiKeyForProvider.mockReset();
+    resolveMemoryBackendConfig.mockReset();
+    resolveMemoryBackendConfig.mockReturnValue({ backend: "builtin", citations: "auto" });
   });
 
   it("does not warn when remote apiKey is configured for explicit provider", async () => {
@@ -59,6 +68,25 @@ describe("noteMemorySearchHealth", () => {
 
     await noteMemorySearchHealth(cfg);
 
+    expect(note).not.toHaveBeenCalled();
+    expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
+  });
+
+  it("does not warn when memory backend is qmd (#17263)", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "auto",
+      local: {},
+      remote: {},
+    });
+    resolveMemoryBackendConfig.mockReturnValue({
+      backend: "qmd",
+      citations: "auto",
+      qmd: {},
+    });
+
+    await noteMemorySearchHealth(cfg);
+
+    // QMD handles embeddings internally — no warning expected.
     expect(note).not.toHaveBeenCalled();
     expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
   });
