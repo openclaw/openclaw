@@ -82,10 +82,13 @@ export async function sendChatMessage(
   // Add image previews to the message for display
   if (hasAttachments) {
     for (const att of attachments) {
-      contentBlocks.push({
-        type: "image",
-        source: { type: "base64", media_type: att.mimeType, data: att.dataUrl },
-      });
+      const parsed = dataUrlToBase64(att.dataUrl);
+      if (parsed) {
+        contentBlocks.push({
+          type: "image",
+          source: { type: "base64", media_type: parsed.mimeType, data: parsed.content },
+        });
+      }
     }
   }
 
