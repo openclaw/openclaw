@@ -191,8 +191,8 @@ export const handleWhoamiCommand: CommandHandler = async (params, allowTextComma
     const handle = senderUsername.startsWith("@") ? senderUsername : `@${senderUsername}`;
     lines.push(`Username: ${handle}`);
   }
-  if (params.ctx.ChatType === "group" && params.ctx.From) {
-    lines.push(`Chat: ${params.ctx.From}`);
+  if (params.ctx.ChatType === "group" && params.ctx.To) {
+    lines.push(`Chat: ${params.ctx.To}`);
   }
   if (params.ctx.MessageThreadId != null) {
     lines.push(`Thread: ${params.ctx.MessageThreadId}`);
