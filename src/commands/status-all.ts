@@ -1,5 +1,6 @@
 import type { GatewayService } from "../daemon/service.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { detectLocalModelOverrides } from "../agents/models-config-overrides.js";
 import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { withProgress } from "../cli/progress.js";
@@ -159,6 +160,7 @@ export async function statusAllCommand(
 
     progress.setLabel("Scanning agents…");
     const agentStatus = await getAgentLocalStatuses(cfg);
+    const localModelOverrides = await detectLocalModelOverrides(cfg);
     progress.tick();
     progress.setLabel("Summarizing channels…");
     const channels = await buildChannelsTable(cfg, { showSecrets: false });
@@ -389,6 +391,7 @@ export async function statusAllCommand(
         message: issue.message,
       })),
       agentStatus,
+      localModelOverrides,
       connectionDetailsForReport,
       diagnosis: {
         snap,

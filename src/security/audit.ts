@@ -628,6 +628,26 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
   findings.push(...collectSmallModelRiskFindings({ cfg, env }));
   findings.push(...collectExposureMatrixFindings(cfg));
 
+  // Check for local agent models.json overrides that silently shadow central config
+  if (opts.includeFilesystem !== false) {
+    const { detectLocalModelOverrides } = await import("../agents/models-config-overrides.js");
+    const overrides = await detectLocalModelOverrides(cfg);
+    for (const override of overrides) {
+      findings.push({
+        checkId: "local-model-override",
+        severity: "warn",
+        title: `Agent "${override.agentId}" has local models.json override`,
+        detail:
+          `${override.modelsJsonPath} contains providers [${override.providerKeys.join(", ")}] ` +
+          `that silently shadow the central openclaw.json model configuration. ` +
+          `Changes via gateway config.patch will appear to succeed but have no effect on this agent.`,
+        remediation:
+          `Remove the local override: rm "${override.modelsJsonPath}" — ` +
+          `or use agents.list[].model in openclaw.json to configure per-agent models centrally.`,
+      });
+    }
+  }
+
   const configSnapshot =
     opts.includeFilesystem !== false
       ? await readConfigSnapshotForAudit({ env, configPath }).catch(() => null)

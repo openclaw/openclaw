@@ -1,3 +1,4 @@
+import type { LocalModelOverride } from "../../agents/models-config-overrides.js";
 import type { ProgressReporter } from "../../cli/progress.js";
 import { renderTable } from "../../terminal/table.js";
 import { isRich, theme } from "../../terminal/theme.js";
@@ -43,6 +44,7 @@ export async function buildStatusAllReportLines(params: {
   channels: ChannelsTable;
   channelIssues: ChannelIssueLike[];
   agentStatus: AgentStatusLike;
+  localModelOverrides?: LocalModelOverride[];
   connectionDetailsForReport: string;
   diagnosis: Omit<
     Parameters<typeof appendStatusAllDiagnosis>[0],
@@ -178,6 +180,28 @@ export async function buildStatusAllReportLines(params: {
   lines.push("");
   lines.push(heading("Agents"));
   lines.push(agentsTable.trimEnd());
+
+  // Warn about local models.json overrides that silently shadow central config
+  if (params.localModelOverrides && params.localModelOverrides.length > 0) {
+    lines.push("");
+    lines.push(
+      warn("⚠️  Local model overrides detected (these silently shadow openclaw.json):"),
+    );
+    for (const override of params.localModelOverrides) {
+      const providers = override.providerKeys.join(", ");
+      lines.push(
+        `  ${warn("→")} Agent ${warn(`"${override.agentId}"`)} has local models.json with providers: ${providers}`,
+      );
+      lines.push(`    ${muted(override.modelsJsonPath)}`);
+    }
+    lines.push(
+      `  ${muted("Fix: Remove these files so agents inherit from openclaw.json, or use agents.list[].model in central config.")}`,
+    );
+    lines.push(
+      `  ${muted("Run: find ~/.openclaw/agents/ -name models.json -delete")}`,
+    );
+  }
+
   lines.push("");
   lines.push(heading("Diagnosis (read-only)"));
 
