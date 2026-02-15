@@ -30,6 +30,7 @@ import {
   summarizeExistingConfig,
 } from "../commands/onboard-helpers.js";
 import { setupInternalHooks } from "../commands/onboard-hooks.js";
+import { setupMemoryRouter } from "../commands/onboard-memoryrouter.js";
 import { promptRemoteGatewayConfig } from "../commands/onboard-remote.js";
 import { setupSkills } from "../commands/onboard-skills.js";
 import {
@@ -407,6 +408,9 @@ export async function runOnboardingWizard(
   }
 
   await warnIfModelConfigLooksOff(nextConfig, prompter);
+
+  // MemoryRouter setup (persistent AI memory)
+  nextConfig = await setupMemoryRouter(nextConfig, prompter);
 
   const gateway = await configureGatewayForOnboarding({
     flow,

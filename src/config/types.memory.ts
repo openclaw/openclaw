@@ -4,6 +4,17 @@ export type MemoryBackend = "builtin" | "qmd";
 export type MemoryCitationsMode = "auto" | "on" | "off";
 export type MemoryQmdSearchMode = "query" | "search" | "vsearch";
 
+export type MemoryRouterConfig = {
+  /** Enable MemoryRouter integration. Default: false */
+  enabled?: boolean;
+  /** Memory key (mk_xxx). Required when enabled. */
+  key?: string;
+  /** MemoryRouter API endpoint. Override for self-hosted. Default: https://api.memoryrouter.ai/v1 */
+  endpoint?: string;
+  /** Fall back to direct provider call on unsupported providers. Default: true */
+  fallbackOnUnsupported?: boolean;
+};
+
 export type MemoryConfig = {
   backend?: MemoryBackend;
   citations?: MemoryCitationsMode;
