@@ -307,6 +307,13 @@ export function buildSystemPrompt(params: {
 }
 
 export function normalizeCliModel(modelId: string, backend: CliBackendConfig): string {
+  if (!modelId || typeof modelId !== "string") {
+    console.warn(
+      `[openclaw] normalizeCliModel called with invalid modelId: ${String(modelId)}. ` +
+        `This indicates a bug in the caller.`,
+    );
+    return "";
+  }
   const trimmed = modelId.trim();
   if (!trimmed) {
     return trimmed;
