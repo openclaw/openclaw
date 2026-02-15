@@ -181,6 +181,28 @@ describe("gateway server cron", () => {
       expect(merged?.delivery?.channel).toBe("telegram");
       expect(merged?.delivery?.to).toBe("19098680");
 
+      const modelOnlyPatchRes = await rpcReq(ws, "cron.update", {
+        id: mergeJobId,
+        patch: {
+          payload: {
+            model: "anthropic/claude-sonnet-4-5",
+          },
+        },
+      });
+      expect(modelOnlyPatchRes.ok).toBe(true);
+      const modelOnlyPatched = modelOnlyPatchRes.payload as
+        | {
+            payload?: {
+              kind?: unknown;
+              message?: unknown;
+              model?: unknown;
+            };
+          }
+        | undefined;
+      expect(modelOnlyPatched?.payload?.kind).toBe("agentTurn");
+      expect(modelOnlyPatched?.payload?.message).toBe("hello");
+      expect(modelOnlyPatched?.payload?.model).toBe("anthropic/claude-sonnet-4-5");
+
       const legacyDeliveryPatchRes = await rpcReq(ws, "cron.update", {
         id: mergeJobId,
         patch: {
