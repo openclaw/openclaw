@@ -24,9 +24,20 @@ const makeMsg = (overrides: Partial<WebInboundMsg>): WebInboundMsg =>
 describe("isBotMentionedFromTargets", () => {
   const mentionCfg = { mentionRegexes: [/\bopenclaw\b/i] };
 
-  it("ignores regex matches when other mentions are present", () => {
+  it("falls through to regex when bot JID not in mentionedJids", () => {
     const msg = makeMsg({
       body: "@OpenClaw please help",
+      mentionedJids: ["19998887777@s.whatsapp.net"],
+      selfE164: "+15551234567",
+      selfJid: "15551234567@s.whatsapp.net",
+    });
+    const targets = resolveMentionTargets(msg);
+    expect(isBotMentionedFromTargets(msg, mentionCfg, targets)).toBe(true);
+  });
+
+  it("returns false when neither JID nor regex match with other mentions present", () => {
+    const msg = makeMsg({
+      body: "hey @OtherPerson what's up",
       mentionedJids: ["19998887777@s.whatsapp.net"],
       selfE164: "+15551234567",
       selfJid: "15551234567@s.whatsapp.net",
