@@ -1,0 +1,36 @@
+{
+  "command": "edit",
+  "session_id": "blossoms-hero",
+  "model": "gemini-3-pro-image-preview",
+  "prompt": "Look at [source]. It shows PET storage jars stacked in 3 columns. I need you to extract ONLY the jar at the TOP of the MIDDLE column — the one with the blue screw lid and blue floral 'Blossoms' print.\n\nExtract it cleanly from the stacked arrangement. Remove the other jars, remove the background wall, remove everything except this one jar. Give it a transparent/clean background. Preserve EVERY detail of the actual product — the exact print, exact colors, exact shape, exact lid. Do not regenerate or reinterpret anything — this is a real product photo and I need the real product, just isolated.",
+  "images": [
+    {"path": "C:/Users/autif/.openclaw/media/inbound/4d600e77-162c-4dfa-b128-970628900f12.jpg", "label": "source"}
+  ],
+  "specs": {
+    "extraction": {
+      "target_description": "The single PET jar at the top of the middle column in [source] — blue lid, blue Blossoms floral print. Extract ONLY this jar, removing all others and the background.",
+      "targets": [{"bbox": [30, 330, 420, 670], "image_label": "source"}],
+      "isolation": "complete",
+      "edge_treatment": "surgical clean, anti-aliased"
+    },
+    "fidelity": {
+      "preserve_colors": "EXACT — do not alter any colors. This is a real product photo.",
+      "preserve_artwork": "EXACT — every flower, every leaf, every line must match the source pixel for pixel",
+      "preserve_text": "EXACT — Blossoms text as-is from source",
+      "preserve_texture": "EXACT — real PET surface, real lid surface",
+      "preserve_shape": "EXACT — real proportions from the source photo",
+      "hero_features": "Everything. This is extraction, not generation."
+    },
+    "background": {
+      "treatment": "solid_color",
+      "color": "#F0F0F0"
+    },
+    "output": {
+      "format": "PNG",
+      "size": "2K",
+      "aspect_ratio": "3:4",
+      "filename": "blossoms_edit_t1"
+    }
+  },
+  "output_dir": "D:/openclaw/workspace/output"
+}

@@ -1,0 +1,68 @@
+{
+  "command": "generate",
+  "model": "gemini-3-pro-image-preview",
+  "prompt": "Professional studio product photograph of a clear PET plastic storage jar. Reference [source] for the EXACT artwork, colors, and design — specifically the jar in the middle column, top position (the one with the blue screw lid and 'Blossoms' cursive floral print).\n\nThis is a single straight-sided cylindrical PET jar, approximately 500ml, 12cm tall, 8cm diameter. Wide mouth with a solid blue opaque plastic screw-on lid. The body is clear transparent PET with a single continuous printed artwork wrap: blue lily flowers, green leaves, cursive 'Blossoms' text, blue wave motifs, and blue diamond/geometric accents.\n\nThe clear PET plastic is a SELLING POINT — the transparency demonstrates quality. Light must transmit through the body, revealing internal clarity. You should see faint artwork from the back side through the front wall (characteristic of clear PET jars). The surface has a subtle glossy sheen but NO harsh speculars or hot spots.\n\nStudio photography setup: Three-point lighting with soft diffused key light from upper-left at 45 degrees casting gentle modelling shadows to define the cylinder. Fill light from right to prevent harsh shadows. Subtle rim/backlight to define the cylindrical edges, enhance the PET transparency, and create a thin bright outline separating the product from the background. Light gray (#F5F5F5) gradient background — NOT pure white — because the clear plastic edges would disappear against pure white. Soft natural contact shadow beneath for grounding and weight.\n\nEye-level camera with very slight elevation (5-10 degrees). Product fills 75% of frame, centered, with even margins. Deep focus — everything tack sharp from front label through lid to back wall. All printed text must be crisp and legible at 200% zoom.\n\nThis must look like it came from a professional product photography studio. The kind of shot you'd see on Amazon or Flipkart for a premium kitchenware brand.",
+  "images": [
+    {"path": "C:/Users/autif/.openclaw/media/inbound/4d600e77-162c-4dfa-b128-970628900f12.jpg", "label": "source"}
+  ],
+  "specs": {
+    "extraction": {
+      "target_description": "The clear PET jar with blue 'Blossoms' floral print and blue screw lid — top jar in the middle column of the stacked arrangement in [source]. Use as REFERENCE for artwork and colors, not literal extraction.",
+      "targets": [{"bbox": [30, 350, 400, 650], "image_label": "source"}],
+      "edge_treatment": "surgical clean, anti-aliased"
+    },
+    "fidelity": {
+      "preserve_colors": "Match the exact blues, greens, and lid color from [source] — do not generate new colors, extract from source",
+      "preserve_artwork": "The printed floral design must match [source] exactly — blue lilies, green leaves, wave pattern, diamond accents. ONE continuous wrap around the jar body, NOT duplicated bands",
+      "preserve_text": "'Blossoms' in its exact cursive script style as shown in [source]",
+      "preserve_texture": "Clear PET plastic — glossy, transparent, smooth surface with subtle sheen",
+      "preserve_shape": "Straight-sided cylinder — uniform diameter from base to lid. NO hourglass, NO pinching, NO tapering. Simple cylindrical jar.",
+      "hero_features": "1) Blossoms cursive branding text 2) Blue lily flower artwork 3) Clear PET transparency showing internal clarity"
+    },
+    "background": {
+      "treatment": "gradient",
+      "color": "Light gray gradient — #F5F5F5 center fading to #E8E8E8 at edges. NOT pure white — clear PET edges disappear against pure white.",
+      "scene_description": "Clean studio infinity curve, subtle tonal variation to define product edges"
+    },
+    "lighting": {
+      "type": "studio three-point with rim accent",
+      "direction": "Key light: upper-left at 45 degrees. Fill: from right, softer. Rim/backlight: behind and slightly above to define cylindrical edges and enhance PET transparency.",
+      "quality": "Soft diffused — no harsh speculars on plastic surface. Light should wrap around the cylinder.",
+      "color_temperature": "5500K neutral daylight — no warm or cool cast",
+      "shadows": "Soft natural contact shadow beneath jar, gentle shadow falloff. Shadow direction consistent with key light position.",
+      "special_requirements": "Rim light must create a thin bright outline along the jar edges to separate clear PET from background. Backlight should transmit through the PET body revealing transparency and internal clarity — this is the defining quality of clear PET packaging."
+    },
+    "composition": {
+      "product_coverage": "75% of frame",
+      "position": "centered with even margins",
+      "camera_angle": "eye-level with very slight elevation (5-10 degrees) — shows full front label artwork and lid top",
+      "negative_space": "balanced — even on all sides, slight extra space above lid for breathing room"
+    },
+    "material_treatment": {
+      "primary_material": "clear_plastic",
+      "rendering_notes": "Clear PET plastic: Light TRANSMITS through the body — you should see the back-side artwork faintly reversed through the front wall. Surface has subtle glossy sheen that follows the cylindrical form as a gentle highlight band. NO harsh speculars, NO hot spots. The printed artwork sits ON the transparent surface — it should look like printed film wrapped around a clear cylinder. The lid is OPAQUE blue plastic — different material behavior from the clear body. Lid should show subtle form-following highlight.",
+      "preserve_details": "Printed artwork must be sharp and legible. Lid color must match source exactly. PET clarity is the hero — the transparency IS the quality signal."
+    },
+    "enhancement": {
+      "sharpness": "Tack sharp — all printed text and artwork crisp and legible at 200% zoom",
+      "contrast": "Subtle lift to make printed artwork pop against the clear body without over-processing",
+      "color_treatment": "Accurate to [source] — true blues, true greens. No AI color drift, no over-saturation.",
+      "detail_enhancement": "Label text legibility, embossed lid detail, PET surface quality"
+    },
+    "focus": {
+      "focus_point": "Front face of jar — Blossoms text and lily flower artwork",
+      "depth_of_field": "Deep — everything sharp from front label through lid to back wall. This is catalog photography, not lifestyle."
+    },
+    "custom_spec": {
+      "instruction": "This jar is a Pavisha brand product for the Indian market. It's a household storage container — the kind you'd see stacked in an Indian kitchen storing dal, sugar, or spices. The photography should be PROFESSIONAL e-commerce quality — think Amazon/Flipkart hero image. The clear PET transparency is the #1 selling point — customers need to SEE that the jar is crystal clear, high quality, not cloudy or cheap-looking.",
+      "artistic_intent": "Commercial product photography that builds trust and conveys quality. Professional but not over-produced."
+    },
+    "output": {
+      "format": "PNG",
+      "size": "2K",
+      "aspect_ratio": "1:1",
+      "filename": "pavisha_blossoms_medium_v3"
+    }
+  },
+  "output_dir": "D:/openclaw/workspace/output"
+}

@@ -1,0 +1,58 @@
+{
+  "command": "generate",
+  "model": "gemini-2.5-flash-image",
+  "prompt": "Professional product photography: extract the MEDIUM-sized clear PET jar with blue 'Blossoms' floral print and BLUE screw-on lid from [source]. It's in the middle column, top position of the 3-column stacked arrangement. Create a clean catalog hero shot on pure white background. The jar is clear transparent PET plastic with printed blue flower artwork featuring the word 'Blossoms' in cursive, blue wave patterns, green leaves, and large blue lily flowers. The lid is a solid blue opaque plastic screw cap. Studio three-point lighting: soft key light from upper-left to reveal the transparency of the PET and the printed artwork, fill from right for even illumination, subtle backlight to define the jar's cylindrical edges and show the clear plastic quality. Soft contact shadow beneath. Camera angle: eye-level to slight elevation (10-15 degrees) to show the full label artwork and lid. Product fills 75-80% of frame, centered. The clear PET material should show its transparency and quality — light should pass through the jar showing internal clarity.",
+  "images": [
+    {"path": "C:/Users/autif/.openclaw/media/inbound/4d600e77-162c-4dfa-b128-970628900f12.jpg", "label": "source"}
+  ],
+  "specs": {
+    "extraction": {
+      "target_description": "The medium-sized clear PET jar with blue Blossoms floral print and blue lid, located at the top of the middle column in [source]",
+      "targets": [{"bbox": [30, 350, 400, 650], "image_label": "source"}]
+    },
+    "fidelity": {
+      "preserve_colors": "Exact blue of the flower artwork and lid from source — do not shift or alter",
+      "preserve_artwork": "Exact 'Blossoms' cursive text, blue lily flowers, green leaves, blue wave pattern — all printed artwork must match source precisely",
+      "preserve_text": "The word 'Blossoms' in its exact cursive font style",
+      "preserve_texture": "Clear PET transparency, glossy smooth surface",
+      "preserve_shape": "Cylindrical jar proportions, screw lid profile, wide mouth opening",
+      "hero_features": "Blossoms printed artwork, blue lid, clear PET transparency"
+    },
+    "background": {
+      "treatment": "solid_color",
+      "color": "pure white (#FFFFFF)"
+    },
+    "lighting": {
+      "type": "studio three-point",
+      "direction": "key light upper-left at 45 degrees, fill from right, subtle backlight for rim definition",
+      "quality": "soft diffused — reveal PET transparency without harsh speculars",
+      "shadows": "soft natural contact shadow beneath jar",
+      "special_requirements": "Light must pass through the clear PET to show transparency and internal clarity — this is a key selling point of PET packaging"
+    },
+    "composition": {
+      "product_coverage": "75-80% of frame",
+      "position": "centered",
+      "camera_angle": "eye-level to slight elevation 10-15 degrees, showing full label artwork and lid"
+    },
+    "material_treatment": {
+      "primary_material": "clear_plastic",
+      "rendering_notes": "Clear PET — show surface sheen without harsh speculars, light transmits through the body revealing clarity and quality. The printed artwork sits ON the transparent surface. Label must be sharp and legible. No harsh hot spots.",
+      "preserve_details": "Printed artwork sharpness, lid color accuracy, PET clarity"
+    },
+    "enhancement": {
+      "sharpness": "tack sharp — artwork text and flowers must be crisp and legible",
+      "contrast": "subtle lift to make printed artwork pop against clear body",
+      "color_treatment": "accurate to source — true blues, greens, no AI drift"
+    },
+    "focus": {
+      "focus_point": "front label artwork — Blossoms text and flowers",
+      "depth_of_field": "deep — everything sharp front to back, this is catalog"
+    },
+    "output": {
+      "format": "PNG",
+      "aspect_ratio": "3:4",
+      "filename": "pavisha_blossoms_medium_hero"
+    }
+  },
+  "output_dir": "D:/openclaw/workspace/output"
+}

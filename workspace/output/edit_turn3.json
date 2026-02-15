@@ -1,0 +1,38 @@
+{
+  "command": "edit",
+  "session_id": "blossoms-hero",
+  "model": "gemini-3-pro-image-preview",
+  "prompt": "The product looks real and authentic — that's great. But the LIGHTING is killing it. It looks like a passport photo. I need this to look like premium e-commerce photography.\n\nDo these changes while keeping the same real product:\n\n1. PURE WHITE BACKGROUND — switch from gray to #FFFFFF. Amazon-standard pure white.\n\n2. ADD DRAMATIC RIM/BACKLIGHT — This is the #1 priority. Place a strong strip light directly behind the jar. I need BRIGHT GLOWING EDGES running along both sides of the jar cylinder. This is how you sell clear PET — the edges should GLOW with transmitted light. Think of how Milton, Borosil, Cello light their clear containers on Amazon.\n\n3. LIGHT THE LID — Add a small overhead spot that rakes across the lid surface at a low angle, creating STRONG micro-shadows in the embossed PAVISHA text and relief pattern. The embossing should POP with dramatic shadow contrast.\n\n4. REFLECTIVE SURFACE — Place the jar on a high-gloss reflective surface (black or white acrylic). The reflection should be CRISP and mirror-sharp with a controlled gradient fade — not ghostly and faint like before.\n\n5. BOOST COLOR VIBRANCY — Increase saturation 10-15%. The blues should be ELECTRIC. The green leaves should be vivid. Make it pop.\n\n6. ADD SLIGHT ANGLE — Rotate the jar 5-10° off dead center for dimension and visual energy.\n\n7. SHARPEN — Tack sharp everything. Labels at 200% zoom must be legible.\n\nThe goal: Transform this from a ₹500 tabletop shoot into a ₹5000 studio shoot. Same REAL product, DRAMATICALLY better photography. When someone scrolls past this on Amazon, they should STOP.",
+  "specs": {
+    "lighting": {
+      "type": "Multi-light premium product setup",
+      "direction": "Key: upper-left soft diffused. Fill: right soft. RIM: STRONG strip light directly behind jar — this is the HERO LIGHT. Overhead spot raking across lid for embossing shadows.",
+      "quality": "Key and fill: soft. Rim: HARD and BRIGHT — razor-sharp specular highlights tracing the cylindrical contour. Lid spot: hard and directional for embossing.",
+      "color_temperature": "5500K main lights. Slight warm fill (4800K) to make blue print pop by contrast.",
+      "shadows": "Dramatic — the lighting should create DEPTH, not flatness. Strong contact shadow.",
+      "special_requirements": "The rim light is NON-NEGOTIABLE. It must create visible bright white glowing edges along BOTH sides of the jar. This is how you sell transparent containers. The PET edges should look like they're lit from within."
+    },
+    "background": {
+      "treatment": "solid_color",
+      "color": "pure white #FFFFFF",
+      "scene_description": "High-gloss reflective surface (white acrylic) beneath the jar showing a crisp mirror reflection with gradient fade"
+    },
+    "enhancement": {
+      "sharpness": "Tack sharp — razor edges, all text crisp",
+      "contrast": "HIGH — S-curve for depth and punch. This should pop off the screen.",
+      "color_treatment": "Boost saturation 10-15% — electric blues, vivid greens. Make the print colors SING.",
+      "detail_enhancement": "Lid embossing shadows, PET edge glow, print sharpness, reflection clarity"
+    },
+    "composition": {
+      "camera_angle": "5-10° rotation off dead center for dimension",
+      "product_coverage": "75% of frame"
+    },
+    "output": {
+      "format": "PNG",
+      "size": "2K",
+      "aspect_ratio": "1:1",
+      "filename": "blossoms_edit_t3"
+    }
+  },
+  "output_dir": "D:/openclaw/workspace/output"
+}

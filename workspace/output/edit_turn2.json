@@ -1,0 +1,50 @@
+{
+  "command": "edit",
+  "session_id": "blossoms-hero",
+  "model": "gemini-3-pro-image-preview",
+  "prompt": "Good extraction. Now look at [lids] — it shows 4 Pavisha-branded lids. The BLUE lid in the top-right position is the ACTUAL lid for this jar. It has embossed 'PAVISHA' text and an embossed decorative nature/floral relief pattern on its top surface.\n\nReplace the current lid on the jar with this ACTUAL Pavisha embossed lid from [lids]. The lid should sit naturally on the jar — same diameter, screwed on properly.\n\nAlso enhance the photography:\n- Add studio three-point lighting: soft key from upper-left, fill from right, STRONG rim/backlight from behind to create dramatic bright edge outlines along both sides of the jar and transmit light through the PET body\n- The rim light should make the jar edges GLOW — this is the money shot for clear PET\n- Light gray gradient background (#F0F0F0 to #E0E0E0) with a subtle reflective surface beneath showing a soft faded reflection of the jar base\n- Soft contact shadow for grounding\n- The lid's embossed PAVISHA pattern should be revealed through directional micro-shadows\n- Slight 3/4 rotation (10-15°) so we see both the front label AND the lid top surface\n- Make the PET transparency the star — light passing through, back-side artwork visible, internal clarity\n- Tack sharp everything\n\nKeep the REAL jar body from the previous turn — only replace the lid and enhance the lighting/background. Do NOT regenerate the jar artwork.",
+  "images": [
+    {"path": "C:/Users/autif/.openclaw/media/inbound/c91e9a0a-d443-4c9c-aea3-83dd661954dd.jpg", "label": "lids"}
+  ],
+  "specs": {
+    "fidelity": {
+      "preserve_colors": "EXACT jar body colors from previous turn. Lid color from [lids] blue lid.",
+      "preserve_artwork": "EXACT jar body artwork from previous turn. Lid embossing from [lids].",
+      "preserve_shape": "Straight cylinder jar body. Lid proportions from [lids].",
+      "hero_features": "1) PAVISHA embossed lid 2) Blossoms print 3) PET transparency with rim glow"
+    },
+    "lighting": {
+      "type": "studio three-point with STRONG rim accent",
+      "direction": "Key: upper-left 45°. Fill: right. Rim: behind, STRONG — create dramatic bright outlines.",
+      "quality": "Soft key/fill. Crisp aggressive rim light for edge separation.",
+      "shadows": "Contact shadow + micro-shadows in lid embossing",
+      "special_requirements": "Rim light must be DRAMATIC — clearly visible bright edges on both sides of the jar. Backlight transmitting through PET is the hero moment."
+    },
+    "background": {
+      "treatment": "gradient",
+      "color": "#F0F0F0 center to #E0E0E0 edges",
+      "scene_description": "Studio infinity curve with subtle reflective surface beneath — soft faded reflection of jar base visible"
+    },
+    "material_treatment": {
+      "primary_material": "clear_plastic",
+      "rendering_notes": "Strong rim light transmitting through PET edges. Back-side artwork visible through front wall. Lid: opaque blue with embossed relief revealed by directional light.",
+      "preserve_details": "Lid PAVISHA embossing, jar print sharpness, PET edge glow"
+    },
+    "enhancement": {
+      "sharpness": "Tack sharp — all text legible at 200%",
+      "contrast": "Medium-high punch — make it pop. This should look aspirational.",
+      "color_treatment": "Accurate to sources. Vibrant but not oversaturated."
+    },
+    "composition": {
+      "camera_angle": "Slight 3/4 rotation (10-15°) showing front label + lid top simultaneously",
+      "product_coverage": "75% of frame"
+    },
+    "output": {
+      "format": "PNG",
+      "size": "2K",
+      "aspect_ratio": "1:1",
+      "filename": "blossoms_edit_t2"
+    }
+  },
+  "output_dir": "D:/openclaw/workspace/output"
+}

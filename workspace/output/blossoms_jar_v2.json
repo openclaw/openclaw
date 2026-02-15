@@ -1,0 +1,52 @@
+{
+  "command": "generate",
+  "model": "gemini-3-pro-image-preview",
+  "prompt": "Create a professional studio product photograph of a clear PET plastic storage jar. Use [source] as the REFERENCE for the exact artwork, colors, and design — specifically look at the TOP JAR in the MIDDLE COLUMN (it has a blue lid and blue floral 'Blossoms' print).\n\nThe jar is:\n- A single straight-sided CYLINDER shape (not tapered, not hourglass, not pinched — a simple uniform-width cylinder)\n- Clear transparent PET plastic body\n- Wide mouth opening with a solid BLUE opaque plastic screw-on lid\n- ONE continuous printed artwork wrap covering the body: blue lily flowers, green leaves, blue wave pattern, and the cursive word 'Blossoms' — exactly matching [source]\n- Approximately 500ml capacity, roughly 12cm tall x 8cm diameter\n\nPhotography setup:\n- Pure white background\n- Studio three-point lighting: soft key light from upper-left, fill from right, subtle backlight to define the cylindrical edges and show PET transparency\n- Light passes through the clear PET body showing its quality and clarity\n- Eye-level camera angle, very slight elevation (5-10 degrees)\n- Soft contact shadow beneath the jar for grounding\n- Product fills 75% of frame, centered\n- Tack sharp focus throughout — all printed text must be legible",
+  "images": [
+    {"path": "C:/Users/autif/.openclaw/media/inbound/4d600e77-162c-4dfa-b128-970628900f12.jpg", "label": "source"}
+  ],
+  "specs": {
+    "fidelity": {
+      "preserve_colors": "Match the exact blues, greens from the Blossoms jar in [source] — the blue lid color, the blue flower artwork, the green leaves",
+      "preserve_artwork": "Match the Blossoms print from [source] exactly — blue lily flowers, green leaves, wave pattern, cursive Blossoms text. ONE continuous wrap, NOT repeated bands",
+      "preserve_text": "The word 'Blossoms' in cursive script exactly as shown in [source]",
+      "hero_features": "Blossoms cursive text, blue lily flower artwork, blue lid, clear PET transparency"
+    },
+    "background": {
+      "treatment": "solid_color",
+      "color": "pure white (#FFFFFF)"
+    },
+    "lighting": {
+      "type": "studio three-point",
+      "direction": "key light upper-left at 45 degrees, fill from right, backlight for rim and edge definition",
+      "quality": "soft diffused",
+      "shadows": "soft natural contact shadow beneath jar",
+      "special_requirements": "Backlight should pass through clear PET to reveal transparency. No harsh speculars on the plastic surface."
+    },
+    "composition": {
+      "product_coverage": "75% of frame",
+      "position": "centered",
+      "camera_angle": "eye-level with very slight 5-10 degree elevation"
+    },
+    "material_treatment": {
+      "primary_material": "clear_plastic",
+      "rendering_notes": "Clear PET — light transmits through body showing clarity. Surface has subtle sheen but no harsh hot spots. Printed artwork sits ON the transparent surface and should be sharp and legible. You should see slight refraction and the back of the jar faintly through the front.",
+      "preserve_details": "Artwork sharpness, text legibility, PET clarity, lid color"
+    },
+    "enhancement": {
+      "sharpness": "tack sharp — printed text and artwork must be crisp",
+      "color_treatment": "accurate to source"
+    },
+    "focus": {
+      "focus_point": "front label — Blossoms text and flowers",
+      "depth_of_field": "deep — everything sharp"
+    },
+    "output": {
+      "format": "PNG",
+      "size": "2K",
+      "aspect_ratio": "3:4",
+      "filename": "pavisha_blossoms_medium_v2"
+    }
+  },
+  "output_dir": "D:/openclaw/workspace/output"
+}

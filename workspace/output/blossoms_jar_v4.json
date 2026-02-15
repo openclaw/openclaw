@@ -1,0 +1,71 @@
+{
+  "command": "generate",
+  "model": "gemini-3-pro-image-preview",
+  "prompt": "Professional studio product photograph composing a COMPLETE product from two source images.\n\n[lids] shows 4 colored Pavisha-branded lids in a 2x2 grid. The BLUE lid is in the top-right position — it has embossed 'PAVISHA' text and an embossed decorative nature/floral pattern on its inner surface. This is the ACTUAL cap for this product.\n\n[jars] shows PET storage jars stacked in columns. The Blossoms jar (blue floral print, cursive 'Blossoms' text, blue lily flowers, green leaves, wave motifs) is the jar body.\n\nCOMPOSE these two components into ONE complete product shot: the clear PET Blossoms jar body WITH the actual blue Pavisha embossed lid from [lids] screwed on top.\n\nThe COMPLETE product is:\n- A straight-sided cylindrical clear PET jar, ~500ml, ~12cm tall, ~8cm diameter\n- Body: clear transparent PET with printed blue floral 'Blossoms' artwork (single continuous wrap)\n- Lid: the ACTUAL blue opaque plastic screw-on cap from [lids] — with embossed PAVISHA text and embossed floral/nature relief pattern on top surface. The lid has a raised rim edge and the embossed pattern is visible through light-and-shadow interplay on the opaque plastic surface.\n\nPhotography setup:\n- Light gray gradient background (#F2F2F2 to #E5E5E5) — NOT pure white, clear PET edges vanish against white\n- Studio three-point lighting: soft diffused key light upper-left at 45°, fill from right, STRONG rim/backlight from behind to define cylindrical edges and dramatically enhance PET transparency\n- The rim light should create a clear bright outline along both sides of the jar, separating it from the background\n- Backlight transmits through clear PET body showing internal clarity and quality\n- The lid's embossed PAVISHA text and pattern should be revealed through directional lighting casting micro-shadows in the relief\n- Soft contact shadow + subtle surface reflection beneath for grounding\n- Eye-level camera, very slight 5-10° elevation and slight 10-15° rotation (3/4 view) to show both the front label AND the lid's embossed top surface\n- Product fills 75% of 1:1 frame, centered\n- Deep focus — everything tack sharp\n- 5500K neutral color temperature\n\nThis must look like premium Amazon/Flipkart hero photography — the kind that makes someone click 'Add to Cart'.",
+  "images": [
+    {"path": "C:/Users/autif/.openclaw/media/inbound/c91e9a0a-d443-4c9c-aea3-83dd661954dd.jpg", "label": "lids"},
+    {"path": "C:/Users/autif/.openclaw/media/inbound/4d600e77-162c-4dfa-b128-970628900f12.jpg", "label": "jars"}
+  ],
+  "specs": {
+    "extraction": {
+      "target_description": "COMPOSE two components: 1) The blue Pavisha lid from top-right of 2x2 grid in [lids], and 2) The Blossoms PET jar body from middle column top position in [jars]. Assemble into one complete product — lid screwed on top of jar.",
+      "targets": [
+        {"bbox": [30, 500, 480, 970], "image_label": "lids"},
+        {"bbox": [30, 350, 400, 650], "image_label": "jars"}
+      ]
+    },
+    "fidelity": {
+      "preserve_colors": "Match EXACT blue from both sources — the lid color from [lids] and the artwork blues from [jars]. Do not generate new colors.",
+      "preserve_artwork": "Jar body: match the Blossoms print from [jars] exactly — blue lilies, green leaves, cursive 'Blossoms' text, wave motifs, diamond accents. ONE continuous wrap. Lid: match the embossed PAVISHA text and nature/floral relief pattern from [lids] exactly.",
+      "preserve_text": "'Blossoms' cursive on jar body as in [jars]. 'PAVISHA' embossed on lid as in [lids].",
+      "preserve_texture": "Jar: clear PET — glossy, transparent, quality surface. Lid: opaque plastic with embossed relief texture — visible through directional lighting.",
+      "preserve_shape": "Jar: straight-sided cylinder, uniform diameter. Lid: round with raised rim edge, matching proportions from [lids].",
+      "hero_features": "1) PAVISHA embossed lid with relief pattern 2) Blossoms printed artwork on clear PET body 3) PET transparency showing internal clarity"
+    },
+    "background": {
+      "treatment": "gradient",
+      "color": "Light gray gradient — #F2F2F2 center to #E5E5E5 edges. Studio infinity curve feel.",
+      "scene_description": "Clean neutral studio with subtle reflective surface beneath jar for a premium touch — the kind of slightly glossy surface that shows a soft, faded reflection of the product base"
+    },
+    "lighting": {
+      "type": "studio three-point with strong rim accent",
+      "direction": "Key light: upper-left at 45°, soft diffused. Fill: right side, gentler. Rim/backlight: directly behind and above — STRONG enough to create visible bright edge outlines on both sides of the jar AND transmit through the PET body.",
+      "quality": "Soft diffused key and fill. Crisp rim light for dramatic edge separation.",
+      "color_temperature": "5500K neutral daylight — no color cast",
+      "shadows": "Soft contact shadow beneath jar grounding it. Micro-shadows in the lid's embossed pattern to reveal the PAVISHA text and relief detail.",
+      "special_requirements": "The rim light is CRITICAL — it must create a dramatic bright outline along the jar edges that makes the product POP from the background. The backlight transmitting through the PET is the money shot — it demonstrates clarity and quality. The lid's embossed pattern needs directional side-lighting to cast micro-shadows that make the relief visible."
+    },
+    "composition": {
+      "product_coverage": "75% of frame",
+      "position": "centered with even margins",
+      "camera_angle": "eye-level with slight 5-10° elevation AND slight 10-15° rotation to 3/4 view — this shows both the front label artwork AND the lid's embossed top surface simultaneously",
+      "negative_space": "balanced, slight extra above lid"
+    },
+    "material_treatment": {
+      "primary_material": "clear_plastic",
+      "rendering_notes": "TWO distinct materials in this product:\n1) JAR BODY — Clear PET: light transmits through showing transparency and back-side artwork (faintly reversed). Surface has subtle glossy sheen following the cylinder. No harsh speculars. The transparency IS the quality signal.\n2) LID — Opaque blue plastic: surface has embossed relief. Directional lighting reveals the PAVISHA text and decorative pattern through shadow interplay. Subtle form-following highlight on the curved lid surface. The embossing depth should be visible.",
+      "preserve_details": "Lid embossing (PAVISHA + pattern) must be clearly visible. Jar printed artwork must be sharp and legible. PET clarity is paramount."
+    },
+    "enhancement": {
+      "sharpness": "Tack sharp — all text (both PAVISHA on lid and Blossoms on body) crisp and legible at 200% zoom",
+      "contrast": "Medium punch — make the product pop. S-curve contrast to add depth without over-processing.",
+      "color_treatment": "Accurate to both source images. True blues, true greens. No AI drift.",
+      "detail_enhancement": "Lid embossing detail, label text legibility, PET surface quality, rim light edge definition"
+    },
+    "focus": {
+      "focus_point": "Front face — Blossoms text and lid simultaneously",
+      "depth_of_field": "Deep — everything sharp. Catalog standard."
+    },
+    "custom_spec": {
+      "instruction": "This is a COMPONENT COMPOSITION. The lid and jar body come from SEPARATE source photos. The final image must look like ONE complete, assembled product — a clear PET storage jar with its matching blue Pavisha embossed lid. The lid must look naturally screwed onto the jar, not floating or misaligned. This is a Pavisha brand product for the Indian household storage market. The photography should make someone want to buy a set of these.",
+      "artistic_intent": "Premium e-commerce hero shot. Trust-building commercial photography. The clear PET transparency and the embossed Pavisha lid branding are the two key trust signals — both must shine."
+    },
+    "output": {
+      "format": "PNG",
+      "size": "2K",
+      "aspect_ratio": "1:1",
+      "filename": "pavisha_blossoms_complete_v4"
+    }
+  },
+  "output_dir": "D:/openclaw/workspace/output"
+}
