@@ -298,7 +298,15 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
   if (slashEnabled) {
     try {
       const teams = await fetchMattermostUserTeams(client, botUserId);
-      const gatewayPort = cfg.gateway?.port ?? 3015;
+
+      // Use the *runtime* listener port when available (e.g. `openclaw gateway run --port <port>`).
+      // The gateway sets OPENCLAW_GATEWAY_PORT when it boots, but the config file may still contain
+      // a different port.
+      const envPortRaw = process.env.OPENCLAW_GATEWAY_PORT?.trim();
+      const envPort = envPortRaw ? Number.parseInt(envPortRaw, 10) : NaN;
+      const gatewayPort =
+        Number.isFinite(envPort) && envPort > 0 ? envPort : (cfg.gateway?.port ?? 3015);
+
       const callbackUrl = resolveCallbackUrl({
         config: slashConfig,
         gatewayPort,
