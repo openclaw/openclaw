@@ -20,6 +20,41 @@ import { normalizeProviderId } from "./model-selection.js";
 
 export { ensureAuthProfileStore, resolveAuthProfileOrder } from "./auth-profiles.js";
 
+/**
+ * Vault proxy placeholder API key.
+ * When vault proxy mode is active for a provider, this dummy key is returned
+ * instead of a real API key. The vault sidecar (nginx reverse proxy) strips
+ * this and injects the real credential before forwarding to the target API.
+ */
+export const VAULT_PROXY_PLACEHOLDER_KEY = "vault-proxy-managed";
+
+/**
+ * Check if a provider has a vault proxy configured.
+ * Returns the proxy URL if vault mode is enabled and a proxy mapping exists
+ * for the given provider, undefined otherwise.
+ */
+export function resolveVaultProxyUrl(
+  cfg: OpenClawConfig | undefined,
+  provider: string,
+): string | undefined {
+  if (!cfg?.vault?.enabled) {
+    return undefined;
+  }
+  const proxies = cfg.vault.proxies;
+  if (!proxies) {
+    return undefined;
+  }
+  const direct = proxies[provider]?.trim();
+  if (direct) {
+    return direct;
+  }
+  const normalized = normalizeProviderId(provider);
+  if (normalized === provider) {
+    return undefined;
+  }
+  return proxies[normalized]?.trim() || undefined;
+}
+
 const AWS_BEARER_ENV = "AWS_BEARER_TOKEN_BEDROCK";
 const AWS_ACCESS_KEY_ENV = "AWS_ACCESS_KEY_ID";
 const AWS_SECRET_KEY_ENV = "AWS_SECRET_ACCESS_KEY";
@@ -142,6 +177,16 @@ export async function resolveApiKeyForProvider(params: {
 }): Promise<ResolvedProviderAuth> {
   const { provider, cfg, profileId, preferredProfile } = params;
   const store = params.store ?? ensureAuthProfileStore(params.agentDir);
+
+  // Vault proxy mode: if a proxy is configured for this provider, return a
+  // placeholder key. The vault sidecar injects the real credential.
+  if (resolveVaultProxyUrl(cfg, provider)) {
+    return {
+      apiKey: VAULT_PROXY_PLACEHOLDER_KEY,
+      source: "vault-proxy",
+      mode: "api-key",
+    };
+  }
 
   if (profileId) {
     const resolved = await resolveApiKeyForProfile({
@@ -331,6 +376,11 @@ export function resolveModelAuthMode(
   const resolved = provider?.trim();
   if (!resolved) {
     return undefined;
+  }
+
+  // Vault proxy mode: if a proxy is configured, auth is handled by the sidecar.
+  if (resolveVaultProxyUrl(cfg, resolved)) {
+    return "api-key";
   }
 
   const authOverride = resolveProviderAuthOverride(cfg, resolved);

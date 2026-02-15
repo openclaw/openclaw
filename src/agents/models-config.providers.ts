@@ -16,7 +16,12 @@ import {
   HUGGINGFACE_MODEL_CATALOG,
   buildHuggingfaceModelDefinition,
 } from "./huggingface-models.js";
-import { resolveAwsSdkEnvVarName, resolveEnvApiKey } from "./model-auth.js";
+import {
+  resolveAwsSdkEnvVarName,
+  resolveEnvApiKey,
+  resolveVaultProxyUrl,
+  VAULT_PROXY_PLACEHOLDER_KEY,
+} from "./model-auth.js";
 import { OLLAMA_NATIVE_BASE_URL } from "./ollama-stream.js";
 import {
   buildSyntheticModelDefinition,
@@ -318,6 +323,7 @@ function normalizeGoogleProvider(provider: ProviderConfig): ProviderConfig {
 export function normalizeProviders(params: {
   providers: ModelsConfig["providers"];
   agentDir: string;
+  config?: OpenClawConfig;
 }): ModelsConfig["providers"] {
   const { providers } = params;
   if (!providers) {
@@ -333,8 +339,21 @@ export function normalizeProviders(params: {
     const normalizedKey = key.trim();
     let normalizedProvider = provider;
 
+    // Vault proxy mode: rewrite baseUrl and set placeholder apiKey so the
+    // vault sidecar handles credential injection transparently.
+    const vaultProxy = resolveVaultProxyUrl(params.config, normalizedKey);
+    if (vaultProxy) {
+      mutated = true;
+      normalizedProvider = {
+        ...normalizedProvider,
+        baseUrl: vaultProxy,
+        apiKey: VAULT_PROXY_PLACEHOLDER_KEY,
+      };
+    }
+
     // Fix common misconfig: apiKey set to "${ENV_VAR}" instead of "ENV_VAR".
     if (
+      !vaultProxy &&
       normalizedProvider.apiKey &&
       normalizeApiKeyConfig(normalizedProvider.apiKey) !== normalizedProvider.apiKey
     ) {
@@ -347,9 +366,10 @@ export function normalizeProviders(params: {
 
     // If a provider defines models, pi's ModelRegistry requires apiKey to be set.
     // Fill it from the environment or auth profiles when possible.
+    // Skip when vault proxy is active (apiKey already set to placeholder).
     const hasModels =
       Array.isArray(normalizedProvider.models) && normalizedProvider.models.length > 0;
-    if (hasModels && !normalizedProvider.apiKey?.trim()) {
+    if (!vaultProxy && hasModels && !normalizedProvider.apiKey?.trim()) {
       const authMode =
         normalizedProvider.auth ?? (normalizedKey === "amazon-bedrock" ? "aws-sdk" : undefined);
       if (authMode === "aws-sdk") {
@@ -366,6 +386,14 @@ export function normalizeProviders(params: {
         if (apiKey?.trim()) {
           mutated = true;
           normalizedProvider = { ...normalizedProvider, apiKey };
+        } else {
+          // SDK's ModelRegistry.validateConfig rejects providers with models
+          // but no apiKey. Local providers (ollama, autorouter) don't need
+          // auth, but omitting apiKey causes the ENTIRE models.json to fail
+          // validation — silently dropping all provider overrides (including
+          // vault proxy baseUrl rewrites for other providers).
+          mutated = true;
+          normalizedProvider = { ...normalizedProvider, apiKey: "no-key-required" };
         }
       }
     }
