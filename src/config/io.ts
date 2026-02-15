@@ -767,9 +767,13 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           config: normalizeConfigPaths(
             applyTalkApiKey(
               applyModelDefaults(
-                applyAgentDefaults(
-                  applySessionDefaults(
-                    applyLoggingDefaults(applyMessageDefaults(validated.config)),
+                applyCompactionDefaults(
+                  applyContextPruningDefaults(
+                    applyAgentDefaults(
+                      applySessionDefaults(
+                        applyLoggingDefaults(applyMessageDefaults(validated.config)),
+                      ),
+                    ),
                   ),
                 ),
               ),
