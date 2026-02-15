@@ -293,19 +293,18 @@ export function registerConfigCli(program: Command) {
       [] as string[],
     )
     .action(async (opts) => {
-      const { CONFIGURE_WIZARD_SECTIONS, configureCommand, configureCommandWithSections } =
-        await import("../commands/configure.js");
-      const sections: string[] = Array.isArray(opts.section)
-        ? opts.section
-            .map((value: unknown) => (typeof value === "string" ? value.trim() : ""))
-            .filter(Boolean)
-        : [];
+      const {
+        CONFIGURE_WIZARD_SECTIONS,
+        configureCommand,
+        configureCommandWithSections,
+        parseConfigureWizardSections,
+      } = await import("../commands/configure.js");
+      const { sections, invalid } = parseConfigureWizardSections(opts.section);
       if (sections.length === 0) {
         await configureCommand(defaultRuntime);
         return;
       }
 
-      const invalid = sections.filter((s) => !CONFIGURE_WIZARD_SECTIONS.includes(s as never));
       if (invalid.length > 0) {
         defaultRuntime.error(
           `Invalid --section: ${invalid.join(", ")}. Expected one of: ${CONFIGURE_WIZARD_SECTIONS.join(", ")}.`,
