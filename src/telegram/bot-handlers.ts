@@ -5,6 +5,7 @@ import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { hasControlCommand } from "../auto-reply/command-detection.js";
 import {
   createInboundDebouncer,
+  resolveDebounceMedia,
   resolveInboundDebounceMs,
 } from "../auto-reply/inbound-debounce.js";
 import { buildCommandsPaginationKeyboard } from "../auto-reply/reply/commands-info.js";
@@ -85,6 +86,7 @@ export const registerTelegramHandlers = ({
   let textFragmentProcessing: Promise<void> = Promise.resolve();
 
   const debounceMs = resolveInboundDebounceMs({ cfg, channel: "telegram" });
+  const debounceMedia = resolveDebounceMedia(cfg);
   type TelegramDebounceEntry = {
     ctx: TelegramContext;
     msg: Message;
@@ -97,11 +99,11 @@ export const registerTelegramHandlers = ({
     debounceMs,
     buildKey: (entry) => entry.debounceKey,
     shouldDebounce: (entry) => {
-      if (entry.allMedia.length > 0) {
+      if (entry.allMedia.length > 0 && !debounceMedia) {
         return false;
       }
       const text = entry.msg.text ?? entry.msg.caption ?? "";
-      if (!text.trim()) {
+      if (!text.trim() && entry.allMedia.length === 0) {
         return false;
       }
       return !hasControlCommand(text, cfg, { botUsername: entry.botUsername });
@@ -119,7 +121,8 @@ export const registerTelegramHandlers = ({
         .map((entry) => entry.msg.text ?? entry.msg.caption ?? "")
         .filter(Boolean)
         .join("\n");
-      if (!combinedText.trim()) {
+      const combinedMedia = entries.flatMap((entry) => entry.allMedia);
+      if (!combinedText.trim() && combinedMedia.length === 0) {
         return;
       }
       const first = entries[0];
@@ -128,7 +131,7 @@ export const registerTelegramHandlers = ({
         typeof baseCtx.getFile === "function" ? baseCtx.getFile.bind(baseCtx) : async () => ({});
       const syntheticMessage: Message = {
         ...first.msg,
-        text: combinedText,
+        text: combinedText || undefined,
         caption: undefined,
         caption_entities: undefined,
         entities: undefined,
@@ -137,7 +140,7 @@ export const registerTelegramHandlers = ({
       const messageIdOverride = last.msg.message_id ? String(last.msg.message_id) : undefined;
       await processMessage(
         { message: syntheticMessage, me: baseCtx.me, getFile },
-        [],
+        combinedMedia,
         first.storeAllowFrom,
         messageIdOverride ? { messageIdOverride } : undefined,
       );

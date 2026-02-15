@@ -4,6 +4,7 @@ import type { DiscordMessagePreflightParams } from "./message-handler.preflight.
 import { hasControlCommand } from "../../auto-reply/command-detection.js";
 import {
   createInboundDebouncer,
+  resolveDebounceMedia,
   resolveInboundDebounceMs,
 } from "../../auto-reply/inbound-debounce.js";
 import { danger } from "../../globals.js";
@@ -22,6 +23,7 @@ export function createDiscordMessageHandler(
   const groupPolicy = params.discordConfig?.groupPolicy ?? "open";
   const ackReactionScope = params.cfg.messages?.ackReactionScope ?? "group-mentions";
   const debounceMs = resolveInboundDebounceMs({ cfg: params.cfg, channel: "discord" });
+  const debounceMedia = resolveDebounceMedia(params.cfg);
 
   const debouncer = createInboundDebouncer<{ data: DiscordMessageEvent; client: Client }>({
     debounceMs,
@@ -42,11 +44,11 @@ export function createDiscordMessageHandler(
       if (!message) {
         return false;
       }
-      if (message.attachments && message.attachments.length > 0) {
+      if (message.attachments && message.attachments.length > 0 && !debounceMedia) {
         return false;
       }
       const baseText = resolveDiscordMessageText(message, { includeForwarded: false });
-      if (!baseText.trim()) {
+      if (!baseText.trim() && !(message.attachments && message.attachments.length > 0)) {
         return false;
       }
       return !hasControlCommand(baseText, params.cfg);
@@ -77,7 +79,7 @@ export function createDiscordMessageHandler(
       const syntheticMessage = {
         ...last.data.message,
         content: combinedBaseText,
-        attachments: [],
+        attachments: entries.flatMap((entry) => entry.data.message?.attachments ?? []),
         message_snapshots: (last.data.message as { message_snapshots?: unknown }).message_snapshots,
         messageSnapshots: (last.data.message as { messageSnapshots?: unknown }).messageSnapshots,
         rawData: {

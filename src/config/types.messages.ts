@@ -25,6 +25,8 @@ export type InboundDebounceByProvider = Record<string, number>;
 export type InboundDebounceConfig = {
   debounceMs?: number;
   byChannel?: InboundDebounceByProvider;
+  /** When true, media/attachment messages are debounced like text (default: false). */
+  debounceMedia?: boolean;
 };
 
 export type BroadcastStrategy = "parallel" | "sequential";

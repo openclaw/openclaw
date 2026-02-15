@@ -49,6 +49,7 @@ Config (global default + per-channel overrides):
   messages: {
     inbound: {
       debounceMs: 2000,
+      debounceMedia: true, // also debounce media/attachments (default: false)
       byChannel: {
         whatsapp: 5000,
         slack: 1500,
@@ -61,7 +62,10 @@ Config (global default + per-channel overrides):
 
 Notes:
 
-- Debounce applies to **text-only** messages; media/attachments flush immediately.
+- By default, debounce applies to **text-only** messages; media/attachments flush immediately.
+- Set `debounceMedia: true` to include media messages in debouncing. This is useful in group
+  chats where users send multiple screenshots that should be processed as a single batch.
+  When enabled, debounced media from the same sender is combined into one agent turn.
 - Control commands bypass debouncing so they remain standalone.
 
 ## Sessions and devices

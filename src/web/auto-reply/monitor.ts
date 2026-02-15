@@ -1,6 +1,9 @@
 import type { WebChannelStatus, WebInboundMsg, WebMonitorTuning } from "./types.js";
 import { hasControlCommand } from "../../auto-reply/command-detection.js";
-import { resolveInboundDebounceMs } from "../../auto-reply/inbound-debounce.js";
+import {
+  resolveDebounceMedia,
+  resolveInboundDebounceMs,
+} from "../../auto-reply/inbound-debounce.js";
 import { getReplyFromConfig } from "../../auto-reply/reply.js";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "../../auto-reply/reply/history.js";
 import { formatCliCommand } from "../../cli/command-format.js";
@@ -176,8 +179,9 @@ export async function monitorWebChannel(
     });
 
     const inboundDebounceMs = resolveInboundDebounceMs({ cfg, channel: "whatsapp" });
+    const debounceMediaEnabled = resolveDebounceMedia(cfg);
     const shouldDebounce = (msg: WebInboundMsg) => {
-      if (msg.mediaPath || msg.mediaType) {
+      if ((msg.mediaPath || msg.mediaType) && !debounceMediaEnabled) {
         return false;
       }
       if (msg.location) {

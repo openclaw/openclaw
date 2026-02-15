@@ -4,7 +4,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { GroupKeyResolution } from "../config/sessions.js";
-import { createInboundDebouncer } from "./inbound-debounce.js";
+import { createInboundDebouncer, resolveDebounceMedia } from "./inbound-debounce.js";
 import { resolveGroupRequireMention } from "./reply/groups.js";
 import { finalizeInboundContext } from "./reply/inbound-context.js";
 import {
@@ -255,6 +255,24 @@ describe("createInboundDebouncer", () => {
     expect(calls).toEqual([["1"], ["2"]]);
 
     vi.useRealTimers();
+  });
+});
+
+describe("resolveDebounceMedia", () => {
+  it("returns false when not configured", () => {
+    expect(resolveDebounceMedia({} as OpenClawConfig)).toBe(false);
+  });
+
+  it("returns false when explicitly false", () => {
+    expect(
+      resolveDebounceMedia({ messages: { inbound: { debounceMedia: false } } } as OpenClawConfig),
+    ).toBe(false);
+  });
+
+  it("returns true when enabled", () => {
+    expect(
+      resolveDebounceMedia({ messages: { inbound: { debounceMedia: true } } } as OpenClawConfig),
+    ).toBe(true);
   });
 });
 

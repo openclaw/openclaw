@@ -33,6 +33,10 @@ export function resolveInboundDebounceMs(params: {
   return override ?? byChannel ?? base ?? 0;
 }
 
+export function resolveDebounceMedia(cfg: OpenClawConfig): boolean {
+  return cfg.messages?.inbound?.debounceMedia === true;
+}
+
 type DebounceBuffer<T> = {
   items: T[];
   timeout: ReturnType<typeof setTimeout> | null;
