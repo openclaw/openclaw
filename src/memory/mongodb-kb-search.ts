@@ -3,6 +3,7 @@ import type { MemoryMongoDBEmbeddingMode } from "../config/types.memory.js";
 import type { DetectedCapabilities } from "./mongodb-schema.js";
 import type { MemorySearchResult } from "./types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { buildVectorSearchStage, MONGODB_MAX_NUM_CANDIDATES } from "./mongodb-search.js";
 
 const log = createSubsystemLogger("memory:mongodb:kb-search");
 
@@ -45,42 +46,106 @@ export async function searchKB(
       ? opts.capabilities.vectorSearch
       : queryVector != null && opts.capabilities.vectorSearch;
 
-  // Try vector search first
+  const canText = opts.capabilities.textSearch;
+  const numCandidates = Math.min(
+    opts.numCandidates ?? Math.max(opts.maxResults * 20, 100),
+    MONGODB_MAX_NUM_CANDIDATES,
+  );
+
+  // F12: Try hybrid search (rankFusion) when both vector and text are available
+  if (canVector && canText && opts.capabilities.rankFusion) {
+    try {
+      const vsStage = buildVectorSearchStage({
+        queryVector,
+        queryText: query,
+        embeddingMode: opts.embeddingMode,
+        indexName: opts.vectorIndexName,
+        numCandidates,
+        limit: opts.maxResults,
+      });
+
+      if (vsStage) {
+        const pipeline: Document[] = [
+          {
+            $rankFusion: {
+              input: {
+                pipelines: {
+                  vector: [{ $vectorSearch: vsStage }],
+                  text: [
+                    {
+                      $search: {
+                        index: opts.textIndexName,
+                        compound: {
+                          must: [{ text: { query, path: "text" } }],
+                        },
+                      },
+                    },
+                    { $limit: opts.maxResults * 4 },
+                  ],
+                },
+              },
+            },
+          },
+          { $limit: opts.maxResults },
+          {
+            $project: {
+              _id: 0,
+              path: 1,
+              startLine: 1,
+              endLine: 1,
+              text: 1,
+              docId: 1,
+              score: { $meta: "searchScore" },
+            },
+          },
+        ];
+
+        const docs = await kbChunks.aggregate(pipeline).toArray();
+        const results = docs.map(toKBSearchResult).filter((r) => r.score >= opts.minScore);
+        if (results.length > 0) {
+          return results;
+        }
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn(`KB hybrid search ($rankFusion) failed, falling back to vector-only: ${msg}`);
+    }
+  }
+
+  // Try vector search (vector-only fallback)
   if (canVector) {
     try {
-      const vsStage: Document = {
-        index: opts.vectorIndexName,
-        numCandidates: opts.numCandidates ?? Math.max(opts.maxResults * 20, 100),
+      const vsStage = buildVectorSearchStage({
+        queryVector,
+        queryText: query,
+        embeddingMode: opts.embeddingMode,
+        indexName: opts.vectorIndexName,
+        numCandidates,
         limit: opts.maxResults,
-      };
+      });
 
-      if (opts.embeddingMode === "automated") {
-        vsStage.query = { text: query };
-        vsStage.path = "text";
-      } else if (queryVector) {
-        vsStage.queryVector = queryVector;
-        vsStage.path = "embedding";
-      }
-
-      const pipeline: Document[] = [
-        { $vectorSearch: vsStage },
-        {
-          $project: {
-            _id: 0,
-            path: 1,
-            startLine: 1,
-            endLine: 1,
-            text: 1,
-            docId: 1,
-            score: { $meta: "vectorSearchScore" },
+      if (vsStage) {
+        const pipeline: Document[] = [
+          { $vectorSearch: vsStage },
+          { $limit: opts.maxResults },
+          {
+            $project: {
+              _id: 0,
+              path: 1,
+              startLine: 1,
+              endLine: 1,
+              text: 1,
+              docId: 1,
+              score: { $meta: "vectorSearchScore" },
+            },
           },
-        },
-      ];
+        ];
 
-      const docs = await kbChunks.aggregate(pipeline).toArray();
-      const results = docs.map(toKBSearchResult).filter((r) => r.score >= opts.minScore);
-      if (results.length > 0) {
-        return results;
+        const docs = await kbChunks.aggregate(pipeline).toArray();
+        const results = docs.map(toKBSearchResult).filter((r) => r.score >= opts.minScore);
+        if (results.length > 0) {
+          return results;
+        }
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -89,7 +154,7 @@ export async function searchKB(
   }
 
   // Keyword search fallback using $search
-  if (opts.capabilities.textSearch) {
+  if (canText) {
     try {
       const pipeline: Document[] = [
         {

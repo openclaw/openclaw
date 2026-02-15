@@ -51,7 +51,6 @@ vi.mock("./mongodb-schema.js", () => ({
     textSearch: false,
     scoreFusion: false,
     rankFusion: false,
-    automatedEmbedding: false,
   }),
   ensureCollections: vi.fn().mockResolvedValue(undefined),
   ensureStandardIndexes: vi.fn().mockResolvedValue(undefined),

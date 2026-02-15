@@ -159,6 +159,18 @@ export class MongoDBMemoryManager implements MemorySearchManager {
       memoryTtlDays: mongoCfg.memoryTtlDays,
     });
 
+    // F3: Warn when embeddingMode "automated" is used on community profiles
+    // (automated embedding requires Atlas with Voyage AI integration, not available on community)
+    const isCommunity =
+      mongoCfg.deploymentProfile === "community-mongot" ||
+      mongoCfg.deploymentProfile === "community-bare";
+    if (isCommunity && mongoCfg.embeddingMode === "automated") {
+      log.warn(
+        `embeddingMode "automated" is not supported on community profile "${mongoCfg.deploymentProfile}". ` +
+          'Automated embedding requires Atlas with Voyage AI. Consider switching to embeddingMode: "managed".',
+      );
+    }
+
     // Detect what the connected MongoDB supports
     const capabilities = await detectCapabilities(db);
     log.info(`capabilities: ${JSON.stringify(capabilities)}`);
@@ -333,7 +345,14 @@ export class MongoDBMemoryManager implements MemorySearchManager {
       return [] as MemorySearchResult[];
     });
 
-    // Merge all results, sorted by score, capped at maxResults
+    // Merge all results, sorted by score, capped at maxResults.
+    //
+    // F23: Score normalization gap — scores from different search methods are NOT
+    // directly comparable. $vectorSearch returns cosine similarity [0,1],
+    // $search returns BM25 scores (unbounded), and $text returns TF-IDF scores.
+    // When mixing results from legacy chunks, KB, and structured memory, the
+    // relative ordering may not reflect true relevance. A future improvement
+    // should normalize all scores to a common [0,1] range before merging.
     const allResults = [...legacyResults, ...kbResults, ...structuredResults]
       .toSorted((a, b) => b.score - a.score)
       .slice(0, maxResults);
@@ -420,7 +439,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
           : (this.embeddingProvider?.id ?? "none"),
       model:
         mongoCfg.embeddingMode === "automated"
-          ? "voyage-4-large (automated)"
+          ? "automated (server-managed)"
           : this.embeddingProvider?.model,
       files: this.fileCount,
       chunks: this.chunkCount,

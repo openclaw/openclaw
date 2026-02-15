@@ -30,11 +30,7 @@ function createMockStructuredCol(): Collection {
       toArray: vi.fn(async () => []),
     })),
     find: vi.fn(() => ({
-      sort: vi.fn(() => ({
-        limit: vi.fn(() => ({
-          toArray: vi.fn(async () => []),
-        })),
-      })),
+      toArray: vi.fn(async () => []),
     })),
   } as unknown as Collection;
 }
@@ -46,7 +42,6 @@ function mockDb(): Db {
 const baseCapabilities: DetectedCapabilities = {
   vectorSearch: true,
   textSearch: true,
-  automatedEmbedding: false,
   scoreFusion: false,
   rankFusion: false,
 };
@@ -54,7 +49,6 @@ const baseCapabilities: DetectedCapabilities = {
 const noSearchCapabilities: DetectedCapabilities = {
   vectorSearch: false,
   textSearch: false,
-  automatedEmbedding: false,
   scoreFusion: false,
   rankFusion: false,
 };
@@ -126,6 +120,39 @@ describe("writeStructuredMemory", () => {
     expect(result.id).toBe("editor");
   });
 
+  it("embeds value + context combined text (F13)", async () => {
+    const col = createMockStructuredCol();
+    vi.mocked(structuredMemCollection).mockReturnValue(col);
+
+    const mockProvider = {
+      id: "test",
+      model: "test-model",
+      embedBatch: vi.fn(async () => [[0.1, 0.2, 0.3]]),
+      embedQuery: vi.fn(async () => [0.1, 0.2, 0.3]),
+    };
+
+    const entry: StructuredMemoryEntry = {
+      type: "decision",
+      key: "db-choice",
+      value: "Using MongoDB",
+      context: "Team decided on 2025-01-01 during architecture review",
+      agentId: "main",
+    };
+
+    await writeStructuredMemory({
+      db: mockDb(),
+      prefix: "test_",
+      entry,
+      embeddingMode: "managed",
+      embeddingProvider: mockProvider,
+    });
+
+    // F13: Should embed value + context combined
+    expect(mockProvider.embedBatch).toHaveBeenCalledWith([
+      "Using MongoDB Team decided on 2025-01-01 during architecture review",
+    ]);
+  });
+
   it("includes embedding when provider is available", async () => {
     const col = createMockStructuredCol();
     vi.mocked(structuredMemCollection).mockReturnValue(col);
@@ -194,6 +221,61 @@ describe("searchStructuredMemory", () => {
     expect(results).toHaveLength(0);
   });
 
+  it("caps numCandidates at 10000 in structured memory search (F1)", async () => {
+    const col = createMockStructuredCol();
+    vi.mocked(col.aggregate).mockReturnValueOnce({
+      toArray: vi.fn(async () => [{ type: "fact", key: "pi", value: "Pi is 3.14", score: 0.9 }]),
+    } as unknown as ReturnType<Collection["aggregate"]>);
+
+    await searchStructuredMemory(col, "pi", [0.1, 0.2], {
+      maxResults: 5,
+      capabilities: baseCapabilities,
+      vectorIndexName: "test_vec",
+      embeddingMode: "managed",
+      numCandidates: 15000,
+    });
+
+    const pipeline = (col.aggregate as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const vsStage = pipeline[0].$vectorSearch;
+    expect(vsStage.numCandidates).toBeLessThanOrEqual(10000);
+  });
+
+  it("includes $limit after $vectorSearch in structured memory (F7)", async () => {
+    const col = createMockStructuredCol();
+    vi.mocked(col.aggregate).mockReturnValueOnce({
+      toArray: vi.fn(async () => [{ type: "fact", key: "pi", value: "Pi is 3.14", score: 0.9 }]),
+    } as unknown as ReturnType<Collection["aggregate"]>);
+
+    await searchStructuredMemory(col, "pi", [0.1, 0.2], {
+      maxResults: 3,
+      capabilities: baseCapabilities,
+      vectorIndexName: "test_vec",
+      embeddingMode: "managed",
+    });
+
+    const pipeline = (col.aggregate as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    // Pipeline: $vectorSearch, $limit, $project
+    expect(pipeline[1].$limit).toBe(3);
+  });
+
+  it("uses textFieldPath 'value' for automated mode in structured memory (F5)", async () => {
+    const col = createMockStructuredCol();
+    vi.mocked(col.aggregate).mockReturnValueOnce({
+      toArray: vi.fn(async () => [{ type: "fact", key: "pi", value: "Pi is 3.14", score: 0.9 }]),
+    } as unknown as ReturnType<Collection["aggregate"]>);
+
+    await searchStructuredMemory(col, "pi", null, {
+      maxResults: 5,
+      capabilities: baseCapabilities,
+      vectorIndexName: "test_vec",
+      embeddingMode: "automated",
+    });
+
+    const pipeline = (col.aggregate as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const vsStage = pipeline[0].$vectorSearch;
+    expect(vsStage.path).toBe("value");
+  });
+
   it("filters by type when provided", async () => {
     const col = createMockStructuredCol();
     vi.mocked(col.aggregate).mockReturnValueOnce({
@@ -223,19 +305,15 @@ describe("getStructuredMemoryByType", () => {
     vi.mocked(structuredMemCollection).mockReturnValue(col);
 
     vi.mocked(col.find).mockReturnValueOnce({
-      sort: vi.fn(() => ({
-        limit: vi.fn(() => ({
-          toArray: vi.fn(async () => [
-            {
-              type: "decision",
-              key: "db-choice",
-              value: "Using MongoDB",
-              confidence: 0.9,
-              updatedAt: new Date("2025-01-01"),
-            },
-          ]),
-        })),
-      })),
+      toArray: vi.fn(async () => [
+        {
+          type: "decision",
+          key: "db-choice",
+          value: "Using MongoDB",
+          confidence: 0.9,
+          updatedAt: new Date("2025-01-01"),
+        },
+      ]),
     } as unknown as ReturnType<Collection["find"]>);
 
     const entries = await getStructuredMemoryByType(mockDb(), "test_", "decision");
@@ -251,9 +329,14 @@ describe("getStructuredMemoryByType", () => {
     const col = createMockStructuredCol();
     vi.mocked(structuredMemCollection).mockReturnValue(col);
 
+    vi.mocked(col.find).mockReturnValueOnce({
+      toArray: vi.fn(async () => []),
+    } as unknown as ReturnType<Collection["find"]>);
+
     await getStructuredMemoryByType(mockDb(), "test_", "fact", 10);
 
     const findCall = (col.find as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(findCall[0]).toEqual({ type: "fact" });
+    expect(findCall[1]).toMatchObject({ sort: { updatedAt: -1 }, limit: 10 });
   });
 });

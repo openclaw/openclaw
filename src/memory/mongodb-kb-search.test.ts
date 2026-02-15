@@ -18,7 +18,6 @@ function mockKBChunksCol(results: Document[] = []): Collection {
 const baseCapabilities: DetectedCapabilities = {
   vectorSearch: true,
   textSearch: true,
-  automatedEmbedding: false,
   scoreFusion: false,
   rankFusion: false,
 };
@@ -26,7 +25,6 @@ const baseCapabilities: DetectedCapabilities = {
 const noSearchCapabilities: DetectedCapabilities = {
   vectorSearch: false,
   textSearch: false,
-  automatedEmbedding: false,
   scoreFusion: false,
   rankFusion: false,
 };
@@ -111,6 +109,67 @@ describe("searchKB", () => {
 
     expect(results).toHaveLength(1);
     expect(results[0].source).toBe("kb");
+  });
+
+  it("caps numCandidates at 10000 in KB search (F1)", async () => {
+    const col = mockKBChunksCol([
+      { path: "a.md", startLine: 1, endLine: 5, text: "content", score: 0.9 },
+    ]);
+
+    await searchKB(col, "test", [0.1], {
+      maxResults: 5,
+      minScore: 0.1,
+      vectorIndexName: "idx",
+      textIndexName: "txt",
+      capabilities: baseCapabilities,
+      embeddingMode: "managed",
+      numCandidates: 15000,
+    });
+
+    const pipeline = (col.aggregate as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const vsStage = pipeline[0].$vectorSearch;
+    expect(vsStage.numCandidates).toBeLessThanOrEqual(10000);
+  });
+
+  it("includes $limit after $vectorSearch in KB search (F7)", async () => {
+    const col = mockKBChunksCol([
+      { path: "a.md", startLine: 1, endLine: 5, text: "content", score: 0.9 },
+    ]);
+
+    await searchKB(col, "test", [0.1], {
+      maxResults: 3,
+      minScore: 0,
+      vectorIndexName: "idx",
+      textIndexName: "txt",
+      capabilities: baseCapabilities,
+      embeddingMode: "managed",
+    });
+
+    const pipeline = (col.aggregate as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(pipeline[1].$limit).toBe(3);
+  });
+
+  it("tries hybrid search ($rankFusion) before vector-only when rankFusion available (F12)", async () => {
+    const hybridCaps: DetectedCapabilities = {
+      ...baseCapabilities,
+      rankFusion: true,
+    };
+    const col = mockKBChunksCol([
+      { path: "hybrid.md", startLine: 1, endLine: 5, text: "hybrid result", score: 0.9 },
+    ]);
+
+    const results = await searchKB(col, "test", [0.1], {
+      maxResults: 5,
+      minScore: 0,
+      vectorIndexName: "idx",
+      textIndexName: "txt",
+      capabilities: hybridCaps,
+      embeddingMode: "managed",
+    });
+
+    expect(results).toHaveLength(1);
+    const pipeline = (col.aggregate as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(pipeline[0].$rankFusion).toBeDefined();
   });
 
   it("uses automated embedding mode query", async () => {

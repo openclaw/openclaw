@@ -37,9 +37,7 @@ function createMockKBCol(): Collection {
     }),
     deleteOne: vi.fn(async () => ({ deletedCount: 1 })),
     find: vi.fn(() => ({
-      sort: vi.fn(() => ({
-        toArray: vi.fn(async () => docs),
-      })),
+      toArray: vi.fn(async () => docs),
     })),
     countDocuments: vi.fn(async () => docs.length),
     distinct: vi.fn(async () => []),
@@ -169,6 +167,63 @@ describe("ingestToKB", () => {
     expect(mockKB.insertOne).toHaveBeenCalled();
   });
 
+  it("deduplicates by source.path first, then hash (F10)", async () => {
+    const content = "Original content";
+    const doc: KBDocument = {
+      title: "Path Dedup",
+      content,
+      source: { type: "file", path: "/docs/guide.md", importedBy: "cli" },
+      hash: hashText(content),
+    };
+
+    // Mock findOne to return existing doc by path with same hash
+    vi.mocked(mockKB.findOne).mockResolvedValueOnce({
+      _id: "existing-id",
+      hash: doc.hash,
+      "source.path": "/docs/guide.md",
+    });
+
+    const result = await ingestToKB({
+      db: mockDb(),
+      prefix: "test_",
+      documents: [doc],
+      embeddingMode: "managed",
+    });
+
+    expect(result.skipped).toBe(1);
+    expect(result.documentsProcessed).toBe(0);
+  });
+
+  it("replaces old version when source.path matches but hash changed (F10)", async () => {
+    const oldHash = hashText("Old content");
+    const newContent = "New updated content";
+    const doc: KBDocument = {
+      title: "Updated Doc",
+      content: newContent,
+      source: { type: "file", path: "/docs/guide.md", importedBy: "cli" },
+      hash: hashText(newContent),
+    };
+
+    // Mock findOne to return existing doc by path with DIFFERENT hash
+    vi.mocked(mockKB.findOne).mockResolvedValueOnce({
+      _id: "old-id",
+      hash: oldHash,
+      "source.path": "/docs/guide.md",
+    });
+
+    const result = await ingestToKB({
+      db: mockDb(),
+      prefix: "test_",
+      documents: [doc],
+      embeddingMode: "managed",
+    });
+
+    expect(result.documentsProcessed).toBe(1);
+    // Should delete old doc+chunks before inserting new
+    expect(mockKBChunks.deleteMany).toHaveBeenCalledWith({ docId: "old-id" });
+    expect(mockKB.deleteOne).toHaveBeenCalled();
+  });
+
   it("handles empty content gracefully", async () => {
     const doc: KBDocument = {
       title: "Empty",
@@ -279,10 +334,54 @@ describe("listKBDocuments", () => {
 });
 
 describe("removeKBDocument", () => {
-  it("removes a KB document and its chunks", async () => {
+  it("removes a KB document and its chunks (sequential fallback)", async () => {
     const removed = await removeKBDocument(mockDb(), "test_", "doc-123");
     expect(removed).toBe(true);
     expect(mockKBChunks.deleteMany).toHaveBeenCalledWith({ docId: "doc-123" });
+    expect(mockKB.deleteOne).toHaveBeenCalled();
+  });
+
+  it("uses transaction when client is provided (F11)", async () => {
+    const sessionMock = {
+      withTransaction: vi.fn(async (fn: () => Promise<void>) => fn()),
+      endSession: vi.fn(),
+    };
+    const clientMock = {
+      startSession: vi.fn(() => sessionMock),
+    };
+
+    const removed = await removeKBDocument(
+      mockDb(),
+      "test_",
+      "doc-tx",
+      clientMock as unknown as import("mongodb").MongoClient,
+    );
+    expect(removed).toBe(true);
+    expect(clientMock.startSession).toHaveBeenCalled();
+    expect(sessionMock.withTransaction).toHaveBeenCalled();
+    expect(sessionMock.endSession).toHaveBeenCalled();
+  });
+
+  it("falls back to sequential on transaction failure (F11)", async () => {
+    const sessionMock = {
+      withTransaction: vi.fn(async () => {
+        throw new Error("not a replica set");
+      }),
+      endSession: vi.fn(),
+    };
+    const clientMock = {
+      startSession: vi.fn(() => sessionMock),
+    };
+
+    const removed = await removeKBDocument(
+      mockDb(),
+      "test_",
+      "doc-fallback",
+      clientMock as unknown as import("mongodb").MongoClient,
+    );
+    expect(removed).toBe(true);
+    // Should still delete via sequential fallback
+    expect(mockKBChunks.deleteMany).toHaveBeenCalledWith({ docId: "doc-fallback" });
     expect(mockKB.deleteOne).toHaveBeenCalled();
   });
 });

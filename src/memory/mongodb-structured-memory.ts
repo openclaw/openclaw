@@ -5,6 +5,7 @@ import type { DetectedCapabilities } from "./mongodb-schema.js";
 import type { MemorySearchResult } from "./types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { structuredMemCollection } from "./mongodb-schema.js";
+import { buildVectorSearchStage, MONGODB_MAX_NUM_CANDIDATES } from "./mongodb-search.js";
 
 const log = createSubsystemLogger("memory:mongodb:structured");
 
@@ -48,11 +49,12 @@ export async function writeStructuredMemory(params: {
   const { db, prefix, entry, embeddingMode } = params;
   const collection = structuredMemCollection(db, prefix);
 
-  // Generate embedding for the value text in managed mode
+  // F13: Generate embedding for value + context combined text in managed mode
   let embedding: number[] | undefined;
   if (embeddingMode === "managed" && params.embeddingProvider) {
     try {
-      const [vec] = await params.embeddingProvider.embedBatch([entry.value]);
+      const textToEmbed = entry.context ? `${entry.value} ${entry.context}` : entry.value;
+      const [vec] = await params.embeddingProvider.embedBatch([textToEmbed]);
       embedding = vec;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -142,15 +144,14 @@ export async function searchStructuredMemory(
       ? opts.capabilities.vectorSearch
       : queryVector != null && opts.capabilities.vectorSearch;
 
-  // Try vector search
+  const numCandidates = Math.min(
+    opts.numCandidates ?? Math.max(opts.maxResults * 20, 100),
+    MONGODB_MAX_NUM_CANDIDATES,
+  );
+
+  // Try vector search (F5: uses shared buildVectorSearchStage)
   if (canVector) {
     try {
-      const vsStage: Document = {
-        index: opts.vectorIndexName,
-        numCandidates: opts.numCandidates ?? Math.max(opts.maxResults * 20, 100),
-        limit: opts.maxResults,
-      };
-
       const filter: Document = {};
       if (opts.filter?.type) {
         filter.type = opts.filter.type;
@@ -158,38 +159,41 @@ export async function searchStructuredMemory(
       if (opts.filter?.tags?.length) {
         filter.tags = { $in: opts.filter.tags };
       }
-      if (Object.keys(filter).length > 0) {
-        vsStage.filter = filter;
-      }
 
-      if (opts.embeddingMode === "automated") {
-        vsStage.query = { text: query };
-        vsStage.path = "value";
-      } else if (queryVector) {
-        vsStage.queryVector = queryVector;
-        vsStage.path = "embedding";
-      }
+      const vsStage = buildVectorSearchStage({
+        queryVector,
+        queryText: query,
+        embeddingMode: opts.embeddingMode,
+        indexName: opts.vectorIndexName,
+        numCandidates,
+        limit: opts.maxResults,
+        filter: Object.keys(filter).length > 0 ? filter : undefined,
+        textFieldPath: "value", // structured memory stores text in "value" field
+      });
 
-      const pipeline: Document[] = [
-        { $vectorSearch: vsStage },
-        {
-          $project: {
-            _id: 0,
-            type: 1,
-            key: 1,
-            value: 1,
-            context: 1,
-            confidence: 1,
-            tags: 1,
-            score: { $meta: "vectorSearchScore" },
+      if (vsStage) {
+        const pipeline: Document[] = [
+          { $vectorSearch: vsStage },
+          { $limit: opts.maxResults },
+          {
+            $project: {
+              _id: 0,
+              type: 1,
+              key: 1,
+              value: 1,
+              context: 1,
+              confidence: 1,
+              tags: 1,
+              score: { $meta: "vectorSearchScore" },
+            },
           },
-        },
-      ];
+        ];
 
-      const docs = await collection.aggregate(pipeline).toArray();
-      const results = docs.map(toStructuredResult).filter((r) => r.score >= minScore);
-      if (results.length > 0) {
-        return results;
+        const docs = await collection.aggregate(pipeline).toArray();
+        const results = docs.map(toStructuredResult).filter((r) => r.score >= minScore);
+        if (results.length > 0) {
+          return results;
+        }
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

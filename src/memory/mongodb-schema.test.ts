@@ -24,6 +24,7 @@ function mockCollection(name: string): Collection {
     collectionName: name,
     createIndex: vi.fn(async () => name),
     createSearchIndex: vi.fn(async () => name),
+    dropIndex: vi.fn(async () => ({ ok: 1 })),
     listSearchIndexes: vi.fn(() => ({ toArray: async () => [] })),
     aggregate: vi.fn(() => ({ toArray: async () => [] })),
   } as unknown as Collection;
@@ -102,6 +103,58 @@ describe("collection helpers", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Schema validation constants
+// ---------------------------------------------------------------------------
+
+describe("schema constants", () => {
+  it("kb_chunks schema uses string docId, not objectId (F9)", async () => {
+    // Verify by creating a collection with the schema and checking the validator
+    const db = mockDb([]);
+    await ensureCollections(db, "test_");
+    const createCalls = (db.createCollection as ReturnType<typeof vi.fn>).mock.calls;
+    const kbChunksCall = createCalls.find((c: unknown[]) => c[0] === "test_kb_chunks");
+    expect(kbChunksCall).toBeDefined();
+    const validator = kbChunksCall![1]?.validator;
+    expect(validator.$jsonSchema.properties.docId.bsonType).toBe("string");
+  });
+
+  it("kb_chunks schema includes source field (F14)", async () => {
+    const db = mockDb([]);
+    await ensureCollections(db, "test_");
+    const createCalls = (db.createCollection as ReturnType<typeof vi.fn>).mock.calls;
+    const kbChunksCall = createCalls.find((c: unknown[]) => c[0] === "test_kb_chunks");
+    expect(kbChunksCall).toBeDefined();
+    const validator = kbChunksCall![1]?.validator;
+    expect(validator.$jsonSchema.properties.source).toBeDefined();
+    expect(validator.$jsonSchema.properties.source.bsonType).toBe("string");
+  });
+
+  it("KB source.type enum uses 'manual' not 'text' (F16)", async () => {
+    const db = mockDb([]);
+    await ensureCollections(db, "test_");
+    const createCalls = (db.createCollection as ReturnType<typeof vi.fn>).mock.calls;
+    const kbCall = createCalls.find((c: unknown[]) => c[0] === "test_knowledge_base");
+    expect(kbCall).toBeDefined();
+    const validator = kbCall![1]?.validator;
+    const sourceTypeEnum = validator.$jsonSchema.properties.source.properties.type.enum;
+    expect(sourceTypeEnum).toContain("manual");
+    expect(sourceTypeEnum).not.toContain("text");
+  });
+
+  it("chunks collection has schema validation (F15)", async () => {
+    const db = mockDb([]);
+    await ensureCollections(db, "test_");
+    const createCalls = (db.createCollection as ReturnType<typeof vi.fn>).mock.calls;
+    const chunksCall = createCalls.find((c: unknown[]) => c[0] === "test_chunks");
+    expect(chunksCall).toBeDefined();
+    // F15: chunks should have schema validation
+    expect(chunksCall![1]?.validator).toBeDefined();
+    expect(chunksCall![1]?.validator.$jsonSchema.required).toContain("path");
+    expect(chunksCall![1]?.validator.$jsonSchema.required).toContain("text");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // ensureCollections
 // ---------------------------------------------------------------------------
 
@@ -111,11 +164,14 @@ describe("ensureCollections", () => {
     await ensureCollections(db, "test_");
     expect(db.createCollection).toHaveBeenCalledTimes(7);
     // Non-validated collections: called with name only
-    expect(db.createCollection).toHaveBeenCalledWith("test_chunks");
     expect(db.createCollection).toHaveBeenCalledWith("test_files");
     expect(db.createCollection).toHaveBeenCalledWith("test_embedding_cache");
     expect(db.createCollection).toHaveBeenCalledWith("test_meta");
-    // Validated collections: called with name + validator options
+    // Validated collections: called with name + validator options (F15: chunks now validated)
+    expect(db.createCollection).toHaveBeenCalledWith(
+      "test_chunks",
+      expect.objectContaining({ validationAction: "warn" }),
+    );
     expect(db.createCollection).toHaveBeenCalledWith(
       "test_knowledge_base",
       expect.objectContaining({ validationAction: "warn" }),
@@ -144,10 +200,7 @@ describe("ensureCollections", () => {
       "test_kb_chunks",
       expect.objectContaining({ validationAction: "warn" }),
     );
-    expect(db.createCollection).toHaveBeenCalledWith(
-      "test_structured_mem",
-      expect.objectContaining({ validationAction: "warn" }),
-    );
+    // Note: test_chunks is already existing in this test case
   });
 
   it("does nothing when all collections exist", async () => {
@@ -190,11 +243,11 @@ describe("ensureStandardIndexes", () => {
       createIndex: ReturnType<typeof vi.fn>;
     };
 
-    // 5 chunk + 2 cache + 4 KB + 3 KB chunks + 5 structured = 19
+    // 4 chunk (F17: removed idx_chunks_source) + 2 cache + 5 KB (F10: +source_path) + 3 KB chunks + 5 structured = 19
     expect(count).toBe(19);
-    expect(chunks.createIndex).toHaveBeenCalledTimes(5);
+    expect(chunks.createIndex).toHaveBeenCalledTimes(4);
     expect(cache.createIndex).toHaveBeenCalledTimes(2);
-    expect(kb.createIndex).toHaveBeenCalledTimes(4);
+    expect(kb.createIndex).toHaveBeenCalledTimes(5);
     expect(kbChunks.createIndex).toHaveBeenCalledTimes(3);
     expect(structured.createIndex).toHaveBeenCalledTimes(5);
   });
@@ -310,6 +363,33 @@ describe("ensureStandardIndexes", () => {
         (c[1] as Record<string, unknown>).name === "idx_files_ttl",
     );
     expect(ttlCall).toBeUndefined();
+  });
+
+  it("drops idx_cache_updated before creating idx_cache_ttl (F18)", async () => {
+    const db = mockDb();
+    await ensureStandardIndexes(db, "test_", { embeddingCacheTtlDays: 30 });
+
+    const cache = db.collection("test_embedding_cache") as unknown as {
+      dropIndex: ReturnType<typeof vi.fn>;
+    };
+    expect(cache.dropIndex).toHaveBeenCalledWith("idx_cache_updated");
+  });
+
+  it("drops idx_cache_ttl before creating idx_cache_updated when no TTL (F18)", async () => {
+    const db = mockDb();
+    await ensureStandardIndexes(db, "test_");
+
+    const cache = db.collection("test_embedding_cache") as unknown as {
+      dropIndex: ReturnType<typeof vi.fn>;
+    };
+    expect(cache.dropIndex).toHaveBeenCalledWith("idx_cache_ttl");
+  });
+
+  it("index count reduced by 1 after F17 idx_chunks_source removal, +1 for F10 source_path", async () => {
+    const db = mockDb();
+    const count = await ensureStandardIndexes(db, "test_");
+    // F17: removed idx_chunks_source (-1), F10: added idx_kb_source_path (+1) = net 0 from 19
+    expect(count).toBe(19);
   });
 
   it("creates unique composite index on embedding_cache", async () => {
@@ -612,6 +692,6 @@ describe("detectCapabilities", () => {
     const caps = await detectCapabilities(db);
     expect(caps.vectorSearch).toBe(true);
     expect(caps.textSearch).toBe(true);
-    expect(caps.automatedEmbedding).toBe(false);
+    // automatedEmbedding removed (F2: dead code)
   });
 });

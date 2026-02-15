@@ -16,7 +16,6 @@ export type DetectedCapabilities = {
   textSearch: boolean;
   scoreFusion: boolean;
   rankFusion: boolean;
-  automatedEmbedding: boolean;
 };
 
 export type MongoIndexBudgetCheck = {
@@ -83,7 +82,7 @@ const KB_SCHEMA: Document = {
         required: ["type"],
         properties: {
           type: {
-            enum: ["file", "url", "text", "api"],
+            enum: ["file", "url", "manual", "api"],
             description: "Source type",
           },
           path: { bsonType: "string" },
@@ -103,11 +102,12 @@ const KB_CHUNKS_SCHEMA: Document = {
     bsonType: "object",
     required: ["docId", "path", "text", "startLine", "endLine", "updatedAt"],
     properties: {
-      docId: { bsonType: "objectId", description: "Reference to knowledge_base _id" },
+      docId: { bsonType: "string", description: "Reference to knowledge_base _id" },
       path: { bsonType: "string" },
       text: { bsonType: "string", description: "Chunk text content" },
       startLine: { bsonType: "number" },
       endLine: { bsonType: "number" },
+      source: { bsonType: "string", description: "Source identifier (e.g., 'kb')" },
       embedding: { bsonType: "array", description: "Vector embedding (managed mode)" },
       updatedAt: { bsonType: "date" },
     },
@@ -136,7 +136,26 @@ const STRUCTURED_MEM_SCHEMA: Document = {
   },
 };
 
+const CHUNKS_SCHEMA: Document = {
+  $jsonSchema: {
+    bsonType: "object",
+    required: ["path", "text", "hash", "updatedAt"],
+    properties: {
+      path: { bsonType: "string" },
+      text: { bsonType: "string" },
+      hash: { bsonType: "string" },
+      source: { bsonType: "string" },
+      startLine: { bsonType: "number" },
+      endLine: { bsonType: "number" },
+      embedding: { bsonType: "array" },
+      model: { bsonType: "string" },
+      updatedAt: { bsonType: "date" },
+    },
+  },
+};
+
 const VALIDATED_COLLECTIONS: Record<string, Document> = {
+  chunks: CHUNKS_SCHEMA,
   knowledge_base: KB_SCHEMA,
   kb_chunks: KB_CHUNKS_SCHEMA,
   structured_mem: STRUCTURED_MEM_SCHEMA,
@@ -218,8 +237,7 @@ export async function ensureStandardIndexes(
   const chunks = chunksCollection(db, prefix);
   await chunks.createIndex({ path: 1 }, { name: "idx_chunks_path" });
   applied++;
-  await chunks.createIndex({ source: 1 }, { name: "idx_chunks_source" });
-  applied++;
+  // F17: Removed idx_chunks_source — low-cardinality index (only "memory"/"sessions" values)
   await chunks.createIndex({ path: 1, hash: 1 }, { name: "idx_chunks_path_hash" });
   applied++;
   await chunks.createIndex({ updatedAt: -1 }, { name: "idx_chunks_updated" });
@@ -239,7 +257,13 @@ export async function ensureStandardIndexes(
   // TTL index on embedding_cache for auto-expiry (per `index-ttl` rule).
   // When TTL is enabled, use TTL index instead of regular idx_cache_updated
   // because MongoDB cannot have two indexes on the same field with different options.
+  // F18: Drop opposite-named index before creating to avoid IndexOptionsConflict.
   if (ttlOpts?.embeddingCacheTtlDays && ttlOpts.embeddingCacheTtlDays > 0) {
+    try {
+      await cache.dropIndex("idx_cache_updated");
+    } catch {
+      // Index may not exist — safe to ignore
+    }
     const seconds = ttlOpts.embeddingCacheTtlDays * 24 * 60 * 60;
     await cache.createIndex(
       { updatedAt: 1 },
@@ -248,14 +272,25 @@ export async function ensureStandardIndexes(
     applied++;
     log.info(`created TTL index on embedding_cache: ${ttlOpts.embeddingCacheTtlDays} days`);
   } else {
+    try {
+      await cache.dropIndex("idx_cache_ttl");
+    } catch {
+      // Index may not exist — safe to ignore
+    }
     await cache.createIndex({ updatedAt: 1 }, { name: "idx_cache_updated" });
     applied++;
   }
 
   // Optional TTL on files for memory auto-expiry
   // WARNING: This deletes memory files from MongoDB after ttlDays
+  // F18: Drop opposite-named index before creating to avoid IndexOptionsConflict.
   if (ttlOpts?.memoryTtlDays && ttlOpts.memoryTtlDays > 0) {
     const files = filesCollection(db, prefix);
+    try {
+      await files.dropIndex("idx_files_updated");
+    } catch {
+      // Index may not exist — safe to ignore
+    }
     const seconds = ttlOpts.memoryTtlDays * 24 * 60 * 60;
     await files.createIndex(
       { updatedAt: 1 },
@@ -265,6 +300,14 @@ export async function ensureStandardIndexes(
     log.warn(
       `created TTL index on files: ${ttlOpts.memoryTtlDays} days — old memory files will be auto-deleted`,
     );
+  } else {
+    // Ensure no ghost TTL index from a previous config
+    const files = filesCollection(db, prefix);
+    try {
+      await files.dropIndex("idx_files_ttl");
+    } catch {
+      // Index may not exist — safe to ignore
+    }
   }
 
   // Knowledge Base indexes
@@ -276,6 +319,9 @@ export async function ensureStandardIndexes(
   await kb.createIndex({ tags: 1 }, { name: "idx_kb_tags" });
   applied++;
   await kb.createIndex({ updatedAt: 1 }, { name: "idx_kb_updated" });
+  applied++;
+  // F10: Index for dedup-by-source-path queries during re-ingestion
+  await kb.createIndex({ "source.path": 1 }, { name: "idx_kb_source_path", sparse: true });
   applied++;
 
   // KB Chunks indexes
@@ -627,7 +673,6 @@ export async function detectCapabilities(db: Db): Promise<DetectedCapabilities> 
     textSearch: false,
     scoreFusion: false,
     rankFusion: false,
-    automatedEmbedding: false,
   };
 
   // Probe $rankFusion (implies 8.0+)
@@ -694,11 +739,6 @@ export async function detectCapabilities(db: Db): Promise<DetectedCapabilities> 
   } catch {
     // listSearchIndexes not available
   }
-
-  // Automated embedding (autoEmbed with Voyage AI) availability is a deployment/config choice,
-  // not a runtime probe. Community Edition with mongot has vectorSearch but NOT autoEmbed.
-  // The config's embeddingMode drives this, not capability detection.
-  result.automatedEmbedding = false;
 
   log.info(`detected capabilities: ${JSON.stringify(result)}`);
   return result;

@@ -131,7 +131,7 @@ describe("resolveMemoryBackendConfig", () => {
     expect(resolved.mongodb!.collectionPrefix).toBe("openclaw_");
     expect(resolved.mongodb!.deploymentProfile).toBe("atlas-default");
     expect(resolved.mongodb!.embeddingMode).toBe("automated");
-    expect(resolved.mongodb!.fusionMethod).toBe("scoreFusion");
+    expect(resolved.mongodb!.fusionMethod).toBe("rankFusion");
     expect(resolved.mongodb!.quantization).toBe("none");
   });
 
@@ -357,6 +357,33 @@ describe("resolveMemoryBackendConfig", () => {
     } as OpenClawConfig;
     const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
     expect(resolved.mongodb!.embeddingMode).toBe("automated");
+  });
+
+  it("caps numCandidates at 10000 in config resolution (F1)", () => {
+    const cfg = {
+      agents: { defaults: { workspace: "/tmp/memory-test" } },
+      memory: {
+        backend: "mongodb",
+        mongodb: {
+          uri: "mongodb://localhost:27017",
+          numCandidates: 15000,
+        },
+      },
+    } as OpenClawConfig;
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
+    expect(resolved.mongodb!.numCandidates).toBe(10000);
+  });
+
+  it("defaults fusionMethod to rankFusion (F8)", () => {
+    const cfg = {
+      agents: { defaults: { workspace: "/tmp/memory-test" } },
+      memory: {
+        backend: "mongodb",
+        mongodb: { uri: "mongodb://localhost:27017" },
+      },
+    } as OpenClawConfig;
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
+    expect(resolved.mongodb!.fusionMethod).toBe("rankFusion");
   });
 
   it("throws when mongodb backend has no URI", () => {

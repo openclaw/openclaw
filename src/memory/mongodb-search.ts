@@ -35,7 +35,10 @@ function filterByScore(results: MemorySearchResult[], minScore: number): MemoryS
 // Use `queryVector` and `path` to the embedding field.
 // ---------------------------------------------------------------------------
 
-function buildVectorSearchStage(input: {
+/** Hard maximum for numCandidates — MongoDB server rejects values above 10,000. */
+export const MONGODB_MAX_NUM_CANDIDATES = 10_000;
+
+export function buildVectorSearchStage(input: {
   queryVector: number[] | null;
   queryText: string | null;
   embeddingMode: "automated" | "managed";
@@ -43,10 +46,11 @@ function buildVectorSearchStage(input: {
   numCandidates: number;
   limit: number;
   filter?: Document;
+  textFieldPath?: string;
 }): Document | null {
   const base: Document = {
     index: input.indexName,
-    numCandidates: input.numCandidates,
+    numCandidates: Math.min(input.numCandidates, MONGODB_MAX_NUM_CANDIDATES),
     limit: input.limit,
   };
   if (input.filter && Object.keys(input.filter).length > 0) {
@@ -56,7 +60,7 @@ function buildVectorSearchStage(input: {
   if (input.embeddingMode === "automated" && input.queryText) {
     // Automated: MongoDB generates the query embedding via Voyage AI
     base.query = { text: input.queryText };
-    base.path = "text";
+    base.path = input.textFieldPath ?? "text";
   } else if (input.queryVector) {
     // Managed: application provides pre-computed query embedding
     base.queryVector = input.queryVector;
@@ -106,6 +110,7 @@ export async function vectorSearch(
 
   const pipeline: Document[] = [
     { $vectorSearch: vsStage },
+    { $limit: opts.maxResults },
     {
       $project: {
         _id: 0,

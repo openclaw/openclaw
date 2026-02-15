@@ -70,7 +70,6 @@ const FULL_CAPS: DetectedCapabilities = {
   textSearch: true,
   scoreFusion: true,
   rankFusion: true,
-  automatedEmbedding: true,
 };
 
 const NO_CAPS: DetectedCapabilities = {
@@ -78,7 +77,6 @@ const NO_CAPS: DetectedCapabilities = {
   textSearch: false,
   scoreFusion: false,
   rankFusion: false,
-  automatedEmbedding: false,
 };
 
 // ---------------------------------------------------------------------------
@@ -169,6 +167,50 @@ describe("vectorSearch", () => {
     expect(vsStage.filter).toEqual({ source: "memory" });
   });
 
+  it("caps numCandidates at 10000 when maxResults would exceed it", async () => {
+    const col = mockCollectionWithResults(SAMPLE_DOCS);
+    await vectorSearch(col, [0.1, 0.2], {
+      maxResults: 600, // 600 * 20 = 12000 > 10000
+      minScore: 0,
+      indexName: "test_vector",
+      embeddingMode: "managed",
+    });
+
+    const pipeline = (col.aggregate as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const vsStage = pipeline[0].$vectorSearch;
+    expect(vsStage.numCandidates).toBeLessThanOrEqual(10000);
+    expect(vsStage.numCandidates).toBe(10000);
+  });
+
+  it("caps explicit numCandidates at 10000", async () => {
+    const col = mockCollectionWithResults(SAMPLE_DOCS);
+    await vectorSearch(col, [0.1, 0.2], {
+      maxResults: 10,
+      minScore: 0,
+      indexName: "test_vector",
+      embeddingMode: "managed",
+      numCandidates: 15000,
+    });
+
+    const pipeline = (col.aggregate as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const vsStage = pipeline[0].$vectorSearch;
+    expect(vsStage.numCandidates).toBe(10000);
+  });
+
+  it("includes $limit after $vectorSearch", async () => {
+    const col = mockCollectionWithResults(SAMPLE_DOCS);
+    await vectorSearch(col, [0.1], {
+      maxResults: 5,
+      minScore: 0,
+      indexName: "idx",
+      embeddingMode: "managed",
+    });
+
+    const pipeline = (col.aggregate as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    // Pipeline: $vectorSearch, $limit, $project
+    expect(pipeline[1].$limit).toBe(5);
+  });
+
   it("includes $project with vectorSearchScore meta", async () => {
     const col = mockCollectionWithResults(SAMPLE_DOCS);
     await vectorSearch(col, [0.1], {
@@ -179,7 +221,8 @@ describe("vectorSearch", () => {
     });
 
     const pipeline = (col.aggregate as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    const projectStage = pipeline[1].$project;
+    // Pipeline: $vectorSearch, $limit, $project
+    const projectStage = pipeline[2].$project;
     expect(projectStage.score).toEqual({ $meta: "vectorSearchScore" });
     expect(projectStage._id).toBe(0);
   });

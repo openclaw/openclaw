@@ -1,5 +1,21 @@
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+
+const log = createSubsystemLogger("memory:backend-config");
+
+// Known embedding model dimensions for numDimensions validation (F22)
+const KNOWN_MODEL_DIMENSIONS: Record<string, number> = {
+  "voyage-4-large": 1024,
+  "voyage-4": 1024,
+  "voyage-4-lite": 512,
+  "voyage-3": 1024,
+  "voyage-3-lite": 512,
+  "voyage-code-3": 1024,
+  "text-embedding-3-small": 1536,
+  "text-embedding-3-large": 3072,
+  "text-embedding-ada-002": 1536,
+};
 import type { SessionSendPolicyConfig } from "../config/types.base.js";
 import type {
   MemoryBackend,
@@ -304,7 +320,7 @@ export function resolveMemoryBackendConfig(params: {
       deploymentProfile === "community-mongot" || deploymentProfile === "community-bare";
     const defaultEmbeddingMode: MemoryMongoDBEmbeddingMode = isCommunity ? "managed" : "automated";
 
-    return {
+    const result: ResolvedMemoryBackendConfig = {
       backend: "mongodb",
       citations,
       mongodb: {
@@ -313,7 +329,7 @@ export function resolveMemoryBackendConfig(params: {
         collectionPrefix: mongoCfg?.collectionPrefix ?? "openclaw_",
         deploymentProfile,
         embeddingMode: mongoCfg?.embeddingMode ?? defaultEmbeddingMode,
-        fusionMethod: mongoCfg?.fusionMethod ?? "scoreFusion",
+        fusionMethod: mongoCfg?.fusionMethod ?? "rankFusion",
         quantization: mongoCfg?.quantization ?? "none",
         watchDebounceMs:
           typeof mongoCfg?.watchDebounceMs === "number" &&
@@ -358,12 +374,14 @@ export function resolveMemoryBackendConfig(params: {
           mongoCfg.connectTimeoutMs > 0
             ? Math.floor(mongoCfg.connectTimeoutMs)
             : 10_000,
-        numCandidates:
+        numCandidates: Math.min(
           typeof mongoCfg?.numCandidates === "number" &&
-          Number.isFinite(mongoCfg.numCandidates) &&
-          mongoCfg.numCandidates > 0
+            Number.isFinite(mongoCfg.numCandidates) &&
+            mongoCfg.numCandidates > 0
             ? Math.floor(mongoCfg.numCandidates)
             : 200,
+          10_000, // F1: hard cap at MongoDB's max numCandidates
+        ),
         kb: {
           enabled: mongoCfg?.kb?.enabled !== false,
           chunking: {
@@ -400,6 +418,20 @@ export function resolveMemoryBackendConfig(params: {
         },
       },
     };
+
+    // F22: numDimensions validation warning — check if configured dimensions
+    // match known model dimensions for the default embedding model
+    const resolvedNumDims = result.mongodb!.numDimensions;
+    const defaultModel = "voyage-4-large";
+    const expectedDims = KNOWN_MODEL_DIMENSIONS[defaultModel];
+    if (mongoCfg?.numDimensions && expectedDims && resolvedNumDims !== expectedDims) {
+      log.warn(
+        `numDimensions=${resolvedNumDims} may not match expected dimensions for ${defaultModel} (${expectedDims}). ` +
+          "Mismatched dimensions will cause vector search errors.",
+      );
+    }
+
+    return result;
   }
 
   if (backend !== "qmd") {

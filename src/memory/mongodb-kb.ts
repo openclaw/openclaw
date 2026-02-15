@@ -1,4 +1,4 @@
-import type { Db } from "mongodb";
+import type { Db, MongoClient } from "mongodb";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -81,12 +81,28 @@ export async function ingestToKB(params: {
         continue;
       }
 
-      // Dedup check by content hash
+      // F10: Dedup check by source.path first, then content hash.
+      // If a document with the same path exists, replace it only if hash changed.
       if (!force) {
-        const existing = await kb.findOne({ hash: doc.hash });
-        if (existing) {
-          result.skipped++;
-          continue;
+        const sourcePath = doc.source.path ?? doc.title;
+        const existingByPath = await kb.findOne({ "source.path": sourcePath });
+        if (existingByPath) {
+          if (existingByPath.hash === doc.hash) {
+            // Same content — skip
+            result.skipped++;
+            continue;
+          }
+          // Hash changed — remove old version so we can insert the updated one
+          const oldId = String(existingByPath._id);
+          await kbChunks.deleteMany({ docId: oldId });
+          await kb.deleteOne({ _id: existingByPath._id });
+        } else {
+          // No path match — check hash as fallback
+          const existingByHash = await kb.findOne({ hash: doc.hash });
+          if (existingByHash) {
+            result.skipped++;
+            continue;
+          }
         }
       }
 
@@ -120,7 +136,7 @@ export async function ingestToKB(params: {
       }
 
       await kb.insertOne({
-        _id: docId as unknown as import("mongodb").ObjectId,
+        _id: docId as unknown as any,
         title: doc.title,
         content: doc.content,
         source: {
@@ -325,11 +341,43 @@ export async function listKBDocuments(
   }));
 }
 
-export async function removeKBDocument(db: Db, prefix: string, docId: string): Promise<boolean> {
+/**
+ * F11: Remove a KB document and its chunks, wrapped in a transaction when possible.
+ * Uses withTransaction for automatic retry of TransientTransactionError.
+ * Falls back to sequential writes on standalone topologies (no replica set).
+ */
+export async function removeKBDocument(
+  db: Db,
+  prefix: string,
+  docId: string,
+  client?: MongoClient,
+): Promise<boolean> {
   const kb = kbCollection(db, prefix);
   const kbChunks = kbChunksCollection(db, prefix);
 
-  // Delete chunks first, then document
+  // Try transaction-wrapped removal (requires replica set)
+  if (client) {
+    try {
+      const session = client.startSession();
+      let deleted = false;
+      try {
+        await session.withTransaction(async () => {
+          await kbChunks.deleteMany({ docId }, { session });
+          const result = await kb.deleteOne({ _id: docId } as Record<string, unknown>, { session });
+          deleted = result.deletedCount > 0;
+        });
+        return deleted;
+      } finally {
+        await session.endSession();
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // Standalone or no replica set — fall through to sequential
+      log.warn(`transaction failed for removeKBDocument, falling back to sequential: ${msg}`);
+    }
+  }
+
+  // Standalone fallback: sequential writes without transaction
   await kbChunks.deleteMany({ docId });
   const result = await kb.deleteOne({ _id: docId } as Record<string, unknown>);
   return result.deletedCount > 0;

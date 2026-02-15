@@ -27,6 +27,13 @@ export class MongoDBChangeStreamWatcher {
   private pendingPaths: Set<string> = new Set();
   private pendingOpType: string = "unknown";
   private closed = false;
+  /**
+   * F21: Last resume token for reconnection after restart.
+   * NOTE (v1): Token is held in-memory only — not persisted to the meta collection.
+   * On process restart the token is lost and events since shutdown are missed.
+   * The manager can call `lastResumeToken` on shutdown to persist externally.
+   */
+  private _lastResumeToken: unknown = null;
 
   constructor(
     private readonly collection: Collection,
@@ -34,17 +41,30 @@ export class MongoDBChangeStreamWatcher {
     private readonly debounceMs: number = 1000,
   ) {}
 
+  /** F21: Get the last resume token for external persistence across restarts */
+  get lastResumeToken(): unknown {
+    return this._lastResumeToken;
+  }
+
   /**
-   * Open the change stream. Returns false if change streams are not supported
-   * (standalone MongoDB, no replica set).
+   * F21: Open the change stream. Accepts an optional resumeAfter token
+   * to resume from a previously persisted position.
+   * Returns false if change streams are not supported (standalone MongoDB).
    */
-  async start(): Promise<boolean> {
+  async start(resumeAfter?: unknown): Promise<boolean> {
     if (this.closed) {
       return false;
     }
 
     try {
       // Filter to relevant operation types only
+      const watchOpts: Record<string, unknown> = {
+        fullDocument: "updateLookup",
+      };
+      if (resumeAfter) {
+        watchOpts.resumeAfter = resumeAfter;
+      }
+
       this.stream = this.collection.watch(
         [
           {
@@ -53,9 +73,7 @@ export class MongoDBChangeStreamWatcher {
             },
           },
         ],
-        {
-          fullDocument: "updateLookup",
-        },
+        watchOpts,
       );
 
       this.stream.on("change", (change: ChangeStreamDocument) => {
@@ -86,6 +104,11 @@ export class MongoDBChangeStreamWatcher {
   }
 
   private handleChange(change: ChangeStreamDocument): void {
+    // F21: Persist resume token for reconnection
+    if (change._id) {
+      this._lastResumeToken = change._id;
+    }
+
     const opType = change.operationType;
 
     // Extract path from the document (available for insert/update/replace)
