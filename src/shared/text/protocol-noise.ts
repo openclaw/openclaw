@@ -6,7 +6,9 @@ export function isLeakedProtocolLine(line: string): boolean {
 }
 
 export function stripLeakedProtocolLines(text: string): string {
-  if (!text) return text;
+  if (!text) {
+    return text;
+  }
 
   const lines = text.split("\n");
   const kept: string[] = [];
@@ -28,7 +30,9 @@ export function stripLeakedProtocolLines(text: string): string {
     kept.push(line);
   }
 
-  if (!removed) return text;
+  if (!removed) {
+    return text;
+  }
 
   const joined = kept.join("\n").replace(/\n{3,}/g, "\n\n");
   return joined.replace(/^\n+/, "").replace(/\n+$/, "");
