@@ -441,6 +441,11 @@
   gap: 24px;
   overflow: hidden;
   padding-bottom: 0;
+  /* Explicit height constraints for Firefox/Gecko compatibility */
+  min-height: 0;
+  max-height: 100%;
+  /* Contain layout to prevent reflow issues in Gecko browsers */
+  contain: layout style;
 }
 
 .content--chat > * + * {
