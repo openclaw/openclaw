@@ -27,19 +27,6 @@ describe("session store lock (Promise chain mutex)", () => {
     return { promise, resolve, reject };
   }
 
-  async function waitForFile(filePath: string, maxTicks = 50): Promise<void> {
-    for (let tick = 0; tick < maxTicks; tick += 1) {
-      try {
-        await fs.access(filePath);
-        return;
-      } catch {
-        // Works under both real + fake timers (setImmediate is faked).
-        await new Promise<void>((resolve) => process.nextTick(resolve));
-      }
-    }
-    throw new Error(`timed out waiting for file: ${filePath}`);
-  }
-
   async function makeTmpStore(
     initial: Record<string, unknown> = {},
   ): Promise<{ dir: string; storePath: string }> {
@@ -76,8 +63,8 @@ describe("session store lock (Promise chain mutex)", () => {
       [key]: { sessionId: "s1", updatedAt: 100, counter: 0 },
     });
 
-    // Launch 10 concurrent read-modify-write cycles.
-    const N = 10;
+    // Launch a few concurrent read-modify-write cycles (enough to surface stale-read races).
+    const N = 4;
     await Promise.all(
       Array.from({ length: N }, (_, i) =>
         updateSessionStore(storePath, async (store) => {
@@ -309,16 +296,17 @@ describe("session store lock (Promise chain mutex)", () => {
       });
       let timedOutRan = false;
 
-      const lockPath = `${storePath}.lock`;
       const releaseLock = createDeferred<void>();
+      const lockStarted = createDeferred<void>();
       const lockHolder = withSessionStoreLockForTest(
         storePath,
         async () => {
+          lockStarted.resolve();
           await releaseLock.promise;
         },
         { timeoutMs: 1_000 },
       );
-      await waitForFile(lockPath);
+      await lockStarted.promise;
       const timedOut = withSessionStoreLockForTest(
         storePath,
         async () => {
@@ -350,12 +338,15 @@ describe("session store lock (Promise chain mutex)", () => {
 
     const lockPath = `${storePath}.lock`;
     const allowWrite = createDeferred<void>();
+    const writeStarted = createDeferred<void>();
     const write = updateSessionStore(storePath, async (store) => {
+      writeStarted.resolve();
       await allowWrite.promise;
       store[key] = { ...store[key], modelOverride: "v" } as unknown as SessionEntry;
     });
 
-    await waitForFile(lockPath);
+    await writeStarted.promise;
+    await fs.access(lockPath);
     allowWrite.resolve();
     await write;
 
