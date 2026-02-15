@@ -1,0 +1,20 @@
+{
+  "name": "@openclaw/coremem-tools",
+  "version": "2026.2.3",
+  "description": "OpenClaw tool extension for reading CoreMemories recent context.",
+  "type": "module",
+  "dependencies": {
+    "@openclaw/core-memories": "workspace:*"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.1.26"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

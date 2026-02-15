@@ -1,0 +1,14 @@
+{
+  "id": "coremem-tools",
+  "name": "CoreMemories Tools",
+  "description": "Tools for retrieving recent CoreMemories entries as meeting-style bullet summaries.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "defaultHours": { "type": "number", "description": "Default window size in hours." },
+      "defaultLimit": { "type": "number", "description": "Default max entries to load." },
+      "maxLimit": { "type": "number", "description": "Hard cap for limit." }
+    }
+  }
+}
