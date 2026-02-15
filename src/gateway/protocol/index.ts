@@ -120,6 +120,8 @@ import {
   type EventFrame,
   EventFrameSchema,
   errorShape,
+  type FsWriteParams,
+  FsWriteParamsSchema,
   type GatewayFrame,
   GatewayFrameSchema,
   type HelloOk,
@@ -367,6 +369,7 @@ export const validateUpdateRunParams = ajv.compile<UpdateRunParams>(UpdateRunPar
 export const validateWebLoginStartParams =
   ajv.compile<WebLoginStartParams>(WebLoginStartParamsSchema);
 export const validateWebLoginWaitParams = ajv.compile<WebLoginWaitParams>(WebLoginWaitParamsSchema);
+export const validateFsWriteParams = ajv.compile<FsWriteParams>(FsWriteParamsSchema);
 
 export function formatValidationErrors(errors: ErrorObject[] | null | undefined) {
   if (!errors?.length) {
@@ -491,6 +494,7 @@ export {
   ChatHistoryParamsSchema,
   ChatSendParamsSchema,
   ChatInjectParamsSchema,
+  FsWriteParamsSchema,
   UpdateRunParamsSchema,
   TickEventSchema,
   ShutdownEventSchema,
@@ -600,4 +604,5 @@ export type {
   PollParams,
   UpdateRunParams,
   ChatInjectParams,
+  FsWriteParams,
 };
