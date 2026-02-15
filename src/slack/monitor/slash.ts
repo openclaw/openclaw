@@ -2,30 +2,15 @@ import type { SlackActionMiddlewareArgs, SlackCommandMiddlewareArgs } from "@sla
 import type { ChatCommandDefinition, CommandArgs } from "../../auto-reply/commands-registry.js";
 import type { ResolvedSlackAccount } from "../accounts.js";
 import type { SlackMonitorContext } from "./context.js";
-import { resolveChunkMode } from "../../auto-reply/chunk.js";
-import {
-  buildCommandTextFromArgs,
-  findCommandByNativeName,
-  listNativeCommandSpecsForConfig,
-  parseCommandArgs,
-  resolveCommandArgMenu,
-} from "../../auto-reply/commands-registry.js";
-import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
-import { dispatchReplyWithDispatcher } from "../../auto-reply/reply/provider-dispatcher.js";
-import { listSkillCommandsForAgents } from "../../auto-reply/skill-commands.js";
 import { formatAllowlistMatchMeta } from "../../channels/allowlist-match.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
-import { resolveConversationLabel } from "../../channels/conversation-label.js";
-import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { resolveNativeCommandsEnabled, resolveNativeSkillsEnabled } from "../../config/commands.js";
-import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
 import { danger, logVerbose } from "../../globals.js";
 import { buildPairingReply } from "../../pairing/pairing-messages.js";
 import {
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
 } from "../../pairing/pairing-store.js";
-import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import {
   normalizeAllowList,
   normalizeAllowListLower,
@@ -36,13 +21,21 @@ import { resolveSlackChannelConfig, type SlackChannelConfigResolved } from "./ch
 import { buildSlackSlashCommandMatcher, resolveSlackSlashCommandConfig } from "./commands.js";
 import { normalizeSlackChannelType } from "./context.js";
 import { isSlackChannelAllowedByPolicy } from "./policy.js";
-import { deliverSlackSlashReplies } from "./replies.js";
 import { resolveSlackRoomContextHints } from "./room-context.js";
 
 type SlackBlock = { type: string; [key: string]: unknown };
 
 const SLACK_COMMAND_ARG_ACTION_ID = "openclaw_cmdarg";
 const SLACK_COMMAND_ARG_VALUE_PREFIX = "cmdarg";
+
+type CommandsRegistry = typeof import("../../auto-reply/commands-registry.js");
+let commandsRegistry: CommandsRegistry | undefined;
+async function getCommandsRegistry(): Promise<CommandsRegistry> {
+  if (!commandsRegistry) {
+    commandsRegistry = await import("../../auto-reply/commands-registry.js");
+  }
+  return commandsRegistry;
+}
 
 function chunkItems<T>(items: T[], size: number): T[][] {
   if (size <= 0) {
@@ -139,10 +132,10 @@ function buildSlackCommandArgMenuBlocks(params: {
   ];
 }
 
-export function registerSlackMonitorSlashCommands(params: {
+export async function registerSlackMonitorSlashCommands(params: {
   ctx: SlackMonitorContext;
   account: ResolvedSlackAccount;
-}) {
+}): Promise<void> {
   const { ctx, account } = params;
   const cfg = ctx.cfg;
   const runtime = ctx.runtime;
@@ -349,7 +342,8 @@ export function registerSlackMonitorSlashCommands(params: {
       }
 
       if (commandDefinition && supportsInteractiveArgMenus) {
-        const menu = resolveCommandArgMenu({
+        const reg = await getCommandsRegistry();
+        const menu = reg.resolveCommandArgMenu({
           command: commandDefinition,
           args: commandArgs,
           cfg,
@@ -376,6 +370,17 @@ export function registerSlackMonitorSlashCommands(params: {
 
       const channelName = channelInfo?.name;
       const roomLabel = channelName ? `#${channelName}` : `#${command.channel_id}`;
+      const [{ resolveAgentRoute }, { finalizeInboundContext }, { dispatchReplyWithDispatcher }] =
+        await Promise.all([
+          import("../../routing/resolve-route.js"),
+          import("../../auto-reply/reply/inbound-context.js"),
+          import("../../auto-reply/reply/provider-dispatcher.js"),
+        ]);
+      const [{ resolveConversationLabel }, { createReplyPrefixOptions }] = await Promise.all([
+        import("../../channels/conversation-label.js"),
+        import("../../channels/reply-prefix.js"),
+      ]);
+
       const route = resolveAgentRoute({
         cfg,
         channel: "slack",
@@ -450,6 +455,15 @@ export function registerSlackMonitorSlashCommands(params: {
         dispatcherOptions: {
           ...prefixOptions,
           deliver: async (payload) => {
+            const [
+              { deliverSlackSlashReplies },
+              { resolveChunkMode },
+              { resolveMarkdownTableMode },
+            ] = await Promise.all([
+              import("./replies.js"),
+              import("../../auto-reply/chunk.js"),
+              import("../../config/markdown-tables.js"),
+            ]);
             await deliverSlackSlashReplies({
               replies: [payload],
               respond,
@@ -473,6 +487,12 @@ export function registerSlackMonitorSlashCommands(params: {
         },
       });
       if (counts.final + counts.tool + counts.block === 0) {
+        const [{ deliverSlackSlashReplies }, { resolveChunkMode }, { resolveMarkdownTableMode }] =
+          await Promise.all([
+            import("./replies.js"),
+            import("../../auto-reply/chunk.js"),
+            import("../../config/markdown-tables.js"),
+          ]);
         await deliverSlackSlashReplies({
           replies: [],
           respond,
@@ -505,25 +525,35 @@ export function registerSlackMonitorSlashCommands(params: {
     providerSetting: account.config.commands?.nativeSkills,
     globalSetting: cfg.commands?.nativeSkills,
   });
-  const skillCommands =
-    nativeEnabled && nativeSkillsEnabled ? listSkillCommandsForAgents({ cfg }) : [];
-  const nativeCommands = nativeEnabled
-    ? listNativeCommandSpecsForConfig(cfg, { skillCommands, provider: "slack" })
-    : [];
+
+  let reg: CommandsRegistry | undefined;
+  let nativeCommands: Array<{ name: string }> = [];
+  if (nativeEnabled) {
+    reg = await getCommandsRegistry();
+    const skillCommands = nativeSkillsEnabled
+      ? (await import("../../auto-reply/skill-commands.js")).listSkillCommandsForAgents({ cfg })
+      : [];
+    nativeCommands = reg.listNativeCommandSpecsForConfig(cfg, { skillCommands, provider: "slack" });
+  }
+
   if (nativeCommands.length > 0) {
+    const registry = reg;
+    if (!registry) {
+      throw new Error("Missing commands registry for native Slack commands.");
+    }
     for (const command of nativeCommands) {
       ctx.app.command(
         `/${command.name}`,
         async ({ command: cmd, ack, respond }: SlackCommandMiddlewareArgs) => {
-          const commandDefinition = findCommandByNativeName(command.name, "slack");
+          const commandDefinition = registry.findCommandByNativeName(command.name, "slack");
           const rawText = cmd.text?.trim() ?? "";
           const commandArgs = commandDefinition
-            ? parseCommandArgs(commandDefinition, rawText)
+            ? registry.parseCommandArgs(commandDefinition, rawText)
             : rawText
               ? ({ raw: rawText } satisfies CommandArgs)
               : undefined;
           const prompt = commandDefinition
-            ? buildCommandTextFromArgs(commandDefinition, commandArgs)
+            ? registry.buildCommandTextFromArgs(commandDefinition, commandArgs)
             : rawText
               ? `/${command.name} ${rawText}`
               : `/${command.name}`;
@@ -596,12 +626,13 @@ export function registerSlackMonitorSlashCommands(params: {
         });
         return;
       }
-      const commandDefinition = findCommandByNativeName(parsed.command, "slack");
+      const reg = await getCommandsRegistry();
+      const commandDefinition = reg.findCommandByNativeName(parsed.command, "slack");
       const commandArgs: CommandArgs = {
         values: { [parsed.arg]: parsed.value },
       };
       const prompt = commandDefinition
-        ? buildCommandTextFromArgs(commandDefinition, commandArgs)
+        ? reg.buildCommandTextFromArgs(commandDefinition, commandArgs)
         : `/${parsed.command} ${parsed.value}`;
       const user = body.user;
       const userName =
