@@ -27,12 +27,14 @@ type WebMediaOptions = {
   maxBytes?: number;
   optimizeImages?: boolean;
   ssrfPolicy?: SsrFPolicy;
-  /** Allowed root directories for local path reads. "any" skips the check (caller already validated). */
-  localRoots?: string[] | "any";
+  /** Allowed root directories for local path reads. "any" is deprecated; prefer sandboxValidated + readFile. */
+  localRoots?: readonly string[] | "any";
+  /** Caller already validated the local path (sandbox/other guards); requires readFile override. */
+  sandboxValidated?: boolean;
   readFile?: (filePath: string) => Promise<Buffer>;
 };
 
-export function getDefaultLocalRoots(): string[] {
+export function getDefaultLocalRoots(): readonly string[] {
   return [
     os.tmpdir(),
     path.join(STATE_DIR, "media"),
@@ -44,7 +46,7 @@ export function getDefaultLocalRoots(): string[] {
 
 async function assertLocalMediaAllowed(
   mediaPath: string,
-  localRoots: string[] | "any" | undefined,
+  localRoots: readonly string[] | "any" | undefined,
 ): Promise<void> {
   if (localRoots === "any") {
     return;
@@ -63,6 +65,11 @@ async function assertLocalMediaAllowed(
       resolvedRoot = await fs.realpath(root);
     } catch {
       resolvedRoot = path.resolve(root);
+    }
+    if (resolvedRoot === path.parse(resolvedRoot).root) {
+      throw new Error(
+        `Invalid localRoots entry (refuses filesystem root): ${root}. Pass a narrower directory.`,
+      );
     }
     if (resolved === resolvedRoot || resolved.startsWith(resolvedRoot + path.sep)) {
       return;
@@ -173,6 +180,7 @@ async function loadWebMediaInternal(
     optimizeImages = true,
     ssrfPolicy,
     localRoots,
+    sandboxValidated = false,
     readFile: readFileOverride,
   } = options;
   // Strip MEDIA: prefix used by agent tools (e.g. TTS) to tag media paths.
@@ -275,8 +283,16 @@ async function loadWebMediaInternal(
     mediaUrl = resolveUserPath(mediaUrl);
   }
 
+  if ((sandboxValidated || localRoots === "any") && !readFileOverride) {
+    throw new Error(
+      "Refusing localRoots bypass without readFile override. Use sandboxValidated with readFile, or pass explicit localRoots.",
+    );
+  }
+
   // Guard local reads against allowed directory roots to prevent file exfiltration.
-  await assertLocalMediaAllowed(mediaUrl, localRoots);
+  if (!(sandboxValidated || localRoots === "any")) {
+    await assertLocalMediaAllowed(mediaUrl, localRoots);
+  }
 
   // Local path
   const data = readFileOverride ? await readFileOverride(mediaUrl) : await fs.readFile(mediaUrl);
@@ -300,7 +316,7 @@ async function loadWebMediaInternal(
 export async function loadWebMedia(
   mediaUrl: string,
   maxBytesOrOptions?: number | WebMediaOptions,
-  options?: { ssrfPolicy?: SsrFPolicy; localRoots?: string[] | "any" },
+  options?: { ssrfPolicy?: SsrFPolicy; localRoots?: readonly string[] | "any" },
 ): Promise<WebMediaResult> {
   if (typeof maxBytesOrOptions === "number" || maxBytesOrOptions === undefined) {
     return await loadWebMediaInternal(mediaUrl, {
@@ -319,7 +335,7 @@ export async function loadWebMedia(
 export async function loadWebMediaRaw(
   mediaUrl: string,
   maxBytesOrOptions?: number | WebMediaOptions,
-  options?: { ssrfPolicy?: SsrFPolicy; localRoots?: string[] | "any" },
+  options?: { ssrfPolicy?: SsrFPolicy; localRoots?: readonly string[] | "any" },
 ): Promise<WebMediaResult> {
   if (typeof maxBytesOrOptions === "number" || maxBytesOrOptions === undefined) {
     return await loadWebMediaInternal(mediaUrl, {

@@ -329,8 +329,20 @@ describe("local media root guard", () => {
   });
 
   it("allows any path when localRoots is 'any'", async () => {
-    const result = await loadWebMedia(tinyPngFile, 1024 * 1024, { localRoots: "any" });
+    const result = await loadWebMedia(tinyPngFile, {
+      maxBytes: 1024 * 1024,
+      localRoots: "any",
+      readFile: (filePath) => fs.readFile(filePath),
+    });
     expect(result.kind).toBe("image");
+  });
+
+  it("rejects filesystem root entries in localRoots", async () => {
+    await expect(
+      loadWebMedia(tinyPngFile, 1024 * 1024, {
+        localRoots: [path.parse(tinyPngFile).root],
+      }),
+    ).rejects.toThrow(/refuses filesystem root/i);
   });
 
   it("allows default OpenClaw state workspace and sandbox roots", async () => {
