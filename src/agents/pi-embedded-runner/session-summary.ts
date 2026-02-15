@@ -132,10 +132,11 @@ export function updateSessionSummaryState(params: {
   maxItems?: number;
 }): SessionSummaryState {
   const maxItems = Math.max(1, Math.floor(params.maxItems ?? DEFAULT_MAX_ITEMS));
-  const safeStart = Math.max(
-    0,
-    Math.min(params.state.lastProcessedMessageCount, params.messages.length),
-  );
+  const rewoundTranscript = params.state.lastProcessedMessageCount > params.messages.length;
+  const safeStart = rewoundTranscript
+    ? 0
+    : Math.max(0, Math.min(params.state.lastProcessedMessageCount, params.messages.length));
+  const baseItems = rewoundTranscript ? [] : params.state.items;
   if (safeStart >= params.messages.length) {
     return params.state;
   }
@@ -146,7 +147,7 @@ export function updateSessionSummaryState(params: {
     if (!summarized) {
       continue;
     }
-    if (params.state.items[params.state.items.length - 1] === summarized) {
+    if (baseItems[baseItems.length - 1] === summarized) {
       continue;
     }
     additions.push(summarized);
@@ -154,8 +155,8 @@ export function updateSessionSummaryState(params: {
 
   const merged =
     additions.length > 0
-      ? [...params.state.items, ...additions].slice(-maxItems)
-      : params.state.items.slice(-maxItems);
+      ? [...baseItems, ...additions].slice(-maxItems)
+      : baseItems.slice(-maxItems);
   return {
     ...params.state,
     items: merged,

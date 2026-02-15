@@ -96,6 +96,22 @@ describe("session summary state", () => {
     expect(prompt?.length).toBeLessThanOrEqual(170);
   });
 
+  it("resets summary tracking when transcript rewinds", () => {
+    const rewound = updateSessionSummaryState({
+      state: {
+        version: 1,
+        lastProcessedMessageCount: 10,
+        items: ["User: stale", "Assistant: stale"],
+        updatedAt: Date.now(),
+      },
+      messages: [makeMessage("user", "fresh start"), makeMessage("assistant", "fresh reply")],
+      maxItems: 10,
+    });
+
+    expect(rewound.lastProcessedMessageCount).toBe(2);
+    expect(rewound.items).toEqual(["User: fresh start", "Assistant: fresh reply"]);
+  });
+
   it("persists and reloads summary state", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-summary-roundtrip-"));
     const sessionFile = path.join(dir, "session.jsonl");
