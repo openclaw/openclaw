@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { buildFileEntry, listMemoryFiles, type MemoryFileEntry } from "./internal.js";
+import { indexFileEntryIfChanged } from "./sync-index.js";
 import { deleteStaleIndexedPaths } from "./sync-stale.js";
 
 const log = createSubsystemLogger("memory");
@@ -51,27 +52,14 @@ export async function syncMemoryFiles(params: {
   }
 
   const tasks = fileEntries.map((entry) => async () => {
-    const record = params.db
-      .prepare(`SELECT hash FROM files WHERE path = ? AND source = ?`)
-      .get(entry.path, "memory") as { hash: string } | undefined;
-    if (!params.needsFullReindex && record?.hash === entry.hash) {
-      if (params.progress) {
-        params.progress.completed += 1;
-        params.progress.report({
-          completed: params.progress.completed,
-          total: params.progress.total,
-        });
-      }
-      return;
-    }
-    await params.indexFile(entry);
-    if (params.progress) {
-      params.progress.completed += 1;
-      params.progress.report({
-        completed: params.progress.completed,
-        total: params.progress.total,
-      });
-    }
+    await indexFileEntryIfChanged({
+      db: params.db,
+      source: "memory",
+      needsFullReindex: params.needsFullReindex,
+      entry,
+      indexFile: params.indexFile,
+      progress: params.progress,
+    });
   });
 
   await params.runWithConcurrency(tasks, params.concurrency);

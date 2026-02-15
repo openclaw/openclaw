@@ -6,6 +6,7 @@ import {
   listSessionFilesForAgent,
   sessionPathForFile,
 } from "./session-files.js";
+import { indexFileEntryIfChanged } from "./sync-index.js";
 import { deleteStaleIndexedPaths } from "./sync-stale.js";
 
 const log = createSubsystemLogger("memory");
@@ -76,27 +77,14 @@ export async function syncSessionFiles(params: {
       }
       return;
     }
-    const record = params.db
-      .prepare(`SELECT hash FROM files WHERE path = ? AND source = ?`)
-      .get(entry.path, "sessions") as { hash: string } | undefined;
-    if (!params.needsFullReindex && record?.hash === entry.hash) {
-      if (params.progress) {
-        params.progress.completed += 1;
-        params.progress.report({
-          completed: params.progress.completed,
-          total: params.progress.total,
-        });
-      }
-      return;
-    }
-    await params.indexFile(entry);
-    if (params.progress) {
-      params.progress.completed += 1;
-      params.progress.report({
-        completed: params.progress.completed,
-        total: params.progress.total,
-      });
-    }
+    await indexFileEntryIfChanged({
+      db: params.db,
+      source: "sessions",
+      needsFullReindex: params.needsFullReindex,
+      entry,
+      indexFile: params.indexFile,
+      progress: params.progress,
+    });
   });
 
   await params.runWithConcurrency(tasks, params.concurrency);
