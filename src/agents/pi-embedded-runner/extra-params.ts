@@ -17,16 +17,34 @@ const OPENAI_RESPONSES_PROVIDERS = new Set(["openai"]);
  * Resolve provider-specific extra params from model config.
  * Used to pass through stream params like temperature/maxTokens.
  *
+ * When an agentId is provided, per-agent params from agents.list[].params
+ * are merged on top of global model defaults.
+ *
  * @internal Exported for testing only
  */
 export function resolveExtraParams(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
   modelId: string;
+  agentId?: string;
 }): Record<string, unknown> | undefined {
   const modelKey = `${params.provider}/${params.modelId}`;
   const modelConfig = params.cfg?.agents?.defaults?.models?.[modelKey];
-  return modelConfig?.params ? { ...modelConfig.params } : undefined;
+  const globalParams = modelConfig?.params ? { ...modelConfig.params } : undefined;
+
+  let agentParams: Record<string, unknown> | undefined;
+  if (params.agentId) {
+    const agentConfig = params.cfg?.agents?.list?.find((a) => a.id === params.agentId);
+    if (agentConfig?.params && Object.keys(agentConfig.params).length > 0) {
+      agentParams = agentConfig.params;
+    }
+  }
+
+  if (!globalParams && !agentParams) {
+    return undefined;
+  }
+
+  return Object.assign({}, globalParams, agentParams);
 }
 
 type CacheRetention = "none" | "short" | "long";
@@ -184,11 +202,13 @@ export function applyExtraParamsToAgent(
   provider: string,
   modelId: string,
   extraParamsOverride?: Record<string, unknown>,
+  agentId?: string,
 ): void {
   const extraParams = resolveExtraParams({
     cfg,
     provider,
     modelId,
+    agentId,
   });
   const override =
     extraParamsOverride && Object.keys(extraParamsOverride).length > 0
