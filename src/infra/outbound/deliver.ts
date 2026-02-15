@@ -22,6 +22,7 @@ import {
   appendAssistantMessageToSessionTranscript,
   resolveMirroredTranscriptText,
 } from "../../config/sessions.js";
+import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { markdownToSignalTextChunks, type SignalTextStyleRange } from "../../signal/format.js";
 import { sendMessageSignal } from "../../signal/send.js";
@@ -90,6 +91,7 @@ async function createChannelHandler(params: {
   deps?: OutboundSendDeps;
   gifPlayback?: boolean;
   silent?: boolean;
+  mediaLocalRoots?: readonly string[];
 }): Promise<ChannelHandler> {
   const outbound = await loadChannelOutboundAdapter(params.channel);
   if (!outbound?.sendText || !outbound?.sendMedia) {
@@ -107,6 +109,7 @@ async function createChannelHandler(params: {
     deps: params.deps,
     gifPlayback: params.gifPlayback,
     silent: params.silent,
+    mediaLocalRoots: params.mediaLocalRoots,
   });
   if (!handler) {
     throw new Error(`Outbound not configured for channel: ${params.channel}`);
@@ -126,6 +129,7 @@ function createPluginHandler(params: {
   deps?: OutboundSendDeps;
   gifPlayback?: boolean;
   silent?: boolean;
+  mediaLocalRoots?: readonly string[];
 }): ChannelHandler | null {
   const outbound = params.outbound;
   if (!outbound?.sendText || !outbound?.sendMedia) {
@@ -153,6 +157,7 @@ function createPluginHandler(params: {
             gifPlayback: params.gifPlayback,
             deps: params.deps,
             silent: params.silent,
+            mediaLocalRoots: params.mediaLocalRoots,
             payload,
           })
       : undefined,
@@ -168,6 +173,7 @@ function createPluginHandler(params: {
         gifPlayback: params.gifPlayback,
         deps: params.deps,
         silent: params.silent,
+        mediaLocalRoots: params.mediaLocalRoots,
       }),
     sendMedia: async (caption, mediaUrl) =>
       sendMedia({
@@ -182,6 +188,7 @@ function createPluginHandler(params: {
         gifPlayback: params.gifPlayback,
         deps: params.deps,
         silent: params.silent,
+        mediaLocalRoots: params.mediaLocalRoots,
       }),
   };
 }
@@ -203,6 +210,8 @@ type DeliverOutboundPayloadsCoreParams = {
   bestEffort?: boolean;
   onError?: (err: unknown, payload: NormalizedOutboundPayload) => void;
   onPayload?: (payload: NormalizedOutboundPayload) => void;
+  /** Active agent id for media local-root scoping. */
+  agentId?: string;
   mirror?: {
     sessionKey: string;
     agentId?: string;
@@ -286,6 +295,10 @@ async function deliverOutboundPayloadsCore(
   const deps = params.deps;
   const abortSignal = params.abortSignal;
   const sendSignal = params.deps?.sendSignal ?? sendMessageSignal;
+  const mediaLocalRoots = getAgentScopedMediaLocalRoots(
+    cfg,
+    params.agentId ?? params.mirror?.agentId,
+  );
   const results: OutboundDeliveryResult[] = [];
   const handler = await createChannelHandler({
     cfg,
@@ -298,6 +311,7 @@ async function deliverOutboundPayloadsCore(
     identity: params.identity,
     gifPlayback: params.gifPlayback,
     silent: params.silent,
+    mediaLocalRoots,
   });
   const textLimit = handler.chunker
     ? resolveTextChunkLimit(cfg, channel, accountId, {
@@ -400,6 +414,7 @@ async function deliverOutboundPayloadsCore(
         accountId: accountId ?? undefined,
         textMode: "plain",
         textStyles: formatted.styles,
+        mediaLocalRoots,
       })),
     };
   };

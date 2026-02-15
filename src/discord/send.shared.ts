@@ -312,6 +312,7 @@ async function sendDiscordMedia(
   channelId: string,
   text: string,
   mediaUrl: string,
+  mediaLocalRoots: readonly string[] | undefined,
   replyTo: string | undefined,
   request: DiscordRequest,
   maxLinesPerMessage?: number,
@@ -319,7 +320,7 @@ async function sendDiscordMedia(
   chunkMode?: ChunkMode,
   silent?: boolean,
 ) {
-  const media = await loadWebMedia(mediaUrl);
+  const media = await loadWebMedia(mediaUrl, { localRoots: mediaLocalRoots });
   const chunks = text ? buildDiscordTextChunks(text, { maxLinesPerMessage, chunkMode }) : [];
   const caption = chunks[0] ?? "";
   const hasCaption = caption.trim().length > 0;
