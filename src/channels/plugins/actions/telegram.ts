@@ -46,7 +46,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
       return [];
     }
     const gate = createActionGate(cfg.channels?.telegram?.actions);
-    const actions = new Set<ChannelMessageActionName>(["send"]);
+    const actions = new Set<ChannelMessageActionName>(["send", "poll"]);
     if (gate("reactions")) {
       actions.add("react");
     }
@@ -193,6 +193,37 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
           action: "searchSticker",
           query,
           limit: limit ?? undefined,
+          accountId: accountId ?? undefined,
+        },
+        cfg,
+      );
+    }
+
+    if (action === "poll") {
+      const to =
+        readStringOrNumberParam(params, "chatId") ??
+        readStringOrNumberParam(params, "channelId") ??
+        readStringParam(params, "to", { required: true });
+      const question = readStringParam(params, "question", { required: true });
+      const options = readStringArrayParam(params, "options");
+      const maxSelections = readNumberParam(params, "maxSelections", { integer: true });
+      const durationSeconds = readNumberParam(params, "durationSeconds", { integer: true });
+      const allowsMultipleAnswers = typeof params.allowsMultipleAnswers === "boolean" ? params.allowsMultipleAnswers : undefined;
+      const anonymous = typeof params.anonymous === "boolean" ? params.anonymous : undefined;
+      const replyToMessageId = readNumberParam(params, "replyTo", { integer: true });
+      const messageThreadId = readNumberParam(params, "threadId", { integer: true });
+      return await handleTelegramAction(
+        {
+          action: "sendPoll",
+          chatId: to,
+          question,
+          options: options ?? [],
+          maxSelections,
+          durationSeconds,
+          allowsMultipleAnswers,
+          anonymous,
+          replyToMessageId: replyToMessageId ?? undefined,
+          messageThreadId: messageThreadId ?? undefined,
           accountId: accountId ?? undefined,
         },
         cfg,
