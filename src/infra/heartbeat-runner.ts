@@ -99,7 +99,6 @@ export type HeartbeatSummary = {
 
 const DEFAULT_HEARTBEAT_TARGET = "last";
 const HEARTBEAT_STATE_FILENAME = "heartbeat-state.json";
-const HEARTBEAT_STATE_VERSION = 1;
 
 // Prompt used when an async exec has completed and the result should be relayed to the user.
 // This overrides the standard heartbeat prompt to ensure the model responds with the exec result
@@ -276,24 +275,29 @@ type HeartbeatModelState = {
   lastUpdated: number;
 };
 
-type HeartbeatState = {
-  version: number;
-  agents: Record<string, HeartbeatModelState>;
-};
-
-function getHeartbeatStatePath(workspaceDir: string): string {
-  return path.join(workspaceDir, HEARTBEAT_STATE_FILENAME);
+function getHeartbeatStatePath(agentDir: string): string {
+  return path.join(agentDir, HEARTBEAT_STATE_FILENAME);
 }
 
 async function loadHeartbeatAgentModelState(
-  workspaceDir: string,
+  agentDir: string,
 ): Promise<HeartbeatModelState | null> {
-  const statePath = getHeartbeatStatePath(workspaceDir);
+  const statePath = getHeartbeatStatePath(agentDir);
+  try {
+    await fs.access(statePath);
+  } catch {
+    // File doesn't exist — normal on first run
+    return null;
+  }
   let content: string;
   try {
     content = await fs.readFile(statePath, "utf-8");
-  } catch {
-    // File doesn't exist — normal on first run
+  } catch (err) {
+    // File exists but can't be read (e.g. wrong permissions) — user must fix manually
+    log.warn("heartbeat: cannot read state file (check permissions)", {
+      path: statePath,
+      error: formatErrorMessage(err),
+    });
     return null;
   }
   try {
@@ -305,7 +309,7 @@ async function loadHeartbeatAgentModelState(
     return parsed;
   } catch (err) {
     // File exists but is corrupt — log so the user can investigate
-    log.warn("heartbeat: failed to parse state file (check permissions/corruption)", {
+    log.warn("heartbeat: failed to parse state file (check for corruption)", {
       path: statePath,
       error: formatErrorMessage(err),
     });
@@ -314,12 +318,12 @@ async function loadHeartbeatAgentModelState(
 }
 
 async function saveHeartbeatAgentModelState(
-  workspaceDir: string,
+  agentDir: string,
   update: Partial<HeartbeatModelState>,
   existing: HeartbeatModelState | null,
 ): Promise<void> {
   try {
-    const statePath = getHeartbeatStatePath(workspaceDir);
+    const statePath = getHeartbeatStatePath(agentDir);
     const next: HeartbeatModelState = {
       currentFallbackIndex: 0,
       lastUpdated: Date.now(),
