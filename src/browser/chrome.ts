@@ -188,6 +188,7 @@ export async function launchOpenClawChrome(
   // First launch to create preference files if missing, then decorate and relaunch.
   const spawnOnce = () => {
     const args: string[] = [
+      "--remote-debugging-address=127.0.0.1",
       `--remote-debugging-port=${profile.cdpPort}`,
       `--user-data-dir=${userDataDir}`,
       "--no-first-run",
