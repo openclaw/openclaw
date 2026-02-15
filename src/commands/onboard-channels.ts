@@ -286,6 +286,52 @@ async function maybeConfigureDmPolicies(params: {
   return cfg;
 }
 
+async function maybeConfigureDmScopeIsolation(params: {
+  cfg: OpenClawConfig;
+  selection: ChannelChoice[];
+  prompter: WizardPrompter;
+  skipConfirm?: boolean;
+}): Promise<OpenClawConfig> {
+  if (params.cfg.session?.dmScope) {
+    return params.cfg;
+  }
+
+  const dmCapableSelection = params.selection.filter((channel) =>
+    Boolean(getChannelOnboardingAdapter(channel)?.dmPolicy),
+  );
+  if (dmCapableSelection.length < 2) {
+    return params.cfg;
+  }
+
+  const shouldSet = params.skipConfirm
+    ? true
+    : await params.prompter.confirm({
+        message:
+          'Enable safe DM session isolation now? (recommended for multi-channel DM setups)',
+        initialValue: true,
+      });
+  if (!shouldSet) {
+    await params.prompter.note(
+      'Skipped. To prevent cross-channel DM context mixing, set session.dmScope="per-channel-peer" later.',
+      'DM session scope',
+    );
+    return params.cfg;
+  }
+
+  const next: OpenClawConfig = {
+    ...params.cfg,
+    session: {
+      ...(params.cfg.session ?? {}),
+      dmScope: 'per-channel-peer',
+    },
+  };
+  await params.prompter.note(
+    'Set session.dmScope="per-channel-peer" to isolate DM context by channel+sender.',
+    'DM session scope',
+  );
+  return next;
+}
+
 // Channel-specific prompts moved into onboarding adapters.
 
 export async function setupChannels(
@@ -674,6 +720,13 @@ export async function setupChannels(
       accountIdsByChannel,
     });
   }
+
+  next = await maybeConfigureDmScopeIsolation({
+    cfg: next,
+    selection,
+    prompter,
+    skipConfirm: options?.skipConfirm,
+  });
 
   return next;
 }
