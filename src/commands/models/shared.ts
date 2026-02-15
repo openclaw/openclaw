@@ -153,6 +153,22 @@ export function resolveKnownAgentId(params: {
   return agentId;
 }
 
+export type PrimaryFallbackConfig = { primary?: string; fallbacks?: string[] };
+
+export function mergePrimaryFallbackConfig(
+  existing: PrimaryFallbackConfig | undefined,
+  patch: { primary?: string; fallbacks?: string[] },
+): PrimaryFallbackConfig {
+  const next: PrimaryFallbackConfig = { ...existing };
+  if (patch.primary !== undefined) {
+    next.primary = patch.primary;
+  }
+  if (patch.fallbacks !== undefined) {
+    next.fallbacks = patch.fallbacks;
+  }
+  return next;
+}
+
 export { modelKey };
 export { DEFAULT_MODEL, DEFAULT_PROVIDER };
 
