@@ -125,4 +125,34 @@ describe("isTransientNetworkError", () => {
     const error = new AggregateError([new Error("regular error")], "Multiple errors");
     expect(isTransientNetworkError(error)).toBe(false);
   });
+
+  it("returns true for GrammyError with 502 Bad Gateway", () => {
+    const error = { name: "GrammyError", message: "Call to 'sendMessage' failed! (502: Bad Gateway)" };
+    expect(isTransientNetworkError(error)).toBe(true);
+  });
+
+  it("returns true for GrammyError with 503 Service Unavailable", () => {
+    const error = { name: "GrammyError", message: "Call to 'getUpdates' failed! (503: Service Unavailable)" };
+    expect(isTransientNetworkError(error)).toBe(true);
+  });
+
+  it("returns true for GrammyError with 504 Gateway Timeout", () => {
+    const error = { name: "GrammyError", message: "API request failed (504: Gateway Timeout)" };
+    expect(isTransientNetworkError(error)).toBe(true);
+  });
+
+  it("returns true for GrammyError with Connection error", () => {
+    const error = { name: "GrammyError", message: "Connection failed: network unreachable" };
+    expect(isTransientNetworkError(error)).toBe(true);
+  });
+
+  it("returns true for HttpError with timeout", () => {
+    const error = { name: "HttpError", message: "Request timeout after 30s" };
+    expect(isTransientNetworkError(error)).toBe(true);
+  });
+
+  it("returns false for GrammyError with non-network error", () => {
+    const error = { name: "GrammyError", message: "Invalid bot token" };
+    expect(isTransientNetworkError(error)).toBe(false);
+  });
 });
