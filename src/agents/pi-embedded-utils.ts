@@ -207,22 +207,21 @@ export function stripThinkingTagsFromText(text: string): string {
 }
 
 export function extractAssistantText(msg: AssistantMessage): string {
-  const isTextBlock = (block: unknown): block is { type: "text"; text: string } => {
-    if (!block || typeof block !== "object") {
-      return false;
-    }
-    const rec = block as Record<string, unknown>;
-    return rec.type === "text" && typeof rec.text === "string";
-  };
-
   const blocks = Array.isArray(msg.content)
     ? msg.content
-        .filter(isTextBlock)
-        .map((c) =>
-          stripThinkingTagsFromText(
-            stripDowngradedToolCallText(stripMinimaxToolCallXml(c.text)),
-          ).trim(),
-        )
+        .map((block) => {
+          if (!block || typeof block !== "object") {
+            return "";
+          }
+          const type = (block as { type?: unknown }).type;
+          const text = (block as { text?: unknown }).text;
+          if ((type !== "text" && type !== "output_text") || typeof text !== "string") {
+            return "";
+          }
+          return stripThinkingTagsFromText(
+            stripDowngradedToolCallText(stripMinimaxToolCallXml(text)),
+          ).trim();
+        })
         .filter(Boolean)
     : [];
   const extracted = blocks.join("\n").trim();

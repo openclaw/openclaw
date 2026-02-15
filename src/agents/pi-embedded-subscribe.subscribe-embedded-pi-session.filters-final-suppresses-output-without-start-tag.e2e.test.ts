@@ -153,4 +153,38 @@ describe("subscribeEmbeddedPiSession", () => {
     const payload = onBlockReply.mock.calls[0][0];
     expect(payload.text).toBe("Hello block");
   });
+
+  it("emits assistant error text on message_end when content is empty", () => {
+    let handler: ((evt: unknown) => void) | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
+
+    const onAgentEvent = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
+      runId: "run",
+      onAgentEvent,
+    });
+
+    const assistantMessage = {
+      role: "assistant",
+      stopReason: "error",
+      errorMessage: "401 Unauthorized",
+      content: [],
+    } as AssistantMessage;
+
+    handler?.({ type: "message_start", message: assistantMessage });
+    handler?.({ type: "message_end", message: assistantMessage });
+
+    const assistantPayload = onAgentEvent.mock.calls
+      .map((call) => call[0] as { stream?: string; data?: Record<string, unknown> })
+      .find((evt) => evt.stream === "assistant");
+
+    expect(assistantPayload?.data?.text).toContain("HTTP 401");
+  });
 });

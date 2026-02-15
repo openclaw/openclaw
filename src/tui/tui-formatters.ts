@@ -96,7 +96,7 @@ export function extractContentFromMessage(message: unknown): string {
       continue;
     }
     const rec = block as Record<string, unknown>;
-    if (rec.type === "text" && typeof rec.text === "string") {
+    if ((rec.type === "text" || rec.type === "output_text") && typeof rec.text === "string") {
       parts.push(rec.text);
     }
   }
@@ -129,7 +129,10 @@ function extractTextBlocks(content: unknown, opts?: { includeThinking?: boolean 
       continue;
     }
     const record = block as Record<string, unknown>;
-    if (record.type === "text" && typeof record.text === "string") {
+    if (
+      (record.type === "text" || record.type === "output_text" || record.type === "input_text") &&
+      typeof record.text === "string"
+    ) {
       textParts.push(record.text);
     }
     if (

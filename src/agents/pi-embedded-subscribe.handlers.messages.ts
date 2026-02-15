@@ -4,6 +4,7 @@ import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
 import {
+  formatRawAssistantErrorForUi,
   isMessagingToolDuplicateNormalized,
   normalizeTextForComparison,
 } from "./pi-embedded-helpers.js";
@@ -235,6 +236,15 @@ export function handleMessageEnd(
       cleanedText = parsedFallback.text ?? rawCandidate;
       mediaUrls = parsedFallback.mediaUrls;
       hasMedia = Boolean(mediaUrls && mediaUrls.length > 0);
+    }
+  }
+  if (!cleanedText && !hasMedia) {
+    const stopReason =
+      typeof assistantMessage.stopReason === "string" ? assistantMessage.stopReason : "";
+    const errorMessage =
+      typeof assistantMessage.errorMessage === "string" ? assistantMessage.errorMessage.trim() : "";
+    if (stopReason === "error" && errorMessage) {
+      cleanedText = formatRawAssistantErrorForUi(errorMessage);
     }
   }
 

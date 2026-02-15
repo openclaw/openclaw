@@ -88,6 +88,15 @@ describe("extractContentFromMessage", () => {
     expect(text).toBe("hello");
   });
 
+  it("collects output_text blocks", () => {
+    const text = extractContentFromMessage({
+      role: "assistant",
+      content: [{ type: "output_text", text: "hello from output_text" }],
+    });
+
+    expect(text).toBe("hello from output_text");
+  });
+
   it("renders error text when stopReason is error and content is not an array", () => {
     const text = extractContentFromMessage({
       role: "assistant",
@@ -104,5 +113,19 @@ describe("isCommandMessage", () => {
     expect(isCommandMessage({ command: true })).toBe(true);
     expect(isCommandMessage({ command: false })).toBe(false);
     expect(isCommandMessage({})).toBe(false);
+  });
+});
+
+describe("extractTextFromMessage block variants", () => {
+  it("joins input_text and output_text blocks", () => {
+    const text = extractTextFromMessage({
+      role: "assistant",
+      content: [
+        { type: "input_text", text: "prompt echo" },
+        { type: "output_text", text: "assistant output" },
+      ],
+    });
+
+    expect(text).toBe("prompt echo\nassistant output");
   });
 });

@@ -93,9 +93,7 @@ export type HeartbeatSummary = {
 
 const DEFAULT_HEARTBEAT_TARGET = "last";
 
-// Prompt used when an async exec has completed and the result should be relayed to the user.
-// This overrides the standard heartbeat prompt to ensure the model responds with the exec result
-// instead of just "HEARTBEAT_OK".
+// Prompt used when async exec completes; overrides standard heartbeat prompt so model relays exec result instead of only "HEARTBEAT_OK".
 const EXEC_EVENT_PROMPT =
   "An async command you ran earlier has completed. The result is shown in the system messages above. " +
   "Please relay the command output to the user in a helpful way. If the command succeeded, share the relevant output. " +
