@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
-import { downloadGoogleChatMedia } from "./api.js";
+import { downloadGoogleChatMedia, markdownToGoogleChat } from "./api.js";
 
 vi.mock("./auth.js", () => ({
   getGoogleChatAccessToken: vi.fn().mockResolvedValue("token"),
@@ -12,6 +12,32 @@ const account = {
   credentialSource: "inline",
   config: {},
 } as ResolvedGoogleChatAccount;
+
+describe("markdownToGoogleChat", () => {
+  it("converts bold from Markdown to Google Chat format", () => {
+    expect(markdownToGoogleChat("Hello **world**")).toBe("Hello *world*");
+  });
+
+  it("converts strikethrough from Markdown to Google Chat format", () => {
+    expect(markdownToGoogleChat("Hello ~~world~~")).toBe("Hello ~world~");
+  });
+
+  it("converts both bold and strikethrough", () => {
+    expect(markdownToGoogleChat("**bold** and ~~strike~~")).toBe("*bold* and ~strike~");
+  });
+
+  it("leaves plain text unchanged", () => {
+    expect(markdownToGoogleChat("no formatting here")).toBe("no formatting here");
+  });
+
+  it("preserves single asterisk italic", () => {
+    expect(markdownToGoogleChat("*italic* text")).toBe("*italic* text");
+  });
+
+  it("handles multiple bold segments", () => {
+    expect(markdownToGoogleChat("**a** and **b**")).toBe("*a* and *b*");
+  });
+});
 
 describe("downloadGoogleChatMedia", () => {
   afterEach(() => {

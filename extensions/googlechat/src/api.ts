@@ -107,6 +107,24 @@ async function fetchBuffer(
   return { buffer, contentType };
 }
 
+/**
+ * Convert standard Markdown formatting to Google Chat markup.
+ * Google Chat uses its own syntax:
+ *   **bold** → *bold*
+ *   ~~strikethrough~~ → ~strikethrough~
+ * Note: *italic* in Markdown maps to _italic_ in Google Chat,
+ * but only single-asterisk italic (not double).
+ */
+export function markdownToGoogleChat(text: string): string {
+  return (
+    text
+      // Bold: **text** → *text* (must come before italic to avoid conflicts)
+      .replace(/\*\*(.+?)\*\*/g, "*$1*")
+      // Strikethrough: ~~text~~ → ~text~
+      .replace(/~~(.+?)~~/g, "~$1~")
+  );
+}
+
 export async function sendGoogleChatMessage(params: {
   account: ResolvedGoogleChatAccount;
   space: string;
@@ -117,7 +135,7 @@ export async function sendGoogleChatMessage(params: {
   const { account, space, text, thread, attachments } = params;
   const body: Record<string, unknown> = {};
   if (text) {
-    body.text = text;
+    body.text = markdownToGoogleChat(text);
   }
   if (thread) {
     body.thread = { name: thread };
@@ -145,7 +163,7 @@ export async function updateGoogleChatMessage(params: {
   const url = `${CHAT_API_BASE}/${messageName}?updateMask=text`;
   const result = await fetchJson<{ name?: string }>(account, url, {
     method: "PATCH",
-    body: JSON.stringify({ text }),
+    body: JSON.stringify({ text: markdownToGoogleChat(text) }),
   });
   return { messageName: result.name };
 }
