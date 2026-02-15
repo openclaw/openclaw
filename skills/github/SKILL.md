@@ -30,7 +30,7 @@ metadata:
 
 # GitHub Skill
 
-Use the `gh` CLI to interact with GitHub. Always specify `--repo owner/repo` when not in a git directory, or use URLs directly.
+Use the `gh` CLI to interact with GitHub. For commands like `gh issue`, `gh pr`, and `gh run`, always specify `--repo owner/repo` when not in a git directory. For `gh api`, include the owner/repo in the URL path or query body.
 
 ## Pull Requests
 
@@ -60,13 +60,33 @@ gh run view <run-id> --repo owner/repo --log-failed
 
 ## API for Advanced Queries
 
-The `gh api` command is useful for accessing data not available through other subcommands.
+The `gh api` command supports both REST and GraphQL. Use it for anything not available through other `gh` subcommands.
 
-Get PR with specific fields:
+REST example:
 
 ```bash
 gh api repos/owner/repo/pulls/55 --jq '.title, .state, .user.login'
 ```
+
+GraphQL example:
+
+```bash
+gh api graphql -f query='query { organization(login: "owner") { projectsV2(first: 10) { nodes { id title } } } }'
+```
+
+When a `gh` subcommand doesn't support what you need (e.g. `gh project` can't modify field options), use `gh api graphql` with the appropriate mutation. **Do not guess mutation or field names** — introspect the schema first:
+
+```bash
+gh api graphql -f query='{ __schema { mutationType { fields { name } } } }' --jq '.data.__schema.mutationType.fields[].name' | grep -i project
+```
+
+Then inspect the input type for the mutation you need:
+
+```bash
+gh api graphql -f query='{ __type(name: "UpdateProjectV2FieldInput") { inputFields { name type { name kind ofType { name } } } } }'
+```
+
+If a GraphQL call returns an `undefinedField` error, use the introspection queries above to find the correct mutation and field names.
 
 ## JSON Output
 
