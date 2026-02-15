@@ -25,6 +25,32 @@ export async function runBeforeToolCallHook(args: {
   const toolName = normalizeToolName(args.toolName || "tool");
   const params = args.params;
 
+  if (args.ctx?.sessionKey) {
+    const { getDiagnosticSessionState } = await import("../logging/diagnostic-session-state.js");
+    const { detectToolCallLoop, recordToolCall } = await import("./tool-loop-detection.js");
+
+    const sessionState = getDiagnosticSessionState({
+      sessionKey: args.ctx.sessionKey,
+      sessionId: args.ctx?.agentId,
+    });
+
+    const loopResult = detectToolCallLoop(sessionState, toolName, params);
+
+    if (loopResult.stuck) {
+      if (loopResult.level === "critical") {
+        log.error(`Blocking ${toolName} due to critical loop: ${loopResult.message}`);
+        return {
+          blocked: true,
+          reason: loopResult.message,
+        };
+      } else {
+        log.warn(`Loop warning for ${toolName}: ${loopResult.message}`);
+      }
+    }
+
+    recordToolCall(sessionState, toolName, params);
+  }
+
   const hookRunner = getGlobalHookRunner();
   if (!hookRunner?.hasHooks("before_tool_call")) {
     return { blocked: false, params: args.params };

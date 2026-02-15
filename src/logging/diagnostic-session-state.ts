@@ -6,6 +6,14 @@ export type SessionState = {
   lastActivity: number;
   state: SessionStateValue;
   queueDepth: number;
+  toolCallHistory?: ToolCallRecord[];
+  commandPollCounts?: Map<string, { count: number; lastPollAt: number }>;
+};
+
+export type ToolCallRecord = {
+  toolName: string;
+  argsHash: string;
+  timestamp: number;
 };
 
 export type SessionRef = {

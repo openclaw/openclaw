@@ -314,6 +314,16 @@ export function startDiagnosticHeartbeat() {
       queued: totalQueued,
     });
 
+    import("../agents/command-poll-backoff.js")
+      .then(({ pruneStaleCommandPolls }) => {
+        for (const [, state] of diagnosticSessionStates) {
+          pruneStaleCommandPolls(state);
+        }
+      })
+      .catch((err) => {
+        diag.debug(`command-poll-backoff prune failed: ${String(err)}`);
+      });
+
     for (const [, state] of diagnosticSessionStates) {
       const ageMs = now - state.lastActivity;
       if (state.state === "processing" && ageMs > 120_000) {
