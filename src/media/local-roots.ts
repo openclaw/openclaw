@@ -9,7 +9,6 @@ function buildMediaLocalRoots(stateDir: string): string[] {
   return [
     os.tmpdir(),
     path.join(resolvedStateDir, "media"),
-    path.join(resolvedStateDir, "agents"),
     path.join(resolvedStateDir, "workspace"),
     path.join(resolvedStateDir, "sandboxes"),
   ];

@@ -1,3 +1,5 @@
+import { promises as fs } from "node:fs";
+import path from "node:path";
 import { loadConfig } from "../config/config.js";
 import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
@@ -29,6 +31,9 @@ export type SubagentRunRecord = {
   cleanupCompletedAt?: number;
   cleanupHandled?: boolean;
   suppressAnnounceReason?: "steer-restart" | "killed";
+  attachmentsDir?: string;
+  attachmentsRootDir?: string;
+  retainAttachmentsOnKeep?: boolean;
 };
 
 const subagentRuns = new Map<string, SubagentRunRecord>();
@@ -185,6 +190,8 @@ async function sweepSubagentRuns() {
     }
     subagentRuns.delete(runId);
     mutated = true;
+    // Archive/purge is terminal for the run record; remove any retained attachments too.
+    await safeRemoveAttachmentsDir(entry);
     try {
       await callGateway({
         method: "sessions.delete",
@@ -250,6 +257,25 @@ function ensureListener() {
   });
 }
 
+async function safeRemoveAttachmentsDir(entry: SubagentRunRecord): Promise<void> {
+  if (!entry.attachmentsDir || !entry.attachmentsRootDir) {
+    return;
+  }
+  try {
+    const [rootReal, dirReal] = await Promise.all([
+      fs.realpath(entry.attachmentsRootDir),
+      fs.realpath(entry.attachmentsDir),
+    ]);
+    const rootWithSep = rootReal.endsWith(path.sep) ? rootReal : `${rootReal}${path.sep}`;
+    if (!dirReal.startsWith(rootWithSep)) {
+      return;
+    }
+    await fs.rm(dirReal, { recursive: true, force: true });
+  } catch {
+    // best effort
+  }
+}
+
 function finalizeSubagentCleanup(runId: string, cleanup: "delete" | "keep", didAnnounce: boolean) {
   const entry = subagentRuns.get(runId);
   if (!entry) {
@@ -262,6 +288,12 @@ function finalizeSubagentCleanup(runId: string, cleanup: "delete" | "keep", didA
     persistSubagentRuns();
     return;
   }
+
+  const shouldDeleteAttachments = cleanup === "delete" || !entry.retainAttachmentsOnKeep;
+  if (shouldDeleteAttachments) {
+    void safeRemoveAttachmentsDir(entry);
+  }
+
   if (cleanup === "delete") {
     subagentRuns.delete(runId);
     persistSubagentRuns();
@@ -412,6 +444,9 @@ export function registerSubagentRun(params: {
   label?: string;
   model?: string;
   runTimeoutSeconds?: number;
+  attachmentsDir?: string;
+  attachmentsRootDir?: string;
+  retainAttachmentsOnKeep?: boolean;
 }) {
   const now = Date.now();
   const cfg = loadConfig();
@@ -435,6 +470,9 @@ export function registerSubagentRun(params: {
     startedAt: now,
     archiveAtMs,
     cleanupHandled: false,
+    attachmentsDir: params.attachmentsDir,
+    attachmentsRootDir: params.attachmentsRootDir,
+    retainAttachmentsOnKeep: params.retainAttachmentsOnKeep,
   });
   ensureListener();
   persistSubagentRuns();
