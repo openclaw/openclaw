@@ -155,6 +155,26 @@ function resolvePathWithinSessionsDir(
     }
   }
   if (!normalized || normalized.startsWith("..") || path.isAbsolute(normalized)) {
+    // If the candidate is an absolute path pointing to a valid agent sessions
+    // directory, allow it. This supports multi-agent setups where session file
+    // paths reference a different agent's sessions directory.
+    if (path.isAbsolute(trimmed)) {
+      const candidateDir = path.dirname(path.resolve(trimmed));
+      const stateDir = resolveStateDir(process.env);
+      const agentsDir = path.join(stateDir, "agents");
+      const relToAgents = path.relative(agentsDir, candidateDir);
+      // Allow paths like <stateDir>/agents/<id>/sessions[/...]
+      // but enforce that the path is specifically within a sessions directory
+      const relParts = relToAgents.split(path.sep);
+      if (
+        !relToAgents.startsWith("..") &&
+        !path.isAbsolute(relToAgents) &&
+        relParts.length >= 2 &&
+        relParts[1] === "sessions"
+      ) {
+        return path.resolve(trimmed);
+      }
+    }
     throw new Error("Session file path must be within sessions directory");
   }
   return path.resolve(resolvedBase, normalized);
