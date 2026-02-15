@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { captureEnv } from "../test-utils/env.js";
 import "./test-helpers/fast-core-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 
@@ -18,8 +19,7 @@ describe("gateway tool", () => {
   it("schedules SIGUSR1 restart", async () => {
     vi.useFakeTimers();
     const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    const previousProfile = process.env.OPENCLAW_PROFILE;
+    const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR", "OPENCLAW_PROFILE"]);
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-"));
     process.env.OPENCLAW_STATE_DIR = stateDir;
     process.env.OPENCLAW_PROFILE = "isolated";
@@ -60,16 +60,8 @@ describe("gateway tool", () => {
     } finally {
       kill.mockRestore();
       vi.useRealTimers();
-      if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
-      if (previousProfile === undefined) {
-        delete process.env.OPENCLAW_PROFILE;
-      } else {
-        process.env.OPENCLAW_PROFILE = previousProfile;
-      }
+      envSnapshot.restore();
+      await fs.rm(stateDir, { recursive: true, force: true });
     }
   });
 
