@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { visibleWidth } from "../../terminal/ansi.js";
+import { stripAnsi, visibleWidth } from "../../terminal/ansi.js";
 import { SearchableSelectList, type SearchableSelectListTheme } from "./searchable-select-list.js";
 
 const mockTheme: SearchableSelectListTheme = {
@@ -101,6 +101,45 @@ describe("SearchableSelectList", () => {
     for (const line of output) {
       expect(visibleWidth(line)).toBeLessThanOrEqual(width);
     }
+  });
+
+  it("ignores ANSI escape codes in search matching", () => {
+    const items = [
+      { value: "styled", label: "\u001b[32mopenai/gpt-4\u001b[0m", description: "Styled label" },
+      { value: "plain", label: "plain-item", description: "Plain label" },
+    ];
+    const list = new SearchableSelectList(items, 5, mockTheme);
+
+    for (const ch of "32m") {
+      list.handleInput(ch);
+    }
+
+    const output = list.render(80);
+    expect(output.some((line) => line.includes("No matches"))).toBe(true);
+  });
+
+  it("does not corrupt ANSI sequences when highlighting multiple tokens", () => {
+    const ansiTheme: SearchableSelectListTheme = {
+      selectedPrefix: (t) => t,
+      selectedText: (t) => t,
+      description: (t) => t,
+      scrollInfo: (t) => t,
+      noMatch: (t) => t,
+      searchPrompt: (t) => t,
+      searchInput: (t) => t,
+      matchHighlight: (t) => `\u001b[31m${t}\u001b[0m`,
+    };
+    const items = [{ value: "gpt-model", label: "gpt-model" }];
+    const list = new SearchableSelectList(items, 5, ansiTheme);
+
+    for (const ch of "gpt m") {
+      list.handleInput(ch);
+    }
+
+    const renderedLine = list.render(80).find((line) => stripAnsi(line).includes("gpt-model"));
+    expect(renderedLine).toBeDefined();
+    const highlightOpens = renderedLine ? renderedLine.split("\u001b[31m").length - 1 : 0;
+    expect(highlightOpens).toBe(2);
   });
 
   it("filters items when typing", () => {
