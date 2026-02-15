@@ -123,13 +123,13 @@ describe("buildStatusMessage", () => {
       sessionEntry: {
         sessionId: "reasoning-fallback",
         updatedAt: 0,
-        reasoningLevel: "medium",
+        reasoningLevel: "on",
       },
       sessionKey: "agent:main:main",
       sessionScope: "per-sender",
       queue: { mode: "collect", depth: 0 },
     });
-    expect(normalizeTestText(text)).toContain("Reasoning: medium");
+    expect(normalizeTestText(text)).toContain("Reasoning: on");
   });
 
   it("prefers resolvedThink over sessionEntry.thinkingLevel", () => {
