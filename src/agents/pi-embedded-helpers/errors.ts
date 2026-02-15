@@ -472,6 +472,10 @@ export function formatAssistantErrorText(
     );
   }
 
+  if (isMalformedToolCallJsonError(raw)) {
+    return "AI returned a malformed response — please try again.";
+  }
+
   const invalidRequest = raw.match(/"type":"invalid_request_error".*?"message":"([^"]+)"/);
   if (invalidRequest?.[1]) {
     return `LLM request rejected: ${invalidRequest[1]}`;
@@ -677,6 +681,13 @@ export function isMissingToolCallInputError(raw: string): boolean {
     return false;
   }
   return TOOL_CALL_INPUT_MISSING_RE.test(raw) || TOOL_CALL_INPUT_PATH_RE.test(raw);
+}
+
+export function isMalformedToolCallJsonError(raw?: string): boolean {
+  if (!raw) return false;
+  return /\bin JSON at position \d+|Unexpected end of JSON input|Unexpected token .* in JSON|Expected .*in JSON at position/i.test(
+    raw,
+  );
 }
 
 export function isBillingAssistantError(msg: AssistantMessage | undefined): boolean {

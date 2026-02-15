@@ -179,6 +179,7 @@ export function buildGatewayCronService(params: {
       const { runtimeConfig, agentId, sessionKey } = resolveCronWakeTarget(opts);
       return await runHeartbeatOnce({
         cfg: runtimeConfig,
+        agentId: opts?.agentId,
         reason: opts?.reason,
         agentId,
         sessionKey,

@@ -36,6 +36,7 @@ import {
   isLikelyContextOverflowError,
   isFailoverAssistantError,
   isFailoverErrorMessage,
+  isMalformedToolCallJsonError,
   parseImageSizeError,
   parseImageDimensionError,
   isRateLimitAssistantError,
@@ -465,6 +466,8 @@ export async function runEmbeddedPiAgent(
       const usageAccumulator = createUsageAccumulator();
       let lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
       let autoCompactionCount = 0;
+      const MAX_MALFORMED_JSON_RETRIES = 1;
+      let malformedJsonRetries = 0;
       try {
         while (true) {
           attemptedThinking.add(thinkLevel);
@@ -848,6 +851,35 @@ export async function runEmbeddedPiAgent(
             );
             thinkLevel = fallbackThinking;
             continue;
+          }
+
+          if (
+            !aborted &&
+            lastAssistant?.stopReason === "error" &&
+            isMalformedToolCallJsonError(lastAssistant.errorMessage)
+          ) {
+            if (
+              malformedJsonRetries < MAX_MALFORMED_JSON_RETRIES &&
+              !attempt.assistantTexts.length
+            ) {
+              // No text streamed yet — safe to retry silently
+              malformedJsonRetries++;
+              log.warn(
+                `malformed JSON in tool call arguments for ${provider}/${modelId} (attempt ${malformedJsonRetries}/${MAX_MALFORMED_JSON_RETRIES}); retrying`,
+              );
+              continue;
+            }
+            // Text was already streamed — send a truncation note through the
+            // streaming channel so it isn't swallowed by shouldDropFinalPayloads.
+            if (attempt.assistantTexts.length && params.onBlockReply) {
+              try {
+                await params.onBlockReply({
+                  text: "\n\n[Response incomplete — please try again]",
+                });
+              } catch {
+                // best-effort; ignore delivery failures
+              }
+            }
           }
 
           const authFailure = isAuthAssistantError(lastAssistant);
