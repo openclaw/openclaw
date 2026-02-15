@@ -1,0 +1,58 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openclaw-gateway
+  labels:
+    app: openclaw
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: openclaw
+  template:
+    metadata:
+      labels:
+        app: openclaw
+    spec:
+      securityContext:
+        fsGroup: 1000 # Ensure 'node' user can write to the volume
+      containers:
+        - name: gateway
+          # Replace with your image registry path or use a local image if configured
+          image: ghcr.io/openclaw/openclaw:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - node
+            - dist/index.js
+            - gateway
+            - --bind
+            - lan
+            - --port
+            - "18789"
+          ports:
+            - containerPort: 18789
+              name: gateway
+            - containerPort: 18790
+              name: bridge
+          env:
+            - name: HOME
+              value: /home/node
+            - name: OPENCLAW_GATEWAY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: openclaw-secret
+                  key: OPENCLAW_GATEWAY_TOKEN
+          volumeMounts:
+            - name: config-volume
+              mountPath: /home/node/.openclaw
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "2Gi"
+              cpu: "1000m"
+      volumes:
+        - name: config-volume
+          persistentVolumeClaim:
+            claimName: openclaw-pvc
