@@ -113,25 +113,47 @@ function resolveAnnounceOrigin(
   return mergeDeliveryContext(requesterOrigin, deliveryContextFromSession(entry));
 }
 
-async function sendAnnounce(item: AnnounceQueueItem) {
+async function sendAnnounce(item: AnnounceQueueItem, attempt = 1, maxAttempts = 3) {
   const origin = item.origin;
   const threadId =
     origin?.threadId != null && origin.threadId !== "" ? String(origin.threadId) : undefined;
-  await callGateway({
-    method: "agent",
-    params: {
-      sessionKey: item.sessionKey,
-      message: item.prompt,
-      channel: origin?.channel,
-      accountId: origin?.accountId,
-      to: origin?.to,
-      threadId,
-      deliver: true,
-      idempotencyKey: crypto.randomUUID(),
-    },
-    expectFinal: true,
-    timeoutMs: 60_000,
-  });
+  try {
+    await callGateway({
+      method: "agent",
+      params: {
+        sessionKey: item.sessionKey,
+        message: item.prompt,
+        channel: origin?.channel,
+        accountId: origin?.accountId,
+        to: origin?.to,
+        threadId,
+        deliver: true,
+        idempotencyKey: crypto.randomUUID(),
+      },
+      expectFinal: true,
+      timeoutMs: 60_000,
+    });
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    const isTimeout = errorMsg.includes("timeout");
+    // Retry on timeout, up to maxAttempts
+    if (isTimeout && attempt < maxAttempts) {
+      const delayMs = Math.min(5000 * Math.pow(2, attempt - 1), 30000);
+      log.warn(`Subagent announce timeout, retrying (attempt ${attempt + 1}/${maxAttempts})`, {
+        sessionKey: item.sessionKey,
+        delayMs,
+      });
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      return sendAnnounce(item, attempt + 1, maxAttempts);
+    }
+    // Max retries exceeded or non-timeout error - log and drop
+    if (attempt >= maxAttempts) {
+      log.error(`Subagent announce failed after ${maxAttempts} attempts: ${errorMsg}`, {
+        sessionKey: item.sessionKey,
+      });
+    }
+    throw err;
+  }
 }
 
 function resolveRequesterStoreKey(
