@@ -1,6 +1,7 @@
 import type { TemplateContext } from "../templating.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveSenderLabel } from "../../channels/sender-label.js";
+import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.js";
 
 function safeTrim(value: unknown): string | undefined {
   if (typeof value !== "string") {
@@ -51,8 +52,21 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
   const chatType = normalizeChatType(ctx.ChatType);
   const isDirect = !chatType || chatType === "direct";
 
+  // Format timestamp for conversation info
+  const tsValue = ctx.Timestamp;
+  const timestampStr =
+    typeof tsValue === "number" && Number.isFinite(tsValue)
+      ? (() => {
+          const date = new Date(tsValue);
+          const weekday = new Intl.DateTimeFormat("en-US", { weekday: "short" }).format(date);
+          const formatted = formatZonedTimestamp(date);
+          return formatted ? `${weekday} ${formatted}` : undefined;
+        })()
+      : undefined;
+
   const conversationInfo = {
     conversation_label: isDirect ? undefined : safeTrim(ctx.ConversationLabel),
+    timestamp: timestampStr,
     group_subject: safeTrim(ctx.GroupSubject),
     group_channel: safeTrim(ctx.GroupChannel),
     group_space: safeTrim(ctx.GroupSpace),
