@@ -370,6 +370,7 @@ export async function monitorWebInbox(options: {
       sendPresenceUpdate: (presence, jid?: string) => sock.sendPresenceUpdate(presence, jid),
     },
     defaultAccountId: options.accountId,
+    lidResolver: lidLookup ?? undefined,
   });
 
   return {
