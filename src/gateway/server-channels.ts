@@ -109,6 +109,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
 
     await Promise.all(
       accountIds.map(async (id) => {
+          try {
         if (store.tasks.has(id)) {
           return;
         }
@@ -174,6 +175,12 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             });
           });
         store.tasks.set(id, tracked);
+        } catch (err) {
+          const message = formatErrorMessage(err);
+          setRuntime(channelId, id, { accountId: id, running: false, lastError: message });
+          const log = channelLogs[channelId];
+          log.error?.(`[${id}] account startup failed (isolated): ${message}`);
+        }
       }),
     );
   };
