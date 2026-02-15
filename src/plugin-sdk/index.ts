@@ -141,6 +141,8 @@ export {
   listDevicePairing,
   rejectDevicePairing,
 } from "../infra/device-pairing.js";
+export { createDedupeCache } from "../infra/dedupe.js";
+export type { DedupeCache } from "../infra/dedupe.js";
 export { formatErrorMessage } from "../infra/errors.js";
 export {
   DEFAULT_WEBHOOK_BODY_TIMEOUT_MS,
