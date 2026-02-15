@@ -28,93 +28,66 @@ fi
 
 "${SCRIPT_DIR}/prepare-whatsapp-auth.sh"
 
+# --- Derive GATEWAY_AUTH_TOKEN from MASTER_KEY (same HKDF as entrypoint.sh) ---
+: "${MASTER_KEY:=local-mux-e2e-master-key}"
+
+GATEWAY_AUTH_TOKEN=$(node -e "
+  const c = require('crypto');
+  const key = c.hkdfSync('sha256', process.argv[1], '', 'gateway-auth-token', 32);
+  process.stdout.write(Buffer.from(key).toString('base64'));
+" "$MASTER_KEY" | tr -d '/+=' | head -c 32)
+
+# --- Generate full openclaw config JSON ---
+CONFIG_JSON=$(node -e "
+  const cfg = {
+    gateway: {
+      mode: 'local',
+      bind: 'lan',
+      port: 18789,
+      auth: { token: process.argv[1] },
+      controlUi: { enabled: false },
+      http: {
+        endpoints: {
+          mux: {
+            enabled: true,
+            baseUrl: process.argv[2],
+            registerKey: process.argv[3],
+            inboundUrl: process.argv[4],
+          },
+        },
+      },
+    },
+    update: { checkOnStart: false },
+    channels: {},
+    plugins: { entries: {} },
+  };
+  for (const ch of ['telegram', 'discord', 'whatsapp']) {
+    cfg.channels[ch] = {
+      accounts: {
+        default: { enabled: false },
+        mux: { enabled: true, mux: { enabled: true, timeoutMs: 30000 } },
+      },
+    };
+    cfg.plugins.entries[ch] = { enabled: true };
+  }
+  process.stdout.write(JSON.stringify(cfg, null, 2));
+" "$GATEWAY_AUTH_TOKEN" "$MUX_BASE_INTERNAL" "$MUX_REGISTER_KEY" "$OPENCLAW_INBOUND_INTERNAL")
+
+OPENCLAW_CONFIG_B64=$(printf '%s' "$CONFIG_JSON" | base64 -w0)
+export OPENCLAW_CONFIG_B64
+
+# --- Bring up the stack ---
 rv-exec TELEGRAM_BOT_TOKEN DISCORD_BOT_TOKEN \
   -- docker compose -f "${COMPOSE_FILE}" up -d --build --remove-orphans
 
-compose() {
-  docker compose -f "${COMPOSE_FILE}" "$@"
-}
-
-echo "[local-mux-e2e] waiting for openclaw container..."
-for i in $(seq 1 60); do
-  if compose exec -T openclaw true >/dev/null 2>&1; then
+# --- Wait for gateway health ---
+echo "[local-mux-e2e] waiting for gateway health..."
+for i in $(seq 1 120); do
+  if curl -sf http://127.0.0.1:18789 >/dev/null 2>&1; then
     break
   fi
-  sleep 1
-  if [[ "${i}" == "60" ]]; then
-    echo "[local-mux-e2e] openclaw container not ready after 60s" >&2
-    exit 1
-  fi
+  sleep 2
 done
-
-echo "[local-mux-e2e] waiting for openclaw config file..."
-for i in $(seq 1 60); do
-  if compose exec -T openclaw bash -lc 'test -f /root/.openclaw/openclaw.json' >/dev/null 2>&1; then
-    break
-  fi
-  sleep 1
-  if [[ "${i}" == "60" ]]; then
-    echo "[local-mux-e2e] /root/.openclaw/openclaw.json not ready after 60s" >&2
-    exit 1
-  fi
-done
-
-echo "[local-mux-e2e] configuring openclaw mux endpoint..."
-compose exec -T openclaw node - "${MUX_REGISTER_KEY}" "${MUX_BASE_INTERNAL}" "${OPENCLAW_INBOUND_INTERNAL}" <<'NODE'
-const fs = require("fs");
-const path = "/root/.openclaw/openclaw.json";
-const registerKey = process.argv[2];
-const muxBaseUrl = process.argv[3];
-const inboundUrl = process.argv[4];
-
-if (!registerKey || !muxBaseUrl || !inboundUrl) {
-  throw new Error("registerKey, muxBaseUrl, and inboundUrl are required");
-}
-
-const cfg = JSON.parse(fs.readFileSync(path, "utf8"));
-cfg.gateway = cfg.gateway || {};
-cfg.gateway.http = cfg.gateway.http || {};
-cfg.gateway.http.endpoints = cfg.gateway.http.endpoints || {};
-cfg.gateway.http.endpoints.mux = {
-  enabled: true,
-  baseUrl: muxBaseUrl,
-  registerKey,
-  inboundUrl,
-};
-
-cfg.channels = cfg.channels || {};
-for (const channel of ["telegram", "discord", "whatsapp"]) {
-  const channelCfg = (cfg.channels[channel] = cfg.channels[channel] || {});
-  if ("enabled" in channelCfg) {
-    delete channelCfg.enabled;
-  }
-
-  channelCfg.accounts = channelCfg.accounts || {};
-  channelCfg.accounts.default = channelCfg.accounts.default || {};
-  channelCfg.accounts.default.enabled = false;
-  channelCfg.accounts.mux = channelCfg.accounts.mux || {};
-  channelCfg.accounts.mux.enabled = true;
-  channelCfg.accounts.mux.mux = {
-    ...(channelCfg.accounts.mux.mux && typeof channelCfg.accounts.mux.mux === "object"
-      ? channelCfg.accounts.mux.mux
-      : {}),
-    enabled: true,
-    timeoutMs: 30000,
-  };
-}
-
-cfg.plugins = cfg.plugins || {};
-cfg.plugins.entries = cfg.plugins.entries || {};
-for (const channel of ["telegram", "discord", "whatsapp"]) {
-  const entry = cfg.plugins.entries[channel] || {};
-  cfg.plugins.entries[channel] = { ...entry, enabled: true };
-}
-
-fs.writeFileSync(path, JSON.stringify(cfg, null, 2));
-NODE
-
-compose restart openclaw >/dev/null
-sleep 4
 
 echo "[local-mux-e2e] stack is up"
 echo "[local-mux-e2e] generate pairing token with: ${SCRIPT_DIR}/pair-token.sh telegram"

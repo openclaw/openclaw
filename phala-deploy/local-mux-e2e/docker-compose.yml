@@ -5,16 +5,16 @@ services:
     build:
       context: ../..
       dockerfile: phala-deploy/Dockerfile
+      target: base
     image: openclaw/local-phala:dev
     container_name: openclaw-local-e2e
     privileged: true
     ports:
-      - "127.0.0.1:1022:22"
       - "127.0.0.1:18789:18789"
     environment:
       NODE_ENV: production
       MASTER_KEY: ${MASTER_KEY:-local-mux-e2e-master-key}
-      REDPILL_API_KEY: ${REDPILL_API_KEY:-}
+      OPENCLAW_CONFIG_B64: ${OPENCLAW_CONFIG_B64:-}
       OPENCLAW_RAW_STREAM: ${OPENCLAW_RAW_STREAM:-}
       OPENCLAW_ANTHROPIC_PAYLOAD_LOG: ${OPENCLAW_ANTHROPIC_PAYLOAD_LOG:-}
     volumes:

@@ -1,11 +1,25 @@
-FROM ubuntu:24.04
+# --- Stage 1: Build gogcli (Google API CLI with env-var credential injection) ---
+FROM golang:1.25-bookworm AS gogcli-builder
+ARG GOGCLI_REPO=https://github.com/Leechael/gogcli.git
+ARG GOGCLI_BRANCH=feat/env-token-injection
+RUN git clone --depth 1 --branch "$GOGCLI_BRANCH" "$GOGCLI_REPO" /src/gogcli
+WORKDIR /src/gogcli
+RUN CGO_ENABLED=0 go build \
+      -ldflags "-s -w \
+        -X github.com/steipete/gogcli/internal/cmd.version=$(git describe --tags --always --dirty 2>/dev/null || echo dev) \
+        -X github.com/steipete/gogcli/internal/cmd.commit=$(git rev-parse --short=12 HEAD) \
+        -X github.com/steipete/gogcli/internal/cmd.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      -o /out/gog-bin ./cmd/gog
+
+# --- Stage 2: Base runtime image (for clawdi) ---
+FROM ubuntu:24.04 AS base
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Layer 1: System packages + openssh-server (Docker binaries mounted from host)
+# Layer 1: System packages (Docker binaries installed below)
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-      ca-certificates curl gnupg git bash tmux openssh-server unzip lsof \
+      ca-certificates curl gnupg git bash tmux unzip lsof \
       iptables lsb-release sudo && \
     update-alternatives --set iptables /usr/sbin/iptables-legacy && \
     update-alternatives --set ip6tables /usr/sbin/ip6tables-legacy && \
@@ -20,10 +34,6 @@ RUN mkdir -p /usr/local/lib/docker/cli-plugins && \
     curl -fsSL "https://github.com/docker/compose/releases/download/v${COMPOSE_VERSION}/docker-compose-linux-x86_64" \
       -o /usr/local/lib/docker/cli-plugins/docker-compose && \
     chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
-
-# SSH config: permit root login with keys
-RUN mkdir -p /var/run/sshd && \
-    sed -i 's/#PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
 
 # Layer 2: Node.js 22 via nodesource
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
@@ -57,18 +67,10 @@ RUN apt-get update && \
 RUN echo 'eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"' >> /root/.bashrc && \
     echo 'export PATH="/root/.bun/bin:$PATH"' >> /root/.bashrc
 
-# rclone for encrypted S3 mount (single static binary, ~50MB)
-ARG RCLONE_VERSION=1.73.0
-RUN curl -fsSL "https://github.com/rclone/rclone/releases/download/v${RCLONE_VERSION}/rclone-v${RCLONE_VERSION}-linux-amd64.zip" \
-      -o /tmp/rclone.zip && \
-    unzip -j /tmp/rclone.zip '*/rclone' -d /usr/local/bin && \
-    chmod +x /usr/local/bin/rclone && \
-    rm /tmp/rclone.zip
-
-# Install fuse3 for rclone mount
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends fuse3 && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
+# gogcli: static binary + credential-sourcing wrapper
+COPY --from=gogcli-builder /out/gog-bin /usr/local/bin/gog-bin
+COPY phala-deploy/gogcli/gog-wrapper.sh /usr/local/bin/gog
+RUN chmod +x /usr/local/bin/gog /usr/local/bin/gog-bin
 
 COPY phala-deploy/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
@@ -79,3 +81,26 @@ HEALTHCHECK --interval=30s --timeout=15s --start-period=60s --retries=3 \
   CMD openclaw channels status --probe >/dev/null 2>&1 || exit 1
 
 ENTRYPOINT ["/entrypoint.sh"]
+
+# --- Stage 3: Full image (standalone with SSH + S3 support) ---
+FROM base AS full
+
+# SSH daemon
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends openssh-server && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+RUN mkdir -p /var/run/sshd && \
+    sed -i 's/#PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
+
+# rclone for encrypted S3 mount (single static binary, ~50MB)
+ARG RCLONE_VERSION=1.73.0
+RUN curl -fsSL "https://github.com/rclone/rclone/releases/download/v${RCLONE_VERSION}/rclone-v${RCLONE_VERSION}-linux-amd64.zip" \
+      -o /tmp/rclone.zip && \
+    unzip -j /tmp/rclone.zip '*/rclone' -d /usr/local/bin && \
+    chmod +x /usr/local/bin/rclone && \
+    rm /tmp/rclone.zip
+
+# fuse3 for rclone mount
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends fuse3 && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*

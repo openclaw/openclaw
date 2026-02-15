@@ -18,25 +18,34 @@ if [ -n "$MASTER_KEY" ]; then
     " "$MASTER_KEY" "$1"
   }
 
-  # Derive and obscure rclone crypt passwords (rclone needs its own obscured format)
-  RCLONE_CRYPT_PASSWORD=$(rclone obscure "$(derive_key rclone-crypt-password)")
-  RCLONE_CRYPT_PASSWORD2=$(rclone obscure "$(derive_key rclone-crypt-salt)")
   GATEWAY_AUTH_TOKEN=$(derive_key gateway-auth-token | tr -d '/+=' | head -c 32)
+  export GATEWAY_AUTH_TOKEN
 
-  export RCLONE_CRYPT_PASSWORD RCLONE_CRYPT_PASSWORD2 GATEWAY_AUTH_TOKEN
-  echo "Keys derived (crypt password, crypt salt, gateway token)."
+  # Derive rclone keys only if rclone is installed
+  if command -v rclone >/dev/null 2>&1; then
+    RCLONE_CRYPT_PASSWORD=$(rclone obscure "$(derive_key rclone-crypt-password)")
+    RCLONE_CRYPT_PASSWORD2=$(rclone obscure "$(derive_key rclone-crypt-salt)")
+    export RCLONE_CRYPT_PASSWORD RCLONE_CRYPT_PASSWORD2
+    echo "Keys derived (gateway token, crypt password, crypt salt)."
+  else
+    echo "Keys derived (gateway token)."
+  fi
 fi
 
 # --- Encrypted S3 storage via rclone crypt + mount ---
 if [ -n "$S3_BUCKET" ]; then
-  echo "S3 storage configured (bucket: $S3_BUCKET), setting up rclone..."
+  if ! command -v rclone >/dev/null 2>&1; then
+    echo "Error: S3_BUCKET is set but rclone is not installed. Use the full image for S3 support."
+    mkdir -p "$DATA_DIR"
+  else
+    echo "S3 storage configured (bucket: $S3_BUCKET), setting up rclone..."
 
-  S3_PREFIX="${S3_PREFIX:-openclaw-data}"
-  S3_REGION="${S3_REGION:-us-east-1}"
+    S3_PREFIX="${S3_PREFIX:-openclaw-data}"
+    S3_REGION="${S3_REGION:-us-east-1}"
 
-  # Generate rclone config from env vars (write to temp location, not ~/.config)
-  mkdir -p /tmp/rclone
-  cat > /tmp/rclone/rclone.conf <<RCONF
+    # Generate rclone config from env vars (write to temp location, not ~/.config)
+    mkdir -p /tmp/rclone
+    cat > /tmp/rclone/rclone.conf <<RCONF
 [s3]
 type = s3
 provider = ${S3_PROVIDER:-Other}
@@ -53,71 +62,72 @@ password2 = ${RCLONE_CRYPT_PASSWORD2:-}
 filename_encryption = standard
 directory_name_encryption = true
 RCONF
-  export RCLONE_CONFIG=/tmp/rclone/rclone.conf
+    export RCLONE_CONFIG=/tmp/rclone/rclone.conf
 
-  # Try FUSE mount first; fall back to rclone sync if FUSE unavailable
-  mkdir -p "$DATA_DIR"
-  S3_MODE=""
+    # Try FUSE mount first; fall back to rclone sync if FUSE unavailable
+    mkdir -p "$DATA_DIR"
+    S3_MODE=""
 
-  if [ -e /dev/fuse ]; then
-    echo "Attempting FUSE mount..."
-    # Unmount Docker volume if present (FUSE can't overlay on existing mounts)
-    if mountpoint -q "$DATA_DIR" 2>/dev/null; then
-      echo "Unmounting existing volume at $DATA_DIR..."
-      umount "$DATA_DIR" 2>/dev/null || true
-    fi
-    rclone mount s3-crypt: "$DATA_DIR" \
-      --config "$RCLONE_CONFIG" \
-      --vfs-cache-mode writes \
-      --vfs-write-back 5s \
-      --dir-cache-time 30s \
-      --vfs-cache-max-size 500M \
-      --allow-other \
-      --daemon 2>&1 || true
-
-    # Wait for FUSE mount (up to 10s) — check for fuse.rclone specifically,
-    # not just mountpoint (Docker volume is already a mountpoint)
-    MOUNT_WAIT=0
-    while ! mount | grep -q "on $DATA_DIR type fuse.rclone"; do
-      sleep 0.5
-      MOUNT_WAIT=$((MOUNT_WAIT + 1))
-      if [ $MOUNT_WAIT -ge 20 ]; then
-        break
+    if [ -e /dev/fuse ]; then
+      echo "Attempting FUSE mount..."
+      # Unmount Docker volume if present (FUSE can't overlay on existing mounts)
+      if mountpoint -q "$DATA_DIR" 2>/dev/null; then
+        echo "Unmounting existing volume at $DATA_DIR..."
+        umount "$DATA_DIR" 2>/dev/null || true
       fi
-    done
+      rclone mount s3-crypt: "$DATA_DIR" \
+        --config "$RCLONE_CONFIG" \
+        --vfs-cache-mode writes \
+        --vfs-write-back 5s \
+        --dir-cache-time 30s \
+        --vfs-cache-max-size 500M \
+        --allow-other \
+        --daemon 2>&1 || true
 
-    if mount | grep -q "on $DATA_DIR type fuse.rclone"; then
-      S3_MODE="mount"
-      echo "rclone FUSE mount ready at $DATA_DIR"
-    else
-      echo "FUSE mount failed, falling back to sync mode."
-    fi
-  fi
-
-  # Fallback: sync mode (pull from S3, periodic push back)
-  if [ -z "$S3_MODE" ]; then
-    S3_MODE="sync"
-    echo "Using rclone sync mode (no FUSE)."
-    # Restore SQLite files to local storage (can't run on FUSE, use symlinks instead)
-    mkdir -p "$SQLITE_LOCAL_DIR"
-    echo "Restoring SQLite files from S3..."
-    rclone copy s3-crypt:sqlite/ "$SQLITE_LOCAL_DIR/" --config "$RCLONE_CONFIG" 2>/dev/null || true
-    # Pull remaining state
-    rclone copy s3-crypt: "$DATA_DIR/" --config "$RCLONE_CONFIG" --exclude "sqlite/**" 2>&1 || true
-    echo "Initial sync from S3 complete."
-  fi
-
-  # In sync mode, run periodic background jobs to push changes to S3.
-  # In mount mode, rclone VFS cache handles syncing automatically.
-  if [ "$S3_MODE" = "sync" ]; then
-    (
-      while true; do
-        sleep 60
-        rclone copy "$SQLITE_LOCAL_DIR/" s3-crypt:sqlite/ --config "$RCLONE_CONFIG" 2>/dev/null || true
-        rclone copy "$DATA_DIR/" s3-crypt: --config "$RCLONE_CONFIG" --exclude "sqlite/**" 2>/dev/null || true
+      # Wait for FUSE mount (up to 10s) — check for fuse.rclone specifically,
+      # not just mountpoint (Docker volume is already a mountpoint)
+      MOUNT_WAIT=0
+      while ! mount | grep -q "on $DATA_DIR type fuse.rclone"; do
+        sleep 0.5
+        MOUNT_WAIT=$((MOUNT_WAIT + 1))
+        if [ $MOUNT_WAIT -ge 20 ]; then
+          break
+        fi
       done
-    ) &
-    echo "Background sync started (PID $!)"
+
+      if mount | grep -q "on $DATA_DIR type fuse.rclone"; then
+        S3_MODE="mount"
+        echo "rclone FUSE mount ready at $DATA_DIR"
+      else
+        echo "FUSE mount failed, falling back to sync mode."
+      fi
+    fi
+
+    # Fallback: sync mode (pull from S3, periodic push back)
+    if [ -z "$S3_MODE" ]; then
+      S3_MODE="sync"
+      echo "Using rclone sync mode (no FUSE)."
+      # Restore SQLite files to local storage (can't run on FUSE, use symlinks instead)
+      mkdir -p "$SQLITE_LOCAL_DIR"
+      echo "Restoring SQLite files from S3..."
+      rclone copy s3-crypt:sqlite/ "$SQLITE_LOCAL_DIR/" --config "$RCLONE_CONFIG" 2>/dev/null || true
+      # Pull remaining state
+      rclone copy s3-crypt: "$DATA_DIR/" --config "$RCLONE_CONFIG" --exclude "sqlite/**" 2>&1 || true
+      echo "Initial sync from S3 complete."
+    fi
+
+    # In sync mode, run periodic background jobs to push changes to S3.
+    # In mount mode, rclone VFS cache handles syncing automatically.
+    if [ "$S3_MODE" = "sync" ]; then
+      (
+        while true; do
+          sleep 60
+          rclone copy "$SQLITE_LOCAL_DIR/" s3-crypt:sqlite/ --config "$RCLONE_CONFIG" 2>/dev/null || true
+          rclone copy "$DATA_DIR/" s3-crypt: --config "$RCLONE_CONFIG" --exclude "sqlite/**" 2>/dev/null || true
+        done
+      ) &
+      echo "Background sync started (PID $!)"
+    fi
   fi
 else
   mkdir -p "$DATA_DIR"
@@ -144,63 +154,16 @@ ensure_symlink_dir "$DATA_DIR/openclaw" /root/.openclaw
 ensure_symlink_dir "$DATA_DIR/.config" /root/.config
 echo "Home symlinks created (~/.openclaw, ~/.config → $DATA_DIR)"
 
-# Bootstrap config if none exists — generates full Redpill provider + model catalog
+# Bootstrap config from OPENCLAW_CONFIG_B64 (sent by clawdi control plane)
 CONFIG_FILE="/root/.openclaw/openclaw.json"
 if [ ! -f "$CONFIG_FILE" ]; then
-  BOOT_TOKEN="${GATEWAY_AUTH_TOKEN:-$(head -c 32 /dev/urandom | base64 | tr -d '/+=' | head -c 32)}"
-  export CONFIG_FILE BOOT_TOKEN
-  node -e "
-    // Import Redpill config functions from installed openclaw package
-    const { writeFileSync } = require('fs');
-    const PKG = 'file:///usr/lib/node_modules/openclaw/dist/commands/onboard-auth.config-core.js';
-
-    (async () => {
-      const { applyRedpillConfig } = await import(PKG);
-
-      const base = {
-        gateway: {
-          mode: 'local',
-          bind: 'lan',
-          auth: { token: process.env.BOOT_TOKEN },
-          controlUi: { dangerouslyDisableDeviceAuth: true },
-        },
-        update: { checkOnStart: false },
-        agents: {
-          defaults: {
-            memorySearch: {
-              provider: 'openai',
-              model: 'qwen/qwen3-embedding-8b',
-              remote: { baseUrl: 'https://api.redpill.ai/v1', apiKey: process.env.REDPILL_API_KEY || undefined },
-              fallback: 'none',
-            },
-          },
-        },
-      };
-
-      // Apply full Redpill provider config (model catalog + default model)
-      let cfg = applyRedpillConfig(base);
-
-      // Override default model to GLM 4.7
-      cfg.agents.defaults.model.primary = 'redpill/z-ai/glm-4.7';
-
-      // Inject Redpill API key if provided
-      if (process.env.REDPILL_API_KEY) {
-        cfg.models.providers.redpill.apiKey = process.env.REDPILL_API_KEY;
-      }
-
-      writeFileSync(process.env.CONFIG_FILE, JSON.stringify(cfg, null, 2));
-    })().catch((err) => {
-      console.error(err);
-      process.exit(1);
-    });
-  " 2>&1 || {
-    # Fallback: write minimal config if node import fails (e.g. package structure changed)
-    echo "Warning: full config generation failed, writing minimal config."
-    cat > "$CONFIG_FILE" <<CONF
-{"gateway":{"mode":"local","bind":"lan","auth":{"token":"$BOOT_TOKEN"},"controlUi":{"dangerouslyDisableDeviceAuth":true}},"update":{"checkOnStart":false},"agents":{"defaults":{"memorySearch":{"provider":"openai","model":"qwen/qwen3-embedding-8b","remote":{"baseUrl":"https://api.redpill.ai/v1"},"fallback":"none"}}}}
-CONF
-  }
-  echo "Created config at $CONFIG_FILE (token: ${GATEWAY_AUTH_TOKEN:+derived}${GATEWAY_AUTH_TOKEN:-random})"
+  if [ -n "$OPENCLAW_CONFIG_B64" ]; then
+    echo "Decoding config from OPENCLAW_CONFIG_B64..."
+    printf '%s' "$OPENCLAW_CONFIG_B64" | base64 -d > "$CONFIG_FILE"
+    echo "Config written to $CONFIG_FILE"
+  else
+    echo "Warning: No config file and no OPENCLAW_CONFIG_B64 set. Gateway may fail."
+  fi
 fi
 
 # --- SQLite symlink helper ---
@@ -226,12 +189,14 @@ setup_sqlite_symlinks() {
   done
 }
 
-# Start SSH daemon first (always available for debugging)
-mkdir -p /var/run/sshd /root/.ssh
-chmod 700 /root/.ssh 2>/dev/null || true
-chmod 600 /root/.ssh/authorized_keys 2>/dev/null || true
-/usr/sbin/sshd
-echo "SSH daemon started."
+# Start SSH daemon if installed (full image only)
+if [ -x /usr/sbin/sshd ]; then
+  mkdir -p /var/run/sshd /root/.ssh
+  chmod 700 /root/.ssh 2>/dev/null || true
+  chmod 600 /root/.ssh/authorized_keys 2>/dev/null || true
+  /usr/sbin/sshd
+  echo "SSH daemon started."
+fi
 
 # Clean up stale PID files from previous container restarts
 rm -f /var/run/docker.pid /var/run/containerd/containerd.pid
