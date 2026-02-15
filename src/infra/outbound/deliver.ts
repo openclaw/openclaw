@@ -465,6 +465,7 @@ async function deliverOutboundPayloadsCore(
           {
             channelId: channel,
             accountId: accountId ?? undefined,
+            conversationId: to,
           },
         )
         .catch(() => {});
@@ -548,5 +549,6 @@ async function deliverOutboundPayloadsCore(
       });
     }
   }
+
   return results;
 }
