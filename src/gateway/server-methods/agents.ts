@@ -67,12 +67,19 @@ function resolveAgentWorkspaceFileOrRespondError(
   name: string;
 } | null {
   const cfg = loadConfig();
-  const agentId = resolveAgentIdOrError(String(params.agentId ?? ""), cfg);
+  const rawAgentId = params.agentId;
+  const agentId = resolveAgentIdOrError(
+    typeof rawAgentId === "string" || typeof rawAgentId === "number" ? String(rawAgentId) : "",
+    cfg,
+  );
   if (!agentId) {
     respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown agent id"));
     return null;
   }
-  const name = String(params.name ?? "").trim();
+  const rawName = params.name;
+  const name = (
+    typeof rawName === "string" || typeof rawName === "number" ? String(rawName) : ""
+  ).trim();
   if (!ALLOWED_FILE_NAMES.has(name)) {
     respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `unsupported file "${name}"`));
     return null;
