@@ -19,7 +19,12 @@ export function looksLikeSlackTargetId(raw: string): boolean {
   if (/^slack:/i.test(trimmed)) {
     return true;
   }
-  if (/^[@#]/.test(trimmed)) {
+  // Only treat #/@ prefixed strings as IDs if followed by a valid Slack ID pattern.
+  // This allows channel/user names (e.g., #general, @john) to be resolved via directory lookup.
+  if (/^#[CUWGD][A-Z0-9]{8,}$/i.test(trimmed)) {
+    return true;
+  }
+  if (/^@[UW][A-Z0-9]{8,}$/i.test(trimmed)) {
     return true;
   }
   return /^[CUWGD][A-Z0-9]{8,}$/i.test(trimmed);
