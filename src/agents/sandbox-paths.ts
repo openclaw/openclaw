@@ -115,11 +115,27 @@ export async function assertSandboxPath(params: {
   cwd: string;
   root: string;
   allowFinalSymlink?: boolean;
+  skipSensitiveCheck?: boolean;
 }) {
   const resolved = resolveSandboxPath(params);
   await assertNoSymlinkEscape(resolved.relative, path.resolve(params.root), {
     allowFinalSymlink: params.allowFinalSymlink,
   });
+
+  // Post-symlink sensitive-path check: resolve the real path (following symlinks)
+  // and verify the *target* isn't sensitive. This closes the symlink bypass where
+  // ~/workspace/link -> ~/.openclaw/ would pass the sync check on the link path
+  // but actually access credentials via the symlink target.
+  if (!params.skipSensitiveCheck) {
+    const realPath = await tryRealpath(resolved.resolved);
+    const check = isSensitivePath(realPath);
+    if (check.sensitive) {
+      throw new Error(
+        `Access denied: path resolves to a sensitive directory (${check.directory}): ${params.filePath}`,
+      );
+    }
+  }
+
   return resolved;
 }
 
