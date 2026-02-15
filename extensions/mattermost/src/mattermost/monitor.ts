@@ -25,6 +25,7 @@ import {
   resolveDefaultGroupPolicy,
   resolveChannelMediaMaxBytes,
   warnMissingProviderGroupPolicyFallbackOnce,
+  listSkillCommandsForAgents,
   type HistoryEntry,
 } from "openclaw/plugin-sdk";
 import { getMattermostRuntime } from "../runtime.js";
@@ -258,8 +259,6 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
 
       if (slashConfig.nativeSkills === true) {
         try {
-          const { listSkillCommandsForAgents } =
-            await import("../../../../src/auto-reply/skill-commands.js");
           const skillCommands = listSkillCommandsForAgents({ cfg: cfg as any });
           for (const spec of skillCommands) {
             const name = typeof spec.name === "string" ? spec.name.trim() : "";
@@ -270,6 +269,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
               description: spec.description || `Run skill ${name}`,
               autoComplete: true,
               autoCompleteHint: "[args]",
+              originalName: name,
             });
           }
         } catch (err) {
@@ -300,10 +300,19 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         allRegistered.push(...registered);
       }
 
+      // Build trigger→originalName map for accurate command name resolution
+      const triggerMap = new Map<string, string>();
+      for (const cmd of dedupedCommands) {
+        if (cmd.originalName) {
+          triggerMap.set(cmd.trigger, cmd.originalName);
+        }
+      }
+
       activateSlashCommands({
         account,
         commandTokens: allRegistered.map((cmd) => cmd.token).filter(Boolean),
         registeredCommands: allRegistered,
+        triggerMap,
         api: { cfg, runtime },
         log: (msg) => runtime.log?.(msg),
       });

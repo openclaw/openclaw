@@ -35,6 +35,8 @@ export type MattermostCommandSpec = {
   description: string;
   autoComplete: boolean;
   autoCompleteHint?: string;
+  /** Original command name (for skill commands that start with oc_) */
+  originalName?: string;
 };
 
 export type MattermostRegisteredCommand = {
@@ -128,39 +130,46 @@ type MattermostCommandResponse = {
 export const DEFAULT_COMMAND_SPECS: MattermostCommandSpec[] = [
   {
     trigger: "oc_status",
+    originalName: "status",
     description: "Show session status (model, usage, uptime)",
     autoComplete: true,
   },
   {
     trigger: "oc_model",
+    originalName: "model",
     description: "View or change the current model",
     autoComplete: true,
     autoCompleteHint: "[model-name]",
   },
   {
     trigger: "oc_new",
+    originalName: "new",
     description: "Start a new conversation session",
     autoComplete: true,
   },
   {
     trigger: "oc_help",
+    originalName: "help",
     description: "Show available commands",
     autoComplete: true,
   },
   {
     trigger: "oc_think",
+    originalName: "think",
     description: "Set thinking/reasoning level",
     autoComplete: true,
     autoCompleteHint: "[off|low|medium|high]",
   },
   {
     trigger: "oc_reasoning",
+    originalName: "reasoning",
     description: "Toggle reasoning mode",
     autoComplete: true,
     autoCompleteHint: "[on|off]",
   },
   {
     trigger: "oc_verbose",
+    originalName: "verbose",
     description: "Toggle verbose mode",
     autoComplete: true,
     autoCompleteHint: "[on|off]",
@@ -435,9 +444,14 @@ export function parseSlashCommandPayload(
  * Map the trigger word back to the original OpenClaw command name.
  * e.g. "oc_status" -> "/status", "oc_model" -> "/model"
  */
-export function resolveCommandText(trigger: string, text: string): string {
-  // Strip the "oc_" prefix to get the original command name
-  const commandName = trigger.startsWith("oc_") ? trigger.slice(3) : trigger;
+export function resolveCommandText(
+  trigger: string,
+  text: string,
+  triggerMap?: ReadonlyMap<string, string>,
+): string {
+  // Use the trigger map if available for accurate name resolution
+  const commandName =
+    triggerMap?.get(trigger) ?? (trigger.startsWith("oc_") ? trigger.slice(3) : trigger);
   const args = text.trim();
   return args ? `/${commandName} ${args}` : `/${commandName}`;
 }
