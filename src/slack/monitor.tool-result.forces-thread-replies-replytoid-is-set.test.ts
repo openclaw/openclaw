@@ -22,6 +22,47 @@ beforeEach(() => {
 });
 
 describe("monitorSlackProvider tool results", () => {
+  async function runDmMessageWithPolicy(policy: "open" | "allowlist" | "pairing" | "disabled") {
+    slackTestState.config = {
+      ...slackTestState.config,
+      channels: {
+        ...slackTestState.config.channels,
+        slack: {
+          ...slackTestState.config.channels?.slack,
+          dm: { enabled: true, policy, allowFrom: [] },
+        },
+      },
+    };
+
+    const controller = new AbortController();
+    const run = monitorSlackProvider({
+      botToken: "bot-token",
+      appToken: "app-token",
+      abortSignal: controller.signal,
+    });
+
+    await waitForSlackEvent("message");
+    const handler = getSlackHandlers()?.get("message");
+    if (!handler) {
+      throw new Error("Slack message handler not registered");
+    }
+
+    await handler({
+      event: {
+        type: "message",
+        user: "U1",
+        text: "hello",
+        ts: "200",
+        channel: "D200",
+        channel_type: "im",
+      },
+    });
+
+    await flush();
+    controller.abort();
+    await run;
+  }
+
   it("forces thread replies when replyToId is set", async () => {
     replyMock.mockResolvedValue({ text: "forced reply", replyToId: "555" });
     slackTestState.config = {
@@ -149,5 +190,37 @@ describe("monitorSlackProvider tool results", () => {
     await stopSlackMonitor({ controller, run });
 
     expect(sendMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows DM processing in open mode even with an empty allowlist", async () => {
+    replyMock.mockResolvedValue({ text: "ok" });
+    await runDmMessageWithPolicy("open");
+
+    expect(replyMock).toHaveBeenCalledTimes(1);
+    expect(upsertPairingRequestMock).not.toHaveBeenCalled();
+  });
+
+  it("blocks unauthorized DM in allowlist mode without triggering pairing", async () => {
+    replyMock.mockResolvedValue({ text: "ok" });
+    await runDmMessageWithPolicy("allowlist");
+
+    expect(replyMock).not.toHaveBeenCalled();
+    expect(upsertPairingRequestMock).not.toHaveBeenCalled();
+  });
+
+  it("triggers pairing in pairing mode for unauthorized DM", async () => {
+    replyMock.mockResolvedValue({ text: "ok" });
+    await runDmMessageWithPolicy("pairing");
+
+    expect(replyMock).not.toHaveBeenCalled();
+    expect(upsertPairingRequestMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks DM in disabled mode", async () => {
+    replyMock.mockResolvedValue({ text: "ok" });
+    await runDmMessageWithPolicy("disabled");
+
+    expect(replyMock).not.toHaveBeenCalled();
+    expect(upsertPairingRequestMock).not.toHaveBeenCalled();
   });
 });
