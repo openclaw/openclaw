@@ -1,7 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const fetchMock = vi.fn();
-vi.stubGlobal("fetch", fetchMock);
 
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
@@ -34,6 +33,11 @@ const { sendMessageMessenger, sendMediaMessenger, sendSenderAction, getUserProfi
 describe("sendMessageMessenger", () => {
   beforeEach(() => {
     fetchMock.mockReset();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it("sends a text message", async () => {
@@ -96,6 +100,11 @@ describe("sendMessageMessenger", () => {
 describe("sendMediaMessenger", () => {
   beforeEach(() => {
     fetchMock.mockReset();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it("sends a media attachment", async () => {
@@ -128,6 +137,11 @@ describe("sendMediaMessenger", () => {
 describe("sendSenderAction", () => {
   beforeEach(() => {
     fetchMock.mockReset();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it("sends a sender action", async () => {
@@ -150,6 +164,11 @@ describe("sendSenderAction", () => {
 describe("getUserProfile", () => {
   beforeEach(() => {
     fetchMock.mockReset();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it("returns profile with snake_case fields", async () => {

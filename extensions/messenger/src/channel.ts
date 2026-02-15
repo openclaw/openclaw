@@ -58,9 +58,13 @@ export const messengerPlugin: ChannelPlugin<ResolvedMessengerAccount> = {
   config: {
     listAccountIds: (cfg) => getMessengerRuntime().channel.messenger.listMessengerAccountIds(cfg),
     resolveAccount: (cfg, accountId) =>
-      getMessengerRuntime().channel.messenger.resolveMessengerAccount({ cfg, accountId }),
+      getMessengerRuntime().channel.messenger.resolveMessengerAccount({
+        cfg,
+        accountId: accountId ?? undefined,
+      }),
     defaultAccountId: (cfg) =>
-      getMessengerRuntime().channel.messenger.resolveDefaultMessengerAccountId(cfg),
+      getMessengerRuntime().channel.messenger.resolveDefaultMessengerAccountId(cfg) ??
+      DEFAULT_ACCOUNT_ID,
     setAccountEnabled: ({ cfg, accountId, enabled }) => {
       const messengerConfig = (cfg.channels?.messenger ?? {}) as MessengerConfig;
       if (accountId === DEFAULT_ACCOUNT_ID) {
@@ -119,18 +123,28 @@ export const messengerPlugin: ChannelPlugin<ResolvedMessengerAccount> = {
         },
       };
     },
-    isConfigured: (account) => Boolean(account.pageAccessToken?.trim()),
+    isConfigured: (account) =>
+      Boolean(
+        account.pageAccessToken?.trim() && account.appSecret?.trim() && account.verifyToken?.trim(),
+      ),
     describeAccount: (account) => ({
       accountId: account.accountId,
       name: account.name,
       enabled: account.enabled,
-      configured: Boolean(account.pageAccessToken?.trim()),
+      configured: Boolean(
+        account.pageAccessToken?.trim() && account.appSecret?.trim() && account.verifyToken?.trim(),
+      ),
       tokenSource: account.tokenSource,
+      pageAccessToken: account.pageAccessToken,
+      appSecret: account.appSecret,
+      verifyToken: account.verifyToken,
     }),
     resolveAllowFrom: ({ cfg, accountId }) =>
       (
-        getMessengerRuntime().channel.messenger.resolveMessengerAccount({ cfg, accountId }).config
-          .allowFrom ?? []
+        getMessengerRuntime().channel.messenger.resolveMessengerAccount({
+          cfg,
+          accountId: accountId ?? undefined,
+        }).config.allowFrom ?? []
       ).map((entry) => String(entry)),
     formatAllowFrom: ({ allowFrom }) =>
       allowFrom
@@ -162,7 +176,7 @@ export const messengerPlugin: ChannelPlugin<ResolvedMessengerAccount> = {
     normalizeTarget: (target) => {
       const trimmed = target.trim();
       if (!trimmed) {
-        return null;
+        return undefined;
       }
       return trimmed.replace(/^messenger:/i, "");
     },
@@ -445,9 +459,21 @@ export const messengerPlugin: ChannelPlugin<ResolvedMessengerAccount> = {
   gateway: {
     startAccount: async (ctx) => {
       const account = ctx.account;
-      const token = account.pageAccessToken.trim();
-      const secret = account.appSecret.trim();
-      const verify = account.verifyToken.trim();
+      const token = account.pageAccessToken?.trim();
+      const secret = account.appSecret?.trim();
+      const verify = account.verifyToken?.trim();
+      if (!token || !secret || !verify) {
+        const missing = [
+          !token && "pageAccessToken",
+          !secret && "appSecret",
+          !verify && "verifyToken",
+        ]
+          .filter(Boolean)
+          .join(", ");
+        throw new Error(
+          `[${account.accountId}] cannot start Messenger provider: missing ${missing}`,
+        );
+      }
 
       let pageLabel = "";
       try {
