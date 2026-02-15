@@ -7,7 +7,9 @@ import { credentialsMatchConfig, loadMatrixCredentials } from "./credentials.js"
 function mergeAccountConfig(base: MatrixConfig, account: MatrixConfig): MatrixConfig {
   const merged = { ...base, ...account };
   // Deep-merge known nested objects so partial overrides inherit base fields
-  for (const key of ["dm", "actions"] as const) {
+  // (Account configs should be able to add/override rooms/groups without
+  // having to re-specify the full top-level maps.)
+  for (const key of ["dm", "actions", "groups", "rooms"] as const) {
     const b = base[key];
     const o = account[key];
     if (typeof b === "object" && b != null && typeof o === "object" && o != null) {

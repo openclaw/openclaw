@@ -79,4 +79,45 @@ describe("resolveMatrixAccount", () => {
     const account = resolveMatrixAccount({ cfg });
     expect(account.configured).toBe(true);
   });
+
+  it("deep-merges groups/rooms maps for per-account overrides", () => {
+    const cfg: CoreConfig = {
+      channels: {
+        matrix: {
+          homeserver: "https://matrix.example.org",
+          accessToken: "tok-base",
+          groups: {
+            "*": { requireMention: true },
+            "!base:example.org": { requireMention: false },
+          },
+          rooms: {
+            "!legacyBase:example.org": { requireMention: true },
+          },
+          accounts: {
+            alerts: {
+              homeserver: "https://matrix.example.org",
+              accessToken: "tok-alerts",
+              groups: {
+                "!alerts:example.org": { requireMention: false },
+              },
+              rooms: {
+                "!legacyAlerts:example.org": { requireMention: false },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const account = resolveMatrixAccount({ cfg, accountId: "alerts" });
+    expect(account.config.groups).toEqual({
+      "*": { requireMention: true },
+      "!base:example.org": { requireMention: false },
+      "!alerts:example.org": { requireMention: false },
+    });
+    expect(account.config.rooms).toEqual({
+      "!legacyBase:example.org": { requireMention: true },
+      "!legacyAlerts:example.org": { requireMention: false },
+    });
+  });
 });
