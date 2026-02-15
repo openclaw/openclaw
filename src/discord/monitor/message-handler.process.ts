@@ -408,7 +408,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     },
   });
   markDispatchIdle();
-  if (!queuedFinal) {
+  if (!(queuedFinal || (counts.block ?? 0) > 0 || (counts.final ?? 0) > 0)) {
     if (isGuildMessage) {
       clearHistoryEntriesIfEnabled({
         historyMap: guildHistories,

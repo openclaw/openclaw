@@ -372,7 +372,7 @@ export const dispatchTelegramMessage = async ({
     sentFallback = result.delivered;
   }
 
-  const hasFinalResponse = queuedFinal || sentFallback;
+  const hasFinalResponse = queuedFinal || sentFallback || deliveryState.delivered;
   if (!hasFinalResponse) {
     if (isGroup && historyKey) {
       clearHistoryEntriesIfEnabled({ historyMap: groupHistories, historyKey, limit: historyLimit });
