@@ -1,0 +1,127 @@
+diff --git a/src/sessions/input-provenance.ts b/src/sessions/input-provenance.ts
+index original..updated
+--- a/src/sessions/input-provenance.ts
++++ b/src/sessions/input-provenance.ts
+@@ -3,6 +3,7 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
+ export const INPUT_PROVENANCE_KIND_VALUES = [
+   "external_user",
+   "inter_session",
+   "internal_system",
++  "tool_invocation",
+ ] as const;
+ 
+ export type InputProvenanceKind = (typeof INPUT_PROVENANCE_KIND_VALUES)[number];
+@@ -13,6 +14,8 @@ export type InputProvenance = {
+   sourceSessionKey?: string;
+   sourceChannel?: string;
+   sourceTool?: string;
++  skill?: string;
++  mode?: string;
+ };
+ 
+ function normalizeOptionalString(value: unknown): string | undefined {
+@@ -59,6 +62,8 @@ export function normalizeInputProvenance(value: unknown): InputProvenance | und
+     sourceSessionKey: normalizeOptionalString(record.sourceSessionKey),
+     sourceChannel: normalizeOptionalString(record.sourceChannel),
+     sourceTool: normalizeOptionalString(record.sourceTool),
++    skill: normalizeOptionalString(record.skill),
++    mode: normalizeOptionalString(record.mode),
+   };
+ }
+ 
+@@ -68,3 +73,17 @@ export function isInterSessionInputProvenance(value: unknown): boolean {
+   return normalizeInputProvenance(value)?.kind === "inter_session";
+ }
+ 
++/**
++ * Check if provenance indicates a tool invocation from another agent.
++ */
++export function isToolInvocationProvenance(value: unknown): boolean {
++  return normalizeInputProvenance(value)?.kind === "tool_invocation";
++}
++
++/**
++ * Check if provenance indicates any cross-session communication.
++ * Returns true for both inter_session and tool_invocation.
++ */
++export function isCrossSessionProvenance(value: unknown): boolean {
++  const provenance = normalizeInputProvenance(value);
++  return provenance?.kind === "inter_session" || provenance?.kind === "tool_invocation";
++}
++
+ export function hasInterSessionUserProvenance(
+   message: { role?: unknown; provenance?: unknown } | undefined,
+ ): boolean {
+   if (!message || message.role !== "user") {
+     return false;
+   }
+-  return isInterSessionInputProvenance(message.provenance);
++  return isCrossSessionProvenance(message.provenance);
+ }
+
+diff --git a/src/gateway/protocol/schema/agent.ts b/src/gateway/protocol/schema/agent.ts
+index original..updated
+--- a/src/gateway/protocol/schema/agent.ts
++++ b/src/gateway/protocol/schema/agent.ts
+@@ -48,6 +48,8 @@ export const AgentParamsSchema = Type.Object(
+         {
+           kind: Type.String({ enum: [...INPUT_PROVENANCE_KIND_VALUES] }),
+           sourceSessionKey: Type.Optional(Type.String()),
+           sourceChannel: Type.Optional(Type.String()),
+           sourceTool: Type.Optional(Type.String()),
++          skill: Type.Optional(Type.String()),
++          mode: Type.Optional(Type.String()),
+         },
+         { additionalProperties: false },
+       ),
+
+diff --git a/src/agents/tools/agent-call-tool.ts b/src/agents/tools/agent-call-tool.ts
+index original..updated
+--- a/src/agents/tools/agent-call-tool.ts
++++ b/src/agents/tools/agent-call-tool.ts
+@@ -289,9 +289,12 @@ export function createAgentCallTool(opts?: {
+             lane: AGENT_LANE_NESTED,
+             extraSystemPrompt: agentContext,
+             inputProvenance: {
+-              kind: "inter_session" as const,
++              kind: "tool_invocation" as const,
+               sourceSessionKey: requesterSessionKey,
+               sourceTool: "agent_call",
++              skill: skillRaw,
++              mode,
+             },
+           },
+           timeoutMs: 10_000,
+@@ -323,9 +326,12 @@ export function createAgentCallTool(opts?: {
+             lane: AGENT_LANE_NESTED,
+             extraSystemPrompt: agentContext,
+             inputProvenance: {
+-              kind: "inter_session" as const,
++              kind: "tool_invocation" as const,
+               sourceSessionKey: requesterSessionKey,
+               sourceTool: "agent_call",
++              skill: skillRaw,
++              mode,
+             },
+           },
+           timeoutMs: 10_000,
+
+diff --git a/src/agents/tools/debate-call-tool.ts b/src/agents/tools/debate-call-tool.ts
+index original..updated
+--- a/src/agents/tools/debate-call-tool.ts
++++ b/src/agents/tools/debate-call-tool.ts
+@@ -175,11 +175,14 @@ async function invokeAgentSkill(params: {
+       lane: AGENT_LANE_NESTED,
+       extraSystemPrompt: agentContext,
+       // Include skill invocation hint in provenance
+       inputProvenance: {
+-        kind: "inter_session" as const,
++        kind: "tool_invocation" as const,
+         sourceSessionKey: params.requesterSessionKey,
+         sourceTool: "debate_call",
++        skill: params.skill,
++        mode: params.mode ?? "execute",
+       },
+     },
+     timeoutMs: 10_000,
+   });
