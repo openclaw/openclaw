@@ -156,7 +156,7 @@ export async function loginChutes(params: {
     await params.onAuth({ url });
     params.onProgress?.("Waiting for redirect URL…");
     const input = await params.onPrompt({
-      message: "Paste the redirect URL (or authorization code)",
+      message: "Paste the redirect URL",
       placeholder: `${params.app.redirectUri}?code=...&state=...`,
     });
     const parsed = parseOAuthCallbackInput(String(input), state);
@@ -176,7 +176,7 @@ export async function loginChutes(params: {
     }).catch(async () => {
       params.onProgress?.("OAuth callback not detected; paste redirect URL…");
       const input = await params.onPrompt({
-        message: "Paste the redirect URL (or authorization code)",
+        message: "Paste the redirect URL",
         placeholder: `${params.app.redirectUri}?code=...&state=...`,
       });
       const parsed = parseOAuthCallbackInput(String(input), state);

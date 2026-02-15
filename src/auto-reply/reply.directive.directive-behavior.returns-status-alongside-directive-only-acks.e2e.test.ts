@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { loadSessionStore } from "../config/sessions.js";
 import {
   installDirectiveBehaviorE2EHooks,
+  makeRestrictedElevatedDisabledConfig,
   runEmbeddedPiAgent,
   withTempHome,
 } from "./reply.directive.directive-behavior.e2e-harness.js";
@@ -68,29 +69,7 @@ describe("directive behavior", () => {
           CommandAuthorized: true,
         },
         {},
-        {
-          agents: {
-            defaults: {
-              model: "anthropic/claude-opus-4-5",
-              workspace: path.join(home, "openclaw"),
-            },
-            list: [
-              {
-                id: "restricted",
-                tools: {
-                  elevated: { enabled: false },
-                },
-              },
-            ],
-          },
-          tools: {
-            elevated: {
-              allowFrom: { whatsapp: ["+1222"] },
-            },
-          },
-          channels: { whatsapp: { allowFrom: ["+1222"] } },
-          session: { store: path.join(home, "sessions.json") },
-        },
+        makeRestrictedElevatedDisabledConfig(home),
       );
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
