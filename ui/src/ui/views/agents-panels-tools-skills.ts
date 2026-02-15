@@ -11,6 +11,11 @@ import {
   TOOL_SECTIONS,
 } from "./agents-utils.ts";
 import { groupSkills } from "./skills-grouping.ts";
+import {
+  computeSkillMissing,
+  computeSkillReasons,
+  renderSkillStatusChips,
+} from "./skills-shared.ts";
 
 export function renderAgentTools(params: {
   agentId: string;
@@ -436,37 +441,14 @@ function renderAgentSkillRow(
   },
 ) {
   const enabled = params.usingAllowlist ? params.allowSet.has(skill.name) : true;
-  const missing = [
-    ...skill.missing.bins.map((b) => `bin:${b}`),
-    ...skill.missing.env.map((e) => `env:${e}`),
-    ...skill.missing.config.map((c) => `config:${c}`),
-    ...skill.missing.os.map((o) => `os:${o}`),
-  ];
-  const reasons: string[] = [];
-  if (skill.disabled) {
-    reasons.push("disabled");
-  }
-  if (skill.blockedByAllowlist) {
-    reasons.push("blocked by allowlist");
-  }
+  const missing = computeSkillMissing(skill);
+  const reasons = computeSkillReasons(skill);
   return html`
     <div class="list-item agent-skill-row">
       <div class="list-main">
         <div class="list-title">${skill.emoji ? `${skill.emoji} ` : ""}${skill.name}</div>
         <div class="list-sub">${skill.description}</div>
-        <div class="chip-row" style="margin-top: 6px;">
-          <span class="chip">${skill.source}</span>
-          <span class="chip ${skill.eligible ? "chip-ok" : "chip-warn"}">
-            ${skill.eligible ? "eligible" : "blocked"}
-          </span>
-          ${
-            skill.disabled
-              ? html`
-                  <span class="chip chip-warn">disabled</span>
-                `
-              : nothing
-          }
-        </div>
+        ${renderSkillStatusChips({ skill })}
         ${
           missing.length > 0
             ? html`<div class="muted" style="margin-top: 6px;">Missing: ${missing.join(", ")}</div>`
