@@ -34,8 +34,10 @@ export async function handleDiscordMessageAction(
 
   if (action === "send") {
     const to = readStringParam(params, "to", { required: true });
+    const components =
+      params.components && typeof params.components === "object" ? params.components : undefined;
     const content = readStringParam(params, "message", {
-      required: true,
+      required: !components,
       allowEmpty: true,
     });
     // Support media, path, and filePath for media URL
@@ -53,6 +55,8 @@ export async function handleDiscordMessageAction(
     const embeds = Array.isArray(rawEmbeds) ? rawEmbeds : undefined;
     const asVoice = params.asVoice === true;
     const silent = params.silent === true;
+    const sessionKey = readStringParam(params, "__sessionKey");
+    const agentId = readStringParam(params, "__agentId");
     return await handleDiscordAction(
       {
         action: "sendMessage",
@@ -65,6 +69,9 @@ export async function handleDiscordMessageAction(
         embeds,
         asVoice,
         silent,
+        components,
+        __sessionKey: sessionKey ?? undefined,
+        __agentId: agentId ?? undefined,
       },
       cfg,
     );
