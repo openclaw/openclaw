@@ -323,6 +323,17 @@ enum ExecApprovalsStore {
 
     static func resolve(agentId: String?) -> ExecApprovalsResolved {
         let file = self.ensureFile()
+        return self.resolveFromFile(file, agentId: agentId)
+    }
+
+    /// Read-only resolve: loads file without writing (no ensureFile side effects).
+    /// Safe to call from background threads / off MainActor.
+    static func resolveReadOnly(agentId: String?) -> ExecApprovalsResolved {
+        let file = self.loadFile()
+        return self.resolveFromFile(file, agentId: agentId)
+    }
+
+    private static func resolveFromFile(_ file: ExecApprovalsFile, agentId: String?) -> ExecApprovalsResolved {
         let defaults = file.defaults ?? ExecApprovalsDefaults()
         let resolvedDefaults = ExecApprovalsResolvedDefaults(
             security: defaults.security ?? self.defaultSecurity,
