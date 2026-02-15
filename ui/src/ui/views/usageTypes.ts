@@ -24,6 +24,7 @@ export type UsageColumnId =
 export type TimeSeriesPoint = SessionUsageTimePoint;
 
 export type UsageProps = {
+  mode: "basic" | "advanced" | "configure";
   loading: boolean;
   error: string | null;
   startDate: string;

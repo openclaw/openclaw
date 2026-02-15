@@ -8,11 +8,13 @@ export type UiSettings = {
   sessionKey: string;
   lastActiveSessionKey: string;
   theme: ThemeMode;
+  mode: "basic" | "advanced" | "configure"; // Basic mode for regular developers, Advanced for power users, Configure for customization
   chatFocusMode: boolean;
   chatShowThinking: boolean;
   splitRatio: number; // Sidebar split ratio (0.4 to 0.7, default 0.6)
   navCollapsed: boolean; // Collapsible sidebar state
   navGroupsCollapsed: Record<string, boolean>; // Which nav groups are collapsed
+  tabVisibility?: Record<string, boolean>; // User-specific tab visibility overrides
 };
 
 export function loadSettings(): UiSettings {
@@ -27,11 +29,13 @@ export function loadSettings(): UiSettings {
     sessionKey: "main",
     lastActiveSessionKey: "main",
     theme: "system",
+    mode: "advanced",
     chatFocusMode: false,
     chatShowThinking: true,
     splitRatio: 0.6,
     navCollapsed: false,
     navGroupsCollapsed: {},
+    tabVisibility: {},
   };
 
   try {
@@ -59,6 +63,10 @@ export function loadSettings(): UiSettings {
         parsed.theme === "light" || parsed.theme === "dark" || parsed.theme === "system"
           ? parsed.theme
           : defaults.theme,
+      mode:
+        parsed.mode === "basic" || parsed.mode === "advanced" || parsed.mode === "configure"
+          ? parsed.mode
+          : defaults.mode,
       chatFocusMode:
         typeof parsed.chatFocusMode === "boolean" ? parsed.chatFocusMode : defaults.chatFocusMode,
       chatShowThinking:
@@ -77,6 +85,10 @@ export function loadSettings(): UiSettings {
         typeof parsed.navGroupsCollapsed === "object" && parsed.navGroupsCollapsed !== null
           ? parsed.navGroupsCollapsed
           : defaults.navGroupsCollapsed,
+      tabVisibility:
+        typeof parsed.tabVisibility === "object" && parsed.tabVisibility !== null
+          ? parsed.tabVisibility
+          : defaults.tabVisibility,
     };
   } catch {
     return defaults;
