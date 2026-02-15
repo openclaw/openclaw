@@ -66,6 +66,15 @@ When the operator says “release”, immediately do this preflight (no extra qu
 
 6. **Publish (npm)**
 
+**Quick release (npm only):** Use the release script for one-command bump, validate, tag, and push (CI publishes on tag):
+
+```bash
+pnpm release:npm patch              # Bump patch, tag, push → CI publishes
+pnpm release:npm patch --skip-smoke # Skip install smoke (faster)
+pnpm release:npm --dry-run          # Validate only, no tag/publish
+pnpm release:npm patch --local      # Publish locally instead of CI
+```
+
 - [ ] Confirm git status is clean; commit and push as needed.
 - [ ] `npm login` (verify 2FA) if needed.
 - [ ] `npm publish --access public` (use `--tag beta` for pre-releases).
