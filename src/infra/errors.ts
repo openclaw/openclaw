@@ -1,3 +1,5 @@
+import { redactSensitiveText } from "../logging/redact.js";
+
 export function extractErrorCode(err: unknown): string | undefined {
   if (!err || typeof err !== "object") {
     return undefined;
@@ -27,20 +29,23 @@ export function hasErrnoCode(err: unknown, code: string): boolean {
 }
 
 export function formatErrorMessage(err: unknown): string {
+  let formatted: string;
   if (err instanceof Error) {
-    return err.message || err.name || "Error";
+    formatted = err.message || err.name || "Error";
+  } else if (typeof err === "string") {
+    formatted = err;
+  } else if (typeof err === "number" || typeof err === "boolean" || typeof err === "bigint") {
+    formatted = String(err);
+  } else {
+    try {
+      formatted = JSON.stringify(err);
+    } catch {
+      formatted = Object.prototype.toString.call(err);
+    }
   }
-  if (typeof err === "string") {
-    return err;
-  }
-  if (typeof err === "number" || typeof err === "boolean" || typeof err === "bigint") {
-    return String(err);
-  }
-  try {
-    return JSON.stringify(err);
-  } catch {
-    return Object.prototype.toString.call(err);
-  }
+  // OC-17: Redact sensitive tokens BEFORE returning (Aether AI Agent)
+  // Prevents Telegram bot tokens and other credentials from appearing in logs
+  return redactSensitiveText(formatted);
 }
 
 export function formatUncaughtError(err: unknown): string {
@@ -48,7 +53,9 @@ export function formatUncaughtError(err: unknown): string {
     return formatErrorMessage(err);
   }
   if (err instanceof Error) {
-    return err.stack ?? err.message ?? err.name;
+    const stackTrace = err.stack ?? err.message ?? err.name;
+    // OC-17: Redact stack traces that might contain tokens (Aether AI Agent)
+    return redactSensitiveText(stackTrace);
   }
   return formatErrorMessage(err);
 }
