@@ -300,15 +300,26 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
 
       const allRegistered: import("./slash-commands.js").MattermostRegisteredCommand[] = [];
 
-      for (const team of teams) {
-        const registered = await registerSlashCommands({
+      try {
+        for (const team of teams) {
+          const registered = await registerSlashCommands({
+            client,
+            teamId: team.id,
+            callbackUrl,
+            commands: dedupedCommands,
+            log: (msg) => runtime.log?.(msg),
+          });
+          allRegistered.push(...registered);
+        }
+      } catch (err) {
+        // If we partially succeeded (some teams had commands created) but later failed,
+        // clean up the created commands so we don't strand registrations that will 503.
+        await cleanupSlashCommands({
           client,
-          teamId: team.id,
-          callbackUrl,
-          commands: dedupedCommands,
+          commands: allRegistered,
           log: (msg) => runtime.log?.(msg),
         });
-        allRegistered.push(...registered);
+        throw err;
       }
 
       // Build trigger→originalName map for accurate command name resolution

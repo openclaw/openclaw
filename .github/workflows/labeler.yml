@@ -284,7 +284,12 @@ jobs:
                 });
                 isMaintainer = membership?.data?.state === "active";
               } catch (error) {
-                if (error?.status !== 404) {
+                // GITHUB_TOKEN may not have org/team read perms; treat permission errors as non-fatal.
+                if (error?.status === 404) {
+                  // ignore
+                } else if (error?.status === 403) {
+                  core.warning(`Skipping team membership check for ${login}; missing permissions.`);
+                } else {
                   throw error;
                 }
               }

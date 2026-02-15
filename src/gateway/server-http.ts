@@ -119,9 +119,12 @@ function resolveMattermostSlashCallbackPaths(
 
   const mmRaw = configSnapshot.channels?.mattermost as Record<string, unknown> | undefined;
   const addMmCommands = (raw: unknown) => {
-    const commands = raw as Record<string, unknown> | undefined;
-    callbackPaths.add(normalizeCallbackPath(commands?.callbackPath));
-    tryAddCallbackUrlPath(commands?.callbackUrl);
+    if (raw == null || typeof raw !== "object") {
+      return;
+    }
+    const commands = raw as Record<string, unknown>;
+    callbackPaths.add(normalizeCallbackPath(commands.callbackPath));
+    tryAddCallbackUrlPath(commands.callbackUrl);
   };
 
   addMmCommands(mmRaw?.commands);
