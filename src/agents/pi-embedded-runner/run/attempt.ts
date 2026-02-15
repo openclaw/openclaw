@@ -69,7 +69,7 @@ import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
 import { appendCacheTtlTimestamp, isCacheTtlEligibleProvider } from "../cache-ttl.js";
 import { buildEmbeddedExtensionPaths } from "../extensions.js";
-import { applyExtraParamsToAgent } from "../extra-params.js";
+import { applyExtraParamsToAgent, resolveDisableToolsFromExtraParams } from "../extra-params.js";
 import {
   logToolSchemasForGoogle,
   sanitizeAntigravityThinkingBlocks,
@@ -281,7 +281,18 @@ export async function runEmbeddedAttempt(
 
     // Check if the model supports native image input
     const modelHasVision = params.model.input?.includes("image") ?? false;
-    const toolsRaw = params.disableTools
+    const disableToolsFromExtraParams = resolveDisableToolsFromExtraParams({
+      cfg: params.config,
+      provider: params.provider,
+      modelId: params.modelId,
+      extraParamsOverride: params.streamParams,
+    });
+    const shouldDisableTools = params.disableTools || disableToolsFromExtraParams === true;
+    if (shouldDisableTools && !params.disableTools && disableToolsFromExtraParams === true) {
+      log.debug(`tools disabled via model params for ${params.provider}/${params.modelId}`);
+    }
+
+    const toolsRaw = shouldDisableTools
       ? []
       : createOpenClawCodingTools({
           exec: {

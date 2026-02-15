@@ -29,6 +29,143 @@ export function resolveExtraParams(params: {
   return modelConfig?.params ? { ...modelConfig.params } : undefined;
 }
 
+function mergeExtraParams(
+  extraParams: Record<string, unknown> | undefined,
+  extraParamsOverride?: Record<string, unknown>,
+): Record<string, unknown> {
+  const override =
+    extraParamsOverride && Object.keys(extraParamsOverride).length > 0
+      ? Object.fromEntries(
+          Object.entries(extraParamsOverride).filter(([, value]) => value !== undefined),
+        )
+      : undefined;
+  return Object.assign({}, extraParams, override);
+}
+
+function parseBooleanFlag(value: unknown): boolean | undefined {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["true", "1", "yes", "on"].includes(normalized)) {
+      return true;
+    }
+    if (["false", "0", "no", "off"].includes(normalized)) {
+      return false;
+    }
+  }
+  return undefined;
+}
+
+function parseStringList(value: unknown): string[] | undefined {
+  if (Array.isArray(value)) {
+    const normalized = value
+      .filter((entry): entry is string => typeof entry === "string")
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+    return normalized.length > 0 ? normalized : undefined;
+  }
+  if (typeof value === "string") {
+    const normalized = value
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+    return normalized.length > 0 ? normalized : undefined;
+  }
+  return undefined;
+}
+
+type OpenRouterRoutingOverrides = {
+  data_collection?: "allow" | "deny";
+  allow_fallbacks?: boolean;
+  require_parameters?: boolean;
+  only?: string[];
+  order?: string[];
+};
+
+/**
+ * Resolve OpenRouter-compatible provider routing overrides from extra params.
+ * These are injected into OpenAI-compatible payloads as `provider: {...}`.
+ *
+ * Supported keys:
+ * - `openrouterDataCollection` ("allow" | "deny")
+ * - `openrouterAllowFallbacks` (boolean)
+ * - `openrouterRequireParameters` (boolean)
+ * - `openrouterProviderOnly` (string[] or comma-separated string)
+ * - `openrouterProviderOrder` (string[] or comma-separated string)
+ *
+ * @internal Exported for testing only
+ */
+export function resolveOpenRouterRoutingFromExtraParams(
+  extraParams: Record<string, unknown> | undefined,
+): OpenRouterRoutingOverrides | undefined {
+  if (!extraParams || Object.keys(extraParams).length === 0) {
+    return undefined;
+  }
+
+  const routing: OpenRouterRoutingOverrides = {};
+
+  const dataCollectionRaw =
+    extraParams.openrouterDataCollection ?? extraParams.openRouterDataCollection;
+  if (typeof dataCollectionRaw === "string") {
+    const normalized = dataCollectionRaw.trim().toLowerCase();
+    if (normalized === "allow" || normalized === "deny") {
+      routing.data_collection = normalized;
+    }
+  }
+
+  const allowFallbacks = parseBooleanFlag(
+    extraParams.openrouterAllowFallbacks ?? extraParams.openRouterAllowFallbacks,
+  );
+  if (allowFallbacks !== undefined) {
+    routing.allow_fallbacks = allowFallbacks;
+  }
+
+  const requireParameters = parseBooleanFlag(
+    extraParams.openrouterRequireParameters ?? extraParams.openRouterRequireParameters,
+  );
+  if (requireParameters !== undefined) {
+    routing.require_parameters = requireParameters;
+  }
+
+  const providerOnly = parseStringList(
+    extraParams.openrouterProviderOnly ?? extraParams.openRouterProviderOnly,
+  );
+  if (providerOnly && providerOnly.length > 0) {
+    routing.only = providerOnly;
+  }
+
+  const providerOrder = parseStringList(
+    extraParams.openrouterProviderOrder ?? extraParams.openRouterProviderOrder,
+  );
+  if (providerOrder && providerOrder.length > 0) {
+    routing.order = providerOrder;
+  }
+
+  return Object.keys(routing).length > 0 ? routing : undefined;
+}
+
+/**
+ * Resolve per-model tool toggle from extra params (`params.disableTools`).
+ *
+ * @internal Exported for testing only
+ */
+export function resolveDisableToolsFromExtraParams(params: {
+  cfg: OpenClawConfig | undefined;
+  provider: string;
+  modelId: string;
+  extraParamsOverride?: Record<string, unknown>;
+}): boolean | undefined {
+  const extraParams = resolveExtraParams({
+    cfg: params.cfg,
+    provider: params.provider,
+    modelId: params.modelId,
+  });
+  const merged = mergeExtraParams(extraParams, params.extraParamsOverride);
+  return parseBooleanFlag(merged.disableTools);
+}
+
 type CacheRetention = "none" | "short" | "long";
 type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
   cacheRetention?: CacheRetention;
@@ -172,6 +309,59 @@ function createOpenRouterHeadersWrapper(baseStreamFn: StreamFn | undefined): Str
     });
 }
 
+function isOpenRouterLikeModel(model: {
+  api?: string;
+  provider?: string;
+  baseUrl?: string;
+}): boolean {
+  if (model.api !== "openai-completions") {
+    return false;
+  }
+  const provider = (model.provider ?? "").toLowerCase();
+  if (provider === "openrouter" || provider === "kilo") {
+    return true;
+  }
+  const baseUrl = (model.baseUrl ?? "").toLowerCase();
+  return baseUrl.includes("openrouter.ai") || baseUrl.includes("kilo.ai");
+}
+
+/**
+ * Inject provider-routing overrides into OpenRouter-compatible payloads.
+ */
+function createOpenRouterRoutingWrapper(
+  baseStreamFn: StreamFn | undefined,
+  routing: OpenRouterRoutingOverrides,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const modelInfo = model as { api?: string; provider?: string; baseUrl?: string };
+    if (!isOpenRouterLikeModel(modelInfo)) {
+      return underlying(model, context, options);
+    }
+
+    const previousOnPayload = options?.onPayload;
+    const onPayload = (payload: unknown) => {
+      if (payload && typeof payload === "object") {
+        const body = payload as Record<string, unknown>;
+        const existingProvider =
+          body.provider && typeof body.provider === "object" && !Array.isArray(body.provider)
+            ? (body.provider as Record<string, unknown>)
+            : {};
+        body.provider = {
+          ...existingProvider,
+          ...routing,
+        };
+      }
+      previousOnPayload?.(payload);
+    };
+
+    return underlying(model, context, {
+      ...options,
+      onPayload,
+    });
+  };
+}
+
 /**
  * Apply extra params (like temperature) to an agent's streamFn.
  * Also adds OpenRouter app attribution headers when using the OpenRouter provider.
@@ -190,18 +380,18 @@ export function applyExtraParamsToAgent(
     provider,
     modelId,
   });
-  const override =
-    extraParamsOverride && Object.keys(extraParamsOverride).length > 0
-      ? Object.fromEntries(
-          Object.entries(extraParamsOverride).filter(([, value]) => value !== undefined),
-        )
-      : undefined;
-  const merged = Object.assign({}, extraParams, override);
+  const merged = mergeExtraParams(extraParams, extraParamsOverride);
   const wrappedStreamFn = createStreamFnWithExtraParams(agent.streamFn, merged, provider);
 
   if (wrappedStreamFn) {
     log.debug(`applying extraParams to agent streamFn for ${provider}/${modelId}`);
     agent.streamFn = wrappedStreamFn;
+  }
+
+  const openRouterRouting = resolveOpenRouterRoutingFromExtraParams(merged);
+  if (openRouterRouting) {
+    log.debug(`applying OpenRouter routing overrides for ${provider}/${modelId}`);
+    agent.streamFn = createOpenRouterRoutingWrapper(agent.streamFn, openRouterRouting);
   }
 
   if (provider === "openrouter") {
