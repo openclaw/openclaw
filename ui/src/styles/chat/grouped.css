@@ -92,8 +92,8 @@
   font-weight: 600;
   font-size: 14px;
   flex-shrink: 0;
-  align-self: flex-end; /* Align with last message in group */
-  margin-bottom: 4px; /* Optical alignment */
+  align-self: flex-start; /* Top-align with first message */
+  margin-top: 0;
 }
 
 .chat-avatar.user {

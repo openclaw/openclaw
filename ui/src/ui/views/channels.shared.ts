@@ -36,3 +36,12 @@ export function renderChannelAccountCount(
   }
   return html`<div class="account-count">Accounts (${count})</div>`;
 }
+
+export function statusChip(value: boolean | null | undefined, yesLabel = "YES", noLabel = "NO", naLabel = "N/A") {
+  if (value === null || value === undefined) {
+    return html`<span class="log-level" style="width: 54px; text-align: center;">${naLabel}</span>`;
+  }
+  return value
+    ? html`<span class="log-level info" style="width: 54px; text-align: center;">${yesLabel}</span>`
+    : html`<span class="log-level warn" style="width: 54px; text-align: center;">${noLabel}</span>`;
+}

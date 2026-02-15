@@ -15,6 +15,25 @@ import { detectTextDirection } from "../text-direction.ts";
 import { renderMarkdownSidebar } from "./markdown-sidebar.ts";
 import "../components/resizable-divider.ts";
 
+// Module-level state for autosuggest
+let showSlashMenu = false;
+let showAtMenu = false;
+let menuFilter = "";
+
+// Module-level state for queue
+let queueExpanded = false;
+
+// Slash commands
+const SLASH_COMMANDS = [
+  { cmd: "/status", desc: "Show session status" },
+  { cmd: "/clear", desc: "Clear chat history" },
+  { cmd: "/model", desc: "Change model" },
+  { cmd: "/thinking", desc: "Toggle thinking level" },
+  { cmd: "/verbose", desc: "Toggle verbose mode" },
+  { cmd: "/reasoning", desc: "Toggle reasoning" },
+  { cmd: "/help", desc: "Show available commands" },
+];
+
 export type CompactionIndicatorStatus = {
   active: boolean;
   startedAt: number | null;
@@ -73,9 +92,187 @@ export type ChatProps = {
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
 
+/** Detect system-role messages that should render as dividers instead of bubbles */
+function detectSystemDivider(msg: { role: string; content: string }): string | null {
+  if (msg.role.toLowerCase() !== "system") return null;
+  const text = (msg.content ?? "").toLowerCase().trim();
+  if (/new\s+session/i.test(text)) return "NEW SESSION";
+  if (/session\s+(reset|cleared|started)/i.test(text)) return "SESSION RESET";
+  if (/heartbeat/i.test(text) && text.length < 40) return "HEARTBEAT";
+  if (/context\s+(window|limit|truncat)/i.test(text)) return "CONTEXT LIMIT";
+  if (/compaction/i.test(text)) return "COMPACTION";
+  if (/model\s+change/i.test(text)) return "MODEL CHANGE";
+  if (/resumed/i.test(text) && text.length < 40) return "RESUMED";
+  if (/connected/i.test(text) && text.length < 40) return "CONNECTED";
+  return null;
+}
+
 function adjustTextareaHeight(el: HTMLTextAreaElement) {
   el.style.height = "auto";
   el.style.height = `${el.scrollHeight}px`;
+}
+
+function renderSessionTabs(props: ChatProps) {
+  const sessions = props.sessions?.sessions ?? [];
+
+  if (sessions.length === 0) {
+    return nothing;
+  }
+
+  // Find main session
+  const mainSession =
+    sessions.find((s) => s.key === "agent:main:main" || !s.key.includes(":")) ??
+    sessions.find((s) => !s.key.includes("subagent:"));
+
+  // Get all other sessions, sorted by updatedAt descending
+  const otherSessions = sessions
+    .filter((s) => s.key !== mainSession?.key)
+    .toSorted((a, b) => {
+      const aTime = typeof a.updatedAt === "number" ? a.updatedAt : 0;
+      const bTime = typeof b.updatedAt === "number" ? b.updatedAt : 0;
+      return bTime - aTime;
+    })
+    .slice(0, 7); // Limit to 7 recent (plus main = 8 total)
+
+  // If only main session exists, don't show the bar
+  if (otherSessions.length === 0) {
+    return nothing;
+  }
+
+  const getSessionDisplayName = (session: any): string => {
+    // Use label or displayName if available
+    if (session.label?.trim()) {
+      return session.label.trim();
+    }
+    if (session.displayName?.trim()) {
+      return session.displayName.trim();
+    }
+
+    // Extract last meaningful segment from key
+    const key = session.key ?? "";
+    const parts = key.split(":");
+    const lastPart = parts[parts.length - 1];
+
+    // If it's a subagent UUID, truncate to first 8 chars
+    if (lastPart.length > 20) {
+      return lastPart.substring(0, 8);
+    }
+
+    return lastPart || key;
+  };
+
+  return html`
+    <div class="chat-session-tabs">
+      <div class="chat-session-tabs__label">Recent</div>
+      ${
+        mainSession
+          ? html`
+        <button
+          class="chat-session-chip ${props.sessionKey === mainSession.key ? "active" : ""}"
+          @click=${() => props.onSessionKeyChange(mainSession.key)}
+        >
+          main
+        </button>
+      `
+          : nothing
+      }
+      ${otherSessions.map((session) => {
+        const displayName = getSessionDisplayName(session);
+        const isActive = props.sessionKey === session.key;
+        return html`
+          <button
+            class="chat-session-chip ${isActive ? "active" : ""}"
+            @click=${() => props.onSessionKeyChange(session.key)}
+            title=${session.key}
+          >
+            ${displayName}
+          </button>
+        `;
+      })}
+    </div>
+  `;
+}
+
+function renderAutosuggestMenu(props: ChatProps, textareaEl: HTMLTextAreaElement | null) {
+  if (!showSlashMenu && !showAtMenu) {
+    return nothing;
+  }
+
+  if (showSlashMenu) {
+    const filtered = SLASH_COMMANDS.filter((cmd) =>
+      cmd.cmd.toLowerCase().includes(menuFilter.toLowerCase()),
+    );
+
+    if (filtered.length === 0) {
+      return nothing;
+    }
+
+    return html`
+      <div class="rpc-suggestions">
+        ${filtered.map(
+          (cmd) => html`
+          <div
+            class="rpc-suggestion"
+            @click=${() => {
+              if (textareaEl) {
+                props.onDraftChange(cmd.cmd + " ");
+                showSlashMenu = false;
+                menuFilter = "";
+                textareaEl.focus();
+              }
+            }}
+          >
+            <div class="rpc-suggestion__name">${cmd.cmd}</div>
+            <div class="rpc-suggestion__desc">${cmd.desc}</div>
+          </div>
+        `,
+        )}
+      </div>
+    `;
+  }
+
+  if (showAtMenu) {
+    const sessions = props.sessions?.sessions ?? [];
+    const subAgents = sessions.filter((s) => s.key.includes("subagent:"));
+
+    if (subAgents.length === 0) {
+      return nothing;
+    }
+
+    const filtered = subAgents.filter((s) =>
+      s.key.toLowerCase().includes(menuFilter.toLowerCase()),
+    );
+
+    return html`
+      <div class="rpc-suggestions">
+        ${filtered.map((session) => {
+          const shortName = session.key.split(":").pop() ?? session.key;
+          return html`
+            <div
+              class="rpc-suggestion"
+              @click=${() => {
+                if (textareaEl) {
+                  const cursorPos = textareaEl.selectionStart;
+                  const text = props.draft;
+                  const beforeAt = text.lastIndexOf("@", cursorPos - 1);
+                  const newText =
+                    text.substring(0, beforeAt) + `@${shortName} ` + text.substring(cursorPos);
+                  props.onDraftChange(newText);
+                  showAtMenu = false;
+                  menuFilter = "";
+                  textareaEl.focus();
+                }
+              }}
+            >
+              <div class="rpc-suggestion__name">@${shortName}</div>
+            </div>
+          `;
+        })}
+      </div>
+    `;
+  }
+
+  return nothing;
 }
 
 function renderCompactionIndicator(status: CompactionIndicatorStatus | null | undefined) {
@@ -285,6 +482,8 @@ export function renderChat(props: ChatProps) {
           : nothing
       }
 
+      ${renderSessionTabs(props)}
+
       <div
         class="chat-split-container ${sidebarOpen ? "chat-split-container--open" : ""}"
       >
@@ -320,38 +519,6 @@ export function renderChat(props: ChatProps) {
         }
       </div>
 
-      ${
-        props.queue.length
-          ? html`
-            <div class="chat-queue" role="status" aria-live="polite">
-              <div class="chat-queue__title">Queued (${props.queue.length})</div>
-              <div class="chat-queue__list">
-                ${props.queue.map(
-                  (item) => html`
-                    <div class="chat-queue__item">
-                      <div class="chat-queue__text">
-                        ${
-                          item.text ||
-                          (item.attachments?.length ? `Image (${item.attachments.length})` : "")
-                        }
-                      </div>
-                      <button
-                        class="btn chat-queue__remove"
-                        type="button"
-                        aria-label="Remove queued message"
-                        @click=${() => props.onQueueRemove(item.id)}
-                      >
-                        ${icons.x}
-                      </button>
-                    </div>
-                  `,
-                )}
-              </div>
-            </div>
-          `
-          : nothing
-      }
-
       ${renderCompactionIndicator(props.compactionStatus)}
 
       ${
@@ -368,17 +535,84 @@ export function renderChat(props: ChatProps) {
           : nothing
       }
 
+      ${
+        props.queue.length
+          ? html`
+            <div class="chat-queue-tab" @click=${() => {
+              queueExpanded = !queueExpanded;
+            }}>
+              <span>Queued (${props.queue.length})</span>
+              <span class="icon-sm" style="width:10px;height:10px;${queueExpanded ? '' : 'transform:rotate(180deg)'}">${icons.arrowDown}</span>
+            </div>
+            ${
+              queueExpanded
+                ? html`
+                  <div class="chat-queue-panel">
+                    ${props.queue.map(
+                      (item) => html`
+                        <div class="chat-queue-item">
+                          <div class="chat-queue-text mono">
+                            ${item.text || (item.attachments?.length ? `Image (${item.attachments.length})` : "")}
+                          </div>
+                          <button
+                            class="btn btn--sm"
+                            @click=${() => props.onQueueRemove(item.id)}
+                          >
+                            <span class="icon-sm" style="width:10px;height:10px;">${icons.x}</span>
+                          </button>
+                        </div>
+                      `,
+                    )}
+                  </div>
+                `
+                : nothing
+            }
+          `
+          : nothing
+      }
+
       <div class="chat-compose">
         ${renderAttachmentPreview(props)}
         <div class="chat-compose__row">
           <label class="field chat-compose__field">
             <span>Message</span>
             <textarea
-              ${ref((el) => el && adjustTextareaHeight(el as HTMLTextAreaElement))}
+              ${ref((el) => {
+                if (el) {
+                  adjustTextareaHeight(el as HTMLTextAreaElement);
+                  (el as any)._textareaRef = el;
+                }
+              })}
               .value=${props.draft}
               dir=${detectTextDirection(props.draft)}
               ?disabled=${!props.connected}
               @keydown=${(e: KeyboardEvent) => {
+                const target = e.target as HTMLTextAreaElement;
+
+                // Tab completion for autosuggest
+                if (e.key === "Tab" && (showSlashMenu || showAtMenu)) {
+                  e.preventDefault();
+                  const firstSuggestion = showSlashMenu
+                    ? SLASH_COMMANDS.filter((cmd) =>
+                        cmd.cmd.toLowerCase().includes(menuFilter.toLowerCase()),
+                      )[0]
+                    : null;
+                  if (firstSuggestion && showSlashMenu) {
+                    props.onDraftChange(firstSuggestion.cmd + " ");
+                    showSlashMenu = false;
+                    menuFilter = "";
+                  }
+                  return;
+                }
+
+                // Escape closes menu
+                if (e.key === "Escape" && (showSlashMenu || showAtMenu)) {
+                  showSlashMenu = false;
+                  showAtMenu = false;
+                  menuFilter = "";
+                  return;
+                }
+
                 if (e.key !== "Enter") {
                   return;
                 }
@@ -399,26 +633,55 @@ export function renderChat(props: ChatProps) {
               @input=${(e: Event) => {
                 const target = e.target as HTMLTextAreaElement;
                 adjustTextareaHeight(target);
-                props.onDraftChange(target.value);
+                const newValue = target.value;
+                props.onDraftChange(newValue);
+
+                // Detect slash command
+                if (newValue.startsWith("/")) {
+                  showSlashMenu = true;
+                  showAtMenu = false;
+                  menuFilter = newValue.substring(1);
+                } else {
+                  showSlashMenu = false;
+                }
+
+                // Detect @ mention
+                const cursorPos = target.selectionStart;
+                const textBeforeCursor = newValue.substring(0, cursorPos);
+                const lastAtIndex = textBeforeCursor.lastIndexOf("@");
+
+                if (lastAtIndex !== -1) {
+                  const afterAt = textBeforeCursor.substring(lastAtIndex + 1);
+                  if (!afterAt.includes(" ")) {
+                    showAtMenu = true;
+                    showSlashMenu = false;
+                    menuFilter = afterAt;
+                  } else {
+                    showAtMenu = false;
+                  }
+                } else {
+                  showAtMenu = false;
+                }
               }}
               @paste=${(e: ClipboardEvent) => handlePaste(e, props)}
               placeholder=${composePlaceholder}
             ></textarea>
+            ${renderAutosuggestMenu(props, document.querySelector(".chat-compose__field textarea") as HTMLTextAreaElement)}
           </label>
           <div class="chat-compose__actions">
-            <button
-              class="btn"
-              ?disabled=${!props.connected || (!canAbort && props.sending)}
-              @click=${canAbort ? props.onAbort : props.onNewSession}
-            >
-              ${canAbort ? "Stop" : "New session"}
-            </button>
             <button
               class="btn primary"
               ?disabled=${!props.connected}
               @click=${props.onSend}
             >
               ${isBusy ? "Queue" : "Send"}<kbd class="btn-kbd">↵</kbd>
+            </button>
+            <button
+              class="btn"
+              ?disabled=${!props.connected || (!canAbort && props.sending)}
+              @click=${canAbort ? props.onAbort : props.onNewSession}
+            >
+              ${canAbort ? "Stop" : "New session"}
             </button>
           </div>
         </div>
@@ -498,7 +761,19 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
           typeof marker.id === "string"
             ? `divider:compaction:${marker.id}`
             : `divider:compaction:${normalized.timestamp}:${i}`,
-        label: "Compaction",
+        label: "COMPACTION",
+        timestamp: normalized.timestamp ?? Date.now(),
+      });
+      continue;
+    }
+
+    // Detect system events and render as dividers
+    const systemDividerLabel = detectSystemDivider(normalized);
+    if (systemDividerLabel) {
+      items.push({
+        kind: "divider",
+        key: `divider:system:${normalized.timestamp}:${i}`,
+        label: systemDividerLabel,
         timestamp: normalized.timestamp ?? Date.now(),
       });
       continue;
