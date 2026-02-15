@@ -18,6 +18,13 @@ const BACKOFF_MS: readonly number[] = [
   600_000, // retry 4: 10m
 ];
 
+type DeliveryMirrorPayload = {
+  sessionKey: string;
+  agentId?: string;
+  text?: string;
+  mediaUrls?: string[];
+};
+
 export interface QueuedDelivery {
   id: string;
   enqueuedAt: number;
@@ -35,12 +42,7 @@ export interface QueuedDelivery {
   bestEffort?: boolean;
   gifPlayback?: boolean;
   silent?: boolean;
-  mirror?: {
-    sessionKey: string;
-    agentId?: string;
-    text?: string;
-    mediaUrls?: string[];
-  };
+  mirror?: DeliveryMirrorPayload;
   retryCount: number;
   lastError?: string;
 }
@@ -74,12 +76,7 @@ export async function enqueueDelivery(
     bestEffort?: boolean;
     gifPlayback?: boolean;
     silent?: boolean;
-    mirror?: {
-      sessionKey: string;
-      agentId?: string;
-      text?: string;
-      mediaUrls?: string[];
-    };
+    mirror?: DeliveryMirrorPayload;
   },
   stateDir?: string,
 ): Promise<string> {
@@ -205,12 +202,7 @@ export type DeliverFn = (params: {
   bestEffort?: boolean;
   gifPlayback?: boolean;
   silent?: boolean;
-  mirror?: {
-    sessionKey: string;
-    agentId?: string;
-    text?: string;
-    mediaUrls?: string[];
-  };
+  mirror?: DeliveryMirrorPayload;
   skipQueue?: boolean;
 }) => Promise<unknown>;
 
