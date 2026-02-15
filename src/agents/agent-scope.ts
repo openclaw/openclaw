@@ -132,8 +132,7 @@ export function resolveAgentConfig(
       typeof entry.model === "string" || (entry.model && typeof entry.model === "object")
         ? entry.model
         : undefined,
-    thinkingDefault:
-      typeof entry.thinkingDefault === "string" ? entry.thinkingDefault : undefined,
+    thinkingDefault: typeof entry.thinkingDefault === "string" ? entry.thinkingDefault : undefined,
     skills: Array.isArray(entry.skills) ? entry.skills : undefined,
     memorySearch: entry.memorySearch,
     humanDelay: entry.humanDelay,
