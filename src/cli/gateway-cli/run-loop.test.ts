@@ -26,6 +26,10 @@ vi.mock("../../infra/restart.js", () => ({
   markGatewaySigusr1RestartHandled: () => markGatewaySigusr1RestartHandled(),
 }));
 
+vi.mock("../../infra/process-respawn.js", () => ({
+  restartGatewayProcessWithFreshPid: () => ({ mode: "skipped" }),
+}));
+
 vi.mock("../../process/command-queue.js", () => ({
   getActiveTaskCount: () => getActiveTaskCount(),
   waitForActiveTasks: (timeoutMs: number) => waitForActiveTasks(timeoutMs),

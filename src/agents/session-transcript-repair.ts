@@ -66,6 +66,25 @@ export type ToolCallInputRepairReport = {
   droppedAssistantMessages: number;
 };
 
+export function stripToolResultDetails(messages: AgentMessage[]): AgentMessage[] {
+  let touched = false;
+  const out: AgentMessage[] = [];
+  for (const msg of messages) {
+    if (!msg || typeof msg !== "object" || (msg as { role?: unknown }).role !== "toolResult") {
+      out.push(msg);
+      continue;
+    }
+    if (!("details" in msg)) {
+      out.push(msg);
+      continue;
+    }
+    const { details: _details, ...rest } = msg as unknown as Record<string, unknown>;
+    touched = true;
+    out.push(rest as unknown as AgentMessage);
+  }
+  return touched ? out : messages;
+}
+
 export function repairToolCallInputs(messages: AgentMessage[]): ToolCallInputRepairReport {
   let droppedToolCalls = 0;
   let droppedAssistantMessages = 0;

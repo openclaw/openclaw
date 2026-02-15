@@ -396,18 +396,11 @@ export const buildTelegramMessageContext = async ({
   }
 
   let bodyText = rawBody;
-  if (!bodyText && allMedia.length > 0) {
-    bodyText = `<media:image>${allMedia.length > 1 ? ` (${allMedia.length} images)` : ""}`;
-  }
-  const hasAnyMention = (msg.entities ?? msg.caption_entities ?? []).some(
-    (ent) => ent.type === "mention",
-  );
-  const explicitlyMentioned = botUsername ? hasBotMention(msg, botUsername) : false;
+  const hasAudio = allMedia.some((media) => media.contentType?.startsWith("audio/"));
 
   // Preflight audio transcription for mention detection in groups
   // This allows voice notes to be checked for mentions before being dropped
   let preflightTranscript: string | undefined;
-  const hasAudio = allMedia.some((media) => media.contentType?.startsWith("audio/"));
   const needsPreflightTranscription =
     isGroup && requireMention && hasAudio && !hasUserText && mentionRegexes.length > 0;
 
@@ -431,6 +424,20 @@ export const buildTelegramMessageContext = async ({
       logVerbose(`telegram: audio preflight transcription failed: ${String(err)}`);
     }
   }
+
+  // Build bodyText - if there's audio with transcript, use transcript; otherwise use placeholder
+  if (!bodyText && allMedia.length > 0) {
+    if (hasAudio) {
+      bodyText = preflightTranscript || "<media:audio>";
+    } else {
+      bodyText = `<media:image>${allMedia.length > 1 ? ` (${allMedia.length} images)` : ""}`;
+    }
+  }
+
+  const hasAnyMention = (msg.entities ?? msg.caption_entities ?? []).some(
+    (ent) => ent.type === "mention",
+  );
+  const explicitlyMentioned = botUsername ? hasBotMention(msg, botUsername) : false;
 
   const computedWasMentioned = matchesMentionWithExplicit({
     text: msg.text ?? msg.caption ?? "",

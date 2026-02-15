@@ -17,6 +17,35 @@ function resolveSlackSendIdentity(identity?: OutboundIdentity): SlackSendIdentit
   return { username, iconUrl, iconEmoji };
 }
 
+async function applySlackMessageSendingHooks(params: {
+  to: string;
+  text: string;
+  threadTs?: string;
+  accountId?: string;
+  mediaUrl?: string;
+}): Promise<{ cancelled: boolean; text: string }> {
+  const hookRunner = getGlobalHookRunner();
+  if (!hookRunner?.hasHooks("message_sending")) {
+    return { cancelled: false, text: params.text };
+  }
+  const hookResult = await hookRunner.runMessageSending(
+    {
+      to: params.to,
+      content: params.text,
+      metadata: {
+        threadTs: params.threadTs,
+        channelId: params.to,
+        ...(params.mediaUrl ? { mediaUrl: params.mediaUrl } : {}),
+      },
+    },
+    { channelId: "slack", accountId: params.accountId ?? undefined },
+  );
+  if (hookResult?.cancel) {
+    return { cancelled: true, text: params.text };
+  }
+  return { cancelled: false, text: hookResult?.content ?? params.text };
+}
+
 export const slackOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   chunker: null,
@@ -25,30 +54,23 @@ export const slackOutbound: ChannelOutboundAdapter = {
     const send = deps?.sendSlack ?? sendMessageSlack;
     // Use threadId fallback so routed tool notifications stay in the Slack thread.
     const threadTs = replyToId ?? (threadId != null ? String(threadId) : undefined);
-    let finalText = text;
-
-    // Run message_sending hooks (e.g. thread-ownership can cancel the send).
-    const hookRunner = getGlobalHookRunner();
-    if (hookRunner?.hasHooks("message_sending")) {
-      const hookResult = await hookRunner.runMessageSending(
-        { to, content: text, metadata: { threadTs, channelId: to } },
-        { channelId: "slack", accountId: accountId ?? undefined },
-      );
-      if (hookResult?.cancel) {
-        return {
-          channel: "slack",
-          messageId: "cancelled-by-hook",
-          channelId: to,
-          meta: { cancelled: true },
-        };
-      }
-      if (hookResult?.content) {
-        finalText = hookResult.content;
-      }
+    const hookResult = await applySlackMessageSendingHooks({
+      to,
+      text,
+      threadTs,
+      accountId: accountId ?? undefined,
+    });
+    if (hookResult.cancelled) {
+      return {
+        channel: "slack",
+        messageId: "cancelled-by-hook",
+        channelId: to,
+        meta: { cancelled: true },
+      };
     }
 
     const slackIdentity = resolveSlackSendIdentity(identity);
-    const result = await send(to, finalText, {
+    const result = await send(to, hookResult.text, {
       threadTs,
       accountId: accountId ?? undefined,
       ...(slackIdentity ? { identity: slackIdentity } : {}),
@@ -59,30 +81,24 @@ export const slackOutbound: ChannelOutboundAdapter = {
     const send = deps?.sendSlack ?? sendMessageSlack;
     // Use threadId fallback so routed tool notifications stay in the Slack thread.
     const threadTs = replyToId ?? (threadId != null ? String(threadId) : undefined);
-    let finalText = text;
-
-    // Run message_sending hooks (e.g. thread-ownership can cancel the send).
-    const hookRunner = getGlobalHookRunner();
-    if (hookRunner?.hasHooks("message_sending")) {
-      const hookResult = await hookRunner.runMessageSending(
-        { to, content: text, metadata: { threadTs, channelId: to, mediaUrl } },
-        { channelId: "slack", accountId: accountId ?? undefined },
-      );
-      if (hookResult?.cancel) {
-        return {
-          channel: "slack",
-          messageId: "cancelled-by-hook",
-          channelId: to,
-          meta: { cancelled: true },
-        };
-      }
-      if (hookResult?.content) {
-        finalText = hookResult.content;
-      }
+    const hookResult = await applySlackMessageSendingHooks({
+      to,
+      text,
+      threadTs,
+      mediaUrl,
+      accountId: accountId ?? undefined,
+    });
+    if (hookResult.cancelled) {
+      return {
+        channel: "slack",
+        messageId: "cancelled-by-hook",
+        channelId: to,
+        meta: { cancelled: true },
+      };
     }
 
     const slackIdentity = resolveSlackSendIdentity(identity);
-    const result = await send(to, finalText, {
+    const result = await send(to, hookResult.text, {
       mediaUrl,
       threadTs,
       accountId: accountId ?? undefined,
