@@ -1,6 +1,8 @@
 import type { ButtonInteraction, ComponentData } from "@buape/carbon";
 import { Routes } from "discord-api-types/v10";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DiscordExecApprovalConfig } from "../../config/types.discord.js";
 import {
@@ -13,7 +15,7 @@ import {
   type ExecApprovalButtonContext,
 } from "./exec-approvals.js";
 
-const STORE_PATH = "/tmp/openclaw-exec-approvals-test.json";
+const STORE_PATH = path.join(os.tmpdir(), "openclaw-exec-approvals-test.json");
 
 const writeStore = (store: Record<string, unknown>) => {
   fs.writeFileSync(STORE_PATH, `${JSON.stringify(store, null, 2)}\n`, "utf8");
