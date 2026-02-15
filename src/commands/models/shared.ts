@@ -93,7 +93,7 @@ export function resolveModelTarget(params: { raw: string; cfg: OpenClawConfig })
 
 export function resolveModelKeysFromEntries(params: {
   cfg: OpenClawConfig;
-  entries: readonly unknown[];
+  entries: readonly string[];
 }): string[] {
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
@@ -102,7 +102,7 @@ export function resolveModelKeysFromEntries(params: {
   return params.entries
     .map((entry) =>
       resolveModelRefFromString({
-        raw: String(entry ?? ""),
+        raw: entry,
         defaultProvider: DEFAULT_PROVIDER,
         aliasIndex,
       }),
