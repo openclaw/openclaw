@@ -60,7 +60,7 @@ import { resolveMessageChannel } from "../utils/message-channel.js";
 import { deliverAgentCommandResult } from "./agent/delivery.js";
 import { resolveAgentRunContext } from "./agent/run-context.js";
 import { updateSessionStoreAfterAgentRun } from "./agent/session-store.js";
-import { resolveSession } from "./agent/session.js";
+import { findSessionKeyByUuid, resolveSession } from "./agent/session.js";
 import type { AgentCommandOpts } from "./agent/types.js";
 
 type PersistSessionEntryParams = {
@@ -205,18 +205,26 @@ export async function agentCommand(
       );
     }
   }
-  // Extract agent ID from session key or session ID
-  const sessionKeyOrId = opts.sessionKey?.trim() || opts.sessionId?.trim();
-  if (agentIdOverride && sessionKeyOrId) {
-    const sessionAgentId = resolveAgentIdFromSessionKey(sessionKeyOrId);
-    if (sessionAgentId !== agentIdOverride) {
-      throw new Error(
-        `Agent id "${agentIdOverrideRaw}" does not match session key agent "${sessionAgentId}".`,
-      );
-    }
+  // Resolve session key from --session-key or --session-id
+  // If --session-id is a UUID (not agent:... format), look it up across all agent stores
+  let resolvedSessionKey = opts.sessionKey?.trim();
+  if (!resolvedSessionKey && opts.sessionId?.trim()) {
+    const sessionIdValue = opts.sessionId.trim();
+    resolvedSessionKey = sessionIdValue.toLowerCase().startsWith("agent:")
+      ? sessionIdValue
+      : findSessionKeyByUuid({ cfg, sessionId: sessionIdValue });
+  }
+
+  // Extract agent ID from the resolved session key (only call once)
+  const keyAgentId = resolveAgentIdFromSessionKey(resolvedSessionKey);
+  const sessionAgentId = agentIdOverride ?? keyAgentId;
+
+  if (agentIdOverride && keyAgentId && keyAgentId !== agentIdOverride) {
+    throw new Error(
+      `Agent id "${agentIdOverrideRaw}" does not match session key agent "${keyAgentId}".`,
+    );
   }
   const agentCfg = cfg.agents?.defaults;
-  const sessionAgentId = agentIdOverride ?? resolveAgentIdFromSessionKey(sessionKeyOrId);
   const workspaceDirRaw = resolveAgentWorkspaceDir(cfg, sessionAgentId);
   const agentDir = resolveAgentDir(cfg, sessionAgentId);
   const workspace = await ensureAgentWorkspace({
