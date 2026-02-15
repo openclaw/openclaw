@@ -3,8 +3,12 @@
  */
 
 import {
+  rotateGatewayToken,
+  createDefaultDeps,
+  type RotationDeps,
+} from "../config/auto-rotation.js";
+import {
   type SecretWithLabels,
-  type SecretRotationResult,
   parseRotationLabels,
   buildRotationLabels,
   checkAllSecrets,
@@ -12,11 +16,6 @@ import {
   acknowledgeRotation,
   setRotationInterval,
 } from "../config/rotation-reminders.js";
-import {
-  rotateGatewayToken,
-  createDefaultDeps,
-  type RotationDeps,
-} from "../config/auto-rotation.js";
 
 // ---------------------------------------------------------------------------
 // Types for mock/test injection
@@ -242,9 +241,7 @@ async function secretsSetupAws(options: SetupCommandOptions): Promise<number> {
     await exec(
       `aws iam create-policy --policy-name ${policyName} --policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["secretsmanager:GetSecretValue"],"Resource":"arn:aws:secretsmanager:${region}:*:secret:openclaw-${agent}-*"}]}'`,
     );
-    await exec(
-      `aws iam create-user --user-name openclaw-${agent}`,
-    );
+    await exec(`aws iam create-user --user-name openclaw-${agent}`);
     await exec(
       `aws iam attach-user-policy --user-name openclaw-${agent} --policy-arn arn:aws:iam::*:policy/${policyName}`,
     );
@@ -460,7 +457,9 @@ export async function secretsRotateCommand(options: RotateCommandOptions): Promi
   const secretName = options.secret ?? "openclaw-main-gateway-token";
 
   if (secretName !== "openclaw-main-gateway-token") {
-    console.error(`Error: Auto-rotation is only supported for "openclaw-main-gateway-token" currently.`);
+    console.error(
+      `Error: Auto-rotation is only supported for "openclaw-main-gateway-token" currently.`,
+    );
     return 1;
   }
 
