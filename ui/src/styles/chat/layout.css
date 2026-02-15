@@ -343,6 +343,10 @@
   font-size: 13px;
 }
 
+.chat-controls__new-session {
+  font-family: var(--font-mono);
+}
+
 /* Icon button style */
 .btn--icon {
   padding: 8px !important;
