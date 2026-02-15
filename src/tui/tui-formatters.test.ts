@@ -189,14 +189,14 @@ describe("sanitizeRenderableText", () => {
 describe("stripInboundMetaEnvelope (#16919)", () => {
   it("strips a single metadata block", () => {
     const input =
-      'Conversation info (untrusted metadata):\n\`\`\`json\n{"key":"value"}\n\`\`\`\nHello there';
+      'Conversation info (untrusted metadata):\n```json\n{"key":"value"}\n```\nHello there';
     expect(stripInboundMetaEnvelope(input)).toBe("Hello there");
   });
 
   it("strips multiple consecutive metadata blocks", () => {
     const input = [
-      'Conversation info (untrusted metadata):\n\`\`\`json\n{"a":1}\n\`\`\`',
-      'Sender info (untrusted metadata):\n\`\`\`json\n{"b":2}\n\`\`\`',
+      'Conversation info (untrusted metadata):\n```json\n{"a":1}\n```',
+      'Sender info (untrusted metadata):\n```json\n{"b":2}\n```',
       "Actual message",
     ].join("\n");
     expect(stripInboundMetaEnvelope(input)).toBe("Actual message");
