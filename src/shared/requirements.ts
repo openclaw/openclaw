@@ -185,3 +185,34 @@ export function evaluateRequirementsFromMetadata(params: {
   });
   return { required, ...result };
 }
+
+export function evaluateRequirementsFromMetadataWithRemote(params: {
+  always: boolean;
+  metadata?: RequirementsMetadata;
+  hasLocalBin: (bin: string) => boolean;
+  localPlatform: string;
+  remote?: {
+    hasBin?: (bin: string) => boolean;
+    hasAnyBin?: (bins: string[]) => boolean;
+    platforms?: string[];
+  };
+  isEnvSatisfied: (envName: string) => boolean;
+  isConfigSatisfied: (pathStr: string) => boolean;
+}): {
+  required: Requirements;
+  missing: Requirements;
+  eligible: boolean;
+  configChecks: RequirementConfigCheck[];
+} {
+  return evaluateRequirementsFromMetadata({
+    always: params.always,
+    metadata: params.metadata,
+    hasLocalBin: params.hasLocalBin,
+    hasRemoteBin: params.remote?.hasBin,
+    hasRemoteAnyBin: params.remote?.hasAnyBin,
+    localPlatform: params.localPlatform,
+    remotePlatforms: params.remote?.platforms,
+    isEnvSatisfied: params.isEnvSatisfied,
+    isConfigSatisfied: params.isConfigSatisfied,
+  });
+}
