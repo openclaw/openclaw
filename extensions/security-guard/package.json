@@ -1,0 +1,25 @@
+{
+  "name": "@openclaw/security-guard",
+  "version": "2026.2.15",
+  "private": true,
+  "description": "Security guardrails extension for OpenClaw — prompt injection detection, config auditing, secrets scanning, and real-time threat monitoring",
+  "type": "module",
+  "author": {
+    "name": "Miloud Belarebia",
+    "url": "https://2pidata.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/miloudbelarebia/openclaw-security-guard"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.1.26"
+  },
+  "openclaw": {
+    "extensions": ["./index.ts"]
+  }
+}
