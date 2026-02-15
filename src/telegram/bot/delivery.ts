@@ -402,39 +402,45 @@ export async function resolveMedia(
   if (!m?.file_id) {
     return null;
   }
-  const file = await ctx.getFile();
-  if (!file.file_path) {
-    throw new Error("Telegram getFile returned no file_path");
+
+  try {
+    const file = await ctx.getFile();
+    if (!file.file_path) {
+      throw new Error("Telegram getFile returned no file_path");
+    }
+    const fetchImpl = proxyFetch ?? globalThis.fetch;
+    if (!fetchImpl) {
+      throw new Error("fetch is not available; set channels.telegram.proxy in config");
+    }
+    const url = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
+    const fetched = await fetchRemoteMedia({
+      url,
+      fetchImpl,
+      filePathHint: file.file_path,
+    });
+    const originalName = fetched.fileName ?? file.file_path;
+    const saved = await saveMediaBuffer(
+      fetched.buffer,
+      fetched.contentType,
+      "inbound",
+      maxBytes,
+      originalName,
+    );
+    let placeholder = "<media:document>";
+    if (msg.photo) {
+      placeholder = "<media:image>";
+    } else if (msg.video) {
+      placeholder = "<media:video>";
+    } else if (msg.video_note) {
+      placeholder = "<media:video>";
+    } else if (msg.audio || msg.voice) {
+      placeholder = "<media:audio>";
+    }
+    return { path: saved.path, contentType: saved.contentType, placeholder };
+  } catch (err) {
+    logVerbose(`telegram: failed to download media file: ${String(err)}`);
+    return null;
   }
-  const fetchImpl = proxyFetch ?? globalThis.fetch;
-  if (!fetchImpl) {
-    throw new Error("fetch is not available; set channels.telegram.proxy in config");
-  }
-  const url = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
-  const fetched = await fetchRemoteMedia({
-    url,
-    fetchImpl,
-    filePathHint: file.file_path,
-  });
-  const originalName = fetched.fileName ?? file.file_path;
-  const saved = await saveMediaBuffer(
-    fetched.buffer,
-    fetched.contentType,
-    "inbound",
-    maxBytes,
-    originalName,
-  );
-  let placeholder = "<media:document>";
-  if (msg.photo) {
-    placeholder = "<media:image>";
-  } else if (msg.video) {
-    placeholder = "<media:video>";
-  } else if (msg.video_note) {
-    placeholder = "<media:video>";
-  } else if (msg.audio || msg.voice) {
-    placeholder = "<media:audio>";
-  }
-  return { path: saved.path, contentType: saved.contentType, placeholder };
 }
 
 function isVoiceMessagesForbidden(err: unknown): boolean {
