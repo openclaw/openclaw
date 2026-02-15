@@ -161,7 +161,7 @@ export async function runCliAgent(params: {
   const stdinPayload = stdin ?? "";
   const baseArgs = useResume ? (backend.resumeArgs ?? backend.args ?? []) : (backend.args ?? []);
   const resolvedArgs = useResume
-    ? baseArgs.map((entry) => entry.replaceAll("{sessionId}", cliSessionIdToSend ?? ""))
+    ? baseArgs.map((entry) => entry.replaceAll("{sessionId}", cliSessionIdToSend ?? "").replaceAll("{model}", normalizedModel))
     : baseArgs;
   const args = buildCliArgs({
     backend,
