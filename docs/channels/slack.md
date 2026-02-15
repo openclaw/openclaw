@@ -221,7 +221,7 @@ and still route command execution against the target conversation session (`Comm
 - With default `session.dmScope=main`, Slack DMs collapse to agent main session.
 - Channel sessions: `agent:<agentId>:slack:channel:<channelId>`.
 - Thread replies can create thread session suffixes (`:thread:<threadTs>`) when applicable.
-- `channels.slack.thread.historyScope` default is `thread`; `thread.inheritParent` default is `false`.
+- `channels.slack.thread.historyScope` default is `thread`; `thread.inheritParent` default is `true`.
 - `channels.slack.thread.initialHistoryLimit` controls how many existing thread messages are fetched when a new thread session starts (default `20`; set `0` to disable).
 
 Reply threading controls:
@@ -230,12 +230,16 @@ Reply threading controls:
 - `channels.slack.replyToModeByChatType`: per `direct|group|channel`
 - legacy fallback for direct chats: `channels.slack.dm.replyToMode`
 
+Thread session inheritance:
+
+- `channels.slack.thread.inheritParent` (default `true`): thread replies route to the parent session instead of creating separate `:thread:<threadTs>` sessions. Set to `false` for isolated thread sessions.
+
 Manual reply tags are supported:
 
 - `[[reply_to_current]]`
 - `[[reply_to:<id>]]`
 
-Note: `replyToMode="off"` disables implicit reply threading. Explicit `[[reply_to_*]]` tags are still honored.
+Threading is a user preference — agents do not use reply tags by default. Configure `replyToMode` to control automatic threading behavior.
 
 ## Media, chunking, and delivery
 

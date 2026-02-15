@@ -220,6 +220,69 @@ describe("runWithModelFallback", () => {
     }
   });
 
+  it("does not drop configured fallbacks when agents.defaults.models allowlist is present", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-"));
+    const provider = `cooldown-allowlist-${crypto.randomUUID()}`;
+    const profileId = `${provider}:default`;
+
+    const store: AuthProfileStore = {
+      version: AUTH_STORE_VERSION,
+      profiles: {
+        [profileId]: {
+          type: "api_key",
+          provider,
+          key: "test-key",
+        },
+      },
+      usageStats: {
+        [profileId]: {
+          cooldownUntil: Date.now() + 60_000,
+        },
+      },
+    };
+
+    saveAuthProfileStore(store, tempDir);
+
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: `${provider}/m1`,
+            fallbacks: ["fallback/ok-model"],
+          },
+          // Presence of agents.defaults.models enables the configured allowlist.
+          // Previously this caused fallbacks not listed here to be silently dropped.
+          models: {
+            [`${provider}/m1`]: {},
+          },
+        },
+      },
+    });
+
+    const run = vi.fn().mockImplementation(async (providerId, modelId) => {
+      if (providerId === "fallback") {
+        return "ok";
+      }
+      throw new Error(`unexpected provider: ${providerId}/${modelId}`);
+    });
+
+    try {
+      const result = await runWithModelFallback({
+        cfg,
+        provider,
+        model: "m1",
+        agentDir: tempDir,
+        run,
+      });
+
+      expect(result.result).toBe("ok");
+      expect(run.mock.calls).toEqual([["fallback", "ok-model"]]);
+      expect(result.attempts[0]?.reason).toBe("rate_limit");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("does not skip when any profile is available", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-"));
     const provider = `cooldown-mixed-${crypto.randomUUID()}`;

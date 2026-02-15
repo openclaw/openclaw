@@ -130,18 +130,69 @@ export function buildConfiguredAllowlistKeys(params: {
   cfg: OpenClawConfig | undefined;
   defaultProvider: string;
 }): Set<string> | null {
-  const rawAllowlist = Object.keys(params.cfg?.agents?.defaults?.models ?? {});
+  const cfg = params.cfg;
+  const rawAllowlist = Object.keys(cfg?.agents?.defaults?.models ?? {});
   if (rawAllowlist.length === 0) {
     return null;
   }
 
   const keys = new Set<string>();
-  for (const raw of rawAllowlist) {
-    const key = resolveAllowlistModelKey(String(raw ?? ""), params.defaultProvider);
+
+  const addKeyFromRaw = (raw: unknown) => {
+    if (raw == null || (typeof raw !== "string" && typeof raw !== "number")) {
+      return;
+    }
+    const value = typeof raw === "string" ? raw : String(raw);
+    const key = resolveAllowlistModelKey(value, params.defaultProvider);
     if (key) {
       keys.add(key);
     }
+  };
+
+  // 1) Allowlist keys from agents.defaults.models (explicit allowlist / alias map).
+  for (const raw of rawAllowlist) {
+    addKeyFromRaw(raw);
   }
+
+  // 2) Also include any models explicitly referenced elsewhere in config (primary/fallbacks).
+  //    This prevents surprising behavior where users set fallbacks but forget to add them to
+  //    agents.defaults.models, causing fallbacks to be silently dropped.
+  const addModelConfigRefs = (rawModel: unknown) => {
+    if (!rawModel) {
+      return;
+    }
+    if (typeof rawModel === "string") {
+      addKeyFromRaw(rawModel);
+      return;
+    }
+    if (typeof rawModel !== "object") {
+      return;
+    }
+    const typed = rawModel as { primary?: unknown; fallbacks?: unknown };
+    addKeyFromRaw(typed.primary);
+    const fallbacks = Array.isArray(typed.fallbacks) ? typed.fallbacks : [];
+    for (const entry of fallbacks) {
+      addKeyFromRaw(entry);
+    }
+  };
+
+  addModelConfigRefs(cfg?.agents?.defaults?.model);
+  addModelConfigRefs(cfg?.agents?.defaults?.imageModel);
+
+  const list = cfg?.agents?.list;
+  if (Array.isArray(list)) {
+    for (const agent of list) {
+      if (!agent || typeof agent !== "object") {
+        continue;
+      }
+      addModelConfigRefs((agent as { model?: unknown }).model);
+      const subagents = (agent as { subagents?: unknown }).subagents;
+      if (subagents && typeof subagents === "object") {
+        addModelConfigRefs((subagents as { model?: unknown }).model);
+      }
+    }
+  }
+
   return keys.size > 0 ? keys : null;
 }
 
