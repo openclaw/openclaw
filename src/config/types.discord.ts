@@ -113,6 +113,11 @@ export type DiscordAgentComponentsConfig = {
   enabled?: boolean;
 };
 
+export type DiscordSlashCommandConfig = {
+  /** Reply ephemerally (default: true). */
+  ephemeral?: boolean;
+};
+
 export type DiscordAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
@@ -183,6 +188,8 @@ export type DiscordAccountConfig = {
   execApprovals?: DiscordExecApprovalConfig;
   /** Agent-controlled interactive components (buttons, select menus). */
   agentComponents?: DiscordAgentComponentsConfig;
+  /** Slash command configuration. */
+  slashCommand?: DiscordSlashCommandConfig;
   /** Privileged Gateway Intents (must also be enabled in Discord Developer Portal). */
   intents?: DiscordIntentsConfig;
   /** PluralKit identity resolution for proxied messages. */

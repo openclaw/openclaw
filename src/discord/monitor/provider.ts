@@ -33,6 +33,7 @@ import { resolveDiscordChannelAllowlist } from "../resolve-channels.js";
 import { resolveDiscordUserAllowlist } from "../resolve-users.js";
 import { normalizeDiscordToken } from "../token.js";
 import { createAgentComponentButton, createAgentSelectMenu } from "./agent-components.js";
+import { resolveDiscordSlashCommandConfig } from "./commands.js";
 import { createExecApprovalButton, DiscordExecApprovalHandler } from "./exec-approvals.js";
 import { createDiscordGatewayPlugin } from "./gateway-plugin.js";
 import { registerGateway, unregisterGateway } from "./gateway-registry.js";
@@ -191,8 +192,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     globalSetting: cfg.commands?.native,
   });
   const useAccessGroups = cfg.commands?.useAccessGroups !== false;
+  const slashCommand = resolveDiscordSlashCommandConfig(discordCfg.slashCommand);
   const sessionPrefix = "discord:slash";
-  const ephemeralDefault = true;
+  const ephemeralDefault = slashCommand.ephemeral;
 
   if (token) {
     if (guildEntries && Object.keys(guildEntries).length > 0) {
