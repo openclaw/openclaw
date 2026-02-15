@@ -94,13 +94,24 @@ export function isTransientNetworkError(err: unknown): boolean {
     return true;
   }
 
-  // "fetch failed" TypeError from undici (Node's native fetch)
-  if (err instanceof TypeError && err.message === "fetch failed") {
-    const cause = getErrorCause(err);
-    if (cause) {
-      return isTransientNetworkError(cause);
+  // TypeErrors from undici's `fetch` can have multiple messages ("fetch failed",
+  // "The socket connection was closed unexpectedly", etc). Treat these as
+  // transient network errors so they don't crash the gateway.
+  if (err instanceof TypeError) {
+    const message = typeof err.message === "string" ? err.message : "";
+    if (
+      message === "fetch failed" ||
+      message.includes("fetch failed") ||
+      /socket connection.*closed/i.test(message) ||
+      /fetch.*aborted/i.test(message) ||
+      /request.*aborted/i.test(message)
+    ) {
+      const cause = getErrorCause(err);
+      if (cause) {
+        return isTransientNetworkError(cause);
+      }
+      return true;
     }
-    return true;
   }
 
   // Check the cause chain recursively
