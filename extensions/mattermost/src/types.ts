@@ -44,6 +44,8 @@ export type MattermostAccountConfig = {
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
   /** Outbound response prefix override for this channel/account. */
   responsePrefix?: string;
+  /** Control reply threading (off|first|all). Default: "off". */
+  replyToMode?: "off" | "first" | "all";
 };
 
 export type MattermostConfig = {

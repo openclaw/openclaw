@@ -21,6 +21,7 @@ export type ResolvedMattermostAccount = {
   textChunkLimit?: number;
   blockStreaming?: boolean;
   blockStreamingCoalesce?: MattermostAccountConfig["blockStreamingCoalesce"];
+  replyToMode?: "off" | "first" | "all";
 };
 
 function listConfiguredAccountIds(cfg: OpenClawConfig): string[] {
@@ -118,6 +119,7 @@ export function resolveMattermostAccount(params: {
     textChunkLimit: merged.textChunkLimit,
     blockStreaming: merged.blockStreaming,
     blockStreamingCoalesce: merged.blockStreamingCoalesce,
+    replyToMode: merged.replyToMode,
   };
 }
 
