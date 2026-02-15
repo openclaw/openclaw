@@ -23,6 +23,8 @@ describe("sendPollTelegram", () => {
   });
 
   it("retries without message_thread_id on thread-not-found", async () => {
+    // Use a negative chatId (group/supergroup) so that message_thread_id is
+    // included in the request. Private chats (positive IDs) suppress it (#17242).
     const api = {
       sendPoll: vi.fn(
         async (_chatId: string, _question: string, _options: string[], params: unknown) => {
@@ -30,18 +32,18 @@ describe("sendPollTelegram", () => {
           if (p?.message_thread_id) {
             throw new Error("400: Bad Request: message thread not found");
           }
-          return { message_id: 1, chat: { id: 2 }, poll: { id: "p2" } };
+          return { message_id: 1, chat: { id: -1001234567890 }, poll: { id: "p2" } };
         },
       ),
     };
 
     const res = await sendPollTelegram(
-      "123",
+      "-1001234567890",
       { question: "Q", options: ["A", "B"] },
       { token: "t", api: api as unknown as Bot["api"], messageThreadId: 99 },
     );
 
-    expect(res).toEqual({ messageId: "1", chatId: "2", pollId: "p2" });
+    expect(res).toEqual({ messageId: "1", chatId: "-1001234567890", pollId: "p2" });
     expect(api.sendPoll).toHaveBeenCalledTimes(2);
     expect(api.sendPoll.mock.calls[0]?.[3]).toMatchObject({ message_thread_id: 99 });
     expect(api.sendPoll.mock.calls[1]?.[3]?.message_thread_id).toBeUndefined();

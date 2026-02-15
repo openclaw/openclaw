@@ -472,7 +472,9 @@ describe("sendMessageTelegram", () => {
   });
 
   it("retries without message_thread_id when Telegram reports missing thread", async () => {
-    const chatId = "123";
+    // Use a negative chatId (group/supergroup) so message_thread_id is included.
+    // Private chats (positive IDs) suppress it proactively (#17242).
+    const chatId = "-1001234567890";
     const threadErr = new Error("400: Bad Request: message thread not found");
     const sendMessage = vi
       .fn()
@@ -608,7 +610,9 @@ describe("sendMessageTelegram", () => {
   });
 
   it("retries media sends without message_thread_id when thread is missing", async () => {
-    const chatId = "123";
+    // Use a negative chatId (group/supergroup) so message_thread_id is included.
+    // Private chats (positive IDs) suppress it proactively (#17242).
+    const chatId = "-1001234567890";
     const threadErr = new Error("400: Bad Request: message thread not found");
     const sendPhoto = vi
       .fn()
@@ -706,7 +710,9 @@ describe("sendStickerTelegram", () => {
   });
 
   it("retries sticker sends without message_thread_id when thread is missing", async () => {
-    const chatId = "123";
+    // Use a negative chatId (group/supergroup) so message_thread_id is included.
+    // Private chats (positive IDs) suppress it proactively (#17242).
+    const chatId = "-1001234567890";
     const threadErr = new Error("400: Bad Request: message thread not found");
     const sendSticker = vi
       .fn()
