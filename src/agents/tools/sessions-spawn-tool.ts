@@ -29,6 +29,7 @@ const SessionsSpawnToolSchema = Type.Object({
   thinking: Type.Optional(Type.String()),
   runTimeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
   cleanup: optionalStringEnum(["delete", "keep"] as const),
+  silent: Type.Optional(Type.Boolean()),
 });
 
 function splitModelRef(ref?: string) {
@@ -89,6 +90,7 @@ export function createSessionsSpawnTool(opts?: {
       const thinkingOverrideRaw = readStringParam(params, "thinking");
       const cleanup =
         params.cleanup === "keep" || params.cleanup === "delete" ? params.cleanup : "keep";
+      const silent = typeof params.silent === "boolean" ? params.silent : undefined;
       const requesterOrigin = normalizeDeliveryContext({
         channel: opts?.agentChannel,
         accountId: opts?.agentAccountId,
@@ -319,6 +321,7 @@ export function createSessionsSpawnTool(opts?: {
         label: label || undefined,
         model: resolvedModel,
         runTimeoutSeconds,
+        silent,
       });
 
       return jsonResult({

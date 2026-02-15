@@ -833,4 +833,110 @@ describe("subagent announce formatting", () => {
     expect(call?.params?.channel).toBe("bluebubbles");
     expect(call?.params?.to).toBe("bluebubbles:chat_guid:123");
   });
+  it("splits collect-mode announces when accountId differs", async () => {
+    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);
+    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
+    sessionStore = {
+      "agent:main:main": {
+        sessionId: "session-789",
+        lastChannel: "whatsapp",
+        lastTo: "+1555",
+        queueMode: "collect",
+        queueDebounceMs: 0,
+      },
+    };
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-a",
+      requesterSessionKey: "main",
+      requesterOrigin: { accountId: "acct-a" },
+      requesterDisplayKey: "main",
+      task: "do thing",
+      timeoutMs: 1000,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+    });
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-b",
+      requesterSessionKey: "main",
+      requesterOrigin: { accountId: "acct-b" },
+      requesterDisplayKey: "main",
+      task: "do thing",
+      timeoutMs: 1000,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+    });
+
+    await expect.poll(() => agentSpy.mock.calls.length).toBe(2);
+
+    const accountIds = agentSpy.mock.calls.map(
+      (call) => (call[0] as { params?: Record<string, unknown> }).params?.accountId,
+    );
+    expect(accountIds).toContain("acct-a");
+    expect(accountIds).toContain("acct-b");
+    expect(agentSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("suppresses announce when silent=true but still reports handled cleanup", async () => {
+    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-silent",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "do thing",
+      timeoutMs: 1000,
+      cleanup: "delete",
+      waitForCompletion: false,
+      silent: true,
+      outcome: { status: "ok" },
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(agentSpy).not.toHaveBeenCalled();
+    expect(sessionsDeleteSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("suppresses announce from global config when override is not set", async () => {
+    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+    configOverride = {
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+      agents: {
+        defaults: {
+          subagents: {
+            suppressAnnounce: true,
+          },
+        },
+      },
+    };
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-suppress-global",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "do thing",
+      timeoutMs: 1000,
+      cleanup: "keep",
+      waitForCompletion: false,
+      outcome: { status: "ok" },
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(agentSpy).not.toHaveBeenCalled();
+    expect(sessionsDeleteSpy).not.toHaveBeenCalled();
+  });
 });

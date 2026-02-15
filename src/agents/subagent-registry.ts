@@ -21,6 +21,8 @@ export type SubagentRunRecord = {
   label?: string;
   model?: string;
   runTimeoutSeconds?: number;
+  /** When true, suppress the completion announcement to the parent session. */
+  silent?: boolean;
   createdAt: number;
   startedAt?: number;
   endedAt?: number;
@@ -72,6 +74,7 @@ function startSubagentAnnounceCleanupFlow(runId: string, entry: SubagentRunRecor
     endedAt: entry.endedAt,
     label: entry.label,
     outcome: entry.outcome,
+    silent: entry.silent,
   }).then((didAnnounce) => {
     finalizeSubagentCleanup(runId, entry.cleanup, didAnnounce);
   });
@@ -412,6 +415,7 @@ export function registerSubagentRun(params: {
   label?: string;
   model?: string;
   runTimeoutSeconds?: number;
+  silent?: boolean;
 }) {
   const now = Date.now();
   const cfg = loadConfig();
@@ -431,6 +435,7 @@ export function registerSubagentRun(params: {
     label: params.label,
     model: params.model,
     runTimeoutSeconds,
+    silent: params.silent,
     createdAt: now,
     startedAt: now,
     archiveAtMs,
