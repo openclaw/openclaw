@@ -84,11 +84,41 @@ const MemoryQmdSchema = z
   })
   .strict();
 
+const MemoryMongoDBSchema = z
+  .object({
+    uri: z.string().optional(),
+    database: z.string().optional(),
+    collectionPrefix: z.string().optional(),
+    deploymentProfile: z
+      .union([
+        z.literal("atlas-default"),
+        z.literal("atlas-m0"),
+        z.literal("community-mongot"),
+        z.literal("community-bare"),
+      ])
+      .optional(),
+    embeddingMode: z.union([z.literal("automated"), z.literal("managed")]).optional(),
+    fusionMethod: z
+      .union([z.literal("scoreFusion"), z.literal("rankFusion"), z.literal("js-merge")])
+      .optional(),
+    quantization: z.union([z.literal("none"), z.literal("scalar"), z.literal("binary")]).optional(),
+    watchDebounceMs: z.number().int().nonnegative().optional(),
+    numDimensions: z.number().int().positive().optional(),
+    maxPoolSize: z.number().int().positive().optional(),
+    embeddingCacheTtlDays: z.number().int().nonnegative().optional(),
+    memoryTtlDays: z.number().int().nonnegative().optional(),
+    enableChangeStreams: z.boolean().optional(),
+    changeStreamDebounceMs: z.number().int().nonnegative().optional(),
+  })
+  .strict()
+  .optional();
+
 const MemorySchema = z
   .object({
-    backend: z.union([z.literal("builtin"), z.literal("qmd")]).optional(),
+    backend: z.union([z.literal("builtin"), z.literal("qmd"), z.literal("mongodb")]).optional(),
     citations: z.union([z.literal("auto"), z.literal("on"), z.literal("off")]).optional(),
     qmd: MemoryQmdSchema.optional(),
+    mongodb: MemoryMongoDBSchema,
   })
   .strict()
   .optional();

@@ -1,10 +1,16 @@
 {
   "name": "openclaw",
   "version": "2026.2.15",
-  "description": "Multi-channel AI gateway with extensible messaging integrations",
-  "keywords": [],
+  "description": "MongoDB memory backend for OpenClaw — ACID transactions, vector search, TTL, analytics, change streams",
+  "keywords": [
+    "ai-gateway",
+    "memory",
+    "mongodb",
+    "openclaw",
+    "vector-search"
+  ],
   "license": "MIT",
-  "author": "",
+  "author": "romiluz",
   "bin": {
     "openclaw": "openclaw.mjs"
   },

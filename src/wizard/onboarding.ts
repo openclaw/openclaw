@@ -38,6 +38,7 @@ import {
   writeConfigFile,
 } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
+import { resolveOpenClawPackageName } from "../infra/openclaw-root.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
 import { setupMemoryBackend } from "./onboarding-memory.js";
@@ -453,9 +454,15 @@ export async function runOnboardingWizard(
 
   await writeConfigFile(nextConfig);
   logConfigUpdated(runtime);
-  await ensureWorkspaceAndSessions(workspaceDir, runtime, {
-    skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
-  });
+  try {
+    await ensureWorkspaceAndSessions(workspaceDir, runtime, {
+      skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
+    });
+  } catch (err) {
+    runtime.log(
+      `Warning: workspace bootstrap incomplete: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 
   if (opts.skipSkills) {
     await prompter.note("Skipping skills setup.", "Skills");
@@ -466,8 +473,12 @@ export async function runOnboardingWizard(
   // Setup hooks (session memory on /new)
   nextConfig = await setupInternalHooks(nextConfig, runtime, prompter);
 
-  // Memory backend selection (advanced mode only)
-  if (flow === "advanced") {
+  // Memory backend selection
+  // ClawMongo: always show (MongoDB is the whole point of this package)
+  // Upstream openclaw: only in advanced mode
+  const packageName = await resolveOpenClawPackageName();
+  const isClawMongo = packageName === "@romiluz/clawmongo";
+  if (isClawMongo || flow === "advanced") {
     nextConfig = await setupMemoryBackend(nextConfig, prompter);
   }
 

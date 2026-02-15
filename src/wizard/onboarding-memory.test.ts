@@ -2,6 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { WizardPrompter } from "./prompts.js";
 
+// Mock resolveOpenClawPackageName — default returns "openclaw" (upstream behaviour)
+const mockResolvePackageName = vi.hoisted(() => vi.fn(async () => "openclaw"));
+vi.mock("../infra/openclaw-root.js", () => ({
+  resolveOpenClawPackageName: mockResolvePackageName,
+}));
+
 function createMockPrompter(responses: {
   selectResponses?: unknown[];
   textResponses?: string[];
@@ -177,5 +183,42 @@ describe("setupMemoryBackend", () => {
     expect(result.gateway?.mode).toBe("local");
     expect(result.memory?.citations).toBe("on");
     expect(result.memory?.backend).toBe("mongodb");
+  });
+
+  it("defaults to mongodb when running as @romiluz/clawmongo", async () => {
+    mockResolvePackageName.mockResolvedValueOnce("@romiluz/clawmongo");
+    const { setupMemoryBackend } = await import("./onboarding-memory.js");
+    const config: OpenClawConfig = {};
+    const prompter = createMockPrompter({
+      selectResponses: ["mongodb", "community-bare"],
+      textResponses: ["mongodb://localhost:27017/"],
+    });
+
+    await setupMemoryBackend(config, prompter);
+
+    const selectCalls = (prompter.select as ReturnType<typeof vi.fn>).mock.calls;
+    // First select is memory backend — initialValue should be "mongodb"
+    expect(selectCalls[0][0].initialValue).toBe("mongodb");
+    // MongoDB option should say "(Recommended)"
+    const mongoOption = selectCalls[0][0].options.find(
+      (o: { value: string }) => o.value === "mongodb",
+    );
+    expect(mongoOption.label).toContain("Recommended");
+  });
+
+  it("defaults to builtin when running as openclaw", async () => {
+    mockResolvePackageName.mockResolvedValueOnce("openclaw");
+    const { setupMemoryBackend } = await import("./onboarding-memory.js");
+    const config: OpenClawConfig = {};
+    const prompter = createMockPrompter({ selectResponses: ["builtin"] });
+
+    await setupMemoryBackend(config, prompter);
+
+    const selectCalls = (prompter.select as ReturnType<typeof vi.fn>).mock.calls;
+    expect(selectCalls[0][0].initialValue).toBe("builtin");
+    const mongoOption = selectCalls[0][0].options.find(
+      (o: { value: string }) => o.value === "mongodb",
+    );
+    expect(mongoOption.label).not.toContain("Recommended");
   });
 });

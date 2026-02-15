@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { MemoryMongoDBDeploymentProfile } from "../config/types.memory.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { resolveOpenClawPackageName } from "../infra/openclaw-root.js";
 import { note } from "../terminal/note.js";
 import { confirm, select, text } from "./configure.shared.js";
 import { guardCancel } from "./onboard-helpers.js";
@@ -14,6 +15,8 @@ export async function configureMemorySection(
   nextConfig: OpenClawConfig,
   runtime: RuntimeEnv,
 ): Promise<OpenClawConfig> {
+  const packageName = await resolveOpenClawPackageName();
+  const isClawMongo = packageName === "@romiluz/clawmongo";
   const currentBackend = nextConfig.memory?.backend ?? "builtin";
 
   note(
@@ -40,8 +43,10 @@ export async function configureMemorySection(
         },
         {
           value: "mongodb",
-          label: "MongoDB",
-          hint: "Scalable. Requires MongoDB 8.0+ connection.",
+          label: isClawMongo ? "MongoDB (Recommended)" : "MongoDB",
+          hint: isClawMongo
+            ? "ACID transactions, vector search, TTL, analytics, change streams."
+            : "Scalable. Requires MongoDB 8.0+ connection.",
         },
         {
           value: "qmd",

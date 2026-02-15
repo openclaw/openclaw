@@ -1,27 +1,39 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { MemoryMongoDBDeploymentProfile } from "../config/types.memory.js";
 import type { WizardPrompter } from "./prompts.js";
+import { resolveOpenClawPackageName } from "../infra/openclaw-root.js";
 
 /**
  * Interactive memory backend selection for the onboarding wizard.
  * Only shown in advanced mode. Returns updated config with memory backend settings.
+ *
+ * When running as @romiluz/clawmongo, MongoDB is the recommended default.
+ * When running as openclaw (upstream), builtin (SQLite) remains the default.
  */
 export async function setupMemoryBackend(
   config: OpenClawConfig,
   prompter: WizardPrompter,
 ): Promise<OpenClawConfig> {
+  const packageName = await resolveOpenClawPackageName();
+  const isClawMongo = packageName === "@romiluz/clawmongo";
+  const defaultBackend = config.memory?.backend ?? (isClawMongo ? "mongodb" : "builtin");
+
   const backend = await prompter.select({
     message: "Memory backend",
     options: [
       {
         value: "builtin" as const,
         label: "Built-in (SQLite)",
-        hint: "Default. Works everywhere, no setup needed.",
+        hint: isClawMongo
+          ? "Basic. Local-only, no multi-instance support."
+          : "Default. Works everywhere, no setup needed.",
       },
       {
         value: "mongodb" as const,
-        label: "MongoDB",
-        hint: "Scalable. Requires MongoDB 8.0+ connection.",
+        label: isClawMongo ? "MongoDB (Recommended)" : "MongoDB",
+        hint: isClawMongo
+          ? "ACID transactions, vector search, TTL, analytics, change streams."
+          : "Scalable. Requires MongoDB 8.0+ connection.",
       },
       {
         value: "qmd" as const,
@@ -29,7 +41,7 @@ export async function setupMemoryBackend(
         hint: "Advanced. Local semantic search with qmd binary.",
       },
     ],
-    initialValue: config.memory?.backend ?? "builtin",
+    initialValue: defaultBackend,
   });
 
   if (backend === "builtin") {
@@ -37,7 +49,7 @@ export async function setupMemoryBackend(
   }
 
   if (backend === "mongodb") {
-    return setupMongoDBMemory(config, prompter);
+    return setupMongoDBMemory(config, prompter, isClawMongo);
   }
 
   // QMD — set backend, existing QMD config flow handles the rest
@@ -50,10 +62,15 @@ export async function setupMemoryBackend(
 async function setupMongoDBMemory(
   config: OpenClawConfig,
   prompter: WizardPrompter,
+  isClawMongo: boolean,
 ): Promise<OpenClawConfig> {
+  const existingUri = config.memory?.mongodb?.uri?.trim();
   const uri = await prompter.text({
     message: "MongoDB connection URI",
-    placeholder: "mongodb+srv://user:pass@cluster.mongodb.net/",
+    placeholder: isClawMongo
+      ? "mongodb://localhost:27017/openclaw"
+      : "mongodb+srv://user:pass@cluster.mongodb.net/",
+    initialValue: existingUri,
     validate: (value) => {
       const trimmed = value.trim();
       if (!trimmed) {

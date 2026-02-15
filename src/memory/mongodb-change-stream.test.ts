@@ -1,4 +1,4 @@
-import type { Collection, ChangeStream, Document } from "mongodb";
+import type { Collection } from "mongodb";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { MongoDBChangeStreamWatcher, type ChangeStreamCallback } from "./mongodb-change-stream.js";
 
