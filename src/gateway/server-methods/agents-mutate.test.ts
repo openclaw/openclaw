@@ -25,6 +25,8 @@ const mocks = vi.hoisted(() => ({
   fsAccess: vi.fn(async () => {}),
   fsMkdir: vi.fn(async () => undefined),
   fsAppendFile: vi.fn(async () => {}),
+  fsReadFile: vi.fn(async () => ""),
+  fsStat: vi.fn(async () => null),
 }));
 
 vi.mock("../../config/config.js", () => ({
@@ -81,6 +83,8 @@ vi.mock("node:fs/promises", async () => {
     access: mocks.fsAccess,
     mkdir: mocks.fsMkdir,
     appendFile: mocks.fsAppendFile,
+    readFile: mocks.fsReadFile,
+    stat: mocks.fsStat,
   };
   return { ...patched, default: patched };
 });
@@ -108,6 +112,27 @@ function makeCall(method: keyof typeof agentsHandlers, params: Record<string, un
   });
   return { respond, promise };
 }
+
+function createEnoentError() {
+  const err = new Error("ENOENT") as NodeJS.ErrnoException;
+  err.code = "ENOENT";
+  return err;
+}
+
+function createErrnoError(code: string) {
+  const err = new Error(code) as NodeJS.ErrnoException;
+  err.code = code;
+  return err;
+}
+
+beforeEach(() => {
+  mocks.fsReadFile.mockImplementation(async () => {
+    throw createEnoentError();
+  });
+  mocks.fsStat.mockImplementation(async () => {
+    throw createEnoentError();
+  });
+});
 
 /* ------------------------------------------------------------------ */
 /* Tests                                                              */
@@ -369,5 +394,55 @@ describe("agents.delete", () => {
       undefined,
       expect.objectContaining({ message: expect.stringContaining("invalid") }),
     );
+  });
+});
+
+describe("agents.files.list", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.loadConfigReturn = {};
+  });
+
+  it("includes BOOTSTRAP.md when onboarding has not completed", async () => {
+    const { respond, promise } = makeCall("agents.files.list", { agentId: "main" });
+    await promise;
+
+    const [, result] = respond.mock.calls[0] ?? [];
+    const files = (result as { files: Array<{ name: string }> }).files;
+    expect(files.some((file) => file.name === "BOOTSTRAP.md")).toBe(true);
+  });
+
+  it("hides BOOTSTRAP.md when workspace onboarding is complete", async () => {
+    mocks.fsReadFile.mockImplementation(async (filePath: string | URL | number) => {
+      if (String(filePath).endsWith("workspace-state.json")) {
+        return JSON.stringify({
+          onboardingCompletedAt: "2026-02-15T14:00:00.000Z",
+        });
+      }
+      throw createEnoentError();
+    });
+
+    const { respond, promise } = makeCall("agents.files.list", { agentId: "main" });
+    await promise;
+
+    const [, result] = respond.mock.calls[0] ?? [];
+    const files = (result as { files: Array<{ name: string }> }).files;
+    expect(files.some((file) => file.name === "BOOTSTRAP.md")).toBe(false);
+  });
+
+  it("falls back to showing BOOTSTRAP.md when workspace state cannot be read", async () => {
+    mocks.fsReadFile.mockImplementation(async (filePath: string | URL | number) => {
+      if (String(filePath).endsWith("workspace-state.json")) {
+        throw createErrnoError("EACCES");
+      }
+      throw createEnoentError();
+    });
+
+    const { respond, promise } = makeCall("agents.files.list", { agentId: "main" });
+    await promise;
+
+    const [, result] = respond.mock.calls[0] ?? [];
+    const files = (result as { files: Array<{ name: string }> }).files;
+    expect(files.some((file) => file.name === "BOOTSTRAP.md")).toBe(true);
   });
 });
