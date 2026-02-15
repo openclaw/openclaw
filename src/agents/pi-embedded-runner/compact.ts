@@ -289,11 +289,30 @@ export async function compactEmbeddedPiSessionDirect(
         );
       }
     } else if (model.provider === "github-copilot") {
-      const { resolveCopilotApiToken } = await import("../../providers/github-copilot-token.js");
-      const copilotToken = await resolveCopilotApiToken({
-        githubToken: apiKeyInfo.apiKey,
-      });
-      authStorage.setRuntimeApiKey(model.provider, copilotToken.token);
+      const { resolveCopilotApiToken, SDK_MANAGED_TOKEN } =
+        await import("../../providers/github-copilot-token.js");
+      if (apiKeyInfo.apiKey === SDK_MANAGED_TOKEN) {
+        // SDK-managed auth: the Copilot SDK handles token lifecycle.
+        // We still need a Copilot API token for pi-ai, so exchange via
+        // the internal endpoint using the GH token from env if available.
+        const envToken = (
+          process.env.COPILOT_GITHUB_TOKEN ??
+          process.env.GH_TOKEN ??
+          process.env.GITHUB_TOKEN ??
+          ""
+        ).trim();
+        if (envToken) {
+          const copilotToken = await resolveCopilotApiToken({ githubToken: envToken });
+          authStorage.setRuntimeApiKey(model.provider, copilotToken.token);
+        }
+        // If no env token, the SDK handles auth internally — pi-ai will
+        // receive auth via Copilot-specific headers set by the SDK.
+      } else {
+        const copilotToken = await resolveCopilotApiToken({
+          githubToken: apiKeyInfo.apiKey,
+        });
+        authStorage.setRuntimeApiKey(model.provider, copilotToken.token);
+      }
     } else {
       authStorage.setRuntimeApiKey(model.provider, apiKeyInfo.apiKey);
     }

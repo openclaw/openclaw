@@ -2,6 +2,14 @@ import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
 
+/**
+ * Marker token stored in auth profiles when the Copilot SDK manages
+ * authentication (e.g. via `gh` CLI or environment variables). The
+ * embedded runner detects this and delegates token resolution to the SDK
+ * instead of exchanging a raw GitHub token.
+ */
+export const SDK_MANAGED_TOKEN = "sdk-managed";
+
 const COPILOT_TOKEN_URL = "https://api.github.com/copilot_internal/v2/token";
 
 export type CachedCopilotToken = {
