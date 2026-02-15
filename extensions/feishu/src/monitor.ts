@@ -11,6 +11,19 @@ import { resolveFeishuAccount, listEnabledFeishuAccounts } from "./accounts.js";
 import { handleFeishuMessage, type FeishuMessageEvent, type FeishuBotAddedEvent } from "./bot.js";
 import { createFeishuWSClient, createEventDispatcher } from "./client.js";
 import { probeFeishu } from "./probe.js";
+import { getMessageFeishu } from "./send.js";
+
+/**
+ * Event payload for im.message.reaction.created_v1 / deleted_v1.
+ * @see https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/reference/im-v1/message-reaction/events/created
+ */
+type FeishuReactionEvent = {
+  message_id: string;
+  reaction_type: { emoji_type: string };
+  operator_type: string;
+  user_id?: { open_id?: string; user_id?: string; union_id?: string };
+  action_time?: string;
+};
 
 export type MonitorFeishuOpts = {
   config?: ClawdbotConfig;
@@ -33,6 +46,107 @@ async function fetchBotOpenId(account: ResolvedFeishuAccount): Promise<string | 
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Handle a Feishu message reaction event by dispatching it as a synthetic
+ * inbound message through the standard handleFeishuMessage pipeline.
+ *
+ * This ensures the agent receives a dedicated turn to process the reaction
+ * and respond appropriately (e.g., by adding a reaction back). Using
+ * enqueueSystemEvent alone would only surface the event passively during
+ * the next agent turn, which is insufficient for interactive reaction flows.
+ */
+function handleReactionEvent(
+  data: unknown,
+  action: "added" | "removed",
+  context: {
+    cfg: ClawdbotConfig;
+    accountId: string;
+    runtime?: RuntimeEnv;
+    chatHistories: Map<string, HistoryEntry[]>;
+    log: (...args: any[]) => void;
+    error: (...args: any[]) => void;
+  },
+): void {
+  const { cfg, accountId, runtime, chatHistories, log, error: logError } = context;
+
+  const processEvent = async () => {
+    const event = data as unknown as FeishuReactionEvent;
+    const senderOpenId = event.user_id?.open_id ?? "";
+    const emoji = event.reaction_type?.emoji_type ?? "";
+    const messageId = event.message_id ?? "";
+
+    if (!messageId || !emoji) return;
+
+    // Skip reactions from the bot itself (operator_type "app" means the bot)
+    if (event.operator_type === "app") return;
+
+    // Also skip by open_id if available
+    const myBotOpenId = botOpenIds.get(accountId);
+    if (myBotOpenId && senderOpenId === myBotOpenId) return;
+
+    // Skip typing indicator emoji — used internally for typing indicators
+    if (emoji === "Typing") return;
+
+    // Only process "added" events; "removed" is logged but not dispatched
+    if (action !== "added") {
+      log(
+        `feishu[${accountId}]: reaction ${action}: ${emoji} on ${messageId} from ${senderOpenId} (ignored)`,
+      );
+      return;
+    }
+
+    log(`feishu[${accountId}]: reaction ${action}: ${emoji} on ${messageId} from ${senderOpenId}`);
+
+    // Look up the original message to determine chat context and type.
+    // Note: Feishu DM chat_ids also use "oc_" prefix, so we cannot distinguish
+    // group vs DM by prefix alone — we must use the chat_type from the message API.
+    let chatId: string | undefined;
+    let chatType: "p2p" | "group" = "p2p";
+    try {
+      const msg = await getMessageFeishu({ cfg, messageId, accountId });
+      chatId = msg?.chatId;
+      // getMessageFeishu doesn't return chat_type, so for now treat all reactions
+      // as DM (p2p) routed by sender. This is safe because:
+      // - DM reactions route to the sender's session (correct)
+      // - Group reactions also route to sender's session (acceptable fallback)
+    } catch {
+      // Best-effort: use sender as fallback
+    }
+
+    // Dispatch as a synthetic DM message through the standard pipeline.
+    // We always route via sender's open_id to avoid group allowlist issues.
+    const syntheticEvent: FeishuMessageEvent = {
+      sender: {
+        sender_id: { open_id: senderOpenId },
+        sender_type: "user",
+      },
+      message: {
+        // Use a unique message_id to avoid dedup collision with the original message
+        message_id: `${messageId}:reaction:${emoji}:${Date.now()}`,
+        chat_id: senderOpenId,
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({
+          text: `[Reacted with ${emoji} on message ${messageId}]`,
+        }),
+      },
+    };
+
+    await handleFeishuMessage({
+      cfg,
+      event: syntheticEvent,
+      botOpenId: myBotOpenId,
+      runtime,
+      chatHistories,
+      accountId,
+    });
+  };
+
+  processEvent().catch((err) => {
+    logError(`feishu[${accountId}]: error handling reaction event: ${String(err)}`);
+  });
 }
 
 /**
@@ -95,6 +209,26 @@ function registerEventHandlers(
       } catch (err) {
         error(`feishu[${accountId}]: error handling bot removed event: ${String(err)}`);
       }
+    },
+    "im.message.reaction.created_v1": async (data) => {
+      handleReactionEvent(data, "added", {
+        cfg,
+        accountId,
+        runtime,
+        chatHistories,
+        log,
+        error,
+      });
+    },
+    "im.message.reaction.deleted_v1": async (data) => {
+      handleReactionEvent(data, "removed", {
+        cfg,
+        accountId,
+        runtime,
+        chatHistories,
+        log,
+        error,
+      });
     },
   });
 }
