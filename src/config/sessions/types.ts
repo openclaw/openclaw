@@ -30,16 +30,6 @@ export type SessionEntry = {
   lastHeartbeatText?: string;
   /** Timestamp (ms) when lastHeartbeatText was delivered. */
   lastHeartbeatSentAt?: number;
-  /**
-   * Model that last successfully handled a heartbeat (provider/model format).
-   * Used for fallback chain persistence.
-   */
-  lastHeartbeatModel?: string;
-  /**
-   * Index of the last successful model in the fallback chain.
-   * Used to track fallback position for "next_heartbeat" mode.
-   */
-  lastHeartbeatModelIndex?: number;
   sessionId: string;
   updatedAt: number;
   sessionFile?: string;

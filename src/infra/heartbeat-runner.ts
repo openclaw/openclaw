@@ -321,20 +321,16 @@ async function saveHeartbeatAgentModelState(
   update: Partial<HeartbeatModelState>,
   existing: HeartbeatModelState | null,
 ): Promise<void> {
-  try {
-    const statePath = getHeartbeatStatePath(agentDir);
-    const next: HeartbeatModelState = {
-      currentFallbackIndex: 0,
-      lastUpdated: Date.now(),
-      agentId: existing?.agentId ?? "",
-      ...existing,
-      ...update,
-      lastUpdated: Date.now(),
-    };
-    await fs.writeFile(statePath, JSON.stringify(next, null, 2));
-  } catch (err) {
-    log.warn("heartbeat: failed to save model state", { error: formatErrorMessage(err) });
-  }
+  const statePath = getHeartbeatStatePath(agentDir);
+  const next: HeartbeatModelState = {
+    currentFallbackIndex: 0,
+    lastUpdated: Date.now(),
+    agentId: existing?.agentId ?? "",
+    ...existing,
+    ...update,
+    lastUpdated: Date.now(),
+  };
+  await fs.writeFile(statePath, JSON.stringify(next, null, 2));
 }
 
 /**
