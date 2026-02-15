@@ -37,6 +37,10 @@ const RECOVERABLE_TOOL_ERROR_KEYWORDS = [
   "must have",
   "needs",
   "requires",
+  // Compaction-related errors - tool call was dropped during compaction, error is not user-actionable
+  "no tool call found",
+  "tool call.*not found",
+  "call_id.*not found",
 ] as const;
 
 function isRecoverableToolError(error: string | undefined): boolean {
