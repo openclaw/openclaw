@@ -5,7 +5,6 @@ import { type Message, type UserFromGetMe, ReactionTypeEmoji } from "@grammyjs/t
 import { Bot, webhookCallback } from "grammy";
 import type { OpenClawConfig, ReplyToMode } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
-import type { TelegramContext } from "./bot/types.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import { isControlCommandMessage } from "../auto-reply/command-detection.js";
@@ -28,7 +27,6 @@ import { getChildLogger } from "../logging.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { resolveTelegramAccount } from "./accounts.js";
-import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { registerTelegramHandlers } from "./bot-handlers.js";
 import { createTelegramMessageProcessor } from "./bot-message.js";
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
@@ -264,32 +262,6 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   const mediaMaxBytes = (opts.mediaMaxMb ?? telegramCfg.mediaMaxMb ?? 5) * 1024 * 1024;
   const logger = getChildLogger({ module: "telegram-auto-reply" });
   const streamMode = resolveTelegramStreamMode(telegramCfg);
-  let botHasTopicsEnabled: boolean | undefined;
-  const resolveBotTopicsEnabled = async (ctx?: TelegramContext) => {
-    if (typeof ctx?.me?.has_topics_enabled === "boolean") {
-      botHasTopicsEnabled = ctx.me.has_topics_enabled;
-      return botHasTopicsEnabled;
-    }
-    if (typeof botHasTopicsEnabled === "boolean") {
-      return botHasTopicsEnabled;
-    }
-    if (typeof bot.api.getMe !== "function") {
-      botHasTopicsEnabled = false;
-      return botHasTopicsEnabled;
-    }
-    try {
-      const me = await withTelegramApiErrorLogging({
-        operation: "getMe",
-        runtime,
-        fn: () => bot.api.getMe(),
-      });
-      botHasTopicsEnabled = Boolean(me?.has_topics_enabled);
-    } catch (err) {
-      logVerbose(`telegram getMe failed: ${String(err)}`);
-      botHasTopicsEnabled = false;
-    }
-    return botHasTopicsEnabled;
-  };
   const resolveGroupPolicy = (chatId: string | number) =>
     resolveChannelGroupPolicy({
       cfg,
@@ -363,7 +335,6 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     streamMode,
     textLimit,
     opts,
-    resolveBotTopicsEnabled,
   });
 
   registerTelegramNativeCommands({
