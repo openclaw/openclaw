@@ -19,6 +19,7 @@ import type {
   CommandsConfig,
   MessagesConfig,
 } from "./types.messages.js";
+import type { RouterConfig } from "../hooks/pre-route.js";
 import type { ModelsConfig } from "./types.models.js";
 import type { NodeHostConfig } from "./types.node-host.js";
 import type { PluginsConfig } from "./types.plugins.js";
@@ -97,6 +98,7 @@ export type OpenClawConfig = {
   talk?: TalkConfig;
   gateway?: GatewayConfig;
   memory?: MemoryConfig;
+  router?: RouterConfig;
 };
 
 export type ConfigValidationIssue = {

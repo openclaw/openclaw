@@ -32,6 +32,8 @@ import {
   isMarkdownCapableMessageChannel,
   resolveMessageChannel,
 } from "../../utils/message-channel.js";
+import { SessionManager } from "@mariozechner/pi-coding-agent";
+import { resolveRouterConfig, routeMessage, parseRoutedModelRef } from "../../hooks/pre-route.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import { buildThreadingToolContext, resolveEnforceFinalTag } from "./agent-runner-utils.js";
@@ -99,6 +101,50 @@ export async function runAgentTurnWithFallback(params: {
   let fallbackModel = params.followupRun.run.model;
   let didResetAfterCompactionFailure = false;
   let didRetryTransientHttpError = false;
+
+  // ─── Pre-route: classify message and select model tier ───
+  // Skip routing for heartbeats and system-generated prompts (e.g. /new session resets)
+  // which contain no real user text to classify.
+  const isSystemPrompt = params.commandBody.startsWith("A new session was started via");
+  const routerConfig =
+    params.isHeartbeat || isSystemPrompt
+      ? null
+      : resolveRouterConfig(params.followupRun.run.config);
+  if (routerConfig) {
+    // Extract last user message from session for conversation context
+    let recentContext: string[] | undefined;
+    try {
+      const sessionManager = SessionManager.open(params.followupRun.run.sessionFile);
+      const ctx = sessionManager.buildSessionContext();
+      recentContext = ctx.messages
+        .filter((m): m is typeof m & { role: "user" } => m.role === "user")
+        .slice(-1)
+        .map((m) =>
+          typeof m.content === "string"
+            ? m.content
+            : (m.content as Array<{ type: string; text?: string }>)
+                .filter((c) => c.type === "text")
+                .map((c) => c.text ?? "")
+                .join(" "),
+        )
+        .filter((text) => text.length > 0);
+    } catch {
+      // Graceful degradation: route without context if session read fails
+    }
+
+    const route = await routeMessage(params.commandBody, routerConfig, recentContext);
+    logVerbose(
+      `[pre-route] tier="${route.tier}" (${route.latencyMs}ms${route.fallback ? " FALLBACK" : ""}) → ${route.modelRef}`,
+    );
+    const routed = parseRoutedModelRef(route.modelRef);
+    params.followupRun.run.provider = routed.provider;
+    params.followupRun.run.model = routed.model;
+    fallbackProvider = routed.provider;
+    fallbackModel = routed.model;
+
+    // Store routed model on the run context so the webchat UI can display it.
+    registerAgentRunContext(runId, { routedModelRef: route.modelRef });
+  }
 
   while (true) {
     try {
