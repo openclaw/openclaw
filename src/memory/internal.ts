@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import readline from "node:readline";
 
 export type MemoryFileEntry = {
   path: string;
@@ -161,6 +162,39 @@ export async function buildFileEntry(
     size: stat.size,
     hash,
   };
+}
+
+export async function readPartialText(
+  absPath: string,
+  from?: number,
+  lines?: number,
+): Promise<string> {
+  const start = Math.max(1, from ?? 1);
+  const count = Math.max(1, lines ?? Number.POSITIVE_INFINITY);
+  const handle = await fs.open(absPath);
+  const stream = handle.createReadStream({ encoding: "utf-8" });
+  const rl = readline.createInterface({
+    input: stream,
+    crlfDelay: Infinity,
+  });
+  const selected: string[] = [];
+  let index = 0;
+  try {
+    for await (const line of rl) {
+      index += 1;
+      if (index < start) {
+        continue;
+      }
+      if (selected.length >= count) {
+        break;
+      }
+      selected.push(line);
+    }
+  } finally {
+    rl.close();
+    await handle.close();
+  }
+  return selected.slice(0, count).join("\n");
 }
 
 export function chunkMarkdown(

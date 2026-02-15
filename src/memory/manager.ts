@@ -24,7 +24,7 @@ import {
   type VoyageEmbeddingClient,
 } from "./embeddings.js";
 import { bm25RankToScore, buildFtsQuery, mergeHybridResults } from "./hybrid.js";
-import { isMemoryPath, normalizeExtraMemoryPaths } from "./internal.js";
+import { isMemoryPath, normalizeExtraMemoryPaths, readPartialText } from "./internal.js";
 import { memoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
 import { searchKeyword, searchVector } from "./manager-search.js";
 import { memoryManagerSyncOps } from "./manager-sync-ops.js";
@@ -392,15 +392,14 @@ export class MemoryIndexManager implements MemorySearchManager {
     if (stat.isSymbolicLink() || !stat.isFile()) {
       throw new Error("path required");
     }
-    const content = await fs.readFile(absPath, "utf-8");
-    if (!params.from && !params.lines) {
-      return { text: content, path: relPath };
+
+    if (params.from !== undefined || params.lines !== undefined) {
+      const text = await readPartialText(absPath, params.from, params.lines);
+      return { text, path: relPath };
     }
-    const lines = content.split("\n");
-    const start = Math.max(1, params.from ?? 1);
-    const count = Math.max(1, params.lines ?? lines.length);
-    const slice = lines.slice(start - 1, start - 1 + count);
-    return { text: slice.join("\n"), path: relPath };
+
+    const content = await fs.readFile(absPath, "utf-8");
+    return { text: content, path: relPath };
   }
 
   status(): MemoryProviderStatus {
