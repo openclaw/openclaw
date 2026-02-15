@@ -23,6 +23,10 @@ export type GuardedFetchOptions = {
   lookupFn?: LookupFn;
   pinDns?: boolean;
   auditContext?: string;
+  /** HTTP/HTTPS proxy URL. Overrides env-var detection; NO_PROXY is not consulted. */
+  proxyUrl?: string;
+  /** Set to true to disable all proxy detection (explicit and env-var). */
+  skipProxy?: boolean;
 };
 
 export type GuardedFetchResult = {
@@ -32,6 +36,80 @@ export type GuardedFetchResult = {
 };
 
 const DEFAULT_MAX_REDIRECTS = 3;
+
+/**
+ * Check if a hostname should bypass the proxy based on NO_PROXY/no_proxy.
+ * Supports comma-separated hostnames and wildcard prefixes (e.g., ".example.com").
+ */
+export function shouldBypassProxy(hostname: string): boolean {
+  const noProxy = process.env.NO_PROXY || process.env.no_proxy;
+  if (!noProxy) {
+    return false;
+  }
+  const entries = noProxy.split(",").map((s) => s.trim().toLowerCase());
+  const lowerHost = hostname.toLowerCase();
+  for (const entry of entries) {
+    if (!entry) {
+      continue;
+    }
+    if (entry === "*") {
+      return true;
+    }
+    if (entry === lowerHost) {
+      return true;
+    }
+    if (entry.startsWith(".") && lowerHost.endsWith(entry)) {
+      return true;
+    }
+    if (lowerHost.endsWith("." + entry)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Resolve proxy URL from options or environment variables.
+ *
+ * Precedence:
+ * 1. skipProxy=true → no proxy
+ * 2. Explicit proxyUrl → use it directly (NO_PROXY is not consulted)
+ * 3. NO_PROXY/no_proxy match → no proxy
+ * 4. HTTPS_PROXY/HTTP_PROXY env vars by protocol
+ */
+export function resolveProxyUrl(params: {
+  proxyUrl?: string;
+  skipProxy?: boolean;
+  protocol?: string;
+  hostname?: string;
+}): string | undefined {
+  if (params.skipProxy) {
+    return undefined;
+  }
+  if (params.proxyUrl) {
+    return params.proxyUrl;
+  }
+  // Check NO_PROXY before using environment proxy
+  if (params.hostname && shouldBypassProxy(params.hostname)) {
+    return undefined;
+  }
+  // Check environment variables (protocol-specific first, then fallback)
+  const isHttps = params.protocol === "https:";
+  if (isHttps) {
+    return (
+      process.env.HTTPS_PROXY ||
+      process.env.https_proxy ||
+      process.env.HTTP_PROXY ||
+      process.env.http_proxy
+    );
+  }
+  return (
+    process.env.HTTP_PROXY ||
+    process.env.http_proxy ||
+    process.env.HTTPS_PROXY ||
+    process.env.https_proxy
+  );
+}
 
 function isRedirectStatus(status: number): boolean {
   return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
@@ -121,7 +199,13 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
         policy: params.policy,
       });
       if (params.pinDns !== false) {
-        dispatcher = createPinnedDispatcher(pinned);
+        const proxyUrl = resolveProxyUrl({
+          proxyUrl: params.proxyUrl,
+          skipProxy: params.skipProxy,
+          protocol: parsedUrl.protocol,
+          hostname: parsedUrl.hostname,
+        });
+        dispatcher = createPinnedDispatcher(pinned, { proxyUrl });
       }
 
       const init: RequestInit & { dispatcher?: Dispatcher } = {

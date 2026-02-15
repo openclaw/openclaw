@@ -1,6 +1,6 @@
 import { lookup as dnsLookupCb, type LookupAddress } from "node:dns";
 import { lookup as dnsLookup } from "node:dns/promises";
-import { Agent, type Dispatcher } from "undici";
+import { Agent, ProxyAgent, type Dispatcher } from "undici";
 
 type LookupCallback = (
   err: NodeJS.ErrnoException | null,
@@ -395,11 +395,38 @@ export async function resolvePinnedHostname(
   return await resolvePinnedHostnameWithPolicy(hostname, { lookupFn });
 }
 
-export function createPinnedDispatcher(pinned: PinnedHostname): Dispatcher {
+export type PinnedDispatcherOptions = {
+  /** HTTP/HTTPS proxy URL (e.g., "http://proxy.example.com:8080") */
+  proxyUrl?: string;
+};
+
+/**
+ * Create a dispatcher with DNS pinning for SSRF protection.
+ * Optionally routes through a proxy.
+ *
+ * Limitation: when a proxy is configured, connect.lookup pins the proxy
+ * hostname resolution, not the target's. The target hostname is resolved
+ * by the proxy server itself, so DNS-rebinding (TOCTOU) protection is
+ * reduced to the pre-fetch resolvePinnedHostnameWithPolicy check only.
+ * The proxy itself must be trusted.
+ */
+export function createPinnedDispatcher(
+  pinned: PinnedHostname,
+  options?: PinnedDispatcherOptions,
+): Dispatcher {
+  const connectOptions = {
+    lookup: pinned.lookup,
+  };
+
+  if (options?.proxyUrl) {
+    return new ProxyAgent({
+      uri: options.proxyUrl,
+      connect: connectOptions,
+    });
+  }
+
   return new Agent({
-    connect: {
-      lookup: pinned.lookup,
-    },
+    connect: connectOptions,
   });
 }
 
