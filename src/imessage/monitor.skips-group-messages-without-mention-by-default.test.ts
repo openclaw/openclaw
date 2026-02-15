@@ -178,6 +178,14 @@ describe("monitorIMessageProvider", () => {
       expect(String(ctx.Body ?? "")).toContain("[Replying to +15559998888 id:9001]");
       expect(String(ctx.Body ?? "")).toContain("original message");
     }
+    expect(updateLastRouteMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deliveryContext: expect.objectContaining({
+          channel: "imessage",
+          to: "+15550001111",
+        }),
+      }),
+    );
 
     await closeMonitor();
     await run;
@@ -397,7 +405,7 @@ describe("monitorIMessageProvider", () => {
     expect(String(sendMock.mock.calls[0]?.[1] ?? "")).toContain("Pairing code: PAIRCODE");
   });
 
-  it("honors group allowlist when groupPolicy is allowlist", async () => {
+  it("honors group allowlist and ignores pairing-store senders in groups", async () => {
     const config = getConfig();
     setConfigMock({
       ...config,
@@ -405,15 +413,20 @@ describe("monitorIMessageProvider", () => {
         ...config.channels,
         imessage: {
           ...config.channels.imessage,
+          dmPolicy: "pairing",
+          allowFrom: [],
           groupPolicy: "allowlist",
           groupAllowFrom: ["chat_id:101"],
         },
       },
     });
+    readAllowFromStoreMock.mockResolvedValue(["+15550003333"]);
 
     const run = startMonitor();
     await waitForSubscribe();
 
+    replyMock.mockClear();
+    sendMock.mockClear();
     notifyMessage({
       id: 3,
       chat_id: 202,
@@ -424,109 +437,13 @@ describe("monitorIMessageProvider", () => {
     });
 
     await flush();
-    await closeMonitor();
-    await run;
-
     expect(replyMock).not.toHaveBeenCalled();
     expect(sendMock).not.toHaveBeenCalled();
-  });
 
-  it("does not allow group sender from pairing store when groupPolicy is allowlist", async () => {
-    const config = getConfig();
-    setConfigMock({
-      ...config,
-      channels: {
-        ...config.channels,
-        imessage: {
-          ...config.channels.imessage,
-          dmPolicy: "pairing",
-          allowFrom: [],
-          groupPolicy: "allowlist",
-          groupAllowFrom: [],
-        },
-      },
-    });
-    readAllowFromStoreMock.mockResolvedValue(["+15550003333"]);
-
-    const run = startMonitor();
-    await waitForSubscribe();
-
-    notifyMessage({
-      id: 30,
-      chat_id: 909,
-      sender: "+15550003333",
-      is_from_me: false,
-      text: "@openclaw hi from paired sender",
-      is_group: true,
-    });
-
-    await flush();
-    await closeMonitor();
-    await run;
-
-    expect(replyMock).not.toHaveBeenCalled();
-    expect(sendMock).not.toHaveBeenCalled();
-  });
-
-  it("does not allow sender from pairing store when groupAllowFrom is restricted to a different chat_id", async () => {
-    const config = getConfig();
-    setConfigMock({
-      ...config,
-      channels: {
-        ...config.channels,
-        imessage: {
-          ...config.channels.imessage,
-          dmPolicy: "pairing",
-          allowFrom: [],
-          groupPolicy: "allowlist",
-          groupAllowFrom: ["chat_id:101"],
-        },
-      },
-    });
-    readAllowFromStoreMock.mockResolvedValue(["+15550003333"]);
-
-    const run = startMonitor();
-    await waitForSubscribe();
-
+    replyMock.mockClear();
+    sendMock.mockClear();
     notifyMessage({
       id: 31,
-      chat_id: 202,
-      sender: "+15550003333",
-      is_from_me: false,
-      text: "@openclaw hi from paired sender",
-      is_group: true,
-    });
-
-    await flush();
-    await closeMonitor();
-    await run;
-
-    expect(replyMock).not.toHaveBeenCalled();
-    expect(sendMock).not.toHaveBeenCalled();
-  });
-
-  it("does not authorize control command via pairing-store sender in non-allowlisted chat", async () => {
-    const config = getConfig();
-    setConfigMock({
-      ...config,
-      channels: {
-        ...config.channels,
-        imessage: {
-          ...config.channels.imessage,
-          dmPolicy: "pairing",
-          allowFrom: [],
-          groupPolicy: "allowlist",
-          groupAllowFrom: ["chat_id:101"],
-        },
-      },
-    });
-    readAllowFromStoreMock.mockResolvedValue(["+15550003333"]);
-
-    const run = startMonitor();
-    await waitForSubscribe();
-
-    notifyMessage({
-      id: 32,
       chat_id: 202,
       sender: "+15550003333",
       is_from_me: false,
@@ -535,11 +452,26 @@ describe("monitorIMessageProvider", () => {
     });
 
     await flush();
+    expect(replyMock).not.toHaveBeenCalled();
+    expect(sendMock).not.toHaveBeenCalled();
+
+    replyMock.mockClear();
+    sendMock.mockClear();
+    notifyMessage({
+      id: 33,
+      chat_id: 101,
+      sender: "+15550003333",
+      is_from_me: false,
+      text: "@openclaw ok",
+      is_group: true,
+    });
+
+    await flush();
     await closeMonitor();
     await run;
 
-    expect(replyMock).not.toHaveBeenCalled();
-    expect(sendMock).not.toHaveBeenCalled();
+    expect(replyMock).toHaveBeenCalled();
+    expect(sendMock).toHaveBeenCalled();
   });
 
   it("blocks group messages when groupPolicy is disabled", async () => {
@@ -572,39 +504,6 @@ describe("monitorIMessageProvider", () => {
     await run;
 
     expect(replyMock).not.toHaveBeenCalled();
-  });
-
-  it("updates last route with sender handle for direct messages", async () => {
-    replyMock.mockResolvedValueOnce({ text: "ok" });
-    const run = startMonitor();
-    await waitForSubscribe();
-
-    getNotificationHandler()?.({
-      method: "message",
-      params: {
-        message: {
-          id: 4,
-          chat_id: 7,
-          sender: "+15550004444",
-          is_from_me: false,
-          text: "hey",
-          is_group: false,
-        },
-      },
-    });
-
-    await flush();
-    await closeMonitor();
-    await run;
-
-    expect(updateLastRouteMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        deliveryContext: expect.objectContaining({
-          channel: "imessage",
-          to: "+15550004444",
-        }),
-      }),
-    );
   });
 
   it("does not trigger unhandledRejection when aborting during shutdown", async () => {
