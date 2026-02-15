@@ -47,6 +47,36 @@ const MINIMAX_API_COST = {
   cacheWrite: 10,
 };
 
+// Anthropic Claude model context limits (as of 2025-02-15)
+// Source: https://docs.anthropic.com/en/docs/about-claude/models
+const ANTHROPIC_CLAUDE_SONNET_4_5_CONTEXT = 1000000;  // Claude 3.5 Sonnet (claude-sonnet-4-5)
+const ANTHROPIC_CLAUDE_OPUS_4_5_CONTEXT = 200000;    // Claude Opus 4.5 (claude-opus-4-5)
+const ANTHROPIC_CLAUDE_OPUS_4_6_CONTEXT = 1000000;   // Claude Opus 4.6 (claude-opus-4-6)
+
+/**
+ * Build Anthropic provider config with corrected context limits.
+ * pi-ai has outdated limits for Claude 4.5 models (195k for Sonnet 4.5, should be 1M).
+ * This override ensures OpenClaw uses the correct Anthropic API limits.
+ */
+function buildAnthropicProvider(): ProviderConfig {
+  return {
+    models: [
+      {
+        id: "claude-sonnet-4-5",
+        contextWindow: ANTHROPIC_CLAUDE_SONNET_4_5_CONTEXT,
+      },
+      {
+        id: "claude-opus-4-5",
+        contextWindow: ANTHROPIC_CLAUDE_OPUS_4_5_CONTEXT,
+      },
+      {
+        id: "claude-opus-4-6",
+        contextWindow: ANTHROPIC_CLAUDE_OPUS_4_6_CONTEXT,
+      },
+    ],
+  };
+}
+
 const XIAOMI_BASE_URL = "https://api.xiaomimimo.com/anthropic";
 export const XIAOMI_DEFAULT_MODEL_ID = "mimo-v2-flash";
 const XIAOMI_DEFAULT_CONTEXT_WINDOW = 262144;
@@ -806,6 +836,11 @@ export async function resolveImplicitProviders(params: {
   if (nvidiaKey) {
     providers.nvidia = { ...buildNvidiaProvider(), apiKey: nvidiaKey };
   }
+
+  // Anthropic provider - override context limits for Claude 4.5 models.
+  // pi-ai has outdated limits (195k for Sonnet 4.5), this corrects them to official values.
+  // Always add this override to fix context limits regardless of API key presence.
+  providers.anthropic = buildAnthropicProvider();
 
   return providers;
 }
