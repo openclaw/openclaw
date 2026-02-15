@@ -107,38 +107,18 @@ export async function ensureOpenClawModelsJson(
     return { agentDir, wrote: false };
   }
 
-  const mode = cfg.models?.mode ?? DEFAULT_MODE;
   const targetPath = path.join(agentDir, "models.json");
 
-  let mergedProviders = providers;
-  let existingRaw = "";
-  if (mode === "merge") {
-    const existing = await readJson(targetPath);
-    if (isRecord(existing) && isRecord(existing.providers)) {
-      const existingProviders = existing.providers as Record<
-        string,
-        NonNullable<ModelsConfig["providers"]>[string]
-      >;
-      mergedProviders = { ...existingProviders, ...providers };
-    }
-  }
-
+  // Always regenerate from gateway config to ensure models.json is always fresh.
+  // This fixes the stale-data bug where new models added to gateway config were
+  // not picked up because models.json was treated as a static snapshot.
   const normalizedProviders = normalizeProviders({
-    providers: mergedProviders,
+    providers,
     agentDir,
   });
   const next = `${JSON.stringify({ providers: normalizedProviders }, null, 2)}\n`;
-  try {
-    existingRaw = await fs.readFile(targetPath, "utf8");
-  } catch {
-    existingRaw = "";
-  }
 
-  if (existingRaw === next) {
-    return { agentDir, wrote: false };
-  }
-
-  await fs.mkdir(agentDir, { recursive: true, mode: 0o700 });
+  await fs.mkdir(path.dirname(targetPath), { recursive: true, mode: 0o700 });
   await fs.writeFile(targetPath, next, { mode: 0o600 });
   return { agentDir, wrote: true };
 }
