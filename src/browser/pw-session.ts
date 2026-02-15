@@ -388,12 +388,24 @@ async function findPageByTargetId(
   cdpUrl?: string,
 ): Promise<Page | null> {
   const pages = await getAllPages(browser);
+  let resolvedViaCdp = false;
   // First, try the standard CDP session approach
   for (const page of pages) {
-    const tid = await pageTargetId(page).catch(() => null);
+    let tid: string | null = null;
+    try {
+      tid = await pageTargetId(page);
+      resolvedViaCdp = true;
+    } catch {
+      tid = null;
+    }
     if (tid && tid === targetId) {
       return page;
     }
+  }
+  // Extension relays can block CDP attachment APIs entirely. If that happens and
+  // Playwright only exposes one page, return it as the best available mapping.
+  if (!resolvedViaCdp && pages.length === 1) {
+    return pages[0];
   }
   // If CDP sessions fail (e.g., extension relay blocks Target.attachToBrowserTarget),
   // fall back to URL-based matching using the /json/list endpoint
