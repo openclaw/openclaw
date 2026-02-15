@@ -202,6 +202,80 @@ describe("createFeishuReplyDispatcher message_sent hooks", () => {
     );
     expect(updateCardElementContentFeishu).toHaveBeenCalledTimes(1);
   });
+
+  it("locks auto render contract to raw when first output is raw", async () => {
+    setFeishuRuntime(createRuntime() as never);
+    sendMessageFeishu
+      .mockResolvedValueOnce({ messageId: "om_raw_1", chatId: "oc_chat" })
+      .mockResolvedValueOnce({ messageId: "om_raw_2", chatId: "oc_chat" });
+
+    const { dispatcher } = createFeishuReplyDispatcher({
+      cfg: {
+        channels: {
+          feishu: {
+            appId: "app",
+            appSecret: "secret",
+            renderMode: "auto",
+            streaming: false,
+            blockStreaming: false,
+          },
+        },
+      } as never,
+      agentId: "agent-main",
+      runtime: { log: () => {}, error: () => {} } as never,
+      chatId: "oc_chat",
+    });
+
+    dispatcher.sendFinalReply({ text: "plain line" });
+    await dispatcher.waitForIdle();
+    dispatcher.sendFinalReply({ text: "```ts\nconst x = 1\n```" });
+    await dispatcher.waitForIdle();
+
+    expect(sendMessageFeishu).toHaveBeenCalledTimes(2);
+    expect(sendMarkdownCardFeishu).not.toHaveBeenCalled();
+    expect(emitMessageSent).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ metadata: { msgType: "post" } }),
+      expect.any(Object),
+    );
+  });
+
+  it("locks auto render contract to card when first output is card", async () => {
+    setFeishuRuntime(createRuntime() as never);
+    sendMarkdownCardFeishu
+      .mockResolvedValueOnce({ messageId: "om_card_1", chatId: "oc_chat" })
+      .mockResolvedValueOnce({ messageId: "om_card_2", chatId: "oc_chat" });
+
+    const { dispatcher } = createFeishuReplyDispatcher({
+      cfg: {
+        channels: {
+          feishu: {
+            appId: "app",
+            appSecret: "secret",
+            renderMode: "auto",
+            streaming: false,
+            blockStreaming: false,
+          },
+        },
+      } as never,
+      agentId: "agent-main",
+      runtime: { log: () => {}, error: () => {} } as never,
+      chatId: "oc_chat",
+    });
+
+    dispatcher.sendFinalReply({ text: "```ts\nconst first = true\n```" });
+    await dispatcher.waitForIdle();
+    dispatcher.sendFinalReply({ text: "plain follow-up" });
+    await dispatcher.waitForIdle();
+
+    expect(sendMarkdownCardFeishu).toHaveBeenCalledTimes(2);
+    expect(sendMessageFeishu).not.toHaveBeenCalled();
+    expect(emitMessageSent).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ metadata: { msgType: "interactive" } }),
+      expect.any(Object),
+    );
+  });
 });
 
 describe("createFeishuReplyDispatcher summary sanitization", () => {

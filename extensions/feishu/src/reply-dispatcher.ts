@@ -137,11 +137,31 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     summarize: firstSentence,
   });
 
+  let lockedMsgType: "post" | "interactive" | null = null;
+
+  const lockRenderContract = (msgType: "post" | "interactive"): void => {
+    if (lockedMsgType) {
+      return;
+    }
+    lockedMsgType = msgType;
+    params.runtime.log?.(`feishu[${account.accountId}] render contract locked: msgType=${msgType}`);
+  };
+
+  const resolveUseCard = (text: string): boolean => {
+    if (lockedMsgType) {
+      return lockedMsgType === "interactive";
+    }
+    return renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
+  };
+
   const notifyMessageSent = (
     content: string,
     messageId?: string,
     metadata?: { msgType?: "text" | "post" | "interactive" },
   ): void => {
+    if (metadata?.msgType === "post" || metadata?.msgType === "interactive") {
+      lockRenderContract(metadata.msgType);
+    }
     emitMessageSent(
       { to: chatId, content, success: true, messageId, metadata },
       { channelId: "feishu", accountId: account.accountId, conversationId: chatId },
@@ -163,15 +183,25 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           return;
         }
 
+        const useCard = resolveUseCard(text);
+        const contractMsgType: "post" | "interactive" = useCard ? "interactive" : "post";
+
         if (info?.kind === "final") {
-          const streamedFinal = await streamingController.tryDeliverFinalStream(text);
-          if (streamedFinal.handled) {
-            notifyMessageSent(text, streamedFinal.messageId, { msgType: streamedFinal.msgType });
-            return;
+          const streamMsgType: "post" | "interactive" =
+            streamRenderMode === "card" ? "interactive" : "post";
+          if (streamMsgType === contractMsgType) {
+            const streamedFinal = await streamingController.tryDeliverFinalStream(text);
+            if (streamedFinal.handled) {
+              notifyMessageSent(text, streamedFinal.messageId, { msgType: streamedFinal.msgType });
+              return;
+            }
+          } else {
+            params.runtime.log?.(
+              `feishu[${account.accountId}] skip final streaming: streamMsgType=${streamMsgType}, contractMsgType=${contractMsgType}`,
+            );
           }
         }
 
-        const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
         if (useCard && (info?.kind === "block" || info?.kind === "final")) {
           const blockResult = await streamingController.tryDeliverBlock(text);
           if (blockResult.handled) {
@@ -220,7 +250,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             isFirstChunk = false;
           }
         }
-        notifyMessageSent(text, firstMessageId, { msgType: useCard ? "interactive" : "post" });
+        notifyMessageSent(text, firstMessageId, { msgType: contractMsgType });
       },
       onError: async (err, info): Promise<void> => {
         params.runtime.error?.(
