@@ -120,4 +120,90 @@ describe("feishu_doc image fetch hardening", () => {
     expect(consoleErrorSpy).toHaveBeenCalled();
     consoleErrorSpy.mockRestore();
   });
+
+  it("retries block insert on rate limit and succeeds", async () => {
+    vi.useFakeTimers();
+    try {
+      blockChildrenCreateMock
+        .mockResolvedValueOnce({ code: 429, msg: "Too many requests" })
+        .mockResolvedValueOnce({
+          code: 0,
+          data: {
+            children: [{ block_type: 27, block_id: "img_block_retry_ok" }],
+          },
+        });
+
+      const registerTool = vi.fn();
+      registerFeishuDocTools({
+        config: {
+          channels: {
+            feishu: {
+              appId: "app_id",
+              appSecret: "app_secret",
+            },
+          },
+        } as any,
+        logger: { debug: vi.fn(), info: vi.fn() } as any,
+        registerTool,
+      } as any);
+
+      const feishuDocTool = registerTool.mock.calls
+        .map((call) => call[0])
+        .find((tool) => tool.name === "feishu_doc");
+      expect(feishuDocTool).toBeDefined();
+
+      const pending = feishuDocTool.execute("tool-call", {
+        action: "write",
+        doc_token: "doc_1",
+        content: "retry content",
+      });
+      await vi.runAllTimersAsync();
+      const result = await pending;
+
+      expect(blockChildrenCreateMock).toHaveBeenCalledTimes(2);
+      expect(result.details.success).toBe(true);
+      expect(result.details.blocks_added).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("returns error when block insert keeps hitting rate limit", async () => {
+    vi.useFakeTimers();
+    try {
+      blockChildrenCreateMock.mockResolvedValue({ code: 429, msg: "Too many requests" });
+
+      const registerTool = vi.fn();
+      registerFeishuDocTools({
+        config: {
+          channels: {
+            feishu: {
+              appId: "app_id",
+              appSecret: "app_secret",
+            },
+          },
+        } as any,
+        logger: { debug: vi.fn(), info: vi.fn() } as any,
+        registerTool,
+      } as any);
+
+      const feishuDocTool = registerTool.mock.calls
+        .map((call) => call[0])
+        .find((tool) => tool.name === "feishu_doc");
+      expect(feishuDocTool).toBeDefined();
+
+      const pending = feishuDocTool.execute("tool-call", {
+        action: "write",
+        doc_token: "doc_1",
+        content: "retry content",
+      });
+      await vi.runAllTimersAsync();
+      const result = await pending;
+
+      expect(blockChildrenCreateMock).toHaveBeenCalledTimes(3);
+      expect(String(result.details.error)).toContain("Too many requests");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

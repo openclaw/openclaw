@@ -54,6 +54,49 @@ const BLOCK_TYPE_NAMES: Record<number, string> = {
 
 // Block types that cannot be created via documentBlockChildren.create API
 const UNSUPPORTED_CREATE_TYPES = new Set([31, 32]);
+const FEISHU_RATE_LIMIT_RETRIES = 3;
+const FEISHU_RATE_LIMIT_DELAY_MS = 300;
+
+type FeishuApiResultLike = {
+  code?: number;
+  msg?: string;
+};
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRateLimited(code: number | undefined, msg: string | undefined): boolean {
+  if (code === 429) {
+    return true;
+  }
+  const lower = (msg ?? "").toLowerCase();
+  return (
+    lower.includes("too many request") ||
+    lower.includes("rate limit") ||
+    lower.includes("request frequency") ||
+    lower.includes("请求过于频繁")
+  );
+}
+
+async function runWithRateLimitRetry<T extends FeishuApiResultLike>(
+  opName: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  let last: T | null = null;
+  for (let attempt = 1; attempt <= FEISHU_RATE_LIMIT_RETRIES; attempt++) {
+    const res = await run();
+    if (res.code === 0) {
+      return res;
+    }
+    last = res;
+    if (!isRateLimited(res.code, res.msg) || attempt >= FEISHU_RATE_LIMIT_RETRIES) {
+      break;
+    }
+    await sleep(FEISHU_RATE_LIMIT_DELAY_MS);
+  }
+  throw new Error(last?.msg || `${opName} failed`);
+}
 
 /** Clean blocks for insertion (remove unsupported types and read-only fields) */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK block types
@@ -116,13 +159,12 @@ async function insertBlocks(
     return { children: [], skipped };
   }
 
-  const res = await client.docx.documentBlockChildren.create({
-    path: { document_id: docToken, block_id: blockId },
-    data: { children: cleaned },
-  });
-  if (res.code !== 0) {
-    throw new Error(res.msg);
-  }
+  const res = await runWithRateLimitRetry("docx.documentBlockChildren.create", () =>
+    client.docx.documentBlockChildren.create({
+      path: { document_id: docToken, block_id: blockId },
+      data: { children: cleaned },
+    }),
+  );
   return { children: res.data?.children ?? [], skipped };
 }
 
