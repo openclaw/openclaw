@@ -24,6 +24,19 @@ export async function writeOAuthCredentials(
   });
 }
 
+export function setOpenAIApiKey(key: string, agentDir?: string) {
+  // Write to resolved agent dir so gateway finds credentials on startup.
+  upsertAuthProfile({
+    profileId: "openai:default",
+    credential: {
+      type: "api_key",
+      provider: "openai",
+      key,
+    },
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}
+
 export async function setAnthropicApiKey(key: string, agentDir?: string) {
   // Write to resolved agent dir so gateway finds credentials on startup.
   upsertAuthProfile({

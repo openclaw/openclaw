@@ -65,6 +65,8 @@ export async function applyAuthChoiceOpenAI(
         initialValue: true,
       });
       if (useExisting) {
+        // Persist in auth-profiles.json so sub-agents and the gateway can resolve it
+        setOpenAIApiKey(envKey.apiKey, params.agentDir);
         const result = upsertSharedEnvVar({
           key: "OPENAI_API_KEY",
           value: envKey.apiKey,
@@ -91,6 +93,8 @@ export async function applyAuthChoiceOpenAI(
     }
 
     const trimmed = normalizeApiKeyInput(String(key));
+    // Persist in auth-profiles.json so sub-agents and the gateway can resolve it
+    setOpenAIApiKey(trimmed, params.agentDir);
     const result = upsertSharedEnvVar({
       key: "OPENAI_API_KEY",
       value: trimmed,

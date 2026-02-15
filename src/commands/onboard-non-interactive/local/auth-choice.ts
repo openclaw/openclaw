@@ -32,6 +32,7 @@ import {
   applyZaiConfig,
   setAnthropicApiKey,
   setCloudflareAiGatewayConfig,
+  setOpenAIApiKey,
   setQianfanApiKey,
   setGeminiApiKey,
   setKimiCodingApiKey,
@@ -334,15 +335,22 @@ export async function applyNonInteractiveAuthChoice(params: {
       flagName: "--openai-api-key",
       envVar: "OPENAI_API_KEY",
       runtime,
-      allowProfile: false,
     });
     if (!resolved) {
       return null;
     }
     const key = resolved.key;
+    if (resolved.source !== "profile") {
+      setOpenAIApiKey(key);
+    }
     const result = upsertSharedEnvVar({ key: "OPENAI_API_KEY", value: key });
     process.env.OPENAI_API_KEY = key;
     runtime.log(`Saved OPENAI_API_KEY to ${shortenHomePath(result.path)}`);
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "openai:default",
+      provider: "openai",
+      mode: "api_key",
+    });
     return applyOpenAIConfig(nextConfig);
   }
 
