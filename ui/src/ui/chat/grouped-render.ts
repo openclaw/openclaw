@@ -13,6 +13,25 @@ import {
 import { isToolResultMessage, normalizeRoleForGrouping } from "./message-normalizer.ts";
 import { extractToolCards, renderToolCardSidebar } from "./tool-cards.ts";
 
+/**
+ * Checks if the text represents a silent reply (NO_REPLY).
+ * Matches server-side isSilentReplyText in src/auto-reply/tokens.ts using word boundaries.
+ */
+function isSilentReplyText(text: string | null | undefined): boolean {
+  if (!text) {
+    return false;
+  }
+  const token = "NO_REPLY";
+  // Prefix: NO_REPLY at start, followed by end-of-string or non-word char
+  const prefix = new RegExp(`^\\s*${token}(?=$|\\W)`);
+  if (prefix.test(text)) {
+    return true;
+  }
+  // Suffix: NO_REPLY at end with word boundaries, allowing trailing non-word chars
+  const suffix = new RegExp(`\\b${token}\\b\\W*$`);
+  return suffix.test(text);
+}
+
 type ImageBlock = {
   url: string;
   alt?: string;
@@ -216,7 +235,7 @@ function renderMessageImages(images: ImageBlock[]) {
   `;
 }
 
-function renderGroupedMessage(
+export function renderGroupedMessage(
   message: unknown,
   opts: { isStreaming: boolean; showReasoning: boolean },
   onOpenSidebar?: (content: string) => void,
@@ -238,6 +257,12 @@ function renderGroupedMessage(
   const extractedText = extractTextCached(message);
   const extractedThinking =
     opts.showReasoning && role === "assistant" ? extractThinkingCached(message) : null;
+
+  // Skip rendering if the message is a silent reply (NO_REPLY)
+  if (isSilentReplyText(extractedText)) {
+    return nothing;
+  }
+
   const markdownBase = extractedText?.trim() ? extractedText : null;
   const reasoningMarkdown = extractedThinking ? formatReasoningMarkdown(extractedThinking) : null;
   const markdown = markdownBase;
