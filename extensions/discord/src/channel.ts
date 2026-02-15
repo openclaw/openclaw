@@ -48,6 +48,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
   id: "discord",
   meta: {
     ...meta,
+    preferSessionLookupForAnnounceTarget: true,
   },
   onboarding: discordOnboardingAdapter,
   pairing: {
