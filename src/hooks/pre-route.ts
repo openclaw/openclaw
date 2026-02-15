@@ -281,15 +281,14 @@ export async function routeMessage(
   let classifierInput = message;
   if (recentContext && recentContext.length > 0) {
     const contextLines = recentContext.map((msg) => {
+      const truncated = msg.length > MAX_CONTEXT_CHARS ? msg.slice(0, MAX_CONTEXT_CHARS) + "…" : msg;
+      return `[Previous: ${truncated}]`;
+    });
+    classifierInput = contextLines.join("\n") + "\n\n" + message;
+  }
+
   if (!baseUrl) {
     console.warn("[pre-route] No baseUrl configured for openai-compatible provider, falling back to default tier");
-    return {
-      tier: config.defaultTier,
-      modelRef: config.tiers[config.defaultTier],
-      latencyMs: Date.now() - start,
-      fallback: true,
-    };
-  }
     return {
       tier: config.defaultTier,
       modelRef: config.tiers[config.defaultTier],
