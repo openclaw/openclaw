@@ -13,5 +13,8 @@ RUN rm -f /etc/apt/sources.list.d/yarn.list && \
         dbus-user-session && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
+# Switch back to the codespace user so Codespaces can resolve remoteUser properly.
+USER codespace
+
 # Do NOT set ENTRYPOINT — Codespaces requires the default entrypoint.
 # systemd will be started as a user service manager via postStartCommand.

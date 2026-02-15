@@ -34,18 +34,18 @@ for i in $(seq 1 30); do
     sleep 1
 done
 
-# Enable lingering for the vscode user so systemctl --user works without a login session.
-loginctl enable-linger vscode 2>/dev/null || true
+# Enable lingering for the codespace user so systemctl --user works without a login session.
+loginctl enable-linger codespace 2>/dev/null || true
 
-# Start the user service manager for vscode.
+# Start the user service manager for codespace.
 # The XDG_RUNTIME_DIR must be set for systemctl --user.
-VSCODE_UID=$(id -u vscode)
-export XDG_RUNTIME_DIR="/run/user/${VSCODE_UID}"
+CS_UID=$(id -u codespace)
+export XDG_RUNTIME_DIR="/run/user/${CS_UID}"
 mkdir -p "$XDG_RUNTIME_DIR"
-chown vscode:vscode "$XDG_RUNTIME_DIR"
+chown codespace:codespace "$XDG_RUNTIME_DIR"
 chmod 700 "$XDG_RUNTIME_DIR"
 
 # Give the user manager a moment to spin up after linger is enabled.
 sleep 2
 
-echo "systemd bootstrap complete. 'systemctl --user' should now work for vscode."
+echo "systemd bootstrap complete. 'systemctl --user' should now work for codespace."
