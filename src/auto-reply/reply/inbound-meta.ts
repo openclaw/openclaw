@@ -1,5 +1,6 @@
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveSenderLabel } from "../../channels/sender-label.js";
+import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.js";
 import type { TemplateContext } from "../templating.js";
 
 function safeTrim(value: unknown): string | undefined {
@@ -8,6 +9,26 @@ function safeTrim(value: unknown): string | undefined {
   }
   const trimmed = value.trim();
   return trimmed ? trimmed : undefined;
+}
+
+function formatConversationTimestamp(value: unknown): string | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return undefined;
+  }
+  const formatted = formatZonedTimestamp(date);
+  if (!formatted) {
+    return undefined;
+  }
+  try {
+    const weekday = new Intl.DateTimeFormat("en-US", { weekday: "short" }).format(date);
+    return weekday ? `${weekday} ${formatted}` : formatted;
+  } catch {
+    return formatted;
+  }
 }
 
 export function buildInboundMetaSystemPrompt(ctx: TemplateContext): string {
@@ -66,6 +87,8 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
 
   const messageId = safeTrim(ctx.MessageSid);
   const messageIdFull = safeTrim(ctx.MessageSidFull);
+  const timestampStr = formatConversationTimestamp(ctx.Timestamp);
+
   const conversationInfo = {
     message_id: isDirect ? undefined : messageId,
     message_id_full: isDirect
@@ -79,6 +102,7 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
     sender: isDirect
       ? undefined
       : (safeTrim(ctx.SenderE164) ?? safeTrim(ctx.SenderId) ?? safeTrim(ctx.SenderUsername)),
+    timestamp: timestampStr,
     group_subject: safeTrim(ctx.GroupSubject),
     group_channel: safeTrim(ctx.GroupChannel),
     group_space: safeTrim(ctx.GroupSpace),
