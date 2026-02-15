@@ -45,6 +45,24 @@ describe("extractTextFromMessage", () => {
     expect(text).toBe("first\nsecond");
   });
 
+  it("preserves internal newlines for string content", () => {
+    const text = extractTextFromMessage({
+      role: "assistant",
+      content: "Line 1\nLine 2\nLine 3",
+    });
+
+    expect(text).toBe("Line 1\nLine 2\nLine 3");
+  });
+
+  it("preserves internal newlines for text blocks", () => {
+    const text = extractTextFromMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "Line 1\nLine 2\nLine 3" }],
+    });
+
+    expect(text).toBe("Line 1\nLine 2\nLine 3");
+  });
+
   it("places thinking before content when included", () => {
     const text = extractTextFromMessage(
       {

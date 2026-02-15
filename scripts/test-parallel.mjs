@@ -29,6 +29,8 @@ const unitIsolatedFilesRaw = [
   "src/browser/server.auth-token-gates-http.test.ts",
   "src/browser/server-context.remote-tab-ops.test.ts",
   "src/browser/server-context.ensure-tab-available.prefers-last-target.test.ts",
+  // Uses process-level unhandledRejection listeners; keep it off vmForks to avoid cross-file leakage.
+  "src/imessage/monitor.skips-group-messages-without-mention-by-default.test.ts",
 ];
 const unitIsolatedFiles = unitIsolatedFilesRaw.filter((file) => fs.existsSync(file));
 
