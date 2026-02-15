@@ -55,6 +55,8 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
  * that might delete the on-disk files.
  */
 export async function preloadDaemonCli(): Promise<void> {
-  // Import and discard - just ensuring modules are loaded
-  await Promise.resolve();
+  // Import all daemon-cli dependencies to ensure they're cached in memory
+  await import("./lifecycle-core.js");
+  await import("./shared.js");
+  await import("../../daemon/service.js");
 }
