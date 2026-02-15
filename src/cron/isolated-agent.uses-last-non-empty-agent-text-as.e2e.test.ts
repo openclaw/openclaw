@@ -23,6 +23,35 @@ async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   return withTempHomeBase(fn, { prefix: "openclaw-cron-" });
 }
 
+function makeDeps(): CliDeps {
+  return {
+    sendMessageWhatsApp: vi.fn(),
+    sendMessageTelegram: vi.fn(),
+    sendMessageDiscord: vi.fn(),
+    sendMessageSignal: vi.fn(),
+    sendMessageIMessage: vi.fn(),
+  };
+}
+
+function mockEmbeddedOk() {
+  vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+    payloads: [{ text: "ok" }],
+    meta: {
+      durationMs: 5,
+      agentMeta: { sessionId: "s", provider: "p", model: "m" },
+    },
+  });
+}
+
+function expectEmbeddedProviderModel(expected: { provider: string; model: string }) {
+  const call = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0] as {
+    provider?: string;
+    model?: string;
+  };
+  expect(call?.provider).toBe(expected.provider);
+  expect(call?.model).toBe(expected.model);
+}
+
 async function writeSessionStore(
   home: string,
   entries: Record<string, Record<string, unknown>> = {},
@@ -394,20 +423,8 @@ describe("runCronIsolatedAgentTurn", () => {
   it("uses hooks.gmail.model for Gmail hook sessions", async () => {
     await withTempHome(async (home) => {
       const storePath = await writeSessionStore(home);
-      const deps: CliDeps = {
-        sendMessageWhatsApp: vi.fn(),
-        sendMessageTelegram: vi.fn(),
-        sendMessageDiscord: vi.fn(),
-        sendMessageSignal: vi.fn(),
-        sendMessageIMessage: vi.fn(),
-      };
-      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
-        payloads: [{ text: "ok" }],
-        meta: {
-          durationMs: 5,
-          agentMeta: { sessionId: "s", provider: "p", model: "m" },
-        },
-      });
+      const deps = makeDeps();
+      mockEmbeddedOk();
 
       const res = await runCronIsolatedAgentTurn({
         cfg: makeCfg(home, storePath, {
@@ -425,12 +442,10 @@ describe("runCronIsolatedAgentTurn", () => {
       });
 
       expect(res.status).toBe("ok");
-      const call = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0] as {
-        provider?: string;
-        model?: string;
-      };
-      expect(call?.provider).toBe("openrouter");
-      expect(call?.model).toBe("meta-llama/llama-3.3-70b:free");
+      expectEmbeddedProviderModel({
+        provider: "openrouter",
+        model: "meta-llama/llama-3.3-70b:free",
+      });
     });
   });
 
@@ -444,20 +459,8 @@ describe("runCronIsolatedAgentTurn", () => {
           modelOverride: "claude-opus-4-5",
         },
       });
-      const deps: CliDeps = {
-        sendMessageWhatsApp: vi.fn(),
-        sendMessageTelegram: vi.fn(),
-        sendMessageDiscord: vi.fn(),
-        sendMessageSignal: vi.fn(),
-        sendMessageIMessage: vi.fn(),
-      };
-      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
-        payloads: [{ text: "ok" }],
-        meta: {
-          durationMs: 5,
-          agentMeta: { sessionId: "s", provider: "p", model: "m" },
-        },
-      });
+      const deps = makeDeps();
+      mockEmbeddedOk();
 
       const res = await runCronIsolatedAgentTurn({
         cfg: makeCfg(home, storePath, {
@@ -475,12 +478,10 @@ describe("runCronIsolatedAgentTurn", () => {
       });
 
       expect(res.status).toBe("ok");
-      const call = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0] as {
-        provider?: string;
-        model?: string;
-      };
-      expect(call?.provider).toBe("openrouter");
-      expect(call?.model).toBe("meta-llama/llama-3.3-70b:free");
+      expectEmbeddedProviderModel({
+        provider: "openrouter",
+        model: "meta-llama/llama-3.3-70b:free",
+      });
     });
   });
 

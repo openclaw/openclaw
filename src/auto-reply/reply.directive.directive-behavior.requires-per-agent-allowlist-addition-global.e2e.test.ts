@@ -8,6 +8,34 @@ import {
 } from "./reply.directive.directive-behavior.e2e-harness.js";
 import { getReplyFromConfig } from "./reply.js";
 
+function makeWorkElevatedAllowlistConfig(home: string) {
+  return {
+    agents: {
+      defaults: {
+        model: "anthropic/claude-opus-4-5",
+        workspace: path.join(home, "openclaw"),
+      },
+      list: [
+        {
+          id: "work",
+          tools: {
+            elevated: {
+              allowFrom: { whatsapp: ["+1333"] },
+            },
+          },
+        },
+      ],
+    },
+    tools: {
+      elevated: {
+        allowFrom: { whatsapp: ["+1222", "+1333"] },
+      },
+    },
+    channels: { whatsapp: { allowFrom: ["+1222", "+1333"] } },
+    session: { store: path.join(home, "sessions.json") },
+  } as const;
+}
+
 describe("directive behavior", () => {
   installDirectiveBehaviorE2EHooks();
 
@@ -24,31 +52,7 @@ describe("directive behavior", () => {
           CommandAuthorized: true,
         },
         {},
-        {
-          agents: {
-            defaults: {
-              model: "anthropic/claude-opus-4-5",
-              workspace: path.join(home, "openclaw"),
-            },
-            list: [
-              {
-                id: "work",
-                tools: {
-                  elevated: {
-                    allowFrom: { whatsapp: ["+1333"] },
-                  },
-                },
-              },
-            ],
-          },
-          tools: {
-            elevated: {
-              allowFrom: { whatsapp: ["+1222", "+1333"] },
-            },
-          },
-          channels: { whatsapp: { allowFrom: ["+1222", "+1333"] } },
-          session: { store: path.join(home, "sessions.json") },
-        },
+        makeWorkElevatedAllowlistConfig(home),
       );
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
@@ -69,31 +73,7 @@ describe("directive behavior", () => {
           CommandAuthorized: true,
         },
         {},
-        {
-          agents: {
-            defaults: {
-              model: "anthropic/claude-opus-4-5",
-              workspace: path.join(home, "openclaw"),
-            },
-            list: [
-              {
-                id: "work",
-                tools: {
-                  elevated: {
-                    allowFrom: { whatsapp: ["+1333"] },
-                  },
-                },
-              },
-            ],
-          },
-          tools: {
-            elevated: {
-              allowFrom: { whatsapp: ["+1222", "+1333"] },
-            },
-          },
-          channels: { whatsapp: { allowFrom: ["+1222", "+1333"] } },
-          session: { store: path.join(home, "sessions.json") },
-        },
+        makeWorkElevatedAllowlistConfig(home),
       );
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
