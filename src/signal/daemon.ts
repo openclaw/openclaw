@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import type { RuntimeEnv } from "../runtime.js";
+import { isSafeExecutableValue } from "../infra/exec-safety.js";
 
 export type SignalDaemonOpts = {
   cliPath: string;
@@ -60,6 +61,9 @@ function buildDaemonArgs(opts: SignalDaemonOpts): string[] {
 }
 
 export function spawnSignalDaemon(opts: SignalDaemonOpts): SignalDaemonHandle {
+  if (!isSafeExecutableValue(opts.cliPath)) {
+    throw new Error(`Invalid signal-cli path: ${opts.cliPath}`);
+  }
   const args = buildDaemonArgs(opts);
   const child = spawn(opts.cliPath, args, {
     stdio: ["ignore", "pipe", "pipe"],
