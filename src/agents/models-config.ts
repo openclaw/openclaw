@@ -127,7 +127,20 @@ export async function ensureOpenClawModelsJson(
     providers: mergedProviders,
     agentDir,
   });
-  const next = `${JSON.stringify({ providers: normalizedProviders }, null, 2)}\n`;
+
+  // Strip resolved apiKey values to prevent credential exposure, but preserve env var names
+  const sanitizedProviders: Record<string, ProviderConfig> = {};
+  for (const [key, provider] of Object.entries(normalizedProviders ?? {})) {
+    const { apiKey, ...rest } = provider;
+    // Keep apiKey only if it looks like an env var name (e.g., "AWS_BEARER_TOKEN_BEDROCK")
+    if (apiKey && typeof apiKey === "string" && /^[A-Z][A-Z0-9_]*$/.test(apiKey)) {
+      sanitizedProviders[key] = { ...rest, apiKey };
+    } else {
+      sanitizedProviders[key] = rest;
+    }
+  }
+
+  const next = `${JSON.stringify({ providers: sanitizedProviders }, null, 2)}\n`;
   try {
     existingRaw = await fs.readFile(targetPath, "utf8");
   } catch {
