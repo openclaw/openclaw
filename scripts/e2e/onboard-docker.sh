@@ -57,7 +57,7 @@ TRASH
     local needle="$1"
     local timeout_s="${2:-45}"
     local needle_compact
-    needle_compact="$(printf "%s" "$needle" | tr -cd "[:alnum:]")"
+    needle_compact="$(printf "%s" "$needle" | tr -cd "[:alpha:]")"
     local start_s
     start_s="$(date +%s)"
     while true; do
@@ -71,9 +71,17 @@ TRASH
           const needle = process.env.NEEDLE ?? \"\";
           let text = \"\";
           try { text = fs.readFileSync(file, \"utf8\"); } catch { process.exit(1); }
-          if (text.length > 20000) text = text.slice(-20000);
-          const stripAnsi = (value) => value.replace(/\\x1b\\[[0-9;]*[A-Za-z]/g, \"\");
-          const compact = (value) => stripAnsi(value).toLowerCase().replace(/[^a-z0-9]+/g, \"\");
+          // Clack/script output can include lots of control sequences; keep a larger tail and strip ANSI more robustly.
+          if (text.length > 120000) text = text.slice(-120000);
+          const stripAnsi = (value) =>
+            value
+              // OSC: ESC ] ... BEL or ESC \\
+              .replace(/\\x1b\\][^\\x07]*(?:\\x07|\\x1b\\\\)/g, \"\")
+              // CSI: ESC [ ... cmd
+              .replace(/\\x1b\\[[0-?]*[ -/]*[@-~]/g, \"\");
+          // Letters-only: script output sometimes fragments ANSI sequences into digits/letters that
+          // can otherwise break substring matching.
+          const compact = (value) => stripAnsi(value).toLowerCase().replace(/[^a-z]+/g, \"\");
           const haystack = compact(text);
           const compactNeedle = compact(needle);
           if (!compactNeedle) process.exit(1);
@@ -229,10 +237,7 @@ TRASH
     # Risk acknowledgement (default is "No").
     wait_for_log "Continue?" 60
     send $'"'"'y\r'"'"' 0.6
-    # Choose local gateway, accept defaults, skip channels/skills/daemon, skip UI.
-    if wait_for_log "Where will the Gateway run?" 20; then
-      send $'"'"'\r'"'"' 0.5
-    fi
+    # Non-interactive flow; no gateway-location prompt.
     select_skip_hooks
   }
 
@@ -265,13 +270,12 @@ TRASH
   }
 
   send_skills_flow() {
-    # Select skills section and skip optional installs.
-    wait_for_log "Where will the Gateway run?" 60 || true
-    send $'"'"'\r'"'"' 0.6
-    # Configure skills now? -> No
-    wait_for_log "Configure skills now?" 60 || true
+    # configure --section skills still runs the configure wizard; the first prompt is gateway location.
+    # Avoid log-based synchronization here; clack output can fragment ANSI sequences and break matching.
+    send $'"'"'\r'"'"' 3.0
+    wait_for_log "Configure skills now?" 120 || true
     send $'"'"'n\r'"'"' 0.8
-    send "" 1.0
+    send "" 2.0
   }
 
 	  run_case_local_basic() {
