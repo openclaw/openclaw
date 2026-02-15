@@ -16,6 +16,7 @@ import { note as emitNote } from "../terminal/note.js";
 import { stylePromptHint, stylePromptMessage, stylePromptTitle } from "../terminal/prompt-style.js";
 import { theme } from "../terminal/theme.js";
 import { WizardCancelledError } from "./prompts.js";
+import { searchableSelect } from "./searchable-select.js";
 
 function guardCancel<T>(value: T | symbol): T {
   if (isCancel(value)) {
@@ -47,6 +48,27 @@ export function createClackPrompter(): WizardPrompter {
           initialValue: params.initialValue,
         }),
       ),
+    searchableSelect: async (params) => {
+      try {
+        return await searchableSelect({
+          message: stylePromptMessage(params.message) ?? params.message,
+          options: params.options.map((opt) => ({
+            value: opt.value,
+            label: opt.label,
+            hint: opt.hint,
+          })),
+          initialValue: params.initialValue,
+          maxVisible: params.maxVisible,
+        });
+      } catch (err) {
+        // Only treat "cancelled" as user cancellation; rethrow other errors
+        if (err instanceof Error && err.message === "cancelled") {
+          cancel(stylePromptTitle("Setup cancelled.") ?? "Setup cancelled.");
+          throw new WizardCancelledError();
+        }
+        throw err;
+      }
+    },
     multiselect: async (params) =>
       guardCancel(
         await multiselect({

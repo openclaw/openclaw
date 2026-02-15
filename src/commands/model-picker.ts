@@ -298,10 +298,12 @@ export async function promptDefaultModel(
     }
   }
 
-  const selection = await params.prompter.select({
+  // Always use searchable select for model picking (FZF-like fuzzy search)
+  const selection = await params.prompter.searchableSelect({
     message: params.message ?? "Default model",
     options,
     initialValue,
+    maxVisible: 12,
   });
 
   if (selection === KEEP_VALUE) {

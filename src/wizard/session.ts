@@ -88,6 +88,17 @@ class WizardSessionPrompter implements WizardPrompter {
     return res as T;
   }
 
+  // Searchable select falls back to regular select in session mode
+  // (the client UI can implement its own searchable behavior)
+  async searchableSelect<T>(params: {
+    message: string;
+    options: Array<{ value: T; label: string; hint?: string }>;
+    initialValue?: T;
+    maxVisible?: number;
+  }): Promise<T> {
+    return this.select(params);
+  }
+
   async multiselect<T>(params: {
     message: string;
     options: Array<{ value: T; label: string; hint?: string }>;

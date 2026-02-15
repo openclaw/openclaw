@@ -16,6 +16,7 @@ export const makePrompter = (overrides: Partial<WizardPrompter> = {}): WizardPro
   outro: vi.fn(async () => {}),
   note: vi.fn(async () => {}),
   select: vi.fn(async () => "npm") as WizardPrompter["select"],
+  searchableSelect: vi.fn(async () => "npm") as WizardPrompter["searchableSelect"],
   multiselect: vi.fn(async () => []) as WizardPrompter["multiselect"],
   text: vi.fn(async () => "") as WizardPrompter["text"],
   confirm: vi.fn(async () => false),
