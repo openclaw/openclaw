@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, beforeEach } from "vitest";
 import { buildTelegramMessageContext } from "./bot-message-context.js";
 
 const transcribeFirstAudioMock = vi.fn();
@@ -8,6 +8,9 @@ vi.mock("../media-understanding/audio-preflight.js", () => ({
 }));
 
 describe("buildTelegramMessageContext audio transcript body", () => {
+  beforeEach(() => {
+    transcribeFirstAudioMock.mockReset();
+  });
   it("uses preflight transcript as BodyForAgent for mention-gated group voice messages", async () => {
     transcribeFirstAudioMock.mockResolvedValueOnce("hey bot please help");
 
@@ -56,6 +59,54 @@ describe("buildTelegramMessageContext audio transcript body", () => {
     expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
     expect(ctx?.ctxPayload?.BodyForAgent).toBe("hey bot please help");
     expect(ctx?.ctxPayload?.Body).toContain("hey bot please help");
+    expect(ctx?.ctxPayload?.Body).not.toContain("<media:audio>");
+  });
+
+  it("uses preflight transcript as BodyForAgent for direct message voice messages", async () => {
+    transcribeFirstAudioMock.mockResolvedValueOnce("hello from voice note");
+
+    const ctx = await buildTelegramMessageContext({
+      primaryCtx: {
+        message: {
+          message_id: 1,
+          chat: { id: 123456789, type: "private" },
+          date: 1700000000,
+          from: { id: 42, first_name: "Bob" },
+          voice: { file_id: "voice-2" },
+        },
+        me: { id: 7, username: "bot" },
+      } as never,
+      allMedia: [{ path: "/tmp/voice2.ogg", contentType: "audio/ogg" }],
+      storeAllowFrom: [],
+      options: undefined,
+      bot: {
+        api: {
+          sendChatAction: vi.fn(),
+          setMessageReaction: vi.fn(),
+        },
+      } as never,
+      cfg: {
+        agents: { defaults: { model: "anthropic/claude-opus-4-5", workspace: "/tmp/openclaw" } },
+        channels: { telegram: {} },
+        messages: { groupChat: { mentionPatterns: ["\\bbot\\b"] } },
+      } as never,
+      account: { accountId: "default" } as never,
+      historyLimit: 0,
+      groupHistories: new Map(),
+      dmPolicy: "open",
+      allowFrom: [],
+      groupAllowFrom: [],
+      ackReactionScope: "off",
+      logger: { info: vi.fn() },
+      resolveGroupActivation: () => undefined,
+      resolveGroupRequireMention: () => false,
+      resolveTelegramGroupConfig: () => ({}),
+    });
+
+    expect(ctx).not.toBeNull();
+    expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
+    expect(ctx?.ctxPayload?.BodyForAgent).toBe("hello from voice note");
+    expect(ctx?.ctxPayload?.Body).toContain("hello from voice note");
     expect(ctx?.ctxPayload?.Body).not.toContain("<media:audio>");
   });
 });
