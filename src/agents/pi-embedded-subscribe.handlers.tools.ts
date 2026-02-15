@@ -247,7 +247,9 @@ export async function handleToolExecutionEnd(
       toolCallId,
       meta,
       isError: isToolError,
-      result: sanitizedResult,
+      // Omit full result for errors to prevent stderr/stdout from leaking
+      // through event consumers that may bridge to external channels.
+      result: isToolError ? undefined : sanitizedResult,
     },
   });
   void ctx.params.onAgentEvent?.({
@@ -265,7 +267,7 @@ export async function handleToolExecutionEnd(
     `embedded run tool end: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
   );
 
-  if (ctx.params.onToolResult && ctx.shouldEmitToolOutput()) {
+  if (ctx.params.onToolResult && ctx.shouldEmitToolOutput() && !isToolError) {
     const outputText = extractToolResultText(sanitizedResult);
     if (outputText) {
       ctx.emitToolOutput(toolName, meta, outputText);
