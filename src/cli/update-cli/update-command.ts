@@ -1,10 +1,10 @@
 import { confirm, isCancel } from "@clack/prompts";
+import { spawnSync } from "node:child_process";
 import path from "node:path";
 import {
   checkShellCompletionStatus,
   ensureCompletionCacheExists,
 } from "../../commands/doctor-completion.js";
-import { doctorCommand } from "../../commands/doctor.js";
 import { readConfigFileSnapshot, writeConfigFile } from "../../config/config.js";
 import {
   channelToNpmTag,
@@ -32,7 +32,6 @@ import { pathExists } from "../../utils.js";
 import { replaceCliName, resolveCliName } from "../cli-name.js";
 import { formatCliCommand } from "../command-format.js";
 import { installCompletion } from "../completion-cli.js";
-import { runDaemonRestart } from "../daemon-cli.js";
 import { createUpdateProgress, printResult } from "./progress.js";
 import {
   DEFAULT_PACKAGE_NAME,
@@ -396,22 +395,45 @@ async function maybeRestartService(params: {
     }
 
     try {
-      const restarted = await runDaemonRestart();
+      // Spawn a new process for gateway restart instead of calling runDaemonRestart()
+      // in-process. After `openclaw update` replaces dist/ files, the running process
+      // has stale references to content-hashed chunk filenames that no longer exist.
+      // A fresh process loads the newly installed binary with correct hashes.
+      const root = params.result.root ?? process.cwd();
+      const entryPath = path.join(root, "dist", "entry.js");
+      const restartResult = spawnSync(resolveNodeRunner(), [entryPath, "gateway", "restart"], {
+        stdio: "inherit",
+        timeout: 30_000,
+      });
+      const restarted = restartResult.status === 0;
+
       if (!params.opts.json && restarted) {
         defaultRuntime.log(theme.success("Daemon restarted successfully."));
         defaultRuntime.log("");
-        process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
-        try {
-          const interactiveDoctor =
-            Boolean(process.stdin.isTTY) && !params.opts.json && params.opts.yes !== true;
-          await doctorCommand(defaultRuntime, {
-            nonInteractive: !interactiveDoctor,
-          });
-        } catch (err) {
-          defaultRuntime.log(theme.warn(`Doctor failed: ${String(err)}`));
-        } finally {
-          delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
+
+        // Run doctor via subprocess for the same stale-module reason.
+        const interactiveDoctor =
+          Boolean(process.stdin.isTTY) && !params.opts.json && params.opts.yes !== true;
+        const doctorArgs = interactiveDoctor
+          ? [entryPath, "doctor"]
+          : [entryPath, "doctor", "--non-interactive"];
+        const doctorResult = spawnSync(resolveNodeRunner(), doctorArgs, {
+          stdio: "inherit",
+          timeout: 60_000,
+          env: { ...process.env, OPENCLAW_UPDATE_IN_PROGRESS: "1" },
+        });
+        if (doctorResult.status !== 0) {
+          defaultRuntime.log(
+            theme.warn(`Doctor exited with code ${doctorResult.status ?? "unknown"}`),
+          );
         }
+      } else if (!restarted && !params.opts.json) {
+        defaultRuntime.log(theme.warn("Daemon restart failed."));
+        defaultRuntime.log(
+          theme.muted(
+            `You may need to restart the service manually: ${replaceCliName(formatCliCommand("openclaw gateway restart"), CLI_NAME)}`,
+          ),
+        );
       }
     } catch (err) {
       if (!params.opts.json) {
