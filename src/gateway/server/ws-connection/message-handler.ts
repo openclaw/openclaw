@@ -652,6 +652,14 @@ export function attachGatewayWsMessageHandler(params: {
         const skipPairing = allowControlUiBypass && sharedAuthOk;
         if (device && devicePublicKey && !skipPairing) {
           const requirePairing = async (reason: string, _paired?: { deviceId: string }) => {
+            // Auto-approve (silent) for local clients and for already-paired devices
+            // requesting scope/role upgrades. The device identity is already
+            // cryptographically verified at this point, so upgrades are safe to
+            // auto-approve. Without this, non-loopback clients (e.g. LAN-bound
+            // gateways) hit a deadlock: the CLI needs the new scopes to connect,
+            // but can't connect to approve them.
+            const isUpgrade = reason === "scope-upgrade" || reason === "role-upgrade";
+            const silent = isLocalClient || (isUpgrade && _paired != null);
             const pairing = await requestDevicePairing({
               deviceId: device.id,
               publicKey: devicePublicKey,
@@ -662,14 +670,14 @@ export function attachGatewayWsMessageHandler(params: {
               role,
               scopes,
               remoteIp: reportedClientIp,
-              silent: isLocalClient,
+              silent,
             });
             const context = buildRequestContext();
             if (pairing.request.silent === true) {
               const approved = await approveDevicePairing(pairing.request.requestId);
               if (approved) {
                 logGateway.info(
-                  `device pairing auto-approved device=${approved.device.deviceId} role=${approved.device.role ?? "unknown"}`,
+                  `device pairing auto-approved device=${approved.device.deviceId} role=${approved.device.role ?? "unknown"} reason=${reason}`,
                 );
                 context.broadcast(
                   "device.pair.resolved",
