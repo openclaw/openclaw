@@ -253,13 +253,16 @@ export async function processMessage(
       return;
     }
     if (dmPolicy !== "open") {
-      const allowed = isAllowedBlueBubblesSender({
-        allowFrom: effectiveAllowFrom,
-        sender: message.senderId,
-        chatId: message.chatId ?? undefined,
-        chatGuid: message.chatGuid ?? undefined,
-        chatIdentifier: message.chatIdentifier ?? undefined,
-      });
+      const allowed =
+        effectiveAllowFrom.includes("*") ||
+        (effectiveAllowFrom.length > 0 &&
+          isAllowedBlueBubblesSender({
+            allowFrom: effectiveAllowFrom,
+            sender: message.senderId,
+            chatId: message.chatId ?? undefined,
+            chatGuid: message.chatGuid ?? undefined,
+            chatIdentifier: message.chatIdentifier ?? undefined,
+          }));
       if (!allowed) {
         if (dmPolicy === "pairing") {
           const { code, created } = await core.channel.pairing.upsertPairingRequest({
@@ -960,13 +963,16 @@ export async function processReaction(
       return;
     }
     if (dmPolicy !== "open") {
-      const allowed = isAllowedBlueBubblesSender({
-        allowFrom: effectiveAllowFrom,
-        sender: reaction.senderId,
-        chatId: reaction.chatId ?? undefined,
-        chatGuid: reaction.chatGuid ?? undefined,
-        chatIdentifier: reaction.chatIdentifier ?? undefined,
-      });
+      const allowed =
+        effectiveAllowFrom.includes("*") ||
+        (effectiveAllowFrom.length > 0 &&
+          isAllowedBlueBubblesSender({
+            allowFrom: effectiveAllowFrom,
+            sender: reaction.senderId,
+            chatId: reaction.chatId ?? undefined,
+            chatGuid: reaction.chatGuid ?? undefined,
+            chatIdentifier: reaction.chatIdentifier ?? undefined,
+          }));
       if (!allowed) {
         return;
       }
