@@ -561,6 +561,21 @@ export function attachGatewayWsMessageHandler(params: {
             nonce: providedNonce || undefined,
             version: providedNonce ? "v2" : "v1",
           });
+          const rejectDeviceSignatureInvalid = () => {
+            setHandshakeState("failed");
+            setCloseCause("device-auth-invalid", {
+              reason: "device-signature",
+              client: connectParams.client.id,
+              deviceId: device.id,
+            });
+            send({
+              type: "res",
+              id: frame.id,
+              ok: false,
+              error: errorShape(ErrorCodes.INVALID_REQUEST, "device signature invalid"),
+            });
+            close(1008, "device signature invalid");
+          };
           const signatureOk = verifyDeviceSignature(device.publicKey, payload, device.signature);
           const allowLegacy = !nonceRequired && !providedNonce;
           if (!signatureOk && allowLegacy) {
@@ -577,35 +592,11 @@ export function attachGatewayWsMessageHandler(params: {
             if (verifyDeviceSignature(device.publicKey, legacyPayload, device.signature)) {
               // accepted legacy loopback signature
             } else {
-              setHandshakeState("failed");
-              setCloseCause("device-auth-invalid", {
-                reason: "device-signature",
-                client: connectParams.client.id,
-                deviceId: device.id,
-              });
-              send({
-                type: "res",
-                id: frame.id,
-                ok: false,
-                error: errorShape(ErrorCodes.INVALID_REQUEST, "device signature invalid"),
-              });
-              close(1008, "device signature invalid");
+              rejectDeviceSignatureInvalid();
               return;
             }
           } else if (!signatureOk) {
-            setHandshakeState("failed");
-            setCloseCause("device-auth-invalid", {
-              reason: "device-signature",
-              client: connectParams.client.id,
-              deviceId: device.id,
-            });
-            send({
-              type: "res",
-              id: frame.id,
-              ok: false,
-              error: errorShape(ErrorCodes.INVALID_REQUEST, "device signature invalid"),
-            });
-            close(1008, "device signature invalid");
+            rejectDeviceSignatureInvalid();
             return;
           }
           devicePublicKey = normalizeDevicePublicKeyBase64Url(device.publicKey);
