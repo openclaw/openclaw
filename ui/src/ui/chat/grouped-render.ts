@@ -11,7 +11,7 @@ import {
   formatReasoningMarkdown,
 } from "./message-extract.ts";
 import { isToolResultMessage, normalizeRoleForGrouping } from "./message-normalizer.ts";
-import { extractToolCards, renderToolCardSidebar } from "./tool-cards.ts";
+import { extractToolCards, renderToolCardsGroup } from "./tool-cards.ts";
 
 type ImageBlock = {
   url: string;
@@ -253,7 +253,7 @@ function renderGroupedMessage(
     .join(" ");
 
   if (!markdown && hasToolCards && isToolResult) {
-    return html`${toolCards.map((card) => renderToolCardSidebar(card, onOpenSidebar))}`;
+    return renderToolCardsGroup(toolCards, onOpenSidebar);
   }
 
   if (!markdown && !hasToolCards && !hasImages) {
@@ -276,7 +276,7 @@ function renderGroupedMessage(
           ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">${unsafeHTML(toSanitizedMarkdownHtml(markdown))}</div>`
           : nothing
       }
-      ${toolCards.map((card) => renderToolCardSidebar(card, onOpenSidebar))}
+      ${renderToolCardsGroup(toolCards, onOpenSidebar)}
     </div>
   `;
 }
