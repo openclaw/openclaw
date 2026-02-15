@@ -1,7 +1,9 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
+  AUTH_ERROR_USER_MESSAGE,
   BILLING_ERROR_USER_MESSAGE,
+  formatAuthErrorMessage,
   formatBillingErrorMessage,
   formatAssistantErrorText,
 } from "./pi-embedded-helpers.js";
@@ -103,6 +105,23 @@ describe("formatAssistantErrorText", () => {
     const result = formatAssistantErrorText(msg);
     expect(result).toContain("API provider");
     expect(result).toBe(BILLING_ERROR_USER_MESSAGE);
+  });
+  it("returns a friendly auth message for invalid API key errors", () => {
+    const msg = makeAssistantError("invalid_api_key");
+    const result = formatAssistantErrorText(msg);
+    expect(result).toBe(AUTH_ERROR_USER_MESSAGE);
+  });
+  it("returns a friendly auth message for HTTP 401 errors", () => {
+    const msg = makeAssistantError("HTTP 401 Unauthorized");
+    const result = formatAssistantErrorText(msg);
+    expect(result).toBe(AUTH_ERROR_USER_MESSAGE);
+  });
+  it("includes provider name in auth message when provider is given", () => {
+    const msg = makeAssistantError("unauthorized");
+    const result = formatAssistantErrorText(msg, { provider: "OpenAI" });
+    expect(result).toBe(formatAuthErrorMessage("OpenAI"));
+    expect(result).toContain("OpenAI");
+    expect(result).not.toContain("API provider");
   });
   it("returns a friendly message for rate limit errors", () => {
     const msg = makeAssistantError("429 rate limit reached");

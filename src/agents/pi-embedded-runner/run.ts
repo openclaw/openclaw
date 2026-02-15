@@ -28,6 +28,7 @@ import {
 import { normalizeProviderId } from "../model-selection.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import {
+  formatAuthErrorMessage,
   formatBillingErrorMessage,
   classifyFailoverReason,
   formatAssistantErrorText,
@@ -877,7 +878,7 @@ export async function runEmbeddedPiAgent(
                     : billingFailure
                       ? formatBillingErrorMessage(provider)
                       : authFailure
-                        ? "LLM request unauthorized."
+                        ? formatAuthErrorMessage(provider)
                         : "LLM request failed.");
               const status =
                 resolveFailoverStatus(assistantFailoverReason ?? "unknown") ??
