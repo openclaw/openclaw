@@ -1,58 +1,57 @@
 ---
-summary: "語音通話外掛：透過 Twilio/Telnyx/Plivo 進行撥出 + 接聽電話（外掛安裝 + 設定 + CLI）"
+summary: "Voice Call 外掛程式：透過 Twilio/Telnyx/Plivo 進行撥出與接聽電話（外掛程式安裝 + 設定 + CLI）"
 read_when:
-  - 您想從 OpenClaw 撥出語音電話時
-  - 您正在設定或開發語音通話外掛時
-title: "語音通話外掛"
+  - 您想從 OpenClaw 撥打外部語音電話
+  - 您正在設定或開發 voice-call 外掛程式
+title: "Voice Call 外掛程式"
 ---
 
-# 語音通話 (外掛)
+# Voice Call (外掛程式)
 
-透過外掛在 OpenClaw 中進行語音通話。支援撥出通知和
-具備接聽策略的多輪對話。
+透過外掛程式為 OpenClaw 提供語音通話功能。支援撥出通知以及具備接聽原則的多輪對話。
 
 目前的供應商：
 
 - `twilio` (Programmable Voice + Media Streams)
 - `telnyx` (Call Control v2)
-- `plivo` (Voice API + XML transfer + GetInput speech)
-- `mock` (dev/no network)
+- `plivo` (Voice API + XML 傳輸 + GetInput 語音)
+- `mock` (開發用/無網路)
 
-快速心智模型：
+快速理解模型：
 
-- 安裝外掛
-- 重新啟動 Gateway
+- 安裝外掛程式
+- 重啟 Gateway
 - 在 `plugins.entries.voice-call.config` 下進行設定
 - 使用 `openclaw voicecall ...` 或 `voice_call` 工具
 
-## 執行位置 (本機與遠端)
+## 執行位置（地端 vs 遠端）
 
-語音通話外掛在 **Gateway 程式** 內部執行。
+Voice Call 外掛程式執行於 **Gateway 程序**中。
 
-如果您使用遠端 Gateway，請在**執行 Gateway 的機器**上安裝/設定外掛，然後重新啟動 Gateway 以載入它。
+如果您使用遠端 Gateway，請在 **執行 Gateway 的機器** 上安裝/設定外掛程式，然後重啟 Gateway 以載入它。
 
 ## 安裝
 
-### 選項 A: 從 npm 安裝 (推薦)
+### 選項 A：從 npm 安裝（建議）
 
 ```bash
 openclaw plugins install @openclaw/voice-call
 ```
 
-之後重新啟動 Gateway。
+安裝完成後請重啟 Gateway。
 
-### 選項 B: 從本機資料夾安裝 (開發用，不複製)
+### 選項 B：從本機資料夾安裝（開發用途，不需複製檔案）
 
 ```bash
 openclaw plugins install ./extensions/voice-call
 cd ./extensions/voice-call && pnpm install
 ```
 
-之後重新啟動 Gateway。
+安裝完成後請重啟 Gateway。
 
 ## 設定
 
-在 `plugins.entries.voice-call.config` 下設定：
+在 `plugins.entries.voice-call.config` 下進行設定：
 
 ```json5
 {
@@ -81,13 +80,13 @@ cd ./extensions/voice-call && pnpm install
             path: "/voice/webhook",
           },
 
-          // Webhook 安全性 (推薦用於通道/代理)
+          // Webhook 安全性（建議用於通道/代理）
           webhookSecurity: {
             allowedHosts: ["voice.example.com"],
             trustedProxyIPs: ["100.64.0.1"],
           },
 
-          // 公開暴露 (擇一)
+          // 公開暴露方式（擇一）
           // publicUrl: "https://example.ngrok.app/voice/webhook",
           // tunnel: { provider: "ngrok" },
           // tailscale: { mode: "funnel", path: "/voice/webhook" }
@@ -109,28 +108,25 @@ cd ./extensions/voice-call && pnpm install
 
 注意事項：
 
-- Twilio/Telnyx 需要一個**可公開存取**的 webhook URL。
-- Plivo 需要一個**可公開存取**的 webhook URL。
-- `mock` 是一個本機開發供應商 (無網路呼叫)。
+- Twilio/Telnyx 需要一個**可從外部存取**的 Webhook URL。
+- Plivo 需要一個**可從外部存取**的 Webhook URL。
+- `mock` 是本機開發用的供應商（無網路呼叫）。
 - `skipSignatureVerification` 僅供本機測試使用。
-- 如果您使用 ngrok 免費方案，請將 `publicUrl` 設定為確切的 ngrok URL；簽章驗證始終強制執行。
-- `tunnel.allowNgrokFreeTierLoopbackBypass: true` 僅在 `tunnel.provider="ngrok"` 且 `serve.bind` 為 local loopback (ngrok 本機代理) 時，允許 Twilio webhooks 帶有無效簽章。僅供本機開發使用。
-- Ngrok 免費方案的 URL 可能會變更或增加插頁式行為；如果 `publicUrl` 漂移，Twilio 簽章將會失敗。對於生產環境，請優先選擇穩定的網域或 Tailscale funnel。
+- 如果您使用 ngrok 免費版，請將 `publicUrl` 設定為正確的 ngrok 網址；簽章驗證一律會強制執行。
+- `tunnel.allowNgrokFreeTierLoopbackBypass: true` 允許 Twilio Webhook 在簽章無效的情況下通過，**僅當** `tunnel.provider="ngrok"` 且 `serve.bind` 為 local loopback (ngrok 本機代理) 時適用。僅供本機開發使用。
+- Ngrok 免費版網址可能會變動或加入中間頁行為；若 `publicUrl` 跑掉，Twilio 簽章驗證將會失敗。正式環境建議使用固定網域或 Tailscale funnel。
 
 ## Webhook 安全性
 
-當代理或通道位於 Gateway 前方時，外掛會重新建構
-用於簽章驗證的公開 URL。這些選項控制哪些轉發的
-標頭是受信任的。
+當 Gateway 前方有代理或通道時，外掛程式會重建公開 URL 以進行簽章驗證。這些選項可控制哪些轉發標頭（forwarded headers）是可信的。
 
-`webhookSecurity.allowedHosts` 允許來自轉發標頭的主機。
+`webhookSecurity.allowedHosts` 會將轉發標頭中的主機加入允許清單。
 
-`webhookSecurity.trustForwardingHeaders` 信任轉發標頭，無需允許清單。
+`webhookSecurity.trustForwardingHeaders` 會在不使用允許清單的情況下信任轉發標頭。
 
-`webhookSecurity.trustedProxyIPs` 僅在請求的
-遠端 IP 與清單匹配時才信任轉發標頭。
+`webhookSecurity.trustedProxyIPs` 僅在請求的遠端 IP 符合清單時才信任轉發標頭。
 
-穩定公開主機的範例：
+使用固定公開主機的範例：
 
 ```json5
 {
@@ -149,11 +145,9 @@ cd ./extensions/voice-call && pnpm install
 }
 ```
 
-## 通話語音合成 (TTS)
+## 通話專用的 TTS
 
-語音通話使用核心 `messages.tts` 設定 (OpenAI 或 ElevenLabs) 來
-在通話中串流語音。您可以在外掛設定中以**相同格式**覆寫它
-— 它會與 `messages.tts` 進行深度合併。
+Voice Call 使用核心 `messages.tts` 設定（OpenAI 或 ElevenLabs）來進行通話中的語音串流。您可以在外掛程式設定中以**相同的結構**進行覆寫 — 它會與 `messages.tts` 進行深度合併（deep-merge）。
 
 ```json5
 {
@@ -169,12 +163,12 @@ cd ./extensions/voice-call && pnpm install
 
 注意事項：
 
-- **Edge TTS 會被語音通話忽略** (電話音訊需要 PCM；Edge 輸出不可靠)。
-- 當啟用 Twilio 媒體串流時，會使用核心 TTS；否則通話會退回到供應商的原生語音。
+- **語音通話會忽略 Edge TTS**（電話音訊需要 PCM；Edge 輸出不夠穩定）。
+- 啟用 Twilio 媒體串流時會使用核心 TTS；否則通話將回退至供應商的原生語音。
 
 ### 更多範例
 
-僅使用核心 TTS (不覆寫)：
+僅使用核心 TTS（不覆寫）：
 
 ```json5
 {
@@ -187,7 +181,7 @@ cd ./extensions/voice-call && pnpm install
 }
 ```
 
-僅針對通話覆寫為 ElevenLabs (其他地方保留核心預設)：
+僅針對通話覆寫為 ElevenLabs（其他地方保留核心預設值）：
 
 ```json5
 {
@@ -210,7 +204,7 @@ cd ./extensions/voice-call && pnpm install
 }
 ```
 
-僅針對通話覆寫 OpenAI 模型 (深度合併範例)：
+僅針對通話覆寫 OpenAI 模型（深度合併範例）：
 
 ```json5
 {
@@ -233,7 +227,7 @@ cd ./extensions/voice-call && pnpm install
 
 ## 接聽電話
 
-接聽策略預設為 `disabled`。若要啟用接聽電話，請設定：
+接聽原則預設為 `disabled`（停用）。要啟用接聽電話，請設定：
 
 ```json5
 {
@@ -243,7 +237,7 @@ cd ./extensions/voice-call && pnpm install
 }
 ```
 
-自動回應使用智慧代理系統。可透過以下項目調整：
+自動回覆使用智慧代理系統。可調整：
 
 - `responseModel`
 - `responseSystemPrompt`
@@ -263,7 +257,7 @@ openclaw voicecall expose --mode funnel
 
 ## 智慧代理工具
 
-工具名稱: `voice_call`
+工具名稱：`voice_call`
 
 動作：
 
@@ -273,7 +267,7 @@ openclaw voicecall expose --mode funnel
 - `end_call` (callId)
 - `get_status` (callId)
 
-此儲存庫隨附一個匹配的技能檔案，位於 `skills/voice-call/SKILL.md`。
+此存放庫於 `skills/voice-call/SKILL.md` 隨附對應的 Skills 文件。
 
 ## Gateway RPC
 

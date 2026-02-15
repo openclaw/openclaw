@@ -1,46 +1,42 @@
 ---
-summary: "Gateway 控制面板 (控制使用者介面) 存取與驗證"
+summary: "Gateway Dashboard (控制介面) 存取與認證"
 read_when:
-  - 變更控制面板驗證或公開模式時
-title: "控制面板"
+  - 更改 Dashboard 認證或公開模式時
+title: "Dashboard"
 ---
 
-# 控制面板 (控制使用者介面)
+# Dashboard (控制介面)
 
-Gateway 控制面板是瀏覽器控制使用者介面，預設在 `/` 提供服務
-(可透過 `gateway.controlUi.basePath` 覆寫)。
+Gateway Dashboard 是預設在 `/` 路徑提供的瀏覽器控制介面 (控制介面) (可透過 `gateway.controlUi.basePath` 覆寫)。
 
-快速開啟 (本機 Gateway):
+快速開啟 (本地 Gateway):
 
 - [http://127.0.0.1:18789/](http://127.0.0.1:18789/) (或 [http://localhost:18789/](http://localhost:18789/))
 
-重要參考資訊:
+重點參考：
 
-- [Control UI](/web/control-ui) 以了解使用方式和使用者介面功能。
-- [Tailscale](/gateway/tailscale) 以了解 Serve/Funnel 自動化。
-- [網頁介面](/web) 以了解綁定模式和安全性注意事項。
+- [控制介面](/web/control-ui) 了解用法與 UI 功能。
+- [Tailscale](/gateway/tailscale) 了解 Serve/Funnel 自動化。
+- [Web surfaces](/web) 了解綁定模式與安全性說明。
 
-驗證在 WebSocket 握手期間強制執行，透過 `connect.params.auth`
-(權杖或密碼)。請參閱 [Gateway 設定](/gateway/configuration) 中的 `gateway.auth`。
+認證是在 WebSocket 握手階段透過 `connect.params.auth` (Token 或密碼) 強制執行的。請參閱 [Gateway 設定](/gateway/configuration) 中的 `gateway.auth`。
 
-安全性注意事項: 控制使用者介面是**管理員介面** (聊天、設定、執行核准)。
-請勿公開。使用者介面在首次載入後會將權杖儲存在 `localStorage` 中。
-建議使用 localhost、Tailscale Serve 或 SSH 通道。
+安全性說明：控制介面是一個 **管理介面** (聊天、設定、執行核准)。請勿將其公開。UI 在首次載入後會將 Token 儲存在 `localStorage` 中。建議優先使用 localhost、Tailscale Serve 或 SSH 通道。
 
-## 快速路徑 (建議)
+## 快速路徑 (建議使用)
 
-- 新手導覽完成後，CLI 會自動開啟控制面板並列印一個乾淨的 (未權杖化的) 連結。
-- 隨時重新開啟: `openclaw dashboard` (複製連結，如果可能則開啟瀏覽器，如果為無頭模式則顯示 SSH 提示)。
-- 如果使用者介面提示驗證，請將 `gateway.auth.token` (或 `OPENCLAW_GATEWAY_TOKEN`) 中的權杖貼上到控制使用者介面設定中。
+- 完成新手導覽後，CLI 會自動開啟 Dashboard 並列印一個乾淨的 (不含 Token) 連結。
+- 隨時重新開啟：`openclaw dashboard` (會複製連結，若可行則開啟瀏覽器，若為無頭模式則顯示 SSH 提示)。
+- 如果 UI 提示需要認證，請將 `gateway.auth.token` (或 `OPENCLAW_GATEWAY_TOKEN`) 中的 Token 貼入控制介面設定中。
 
-## 權杖基礎知識 (本機與遠端)
+## Token 基礎知識 (本地 vs 遠端)
 
-- **Localhost**: 開啟 `http://127.0.0.1:18789/`。
-- **權杖來源**: `gateway.auth.token` (或 `OPENCLAW_GATEWAY_TOKEN`); 使用者介面在您連線後會在 localStorage 中儲存一個副本。
-- **非 localhost**: 使用 Tailscale Serve (如果 `gateway.auth.allowTailscale: true` 則無需權杖)、使用權杖綁定 tailnet，或 SSH 通道。請參閱 [網頁介面](/web)。
+- **Localhost**：開啟 `http://127.0.0.1:18789/`。
+- **Token 來源**：`gateway.auth.token` (或 `OPENCLAW_GATEWAY_TOKEN`)；UI 在你連接後會於 `localStorage` 儲存一份副本。
+- **非 localhost**：使用 Tailscale Serve (若 `gateway.auth.allowTailscale: true` 則無需 Token)、帶有 Token 的 tailnet 綁定，或 SSH 通道。請參閱 [Web surfaces](/web)。
 
-## 如果您看到「未經授權」/ 1008
+## 如果你看到 “unauthorized” / 1008
 
-- 確保 Gateway 可到達 (本機: `openclaw status`; 遠端: SSH 通道 `ssh -N -L 18789:127.0.0.1:18789 user @host` 然後開啟 `http://127.0.0.1:18789/`)。
-- 從 Gateway 主機檢索權杖: `openclaw config get gateway.auth.token` (或產生一個: `openclaw doctor --generate-gateway-token`)。
-- 在控制面板設定中，將權杖貼到驗證欄位，然後連線。
+- 確保 Gateway 可連線 (本地：`openclaw status`；遠端：SSH 通道 `ssh -N -L 18789:127.0.0.1:18789 user@host` 然後開啟 `http://127.0.0.1:18789/`)。
+- 從 Gateway 主機取得 Token：`openclaw config get gateway.auth.token` (或生成一個：`openclaw doctor --generate-gateway-token`)。
+- 在 Dashboard 設定中，將 Token 貼入認證欄位，然後進行連線。

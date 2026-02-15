@@ -1,34 +1,34 @@
 ---
-summary: "OpenClaw 紀錄：滾動式診斷檔案紀錄 + 統一紀錄隱私旗標"
+summary: "OpenClaw 日誌：滾動式診斷檔案日誌 + 統一日誌隱私標記"
 read_when:
-  - 擷取 macOS 紀錄或調查私有資料紀錄
-  - 偵錯語音喚醒/工作階段生命週期問題
-title: "macOS 紀錄"
+  - 擷取 macOS 日誌或調查隱私資料記錄時
+  - 偵錯語音喚醒/工作階段生命週期問題時
+title: "macOS 日誌記錄"
 ---
 
-# 紀錄 (macOS)
+# 日誌記錄 (macOS)
 
-## 滾動式診斷檔案紀錄 (除錯面板)
+## 滾動式診斷檔案日誌 (Debug 面板)
 
-OpenClaw 透過 swift-log (預設為統一紀錄) 路由 macOS 應用程式紀錄，並可在需要持久擷取時，將本地的滾動式檔案紀錄寫入磁碟。
+OpenClaw 透過 swift-log（預設為統一日誌記錄）傳輸 macOS 應用程式日誌，並可在您需要持久擷取時，將本機滾動式檔案日誌寫入磁碟。
 
-- 詳細程度：**除錯面板 → 紀錄 → 應用程式紀錄 → 詳細程度**
-- 啟用：**除錯面板 → 紀錄 → 應用程式紀錄 → “寫入滾動式診斷紀錄 (JSONL)”**
-- 位置：`~/Library/Logs/OpenClaw/diagnostics.jsonl` (自動輪替；舊檔案會加上 `.1`, `.2`, … 等後綴)
-- 清除：**除錯面板 → 紀錄 → 應用程式紀錄 → “清除”**
+- 詳細程度：**Debug 面板 → Logs → App logging → Verbosity**
+- 啟用：**Debug 面板 → Logs → App logging → 「Write rolling diagnostics log (JSONL)」**
+- 位置：`~/Library/Logs/OpenClaw/diagnostics.jsonl`（自動滾動；舊檔案會加上 `.1`、`.2` … 等字尾）
+- 清除：**Debug 面板 → Logs → App logging → 「Clear」**
 
-備註：
+注意事項：
 
-- 此功能**預設為關閉**。僅在積極偵錯時啟用。
-- 請將此檔案視為敏感檔案；未經審查請勿分享。
+- 此功能**預設為關閉**。僅在主動偵錯時啟用。
+- 請將此檔案視為敏感資訊；未經檢查請勿分享。
 
-## macOS 上的統一紀錄私有資料
+## macOS 上的統一日誌隱私資料
 
-統一紀錄會遮蓋大多數酬載，除非子系統選擇加入 `privacy -off`。根據 Peter 關於 macOS [紀錄隱私惡作劇](https://steipete.me/posts/2025/logging-privacy-shenanigans) (2025) 的文章，這由 `/Library/Preferences/Logging/Subsystems/` 中以子系統名稱為鍵的 plist 控制。只有新的紀錄項目會擷取該旗標，因此請在重現問題之前啟用它。
+除非子系統選擇加入 `privacy -off`，否則統一日誌記錄會遮蔽大多數的承載資料 (payload)。根據 Peter 關於 macOS [日誌隱私機制](https://steipete.me/posts/2025/logging-privacy-shenanigans) (2025) 的文章，這由 `/Library/Preferences/Logging/Subsystems/` 中以子系統名稱命名的 plist 控制。只有新的日誌分錄會套用此標記，因此請在重現問題前啟用它。
 
-## 為 OpenClaw 啟用 (`bot.molt`)
+## 為 OpenClaw (`bot.molt`) 啟用
 
-- 先將 plist 寫入暫存檔案，然後以 root 身分原子化安裝：
+- 先將 plist 寫入暫存檔，然後以 root 身分進行原子化安裝：
 
 ```bash
 cat <<'EOF' >/tmp/bot.molt.plist
@@ -47,11 +47,11 @@ EOF
 sudo install -m 644 -o root -g wheel /tmp/bot.molt.plist /Library/Preferences/Logging/Subsystems/bot.molt.plist
 ```
 
-- 無需重新啟動；logd 會迅速注意到該檔案，但只有新的紀錄行會包含私有酬載。
-- 使用現有的輔助程式查看更豐富的輸出，例如 `./scripts/clawlog.sh --category WebChat --last 5m`。
+- 不需要重啟；logd 會迅速偵測到該檔案，但只有新的日誌行會包含隱私承載資料。
+- 使用現有的輔助工具查看更豐富的輸出，例如：`./scripts/clawlog.sh --category WebChat --last 5m`。
 
 ## 偵錯後停用
 
-- 移除覆蓋：`sudo rm /Library/Preferences/Logging/Subsystems/bot.molt.plist`。
-- 您可以選擇執行 `sudo log config --reload` 以強制 logd 立即捨棄覆蓋。
-- 請記住，此介面可能包含電話號碼和訊息內容；僅在您積極需要額外細節時才保留 plist。
+- 移除覆寫設定：`sudo rm /Library/Preferences/Logging/Subsystems/bot.molt.plist`。
+- 可選擇執行 `sudo log config --reload` 來強制 logd 立即捨棄覆寫設定。
+- 請記住，這些資料可能包含電話號碼和訊息內容；僅在主動需要額外詳細資訊時才保留此 plist。

@@ -1,16 +1,16 @@
 ---
-summary: "openclaw tui 的 CLI 參考 (連接到 Gateway 的終端機使用者介面)"
+summary: "`openclaw tui` 的 CLI 參考（連接至 Gateway 的終端機 UI）"
 read_when:
-  - 您需要 Gateway 的終端機使用者介面 (遠端友善)
-  - 您想從腳本傳遞 url/token/工作階段
+  - "您想要使用 Gateway 的終端機 UI（適合遠端操作）"
+  - "您想要從腳本中傳遞 url/token/session"
 title: "tui"
 ---
 
 # `openclaw tui`
 
-開啟連接到 Gateway 的終端機使用者介面。
+開啟連接至 Gateway 的終端機 UI。
 
-相關資訊：
+相關內容：
 
 - TUI 指南：[TUI](/web/tui)
 

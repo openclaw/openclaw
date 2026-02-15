@@ -1,18 +1,18 @@
 ---
-summary: "OpenClaw 故障診斷中心"
+summary: "以症狀為導向的 OpenClaw 疑難排解中心"
 read_when:
-  - OpenClaw 無法正常運作，您需要最快的修復路徑
-  - 在深入了解詳細執行手冊之前，您想要一個初步分類流程
-title: "故障診斷"
+  - OpenClaw 無法運作且您需要最快的修復路徑
+  - 在深入研究詳細的執行指南之前，您想要一個檢測流程
+title: "疑難排解"
 ---
 
-# 故障診斷
+# 疑難排解
 
-如果您只有 2 分鐘，請將此頁面作為初步分類的入口。
+如果您只有 2 分鐘，請將此頁面視為初步檢測的入口。
 
 ## 最初的六十秒
 
-請按照以下順序執行此精確的步驟：
+請依序執行以下步驟：
 
 ```bash
 openclaw status
@@ -24,36 +24,36 @@ openclaw channels status --probe
 openclaw logs --follow
 ```
 
-一行好的輸出範例：
+正常的輸出結果應如下：
 
-- `openclaw status` → 顯示已設定的頻道且沒有明顯的憑證錯誤。
-- `openclaw status --all` → 完整的報告已顯示且可分享。
-- `openclaw gateway probe` → 預期的 Gateway 目標可達。
+- `openclaw status` → 顯示已設定的頻道且無明顯的驗證錯誤。
+- `openclaw status --all` → 完整報告已產生且可供分享。
+- `openclaw gateway probe` → 預期的 Gateway 目標可連線。
 - `openclaw gateway status` → `Runtime: running` 且 `RPC probe: ok`。
-- `openclaw doctor` → 沒有阻擋性的設定/服務錯誤。
-- `openclaw channels status --probe` → 頻道報告 `connected` 或 `ready`。
-- `openclaw logs --follow` → 活動穩定，沒有重複的嚴重錯誤。
+- `openclaw doctor` → 無阻礙運作的設定或服務錯誤。
+- `openclaw channels status --probe` → 頻道回報 `connected`（已連線）或 `ready`（就緒）。
+- `openclaw logs --follow` → 活動穩定，無重複的嚴重錯誤。
 
 ## 決策樹
 
 ```mermaid
 flowchart TD
-  A[OpenClaw 無法正常運作] --> B{什麼先發生故障}
+  A[OpenClaw 無法運作] --> B{哪個部分最先出錯}
   B --> C[沒有回應]
-  B --> D[儀表板或控制使用者介面無法連線]
+  B --> D[Dashboard 或 Control UI 無法連線]
   B --> E[Gateway 無法啟動或服務未執行]
-  B --> F[頻道已連線但訊息未傳遞]
-  B --> G[Cron 或心跳未觸發或未送達]
-  B --> H[節點已配對但攝影機畫布螢幕執行失敗]
+  B --> F[頻道已連線但訊息無法傳遞]
+  B --> G[Cron 或 heartbeat 未觸發或未送達]
+  B --> H[Node 已配對但相機/畫布/螢幕執行失敗]
   B --> I[瀏覽器工具失敗]
 
-  C --> C1[/沒有回應部分/]
-  D --> D1[/控制使用者介面部分/]
-  E --> E1[/Gateway 部分/]
-  F --> F1[/頻道傳遞部分/]
-  G --> G1[/自動化部分/]
-  H --> H1[/節點工具部分/]
-  I --> I1[/瀏覽器部分/]
+  C --> C1[/沒有回應章節/]
+  D --> D1[/Control UI 章節/]
+  E --> E1[/Gateway 章節/]
+  F --> F1[/頻道傳遞章節/]
+  G --> G1[/自動化章節/]
+  H --> H1[/Node 工具章節/]
+  I --> I1[/瀏覽器章節/]
 ```
 
 <AccordionGroup>
@@ -66,20 +66,20 @@ flowchart TD
     openclaw logs --follow
     ```
 
-    好的輸出應如下所示：
+    正常的輸出應如下：
 
     - `Runtime: running`
     - `RPC probe: ok`
-    - 您的頻道在 `channels status --probe` 中顯示已連線/準備就緒
-    - 傳送者顯示已批准（或私訊政策是開放/允許清單）
+    - 您的頻道在 `channels status --probe` 中顯示為 connected/ready
+    - 發送者顯示為已核准（或私訊政策為開放/白名單）
 
-    常見的日誌簽名：
+    常見日誌特徵：
 
-    - `drop guild message (mention required` → 提及限制阻止了 Discord 中的訊息。
-    - `pairing request` → 傳送者未經批准且正在等待私訊配對批准。
-    - 頻道日誌中的 `blocked` / `allowlist` → 傳送者、聊天室或群組被過濾。
+    - `drop guild message (mention required` → Discord 中的提及限制阻擋了該訊息。
+    - `pairing request` → 發送者尚未核准，正在等待私訊配對核准。
+    - 頻道日誌中出現 `blocked` / `allowlist` → 發送者、房間或群組已被過濾。
 
-    深入頁面：
+    深度內容頁面：
 
     - [/gateway/troubleshooting#no-replies](/gateway/troubleshooting#no-replies)
     - [/channels/troubleshooting](/channels/troubleshooting)
@@ -87,7 +87,7 @@ flowchart TD
 
   </Accordion>
 
-  <Accordion title="儀表板或控制使用者介面無法連線">
+  <Accordion title="Dashboard 或 Control UI 無法連線">
     ```bash
     openclaw status
     openclaw gateway status
@@ -96,19 +96,19 @@ flowchart TD
     openclaw channels status --probe
     ```
 
-    好的輸出應如下所示：
+    正常的輸出應如下：
 
-    - `Dashboard: http://...` 顯示在 `openclaw gateway status` 中
+    - `openclaw gateway status` 顯示 `Dashboard: http://...`
     - `RPC probe: ok`
-    - 日誌中沒有憑證循環
+    - 日誌中無驗證迴圈
 
-    常見的日誌簽名：
+    常見日誌特徵：
 
-    - `device identity required` → HTTP/非安全環境無法完成裝置憑證。
-    - `unauthorized` / reconnect loop → 錯誤的權杖/密碼或憑證模式不匹配。
-    - `gateway connect failed:` → 使用者介面目標的 URL/連接埠錯誤或 Gateway 無法到達。
+    - `device identity required` → HTTP/非安全環境無法完成裝置驗證。
+    - `unauthorized` / 重新連線迴圈 → 錯誤的權杖/密碼或驗證模式不匹配。
+    - `gateway connect failed:` → UI 指向錯誤的 URL/連接埠或無法存取的 Gateway。
 
-    深入頁面：
+    深度內容頁面：
 
     - [/gateway/troubleshooting#dashboard-control-ui-connectivity](/gateway/troubleshooting#dashboard-control-ui-connectivity)
     - [/web/control-ui](/web/control-ui)
@@ -125,19 +125,19 @@ flowchart TD
     openclaw channels status --probe
     ```
 
-    好的輸出應如下所示：
+    正常的輸出應如下：
 
     - `Service: ... (loaded)`
     - `Runtime: running`
     - `RPC probe: ok`
 
-    常見的日誌簽名：
+    常見日誌特徵：
 
-    - `Gateway start blocked: set gateway.mode=local` → Gateway 模式未設定/遠端。
-    - `refusing to bind gateway ... without auth` → 沒有權杖/密碼的非 local loopback 綁定。
+    - `Gateway start blocked: set gateway.mode=local` → Gateway 模式未設定或為遠端模式。
+    - `refusing to bind gateway ... without auth` → 非 local loopback 綁定且未提供權杖/密碼。
     - `another gateway instance is already listening` 或 `EADDRINUSE` → 連接埠已被佔用。
 
-    深入頁面：
+    深度內容頁面：
 
     - [/gateway/troubleshooting#gateway-service-not-running](/gateway/troubleshooting#gateway-service-not-running)
     - [/gateway/background-process](/gateway/background-process)
@@ -145,7 +145,7 @@ flowchart TD
 
   </Accordion>
 
-  <Accordion title="頻道已連線但訊息未傳遞">
+  <Accordion title="頻道已連線但訊息無法傳遞">
     ```bash
     openclaw status
     openclaw gateway status
@@ -154,26 +154,26 @@ flowchart TD
     openclaw channels status --probe
     ```
 
-    好的輸出應如下所示：
+    正常的輸出應如下：
 
-    - 頻道傳輸已連線。
-    - 配對/允許清單檢查通過。
-    - 在需要時偵測到提及。
+    - 頻道傳輸協定已連線。
+    - 配對/白名單檢查通過。
+    - 在需要的地方偵測到提及 (@mention)。
 
-    常見的日誌簽名：
+    常見日誌特徵：
 
-    - `mention required` → 群組提及限制阻止處理。
-    - `pairing` / `pending` → 私訊傳送者尚未獲批准。
-    - `not_in_channel`、`missing_scope`、`Forbidden`、`401/403` → 頻道權限權杖問題。
+    - `mention required` → 群組提及限制阻擋了處理程序。
+    - `pairing` / `pending` → 私訊發送者尚未被核准。
+    - `not_in_channel`, `missing_scope`, `Forbidden`, `401/403` → 頻道權限權杖問題。
 
-    深入頁面：
+    深度內容頁面：
 
     - [/gateway/troubleshooting#channel-connected-messages-not-flowing](/gateway/troubleshooting#channel-connected-messages-not-flowing)
     - [/channels/troubleshooting](/channels/troubleshooting)
 
   </Accordion>
 
-  <Accordion title="Cron 或心跳未觸發或未送達">
+  <Accordion title="Cron 或 heartbeat 未觸發或未送達">
     ```bash
     openclaw status
     openclaw gateway status
@@ -183,20 +183,20 @@ flowchart TD
     openclaw logs --follow
     ```
 
-    好的輸出應如下所示：
+    正常的輸出應如下：
 
-    - `cron.status` 顯示已啟用並有下一個喚醒時間。
-    - `cron runs` 顯示最近的 `ok` 條目。
-    - 心跳已啟用且不在活動時間之外。
+    - `cron.status` 顯示已啟用且有下次喚醒時間。
+    - `cron runs` 顯示最近有 `ok` 的項目。
+    - Heartbeat 已啟用且不在設定的非活動時間內。
 
-    常見的日誌簽名：
+    常見日誌特徵：
 
     - `cron: scheduler disabled; jobs will not run automatically` → Cron 已停用。
-    - `heartbeat skipped` with `reason=quiet-hours` → 在設定的活動時間之外。
-    - `requests-in-flight` → 主線路忙碌；心跳喚醒被延遲。
-    - `unknown accountId` → 心跳傳遞目標帳戶不存在。
+    - `heartbeat skipped` 帶有 `reason=quiet-hours` → 在設定的活動時間之外。
+    - `requests-in-flight` → 主通道忙碌；heartbeat 喚醒已推遲。
+    - `unknown accountId` → Heartbeat 傳送目標帳號不存在。
 
-    深入頁面：
+    深度內容頁面：
 
     - [/gateway/troubleshooting#cron-and-heartbeat-delivery](/gateway/troubleshooting#cron-and-heartbeat-delivery)
     - [/automation/troubleshooting](/automation/troubleshooting)
@@ -204,7 +204,7 @@ flowchart TD
 
   </Accordion>
 
-  <Accordion title="節點已配對但工具執行攝影機畫布螢幕失敗">
+  <Accordion title="Node 已配對但工具執行相機/畫布/螢幕操作失敗">
     ```bash
     openclaw status
     openclaw gateway status
@@ -213,20 +213,20 @@ flowchart TD
     openclaw logs --follow
     ```
 
-    好的輸出應如下所示：
+    正常的輸出應如下：
 
-    - 節點顯示為已連線且已配對為 `node` 角色。
-    - 您正在調用的命令具有此功能。
-    - 工具已獲授予權限。
+    - Node 列為已連線，且已配對 `node` 角色。
+    - 存在您所調用指令的功能。
+    - 工具的權限狀態已獲授權。
 
-    常見的日誌簽名：
+    常見日誌特徵：
 
-    - `NODE_BACKGROUND_UNAVAILABLE` → 將節點應用程式帶到前景。
-    - `*_PERMISSION_REQUIRED` → 作業系統權限被拒絕/遺失。
-    - `SYSTEM_RUN_DENIED: approval required` → 執行批准待定。
-    - `SYSTEM_RUN_DENIED: allowlist miss` → 命令不在執行允許清單中。
+    - `NODE_BACKGROUND_UNAVAILABLE` → 請將 Node 應用程式移至前景。
+    - `*_PERMISSION_REQUIRED` → 作業系統權限被拒絕或缺失。
+    - `SYSTEM_RUN_DENIED: approval required` → 執行核准尚在等待中。
+    - `SYSTEM_RUN_DENIED: allowlist miss` → 指令不在執行白名單中。
 
-    深入頁面：
+    深度內容頁面：
 
     - [/gateway/troubleshooting#node-paired-tool-fails](/gateway/troubleshooting#node-paired-tool-fails)
     - [/nodes/troubleshooting](/nodes/troubleshooting)
@@ -243,19 +243,19 @@ flowchart TD
     openclaw doctor
     ```
 
-    好的輸出應如下所示：
+    正常的輸出應如下：
 
-    - 瀏覽器狀態顯示 `running: true` 和選定的瀏覽器/設定檔。
-    - `openclaw` 設定檔啟動或 `chrome` 轉發器有附加分頁。
+    - 瀏覽器狀態顯示 `running: true` 且已選取瀏覽器/設定檔。
+    - `openclaw` 設定檔啟動或 `chrome` 轉接器已附加分頁。
 
-    常見的日誌簽名：
+    常見日誌特徵：
 
-    - `Failed to start Chrome CDP on port` → 本機瀏覽器啟動失敗。
-    - `browser.executablePath not found` → 設定的二進位路徑錯誤。
+    - `Failed to start Chrome CDP on port` → 本地瀏覽器啟動失敗。
+    - `browser.executablePath not found` → 設定的執行檔路徑錯誤。
     - `Chrome extension relay is running, but no tab is connected` → 擴充功能未附加。
-    - `Browser attachOnly is enabled ... not reachable` → 僅附加設定檔沒有即時 CDP 目標。
+    - `Browser attachOnly is enabled ... not reachable` → attach-only 設定檔無動態 CDP 目標。
 
-    深入頁面：
+    深度內容頁面：
 
     - [/gateway/troubleshooting#browser-tool-fails](/gateway/troubleshooting#browser-tool-fails)
     - [/tools/browser-linux-troubleshooting](/tools/browser-linux-troubleshooting)

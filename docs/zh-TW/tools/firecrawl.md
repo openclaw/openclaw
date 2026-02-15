@@ -1,20 +1,20 @@
 ---
-summary: "用於 web_fetch 的 Firecrawl 備援（防機器人 + 快取式擷取）"
+summary: "為 web_fetch 提供 Firecrawl 備援方案（防機器人偵測 + 快取擷取）"
 read_when:
-  - 您需要 Firecrawl 支援的網頁擷取功能
+  - 您想要使用 Firecrawl 支援的網頁擷取
   - 您需要 Firecrawl API 金鑰
-  - 您需要用於 web_fetch 的防機器人擷取功能
+  - 您希望為 web_fetch 增加防機器人偵測的擷取功能
 title: "Firecrawl"
 ---
 
 # Firecrawl
 
-OpenClaw 可以使用 **Firecrawl** 作為 `web_fetch` 的備援擷取工具。它是一個託管的內容擷取服務，支援機器人規避和快取，這有助於處理大量使用 JS 的網站或阻擋純 HTTP 擷取的頁面。
+OpenClaw 可以使用 **Firecrawl** 作為 `web_fetch` 的備援擷取器。它是一項託管的內容擷取服務，支援規避機器人偵測和快取功能，有助於處理大量使用 JavaScript 的網站或阻擋一般 HTTP 擷取的頁面。
 
 ## 取得 API 金鑰
 
-1. 建立一個 Firecrawl 帳戶並產生一個 API 金鑰。
-2. 將其儲存到設定中，或在 Gateway 環境中設定 `FIRECRAWL_API_KEY`。
+1. 建立 Firecrawl 帳號並產生 API 金鑰。
+2. 將其儲存在設定中，或在 Gateway 環境變數中設定 `FIRECRAWL_API_KEY`。
 
 ## 設定 Firecrawl
 
@@ -24,7 +24,7 @@ OpenClaw 可以使用 **Firecrawl** 作為 `web_fetch` 的備援擷取工具。�
     web: {
       fetch: {
         firecrawl: {
-          apiKey: "FIRECRAWL_API_KEY_HERE",
+          apiKey: "在此輸入_FIRECRAWL_API_KEY",
           baseUrl: "https://api.firecrawl.dev",
           onlyMainContent: true,
           maxAgeMs: 172800000,
@@ -36,21 +36,23 @@ OpenClaw 可以使用 **Firecrawl** 作為 `web_fetch` 的備援擷取工具。�
 }
 ```
 
-注意事項：
+說明：
 
 - 當存在 API 金鑰時，`firecrawl.enabled` 預設為 true。
-- `maxAgeMs` 控制快取結果的時效（毫秒）。預設為 2 天。
+- `maxAgeMs` 控制快取結果的有效期（毫秒）。預設為 2 天。
 
-## 隱匿/機器人規避
+## 隱身 / 規避機器人偵測
 
-Firecrawl 針對機器人規避暴露了一個 **代理模式** 參數（`basic`、`stealth` 或 `auto`）。OpenClaw 始終針對 Firecrawl 請求使用 `proxy: "auto"` 以及 `storeInCache: true`。如果省略 proxy，Firecrawl 預設為 `auto`。如果基本嘗試失敗，`auto` 會使用隱匿代理重試，這可能會比僅使用基本抓取消耗更多點數。
+Firecrawl 提供了一個用於規避機器人偵測的 **proxy mode** 參數（`basic`、`stealth` 或 `auto`）。
+OpenClaw 對於 Firecrawl 請求一律使用 `proxy: "auto"` 加上 `storeInCache: true`。
+如果省略 proxy，Firecrawl 預設為 `auto`。若基本嘗試失敗，`auto` 會使用 stealth 代理伺服器重試，這可能會比僅使用基本（basic）爬取消耗更多點數（credits）。
 
-## `web_fetch` 如何使用 Firecrawl
+## web_fetch 如何使用 Firecrawl
 
-`web_fetch` 擷取順序：
+`web_fetch` 的擷取順序：
 
-1. 可讀性 (local)
-2. Firecrawl (如果已設定)
-3. 基本 HTML 清理 (最終備援)
+1. Readability (本地)
+2. Firecrawl (若已設定)
+3. 基本 HTML 清理 (最後的備援方案)
 
-有關完整的網頁工具設定，請參閱[網頁工具](/tools/web)。
+請參閱 [Web 工具](/tools/web) 以了解完整的 Web 工具設定。

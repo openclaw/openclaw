@@ -1,27 +1,26 @@
-```
 ---
-summary: "將 OpenCode Zen (策展模型) 與 OpenClaw 搭配使用"
+summary: "在 OpenClaw 中使用 OpenCode Zen（精選模型）"
 read_when:
-  - 您需要 OpenCode Zen 來存取模型
-  - 您需要一份精選的程式碼友善模型清單
+  - 您想使用 OpenCode Zen 存取模型
+  - 您需要一份適合程式開發的精選模型清單
 title: "OpenCode Zen"
 ---
 
 # OpenCode Zen
 
-OpenCode Zen 是由 OpenCode 團隊為程式碼智慧代理推薦的**策展模型清單**。
-這是一個選用、託管的模型存取路徑，它使用 API 金鑰和 `opencode` 供應商。
-Zen 目前處於測試階段。
+OpenCode Zen 是由 OpenCode 團隊為程式開發智慧代理推薦的**精選模型清單**。
+這是一個選用的託管模型存取路徑，使用 API 金鑰與 `opencode` 供應商。
+Zen 目前處於 Beta 階段。
 
 ## CLI 設定
 
 ```bash
 openclaw onboard --auth-choice opencode-zen
-# or non-interactive
+# 或非互動模式
 openclaw onboard --opencode-zen-api-key "$OPENCODE_API_KEY"
 ```
 
-## 設定程式碼片段
+## 設定片段
 
 ```json5
 {
@@ -32,7 +31,6 @@ openclaw onboard --opencode-zen-api-key "$OPENCODE_API_KEY"
 
 ## 注意事項
 
-- `OPENCODE_ZEN_API_KEY` 也支援。
-- 您登入 Zen，新增帳單資訊，並複製您的 API 金鑰。
-- OpenCode Zen 按請求計費；請查看 OpenCode 儀表板了解詳情。
-```
+- 也支援 `OPENCODE_ZEN_API_KEY`。
+- 您登入 Zen，新增帳單詳細資訊，並複製您的 API 金鑰。
+- OpenCode Zen 按請求計費；請查看 OpenCode 控制面板了解詳情。

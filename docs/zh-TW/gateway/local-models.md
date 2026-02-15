@@ -1,19 +1,19 @@
 ---
-summary: "在 local LLM（LM Studio、vLLM、LiteLLM、自訂 OpenAI 端點）上執行 OpenClaw"
+summary: "在本地 LLM（LM Studio、vLLM、LiteLLM、自定義 OpenAI 端點）上執行 OpenClaw"
 read_when:
-  - 您想從自己的 GPU 機器提供模型服務
-  - 您正在連接 LM Studio 或 OpenAI 相容的代理
-  - 您需要最安全的本機模型指南
-title: "本機模型"
+  - 您想從自己的 GPU 設備提供模型服務
+  - 您正在連接 LM Studio 或相容於 OpenAI 的代理伺服器
+  - 您需要最安全的本地模型指南
+title: "本地模型"
 ---
 
-# 本機模型
+# 本地模型
 
-本機執行是可行的，但 OpenClaw 需要大型上下文 + 強大的提示注入防禦。小記憶體會截斷上下文並洩漏安全性。目標要高：**≥2 台頂規 Mac Studios 或同等 GPU 設備（約 $30k+）**。單張 **24 GB** GPU 僅適用於較輕的提示，且延遲較高。請使用**您可以執行的最大/完整尺寸模型變體**；積極量化或「小型」檢查點會增加提示注入風險（請參閱[安全性](/gateway/security)）。
+本地執行是可行的，但 OpenClaw 需要較大的上下文長度（context length）以及針對提示詞注入（prompt injection）的強大防禦能力。小型顯示卡會截斷上下文並導致安全性漏洞。建議配置：**2 台以上頂規 Mac Studio 或同等效能的 GPU 設備（約 3 萬美元以上）**。單張 **24 GB** GPU 僅適用於較簡單的提示詞，且延遲較高。請使用**您能執行的最大 / 完整版模型變體**；過度量化或「小型」的模型權重會增加提示詞注入風險（請參閱 [Security](/gateway/security)）。
 
-## 推薦：LM Studio + MiniMax M2.1 (Responses API, 完整尺寸)
+## 推薦：LM Studio + MiniMax M2.1 (Responses API, 完整版)
 
-目前最佳的本機堆疊。在 LM Studio 中載入 MiniMax M2.1，啟用本機伺服器（預設 `http://127.0.0.1:1234`），並使用 Responses API 將推論與最終文字分開。
+目前最佳的本地技術棧。在 LM Studio 中載入 MiniMax M2.1，啟用本地伺服器（預設為 `http://127.0.0.1:1234`），並使用 Responses API 將推理性內容與最終文字分開。
 
 ```json5
 {
@@ -53,14 +53,14 @@ title: "本機模型"
 **設定清單**
 
 - 安裝 LM Studio：[https://lmstudio.ai](https://lmstudio.ai)
-- 在 LM Studio 中，下載**可用的最大 MiniMax M2.1 版本**（避免「小型」/重度量化變體），啟動伺服器，確認 `http://127.0.0.1:1234/v1/models` 中列出了它。
-- 保持模型載入；冷載入會增加啟動延遲。
+- 在 LM Studio 中，下載**可用的最大 MiniMax M2.1 版本**（避免使用「小型」或高度量化的變體），啟動伺服器，並確認 `http://127.0.0.1:1234/v1/models` 中有列出該模型。
+- 保持模型載入狀態；冷啟動會增加延遲。
 - 如果您的 LM Studio 版本不同，請調整 `contextWindow`/`maxTokens`。
-- 對於 WhatsApp，請堅持使用 Responses API，這樣只會傳送最終文字。
+- 對於 WhatsApp，請堅持使用 Responses API，以確保僅傳送最終文字。
 
-即使執行本機模型，也要保持託管模型的設定；使用 `models.mode: "merge"` 以便備用方案保持可用。
+即使在本地執行，也請保留託管模型的設定；使用 `models.mode: "merge"` 以確保備援（fallback）模型可用。
 
-### 混合設定：託管為主，本機備用
+### 混合設定：託管主模型，本地備援
 
 ```json5
 {
@@ -101,18 +101,18 @@ title: "本機模型"
 }
 ```
 
-### 本機優先，託管作為安全網
+### 本地優先，託管模型作為安全網
 
-交換主要和備用的順序；保持相同的 providers 區塊和 `models.mode: "merge"`，這樣當本機機器關閉時可以回退到 Sonnet 或 Opus。
+調換主模型與備援模型的順序；保留相同的 providers 區塊與 `models.mode: "merge"`，以便在本地設備離線時可以備援回 Sonnet 或 Opus。
 
-### 區域託管 / 資料路由
+### 區域託管 / 數據路由
 
-- 託管的 MiniMax/Kimi/GLM 變體也存在於 OpenRouter 上，帶有區域固定的端點（例如，美國託管）。選擇那裡的區域變體，以將流量保持在您選擇的管轄區內，同時仍使用 `models.mode: "merge"` 作為 Anthropic/OpenAI 備用。
-- 純本機仍然是最強的隱私路徑；當您需要供應商功能但又想控制資料流時，託管區域路由是折衷方案。
+- OpenRouter 上也提供託管的 MiniMax/Kimi/GLM 變體，並具有固定區域的端點（例如美國託管）。在那裡選擇區域變體，可以將流量保持在您選擇的管轄區內，同時仍可使用 `models.mode: "merge"` 進行 Anthropic/OpenAI 的備援。
+- 「僅限本地」仍然是最強的隱私保護路徑；當您需要供應商功能但想控制數據流向時，託管的區域路由是折衷方案。
 
-## 其他 OpenAI 相容的本機代理
+## 其他相容於 OpenAI 的本地代理伺服器
 
-vLLM、LiteLLM、OAI-proxy 或自訂 Gateway都可以運作，只要它們公開 OpenAI 風格的 `/v1` 端點。用您的端點和模型 ID 替換上面的 provider 區塊：
+如果 vLLM、LiteLLM、OAI-proxy 或自定義 Gateway 提供 OpenAI 風格的 `/v1` 端點，則可以使用它們。請將上方的 provider 區塊替換為您的端點和模型 ID：
 
 ```json5
 {
@@ -140,11 +140,11 @@ vLLM、LiteLLM、OAI-proxy 或自訂 Gateway都可以運作，只要它們公開
 }
 ```
 
-保持 `models.mode: "merge"` 以便託管模型作為備用保持可用。
+保持 `models.mode: "merge"`，使託管模型可作為備援使用。
 
 ## 疑難排解
 
-- Gateway能連線到代理嗎？`curl http://127.0.0.1:1234/v1/models`。
-- LM Studio 模型已卸載？重新載入；冷啟動是常見的「卡住」原因。
-- 上下文錯誤？降低 `contextWindow` 或提高您的伺服器限制。
-- 安全性：本機模型會跳過供應商端的篩選器；保持智慧代理範圍狹窄並開啟壓縮以限制提示注入的影響範圍。
+- Gateway 是否可以連接到代理伺服器？`curl http://127.0.0.1:1234/v1/models`。
+- LM Studio 模型是否已卸載？請重新載入；冷啟動是常見的「卡住」原因。
+- 上下文錯誤？降低 `contextWindow` 或調高您的伺服器限制。
+- 安全性：本地模型會跳過供應商端的過濾器；請保持智慧代理的功能專一並開啟壓縮（compaction），以限制提示詞注入的影響範圍。

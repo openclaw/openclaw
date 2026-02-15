@@ -1,66 +1,66 @@
-```
 ---
-summary: "子代理：產生獨立的代理執行，並將結果回報給請求聊天"
+summary: "Sub-agents：產生獨立的智慧代理執行任務，並將結果通知回請求者的聊天中"
 read_when:
-  - 您需要透過代理進行背景/平行工作時
-  - 您正在變更 `sessions_spawn` 或子代理工具策略時
-title: "子代理"
+  - 您希望透過智慧代理進行背景或平行作業
+  - 您正在修改 sessions_spawn 或 sub-agent 工具規則
+title: "Sub-Agents"
 ---
 
-# 子代理
+# Sub-Agents
 
-子代理讓您可以在背景執行任務，而不會阻擋主要對話。當您產生一個子代理時，它會在自己的獨立工作階段中執行，完成工作後，會將結果回報給聊天。
+Sub-agents 讓您可以在不阻塞主對話的情況下執行背景任務。當您產生一個 sub-agent 時，它會在獨立的工作階段中執行，完成工作後會將結果通知回聊天室。
 
-**使用情境：**
+**使用案例：**
 
-- 在主要智慧代理繼續回答問題的同時，研究一個主題
-- 平行執行多個長時間任務（網路爬蟲、程式碼分析、檔案處理）
-- 在多智慧代理設定中，將任務委派給專門的智慧代理
+- 在主智慧代理繼續回答問題時研究某個主題
+- 同時平行執行多個長時間任務（網頁抓取、程式碼分析、檔案處理）
+- 在多智慧代理架構中將任務委派給專業的智慧代理
 
 ## 快速開始
 
-使用子代理最簡單的方式是自然地詢問您的智慧代理：
+使用 sub-agents 最簡單的方式是直接以自然語言詢問您的智慧代理：
 
-> "產生一個子代理來研究最新的 Node.js 發行說明"
+> 「產生一個 sub-agent 來研究最新的 Node.js 版本說明」
 
-智慧代理會在幕後呼叫 `sessions_spawn` 工具。當子代理完成時，它會將其發現結果回報到您的聊天中。
+智慧代理會在幕後呼叫 `sessions_spawn` 工具。當 sub-agent 完成時，它會將發現的資訊通知回您的聊天室。
 
-您也可以明確地指定選項：
+您也可以明確指定選項：
 
-> "產生一個子代理來分析今天的伺服器日誌。使用 gpt-5.2 並設定 5 分鐘逾時。"
+> 「產生一個 sub-agent 來分析今天的伺服器日誌。使用 gpt-5.2 並設定 5 分鐘超時。」
 
 ## 運作方式
 
 <Steps>
-  <Step title="主要智慧代理產生">
-    主要智慧代理呼叫 `sessions_spawn` 並附帶任務描述。此呼叫是**非阻塞的** — 主要智慧代理會立即收到 `{ status: "accepted", runId, childSessionKey }`。
+  <Step title="主智慧代理產生任務">
+    主智慧代理呼叫 `sessions_spawn` 並附帶任務描述。此呼叫是**非阻塞的** —— 主智慧代理會立即收到 `{ status: "accepted", runId, childSessionKey }`。
   </Step>
-  <Step title="子代理在背景執行">
-    新的獨立工作階段 (`agent:<agentId>:subagent:<uuid>`) 會在專用的 `subagent` 佇列通道上建立。
+  <Step title="Sub-agent 在背景執行">
+    系統會在專用的 `subagent` 佇列通道中建立一個新的獨立工作階段 (`agent:<agentId>:subagent:<uuid>`)。
   </Step>
-  <Step title="結果已公佈">
-    當子代理完成時，它會將其發現結果回報給請求聊天。主要智慧代理會發布一個自然語言摘要。
+  <Step title="通知結果">
+    當 sub-agent 完成時，它會將發現的結果通知回請求者的聊天室。主智慧代理會發布一段自然語言摘要。
   </Step>
-  <Step title="工作階段已封存">
-    子代理工作階段會在 60 分鐘後自動封存（可設定）。對話記錄會保留。
-  </Steps>
+  <Step title="工作階段封存">
+    Sub-agent 工作階段會在 60 分鐘後（可設定）自動封存。對話紀錄會被保留。
+  </Step>
+</Steps>
 
 <Tip>
-每個子代理都有其**自己**的上下文和 Token 用量。為子代理設定一個更便宜的模型以節省費用 — 請參閱下面的 [設定預設模型](#setting-a-default-model)。
+每個 sub-agent 都有其**自己的**上下文和 Token 使用量。為 sub-agent 設定較便宜的模型以節省成本 —— 請參閱下方的[設定預設模型](#設定預設模型)。
 </Tip>
 
 ## 設定
 
-子代理無需設定即可立即使用。預設值：
+Sub-agents 無需任何設定即可直接使用。預設值：
 
-- 模型：目標智慧代理的正常模型選擇（除非 `subagents.model` 已設定）
-- 思考：無子代理覆蓋（除非 `subagents.thinking` 已設定）
-- 最大並發數：8
+- 模型：目標智慧代理的正常模型選擇（除非設定了 `subagents.model`）
+- 思考 (Thinking)：無 sub-agent 覆寫（除非設定了 `subagents.thinking`）
+- 最大並行數：8
 - 自動封存：60 分鐘後
 
 ### 設定預設模型
 
-為子代理使用更便宜的模型以節省 Token 費用：
+為 sub-agent 使用較便宜的模型以節省 Token 成本：
 
 ```json5
 {
@@ -88,9 +88,9 @@ title: "子代理"
 }
 ```
 
-### 每個智慧代理覆蓋
+### 個別智慧代理覆寫
 
-在多智慧代理設定中，您可以為每個智慧代理設定子代理預設值：
+在多智慧代理架構中，您可以為每個智慧代理設定 sub-agent 預設值：
 
 ```json5
 {
@@ -113,34 +113,34 @@ title: "子代理"
 }
 ```
 
-### 並發性
+### 並行限制
 
-控制可以同時執行的子代理數量：
+控制可以同時執行的 sub-agent 數量：
 
 ```json5
 {
   agents: {
     defaults: {
       subagents: {
-        maxConcurrent: 4, // default: 8
+        maxConcurrent: 4, // 預設：8
       },
     },
   },
 }
 ```
 
-子代理使用專用的佇列通道 (`subagent`)，該通道與主要智慧代理佇列分開，因此子代理執行不會阻擋入站回覆。
+Sub-agents 使用獨立於主智慧代理佇列的專用佇列通道 (`subagent`)，因此 sub-agent 的執行不會阻塞傳入的回覆。
 
 ### 自動封存
 
-子代理工作階段會在可設定的時間後自動封存：
+Sub-agent 工作階段會在設定的時間後自動封存：
 
 ```json5
 {
   agents: {
     defaults: {
       subagents: {
-        archiveAfterMinutes: 120, // default: 60
+        archiveAfterMinutes: 120, // 預設：60
       },
     },
   },
@@ -148,324 +148,11 @@ title: "子代理"
 ```
 
 <Note>
-封存會將對話記錄重新命名為 `*.deleted.<timestamp>`（相同資料夾）— 對話記錄會保留，不會刪除。自動封存計時器是盡力而為的；如果 Gateway 重新啟動，待處理的計時器將會遺失。
+封存會將對話紀錄重新命名為 `*.deleted.<timestamp>`（位於同一資料夾）—— 對話紀錄會被保留而非刪除。自動封存定時器是盡力而為的；如果 Gateway 重新啟動，待處理的定時器將會遺失。
 </Note>
 
 ## `sessions_spawn` 工具
 
-這是智慧代理呼叫以建立子代理的工具。
+這是智慧代理用來建立 sub-agent 的工具。
 
-### 參數
-
-| 參數                | 類型                   | 預設值            | 描述                                                    |
-| ------------------- | ---------------------- | ------------------ | -------------------------------------------------------------- |
-| `task`              | string                 | _(必填)_       | 子代理應該做什麼                                   |
-| `label`             | string                 | —                  | 用於識別的簡短標籤                                 |
-| `agentId`           | string                 | _(呼叫者的智慧代理)_ | 在不同的智慧代理 ID 下產生（必須被允許）             |
-| `model`             | string                 | _(選填)_       | 覆蓋此子代理的模型                          |
-| `thinking`          | string                 | _(選填)_       | 覆蓋思考層級 (`off`、`low`、`medium`、`high` 等) |
-| `runTimeoutSeconds` | number                 | `0` (無限制)     | 在 N 秒後終止子代理                            |
-| `cleanup`           | `"delete"` \| `"keep"` | `"keep"`           | 公佈後立即封存 `"delete"`                 |
-
-### 模型解析順序
-
-子代理模型按此順序解析（第一個匹配勝出）：
-
-1. `sessions_spawn` 呼叫中明確的 `model` 參數
-2. 每個智慧代理的設定：`agents.list[].subagents.model`
-3. 全域預設值：`agents.defaults.subagents.model`
-4. 目標智慧代理該新工作階段的正常模型解析
-
-思考層級按此順序解析：
-
-1. `sessions_spawn` 呼叫中明確的 `thinking` 參數
-2. 每個智慧代理的設定：`agents.list[].subagents.thinking`
-3. 全域預設值：`agents.defaults.subagents.thinking`
-4. 否則不應用子代理特定的思考覆蓋
-
-<Note>
-無效的模型值會被靜默跳過 — 子代理會在下一個有效預設值上執行，並在工具結果中發出警告。
-</Note>
-
-### 跨智慧代理產生
-
-預設情況下，子代理只能在其自己的智慧代理 ID 下產生。若要允許智慧代理在其他智慧代理 ID 下產生子代理：
-
-```json5
-{
-  agents: {
-    list: [
-      {
-        id: "orchestrator",
-        subagents: {
-          allowAgents: ["researcher", "coder"], // or ["*"] to allow any
-        },
-      },
-    ],
-  },
-}
-```
-
-<Tip>
-使用 `agents_list` 工具來發現目前允許 `sessions_spawn` 的智慧代理 ID。
-</Tip>
-
-## 管理子代理 (`/subagents`)
-
-使用 `/subagents` 斜線指令來檢查和控制當前工作階段的子代理執行：
-
-| 指令                                       | 描述                                    |
-| ------------------------------------------ | ---------------------------------------------- |
-| `/subagents list`                          | 列出所有子代理執行（活動中和已完成） |
-| `/subagents stop <id|#|all>`               | 停止正在執行的子代理                       |
-| `/subagents log <id|#> [limit] [tools]`    | 查看子代理對話記錄                      |
-| `/subagents info <id|#>`                   | 顯示詳細執行中繼資料                     |
-| `/subagents send <id|#> <message>`         | 向正在執行的子代理發送訊息          |
-
-您可以透過清單索引 (`1`、`2`)、執行 ID 前綴、完整工作階段金鑰或 `last` 引用子代理。
-
-<AccordionGroup>
-  <Accordion title="範例：列出並停止子代理">
-    ```
-    /subagents list
-    ```
-
-    ```
-    🧭 Subagents (current session)
-    Active: 1 · Done: 2
-    1) ✅ · research logs · 2m31s · run a1b2c3d4 · agent:main:subagent:...
-    2) ✅ · check deps · 45s · run e5f6g7h8 · agent:main:subagent:...
-    3) 🔄 · deploy staging · 1m12s · run i9j0k1l2 · agent:main:subagent:...
-    ```
-
-    ```
-    /subagents stop 3
-    ```
-
-    ```
-    ⚙️ 已請求停止 deploy staging。
-    ```
-
-  </Accordion>
-  <Accordion title="範例：檢查子代理">
-    ```
-    /subagents info 1
-    ```
-
-    ```
-    ℹ️ 子代理資訊
-    Status: ✅
-    Label: research logs
-    Task: Research the latest server error logs and summarize findings
-    Run: a1b2c3d4-...
-    Session: agent:main:subagent:...
-    Runtime: 2m31s
-    Cleanup: keep
-    Outcome: ok
-    ```
-
-  </Accordion>
-  <Accordion title="範例：查看子代理日誌">
-    ```
-    /subagents log 1 10
-    ```
-
-    顯示子代理對話記錄的最後 10 則訊息。新增 `tools` 以包含工具呼叫訊息：
-
-    ```
-    /subagents log 1 10 tools
-    ```
-
-  </Accordion>
-  <Accordion title="範例：發送後續訊息">
-    ```
-    /subagents send 3 "Also check the staging environment"
-    ```
-
-    將訊息發送到正在執行的子代理工作階段，並等待最多 30 秒以獲得回覆。
-
-  </Accordion>
-</AccordionGroup>
-
-## 公佈 (結果如何回報)
-
-當子代理完成時，它會經過一個**公佈**步驟：
-
-1. 擷取子代理的最終回覆
-2. 向主要智慧代理的工作階段發送一則包含結果、狀態和統計資料的摘要訊息
-3. 主要智慧代理向您的聊天發布自然語言摘要
-
-公佈回覆會在可用時保留線程/主題路由（Slack 線程、Telegram 主題、Matrix 線程）。
-
-### 公佈統計資料
-
-每次公佈都包含一個帶有以下內容的統計行：
-
-- 執行時間
-- Token 用量（輸入/輸出/總計）
-- 預估費用（當透過 `models.providers.*.models[].cost` 設定模型定價時）
-- 工作階段金鑰、工作階段 ID 和對話記錄路徑
-
-### 公佈狀態
-
-公佈訊息包含一個從執行結果（而非模型輸出）派生的狀態：
-
-- **成功完成** (`ok`) — 任務正常完成
-- **錯誤** — 任務失敗（錯誤詳細資料在備註中）
-- **逾時** — 任務超出 `runTimeoutSeconds`
-- **未知** — 無法確定狀態
-
-<Tip>
-如果不需要面向使用者的公佈，主要智慧代理的摘要步驟可以返回 `NO_REPLY`，並且不會發布任何內容。
-這與 `ANNOUNCE_SKIP` 不同，後者用於智慧代理到智慧代理的公佈流程 (`sessions_send`)。
-</Tip>
-
-## 工具策略
-
-預設情況下，子代理會獲得**所有工具，除了**一組被拒絕的工具，這些工具對於背景任務而言是不安全或不必要的：
-
-<AccordionGroup>
-  <Accordion title="預設拒絕的工具">
-    | 被拒絕的工具 | 原因 |
-    |-------------|--------|
-    | `sessions_list` | 工作階段管理 — 由主要智慧代理協調 |
-    | `sessions_history` | 工作階段管理 — 由主要智慧代理協調 |
-    | `sessions_send` | 工作階段管理 — 由主要智慧代理協調 |
-    | `sessions_spawn` | 無巢狀擴展（子代理無法產生子代理） |
-    | `gateway` | 系統管理 — 從子代理執行危險 |
-    | `agents_list` | 系統管理 |
-    | `whatsapp_login` | 互動式設定 — 非任務 |
-    | `session_status` | 狀態/排程 — 由主要智慧代理協調 |
-    | `cron` | 狀態/排程 — 由主要智慧代理協調 |
-    | `memory_search` | 在產生提示中傳遞相關資訊即可 |
-    | `memory_get` | 在產生提示中傳遞相關資訊即可 |
-  </Accordion>
-</AccordionGroup>
-
-### 自訂子代理工具
-
-您可以進一步限制子代理工具：
-
-```json5
-{
-  tools: {
-    subagents: {
-      tools: {
-        // deny 總是優先於 allow
-        deny: ["browser", "firecrawl"],
-      },
-    },
-  },
-}
-```
-
-若要將子代理限制為**僅限**特定工具：
-
-```json5
-{
-  tools: {
-    subagents: {
-      tools: {
-        allow: ["read", "exec", "process", "write", "edit", "apply_patch"],
-        // 如果設定了 deny，仍然會優先
-      },
-    },
-  },
-}
-```
-
-<Note>
-自訂拒絕項目會**新增到**預設拒絕清單中。如果設定了 `allow`，則只有這些工具可用（預設拒絕清單仍然適用）。
-</Note>
-
-## 身份驗證
-
-子代理身份驗證是透過**智慧代理 ID** 解析，而不是透過工作階段類型：
-
-- 身份驗證儲存會從目標智慧代理的 `agentDir` 載入
-- 主要智慧代理的身份驗證設定檔會合併作為**備用**（智慧代理設定檔在衝突時勝出）
-- 合併是累加的 — 主要設定檔始終可用作備用
-
-<Note>
-目前不支援每個子代理完全隔離的身份驗證。
-</Note>
-
-## 上下文和系統提示
-
-與主要智慧代理相比，子代理會收到精簡的系統提示：
-
-- **包含：** 工具、工作區、執行時區段，以及 `AGENTS.md` 和 `TOOLS.md`
-- **不包含：** `SOUL.md`、`IDENTITY.md`、`USER.md`、`HEARTBEAT.md`、`BOOTSTRAP.md`
-
-子代理還會收到一個以任務為中心的系統提示，指示其專注於指定的任務，完成任務，而不是充當主要智慧代理。
-
-## 停止子代理
-
-| 方法                 | 效果                                                                    |
-| ---------------------- | ------------------------------------------------------------------------- |
-| 聊天中的 `/stop`    | 終止主要工作階段**和**從其產生所有活動中的子代理執行 |
-| `/subagents stop <id>` | 停止特定的子代理，而不影響主要工作階段             |
-| `runTimeoutSeconds`    | 在指定時間後自動終止子代理執行           |
-
-<Note>
-`runTimeoutSeconds` 不會自動封存工作階段。工作階段會保留，直到正常的封存計時器觸發。
-</Note>
-
-## 完整設定範例
-
-<Accordion title="完整的子代理設定">
-```json5
-{
-  agents: {
-    defaults: {
-      model: { primary: "anthropic/claude-sonnet-4" },
-      subagents: {
-        model: "minimax/MiniMax-M2.1",
-        thinking: "low",
-        maxConcurrent: 4,
-        archiveAfterMinutes: 30,
-      },
-    },
-    list: [
-      {
-        id: "main",
-        default: true,
-        name: "Personal Assistant",
-      },
-      {
-        id: "ops",
-        name: "Ops Agent",
-        subagents: {
-          model: "anthropic/claude-sonnet-4",
-          allowAgents: ["main"], // ops 可以產生 "main" 下的子代理
-        },
-      },
-    ],
-  },
-  tools: {
-    subagents: {
-      tools: {
-        deny: ["browser"], // 子代理不能使用瀏覽器
-      },
-    },
-  },
-}
-```
-</Accordion>
-
-## 限制
-
-<Warning>
-- **盡力而為的公佈：** 如果 Gateway 重新啟動，待處理的公佈工作將會遺失。
-- **無巢狀產生：** 子代理無法產生自己的子代理。
-- **共享資源：** 子代理共享 Gateway 處理程序；使用 `maxConcurrent` 作為安全閥。
-- **自動封存是盡力而為的：** Gateway 重新啟動時，待處理的封存計時器將會遺失。
-</Warning>
-
-## 參閱
-
-- [工作階段工具](/concepts/session-tool) — 關於 `sessions_spawn` 和其他工作階段工具的詳細資訊
-- [多智慧代理沙箱和工具](/tools/multi-agent-sandbox-tools) — 每個智慧代理的工具限制和沙箱隔離
-- [設定](/gateway/configuration) — `agents.defaults.subagents` 參考
-- [佇列](/concepts/queue) — `subagent` 通道如何運作
-```
+###

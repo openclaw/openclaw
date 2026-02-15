@@ -1,17 +1,17 @@
 ---
-summary: "CLI 參考文件：`openclaw memory` (狀態/索引/搜尋)"
+summary: "openclaw memory 的 CLI 參考文件（狀態/索引/搜尋）"
 read_when:
-  - 您希望為語義記憶建立索引或進行搜尋
-  - 您正在偵錯記憶體可用性或索引功能
-title: "記憶體"
+  - 當您想要索引或搜尋語義記憶時
+  - 當您在偵錯記憶體可用性或索引功能時
+title: "memory"
 ---
 
 # `openclaw memory`
 
-管理語義記憶體索引和搜尋。
-由活躍的記憶體外掛程式提供（預設：`memory-core`；設定 `plugins.slots.memory = "none"` 可停用）。
+管理語義記憶的索引與搜尋。
+由作用中的記憶體外掛程式提供（預設：`memory-core`；將 `plugins.slots.memory = "none"` 即可停用）。
 
-相關：
+相關內容：
 
 - 記憶體概念：[記憶體](/concepts/memory)
 - 外掛程式：[外掛程式](/tools/plugin)
@@ -32,14 +32,14 @@ openclaw memory index --agent main --verbose
 
 ## 選項
 
-通用：
+常用：
 
-- `--agent <id>`: 限制為單一智慧代理（預設：所有已設定的智慧代理）。
-- `--verbose`: 在探測和索引期間發出詳細記錄。
+- `--agent <id>`：限定範圍於單一智慧代理（預設：所有已設定的智慧代理）。
+- `--verbose`：在探測與索引期間輸出詳細紀錄。
 
-注意事項：
+說明：
 
-- `memory status --deep` 探測向量 + 嵌入的可用性。
-- `memory status --deep --index` 如果儲存庫有變更，則執行重新索引。
-- `memory index --verbose` 列印每個階段的詳細資訊（供應商、模型、來源、批次活動）。
+- `memory status --deep` 探測向量（vector）與 embedding 的可用性。
+- `memory status --deep --index` 若儲存空間有變動（dirty），則執行重新索引。
+- `memory index --verbose` 會印出各階段的詳細資訊（供應商、模型、來源、批次活動）。
 - `memory status` 包含透過 `memorySearch.extraPaths` 設定的任何額外路徑。

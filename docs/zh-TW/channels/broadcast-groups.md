@@ -2,7 +2,7 @@
 summary: "將 WhatsApp 訊息廣播給多個智慧代理"
 read_when:
   - 設定廣播群組
-  - 在 WhatsApp 中偵錯多智慧代理回覆
+  - 對 WhatsApp 中的多智慧代理回應進行疑難排解
 status: experimental
 title: "廣播群組"
 ---
@@ -12,68 +12,68 @@ title: "廣播群組"
 **狀態：** 實驗性  
 **版本：** 於 2026.1.9 新增
 
-## 概覽
+## 總覽
 
-廣播群組讓多個智慧代理能夠同時處理並回覆同一則訊息。這使您能夠建立專業化的智慧代理團隊，在單一 WhatsApp 群組或私訊中協同工作 — 全部使用一個電話號碼。
+廣播群組 (Broadcast Groups) 讓多個智慧代理 (agents) 能同時處理並回應同一則訊息。這讓您能建立專門的智慧代理團隊，在單一 WhatsApp 群組或私訊 (DM) 中共同協作 —— 全部使用同一個電話號碼。
 
 目前範圍：**僅限 WhatsApp** (web 頻道)。
 
-廣播群組在頻道允許清單和群組啟用規則之後進行評估。在 WhatsApp 群組中，這表示當 OpenClaw 通常會回覆時（例如：在提及時，根據您的群組設定），就會發生廣播。
+廣播群組會在頻道白名單和群組啟用規則之後進行評估。在 WhatsApp 群組中，這代表廣播會在 OpenClaw 平常會回應的時候發生（例如：根據您的群組設定，在被提及時觸發）。
 
-## 用例
+## 使用案例
 
-### 1. 專業化智慧代理團隊
+### 1. 專門的智慧代理團隊
 
-部署具有原子性、專注職責的多個智慧代理：
+部署多個具有原子化且專注職責的智慧代理：
 
 ```
-Group: "Development Team"
-Agents:
-  - CodeReviewer (reviews code snippets)
-  - DocumentationBot (generates docs)
-  - SecurityAuditor (checks for vulnerabilities)
-  - TestGenerator (suggests test cases)
+群組："開發團隊"
+智慧代理：
+  - CodeReviewer (審閱程式碼片段)
+  - DocumentationBot (產生文件)
+  - SecurityAuditor (檢查漏洞)
+  - TestGenerator (建議測試案例)
 ```
 
-每個智慧代理處理相同的訊息並提供其專業化的觀點。
+每個智慧代理都會處理同一則訊息，並提供其專門的觀點。
 
 ### 2. 多語言支援
 
 ```
-Group: "International Support"
-Agents:
-  - Agent_EN (responds in English)
-  - Agent_DE (responds in German)
-  - Agent_ES (responds in Spanish)
+群組："國際支援"
+智慧代理：
+  - Agent_EN (以英文回應)
+  - Agent_DE (以德文回應)
+  - Agent_ES (以西班牙文回應)
 ```
 
-### 3. 品質保證工作流程
+### 3. 品質保證流程
 
 ```
-Group: "Customer Support"
-Agents:
-  - SupportAgent (provides answer)
-  - QAAgent (reviews quality, only responds if issues found)
+群組："客戶支援"
+智慧代理：
+  - SupportAgent (提供解答)
+  - QAAgent (審閱品質，僅在發現問題時回應)
 ```
 
 ### 4. 任務自動化
 
 ```
-Group: "Project Management"
-Agents:
-  - TaskTracker (updates task database)
-  - TimeLogger (logs time spent)
-  - ReportGenerator (creates summaries)
+群組："專案管理"
+智慧代理：
+  - TaskTracker (更新任務資料庫)
+  - TimeLogger (記錄花費時間)
+  - ReportGenerator (建立摘要)
 ```
 
 ## 設定
 
 ### 基本設定
 
-在頂層新增 `broadcast` 部分（與 `bindings` 並列）。鍵是 WhatsApp 對等 ID：
+新增一個最上層的 `broadcast` 區塊（位於 `bindings` 旁邊）。鍵名為 WhatsApp peer id：
 
-- 群組聊天：群組 JID（例如 `120363403215116621 @g.us`）
-- 私訊：E.164 電話號碼（例如 `+15551234567`）
+- 群組對話：群組 JID（例如 `120363403215116621 @g.us`）
+- 私訊 (DM)：E.164 電話號碼（例如 `+15551234567`）
 
 ```json
 {
@@ -83,13 +83,13 @@ Agents:
 }
 ```
 
-**結果：** 當 OpenClaw 在此聊天中回覆時，它將執行所有三個智慧代理。
+**結果：** 當 OpenClaw 在此對話中回應時，它將執行所有三個智慧代理。
 
 ### 處理策略
 
 控制智慧代理如何處理訊息：
 
-#### 並行（預設）
+#### 並行 (Parallel)（預設）
 
 所有智慧代理同時處理：
 
@@ -102,9 +102,9 @@ Agents:
 }
 ```
 
-#### 依序
+#### 循序 (Sequential)
 
-智慧代理按順序處理（一個等待前一個完成）：
+智慧代理依序處理（後一個會等待前一個完成）：
 
 ```json
 {
@@ -150,42 +150,42 @@ Agents:
 }
 ```
 
-## 工作原理
+## 運作原理
 
 ### 訊息流程
 
 1. **傳入訊息**抵達 WhatsApp 群組
-2. **廣播檢查**：系統檢查對等 ID 是否在 `broadcast` 中
-3. **如果在廣播清單中**：
-   - 所有列出的智慧代理處理訊息
-   - 每個智慧代理都有自己的工作階段鍵和隔離的上下文
-   - 智慧代理並行（預設）或依序處理
-4. **如果不在廣播清單中**：
-   - 套用正常路由（第一個匹配的綁定）
+2. **廣播檢查**：系統檢查 peer ID 是否在 `broadcast` 中
+3. **如果位於廣播列表**：
+   - 所有列出的智慧代理都會處理該訊息
+   - 每個智慧代理都有自己的工作階段 (session) 金鑰和隔離的上下文
+   - 智慧代理會以並行（預設）或循序方式處理
+4. **如果不位於廣播列表**：
+   - 套用正常路由（第一個符合的 binding）
 
-注意：廣播群組不會繞過頻道允許清單或群組啟用規則（提及/指令/等）。它們只在訊息符合處理資格時，改變**哪些智慧代理運行**。
+注意：廣播群組不會跳過頻道白名單或群組啟用規則（提及/指令等）。它們僅在訊息符合處理資格時更改*執行的智慧代理*。
 
 ### 工作階段隔離
 
-廣播群組中的每個智慧代理都維持完全獨立的：
+廣播群組中的每個智慧代理都保持完全獨立的：
 
-- **工作階段鍵**（`agent:alfred:whatsapp:group:120363...` 與 `agent:baerbel:whatsapp:group:120363...`）
-- **對話記錄**（智慧代理看不到其他智慧代理的訊息）
-- **工作區**（如果已設定，則為獨立的沙箱）
-- **工具存取**（不同的允許/拒絕清單）
-- **記憶體/上下文**（獨立的 IDENTITY.md、SOUL.md 等）
-- **群組上下文緩衝區**（用於上下文的最近群組訊息）是每個對等共用的，因此所有廣播智慧代理在觸發時都會看到相同的上下文
+- **工作階段 (Session) 金鑰** (`agent:alfred:whatsapp:group:120363...` vs `agent:baerbel:whatsapp:group:120363...`)
+- **對話歷史記錄**（智慧代理看不到其他智慧代理的訊息）
+- **工作區**（若有設定則為獨立的沙箱隔離）
+- **工具存取**（不同的允許/拒絕列表）
+- **記憶體/上下文**（獨立的 IDENTITY.md, SOUL.md 等）
+- **群組上下文緩衝區**（用於上下文的近期群組訊息）是依 peer 共用的，因此所有廣播代理在觸發時會看到相同的上下文
 
-這允許每個智慧代理擁有：
+這讓每個智慧代理可以擁有：
 
 - 不同的個性
-- 不同的工具存取權限（例如，唯讀與讀寫）
-- 不同的模型（例如，opus 與 sonnet）
+- 不同的工具存取權限（例如：唯讀 vs. 讀寫）
+- 不同的模型 (model)（例如：opus vs. sonnet）
 - 安裝不同的 Skills
 
 ### 範例：隔離的工作階段
 
-在群組 `120363403215116621 @g.us` 中，智慧代理為 `["alfred", "baerbel"]`：
+在群組 `120363403215116621 @g.us` 中有智慧代理 `["alfred", "baerbel"]`：
 
 **Alfred 的上下文：**
 
@@ -207,9 +207,9 @@ Tools: read only
 
 ## 最佳實踐
 
-### 1. 保持智慧代理專注
+### 1. 保持智慧代理功能專注
 
-設計每個智慧代理時，讓其只負責一個明確的職責：
+為每個智慧代理設計單一且明確的職責：
 
 ```json
 {
@@ -220,11 +220,11 @@ Tools: read only
 ```
 
 ✅ **優點：** 每個智慧代理只有一項工作  
-❌ **缺點：** 一個通用的「開發協助」智慧代理
+❌ **缺點：** 單一個通用的 "dev-helper" 智慧代理
 
-### 2. 使用描述性名稱
+### 2. 使用具描述性的名稱
 
-清楚表明每個智慧代理的功能：
+讓每個智慧代理的功能清晰明確：
 
 ```json
 {
@@ -238,7 +238,7 @@ Tools: read only
 
 ### 3. 設定不同的工具存取權限
 
-僅授予智慧代理所需的工具：
+僅提供智慧代理所需的工具：
 
 ```json
 {
@@ -255,35 +255,35 @@ Tools: read only
 
 ### 4. 監控效能
 
-智慧代理數量眾多時，請考慮：
+當智慧代理較多時，請考慮：
 
 - 使用 `"strategy": "parallel"`（預設）以提高速度
-- 將廣播群組限制為 5-10 個智慧代理
-- 對於較簡單的智慧代理，使用速度較快的模型
+- 將廣播群組限制在 5-10 個智慧代理
+- 為較簡單的智慧代理使用更快的模型
 
 ### 5. 優雅地處理失敗
 
-智慧代理獨立失敗。一個智慧代理的錯誤不會阻止其他智慧代理：
+智慧代理會獨立失敗。其中一個智慧代理的錯誤不會阻礙其他代理：
 
 ```
-Message → [Agent A ✓, Agent B ✗ error, Agent C ✓]
-Result: Agent A 和 C 回覆，Agent B 記錄錯誤
+訊息 → [智慧代理 A ✓, 智慧代理 B ✗ 錯誤, 智慧代理 C ✓]
+結果：智慧代理 A 和 C 回應，智慧代理 B 記錄錯誤
 ```
 
 ## 相容性
 
-### 供應商
+### 供應商 (Providers)
 
-廣播群組目前適用於：
+廣播群組目前可用於：
 
 - ✅ WhatsApp（已實作）
-- 🚧 Telegram（規劃中）
-- 🚧 Discord（規劃中）
-- 🚧 Slack（規劃中）
+- 🚧 Telegram（計畫中）
+- 🚧 Discord（計畫中）
+- 🚧 Slack（計畫中）
 
 ### 路由
 
-廣播群組與現有路由協同工作：
+廣播群組可與現有路由並存：
 
 ```json
 {
@@ -299,44 +299,44 @@ Result: Agent A 和 C 回覆，Agent B 記錄錯誤
 }
 ```
 
-- `GROUP_A`：只有 alfred 回覆（正常路由）
-- `GROUP_B`：agent1 和 agent2 回覆（廣播）
+- `GROUP_A`：僅 alfred 回應（正常路由）
+- `GROUP_B`：agent1 與 agent2 同時回應（廣播）
 
-**優先順序：** `broadcast` 的優先順序高於 `bindings`。
+**優先級：** `broadcast` 優先於 `bindings`。
 
 ## 疑難排解
 
-### 智慧代理沒有回覆
+### 智慧代理沒有回應
 
 **檢查：**
 
 1. 智慧代理 ID 存在於 `agents.list` 中
-2. 對等 ID 格式正確（例如 `120363403215116621 @g.us`）
-3. 智慧代理不在拒絕清單中
+2. Peer ID 格式正確（例如 `120363403215116621 @g.us`）
+3. 智慧代理不在拒絕列表中
 
-**偵錯：**
+**除錯：**
 
 ```bash
 tail -f ~/.openclaw/logs/gateway.log | grep broadcast
 ```
 
-### 只有一個智慧代理回覆
+### 只有一個智慧代理回應
 
-**原因：** 對等 ID 可能在 `bindings` 中，但不在 `broadcast` 中。
+**原因：** Peer ID 可能在 `bindings` 中，但不在 `broadcast` 中。
 
-**修復：** 新增到廣播設定或從綁定中移除。
+**修正：** 新增至廣播設定或從 bindings 中移除。
 
 ### 效能問題
 
-**如果智慧代理數量多時速度緩慢：**
+**如果智慧代理較多導致速度變慢：**
 
 - 減少每個群組的智慧代理數量
-- 使用較輕量級的模型（sonnet 而非 opus）
+- 使用更輕量的模型（用 sonnet 代替 opus）
 - 檢查沙箱啟動時間
 
 ## 範例
 
-### 範例 1：程式碼審查團隊
+### 範例 1：程式碼審閱團隊
 
 ```json
 {
@@ -372,13 +372,13 @@ tail -f ~/.openclaw/logs/gateway.log | grep broadcast
 }
 ```
 
-**使用者傳送：** 程式碼片段  
-**回覆：**
+**使用者發送：** 程式碼片段  
+**回應：**
 
-- code-formatter：「已修正縮排並新增類型提示」
-- security-scanner：「⚠️ 第 12 行存在 SQL 注入漏洞」
-- test-coverage：「覆蓋率為 45%，遺漏錯誤情況的測試」
-- docs-checker：「`process_data` 函數缺少文件字串」
+- code-formatter："已修正縮排並新增型別提示"
+- security-scanner："⚠️ 第 12 行有 SQL 注入漏洞"
+- test-coverage："測試覆蓋率為 45%，缺少錯誤情況的測試"
+- docs-checker："函式 `process_data` 缺少 docstring"
 
 ### 範例 2：多語言支援
 
@@ -400,7 +400,7 @@ tail -f ~/.openclaw/logs/gateway.log | grep broadcast
 
 ## API 參考
 
-### 設定綱要
+### 設定結構描述 (Config Schema)
 
 ```typescript
 interface OpenClawConfig {
@@ -415,27 +415,27 @@ interface OpenClawConfig {
 
 - `strategy`（選填）：如何處理智慧代理
   - `"parallel"`（預設）：所有智慧代理同時處理
-  - `"sequential"`：智慧代理按陣列順序處理
-- `[peerId]`：WhatsApp 群組 JID、E.164 號碼或其他對等 ID
+  - `"sequential"`：智慧代理依陣列順序處理
+- `[peerId]`：WhatsApp 群組 JID、E.164 號碼或其他 peer ID
   - 值：應處理訊息的智慧代理 ID 陣列
 
 ## 限制
 
-1. **最大智慧代理數量：** 沒有硬性限制，但 10 個以上的智慧代理可能會變慢
-2. **共用上下文：** 智慧代理彼此看不到對方的回覆（設計如此）
-3. **訊息排序：** 並行回覆可能以任意順序到達
-4. **速率限制：** 所有智慧代理都計入 WhatsApp 速率限制
+1. **最大代理數：** 無硬性限制，但 10 個以上智慧代理可能較慢
+2. **共用上下文：** 智慧代理看不到彼此的回應（設計使然）
+3. **訊息順序：** 並行回應可能以任何順序抵達
+4. **速率限制：** 所有智慧代理都會計入 WhatsApp 速率限制
 
 ## 未來增強功能
 
-規劃中的功能：
+計畫中的功能：
 
-- [ ] 共用上下文模式（智慧代理可以看到彼此的回覆）
-- [ ] 智慧代理協調（智慧代理可以互相發出訊號）
-- [ ] 動態智慧代理選擇（根據訊息內容選擇智慧代理）
-- [ ] 智慧代理優先級（某些智慧代理比其他智慧代理優先回覆）
+- [ ] 共用上下文模式（智慧代理可看到彼此的回應）
+- [ ] 智慧代理協作（智慧代理可互相發送信號）
+- [ ] 動態代理選擇（根據訊息內容選擇智慧代理）
+- [ ] 智慧代理優先權（某些代理比其他代理先回應）
 
-## 參閱
+## 延伸閱讀
 
 - [多智慧代理設定](/tools/multi-agent-sandbox-tools)
 - [路由設定](/channels/channel-routing)

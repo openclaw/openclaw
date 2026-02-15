@@ -1,16 +1,16 @@
 ---
-summary: "Deepgram 傳入語音備忘錄轉錄"
+summary: "針對傳入語音訊息的 Deepgram 逐字稿功能"
 read_when:
-  - 當您需要 Deepgram 語音轉文字功能用於音訊附件時
-  - 當您需要快速 Deepgram 設定範例時
+  - 您希望為音訊附件使用 Deepgram 語音轉文字功能
+  - 您需要快速查看 Deepgram 設定範例
 title: "Deepgram"
 ---
 
-# Deepgram (音訊轉錄)
+# Deepgram (音訊逐字稿)
 
-Deepgram 是一個語音轉文字 API。在 OpenClaw 中，它透過 `tools.media.audio` 用於**傳入音訊/語音備忘錄轉錄**。
+Deepgram 是一個語音轉文字 API。在 OpenClaw 中，它透過 `tools.media.audio` 用於 **傳入音訊/語音訊息的逐字稿轉換**。
 
-啟用後，OpenClaw 會將音訊檔案上傳到 Deepgram 並將轉錄稿注入回覆管道（`{{Transcript}}` + `[Audio]` 區塊）。這**不是串流傳輸**；它使用預錄的轉錄端點。
+啟用時，OpenClaw 會將音訊檔案上傳至 Deepgram，並將逐字稿注入回覆流程中（`{{Transcript}}` + `[Audio]` 區塊）。這 **不是串流傳輸**；它使用的是預錄音訊逐字稿端點。
 
 網站：[https://deepgram.com](https://deepgram.com)  
 文件：[https://developers.deepgram.com](https://developers.deepgram.com)
@@ -40,13 +40,13 @@ DEEPGRAM_API_KEY=dg_...
 
 ## 選項
 
-- `model`：Deepgram 模型 ID（預設值：`nova-3`）
-- `language`：語言提示（選用）
-- `tools.media.audio.providerOptions.deepgram.detect_language`：啟用語言偵測（選用）
-- `tools.media.audio.providerOptions.deepgram.punctuate`：啟用標點符號（選用）
-- `tools.media.audio.providerOptions.deepgram.smart_format`：啟用智慧格式化（選用）
+- `model`: Deepgram 模型 ID（預設：`nova-3`）
+- `language`: 語言提示（選填）
+- `tools.media.audio.providerOptions.deepgram.detect_language`: 啟用語言偵測（選填）
+- `tools.media.audio.providerOptions.deepgram.punctuate`: 啟用標點符號（選填）
+- `tools.media.audio.providerOptions.deepgram.smart_format`: 啟用智慧格式化（選填）
 
-語言範例：
+包含語言設定的範例：
 
 ```json5
 {
@@ -61,7 +61,7 @@ DEEPGRAM_API_KEY=dg_...
 }
 ```
 
-Deepgram 選項範例：
+包含 Deepgram 選項的範例：
 
 ```json5
 {
@@ -83,8 +83,8 @@ Deepgram 選項範例：
 }
 ```
 
-## 備註
+## 注意事項
 
-- 身份驗證遵循標準的供應商身份驗證順序；`DEEPGRAM_API_KEY` 是最簡單的路徑。
-- 使用 `tools.media.audio.baseUrl` 和 `tools.media.audio.headers` 覆寫端點或標頭，當使用代理伺服器時。
-- 輸出遵循與其他供應商相同的音訊規則（大小限制、逾時、轉錄稿注入）。
+- 身份驗證遵循標準供應商驗證順序；使用 `DEEPGRAM_API_KEY` 是最簡單的方式。
+- 使用代理伺服器時，可透過 `tools.media.audio.baseUrl` 和 `tools.media.audio.headers` 覆寫端點或標頭。
+- 輸出遵循與其他供應商相同的音訊規則（大小限制、逾時、逐字稿注入）。

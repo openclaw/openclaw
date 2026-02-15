@@ -1,35 +1,34 @@
-```
 ---
-summary: "Cron 工作排程 + Gateway 排程器的喚醒功能"
+summary: "Gateway 排程器的排程工作與喚醒功能"
 read_when:
-  - 排定背景工作或喚醒功能時
-  - 串接應與心跳訊號一同執行或搭配執行的自動化時
-  - 決定排程任務使用心跳訊號還是 cron 時
-title: "Cron 工作排程"
+  - 排程背景工作或喚醒
+  - 串接應隨心跳執行或與其併行的自動化
+  - 在心跳與排程之間決定排程任務的處理方式
+title: "排程工作 (Cron Jobs)"
 ---
 
-# Cron 工作排程 (Gateway 排程器)
+# 排程工作 (Gateway 排程器)
 
-> **Cron 與心跳訊號的比較？** 請參閱[Cron 與心跳訊號](/automation/cron-vs-heartbeat)以了解何時使用兩者。
+> **Cron vs Heartbeat？** 請參閱 [Cron vs Heartbeat](/automation/cron-vs-heartbeat) 以獲取使用時機的指引。
 
-Cron 是 Gateway 內建的排程器。它會儲存工作排程、在正確的時間喚醒代理程式，並且可以選擇性地將輸出訊息傳遞回聊天室。
+Cron 是 Gateway 內建的排程器。它可以持久化工作、在正確的時間喚醒 Agent，並可選擇將輸出傳送回聊天視窗。
 
-如果您想要 _「每天早上執行此操作」_ 或 _「在 20 分鐘後觸發代理程式」_，cron 就是實現此目的的機制。
+如果您想要「每天早上執行」或「在 20 分鐘後提醒 Agent」，Cron 就是實現此機制的工具。
 
 疑難排解：[/automation/troubleshooting](/automation/troubleshooting)
 
-## 重點摘要
+## 摘要 (TL;DR)
 
-- Cron 在 **Gateway 內部**執行 (而非模型內部)。
-- 工作排程會儲存在 `~/.openclaw/cron/` 下，因此重新啟動不會遺失排程。
-- 兩種執行方式：
-  - **主要會話**: 將系統事件排入佇列，然後在下一次心跳訊號時執行。
-  - **隔離**: 在 `cron:<jobId>` 中執行專用的代理程式輪次，並帶有傳遞功能 (預設為公告，或不傳遞)。
-- 喚醒功能是首要的：工作排程可以請求「立即喚醒」與「下一次心跳訊號時喚醒」。
+- Cron 在 **Gateway 內部**執行（而非模型內部）。
+- 工作會儲存在 `~/.openclaw/cron/` 下，因此重新啟動不會丟失排程。
+- 兩種執行風格：
+  - **主對話階段 (Main session)**：將系統事件排入佇列，然後在下一次心跳時執行。
+  - **獨立執行 (Isolated)**：在 `cron:<jobId>` 中執行專用的 Agent 輪次，並進行傳送（預設為宣告或無）。
+- 喚醒功能是一等公民：工作可以要求「立即喚醒」或「下一次心跳」。
 
-## 快速入門 (可操作)
+## 快速開始（可操作）
 
-建立一次性提醒、驗證其是否存在，然後立即執行：
+建立一個一次性提醒，驗證其是否存在，並立即執行：
 
 ```bash
 openclaw cron add \
@@ -45,7 +44,7 @@ openclaw cron run <job-id>
 openclaw cron runs --id <job-id>
 ```
 
-排定一個帶有傳遞功能的重複隔離工作排程：
+排程一個帶有傳送功能的週期性獨立工作：
 
 ```bash
 openclaw cron add \
@@ -59,188 +58,179 @@ openclaw cron add \
   --to "channel:C1234567890"
 ```
 
-## 工具呼叫的等效功能 (Gateway cron 工具)
+## 工具呼叫對應物 (Gateway cron 工具)
 
-有關標準 JSON 格式和範例，請參閱[工具呼叫的 JSON 綱要](/automation/cron-jobs#json-schema-for-tool-calls)。
+有關規範的 JSON 形式和範例，請參閱 [工具呼叫的 JSON 結構描述](/automation/cron-jobs#json-schema-for-tool-calls)。
 
-## Cron 工作排程的儲存位置
+## 排程工作儲存位置
 
-Cron 工作排程預設儲存在 Gateway 主機的 `~/.openclaw/cron/jobs.json`。Gateway 會將檔案載入記憶體並在變更時寫回，因此手動編輯僅在 Gateway 停止時才是安全的。建議使用 `openclaw cron add/edit` 或 cron 工具呼叫 API 進行變更。
+排程工作預設會持久化在 Gateway 主機的 `~/.openclaw/cron/jobs.json` 中。
+Gateway 會將檔案載入記憶體，並在變更時寫回，因此僅在 Gateway 停止時才可安全地手動編輯。建議優先使用 `openclaw cron add/edit` 或 cron 工具呼叫 API 進行更改。
 
-## 初學者友善概覽
+## 入門指引
 
-將 cron 工作排程視為：**何時**執行 + **要做什麼**。
+將排程工作想像成：**何時**執行 + **做什麼**事。
 
-1.  **選擇排程**
-    -   一次性提醒 → `schedule.kind = "at"` (CLI: `--at`)
-    -   重複工作排程 → `schedule.kind = "every"` 或 `schedule.kind = "cron"`
-    -   如果您的 ISO 時間戳記省略了時區，則會被視為 **UTC**。
+1. **選擇排程**
+   - 一次性提醒 → `schedule.kind = "at"` (CLI: `--at`)
+   - 重複性工作 → `schedule.kind = "every"` 或 `schedule.kind = "cron"`
+   - 如果您的 ISO 時間戳記省略了時區，它會被視為 **UTC**。
 
-2.  **選擇執行位置**
-    -   `sessionTarget: "main"` → 在下一次心跳訊號時，以主要情境執行。
-    -   `sessionTarget: "isolated"` → 在 `cron:<jobId>` 中執行專用的代理程式輪次。
+2. **選擇執行位置**
+   - `sessionTarget: "main"` → 在下一次心跳期間使用主內容執行。
+   - `sessionTarget: "isolated"` → 在 `cron:<jobId>` 中執行專用的 Agent 輪次。
 
-3.  **選擇酬載**
-    -   主要會話 → `payload.kind = "systemEvent"`
-    -   隔離會話 → `payload.kind = "agentTurn"`
+3. **選擇有效負載 (Payload)**
+   - 主對話階段 → `payload.kind = "systemEvent"`
+   - 獨立對話階段 → `payload.kind = "agentTurn"`
 
-選填：一次性工作排程 (`schedule.kind = "at"`) 預設在成功後刪除。設定
-`deleteAfterRun: false` 以保留它們 (它們會在成功後停用)。
+選配：一次性工作（`schedule.kind = "at"`）預設在成功後刪除。設定 `deleteAfterRun: false` 以保留它們（成功後它們會變為停用狀態）。
 
 ## 概念
 
-### 工作排程
+### 工作 (Jobs)
 
-cron 工作排程是一個儲存的紀錄，包含：
+排程工作是一條儲存的記錄，包含：
 
--   **排程** (何時執行)，
--   **酬載** (要做什麼)，
--   選填的**傳遞模式** (公告或不傳遞)。
--   選填的**代理程式綁定** (`agentId`)：在特定代理程式下執行工作排程；如果
-    缺少或未知，Gateway 會回退到預設代理程式。
+- **排程**（何時執行）、
+- **有效負載**（要做什麼）、
+- 選配的 **傳送模式**（宣告或無）。
+- 選配的 **Agent 綁定** (`agentId`)：在特定 Agent 下執行工作；如果缺失或未知，Gateway 會退回到預設 Agent。
 
-工作排程由穩定的 `jobId` 識別 (CLI/Gateway API 使用)。
-在代理程式工具呼叫中，`jobId` 是規範的；為了相容性，也接受舊版的 `id`。
-一次性工作排程預設在成功後自動刪除；設定 `deleteAfterRun: false` 以保留它們。
+工作由穩定的 `jobId` 識別（供 CLI/Gateway API 使用）。
+在 Agent 工具呼叫中，`jobId` 是規範用法；為了相容性也接受舊版的 `id`。
+一次性工作預設在成功後自動刪除；設定 `deleteAfterRun: false` 可保留。
 
-### 排程
+### 排程 (Schedules)
 
 Cron 支援三種排程類型：
 
--   `at`：透過 `schedule.at` 的一次性時間戳記 (ISO 8601)。
--   `every`：固定間隔 (毫秒)。
--   `cron`：包含選填 IANA 時區的 5 欄位 cron 表達式。
+- `at`：透過 `schedule.at` (ISO 8601) 設定的一次性時間戳記。
+- `every`：固定間隔（毫秒）。
+- `cron`：具有選配 IANA 時區的 5 欄位 cron 表達式。
 
-Cron 表達式使用 `croner`。如果省略時區，則使用 Gateway 主機的當地時區。
+Cron 表達式使用 `croner`。如果省略時區，則使用 Gateway 主機的在地時區。
 
-### 主要會話與隔離會話執行
+### 主對話 vs 獨立執行
 
-#### 主要會話工作排程 (系統事件)
+#### 主對話階段工作（系統事件）
 
-主要工作排程會將系統事件排入佇列，並可選擇性地喚醒心跳訊號執行器。
+主對話工作會將系統事件排入佇列，並可選擇喚醒心跳執行器。
 它們必須使用 `payload.kind = "systemEvent"`。
 
--   `wakeMode: "now"` (預設)：事件觸發立即的心跳訊號執行。
--   `wakeMode: "next-heartbeat"`：事件等待下一次排定的心跳訊號。
+- `wakeMode: "now"`（預設）：事件會觸發立即的心跳執行。
+- `wakeMode: "next-heartbeat"`：事件會等待下一個預定的心跳。
 
-當您想要正常的心跳訊號提示 + 主要會話情境時，這是最佳選擇。
-請參閱[心跳訊號](/gateway/heartbeat)。
+當您想要使用正常的心跳提示詞 + 主對話階段內容時，這是最佳選擇。
+請參閱 [心跳 (Heartbeat)](/gateway/heartbeat)。
 
-#### 隔離工作排程 (專用 cron 會話)
+#### 獨立工作（專用 Cron 對話階段）
 
-隔離工作排程在會話 `cron:<jobId>` 中執行專用的代理程式輪次。
+獨立工作會在對話階段 `cron:<jobId>` 中執行專用的 Agent 輪次。
 
-主要行為：
+關鍵行為：
 
--   提示會以 `[cron:<jobId> <工作排程名稱>]` 為前綴，以便追溯。
--   每次執行都會啟動**新的會話 ID** (沒有先前的對話延續)。
--   預設行為：如果省略 `delivery`，隔離工作排程會公告摘要 (`delivery.mode = "announce"`)。
--   `delivery.mode` (僅限隔離) 選擇會發生什麼：
-    -   `announce`：將摘要傳遞到目標通道，並將簡短摘要發佈到主要會話。
-    -   `none`：僅限內部 (不傳遞，無主要會話摘要)。
--   `wakeMode` 控制主要會話摘要發佈的時間：
-    -   `now`：立即心跳訊號。
-    -   `next-heartbeat`：等待下一次排定的心跳訊號。
+- 提示詞會加上 `[cron:<jobId> <job name>]` 前綴以便追蹤。
+- 每次執行都會啟動一個 **全新的對話階段 ID**（不會繼承之前的對話內容）。
+- 預設行為：如果省略 `delivery`，獨立工作會宣告摘要 (`delivery.mode = "announce"`)。
+- `delivery.mode`（僅限獨立工作）決定發生的情況：
+  - `announce`：將摘要傳送到目標通道，並在主對話階段發佈簡短摘要。
+  - `none`：僅限內部（不傳送，無主對話階段摘要）。
+- `wakeMode` 控制主對話階段摘要發佈的時間：
+  - `now`：立即執行心跳。
+  - `next-heartbeat`：等待下一個預定的心跳。
 
-將隔離工作排程用於嘈雜、頻繁或「背景雜務」，這些雜務不應在您的主要聊天記錄中產生垃圾訊息。
+針對雜亂、頻繁或「背景瑣事」，請使用獨立執行工作，以免洗版您的主聊天紀錄。
 
-### 酬載格式 (執行什麼)
+### 有效負載形式（執行內容）
 
-支援兩種酬載類型：
+支援兩種有效負載類型：
 
--   `systemEvent`：僅限主要會話，透過心跳訊號提示路由。
--   `agentTurn`：僅限隔離會話，執行專用的代理程式輪次。
+- `systemEvent`：僅限主對話階段，透過心跳提示詞路由。
+- `agentTurn`：僅限獨立對話階段，執行專用的 Agent 輪次。
 
-常見 `agentTurn` 欄位：
+常見的 `agentTurn` 欄位：
 
--   `message`：必要的文字提示。
--   `model` / `thinking`：選填的覆寫 (請參閱下方)。
--   `timeoutSeconds`：選填的逾時覆寫。
+- `message`：必要的文字提示詞。
+- `model` / `thinking`：選配的覆寫項（見下文）。
+- `timeoutSeconds`：選配的逾時覆寫。
 
-傳遞設定 (僅限隔離工作排程)：
+傳送設定（僅限獨立工作）：
 
--   `delivery.mode`：`none` | `announce`。
--   `delivery.channel`：`last` 或特定通道。
--   `delivery.to`：通道特定目標 (電話/聊天/通道 ID)。
--   `delivery.bestEffort`：如果公告傳遞失敗，則避免工作排程失敗。
+- `delivery.mode`: `none` | `announce`。
+- `delivery.channel`: `last` 或特定通道。
+- `delivery.to`: 針對通道的目標（電話/聊天/通道 ID）。
+- `delivery.bestEffort`: 如果宣告傳送失敗，避免使工作失敗。
 
-公告傳遞會抑制執行期間的訊息工具傳送；請改用 `delivery.channel`/`delivery.to`
-來指定聊天目標。當 `delivery.mode = "none"` 時，不會將摘要發佈到主要會話。
+宣告傳送會抑制該次執行的訊息工具發送；請改用 `delivery.channel`/`delivery.to` 來指定聊天目標。當 `delivery.mode = "none"` 時，不會在主對話階段發佈摘要。
 
-如果隔離工作排程省略 `delivery`，OpenClaw 預設為 `announce`。
+如果獨立工作省略了 `delivery`，OpenClaw 預設會使用 `announce`。
 
-#### 公告傳遞流程
+#### 宣告傳送流程
 
-當 `delivery.mode = "announce"` 時，cron 會直接透過 outbound 通道配接器進行傳遞。
-主代理程式不會啟動來製作或轉發訊息。
+當 `delivery.mode = "announce"` 時，Cron 會透過出站通道適配器直接傳送。
+主 Agent 不會啟動來編寫或轉發訊息。
 
-行為詳情：
+行為細節：
 
--   內容：傳遞使用隔離執行的 outbound 酬載 (文字/媒體)，並採用正常的區塊化和
-    通道格式。
--   僅限心跳訊號的回應 (無實際內容的 `HEARTBEAT_OK`) 不會傳遞。
--   如果隔離執行已透過訊息工具向同一目標發送訊息，則會跳過傳遞以避免重複。
--   缺少或無效的傳遞目標會導致工作排程失敗，除非 `delivery.bestEffort = true`。
--   只有當 `delivery.mode = "announce"` 時，才會將簡短摘要發佈到主要會話。
--   主要會話摘要會遵循 `wakeMode`：`now` 觸發立即心跳訊號，而
-    `next-heartbeat` 等待下一次排定的心跳訊號。
+- 內容：傳送使用獨立執行的出站有效負載（文字/媒體），並進行正常的分段和通道格式化。
+- 僅心跳回應（`HEARTBEAT_OK` 且無實質內容）不會傳送。
+- 如果獨立執行已經透過訊息工具向同一目標發送了訊息，則會跳過傳送以避免重複。
+- 除非 `delivery.bestEffort = true`，否則缺失或無效的傳送目標會導致工作失敗。
+- 僅在 `delivery.mode = "announce"` 時，才會在主對話階段發佈短摘要。
+- 主對話階段摘要遵循 `wakeMode`：`now` 會觸發立即的心跳，而 `next-heartbeat` 會等待下一個預定的心跳。
 
-### 模型和思維覆寫
+### 模型與思考覆寫
 
-隔離工作排程 (`agentTurn`) 可以覆寫模型和思維層級：
+獨立工作 (`agentTurn`) 可以覆寫模型和思考等級：
 
--   `model`：供應商/模型字串 (例如 `anthropic/claude-sonnet-4-20250514`) 或別名 (例如 `opus`)
--   `thinking`：思維層級 (`off`、`minimal`、`low`、`medium`、`high`、`xhigh`；僅限 GPT-5.2 + Codex 模型)
+- `model`：提供者/模型字串（例如 `anthropic/claude-sonnet-4-20250514`）或別名（例如 `opus`）
+- `thinking`：思考等級（`off`, `minimal`, `low`, `medium`, `high`, `xhigh`；僅限 GPT-5.2 + Codex 模型）
 
-注意：您也可以在主要會話工作排程上設定 `model`，但它會變更共享的主要
-會話模型。我們建議僅針對隔離工作排程使用模型覆寫，以避免
-意外的情境轉換。
+注意：您也可以在主對話階段工作上設定 `model`，但這會更改共享的主對話階段模型。我們建議僅對獨立工作使用模型覆寫，以避免非預期的內容切換。
 
 解析優先順序：
 
-1.  工作排程酬載覆寫 (最高)
-2.  Hook 特定預設值 (例如 `hooks.gmail.model`)
-3.  代理程式設定預設值
+1. 工作有效負載覆寫（最高）
+2. Hook 特定預設值（例如 `hooks.gmail.model`）
+3. Agent 設定預設值
 
-### 傳遞 (通道 + 目標)
+### 傳送（通道 + 目標）
 
-隔離工作排程可以透過頂層 `delivery` 設定將輸出傳遞到通道：
+獨立工作可以透過頂層的 `delivery` 設定將輸出傳送到通道：
 
--   `delivery.mode`：`announce` (傳遞摘要) 或 `none`。
--   `delivery.channel`：`whatsapp` / `telegram` / `discord` / `slack` / `mattermost` (外掛程式) / `signal` / `imessage` / `last`。
--   `delivery.to`：通道特定的收件人目標。
+- `delivery.mode`: `announce`（傳送摘要）或 `none`。
+- `delivery.channel`: `whatsapp` / `telegram` / `discord` / `slack` / `mattermost` (外掛) / `signal` / `imessage` / `last`。
+- `delivery.to`: 通道特定的接收者目標。
 
-傳遞設定僅適用於隔離工作排程 (`sessionTarget: "isolated"`)。
+傳送設定僅對獨立工作 (`sessionTarget: "isolated"`) 有效。
 
-如果 `delivery.channel` 或 `delivery.to` 被省略，cron 可以回退到主要會話的
-「最後路由」(代理程式上次回覆的位置)。
+如果省略 `delivery.channel` 或 `delivery.to`，Cron 可以退回到主對話階段的「最後路由」（Agent 上次遞送的地點）。
 
 目標格式提醒：
 
--   Slack/Discord/Mattermost (外掛程式) 目標應使用明確的前綴 (例如 `channel:<id>`、`user:<id>`) 以避免模糊不清。
--   Telegram 主題應使用 `:topic:` 形式 (請參閱下方)。
+- Slack/Discord/Mattermost (外掛) 目標應使用明確的前綴（例如 `channel:<id>`, `user:<id>`）以避免歧義。
+- Telegram 主題應使用 `:topic:` 形式（見下文）。
 
-#### Telegram 傳遞目標 (主題 / 論壇討論串)
+#### Telegram 傳送目標（主題 / 論壇討論串）
 
-Telegram 透過 `message_thread_id` 支援論壇主題。對於 cron 傳遞，您可以將主題/討論串編碼到 `to` 欄位中：
+Telegram 透過 `message_thread_id` 支援論壇主題。對於 Cron 傳送，您可以將主題/討論串編碼到 `to` 欄位中：
 
--   `-1001234567890` (僅聊天 ID)
--   `-1001234567890:topic:123` (建議：明確的主題標記)
--   `-1001234567890:123` (縮寫：數字後綴)
+- `-1001234567890`（僅限聊天 ID）
+- `-1001234567890:topic:123`（推薦：明確的主題標記）
+- `-1001234567890:123`（簡寫：數字字尾）
 
-也接受 `telegram:...` / `telegram:group:...` 等帶前綴的目標：
+也接受帶有前綴的目標，如 `telegram:...` / `telegram:group:...`：
 
--   `telegram:group:-1001234567890:topic:123`
+- `telegram:group:-1001234567890:topic:123`
 
-## 工具呼叫的 JSON 綱要
+## 工具呼叫的 JSON 結構描述
 
-當直接呼叫 Gateway `cron.*` 工具 (代理程式工具呼叫或 RPC) 時，請使用這些格式。
-CLI 標誌接受像 `20m` 這樣的人類可讀持續時間，但工具呼叫應使用 ISO 8601 字串
-表示 `schedule.at` 和毫秒表示 `schedule.everyMs`。
+直接呼叫 Gateway `cron.*` 工具（Agent 工具呼叫或 RPC）時請使用這些形式。CLI 旗標接受像 `20m` 這樣的人性化時長，但工具呼叫應為 `schedule.at` 使用 ISO 8601 字串，並為 `schedule.everyMs` 使用毫秒。
 
 ### cron.add 參數
 
-一次性、主要會話工作排程 (系統事件)：
+一次性、主對話階段工作（系統事件）：
 
 ```json
 {
@@ -253,7 +243,7 @@ CLI 標誌接受像 `20m` 這樣的人類可讀持續時間，但工具呼叫應
 }
 ```
 
-帶有傳遞功能的重複隔離工作排程：
+重複性、帶有傳送功能的獨立工作：
 
 ```json
 {
@@ -274,15 +264,14 @@ CLI 標誌接受像 `20m` 這樣的人類可讀持續時間，但工具呼叫應
 }
 ```
 
-注意事項：
+注意：
 
--   `schedule.kind`：`at` (`at`)、`every` (`everyMs`) 或 `cron` (`expr`，選填 `tz`)。
--   `schedule.at` 接受 ISO 8601 (時區選填；省略時視為 UTC)。
--   `everyMs` 是毫秒。
--   `sessionTarget` 必須是 `"main"` 或 `"isolated"`，並且必須與 `payload.kind` 匹配。
--   選填欄位：`agentId`、`description`、`enabled`、`deleteAfterRun` (對於 `at` 預設為 true)、
-    `delivery`。
--   `wakeMode` 省略時預設為 `"now"`。
+- `schedule.kind`: `at` (`at`), `every` (`everyMs`), 或 `cron` (`expr`, 選配 `tz`)。
+- `schedule.at` 接受 ISO 8601（時區選配；省略時視為 UTC）。
+- `everyMs` 單位為毫秒。
+- `sessionTarget` 必須為 `"main"` 或 `"isolated"`，且必須與 `payload.kind` 匹配。
+- 選配欄位：`agentId`, `description`, `enabled`, `deleteAfterRun`（對於 `at` 預設為 true）, `delivery`。
+- 省略時 `wakeMode` 預設為 `"now"`。
 
 ### cron.update 參數
 
@@ -296,12 +285,12 @@ CLI 標誌接受像 `20m` 這樣的人類可讀持續時間，但工具呼叫應
 }
 ```
 
-注意事項：
+注意：
 
--   `jobId` 是規範的；為了相容性，也接受 `id`。
--   在修補程式中使用 `agentId: null` 以清除代理程式綁定。
+- `jobId` 是規範用法；也接受 `id` 以進行相容。
+- 在 patch 中使用 `agentId: null` 可清除 Agent 綁定。
 
-### cron.run 和 cron.remove 參數
+### cron.run 與 cron.remove 參數
 
 ```json
 { "jobId": "job-123", "mode": "force" }
@@ -311,32 +300,32 @@ CLI 標誌接受像 `20m` 這樣的人類可讀持續時間，但工具呼叫應
 { "jobId": "job-123" }
 ```
 
-## 儲存與歷史記錄
+## 儲存與紀錄
 
--   工作排程儲存：`~/.openclaw/cron/jobs.json` (Gateway 管理的 JSON)。
--   執行歷史記錄：`~/.openclaw/cron/runs/<jobId>.jsonl` (JSONL，自動修剪)。
--   覆寫儲存路徑：設定中的 `cron.store`。
+- 工作儲存：`~/.openclaw/cron/jobs.json`（由 Gateway 管理的 JSON）。
+- 執行紀錄：`~/.openclaw/cron/runs/<jobId>.jsonl`（JSONL，自動清理）。
+- 覆寫儲存路徑：設定中的 `cron.store`。
 
 ## 設定
 
 ```json5
 {
   cron: {
-    enabled: true, // default true
+    enabled: true, // 預設為 true
     store: "~/.openclaw/cron/jobs.json",
-    maxConcurrentRuns: 1, // default 1
+    maxConcurrentRuns: 1, // 預設為 1
   },
 }
 ```
 
-完全停用 cron：
+完全停用 Cron：
 
--   `cron.enabled: false` (設定)
--   `OPENCLAW_SKIP_CRON=1` (環境變數)
+- `cron.enabled: false` (設定)
+- `OPENCLAW_SKIP_CRON=1` (環境變數)
 
-## CLI 快速入門
+## CLI 快速上手
 
-一次性提醒 (UTC ISO，成功後自動刪除)：
+一次性提醒（UTC ISO，成功後自動刪除）：
 
 ```bash
 openclaw cron add \
@@ -348,7 +337,7 @@ openclaw cron add \
   --delete-after-run
 ```
 
-一次性提醒 (主要會話，立即喚醒)：
+一次性提醒（主對話階段，立即喚醒）：
 
 ```bash
 openclaw cron add \
@@ -359,7 +348,7 @@ openclaw cron add \
   --wake now
 ```
 
-重複隔離工作排程 (公告到 WhatsApp)：
+重複性獨立工作（宣告到 WhatsApp）：
 
 ```bash
 openclaw cron add \
@@ -373,7 +362,7 @@ openclaw cron add \
   --to "+15551234567"
 ```
 
-重複隔離工作排程 (傳遞到 Telegram 主題)：
+重複性獨立工作（傳送到 Telegram 主題）：
 
 ```bash
 openclaw cron add \
@@ -387,7 +376,7 @@ openclaw cron add \
   --to "-1001234567890:topic:123"
 ```
 
-帶有模型和思維覆寫的隔離工作排程：
+帶有模型與思考覆寫的獨立工作：
 
 ```bash
 openclaw cron add \
@@ -403,25 +392,25 @@ openclaw cron add \
   --to "+15551234567"
 ```
 
-代理程式選擇 (多代理程式設定)：
+Agent 選擇（多 Agent 設定）：
 
 ```bash
-# Pin a job to agent "ops" (falls back to default if that agent is missing)
+# 將工作固定到 Agent "ops"（如果該 Agent 缺失則退回到預設值）
 openclaw cron add --name "Ops sweep" --cron "0 6 * * *" --session isolated --message "Check ops queue" --agent ops
 
-# Switch or clear the agent on an existing job
+# 切換或清除現有工作上的 Agent
 openclaw cron edit <jobId> --agent ops
 openclaw cron edit <jobId> --clear-agent
 ```
 
-手動執行 (force 為預設值，使用 `--due` 僅在到期時執行)：
+手動執行（預設為強制執行，使用 `--due` 則僅在到期時執行）：
 
 ```bash
 openclaw cron run <jobId>
 openclaw cron run <jobId> --due
 ```
 
-編輯現有工作排程 (修補欄位)：
+編輯現有工作（補丁欄位）：
 
 ```bash
 openclaw cron edit <jobId> \
@@ -430,13 +419,13 @@ openclaw cron edit <jobId> \
   --thinking low
 ```
 
-執行歷史記錄：
+執行紀錄：
 
 ```bash
 openclaw cron runs --id <jobId> --limit 50
 ```
 
-不建立工作排程的立即系統事件：
+不建立工作的立即系統事件：
 
 ```bash
 openclaw system event --mode now --text "Next heartbeat: check battery."
@@ -444,22 +433,27 @@ openclaw system event --mode now --text "Next heartbeat: check battery."
 
 ## Gateway API 介面
 
--   `cron.list`、`cron.status`、`cron.add`、`cron.update`、`cron.remove`
--   `cron.run` (強制或到期時)、`cron.runs`
-    對於不建立工作排程的立即系統事件，請使用[`openclaw system event`](/cli/system)。
+- `cron.list`, `cron.status`, `cron.add`, `cron.update`, `cron.remove`
+- `cron.run`（強制或到期）, `cron.runs`
+  對於不帶工作的立即系統事件，請使用 [`openclaw system event`](/cli/system)。
 
 ## 疑難排解
 
-### 「沒有任何東西執行」
+### 「沒有任何東西在執行」
 
--   檢查 cron 是否已啟用：`cron.enabled` 和 `OPENCLAW_SKIP_CRON`。
--   檢查 Gateway 是否持續執行 (cron 在 Gateway 處理程序內部執行)。
--   對於 `cron` 排程：確認時區 (`--tz`) 與主機時區的差異。
+- 檢查 Cron 是否已啟用：`cron.enabled` 和 `OPENCLAW_SKIP_CRON`。
+- 檢查 Gateway 是否持續執行（Cron 在 Gateway 程序內部執行）。
+- 對於 `cron` 排程：確認時區 (`--tz`) 與主機時區的對比。
 
-### 重複工作排程在失敗後不斷延遲
+### 重複性工作在失敗後持續延遲
 
--   OpenClaw 在連續錯誤後對重複工作排程應用指數重試退避：
-    30 秒、1 分鐘、5 分鐘、15 分鐘，然後是每次重試之間 60 分鐘。
--   退避會在下一次成功執行後自動重設。
--   一次性 (`at`) 工作排程在終端執行 (`ok`、`error` 或 `skipped`) 後會停用，並且不會重試。
-```
+- 對於連續錯誤的重複性工作，OpenClaw 會套用指數型退避重試：
+  重試之間間隔 30 秒、1 分鐘、5 分鐘、15 分鐘，然後是 60 分鐘。
+- 退避會在下一次成功執行後自動重設。
+- 一次性 (`at`) 工作在終端執行（`ok`、`error` 或 `skipped`）後會停用，且不會重試。
+
+### Telegram 傳送到錯誤的位置
+
+- 對於論壇主題，請使用 `-100…:topic:<id>`，使其明確且無歧義。
+- 如果您在日誌或儲存的「最後路由」目標中看到 `telegram:...` 前綴，這是正常的；
+  Cron 傳送接受它們，並且仍能正確解析主題 ID。

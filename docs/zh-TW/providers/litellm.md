@@ -1,21 +1,21 @@
 ---
-summary: "透過 LiteLLM Proxy 執行 OpenClaw，以實現統一模型存取和成本追蹤"
+summary: "透過 LiteLLM Proxy 執行 OpenClaw 以進行統一的模型存取與費用追蹤"
 read_when:
-  - 您想透過 LiteLLM proxy 路由 OpenClaw
-  - 您需要透過 LiteLLM 進行成本追蹤、日誌記錄或模型路由
+  - 您想透過 LiteLLM 代理轉發 OpenClaw
+  - 您需要透過 LiteLLM 進行費用追蹤、記錄或模型路由
 ---
 
 # LiteLLM
 
-[LiteLLM](https://litellm.ai) 是一個開源的 LLM Gateway，提供 100 多個模型供應商的統一 API。透過 LiteLLM 路由 OpenClaw，以獲得集中式的成本追蹤、日誌記錄以及無需更改 OpenClaw 設定即可切換後端的靈活性。
+[LiteLLM](https://litellm.ai) 是一個開源的 LLM Gateway，為超過 100 家模型供應商提供統一的 API。透過 LiteLLM 轉發 OpenClaw，可以獲得集中化的費用追蹤、日誌記錄，並能在不更改 OpenClaw 設定的情況下靈活切換後端。
 
-## 為什麼要將 LiteLLM 與 OpenClaw 搭配使用？
+## 為什麼要在 OpenClaw 使用 LiteLLM？
 
-- **成本追蹤** — 準確查看 OpenClaw 在所有模型上的支出
+- **費用追蹤** — 精確查看 OpenClaw 在所有模型上的支出
 - **模型路由** — 無需更改設定即可在 Claude、GPT-4、Gemini、Bedrock 之間切換
 - **虛擬金鑰** — 為 OpenClaw 建立具有支出限制的金鑰
-- **日誌記錄** — 用於偵錯的完整請求/回應日誌
-- **備援** — 如果您的主要供應商發生故障，則自動容錯移轉
+- **日誌記錄** — 用於除錯的完整請求/回應日誌
+- **容錯機制** — 如果主要供應商故障，會自動進行容錯移轉
 
 ## 快速開始
 
@@ -42,7 +42,7 @@ export LITELLM_API_KEY="your-litellm-key"
 openclaw
 ```
 
-就這樣。OpenClaw 現在透過 LiteLLM 進行路由。
+就這麼簡單。OpenClaw 現在會透過 LiteLLM 進行路由。
 
 ## 設定
 
@@ -106,7 +106,7 @@ curl -X POST "http://localhost:4000/key/generate" \
   }'
 ```
 
-使用生成的金鑰作為 `LITELLM_API_KEY`。
+將產生的金鑰用作 `LITELLM_API_KEY`。
 
 ## 模型路由
 
@@ -125,29 +125,29 @@ model_list:
       api_key: os.environ/OPENAI_API_KEY
 ```
 
-OpenClaw 繼續請求 `claude-opus-4-6` — LiteLLM 處理路由。
+OpenClaw 持續請求 `claude-opus-4-6` — 而由 LiteLLM 處理路由。
 
 ## 查看使用情況
 
-檢查 LiteLLM 的儀表板或 API：
+查看 LiteLLM 的儀表板或 API：
 
 ```bash
-# Key info
+# 金鑰資訊
 curl "http://localhost:4000/key/info" \
   -H "Authorization: Bearer sk-litellm-key"
 
-# Spend logs
+# 支出日誌
 curl "http://localhost:4000/spend/logs" \
   -H "Authorization: Bearer $LITELLM_MASTER_KEY"
 ```
 
-## 說明
+## 注意事項
 
-- LiteLLM 預設在 `http://localhost:4000` 上執行
-- OpenClaw 透過 OpenAI 相容的 `/v1/chat/completions` 端點連接
-- 所有 OpenClaw 功能都透過 LiteLLM 運作 — 沒有限制
+- LiteLLM 預設在 `http://localhost:4000` 執行
+- OpenClaw 透過相容於 OpenAI 的 `/v1/chat/completions` 端點進行連接
+- 所有 OpenClaw 功能在 LiteLLM 下皆可正常運作 — 無任何限制
 
-## 參閱
+## 延伸閱讀
 
-- [LiteLLM 文件](https://docs.litellm.ai)
+- [LiteLLM Docs](https://docs.litellm.ai)
 - [模型供應商](/concepts/model-providers)

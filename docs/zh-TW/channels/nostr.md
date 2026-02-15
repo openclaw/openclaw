@@ -1,30 +1,30 @@
 ---
-summary: "Nostr 私訊頻道，透過 NIP-04 加密訊息"
+summary: "透過 NIP-04 加密訊息的 Nostr 私訊通道"
 read_when:
   - 您希望 OpenClaw 透過 Nostr 接收私訊
-  - 您正在設定去中心化訊息傳輸
+  - 您正在設定去中心化通訊
 title: "Nostr"
 ---
 
 # Nostr
 
-**狀態：** 可選外掛（預設為停用）。
+**狀態：** 選用外掛（預設禁用）。
 
-Nostr 是一個去中心化的社交網路通訊協定。此頻道讓 OpenClaw 能夠透過 NIP-04 接收並回應加密的私訊。
+Nostr 是一個去中心化的社群網路協定。此通道讓 OpenClaw 能夠透過 NIP-04 接收並回覆加密的私訊 (DMs)。
 
-## 安裝 (隨選)
+## 安裝（按需安裝）
 
-### 新手導覽 (建議)
+### 新手導覽（推薦）
 
-- 新手導覽精靈 (`openclaw onboard`) 和 `openclaw channels add` 會列出可選的頻道外掛。
-- 選擇 Nostr 會提示您隨選安裝該外掛。
+- 新手導覽精靈 (`openclaw onboard`) 與 `openclaw channels add` 會列出選用的通道外掛。
+- 選擇 Nostr 會提示您按需安裝此外掛。
 
-預設安裝：
+安裝預設值：
 
-- **開發頻道 + git checkout 可用：** 使用本機外掛路徑。
-- **穩定/測試版：** 從 npm 下載。
+- **開發通道 + 可使用 git checkout：** 使用本地外掛路徑。
+- **穩定版/測試版 (Stable/Beta)：** 從 npm 下載。
 
-您隨時可以在提示中覆寫選擇。
+您隨時可以在提示中覆蓋此選擇。
 
 ### 手動安裝
 
@@ -32,7 +32,7 @@ Nostr 是一個去中心化的社交網路通訊協定。此頻道讓 OpenClaw �
 openclaw plugins install @openclaw/nostr
 ```
 
-使用本機 checkout (開發工作流程)：
+使用本地檢出（開發工作流）：
 
 ```bash
 openclaw plugins install --link <path-to-openclaw>/extensions/nostr
@@ -45,11 +45,11 @@ openclaw plugins install --link <path-to-openclaw>/extensions/nostr
 1. 產生 Nostr 金鑰對（如果需要）：
 
 ```bash
-# Using nak
+# 使用 nak
 nak key generate
 ```
 
-2. 加入設定：
+2. 新增至設定：
 
 ```json
 {
@@ -71,19 +71,19 @@ export NOSTR_PRIVATE_KEY="nsec1..."
 
 ## 設定參考
 
-| Key | 類型 | 預設值 | 說明 |
-|---|---|---|---|
-| `privateKey` | string | required | 以 `nsec` 或十六進位格式表示的私密金鑰 |
-| `relays` | string[] | `['wss://relay.damus.io', 'wss://nos.lol']` | Relay 網址 (WebSocket) |
-| `dmPolicy` | string | `pairing` | 私訊存取政策 |
-| `allowFrom` | string[] | `[]` | 允許的寄件者公開金鑰 |
-| `enabled` | boolean | `true` | 啟用/停用頻道 |
-| `name` | string | - | 顯示名稱 |
-| `profile` | object | - | NIP-01 個人檔案中繼資料 |
+| 鍵名          | 類型     | 預設值                                      | 描述                                |
+| ------------ | -------- | ------------------------------------------- | ----------------------------------- |
+| `privateKey` | string   | 必填                                        | `nsec` 或十六進制格式的私鑰         |
+| `relays`     | string[] | `['wss://relay.damus.io', 'wss://nos.lol']` | 中繼站 URL (WebSocket)              |
+| `dmPolicy`   | string   | `pairing`                                   | 私訊存取策略                        |
+| `allowFrom`  | string[] | `[]`                                        | 允許的傳送者公鑰                    |
+| `enabled`    | boolean  | `true`                                      | 啟用/禁用通道                       |
+| `name`       | string   | -                                           | 顯示名稱                            |
+| `profile`    | object   | -                                           | NIP-01 個人資料詮釋資料 (metadata)  |
 
-## 個人檔案中繼資料
+## 個人資料詮釋資料
 
-個人檔案資料以 NIP-01 `kind:0` 事件發布。您可以從控制介面 (Channels -> Nostr -> Profile) 管理它，或直接在設定中設定。
+個人資料會以 NIP-01 `kind:0` 事件發佈。您可以從控制介面 (Channels -> Nostr -> Profile) 進行管理，或直接在設定中設定。
 
 範例：
 
@@ -99,29 +99,29 @@ export NOSTR_PRIVATE_KEY="nsec1..."
         "picture": "https://example.com/avatar.png",
         "banner": "https://example.com/banner.png",
         "website": "https://example.com",
-        "nip05": "openclaw @example.com",
-        "lud16": "openclaw @example.com"
+        "nip05": "openclaw@example.com",
+        "lud16": "openclaw@example.com"
       }
     }
   }
 }
 ```
 
-注意事項：
+附註：
 
-- 個人檔案網址必須使用 `https://`。
-- 從 relay 匯入會合併欄位並保留本機覆寫。
+- 個人資料 URL 必須使用 `https://`。
+- 從中繼站匯入會合併欄位並保留本地覆蓋。
 
 ## 存取控制
 
-### 私訊政策
+### 私訊策略
 
-- **配對** (預設)：未知寄件者會獲得一個配對碼。
-- **允許清單**：只有 `allowFrom` 中的公開金鑰可以發送私訊。
-- **開放**：公開傳入私訊（需要 `allowFrom: ["*"]`）。
-- **停用**：忽略傳入私訊。
+- **pairing** (預設)：未知的傳送者會收到配對碼。
+- **allowlist**：只有 `allowFrom` 中的公鑰可以傳送私訊。
+- **open**：開放外部私訊（需要設定 `allowFrom: ["*"]`）。
+- **disabled**：忽略傳入的私訊。
 
-### 允許清單範例
+### 白名單範例
 
 ```json
 {
@@ -139,12 +139,12 @@ export NOSTR_PRIVATE_KEY="nsec1..."
 
 接受的格式：
 
-- **私密金鑰：** `nsec...` 或 64 個字元的十六進位
-- **公開金鑰 (`allowFrom`)：** `npub...` 或 十六進位
+- **私鑰：** `nsec...` 或 64 字元的十六進制格式
+- **公鑰 (`allowFrom`)：** `npub...` 或十六進制格式
 
-## Relays
+## 中繼站 (Relays)
 
-預設值：`relay.damus.io` 和 `nos.lol`。
+預設值：`relay.damus.io` 與 `nos.lol`。
 
 ```json
 {
@@ -159,26 +159,26 @@ export NOSTR_PRIVATE_KEY="nsec1..."
 
 提示：
 
-- 使用 2-3 個 relay 以實現冗餘。
-- 避免過多 relay（延遲、重複）。
-- 付費 relay 可以提高可靠性。
-- 本機 relay 適合測試 (`ws://localhost:7777`)。
+- 使用 2-3 個中繼站以確保冗餘。
+- 避免使用過多中繼站（延遲、重複）。
+- 付費中繼站可以提高可靠性。
+- 本地中繼站適用於測試 (`ws://localhost:7777`)。
 
 ## 協定支援
 
-| NIP | 狀態 | 說明 |
-|---|---|---|
-| NIP-01 | 支援 | 基本事件格式 + 個人檔案中繼資料 |
-| NIP-04 | 支援 | 加密私訊 (`kind:4`) |
-| NIP-17 | 規劃中 | 禮物包裝私訊 |
-| NIP-44 | 規劃中 | 版本化加密 |
+| NIP    | 狀態     | 描述                                  |
+| ------ | -------- | ------------------------------------- |
+| NIP-01 | 已支援   | 基本事件格式 + 個人資料詮釋資料       |
+| NIP-04 | 已支援   | 加密私訊 (`kind:4`)                   |
+| NIP-17 | 計畫中   | 禮物包裝式私訊 (Gift-wrapped DMs)     |
+| NIP-44 | 計畫中   | 版本化加密                            |
 
 ## 測試
 
-### 本機 Relay
+### 本地中繼站
 
 ```bash
-# Start strfry
+# 啟動 strfry
 docker run -p 7777:7777 ghcr.io/hoytech/strfry
 ```
 
@@ -195,39 +195,39 @@ docker run -p 7777:7777 ghcr.io/hoytech/strfry
 
 ### 手動測試
 
-1. 從日誌中記下機器人的公開金鑰 (npub)。
-2. 開啟 Nostr 用戶端（例如 Damus、Amethyst 等）。
-3. 向機器人的公開金鑰發送私訊。
-4. 驗證回應。
+1. 從記錄中記下機器人的公鑰 (npub)。
+2. 開啟 Nostr 用戶端（如 Damus, Amethyst 等）。
+3. 傳送私訊給機器人公鑰。
+4. 驗證回覆。
 
 ## 疑難排解
 
-### 未收到訊息
+### 無法接收訊息
 
-- 驗證私密金鑰是否有效。
-- 確保 relay 網址可連線並使用 `wss://` (或本機的 `ws://`)。
-- 確認 `enabled` 不是 `false`。
-- 檢查 Gateway 日誌以查看 relay 連線錯誤。
+- 驗證私鑰是否有效。
+- 確保中繼站 URL 可連接，且使用 `wss://`（本地則使用 `ws://`）。
+- 確認 `enabled` 未設定為 `false`。
+- 檢查 Gateway 記錄中是否有中繼站連線錯誤。
 
-### 未發送回應
+### 無法傳送回覆
 
-- 檢查 relay 是否接受寫入。
-- 驗證對外連線。
-- 注意 relay 速率限制。
+- 檢查中繼站是否接受寫入。
+- 驗證對外連線性。
+- 注意中繼站的頻率限制 (rate limits)。
 
-### 重複回應
+### 重複回覆
 
-- 使用多個 relay 時預期會發生。
-- 訊息透過事件 ID 進行去重複；只有第一次傳送會觸發回應。
+- 使用多個中繼站時為預期現象。
+- 訊息會根據事件 ID 進行去重；只有第一次送達會觸發回覆。
 
 ## 安全性
 
-- 絕不要提交私密金鑰。
-- 對於金鑰使用環境變數。
-- 考慮在生產機器人中使用 `允許清單`。
+- 絕不要提交私鑰。
+- 使用環境變數來管理金鑰。
+- 對於生產環境的機器人，請考慮使用 `allowlist`。
 
-## 限制 (最小可行產品)
+## 限制 (MVP)
 
-- 僅限直接訊息（無群組聊天）。
+- 僅限私訊（無群組聊天）。
 - 無媒體附件。
-- 僅限 NIP-04 (NIP-17 禮物包裝功能規劃中)。
+- 僅限 NIP-04（計畫支援 NIP-17 禮物包裝）。

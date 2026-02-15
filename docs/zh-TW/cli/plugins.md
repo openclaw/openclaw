@@ -1,22 +1,22 @@
 ---
-summary: "openclaw plugins 的 CLI 參考 (列出、安裝、解除安裝、啟用/停用、診斷)"
+summary: "`openclaw plugins` 的 CLI 參考文件（列表、安裝、解除安裝、啟用/停用、檢查）"
 read_when:
-  - 當您想要安裝或管理程序內 Gateway 外掛程式時
-  - 當您想要偵錯外掛程式載入失敗時
-title: "外掛程式"
+  - 當你想安裝或管理程序內（in-process）的 Gateway 外掛程式時
+  - 當你想對外掛程式載入失敗進行偵錯時
+title: "plugins"
 ---
 
-# `openclaw 外掛程式`
+# `openclaw plugins`
 
-管理 Gateway 外掛程式/擴充功能 (程序內載入)。
+管理 Gateway 外掛程式/擴展功能（以程序內方式載入）。
 
-相關：
+相關資訊：
 
-- 外掛程式系統：[外掛程式](/tools/plugin)
-- 外掛程式清單 + 結構描述：[外掛程式清單](/plugins/manifest)
-- 安全性強化：[安全性](/gateway/security)
+- 外掛程式系統：[Plugins](/tools/plugin)
+- 外掛程式資訊清單（manifest）與結構描述（schema）：[Plugin manifest](/plugins/manifest)
+- 安全強化：[Security](/gateway/security)
 
-## 指令
+## Commands
 
 ```bash
 openclaw plugins list
@@ -29,27 +29,27 @@ openclaw plugins update <id>
 openclaw plugins update --all
 ```
 
-OpenClaw 隨附的捆綁外掛程式預設為停用。使用 `plugins enable` 啟用它們。
+隨附外掛程式會隨 OpenClaw 一併提供，但初始狀態為停用。請使用 `plugins enable` 來啟用它們。
 
-所有外掛程式必須隨附一個 `openclaw.plugin.json` 檔案，其中包含內聯 JSON 結構描述 (`configSchema`，即使為空)。缺少/無效的清單或結構描述會導致外掛程式無法載入並使設定驗證失敗。
+所有外掛程式都必須隨附一個 `openclaw.plugin.json` 檔案，其中包含內嵌的 JSON Schema（`configSchema`，即使內容為空也需提供）。遺失或無效的資訊清單或結構描述將導致外掛程式無法載入，且無法通過設定驗證。
 
-### 安裝
+### Install
 
 ```bash
 openclaw plugins install <path-or-spec>
 ```
 
-安全注意事項：將外掛程式安裝視為執行程式碼。建議使用固定版本。
+安全注意事項：請像對待執行程式碼一樣謹慎處理外掛程式安裝。建議優先選用固定版本（pinned versions）。
 
 支援的封存格式：`.zip`、`.tgz`、`.tar.gz`、`.tar`。
 
-使用 `--link` 避免複製本機目錄 (新增至 `plugins.load.paths`)：
+使用 `--link` 以避免複製本地目錄（會將路徑新增至 `plugins.load.paths`）：
 
 ```bash
 openclaw plugins install -l ./my-plugin
 ```
 
-### 解除安裝
+### Uninstall
 
 ```bash
 openclaw plugins uninstall <id>
@@ -57,13 +57,13 @@ openclaw plugins uninstall <id> --dry-run
 openclaw plugins uninstall <id> --keep-files
 ```
 
-`uninstall` 會從 `plugins.entries`、`plugins.installs`、外掛程式允許清單以及適用的連結 `plugins.load.paths` 項目中移除外掛程式記錄。對於啟用中的記憶體外掛程式，記憶體槽會重設為 `memory-core`。
+`uninstall` 會從 `plugins.entries`、`plugins.installs`、外掛程式白名單以及（若適用）連結的 `plugins.load.paths` 項目中移除外掛程式紀錄。對於使用中的記憶體外掛程式，記憶體插槽將重設為 `memory-core`。
 
-依預設，解除安裝也會移除啟用中狀態目錄擴充功能根目錄 (`$OPENCLAW_STATE_DIR/extensions/<id>`) 下的外掛程式安裝目錄。使用 `--keep-files` 可保留磁碟上的檔案。
+預設情況下，解除安裝也會移除位於活動狀態目錄擴展根目錄（`$OPENCLAW_STATE_DIR/extensions/<id>`）下的外掛程式安裝目錄。使用 `--keep-files` 可保留磁碟上的檔案。
 
-`--keep-config` 做為 `--keep-files` 的已棄用別名受到支援。
+`--keep-config` 作為 `--keep-files` 的棄用別名仍受支援。
 
-### 更新
+### Update
 
 ```bash
 openclaw plugins update <id>
@@ -71,4 +71,4 @@ openclaw plugins update --all
 openclaw plugins update <id> --dry-run
 ```
 
-更新僅適用於從 npm 安裝的外掛程式 (在 `plugins.installs` 中追蹤)。
+更新僅適用於從 npm 安裝的外掛程式（記錄於 `plugins.installs` 中）。

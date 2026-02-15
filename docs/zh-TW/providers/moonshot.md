@@ -1,17 +1,15 @@
 ---
-summary: "設定 Moonshot K2 與 Kimi Coding（獨立供應商 + 金鑰）"
+summary: "設定 Moonshot K2 與 Kimi Coding（獨立供應商與金鑰）"
 read_when:
-  - 您想設定 Moonshot K2（Moonshot Open Platform）與 Kimi Coding
-  - 您需要了解獨立的端點、金鑰和模型參考
-  - 您想要複製/貼上任一供應商的設定
+  - 您想要設定 Moonshot K2 (Moonshot 開放平台) 或 Kimi Coding
+  - 您需要了解獨立的端點、金鑰與模型引用
+  - 您想要複製並貼上任一供應商的設定
 title: "Moonshot AI"
 ---
 
 # Moonshot AI (Kimi)
 
-Moonshot 提供與 OpenAI 相容端點的 Kimi API。設定
-供應商並將預設模型設定為 `moonshot/kimi-k2.5`，或使用
-Kimi Coding 與 `kimi-coding/k2p5`。
+Moonshot 提供與 OpenAI 相容端點的 Kimi API。請設定供應商，並將預設模型設為 `moonshot/kimi-k2.5`，或使用 `kimi-coding/k2p5` 來搭配 Kimi Coding。
 
 目前的 Kimi K2 模型 ID：
 
@@ -34,9 +32,9 @@ Kimi Coding：
 openclaw onboard --auth-choice kimi-code-api-key
 ```
 
-備註：Moonshot 和 Kimi Coding 是獨立的供應商。金鑰不可互換，端點不同，模型參考也不同（Moonshot 使用 `moonshot/...`，Kimi Coding 使用 `kimi-coding/...`）。
+注意：Moonshot 與 Kimi Coding 是獨立的供應商。金鑰無法通用、端點不同，且模型引用也不同 (Moonshot 使用 `moonshot/...`，Kimi Coding 使用 `kimi-coding/...`)。
 
-## 設定片段 (Moonshot API)
+## 設定程式碼片段 (Moonshot API)
 
 ```json5
 {
@@ -133,10 +131,9 @@ openclaw onboard --auth-choice kimi-code-api-key
 }
 ```
 
-## 備註
+## 注意事項
 
-- Moonshot 模型參考使用 `moonshot/<modelId>`。Kimi Coding 模型參考使用 `kimi-coding/<modelId>`。
-- 如有需要，可在 `models.providers` 中覆寫定價和上下文中繼資料。
-- 如果 Moonshot 發布了模型的不同上下文限制，請相應調整
-  `contextWindow`。
-- 國際端點使用 `https://api.moonshot.ai/v1`，中國端點使用 `https://api.moonshot.cn/v1`。
+- Moonshot 模型引用使用 `moonshot/<modelId>`。Kimi Coding 模型引用則使用 `kimi-coding/<modelId>`。
+- 如有需要，可在 `models.providers` 中覆寫計價與上下文 (context) 中繼資料。
+- 如果 Moonshot 為特定模型發佈了不同的上下文限制，請相應調整 `contextWindow`。
+- 國際端點請使用 `https://api.moonshot.ai/v1`，中國端點請使用 `https://api.moonshot.cn/v1`。

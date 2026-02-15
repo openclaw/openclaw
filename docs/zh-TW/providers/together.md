@@ -7,21 +7,21 @@ read_when:
 
 # Together AI
 
-[Together AI](https://together.ai) 透過統一的 API 提供對領先的開源模型（包括 Llama、DeepSeek、Kimi 等）的存取。
+[Together AI](https://together.ai) 透過統一的 API 提供存取多種領先的開源模型，包括 Llama、DeepSeek、Kimi 等。
 
-- 提供者: `together`
-- 驗證: `TOGETHER_API_KEY`
-- API: 與 OpenAI 相容
+- 供應商：`together`
+- 驗證：`TOGETHER_API_KEY`
+- API：相容 OpenAI
 
-## 快速入門
+## 快速開始
 
-1. 設定 API 金鑰 (建議: 將其儲存在 Gateway):
+1. 設定 API 金鑰（建議：儲存至 Gateway）：
 
 ```bash
 openclaw onboard --auth-choice together-api-key
 ```
 
-2. 設定預設模型:
+2. 設定預設模型：
 
 ```json5
 {
@@ -42,22 +42,22 @@ openclaw onboard --non-interactive \
   --together-api-key "$TOGETHER_API_KEY"
 ```
 
-這將把 `together/moonshotai/Kimi-K2.5` 設定為預設模型。
+這會將 `together/moonshotai/Kimi-K2.5` 設為預設模型。
 
-## 環境注意事項
+## 環境說明
 
-如果 Gateway 作為守護行程 (launchd/systemd) 運行，請確保 `TOGETHER_API_KEY` 對該程序可用 (例如，在 `~/.clawdbot/.env` 或透過 `env.shellEnv`)。
+如果 Gateway 以守護行程 (daemon, 如 launchd/systemd) 執行，請確保該程序可以存取 `TOGETHER_API_KEY`（例如，存放在 `~/.clawdbot/.env` 檔案中或透過 `env.shellEnv` 設定）。
 
 ## 可用模型
 
-Together AI 提供對許多流行開源模型的存取:
+Together AI 提供許多熱門開源模型的存取權：
 
-- **GLM 4.7 Fp8** - 預設模型，具有 200K 上下文視窗
-- **Llama 3.3 70B Instruct Turbo** - 快速、高效的指令遵循
-- **Llama 4 Scout** - 具有圖像理解功能的視覺模型
-- **Llama 4 Maverick** - 先進的視覺和推理
-- **DeepSeek V3.1** - 強大的程式設計和推理模型
-- **DeepSeek R1** - 高級推理模型
-- **Kimi K2 Instruct** - 具有 262K 上下文視窗的高效能模型
+- **GLM 4.7 Fp8** - 具備 200K 上下文視窗的預設模型
+- **Llama 3.3 70B Instruct Turbo** - 快速且高效的指令遵循模型
+- **Llama 4 Scout** - 具備圖像理解能力的視覺模型
+- **Llama 4 Maverick** - 先進的視覺與推理模型
+- **DeepSeek V3.1** - 強大的程式碼編寫與推理模型
+- **DeepSeek R1** - 先進的推理模型
+- **Kimi K2 Instruct** - 高效能模型，具備 262K 上下文視窗
 
-所有模型都支援標準聊天完成，並與 OpenAI API 相容。
+所有模型皆支援標準對話補全 (chat completions)，且與 OpenAI API 相容。

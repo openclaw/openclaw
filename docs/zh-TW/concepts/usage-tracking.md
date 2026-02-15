@@ -1,8 +1,8 @@
 ---
-summary: "使用追蹤介面與憑證要求"
+summary: "使用量追蹤介面與憑證需求"
 read_when:
-  - 您正在連接供應商使用量/配額介面時
-  - 您需要解釋使用追蹤行為或憑證要求時
+  - 當你在串接供應商使用量/配額介面時
+  - 當你需要說明使用量追蹤行為或驗證需求時
 title: "使用量追蹤"
 ---
 
@@ -10,26 +10,26 @@ title: "使用量追蹤"
 
 ## 這是什麼
 
-- 直接從供應商的使用端點拉取其使用量/配額。
-- 沒有估計費用；只有供應商回報的時間窗口。
+- 直接從供應商的使用量端點獲取使用量/配額。
+- 不提供估算成本；僅顯示供應商回報的時間窗口。
 
 ## 顯示位置
 
-- 聊天中的 `/status`：表情符號豐富的狀態卡，顯示工作階段代幣 + 估計費用（僅限 API key）。當可用時，供應商使用量會顯示給**目前的模型供應商**。
-- 聊天中的 `/usage off|tokens|full`：每回覆的使用量頁尾（OAuth 僅顯示代幣）。
-- 聊天中的 `/usage cost`：從 OpenClaw 工作階段日誌中彙總的本地費用摘要。
-- CLI：`openclaw status --usage` 會列印完整的每個供應商細目。
-- CLI：`openclaw channels list` 會列印相同的使用量快照以及供應商設定（使用 `--no-usage` 即可跳過）。
-- macOS 選單列：「使用量」區段在「Context」下方（僅當可用時）。
+- 聊天中的 `/status`：豐富表情符號的狀態卡片，包含工作階段 tokens + 估算成本（僅限 API key）。當可用時，會顯示**目前模型供應商**的使用量。
+- 聊天中的 `/usage off|tokens|full`：每則回應的使用量頁尾（OAuth 僅顯示 tokens）。
+- 聊天中的 `/usage cost`：彙整自 OpenClaw 工作階段日誌的本地成本摘要。
+- CLI：`openclaw status --usage` 列印完整的各供應商明細。
+- CLI：`openclaw channels list` 在供應商設定旁列印相同的使用量快照（使用 `--no-usage` 略過）。
+- macOS 選單列：Context 下的「Usage」區段（僅在可用時顯示）。
 
-## 供應商 + 憑證
+## 供應商與憑證
 
-- **Anthropic (Claude)**：憑證設定檔中的 OAuth 代幣。
-- **GitHub Copilot**：憑證設定檔中的 OAuth 代幣。
-- **Gemini CLI**：憑證設定檔中的 OAuth 代幣。
-- **Antigravity**：憑證設定檔中的 OAuth 代幣。
-- **OpenAI Codex**：憑證設定檔中的 OAuth 代幣（存在時使用 accountId）。
-- **MiniMax**：API key（編碼方案 key；`MINIMAX_CODE_PLAN_KEY` 或 `MINIMAX_API_KEY`）；使用 5 小時編碼方案視窗。
-- **z.ai**：透過環境變數/設定/憑證儲存的 API key。
+- **Anthropic (Claude)**：驗證設定檔中的 OAuth tokens。
+- **GitHub Copilot**：驗證設定檔中的 OAuth tokens。
+- **Gemini CLI**：驗證設定檔中的 OAuth tokens。
+- **Antigravity**：驗證設定檔中的 OAuth tokens。
+- **OpenAI Codex**：驗證設定檔中的 OAuth tokens（若存在則使用 accountId）。
+- **MiniMax**：API key（程式碼方案金鑰；`MINIMAX_CODE_PLAN_KEY` 或 `MINIMAX_API_KEY`）；使用 5 小時程式碼方案窗口。
+- **z.ai**：透過環境變數/設定/驗證儲存庫提供的 API key。
 
-如果沒有匹配的 OAuth/API 憑證，則隱藏使用量。
+若不存在匹配的 OAuth/API 憑證，則會隱藏使用量。

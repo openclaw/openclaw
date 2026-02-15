@@ -1,33 +1,32 @@
-```
 ---
-summary: "在幾分鐘內安裝 OpenClaw 並運行您的第一次聊天。"
+summary: "在幾分鐘內完成 OpenClaw 安裝並開始您的第一次對話。"
 read_when:
-  - 從零開始的首次設定
-  - 您希望以最快的方式建立可運作的聊天
+  - 從零開始進行首次設定
+  - 您想以最快路徑開始對話
 title: "入門指南"
 ---
 
 # 入門指南
 
-目標：以最少的設定，從零開始建立第一個可運作的聊天。
+目標：以最少的設定從零開始完成第一次對話。
 
 <Info>
-最快速的聊天：開啟控制介面 (無需頻道設定)。運行 `openclaw dashboard` 並在瀏覽器中聊天，或者在 <Tooltip headline="Gateway 主機" tip="運行 OpenClaw Gateway 服務的機器。">Gateway 主機</Tooltip> 上開啟 `http://127.0.0.1:18789/`。
-文件：[儀表板](/web/dashboard) 和 [控制介面](/web/control-ui)。
+最快開始對話的方式：開啟 Control UI（不需要設定頻道）。執行 `openclaw dashboard` 並在瀏覽器中進行對話，或在 <Tooltip headline="Gateway host" tip="執行 OpenClaw Gateway 服務的機器。">Gateway 主機</Tooltip>上開啟 `http://127.0.0.1:18789/`。
+文件：[Dashboard](/web/dashboard) 與 [Control UI](/web/control-ui)。
 </Info>
 
-## 先決條件
+## 前置需求
 
-- Node 22 或更新版本
+- Node 22 或更高版本
 
 <Tip>
-如果您不確定，請使用 `node --version` 檢查您的 Node 版本。
+如果不確定，請使用 `node --version` 檢查您的 Node 版本。
 </Tip>
 
 ## 快速設定 (CLI)
 
 <Steps>
-  <Step title="安裝 OpenClaw (建議)">
+  <Step title="安裝 OpenClaw (建議使用)">
     <Tabs>
       <Tab title="macOS/Linux">
         ```bash
@@ -35,7 +34,7 @@ title: "入門指南"
         ```
         <img
   src="/assets/install-script.svg"
-  alt="Install Script Process"
+  alt="安裝指令碼流程"
   className="rounded-lg"
 />
       </Tab>
@@ -47,27 +46,28 @@ title: "入門指南"
     </Tabs>
 
     <Note>
-    其他安裝方法和要求：[安裝](/install)。
+    其他安裝方法與需求：[安裝](/install)。
     </Note>
 
   </Step>
-  <Step title="運行新手導覽精靈">
+  <Step title="執行新手導覽精靈">
     ```bash
     openclaw onboard --install-daemon
     ```
 
-    精靈會設定憑證、Gateway 設定和可選的頻道。詳情請參閱 [新手導覽精靈](/start/wizard)。
+    精靈將引導您完成憑證、Gateway 設定以及選用的頻道設定。
+    詳情請參閱 [新手導覽精靈](/start/wizard)。
 
   </Step>
   <Step title="檢查 Gateway">
-    如果您安裝了服務，它應該已經在運行：
+    如果您已安裝該服務，它應該已經在執行中：
 
     ```bash
     openclaw gateway status
     ```
 
   </Step>
-  <Step title="開啟控制介面">
+  <Step title="開啟 Control UI">
     ```bash
     openclaw dashboard
     ```
@@ -75,22 +75,22 @@ title: "入門指南"
 </Steps>
 
 <Check>
-如果控制介面載入，您的 Gateway 已可供使用。
+如果 Control UI 成功載入，表示您的 Gateway 已準備就緒。
 </Check>
 
-## 可選的檢查和額外項目
+## 選用檢查與額外功能
 
 <AccordionGroup>
-  <Accordion title="在前台運行 Gateway">
-    對於快速測試或疑難排解很有用。
+  <Accordion title="在前台執行 Gateway">
+    適用於快速測試或疑難排解。
 
     ```bash
     openclaw gateway --port 18789
     ```
 
   </Accordion>
-  <Accordion title="傳送測試訊息">
-    需要配置的頻道。
+  <Accordion title="發送測試訊息">
+    需要已設定的頻道。
 
     ```bash
     openclaw message send --target +15555550123 --message "Hello from OpenClaw"
@@ -101,34 +101,33 @@ title: "入門指南"
 
 ## 有用的環境變數
 
-如果您將 OpenClaw 作為服務帳戶運行，或者需要自訂設定/狀態位置：
+如果您以服務帳戶執行 OpenClaw，或想要自訂設定/狀態位置：
 
 - `OPENCLAW_HOME` 設定用於內部路徑解析的主目錄。
-- `OPENCLAW_STATE_DIR` 覆寫狀態目錄。
-- `OPENCLAW_CONFIG_PATH` 覆寫設定檔案路徑。
+- `OPENCLAW_STATE_DIR` 覆蓋狀態目錄。
+- `OPENCLAW_CONFIG_PATH` 覆蓋設定檔案路徑。
 
 完整的環境變數參考：[環境變數](/help/environment)。
 
-## 深入了解
+## 深入瞭解
 
 <Columns>
   <Card title="新手導覽精靈 (詳情)" href="/start/wizard">
-    完整的 CLI 精靈參考和進階選項。
+    完整的 CLI 精靈參考與進階選項。
   </Card>
   <Card title="macOS 應用程式新手導覽" href="/start/onboarding">
-    macOS 應用程式的首次運行流程。
+    macOS 應用程式的首次執行流程。
   </Card>
 </Columns>
 
-## 您將擁有什麼
+## 您將獲得
 
-- 一個正在運行的 Gateway
-- 憑證已設定
-- 控制介面存取權或一個已連接的頻道
+- 執行中的 Gateway
+- 已設定憑證
+- Control UI 存取權限或已連線的頻道
 
 ## 後續步驟
 
-- 私訊安全與核准：[配對](/channels/pairing)
-- 連接更多頻道：[頻道](/channels)
-- 進階工作流程和從源碼：[設定](/start/setup)
-```
+- 私訊安全與授權：[Pairing](/channels/pairing)
+- 連結更多頻道：[Channels](/channels)
+- 進階工作流與從原始碼安裝：[Setup](/start/setup)

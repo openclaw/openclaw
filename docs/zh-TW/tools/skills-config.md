@@ -1,14 +1,14 @@
 ---
-summary: "Skills 設定綱要與範例"
+summary: "Skills 設定結構與範例"
 read_when:
-  - 新增或修改 Skills 設定
-  - 調整綁定允許清單或安裝行為
+  - 新增或修改 Skills 設定時
+  - 調整內建白名單或安裝行為時
 title: "Skills 設定"
 ---
 
 # Skills 設定
 
-所有與 Skills 相關的設定都位於 `~/.openclaw/openclaw.json` 中的 `skills` 之下。
+所有與 Skills 相關的設定都位於 `~/.openclaw/openclaw.json` 中的 `skills` 欄位下。
 
 ```json5
 {
@@ -21,7 +21,7 @@ title: "Skills 設定"
     },
     install: {
       preferBrew: true,
-      nodeManager: "npm", // npm | pnpm | yarn | bun (Gateway runtime still Node; bun not recommended)
+      nodeManager: "npm", // npm | pnpm | yarn | bun (Gateway 執行環境仍為 Node；不建議使用 bun)
     },
     entries: {
       "nano-banana-pro": {
@@ -40,32 +40,32 @@ title: "Skills 設定"
 
 ## 欄位
 
-- `allowBundled`: 僅限用於**綁定** Skills 的選用允許清單。設定後，只有清單中的綁定 Skills 才符合資格（不影響受管理/工作區 Skills）。
-- `load.extraDirs`: 額外要掃描的 Skills 目錄（優先級最低）。
-- `load.watch`: 監看 Skills 資料夾並重新整理 Skills 快照（預設：true）。
-- `load.watchDebounceMs`: Skills 監看事件的防抖延遲時間（毫秒）（預設：250）。
-- `install.preferBrew`: 優先使用 brew 安裝程式（如果可用）（預設：true）。
-- `install.nodeManager`: Node 安裝程式偏好設定 (`npm` | `pnpm` | `yarn` | `bun`，預設：npm）。這僅影響 **Skills 安裝**；Gateway 執行時仍應為 Node（不建議將 Bun 用於 WhatsApp/Telegram）。
-- `entries.<skillKey>`: 每個 Skills 的覆寫設定。
+- `allowBundled`: 內建 **bundled** Skills 的選擇性白名單。設定後，僅清單中的內建 Skills 可供使用（受管理/工作區 Skills 不受影響）。
+- `load.extraDirs`: 額外掃描的 Skills 目錄（優先級最低）。
+- `load.watch`: 監控 Skills 資料夾並重新整理 Skills 快照（預設值：true）。
+- `load.watchDebounceMs`: Skills 監控事件的防彈跳時間（毫秒，預設值：250）。
+- `install.preferBrew`: 若可用，優先使用 brew 安裝程式（預設值：true）。
+- `install.nodeManager`: Node 安裝程式偏好 (`npm` | `pnpm` | `yarn` | `bun`，預設值：npm)。這僅影響 **Skills 安裝**；Gateway 執行環境仍應為 Node（WhatsApp/Telegram 不建議使用 Bun）。
+- `entries.<skillKey>`: 個別 Skill 的覆寫設定。
 
-每個 Skills 的欄位：
+個別 Skill 欄位：
 
-- `enabled`: 將 `false` 設定為停用某個 Skills，即使它是綁定/已安裝的。
-- `env`: 為智慧代理執行注入的環境變數（僅在未設定時）。
-- `apiKey`: 對於宣告主要環境變數的 Skills 而言是選用方便欄位。
+- `enabled`: 設為 `false` 可停用該 Skill，即使它是內建或已安裝的。
+- `env`: 注入智慧代理執行的環境變數（僅在未設定時注入）。
+- `apiKey`: 為宣告主要環境變數的 Skills 提供的選用便利設定。
 
 ## 注意事項
 
-- `entries` 下方的鍵名預設對應到 Skills 名稱。如果 Skills 定義了 `metadata.openclaw.skillKey`，則改用該鍵名。
-- 當監看器啟用時，Skills 的變更會在智慧代理的下一個回合中生效。
+- `entries` 下的鍵名預設對應 Skill 名稱。如果 Skill 定義了 `metadata.openclaw.skillKey`，請改用該鍵名。
+- 啟用監控器時，Skills 的變更將在智慧代理的下一次輪詢中生效。
 
-### 沙箱隔離 Skills + 環境變數
+### 沙箱隔離的 Skills + 環境變數
 
-當一個工作階段是**沙箱隔離**時，Skills 程式會在 Docker 內部執行。沙箱**不會**繼承主機的 `process.env`。
+當工作階段被**沙箱隔離**時，Skill 程序會在 Docker 內部執行。沙箱**不會**繼承主機的 `process.env`。
 
 請使用以下其中一種方式：
 
-- `agents.defaults.sandbox.docker.env` (或每個智慧代理的 `agents.list[].sandbox.docker.env`)
-- 將環境變數烘焙到您的自訂沙箱隔離映像檔中
+- `agents.defaults.sandbox.docker.env`（或個別智慧代理的 `agents.list[].sandbox.docker.env`）
+- 將環境變數封裝到自定義沙箱映像檔中
 
-全域的 `env` 和 `skills.entries.<skill>.env/apiKey` 僅適用於**主機**執行。
+全域 `env` 以及 `skills.entries.<skill>.env/apiKey` 僅適用於**主機**端執行。

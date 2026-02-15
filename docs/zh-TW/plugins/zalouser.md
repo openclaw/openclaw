@@ -1,26 +1,26 @@
 ---
-summary: "Zalo 個人外掛程式：透過 zca-cli 進行 QR 登入 + 訊息傳送（外掛程式安裝 + 頻道設定 + CLI + 工具）"
+summary: "Zalo 個人版插件：QR 碼登入 + 透過 zca-cli 傳送訊息（插件安裝 + 頻道設定 + CLI + 工具）"
 read_when:
-  - 您想在 OpenClaw 中獲得 Zalo 個人版（非官方）支援
-  - 您正在設定或開發 zalouser 外掛程式
-title: "Zalo 個人外掛程式"
+  - 您想在 OpenClaw 中使用 Zalo 個人版（非官方）支援
+  - 您正在設定或開發 zalouser 插件
+title: "Zalo 個人版插件"
 ---
 
-# Zalo 個人版（外掛程式）
+# Zalo 個人版 (插件)
 
-透過外掛程式在 OpenClaw 中支援 Zalo 個人版，使用 `zca-cli` 自動化普通的 Zalo 使用者帳號。
+透過插件為 OpenClaw 提供 Zalo 個人版支援，使用 `zca-cli` 自動化操作一般的 Zalo 使用者帳號。
 
-> **警告：** 非官方自動化可能導致帳號暫停/封鎖。請自行承擔風險。
+> **警告：** 非官方自動化可能導致帳號被停權或封鎖。請自行承擔風險。
 
 ## 命名
 
-頻道 ID 為 `zalouser`，以明確表示這會自動化**個人 Zalo 使用者帳號**（非官方）。我們保留 `zalo` 以供未來可能與 Zalo 官方 API 整合使用。
+頻道 ID 為 `zalouser`，以明確表示這是自動化操作 **個人 Zalo 使用者帳號**（非官方）。我們保留 `zalo` 一詞，以備未來可能的官方 Zalo API 整合之用。
 
 ## 執行位置
 
-此外掛程式在 **Gateway 處理程序內部**執行。
+此插件在 **Gateway 程序內部** 執行。
 
-如果您使用遠端 Gateway，請將其安裝/設定在**執行 Gateway 的機器上**，然後重新啟動 Gateway。
+如果您使用遠端 Gateway，請在 **執行 Gateway 的機器** 上安裝/設定，然後重啟 Gateway。
 
 ## 安裝
 
@@ -30,20 +30,20 @@ title: "Zalo 個人外掛程式"
 openclaw plugins install @openclaw/zalouser
 ```
 
-之後重新啟動 Gateway。
+完成後請重啟 Gateway。
 
-### 選項 B：從本機檔案夾安裝（開發）
+### 選項 B：從本地資料夾安裝（開發環境）
 
 ```bash
 openclaw plugins install ./extensions/zalouser
 cd ./extensions/zalouser && pnpm install
 ```
 
-之後重新啟動 Gateway。
+完成後請重啟 Gateway。
 
-## 必要條件：zca-cli
+## 前提條件：zca-cli
 
-Gateway 機器必須在 `PATH` 中包含 `zca`：
+執行 Gateway 的機器必須將 `zca` 加入 `PATH`：
 
 ```bash
 zca --version
@@ -78,4 +78,4 @@ openclaw directory peers list --channel zalouser --query "name"
 
 工具名稱：`zalouser`
 
-動作：`send`, `image`, `link`, `friends`, `groups`, `me`, `status`
+操作：`send`, `image`, `link`, `friends`, `groups`, `me`, `status`

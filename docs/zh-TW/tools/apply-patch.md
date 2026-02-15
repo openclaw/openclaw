@@ -1,16 +1,16 @@
 ---
-summary: "使用 apply_patch 工具應用多檔案補丁"
+summary: "使用 apply_patch 工具套用多檔案 patch"
 read_when:
-  - 當您需要在多個檔案中進行結構化的檔案編輯時
-  - 當您想要記錄或偵錯基於補丁的編輯時
+  - 您需要在多個檔案中進行結構化檔案編輯
+  - 您想要記錄或偵錯基於 patch 的編輯
 title: "apply_patch 工具"
 ---
 
 # apply_patch 工具
 
-使用結構化補丁格式應用檔案變更。這對於多檔案或多區塊的編輯來說是理想的選擇，因為單一的 `edit` 呼叫可能會很脆弱。
+使用結構化的 patch 格式套用檔案變更。這非常適合多檔案或多程式碼片段 (hunk) 的編輯，在這種情況下，單次的 `edit` 呼叫可能會顯得脆弱。
 
-此工具接受一個單一的 `input` 字串，其中包含一個或多個檔案操作：
+此工具接受單一的 `input` 字串，其中封裝了一個或多個檔案操作：
 
 ```
 *** Begin Patch
@@ -27,16 +27,16 @@ title: "apply_patch 工具"
 
 ## 參數
 
-- `input` (必要): 完整的補丁內容，包括 `*** Begin Patch` 和 `*** End Patch`。
+- `input` (必填)：完整的 patch 內容，包含 `*** Begin Patch` 與 `*** End Patch`。
 
 ## 注意事項
 
-- 檔案路徑是相對於工作區根目錄解析的。
-- 在 `*** Update File:` 區塊中使用 `*** Move to:` 來重新命名檔案。
-- `*** End of File` 標記了僅在檔案結尾處的插入點（如果需要）。
-- 這是實驗性功能，預設為停用。透過 `tools.exec.applyPatch.enabled` 啟用。
-- 僅限 OpenAI（包括 OpenAI Codex）。可以透過 `tools.exec.applyPatch.allowModels` 選擇性地限制模型使用。
-- 設定僅在 `tools.exec` 下。
+- 路徑是相對於工作區根目錄進行解析。
+- 在 `*** Update File:` hunk 中使用 `*** Move to:` 來重新命名檔案。
+- `*** End of File` 在需要時標記僅限檔案結尾 (EOF) 的插入。
+- 實驗性功能，預設為停用。可透過 `tools.exec.applyPatch.enabled` 啟用。
+- 僅限 OpenAI（包含 OpenAI Codex）。可選擇性地透過 `tools.exec.applyPatch.allowModels` 根據模型進行限制。
+- 設定僅位於 `tools.exec` 之下。
 
 ## 範例
 

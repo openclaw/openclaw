@@ -1,18 +1,18 @@
 ---
-summary: "透過 Gateway + CLI 傳送投票"
+summary: "透過 Gateway + CLI 發送投票"
 read_when:
   - 新增或修改投票支援時
-  - 從 CLI 或 Gateway 偵錯投票傳送時
+  - 從 CLI 或 Gateway 除錯投票發送時
 title: "投票"
 ---
 
 # 投票
 
-## 支援的通道
+## 支援的頻道
 
-- WhatsApp (網頁通道)
+- WhatsApp (web 頻道)
 - Discord
-- MS Teams (自適應卡片)
+- MS Teams (Adaptive Cards)
 
 ## CLI
 
@@ -36,9 +36,9 @@ openclaw message poll --channel msteams --target conversation:19:abc @thread.tac
 
 選項：
 
-- `--channel`：`whatsapp` (預設)、`discord` 或 `msteams`
+- `--channel`：`whatsapp`（預設）、`discord` 或 `msteams`
 - `--poll-multi`：允許選擇多個選項
-- `--poll-duration-hours`：僅限 Discord (省略時預設為 24 小時)
+- `--poll-duration-hours`：僅限 Discord（省略時預設為 24）
 
 ## Gateway RPC
 
@@ -46,23 +46,23 @@ openclaw message poll --channel msteams --target conversation:19:abc @thread.tac
 
 參數：
 
-- `to` (字串，必填)
-- `question` (字串，必填)
-- `options` (字串陣列，必填)
-- `maxSelections` (數字，選填)
-- `durationHours` (數字，選填)
-- `channel` (字串，選填，預設：`whatsapp`)
-- `idempotencyKey` (字串，必填)
+- `to` (string, 必填)
+- `question` (string, 必填)
+- `options` (string[], 必填)
+- `maxSelections` (number, 選填)
+- `durationHours` (number, 選填)
+- `channel` (string, 選填，預設：`whatsapp`)
+- `idempotencyKey` (string, 必填)
 
-## 通道差異
+## 頻道差異
 
-- WhatsApp：2-12 個選項，`maxSelections` 必須在選項數量範圍內，忽略 `durationHours`。
-- Discord：2-10 個選項，`durationHours` 限制在 1-768 小時 (預設 24)。`maxSelections > 1` 啟用多選；Discord 不支援嚴格的選擇數量。
-- MS Teams：自適應卡片投票 (OpenClaw 管理)。無原生投票 API；`durationHours` 被忽略。
+- WhatsApp：2-12 個選項，`maxSelections` 必須在選項總數內，忽略 `durationHours`。
+- Discord：2-10 個選項，`durationHours` 限制在 1-768 小時（預設 24）。`maxSelections > 1` 會啟用多選；Discord 不支援嚴格的選擇數量限制。
+- MS Teams：Adaptive Card 投票（由 OpenClaw 管理）。沒有原生投票 API；忽略 `durationHours`。
 
-## 代理工具 (訊息)
+## 智慧代理工具 (Message)
 
-使用 `message` 工具搭配 `poll` 動作 (`to`、`pollQuestion`、`pollOption`，選填 `pollMulti`、`pollDurationHours`、`channel`)。
+使用帶有 `poll` 動作（`to`、`pollQuestion`、`pollOption`、選填 `pollMulti`、`pollDurationHours`、`channel`）的 `message` 工具。
 
-注意：Discord 沒有「精確選擇 N 個」模式；`pollMulti` 對應到多選。
-Teams 投票以自適應卡片呈現，並要求 Gateway 保持線上才能將投票記錄在 `~/.openclaw/msteams-polls.json` 中。
+注意：Discord 沒有「精確選擇 N 個」模式；`pollMulti` 會對應到多選。
+Teams 投票會以 Adaptive Cards 呈現，且需要 Gateway 保持在線，以便將投票結果記錄在 `~/.openclaw/msteams-polls.json` 中。

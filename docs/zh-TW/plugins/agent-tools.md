@@ -1,18 +1,18 @@
 ---
-summary: "在插件中編寫智慧代理工具（Schema、選用工具、允許清單）"
+summary: "在外掛程式中撰寫智慧代理工具（結構定義、選用工具、允許清單）"
 read_when:
-  - 您想在插件中新增智慧代理工具
-  - 您需要透過允許清單讓工具選擇啟用
-title: "插件智慧代理工具"
+  - 您想在外掛程式中新增智慧代理工具
+  - 您需要透過允許清單讓工具變為選擇性加入 (opt-in)
+title: "外掛程式智慧代理工具"
 ---
 
-# 插件智慧代理工具
+# 外掛程式智慧代理工具
 
-OpenClaw 插件可以註冊**智慧代理工具** (JSON-schema functions)，這些工具會在智慧代理執行期間暴露給 LLM。工具可以是**必備**（始終可用）或**選用**（選擇啟用）。
+OpenClaw 外掛程式可以註冊 **智慧代理工具**（JSON‑schema 函式），這些工具會在智慧代理執行期間提供給 LLM 使用。工具可以是 **必選**（一律可用）或 **選用**（選擇性加入）。
 
-智慧代理工具的設定位於主要設定檔中的 `tools`，或每個智慧代理的 `agents.list[].tools`。允許清單/拒絕清單政策控制智慧代理可以呼叫哪些工具。
+智慧代理工具可在主設定的 `tools` 下進行設定，或在 `agents.list[].tools` 下針對個別智慧代理進行設定。允許清單/拒絕清單政策控制智慧代理可以呼叫哪些工具。
 
-## 基本工具
+## 基礎工具
 
 ```ts
 import { Type } from " @sinclair/typebox";
@@ -31,9 +31,9 @@ export default function (api) {
 }
 ```
 
-## 選用工具（選擇啟用）
+## 選用工具（選擇性加入）
 
-選用工具**絕不會**自動啟用。使用者必須將它們新增到智慧代理的允許清單中。
+選用工具 **絕不會** 自動啟用。使用者必須將其新增至智慧代理的允許清單中。
 
 ```ts
 export default function (api) {
@@ -57,7 +57,7 @@ export default function (api) {
 }
 ```
 
-在 `agents.list[].tools.allow`（或全域 `tools.allow`）中啟用選用工具：
+在 `agents.list[].tools.allow`（或全域的 `tools.allow`）中啟用選用工具：
 
 ```json5
 {
@@ -67,9 +67,9 @@ export default function (api) {
         id: "main",
         tools: {
           allow: [
-            "workflow_tool", // specific tool name
-            "workflow", // plugin id (enables all tools from that plugin)
-            "group:plugins", // all plugin tools
+            "workflow_tool", // 特定工具名稱
+            "workflow", // 外掛程式 ID（啟用該外掛程式的所有工具）
+            "group:plugins", // 所有外掛程式工具
           ],
         },
       },
@@ -78,15 +78,15 @@ export default function (api) {
 }
 ```
 
-其他影響工具可用性的設定開關：
+其他影響工具可用性的設定項：
 
-- 只命名插件工具的允許清單會被視為插件的選擇啟用；核心工具仍會啟用，除非您在允許清單中也包含核心工具或群組。
-- `tools.profile` / `agents.list[].tools.profile` (基礎允許清單)
-- `tools.byProvider` / `agents.list[].tools.byProvider` (供應商專屬允許/拒絕)
-- `tools.sandbox.tools.*` (沙箱隔離時的沙箱工具政策)
+- 僅列出外掛程式工具的允許清單會被視為外掛程式的選擇性加入；核心工具仍會保持啟用，除非您也在允許清單中包含核心工具或群組。
+- `tools.profile` / `agents.list[].tools.profile`（基礎允許清單）
+- `tools.byProvider` / `agents.list[].tools.byProvider`（特定供應商的允許/拒絕）
+- `tools.sandbox.tools.*`（沙箱隔離時的沙箱工具政策）
 
-## 規則 + 提示
+## 規則與提示
 
-- 工具名稱**不得**與核心工具名稱衝突；衝突的工具將被跳過。
-- 允許清單中使用的插件 ID 不得與核心工具名稱衝突。
-- 對於會觸發副作用或需要額外二進位檔案/憑證的工具，請優先使用 `optional: true`。
+- 工具名稱 **不得** 與核心工具名稱衝突；衝突的工具將被略過。
+- 允許清單中使用的外掛程式 ID 不得與核心工具名稱衝突。
+- 對於會觸發副作用或需要額外執行檔/憑證的工具，建議使用 `optional: true`。

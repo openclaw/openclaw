@@ -1,44 +1,44 @@
 ---
-summary: "Gateway 網頁介面：控制 UI、綁定模式和安全性"
+summary: "Gateway 網頁介面：控制 UI、綁定模式與安全性"
 read_when:
-  - 您希望透過 Tailscale 存取 Gateway
-  - 您希望使用瀏覽器控制 UI 並編輯設定
+  - 您想透過 Tailscale 存取 Gateway
+  - 您需要瀏覽器控制 UI 與設定編輯功能
 title: "網頁"
 ---
 
 # 網頁 (Gateway)
 
-Gateway 從與 Gateway WebSocket 相同的埠提供一個小型的 **瀏覽器控制 UI** (Vite + Lit)：
+Gateway 在與 Gateway WebSocket 相同的連接埠上提供一個小型的 **瀏覽器控制 UI** (Vite + Lit)：
 
-- 預設值: `http://<host>:18789/`
-- 可選前綴：設定 `gateway.controlUi.basePath` (例如 `/openclaw`)
+- 預設：`http://<host>:18789/`
+- 選用前綴：設定 `gateway.controlUi.basePath` (例如 `/openclaw`)
 
-功能位於 [控制 UI](/web/control-ui)。
-此頁面專注於綁定模式、安全性以及網頁介面。
+功能詳見 [控制 UI](/web/control-ui)。
+本頁面重點介紹綁定模式、安全性以及面向網頁的介面。
 
 ## Webhooks
 
-當 `hooks.enabled=true` 時，Gateway 也會在相同的 HTTP 伺服器上公開一個小型 Webhook 端點。
-請參閱 [Gateway 設定](/gateway/configuration) → `hooks` 以了解憑證 + 有效負載。
+當 `hooks.enabled=true` 時，Gateway 也會在同一個 HTTP 伺服器上公開一個小型 Webhook 端點。
+請參閱 [Gateway 設定](/gateway/configuration) → `hooks` 以了解驗證與有效負載的詳情。
 
-## 設定 (預設啟用)
+## 設定 (預設開啟)
 
-當資源存在 (`dist/control-ui`) 時，控制 UI 會**預設啟用**。
-您可以透過設定來控制它：
+當資產存在時 (`dist/control-ui`)，控制 UI **預設為啟用**。
+您可以透過設定進行控制：
 
 ```json5
 {
   gateway: {
-    controlUi: { enabled: true, basePath: "/openclaw" }, // basePath optional
+    controlUi: { enabled: true, basePath: "/openclaw" }, // basePath 為選填
   },
 }
 ```
 
 ## Tailscale 存取
 
-### 整合式 Serve (建議)
+### 整合式 Serve (推薦)
 
-讓 Gateway 保持在 local loopback 上，並讓 Tailscale Serve 代理它：
+將 Gateway 保持在 local loopback，並讓 Tailscale Serve 進行代理：
 
 ```json5
 {
@@ -49,7 +49,7 @@ Gateway 從與 Gateway WebSocket 相同的埠提供一個小型的 **瀏覽器�
 }
 ```
 
-然後啟動 Gateway：
+接著啟動 Gateway：
 
 ```bash
 openclaw gateway
@@ -71,7 +71,7 @@ openclaw gateway
 }
 ```
 
-然後啟動 Gateway (非 local loopback 綁定需要權杖)：
+接著啟動 Gateway (非 loopback 綁定需要權杖)：
 
 ```bash
 openclaw gateway
@@ -81,32 +81,32 @@ openclaw gateway
 
 - `http://<tailscale-ip>:18789/` (或您設定的 `gateway.controlUi.basePath`)
 
-### 公共網路 (Funnel)
+### 公開網際網路 (Funnel)
 
 ```json5
 {
   gateway: {
     bind: "loopback",
     tailscale: { mode: "funnel" },
-    auth: { mode: "password" }, // or OPENCLAW_GATEWAY_PASSWORD
+    auth: { mode: "password" }, // 或 OPENCLAW_GATEWAY_PASSWORD
   },
 }
 ```
 
 ## 安全性注意事項
 
-- Gateway 預設需要憑證 (權杖/密碼或 Tailscale 身份標頭)。
-- 非 local loopback 綁定仍然**需要**共用權杖/密碼 (`gateway.auth` 或 環境變數)。
-- 精靈預設會產生一個 Gateway 權杖 (即使在 local loopback 上)。
-- UI 傳送 `connect.params.auth.token` 或 `connect.params.auth.password`。
-- 控制 UI 傳送反點擊劫持標頭，並且只接受同源瀏覽器 WebSocket 連線，除非設定了 `gateway.controlUi.allowedOrigins`。
-- 使用 Serve，當 `gateway.auth.allowTailscale` 為 `true` 時，Tailscale 身份標頭可以滿足憑證要求 (無需權杖/密碼)。將 `gateway.auth.allowTailscale: false` 設定為需要明確的憑證。請參閱 [Tailscale](/gateway/tailscale) 和 [安全性](/gateway/security)。
+- 預設情況下需要 Gateway 驗證 (權杖/密碼或 Tailscale 身分識別標頭)。
+- 非 loopback 綁定仍 **需要** 共用權杖/密碼 (`gateway.auth` 或環境變數)。
+- 新手導覽精靈預設會產生 Gateway 權杖 (即使在 loopback 上)。
+- UI 會傳送 `connect.params.auth.token` 或 `connect.params.auth.password`。
+- 控制 UI 會傳送抗點擊劫持 (anti-clickjacking) 標頭，且除非設定了 `gateway.controlUi.allowedOrigins`，否則僅接受同源 (same-origin) 的瀏覽器 WebSocket 連線。
+- 使用 Serve 時，若 `gateway.auth.allowTailscale` 為 `true`，Tailscale 身分識別標頭即可滿足驗證需求 (不需要權杖/密碼)。設定 `gateway.auth.allowTailscale: false` 則需要明確的憑證。請參閱 [Tailscale](/gateway/tailscale) 與 [安全性](/gateway/security)。
 - `gateway.tailscale.mode: "funnel"` 需要 `gateway.auth.mode: "password"` (共用密碼)。
 
-## 建構 UI
+## 建置 UI
 
-Gateway 從 `dist/control-ui` 提供靜態檔案。使用以下方式建構它們：
+Gateway 提供來自 `dist/control-ui` 的靜態檔案。請使用以下指令建置：
 
 ```bash
-pnpm ui:build # auto-installs UI deps on first run
+pnpm ui:build # 首次執行時會自動安裝 UI 依賴項目
 ```

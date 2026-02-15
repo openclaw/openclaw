@@ -1,32 +1,32 @@
 ---
-summary: "使用 vLLM 執行 OpenClaw (與 OpenAI 相容的本地伺服器)"
+summary: "使用 OpenClaw 執行 vLLM（OpenAI 相容的本地伺服器）"
 read_when:
-  - 您希望針對本地 vLLM 伺服器執行 OpenClaw
-  - 您希望透過自己的模型使用與 OpenAI 相容的 /v1 端點
+  - 你想針對本地 vLLM 伺服器執行 OpenClaw
+  - 你想透過自己的模型使用 OpenAI 相容的 /v1 端點
 title: "vLLM"
 ---
 
 # vLLM
 
-vLLM 可以透過**與 OpenAI 相容**的 HTTP API 提供開源（和一些客製化）模型服務。OpenClaw 可以使用 `openai-completions` API 連接到 vLLM。
+vLLM 可以透過 **OpenAI 相容**的 HTTP API 提供開源（以及一些自定義）模型。OpenClaw 可以使用 `openai-completions` API 連接到 vLLM。
 
-當您使用 `VLLM_API_KEY` 啟用（如果您的伺服器不強制進行身份驗證，任何值都可以）並且未定義明確的 `models.providers.vllm` 項目時，OpenClaw 還可以從 vLLM **自動探索**可用的模型。
+當你啟用 `VLLM_API_KEY`（如果你的伺服器不強制執行驗證，則任何值都可以）且未定義明確的 `models.providers.vllm` 項目時，OpenClaw 還可以從 vLLM **自動探索**可用的模型。
 
 ## 快速開始
 
-1. 啟動具有 OpenAI 相容伺服器的 vLLM。
+1. 使用 OpenAI 相容的伺服器啟動 vLLM。
 
-您的基本 URL 應公開 `/v1` 端點（例如 `/v1/models`、`/v1/chat/completions`）。vLLM 通常在以下位置運行：
+你的基礎 URL 應公開 `/v1` 端點（例如 `/v1/models`、`/v1/chat/completions`）。vLLM 通常執行於：
 
 - `http://127.0.0.1:8000/v1`
 
-2. 啟用（如果未設定身份驗證，任何值都可以）：
+2. 啟用（如果未設定驗證，則任何值都可以）：
 
 ```bash
 export VLLM_API_KEY="vllm-local"
 ```
 
-3. 選擇一個模型（替換為您的 vLLM 模型 ID 之一）：
+3. 選擇模型（替換為你的其中一個 vLLM 模型 ID）：
 
 ```json5
 {
@@ -38,23 +38,23 @@ export VLLM_API_KEY="vllm-local"
 }
 ```
 
-## 模型探索（隱式供應商）
+## 模型探索（隱含供應商）
 
-當設定 `VLLM_API_KEY`（或存在身份驗證設定檔）並且您**未**定義 `models.providers.vllm` 時，OpenClaw 將會查詢：
+當 `VLLM_API_KEY` 已設定（或存在驗證設定檔）且你**沒有**定義 `models.providers.vllm` 時，OpenClaw 將查詢：
 
 - `GET http://127.0.0.1:8000/v1/models`
 
-…並將返回的 ID 轉換為模型項目。
+……並將返回的 ID 轉換為模型項目。
 
-如果您明確設定 `models.providers.vllm`，則會跳過自動探索，並且您必須手動定義模型。
+如果你明確設定了 `models.providers.vllm`，則會跳過自動探索，你必須手動定義模型。
 
 ## 明確設定（手動模型）
 
 在以下情況下使用明確設定：
 
 - vLLM 在不同的主機/連接埠上執行。
-- 您希望固定 `contextWindow`/`maxTokens` 值。
-- 您的伺服器需要真正的 API 金鑰（或者您希望控制請求標頭）。
+- 你想固定 `contextWindow`/`maxTokens` 的值。
+- 你的伺服器需要真實的 API 金鑰（或者你想控制標頭）。
 
 ```json5
 {
@@ -83,10 +83,10 @@ export VLLM_API_KEY="vllm-local"
 
 ## 疑難排解
 
-- 檢查伺服器是否可達：
+- 檢查伺服器是否可連線：
 
 ```bash
 curl http://127.0.0.1:8000/v1/models
 ```
 
-- 如果請求因身份驗證錯誤而失敗，請設定一個符合您伺服器設定的真實 `VLLM_API_KEY`，或在 `models.providers.vllm` 下明確設定供應商。
+- 如果請求失敗並出現驗證錯誤，請設定一個與你的伺服器設定相符的真實 `VLLM_API_KEY`，或在 `models.providers.vllm` 下明確設定供應商。

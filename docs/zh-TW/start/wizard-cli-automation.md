@@ -1,7 +1,7 @@
 ---
-summary: "OpenClaw CLI 的指令碼自動化新手導覽與智慧代理設定"
+summary: "OpenClaw CLI 的腳本化新手導覽與智慧代理設定"
 read_when:
-  - 您正在指令碼或 CI 中自動化新手導覽
+  - 您正在腳本或 CI 中自動化執行新手導覽
   - 您需要特定供應商的非互動式範例
 title: "CLI 自動化"
 sidebarTitle: "CLI 自動化"
@@ -9,13 +9,13 @@ sidebarTitle: "CLI 自動化"
 
 # CLI 自動化
 
-使用 `--non-interactive` 自動化 `openclaw onboard`。
+使用 `--non-interactive` 來自動化執行 `openclaw onboard`。
 
 <Note>
-`--json` 不表示非互動模式。指令碼請使用 `--non-interactive` (和 `--workspace`)。
+`--json` 並不代表非互動模式。在腳本中請使用 `--non-interactive`（以及 `--workspace`）。
 </Note>
 
-## 非互動式基礎範例
+## 基礎非互動式範例
 
 ```bash
 openclaw onboard --non-interactive \
@@ -29,7 +29,7 @@ openclaw onboard --non-interactive \
   --skip-skills
 ```
 
-加入 `--json` 以取得機器可讀的摘要。
+加上 `--json` 可取得機器可讀的摘要資訊。
 
 ## 特定供應商範例
 
@@ -106,7 +106,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="自訂供應商範例">
+  <Accordion title="自定義供應商範例">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -120,14 +120,14 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
 
-    `--custom-api-key` 是選用參數。若省略，新手導覽會檢查 `CUSTOM_API_KEY`。
+    `--custom-api-key` 為選填項目。若省略，新手導覽會檢查 `CUSTOM_API_KEY` 環境變數。
 
   </Accordion>
 </AccordionGroup>
 
 ## 新增另一個智慧代理
 
-使用 `openclaw agents add <name>` 建立一個獨立的智慧代理，擁有自己的工作區、工作階段和驗證設定檔。若未執行 `--workspace`，將啟動精靈。
+使用 `openclaw agents add <name>` 來建立一個擁有獨立工作空間、工作階段與憑證設定檔的智慧代理。若執行時不帶 `--workspace` 參數，則會啟動新手導覽精靈。
 
 ```bash
 openclaw agents add work \
@@ -138,16 +138,16 @@ openclaw agents add work \
   --json
 ```
 
-設定項目：
+此指令會設定：
 
 - `agents.list[].name`
 - `agents.list[].workspace`
 - `agents.list[].agentDir`
 
-注意事項：
+備註：
 
-- 預設工作區位於 `~/.openclaw/workspace-<agentId>`。
-- 加入 `bindings` 以路由傳入訊息 (精靈可以做到)。
+- 預設的工作空間路徑為 `~/.openclaw/workspace-<agentId>`。
+- 新增繫結（bindings）以路由傳入訊息（精靈也可以完成此操作）。
 - 非互動式旗標：`--model`、`--agent-dir`、`--bind`、`--non-interactive`。
 
 ## 相關文件

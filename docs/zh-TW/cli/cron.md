@@ -1,36 +1,36 @@
 ---
-summary: "CLI 參考 `openclaw cron` (排程並執行背景工作)"
+summary: "openclaw cron CLI 參考文件 (排程與執行背景任務)"
 read_when:
-  - 您需要排程工作和喚醒
-  - 您正在偵錯 cron 執行和日誌
+  - 您需要排程任務與喚醒
+  - 您正在對 cron 執行與記錄進行除錯
 title: "cron"
 ---
 
 # `openclaw cron`
 
-管理用於 Gateway 排程器的 cron 工作。
+管理 Gateway 排程器的 cron 任務。
 
-相關：
+相關內容：
 
-- Cron 工作: [Cron 工作](/automation/cron-jobs)
+- Cron 任務：[Cron 任務](/automation/cron-jobs)
 
-提示：執行 `openclaw cron --help` 以查看完整的指令介面。
+提示：執行 `openclaw cron --help` 查看完整的指令介面。
 
-注意：獨立的 `cron add` 工作預設為 `--announce` 傳遞。使用 `--no-deliver` 以保持輸出在內部。`--deliver` 仍作為 `--announce` 的已棄用別名。
+注意：獨立的 `cron add` 任務預設為 `--announce` 傳遞。使用 `--no-deliver` 來保留內部輸出。`--deliver` 仍作為 `--announce` 的棄用別名保留。
 
-注意：一次性 (`--at`) 工作預設在成功後刪除。使用 `--keep-after-run` 以保留它們。
+注意：一次性 (`--at`) 任務預設在成功後刪除。使用 `--keep-after-run` 來保留它們。
 
-注意：重複性工作現在在連續錯誤後使用指數退避重試 (30s → 1m → 5m → 15m → 60m)，然後在下次成功執行後恢復正常排程。
+注意：定期任務現在在連續錯誤後會使用指數級重試退避 (30s → 1m → 5m → 15m → 60m)，並在下一次成功執行後恢復正常排程。
 
-## 常見編輯
+## 常見編輯操作
 
-更新傳遞設定而不改變訊息：
+在不更改訊息的情況下更新傳遞設定：
 
 ```bash
 openclaw cron edit <job-id> --announce --channel telegram --to "123456789"
 ```
 
-禁用針對獨立工作的傳遞：
+停用獨立任務的傳遞：
 
 ```bash
 openclaw cron edit <job-id> --no-deliver

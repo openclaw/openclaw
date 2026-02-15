@@ -1,27 +1,27 @@
 ---
 summary: "OpenClaw 支援的模型供應商 (LLM)"
 read_when:
-  - 您想選擇模型供應商時
-  - 您想快速了解 LLM 憑證設定與模型選擇範例時
+  - 您想要選擇模型供應商
+  - 您想要 LLM 驗證與模型選擇的快速設定範例
 title: "模型供應商快速開始"
 ---
 
 # 模型供應商
 
-OpenClaw 可以使用多個 LLM 供應商。請選擇一個，進行憑證驗證，然後將預設模型設定為 `provider/model`。
+OpenClaw 可以使用多種 LLM 供應商。選擇一個、進行驗證，然後將預設模型設定為 `provider/model`。
 
-## 焦點：Venice (Venice AI)
+## 重點介紹：Venice (Venice AI)
 
-Venice 是我們推薦的 Venice AI 設定，可優先考慮隱私推論，並可選擇使用 Opus 處理最困難的任務。
+Venice 是我們推薦的 Venice AI 設定，專為隱私優先的推論而設計，並提供在執行最艱難任務時使用 Opus 的選項。
 
-- Default: `venice/llama-3.3-70b`
-- Best overall: `venice/claude-opus-45` (Opus 仍然最強大)
+- 預設：`venice/llama-3.3-70b`
+- 整體最佳：`venice/claude-opus-45` (Opus 依然最強大)
 
-請參閱 [Venice AI](/providers/venice)。
+參閱 [Venice AI](/providers/venice)。
 
-## 快速開始（兩步驟）
+## 快速開始（兩個步驟）
 
-1. 向供應商進行憑證驗證 (通常透過 `openclaw onboard`)。
+1. 與供應商進行驗證（通常透過 `openclaw onboard`）。
 2. 設定預設模型：
 
 ```json5
@@ -30,7 +30,7 @@ Venice 是我們推薦的 Venice AI 設定，可優先考慮隱私推論，並�
 }
 ```
 
-## 支援的供應商（入門套件）
+## 支援的供應商（入門組）
 
 - [OpenAI (API + Codex)](/providers/openai)
 - [Anthropic (API + Claude Code CLI)](/providers/anthropic)
@@ -47,4 +47,4 @@ Venice 是我們推薦的 Venice AI 設定，可優先考慮隱私推論，並�
 - [Amazon Bedrock](/providers/bedrock)
 - [Qianfan](/providers/qianfan)
 
-如需完整的供應商目錄 (xAI、Groq、Mistral 等) 以及進階設定，請參閱[模型供應商](/concepts/model-providers)。
+若要查看完整的供應商目錄（xAI、Groq、Mistral 等）與進階設定，請參閱 [模型供應商](/concepts/model-providers)。

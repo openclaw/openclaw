@@ -1,32 +1,32 @@
 ---
-summary: "`openclaw node` 的 CLI 參考 (無頭節點主機)"
+summary: "`openclaw node` 的 CLI 參考文件（無介面節點主機）"
 read_when:
-  - 執行無頭節點主機時
-  - 為 system.run 配對非 macOS 節點時
+  - 執行無介面節點主機時
+  - 配對非 macOS 節點以使用 system.run 時
 title: "node"
 ---
 
 # `openclaw node`
 
-執行一個**無頭節點主機**，它連接到 Gateway WebSocket 並在這台機器上公開 `system.run` / `system.which`。
+執行一個**無介面節點主機 (headless node host)**，其會連線至 Gateway WebSocket 並在此機器上提供 `system.run` / `system.which` 功能。
 
-## 為何使用節點主機？
+## 為什麼要使用節點主機？
 
-當您希望智慧代理在您的網路中**其他機器上執行命令**，而無需在那些機器上安裝完整的 macOS 配套應用時，請使用節點主機。
+當您希望智慧代理在不需安裝完整 macOS 配套應用的情況下，於網路中的**其他機器上執行指令**時，請使用節點主機。
 
-常見用例：
+常見使用場景：
 
-- 在遠端 Linux/Windows 設備（建置伺服器、實驗室機器、NAS）上執行命令。
-- 將執行保持在 Gateway 上**沙箱隔離**，但將經批准的執行委派給其他主機。
-- 為自動化或 CI 節點提供輕量級、無頭的執行目標。
+- 在遠端 Linux/Windows 機器上執行指令（構建伺服器、實驗室機器、NAS）。
+- 將執行程式碼在 Gateway 上進行**沙箱隔離**，但將核准的執行作業委託給其他主機。
+- 為自動化或 CI 節點提供輕量、無介面的執行目標。
 
-執行仍受節點主機上**執行批准**和每個智慧代理允許清單的保護，因此您可以保持命令存取範圍明確且顯式。
+執行作業仍受節點主機上的**執行核准 (exec approvals)** 和針對個別智慧代理的白名單保護，因此您可以確保指令存取權限是受限且明確的。
 
-## 瀏覽器代理 (零設定)
+## 瀏覽器代理伺服器（零設定）
 
-如果節點上未停用 `browser.enabled`，節點主機將自動公告瀏覽器代理。這使得智慧代理可以在該節點上使用瀏覽器自動化，而無需額外設定。
+如果節點上未停用 `browser.enabled`，節點主機會自動宣佈瀏覽器代理伺服器。這讓智慧代理無需額外設定即可在該節點上使用瀏覽器自動化。
 
-如果需要，請在節點上停用它：
+如果需要，請在節點上將其停用：
 
 ```json5
 {
@@ -38,7 +38,7 @@ title: "node"
 }
 ```
 
-## 執行 (前景)
+## 執行（前景）
 
 ```bash
 openclaw node run --host <gateway-host> --port 18789
@@ -46,16 +46,16 @@ openclaw node run --host <gateway-host> --port 18789
 
 選項：
 
-- `--host <host>`: Gateway WebSocket 主機 (預設: `127.0.0.1`)
-- `--port <port>`: Gateway WebSocket 埠 (預設: `18789`)
-- `--tls`: 使用 TLS 進行 Gateway 連線
-- `--tls-fingerprint <sha256>`: 預期的 TLS 憑證指紋 (sha256)
-- `--node-id <id>`: 覆寫節點 ID (清除配對權杖)
-- `--display-name <name>`: 覆寫節點顯示名稱
+- `--host <host>`：Gateway WebSocket 主機（預設：`127.0.0.1`）
+- `--port <port>`：Gateway WebSocket 連接埠（預設：`18789`）
+- `--tls`：使用 TLS 連線至 Gateway
+- `--tls-fingerprint <sha256>`：預期的 TLS 憑證指紋 (sha256)
+- `--node-id <id>`：覆蓋節點 ID（會清除配對權杖）
+- `--display-name <name>`：覆蓋節點顯示名稱
 
-## 服務 (背景)
+## 服務（背景）
 
-將無頭節點主機安裝為使用者服務。
+將無介面節點主機安裝為使用者服務。
 
 ```bash
 openclaw node install --host <gateway-host> --port 18789
@@ -63,14 +63,14 @@ openclaw node install --host <gateway-host> --port 18789
 
 選項：
 
-- `--host <host>`: Gateway WebSocket 主機 (預設: `127.0.0.1`)
-- `--port <port>`: Gateway WebSocket 埠 (預設: `18789`)
-- `--tls`: 使用 TLS 進行 Gateway 連線
-- `--tls-fingerprint <sha256>`: 預期的 TLS 憑證指紋 (sha256)
-- `--node-id <id>`: 覆寫節點 ID (清除配對權杖)
-- `--display-name <name>`: 覆寫節點顯示名稱
-- `--runtime <runtime>`: 服務執行環境 (`node` 或 `bun`)
-- `--force`: 如果已安裝，則重新安裝/覆寫
+- `--host <host>`：Gateway WebSocket 主機（預設：`127.0.0.1`）
+- `--port <port>`：Gateway WebSocket 連接埠（預設：`18789`）
+- `--tls`：使用 TLS 連線至 Gateway
+- `--tls-fingerprint <sha256>`：預期的 TLS 憑證指紋 (sha256)
+- `--node-id <id>`：覆蓋節點 ID（會清除配對權杖）
+- `--display-name <name>`：覆蓋節點顯示名稱
+- `--runtime <runtime>`：服務執行環境（`node` 或 `bun`）
+- `--force`：如果已安裝則重新安裝/覆蓋
 
 管理服務：
 
@@ -81,26 +81,25 @@ openclaw node restart
 openclaw node uninstall
 ```
 
-使用 `openclaw node run` 執行前景節點主機（無服務）。
+使用 `openclaw node run` 執行前景節點主機（非服務）。
 
-服務命令接受 `--json` 以產生機器可讀的輸出。
+服務指令支援 `--json` 選項以提供機器可讀的輸出。
 
 ## 配對
 
-首次連線會在 Gateway 上建立一個待處理的節點配對請求。
-透過以下方式批准：
+首次連線會在 Gateway 上建立一個待處理的節點配對請求。請透過以下方式核准：
 
 ```bash
 openclaw nodes pending
 openclaw nodes approve <requestId>
 ```
 
-節點主機將其節點 ID、權杖、顯示名稱和 Gateway 連線資訊儲存在 `~/.openclaw/node.json`。
+節點主機會將其節點 ID、權杖 (token)、顯示名稱以及 Gateway 連線資訊儲存在 `~/.openclaw/node.json`。
 
-## 執行批准
+## 執行核准 (Exec approvals)
 
-`system.run` 受本地執行批准的限制：
+`system.run` 受到本地執行核准的限制：
 
 - `~/.openclaw/exec-approvals.json`
-- [執行批准](/tools/exec-approvals)
-- `openclaw approvals --node <id|name|ip>` (從 Gateway 編輯)
+- [執行核准 (Exec approvals)](/tools/exec-approvals)
+- `openclaw approvals --node <id|name|ip>`（從 Gateway 進行編輯）

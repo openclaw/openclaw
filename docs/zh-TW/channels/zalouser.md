@@ -1,39 +1,39 @@
 ---
-summary: "透過 zca-cli（QR 登入）、功能和設定，支援 Zalo 個人帳號"
+summary: "透過 zca-cli (QR 登入) 支援 Zalo 個人帳號，包含功能與設定"
 read_when:
   - 為 OpenClaw 設定 Zalo 個人帳號
-  - 偵錯 Zalo 個人登入或訊息流程
-title: "Zalo 個人帳號"
+  - 排查 Zalo 個人帳號登入或訊息流問題
+title: "Zalo Personal"
 ---
 
-# Zalo 個人帳號 (非官方)
+# Zalo Personal (非官方)
 
-狀態：實驗性質。此整合透過 `zca-cli` 自動化 **Zalo 個人帳號**。
+狀態：實驗中。此整合透過 `zca-cli` 自動化 **Zalo 個人帳號**。
 
-> **警告：** 這是一個非官方整合，可能會導致帳號暫停/封鎖。請自行承擔風險使用。
+> **警告：** 這是一個非官方整合，可能導致帳號停權/封禁。請自行承擔風險。
 
-## 所需外掛程式
+## Plugin required
 
-Zalo 個人帳號以外掛程式形式提供，並未與核心安裝程式捆綁。
+Zalo Personal 以外掛形式提供，未包含在核心安裝程式中。
 
 - 透過 CLI 安裝：`openclaw plugins install @openclaw/zalouser`
-- 或從原始碼結帳安裝：`openclaw plugins install ./extensions/zalouser`
-- 詳細資訊：[外掛程式](/tools/plugin)
+- 或從原始碼安裝：`openclaw plugins install ./extensions/zalouser`
+- 詳情：[Plugins](/tools/plugin)
 
-## 必要條件：zca-cli
+## Prerequisite: zca-cli
 
-Gateway 機器必須在 `PATH` 中提供 `zca` 二進位檔。
+Gateway 機器必須在 `PATH` 中提供 `zca` 執行檔。
 
 - 驗證：`zca --version`
-- 如果缺少，請安裝 zca-cli（請參閱 `extensions/zalouser/README.md` 或上游 zca-cli 文件）。
+- 如果遺失，請安裝 zca-cli（參閱 `extensions/zalouser/README.md` 或上游 zca-cli 文件）。
 
-## 快速設定 (初學者)
+## Quick setup (beginner)
 
-1.  安裝外掛程式（請參閱上方）。
-2.  登入（QR 碼，在 Gateway 機器上）：
-    - `openclaw channels login --channel zalouser`
-    - 使用 Zalo 行動應用程式掃描終端機中的 QR 碼。
-3.  啟用頻道：
+1. 安裝外掛（見上方）。
+2. 登入（QR Code，在 Gateway 機器上）：
+   - `openclaw channels login --channel zalouser`
+   - 使用 Zalo 行動應用程式掃描終端機中的 QR code。
+3. 啟用頻道：
 
 ```json5
 {
@@ -46,22 +46,22 @@ Gateway 機器必須在 `PATH` 中提供 `zca` 二進位檔。
 }
 ```
 
-4.  重新啟動 Gateway（或完成新手導覽）。
-5.  私訊存取預設為配對；初次聯絡時請批准配對碼。
+4. 重啟 Gateway（或完成新手導覽）。
+5. 私訊存取預設為配對模式；在第一次接觸時核准配對碼。
 
-## 內容說明
+## What it is
 
 - 使用 `zca listen` 接收傳入訊息。
-- 使用 `zca msg ...` 傳送回覆（文字/媒體/連結）。
-- 專為 Zalo Bot API 不可用的「個人帳號」使用案例設計。
+- 使用 `zca msg ...` 傳送回覆（文字/多媒體/連結）。
+- 專為無法使用 Zalo Bot API 的「個人帳號」場景設計。
 
-## 命名
+## Naming
 
-頻道 ID 為 `zalouser`，以明確表示這會自動化 **Zalo 個人使用者帳號** (非官方)。我們保留 `zalo` 以供未來潛在的官方 Zalo API 整合使用。
+頻道 ID 為 `zalouser`，以明確表示這是自動化 **Zalo 個人使用者帳號**（非官方）。我們將 `zalo` 保留給未來可能的官方 Zalo API 整合。
 
-## 尋找 ID (目錄)
+## Finding IDs (directory)
 
-使用目錄 CLI 探索對等方/群組及其 ID：
+使用 directory CLI 來探索同儕/群組及其 ID：
 
 ```bash
 openclaw directory self --channel zalouser
@@ -69,30 +69,30 @@ openclaw directory peers list --channel zalouser --query "name"
 openclaw directory groups list --channel zalouser --query "work"
 ```
 
-## 限制
+## Limits
 
-- 出站文字會分塊處理為約 2000 個字元（Zalo 用戶端限制）。
-- 串流傳輸預設為區塊串流傳輸。
+- 傳出文字會被切分為約 2000 個字元（Zalo 用戶端限制）。
+- 預設禁用區塊串流傳輸。
 
-## 存取控制 (私訊)
+## Access control (DMs)
 
-`channels.zalouser.dmPolicy` 支援：`pairing | allowlist | open | disabled` (預設值：`pairing`)。
+`channels.zalouser.dmPolicy` 支援：`pairing | allowlist | open | disabled`（預設：`pairing`）。
 `channels.zalouser.allowFrom` 接受使用者 ID 或名稱。精靈會在可用時透過 `zca friend find` 將名稱解析為 ID。
 
-透過以下方式批准：
+核准方式：
 
 - `openclaw pairing list zalouser`
 - `openclaw pairing approve zalouser <code>`
 
-## 群組存取 (可選)
+## Group access (optional)
 
-- 預設值：`channels.zalouser.groupPolicy = "open"` (允許群組)。在未設定時，使用 `channels.defaults.groupPolicy` 覆寫預設值。
-- 使用允許列表限制：
+- 預設：`channels.zalouser.groupPolicy = "open"`（允許群組）。若未設定，請使用 `channels.defaults.groupPolicy` 覆蓋預設值。
+- 使用白名單限制：
   - `channels.zalouser.groupPolicy = "allowlist"`
-  - `channels.zalouser.groups` (鍵為群組 ID 或名稱)
+  - `channels.zalouser.groups`（鍵名為群組 ID 或名稱）
 - 封鎖所有群組：`channels.zalouser.groupPolicy = "disabled"`。
-- 設定精靈可以提示群組允許列表。
-- 在啟動時，OpenClaw 會將允許列表中的群組/使用者名稱解析為 ID，並記錄映射；未解析的項目將保持原樣。
+- 設定精靈可以提示輸入群組白名單。
+- 啟動時，OpenClaw 會將白名單中的群組/使用者名稱解析為 ID 並記錄映射關係；未解析的項目將保留原始輸入內容。
 
 範例：
 
@@ -110,9 +110,9 @@ openclaw directory groups list --channel zalouser --query "work"
 }
 ```
 
-## 多帳號
+## Multi-account
 
-帳號映射到 zca 設定檔。範例：
+帳號映射至 zca 設定檔。範例：
 
 ```json5
 {
@@ -132,9 +132,9 @@ openclaw directory groups list --channel zalouser --query "work"
 
 **找不到 `zca`：**
 
-- 安裝 zca-cli 並確保它在 Gateway 程序的 `PATH` 中。
+- 安裝 zca-cli 並確保其在 Gateway 程序可存取的 `PATH` 中。
 
-**登入無法持續：**
+**登入狀態未保存：**
 
 - `openclaw channels status --probe`
 - 重新登入：`openclaw channels logout --channel zalouser && openclaw channels login --channel zalouser`

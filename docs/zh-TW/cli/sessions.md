@@ -1,13 +1,13 @@
 ---
-summary: "`openclaw sessions` 的 CLI 參考 (列出儲存的會話 + 使用方式)"
+summary: "openclaw sessions CLI 參考（列出已儲存的工作階段與用法）"
 read_when:
-  - 當您想要列出儲存的會話並查看近期活動時
-title: "會話"
+  - 您想要列出已儲存的工作階段並查看近期活動
+title: "sessions"
 ---
 
 # `openclaw sessions`
 
-列出儲存的對話會話。
+列出已儲存的對話工作階段。
 
 ```bash
 openclaw sessions

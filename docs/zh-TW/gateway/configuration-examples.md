@@ -1,5 +1,5 @@
 ---
-summary: "OpenClaw 常見設定的結構正確設定範例"
+summary: "適用於常見 OpenClaw 設定且符合結構 (Schema) 的設定範例"
 read_when:
   - 學習如何設定 OpenClaw
   - 尋找設定範例
@@ -9,11 +9,11 @@ title: "設定範例"
 
 # 設定範例
 
-以下範例與目前的設定模式保持一致。如需詳盡的參考資料和各欄位說明，請參閱[設定](/gateway/configuration)。
+以下範例與目前的設定結構 (schema) 一致。如需詳盡的參考資料與各欄位說明，請參閱 [設定](/gateway/configuration)。
 
 ## 快速開始
 
-### 最基本設定
+### 最簡化設定
 
 ```json5
 {
@@ -22,9 +22,9 @@ title: "設定範例"
 }
 ```
 
-將其儲存至 `~/.openclaw/openclaw.json`，您便能從該號碼傳送私訊給智慧代理。
+將其儲存至 `~/.openclaw/openclaw.json`，您就可以從該號碼私訊機器人。
 
-### 建議的入門設定
+### 推薦入門設定
 
 ```json5
 {
@@ -46,9 +46,9 @@ title: "設定範例"
 }
 ```
 
-## 擴展示例（主要選項）
+## 擴展範例（主要選項）
 
-> JSON5 允許您使用註解和尾隨逗號。一般 JSON 也能使用。
+> JSON5 允許您使用註釋和結尾逗號。一般的 JSON 格式也同樣適用。
 
 ```json5
 {
@@ -64,7 +64,7 @@ title: "設定範例"
     },
   },
 
-  // 憑證設定檔中繼資料 (機密資訊儲存在 auth-profiles.json 中)
+  // 認證設定檔中繼資料 (秘密資訊儲存在 auth-profiles.json)
   auth: {
     profiles: {
       "anthropic:me @example.com": {
@@ -83,14 +83,14 @@ title: "設定範例"
     },
   },
 
-  // 身份
+  // 身分識別
   identity: {
     name: "Samantha",
     theme: "helpful sloth",
     emoji: "🦥",
   },
 
-  // 日誌
+  // 記錄
   logging: {
     level: "info",
     file: "/tmp/openclaw/openclaw.log",
@@ -138,7 +138,7 @@ title: "設定範例"
         maxBytes: 20971520,
         models: [
           { provider: "openai", model: "gpt-4o-mini-transcribe" },
-          // 選用 CLI 備用 (Whisper 二進位檔):
+          // 可選的 CLI 備援 (Whisper 二進制檔案):
           // { type: "cli", command: "whisper", args: ["--model", "base", "{{MediaPath}}"] }
         ],
         timeoutSeconds: 120,
@@ -229,7 +229,7 @@ title: "設定範例"
     },
   },
 
-  // 智慧代理執行階段
+  // 智慧代理執行環境
   agents: {
     defaults: {
       workspace: "~/.openclaw/workspace",
@@ -323,7 +323,7 @@ title: "設定範例"
     },
   },
 
-  // 自訂模型供應商
+  // 自定義模型供應商
   models: {
     mode: "merge",
     providers: {
@@ -349,7 +349,7 @@ title: "設定範例"
     },
   },
 
-  // 排程作業
+  // 排程任務 (Cron jobs)
   cron: {
     enabled: true,
     store: "~/.openclaw/cron/cron.json",
@@ -462,21 +462,21 @@ title: "設定範例"
 
 ### 安全私訊模式（共用收件匣 / 多使用者私訊）
 
-如果有多於一人可以私訊您的智慧代理（`allowFrom` 中有多個條目、多人配對核准，或 `dmPolicy: "open"`），請啟用**安全私訊模式**，這樣不同寄件者的私訊預設就不會共用一個上下文：
+如果有多人可以私訊您的機器人（`allowFrom` 中有多個項目、多人配對核准，或 `dmPolicy: "open"`），請啟用**安全私訊模式**，這樣預設情況下，來自不同傳送者的私訊就不會共享同一個上下文 (context)：
 
 ```json5
 {
-  // 安全私訊模式 (建議用於多使用者或敏感的私訊智慧代理)
+  // 安全私訊模式（建議用於多使用者或敏感私訊的智慧代理）
   session: { dmScope: "per-channel-peer" },
 
   channels: {
-    // 範例: WhatsApp 多使用者收件匣
+    // 範例：WhatsApp 多使用者收件匣
     whatsapp: {
       dmPolicy: "allowlist",
       allowFrom: ["+15555550123", "+15555550124"],
     },
 
-    // 範例: Discord 多使用者收件匣
+    // 範例：Discord 多使用者收件匣
     discord: {
       enabled: true,
       token: "YOUR_DISCORD_BOT_TOKEN",
@@ -486,7 +486,7 @@ title: "設定範例"
 }
 ```
 
-### 支援 OAuth 並具備 API 金鑰備援
+### OAuth 與 API 金鑰容錯移轉
 
 ```json5
 {
@@ -555,7 +555,7 @@ title: "設定範例"
 }
 ```
 
-### 工作智慧代理（受限存取）
+### 工作機器人（受限存取）
 
 ```json5
 {
@@ -612,9 +612,9 @@ title: "設定範例"
 }
 ```
 
-## 提示
+## 小撇步
 
-- 如果您將 `dmPolicy: "open"`，則匹配的 `allowFrom` 列表必須包含 `"*"`。
-- 供應商 ID 各不相同（電話號碼、使用者 ID、頻道 ID）。請查閱供應商文件以確認格式。
-- 稍後可新增的選用區段：`web`、`browser`、`ui`、`discovery`、`canvasHost`、`talk`、`signal`、`imessage`。
-- 請參閱[供應商](/channels/whatsapp)和[疑難排解](/gateway/troubleshooting)以深入了解設定說明。
+- 如果您設定 `dmPolicy: "open"`，對應的 `allowFrom` 列表必須包含 `"*"`。
+- 各供應商的識別碼格式不同（電話號碼、使用者 ID、頻道 ID）。請使用供應商文件來確認格式。
+- 稍後可新增的可選部分：`web`、`browser`、`ui`、`discovery`、`canvasHost`、`talk`、`signal`、`imessage`。
+- 請參閱 [供應商](/channels/whatsapp) 與 [疑難排解](/gateway/troubleshooting) 以了解更深入的設定說明。
