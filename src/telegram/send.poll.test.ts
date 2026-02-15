@@ -35,8 +35,10 @@ describe("sendPollTelegram", () => {
       ),
     };
 
+    // Use negative chatId (group/supergroup) – private chats never
+    // include message_thread_id after the #17242 fix.
     const res = await sendPollTelegram(
-      "123",
+      "-1001234567890",
       { question: "Q", options: ["A", "B"] },
       { token: "t", api: api as unknown as Bot["api"], messageThreadId: 99 },
     );
@@ -45,6 +47,27 @@ describe("sendPollTelegram", () => {
     expect(api.sendPoll).toHaveBeenCalledTimes(2);
     expect(api.sendPoll.mock.calls[0]?.[3]).toMatchObject({ message_thread_id: 99 });
     expect(api.sendPoll.mock.calls[1]?.[3]?.message_thread_id).toBeUndefined();
+  });
+
+  it("omits message_thread_id for private chats (positive chatId)", async () => {
+    const api = {
+      sendPoll: vi.fn(async () => ({
+        message_id: 3,
+        chat: { id: 456 },
+        poll: { id: "p3" },
+      })),
+    };
+
+    const res = await sendPollTelegram(
+      "456",
+      { question: "Q", options: ["A", "B"] },
+      { token: "t", api: api as unknown as Bot["api"], messageThreadId: 99 },
+    );
+
+    expect(res).toEqual({ messageId: "3", chatId: "456", pollId: "p3" });
+    expect(api.sendPoll).toHaveBeenCalledTimes(1);
+    // message_thread_id should NOT be included for private chats (#17242)
+    expect(api.sendPoll.mock.calls[0]?.[3]?.message_thread_id).toBeUndefined();
   });
 
   it("rejects durationHours for Telegram polls", async () => {

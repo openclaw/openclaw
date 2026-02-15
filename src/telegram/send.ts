@@ -161,6 +161,35 @@ function normalizeChatId(to: string): string {
   return normalized;
 }
 
+/**
+ * Infer the thread scope from the chatId.  Telegram private chats (positive
+ * numeric IDs) don't support forum topics; sending a `message_thread_id` to
+ * them triggers a 400 "message thread not found".  Groups and supergroups
+ * have negative numeric IDs and may be forums.
+ *
+ * NOTE: `@`-usernames can refer to either private chats OR public
+ * supergroups (which may have forum topics).  In practice the main outbound
+ * path uses numeric IDs from session routing, so `@`-prefixed values only
+ * appear in manual/CLI sends.  We default to "forum" for `@`-usernames to
+ * avoid suppressing valid `message_thread_id` for public forum groups.
+ *
+ * See: https://github.com/openclaw/openclaw/issues/17242
+ */
+function inferThreadScope(chatId: string): "dm" | "forum" {
+  const trimmed = chatId.trim();
+  // @-usernames could be private chats or public groups; assume "forum" to
+  // avoid suppressing message_thread_id for public forum groups.
+  if (trimmed.startsWith("@")) {
+    return "forum";
+  }
+  // Negative numeric IDs → group/supergroup (may be forum).
+  if (trimmed.startsWith("-")) {
+    return "forum";
+  }
+  // Positive numeric IDs → private chat (DM).
+  return "dm";
+}
+
 function normalizeMessageId(raw: string | number): number {
   if (typeof raw === "number" && Number.isFinite(raw)) {
     return Math.trunc(raw);
@@ -256,7 +285,7 @@ export async function sendMessageTelegram(
   const messageThreadId =
     opts.messageThreadId != null ? opts.messageThreadId : target.messageThreadId;
   const threadSpec =
-    messageThreadId != null ? { id: messageThreadId, scope: "forum" as const } : undefined;
+    messageThreadId != null ? { id: messageThreadId, scope: inferThreadScope(chatId) } : undefined;
   const threadIdParams = buildTelegramThreadParams(threadSpec);
   const threadParams: Record<string, unknown> = threadIdParams ? { ...threadIdParams } : {};
   const quoteText = opts.quoteText?.trim();
@@ -851,7 +880,7 @@ export async function sendStickerTelegram(
   const messageThreadId =
     opts.messageThreadId != null ? opts.messageThreadId : target.messageThreadId;
   const threadSpec =
-    messageThreadId != null ? { id: messageThreadId, scope: "forum" as const } : undefined;
+    messageThreadId != null ? { id: messageThreadId, scope: inferThreadScope(chatId) } : undefined;
   const threadIdParams = buildTelegramThreadParams(threadSpec);
   const threadParams: Record<string, number> = threadIdParams ? { ...threadIdParams } : {};
   if (opts.replyToMessageId != null) {
@@ -981,7 +1010,7 @@ export async function sendPollTelegram(
   const messageThreadId =
     opts.messageThreadId != null ? opts.messageThreadId : target.messageThreadId;
   const threadSpec =
-    messageThreadId != null ? { id: messageThreadId, scope: "forum" as const } : undefined;
+    messageThreadId != null ? { id: messageThreadId, scope: inferThreadScope(chatId) } : undefined;
   const threadIdParams = buildTelegramThreadParams(threadSpec);
 
   // Build poll options as simple strings (Grammy accepts string[] or InputPollOption[])
