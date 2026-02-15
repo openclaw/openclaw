@@ -10,34 +10,37 @@ import { createSandboxFsBridge } from "./fs-bridge.js";
 
 const mockedExecDockerRaw = vi.mocked(execDockerRaw);
 
-const sandbox: SandboxContext = {
-  enabled: true,
-  sessionKey: "sandbox:test",
-  workspaceDir: "/tmp/workspace",
-  agentWorkspaceDir: "/tmp/workspace",
-  workspaceAccess: "rw",
-  containerName: "moltbot-sbx-test",
-  containerWorkdir: "/workspace",
-  docker: {
-    image: "moltbot-sandbox:bookworm-slim",
-    containerPrefix: "moltbot-sbx-",
-    network: "none",
-    user: "1000:1000",
-    workdir: "/workspace",
-    readOnlyRoot: false,
-    tmpfs: [],
-    capDrop: [],
-    seccompProfile: "",
-    apparmorProfile: "",
-    setupCommand: "",
-    binds: [],
-    dns: [],
-    extraHosts: [],
-    pidsLimit: 0,
-  },
-  tools: { allow: ["*"], deny: [] },
-  browserAllowHostControl: false,
-};
+function createSandbox(overrides?: Partial<SandboxContext>): SandboxContext {
+  return {
+    enabled: true,
+    sessionKey: "sandbox:test",
+    workspaceDir: "/tmp/workspace",
+    agentWorkspaceDir: "/tmp/workspace",
+    workspaceAccess: "rw",
+    containerName: "moltbot-sbx-test",
+    containerWorkdir: "/workspace",
+    docker: {
+      image: "moltbot-sandbox:bookworm-slim",
+      containerPrefix: "moltbot-sbx-",
+      network: "none",
+      user: "1000:1000",
+      workdir: "/workspace",
+      readOnlyRoot: false,
+      tmpfs: [],
+      capDrop: [],
+      seccompProfile: "",
+      apparmorProfile: "",
+      setupCommand: "",
+      binds: [],
+      dns: [],
+      extraHosts: [],
+      pidsLimit: 0,
+    },
+    tools: { allow: ["*"], deny: [] },
+    browserAllowHostControl: false,
+    ...overrides,
+  };
+}
 
 describe("sandbox fs bridge shell compatibility", () => {
   beforeEach(() => {
@@ -67,7 +70,7 @@ describe("sandbox fs bridge shell compatibility", () => {
   });
 
   it("uses POSIX-safe shell prologue in all bridge commands", async () => {
-    const bridge = createSandboxFsBridge({ sandbox });
+    const bridge = createSandboxFsBridge({ sandbox: createSandbox() });
 
     await bridge.readFile({ filePath: "a.txt" });
     await bridge.writeFile({ filePath: "b.txt", data: "hello" });
@@ -84,5 +87,38 @@ describe("sandbox fs bridge shell compatibility", () => {
     expect(executables.every((shell) => shell === "sh")).toBe(true);
     expect(scripts.every((script) => script.includes("set -eu;"))).toBe(true);
     expect(scripts.some((script) => script.includes("pipefail"))).toBe(false);
+  });
+
+  it("resolves bind-mounted absolute container paths for reads", async () => {
+    const sandbox = createSandbox({
+      docker: {
+        ...createSandbox().docker,
+        binds: ["/tmp/workspace-two:/workspace-two:ro"],
+      },
+    });
+    const bridge = createSandboxFsBridge({ sandbox });
+
+    await bridge.readFile({ filePath: "/workspace-two/README.md" });
+
+    const args = mockedExecDockerRaw.mock.calls.at(-1)?.[0] ?? [];
+    expect(args).toEqual(
+      expect.arrayContaining(["moltbot-sbx-test", "sh", "-c", 'set -eu; cat -- "$1"']),
+    );
+    expect(args.at(-1)).toBe("/workspace-two/README.md");
+  });
+
+  it("blocks writes into read-only bind mounts", async () => {
+    const sandbox = createSandbox({
+      docker: {
+        ...createSandbox().docker,
+        binds: ["/tmp/workspace-two:/workspace-two:ro"],
+      },
+    });
+    const bridge = createSandboxFsBridge({ sandbox });
+
+    await expect(
+      bridge.writeFile({ filePath: "/workspace-two/new.txt", data: "hello" }),
+    ).rejects.toThrow(/read-only/);
+    expect(mockedExecDockerRaw).not.toHaveBeenCalled();
   });
 });
