@@ -102,7 +102,10 @@ describe("createOpenClawCodingTools", () => {
         execute,
       };
 
-      const wrapped = __testing.wrapToolParamNormalization(tool, [{ keys: ["path", "file_path"] }]);
+      const wrapped = __testing.wrapToolParamNormalization(tool, [
+        { keys: ["path", "file_path"], label: "path (path or file_path)" },
+        { keys: ["content"], label: "content" },
+      ]);
 
       await wrapped.execute("tool-1", { file_path: "foo.txt", content: "x" });
       expect(execute).toHaveBeenCalledWith(
@@ -115,8 +118,20 @@ describe("createOpenClawCodingTools", () => {
       await expect(wrapped.execute("tool-2", { content: "x" })).rejects.toThrow(
         /Missing required parameter/,
       );
+      await expect(wrapped.execute("tool-2", { content: "x" })).rejects.toThrow(
+        /Supply correct parameters before retrying\./,
+      );
       await expect(wrapped.execute("tool-3", { file_path: "   ", content: "x" })).rejects.toThrow(
         /Missing required parameter/,
+      );
+      await expect(wrapped.execute("tool-3", { file_path: "   ", content: "x" })).rejects.toThrow(
+        /Supply correct parameters before retrying\./,
+      );
+      await expect(wrapped.execute("tool-4", {})).rejects.toThrow(
+        /Missing required parameters: path \(path or file_path\), content/,
+      );
+      await expect(wrapped.execute("tool-4", {})).rejects.toThrow(
+        /Supply correct parameters before retrying\./,
       );
     });
   });
