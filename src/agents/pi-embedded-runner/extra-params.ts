@@ -111,9 +111,16 @@ function createStreamFnWithExtraParams(
   return wrappedStreamFn;
 }
 
-function isDirectOpenAIBaseUrl(baseUrl: unknown): boolean {
-  if (typeof baseUrl !== "string" || !baseUrl.trim()) {
+/** @internal Exported for testing only */
+export function isDirectOpenAIBaseUrl(baseUrl: unknown): boolean {
+  // Missing baseUrl (undefined/null) — assume direct OpenAI for custom models
+  // that omit the field. But an *empty string* is an explicit provider-level
+  // sentinel (used by azure-openai-responses) and must NOT be treated as direct.
+  if (typeof baseUrl !== "string") {
     return true;
+  }
+  if (!baseUrl.trim()) {
+    return false;
   }
 
   try {
@@ -125,7 +132,8 @@ function isDirectOpenAIBaseUrl(baseUrl: unknown): boolean {
   }
 }
 
-function shouldForceResponsesStore(model: {
+/** @internal Exported for testing only */
+export function shouldForceResponsesStore(model: {
   api?: unknown;
   provider?: unknown;
   baseUrl?: unknown;
