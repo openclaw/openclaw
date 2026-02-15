@@ -437,17 +437,11 @@ export function createBrowserTool(opts?: {
           return jsonResult({ ok: true });
         }
         case "snapshot": {
-          const snapshotDefaults = loadConfig().browser?.snapshotDefaults;
           const format =
             params.snapshotFormat === "ai" || params.snapshotFormat === "aria"
               ? params.snapshotFormat
               : "ai";
-          const mode =
-            params.mode === "efficient"
-              ? "efficient"
-              : format === "ai" && snapshotDefaults?.mode === "efficient"
-                ? "efficient"
-                : undefined;
+          const mode = params.mode === "efficient" ? "efficient" : undefined;
           const labels = typeof params.labels === "boolean" ? params.labels : undefined;
           const refs = params.refs === "aria" || params.refs === "role" ? params.refs : undefined;
           const hasMaxChars = Object.hasOwn(params, "maxChars");
@@ -516,7 +510,7 @@ export function createBrowserTool(opts?: {
               });
           if (snapshot.format === "ai") {
             const extractedText = snapshot.snapshot ?? "";
-            const wrappedSnapshot = wrapExternalContent(extractedText, {
+            let wrappedSnapshot = wrapExternalContent(extractedText, {
               source: "browser",
               includeWarning: true,
             });
@@ -541,6 +535,9 @@ export function createBrowserTool(opts?: {
                 wrapped: true,
               },
             };
+            if (snapshot.truncated) {
+              wrappedSnapshot += `\n\n[Snapshot was truncated.${mode !== "efficient" ? ' Use mode="efficient" for a compact interactive-elements view, or increase' : " Increase"} maxChars (e.g. maxChars=50000) for more content.]`;
+            }
             if (labels && snapshot.imagePath) {
               return await imageResultFromFile({
                 label: "browser:snapshot",
