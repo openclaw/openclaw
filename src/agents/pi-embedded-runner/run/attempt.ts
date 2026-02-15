@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
 import type { ImageContent } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
 import { createAgentSession, SessionManager, SettingsManager } from "@mariozechner/pi-coding-agent";
@@ -93,6 +93,7 @@ import {
   createSystemPromptOverride,
 } from "../system-prompt.js";
 import { splitSdkTools } from "../tool-split.js";
+import { stripThinkingFromAssistantToolCallMessages } from "../toolcall-thinking.js";
 import { describeUnknownError, mapThinkingLevel } from "../utils.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
 import {
@@ -611,6 +612,15 @@ export async function runEmbeddedAttempt(
         // Force a stable streamFn reference so vitest can reliably mock @mariozechner/pi-ai.
         activeSession.agent.streamFn = streamSimple;
       }
+
+      // Remove thinking blocks from assistant messages that also include tool calls.
+      // Some OpenAI-compatible APIs reject assistant messages that include both `content` and
+      // `thinking` when tool calls are present (pi-ai surfaces this as a template error).
+      const originalStreamFn: StreamFn = activeSession.agent.streamFn ?? streamSimple;
+      activeSession.agent.streamFn = ((model, context, options) => {
+        const sanitized = stripThinkingFromAssistantToolCallMessages(context) as typeof context;
+        return originalStreamFn(model, sanitized, options);
+      }) satisfies StreamFn;
 
       applyExtraParamsToAgent(
         activeSession.agent,
