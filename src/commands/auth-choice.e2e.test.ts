@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { AuthChoice } from "./onboard-types.js";
+import { captureEnv } from "../test-utils/env.js";
 import { applyAuthChoice, resolvePreferredProviderForAuthChoice } from "./auth-choice.js";
 import {
   MINIMAX_CN_API_BASE_URL,
@@ -38,18 +39,20 @@ const requireAgentDir = () => {
 };
 
 describe("applyAuthChoice", () => {
-  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-  const previousAgentDir = process.env.OPENCLAW_AGENT_DIR;
-  const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
-  const previousAnthropicKey = process.env.ANTHROPIC_API_KEY;
-  const previousOpenrouterKey = process.env.OPENROUTER_API_KEY;
-  const previousHfToken = process.env.HF_TOKEN;
-  const previousHfHubToken = process.env.HUGGINGFACE_HUB_TOKEN;
-  const previousLitellmKey = process.env.LITELLM_API_KEY;
-  const previousAiGatewayKey = process.env.AI_GATEWAY_API_KEY;
-  const previousCloudflareGatewayKey = process.env.CLOUDFLARE_AI_GATEWAY_API_KEY;
-  const previousSshTty = process.env.SSH_TTY;
-  const previousChutesClientId = process.env.CHUTES_CLIENT_ID;
+  const envSnapshot = captureEnv([
+    "OPENCLAW_STATE_DIR",
+    "OPENCLAW_AGENT_DIR",
+    "PI_CODING_AGENT_DIR",
+    "ANTHROPIC_API_KEY",
+    "OPENROUTER_API_KEY",
+    "HF_TOKEN",
+    "HUGGINGFACE_HUB_TOKEN",
+    "LITELLM_API_KEY",
+    "AI_GATEWAY_API_KEY",
+    "CLOUDFLARE_AI_GATEWAY_API_KEY",
+    "SSH_TTY",
+    "CHUTES_CLIENT_ID",
+  ]);
   let tempStateDir: string | null = null;
 
   afterEach(async () => {
@@ -61,66 +64,7 @@ describe("applyAuthChoice", () => {
       await fs.rm(tempStateDir, { recursive: true, force: true });
       tempStateDir = null;
     }
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    }
-    if (previousAgentDir === undefined) {
-      delete process.env.OPENCLAW_AGENT_DIR;
-    } else {
-      process.env.OPENCLAW_AGENT_DIR = previousAgentDir;
-    }
-    if (previousPiAgentDir === undefined) {
-      delete process.env.PI_CODING_AGENT_DIR;
-    } else {
-      process.env.PI_CODING_AGENT_DIR = previousPiAgentDir;
-    }
-    if (previousAnthropicKey === undefined) {
-      delete process.env.ANTHROPIC_API_KEY;
-    } else {
-      process.env.ANTHROPIC_API_KEY = previousAnthropicKey;
-    }
-    if (previousOpenrouterKey === undefined) {
-      delete process.env.OPENROUTER_API_KEY;
-    } else {
-      process.env.OPENROUTER_API_KEY = previousOpenrouterKey;
-    }
-    if (previousHfToken === undefined) {
-      delete process.env.HF_TOKEN;
-    } else {
-      process.env.HF_TOKEN = previousHfToken;
-    }
-    if (previousHfHubToken === undefined) {
-      delete process.env.HUGGINGFACE_HUB_TOKEN;
-    } else {
-      process.env.HUGGINGFACE_HUB_TOKEN = previousHfHubToken;
-    }
-    if (previousLitellmKey === undefined) {
-      delete process.env.LITELLM_API_KEY;
-    } else {
-      process.env.LITELLM_API_KEY = previousLitellmKey;
-    }
-    if (previousAiGatewayKey === undefined) {
-      delete process.env.AI_GATEWAY_API_KEY;
-    } else {
-      process.env.AI_GATEWAY_API_KEY = previousAiGatewayKey;
-    }
-    if (previousCloudflareGatewayKey === undefined) {
-      delete process.env.CLOUDFLARE_AI_GATEWAY_API_KEY;
-    } else {
-      process.env.CLOUDFLARE_AI_GATEWAY_API_KEY = previousCloudflareGatewayKey;
-    }
-    if (previousSshTty === undefined) {
-      delete process.env.SSH_TTY;
-    } else {
-      process.env.SSH_TTY = previousSshTty;
-    }
-    if (previousChutesClientId === undefined) {
-      delete process.env.CHUTES_CLIENT_ID;
-    } else {
-      process.env.CHUTES_CLIENT_ID = previousChutesClientId;
-    }
+    envSnapshot.restore();
   });
 
   it("does not throw when openai-codex oauth fails", async () => {
