@@ -11,12 +11,38 @@ import type { EmbeddedContextFile } from "../pi-embedded-helpers.js";
 import { runExec } from "../../process/exec.js";
 import { buildTtsSystemPromptHint } from "../../tts/tts.js";
 import { escapeRegExp, isRecord } from "../../utils.js";
+import { buildModelAliasLines } from "../model-alias-lines.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
 import { detectRuntimeShell } from "../shell-utils.js";
 import { buildSystemPromptParams } from "../system-prompt-params.js";
 import { buildAgentSystemPrompt } from "../system-prompt.js";
 
 const CLI_RUN_QUEUE = new Map<string, Promise<unknown>>();
+
+function buildLooseArgOrderRegex(tokens: string[]): RegExp {
+  // Scan `ps` output lines. Keep matching flexible, but require whitespace arg boundaries
+  // to avoid substring matches like `codexx` or `/path/to/codexx`.
+  const [head, ...rest] = tokens.map((t) => String(t ?? "").trim()).filter(Boolean);
+  if (!head) {
+    return /$^/;
+  }
+
+  const headEscaped = escapeRegExp(head);
+  const headFragment = `(?:^|\\s)(?:${headEscaped}|\\S+\\/${headEscaped})(?=\\s|$)`;
+  const restFragments = rest.map((t) => `(?:^|\\s)${escapeRegExp(t)}(?=\\s|$)`);
+  return new RegExp([headFragment, ...restFragments].join(".*"));
+}
+
+async function psWithFallback(argsA: string[], argsB: string[]): Promise<string> {
+  try {
+    const { stdout } = await runExec("ps", argsA);
+    return stdout;
+  } catch {
+    // fallthrough
+  }
+  const { stdout } = await runExec("ps", argsB);
+  return stdout;
+}
 
 export async function cleanupResumeProcesses(
   backend: CliBackendConfig,
@@ -47,9 +73,53 @@ export async function cleanupResumeProcesses(
   }
 
   try {
-    await runExec("pkill", ["-f", pattern]);
+    const stdout = await psWithFallback(
+      ["-axww", "-o", "pid=,ppid=,command="],
+      ["-ax", "-o", "pid=,ppid=,command="],
+    );
+    const patternRegex = buildLooseArgOrderRegex([commandToken, ...resumeTokens]);
+    const toKill: number[] = [];
+
+    for (const line of stdout.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed) {
+        continue;
+      }
+      const match = /^(\d+)\s+(\d+)\s+(.*)$/.exec(trimmed);
+      if (!match) {
+        continue;
+      }
+      const pid = Number(match[1]);
+      const ppid = Number(match[2]);
+      const cmd = match[3] ?? "";
+      if (!Number.isFinite(pid)) {
+        continue;
+      }
+      if (ppid !== process.pid) {
+        continue;
+      }
+      if (!patternRegex.test(cmd)) {
+        continue;
+      }
+      toKill.push(pid);
+    }
+
+    if (toKill.length > 0) {
+      const pidArgs = toKill.map((pid) => String(pid));
+      try {
+        await runExec("kill", ["-TERM", ...pidArgs]);
+      } catch {
+        // ignore
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      try {
+        await runExec("kill", ["-9", ...pidArgs]);
+      } catch {
+        // ignore
+      }
+    }
   } catch {
-    // ignore missing pkill or no matches
+    // ignore errors - best effort cleanup
   }
 }
 
@@ -115,21 +185,28 @@ export async function cleanupSuspendedCliProcesses(
   }
 
   try {
-    const { stdout } = await runExec("ps", ["-ax", "-o", "pid=,stat=,command="]);
+    const stdout = await psWithFallback(
+      ["-axww", "-o", "pid=,ppid=,stat=,command="],
+      ["-ax", "-o", "pid=,ppid=,stat=,command="],
+    );
     const suspended: number[] = [];
     for (const line of stdout.split("\n")) {
       const trimmed = line.trim();
       if (!trimmed) {
         continue;
       }
-      const match = /^(\d+)\s+(\S+)\s+(.*)$/.exec(trimmed);
+      const match = /^(\d+)\s+(\d+)\s+(\S+)\s+(.*)$/.exec(trimmed);
       if (!match) {
         continue;
       }
       const pid = Number(match[1]);
-      const stat = match[2] ?? "";
-      const command = match[3] ?? "";
+      const ppid = Number(match[2]);
+      const stat = match[3] ?? "";
+      const command = match[4] ?? "";
       if (!Number.isFinite(pid)) {
+        continue;
+      }
+      if (ppid !== process.pid) {
         continue;
       }
       if (!stat.includes("T")) {
@@ -174,25 +251,6 @@ export type CliOutput = {
   sessionId?: string;
   usage?: CliUsage;
 };
-
-function buildModelAliasLines(cfg?: OpenClawConfig) {
-  const models = cfg?.agents?.defaults?.models ?? {};
-  const entries: Array<{ alias: string; model: string }> = [];
-  for (const [keyRaw, entryRaw] of Object.entries(models)) {
-    const model = String(keyRaw ?? "").trim();
-    if (!model) {
-      continue;
-    }
-    const alias = String((entryRaw as { alias?: string } | undefined)?.alias ?? "").trim();
-    if (!alias) {
-      continue;
-    }
-    entries.push({ alias, model });
-  }
-  return entries
-    .toSorted((a, b) => a.alias.localeCompare(b.alias))
-    .map((entry) => `- ${entry.alias}: ${entry.model}`);
-}
 
 export function buildSystemPrompt(params: {
   workspaceDir: string;

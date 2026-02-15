@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
+import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { resolvePluginTools } from "../plugins/tools.js";
 import { resolveSessionAgentId } from "./agent-scope.js";
@@ -16,8 +17,10 @@ import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
+import { createSubagentsTool } from "./tools/subagents-tool.js";
 import { createTtsTool } from "./tools/tts-tool.js";
 import { createWebFetchTool, createWebSearchTool } from "./tools/web-tools.js";
+import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
 export function createOpenClawTools(options?: {
   sandboxBrowserBridgeUrl?: string;
@@ -37,6 +40,7 @@ export function createOpenClawTools(options?: {
   agentGroupSpace?: string | null;
   agentDir?: string;
   sandboxRoot?: string;
+  sandboxFsBridge?: SandboxFsBridge;
   workspaceDir?: string;
   sandboxed?: boolean;
   config?: OpenClawConfig;
@@ -58,11 +62,16 @@ export function createOpenClawTools(options?: {
   /** If true, omit the message tool from the tool list. */
   disableMessageTool?: boolean;
 }): AnyAgentTool[] {
+  const workspaceDir = resolveWorkspaceRoot(options?.workspaceDir);
   const imageTool = options?.agentDir?.trim()
     ? createImageTool({
         config: options?.config,
         agentDir: options.agentDir,
-        sandboxRoot: options?.sandboxRoot,
+        workspaceDir,
+        sandbox:
+          options?.sandboxRoot && options?.sandboxFsBridge
+            ? { root: options.sandboxRoot, bridge: options.sandboxFsBridge }
+            : undefined,
         modelHasVision: options?.modelHasVision,
       })
     : null;
@@ -139,6 +148,9 @@ export function createOpenClawTools(options?: {
       sandboxed: options?.sandboxed,
       requesterAgentIdOverride: options?.requesterAgentIdOverride,
     }),
+    createSubagentsTool({
+      agentSessionKey: options?.agentSessionKey,
+    }),
     createSessionStatusTool({
       agentSessionKey: options?.agentSessionKey,
       config: options?.config,
@@ -151,7 +163,7 @@ export function createOpenClawTools(options?: {
   const pluginTools = resolvePluginTools({
     context: {
       config: options?.config,
-      workspaceDir: options?.workspaceDir,
+      workspaceDir,
       agentDir: options?.agentDir,
       agentId: resolveSessionAgentId({
         sessionKey: options?.agentSessionKey,

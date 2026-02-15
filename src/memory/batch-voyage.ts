@@ -1,7 +1,8 @@
 import { createInterface } from "node:readline";
 import { Readable } from "node:stream";
 import type { VoyageEmbeddingClient } from "./embeddings-voyage.js";
-import { retryAsync } from "../infra/retry.js";
+import { postJsonWithRetry } from "./batch-http.js";
+import { applyEmbeddingBatchOutputLine } from "./batch-output.js";
 import { hashText, runWithConcurrency } from "./internal.js";
 
 /**
@@ -100,47 +101,24 @@ async function submitVoyageBatch(params: {
   }
 
   // 2. Create batch job using Voyage Batches API
-  const batchRes = await retryAsync(
-    async () => {
-      const res = await fetch(`${baseUrl}/batches`, {
-        method: "POST",
-        headers: getVoyageHeaders(params.client, { json: true }),
-        body: JSON.stringify({
-          input_file_id: filePayload.id,
-          endpoint: VOYAGE_BATCH_ENDPOINT,
-          completion_window: VOYAGE_BATCH_COMPLETION_WINDOW,
-          request_params: {
-            model: params.client.model,
-            input_type: "document",
-          },
-          metadata: {
-            source: "clawdbot-memory",
-            agent: params.agentId,
-          },
-        }),
-      });
-      if (!res.ok) {
-        const text = await res.text();
-        const err = new Error(`voyage batch create failed: ${res.status} ${text}`) as Error & {
-          status?: number;
-        };
-        err.status = res.status;
-        throw err;
-      }
-      return res;
-    },
-    {
-      attempts: 3,
-      minDelayMs: 300,
-      maxDelayMs: 2000,
-      jitter: 0.2,
-      shouldRetry: (err) => {
-        const status = (err as { status?: number }).status;
-        return status === 429 || (typeof status === "number" && status >= 500);
+  return await postJsonWithRetry<VoyageBatchStatus>({
+    url: `${baseUrl}/batches`,
+    headers: getVoyageHeaders(params.client, { json: true }),
+    body: {
+      input_file_id: filePayload.id,
+      endpoint: VOYAGE_BATCH_ENDPOINT,
+      completion_window: VOYAGE_BATCH_COMPLETION_WINDOW,
+      request_params: {
+        model: params.client.model,
+        input_type: "document",
+      },
+      metadata: {
+        source: "clawdbot-memory",
+        agent: params.agentId,
       },
     },
-  );
-  return (await batchRes.json()) as VoyageBatchStatus;
+    errorPrefix: "voyage batch create failed",
+  });
 }
 
 async function fetchVoyageBatchStatus(params: {
@@ -322,32 +300,7 @@ export async function runVoyageEmbeddingBatches(params: {
           continue;
         }
         const line = JSON.parse(rawLine) as VoyageBatchOutputLine;
-        const customId = line.custom_id;
-        if (!customId) {
-          continue;
-        }
-        remaining.delete(customId);
-        if (line.error?.message) {
-          errors.push(`${customId}: ${line.error.message}`);
-          continue;
-        }
-        const response = line.response;
-        const statusCode = response?.status_code ?? 0;
-        if (statusCode >= 400) {
-          const message =
-            response?.body?.error?.message ??
-            (typeof response?.body === "string" ? response.body : undefined) ??
-            "unknown error";
-          errors.push(`${customId}: ${message}`);
-          continue;
-        }
-        const data = response?.body?.data ?? [];
-        const embedding = data[0]?.embedding ?? [];
-        if (embedding.length === 0) {
-          errors.push(`${customId}: empty embedding`);
-          continue;
-        }
-        byCustomId.set(customId, embedding);
+        applyEmbeddingBatchOutputLine({ line, remaining, errors, byCustomId });
       }
     }
 

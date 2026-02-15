@@ -3,6 +3,8 @@ import { readFile } from "node:fs/promises";
 import { loadConfig } from "../config/config.js";
 import { logVerbose } from "../globals.js";
 import { resolveLineAccount } from "./accounts.js";
+import { datetimePickerAction, messageAction, postbackAction, uriAction } from "./actions.js";
+import { resolveLineChannelAccessToken } from "./channel-access-token.js";
 
 type RichMenuRequest = messagingApi.RichMenuRequest;
 type RichMenuResponse = messagingApi.RichMenuResponse;
@@ -38,28 +40,13 @@ interface RichMenuOpts {
   verbose?: boolean;
 }
 
-function resolveToken(
-  explicit: string | undefined,
-  params: { accountId: string; channelAccessToken: string },
-): string {
-  if (explicit?.trim()) {
-    return explicit.trim();
-  }
-  if (!params.channelAccessToken) {
-    throw new Error(
-      `LINE channel access token missing for account "${params.accountId}" (set channels.line.channelAccessToken or LINE_CHANNEL_ACCESS_TOKEN).`,
-    );
-  }
-  return params.channelAccessToken.trim();
-}
-
 function getClient(opts: RichMenuOpts = {}): messagingApi.MessagingApiClient {
   const cfg = loadConfig();
   const account = resolveLineAccount({
     cfg,
     accountId: opts.accountId,
   });
-  const token = resolveToken(opts.channelAccessToken, account);
+  const token = resolveLineChannelAccessToken(opts.channelAccessToken, account);
 
   return new messagingApi.MessagingApiClient({
     channelAccessToken: token,
@@ -72,7 +59,7 @@ function getBlobClient(opts: RichMenuOpts = {}): messagingApi.MessagingApiBlobCl
     cfg,
     accountId: opts.accountId,
   });
-  const token = resolveToken(opts.channelAccessToken, account);
+  const token = resolveLineChannelAccessToken(opts.channelAccessToken, account);
 
   return new messagingApi.MessagingApiBlobClient({
     channelAccessToken: token,
@@ -382,63 +369,7 @@ export function createGridLayout(
   ];
 }
 
-/**
- * Create a message action (sends text when tapped)
- */
-export function messageAction(label: string, text?: string): Action {
-  return {
-    type: "message",
-    label: label.slice(0, 20),
-    text: text ?? label,
-  };
-}
-
-/**
- * Create a URI action (opens a URL when tapped)
- */
-export function uriAction(label: string, uri: string): Action {
-  return {
-    type: "uri",
-    label: label.slice(0, 20),
-    uri,
-  };
-}
-
-/**
- * Create a postback action (sends data to webhook when tapped)
- */
-export function postbackAction(label: string, data: string, displayText?: string): Action {
-  return {
-    type: "postback",
-    label: label.slice(0, 20),
-    data: data.slice(0, 300),
-    displayText: displayText?.slice(0, 300),
-  };
-}
-
-/**
- * Create a datetime picker action
- */
-export function datetimePickerAction(
-  label: string,
-  data: string,
-  mode: "date" | "time" | "datetime",
-  options?: {
-    initial?: string;
-    max?: string;
-    min?: string;
-  },
-): Action {
-  return {
-    type: "datetimepicker",
-    label: label.slice(0, 20),
-    data: data.slice(0, 300),
-    mode,
-    initial: options?.initial,
-    max: options?.max,
-    min: options?.min,
-  };
-}
+export { datetimePickerAction, messageAction, postbackAction, uriAction };
 
 /**
  * Create a default help/status/settings menu

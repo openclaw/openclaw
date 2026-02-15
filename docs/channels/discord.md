@@ -91,11 +91,11 @@ Token resolution is account-aware. Config token values win over env fallback. `D
 
 <Tabs>
   <Tab title="DM policy">
-    `channels.discord.dm.policy` controls DM access:
+    `channels.discord.dmPolicy` controls DM access (legacy: `channels.discord.dm.policy`):
 
     - `pairing` (default)
     - `allowlist`
-    - `open` (requires `channels.discord.dm.allowFrom` to include `"*"`)
+    - `open` (requires `channels.discord.allowFrom` to include `"*"`; legacy: `channels.discord.dm.allowFrom`)
     - `disabled`
 
     If DM policy is not open, unknown users are blocked (or prompted for pairing in `pairing` mode).
@@ -173,7 +173,7 @@ Token resolution is account-aware. Config token values win over env fallback. `D
 
 ### Role-based agent routing
 
-Use `bindings[].match.roles` to route Discord guild members to different agents by role ID. Role-based bindings accept role IDs only and are evaluated after peer or parent-peer bindings and before guild-only bindings.
+Use `bindings[].match.roles` to route Discord guild members to different agents by role ID. Role-based bindings accept role IDs only and are evaluated after peer or parent-peer bindings and before guild-only bindings. If a binding also sets other match fields (for example `peer` + `guildId` + `roles`), all configured fields must match.
 
 ```json5
 {
@@ -273,6 +273,8 @@ See [Slash commands](/tools/slash-commands) for command catalog and behavior.
     - `first`
     - `all`
 
+    Note: `off` disables implicit reply threading. Explicit `[[reply_to_*]]` tags are still honored.
+
     Message IDs are surfaced in context/history so agents can target specific messages.
 
   </Accordion>
@@ -311,6 +313,23 @@ See [Slash commands](/tools/slash-commands) for command catalog and behavior.
 
   </Accordion>
 
+  <Accordion title="Ack reactions">
+    `ackReaction` sends an acknowledgement emoji while OpenClaw is processing an inbound message.
+
+    Resolution order:
+
+    - `channels.discord.accounts.<accountId>.ackReaction`
+    - `channels.discord.ackReaction`
+    - `messages.ackReaction`
+    - agent identity emoji fallback (`agents.list[].identity.emoji`, else "👀")
+
+    Notes:
+
+    - Discord accepts unicode emoji or custom emoji names.
+    - Use `""` to disable the reaction for a channel or account.
+
+  </Accordion>
+
   <Accordion title="Config writes">
     Channel-initiated config writes are enabled by default.
 
@@ -323,6 +342,37 @@ See [Slash commands](/tools/slash-commands) for command catalog and behavior.
   channels: {
     discord: {
       configWrites: false,
+    },
+  },
+}
+```
+
+  </Accordion>
+
+  <Accordion title="Gateway proxy">
+    Route Discord gateway WebSocket traffic through an HTTP(S) proxy with `channels.discord.proxy`.
+
+```json5
+{
+  channels: {
+    discord: {
+      proxy: "http://proxy.example:8080",
+    },
+  },
+}
+```
+
+    Per-account override:
+
+```json5
+{
+  channels: {
+    discord: {
+      accounts: {
+        primary: {
+          proxy: "http://proxy.example:8080",
+        },
+      },
     },
   },
 }
@@ -355,14 +405,70 @@ See [Slash commands](/tools/slash-commands) for command catalog and behavior.
 
   </Accordion>
 
+  <Accordion title="Presence configuration">
+    Presence updates are applied only when you set a status or activity field.
+
+    Status only example:
+
+```json5
+{
+  channels: {
+    discord: {
+      status: "idle",
+    },
+  },
+}
+```
+
+    Activity example (custom status is the default activity type):
+
+```json5
+{
+  channels: {
+    discord: {
+      activity: "Focus time",
+      activityType: 4,
+    },
+  },
+}
+```
+
+    Streaming example:
+
+```json5
+{
+  channels: {
+    discord: {
+      activity: "Live coding",
+      activityType: 1,
+      activityUrl: "https://twitch.tv/openclaw",
+    },
+  },
+}
+```
+
+    Activity type map:
+
+    - 0: Playing
+    - 1: Streaming (requires `activityUrl`)
+    - 2: Listening
+    - 3: Watching
+    - 4: Custom (uses the activity text as the status state; emoji is optional)
+    - 5: Competing
+
+  </Accordion>
+
   <Accordion title="Exec approvals in Discord">
-    Discord supports button-based exec approvals in DMs.
+    Discord supports button-based exec approvals in DMs and can optionally post approval prompts in the originating channel.
 
     Config path:
 
     - `channels.discord.execApprovals.enabled`
     - `channels.discord.execApprovals.approvers`
+    - `channels.discord.execApprovals.target` (`dm` | `channel` | `both`, default: `dm`)
     - `agentFilter`, `sessionFilter`, `cleanupAfterResolve`
+
+    When `target` is `channel` or `both`, the approval prompt is visible in the channel. Only configured approvers can use the buttons; other users receive an ephemeral denial. Approval prompts include the command text, so only enable channel delivery in trusted channels. If the channel ID cannot be derived from the session key, OpenClaw falls back to DM delivery.
 
     If approvals fail with unknown approval IDs, verify approver list and feature enablement.
 
@@ -392,6 +498,46 @@ Default gate behavior:
 | roles                                                                                                                                                                    | disabled |
 | moderation                                                                                                                                                               | disabled |
 | presence                                                                                                                                                                 | disabled |
+
+## Components v2 UI
+
+OpenClaw uses Discord components v2 for exec approvals and cross-context markers. Discord message actions can also accept `components` for custom UI (advanced; requires Carbon component instances), while legacy `embeds` remain available but are not recommended.
+
+- `channels.discord.ui.components.accentColor` sets the accent color used by Discord component containers (hex).
+- Set per account with `channels.discord.accounts.<id>.ui.components.accentColor`.
+- `embeds` are ignored when components v2 are present.
+
+Example:
+
+```json5
+{
+  channels: {
+    discord: {
+      ui: {
+        components: {
+          accentColor: "#5865F2",
+        },
+      },
+    },
+  },
+}
+```
+
+## Voice messages
+
+Discord voice messages show a waveform preview and require OGG/Opus audio plus metadata. OpenClaw generates the waveform automatically, but it needs `ffmpeg` and `ffprobe` available on the gateway host to inspect and convert audio files.
+
+Requirements and constraints:
+
+- Provide a **local file path** (URLs are rejected).
+- Omit text content (Discord does not allow text + voice message in the same payload).
+- Any audio format is accepted; OpenClaw converts to OGG/Opus when needed.
+
+Example:
+
+```bash
+message(action="send", channel="discord", target="channel:123", path="/path/to/audio.mp3", asVoice=true)
+```
 
 ## Troubleshooting
 
@@ -440,7 +586,7 @@ openclaw logs --follow
   <Accordion title="DM and pairing issues">
 
     - DM disabled: `channels.discord.dm.enabled=false`
-    - DM policy disabled: `channels.discord.dm.policy="disabled"`
+    - DM policy disabled: `channels.discord.dmPolicy="disabled"` (legacy: `channels.discord.dm.policy`)
     - awaiting pairing approval in `pairing` mode
 
   </Accordion>
@@ -468,6 +614,8 @@ High-signal Discord fields:
 - delivery: `textChunkLimit`, `chunkMode`, `maxLinesPerMessage`
 - media/retry: `mediaMaxMb`, `retry`
 - actions: `actions.*`
+- presence: `activity`, `status`, `activityType`, `activityUrl`
+- UI: `ui.components.accentColor`
 - features: `pluralkit`, `execApprovals`, `intents`, `agentComponents`, `heartbeat`, `responsePrefix`
 
 ## Safety and operations

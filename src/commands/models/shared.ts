@@ -43,6 +43,22 @@ export const formatMs = (value?: number | null) => {
   return `${Math.round(value / 100) / 10}s`;
 };
 
+export const isLocalBaseUrl = (baseUrl: string) => {
+  try {
+    const url = new URL(baseUrl);
+    const host = url.hostname.toLowerCase();
+    return (
+      host === "localhost" ||
+      host === "127.0.0.1" ||
+      host === "0.0.0.0" ||
+      host === "::1" ||
+      host.endsWith(".local")
+    );
+  } catch {
+    return false;
+  }
+};
+
 export async function updateConfig(
   mutator: (cfg: OpenClawConfig) => OpenClawConfig,
 ): Promise<OpenClawConfig> {
@@ -73,6 +89,26 @@ export function resolveModelTarget(params: { raw: string; cfg: OpenClawConfig })
     throw new Error(`Invalid model reference: ${params.raw}`);
   }
   return resolved.ref;
+}
+
+export function resolveModelKeysFromEntries(params: {
+  cfg: OpenClawConfig;
+  entries: readonly string[];
+}): string[] {
+  const aliasIndex = buildModelAliasIndex({
+    cfg: params.cfg,
+    defaultProvider: DEFAULT_PROVIDER,
+  });
+  return params.entries
+    .map((entry) =>
+      resolveModelRefFromString({
+        raw: entry,
+        defaultProvider: DEFAULT_PROVIDER,
+        aliasIndex,
+      }),
+    )
+    .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
+    .map((entry) => modelKey(entry.ref.provider, entry.ref.model));
 }
 
 export function buildAllowlistSet(cfg: OpenClawConfig): Set<string> {
@@ -115,6 +151,22 @@ export function resolveKnownAgentId(params: {
     );
   }
   return agentId;
+}
+
+export type PrimaryFallbackConfig = { primary?: string; fallbacks?: string[] };
+
+export function mergePrimaryFallbackConfig(
+  existing: PrimaryFallbackConfig | undefined,
+  patch: { primary?: string; fallbacks?: string[] },
+): PrimaryFallbackConfig {
+  const next: PrimaryFallbackConfig = { ...existing };
+  if (patch.primary !== undefined) {
+    next.primary = patch.primary;
+  }
+  if (patch.fallbacks !== undefined) {
+    next.fallbacks = patch.fallbacks;
+  }
+  return next;
 }
 
 export { modelKey };

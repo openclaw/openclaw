@@ -1,5 +1,6 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { DiscordActionConfig } from "../../config/config.js";
+import type { DiscordSendComponents, DiscordSendEmbeds } from "../../discord/send.shared.js";
 import {
   createThreadDiscord,
   deleteMessageDiscord,
@@ -18,10 +19,12 @@ import {
   sendMessageDiscord,
   sendPollDiscord,
   sendStickerDiscord,
+  sendVoiceMessageDiscord,
   unpinMessageDiscord,
 } from "../../discord/send.js";
 import { resolveDiscordChannelId } from "../../discord/targets.js";
 import { withNormalizedTimestamp } from "../date-time.js";
+import { assertMediaNotDataUrl } from "../sandbox-paths.js";
 import {
   type ActionGate,
   jsonResult,
@@ -228,18 +231,55 @@ export async function handleDiscordMessagingAction(
         throw new Error("Discord message sends are disabled.");
       }
       const to = readStringParam(params, "to", { required: true });
+      const asVoice = params.asVoice === true;
+      const silent = params.silent === true;
       const content = readStringParam(params, "content", {
-        required: true,
+        required: !asVoice,
+        allowEmpty: true,
       });
-      const mediaUrl = readStringParam(params, "mediaUrl");
+      const mediaUrl =
+        readStringParam(params, "mediaUrl", { trim: false }) ??
+        readStringParam(params, "path", { trim: false }) ??
+        readStringParam(params, "filePath", { trim: false });
       const replyTo = readStringParam(params, "replyTo");
-      const embeds =
-        Array.isArray(params.embeds) && params.embeds.length > 0 ? params.embeds : undefined;
-      const result = await sendMessageDiscord(to, content, {
+      const rawComponents = params.components;
+      const components: DiscordSendComponents | undefined =
+        Array.isArray(rawComponents) || typeof rawComponents === "function"
+          ? (rawComponents as DiscordSendComponents)
+          : undefined;
+      const rawEmbeds = params.embeds;
+      const embeds: DiscordSendEmbeds | undefined = Array.isArray(rawEmbeds)
+        ? (rawEmbeds as DiscordSendEmbeds)
+        : undefined;
+
+      // Handle voice message sending
+      if (asVoice) {
+        if (!mediaUrl) {
+          throw new Error(
+            "Voice messages require a media file reference (mediaUrl, path, or filePath).",
+          );
+        }
+        if (content && content.trim()) {
+          throw new Error(
+            "Voice messages cannot include text content (Discord limitation). Remove the content parameter.",
+          );
+        }
+        assertMediaNotDataUrl(mediaUrl);
+        const result = await sendVoiceMessageDiscord(to, mediaUrl, {
+          ...(accountId ? { accountId } : {}),
+          replyTo,
+          silent,
+        });
+        return jsonResult({ ok: true, result, voiceMessage: true });
+      }
+
+      const result = await sendMessageDiscord(to, content ?? "", {
         ...(accountId ? { accountId } : {}),
         mediaUrl,
         replyTo,
+        components,
         embeds,
+        silent,
       });
       return jsonResult({ ok: true, result });
     }

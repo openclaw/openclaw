@@ -13,6 +13,26 @@ const resolveMediaDir = () => path.join(resolveConfigDir(), "media");
 export const MEDIA_MAX_BYTES = 5 * 1024 * 1024; // 5MB default
 const MAX_BYTES = MEDIA_MAX_BYTES;
 const DEFAULT_TTL_MS = 2 * 60 * 1000; // 2 minutes
+type RequestImpl = typeof httpRequest;
+type ResolvePinnedHostnameImpl = typeof resolvePinnedHostname;
+
+const defaultHttpRequestImpl: RequestImpl = httpRequest;
+const defaultHttpsRequestImpl: RequestImpl = httpsRequest;
+const defaultResolvePinnedHostnameImpl: ResolvePinnedHostnameImpl = resolvePinnedHostname;
+
+let httpRequestImpl: RequestImpl = defaultHttpRequestImpl;
+let httpsRequestImpl: RequestImpl = defaultHttpsRequestImpl;
+let resolvePinnedHostnameImpl: ResolvePinnedHostnameImpl = defaultResolvePinnedHostnameImpl;
+
+export function setMediaStoreNetworkDepsForTest(deps?: {
+  httpRequest?: RequestImpl;
+  httpsRequest?: RequestImpl;
+  resolvePinnedHostname?: ResolvePinnedHostnameImpl;
+}): void {
+  httpRequestImpl = deps?.httpRequest ?? defaultHttpRequestImpl;
+  httpsRequestImpl = deps?.httpsRequest ?? defaultHttpsRequestImpl;
+  resolvePinnedHostnameImpl = deps?.resolvePinnedHostname ?? defaultResolvePinnedHostnameImpl;
+}
 
 /**
  * Sanitize a filename for cross-platform safety.
@@ -107,8 +127,8 @@ async function downloadToFile(
       reject(new Error(`Invalid URL protocol: ${parsedUrl.protocol}. Only HTTP/HTTPS allowed.`));
       return;
     }
-    const requestImpl = parsedUrl.protocol === "https:" ? httpsRequest : httpRequest;
-    resolvePinnedHostname(parsedUrl.hostname)
+    const requestImpl = parsedUrl.protocol === "https:" ? httpsRequestImpl : httpRequestImpl;
+    resolvePinnedHostnameImpl(parsedUrl.hostname)
       .then((pinned) => {
         const req = requestImpl(parsedUrl, { headers, lookup: pinned.lookup }, (res) => {
           // Follow redirects

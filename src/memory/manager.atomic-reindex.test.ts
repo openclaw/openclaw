@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getMemorySearchManager, type MemoryIndexManager } from "./index.js";
 
 let shouldFail = false;
@@ -34,14 +34,26 @@ vi.mock("./embeddings.js", () => {
   };
 });
 
+vi.mock("./sqlite-vec.js", () => ({
+  loadSqliteVecExtension: async () => ({ ok: false, error: "sqlite-vec disabled in tests" }),
+}));
+
 describe("memory manager atomic reindex", () => {
+  let fixtureRoot = "";
+  let caseId = 0;
   let workspaceDir: string;
   let indexPath: string;
   let manager: MemoryIndexManager | null = null;
 
+  beforeAll(async () => {
+    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-atomic-"));
+  });
+
   beforeEach(async () => {
+    vi.stubEnv("OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX", "0");
     shouldFail = false;
-    workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-"));
+    workspaceDir = path.join(fixtureRoot, `case-${caseId++}`);
+    await fs.mkdir(workspaceDir, { recursive: true });
     indexPath = path.join(workspaceDir, "index.sqlite");
     await fs.mkdir(path.join(workspaceDir, "memory"));
     await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "Hello memory.");
@@ -52,7 +64,13 @@ describe("memory manager atomic reindex", () => {
       await manager.close();
       manager = null;
     }
-    await fs.rm(workspaceDir, { recursive: true, force: true });
+  });
+
+  afterAll(async () => {
+    if (!fixtureRoot) {
+      return;
+    }
+    await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
   it("keeps the prior index when a full reindex fails", async () => {
@@ -65,6 +83,8 @@ describe("memory manager atomic reindex", () => {
             model: "mock-embed",
             store: { path: indexPath },
             cache: { enabled: false },
+            // Perf: keep test indexes to a single chunk to reduce sqlite work.
+            chunking: { tokens: 4000, overlap: 0 },
             sync: { watch: false, onSessionStart: false, onSearch: false },
           },
         },
@@ -80,13 +100,13 @@ describe("memory manager atomic reindex", () => {
     manager = result.manager;
 
     await manager.sync({ force: true });
-    const before = await manager.search("Hello");
-    expect(before.length).toBeGreaterThan(0);
+    const beforeStatus = manager.status();
+    expect(beforeStatus.chunks).toBeGreaterThan(0);
 
     shouldFail = true;
     await expect(manager.sync({ force: true })).rejects.toThrow("embedding failure");
 
-    const after = await manager.search("Hello");
-    expect(after.length).toBeGreaterThan(0);
+    const afterStatus = manager.status();
+    expect(afterStatus.chunks).toBeGreaterThan(0);
   });
 });

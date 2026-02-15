@@ -1,5 +1,7 @@
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
+import type { RequirementConfigCheck, Requirements } from "../shared/requirements.js";
+import { evaluateEntryMetadataRequirements } from "../shared/entry-status.js";
 import { CONFIG_DIR } from "../utils.js";
 import {
   hasBinary,
@@ -7,7 +9,6 @@ import {
   isConfigPathTruthy,
   loadWorkspaceSkillEntries,
   resolveBundledAllowlist,
-  resolveConfigPath,
   resolveSkillConfig,
   resolveSkillsInstallPreferences,
   type SkillEntry,
@@ -17,11 +18,7 @@ import {
 } from "./skills.js";
 import { resolveBundledSkillsContext } from "./skills/bundled-context.js";
 
-export type SkillStatusConfigCheck = {
-  path: string;
-  value: unknown;
-  satisfied: boolean;
-};
+export type SkillStatusConfigCheck = RequirementConfigCheck;
 
 export type SkillInstallOption = {
   id: string;
@@ -45,20 +42,8 @@ export type SkillStatusEntry = {
   disabled: boolean;
   blockedByAllowlist: boolean;
   eligible: boolean;
-  requirements: {
-    bins: string[];
-    anyBins: string[];
-    env: string[];
-    config: string[];
-    os: string[];
-  };
-  missing: {
-    bins: string[];
-    anyBins: string[];
-    env: string[];
-    config: string[];
-    os: string[];
-  };
+  requirements: Requirements;
+  missing: Requirements;
   configChecks: SkillStatusConfigCheck[];
   install: SkillInstallOption[];
 };
@@ -184,87 +169,28 @@ function buildSkillStatus(
   const allowBundled = resolveBundledAllowlist(config);
   const blockedByAllowlist = !isBundledSkillAllowed(entry, allowBundled);
   const always = entry.metadata?.always === true;
-  const emoji = entry.metadata?.emoji ?? entry.frontmatter.emoji;
-  const homepageRaw =
-    entry.metadata?.homepage ??
-    entry.frontmatter.homepage ??
-    entry.frontmatter.website ??
-    entry.frontmatter.url;
-  const homepage = homepageRaw?.trim() ? homepageRaw.trim() : undefined;
   const bundled =
     bundledNames && bundledNames.size > 0
       ? bundledNames.has(entry.skill.name)
       : entry.skill.source === "openclaw-bundled";
 
-  const requiredBins = entry.metadata?.requires?.bins ?? [];
-  const requiredAnyBins = entry.metadata?.requires?.anyBins ?? [];
-  const requiredEnv = entry.metadata?.requires?.env ?? [];
-  const requiredConfig = entry.metadata?.requires?.config ?? [];
-  const requiredOs = entry.metadata?.os ?? [];
-
-  const missingBins = requiredBins.filter((bin) => {
-    if (hasBinary(bin)) {
-      return false;
-    }
-    if (eligibility?.remote?.hasBin?.(bin)) {
-      return false;
-    }
-    return true;
-  });
-  const missingAnyBins =
-    requiredAnyBins.length > 0 &&
-    !(
-      requiredAnyBins.some((bin) => hasBinary(bin)) ||
-      eligibility?.remote?.hasAnyBin?.(requiredAnyBins)
-    )
-      ? requiredAnyBins
-      : [];
-  const missingOs =
-    requiredOs.length > 0 &&
-    !requiredOs.includes(process.platform) &&
-    !eligibility?.remote?.platforms?.some((platform) => requiredOs.includes(platform))
-      ? requiredOs
-      : [];
-
-  const missingEnv: string[] = [];
-  for (const envName of requiredEnv) {
-    if (process.env[envName]) {
-      continue;
-    }
-    if (skillConfig?.env?.[envName]) {
-      continue;
-    }
-    if (skillConfig?.apiKey && entry.metadata?.primaryEnv === envName) {
-      continue;
-    }
-    missingEnv.push(envName);
-  }
-
-  const configChecks: SkillStatusConfigCheck[] = requiredConfig.map((pathStr) => {
-    const value = resolveConfigPath(config, pathStr);
-    const satisfied = isConfigPathTruthy(config, pathStr);
-    return { path: pathStr, value, satisfied };
-  });
-  const missingConfig = configChecks.filter((check) => !check.satisfied).map((check) => check.path);
-
-  const missing = always
-    ? { bins: [], anyBins: [], env: [], config: [], os: [] }
-    : {
-        bins: missingBins,
-        anyBins: missingAnyBins,
-        env: missingEnv,
-        config: missingConfig,
-        os: missingOs,
-      };
-  const eligible =
-    !disabled &&
-    !blockedByAllowlist &&
-    (always ||
-      (missing.bins.length === 0 &&
-        missing.anyBins.length === 0 &&
-        missing.env.length === 0 &&
-        missing.config.length === 0 &&
-        missing.os.length === 0));
+  const { emoji, homepage, required, missing, requirementsSatisfied, configChecks } =
+    evaluateEntryMetadataRequirements({
+      always,
+      metadata: entry.metadata,
+      frontmatter: entry.frontmatter,
+      hasLocalBin: hasBinary,
+      localPlatform: process.platform,
+      remote: eligibility?.remote,
+      isEnvSatisfied: (envName) =>
+        Boolean(
+          process.env[envName] ||
+          skillConfig?.env?.[envName] ||
+          (skillConfig?.apiKey && entry.metadata?.primaryEnv === envName),
+        ),
+      isConfigSatisfied: (pathStr) => isConfigPathTruthy(config, pathStr),
+    });
+  const eligible = !disabled && !blockedByAllowlist && requirementsSatisfied;
 
   return {
     name: entry.skill.name,
@@ -281,13 +207,7 @@ function buildSkillStatus(
     disabled,
     blockedByAllowlist,
     eligible,
-    requirements: {
-      bins: requiredBins,
-      anyBins: requiredAnyBins,
-      env: requiredEnv,
-      config: requiredConfig,
-      os: requiredOs,
-    },
+    requirements: required,
     missing,
     configChecks,
     install: normalizeInstallOptions(entry, prefs ?? resolveSkillsInstallPreferences(config)),

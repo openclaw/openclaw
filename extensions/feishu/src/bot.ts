@@ -1,5 +1,6 @@
 import type { ClawdbotConfig, RuntimeEnv } from "openclaw/plugin-sdk";
 import {
+  buildAgentMediaPayload,
   buildPendingHistoryContextFromMap,
   recordPendingHistoryEntryIfEnabled,
   clearHistoryEntriesIfEnabled,
@@ -10,6 +11,7 @@ import type { FeishuMessageContext, FeishuMediaInfo, ResolvedFeishuAccount } fro
 import type { DynamicAgentCreationConfig } from "./types.js";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
+import { tryRecordMessage } from "./dedup.js";
 import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
 import { downloadImageFeishu, downloadMessageResourceFeishu } from "./media.js";
 import { extractMentionTargets, extractMessageBody, isMentionForwardRequest } from "./mention.js";
@@ -22,37 +24,6 @@ import {
 import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu, sendMessageFeishu } from "./send.js";
-
-// --- Message deduplication ---
-// Prevent duplicate processing when WebSocket reconnects or Feishu redelivers messages.
-const DEDUP_TTL_MS = 30 * 60 * 1000; // 30 minutes
-const DEDUP_MAX_SIZE = 1_000;
-const DEDUP_CLEANUP_INTERVAL_MS = 5 * 60 * 1000; // cleanup every 5 minutes
-const processedMessageIds = new Map<string, number>(); // messageId -> timestamp
-let lastCleanupTime = Date.now();
-
-function tryRecordMessage(messageId: string): boolean {
-  const now = Date.now();
-
-  // Throttled cleanup: evict expired entries at most once per interval
-  if (now - lastCleanupTime > DEDUP_CLEANUP_INTERVAL_MS) {
-    for (const [id, ts] of processedMessageIds) {
-      if (now - ts > DEDUP_TTL_MS) processedMessageIds.delete(id);
-    }
-    lastCleanupTime = now;
-  }
-
-  if (processedMessageIds.has(messageId)) return false;
-
-  // Evict oldest entries if cache is full
-  if (processedMessageIds.size >= DEDUP_MAX_SIZE) {
-    const first = processedMessageIds.keys().next().value!;
-    processedMessageIds.delete(first);
-  }
-
-  processedMessageIds.set(messageId, now);
-  return true;
-}
 
 // --- Permission error extraction ---
 // Extract permission grant URL from Feishu API error response.
@@ -463,27 +434,6 @@ async function resolveFeishuMediaList(params: {
  * Build media payload for inbound context.
  * Similar to Discord's buildDiscordMediaPayload().
  */
-function buildFeishuMediaPayload(mediaList: FeishuMediaInfo[]): {
-  MediaPath?: string;
-  MediaType?: string;
-  MediaUrl?: string;
-  MediaPaths?: string[];
-  MediaUrls?: string[];
-  MediaTypes?: string[];
-} {
-  const first = mediaList[0];
-  const mediaPaths = mediaList.map((media) => media.path);
-  const mediaTypes = mediaList.map((media) => media.contentType).filter(Boolean) as string[];
-  return {
-    MediaPath: first?.path,
-    MediaType: first?.contentType,
-    MediaUrl: first?.path,
-    MediaPaths: mediaPaths.length > 0 ? mediaPaths : undefined,
-    MediaUrls: mediaPaths.length > 0 ? mediaPaths : undefined,
-    MediaTypes: mediaTypes.length > 0 ? mediaTypes : undefined,
-  };
-}
-
 export function parseFeishuMessageEvent(
   event: FeishuMessageEvent,
   botOpenId?: string,
@@ -796,7 +746,7 @@ export async function handleFeishuMessage(params: {
       log,
       accountId: account.accountId,
     });
-    const mediaPayload = buildFeishuMediaPayload(mediaList);
+    const mediaPayload = buildAgentMediaPayload(mediaList);
 
     // Fetch quoted/replied message content if parentId exists
     let quotedContent: string | undefined;

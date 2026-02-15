@@ -80,7 +80,7 @@ type ChromeVersion = {
 
 async function fetchChromeVersion(cdpUrl: string, timeoutMs = 500): Promise<ChromeVersion | null> {
   const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  const t = setTimeout(ctrl.abort.bind(ctrl), timeoutMs);
   try {
     const versionUrl = appendCdpPath(cdpUrl, "/json/version");
     const res = await fetch(versionUrl, {

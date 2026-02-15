@@ -5,6 +5,8 @@ import { createDiscordMessageHandler } from "./monitor.js";
 import { __resetDiscordChannelInfoCacheForTest } from "./monitor/message-utils.js";
 import { __resetDiscordThreadStarterCacheForTest } from "./monitor/threading.js";
 
+type Config = ReturnType<typeof import("../config/config.js").loadConfig>;
+
 const sendMock = vi.fn();
 const reactMock = vi.fn();
 const updateLastRouteMock = vi.fn();
@@ -54,49 +56,116 @@ beforeEach(() => {
   __resetDiscordThreadStarterCacheForTest();
 });
 
+const BASE_CFG = {
+  agents: {
+    defaults: {
+      model: "anthropic/claude-opus-4-5",
+      workspace: "/tmp/openclaw",
+    },
+  },
+  session: { store: "/tmp/openclaw-sessions.json" },
+} as const;
+
+const CATEGORY_GUILD_CFG = {
+  ...BASE_CFG,
+  channels: {
+    discord: {
+      dm: { enabled: true, policy: "open" },
+      guilds: {
+        "*": {
+          requireMention: false,
+          channels: { c1: { allow: true } },
+        },
+      },
+    },
+  },
+  routing: { allowFrom: [] },
+} as Config;
+
+function createDmHandler(opts: { cfg: Config; runtimeError?: (err: unknown) => void }) {
+  return createDiscordMessageHandler({
+    cfg: opts.cfg,
+    discordConfig: opts.cfg.channels.discord,
+    accountId: "default",
+    token: "token",
+    runtime: {
+      log: vi.fn(),
+      error: opts.runtimeError ?? vi.fn(),
+      exit: (code: number): never => {
+        throw new Error(`exit ${code}`);
+      },
+    },
+    botUserId: "bot-id",
+    guildHistories: new Map(),
+    historyLimit: 0,
+    mediaMaxBytes: 10_000,
+    textLimit: 2000,
+    replyToMode: "off",
+    dmEnabled: true,
+    groupDmEnabled: false,
+  });
+}
+
+function createDmClient(fetchChannel?: ReturnType<typeof vi.fn>) {
+  const resolvedFetchChannel =
+    fetchChannel ??
+    vi.fn().mockResolvedValue({
+      type: ChannelType.DM,
+      name: "dm",
+    });
+
+  return { fetchChannel: resolvedFetchChannel } as unknown as Client;
+}
+
+function createCategoryGuildHandler() {
+  return createDiscordMessageHandler({
+    cfg: CATEGORY_GUILD_CFG,
+    discordConfig: CATEGORY_GUILD_CFG.channels.discord,
+    accountId: "default",
+    token: "token",
+    runtime: {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: (code: number): never => {
+        throw new Error(`exit ${code}`);
+      },
+    },
+    botUserId: "bot-id",
+    guildHistories: new Map(),
+    historyLimit: 0,
+    mediaMaxBytes: 10_000,
+    textLimit: 2000,
+    replyToMode: "off",
+    dmEnabled: true,
+    groupDmEnabled: false,
+    guildEntries: {
+      "*": { requireMention: false, channels: { c1: { allow: true } } },
+    },
+  });
+}
+
+function createCategoryGuildClient() {
+  return {
+    fetchChannel: vi.fn().mockResolvedValue({
+      type: ChannelType.GuildText,
+      name: "general",
+      parentId: "category-1",
+    }),
+    rest: { get: vi.fn() },
+  } as unknown as Client;
+}
+
 describe("discord tool result dispatch", () => {
   it("sends status replies with responsePrefix", async () => {
     const cfg = {
-      agents: {
-        defaults: {
-          model: "anthropic/claude-opus-4-5",
-          workspace: "/tmp/openclaw",
-        },
-      },
-      session: { store: "/tmp/openclaw-sessions.json" },
+      ...BASE_CFG,
       messages: { responsePrefix: "PFX" },
-      channels: { discord: { dm: { enabled: true, policy: "open" } } },
+      channels: { discord: { dmPolicy: "open", allowFrom: ["*"], dm: { enabled: true } } },
     } as ReturnType<typeof import("../config/config.js").loadConfig>;
 
     const runtimeError = vi.fn();
-    const handler = createDiscordMessageHandler({
-      cfg,
-      discordConfig: cfg.channels.discord,
-      accountId: "default",
-      token: "token",
-      runtime: {
-        log: vi.fn(),
-        error: runtimeError,
-        exit: (code: number): never => {
-          throw new Error(`exit ${code}`);
-        },
-      },
-      botUserId: "bot-id",
-      guildHistories: new Map(),
-      historyLimit: 0,
-      mediaMaxBytes: 10_000,
-      textLimit: 2000,
-      replyToMode: "off",
-      dmEnabled: true,
-      groupDmEnabled: false,
-    });
-
-    const client = {
-      fetchChannel: vi.fn().mockResolvedValue({
-        type: ChannelType.DM,
-        name: "dm",
-      }),
-    } as unknown as Client;
+    const handler = createDmHandler({ cfg, runtimeError });
+    const client = createDmClient();
 
     await handler(
       {
@@ -126,43 +195,16 @@ describe("discord tool result dispatch", () => {
 
   it("caches channel info lookups between messages", async () => {
     const cfg = {
-      agents: {
-        defaults: {
-          model: "anthropic/claude-opus-4-5",
-          workspace: "/tmp/openclaw",
-        },
-      },
-      session: { store: "/tmp/openclaw-sessions.json" },
+      ...BASE_CFG,
       channels: { discord: { dm: { enabled: true, policy: "open" } } },
     } as ReturnType<typeof import("../config/config.js").loadConfig>;
 
-    const handler = createDiscordMessageHandler({
-      cfg,
-      discordConfig: cfg.channels.discord,
-      accountId: "default",
-      token: "token",
-      runtime: {
-        log: vi.fn(),
-        error: vi.fn(),
-        exit: (code: number): never => {
-          throw new Error(`exit ${code}`);
-        },
-      },
-      botUserId: "bot-id",
-      guildHistories: new Map(),
-      historyLimit: 0,
-      mediaMaxBytes: 10_000,
-      textLimit: 2000,
-      replyToMode: "off",
-      dmEnabled: true,
-      groupDmEnabled: false,
-    });
-
+    const handler = createDmHandler({ cfg });
     const fetchChannel = vi.fn().mockResolvedValue({
       type: ChannelType.DM,
       name: "dm",
     });
-    const client = { fetchChannel } as unknown as Client;
+    const client = createDmClient(fetchChannel);
     const baseMessage = {
       content: "hello",
       channelId: "cache-channel-1",
@@ -205,44 +247,12 @@ describe("discord tool result dispatch", () => {
     });
 
     const cfg = {
-      agents: {
-        defaults: {
-          model: "anthropic/claude-opus-4-5",
-          workspace: "/tmp/openclaw",
-        },
-      },
-      session: { store: "/tmp/openclaw-sessions.json" },
+      ...BASE_CFG,
       channels: { discord: { dm: { enabled: true, policy: "open" } } },
     } as ReturnType<typeof import("../config/config.js").loadConfig>;
 
-    const handler = createDiscordMessageHandler({
-      cfg,
-      discordConfig: cfg.channels.discord,
-      accountId: "default",
-      token: "token",
-      runtime: {
-        log: vi.fn(),
-        error: vi.fn(),
-        exit: (code: number): never => {
-          throw new Error(`exit ${code}`);
-        },
-      },
-      botUserId: "bot-id",
-      guildHistories: new Map(),
-      historyLimit: 0,
-      mediaMaxBytes: 10_000,
-      textLimit: 2000,
-      replyToMode: "off",
-      dmEnabled: true,
-      groupDmEnabled: false,
-    });
-
-    const client = {
-      fetchChannel: vi.fn().mockResolvedValue({
-        type: ChannelType.DM,
-        name: "dm",
-      }),
-    } as unknown as Client;
+    const handler = createDmHandler({ cfg });
+    const client = createDmClient();
 
     await handler(
       {
@@ -286,7 +296,6 @@ describe("discord tool result dispatch", () => {
   });
 
   it("uses channel id allowlists for non-thread channels with categories", async () => {
-    const { createDiscordMessageHandler } = await import("./monitor.js");
     let capturedCtx: { SessionKey?: string } | undefined;
     dispatchMock.mockImplementationOnce(async ({ ctx, dispatcher }) => {
       capturedCtx = ctx;
@@ -294,61 +303,8 @@ describe("discord tool result dispatch", () => {
       return { queuedFinal: true, counts: { final: 1 } };
     });
 
-    const cfg = {
-      agents: {
-        defaults: {
-          model: "anthropic/claude-opus-4-5",
-          workspace: "/tmp/openclaw",
-        },
-      },
-      session: { store: "/tmp/openclaw-sessions.json" },
-      channels: {
-        discord: {
-          dm: { enabled: true, policy: "open" },
-          guilds: {
-            "*": {
-              requireMention: false,
-              channels: { c1: { allow: true } },
-            },
-          },
-        },
-      },
-      routing: { allowFrom: [] },
-    } as ReturnType<typeof import("../config/config.js").loadConfig>;
-
-    const handler = createDiscordMessageHandler({
-      cfg,
-      discordConfig: cfg.channels.discord,
-      accountId: "default",
-      token: "token",
-      runtime: {
-        log: vi.fn(),
-        error: vi.fn(),
-        exit: (code: number): never => {
-          throw new Error(`exit ${code}`);
-        },
-      },
-      botUserId: "bot-id",
-      guildHistories: new Map(),
-      historyLimit: 0,
-      mediaMaxBytes: 10_000,
-      textLimit: 2000,
-      replyToMode: "off",
-      dmEnabled: true,
-      groupDmEnabled: false,
-      guildEntries: {
-        "*": { requireMention: false, channels: { c1: { allow: true } } },
-      },
-    });
-
-    const client = {
-      fetchChannel: vi.fn().mockResolvedValue({
-        type: ChannelType.GuildText,
-        name: "general",
-        parentId: "category-1",
-      }),
-      rest: { get: vi.fn() },
-    } as unknown as Client;
+    const handler = createCategoryGuildHandler();
+    const client = createCategoryGuildClient();
 
     await handler(
       {
@@ -377,7 +333,6 @@ describe("discord tool result dispatch", () => {
   });
 
   it("prefixes group bodies with sender label", async () => {
-    const { createDiscordMessageHandler } = await import("./monitor.js");
     let capturedBody = "";
     dispatchMock.mockImplementationOnce(async ({ ctx, dispatcher }) => {
       capturedBody = ctx.Body ?? "";
@@ -385,61 +340,8 @@ describe("discord tool result dispatch", () => {
       return { queuedFinal: true, counts: { final: 1 } };
     });
 
-    const cfg = {
-      agents: {
-        defaults: {
-          model: "anthropic/claude-opus-4-5",
-          workspace: "/tmp/openclaw",
-        },
-      },
-      session: { store: "/tmp/openclaw-sessions.json" },
-      channels: {
-        discord: {
-          dm: { enabled: true, policy: "open" },
-          guilds: {
-            "*": {
-              requireMention: false,
-              channels: { c1: { allow: true } },
-            },
-          },
-        },
-      },
-      routing: { allowFrom: [] },
-    } as ReturnType<typeof import("../config/config.js").loadConfig>;
-
-    const handler = createDiscordMessageHandler({
-      cfg,
-      discordConfig: cfg.channels.discord,
-      accountId: "default",
-      token: "token",
-      runtime: {
-        log: vi.fn(),
-        error: vi.fn(),
-        exit: (code: number): never => {
-          throw new Error(`exit ${code}`);
-        },
-      },
-      botUserId: "bot-id",
-      guildHistories: new Map(),
-      historyLimit: 0,
-      mediaMaxBytes: 10_000,
-      textLimit: 2000,
-      replyToMode: "off",
-      dmEnabled: true,
-      groupDmEnabled: false,
-      guildEntries: {
-        "*": { requireMention: false, channels: { c1: { allow: true } } },
-      },
-    });
-
-    const client = {
-      fetchChannel: vi.fn().mockResolvedValue({
-        type: ChannelType.GuildText,
-        name: "general",
-        parentId: "category-1",
-      }),
-      rest: { get: vi.fn() },
-    } as unknown as Client;
+    const handler = createCategoryGuildHandler();
+    const client = createCategoryGuildClient();
 
     await handler(
       {
@@ -468,48 +370,15 @@ describe("discord tool result dispatch", () => {
   });
 
   it("replies with pairing code and sender id when dmPolicy is pairing", async () => {
-    const { createDiscordMessageHandler } = await import("./monitor.js");
     const cfg = {
-      agents: {
-        defaults: {
-          model: "anthropic/claude-opus-4-5",
-          workspace: "/tmp/openclaw",
-        },
-      },
-      session: { store: "/tmp/openclaw-sessions.json" },
+      ...BASE_CFG,
       channels: {
         discord: { dm: { enabled: true, policy: "pairing", allowFrom: [] } },
       },
-    } as ReturnType<typeof import("../config/config.js").loadConfig>;
+    } as Config;
 
-    const handler = createDiscordMessageHandler({
-      cfg,
-      discordConfig: cfg.channels.discord,
-      accountId: "default",
-      token: "token",
-      runtime: {
-        log: vi.fn(),
-        error: vi.fn(),
-        exit: (code: number): never => {
-          throw new Error(`exit ${code}`);
-        },
-      },
-      botUserId: "bot-id",
-      guildHistories: new Map(),
-      historyLimit: 0,
-      mediaMaxBytes: 10_000,
-      textLimit: 2000,
-      replyToMode: "off",
-      dmEnabled: true,
-      groupDmEnabled: false,
-    });
-
-    const client = {
-      fetchChannel: vi.fn().mockResolvedValue({
-        type: ChannelType.DM,
-        name: "dm",
-      }),
-    } as unknown as Client;
+    const handler = createDmHandler({ cfg });
+    const client = createDmClient();
 
     await handler(
       {
