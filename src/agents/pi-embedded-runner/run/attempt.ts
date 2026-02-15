@@ -218,6 +218,7 @@ export async function runEmbeddedAttempt(
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   const prevCwd = process.cwd();
   const runAbortController = new AbortController();
+  const shouldConsoleLogLlmIo = params.model.api !== "ollama";
 
   log.debug(
     `embedded run start: runId=${params.runId} sessionId=${params.sessionId} provider=${params.provider} model=${params.modelId} thinking=${params.thinkLevel} messageChannel=${params.messageChannel ?? params.messageProvider ?? "unknown"}`,
@@ -956,6 +957,45 @@ export async function runEmbeddedAttempt(
 
           // Only pass images option if there are actually images to pass
           // This avoids potential issues with models that don't expect the images parameter
+          if (hookRunner?.hasHooks("llm_input")) {
+            hookRunner
+              .runLlmInput(
+                {
+                  runId: params.runId,
+                  sessionId: params.sessionId,
+                  provider: params.provider,
+                  model: params.modelId,
+                  systemPrompt: systemPromptText,
+                  prompt: effectivePrompt,
+                  historyMessages: activeSession.messages,
+                  imagesCount: imageResult.images.length,
+                },
+                {
+                  agentId: hookAgentId,
+                  sessionKey: params.sessionKey,
+                  sessionId: params.sessionId,
+                  workspaceDir: params.workspaceDir,
+                  messageProvider: params.messageProvider ?? undefined,
+                },
+              )
+              .catch((err) => {
+                log.warn(`llm_input hook failed: ${String(err)}`);
+              });
+          }
+
+          if (shouldConsoleLogLlmIo) {
+            console.log("[openclaw][llm:input]", {
+              runId: params.runId,
+              sessionId: params.sessionId,
+              provider: params.provider,
+              model: params.modelId,
+              systemPrompt: systemPromptText,
+              prompt: effectivePrompt,
+              historyMessages: activeSession.messages,
+              imagesCount: imageResult.images.length,
+            });
+          }
+
           if (imageResult.images.length > 0) {
             await abortable(activeSession.prompt(effectivePrompt, { images: imageResult.images }));
           } else {
@@ -1102,6 +1142,43 @@ export async function runEmbeddedAttempt(
             typeof entry.toolName === "string" && entry.toolName.trim().length > 0,
         )
         .map((entry) => ({ toolName: entry.toolName, meta: entry.meta }));
+
+      if (shouldConsoleLogLlmIo) {
+        console.log("[openclaw][llm:output]", {
+          runId: params.runId,
+          sessionId: params.sessionId,
+          provider: params.provider,
+          model: params.modelId,
+          assistantTexts,
+          lastAssistant,
+          usage: getUsageTotals(),
+        });
+      }
+
+      if (hookRunner?.hasHooks("llm_output")) {
+        hookRunner
+          .runLlmOutput(
+            {
+              runId: params.runId,
+              sessionId: params.sessionId,
+              provider: params.provider,
+              model: params.modelId,
+              assistantTexts,
+              lastAssistant,
+              usage: getUsageTotals(),
+            },
+            {
+              agentId: hookAgentId,
+              sessionKey: params.sessionKey,
+              sessionId: params.sessionId,
+              workspaceDir: params.workspaceDir,
+              messageProvider: params.messageProvider ?? undefined,
+            },
+          )
+          .catch((err) => {
+            log.warn(`llm_output hook failed: ${String(err)}`);
+          });
+      }
 
       return {
         aborted,
