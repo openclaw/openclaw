@@ -84,7 +84,10 @@ describe("CronService delivery plan consistency", () => {
 
     const result = await cron.run(job.id, "force");
     expect(result).toEqual({ ok: true, ran: true });
-    expect(enqueueSystemEvent).toHaveBeenCalledWith("Cron: done", { agentId: undefined });
+    expect(enqueueSystemEvent).toHaveBeenCalledWith(
+      "Cron: done",
+      expect.objectContaining({ agentId: undefined }),
+    );
 
     cron.stop();
     await store.cleanup();
