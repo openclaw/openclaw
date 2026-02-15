@@ -83,6 +83,43 @@ describe("sanitizeUserFacingText", () => {
     );
   });
 
+  it("does not rewrite normal text containing '402' even in error context", () => {
+    // Dollar amounts (GitHub issue #12711) — must pass through even when errorContext: true
+    expect(sanitizeUserFacingText("Your MTD spend is $402.55", { errorContext: true })).toBe(
+      "Your MTD spend is $402.55",
+    );
+    // Street addresses
+    expect(sanitizeUserFacingText("Meet me at 402 Main Street", { errorContext: true })).toBe(
+      "Meet me at 402 Main Street",
+    );
+    // General numeric context
+    expect(
+      sanitizeUserFacingText("The report lists 402 items in total", { errorContext: true }),
+    ).toBe("The report lists 402 items in total");
+    // Historical year
+    expect(
+      sanitizeUserFacingText("In the year 1402 the empire expanded", { errorContext: true }),
+    ).toBe("In the year 1402 the empire expanded");
+  });
+
+  it("still rewrites leaked billing error payloads when in error context", () => {
+    // HTTP status error
+    expect(sanitizeUserFacingText("402 Payment Required", { errorContext: true })).toContain(
+      "billing",
+    );
+    // Error-prefix form
+    expect(sanitizeUserFacingText("Error: 402 Payment Required", { errorContext: true })).toContain(
+      "billing",
+    );
+    // JSON API error payload with billing keywords
+    expect(
+      sanitizeUserFacingText(
+        '{"type":"error","error":{"message":"insufficient credits","type":"billing_error"}}',
+        { errorContext: true },
+      ),
+    ).toContain("billing");
+  });
+
   it("collapses consecutive duplicate paragraphs", () => {
     const text = "Hello there!\n\nHello there!";
     expect(sanitizeUserFacingText(text)).toBe("Hello there!");
