@@ -118,10 +118,10 @@ const SECURITY_RULES: AuditRule[] = [
     id: "rate-limiting",
     category: "security",
     severity: "medium",
-    check: (c) => asAny(c).security?.rateLimiting?.enabled === true,
-    message: "Rate limiting should be enabled",
-    detail: "Without rate limiting, abuse and cost overruns are possible",
-    fix: "Enable security.rateLimiting.enabled",
+    check: (c) => asAny(c).gateway?.auth?.rateLimit?.maxAttempts !== undefined,
+    message: "Gateway auth rate limiting should be configured",
+    detail: "Without rate limiting, brute force attacks are easier",
+    fix: "Configure gateway.auth.rateLimit.maxAttempts",
   },
 ];
 
