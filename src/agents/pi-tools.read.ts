@@ -87,6 +87,12 @@ type RequiredParamGroup = {
   label?: string;
 };
 
+const RETRY_GUIDANCE_SUFFIX = " Supply correct parameters before retrying.";
+
+function parameterValidationError(message: string): Error {
+  return new Error(`${message}.${RETRY_GUIDANCE_SUFFIX}`);
+}
+
 export const CLAUDE_PARAM_GROUPS = {
   read: [{ keys: ["path", "file_path"], label: "path (path or file_path)" }],
   write: [
@@ -245,9 +251,10 @@ export function assertRequiredParams(
   toolName: string,
 ): void {
   if (!record || typeof record !== "object") {
-    throw new Error(`Missing parameters for ${toolName}`);
+    throw parameterValidationError(`Missing parameters for ${toolName}`);
   }
 
+  const missingLabels: string[] = [];
   for (const group of groups) {
     const satisfied = group.keys.some((key) => {
       if (!(key in record)) {
@@ -265,8 +272,14 @@ export function assertRequiredParams(
 
     if (!satisfied) {
       const label = group.label ?? group.keys.join(" or ");
-      throw new Error(`Missing required parameter: ${label}`);
+      missingLabels.push(label);
     }
+  }
+
+  if (missingLabels.length > 0) {
+    const joined = missingLabels.join(", ");
+    const noun = missingLabels.length === 1 ? "parameter" : "parameters";
+    throw parameterValidationError(`Missing required ${noun}: ${joined}`);
   }
 }
 
