@@ -143,6 +143,7 @@
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
     "file-type": "^21.3.0",
+    "google-auth-library": "^10.5.0",
     "grammy": "^1.40.0",
     "https-proxy-agent": "^7.0.6",
     "jiti": "^2.6.1",

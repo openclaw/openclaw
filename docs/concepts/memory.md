@@ -101,7 +101,24 @@ resolves keys from auth profiles, `models.providers.*.apiKey`, or environment
 variables. Codex OAuth only covers chat/completions and does **not** satisfy
 embeddings for memory search. For Gemini, use `GEMINI_API_KEY` or
 `models.providers.google.apiKey`. For Voyage, use `VOYAGE_API_KEY` or
-`models.providers.voyage.apiKey`. When using a custom OpenAI-compatible endpoint,
+`models.providers.voyage.apiKey`.
+
+### Vertex AI embeddings (GCP)
+
+For enterprise users on Google Cloud, use the `google-vertex` provider. This uses
+Application Default Credentials (ADC) or a Service Account key file.
+
+```json5
+memorySearch: {
+  provider: "google-vertex",
+  model: "google-vertex/text-embedding-004",
+  remote: {
+    location: "us-central1" // Recommended for embeddings
+  }
+}
+```
+
+When using a custom OpenAI-compatible endpoint,
 set `memorySearch.remote.apiKey` (and optional `memorySearch.remote.headers`).
 
 ### QMD backend (experimental)

@@ -5,6 +5,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { resolveUserPath } from "../utils.js";
 import { createGeminiEmbeddingProvider, type GeminiEmbeddingClient } from "./embeddings-gemini.js";
 import { createOpenAiEmbeddingProvider, type OpenAiEmbeddingClient } from "./embeddings-openai.js";
+import { createVertexEmbeddingProvider, type VertexEmbeddingClient } from "./embeddings-vertex.js";
 import { createVoyageEmbeddingProvider, type VoyageEmbeddingClient } from "./embeddings-voyage.js";
 import { importNodeLlamaCpp } from "./node-llama.js";
 
@@ -19,6 +20,7 @@ function sanitizeAndNormalizeEmbedding(vec: number[]): number[] {
 
 export type { GeminiEmbeddingClient } from "./embeddings-gemini.js";
 export type { OpenAiEmbeddingClient } from "./embeddings-openai.js";
+export type { VertexEmbeddingClient } from "./embeddings-vertex.js";
 export type { VoyageEmbeddingClient } from "./embeddings-voyage.js";
 
 export type EmbeddingProvider = {
@@ -29,11 +31,11 @@ export type EmbeddingProvider = {
   embedBatch: (texts: string[]) => Promise<number[][]>;
 };
 
-export type EmbeddingProviderId = "openai" | "local" | "gemini" | "voyage";
+export type EmbeddingProviderId = "openai" | "local" | "gemini" | "voyage" | "google-vertex";
 export type EmbeddingProviderRequest = EmbeddingProviderId | "auto";
 export type EmbeddingProviderFallback = EmbeddingProviderId | "none";
 
-const REMOTE_EMBEDDING_PROVIDER_IDS = ["openai", "gemini", "voyage"] as const;
+const REMOTE_EMBEDDING_PROVIDER_IDS = ["openai", "gemini", "google-vertex", "voyage"] as const;
 
 export type EmbeddingProviderResult = {
   provider: EmbeddingProvider;
@@ -42,6 +44,7 @@ export type EmbeddingProviderResult = {
   fallbackReason?: string;
   openAi?: OpenAiEmbeddingClient;
   gemini?: GeminiEmbeddingClient;
+  vertex?: VertexEmbeddingClient;
   voyage?: VoyageEmbeddingClient;
 };
 
@@ -51,6 +54,7 @@ export type EmbeddingProviderOptions = {
   provider: EmbeddingProviderRequest;
   remote?: {
     baseUrl?: string;
+    location?: string;
     apiKey?: string;
     headers?: Record<string, string>;
   };
@@ -148,6 +152,10 @@ export async function createEmbeddingProvider(
     if (id === "gemini") {
       const { provider, client } = await createGeminiEmbeddingProvider(options);
       return { provider, gemini: client };
+    }
+    if (id === "google-vertex") {
+      const { provider, client } = await createVertexEmbeddingProvider(options);
+      return { provider, vertex: client };
     }
     if (id === "voyage") {
       const { provider, client } = await createVoyageEmbeddingProvider(options);

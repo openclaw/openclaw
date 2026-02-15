@@ -350,11 +350,18 @@ export const MemorySearchSchema = z
       .strict()
       .optional(),
     provider: z
-      .union([z.literal("openai"), z.literal("local"), z.literal("gemini"), z.literal("voyage")])
+      .union([
+        z.literal("openai"),
+        z.literal("local"),
+        z.literal("gemini"),
+        z.literal("voyage"),
+        z.literal("google-vertex"),
+      ])
       .optional(),
     remote: z
       .object({
         baseUrl: z.string().optional(),
+        location: z.string().optional(),
         apiKey: z.string().optional().register(sensitive),
         headers: z.record(z.string(), z.string()).optional(),
         batch: z
@@ -376,6 +383,7 @@ export const MemorySearchSchema = z
         z.literal("gemini"),
         z.literal("local"),
         z.literal("voyage"),
+        z.literal("google-vertex"),
         z.literal("none"),
       ])
       .optional(),

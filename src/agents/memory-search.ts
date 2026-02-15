@@ -9,9 +9,10 @@ export type ResolvedMemorySearchConfig = {
   enabled: boolean;
   sources: Array<"memory" | "sessions">;
   extraPaths: string[];
-  provider: "openai" | "local" | "gemini" | "voyage" | "auto";
+  provider: "openai" | "local" | "gemini" | "voyage" | "google-vertex" | "auto";
   remote?: {
     baseUrl?: string;
+    location?: string;
     apiKey?: string;
     headers?: Record<string, string>;
     batch?: {
@@ -25,7 +26,7 @@ export type ResolvedMemorySearchConfig = {
   experimental: {
     sessionMemory: boolean;
   };
-  fallback: "openai" | "gemini" | "local" | "voyage" | "none";
+  fallback: "openai" | "gemini" | "local" | "voyage" | "google-vertex" | "none";
   model: string;
   local: {
     modelPath?: string;
@@ -130,9 +131,11 @@ function mergeConfig(
   const overrideRemote = overrides?.remote;
   const hasRemoteConfig = Boolean(
     overrideRemote?.baseUrl ||
+    overrideRemote?.location ||
     overrideRemote?.apiKey ||
     overrideRemote?.headers ||
     defaultRemote?.baseUrl ||
+    defaultRemote?.location ||
     defaultRemote?.apiKey ||
     defaultRemote?.headers,
   );
@@ -141,6 +144,7 @@ function mergeConfig(
     provider === "openai" ||
     provider === "gemini" ||
     provider === "voyage" ||
+    provider === "google-vertex" ||
     provider === "auto";
   const batch = {
     enabled: overrideRemote?.batch?.enabled ?? defaultRemote?.batch?.enabled ?? false,
@@ -157,6 +161,7 @@ function mergeConfig(
   const remote = includeRemote
     ? {
         baseUrl: overrideRemote?.baseUrl ?? defaultRemote?.baseUrl,
+        location: overrideRemote?.location ?? defaultRemote?.location,
         apiKey: overrideRemote?.apiKey ?? defaultRemote?.apiKey,
         headers: overrideRemote?.headers ?? defaultRemote?.headers,
         batch,

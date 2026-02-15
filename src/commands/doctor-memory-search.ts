@@ -111,7 +111,7 @@ function hasLocalEmbeddings(local: { modelPath?: string }): boolean {
 }
 
 async function hasApiKeyForProvider(
-  provider: "openai" | "gemini" | "voyage",
+  provider: "openai" | "gemini" | "voyage" | "google-vertex",
   cfg: OpenClawConfig,
   agentDir: string,
 ): Promise<boolean> {
