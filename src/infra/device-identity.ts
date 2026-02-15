@@ -22,7 +22,7 @@ function resolveDefaultIdentityPath(): string {
 }
 
 function ensureDir(filePath: string) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
 }
 
 const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
@@ -82,11 +82,7 @@ export function loadOrCreateDeviceIdentity(
             deviceId: derivedId,
           };
           fs.writeFileSync(filePath, `${JSON.stringify(updated, null, 2)}\n`, { mode: 0o600 });
-          try {
-            fs.chmodSync(filePath, 0o600);
-          } catch {
-            // best-effort
-          }
+          fs.chmodSync(filePath, 0o600);
           return {
             deviceId: derivedId,
             publicKeyPem: parsed.publicKeyPem,
@@ -114,11 +110,7 @@ export function loadOrCreateDeviceIdentity(
     createdAtMs: Date.now(),
   };
   fs.writeFileSync(filePath, `${JSON.stringify(stored, null, 2)}\n`, { mode: 0o600 });
-  try {
-    fs.chmodSync(filePath, 0o600);
-  } catch {
-    // best-effort
-  }
+  fs.chmodSync(filePath, 0o600);
   return identity;
 }
 
