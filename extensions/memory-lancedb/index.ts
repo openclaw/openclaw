@@ -6,10 +6,10 @@
  * Provides seamless auto-recall and auto-capture via lifecycle hooks.
  */
 
-import type * as LanceDB from "@lancedb/lancedb";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { Type } from "@sinclair/typebox";
 import { randomUUID } from "node:crypto";
+import type * as LanceDB from "@lancedb/lancedb";
+import { Type } from "@sinclair/typebox";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import {
   DEFAULT_CAPTURE_MAX_CHARS,
   MEMORY_CATEGORIES,
@@ -161,11 +161,13 @@ class MemoryDB {
 
 class Embeddings {
   private readonly baseUrl: string;
+  private static readonly REQUEST_TIMEOUT_MS = 30_000;
 
   constructor(
     private readonly apiKey: string,
     private readonly model: string,
     baseUrl?: string,
+    private readonly requestDimensions?: number,
     private readonly expectedDimensions?: number,
   ) {
     const normalized = (baseUrl?.trim() || "https://api.openai.com/v1").replace(/\/+$/, "");
@@ -182,10 +184,11 @@ class Embeddings {
       body: JSON.stringify({
         model: this.model,
         input: text,
-        ...(typeof this.expectedDimensions === "number"
-          ? { dimensions: this.expectedDimensions }
+        ...(typeof this.requestDimensions === "number"
+          ? { dimensions: this.requestDimensions }
           : {}),
       }),
+      signal: AbortSignal.timeout(Embeddings.REQUEST_TIMEOUT_MS),
     });
     if (!res.ok) {
       const body = await res.text();
@@ -328,6 +331,7 @@ const memoryPlugin = {
       cfg.embedding.apiKey,
       cfg.embedding.model!,
       cfg.embedding.baseUrl,
+      cfg.embedding.dimensions,
       vectorDim,
     );
 
