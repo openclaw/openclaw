@@ -57,6 +57,25 @@ function hasAuthForProvider(
   return false;
 }
 
+function createProviderAuthChecker(params: {
+  cfg: OpenClawConfig;
+  agentDir?: string;
+}): (provider: string) => boolean {
+  const authStore = ensureAuthProfileStore(params.agentDir, {
+    allowKeychainPrompt: false,
+  });
+  const authCache = new Map<string, boolean>();
+  return (provider: string) => {
+    const cached = authCache.get(provider);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const value = hasAuthForProvider(provider, params.cfg, authStore);
+    authCache.set(provider, value);
+    return value;
+  };
+}
+
 function resolveConfiguredModelRaw(cfg: OpenClawConfig): string {
   const raw = cfg.agents?.defaults?.model as { primary?: string } | string | undefined;
   if (typeof raw === "string") {
@@ -235,19 +254,7 @@ export async function promptDefaultModel(
   }
 
   const agentDir = params.agentDir;
-  const authStore = ensureAuthProfileStore(agentDir, {
-    allowKeychainPrompt: false,
-  });
-  const authCache = new Map<string, boolean>();
-  const hasAuth = (provider: string) => {
-    const cached = authCache.get(provider);
-    if (cached !== undefined) {
-      return cached;
-    }
-    const value = hasAuthForProvider(provider, cfg, authStore);
-    authCache.set(provider, value);
-    return value;
-  };
+  const hasAuth = createProviderAuthChecker({ cfg, agentDir });
 
   const options: WizardSelectOption[] = [];
   if (allowKeep) {
@@ -383,19 +390,7 @@ export async function promptModelAllowlist(params: {
     cfg,
     defaultProvider: DEFAULT_PROVIDER,
   });
-  const authStore = ensureAuthProfileStore(params.agentDir, {
-    allowKeychainPrompt: false,
-  });
-  const authCache = new Map<string, boolean>();
-  const hasAuth = (provider: string) => {
-    const cached = authCache.get(provider);
-    if (cached !== undefined) {
-      return cached;
-    }
-    const value = hasAuthForProvider(provider, cfg, authStore);
-    authCache.set(provider, value);
-    return value;
-  };
+  const hasAuth = createProviderAuthChecker({ cfg, agentDir: params.agentDir });
 
   const options: WizardSelectOption[] = [];
   const seen = new Set<string>();
