@@ -28,6 +28,34 @@ Sandboxing details: [Sandboxing](/gateway/sandboxing)
 - Docker Desktop (or Docker Engine) + Docker Compose v2
 - Enough disk for images + logs
 
+## Getting the Image
+
+### Option 1: Pre-built image (recommended)
+
+Pull the official image from GitHub Container Registry:
+
+```bash
+docker pull ghcr.io/openclaw/openclaw:latest
+```
+
+To use with docker-compose, set the image in your environment:
+
+```bash
+export OPENCLAW_IMAGE=ghcr.io/openclaw/openclaw:latest
+```
+
+### Option 2: Build locally
+
+Clone the repository and build:
+
+```bash
+git clone https://github.com/openclaw/openclaw.git
+cd openclaw
+docker build -t openclaw:local -f Dockerfile .
+```
+
+The `docker-setup.sh` script (below) handles building automatically if no image is specified.
+
 ## Containerized Gateway (Docker Compose)
 
 ### Quick start (recommended)
