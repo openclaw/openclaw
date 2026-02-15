@@ -108,7 +108,8 @@ export function resolveInfoflowAccount(params: {
   const encodingAESKey = merged.encodingAESKey ?? "";
   const appKey = merged.appKey ?? "";
   const appSecret = merged.appSecret ?? "";
-  const configured = Boolean(checkToken) && Boolean(appKey) && Boolean(appSecret);
+  const configured =
+    Boolean(checkToken) && Boolean(encodingAESKey) && Boolean(appKey) && Boolean(appSecret);
 
   return {
     accountId,

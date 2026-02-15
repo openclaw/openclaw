@@ -95,7 +95,7 @@ export async function handleInfoflowWebhookRequest(
   const requestPath = normalizeWebhookPath(url.pathname);
 
   if (verbose) {
-    // 记录url全部内容
+    // Log the full request URL
     getInfoflowWebhookLog().debug?.(`[infoflow] request: url=${url}`);
   }
 

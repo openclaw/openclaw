@@ -358,7 +358,7 @@ export async function sendInfoflowGroupMessage(params: {
     } else if (type === "md" || type === "markdown") {
       body.push({ type: "MD", content: item.content });
       hasMarkdown = true;
-    } else if (item.type === "at") {
+    } else if (type === "at") {
       // Parse AT content: "all" means atall, otherwise comma-separated user IDs
       if (item.content === "all") {
         body.push({ type: "AT", atall: true, atuserids: [] });
