@@ -47,3 +47,46 @@ export const makeGeminiCliModel = (id: string): Model<"google-gemini-cli"> =>
     contextWindow: 1,
     maxTokens: 1,
   }) as Model<"google-gemini-cli">;
+
+function makeZeroUsage() {
+  return {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 0,
+    cost: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      total: 0,
+    },
+  };
+}
+
+export function makeGoogleAssistantMessage(model: string, content: unknown) {
+  return {
+    role: "assistant",
+    content,
+    api: "google-generative-ai",
+    provider: "google",
+    model,
+    usage: makeZeroUsage(),
+    stopReason: "stop",
+    timestamp: 0,
+  };
+}
+
+export function makeGeminiCliAssistantMessage(model: string, content: unknown) {
+  return {
+    role: "assistant",
+    content,
+    api: "google-gemini-cli",
+    provider: "google-gemini-cli",
+    model,
+    usage: makeZeroUsage(),
+    stopReason: "stop",
+    timestamp: 0,
+  };
+}
