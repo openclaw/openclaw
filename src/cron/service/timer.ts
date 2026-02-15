@@ -445,7 +445,10 @@ async function executeJobCore(
             : 'main job requires payload.kind="systemEvent"',
       };
     }
-    state.deps.enqueueSystemEvent(text, { agentId: job.agentId });
+    state.deps.enqueueSystemEvent(text, {
+      agentId: job.agentId,
+      contextKey: `cron:${job.id}`,
+    });
     if (job.wakeMode === "now" && state.deps.runHeartbeatOnce) {
       const reason = `cron:${job.id}`;
       const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -503,7 +506,10 @@ async function executeJobCore(
     const prefix = "Cron";
     const label =
       res.status === "error" ? `${prefix} (error): ${summaryText}` : `${prefix}: ${summaryText}`;
-    state.deps.enqueueSystemEvent(label, { agentId: job.agentId });
+    state.deps.enqueueSystemEvent(label, {
+      agentId: job.agentId,
+      contextKey: `cron:${job.id}`,
+    });
     if (job.wakeMode === "now") {
       state.deps.requestHeartbeatNow({ reason: `cron:${job.id}` });
     }
