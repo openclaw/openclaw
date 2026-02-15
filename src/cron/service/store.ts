@@ -231,7 +231,23 @@ export async function ensureLoaded(
   // Fast path: store is already in memory. Other callers (add, list, run, …)
   // trust the in-memory copy to avoid a stat syscall on every operation.
   if (state.store && !opts?.forceReload) {
-    return;
+    // For read-only operations like list/status, check if cache is fresh enough
+    const now = state.deps.nowMs();
+    const cacheAge = now - (state.storeLoadedAtMs ?? 0);
+    const MAX_CACHE_AGE_MS = 5000; // 5 seconds cache for read operations
+
+    // If cache is fresh enough, use it directly
+    if (cacheAge < MAX_CACHE_AGE_MS) {
+      return;
+    }
+
+    // Check if file has changed before reloading
+    const currentMtime = await getFileMtimeMs(state.deps.storePath);
+    if (currentMtime === state.storeFileMtimeMs) {
+      // File hasn't changed, update cache timestamp and continue
+      state.storeLoadedAtMs = now;
+      return;
+    }
   }
   // Force reload always re-reads the file to avoid missing cross-service
   // edits on filesystems with coarse mtime resolution.

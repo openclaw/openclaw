@@ -607,6 +607,7 @@ const ERROR_PATTERNS = {
     "credit balance",
     "plans & billing",
     "insufficient balance",
+    /billing.*upgrade|upgrade.*plan/,
   ],
   auth: [
     /invalid[_ ]?api[_ ]?key/,
