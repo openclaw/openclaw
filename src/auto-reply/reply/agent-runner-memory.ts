@@ -38,7 +38,8 @@ export async function runMemoryFlushIfNeeded(params: {
   storePath?: string;
   isHeartbeat: boolean;
 }): Promise<SessionEntry | undefined> {
-  const memoryFlushSettings = resolveMemoryFlushSettings(params.cfg);
+  const agentId = params.sessionKey ? resolveAgentIdFromSessionKey(params.sessionKey) : undefined;
+  const memoryFlushSettings = resolveMemoryFlushSettings(params.cfg, agentId);
   if (!memoryFlushSettings) {
     return params.sessionEntry;
   }
