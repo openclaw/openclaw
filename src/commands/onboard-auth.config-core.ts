@@ -50,8 +50,10 @@ export {
 } from "./onboard-auth.config-litellm.js";
 import {
   applyAgentDefaultModelPrimary,
+  applyOnboardAuthAgentModelsAndProviders,
   applyProviderConfigWithDefaultModel,
   applyProviderConfigWithDefaultModels,
+  applyProviderConfigWithModelCatalog,
 } from "./onboard-auth.config-shared.js";
 import {
   buildZaiModelDefinition,
@@ -123,20 +125,7 @@ export function applyZaiProviderConfig(
     models: mergedModels.length > 0 ? mergedModels : defaultModels,
   };
 
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...cfg.agents?.defaults,
-        models,
-      },
-    },
-    models: {
-      mode: cfg.models?.mode ?? "merge",
-      providers,
-    },
-  };
+  return applyOnboardAuthAgentModelsAndProviders(cfg, { agentModels: models, providers });
 }
 
 export function applyZaiConfig(
@@ -320,20 +309,7 @@ export function applySyntheticProviderConfig(cfg: OpenClawConfig): OpenClawConfi
     models: mergedModels.length > 0 ? mergedModels : syntheticModels,
   };
 
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...cfg.agents?.defaults,
-        models,
-      },
-    },
-    models: {
-      mode: cfg.models?.mode ?? "merge",
-      providers,
-    },
-  };
+  return applyOnboardAuthAgentModelsAndProviders(cfg, { agentModels: models, providers });
 }
 
 export function applySyntheticConfig(cfg: OpenClawConfig): OpenClawConfig {
@@ -409,42 +385,14 @@ export function applyVeniceProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
     alias: models[VENICE_DEFAULT_MODEL_REF]?.alias ?? "Llama 3.3 70B",
   };
 
-  const providers = { ...cfg.models?.providers };
-  const existingProvider = providers.venice;
-  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
   const veniceModels = VENICE_MODEL_CATALOG.map(buildVeniceModelDefinition);
-  const mergedModels = [
-    ...existingModels,
-    ...veniceModels.filter((model) => !existingModels.some((existing) => existing.id === model.id)),
-  ];
-  const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as Record<
-    string,
-    unknown
-  > as { apiKey?: string };
-  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
-  const normalizedApiKey = resolvedApiKey?.trim();
-  providers.venice = {
-    ...existingProviderRest,
-    baseUrl: VENICE_BASE_URL,
+  return applyProviderConfigWithModelCatalog(cfg, {
+    agentModels: models,
+    providerId: "venice",
     api: "openai-completions",
-    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
-    models: mergedModels.length > 0 ? mergedModels : veniceModels,
-  };
-
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...cfg.agents?.defaults,
-        models,
-      },
-    },
-    models: {
-      mode: cfg.models?.mode ?? "merge",
-      providers,
-    },
-  };
+    baseUrl: VENICE_BASE_URL,
+    catalogModels: veniceModels,
+  });
 }
 
 /**
@@ -484,44 +432,14 @@ export function applyTogetherProviderConfig(cfg: OpenClawConfig): OpenClawConfig
     alias: models[TOGETHER_DEFAULT_MODEL_REF]?.alias ?? "Together AI",
   };
 
-  const providers = { ...cfg.models?.providers };
-  const existingProvider = providers.together;
-  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
   const togetherModels = TOGETHER_MODEL_CATALOG.map(buildTogetherModelDefinition);
-  const mergedModels = [
-    ...existingModels,
-    ...togetherModels.filter(
-      (model) => !existingModels.some((existing) => existing.id === model.id),
-    ),
-  ];
-  const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as Record<
-    string,
-    unknown
-  > as { apiKey?: string };
-  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
-  const normalizedApiKey = resolvedApiKey?.trim();
-  providers.together = {
-    ...existingProviderRest,
-    baseUrl: TOGETHER_BASE_URL,
+  return applyProviderConfigWithModelCatalog(cfg, {
+    agentModels: models,
+    providerId: "together",
     api: "openai-completions",
-    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
-    models: mergedModels.length > 0 ? mergedModels : togetherModels,
-  };
-
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...cfg.agents?.defaults,
-        models,
-      },
-    },
-    models: {
-      mode: cfg.models?.mode ?? "merge",
-      providers,
-    },
-  };
+    baseUrl: TOGETHER_BASE_URL,
+    catalogModels: togetherModels,
+  });
 }
 
 /**
@@ -560,42 +478,14 @@ export function applyHuggingfaceProviderConfig(cfg: OpenClawConfig): OpenClawCon
     alias: models[HUGGINGFACE_DEFAULT_MODEL_REF]?.alias ?? "Hugging Face",
   };
 
-  const providers = { ...cfg.models?.providers };
-  const existingProvider = providers.huggingface;
-  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
   const hfModels = HUGGINGFACE_MODEL_CATALOG.map(buildHuggingfaceModelDefinition);
-  const mergedModels = [
-    ...existingModels,
-    ...hfModels.filter((model) => !existingModels.some((existing) => existing.id === model.id)),
-  ];
-  const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as Record<
-    string,
-    unknown
-  > as { apiKey?: string };
-  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
-  const normalizedApiKey = resolvedApiKey?.trim();
-  providers.huggingface = {
-    ...existingProviderRest,
-    baseUrl: HUGGINGFACE_BASE_URL,
+  return applyProviderConfigWithModelCatalog(cfg, {
+    agentModels: models,
+    providerId: "huggingface",
     api: "openai-completions",
-    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
-    models: mergedModels.length > 0 ? mergedModels : hfModels,
-  };
-
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...cfg.agents?.defaults,
-        models,
-      },
-    },
-    models: {
-      mode: cfg.models?.mode ?? "merge",
-      providers,
-    },
-  };
+    baseUrl: HUGGINGFACE_BASE_URL,
+    catalogModels: hfModels,
+  });
 }
 
 /**

@@ -67,6 +67,31 @@ describe("handleDiscordMessageAction", () => {
     );
   });
 
+  it("forwards legacy embeds for send", async () => {
+    sendMessageDiscord.mockClear();
+    const handleDiscordMessageAction = await loadHandleDiscordMessageAction();
+
+    const embeds = [{ title: "Legacy", description: "Use components v2." }];
+
+    await handleDiscordMessageAction({
+      action: "send",
+      params: {
+        to: "channel:123",
+        message: "hi",
+        embeds,
+      },
+      cfg: {} as OpenClawConfig,
+    });
+
+    expect(sendMessageDiscord).toHaveBeenCalledWith(
+      "channel:123",
+      "hi",
+      expect.objectContaining({
+        embeds,
+      }),
+    );
+  });
+
   it("falls back to params accountId when context missing", async () => {
     sendPollDiscord.mockClear();
 
