@@ -1,5 +1,9 @@
-import type { ChannelMeta, ChannelPlugin, ClawdbotConfig } from "openclaw/plugin-sdk";
-import { DEFAULT_ACCOUNT_ID, PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk";
+import type { ChannelPlugin, ClawdbotConfig } from "openclaw/plugin-sdk";
+import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+  PAIRING_APPROVED_MESSAGE,
+} from "openclaw/plugin-sdk";
 import type { ResolvedFeishuAccount, FeishuConfig } from "./types.js";
 import {
   resolveFeishuAccount,
@@ -20,7 +24,7 @@ import { probeFeishu } from "./probe.js";
 import { sendMessageFeishu } from "./send.js";
 import { normalizeFeishuTarget, looksLikeFeishuId, formatFeishuTarget } from "./targets.js";
 
-const meta: ChannelMeta = {
+const meta = {
   id: "feishu",
   label: "Feishu",
   selectionLabel: "Feishu/Lark (飞书)",
@@ -203,7 +207,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
     }),
     resolveAllowFrom: ({ cfg, accountId }) => {
       const account = resolveFeishuAccount({ cfg, accountId });
-      return (account.config?.allowFrom ?? []).map((entry) => String(entry));
+      return (account.config?.allowFrom ?? []).map((entry) => String(entry).trim()).filter(Boolean);
     },
     formatAllowFrom: ({ allowFrom }) =>
       allowFrom
@@ -226,7 +230,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
     },
   },
   setup: {
-    resolveAccountId: () => DEFAULT_ACCOUNT_ID,
+    resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
     applyAccountConfig: ({ cfg, accountId }) => {
       const isDefault = !accountId || accountId === DEFAULT_ACCOUNT_ID;
 
@@ -321,7 +325,9 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
       probe: snapshot.probe,
       lastProbeAt: snapshot.lastProbeAt ?? null,
     }),
-    probeAccount: async ({ account }) => await probeFeishu(account),
+    probeAccount: async ({ account }) => {
+      return await probeFeishu(account);
+    },
     buildAccountSnapshot: ({ account, runtime, probe }) => ({
       accountId: account.accountId,
       enabled: account.enabled,

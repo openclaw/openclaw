@@ -1,5 +1,5 @@
 import type { ClawdbotConfig } from "openclaw/plugin-sdk";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk";
 import type {
   FeishuConfig,
   FeishuAccountConfig,
@@ -28,7 +28,7 @@ export function listFeishuAccountIds(cfg: ClawdbotConfig): string[] {
     // Backward compatibility: no accounts configured, use default
     return [DEFAULT_ACCOUNT_ID];
   }
-  return [...ids].toSorted((a, b) => a.localeCompare(b));
+  return [...ids].sort((a, b) => a.localeCompare(b));
 }
 
 /**
@@ -85,9 +85,7 @@ export function resolveFeishuCredentials(cfg?: FeishuConfig): {
 } | null {
   const appId = cfg?.appId?.trim();
   const appSecret = cfg?.appSecret?.trim();
-  if (!appId || !appSecret) {
-    return null;
-  }
+  if (!appId || !appSecret) return null;
   return {
     appId,
     appSecret,

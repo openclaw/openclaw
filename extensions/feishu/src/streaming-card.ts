@@ -1,14 +1,9 @@
-/**
- * Feishu Streaming Card - Card Kit streaming API for real-time text output
- */
-
 import type { Client } from "@larksuiteoapi/node-sdk";
 import type { FeishuDomain } from "./types.js";
 
 type Credentials = { appId: string; appSecret: string; domain?: FeishuDomain };
 type CardState = { cardId: string; messageId: string; sequence: number; currentText: string };
 
-// Token cache (keyed by domain + appId)
 const tokenCache = new Map<string, { token: string; expiresAt: number }>();
 
 function resolveApiBase(domain?: FeishuDomain): string {
@@ -57,7 +52,6 @@ function truncateSummary(text: string, max = 50): string {
   return clean.length <= max ? clean : clean.slice(0, max - 3) + "...";
 }
 
-/** Streaming card session manager */
 export class FeishuStreamingSession {
   private client: Client;
   private creds: Credentials;
@@ -67,7 +61,7 @@ export class FeishuStreamingSession {
   private log?: (msg: string) => void;
   private lastUpdateTime = 0;
   private pendingText: string | null = null;
-  private updateThrottleMs = 100; // Throttle updates to max 10/sec
+  private updateThrottleMs = 100;
 
   constructor(client: Client, creds: Credentials, log?: (msg: string) => void) {
     this.client = client;
@@ -92,11 +86,10 @@ export class FeishuStreamingSession {
         streaming_config: { print_frequency_ms: { default: 50 }, print_step: { default: 2 } },
       },
       body: {
-        elements: [{ tag: "markdown", content: "⏳ Thinking...", element_id: "content" }],
+        elements: [{ tag: "markdown", content: "Thinking...", element_id: "content" }],
       },
     };
 
-    // Create card entity
     const createRes = await fetch(`${apiBase}/cardkit/v1/cards`, {
       method: "POST",
       headers: {
@@ -115,7 +108,6 @@ export class FeishuStreamingSession {
     }
     const cardId = createData.data.card_id;
 
-    // Send card message
     const sendRes = await this.client.im.message.create({
       params: { receive_id_type: receiveIdType },
       data: {
@@ -136,7 +128,6 @@ export class FeishuStreamingSession {
     if (!this.state || this.closed) {
       return;
     }
-    // Throttle: skip if updated recently, but remember pending text
     const now = Date.now();
     if (now - this.lastUpdateTime < this.updateThrottleMs) {
       this.pendingText = text;
@@ -175,11 +166,9 @@ export class FeishuStreamingSession {
     this.closed = true;
     await this.queue;
 
-    // Use finalText, or pending throttled text, or current text
     const text = finalText ?? this.pendingText ?? this.state.currentText;
     const apiBase = resolveApiBase(this.creds.domain);
 
-    // Only send final update if content differs from what's already displayed
     if (text && text !== this.state.currentText) {
       this.state.sequence += 1;
       await fetch(`${apiBase}/cardkit/v1/cards/${this.state.cardId}/elements/content/content`, {
@@ -197,7 +186,6 @@ export class FeishuStreamingSession {
       this.state.currentText = text;
     }
 
-    // Close streaming mode
     this.state.sequence += 1;
     await fetch(`${apiBase}/cardkit/v1/cards/${this.state.cardId}/settings`, {
       method: "PATCH",
