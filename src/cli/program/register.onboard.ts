@@ -109,7 +109,7 @@ export function registerOnboardCommand(program: Command) {
     .option("--skip-ui", "Skip Control UI/TUI prompts")
     .option("--node-manager <name>", "Node manager for skills: npm|pnpm|bun")
     .option("--json", "Output JSON summary", false)
-    .action(async (opts: any, commandRuntime: any) => {
+    .action(async (opts, commandRuntime) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const installDaemon = resolveInstallDaemonFlag(commandRuntime, {
           installDaemon: Boolean(opts.installDaemon),
