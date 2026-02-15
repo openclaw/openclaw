@@ -1,4 +1,5 @@
 const DEFAULT_PORT = 18792
+const AUTO_ATTACH_PATH = '/extension/launch'
 
 const BADGE = {
   on: { text: 'ON', color: '#FF5A36' },
@@ -18,6 +19,8 @@ let nextSession = 1
 
 /** @type {Map<number, {state:'connecting'|'connected', sessionId?:string, targetId?:string, attachOrder?:number}>} */
 const tabs = new Map()
+/** @type {Set<number>} */
+const autoAttachTabs = new Set()
 /** @type {Map<string, number>} */
 const tabBySession = new Map()
 /** @type {Map<string, number>} */
@@ -282,15 +285,14 @@ async function detachTab(tabId, reason) {
   })
 }
 
-async function connectOrToggleForActiveTab() {
-  const [active] = await chrome.tabs.query({ active: true, currentWindow: true })
-  const tabId = active?.id
+async function connectOrToggleForTab(tabId, opts = {}) {
   if (!tabId) return
 
   const existing = tabs.get(tabId)
   if (existing?.state === 'connected') {
+    if (opts.forceAttach) return true
     await detachTab(tabId, 'toggle')
-    return
+    return false
   }
 
   tabs.set(tabId, { state: 'connecting' })
@@ -303,6 +305,7 @@ async function connectOrToggleForActiveTab() {
   try {
     await ensureRelayConnection()
     await attachTab(tabId)
+    return true
   } catch (err) {
     tabs.delete(tabId)
     setBadge(tabId, 'error')
@@ -314,6 +317,53 @@ async function connectOrToggleForActiveTab() {
     // Extra breadcrumbs in chrome://extensions service worker logs.
     const message = err instanceof Error ? err.message : String(err)
     console.warn('attach failed', message, nowStack())
+    return false
+  }
+}
+
+async function connectOrToggleForActiveTab() {
+  const [active] = await chrome.tabs.query({ active: true, currentWindow: true })
+  const tabId = active?.id
+  if (!tabId) return
+  await connectOrToggleForTab(tabId)
+}
+
+function isRelayLaunchUrl(rawUrl, port) {
+  let parsed
+  try {
+    parsed = new URL(String(rawUrl || ''))
+  } catch {
+    return null
+  }
+  if (parsed.protocol !== 'http:') return null
+  if (parsed.hostname !== '127.0.0.1' && parsed.hostname !== 'localhost') return null
+  const parsedPort = parsed.port ? Number(parsed.port) : 80
+  if (parsedPort !== port) return null
+  const path = parsed.pathname.replace(/\/$/, '')
+  if (path !== AUTO_ATTACH_PATH) return null
+  return parsed
+}
+
+async function maybeAutoAttachFromUrl(tabId, rawUrl) {
+  if (!tabId) return
+  const port = await getRelayPort()
+  const parsed = isRelayLaunchUrl(rawUrl, port)
+  if (!parsed) return
+
+  if (autoAttachTabs.has(tabId)) return
+  autoAttachTabs.add(tabId)
+  try {
+    const attached = await connectOrToggleForTab(tabId, { forceAttach: true })
+    const nextUrl = String(parsed.searchParams.get('url') || '').trim()
+    if (attached && nextUrl) {
+      try {
+        await chrome.tabs.update(tabId, { url: nextUrl })
+      } catch {
+        // ignore
+      }
+    }
+  } finally {
+    autoAttachTabs.delete(tabId)
   }
 }
 
@@ -431,6 +481,17 @@ function onDebuggerDetach(source, reason) {
 }
 
 chrome.action.onClicked.addListener(() => void connectOrToggleForActiveTab())
+
+chrome.tabs.onCreated.addListener((tab) => {
+  if (!tab?.id || !tab.url) return
+  void maybeAutoAttachFromUrl(tab.id, tab.url)
+})
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  const url = changeInfo?.url || tab?.url
+  if (!url) return
+  void maybeAutoAttachFromUrl(tabId, url)
+})
 
 chrome.runtime.onInstalled.addListener(() => {
   // Useful: first-time instructions.

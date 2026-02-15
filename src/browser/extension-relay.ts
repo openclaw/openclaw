@@ -359,6 +359,17 @@ export async function ensureChromeExtensionRelayServer(opts: {
       return;
     }
 
+    if (path === "/extension/launch") {
+      if (req.method === "HEAD") {
+        res.writeHead(200);
+        res.end();
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+      res.end("OpenClaw relay launch");
+      return;
+    }
+
     const hostHeader = req.headers.host?.trim() || `${info.host}:${info.port}`;
     const wsHost = `ws://${hostHeader}`;
     const cdpWsUrl = `${wsHost}/cdp`;
