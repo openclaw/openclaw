@@ -48,12 +48,7 @@ const state: SecurityState = {
   recentThreats: [],
 };
 
-function addThreat(
-  category: string,
-  severity: string,
-  from: string,
-  blocked: boolean,
-) {
+function addThreat(category: string, severity: string, from: string, blocked: boolean) {
   state.threatsDetected++;
   if (blocked) state.threatsBlocked++;
   state.recentThreats.unshift({
@@ -166,12 +161,7 @@ const plugin = {
       const result = detectInjection(paramsStr, sensitivity);
 
       if (result.shouldBlock && blockOnCritical) {
-        addThreat(
-          "Tool Parameter Injection",
-          "critical",
-          event.toolName,
-          true,
-        );
+        addThreat("Tool Parameter Injection", "critical", event.toolName, true);
         api.logger.warn(
           `[security-guard] Blocked tool call "${event.toolName}" — injection detected in parameters`,
         );
@@ -184,9 +174,7 @@ const plugin = {
 
       // Also warn on dangerous tools being called
       if (isDangerousTool(event.toolName)) {
-        api.logger.info(
-          `[security-guard] Dangerous tool invoked: ${event.toolName}`,
-        );
+        api.logger.info(`[security-guard] Dangerous tool invoked: ${event.toolName}`);
       }
 
       return undefined;
@@ -226,8 +214,7 @@ const plugin = {
         state.lastAuditScore = audit.score;
         state.lastAuditTime = new Date().toISOString();
 
-        const scoreIcon =
-          audit.score >= 80 ? "🟢" : audit.score >= 60 ? "🟡" : "🔴";
+        const scoreIcon = audit.score >= 80 ? "🟢" : audit.score >= 60 ? "🟡" : "🔴";
         const recentList =
           state.recentThreats.length > 0
             ? state.recentThreats
