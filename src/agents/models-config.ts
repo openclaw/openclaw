@@ -19,7 +19,13 @@ function mergeProviderModels(implicit: ProviderConfig, explicit: ProviderConfig)
   const implicitModels = Array.isArray(implicit.models) ? implicit.models : [];
   const explicitModels = Array.isArray(explicit.models) ? explicit.models : [];
   if (implicitModels.length === 0) {
-    return { ...implicit, ...explicit };
+    // Destructure models from explicit to avoid overwriting with undefined
+    const { models: _explicitModels, ...explicitWithoutModels } = explicit;
+    return {
+      ...implicit,
+      ...explicitWithoutModels,
+      ...(explicitModels.length > 0 ? { models: explicitModels } : {}),
+    };
   }
 
   const getId = (model: unknown): string => {
@@ -119,7 +125,14 @@ export async function ensureOpenClawModelsJson(
         string,
         NonNullable<ModelsConfig["providers"]>[string]
       >;
-      mergedProviders = { ...existingProviders, ...providers };
+      // Use mergeProviders to properly merge models at the provider level.
+      // This ensures that models from existing providers are preserved when
+      // the new provider config doesn't include them (e.g., when auth profiles
+      // are temporarily inaccessible).
+      mergedProviders = mergeProviders({
+        implicit: existingProviders,
+        explicit: providers,
+      });
     }
   }
 
