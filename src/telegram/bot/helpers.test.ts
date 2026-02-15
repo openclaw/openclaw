@@ -43,8 +43,12 @@ describe("buildTelegramThreadParams", () => {
     });
   });
 
-  it("keeps thread id=1 for dm threads", () => {
-    expect(buildTelegramThreadParams({ id: 1, scope: "dm" })).toEqual({
+  it("drops thread id=1 for dm threads", () => {
+    expect(buildTelegramThreadParams({ id: 1, scope: "dm" })).toBeUndefined();
+  });
+
+  it("keeps thread id=1 for non-forum group threads", () => {
+    expect(buildTelegramThreadParams({ id: 1, scope: "none" })).toEqual({
       message_thread_id: 1,
     });
   });
