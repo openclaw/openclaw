@@ -330,6 +330,38 @@ describe("exec approvals shell parsing", () => {
 });
 
 describe("exec approvals shell allowlist (chained commands)", () => {
+  it("allows chained commands when a safe builtin precedes an allowlisted command", () => {
+    const allowlist: ExecAllowlistEntry[] = [{ pattern: "/usr/bin/git" }];
+    const result = evaluateShellAllowlist({
+      command: "cd /tmp && /usr/bin/git status",
+      allowlist,
+      safeBins: new Set(),
+      cwd: "/",
+    });
+    expect(result.analysisOk).toBe(true);
+    expect(result.allowlistSatisfied).toBe(true);
+  });
+
+  it("treats safe builtins as builtins even when PATH has a shadowing binary", () => {
+    const dir = makeTempDir();
+    const binDir = path.join(dir, "bin");
+    fs.mkdirSync(binDir, { recursive: true });
+    const shadow = path.join(binDir, process.platform === "win32" ? "cd.cmd" : "cd");
+    fs.writeFileSync(shadow, "");
+    fs.chmodSync(shadow, 0o755);
+
+    const allowlist: ExecAllowlistEntry[] = [{ pattern: "/usr/bin/git" }];
+    const result = evaluateShellAllowlist({
+      command: "cd /tmp && /usr/bin/git status",
+      allowlist,
+      safeBins: new Set(),
+      cwd: "/",
+      env: makePathEnv(binDir),
+    });
+    expect(result.analysisOk).toBe(true);
+    expect(result.allowlistSatisfied).toBe(true);
+  });
+
   it("allows chained commands when all parts are allowlisted", () => {
     const allowlist: ExecAllowlistEntry[] = [
       { pattern: "/usr/bin/obsidian-cli" },
@@ -404,6 +436,89 @@ describe("exec approvals shell allowlist (chained commands)", () => {
       platform: "win32",
     });
     expect(result.analysisOk).toBe(false);
+    expect(result.allowlistSatisfied).toBe(false);
+  });
+
+  it("rejects chained commands when a dangerous builtin is used", () => {
+    const allowlist: ExecAllowlistEntry[] = [{ pattern: "/usr/bin/git" }];
+    const result = evaluateShellAllowlist({
+      command: "eval true && /usr/bin/git status",
+      allowlist,
+      safeBins: new Set(),
+      cwd: "/tmp",
+    });
+    expect(result.analysisOk).toBe(true);
+    expect(result.allowlistSatisfied).toBe(false);
+  });
+
+  it("rejects source builtin in chained commands", () => {
+    const allowlist: ExecAllowlistEntry[] = [{ pattern: "/usr/bin/git" }];
+    const result = evaluateShellAllowlist({
+      command: "source ./env.sh && /usr/bin/git status",
+      allowlist,
+      safeBins: new Set(),
+      cwd: "/tmp",
+    });
+    expect(result.analysisOk).toBe(true);
+    expect(result.allowlistSatisfied).toBe(false);
+  });
+
+  it("rejects exec builtin in chained commands", () => {
+    const allowlist: ExecAllowlistEntry[] = [{ pattern: "/usr/bin/git" }];
+    const result = evaluateShellAllowlist({
+      command: "exec /usr/bin/git status",
+      allowlist,
+      safeBins: new Set(),
+      cwd: "/tmp",
+    });
+    expect(result.analysisOk).toBe(true);
+    expect(result.allowlistSatisfied).toBe(false);
+  });
+
+  it("rejects dot builtin in chained commands", () => {
+    const allowlist: ExecAllowlistEntry[] = [{ pattern: "/usr/bin/git" }];
+    const result = evaluateShellAllowlist({
+      command: ". ./env.sh && /usr/bin/git status",
+      allowlist,
+      safeBins: new Set(),
+      cwd: "/tmp",
+    });
+    expect(result.analysisOk).toBe(true);
+    expect(result.allowlistSatisfied).toBe(false);
+  });
+
+  it("allows multiple safe builtins in a chain with an allowlisted command", () => {
+    const allowlist: ExecAllowlistEntry[] = [{ pattern: "/usr/bin/git" }];
+    const result = evaluateShellAllowlist({
+      command: "cd /workspace && export FOO=bar && /usr/bin/git commit -m 'test'",
+      allowlist,
+      safeBins: new Set(),
+      cwd: "/tmp",
+    });
+    expect(result.analysisOk).toBe(true);
+    expect(result.allowlistSatisfied).toBe(true);
+  });
+
+  it("allows builtin-only commands with no external binaries", () => {
+    const result = evaluateShellAllowlist({
+      command: "cd /workspace && export FOO=bar",
+      allowlist: [],
+      safeBins: new Set(),
+      cwd: "/tmp",
+    });
+    expect(result.analysisOk).toBe(true);
+    expect(result.allowlistSatisfied).toBe(true);
+  });
+
+  it("rejects chain with safe builtin + non-allowlisted binary", () => {
+    const allowlist: ExecAllowlistEntry[] = [{ pattern: "/usr/bin/git" }];
+    const result = evaluateShellAllowlist({
+      command: "cd /workspace && /usr/bin/rm -rf /",
+      allowlist,
+      safeBins: new Set(),
+      cwd: "/tmp",
+    });
+    expect(result.analysisOk).toBe(true);
     expect(result.allowlistSatisfied).toBe(false);
   });
 });

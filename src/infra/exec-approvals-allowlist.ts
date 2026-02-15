@@ -14,6 +14,9 @@ import {
 import type { ExecAllowlistEntry } from "./exec-approvals.js";
 import { isTrustedSafeBinPath } from "./exec-safe-bin-trust.js";
 
+const SAFE_SHELL_BUILTINS = new Set(["cd", "pwd", "echo", "printf", "export", "unset"]);
+const UNSAFE_SHELL_BUILTINS = new Set(["eval", "exec", "source", "."]);
+
 function isPathLikeToken(value: string): boolean {
   const trimmed = value.trim();
   if (!trimmed) {
@@ -143,7 +146,22 @@ export type ExecAllowlistEvaluation = {
   segmentSatisfiedBy: ExecSegmentSatisfiedBy[];
 };
 
-export type ExecSegmentSatisfiedBy = "allowlist" | "safeBins" | "skills" | null;
+export type ExecSegmentSatisfiedBy = "allowlist" | "safeBins" | "builtins" | "skills" | null;
+
+function isSafeBuiltinSegment(segment: ExecCommandSegment): boolean {
+  const rawExecutable = segment.resolution?.rawExecutable?.trim() ?? segment.argv[0]?.trim() ?? "";
+  if (!rawExecutable) {
+    return false;
+  }
+  if (rawExecutable.includes("/") || rawExecutable.includes("\\")) {
+    return false;
+  }
+  const normalized = rawExecutable.toLowerCase();
+  if (UNSAFE_SHELL_BUILTINS.has(normalized)) {
+    return false;
+  }
+  return SAFE_SHELL_BUILTINS.has(normalized);
+}
 
 function evaluateSegments(
   segments: ExecCommandSegment[],
@@ -183,13 +201,16 @@ function evaluateSegments(
       allowSkills && segment.resolution?.executableName
         ? params.skillBins?.has(segment.resolution.executableName)
         : false;
+    const safeBuiltin = isSafeBuiltinSegment(segment);
     const by: ExecSegmentSatisfiedBy = match
       ? "allowlist"
       : safe
         ? "safeBins"
-        : skillAllow
-          ? "skills"
-          : null;
+        : safeBuiltin
+          ? "builtins"
+          : skillAllow
+            ? "skills"
+            : null;
     segmentSatisfiedBy.push(by);
     return Boolean(by);
   });
