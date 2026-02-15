@@ -23,7 +23,10 @@ export function extractText(message: unknown): string | null {
       })
       .filter((v): v is string => typeof v === "string");
     if (parts.length > 0) {
-      const joined = parts.join("\n");
+      // Join with empty string: LLM text blocks split at tool_use boundaries
+      // already include natural whitespace.  Joining with "\n" created extra
+      // <br> tags when the markdown renderer has breaks:true (#16636).
+      const joined = parts.join("");
       const processed = role === "assistant" ? stripThinkingTags(joined) : stripEnvelope(joined);
       return processed;
     }
@@ -109,7 +112,7 @@ export function extractRawText(message: unknown): string | null {
       })
       .filter((v): v is string => typeof v === "string");
     if (parts.length > 0) {
-      return parts.join("\n");
+      return parts.join("");
     }
   }
   if (typeof m.text === "string") {
