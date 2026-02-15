@@ -1,14 +1,14 @@
-# 🦞 OpenClaw — Personal AI Assistant
+# SecureClaw — Secure Personal AI Assistant
 
 <p align="center">
     <picture>
         <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/openclaw-logo-text-dark.png">
-        <img src="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/openclaw-logo-text.png" alt="OpenClaw" width="500">
+        <img src="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/openclaw-logo-text.png" alt="SecureClaw" width="500">
     </picture>
 </p>
 
 <p align="center">
-  <strong>EXFOLIATE! EXFOLIATE!</strong>
+  <strong>Secure by default. Open at heart.</strong>
 </p>
 
 <p align="center">
@@ -18,12 +18,19 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge" alt="MIT License"></a>
 </p>
 
-**OpenClaw** is a _personal AI assistant_ you run on your own devices.
+**SecureClaw** is a security-hardened distribution of [OpenClaw](https://openclaw.ai), brought to you by [clawoncloud.com](https://clawoncloud.com). It is still fully open-source under the MIT license and built on the same OpenClaw core — but with an enhanced security posture designed for teams and individuals who need stronger secret management and a more secure deployment model.
+
+**What makes SecureClaw different from upstream OpenClaw?**
+
+- **Encrypted secret vault** — API keys, tokens, and credentials are stored in an AES-256-GCM encrypted SQLite vault (`~/.openclaw/vault.db`) instead of sitting in plaintext `.env` files on disk. Only one bootstrap variable (`OPENCLAW_VAULT_PASSWORD`) remains in the environment; everything else is encrypted at rest with scrypt key derivation. No external services required — the vault ships with the code and works inside Docker.
+- **Same OpenClaw you know** — every feature, channel, tool, and companion app works exactly as before. SecureClaw is a superset, not a fork. Upstream updates merge cleanly.
+
+SecureClaw is a _personal AI assistant_ you run on your own devices.
 It answers you on the channels you already use (WhatsApp, Telegram, Slack, Discord, Google Chat, Signal, iMessage, Microsoft Teams, WebChat), plus extension channels like BlueBubbles, Matrix, Zalo, and Zalo Personal. It can speak and listen on macOS/iOS/Android, and can render a live Canvas you control. The Gateway is just the control plane — the product is the assistant.
 
-If you want a personal, single-user assistant that feels local, fast, and always-on, this is it.
+If you want a personal, single-user assistant that feels local, fast, and always-on — with enterprise-grade secret management — this is it.
 
-[Website](https://openclaw.ai) · [Docs](https://docs.openclaw.ai) · [DeepWiki](https://deepwiki.com/openclaw/openclaw) · [Getting Started](https://docs.openclaw.ai/start/getting-started) · [Updating](https://docs.openclaw.ai/install/updating) · [Showcase](https://docs.openclaw.ai/start/showcase) · [FAQ](https://docs.openclaw.ai/start/faq) · [Wizard](https://docs.openclaw.ai/start/wizard) · [Nix](https://github.com/openclaw/nix-openclaw) · [Docker](https://docs.openclaw.ai/install/docker) · [Discord](https://discord.gg/clawd)
+[clawoncloud.com](https://clawoncloud.com) · [OpenClaw Website](https://openclaw.ai) · [Docs](https://docs.openclaw.ai) · [DeepWiki](https://deepwiki.com/openclaw/openclaw) · [Getting Started](https://docs.openclaw.ai/start/getting-started) · [Updating](https://docs.openclaw.ai/install/updating) · [Showcase](https://docs.openclaw.ai/start/showcase) · [FAQ](https://docs.openclaw.ai/start/faq) · [Wizard](https://docs.openclaw.ai/start/wizard) · [Nix](https://github.com/openclaw/nix-openclaw) · [Docker](https://docs.openclaw.ai/install/docker) · [Discord](https://discord.gg/clawd)
 
 Preferred setup: run the onboarding wizard (`openclaw onboard`) in your terminal.
 The wizard guides you step by step through setting up the gateway, workspace, channels, and skills. The CLI wizard is the recommended path and works on **macOS, Linux, and Windows (via WSL2; strongly recommended)**.
@@ -104,9 +111,48 @@ pnpm gateway:watch
 
 Note: `pnpm openclaw ...` runs TypeScript directly (via `tsx`). `pnpm build` produces `dist/` for running via Node / the packaged `openclaw` binary.
 
+## Encrypted secret vault (SecureClaw)
+
+SecureClaw adds an **encrypted secret vault** so your API keys and tokens never need to live in plaintext `.env` files. Secrets are stored in `~/.openclaw/vault.db` — an AES-256-GCM encrypted SQLite database with scrypt key derivation. No external services, no cloud dependencies — it ships with the code and works in Docker out of the box.
+
+Setup:
+
+1. Set one bootstrap var in your `.env` (or as a Docker/systemd env var):
+
+   ```
+   OPENCLAW_VAULT_PASSWORD=your-strong-master-password
+   ```
+
+2. Store secrets in the vault (they are encrypted automatically):
+
+   ```bash
+   # Using the vault CLI helper
+   node -e "
+     const { openVault } = require('./dist/infra/env-vault.js');
+     const v = openVault({ masterPassword: 'your-strong-master-password' });
+     v.set('OPENAI_API_KEY', 'sk-...');
+     v.set('TELEGRAM_BOT_TOKEN', '123456:ABCDEF...');
+     console.log('Stored:', v.listKeys().join(', '));
+     v.close();
+   "
+   ```
+
+3. Start SecureClaw normally — vault secrets load automatically at startup.
+
+Precedence (highest to lowest): process env > `./.env` > `~/.openclaw/.env` > **encrypted vault** > `openclaw.json` `env` block.
+
+Security properties:
+
+- **AES-256-GCM** encryption with per-value random salt and IV
+- **scrypt** key derivation (N=16384, r=8, p=1) — resistant to brute-force
+- File permissions locked to `0600` (owner read/write only)
+- Wrong master password cannot decrypt any values
+- Fully synchronous — no async gap, no network calls, no external dependencies
+- Docker-native — the vault file mounts via the existing `~/.openclaw` volume
+
 ## Security defaults (DM access)
 
-OpenClaw connects to real messaging surfaces. Treat inbound DMs as **untrusted input**.
+SecureClaw connects to real messaging surfaces. Treat inbound DMs as **untrusted input**.
 
 Full security guide: [Security](https://docs.openclaw.ai/gateway/security)
 

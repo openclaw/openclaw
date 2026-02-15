@@ -17,6 +17,7 @@ import {
 } from "./config/sessions.js";
 import { ensureBinary } from "./infra/binaries.js";
 import { loadDotEnv } from "./infra/dotenv.js";
+import { loadVaultEnv } from "./infra/env-vault.js";
 import { normalizeEnv } from "./infra/env.js";
 import { formatUncaughtError } from "./infra/errors.js";
 import { isMainModule } from "./infra/is-main.js";
@@ -34,6 +35,7 @@ import { runCommandWithTimeout, runExec } from "./process/exec.js";
 import { assertWebChannel, normalizeE164, toWhatsappJid } from "./utils.js";
 
 loadDotEnv({ quiet: true });
+loadVaultEnv();
 normalizeEnv();
 ensureOpenClawCliOnPath();
 

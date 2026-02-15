@@ -1,6 +1,7 @@
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { loadDotEnv } from "../infra/dotenv.js";
+import { loadVaultEnv } from "../infra/env-vault.js";
 import { normalizeEnv } from "../infra/env.js";
 import { formatUncaughtError } from "../infra/errors.js";
 import { isMainModule } from "../infra/is-main.js";
@@ -64,6 +65,10 @@ export function shouldEnsureCliPath(argv: string[]): boolean {
 export async function runCli(argv: string[] = process.argv) {
   const normalizedArgv = normalizeWindowsArgv(argv);
   loadDotEnv({ quiet: true });
+  // Load secrets from the encrypted vault (if configured) before any config
+  // loading runs. Fully synchronous — no async gap. No-op when
+  // OPENCLAW_VAULT_PASSWORD is not set.
+  loadVaultEnv();
   normalizeEnv();
   if (shouldEnsureCliPath(normalizedArgv)) {
     ensureOpenClawCliOnPath();

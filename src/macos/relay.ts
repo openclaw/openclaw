@@ -49,6 +49,9 @@ async function main() {
   const { loadDotEnv } = await import("../infra/dotenv.js");
   loadDotEnv({ quiet: true });
 
+  const { loadVaultEnv } = await import("../infra/env-vault.js");
+  loadVaultEnv();
+
   const { ensureOpenClawCliOnPath } = await import("../infra/path-env.js");
   ensureOpenClawCliOnPath();
 
