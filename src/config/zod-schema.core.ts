@@ -98,9 +98,24 @@ export const GroupChatSchema = z
   .strict()
   .optional();
 
+export const ContextDecaySchema = z
+  .object({
+    stripThinkingAfterTurns: z.number().int().positive().optional(),
+    summarizeToolResultsAfterTurns: z.number().int().positive().optional(),
+    summarizeWindowAfterTurns: z.number().int().positive().optional(),
+    summarizeWindowSize: z.number().int().positive().optional(),
+    stripToolResultsAfterTurns: z.number().int().positive().optional(),
+    maxContextMessages: z.number().int().positive().optional(),
+    summarizationModel: z.string().optional(),
+    groupSummarizationModel: z.string().optional(),
+  })
+  .strict()
+  .optional();
+
 export const DmConfigSchema = z
   .object({
     historyLimit: z.number().int().min(0).optional(),
+    contextDecay: ContextDecaySchema,
   })
   .strict();
 

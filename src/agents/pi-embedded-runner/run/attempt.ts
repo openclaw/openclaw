@@ -30,6 +30,8 @@ import {
   listChannelSupportedActions,
   resolveChannelMessageToolHints,
 } from "../../channel-tools.js";
+import { summarizeAgedTurnWindows } from "../../context-decay/group-summarizer.js";
+import { summarizeAgedToolResults } from "../../context-decay/summarizer.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { resolveOpenClawDocsPath } from "../../docs-path.js";
 import { isTimeoutError } from "../../failover-error.js";
@@ -108,6 +110,10 @@ import {
 import { detectAndLoadPromptImages } from "./images.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
+/**
+ * Inject detected images into their original message positions in the conversation history.
+ * Mutates messages in-place by appending ImageContent blocks. Returns true if any mutations occurred.
+ */
 export function injectHistoryImagesIntoMessages(
   messages: AgentMessage[],
   historyImagesByIndex: Map<number, ImageContent[]>,
@@ -219,6 +225,11 @@ function summarizeSessionContext(messages: AgentMessage[]): {
   };
 }
 
+/**
+ * Execute a single embedded agent run (one LLM prompt/response cycle).
+ * Handles session setup, system prompt construction, model invocation with tools,
+ * and post-delivery tasks (context decay summarization, hooks) as fire-and-forget.
+ */
 export async function runEmbeddedAttempt(
   params: EmbeddedRunAttemptParams,
 ): Promise<EmbeddedRunAttemptResult> {
@@ -536,14 +547,17 @@ export async function runEmbeddedAttempt(
         minReserveTokens: resolveCompactionReserveTokensFloor(params.config),
       });
 
-      // Call for side effects (sets compaction/pruning runtime state)
-      buildEmbeddedExtensionPaths({
+      // Call for side effects (sets compaction/pruning/decay runtime state)
+      const extensionResult = buildEmbeddedExtensionPaths({
         cfg: params.config,
         sessionManager,
         provider: params.provider,
         modelId: params.modelId,
         model: params.model,
+        sessionKey: params.sessionKey,
+        sessionFile: params.sessionFile,
       });
+      const contextDecayConfig = extensionResult.contextDecayConfig;
 
       // Get hook runner early so it's available when creating tools
       const hookRunner = getGlobalHookRunner();
@@ -1171,6 +1185,34 @@ export async function runEmbeddedAttempt(
             .catch((err) => {
               log.warn(`agent_end hook failed: ${err}`);
             });
+        }
+
+        // Fire-and-forget: summarize aged tool results for context decay
+        if (contextDecayConfig?.summarizeToolResultsAfterTurns && params.model) {
+          void summarizeAgedToolResults({
+            sessionFilePath: params.sessionFile,
+            messages: messagesSnapshot,
+            config: contextDecayConfig,
+            model: params.model,
+            authStorage: params.authStorage,
+            abortSignal: params.abortSignal,
+          }).catch((err) => {
+            log.warn(`context-decay summarization failed: ${err}`);
+          });
+        }
+
+        // Fire-and-forget: group-summarize aged turn windows
+        if (contextDecayConfig?.summarizeWindowAfterTurns && params.model) {
+          void summarizeAgedTurnWindows({
+            sessionFilePath: params.sessionFile,
+            messages: messagesSnapshot,
+            config: contextDecayConfig,
+            model: params.model,
+            authStorage: params.authStorage,
+            abortSignal: params.abortSignal,
+          }).catch((err) => {
+            log.warn(`context-decay group summarization failed: ${err}`);
+          });
         }
       } finally {
         clearTimeout(abortTimer);
