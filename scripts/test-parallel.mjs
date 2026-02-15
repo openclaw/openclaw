@@ -3,7 +3,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-const pnpm = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
+// On Windows, `.cmd` launchers can fail with `spawn EINVAL` when invoked without a shell
+// (especially under GitHub Actions + Git Bash). Use `shell: true` and let the shell resolve pnpm.
+const pnpm = "pnpm";
 
 const unitIsolatedFilesRaw = [
   "src/plugins/loader.test.ts",
@@ -220,11 +222,22 @@ const runOnce = (entry, extraArgs = []) =>
       (acc, flag) => (acc.includes(flag) ? acc : `${acc} ${flag}`.trim()),
       nodeOptions,
     );
-    const child = spawn(pnpm, args, {
-      stdio: "inherit",
-      env: { ...process.env, VITEST_GROUP: entry.name, NODE_OPTIONS: nextNodeOptions },
-    });
+    let child;
+    try {
+      child = spawn(pnpm, args, {
+        stdio: "inherit",
+        env: { ...process.env, VITEST_GROUP: entry.name, NODE_OPTIONS: nextNodeOptions },
+        shell: isWindows,
+      });
+    } catch (err) {
+      console.error(`[test-parallel] spawn failed: ${String(err)}`);
+      resolve(1);
+      return;
+    }
     children.add(child);
+    child.on("error", (err) => {
+      console.error(`[test-parallel] child error: ${String(err)}`);
+    });
     child.on("exit", (code, signal) => {
       children.delete(child);
       resolve(code ?? (signal ? 1 : 0));
@@ -273,11 +286,22 @@ if (passthroughArgs.length > 0) {
     nodeOptions,
   );
   const code = await new Promise((resolve) => {
-    const child = spawn(pnpm, args, {
-      stdio: "inherit",
-      env: { ...process.env, NODE_OPTIONS: nextNodeOptions },
-    });
+    let child;
+    try {
+      child = spawn(pnpm, args, {
+        stdio: "inherit",
+        env: { ...process.env, NODE_OPTIONS: nextNodeOptions },
+        shell: isWindows,
+      });
+    } catch (err) {
+      console.error(`[test-parallel] spawn failed: ${String(err)}`);
+      resolve(1);
+      return;
+    }
     children.add(child);
+    child.on("error", (err) => {
+      console.error(`[test-parallel] child error: ${String(err)}`);
+    });
     child.on("exit", (exitCode, signal) => {
       children.delete(child);
       resolve(exitCode ?? (signal ? 1 : 0));
