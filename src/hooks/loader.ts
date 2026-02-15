@@ -71,10 +71,14 @@ export async function loadInternalHooks(
       }
 
       try {
-        // Import handler module with cache-busting
+        // Import handler module with conditional cache-busting
+        // Bundled hooks are immutable between npm install runs - no cache busting needed
+        // Workspace/managed hooks may change - use mtime for cache busting
         const url = pathToFileURL(entry.hook.handlerPath).href;
-        const cacheBustedUrl = `${url}?t=${Date.now()}`;
-        const mod = (await import(cacheBustedUrl)) as Record<string, unknown>;
+        const isBundled = entry.origin === "bundled";
+        const cacheBuster = isBundled ? "" : `?t=${Date.now()}`;
+        const importUrl = `${url}${cacheBuster}`;
+        const mod = (await import(importUrl)) as Record<string, unknown>;
 
         // Get handler function (default or named export)
         const exportName = entry.metadata?.export ?? "default";
@@ -136,7 +140,8 @@ export async function loadInternalHooks(
         continue;
       }
 
-      // Import the module with cache-busting to ensure fresh reload
+      // Import the module with cache-busting for workspace handlers
+      // (legacy config handlers are always workspace-relative and may change)
       const url = pathToFileURL(modulePath).href;
       const cacheBustedUrl = `${url}?t=${Date.now()}`;
       const mod = (await import(cacheBustedUrl)) as Record<string, unknown>;
