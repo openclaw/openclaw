@@ -690,6 +690,15 @@ export async function runEmbeddedAttempt(
         err.name = "AbortError";
         return err;
       };
+      const isAbortError = (err: unknown): boolean =>
+        err instanceof Error
+          ? err.name === "AbortError"
+          : Boolean(
+              err &&
+              typeof err === "object" &&
+              "name" in err &&
+              (err as { name?: unknown }).name === "AbortError",
+            );
       const abortRun = (isTimeout = false, reason?: unknown) => {
         aborted = true;
         if (isTimeout) {
@@ -700,7 +709,12 @@ export async function runEmbeddedAttempt(
         } else {
           runAbortController.abort(reason);
         }
-        void activeSession.abort();
+        // AbortError from in-flight requests is expected during timeout aborts.
+        activeSession.abort().catch((err) => {
+          if (!isAbortError(err)) {
+            log.warn(`activeSession.abort() failed unexpectedly: ${String(err)}`);
+          }
+        });
       };
       const abortable = <T>(promise: Promise<T>): Promise<T> => {
         const signal = runAbortController.signal;
