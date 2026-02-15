@@ -2,6 +2,7 @@ import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../config/config.js";
+import { parseModelRef } from "../model-selection.js";
 import { log } from "./logger.js";
 
 const OPENROUTER_APP_HEADERS: Record<string, string> = {
@@ -24,9 +25,36 @@ export function resolveExtraParams(params: {
   provider: string;
   modelId: string;
 }): Record<string, unknown> | undefined {
+  // First try exact match with provider/modelId
   const modelKey = `${params.provider}/${params.modelId}`;
   const modelConfig = params.cfg?.agents?.defaults?.models?.[modelKey];
-  return modelConfig?.params ? { ...modelConfig.params } : undefined;
+  if (modelConfig?.params) {
+    log.debug(`resolveExtraParams: found exact match for ${modelKey}`);
+    return { ...modelConfig.params };
+  }
+
+  // Try resolving model alias (e.g., "sonnet" -> "anthropic/claude-sonnet-4-5")
+  const parsed = parseModelRef(params.modelId, params.provider);
+  if (parsed) {
+    const resolvedKey = `${parsed.provider}/${parsed.model}`;
+    if (resolvedKey !== modelKey) {
+      const resolvedConfig = params.cfg?.agents?.defaults?.models?.[resolvedKey];
+      if (resolvedConfig?.params) {
+        log.debug(`resolveExtraParams: found alias match for ${modelKey} -> ${resolvedKey}`);
+        return { ...resolvedConfig.params };
+      }
+    }
+  }
+
+  // Try just modelId as key (for configs that use short keys)
+  const shortKeyConfig = params.cfg?.agents?.defaults?.models?.[params.modelId];
+  if (shortKeyConfig?.params) {
+    log.debug(`resolveExtraParams: found short key match for ${params.modelId}`);
+    return { ...shortKeyConfig.params };
+  }
+
+  log.debug(`resolveExtraParams: no config found for ${modelKey}`);
+  return undefined;
 }
 
 type CacheRetention = "none" | "short" | "long";
