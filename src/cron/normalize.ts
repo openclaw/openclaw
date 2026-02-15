@@ -337,6 +337,15 @@ export function normalizeCronJobInput(
   if (isRecord(base.schedule)) {
     next.schedule = coerceSchedule(base.schedule);
   }
+  if (Array.isArray(base.schedules)) {
+    const schedules = base.schedules.filter(isRecord).map((entry) => coerceSchedule(entry));
+    if (schedules.length > 0) {
+      next.schedules = schedules;
+      if (!isRecord(next.schedule)) {
+        next.schedule = schedules[0];
+      }
+    }
+  }
 
   if (!("payload" in next) || !isRecord(next.payload)) {
     const message = typeof next.message === "string" ? next.message.trim() : "";

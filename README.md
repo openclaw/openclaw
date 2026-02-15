@@ -42,6 +42,57 @@ Model note: while any model is supported, I strongly recommend **Anthropic Pro/M
 - Models config + CLI: [Models](https://docs.openclaw.ai/concepts/models)
 - Auth profile rotation (OAuth vs API keys) + fallbacks: [Model failover](https://docs.openclaw.ai/concepts/model-failover)
 
+## Advanced config snippets
+
+Use these when you want stronger runtime controls and smarter routing in addition to baseline setup.
+
+```json5
+{
+  // Resolve secrets from secret managers
+  models: {
+    providers: {
+      openrouter: { apiKey: "op://Private/OpenRouter/token" },
+    },
+  },
+  gateway: { auth: { token: "vault://kv/openclaw#token" } },
+
+  // Membrane checks before tool execution
+  tools: {
+    membrane: {
+      enabled: true,
+      denyTools: ["browser.open", "exec"],
+      denyCommandSubstrings: ["rm -rf", "curl | sh"],
+    },
+  },
+
+  // Route simple prompts to a cheaper/faster model
+  agents: {
+    defaults: {
+      modelRouting: {
+        enabled: true,
+        simpleModel: "openai/gpt-5.2-mini",
+        complexModel: "anthropic/claude-sonnet-4-5",
+        simpleMaxChars: 240,
+      },
+    },
+  },
+
+  // Skip memory writes when conversation depth is too low
+  hooks: {
+    internal: {
+      entries: {
+        "session-memory": {
+          enabled: true,
+          factCheck: { enabled: true, minUserMessages: 1, minAssistantMessages: 1 },
+        },
+      },
+    },
+  },
+}
+```
+
+More examples: [Configuration Examples](https://docs.openclaw.ai/gateway/configuration-examples) and [Configuration Reference](https://docs.openclaw.ai/gateway/configuration-reference).
+
 ## Install (recommended)
 
 Runtime: **Node ≥22**.

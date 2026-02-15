@@ -82,6 +82,34 @@ describe("before_tool_call hook integration", () => {
     expect(execute).toHaveBeenCalledWith("call-4", { path: "/tmp/file" }, undefined, undefined);
   });
 
+  it("blocks membrane-denied tools before hooks", async () => {
+    hookRunner.hasHooks.mockReturnValue(true);
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const tool = wrapToolWithBeforeToolCallHook({ name: "web_fetch", execute } as any, {
+      membrane: { enabled: true, denyTools: ["web_fetch"] },
+    });
+    await expect(
+      tool.execute("call-membrane-tool", { url: "https://example.com" }, undefined, undefined),
+    ).rejects.toThrow("[membrane:tool-denied]");
+    expect(hookRunner.runBeforeToolCall).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("blocks membrane-denied exec command substrings", async () => {
+    hookRunner.hasHooks.mockReturnValue(true);
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const tool = wrapToolWithBeforeToolCallHook({ name: "exec", execute } as any, {
+      membrane: { enabled: true, denyCommandSubstrings: ["rm -rf"] },
+    });
+    await expect(
+      tool.execute("call-membrane-exec", { command: "echo ok && rm -rf /tmp/x" }, undefined, undefined),
+    ).rejects.toThrow("[membrane:command-denied]");
+    expect(hookRunner.runBeforeToolCall).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+  });
+
   it("normalizes non-object params for hook contract", async () => {
     hookRunner.hasHooks.mockReturnValue(true);
     hookRunner.runBeforeToolCall.mockResolvedValue(undefined);

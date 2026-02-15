@@ -16,6 +16,7 @@ import { resolveCronStyleNow } from "../../agents/current-time.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
+import { resolveRoutedModelForMessage } from "../../agents/model-routing.js";
 import {
   getModelRefStatus,
   isCliProvider,
@@ -358,7 +359,14 @@ export async function runCronIsolatedAgentTurn(params: {
   }
   const modelOverrideRaw =
     params.job.payload.kind === "agentTurn" ? params.job.payload.model : undefined;
-  const modelOverride = typeof modelOverrideRaw === "string" ? modelOverrideRaw.trim() : undefined;
+  const routedModelOverride = resolveRoutedModelForMessage({
+    routing: agentCfg?.modelRouting,
+    message: params.message,
+  });
+  const modelOverride =
+    typeof modelOverrideRaw === "string" && modelOverrideRaw.trim()
+      ? modelOverrideRaw.trim()
+      : routedModelOverride;
   if (modelOverride !== undefined && modelOverride.length > 0) {
     const resolvedOverride = resolveAllowedModelRef({
       cfg: cfgWithAgentDefaults,
@@ -809,6 +817,27 @@ export async function runCronIsolatedAgentTurn(params: {
       if (synthesizedText.toUpperCase() === SILENT_REPLY_TOKEN.toUpperCase()) {
         return withRunSession({ status: "ok", summary, outputText });
       }
+      const tryDirectFallbackDelivery = async (): Promise<boolean> => {
+        try {
+          const payloadsForDelivery = [{ text: synthesizedText }];
+          const deliveryResults = await deliverOutboundPayloads({
+            cfg: cfgWithAgentDefaults,
+            channel: resolvedDelivery.channel,
+            to: resolvedDelivery.to,
+            accountId: resolvedDelivery.accountId,
+            threadId: resolvedDelivery.threadId,
+            payloads: payloadsForDelivery,
+            agentId,
+            identity: resolveAgentOutboundIdentity(cfgWithAgentDefaults, agentId),
+            bestEffort: deliveryBestEffort,
+            deps: createOutboundSendDeps(params.deps),
+          });
+          return deliveryResults.length > 0;
+        } catch (err) {
+          logWarn(`[cron:${params.job.id}] direct fallback delivery failed: ${String(err)}`);
+          return false;
+        }
+      };
       try {
         const didAnnounce = await runSubagentAnnounceFlow({
           childSessionKey: agentSessionKey,
@@ -834,22 +863,31 @@ export async function runCronIsolatedAgentTurn(params: {
         if (didAnnounce) {
           delivered = true;
         } else {
-          const message = "cron announce delivery failed";
-          if (!deliveryBestEffort) {
-            return withRunSession({
-              status: "error",
-              summary,
-              outputText,
-              error: message,
-            });
+          const directFallbackDelivered = await tryDirectFallbackDelivery();
+          if (directFallbackDelivered) {
+            delivered = true;
+          } else {
+            const message = "cron announce delivery failed";
+            if (!deliveryBestEffort) {
+              return withRunSession({
+                status: "error",
+                summary,
+                outputText,
+                error: message,
+              });
+            }
+            logWarn(`[cron:${params.job.id}] ${message}`);
           }
-          logWarn(`[cron:${params.job.id}] ${message}`);
         }
       } catch (err) {
-        if (!deliveryBestEffort) {
+        const directFallbackDelivered = await tryDirectFallbackDelivery();
+        if (directFallbackDelivered) {
+          delivered = true;
+        } else if (!deliveryBestEffort) {
           return withRunSession({ status: "error", summary, outputText, error: String(err) });
+        } else {
+          logWarn(`[cron:${params.job.id}] ${String(err)}`);
         }
-        logWarn(`[cron:${params.job.id}] ${String(err)}`);
       }
     }
   }

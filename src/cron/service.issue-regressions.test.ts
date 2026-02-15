@@ -572,4 +572,40 @@ describe("Cron issue regressions", () => {
 
     await store.cleanup();
   });
+
+  it("supports multiple schedules per job and picks the earliest next run", async () => {
+    const store = await makeStorePath();
+    const cron = new CronService({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "ok" }),
+    });
+    await cron.start();
+
+    const created = await cron.add({
+      name: "multi-schedule",
+      schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC" },
+      schedules: [
+        { kind: "cron", expr: "0 * * * *", tz: "UTC" },
+        { kind: "cron", expr: "30 * * * *", tz: "UTC" },
+      ],
+      sessionTarget: "main",
+      payload: { kind: "systemEvent", text: "tick" },
+    });
+    expect(created.state.nextRunAtMs).toBe(Date.parse("2026-02-06T10:30:00.000Z"));
+
+    const updated = await cron.update(created.id, {
+      schedules: [
+        { kind: "cron", expr: "45 * * * *", tz: "UTC" },
+        { kind: "cron", expr: "15 * * * *", tz: "UTC" },
+      ],
+    });
+    expect(updated.state.nextRunAtMs).toBe(Date.parse("2026-02-06T10:15:00.000Z"));
+
+    cron.stop();
+    await store.cleanup();
+  });
 });

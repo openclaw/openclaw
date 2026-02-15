@@ -96,6 +96,14 @@ export type CliBackendConfig = {
 export type AgentDefaultsConfig = {
   /** Primary model and fallbacks (provider/model). */
   model?: AgentModelListConfig;
+  /** Optional smart model router for simple vs complex tasks. */
+  modelRouting?: {
+    enabled?: boolean;
+    simpleModel?: string;
+    complexModel?: string;
+    /** Messages at or below this size can be routed to simpleModel (default: 240). */
+    simpleMaxChars?: number;
+  };
   /** Optional image-capable model and fallbacks (provider/model). */
   imageModel?: AgentModelListConfig;
   /** Model catalog with optional aliases (full provider/model keys). */

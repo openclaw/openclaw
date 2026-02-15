@@ -273,4 +273,25 @@ describe("session-memory hook", () => {
     expect(memoryContent).toContain("user: Only message 1");
     expect(memoryContent).toContain("assistant: Only message 2");
   });
+
+  it("skips write when fact-check thresholds are not met", async () => {
+    const sessionContent = createMockSessionContent([{ role: "user", content: "single turn only" }]);
+    const { files } = await runNewWithPreviousSession({
+      sessionContent,
+      cfg: (tempDir) => ({
+        agents: { defaults: { workspace: tempDir } },
+        hooks: {
+          internal: {
+            entries: {
+              "session-memory": {
+                enabled: true,
+                factCheck: { enabled: true, minUserMessages: 1, minAssistantMessages: 1 },
+              },
+            },
+          },
+        },
+      }),
+    });
+    expect(files.length).toBe(0);
+  });
 });

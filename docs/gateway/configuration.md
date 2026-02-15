@@ -471,6 +471,75 @@ Rules:
 
 </Accordion>
 
+<Accordion title="Secret manager references (1Password/Vault)">
+  You can reference secrets directly in config values. OpenClaw resolves these at load time:
+
+```json5
+{
+  models: {
+    providers: {
+      openrouter: {
+        apiKey: "op://Private/OpenRouter/token",
+      },
+    },
+  },
+  gateway: {
+    auth: {
+      token: "vault://kv/openclaw#token",
+    },
+  },
+}
+```
+
+Notes:
+
+- `op://...` uses `op read <ref>` (1Password CLI)
+- `vault://path#field` uses `vault kv get -field=<field> <path>` (field defaults to `value`)
+- Resolution happens after env substitution and before schema validation
+- Secret read failures abort startup with a config path error
+
+</Accordion>
+
+## Advanced guardrails and routing
+
+Use these options to add stronger runtime boundaries and smarter model selection.
+
+```json5
+{
+  tools: {
+    membrane: {
+      enabled: true,
+      denyTools: ["browser.open", "exec"],
+      denyCommandSubstrings: ["rm -rf", "curl | sh"],
+    },
+  },
+  agents: {
+    defaults: {
+      modelRouting: {
+        enabled: true,
+        simpleModel: "openai/gpt-5.2-mini",
+        complexModel: "anthropic/claude-sonnet-4-5",
+        simpleMaxChars: 240,
+      },
+    },
+  },
+  hooks: {
+    internal: {
+      entries: {
+        "session-memory": {
+          enabled: true,
+          factCheck: {
+            enabled: true,
+            minUserMessages: 1,
+            minAssistantMessages: 1,
+          },
+        },
+      },
+    },
+  },
+}
+```
+
 See [Environment](/help/environment) for full precedence and sources.
 
 ## Full reference

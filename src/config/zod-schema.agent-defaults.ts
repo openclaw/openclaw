@@ -23,6 +23,15 @@ export const AgentDefaultsSchema = z
       })
       .strict()
       .optional(),
+    modelRouting: z
+      .object({
+        enabled: z.boolean().optional(),
+        simpleModel: z.string().optional(),
+        complexModel: z.string().optional(),
+        simpleMaxChars: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
     imageModel: z
       .object({
         primary: z.string().optional(),

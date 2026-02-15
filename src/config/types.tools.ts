@@ -480,4 +480,13 @@ export type ToolsConfig = {
       deny?: string[];
     };
   };
+  /** Membrane-style boundary checks applied before tool execution. */
+  membrane?: {
+    /** Enable membrane checks. */
+    enabled?: boolean;
+    /** Hard-deny specific tool names. */
+    denyTools?: string[];
+    /** For exec tool calls, deny commands containing any of these substrings. */
+    denyCommandSubstrings?: string[];
+  };
 };

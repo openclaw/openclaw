@@ -7,6 +7,11 @@ import { normalizeToolName } from "./tool-policy.js";
 type HookContext = {
   agentId?: string;
   sessionKey?: string;
+  membrane?: {
+    enabled?: boolean;
+    denyTools?: string[];
+    denyCommandSubstrings?: string[];
+  };
 };
 
 type HookOutcome = { blocked: true; reason: string } | { blocked: false; params: unknown };
@@ -24,6 +29,23 @@ export async function runBeforeToolCallHook(args: {
 }): Promise<HookOutcome> {
   const toolName = normalizeToolName(args.toolName || "tool");
   const params = args.params;
+  const membrane = args.ctx?.membrane;
+  if (membrane?.enabled) {
+    const deniedTools = new Set((membrane.denyTools ?? []).map((entry) => normalizeToolName(entry)));
+    if (deniedTools.has(toolName)) {
+      return { blocked: true, reason: `[membrane:tool-denied] ${toolName}` };
+    }
+    if (toolName === "exec" && isPlainObject(params)) {
+      const commandRaw = typeof params.command === "string" ? params.command : "";
+      const command = commandRaw.toLowerCase();
+      const deniedByCommand = (membrane.denyCommandSubstrings ?? []).find((entry) =>
+        command.includes(entry.toLowerCase()),
+      );
+      if (deniedByCommand) {
+        return { blocked: true, reason: `[membrane:command-denied] ${deniedByCommand}` };
+      }
+    }
+  }
 
   const hookRunner = getGlobalHookRunner();
   if (!hookRunner?.hasHooks("before_tool_call")) {

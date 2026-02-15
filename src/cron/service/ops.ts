@@ -146,7 +146,8 @@ export async function update(state: CronServiceState, id: string, patch: CronJob
         };
       }
     }
-    const scheduleChanged = patch.schedule !== undefined;
+    const scheduleChanged =
+      patch.schedule !== undefined || Array.isArray((patch as { schedules?: unknown }).schedules);
     const enabledChanged = patch.enabled !== undefined;
 
     job.updatedAtMs = now;

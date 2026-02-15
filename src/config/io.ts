@@ -32,6 +32,7 @@ import {
   containsEnvVarReference,
   resolveConfigEnvVars,
 } from "./env-substitution.js";
+import { resolveConfigSecrets } from "./secret-resolver.js";
 import { applyConfigEnvVars } from "./env-vars.js";
 import { ConfigIncludeError, resolveConfigIncludes } from "./includes.js";
 import { findLegacyConfigIssues } from "./legacy.js";
@@ -506,7 +507,7 @@ function resolveConfigForRead(
   }
 
   return {
-    resolvedConfigRaw: resolveConfigEnvVars(resolvedIncludes, env),
+    resolvedConfigRaw: resolveConfigSecrets(resolveConfigEnvVars(resolvedIncludes, env)),
     // Capture env snapshot after substitution for write-time ${VAR} restoration.
     envSnapshotForRestore: { ...env } as Record<string, string | undefined>,
   };

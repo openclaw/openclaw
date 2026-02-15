@@ -88,6 +88,46 @@ function normalizePayloadKind(payload: Record<string, unknown>) {
   return false;
 }
 
+function coerceScheduleRecord(schedule: Record<string, unknown>, fallbackAnchorMs?: number) {
+  const sched = schedule;
+  const kind = typeof sched.kind === "string" ? sched.kind.trim().toLowerCase() : "";
+  if (!kind && ("at" in sched || "atMs" in sched)) {
+    sched.kind = "at";
+  }
+  const atRaw = typeof sched.at === "string" ? sched.at.trim() : "";
+  const atMsRaw = sched.atMs;
+  const parsedAtMs =
+    typeof atMsRaw === "number"
+      ? atMsRaw
+      : typeof atMsRaw === "string"
+        ? parseAbsoluteTimeMs(atMsRaw)
+        : atRaw
+          ? parseAbsoluteTimeMs(atRaw)
+          : null;
+  if (parsedAtMs !== null) {
+    sched.at = new Date(parsedAtMs).toISOString();
+    if ("atMs" in sched) {
+      delete sched.atMs;
+    }
+  }
+
+  const everyMsRaw = sched.everyMs;
+  const everyMs =
+    typeof everyMsRaw === "number" && Number.isFinite(everyMsRaw) ? Math.floor(everyMsRaw) : null;
+  if ((kind === "every" || sched.kind === "every") && everyMs !== null) {
+    const anchorRaw = sched.anchorMs;
+    const normalizedAnchor =
+      typeof anchorRaw === "number" && Number.isFinite(anchorRaw)
+        ? Math.max(0, Math.floor(anchorRaw))
+        : typeof fallbackAnchorMs === "number" && Number.isFinite(fallbackAnchorMs)
+          ? Math.max(0, Math.floor(fallbackAnchorMs))
+        : null;
+    if (normalizedAnchor !== null && anchorRaw !== normalizedAnchor) {
+      sched.anchorMs = normalizedAnchor;
+    }
+  }
+}
+
 function inferPayloadIfMissing(raw: Record<string, unknown>) {
   const message = typeof raw.message === "string" ? raw.message.trim() : "";
   const text = typeof raw.text === "string" ? raw.text.trim() : "";
@@ -327,50 +367,45 @@ export async function ensureLoaded(
 
     const schedule = raw.schedule;
     if (schedule && typeof schedule === "object" && !Array.isArray(schedule)) {
-      const sched = schedule as Record<string, unknown>;
-      const kind = typeof sched.kind === "string" ? sched.kind.trim().toLowerCase() : "";
-      if (!kind && ("at" in sched || "atMs" in sched)) {
-        sched.kind = "at";
+      const before = JSON.stringify(schedule);
+      const fallbackAnchorMs =
+        typeof raw.createdAtMs === "number" && Number.isFinite(raw.createdAtMs)
+          ? raw.createdAtMs
+          : typeof raw.updatedAtMs === "number" && Number.isFinite(raw.updatedAtMs)
+            ? raw.updatedAtMs
+            : undefined;
+      coerceScheduleRecord(schedule as Record<string, unknown>, fallbackAnchorMs);
+      if (JSON.stringify(schedule) !== before) {
         mutated = true;
       }
-      const atRaw = typeof sched.at === "string" ? sched.at.trim() : "";
-      const atMsRaw = sched.atMs;
-      const parsedAtMs =
-        typeof atMsRaw === "number"
-          ? atMsRaw
-          : typeof atMsRaw === "string"
-            ? parseAbsoluteTimeMs(atMsRaw)
-            : atRaw
-              ? parseAbsoluteTimeMs(atRaw)
-              : null;
-      if (parsedAtMs !== null) {
-        sched.at = new Date(parsedAtMs).toISOString();
-        if ("atMs" in sched) {
-          delete sched.atMs;
-        }
-        mutated = true;
-      }
-
-      const everyMsRaw = sched.everyMs;
-      const everyMs =
-        typeof everyMsRaw === "number" && Number.isFinite(everyMsRaw)
-          ? Math.floor(everyMsRaw)
-          : null;
-      if ((kind === "every" || sched.kind === "every") && everyMs !== null) {
-        const anchorRaw = sched.anchorMs;
-        const normalizedAnchor =
-          typeof anchorRaw === "number" && Number.isFinite(anchorRaw)
-            ? Math.max(0, Math.floor(anchorRaw))
-            : typeof raw.createdAtMs === "number" && Number.isFinite(raw.createdAtMs)
-              ? Math.max(0, Math.floor(raw.createdAtMs))
+    }
+    if (Array.isArray(raw.schedules)) {
+      const schedules = raw.schedules.filter(
+        (entry): entry is Record<string, unknown> =>
+          Boolean(entry) && typeof entry === "object" && !Array.isArray(entry),
+      );
+      if (schedules.length > 0) {
+        for (const scheduleEntry of schedules) {
+          const before = JSON.stringify(scheduleEntry);
+          const fallbackAnchorMs =
+            typeof raw.createdAtMs === "number" && Number.isFinite(raw.createdAtMs)
+              ? raw.createdAtMs
               : typeof raw.updatedAtMs === "number" && Number.isFinite(raw.updatedAtMs)
-                ? Math.max(0, Math.floor(raw.updatedAtMs))
-                : null;
-        if (normalizedAnchor !== null && anchorRaw !== normalizedAnchor) {
-          sched.anchorMs = normalizedAnchor;
+                ? raw.updatedAtMs
+                : undefined;
+          coerceScheduleRecord(scheduleEntry, fallbackAnchorMs);
+          if (JSON.stringify(scheduleEntry) !== before) {
+            mutated = true;
+          }
+        }
+        if (!raw.schedule || typeof raw.schedule !== "object" || Array.isArray(raw.schedule)) {
+          raw.schedule = schedules[0];
           mutated = true;
         }
       }
+    } else if (schedule && typeof schedule === "object" && !Array.isArray(schedule)) {
+      raw.schedules = [schedule];
+      mutated = true;
     }
 
     const delivery = raw.delivery;
