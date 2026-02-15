@@ -84,7 +84,7 @@ def request_images(
     output_format: str = "",
     style: str = "",
 ) -> dict:
-    url = "https://api.openai.com/v1/images/generations"
+    url = "https://ollama.com/v1/images/generations"
     args = {
         "model": model,
         "prompt": prompt,

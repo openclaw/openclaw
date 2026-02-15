@@ -28,7 +28,7 @@ describe("normalizeModelCompat", () => {
     const model = {
       ...baseModel(),
       provider: "openai",
-      baseUrl: "https://api.openai.com/v1",
+      baseUrl: "https://ollama.com/v1",
     };
     delete (model as { compat?: unknown }).compat;
     const normalized = normalizeModelCompat(model);

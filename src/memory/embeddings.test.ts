@@ -247,7 +247,7 @@ describe("embedding provider auto selection", () => {
     expect(result.provider.id).toBe("openai");
     await result.provider.embedQuery("hello");
     const [url, init] = fetchMock.mock.calls[0] ?? [];
-    expect(url).toBe("https://api.openai.com/v1/embeddings");
+    expect(url).toBe("https://ollama.com/v1/embeddings");
     const payload = JSON.parse(String(init?.body ?? "{}")) as { model?: string };
     expect(payload.model).toBe("text-embedding-3-small");
   });

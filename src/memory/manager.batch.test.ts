@@ -17,7 +17,7 @@ vi.mock("./embeddings.js", () => ({
       embedBatch,
     },
     openAi: {
-      baseUrl: "https://api.openai.com/v1",
+      baseUrl: "https://ollama.com/v1",
       headers: { Authorization: "Bearer test", "Content-Type": "application/json" },
       model: "text-embedding-3-small",
     },

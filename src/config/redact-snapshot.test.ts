@@ -65,14 +65,14 @@ describe("redactConfigSnapshot", () => {
     const snapshot = makeSnapshot({
       models: {
         providers: {
-          openai: { apiKey: "sk-proj-abcdef1234567890ghij", baseUrl: "https://api.openai.com" },
+          openai: { apiKey: "sk-proj-abcdef1234567890ghij", baseUrl: "https://ollama.com" },
         },
       },
     });
     const result = redactConfigSnapshot(snapshot);
     const models = result.config.models as Record<string, Record<string, Record<string, string>>>;
     expect(models.providers.openai.apiKey).toBe(REDACTED_SENTINEL);
-    expect(models.providers.openai.baseUrl).toBe("https://api.openai.com");
+    expect(models.providers.openai.baseUrl).toBe("https://ollama.com");
   });
 
   it("redacts password fields", () => {
@@ -119,7 +119,7 @@ describe("redactConfigSnapshot", () => {
     const snapshot = makeSnapshot({
       ui: { seamColor: "#0088cc" },
       gateway: { port: 18789 },
-      models: { providers: { openai: { baseUrl: "https://api.openai.com" } } },
+      models: { providers: { openai: { baseUrl: "https://ollama.com" } } },
     });
     const result = redactConfigSnapshot(snapshot);
     expect(result.config).toEqual(snapshot.config);
@@ -760,7 +760,7 @@ describe("restoreRedactedValues", () => {
         providers: {
           openai: {
             apiKey: "sk-proj-fake-openai-api-key-value",
-            baseUrl: "https://api.openai.com",
+            baseUrl: "https://ollama.com",
           },
         },
       },

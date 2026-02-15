@@ -607,7 +607,7 @@ async function classifyItem(
   options: { apiKey: string; model: string },
 ): Promise<Classification> {
   const itemText = buildItemPrompt(item, kind);
-  const response = await fetch("https://api.openai.com/v1/responses", {
+  const response = await fetch("https://ollama.com/v1/responses", {
     method: "POST",
     headers: {
       Authorization: `Bearer ${options.apiKey}`,

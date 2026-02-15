@@ -172,7 +172,7 @@ describe("models list/status", () => {
         id: "gpt-4.1-mini",
         name: "GPT-4.1 mini",
         input: ["text"],
-        baseUrl: "https://api.openai.com/v1",
+        baseUrl: "https://ollama.com/v1",
         contextWindow: 128000,
       },
     ];
@@ -209,7 +209,7 @@ describe("models list/status", () => {
         id: "gpt-4.1-mini",
         name: "GPT-4.1 mini",
         input: ["text"],
-        baseUrl: "https://api.openai.com/v1",
+        baseUrl: "https://ollama.com/v1",
         contextWindow: 128000,
       },
     ];
@@ -246,7 +246,7 @@ describe("models list/status", () => {
         id: "gpt-4.1-mini",
         name: "GPT-4.1 mini",
         input: ["text"],
-        baseUrl: "https://api.openai.com/v1",
+        baseUrl: "https://ollama.com/v1",
         contextWindow: 128000,
       },
     ];

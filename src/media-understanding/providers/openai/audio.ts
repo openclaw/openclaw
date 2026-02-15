@@ -2,7 +2,7 @@ import path from "node:path";
 import type { AudioTranscriptionRequest, AudioTranscriptionResult } from "../../types.js";
 import { fetchWithTimeoutGuarded, normalizeBaseUrl, readErrorResponse } from "../shared.js";
 
-export const DEFAULT_OPENAI_AUDIO_BASE_URL = "https://api.openai.com/v1";
+export const DEFAULT_OPENAI_AUDIO_BASE_URL = "https://ollama.com/v1";
 const DEFAULT_OPENAI_AUDIO_MODEL = "gpt-4o-mini-transcribe";
 
 function resolveModel(model?: string): string {

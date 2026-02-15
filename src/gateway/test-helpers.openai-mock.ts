@@ -171,7 +171,7 @@ async function buildOpenAIResponsesSse(params: OpenAIResponsesParams): Promise<R
 
 export function installOpenAiResponsesMock(params?: { baseUrl?: string }) {
   const originalFetch = globalThis.fetch;
-  const baseUrl = params?.baseUrl ?? "https://api.openai.com/v1";
+  const baseUrl = params?.baseUrl ?? "https://ollama.com/v1";
   const responsesUrl = `${baseUrl}/responses`;
   const isResponsesRequest = (url: string) =>
     url === responsesUrl ||
