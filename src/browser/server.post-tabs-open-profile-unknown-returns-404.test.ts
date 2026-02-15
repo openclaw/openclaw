@@ -9,6 +9,9 @@ import {
   startBrowserControlServerFromConfig,
 } from "./server.control-server.test-harness.js";
 
+let prevGatewayToken: string | undefined;
+let prevGatewayPassword: string | undefined;
+
 describe("browser control server", () => {
   installBrowserControlServerHooks();
 
@@ -43,6 +46,11 @@ describe("browser control server", () => {
 
 describe("profile CRUD endpoints", () => {
   beforeEach(async () => {
+    prevGatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+    prevGatewayPassword = process.env.OPENCLAW_GATEWAY_PASSWORD;
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+
     await resetBrowserControlServerTestContext();
 
     vi.stubGlobal(
@@ -58,6 +66,17 @@ describe("profile CRUD endpoints", () => {
   });
 
   afterEach(async () => {
+    if (prevGatewayToken === undefined) {
+      delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    } else {
+      process.env.OPENCLAW_GATEWAY_TOKEN = prevGatewayToken;
+    }
+    if (prevGatewayPassword === undefined) {
+      delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+    } else {
+      process.env.OPENCLAW_GATEWAY_PASSWORD = prevGatewayPassword;
+    }
+
     await cleanupBrowserControlServerTestContext();
   });
 

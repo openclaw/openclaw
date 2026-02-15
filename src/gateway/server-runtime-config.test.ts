@@ -110,10 +110,13 @@ describe("resolveGatewayRuntimeConfig", () => {
 
   describe("token/password auth modes", () => {
     let originalToken: string | undefined;
+    let originalPassword: string | undefined;
 
     beforeEach(() => {
       originalToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+      originalPassword = process.env.OPENCLAW_GATEWAY_PASSWORD;
       delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      delete process.env.OPENCLAW_GATEWAY_PASSWORD;
     });
 
     afterEach(() => {
@@ -121,6 +124,11 @@ describe("resolveGatewayRuntimeConfig", () => {
         process.env.OPENCLAW_GATEWAY_TOKEN = originalToken;
       } else {
         delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      }
+      if (originalPassword !== undefined) {
+        process.env.OPENCLAW_GATEWAY_PASSWORD = originalPassword;
+      } else {
+        delete process.env.OPENCLAW_GATEWAY_PASSWORD;
       }
     });
 
