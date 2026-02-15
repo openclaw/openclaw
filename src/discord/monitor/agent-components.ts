@@ -434,6 +434,8 @@ export class AgentComponentButton extends Button {
     // This prevents unauthorized users from injecting system events
     const guildInfo = resolveDiscordGuildEntry({
       guild: interaction.guild ?? undefined,
+      guildId: rawGuildId ?? undefined,
+      guildName: interaction.guild?.name ?? undefined,
       guildEntries: this.ctx.guildEntries,
     });
     const channelCtx = resolveDiscordChannelContext(interaction);
@@ -540,6 +542,8 @@ export class AgentSelectMenu extends StringSelectMenu {
     // Check user allowlist before processing component interaction
     const guildInfo = resolveDiscordGuildEntry({
       guild: interaction.guild ?? undefined,
+      guildId: rawGuildId ?? undefined,
+      guildName: interaction.guild?.name ?? undefined,
       guildEntries: this.ctx.guildEntries,
     });
     const channelCtx = resolveDiscordChannelContext(interaction);

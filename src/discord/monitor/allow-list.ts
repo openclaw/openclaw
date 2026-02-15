@@ -251,25 +251,31 @@ export function resolveDiscordCommandAuthorized(params: {
 
 export function resolveDiscordGuildEntry(params: {
   guild?: Guild<true> | Guild | null;
+  guildId?: string;
+  guildName?: string;
   guildEntries?: Record<string, DiscordGuildEntryResolved>;
 }): DiscordGuildEntryResolved | null {
   const guild = params.guild;
   const entries = params.guildEntries;
-  if (!guild || !entries) {
+  if (!entries) {
     return null;
   }
-  const byId = entries[guild.id];
-  if (byId) {
-    return { ...byId, id: guild.id };
+  const guildId = guild?.id ?? (params.guildId?.trim() || undefined);
+  if (!guildId) {
+    return null;
   }
-  const slug = normalizeDiscordSlug(guild.name ?? "");
-  const bySlug = entries[slug];
+  const byId = entries[guildId];
+  if (byId) {
+    return { ...byId, id: guildId };
+  }
+  const slug = normalizeDiscordSlug(guild?.name ?? params.guildName ?? "");
+  const bySlug = slug ? entries[slug] : undefined;
   if (bySlug) {
-    return { ...bySlug, id: guild.id, slug: slug || bySlug.slug };
+    return { ...bySlug, id: guildId, slug: slug || bySlug.slug };
   }
   const wildcard = entries["*"];
   if (wildcard) {
-    return { ...wildcard, id: guild.id, slug: slug || wildcard.slug };
+    return { ...wildcard, id: guildId, slug: slug || wildcard.slug };
   }
   return null;
 }

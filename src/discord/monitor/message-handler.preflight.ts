@@ -263,6 +263,8 @@ export async function preflightDiscordMessage(
   const guildInfo = isGuildMessage
     ? resolveDiscordGuildEntry({
         guild: params.data.guild ?? undefined,
+        guildId: params.data.guild_id ?? undefined,
+        guildName: params.data.guild?.name ?? undefined,
         guildEntries: params.guildEntries,
       })
     : null;
