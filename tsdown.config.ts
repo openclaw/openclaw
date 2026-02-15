@@ -36,6 +36,7 @@ export default defineConfig([
     env,
     fixedExtension: false,
     platform: "node",
+    treeshake: false,
   },
   {
     entry: "src/plugin-sdk/account-id.ts",
@@ -43,6 +44,7 @@ export default defineConfig([
     env,
     fixedExtension: false,
     platform: "node",
+    treeshake: false,
   },
   {
     entry: "src/extensionAPI.ts",

@@ -199,6 +199,14 @@ export function renderChat(props: ChatProps) {
   };
 
   const hasAttachments = (props.attachments?.length ?? 0) > 0;
+  const handleSend = () => {
+    console.info("[chat] send click", {
+      connected: props.connected,
+      hasDraft: Boolean(props.draft.trim()),
+      hasAttachments,
+    });
+    props.onSend();
+  };
   const composePlaceholder = props.connected
     ? hasAttachments
       ? "Add a message or paste more images..."
@@ -393,7 +401,7 @@ export function renderChat(props: ChatProps) {
                 }
                 e.preventDefault();
                 if (canCompose) {
-                  props.onSend();
+                  handleSend();
                 }
               }}
               @input=${(e: Event) => {
@@ -416,7 +424,7 @@ export function renderChat(props: ChatProps) {
             <button
               class="btn primary"
               ?disabled=${!props.connected}
-              @click=${props.onSend}
+              @click=${handleSend}
             >
               ${isBusy ? "Queue" : "Send"}<kbd class="btn-kbd">↵</kbd>
             </button>
