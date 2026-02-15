@@ -1,3 +1,4 @@
+import fsSync, { type Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -370,5 +371,39 @@ describe("local media root guard", () => {
         kind: "unknown",
       }),
     );
+  });
+
+  it("allows default OpenClaw state per-agent workspace-* roots", async () => {
+    const { STATE_DIR } = await import("../config/paths.js");
+    const readFile = vi.fn(async () => Buffer.from("generated-media"));
+    const readdirSpy = vi.spyOn(fsSync, "readdirSync").mockReturnValue([
+      {
+        name: "workspace-clawdy",
+        isDirectory: () => true,
+      } as unknown as Dirent,
+      {
+        name: "workspace-main",
+        isDirectory: () => true,
+      } as unknown as Dirent,
+      {
+        name: "workspace-file",
+        isDirectory: () => false,
+      } as unknown as Dirent,
+    ]);
+
+    try {
+      await expect(
+        loadWebMedia(path.join(STATE_DIR, "workspace-clawdy", "tmp", "render.bin"), {
+          maxBytes: 1024 * 1024,
+          readFile,
+        }),
+      ).resolves.toEqual(
+        expect.objectContaining({
+          kind: "unknown",
+        }),
+      );
+    } finally {
+      readdirSpy.mockRestore();
+    }
   });
 });
