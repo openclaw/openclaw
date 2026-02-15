@@ -36,22 +36,25 @@ const plugin = {
       const status = tracker.checkBudget(config);
 
       if (status.level === "exceeded" && config.hardStop) {
+        const dailyExceeded = status.dailyUsed >= status.dailyLimit;
+        const limitMsg = status.exceededProvider
+          ? `Provider "${status.exceededProvider}" budget exceeded.`
+          : dailyExceeded
+            ? `Daily limit of $${status.dailyLimit.toFixed(2)} reached ($${status.dailyUsed.toFixed(2)} used).`
+            : `Monthly limit of $${status.monthlyLimit.toFixed(2)} reached ($${status.monthlyUsed.toFixed(2)} used).`;
         return {
-          prependContext: [
-            "[Cost Guard] BUDGET EXCEEDED.",
-            `Daily limit of $${status.dailyLimit.toFixed(2)} reached ($${status.dailyUsed.toFixed(2)} used).`,
-            "Responses are blocked until the budget resets.",
-          ].join(" "),
+          prependContext: `[Cost Guard] BUDGET EXCEEDED. ${limitMsg} Responses are blocked until the budget resets.`,
         };
       }
 
       if (status.level === "warning") {
+        const dailyWarning = status.dailyPercent >= config.warningThreshold;
+        const pct = dailyWarning ? status.dailyPercent : status.monthlyPercent;
+        const label = dailyWarning ? "daily" : "monthly";
+        const used = dailyWarning ? status.dailyUsed : status.monthlyUsed;
+        const limit = dailyWarning ? status.dailyLimit : status.monthlyLimit;
         return {
-          prependContext: [
-            `[Cost Guard] Warning: ${(status.dailyPercent * 100).toFixed(0)}% of daily budget used`,
-            `($${status.dailyUsed.toFixed(2)}/$${status.dailyLimit.toFixed(2)}).`,
-            "Please keep responses concise to stay within budget.",
-          ].join(" "),
+          prependContext: `[Cost Guard] Warning: ${(pct * 100).toFixed(0)}% of ${label} budget used ($${used.toFixed(2)}/$${limit.toFixed(2)}). Please keep responses concise.`,
         };
       }
 
