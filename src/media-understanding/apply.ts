@@ -93,15 +93,17 @@ function escapeFileBlockContent(value: string): string {
   return value.replace(/<\s*\/\s*file\s*>/gi, "&lt;/file&gt;").replace(/<\s*file\b/gi, "&lt;file");
 }
 
-function sanitizeMimeType(value?: string): string | undefined {
+export function sanitizeMimeType(value?: string): string | undefined {
   if (!value) {
     return undefined;
   }
-  const trimmed = value.trim().toLowerCase();
+  // NFKC normalization converts fullwidth Unicode characters (e.g. ｔｅｘｔ → text)
+  // to their ASCII equivalents before validation, preventing bypass via homoglyphs.
+  const trimmed = value.normalize("NFKC").trim().toLowerCase();
   if (!trimmed) {
     return undefined;
   }
-  const match = trimmed.match(/^([a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+)/);
+  const match = trimmed.match(/^([a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+)$/);
   return match?.[1];
 }
 
