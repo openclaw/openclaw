@@ -5,8 +5,10 @@ import PackageDescription
 
 let package = Package(
     name: "OpenClaw",
+    // This package is macOS-only. Do not build for iOS.
     platforms: [
         .macOS(.v15),
+        .iOS(.v18),
     ],
     products: [
         .library(name: "OpenClawIPC", targets: ["OpenClawIPC"]),
