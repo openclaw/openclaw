@@ -857,6 +857,12 @@ async function runWebSearch(params: {
       provider: params.provider,
       model: params.geminiModel ?? DEFAULT_GEMINI_MODEL,
       tookMs: Date.now() - start, // Includes redirect URL resolution time
+      externalContent: {
+        untrusted: true,
+        source: "web_search",
+        provider: params.provider,
+        wrapped: true,
+      },
       content: wrapWebContent(geminiResult.content),
       citations: geminiResult.citations,
     };
