@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveEmojiAndHomepage } from "../shared/entry-metadata.js";
 import { evaluateRequirementsFromMetadata } from "../shared/requirements.js";
 import { CONFIG_DIR } from "../utils.js";
 import {
@@ -183,13 +184,10 @@ function buildSkillStatus(
   const allowBundled = resolveBundledAllowlist(config);
   const blockedByAllowlist = !isBundledSkillAllowed(entry, allowBundled);
   const always = entry.metadata?.always === true;
-  const emoji = entry.metadata?.emoji ?? entry.frontmatter.emoji;
-  const homepageRaw =
-    entry.metadata?.homepage ??
-    entry.frontmatter.homepage ??
-    entry.frontmatter.website ??
-    entry.frontmatter.url;
-  const homepage = homepageRaw?.trim() ? homepageRaw.trim() : undefined;
+  const { emoji, homepage } = resolveEmojiAndHomepage({
+    metadata: entry.metadata,
+    frontmatter: entry.frontmatter,
+  });
   const bundled =
     bundledNames && bundledNames.size > 0
       ? bundledNames.has(entry.skill.name)

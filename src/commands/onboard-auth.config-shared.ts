@@ -117,3 +117,60 @@ export function applyProviderConfigWithDefaultModel(
     defaultModelId: params.defaultModelId ?? params.defaultModel.id,
   });
 }
+
+export function applyProviderConfigWithModelCatalog(
+  cfg: OpenClawConfig,
+  params: {
+    agentModels: Record<string, AgentModelEntryConfig>;
+    providerId: string;
+    api: ModelApi;
+    baseUrl: string;
+    catalogModels: ModelDefinitionConfig[];
+  },
+): OpenClawConfig {
+  const providers = { ...cfg.models?.providers } as Record<string, ModelProviderConfig>;
+  const existingProvider = providers[params.providerId] as ModelProviderConfig | undefined;
+  const existingModels: ModelDefinitionConfig[] = Array.isArray(existingProvider?.models)
+    ? existingProvider.models
+    : [];
+
+  const catalogModels = params.catalogModels;
+  const mergedModels =
+    existingModels.length > 0
+      ? [
+          ...existingModels,
+          ...catalogModels.filter(
+            (model) => !existingModels.some((existing) => existing.id === model.id),
+          ),
+        ]
+      : catalogModels;
+
+  const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as {
+    apiKey?: string;
+  };
+
+  const normalizedApiKey = typeof existingApiKey === "string" ? existingApiKey.trim() : undefined;
+
+  providers[params.providerId] = {
+    ...existingProviderRest,
+    baseUrl: params.baseUrl,
+    api: params.api,
+    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
+    models: mergedModels.length > 0 ? mergedModels : catalogModels,
+  };
+
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models: params.agentModels,
+      },
+    },
+    models: {
+      mode: cfg.models?.mode ?? "merge",
+      providers,
+    },
+  };
+}
