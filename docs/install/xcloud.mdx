@@ -1,0 +1,155 @@
+---
+title: Deploy on xCloud
+---
+
+Deploy OpenClaw on xCloud using a fully managed server with a preconfigured stack. This setup removes manual configuration and runs OpenClaw as a root user inside your VPS.
+
+xCloud provisions and secures the entire VPS with a locked-down firewall, automated updates, backups, and SSL. You can manage OpenClaw directly from the dashboard and easily disable the web dashboard to restrict access when needed.
+
+## What you need
+
+Before deploying OpenClaw on xCloud, make sure you have the following ready:
+
+- An active xCloud account
+- An xCloud managed server with at least 4GB RAM
+- API keys from your preferred AI provider (Anthropic, Claude Code, OpenAI, or Google Gemini)
+- Optional messaging credentials, such as Telegram Bot Token and Telegram User ID, if you plan to control OpenClaw through chat
+
+OpenClaw runs only on xCloud-managed servers. You cannot deploy it on existing, external, or shared servers.
+
+## Beginner quick path
+
+If you want the fastest way to get started, follow this path:
+
+1. Create a new xCloud managed server
+2. Select OpenClaw as the app type
+3. Choose server size, region, and Ubuntu version
+4. Enter your AI provider API key
+5. Optionally connect a messaging platform for chat-based access (optional)
+6. Complete provisioning from the dashboard
+7. Copy the Control UI URL and login credentials
+8. Start chatting with OpenClaw
+
+This path avoids manual configuration and lets you manage everything from the xCloud dashboard.
+
+## What we're actually setting up
+
+- Create a managed VPS on xCloud
+- Provision OpenClaw automatically during server setup
+- Run OpenClaw as root inside the isolated VPS environment
+- Secure the VPS with a locked-down firewall, SSL, and automated updates
+- Store OpenClaw data on the server
+
+Follow this guide you are deploying through the xCloud dashboard. You do not need Docker, manual CLI setup, or SSH tunneling for standard deployment.
+
+## Step 1: Create an xCloud managed server
+
+Start by creating a new xCloud managed server from the dashboard.
+
+1. Click **Start Now** from the xCloud dashboard
+2. Enter a server name and an optional tag
+3. Select **App Type: OpenClaw**. xCloud automatically provisions OpenClaw during server creation
+
+### Choose server type and size
+
+xCloud offers two types of managed servers: 'General', 'Premium'. Choose your preferred one. Select a server size with at least 4GB RAM, which is required to run OpenClaw.
+
+### Choose region and OS
+
+- Select your preferred continent and server location from 30+ locations
+- Choose an Ubuntu version
+
+### Backups
+
+xCloud allows you to automate backups during server creation. If backups are enabled, your OpenClaw server data is stored according to your selected backup schedule.
+
+The OpenClaw stack is selected automatically.
+
+### Confirm security notice
+
+Read the security warning carefully and confirm that you understand the risks and limitations before continuing.
+
+### Enter your AI provider credentials
+
+Select your preferred AI provider, such as Anthropic, Claude Code, OpenAI, and Google Gemini, and enter the required credentials.
+
+### Set up messaging platform (optional)
+
+From the xCloud dashboard, you can set up your messaging platform. Select your messaging platform and enter the required credentials.
+
+#### Telegram
+
+1. Enter your Telegram Bot Token
+2. Enter your Telegram User ID
+3. Continue to the next step
+
+When you provide your Telegram User ID during setup, your account is allowlisted. No manual pairing commands are required.
+
+### Control UI access (optional)
+
+You can restrict access to the OpenClaw Control UI.
+
+1. Enable or disable OpenClaw Control UI Dashboard
+2. Disable it if you want to prevent public UI access
+
+### Complete deployment
+
+Click **Create** to start server provisioning and OpenClaw deployment.
+
+Once deployment finishes:
+
+1. Open **Status** from the dashboard
+2. Collect the Control UI URL
+3. Collect the Basic Auth password
+
+Use these credentials to log in and start chatting with OpenClaw.
+
+## Step 2: Manage OpenClaw from the xCloud dashboard
+
+After deployment, all management happens inside the xCloud dashboard.
+
+### Access credentials and UI controls
+
+From **Status**:
+
+- View UI URL and authentication credentials
+- Toggle Control UI access on or off
+
+Disabling the UI blocks all OpenClaw dashboard access. You will be able to manage with the messaging platform.
+
+### Update configuration and environment variables
+
+- Open **Config** to update provider credentials
+- Open **Environment** to adjust runtime settings
+- Save changes directly from the dashboard
+
+### Update OpenClaw
+
+- Open **Updates** from the sidebar
+- Click **Check for Updates**
+- Apply updates when available
+
+### View logs
+
+- Open **Logs** from the sidebar
+- View all application logs in one place
+
+### Update default LLM provider
+
+To change the default AI provider:
+
+1. Open **Providers** from the sidebar
+2. Select **Change Provider**
+3. Enter the new provider and API key
+4. Save changes
+
+### Add or update Telegram channels
+
+To manage Telegram settings:
+
+1. Open **Channels** from the sidebar
+2. Update the Bot Token and User ID
+3. Save changes
+
+Learn more about the [pricing and more details of xCloud OpenClaw Hosting](https://xcloud.host).
+
