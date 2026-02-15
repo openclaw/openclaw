@@ -25,7 +25,16 @@ export function resolveCronSession(params: {
     model: entry?.model,
     modelOverride: entry?.modelOverride,
     providerOverride: entry?.providerOverride,
-    contextTokens: entry?.contextTokens,
+    // Don't preserve contextTokens from old entry - it will be set during the run
+    // based on the actual model used. Preserving stale values can cause misleading
+    // token counters after session deletion/recreation.
+    contextTokens: undefined,
+    // Explicitly clear token counters to ensure fresh state.
+    // These will be set after the run completes with actual usage.
+    inputTokens: undefined,
+    outputTokens: undefined,
+    totalTokens: undefined,
+    totalTokensFresh: false,
     sendPolicy: entry?.sendPolicy,
     lastChannel: entry?.lastChannel,
     lastTo: entry?.lastTo,
