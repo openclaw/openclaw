@@ -67,7 +67,8 @@ async function resizeImageBase64IfNeeded(params: {
   const meta = await getImageMetadata(buf);
   const width = meta?.width;
   const height = meta?.height;
-  const overBytes = buf.byteLength > params.maxBytes;
+  // Check base64 string length (not decoded bytes) against API limit
+  const overBytes = params.base64.length > params.maxBytes;
   const hasDimensions = typeof width === "number" && typeof height === "number";
   if (
     hasDimensions &&
@@ -113,23 +114,25 @@ async function resizeImageBase64IfNeeded(params: {
         quality,
         withoutEnlargement: true,
       });
-      if (!smallest || out.byteLength < smallest.size) {
-        smallest = { buffer: out, size: out.byteLength };
+      const outBase64 = out.toString("base64");
+      const outBase64Len = outBase64.length;
+      if (!smallest || outBase64Len < smallest.size) {
+        smallest = { buffer: out, size: outBase64Len };
       }
-      if (out.byteLength <= params.maxBytes) {
+      if (outBase64Len <= params.maxBytes) {
         log.info("Image resized", {
           label: params.label,
           width,
           height,
           maxDimensionPx: params.maxDimensionPx,
           maxBytes: params.maxBytes,
-          originalBytes: buf.byteLength,
-          resizedBytes: out.byteLength,
+          originalBase64Len: params.base64.length,
+          resizedBase64Len: outBase64Len,
           quality,
           side,
         });
         return {
-          base64: out.toString("base64"),
+          base64: outBase64,
           mimeType: "image/jpeg",
           resized: true,
           width,
@@ -139,10 +142,10 @@ async function resizeImageBase64IfNeeded(params: {
     }
   }
 
-  const best = smallest?.buffer ?? buf;
+  const bestSize = smallest?.size ?? params.base64.length;
   const maxMb = (params.maxBytes / (1024 * 1024)).toFixed(0);
-  const gotMb = (best.byteLength / (1024 * 1024)).toFixed(2);
-  throw new Error(`Image could not be reduced below ${maxMb}MB (got ${gotMb}MB)`);
+  const gotMb = (bestSize / (1024 * 1024)).toFixed(2);
+  throw new Error(`Image could not be reduced below ${maxMb}MB base64 (got ${gotMb}MB)`);
 }
 
 export async function sanitizeContentBlocksImages(
