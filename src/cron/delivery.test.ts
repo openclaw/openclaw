@@ -42,4 +42,26 @@ describe("resolveCronDeliveryPlan", () => {
     expect(plan.mode).toBe("none");
     expect(plan.requested).toBe(false);
   });
+
+  it("extracts accountId from delivery config", () => {
+    const plan = resolveCronDeliveryPlan(
+      makeJob({
+        delivery: { mode: "announce", channel: "whatsapp", to: "123@g.us", accountId: "flickclaw" },
+      }),
+    );
+    expect(plan.mode).toBe("announce");
+    expect(plan.channel).toBe("whatsapp");
+    expect(plan.to).toBe("123@g.us");
+    expect(plan.accountId).toBe("flickclaw");
+    expect(plan.requested).toBe(true);
+  });
+
+  it("accountId is undefined when not specified", () => {
+    const plan = resolveCronDeliveryPlan(
+      makeJob({
+        delivery: { mode: "announce", channel: "telegram", to: "123" },
+      }),
+    );
+    expect(plan.accountId).toBeUndefined();
+  });
 });

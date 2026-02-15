@@ -19,6 +19,8 @@ export async function resolveDeliveryTarget(
   jobPayload: {
     channel?: "last" | ChannelId;
     to?: string;
+    /** Explicit account ID override for multi-account channels. */
+    accountId?: string;
   },
 ): Promise<{
   channel: Exclude<OutboundChannel, "none">;
@@ -30,6 +32,7 @@ export async function resolveDeliveryTarget(
 }> {
   const requestedChannel = typeof jobPayload.channel === "string" ? jobPayload.channel : "last";
   const explicitTo = typeof jobPayload.to === "string" ? jobPayload.to : undefined;
+  const explicitAccountId = typeof jobPayload.accountId === "string" ? jobPayload.accountId.trim() || undefined : undefined;
   const allowMismatchedLastTo = requestedChannel === "last";
 
   const sessionCfg = cfg.session;
@@ -79,11 +82,14 @@ export async function resolveDeliveryTarget(
       ? resolved.threadId
       : undefined;
 
+  // Use explicit accountId from job config if provided, otherwise fall back to session-derived.
+  const accountId = explicitAccountId ?? resolved.accountId;
+
   if (!toCandidate) {
     return {
       channel,
       to: undefined,
-      accountId: resolved.accountId,
+      accountId,
       threadId,
       mode,
     };
@@ -93,13 +99,13 @@ export async function resolveDeliveryTarget(
     channel,
     to: toCandidate,
     cfg,
-    accountId: resolved.accountId,
+    accountId,
     mode,
   });
   return {
     channel,
     to: docked.ok ? docked.to : undefined,
-    accountId: resolved.accountId,
+    accountId,
     threadId,
     mode,
     error: docked.ok ? undefined : docked.error,

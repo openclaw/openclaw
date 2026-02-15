@@ -82,6 +82,8 @@ export const CronDeliverySchema = Type.Object(
     mode: Type.Union([Type.Literal("none"), Type.Literal("announce")]),
     channel: Type.Optional(Type.Union([Type.Literal("last"), NonEmptyString])),
     to: Type.Optional(Type.String()),
+    /** Account ID for multi-account channels (e.g., WhatsApp). */
+    accountId: Type.Optional(NonEmptyString),
     bestEffort: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
@@ -92,6 +94,8 @@ export const CronDeliveryPatchSchema = Type.Object(
     mode: Type.Optional(Type.Union([Type.Literal("none"), Type.Literal("announce")])),
     channel: Type.Optional(Type.Union([Type.Literal("last"), NonEmptyString])),
     to: Type.Optional(Type.String()),
+    /** Account ID for multi-account channels (e.g., WhatsApp). */
+    accountId: Type.Optional(NonEmptyString),
     bestEffort: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },

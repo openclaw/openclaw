@@ -16,6 +16,8 @@ export type CronDelivery = {
   mode: CronDeliveryMode;
   channel?: CronMessageChannel;
   to?: string;
+  /** Account ID for multi-account channels (e.g., WhatsApp). */
+  accountId?: string;
   bestEffort?: boolean;
 };
 
