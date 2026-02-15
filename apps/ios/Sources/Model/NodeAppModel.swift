@@ -57,6 +57,11 @@ final class NodeAppModel {
     var gatewayRemoteAddress: String?
     var connectedGatewayID: String?
     var gatewayAutoReconnectEnabled: Bool = true
+    // When the gateway requires pairing approval, we pause reconnect churn and show a stable UX.
+    // Reconnect loops (both our own and the underlying WebSocket watchdog) can otherwise generate
+    // multiple pending requests and cause the onboarding UI to "flip-flop".
+    var gatewayPairingPaused: Bool = false
+    var gatewayPairingRequestId: String?
     var seamColorHex: String?
     private var mainSessionBaseKey: String = "main"
     var selectedAgentId: String?
@@ -1547,6 +1552,8 @@ extension NodeAppModel {
 
     func disconnectGateway() {
         self.gatewayAutoReconnectEnabled = false
+        self.gatewayPairingPaused = false
+        self.gatewayPairingRequestId = nil
         self.nodeGatewayTask?.cancel()
         self.nodeGatewayTask = nil
         self.operatorGatewayTask?.cancel()
@@ -1576,6 +1583,8 @@ extension NodeAppModel {
 private extension NodeAppModel {
     func prepareForGatewayConnect(url: URL, stableID: String) {
         self.gatewayAutoReconnectEnabled = true
+        self.gatewayPairingPaused = false
+        self.gatewayPairingRequestId = nil
         self.nodeGatewayTask?.cancel()
         self.operatorGatewayTask?.cancel()
         self.gatewayHealthMonitor.stop()
@@ -1605,6 +1614,10 @@ private extension NodeAppModel {
             guard let self else { return }
             var attempt = 0
             while !Task.isCancelled {
+                if self.gatewayPairingPaused {
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                    continue
+                }
                 if await self.isOperatorConnected() {
                     try? await Task.sleep(nanoseconds: 1_000_000_000)
                     continue
@@ -1680,8 +1693,13 @@ private extension NodeAppModel {
             var attempt = 0
             var currentOptions = nodeOptions
             var didFallbackClientId = false
+            var pausedForPairingApproval = false
 
             while !Task.isCancelled {
+                if self.gatewayPairingPaused {
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                    continue
+                }
                 if await self.isGatewayConnected() {
                     try? await Task.sleep(nanoseconds: 1_000_000_000)
                     continue
@@ -1768,9 +1786,50 @@ private extension NodeAppModel {
                         self.showLocalCanvasOnDisconnect()
                     }
                     GatewayDiagnostics.log("gateway connect error: \(error.localizedDescription)")
+
+                    // If pairing is required, stop reconnect churn. The user must approve the request
+                    // on the gateway before another connect attempt will succeed, and retry loops can
+                    // generate multiple pending requests.
+                    let lower = error.localizedDescription.lowercased()
+                    if lower.contains("not_paired") || lower.contains("pairing required") {
+                        let requestId: String? = {
+                            // GatewayResponseError for connect decorates the message with `(requestId: ...)`.
+                            // Keep this resilient since other layers may wrap the text.
+                            let text = error.localizedDescription
+                            guard let start = text.range(of: "(requestId: ")?.upperBound else { return nil }
+                            guard let end = text[start...].firstIndex(of: ")") else { return nil }
+                            let raw = String(text[start..<end]).trimmingCharacters(in: .whitespacesAndNewlines)
+                            return raw.isEmpty ? nil : raw
+                        }()
+                        await MainActor.run {
+                            self.gatewayAutoReconnectEnabled = false
+                            self.gatewayPairingPaused = true
+                            self.gatewayPairingRequestId = requestId
+                            if let requestId, !requestId.isEmpty {
+                                self.gatewayStatusText =
+                                    "Pairing required (requestId: \(requestId)). Approve on gateway, then tap Resume."
+                            } else {
+                                self.gatewayStatusText = "Pairing required. Approve on gateway, then tap Resume."
+                            }
+                        }
+                        // Hard stop the underlying WebSocket watchdog reconnects so the UI stays stable and
+                        // we don't generate multiple pending requests while waiting for approval.
+                        pausedForPairingApproval = true
+                        self.operatorGatewayTask?.cancel()
+                        self.operatorGatewayTask = nil
+                        await self.operatorGateway.disconnect()
+                        await self.nodeGateway.disconnect()
+                        break
+                    }
+
                     let sleepSeconds = min(8.0, 0.5 * pow(1.7, Double(attempt)))
                     try? await Task.sleep(nanoseconds: UInt64(sleepSeconds * 1_000_000_000))
                 }
+            }
+
+            if pausedForPairingApproval {
+                // Leave the status text + request id intact so onboarding can guide the user.
+                return
             }
 
             await MainActor.run {

@@ -34,9 +34,9 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
               let hostname = parsed.host, !hostname.isEmpty
         else { return nil }
 
-        let scheme = parsed.scheme ?? "ws"
+        let scheme = (parsed.scheme ?? "ws").lowercased()
         let tls = scheme == "wss"
-        let port = parsed.port ?? 18789
+        let port = parsed.port ?? (tls ? 443 : 18789)
         let token = json["token"] as? String
         let password = json["password"] as? String
         return GatewayConnectDeepLink(host: hostname, port: port, tls: tls, token: token, password: password)

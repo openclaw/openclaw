@@ -86,10 +86,10 @@ struct RootCanvas: View {
                 .environment(self.gatewayController)
         }
         .onAppear { self.updateIdleTimer() }
+        .onAppear { self.evaluateOnboardingPresentation(force: false) }
         .onAppear { self.maybeAutoOpenSettings() }
         .onChange(of: self.preventSleep) { _, _ in self.updateIdleTimer() }
         .onChange(of: self.scenePhase) { _, _ in self.updateIdleTimer() }
-        .onAppear { self.evaluateOnboardingPresentation(force: false) }
         .onAppear { self.maybeShowQuickSetup() }
         .onChange(of: self.gatewayController.gateways.count) { _, _ in self.maybeShowQuickSetup() }
         .onAppear { self.updateCanvasDebugStatus() }
@@ -196,6 +196,7 @@ struct RootCanvas: View {
 
     private func maybeAutoOpenSettings() {
         guard !self.didAutoOpenSettings else { return }
+        guard !self.showOnboarding else { return }
         guard self.shouldAutoOpenSettings() else { return }
         self.didAutoOpenSettings = true
         self.presentedSheet = .settings

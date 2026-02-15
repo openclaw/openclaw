@@ -106,4 +106,22 @@ import Testing
     @Test func parseGatewaySetupCodeRejectsInvalidInput() {
         #expect(GatewayConnectDeepLink.fromSetupCode("not-a-valid-setup-code") == nil)
     }
+
+    @Test func parseGatewaySetupCodeDefaultsTo443ForWssWithoutPort() {
+        let payload = #"{"url":"wss://gateway.example.com","token":"tok"}"#
+        let encoded = Data(payload.utf8)
+            .base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+
+        let link = GatewayConnectDeepLink.fromSetupCode(encoded)
+
+        #expect(link == .init(
+            host: "gateway.example.com",
+            port: 443,
+            tls: true,
+            token: "tok",
+            password: nil))
+    }
 }
