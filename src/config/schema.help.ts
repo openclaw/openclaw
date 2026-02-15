@@ -120,7 +120,7 @@ export const FIELD_HELP: Record<string, string> = {
   "channels.slack.thread.historyScope":
     'Scope for Slack thread history context ("thread" isolates per thread; "channel" reuses channel history).',
   "channels.slack.thread.inheritParent":
-    "If true, Slack thread sessions inherit the parent channel transcript (default: false).",
+    "If true, Slack thread replies route to the parent session instead of creating separate thread sessions (default: true).",
   "channels.slack.thread.initialHistoryLimit":
     "Maximum number of existing Slack thread messages to fetch when starting a new thread session (default: 20, set to 0 to disable).",
   "channels.mattermost.botToken":

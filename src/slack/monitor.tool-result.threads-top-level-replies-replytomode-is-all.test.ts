@@ -72,10 +72,10 @@ describe("monitorSlackProvider tool results", () => {
       ParentSessionKey?: string;
     };
     expect(ctx.SessionKey).toBe("agent:main:main:thread:123");
-    expect(ctx.ParentSessionKey).toBeUndefined();
+    expect(ctx.ParentSessionKey).toBe("agent:main:main");
   });
 
-  it("keeps thread parent inheritance opt-in", async () => {
+  it("respects explicit thread parent inheritance opt-in", async () => {
     replyMock.mockResolvedValue({ text: "thread reply" });
 
     slackTestState.config = {
@@ -155,7 +155,7 @@ describe("monitorSlackProvider tool results", () => {
       ThreadLabel?: string;
     };
     expect(ctx.SessionKey).toBe("agent:main:slack:channel:c1:thread:111.222");
-    expect(ctx.ParentSessionKey).toBeUndefined();
+    expect(ctx.ParentSessionKey).toBe("agent:main:slack:channel:c1");
     expect(ctx.ThreadStarterBody).toContain("starter message");
     expect(ctx.ThreadLabel).toContain("Slack thread #general");
   });
@@ -204,6 +204,57 @@ describe("monitorSlackProvider tool results", () => {
       ParentSessionKey?: string;
     };
     expect(ctx.SessionKey).toBe("agent:support:slack:channel:c1:thread:111.222");
+    expect(ctx.ParentSessionKey).toBe("agent:support:slack:channel:c1");
+  });
+
+  it("disables thread inheritance when inheritParent is false", async () => {
+    replyMock.mockResolvedValue({ text: "isolated thread" });
+    slackTestState.config = {
+      messages: { responsePrefix: "PFX" },
+      channels: {
+        slack: {
+          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+          channels: { C1: { allow: true, requireMention: false } },
+          thread: { inheritParent: false },
+        },
+      },
+    };
+
+    const controller = new AbortController();
+    const run = monitorSlackProvider({
+      botToken: "bot-token",
+      appToken: "app-token",
+      abortSignal: controller.signal,
+    });
+
+    await waitForSlackEvent("message");
+    const handler = getSlackHandlers()?.get("message");
+    if (!handler) {
+      throw new Error("Slack message handler not registered");
+    }
+
+    await handler({
+      event: {
+        type: "message",
+        user: "U1",
+        text: "thread reply",
+        ts: "123.456",
+        thread_ts: "111.222",
+        channel: "C1",
+        channel_type: "channel",
+      },
+    });
+
+    await flush();
+    controller.abort();
+    await run;
+
+    expect(replyMock).toHaveBeenCalledTimes(1);
+    const ctx = replyMock.mock.calls[0]?.[0] as {
+      SessionKey?: string;
+      ParentSessionKey?: string;
+    };
+    expect(ctx.SessionKey).toBe("agent:main:slack:channel:c1:thread:111.222");
     expect(ctx.ParentSessionKey).toBeUndefined();
   });
 
