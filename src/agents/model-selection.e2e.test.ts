@@ -54,6 +54,21 @@ describe("model-selection", () => {
       });
     });
 
+    it("normalizes openai gpt-5.3 codex refs to openai-codex provider", () => {
+      expect(parseModelRef("openai/gpt-5.3-codex", "anthropic")).toEqual({
+        provider: "openai-codex",
+        model: "gpt-5.3-codex",
+      });
+      expect(parseModelRef("gpt-5.3-codex", "openai")).toEqual({
+        provider: "openai-codex",
+        model: "gpt-5.3-codex",
+      });
+      expect(parseModelRef("openai/gpt-5.3-codex-codex", "anthropic")).toEqual({
+        provider: "openai-codex",
+        model: "gpt-5.3-codex-codex",
+      });
+    });
+
     it("should return null for empty strings", () => {
       expect(parseModelRef("", "anthropic")).toBeNull();
       expect(parseModelRef("  ", "anthropic")).toBeNull();
