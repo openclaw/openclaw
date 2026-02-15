@@ -84,6 +84,21 @@ describe("control UI routing", () => {
     expect(window.location.pathname).toBe("/channels");
   });
 
+  it("resets to the main session when opening chat from sidebar navigation", async () => {
+    const app = mountApp("/sessions?session=agent:main:subagent:task-123");
+    await app.updateComplete;
+
+    const link = app.querySelector<HTMLAnchorElement>('a.nav-item[href="/chat"]');
+    expect(link).not.toBeNull();
+    link?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
+
+    await app.updateComplete;
+    expect(app.tab).toBe("chat");
+    expect(app.sessionKey).toBe("main");
+    expect(window.location.pathname).toBe("/chat");
+    expect(window.location.search).toBe("?session=main");
+  });
+
   it("keeps chat and nav usable on narrow viewports", async () => {
     const app = mountApp("/chat");
     await app.updateComplete;

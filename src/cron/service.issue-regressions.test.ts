@@ -118,7 +118,10 @@ describe("Cron issue regressions", () => {
     const result = await cron.run(forceNow.id, "force");
 
     expect(result).toEqual({ ok: true, ran: true });
-    expect(enqueueSystemEvent).toHaveBeenCalledWith("force", { agentId: undefined });
+    expect(enqueueSystemEvent).toHaveBeenCalledWith(
+      "force",
+      expect.objectContaining({ agentId: undefined }),
+    );
 
     const job = await cron.add({
       name: "isolated",

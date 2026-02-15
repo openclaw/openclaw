@@ -2,8 +2,7 @@ import { loadConfig } from "../config/config.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { convertMarkdownTables } from "../markdown/tables.js";
 import { mediaKindFromMime } from "../media/constants.js";
-import { saveMediaBuffer } from "../media/store.js";
-import { loadWebMedia } from "../web/media.js";
+import { resolveOutboundAttachmentFromUrl } from "../media/outbound-attachment.js";
 import { resolveIMessageAccount, type ResolvedIMessageAccount } from "./accounts.js";
 import { createIMessageRpcClient, type IMessageRpcClient } from "./client.js";
 import { formatIMessageChatTarget, type IMessageService, parseIMessageTarget } from "./targets.js";
@@ -46,20 +45,6 @@ function resolveMessageId(result: Record<string, unknown> | null | undefined): s
   return raw ? String(raw).trim() : null;
 }
 
-async function resolveAttachment(
-  mediaUrl: string,
-  maxBytes: number,
-): Promise<{ path: string; contentType?: string }> {
-  const media = await loadWebMedia(mediaUrl, maxBytes);
-  const saved = await saveMediaBuffer(
-    media.buffer,
-    media.contentType ?? undefined,
-    "outbound",
-    maxBytes,
-  );
-  return { path: saved.path, contentType: saved.contentType };
-}
-
 export async function sendMessageIMessage(
   to: string,
   text: string,
@@ -90,7 +75,7 @@ export async function sendMessageIMessage(
   let filePath: string | undefined;
 
   if (opts.mediaUrl?.trim()) {
-    const resolveAttachmentFn = opts.resolveAttachmentImpl ?? resolveAttachment;
+    const resolveAttachmentFn = opts.resolveAttachmentImpl ?? resolveOutboundAttachmentFromUrl;
     const resolved = await resolveAttachmentFn(opts.mediaUrl.trim(), maxBytes);
     filePath = resolved.path;
     if (!message.trim()) {

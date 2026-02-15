@@ -43,6 +43,34 @@ export type PluginUninstallOptions = {
   dryRun?: boolean;
 };
 
+function resolveFileNpmSpecToLocalPath(
+  raw: string,
+): { ok: true; path: string } | { ok: false; error: string } | null {
+  const trimmed = raw.trim();
+  if (!trimmed.toLowerCase().startsWith("file:")) {
+    return null;
+  }
+  const rest = trimmed.slice("file:".length);
+  if (!rest) {
+    return { ok: false, error: "unsupported file: spec: missing path" };
+  }
+  if (rest.startsWith("///")) {
+    // file:///abs/path -> /abs/path
+    return { ok: true, path: rest.slice(2) };
+  }
+  if (rest.startsWith("//localhost/")) {
+    // file://localhost/abs/path -> /abs/path
+    return { ok: true, path: rest.slice("//localhost".length) };
+  }
+  if (rest.startsWith("//")) {
+    return {
+      ok: false,
+      error: 'unsupported file: URL host (expected "file:<path>" or "file:///abs/path")',
+    };
+  }
+  return { ok: true, path: rest };
+}
+
 function formatPluginLine(plugin: PluginRecord, verbose = false): string {
   const status =
     plugin.status === "loaded"
@@ -97,6 +125,29 @@ function applySlotSelectionForPlugin(
     registry: report,
   });
   return { config: result.config, warnings: result.warnings };
+}
+
+function createPluginInstallLogger(): { info: (msg: string) => void; warn: (msg: string) => void } {
+  return {
+    info: (msg) => defaultRuntime.log(msg),
+    warn: (msg) => defaultRuntime.log(theme.warn(msg)),
+  };
+}
+
+function enablePluginInConfig(config: OpenClawConfig, pluginId: string): OpenClawConfig {
+  return {
+    ...config,
+    plugins: {
+      ...config.plugins,
+      entries: {
+        ...config.plugins?.entries,
+        [pluginId]: {
+          ...(config.plugins?.entries?.[pluginId] as object | undefined),
+          enabled: true,
+        },
+      },
+    },
+  };
 }
 
 function logSlotWarnings(warnings: string[]) {
@@ -484,7 +535,13 @@ export function registerPluginsCli(program: Command) {
     .argument("<path-or-spec>", "Path (.ts/.js/.zip/.tgz/.tar.gz) or an npm package spec")
     .option("-l, --link", "Link a local path instead of copying", false)
     .action(async (raw: string, opts: { link?: boolean }) => {
-      const resolved = resolveUserPath(raw);
+      const fileSpec = resolveFileNpmSpecToLocalPath(raw);
+      if (fileSpec && !fileSpec.ok) {
+        defaultRuntime.error(fileSpec.error);
+        process.exit(1);
+      }
+      const normalized = fileSpec && fileSpec.ok ? fileSpec.path : raw;
+      const resolved = resolveUserPath(normalized);
       const cfg = loadConfig();
 
       if (fs.existsSync(resolved)) {
@@ -497,23 +554,19 @@ export function registerPluginsCli(program: Command) {
             process.exit(1);
           }
 
-          let next: OpenClawConfig = {
-            ...cfg,
-            plugins: {
-              ...cfg.plugins,
-              load: {
-                ...cfg.plugins?.load,
-                paths: merged,
-              },
-              entries: {
-                ...cfg.plugins?.entries,
-                [probe.pluginId]: {
-                  ...(cfg.plugins?.entries?.[probe.pluginId] as object | undefined),
-                  enabled: true,
+          let next: OpenClawConfig = enablePluginInConfig(
+            {
+              ...cfg,
+              plugins: {
+                ...cfg.plugins,
+                load: {
+                  ...cfg.plugins?.load,
+                  paths: merged,
                 },
               },
             },
-          };
+            probe.pluginId,
+          );
           next = recordPluginInstall(next, {
             pluginId: probe.pluginId,
             source: "path",
@@ -532,29 +585,14 @@ export function registerPluginsCli(program: Command) {
 
         const result = await installPluginFromPath({
           path: resolved,
-          logger: {
-            info: (msg) => defaultRuntime.log(msg),
-            warn: (msg) => defaultRuntime.log(theme.warn(msg)),
-          },
+          logger: createPluginInstallLogger(),
         });
         if (!result.ok) {
           defaultRuntime.error(result.error);
           process.exit(1);
         }
 
-        let next: OpenClawConfig = {
-          ...cfg,
-          plugins: {
-            ...cfg.plugins,
-            entries: {
-              ...cfg.plugins?.entries,
-              [result.pluginId]: {
-                ...(cfg.plugins?.entries?.[result.pluginId] as object | undefined),
-                enabled: true,
-              },
-            },
-          },
-        };
+        let next = enablePluginInConfig(cfg, result.pluginId);
         const source: "archive" | "path" = resolveArchiveKind(resolved) ? "archive" : "path";
         next = recordPluginInstall(next, {
           pluginId: result.pluginId,
@@ -596,29 +634,14 @@ export function registerPluginsCli(program: Command) {
 
       const result = await installPluginFromNpmSpec({
         spec: raw,
-        logger: {
-          info: (msg) => defaultRuntime.log(msg),
-          warn: (msg) => defaultRuntime.log(theme.warn(msg)),
-        },
+        logger: createPluginInstallLogger(),
       });
       if (!result.ok) {
         defaultRuntime.error(result.error);
         process.exit(1);
       }
 
-      let next: OpenClawConfig = {
-        ...cfg,
-        plugins: {
-          ...cfg.plugins,
-          entries: {
-            ...cfg.plugins?.entries,
-            [result.pluginId]: {
-              ...(cfg.plugins?.entries?.[result.pluginId] as object | undefined),
-              enabled: true,
-            },
-          },
-        },
-      };
+      let next = enablePluginInConfig(cfg, result.pluginId);
       next = recordPluginInstall(next, {
         pluginId: result.pluginId,
         source: "npm",

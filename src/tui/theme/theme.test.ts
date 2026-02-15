@@ -7,7 +7,7 @@ const cliHighlightMocks = vi.hoisted(() => ({
 
 vi.mock("cli-highlight", () => cliHighlightMocks);
 
-const { markdownTheme } = await import("./theme.js");
+const { markdownTheme, theme } = await import("./theme.js");
 
 const stripAnsi = (str: string) =>
   str.replace(new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g"), "");
@@ -50,5 +50,12 @@ describe("markdownTheme", () => {
       expect(result).toHaveLength(1);
       expect(stripAnsi(result[0] ?? "")).toBe("echo hello");
     });
+  });
+});
+
+describe("theme", () => {
+  it("keeps assistant text in terminal default foreground", () => {
+    expect(theme.assistantText("hello")).toBe("hello");
+    expect(stripAnsi(theme.assistantText("hello"))).toBe("hello");
   });
 });

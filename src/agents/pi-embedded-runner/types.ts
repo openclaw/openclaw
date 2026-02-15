@@ -83,6 +83,7 @@ export type EmbeddedPiCompactResult = {
 export type EmbeddedSandboxInfo = {
   enabled: boolean;
   workspaceDir?: string;
+  containerWorkspaceDir?: string;
   workspaceAccess?: "none" | "ro" | "rw";
   agentWorkspaceMount?: string;
   browserBridgeUrl?: string;

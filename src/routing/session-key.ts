@@ -2,6 +2,8 @@ import type { ChatType } from "../channels/chat-type.js";
 import { parseAgentSessionKey, type ParsedAgentSessionKey } from "../sessions/session-key-utils.js";
 
 export {
+  getSubagentDepth,
+  isCronSessionKey,
   isAcpSessionKey,
   isSubagentSessionKey,
   parseAgentSessionKey,

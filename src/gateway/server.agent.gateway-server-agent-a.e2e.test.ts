@@ -196,6 +196,38 @@ describe("gateway server agent", () => {
     expect(call.to).toBeUndefined();
   });
 
+  test("agent preserves spawnDepth on subagent sessions", async () => {
+    setRegistry(defaultRegistry);
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    const storePath = path.join(dir, "sessions.json");
+    testState.sessionStorePath = storePath;
+    await writeSessionStore({
+      entries: {
+        "agent:main:subagent:depth": {
+          sessionId: "sess-sub-depth",
+          updatedAt: Date.now(),
+          spawnedBy: "agent:main:main",
+          spawnDepth: 2,
+        },
+      },
+    });
+
+    const res = await rpcReq(ws, "agent", {
+      message: "hi",
+      sessionKey: "agent:main:subagent:depth",
+      idempotencyKey: "idem-agent-subdepth",
+    });
+    expect(res.ok).toBe(true);
+
+    const raw = await fs.readFile(storePath, "utf-8");
+    const persisted = JSON.parse(raw) as Record<
+      string,
+      { spawnDepth?: number; spawnedBy?: string }
+    >;
+    expect(persisted["agent:main:subagent:depth"]?.spawnDepth).toBe(2);
+    expect(persisted["agent:main:subagent:depth"]?.spawnedBy).toBe("agent:main:main");
+  });
+
   test("agent derives sessionKey from agentId", async () => {
     setRegistry(defaultRegistry);
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));

@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { randomUUID } from "node:crypto";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
+import type { ResolvedGatewayAuth } from "./auth.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommand } from "../commands/agent.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
@@ -10,16 +11,9 @@ import {
   buildAgentMessageFromConversationEntries,
   type ConversationEntry,
 } from "./agent-prompt.js";
-import { authorizeGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
-import {
-  readJsonBodyOrError,
-  sendGatewayAuthFailure,
-  sendJson,
-  sendMethodNotAllowed,
-  setSseHeaders,
-  writeDone,
-} from "./http-common.js";
-import { getBearerToken, resolveAgentIdForRequest, resolveSessionKey } from "./http-utils.js";
+import { sendJson, setSseHeaders, writeDone } from "./http-common.js";
+import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
+import { resolveAgentIdForRequest, resolveSessionKey } from "./http-utils.js";
 
 type OpenAiHttpOptions = {
   auth: ResolvedGatewayAuth;
@@ -151,35 +145,21 @@ export async function handleOpenAiHttpRequest(
   res: ServerResponse,
   opts: OpenAiHttpOptions,
 ): Promise<boolean> {
-  const url = new URL(req.url ?? "/", `http://${req.headers.host || "localhost"}`);
-  if (url.pathname !== "/v1/chat/completions") {
-    return false;
-  }
-
-  if (req.method !== "POST") {
-    sendMethodNotAllowed(res);
-    return true;
-  }
-
-  const token = getBearerToken(req);
-  const authResult = await authorizeGatewayConnect({
+  const handled = await handleGatewayPostJsonEndpoint(req, res, {
+    pathname: "/v1/chat/completions",
     auth: opts.auth,
-    connectAuth: { token, password: token },
-    req,
     trustedProxies: opts.trustedProxies,
     rateLimiter: opts.rateLimiter,
+    maxBodyBytes: opts.maxBodyBytes ?? 1024 * 1024,
   });
-  if (!authResult.ok) {
-    sendGatewayAuthFailure(res, authResult);
+  if (handled === false) {
+    return false;
+  }
+  if (!handled) {
     return true;
   }
 
-  const body = await readJsonBodyOrError(req, res, opts.maxBodyBytes ?? 1024 * 1024);
-  if (body === undefined) {
-    return true;
-  }
-
-  const payload = coerceRequest(body);
+  const payload = coerceRequest(handled.body);
   const stream = Boolean(payload.stream);
   const model = typeof payload.model === "string" ? payload.model : "openclaw";
   const user = typeof payload.user === "string" ? payload.user : undefined;

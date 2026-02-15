@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayRequestContext } from "./types.js";
+import { BARE_SESSION_RESET_PROMPT } from "../../auto-reply/reply/session-reset-prompt.js";
 import { agentHandlers } from "./agent.js";
 
 const mocks = vi.hoisted(() => ({
@@ -7,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   updateSessionStore: vi.fn(),
   agentCommand: vi.fn(),
   registerAgentRunContext: vi.fn(),
+  sessionsResetHandler: vi.fn(),
   loadConfigReturn: {} as Record<string, unknown>,
 }));
 
@@ -52,6 +54,13 @@ vi.mock("../../agents/agent-scope.js", () => ({
 vi.mock("../../infra/agent-events.js", () => ({
   registerAgentRunContext: mocks.registerAgentRunContext,
   onAgentEvent: vi.fn(),
+}));
+
+vi.mock("./sessions.js", () => ({
+  sessionsHandlers: {
+    "sessions.reset": (...args: unknown[]) =>
+      (mocks.sessionsResetHandler as (...args: unknown[]) => unknown)(...args),
+  },
 }));
 
 vi.mock("../../sessions/send-policy.js", () => ({
@@ -272,5 +281,59 @@ describe("gateway agent handler", () => {
     expect(capturedStore).toBeDefined();
     expect(capturedStore?.["agent:main:work"]).toBeDefined();
     expect(capturedStore?.["agent:main:MAIN"]).toBeUndefined();
+  });
+
+  it("handles bare /new by resetting the same session and sending reset greeting prompt", async () => {
+    mocks.sessionsResetHandler.mockImplementation(
+      async (opts: {
+        params: { key: string; reason: string };
+        respond: (ok: boolean, payload?: unknown) => void;
+      }) => {
+        expect(opts.params.key).toBe("agent:main:main");
+        expect(opts.params.reason).toBe("new");
+        opts.respond(true, {
+          ok: true,
+          key: "agent:main:main",
+          entry: { sessionId: "reset-session-id" },
+        });
+      },
+    );
+
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: {
+        sessionId: "reset-session-id",
+        updatedAt: Date.now(),
+      },
+      canonicalKey: "agent:main:main",
+    });
+    mocks.updateSessionStore.mockResolvedValue(undefined);
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    const respond = vi.fn();
+    await agentHandlers.agent({
+      params: {
+        message: "/new",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "test-idem-new",
+      },
+      respond,
+      context: makeContext(),
+      req: { type: "req", id: "4", method: "agent" },
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    expect(mocks.sessionsResetHandler).toHaveBeenCalledTimes(1);
+    const call = mocks.agentCommand.mock.calls.at(-1)?.[0] as
+      | { message?: string; sessionId?: string }
+      | undefined;
+    expect(call?.message).toBe(BARE_SESSION_RESET_PROMPT);
+    expect(call?.sessionId).toBe("reset-session-id");
   });
 });

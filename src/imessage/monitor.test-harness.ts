@@ -109,7 +109,14 @@ vi.mock("./probe.js", () => ({
   probeIMessage: vi.fn(async () => ({ ok: true })),
 }));
 
-export const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+export const flush = () =>
+  new Promise<void>((resolve) => {
+    if (typeof setImmediate === "function") {
+      setImmediate(resolve);
+      return;
+    }
+    setTimeout(resolve, 0);
+  });
 
 export async function waitForSubscribe() {
   for (let i = 0; i < 25; i += 1) {

@@ -114,6 +114,7 @@ export const MessagesSchema = z
     ackReaction: z.string().optional(),
     ackReactionScope: z.enum(["group-mentions", "group-all", "direct", "all"]).optional(),
     removeAckAfterReply: z.boolean().optional(),
+    suppressToolErrors: z.boolean().optional(),
     tts: TtsConfigSchema,
   })
   .strict()

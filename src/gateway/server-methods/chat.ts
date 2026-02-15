@@ -39,6 +39,7 @@ import {
 } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
+import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 
 type TranscriptAppendResult = {
   ok: boolean;
@@ -48,6 +49,27 @@ type TranscriptAppendResult = {
 };
 
 type AppendMessageArg = Parameters<SessionManager["appendMessage"]>[0];
+
+function stripDisallowedChatControlChars(message: string): string {
+  let output = "";
+  for (const char of message) {
+    const code = char.charCodeAt(0);
+    if (code === 9 || code === 10 || code === 13 || (code >= 32 && code !== 127)) {
+      output += char;
+    }
+  }
+  return output;
+}
+
+export function sanitizeChatSendMessageInput(
+  message: string,
+): { ok: true; message: string } | { ok: false; error: string } {
+  const normalized = message.normalize("NFC");
+  if (normalized.includes("\u0000")) {
+    return { ok: false, error: "message must not contain null bytes" };
+  }
+  return { ok: true, message: stripDisallowedChatControlChars(normalized) };
+}
 
 function resolveTranscriptPath(params: {
   sessionId: string;
@@ -353,26 +375,19 @@ export const chatHandlers: GatewayRequestHandlers = {
       timeoutMs?: number;
       idempotencyKey: string;
     };
-    const stopCommand = isChatStopCommandText(p.message);
-    const normalizedAttachments =
-      p.attachments
-        ?.map((a) => ({
-          type: typeof a?.type === "string" ? a.type : undefined,
-          mimeType: typeof a?.mimeType === "string" ? a.mimeType : undefined,
-          fileName: typeof a?.fileName === "string" ? a.fileName : undefined,
-          content:
-            typeof a?.content === "string"
-              ? a.content
-              : ArrayBuffer.isView(a?.content)
-                ? Buffer.from(
-                    a.content.buffer,
-                    a.content.byteOffset,
-                    a.content.byteLength,
-                  ).toString("base64")
-                : undefined,
-        }))
-        .filter((a) => a.content) ?? [];
-    const rawMessage = p.message.trim();
+    const sanitizedMessageResult = sanitizeChatSendMessageInput(p.message);
+    if (!sanitizedMessageResult.ok) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, sanitizedMessageResult.error),
+      );
+      return;
+    }
+    const inboundMessage = sanitizedMessageResult.message;
+    const stopCommand = isChatStopCommandText(inboundMessage);
+    const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(p.attachments);
+    const rawMessage = inboundMessage.trim();
     if (!rawMessage && normalizedAttachments.length === 0) {
       respond(
         false,
@@ -381,11 +396,11 @@ export const chatHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    let parsedMessage = p.message;
+    let parsedMessage = inboundMessage;
     let parsedImages: ChatImageContent[] = [];
     if (normalizedAttachments.length > 0) {
       try {
-        const parsed = await parseMessageWithAttachments(p.message, normalizedAttachments, {
+        const parsed = await parseMessageWithAttachments(inboundMessage, normalizedAttachments, {
           maxBytes: 5_000_000,
           log: context.logGateway,
         });
