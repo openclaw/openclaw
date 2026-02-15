@@ -60,7 +60,7 @@ export function isModernModelRef(ref: ModelRef): boolean {
   }
 
   if (provider === "google-antigravity") {
-    return matchesPrefix(id, GOOGLE_PREFIXES) || matchesPrefix(id, ANTHROPIC_PREFIXES);
+    return matchesPrefix(id, GOOGLE_PREFIXES);
   }
 
   if (provider === "zai") {
