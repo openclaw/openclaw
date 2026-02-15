@@ -4,6 +4,8 @@ import {
   checkShellCompletionStatus,
   ensureCompletionCacheExists,
 } from "../../commands/doctor-completion.js";
+// Keep this eager import: after npm global update swaps dist chunk filenames,
+// lazy-loading doctor can fail with ERR_MODULE_NOT_FOUND from old chunk paths.
 import { doctorCommand } from "../../commands/doctor.js";
 import { readConfigFileSnapshot, writeConfigFile } from "../../config/config.js";
 import {
@@ -32,6 +34,8 @@ import { pathExists } from "../../utils.js";
 import { replaceCliName, resolveCliName } from "../cli-name.js";
 import { formatCliCommand } from "../command-format.js";
 import { installCompletion } from "../completion-cli.js";
+// Keep this eager import for post-update restart: global package updates can replace
+// dist chunk names, so deferred imports may resolve stale filenames.
 import { runDaemonRestart } from "../daemon-cli.js";
 import { createUpdateProgress, printResult } from "./progress.js";
 import {
