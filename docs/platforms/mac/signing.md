@@ -11,7 +11,7 @@ This app is usually built from [`scripts/package-mac-app.sh`](https://github.com
 
 - sets a stable debug bundle identifier: `ai.openclaw.mac.debug`
 - writes the Info.plist with that bundle id (override via `BUNDLE_ID=...`)
-- calls [`scripts/codesign-mac-app.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/codesign-mac-app.sh) to sign the main binary and app bundle so macOS treats each rebuild as the same signed bundle and keeps TCC permissions (notifications, accessibility, screen recording, mic, speech). For stable permissions, use a real signing identity; ad-hoc is opt-in and fragile (see [macOS permissions](/platforms/mac/permissions)).
+- calls [`scripts/codesign-mac-app.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/codesign-mac-app.sh) to sign the main binary and app bundle so macOS treats each rebuild as the same signed bundle and keeps TCC permissions (notifications, accessibility, screen recording, mic, speech, location, calendar, reminders, contacts). For stable permissions, use a real signing identity; ad-hoc is opt-in and fragile (see [macOS permissions](/platforms/mac/permissions)).
 - uses `CODESIGN_TIMESTAMP=auto` by default; it enables trusted timestamps for Developer ID signatures. Set `CODESIGN_TIMESTAMP=off` to skip timestamping (offline debug builds).
 - inject build metadata into Info.plist: `OpenClawBuildTimestamp` (UTC) and `OpenClawGitCommit` (short hash) so the About pane can show build, git, and debug/release channel.
 - **Packaging requires Node 22+**: the script runs TS builds and the Control UI build.
@@ -41,6 +41,26 @@ When signing with `SIGN_IDENTITY="-"` (ad-hoc), the script automatically disable
 - `OpenClawGitCommit`: short git hash (or `unknown` if unavailable)
 
 The About tab reads these keys to show version, build date, git commit, and whether it’s a debug build (via `#if DEBUG`). Run the packager to refresh these values after code changes.
+
+## Personal data permissions
+
+For Calendar, Reminders, and Contacts to work when OpenClaw is the responsible process, the app must have both:
+
+- code-sign entitlements in `scripts/codesign-mac-app.sh`
+- matching `Info.plist` usage-description keys in `apps/macos/Sources/OpenClaw/Resources/Info.plist`
+
+OpenClaw currently signs with:
+
+- `com.apple.security.personal-information.calendars`
+- `com.apple.security.personal-information.reminders`
+- `com.apple.security.personal-information.addressbook`
+
+And includes:
+
+- `NSCalendarsUsageDescription`
+- `NSRemindersUsageDescription`
+- `NSRemindersFullAccessUsageDescription`
+- `NSContactsUsageDescription`
 
 ## Why
 

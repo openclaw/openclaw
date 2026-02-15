@@ -24,6 +24,32 @@ macOS treats the app as new and may drop or hide prompts.
 Ad-hoc signatures generate a new identity every build. macOS will forget previous
 grants, and prompts can disappear entirely until the stale entries are cleared.
 
+## Personal data permissions
+
+Calendar, Reminders, and Contacts require two things at the same time:
+
+- app entitlements at code-sign time
+- `Info.plist` usage-description keys
+
+If either is missing, TCC can deny access even when you toggled permission in Settings.
+
+OpenClaw mac app permissions are provided by:
+
+- entitlements in [`scripts/codesign-mac-app.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/codesign-mac-app.sh):
+  - `com.apple.security.personal-information.calendars`
+  - `com.apple.security.personal-information.reminders`
+  - `com.apple.security.personal-information.addressbook`
+- usage strings in `apps/macos/Sources/OpenClaw/Resources/Info.plist`:
+  - `NSCalendarsUsageDescription`
+  - `NSRemindersUsageDescription`
+  - `NSRemindersFullAccessUsageDescription`
+  - `NSContactsUsageDescription`
+
+TCC symptom mapping:
+
+- `requires entitlement ... but it is missing`: signing entitlements are missing or stale on the built app.
+- `missing usage string`: the corresponding `NS*UsageDescription` key is missing in `Info.plist`.
+
 ## Recovery checklist when prompts disappear
 
 1. Quit the app.
