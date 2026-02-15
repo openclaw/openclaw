@@ -107,6 +107,60 @@ describe("resolveOutboundTarget", () => {
       expect(res.error.message).toContain("WebChat");
     }
   });
+
+  describe("defaultTo config fallback", () => {
+    it("uses whatsapp defaultTo when no explicit target is provided", () => {
+      const cfg: OpenClawConfig = {
+        channels: { whatsapp: { defaultTo: "+15551234567", allowFrom: ["*"] } },
+      };
+      const res = resolveOutboundTarget({
+        channel: "whatsapp",
+        to: undefined,
+        cfg,
+        mode: "implicit",
+      });
+      expect(res).toEqual({ ok: true, to: "+15551234567" });
+    });
+
+    it("uses telegram defaultTo when no explicit target is provided", () => {
+      const cfg: OpenClawConfig = {
+        channels: { telegram: { defaultTo: "123456789" } },
+      };
+      const res = resolveOutboundTarget({
+        channel: "telegram",
+        to: "",
+        cfg,
+        mode: "implicit",
+      });
+      expect(res).toEqual({ ok: true, to: "123456789" });
+    });
+
+    it("explicit --reply-to overrides defaultTo", () => {
+      const cfg: OpenClawConfig = {
+        channels: { whatsapp: { defaultTo: "+15551234567", allowFrom: ["*"] } },
+      };
+      const res = resolveOutboundTarget({
+        channel: "whatsapp",
+        to: "+15559999999",
+        cfg,
+        mode: "explicit",
+      });
+      expect(res).toEqual({ ok: true, to: "+15559999999" });
+    });
+
+    it("still errors when no defaultTo and no explicit target", () => {
+      const cfg: OpenClawConfig = {
+        channels: { whatsapp: { allowFrom: ["+1555"] } },
+      };
+      const res = resolveOutboundTarget({
+        channel: "whatsapp",
+        to: "",
+        cfg,
+        mode: "implicit",
+      });
+      expect(res.ok).toBe(false);
+    });
+  });
 });
 
 describe("resolveSessionDeliveryTarget", () => {

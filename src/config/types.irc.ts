@@ -56,6 +56,8 @@ export type IrcAccountConfig = {
   dmPolicy?: DmPolicy;
   /** Optional allowlist for inbound DM senders. */
   allowFrom?: Array<string | number>;
+  /** Default delivery target for CLI --deliver when no explicit --reply-to is provided. */
+  defaultTo?: string;
   /** Optional allowlist for IRC channel senders. */
   groupAllowFrom?: Array<string | number>;
   /**
