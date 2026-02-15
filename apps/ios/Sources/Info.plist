@@ -19,9 +19,9 @@
 	<key>CFBundlePackageType</key>
 		<string>APPL</string>
 		<key>CFBundleShortVersionString</key>
-		<string>2026.2.13</string>
+		<string>2026.2.14</string>
 		<key>CFBundleVersion</key>
-		<string>20260213</string>
+		<string>20260214</string>
 		<key>NSAppTransportSecurity</key>
 		<dict>
 		<key>NSAllowsArbitraryLoadsInWebContent</key>

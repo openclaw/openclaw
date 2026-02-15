@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/mattermost",
-  "version": "2026.2.13",
+  "version": "2026.2.14",
   "private": true,
   "description": "OpenClaw Mattermost channel plugin",
   "type": "module",
