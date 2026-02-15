@@ -19,6 +19,26 @@ import { GatewayClient } from "./client.js";
 import { pickPrimaryLanIPv4 } from "./net.js";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
 
+/**
+ * Transient WebSocket close codes that are safe to retry.
+ * 1006 = abnormal closure (no close frame) — typically caused by idle connection reaping
+ * or gateway memory pressure during long-running subagent sessions.
+ */
+const RETRYABLE_CLOSE_CODES = new Set([1006]);
+const DEFAULT_RETRY_COUNT = 2;
+const RETRY_BASE_DELAY_MS = 1_000;
+
+function isRetryableCloseError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const msg = err.message;
+  return RETRYABLE_CLOSE_CODES.has(parseCloseCodeFromError(msg));
+}
+
+function parseCloseCodeFromError(msg: string): number {
+  const match = msg.match(/gateway closed \((\d+)/);
+  return match ? Number.parseInt(match[1], 10) : 0;
+}
+
 export type CallGatewayOptions = {
   url?: string;
   token?: string;
@@ -42,6 +62,11 @@ export type CallGatewayOptions = {
    * Does not affect config loading; callers still control auth via opts.token/password/env/config.
    */
   configPath?: string;
+  /**
+   * Number of automatic retries on transient WebSocket close errors (e.g. 1006).
+   * Defaults to 2. Set to 0 to disable retries.
+   */
+  retries?: number;
 };
 
 export type GatewayConnectionDetails = {
@@ -154,6 +179,27 @@ export function buildGatewayConnectionDetails(
 }
 
 export async function callGateway<T = Record<string, unknown>>(
+  opts: CallGatewayOptions,
+): Promise<T> {
+  const maxRetries = typeof opts.retries === "number" ? Math.max(0, opts.retries) : DEFAULT_RETRY_COUNT;
+  let lastError: Error | undefined;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await callGatewayOnce<T>(opts);
+    } catch (err) {
+      lastError = err as Error;
+      if (attempt < maxRetries && isRetryableCloseError(err)) {
+        const delayMs = RETRY_BASE_DELAY_MS * 2 ** attempt;
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastError ?? new Error("callGateway: unexpected retry exhaustion");
+}
+
+async function callGatewayOnce<T = Record<string, unknown>>(
   opts: CallGatewayOptions,
 ): Promise<T> {
   const timeoutMs =
