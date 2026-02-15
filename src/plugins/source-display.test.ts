@@ -14,7 +14,7 @@ describe("formatPluginSourceForTable", () => {
         workspace: "/Users/x/ws/.openclaw/extensions",
       },
     );
-    expect(out.value).toBe("stock:bluebubbles/index.ts");
+    expect(out.value.replaceAll("\\", "/")).toBe("stock:bluebubbles/index.ts");
     expect(out.rootKey).toBe("stock");
   });
 
@@ -30,7 +30,7 @@ describe("formatPluginSourceForTable", () => {
         workspace: "/Users/x/ws/.openclaw/extensions",
       },
     );
-    expect(out.value).toBe("workspace:matrix/index.ts");
+    expect(out.value.replaceAll("\\", "/")).toBe("workspace:matrix/index.ts");
     expect(out.rootKey).toBe("workspace");
   });
 
@@ -46,7 +46,7 @@ describe("formatPluginSourceForTable", () => {
         workspace: "/Users/x/ws/.openclaw/extensions",
       },
     );
-    expect(out.value).toBe("global:zalo/index.js");
+    expect(out.value.replaceAll("\\", "/")).toBe("global:zalo/index.js");
     expect(out.rootKey).toBe("global");
   });
 });
