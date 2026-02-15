@@ -802,6 +802,85 @@ export function isFailoverErrorMessage(raw: string): boolean {
   return classifyFailoverReason(raw) !== null;
 }
 
+/**
+ * Extract the model identifier from a rate limit error response.
+ * Google 429 responses include `quotaDimensions.model` to identify which model hit its limit.
+ * This enables per-model cooldown tracking instead of full provider cooldown.
+ *
+ * Example Google 429 response:
+ * ```json
+ * {
+ *   "error": {
+ *     "code": 429,
+ *     "message": "Resource exhausted...",
+ *     "details": [{
+ *       "quotaDimensions": {
+ *         "location": "global",
+ *         "model": "gemini-3-flash"
+ *       }
+ *     }]
+ *   }
+ * }
+ * ```
+ */
+export function extractRateLimitedModel(raw: string): string | null {
+  if (!raw) {
+    return null;
+  }
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  // Try to parse as JSON to extract quotaDimensions.model
+  const jsonStart = trimmed.indexOf("{");
+  if (jsonStart === -1) {
+    return null;
+  }
+
+  try {
+    const jsonStr = trimmed.slice(jsonStart);
+    const parsed = JSON.parse(jsonStr) as unknown;
+    if (!parsed || typeof parsed !== "object") {
+      return null;
+    }
+
+    const record = parsed as Record<string, unknown>;
+
+    // Check for Google-style error response with quotaDimensions
+    const error = record.error as Record<string, unknown> | undefined;
+    const details = error?.details ?? record.details;
+    if (Array.isArray(details)) {
+      for (const detail of details) {
+        if (detail && typeof detail === "object") {
+          const detailRecord = detail as Record<string, unknown>;
+          const quotaDimensions = detailRecord.quotaDimensions as
+            | Record<string, unknown>
+            | undefined;
+          if (quotaDimensions?.model && typeof quotaDimensions.model === "string") {
+            return quotaDimensions.model;
+          }
+        }
+      }
+    }
+
+    // Check for model field at various levels (different provider formats)
+    const modelFromError = error?.model;
+    if (typeof modelFromError === "string" && modelFromError.trim()) {
+      return modelFromError.trim();
+    }
+
+    const modelFromRoot = record.model;
+    if (typeof modelFromRoot === "string" && modelFromRoot.trim()) {
+      return modelFromRoot.trim();
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 export function isFailoverAssistantError(msg: AssistantMessage | undefined): boolean {
   if (!msg || msg.stopReason !== "error") {
     return false;

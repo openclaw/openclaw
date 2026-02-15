@@ -11,6 +11,7 @@ export {
   BILLING_ERROR_USER_MESSAGE,
   formatBillingErrorMessage,
   classifyFailoverReason,
+  extractRateLimitedModel,
   formatRawAssistantErrorForUi,
   formatAssistantErrorText,
   getApiErrorPayloadFingerprint,

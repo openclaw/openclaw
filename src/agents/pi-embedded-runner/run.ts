@@ -30,6 +30,7 @@ import { ensureOpenClawModelsJson } from "../models-config.js";
 import {
   formatBillingErrorMessage,
   classifyFailoverReason,
+  extractRateLimitedModel,
   formatAssistantErrorText,
   isAuthAssistantError,
   isBillingAssistantError,
@@ -745,12 +746,19 @@ export async function runEmbeddedPiAgent(
             }
             const promptFailoverReason = classifyFailoverReason(errorText);
             if (promptFailoverReason && promptFailoverReason !== "timeout" && lastProfileId) {
+              // For rate_limit errors, try to extract the specific model that hit its limit
+              // This enables per-model cooldown instead of full provider cooldown
+              const rateLimitedModel =
+                promptFailoverReason === "rate_limit"
+                  ? (extractRateLimitedModel(errorText) ?? modelId)
+                  : undefined;
               await markAuthProfileFailure({
                 store: authStore,
                 profileId: lastProfileId,
                 reason: promptFailoverReason,
                 cfg: params.config,
                 agentDir: params.agentDir,
+                model: rateLimitedModel,
               });
             }
             if (
@@ -835,12 +843,19 @@ export async function runEmbeddedPiAgent(
                 timedOut || assistantFailoverReason === "timeout"
                   ? "timeout"
                   : (assistantFailoverReason ?? "unknown");
+              // For rate_limit errors, try to extract the specific model that hit its limit
+              // This enables per-model cooldown instead of full provider cooldown
+              const rateLimitedModel =
+                reason === "rate_limit"
+                  ? (extractRateLimitedModel(lastAssistant?.errorMessage ?? "") ?? modelId)
+                  : undefined;
               await markAuthProfileFailure({
                 store: authStore,
                 profileId: lastProfileId,
                 reason,
                 cfg: params.config,
                 agentDir: params.agentDir,
+                model: rateLimitedModel,
               });
               if (timedOut && !isProbeSession) {
                 log.warn(
@@ -963,6 +978,7 @@ export async function runEmbeddedPiAgent(
               store: authStore,
               profileId: lastProfileId,
               agentDir: params.agentDir,
+              model: modelId,
             });
           }
           return {

@@ -33,7 +33,9 @@ export type {
 export {
   calculateAuthProfileCooldownMs,
   clearAuthProfileCooldown,
+  getModelCooldownUntil,
   isProfileInCooldown,
+  isProfileInCooldownForModel,
   markAuthProfileCooldown,
   markAuthProfileFailure,
   markAuthProfileUsed,

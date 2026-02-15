@@ -43,12 +43,19 @@ export type AuthProfileFailureReason =
 /** Per-profile usage statistics for round-robin and cooldown tracking */
 export type ProfileUsageStats = {
   lastUsed?: number;
+  /** Profile-level cooldown (for auth/billing/unknown errors) */
   cooldownUntil?: number;
   disabledUntil?: number;
   disabledReason?: AuthProfileFailureReason;
   errorCount?: number;
   failureCounts?: Partial<Record<AuthProfileFailureReason, number>>;
   lastFailureAt?: number;
+  /** Per-model cooldown timestamps (model -> cooldownUntil). Used for rate_limit errors. */
+  modelCooldowns?: Record<string, number>;
+  /** Per-model error counts (model -> errorCount). Used for rate_limit backoff calculation. */
+  modelErrorCounts?: Record<string, number>;
+  /** Per-model last failure timestamps (model -> lastFailureAt). */
+  modelLastFailureAt?: Record<string, number>;
 };
 
 export type AuthProfileStore = {
