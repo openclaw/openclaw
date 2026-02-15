@@ -3,6 +3,11 @@ import path from "node:path";
 import { vi } from "vitest";
 import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
+import {
+  embeddedPiMockFactory,
+  modelFallbackMockFactory,
+  queueMockFactory,
+} from "./agent-runner.test-harness.mocks.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 // Avoid exporting vitest mock types (TS2742 under pnpm + d.ts emit).
@@ -31,19 +36,7 @@ export function getRunCliAgentMock(): AnyMock {
 export type { EmbeddedRunParams };
 
 vi.mock("../../agents/model-fallback.js", () => ({
-  runWithModelFallback: async ({
-    provider,
-    model,
-    run,
-  }: {
-    provider: string;
-    model: string;
-    run: (provider: string, model: string) => Promise<unknown>;
-  }) => ({
-    result: await run(provider, model),
-    provider,
-    model,
-  }),
+  ...modelFallbackMockFactory(),
 }));
 
 vi.mock("../../agents/cli-runner.js", () => ({
@@ -51,18 +44,10 @@ vi.mock("../../agents/cli-runner.js", () => ({
 }));
 
 vi.mock("../../agents/pi-embedded.js", () => ({
-  queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
-  runEmbeddedPiAgent: (params: unknown) => state.runEmbeddedPiAgentMock(params),
+  ...embeddedPiMockFactory(state),
 }));
 
-vi.mock("./queue.js", async () => {
-  const actual = await vi.importActual<typeof import("./queue.js")>("./queue.js");
-  return {
-    ...actual,
-    enqueueFollowupRun: vi.fn(),
-    scheduleFollowupDrain: vi.fn(),
-  };
-});
+vi.mock("./queue.js", queueMockFactory);
 
 export async function seedSessionStore(params: {
   storePath: string;
