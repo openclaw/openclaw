@@ -212,11 +212,11 @@ export async function callGateway<T = Record<string, unknown>>(
         ? typeof remote?.token === "string" && remote.token.trim().length > 0
           ? remote.token.trim()
           : undefined
-        : process.env.OPENCLAW_GATEWAY_TOKEN?.trim() ||
-          process.env.CLAWDBOT_GATEWAY_TOKEN?.trim() ||
-          (typeof authToken === "string" && authToken.trim().length > 0
+        : (typeof authToken === "string" && authToken.trim().length > 0
             ? authToken.trim()
-            : undefined)
+            : undefined) ||
+          process.env.OPENCLAW_GATEWAY_TOKEN?.trim() ||
+          process.env.CLAWDBOT_GATEWAY_TOKEN?.trim()
       : undefined);
   const password =
     explicitAuth.password ||
