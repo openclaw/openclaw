@@ -12,7 +12,9 @@ const cliDir = path.join(distDir, "cli");
 
 const findCandidates = () =>
   fs.readdirSync(distDir).filter((entry) => {
-    if (!entry.startsWith("daemon-cli-")) {
+    const isDaemonCliBundle =
+      entry === "daemon-cli.js" || entry === "daemon-cli.mjs" || entry.startsWith("daemon-cli-");
+    if (!isDaemonCliBundle) {
       return false;
     }
     // tsdown can emit either .js or .mjs depending on bundler settings/runtime.
