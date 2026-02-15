@@ -700,6 +700,10 @@ async function processMessageWithPipeline(params: {
     OriginatingTo: `googlechat:${spaceId}`,
   });
 
+  // Record session meta and update delivery context with the original-case space ID.
+  // Google Chat space IDs are case-sensitive; the session key is lowercased, so we must
+  // persist the original-case target via updateLastRoute to ensure outbound replies use
+  // the correct casing (fixes #15790).
   void core.channel.session
     .recordSessionMetaFromInbound({
       storePath,
@@ -708,6 +712,22 @@ async function processMessageWithPipeline(params: {
     })
     .catch((err) => {
       runtime.error?.(`googlechat: failed updating session meta: ${String(err)}`);
+    });
+
+  void core.channel.session
+    .updateLastRoute({
+      storePath,
+      sessionKey: route.sessionKey,
+      deliveryContext: {
+        channel: "googlechat",
+        to: `googlechat:${spaceId}`,
+        accountId: route.accountId,
+        threadId: message.thread?.name,
+      },
+      ctx: ctxPayload,
+    })
+    .catch((err) => {
+      runtime.error?.(`googlechat: failed updating last route: ${String(err)}`);
     });
 
   // Typing indicator setup
