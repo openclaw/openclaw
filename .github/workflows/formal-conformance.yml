@@ -14,6 +14,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
+      issues: write # this should be here because it doesn't work if it's not here
 
     steps:
       - name: Checkout openclaw (PR)
