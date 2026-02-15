@@ -507,7 +507,22 @@ export function resolveCallbackUrl(params: {
   if (params.config.callbackUrl) {
     return params.config.callbackUrl;
   }
-  let host = params.gatewayHost || "localhost";
+
+  const isWildcardBindHost = (rawHost: string): boolean => {
+    const trimmed = rawHost.trim();
+    if (!trimmed) return false;
+    const host = trimmed.startsWith("[") && trimmed.endsWith("]") ? trimmed.slice(1, -1) : trimmed;
+
+    // NOTE: Wildcard listen hosts are valid bind addresses but are not routable callback
+    // destinations. Don't emit callback URLs like http://0.0.0.0:3015/... or http://[::]:3015/...
+    // when an operator sets gateway.customBindHost.
+    return host === "0.0.0.0" || host === "::" || host === "0:0:0:0:0:0:0:0" || host === "::0";
+  };
+
+  let host =
+    params.gatewayHost && !isWildcardBindHost(params.gatewayHost)
+      ? params.gatewayHost
+      : "localhost";
   const path = normalizeCallbackPath(params.config.callbackPath);
 
   // Bracket IPv6 literals so the URL is valid: http://[::1]:3015/...
