@@ -451,6 +451,7 @@ export function createOpenClawCodingTools(options?: {
     wrapToolWithBeforeToolCallHook(tool, {
       agentId,
       sessionKey: options?.sessionKey,
+      membrane: options?.config?.tools?.membrane,
     }),
   );
   const withAbort = options?.abortSignal

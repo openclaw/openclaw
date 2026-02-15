@@ -7,6 +7,8 @@ import { CONFIG_DIR } from "../utils.js";
 
 export const DEFAULT_CRON_DIR = path.join(CONFIG_DIR, "cron");
 export const DEFAULT_CRON_STORE_PATH = path.join(DEFAULT_CRON_DIR, "jobs.json");
+const ATOMIC_RENAME_RETRY_CODES = new Set(["EBUSY", "EPERM", "ENOTEMPTY"]);
+const ATOMIC_RENAME_RETRY_DELAYS_MS = [20, 50, 100, 200];
 
 export function resolveCronStorePath(storePath?: string) {
   if (storePath?.trim()) {
@@ -51,11 +53,45 @@ export async function saveCronStore(storePath: string, store: CronStoreFile) {
   await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
   const tmp = `${storePath}.${process.pid}.${Math.random().toString(16).slice(2)}.tmp`;
   const json = JSON.stringify(store, null, 2);
-  await fs.promises.writeFile(tmp, json, "utf-8");
-  await fs.promises.rename(tmp, storePath);
   try {
-    await fs.promises.copyFile(storePath, `${storePath}.bak`);
-  } catch {
-    // best-effort
+    await fs.promises.writeFile(tmp, json, "utf-8");
+    await renameWithRetry(tmp, storePath);
+    try {
+      await fs.promises.copyFile(storePath, `${storePath}.bak`);
+    } catch {
+      // best-effort
+    }
+  } finally {
+    try {
+      await fs.promises.unlink(tmp);
+    } catch {
+      // best-effort cleanup when rename succeeded or temp file vanished.
+    }
+  }
+}
+
+async function renameWithRetry(from: string, to: string) {
+  let attempt = 0;
+  // Retry transient Windows file-lock races around atomic rename.
+  for (;;) {
+    try {
+      await fs.promises.rename(from, to);
+      return;
+    } catch (err) {
+      const code = err && typeof err === "object" && "code" in err ? String(err.code) : undefined;
+      if (
+        !code ||
+        !ATOMIC_RENAME_RETRY_CODES.has(code) ||
+        attempt >= ATOMIC_RENAME_RETRY_DELAYS_MS.length
+      ) {
+        throw err;
+      }
+      const delayMs = ATOMIC_RENAME_RETRY_DELAYS_MS[attempt];
+      if (delayMs === undefined) {
+        throw err;
+      }
+      attempt += 1;
+      await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+    }
   }
 }

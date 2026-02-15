@@ -75,6 +75,7 @@ export type CronJob = {
   createdAtMs: number;
   updatedAtMs: number;
   schedule: CronSchedule;
+  schedules?: CronSchedule[];
   sessionTarget: CronSessionTarget;
   wakeMode: CronWakeMode;
   payload: CronPayload;
@@ -88,6 +89,7 @@ export type CronStoreFile = {
 };
 
 export type CronJobCreate = Omit<CronJob, "id" | "createdAtMs" | "updatedAtMs" | "state"> & {
+  schedule?: CronSchedule;
   state?: Partial<CronJobState>;
 };
 

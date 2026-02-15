@@ -31,6 +31,31 @@ function resolveEveryAnchorMs(params: {
   return Math.max(0, Math.floor(params.fallbackAnchorMs));
 }
 
+function resolveJobSchedules(job: Pick<CronJob, "schedule" | "schedules">) {
+  const list = Array.isArray(job.schedules) ? job.schedules.filter(Boolean) : [];
+  if (list.length > 0) {
+    return list;
+  }
+  return [job.schedule];
+}
+
+function ensureScheduleAnchors(
+  schedules: CronJob["schedules"],
+  fallbackAnchorMs: number,
+): NonNullable<CronJob["schedules"]> {
+  return (schedules ?? []).map((schedule) =>
+    schedule.kind === "every"
+      ? {
+          ...schedule,
+          anchorMs: resolveEveryAnchorMs({
+            schedule,
+            fallbackAnchorMs,
+          }),
+        }
+      : schedule,
+  );
+}
+
 export function assertSupportedJobSpec(job: Pick<CronJob, "sessionTarget" | "payload">) {
   if (job.sessionTarget === "main" && job.payload.kind !== "systemEvent") {
     throw new Error('main cron jobs require payload.kind="systemEvent"');
@@ -58,33 +83,49 @@ export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | und
   if (!job.enabled) {
     return undefined;
   }
-  if (job.schedule.kind === "every") {
-    const anchorMs = resolveEveryAnchorMs({
-      schedule: job.schedule,
-      fallbackAnchorMs: job.createdAtMs,
-    });
-    return computeNextRunAtMs({ ...job.schedule, anchorMs }, nowMs);
-  }
-  if (job.schedule.kind === "at") {
-    // One-shot jobs stay due until they successfully finish.
-    if (job.state.lastStatus === "ok" && job.state.lastRunAtMs) {
-      return undefined;
+  const schedules = resolveJobSchedules(job);
+  const candidates: number[] = [];
+  for (const schedule of schedules) {
+    if (schedule.kind === "every") {
+      const anchorMs = resolveEveryAnchorMs({
+        schedule,
+        fallbackAnchorMs: job.createdAtMs,
+      });
+      const next = computeNextRunAtMs({ ...schedule, anchorMs }, nowMs);
+      if (typeof next === "number" && Number.isFinite(next)) {
+        candidates.push(next);
+      }
+      continue;
     }
-    // Handle both canonical `at` (string) and legacy `atMs` (number) fields.
-    // The store migration should convert atMs→at, but be defensive in case
-    // the migration hasn't run yet or was bypassed.
-    const schedule = job.schedule as { at?: string; atMs?: number | string };
-    const atMs =
-      typeof schedule.atMs === "number" && Number.isFinite(schedule.atMs) && schedule.atMs > 0
-        ? schedule.atMs
-        : typeof schedule.atMs === "string"
-          ? parseAbsoluteTimeMs(schedule.atMs)
-          : typeof schedule.at === "string"
-            ? parseAbsoluteTimeMs(schedule.at)
-            : null;
-    return atMs !== null ? atMs : undefined;
+    if (schedule.kind === "at") {
+      if (job.state.lastStatus === "ok" && job.state.lastRunAtMs) {
+        continue;
+      }
+      const atSchedule = schedule as { at?: string; atMs?: number | string };
+      const atMs =
+        typeof atSchedule.atMs === "number" &&
+        Number.isFinite(atSchedule.atMs) &&
+        atSchedule.atMs > 0
+          ? atSchedule.atMs
+          : typeof atSchedule.atMs === "string"
+            ? parseAbsoluteTimeMs(atSchedule.atMs)
+            : typeof atSchedule.at === "string"
+              ? parseAbsoluteTimeMs(atSchedule.at)
+              : null;
+      if (atMs !== null) {
+        candidates.push(atMs);
+      }
+      continue;
+    }
+    const next = computeNextRunAtMs(schedule, nowMs);
+    if (typeof next === "number" && Number.isFinite(next)) {
+      candidates.push(next);
+    }
   }
-  return computeNextRunAtMs(job.schedule, nowMs);
+  if (candidates.length === 0) {
+    return undefined;
+  }
+  return Math.min(...candidates);
 }
 
 /** Maximum consecutive schedule errors before auto-disabling a job. */
@@ -220,7 +261,12 @@ export function recomputeNextRunsForMaintenance(state: CronServiceState): boolea
 
 export function nextWakeAtMs(state: CronServiceState) {
   const jobs = state.store?.jobs ?? [];
-  const enabled = jobs.filter((j) => j.enabled && typeof j.state.nextRunAtMs === "number");
+  const enabled = jobs.filter(
+    (j) =>
+      j.enabled &&
+      typeof j.state.nextRunAtMs === "number" &&
+      typeof j.state.runningAtMs !== "number",
+  );
   if (enabled.length === 0) {
     return undefined;
   }
@@ -233,16 +279,19 @@ export function nextWakeAtMs(state: CronServiceState) {
 export function createJob(state: CronServiceState, input: CronJobCreate): CronJob {
   const now = state.deps.nowMs();
   const id = crypto.randomUUID();
-  const schedule =
-    input.schedule.kind === "every"
-      ? {
-          ...input.schedule,
-          anchorMs: resolveEveryAnchorMs({
-            schedule: input.schedule,
-            fallbackAnchorMs: now,
-          }),
-        }
-      : input.schedule;
+  const rawSchedules = Array.isArray(input.schedules)
+    ? input.schedules.filter(Boolean)
+    : input.schedule
+      ? [input.schedule]
+      : [];
+  if (rawSchedules.length === 0) {
+    throw new Error("cron job requires at least one schedule");
+  }
+  const schedules = ensureScheduleAnchors(rawSchedules, now);
+  const schedule = schedules[0];
+  if (!schedule) {
+    throw new Error("cron job requires at least one schedule");
+  }
   const deleteAfterRun =
     typeof input.deleteAfterRun === "boolean"
       ? input.deleteAfterRun
@@ -260,6 +309,7 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
     createdAtMs: now,
     updatedAtMs: now,
     schedule,
+    schedules,
     sessionTarget: input.sessionTarget,
     wakeMode: input.wakeMode,
     payload: input.payload,
@@ -288,7 +338,38 @@ export function applyJobPatch(job: CronJob, patch: CronJobPatch) {
     job.deleteAfterRun = patch.deleteAfterRun;
   }
   if (patch.schedule) {
-    job.schedule = patch.schedule;
+    const normalizedSchedules = ensureScheduleAnchors(
+      [patch.schedule],
+      typeof job.createdAtMs === "number" && Number.isFinite(job.createdAtMs)
+        ? job.createdAtMs
+        : Date.now(),
+    );
+    const normalized = normalizedSchedules[0];
+    if (!normalized) {
+      throw new Error("cron.update schedule normalization failed");
+    }
+    job.schedule = normalized;
+    if (Array.isArray(job.schedules) && job.schedules.length > 0) {
+      job.schedules = [normalized, ...job.schedules.slice(1)];
+    } else {
+      job.schedules = [normalized];
+    }
+  }
+  if (Array.isArray((patch as { schedules?: unknown }).schedules)) {
+    const schedules = ensureScheduleAnchors(
+      ((patch as { schedules?: CronJob["schedules"] }).schedules ?? []).filter(Boolean),
+      typeof job.createdAtMs === "number" && Number.isFinite(job.createdAtMs)
+        ? job.createdAtMs
+        : Date.now(),
+    );
+    if (schedules.length > 0) {
+      job.schedules = schedules;
+      const firstSchedule = schedules[0];
+      if (!firstSchedule) {
+        throw new Error("cron.update schedules normalization failed");
+      }
+      job.schedule = firstSchedule;
+    }
   }
   if (patch.sessionTarget) {
     job.sessionTarget = patch.sessionTarget;

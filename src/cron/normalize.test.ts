@@ -123,6 +123,24 @@ describe("normalizeCronJobCreate", () => {
     expect(schedule.at).toBe(new Date(Date.parse("2026-01-12T18:00:00Z")).toISOString());
   });
 
+  it("normalizes schedules[] and keeps schedule in sync with the first entry", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "multi",
+      schedules: [{ at: "2026-01-12T18:00:00" }, { kind: "cron", expr: "30 * * * *" }],
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: {
+        kind: "systemEvent",
+        text: "hi",
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const schedules = normalized.schedules as Array<Record<string, unknown>>;
+    expect(Array.isArray(schedules)).toBe(true);
+    expect(schedules[0]?.kind).toBe("at");
+    expect((normalized.schedule as Record<string, unknown>).kind).toBe("at");
+  });
+
   it("defaults deleteAfterRun for one-shot schedules", () => {
     const normalized = normalizeCronJobCreate({
       name: "default delete",

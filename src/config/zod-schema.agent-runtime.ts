@@ -554,6 +554,14 @@ export const ToolsSchema = z
       })
       .strict()
       .optional(),
+    membrane: z
+      .object({
+        enabled: z.boolean().optional(),
+        denyTools: z.array(z.string()).optional(),
+        denyCommandSubstrings: z.array(z.string()).optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .superRefine((value, ctx) => {

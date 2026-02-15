@@ -39,6 +39,7 @@ import { applyMergePatch } from "./merge-patch.js";
 import { normalizeConfigPaths } from "./normalize-paths.js";
 import { resolveConfigPath, resolveDefaultConfigCandidates, resolveStateDir } from "./paths.js";
 import { applyConfigOverrides } from "./runtime-overrides.js";
+import { resolveConfigSecrets } from "./secret-resolver.js";
 import {
   validateConfigObjectRawWithPlugins,
   validateConfigObjectWithPlugins,
@@ -506,7 +507,7 @@ function resolveConfigForRead(
   }
 
   return {
-    resolvedConfigRaw: resolveConfigEnvVars(resolvedIncludes, env),
+    resolvedConfigRaw: resolveConfigSecrets(resolveConfigEnvVars(resolvedIncludes, env)),
     // Capture env snapshot after substitution for write-time ${VAR} restoration.
     envSnapshotForRestore: { ...env } as Record<string, string | undefined>,
   };

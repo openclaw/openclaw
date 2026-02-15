@@ -612,6 +612,75 @@ If more than one person can DM your bot (multiple entries in `allowFrom`, pairin
 }
 ```
 
+### Priority 3 hardening snippets
+
+```json5
+{
+  // 1) Resolve secrets from 1Password/Vault at config load time
+  models: {
+    providers: {
+      openrouter: {
+        apiKey: "op://Private/OpenRouter/token",
+      },
+    },
+  },
+  gateway: {
+    auth: {
+      token: "vault://kv/openclaw#token",
+    },
+  },
+}
+```
+
+```json5
+{
+  // 2) Membrane checks before tool calls
+  tools: {
+    membrane: {
+      enabled: true,
+      denyTools: ["browser.open", "exec"],
+      denyCommandSubstrings: ["rm -rf", "curl | sh"],
+    },
+  },
+}
+```
+
+```json5
+{
+  // 3) Smart model routing for simple vs complex requests
+  agents: {
+    defaults: {
+      modelRouting: {
+        enabled: true,
+        simpleModel: "openai/gpt-5.2-mini",
+        complexModel: "anthropic/claude-sonnet-4-5",
+        simpleMaxChars: 240,
+      },
+    },
+  },
+}
+```
+
+```json5
+{
+  // 4) Session-memory fact-check gate
+  hooks: {
+    internal: {
+      entries: {
+        "session-memory": {
+          enabled: true,
+          factCheck: {
+            enabled: true,
+            minUserMessages: 1,
+            minAssistantMessages: 1,
+          },
+        },
+      },
+    },
+  },
+}
+```
+
 ## Tips
 
 - If you set `dmPolicy: "open"`, the matching `allowFrom` list must include `"*"`.

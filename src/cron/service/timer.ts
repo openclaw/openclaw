@@ -22,6 +22,7 @@ const MAX_TIMER_DELAY_MS = 60_000;
  * from wedging the entire cron lane.
  */
 const DEFAULT_JOB_TIMEOUT_MS = 10 * 60_000; // 10 minutes
+const MAX_JOB_TIMEOUT_MS = 24 * 60 * 60_000; // 24 hours safety cap
 
 /**
  * Exponential backoff delays (in ms) indexed by consecutive error count.
@@ -38,6 +39,18 @@ const ERROR_BACKOFF_SCHEDULE_MS = [
 function errorBackoffMs(consecutiveErrors: number): number {
   const idx = Math.min(consecutiveErrors - 1, ERROR_BACKOFF_SCHEDULE_MS.length - 1);
   return ERROR_BACKOFF_SCHEDULE_MS[Math.max(0, idx)];
+}
+
+function resolveJobTimeoutMs(job: CronJob): number {
+  if (job.payload.kind !== "agentTurn") {
+    return DEFAULT_JOB_TIMEOUT_MS;
+  }
+  const timeoutSeconds = job.payload.timeoutSeconds;
+  if (typeof timeoutSeconds !== "number" || !Number.isFinite(timeoutSeconds)) {
+    return DEFAULT_JOB_TIMEOUT_MS;
+  }
+  const normalized = Math.max(1, Math.floor(timeoutSeconds));
+  return Math.min(normalized * 1_000, MAX_JOB_TIMEOUT_MS);
 }
 
 /**
@@ -133,8 +146,32 @@ export function armTimer(state: CronServiceState) {
     const withNextRun =
       state.store?.jobs.filter((j) => j.enabled && typeof j.state.nextRunAtMs === "number")
         .length ?? 0;
+    const blockedRunningCount =
+      state.store?.jobs.filter(
+        (j) =>
+          j.enabled &&
+          typeof j.state.nextRunAtMs === "number" &&
+          typeof j.state.runningAtMs === "number",
+      ).length ?? 0;
+    // Keep a periodic maintenance tick when all enabled jobs are currently
+    // marked as running. This avoids a zero-delay spin loop and also allows
+    // stale running markers to recover without requiring a restart.
+    if (blockedRunningCount > 0) {
+      state.timer = setTimeout(async () => {
+        try {
+          await onTimer(state);
+        } catch (err) {
+          state.deps.log.error({ err: String(err) }, "cron: timer tick failed");
+        }
+      }, MAX_TIMER_DELAY_MS);
+      state.deps.log.debug(
+        { jobCount, enabledCount, withNextRun, blockedRunningCount, delayMs: MAX_TIMER_DELAY_MS },
+        "cron: armTimer set maintenance tick for running jobs",
+      );
+      return;
+    }
     state.deps.log.debug(
-      { jobCount, enabledCount, withNextRun },
+      { jobCount, enabledCount, withNextRun, blockedRunningCount },
       "cron: armTimer skipped - no jobs with nextRunAtMs",
     );
     return;
@@ -227,10 +264,7 @@ export async function onTimer(state: CronServiceState) {
       job.state.runningAtMs = startedAt;
       emit(state, { jobId: job.id, action: "started", runAtMs: startedAt });
 
-      const jobTimeoutMs =
-        job.payload.kind === "agentTurn" && typeof job.payload.timeoutSeconds === "number"
-          ? job.payload.timeoutSeconds * 1_000
-          : DEFAULT_JOB_TIMEOUT_MS;
+      const jobTimeoutMs = resolveJobTimeoutMs(job);
 
       try {
         let timeoutId: NodeJS.Timeout;

@@ -123,6 +123,7 @@ export const CronJobSchema = Type.Object(
     createdAtMs: Type.Integer({ minimum: 0 }),
     updatedAtMs: Type.Integer({ minimum: 0 }),
     schedule: CronScheduleSchema,
+    schedules: Type.Optional(Type.Array(CronScheduleSchema, { minItems: 1 })),
     sessionTarget: Type.Union([Type.Literal("main"), Type.Literal("isolated")]),
     wakeMode: Type.Union([Type.Literal("next-heartbeat"), Type.Literal("now")]),
     payload: CronPayloadSchema,
@@ -141,21 +142,36 @@ export const CronListParamsSchema = Type.Object(
 
 export const CronStatusParamsSchema = Type.Object({}, { additionalProperties: false });
 
-export const CronAddParamsSchema = Type.Object(
-  {
-    name: NonEmptyString,
-    agentId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
-    description: Type.Optional(Type.String()),
-    enabled: Type.Optional(Type.Boolean()),
-    deleteAfterRun: Type.Optional(Type.Boolean()),
-    schedule: CronScheduleSchema,
-    sessionTarget: Type.Union([Type.Literal("main"), Type.Literal("isolated")]),
-    wakeMode: Type.Union([Type.Literal("next-heartbeat"), Type.Literal("now")]),
-    payload: CronPayloadSchema,
-    delivery: Type.Optional(CronDeliverySchema),
-  },
-  { additionalProperties: false },
-);
+const CronAddParamsBaseSchema = {
+  name: NonEmptyString,
+  agentId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+  description: Type.Optional(Type.String()),
+  enabled: Type.Optional(Type.Boolean()),
+  deleteAfterRun: Type.Optional(Type.Boolean()),
+  sessionTarget: Type.Union([Type.Literal("main"), Type.Literal("isolated")]),
+  wakeMode: Type.Union([Type.Literal("next-heartbeat"), Type.Literal("now")]),
+  payload: CronPayloadSchema,
+  delivery: Type.Optional(CronDeliverySchema),
+} as const;
+
+export const CronAddParamsSchema = Type.Union([
+  Type.Object(
+    {
+      ...CronAddParamsBaseSchema,
+      schedule: CronScheduleSchema,
+      schedules: Type.Optional(Type.Array(CronScheduleSchema, { minItems: 1 })),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      ...CronAddParamsBaseSchema,
+      schedules: Type.Array(CronScheduleSchema, { minItems: 1 }),
+      schedule: Type.Optional(CronScheduleSchema),
+    },
+    { additionalProperties: false },
+  ),
+]);
 
 export const CronJobPatchSchema = Type.Object(
   {
@@ -165,6 +181,7 @@ export const CronJobPatchSchema = Type.Object(
     enabled: Type.Optional(Type.Boolean()),
     deleteAfterRun: Type.Optional(Type.Boolean()),
     schedule: Type.Optional(CronScheduleSchema),
+    schedules: Type.Optional(Type.Array(CronScheduleSchema, { minItems: 1 })),
     sessionTarget: Type.Optional(Type.Union([Type.Literal("main"), Type.Literal("isolated")])),
     wakeMode: Type.Optional(Type.Union([Type.Literal("next-heartbeat"), Type.Literal("now")])),
     payload: Type.Optional(CronPayloadPatchSchema),

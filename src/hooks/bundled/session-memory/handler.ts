@@ -19,6 +19,11 @@ import { resolveHookConfig } from "../../config.js";
 import { generateSlugViaLLM } from "../../llm-slug-generator.js";
 
 const log = createSubsystemLogger("hooks/session-memory");
+type SessionMemoryFactCheckConfig = {
+  enabled?: boolean;
+  minUserMessages?: number;
+  minAssistantMessages?: number;
+};
 
 /**
  * Read recent messages from session file for slug generation
@@ -65,6 +70,22 @@ async function getRecentSessionContent(
   } catch {
     return null;
   }
+}
+
+function passesFactCheck(
+  sessionContent: string,
+  cfg: {
+    minUserMessages: number;
+    minAssistantMessages: number;
+  },
+): boolean {
+  const lines = sessionContent
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const userCount = lines.filter((line) => line.startsWith("user:")).length;
+  const assistantCount = lines.filter((line) => line.startsWith("assistant:")).length;
+  return userCount >= cfg.minUserMessages && assistantCount >= cfg.minAssistantMessages;
 }
 
 /**
@@ -139,6 +160,25 @@ const saveSessionToMemory: HookHandler = async (event) => {
         // Use LLM to generate a descriptive slug
         slug = await generateSlugViaLLM({ sessionContent, cfg });
         log.debug("Generated slug", { slug });
+      }
+
+      const factCheck = hookConfig?.factCheck as SessionMemoryFactCheckConfig | undefined;
+      if (factCheck?.enabled === true && sessionContent) {
+        const minUserMessages =
+          typeof factCheck.minUserMessages === "number" && factCheck.minUserMessages > 0
+            ? Math.floor(factCheck.minUserMessages)
+            : 1;
+        const minAssistantMessages =
+          typeof factCheck.minAssistantMessages === "number" && factCheck.minAssistantMessages > 0
+            ? Math.floor(factCheck.minAssistantMessages)
+            : 1;
+        if (!passesFactCheck(sessionContent, { minUserMessages, minAssistantMessages })) {
+          log.warn("session-memory fact-check failed; skipping memory write", {
+            minUserMessages,
+            minAssistantMessages,
+          });
+          return;
+        }
       }
     }
 

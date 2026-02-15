@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CronJob } from "./types.js";
 import { createCronServiceState } from "./service/state.js";
-import { onTimer } from "./service/timer.js";
+import { armTimer, onTimer } from "./service/timer.js";
 
 const noopLogger = {
   debug: vi.fn(),
@@ -100,6 +100,46 @@ describe("CronService - timer re-arm when running (#12025)", () => {
     // state.running should still be true (onTimer bailed out, didn't
     // touch it — the original caller's finally block handles that).
     expect(state.running).toBe(true);
+
+    timeoutSpy.mockRestore();
+    await store.cleanup();
+  });
+
+  it("schedules a 60s maintenance tick when all next runs are blocked by running markers", async () => {
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const store = await makeStorePath();
+    const now = Date.parse("2026-02-06T10:05:00.000Z");
+
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "ok" }),
+    });
+    state.store = {
+      version: 1,
+      jobs: [
+        {
+          ...createDueRecurringJob({
+            id: "blocked-running",
+            nowMs: now,
+            nextRunAtMs: now - 1,
+          }),
+          state: { nextRunAtMs: now - 1, runningAtMs: now - 1_000 },
+        },
+      ],
+    };
+
+    armTimer(state);
+
+    expect(state.timer).not.toBeNull();
+    const delays = timeoutSpy.mock.calls
+      .map(([, delay]) => delay)
+      .filter((d): d is number => typeof d === "number");
+    expect(delays).toContain(60_000);
 
     timeoutSpy.mockRestore();
     await store.cleanup();

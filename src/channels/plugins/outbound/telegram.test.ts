@@ -2,6 +2,18 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { telegramOutbound } from "./telegram.js";
 
+const sendPollTelegramMock = vi.fn();
+
+vi.mock("../../../telegram/send.js", async () => {
+  const actual = await vi.importActual<typeof import("../../../telegram/send.js")>(
+    "../../../telegram/send.js",
+  );
+  return {
+    ...actual,
+    sendPollTelegram: (...args: unknown[]) => sendPollTelegramMock(...args),
+  };
+});
+
 describe("telegramOutbound.sendPayload", () => {
   it("sends text payload with buttons", async () => {
     const sendTelegram = vi.fn(async () => ({ messageId: "m1", chatId: "c1" }));
@@ -76,5 +88,47 @@ describe("telegramOutbound.sendPayload", () => {
     );
     expect(secondOpts?.buttons).toBeUndefined();
     expect(result).toEqual({ channel: "telegram", messageId: "m2", chatId: "c1" });
+  });
+});
+
+describe("telegramOutbound.sendPoll", () => {
+  it("forwards poll params to sendPollTelegram", async () => {
+    sendPollTelegramMock.mockReset();
+    sendPollTelegramMock.mockResolvedValue({
+      messageId: "p1",
+      chatId: "c1",
+      pollId: "poll1",
+    });
+
+    const result = await telegramOutbound.sendPoll?.({
+      cfg: {} as OpenClawConfig,
+      to: "telegram:123",
+      poll: {
+        question: "Snack?",
+        options: ["Pizza", "Sushi"],
+        maxSelections: 1,
+      },
+      accountId: "acc1",
+      threadId: "99",
+      silent: true,
+      isAnonymous: false,
+    });
+
+    expect(sendPollTelegramMock).toHaveBeenCalledTimes(1);
+    expect(sendPollTelegramMock).toHaveBeenCalledWith(
+      "telegram:123",
+      {
+        question: "Snack?",
+        options: ["Pizza", "Sushi"],
+        maxSelections: 1,
+      },
+      {
+        accountId: "acc1",
+        messageThreadId: 99,
+        silent: true,
+        isAnonymous: false,
+      },
+    );
+    expect(result).toEqual({ messageId: "p1", chatId: "c1", pollId: "poll1" });
   });
 });
