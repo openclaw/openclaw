@@ -4,8 +4,8 @@ import { formatTokenCount } from "../utils/usage-format.js";
 
 const REPLACEMENT_CHAR_RE = /\uFFFD/g;
 const MAX_TOKEN_CHARS = 32;
-const LONG_TOKEN_RE = /\S{33,}/g;
-const LONG_TOKEN_TEST_RE = /\S{33,}/;
+const LONG_TOKEN_RE = /[^\s\u200B]{33,}/g;
+const LONG_TOKEN_TEST_RE = /[^\s\u200B]{33,}/;
 const BINARY_LINE_REPLACEMENT_THRESHOLD = 12;
 
 function hasControlChars(text: string): boolean {

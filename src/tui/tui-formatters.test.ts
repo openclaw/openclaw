@@ -172,4 +172,26 @@ describe("sanitizeRenderableText", () => {
     expect(sanitized).not.toContain(" ");
     expect(sanitized.replace(/\u200B/g, "")).toBe(path);
   });
+
+  it("is idempotent — calling twice produces the same result", () => {
+    const input = "x".repeat(100);
+    const once = sanitizeRenderableText(input);
+    const twice = sanitizeRenderableText(once);
+
+    expect(twice).toBe(once);
+  });
+
+  it("leaves short tokens untouched", () => {
+    const input = "short token here";
+    expect(sanitizeRenderableText(input)).toBe(input);
+  });
+
+  it("preserves spaces between normal words with one long token", () => {
+    const input = "prefix " + "z".repeat(50) + " suffix";
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toContain("prefix ");
+    expect(sanitized).toContain(" suffix");
+    expect(sanitized.replace(/\u200B/g, "")).toBe(input);
+  });
 });
