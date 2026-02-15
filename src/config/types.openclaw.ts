@@ -104,6 +104,8 @@ export type OpenClawConfig = {
         project: string;
         /** Cache TTL in seconds. Default: 300 (5 minutes). */
         cacheTtlSeconds?: number;
+        /** Path to service account key file. If omitted, uses ADC. */
+        credentialsFile?: string;
       };
     };
   };

@@ -89,21 +89,24 @@ export class GcpSecretProvider implements SecretProvider {
   public readonly name = "gcp";
   private readonly project: string;
   private readonly cacheTtlMs: number;
+  private readonly credentialsFile?: string;
   constructor(config: { project: string; cacheTtlSeconds?: number; credentialsFile?: string }) {
     this.project = config.project;
     this.cacheTtlMs = (config.cacheTtlSeconds ?? 300) * 1000;
+    this.credentialsFile = config.credentialsFile;
   }
 
   private async getClient(): Promise<unknown> {
     try {
       const mod = await import("@google-cloud/secret-manager");
       const Ctor = mod.SecretManagerServiceClient;
-      // Support both `new Ctor()` (real) and mock functions that don't support `new`
+      const opts = this.credentialsFile ? { keyFilename: this.credentialsFile } : {};
+      // Support both `new Ctor(opts)` (real) and mock functions that don't support `new`
       try {
-        return new (Ctor as unknown as new () => unknown)();
+        return new (Ctor as unknown as new (o: Record<string, unknown>) => unknown)(opts);
       } catch {
         // Fallback for mock functions that don't support new operator
-        return (Ctor as unknown as new () => unknown)();
+        return (Ctor as unknown as (o: Record<string, unknown>) => unknown)(opts);
       }
     } catch {
       throw new Error(

@@ -639,6 +639,7 @@ export const OpenClawSchema = z
               .object({
                 project: z.string(),
                 cacheTtlSeconds: z.number().int().nonnegative().optional(),
+                credentialsFile: z.string().optional(),
               })
               .strict()
               .optional(),
