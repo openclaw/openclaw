@@ -27,10 +27,19 @@ export type ChatEventPayload = {
   errorMessage?: string;
 };
 
-export async function loadChatHistory(state: ChatState) {
+export async function loadChatHistory(state: ChatState, opts?: { preserveLocalUser?: boolean }) {
   if (!state.client || !state.connected) {
     return;
   }
+
+  // Capture local user messages that may not be on server yet
+  const localUserMessages = opts?.preserveLocalUser
+    ? state.chatMessages.filter((m: unknown) => {
+        const msg = m as Record<string, unknown>;
+        return msg.role === "user" && !msg.id;
+      })
+    : [];
+
   state.chatLoading = true;
   state.lastError = null;
   try {
@@ -41,7 +50,21 @@ export async function loadChatHistory(state: ChatState) {
         limit: 200,
       },
     );
-    state.chatMessages = Array.isArray(res.messages) ? res.messages : [];
+    const serverMessages = Array.isArray(res.messages) ? res.messages : [];
+
+    // Merge local user messages that aren't in server response (by timestamp)
+    if (localUserMessages.length > 0) {
+      const serverTimestamps = new Set(
+        serverMessages.map((m: unknown) => (m as Record<string, unknown>).timestamp),
+      );
+      const missingLocal = localUserMessages.filter(
+        (m: unknown) => !serverTimestamps.has((m as Record<string, unknown>).timestamp),
+      );
+      state.chatMessages = [...serverMessages, ...missingLocal];
+    } else {
+      state.chatMessages = serverMessages;
+    }
+
     state.chatThinkingLevel = res.thinkingLevel ?? null;
   } catch (err) {
     state.lastError = String(err);
