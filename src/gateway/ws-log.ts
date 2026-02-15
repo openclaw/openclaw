@@ -25,6 +25,25 @@ const wsInflightOptimized = new Map<string, number>();
 const wsInflightSince = new Map<string, number>();
 const wsLog = createSubsystemLogger("gateway/ws");
 
+const WS_META_SKIP_KEYS = new Set(["connId", "id", "method", "ok", "event"]);
+
+function collectWsRestMeta(meta?: Record<string, unknown>): string[] {
+  const restMeta: string[] = [];
+  if (!meta) {
+    return restMeta;
+  }
+  for (const [key, value] of Object.entries(meta)) {
+    if (value === undefined) {
+      continue;
+    }
+    if (WS_META_SKIP_KEYS.has(key)) {
+      continue;
+    }
+    restMeta.push(`${chalk.dim(key)}=${formatForLog(value)}`);
+  }
+  return restMeta;
+}
+
 export function shouldLogWs(): boolean {
   return shouldLogSubsystemToConsole("gateway/ws");
 }
@@ -252,24 +271,7 @@ export function logWs(direction: "in" | "out", kind: string, meta?: Record<strin
 
   const durationToken = typeof durationMs === "number" ? chalk.dim(`${durationMs}ms`) : undefined;
 
-  const restMeta: string[] = [];
-  if (meta) {
-    for (const [key, value] of Object.entries(meta)) {
-      if (value === undefined) {
-        continue;
-      }
-      if (key === "connId" || key === "id") {
-        continue;
-      }
-      if (key === "method" || key === "ok") {
-        continue;
-      }
-      if (key === "event") {
-        continue;
-      }
-      restMeta.push(`${chalk.dim(key)}=${formatForLog(value)}`);
-    }
-  }
+  const restMeta = collectWsRestMeta(meta);
 
   const trailing: string[] = [];
   if (connId) {
@@ -336,21 +338,7 @@ function logWsOptimized(direction: "in" | "out", kind: string, meta?: Record<str
     ok === undefined ? undefined : ok ? chalk.greenBright("✓") : chalk.redBright("✗");
   const durationToken = typeof durationMs === "number" ? chalk.dim(`${durationMs}ms`) : undefined;
 
-  const restMeta: string[] = [];
-  if (meta) {
-    for (const [key, value] of Object.entries(meta)) {
-      if (value === undefined) {
-        continue;
-      }
-      if (key === "connId" || key === "id") {
-        continue;
-      }
-      if (key === "method" || key === "ok") {
-        continue;
-      }
-      restMeta.push(`${chalk.dim(key)}=${formatForLog(value)}`);
-    }
-  }
+  const restMeta = collectWsRestMeta(meta);
 
   const tokens = [
     `${chalk.yellowBright("⇄")} ${chalk.bold("res")}`,
@@ -417,24 +405,7 @@ function logWsCompact(direction: "in" | "out", kind: string, meta?: Record<strin
         ? chalk.bold(meta.event)
         : undefined;
 
-  const restMeta: string[] = [];
-  if (meta) {
-    for (const [key, value] of Object.entries(meta)) {
-      if (value === undefined) {
-        continue;
-      }
-      if (key === "connId" || key === "id") {
-        continue;
-      }
-      if (key === "method" || key === "ok") {
-        continue;
-      }
-      if (key === "event") {
-        continue;
-      }
-      restMeta.push(`${chalk.dim(key)}=${formatForLog(value)}`);
-    }
-  }
+  const restMeta = collectWsRestMeta(meta);
 
   const trailing: string[] = [];
   if (connId && connId !== wsLastCompactConnId) {
