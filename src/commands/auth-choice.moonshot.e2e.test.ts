@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
+import { captureEnv } from "../test-utils/env.js";
 import { applyAuthChoice } from "./auth-choice.js";
 
 const noopAsync = async () => {};
@@ -42,10 +43,12 @@ function createPrompter(overrides: Partial<WizardPrompter>): WizardPrompter {
 }
 
 describe("applyAuthChoice (moonshot)", () => {
-  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-  const previousAgentDir = process.env.OPENCLAW_AGENT_DIR;
-  const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
-  const previousMoonshotKey = process.env.MOONSHOT_API_KEY;
+  const envSnapshot = captureEnv([
+    "OPENCLAW_STATE_DIR",
+    "OPENCLAW_AGENT_DIR",
+    "PI_CODING_AGENT_DIR",
+    "MOONSHOT_API_KEY",
+  ]);
   let tempStateDir: string | null = null;
 
   async function setupTempState() {
@@ -61,26 +64,7 @@ describe("applyAuthChoice (moonshot)", () => {
       await fs.rm(tempStateDir, { recursive: true, force: true });
       tempStateDir = null;
     }
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    }
-    if (previousAgentDir === undefined) {
-      delete process.env.OPENCLAW_AGENT_DIR;
-    } else {
-      process.env.OPENCLAW_AGENT_DIR = previousAgentDir;
-    }
-    if (previousPiAgentDir === undefined) {
-      delete process.env.PI_CODING_AGENT_DIR;
-    } else {
-      process.env.PI_CODING_AGENT_DIR = previousPiAgentDir;
-    }
-    if (previousMoonshotKey === undefined) {
-      delete process.env.MOONSHOT_API_KEY;
-    } else {
-      process.env.MOONSHOT_API_KEY = previousMoonshotKey;
-    }
+    envSnapshot.restore();
   });
 
   it("keeps the .cn baseUrl when setDefaultModel is false", async () => {
