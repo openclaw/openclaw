@@ -95,6 +95,36 @@ describe("resolveSandboxFsPathWithMounts", () => {
     expect(resolved.writable).toBe(true);
   });
 
+  it("marks workspace writable when workspaceAccess is none", () => {
+    const sandbox = createSandbox({
+      workspaceAccess: "none",
+      workspaceDir: "/tmp/sandbox-workspace",
+      agentWorkspaceDir: "/tmp/agent-workspace",
+    });
+    const mounts = buildSandboxFsMounts(sandbox);
+    const resolved = resolveSandboxFsPathWithMounts({
+      filePath: "src/data/content.ts",
+      cwd: sandbox.workspaceDir,
+      defaultWorkspaceRoot: sandbox.workspaceDir,
+      defaultContainerRoot: sandbox.containerWorkdir,
+      mounts,
+    });
+    expect(resolved.writable).toBe(true);
+  });
+
+  it("marks workspace read-only when workspaceAccess is ro", () => {
+    const sandbox = createSandbox({ workspaceAccess: "ro" });
+    const mounts = buildSandboxFsMounts(sandbox);
+    const resolved = resolveSandboxFsPathWithMounts({
+      filePath: "src/index.ts",
+      cwd: sandbox.workspaceDir,
+      defaultWorkspaceRoot: sandbox.workspaceDir,
+      defaultContainerRoot: sandbox.containerWorkdir,
+      mounts,
+    });
+    expect(resolved.writable).toBe(false);
+  });
+
   it("preserves legacy sandbox-root error for outside paths", () => {
     const sandbox = createSandbox();
     const mounts = buildSandboxFsMounts(sandbox);

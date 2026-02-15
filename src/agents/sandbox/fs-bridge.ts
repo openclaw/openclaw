@@ -229,7 +229,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
 }
 
 function allowsWrites(access: SandboxWorkspaceAccess): boolean {
-  return access === "rw";
+  return access !== "ro";
 }
 
 function coerceStatType(typeRaw?: string): "file" | "directory" | "other" {
