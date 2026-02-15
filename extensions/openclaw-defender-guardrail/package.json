@@ -1,0 +1,16 @@
+{
+  "name": "@openclaw/openclaw-defender-guardrail",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Guardrail layer for openclaw-defender: check-command and check-network in before_tool_call (defense in depth with core gates)",
+  "type": "module",
+  "main": "index.ts",
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

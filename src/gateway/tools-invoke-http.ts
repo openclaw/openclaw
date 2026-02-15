@@ -22,6 +22,7 @@ import { logWarn } from "../logger.js";
 import { isTestDefaultMemorySlotDisabled } from "../plugins/config-state.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
+import { isKillSwitchActive, resolveDefenderWorkspace } from "../security/defender-client.js";
 import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "../security/dangerous-tools.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { authorizeGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
@@ -163,6 +164,20 @@ export async function handleToolsInvokeHttpRequest(
     return true;
   }
   const body = (bodyUnknown ?? {}) as ToolsInvokeBody;
+
+  // Defender kill switch: if .kill-switch exists in workspace, refuse all tool invocations
+  const defenderWorkspace = resolveDefenderWorkspace();
+  if (await isKillSwitchActive(defenderWorkspace)) {
+    sendJson(res, 503, {
+      ok: false,
+      error: {
+        type: "service_unavailable",
+        message:
+          "KILL_SWITCH_ACTIVE: All tool operations are disabled. Remove workspace .kill-switch to resume.",
+      },
+    });
+    return true;
+  }
 
   const toolName = typeof body.tool === "string" ? body.tool.trim() : "";
   if (!toolName) {

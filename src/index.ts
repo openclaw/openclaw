@@ -31,6 +31,7 @@ import { assertSupportedRuntime } from "./infra/runtime-guard.js";
 import { installUnhandledRejectionHandler } from "./infra/unhandled-rejections.js";
 import { enableConsoleCapture } from "./logging.js";
 import { runCommandWithTimeout, runExec } from "./process/exec.js";
+import { resolveDefenderWorkspace, runDefenderRuntimeMonitor } from "./security/defender-client.js";
 import { assertWebChannel, normalizeE164, toWhatsappJid } from "./utils.js";
 
 loadDotEnv({ quiet: true });
@@ -63,9 +64,11 @@ export {
   normalizeE164,
   PortInUseError,
   promptYesNo,
+  resolveDefenderWorkspace,
   resolveSessionKey,
   resolveStorePath,
   runCommandWithTimeout,
+  runDefenderRuntimeMonitor,
   runExec,
   saveSessionStore,
   toWhatsappJid,

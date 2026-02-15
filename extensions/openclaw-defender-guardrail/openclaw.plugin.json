@@ -1,0 +1,29 @@
+{
+  "id": "openclaw-defender-guardrail",
+  "name": "OpenClaw Defender (guardrail)",
+  "description": "Runs defender check-command and check-network in the guardrail layer for exec and web_fetch (defense in depth; requires openclaw-defender skill installed)",
+  "version": "0.0.1",
+  "uiHints": {
+    "failOpen": {
+      "label": "Fail Open",
+      "help": "Allow through if defender script is missing or errors (default: true)"
+    },
+    "guardrailPriority": {
+      "label": "Priority",
+      "help": "Higher runs earlier when multiple guardrails are enabled"
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "failOpen": {
+        "type": "boolean",
+        "description": "If true, allow tool call when defender script is missing or times out (default: true)"
+      },
+      "guardrailPriority": {
+        "type": "integer",
+        "description": "Hook priority (default: 60 so defender runs before command-safety-guard)"
+      }
+    }
+  }
+}

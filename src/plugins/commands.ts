@@ -12,6 +12,10 @@ import type {
   PluginCommandResult,
 } from "./types.js";
 import { logVerbose } from "../globals.js";
+import {
+  resolveDefenderWorkspace,
+  runDefenderRuntimeMonitor,
+} from "../security/defender-client.js";
 
 type RegisteredPluginCommand = OpenClawPluginCommandDefinition & {
   pluginId: string;
@@ -269,6 +273,11 @@ export async function executePluginCommand(params: {
     messageThreadId: params.messageThreadId,
   };
 
+  // Defender skill start/end logging (optional; enables collusion detection)
+  const defenderWorkspace = resolveDefenderWorkspace();
+  void runDefenderRuntimeMonitor(defenderWorkspace, "start", [command.name], 5_000).catch(() => {});
+
+  let exitCode = "0";
   // Lock registry during execution to prevent concurrent modifications
   registryLocked = true;
   try {
@@ -278,11 +287,15 @@ export async function executePluginCommand(params: {
     );
     return result;
   } catch (err) {
+    exitCode = "1";
     const error = err as Error;
     logVerbose(`Plugin command /${command.name} error: ${error.message}`);
     // Don't leak internal error details - return a safe generic message
     return { text: "⚠️ Command failed. Please try again later." };
   } finally {
+    void runDefenderRuntimeMonitor(defenderWorkspace, "end", [command.name, exitCode], 5_000).catch(
+      () => {},
+    );
     registryLocked = false;
   }
 }
