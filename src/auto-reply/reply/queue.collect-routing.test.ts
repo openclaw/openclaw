@@ -3,6 +3,35 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
 
+const COLLECT_SETTINGS: QueueSettings = {
+  mode: "collect",
+  debounceMs: 0,
+  cap: 50,
+  dropPolicy: "summarize",
+};
+
+function createSettings(overrides?: Partial<QueueSettings>): QueueSettings {
+  return { ...COLLECT_SETTINGS, ...overrides } as QueueSettings;
+}
+
+function createRunCollector() {
+  const calls: FollowupRun[] = [];
+  const runFollowup = async (run: FollowupRun) => {
+    calls.push(run);
+  };
+  return { calls, runFollowup };
+}
+
+async function drainAndWait(params: {
+  key: string;
+  calls: FollowupRun[];
+  runFollowup: (run: FollowupRun) => Promise<void>;
+  count: number;
+}) {
+  scheduleFollowupDrain(params.key, params.runFollowup);
+  await expect.poll(() => params.calls.length).toBe(params.count);
+}
+
 function createRun(params: {
   prompt: string;
   messageId?: string;
@@ -37,16 +66,8 @@ function createRun(params: {
 describe("followup queue deduplication", () => {
   it("deduplicates messages with same Discord message_id", async () => {
     const key = `test-dedup-message-id-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const runFollowup = async (run: FollowupRun) => {
-      calls.push(run);
-    };
-    const settings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 50,
-      dropPolicy: "summarize",
-    };
+    const { calls, runFollowup } = createRunCollector();
+    const settings = createSettings();
 
     // First enqueue should succeed
     const first = enqueueFollowupRun(
@@ -87,20 +108,14 @@ describe("followup queue deduplication", () => {
     );
     expect(third).toBe(true);
 
-    scheduleFollowupDrain(key, runFollowup);
-    await expect.poll(() => calls.length).toBe(1);
+    await drainAndWait({ key, calls, runFollowup, count: 1 });
     // Should collect both unique messages
     expect(calls[0]?.prompt).toContain("[Queued messages while agent was busy]");
   });
 
   it("deduplicates exact prompt when routing matches and no message id", async () => {
     const key = `test-dedup-whatsapp-${Date.now()}`;
-    const settings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 50,
-      dropPolicy: "summarize",
-    };
+    const settings = createSettings();
 
     // First enqueue should succeed
     const first = enqueueFollowupRun(
@@ -141,12 +156,7 @@ describe("followup queue deduplication", () => {
 
   it("does not deduplicate across different providers without message id", async () => {
     const key = `test-dedup-cross-provider-${Date.now()}`;
-    const settings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 50,
-      dropPolicy: "summarize",
-    };
+    const settings = createSettings();
 
     const first = enqueueFollowupRun(
       key,
@@ -173,12 +183,7 @@ describe("followup queue deduplication", () => {
 
   it("can opt-in to prompt-based dedupe when message id is absent", async () => {
     const key = `test-dedup-prompt-mode-${Date.now()}`;
-    const settings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 50,
-      dropPolicy: "summarize",
-    };
+    const settings = createSettings();
 
     const first = enqueueFollowupRun(
       key,
@@ -209,16 +214,8 @@ describe("followup queue deduplication", () => {
 describe("followup queue collect routing", () => {
   it("does not collect when destinations differ", async () => {
     const key = `test-collect-diff-to-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const runFollowup = async (run: FollowupRun) => {
-      calls.push(run);
-    };
-    const settings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 50,
-      dropPolicy: "summarize",
-    };
+    const { calls, runFollowup } = createRunCollector();
+    const settings = createSettings();
 
     enqueueFollowupRun(
       key,
@@ -239,24 +236,15 @@ describe("followup queue collect routing", () => {
       settings,
     );
 
-    scheduleFollowupDrain(key, runFollowup);
-    await expect.poll(() => calls.length).toBe(2);
+    await drainAndWait({ key, calls, runFollowup, count: 2 });
     expect(calls[0]?.prompt).toBe("one");
     expect(calls[1]?.prompt).toBe("two");
   });
 
   it("collects when channel+destination match", async () => {
     const key = `test-collect-same-to-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const runFollowup = async (run: FollowupRun) => {
-      calls.push(run);
-    };
-    const settings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 50,
-      dropPolicy: "summarize",
-    };
+    const { calls, runFollowup } = createRunCollector();
+    const settings = createSettings();
 
     enqueueFollowupRun(
       key,
@@ -277,8 +265,7 @@ describe("followup queue collect routing", () => {
       settings,
     );
 
-    scheduleFollowupDrain(key, runFollowup);
-    await expect.poll(() => calls.length).toBe(1);
+    await drainAndWait({ key, calls, runFollowup, count: 1 });
     expect(calls[0]?.prompt).toContain("[Queued messages while agent was busy]");
     expect(calls[0]?.originatingChannel).toBe("slack");
     expect(calls[0]?.originatingTo).toBe("channel:A");
@@ -286,16 +273,8 @@ describe("followup queue collect routing", () => {
 
   it("collects Slack messages in same thread and preserves string thread id", async () => {
     const key = `test-collect-slack-thread-same-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const runFollowup = async (run: FollowupRun) => {
-      calls.push(run);
-    };
-    const settings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 50,
-      dropPolicy: "summarize",
-    };
+    const { calls, runFollowup } = createRunCollector();
+    const settings = createSettings();
 
     enqueueFollowupRun(
       key,
@@ -318,24 +297,15 @@ describe("followup queue collect routing", () => {
       settings,
     );
 
-    scheduleFollowupDrain(key, runFollowup);
-    await expect.poll(() => calls.length).toBe(1);
+    await drainAndWait({ key, calls, runFollowup, count: 1 });
     expect(calls[0]?.prompt).toContain("[Queued messages while agent was busy]");
     expect(calls[0]?.originatingThreadId).toBe("1706000000.000001");
   });
 
   it("does not collect Slack messages when thread ids differ", async () => {
     const key = `test-collect-slack-thread-diff-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const runFollowup = async (run: FollowupRun) => {
-      calls.push(run);
-    };
-    const settings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 50,
-      dropPolicy: "summarize",
-    };
+    const { calls, runFollowup } = createRunCollector();
+    const settings = createSettings();
 
     enqueueFollowupRun(
       key,
@@ -358,8 +328,7 @@ describe("followup queue collect routing", () => {
       settings,
     );
 
-    scheduleFollowupDrain(key, runFollowup);
-    await expect.poll(() => calls.length).toBe(2);
+    await drainAndWait({ key, calls, runFollowup, count: 2 });
     expect(calls[0]?.prompt).toBe("one");
     expect(calls[1]?.prompt).toBe("two");
     expect(calls[0]?.originatingThreadId).toBe("1706000000.000001");
@@ -377,12 +346,7 @@ describe("followup queue collect routing", () => {
       }
       calls.push(run);
     };
-    const settings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 50,
-      dropPolicy: "summarize",
-    };
+    const settings = createSettings();
 
     enqueueFollowupRun(key, createRun({ prompt: "one" }), settings);
     enqueueFollowupRun(key, createRun({ prompt: "two" }), settings);
@@ -404,12 +368,7 @@ describe("followup queue collect routing", () => {
       }
       calls.push(run);
     };
-    const settings: QueueSettings = {
-      mode: "followup",
-      debounceMs: 0,
-      cap: 1,
-      dropPolicy: "summarize",
-    };
+    const settings = createSettings({ mode: "followup", cap: 1 });
 
     enqueueFollowupRun(key, createRun({ prompt: "first" }), settings);
     enqueueFollowupRun(key, createRun({ prompt: "second" }), settings);
