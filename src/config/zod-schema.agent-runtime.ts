@@ -264,7 +264,7 @@ export const ToolsWebSearchSchema = z
       .optional(),
     gemini: z
       .object({
-        apiKey: z.string().optional(),
+        apiKey: z.string().optional().register(sensitive),
         model: z.string().optional(),
       })
       .strict()
