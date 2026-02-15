@@ -103,6 +103,19 @@ describe("shouldRunMemoryFlush", () => {
     ).toBe(false);
   });
 
+  it("skips when totalTokens is below 5% of context window (post-compaction guard)", () => {
+    // Reproduces #12170: after compaction session drops to 1,489 tokens on a
+    // 200K context window.  The flush should not re-trigger at such low usage.
+    expect(
+      shouldRunMemoryFlush({
+        entry: { totalTokens: 1_489, compactionCount: 1 },
+        contextWindowTokens: 200_000,
+        reserveTokensFloor: 20_000,
+        softThresholdTokens: DEFAULT_MEMORY_FLUSH_SOFT_TOKENS,
+      }),
+    ).toBe(false);
+  });
+
   it("runs when above threshold and not flushed", () => {
     expect(
       shouldRunMemoryFlush({
