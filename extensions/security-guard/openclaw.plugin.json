@@ -1,0 +1,46 @@
+{
+  "id": "security-guard",
+  "name": "Security Guard",
+  "description": "Agentic safety guardrails — prompt injection detection, config auditing, secrets scanning, and real-time threat monitoring. By Miloud Belarebia (2pidata.com).",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "sensitivity": {
+        "type": "string",
+        "enum": ["low", "medium", "high"],
+        "default": "medium"
+      },
+      "blockOnCritical": {
+        "type": "boolean",
+        "default": true
+      },
+      "scanIntervalMinutes": {
+        "type": "number",
+        "default": 5
+      },
+      "auditOnGatewayStart": {
+        "type": "boolean",
+        "default": true
+      }
+    }
+  },
+  "uiHints": {
+    "sensitivity": {
+      "label": "Detection Sensitivity",
+      "help": "Controls how aggressively prompt injection patterns are detected. 'high' may produce more false positives."
+    },
+    "blockOnCritical": {
+      "label": "Block Critical Threats",
+      "help": "Automatically block messages and tool calls that match critical-severity injection patterns."
+    },
+    "scanIntervalMinutes": {
+      "label": "Background Scan Interval",
+      "help": "How often (in minutes) the background security scanner runs."
+    },
+    "auditOnGatewayStart": {
+      "label": "Audit on Startup",
+      "help": "Run a full config and secrets audit when the gateway starts."
+    }
+  }
+}
