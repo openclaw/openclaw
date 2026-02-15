@@ -1071,10 +1071,10 @@ final class NodeAppModel {
             }
         }
 
-        if params.speak ?? true {
+        if params.speak == true {
             let toSpeak = text
             Task { @MainActor in
-                try? await TalkSystemSpeechSynthesizer.shared.speak(text: toSpeak)
+                self.talkMode.speakPushMessage(text: toSpeak)
             }
         }
 

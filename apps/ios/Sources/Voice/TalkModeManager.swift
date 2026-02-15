@@ -54,6 +54,11 @@ final class TalkModeManager: NSObject {
     private var lastTranscript: String = ""
     private var loggedPartialThisCycle: Bool = false
     private var lastSpokenText: String?
+    private var allSpokenText: String = ""
+    /// Rolling average of mic level during TTS playback (speaker bleed baseline).
+    private var ttsAudioBaseline: Double = 0
+    /// When TTS started, used for grace period before allowing interrupts.
+    private var ttsStartedAt: Date?
     private var lastInterruptedAtSeconds: Double?
 
     private var defaultVoiceId: String?
@@ -74,7 +79,7 @@ final class TalkModeManager: NSObject {
 
     private var gateway: GatewayNodeSession?
     private var gatewayConnected = false
-    private let silenceWindow: TimeInterval = 0.9
+    private let silenceWindow: TimeInterval = 0.6
     private var lastAudioActivity: Date?
     private var noiseFloorSamples: [Double] = []
     private var noiseFloor: Double?
@@ -91,10 +96,20 @@ final class TalkModeManager: NSObject {
     private var incrementalSpeechDirective: TalkDirective?
 
     private let logger = Logger(subsystem: "bot.molt", category: "TalkMode")
+    private var routeChangeObserver: NSObjectProtocol?
+    private var interruptionObserver: NSObjectProtocol?
+    private var lastConfigReload: Date?
+    private var thinkingSoundURL: URL?
+    private var startupSoundURL: URL?
+    private var pushSpeechQueue: [String] = []
+    private var pushSpeechTask: Task<Void, Never>?
 
     init(allowSimulatorCapture: Bool = false) {
         self.allowSimulatorCapture = allowSimulatorCapture
         super.init()
+        self.observeAudioRouteChanges()
+        self.prepareThinkingSound()
+        self.prepareStartupSound()
     }
 
     func attachGateway(_ gateway: GatewayNodeSession) {
@@ -147,7 +162,11 @@ final class TalkModeManager: NSObject {
         }
 
         self.logger.info("start")
-        self.statusText = "Requesting permissions…"
+        let needsPrompt = AVAudioSession.sharedInstance().recordPermission == .undetermined
+            || SFSpeechRecognizer.authorizationStatus() == .notDetermined
+        if needsPrompt {
+            self.statusText = "Requesting permissions…"
+        }
         let micOk = await Self.requestMicrophonePermission()
         guard micOk else {
             self.logger.warning("start blocked: microphone permission denied")
@@ -165,7 +184,7 @@ final class TalkModeManager: NSObject {
             return
         }
 
-        await self.reloadConfig()
+        await self.reloadConfig(force: self.lastConfigReload == nil)
         do {
             try Self.configureAudioSession()
             // Set this before starting recognition so any early speech errors are classified correctly.
@@ -175,6 +194,7 @@ final class TalkModeManager: NSObject {
             self.statusText = "Listening"
             self.startSilenceMonitor()
             await self.subscribeChatIfNeeded(sessionKey: self.mainSessionKey)
+            self.playStartupSound()
             self.logger.info("listening")
         } catch {
             self.isListening = false
@@ -555,6 +575,11 @@ final class TalkModeManager: NSObject {
                     }
                 }
 
+                // Track speaker bleed baseline during TTS for interrupt gating.
+                if self.isSpeechOutputActive {
+                    self.ttsAudioBaseline = (self.ttsAudioBaseline * 0.92) + (raw * 0.08)
+                }
+
                 let threshold: Double = if let floor = self.noiseFloor, self.noiseFloorReady {
                     min(0.35, max(0.12, floor + 0.10))
                 } else {
@@ -581,9 +606,12 @@ final class TalkModeManager: NSObject {
             if let error {
                 let msg = error.localizedDescription
                 GatewayDiagnostics.log("talk speech: error=\(msg)")
-                if !self.isSpeaking {
-                    if msg.localizedCaseInsensitiveContains("no speech detected") {
-                        // Treat as transient silence. Don't scare users with an error banner.
+                // Only update status for genuine errors, not intentional cancellations
+                // (e.g. processTranscript sets captureMode=.idle before stopping recognition).
+                if !self.isSpeaking, self.captureMode != .idle {
+                    if msg.localizedCaseInsensitiveContains("no speech detected") ||
+                        msg.localizedCaseInsensitiveContains("was canceled")
+                    {
                         self.statusText = self.isEnabled ? "Listening" : "Speech error: \(msg)"
                     } else {
                         self.statusText = "Speech error: \(msg)"
@@ -594,7 +622,11 @@ final class TalkModeManager: NSObject {
                 // If talk mode is enabled and we're in continuous capture, try to restart.
                 if self.captureMode == .continuous, self.isEnabled, !self.isSpeaking {
                     // Treat the task as terminal on error so we don't get stuck with a dead recognizer.
-                    self.stopRecognition()
+                    if self.backgroundKeepAlive {
+                        self.pauseRecognitionOnly()
+                    } else {
+                        self.stopRecognition()
+                    }
                     Task { @MainActor [weak self] in
                         await self?.restartRecognitionAfterError()
                     }
@@ -617,10 +649,21 @@ final class TalkModeManager: NSObject {
 
     private func restartRecognitionAfterError() async {
         guard self.isEnabled, self.captureMode == .continuous else { return }
-        // Avoid thrashing the audio engine if it’s already running.
+        // Avoid thrashing the audio engine if it's already running.
         if self.recognitionTask != nil, self.audioEngine.isRunning { return }
         try? await Task.sleep(nanoseconds: 250_000_000)
         guard self.isEnabled, self.captureMode == .continuous else { return }
+
+        if self.backgroundKeepAlive {
+            // In background mode, resume recognition on the already-running engine
+            await self.resumeRecognitionOnly()
+            if self.statusText.localizedCaseInsensitiveContains("speech error") {
+                self.statusText = "Listening"
+            }
+            GatewayDiagnostics.log("talk speech: recognition restarted (background)")
+            return
+        }
+
         do {
             try Self.configureAudioSession()
             try self.startRecognition()
@@ -654,7 +697,9 @@ final class TalkModeManager: NSObject {
         self.speechRecognizer = nil
     }
     
-    /// Pauses speech recognition but keeps AVAudioEngine running for background mode
+    /// Pauses speech recognition but keeps AVAudioEngine AND input tap running for background mode.
+    /// The tap continues processing audio (keeping iOS from suspending us) but buffers are
+    /// discarded since the recognition request has ended.
     private func pauseRecognitionOnly() {
         self.recognitionTask?.cancel()
         self.recognitionTask = nil
@@ -665,14 +710,12 @@ final class TalkModeManager: NSObject {
         self.noiseFloorSamples.removeAll(keepingCapacity: true)
         self.noiseFloor = nil
         self.noiseFloorReady = false
-        self.audioTapDiagnostics = nil
-        if self.inputTapInstalled {
-            self.audioEngine.inputNode.removeTap(onBus: 0)
-            self.inputTapInstalled = false
-        }
-        // CRITICAL: Do NOT stop the audioEngine in background mode - this keeps us alive
+        // CRITICAL: Do NOT remove the input tap or stop the audioEngine in background mode.
+        // Keeping the tap installed means audio continues flowing through the engine,
+        // which iOS recognizes as active audio work and won't suspend us.
+        // The tap's captured request reference has had endAudio() called, so append() is a no-op.
         self.speechRecognizer = nil
-        self.logger.info("paused recognition only, keeping engine running for background mode")
+        self.logger.info("paused recognition only, keeping engine + tap running for background mode (tapInstalled=\(self.inputTapInstalled))")
     }
     
     /// Resumes speech recognition on an already-running AVAudioEngine (for background mode)
@@ -683,11 +726,12 @@ final class TalkModeManager: NSObject {
             await self.start()
             return
         }
-        guard self.gatewayConnected else {
-            self.statusText = "Offline"
-            return
+        // Don't block on gateway - speech recognition is local. Transcripts
+        // will be sent when the gateway reconnects.
+        if !self.gatewayConnected {
+            self.logger.info("resumeRecognitionOnly: gateway offline, recognition will still run locally")
         }
-        
+
         do {
             // The engine should already be running, just restart recognition
             guard self.audioEngine.isRunning else {
@@ -710,7 +754,13 @@ final class TalkModeManager: NSObject {
             
             let input = self.audioEngine.inputNode
             let format = input.inputFormat(forBus: 0)
-            
+
+            // Remove the old tap (kept alive during pause) before installing the new one
+            if self.inputTapInstalled {
+                input.removeTap(onBus: 0)
+                self.inputTapInstalled = false
+            }
+
             // Set up audio tap again
             let tapDiagnostics = AudioTapDiagnostics(label: "talk") { [weak self] level in
                 guard let self else { return }
@@ -735,6 +785,11 @@ final class TalkModeManager: NSObject {
                         }
                     }
                     
+                    // Track speaker bleed baseline during TTS for interrupt gating.
+                    if self.isSpeechOutputActive {
+                        self.ttsAudioBaseline = (self.ttsAudioBaseline * 0.92) + (raw * 0.08)
+                    }
+
                     let threshold: Double = if let floor = self.noiseFloor, self.noiseFloorReady {
                         min(0.35, max(0.12, floor + 0.10))
                     } else {
@@ -813,10 +868,26 @@ final class TalkModeManager: NSObject {
         }
     }
 
+    /// Returns true if headphones or a Bluetooth audio device is connected (no speaker-to-mic bleed).
+    private var hasIsolatedAudioOutput: Bool {
+        let outputs = AVAudioSession.sharedInstance().currentRoute.outputs
+        return outputs.contains { port in
+            port.portType == .headphones ||
+            port.portType == .bluetoothA2DP ||
+            port.portType == .bluetoothHFP ||
+            port.portType == .bluetoothLE ||
+            port.portType == .carAudio
+        }
+    }
+
     private func handleTranscript(transcript: String, isFinal: Bool) async {
         let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         let ttsActive = self.isSpeechOutputActive
         if ttsActive, self.interruptOnSpeech {
+            // On speaker (no headphones), skip interrupt-on-speech entirely.
+            // The mic picks up the TTS output and falsely triggers interrupts.
+            // User can still tap the orb to stop playback.
+            guard self.hasIsolatedAudioOutput else { return }
             if self.shouldInterrupt(with: trimmed) {
                 self.stopSpeaking()
             }
@@ -848,7 +919,7 @@ final class TalkModeManager: NSObject {
         self.silenceTask = Task { [weak self] in
             guard let self else { return }
             while self.isEnabled || (self.isPushToTalkActive && self.pttAutoStopEnabled) {
-                try? await Task.sleep(nanoseconds: 200_000_000)
+                try? await Task.sleep(nanoseconds: 100_000_000)
                 await self.checkSilence()
             }
         }
@@ -898,8 +969,8 @@ final class TalkModeManager: NSObject {
         continuation.resume(returning: payload)
     }
 
-    /// Plays a short, subtle chime to indicate the assistant is processing.
-    private func playThinkingSound() {
+    /// Pre-generates the thinking chime WAV so it's ready for instant playback.
+    private func prepareThinkingSound() {
         let sampleRate: Float = 44100
         let duration: Float = 0.15
         let frequency: Float = 880 // A5 note
@@ -915,21 +986,145 @@ final class TalkModeManager: NSObject {
             let envelope = 1.0 - (t / duration) // linear fade out
             data[i] = sin(2.0 * .pi * frequency * t) * envelope * 0.15
         }
-        // Write as WAV to temp file and play with AVAudioPlayer for simplicity.
         let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("thinking_chime.wav")
         do {
             let file = try AVAudioFile(forWriting: tempURL, settings: format.settings)
             try file.write(from: buffer)
-            let player = try AVAudioPlayer(contentsOf: tempURL)
+            self.thinkingSoundURL = tempURL
+        } catch {
+            self.logger.debug("thinking sound prep failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// Plays a short, subtle chime to indicate the assistant is processing.
+    private func playThinkingSound() {
+        guard let url = self.thinkingSoundURL else {
+            self.prepareThinkingSound()
+            guard let url = self.thinkingSoundURL else { return }
+            return self.playThinkingSound()
+        }
+        do {
+            let player = try AVAudioPlayer(contentsOf: url)
             player.volume = 0.4
+            player.prepareToPlay()
             player.play()
-            // Hold reference briefly so playback completes.
             Task { @MainActor in
-                try? await Task.sleep(nanoseconds: UInt64(duration * 1_000_000_000) + 50_000_000)
-                _ = player // prevent early dealloc
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                _ = player
             }
         } catch {
             self.logger.debug("thinking sound failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// Pre-generates a two-tone ascending chime for voice mode startup.
+    private func prepareStartupSound() {
+        let sampleRate: Float = 44100
+        let noteDuration: Float = 0.12
+        let gap: Float = 0.06
+        let totalDuration = noteDuration * 2 + gap
+        let freq1: Float = 523.25 // C5
+        let freq2: Float = 783.99 // G5
+        let numSamples = Int(sampleRate * totalDuration)
+        let numChannels: UInt32 = 1
+        guard let format = AVAudioFormat(standardFormatWithSampleRate: Double(sampleRate), channels: numChannels),
+              let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(numSamples))
+        else { return }
+        buffer.frameLength = AVAudioFrameCount(numSamples)
+        guard let data = buffer.floatChannelData?[0] else { return }
+        let note1End = Int(sampleRate * noteDuration)
+        let gapEnd = Int(sampleRate * (noteDuration + gap))
+        for i in 0..<numSamples {
+            let t = Float(i) / sampleRate
+            if i < note1End {
+                let env = 1.0 - (t / noteDuration)
+                data[i] = sin(2.0 * .pi * freq1 * t) * env * 0.18
+            } else if i < gapEnd {
+                data[i] = 0
+            } else {
+                let t2 = Float(i - gapEnd) / sampleRate
+                let env = 1.0 - (t2 / noteDuration)
+                data[i] = sin(2.0 * .pi * freq2 * t2) * env * 0.18
+            }
+        }
+        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("startup_chime.wav")
+        do {
+            let file = try AVAudioFile(forWriting: tempURL, settings: format.settings)
+            try file.write(from: buffer)
+            self.startupSoundURL = tempURL
+        } catch {
+            self.logger.debug("startup sound prep failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// Plays the startup chime when voice mode begins listening.
+    private func playStartupSound() {
+        guard let url = self.startupSoundURL else {
+            self.prepareStartupSound()
+            guard let _ = self.startupSoundURL else { return }
+            return self.playStartupSound()
+        }
+        do {
+            let player = try AVAudioPlayer(contentsOf: url)
+            player.volume = 0.5
+            player.prepareToPlay()
+            player.play()
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 400_000_000)
+                _ = player
+            }
+        } catch {
+            self.logger.debug("startup sound failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// Polls for follow-up assistant messages after the initial response.
+    /// Handles multi-turn agentic responses where the bot runs commands
+    /// between text messages (each producing a separate run).
+    private func pollForFollowUpMessages(
+        gateway: GatewayNodeSession, since: Double, lastKnownText: String) async
+    {
+        var lastText = lastKnownText
+        var missCount = 0
+
+        for i in 0..<8 {
+            try? await Task.sleep(nanoseconds: 2_000_000_000) // 2 sec interval
+            guard self.isEnabled, self.gatewayConnected else { break }
+
+            guard let newest = try? await self.fetchLatestAssistantText(
+                gateway: gateway, since: since) else {
+                missCount += 1
+                if missCount >= 2 { break }
+                continue
+            }
+            let trimmed = newest.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard trimmed != lastText else {
+                missCount += 1
+                if missCount >= 2 { break }
+                continue
+            }
+
+            // New follow-up message detected
+            missCount = 0
+            self.logger.info("multi-turn follow-up \(i+1, privacy: .public) chars=\(trimmed.count, privacy: .public)")
+            GatewayDiagnostics.log("talk: multi-turn follow-up \(i+1) chars=\(trimmed.count)")
+
+            self.isSpeaking = true
+            self.statusText = "Speaking…"
+            self.lastSpokenText = trimmed
+            self.allSpokenText = trimmed
+
+            do {
+                try await TalkSystemSpeechSynthesizer.shared.speak(text: trimmed)
+            } catch {
+                self.logger.error(
+                    "multi-turn speak failed: \(error.localizedDescription, privacy: .public)")
+            }
+
+            self.isSpeaking = false
+            self.allSpokenText = ""
+            self.ttsAudioBaseline = 0
+            lastText = trimmed
         }
     }
 
@@ -958,7 +1153,11 @@ final class TalkModeManager: NSObject {
             self.logger.warning("finalize: gateway not connected")
             GatewayDiagnostics.log("talk: abort gateway not connected")
             if restartAfter {
-                await self.start()
+                if self.backgroundKeepAlive {
+                    await self.resumeRecognitionOnly()
+                } else {
+                    await self.start()
+                }
             }
             return
         }
@@ -993,7 +1192,11 @@ final class TalkModeManager: NSObject {
                 GatewayDiagnostics.log("talk: chat completion aborted runId=\(runId)")
                 streamingTask?.cancel()
                 await self.finishIncrementalSpeech()
-                await self.start()
+                if self.backgroundKeepAlive {
+                    await self.resumeRecognitionOnly()
+                } else {
+                    await self.start()
+                }
                 return
             } else if completion == .error {
                 self.statusText = "Chat error"
@@ -1001,7 +1204,11 @@ final class TalkModeManager: NSObject {
                 GatewayDiagnostics.log("talk: chat completion error runId=\(runId)")
                 streamingTask?.cancel()
                 await self.finishIncrementalSpeech()
-                await self.start()
+                if self.backgroundKeepAlive {
+                    await self.resumeRecognitionOnly()
+                } else {
+                    await self.start()
+                }
                 return
             }
 
@@ -1021,7 +1228,11 @@ final class TalkModeManager: NSObject {
                 GatewayDiagnostics.log("talk: assistant text timeout runId=\(runId)")
                 streamingTask?.cancel()
                 await self.finishIncrementalSpeech()
-                await self.start()
+                if self.backgroundKeepAlive {
+                    await self.resumeRecognitionOnly()
+                } else {
+                    await self.start()
+                }
                 return
             }
             self.logger.info("assistant text ok chars=\(assistantText.count, privacy: .public)")
@@ -1032,6 +1243,12 @@ final class TalkModeManager: NSObject {
             } else {
                 await self.playAssistant(text: assistantText)
             }
+
+            // Multi-turn support: poll for follow-up assistant messages.
+            // When the bot runs commands between responses, subsequent messages
+            // may arrive after the initial run completes.
+            await self.pollForFollowUpMessages(
+                gateway: gateway, since: startedAt, lastKnownText: assistantText)
         } catch {
             self.statusText = "Talk failed: \(error.localizedDescription)"
             self.logger.error("finalize failed: \(error.localizedDescription, privacy: .public)")
@@ -1200,6 +1417,9 @@ final class TalkModeManager: NSObject {
         self.statusText = "Generating voice…"
         self.isSpeaking = true
         self.lastSpokenText = cleaned
+        self.allSpokenText = cleaned
+        self.ttsAudioBaseline = 0
+        self.ttsStartedAt = Date()
 
         do {
             let started = Date()
@@ -1350,6 +1570,84 @@ final class TalkModeManager: NSObject {
             }
         }
         self.isSpeaking = false
+        self.allSpokenText = ""
+        self.ttsAudioBaseline = 0
+    }
+
+    /// Speak a push message (e.g. from `chat.push`) while properly gating the mic.
+    /// Messages are queued so rapid-fire pushes don't cancel each other.
+    /// Skipped when incremental speech is already active (normal response flow handles TTS).
+    func speakPushMessage(text: String) {
+        let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty else { return }
+
+        // Don't fight with the normal incremental speech pipeline
+        if self.isSpeechOutputActive {
+            self.logger.info("speakPushMessage: skipping, speech output already active")
+            return
+        }
+
+        self.pushSpeechQueue.append(cleaned)
+
+        if self.pushSpeechTask == nil {
+            self.startPushSpeechTask()
+        }
+    }
+
+    private func startPushSpeechTask() {
+        self.pushSpeechTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+
+            let talkActive = self.isEnabled
+
+            if talkActive {
+                self.isSpeaking = true
+                self.statusText = "Speaking…"
+                if self.backgroundKeepAlive {
+                    self.pauseRecognitionOnly()
+                } else {
+                    self.stopRecognition()
+                }
+            }
+
+            while !self.pushSpeechQueue.isEmpty, !Task.isCancelled {
+                let segment = self.pushSpeechQueue.removeFirst()
+                if talkActive {
+                    self.lastSpokenText = segment
+                    self.allSpokenText = segment
+                    self.statusText = "Speaking…"
+                }
+                do {
+                    try await TalkSystemSpeechSynthesizer.shared.speak(text: segment)
+                } catch {
+                    self.logger.error("push message speak failed: \(error.localizedDescription, privacy: .public)")
+                }
+            }
+
+            if talkActive {
+                // Restore listening state
+                if self.backgroundKeepAlive {
+                    await self.resumeRecognitionOnly()
+                } else if self.isEnabled {
+                    do {
+                        try Self.configureAudioSession()
+                        try self.startRecognition()
+                        self.isListening = true
+                    } catch {
+                        self.logger.error(
+                            "recognition restart after push speak failed: \(error.localizedDescription, privacy: .public)")
+                    }
+                }
+                self.isSpeaking = false
+                self.allSpokenText = ""
+                self.ttsAudioBaseline = 0
+                if self.isEnabled, self.isListening {
+                    self.statusText = "Listening"
+                }
+            }
+
+            self.pushSpeechTask = nil
+        }
     }
 
     private func stopSpeaking(storeInterruption: Bool = true) {
@@ -1374,12 +1672,46 @@ final class TalkModeManager: NSObject {
         self.isSpeaking = false
     }
 
+    /// Normalize text for fuzzy comparison (handles "alright" vs "all right", etc.)
+    private static func normalizeForComparison(_ text: String) -> String {
+        text.lowercased()
+            .replacingOccurrences(of: "all right", with: "alright")
+            .replacingOccurrences(of: "gonna", with: "going to")
+            .replacingOccurrences(of: "wanna", with: "want to")
+            .replacingOccurrences(of: "gotta", with: "got to")
+    }
+
     private func shouldInterrupt(with transcript: String) -> Bool {
         let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count >= 3 else { return false }
-        if let spoken = self.lastSpokenText?.lowercased(), spoken.contains(trimmed.lowercased()) {
+        // Grace period: don't allow interrupts in the first 1.5s of TTS while the
+        // speaker bleed baseline calibrates. Without this, early partials slip through.
+        if let started = self.ttsStartedAt, Date().timeIntervalSince(started) < 1.5 {
+            GatewayDiagnostics.log(
+                "talk interrupt: BLOCKED (grace period) mic=\(String(format: "%.3f", self.micLevel)) transcript=\"\(trimmed.prefix(40))\"")
             return false
         }
+        // Check against all text spoken this TTS cycle using fuzzy normalization.
+        let spokenNorm = Self.normalizeForComparison(self.allSpokenText)
+        let trimmedNorm = Self.normalizeForComparison(trimmed)
+        if !spokenNorm.isEmpty, spokenNorm.contains(trimmedNorm) {
+            GatewayDiagnostics.log(
+                "talk interrupt: BLOCKED (text match) mic=\(String(format: "%.3f", self.micLevel)) baseline=\(String(format: "%.3f", self.ttsAudioBaseline)) transcript=\"\(trimmed.prefix(40))\"")
+            return false
+        }
+        if let spoken = self.lastSpokenText {
+            let segNorm = Self.normalizeForComparison(spoken)
+            if segNorm.contains(trimmedNorm) {
+                GatewayDiagnostics.log(
+                    "talk interrupt: BLOCKED (segment match) mic=\(String(format: "%.3f", self.micLevel)) baseline=\(String(format: "%.3f", self.ttsAudioBaseline)) transcript=\"\(trimmed.prefix(40))\"")
+                return false
+            }
+        }
+        // Note: threshold-based gating doesn't work well on speaker because the speaker
+        // bleed baseline is so high (0.4-0.6) that the user's voice on top (0.5-0.7) can
+        // never exceed 1.5x+ the baseline. Rely on text matching + grace period instead.
+        GatewayDiagnostics.log(
+            "talk interrupt: ALLOWED mic=\(String(format: "%.3f", self.micLevel)) baseline=\(String(format: "%.3f", self.ttsAudioBaseline)) transcript=\"\(trimmed.prefix(40))\"")
         return true
     }
 
@@ -1391,7 +1723,8 @@ final class TalkModeManager: NSObject {
         self.isSpeaking ||
             self.incrementalSpeechActive ||
             self.incrementalSpeechTask != nil ||
-            !self.incrementalSpeechQueue.isEmpty
+            !self.incrementalSpeechQueue.isEmpty ||
+            self.pushSpeechTask != nil
     }
 
     private func applyDirective(_ directive: TalkDirective?) {
@@ -1467,10 +1800,17 @@ final class TalkModeManager: NSObject {
                 self.statusText = "Speaking…"
                 self.isSpeaking = true
                 self.lastSpokenText = segment
+                self.allSpokenText += " " + segment
                 await self.speakIncrementalSegment(segment)
             }
             self.isSpeaking = false
-            self.stopRecognition()
+            self.allSpokenText = ""
+            self.ttsAudioBaseline = 0
+            if self.backgroundKeepAlive {
+                self.pauseRecognitionOnly()
+            } else {
+                self.stopRecognition()
+            }
             self.incrementalSpeechTask = nil
         }
     }
@@ -1933,8 +2273,11 @@ extension TalkModeManager {
         return value.allSatisfy { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" }
     }
 
-    func reloadConfig() async {
+    func reloadConfig(force: Bool = false) async {
         guard let gateway else { return }
+        if !force, let last = self.lastConfigReload, Date().timeIntervalSince(last) < 60 {
+            return
+        }
         do {
             let res = try await gateway.request(method: "talk.config", paramsJSON: "{\"includeSecrets\":true}", timeoutSeconds: 8)
             guard let json = try JSONSerialization.jsonObject(with: res) as? [String: Any] else { return }
@@ -1968,6 +2311,7 @@ extension TalkModeManager {
             if let interrupt = talk?["interruptOnSpeech"] as? Bool {
                 self.interruptOnSpeech = interrupt
             }
+            self.lastConfigReload = Date()
         } catch {
             self.defaultModelId = Self.defaultModelIdFallback
             if !self.modelOverrideActive {
@@ -1978,16 +2322,88 @@ extension TalkModeManager {
 
     static func configureAudioSession() throws {
         let session = AVAudioSession.sharedInstance()
-        // Prefer `.spokenAudio` for STT; it tends to preserve speech energy better than `.voiceChat`.
-        // While `.voiceChat` might seem more appropriate for VoIP background modes, `.spokenAudio` 
-        // is optimized for speech recognition accuracy which is our primary use case.
+        // Use `.spokenAudio` for best STT accuracy. Speaker-to-mic feedback during TTS
+        // is handled by disabling interrupt-on-speech on speaker rather than hardware AEC,
+        // because TTS plays through separate audio players (not AVAudioEngine output).
         try session.setCategory(.playAndRecord, mode: .spokenAudio, options: [
+            .allowBluetooth,
+            .allowBluetoothA2DP,
             .allowBluetoothHFP,
             .defaultToSpeaker,
         ])
         try? session.setPreferredSampleRate(48_000)
         try? session.setPreferredIOBufferDuration(0.02)
         try session.setActive(true, options: [])
+    }
+
+    // MARK: - Audio route change handling
+
+    private func observeAudioRouteChanges() {
+        self.routeChangeObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.routeChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let self else { return }
+            let reason = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt
+            let reasonEnum = reason.flatMap { AVAudioSession.RouteChangeReason(rawValue: $0) }
+            let route = AVAudioSession.sharedInstance().currentRoute
+            let outputs = route.outputs.map { $0.portType.rawValue }.joined(separator: ",")
+            let inputs = route.inputs.map { $0.portType.rawValue }.joined(separator: ",")
+            GatewayDiagnostics.log(
+                "talk audio: route changed reason=\(reasonEnum.map { String(describing: $0) } ?? "?") in=[\(inputs)] out=[\(outputs)]")
+            self.logger.info("audio route changed: reason=\(reason ?? 0) in=[\(inputs)] out=[\(outputs)]")
+            Task { @MainActor [weak self] in
+                await self?.handleAudioRouteChange(reason: reasonEnum)
+            }
+        }
+
+        self.interruptionObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.interruptionNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let self else { return }
+            let type = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
+            let typeEnum = type.flatMap { AVAudioSession.InterruptionType(rawValue: $0) }
+            GatewayDiagnostics.log("talk audio: interruption type=\(typeEnum.map { String(describing: $0) } ?? "?")")
+            if typeEnum == .ended {
+                Task { @MainActor [weak self] in
+                    guard let self, self.isEnabled else { return }
+                    try? Self.configureAudioSession()
+                    await self.start()
+                }
+            }
+        }
+    }
+
+    private func handleAudioRouteChange(reason: AVAudioSession.RouteChangeReason?) async {
+        guard self.isEnabled, self.isListening else { return }
+        // When audio route changes (headphones plugged in/out, Bluetooth connects/disconnects),
+        // the AVAudioEngine input format changes. We need to restart recognition with the new format.
+        switch reason {
+        case .newDeviceAvailable, .oldDeviceUnavailable:
+            self.logger.info("restarting recognition for audio route change")
+            GatewayDiagnostics.log("talk audio: restarting recognition for route change")
+            if self.backgroundKeepAlive {
+                self.pauseRecognitionOnly()
+                try? Self.configureAudioSession()
+                await self.resumeRecognitionOnly()
+            } else {
+                self.stopRecognition()
+                do {
+                    try Self.configureAudioSession()
+                    try self.startRecognition()
+                    self.isListening = true
+                    self.statusText = "Listening"
+                } catch {
+                    self.statusText = "Route change failed: \(error.localizedDescription)"
+                    self.logger.error("route change restart failed: \(error.localizedDescription, privacy: .public)")
+                }
+            }
+        default:
+            break
+        }
     }
 
     // MARK: - Background audio keepalive

@@ -237,16 +237,18 @@ struct SettingsTab: View {
                             .onChange(of: self.talkEnabled) { _, newValue in
                                 self.appModel.setTalkEnabled(newValue)
                             }
-                        Toggle("Background Voice", isOn: self.$talkBackgroundEnabled)
-                        Text("Keep Talk Mode active when the app is in the background. Uses more battery.")
+                        Toggle("Background Listening", isOn: self.$talkBackgroundEnabled)
+                        Text("Keep listening when the app is in the background. Uses more battery.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                         Toggle("Voice Directive Hint", isOn: self.$talkVoiceDirectiveHintEnabled)
                         Text("Include ElevenLabs voice switching instructions in the Talk Mode prompt. Disable to save tokens.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
-                        // Keep this separate so users can hide the side bubble without disabling Talk Mode.
-                        Toggle("Show Talk Button", isOn: self.$talkButtonEnabled)
+                        Toggle("Overlay Button", isOn: self.$talkButtonEnabled)
+                        Text("Show a floating Talk Mode button on the main screen.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
 
                         NavigationLink {
                             VoiceWakeWordsSettingsView()
