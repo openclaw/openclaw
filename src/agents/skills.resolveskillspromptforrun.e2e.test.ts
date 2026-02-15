@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { resolveSkillsPromptForRun } from "./skills.js";
+import { resolveSkillsPromptForRun, type SkillEntry } from "./skills.js";
 
 async function _writeSkill(params: {
   dir: string;
@@ -50,5 +50,52 @@ describe("resolveSkillsPromptForRun", () => {
     });
     expect(prompt).toContain("<available_skills>");
     expect(prompt).toContain("/app/skills/demo-skill/SKILL.md");
+  });
+  it("applies skillFilter when snapshot is absent", () => {
+    const alpha: SkillEntry = {
+      skill: {
+        name: "alpha",
+        description: "Alpha skill",
+        filePath: "/app/skills/alpha/SKILL.md",
+        baseDir: "/app/skills/alpha",
+        source: "openclaw-bundled",
+      },
+      frontmatter: {},
+    };
+    const beta: SkillEntry = {
+      skill: {
+        name: "beta",
+        description: "Beta skill",
+        filePath: "/app/skills/beta/SKILL.md",
+        baseDir: "/app/skills/beta",
+        source: "openclaw-bundled",
+      },
+      frontmatter: {},
+    };
+    const prompt = resolveSkillsPromptForRun({
+      entries: [alpha, beta],
+      workspaceDir: "/tmp/openclaw",
+      skillFilter: ["alpha"],
+    });
+    expect(prompt).toContain("alpha");
+    expect(prompt).not.toContain("beta");
+  });
+  it("returns empty when skillFilter is an empty array", () => {
+    const entry: SkillEntry = {
+      skill: {
+        name: "demo-skill",
+        description: "Demo",
+        filePath: "/app/skills/demo-skill/SKILL.md",
+        baseDir: "/app/skills/demo-skill",
+        source: "openclaw-bundled",
+      },
+      frontmatter: {},
+    };
+    const prompt = resolveSkillsPromptForRun({
+      entries: [entry],
+      workspaceDir: "/tmp/openclaw",
+      skillFilter: [],
+    });
+    expect(prompt).toBe("");
   });
 });
