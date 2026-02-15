@@ -157,11 +157,15 @@ export function resolveConfigPath(
   if (override) {
     return resolveUserPath(override, env, homedir);
   }
-  const newConfigExists = fs.existsSync(path.join(stateDir, CONFIG_FILENAME));
+
+  // Consistent legacy skipping: omit legacy filenames when openclaw.json exists
+  const primaryConfigPath = path.join(stateDir, CONFIG_FILENAME);
+  const skipLegacy = fs.existsSync(primaryConfigPath);
   const candidates = [
-    path.join(stateDir, CONFIG_FILENAME),
-    ...(newConfigExists ? [] : LEGACY_CONFIG_FILENAMES.map((name) => path.join(stateDir, name))),
+    primaryConfigPath,
+    ...(skipLegacy ? [] : LEGACY_CONFIG_FILENAMES.map((name) => path.join(stateDir, name))),
   ];
+
   const existing = candidates.find((candidate) => {
     try {
       return fs.existsSync(candidate);

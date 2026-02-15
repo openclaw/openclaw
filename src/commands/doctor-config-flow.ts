@@ -757,9 +757,12 @@ async function maybeMigrateLegacyConfig(): Promise<string[]> {
  * already exists in the same directory.  This prevents the gateway from
  * picking them up and producing validation-error log spam (issue #11465).
  */
-export async function renameStaleLegacyConfigs(stateDir?: string): Promise<string[]> {
+export async function renameStaleLegacyConfigs(
+  env: NodeJS.ProcessEnv = process.env,
+  stateDir?: string,
+): Promise<string[]> {
   const changes: string[] = [];
-  const dir = stateDir ?? resolveStateDir();
+  const dir = stateDir ?? resolveStateDir(env);
   const primaryPath = path.join(dir, "openclaw.json");
 
   try {
@@ -776,15 +779,25 @@ export async function renameStaleLegacyConfigs(stateDir?: string): Promise<strin
     } catch {
       continue;
     }
-    const migratedPath = `${legacyPath}.migrated`;
+    let migratedPath = `${legacyPath}.migrated`;
+
+    // Check for collision and append timestamp if needed
     try {
-      // Remove existing .migrated first — on Windows, rename() fails with
-      // EEXIST if the destination exists (unlike POSIX which overwrites).
-      await fs.rm(migratedPath, { force: true });
+      await fs.access(migratedPath);
+      // .migrated already exists — append timestamp to avoid collision
+      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+      migratedPath = `${legacyPath}.migrated.${timestamp}`;
+    } catch {
+      // .migrated doesn't exist — proceed with standard naming
+    }
+
+    try {
       await fs.rename(legacyPath, migratedPath);
       changes.push(`Renamed stale legacy config: ${legacyPath} -> ${migratedPath}`);
-    } catch {
-      // best effort
+    } catch (err) {
+      // Log the specific error for debugging, but continue best-effort
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      changes.push(`Failed to rename ${legacyPath}: ${errorMsg}`);
     }
   }
 
@@ -809,7 +822,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     note(legacyConfigChanges.map((entry) => `- ${entry}`).join("\n"), "Doctor changes");
   }
 
-  const staleLegacyChanges = await renameStaleLegacyConfigs();
+  const staleLegacyChanges = await renameStaleLegacyConfigs(process.env);
   if (staleLegacyChanges.length > 0) {
     note(staleLegacyChanges.map((entry) => `- ${entry}`).join("\n"), "Doctor changes");
   }
