@@ -189,6 +189,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional override path to sqlite-vec extension library (.dylib/.so/.dll).",
   "agents.defaults.memorySearch.query.hybrid.enabled":
     "Enable hybrid BM25 + vector search for memory (default: true).",
+  "agents.defaults.memorySearch.query.maxInjectedChars":
+    "Max total snippet characters returned by memory_search per call (default: 4000).",
   "agents.defaults.memorySearch.query.hybrid.vectorWeight":
     "Weight for vector similarity when merging results (0-1).",
   "agents.defaults.memorySearch.query.hybrid.textWeight":

@@ -323,6 +323,8 @@ export type MemorySearchConfig = {
   query?: {
     maxResults?: number;
     minScore?: number;
+    /** Max total snippet characters injected per memory_search call. */
+    maxInjectedChars?: number;
     hybrid?: {
       /** Enable hybrid BM25 + vector search (default: true). */
       enabled?: boolean;

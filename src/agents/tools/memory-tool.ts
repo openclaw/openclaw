@@ -10,6 +10,8 @@ import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveMemorySearchConfig } from "../memory-search.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 
+const DEFAULT_MEMORY_SEARCH_MAX_INJECTED_CHARS = 4_000;
+
 const MemorySearchSchema = Type.Object({
   query: Type.String(),
   maxResults: Type.Optional(Type.Number()),
@@ -34,7 +36,8 @@ export function createMemorySearchTool(options: {
     sessionKey: options.agentSessionKey,
     config: cfg,
   });
-  if (!resolveMemorySearchConfig(cfg, agentId)) {
+  const memorySearch = resolveMemorySearchConfig(cfg, agentId);
+  if (!memorySearch) {
     return null;
   }
   return {
@@ -68,10 +71,12 @@ export function createMemorySearchTool(options: {
         const status = manager.status();
         const decorated = decorateCitations(rawResults, includeCitations);
         const resolved = resolveMemoryBackendConfig({ cfg, agentId });
-        const results =
-          status.backend === "qmd"
-            ? clampResultsByInjectedChars(decorated, resolved.qmd?.limits.maxInjectedChars)
-            : decorated;
+        const injectedBudget = resolveInjectedCharsBudget({
+          fallbackBudget: memorySearch.query.maxInjectedChars,
+          backend: status.backend,
+          qmdBudget: resolved.qmd?.limits.maxInjectedChars,
+        });
+        const results = clampResultsByInjectedChars(decorated, injectedBudget);
         return jsonResult({
           results,
           provider: status.provider,
@@ -185,6 +190,27 @@ function clampResultsByInjectedChars(
     }
   }
   return clamped;
+}
+
+function resolveInjectedCharsBudget(params: {
+  fallbackBudget?: number;
+  backend?: "builtin" | "qmd";
+  qmdBudget?: number;
+}): number {
+  const fallbackBudget =
+    typeof params.fallbackBudget === "number" && Number.isFinite(params.fallbackBudget)
+      ? Math.max(1, Math.floor(params.fallbackBudget))
+      : DEFAULT_MEMORY_SEARCH_MAX_INJECTED_CHARS;
+
+  if (params.backend !== "qmd") {
+    return fallbackBudget;
+  }
+
+  const qmdBudget =
+    typeof params.qmdBudget === "number" && Number.isFinite(params.qmdBudget)
+      ? Math.max(1, Math.floor(params.qmdBudget))
+      : fallbackBudget;
+  return Math.min(fallbackBudget, qmdBudget);
 }
 
 function shouldIncludeCitations(params: {
