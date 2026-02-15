@@ -2,6 +2,8 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import type WebSocket from "ws";
 import { Buffer } from "node:buffer";
 
+export { createDedupeCache } from "openclaw/plugin-sdk";
+
 export type ResponsePrefixContext = {
   model?: string;
   modelFull?: string;
@@ -36,59 +38,6 @@ export function formatInboundFromLabel(params: {
     return directLabel;
   }
   return `${directLabel} id:${directId}`;
-}
-
-type DedupeCache = {
-  check: (key: string | undefined | null, now?: number) => boolean;
-};
-
-export function createDedupeCache(options: { ttlMs: number; maxSize: number }): DedupeCache {
-  const ttlMs = Math.max(0, options.ttlMs);
-  const maxSize = Math.max(0, Math.floor(options.maxSize));
-  const cache = new Map<string, number>();
-
-  const touch = (key: string, now: number) => {
-    cache.delete(key);
-    cache.set(key, now);
-  };
-
-  const prune = (now: number) => {
-    const cutoff = ttlMs > 0 ? now - ttlMs : undefined;
-    if (cutoff !== undefined) {
-      for (const [entryKey, entryTs] of cache) {
-        if (entryTs < cutoff) {
-          cache.delete(entryKey);
-        }
-      }
-    }
-    if (maxSize <= 0) {
-      cache.clear();
-      return;
-    }
-    while (cache.size > maxSize) {
-      const oldestKey = cache.keys().next().value as string | undefined;
-      if (!oldestKey) {
-        break;
-      }
-      cache.delete(oldestKey);
-    }
-  };
-
-  return {
-    check: (key, now = Date.now()) => {
-      if (!key) {
-        return false;
-      }
-      const existing = cache.get(key);
-      if (existing !== undefined && (ttlMs <= 0 || now - existing < ttlMs)) {
-        touch(key, now);
-        return true;
-      }
-      touch(key, now);
-      prune(now);
-      return false;
-    },
-  };
 }
 
 export function rawDataToString(
