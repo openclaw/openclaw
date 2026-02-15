@@ -108,8 +108,9 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
       return;
     }
 
-    // Validate token
-    if (commandTokens.size > 0 && !commandTokens.has(payload.token)) {
+    // Validate token — fail closed: reject when no tokens are registered
+    // (e.g. registration failed or startup was partial)
+    if (commandTokens.size === 0 || !commandTokens.has(payload.token)) {
       sendJsonResponse(res, 401, {
         response_type: "ephemeral",
         text: "Unauthorized: invalid command token.",

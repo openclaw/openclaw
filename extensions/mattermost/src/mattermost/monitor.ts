@@ -1075,10 +1075,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     const onAbortCleanup = () => {
       void cleanupSlashCommands({
         client,
-        commands: getSlashCommandState().registeredCommands,
+        commands: getSlashCommandState(account.accountId)?.registeredCommands ?? [],
         log: (msg) => runtime.log?.(msg),
       })
-        .then(() => deactivateSlashCommands())
+        .then(() => deactivateSlashCommands(account.accountId))
         .catch((err) => runtime.error?.(`mattermost: slash cleanup failed: ${String(err)}`));
     };
     opts.abortSignal?.addEventListener("abort", onAbortCleanup, { once: true });
