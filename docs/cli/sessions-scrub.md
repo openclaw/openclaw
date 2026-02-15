@@ -188,7 +188,7 @@ openclaw sessions scrub --no-backup
 - **Location**: Session files are discovered in `~/.openclaw/agents/*/sessions/*.jsonl`, `${stateDir}/sessions/*.jsonl`, and legacy `~/.openclaw/sessions/*.jsonl`
 - **Patterns**: Uses `redactSensitiveText()` from `src/logging/redact.ts`
 - **Scope**: Processes all agents' sessions
-- **Performance**: Processes files sequentially; may take a few seconds for hundreds of sessions
+- **Performance**: Uses bounded concurrency with default 20 parallel workers (configurable via `--concurrency`)
 - **Safety**: Creates backups by default; dry-run mode available
 
 ## Context: GitHub issue #11468

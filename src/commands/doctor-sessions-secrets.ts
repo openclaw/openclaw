@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveStateDir } from "../config/paths.js";
 import { findSessionFiles } from "../gateway/session-utils.fs.js";
-import { getDefaultRedactPatterns } from "../logging/redact.js";
+import { getDefaultRedactPatterns, parsePattern } from "../logging/redact.js";
 import { note } from "../terminal/note.js";
 
 /**
@@ -38,23 +38,6 @@ async function scanFileForSecrets(
     return { matchCount: count };
   } catch {
     return { matchCount: 0, error: true };
-  }
-}
-
-/** Parse a single redact pattern string into a RegExp (mirrors redact.ts logic). */
-function parsePattern(raw: string): RegExp | null {
-  if (!raw.trim()) {
-    return null;
-  }
-  const match = raw.match(/^\/(.+)\/([gimsuy]*)$/);
-  try {
-    if (match) {
-      const flags = match[2].includes("g") ? match[2] : `${match[2]}g`;
-      return new RegExp(match[1], flags);
-    }
-    return new RegExp(raw, "gi");
-  } catch {
-    return null;
   }
 }
 
