@@ -114,6 +114,45 @@ describe("listMemoryFiles", () => {
       expect(files.some((file) => file.endsWith("nested.md"))).toBe(false);
     }
   });
+
+  it("respects ignorePaths glob patterns", async () => {
+    await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Default memory");
+    const extraDir = path.join(tmpDir, "extra");
+    await fs.mkdir(extraDir, { recursive: true });
+    await fs.writeFile(path.join(extraDir, "note.md"), "# Note");
+
+    // Create node_modules with a .md file inside
+    const nodeModules = path.join(extraDir, "node_modules");
+    await fs.mkdir(nodeModules, { recursive: true });
+    await fs.writeFile(path.join(nodeModules, "readme.md"), "# Should be ignored");
+
+    // Create .venv with a .md file inside
+    const venv = path.join(extraDir, ".venv");
+    await fs.mkdir(venv, { recursive: true });
+    await fs.writeFile(path.join(venv, "docs.md"), "# Should also be ignored");
+
+    const files = await listMemoryFiles(tmpDir, [extraDir], ["**/node_modules/**", "**/.venv/**"]);
+    expect(files).toHaveLength(2); // MEMORY.md + note.md
+    expect(files.some((file) => file.endsWith("MEMORY.md"))).toBe(true);
+    expect(files.some((file) => file.endsWith("note.md"))).toBe(true);
+    expect(files.some((file) => file.includes("node_modules"))).toBe(false);
+    expect(files.some((file) => file.includes(".venv"))).toBe(false);
+  });
+
+  it("supports wildcard glob patterns in ignorePaths", async () => {
+    await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Default memory");
+    const extraDir = path.join(tmpDir, "extra");
+    await fs.mkdir(extraDir, { recursive: true });
+    await fs.writeFile(path.join(extraDir, "note.md"), "# Note");
+
+    const generatedDir = path.join(extraDir, "generated-build-cache");
+    await fs.mkdir(generatedDir, { recursive: true });
+    await fs.writeFile(path.join(generatedDir, "skip.md"), "# Should be ignored");
+
+    const files = await listMemoryFiles(tmpDir, [extraDir], ["**/generated-*/**"]);
+    expect(files).toHaveLength(2); // MEMORY.md + note.md
+    expect(files.some((file) => file.endsWith("skip.md"))).toBe(false);
+  });
 });
 
 describe("chunkMarkdown", () => {

@@ -54,7 +54,50 @@ export function isMemoryPath(relPath: string): boolean {
   return normalized.startsWith("memory/");
 }
 
-async function walkDir(dir: string, files: string[]) {
+/**
+ * Normalize paths for glob matching across platforms.
+ */
+function toPosixPath(value: string): string {
+  return value.replace(/\\/g, "/");
+}
+
+function shouldIgnorePath(params: {
+  absPath: string;
+  workspaceDir: string;
+  rootDir: string;
+  ignorePaths: string[];
+  isDirectory?: boolean;
+}): boolean {
+  const absPathPosix = toPosixPath(path.resolve(params.absPath));
+  const rootRelPosix = toPosixPath(path.relative(params.rootDir, params.absPath));
+  const workspaceRelPosix = toPosixPath(path.relative(params.workspaceDir, params.absPath));
+  const candidates = [absPathPosix, rootRelPosix, workspaceRelPosix]
+    .filter((value) => value.length > 0 && value !== ".")
+    .map((value) => (params.isDirectory ? `${value.replace(/\/+$/g, "")}/` : value));
+
+  for (const rawPattern of params.ignorePaths) {
+    const pattern = rawPattern.trim();
+    if (!pattern) {
+      continue;
+    }
+    const posixPattern = toPosixPath(pattern);
+    for (const candidate of candidates) {
+      if (path.posix.matchesGlob(candidate, posixPattern)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+async function walkDir(params: {
+  dir: string;
+  files: string[];
+  workspaceDir: string;
+  rootDir: string;
+  ignorePaths: string[];
+}) {
+  const { dir, files, workspaceDir, rootDir, ignorePaths } = params;
   const entries = await fs.readdir(dir, { withFileTypes: true });
   for (const entry of entries) {
     const full = path.join(dir, entry.name);
@@ -62,10 +105,33 @@ async function walkDir(dir: string, files: string[]) {
       continue;
     }
     if (entry.isDirectory()) {
-      await walkDir(full, files);
+      if (
+        ignorePaths.length > 0 &&
+        shouldIgnorePath({
+          absPath: full,
+          workspaceDir,
+          rootDir,
+          ignorePaths,
+          isDirectory: true,
+        })
+      ) {
+        continue;
+      }
+      await walkDir({ dir: full, files, workspaceDir, rootDir, ignorePaths });
       continue;
     }
     if (!entry.isFile()) {
+      continue;
+    }
+    if (
+      ignorePaths.length > 0 &&
+      shouldIgnorePath({
+        absPath: full,
+        workspaceDir,
+        rootDir,
+        ignorePaths,
+      })
+    ) {
       continue;
     }
     if (!entry.name.endsWith(".md")) {
@@ -78,11 +144,13 @@ async function walkDir(dir: string, files: string[]) {
 export async function listMemoryFiles(
   workspaceDir: string,
   extraPaths?: string[],
+  ignorePaths?: string[],
 ): Promise<string[]> {
   const result: string[] = [];
   const memoryFile = path.join(workspaceDir, "MEMORY.md");
   const altMemoryFile = path.join(workspaceDir, "memory.md");
   const memoryDir = path.join(workspaceDir, "memory");
+  const normalizedIgnorePaths = (ignorePaths ?? []).map((value) => value.trim()).filter(Boolean);
 
   const addMarkdownFile = async (absPath: string) => {
     try {
@@ -102,7 +170,13 @@ export async function listMemoryFiles(
   try {
     const dirStat = await fs.lstat(memoryDir);
     if (!dirStat.isSymbolicLink() && dirStat.isDirectory()) {
-      await walkDir(memoryDir, result);
+      await walkDir({
+        dir: memoryDir,
+        files: result,
+        workspaceDir,
+        rootDir: memoryDir,
+        ignorePaths: normalizedIgnorePaths,
+      });
     }
   } catch {}
 
@@ -115,7 +189,13 @@ export async function listMemoryFiles(
           continue;
         }
         if (stat.isDirectory()) {
-          await walkDir(inputPath, result);
+          await walkDir({
+            dir: inputPath,
+            files: result,
+            workspaceDir,
+            rootDir: inputPath,
+            ignorePaths: normalizedIgnorePaths,
+          });
           continue;
         }
         if (stat.isFile() && inputPath.endsWith(".md")) {
