@@ -7,9 +7,10 @@ import { loadConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.js";
-import { resolveAgentConfig } from "../agent-scope.js";
+import { resolveAgentConfig, resolveAgentModelFallbacksOverride } from "../agent-scope.js";
 import { AGENT_LANE_SUBAGENT } from "../lanes.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
+import { runWithModelFallback } from "../model-fallback.js";
 import { optionalStringEnum } from "../schema/typebox.js";
 import { buildSubagentSystemPrompt } from "../subagent-announce.js";
 import { getSubagentDepthFromSessionStore } from "../subagent-depth.js";
@@ -267,9 +268,23 @@ export function createSessionsSpawnTool(opts?: {
         maxSpawnDepth,
       });
 
+      // Get fallbacks for this agent
+      const fallbacks = resolveAgentModelFallbacksOverride(cfg, targetAgentId);
+
+      // Generate idempotency key upfront
       const childIdem = crypto.randomUUID();
       let childRunId: string = childIdem;
-      try {
+
+      // Build the run function that will be executed with fallback support
+      const runSubagentWithModel = async (modelProvider: string, modelName: string) => {
+        // Patch the session with the current model
+        await callGateway({
+          method: "sessions.patch",
+          params: { key: childSessionKey, model: `${modelProvider}/${modelName}` },
+          timeoutMs: 10_000,
+        });
+
+        // Start the agent
         const response = await callGateway<{ runId: string }>({
           method: "agent",
           params: {
@@ -294,9 +309,47 @@ export function createSessionsSpawnTool(opts?: {
           },
           timeoutMs: 10_000,
         });
-        if (typeof response?.runId === "string" && response.runId) {
-          childRunId = response.runId;
+
+        return response;
+      };
+
+      // Extract provider and model from resolvedModel
+      const { provider: primaryProvider, model: primaryModel } = splitModelRef(resolvedModel);
+
+      try {
+        // Run with fallback support
+        const fallbackResult = await runWithModelFallback({
+          cfg,
+          provider: primaryProvider ?? "unknown",
+          model: primaryModel ?? "default",
+          agentDir: undefined,
+          fallbacksOverride: fallbacks,
+          run: async (provider, model) => {
+            // Patch session depth first
+            await callGateway({
+              method: "sessions.patch",
+              params: { key: childSessionKey, spawnDepth: childDepth },
+              timeoutMs: 10_000,
+            });
+            // Patch thinking if set
+            if (thinkingOverride !== undefined) {
+              await callGateway({
+                method: "sessions.patch",
+                params: {
+                  key: childSessionKey,
+                  thinkingLevel: thinkingOverride === "off" ? null : thinkingOverride,
+                },
+                timeoutMs: 10_000,
+              });
+            }
+            return runSubagentWithModel(provider, model);
+          },
+        });
+
+        if (typeof fallbackResult.result?.runId === "string" && fallbackResult.result.runId) {
+          childRunId = fallbackResult.result.runId;
         }
+        modelApplied = true;
       } catch (err) {
         const messageText =
           err instanceof Error ? err.message : typeof err === "string" ? err : "error";
