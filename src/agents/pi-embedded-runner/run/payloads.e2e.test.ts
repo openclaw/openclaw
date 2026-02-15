@@ -41,16 +41,24 @@ describe("buildEmbeddedRunPayloads", () => {
     ...overrides,
   });
 
-  it("suppresses raw API error JSON when the assistant errored", () => {
-    const lastAssistant = makeAssistant({});
-    const payloads = buildEmbeddedRunPayloads({
-      assistantTexts: [errorJson],
+  type BuildPayloadParams = Parameters<typeof buildEmbeddedRunPayloads>[0];
+  const buildPayloads = (overrides: Partial<BuildPayloadParams> = {}) =>
+    buildEmbeddedRunPayloads({
+      assistantTexts: [],
       toolMetas: [],
-      lastAssistant,
+      lastAssistant: undefined,
       sessionKey: "session:telegram",
       inlineToolResultsAllowed: false,
       verboseLevel: "off",
       reasoningLevel: "off",
+      toolResultFormat: "plain",
+      ...overrides,
+    });
+
+  it("suppresses raw API error JSON when the assistant errored", () => {
+    const payloads = buildPayloads({
+      assistantTexts: [errorJson],
+      lastAssistant: makeAssistant({}),
     });
 
     expect(payloads).toHaveLength(1);
@@ -62,15 +70,11 @@ describe("buildEmbeddedRunPayloads", () => {
   });
 
   it("suppresses pretty-printed error JSON that differs from the errorMessage", () => {
-    const lastAssistant = makeAssistant({ errorMessage: errorJson });
-    const payloads = buildEmbeddedRunPayloads({
+    const payloads = buildPayloads({
       assistantTexts: [errorJsonPretty],
-      toolMetas: [],
-      lastAssistant,
-      sessionKey: "session:telegram",
+      lastAssistant: makeAssistant({ errorMessage: errorJson }),
       inlineToolResultsAllowed: true,
       verboseLevel: "on",
-      reasoningLevel: "off",
     });
 
     expect(payloads).toHaveLength(1);
@@ -81,15 +85,8 @@ describe("buildEmbeddedRunPayloads", () => {
   });
 
   it("suppresses raw error JSON from fallback assistant text", () => {
-    const lastAssistant = makeAssistant({ content: [{ type: "text", text: errorJsonPretty }] });
-    const payloads = buildEmbeddedRunPayloads({
-      assistantTexts: [],
-      toolMetas: [],
-      lastAssistant,
-      sessionKey: "session:telegram",
-      inlineToolResultsAllowed: false,
-      verboseLevel: "off",
-      reasoningLevel: "off",
+    const payloads = buildPayloads({
+      lastAssistant: makeAssistant({ content: [{ type: "text", text: errorJsonPretty }] }),
     });
 
     expect(payloads).toHaveLength(1);
@@ -100,19 +97,12 @@ describe("buildEmbeddedRunPayloads", () => {
   });
 
   it("includes provider context for billing errors", () => {
-    const lastAssistant = makeAssistant({
-      errorMessage: "insufficient credits",
-      content: [{ type: "text", text: "insufficient credits" }],
-    });
-    const payloads = buildEmbeddedRunPayloads({
-      assistantTexts: [],
-      toolMetas: [],
-      lastAssistant,
-      sessionKey: "session:telegram",
+    const payloads = buildPayloads({
+      lastAssistant: makeAssistant({
+        errorMessage: "insufficient credits",
+        content: [{ type: "text", text: "insufficient credits" }],
+      }),
       provider: "Anthropic",
-      inlineToolResultsAllowed: false,
-      verboseLevel: "off",
-      reasoningLevel: "off",
     });
 
     expect(payloads).toHaveLength(1);
@@ -121,15 +111,9 @@ describe("buildEmbeddedRunPayloads", () => {
   });
 
   it("suppresses raw error JSON even when errorMessage is missing", () => {
-    const lastAssistant = makeAssistant({ errorMessage: undefined });
-    const payloads = buildEmbeddedRunPayloads({
+    const payloads = buildPayloads({
       assistantTexts: [errorJsonPretty],
-      toolMetas: [],
-      lastAssistant,
-      sessionKey: "session:telegram",
-      inlineToolResultsAllowed: false,
-      verboseLevel: "off",
-      reasoningLevel: "off",
+      lastAssistant: makeAssistant({ errorMessage: undefined }),
     });
 
     expect(payloads).toHaveLength(1);
@@ -138,19 +122,13 @@ describe("buildEmbeddedRunPayloads", () => {
   });
 
   it("does not suppress error-shaped JSON when the assistant did not error", () => {
-    const lastAssistant = makeAssistant({
-      stopReason: "stop",
-      errorMessage: undefined,
-      content: [],
-    });
-    const payloads = buildEmbeddedRunPayloads({
+    const payloads = buildPayloads({
       assistantTexts: [errorJsonPretty],
-      toolMetas: [],
-      lastAssistant,
-      sessionKey: "session:telegram",
-      inlineToolResultsAllowed: false,
-      verboseLevel: "off",
-      reasoningLevel: "off",
+      lastAssistant: makeAssistant({
+        stopReason: "stop",
+        errorMessage: undefined,
+        content: [],
+      }),
     });
 
     expect(payloads).toHaveLength(1);
@@ -158,16 +136,8 @@ describe("buildEmbeddedRunPayloads", () => {
   });
 
   it("adds a fallback error when a tool fails and no assistant output exists", () => {
-    const payloads = buildEmbeddedRunPayloads({
-      assistantTexts: [],
-      toolMetas: [],
-      lastAssistant: undefined,
+    const payloads = buildPayloads({
       lastToolError: { toolName: "browser", error: "tab not found" },
-      sessionKey: "session:telegram",
-      inlineToolResultsAllowed: false,
-      verboseLevel: "off",
-      reasoningLevel: "off",
-      toolResultFormat: "plain",
     });
 
     expect(payloads).toHaveLength(1);
@@ -177,21 +147,14 @@ describe("buildEmbeddedRunPayloads", () => {
   });
 
   it("does not add tool error fallback when assistant output exists", () => {
-    const lastAssistant = makeAssistant({
-      stopReason: "stop",
-      errorMessage: undefined,
-      content: [],
-    });
-    const payloads = buildEmbeddedRunPayloads({
+    const payloads = buildPayloads({
       assistantTexts: ["All good"],
-      toolMetas: [],
-      lastAssistant,
+      lastAssistant: makeAssistant({
+        stopReason: "stop",
+        errorMessage: undefined,
+        content: [],
+      }),
       lastToolError: { toolName: "browser", error: "tab not found" },
-      sessionKey: "session:telegram",
-      inlineToolResultsAllowed: false,
-      verboseLevel: "off",
-      reasoningLevel: "off",
-      toolResultFormat: "plain",
     });
 
     expect(payloads).toHaveLength(1);
@@ -199,28 +162,20 @@ describe("buildEmbeddedRunPayloads", () => {
   });
 
   it("adds tool error fallback when the assistant only invoked tools", () => {
-    const lastAssistant = makeAssistant({
-      stopReason: "toolUse",
-      errorMessage: undefined,
-      content: [
-        {
-          type: "toolCall",
-          id: "toolu_01",
-          name: "exec",
-          arguments: { command: "echo hi" },
-        },
-      ],
-    });
-    const payloads = buildEmbeddedRunPayloads({
-      assistantTexts: [],
-      toolMetas: [],
-      lastAssistant,
+    const payloads = buildPayloads({
+      lastAssistant: makeAssistant({
+        stopReason: "toolUse",
+        errorMessage: undefined,
+        content: [
+          {
+            type: "toolCall",
+            id: "toolu_01",
+            name: "exec",
+            arguments: { command: "echo hi" },
+          },
+        ],
+      }),
       lastToolError: { toolName: "exec", error: "Command exited with code 1" },
-      sessionKey: "session:telegram",
-      inlineToolResultsAllowed: false,
-      verboseLevel: "off",
-      reasoningLevel: "off",
-      toolResultFormat: "plain",
     });
 
     expect(payloads).toHaveLength(1);
@@ -230,16 +185,8 @@ describe("buildEmbeddedRunPayloads", () => {
   });
 
   it("suppresses recoverable tool errors containing 'required' for non-mutating tools", () => {
-    const payloads = buildEmbeddedRunPayloads({
-      assistantTexts: [],
-      toolMetas: [],
-      lastAssistant: undefined,
+    const payloads = buildPayloads({
       lastToolError: { toolName: "browser", error: "url required" },
-      sessionKey: "session:telegram",
-      inlineToolResultsAllowed: false,
-      verboseLevel: "off",
-      reasoningLevel: "off",
-      toolResultFormat: "plain",
     });
 
     // Recoverable errors should not be sent to the user
@@ -247,66 +194,34 @@ describe("buildEmbeddedRunPayloads", () => {
   });
 
   it("suppresses recoverable tool errors containing 'missing' for non-mutating tools", () => {
-    const payloads = buildEmbeddedRunPayloads({
-      assistantTexts: [],
-      toolMetas: [],
-      lastAssistant: undefined,
+    const payloads = buildPayloads({
       lastToolError: { toolName: "browser", error: "url missing" },
-      sessionKey: "session:telegram",
-      inlineToolResultsAllowed: false,
-      verboseLevel: "off",
-      reasoningLevel: "off",
-      toolResultFormat: "plain",
     });
 
     expect(payloads).toHaveLength(0);
   });
 
   it("suppresses recoverable tool errors containing 'invalid' for non-mutating tools", () => {
-    const payloads = buildEmbeddedRunPayloads({
-      assistantTexts: [],
-      toolMetas: [],
-      lastAssistant: undefined,
+    const payloads = buildPayloads({
       lastToolError: { toolName: "browser", error: "invalid parameter: url" },
-      sessionKey: "session:telegram",
-      inlineToolResultsAllowed: false,
-      verboseLevel: "off",
-      reasoningLevel: "off",
-      toolResultFormat: "plain",
     });
 
     expect(payloads).toHaveLength(0);
   });
 
   it("suppresses non-mutating non-recoverable tool errors when messages.suppressToolErrors is enabled", () => {
-    const payloads = buildEmbeddedRunPayloads({
-      assistantTexts: [],
-      toolMetas: [],
-      lastAssistant: undefined,
+    const payloads = buildPayloads({
       lastToolError: { toolName: "browser", error: "connection timeout" },
       config: { messages: { suppressToolErrors: true } },
-      sessionKey: "session:telegram",
-      inlineToolResultsAllowed: false,
-      verboseLevel: "off",
-      reasoningLevel: "off",
-      toolResultFormat: "plain",
     });
 
     expect(payloads).toHaveLength(0);
   });
 
   it("still shows mutating tool errors when messages.suppressToolErrors is enabled", () => {
-    const payloads = buildEmbeddedRunPayloads({
-      assistantTexts: [],
-      toolMetas: [],
-      lastAssistant: undefined,
+    const payloads = buildPayloads({
       lastToolError: { toolName: "write", error: "connection timeout" },
       config: { messages: { suppressToolErrors: true } },
-      sessionKey: "session:telegram",
-      inlineToolResultsAllowed: false,
-      verboseLevel: "off",
-      reasoningLevel: "off",
-      toolResultFormat: "plain",
     });
 
     expect(payloads).toHaveLength(1);
@@ -315,16 +230,8 @@ describe("buildEmbeddedRunPayloads", () => {
   });
 
   it("shows recoverable tool errors for mutating tools", () => {
-    const payloads = buildEmbeddedRunPayloads({
-      assistantTexts: [],
-      toolMetas: [],
-      lastAssistant: undefined,
+    const payloads = buildPayloads({
       lastToolError: { toolName: "message", meta: "reply", error: "text required" },
-      sessionKey: "session:telegram",
-      inlineToolResultsAllowed: false,
-      verboseLevel: "off",
-      reasoningLevel: "off",
-      toolResultFormat: "plain",
     });
 
     expect(payloads).toHaveLength(1);
@@ -333,16 +240,10 @@ describe("buildEmbeddedRunPayloads", () => {
   });
 
   it("shows mutating tool errors even when assistant output exists", () => {
-    const payloads = buildEmbeddedRunPayloads({
+    const payloads = buildPayloads({
       assistantTexts: ["Done."],
-      toolMetas: [],
       lastAssistant: { stopReason: "end_turn" } as AssistantMessage,
       lastToolError: { toolName: "write", error: "file missing" },
-      sessionKey: "session:telegram",
-      inlineToolResultsAllowed: false,
-      verboseLevel: "off",
-      reasoningLevel: "off",
-      toolResultFormat: "plain",
     });
 
     expect(payloads).toHaveLength(2);
@@ -352,20 +253,14 @@ describe("buildEmbeddedRunPayloads", () => {
   });
 
   it("does not treat session_status read failures as mutating when explicitly flagged", () => {
-    const payloads = buildEmbeddedRunPayloads({
+    const payloads = buildPayloads({
       assistantTexts: ["Status loaded."],
-      toolMetas: [],
       lastAssistant: { stopReason: "end_turn" } as AssistantMessage,
       lastToolError: {
         toolName: "session_status",
         error: "model required",
         mutatingAction: false,
       },
-      sessionKey: "session:telegram",
-      inlineToolResultsAllowed: false,
-      verboseLevel: "off",
-      reasoningLevel: "off",
-      toolResultFormat: "plain",
     });
 
     expect(payloads).toHaveLength(1);
@@ -373,38 +268,24 @@ describe("buildEmbeddedRunPayloads", () => {
   });
 
   it("dedupes identical tool warning text already present in assistant output", () => {
-    const seed = buildEmbeddedRunPayloads({
-      assistantTexts: [],
-      toolMetas: [],
-      lastAssistant: undefined,
+    const seed = buildPayloads({
       lastToolError: {
         toolName: "write",
         error: "file missing",
         mutatingAction: true,
       },
-      sessionKey: "session:telegram",
-      inlineToolResultsAllowed: false,
-      verboseLevel: "off",
-      reasoningLevel: "off",
-      toolResultFormat: "plain",
     });
     const warningText = seed[0]?.text;
     expect(warningText).toBeTruthy();
 
-    const payloads = buildEmbeddedRunPayloads({
+    const payloads = buildPayloads({
       assistantTexts: [warningText ?? ""],
-      toolMetas: [],
       lastAssistant: { stopReason: "end_turn" } as AssistantMessage,
       lastToolError: {
         toolName: "write",
         error: "file missing",
         mutatingAction: true,
       },
-      sessionKey: "session:telegram",
-      inlineToolResultsAllowed: false,
-      verboseLevel: "off",
-      reasoningLevel: "off",
-      toolResultFormat: "plain",
     });
 
     expect(payloads).toHaveLength(1);
@@ -412,16 +293,8 @@ describe("buildEmbeddedRunPayloads", () => {
   });
 
   it("shows non-recoverable tool errors to the user", () => {
-    const payloads = buildEmbeddedRunPayloads({
-      assistantTexts: [],
-      toolMetas: [],
-      lastAssistant: undefined,
+    const payloads = buildPayloads({
       lastToolError: { toolName: "browser", error: "connection timeout" },
-      sessionKey: "session:telegram",
-      inlineToolResultsAllowed: false,
-      verboseLevel: "off",
-      reasoningLevel: "off",
-      toolResultFormat: "plain",
     });
 
     // Non-recoverable errors should still be shown
