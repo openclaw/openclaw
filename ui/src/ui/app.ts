@@ -136,6 +136,8 @@ export class OpenClawApp extends LitElement {
   @state() chatThinkingLevel: string | null = null;
   @state() chatQueue: ChatQueueItem[] = [];
   @state() chatAttachments: ChatAttachment[] = [];
+  @state() chatModels: Array<{ id: string; name: string; provider: string }> = [];
+  @state() chatAuthProfiles: Array<{ id: string; provider: string }> = [];
   @state() chatManualRefreshInFlight = false;
   // Sidebar state for tool output viewing
   @state() sidebarOpen = false;

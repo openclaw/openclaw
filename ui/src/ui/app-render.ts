@@ -855,6 +855,15 @@ export function renderApp(state: AppViewState) {
                 onSplitRatioChange: (ratio: number) => state.handleSplitRatioChange(ratio),
                 assistantName: state.assistantName,
                 assistantAvatar: state.assistantAvatar,
+                // Model & auth profile selectors
+                availableModels: state.chatModels,
+                availableAuthProfiles: state.chatAuthProfiles,
+                onModelChange: (modelId: string | null) => {
+                  void patchSession(state, state.sessionKey, { model: modelId });
+                },
+                onAuthProfileChange: (profileId: string | null) => {
+                  void patchSession(state, state.sessionKey, { authProfile: profileId });
+                },
               })
             : nothing
         }

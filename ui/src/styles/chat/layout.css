@@ -307,11 +307,20 @@
 .chat-compose__actions {
   flex-shrink: 0;
   display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  justify-content: flex-end;
+}
+
+.chat-compose__buttons {
+  display: flex;
   align-items: stretch;
   gap: 8px;
 }
 
-.chat-compose .chat-compose__actions .btn {
+.chat-compose .chat-compose__actions .btn,
+.chat-compose .chat-compose__buttons .btn {
   padding: 0 16px;
   font-size: 13px;
   height: 40px;

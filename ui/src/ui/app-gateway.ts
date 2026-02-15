@@ -54,6 +54,8 @@ type GatewayHost = {
   refreshSessionsAfterChat: Set<string>;
   execApprovalQueue: ExecApprovalRequest[];
   execApprovalError: string | null;
+  chatModels: Array<{ id: string; name: string; provider: string }>;
+  chatAuthProfiles: Array<{ id: string; provider: string }>;
 };
 
 type SessionDefaultsSnapshot = {
@@ -148,6 +150,7 @@ export function connectGateway(host: GatewayHost) {
       void loadNodes(host as unknown as OpenClawApp, { quiet: true });
       void loadDevices(host as unknown as OpenClawApp, { quiet: true });
       void refreshActiveTab(host as unknown as Parameters<typeof refreshActiveTab>[0]);
+      void loadChatModelsAndProfiles(host);
     },
     onClose: ({ code, reason }) => {
       if (host.client !== client) {
@@ -269,6 +272,35 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
     if (resolved) {
       host.execApprovalQueue = removeExecApproval(host.execApprovalQueue, resolved.id);
     }
+  }
+}
+
+async function loadChatModelsAndProfiles(host: GatewayHost) {
+  if (!host.client) {
+    return;
+  }
+  try {
+    const [modelsRes, configRes] = await Promise.all([
+      host.client.request<{ models: Array<{ id: string; name: string; provider: string }> }>(
+        "models.list",
+        {},
+      ),
+      host.client.request<{
+        parsed?: { auth?: { profiles?: Record<string, { provider?: string; mode?: string }> } };
+      }>("config.get", {}),
+    ]);
+    if (modelsRes?.models) {
+      host.chatModels = modelsRes.models;
+    }
+    const profiles = configRes?.parsed?.auth?.profiles;
+    if (profiles && typeof profiles === "object") {
+      host.chatAuthProfiles = Object.entries(profiles).map(([id, val]) => ({
+        id,
+        provider: val.provider ?? "unknown",
+      }));
+    }
+  } catch {
+    // Non-critical; silently ignore
   }
 }
 
