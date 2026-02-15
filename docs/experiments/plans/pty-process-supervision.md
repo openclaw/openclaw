@@ -74,10 +74,10 @@ That requires one supervisor model for PTY and non PTY execution.
 
 ### Packaging And Placement
 
-This rewrite should be implemented as a standalone internal workspace package:
+This rewrite should be implemented as a core internal module in the existing source tree:
 
-- Path: `packages/process-supervisor`
-- Package type: internal (private) workspace module
+- Path: `src/process/supervisor`
+- Module type: internal source module (no new workspace package)
 - Consumers: core runtime paths (CLI runner, PTY runner, future process based tooling)
 
 It must **not** be implemented under `extensions/*`.
@@ -87,9 +87,9 @@ Rationale:
 - `extensions/*` are plugin surfaces for channels and optional features.
 - Process supervision is core infra and must be available to core execution paths.
 - Core infra needs strict lifecycle guarantees and cross platform contracts that should not depend on extension loading.
-- Keeping it in `packages/*` preserves clear boundaries and allows shared use across core modules.
+- `src/process/*` already contains process execution primitives, so colocating supervision there keeps ownership and lifecycle logic together.
 
-Initial API boundary for the package:
+Initial API boundary for the module:
 
 - `spawn(input): ManagedRun`
 - `cancel(runId, reason)`
@@ -105,7 +105,7 @@ Only consider moving to a separate repo/package registry after all are true:
 - More than one product/repo needs it directly.
 - We can maintain semver, docs, and Linux/macOS/Windows CI as a library owner.
 
-Until then, keep it as an internal workspace package in this monorepo.
+Until then, keep it as an internal module under `src/process/supervisor` in this monorepo.
 
 ### Proposed Interfaces
 
@@ -391,7 +391,7 @@ Implementation requirement:
 Scope trigger requirement:
 
 - Ensure `changed-scope` in `.github/workflows/ci.yml` marks process supervisor changes as Node + macOS relevant, including:
-  - `packages/process-supervisor/**`
+  - `src/process/supervisor/**`
   - `src/process/**`
   - `src/agents/**` paths that consume the supervisor
   - supervisor specific test files
