@@ -53,6 +53,31 @@ function suppressAnnounceForSteerRestart(entry?: SubagentRunRecord) {
   return entry?.suppressAnnounceReason === "steer-restart";
 }
 
+function startSubagentAnnounceCleanupFlow(runId: string, entry: SubagentRunRecord): boolean {
+  if (!beginSubagentCleanup(runId)) {
+    return false;
+  }
+  const requesterOrigin = normalizeDeliveryContext(entry.requesterOrigin);
+  void runSubagentAnnounceFlow({
+    childSessionKey: entry.childSessionKey,
+    childRunId: entry.runId,
+    requesterSessionKey: entry.requesterSessionKey,
+    requesterOrigin,
+    requesterDisplayKey: entry.requesterDisplayKey,
+    task: entry.task,
+    timeoutMs: SUBAGENT_ANNOUNCE_TIMEOUT_MS,
+    cleanup: entry.cleanup,
+    waitForCompletion: false,
+    startedAt: entry.startedAt,
+    endedAt: entry.endedAt,
+    label: entry.label,
+    outcome: entry.outcome,
+  }).then((didAnnounce) => {
+    finalizeSubagentCleanup(runId, entry.cleanup, didAnnounce);
+  });
+  return true;
+}
+
 function resumeSubagentRun(runId: string) {
   if (!runId || resumedRuns.has(runId)) {
     return;
@@ -70,27 +95,9 @@ function resumeSubagentRun(runId: string) {
       resumedRuns.add(runId);
       return;
     }
-    if (!beginSubagentCleanup(runId)) {
+    if (!startSubagentAnnounceCleanupFlow(runId, entry)) {
       return;
     }
-    const requesterOrigin = normalizeDeliveryContext(entry.requesterOrigin);
-    void runSubagentAnnounceFlow({
-      childSessionKey: entry.childSessionKey,
-      childRunId: entry.runId,
-      requesterSessionKey: entry.requesterSessionKey,
-      requesterOrigin,
-      requesterDisplayKey: entry.requesterDisplayKey,
-      task: entry.task,
-      timeoutMs: SUBAGENT_ANNOUNCE_TIMEOUT_MS,
-      cleanup: entry.cleanup,
-      waitForCompletion: false,
-      startedAt: entry.startedAt,
-      endedAt: entry.endedAt,
-      label: entry.label,
-      outcome: entry.outcome,
-    }).then((didAnnounce) => {
-      finalizeSubagentCleanup(runId, entry.cleanup, didAnnounce);
-    });
     resumedRuns.add(runId);
     return;
   }
@@ -237,27 +244,9 @@ function ensureListener() {
       return;
     }
 
-    if (!beginSubagentCleanup(evt.runId)) {
+    if (!startSubagentAnnounceCleanupFlow(evt.runId, entry)) {
       return;
     }
-    const requesterOrigin = normalizeDeliveryContext(entry.requesterOrigin);
-    void runSubagentAnnounceFlow({
-      childSessionKey: entry.childSessionKey,
-      childRunId: entry.runId,
-      requesterSessionKey: entry.requesterSessionKey,
-      requesterOrigin,
-      requesterDisplayKey: entry.requesterDisplayKey,
-      task: entry.task,
-      timeoutMs: SUBAGENT_ANNOUNCE_TIMEOUT_MS,
-      cleanup: entry.cleanup,
-      waitForCompletion: false,
-      startedAt: entry.startedAt,
-      endedAt: entry.endedAt,
-      label: entry.label,
-      outcome: entry.outcome,
-    }).then((didAnnounce) => {
-      finalizeSubagentCleanup(evt.runId, entry.cleanup, didAnnounce);
-    });
   });
 }
 
@@ -507,27 +496,9 @@ async function waitForSubagentCompletion(runId: string, waitTimeoutMs: number) {
     if (suppressAnnounceForSteerRestart(entry)) {
       return;
     }
-    if (!beginSubagentCleanup(runId)) {
+    if (!startSubagentAnnounceCleanupFlow(runId, entry)) {
       return;
     }
-    const requesterOrigin = normalizeDeliveryContext(entry.requesterOrigin);
-    void runSubagentAnnounceFlow({
-      childSessionKey: entry.childSessionKey,
-      childRunId: entry.runId,
-      requesterSessionKey: entry.requesterSessionKey,
-      requesterOrigin,
-      requesterDisplayKey: entry.requesterDisplayKey,
-      task: entry.task,
-      timeoutMs: SUBAGENT_ANNOUNCE_TIMEOUT_MS,
-      cleanup: entry.cleanup,
-      waitForCompletion: false,
-      startedAt: entry.startedAt,
-      endedAt: entry.endedAt,
-      label: entry.label,
-      outcome: entry.outcome,
-    }).then((didAnnounce) => {
-      finalizeSubagentCleanup(runId, entry.cleanup, didAnnounce);
-    });
   } catch {
     // ignore
   }
