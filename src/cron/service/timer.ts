@@ -357,16 +357,23 @@ function findDueJobs(state: CronServiceState): CronJob[] {
   });
 }
 
-export async function runMissedJobs(state: CronServiceState) {
+export async function runMissedJobs(
+  state: CronServiceState,
+  opts?: { skipJobIds?: ReadonlySet<string> },
+) {
   if (!state.store) {
     return;
   }
   const now = state.deps.nowMs();
+  const skipJobIds = opts?.skipJobIds;
   const missed = state.store.jobs.filter((j) => {
     if (!j.state) {
       j.state = {};
     }
     if (!j.enabled) {
+      return false;
+    }
+    if (skipJobIds?.has(j.id)) {
       return false;
     }
     if (typeof j.state.runningAtMs === "number") {
