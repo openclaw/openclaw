@@ -109,10 +109,22 @@ export async function consumeRestartSentinel(
 }
 
 export function formatRestartSentinelMessage(payload: RestartSentinelPayload): string {
-  if (payload.message?.trim()) {
-    return payload.message.trim();
+  const message = payload.message?.trim();
+  if (message && !payload.stats) {
+    return message;
   }
-  return summarizeRestartSentinel(payload);
+  const lines: string[] = [summarizeRestartSentinel(payload)];
+  if (message) {
+    lines.push(message);
+  }
+  const reason = payload.stats?.reason?.trim();
+  if (reason) {
+    lines.push(`Reason: ${reason}`);
+  }
+  if (payload.doctorHint?.trim()) {
+    lines.push(payload.doctorHint.trim());
+  }
+  return lines.join("\n");
 }
 
 export function summarizeRestartSentinel(payload: RestartSentinelPayload): string {

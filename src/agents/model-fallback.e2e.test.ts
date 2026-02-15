@@ -24,6 +24,22 @@ function makeCfg(overrides: Partial<OpenClawConfig> = {}): OpenClawConfig {
 }
 
 describe("runWithModelFallback", () => {
+  it("normalizes openai gpt-5.3 codex to openai-codex before running", async () => {
+    const cfg = makeCfg();
+    const run = vi.fn().mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-5.3-codex",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run).toHaveBeenCalledWith("openai-codex", "gpt-5.3-codex");
+  });
+
   it("does not fall back on non-auth errors", async () => {
     const cfg = makeCfg();
     const run = vi.fn().mockRejectedValueOnce(new Error("bad request")).mockResolvedValueOnce("ok");

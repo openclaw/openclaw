@@ -127,4 +127,34 @@ describe("gateway sessions patch", () => {
     expect(res.entry.authProfileOverrideSource).toBeUndefined();
     expect(res.entry.authProfileOverrideCompactionCount).toBeUndefined();
   });
+
+  test("sets spawnDepth for subagent sessions", async () => {
+    const store: Record<string, SessionEntry> = {};
+    const res = await applySessionsPatchToStore({
+      cfg: {} as OpenClawConfig,
+      store,
+      storeKey: "agent:main:subagent:child",
+      patch: { spawnDepth: 2 },
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.entry.spawnDepth).toBe(2);
+  });
+
+  test("rejects spawnDepth on non-subagent sessions", async () => {
+    const store: Record<string, SessionEntry> = {};
+    const res = await applySessionsPatchToStore({
+      cfg: {} as OpenClawConfig,
+      store,
+      storeKey: "agent:main:main",
+      patch: { spawnDepth: 1 },
+    });
+    expect(res.ok).toBe(false);
+    if (res.ok) {
+      return;
+    }
+    expect(res.error.message).toContain("spawnDepth is only supported");
+  });
 });
