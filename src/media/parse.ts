@@ -116,13 +116,6 @@ export function splitMediaFromOutput(raw: string): {
       continue;
     }
 
-    const trimmedStart = line.trimStart();
-    if (!trimmedStart.startsWith("MEDIA:")) {
-      keptLines.push(line);
-      lineOffset += line.length + 1; // +1 for newline
-      continue;
-    }
-
     const matches = Array.from(line.matchAll(MEDIA_TOKEN_RE));
     if (matches.length === 0) {
       keptLines.push(line);
@@ -160,8 +153,13 @@ export function splitMediaFromOutput(raw: string): {
       const trimmedPayload = payloadValue.trim();
       const looksLikeLocalPath =
         isLikelyLocalPath(trimmedPayload) || trimmedPayload.startsWith("file://");
+      // Only apply the "path with spaces" fallback when MEDIA: is at line start.
+      // When MEDIA: appears inline (preceded by other text), trailing words are
+      // likely prose, not part of the file path.
+      const isInlineToken = start > 0 && line.slice(0, start).trim().length > 0;
       if (
         !unwrapped &&
+        !isInlineToken &&
         validCount === 1 &&
         invalidParts.length > 0 &&
         /\s/.test(payloadValue) &&
