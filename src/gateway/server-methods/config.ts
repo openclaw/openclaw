@@ -342,7 +342,9 @@ export const configHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const merged = applyMergePatch(snapshot.config, parsedRes.parsed);
+    const merged = applyMergePatch(snapshot.config, parsedRes.parsed, {
+      mergeObjectArraysById: true,
+    });
     const schemaPatch = loadSchemaWithPlugins();
     const restoredMerge = restoreRedactedValues(merged, snapshot.config, schemaPatch.uiHints);
     if (!restoredMerge.ok) {
