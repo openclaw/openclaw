@@ -104,6 +104,7 @@ describe("runConfigureWizard", () => {
       exists: false,
       valid: true,
       config: {},
+      resolved: {},
       issues: [],
     });
     mocks.resolveGatewayPort.mockReturnValue(18789);
@@ -135,6 +136,76 @@ describe("runConfigureWizard", () => {
     );
   });
 
+  it("preserves custom keys not managed by the wizard", async () => {
+    vi.clearAllMocks();
+    // User config with custom keys the wizard doesn't manage
+    const customConfig: OpenClawConfig = {
+      gateway: { auth: { mode: "token", token: "my-token", allowTailscale: true } },
+      tools: { media: { audio: { enabled: true } } },
+      skills: {
+        entries: {
+          "my-skill": { enabled: false },
+          "another-skill": { enabled: true, apiKey: "sk-test" },
+        },
+      },
+    };
+    // snapshot.config includes runtime defaults on top of user config
+    const configWithDefaults: OpenClawConfig = {
+      ...customConfig,
+      gateway: { ...customConfig.gateway },
+      agents: {
+        defaults: {
+          maxConcurrent: 4,
+          workspace: "~/.openclaw/workspace",
+        },
+      },
+    };
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      config: configWithDefaults,
+      resolved: customConfig,
+      issues: [],
+    });
+    mocks.resolveGatewayPort.mockReturnValue(18789);
+    mocks.probeGatewayReachable.mockResolvedValue({ ok: false });
+    mocks.resolveControlUiLinks.mockReturnValue({ wsUrl: "ws://127.0.0.1:18789" });
+    mocks.summarizeExistingConfig.mockReturnValue("");
+    mocks.createClackPrompter.mockReturnValue({});
+
+    // User selects local mode then immediately continues (no sections).
+    // Since resolved config has no gateway.mode, the wizard sets it to "local"
+    // and didSetGatewayMode=true, triggering persistConfig().
+    const selectQueue = ["local", "__continue"];
+    mocks.clackSelect.mockImplementation(async () => selectQueue.shift());
+    mocks.clackIntro.mockResolvedValue(undefined);
+    mocks.clackOutro.mockResolvedValue(undefined);
+    mocks.clackText.mockResolvedValue("");
+    mocks.clackConfirm.mockResolvedValue(false);
+
+    await runConfigureWizard(
+      { command: "configure" },
+      {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      },
+    );
+
+    expect(mocks.writeConfigFile).toHaveBeenCalled();
+    const writtenConfig = mocks.writeConfigFile.mock.calls[0]?.[0] as OpenClawConfig;
+    // Custom keys must be preserved
+    expect(writtenConfig.tools?.media?.audio).toEqual({ enabled: true });
+    expect(writtenConfig.skills?.entries?.["my-skill"]).toEqual({ enabled: false });
+    expect(writtenConfig.skills?.entries?.["another-skill"]).toEqual({
+      enabled: true,
+      apiKey: "sk-test",
+    });
+    expect(writtenConfig.gateway?.auth?.allowTailscale).toBe(true);
+    // Runtime defaults must NOT leak into the written config
+    expect(writtenConfig.agents?.defaults?.maxConcurrent).toBeUndefined();
+  });
+
   it("exits with code 1 when configure wizard is cancelled", async () => {
     const runtime = {
       log: vi.fn(),
@@ -146,6 +217,7 @@ describe("runConfigureWizard", () => {
       exists: false,
       valid: true,
       config: {},
+      resolved: {},
       issues: [],
     });
     mocks.probeGatewayReachable.mockResolvedValue({ ok: false });
