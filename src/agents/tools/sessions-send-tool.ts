@@ -252,6 +252,7 @@ export function createSessionsSendTool(opts?: {
         requesterChannel: opts?.agentChannel,
         targetSessionKey: displayKey,
       });
+
       const sendParams = {
         message,
         sessionKey: resolvedKey,
