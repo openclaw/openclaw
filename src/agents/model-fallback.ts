@@ -27,7 +27,7 @@ type ModelCandidate = {
   model: string;
 };
 
-type FallbackAttempt = {
+export type FallbackAttempt = {
   provider: string;
   model: string;
   error: string;
