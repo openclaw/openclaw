@@ -26,7 +26,17 @@ export function resolveExtraParams(params: {
 }): Record<string, unknown> | undefined {
   const modelKey = `${params.provider}/${params.modelId}`;
   const modelConfig = params.cfg?.agents?.defaults?.models?.[modelKey];
-  return modelConfig?.params ? { ...modelConfig.params } : undefined;
+  if (!modelConfig) {
+    return undefined;
+  }
+  const result: Record<string, unknown> = {};
+  if (modelConfig.params) {
+    Object.assign(result, modelConfig.params);
+  }
+  if (typeof modelConfig.streaming === "boolean") {
+    result.streaming = modelConfig.streaming;
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
 }
 
 type CacheRetention = "none" | "short" | "long";
@@ -77,12 +87,15 @@ function createStreamFnWithExtraParams(
     return undefined;
   }
 
-  const streamParams: CacheRetentionStreamOptions = {};
+  const streamParams: CacheRetentionStreamOptions & Record<string, unknown> = {};
   if (typeof extraParams.temperature === "number") {
     streamParams.temperature = extraParams.temperature;
   }
   if (typeof extraParams.maxTokens === "number") {
     streamParams.maxTokens = extraParams.maxTokens;
+  }
+  if (typeof extraParams.streaming === "boolean") {
+    streamParams.streaming = extraParams.streaming;
   }
   const cacheRetention = resolveCacheRetention(extraParams, provider);
   if (cacheRetention) {
