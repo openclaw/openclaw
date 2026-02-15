@@ -44,9 +44,7 @@ import {
   resolveGmailHookRuntimeConfig,
 } from "./gmail.js";
 
-export type GmailSetupOptions = {
-  account: string;
-  project?: string;
+type GmailCommonOptions = {
   topic?: string;
   subscription?: string;
   label?: string;
@@ -62,27 +60,17 @@ export type GmailSetupOptions = {
   tailscale?: "off" | "serve" | "funnel";
   tailscalePath?: string;
   tailscaleTarget?: string;
+};
+
+export type GmailSetupOptions = GmailCommonOptions & {
+  account: string;
+  project?: string;
   pushEndpoint?: string;
   json?: boolean;
 };
 
-export type GmailRunOptions = {
+export type GmailRunOptions = GmailCommonOptions & {
   account?: string;
-  topic?: string;
-  subscription?: string;
-  label?: string;
-  hookToken?: string;
-  pushToken?: string;
-  hookUrl?: string;
-  bind?: string;
-  port?: number;
-  path?: string;
-  includeBody?: boolean;
-  maxBytes?: number;
-  renewEveryMinutes?: number;
-  tailscale?: "off" | "serve" | "funnel";
-  tailscalePath?: string;
-  tailscaleTarget?: string;
 };
 
 const DEFAULT_GMAIL_TOPIC_IAM_MEMBER = "serviceAccount:gmail-api-push@system.gserviceaccount.com";
