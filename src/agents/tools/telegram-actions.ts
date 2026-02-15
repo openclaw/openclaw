@@ -10,6 +10,7 @@ import {
   editMessageTelegram,
   reactMessageTelegram,
   sendMessageTelegram,
+  sendPollTelegram,
   sendStickerTelegram,
 } from "../../telegram/send.js";
 import { getCacheStats, searchStickers } from "../../telegram/sticker-cache.js";
@@ -196,6 +197,63 @@ export async function handleTelegramAction(
       ok: true,
       messageId: result.messageId,
       chatId: result.chatId,
+    });
+  }
+
+  if (action === "sendPoll") {
+    if (!isActionEnabled("sendMessage")) {
+      throw new Error("Telegram sendMessage is disabled.");
+    }
+    const to = readStringParam(params, "to", { required: true });
+    const question = readStringParam(params, "question", { required: true });
+    const optionsRaw = params.options;
+    if (!Array.isArray(optionsRaw)) {
+      throw new Error("options must be an array");
+    }
+    const options = optionsRaw
+      .map((entry) => (typeof entry === "string" ? entry : String(entry ?? "")))
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+    if (options.length < 2) {
+      throw new Error("options requires at least two values");
+    }
+    const maxSelections = readNumberParam(params, "maxSelections", { integer: true });
+    const durationSeconds = readNumberParam(params, "durationSeconds", { integer: true });
+    const durationHours = readNumberParam(params, "durationHours", { integer: true });
+    const messageThreadId = readNumberParam(params, "messageThreadId", {
+      integer: true,
+    });
+    const silent = typeof params.silent === "boolean" ? params.silent : undefined;
+    const isAnonymous = typeof params.isAnonymous === "boolean" ? params.isAnonymous : undefined;
+
+    const token = resolveTelegramToken(cfg, { accountId }).token;
+    if (!token) {
+      throw new Error(
+        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
+      );
+    }
+    const result = await sendPollTelegram(
+      to,
+      {
+        question,
+        options,
+        maxSelections: maxSelections ?? undefined,
+        durationSeconds: durationSeconds ?? undefined,
+        durationHours: durationHours ?? undefined,
+      },
+      {
+        token,
+        accountId: accountId ?? undefined,
+        messageThreadId: messageThreadId ?? undefined,
+        silent,
+        isAnonymous,
+      },
+    );
+    return jsonResult({
+      ok: true,
+      messageId: result.messageId,
+      chatId: result.chatId,
+      pollId: result.pollId,
     });
   }
 

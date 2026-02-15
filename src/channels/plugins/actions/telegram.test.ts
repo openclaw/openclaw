@@ -9,6 +9,12 @@ vi.mock("../../../agents/tools/telegram-actions.js", () => ({
 }));
 
 describe("telegramMessageActions", () => {
+  it("includes poll action when telegram account is configured", () => {
+    const cfg = { channels: { telegram: { botToken: "tok" } } } as OpenClawConfig;
+    const actions = telegramMessageActions.listActions({ cfg });
+    expect(actions).toContain("poll");
+  });
+
   it("excludes sticker actions when not enabled", () => {
     const cfg = { channels: { telegram: { botToken: "tok" } } } as OpenClawConfig;
     const actions = telegramMessageActions.listActions({ cfg });
@@ -38,6 +44,40 @@ describe("telegramMessageActions", () => {
         content: "",
         mediaUrl: "https://example.com/voice.ogg",
         asVoice: true,
+      }),
+      cfg,
+    );
+  });
+
+  it("maps poll action params into sendPoll", async () => {
+    handleTelegramAction.mockClear();
+    const cfg = { channels: { telegram: { botToken: "tok" } } } as OpenClawConfig;
+
+    await telegramMessageActions.handleAction({
+      action: "poll",
+      params: {
+        to: "123",
+        pollQuestion: "Lunch?",
+        pollOption: ["Pizza", "Sushi"],
+        pollMulti: true,
+        pollDurationSeconds: 120,
+        pollPublic: true,
+        silent: true,
+      },
+      cfg,
+      accountId: undefined,
+    });
+
+    expect(handleTelegramAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "sendPoll",
+        to: "123",
+        question: "Lunch?",
+        options: ["Pizza", "Sushi"],
+        maxSelections: 2,
+        durationSeconds: 120,
+        isAnonymous: false,
+        silent: true,
       }),
       cfg,
     );

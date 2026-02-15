@@ -47,7 +47,22 @@ describe("sendPollTelegram", () => {
     expect(api.sendPoll.mock.calls[1]?.[3]?.message_thread_id).toBeUndefined();
   });
 
-  it("rejects durationHours for Telegram polls", async () => {
+  it("rejects fractional durationHours after poll normalization", async () => {
+    const api = {
+      sendPoll: vi.fn(async () => ({ message_id: 123, chat: { id: 555 }, poll: { id: "p1" } })),
+    };
+
+    await expect(
+      sendPollTelegram(
+        "123",
+        { question: "Q", options: ["A", "B"], durationHours: 0.01 },
+        { token: "t", api: api as unknown as Bot["api"] },
+      ),
+    ).rejects.toThrow(/durationHours must be at least 1/i);
+    expect(api.sendPoll).not.toHaveBeenCalled();
+  });
+
+  it("rejects out-of-range durationHours", async () => {
     const api = { sendPoll: vi.fn() };
 
     await expect(
@@ -56,8 +71,36 @@ describe("sendPollTelegram", () => {
         { question: "Q", options: ["A", "B"], durationHours: 1 },
         { token: "t", api: api as unknown as Bot["api"] },
       ),
-    ).rejects.toThrow(/durationHours is not supported/i);
+    ).rejects.toThrow(/durationSeconds must be between 5 and 600/i);
 
     expect(api.sendPoll).not.toHaveBeenCalled();
+  });
+
+  it("defaults to non-anonymous polls in direct chats", async () => {
+    const api = {
+      sendPoll: vi.fn(async () => ({ message_id: 10, chat: { id: 123 }, poll: { id: "p3" } })),
+    };
+
+    await sendPollTelegram(
+      "123",
+      { question: "Q", options: ["A", "B"] },
+      { token: "t", api: api as unknown as Bot["api"] },
+    );
+
+    expect(api.sendPoll.mock.calls[0]?.[3]).toMatchObject({ is_anonymous: false });
+  });
+
+  it("defaults to non-anonymous polls in group chats", async () => {
+    const api = {
+      sendPoll: vi.fn(async () => ({ message_id: 11, chat: { id: -1001 }, poll: { id: "p4" } })),
+    };
+
+    await sendPollTelegram(
+      "-1001",
+      { question: "Q", options: ["A", "B"] },
+      { token: "t", api: api as unknown as Bot["api"] },
+    );
+
+    expect(api.sendPoll.mock.calls[0]?.[3]).toMatchObject({ is_anonymous: false });
   });
 });

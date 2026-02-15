@@ -4,13 +4,14 @@ import {
   parseTelegramReplyToMessageId,
   parseTelegramThreadId,
 } from "../../../telegram/outbound-params.js";
-import { sendMessageTelegram } from "../../../telegram/send.js";
+import { sendMessageTelegram, sendPollTelegram } from "../../../telegram/send.js";
 
 export const telegramOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   chunker: markdownToTelegramHtmlChunks,
   chunkerMode: "markdown",
   textChunkLimit: 4000,
+  pollMaxOptions: 10,
   sendText: async ({ to, text, accountId, deps, replyToId, threadId }) => {
     const send = deps?.sendTelegram ?? sendMessageTelegram;
     const replyToMessageId = parseTelegramReplyToMessageId(replyToId);
@@ -48,6 +49,13 @@ export const telegramOutbound: ChannelOutboundAdapter = {
     });
     return { channel: "telegram", ...result };
   },
+  sendPoll: async ({ to, poll, accountId, threadId, silent, isAnonymous }) =>
+    await sendPollTelegram(to, poll, {
+      accountId: accountId ?? undefined,
+      messageThreadId: parseTelegramThreadId(threadId),
+      silent: silent ?? undefined,
+      isAnonymous: isAnonymous ?? undefined,
+    }),
   sendPayload: async ({ to, payload, mediaLocalRoots, accountId, deps, replyToId, threadId }) => {
     const send = deps?.sendTelegram ?? sendMessageTelegram;
     const replyToMessageId = parseTelegramReplyToMessageId(replyToId);
