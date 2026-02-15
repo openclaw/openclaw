@@ -8,7 +8,7 @@ title: "System Prompt"
 
 # System Prompt
 
-OpenClaw builds a custom system prompt for every agent run. The prompt is **OpenClaw-owned** and does not use the p-coding-agent default prompt.
+OpenClaw builds a custom system prompt for every agent run. The prompt is **OpenClaw-owned** and does not use the pi-coding-agent default prompt.
 
 The prompt is assembled by OpenClaw and injected into each agent run.
 
@@ -71,8 +71,9 @@ compaction.
 > do not count against the context window unless the model explicitly reads them.
 
 Large files are truncated with a marker. The max per-file size is controlled by
-`agents.defaults.bootstrapMaxChars` (default: 20000). Missing files inject a
-short missing-file marker.
+`agents.defaults.bootstrapMaxChars` (default: 20000). Total injected bootstrap
+content across files is capped by `agents.defaults.bootstrapTotalMaxChars`
+(default: 24000). Missing files inject a short missing-file marker.
 
 Sub-agent sessions only inject `AGENTS.md` and `TOOLS.md` (other bootstrap files
 are filtered out to keep the sub-agent context small).

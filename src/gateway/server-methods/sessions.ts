@@ -13,6 +13,7 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
+import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   ErrorCodes,
@@ -86,6 +87,33 @@ function archiveSessionTranscriptsForSession(params: {
     agentId: params.agentId,
     reason: params.reason,
   });
+}
+
+async function ensureSessionRuntimeCleanup(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  key: string;
+  target: ReturnType<typeof resolveGatewaySessionStoreTarget>;
+  sessionId?: string;
+}) {
+  const queueKeys = new Set<string>(params.target.storeKeys);
+  queueKeys.add(params.target.canonicalKey);
+  if (params.sessionId) {
+    queueKeys.add(params.sessionId);
+  }
+  clearSessionQueues([...queueKeys]);
+  stopSubagentsForRequester({ cfg: params.cfg, requesterSessionKey: params.target.canonicalKey });
+  if (!params.sessionId) {
+    return undefined;
+  }
+  abortEmbeddedPiRun(params.sessionId);
+  const ended = await waitForEmbeddedPiRunEnd(params.sessionId, 15_000);
+  if (ended) {
+    return undefined;
+  }
+  return errorShape(
+    ErrorCodes.UNAVAILABLE,
+    `Session ${params.key} is still active; try again in a moment.`,
+  );
 }
 
 export const sessionsHandlers: GatewayRequestHandlers = {
@@ -278,6 +306,26 @@ export const sessionsHandlers: GatewayRequestHandlers = {
 
     const cfg = loadConfig();
     const target = resolveGatewaySessionStoreTarget({ cfg, key });
+    const { entry } = loadSessionEntry(key);
+    const commandReason = p.reason === "new" ? "new" : "reset";
+    const hookEvent = createInternalHookEvent(
+      "command",
+      commandReason,
+      target.canonicalKey ?? key,
+      {
+        sessionEntry: entry,
+        previousSessionEntry: entry,
+        commandSource: "gateway:sessions.reset",
+        cfg,
+      },
+    );
+    await triggerInternalHook(hookEvent);
+    const sessionId = entry?.sessionId;
+    const cleanupError = await ensureSessionRuntimeCleanup({ cfg, key, target, sessionId });
+    if (cleanupError) {
+      respond(false, undefined, cleanupError);
+      return;
+    }
     const storePath = target.storePath;
     let oldSessionId: string | undefined;
     let oldSessionFile: string | undefined;
@@ -360,27 +408,10 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const { entry } = loadSessionEntry(key);
     const sessionId = entry?.sessionId;
     const existed = Boolean(entry);
-    const queueKeys = new Set<string>(target.storeKeys);
-    queueKeys.add(target.canonicalKey);
-    if (sessionId) {
-      queueKeys.add(sessionId);
-    }
-    clearSessionQueues([...queueKeys]);
-    stopSubagentsForRequester({ cfg, requesterSessionKey: target.canonicalKey });
-    if (sessionId) {
-      abortEmbeddedPiRun(sessionId);
-      const ended = await waitForEmbeddedPiRunEnd(sessionId, 15_000);
-      if (!ended) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.UNAVAILABLE,
-            `Session ${key} is still active; try again in a moment.`,
-          ),
-        );
-        return;
-      }
+    const cleanupError = await ensureSessionRuntimeCleanup({ cfg, key, target, sessionId });
+    if (cleanupError) {
+      respond(false, undefined, cleanupError);
+      return;
     }
     await updateSessionStore(storePath, (store) => {
       const { primaryKey } = migrateAndPruneSessionStoreKey({ cfg, key, store });

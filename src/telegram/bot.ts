@@ -244,7 +244,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       ? telegramCfg.allowFrom
       : undefined) ??
     (opts.allowFrom && opts.allowFrom.length > 0 ? opts.allowFrom : undefined);
-  const replyToMode = opts.replyToMode ?? telegramCfg.replyToMode ?? "first";
+  const replyToMode = opts.replyToMode ?? telegramCfg.replyToMode ?? "off";
   const nativeEnabled = resolveNativeCommandsEnabled({
     providerId: "telegram",
     providerSetting: telegramCfg.commands?.native,

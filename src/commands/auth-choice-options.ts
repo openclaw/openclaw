@@ -1,5 +1,6 @@
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { AuthChoice, AuthChoiceGroupId } from "./onboard-types.js";
+import { AUTH_CHOICE_LEGACY_ALIASES_FOR_CLI } from "./auth-choice-legacy.js";
 
 export type { AuthChoiceGroupId };
 
@@ -34,6 +35,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["token", "apiKey"],
   },
   {
+    value: "chutes",
+    label: "Chutes",
+    hint: "OAuth",
+    choices: ["chutes"],
+  },
+  {
     value: "vllm",
     label: "vLLM",
     hint: "Local/self-hosted OpenAI-compatible",
@@ -43,7 +50,7 @@ const AUTH_CHOICE_GROUP_DEFS: {
     value: "minimax",
     label: "MiniMax",
     hint: "M2.5 (recommended)",
-    choices: ["minimax-portal", "minimax-api", "minimax-api-lightning"],
+    choices: ["minimax-portal", "minimax-api", "minimax-api-key-cn", "minimax-api-lightning"],
   },
   {
     value: "moonshot",
@@ -280,20 +287,16 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
   },
   { value: "minimax-api", label: "MiniMax M2.5" },
   {
+    value: "minimax-api-key-cn",
+    label: "MiniMax M2.5 (CN)",
+    hint: "China endpoint (api.minimaxi.com)",
+  },
+  {
     value: "minimax-api-lightning",
     label: "MiniMax M2.5 Lightning",
     hint: "Faster, higher output cost",
   },
   { value: "custom-api-key", label: "Custom Provider" },
-];
-
-const LEGACY_AUTH_CHOICE_ALIASES: ReadonlyArray<AuthChoice> = [
-  "setup-token",
-  "oauth",
-  "claude-cli",
-  "codex-cli",
-  "minimax-cloud",
-  "minimax",
 ];
 
 export function formatAuthChoiceChoicesForCli(params?: {
@@ -308,7 +311,7 @@ export function formatAuthChoiceChoicesForCli(params?: {
     values.push("skip");
   }
   if (includeLegacyAliases) {
-    values.push(...LEGACY_AUTH_CHOICE_ALIASES);
+    values.push(...AUTH_CHOICE_LEGACY_ALIASES_FOR_CLI);
   }
 
   return values.join("|");

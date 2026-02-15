@@ -82,8 +82,5 @@ USER.md
 /memory/
 .agent/*.json
 !.agent/workflows/
-local/
-
-start-gateway.ps1
-update.ps1
+/local/
 package-lock.json

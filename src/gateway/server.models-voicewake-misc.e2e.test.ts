@@ -403,8 +403,7 @@ describe("gateway server misc", () => {
     const plugins = updated.plugins as Record<string, unknown> | undefined;
     const entries = plugins?.entries as Record<string, unknown> | undefined;
     const discord = entries?.discord as Record<string, unknown> | undefined;
-    // Auto-enable registers the plugin entry but keeps it disabled for explicit opt-in.
-    expect(discord?.enabled).toBe(false);
+    expect(discord?.enabled).toBe(true);
     expect((updated.channels as Record<string, unknown> | undefined)?.discord).toMatchObject({
       token: "token-123",
     });

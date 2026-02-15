@@ -32,12 +32,14 @@ import {
   resolveBlueBubblesMessageId,
   resolveReplyContextFromCache,
 } from "./monitor-reply-cache.js";
+import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
 import { normalizeBlueBubblesReactionInput, sendBlueBubblesReaction } from "./reactions.js";
 import { resolveChatGuidForTarget, sendMessageBlueBubbles } from "./send.js";
 import { formatBlueBubblesChatTarget, isAllowedBlueBubblesSender } from "./targets.js";
 
 const DEFAULT_TEXT_LIMIT = 4000;
 const invalidAckReactions = new Set<string>();
+const REPLY_DIRECTIVE_TAG_RE = /\[\[\s*(?:reply_to_current|reply_to\s*:\s*[^\]\n]+)\s*\]\]/gi;
 
 export function logVerbose(
   core: BlueBubblesCoreRuntime,
@@ -110,6 +112,7 @@ export async function processMessage(
   target: WebhookTarget,
 ): Promise<void> {
   const { account, config, runtime, core, statusSink } = target;
+  const privateApiEnabled = getCachedBlueBubblesPrivateApiStatus(account.accountId) !== false;
 
   const groupFlag = resolveGroupFlagFromChatGuid(message.chatGuid);
   const isGroup = typeof groupFlag === "boolean" ? groupFlag : message.isGroup;
@@ -503,7 +506,15 @@ export async function processMessage(
       ? `${rawBody} ${replyTag}`
       : `${replyTag} ${rawBody}`
     : rawBody;
-  const fromLabel = isGroup ? undefined : message.senderName || `user:${message.senderId}`;
+  // Build fromLabel the same way as iMessage/Signal (formatInboundFromLabel):
+  // group label + id for groups, sender for DMs.
+  // The sender identity is included in the envelope body via formatInboundEnvelope.
+  const senderLabel = message.senderName || `user:${message.senderId}`;
+  const fromLabel = isGroup
+    ? `${message.chatName?.trim() || "Group"} id:${peerId}`
+    : senderLabel !== message.senderId
+      ? `${senderLabel} id:${message.senderId}`
+      : senderLabel;
   const groupSubject = isGroup ? message.chatName?.trim() || undefined : undefined;
   const groupMembers = isGroup
     ? formatGroupMembers({
@@ -519,13 +530,15 @@ export async function processMessage(
     storePath,
     sessionKey: route.sessionKey,
   });
-  const body = core.channel.reply.formatAgentEnvelope({
+  const body = core.channel.reply.formatInboundEnvelope({
     channel: "BlueBubbles",
     from: fromLabel,
     timestamp: message.timestamp,
     previousTimestamp,
     envelope: envelopeOptions,
     body: baseBody,
+    chatType: isGroup ? "group" : "direct",
+    sender: { name: message.senderName || undefined, id: message.senderId },
   });
   let chatGuidForActions = chatGuid;
   if (!chatGuidForActions && baseUrl && password) {
@@ -639,10 +652,19 @@ export async function processMessage(
       contextKey: `bluebubbles:outbound:${outboundTarget}:${trimmed}`,
     });
   };
+  const sanitizeReplyDirectiveText = (value: string): string => {
+    if (privateApiEnabled) {
+      return value;
+    }
+    return value
+      .replace(REPLY_DIRECTIVE_TAG_RE, " ")
+      .replace(/[ \t]+/g, " ")
+      .trim();
+  };
 
-  const ctxPayload = {
+  const ctxPayload = core.channel.reply.finalizeInboundContext({
     Body: body,
-    BodyForAgent: body,
+    BodyForAgent: rawBody,
     RawBody: rawBody,
     CommandBody: rawBody,
     BodyForCommands: rawBody,
@@ -677,7 +699,7 @@ export async function processMessage(
     OriginatingTo: `bluebubbles:${outboundTarget}`,
     WasMentioned: effectiveWasMentioned,
     CommandAuthorized: commandAuthorized,
-  };
+  });
 
   let sentMessage = false;
   let streamingActive = false;
@@ -721,7 +743,9 @@ export async function processMessage(
         ...prefixOptions,
         deliver: async (payload, info) => {
           const rawReplyToId =
-            typeof payload.replyToId === "string" ? payload.replyToId.trim() : "";
+            privateApiEnabled && typeof payload.replyToId === "string"
+              ? payload.replyToId.trim()
+              : "";
           // Resolve short ID (e.g., "5") to full UUID
           const replyToMessageGuid = rawReplyToId
             ? resolveBlueBubblesMessageId(rawReplyToId, { requireKnownShortId: true })
@@ -737,7 +761,9 @@ export async function processMessage(
               channel: "bluebubbles",
               accountId: account.accountId,
             });
-            const text = core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode);
+            const text = sanitizeReplyDirectiveText(
+              core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode),
+            );
             let first = true;
             for (const mediaUrl of mediaList) {
               const caption = first ? text : undefined;
@@ -771,7 +797,9 @@ export async function processMessage(
             channel: "bluebubbles",
             accountId: account.accountId,
           });
-          const text = core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode);
+          const text = sanitizeReplyDirectiveText(
+            core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode),
+          );
           const chunks =
             chunkMode === "newline"
               ? core.channel.text.chunkTextWithMode(text, textLimit, chunkMode)

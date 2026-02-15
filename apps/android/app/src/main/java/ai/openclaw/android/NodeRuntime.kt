@@ -15,6 +15,7 @@ import ai.openclaw.android.gateway.DeviceIdentityStore
 import ai.openclaw.android.gateway.GatewayDiscovery
 import ai.openclaw.android.gateway.GatewayEndpoint
 import ai.openclaw.android.gateway.GatewaySession
+import ai.openclaw.android.gateway.probeGatewayTlsFingerprint
 import ai.openclaw.android.node.*
 import ai.openclaw.android.protocol.OpenClawCanvasA2UIAction
 import ai.openclaw.android.voice.TalkModeManager
@@ -166,11 +167,19 @@ class NodeRuntime(context: Context) {
 
   private lateinit var gatewayEventHandler: GatewayEventHandler
 
+  data class GatewayTrustPrompt(
+    val endpoint: GatewayEndpoint,
+    val fingerprintSha256: String,
+  )
+
   private val _isConnected = MutableStateFlow(false)
   val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
 
   private val _statusText = MutableStateFlow("Offline")
   val statusText: StateFlow<String> = _statusText.asStateFlow()
+
+  private val _pendingGatewayTrust = MutableStateFlow<GatewayTrustPrompt?>(null)
+  val pendingGatewayTrust: StateFlow<GatewayTrustPrompt?> = _pendingGatewayTrust.asStateFlow()
 
   private val _mainSessionKey = MutableStateFlow("main")
   val mainSessionKey: StateFlow<String> = _mainSessionKey.asStateFlow()
@@ -405,8 +414,11 @@ class NodeRuntime(context: Context) {
     scope.launch(Dispatchers.Default) {
       gateways.collect { list ->
         if (list.isNotEmpty()) {
-          // Persist the last discovered gateway (best-effort UX parity with iOS).
-          prefs.setLastDiscoveredStableId(list.last().stableId)
+          // Security: don't let an unauthenticated discovery feed continuously steer autoconnect.
+          // UX parity with iOS: only set once when unset.
+          if (lastDiscoveredStableId.value.trim().isEmpty()) {
+            prefs.setLastDiscoveredStableId(list.first().stableId)
+          }
         }
 
         if (didAutoConnect) return@collect
@@ -416,6 +428,12 @@ class NodeRuntime(context: Context) {
           val host = manualHost.value.trim()
           val port = manualPort.value
           if (host.isNotEmpty() && port in 1..65535) {
+            // Security: autoconnect only to previously trusted gateways (stored TLS pin).
+            if (!manualTls.value) return@collect
+            val stableId = GatewayEndpoint.manual(host = host, port = port).stableId
+            val storedFingerprint = prefs.loadGatewayTlsFingerprint(stableId)?.trim().orEmpty()
+            if (storedFingerprint.isEmpty()) return@collect
+
             didAutoConnect = true
             connect(GatewayEndpoint.manual(host = host, port = port))
           }
@@ -425,6 +443,11 @@ class NodeRuntime(context: Context) {
         val targetStableId = lastDiscoveredStableId.value.trim()
         if (targetStableId.isEmpty()) return@collect
         val target = list.firstOrNull { it.stableId == targetStableId } ?: return@collect
+
+        // Security: autoconnect only to previously trusted gateways (stored TLS pin).
+        val storedFingerprint = prefs.loadGatewayTlsFingerprint(target.stableId)?.trim().orEmpty()
+        if (storedFingerprint.isEmpty()) return@collect
+
         didAutoConnect = true
         connect(target)
       }
@@ -520,15 +543,40 @@ class NodeRuntime(context: Context) {
   }
 
   fun connect(endpoint: GatewayEndpoint) {
+    val tls = connectionManager.resolveTlsParams(endpoint)
+    if (tls?.required == true && tls.expectedFingerprint.isNullOrBlank()) {
+      // First-time TLS: capture fingerprint, ask user to verify out-of-band, then store and connect.
+      _statusText.value = "Verify gateway TLS fingerprint…"
+      scope.launch {
+        val fp = probeGatewayTlsFingerprint(endpoint.host, endpoint.port) ?: run {
+          _statusText.value = "Failed: can't read TLS fingerprint"
+          return@launch
+        }
+        _pendingGatewayTrust.value = GatewayTrustPrompt(endpoint = endpoint, fingerprintSha256 = fp)
+      }
+      return
+    }
+
     connectedEndpoint = endpoint
     operatorStatusText = "Connecting…"
     nodeStatusText = "Connecting…"
     updateStatus()
     val token = prefs.loadGatewayToken()
     val password = prefs.loadGatewayPassword()
-    val tls = connectionManager.resolveTlsParams(endpoint)
     operatorSession.connect(endpoint, token, password, connectionManager.buildOperatorConnectOptions(), tls)
     nodeSession.connect(endpoint, token, password, connectionManager.buildNodeConnectOptions(), tls)
+  }
+
+  fun acceptGatewayTrustPrompt() {
+    val prompt = _pendingGatewayTrust.value ?: return
+    _pendingGatewayTrust.value = null
+    prefs.saveGatewayTlsFingerprint(prompt.endpoint.stableId, prompt.fingerprintSha256)
+    connect(prompt.endpoint)
+  }
+
+  fun declineGatewayTrustPrompt() {
+    _pendingGatewayTrust.value = null
+    _statusText.value = "Offline"
   }
 
   private fun hasRecordAudioPermission(): Boolean {
@@ -550,6 +598,7 @@ class NodeRuntime(context: Context) {
 
   fun disconnect() {
     connectedEndpoint = null
+    _pendingGatewayTrust.value = null
     operatorSession.disconnect()
     nodeSession.disconnect()
   }
