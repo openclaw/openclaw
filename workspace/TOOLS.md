@@ -31,6 +31,17 @@ Things like:
 - Default speaker: Kitchen HomePod
 ```
 
+## Shell Commands (Windows)
+
+- **NO `grep`** → Use `Select-String -Path <file> -Pattern <pattern>`
+- **NO `head`** → Use `Select-Object -First N`
+- **NO `tail`** → Use `Select-Object -Last N`
+- **NO `cat`** → Use `Get-Content <file>`
+- **NO `ls`** → Use `Get-ChildItem` or `dir`
+- **NO `find`** → Use `Get-ChildItem -Recurse -Filter <pattern>`
+- **NO `&&`** → Use `;` to chain commands (e.g., `cd dir; git add .; git commit`)
+- This is Windows/PowerShell. Linux commands don't exist here.
+
 ## Why Separate?
 
 Skills are shared. Your setup is yours. Keeping them apart means you can update skills without losing your notes, and share skills without leaking your infrastructure.

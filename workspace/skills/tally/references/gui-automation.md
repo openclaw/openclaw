@@ -92,7 +92,7 @@ From Gateway, press `D` to enter Display, then:
 ## ⚠️ Critical Notes
 
 ### Text Input in Tally
-Tally uses custom text fields that DON'T work with standard Windows input methods. The tool uses the `keyboard` library (most reliable) with WM_CHAR fallback.
+Tally uses custom text fields. The tool types via `WM_CHAR` PostMessage (background-safe, no focus needed).
 
 ### Type-Ahead Lists
 When Tally shows a selection list (ledger names, stock items), just type the first few characters — Tally filters automatically. Press ENTER to select.
@@ -110,13 +110,5 @@ Tally sometimes shows "Yes/No" dialogs. These block the API. Use:
 ```
 Or just ENTER (for default Yes).
 
-### Reliable Workflow Pattern
-```
-1. gui_escape (get to known state)
-2. gui_screenshot (verify state)  
-3. [analyze screenshot to confirm at Gateway]
-4. gui_keys with navigation + action
-5. gui_screenshot (verify result)
-6. [analyze screenshot to confirm success]
-```
-Always verify with screenshots. Never assume state.
+### Workflow
+ESC to Gateway → action via gui_keys → verify with API (or screenshot if API can't confirm).

@@ -21,13 +21,13 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-# ─── Configuration ───────────────────────────────────────────────────────────
+# ""  Configuration """""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 TALLY_URL = os.environ.get("TALLY_URL", "http://localhost:9000")
 SCREENSHOT_DIR = os.environ.get("TALLY_SCREENSHOT_DIR", str(Path(__file__).parent.parent.parent.parent))  # workspace
 DEFAULT_TIMEOUT = 30
 GUI_DELAY = 0.15  # seconds between GUI keystrokes
 
-# ─── XML Helpers ─────────────────────────────────────────────────────────────
+# ""  XML Helpers """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 
 def _sanitize_xml(xml_str: str) -> str:
     """Remove invalid XML character references (e.g., &#4;) that Tally sometimes produces."""
@@ -37,7 +37,7 @@ def _sanitize_xml(xml_str: str) -> str:
 def _xml_escape(s: str) -> str:
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
 
-# ─── XML API Layer ───────────────────────────────────────────────────────────
+# ""  XML API Layer """""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 
 def api_post(xml_body: str, timeout: int = DEFAULT_TIMEOUT) -> str:
     """Post raw XML to Tally and return response string."""
@@ -159,7 +159,7 @@ def api_list_companies() -> str:
 </DESC></BODY></ENVELOPE>"""
     return api_post(xml)
 
-# ─── Parsed API Helpers ──────────────────────────────────────────────────────
+# ""  Parsed API Helpers """"""""""""""""""""""""""""""""""""""""""""""""""""""
 
 def parse_xml_to_dicts(xml_str: str, tag: str) -> list[dict]:
     """Parse XML response into list of dicts for a given tag."""
@@ -168,7 +168,7 @@ def parse_xml_to_dicts(xml_str: str, tag: str) -> list[dict]:
     except ET.ParseError:
         return [{"_raw": xml_str}]
     results = []
-    # Look for data elements (with attributes — Tally data elements have NAME attr)
+    # Look for data elements (with attributes " Tally data elements have NAME attr)
     # Skip CMPINFO counter elements (they're just numbers like <STOCKITEM>202</STOCKITEM>)
     for elem in root.iter(tag):
         # Data elements have attributes (NAME, RESERVEDNAME, etc.) or child elements with TYPE attr
@@ -331,7 +331,7 @@ def action_alter_company(params: dict) -> str:
         return "ERROR: settings_xml required"
     return api_alter_company(company, settings_xml)
 
-# ─── GUI Automation Layer ────────────────────────────────────────────────────
+# ""  GUI Automation Layer """"""""""""""""""""""""""""""""""""""""""""""""""""
 
 user32 = ctypes.windll.user32
 
@@ -356,91 +356,73 @@ VK = {
 
 INPUT_KEYBOARD = 1
 KEYEVENTF_KEYUP = 0x0002
-KEYEVENTF_UNICODE = 0x0004
-
-class KEYBDINPUT(ctypes.Structure):
-    _fields_ = [("wVk", w.WORD), ("wScan", w.WORD), ("dwFlags", w.DWORD),
-                ("time", w.DWORD), ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong))]
-
-class INPUT(ctypes.Structure):
-    class _INPUT(ctypes.Union):
-        _fields_ = [("ki", KEYBDINPUT), ("padding", ctypes.c_ubyte * 64)]
-    _fields_ = [("type", w.DWORD), ("_input", _INPUT)]
 
 def _find_tally_hwnd() -> int:
-    """Find TallyPrime window handle."""
+    """Find TallyPrime window handle as a plain integer."""
     result = []
-    def callback(hwnd, _):
+    @ctypes.WINFUNCTYPE(w.BOOL, w.HWND, w.LPARAM)
+    def callback(hwnd, lparam):
         if user32.IsWindowVisible(hwnd):
             buf = ctypes.create_unicode_buffer(256)
             user32.GetWindowTextW(hwnd, buf, 256)
             title = buf.value
             if "TallyPrime" in title or "Tally.ERP" in title:
-                result.append(hwnd)
+                result.append(int(hwnd))
         return True
-    WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int))
-    user32.EnumWindows(WNDENUMPROC(callback), 0)
+    user32.EnumWindows(callback, 0)
     return result[0] if result else 0
 
-def gui_focus() -> int:
-    """Focus Tally window. Returns HWND or 0 if not found."""
+def gui_send_vk(vk_code: int, hold_ms: int = 0):
+    """Send a virtual key to Tally via PostMessage. Background-safe (no focus needed).
+    Uses WM_CHAR for printable chars (most reliable for Tally's custom Ganeshji UI),
+    WM_KEYDOWN/UP for special keys (ESC, F-keys, arrows, etc.)."""
     hwnd = _find_tally_hwnd()
     if not hwnd:
-        print("ERROR: TallyPrime window not found")
-        return 0
-    user32.ShowWindow(hwnd, 9)  # SW_RESTORE
-    time.sleep(0.1)
-    # AttachThreadInput for reliable focus
-    fg_thread = user32.GetWindowThreadProcessId(user32.GetForegroundWindow(), None)
-    tally_thread = user32.GetWindowThreadProcessId(hwnd, None)
-    if fg_thread != tally_thread:
-        user32.AttachThreadInput(fg_thread, tally_thread, True)
-    user32.SetForegroundWindow(hwnd)
-    user32.BringWindowToTop(hwnd)
-    if fg_thread != tally_thread:
-        user32.AttachThreadInput(fg_thread, tally_thread, False)
-    time.sleep(0.3)
-    return hwnd
-
-def gui_send_vk(vk_code: int, hold_ms: int = 0):
-    """Send a single virtual key press/release."""
-    inp = INPUT()
-    inp.type = INPUT_KEYBOARD
-    inp._input.ki.wVk = vk_code
-    inp._input.ki.dwFlags = 0
-    inp._input.ki.dwExtraInfo = ctypes.pointer(ctypes.c_ulong(0))
-    user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
-    time.sleep(hold_ms / 1000 if hold_ms else 0.05)
-    inp._input.ki.dwFlags = KEYEVENTF_KEYUP
-    user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
+        print("WARNING: Tally window not found for gui_send_vk")
+        return
+    # For letter/number keys (A-Z, 0-9), use WM_CHAR which Tally handles reliably
+    if 0x41 <= vk_code <= 0x5A:  # A-Z
+        user32.PostMessageW(hwnd, 0x0102, vk_code + 32, 0)  # lowercase char
+    elif 0x30 <= vk_code <= 0x39:  # 0-9
+        user32.PostMessageW(hwnd, 0x0102, vk_code, 0)
+    else:
+        # Special keys: use WM_KEYDOWN/UP
+        scan = user32.MapVirtualKeyW(vk_code, 0)
+        lparam_down = (scan << 16) | 1
+        lparam_up = (scan << 16) | 1 | (1 << 30) | (1 << 31)
+        user32.PostMessageW(hwnd, 0x0100, vk_code, lparam_down)
+        time.sleep(hold_ms / 1000 if hold_ms else 0.05)
+        user32.PostMessageW(hwnd, 0x0101, vk_code, lparam_up)
     time.sleep(GUI_DELAY)
 
 def gui_send_combo(*vk_codes: int):
-    """Send a key combination (e.g., Alt+D, Ctrl+A). Last key is the main key."""
-    # Press modifiers
+    """Send a key combination (e.g., Alt+D, Ctrl+A). Uses PostMessage for background safety."""
+    hwnd = _find_tally_hwnd()
+    if not hwnd:
+        print("WARNING: Tally window not found for gui_send_combo")
+        return
+    # Press modifiers down
     for vk in vk_codes[:-1]:
-        inp = INPUT()
-        inp.type = INPUT_KEYBOARD
-        inp._input.ki.wVk = vk
-        inp._input.ki.dwFlags = 0
-        inp._input.ki.dwExtraInfo = ctypes.pointer(ctypes.c_ulong(0))
-        user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
+        scan = user32.MapVirtualKeyW(vk, 0)
+        lparam = (scan << 16) | 1
+        user32.PostMessageW(hwnd, 0x0100, vk, lparam)
         time.sleep(0.05)
-    # Press main key
-    gui_send_vk(vk_codes[-1])
-    # Release modifiers (reverse order)
+    # Press+release main key
+    main_vk = vk_codes[-1]
+    scan = user32.MapVirtualKeyW(main_vk, 0)
+    user32.PostMessageW(hwnd, 0x0100, main_vk, (scan << 16) | 1)
+    time.sleep(0.05)
+    user32.PostMessageW(hwnd, 0x0101, main_vk, (scan << 16) | 1 | (1 << 30) | (1 << 31))
+    time.sleep(0.05)
+    # Release modifiers
     for vk in reversed(vk_codes[:-1]):
-        inp = INPUT()
-        inp.type = INPUT_KEYBOARD
-        inp._input.ki.wVk = vk
-        inp._input.ki.dwFlags = KEYEVENTF_KEYUP
-        inp._input.ki.dwExtraInfo = ctypes.pointer(ctypes.c_ulong(0))
-        user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
+        scan = user32.MapVirtualKeyW(vk, 0)
+        user32.PostMessageW(hwnd, 0x0101, vk, (scan << 16) | 1 | (1 << 30) | (1 << 31))
         time.sleep(0.05)
     time.sleep(GUI_DELAY)
 
 def gui_type_unicode(text: str):
-    """Type text using Unicode SendInput — works in Tally's custom fields."""
+    """Type text via WM_CHAR PostMessage — background-safe, no focus needed."""
     hwnd = _find_tally_hwnd()
     if not hwnd:
         print("ERROR: TallyPrime not found")
@@ -451,58 +433,79 @@ def gui_type_unicode(text: str):
         time.sleep(0.04)
     time.sleep(GUI_DELAY)
 
-def gui_type_with_keyboard(text: str):
-    """Type text using the `keyboard` library — most reliable for Tally fields."""
-    try:
-        import keyboard as kb
-        kb.write(text, delay=0.03)
-        time.sleep(GUI_DELAY)
-    except ImportError:
-        # Fallback to unicode method
-        gui_type_unicode(text)
-
 def gui_screenshot(filename: str = "tally_screenshot.png") -> str:
-    """Take a screenshot of the Tally window area. Returns file path."""
+    """Take a screenshot of the Tally window using PrintWindow (works from background/service).
+    
+    NOTE: pyautogui.screenshot / ImageGrab.grab FAIL when OpenClaw runs as a service
+    without interactive desktop access. PrintWindow via PostMessage works because it
+    asks the target window to paint into our DC — no desktop access needed.
+    """
     filepath = os.path.join(SCREENSHOT_DIR, filename)
     try:
-        import pyautogui
+        from PIL import Image
+        gdi32 = ctypes.windll.gdi32
+        
         hwnd = _find_tally_hwnd()
-        if hwnd:
-            rect = w.RECT()
-            user32.GetWindowRect(hwnd, ctypes.byref(rect))
-            region = (rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top)
-            img = pyautogui.screenshot(region=region)
-        else:
-            img = pyautogui.screenshot()
+        if not hwnd:
+            print("ERROR: Screenshot failed: Tally window not found")
+            return ""
+        
+        rect = w.RECT()
+        user32.GetWindowRect(hwnd, ctypes.byref(rect))
+        cx = rect.right - rect.left
+        cy = rect.bottom - rect.top
+        
+        if cx <= 0 or cy <= 0:
+            print(f"ERROR: Screenshot failed: invalid window size {cx}x{cy}")
+            return ""
+        
+        hdc = user32.GetDC(hwnd)
+        memdc = gdi32.CreateCompatibleDC(hdc)
+        bmp = gdi32.CreateCompatibleBitmap(hdc, cx, cy)
+        old = gdi32.SelectObject(memdc, bmp)
+        
+        # PW_RENDERFULLCONTENT = 2 — captures the full window content
+        result = user32.PrintWindow(hwnd, memdc, 2)
+        if not result:
+            # Fallback to PW_CLIENTONLY = 1
+            result = user32.PrintWindow(hwnd, memdc, 1)
+        
+        # Extract pixel data
+        class BITMAPINFOHEADER(ctypes.Structure):
+            _fields_ = [
+                ('biSize', ctypes.c_uint32), ('biWidth', ctypes.c_int32),
+                ('biHeight', ctypes.c_int32), ('biPlanes', ctypes.c_uint16),
+                ('biBitCount', ctypes.c_uint16), ('biCompression', ctypes.c_uint32),
+                ('biSizeImage', ctypes.c_uint32), ('biXPelsPerMeter', ctypes.c_int32),
+                ('biYPelsPerMeter', ctypes.c_int32), ('biClrUsed', ctypes.c_uint32),
+                ('biClrImportant', ctypes.c_uint32)
+            ]
+        
+        bi = BITMAPINFOHEADER()
+        bi.biSize = ctypes.sizeof(bi)
+        bi.biWidth = cx
+        bi.biHeight = -cy  # top-down
+        bi.biPlanes = 1
+        bi.biBitCount = 32
+        bi.biCompression = 0
+        
+        buf = ctypes.create_string_buffer(cx * cy * 4)
+        gdi32.GetDIBits(memdc, bmp, 0, cy, buf, ctypes.byref(bi), 0)
+        
+        img = Image.frombuffer('RGBA', (cx, cy), buf, 'raw', 'BGRA', 0, 1)
         img.save(filepath)
+        
+        # Cleanup
+        gdi32.SelectObject(memdc, old)
+        gdi32.DeleteObject(bmp)
+        gdi32.DeleteDC(memdc)
+        user32.ReleaseDC(hwnd, hdc)
+        
         print(f"Screenshot saved: {filepath}")
         return filepath
-    except ImportError:
-        # Fallback: full screen via ctypes + PIL
-        try:
-            from PIL import Image
-            gdi32 = ctypes.windll.gdi32
-            width = user32.GetSystemMetrics(0)
-            height = user32.GetSystemMetrics(1)
-            hdc_screen = user32.GetDC(0)
-            hdc_mem = gdi32.CreateCompatibleDC(hdc_screen)
-            hbmp = gdi32.CreateCompatibleBitmap(hdc_screen, width, height)
-            gdi32.SelectObject(hdc_mem, hbmp)
-            gdi32.BitBlt(hdc_mem, 0, 0, width, height, hdc_screen, 0, 0, 0x00CC0020)
-            bmi = struct.pack('=lllHHllllll', 40, width, -height, 1, 24, 0, 0, 0, 0, 0, 0)
-            row_sz = ((width * 3 + 3) // 4) * 4
-            buf = ctypes.create_string_buffer(row_sz * height)
-            gdi32.GetDIBits(hdc_mem, hbmp, 0, height, buf, bmi, 0)
-            img = Image.frombytes("RGB", (width, height), buf.raw, "raw", "BGR", row_sz)
-            img.save(filepath)
-            gdi32.DeleteObject(hbmp)
-            gdi32.DeleteDC(hdc_mem)
-            user32.ReleaseDC(0, hdc_screen)
-            print(f"Screenshot saved: {filepath}")
-            return filepath
-        except Exception as e:
-            print(f"ERROR: Screenshot failed: {e}")
-            return ""
+    except Exception as e:
+        print(f"ERROR: Screenshot failed: {e}")
+        return ""
 
 def gui_parse_keys(key_string: str) -> list:
     """Parse a key sequence string into actions.
@@ -558,12 +561,10 @@ def gui_parse_keys(key_string: str) -> list:
         i += 1
     return actions
 
-def gui_execute_keys(key_string: str, focus: bool = True) -> str:
-    """Execute a key sequence string on Tally. Returns status."""
-    if focus:
-        hwnd = gui_focus()
-        if not hwnd:
-            return "ERROR: Could not focus TallyPrime"
+def gui_execute_keys(key_string: str, focus: bool = False) -> str:
+    """Execute a key sequence string on Tally. Returns status. Uses PostMessage (no focus needed)."""
+    if not _find_tally_hwnd():
+        return "ERROR: TallyPrime window not found"
     actions = gui_parse_keys(key_string)
     for action in actions:
         if action[0] == "key":
@@ -574,7 +575,7 @@ def gui_execute_keys(key_string: str, focus: bool = True) -> str:
             for _ in range(action[2]):
                 gui_send_vk(action[1])
         elif action[0] == "type":
-            gui_type_with_keyboard(action[1])
+            gui_type_unicode(action[1])
         elif action[0] == "wait":
             time.sleep(action[1] / 1000)
     return "OK"
@@ -588,25 +589,28 @@ def action_gui_keys(params: dict) -> str:
     result = gui_execute_keys(keys, focus=focus)
     if params.get("screenshot"):
         time.sleep(params.get("screenshot_delay", 0.5))
-        gui_screenshot(params.get("screenshot_name", "tally_after_keys.png"))
+        try:
+            gui_screenshot(params.get("screenshot_name", "tally_after_keys.png"))
+        except Exception as e:
+            print(f"WARNING: Screenshot failed: {e}")
     return result
 
 def action_gui_escape_to_gateway(params: dict) -> str:
     """Press ESC repeatedly to return to Tally Gateway."""
     count = params.get("count", 10)
-    gui_focus()
     for _ in range(count):
         gui_send_vk(VK["ESCAPE"])
         time.sleep(0.2)
     time.sleep(0.3)
     if params.get("screenshot", True):
-        gui_screenshot("tally_gateway.png")
-    return f"Sent {count}x ESC — should be at Gateway"
+        try:
+            gui_screenshot("tally_gateway.png")
+        except Exception as e:
+            print(f"WARNING: Screenshot failed: {e}")
+    return f"Sent {count}x ESC - should be at Gateway"
 
 def action_gui_screenshot(params: dict) -> str:
     """Take screenshot of Tally."""
-    gui_focus()
-    time.sleep(0.3)
     name = params.get("filename", "tally_screenshot.png")
     path = gui_screenshot(name)
     return path if path else "ERROR: Screenshot failed"
@@ -617,7 +621,6 @@ def action_gui_navigate(params: dict) -> str:
     path = params.get("path", [])
     if not path:
         return "ERROR: 'path' list required (e.g., ['D', 'Trial Balance'])"
-    gui_focus()
     for i, segment in enumerate(path):
         if len(segment) == 1:
             # Single char = shortcut key
@@ -626,16 +629,151 @@ def action_gui_navigate(params: dict) -> str:
             gui_send_vk(VK[segment.upper()])
         else:
             # Multi-char = type to search in Tally's type-ahead list
-            gui_type_with_keyboard(segment)
+            gui_type_unicode(segment)
             time.sleep(0.3)
             gui_send_vk(VK["ENTER"])
         time.sleep(0.5)
     if params.get("screenshot", True):
         time.sleep(0.3)
-        gui_screenshot(params.get("screenshot_name", "tally_nav.png"))
+        try:
+            gui_screenshot(params.get("screenshot_name", "tally_nav.png"))
+        except Exception as e:
+            print(f"WARNING: Screenshot failed: {e}")
     return "OK"
 
-# ─── Action Dispatch ─────────────────────────────────────────────────────────
+# ""  Setup Action """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+
+def _is_tally_reachable() -> bool:
+    """Check if Tally API is responding."""
+    try:
+        resp = api_list_companies()
+        return not resp.startswith("ERROR:")
+    except:
+        return False
+
+def _is_company_loaded() -> tuple[bool, list[str]]:
+    """Check if any company is loaded. Returns (loaded, company_names)."""
+    raw = api_list_companies()
+    if raw.startswith("ERROR:"):
+        return False, []
+    companies = parse_xml_to_dicts(raw, "COMPANY")
+    names = [c.get("_NAME", "") for c in companies if c.get("_NAME")]
+    return len(names) > 0, names
+
+def _launch_tally() -> bool:
+    """Try to launch TallyPrime. Returns True if process started."""
+    import subprocess
+    paths = [
+        r"C:\Program Files\TallyPrime\tally.exe",
+        r"C:\Program Files (x86)\TallyPrime\tally.exe",
+        r"C:\TallyPrime\tally.exe",
+        r"C:\Tally\TallyPrime\tally.exe",
+    ]
+    for p in paths:
+        if os.path.exists(p):
+            subprocess.Popen([p], shell=False)
+            print(f"Launched Tally from: {p}")
+            return True
+    # Try searching common locations
+    for drive in ["C:", "D:", "E:"]:
+        for root_dir in [f"{drive}\\Program Files", f"{drive}\\Program Files (x86)", f"{drive}\\"]:
+            candidate = os.path.join(root_dir, "TallyPrime", "tally.exe")
+            if os.path.exists(candidate):
+                subprocess.Popen([candidate], shell=False)
+                print(f"Launched Tally from: {candidate}")
+                return True
+    return False
+
+def action_setup(params: dict) -> str:
+    """Full automated setup: launch Tally if needed, load company, verify."""
+    company = params.get("company", "")
+    max_retries = params.get("retries", 3)
+    wait_secs = params.get("wait", 12)
+
+    # Step 1: Check if Tally is reachable
+    print("Step 1: Checking if Tally API is reachable...")
+    if _is_tally_reachable():
+        print("  Tally API is responding")
+    else:
+        # Step 2: Launch Tally
+        print("  - Tally not reachable. Launching...")
+        if not _launch_tally():
+            return "ERROR: Could not find TallyPrime executable. Please launch Tally manually."
+
+        # Wait for Tally to start and API to become available
+        for attempt in range(max_retries):
+            print(f"  Waiting {wait_secs}s for Tally to start (attempt {attempt + 1}/{max_retries})...")
+            time.sleep(wait_secs)
+            if _is_tally_reachable():
+                print("  Tally API is now responding")
+                break
+        else:
+            return "ERROR: Tally launched but API not responding after retries. Check that XML server is enabled (F12 > Advanced Configuration > port 9000)."
+
+    # Step 3: Dismiss license dialog if present
+    # Tally EDU shows a license dialog on startup requiring 'T' for Educational Mode.
+    # Sending 'T' via WM_CHAR is harmless if no dialog is present.
+    print("Step 2: Dismissing license dialog (sending 'T' for Educational Mode)...")
+    hwnd = _find_tally_hwnd()
+    if not hwnd:
+        return "ERROR: TallyPrime window not found. Is it running?"
+    user32.PostMessageW(hwnd, 0x0102, ord('T'), 0)  # WM_CHAR 'T'
+    time.sleep(3)
+
+    # Step 4: Check if company auto-loaded (tally.ini Default Companies + Load=)
+    print("Step 3: Checking if company is loaded...")
+    loaded, names = _is_company_loaded()
+    if loaded:
+        print(f"  OK: Companies loaded: {', '.join(names)}")
+        return f"OK: Tally ready. Companies loaded: {', '.join(names)}"
+
+    # Wait for auto-load
+    print("  No company yet, waiting for auto-load...")
+    for _ in range(4):
+        time.sleep(5)
+        loaded, names = _is_company_loaded()
+        if loaded:
+            print(f"  OK: Companies loaded: {', '.join(names)}")
+            return f"OK: Tally ready. Companies loaded: {', '.join(names)}"
+
+    # Step 5: Try GUI to select company (F1 + type name + Enter)
+    print("Step 4: Selecting company via GUI...")
+    hwnd = _find_tally_hwnd()
+    if not hwnd:
+        return "ERROR: TallyPrime window not found."
+
+    # ESC to clean Gateway state
+    for _ in range(3):
+        gui_send_vk(VK["ESCAPE"])
+        time.sleep(0.3)
+    time.sleep(1)
+
+    # F1 to open company list
+    gui_send_vk(VK["F1"])
+    time.sleep(2)
+
+    # Type company name if provided
+    if company:
+        gui_type_unicode(company)
+        time.sleep(1)
+
+    # Enter to select
+    gui_send_vk(VK["ENTER"])
+    time.sleep(5)
+
+    # Verify
+    for attempt in range(max_retries):
+        loaded, names = _is_company_loaded()
+        if loaded:
+            print(f"  OK: Companies loaded: {', '.join(names)}")
+            return f"OK: Tally ready. Companies loaded: {', '.join(names)}"
+        print(f"  Waiting for company to load (attempt {attempt + 1}/{max_retries})...")
+        time.sleep(3)
+
+    return "ERROR: Company did not load. Check Tally screen manually."
+
+
+# ""  Action Dispatch """""""""""""""""""""""""""""""""""""""""""""""""""""""""
 
 ACTIONS = {
     # API actions
@@ -655,14 +793,16 @@ ACTIONS = {
     "gui_escape": action_gui_escape_to_gateway,
     "gui_screenshot": action_gui_screenshot,
     "gui_navigate": action_gui_navigate,
+    # Setup
+    "setup": action_setup,
 }
 
 def main():
-    if len(sys.argv) < 2:
+    if len(sys.argv) < 2 or sys.argv[1] in ("--help", "-h", "help"):
         print("Usage: python tally.py --file request.json")
         print("       python tally.py <action> [json_params]")
         print(f"\nAvailable actions: {', '.join(sorted(ACTIONS.keys()))}")
-        sys.exit(1)
+        sys.exit(0)
 
     if sys.argv[1] == "--file":
         filepath = sys.argv[2]
@@ -690,3 +830,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
