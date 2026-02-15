@@ -19,6 +19,17 @@ export const EventType = {
 export type RoomMessageEventContent = {
   msgtype: string;
   body: string;
+  url?: string;
+  file?: {
+    url?: string;
+    [key: string]: unknown;
+  };
+  info?: {
+    mimetype?: string;
+    size?: number;
+    duration?: number;
+    [key: string]: unknown;
+  };
   "m.new_content"?: RoomMessageEventContent;
   "m.relates_to"?: {
     rel_type?: string;
@@ -66,6 +77,14 @@ export type MatrixMessageSummary = {
   body?: string;
   msgtype?: string;
   timestamp?: number;
+  media?: {
+    mxcUrl?: string;
+    downloadUrl?: string;
+    encrypted?: boolean;
+    contentType?: string;
+    sizeBytes?: number;
+    durationMs?: number;
+  };
   relatesTo?: {
     relType?: string;
     eventId?: string;

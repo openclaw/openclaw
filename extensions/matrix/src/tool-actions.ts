@@ -21,6 +21,7 @@ import {
   unpinMatrixMessage,
 } from "./matrix/actions.js";
 import { reactMatrixMessage } from "./matrix/send.js";
+import { readBooleanParam } from "./utils.js";
 
 const messageActions = new Set(["sendMessage", "editMessage", "deleteMessage", "readMessages"]);
 const reactionActions = new Set(["react", "reactions"]);
@@ -108,10 +109,12 @@ export async function handleMatrixAction(
         const limit = readNumberParam(params, "limit", { integer: true });
         const before = readStringParam(params, "before");
         const after = readStringParam(params, "after");
+        const includeMedia = readBooleanParam(params, "includeMedia");
         const result = await readMatrixMessages(roomId, {
           limit: limit ?? undefined,
           before: before ?? undefined,
           after: after ?? undefined,
+          includeMedia: includeMedia ?? undefined,
         });
         return jsonResult({ ok: true, ...result });
       }

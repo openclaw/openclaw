@@ -86,6 +86,7 @@ export async function readMatrixMessages(
     limit?: number;
     before?: string;
     after?: string;
+    includeMedia?: boolean;
   } = {},
 ): Promise<{
   messages: MatrixMessageSummary[];
@@ -114,7 +115,12 @@ export async function readMatrixMessages(
     const messages = res.chunk
       .filter((event) => event.type === EventType.RoomMessage)
       .filter((event) => !event.unsigned?.redacted_because)
-      .map(summarizeMatrixRawEvent);
+      .map((event) =>
+        summarizeMatrixRawEvent(event, {
+          includeMedia: opts.includeMedia,
+          client,
+        }),
+      );
     return {
       messages,
       nextBatch: res.end ?? null,

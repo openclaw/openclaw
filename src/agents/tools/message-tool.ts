@@ -134,6 +134,12 @@ function buildFetchSchema() {
     around: Type.Optional(Type.String()),
     fromMe: Type.Optional(Type.Boolean()),
     includeArchived: Type.Optional(Type.Boolean()),
+    includeMedia: Type.Optional(
+      Type.Boolean({
+        description:
+          "Include provider-specific media fields in read results (for Matrix: mxcUrl/downloadUrl).",
+      }),
+    ),
   };
 }
 

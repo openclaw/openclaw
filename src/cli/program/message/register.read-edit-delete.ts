@@ -16,6 +16,7 @@ export function registerMessageReadEditDeleteCommands(
     .option("--after <id>", "Read/search after id")
     .option("--around <id>", "Read around id")
     .option("--include-thread", "Include thread replies (Discord)", false)
+    .option("--include-media", "Include provider media metadata in read results", false)
     .action(async (opts) => {
       await helpers.runMessageAction("read", opts);
     });

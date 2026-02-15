@@ -10,6 +10,7 @@ import {
 import type { CoreConfig } from "./types.js";
 import { resolveMatrixAccount } from "./matrix/accounts.js";
 import { handleMatrixAction } from "./tool-actions.js";
+import { readBooleanParam } from "./utils.js";
 
 export const matrixMessageActions: ChannelMessageActionAdapter = {
   listActions: ({ cfg }) => {
@@ -114,6 +115,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
 
     if (action === "read") {
       const limit = readNumberParam(params, "limit", { integer: true });
+      const includeMedia = readBooleanParam(params, "includeMedia");
       return await handleMatrixAction(
         {
           action: "readMessages",
@@ -121,6 +123,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
           limit,
           before: readStringParam(params, "before"),
           after: readStringParam(params, "after"),
+          includeMedia,
         },
         cfg as CoreConfig,
       );
