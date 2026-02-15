@@ -21,6 +21,11 @@ export const FeishuDocSchema = Type.Union([
     action: Type.Literal("create"),
     title: Type.String({ description: "Document title" }),
     folder_token: Type.Optional(Type.String({ description: "Target folder token (optional)" })),
+    content: Type.Optional(
+      Type.String({
+        description: "Optional markdown content to write right after document creation",
+      }),
+    ),
   }),
   Type.Object({
     action: Type.Literal("list_blocks"),
