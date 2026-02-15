@@ -205,19 +205,18 @@ export async function callGateway<T = Record<string, unknown>>(
     overrideTlsFingerprint ||
     remoteTlsFingerprint ||
     (tlsRuntime?.enabled ? tlsRuntime.fingerprintSha256 : undefined);
-  const token =
-    explicitAuth.token ||
-    (!urlOverride
-      ? isRemoteMode
-        ? typeof remote?.token === "string" && remote.token.trim().length > 0
-          ? remote.token.trim()
-          : undefined
-        : process.env.OPENCLAW_GATEWAY_TOKEN?.trim() ||
-          process.env.CLAWDBOT_GATEWAY_TOKEN?.trim() ||
-          (typeof authToken === "string" && authToken.trim().length > 0
-            ? authToken.trim()
-            : undefined)
-      : undefined);
+  const explicitToken = explicitAuth.token;
+  const token = !urlOverride
+    ? isRemoteMode
+      ? typeof remote?.token === "string" && remote.token.trim().length > 0
+        ? remote.token.trim()
+        : undefined
+      : process.env.OPENCLAW_GATEWAY_TOKEN?.trim() ||
+        process.env.CLAWDBOT_GATEWAY_TOKEN?.trim() ||
+        (typeof authToken === "string" && authToken.trim().length > 0
+          ? authToken.trim()
+          : undefined)
+    : undefined;
   const password =
     explicitAuth.password ||
     (!urlOverride
@@ -260,6 +259,7 @@ export async function callGateway<T = Record<string, unknown>>(
     const client = new GatewayClient({
       url,
       token,
+      explicitToken,
       password,
       tlsFingerprint,
       instanceId: opts.instanceId ?? randomUUID(),

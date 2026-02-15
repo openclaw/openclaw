@@ -72,7 +72,8 @@ describe("resolveGatewayConnection", () => {
 
     expect(result).toEqual({
       url: "wss://override.example/ws",
-      token: "explicit-token",
+      token: undefined,
+      explicitToken: "explicit-token",
       password: undefined,
     });
   });
@@ -88,6 +89,7 @@ describe("resolveGatewayConnection", () => {
     expect(result).toEqual({
       url: "wss://override.example/ws",
       token: undefined,
+      explicitToken: undefined,
       password: "explicit-password",
     });
   });

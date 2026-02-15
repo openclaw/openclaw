@@ -28,7 +28,12 @@ vi.mock("../../agents/identity.js", async (importOriginal) => {
   };
 });
 
-export function getSlackSlashMocks() {
+export function getSlackSlashMocks(): {
+  dispatchMock: ReturnType<typeof vi.fn>;
+  readAllowFromStoreMock: ReturnType<typeof vi.fn>;
+  upsertPairingRequestMock: ReturnType<typeof vi.fn>;
+  resolveAgentRouteMock: ReturnType<typeof vi.fn>;
+} {
   return mocks;
 }
 
