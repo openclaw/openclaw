@@ -323,6 +323,14 @@ export function formatContextUsageLine(params: {
   return `tokens ${totalLabel}/${ctxLabel}${extra ? ` (${extra})` : ""}`;
 }
 
+
+const INBOUND_META_BLOCK_RE =
+  /^(?:(?:Conversation info|Sender info|Timing info|Channel info) \(untrusted metadata\):\n\`\`\`json\n[\s\S]*?\`\`\`\n*)+/;
+
+export function stripInboundMetaEnvelope(text: string): string {
+  return text.replace(INBOUND_META_BLOCK_RE, "").trim();
+}
+
 export function asString(value: unknown, fallback = ""): string {
   if (typeof value === "string") {
     return value;

@@ -5,6 +5,7 @@ import {
   extractThinkingFromMessage,
   isCommandMessage,
   sanitizeRenderableText,
+  stripInboundMetaEnvelope,
 } from "./tui-formatters.js";
 
 describe("extractTextFromMessage", () => {
@@ -182,5 +183,27 @@ describe("sanitizeRenderableText", () => {
     const sanitized = sanitizeRenderableText(input);
 
     expect(sanitized).toBe(input);
+  });
+});
+
+describe("stripInboundMetaEnvelope (#16919)", () => {
+  it("strips a single metadata block", () => {
+    const input =
+      'Conversation info (untrusted metadata):\n\`\`\`json\n{"key":"value"}\n\`\`\`\nHello there';
+    expect(stripInboundMetaEnvelope(input)).toBe("Hello there");
+  });
+
+  it("strips multiple consecutive metadata blocks", () => {
+    const input = [
+      'Conversation info (untrusted metadata):\n\`\`\`json\n{"a":1}\n\`\`\`',
+      'Sender info (untrusted metadata):\n\`\`\`json\n{"b":2}\n\`\`\`',
+      "Actual message",
+    ].join("\n");
+    expect(stripInboundMetaEnvelope(input)).toBe("Actual message");
+  });
+
+  it("returns original text when no metadata envelope is present", () => {
+    const input = "Just a normal message";
+    expect(stripInboundMetaEnvelope(input)).toBe("Just a normal message")
   });
 });

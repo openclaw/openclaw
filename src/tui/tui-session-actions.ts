@@ -8,7 +8,7 @@ import {
   normalizeMainKey,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
-import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
+import { asString, extractTextFromMessage, isCommandMessage, stripInboundMetaEnvelope } from "./tui-formatters.js";
 
 type SessionActionContext = {
   client: GatewayChatClient;
@@ -326,7 +326,7 @@ export function createSessionActions(context: SessionActionContext) {
         if (message.role === "user") {
           const text = extractTextFromMessage(message);
           if (text) {
-            chatLog.addUser(text);
+            chatLog.addUser(stripInboundMetaEnvelope(text));
           }
           continue;
         }
