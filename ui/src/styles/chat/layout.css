@@ -431,6 +431,29 @@
     grid-template-columns: 1fr;
   }
 
+  .chat-compose__row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .chat-compose__field {
+    width: 100%;
+  }
+
+  .chat-compose .chat-compose__field textarea {
+    min-height: 80px;
+  }
+
+  .chat-compose__actions {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .chat-compose .chat-compose__actions .btn {
+    flex: 1 1 0;
+  }
+
   .chat-controls {
     flex-wrap: wrap;
     gap: 8px;
