@@ -339,6 +339,31 @@ class MemoryManagerEmbeddingOps {
     this.upsertEmbeddingCache(toCache);
   }
 
+  private buildEmbeddingBatchRunnerOptions<TRequest>(params: {
+    requests: TRequest[];
+    chunks: MemoryChunk[];
+    source: MemorySource;
+  }): {
+    agentId: string | undefined;
+    requests: TRequest[];
+    wait: boolean;
+    concurrency: number;
+    pollIntervalMs: number;
+    timeoutMs: number;
+    debug: (message: string, data: Record<string, unknown>) => void;
+  } {
+    const { requests, chunks, source } = params;
+    return {
+      agentId: this.agentId,
+      requests,
+      wait: this.batch.wait,
+      concurrency: this.batch.concurrency,
+      pollIntervalMs: this.batch.pollIntervalMs,
+      timeoutMs: this.batch.timeoutMs,
+      debug: (message, data) => log.debug(message, { ...data, source, chunks: chunks.length }),
+    };
+  }
+
   private async embedChunksWithVoyageBatch(
     chunks: MemoryChunk[],
     entry: MemoryFileEntry | SessionFileEntry,
@@ -364,18 +389,13 @@ class MemoryManagerEmbeddingOps {
         body: { input: chunk.text },
       }),
     });
+    const runnerOptions = this.buildEmbeddingBatchRunnerOptions({ requests, chunks, source });
     const batchResult = await this.runBatchWithFallback({
       provider: "voyage",
       run: async () =>
         await runVoyageEmbeddingBatches({
           client: voyage,
-          agentId: this.agentId,
-          requests,
-          wait: this.batch.wait,
-          concurrency: this.batch.concurrency,
-          pollIntervalMs: this.batch.pollIntervalMs,
-          timeoutMs: this.batch.timeoutMs,
-          debug: (message, data) => log.debug(message, { ...data, source, chunks: chunks.length }),
+          ...runnerOptions,
         }),
       fallback: async () => await this.embedChunksInBatches(chunks),
     });
@@ -416,18 +436,13 @@ class MemoryManagerEmbeddingOps {
         },
       }),
     });
+    const runnerOptions = this.buildEmbeddingBatchRunnerOptions({ requests, chunks, source });
     const batchResult = await this.runBatchWithFallback({
       provider: "openai",
       run: async () =>
         await runOpenAiEmbeddingBatches({
           openAi,
-          agentId: this.agentId,
-          requests,
-          wait: this.batch.wait,
-          concurrency: this.batch.concurrency,
-          pollIntervalMs: this.batch.pollIntervalMs,
-          timeoutMs: this.batch.timeoutMs,
-          debug: (message, data) => log.debug(message, { ...data, source, chunks: chunks.length }),
+          ...runnerOptions,
         }),
       fallback: async () => await this.embedChunksInBatches(chunks),
     });
@@ -464,19 +479,14 @@ class MemoryManagerEmbeddingOps {
         taskType: "RETRIEVAL_DOCUMENT",
       }),
     });
+    const runnerOptions = this.buildEmbeddingBatchRunnerOptions({ requests, chunks, source });
 
     const batchResult = await this.runBatchWithFallback({
       provider: "gemini",
       run: async () =>
         await runGeminiEmbeddingBatches({
           gemini,
-          agentId: this.agentId,
-          requests,
-          wait: this.batch.wait,
-          concurrency: this.batch.concurrency,
-          pollIntervalMs: this.batch.pollIntervalMs,
-          timeoutMs: this.batch.timeoutMs,
-          debug: (message, data) => log.debug(message, { ...data, source, chunks: chunks.length }),
+          ...runnerOptions,
         }),
       fallback: async () => await this.embedChunksInBatches(chunks),
     });
