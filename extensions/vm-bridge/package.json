@@ -1,0 +1,20 @@
+{
+  "name": "@openclaw/vm-bridge",
+  "version": "2026.2.14",
+  "description": "VM Bridge Orchestrator — poll messages, classify, create contracts, dispatch to VMs, handle checkpoints",
+  "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.48",
+    "pg": "^8.13.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.11.0",
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
