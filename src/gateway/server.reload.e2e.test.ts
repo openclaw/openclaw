@@ -1,11 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   connectOk,
-  getFreePort,
   installGatewayTestHooks,
   rpcReq,
-  startGatewayServer,
   startServerWithClient,
+  withGatewayServer,
 } from "./test-helpers.js";
 
 const hoisted = vi.hoisted(() => {
@@ -200,110 +199,107 @@ describe("gateway hot reload", () => {
   });
 
   it("applies hot reload actions and emits restart signal", async () => {
-    const port = await getFreePort();
-    const server = await startGatewayServer(port);
+    await withGatewayServer(async () => {
+      const onHotReload = hoisted.getOnHotReload();
+      expect(onHotReload).toBeTypeOf("function");
 
-    const onHotReload = hoisted.getOnHotReload();
-    expect(onHotReload).toBeTypeOf("function");
+      const nextConfig = {
+        hooks: {
+          enabled: true,
+          token: "secret",
+          gmail: { account: "me@example.com" },
+        },
+        cron: { enabled: true, store: "/tmp/cron.json" },
+        agents: { defaults: { heartbeat: { every: "1m" }, maxConcurrent: 2 } },
+        browser: { enabled: true },
+        web: { enabled: true },
+        channels: {
+          telegram: { botToken: "token" },
+          discord: { token: "token" },
+          signal: { account: "+15550000000" },
+          imessage: { enabled: true },
+        },
+      };
 
-    const nextConfig = {
-      hooks: {
-        enabled: true,
-        token: "secret",
-        gmail: { account: "me@example.com" },
-      },
-      cron: { enabled: true, store: "/tmp/cron.json" },
-      agents: { defaults: { heartbeat: { every: "1m" }, maxConcurrent: 2 } },
-      browser: { enabled: true },
-      web: { enabled: true },
-      channels: {
-        telegram: { botToken: "token" },
-        discord: { token: "token" },
-        signal: { account: "+15550000000" },
-        imessage: { enabled: true },
-      },
-    };
+      await onHotReload?.(
+        {
+          changedPaths: [
+            "hooks.gmail.account",
+            "cron.enabled",
+            "agents.defaults.heartbeat.every",
+            "browser.enabled",
+            "web.enabled",
+            "channels.telegram.botToken",
+            "channels.discord.token",
+            "channels.signal.account",
+            "channels.imessage.enabled",
+          ],
+          restartGateway: false,
+          restartReasons: [],
+          hotReasons: ["web.enabled"],
+          reloadHooks: true,
+          restartGmailWatcher: true,
+          restartBrowserControl: true,
+          restartCron: true,
+          restartHeartbeat: true,
+          restartChannels: new Set(["whatsapp", "telegram", "discord", "signal", "imessage"]),
+          noopPaths: [],
+        },
+        nextConfig,
+      );
 
-    await onHotReload?.(
-      {
-        changedPaths: [
-          "hooks.gmail.account",
-          "cron.enabled",
-          "agents.defaults.heartbeat.every",
-          "browser.enabled",
-          "web.enabled",
-          "channels.telegram.botToken",
-          "channels.discord.token",
-          "channels.signal.account",
-          "channels.imessage.enabled",
-        ],
-        restartGateway: false,
-        restartReasons: [],
-        hotReasons: ["web.enabled"],
-        reloadHooks: true,
-        restartGmailWatcher: true,
-        restartBrowserControl: true,
-        restartCron: true,
-        restartHeartbeat: true,
-        restartChannels: new Set(["whatsapp", "telegram", "discord", "signal", "imessage"]),
-        noopPaths: [],
-      },
-      nextConfig,
-    );
+      expect(hoisted.stopGmailWatcher).toHaveBeenCalled();
+      expect(hoisted.startGmailWatcher).toHaveBeenCalledWith(nextConfig);
 
-    expect(hoisted.stopGmailWatcher).toHaveBeenCalled();
-    expect(hoisted.startGmailWatcher).toHaveBeenCalledWith(nextConfig);
+      expect(hoisted.browserStop).toHaveBeenCalledTimes(1);
+      expect(hoisted.startBrowserControlServerIfEnabled).toHaveBeenCalledTimes(2);
 
-    expect(hoisted.browserStop).toHaveBeenCalledTimes(1);
-    expect(hoisted.startBrowserControlServerIfEnabled).toHaveBeenCalledTimes(2);
+      expect(hoisted.startHeartbeatRunner).toHaveBeenCalledTimes(1);
+      expect(hoisted.heartbeatUpdateConfig).toHaveBeenCalledTimes(1);
+      expect(hoisted.heartbeatUpdateConfig).toHaveBeenCalledWith(nextConfig);
 
-    expect(hoisted.startHeartbeatRunner).toHaveBeenCalledTimes(1);
-    expect(hoisted.heartbeatUpdateConfig).toHaveBeenCalledTimes(1);
-    expect(hoisted.heartbeatUpdateConfig).toHaveBeenCalledWith(nextConfig);
+      expect(hoisted.cronInstances.length).toBe(2);
+      expect(hoisted.cronInstances[0].stop).toHaveBeenCalledTimes(1);
+      expect(hoisted.cronInstances[1].start).toHaveBeenCalledTimes(1);
 
-    expect(hoisted.cronInstances.length).toBe(2);
-    expect(hoisted.cronInstances[0].stop).toHaveBeenCalledTimes(1);
-    expect(hoisted.cronInstances[1].start).toHaveBeenCalledTimes(1);
+      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledTimes(5);
+      expect(hoisted.providerManager.startChannel).toHaveBeenCalledTimes(5);
+      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("whatsapp");
+      expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith("whatsapp");
+      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("telegram");
+      expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith("telegram");
+      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("discord");
+      expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith("discord");
+      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("signal");
+      expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith("signal");
+      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("imessage");
+      expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith("imessage");
 
-    expect(hoisted.providerManager.stopChannel).toHaveBeenCalledTimes(5);
-    expect(hoisted.providerManager.startChannel).toHaveBeenCalledTimes(5);
-    expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("whatsapp");
-    expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith("whatsapp");
-    expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("telegram");
-    expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith("telegram");
-    expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("discord");
-    expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith("discord");
-    expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("signal");
-    expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith("signal");
-    expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("imessage");
-    expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith("imessage");
+      const onRestart = hoisted.getOnRestart();
+      expect(onRestart).toBeTypeOf("function");
 
-    const onRestart = hoisted.getOnRestart();
-    expect(onRestart).toBeTypeOf("function");
+      const signalSpy = vi.fn();
+      process.once("SIGUSR1", signalSpy);
 
-    const signalSpy = vi.fn();
-    process.once("SIGUSR1", signalSpy);
+      onRestart?.(
+        {
+          changedPaths: ["gateway.port"],
+          restartGateway: true,
+          restartReasons: ["gateway.port"],
+          hotReasons: [],
+          reloadHooks: false,
+          restartGmailWatcher: false,
+          restartBrowserControl: false,
+          restartCron: false,
+          restartHeartbeat: false,
+          restartChannels: new Set(),
+          noopPaths: [],
+        },
+        {},
+      );
 
-    onRestart?.(
-      {
-        changedPaths: ["gateway.port"],
-        restartGateway: true,
-        restartReasons: ["gateway.port"],
-        hotReasons: [],
-        reloadHooks: false,
-        restartGmailWatcher: false,
-        restartBrowserControl: false,
-        restartCron: false,
-        restartHeartbeat: false,
-        restartChannels: new Set(),
-        noopPaths: [],
-      },
-      {},
-    );
-
-    expect(signalSpy).toHaveBeenCalledTimes(1);
-
-    await server.close();
+      expect(signalSpy).toHaveBeenCalledTimes(1);
+    });
   });
 });
 
