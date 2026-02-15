@@ -407,7 +407,7 @@ function registerPluginEntry(cfg: OpenClawConfig, pluginId: string): OpenClawCon
     ...cfg.plugins?.entries,
     [pluginId]: {
       ...(cfg.plugins?.entries?.[pluginId] as Record<string, unknown> | undefined),
-      enabled: false,
+      enabled: true,
     },
   };
   return {
@@ -426,7 +426,7 @@ function formatAutoEnableChange(entry: PluginEnableChange): string {
     const label = getChatChannelMeta(channelId).label;
     reason = reason.replace(new RegExp(`^${channelId}\\b`, "i"), label);
   }
-  return `${reason}, not enabled yet.`;
+  return `${reason}, enabled automatically.`;
 }
 
 export function applyPluginAutoEnable(params: {

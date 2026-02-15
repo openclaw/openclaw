@@ -38,8 +38,7 @@ import { resolveBlockStreamingCoalescing } from "./block-streaming.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import { enqueueFollowupRun, type FollowupRun, type QueueSettings } from "./queue.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
-import { incrementCompactionCount } from "./session-updates.js";
-import { persistSessionUsageUpdate } from "./session-usage.js";
+import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { createTypingSignaler } from "./typing-mode.js";
 
 const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
@@ -158,22 +157,26 @@ export async function runReplyAgent(params: {
           buffer: createAudioAsVoiceBuffer({ isAudioPayload }),
         })
       : null;
+  const touchActiveSessionEntry = async () => {
+    if (!activeSessionEntry || !activeSessionStore || !sessionKey) {
+      return;
+    }
+    const updatedAt = Date.now();
+    activeSessionEntry.updatedAt = updatedAt;
+    activeSessionStore[sessionKey] = activeSessionEntry;
+    if (storePath) {
+      await updateSessionStoreEntry({
+        storePath,
+        sessionKey,
+        update: async () => ({ updatedAt }),
+      });
+    }
+  };
 
   if (shouldSteer && isStreaming) {
     const steered = queueEmbeddedPiMessage(followupRun.run.sessionId, followupRun.prompt);
     if (steered && !shouldFollowup) {
-      if (activeSessionEntry && activeSessionStore && sessionKey) {
-        const updatedAt = Date.now();
-        activeSessionEntry.updatedAt = updatedAt;
-        activeSessionStore[sessionKey] = activeSessionEntry;
-        if (storePath) {
-          await updateSessionStoreEntry({
-            storePath,
-            sessionKey,
-            update: async () => ({ updatedAt }),
-          });
-        }
-      }
+      await touchActiveSessionEntry();
       typing.cleanup();
       return undefined;
     }
@@ -181,18 +184,7 @@ export async function runReplyAgent(params: {
 
   if (isActive && (shouldFollowup || resolvedQueue.mode === "steer")) {
     enqueueFollowupRun(queueKey, followupRun, resolvedQueue);
-    if (activeSessionEntry && activeSessionStore && sessionKey) {
-      const updatedAt = Date.now();
-      activeSessionEntry.updatedAt = updatedAt;
-      activeSessionStore[sessionKey] = activeSessionEntry;
-      if (storePath) {
-        await updateSessionStoreEntry({
-          storePath,
-          sessionKey,
-          update: async () => ({ updatedAt }),
-        });
-      }
-    }
+    await touchActiveSessionEntry();
     typing.cleanup();
     return undefined;
   }
@@ -372,6 +364,7 @@ export async function runReplyAgent(params: {
     }
 
     const usage = runResult.meta.agentMeta?.usage;
+    const promptTokens = runResult.meta.agentMeta?.promptTokens;
     const modelUsed = runResult.meta.agentMeta?.model ?? fallbackModel ?? defaultModel;
     const providerUsed =
       runResult.meta.agentMeta?.provider ?? fallbackProvider ?? followupRun.run.provider;
@@ -384,10 +377,12 @@ export async function runReplyAgent(params: {
       activeSessionEntry?.contextTokens ??
       DEFAULT_CONTEXT_TOKENS;
 
-    await persistSessionUsageUpdate({
+    await persistRunSessionUsage({
       storePath,
       sessionKey,
       usage,
+      lastCallUsage: runResult.meta.agentMeta?.lastCallUsage,
+      promptTokens,
       modelUsed,
       providerUsed,
       contextTokensUsed,
@@ -495,11 +490,13 @@ export async function runReplyAgent(params: {
     let finalPayloads = replyPayloads;
     const verboseEnabled = resolvedVerboseLevel !== "off";
     if (autoCompactionCompleted) {
-      const count = await incrementCompactionCount({
+      const count = await incrementRunCompactionCount({
         sessionEntry: activeSessionEntry,
         sessionStore: activeSessionStore,
         sessionKey,
         storePath,
+        lastCallUsage: runResult.meta.agentMeta?.lastCallUsage,
+        contextTokensUsed,
       });
       if (verboseEnabled) {
         const suffix = typeof count === "number" ? ` (count ${count})` : "";

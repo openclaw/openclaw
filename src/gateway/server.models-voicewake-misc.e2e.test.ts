@@ -5,13 +5,13 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
 import type { ChannelOutboundAdapter } from "../channels/plugins/types.js";
-import type { PluginRegistry } from "../plugins/registry.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
 import { resolveCanvasHostUrl } from "../infra/canvas-host-url.js";
 import { GatewayLockError } from "../infra/gateway-lock.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createOutboundTestPlugin } from "../test-utils/channel-plugins.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { createRegistry } from "./server.e2e-registry-helpers.js";
 import {
   connectOk,
   getFreePort,
@@ -65,19 +65,6 @@ const whatsappPlugin = createOutboundTestPlugin({
   id: "whatsapp",
   outbound: whatsappOutbound,
   label: "WhatsApp",
-});
-
-const createRegistry = (channels: PluginRegistry["channels"]): PluginRegistry => ({
-  plugins: [],
-  tools: [],
-  channels,
-  providers: [],
-  gatewayHandlers: {},
-  httpHandlers: [],
-  httpRoutes: [],
-  cliRegistrars: [],
-  services: [],
-  diagnostics: [],
 });
 
 const whatsappRegistry = createRegistry([

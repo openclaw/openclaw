@@ -24,25 +24,29 @@ const createCfg = (): OpenClawConfig => ({}) as OpenClawConfig;
 
 const createDmButtonInteraction = (overrides: Partial<ButtonInteraction> = {}) => {
   const reply = vi.fn().mockResolvedValue(undefined);
+  const defer = vi.fn().mockResolvedValue(undefined);
   const interaction = {
     rawData: { channel_id: "dm-channel" },
     user: { id: "123456789", username: "Alice", discriminator: "1234" },
+    defer,
     reply,
     ...overrides,
   } as unknown as ButtonInteraction;
-  return { interaction, reply };
+  return { interaction, defer, reply };
 };
 
 const createDmSelectInteraction = (overrides: Partial<StringSelectMenuInteraction> = {}) => {
   const reply = vi.fn().mockResolvedValue(undefined);
+  const defer = vi.fn().mockResolvedValue(undefined);
   const interaction = {
     rawData: { channel_id: "dm-channel" },
     user: { id: "123456789", username: "Alice", discriminator: "1234" },
     values: ["alpha"],
+    defer,
     reply,
     ...overrides,
   } as unknown as StringSelectMenuInteraction;
-  return { interaction, reply };
+  return { interaction, defer, reply };
 };
 
 beforeEach(() => {
@@ -58,10 +62,11 @@ describe("agent components", () => {
       accountId: "default",
       dmPolicy: "pairing",
     });
-    const { interaction, reply } = createDmButtonInteraction();
+    const { interaction, defer, reply } = createDmButtonInteraction();
 
     await button.run(interaction, { componentId: "hello" } as ComponentData);
 
+    expect(defer).toHaveBeenCalledWith({ ephemeral: true });
     expect(reply).toHaveBeenCalledTimes(1);
     expect(reply.mock.calls[0]?.[0]?.content).toContain("Pairing code: PAIRCODE");
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
@@ -74,11 +79,12 @@ describe("agent components", () => {
       accountId: "default",
       dmPolicy: "allowlist",
     });
-    const { interaction, reply } = createDmButtonInteraction();
+    const { interaction, defer, reply } = createDmButtonInteraction();
 
     await button.run(interaction, { componentId: "hello" } as ComponentData);
 
-    expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
+    expect(defer).toHaveBeenCalledWith({ ephemeral: true });
+    expect(reply).toHaveBeenCalledWith({ content: "✓" });
     expect(enqueueSystemEventMock).toHaveBeenCalled();
   });
 
@@ -89,11 +95,12 @@ describe("agent components", () => {
       dmPolicy: "allowlist",
       allowFrom: ["Alice#1234"],
     });
-    const { interaction, reply } = createDmSelectInteraction();
+    const { interaction, defer, reply } = createDmSelectInteraction();
 
     await select.run(interaction, { componentId: "hello" } as ComponentData);
 
-    expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
+    expect(defer).toHaveBeenCalledWith({ ephemeral: true });
+    expect(reply).toHaveBeenCalledWith({ content: "✓" });
     expect(enqueueSystemEventMock).toHaveBeenCalled();
   });
 });

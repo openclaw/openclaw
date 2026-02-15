@@ -14,6 +14,7 @@ import { resolveAgentWorkspaceDir } from "../../../agents/agent-scope.js";
 import { resolveStateDir } from "../../../config/paths.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
+import { hasInterSessionUserProvenance } from "../../../sessions/input-provenance.js";
 import { resolveHookConfig } from "../../config.js";
 import { generateSlugViaLLM } from "../../llm-slug-generator.js";
 
@@ -40,6 +41,9 @@ async function getRecentSessionContent(
           const msg = entry.message;
           const role = msg.role;
           if ((role === "user" || role === "assistant") && msg.content) {
+            if (role === "user" && hasInterSessionUserProvenance(msg)) {
+              continue;
+            }
             // Extract text content
             const text = Array.isArray(msg.content)
               ? // oxlint-disable-next-line typescript/no-explicit-any
