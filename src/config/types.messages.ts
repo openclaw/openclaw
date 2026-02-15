@@ -125,6 +125,8 @@ export type CommandsConfig = {
    * Example: { "*": ["user1"], discord: ["user:123"] }
    */
   allowFrom?: CommandAllowFrom;
+  /** How to handle duplicate skill commands: "number" to append number suffix, "skip" to skip duplicates. */
+  skillCommandDeduplication?: "number" | "skip";
 };
 
 export type ProviderCommandsConfig = {

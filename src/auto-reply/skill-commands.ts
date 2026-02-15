@@ -60,6 +60,7 @@ export function listSkillCommandsForAgents(params: {
       config: params.cfg,
       eligibility: { remote: getRemoteSkillEligibility() },
       reservedNames: used,
+      deduplicationMode: params.cfg?.commands?.skillCommandDeduplication ?? "number",
     });
     for (const command of commands) {
       used.add(command.name.toLowerCase());
