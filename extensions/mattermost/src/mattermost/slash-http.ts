@@ -70,11 +70,26 @@ function sendJsonResponse(
   res.end(JSON.stringify(body));
 }
 
+/**
+ * Normalize a single allowlist entry, matching the websocket monitor behaviour.
+ * Strips `mattermost:`, `user:`, and `@` prefixes, and preserves the `*` wildcard.
+ */
+function normalizeAllowEntry(entry: string): string {
+  const trimmed = entry.trim();
+  if (!trimmed) {
+    return "";
+  }
+  if (trimmed === "*") {
+    return "*";
+  }
+  return trimmed
+    .replace(/^(mattermost|user):/i, "")
+    .replace(/^@/, "")
+    .toLowerCase();
+}
+
 function normalizeAllowList(entries: Array<string | number>): string[] {
-  const normalized = entries
-    .map((entry) => String(entry).trim())
-    .filter(Boolean)
-    .map((entry) => entry.toLowerCase());
+  const normalized = entries.map((entry) => normalizeAllowEntry(String(entry))).filter(Boolean);
   return Array.from(new Set(normalized));
 }
 
@@ -83,12 +98,16 @@ function isSenderAllowed(params: { senderId: string; senderName: string; allowFr
   if (allowFrom.length === 0) {
     return false;
   }
+  if (allowFrom.includes("*")) {
+    return true;
+  }
 
-  const allowed = new Set(allowFrom.map((v) => v.toLowerCase()));
-  const id = senderId.trim().toLowerCase();
-  const name = senderName.trim().toLowerCase();
+  const normalizedId = normalizeAllowEntry(senderId);
+  const normalizedName = senderName ? normalizeAllowEntry(senderName) : "";
 
-  return allowed.has(id) || allowed.has(name);
+  return allowFrom.some(
+    (entry) => entry === normalizedId || (normalizedName && entry === normalizedName),
+  );
 }
 
 type SlashInvocationAuth = {
