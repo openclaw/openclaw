@@ -67,6 +67,7 @@
   border-radius: 6px;
   padding: 10px 12px;
   overflow-x: auto;
+  max-width: 100%;
 }
 
 .chat-text :where(pre code) {
