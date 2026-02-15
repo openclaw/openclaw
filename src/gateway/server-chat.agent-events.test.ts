@@ -131,6 +131,52 @@ describe("agent event handler", () => {
     nowSpy.mockRestore();
   });
 
+  it("cleans up agent run sequence tracking when lifecycle completes", () => {
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(2_500);
+    const broadcast = vi.fn();
+    const broadcastToConnIds = vi.fn();
+    const nodeSendToSession = vi.fn();
+    const agentRunSeq = new Map<string, number>();
+    const chatRunState = createChatRunState();
+    const toolEventRecipients = createToolEventRecipientRegistry();
+    chatRunState.registry.add("run-cleanup", {
+      sessionKey: "session-cleanup",
+      clientRunId: "client-cleanup",
+    });
+
+    const handler = createAgentEventHandler({
+      broadcast,
+      broadcastToConnIds,
+      nodeSendToSession,
+      agentRunSeq,
+      chatRunState,
+      resolveSessionKeyForRun: () => undefined,
+      clearAgentRunContext: vi.fn(),
+      toolEventRecipients,
+    });
+
+    handler({
+      runId: "run-cleanup",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "done" },
+    });
+    expect(agentRunSeq.get("run-cleanup")).toBe(1);
+
+    handler({
+      runId: "run-cleanup",
+      seq: 2,
+      stream: "lifecycle",
+      ts: Date.now(),
+      data: { phase: "end" },
+    });
+
+    expect(agentRunSeq.has("run-cleanup")).toBe(false);
+    expect(agentRunSeq.has("client-cleanup")).toBe(false);
+    nowSpy.mockRestore();
+  });
+
   it("routes tool events only to registered recipients when verbose is enabled", () => {
     const broadcast = vi.fn();
     const broadcastToConnIds = vi.fn();

@@ -419,6 +419,8 @@ export function createAgentEventHandler({
     if (lifecyclePhase === "end" || lifecyclePhase === "error") {
       toolEventRecipients.markFinal(evt.runId);
       clearAgentRunContext(evt.runId);
+      agentRunSeq.delete(evt.runId);
+      agentRunSeq.delete(clientRunId);
     }
   };
 }
