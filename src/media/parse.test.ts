@@ -87,4 +87,18 @@ describe("splitMediaFromOutput", () => {
     const result = splitMediaFromOutput("MEDIA:screenshot");
     expect(result.mediaUrls).toBeUndefined();
   });
+
+  it("ignores MEDIA: inside changelog prose (#16935)", () => {
+    const input = "accept `MEDIA:`-prefixed paths (lenient whitespace) when loading outbound media";
+    const result = splitMediaFromOutput(input);
+    expect(result.mediaUrls).toBeUndefined();
+    expect(result.text).toBe(input);
+  });
+
+  it("ignores MEDIA: mid-line in markdown list items (#16935)", () => {
+    const input = "- Fixed `MEDIA:` prefix handling for outbound files";
+    const result = splitMediaFromOutput(input);
+    expect(result.mediaUrls).toBeUndefined();
+    expect(result.text).toBe(input);
+  });
 });
