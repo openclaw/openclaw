@@ -568,7 +568,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         channel: "mattermost",
         accountId: account.accountId,
         groupId: channelId,
-      });
+        requireMentionOverride: account.requireMention,
+      }) !== false;
     const shouldBypassMention =
       isControlCommand && shouldRequireMention && !wasMentioned && commandAuthorized;
     const effectiveWasMentioned = wasMentioned || shouldBypassMention || oncharTriggered;
