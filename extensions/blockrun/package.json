@@ -1,0 +1,17 @@
+{
+  "name": "@openclaw/blockrun",
+  "version": "2026.2.14",
+  "description": "BlockRun LLM provider — 30+ models, smart routing, x402 micropayments",
+  "type": "module",
+  "dependencies": {
+    "@blockrun/clawrouter": "^0.9.4"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

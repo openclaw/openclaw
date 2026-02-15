@@ -1,0 +1,27 @@
+{
+  "id": "blockrun",
+  "name": "BlockRun",
+  "description": "30+ AI models with smart routing and x402 micropayments. No API key — pay per request with USDC.",
+  "providers": ["blockrun"],
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "walletKey": {
+        "type": "string",
+        "description": "EVM wallet private key (0x...). Falls back to BLOCKRUN_WALLET_KEY env var. Auto-generated if neither is set."
+      },
+      "routing": {
+        "type": "object",
+        "description": "Override default routing configuration"
+      }
+    },
+    "additionalProperties": false
+  },
+  "uiHints": {
+    "walletKey": {
+      "label": "Wallet Private Key",
+      "sensitive": true,
+      "placeholder": "0x... (optional — falls back to BLOCKRUN_WALLET_KEY env var, or auto-generated)"
+    }
+  }
+}
