@@ -1,5 +1,6 @@
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import { normalizeTargetForProvider } from "../infra/outbound/target-normalization.js";
+import { MEDIA_TOKEN_RE } from "../media/parse.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { type MessagingToolSend } from "./pi-embedded-messaging.js";
 
@@ -116,6 +117,72 @@ export function extractToolResultText(result: unknown): string | undefined {
     return undefined;
   }
   return texts.join("\n");
+}
+
+/**
+ * Extract media file paths from a tool result.
+ *
+ * Strategy (first match wins):
+ * 1. Parse `MEDIA:` tokens from text content blocks (all OpenClaw tools).
+ * 2. Fall back to `details.path` when image content exists (OpenClaw imageResult).
+ *
+ * Returns an empty array when no media is found (e.g. Pi SDK `read` tool
+ * returns base64 image data but no file path; those need a different delivery
+ * path like saving to a temp file).
+ */
+export function extractToolResultMediaPaths(result: unknown): string[] {
+  if (!result || typeof result !== "object") {
+    return [];
+  }
+  const record = result as Record<string, unknown>;
+  const content = Array.isArray(record.content) ? record.content : null;
+  if (!content) {
+    return [];
+  }
+
+  // Extract MEDIA: paths from text content blocks.
+  const paths: string[] = [];
+  let hasImageContent = false;
+  for (const item of content) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+    const entry = item as Record<string, unknown>;
+    if (entry.type === "image") {
+      hasImageContent = true;
+      continue;
+    }
+    if (entry.type === "text" && typeof entry.text === "string") {
+      // Reset lastIndex since MEDIA_TOKEN_RE is global.
+      MEDIA_TOKEN_RE.lastIndex = 0;
+      let match: RegExpExecArray | null;
+      while ((match = MEDIA_TOKEN_RE.exec(entry.text)) !== null) {
+        // Strip surrounding quotes/backticks and whitespace (mirrors cleanCandidate in media/parse).
+        const p = match[1]
+          ?.replace(/^[`"'[{(]+/, "")
+          .replace(/[`"'\]})\\,]+$/, "")
+          .trim();
+        if (p && p.length <= 4096) {
+          paths.push(p);
+        }
+      }
+    }
+  }
+
+  if (paths.length > 0) {
+    return paths;
+  }
+
+  // Fall back to details.path when image content exists but no MEDIA: text.
+  if (hasImageContent) {
+    const details = record.details as Record<string, unknown> | undefined;
+    const p = typeof details?.path === "string" ? details.path.trim() : "";
+    if (p) {
+      return [p];
+    }
+  }
+
+  return [];
 }
 
 export function isToolResultError(result: unknown): boolean {
