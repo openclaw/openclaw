@@ -1,0 +1,1979 @@
+{
+  "openapi": "3.0.1",
+  "info": {
+    "title": "Visma e-conomic OpenAPI Subscriptions",
+    "description": "# Changelog\n<details>\n<summary>Click to see changelog.</summary>\n\n| Version | Description | Date |\n|:--------|:------------|:-----|\n|6.0.3| Aligned validation error message with new license name | 02/01/2026|\r\n|6.0.2| API documentation updated according to a new error code | 01/07/2024|\r\n|6.0.1| Customer of project no longer needs to match customer specified on subscriber. | 24/05/2024|\r\n|6.0.0| Stripped Time from startDate, endDate, discountExpiryDate, registrationDate and expiryDate properties from [`subscribers`](#tag/Subscribers).<br> Starting with this version, a validation error will be returned if the fields contain timestamps.<br> Previous versions allowed the saving of Time for the specified properties, which was not aligned with the e-conomic application.<br> From now on, on previous versions Time on DateTime properties will be stripped - you can send it, but it will be not saved to database.<br> Entries already existing in the database will continue to have the Time set.<br> If filtering on DateTime properties is needed for previous versions, please use time intervals and not the equality operator. | 30/05/2024|\r\n|5.0.1| Updated error message returned when exceeding max length of `comments` on [`subscribers`](#tag/Subscribers) endpoints. | 27/03/2024|\r\n\ufeff|5.0.0| - Changed max length for ExtraTextForInvoice and OtherRef on [`subscribers`](#tag/Subscribers) endpoints and for Description and Name on [`subscriptions`](#tag/Subscriptions) endpoints. <br>- Fixed response schemas for GetAll and GetPaged endpoints for [`subscriptionlines`](#tag/SubscriptionLines). | 26/03/2024|\r\n|4.0.2| Changed max length for Description on [`subscriptionlines`](#tag/SubscriptionLines) from 100 to 2500 | 07/02/2024|\r\n|4.0.1| Added filtering possibility for the ExtraTextForInvoice property on [`subscribers`](#tag/Subscribers) endpoints. | 26/01/2024|\r\n|4.0.0| Updated schema for Quantity in [`subscriptionlines`](#tag/SubscriptionLines) from int to decimal. e-conomic uses decimals for quantities, and it was our mistake to start with int. | 26/01/2024|\r\n|3.0.2| Updated max length of Comments on [`subscribers`](#tag/Subscribers) endpoints, from 255 to 500. | 13/12/2023|\r\n|3.0.1| Added Location header to responses from POST requests.  | 24/11/2023|\r\n|3.0.0| Updated the schema for productNumber from int to string. e-conomic uses strings for product numbers, and it was our mistake to start with int. | 02/11/2023|\r\n|2.0.0| Added DraftDocumentId and BookedInvoiceId properties to [`subscribers`](#tag/Subscribers) endpoints to help filter out previous subscribers. | 29/08/2023|\r\n|1.0.0| [`subscriptions`](#tag/Subscriptions), [`subscriptionlines`](#tag/SubscriptionLines), [`subscribers`](#tag/Subscribers) endpoints added. | 21/08/2023|\n\n</details>\n\n# TL;DR\n\n**Create tokens as instructed [here](https://www.e-conomic.com/developer/connect) and then add these three headers to your requests:**\n\n| Header                | Value                      | What is this?                                                |\n| :-------------------- | :------------------------- | :----------------------------------------------------------- |\n| X-AppSecretToken      | YOUR_PRIVATE_TOKEN         | This identifies your app. This is your secret token. Try using the value `demo`. |\n| X-AgreementGrantToken | YOUR_AGREEMENT_GRANT_TOKEN | This identifies the grant issued by an agreement, to allow your app to access the agreements data. Try using the value `demo`. |\n| Content-Type          | application/json           | We\u2019re a JSON based API. This tells us that you agree with us on using JSON. |\n\n**Optional headers:**\n\n| Header                | Value                      | What is this?                                                |\n| :-------------------- | :------------------------- | :----------------------------------------------------------- |\n| Idempotency-Key       | YOUR_IDEMPOTENCY_KEY       | This represents your own unique idempotency key. Enables you to make use of our [Idempotency Tokens](#section/Retrieving-data/Idempotency-tokens) feature. You can't use this feature with GET requests. |\n\n### Examples\n\n#### jQuery\n\n```javascript/jQuery\n$.ajax({\n    url: \"https://apis.e-conomic.com/subscriptionsapi/v6.0.3/the_resource\",\n    dataType: \"json\",\n    headers: {\n        'X-AppSecretToken': \"demo\",\n        'X-AgreementGrantToken': \"demo\",\n        'Accept': \"application/json\"\n    },\n    type: \"GET\"\n})\n    .always(function (data) {\n    $(\"#output\").text(JSON.stringify(data, null, 4));\n});\n```\n\n#### cURL\n\n```curl\ncurl -H \"X-AppSecretToken: demo\" -H \"X-AgreementGrantToken: demo\" https://apis.e-conomic.com/subscriptionsapi/v6.0.3/the_resource\n```\n\n\n\n# Introduction\n\nWelcome to the **Visma e-conomic OpenAPI** documentation!\n\nThe e-conomic API is a document-based JSON REST API. \n\nFor more in-depth information about e-conomic itself, please have a look at the e-copedia [http://wiki.e-conomic.dk](http://wiki.e-conomic.dk/).\n\n## Usage\n\n- **Generating a client** can easily be done using tools like [swagger-codegen](https://github.com/swagger-api/swagger-codegen) or others that work with [OpenAPI Specification](https://github.com/OAI/OpenAPI-Specification) specs.\n\n\n## Versioning\n\nAPI releases are versioned using a three-part versioning scheme: `{major version}.{minor version}.{patch version}`.\n\nWe broadly follow [Semantic Versioning](https://semver.org/) principles when versioning the API. The major version number is incremented when a breaking change occurs. \n\nThe format is:\n\n`/{resource-api}/v{major version}.{minor version}.{patch version}/{resource-name}`\n\nEach value of the above are integers and you should configure the specific version in each API call. \n\nAn example could be: `/subscriptionsapi/v1.0.0/subscriptions`\n\nTo track the changes of versions, please see our [changelog](#section/Changelog).\n\nWe reserve the right to deprecate versions at intervals since this allows for moving into a friendly environment for you faster.\n\n## Demo authentication\n\nIf you wish to try out the API before registering a developer agreement, you can do this by using the demo agreement, which mimics the authentication flow you will have to use when you create your app. All you have to do is specify HTTP header tokens `X-AgreementGrantToken: demo` and `X-AppSecretToken: demo`. Note however that you can only do GET requests with the demo agreement. If you want full access to our API's, you will need to register.\n\n# Retrieving data\n\nOur data is exposed as collections of items. Each item has many properties, with one property as a unique identifier, usually called `number` or `id`. You can always get a single item if you already know the unique identifier. In case the unique identifier is not known, you can always search the collection and retrieve an array of items that satisfy the search criteria, or retrieve only the count of items that satisfy the search criteria. When you search for items in a collection, you can always use filtering, sorting and pagination. When it comes to pagination, we offer two distinct approaches available on separate endpoints. You can read more about filtering, sorting and pagination in the following sections. \n\n## Filtering\n\nFiltering is enabled on all collection endpoints but not on all properties.\n\nFiltering on collections can be done using the query string parameter `filter`. A filter is made up of a set of predicates and follows a syntax inspired by mongoDB. A predicate is made up of a property name, an operator, and a value.\n\nExample: `?filter=name$eq:Joe`\n\nThis matches all resources with the value Joe in the property name.\n\nPredicates can be chained using either of the logical operators AND and OR.\n\nExample: `?filter=name$eq:Joe$and:city$like:*port`\n\nFiltering on strings is case insensitive.\n\n#### Filterable properties\nInformation about what properties allow filtering and on what operators can be found in the property in the schema for the collection. Each property that allows filtering has the property `\"x-filterable\"` in combination with `operators` set. If you try to filter on something that isn\u2019t allowed the server will respond with a status code 400.\n\n#### Specifying Operator affinity\nIf you want to control the operator affinity then you can use parentheses.\n\nAn example is: `?filter=name$eq:Joe$and:(city$like:*port$or:age$lt:40)`\n\n#### URL Encoding\nURL parameter values should always be URL compatible. Always URL encode filter strings.\n\n#### Filter Operators\nThe possible filtering operators are:\n\n| Operator   | Syntax |\n| --------   | ------ |\n|Equals | $eq:|\n|Not equals | $ne:|\n|Greater than | $gt:|\n|Greater than or equal | $gte:|\n|Less than | $lt:|\n|Less than or equal | $lte:|\n|Substring match\t| $like:|\n|And also | $and:|\n|Or else | $or:|\n|In | $in:|\n|Not In | $nin:|\n\n#### Substring matching\n\nThe `$like:` operator supports both using wildcards (*) and not using wildcards. If no wildcards are used, the expression is considered a `contains` expression and effectively becomes a filter with a wildcard at the start of the string and one at the end of the string. This operator is only allowed on some properties.\n\n#### Escaping special characters in your filter\nTo not interfere with the parsing of the filter expression, certain escape sequences are necessary.\n\n- \u201c$\u201d is escaped with \u201c$$\u201d\n- \u201c(\u201d is escaped with \u201c$(\u201d\n- \u201c)\u201d is escaped with \u201c$)\u201d\n- \u201c*\u201d is escaped with \u201c$*\u201d\n- \u201c,\u201d is escaped with \u201c$,\u201d\n- \u201c[\u201d is escaped with \u201c$[\u201d\n- \u201c]\u201d is escaped with \u201c$]\u201d\n\n#### Using null values in your filter\nShould you want to filter for the nonexistence of a property (i.e. null value) you can use the null escape sequence.\n\n`$null:`\n\n#### Using in and not in operators\nTo determine whether a specified value matches any value in (or not in) a list you filter using the `$in:` or `$nin:` operator. The list to filter by has to be enclosed in brackets and values separated by commas.\n\n`customerNumber$in:[2,5,7,22,45]`\n\n\nIt is possible to also use the `$null:` keyword if you wish to include that in the filter. The max supported length of an array using the `$in:` or `$nin:` operator is 200.\n\n\n## Sorting\n\nSorting on strings is case insensitive.\n\n### Sort ascending\n\nSorting on collections can be done using the query string parameter \u2018sort\u2019.\n\n```\n?sort=name\n```\n\n### Sort descending\n\nThe default sort direction is ascending, but this can be turned by prepending a minus (-).\n\n```\n?sort=-name\n```\n\n### Sort by multiple properties\n\nIf you need to sort by multiple properties these can just be separated by commas. Mixing of directions is allowed.\n\n```\n?sort=-name,age\n```\n\n### Sort alphabetically\n\nIn certain cases, you might want to enforce that even numeric values are sorted alphabetically, so 1000 is less than 30. In those cases, you can prepend the sort property with a tilde (~).\n\n```\n?sort=~name\n```\n\n#### Sortable properties\nInformation about what properties are sortable can be found in the schema for the collection. Each property that allows sorting has the property `\"x-sortable\": true` set.\n\n\n## Pagination\n\nWhen it comes to retrieving a collection of items, you can use two distinct approaches:\n\n* **Cursor-based pagination** (continued loading of items using a `cursor` as a query parameter to get the next page of items)\n  * This is the recommended approach, and the one you should use by default.\n  * The endpoint naming scheme is **\"Retrieve all `Items`\"**. (Usage: `/{ITEM}?cursor={CURSOR_VALUE}`)\n  * The maximum number of items returned in a single call is defined in the `x-cursor-page-size` extension of the response type. Usually, the size is 1000, but in some cases, where we explicitly state so, it can be smaller.\n\n\n* **Classic pagination** (limited functionality*. Specify `skippages` and `pagesize ` as query parameters to get a specific page of items)\n  * You should only consider using classic pagination, if you rely on loading pages (i.e. for list views or table/grid-based UI's).\n  * The endpoint naming scheme is **\"Retrieve a page of `Items`\"**. (Usage: `/{ITEM}/paged?skippages=0&pagesize=20`)  \n    \\* It's important to note that there is a limit of 10.000 items using this approach. Any items outside of the first 10.000 items will not be loaded.\n\nPlease bear in mind that the two approaches are supported by **separate endpoints**. To use classic pagination, add `/paged` to your request URL.\n\nIf you need to know the total count of items that you can expect to get from your search, you can use a separate endpoint called **\"Retrieve the number of `Items`\"**.  \nYou can also use the result of this endpoint to calculate the pagination navigation buttons for a table/grid-based UI.\n\n\n### Which approach should you use?\nWe highly recommend that you use cursor-based pagination because:\n- It is more performant and offers much faster retrieval of items;\n- It can be used for very large collections of many thousands or millions of items, whereas classic pagination is limited to only returning 10.000 results, everything else is ignored;  \n  Classic pagination is only appropriate when you have an app with a table/grid-based UI.\n\n### Cursor-based pagination\n\n#### How it works\n\nWhen you search for items in a large collection, the response will contain a first set of items and a cursor that you can use in a subsequent request to get the next series of items. This way you can retrieve the next set of items only when needed (if the first set suffices, you don't need to send a second request).\n\nThe first set of items usually consists of 1000 results. If the cursor is not present in the response, it means that there are no more items in the results. \n\nPlease note that the cursor represents the `identifier` of the first `item` on the next set and it should not be mistaken for the number of items which are yet to be displayed.\n\n##### Real world example\n\nI want to retrieve all subscriptions.\n\n1) I send a request to https://apis.e-conomic.com/subscriptionsapi/v1.0.0/subscriptions \n   and get back an array of 1.000 subscriptions, and a cursor with value 34781\n\n2) I send a request for the next items in the resulting collection:\n   https://apis.e-conomic.com/subscriptionsapi/v1.0.0/subscriptions?cursor=34781\n   and get back an array of 1.000 subscriptions and a cursor with value 87695\n\n3) I send a request for the next items in the result:\n   https://apis.e-conomic.com/subscriptionsapi/v1.0.0/subscriptions?cursor=87695\n   and get back an array of 56 items and no cursor.\n   No cursor means I have retrieved all the subscriptions, i.e. I have reached the end of the list.\n\n### Classic pagination\n\nIf no parameters are used, the collection endpoint returns 20 items at a time. URL parameters allow you to increase this to up to 100 items or to skip pages if necessary.\n\n##### Real world example\n\nI want to show a grid with page size of 50 and pagination navigation buttons.\n\n1) I send a request to see how many subscriptions there are in the collection:  \n   `https://apis.e-conomic.com/subscriptionsapi/v1.0.0/subscriptions/count`  \n   I get the number of subscriptions in the collection, `2056`, and I can calculate the number of pages to be 2056 divided by 50 = 40 with 6 as remainder, meaning I have 41 pages total. I can then use this to present the user the navigation buttons.\n\n\n2) I send a request to retrieve the first page of subscriptions that my user will see:  \n   `https://apis.e-conomic.com/subscriptionsapi/v1.0.0/subscriptions/paged?pagesize=50&sort=-number`  \n   with this I get back an array of 50 subscriptions, sorted by number in descending order.\n\n\n3) Now if the user wants to see page number 6, I'll send a new request, skipping the first 5 pages to get the subscriptions from page number 6:  \n   `https://apis.e-conomic.com/subscriptionsapi/v1.0.0/subscriptions/paged?pagesize=50&skippages=5&sort=-number`  \n   I get back an array of 50 subscriptions that belong to page number 6 when sorting by number in descending order.\n\n\n\n### Number of items in a collection\n\nAs mentioned before we offer endpoint to get the count of items in the collection. You can also use this info for calculation of pagination navigation in case of classic pagination.\n\nExample `https://apis.e-conomic.com/subscriptionsapi/v1.0.0/subscriptions/count`\n\n\n## HTTP Status Codes\n\nThe Open API returns these HTTP status codes.\n\n| Code | Text                   | Description                                                  |\n| :--- | :--------------------- | :----------------------------------------------------------- |\n| 200  | OK                     | Everything is OK                                             |\n| 201  | Created                | When you create resources, this is what you get. This will be accompanied by the created resource in the body and a location header with a link to the created resource. |\n| 204  | No Content             | In certain cases there is nothing to return. So we will let you know by returning a 204. |\n| 400  | Bad Request            | The request you made was somehow malformed. A malformed request could be failed validation on creation or updating. If you try to filter on something that isn\u2019t filterable this is also what you\u2019ll see. Whenever possible we will also try to include a developer hint to help you get around this issue. |\n| 401  | Unauthorized           | The credentials you supplied us with weren\u2019t correct, or perhaps you forgot them altogether. If an agreement has revoked the grant they gave your app, this is what you will see. |\n| 403  | Forbidden              | You won\u2019t necessarily have access to everything. So even though you were authorized we might still deny access to certain resources. This depends on the roles asked for when the grant was issued. |\n| 404  | Not Found              | This is returned when you try to request something that doesn\u2019t exist. This could be a resource that has been deleted or just a URL you tried to hack. If you see a lot of these, it could be an indication that you aren\u2019t using the links provided by the API. You should never need to concatenate any URLs. The API should provide you with the links needed. |\n| 405  | Method Not Allowed     | Not all endpoints support all HTTP methods. If you try issue a PUT request to a collection resource this is what you get. |\n| 409  | Conflict               | The request cannot be completed due to a conflict with the current state of the target resource. Retrieve the resource/object and try the update again. This is needed in order to prevent you from rolling back another user's update. |\n| 415  | Unsupported Media Type | Our API is a JSON api. If you ask us to give you anything else, we give you this, and tell you why in the JSON body of the response. |\n| 500  | Internal Server Error  | We don\u2019t like to see these, and they are flagged in our logs. When you see this, something went wrong on our end. Either try again, or contact our support. |\n\n\n## Required and Readonly Properties\n\nSince OpenAPI allows client generation based on the specification, we decided to use the same model/schema in our for both read and write endpoints where possible.\n\nThis led us to chose not to have the Id/Number in the URL parameter for PUT requests, but to use the one from the body, so there is no confusion.\n\nWhen a property is marked as `required` it means you need to provide a value on each POST and PUT requests.\n\nWhen a property is marked as `readonly` it means you should provide the same value you get in the GET requests, or do not send the property in the JSON at all (skip it).\n\n## Resource encoding\n\nAll non-alphanumeric characters in resource URLs are standard URL encoded. Please refer to standard URL encoding.\n\n## Implementation specifics\n\nHelpful details to know when implementing e-conomic REST.\n\n### Booleans\n\nBooleans should only be expected to be represented in responses when true. A false boolean is omitted from response body. The same logic applies to write operations such as POST and PUT.\n\n### Nulling\n\nWe do not generally accept null as a value and a validation exception should be expected. To null a property you must exclude it from your JSON on the write operation.\n\n## Object version\n\nObjectVersion is the mechanism that enforces updates only on latest state of an object.\nObjectVersion property is mandatory in Put Requests.\nObjectVersion property is retrieved on Get Request and needs to be included in Put Request.\nIf object was modified between Get and Put requests, Put request will fail with error code `409 Conflict`\n\n```\n{\n  \"message\": \"Update conflict. Version does not match.\",\n  \"developerHint\": \"The resource has been updated by another user. Retrieve the resource/object and try the update again. This is needed in order to prevent you from rolling back another user's update.\",\n  \"logId\": \"09580053-1141-4e7f-85e1-bed8600e0278\",\n  \"logTimeUtc\": \"2021-11-04T09:07:56\",\n  \"property\": \"version\"\n}\n```\n\n## Idempotency tokens\n Idempotency tokens are unique keys that help maintain the integrity of operations on the API\u2019s. These tokens prevent accidental duplication of requests, ensuring that the same operation is not performed multiple times, even if the same request is sent repeatedly.\n \n When making a request, you can set `Idempotency-Key` header with your own unique value for that specific request. In case of a network failure, if you don't get the response, you can retry the request with the same value for the header. Our system will prevent duplicate requests, instead you will get the original response from our cache. \n \n Keep in mind that this is cached for only **one hour** window. \n \n When we return a response from the cache, we set a response header `X-ResultFromCache` to true.\n\n It\u2019s important to note that **you will be responsible for generating and keeping track of these keys**.\n\n The [Idempotency Tokens feature](https://techtalk.e-conomic.com/idempotency-tokens-in-e-conomic-apis/) is not available for GET requests.\n\n## The LastUpdated property of resources\nThe `LastUpdated` property shows the date when a resource was last updated. A resource is considered updated when any property in the model has been changed. If there aren\u2019t any changes, `LastUpdated` will equal the creation date.\n \nPlease bear in mind that not all resources have a LastUpdated property. Also, sometimes the LastUpdated property is modified by changes to a different model, as is the case with sales documents.\nFor example, when an invoice line is created, the LastUpdated field on the invoice is modified.\n \nThe main usage for this property is to help retrieve only data that has been changed within a certain interval. This will save processing and network time spent on the client side.\n \nUsage example: https://apis.e-conomic.com/subscriptionsapi/v6.0.3/the_resource?filter$eq:lastUpdated$gt:2024-02-24\nThis will return all resources which have been updated since 24.02.2024.\n      \n## Custom extensions in OpenAPI specification\n\nIn the specification file, there are some custom extensions that developers can make use of when consuming endpoints. Those extensions are always prefixed by `x-`.\n\n1) `x-required-roles`: The list of roles that are required for each group of endpoints.\n2) `x-error-codes`: The list of error codes that are potentially returned from each group of endpoints.\n3) `x-cursor-page-size`: The maximum number of items in `CursorResults` that can be returned in a single call.\n\n\n# Authentication\n\n**Create tokens as instructed [here](https://www.e-conomic.com/developer/connect) and then add these two authentication headers to your requests:**\n\n<SecurityDefinitions />",
+    "contact": {
+      "url": "https://www.e-conomic.com/",
+      "email": "api@e-conomic.com"
+    },
+    "version": "6.0.3",
+    "x-logo": {
+      "url": "",
+      "altText": "Visma e-conomic"
+    }
+  },
+  "servers": [
+    {
+      "url": "https://apis.e-conomic.com/subscriptionsapi/v6.0.3/"
+    }
+  ],
+  "paths": {
+    "/Subscribers/{number}": {
+      "get": {
+        "tags": [
+          "Subscribers"
+        ],
+        "summary": "Retrieve single Subscriber",
+        "description": "Use this endpoint to load a single Subscriber by number.",
+        "operationId": "GetSubscriberById",
+        "parameters": [
+          {
+            "name": "number",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Subscriber"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "**Bad request.** Your request does not pass our validation. Check the errors array for more details.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "**Unauthorized access.** Please take a look at https://apis.e-conomic.com and follow the links to help on authorization, or use the word demo for both tokens.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "**Access forbidden.** You won\u2019t necessarily have access to everything. So even though you were authorized we might still deny access to certain resources. This depends on the roles asked for when the grant was issued.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "**Resource not found.** The resource you have been looking for does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "**Too many requests.** You have made too many calls towards our API. You are over your quota. Need to wait a bit. Check info in the response headers.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "**Internal server error.** Something went wrong but the error has been logged. If you continue to see errors here, please contact api@e-conomic.com. Remember to include log id and agreement number when contacting support.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/Subscribers/paged": {
+      "get": {
+        "tags": [
+          "Subscribers"
+        ],
+        "summary": "Retrieve a page of Subscribers",
+        "description": "Use this endpoint to load a page of Subscribers.",
+        "operationId": "GetPageOfSubscribers",
+        "parameters": [
+          {
+            "name": "filter",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "Use this parameter to set the filtering for fields. [Filtering instructions](#section/Retrieving-data/Filtering)"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "Use this parameter to set the sort fields and direction. [Sort instructions](#section/Retrieving-data/Sorting)"
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer",
+              "description": "Use this parameter to set the page size. [Pagination instructions](#section/Retrieving-data/Pagination)",
+              "format": "int32",
+              "default": 20
+            }
+          },
+          {
+            "name": "skipPages",
+            "in": "query",
+            "schema": {
+              "maximum": 100,
+              "minimum": 0,
+              "type": "integer",
+              "description": "Use this parameter to set number of pages to skip. [Pagination instructions](#section/Retrieving-data/Pagination)",
+              "format": "int32",
+              "default": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Subscriber"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "**Bad request.** Your request does not pass our validation. Check the errors array for more details.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "**Unauthorized access.** Please take a look at https://apis.e-conomic.com and follow the links to help on authorization, or use the word demo for both tokens.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "**Access forbidden.** You won\u2019t necessarily have access to everything. So even though you were authorized we might still deny access to certain resources. This depends on the roles asked for when the grant was issued.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "**Too many requests.** You have made too many calls towards our API. You are over your quota. Need to wait a bit. Check info in the response headers.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "**Internal server error.** Something went wrong but the error has been logged. If you continue to see errors here, please contact api@e-conomic.com. Remember to include log id and agreement number when contacting support.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/Subscribers": {
+      "get": {
+        "tags": [
+          "Subscribers"
+        ],
+        "summary": "Retrieve all Subscribers",
+        "description": "Use this endpoint to retrieve all Subscribers in bulk. <br/>The maximum number of items returned in a single call is defined in the `x-cursor-page-size` extension of the response type. Usually, the size is 1000, but in some cases, where we explicitly state so, it can be smaller than that.<br/>Use the continuation cursor parameter to set the cursor for retrieval of the next set of data.<br/>Please check the [pagination instructions](#section/Retrieving-data/Pagination).",
+        "operationId": "GetAllSubscribers",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "maxLength": 50,
+              "minLength": 0,
+              "type": "string",
+              "description": "Use this parameter to set the continuation cursor for paging. [Pagination instructions](#section/Retrieving-data/Pagination)"
+            }
+          },
+          {
+            "name": "filter",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "Use this parameter to set the filtering for fields. [filtering instructions](#section/Retrieving-data/Filtering)"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriberCursorResults"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "**Bad request.** Your request does not pass our validation. Check the errors array for more details.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "**Unauthorized access.** Please take a look at https://apis.e-conomic.com and follow the links to help on authorization, or use the word demo for both tokens.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "**Access forbidden.** You won\u2019t necessarily have access to everything. So even though you were authorized we might still deny access to certain resources. This depends on the roles asked for when the grant was issued.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "**Too many requests.** You have made too many calls towards our API. You are over your quota. Need to wait a bit. Check info in the response headers.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "**Internal server error.** Something went wrong but the error has been logged. If you continue to see errors here, please contact api@e-conomic.com. Remember to include log id and agreement number when contacting support.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/Subscribers/count": {
+      "get": {
+        "tags": [
+          "Subscribers"
+        ],
+        "summary": "Retrieve the number of Subscribers",
+        "description": "Call this endpoint to get the number of Subscribers. You can use filtering as well.",
+        "operationId": "GetNumberOfSubscribers",
+        "parameters": [
+          {
+            "name": "filter",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "Use this parameter to set the filtering for fields. [Filtering instructions](#section/Retrieving-data/Filtering)"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int32"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "**Bad request.** Your request does not pass our validation. Check the errors array for more details.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "**Unauthorized access.** Please take a look at https://apis.e-conomic.com and follow the links to help on authorization, or use the word demo for both tokens.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "**Access forbidden.** You won\u2019t necessarily have access to everything. So even though you were authorized we might still deny access to certain resources. This depends on the roles asked for when the grant was issued.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "**Too many requests.** You have made too many calls towards our API. You are over your quota. Need to wait a bit. Check info in the response headers.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "**Internal server error.** Something went wrong but the error has been logged. If you continue to see errors here, please contact api@e-conomic.com. Remember to include log id and agreement number when contacting support.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/subscriptions/{subscriptionNumber}/lines/{number}": {
+      "get": {
+        "tags": [
+          "SubscriptionLines"
+        ],
+        "summary": "Retrieve single SubscriptionLine",
+        "description": "Use this endpoint to retrieve a line belonging to a subscription.",
+        "operationId": "GetSubscriptionLine",
+        "parameters": [
+          {
+            "name": "subscriptionNumber",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "number",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionLine"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "**Bad request.** Your request does not pass our validation. Check the errors array for more details.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "**Unauthorized access.** Please take a look at https://apis.e-conomic.com and follow the links to help on authorization, or use the word demo for both tokens.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "**Access forbidden.** You won\u2019t necessarily have access to everything. So even though you were authorized we might still deny access to certain resources. This depends on the roles asked for when the grant was issued.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "**Resource not found.** The resource you have been looking for does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "**Too many requests.** You have made too many calls towards our API. You are over your quota. Need to wait a bit. Check info in the response headers.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "**Internal server error.** Something went wrong but the error has been logged. If you continue to see errors here, please contact api@e-conomic.com. Remember to include log id and agreement number when contacting support.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/subscriptions/{subscriptionNumber}/lines": {
+      "get": {
+        "tags": [
+          "SubscriptionLines"
+        ],
+        "summary": "Retrieve all SubscriptionLines of a subscription",
+        "description": "Use this endpoint to retrieve all the lines belonging to a subscription.",
+        "operationId": "GetSubscriptionLinesForSubscription",
+        "parameters": [
+          {
+            "name": "subscriptionNumber",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "filter",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "Use this parameter to set the filtering for fields. [Filtering instructions](#section/Retrieving-data/Filtering)"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "Use this parameter to set the sort fields and direction. [Sort instructions](#section/Retrieving-data/Sorting)"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SubscriptionLine"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "**Bad request.** Your request does not pass our validation. Check the errors array for more details.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "**Unauthorized access.** Please take a look at https://apis.e-conomic.com and follow the links to help on authorization, or use the word demo for both tokens.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "**Access forbidden.** You won\u2019t necessarily have access to everything. So even though you were authorized we might still deny access to certain resources. This depends on the roles asked for when the grant was issued.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "**Too many requests.** You have made too many calls towards our API. You are over your quota. Need to wait a bit. Check info in the response headers.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "**Internal server error.** Something went wrong but the error has been logged. If you continue to see errors here, please contact api@e-conomic.com. Remember to include log id and agreement number when contacting support.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/subscriptionlines/paged": {
+      "get": {
+        "tags": [
+          "SubscriptionLines"
+        ],
+        "summary": "Retrieve a page of SubscriptionLines",
+        "description": "Use this endpoint to load a page of SubscriptionLines.",
+        "operationId": "GetPageOfSubscriptionLines",
+        "parameters": [
+          {
+            "name": "filter",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "Use this parameter to set the filtering for fields. [Filtering instructions](#section/Retrieving-data/Filtering)"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "Use this parameter to set the sort fields and direction. [Sort instructions](#section/Retrieving-data/Sorting)"
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer",
+              "description": "Use this parameter to set the page size. [Pagination instructions](#section/Retrieving-data/Pagination)",
+              "format": "int32",
+              "default": 20
+            }
+          },
+          {
+            "name": "skipPages",
+            "in": "query",
+            "schema": {
+              "maximum": 100,
+              "minimum": 0,
+              "type": "integer",
+              "description": "Use this parameter to set number of pages to skip. [Pagination instructions](#section/Retrieving-data/Pagination)",
+              "format": "int32",
+              "default": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SubscriptionLine"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "**Bad request.** Your request does not pass our validation. Check the errors array for more details.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "**Unauthorized access.** Please take a look at https://apis.e-conomic.com and follow the links to help on authorization, or use the word demo for both tokens.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "**Access forbidden.** You won\u2019t necessarily have access to everything. So even though you were authorized we might still deny access to certain resources. This depends on the roles asked for when the grant was issued.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "**Too many requests.** You have made too many calls towards our API. You are over your quota. Need to wait a bit. Check info in the response headers.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "**Internal server error.** Something went wrong but the error has been logged. If you continue to see errors here, please contact api@e-conomic.com. Remember to include log id and agreement number when contacting support.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/subscriptionlines": {
+      "get": {
+        "tags": [
+          "SubscriptionLines"
+        ],
+        "summary": "Retrieve all SubscriptionLines",
+        "description": "Use this endpoint to retrieve all Subscription Lines for all subscriptions in bulk.  \nThe maximum number of items returned in a single call is 1000.  \nUse the continuation cursor parameter to set the cursor for retrieval of the next set of data.  \nPlease check the [pagination instructions](#section/Retrieving-data/Pagination).",
+        "operationId": "GetAllSubscriptionLines",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "maxLength": 50,
+              "minLength": 0,
+              "type": "string",
+              "description": "Use this parameter to set the continuation cursor for paging. [Pagination instructions](#section/Retrieving-data/Pagination)"
+            }
+          },
+          {
+            "name": "filter",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "Use this parameter to set the filtering for fields. [filtering instructions](#section/Retrieving-data/Filtering)"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionLineCursorResults"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "**Bad request.** Your request does not pass our validation. Check the errors array for more details.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "**Unauthorized access.** Please take a look at https://apis.e-conomic.com and follow the links to help on authorization, or use the word demo for both tokens.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "**Access forbidden.** You won\u2019t necessarily have access to everything. So even though you were authorized we might still deny access to certain resources. This depends on the roles asked for when the grant was issued.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "**Too many requests.** You have made too many calls towards our API. You are over your quota. Need to wait a bit. Check info in the response headers.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "**Internal server error.** Something went wrong but the error has been logged. If you continue to see errors here, please contact api@e-conomic.com. Remember to include log id and agreement number when contacting support.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/subscriptionlines/count": {
+      "get": {
+        "tags": [
+          "SubscriptionLines"
+        ],
+        "summary": "Retrieve the number of Subscription Lines",
+        "description": "Call this endpoint to get the number of Subscription Lines for all subscriptions. You can use filtering as well.",
+        "operationId": "GetNumberOfSubscriptionLines",
+        "parameters": [
+          {
+            "name": "filter",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "Use this parameter to set the filtering for fields. [Filtering instructions](#section/Retrieving-data/Filtering)"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int32"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "**Bad request.** Your request does not pass our validation. Check the errors array for more details.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "**Unauthorized access.** Please take a look at https://apis.e-conomic.com and follow the links to help on authorization, or use the word demo for both tokens.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "**Access forbidden.** You won\u2019t necessarily have access to everything. So even though you were authorized we might still deny access to certain resources. This depends on the roles asked for when the grant was issued.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "**Too many requests.** You have made too many calls towards our API. You are over your quota. Need to wait a bit. Check info in the response headers.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "**Internal server error.** Something went wrong but the error has been logged. If you continue to see errors here, please contact api@e-conomic.com. Remember to include log id and agreement number when contacting support.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/Subscriptions/{number}": {
+      "get": {
+        "tags": [
+          "Subscriptions"
+        ],
+        "summary": "Retrieve single Subscription",
+        "description": "Use this endpoint to load a single Subscription by number.",
+        "operationId": "GetSubscriptionById",
+        "parameters": [
+          {
+            "name": "number",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Subscription"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "**Bad request.** Your request does not pass our validation. Check the errors array for more details.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "**Unauthorized access.** Please take a look at https://apis.e-conomic.com and follow the links to help on authorization, or use the word demo for both tokens.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "**Access forbidden.** You won\u2019t necessarily have access to everything. So even though you were authorized we might still deny access to certain resources. This depends on the roles asked for when the grant was issued.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "**Resource not found.** The resource you have been looking for does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "**Too many requests.** You have made too many calls towards our API. You are over your quota. Need to wait a bit. Check info in the response headers.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "**Internal server error.** Something went wrong but the error has been logged. If you continue to see errors here, please contact api@e-conomic.com. Remember to include log id and agreement number when contacting support.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/Subscriptions/paged": {
+      "get": {
+        "tags": [
+          "Subscriptions"
+        ],
+        "summary": "Retrieve a page of Subscriptions",
+        "description": "Use this endpoint to load a page of Subscriptions.",
+        "operationId": "GetPageOfSubscriptions",
+        "parameters": [
+          {
+            "name": "filter",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "Use this parameter to set the filtering for fields. [Filtering instructions](#section/Retrieving-data/Filtering)"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "Use this parameter to set the sort fields and direction. [Sort instructions](#section/Retrieving-data/Sorting)"
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer",
+              "description": "Use this parameter to set the page size. [Pagination instructions](#section/Retrieving-data/Pagination)",
+              "format": "int32",
+              "default": 20
+            }
+          },
+          {
+            "name": "skipPages",
+            "in": "query",
+            "schema": {
+              "maximum": 100,
+              "minimum": 0,
+              "type": "integer",
+              "description": "Use this parameter to set number of pages to skip. [Pagination instructions](#section/Retrieving-data/Pagination)",
+              "format": "int32",
+              "default": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Subscription"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "**Bad request.** Your request does not pass our validation. Check the errors array for more details.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "**Unauthorized access.** Please take a look at https://apis.e-conomic.com and follow the links to help on authorization, or use the word demo for both tokens.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "**Access forbidden.** You won\u2019t necessarily have access to everything. So even though you were authorized we might still deny access to certain resources. This depends on the roles asked for when the grant was issued.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "**Too many requests.** You have made too many calls towards our API. You are over your quota. Need to wait a bit. Check info in the response headers.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "**Internal server error.** Something went wrong but the error has been logged. If you continue to see errors here, please contact api@e-conomic.com. Remember to include log id and agreement number when contacting support.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/Subscriptions": {
+      "get": {
+        "tags": [
+          "Subscriptions"
+        ],
+        "summary": "Retrieve all Subscriptions",
+        "description": "Use this endpoint to retrieve all Subscriptions in bulk. <br/>The maximum number of items returned in a single call is defined in the `x-cursor-page-size` extension of the response type. Usually, the size is 1000, but in some cases, where we explicitly state so, it can be smaller than that.<br/>Use the continuation cursor parameter to set the cursor for retrieval of the next set of data.<br/>Please check the [pagination instructions](#section/Retrieving-data/Pagination).",
+        "operationId": "GetAllSubscriptions",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "maxLength": 50,
+              "minLength": 0,
+              "type": "string",
+              "description": "Use this parameter to set the continuation cursor for paging. [Pagination instructions](#section/Retrieving-data/Pagination)"
+            }
+          },
+          {
+            "name": "filter",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "Use this parameter to set the filtering for fields. [filtering instructions](#section/Retrieving-data/Filtering)"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionCursorResults"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "**Bad request.** Your request does not pass our validation. Check the errors array for more details.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "**Unauthorized access.** Please take a look at https://apis.e-conomic.com and follow the links to help on authorization, or use the word demo for both tokens.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "**Access forbidden.** You won\u2019t necessarily have access to everything. So even though you were authorized we might still deny access to certain resources. This depends on the roles asked for when the grant was issued.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "**Too many requests.** You have made too many calls towards our API. You are over your quota. Need to wait a bit. Check info in the response headers.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "**Internal server error.** Something went wrong but the error has been logged. If you continue to see errors here, please contact api@e-conomic.com. Remember to include log id and agreement number when contacting support.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/Subscriptions/count": {
+      "get": {
+        "tags": [
+          "Subscriptions"
+        ],
+        "summary": "Retrieve the number of Subscriptions",
+        "description": "Call this endpoint to get the number of Subscriptions. You can use filtering as well.",
+        "operationId": "GetNumberOfSubscriptions",
+        "parameters": [
+          {
+            "name": "filter",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "Use this parameter to set the filtering for fields. [Filtering instructions](#section/Retrieving-data/Filtering)"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int32"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "**Bad request.** Your request does not pass our validation. Check the errors array for more details.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "**Unauthorized access.** Please take a look at https://apis.e-conomic.com and follow the links to help on authorization, or use the word demo for both tokens.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "**Access forbidden.** You won\u2019t necessarily have access to everything. So even though you were authorized we might still deny access to certain resources. This depends on the roles asked for when the grant was issued.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "**Too many requests.** You have made too many calls towards our API. You are over your quota. Need to wait a bit. Check info in the response headers.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "**Internal server error.** Something went wrong but the error has been logged. If you continue to see errors here, please contact api@e-conomic.com. Remember to include log id and agreement number when contacting support.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "CreatedResult": {
+        "type": "object",
+        "properties": {
+          "number": {
+            "type": "integer",
+            "description": "<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "format": "int32",
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "Error": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string",
+            "description": "<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "nullable": true,
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          },
+          "errorCode": {
+            "type": "string",
+            "description": "<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "nullable": true,
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          },
+          "property": {
+            "type": "string",
+            "description": "<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "nullable": true,
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "ProblemDetails": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "nullable": true
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "detail": {
+            "type": "string",
+            "nullable": true
+          },
+          "instance": {
+            "type": "string",
+            "nullable": true
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "nullable": true
+          },
+          "traceId": {
+            "type": "string"
+          },
+          "errorCode": {
+            "type": "string"
+          },
+          "traceTimeUtc": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "Subscriber": {
+        "required": [
+          "customerNumber",
+          "endDate",
+          "startDate",
+          "subscriptionNumber"
+        ],
+        "type": "object",
+        "properties": {
+          "number": {
+            "type": "integer",
+            "description": "The unique number of the subscriber<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: eq, ne, lt, lte, gt, gte, in, nin</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: true</p>",
+            "format": "int32",
+            "x-filterable": "eq, ne, lt, lte, gt, gte, in, nin",
+            "x-sortable": true
+          },
+          "subscriptionNumber": {
+            "type": "integer",
+            "description": "The subscription that the subscriber is linked to.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: eq, ne, lt, lte, gt, gte, in, nin</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: true</p>",
+            "format": "int32",
+            "x-filterable": "eq, ne, lt, lte, gt, gte, in, nin",
+            "x-sortable": true
+          },
+          "customerNumber": {
+            "type": "integer",
+            "description": "The customer who is to receive the invoices/orders generated through the subscription.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: eq, ne, lt, lte, gt, gte, in, nin</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "format": "int32",
+            "x-filterable": "eq, ne, lt, lte, gt, gte, in, nin",
+            "x-sortable": false
+          },
+          "yourRef": {
+            "type": "integer",
+            "description": "The number of the customer contact that is referenced as a contact person for the subscriber<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "format": "int32",
+            "nullable": true,
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          },
+          "otherRef": {
+            "maxLength": 250,
+            "minLength": 0,
+            "type": "string",
+            "description": "A text field that can be used to save any custom reference on the invoice/order.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "nullable": true,
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          },
+          "startDate": {
+            "type": "string",
+            "description": "The first day of the period for which the customer will be invoiced.  \nE.g. if a subscriber has a Youtube subscription starting with 21.04.2023, 21.04.2023 needs to be set as start date.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: eq, ne, lt, lte, gt, gte</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "format": "date",
+            "x-filterable": "eq, ne, lt, lte, gt, gte",
+            "x-sortable": false
+          },
+          "endDate": {
+            "type": "string",
+            "description": "The last day of the period that will appear on the invoice.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: eq, ne, lt, lte, gt, gte</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "format": "date",
+            "x-filterable": "eq, ne, lt, lte, gt, gte",
+            "x-sortable": false
+          },
+          "specialPrice": {
+            "type": "number",
+            "description": "The custom price to be applied to all the products that the subscriber is invoiced for through the subscription.  \nIt overwrites any special price set on the product.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "format": "double",
+            "nullable": true,
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          },
+          "discountPercentage": {
+            "type": "number",
+            "description": "The discount to be applied to all the products that the subscriber is invoiced for through the subscription.  \nIt can be combined with special price - if both are set, the final price will be the special price minus discount.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: eq, ne, lt, lte, gt, gte</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "format": "double",
+            "nullable": true,
+            "x-filterable": "eq, ne, lt, lte, gt, gte",
+            "x-sortable": false
+          },
+          "discountExpiryDate": {
+            "type": "string",
+            "description": "The last day when the discount is to be applied.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "format": "date",
+            "nullable": true,
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          },
+          "quantityFactor": {
+            "type": "number",
+            "description": "It helps adjust the quantity set on the linked products.  \nE.g. if the quantity set on the linked product is 2 and the customer wants 6, the quantity factor needs to be 3.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: eq, ne, lt, lte, gt, gte</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "format": "double",
+            "nullable": true,
+            "x-filterable": "eq, ne, lt, lte, gt, gte",
+            "x-sortable": false
+          },
+          "priceFactor": {
+            "type": "number",
+            "description": "It helps adjust the price set on the products by a certain percentage.  \nThe default value is 1 (no adjustment needed), but if you want to increase the final price by 10%, price factor = 1.10.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: eq, ne, lt, lte, gt, gte</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "format": "double",
+            "nullable": true,
+            "x-filterable": "eq, ne, lt, lte, gt, gte",
+            "x-sortable": false
+          },
+          "registrationDate": {
+            "type": "string",
+            "description": "The date when the subscriber was registered.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "format": "date",
+            "nullable": true,
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          },
+          "expiryDate": {
+            "type": "string",
+            "description": "The last day for which the subscriber can be invoiced.  \nNot to be mistaken for end date: end date is the last day of the interval on one invoice, but the subscriber can receive a new invoice for the next interval.  \nAfter the expiry date however, the subscriber can\u2019t receive any new invoices.  \nEnd date can never be after the expiry date.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: eq, ne, lt, lte, gt, gte</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "format": "date",
+            "nullable": true,
+            "x-filterable": "eq, ne, lt, lte, gt, gte",
+            "x-sortable": false
+          },
+          "projectNumber": {
+            "type": "integer",
+            "description": "The number of the project for which invoices/orders are generated.  \nIt can only be set on subscribers for subscription without accruals.  \nPlease make sure to specify a project linked to the same customer as the subscriber.  \nIt requires the Projects module to be installed. You can find out if you have the Projects module by calling this endpoint: https://restdocs.e-conomic.com/#self<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: eq, ne, lt, lte, gt, gte, in, nin</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "format": "int32",
+            "nullable": true,
+            "x-filterable": "eq, ne, lt, lte, gt, gte, in, nin",
+            "x-sortable": false
+          },
+          "departmentNumber": {
+            "type": "integer",
+            "description": "The number of the department for which invoices are generated.  \nIt requires the Dimension module to be installed. You can find out if you have the Dimension module by calling this endpoint: https://restdocs.e-conomic.com/#self<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: eq, ne, lt, lte, gt, gte, in, nin</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "format": "int32",
+            "nullable": true,
+            "x-filterable": "eq, ne, lt, lte, gt, gte, in, nin",
+            "x-sortable": false
+          },
+          "bookedInvoiceId": {
+            "type": "integer",
+            "description": "The id of the booked invoice that was created when running a subscription batch.  \nIt can be used to filter out previous subscribers - subscribers with both DraftDocumentId and BookedInvoiceId  = null are current.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Read-only: true</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: eq, ne, lt, lte, gt, gte, in, nin</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "format": "int32",
+            "nullable": true,
+            "readOnly": true,
+            "x-filterable": "eq, ne, lt, lte, gt, gte, in, nin",
+            "x-sortable": false
+          },
+          "draftDocumentId": {
+            "type": "integer",
+            "description": "The id of the draft invoice or draft order that was created when running a subscription batch.  \nIt can be used to filter out previous subscribers - subscribers with both DraftDocumentId and BookedInvoiceId  = null are current.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Read-only: true</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: eq, ne, lt, lte, gt, gte, in, nin</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "format": "int32",
+            "nullable": true,
+            "readOnly": true,
+            "x-filterable": "eq, ne, lt, lte, gt, gte, in, nin",
+            "x-sortable": false
+          },
+          "extraTextForInvoice": {
+            "maxLength": 1000,
+            "minLength": 0,
+            "type": "string",
+            "description": "Extra information that can be added as a top line on invoices/orders - just above the subscription name if the addName is true.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: eq, ne, lt, lte, gt, gte, in, nin</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "nullable": true,
+            "x-filterable": "eq, ne, lt, lte, gt, gte, in, nin",
+            "x-sortable": false
+          },
+          "comments": {
+            "maxLength": 500,
+            "minLength": 0,
+            "type": "string",
+            "description": "Extra information about the subscription/customer that will not be shown on invoices/orders.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "nullable": true,
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          },
+          "lastUpdated": {
+            "type": "string",
+            "description": "The date and time when the subscriber was last updated. Use it in the filter to retrieve only updated subscribers.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Read-only: true</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: eq, ne, lt, lte, gt, gte</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "format": "date-time",
+            "nullable": true,
+            "readOnly": true,
+            "x-filterable": "eq, ne, lt, lte, gt, gte",
+            "x-sortable": false
+          },
+          "objectVersion": {
+            "type": "string",
+            "description": "The object version, required for PUT requests to help ensure that updates made by others don\u2019t get overwritten by your update request.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "nullable": true,
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "SubscriberCursorResults": {
+        "type": "object",
+        "properties": {
+          "cursor": {
+            "type": "string",
+            "description": "Use this continuation cursor in a request back to continue the list. In case there are no more items to retrieve, the cursor is not returned at all.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Read-only: true</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "nullable": true,
+            "readOnly": true,
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Subscriber"
+            },
+            "description": "Max number of items returned is 1000.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "nullable": true,
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          }
+        },
+        "additionalProperties": false,
+        "description": "Array of objects along with a cursor.",
+        "example": {
+          "cursor": "234",
+          "items": [
+            {
+              "id": "13",
+              "name": "Patrick"
+            },
+            {
+              "id": "16",
+              "name": "John"
+            }
+          ]
+        },
+        "x-cursor-page-size": 1000
+      },
+      "Subscription": {
+        "required": [
+          "collection",
+          "interval",
+          "name"
+        ],
+        "type": "object",
+        "properties": {
+          "number": {
+            "type": "integer",
+            "description": "The unique number of the subscription.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: eq, ne, lt, lte, gt, gte, in, nin</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: true</p>",
+            "format": "int32",
+            "x-filterable": "eq, ne, lt, lte, gt, gte, in, nin",
+            "x-sortable": true
+          },
+          "name": {
+            "maxLength": 50,
+            "minLength": 0,
+            "type": "string",
+            "description": "The subscription name, e.g. Family plan, 1 year.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: eq, ne, lt, lte, gt, gte, in, nin</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "x-filterable": "eq, ne, lt, lte, gt, gte, in, nin",
+            "x-sortable": false
+          },
+          "description": {
+            "maxLength": 500,
+            "minLength": 0,
+            "type": "string",
+            "description": "Short text describing the subscription. It is not shown on the invoice/order created through the subscription.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "nullable": true,
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          },
+          "interval": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SubscriptionIntervalType"
+              }
+            ],
+            "description": "The period for which the customer is charged through one invoice.  \nE.g. If the interval is 2 months and start date on subscriber is 01.04.2023, the end date will be 31.05.2023. \n\nThe interval can be: \n- 1: one week \n- 2: two weeks \n- 3: a month \n- 4: a quarter \n- 5: six months \n- 6: a year  \n- 7: two months \n- 8: two years \n- 9: three years \n- 10: four years \n- 11: five years \n- 12: four weeks \n- 13: eight weeks.  \n\n<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          },
+          "isCalendarBased": {
+            "type": "boolean",
+            "description": "If set to true, the end date will be based on the year calendar, instead of the addition of an exact interval to the start date.  \ne.g. For a 2- year subscription with calendar basis, if start date on subscriber is 21.04.2023, the end date will be 31.12.2024, the last day of the second year.  \n For a 2- year subscription without calendar basis, if start date is 21.04.2023, the end date will be 20.04.2025, exactly 2 years later.  \nOnly available if the interval is set to: 1 month, a quarter, 6 months, 1 year, 2, 3, 4 or 5 years.  <p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          },
+          "collection": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SubscriptionCollectionPeriod"
+              }
+            ],
+            "description": "Determines whether the amount should be collected for an entire period or just for a part of it.  \n- 0: full  \n- 1: proportional  \n\nIf collection is full, customers are charged for an entire period, even if the subscription was created in the middle of a subscription period.  \n\nIf collection is proportional, customers are only charged for the period from the subscription date to the end of the subscription period.  \n\n<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          },
+          "includeName": {
+            "type": "boolean",
+            "description": "If true, an empty line with just the subscription name will be added to the invoice/order<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          },
+          "includePeriod": {
+            "type": "boolean",
+            "description": "If true, an empty line with just the subscription period will be added to the invoice/order.  \nIf both IncludeName and IncludePeriod are true, a single line containing the subscription name and the subscription period will be added.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          },
+          "allowMoreThanOnePerCustomer": {
+            "type": "boolean",
+            "description": "If true, several subscribers with the same customer number can be created.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          },
+          "accrue": {
+            "type": "boolean",
+            "description": "Accrual is used to allocate costs and/or revenues over several periods. If true, the invoice/order created through the subscription is to be booked on the accruals account.  \nIt requires the Accruals module to be installed.  \nYou can find out if you have the Accruals module by calling this endpoint: https://restdocs.e-conomic.com/#self<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          },
+          "isBarred": {
+            "type": "boolean",
+            "description": "Flag indicating if a subscription is barred or not. Barred subscriptions are excluded from batch runs<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: eq, ne, lt, lte, gt, gte</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "x-filterable": "eq, ne, lt, lte, gt, gte",
+            "x-sortable": false
+          },
+          "lastUpdated": {
+            "type": "string",
+            "description": "The date and time when the subscription or a line on the subscription was last updated. Use it in the filter to retrieve only updated subscriptions.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Read-only: true</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: eq, ne, lt, lte, gt, gte</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "format": "date-time",
+            "nullable": true,
+            "readOnly": true,
+            "x-filterable": "eq, ne, lt, lte, gt, gte",
+            "x-sortable": false
+          },
+          "objectVersion": {
+            "type": "string",
+            "description": "The object version, required for PUT requests to help ensure that updates made by others don\u2019t get overwritten by your update request.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "nullable": true,
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "SubscriptionCollectionPeriod": {
+        "enum": [
+          0,
+          1
+        ],
+        "type": "integer",
+        "format": "int32"
+      },
+      "SubscriptionCursorResults": {
+        "type": "object",
+        "properties": {
+          "cursor": {
+            "type": "string",
+            "description": "Use this continuation cursor in a request back to continue the list. In case there are no more items to retrieve, the cursor is not returned at all.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Read-only: true</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "nullable": true,
+            "readOnly": true,
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Subscription"
+            },
+            "description": "Max number of items returned is 1000.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "nullable": true,
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          }
+        },
+        "additionalProperties": false,
+        "description": "Array of objects along with a cursor.",
+        "example": {
+          "cursor": "234",
+          "items": [
+            {
+              "id": "13",
+              "name": "Patrick"
+            },
+            {
+              "id": "16",
+              "name": "John"
+            }
+          ]
+        },
+        "x-cursor-page-size": 1000
+      },
+      "SubscriptionIntervalType": {
+        "enum": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13
+        ],
+        "type": "integer",
+        "format": "int32"
+      },
+      "SubscriptionLine": {
+        "type": "object",
+        "properties": {
+          "number": {
+            "type": "integer",
+            "description": "The unique number of the subscription line<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: eq, ne, lt, lte, gt, gte, in, nin</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: true</p>",
+            "format": "int32",
+            "x-filterable": "eq, ne, lt, lte, gt, gte, in, nin",
+            "x-sortable": true
+          },
+          "subscriptionNumber": {
+            "type": "integer",
+            "description": "The subscription that the line belongs to<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: eq, ne, lt, lte, gt, gte, in, nin</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: true</p>",
+            "format": "int32",
+            "x-filterable": "eq, ne, lt, lte, gt, gte, in, nin",
+            "x-sortable": true
+          },
+          "productNumber": {
+            "maxLength": 25,
+            "minLength": 0,
+            "type": "string",
+            "description": "The unique number of the product that will appear on the invoice/order line.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: eq, ne, lt, lte, gt, gte</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "nullable": true,
+            "x-filterable": "eq, ne, lt, lte, gt, gte",
+            "x-sortable": false
+          },
+          "description": {
+            "maxLength": 2500,
+            "minLength": 0,
+            "type": "string",
+            "description": "A descriptive text associated with the invoice/order line.  \nIt can include the actual product name or any relevant note related to the specific line.  \nThe line description is required when the product number is provided. In this case it should consist of the product name as you want it to be displayed on the subscription line.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: eq, ne, lt, lte, gt, gte, in, nin</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "nullable": true,
+            "x-filterable": "eq, ne, lt, lte, gt, gte, in, nin",
+            "x-sortable": false
+          },
+          "quantity": {
+            "type": "number",
+            "description": "The quantity of the product or service specified on the subscription line. \nThe property is required if the product number is set.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "format": "double",
+            "nullable": true,
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          },
+          "specialPrice": {
+            "type": "number",
+            "description": "Custom price to be applied to the product on the invoices/orders created through subscription.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "format": "double",
+            "nullable": true,
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          },
+          "departmentNumber": {
+            "type": "integer",
+            "description": "The number of the department to be set on the invoices/orders generated through subscription.  \nIt requires the Dimension module to be installed.  \nYou can find out if you have the Dimension module by calling this endpoint: https://restdocs.e-conomic.com/#self<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: eq, ne, lt, lte, gt, gte, in, nin</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "format": "int32",
+            "nullable": true,
+            "x-filterable": "eq, ne, lt, lte, gt, gte, in, nin",
+            "x-sortable": false
+          },
+          "objectVersion": {
+            "type": "string",
+            "description": "The object version, required for PUT requests to help ensure that updates made by others don\u2019t get overwritten by your update request.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "nullable": true,
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "SubscriptionLineCursorResults": {
+        "type": "object",
+        "properties": {
+          "cursor": {
+            "type": "string",
+            "description": "Use this continuation cursor in a request back to continue the list. In case there are no more items to retrieve, the cursor is not returned at all.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Read-only: true</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "nullable": true,
+            "readOnly": true,
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SubscriptionLine"
+            },
+            "description": "Max number of items returned is 1000.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "nullable": true,
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          }
+        },
+        "additionalProperties": false,
+        "description": "Array of objects along with a cursor.",
+        "example": {
+          "cursor": "234",
+          "items": [
+            {
+              "id": "13",
+              "name": "Patrick"
+            },
+            {
+              "id": "16",
+              "name": "John"
+            }
+          ]
+        },
+        "x-cursor-page-size": 1000
+      }
+    },
+    "securitySchemes": {
+      "X-AppSecretToken": {
+        "type": "apiKey",
+        "description": "Application secret token needed to access the endpoints.",
+        "name": "X-AppSecretToken",
+        "in": "header"
+      },
+      "X-AgreementGrantToken": {
+        "type": "apiKey",
+        "description": "Agreement grant token needed to access the endpoints.",
+        "name": "X-AgreementGrantToken",
+        "in": "header"
+      }
+    }
+  },
+  "security": [
+    {
+      "X-AppSecretToken": [],
+      "X-AgreementGrantToken": []
+    }
+  ],
+  "tags": [
+    {
+      "name": "Subscribers",
+      "description": "<code>Subscribers</code> define the customers who are to receive invoices or orders generated through subscriptions. Each subscription can be set to allow just one or more subscribers with the same customer number.\n#### Examples of use cases:\n* Create a subscriber;\n* Set a discount for a particular customer.\n\nRelated guide for users: [e-copedia](https://www.e-conomic.dk/support/artikler/opret-abonnent) (Danish).\n\n<details><summary><b>Click to see the list of possible error codes.</b></summary>\n\n| Error Code | Description |\n| ---------- | ----------- |\n| SubscriberStartDateHasToBeBeforeEndDate | Start date cannot be after end date. |\n| SubscriberQuanityFactorCannotBeZero | Quantity factor cannot be zero. |\n| SubscriberStartDateHasToBeBeforeExpiryDate | Start date cannot be after expiry date. |\n| SubscriberProjectDoesNotExist | Cannot create/update subscriber. Project not found. |\n| SubscriberProjectIsClosed | Cannot create/update subscriber. Project is closed. |\n| SubscriberAccrueStartCannotBeEqualEndDate | Start date cannot be the same as end date if subscription has accruals. |\n| SubscriberAccrueCannotHaveProjectWithAccrue | You cannot set a project number if subscription has accruals. |\n| SubscriberCustomerAlreadyHasSubscription | Subscription does not allow for two subscribers with the same customer number. |\n| SubscriberCustomerHasNonInvoicedSubscription | Customer has non invoiced subscription. |\n| SubscriberSubscriptionDoesNotExist | Cannot create/update subscriber. Subscription not found. |\n| SubscriberCustomerDoesNotExist | Cannot create/update subscriber. Customer not found. |\n| SubscriberProjectAccessError | Both agreement and user must have acces to the Projects module. |\n| SubscriberDimensionAccessError | To access this entity, the agreement needs to have the Dimension module enabled. |\n| SubscriberInvalidDepartment | Cannot create/update subscriber. Department not found. |\n| SubscriberYourReferenceContactDoesNotExist | Cannot create/update subscriber. The customer contact set as yourRef was not found. |\n| SubscriberYourReferenceContactIsDeleted | Cannot create/update subscriber. The customer contact set as yourRef was deleted. |\n| SubscriberYourReferenceContactDoesNotBelongToCustomer | Cannot create/update subscriber. The customer contact set as yourRef does not belong to the customer. |\n| SubscriberSubscriptionNumberCannotBeUpdated | Cannot update subscriber. The subscription number cannot be modified. |\n| SubscriberCustomerNumberCannotBeUpdated | Cannot update subscriber. The customer number cannot be modified. |\n| SubscriberRegistrationDateCannotBeUpdated | Cannot update subscriber. The registration date cannot be modified. |\n| SubscriberCustomerIsBarred | Cannot create/update subscriber. Customer is barred. |\n| SubscriberCommentsMaxLengthExceeded | Max. length is 500 for comments |\n</details>\n\n**Required application roles:** SuperUser or Sales [More info](https://www.e-conomic.com/developer/permissions)",
+      "x-error-codes": [
+        "SubscriberAccrueCannotHaveProjectWithAccrue",
+        "SubscriberAccrueStartCannotBeEqualEndDate",
+        "SubscriberCommentsMaxLengthExceeded",
+        "SubscriberCustomerAlreadyHasSubscription",
+        "SubscriberCustomerDoesNotExist",
+        "SubscriberCustomerHasNonInvoicedSubscription",
+        "SubscriberCustomerIsBarred",
+        "SubscriberCustomerNumberCannotBeUpdated",
+        "SubscriberDimensionAccessError",
+        "SubscriberInvalidDepartment",
+        "SubscriberProjectAccessError",
+        "SubscriberProjectDoesNotExist",
+        "SubscriberProjectIsClosed",
+        "SubscriberQuanityFactorCannotBeZero",
+        "SubscriberRegistrationDateCannotBeUpdated",
+        "SubscriberStartDateHasToBeBeforeEndDate",
+        "SubscriberStartDateHasToBeBeforeExpiryDate",
+        "SubscriberSubscriptionDoesNotExist",
+        "SubscriberSubscriptionNumberCannotBeUpdated",
+        "SubscriberYourReferenceContactDoesNotBelongToCustomer",
+        "SubscriberYourReferenceContactDoesNotExist",
+        "SubscriberYourReferenceContactIsDeleted"
+      ],
+      "x-required-roles": [
+        "Sales",
+        "SuperUser"
+      ]
+    },
+    {
+      "name": "SubscriptionLines",
+      "description": "<code>SubscriptionLines</code> define the products for which invoices or orders are generated through subscriptions. Subscription lines without a product number are also possible and can be used to provide extra info on the invoice, product or customer.\n\n\n#### Examples of use cases:\n\n* Create a subscription line;\n* Set a special price for a particular product.\n\nRelated guide for users: [e-copedia](https://www.e-conomic.dk/support/artikler/knyt-vareydelse-til-abonnement) (Danish).\n\n\n<details><summary><b>Click to see the list of possible error codes.</b></summary>\n\n| Error Code | Description |\n| ---------- | ----------- |\n| SubscriptionLineSubscriptionDoesNotExist | Cannot create/update subscription line. Subscription not found. |\n| SubscriptionLineQuantityNotNullOrZero | Quantity cannot be null or zero. |\n| SubscriptionLineProductDoesNotExist | Cannot create/update subscription line. Product not found. |\n| SubscriptionLineProductIsBarred | Product is barred. |\n| SubscriptionLineDimensionAccessError | To access this entity, the agreement needs to have the Dimension module enabled. |\n| SubscriptionLineInvalidDepartment | Cannot create/update subscription line. Department not found. |\n| SubscriptionLineDescriptionNotNullOrEmpty | Description cannot be null or empty string when the product number is specified. |\n| SubscriptionLineMultipleDimensionAccessError | To access this entity, the agreements with complete subscription plan is required. |\n</details>\n\n**Required application roles:** SuperUser or Sales [More info](https://www.e-conomic.com/developer/permissions)",
+      "x-error-codes": [
+        "SubscriptionLineDescriptionNotNullOrEmpty",
+        "SubscriptionLineDimensionAccessError",
+        "SubscriptionLineInvalidDepartment",
+        "SubscriptionLineMultipleDimensionAccessError",
+        "SubscriptionLineProductDoesNotExist",
+        "SubscriptionLineProductIsBarred",
+        "SubscriptionLineQuantityNotNullOrZero",
+        "SubscriptionLineSubscriptionDoesNotExist"
+      ],
+      "x-required-roles": [
+        "Sales",
+        "SuperUser"
+      ]
+    },
+    {
+      "name": "Subscriptions",
+      "description": "<code>Subscriptions</code> are an easy way to create bulk invoices or orders. They are especially helpful for those who want to collect membership dues, charge tenants or pay for subscription-based services.\n\n#### Examples of use cases:\n\n* Create a subscription;\n* Retrieve all subscriptions for all customers or for a single customer.\n\nRelated guide for users: [e-copedia](https://www.e-conomic.dk/support/artikler/om-abonnement) (Danish).\n\n<details><summary><b>Click to see the list of possible error codes.</b></summary>\n\n| Error Code | Description |\n| ---------- | ----------- |\n| SubscriptionNumberAlreadyExists | Subscription number already exists. |\n| SubscriptionIntervalCannotUseCalendarYear | Calendar basis cannot be used for this type of interval. |\n| SubscriptionAcrrualsMissingAcces | Accrue cannot be modified. Agreement is missing access to the Accruals module. |\n| SubscriptionHasSubscribers | Subscription has subscribers and cannot be deleted. |\n| SubscriptionCannotChangeNumbers | Subscription number cannot be changed. |\n</details>\n\n**Required application roles:** SuperUser or Sales [More info](https://www.e-conomic.com/developer/permissions)",
+      "x-error-codes": [
+        "SubscriptionAcrrualsMissingAcces",
+        "SubscriptionCannotChangeNumbers",
+        "SubscriptionHasSubscribers",
+        "SubscriptionIntervalCannotUseCalendarYear",
+        "SubscriptionNumberAlreadyExists"
+      ],
+      "x-required-roles": [
+        "Sales",
+        "SuperUser"
+      ]
+    }
+  ],
+  "x-tagGroups": [
+    {
+      "name": "Endpoints",
+      "tags": [
+        "Subscribers",
+        "SubscriptionLines",
+        "Subscriptions"
+      ]
+    }
+  ]
+}

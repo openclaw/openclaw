@@ -31,8 +31,15 @@ RUN pnpm ui:build
 
 ENV NODE_ENV=production
 
+# Install Python for financial calculations (Bea uses Python via exec tool)
+RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-pip && pip3 install --break-system-packages requests && rm -rf /var/lib/apt/lists/*
+
+# Copy workspace defaults into the image (NOT the live workspace)
+COPY workspace-defaults/ /opt/openbea/workspace-defaults/
+
 # Allow non-root user to write temp files during runtime/tests.
 RUN chown -R node:node /app
+RUN chmod +x /app/scripts/docker-entrypoint.sh
 
 # Security hardening: Run as non-root user
 # The node:22-bookworm image includes a 'node' user (uid 1000)
@@ -45,4 +52,7 @@ USER node
 # For container platforms requiring external health checks:
 #   1. Set OPENCLAW_GATEWAY_TOKEN or OPENCLAW_GATEWAY_PASSWORD env var
 #   2. Override CMD: ["node","openclaw.mjs","gateway","--allow-unconfigured","--bind","lan"]
-CMD ["node", "openclaw.mjs", "gateway", "--allow-unconfigured"]
+#
+# Entrypoint seeds openclaw.json (device auth disabled) when missing.
+ENTRYPOINT ["/app/scripts/docker-entrypoint.sh"]
+CMD ["node","openclaw.mjs","gateway","--allow-unconfigured","--bind","lan"]

@@ -1,0 +1,3493 @@
+{
+  "openapi": "3.0.1",
+  "info": {
+    "title": "Visma e-conomic OpenAPI Dimensions",
+    "description": "# Changelog\n<details>\n<summary>Click to see changelog.</summary>\n\n| Version | Description | Date |\n|:--------|:------------|:-----|\n|5.0.4| - Aligned validation error message with new license name | January, 2026|\n|5.0.1| - Set max digits to 9 on Key and changed DimensionNumber range from 1-int.max to 1-3 since only 3 dimension layers can exist. This was done both on [`DimensionValue`](#tag/DimensionValues) and [`DimensionDistribution`](#tag/DimensionDistributions) | July, 2025|\n|5.0.0| - Restricted maximum number of items in DimensionData bulk endpoints to 500 in schemas: [`booked-entries`](#tag/BookedEntry/operation/CreateBookedEntriesDimensionData), [`budget-figures`](#tag/BudgetFigure/operation/CreateBudgetFiguresDimensionData), [`draft-entries`](#tag/DraftEntry/operation/CreateDraftEntriesDimensionData) and [`sales-document-lines`](#tag/SalesDocumentLine/operation/CreateSalesDocumentLinesDimensionData) | April, 2025|\n|4.3.2| - Restricted range for dimensionNumber from 2147483647 to 3 in all schemas under [`booked-entries`](#tag/BookedEntry), [`budget-figures`](#tag/BudgetFigure), [`draft-entries`](#tag/DraftEntry) and [`sales-document-lines`](#tag/SalesDocumentLine) | March, 2025|\n|4.3.1| - Changed return code for POST and PUT [`booked-entries`](#tag/BookedEntry), [`budget-figures`](#tag/BudgetFigure), [`draft-entries`](#tag/DraftEntry) and [`sales-document-lines`](#tag/SalesDocumentLine) requests from 200 to 201 and from 200 to 204 | January, 2025|\n|4.3.0| - Added dimension data endpoints for [`budget-figures`](#tag/BudgetFigures) | October, 2024|\n|4.2.0| - Added new [`dimension distributions`](#tag/DimensionDistributions) endpoints: [`GetSingle`](#operation/GetDimensionDistribution), [`GetCount`](#operation/GetNumberOfDimensionDistributions). | October, 2024|\n|4.1.0| - New dimension data endpoints are added. [`booked-entries`](#tag/BookedEntry), [`draft-entries`](#tag/DraftEntry), [`sales-document-lines`](#tag/SalesDocumentLine) | October, 2024|\n|4.0.0| - Changed restrictions for [`dimensions`](#tag/Dimensions), [`dimension values`](#tag/DimensionValues) and [`dimension distributions`](#tag/DimensionDistributions) endpoints, so that GET/POST/PUT/DELETE requests are now available to all application roles. | August, 2024|\n|3.1.1| - Specification has been changed for [`Update`](#operation/UpdateDimension). | August, 2024|\n|3.0.0| - Changed the URL for [`Create`](#operation/CreateDimension) and [`Update`](#operation/UpdateDimensionById) [`dimensions`](#tag/Dimensions). <br>- [`dimensions`](#tag/Dimensions) [`GetSingle`](#operation/GetDimension) and [`GetCount`](#operation/GetNumberOfDimensions) endpoints added. <br>- [`dimension values`](#tag/DimensionValues) [`Create`](#operation/CreateDimensionValue), [`Update`](#operation/UpdateDimensionValueById), [`Delete`](#operation/DeleteDimensionValue), [`GetSingle`](#operation/GetDimensionValue) and [`GetCount`](#operation/GetNumberOfDimensionValues) endpoints added. | March, 2024|\n|2.0.0| [`dimensions`](#tag/Dimensions) [`Create`](#operation/CreateDimension), [`Update`](#operation/UpdateDimensionById) and [`Delete`](#operation/DeleteDimension) endpoints added.\t\t\t\t\t\t\t\t\t   | January, 2024|\n|1.0.0| [`dimensions`](#tag/Dimensions),[`dimension-values`](#tag/DimensionValues) endpoints added.\t\t\t\t\t   | October, 2023|\n\n</details>\n\n# TL;DR\n\n**Create tokens as instructed [here](https://www.e-conomic.com/developer/connect) and then add these three headers to your requests:**\n\n| Header                | Value                      | What is this?                                                |\n| :-------------------- | :------------------------- | :----------------------------------------------------------- |\n| X-AppSecretToken      | YOUR_PRIVATE_TOKEN         | This identifies your app. This is your secret token. Try using the value `demo`. |\n| X-AgreementGrantToken | YOUR_AGREEMENT_GRANT_TOKEN | This identifies the grant issued by an agreement, to allow your app to access the agreements data. Try using the value `demo`. |\n| Content-Type          | application/json           | We\u2019re a JSON based API. This tells us that you agree with us on using JSON. |\n\n**Optional headers:**\n\n| Header                | Value                      | What is this?                                                |\n| :-------------------- | :------------------------- | :----------------------------------------------------------- |\n| Idempotency-Key       | YOUR_IDEMPOTENCY_KEY       | This represents your own unique idempotency key. Enables you to make use of our [Idempotency Tokens](#section/Retrieving-data/Idempotency-tokens) feature. You can't use this feature with GET requests. |\n\n### Examples\n\n#### jQuery\n\n```javascript/jQuery\n$.ajax({\n    url: \"https://apis.e-conomic.com/dimensionsapi/v5.0.4/the_resource\",\n    dataType: \"json\",\n    headers: {\n        'X-AppSecretToken': \"demo\",\n        'X-AgreementGrantToken': \"demo\",\n        'Accept': \"application/json\"\n    },\n    type: \"GET\"\n})\n    .always(function (data) {\n    $(\"#output\").text(JSON.stringify(data, null, 4));\n});\n```\n\n#### cURL\n\n```curl\ncurl -H \"X-AppSecretToken: demo\" -H \"X-AgreementGrantToken: demo\" https://apis.e-conomic.com/dimensionsapi/v5.0.4/the_resource\n```\n\n\n\n# Introduction\n\nWelcome to the **Visma e-conomic OpenAPI** documentation!\n\nThe e-conomic API is a document-based JSON REST API. \n\nFor more in-depth information about e-conomic itself, please have a look at the e-copedia [http://wiki.e-conomic.dk](http://wiki.e-conomic.dk/).\n\n## Usage\n\n- **Generating a client** can easily be done using tools like [swagger-codegen](https://github.com/swagger-api/swagger-codegen) or others that work with [OpenAPI Specification](https://github.com/OAI/OpenAPI-Specification) specs.\n\n\n## Versioning\n\nAPI releases are versioned using a three-part versioning scheme: `{major version}.{minor version}.{patch version}`.\n\nWe broadly follow [Semantic Versioning](https://semver.org/) principles when versioning the API. The major version number is incremented when a breaking change occurs. \n\nThe format is:\n\n`/{resource-api}/v{major version}.{minor version}.{patch version}/{resource-name}`\n\nEach value of the above are integers and you should configure the specific version in each API call. \n\nAn example could be: `/subscriptionsapi/v1.0.0/subscriptions`\n\nTo track the changes of versions, please see our [changelog](#section/Changelog).\n\nWe reserve the right to deprecate versions at intervals since this allows for moving into a friendly environment for you faster.\n\n## Demo authentication\n\nIf you wish to try out the API before registering a developer agreement, you can do this by using the demo agreement, which mimics the authentication flow you will have to use when you create your app. All you have to do is specify HTTP header tokens `X-AgreementGrantToken: demo` and `X-AppSecretToken: demo`. Note however that you can only do GET requests with the demo agreement. If you want full access to our API's, you will need to register.\n\n# Retrieving data\n\nOur data is exposed as collections of items. Each item has many properties, with one property as a unique identifier, usually called `number` or `id`. You can always get a single item if you already know the unique identifier. In case the unique identifier is not known, you can always search the collection and retrieve an array of items that satisfy the search criteria, or retrieve only the count of items that satisfy the search criteria. When you search for items in a collection, you can always use filtering, sorting and pagination. When it comes to pagination, we offer two distinct approaches available on separate endpoints. You can read more about filtering, sorting and pagination in the following sections. \n\n## Filtering\n\nFiltering is enabled on all collection endpoints but not on all properties.\n\nFiltering on collections can be done using the query string parameter `filter`. A filter is made up of a set of predicates and follows a syntax inspired by mongoDB. A predicate is made up of a property name, an operator, and a value.\n\nExample: `?filter=name$eq:Joe`\n\nThis matches all resources with the value Joe in the property name.\n\nPredicates can be chained using either of the logical operators AND and OR.\n\nExample: `?filter=name$eq:Joe$and:city$like:*port`\n\nFiltering on strings is case insensitive.\n\n#### Filterable properties\nInformation about what properties allow filtering and on what operators can be found in the property in the schema for the collection. Each property that allows filtering has the property `\"x-filterable\"` in combination with `operators` set. If you try to filter on something that isn\u2019t allowed the server will respond with a status code 400.\n\n#### Specifying Operator affinity\nIf you want to control the operator affinity then you can use parentheses.\n\nAn example is: `?filter=name$eq:Joe$and:(city$like:*port$or:age$lt:40)`\n\n#### URL Encoding\nURL parameter values should always be URL compatible. Always URL encode filter strings.\n\n#### Filter Operators\nThe possible filtering operators are:\n\n| Operator   | Syntax |\n| --------   | ------ |\n|Equals | $eq:|\n|Not equals | $ne:|\n|Greater than | $gt:|\n|Greater than or equal | $gte:|\n|Less than | $lt:|\n|Less than or equal | $lte:|\n|Substring match\t| $like:|\n|And also | $and:|\n|Or else | $or:|\n|In | $in:|\n|Not In | $nin:|\n\n#### Substring matching\n\nThe `$like:` operator supports both using wildcards (*) and not using wildcards. If no wildcards are used, the expression is considered a `contains` expression and effectively becomes a filter with a wildcard at the start of the string and one at the end of the string. This operator is only allowed on some properties.\n\n#### Escaping special characters in your filter\nTo not interfere with the parsing of the filter expression, certain escape sequences are necessary.\n\n- \u201c$\u201d is escaped with \u201c$$\u201d\n- \u201c(\u201d is escaped with \u201c$(\u201d\n- \u201c)\u201d is escaped with \u201c$)\u201d\n- \u201c*\u201d is escaped with \u201c$*\u201d\n- \u201c,\u201d is escaped with \u201c$,\u201d\n- \u201c[\u201d is escaped with \u201c$[\u201d\n- \u201c]\u201d is escaped with \u201c$]\u201d\n\n#### Using null values in your filter\nShould you want to filter for the nonexistence of a property (i.e. null value) you can use the null escape sequence.\n\n`$null:`\n\n#### Using in and not in operators\nTo determine whether a specified value matches any value in (or not in) a list you filter using the `$in:` or `$nin:` operator. The list to filter by has to be enclosed in brackets and values separated by commas.\n\n`customerNumber$in:[2,5,7,22,45]`\n\n\nIt is possible to also use the `$null:` keyword if you wish to include that in the filter. The max supported length of an array using the `$in:` or `$nin:` operator is 200.\n\n\n## Sorting\n\nSorting on strings is case insensitive.\n\n### Sort ascending\n\nSorting on collections can be done using the query string parameter \u2018sort\u2019.\n\n```\n?sort=name\n```\n\n### Sort descending\n\nThe default sort direction is ascending, but this can be turned by prepending a minus (-).\n\n```\n?sort=-name\n```\n\n### Sort by multiple properties\n\nIf you need to sort by multiple properties these can just be separated by commas. Mixing of directions is allowed.\n\n```\n?sort=-name,age\n```\n\n### Sort alphabetically\n\nIn certain cases, you might want to enforce that even numeric values are sorted alphabetically, so 1000 is less than 30. In those cases, you can prepend the sort property with a tilde (~).\n\n```\n?sort=~name\n```\n\n#### Sortable properties\nInformation about what properties are sortable can be found in the schema for the collection. Each property that allows sorting has the property `\"x-sortable\": true` set.\n\n\n## Pagination\n\nWhen it comes to retrieving a collection of items, you can use two distinct approaches:\n\n* **Cursor-based pagination** (continued loading of items using a `cursor` as a query parameter to get the next page of items)\n  * This is the recommended approach, and the one you should use by default.\n  * The endpoint naming scheme is **\"Retrieve all `Items`\"**. (Usage: `/{ITEM}?cursor={CURSOR_VALUE}`)\n  * The maximum number of items returned in a single call is defined in the `x-cursor-page-size` extension of the response type. Usually, the size is 1000, but in some cases, where we explicitly state so, it can be smaller.\n\n\n* **Classic pagination** (limited functionality*. Specify `skippages` and `pagesize ` as query parameters to get a specific page of items)\n  * You should only consider using classic pagination, if you rely on loading pages (i.e. for list views or table/grid-based UI's).\n  * The endpoint naming scheme is **\"Retrieve a page of `Items`\"**. (Usage: `/{ITEM}/paged?skippages=0&pagesize=20`)  \n    \\* It's important to note that there is a limit of 10.000 items using this approach. Any items outside of the first 10.000 items will not be loaded.\n\nPlease bear in mind that the two approaches are supported by **separate endpoints**. To use classic pagination, add `/paged` to your request URL.\n\nIf you need to know the total count of items that you can expect to get from your search, you can use a separate endpoint called **\"Retrieve the number of `Items`\"**.  \nYou can also use the result of this endpoint to calculate the pagination navigation buttons for a table/grid-based UI.\n\n\n### Which approach should you use?\nWe highly recommend that you use cursor-based pagination because:\n- It is more performant and offers much faster retrieval of items;\n- It can be used for very large collections of many thousands or millions of items, whereas classic pagination is limited to only returning 10.000 results, everything else is ignored;  \n  Classic pagination is only appropriate when you have an app with a table/grid-based UI.\n\n### Cursor-based pagination\n\n#### How it works\n\nWhen you search for items in a large collection, the response will contain a first set of items and a cursor that you can use in a subsequent request to get the next series of items. This way you can retrieve the next set of items only when needed (if the first set suffices, you don't need to send a second request).\n\nThe first set of items usually consists of 1000 results. If the cursor is not present in the response, it means that there are no more items in the results. \n\nPlease note that the cursor represents the `identifier` of the first `item` on the next set and it should not be mistaken for the number of items which are yet to be displayed.\n\n##### Real world example\n\nI want to retrieve all subscriptions.\n\n1) I send a request to https://apis.e-conomic.com/subscriptionsapi/v1.0.0/subscriptions \n   and get back an array of 1.000 subscriptions, and a cursor with value 34781\n\n2) I send a request for the next items in the resulting collection:\n   https://apis.e-conomic.com/subscriptionsapi/v1.0.0/subscriptions?cursor=34781\n   and get back an array of 1.000 subscriptions and a cursor with value 87695\n\n3) I send a request for the next items in the result:\n   https://apis.e-conomic.com/subscriptionsapi/v1.0.0/subscriptions?cursor=87695\n   and get back an array of 56 items and no cursor.\n   No cursor means I have retrieved all the subscriptions, i.e. I have reached the end of the list.\n\n### Classic pagination\n\nIf no parameters are used, the collection endpoint returns 20 items at a time. URL parameters allow you to increase this to up to 100 items or to skip pages if necessary.\n\n##### Real world example\n\nI want to show a grid with page size of 50 and pagination navigation buttons.\n\n1) I send a request to see how many subscriptions there are in the collection:  \n   `https://apis.e-conomic.com/subscriptionsapi/v1.0.0/subscriptions/count`  \n   I get the number of subscriptions in the collection, `2056`, and I can calculate the number of pages to be 2056 divided by 50 = 40 with 6 as remainder, meaning I have 41 pages total. I can then use this to present the user the navigation buttons.\n\n\n2) I send a request to retrieve the first page of subscriptions that my user will see:  \n   `https://apis.e-conomic.com/subscriptionsapi/v1.0.0/subscriptions/paged?pagesize=50&sort=-number`  \n   with this I get back an array of 50 subscriptions, sorted by number in descending order.\n\n\n3) Now if the user wants to see page number 6, I'll send a new request, skipping the first 5 pages to get the subscriptions from page number 6:  \n   `https://apis.e-conomic.com/subscriptionsapi/v1.0.0/subscriptions/paged?pagesize=50&skippages=5&sort=-number`  \n   I get back an array of 50 subscriptions that belong to page number 6 when sorting by number in descending order.\n\n\n\n### Number of items in a collection\n\nAs mentioned before we offer endpoint to get the count of items in the collection. You can also use this info for calculation of pagination navigation in case of classic pagination.\n\nExample `https://apis.e-conomic.com/subscriptionsapi/v1.0.0/subscriptions/count`\n\n\n## HTTP Status Codes\n\nThe Open API returns these HTTP status codes.\n\n| Code | Text                   | Description                                                  |\n| :--- | :--------------------- | :----------------------------------------------------------- |\n| 200  | OK                     | Everything is OK                                             |\n| 201  | Created                | When you create resources, this is what you get. This will be accompanied by the created resource in the body and a location header with a link to the created resource. |\n| 204  | No Content             | In certain cases there is nothing to return. So we will let you know by returning a 204. |\n| 400  | Bad Request            | The request you made was somehow malformed. A malformed request could be failed validation on creation or updating. If you try to filter on something that isn\u2019t filterable this is also what you\u2019ll see. Whenever possible we will also try to include a developer hint to help you get around this issue. |\n| 401  | Unauthorized           | The credentials you supplied us with weren\u2019t correct, or perhaps you forgot them altogether. If an agreement has revoked the grant they gave your app, this is what you will see. |\n| 403  | Forbidden              | You won\u2019t necessarily have access to everything. So even though you were authorized we might still deny access to certain resources. This depends on the roles asked for when the grant was issued. |\n| 404  | Not Found              | This is returned when you try to request something that doesn\u2019t exist. This could be a resource that has been deleted or just a URL you tried to hack. If you see a lot of these, it could be an indication that you aren\u2019t using the links provided by the API. You should never need to concatenate any URLs. The API should provide you with the links needed. |\n| 405  | Method Not Allowed     | Not all endpoints support all HTTP methods. If you try issue a PUT request to a collection resource this is what you get. |\n| 409  | Conflict               | The request cannot be completed due to a conflict with the current state of the target resource. Retrieve the resource/object and try the update again. This is needed in order to prevent you from rolling back another user's update. |\n| 415  | Unsupported Media Type | Our API is a JSON api. If you ask us to give you anything else, we give you this, and tell you why in the JSON body of the response. |\n| 500  | Internal Server Error  | We don\u2019t like to see these, and they are flagged in our logs. When you see this, something went wrong on our end. Either try again, or contact our support. |\n\n\n## Required and Readonly Properties\n\nSince OpenAPI allows client generation based on the specification, we decided to use the same model/schema in our for both read and write endpoints where possible.\n\nThis led us to chose not to have the Id/Number in the URL parameter for PUT requests, but to use the one from the body, so there is no confusion.\n\nWhen a property is marked as `required` it means you need to provide a value on each POST and PUT requests.\n\nWhen a property is marked as `readonly` it means you should provide the same value you get in the GET requests, or do not send the property in the JSON at all (skip it).\n\n## Resource encoding\n\nAll non-alphanumeric characters in resource URLs are standard URL encoded. Please refer to standard URL encoding.\n\n## Implementation specifics\n\nHelpful details to know when implementing e-conomic REST.\n\n### Booleans\n\nBooleans should only be expected to be represented in responses when true. A false boolean is omitted from response body. The same logic applies to write operations such as POST and PUT.\n\n### Nulling\n\nWe do not generally accept null as a value and a validation exception should be expected. To null a property you must exclude it from your JSON on the write operation.\n\n## Object version\n\nObjectVersion is the mechanism that enforces updates only on latest state of an object.\nObjectVersion property is mandatory in Put Requests.\nObjectVersion property is retrieved on Get Request and needs to be included in Put Request.\nIf object was modified between Get and Put requests, Put request will fail with error code `409 Conflict`\n\n```\n{\n  \"message\": \"Update conflict. Version does not match.\",\n  \"developerHint\": \"The resource has been updated by another user. Retrieve the resource/object and try the update again. This is needed in order to prevent you from rolling back another user's update.\",\n  \"logId\": \"09580053-1141-4e7f-85e1-bed8600e0278\",\n  \"logTimeUtc\": \"2021-11-04T09:07:56\",\n  \"property\": \"version\"\n}\n```\n\n## Idempotency tokens\n Idempotency tokens are unique keys that help maintain the integrity of operations on the API\u2019s. These tokens prevent accidental duplication of requests, ensuring that the same operation is not performed multiple times, even if the same request is sent repeatedly.\n \n When making a request, you can set `Idempotency-Key` header with your own unique value for that specific request. In case of a network failure, if you don't get the response, you can retry the request with the same value for the header. Our system will prevent duplicate requests, instead you will get the original response from our cache. \n \n Keep in mind that this is cached for only **one hour** window. \n \n When we return a response from the cache, we set a response header `X-ResultFromCache` to true.\n\n It\u2019s important to note that **you will be responsible for generating and keeping track of these keys**.\n\n The [Idempotency Tokens feature](https://techtalk.e-conomic.com/idempotency-tokens-in-e-conomic-apis/) is not available for GET requests.\n\n## The LastUpdated property of resources\nThe `LastUpdated` property shows the date when a resource was last updated. A resource is considered updated when any property in the model has been changed. If there aren\u2019t any changes, `LastUpdated` will equal the creation date.\n \nPlease bear in mind that not all resources have a LastUpdated property. Also, sometimes the LastUpdated property is modified by changes to a different model, as is the case with sales documents.\nFor example, when an invoice line is created, the LastUpdated field on the invoice is modified.\n \nThe main usage for this property is to help retrieve only data that has been changed within a certain interval. This will save processing and network time spent on the client side.\n \nUsage example: https://apis.e-conomic.com/dimensionsapi/v5.0.4/the_resource?filter$eq:lastUpdated$gt:2024-02-24\nThis will return all resources which have been updated since 24.02.2024.\n      \n## Custom extensions in OpenAPI specification\n\nIn the specification file, there are some custom extensions that developers can make use of when consuming endpoints. Those extensions are always prefixed by `x-`.\n\n1) `x-required-roles`: The list of roles that are required for each group of endpoints.\n2) `x-error-codes`: The list of error codes that are potentially returned from each group of endpoints.\n3) `x-cursor-page-size`: The maximum number of items in `CursorResults` that can be returned in a single call.\n\n\n# Authentication\n\n**Create tokens as instructed [here](https://www.e-conomic.com/developer/connect) and then add these two authentication headers to your requests:**\n\n<SecurityDefinitions />",
+    "contact": {
+      "url": "https://www.e-conomic.com/",
+      "email": "api@e-conomic.com"
+    },
+    "version": "5.0.4",
+    "x-logo": {
+      "url": "",
+      "altText": "Visma e-conomic"
+    }
+  },
+  "servers": [
+    {
+      "url": "https://apis.e-conomic.com/dimensionsapi/v5.0.4/"
+    }
+  ],
+  "paths": {
+    "/dimension-data/booked-entries": {
+      "get": {
+        "tags": [
+          "BookedEntry"
+        ],
+        "summary": "Retrieve all dimension data related to booked entries",
+        "description": "Use this endpoint to retrieve all the dimension data related to booked entries.",
+        "operationId": "GetDimensionDataOfBookedEntries",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "maxLength": 50,
+              "minLength": 0,
+              "type": "string",
+              "description": "Use this parameter to set the continuation cursor for paging. [Pagination instructions](#section/Retrieving-data/Pagination)"
+            }
+          },
+          {
+            "name": "filter",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "Use this parameter to set the filtering for fields. [filtering instructions](#section/Retrieving-data/Filtering)"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BookedEntryCursorResults"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "**Bad request.** Your request does not pass our validation. Check the errors array for more details.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "**Unauthorized access.** Please take a look at https://apis.e-conomic.com and follow the links to help on authorization, or use the word demo for both tokens.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "**Access forbidden.** You won\u2019t necessarily have access to everything. So even though you were authorized we might still deny access to certain resources. This depends on the roles asked for when the grant was issued.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "**Too many requests.** You have made too many calls towards our API. You are over your quota. Need to wait a bit. Check info in the response headers.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "**Internal server error.** Something went wrong but the error has been logged. If you continue to see errors here, please contact api@e-conomic.com. Remember to include log id and agreement number when contacting support.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/dimension-data/booked-entries/paged": {
+      "get": {
+        "tags": [
+          "BookedEntry"
+        ],
+        "summary": "Retrieve a page of DimensionData",
+        "description": "Use this endpoint to load a page of DimensionData.",
+        "operationId": "GetDimensionDataOfBookedEntriesPaged",
+        "parameters": [
+          {
+            "name": "filter",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "Use this parameter to set the filtering for fields. [Filtering instructions](#section/Retrieving-data/Filtering)"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "Use this parameter to set the sort fields and direction. [Sort instructions](#section/Retrieving-data/Sorting)"
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer",
+              "description": "Use this parameter to set the page size. [Pagination instructions](#section/Retrieving-data/Pagination)",
+              "format": "int32",
+              "default": 20
+            }
+          },
+          {
+            "name": "skipPages",
+            "in": "query",
+            "schema": {
+              "maximum": 100,
+              "minimum": 0,
+              "type": "integer",
+              "description": "Use this parameter to set number of pages to skip. [Pagination instructions](#section/Retrieving-data/Pagination)",
+              "format": "int32",
+              "default": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BookedEntry"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "**Bad request.** Your request does not pass our validation. Check the errors array for more details.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "**Unauthorized access.** Please take a look at https://apis.e-conomic.com and follow the links to help on authorization, or use the word demo for both tokens.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "**Access forbidden.** You won\u2019t necessarily have access to everything. So even though you were authorized we might still deny access to certain resources. This depends on the roles asked for when the grant was issued.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "**Too many requests.** You have made too many calls towards our API. You are over your quota. Need to wait a bit. Check info in the response headers.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "**Internal server error.** Something went wrong but the error has been logged. If you continue to see errors here, please contact api@e-conomic.com. Remember to include log id and agreement number when contacting support.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/dimension-data/booked-entries/count": {
+      "get": {
+        "tags": [
+          "BookedEntry"
+        ],
+        "summary": "Retrieve the number of DimensionData",
+        "description": "Call this endpoint to get the number of DimensionData. You can use filtering as well.",
+        "operationId": "GetDimensionDataOfBookedEntriesCount",
+        "parameters": [
+          {
+            "name": "filter",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "Use this parameter to set the filtering for fields. [Filtering instructions](#section/Retrieving-data/Filtering)"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int32"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "**Bad request.** Your request does not pass our validation. Check the errors array for more details.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "**Unauthorized access.** Please take a look at https://apis.e-conomic.com and follow the links to help on authorization, or use the word demo for both tokens.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "**Access forbidden.** You won\u2019t necessarily have access to everything. So even though you were authorized we might still deny access to certain resources. This depends on the roles asked for when the grant was issued.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "**Too many requests.** You have made too many calls towards our API. You are over your quota. Need to wait a bit. Check info in the response headers.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "**Internal server error.** Something went wrong but the error has been logged. If you continue to see errors here, please contact api@e-conomic.com. Remember to include log id and agreement number when contacting support.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/dimension-data/budget-figures": {
+      "get": {
+        "tags": [
+          "BudgetFigure"
+        ],
+        "summary": "Retrieve all dimension data related to budget figures",
+        "description": "Use this endpoint to retrieve all the dimension data related to budget figures.",
+        "operationId": "GetDimensionDataOfBudgetFigures",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "maxLength": 50,
+              "minLength": 0,
+              "type": "string",
+              "description": "Use this parameter to set the continuation cursor for paging. [Pagination instructions](#section/Retrieving-data/Pagination)"
+            }
+          },
+          {
+            "name": "filter",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "Use this parameter to set the filtering for fields. [filtering instructions](#section/Retrieving-data/Filtering)"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetFigureCursorResults"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "**Bad request.** Your request does not pass our validation. Check the errors array for more details.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "**Unauthorized access.** Please take a look at https://apis.e-conomic.com and follow the links to help on authorization, or use the word demo for both tokens.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "**Access forbidden.** You won\u2019t necessarily have access to everything. So even though you were authorized we might still deny access to certain resources. This depends on the roles asked for when the grant was issued.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "**Too many requests.** You have made too many calls towards our API. You are over your quota. Need to wait a bit. Check info in the response headers.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "**Internal server error.** Something went wrong but the error has been logged. If you continue to see errors here, please contact api@e-conomic.com. Remember to include log id and agreement number when contacting support.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/dimension-data/budget-figures/paged": {
+      "get": {
+        "tags": [
+          "BudgetFigure"
+        ],
+        "summary": "Retrieve a page of DimensionData",
+        "description": "Use this endpoint to load a page of DimensionData.",
+        "operationId": "GetDimensionDataOfBudgetFiguresPaged",
+        "parameters": [
+          {
+            "name": "filter",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "Use this parameter to set the filtering for fields. [Filtering instructions](#section/Retrieving-data/Filtering)"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "Use this parameter to set the sort fields and direction. [Sort instructions](#section/Retrieving-data/Sorting)"
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer",
+              "description": "Use this parameter to set the page size. [Pagination instructions](#section/Retrieving-data/Pagination)",
+              "format": "int32",
+              "default": 20
+            }
+          },
+          {
+            "name": "skipPages",
+            "in": "query",
+            "schema": {
+              "maximum": 100,
+              "minimum": 0,
+              "type": "integer",
+              "description": "Use this parameter to set number of pages to skip. [Pagination instructions](#section/Retrieving-data/Pagination)",
+              "format": "int32",
+              "default": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BudgetFigure"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "**Bad request.** Your request does not pass our validation. Check the errors array for more details.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "**Unauthorized access.** Please take a look at https://apis.e-conomic.com and follow the links to help on authorization, or use the word demo for both tokens.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "**Access forbidden.** You won\u2019t necessarily have access to everything. So even though you were authorized we might still deny access to certain resources. This depends on the roles asked for when the grant was issued.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "**Too many requests.** You have made too many calls towards our API. You are over your quota. Need to wait a bit. Check info in the response headers.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "**Internal server error.** Something went wrong but the error has been logged. If you continue to see errors here, please contact api@e-conomic.com. Remember to include log id and agreement number when contacting support.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/dimension-data/budget-figures/count": {
+      "get": {
+        "tags": [
+          "BudgetFigure"
+        ],
+        "summary": "Retrieve the number of DimensionData",
+        "description": "Call this endpoint to get the number of DimensionData. You can use filtering as well.",
+        "operationId": "GetDimensionDataOfBudgetFiguresCount",
+        "parameters": [
+          {
+            "name": "filter",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "Use this parameter to set the filtering for fields. [Filtering instructions](#section/Retrieving-data/Filtering)"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int32"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "**Bad request.** Your request does not pass our validation. Check the errors array for more details.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "**Unauthorized access.** Please take a look at https://apis.e-conomic.com and follow the links to help on authorization, or use the word demo for both tokens.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "**Access forbidden.** You won\u2019t necessarily have access to everything. So even though you were authorized we might still deny access to certain resources. This depends on the roles asked for when the grant was issued.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "**Too many requests.** You have made too many calls towards our API. You are over your quota. Need to wait a bit. Check info in the response headers.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "**Internal server error.** Something went wrong but the error has been logged. If you continue to see errors here, please contact api@e-conomic.com. Remember to include log id and agreement number when contacting support.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/distributions/{dimensionNumber}/{key}": {
+      "get": {
+        "tags": [
+          "DimensionDistributions"
+        ],
+        "summary": "Retrieve single Dimension Distribution",
+        "description": "Use this endpoint to retrieve single dimension distribution defined for a customer.",
+        "operationId": "GetDimensionDistribution",
+        "parameters": [
+          {
+            "name": "dimensionNumber",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DimensionDistribution"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "**Bad request.** Your request does not pass our validation. Check the errors array for more details.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "**Unauthorized access.** Please take a look at https://apis.e-conomic.com and follow the links to help on authorization, or use the word demo for both tokens.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "**Access forbidden.** You won\u2019t necessarily have access to everything. So even though you were authorized we might still deny access to certain resources. This depends on the roles asked for when the grant was issued.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "**Resource not found.** The resource you have been looking for does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "**Too many requests.** You have made too many calls towards our API. You are over your quota. Need to wait a bit. Check info in the response headers.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "**Internal server error.** Something went wrong but the error has been logged. If you continue to see errors here, please contact api@e-conomic.com. Remember to include log id and agreement number when contacting support.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/distributions": {
+      "get": {
+        "tags": [
+          "DimensionDistributions"
+        ],
+        "summary": "Retrieve all DimensionDistributions",
+        "description": "Use this endpoint to retrieve all the dimension distributions that defined for a customer.",
+        "operationId": "GetAllDimensionDistributions",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "maxLength": 50,
+              "minLength": 0,
+              "type": "string",
+              "description": "Use this parameter to set the continuation cursor for paging. [Pagination instructions](#section/Retrieving-data/Pagination)"
+            }
+          },
+          {
+            "name": "filter",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "Use this parameter to set the filtering for fields. [filtering instructions](#section/Retrieving-data/Filtering)"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DimensionDistributionCursorResults"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "**Bad request.** Your request does not pass our validation. Check the errors array for more details.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "**Unauthorized access.** Please take a look at https://apis.e-conomic.com and follow the links to help on authorization, or use the word demo for both tokens.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "**Access forbidden.** You won\u2019t necessarily have access to everything. So even though you were authorized we might still deny access to certain resources. This depends on the roles asked for when the grant was issued.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "**Too many requests.** You have made too many calls towards our API. You are over your quota. Need to wait a bit. Check info in the response headers.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "**Internal server error.** Something went wrong but the error has been logged. If you continue to see errors here, please contact api@e-conomic.com. Remember to include log id and agreement number when contacting support.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/distributions/paged": {
+      "get": {
+        "tags": [
+          "DimensionDistributions"
+        ],
+        "summary": "Retrieve a page of DimensionDistributions",
+        "description": "Use this endpoint to load a page of DimensionDistributions.",
+        "operationId": "GetPageOfDimensionDistributions",
+        "parameters": [
+          {
+            "name": "filter",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "Use this parameter to set the filtering for fields. [Filtering instructions](#section/Retrieving-data/Filtering)"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "Use this parameter to set the sort fields and direction. [Sort instructions](#section/Retrieving-data/Sorting)"
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer",
+              "description": "Use this parameter to set the page size. [Pagination instructions](#section/Retrieving-data/Pagination)",
+              "format": "int32",
+              "default": 20
+            }
+          },
+          {
+            "name": "skipPages",
+            "in": "query",
+            "schema": {
+              "maximum": 100,
+              "minimum": 0,
+              "type": "integer",
+              "description": "Use this parameter to set number of pages to skip. [Pagination instructions](#section/Retrieving-data/Pagination)",
+              "format": "int32",
+              "default": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DimensionDistribution"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "**Bad request.** Your request does not pass our validation. Check the errors array for more details.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "**Unauthorized access.** Please take a look at https://apis.e-conomic.com and follow the links to help on authorization, or use the word demo for both tokens.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "**Access forbidden.** You won\u2019t necessarily have access to everything. So even though you were authorized we might still deny access to certain resources. This depends on the roles asked for when the grant was issued.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "**Too many requests.** You have made too many calls towards our API. You are over your quota. Need to wait a bit. Check info in the response headers.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "**Internal server error.** Something went wrong but the error has been logged. If you continue to see errors here, please contact api@e-conomic.com. Remember to include log id and agreement number when contacting support.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/distributions/count": {
+      "get": {
+        "tags": [
+          "DimensionDistributions"
+        ],
+        "summary": "Retrieve the number of DimensionDistributions",
+        "description": "Call this endpoint to get the number of DimensionDistributions. You can use filtering as well.",
+        "operationId": "GetNumberOfDimensionDistributions",
+        "parameters": [
+          {
+            "name": "filter",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "Use this parameter to set the filtering for fields. [Filtering instructions](#section/Retrieving-data/Filtering)"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int32"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "**Bad request.** Your request does not pass our validation. Check the errors array for more details.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "**Unauthorized access.** Please take a look at https://apis.e-conomic.com and follow the links to help on authorization, or use the word demo for both tokens.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "**Access forbidden.** You won\u2019t necessarily have access to everything. So even though you were authorized we might still deny access to certain resources. This depends on the roles asked for when the grant was issued.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "**Too many requests.** You have made too many calls towards our API. You are over your quota. Need to wait a bit. Check info in the response headers.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "**Internal server error.** Something went wrong but the error has been logged. If you continue to see errors here, please contact api@e-conomic.com. Remember to include log id and agreement number when contacting support.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/dimensions/{number}": {
+      "get": {
+        "tags": [
+          "Dimensions"
+        ],
+        "summary": "Retrieve single Dimension",
+        "description": "Use this endpoint to retrieve single dimension defined for a customer.",
+        "operationId": "GetDimension",
+        "parameters": [
+          {
+            "name": "number",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Dimension"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "**Bad request.** Your request does not pass our validation. Check the errors array for more details.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "**Unauthorized access.** Please take a look at https://apis.e-conomic.com and follow the links to help on authorization, or use the word demo for both tokens.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "**Access forbidden.** You won\u2019t necessarily have access to everything. So even though you were authorized we might still deny access to certain resources. This depends on the roles asked for when the grant was issued.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "**Resource not found.** The resource you have been looking for does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "**Too many requests.** You have made too many calls towards our API. You are over your quota. Need to wait a bit. Check info in the response headers.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "**Internal server error.** Something went wrong but the error has been logged. If you continue to see errors here, please contact api@e-conomic.com. Remember to include log id and agreement number when contacting support.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/dimensions": {
+      "get": {
+        "tags": [
+          "Dimensions"
+        ],
+        "summary": "Retrieve all Dimensions",
+        "description": "Use this endpoint to retrieve all the dimensions defined for a customer.",
+        "operationId": "GetAllDimensions",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "maxLength": 50,
+              "minLength": 0,
+              "type": "string",
+              "description": "Use this parameter to set the continuation cursor for paging. [Pagination instructions](#section/Retrieving-data/Pagination)"
+            }
+          },
+          {
+            "name": "filter",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "Use this parameter to set the filtering for fields. [filtering instructions](#section/Retrieving-data/Filtering)"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DimensionCursorResults"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "**Bad request.** Your request does not pass our validation. Check the errors array for more details.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "**Unauthorized access.** Please take a look at https://apis.e-conomic.com and follow the links to help on authorization, or use the word demo for both tokens.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "**Access forbidden.** You won\u2019t necessarily have access to everything. So even though you were authorized we might still deny access to certain resources. This depends on the roles asked for when the grant was issued.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "**Too many requests.** You have made too many calls towards our API. You are over your quota. Need to wait a bit. Check info in the response headers.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "**Internal server error.** Something went wrong but the error has been logged. If you continue to see errors here, please contact api@e-conomic.com. Remember to include log id and agreement number when contacting support.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/dimensions/paged": {
+      "get": {
+        "tags": [
+          "Dimensions"
+        ],
+        "summary": "Retrieve a page of Dimensions",
+        "description": "Use this endpoint to load a page of Dimensions.",
+        "operationId": "GetPageOfDimensions",
+        "parameters": [
+          {
+            "name": "filter",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "Use this parameter to set the filtering for fields. [Filtering instructions](#section/Retrieving-data/Filtering)"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "Use this parameter to set the sort fields and direction. [Sort instructions](#section/Retrieving-data/Sorting)"
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer",
+              "description": "Use this parameter to set the page size. [Pagination instructions](#section/Retrieving-data/Pagination)",
+              "format": "int32",
+              "default": 20
+            }
+          },
+          {
+            "name": "skipPages",
+            "in": "query",
+            "schema": {
+              "maximum": 100,
+              "minimum": 0,
+              "type": "integer",
+              "description": "Use this parameter to set number of pages to skip. [Pagination instructions](#section/Retrieving-data/Pagination)",
+              "format": "int32",
+              "default": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Dimension"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "**Bad request.** Your request does not pass our validation. Check the errors array for more details.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "**Unauthorized access.** Please take a look at https://apis.e-conomic.com and follow the links to help on authorization, or use the word demo for both tokens.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "**Access forbidden.** You won\u2019t necessarily have access to everything. So even though you were authorized we might still deny access to certain resources. This depends on the roles asked for when the grant was issued.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "**Too many requests.** You have made too many calls towards our API. You are over your quota. Need to wait a bit. Check info in the response headers.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "**Internal server error.** Something went wrong but the error has been logged. If you continue to see errors here, please contact api@e-conomic.com. Remember to include log id and agreement number when contacting support.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/dimensions/count": {
+      "get": {
+        "tags": [
+          "Dimensions"
+        ],
+        "summary": "Retrieve the number of Dimensions",
+        "description": "Call this endpoint to get the number of Dimensions. You can use filtering as well.",
+        "operationId": "GetNumberOfDimensions",
+        "parameters": [
+          {
+            "name": "filter",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "Use this parameter to set the filtering for fields. [Filtering instructions](#section/Retrieving-data/Filtering)"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int32"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "**Bad request.** Your request does not pass our validation. Check the errors array for more details.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "**Unauthorized access.** Please take a look at https://apis.e-conomic.com and follow the links to help on authorization, or use the word demo for both tokens.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "**Access forbidden.** You won\u2019t necessarily have access to everything. So even though you were authorized we might still deny access to certain resources. This depends on the roles asked for when the grant was issued.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "**Too many requests.** You have made too many calls towards our API. You are over your quota. Need to wait a bit. Check info in the response headers.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "**Internal server error.** Something went wrong but the error has been logged. If you continue to see errors here, please contact api@e-conomic.com. Remember to include log id and agreement number when contacting support.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/values/{dimensionNumber}/{key}": {
+      "get": {
+        "tags": [
+          "DimensionValues"
+        ],
+        "summary": "Retrieve single Dimension Value",
+        "description": "Use this endpoint to retrieve single dimension value defined for a customer.",
+        "operationId": "GetDimensionValue",
+        "parameters": [
+          {
+            "name": "dimensionNumber",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DimensionValue"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "**Bad request.** Your request does not pass our validation. Check the errors array for more details.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "**Unauthorized access.** Please take a look at https://apis.e-conomic.com and follow the links to help on authorization, or use the word demo for both tokens.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "**Access forbidden.** You won\u2019t necessarily have access to everything. So even though you were authorized we might still deny access to certain resources. This depends on the roles asked for when the grant was issued.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "**Resource not found.** The resource you have been looking for does not exist.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "**Too many requests.** You have made too many calls towards our API. You are over your quota. Need to wait a bit. Check info in the response headers.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "**Internal server error.** Something went wrong but the error has been logged. If you continue to see errors here, please contact api@e-conomic.com. Remember to include log id and agreement number when contacting support.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/values": {
+      "get": {
+        "tags": [
+          "DimensionValues"
+        ],
+        "summary": "Retrieve all DimensionValues",
+        "description": "Use this endpoint to retrieve all the dimension values that defined for a customer.",
+        "operationId": "GetAllDimensionValues",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "maxLength": 50,
+              "minLength": 0,
+              "type": "string",
+              "description": "Use this parameter to set the continuation cursor for paging. [Pagination instructions](#section/Retrieving-data/Pagination)"
+            }
+          },
+          {
+            "name": "filter",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "Use this parameter to set the filtering for fields. [filtering instructions](#section/Retrieving-data/Filtering)"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DimensionValueCursorResults"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "**Bad request.** Your request does not pass our validation. Check the errors array for more details.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "**Unauthorized access.** Please take a look at https://apis.e-conomic.com and follow the links to help on authorization, or use the word demo for both tokens.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "**Access forbidden.** You won\u2019t necessarily have access to everything. So even though you were authorized we might still deny access to certain resources. This depends on the roles asked for when the grant was issued.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "**Too many requests.** You have made too many calls towards our API. You are over your quota. Need to wait a bit. Check info in the response headers.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "**Internal server error.** Something went wrong but the error has been logged. If you continue to see errors here, please contact api@e-conomic.com. Remember to include log id and agreement number when contacting support.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/values/paged": {
+      "get": {
+        "tags": [
+          "DimensionValues"
+        ],
+        "summary": "Retrieve a page of DimensionValues",
+        "description": "Use this endpoint to load a page of DimensionValues.",
+        "operationId": "GetPageOfDimensionValues",
+        "parameters": [
+          {
+            "name": "filter",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "Use this parameter to set the filtering for fields. [Filtering instructions](#section/Retrieving-data/Filtering)"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "Use this parameter to set the sort fields and direction. [Sort instructions](#section/Retrieving-data/Sorting)"
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer",
+              "description": "Use this parameter to set the page size. [Pagination instructions](#section/Retrieving-data/Pagination)",
+              "format": "int32",
+              "default": 20
+            }
+          },
+          {
+            "name": "skipPages",
+            "in": "query",
+            "schema": {
+              "maximum": 100,
+              "minimum": 0,
+              "type": "integer",
+              "description": "Use this parameter to set number of pages to skip. [Pagination instructions](#section/Retrieving-data/Pagination)",
+              "format": "int32",
+              "default": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DimensionValue"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "**Bad request.** Your request does not pass our validation. Check the errors array for more details.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "**Unauthorized access.** Please take a look at https://apis.e-conomic.com and follow the links to help on authorization, or use the word demo for both tokens.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "**Access forbidden.** You won\u2019t necessarily have access to everything. So even though you were authorized we might still deny access to certain resources. This depends on the roles asked for when the grant was issued.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "**Too many requests.** You have made too many calls towards our API. You are over your quota. Need to wait a bit. Check info in the response headers.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "**Internal server error.** Something went wrong but the error has been logged. If you continue to see errors here, please contact api@e-conomic.com. Remember to include log id and agreement number when contacting support.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/values/count": {
+      "get": {
+        "tags": [
+          "DimensionValues"
+        ],
+        "summary": "Retrieve the number of DimensionValues",
+        "description": "Call this endpoint to get the number of DimensionValues. You can use filtering as well.",
+        "operationId": "GetNumberOfDimensionValues",
+        "parameters": [
+          {
+            "name": "filter",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "Use this parameter to set the filtering for fields. [Filtering instructions](#section/Retrieving-data/Filtering)"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int32"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "**Bad request.** Your request does not pass our validation. Check the errors array for more details.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "**Unauthorized access.** Please take a look at https://apis.e-conomic.com and follow the links to help on authorization, or use the word demo for both tokens.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "**Access forbidden.** You won\u2019t necessarily have access to everything. So even though you were authorized we might still deny access to certain resources. This depends on the roles asked for when the grant was issued.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "**Too many requests.** You have made too many calls towards our API. You are over your quota. Need to wait a bit. Check info in the response headers.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "**Internal server error.** Something went wrong but the error has been logged. If you continue to see errors here, please contact api@e-conomic.com. Remember to include log id and agreement number when contacting support.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/dimension-data/draft-entries": {
+      "get": {
+        "tags": [
+          "DraftEntry"
+        ],
+        "summary": "Retrieve all dimension data related to draft entries",
+        "description": "Use this endpoint to retrieve all the dimension data related to draft entries.",
+        "operationId": "GetDimensionDataOfDraftEntries",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "maxLength": 50,
+              "minLength": 0,
+              "type": "string",
+              "description": "Use this parameter to set the continuation cursor for paging. [Pagination instructions](#section/Retrieving-data/Pagination)"
+            }
+          },
+          {
+            "name": "filter",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "Use this parameter to set the filtering for fields. [filtering instructions](#section/Retrieving-data/Filtering)"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DraftEntryCursorResults"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "**Bad request.** Your request does not pass our validation. Check the errors array for more details.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "**Unauthorized access.** Please take a look at https://apis.e-conomic.com and follow the links to help on authorization, or use the word demo for both tokens.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "**Access forbidden.** You won\u2019t necessarily have access to everything. So even though you were authorized we might still deny access to certain resources. This depends on the roles asked for when the grant was issued.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "**Too many requests.** You have made too many calls towards our API. You are over your quota. Need to wait a bit. Check info in the response headers.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "**Internal server error.** Something went wrong but the error has been logged. If you continue to see errors here, please contact api@e-conomic.com. Remember to include log id and agreement number when contacting support.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/dimension-data/draft-entries/paged": {
+      "get": {
+        "tags": [
+          "DraftEntry"
+        ],
+        "summary": "Retrieve a page of DimensionData",
+        "description": "Use this endpoint to load a page of DimensionData.",
+        "operationId": "GetDimensionDataOfDraftEntriesPaged",
+        "parameters": [
+          {
+            "name": "filter",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "Use this parameter to set the filtering for fields. [Filtering instructions](#section/Retrieving-data/Filtering)"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "Use this parameter to set the sort fields and direction. [Sort instructions](#section/Retrieving-data/Sorting)"
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer",
+              "description": "Use this parameter to set the page size. [Pagination instructions](#section/Retrieving-data/Pagination)",
+              "format": "int32",
+              "default": 20
+            }
+          },
+          {
+            "name": "skipPages",
+            "in": "query",
+            "schema": {
+              "maximum": 100,
+              "minimum": 0,
+              "type": "integer",
+              "description": "Use this parameter to set number of pages to skip. [Pagination instructions](#section/Retrieving-data/Pagination)",
+              "format": "int32",
+              "default": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DraftEntry"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "**Bad request.** Your request does not pass our validation. Check the errors array for more details.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "**Unauthorized access.** Please take a look at https://apis.e-conomic.com and follow the links to help on authorization, or use the word demo for both tokens.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "**Access forbidden.** You won\u2019t necessarily have access to everything. So even though you were authorized we might still deny access to certain resources. This depends on the roles asked for when the grant was issued.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "**Too many requests.** You have made too many calls towards our API. You are over your quota. Need to wait a bit. Check info in the response headers.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "**Internal server error.** Something went wrong but the error has been logged. If you continue to see errors here, please contact api@e-conomic.com. Remember to include log id and agreement number when contacting support.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/dimension-data/draft-entries/count": {
+      "get": {
+        "tags": [
+          "DraftEntry"
+        ],
+        "summary": "Retrieve the number of DimensionData",
+        "description": "Call this endpoint to get the number of DimensionData. You can use filtering as well.",
+        "operationId": "GetDimensionDataOfDraftEntriesCount",
+        "parameters": [
+          {
+            "name": "filter",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "Use this parameter to set the filtering for fields. [Filtering instructions](#section/Retrieving-data/Filtering)"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int32"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "**Bad request.** Your request does not pass our validation. Check the errors array for more details.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "**Unauthorized access.** Please take a look at https://apis.e-conomic.com and follow the links to help on authorization, or use the word demo for both tokens.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "**Access forbidden.** You won\u2019t necessarily have access to everything. So even though you were authorized we might still deny access to certain resources. This depends on the roles asked for when the grant was issued.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "**Too many requests.** You have made too many calls towards our API. You are over your quota. Need to wait a bit. Check info in the response headers.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "**Internal server error.** Something went wrong but the error has been logged. If you continue to see errors here, please contact api@e-conomic.com. Remember to include log id and agreement number when contacting support.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/dimension-data/sales-document-lines": {
+      "get": {
+        "tags": [
+          "SalesDocumentLine"
+        ],
+        "summary": "Retrieve all dimension data related to sales document lines",
+        "description": "Use this endpoint to retrieve all the dimension data related to sales document lines.",
+        "operationId": "GetDimensionDataOfSalesDocumentLines",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "maxLength": 50,
+              "minLength": 0,
+              "type": "string",
+              "description": "Use this parameter to set the continuation cursor for paging. [Pagination instructions](#section/Retrieving-data/Pagination)"
+            }
+          },
+          {
+            "name": "filter",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "Use this parameter to set the filtering for fields. [filtering instructions](#section/Retrieving-data/Filtering)"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SalesDocumentLineCursorResults"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "**Bad request.** Your request does not pass our validation. Check the errors array for more details.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "**Unauthorized access.** Please take a look at https://apis.e-conomic.com and follow the links to help on authorization, or use the word demo for both tokens.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "**Access forbidden.** You won\u2019t necessarily have access to everything. So even though you were authorized we might still deny access to certain resources. This depends on the roles asked for when the grant was issued.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "**Too many requests.** You have made too many calls towards our API. You are over your quota. Need to wait a bit. Check info in the response headers.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "**Internal server error.** Something went wrong but the error has been logged. If you continue to see errors here, please contact api@e-conomic.com. Remember to include log id and agreement number when contacting support.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/dimension-data/sales-document-lines/paged": {
+      "get": {
+        "tags": [
+          "SalesDocumentLine"
+        ],
+        "summary": "Retrieve a page of DimensionData",
+        "description": "Use this endpoint to load a page of DimensionData.",
+        "operationId": "GetDimensionDataOfSalesDocumentLinesPaged",
+        "parameters": [
+          {
+            "name": "filter",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "Use this parameter to set the filtering for fields. [Filtering instructions](#section/Retrieving-data/Filtering)"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "Use this parameter to set the sort fields and direction. [Sort instructions](#section/Retrieving-data/Sorting)"
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer",
+              "description": "Use this parameter to set the page size. [Pagination instructions](#section/Retrieving-data/Pagination)",
+              "format": "int32",
+              "default": 20
+            }
+          },
+          {
+            "name": "skipPages",
+            "in": "query",
+            "schema": {
+              "maximum": 100,
+              "minimum": 0,
+              "type": "integer",
+              "description": "Use this parameter to set number of pages to skip. [Pagination instructions](#section/Retrieving-data/Pagination)",
+              "format": "int32",
+              "default": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SalesDocumentLine"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "**Bad request.** Your request does not pass our validation. Check the errors array for more details.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "**Unauthorized access.** Please take a look at https://apis.e-conomic.com and follow the links to help on authorization, or use the word demo for both tokens.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "**Access forbidden.** You won\u2019t necessarily have access to everything. So even though you were authorized we might still deny access to certain resources. This depends on the roles asked for when the grant was issued.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "**Too many requests.** You have made too many calls towards our API. You are over your quota. Need to wait a bit. Check info in the response headers.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "**Internal server error.** Something went wrong but the error has been logged. If you continue to see errors here, please contact api@e-conomic.com. Remember to include log id and agreement number when contacting support.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/dimension-data/sales-document-lines/count": {
+      "get": {
+        "tags": [
+          "SalesDocumentLine"
+        ],
+        "summary": "Retrieve the number of DimensionData",
+        "description": "Call this endpoint to get the number of DimensionData. You can use filtering as well.",
+        "operationId": "GetDimensionDataOfSalesDocumentLinesCount",
+        "parameters": [
+          {
+            "name": "filter",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "Use this parameter to set the filtering for fields. [Filtering instructions](#section/Retrieving-data/Filtering)"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int32"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "**Bad request.** Your request does not pass our validation. Check the errors array for more details.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "**Unauthorized access.** Please take a look at https://apis.e-conomic.com and follow the links to help on authorization, or use the word demo for both tokens.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "**Access forbidden.** You won\u2019t necessarily have access to everything. So even though you were authorized we might still deny access to certain resources. This depends on the roles asked for when the grant was issued.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "**Too many requests.** You have made too many calls towards our API. You are over your quota. Need to wait a bit. Check info in the response headers.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "**Internal server error.** Something went wrong but the error has been logged. If you continue to see errors here, please contact api@e-conomic.com. Remember to include log id and agreement number when contacting support.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "BookedEntries": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "maxItems": 500,
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BookedEntry"
+            },
+            "description": "List of booked entries<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "nullable": true,
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "BookedEntry": {
+        "required": [
+          "dimensionKey",
+          "dimensionNumber",
+          "entryNumber"
+        ],
+        "type": "object",
+        "properties": {
+          "dimensionNumber": {
+            "maximum": 3,
+            "minimum": 1,
+            "type": "integer",
+            "description": "The unique number of the dimension associated with the sales document, journal entry or budget figure.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: eq, ne, lt, lte, gt, gte, in, nin</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: true</p>",
+            "format": "int32",
+            "x-filterable": "eq, ne, lt, lte, gt, gte, in, nin",
+            "x-sortable": true
+          },
+          "dimensionKey": {
+            "maximum": 2147483647,
+            "minimum": 1,
+            "type": "integer",
+            "description": "The unique number of the value or distribution corresponding to the dimension that the sales document, journal entry or budget figure is linked to.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: eq, ne, lt, lte, gt, gte, in, nin</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: true</p>",
+            "format": "int32",
+            "x-filterable": "eq, ne, lt, lte, gt, gte, in, nin",
+            "x-sortable": true
+          },
+          "isDistribution": {
+            "type": "boolean",
+            "description": "Flag indicating whether the selected entity is a dimension value or a dimension distribution.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          },
+          "objectVersion": {
+            "type": "string",
+            "description": "The object version, required for PUT requests to help ensure that updates made by others don\u2019t get overwritten by your update request.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "nullable": true,
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          },
+          "entryNumber": {
+            "type": "integer",
+            "description": "The number of the booked entry associated with the dimension.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: eq, ne, lt, lte, gt, gte, in, nin</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: true</p>",
+            "format": "int32",
+            "x-filterable": "eq, ne, lt, lte, gt, gte, in, nin",
+            "x-sortable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "BookedEntryCreatedResult": {
+        "type": "object",
+        "properties": {
+          "dimensionNumber": {
+            "maximum": 3,
+            "minimum": 1,
+            "type": "integer",
+            "description": "The unique number of the dimension associated with the sales document, journal entry or budget figure.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: eq, ne, lt, lte, gt, gte, in, nin</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: true</p>",
+            "format": "int32",
+            "x-filterable": "eq, ne, lt, lte, gt, gte, in, nin",
+            "x-sortable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "BookedEntryCreatedResultArray": {
+        "type": "object",
+        "properties": {
+          "dimensionNumbers": {
+            "type": "array",
+            "items": {
+              "maximum": 3,
+              "minimum": 1,
+              "type": "integer",
+              "description": "The unique number of the dimension associated with the sales document, journal entry or budget figure.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: eq, ne, lt, lte, gt, gte, in, nin</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: true</p>",
+              "format": "int32",
+              "x-filterable": "eq, ne, lt, lte, gt, gte, in, nin",
+              "x-sortable": true
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "BookedEntryCursorResults": {
+        "type": "object",
+        "properties": {
+          "cursor": {
+            "type": "string",
+            "description": "Use this continuation cursor in a request back to continue the list. In case there are no more items to retrieve, the cursor is not returned at all.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Read-only: true</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "nullable": true,
+            "readOnly": true,
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BookedEntry"
+            },
+            "description": "Max number of items returned is 1000.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "nullable": true,
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          }
+        },
+        "additionalProperties": false,
+        "description": "Array of objects along with a cursor.",
+        "example": {
+          "cursor": "234",
+          "items": [
+            {
+              "id": "13",
+              "name": "Patrick"
+            },
+            {
+              "id": "16",
+              "name": "John"
+            }
+          ]
+        },
+        "x-cursor-page-size": 1000
+      },
+      "BudgetFigure": {
+        "required": [
+          "budgetFigureNumber",
+          "dimensionKey",
+          "dimensionNumber"
+        ],
+        "type": "object",
+        "properties": {
+          "dimensionNumber": {
+            "maximum": 3,
+            "minimum": 1,
+            "type": "integer",
+            "description": "The unique number of the dimension associated with the sales document, journal entry or budget figure.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: eq, ne, lt, lte, gt, gte, in, nin</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: true</p>",
+            "format": "int32",
+            "x-filterable": "eq, ne, lt, lte, gt, gte, in, nin",
+            "x-sortable": true
+          },
+          "dimensionKey": {
+            "maximum": 2147483647,
+            "minimum": 1,
+            "type": "integer",
+            "description": "The unique number of the value or distribution corresponding to the dimension that the sales document, journal entry or budget figure is linked to.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: eq, ne, lt, lte, gt, gte, in, nin</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: true</p>",
+            "format": "int32",
+            "x-filterable": "eq, ne, lt, lte, gt, gte, in, nin",
+            "x-sortable": true
+          },
+          "isDistribution": {
+            "type": "boolean",
+            "description": "Flag indicating whether the selected entity is a dimension value or a dimension distribution.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          },
+          "objectVersion": {
+            "type": "string",
+            "description": "The object version, required for PUT requests to help ensure that updates made by others don\u2019t get overwritten by your update request.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "nullable": true,
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          },
+          "budgetFigureNumber": {
+            "type": "integer",
+            "description": "The number of the budget figure associated with the dimension.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: eq, ne, lt, lte, gt, gte, in, nin</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: true</p>",
+            "format": "int32",
+            "x-filterable": "eq, ne, lt, lte, gt, gte, in, nin",
+            "x-sortable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "BudgetFigureCreatedResult": {
+        "type": "object",
+        "properties": {
+          "dimensionNumber": {
+            "maximum": 3,
+            "minimum": 1,
+            "type": "integer",
+            "description": "The unique number of the dimension associated with the sales document, journal entry or budget figure.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: eq, ne, lt, lte, gt, gte, in, nin</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: true</p>",
+            "format": "int32",
+            "x-filterable": "eq, ne, lt, lte, gt, gte, in, nin",
+            "x-sortable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "BudgetFigureCreatedResultArray": {
+        "type": "object",
+        "properties": {
+          "dimensionNumbers": {
+            "type": "array",
+            "items": {
+              "maximum": 3,
+              "minimum": 1,
+              "type": "integer",
+              "description": "The unique number of the dimension associated with the sales document, journal entry or budget figure.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: eq, ne, lt, lte, gt, gte, in, nin</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: true</p>",
+              "format": "int32",
+              "x-filterable": "eq, ne, lt, lte, gt, gte, in, nin",
+              "x-sortable": true
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "BudgetFigureCursorResults": {
+        "type": "object",
+        "properties": {
+          "cursor": {
+            "type": "string",
+            "description": "Use this continuation cursor in a request back to continue the list. In case there are no more items to retrieve, the cursor is not returned at all.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Read-only: true</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "nullable": true,
+            "readOnly": true,
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BudgetFigure"
+            },
+            "description": "Max number of items returned is 1000.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "nullable": true,
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          }
+        },
+        "additionalProperties": false,
+        "description": "Array of objects along with a cursor.",
+        "example": {
+          "cursor": "234",
+          "items": [
+            {
+              "id": "13",
+              "name": "Patrick"
+            },
+            {
+              "id": "16",
+              "name": "John"
+            }
+          ]
+        },
+        "x-cursor-page-size": 1000
+      },
+      "BudgetFigures": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "maxItems": 500,
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BudgetFigure"
+            },
+            "description": "List of budget figures<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "nullable": true,
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "CreatedResult": {
+        "type": "object",
+        "properties": {
+          "number": {
+            "type": "integer",
+            "description": "<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "format": "int32",
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "Dimension": {
+        "required": [
+          "active",
+          "name"
+        ],
+        "type": "object",
+        "properties": {
+          "number": {
+            "maximum": 3,
+            "minimum": 1,
+            "type": "integer",
+            "description": "The unique number of the dimension. By default, only one dimension per agreement is allowed. Agreements with complete subscription plan can have up to 3.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: eq, ne, lt, lte, gt, gte, in, nin</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: true</p>",
+            "format": "int32",
+            "x-filterable": "eq, ne, lt, lte, gt, gte, in, nin",
+            "x-sortable": true
+          },
+          "name": {
+            "maxLength": 255,
+            "minLength": 0,
+            "type": "string",
+            "description": "The name of the dimension. It should suggest the category you want your items to be associated with, e.g. Region, Supplier, ProductType, Project etc. <p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: eq, ne, lt, lte, gt, gte, like</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "x-filterable": "eq, ne, lt, lte, gt, gte, like",
+            "x-sortable": false
+          },
+          "active": {
+            "type": "boolean",
+            "description": "Flag indicating whether the dimension is active or disabled.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: eq, ne, lt, lte, gt, gte</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "x-filterable": "eq, ne, lt, lte, gt, gte",
+            "x-sortable": false
+          },
+          "objectVersion": {
+            "type": "string",
+            "description": "The object version, required for PUT requests to help ensure that updates made by others don\u2019t get overwritten by your update request.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "nullable": true,
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "DimensionCursorResults": {
+        "type": "object",
+        "properties": {
+          "cursor": {
+            "type": "string",
+            "description": "Use this continuation cursor in a request back to continue the list. In case there are no more items to retrieve, the cursor is not returned at all.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Read-only: true</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "nullable": true,
+            "readOnly": true,
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Dimension"
+            },
+            "description": "Max number of items returned is 1000.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "nullable": true,
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          }
+        },
+        "additionalProperties": false,
+        "description": "Array of objects along with a cursor.",
+        "example": {
+          "cursor": "234",
+          "items": [
+            {
+              "id": "13",
+              "name": "Patrick"
+            },
+            {
+              "id": "16",
+              "name": "John"
+            }
+          ]
+        },
+        "x-cursor-page-size": 1000
+      },
+      "DimensionDistribution": {
+        "type": "object",
+        "properties": {
+          "dimensionNumber": {
+            "maximum": 3,
+            "minimum": 1,
+            "type": "integer",
+            "description": "The unique number of the dimension that the distribution corresponds to.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: eq, ne, lt, lte, gt, gte, in, nin</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: true</p>",
+            "format": "int32",
+            "x-filterable": "eq, ne, lt, lte, gt, gte, in, nin",
+            "x-sortable": true
+          },
+          "key": {
+            "maximum": 999999999,
+            "minimum": 1,
+            "type": "integer",
+            "description": "The unique number of the dimension distribution. Since distributions and values are both dimension keys, there can't be a value with the same key as a distribution.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: eq, ne, lt, lte, gt, gte, in, nin</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: true</p>",
+            "format": "int32",
+            "x-filterable": "eq, ne, lt, lte, gt, gte, in, nin",
+            "x-sortable": true
+          },
+          "name": {
+            "maxLength": 255,
+            "minLength": 0,
+            "type": "string",
+            "description": "The name of the dimension distribution. It should suggest the percentage you allocate to each value when applying a distribution, e.g. 60/40.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: eq, ne, lt, lte, gt, gte, like</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "nullable": true,
+            "x-filterable": "eq, ne, lt, lte, gt, gte, like",
+            "x-sortable": false
+          },
+          "active": {
+            "type": "boolean",
+            "description": "Flag indicating whether the dimension distribution is active or disabled.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: eq, ne, lt, lte, gt, gte</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "x-filterable": "eq, ne, lt, lte, gt, gte",
+            "x-sortable": false
+          },
+          "distributions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Distribution"
+            },
+            "description": "List showing the percentage in which you want to distribute several dimension values.  E.g. You can have a distribution of 60% for value 1 and 40% for value 2<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "nullable": true,
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          },
+          "objectVersion": {
+            "type": "string",
+            "description": "The object version, required for PUT requests to help ensure that updates made by others don\u2019t get overwritten by your update request.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "nullable": true,
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "DimensionDistributionCursorResults": {
+        "type": "object",
+        "properties": {
+          "cursor": {
+            "type": "string",
+            "description": "Use this continuation cursor in a request back to continue the list. In case there are no more items to retrieve, the cursor is not returned at all.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Read-only: true</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "nullable": true,
+            "readOnly": true,
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DimensionDistribution"
+            },
+            "description": "Max number of items returned is 1000.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "nullable": true,
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          }
+        },
+        "additionalProperties": false,
+        "description": "Array of objects along with a cursor.",
+        "example": {
+          "cursor": "234",
+          "items": [
+            {
+              "id": "13",
+              "name": "Patrick"
+            },
+            {
+              "id": "16",
+              "name": "John"
+            }
+          ]
+        },
+        "x-cursor-page-size": 1000
+      },
+      "DimensionValue": {
+        "type": "object",
+        "properties": {
+          "dimensionNumber": {
+            "maximum": 3,
+            "minimum": 1,
+            "type": "integer",
+            "description": "The unique number of the dimension that the dimension value belongs to.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: eq, ne, lt, lte, gt, gte, in, nin</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: true</p>",
+            "format": "int32",
+            "x-filterable": "eq, ne, lt, lte, gt, gte, in, nin",
+            "x-sortable": true
+          },
+          "key": {
+            "maximum": 999999999,
+            "minimum": 1,
+            "type": "integer",
+            "description": "The unique number of the dimension value. Since distributions and values are both dimension keys, there can't be a value with the same key as a distribution.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: eq, ne, lt, lte, gt, gte, in, nin</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: true</p>",
+            "format": "int32",
+            "x-filterable": "eq, ne, lt, lte, gt, gte, in, nin",
+            "x-sortable": true
+          },
+          "name": {
+            "maxLength": 255,
+            "minLength": 0,
+            "type": "string",
+            "description": "The name of the dimension value. It should reflect the possible values corresponding to a certain dimension. E.g. if you have a dimension called Product, a value name could be the name of a product you are selling or if you have a dimension called Location, a value name could be a city where you have a store.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: eq, ne, lt, lte, gt, gte, like</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "nullable": true,
+            "x-filterable": "eq, ne, lt, lte, gt, gte, like",
+            "x-sortable": false
+          },
+          "active": {
+            "type": "boolean",
+            "description": "The flag that indicates dimension value is activated or disabled.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: eq, ne, lt, lte, gt, gte</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "x-filterable": "eq, ne, lt, lte, gt, gte",
+            "x-sortable": false
+          },
+          "objectVersion": {
+            "type": "string",
+            "description": "The object version, required for PUT requests to help ensure that updates made by others don\u2019t get overwritten by your update request.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "nullable": true,
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "DimensionValueCreatedResult": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "maximum": 999999999,
+            "minimum": 1,
+            "type": "integer",
+            "description": "The unique number of the dimension value. Since distributions and values are both dimension keys, there can't be a value with the same key as a distribution.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: eq, ne, lt, lte, gt, gte, in, nin</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: true</p>",
+            "format": "int32",
+            "x-filterable": "eq, ne, lt, lte, gt, gte, in, nin",
+            "x-sortable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "DimensionValueCursorResults": {
+        "type": "object",
+        "properties": {
+          "cursor": {
+            "type": "string",
+            "description": "Use this continuation cursor in a request back to continue the list. In case there are no more items to retrieve, the cursor is not returned at all.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Read-only: true</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "nullable": true,
+            "readOnly": true,
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DimensionValue"
+            },
+            "description": "Max number of items returned is 1000.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "nullable": true,
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          }
+        },
+        "additionalProperties": false,
+        "description": "Array of objects along with a cursor.",
+        "example": {
+          "cursor": "234",
+          "items": [
+            {
+              "id": "13",
+              "name": "Patrick"
+            },
+            {
+              "id": "16",
+              "name": "John"
+            }
+          ]
+        },
+        "x-cursor-page-size": 1000
+      },
+      "Distribution": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "integer",
+            "description": "The unique number of the dimension distribution.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "format": "int32",
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          },
+          "percent": {
+            "type": "number",
+            "description": "The dimension distribution percent.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "format": "double",
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          },
+          "objectVersion": {
+            "type": "string",
+            "description": "The object version, required for PUT requests to help ensure that updates made by others don\u2019t get overwritten by your update request.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "nullable": true,
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "DraftEntries": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "maxItems": 500,
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DraftEntry"
+            },
+            "description": "List of draft entries<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "nullable": true,
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "DraftEntry": {
+        "required": [
+          "dimensionKey",
+          "dimensionNumber",
+          "entryNumber",
+          "journalNumber"
+        ],
+        "type": "object",
+        "properties": {
+          "dimensionNumber": {
+            "maximum": 3,
+            "minimum": 1,
+            "type": "integer",
+            "description": "The unique number of the dimension associated with the sales document, journal entry or budget figure.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: eq, ne, lt, lte, gt, gte, in, nin</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: true</p>",
+            "format": "int32",
+            "x-filterable": "eq, ne, lt, lte, gt, gte, in, nin",
+            "x-sortable": true
+          },
+          "dimensionKey": {
+            "maximum": 2147483647,
+            "minimum": 1,
+            "type": "integer",
+            "description": "The unique number of the value or distribution corresponding to the dimension that the sales document, journal entry or budget figure is linked to.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: eq, ne, lt, lte, gt, gte, in, nin</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: true</p>",
+            "format": "int32",
+            "x-filterable": "eq, ne, lt, lte, gt, gte, in, nin",
+            "x-sortable": true
+          },
+          "isDistribution": {
+            "type": "boolean",
+            "description": "Flag indicating whether the selected entity is a dimension value or a dimension distribution.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          },
+          "objectVersion": {
+            "type": "string",
+            "description": "The object version, required for PUT requests to help ensure that updates made by others don\u2019t get overwritten by your update request.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "nullable": true,
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          },
+          "journalNumber": {
+            "type": "integer",
+            "description": "The number of the journal on which the entry associated with the dimension was registered.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: eq, ne, lt, lte, gt, gte, in, nin</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: true</p>",
+            "format": "int32",
+            "x-filterable": "eq, ne, lt, lte, gt, gte, in, nin",
+            "x-sortable": true
+          },
+          "entryNumber": {
+            "type": "integer",
+            "description": "The number of the draft entry associated with the dimension.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: eq, ne, lt, lte, gt, gte, in, nin</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: true</p>",
+            "format": "int32",
+            "x-filterable": "eq, ne, lt, lte, gt, gte, in, nin",
+            "x-sortable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "DraftEntryCreatedResult": {
+        "type": "object",
+        "properties": {
+          "dimensionNumber": {
+            "maximum": 3,
+            "minimum": 1,
+            "type": "integer",
+            "description": "The unique number of the dimension associated with the sales document, journal entry or budget figure.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: eq, ne, lt, lte, gt, gte, in, nin</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: true</p>",
+            "format": "int32",
+            "x-filterable": "eq, ne, lt, lte, gt, gte, in, nin",
+            "x-sortable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "DraftEntryCreatedResultArray": {
+        "type": "object",
+        "properties": {
+          "dimensionNumbers": {
+            "type": "array",
+            "items": {
+              "maximum": 3,
+              "minimum": 1,
+              "type": "integer",
+              "description": "The unique number of the dimension associated with the sales document, journal entry or budget figure.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: eq, ne, lt, lte, gt, gte, in, nin</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: true</p>",
+              "format": "int32",
+              "x-filterable": "eq, ne, lt, lte, gt, gte, in, nin",
+              "x-sortable": true
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "DraftEntryCursorResults": {
+        "type": "object",
+        "properties": {
+          "cursor": {
+            "type": "string",
+            "description": "Use this continuation cursor in a request back to continue the list. In case there are no more items to retrieve, the cursor is not returned at all.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Read-only: true</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "nullable": true,
+            "readOnly": true,
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DraftEntry"
+            },
+            "description": "Max number of items returned is 1000.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "nullable": true,
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          }
+        },
+        "additionalProperties": false,
+        "description": "Array of objects along with a cursor.",
+        "example": {
+          "cursor": "234",
+          "items": [
+            {
+              "id": "13",
+              "name": "Patrick"
+            },
+            {
+              "id": "16",
+              "name": "John"
+            }
+          ]
+        },
+        "x-cursor-page-size": 1000
+      },
+      "Error": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string",
+            "description": "<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "nullable": true,
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          },
+          "errorCode": {
+            "type": "string",
+            "description": "<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "nullable": true,
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          },
+          "property": {
+            "type": "string",
+            "description": "<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "nullable": true,
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "ProblemDetails": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "nullable": true
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "detail": {
+            "type": "string",
+            "nullable": true
+          },
+          "instance": {
+            "type": "string",
+            "nullable": true
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "nullable": true
+          },
+          "traceId": {
+            "type": "string"
+          },
+          "errorCode": {
+            "type": "string"
+          },
+          "traceTimeUtc": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "SalesDocumentLine": {
+        "required": [
+          "dimensionKey",
+          "dimensionNumber",
+          "documentNumber",
+          "lineNumber"
+        ],
+        "type": "object",
+        "properties": {
+          "dimensionNumber": {
+            "maximum": 3,
+            "minimum": 1,
+            "type": "integer",
+            "description": "The unique number of the dimension associated with the sales document, journal entry or budget figure.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: eq, ne, lt, lte, gt, gte, in, nin</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: true</p>",
+            "format": "int32",
+            "x-filterable": "eq, ne, lt, lte, gt, gte, in, nin",
+            "x-sortable": true
+          },
+          "dimensionKey": {
+            "maximum": 2147483647,
+            "minimum": 1,
+            "type": "integer",
+            "description": "The unique number of the value or distribution corresponding to the dimension that the sales document, journal entry or budget figure is linked to.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: eq, ne, lt, lte, gt, gte, in, nin</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: true</p>",
+            "format": "int32",
+            "x-filterable": "eq, ne, lt, lte, gt, gte, in, nin",
+            "x-sortable": true
+          },
+          "isDistribution": {
+            "type": "boolean",
+            "description": "Flag indicating whether the selected entity is a dimension value or a dimension distribution.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          },
+          "objectVersion": {
+            "type": "string",
+            "description": "The object version, required for PUT requests to help ensure that updates made by others don\u2019t get overwritten by your update request.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "nullable": true,
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          },
+          "documentNumber": {
+            "type": "integer",
+            "description": "The number of the sales document (invoice, order or quote) associated with the dimension.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: eq, ne, lt, lte, gt, gte, in, nin</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: true</p>",
+            "format": "int32",
+            "x-filterable": "eq, ne, lt, lte, gt, gte, in, nin",
+            "x-sortable": true
+          },
+          "lineNumber": {
+            "type": "integer",
+            "description": "The number of the line on the sales document (invoice, order or quote) associated with the dimension.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: eq, ne, lt, lte, gt, gte, in, nin</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: true</p>",
+            "format": "int32",
+            "x-filterable": "eq, ne, lt, lte, gt, gte, in, nin",
+            "x-sortable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "SalesDocumentLineCreatedResult": {
+        "type": "object",
+        "properties": {
+          "dimensionNumber": {
+            "maximum": 3,
+            "minimum": 1,
+            "type": "integer",
+            "description": "The unique number of the dimension associated with the sales document, journal entry or budget figure.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: eq, ne, lt, lte, gt, gte, in, nin</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: true</p>",
+            "format": "int32",
+            "x-filterable": "eq, ne, lt, lte, gt, gte, in, nin",
+            "x-sortable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "SalesDocumentLineCreatedResultArray": {
+        "type": "object",
+        "properties": {
+          "dimensionNumbers": {
+            "type": "array",
+            "items": {
+              "maximum": 3,
+              "minimum": 1,
+              "type": "integer",
+              "description": "The unique number of the dimension associated with the sales document, journal entry or budget figure.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: eq, ne, lt, lte, gt, gte, in, nin</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: true</p>",
+              "format": "int32",
+              "x-filterable": "eq, ne, lt, lte, gt, gte, in, nin",
+              "x-sortable": true
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "SalesDocumentLineCursorResults": {
+        "type": "object",
+        "properties": {
+          "cursor": {
+            "type": "string",
+            "description": "Use this continuation cursor in a request back to continue the list. In case there are no more items to retrieve, the cursor is not returned at all.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Read-only: true</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "nullable": true,
+            "readOnly": true,
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SalesDocumentLine"
+            },
+            "description": "Max number of items returned is 1000.<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "nullable": true,
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          }
+        },
+        "additionalProperties": false,
+        "description": "Array of objects along with a cursor.",
+        "example": {
+          "cursor": "234",
+          "items": [
+            {
+              "id": "13",
+              "name": "Patrick"
+            },
+            {
+              "id": "16",
+              "name": "John"
+            }
+          ]
+        },
+        "x-cursor-page-size": 1000
+      },
+      "SalesDocumentLines": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "maxItems": 500,
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SalesDocumentLine"
+            },
+            "description": "List of sales document lines<p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Filterable: not filterable</p><p style='font-style:italic;font-family:monospace;font-size:small;margin:0'>Sortable: false</p>",
+            "nullable": true,
+            "x-filterable": "not filterable",
+            "x-sortable": false
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "securitySchemes": {
+      "X-AppSecretToken": {
+        "type": "apiKey",
+        "description": "Application secret token needed to access the endpoints.",
+        "name": "X-AppSecretToken",
+        "in": "header"
+      },
+      "X-AgreementGrantToken": {
+        "type": "apiKey",
+        "description": "Agreement grant token needed to access the endpoints.",
+        "name": "X-AgreementGrantToken",
+        "in": "header"
+      }
+    }
+  },
+  "security": [
+    {
+      "X-AppSecretToken": [],
+      "X-AgreementGrantToken": []
+    }
+  ],
+  "tags": [
+    {
+      "name": "BookedEntry",
+      "description": "<code>Booked entry dimension data</code> endpoints allow you to link booked entries to one or more dimension values.\n\n\n#### Examples of use cases:\n\n* Retrieve a single dimension value related to a single entry;\n* Retrieve multiple dimensions related to multiple booked entries;\n* Add multiple dimension values to multiple booked entries;\n* Update multiple dimension distributions on multiple booked entries;\n\n#### Note\n\n* To retrieve a dimension value related to a single entry, you can use filtering. e.g.\n  </br> <code>?filter=entryNumber$eq:11$and:dimensionNumber$eq:2</code>\n\n\n\n<details><summary><b>Click to see the list of possible error codes.</b></summary>\n\n| Error Code | Description |\n| ---------- | ----------- |\n| ONLYONEITEMPERDIMENSION | Invalid dimension key, only one dimension value or distribution key is allowed per dimension. |\n| ONLYONEDISTRIBUTIONALLOWED | Invalid dimension key, only one distribution key is allowed across dimensions. |\n| CONTAINSINVALIDVALUES | Invalid dimension key, please use valid dimension value or distribution key. |\n| CONTAINSBARREDDISTRIBUTIONKEY | Contains barred distribution key. |\n| CONTAINSBARREDDIMENSIONVALUE | Contains barred dimension value. |\n| BOOKEDENTRYNOTFOUND | One or more given booked entries do not exist. |\n</details>\n\n**Required application roles:** SuperUser or Bookkeeping [More info](https://www.e-conomic.com/developer/permissions)",
+      "x-error-codes": [
+        "BOOKEDENTRYNOTFOUND",
+        "CONTAINSBARREDDIMENSIONVALUE",
+        "CONTAINSBARREDDISTRIBUTIONKEY",
+        "CONTAINSINVALIDVALUES",
+        "ONLYONEDISTRIBUTIONALLOWED",
+        "ONLYONEITEMPERDIMENSION"
+      ],
+      "x-required-roles": [
+        "Bookkeeping",
+        "SuperUser"
+      ]
+    },
+    {
+      "name": "BudgetFigure",
+      "description": "<code>Budget figure dimension data</code> endpoints allow you to link budget figures to one or more dimension values.\n\n#### Examples of use cases:\n\n* Retrieve a single dimension related to a single budget figure\n* Retrieve multiple dimensions related to multiple budget figures\n* Add a single dimension to a single budget figure\n* Update multiple dimensions on multiple budget figures\n\n#### Notice\n\n* To retrieve a dimension value related to a single budget figure, you can use filtering. e.g.\n  </br> <code>?filter=budgetFigureNumber$eq:11$and:dimensionNumber$eq:2</code>\n\n\n\n<details><summary><b>Click to see the list of possible error codes.</b></summary>\n\n| Error Code | Description |\n| ---------- | ----------- |\n| ONLYONEITEMPERDIMENSION | Invalid dimension key, only one dimension value or distribution key is allowed per dimension. |\n| ONLYONEDISTRIBUTIONALLOWED | Invalid dimension key, only one distribution key is allowed across dimensions. |\n| CONTAINSINVALIDVALUES | Invalid dimension key, please use valid dimension value or distribution key. |\n| CONTAINSBARREDDISTRIBUTIONKEY | Contains barred distribution key. |\n| CONTAINSBARREDDIMENSIONVALUE | Contains barred dimension value. |\n| BUDGETFIGURENOTFOUND | One or more given budget figures do not exist. |\n</details>\n\n**Required application roles:** SuperUser or Bookkeeping [More info](https://www.e-conomic.com/developer/permissions)",
+      "x-error-codes": [
+        "BUDGETFIGURENOTFOUND",
+        "CONTAINSBARREDDIMENSIONVALUE",
+        "CONTAINSBARREDDISTRIBUTIONKEY",
+        "CONTAINSINVALIDVALUES",
+        "ONLYONEDISTRIBUTIONALLOWED",
+        "ONLYONEITEMPERDIMENSION"
+      ],
+      "x-required-roles": [
+        "Bookkeeping",
+        "SuperUser"
+      ]
+    },
+    {
+      "name": "DimensionDistributions",
+      "description": "<code>Dimension distributions</code> allow expenses/revenue to be distributed to several dimension values when registering a sales document.\nE.g. Suppose you have a dimension called Region and a value for each city where you have a store and you want to link a sales document not to a single store, but to two. In this case you create a distribution called 40/60, where you specify that 40% of the amount on the sales document is related to the store in value 1 and 60% to the store in value 2.\n\n\n#### Examples of use cases:\n\n* Retrieve all Dimension Distributions;\n* Retrieve a single Dimension Distribution;\n* Retrieve the number of Dimension Distributions;\n\n\n<details><summary><b>Click to see the list of possible error codes.</b></summary>\n\n| Error Code | Description |\n| ---------- | ----------- |\n| DimensionDistributionDoesNotExist | DimensionDistributionDoesNotExist |\n| DimensionDistributionAtLeast1ChildRequired | Distribution keys must have at least one value. |\n| DimensionDistributionOnlyOneOfEachValueAllowed | Each value can only be specified once. |\n| DimensionDistributionPercentSumMustBe100 | The total of the percentage distributions must be 100. |\n</details>\n\n**Required application roles:** SuperUser or Bookkeeping or Sales or ProjectEmployee [More info](https://www.e-conomic.com/developer/permissions)",
+      "x-error-codes": [
+        "DimensionDistributionAtLeast1ChildRequired",
+        "DimensionDistributionDoesNotExist",
+        "DimensionDistributionOnlyOneOfEachValueAllowed",
+        "DimensionDistributionPercentSumMustBe100"
+      ],
+      "x-required-roles": [
+        "Bookkeeping",
+        "ProjectEmployee",
+        "Sales",
+        "SuperUser"
+      ]
+    },
+    {
+      "name": "DimensionValues",
+      "description": "<code>Dimension values</code> go hand in hand with dimensions like a key-value pair. While dimensions can be seen as a category, values designate the items that fit into a particular category. E.g if you have a dimension called Suppliers, you should create a value for each supplier of interest or if you have a chain of stores and a dimension called Region, you could use values for each city where you have a store.\n\n#### Examples of use cases:\n\n* create a dimension value;\n* update a dimension value;\n\n<details><summary><b>Click to see the list of possible error codes.</b></summary>\n\n| Error Code | Description |\n| ---------- | ----------- |\n| DimensionValueDoesNotExist | Dimension value with this number does not exist. |\n| DimensionValueInUse | Dimension value is in use with one or more entries/configurations. |\n| DimensionValueInUseMultiple | Dimension value is in use with one or more entries/configurations. |\n| DimensionValueInUseByDistribution | Dimension value is in use by one or more distribution keys. |\n| KeyInUse | A dimension value or distribution key with this number already exists. |\n| KeyInUseMultiple | A dimension value or distribution key with this number is in use with one or more entries/configurations. |\n| KeyNumberIsZeroOrNegative | Number must be a positive number. |\n| KeyNumberExceedsMaximumDigits | Key must be at most 9 digits. |\n| DimensionValueImportDuplicateKey | DimensionValueImportDuplicateKey |\n| DimensionValueImportDistributionKeyInUse | DimensionValueImportDistributionKeyInUse |\n| DimensionValueImportDuplicateIndex | DimensionValueImportDuplicateIndex |\n</details>\n\n**Required application roles:** SuperUser or Bookkeeping or Sales or ProjectEmployee [More info](https://www.e-conomic.com/developer/permissions)",
+      "x-error-codes": [
+        "DimensionValueDoesNotExist",
+        "DimensionValueImportDistributionKeyInUse",
+        "DimensionValueImportDuplicateIndex",
+        "DimensionValueImportDuplicateKey",
+        "DimensionValueInUse",
+        "DimensionValueInUseByDistribution",
+        "DimensionValueInUseMultiple",
+        "KeyInUse",
+        "KeyInUseMultiple",
+        "KeyNumberExceedsMaximumDigits",
+        "KeyNumberIsZeroOrNegative"
+      ],
+      "x-required-roles": [
+        "Bookkeeping",
+        "ProjectEmployee",
+        "Sales",
+        "SuperUser"
+      ]
+    },
+    {
+      "name": "Dimensions",
+      "description": "<code>Dimensions</code> endpoints help organize and eventually track your company's expenses and income in Reports by various parameters such as regions, products, projects, customers, suppliers etc.\nThey require the Dimension module to be installed. By default, only one dimension per agreement is allowed. Agreements with complete subscription plan can have up to 3.\n\nA full flow for dimensions API's would be: you create a dimension, e.g. Customers, then you create values that match the dimension, e.g. a value designating each of your customers. On every sales document/ journal entry you select the dimension value that matches the customer on the sales document. You create a report to see which customers brought you the highest revenue.\n\n#### Examples of use cases:\n\n* create a dimension;\n* retrieve all existing dimensions;\n\nRelated guide for users: [e-copedia](https://www.e-conomic.dk/support/artikler/om-dimensionsregnskab) (Danish).\n\n\n<details><summary><b>Click to see the list of possible error codes.</b></summary>\n\n| Error Code | Description |\n| ---------- | ----------- |\n| DimensionAlreadyExists | Dimension with this number already exists. |\n| DimensionDoesNotExist | Dimension with this number does not exist. |\n| DimensionInUse | Dimension is in use with one or more entries/configurations. |\n| DimensionInUseMultiple | Dimension is in use with multiple entries/configurations. |\n| Dimension1CannotBeDeleted | The first dimension can't be deleted. |\n| DimensionAllowedUpTo3 | You are allowed to work with up to 3 dimensions. |\n| DimensionIncorrectPackageLevel | You need to upgrade your package level to Complete to work with multiple dimensions. |\n| DimensionIncorrectModule | You need to activate Department module to work with first dimension. |\n</details>\n\n**Required application roles:** SuperUser or Bookkeeping or Sales or ProjectEmployee [More info](https://www.e-conomic.com/developer/permissions)",
+      "x-error-codes": [
+        "Dimension1CannotBeDeleted",
+        "DimensionAllowedUpTo3",
+        "DimensionAlreadyExists",
+        "DimensionDoesNotExist",
+        "DimensionInUse",
+        "DimensionInUseMultiple",
+        "DimensionIncorrectModule",
+        "DimensionIncorrectPackageLevel"
+      ],
+      "x-required-roles": [
+        "Bookkeeping",
+        "ProjectEmployee",
+        "Sales",
+        "SuperUser"
+      ]
+    },
+    {
+      "name": "DraftEntry",
+      "description": "<code>Draft entry dimension data</code> endpoints allow you to link draft entries to one or more dimension values.\n\n\n#### Examples of use cases:\n\n* Retrieve a single dimension value related to a single entry;\n* Retrieve multiple dimensions related to multiple draft entries;\n* Add multiple dimension values to multiple draft entries;\n* Update multiple dimension distributions on multiple draft entries;\n\n#### Note\n\n* To retrieve a dimension value related to a single entry, you can use filtering. e.g.\n  </br> <code>?filter=entryNumber$eq:11$and:dimensionNumber$eq:2</code>\n\n\n\n<details><summary><b>Click to see the list of possible error codes.</b></summary>\n\n| Error Code | Description |\n| ---------- | ----------- |\n| ONLYONEITEMPERDIMENSION | Invalid dimension key, only one dimension value or distribution key is allowed per dimension. |\n| ONLYONEDISTRIBUTIONALLOWED | Invalid dimension key, only one distribution key is allowed across dimensions. |\n| CONTAINSINVALIDVALUES | Invalid dimension key, please use valid dimension value or distribution key. |\n| CONTAINSBARREDDISTRIBUTIONKEY | Contains barred distribution key. |\n| CONTAINSBARREDDIMENSIONVALUE | Contains barred dimension value. |\n| JOURNALNOTFOUND | One or more given journals do not exist. |\n| DRAFTENTRYNOTFOUND | One or more given draft entries do not exist. |\n</details>\n\n**Required application roles:** SuperUser or Bookkeeping [More info](https://www.e-conomic.com/developer/permissions)",
+      "x-error-codes": [
+        "CONTAINSBARREDDIMENSIONVALUE",
+        "CONTAINSBARREDDISTRIBUTIONKEY",
+        "CONTAINSINVALIDVALUES",
+        "DRAFTENTRYNOTFOUND",
+        "JOURNALNOTFOUND",
+        "ONLYONEDISTRIBUTIONALLOWED",
+        "ONLYONEITEMPERDIMENSION"
+      ],
+      "x-required-roles": [
+        "Bookkeeping",
+        "SuperUser"
+      ]
+    },
+    {
+      "name": "SalesDocumentLine",
+      "description": "<code>Sales documents dimension data</code> endpoints allow you to link sales documents such as orders, quotes or invoices to one or more dimension values.\n\n\n#### Examples of use cases:\n\n* Retrieve a single dimension value related to a single sales document;\n* Retrieve multiple dimensions related to multiple sales documents;\n* Add multiple dimension values to multiple sales documents;\n* Update multiple dimension distributions on multiple sales documents;\n\n#### Note\n\n* To retrieve a dimension value related to a single sales document, you can use filtering. e.g.\n  </br> <code>?filter=documentNumber$eq:11$and:dimensionNumber$eq:2</code>\n\n\n\n<details><summary><b>Click to see the list of possible error codes.</b></summary>\n\n| Error Code | Description |\n| ---------- | ----------- |\n| ONLYONEITEMPERDIMENSION | Invalid dimension key, only one dimension value or distribution key is allowed per dimension. |\n| ONLYONEDISTRIBUTIONALLOWED | Invalid dimension key, only one distribution key is allowed across dimensions. |\n| CONTAINSINVALIDVALUES | Invalid dimension key, please use valid dimension value or distribution key. |\n| CONTAINSBARREDDISTRIBUTIONKEY | Contains barred distribution key. |\n| CONTAINSBARREDDIMENSIONVALUE | Contains barred dimension value. |\n| SALESDOCUMENTNOTFOUND | One or more given sales documents do not exist. |\n| SALESDOCUMENTLINENOTFOUND | One or more given sales document lines do not exist. |\n</details>\n\n**Required application roles:** SuperUser or Sales [More info](https://www.e-conomic.com/developer/permissions)",
+      "x-error-codes": [
+        "CONTAINSBARREDDIMENSIONVALUE",
+        "CONTAINSBARREDDISTRIBUTIONKEY",
+        "CONTAINSINVALIDVALUES",
+        "ONLYONEDISTRIBUTIONALLOWED",
+        "ONLYONEITEMPERDIMENSION",
+        "SALESDOCUMENTLINENOTFOUND",
+        "SALESDOCUMENTNOTFOUND"
+      ],
+      "x-required-roles": [
+        "Sales",
+        "SuperUser"
+      ]
+    }
+  ],
+  "x-tagGroups": [
+    {
+      "name": "Dimension Data",
+      "tags": [
+        "BookedEntry",
+        "BudgetFigure",
+        "DraftEntry",
+        "SalesDocumentLine"
+      ]
+    },
+    {
+      "name": "Dimensions",
+      "tags": [
+        "Dimensions"
+      ]
+    },
+    {
+      "name": "Values",
+      "tags": [
+        "DimensionDistributions",
+        "DimensionValues"
+      ]
+    }
+  ]
+}
