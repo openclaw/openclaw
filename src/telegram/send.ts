@@ -1091,7 +1091,7 @@ export async function sendPollTelegram(
   });
 
   if (pollId) {
-    const isGroup = /^-/.test(chatId);
+    const isGroup = chatId.startsWith("-");
     const resolvedThreadId = resolveTelegramForumThreadId({
       isForum: isGroup,
       messageThreadId: messageThreadId ?? undefined,
