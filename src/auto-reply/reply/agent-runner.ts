@@ -194,6 +194,7 @@ export async function runReplyAgent(params: {
   activeSessionEntry = await runMemoryFlushIfNeeded({
     cfg,
     followupRun,
+    promptForEstimate: followupRun.prompt,
     sessionCtx,
     opts,
     defaultModel,
