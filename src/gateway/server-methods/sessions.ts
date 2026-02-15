@@ -319,8 +319,9 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         verboseLevel: entry?.verboseLevel,
         reasoningLevel: entry?.reasoningLevel,
         responseUsage: entry?.responseUsage,
-        model: entry?.model,
-        contextTokens: entry?.contextTokens,
+        // Do not carry over cached model/contextTokens; let them re-resolve
+        // from config so the welcome message shows the actual model (#17003).
+        contextTokens: undefined,
         sendPolicy: entry?.sendPolicy,
         label: entry?.label,
         origin: snapshotSessionOrigin(entry),
