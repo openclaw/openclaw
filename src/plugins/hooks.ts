@@ -34,6 +34,9 @@ import type {
   PluginHookToolResultPersistContext,
   PluginHookToolResultPersistEvent,
   PluginHookToolResultPersistResult,
+  PluginHookMessagePersistContext,
+  PluginHookMessagePersistEvent,
+  PluginHookMessagePersistResult,
 } from "./types.js";
 
 // Re-export types for consumers
@@ -57,6 +60,9 @@ export type {
   PluginHookToolResultPersistContext,
   PluginHookToolResultPersistEvent,
   PluginHookToolResultPersistResult,
+  PluginHookMessagePersistContext,
+  PluginHookMessagePersistEvent,
+  PluginHookMessagePersistResult,
   PluginHookSessionContext,
   PluginHookSessionStartEvent,
   PluginHookSessionEndEvent,
@@ -385,6 +391,66 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     return { message: current };
   }
 
+  /**
+   * Run message_persist hook.
+   *
+   * Like tool_result_persist, this hook is synchronous and runs in the hot
+   * path where session transcripts are appended. It is called for ALL messages
+   * (user, assistant, system, toolResult, etc.) before they are written to disk.
+   *
+   * Handlers are executed sequentially in priority order (higher first). Each
+   * handler may return `{ message }` to replace the message passed to the next
+   * handler. This enables use cases like content encryption at rest.
+   */
+  function runMessagePersist(
+    event: PluginHookMessagePersistEvent,
+    ctx: PluginHookMessagePersistContext,
+  ): PluginHookMessagePersistResult | undefined {
+    const hooks = getHooksForName(registry, "message_persist");
+    if (hooks.length === 0) {
+      return undefined;
+    }
+
+    let current = event.message;
+
+    for (const hook of hooks) {
+      try {
+        // oxlint-disable-next-line typescript/no-explicit-any
+        const out = (hook.handler as any)({ ...event, message: current }, ctx) as
+          | PluginHookMessagePersistResult
+          | void
+          | Promise<unknown>;
+
+        // Guard against accidental async handlers (this hook is sync-only).
+        // oxlint-disable-next-line typescript/no-explicit-any
+        if (out && typeof (out as any).then === "function") {
+          const msg =
+            `[hooks] message_persist handler from ${hook.pluginId} returned a Promise; ` +
+            `this hook is synchronous and the result was ignored.`;
+          if (catchErrors) {
+            logger?.warn?.(msg);
+            continue;
+          }
+          throw new Error(msg);
+        }
+
+        const next = (out as PluginHookMessagePersistResult | undefined)?.message;
+        if (next) {
+          current = next;
+        }
+      } catch (err) {
+        const msg = `[hooks] message_persist handler from ${hook.pluginId} failed: ${String(err)}`;
+        if (catchErrors) {
+          logger?.error(msg);
+        } else {
+          throw new Error(msg, { cause: err });
+        }
+      }
+    }
+
+    return { message: current };
+  }
+
   // =========================================================================
   // Session Hooks
   // =========================================================================
@@ -470,6 +536,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     runBeforeToolCall,
     runAfterToolCall,
     runToolResultPersist,
+    runMessagePersist,
     // Session hooks
     runSessionStart,
     runSessionEnd,

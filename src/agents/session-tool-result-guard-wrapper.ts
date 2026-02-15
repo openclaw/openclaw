@@ -50,9 +50,35 @@ export function guardSessionManager(
       }
     : undefined;
 
+  const messagePersistTransform = hookRunner?.hasHooks("message_persist")
+    ? (message: Parameters<typeof hookRunner.runMessagePersist>[0]["message"]) => {
+        const out = hookRunner.runMessagePersist(
+          {
+            message,
+            role: (message as { role?: string }).role,
+          },
+          {
+            agentId: opts?.agentId,
+            sessionKey: opts?.sessionKey,
+          },
+        );
+        return out?.message ?? message;
+      }
+    : undefined;
+
   const guard = installSessionToolResultGuard(sessionManager, {
-    transformMessageForPersistence: (message) =>
-      applyInputProvenanceToUserMessage(message, opts?.inputProvenance),
+    // Note: This callback runs for ALL message roles (user, assistant, system,
+    // toolResult). For toolResult messages, `tool_result_persist` also fires
+    // separately via transformToolResultForPersistence. Plugin authors who
+    // register both hooks should guard against double-processing (e.g. check
+    // if content is already encrypted before encrypting again).
+    transformMessageForPersistence: (message) => {
+      let msg = applyInputProvenanceToUserMessage(message, opts?.inputProvenance);
+      if (messagePersistTransform) {
+        msg = messagePersistTransform(msg);
+      }
+      return msg;
+    },
     transformToolResultForPersistence: transform,
     allowSyntheticToolResults: opts?.allowSyntheticToolResults,
   });
