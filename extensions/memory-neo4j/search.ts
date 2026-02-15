@@ -14,7 +14,12 @@
 
 import type { Embeddings } from "./embeddings.js";
 import type { Neo4jMemoryClient } from "./neo4j-client.js";
-import type { HybridSearchResult, Logger, SearchSignalResult } from "./schema.js";
+import type {
+  HybridSearchResult,
+  Logger,
+  SearchSignalResult,
+  SignalAttribution,
+} from "./schema.js";
 
 // ============================================================================
 // Query Classification
@@ -107,6 +112,11 @@ type FusedCandidate = {
   importance: number;
   createdAt: string;
   rrfScore: number;
+  signals: {
+    vector: SignalAttribution;
+    bm25: SignalAttribution;
+    graph: SignalAttribution;
+  };
 };
 
 /**
@@ -159,6 +169,7 @@ export function fuseWithConfidenceRRF(
 
   // Calculate confidence-weighted RRF score for each candidate
   const results: FusedCandidate[] = [];
+  const NO_SIGNAL: SignalAttribution = { rank: 0, score: 0 };
 
   for (const [id, meta] of candidateMetadata) {
     let rrfScore = 0;
@@ -171,6 +182,13 @@ export function fuseWithConfidenceRRF(
       }
     }
 
+    // Build per-signal attribution from the existing signal maps
+    const signals = {
+      vector: signalMaps[0]?.get(id) ?? NO_SIGNAL,
+      bm25: signalMaps[1]?.get(id) ?? NO_SIGNAL,
+      graph: signalMaps[2]?.get(id) ?? NO_SIGNAL,
+    };
+
     results.push({
       id,
       text: meta.text,
@@ -178,6 +196,7 @@ export function fuseWithConfidenceRRF(
       importance: meta.importance,
       createdAt: meta.createdAt,
       rrfScore,
+      signals,
     });
   }
 
@@ -269,6 +288,7 @@ export async function hybridSearch(
     importance: r.importance,
     createdAt: r.createdAt,
     score: Math.min(1, r.rrfScore * normalizer), // Normalize to 0-1
+    signals: r.signals,
   }));
 
   // 6. Record retrieval events (fire-and-forget for latency)
