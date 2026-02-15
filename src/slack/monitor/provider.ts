@@ -283,18 +283,17 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
             token: resolveToken,
             entries: allowEntries.map((entry) => String(entry)),
           });
-          const mapping: string[] = [];
-          const unresolved: string[] = [];
-          const additions: string[] = [];
-          for (const entry of resolvedUsers) {
-            if (entry.resolved && entry.id) {
-              const note = entry.note ? ` (${entry.note})` : "";
-              mapping.push(`${entry.input}→${entry.id}${note}`);
-              additions.push(entry.id);
-            } else {
-              unresolved.push(entry.input);
-            }
-          }
+          const { mapping, unresolved, additions } = buildAllowlistResolutionSummary(
+            resolvedUsers,
+            {
+              formatResolved: (entry) => {
+                const note = (entry as { note?: string }).note
+                  ? ` (${(entry as { note?: string }).note})`
+                  : "";
+                return `${entry.input}→${entry.id}${note}`;
+              },
+            },
+          );
           allowFrom = mergeAllowlist({ existing: allowFrom, additions });
           ctx.allowFrom = normalizeAllowList(allowFrom);
           summarizeMapping("slack users", mapping, unresolved, runtime);
