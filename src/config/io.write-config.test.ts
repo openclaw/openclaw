@@ -2,43 +2,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { captureEnv } from "../test-utils/env.js";
 import { createConfigIO } from "./io.js";
 
 describe("config io write", () => {
   const silentLogger = {
     warn: () => {},
     error: () => {},
-  };
-
-  type HomeEnvSnapshot = {
-    home: string | undefined;
-    userProfile: string | undefined;
-    homeDrive: string | undefined;
-    homePath: string | undefined;
-    stateDir: string | undefined;
-  };
-
-  const snapshotHomeEnv = (): HomeEnvSnapshot => ({
-    home: process.env.HOME,
-    userProfile: process.env.USERPROFILE,
-    homeDrive: process.env.HOMEDRIVE,
-    homePath: process.env.HOMEPATH,
-    stateDir: process.env.OPENCLAW_STATE_DIR,
-  });
-
-  const restoreHomeEnv = (snapshot: HomeEnvSnapshot) => {
-    const restoreKey = (key: string, value: string | undefined) => {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    };
-    restoreKey("HOME", snapshot.home);
-    restoreKey("USERPROFILE", snapshot.userProfile);
-    restoreKey("HOMEDRIVE", snapshot.homeDrive);
-    restoreKey("HOMEPATH", snapshot.homePath);
-    restoreKey("OPENCLAW_STATE_DIR", snapshot.stateDir);
   };
 
   let fixtureRoot = "";
@@ -49,7 +19,13 @@ describe("config io write", () => {
     const home = path.join(fixtureRoot, `${safePrefix}${caseId++}`);
     await fs.mkdir(path.join(home, ".openclaw"), { recursive: true });
 
-    const snapshot = snapshotHomeEnv();
+    const snapshot = captureEnv([
+      "HOME",
+      "USERPROFILE",
+      "HOMEDRIVE",
+      "HOMEPATH",
+      "OPENCLAW_STATE_DIR",
+    ]);
     process.env.HOME = home;
     process.env.USERPROFILE = home;
     process.env.OPENCLAW_STATE_DIR = path.join(home, ".openclaw");
@@ -65,7 +41,7 @@ describe("config io write", () => {
     try {
       await fn(home);
     } finally {
-      restoreHomeEnv(snapshot);
+      snapshot.restore();
     }
   }
 
