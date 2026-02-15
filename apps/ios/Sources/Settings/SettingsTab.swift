@@ -590,15 +590,6 @@ struct SettingsTab: View {
         }
     }
 
-    private struct SetupPayload: Codable {
-        var url: String?
-        var host: String?
-        var port: Int?
-        var tls: Bool?
-        var token: String?
-        var password: String?
-    }
-
     private func applySetupCodeAndConnect() async {
         self.setupStatusText = nil
         guard self.applySetupCode() else { return }
@@ -626,7 +617,7 @@ struct SettingsTab: View {
             return false
         }
 
-        guard let payload = self.decodeSetupPayload(raw: raw) else {
+        guard let payload = GatewaySetupCode.decode(raw: raw) else {
             self.setupStatusText = "Setup code not recognized."
             return false
         }
@@ -727,67 +718,14 @@ struct SettingsTab: View {
     }
 
     private static func probeTCP(host: String, port: Int, timeoutSeconds: Double) async -> Bool {
-        guard let nwPort = NWEndpoint.Port(rawValue: UInt16(port)) else { return false }
-        let endpointHost = NWEndpoint.Host(host)
-        let connection = NWConnection(host: endpointHost, port: nwPort, using: .tcp)
-        return await withCheckedContinuation { cont in
-            let queue = DispatchQueue(label: "gateway.preflight")
-            let finished = OSAllocatedUnfairLock(initialState: false)
-            let finish: @Sendable (Bool) -> Void = { ok in
-                let shouldResume = finished.withLock { flag -> Bool in
-                    if flag { return false }
-                    flag = true
-                    return true
-                }
-                guard shouldResume else { return }
-                connection.cancel()
-                cont.resume(returning: ok)
-            }
-            connection.stateUpdateHandler = { state in
-                switch state {
-                case .ready:
-                    finish(true)
-                case .failed, .cancelled:
-                    finish(false)
-                default:
-                    break
-                }
-            }
-            connection.start(queue: queue)
-            queue.asyncAfter(deadline: .now() + timeoutSeconds) {
-                finish(false)
-            }
-        }
+        await TCPProbe.probe(
+            host: host,
+            port: port,
+            timeoutSeconds: timeoutSeconds,
+            queueLabel: "gateway.preflight")
     }
 
-    private func decodeSetupPayload(raw: String) -> SetupPayload? {
-        if let payload = decodeSetupPayloadFromJSON(raw) {
-            return payload
-        }
-        if let decoded = decodeBase64Payload(raw),
-           let payload = decodeSetupPayloadFromJSON(decoded)
-        {
-            return payload
-        }
-        return nil
-    }
-
-    private func decodeSetupPayloadFromJSON(_ json: String) -> SetupPayload? {
-        guard let data = json.data(using: .utf8) else { return nil }
-        return try? JSONDecoder().decode(SetupPayload.self, from: data)
-    }
-
-    private func decodeBase64Payload(_ raw: String) -> String? {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        let normalized = trimmed
-            .replacingOccurrences(of: "-", with: "+")
-            .replacingOccurrences(of: "_", with: "/")
-        let padding = normalized.count % 4
-        let padded = padding == 0 ? normalized : normalized + String(repeating: "=", count: 4 - padding)
-        guard let data = Data(base64Encoded: padded) else { return nil }
-        return String(data: data, encoding: .utf8)
-    }
+    // (GatewaySetupCode) decode raw setup codes.
 
     private func connectManual() async {
         let host = self.manualGatewayHost.trimmingCharacters(in: .whitespacesAndNewlines)
