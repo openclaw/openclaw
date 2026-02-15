@@ -28,6 +28,7 @@ import { resolveMedia } from "./bot/delivery.js";
 import {
   buildTelegramGroupPeerId,
   buildTelegramParentPeer,
+  hasBotMention,
   resolveTelegramForumThreadId,
 } from "./bot/helpers.js";
 import { migrateTelegramGroupConfig } from "./group-migration.js";
@@ -894,6 +895,27 @@ export const registerTelegramHandlers = ({
       } catch (mediaErr) {
         const errMsg = String(mediaErr);
         if (errMsg.includes("exceeds") && errMsg.includes("MB limit")) {
+          // In groups with requireMention, suppress the error reply when the bot
+          // was not mentioned — otherwise every agent in the group spams the same
+          // "File too large" message for files they were never asked to process.
+          if (isGroup) {
+            const requireMention = firstDefined(
+              topicConfig?.requireMention,
+              groupConfig?.requireMention,
+              telegramCfg.requireMention,
+              opts.requireMention,
+            );
+            if (requireMention !== false) {
+              const botUser = ctx.me?.username;
+              const mentioned = botUser && hasBotMention(msg, botUser.toLowerCase());
+              if (!mentioned) {
+                logVerbose(
+                  `telegram: suppressing file-size error in group ${chatId} (requireMention, not mentioned)`,
+                );
+                return;
+              }
+            }
+          }
           const limitMb = Math.round(mediaMaxBytes / (1024 * 1024));
           await withTelegramApiErrorLogging({
             operation: "sendMessage",
