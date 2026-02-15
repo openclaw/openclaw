@@ -1,5 +1,6 @@
 import DOMPurify from "dompurify";
 import { marked } from "marked";
+import katex from "katex";
 import { truncateText } from "./format.ts";
 
 marked.setOptions({
@@ -9,6 +10,7 @@ marked.setOptions({
 
 const allowedTags = [
   "a",
+  "annotation",
   "b",
   "blockquote",
   "br",
@@ -22,9 +24,38 @@ const allowedTags = [
   "hr",
   "i",
   "li",
+  "math",
+  "menclose",
+  "merror",
+  "mfrac",
+  "mi",
+  "mn",
+  "mo",
+  "mover",
+  "mpadded",
+  "mphantom",
+  "mprescripts",
+  "mroot",
+  "mrow",
+  "ms",
+  "mspace",
+  "msqrt",
+  "mstyle",
+  "msub",
+  "msubsup",
+  "msup",
+  "mtable",
+  "mtd",
+  "mtext",
+  "mtr",
+  "munder",
+  "munderover",
+  "none",
   "ol",
   "p",
   "pre",
+  "semantics",
+  "span",
   "strong",
   "table",
   "tbody",
@@ -36,7 +67,29 @@ const allowedTags = [
   "img",
 ];
 
-const allowedAttrs = ["class", "href", "rel", "target", "title", "start", "src", "alt"];
+const allowedAttrs = [
+  "alt",
+  "aria-hidden",
+  "class",
+  "height",
+  "href",
+  "id",
+  "mathvariant",
+  "minsize",
+  "maxsize",
+  "rel",
+  "rspace",
+  "scriptlevel",
+  "src",
+  "start",
+  "stretchy",
+  "style",
+  "target",
+  "title",
+  "viewbox",
+  "width",
+  "xmlns",
+];
 const sanitizeOptions = {
   ALLOWED_TAGS: allowedTags,
   ALLOWED_ATTR: allowedAttrs,
@@ -90,6 +143,87 @@ function installHooks() {
   });
 }
 
+/**
+ * Process LaTeX math expressions in markdown.
+ * Supports both display math ($$...$$) and inline math ($...$).
+ */
+function processLatex(text: string): string {
+  // Track positions to avoid processing LaTeX inside code blocks
+  const codeBlockPattern = /```[\s\S]*?```|`[^`]+`/g;
+  const codeBlocks: Array<{ start: number; end: number }> = [];
+  let match;
+  
+  while ((match = codeBlockPattern.exec(text)) !== null) {
+    codeBlocks.push({ start: match.index, end: match.index + match[0].length });
+  }
+
+  function isInCodeBlock(index: number): boolean {
+    return codeBlocks.some(block => index >= block.start && index < block.end);
+  }
+
+  // Process display math ($$...$$) first
+  let result = text;
+  const displayMathPattern = /\$\$([^\$]+)\$\$/g;
+  const displayMatches: Array<{ match: string; latex: string; index: number }> = [];
+  
+  while ((match = displayMathPattern.exec(text)) !== null) {
+    if (!isInCodeBlock(match.index)) {
+      displayMatches.push({
+        match: match[0],
+        latex: match[1].trim(),
+        index: match.index,
+      });
+    }
+  }
+
+  // Replace display math from end to start to preserve indices
+  for (let i = displayMatches.length - 1; i >= 0; i--) {
+    const { match, latex, index } = displayMatches[i];
+    try {
+      const rendered = katex.renderToString(latex, {
+        displayMode: true,
+        throwOnError: false,
+        trust: false,
+      });
+      result = result.substring(0, index) + rendered + result.substring(index + match.length);
+    } catch (error) {
+      console.warn("KaTeX display math rendering error:", error);
+    }
+  }
+
+  // Process inline math ($...$)
+  // Use a more careful pattern to avoid matching $$ from display math
+  const inlineMathPattern = /(?<!\$)\$(?!\$)([^\$\n]+)\$(?!\$)/g;
+  const inlineMatches: Array<{ match: string; latex: string; index: number }> = [];
+  
+  while ((match = inlineMathPattern.exec(result)) !== null) {
+    if (!isInCodeBlock(match.index)) {
+      inlineMatches.push({
+        match: match[0],
+        latex: match[1].trim(),
+        index: match.index,
+      });
+    }
+  }
+
+  // Replace inline math from end to start to preserve indices
+  for (let i = inlineMatches.length - 1; i >= 0; i--) {
+    const { match, latex, index } = inlineMatches[i];
+    try {
+      const rendered = katex.renderToString(latex, {
+        displayMode: false,
+        throwOnError: false,
+        trust: false,
+      });
+      result = result.substring(0, index) + rendered + result.substring(index + match.length);
+    } catch (error) {
+      console.warn("KaTeX inline math rendering error:", error);
+    }
+  }
+
+  return result;
+}
+
 export function toSanitizedMarkdownHtml(markdown: string): string {
   const input = markdown.trim();
   if (!input) {
@@ -115,7 +249,9 @@ export function toSanitizedMarkdownHtml(markdown: string): string {
     }
     return sanitized;
   }
-  const rendered = marked.parse(`${truncated.text}${suffix}`, {
+  // Process LaTeX before markdown rendering
+  const withLatex = processLatex(`${truncated.text}${suffix}`);
+  const rendered = marked.parse(withLatex, {
     renderer: htmlEscapeRenderer,
   }) as string;
   const sanitized = DOMPurify.sanitize(rendered, sanitizeOptions);
