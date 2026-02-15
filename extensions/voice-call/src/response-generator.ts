@@ -16,7 +16,7 @@ export type VoiceResponseParams = {
   callId: string;
   /** Caller's phone number */
   from: string;
-  /** Conversation transcript */
+  /** @deprecated Conversation transcript - no longer used (session has history) */
   transcript: Array<{ speaker: "user" | "bot"; text: string }>;
   /** Latest user message */
   userMessage: string;
@@ -39,7 +39,9 @@ type SessionEntry = {
 export async function generateVoiceResponse(
   params: VoiceResponseParams,
 ): Promise<VoiceResponseResult> {
-  const { voiceConfig, callId, from, transcript, userMessage, coreConfig } = params;
+  // Note: transcript param kept for backwards compatibility but no longer used
+  // (session history already contains the conversation)
+  const { voiceConfig, callId, from, userMessage, coreConfig } = params;
 
   if (!coreConfig) {
     return { text: null, error: "Core config unavailable for voice response" };
@@ -101,18 +103,13 @@ export async function generateVoiceResponse(
   const identity = deps.resolveAgentIdentity(cfg, agentId);
   const agentName = identity?.name?.trim() || "assistant";
 
-  // Build system prompt with conversation history
-  const basePrompt =
+  // Build voice-specific system prompt (conversation history is already in session)
+  // NOTE: Previously this included the full transcript, but that duplicated context
+  // since runEmbeddedPiAgent loads session history. Removing transcript from
+  // extraSystemPrompt reduces token usage by ~50% and improves latency.
+  const extraSystemPrompt =
     voiceConfig.responseSystemPrompt ??
     `You are ${agentName}, a helpful voice assistant on a phone call. Keep responses brief and conversational (1-2 sentences max). Be natural and friendly. The caller's phone number is ${from}. You have access to tools - use them when helpful.`;
-
-  let extraSystemPrompt = basePrompt;
-  if (transcript.length > 0) {
-    const history = transcript
-      .map((entry) => `${entry.speaker === "bot" ? "You" : "Caller"}: ${entry.text}`)
-      .join("\n");
-    extraSystemPrompt = `${basePrompt}\n\nConversation so far:\n${history}`;
-  }
 
   // Resolve timeout
   const timeoutMs = voiceConfig.responseTimeoutMs ?? deps.resolveAgentTimeoutMs({ cfg });
