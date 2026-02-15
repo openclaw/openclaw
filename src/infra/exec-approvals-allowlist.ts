@@ -68,11 +68,6 @@ export function isSafeBinUsage(params: {
   cwd?: string;
   fileExists?: (filePath: string) => boolean;
 }): boolean {
-  // Windows host exec uses PowerShell, which has different parsing/expansion rules.
-  // Keep safeBins conservative there (require explicit allowlist entries).
-  if (isWindowsPlatform(process.platform)) {
-    return false;
-  }
   if (params.safeBins.size === 0) {
     return false;
   }

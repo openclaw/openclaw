@@ -24,6 +24,14 @@ export type ExecApprovalForwardingConfig = {
   targets?: ExecApprovalForwardTarget[];
 };
 
+export type AgentShieldApprovalForwardingConfig = {
+  /** Enable forwarding AgentShield approvals to chat channels. Default: false. */
+  enabled?: boolean;
+  /** Explicit delivery targets. */
+  targets?: ExecApprovalForwardTarget[];
+};
+
 export type ApprovalsConfig = {
   exec?: ExecApprovalForwardingConfig;
+  agentshield?: AgentShieldApprovalForwardingConfig;
 };

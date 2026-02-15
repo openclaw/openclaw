@@ -1,0 +1,8 @@
+{
+  "id": "agentshield",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
