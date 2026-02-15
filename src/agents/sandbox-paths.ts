@@ -30,11 +30,15 @@ function resolveToCwd(filePath: string, cwd: string): string {
   return path.resolve(cwd, expanded);
 }
 
+export function resolveSandboxInputPath(filePath: string, cwd: string): string {
+  return resolveToCwd(filePath, cwd);
+}
+
 export function resolveSandboxPath(params: { filePath: string; cwd: string; root: string }): {
   resolved: string;
   relative: string;
 } {
-  const resolved = resolveToCwd(params.filePath, params.cwd);
+  const resolved = resolveSandboxInputPath(params.filePath, params.cwd);
   const rootResolved = path.resolve(params.root);
   const relative = path.relative(rootResolved, resolved);
   if (!relative || relative === "") {
