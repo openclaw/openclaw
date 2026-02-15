@@ -439,7 +439,7 @@ export async function sendMessageTelegram(
     // When splitting, put reply_markup only on the follow-up text (the "main" content),
     // not on the media message.
     const baseMediaParams = {
-      ...(hasThreadParams ? threadParams : {}),
+      ...(Object.keys(threadParams).length > 0 ? threadParams : {}),
       ...(!needsSeparateText && replyMarkup ? { reply_markup: replyMarkup } : {}),
     };
     const mediaParams = {
@@ -612,7 +612,7 @@ export async function sendMessageTelegram(
     throw new Error("Message must be non-empty for Telegram sends");
   }
   const textParams =
-    hasThreadParams || replyMarkup
+    Object.keys(threadParams).length > 0 || replyMarkup
       ? {
           ...threadParams,
           ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
@@ -890,7 +890,6 @@ export async function sendStickerTelegram(
   if (opts.replyToMessageId != null) {
     threadParams.reply_to_message_id = Math.trunc(opts.replyToMessageId);
   }
-  const hasThreadParams = Object.keys(threadParams).length > 0;
 
   const request = createTelegramRetryRunner({
     retry: opts.retry,
@@ -904,7 +903,7 @@ export async function sendStickerTelegram(
       throw err;
     });
 
-  const stickerParams = hasThreadParams ? threadParams : undefined;
+  const stickerParams = Object.keys(threadParams).length > 0 ? threadParams : undefined;
 
   const result = await sendWithThreadFallback(
     stickerParams as Record<string, unknown>,
@@ -979,12 +978,6 @@ export async function sendPollTelegram(
   // Normalize the poll input (validates question, options, maxSelections)
   const normalizedPoll = normalizePollInput(poll, { maxOptions: 10 });
 
-  const messageThreadId =
-    opts.messageThreadId != null ? opts.messageThreadId : target.messageThreadId;
-  const threadSpec =
-    messageThreadId != null ? { id: messageThreadId, scope: "forum" as const } : undefined;
-  const threadIdParams = buildTelegramThreadParams(threadSpec);
-
   // Build poll options as simple strings (Grammy accepts string[] or InputPollOption[])
   const pollOptions = normalizedPoll.options;
 
@@ -1020,7 +1013,16 @@ export async function sendPollTelegram(
     allows_multiple_answers: normalizedPoll.maxSelections > 1,
     is_anonymous: opts.isAnonymous ?? true,
     ...(durationSeconds !== undefined ? { open_period: durationSeconds } : {}),
-    ...(threadIdParams ? threadIdParams : {}),
+    ...buildTelegramThreadParams(
+      opts.messageThreadId != null
+        ? opts.messageThreadId
+        : target.messageThreadId
+          ? {
+              id: opts.messageThreadId != null ? opts.messageThreadId : target.messageThreadId,
+              scope: "forum" as const,
+            }
+          : undefined,
+    ),
     ...(opts.replyToMessageId != null
       ? { reply_to_message_id: Math.trunc(opts.replyToMessageId) }
       : {}),
