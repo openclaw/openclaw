@@ -1,4 +1,5 @@
 import DOMPurify from "dompurify";
+import katex from "katex";
 import { marked } from "marked";
 import { truncateText } from "./format.ts";
 
@@ -42,6 +43,92 @@ const sanitizeOptions = {
   ALLOWED_ATTR: allowedAttrs,
   ADD_DATA_URI_TAGS: ["img"],
 };
+
+const MATH_PLACEHOLDER_PREFIX = "KATEXPLACEHOLDER";
+
+function extractAndRenderMath(text: string): { text: string; replacements: Map<string, string> } {
+  const replacements = new Map<string, string>();
+  let counter = 0;
+
+  const parts = text.split(/(```[\s\S]*?```|`[^`\n]+`)/g);
+  const processed = parts.map((part, i) => {
+    if (i % 2 === 1) {
+      return part;
+    }
+
+    let result = part.replace(/\$\$([\s\S]+?)\$\$/g, (_match, expr: string) => {
+      const placeholder = `${MATH_PLACEHOLDER_PREFIX}${counter++}END`;
+      try {
+        replacements.set(
+          placeholder,
+          katex.renderToString(expr.trim(), { displayMode: true, throwOnError: false }),
+        );
+      } catch {
+        replacements.set(placeholder, `<pre>${escapeHtml(expr)}</pre>`);
+      }
+      return placeholder;
+    });
+
+    result = result.replace(/\\\[([\s\S]+?)\\\]/g, (_match, expr: string) => {
+      const placeholder = `${MATH_PLACEHOLDER_PREFIX}${counter++}END`;
+      try {
+        replacements.set(
+          placeholder,
+          katex.renderToString(expr.trim(), { displayMode: true, throwOnError: false }),
+        );
+      } catch {
+        replacements.set(placeholder, `<pre>${escapeHtml(expr)}</pre>`);
+      }
+      return placeholder;
+    });
+
+    result = result.replace(
+      /(?<!\$)\$(?!\$)(?!\d)((?:[^$\\]|\\[\s\S])+?)\$(?!\$)/g,
+      (_match, expr: string) => {
+        const placeholder = `${MATH_PLACEHOLDER_PREFIX}${counter++}END`;
+        try {
+          replacements.set(
+            placeholder,
+            katex.renderToString(expr.trim(), { displayMode: false, throwOnError: false }),
+          );
+        } catch {
+          replacements.set(placeholder, `<code>${escapeHtml(expr)}</code>`);
+        }
+        return placeholder;
+      },
+    );
+
+    result = result.replace(/\\\(([\s\S]+?)\\\)/g, (_match, expr: string) => {
+      const placeholder = `${MATH_PLACEHOLDER_PREFIX}${counter++}END`;
+      try {
+        replacements.set(
+          placeholder,
+          katex.renderToString(expr.trim(), { displayMode: false, throwOnError: false }),
+        );
+      } catch {
+        replacements.set(placeholder, `<code>${escapeHtml(expr)}</code>`);
+      }
+      return placeholder;
+    });
+
+    return result;
+  });
+
+  return { text: processed.join(""), replacements };
+}
+
+function restoreMath(html: string, replacements: Map<string, string>): string {
+  if (replacements.size === 0) {
+    return html;
+  }
+  let result = html;
+  for (const [placeholder, rendered] of replacements) {
+    const escaped = escapeHtml(placeholder);
+    result = result.replaceAll(escaped, rendered);
+    result = result.replaceAll(placeholder, rendered);
+  }
+  return result;
+}
 
 let hooksInstalled = false;
 const MARKDOWN_CHAR_LIMIT = 140_000;
@@ -115,14 +202,16 @@ export function toSanitizedMarkdownHtml(markdown: string): string {
     }
     return sanitized;
   }
-  const rendered = marked.parse(`${truncated.text}${suffix}`, {
+  const { text: mathProcessed, replacements } = extractAndRenderMath(`${truncated.text}${suffix}`);
+  const rendered = marked.parse(mathProcessed, {
     renderer: htmlEscapeRenderer,
   }) as string;
   const sanitized = DOMPurify.sanitize(rendered, sanitizeOptions);
+  const final = restoreMath(sanitized, replacements);
   if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
-    setCachedMarkdown(input, sanitized);
+    setCachedMarkdown(input, final);
   }
-  return sanitized;
+  return final;
 }
 
 // Prevent raw HTML in chat messages from being rendered as formatted HTML.

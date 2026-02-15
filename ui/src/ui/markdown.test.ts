@@ -48,4 +48,50 @@ describe("toSanitizedMarkdownHtml", () => {
     expect(html).not.toContain("javascript:");
     expect(html).not.toContain("src=");
   });
+
+  it("renders display math ($$...$$) with KaTeX", () => {
+    const html = toSanitizedMarkdownHtml("$$x^2 + y^2 = z^2$$");
+    expect(html).toContain("katex");
+    expect(html).not.toContain("$$");
+  });
+
+  it("renders inline math ($...$) with KaTeX", () => {
+    const html = toSanitizedMarkdownHtml("The formula $E = mc^2$ is famous.");
+    expect(html).toContain("katex");
+    expect(html).not.toContain("$E");
+  });
+
+  it("does not render dollar amounts as math", () => {
+    const html = toSanitizedMarkdownHtml("The price is $100.");
+    expect(html).not.toContain("katex");
+    expect(html).toContain("$100");
+  });
+
+  it("does not render math inside code blocks", () => {
+    const html = toSanitizedMarkdownHtml(["```", "$$x^2$$", "```"].join("\n"));
+    expect(html).not.toContain("katex");
+  });
+
+  it("renders complex LaTeX display math", () => {
+    const input = "$$\\mathbb{I}\\left[ \\frac{\\partial \\mathcal{L}}{\\partial t} \\right]$$";
+    const html = toSanitizedMarkdownHtml(input);
+    expect(html).toContain("katex");
+    expect(html).not.toContain("$$");
+  });
+
+  it("renders display math with \\\\[...\\\\] delimiters", () => {
+    const html = toSanitizedMarkdownHtml("\\[x^2 + y^2 = z^2\\]");
+    expect(html).toContain("katex");
+  });
+
+  it("renders inline math with \\\\(...\\\\) delimiters", () => {
+    const html = toSanitizedMarkdownHtml("The formula \\(E = mc^2\\) is famous.");
+    expect(html).toContain("katex");
+  });
+
+  it("renders mixed LaTeX-style and dollar-style math", () => {
+    const input = "Display: \\[x^2\\] and inline \\(y^2\\) plus $z^2$ here.";
+    const html = toSanitizedMarkdownHtml(input);
+    expect(html).toContain("katex");
+  });
 });

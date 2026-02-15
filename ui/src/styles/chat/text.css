@@ -142,3 +142,28 @@
   padding-left: 0;
   padding-right: 1em;
 }
+
+/* KaTeX math blocks */
+.chat-text :where(.katex-display) {
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 6px;
+  padding: 12px 14px;
+  margin: 0.6em 0;
+  overflow-x: auto;
+}
+
+.chat-text :where(.katex:not(.katex-display .katex)) {
+  background: rgba(0, 0, 0, 0.15);
+  padding: 0.15em 0.35em;
+  border-radius: 4px;
+}
+
+:root[data-theme="light"] .chat-text :where(.katex-display) {
+  background: rgba(0, 0, 0, 0.05);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+:root[data-theme="light"] .chat-text :where(.katex:not(.katex-display .katex)) {
+  background: rgba(0, 0, 0, 0.08);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+}
