@@ -6,8 +6,8 @@
  * merge/close decisions. Uses adaptive thinking for deep reasoning.
  * Silent labels only — no public bot comments.
  *
- * Default: Claude Opus 4.6 with adaptive thinking (effort=high).
- * Override model via TRIAGE_MODEL, effort via TRIAGE_EFFORT.
+ * Default: Claude Sonnet 4.5 (override via TRIAGE_MODEL, effort via TRIAGE_EFFORT).
+ * Use TRIAGE_MODEL=claude-opus-4-6 for frontier reasoning on ambiguous PRs.
  * Cost tracking built-in — logs per-call and cumulative costs.
  */
 
@@ -42,8 +42,8 @@ if (!GITHUB_TOKEN) {
 }
 
 const ANTHROPIC_API = "https://api.anthropic.com/v1/messages";
-const MODEL = process.env.TRIAGE_MODEL || "claude-opus-4-6";
-const EFFORT = process.env.TRIAGE_EFFORT || "high";
+const MODEL = process.env.TRIAGE_MODEL || "claude-sonnet-4-5-20250929";
+const EFFORT = process.env.TRIAGE_EFFORT || "medium";
 const MAX_OPEN_PRS = Number(process.env.MAX_OPEN_PRS) || 500;
 const MAX_HISTORY = Number(process.env.MAX_HISTORY) || 100;
 const MAX_DIFF_CHARS = Number(process.env.MAX_DIFF_CHARS) || 8000;
@@ -57,8 +57,6 @@ const PRICING = {
   "claude-sonnet-4-5-20250929": { input: 3.0, cache_read: 0.3, cache_write: 3.75, output: 15.0 },
   "claude-haiku-4-5-20251001": { input: 1.0, cache_read: 0.1, cache_write: 1.25, output: 5.0 },
 };
-let totalCost = 0;
-
 const { gh, ghGraphQL, ghPaginate } = createGitHubClient(GITHUB_TOKEN);
 
 // --- LLM triage call ---
@@ -152,16 +150,16 @@ ${decisions.rejectedPRs.join("\n")}
 
   const deterministicContext =
     deterministicHints.length > 0
-      ? `\n<deterministic_signals>\n${deterministicHints.map((h) => `PR #${h.pr}: file_overlap=${h.jaccard}`).join("\n")}\n</deterministic_signals>`
+      ? `\n<deterministic_signals>\n${deterministicHints.map((h) => `PR #${h.pr}: file_overlap=${h.jaccard}, dir_overlap=${h.dirJaccard}`).join("\n")}\n</deterministic_signals>`
       : "";
 
   const userPrompt = `<new_pr>
 <title>${sanitizeUntrusted(targetPR.title, 200)}</title>
-<author>${targetPR.author}</author>
+<author>${sanitizeUntrusted(targetPR.author, 100)}</author>
 <branch>${sanitizeUntrusted(targetPR.branch, 200)}</branch>
 <size additions="${targetPR.additions}" deletions="${targetPR.deletions}" files="${targetPR.changed_files}" />
 <created>${targetPR.created_at}</created>
-<files>${targetPR.files.join(", ")}</files>
+<files>${sanitizeUntrusted(targetPR.files.join(", "), 8000)}</files>
 <description>${sanitizeUntrusted(targetPR.body, MAX_BODY_CHARS)}</description>
 <diff>${sanitizeUntrusted(targetPR.diff, MAX_DIFF_CHARS)}</diff>
 </new_pr>
@@ -184,28 +182,41 @@ Analyze this PR and respond with the triage JSON. PR #${targetPR.number} may app
     },
     system: [
       { type: "text", text: stableInstructions, cache_control: { type: "ephemeral" } },
-      { type: "text", text: dynamicContext, cache_control: { type: "ephemeral" } },
+      { type: "text", text: dynamicContext },
     ],
     messages: [{ role: "user", content: userPrompt }],
   };
 
-  const res = await fetch(ANTHROPIC_API, {
-    method: "POST",
-    headers: {
-      "x-api-key": ANTHROPIC_API_KEY,
-      "anthropic-version": "2023-06-01",
-      "anthropic-beta": "structured-outputs-2025-11-13",
-      "content-type": "application/json",
-    },
-    body: JSON.stringify(body),
-  });
+  let data;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const res = await fetch(ANTHROPIC_API, {
+      method: "POST",
+      headers: {
+        "x-api-key": ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+        "anthropic-beta": "structured-outputs-2025-11-13",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(120_000),
+    });
 
-  if (!res.ok) {
+    if (res.ok) {
+      data = await res.json();
+      break;
+    }
+
     const errBody = await res.text().catch(() => "");
+    if ((res.status >= 500 || res.status === 429) && attempt < 2) {
+      const delay = Math.pow(2, attempt + 1) * 1000;
+      console.warn(
+        `Anthropic API ${res.status}, retry in ${delay / 1000}s (${attempt + 1}/3)`,
+      );
+      await new Promise((r) => setTimeout(r, delay));
+      continue;
+    }
     throw new Error(`Anthropic API ${res.status}: ${errBody.slice(0, 300)}`);
   }
-
-  const data = await res.json();
 
   // Cost tracking (including thinking tokens)
   const usage = data.usage || {};
@@ -216,13 +227,12 @@ Analyze this PR and respond with the triage JSON. PR #${targetPR.number} may app
     ((usage.cache_creation_input_tokens || 0) / 1_000_000) * prices.cache_write;
   const outputCost = ((usage.output_tokens || 0) / 1_000_000) * prices.output;
   const callCost = inputCost + cacheReadCost + cacheCreateCost + outputCost;
-  totalCost += callCost;
 
   const thinkingTokens = usage.thinking_tokens || 0;
   console.log(
     `Tokens: ${usage.input_tokens || 0} in (${usage.cache_read_input_tokens || 0} cached, ${usage.cache_creation_input_tokens || 0} cache-write), ${usage.output_tokens || 0} out${thinkingTokens ? `, ${thinkingTokens} thinking` : ""}`,
   );
-  console.log(`Cost: $${callCost.toFixed(4)} this call | $${totalCost.toFixed(4)} total`);
+  console.log(`Cost: $${callCost.toFixed(4)}`);
 
   // Extract response — try text blocks, then json blocks, then any content
   for (const block of data.content || []) {
@@ -247,17 +257,16 @@ Analyze this PR and respond with the triage JSON. PR #${targetPR.number} may app
 // --- Main ---
 
 async function main() {
-  const prNumber = PR_NUMBER || 0;
-  if (!prNumber) {
+  if (!PR_NUMBER) {
     console.error("No PR number provided (set PR_NUMBER env var)");
     process.exit(1);
   }
 
-  console.log(`Triaging PR #${prNumber} on ${REPO} [model=${MODEL}, effort=${EFFORT}]`);
+  console.log(`Triaging PR #${PR_NUMBER} on ${REPO} [model=${MODEL}, effort=${EFFORT}]`);
 
   // Target PR is always fetched fresh (2-3 API calls)
   console.log("Fetching target PR...");
-  const targetPR = await getTargetPR(gh, REPO, prNumber, MAX_DIFF_CHARS, GITHUB_TOKEN);
+  const targetPR = await getTargetPR(gh, REPO, PR_NUMBER, MAX_DIFF_CHARS, GITHUB_TOKEN);
   console.log(`Target: "${targetPR.title}" by ${targetPR.author}, ${targetPR.files.length} files`);
 
   // Context: try cached snapshot first (hourly, shared across all PRs in window).
@@ -351,12 +360,12 @@ async function main() {
 
   if (!DRY_RUN) {
     console.log("Applying labels...");
-    await applyLabels(gh, REPO, prNumber, triage);
+    await applyLabels(gh, REPO, PR_NUMBER, triage);
   } else {
     console.log("DRY RUN — skipping label application");
   }
 
-  writeSummary(prNumber, triage, deterministicHints, { model: MODEL, effort: EFFORT, totalCost });
+  writeSummary(PR_NUMBER, triage, deterministicHints, { model: MODEL, effort: EFFORT });
   console.log("Done.");
 }
 

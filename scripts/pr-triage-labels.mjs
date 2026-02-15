@@ -16,15 +16,13 @@ const CATEGORY_LABELS = {
 
 async function ensureLabel(gh, repo, name, color) {
   try {
-    await gh(`/repos/${repo}/labels/${encodeURIComponent(name)}`);
+    await gh(`/repos/${repo}/labels`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, color }),
+    });
   } catch {
-    try {
-      await gh(`/repos/${repo}/labels`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, color }),
-      });
-    } catch {}
+    // Label already exists (422) or insufficient permissions — continue
   }
 }
 
@@ -55,6 +53,9 @@ export async function applyLabels(gh, repo, prNumber, triage) {
   } else if (triage.suggested_action === "needs-discussion") {
     await ensureLabel(gh, repo, "triage:needs-discussion", "c2e0c6");
     labels.push("triage:needs-discussion");
+  } else if (triage.suggested_action === "fast-track") {
+    await ensureLabel(gh, repo, "triage:fast-track", "0e8a16");
+    labels.push("triage:fast-track");
   }
 
   if (triage.quality_signals) {
@@ -104,7 +105,7 @@ export function writeSummary(prNumber, triage, deterministicHints, costInfo) {
   if (deterministicHints.length > 0) {
     lines.push("", "**Deterministic signals:**");
     for (const h of deterministicHints) {
-      lines.push(`- #${h.pr}: file overlap=${h.jaccard}`);
+      lines.push(`- #${h.pr}: file overlap=${h.jaccard}, dir overlap=${h.dirJaccard}`);
     }
   }
   const qs = triage.quality_signals || {};
@@ -119,7 +120,7 @@ export function writeSummary(prNumber, triage, deterministicHints, costInfo) {
   if (costInfo) {
     lines.push(
       "",
-      `**Model:** ${costInfo.model} | **Effort:** ${costInfo.effort} | **Cost:** $${costInfo.totalCost.toFixed(4)}`,
+      `**Model:** ${costInfo.model} | **Effort:** ${costInfo.effort}`,
     );
   }
   const summary = lines.join("\n");

@@ -155,7 +155,8 @@ function summarizePR(pr) {
   const moreFiles = (pr.files?.length || 0) > 6 ? ` +${pr.files.length - 6}` : "";
   const refs = issueRefs.length ? ` refs:${issueRefs.join(",")}` : "";
   const size = `+${pr.additions}/-${pr.deletions} ${pr.changed_files ?? pr.files?.length ?? "?"}f`;
-  return `#${pr.number} ${pr.title} ${size}\n  ${shortFiles.join(",")}${moreFiles}${refs}`;
+  const safeTitle = sanitizeUntrusted(pr.title, 200);
+  return `#${pr.number} ${safeTitle} ${size}\n  ${shortFiles.join(",")}${moreFiles}${refs}`;
 }
 
 export async function getTargetPR(gh, repo, prNumber, maxDiffChars, token) {
@@ -295,17 +296,29 @@ export async function getRecentDecisions(ghPaginate, repo, maxHistory) {
     .slice(0, maxHistory)
     .map(
       (pr) =>
-        `MERGED #${pr.number}: ${pr.title} (by ${pr.user?.login}, +${pr.additions}/-${pr.deletions})`,
+        `MERGED #${pr.number}: ${sanitizeUntrusted(pr.title, 200)} (by ${pr.user?.login}, +${pr.additions}/-${pr.deletions})`,
     );
   const rejectedPRs = merged
     .filter((pr) => !pr.merged_at)
     .slice(0, maxHistory)
     .map(
       (pr) =>
-        `CLOSED #${pr.number}: ${pr.title} (by ${pr.user?.login}, +${pr.additions}/-${pr.deletions})`,
+        `CLOSED #${pr.number}: ${sanitizeUntrusted(pr.title, 200)} (by ${pr.user?.login}, +${pr.additions}/-${pr.deletions})`,
     );
   return { mergedPRs, rejectedPRs };
 }
+
+// --- Shared enums (single source of truth for schema + validation) ---
+
+export const VALID_CATEGORIES = ["bug", "feature", "refactor", "test", "docs", "chore"];
+export const VALID_CONFIDENCE = ["high", "medium", "low"];
+export const VALID_ACTIONS = [
+  "needs-review",
+  "likely-duplicate",
+  "needs-discussion",
+  "auto-label-only",
+  "fast-track",
+];
 
 // --- JSON Schema for structured output ---
 
@@ -323,8 +336,8 @@ export const TRIAGE_SCHEMA = {
       items: { type: "integer" },
       description: "PR numbers with related/overlapping work",
     },
-    category: { type: "string", enum: ["bug", "feature", "refactor", "test", "docs", "chore"] },
-    confidence: { type: "string", enum: ["high", "medium", "low"] },
+    category: { type: "string", enum: VALID_CATEGORIES },
+    confidence: { type: "string", enum: VALID_CONFIDENCE },
     quality_signals: {
       type: "object",
       additionalProperties: false,
@@ -338,7 +351,7 @@ export const TRIAGE_SCHEMA = {
     },
     suggested_action: {
       type: "string",
-      enum: ["needs-review", "likely-duplicate", "needs-discussion", "auto-label-only"],
+      enum: VALID_ACTIONS,
     },
     reasoning: { type: "string", description: "Brief explanation of the triage decision" },
   },
@@ -363,7 +376,7 @@ export function sanitizeUntrusted(text, maxLen) {
     .slice(0, maxLen)
     .replace(/```/g, "'''")
     .replace(
-      /<\/?(?:system|human|assistant|instructions?|prompt|ignore|override)[^>]*>/gi,
+      /<\/?(?:system|human|assistant|instructions?|prompt|ignore|override|rules|task|open_prs|maintainer_decisions|new_pr|deterministic_signals|merged|closed_without_merge|project_focus|context|thinking|tool_use|function_call)[^>]*>/gi,
       "[FILTERED]",
     );
 }
@@ -374,19 +387,6 @@ export function extractJSON(text) {
   try {
     return JSON.parse(text);
   } catch {}
-  const fenced = text
-    .replace(/^```(?:json)?\n?/m, "")
-    .replace(/\n?```$/m, "")
-    .trim();
-  try {
-    return JSON.parse(fenced);
-  } catch {}
-  const braceMatch = text.match(/\{[\s\S]*\}/);
-  if (braceMatch) {
-    try {
-      return JSON.parse(braceMatch[0]);
-    } catch {}
-  }
   return null;
 }
 
@@ -411,18 +411,15 @@ export function validateTriageOutput(triage, knownPRNumbers) {
     triage.related_to = [];
   }
 
-  const validCategories = ["bug", "feature", "refactor", "test", "docs", "chore"];
-  if (!validCategories.includes(triage.category)) {
+  if (!VALID_CATEGORIES.includes(triage.category)) {
     triage.category = "chore";
   }
 
-  const validConfidence = ["high", "medium", "low"];
-  if (!validConfidence.includes(triage.confidence)) {
+  if (!VALID_CONFIDENCE.includes(triage.confidence)) {
     triage.confidence = "low";
   }
 
-  const validActions = ["needs-review", "likely-duplicate", "needs-discussion", "auto-label-only"];
-  if (!validActions.includes(triage.suggested_action)) {
+  if (!VALID_ACTIONS.includes(triage.suggested_action)) {
     triage.suggested_action = "needs-review";
   }
 
@@ -445,8 +442,25 @@ export function validateTriageOutput(triage, knownPRNumbers) {
 
 // --- Deterministic pre-enrichment (uses structured fileMap) ---
 
+function getDirs(files) {
+  return new Set(
+    files.map((f) => {
+      const parts = f.split("/");
+      return parts.length > 1 ? parts.slice(0, -1).join("/") : ".";
+    }),
+  );
+}
+
+export function jaccardSets(a, b) {
+  if (a.size === 0 || b.size === 0) return 0;
+  const intersection = [...a].filter((x) => b.has(x));
+  const union = new Set([...a, ...b]);
+  return intersection.length / union.size;
+}
+
 export function deterministicSignals(targetPR, fileMap) {
   const targetFiles = targetPR.files || [];
+  const targetDirs = getDirs(targetFiles);
   const signals = [];
 
   for (const [prNum, prFiles] of fileMap) {
@@ -454,8 +468,14 @@ export function deterministicSignals(targetPR, fileMap) {
       continue;
     }
     const jaccard = computeFileOverlap(targetFiles, prFiles);
-    if (jaccard > 0.3) {
-      signals.push({ pr: prNum, jaccard: Math.round(jaccard * 100) / 100 });
+    const dirJaccard = jaccardSets(targetDirs, getDirs(prFiles));
+
+    if (jaccard > 0.3 || dirJaccard > 0.5) {
+      signals.push({
+        pr: prNum,
+        jaccard: Math.round(jaccard * 100) / 100,
+        dirJaccard: Math.round(dirJaccard * 100) / 100,
+      });
     }
   }
 
