@@ -152,6 +152,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.memorySearch.sync.sessions.deltaMessages": "Session Delta Messages",
   "agents.defaults.memorySearch.query.maxResults": "Memory Search Max Results",
   "agents.defaults.memorySearch.query.minScore": "Memory Search Min Score",
+  "agents.defaults.memorySearch.query.maxInjectedChars": "Memory Search Max Injected Chars",
   "agents.defaults.memorySearch.query.hybrid.enabled": "Memory Search Hybrid",
   "agents.defaults.memorySearch.query.hybrid.vectorWeight": "Memory Search Vector Weight",
   "agents.defaults.memorySearch.query.hybrid.textWeight": "Memory Search Text Weight",

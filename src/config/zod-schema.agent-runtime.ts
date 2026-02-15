@@ -429,6 +429,7 @@ export const MemorySearchSchema = z
       .object({
         maxResults: z.number().int().positive().optional(),
         minScore: z.number().min(0).max(1).optional(),
+        maxInjectedChars: z.number().int().positive().optional(),
         hybrid: z
           .object({
             enabled: z.boolean().optional(),

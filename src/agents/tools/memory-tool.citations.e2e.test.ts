@@ -85,6 +85,39 @@ describe("memory search citations", () => {
     expect(details.results[0]?.snippet.length).toBeLessThanOrEqual(20);
   });
 
+  it("clamps builtin snippets to configured memorySearch injected budget", async () => {
+    backend = "builtin";
+    stubManager.search.mockResolvedValueOnce([
+      {
+        path: "MEMORY.md",
+        startLine: 11,
+        endLine: 15,
+        score: 0.91,
+        snippet: "x".repeat(200),
+        source: "memory" as const,
+      },
+    ]);
+
+    const cfg = {
+      memory: { citations: "off" },
+      agents: {
+        defaults: {
+          memorySearch: {
+            query: { maxInjectedChars: 40 },
+          },
+        },
+        list: [{ id: "main", default: true }],
+      },
+    };
+    const tool = createMemorySearchTool({ config: cfg });
+    if (!tool) {
+      throw new Error("tool missing");
+    }
+    const result = await tool.execute("builtin_budget", { query: "notes" });
+    const details = result.details as { results: Array<{ snippet: string; citation?: string }> };
+    expect(details.results[0]?.snippet.length).toBeLessThanOrEqual(40);
+  });
+
   it("honors auto mode for direct chats", async () => {
     backend = "builtin";
     const cfg = {

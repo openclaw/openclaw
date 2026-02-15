@@ -1,7 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ImageContent } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
-import { injectHistoryImagesIntoMessages } from "./attempt.js";
+import { decideSessionSummaryInjection, injectHistoryImagesIntoMessages } from "./attempt.js";
 
 describe("injectHistoryImagesIntoMessages", () => {
   const image: ImageContent = { type: "image", data: "abc", mimeType: "image/png" };
@@ -54,5 +54,66 @@ describe("injectHistoryImagesIntoMessages", () => {
 
     expect(didMutate).toBe(false);
     expect(messages[0]?.content).toBe("noop");
+  });
+});
+
+describe("decideSessionSummaryInjection", () => {
+  it("injects summary when base plan was trimmed", () => {
+    const decision = decideSessionSummaryInjection({
+      summaryContext: "[SESSION_SUMMARY]\n- x",
+      basePlan: {
+        messages: [],
+        trimmed: true,
+        reason: "budget-trimmed",
+        estimatedHistoryTokensBefore: 8_000,
+        estimatedHistoryTokensAfter: 2_000,
+        historyBudgetTokens: 4_000,
+        droppedMessages: 4,
+        droppedTokens: 6_000,
+      },
+    });
+
+    expect(decision.inject).toBe(true);
+    expect(decision.reason).toBe("trimmed");
+  });
+
+  it("injects summary when pressure ratio exceeds threshold", () => {
+    const decision = decideSessionSummaryInjection({
+      summaryContext: "[SESSION_SUMMARY]\n- x",
+      basePlan: {
+        messages: [],
+        trimmed: false,
+        reason: "under-budget",
+        estimatedHistoryTokensBefore: 7_400,
+        estimatedHistoryTokensAfter: 7_400,
+        historyBudgetTokens: 10_000,
+        droppedMessages: 0,
+        droppedTokens: 0,
+      },
+      pressureThreshold: 0.7,
+    });
+
+    expect(decision.inject).toBe(true);
+    expect(decision.reason).toBe("pressure");
+  });
+
+  it("skips summary when pressure is low and no trimming occurred", () => {
+    const decision = decideSessionSummaryInjection({
+      summaryContext: "[SESSION_SUMMARY]\n- x",
+      basePlan: {
+        messages: [],
+        trimmed: false,
+        reason: "under-budget",
+        estimatedHistoryTokensBefore: 2_000,
+        estimatedHistoryTokensAfter: 2_000,
+        historyBudgetTokens: 10_000,
+        droppedMessages: 0,
+        droppedTokens: 0,
+      },
+      pressureThreshold: 0.7,
+    });
+
+    expect(decision.inject).toBe(false);
+    expect(decision.reason).toBe("none");
   });
 });
