@@ -1,0 +1,14 @@
+# Progress log — Antfarm run 4e9d832b-b440-4c68-a21c-9ebe6c1171ab
+
+## Codebase Patterns
+- Next.js App Router under src/app
+- Tailwind utility classes used for styling (globals.css)
+- API routes under src/app/api/*/route.ts (nodejs runtime)
+
+## Stories
+- S1: App shell layout with persistent left nav
+  - Added app-level layout with SideNav + main content container
+  - Added client-side NavLink for active state using next/navigation usePathname
+  - Added placeholder /calendar page (no schedules model yet)
+  - Fixed existing ESLint no-explicit-any violations so npm run lint passes
+
