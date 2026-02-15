@@ -9,6 +9,45 @@ vi.mock("openclaw/plugin-sdk", () => ({
     return stripped.includes("@g.us") ? stripped : `${stripped}@s.whatsapp.net`;
   },
   isWhatsAppGroupJid: (value: string) => value.endsWith("@g.us"),
+  resolveWhatsAppOutboundTarget: ({
+    to,
+    allowFrom,
+    mode,
+  }: {
+    to?: string;
+    allowFrom: string[];
+    mode: "explicit" | "implicit";
+  }) => {
+    const raw = typeof to === "string" ? to.trim() : "";
+    if (!raw) {
+      return { ok: false, error: new Error("missing target") };
+    }
+    const normalizeWhatsAppTarget = (value: string) => {
+      if (value === "invalid-target") return null;
+      const stripped = value.replace(/^whatsapp:/i, "").replace(/^\+/, "");
+      return stripped.includes("@g.us") ? stripped : `${stripped}@s.whatsapp.net`;
+    };
+    const normalized = normalizeWhatsAppTarget(raw);
+    if (!normalized) {
+      return { ok: false, error: new Error("invalid target") };
+    }
+
+    if (mode === "implicit" && !normalized.endsWith("@g.us")) {
+      const allowAll = allowFrom.includes("*");
+      const allowExact = allowFrom.some((entry) => {
+        if (!entry) {
+          return false;
+        }
+        const normalizedEntry = normalizeWhatsAppTarget(entry.trim());
+        return normalizedEntry?.toLowerCase() === normalized.toLowerCase();
+      });
+      if (!allowAll && !allowExact) {
+        return { ok: false, error: new Error("target not allowlisted") };
+      }
+    }
+
+    return { ok: true, to: normalized };
+  },
   missingTargetError: (provider: string, hint: string) =>
     new Error(`Delivering to ${provider} requires target ${hint}`),
   WhatsAppConfigSchema: {},
