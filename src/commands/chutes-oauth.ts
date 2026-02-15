@@ -15,6 +15,34 @@ type OAuthPrompt = {
   placeholder?: string;
 };
 
+function parseManualOAuthInput(
+  input: string,
+  expectedState: string,
+): { code: string; state: string } {
+  const trimmed = String(input ?? "").trim();
+  if (!trimmed) {
+    throw new Error("Missing OAuth redirect URL or authorization code.");
+  }
+
+  // Support pasting either:
+  // - Full redirect URL (preferred; validates state)
+  // - Raw authorization code (legacy/manual copy flows)
+  const looksLikeRedirect =
+    /^https?:\/\//i.test(trimmed) || trimmed.includes("://") || trimmed.includes("?");
+  if (!looksLikeRedirect) {
+    return { code: trimmed, state: expectedState };
+  }
+
+  const parsed = parseOAuthCallbackInput(trimmed, expectedState);
+  if ("error" in parsed) {
+    throw new Error(parsed.error);
+  }
+  if (parsed.state !== expectedState) {
+    throw new Error("Invalid OAuth state");
+  }
+  return parsed;
+}
+
 function buildAuthorizeUrl(params: {
   clientId: string;
   redirectUri: string;
@@ -156,17 +184,10 @@ export async function loginChutes(params: {
     await params.onAuth({ url });
     params.onProgress?.("Waiting for redirect URL…");
     const input = await params.onPrompt({
-      message: "Paste the redirect URL",
+      message: "Paste the redirect URL (or authorization code)",
       placeholder: `${params.app.redirectUri}?code=...&state=...`,
     });
-    const parsed = parseOAuthCallbackInput(String(input), state);
-    if ("error" in parsed) {
-      throw new Error(parsed.error);
-    }
-    if (parsed.state !== state) {
-      throw new Error("Invalid OAuth state");
-    }
-    codeAndState = parsed;
+    codeAndState = parseManualOAuthInput(input, state);
   } else {
     const callback = waitForLocalCallback({
       redirectUri: params.app.redirectUri,
@@ -176,17 +197,10 @@ export async function loginChutes(params: {
     }).catch(async () => {
       params.onProgress?.("OAuth callback not detected; paste redirect URL…");
       const input = await params.onPrompt({
-        message: "Paste the redirect URL",
+        message: "Paste the redirect URL (or authorization code)",
         placeholder: `${params.app.redirectUri}?code=...&state=...`,
       });
-      const parsed = parseOAuthCallbackInput(String(input), state);
-      if ("error" in parsed) {
-        throw new Error(parsed.error);
-      }
-      if (parsed.state !== state) {
-        throw new Error("Invalid OAuth state");
-      }
-      return parsed;
+      return parseManualOAuthInput(input, state);
     });
 
     await params.onAuth({ url });
