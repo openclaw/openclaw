@@ -17,6 +17,16 @@ import type { VoiceCallProvider } from "./base.js";
 import { verifyTelnyxWebhook } from "../webhook-security.js";
 
 /**
+ * Map Telnyx direction strings ("incoming"/"outgoing") to the normalised
+ * schema values ("inbound"/"outbound").
+ */
+function mapTelnyxDirection(raw: unknown): "inbound" | "outbound" | undefined {
+  if (raw === "incoming") return "inbound";
+  if (raw === "outgoing") return "outbound";
+  return undefined;
+}
+
+/**
  * Telnyx Voice API provider implementation.
  *
  * Uses Telnyx Call Control API v2 for managing calls.
@@ -139,7 +149,13 @@ export class TelnyxProvider implements VoiceCallProvider {
 
     switch (data.event_type) {
       case "call.initiated":
-        return { ...baseEvent, type: "call.initiated" };
+        return {
+          ...baseEvent,
+          type: "call.initiated",
+          direction: mapTelnyxDirection(data.payload?.direction),
+          from: typeof data.payload?.from === "string" ? data.payload.from : undefined,
+          to: typeof data.payload?.to === "string" ? data.payload.to : undefined,
+        };
 
       case "call.ringing":
         return { ...baseEvent, type: "call.ringing" };

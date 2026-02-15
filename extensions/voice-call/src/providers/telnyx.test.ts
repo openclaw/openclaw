@@ -22,6 +22,61 @@ function decodeBase64Url(input: string): Buffer {
   return Buffer.from(padded, "base64");
 }
 
+describe("TelnyxProvider.parseWebhookEvent", () => {
+  function createInboundCallCtx(overrides?: Record<string, unknown>): WebhookContext {
+    return createCtx({
+      rawBody: JSON.stringify({
+        data: {
+          id: "evt-1",
+          event_type: "call.initiated",
+          payload: {
+            call_control_id: "ctrl-1",
+            direction: "incoming",
+            from: "+15551234567",
+            to: "+15559876543",
+            ...overrides,
+          },
+        },
+      }),
+    });
+  }
+
+  it("maps direction, from, and to for inbound call.initiated events (#16601)", () => {
+    const provider = new TelnyxProvider(
+      { apiKey: "KEY", connectionId: "CONN" },
+      { skipVerification: true },
+    );
+
+    const result = provider.parseWebhookEvent(createInboundCallCtx());
+    expect(result.events).toHaveLength(1);
+    const event = result.events[0];
+    expect(event.type).toBe("call.initiated");
+    expect(event.direction).toBe("inbound");
+    expect(event.from).toBe("+15551234567");
+    expect(event.to).toBe("+15559876543");
+  });
+
+  it("maps outgoing direction to outbound", () => {
+    const provider = new TelnyxProvider(
+      { apiKey: "KEY", connectionId: "CONN" },
+      { skipVerification: true },
+    );
+
+    const result = provider.parseWebhookEvent(createInboundCallCtx({ direction: "outgoing" }));
+    expect(result.events[0].direction).toBe("outbound");
+  });
+
+  it("leaves direction undefined for unknown values", () => {
+    const provider = new TelnyxProvider(
+      { apiKey: "KEY", connectionId: "CONN" },
+      { skipVerification: true },
+    );
+
+    const result = provider.parseWebhookEvent(createInboundCallCtx({ direction: "other" }));
+    expect(result.events[0].direction).toBeUndefined();
+  });
+});
+
 describe("TelnyxProvider.verifyWebhook", () => {
   it("fails closed when public key is missing and skipVerification is false", () => {
     const provider = new TelnyxProvider(
