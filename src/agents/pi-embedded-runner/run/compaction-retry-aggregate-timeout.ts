@@ -9,7 +9,7 @@ export async function waitForCompactionRetryWithAggregateTimeout(params: {
   onTimeout?: () => void;
 }): Promise<{ timedOut: boolean }> {
   const timeoutMsRaw = params.aggregateTimeoutMs;
-  const timeoutMs = Math.max(1, Math.floor(timeoutMsRaw));
+  const timeoutMs = Number.isFinite(timeoutMsRaw) ? Math.max(1, Math.floor(timeoutMsRaw)) : 1;
 
   let timer: ReturnType<typeof setTimeout> | undefined;
   let timedOut = false;
@@ -29,7 +29,7 @@ export async function waitForCompactionRetryWithAggregateTimeout(params: {
       params.onTimeout?.();
     }
   } finally {
-    if (timer) {
+    if (timer !== undefined) {
       clearTimeout(timer);
     }
   }

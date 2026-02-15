@@ -124,7 +124,7 @@ export async function runGatewayLoop(params: {
           const activeRuns = getActiveEmbeddedRunCount();
 
           // Abort compacting embedded runs before draining. In-flight compaction can take
-          // 60–90s and holds the session write lock; restarting mid-compaction can leave
+          // 60-90s and holds the session write lock; restarting mid-compaction can leave
           // the lock held by the previous lifecycle.
           if (activeRuns > 0) {
             abortEmbeddedPiRun(undefined, { mode: "compacting" });

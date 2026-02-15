@@ -59,7 +59,12 @@ export function abortEmbeddedPiRun(
       return false;
     }
     diag.debug(`aborting run: sessionId=${sessionId}`);
-    handle.abort();
+    try {
+      handle.abort();
+    } catch (err) {
+      diag.warn(`abort failed: sessionId=${sessionId} err=${String(err)}`);
+      return false;
+    }
     return true;
   }
 
@@ -71,8 +76,12 @@ export function abortEmbeddedPiRun(
         continue;
       }
       diag.debug(`aborting compacting run: sessionId=${id}`);
-      handle.abort();
-      aborted = true;
+      try {
+        handle.abort();
+        aborted = true;
+      } catch (err) {
+        diag.warn(`abort failed: sessionId=${id} err=${String(err)}`);
+      }
     }
     return aborted;
   }
@@ -81,8 +90,12 @@ export function abortEmbeddedPiRun(
     let aborted = false;
     for (const [id, handle] of ACTIVE_EMBEDDED_RUNS) {
       diag.debug(`aborting run: sessionId=${id}`);
-      handle.abort();
-      aborted = true;
+      try {
+        handle.abort();
+        aborted = true;
+      } catch (err) {
+        diag.warn(`abort failed: sessionId=${id} err=${String(err)}`);
+      }
     }
     return aborted;
   }
