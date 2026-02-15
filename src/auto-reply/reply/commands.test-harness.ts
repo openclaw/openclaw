@@ -7,6 +7,9 @@ export function buildCommandTestParams(
   commandBody: string,
   cfg: OpenClawConfig,
   ctxOverrides?: Partial<MsgContext>,
+  options?: {
+    workspaceDir?: string;
+  },
 ) {
   const ctx = {
     Body: commandBody,
@@ -33,7 +36,7 @@ export function buildCommandTestParams(
     directives: parseInlineDirectives(commandBody),
     elevated: { enabled: true, allowed: true, failures: [] },
     sessionKey: "agent:main:main",
-    workspaceDir: "/tmp",
+    workspaceDir: options?.workspaceDir ?? "/tmp",
     defaultGroupActivation: () => "mention",
     resolvedVerboseLevel: "off" as const,
     resolvedReasoningLevel: "off" as const,
