@@ -3,26 +3,15 @@ import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
 import { drainSystemEvents, peekSystemEvents } from "../infra/system-events.js";
 import {
   cronIsolatedRun,
-  getFreePort,
   installGatewayTestHooks,
-  startGatewayServer,
   testState,
+  withGatewayServer,
   waitForSystemEvent,
 } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
 const resolveMainKey = () => resolveMainSessionKeyFromConfig();
-
-async function withGatewayServer<T>(fn: (ctx: { port: number }) => Promise<T>): Promise<T> {
-  const port = await getFreePort();
-  const server = await startGatewayServer(port);
-  try {
-    return await fn({ port });
-  } finally {
-    await server.close();
-  }
-}
 
 describe("gateway server hooks", () => {
   test("handles auth, wake, and agent flows", async () => {

@@ -13,13 +13,12 @@ import { createRegistry } from "./server.e2e-registry-helpers.js";
 import {
   agentCommand,
   connectOk,
-  getFreePort,
   installGatewayTestHooks,
   onceMessage,
   rpcReq,
-  startGatewayServer,
   startServerWithClient,
   testState,
+  withGatewayServer,
   writeSessionStore,
 } from "./test-helpers.js";
 
@@ -326,52 +325,50 @@ describe("gateway server agent", () => {
   });
 
   test("agent dedupe survives reconnect", { timeout: 60_000 }, async () => {
-    const port = await getFreePort();
-    const server = await startGatewayServer(port);
+    await withGatewayServer(async ({ port }) => {
+      const dial = async () => {
+        const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+        await new Promise<void>((resolve) => ws.once("open", resolve));
+        await connectOk(ws);
+        return ws;
+      };
 
-    const dial = async () => {
-      const ws = new WebSocket(`ws://127.0.0.1:${port}`);
-      await new Promise<void>((resolve) => ws.once("open", resolve));
-      await connectOk(ws);
-      return ws;
-    };
+      const idem = "reconnect-agent";
+      const ws1 = await dial();
+      const final1P = onceMessage(
+        ws1,
+        (o) => o.type === "res" && o.id === "ag1" && o.payload?.status !== "accepted",
+        6000,
+      );
+      ws1.send(
+        JSON.stringify({
+          type: "req",
+          id: "ag1",
+          method: "agent",
+          params: { message: "hi", idempotencyKey: idem },
+        }),
+      );
+      const final1 = await final1P;
+      ws1.close();
 
-    const idem = "reconnect-agent";
-    const ws1 = await dial();
-    const final1P = onceMessage(
-      ws1,
-      (o) => o.type === "res" && o.id === "ag1" && o.payload?.status !== "accepted",
-      6000,
-    );
-    ws1.send(
-      JSON.stringify({
-        type: "req",
-        id: "ag1",
-        method: "agent",
-        params: { message: "hi", idempotencyKey: idem },
-      }),
-    );
-    const final1 = await final1P;
-    ws1.close();
-
-    const ws2 = await dial();
-    const final2P = onceMessage(
-      ws2,
-      (o) => o.type === "res" && o.id === "ag2" && o.payload?.status !== "accepted",
-      6000,
-    );
-    ws2.send(
-      JSON.stringify({
-        type: "req",
-        id: "ag2",
-        method: "agent",
-        params: { message: "hi again", idempotencyKey: idem },
-      }),
-    );
-    const res = await final2P;
-    expect(res.payload).toEqual(final1.payload);
-    ws2.close();
-    await server.close();
+      const ws2 = await dial();
+      const final2P = onceMessage(
+        ws2,
+        (o) => o.type === "res" && o.id === "ag2" && o.payload?.status !== "accepted",
+        6000,
+      );
+      ws2.send(
+        JSON.stringify({
+          type: "req",
+          id: "ag2",
+          method: "agent",
+          params: { message: "hi again", idempotencyKey: idem },
+        }),
+      );
+      const res = await final2P;
+      expect(res.payload).toEqual(final1.payload);
+      ws2.close();
+    });
   });
 
   test("agent events stream to webchat clients when run context is registered", async () => {
