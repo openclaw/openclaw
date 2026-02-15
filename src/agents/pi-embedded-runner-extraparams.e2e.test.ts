@@ -138,6 +138,29 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.store).toBe(false);
   });
 
+  it("does not force store for OpenAI Responses when baseUrl is empty", () => {
+    const payload = { store: false };
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      options?.onPayload?.(payload);
+      return new AssistantMessageEventStream();
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "openai", "gpt-5");
+
+    const model = {
+      api: "openai-responses",
+      provider: "openai",
+      id: "gpt-5",
+      baseUrl: "",
+    } as Model<"openai-responses">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, {});
+
+    expect(payload.store).toBe(false);
+  });
+
   it("does not force store=true for Codex responses (Codex requires store=false)", () => {
     const payload = { store: false };
     const baseStreamFn: StreamFn = (_model, _context, options) => {
