@@ -31,7 +31,7 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 
 ```json5
 {
-  agents: { defaults: { model: { primary: "openai/gpt-5.1-codex" } } },
+	agents: { defaults: { model: { primary: "openai/gpt-5.1-codex" } } },
 }
 ```
 
@@ -44,7 +44,7 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 
 ```json5
 {
-  agents: { defaults: { model: { primary: "anthropic/claude-opus-4-6" } } },
+	agents: { defaults: { model: { primary: "anthropic/claude-opus-4-6" } } },
 }
 ```
 
@@ -57,7 +57,7 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 
 ```json5
 {
-  agents: { defaults: { model: { primary: "openai-codex/gpt-5.3-codex" } } },
+	agents: { defaults: { model: { primary: "openai-codex/gpt-5.3-codex" } } },
 }
 ```
 
@@ -70,7 +70,7 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 
 ```json5
 {
-  agents: { defaults: { model: { primary: "opencode/claude-opus-4-6" } } },
+	agents: { defaults: { model: { primary: "opencode/claude-opus-4-6" } } },
 }
 ```
 
@@ -85,6 +85,7 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 
 - Providers: `google-vertex`, `google-antigravity`, `google-gemini-cli`
 - Auth: Vertex uses gcloud ADC; Antigravity/Gemini CLI use their respective auth flows
+- Caution: Antigravity and Gemini CLI OAuth in OpenClaw are unofficial integrations. Some users have reported Google account restrictions after using third-party clients. Review Google terms and use a non-critical account if you choose to proceed.
 - Antigravity OAuth is shipped as a bundled plugin (`google-antigravity-auth`, disabled by default).
   - Enable: `openclaw plugins enable google-antigravity-auth`
   - Login: `openclaw models auth login --provider google-antigravity --set-default`
@@ -148,20 +149,20 @@ Kimi K2 model IDs:
 
 ```json5
 {
-  agents: {
-    defaults: { model: { primary: "moonshot/kimi-k2.5" } },
-  },
-  models: {
-    mode: "merge",
-    providers: {
-      moonshot: {
-        baseUrl: "https://api.moonshot.ai/v1",
-        apiKey: "${MOONSHOT_API_KEY}",
-        api: "openai-completions",
-        models: [{ id: "kimi-k2.5", name: "Kimi K2.5" }],
-      },
-    },
-  },
+	agents: {
+		defaults: { model: { primary: "moonshot/kimi-k2.5" } },
+	},
+	models: {
+		mode: "merge",
+		providers: {
+			moonshot: {
+				baseUrl: "https://api.moonshot.ai/v1",
+				apiKey: "${MOONSHOT_API_KEY}",
+				api: "openai-completions",
+				models: [{ id: "kimi-k2.5", name: "Kimi K2.5" }],
+			},
+		},
+	},
 }
 ```
 
@@ -175,10 +176,10 @@ Kimi Coding uses Moonshot AI's Anthropic-compatible endpoint:
 
 ```json5
 {
-  env: { KIMI_API_KEY: "sk-..." },
-  agents: {
-    defaults: { model: { primary: "kimi-coding/k2p5" } },
-  },
+	env: { KIMI_API_KEY: "sk-..." },
+	agents: {
+		defaults: { model: { primary: "kimi-coding/k2p5" } },
+	},
 }
 ```
 
@@ -210,20 +211,20 @@ Synthetic provides Anthropic-compatible models behind the `synthetic` provider:
 
 ```json5
 {
-  agents: {
-    defaults: { model: { primary: "synthetic/hf:MiniMaxAI/MiniMax-M2.1" } },
-  },
-  models: {
-    mode: "merge",
-    providers: {
-      synthetic: {
-        baseUrl: "https://api.synthetic.new/anthropic",
-        apiKey: "${SYNTHETIC_API_KEY}",
-        api: "anthropic-messages",
-        models: [{ id: "hf:MiniMaxAI/MiniMax-M2.1", name: "MiniMax M2.1" }],
-      },
-    },
-  },
+	agents: {
+		defaults: { model: { primary: "synthetic/hf:MiniMaxAI/MiniMax-M2.1" } },
+	},
+	models: {
+		mode: "merge",
+		providers: {
+			synthetic: {
+				baseUrl: "https://api.synthetic.new/anthropic",
+				apiKey: "${SYNTHETIC_API_KEY}",
+				api: "anthropic-messages",
+				models: [{ id: "hf:MiniMaxAI/MiniMax-M2.1", name: "MiniMax M2.1" }],
+			},
+		},
+	},
 }
 ```
 
@@ -252,9 +253,9 @@ ollama pull llama3.3
 
 ```json5
 {
-  agents: {
-    defaults: { model: { primary: "ollama/llama3.3" } },
-  },
+	agents: {
+		defaults: { model: { primary: "ollama/llama3.3" } },
+	},
 }
 ```
 
@@ -278,9 +279,9 @@ Then set a model (replace with one of the IDs returned by `/v1/models`):
 
 ```json5
 {
-  agents: {
-    defaults: { model: { primary: "vllm/your-model-id" } },
-  },
+	agents: {
+		defaults: { model: { primary: "vllm/your-model-id" } },
+	},
 }
 ```
 
@@ -292,32 +293,32 @@ Example (OpenAI‑compatible):
 
 ```json5
 {
-  agents: {
-    defaults: {
-      model: { primary: "lmstudio/minimax-m2.1-gs32" },
-      models: { "lmstudio/minimax-m2.1-gs32": { alias: "Minimax" } },
-    },
-  },
-  models: {
-    providers: {
-      lmstudio: {
-        baseUrl: "http://localhost:1234/v1",
-        apiKey: "LMSTUDIO_KEY",
-        api: "openai-completions",
-        models: [
-          {
-            id: "minimax-m2.1-gs32",
-            name: "MiniMax M2.1",
-            reasoning: false,
-            input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 200000,
-            maxTokens: 8192,
-          },
-        ],
-      },
-    },
-  },
+	agents: {
+		defaults: {
+			model: { primary: "lmstudio/minimax-m2.1-gs32" },
+			models: { "lmstudio/minimax-m2.1-gs32": { alias: "Minimax" } },
+		},
+	},
+	models: {
+		providers: {
+			lmstudio: {
+				baseUrl: "http://localhost:1234/v1",
+				apiKey: "LMSTUDIO_KEY",
+				api: "openai-completions",
+				models: [
+					{
+						id: "minimax-m2.1-gs32",
+						name: "MiniMax M2.1",
+						reasoning: false,
+						input: ["text"],
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+						contextWindow: 200000,
+						maxTokens: 8192,
+					},
+				],
+			},
+		},
+	},
 }
 ```
 
