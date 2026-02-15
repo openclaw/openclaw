@@ -35,6 +35,10 @@ type DiscordUser = Parameters<typeof formatDiscordUserTag>[0];
 
 type AgentComponentInteraction = ButtonInteraction | StringSelectMenuInteraction;
 
+type ComponentInteractionContext = NonNullable<
+  Awaited<ReturnType<typeof resolveComponentInteractionContext>>
+>;
+
 type DiscordChannelContext = {
   channelName: string | undefined;
   channelSlug: string;
@@ -349,6 +353,34 @@ async function ensureDmComponentAuthorized(params: {
   return false;
 }
 
+async function resolveInteractionContextWithDmAuth(params: {
+  ctx: AgentComponentContext;
+  interaction: AgentComponentInteraction;
+  label: string;
+  componentLabel: string;
+}): Promise<ComponentInteractionContext | null> {
+  const interactionCtx = await resolveComponentInteractionContext({
+    interaction: params.interaction,
+    label: params.label,
+  });
+  if (!interactionCtx) {
+    return null;
+  }
+  if (interactionCtx.isDirectMessage) {
+    const authorized = await ensureDmComponentAuthorized({
+      ctx: params.ctx,
+      interaction: params.interaction,
+      user: interactionCtx.user,
+      componentLabel: params.componentLabel,
+      replyOpts: interactionCtx.replyOpts,
+    });
+    if (!authorized) {
+      return null;
+    }
+  }
+  return interactionCtx;
+}
+
 export class AgentComponentButton extends Button {
   label = AGENT_BUTTON_KEY;
   customId = `${AGENT_BUTTON_KEY}:seed=1`;
@@ -378,9 +410,11 @@ export class AgentComponentButton extends Button {
 
     const { componentId } = parsed;
 
-    const interactionCtx = await resolveComponentInteractionContext({
+    const interactionCtx = await resolveInteractionContextWithDmAuth({
+      ctx: this.ctx,
       interaction,
       label: "agent button",
+      componentLabel: "button",
     });
     if (!interactionCtx) {
       return;
@@ -395,19 +429,6 @@ export class AgentComponentButton extends Button {
       isDirectMessage,
       memberRoleIds,
     } = interactionCtx;
-
-    if (isDirectMessage) {
-      const authorized = await ensureDmComponentAuthorized({
-        ctx: this.ctx,
-        interaction,
-        user,
-        componentLabel: "button",
-        replyOpts,
-      });
-      if (!authorized) {
-        return;
-      }
-    }
 
     // P2 FIX: Check user allowlist before processing component interaction
     // This prevents unauthorized users from injecting system events
@@ -496,9 +517,11 @@ export class AgentSelectMenu extends StringSelectMenu {
 
     const { componentId } = parsed;
 
-    const interactionCtx = await resolveComponentInteractionContext({
+    const interactionCtx = await resolveInteractionContextWithDmAuth({
+      ctx: this.ctx,
       interaction,
       label: "agent select",
+      componentLabel: "select menu",
     });
     if (!interactionCtx) {
       return;
@@ -513,19 +536,6 @@ export class AgentSelectMenu extends StringSelectMenu {
       isDirectMessage,
       memberRoleIds,
     } = interactionCtx;
-
-    if (isDirectMessage) {
-      const authorized = await ensureDmComponentAuthorized({
-        ctx: this.ctx,
-        interaction,
-        user,
-        componentLabel: "select menu",
-        replyOpts,
-      });
-      if (!authorized) {
-        return;
-      }
-    }
 
     // Check user allowlist before processing component interaction
     const guildInfo = resolveDiscordGuildEntry({
