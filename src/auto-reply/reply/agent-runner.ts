@@ -450,6 +450,7 @@ export async function runReplyAgent(params: {
           promptTokens,
           total: totalTokens,
         },
+        lastCallUsage: runResult.meta.agentMeta?.lastCallUsage,
         context: {
           limit: contextTokensUsed,
           used: totalTokens,
