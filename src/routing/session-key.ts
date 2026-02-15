@@ -164,7 +164,6 @@ export function buildAgentPeerSessionKey(params: {
     if (linkedPeerId) {
       peerId = linkedPeerId;
     }
-    peerId = peerId.toLowerCase();
     if (dmScope === "per-account-channel-peer" && peerId) {
       const channel = (params.channel ?? "").trim().toLowerCase() || "unknown";
       const accountId = normalizeAccountId(params.accountId);
@@ -183,7 +182,7 @@ export function buildAgentPeerSessionKey(params: {
     });
   }
   const channel = (params.channel ?? "").trim().toLowerCase() || "unknown";
-  const peerId = ((params.peerId ?? "").trim() || "unknown").toLowerCase();
+  const peerId = (params.peerId ?? "").trim() || "unknown";
   return `agent:${normalizeAgentId(params.agentId)}:${channel}:${peerKind}:${peerId}`;
 }
 
@@ -241,7 +240,7 @@ export function buildGroupHistoryKey(params: {
 }): string {
   const channel = normalizeToken(params.channel) || "unknown";
   const accountId = normalizeAccountId(params.accountId);
-  const peerId = params.peerId.trim().toLowerCase() || "unknown";
+  const peerId = params.peerId.trim() || "unknown";
   return `${channel}:${accountId}:${params.peerKind}:${peerId}`;
 }
 

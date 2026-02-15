@@ -102,7 +102,7 @@ describe("runMessageAction threading auto-injection", () => {
     });
 
     const call = mocks.executeSendAction.mock.calls[0]?.[0];
-    expect(call?.ctx?.mirror?.sessionKey).toBe("agent:main:slack:channel:c123:thread:111.222");
+    expect(call?.ctx?.mirror?.sessionKey).toBe("agent:main:slack:channel:C123:thread:111.222");
   });
 
   it("matches auto-threading when channel ids differ in case", async () => {
@@ -128,7 +128,7 @@ describe("runMessageAction threading auto-injection", () => {
     });
 
     const call = mocks.executeSendAction.mock.calls[0]?.[0];
-    expect(call?.ctx?.mirror?.sessionKey).toBe("agent:main:slack:channel:c123:thread:333.444");
+    expect(call?.ctx?.mirror?.sessionKey).toBe("agent:main:slack:channel:C123:thread:333.444");
   });
 
   it("auto-injects telegram threadId from toolContext when omitted", async () => {

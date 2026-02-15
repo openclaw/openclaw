@@ -309,11 +309,11 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
       peer,
       dmScope,
       identityLinks,
-    }).toLowerCase();
+    });
     const mainSessionKey = buildAgentMainSessionKey({
       agentId: resolvedAgentId,
       mainKey: DEFAULT_MAIN_KEY,
-    }).toLowerCase();
+    });
     return {
       agentId: resolvedAgentId,
       channel,

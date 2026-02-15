@@ -14,7 +14,7 @@ describe("resolveOutboundSessionRoute", () => {
       replyToId: "456",
     });
 
-    expect(route?.sessionKey).toBe("agent:main:slack:channel:c123:thread:456");
+    expect(route?.sessionKey).toBe("agent:main:slack:channel:C123:thread:456");
     expect(route?.from).toBe("slack:channel:C123");
     expect(route?.to).toBe("channel:C123");
     expect(route?.threadId).toBe("456");
@@ -75,7 +75,7 @@ describe("resolveOutboundSessionRoute", () => {
       target: "chat_guid:ABC123",
     });
 
-    expect(route?.sessionKey).toBe("agent:main:bluebubbles:group:abc123");
+    expect(route?.sessionKey).toBe("agent:main:bluebubbles:group:ABC123");
     expect(route?.from).toBe("group:ABC123");
   });
 
@@ -110,7 +110,7 @@ describe("resolveOutboundSessionRoute", () => {
       target: "channel:G123",
     });
 
-    expect(route?.sessionKey).toBe("agent:main:slack:group:g123");
+    expect(route?.sessionKey).toBe("agent:main:slack:group:G123");
     expect(route?.from).toBe("slack:group:G123");
   });
 });

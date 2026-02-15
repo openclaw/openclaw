@@ -490,6 +490,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
           resolvedTarget,
           replyToId,
           threadId: resolvedThreadId,
+          toolContext: input.toolContext,
         })
       : null;
   if (outboundRoute && agentId && !dryRun) {

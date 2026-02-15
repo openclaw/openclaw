@@ -1,6 +1,6 @@
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { ChatType } from "../../channels/chat-type.js";
-import type { ChannelId } from "../../channels/plugins/types.js";
+import type { ChannelId, ChannelThreadingToolContext } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ResolvedMessagingTarget } from "./target-resolver.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
@@ -42,6 +42,7 @@ export type ResolveOutboundSessionRouteParams = {
   resolvedTarget?: ResolvedMessagingTarget;
   replyToId?: string | null;
   threadId?: string | number | null;
+  toolContext?: ChannelThreadingToolContext;
 };
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -217,9 +218,15 @@ async function resolveSlackSession(
       peerKind = "direct";
     }
   }
+  // Use currentChannelId from toolContext if it matches case-insensitively to preserve case.
+  let channelId = parsed.id;
+  const currentChannelId = params.toolContext?.currentChannelId?.trim();
+  if (!isDm && currentChannelId && currentChannelId.toLowerCase() === parsed.id.toLowerCase()) {
+    channelId = currentChannelId;
+  }
   const peer: RoutePeer = {
     kind: peerKind,
-    id: parsed.id,
+    id: channelId,
   };
   const baseSessionKey = buildBaseSessionKey({
     cfg: params.cfg,
@@ -240,11 +247,11 @@ async function resolveSlackSession(
     chatType: peerKind === "direct" ? "direct" : "channel",
     from:
       peerKind === "direct"
-        ? `slack:${parsed.id}`
+        ? `slack:${channelId}`
         : peerKind === "group"
-          ? `slack:group:${parsed.id}`
-          : `slack:channel:${parsed.id}`,
-    to: peerKind === "direct" ? `user:${parsed.id}` : `channel:${parsed.id}`,
+          ? `slack:group:${channelId}`
+          : `slack:channel:${channelId}`,
+    to: peerKind === "direct" ? `user:${channelId}` : `channel:${channelId}`,
     threadId,
   };
 }
