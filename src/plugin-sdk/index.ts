@@ -313,6 +313,12 @@ export {
   looksLikeIMessageTargetId,
   normalizeIMessageMessagingTarget,
 } from "../channels/plugins/normalize/imessage.js";
+export {
+  parseChatAllowTargetPrefixes,
+  parseChatTargetPrefixesOrThrow,
+  resolveServicePrefixedAllowTarget,
+  resolveServicePrefixedTarget,
+} from "../imessage/target-parsing-helpers.js";
 
 // Channel: Slack
 export {
