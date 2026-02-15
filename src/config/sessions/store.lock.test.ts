@@ -1,9 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "./types.js";
-import { sleep } from "../../utils.js";
 import {
   clearSessionStoreCacheForTest,
   getSessionStoreLockQueueSizeForTest,
@@ -18,11 +17,34 @@ describe("session store lock (Promise chain mutex)", () => {
   let caseId = 0;
   let tmpDirs: string[] = [];
 
+  function createDeferred<T>() {
+    let resolve!: (value: T) => void;
+    let reject!: (reason?: unknown) => void;
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  }
+
+  async function waitForFile(filePath: string, maxTicks = 50): Promise<void> {
+    for (let tick = 0; tick < maxTicks; tick += 1) {
+      try {
+        await fs.access(filePath);
+        return;
+      } catch {
+        // Works under both real + fake timers (setImmediate is faked).
+        await new Promise<void>((resolve) => process.nextTick(resolve));
+      }
+    }
+    throw new Error(`timed out waiting for file: ${filePath}`);
+  }
+
   async function makeTmpStore(
     initial: Record<string, unknown> = {},
   ): Promise<{ dir: string; storePath: string }> {
     const dir = path.join(fixtureRoot, `case-${caseId++}`);
-    await fs.mkdir(dir, { recursive: true });
+    await fs.mkdir(dir);
     tmpDirs.push(dir);
     const storePath = path.join(dir, "sessions.json");
     if (Object.keys(initial).length > 0) {
@@ -280,30 +302,44 @@ describe("session store lock (Promise chain mutex)", () => {
   });
 
   it("times out queued operations strictly and does not run them later", async () => {
-    const { storePath } = await makeTmpStore({
-      x: { sessionId: "x", updatedAt: 100 },
-    });
-    let timedOutRan = false;
+    vi.useFakeTimers();
+    try {
+      const { storePath } = await makeTmpStore({
+        x: { sessionId: "x", updatedAt: 100 },
+      });
+      let timedOutRan = false;
 
-    const lockHolder = withSessionStoreLockForTest(
-      storePath,
-      async () => {
-        await sleep(15);
-      },
-      { timeoutMs: 1_000 },
-    );
-    const timedOut = withSessionStoreLockForTest(
-      storePath,
-      async () => {
-        timedOutRan = true;
-      },
-      { timeoutMs: 5 },
-    );
+      const lockPath = `${storePath}.lock`;
+      const releaseLock = createDeferred<void>();
+      const lockHolder = withSessionStoreLockForTest(
+        storePath,
+        async () => {
+          await releaseLock.promise;
+        },
+        { timeoutMs: 1_000 },
+      );
+      await waitForFile(lockPath);
+      const timedOut = withSessionStoreLockForTest(
+        storePath,
+        async () => {
+          timedOutRan = true;
+        },
+        { timeoutMs: 5 },
+      );
 
-    await expect(timedOut).rejects.toThrow("timeout waiting for session store lock");
-    await lockHolder;
-    await sleep(2);
-    expect(timedOutRan).toBe(false);
+      // Attach rejection handler before advancing fake timers to avoid unhandled rejections.
+      const timedOutExpectation = expect(timedOut).rejects.toThrow(
+        "timeout waiting for session store lock",
+      );
+      await vi.advanceTimersByTimeAsync(5);
+      await timedOutExpectation;
+      releaseLock.resolve();
+      await lockHolder;
+      await vi.runOnlyPendingTimersAsync();
+      expect(timedOutRan).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("creates and removes lock file while operation runs", async () => {
@@ -312,23 +348,15 @@ describe("session store lock (Promise chain mutex)", () => {
       [key]: { sessionId: "s1", updatedAt: 100 },
     });
 
+    const lockPath = `${storePath}.lock`;
+    const allowWrite = createDeferred<void>();
     const write = updateSessionStore(storePath, async (store) => {
-      await sleep(8);
+      await allowWrite.promise;
       store[key] = { ...store[key], modelOverride: "v" } as unknown as SessionEntry;
     });
 
-    const lockPath = `${storePath}.lock`;
-    let lockSeen = false;
-    for (let i = 0; i < 20; i += 1) {
-      try {
-        await fs.access(lockPath);
-        lockSeen = true;
-        break;
-      } catch {
-        await sleep(1);
-      }
-    }
-    expect(lockSeen).toBe(true);
+    await waitForFile(lockPath);
+    allowWrite.resolve();
     await write;
 
     const files = await fs.readdir(dir);

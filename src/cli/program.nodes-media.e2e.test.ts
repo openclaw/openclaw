@@ -20,6 +20,14 @@ const IOS_NODE = {
   connected: true,
 } as const;
 
+function getFirstRuntimeLogLine(): string {
+  const value = runtime.log.mock.calls[0]?.[0];
+  if (typeof value !== "string") {
+    throw new Error(`expected runtime.log first arg to be string, got ${typeof value}`);
+  }
+  return value;
+}
+
 function mockCameraGateway(
   command: "camera.snap" | "camera.clip",
   payload: Record<string, unknown>,
