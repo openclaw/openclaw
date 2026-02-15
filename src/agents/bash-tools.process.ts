@@ -86,6 +86,18 @@ function resolvePollWaitMs(value: unknown) {
   return 0;
 }
 
+function failText(text: string): AgentToolResult<unknown> {
+  return {
+    content: [
+      {
+        type: "text",
+        text,
+      },
+    ],
+    details: { status: "failed" },
+  };
+}
+
 export function createProcessTool(
   defaults?: ProcessToolDefaults,
   // oxlint-disable-next-line typescript/no-explicit-any
@@ -258,26 +270,10 @@ export function createProcessTool(
                 },
               };
             }
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `No session found for ${params.sessionId}`,
-                },
-              ],
-              details: { status: "failed" },
-            };
+            return failText(`No session found for ${params.sessionId}`);
           }
           if (!scopedSession.backgrounded) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `Session ${params.sessionId} is not backgrounded.`,
-                },
-              ],
-              details: { status: "failed" },
-            };
+            return failText(`Session ${params.sessionId} is not backgrounded.`);
           }
           const pollWaitMs = resolvePollWaitMs(params.timeout);
           if (pollWaitMs > 0 && !scopedSession.exited) {
@@ -521,26 +517,10 @@ export function createProcessTool(
 
         case "kill": {
           if (!scopedSession) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `No active session found for ${params.sessionId}`,
-                },
-              ],
-              details: { status: "failed" },
-            };
+            return failText(`No active session found for ${params.sessionId}`);
           }
           if (!scopedSession.backgrounded) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `Session ${params.sessionId} is not backgrounded.`,
-                },
-              ],
-              details: { status: "failed" },
-            };
+            return failText(`Session ${params.sessionId} is not backgrounded.`);
           }
           killSession(scopedSession);
           markExited(scopedSession, null, "SIGKILL", "failed");

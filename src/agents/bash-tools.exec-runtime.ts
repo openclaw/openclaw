@@ -338,6 +338,25 @@ export async function runExecProcess(opts: {
     opts.warnings.push(warning);
   };
 
+  const spawnShellChild = async (
+    shell: string,
+    shellArgs: string[],
+  ): Promise<ChildProcessWithoutNullStreams> => {
+    const { child: spawned } = await spawnWithFallback({
+      argv: [shell, ...shellArgs, execCommand],
+      options: {
+        cwd: opts.workdir,
+        env: opts.env,
+        detached: process.platform !== "win32",
+        stdio: ["pipe", "pipe", "pipe"],
+        windowsHide: true,
+      },
+      fallbacks: spawnFallbacks,
+      onFallback: handleSpawnFallback,
+    });
+    return spawned as ChildProcessWithoutNullStreams;
+  };
+
   // `exec` does not currently accept tool-provided stdin content. For non-PTY runs,
   // keeping stdin open can cause commands like `wc -l` (or safeBins-hardened segments)
   // to block forever waiting for input, leading to accidental backgrounding.
@@ -421,36 +440,12 @@ export async function runExecProcess(opts: {
       const warning = `Warning: PTY spawn failed (${errText}); retrying without PTY for \`${opts.command}\`.`;
       logWarn(`exec: PTY spawn failed (${errText}); retrying without PTY for "${opts.command}".`);
       opts.warnings.push(warning);
-      const { child: spawned } = await spawnWithFallback({
-        argv: [shell, ...shellArgs, execCommand],
-        options: {
-          cwd: opts.workdir,
-          env: opts.env,
-          detached: process.platform !== "win32",
-          stdio: ["pipe", "pipe", "pipe"],
-          windowsHide: true,
-        },
-        fallbacks: spawnFallbacks,
-        onFallback: handleSpawnFallback,
-      });
-      child = spawned as ChildProcessWithoutNullStreams;
+      child = await spawnShellChild(shell, shellArgs);
       stdin = child.stdin;
     }
   } else {
     const { shell, args: shellArgs } = getShellConfig();
-    const { child: spawned } = await spawnWithFallback({
-      argv: [shell, ...shellArgs, execCommand],
-      options: {
-        cwd: opts.workdir,
-        env: opts.env,
-        detached: process.platform !== "win32",
-        stdio: ["pipe", "pipe", "pipe"],
-        windowsHide: true,
-      },
-      fallbacks: spawnFallbacks,
-      onFallback: handleSpawnFallback,
-    });
-    child = spawned as ChildProcessWithoutNullStreams;
+    child = await spawnShellChild(shell, shellArgs);
     stdin = child.stdin;
     maybeCloseNonPtyStdin();
   }
