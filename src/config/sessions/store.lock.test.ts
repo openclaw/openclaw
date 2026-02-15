@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import type { SessionEntry } from "./types.js";
 import { sleep } from "../../utils.js";
 import {
@@ -14,12 +14,15 @@ import {
 } from "../sessions.js";
 
 describe("session store lock (Promise chain mutex)", () => {
+  let fixtureRoot = "";
+  let caseId = 0;
   let tmpDirs: string[] = [];
 
   async function makeTmpStore(
     initial: Record<string, unknown> = {},
   ): Promise<{ dir: string; storePath: string }> {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-test-"));
+    const dir = path.join(fixtureRoot, `case-${caseId++}`);
+    await fs.mkdir(dir, { recursive: true });
     tmpDirs.push(dir);
     const storePath = path.join(dir, "sessions.json");
     if (Object.keys(initial).length > 0) {
@@ -28,11 +31,18 @@ describe("session store lock (Promise chain mutex)", () => {
     return { dir, storePath };
   }
 
+  beforeAll(async () => {
+    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-test-"));
+  });
+
+  afterAll(async () => {
+    if (fixtureRoot) {
+      await fs.rm(fixtureRoot, { recursive: true, force: true }).catch(() => undefined);
+    }
+  });
+
   afterEach(async () => {
     clearSessionStoreCacheForTest();
-    for (const dir of tmpDirs) {
-      await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
-    }
     tmpDirs = [];
   });
 
