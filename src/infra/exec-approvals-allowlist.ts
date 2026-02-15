@@ -57,11 +57,6 @@ export function isSafeBinUsage(params: {
   safeBinProfiles?: Readonly<Record<string, SafeBinProfile>>;
   isTrustedSafeBinPathFn?: typeof isTrustedSafeBinPath;
 }): boolean {
-  // Windows host exec uses PowerShell, which has different parsing/expansion rules.
-  // Keep safeBins conservative there (require explicit allowlist entries).
-  if (isWindowsPlatform(params.platform ?? process.platform)) {
-    return false;
-  }
   if (params.safeBins.size === 0) {
     return false;
   }
