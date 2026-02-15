@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
-import { STATE_DIR } from "../config/paths.js";
+import { resolveStateDir } from "../config/paths.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { type MediaKind, maxBytesForKind, mediaKindFromMime } from "../media/constants.js";
 import { fetchRemoteMedia } from "../media/fetch.js";
@@ -60,10 +60,11 @@ async function assertLocalMediaAllowed(
   // This prevents broader roots (like /tmp, if STATE_DIR is in /tmp) from accidentally exposing
   // restricted STATE_DIR subdirectories (like workspace-*).
   let stateDirResolved: string;
+  const stateDir = resolveStateDir();
   try {
-    stateDirResolved = await fs.realpath(STATE_DIR);
+    stateDirResolved = await fs.realpath(stateDir);
   } catch {
-    stateDirResolved = path.resolve(STATE_DIR);
+    stateDirResolved = path.resolve(stateDir);
   }
   for (const root of roots) {
     let resolvedRoot: string;
