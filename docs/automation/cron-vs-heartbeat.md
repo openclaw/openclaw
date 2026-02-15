@@ -275,6 +275,39 @@ openclaw cron add \
 - Use `target: "none"` on heartbeat if you only want internal processing.
 - Use isolated cron with a cheaper model for routine tasks.
 
+### Token optimization for standalone reports
+
+For scheduled reports that run independently (weather briefings, weekly summaries, event listings), isolated sessions can reduce token usage significantly.
+
+**Why it matters**: Main session cron jobs load the full conversation history (often 50-100K+ tokens). Isolated sessions start fresh with only the system prompt and workspace files (typically 10-20K tokens).
+
+| Session Type | Typical Context Size | Best For                              |
+| ------------ | -------------------- | ------------------------------------- |
+| `main`       | 50-100K+ tokens      | Tasks needing conversation history    |
+| `isolated`   | 10-20K tokens        | Standalone reports, scheduled outputs |
+
+**Example**: A weekly events report that searches the web and formats results does not need to know what you discussed yesterday. Running it isolated saves 80%+ of input tokens per run.
+
+```bash
+# Standalone report - use isolated + message
+openclaw cron add \
+  --name "Weekly summary" \
+  --cron "0 9 * * 1" \
+  --session isolated \
+  --message "Generate a summary of key updates from the past week." \
+  --deliver
+
+# Context-aware task - use main + system-event
+openclaw cron add \
+  --name "Follow up on discussion" \
+  --at "2h" \
+  --session main \
+  --system-event "Check if the task from earlier was completed." \
+  --wake now
+```
+
+**Important**: Isolated sessions require `--message` (agentTurn payload). Use `--system-event` only with `--session main`. The CLI will error if you try to combine `--session isolated` with `--system-event`.
+
 ## Related
 
 - [Heartbeat](/gateway/heartbeat) - full heartbeat configuration

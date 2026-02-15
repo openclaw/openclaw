@@ -473,6 +473,22 @@ openclaw system event --mode now --text "Next heartbeat: check battery."
 
 ### Telegram delivers to the wrong place
 
-- For forum topics, use `-100…:topic:<id>` so it’s explicit and unambiguous.
-- If you see `telegram:...` prefixes in logs or stored “last route” targets, that’s normal;
+- For forum topics, use `-100…:topic:<id>` so it's explicit and unambiguous.
+- If you see `telegram:...` prefixes in logs or stored "last route" targets, that's normal;
   cron delivery accepts them and still parses topic IDs correctly.
+
+### Isolated sessions require agentTurn payload
+
+This error occurs when using `--session isolated` with `--system-event`. Isolated sessions require a dedicated agent turn, not a system event injection.
+
+**Fix**: Use `--message` instead of `--system-event`:
+
+```bash
+# Wrong - will error
+openclaw cron add --session isolated --system-event "Do something"
+
+# Correct - use --message for isolated sessions
+openclaw cron add --session isolated --message "Do something" --deliver
+```
+
+If you need the task to have access to conversation history, use `--session main` with `--system-event` instead. See [Token optimization](/automation/cron-vs-heartbeat#token-optimization-for-standalone-reports) for guidance on when to use each.
