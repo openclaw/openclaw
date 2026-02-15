@@ -57,6 +57,22 @@ const MEMORY_FILE_NAMES = [DEFAULT_MEMORY_FILENAME, DEFAULT_MEMORY_ALT_FILENAME]
 
 const ALLOWED_FILE_NAMES = new Set<string>([...BOOTSTRAP_FILE_NAMES, ...MEMORY_FILE_NAMES]);
 
+function isAllowedFileName(name: string): boolean {
+  if (ALLOWED_FILE_NAMES.has(name)) {
+    return true;
+  }
+  if (
+    name.startsWith("memory/") &&
+    name.endsWith(".md") &&
+    !name.includes("..") &&
+    name.split("/").length === 2 &&
+    name.length > "memory/.md".length
+  ) {
+    return true;
+  }
+  return false;
+}
+
 type FileMeta = {
   size: number;
   updatedAtMs: number;
@@ -127,6 +143,28 @@ async function listAgentFiles(workspaceDir: string) {
       files.push({ name: DEFAULT_MEMORY_FILENAME, path: primaryMemoryPath, missing: true });
     }
   }
+
+  const memoryDir = path.join(workspaceDir, "memory");
+  try {
+    const entries = await fs.readdir(memoryDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith(".md")) {
+        continue;
+      }
+      const name = `memory/${entry.name}`;
+      const filePath = path.join(memoryDir, entry.name);
+      const meta = await statFile(filePath);
+      if (meta) {
+        files.push({
+          name,
+          path: filePath,
+          missing: false,
+          size: meta.size,
+          updatedAtMs: meta.updatedAtMs,
+        });
+      }
+    }
+  } catch {}
 
   return files;
 }
@@ -410,7 +448,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
       return;
     }
     const name = String(params.name ?? "").trim();
-    if (!ALLOWED_FILE_NAMES.has(name)) {
+    if (!isAllowedFileName(name)) {
       respond(
         false,
         undefined,
@@ -472,7 +510,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
       return;
     }
     const name = String(params.name ?? "").trim();
-    if (!ALLOWED_FILE_NAMES.has(name)) {
+    if (!isAllowedFileName(name)) {
       respond(
         false,
         undefined,
@@ -483,6 +521,10 @@ export const agentsHandlers: GatewayRequestHandlers = {
     const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
     await fs.mkdir(workspaceDir, { recursive: true });
     const filePath = path.join(workspaceDir, name);
+    const fileDir = path.dirname(filePath);
+    if (fileDir !== workspaceDir) {
+      await fs.mkdir(fileDir, { recursive: true });
+    }
     const content = String(params.content ?? "");
     await fs.writeFile(filePath, content, "utf-8");
     const meta = await statFile(filePath);
