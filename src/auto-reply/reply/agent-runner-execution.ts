@@ -344,6 +344,9 @@ export async function runAgentTurnWithFallback(params: {
                     });
                   }
                 : undefined,
+            onPromptCycleStart: () => {
+              void params.typingSignals.signalToolStart();
+            },
             onAgentEvent: async (evt) => {
               // Trigger typing when tools start executing.
               // Must await to ensure typing indicator starts before tool summaries are emitted.
