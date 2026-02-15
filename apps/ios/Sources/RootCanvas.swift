@@ -67,7 +67,9 @@ struct RootCanvas: View {
                 SettingsTab()
             case .chat:
                 ChatSheet(
-                    gateway: self.appModel.operatorSession,
+                    // Mobile chat UI should use the node role RPC surface (chat.* / sessions.*)
+                    // to avoid requiring operator scopes like operator.read.
+                    gateway: self.appModel.gatewaySession,
                     sessionKey: self.appModel.mainSessionKey,
                     agentName: self.appModel.activeAgentName,
                     userAccent: self.appModel.seamColor)
@@ -109,6 +111,7 @@ struct RootCanvas: View {
             if newValue != nil {
                 self.onboardingComplete = true
                 self.hasConnectedOnce = true
+                OnboardingStateStore.markCompleted(mode: nil)
             }
             self.maybeAutoOpenSettings()
         }
@@ -176,6 +179,11 @@ struct RootCanvas: View {
 
         guard !self.didEvaluateOnboarding else { return }
         self.didEvaluateOnboarding = true
+        // If we've connected before or have a saved connection config, don't force onboarding on launch.
+        // Auto-connect + Settings cover recovery without blocking the UI behind onboarding.
+        if self.hasConnectedOnce || self.onboardingComplete || self.hasExistingGatewayConfig() {
+            return
+        }
         guard OnboardingStateStore.shouldPresentOnLaunch(appModel: self.appModel) else { return }
         self.onboardingAllowSkip = true
         self.showOnboarding = true

@@ -25,6 +25,9 @@ enum OnboardingStateStore {
     @MainActor
     static func shouldPresentOnLaunch(appModel: NodeAppModel, defaults: UserDefaults = .standard) -> Bool {
         if defaults.bool(forKey: Self.completedDefaultsKey) { return false }
+        // If we have a last-known connection config, don't force onboarding on launch. Auto-connect
+        // should handle reconnecting, and users can always open onboarding manually if needed.
+        if GatewaySettingsStore.loadLastGatewayConnection() != nil { return false }
         return appModel.gatewayServerName == nil
     }
 
