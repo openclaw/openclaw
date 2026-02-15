@@ -2,14 +2,23 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, expect } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import { getEmbedBatchMock, resetEmbeddingMocks } from "./embedding.test-mocks.js";
-import { getMemorySearchManager, type MemoryIndexManager } from "./index.js";
+import {
+  getMemorySearchManager,
+  type MemoryIndexManager,
+  type MemorySearchManager,
+} from "./index.js";
 
 export function installEmbeddingManagerFixture(opts: {
   fixturePrefix: string;
   largeTokens: number;
   smallTokens: number;
-  createCfg: (params: { workspaceDir: string; indexPath: string; tokens: number }) => unknown;
+  createCfg: (params: {
+    workspaceDir: string;
+    indexPath: string;
+    tokens: number;
+  }) => OpenClawConfig;
   resetIndexEachTest?: boolean;
 }) {
   const embedBatch = getEmbedBatchMock();
@@ -33,6 +42,19 @@ export function installEmbeddingManagerFixture(opts: {
     return value;
   };
 
+  const requireIndexManager = (
+    manager: MemorySearchManager | null,
+    name: string,
+  ): MemoryIndexManager => {
+    if (!manager) {
+      throw new Error(`${name} missing`);
+    }
+    if (!("resetIndex" in manager) || typeof manager.resetIndex !== "function") {
+      throw new Error(`${name} is not a MemoryIndexManager`);
+    }
+    return manager as unknown as MemoryIndexManager;
+  };
+
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), opts.fixturePrefix));
     workspaceDir = path.join(fixtureRoot, "workspace");
@@ -51,7 +73,7 @@ export function installEmbeddingManagerFixture(opts: {
       agentId: "main",
     });
     expect(large.manager).not.toBeNull();
-    managerLarge = large.manager ?? undefined;
+    managerLarge = requireIndexManager(large.manager, "managerLarge");
 
     const small = await getMemorySearchManager({
       cfg: opts.createCfg({
@@ -62,7 +84,7 @@ export function installEmbeddingManagerFixture(opts: {
       agentId: "main",
     });
     expect(small.manager).not.toBeNull();
-    managerSmall = small.manager ?? undefined;
+    managerSmall = requireIndexManager(small.manager, "managerSmall");
   });
 
   afterAll(async () => {
