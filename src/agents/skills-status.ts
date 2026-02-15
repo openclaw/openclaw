@@ -1,7 +1,7 @@
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveEmojiAndHomepage } from "../shared/entry-metadata.js";
-import { evaluateRequirementsFromMetadata } from "../shared/requirements.js";
+import { evaluateRequirementsFromMetadataWithRemote } from "../shared/requirements.js";
 import { CONFIG_DIR } from "../utils.js";
 import {
   hasBinary,
@@ -198,14 +198,12 @@ function buildSkillStatus(
     missing,
     eligible: requirementsSatisfied,
     configChecks,
-  } = evaluateRequirementsFromMetadata({
+  } = evaluateRequirementsFromMetadataWithRemote({
     always,
     metadata: entry.metadata,
     hasLocalBin: hasBinary,
-    hasRemoteBin: eligibility?.remote?.hasBin,
-    hasRemoteAnyBin: eligibility?.remote?.hasAnyBin,
     localPlatform: process.platform,
-    remotePlatforms: eligibility?.remote?.platforms,
+    remote: eligibility?.remote,
     isEnvSatisfied: (envName) =>
       Boolean(
         process.env[envName] ||

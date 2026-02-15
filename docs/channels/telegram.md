@@ -221,23 +221,20 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 ## Feature reference
 
 <AccordionGroup>
-  <Accordion title="Draft streaming in Telegram DMs">
-    OpenClaw can stream partial replies with Telegram draft bubbles (`sendMessageDraft`).
+  <Accordion title="Live stream preview (message edits)">
+    OpenClaw can stream partial replies by sending a temporary Telegram message and editing it as text arrives.
 
-    Requirements:
+    Requirement:
 
     - `channels.telegram.streamMode` is not `"off"` (default: `"partial"`)
-    - private chat
-    - inbound update includes `message_thread_id`
-    - bot topics are enabled (`getMe().has_topics_enabled`)
 
     Modes:
 
-    - `off`: no draft streaming
-    - `partial`: frequent draft updates from partial text
-    - `block`: chunked draft updates using `channels.telegram.draftChunk`
+    - `off`: no live preview
+    - `partial`: frequent preview updates from partial text
+    - `block`: chunked preview updates using `channels.telegram.draftChunk`
 
-    `draftChunk` defaults for block mode:
+    `draftChunk` defaults for `streamMode: "block"`:
 
     - `minChars: 200`
     - `maxChars: 800`
@@ -245,13 +242,17 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     `maxChars` is clamped by `channels.telegram.textChunkLimit`.
 
-    Draft streaming is DM-only; groups/channels do not use draft bubbles.
+    This works in direct chats and groups/topics.
 
-    If you want early real Telegram messages instead of draft updates, use block streaming (`channels.telegram.blockStreaming: true`).
+    For text-only replies, OpenClaw keeps the same preview message and performs a final edit in place (no second message).
+
+    For complex replies (for example media payloads), OpenClaw falls back to normal final delivery and then cleans up the preview message.
+
+    `streamMode` is separate from block streaming. When block streaming is explicitly enabled for Telegram, OpenClaw skips the preview stream to avoid double-streaming.
 
     Telegram-only reasoning stream:
 
-    - `/reasoning stream` sends reasoning to the draft bubble while generating
+    - `/reasoning stream` sends reasoning to the live preview while generating
     - final answer is sent without reasoning text
 
   </Accordion>
@@ -703,7 +704,7 @@ Primary reference:
 - `channels.telegram.textChunkLimit`: outbound chunk size (chars).
 - `channels.telegram.chunkMode`: `length` (default) or `newline` to split on blank lines (paragraph boundaries) before length chunking.
 - `channels.telegram.linkPreview`: toggle link previews for outbound messages (default: true).
-- `channels.telegram.streamMode`: `off | partial | block` (draft streaming).
+- `channels.telegram.streamMode`: `off | partial | block` (live stream preview).
 - `channels.telegram.mediaMaxMb`: inbound/outbound media cap (MB).
 - `channels.telegram.retry`: retry policy for outbound Telegram API calls (attempts, minDelayMs, maxDelayMs, jitter).
 - `channels.telegram.network.autoSelectFamily`: override Node autoSelectFamily (true=enable, false=disable). Defaults to disabled on Node 22 to avoid Happy Eyeballs timeouts.
@@ -727,7 +728,7 @@ Telegram-specific high-signal fields:
 - access control: `dmPolicy`, `allowFrom`, `groupPolicy`, `groupAllowFrom`, `groups`, `groups.*.topics.*`
 - command/menu: `commands.native`, `customCommands`
 - threading/replies: `replyToMode`
-- streaming: `streamMode`, `draftChunk`, `blockStreaming`
+- streaming: `streamMode` (preview), `draftChunk`, `blockStreaming`
 - formatting/delivery: `textChunkLimit`, `chunkMode`, `linkPreview`, `responsePrefix`
 - media/network: `mediaMaxMb`, `timeoutSeconds`, `retry`, `network.autoSelectFamily`, `proxy`
 - webhook: `webhookUrl`, `webhookSecret`, `webhookPath`, `webhookHost`
