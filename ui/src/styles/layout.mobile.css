@@ -232,6 +232,15 @@
     gap: 8px;
   }
 
+  .chat-compose__row {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .chat-compose__actions {
+    align-self: flex-end;
+  }
+
   .chat-compose__field textarea {
     min-height: 60px;
     padding: 8px 10px;
