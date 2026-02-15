@@ -102,6 +102,7 @@ const entries: SubCliEntry[] = [
   {
     name: "agentshield-approvals",
     description: "AgentShield tool-call approvals",
+    hasSubcommands: true,
     register: async (program) => {
       const mod = await import("../agentshield-approvals-cli.js");
       mod.registerAgentShieldApprovalsCli(program);

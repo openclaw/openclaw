@@ -1,10 +1,10 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { loadConfig } from "../config/config.js";
 import type { ExecApprovalForwardTarget } from "../config/types.approvals.js";
 import type {
   AgentShieldApprovalDecision,
   AgentShieldApprovalRecord,
 } from "../gateway/agentshield-approval-manager.js";
-import { loadConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
 import { deliverOutboundPayloads } from "./outbound/deliver.js";

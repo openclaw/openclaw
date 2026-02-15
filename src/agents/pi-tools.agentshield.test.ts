@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import type { AnyAgentTool } from "./tools/common.js";
 import { wrapToolWithAgentShieldApproval, __testing } from "./pi-tools.agentshield.js";
+import type { AnyAgentTool } from "./tools/common.js";
 
 const { isEnabled, needsApproval, canonicalParamsJSON } = __testing;
 
@@ -144,7 +144,10 @@ describe("wrapToolWithAgentShieldApproval", () => {
     });
     const result = await wrapped.execute("tc-1", { cmd: "ls" }, undefined as never);
     expect(result).toBeDefined();
-    const details = (result as Record<string, unknown>).details as Record<string, unknown>;
+    const details = (result as unknown as Record<string, unknown>).details as Record<
+      string,
+      unknown
+    >;
     expect(details.status).toBe("approval-pending");
     expect(details.tool).toBe("test_tool");
     expect(details.agentId).toBe("a1");
@@ -160,7 +163,10 @@ describe("wrapToolWithAgentShieldApproval", () => {
     const tool = makeTool(inner);
     const wrapped = wrapToolWithAgentShieldApproval(tool);
     const result = await wrapped.execute("tc-1", {}, undefined as never);
-    const details = (result as Record<string, unknown>).details as Record<string, unknown>;
+    const details = (result as unknown as Record<string, unknown>).details as Record<
+      string,
+      unknown
+    >;
     expect(details.status).toBe("approval-pending");
   });
 
@@ -171,7 +177,10 @@ describe("wrapToolWithAgentShieldApproval", () => {
     const params = { b: 2, a: 1 };
     const wrapped = wrapToolWithAgentShieldApproval(tool);
     const result = await wrapped.execute("tc-1", params, undefined as never);
-    const details = (result as Record<string, unknown>).details as Record<string, unknown>;
+    const details = (result as unknown as Record<string, unknown>).details as Record<
+      string,
+      unknown
+    >;
     expect(details.paramsJSON).toBe(canonicalParamsJSON(params));
   });
 

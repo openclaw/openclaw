@@ -4,7 +4,6 @@ import type {
   AgentShieldApprovalDecision,
   AgentShieldApprovalManager,
 } from "../agentshield-approval-manager.js";
-import type { GatewayRequestHandlers } from "./types.js";
 import {
   ErrorCodes,
   errorShape,
@@ -13,6 +12,7 @@ import {
   validateAgentShieldApprovalResolveParams,
   validateAgentShieldApprovalListParams,
 } from "../protocol/index.js";
+import type { GatewayRequestHandlers } from "./types.js";
 
 export type { AgentShieldApprovalDecision } from "../agentshield-approval-manager.js";
 

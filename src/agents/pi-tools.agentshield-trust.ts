@@ -1,12 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { AnyAgentTool } from "./tools/common.js";
 import { getTrustEnforcementConfig } from "../infra/agentshield-trust-config.js";
 import {
   enforceTrust,
   isTrustEnforcementEnabled,
   type TrustCheckInput,
 } from "../infra/agentshield-trust-enforcement.js";
+import type { AnyAgentTool } from "./tools/common.js";
 import { jsonResult } from "./tools/common.js";
 
 export type TrustContext = {

@@ -2,11 +2,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import type { AnyAgentTool } from "./tools/common.js";
 import { clearKeyringCaches, KEYRING_SCHEMA } from "../infra/agentshield-keyring.js";
 import { clearRevocationsCache } from "../infra/agentshield-revocations.js";
 import { clearTrustEnforcementConfigCache } from "../infra/agentshield-trust-config.js";
 import { wrapToolWithAgentShieldTrust, __testing } from "./pi-tools.agentshield-trust.js";
+import type { AnyAgentTool } from "./tools/common.js";
 
 const { resolveAgentShieldTrustContext, formatTrustHint } = __testing;
 
