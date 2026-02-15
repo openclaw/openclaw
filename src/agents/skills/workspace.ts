@@ -506,11 +506,13 @@ export function buildWorkspaceSkillCommandSpecs(
       return { kind: "tool", toolName, argMode: "raw" } as const;
     })();
 
+    const isBundled = entry.skill.source === "openclaw-bundled";
     specs.push({
       name: unique,
       skillName: rawName,
       description,
       ...(dispatch ? { dispatch } : {}),
+      ...(isBundled ? { bundled: true } : {}),
     });
   }
   return specs;
