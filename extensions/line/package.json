@@ -24,7 +24,7 @@
     "install": {
       "npmSpec": "@openclaw/line",
       "localPath": "extensions/line",
-      "defaultChoice": "npm"
+      "defaultChoice": "local"
     }
   }
 }
