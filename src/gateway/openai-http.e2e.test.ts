@@ -471,4 +471,168 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       // shared server
     }
   });
+
+  it("passes image attachments from multimodal content to agentCommand", async () => {
+    const port = enabledPort;
+    agentCommand.mockReset();
+    agentCommand.mockResolvedValueOnce({ payloads: [{ text: "I see a cat" }] } as never);
+
+    const base64Data =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQI12NgAAIABQABNjN9GQAAAAlwSFlzAAAWJQAAFiUBSVIk8AAAABl0RVh0U29mdHdhcmUAcGFpbnQubmV0IDQuMC4xNkREYYoAAAANSURBVBhXY2BgYPgPAAEEAQB3GMOEAAAAASUVORK5CYII=";
+    const res = await postChatCompletions(port, {
+      model: "openclaw",
+      messages: [
+        { role: "system", content: "You are helpful." },
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "What is in this image?" },
+            {
+              type: "image_url",
+              image_url: { url: `data:image/png;base64,${base64Data}` },
+            },
+          ],
+        },
+      ],
+    });
+    expect(res.status).toBe(200);
+
+    expect(agentCommand).toHaveBeenCalledTimes(1);
+    const [opts] = agentCommand.mock.calls[0] ?? [];
+    const typedOpts = opts as {
+      message?: string;
+      extraSystemPrompt?: string;
+      images?: Array<{ type: string; data: string; mimeType: string }>;
+    };
+
+    // Message should contain the text
+    expect(typedOpts.message).toContain("What is in this image?");
+
+    // extraSystemPrompt should contain system message
+    expect(typedOpts.extraSystemPrompt).toContain("You are helpful.");
+
+    // Images should be extracted and passed
+    expect(typedOpts.images).toBeDefined();
+    expect(typedOpts.images).toHaveLength(1);
+    expect(typedOpts.images![0]).toEqual({
+      type: "image",
+      data: base64Data,
+      mimeType: "image/png",
+    });
+
+    await res.text();
+  });
+
+  it("does not pass images when content is plain text", async () => {
+    const port = enabledPort;
+    agentCommand.mockReset();
+    agentCommand.mockResolvedValueOnce({ payloads: [{ text: "hi" }] } as never);
+
+    const res = await postChatCompletions(port, {
+      model: "openclaw",
+      messages: [{ role: "user", content: "hello" }],
+    });
+    expect(res.status).toBe(200);
+
+    expect(agentCommand).toHaveBeenCalledTimes(1);
+    const [opts] = agentCommand.mock.calls[0] ?? [];
+    const typedOpts = opts as { images?: unknown };
+    expect(typedOpts.images).toBeUndefined();
+
+    await res.text();
+  });
+
+  it("extracts images only from the last user message", async () => {
+    const port = enabledPort;
+    agentCommand.mockReset();
+    agentCommand.mockResolvedValueOnce({ payloads: [{ text: "ok" }] } as never);
+
+    const base64First = "AAAA";
+    const base64Last = "BBBB";
+    const res = await postChatCompletions(port, {
+      model: "openclaw",
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "first message" },
+            { type: "image_url", image_url: { url: `data:image/jpeg;base64,${base64First}` } },
+          ],
+        },
+        { role: "assistant", content: "I see the first image." },
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "now this one" },
+            { type: "image_url", image_url: { url: `data:image/png;base64,${base64Last}` } },
+          ],
+        },
+      ],
+    });
+    expect(res.status).toBe(200);
+
+    expect(agentCommand).toHaveBeenCalledTimes(1);
+    const [opts] = agentCommand.mock.calls[0] ?? [];
+    const typedOpts = opts as {
+      images?: Array<{ type: string; data: string; mimeType: string }>;
+    };
+
+    // Should only have images from the LAST user message
+    expect(typedOpts.images).toHaveLength(1);
+    expect(typedOpts.images[0].data).toBe(base64Last);
+    expect(typedOpts.images[0].mimeType).toBe("image/png");
+
+    await res.text();
+  });
+
+  it("accepts image-only messages without text", async () => {
+    const port = enabledPort;
+    agentCommand.mockReset();
+    agentCommand.mockResolvedValueOnce({ payloads: [{ text: "I see it" }] } as never);
+
+    const res = await postChatCompletions(port, {
+      model: "openclaw",
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "image_url", image_url: { url: "data:image/png;base64,AAAA" } }],
+        },
+      ],
+    });
+    // Should NOT return 400 — image-only is valid
+    expect(res.status).toBe(200);
+
+    const [opts] = agentCommand.mock.calls[0] ?? [];
+    const typedOpts = opts as { images?: Array<{ data: string }> };
+    expect(typedOpts.images).toHaveLength(1);
+
+    await res.text();
+  });
+
+  it("ignores non-data-url image_url entries", async () => {
+    const port = enabledPort;
+    agentCommand.mockReset();
+    agentCommand.mockResolvedValueOnce({ payloads: [{ text: "ok" }] } as never);
+
+    const res = await postChatCompletions(port, {
+      model: "openclaw",
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "check this" },
+            { type: "image_url", image_url: { url: "https://example.com/image.png" } },
+          ],
+        },
+      ],
+    });
+    expect(res.status).toBe(200);
+
+    const [opts] = agentCommand.mock.calls[0] ?? [];
+    const typedOpts = opts as { images?: unknown };
+    // Non-data-url should be ignored
+    expect(typedOpts.images).toBeUndefined();
+
+    await res.text();
+  });
 });

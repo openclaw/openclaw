@@ -43,6 +43,34 @@ function asMessages(val: unknown): OpenAiChatMessage[] {
   return Array.isArray(val) ? (val as OpenAiChatMessage[]) : [];
 }
 
+type ImageContent = { type: "image"; data: string; mimeType: string };
+
+function extractImages(content: unknown): ImageContent[] {
+  if (!Array.isArray(content)) {
+    return [];
+  }
+  const images: ImageContent[] = [];
+  for (const part of content) {
+    if (!part || typeof part !== "object") {
+      continue;
+    }
+    const type = (part as { type?: unknown }).type;
+    if (type !== "image_url") {
+      continue;
+    }
+    const imageUrl = (part as { image_url?: { url?: string } }).image_url;
+    const url = imageUrl?.url;
+    if (typeof url !== "string") {
+      continue;
+    }
+    const match = /^data:([^;]+);base64,(.+)$/i.exec(url);
+    if (match) {
+      images.push({ type: "image", data: match[2], mimeType: match[1] });
+    }
+  }
+  return images;
+}
+
 function extractTextContent(content: unknown): string {
   if (typeof content === "string") {
     return content;
@@ -76,11 +104,13 @@ function extractTextContent(content: unknown): string {
 function buildAgentPrompt(messagesUnknown: unknown): {
   message: string;
   extraSystemPrompt?: string;
+  images?: ImageContent[];
 } {
   const messages = asMessages(messagesUnknown);
 
   const systemParts: string[] = [];
   const conversationEntries: ConversationEntry[] = [];
+  const entryImages: Array<ImageContent[] | undefined> = [];
 
   for (const msg of messages) {
     if (!msg || typeof msg !== "object") {
@@ -88,11 +118,14 @@ function buildAgentPrompt(messagesUnknown: unknown): {
     }
     const role = typeof msg.role === "string" ? msg.role.trim() : "";
     const content = extractTextContent(msg.content).trim();
-    if (!role || !content) {
+    const msgImages = extractImages(msg.content);
+    if (!role || (!content && msgImages.length === 0)) {
       continue;
     }
     if (role === "system" || role === "developer") {
-      systemParts.push(content);
+      if (content) {
+        systemParts.push(content);
+      }
       continue;
     }
 
@@ -115,13 +148,24 @@ function buildAgentPrompt(messagesUnknown: unknown): {
       role: normalizedRole,
       entry: { sender, body: content },
     });
+    entryImages.push(msgImages.length > 0 ? msgImages : undefined);
   }
 
   const message = buildAgentMessageFromConversationEntries(conversationEntries);
 
+  // Collect images from the last user message
+  let images: ImageContent[] | undefined;
+  for (let i = conversationEntries.length - 1; i >= 0; i -= 1) {
+    if (conversationEntries[i]?.role === "user" && entryImages[i]) {
+      images = entryImages[i];
+      break;
+    }
+  }
+
   return {
     message,
     extraSystemPrompt: systemParts.length > 0 ? systemParts.join("\n\n") : undefined,
+    images: images && images.length > 0 ? images : undefined,
   };
 }
 
@@ -167,7 +211,10 @@ export async function handleOpenAiHttpRequest(
   const agentId = resolveAgentIdForRequest({ req, model });
   const sessionKey = resolveOpenAiSessionKey({ req, agentId, user });
   const prompt = buildAgentPrompt(payload.messages);
-  if (!prompt.message) {
+  // Use a placeholder when the user sends only images with no text,
+  // because agentCommand requires a non-empty message string.
+  const message = prompt.message || (prompt.images?.length ? "[image]" : "");
+  if (!message && (!prompt.images || prompt.images.length === 0)) {
     sendJson(res, 400, {
       error: {
         message: "Missing user message in `messages`.",
@@ -184,13 +231,14 @@ export async function handleOpenAiHttpRequest(
     try {
       const result = await agentCommand(
         {
-          message: prompt.message,
+          message,
           extraSystemPrompt: prompt.extraSystemPrompt,
           sessionKey,
           runId,
           deliver: false,
           messageChannel: "webchat",
           bestEffortDeliver: false,
+          images: prompt.images,
         },
         defaultRuntime,
         deps,
@@ -298,13 +346,14 @@ export async function handleOpenAiHttpRequest(
     try {
       const result = await agentCommand(
         {
-          message: prompt.message,
+          message,
           extraSystemPrompt: prompt.extraSystemPrompt,
           sessionKey,
           runId,
           deliver: false,
           messageChannel: "webchat",
           bestEffortDeliver: false,
+          images: prompt.images,
         },
         defaultRuntime,
         deps,
