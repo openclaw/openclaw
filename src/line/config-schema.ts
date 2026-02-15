@@ -29,17 +29,13 @@ const LineGroupConfigSchema = z
   })
   .strict();
 
-const LineAccountConfigSchema = z
-  .extend({
-    groups: z.record(z.string(), LineGroupConfigSchema.optional()).optional(),
-  })
-  .strict();
+const LineAccountConfigSchema = LineCommonConfigSchema.extend({
+  groups: z.record(z.string(), LineGroupConfigSchema.optional()).optional(),
+}).strict();
 
-export const LineConfigSchema = z
-  .extend({
-    accounts: z.record(z.string(), LineAccountConfigSchema.optional()).optional(),
-    groups: z.record(z.string(), LineGroupConfigSchema.optional()).optional(),
-  })
-  .strict();
+export const LineConfigSchema = LineCommonConfigSchema.extend({
+  accounts: z.record(z.string(), LineAccountConfigSchema.optional()).optional(),
+  groups: z.record(z.string(), LineGroupConfigSchema.optional()).optional(),
+}).strict();
 
 export type LineConfigSchemaType = z.infer<typeof LineConfigSchema>;
