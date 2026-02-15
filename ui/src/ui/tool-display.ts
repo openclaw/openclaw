@@ -9,7 +9,6 @@ import {
   resolveWriteDetail,
   type ToolDisplaySpec as ToolDisplaySpecBase,
 } from "../../../src/agents/tool-display-common.js";
-import { shortenHomeInString } from "../../../src/utils.js";
 import rawConfig from "./tool-display.json" with { type: "json" };
 
 type ToolDisplaySpec = ToolDisplaySpecBase & {
@@ -34,6 +33,27 @@ export type ToolDisplay = {
 const TOOL_DISPLAY_CONFIG = rawConfig as ToolDisplayConfig;
 const FALLBACK = TOOL_DISPLAY_CONFIG.fallback ?? { icon: "puzzle" };
 const TOOL_MAP = TOOL_DISPLAY_CONFIG.tools ?? {};
+
+function shortenHomeInString(input: string): string {
+  if (!input) {
+    return input;
+  }
+
+  // Browser-safe home shortening: avoid importing Node-only helpers (keeps Vite builds working in Docker/CI).
+  const patterns = [
+    { re: /^\/Users\/[^/]+(\/|$)/, replacement: "~$1" }, // macOS
+    { re: /^\/home\/[^/]+(\/|$)/, replacement: "~$1" }, // Linux
+    { re: /^C:\\Users\\[^\\]+(\\|$)/i, replacement: "~$1" }, // Windows
+  ] as const;
+
+  for (const pattern of patterns) {
+    if (pattern.re.test(input)) {
+      return input.replace(pattern.re, pattern.replacement);
+    }
+  }
+
+  return input;
+}
 
 export function resolveToolDisplay(params: {
   name?: string;
