@@ -70,7 +70,11 @@ import { resolveTranscriptPolicy } from "../../transcript-policy.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
 import { appendCacheTtlTimestamp, isCacheTtlEligibleProvider } from "../cache-ttl.js";
-import { computeStaticPromptTokens, planContextMessages } from "../context-planner.js";
+import {
+  computeStaticPromptTokens,
+  planContextMessages,
+  type ContextPlanResult,
+} from "../context-planner.js";
 import { buildEmbeddedExtensionPaths } from "../extensions.js";
 import { applyExtraParamsToAgent } from "../extra-params.js";
 import {
@@ -109,6 +113,37 @@ import {
   shouldFlagCompactionTimeout,
 } from "./compaction-timeout.js";
 import { detectAndLoadPromptImages } from "./images.js";
+
+const DEFAULT_SUMMARY_INJECTION_PRESSURE_THRESHOLD = 0.72;
+
+export type SessionSummaryInjectionDecision = {
+  inject: boolean;
+  reason: "none" | "trimmed" | "pressure";
+  pressureRatio: number;
+};
+
+export function decideSessionSummaryInjection(params: {
+  summaryContext: string;
+  basePlan: ContextPlanResult;
+  pressureThreshold?: number;
+}): SessionSummaryInjectionDecision {
+  const pressureThreshold = Number.isFinite(params.pressureThreshold)
+    ? Math.max(0, params.pressureThreshold ?? DEFAULT_SUMMARY_INJECTION_PRESSURE_THRESHOLD)
+    : DEFAULT_SUMMARY_INJECTION_PRESSURE_THRESHOLD;
+  const pressureRatio =
+    params.basePlan.estimatedHistoryTokensBefore / Math.max(1, params.basePlan.historyBudgetTokens);
+
+  if (!params.summaryContext.trim()) {
+    return { inject: false, reason: "none", pressureRatio };
+  }
+  if (params.basePlan.trimmed) {
+    return { inject: true, reason: "trimmed", pressureRatio };
+  }
+  if (pressureRatio >= pressureThreshold) {
+    return { inject: true, reason: "pressure", pressureRatio };
+  }
+  return { inject: false, reason: "none", pressureRatio };
+}
 
 export function injectHistoryImagesIntoMessages(
   messages: AgentMessage[],
@@ -685,10 +720,6 @@ export async function runEmbeddedAttempt(
           buildSessionSummaryPrompt({
             state: nextSummaryState,
           }) ?? "";
-        if (sessionSummaryContext) {
-          effectiveSystemPromptText = `${systemPromptText}\n\n${sessionSummaryContext}`;
-          applySystemPromptOverrideToSession(activeSession, effectiveSystemPromptText);
-        }
 
         const contextWindowTokens = resolveContextWindowInfo({
           cfg: params.config,
@@ -698,16 +729,35 @@ export async function runEmbeddedAttempt(
           defaultTokens: DEFAULT_CONTEXT_TOKENS,
         }).tokens;
         const reserveTokens = resolveCompactionReserveTokensFloor(params.config);
-        const staticPromptTokens = computeStaticPromptTokens({
-          systemPrompt: effectiveSystemPromptText,
+        const baseStaticPromptTokens = computeStaticPromptTokens({
+          systemPrompt: systemPromptText,
           prompt: params.prompt,
         });
-        const budgeted = planContextMessages({
+        const basePlan = planContextMessages({
           messages: validated,
           contextWindowTokens,
           reserveTokens,
-          staticPromptTokens,
+          staticPromptTokens: baseStaticPromptTokens,
         });
+        const summaryDecision = decideSessionSummaryInjection({
+          summaryContext: sessionSummaryContext,
+          basePlan,
+        });
+        let budgeted = basePlan;
+        if (summaryDecision.inject) {
+          effectiveSystemPromptText = `${systemPromptText}\n\n${sessionSummaryContext}`;
+          applySystemPromptOverrideToSession(activeSession, effectiveSystemPromptText);
+          const summarizedStaticPromptTokens = computeStaticPromptTokens({
+            systemPrompt: effectiveSystemPromptText,
+            prompt: params.prompt,
+          });
+          budgeted = planContextMessages({
+            messages: validated,
+            contextWindowTokens,
+            reserveTokens,
+            staticPromptTokens: summarizedStaticPromptTokens,
+          });
+        }
         const turnLimited = limitHistoryTurns(
           budgeted.messages,
           getDmHistoryLimitFromSessionKey(params.sessionKey, params.config),
@@ -724,7 +774,9 @@ export async function runEmbeddedAttempt(
             `trimmed=${budgeted.trimmed ? "yes" : "no"} ` +
             `reason=${budgeted.reason} ` +
             `tokens=${budgeted.estimatedHistoryTokensAfter}/${budgeted.historyBudgetTokens} ` +
-            `summary=${sessionSummaryContext ? "on" : "off"}`,
+            `summary=${summaryDecision.inject ? "on" : "off"} ` +
+            `summaryReason=${summaryDecision.reason} ` +
+            `pressure=${summaryDecision.pressureRatio.toFixed(2)}`,
         });
         if (limited.length > 0) {
           activeSession.agent.replaceMessages(limited);
