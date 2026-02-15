@@ -123,6 +123,36 @@ const NVIDIA_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
+const MISTRAL_BASE_URL = "https://api.mistral.ai/v1";
+const MISTRAL_DEFAULT_CONTEXT_WINDOW = 128000;
+const MISTRAL_DEFAULT_MAX_TOKENS = 8192;
+// Pricing: https://mistral.ai/products/la-plateprise#pricing
+// Costs are per 1M tokens in USD
+const MISTRAL_LARGE_COST = {
+  input: 2.0,
+  output: 6.0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+const MISTRAL_MEDIUM_COST = {
+  input: 0.4,
+  output: 1.2,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+const MISTRAL_SMALL_COST = {
+  input: 0.1,
+  output: 0.3,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+const CODESTRAL_COST = {
+  input: 0.3,
+  output: 0.9,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
 interface OllamaModel {
   name: string;
   modified_at: string;
@@ -656,6 +686,60 @@ export function buildNvidiaProvider(): ProviderConfig {
   };
 }
 
+export function buildMistralProvider(): ProviderConfig {
+  return {
+    baseUrl: MISTRAL_BASE_URL,
+    api: "openai-completions",
+    models: [
+      {
+        id: "mistral-large-latest",
+        name: "Mistral Large",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: MISTRAL_LARGE_COST,
+        contextWindow: 128000,
+        maxTokens: MISTRAL_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "mistral-medium-latest",
+        name: "Mistral Medium",
+        reasoning: false,
+        input: ["text"],
+        cost: MISTRAL_MEDIUM_COST,
+        contextWindow: MISTRAL_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: MISTRAL_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "mistral-small-latest",
+        name: "Mistral Small",
+        reasoning: false,
+        input: ["text"],
+        cost: MISTRAL_SMALL_COST,
+        contextWindow: MISTRAL_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: MISTRAL_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "codestral-latest",
+        name: "Codestral",
+        reasoning: false,
+        input: ["text"],
+        cost: CODESTRAL_COST,
+        contextWindow: 256000,
+        maxTokens: MISTRAL_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "ministral-8b-latest",
+        name: "Ministral 8B",
+        reasoning: false,
+        input: ["text"],
+        cost: MISTRAL_SMALL_COST,
+        contextWindow: 128000,
+        maxTokens: MISTRAL_DEFAULT_MAX_TOKENS,
+      },
+    ],
+  };
+}
+
 export async function resolveImplicitProviders(params: {
   agentDir: string;
   explicitProviders?: Record<string, ProviderConfig> | null;
@@ -805,6 +889,13 @@ export async function resolveImplicitProviders(params: {
     resolveApiKeyFromProfiles({ provider: "nvidia", store: authStore });
   if (nvidiaKey) {
     providers.nvidia = { ...buildNvidiaProvider(), apiKey: nvidiaKey };
+  }
+
+  const mistralKey =
+    resolveEnvApiKeyVarName("mistral") ??
+    resolveApiKeyFromProfiles({ provider: "mistral", store: authStore });
+  if (mistralKey) {
+    providers.mistral = { ...buildMistralProvider(), apiKey: mistralKey };
   }
 
   return providers;
