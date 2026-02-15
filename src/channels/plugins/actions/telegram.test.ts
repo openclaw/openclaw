@@ -3,9 +3,18 @@ import type { OpenClawConfig } from "../../../config/config.js";
 import { telegramMessageActions } from "./telegram.js";
 
 const handleTelegramAction = vi.fn(async () => ({ ok: true }));
+const sendPollTelegram = vi.fn(async () => ({
+  messageId: "99",
+  chatId: "123",
+  pollId: "p1",
+}));
 
 vi.mock("../../../agents/tools/telegram-actions.js", () => ({
   handleTelegramAction: (...args: unknown[]) => handleTelegramAction(...args),
+}));
+
+vi.mock("../../../telegram/send.js", () => ({
+  sendPollTelegram: (...args: unknown[]) => sendPollTelegram(...args),
 }));
 
 describe("telegramMessageActions", () => {
@@ -139,5 +148,57 @@ describe("telegramMessageActions", () => {
     expect(String(call.chatId)).toBe("123");
     expect(String(call.messageId)).toBe("456");
     expect(call.emoji).toBe("ok");
+  });
+
+  it("lists poll action when polls gate is enabled (#16977)", () => {
+    const cfg = {
+      channels: { telegram: { botToken: "tok", actions: { polls: true } } },
+    } as OpenClawConfig;
+    const actions = telegramMessageActions.listActions({ cfg });
+    expect(actions).toContain("poll");
+  });
+
+  it("handles poll action and calls sendPollTelegram (#16977)", async () => {
+    sendPollTelegram.mockClear();
+    const cfg = { channels: { telegram: { botToken: "tok" } } } as OpenClawConfig;
+
+    const result = await telegramMessageActions.handleAction({
+      action: "poll",
+      params: {
+        to: "123",
+        pollQuestion: "Favorite color?",
+        pollOption: ["Red", "Blue", "Green"],
+        pollMulti: true,
+        pollDurationSeconds: 120,
+        pollAnonymous: false,
+        silent: true,
+      },
+      cfg,
+      accountId: "acct-1",
+    });
+
+    expect(sendPollTelegram).toHaveBeenCalledTimes(1);
+    const [to, poll, opts] = sendPollTelegram.mock.calls[0] as [
+      string,
+      Record<string, unknown>,
+      Record<string, unknown>,
+    ];
+    expect(to).toBe("123");
+    expect(poll.question).toBe("Favorite color?");
+    expect(poll.options).toEqual(["Red", "Blue", "Green"]);
+    expect(poll.maxSelections).toBe(3);
+    expect(poll.durationSeconds).toBe(120);
+    expect(opts.accountId).toBe("acct-1");
+    expect(opts.isAnonymous).toBe(false);
+    expect(opts.silent).toBe(true);
+    expect(result).toEqual({
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({ messageId: "99", chatId: "123", pollId: "p1" }, null, 2),
+        },
+      ],
+      details: { messageId: "99", chatId: "123", pollId: "p1" },
+    });
   });
 });

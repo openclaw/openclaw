@@ -1,6 +1,7 @@
 import type { ChannelMessageActionAdapter, ChannelMessageActionName } from "../types.js";
 import {
   createActionGate,
+  jsonResult,
   readNumberParam,
   readStringArrayParam,
   readStringOrNumberParam,
@@ -9,6 +10,7 @@ import {
 import { handleTelegramAction } from "../../../agents/tools/telegram-actions.js";
 import { listEnabledTelegramAccounts } from "../../../telegram/accounts.js";
 import { isTelegramInlineButtonsEnabled } from "../../../telegram/inline-buttons.js";
+import { sendPollTelegram } from "../../../telegram/send.js";
 
 const providerId = "telegram";
 
@@ -55,6 +57,9 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     }
     if (gate("editMessage")) {
       actions.add("edit");
+    }
+    if (gate("polls")) {
+      actions.add("poll");
     }
     if (gate("sticker", false)) {
       actions.add("sticker");
@@ -197,6 +202,32 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
         },
         cfg,
       );
+    }
+
+    if (action === "poll") {
+      const to = readStringParam(params, "to", { required: true });
+      const question = readStringParam(params, "pollQuestion", { required: true });
+      const options = readStringArrayParam(params, "pollOption", { required: true }) ?? [];
+      const allowMultiselect = typeof params.pollMulti === "boolean" ? params.pollMulti : undefined;
+      const durationSeconds = readNumberParam(params, "pollDurationSeconds", { integer: true });
+      const isAnonymous =
+        typeof params.pollAnonymous === "boolean" ? params.pollAnonymous : undefined;
+      const replyTo = readNumberParam(params, "replyTo", { integer: true });
+      const threadId = readNumberParam(params, "threadId", { integer: true });
+      const silent = typeof params.silent === "boolean" ? params.silent : undefined;
+      const maxSelections = allowMultiselect ? Math.max(2, options.length) : 1;
+      const result = await sendPollTelegram(
+        to,
+        { question, options, maxSelections, durationSeconds: durationSeconds ?? undefined },
+        {
+          accountId: accountId ?? undefined,
+          isAnonymous,
+          replyToMessageId: replyTo ?? undefined,
+          messageThreadId: threadId ?? undefined,
+          silent,
+        },
+      );
+      return jsonResult(result);
     }
 
     throw new Error(`Action ${action} is not supported for provider ${providerId}.`);
