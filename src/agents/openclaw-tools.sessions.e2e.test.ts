@@ -1,3 +1,7 @@
+import crypto from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   addSubagentRunForTests,
@@ -73,6 +77,7 @@ describe("sessions tools", () => {
     };
 
     expect(schemaProp("sessions_history", "limit").type).toBe("number");
+    expect(schemaProp("sessions_history", "outputRefMaxChars").type).toBe("number");
     expect(schemaProp("sessions_list", "limit").type).toBe("number");
     expect(schemaProp("sessions_list", "activeMinutes").type).toBe("number");
     expect(schemaProp("sessions_list", "messageLimit").type).toBe("number");
@@ -266,6 +271,97 @@ describe("sessions tools", () => {
     expect((textBlock?.text ?? "").length <= 4015).toBe(true);
     const thinkingBlock = first?.content?.find((block) => block.type === "thinking");
     expect(thinkingBlock?.thinkingSignature).toBeUndefined();
+  });
+
+  it("sessions_history resolves tool output refs on demand", async () => {
+    callGatewayMock.mockReset();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sessions-history-output-ref-"));
+    const sessionId = "sess-output-ref";
+    const transcriptPath = path.join(dir, `${sessionId}.jsonl`);
+    fs.writeFileSync(transcriptPath, '{"type":"session"}\n', "utf-8");
+
+    const outputRefPath = path.join("tool-output", "payload.json");
+    const payloadPath = path.join(dir, outputRefPath);
+    fs.mkdirSync(path.dirname(payloadPath), { recursive: true });
+    const payloadText = JSON.stringify(
+      { stdout: "x".repeat(20_000), status: "completed" },
+      null,
+      2,
+    );
+    fs.writeFileSync(payloadPath, payloadText, "utf-8");
+    const payloadSha = crypto.createHash("sha256").update(payloadText).digest("hex");
+
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as {
+        method?: string;
+      };
+      if (request.method === "sessions.resolve") {
+        return { key: "main" };
+      }
+      if (request.method === "chat.history") {
+        return {
+          sessionId,
+          messages: [
+            {
+              role: "toolResult",
+              details: {
+                outputRef: {
+                  kind: "tool_result_payload",
+                  path: outputRefPath,
+                  sha256: payloadSha,
+                  contains: { details: true, text: true },
+                },
+              },
+              content: [{ type: "text", text: "preview" }],
+            },
+            { role: "assistant", content: [{ type: "text", text: "ok" }] },
+          ],
+        };
+      }
+      if (request.method === "sessions.list") {
+        return {
+          path: path.join(dir, "sessions.json"),
+          sessions: [{ key: "main", sessionId }],
+        };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing sessions_history tool");
+    }
+
+    const base = await tool.execute("call-output-ref-base", {
+      sessionKey: "main",
+      includeTools: true,
+    });
+    const baseDetails = base.details as {
+      messages?: Array<{
+        details?: { outputRef?: { path?: string } };
+      }>;
+    };
+    expect(baseDetails.messages?.[0]?.details?.outputRef?.path).toBe(outputRefPath);
+
+    const withPayload = await tool.execute("call-output-ref-load", {
+      sessionKey: "main",
+      includeTools: true,
+      outputRefPath,
+      outputRefMaxChars: 1024,
+    });
+    const withPayloadDetails = withPayload.details as {
+      outputRefPayload?: {
+        path?: string;
+        truncated?: boolean;
+        text?: string;
+        sha256Verified?: boolean;
+      };
+    };
+    expect(withPayloadDetails.outputRefPayload?.path).toBe(outputRefPath);
+    expect(withPayloadDetails.outputRefPayload?.truncated).toBe(true);
+    expect(withPayloadDetails.outputRefPayload?.sha256Verified).toBe(true);
+    expect(withPayloadDetails.outputRefPayload?.text).toContain("stdout");
   });
 
   it("sessions_history enforces a hard byte cap even when a single message is huge", async () => {

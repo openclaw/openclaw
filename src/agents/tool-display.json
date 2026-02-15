@@ -250,7 +250,7 @@
     "sessions_history": {
       "emoji": "🧾",
       "title": "Session History",
-      "detailKeys": ["sessionKey", "limit", "includeTools"]
+      "detailKeys": ["sessionKey", "limit", "includeTools", "outputRefPath", "outputRefMaxChars"]
     },
     "sessions_send": {
       "emoji": "📨",
