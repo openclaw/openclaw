@@ -42,12 +42,59 @@ import org.xbill.DNS.TXTRecord
 import org.xbill.DNS.Type
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+import kotlin.math.pow
 
 @Suppress("DEPRECATION")
 class GatewayDiscovery(
   context: Context,
   private val scope: CoroutineScope,
 ) {
+  companion object {
+    /**
+     * Discovery timeout in milliseconds for socket connections.
+     * Prevents indefinite hangs when gateways are offline.
+     */
+    const val DISCOVERY_TIMEOUT_MS = 3000L
+
+    private const val BASE_BACKOFF_DELAY_MS = 5000L
+    private const val MAX_BACKOFF_DELAY_MS = 60000L
+
+    /**
+     * Calculate exponential backoff delay with overflow protection.
+     * 
+     * Uses exponential backoff formula: min(baseDelay * 2^attempt, maxDelay)
+     * The attempt count is internally capped at 20 to prevent arithmetic overflow.
+     * 
+     * Example with defaults (5s base, 60s max):
+     * - Attempt 0: 5s
+     * - Attempt 1: 10s
+     * - Attempt 2: 20s
+     * - Attempt 3: 40s
+     * - Attempt 4+: 60s (capped)
+     *
+     * @param attempt Retry attempt number (0-indexed); negative values treated as 0
+     * @param baseDelay Base delay in milliseconds (default: 5000ms)
+     * @param maxDelay Maximum delay cap in milliseconds (default: 60000ms)
+     * @return Calculated delay in milliseconds, guaranteed to be in range [0, maxDelay]
+     */
+    @JvmStatic
+    fun calculateBackoffDelay(
+      attempt: Int,
+      baseDelay: Long = BASE_BACKOFF_DELAY_MS,
+      maxDelay: Long = MAX_BACKOFF_DELAY_MS,
+    ): Long {
+      if (attempt < 0) return baseDelay
+      if (baseDelay == 0L) return 0L
+      
+      // Cap attempt to prevent overflow (2^20 * 5000 = 5.24B ms ≈ 87 minutes, well under Long.MAX_VALUE)
+      val cappedAttempt = minOf(attempt, 20)
+      val multiplier = 2.0.pow(cappedAttempt).toLong()
+      val calculatedDelay = baseDelay * multiplier
+      
+      return minOf(calculatedDelay, maxDelay)
+    }
+  }
+
   private val nsd = context.getSystemService(NsdManager::class.java)
   private val connectivity = context.getSystemService(ConnectivityManager::class.java)
   private val dns = DnsResolver.getInstance()
@@ -115,13 +162,17 @@ class GatewayDiscovery(
   private fun startUnicastDiscovery(domain: String) {
     unicastJob =
       scope.launch(Dispatchers.IO) {
+        var attempt = 0
         while (true) {
           try {
             refreshUnicast(domain)
+            attempt = 0
+            delay(BASE_BACKOFF_DELAY_MS) // Fixed polling interval on success
           } catch (_: Throwable) {
-            // ignore (best-effort)
+            // Backoff on failure with exponential delay
+            delay(calculateBackoffDelay(attempt))
+            attempt++
           }
-          delay(5000)
         }
       }
   }
@@ -421,19 +472,20 @@ class GatewayDiscovery(
     if (servers.isEmpty()) return null
 
     return try {
+      val timeoutSeconds = maxOf(((DISCOVERY_TIMEOUT_MS + 999) / 1000).toInt(), 1)
       val resolvers =
         servers.mapNotNull { addr ->
           try {
             SimpleResolver().apply {
               setAddress(InetSocketAddress(addr, 53))
-              setTimeout(3)
+              setTimeout(timeoutSeconds)
             }
           } catch (_: Throwable) {
             null
           }
         }
       if (resolvers.isEmpty()) return null
-      ExtendedResolver(resolvers.toTypedArray()).apply { setTimeout(3) }
+      ExtendedResolver(resolvers.toTypedArray()).apply { setTimeout(timeoutSeconds) }
     } catch (_: Throwable) {
       null
     }
