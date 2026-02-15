@@ -64,6 +64,9 @@ RUN chown -R node:node /app
 # This reduces the attack surface by preventing container escape via root privileges
 USER node
 
+HEALTHCHECK --interval=30s --timeout=10s --start-period=180s --retries=5 \
+  CMD node openclaw.mjs gateway call health --json --timeout 8000 > /dev/null || exit 1
+
 # Start gateway server with default config.
 # Binds to loopback (127.0.0.1) by default for security.
 #

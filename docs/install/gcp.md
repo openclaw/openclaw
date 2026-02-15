@@ -270,6 +270,16 @@ services:
       # Recommended: keep the Gateway loopback-only on the VM; access via SSH tunnel.
       # To expose it publicly, remove the `127.0.0.1:` prefix and firewall accordingly.
       - "127.0.0.1:${OPENCLAW_GATEWAY_PORT}:18789"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "node dist/index.js gateway call health --json --timeout 8000 > /dev/null || exit 1",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 180s
     command:
       [
         "node",
@@ -426,6 +436,45 @@ Success:
 
 ```
 [gateway] listening on ws://0.0.0.0:18789
+```
+
+### Container health behavior (expected)
+
+The Compose service runs this health probe against the configured Gateway port:
+
+```bash
+node dist/index.js gateway call health --json --timeout 8000
+```
+
+- `healthy`: Docker can reach the Gateway and `gateway call health` returns success.
+- `starting`: Startup grace period is still active (`start_period: 180s`) while first boot tasks finish (for example: migration, first build warm-up, or provider initialization).
+- `unhealthy`: Health probe retries exceeded (`retries: 5`) and Docker marks the container unhealthy.
+
+Check current health state:
+
+```bash
+docker compose ps
+```
+
+Inspect detailed probe history:
+
+```bash
+docker inspect --format '{{json .State.Health}}' $(docker compose ps -q openclaw-gateway) | jq
+```
+
+If the container is unhealthy, run these commands in order:
+
+```bash
+docker compose logs --tail=200 openclaw-gateway
+docker compose exec openclaw-gateway node dist/index.js gateway call health --json --timeout 8000
+docker compose restart openclaw-gateway
+```
+
+If health still fails, verify auth and bind configuration in `.env` (`OPENCLAW_GATEWAY_TOKEN`, `OPENCLAW_GATEWAY_BIND`, `OPENCLAW_GATEWAY_PORT`), then rebuild and relaunch:
+
+```bash
+docker compose build --no-cache openclaw-gateway
+docker compose up -d openclaw-gateway
 ```
 
 ---
