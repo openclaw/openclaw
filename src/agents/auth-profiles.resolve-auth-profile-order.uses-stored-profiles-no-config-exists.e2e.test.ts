@@ -1,30 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { resolveAuthProfileOrder } from "./auth-profiles.js";
+import {
+  ANTHROPIC_CFG,
+  ANTHROPIC_STORE,
+} from "./auth-profiles.resolve-auth-profile-order.fixtures.js";
 
 describe("resolveAuthProfileOrder", () => {
-  const store: AuthProfileStore = {
-    version: 1,
-    profiles: {
-      "anthropic:default": {
-        type: "api_key",
-        provider: "anthropic",
-        key: "sk-default",
-      },
-      "anthropic:work": {
-        type: "api_key",
-        provider: "anthropic",
-        key: "sk-work",
-      },
-    },
-  };
-  const cfg = {
-    auth: {
-      profiles: {
-        "anthropic:default": { provider: "anthropic", mode: "api_key" },
-        "anthropic:work": { provider: "anthropic", mode: "api_key" },
-      },
-    },
-  };
+  const store = ANTHROPIC_STORE;
+  const cfg = ANTHROPIC_CFG;
 
   it("uses stored profiles when no config exists", () => {
     const order = resolveAuthProfileOrder({
