@@ -409,6 +409,44 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(chatLog.updateAssistant).toHaveBeenLastCalledWith("continued", "run-active");
   });
 
+  it("suppresses non-local empty final placeholders during concurrent runs", () => {
+    const state = makeState({ activeChatRunId: "run-active" });
+    const { chatLog, tui, setActivityStatus, loadHistory, isLocalRunId, forgetLocalRunId } =
+      makeContext(state);
+    const { handleChatEvent } = createEventHandlers({
+      chatLog,
+      tui,
+      state,
+      setActivityStatus,
+      loadHistory,
+      isLocalRunId,
+      forgetLocalRunId,
+    });
+
+    handleChatEvent({
+      runId: "run-active",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "local stream" },
+    });
+
+    loadHistory.mockClear();
+    chatLog.finalizeAssistant.mockClear();
+    chatLog.dropAssistant.mockClear();
+
+    handleChatEvent({
+      runId: "run-other",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [] },
+    });
+
+    expect(chatLog.finalizeAssistant).not.toHaveBeenCalledWith("(no output)", "run-other");
+    expect(chatLog.dropAssistant).toHaveBeenCalledWith("run-other");
+    expect(loadHistory).not.toHaveBeenCalled();
+    expect(state.activeChatRunId).toBe("run-active");
+  });
+
   it("drops streaming assistant when chat final has no message", () => {
     const state = makeState({ activeChatRunId: null });
     const { chatLog, tui, setActivityStatus } = makeContext(state);

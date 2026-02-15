@@ -172,7 +172,13 @@ export function createEventHandlers(context: EventHandlerContext) {
           : "";
 
       const finalText = streamAssembler.finalize(evt.runId, evt.message, state.showThinking);
-      chatLog.finalizeAssistant(finalText, evt.runId);
+      const suppressEmptyExternalPlaceholder =
+        finalText === "(no output)" && !isLocalRunId?.(evt.runId);
+      if (suppressEmptyExternalPlaceholder) {
+        chatLog.dropAssistant(evt.runId);
+      } else {
+        chatLog.finalizeAssistant(finalText, evt.runId);
+      }
       noteFinalizedRun(evt.runId);
       clearActiveRunIfMatch(evt.runId);
       if (wasActiveRun) {
