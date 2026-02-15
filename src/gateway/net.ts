@@ -59,6 +59,14 @@ function normalizeIp(ip: string | undefined): string | undefined {
   return normalizeIPv4MappedAddress(trimmed.toLowerCase());
 }
 
+function normalizeIpMaybeWithPort(ip: string | undefined): string | undefined {
+  const trimmed = ip?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return normalizeIp(stripOptionalPort(trimmed));
+}
+
 function stripOptionalPort(ip: string): string {
   if (ip.startsWith("[")) {
     const end = ip.indexOf("]");
@@ -95,12 +103,249 @@ function parseRealIp(realIp?: string): string | undefined {
   return normalizeIp(stripOptionalPort(raw));
 }
 
+type ParsedCidr = {
+  family: 4 | 6;
+  prefix: number;
+  network: Uint8Array;
+};
+
+const PRIVATE_PROXY_CIDRS = [
+  "127.0.0.0/8",
+  "::1/128",
+  "::ffff:127.0.0.0/104",
+  "10.0.0.0/8",
+  "172.16.0.0/12",
+  "192.168.0.0/16",
+  "169.254.0.0/16",
+  "100.64.0.0/10",
+  "fc00::/7",
+  "fe80::/10",
+];
+
+function parseIPv4Bytes(ip: string): Uint8Array | null {
+  const normalized = normalizeIpMaybeWithPort(ip);
+  if (!normalized || net.isIP(normalized) !== 4) {
+    return null;
+  }
+  const parts = normalized.split(".");
+  if (parts.length !== 4) {
+    return null;
+  }
+  const bytes = new Uint8Array(4);
+  for (let i = 0; i < 4; i++) {
+    const n = Number(parts[i]);
+    if (!Number.isInteger(n) || n < 0 || n > 255) {
+      return null;
+    }
+    bytes[i] = n;
+  }
+  return bytes;
+}
+
+function parseIPv6Bytes(ip: string): Uint8Array | null {
+  const normalized = normalizeIpMaybeWithPort(ip);
+  if (!normalized) {
+    return null;
+  }
+  const zoneStripped = normalized.split("%")[0] ?? normalized;
+  if (net.isIP(zoneStripped) !== 6) {
+    return null;
+  }
+
+  const doubleParts = zoneStripped.split("::");
+  if (doubleParts.length > 2) {
+    return null; // more than one '::'
+  }
+  const headRaw = doubleParts[0] ?? "";
+  const tailRaw = doubleParts[1];
+
+  const headParts = headRaw ? headRaw.split(":").filter(Boolean) : [];
+  const tailParts = tailRaw ? tailRaw.split(":").filter(Boolean) : [];
+
+  const expandIPv4Tail = (parts: string[]): string[] => {
+    const last = parts.at(-1);
+    if (!last || !last.includes(".")) {
+      return parts;
+    }
+    const v4 = parseIPv4Bytes(last);
+    if (!v4) {
+      return parts;
+    }
+    const hi = (v4[0] << 8) | v4[1];
+    const lo = (v4[2] << 8) | v4[3];
+    return [...parts.slice(0, -1), hi.toString(16), lo.toString(16)];
+  };
+
+  const head = expandIPv4Tail(headParts);
+  const tail = expandIPv4Tail(tailParts);
+
+  const hasDoubleColon = doubleParts.length === 2;
+  const totalParts = head.length + tail.length;
+  if (!hasDoubleColon && totalParts !== 8) {
+    return null;
+  }
+  if (hasDoubleColon && totalParts > 8) {
+    return null;
+  }
+
+  const zerosToInsert = hasDoubleColon ? 8 - totalParts : 0;
+  const fullParts = [...head, ...Array.from({ length: zerosToInsert }, () => "0"), ...tail];
+  if (fullParts.length !== 8) {
+    return null;
+  }
+
+  const bytes = new Uint8Array(16);
+  for (let i = 0; i < 8; i++) {
+    const part = fullParts[i] ?? "";
+    const n = Number.parseInt(part, 16);
+    if (!Number.isFinite(n) || n < 0 || n > 0xffff) {
+      return null;
+    }
+    bytes[i * 2] = (n >> 8) & 0xff;
+    bytes[i * 2 + 1] = n & 0xff;
+  }
+  return bytes;
+}
+
+function applyPrefixMask(bytes: Uint8Array, prefix: number): Uint8Array {
+  const masked = new Uint8Array(bytes);
+  const fullBytes = Math.floor(prefix / 8);
+  const remainder = prefix % 8;
+
+  for (let i = fullBytes + (remainder > 0 ? 1 : 0); i < masked.length; i++) {
+    masked[i] = 0;
+  }
+
+  if (remainder > 0 && fullBytes < masked.length) {
+    const mask = (0xff << (8 - remainder)) & 0xff;
+    masked[fullBytes] = masked[fullBytes] & mask;
+  }
+
+  return masked;
+}
+
+function parseCidr(value: string): ParsedCidr | null {
+  const trimmed = value.trim();
+  const slashIdx = trimmed.lastIndexOf("/");
+  if (slashIdx <= 0) {
+    return null;
+  }
+  const addrRaw = trimmed.slice(0, slashIdx).trim();
+  const prefixRaw = trimmed.slice(slashIdx + 1).trim();
+  if (!addrRaw || !prefixRaw) {
+    return null;
+  }
+  const prefix = Number.parseInt(prefixRaw, 10);
+  if (!Number.isInteger(prefix)) {
+    return null;
+  }
+
+  const addr = normalizeIpMaybeWithPort(addrRaw);
+  if (!addr) {
+    return null;
+  }
+
+  const family = net.isIP(addr);
+  if (family === 4) {
+    if (prefix < 0 || prefix > 32) {
+      return null;
+    }
+    const bytes = parseIPv4Bytes(addr);
+    if (!bytes) {
+      return null;
+    }
+    return { family: 4, prefix, network: applyPrefixMask(bytes, prefix) };
+  }
+  if (family === 6) {
+    if (prefix < 0 || prefix > 128) {
+      return null;
+    }
+    const bytes = parseIPv6Bytes(addr);
+    if (!bytes) {
+      return null;
+    }
+    return { family: 6, prefix, network: applyPrefixMask(bytes, prefix) };
+  }
+  return null;
+}
+
+function isIpInCidr(ip: string, cidr: ParsedCidr): boolean {
+  const normalized = normalizeIpMaybeWithPort(ip);
+  if (!normalized) {
+    return false;
+  }
+  const family = net.isIP(normalized);
+  if (family !== cidr.family) {
+    return false;
+  }
+
+  const bytes =
+    cidr.family === 4
+      ? parseIPv4Bytes(normalized)
+      : cidr.family === 6
+        ? parseIPv6Bytes(normalized)
+        : null;
+  if (!bytes) {
+    return false;
+  }
+
+  const fullBytes = Math.floor(cidr.prefix / 8);
+  const remainder = cidr.prefix % 8;
+  for (let i = 0; i < fullBytes; i++) {
+    if (bytes[i] !== cidr.network[i]) {
+      return false;
+    }
+  }
+  if (remainder > 0) {
+    const mask = (0xff << (8 - remainder)) & 0xff;
+    if (((bytes[fullBytes] ?? 0) & mask) !== ((cidr.network[fullBytes] ?? 0) & mask)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+export function resolveTrustedProxies(
+  configured?: string[] | null,
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  const base = Array.isArray(configured)
+    ? configured.map((entry) => entry?.trim()).filter((entry): entry is string => Boolean(entry))
+    : [];
+
+  const isRailway =
+    Boolean(env.RAILWAY_STATIC_URL) ||
+    Boolean(env.RAILWAY_ENVIRONMENT) ||
+    Boolean(env.RAILWAY_SERVICE_NAME);
+  const allowPrivateRanges = env.OPENCLAW_TRUST_PROXY_PRIVATE === "1" || isRailway;
+
+  if (allowPrivateRanges) {
+    for (const cidr of PRIVATE_PROXY_CIDRS) {
+      if (!base.includes(cidr)) {
+        base.push(cidr);
+      }
+    }
+  }
+  return base;
+}
+
 export function isTrustedProxyAddress(ip: string | undefined, trustedProxies?: string[]): boolean {
-  const normalized = normalizeIp(ip);
+  const normalized = normalizeIpMaybeWithPort(ip);
   if (!normalized || !trustedProxies || trustedProxies.length === 0) {
     return false;
   }
-  return trustedProxies.some((proxy) => normalizeIp(proxy) === normalized);
+
+  return trustedProxies.some((proxy) => {
+    const raw = proxy?.trim();
+    if (!raw) {
+      return false;
+    }
+    if (raw.includes("/")) {
+      const cidr = parseCidr(raw);
+      return cidr ? isIpInCidr(normalized, cidr) : false;
+    }
+    return normalizeIpMaybeWithPort(raw) === normalized;
+  });
 }
 
 export function resolveGatewayClientIp(params: {
@@ -109,7 +354,7 @@ export function resolveGatewayClientIp(params: {
   realIp?: string;
   trustedProxies?: string[];
 }): string | undefined {
-  const remote = normalizeIp(params.remoteAddr);
+  const remote = normalizeIpMaybeWithPort(params.remoteAddr);
   if (!remote) {
     return undefined;
   }
