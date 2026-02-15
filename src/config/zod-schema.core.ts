@@ -13,6 +13,16 @@ export const ModelApiSchema = z.union([
   z.literal("ollama"),
 ]);
 
+export const RetryConfigSchema = z
+  .object({
+    attempts: z.number().int().min(1).optional(),
+    minDelayMs: z.number().int().min(0).optional(),
+    maxDelayMs: z.number().int().min(0).optional(),
+    jitter: z.number().min(0).max(1).optional(),
+  })
+  .strict()
+  .optional();
+
 export const ModelCompatSchema = z
   .object({
     supportsStore: z.boolean().optional(),
@@ -66,6 +76,7 @@ export const ModelProviderSchema = z
     headers: z.record(z.string(), z.string()).optional(),
     authHeader: z.boolean().optional(),
     models: z.array(ModelDefinitionSchema),
+    retry: RetryConfigSchema,
   })
   .strict();
 
@@ -303,16 +314,6 @@ export const requireOpenAllowFrom = (params: {
 };
 
 export const MSTeamsReplyStyleSchema = z.enum(["thread", "top-level"]);
-
-export const RetryConfigSchema = z
-  .object({
-    attempts: z.number().int().min(1).optional(),
-    minDelayMs: z.number().int().min(0).optional(),
-    maxDelayMs: z.number().int().min(0).optional(),
-    jitter: z.number().min(0).max(1).optional(),
-  })
-  .strict()
-  .optional();
 
 export const QueueModeBySurfaceSchema = z
   .object({

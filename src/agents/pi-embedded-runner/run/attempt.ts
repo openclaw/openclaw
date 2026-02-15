@@ -100,6 +100,7 @@ import {
   shouldFlagCompactionTimeout,
 } from "./compaction-timeout.js";
 import { detectAndLoadPromptImages } from "./images.js";
+import { getRetryConfig, runWithPromptRetry } from "./prompt-retry.js";
 
 export function injectHistoryImagesIntoMessages(
   messages: AgentMessage[],
@@ -956,10 +957,26 @@ export async function runEmbeddedAttempt(
 
           // Only pass images option if there are actually images to pass
           // This avoids potential issues with models that don't expect the images parameter
+          const retryConfig = getRetryConfig(params.provider, params.config);
+
           if (imageResult.images.length > 0) {
-            await abortable(activeSession.prompt(effectivePrompt, { images: imageResult.images }));
+            await abortable(
+              runWithPromptRetry(
+                () => activeSession.prompt(effectivePrompt, { images: imageResult.images }),
+                params.provider,
+                params.modelId,
+                retryConfig,
+              ),
+            );
           } else {
-            await abortable(activeSession.prompt(effectivePrompt));
+            await abortable(
+              runWithPromptRetry(
+                () => activeSession.prompt(effectivePrompt),
+                params.provider,
+                params.modelId,
+                retryConfig,
+              ),
+            );
           }
         } catch (err) {
           promptError = err;

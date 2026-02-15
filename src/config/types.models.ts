@@ -1,3 +1,5 @@
+import type { OutboundRetryConfig } from "./types.base.js";
+
 export type ModelApi =
   | "openai-completions"
   | "openai-responses"
@@ -49,6 +51,8 @@ export type ModelProviderConfig = {
   headers?: Record<string, string>;
   authHeader?: boolean;
   models: ModelDefinitionConfig[];
+  /** Retry configuration for LLM API calls (TPM/RPM rate limits). */
+  retry?: OutboundRetryConfig;
 };
 
 export type BedrockDiscoveryConfig = {
