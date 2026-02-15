@@ -134,7 +134,15 @@ const memoryNeo4jPlugin = {
             }
 
             const text = results
-              .map((r, i) => `${i + 1}. [${r.category}] ${r.text} (${(r.score * 100).toFixed(0)}%)`)
+              .map((r, i) => {
+                const base = `${i + 1}. [${r.category}] ${r.text} (${(r.score * 100).toFixed(0)}%)`;
+                if (!r.signals) return base;
+                const parts: string[] = [];
+                if (r.signals.vector.rank > 0) parts.push(`vec:#${r.signals.vector.rank}`);
+                if (r.signals.bm25.rank > 0) parts.push(`bm25:#${r.signals.bm25.rank}`);
+                if (r.signals.graph.rank > 0) parts.push(`graph:#${r.signals.graph.rank}`);
+                return parts.length > 0 ? `${base} [${parts.join(" ")}]` : base;
+              })
               .join("\n");
 
             const sanitizedResults = results.map((r) => ({
@@ -565,7 +573,7 @@ const memoryNeo4jPlugin = {
           const memoryContext = results.map((r) => `- [${r.category}] ${r.text}`).join("\n");
 
           api.logger.debug?.(
-            `memory-neo4j: auto-recall memories: ${JSON.stringify(results.map((r) => ({ id: r.id, text: r.text.slice(0, 80), category: r.category, score: r.score })))}`,
+            `memory-neo4j: auto-recall memories: ${JSON.stringify(results.map((r) => ({ id: r.id, text: r.text.slice(0, 80), score: r.score, vec: r.signals?.vector.rank || "-", bm25: r.signals?.bm25.rank || "-", graph: r.signals?.graph.rank || "-" })))}`,
           );
 
           return {

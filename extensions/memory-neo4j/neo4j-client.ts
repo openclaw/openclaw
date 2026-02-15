@@ -1772,6 +1772,90 @@ export class Neo4jMemoryClient {
   }
 
   // --------------------------------------------------------------------------
+  // Health & Stats Queries
+  // --------------------------------------------------------------------------
+
+  /**
+   * Get entity graph statistics: entity count, mention count, and density.
+   * Density = mentionCount / max(entityCount, 1).
+   */
+  async getEntityGraphStats(
+    agentId?: string,
+  ): Promise<{ entityCount: number; mentionCount: number; density: number }> {
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      // When agentId is provided, only count entities connected to that agent's memories
+      const query = agentId
+        ? `OPTIONAL MATCH (m:Memory {agentId: $agentId})-[r:MENTIONS]->(e:Entity)
+           WITH collect(DISTINCT e) AS entities, count(r) AS mentionCount
+           RETURN size(entities) AS entityCount, mentionCount`
+        : `OPTIONAL MATCH (e:Entity)
+           WITH count(DISTINCT e) AS entityCount
+           OPTIONAL MATCH ()-[r:MENTIONS]->()
+           RETURN entityCount, count(r) AS mentionCount`;
+
+      const result = await session.run(query, agentId ? { agentId } : {});
+      const entityCount = (result.records[0]?.get("entityCount") as number) ?? 0;
+      const mentionCount = (result.records[0]?.get("mentionCount") as number) ?? 0;
+      return {
+        entityCount,
+        mentionCount,
+        density: mentionCount / Math.max(entityCount, 1),
+      };
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
+   * Get decay score distribution bucketed into health categories.
+   * Computes decay scores server-side and buckets them.
+   */
+  async getDecayDistribution(agentId?: string): Promise<Array<{ bucket: string; count: number }>> {
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      const agentFilter = agentId ? "AND m.agentId = $agentId" : "";
+      const result = await session.run(
+        `MATCH (m:Memory)
+         WHERE m.createdAt IS NOT NULL AND m.category <> 'core' ${agentFilter}
+         WITH m,
+              m.importance AS importance,
+              CASE
+                WHEN m.lastRetrievedAt IS NOT NULL
+                THEN duration.between(datetime(m.lastRetrievedAt), datetime()).days
+                ELSE duration.between(datetime(m.createdAt), datetime()).days
+              END AS effectiveAgeDays,
+              coalesce(m.retrievalCount, 0) AS retrievalCount
+         WITH m, importance,
+              30.0 * (1.0 + importance * 2.0) * (1.0 + log(1.0 + retrievalCount) * 0.2) AS halfLife,
+              effectiveAgeDays
+         WITH CASE
+           WHEN importance * exp(-1.0 * effectiveAgeDays / halfLife) >= 0.8 THEN 'healthy'
+           WHEN importance * exp(-1.0 * effectiveAgeDays / halfLife) >= 0.5 THEN 'moderate'
+           WHEN importance * exp(-1.0 * effectiveAgeDays / halfLife) >= 0.2 THEN 'fading'
+           ELSE 'near-pruning'
+         END AS bucket
+         RETURN bucket, count(*) AS cnt
+         ORDER BY CASE bucket
+           WHEN 'healthy' THEN 1
+           WHEN 'moderate' THEN 2
+           WHEN 'fading' THEN 3
+           WHEN 'near-pruning' THEN 4
+         END`,
+        agentId ? { agentId } : {},
+      );
+      return result.records.map((r) => ({
+        bucket: r.get("bucket") as string,
+        count: (r.get("cnt") as number) ?? 0,
+      }));
+    } finally {
+      await session.close();
+    }
+  }
+
+  // --------------------------------------------------------------------------
   // Sleep Cycle: Entity Deduplication
   // --------------------------------------------------------------------------
 

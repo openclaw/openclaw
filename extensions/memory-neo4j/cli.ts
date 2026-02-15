@@ -290,6 +290,7 @@ export function registerCli(api: OpenClawPluginApi, deps: CliDeps): void {
           "Skip LLM-based semantic dedup (Phase 1b) and conflict detection (Phase 1c)",
         )
         .option("--workspace <dir>", "Workspace directory for TASKS.md cleanup")
+        .option("--report", "Show quality metrics after sleep cycle completes")
         .action(
           async (opts: {
             agent?: string;
@@ -302,6 +303,7 @@ export function registerCli(api: OpenClawPluginApi, deps: CliDeps): void {
             concurrency?: string;
             skipSemantic?: boolean;
             workspace?: string;
+            report?: boolean;
           }) => {
             console.log("\n🌙 Memory Sleep Cycle");
             console.log("═════════════════════════════════════════════════════════════");
@@ -440,6 +442,54 @@ export function registerCli(api: OpenClawPluginApi, deps: CliDeps): void {
               if (result.aborted) {
                 console.log("\n⚠️  Sleep cycle was aborted before completion.");
               }
+
+              // Quality report (optional)
+              if (opts.report) {
+                console.log("\n═════════════════════════════════════════════════════════════");
+                console.log("📊 Quality Report");
+                console.log("─────────────────────────────────────────────────────────────");
+
+                try {
+                  // Extraction coverage
+                  const statusCounts = await db.countByExtractionStatus(opts.agent);
+                  const totalMems =
+                    statusCounts.pending +
+                    statusCounts.complete +
+                    statusCounts.failed +
+                    statusCounts.skipped;
+                  const coveragePct =
+                    totalMems > 0 ? ((statusCounts.complete / totalMems) * 100).toFixed(1) : "0.0";
+                  console.log(
+                    `\n  Extraction Coverage: ${coveragePct}% (${statusCounts.complete}/${totalMems})`,
+                  );
+                  console.log(
+                    `    pending=${statusCounts.pending}  complete=${statusCounts.complete}  failed=${statusCounts.failed}  skipped=${statusCounts.skipped}`,
+                  );
+
+                  // Entity graph stats
+                  const graphStats = await db.getEntityGraphStats(opts.agent);
+                  console.log(`\n  Entity Graph:`);
+                  console.log(
+                    `    Entities: ${graphStats.entityCount}  Mentions: ${graphStats.mentionCount}  Density: ${graphStats.density.toFixed(2)}`,
+                  );
+
+                  // Decay distribution
+                  const decayDist = await db.getDecayDistribution(opts.agent);
+                  if (decayDist.length > 0) {
+                    const maxCount = Math.max(...decayDist.map((d) => d.count));
+                    const BAR_W = 20;
+                    console.log(`\n  Decay Distribution:`);
+                    for (const { bucket, count } of decayDist) {
+                      const filled = maxCount > 0 ? Math.round((count / maxCount) * BAR_W) : 0;
+                      const bar = "█".repeat(filled) + "░".repeat(BAR_W - filled);
+                      console.log(`    ${bucket.padEnd(13)} ${bar} ${count}`);
+                    }
+                  }
+                } catch (reportErr) {
+                  console.log(`\n  ⚠️  Could not generate quality report: ${String(reportErr)}`);
+                }
+              }
+
               console.log("");
             } catch (err) {
               console.error(
@@ -562,6 +612,192 @@ export function registerCli(api: OpenClawPluginApi, deps: CliDeps): void {
             // Delete in batch
             const deleted = await db.pruneMemories(noise.map((m) => m.id));
             console.log(`\nDeleted ${deleted} low-substance memories.\n`);
+          } catch (err) {
+            console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
+            process.exitCode = 1;
+          }
+        });
+      memory
+        .command("health")
+        .description("Memory system health dashboard")
+        .option("--agent <id>", "Scope to a specific agent")
+        .option("--json", "Output all sections as JSON")
+        .action(async (opts: { agent?: string; json?: boolean }) => {
+          try {
+            await db.ensureInitialized();
+
+            const agentId = opts.agent;
+
+            // Gather all data in parallel
+            const [
+              memoryStats,
+              totalCount,
+              statusCounts,
+              graphStats,
+              decayDist,
+              orphanEntities,
+              orphanTags,
+              singleUseTags,
+            ] = await Promise.all([
+              db.getMemoryStats(),
+              db.countMemories(agentId),
+              db.countByExtractionStatus(agentId),
+              db.getEntityGraphStats(agentId),
+              db.getDecayDistribution(agentId),
+              db.findOrphanEntities(500),
+              db.findOrphanTags(500),
+              db.findSingleUseTags(14, 500),
+            ]);
+
+            // Filter stats by agent if specified
+            const filteredStats = agentId
+              ? memoryStats.filter((s) => s.agentId === agentId)
+              : memoryStats;
+
+            if (opts.json) {
+              const totalExtraction =
+                statusCounts.pending +
+                statusCounts.complete +
+                statusCounts.failed +
+                statusCounts.skipped;
+              console.log(
+                JSON.stringify(
+                  {
+                    memoryOverview: {
+                      total: totalCount,
+                      byAgentCategory: filteredStats,
+                    },
+                    extractionHealth: {
+                      ...statusCounts,
+                      total: totalExtraction,
+                      coveragePercent:
+                        totalExtraction > 0
+                          ? Number(((statusCounts.complete / totalExtraction) * 100).toFixed(1))
+                          : 0,
+                    },
+                    entityGraph: {
+                      ...graphStats,
+                      orphanCount: orphanEntities.length,
+                    },
+                    tagHealth: {
+                      orphanCount: orphanTags.length,
+                      singleUseCount: singleUseTags.length,
+                    },
+                    decayDistribution: decayDist,
+                  },
+                  null,
+                  2,
+                ),
+              );
+              return;
+            }
+
+            const BAR_W = 20;
+            const bar = (ratio: number) => {
+              const filled = Math.round(Math.min(1, Math.max(0, ratio)) * BAR_W);
+              return "█".repeat(filled) + "░".repeat(BAR_W - filled);
+            };
+
+            console.log("\n╔═══════════════════════════════════════════════════════════╗");
+            console.log("║           Memory (Neo4j) Health Dashboard                ║");
+            if (agentId) {
+              console.log(`║  Agent: ${agentId.padEnd(49)}║`);
+            }
+            console.log("╚═══════════════════════════════════════════════════════════╝");
+
+            // Section 1: Memory Overview
+            console.log("\n┌─ Memory Overview");
+            console.log("│");
+            console.log(`│  Total: ${totalCount} memories`);
+
+            if (filteredStats.length > 0) {
+              // Group by agent
+              const byAgent = new Map<
+                string,
+                Array<{ category: string; count: number; avgImportance: number }>
+              >();
+              for (const row of filteredStats) {
+                const list = byAgent.get(row.agentId) || [];
+                list.push({
+                  category: row.category,
+                  count: row.count,
+                  avgImportance: row.avgImportance,
+                });
+                byAgent.set(row.agentId, list);
+              }
+
+              for (const [agent, categories] of byAgent) {
+                const agentTotal = categories.reduce((s, c) => s + c.count, 0);
+                const maxCat = Math.max(...categories.map((c) => c.count));
+                console.log(`│`);
+                console.log(`│  ${agent} (${agentTotal}):`);
+                for (const { category, count } of categories) {
+                  const ratio = maxCat > 0 ? count / maxCat : 0;
+                  console.log(`│    ${category.padEnd(12)} ${bar(ratio)} ${count}`);
+                }
+              }
+            }
+            console.log("└");
+
+            // Section 2: Extraction Health
+            const totalExtraction =
+              statusCounts.pending +
+              statusCounts.complete +
+              statusCounts.failed +
+              statusCounts.skipped;
+            const coveragePct =
+              totalExtraction > 0
+                ? ((statusCounts.complete / totalExtraction) * 100).toFixed(1)
+                : "0.0";
+
+            console.log("\n┌─ Extraction Health");
+            console.log("│");
+            console.log(
+              `│  Coverage: ${coveragePct}% (${statusCounts.complete}/${totalExtraction})`,
+            );
+            console.log(`│`);
+            const statusEntries: Array<[string, number]> = [
+              ["pending", statusCounts.pending],
+              ["complete", statusCounts.complete],
+              ["failed", statusCounts.failed],
+              ["skipped", statusCounts.skipped],
+            ];
+            const maxStatus = Math.max(...statusEntries.map(([, c]) => c));
+            for (const [label, count] of statusEntries) {
+              const ratio = maxStatus > 0 ? count / maxStatus : 0;
+              console.log(`│  ${label.padEnd(10)} ${bar(ratio)} ${count}`);
+            }
+            console.log("└");
+
+            // Section 3: Entity Graph
+            console.log("\n┌─ Entity Graph");
+            console.log("│");
+            console.log(`│  Entities:  ${graphStats.entityCount}`);
+            console.log(`│  Mentions:  ${graphStats.mentionCount}`);
+            console.log(`│  Density:   ${graphStats.density.toFixed(2)} mentions/entity`);
+            console.log(`│  Orphans:   ${orphanEntities.length}`);
+            console.log("└");
+
+            // Section 4: Tag Health
+            console.log("\n┌─ Tag Health");
+            console.log("│");
+            console.log(`│  Orphan tags:     ${orphanTags.length}`);
+            console.log(`│  Single-use tags: ${singleUseTags.length}`);
+            console.log("└");
+
+            // Section 5: Decay Distribution
+            console.log("\n┌─ Decay Distribution");
+            console.log("│");
+            if (decayDist.length > 0) {
+              const maxDecay = Math.max(...decayDist.map((d) => d.count));
+              for (const { bucket, count } of decayDist) {
+                const ratio = maxDecay > 0 ? count / maxDecay : 0;
+                console.log(`│  ${bucket.padEnd(13)} ${bar(ratio)} ${count}`);
+              }
+            } else {
+              console.log("│  No non-core memories found.");
+            }
+            console.log("└\n");
           } catch (err) {
             console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
             process.exitCode = 1;
