@@ -179,6 +179,29 @@ describe("redactConfigSnapshot", () => {
     expect(gw.auth.token).toBe(REDACTED_SENTINEL);
   });
 
+  it("does not redact passwordFile path fields", () => {
+    const snapshot = makeSnapshot({
+      channels: {
+        irc: {
+          passwordFile: "/etc/openclaw/irc-password.txt",
+          nickserv: {
+            passwordFile: "/etc/openclaw/nickserv-password.txt",
+            password: "super-secret-nickserv-password",
+          },
+        },
+      },
+    });
+
+    const result = redactConfigSnapshot(snapshot);
+    const channels = result.config.channels as Record<string, Record<string, unknown>>;
+    const irc = channels.irc;
+    const nickserv = irc.nickserv as Record<string, unknown>;
+
+    expect(irc.passwordFile).toBe("/etc/openclaw/irc-password.txt");
+    expect(nickserv.passwordFile).toBe("/etc/openclaw/nickserv-password.txt");
+    expect(nickserv.password).toBe(REDACTED_SENTINEL);
+  });
+
   it("preserves hash unchanged", () => {
     const snapshot = makeSnapshot({ gateway: { auth: { token: "secret-token-value-here" } } });
     const result = redactConfigSnapshot(snapshot);
@@ -343,7 +366,9 @@ describe("redactConfigSnapshot", () => {
     });
     const result = redactConfigSnapshot(snapshot, hints);
     const custom = result.config.custom as Record<string, string>;
+    const resolved = result.resolved as Record<string, Record<string, string>>;
     expect(custom.mySecret).toBe(REDACTED_SENTINEL);
+    expect(resolved.custom.mySecret).toBe(REDACTED_SENTINEL);
   });
 
   it("keeps regex fallback for extension keys not covered by uiHints", () => {
@@ -630,7 +655,9 @@ describe("redactConfigSnapshot", () => {
     });
     const result = redactConfigSnapshot(snapshot, hints);
     const gw = result.config.gateway as Record<string, Record<string, string>>;
+    const resolved = result.resolved as Record<string, Record<string, Record<string, string>>>;
     expect(gw.auth.token).toBe("not-actually-secret-value");
+    expect(resolved.gateway.auth.token).toBe("not-actually-secret-value");
   });
 
   it("does not redact paths absent from uiHints (schema is single source of truth)", () => {
@@ -642,7 +669,9 @@ describe("redactConfigSnapshot", () => {
     });
     const result = redactConfigSnapshot(snapshot, hints);
     const gw = result.config.gateway as Record<string, Record<string, string>>;
+    const resolved = result.resolved as Record<string, Record<string, Record<string, string>>>;
     expect(gw.auth.password).toBe("not-in-hints-value");
+    expect(resolved.gateway.auth.password).toBe("not-in-hints-value");
   });
 
   it("uses wildcard hints for array items", () => {

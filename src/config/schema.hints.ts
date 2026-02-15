@@ -91,7 +91,7 @@ const FIELD_PLACEHOLDERS: Record<string, string> = {
  * These are explicitly excluded from redaction (plugin config) and
  * warnings about not being marked sensitive (base config).
  */
-const SENSITIVE_KEY_WHITELIST = new Set([
+const SENSITIVE_KEY_WHITELIST_SUFFIXES = [
   "maxtokens",
   "maxoutputtokens",
   "maxinputtokens",
@@ -102,15 +102,24 @@ const SENSITIVE_KEY_WHITELIST = new Set([
   "tokenlimit",
   "tokenbudget",
   "passwordFile",
-]);
+] as const;
+const NORMALIZED_SENSITIVE_KEY_WHITELIST_SUFFIXES = SENSITIVE_KEY_WHITELIST_SUFFIXES.map((suffix) =>
+  suffix.toLowerCase(),
+);
 
 const SENSITIVE_PATTERNS = [/token$/i, /password/i, /secret/i, /api.?key/i];
 
+function isWhitelistedSensitivePath(path: string): boolean {
+  const lowerPath = path.toLowerCase();
+  return NORMALIZED_SENSITIVE_KEY_WHITELIST_SUFFIXES.some((suffix) => lowerPath.endsWith(suffix));
+}
+
+function matchesSensitivePattern(path: string): boolean {
+  return SENSITIVE_PATTERNS.some((pattern) => pattern.test(path));
+}
+
 export function isSensitiveConfigPath(path: string): boolean {
-  return (
-    !Array.from(SENSITIVE_KEY_WHITELIST).some((suffix) => path.endsWith(suffix)) &&
-    SENSITIVE_PATTERNS.some((pattern) => pattern.test(path))
-  );
+  return !isWhitelistedSensitivePath(path) && matchesSensitivePattern(path);
 }
 
 export function buildBaseHints(): ConfigUiHints {

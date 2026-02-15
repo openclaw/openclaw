@@ -301,7 +301,7 @@ export function redactConfigSnapshot(
   const redactedRaw = snapshot.raw ? redactRawText(snapshot.raw, snapshot.config, uiHints) : null;
   const redactedParsed = snapshot.parsed ? redactObject(snapshot.parsed, uiHints) : snapshot.parsed;
   // Also redact the resolved config (contains values after ${ENV} substitution)
-  const redactedResolved = redactConfigObject(snapshot.resolved);
+  const redactedResolved = redactConfigObject(snapshot.resolved, uiHints);
 
   return {
     ...snapshot,
