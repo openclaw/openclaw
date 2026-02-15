@@ -16,6 +16,7 @@ import { resolveBrowserConfig } from "../browser/config.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { resolveNodeCommandAllowlist } from "../gateway/node-command-policy.js";
+import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
 
 export type SecurityAuditFinding = {
   checkId: string;
@@ -141,26 +142,6 @@ const LEGACY_MODEL_PATTERNS: Array<{ id: string; re: RegExp; label: string }> = 
 const WEAK_TIER_MODEL_PATTERNS: Array<{ id: string; re: RegExp; label: string }> = [
   { id: "anthropic.haiku", re: /\bhaiku\b/i, label: "Haiku tier (smaller model)" },
 ];
-
-function inferParamBFromIdOrName(text: string): number | null {
-  const raw = text.toLowerCase();
-  const matches = raw.matchAll(/(?:^|[^a-z0-9])[a-z]?(\d+(?:\.\d+)?)b(?:[^a-z0-9]|$)/g);
-  let best: number | null = null;
-  for (const match of matches) {
-    const numRaw = match[1];
-    if (!numRaw) {
-      continue;
-    }
-    const value = Number(numRaw);
-    if (!Number.isFinite(value) || value <= 0) {
-      continue;
-    }
-    if (best === null || value > best) {
-      best = value;
-    }
-  }
-  return best;
-}
 
 function isGptModel(id: string): boolean {
   return /\bgpt-/i.test(id);
