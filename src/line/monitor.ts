@@ -129,6 +129,20 @@ export async function monitorLineProvider(
     webhookPath,
   } = opts;
   const resolvedAccountId = accountId ?? "default";
+  const trimmedToken = channelAccessToken.trim();
+  const trimmedSecret = channelSecret.trim();
+
+  // Fail closed if webhook auth material is missing.
+  if (!trimmedToken) {
+    throw new Error(
+      `LINE channel access token missing for account "${resolvedAccountId}" (set channels.line.channelAccessToken or channels.line.accounts.${resolvedAccountId}.channelAccessToken).`,
+    );
+  }
+  if (!trimmedSecret) {
+    throw new Error(
+      `LINE channel secret missing for account "${resolvedAccountId}" (set channels.line.channelSecret or channels.line.accounts.${resolvedAccountId}.channelSecret).`,
+    );
+  }
 
   // Record starting state
   recordChannelRuntimeState({
@@ -142,8 +156,8 @@ export async function monitorLineProvider(
 
   // Create the bot
   const bot = createLineBot({
-    channelAccessToken,
-    channelSecret,
+    channelAccessToken: trimmedToken,
+    channelSecret: trimmedSecret,
     accountId,
     runtime,
     config,
@@ -281,7 +295,7 @@ export async function monitorLineProvider(
     pluginId: "line",
     accountId: resolvedAccountId,
     log: (msg) => logVerbose(msg),
-    handler: createLineNodeWebhookHandler({ channelSecret, bot, runtime }),
+    handler: createLineNodeWebhookHandler({ channelSecret: trimmedSecret, bot, runtime }),
   });
 
   logVerbose(`line: registered webhook handler at ${normalizedPath}`);
