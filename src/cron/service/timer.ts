@@ -442,7 +442,8 @@ async function executeJobCore(
     if (job.wakeMode === "now" && state.deps.runHeartbeatOnce) {
       const reason = `cron:${job.id}`;
       const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-      const maxWaitMs = 2 * 60_000;
+      const maxWaitMs = state.deps.wakeNowHeartbeatBusyMaxWaitMs ?? 2 * 60_000;
+      const retryDelayMs = state.deps.wakeNowHeartbeatBusyRetryDelayMs ?? 250;
       const waitStartedAt = state.deps.nowMs();
 
       let heartbeatResult: HeartbeatRunResult;
@@ -458,7 +459,7 @@ async function executeJobCore(
           state.deps.requestHeartbeatNow({ reason });
           return { status: "ok", summary: text };
         }
-        await delay(250);
+        await delay(retryDelayMs);
       }
 
       if (heartbeatResult.status === "ran") {

@@ -7,8 +7,8 @@ import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { whatsappPlugin } from "../../extensions/whatsapp/src/channel.js";
 import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { setRegistry } from "./server.agent.gateway-server-agent.mocks.js";
 import {
   agentCommand,
   connectOk,
@@ -39,34 +39,6 @@ beforeAll(async () => {
 afterAll(async () => {
   ws.close();
   await server.close();
-});
-
-const registryState = vi.hoisted(() => ({
-  registry: {
-    plugins: [],
-    tools: [],
-    channels: [],
-    providers: [],
-    gatewayHandlers: {},
-    httpHandlers: [],
-    httpRoutes: [],
-    cliRegistrars: [],
-    services: [],
-    diagnostics: [],
-  } as PluginRegistry,
-}));
-
-vi.mock("./server-plugins.js", async () => {
-  const { setActivePluginRegistry } = await import("../plugins/runtime.js");
-  return {
-    loadGatewayPlugins: (params: { baseMethods: string[] }) => {
-      setActivePluginRegistry(registryState.registry);
-      return {
-        pluginRegistry: registryState.registry,
-        gatewayMethods: params.baseMethods ?? [],
-      };
-    },
-  };
 });
 
 const _BASE_IMAGE_PNG =
@@ -123,13 +95,11 @@ async function useTempSessionStorePath() {
 
 describe("gateway server agent", () => {
   beforeEach(() => {
-    registryState.registry = defaultRegistry;
-    setActivePluginRegistry(defaultRegistry);
+    setRegistry(defaultRegistry);
   });
 
   afterEach(() => {
-    registryState.registry = emptyRegistry;
-    setActivePluginRegistry(emptyRegistry);
+    setRegistry(emptyRegistry);
   });
 
   test("agent falls back when last-channel plugin is unavailable", async () => {
@@ -140,8 +110,7 @@ describe("gateway server agent", () => {
         plugin: createMSTeamsPlugin(),
       },
     ]);
-    registryState.registry = registry;
-    setActivePluginRegistry(registry);
+    setRegistry(registry);
     await useTempSessionStorePath();
     await writeSessionStore({
       entries: {
@@ -179,8 +148,7 @@ describe("gateway server agent", () => {
         plugin: createMSTeamsPlugin({ aliases: ["teams"] }),
       },
     ]);
-    registryState.registry = registry;
-    setActivePluginRegistry(registry);
+    setRegistry(registry);
     await useTempSessionStorePath();
     await writeSessionStore({
       entries: {

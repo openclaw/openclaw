@@ -70,6 +70,14 @@ Set config under `plugins.entries.voice-call.config`:
             authToken: "...",
           },
 
+          telnyx: {
+            apiKey: "...",
+            connectionId: "...",
+            // Telnyx webhook public key from the Telnyx Mission Control Portal
+            // (Base64 string; can also be set via TELNYX_PUBLIC_KEY).
+            publicKey: "...",
+          },
+
           plivo: {
             authId: "MAxxxxxxxxxxxxxxxxxxxx",
             authToken: "...",
@@ -112,6 +120,7 @@ Notes:
 - Twilio/Telnyx require a **publicly reachable** webhook URL.
 - Plivo requires a **publicly reachable** webhook URL.
 - `mock` is a local dev provider (no network calls).
+- Telnyx requires `telnyx.publicKey` (or `TELNYX_PUBLIC_KEY`) unless `skipSignatureVerification` is true.
 - `skipSignatureVerification` is for local testing only.
 - If you use ngrok free tier, set `publicUrl` to the exact ngrok URL; signature verification is always enforced.
 - `tunnel.allowNgrokFreeTierLoopbackBypass: true` allows Twilio webhooks with invalid signatures **only** when `tunnel.provider="ngrok"` and `serve.bind` is loopback (ngrok local agent). Use for local dev only.

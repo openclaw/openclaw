@@ -2,54 +2,51 @@ import { describe, expect, it } from "vitest";
 import { generateChutesPkce, parseOAuthCallbackInput } from "./chutes-oauth.js";
 
 describe("parseOAuthCallbackInput", () => {
-  const EXPECTED_STATE = "abc123def456";
+  it("rejects code-only input (state required)", () => {
+    const parsed = parseOAuthCallbackInput("abc123", "expected-state");
+    expect(parsed).toEqual({
+      error: "Paste the full redirect URL (must include code + state).",
+    });
+  });
 
-  it("returns code and state for valid URL with matching state", () => {
-    const result = parseOAuthCallbackInput(
-      `http://localhost/cb?code=authcode_xyz&state=${EXPECTED_STATE}`,
-      EXPECTED_STATE,
+  it("accepts full redirect URL when state matches", () => {
+    const parsed = parseOAuthCallbackInput(
+      "http://127.0.0.1:1456/oauth-callback?code=abc123&state=expected-state",
+      "expected-state",
     );
-    expect(result).toEqual({ code: "authcode_xyz", state: EXPECTED_STATE });
+    expect(parsed).toEqual({ code: "abc123", state: "expected-state" });
   });
 
-  it("rejects URL with mismatched state (CSRF protection)", () => {
-    const result = parseOAuthCallbackInput(
-      "http://localhost/cb?code=authcode_xyz&state=attacker_state",
-      EXPECTED_STATE,
+  it("accepts querystring-only input when state matches", () => {
+    const parsed = parseOAuthCallbackInput("code=abc123&state=expected-state", "expected-state");
+    expect(parsed).toEqual({ code: "abc123", state: "expected-state" });
+  });
+
+  it("rejects missing state", () => {
+    const parsed = parseOAuthCallbackInput(
+      "http://127.0.0.1:1456/oauth-callback?code=abc123",
+      "expected-state",
     );
-    expect(result).toHaveProperty("error");
-    expect((result as { error: string }).error).toMatch(/state mismatch/i);
+    expect(parsed).toEqual({
+      error: "Missing 'state' parameter. Paste the full redirect URL.",
+    });
   });
 
-  it("rejects bare code input without fabricating state", () => {
-    const result = parseOAuthCallbackInput("bare_auth_code", EXPECTED_STATE);
-    expect(result).toHaveProperty("error");
-    expect(result).not.toHaveProperty("code");
-  });
-
-  it("rejects empty input", () => {
-    const result = parseOAuthCallbackInput("", EXPECTED_STATE);
-    expect(result).toEqual({ error: "No input provided" });
-  });
-
-  it("rejects URL missing code parameter", () => {
-    const result = parseOAuthCallbackInput(
-      `http://localhost/cb?state=${EXPECTED_STATE}`,
-      EXPECTED_STATE,
+  it("rejects state mismatch", () => {
+    const parsed = parseOAuthCallbackInput(
+      "http://127.0.0.1:1456/oauth-callback?code=abc123&state=evil",
+      "expected-state",
     );
-    expect(result).toHaveProperty("error");
-  });
-
-  it("rejects URL missing state parameter", () => {
-    const result = parseOAuthCallbackInput("http://localhost/cb?code=authcode_xyz", EXPECTED_STATE);
-    expect(result).toHaveProperty("error");
+    expect(parsed).toEqual({
+      error: "OAuth state mismatch - possible CSRF attack. Please retry login.",
+    });
   });
 });
 
 describe("generateChutesPkce", () => {
-  it("returns verifier and challenge strings", () => {
+  it("returns verifier and challenge", () => {
     const pkce = generateChutesPkce();
     expect(pkce.verifier).toMatch(/^[0-9a-f]{64}$/);
-    expect(pkce.challenge).toBeTruthy();
+    expect(pkce.challenge).toMatch(/^[A-Za-z0-9_-]+$/);
   });
 });

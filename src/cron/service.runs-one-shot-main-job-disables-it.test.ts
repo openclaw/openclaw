@@ -1,27 +1,18 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { HeartbeatRunResult } from "../infra/heartbeat-wake.js";
 import type { CronJob } from "./types.js";
 import { CronService } from "./service.js";
+import {
+  createCronStoreHarness,
+  createNoopLogger,
+  installCronTestHooks,
+} from "./service.test-harness.js";
 
-const noopLogger = {
-  debug: vi.fn(),
-  info: vi.fn(),
-  warn: vi.fn(),
-  error: vi.fn(),
-};
-
-async function makeStorePath() {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-"));
-  return {
-    storePath: path.join(dir, "cron", "jobs.json"),
-    cleanup: async () => {
-      await fs.rm(dir, { recursive: true, force: true });
-    },
-  };
-}
+const noopLogger = createNoopLogger();
+const { makeStorePath } = createCronStoreHarness();
+installCronTestHooks({ logger: noopLogger });
 
 async function waitForJobs(cron: CronService, predicate: (jobs: CronJob[]) => boolean) {
   let latest: CronJob[] = [];
@@ -36,19 +27,6 @@ async function waitForJobs(cron: CronService, predicate: (jobs: CronJob[]) => bo
 }
 
 describe("CronService", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2025-12-13T00:00:00.000Z"));
-    noopLogger.debug.mockClear();
-    noopLogger.info.mockClear();
-    noopLogger.warn.mockClear();
-    noopLogger.error.mockClear();
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
   it("runs a one-shot main job and disables it after success when requested", async () => {
     const store = await makeStorePath();
     const enqueueSystemEvent = vi.fn();
@@ -210,6 +188,9 @@ describe("CronService", () => {
       storePath: store.storePath,
       cronEnabled: true,
       log: noopLogger,
+      // Perf: avoid advancing fake timers by 2+ minutes for the busy-heartbeat fallback.
+      wakeNowHeartbeatBusyMaxWaitMs: 1,
+      wakeNowHeartbeatBusyRetryDelayMs: 2,
       enqueueSystemEvent,
       requestHeartbeatNow,
       runHeartbeatOnce,
@@ -251,11 +232,20 @@ describe("CronService", () => {
       status: "skipped" as const,
       reason: "requests-in-flight",
     }));
+    let now = 0;
+    const nowMs = () => {
+      now += 10;
+      return now;
+    };
 
     const cron = new CronService({
       storePath: store.storePath,
       cronEnabled: true,
       log: noopLogger,
+      nowMs,
+      // Perf: avoid advancing fake timers by 2+ minutes for the busy-heartbeat fallback.
+      wakeNowHeartbeatBusyMaxWaitMs: 1,
+      wakeNowHeartbeatBusyRetryDelayMs: 2,
       enqueueSystemEvent,
       requestHeartbeatNow,
       runHeartbeatOnce,
@@ -272,9 +262,7 @@ describe("CronService", () => {
       payload: { kind: "systemEvent", text: "hello" },
     });
 
-    const runPromise = cron.run(job.id, "force");
-    await vi.advanceTimersByTimeAsync(125_000);
-    await runPromise;
+    await cron.run(job.id, "force");
 
     expect(runHeartbeatOnce).toHaveBeenCalled();
     expect(requestHeartbeatNow).toHaveBeenCalled();

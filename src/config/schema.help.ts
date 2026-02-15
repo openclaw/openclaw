@@ -58,13 +58,19 @@ export const FIELD_HELP: Record<string, string> = {
   "diagnostics.cacheTrace.includeSystem": "Include system prompt in trace output (default: true).",
   "tools.exec.applyPatch.enabled":
     "Experimental. Enables apply_patch for OpenAI models when allowed by tool policy.",
+  "tools.exec.applyPatch.workspaceOnly":
+    "Restrict apply_patch paths to the workspace directory (default: false).",
   "tools.exec.applyPatch.allowModels":
     'Optional allowlist of model ids (e.g. "gpt-5.2" or "openai/gpt-5.2").',
   "tools.exec.notifyOnExit":
     "When true (default), backgrounded exec sessions enqueue a system event and request a heartbeat on exit.",
+  "tools.exec.notifyOnExitEmptySuccess":
+    "When true, successful backgrounded exec exits with empty output still enqueue a completion system event (default: false).",
   "tools.exec.pathPrepend": "Directories to prepend to PATH for exec runs (gateway/sandbox).",
   "tools.exec.safeBins":
     "Allow stdin-only safe binaries to run without explicit allowlist entries.",
+  "tools.fs.workspaceOnly":
+    "Restrict filesystem tools (read/write/edit/apply_patch) to the workspace directory (default: false).",
   "tools.message.allowCrossContextSend":
     "Legacy override: allow cross-context sends across all providers.",
   "tools.message.crossContext.allowWithinProvider":
@@ -136,6 +142,8 @@ export const FIELD_HELP: Record<string, string> = {
   "auth.cooldowns.failureWindowHours": "Failure window (hours) for backoff counters (default: 24).",
   "agents.defaults.bootstrapMaxChars":
     "Max characters of each workspace bootstrap file injected into the system prompt before truncation (default: 20000).",
+  "agents.defaults.bootstrapTotalMaxChars":
+    "Max total characters across all injected workspace bootstrap files (default: 24000).",
   "agents.defaults.repoRoot":
     "Optional repository root shown in the system prompt runtime line (overrides auto-detect).",
   "agents.defaults.envelopeTimezone":
@@ -353,6 +361,8 @@ export const FIELD_HELP: Record<string, string> = {
     'Direct message access control ("pairing" recommended). "open" requires channels.imessage.allowFrom=["*"].',
   "channels.bluebubbles.dmPolicy":
     'Direct message access control ("pairing" recommended). "open" requires channels.bluebubbles.allowFrom=["*"].',
+  "channels.discord.dmPolicy":
+    'Direct message access control ("pairing" recommended). "open" requires channels.discord.allowFrom=["*"].',
   "channels.discord.dm.policy":
     'Direct message access control ("pairing" recommended). "open" requires channels.discord.dm.allowFrom=["*"].',
   "channels.discord.retry.attempts":
@@ -376,4 +386,6 @@ export const FIELD_HELP: Record<string, string> = {
   "channels.discord.activityUrl": "Discord presence streaming URL (required for activityType=1).",
   "channels.slack.dm.policy":
     'Direct message access control ("pairing" recommended). "open" requires channels.slack.dm.allowFrom=["*"].',
+  "channels.slack.dmPolicy":
+    'Direct message access control ("pairing" recommended). "open" requires channels.slack.allowFrom=["*"].',
 };

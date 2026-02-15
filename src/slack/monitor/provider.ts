@@ -87,8 +87,8 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const dmConfig = slackCfg.dm;
 
   const dmEnabled = dmConfig?.enabled ?? true;
-  const dmPolicy = dmConfig?.policy ?? "pairing";
-  let allowFrom = dmConfig?.allowFrom;
+  const dmPolicy = slackCfg.dmPolicy ?? dmConfig?.policy ?? "pairing";
+  let allowFrom = slackCfg.allowFrom ?? dmConfig?.allowFrom;
   const groupDmEnabled = dmConfig?.groupEnabled ?? false;
   const groupDmChannels = dmConfig?.groupChannels;
   let channelsConfig = slackCfg.channels;

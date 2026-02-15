@@ -50,6 +50,12 @@ run_as_user() {
   fi
 }
 
+run_as_openclaw() {
+  # Avoid root writes into $OPENCLAW_HOME (symlink/hardlink/TOCTOU footguns).
+  # Anything under the target user's home should be created/modified as that user.
+  run_as_user "$OPENCLAW_USER" env HOME="$OPENCLAW_HOME" "$@"
+}
+
 # Quadlet: opt-in via --quadlet or OPENCLAW_PODMAN_QUADLET=1
 INSTALL_QUADLET=false
 for arg in "$@"; do
@@ -77,6 +83,27 @@ if [[ ! -f "$RUN_SCRIPT_SRC" ]]; then
   echo "Launch script not found at $RUN_SCRIPT_SRC." >&2
   exit 1
 fi
+
+generate_token_hex_32() {
+  if command -v openssl >/dev/null 2>&1; then
+    openssl rand -hex 32
+    return 0
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - <<'PY'
+import secrets
+print(secrets.token_hex(32))
+PY
+    return 0
+  fi
+  if command -v od >/dev/null 2>&1; then
+    # 32 random bytes -> 64 lowercase hex chars
+    od -An -N32 -tx1 /dev/urandom | tr -d " \n"
+    return 0
+  fi
+  echo "Missing dependency: need openssl or python3 (or od) to generate OPENCLAW_GATEWAY_TOKEN." >&2
+  exit 1
+}
 
 user_exists() {
   local user="$1"
@@ -138,7 +165,7 @@ LAUNCH_SCRIPT_DST="$OPENCLAW_HOME/run-openclaw-podman.sh"
 if command -v loginctl &>/dev/null; then
   run_root loginctl enable-linger "$OPENCLAW_USER" 2>/dev/null || true
 fi
-if [[ -n "${OPENCLAW_UID:-}" && -d /run/user && command -v systemctl &>/dev/null ]]; then
+if [[ -n "${OPENCLAW_UID:-}" && -d /run/user ]] && command -v systemctl &>/dev/null; then
   run_root systemctl start "user@${OPENCLAW_UID}.service" 2>/dev/null || true
 fi
 
@@ -149,23 +176,31 @@ if ! grep -q "^${OPENCLAW_USER}:" /etc/subuid 2>/dev/null; then
 fi
 
 echo "Creating $OPENCLAW_CONFIG and workspace..."
-run_root mkdir -p "$OPENCLAW_CONFIG/workspace"
-run_root chown -R "$OPENCLAW_USER:" "$OPENCLAW_CONFIG"
+run_as_openclaw mkdir -p "$OPENCLAW_CONFIG/workspace"
+run_as_openclaw chmod 700 "$OPENCLAW_CONFIG" "$OPENCLAW_CONFIG/workspace" 2>/dev/null || true
 
-if [[ ! -f "$OPENCLAW_CONFIG/.env" ]]; then
-  if command -v openssl >/dev/null 2>&1; then
-    TOKEN="$(openssl rand -hex 32)"
-  else
-    TOKEN="$(python3 - <<'PY'
-import secrets
-print(secrets.token_hex(32))
-PY
-)"
+ENV_FILE="$OPENCLAW_CONFIG/.env"
+if run_as_openclaw test -f "$ENV_FILE"; then
+  if ! run_as_openclaw grep -q '^OPENCLAW_GATEWAY_TOKEN=' "$ENV_FILE" 2>/dev/null; then
+    TOKEN="$(generate_token_hex_32)"
+    printf 'OPENCLAW_GATEWAY_TOKEN=%s\n' "$TOKEN" | run_as_openclaw tee -a "$ENV_FILE" >/dev/null
+    echo "Added OPENCLAW_GATEWAY_TOKEN to $ENV_FILE."
   fi
-  echo "OPENCLAW_GATEWAY_TOKEN=$TOKEN" | run_root tee "$OPENCLAW_CONFIG/.env" >/dev/null
-  run_root chown "$OPENCLAW_USER:" "$OPENCLAW_CONFIG/.env"
-  run_root chmod 600 "$OPENCLAW_CONFIG/.env" 2>/dev/null || true
-  echo "Created $OPENCLAW_CONFIG/.env with new token."
+  run_as_openclaw chmod 600 "$ENV_FILE" 2>/dev/null || true
+else
+  TOKEN="$(generate_token_hex_32)"
+  printf 'OPENCLAW_GATEWAY_TOKEN=%s\n' "$TOKEN" | run_as_openclaw tee "$ENV_FILE" >/dev/null
+  run_as_openclaw chmod 600 "$ENV_FILE" 2>/dev/null || true
+  echo "Created $ENV_FILE with new token."
+fi
+
+# The gateway refuses to start unless gateway.mode=local is set in config.
+# Make first-run non-interactive; users can run the wizard later to configure channels/providers.
+OPENCLAW_JSON="$OPENCLAW_CONFIG/openclaw.json"
+if ! run_as_openclaw test -f "$OPENCLAW_JSON"; then
+  printf '%s\n' '{ gateway: { mode: "local" } }' | run_as_openclaw tee "$OPENCLAW_JSON" >/dev/null
+  run_as_openclaw chmod 600 "$OPENCLAW_JSON" 2>/dev/null || true
+  echo "Created $OPENCLAW_JSON (minimal gateway.mode=local)."
 fi
 
 echo "Building image from $REPO_PATH..."
@@ -181,17 +216,18 @@ rm -f "$TMP_IMAGE"
 trap - EXIT
 
 echo "Copying launch script to $LAUNCH_SCRIPT_DST..."
-run_root cp "$RUN_SCRIPT_SRC" "$LAUNCH_SCRIPT_DST"
-run_root chown "$OPENCLAW_USER:" "$LAUNCH_SCRIPT_DST"
-run_root chmod 755 "$LAUNCH_SCRIPT_DST"
+run_root cat "$RUN_SCRIPT_SRC" | run_as_openclaw tee "$LAUNCH_SCRIPT_DST" >/dev/null
+run_as_openclaw chmod 755 "$LAUNCH_SCRIPT_DST"
 
 # Optionally install systemd quadlet for openclaw user (rootless Podman + systemd)
 QUADLET_DIR="$OPENCLAW_HOME/.config/containers/systemd"
 if [[ "$INSTALL_QUADLET" == true && -f "$QUADLET_TEMPLATE" ]]; then
   echo "Installing systemd quadlet for $OPENCLAW_USER..."
-  run_root mkdir -p "$QUADLET_DIR"
-  sed "s|{{OPENCLAW_HOME}}|$OPENCLAW_HOME|g" "$QUADLET_TEMPLATE" | run_root tee "$QUADLET_DIR/openclaw.container" >/dev/null
-  run_root chown -R "$OPENCLAW_USER:" "$QUADLET_DIR"
+  run_as_openclaw mkdir -p "$QUADLET_DIR"
+  OPENCLAW_HOME_SED="$(printf '%s' "$OPENCLAW_HOME" | sed -e 's/[\\/&|]/\\\\&/g')"
+  sed "s|{{OPENCLAW_HOME}}|$OPENCLAW_HOME_SED|g" "$QUADLET_TEMPLATE" | run_as_openclaw tee "$QUADLET_DIR/openclaw.container" >/dev/null
+  run_as_openclaw chmod 700 "$OPENCLAW_HOME/.config" "$OPENCLAW_HOME/.config/containers" "$QUADLET_DIR" 2>/dev/null || true
+  run_as_openclaw chmod 600 "$QUADLET_DIR/openclaw.container" 2>/dev/null || true
   if command -v systemctl &>/dev/null; then
     run_root systemctl --machine "${OPENCLAW_USER}@" --user daemon-reload 2>/dev/null || true
     run_root systemctl --machine "${OPENCLAW_USER}@" --user enable openclaw.service 2>/dev/null || true

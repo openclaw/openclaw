@@ -274,7 +274,11 @@ export const sendHandlers: GatewayRequestHandlers = {
       question: string;
       options: string[];
       maxSelections?: number;
+      durationSeconds?: number;
       durationHours?: number;
+      silent?: boolean;
+      isAnonymous?: boolean;
+      threadId?: string;
       channel?: string;
       accountId?: string;
       idempotencyKey: string;
@@ -299,12 +303,36 @@ export const sendHandlers: GatewayRequestHandlers = {
       return;
     }
     const channel = normalizedChannel ?? DEFAULT_CHAT_CHANNEL;
+    if (typeof request.durationSeconds === "number" && channel !== "telegram") {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "durationSeconds is only supported for Telegram polls",
+        ),
+      );
+      return;
+    }
+    if (typeof request.isAnonymous === "boolean" && channel !== "telegram") {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "isAnonymous is only supported for Telegram polls"),
+      );
+      return;
+    }
     const poll = {
       question: request.question,
       options: request.options,
       maxSelections: request.maxSelections,
+      durationSeconds: request.durationSeconds,
       durationHours: request.durationHours,
     };
+    const threadId =
+      typeof request.threadId === "string" && request.threadId.trim().length
+        ? request.threadId.trim()
+        : undefined;
     const accountId =
       typeof request.accountId === "string" && request.accountId.trim().length
         ? request.accountId.trim()
@@ -340,6 +368,9 @@ export const sendHandlers: GatewayRequestHandlers = {
         to: resolved.to,
         poll: normalized,
         accountId,
+        threadId,
+        silent: request.silent,
+        isAnonymous: request.isAnonymous,
       });
       const payload: Record<string, unknown> = {
         runId: idem,
