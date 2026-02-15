@@ -23,6 +23,11 @@ export type GatewayBonjourAdvertiseOpts = {
    * Reduces information disclosure for better operational security.
    */
   minimal?: boolean;
+  /**
+   * Restrict mDNS to a single network interface (name or IP address).
+   * Prevents mDNS floods on machines with multiple interfaces on the same LAN.
+   */
+  networkInterface?: string;
 };
 
 function isDisabledByEnv() {
@@ -89,7 +94,9 @@ export async function startGatewayBonjourAdvertiser(
   }
 
   const { getResponder, Protocol } = await import("@homebridge/ciao");
-  const responder = getResponder();
+  const responder = getResponder(
+    opts.networkInterface ? { interface: opts.networkInterface } : undefined,
+  );
 
   // mDNS service instance names are single DNS labels; dots in hostnames (like
   // `Mac.localdomain`) can confuse some resolvers/browsers and break discovery.
@@ -169,7 +176,7 @@ export async function startGatewayBonjourAdvertiser(
   logDebug(
     `bonjour: starting (hostname=${hostname}, instance=${JSON.stringify(
       safeServiceName(instanceName),
-    )}, gatewayPort=${opts.gatewayPort}${opts.minimal ? ", minimal=true" : `, sshPort=${opts.sshPort ?? 22}`})`,
+    )}, gatewayPort=${opts.gatewayPort}${opts.networkInterface ? `, interface=${opts.networkInterface}` : ""}${opts.minimal ? ", minimal=true" : `, sshPort=${opts.sshPort ?? 22}`})`,
   );
 
   for (const { label, svc } of services) {
