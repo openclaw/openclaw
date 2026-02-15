@@ -68,3 +68,21 @@ describe("ensureSkillsWatcher", () => {
     expect(ignored.some((re) => re.test("/tmp/workspace/skills/my-skill/SKILL.md"))).toBe(false);
   });
 });
+
+describe("getSkillsSnapshotVersion", () => {
+  it("returns a value > 0 on cold start so sessions always build an initial snapshot", async () => {
+    const mod = await import("./refresh.js");
+    // On a fresh process the version must be > 0 so that the
+    // `snapshotVersion > 0` guard in session-updates.ts passes.
+    expect(mod.getSkillsSnapshotVersion()).toBeGreaterThan(0);
+    expect(mod.getSkillsSnapshotVersion("/some/workspace")).toBeGreaterThan(0);
+  });
+
+  it("increases after bumpSkillsSnapshotVersion", async () => {
+    const mod = await import("./refresh.js");
+    const before = mod.getSkillsSnapshotVersion();
+    mod.bumpSkillsSnapshotVersion({ reason: "manual" });
+    const after = mod.getSkillsSnapshotVersion();
+    expect(after).toBeGreaterThan(before);
+  });
+});
