@@ -140,9 +140,9 @@ export function resolveNodeCommandAllowlist(
   const base = PLATFORM_DEFAULTS[platformId] ?? PLATFORM_DEFAULTS.unknown;
   const extra = cfg.gateway?.nodes?.allowCommands ?? [];
   const deny = new Set(cfg.gateway?.nodes?.denyCommands ?? []);
-  const allow = new Set([...base, ...extra].map((cmd) => cmd.trim()).filter(Boolean));
+  const allow = new Set([...base, ...extra].map((cmd) => cmd.trim().toLowerCase()).filter(Boolean));
   for (const blocked of deny) {
-    const trimmed = blocked.trim();
+    const trimmed = blocked.trim().toLowerCase();
     if (trimmed) {
       allow.delete(trimmed);
     }
@@ -155,7 +155,7 @@ export function isNodeCommandAllowed(params: {
   declaredCommands?: string[];
   allowlist: Set<string>;
 }): { ok: true } | { ok: false; reason: string } {
-  const command = params.command.trim();
+  const command = params.command.trim().toLowerCase();
   if (!command) {
     return { ok: false, reason: "command required" };
   }
@@ -163,7 +163,7 @@ export function isNodeCommandAllowed(params: {
     return { ok: false, reason: "command not allowlisted" };
   }
   if (Array.isArray(params.declaredCommands) && params.declaredCommands.length > 0) {
-    if (!params.declaredCommands.includes(command)) {
+    if (!params.declaredCommands.some((cmd) => cmd.toLowerCase() === command)) {
       return { ok: false, reason: "command not declared by node" };
     }
   } else {
