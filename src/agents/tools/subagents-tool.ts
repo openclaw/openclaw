@@ -12,6 +12,11 @@ import {
   parseAgentSessionKey,
   type ParsedAgentSessionKey,
 } from "../../routing/session-key.js";
+import {
+  formatDurationCompact,
+  formatTokenShort,
+  truncateLine,
+} from "../../shared/subagents-format.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { AGENT_LANE_SUBAGENT } from "../lanes.js";
 import { abortEmbeddedPiRun } from "../pi-embedded.js";
@@ -61,48 +66,6 @@ type TargetResolution = {
   entry?: SubagentRunRecord;
   error?: string;
 };
-
-function formatDurationCompact(valueMs?: number) {
-  if (!valueMs || !Number.isFinite(valueMs) || valueMs <= 0) {
-    return "n/a";
-  }
-  const minutes = Math.max(1, Math.round(valueMs / 60_000));
-  if (minutes < 60) {
-    return `${minutes}m`;
-  }
-  const hours = Math.floor(minutes / 60);
-  const minutesRemainder = minutes % 60;
-  if (hours < 24) {
-    return minutesRemainder > 0 ? `${hours}h${minutesRemainder}m` : `${hours}h`;
-  }
-  const days = Math.floor(hours / 24);
-  const hoursRemainder = hours % 24;
-  return hoursRemainder > 0 ? `${days}d${hoursRemainder}h` : `${days}d`;
-}
-
-function formatTokenShort(value?: number) {
-  if (!value || !Number.isFinite(value) || value <= 0) {
-    return undefined;
-  }
-  const n = Math.floor(value);
-  if (n < 1_000) {
-    return `${n}`;
-  }
-  if (n < 10_000) {
-    return `${(n / 1_000).toFixed(1).replace(/\.0$/, "")}k`;
-  }
-  if (n < 1_000_000) {
-    return `${Math.round(n / 1_000)}k`;
-  }
-  return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}m`;
-}
-
-function truncate(text: string, maxLength: number) {
-  if (text.length <= maxLength) {
-    return text;
-  }
-  return `${text.slice(0, maxLength).trimEnd()}...`;
-}
 
 function resolveRunLabel(entry: SubagentRunRecord, fallback = "subagent") {
   const raw = entry.label?.trim() || entry.task?.trim() || "";
@@ -510,8 +473,8 @@ export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAge
             const usageText = resolveUsageDisplay(sessionEntry);
             const status = resolveRunStatus(entry);
             const runtime = formatDurationCompact(now - (entry.startedAt ?? entry.createdAt));
-            const label = truncate(resolveRunLabel(entry), 48);
-            const task = truncate(entry.task.trim(), 72);
+            const label = truncateLine(resolveRunLabel(entry), 48);
+            const task = truncateLine(entry.task.trim(), 72);
             const line = `${index}. ${label} (${resolveModelDisplay(sessionEntry, entry.model)}, ${runtime}${usageText ? `, ${usageText}` : ""}) ${status}${task.toLowerCase() !== label.toLowerCase() ? ` - ${task}` : ""}`;
             const view = {
               index,
@@ -543,8 +506,8 @@ export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAge
             const runtime = formatDurationCompact(
               (entry.endedAt ?? now) - (entry.startedAt ?? entry.createdAt),
             );
-            const label = truncate(resolveRunLabel(entry), 48);
-            const task = truncate(entry.task.trim(), 72);
+            const label = truncateLine(resolveRunLabel(entry), 48);
+            const task = truncateLine(entry.task.trim(), 72);
             const line = `${index}. ${label} (${resolveModelDisplay(sessionEntry, entry.model)}, ${runtime}${usageText ? `, ${usageText}` : ""}) ${status}${task.toLowerCase() !== label.toLowerCase() ? ` - ${task}` : ""}`;
             const view = {
               index,
