@@ -316,6 +316,9 @@ class MemoryManagerSyncOps {
     this.watcher.on("add", markDirty);
     this.watcher.on("change", markDirty);
     this.watcher.on("unlink", markDirty);
+    this.watcher.on("error", (err) => {
+      log.warn(`memory watcher error: ${String(err)}`);
+    });
   }
 
   private ensureSessionListener() {
