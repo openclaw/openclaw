@@ -17,6 +17,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import {
   resolveAgentIdFromSessionKey,
   resolveSessionFilePath,
+  resolveSessionFilePathOptions,
   type SessionEntry,
   updateSessionStoreEntry,
 } from "../../config/sessions.js";
@@ -78,20 +79,30 @@ export async function readPromptTokensFromSessionLog(
   sessionId?: string,
   sessionEntry?: SessionEntry,
   sessionKey?: string,
+  opts?: { storePath?: string },
 ): Promise<SessionTranscriptUsageSnapshot | undefined> {
   if (!sessionId) {
     return undefined;
   }
-  const transcriptPath = (
-    sessionEntry as (SessionEntry & { transcriptPath?: string }) | undefined
-  )?.transcriptPath?.trim();
-  const sessionFile = sessionEntry?.sessionFile?.trim() || transcriptPath;
-  const agentId = sessionFile ? undefined : resolveAgentIdFromSessionKey(sessionKey);
-  const logPath =
-    sessionFile ??
-    resolveSessionFilePath(sessionId, sessionEntry, agentId ? { agentId } : undefined);
 
   try {
+    const transcriptPath = (
+      sessionEntry as (SessionEntry & { transcriptPath?: string }) | undefined
+    )?.transcriptPath?.trim();
+    const sessionFile = sessionEntry?.sessionFile?.trim() || transcriptPath;
+    const agentId = resolveAgentIdFromSessionKey(sessionKey);
+    const pathOpts = resolveSessionFilePathOptions({
+      agentId,
+      storePath: opts?.storePath,
+    });
+    // Normalize sessionFile through resolveSessionFilePath so relative entries
+    // are resolved against the sessions dir/store layout, not process.cwd().
+    const logPath = resolveSessionFilePath(
+      sessionId,
+      sessionFile ? { sessionFile } : sessionEntry,
+      pathOpts,
+    );
+
     const lines = (await fs.promises.readFile(logPath, "utf-8")).split(/\n+/);
     let lastUsage: ReturnType<typeof normalizeUsage> | undefined;
     for (const line of lines) {
@@ -222,6 +233,7 @@ export async function runMemoryFlushIfNeeded(params: {
         params.followupRun.run.sessionId,
         entry,
         params.sessionKey ?? params.followupRun.run.sessionKey,
+        { storePath: params.storePath },
       )
     : undefined;
   const transcriptPromptTokens = transcriptUsageSnapshot?.promptTokens;
