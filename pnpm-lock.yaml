@@ -24,7 +24,7 @@ importers:
         version: 3.990.0
       '@buape/carbon':
         specifier: 0.14.0
-        version: 0.14.0(hono@4.11.9)
+        version: 0.14.0(@discordjs/opus@0.10.0)(hono@4.11.9)
       '@clack/prompts':
         specifier: ^1.0.1
         version: 1.0.1
@@ -397,6 +397,8 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/mcp-client: {}
+
   extensions/memory-core:
     devDependencies:
       openclaw:
@@ -443,6 +445,37 @@ importers:
       openclaw:
         specifier: workspace:*
         version: link:../..
+
+  extensions/mumble:
+    dependencies:
+      '@discordjs/opus':
+        specifier: ^0.10.0
+        version: 0.10.0
+      '@tf2pickup-org/mumble-client':
+        specifier: ^0.12.5
+        version: 0.12.5
+      node-fetch:
+        specifier: ^3.3.2
+        version: 3.3.2
+      opus-decoder:
+        specifier: ^0.7.11
+        version: 0.7.11
+      opus-encdec:
+        specifier: ^0.1.1
+        version: 0.1.1
+      ws:
+        specifier: ^8.18.0
+        version: 8.19.0
+    devDependencies:
+      '@types/node':
+        specifier: ^20.0.0
+        version: 20.19.33
+      openclaw:
+        specifier: '*'
+        version: 2026.2.14(@discordjs/opus@0.10.0)(@napi-rs/canvas@0.1.92)(@types/express@5.0.6)(audio-decode@2.2.3)(hono@4.11.9)(node-llama-cpp@3.15.1(typescript@5.9.3))(signal-polyfill@0.2.2)
+      typescript:
+        specifier: ^5.0.0
+        version: 5.9.3
 
   extensions/nextcloud-talk:
     devDependencies:
@@ -878,6 +911,14 @@ packages:
 
   '@d-fischer/typed-event-emitter@3.3.3':
     resolution: {integrity: sha512-OvSEOa8icfdWDqcRtjSEZtgJTFOFNgTjje7zaL0+nAtu2/kZtRCSK5wUMrI/aXtCH8o0Qz2vA8UqkhWUTARFQQ==}
+
+  '@discordjs/node-pre-gyp@0.4.5':
+    resolution: {integrity: sha512-YJOVVZ545x24mHzANfYoy0BJX5PDyeZlpiJjDkUBM/V/Ao7TFX9lcUvCN4nr0tbr5ubeaXxtEBILUrHtTphVeQ==}
+    hasBin: true
+
+  '@discordjs/opus@0.10.0':
+    resolution: {integrity: sha512-HHEnSNrSPmFEyndRdQBJN2YE6egyXS9JUnJWyP6jficK0Y+qKMEZXyYTgmzpjrxXP1exM/hKaNP7BRBUEWkU5w==}
+    engines: {node: '>=12.0.0'}
 
   '@discordjs/voice@0.19.0':
     resolution: {integrity: sha512-UyX6rGEXzVyPzb1yvjHtPfTlnLvB5jX/stAMdiytHhfoydX+98hfympdOwsnTktzr+IRvphxTbdErgYDJkEsvw==}
@@ -2213,6 +2254,9 @@ packages:
   '@polka/url@1.0.0-next.29':
     resolution: {integrity: sha512-wwQAWhWSuHaag8c4q/KN/vCoeOJYshAIvMQwD4GpSb3OiZklFfvAgmj0VCBBImRpuF/aFgIRzllXlVX93Jevww==}
 
+  '@protobuf-ts/runtime@2.11.1':
+    resolution: {integrity: sha512-KuDaT1IfHkugM2pyz+FwiY80ejWrkH1pAtOBOZFuR6SXEFTsnb/jiQWQ1rCIrcKx2BtyxnxW6BWwsVSA/Ie+WQ==}
+
   '@protobufjs/aspromise@1.1.2':
     resolution: {integrity: sha512-j+gKExEuLmKwvz3OgROXtrJ2UG2x8Ch2YZUxahh+s1F2HZ+wAceUNLkvy6zKCPVRkU++ZWQrdxsUeQXmcg4uoQ==}
 
@@ -2825,6 +2869,12 @@ packages:
   '@swc/helpers@0.5.18':
     resolution: {integrity: sha512-TXTnIcNJQEKwThMMqBXsZ4VGAza6bvN4pa41Rkqoio6QBKMvo+5lexeTMScGCIxtzgQJzElcvIltani+adC5PQ==}
 
+  '@tf2pickup-org/mumble-client@0.12.5':
+    resolution: {integrity: sha512-UPrEHYcOhIPvWEkeJqepbrbf678pCoOklONcn8o9/p5+19XaCU2xurZ80ap5yIGBONLmCCGVozRrUXV9QB7IEQ==}
+
+  '@tf2pickup-org/mumble-protocol@1.0.11':
+    resolution: {integrity: sha512-aBclO2r1WGnh+FO445mlJdVRW8Zes7K4Agu6WbsSkWlTq2yt/f0m6ufFKAgJ9jifBKGbcK9wVEY71OTmwZfD5g==}
+
   '@thi.ng/bitstream@2.4.41':
     resolution: {integrity: sha512-treRzw3+7I1YCuilFtznwT3SGtceS9spUXhyBqeuKNTm4nIfMuvg4fNqx4GgpuS6cGPQNPMUJm0OyzKnSe2Emw==}
     engines: {node: '>=18'}
@@ -3127,6 +3177,9 @@ packages:
     resolution: {tarball: https://codeload.github.com/whiskeysockets/libsignal-node/tar.gz/1c30d7d7e76a3b0aa120b04dc6a26f5a12dccf67}
     version: 2.0.1
 
+  abbrev@1.1.1:
+    resolution: {integrity: sha512-nne9/IiQ/hzIhY6pdDnbBtz7DjPTKrY00P/zvPSm5pOFkl6xuGrGnXn/VtTNNfNtAfZ9/1RtehkszU9qcTii0Q==}
+
   abort-controller@3.0.0:
     resolution: {integrity: sha512-h8lQ8tacZYnR3vNQTgibj+tODHI5/+l06Au2Pcriv/Gmet0eaj4TwWH41sO9wnHDiQsEj19q0drzdWdeAHtweg==}
     engines: {node: '>=6.5'}
@@ -3148,6 +3201,10 @@ packages:
     resolution: {integrity: sha512-NZyJarBfL7nWwIq+FDL6Zp/yHEhePMNnnJ0y3qfieCrmNvYct8uvtiV41UvlSe6apAfk0fY1FbWx+NwfmpvtTg==}
     engines: {node: '>=0.4.0'}
     hasBin: true
+
+  agent-base@6.0.2:
+    resolution: {integrity: sha512-RZNwNclF7+MS/8bDg70amg32dyeZGZxiDuQmZxKLAlQjr3jGyLx+4Kkk58UO7D2QdgFIQCovuSuZESne6RG6XQ==}
+    engines: {node: '>= 6.0.0'}
 
   agent-base@7.1.4:
     resolution: {integrity: sha512-MnA+YT8fwfJPgBx3m60MNqakm30XOkyIoH1y6huTQvC0PwZG7ki8NacLBcrPbNoo8vEZy7Jpuk7+jMO+CUovTQ==}
@@ -3203,6 +3260,11 @@ packages:
 
   aproba@2.1.0:
     resolution: {integrity: sha512-tLIEcj5GuR2RSTnxNKdkK0dJ/GrC7P38sUkiDmDuHfsHmbagTFAxDVIBltoklXEVIQ/f14IL8IMJ5pn9Hez1Ew==}
+
+  are-we-there-yet@2.0.0:
+    resolution: {integrity: sha512-Ci/qENmwHnsYo9xKIcUJN5LeDKdJ6R1Z1j9V/J5wyq8nh/mYPEpIKJbBZXtZjG04HiK7zV/p6Vs9952MrMeUIw==}
+    engines: {node: '>=10'}
+    deprecated: This package is no longer supported.
 
   are-we-there-yet@3.0.1:
     resolution: {integrity: sha512-QZW4EDmGwlYur0Yyf/b2uGucHQMa8aFUP7eu9ddR73vvhFyt4V0Vl3QHPcTNJ8l6qYOBdxgXdnBXQrHilfRQBg==}
@@ -3329,6 +3391,9 @@ packages:
 
   bowser@2.14.1:
     resolution: {integrity: sha512-tzPjzCxygAKWFOJP011oxFHs57HzIhOEracIgAePE4pqB3LikALKnSzUyU4MGs9/iCEUuHlAJTjTc5M+u7YEGg==}
+
+  brace-expansion@1.1.12:
+    resolution: {integrity: sha512-9T9UjW3r0UW5c1Q7GTwllptXwhvYmEzFhzMfZ9H7FQWt+uZePjZPjBP/W1ZEyZ1twGWom5/56TF4lPcqjnDHcg==}
 
   brace-expansion@2.0.2:
     resolution: {integrity: sha512-Jt0vHyM+jmUBqojB7E1NIYadt0vI0Qxjxd2TErW94wDz+E2LAm5vKMXXwg6ZZBTHPuUlDgQHKXvjGBdfcF1ZDQ==}
@@ -3460,6 +3525,9 @@ packages:
   commander@14.0.3:
     resolution: {integrity: sha512-H+y0Jo/T1RZ9qPP4Eh1pkcQcLRglraJaSLoyOtHxu6AapkjWVCy2Sit1QQ4x3Dng8qDlSsZEet7g5Pq06MvTgw==}
     engines: {node: '>=20'}
+
+  concat-map@0.0.1:
+    resolution: {integrity: sha512-/Srv4dswyQNBfohGpz9o6Yb3Gz3SrUDqBH5rTuhGR7ahtlbYKnVxw2bCFMRljaA7EXHaXZ8wsHdodFvbkhKmqg==}
 
   console-control-strings@1.1.0:
     resolution: {integrity: sha512-ty/fTekppD2fIwRvnZAVdeOiGd1c7YXEixbgJTNzqcxJWKQnjJ/V1bNEEE6hygpM3WjwHFUVK6HTjWSzV4a8sQ==}
@@ -3847,6 +3915,9 @@ packages:
     resolution: {integrity: sha512-VWSRii4t0AFm6ixFFmLLx1t7wS1gh+ckoa84aOeapGum0h+EZd1EhEumSB+ZdDLnEPuucsVB9oB7cxJHap6Afg==}
     engines: {node: '>=14.14'}
 
+  fs.realpath@1.0.0:
+    resolution: {integrity: sha512-OO0pH2lK6a0hZnAdau5ItzHPI6pUlvI7jMVnxUQRtw4owF2wk8lOSabtGDCTP4Ggrg2MbGnWO9X8K1t4+fGMDw==}
+
   fsevents@2.3.2:
     resolution: {integrity: sha512-xiqMQR4xAeHTuB9uWm+fFRcIOgKBMiOBP+eXiyT7jsgVCq1bkVygt00oASowB7EdtpOHaaPgKt812P9ab+DDKA==}
     engines: {node: ^8.16.0 || ^10.6.0 || >=11.0.0}
@@ -3859,6 +3930,11 @@ packages:
 
   function-bind@1.1.2:
     resolution: {integrity: sha512-7XHNxH7qX9xG5mIwxkhumTox/MIRNcOgDrxWsMt2pAr23WHp6MrRlN7FBSFpCpr+oVO0F744iUgR82nJMfG2SA==}
+
+  gauge@3.0.2:
+    resolution: {integrity: sha512-+5J6MS/5XksCuXq++uFRsnUd7Ovu1XenbeuIuNRJxYWjgQbPuFhT14lAvsWfqfAmnwluf1OwMjz39HjfLPci0Q==}
+    engines: {node: '>=10'}
+    deprecated: This package is no longer supported.
 
   gauge@4.0.4:
     resolution: {integrity: sha512-f9m+BEN5jkg6a0fZjleidjN51VE1X+mPFQ2DJ0uv1V39oCLCbsGe6yjbBnp7eK7z/+GAon99a3nHuqbuuthyPg==}
@@ -3910,6 +3986,10 @@ packages:
   glob@13.0.3:
     resolution: {integrity: sha512-/g3B0mC+4x724v1TgtBlBtt2hPi/EWptsIAmXUx9Z2rvBYleQcsrmaOzd5LyL50jf/Soi83ZDJmw2+XqvH/EeA==}
     engines: {node: 20 || >=22}
+
+  glob@7.2.3:
+    resolution: {integrity: sha512-nFR0zLpU2YCaRxwoCJvL6UvCH2JFyFVIvwTLsIf21AuHlMskA1hhTdk+LlYJtOlYt9v6dvszD2BGRqBL+iQK9Q==}
+    deprecated: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
 
   google-auth-library@10.5.0:
     resolution: {integrity: sha512-7ABviyMOlX5hIVD60YOfHw4/CxOfBhyduaYB+wbFWCWoni4N7SLcV46hrVRktuBbZjFC9ONyqamZITN7q3n32w==}
@@ -4021,6 +4101,10 @@ packages:
     resolution: {integrity: sha512-CAbnr6Rz4CYQkLYUtSNXxQPUH2gK8f3iWexVlsnMeD+GjlsQ0Xsy1cOX+mN3dtxYomRy21CiOzU8Uhw6OwncEQ==}
     engines: {node: '>=0.8', npm: '>=1.3.7'}
 
+  https-proxy-agent@5.0.1:
+    resolution: {integrity: sha512-dFcAjpTQFgoLMzC2VwU+C/CbS7uRL0lWmxDITmqm7C+7F0Odmj6s9l6alZc6AELXhrnggM2CeWSXHGOdX2YtwA==}
+    engines: {node: '>= 6'}
+
   https-proxy-agent@7.0.6:
     resolution: {integrity: sha512-vK9P5/iUfdl95AI+JVyUuIcVtd4ofvtrOr3HNtM2yxC9bnMbEdp3x01OhQNnjb8IJYi38VlTE3mBXwcfvywuSw==}
     engines: {node: '>= 14'}
@@ -4049,6 +4133,10 @@ packages:
   import-without-cache@0.2.5:
     resolution: {integrity: sha512-B6Lc2s6yApwnD2/pMzFh/d5AVjdsDXjgkeJ766FmFuJELIGHNycKRj+l3A39yZPM4CchqNCB4RITEAYB1KUM6A==}
     engines: {node: '>=20.19.0'}
+
+  inflight@1.0.6:
+    resolution: {integrity: sha512-k92I/b08q4wvFscXCLvqfsHCrjrF7yiXsQuIVvVE7N82W3+aqpzuUdBbfhWcy/FZR3/4IgflMgKLOsvPDrGCJA==}
+    deprecated: This module is not supported, and leaks memory. Do not use it. Check out lru-cache if you want a good and tested way to coalesce async requests by a key value, which is much more comprehensive and powerful.
 
   inherits@2.0.4:
     resolution: {integrity: sha512-k/vGaX4/Yla3WzyMCvTQOXYeIHvqOKtnqBduzTHpzpQZzAskKMhZ2K+EnBiSM9zGSoIFeMpXKxa4dYeZIQqewQ==}
@@ -4419,6 +4507,10 @@ packages:
   magicast@0.5.2:
     resolution: {integrity: sha512-E3ZJh4J3S9KfwdjZhe2afj6R9lGIN5Pher1pF39UGrXRqq/VDaGVIGN13BjHd2u8B61hArAGOnso7nBOouW3TQ==}
 
+  make-dir@3.1.0:
+    resolution: {integrity: sha512-g3FeP20LNwhALb/6Cz6Dd4F2ngze0jz7tbzrD2wAV+o9FeNHe4rL+yK2md0J/fiSf1sa1ADhXqi5+oVwOM/eGw==}
+    engines: {node: '>=8'}
+
   make-dir@4.0.0:
     resolution: {integrity: sha512-hXdUTZYIVOt1Ex//jAQi+wTZZpUpwBj/0QsOzqegb3rGMMeJiSEu5xLHnYfBrRV4RH2+OCSOO95Is/7x1WJ4bw==}
     engines: {node: '>=10'}
@@ -4497,6 +4589,9 @@ packages:
   minimatch@10.2.0:
     resolution: {integrity: sha512-ugkC31VaVg9cF0DFVoADH12k6061zNZkZON+aX8AWsR9GhPcErkcMBceb6znR8wLERM2AkkOxy2nWRLpT9Jq5w==}
     engines: {node: 20 || >=22}
+
+  minimatch@3.1.2:
+    resolution: {integrity: sha512-J7p63hRiAjw1NDEww1W7i37+ByIrOWO5XQQAzZ3VOcL0PNybwpfmV/N05zFAzwQ9USyEcX6t3UO+K5aqBQOIHw==}
 
   minimatch@9.0.5:
     resolution: {integrity: sha512-G6T0ZX48xgozx7587koeX9Ys2NYy6Gmv//P89sEte9V9whIapMNF4idKxnW2QtCcLiTWlb/wfCabAtAFWhhBow==}
@@ -4618,6 +4713,11 @@ packages:
     resolution: {integrity: sha512-M6Rm/bbG6De/gKGxOpeOobx/dnGuP0dz40adqx38boqHhlWssBJZgLCPBNtb9NkrmnKYiV04xELq+R6PFOnoLA==}
     engines: {node: '>=4.4.0'}
 
+  nopt@5.0.0:
+    resolution: {integrity: sha512-Tbj67rffqceeLpcRXrT7vKAN8CwfPeIBgM7E6iBkmKLV7bEMwpGgYLGv0jACUsECaa/vuxP0IjEont6umdMgtQ==}
+    engines: {node: '>=6'}
+    hasBin: true
+
   nostr-tools@2.23.1:
     resolution: {integrity: sha512-Q5SJ1omrseBFXtLwqDhufpFLA6vX3rS/IuBCc974qaYX6YKGwEPxa/ZsyxruUOr+b+5EpWL2hFmCB5AueYrfBw==}
     peerDependencies:
@@ -4628,6 +4728,10 @@ packages:
 
   nostr-wasm@0.1.0:
     resolution: {integrity: sha512-78BTryCLcLYv96ONU8Ws3Q1JzjlAt+43pWQhIl86xZmWeegYCNLPml7yQ+gG3vR6V5h4XGj+TxO+SS5dsThQIA==}
+
+  npmlog@5.0.1:
+    resolution: {integrity: sha512-AqZtDUWOMKs1G/8lwylVjrdYgqA4d9nu8hc+0gzRxlDb1I10+FHBGMXs6aiQHFdCUUlqH99MUMuLfzWDNDtfxw==}
+    deprecated: This package is no longer supported.
 
   npmlog@6.0.2:
     resolution: {integrity: sha512-/vBvz5Jfr9dT/aFWd0FIRf+T/Q2WBsLENygUaFUqstqsycmZAP/t5BvFJTK0viFmSUxiUKTUplWy5vt+rvKIxg==}
@@ -4712,8 +4816,19 @@ packages:
       zod:
         optional: true
 
+  openclaw@2026.2.14:
+    resolution: {integrity: sha512-NHkuZqiHtWstoGNQIsXPIGKvCWKKjEtzOTRv4K1OjOJ5CAHAd0Gs7djyonxBIQz7KeX/JqrP8/4A63fIAmFY/Q==}
+    engines: {node: '>=22.12.0'}
+    hasBin: true
+    peerDependencies:
+      '@napi-rs/canvas': ^0.1.89
+      node-llama-cpp: 3.15.1
+
   opus-decoder@0.7.11:
     resolution: {integrity: sha512-+e+Jz3vGQLxRTBHs8YJQPRPc1Tr+/aC6coV/DlZylriA29BdHQAYXhvNRKtjftof17OFng0+P4wsFIqQu3a48A==}
+
+  opus-encdec@0.1.1:
+    resolution: {integrity: sha512-TDzyGqYqrwn5UEUNaLsfLGu8Ma+HRNrgLYj7Vx5wfTnafAA21G6Bnm/qTIa3orQi/yZPZYmkdpO/gez4nfA1Rw==}
 
   ora@8.2.0:
     resolution: {integrity: sha512-weP+BZ8MVNnlCm8c0Qdc1WSWq4Qn7I+9CJGm7Qali6g44e/PUzbjNqJX5NJ9ljlNMosfJvg1fKEGILklK9cwnw==}
@@ -4813,6 +4928,10 @@ packages:
 
   partial-json@0.1.7:
     resolution: {integrity: sha512-Njv/59hHaokb/hRUjce3Hdv12wd60MtM9Z5Olmn+nehe0QDAsRtRbJPvJ0Z91TusF0SuZRIvnM+S4l6EIP8leA==}
+
+  path-is-absolute@1.0.1:
+    resolution: {integrity: sha512-AVbw3UJ2e9bq64vSaS9Am0fje1Pa8pbGqTTsmXfaIiMpnr5DlDhfJOuLj9Sf95ZPVDAUerDfEk88MPmPe7UCQg==}
+    engines: {node: '>=0.10.0'}
 
   path-key@3.1.1:
     resolution: {integrity: sha512-ojmeN0qd+y0jszEtoY48r0Peq5dwMEkIlCOu6Q5f41lfkswXuKtYrhgoTpLnyIcHm24Uhqx+5Tqm2InSwLhE6Q==}
@@ -5070,6 +5189,11 @@ packages:
     resolution: {integrity: sha512-XQBQ3I8W1Cge0Seh+6gjj03LbmRFWuoszgK9ooCpwYIrhhoO80pfq4cUkU5DkknwfOfFteRwlZ56PYOGYyFWdg==}
     engines: {node: '>= 4'}
 
+  rimraf@3.0.2:
+    resolution: {integrity: sha512-JZkJMZkAGFFPP2YqXZXPbMlMBgsxzE8ILs4lMIX/2o0L9UBw9O/Y3o6wFw/i9YLapcUJWwqbi3kdxIPdC62TIA==}
+    deprecated: Rimraf versions prior to v4 are no longer supported
+    hasBin: true
+
   rimraf@5.0.10:
     resolution: {integrity: sha512-l0OE8wL34P4nJH/H2ffoaniAokM2qSmrtXHmlpvYr5AVVX8msAyW0l8NVJFDxlSK4u3Uh/f41cQheDVdnYijwQ==}
     hasBin: true
@@ -5112,6 +5236,9 @@ packages:
     resolution: {integrity: sha512-nLTrUKm2UyiL7rlhapu/Zl45FwNgkZGaCpZbIHajDYgwlJCOzLSk+cIPAnsEqV955GjILJnKbdQC1nVPz+gAYQ==}
     engines: {node: '>= 18'}
 
+  rxjs@7.8.2:
+    resolution: {integrity: sha512-dhKf903U/PQZY6boNNtAGdWbG85WAbjT/1xYoZIC7FAY0yWapOBQVsVrDl58W86//e1VpMNBtRV4MaXfdMySFA==}
+
   safe-buffer@5.1.2:
     resolution: {integrity: sha512-Gd2UZBJDkXlY7GbJxfsE8/nvKkUEU1G38c1siN6QP6a9PT9MmHB8GnpscSmMJSoF8LOIrt8ud/wPtojys4G6+g==}
 
@@ -5130,6 +5257,10 @@ packages:
 
   selderee@0.11.0:
     resolution: {integrity: sha512-5TF+l7p4+OsnP8BCCvSyZiSPc4x4//p5uPwK8TCnVPJYRmU2aYKMpOXvw8zM5a5JvuuCGN1jmsMwuU2W02ukfA==}
+
+  semver@6.3.1:
+    resolution: {integrity: sha512-BR7VvDCVHO+q2xBEWskxS6DJE1qRnb7DxzUrogb71CWoSficBxYsiAGd+Kl0mmq/MprG9yArRkyrQxTO6XjMzA==}
+    hasBin: true
 
   semver@7.7.4:
     resolution: {integrity: sha512-vFKC2IEtQnVhpT78h1Yp8wzwrf8CM+MzKMHGJZfBtzhZNycRFnXsHk6E5TxIkkMsgNS7mdX3AGB7x2QM2di4lA==}
@@ -6315,13 +6446,13 @@ snapshots:
 
   '@borewit/text-codec@0.2.1': {}
 
-  '@buape/carbon@0.14.0(hono@4.11.9)':
+  '@buape/carbon@0.14.0(@discordjs/opus@0.10.0)(hono@4.11.9)':
     dependencies:
       '@types/node': 25.2.3
       discord-api-types: 0.38.37
     optionalDependencies:
       '@cloudflare/workers-types': 4.20260120.0
-      '@discordjs/voice': 0.19.0
+      '@discordjs/voice': 0.19.0(@discordjs/opus@0.10.0)
       '@hono/node-server': 1.19.9(hono@4.11.9)
       '@types/bun': 1.3.6
       '@types/ws': 8.18.1
@@ -6415,11 +6546,34 @@ snapshots:
     dependencies:
       tslib: 2.8.1
 
-  '@discordjs/voice@0.19.0':
+  '@discordjs/node-pre-gyp@0.4.5':
+    dependencies:
+      detect-libc: 2.1.2
+      https-proxy-agent: 5.0.1
+      make-dir: 3.1.0
+      node-fetch: 2.7.0
+      nopt: 5.0.0
+      npmlog: 5.0.1
+      rimraf: 3.0.2
+      semver: 7.7.4
+      tar: 7.5.7
+    transitivePeerDependencies:
+      - encoding
+      - supports-color
+
+  '@discordjs/opus@0.10.0':
+    dependencies:
+      '@discordjs/node-pre-gyp': 0.4.5
+      node-addon-api: 8.5.0
+    transitivePeerDependencies:
+      - encoding
+      - supports-color
+
+  '@discordjs/voice@0.19.0(@discordjs/opus@0.10.0)':
     dependencies:
       '@types/ws': 8.18.1
       discord-api-types: 0.38.39
-      prism-media: 1.3.5
+      prism-media: 1.3.5(@discordjs/opus@0.10.0)
       tslib: 2.8.1
       ws: 8.19.0
     transitivePeerDependencies:
@@ -6525,8 +6679,7 @@ snapshots:
   '@esbuild/win32-x64@0.27.3':
     optional: true
 
-  '@eshaz/web-worker@1.2.2':
-    optional: true
+  '@eshaz/web-worker@1.2.2': {}
 
   '@google/genai@1.41.0':
     dependencies:
@@ -7628,6 +7781,8 @@ snapshots:
 
   '@polka/url@1.0.0-next.29': {}
 
+  '@protobuf-ts/runtime@2.11.1': {}
+
   '@protobufjs/aspromise@1.1.2': {}
 
   '@protobufjs/base64@1.1.2': {}
@@ -8249,6 +8404,16 @@ snapshots:
     dependencies:
       tslib: 2.8.1
 
+  '@tf2pickup-org/mumble-client@0.12.5':
+    dependencies:
+      '@protobuf-ts/runtime': 2.11.1
+      '@tf2pickup-org/mumble-protocol': 1.0.11
+      rxjs: 7.8.2
+
+  '@tf2pickup-org/mumble-protocol@1.0.11':
+    dependencies:
+      '@protobuf-ts/runtime': 2.11.1
+
   '@thi.ng/bitstream@2.4.41':
     dependencies:
       '@thi.ng/errors': 2.6.3
@@ -8627,7 +8792,6 @@ snapshots:
     dependencies:
       '@eshaz/web-worker': 1.2.2
       simple-yenc: 1.0.4
-    optional: true
 
   '@wasm-audio-decoders/flac@0.2.10':
     dependencies:
@@ -8671,6 +8835,8 @@ snapshots:
       curve25519-js: 0.0.4
       protobufjs: 6.8.8
 
+  abbrev@1.1.1: {}
+
   abort-controller@3.0.0:
     dependencies:
       event-target-shim: 5.0.1
@@ -8690,6 +8856,12 @@ snapshots:
       acorn: 8.15.0
 
   acorn@8.15.0: {}
+
+  agent-base@6.0.2:
+    dependencies:
+      debug: 4.4.3
+    transitivePeerDependencies:
+      - supports-color
 
   agent-base@7.1.4: {}
 
@@ -8742,6 +8914,11 @@ snapshots:
       tslib: 2.8.1
 
   aproba@2.1.0: {}
+
+  are-we-there-yet@2.0.0:
+    dependencies:
+      delegates: 1.0.0
+      readable-stream: 3.6.2
 
   are-we-there-yet@3.0.1:
     dependencies:
@@ -8887,6 +9064,11 @@ snapshots:
 
   bowser@2.14.1: {}
 
+  brace-expansion@1.1.12:
+    dependencies:
+      balanced-match: 1.0.2
+      concat-map: 0.0.1
+
   brace-expansion@2.0.2:
     dependencies:
       balanced-match: 1.0.2
@@ -9029,6 +9211,8 @@ snapshots:
   commander@10.0.1: {}
 
   commander@14.0.3: {}
+
+  concat-map@0.0.1: {}
 
   console-control-strings@1.1.0: {}
 
@@ -9431,6 +9615,8 @@ snapshots:
       jsonfile: 6.2.0
       universalify: 2.0.1
 
+  fs.realpath@1.0.0: {}
+
   fsevents@2.3.2:
     optional: true
 
@@ -9438,6 +9624,18 @@ snapshots:
     optional: true
 
   function-bind@1.1.2: {}
+
+  gauge@3.0.2:
+    dependencies:
+      aproba: 2.1.0
+      color-support: 1.1.3
+      console-control-strings: 1.1.0
+      has-unicode: 2.0.1
+      object-assign: 4.1.1
+      signal-exit: 3.0.7
+      string-width: 4.2.3
+      strip-ansi: 6.0.1
+      wide-align: 1.1.5
 
   gauge@4.0.4:
     dependencies:
@@ -9521,6 +9719,15 @@ snapshots:
       minimatch: 10.2.0
       minipass: 7.1.2
       path-scurry: 2.0.1
+
+  glob@7.2.3:
+    dependencies:
+      fs.realpath: 1.0.0
+      inflight: 1.0.6
+      inherits: 2.0.4
+      minimatch: 3.1.2
+      once: 1.4.0
+      path-is-absolute: 1.0.1
 
   google-auth-library@10.5.0:
     dependencies:
@@ -9651,6 +9858,13 @@ snapshots:
       jsprim: 1.4.2
       sshpk: 1.18.0
 
+  https-proxy-agent@5.0.1:
+    dependencies:
+      agent-base: 6.0.2
+      debug: 4.4.3
+    transitivePeerDependencies:
+      - supports-color
+
   https-proxy-agent@7.0.6:
     dependencies:
       agent-base: 7.1.4
@@ -9680,6 +9894,11 @@ snapshots:
       module-details-from-path: 1.0.4
 
   import-without-cache@0.2.5: {}
+
+  inflight@1.0.6:
+    dependencies:
+      once: 1.4.0
+      wrappy: 1.0.2
 
   inherits@2.0.4: {}
 
@@ -10043,6 +10262,10 @@ snapshots:
       '@babel/types': 7.29.0
       source-map-js: 1.2.1
 
+  make-dir@3.1.0:
+    dependencies:
+      semver: 6.3.1
+
   make-dir@4.0.0:
     dependencies:
       semver: 7.7.4
@@ -10099,6 +10322,10 @@ snapshots:
   minimatch@10.2.0:
     dependencies:
       brace-expansion: 5.0.2
+
+  minimatch@3.1.2:
+    dependencies:
+      brace-expansion: 1.1.12
 
   minimatch@9.0.5:
     dependencies:
@@ -10251,6 +10478,10 @@ snapshots:
   node-wav@0.0.2:
     optional: true
 
+  nopt@5.0.0:
+    dependencies:
+      abbrev: 1.1.1
+
   nostr-tools@2.23.1(typescript@5.9.3):
     dependencies:
       '@noble/ciphers': 2.1.1
@@ -10264,6 +10495,13 @@ snapshots:
       typescript: 5.9.3
 
   nostr-wasm@0.1.0: {}
+
+  npmlog@5.0.1:
+    dependencies:
+      are-we-there-yet: 2.0.0
+      console-control-strings: 1.1.0
+      gauge: 3.0.2
+      set-blocking: 2.0.0
 
   npmlog@6.0.2:
     dependencies:
@@ -10342,10 +10580,87 @@ snapshots:
       ws: 8.19.0
       zod: 4.3.6
 
+  openclaw@2026.2.14(@discordjs/opus@0.10.0)(@napi-rs/canvas@0.1.92)(@types/express@5.0.6)(audio-decode@2.2.3)(hono@4.11.9)(node-llama-cpp@3.15.1(typescript@5.9.3))(signal-polyfill@0.2.2):
+    dependencies:
+      '@agentclientprotocol/sdk': 0.14.1(zod@4.3.6)
+      '@aws-sdk/client-bedrock': 3.990.0
+      '@buape/carbon': 0.14.0(@discordjs/opus@0.10.0)(hono@4.11.9)
+      '@clack/prompts': 1.0.1
+      '@grammyjs/runner': 2.0.3(grammy@1.40.0)
+      '@grammyjs/transformer-throttler': 1.2.1(grammy@1.40.0)
+      '@homebridge/ciao': 1.3.5
+      '@larksuiteoapi/node-sdk': 1.59.0
+      '@line/bot-sdk': 10.6.0
+      '@lydell/node-pty': 1.2.0-beta.3
+      '@mariozechner/pi-agent-core': 0.52.12(ws@8.19.0)(zod@4.3.6)
+      '@mariozechner/pi-ai': 0.52.12(ws@8.19.0)(zod@4.3.6)
+      '@mariozechner/pi-coding-agent': 0.52.12(ws@8.19.0)(zod@4.3.6)
+      '@mariozechner/pi-tui': 0.52.12
+      '@mozilla/readability': 0.6.0
+      '@napi-rs/canvas': 0.1.92
+      '@sinclair/typebox': 0.34.48
+      '@slack/bolt': 4.6.0(@types/express@5.0.6)
+      '@slack/web-api': 7.14.1
+      '@whiskeysockets/baileys': 7.0.0-rc.9(audio-decode@2.2.3)(sharp@0.34.5)
+      ajv: 8.18.0
+      chalk: 5.6.2
+      chokidar: 5.0.0
+      cli-highlight: 2.1.11
+      commander: 14.0.3
+      croner: 10.0.1
+      discord-api-types: 0.38.39
+      dotenv: 17.3.1
+      express: 5.2.1
+      file-type: 21.3.0
+      grammy: 1.40.0
+      https-proxy-agent: 7.0.6
+      jiti: 2.6.1
+      json5: 2.2.3
+      jszip: 3.10.1
+      linkedom: 0.18.12
+      long: 5.3.2
+      markdown-it: 14.1.1
+      node-edge-tts: 1.2.10
+      node-llama-cpp: 3.15.1(typescript@5.9.3)
+      osc-progress: 0.3.0
+      pdfjs-dist: 5.4.624
+      playwright-core: 1.58.2
+      proper-lockfile: 4.1.2
+      qrcode-terminal: 0.12.0
+      sharp: 0.34.5
+      signal-utils: 0.21.1(signal-polyfill@0.2.2)
+      sqlite-vec: 0.1.7-alpha.2
+      tar: 7.5.7
+      tslog: 4.10.2
+      undici: 7.22.0
+      ws: 8.19.0
+      yaml: 2.8.2
+      zod: 4.3.6
+    transitivePeerDependencies:
+      - '@discordjs/opus'
+      - '@modelcontextprotocol/sdk'
+      - '@types/express'
+      - audio-decode
+      - aws-crt
+      - bufferutil
+      - canvas
+      - debug
+      - encoding
+      - ffmpeg-static
+      - hono
+      - jimp
+      - link-preview-js
+      - node-opus
+      - opusscript
+      - signal-polyfill
+      - supports-color
+      - utf-8-validate
+
   opus-decoder@0.7.11:
     dependencies:
       '@wasm-audio-decoders/common': 9.0.7
-    optional: true
+
+  opus-encdec@0.1.1: {}
 
   ora@8.2.0:
     dependencies:
@@ -10489,6 +10804,8 @@ snapshots:
 
   partial-json@0.1.7: {}
 
+  path-is-absolute@1.0.1: {}
+
   path-key@3.1.1: {}
 
   path-scurry@1.11.1:
@@ -10574,7 +10891,9 @@ snapshots:
     dependencies:
       parse-ms: 4.0.0
 
-  prism-media@1.3.5:
+  prism-media@1.3.5(@discordjs/opus@0.10.0):
+    optionalDependencies:
+      '@discordjs/opus': 0.10.0
     optional: true
 
   process-nextick-args@2.0.1: {}
@@ -10787,6 +11106,10 @@ snapshots:
 
   retry@0.13.1: {}
 
+  rimraf@3.0.2:
+    dependencies:
+      glob: 7.2.3
+
   rimraf@5.0.10:
     dependencies:
       glob: 10.5.0
@@ -10888,6 +11211,10 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
+  rxjs@7.8.2:
+    dependencies:
+      tslib: 2.8.1
+
   safe-buffer@5.1.2: {}
 
   safe-buffer@5.2.1: {}
@@ -10908,6 +11235,8 @@ snapshots:
   selderee@0.11.0:
     dependencies:
       parseley: 0.12.1
+
+  semver@6.3.1: {}
 
   semver@7.7.4: {}
 
@@ -11054,8 +11383,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  simple-yenc@1.0.4:
-    optional: true
+  simple-yenc@1.0.4: {}
 
   sirv@3.0.2:
     dependencies:

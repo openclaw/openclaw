@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "@discordjs/opus": "^0.10.0",
-    "@tf2pickup-org/mumble-client": "file:../../../code/mumble-client-fork",
+    "@tf2pickup-org/mumble-client": "^0.12.5",
     "node-fetch": "^3.3.2",
     "opus-decoder": "^0.7.11",
     "opus-encdec": "^0.1.1",
