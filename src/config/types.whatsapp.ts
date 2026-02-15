@@ -67,6 +67,8 @@ export type WhatsAppConfig = {
   selfChatMode?: boolean;
   /** Optional allowlist for WhatsApp direct chats (E.164). */
   allowFrom?: string[];
+  /** Optional blocklist for WhatsApp senders (E.164). Blocked senders are rejected before any other access check. */
+  blockFrom?: string[];
   /** Optional allowlist for WhatsApp group senders (E.164). */
   groupAllowFrom?: string[];
   /**
