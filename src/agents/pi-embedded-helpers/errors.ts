@@ -685,7 +685,7 @@ export function isMissingToolCallInputError(raw: string): boolean {
 
 export function isMalformedToolCallJsonError(raw?: string): boolean {
   if (!raw) return false;
-  return /\bin JSON at position \d+|Unexpected end of JSON input|Unexpected token .* in JSON|Expected .*in JSON at position/i.test(
+  return /\b(?:in|after) JSON at position \d+|Unexpected end of JSON input|Unexpected token .* in JSON|Expected .*(?:in|after) JSON at position/i.test(
     raw,
   );
 }
