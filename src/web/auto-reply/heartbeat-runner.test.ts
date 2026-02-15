@@ -16,7 +16,8 @@ const state = vi.hoisted(() => ({
 }));
 
 vi.mock("../../agents/current-time.js", () => ({
-  appendCronStyleCurrentTimeLine: (body: string) => body,
+  appendCronStyleCurrentTimeLine: (body: string) =>
+    `${body}\nCurrent time: 2026-02-15T00:00:00Z (mock)`,
 }));
 
 // Perf: this module otherwise pulls a large dependency graph that we don't need
@@ -134,6 +135,21 @@ describe("runWebHeartbeatOnce", () => {
     expect(state.events).toEqual(
       expect.arrayContaining([expect.objectContaining({ status: "ok-empty", silent: false })]),
     );
+  });
+
+  it("injects a cron-style Current time line into the heartbeat prompt", async () => {
+    const { runWebHeartbeatOnce } = await getModules();
+    await runWebHeartbeatOnce({
+      cfg: { agents: { defaults: { heartbeat: { prompt: "Ops check" } } }, session: {} } as never,
+      to: "+123",
+      sender,
+      replyResolver,
+      dryRun: true,
+    });
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    const ctx = replyResolver.mock.calls[0]?.[0];
+    expect(ctx?.Body).toContain("Ops check");
+    expect(ctx?.Body).toContain("Current time: 2026-02-15T00:00:00Z (mock)");
   });
 
   it("treats heartbeat token-only replies as ok-token and preserves session updatedAt", async () => {
