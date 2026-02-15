@@ -166,6 +166,16 @@ actor VoiceWakeRuntime {
             }
             guard let audioEngine = self.audioEngine else { return }
 
+            // Guard against missing microphone to prevent crash when accessing inputNode.
+            // On Macs without built-in mic (e.g., Mac mini) and no external mic connected,
+            // accessing inputNode can crash instead of returning gracefully.
+            guard AudioInputDeviceObserver.defaultInputDeviceUID() != nil else {
+                throw NSError(
+                    domain: "VoiceWakeRuntime",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "No audio input available"])
+            }
+
             let input = audioEngine.inputNode
             let format = input.outputFormat(forBus: 0)
             guard format.channelCount > 0, format.sampleRate > 0 else {
