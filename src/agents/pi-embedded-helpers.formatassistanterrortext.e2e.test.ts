@@ -104,4 +104,13 @@ describe("formatAssistantErrorText", () => {
     expect(result).toContain("API provider");
     expect(result).toBe(BILLING_ERROR_USER_MESSAGE);
   });
+  it("returns a friendly message for rate limit errors", () => {
+    const msg = makeAssistantError("429 rate limit reached");
+    expect(formatAssistantErrorText(msg)).toContain("rate limit reached");
+  });
+
+  it("returns a friendly message for empty stream chunk errors", () => {
+    const msg = makeAssistantError("request ended without sending any chunks");
+    expect(formatAssistantErrorText(msg)).toBe("LLM request timed out.");
+  });
 });

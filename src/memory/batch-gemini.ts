@@ -1,7 +1,7 @@
 import type { GeminiEmbeddingClient } from "./embeddings-gemini.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { hashText } from "./internal.js";
+import { hashText, runWithConcurrency } from "./internal.js";
 
 export type GeminiBatchRequest = {
   custom_id: string;
@@ -275,41 +275,6 @@ async function waitForGeminiBatch(params: {
     await new Promise((resolve) => setTimeout(resolve, params.pollIntervalMs));
     current = undefined;
   }
-}
-
-async function runWithConcurrency<T>(tasks: Array<() => Promise<T>>, limit: number): Promise<T[]> {
-  if (tasks.length === 0) {
-    return [];
-  }
-  const resolvedLimit = Math.max(1, Math.min(limit, tasks.length));
-  const results: T[] = Array.from({ length: tasks.length });
-  let next = 0;
-  let firstError: unknown = null;
-
-  const workers = Array.from({ length: resolvedLimit }, async () => {
-    while (true) {
-      if (firstError) {
-        return;
-      }
-      const index = next;
-      next += 1;
-      if (index >= tasks.length) {
-        return;
-      }
-      try {
-        results[index] = await tasks[index]();
-      } catch (err) {
-        firstError = err;
-        return;
-      }
-    }
-  });
-
-  await Promise.allSettled(workers);
-  if (firstError) {
-    throw firstError;
-  }
-  return results;
 }
 
 export async function runGeminiEmbeddingBatches(params: {

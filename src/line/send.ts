@@ -4,6 +4,7 @@ import { loadConfig } from "../config/config.js";
 import { logVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
 import { resolveLineAccount } from "./accounts.js";
+import { resolveLineChannelAccessToken } from "./channel-access-token.js";
 
 // Use the messaging API types directly
 type Message = messagingApi.Message;
@@ -29,21 +30,6 @@ interface LineSendOpts {
   verbose?: boolean;
   mediaUrl?: string;
   replyToken?: string;
-}
-
-function resolveToken(
-  explicit: string | undefined,
-  params: { accountId: string; channelAccessToken: string },
-): string {
-  if (explicit?.trim()) {
-    return explicit.trim();
-  }
-  if (!params.channelAccessToken) {
-    throw new Error(
-      `LINE channel access token missing for account "${params.accountId}" (set channels.line.channelAccessToken or LINE_CHANNEL_ACCESS_TOKEN).`,
-    );
-  }
-  return params.channelAccessToken.trim();
 }
 
 function normalizeTarget(to: string): string {
@@ -121,7 +107,7 @@ export async function sendMessageLine(
     cfg,
     accountId: opts.accountId,
   });
-  const token = resolveToken(opts.channelAccessToken, account);
+  const token = resolveLineChannelAccessToken(opts.channelAccessToken, account);
   const chatId = normalizeTarget(to);
 
   const client = new messagingApi.MessagingApiClient({
@@ -208,7 +194,7 @@ export async function replyMessageLine(
     cfg,
     accountId: opts.accountId,
   });
-  const token = resolveToken(opts.channelAccessToken, account);
+  const token = resolveLineChannelAccessToken(opts.channelAccessToken, account);
 
   const client = new messagingApi.MessagingApiClient({
     channelAccessToken: token,
@@ -244,7 +230,7 @@ export async function pushMessagesLine(
     cfg,
     accountId: opts.accountId,
   });
-  const token = resolveToken(opts.channelAccessToken, account);
+  const token = resolveLineChannelAccessToken(opts.channelAccessToken, account);
   const chatId = normalizeTarget(to);
 
   const client = new messagingApi.MessagingApiClient({
@@ -302,7 +288,7 @@ export async function pushImageMessage(
     cfg,
     accountId: opts.accountId,
   });
-  const token = resolveToken(opts.channelAccessToken, account);
+  const token = resolveLineChannelAccessToken(opts.channelAccessToken, account);
   const chatId = normalizeTarget(to);
 
   const client = new messagingApi.MessagingApiClient({
@@ -350,7 +336,7 @@ export async function pushLocationMessage(
     cfg,
     accountId: opts.accountId,
   });
-  const token = resolveToken(opts.channelAccessToken, account);
+  const token = resolveLineChannelAccessToken(opts.channelAccessToken, account);
   const chatId = normalizeTarget(to);
 
   const client = new messagingApi.MessagingApiClient({
@@ -394,7 +380,7 @@ export async function pushFlexMessage(
     cfg,
     accountId: opts.accountId,
   });
-  const token = resolveToken(opts.channelAccessToken, account);
+  const token = resolveLineChannelAccessToken(opts.channelAccessToken, account);
   const chatId = normalizeTarget(to);
 
   const client = new messagingApi.MessagingApiClient({
@@ -446,7 +432,7 @@ export async function pushTemplateMessage(
     cfg,
     accountId: opts.accountId,
   });
-  const token = resolveToken(opts.channelAccessToken, account);
+  const token = resolveLineChannelAccessToken(opts.channelAccessToken, account);
   const chatId = normalizeTarget(to);
 
   const client = new messagingApi.MessagingApiClient({
@@ -488,7 +474,7 @@ export async function pushTextMessageWithQuickReplies(
     cfg,
     accountId: opts.accountId,
   });
-  const token = resolveToken(opts.channelAccessToken, account);
+  const token = resolveLineChannelAccessToken(opts.channelAccessToken, account);
   const chatId = normalizeTarget(to);
 
   const client = new messagingApi.MessagingApiClient({
@@ -559,7 +545,7 @@ export async function showLoadingAnimation(
     cfg,
     accountId: opts.accountId,
   });
-  const token = resolveToken(opts.channelAccessToken, account);
+  const token = resolveLineChannelAccessToken(opts.channelAccessToken, account);
 
   const client = new messagingApi.MessagingApiClient({
     channelAccessToken: token,
@@ -599,7 +585,7 @@ export async function getUserProfile(
     cfg,
     accountId: opts.accountId,
   });
-  const token = resolveToken(opts.channelAccessToken, account);
+  const token = resolveLineChannelAccessToken(opts.channelAccessToken, account);
 
   const client = new messagingApi.MessagingApiClient({
     channelAccessToken: token,

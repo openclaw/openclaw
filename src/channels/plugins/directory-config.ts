@@ -21,7 +21,7 @@ export async function listSlackDirectoryPeersFromConfig(
   const q = params.query?.trim().toLowerCase() || "";
   const ids = new Set<string>();
 
-  for (const entry of account.dm?.allowFrom ?? []) {
+  for (const entry of account.config.allowFrom ?? account.dm?.allowFrom ?? []) {
     const raw = String(entry).trim();
     if (!raw || raw === "*") {
       continue;
@@ -84,7 +84,7 @@ export async function listDiscordDirectoryPeersFromConfig(
   const q = params.query?.trim().toLowerCase() || "";
   const ids = new Set<string>();
 
-  for (const entry of account.config.dm?.allowFrom ?? []) {
+  for (const entry of account.config.allowFrom ?? account.config.dm?.allowFrom ?? []) {
     const raw = String(entry).trim();
     if (!raw || raw === "*") {
       continue;

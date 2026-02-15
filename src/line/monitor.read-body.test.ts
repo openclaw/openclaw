@@ -1,7 +1,7 @@
 import type { IncomingMessage } from "node:http";
 import { EventEmitter } from "node:events";
 import { describe, expect, it } from "vitest";
-import { readLineWebhookRequestBody } from "./monitor.js";
+import { readLineWebhookRequestBody } from "./webhook-node.js";
 
 function createMockRequest(chunks: string[]): IncomingMessage {
   const req = new EventEmitter() as IncomingMessage & { destroyed?: boolean; destroy: () => void };

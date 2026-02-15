@@ -1,11 +1,18 @@
 import { formatCliCommand } from "../cli/command-format.js";
 import { loadConfig } from "../config/config.js";
+import { getBridgeAuthForPort } from "./bridge-auth-registry.js";
 import { resolveBrowserControlAuth } from "./control-auth.js";
 import {
   createBrowserControlContext,
   startBrowserControlServiceFromConfig,
 } from "./control-service.js";
 import { createBrowserRouteDispatcher } from "./routes/dispatcher.js";
+
+type LoopbackBrowserAuthDeps = {
+  loadConfig: typeof loadConfig;
+  resolveBrowserControlAuth: typeof resolveBrowserControlAuth;
+  getBridgeAuthForPort: typeof getBridgeAuthForPort;
+};
 
 function isAbsoluteHttp(url: string): boolean {
   return /^https?:\/\//i.test(url.trim());
@@ -20,9 +27,10 @@ function isLoopbackHttpUrl(url: string): boolean {
   }
 }
 
-function withLoopbackBrowserAuth(
+function withLoopbackBrowserAuthImpl(
   url: string,
   init: (RequestInit & { timeoutMs?: number }) | undefined,
+  deps: LoopbackBrowserAuthDeps,
 ): RequestInit & { timeoutMs?: number } {
   const headers = new Headers(init?.headers ?? {});
   if (headers.has("authorization") || headers.has("x-openclaw-password")) {
@@ -33,18 +41,52 @@ function withLoopbackBrowserAuth(
   }
 
   try {
-    const cfg = loadConfig();
-    const auth = resolveBrowserControlAuth(cfg);
+    const cfg = deps.loadConfig();
+    const auth = deps.resolveBrowserControlAuth(cfg);
     if (auth.token) {
       headers.set("Authorization", `Bearer ${auth.token}`);
-    } else if (auth.password) {
+      return { ...init, headers };
+    }
+    if (auth.password) {
       headers.set("x-openclaw-password", auth.password);
+      return { ...init, headers };
     }
   } catch {
     // ignore config/auth lookup failures and continue without auth headers
   }
 
+  // Sandbox bridge servers can run with per-process ephemeral auth on dynamic ports.
+  // Fall back to the in-memory registry if config auth is not available.
+  try {
+    const parsed = new URL(url);
+    const port =
+      parsed.port && Number.parseInt(parsed.port, 10) > 0
+        ? Number.parseInt(parsed.port, 10)
+        : parsed.protocol === "https:"
+          ? 443
+          : 80;
+    const bridgeAuth = deps.getBridgeAuthForPort(port);
+    if (bridgeAuth?.token) {
+      headers.set("Authorization", `Bearer ${bridgeAuth.token}`);
+    } else if (bridgeAuth?.password) {
+      headers.set("x-openclaw-password", bridgeAuth.password);
+    }
+  } catch {
+    // ignore
+  }
+
   return { ...init, headers };
+}
+
+function withLoopbackBrowserAuth(
+  url: string,
+  init: (RequestInit & { timeoutMs?: number }) | undefined,
+): RequestInit & { timeoutMs?: number } {
+  return withLoopbackBrowserAuthImpl(url, init, {
+    loadConfig,
+    resolveBrowserControlAuth,
+    getBridgeAuthForPort,
+  });
 }
 
 function enhanceBrowserFetchError(url: string, err: unknown, timeoutMs: number): Error {
@@ -191,3 +233,7 @@ export async function fetchBrowserJson<T>(
     throw enhanceBrowserFetchError(url, err, timeoutMs);
   }
 }
+
+export const __test = {
+  withLoopbackBrowserAuth: withLoopbackBrowserAuthImpl,
+};

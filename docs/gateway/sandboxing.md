@@ -71,6 +71,11 @@ Format: `host:container:mode` (e.g., `"/home/user/source:/source:rw"`).
 
 Global and per-agent binds are **merged** (not replaced). Under `scope: "shared"`, per-agent binds are ignored.
 
+`agents.defaults.sandbox.browser.binds` mounts additional host directories into the **sandbox browser** container only.
+
+- When set (including `[]`), it replaces `agents.defaults.sandbox.docker.binds` for the browser container.
+- When omitted, the browser container falls back to `agents.defaults.sandbox.docker.binds` (backwards compatible).
+
 Example (read-only source + docker socket):
 
 ```json5

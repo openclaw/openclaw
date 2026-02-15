@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { resolveBlueBubblesAccount } from "./accounts.js";
+import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
 import { blueBubblesFetchWithTimeout, buildBlueBubblesApiUrl } from "./types.js";
 
 export type BlueBubblesReactionOpts = {
@@ -123,7 +124,7 @@ function resolveAccount(params: BlueBubblesReactionOpts) {
   if (!password) {
     throw new Error("BlueBubbles password is required");
   }
-  return { baseUrl, password };
+  return { baseUrl, password, accountId: account.accountId };
 }
 
 export function normalizeBlueBubblesReactionInput(emoji: string, remove?: boolean): string {
@@ -160,7 +161,12 @@ export async function sendBlueBubblesReaction(params: {
     throw new Error("BlueBubbles reaction requires messageGuid.");
   }
   const reaction = normalizeBlueBubblesReactionInput(params.emoji, params.remove);
-  const { baseUrl, password } = resolveAccount(params.opts ?? {});
+  const { baseUrl, password, accountId } = resolveAccount(params.opts ?? {});
+  if (getCachedBlueBubblesPrivateApiStatus(accountId) === false) {
+    throw new Error(
+      "BlueBubbles reaction requires Private API, but it is disabled on the BlueBubbles server.",
+    );
+  }
   const url = buildBlueBubblesApiUrl({
     baseUrl,
     path: "/api/v1/message/react",

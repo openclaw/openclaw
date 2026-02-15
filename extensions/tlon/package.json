@@ -1,12 +1,11 @@
 {
   "name": "@openclaw/tlon",
-  "version": "2026.2.13",
+  "version": "2026.2.15",
   "private": true,
   "description": "OpenClaw Tlon/Urbit channel plugin",
   "type": "module",
   "dependencies": {
-    "@urbit/aura": "^3.0.0",
-    "@urbit/http-api": "^3.0.0"
+    "@urbit/aura": "^3.0.0"
   },
   "devDependencies": {
     "openclaw": "workspace:*"

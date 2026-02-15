@@ -2,6 +2,7 @@ import fs from "node:fs";
 import type { ResolvedBrowserProfile } from "./config.js";
 import type { PwAiModule } from "./pw-ai-module.js";
 import type {
+  BrowserServerState,
   BrowserRouteContext,
   BrowserTab,
   ContextOptions,
@@ -23,6 +24,10 @@ import {
   stopChromeExtensionRelayServer,
 } from "./extension-relay.js";
 import { getPwAiModule } from "./pw-ai-module.js";
+import {
+  refreshResolvedBrowserConfigFromDisk,
+  resolveBrowserProfileWithHotReload,
+} from "./resolved-config-refresh.js";
 import { resolveTargetIdFromTabs } from "./target-id.js";
 import { movePathToTrash } from "./trash.js";
 
@@ -34,6 +39,14 @@ export type {
   ProfileRuntimeState,
   ProfileStatus,
 } from "./server-context.types.js";
+
+export function listKnownProfileNames(state: BrowserServerState): string[] {
+  const names = new Set(Object.keys(state.resolved.profiles));
+  for (const name of state.profiles.keys()) {
+    names.add(name);
+  }
+  return [...names];
+}
 
 /**
  * Normalize a CDP WebSocket URL to use the correct base URL.
@@ -559,6 +572,8 @@ function createProfileContext(
 }
 
 export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteContext {
+  const refreshConfigFromDisk = opts.refreshConfigFromDisk === true;
+
   const state = () => {
     const current = opts.getState();
     if (!current) {
@@ -570,7 +585,12 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
   const forProfile = (profileName?: string): ProfileContext => {
     const current = state();
     const name = profileName ?? current.resolved.defaultProfile;
-    const profile = resolveProfile(current.resolved, name);
+    const profile = resolveBrowserProfileWithHotReload({
+      current,
+      refreshConfigFromDisk,
+      name,
+    });
+
     if (!profile) {
       const available = Object.keys(current.resolved.profiles).join(", ");
       throw new Error(`Profile "${name}" not found. Available profiles: ${available || "(none)"}`);
@@ -580,6 +600,11 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
 
   const listProfiles = async (): Promise<ProfileStatus[]> => {
     const current = state();
+    refreshResolvedBrowserConfigFromDisk({
+      current,
+      refreshConfigFromDisk,
+      mode: "cached",
+    });
     const result: ProfileStatus[] = [];
 
     for (const name of Object.keys(current.resolved.profiles)) {

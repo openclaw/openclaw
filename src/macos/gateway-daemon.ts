@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import process from "node:process";
 import type { GatewayLockHandle } from "../infra/gateway-lock.js";
+import { restartGatewayProcessWithFreshPid } from "../infra/process-respawn.js";
 
 declare const __OPENCLAW_VERSION__: string | undefined;
 
@@ -49,7 +50,11 @@ async function main() {
     { setGatewayWsLogStyle },
     { setVerbose },
     { acquireGatewayLock, GatewayLockError },
-    { consumeGatewaySigusr1RestartAuthorization, isGatewaySigusr1RestartExternallyAllowed },
+    {
+      consumeGatewaySigusr1RestartAuthorization,
+      isGatewaySigusr1RestartExternallyAllowed,
+      markGatewaySigusr1RestartHandled,
+    },
     { defaultRuntime },
     { enableConsoleCapture, setConsoleTimestampPrefix },
     commandQueueMod,
@@ -174,8 +179,26 @@ async function main() {
         }
         server = null;
         if (isRestart) {
-          shuttingDown = false;
-          restartResolver?.();
+          const respawn = restartGatewayProcessWithFreshPid();
+          if (respawn.mode === "spawned" || respawn.mode === "supervised") {
+            const modeLabel =
+              respawn.mode === "spawned"
+                ? `spawned pid ${respawn.pid ?? "unknown"}`
+                : "supervisor restart";
+            defaultRuntime.log(`gateway: restart mode full process restart (${modeLabel})`);
+            cleanupSignals();
+            process.exit(0);
+          } else {
+            if (respawn.mode === "failed") {
+              defaultRuntime.log(
+                `gateway: full process restart failed (${respawn.detail ?? "unknown error"}); falling back to in-process restart`,
+              );
+            } else {
+              defaultRuntime.log("gateway: restart mode in-process restart (OPENCLAW_NO_RESPAWN)");
+            }
+            shuttingDown = false;
+            restartResolver?.();
+          }
         } else {
           cleanupSignals();
           process.exit(0);
@@ -201,6 +224,7 @@ async function main() {
       );
       return;
     }
+    markGatewaySigusr1RestartHandled();
     request("restart", "SIGUSR1");
   };
 

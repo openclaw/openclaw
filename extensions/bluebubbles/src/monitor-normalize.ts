@@ -198,6 +198,108 @@ function readFirstChatRecord(message: Record<string, unknown>): Record<string, u
   return asRecord(first);
 }
 
+function extractSenderInfo(message: Record<string, unknown>): {
+  senderId: string;
+  senderName?: string;
+} {
+  const handleValue = message.handle ?? message.sender;
+  const handle =
+    asRecord(handleValue) ?? (typeof handleValue === "string" ? { address: handleValue } : null);
+  const senderId =
+    readString(handle, "address") ??
+    readString(handle, "handle") ??
+    readString(handle, "id") ??
+    readString(message, "senderId") ??
+    readString(message, "sender") ??
+    readString(message, "from") ??
+    "";
+  const senderName =
+    readString(handle, "displayName") ??
+    readString(handle, "name") ??
+    readString(message, "senderName") ??
+    undefined;
+
+  return { senderId, senderName };
+}
+
+function extractChatContext(message: Record<string, unknown>): {
+  chatGuid?: string;
+  chatIdentifier?: string;
+  chatId?: number;
+  chatName?: string;
+  isGroup: boolean;
+  participants: unknown[];
+} {
+  const chat = asRecord(message.chat) ?? asRecord(message.conversation) ?? null;
+  const chatFromList = readFirstChatRecord(message);
+  const chatGuid =
+    readString(message, "chatGuid") ??
+    readString(message, "chat_guid") ??
+    readString(chat, "chatGuid") ??
+    readString(chat, "chat_guid") ??
+    readString(chat, "guid") ??
+    readString(chatFromList, "chatGuid") ??
+    readString(chatFromList, "chat_guid") ??
+    readString(chatFromList, "guid");
+  const chatIdentifier =
+    readString(message, "chatIdentifier") ??
+    readString(message, "chat_identifier") ??
+    readString(chat, "chatIdentifier") ??
+    readString(chat, "chat_identifier") ??
+    readString(chat, "identifier") ??
+    readString(chatFromList, "chatIdentifier") ??
+    readString(chatFromList, "chat_identifier") ??
+    readString(chatFromList, "identifier") ??
+    extractChatIdentifierFromChatGuid(chatGuid);
+  const chatId =
+    readNumberLike(message, "chatId") ??
+    readNumberLike(message, "chat_id") ??
+    readNumberLike(chat, "chatId") ??
+    readNumberLike(chat, "chat_id") ??
+    readNumberLike(chat, "id") ??
+    readNumberLike(chatFromList, "chatId") ??
+    readNumberLike(chatFromList, "chat_id") ??
+    readNumberLike(chatFromList, "id");
+  const chatName =
+    readString(message, "chatName") ??
+    readString(chat, "displayName") ??
+    readString(chat, "name") ??
+    readString(chatFromList, "displayName") ??
+    readString(chatFromList, "name") ??
+    undefined;
+
+  const chatParticipants = chat ? chat["participants"] : undefined;
+  const messageParticipants = message["participants"];
+  const chatsParticipants = chatFromList ? chatFromList["participants"] : undefined;
+  const participants = Array.isArray(chatParticipants)
+    ? chatParticipants
+    : Array.isArray(messageParticipants)
+      ? messageParticipants
+      : Array.isArray(chatsParticipants)
+        ? chatsParticipants
+        : [];
+  const participantsCount = participants.length;
+  const groupFromChatGuid = resolveGroupFlagFromChatGuid(chatGuid);
+  const explicitIsGroup =
+    readBoolean(message, "isGroup") ??
+    readBoolean(message, "is_group") ??
+    readBoolean(chat, "isGroup") ??
+    readBoolean(message, "group");
+  const isGroup =
+    typeof groupFromChatGuid === "boolean"
+      ? groupFromChatGuid
+      : (explicitIsGroup ?? participantsCount > 2);
+
+  return {
+    chatGuid,
+    chatIdentifier,
+    chatId,
+    chatName,
+    isGroup,
+    participants,
+  };
+}
+
 function normalizeParticipantEntry(entry: unknown): BlueBubblesParticipant | null {
   if (typeof entry === "string" || typeof entry === "number") {
     const raw = String(entry).trim();
@@ -555,84 +657,10 @@ export function normalizeWebhookMessage(
     readString(message, "subject") ??
     "";
 
-  const handleValue = message.handle ?? message.sender;
-  const handle =
-    asRecord(handleValue) ?? (typeof handleValue === "string" ? { address: handleValue } : null);
-  const senderId =
-    readString(handle, "address") ??
-    readString(handle, "handle") ??
-    readString(handle, "id") ??
-    readString(message, "senderId") ??
-    readString(message, "sender") ??
-    readString(message, "from") ??
-    "";
-
-  const senderName =
-    readString(handle, "displayName") ??
-    readString(handle, "name") ??
-    readString(message, "senderName") ??
-    undefined;
-
-  const chat = asRecord(message.chat) ?? asRecord(message.conversation) ?? null;
-  const chatFromList = readFirstChatRecord(message);
-  const chatGuid =
-    readString(message, "chatGuid") ??
-    readString(message, "chat_guid") ??
-    readString(chat, "chatGuid") ??
-    readString(chat, "chat_guid") ??
-    readString(chat, "guid") ??
-    readString(chatFromList, "chatGuid") ??
-    readString(chatFromList, "chat_guid") ??
-    readString(chatFromList, "guid");
-  const chatIdentifier =
-    readString(message, "chatIdentifier") ??
-    readString(message, "chat_identifier") ??
-    readString(chat, "chatIdentifier") ??
-    readString(chat, "chat_identifier") ??
-    readString(chat, "identifier") ??
-    readString(chatFromList, "chatIdentifier") ??
-    readString(chatFromList, "chat_identifier") ??
-    readString(chatFromList, "identifier") ??
-    extractChatIdentifierFromChatGuid(chatGuid);
-  const chatId =
-    readNumberLike(message, "chatId") ??
-    readNumberLike(message, "chat_id") ??
-    readNumberLike(chat, "chatId") ??
-    readNumberLike(chat, "chat_id") ??
-    readNumberLike(chat, "id") ??
-    readNumberLike(chatFromList, "chatId") ??
-    readNumberLike(chatFromList, "chat_id") ??
-    readNumberLike(chatFromList, "id");
-  const chatName =
-    readString(message, "chatName") ??
-    readString(chat, "displayName") ??
-    readString(chat, "name") ??
-    readString(chatFromList, "displayName") ??
-    readString(chatFromList, "name") ??
-    undefined;
-
-  const chatParticipants = chat ? chat["participants"] : undefined;
-  const messageParticipants = message["participants"];
-  const chatsParticipants = chatFromList ? chatFromList["participants"] : undefined;
-  const participants = Array.isArray(chatParticipants)
-    ? chatParticipants
-    : Array.isArray(messageParticipants)
-      ? messageParticipants
-      : Array.isArray(chatsParticipants)
-        ? chatsParticipants
-        : [];
+  const { senderId, senderName } = extractSenderInfo(message);
+  const { chatGuid, chatIdentifier, chatId, chatName, isGroup, participants } =
+    extractChatContext(message);
   const normalizedParticipants = normalizeParticipantList(participants);
-  const participantsCount = participants.length;
-  const groupFromChatGuid = resolveGroupFlagFromChatGuid(chatGuid);
-  const explicitIsGroup =
-    readBoolean(message, "isGroup") ??
-    readBoolean(message, "is_group") ??
-    readBoolean(chat, "isGroup") ??
-    readBoolean(message, "group");
-  const isGroup =
-    typeof groupFromChatGuid === "boolean"
-      ? groupFromChatGuid
-      : (explicitIsGroup ?? participantsCount > 2);
 
   const fromMe = readBoolean(message, "isFromMe") ?? readBoolean(message, "is_from_me");
   const messageId =
@@ -731,82 +759,8 @@ export function normalizeWebhookReaction(
   const emoji = (associatedEmoji?.trim() || mapping?.emoji) ?? `reaction:${associatedType}`;
   const action = mapping?.action ?? resolveTapbackActionHint(associatedType) ?? "added";
 
-  const handleValue = message.handle ?? message.sender;
-  const handle =
-    asRecord(handleValue) ?? (typeof handleValue === "string" ? { address: handleValue } : null);
-  const senderId =
-    readString(handle, "address") ??
-    readString(handle, "handle") ??
-    readString(handle, "id") ??
-    readString(message, "senderId") ??
-    readString(message, "sender") ??
-    readString(message, "from") ??
-    "";
-  const senderName =
-    readString(handle, "displayName") ??
-    readString(handle, "name") ??
-    readString(message, "senderName") ??
-    undefined;
-
-  const chat = asRecord(message.chat) ?? asRecord(message.conversation) ?? null;
-  const chatFromList = readFirstChatRecord(message);
-  const chatGuid =
-    readString(message, "chatGuid") ??
-    readString(message, "chat_guid") ??
-    readString(chat, "chatGuid") ??
-    readString(chat, "chat_guid") ??
-    readString(chat, "guid") ??
-    readString(chatFromList, "chatGuid") ??
-    readString(chatFromList, "chat_guid") ??
-    readString(chatFromList, "guid");
-  const chatIdentifier =
-    readString(message, "chatIdentifier") ??
-    readString(message, "chat_identifier") ??
-    readString(chat, "chatIdentifier") ??
-    readString(chat, "chat_identifier") ??
-    readString(chat, "identifier") ??
-    readString(chatFromList, "chatIdentifier") ??
-    readString(chatFromList, "chat_identifier") ??
-    readString(chatFromList, "identifier") ??
-    extractChatIdentifierFromChatGuid(chatGuid);
-  const chatId =
-    readNumberLike(message, "chatId") ??
-    readNumberLike(message, "chat_id") ??
-    readNumberLike(chat, "chatId") ??
-    readNumberLike(chat, "chat_id") ??
-    readNumberLike(chat, "id") ??
-    readNumberLike(chatFromList, "chatId") ??
-    readNumberLike(chatFromList, "chat_id") ??
-    readNumberLike(chatFromList, "id");
-  const chatName =
-    readString(message, "chatName") ??
-    readString(chat, "displayName") ??
-    readString(chat, "name") ??
-    readString(chatFromList, "displayName") ??
-    readString(chatFromList, "name") ??
-    undefined;
-
-  const chatParticipants = chat ? chat["participants"] : undefined;
-  const messageParticipants = message["participants"];
-  const chatsParticipants = chatFromList ? chatFromList["participants"] : undefined;
-  const participants = Array.isArray(chatParticipants)
-    ? chatParticipants
-    : Array.isArray(messageParticipants)
-      ? messageParticipants
-      : Array.isArray(chatsParticipants)
-        ? chatsParticipants
-        : [];
-  const participantsCount = participants.length;
-  const groupFromChatGuid = resolveGroupFlagFromChatGuid(chatGuid);
-  const explicitIsGroup =
-    readBoolean(message, "isGroup") ??
-    readBoolean(message, "is_group") ??
-    readBoolean(chat, "isGroup") ??
-    readBoolean(message, "group");
-  const isGroup =
-    typeof groupFromChatGuid === "boolean"
-      ? groupFromChatGuid
-      : (explicitIsGroup ?? participantsCount > 2);
+  const { senderId, senderName } = extractSenderInfo(message);
+  const { chatGuid, chatIdentifier, chatId, chatName, isGroup } = extractChatContext(message);
 
   const fromMe = readBoolean(message, "isFromMe") ?? readBoolean(message, "is_from_me");
   const timestampRaw =

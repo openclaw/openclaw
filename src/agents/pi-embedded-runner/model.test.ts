@@ -8,21 +8,15 @@ vi.mock("../pi-model-discovery.js", () => ({
 import type { OpenClawConfig } from "../../config/config.js";
 import { discoverModels } from "../pi-model-discovery.js";
 import { buildInlineProviderModels, resolveModel } from "./model.js";
-
-const makeModel = (id: string) => ({
-  id,
-  name: id,
-  reasoning: false,
-  input: ["text"] as const,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 1,
-  maxTokens: 1,
-});
+import {
+  makeModel,
+  mockDiscoveredModel,
+  OPENAI_CODEX_TEMPLATE_MODEL,
+  resetMockDiscoverModels,
+} from "./model.test-harness.js";
 
 beforeEach(() => {
-  vi.mocked(discoverModels).mockReturnValue({
-    find: vi.fn(() => null),
-  } as unknown as ReturnType<typeof discoverModels>);
+  resetMockDiscoverModels();
 });
 
 describe("buildInlineProviderModels", () => {
@@ -136,27 +130,11 @@ describe("resolveModel", () => {
   });
 
   it("builds an openai-codex fallback for gpt-5.3-codex", () => {
-    const templateModel = {
-      id: "gpt-5.2-codex",
-      name: "GPT-5.2 Codex",
+    mockDiscoveredModel({
       provider: "openai-codex",
-      api: "openai-codex-responses",
-      baseUrl: "https://chatgpt.com/backend-api",
-      reasoning: true,
-      input: ["text", "image"] as const,
-      cost: { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0 },
-      contextWindow: 272000,
-      maxTokens: 128000,
-    };
-
-    vi.mocked(discoverModels).mockReturnValue({
-      find: vi.fn((provider: string, modelId: string) => {
-        if (provider === "openai-codex" && modelId === "gpt-5.2-codex") {
-          return templateModel;
-        }
-        return null;
-      }),
-    } as unknown as ReturnType<typeof discoverModels>);
+      modelId: "gpt-5.2-codex",
+      templateModel: OPENAI_CODEX_TEMPLATE_MODEL,
+    });
 
     const result = resolveModel("openai-codex", "gpt-5.3-codex", "/tmp/agent");
 
@@ -164,43 +142,6 @@ describe("resolveModel", () => {
     expect(result.model).toMatchObject({
       provider: "openai-codex",
       id: "gpt-5.3-codex",
-      api: "openai-codex-responses",
-      baseUrl: "https://chatgpt.com/backend-api",
-      reasoning: true,
-      contextWindow: 272000,
-      maxTokens: 128000,
-    });
-  });
-
-  it("builds an openai-codex fallback for gpt-5.3-codex-spark", () => {
-    const templateModel = {
-      id: "gpt-5.2-codex",
-      name: "GPT-5.2 Codex",
-      provider: "openai-codex",
-      api: "openai-codex-responses",
-      baseUrl: "https://chatgpt.com/backend-api",
-      reasoning: true,
-      input: ["text", "image"] as const,
-      cost: { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0 },
-      contextWindow: 272000,
-      maxTokens: 128000,
-    };
-
-    vi.mocked(discoverModels).mockReturnValue({
-      find: vi.fn((provider: string, modelId: string) => {
-        if (provider === "openai-codex" && modelId === "gpt-5.2-codex") {
-          return templateModel;
-        }
-        return null;
-      }),
-    } as unknown as ReturnType<typeof discoverModels>);
-
-    const result = resolveModel("openai-codex", "gpt-5.3-codex-spark", "/tmp/agent");
-
-    expect(result.error).toBeUndefined();
-    expect(result.model).toMatchObject({
-      provider: "openai-codex",
-      id: "gpt-5.3-codex-spark",
       api: "openai-codex-responses",
       baseUrl: "https://chatgpt.com/backend-api",
       reasoning: true,
@@ -244,7 +185,7 @@ describe("resolveModel", () => {
     });
   });
 
-  it("builds a google-antigravity forward-compat fallback for claude-opus-4-6-thinking", () => {
+  it("builds an antigravity forward-compat fallback for claude-opus-4-6-thinking", () => {
     const templateModel = {
       id: "claude-opus-4-5-thinking",
       name: "Claude Opus 4.5 Thinking",
@@ -253,8 +194,8 @@ describe("resolveModel", () => {
       baseUrl: "https://daily-cloudcode-pa.sandbox.googleapis.com",
       reasoning: true,
       input: ["text", "image"] as const,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 1000000,
+      cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+      contextWindow: 200000,
       maxTokens: 64000,
     };
 
@@ -276,6 +217,45 @@ describe("resolveModel", () => {
       api: "google-gemini-cli",
       baseUrl: "https://daily-cloudcode-pa.sandbox.googleapis.com",
       reasoning: true,
+      contextWindow: 200000,
+      maxTokens: 64000,
+    });
+  });
+
+  it("builds an antigravity forward-compat fallback for claude-opus-4-6", () => {
+    const templateModel = {
+      id: "claude-opus-4-5",
+      name: "Claude Opus 4.5",
+      provider: "google-antigravity",
+      api: "google-gemini-cli",
+      baseUrl: "https://daily-cloudcode-pa.sandbox.googleapis.com",
+      reasoning: true,
+      input: ["text", "image"] as const,
+      cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+      contextWindow: 200000,
+      maxTokens: 64000,
+    };
+
+    vi.mocked(discoverModels).mockReturnValue({
+      find: vi.fn((provider: string, modelId: string) => {
+        if (provider === "google-antigravity" && modelId === "claude-opus-4-5") {
+          return templateModel;
+        }
+        return null;
+      }),
+    } as unknown as ReturnType<typeof discoverModels>);
+
+    const result = resolveModel("google-antigravity", "claude-opus-4-6", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "google-antigravity",
+      id: "claude-opus-4-6",
+      api: "google-gemini-cli",
+      baseUrl: "https://daily-cloudcode-pa.sandbox.googleapis.com",
+      reasoning: true,
+      contextWindow: 200000,
+      maxTokens: 64000,
     });
   });
 
@@ -314,16 +294,32 @@ describe("resolveModel", () => {
     });
   });
 
+  it("keeps unknown-model errors when no antigravity thinking template exists", () => {
+    vi.mocked(discoverModels).mockReturnValue({
+      find: vi.fn(() => null),
+    } as unknown as ReturnType<typeof discoverModels>);
+
+    const result = resolveModel("google-antigravity", "claude-opus-4-6-thinking", "/tmp/agent");
+
+    expect(result.model).toBeUndefined();
+    expect(result.error).toBe("Unknown model: google-antigravity/claude-opus-4-6-thinking");
+  });
+
+  it("keeps unknown-model errors when no antigravity non-thinking template exists", () => {
+    vi.mocked(discoverModels).mockReturnValue({
+      find: vi.fn(() => null),
+    } as unknown as ReturnType<typeof discoverModels>);
+
+    const result = resolveModel("google-antigravity", "claude-opus-4-6", "/tmp/agent");
+
+    expect(result.model).toBeUndefined();
+    expect(result.error).toBe("Unknown model: google-antigravity/claude-opus-4-6");
+  });
+
   it("keeps unknown-model errors for non-gpt-5 openai-codex ids", () => {
     const result = resolveModel("openai-codex", "gpt-4.1-mini", "/tmp/agent");
     expect(result.model).toBeUndefined();
     expect(result.error).toBe("Unknown model: openai-codex/gpt-4.1-mini");
-  });
-
-  it("errors for unknown gpt-5.3-codex-* variants", () => {
-    const result = resolveModel("openai-codex", "gpt-5.3-codex-unknown", "/tmp/agent");
-    expect(result.model).toBeUndefined();
-    expect(result.error).toBe("Unknown model: openai-codex/gpt-5.3-codex-unknown");
   });
 
   it("uses codex fallback even when openai-codex provider is configured", () => {

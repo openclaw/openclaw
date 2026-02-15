@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   analyzeArgvCommand,
   analyzeShellCommand,
+  buildSafeBinsShellCommand,
   evaluateExecAllowlist,
   evaluateShellAllowlist,
   isSafeBinUsage,
@@ -75,6 +76,34 @@ describe("exec approvals allowlist matching", () => {
     const entries: ExecAllowlistEntry[] = [{ pattern: "bin/rg" }];
     const match = matchAllowlist(entries, resolution);
     expect(match).toBeNull();
+  });
+});
+
+describe("exec approvals safe shell command builder", () => {
+  it("quotes only safeBins segments (leaves other segments untouched)", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const analysis = analyzeShellCommand({
+      command: "rg foo src/*.ts | head -n 5 && echo ok",
+      cwd: "/tmp",
+      env: { PATH: "/usr/bin:/bin" },
+      platform: process.platform,
+    });
+    expect(analysis.ok).toBe(true);
+
+    const res = buildSafeBinsShellCommand({
+      command: "rg foo src/*.ts | head -n 5 && echo ok",
+      segments: analysis.segments,
+      segmentSatisfiedBy: [null, "safeBins", null],
+      platform: process.platform,
+    });
+    expect(res.ok).toBe(true);
+    // Preserve non-safeBins segment raw (glob stays unquoted)
+    expect(res.command).toContain("rg foo src/*.ts");
+    // SafeBins segment is fully quoted
+    expect(res.command).toContain("'head' '-n' '5'");
   });
 });
 
@@ -326,6 +355,9 @@ describe("exec approvals shell allowlist (chained commands)", () => {
 
 describe("exec approvals safe bins", () => {
   it("allows safe bins with non-path args", () => {
+    if (process.platform === "win32") {
+      return;
+    }
     const dir = makeTempDir();
     const binDir = path.join(dir, "bin");
     fs.mkdirSync(binDir, { recursive: true });
@@ -350,6 +382,9 @@ describe("exec approvals safe bins", () => {
   });
 
   it("blocks safe bins with file args", () => {
+    if (process.platform === "win32") {
+      return;
+    }
     const dir = makeTempDir();
     const binDir = path.join(dir, "bin");
     fs.mkdirSync(binDir, { recursive: true });
@@ -424,6 +459,11 @@ describe("exec approvals allowlist evaluation", () => {
       safeBins: normalizeSafeBins(["jq"]),
       cwd: "/tmp",
     });
+    // Safe bins are disabled on Windows (PowerShell parsing/expansion differences).
+    if (process.platform === "win32") {
+      expect(result.allowlistSatisfied).toBe(false);
+      return;
+    }
     expect(result.allowlistSatisfied).toBe(true);
     expect(result.allowlistMatches).toEqual([]);
   });
@@ -616,6 +656,11 @@ describe("exec approvals node host allowlist check", () => {
       safeBins: normalizeSafeBins(["jq"]),
       cwd: "/tmp",
     });
+    // Safe bins are disabled on Windows (PowerShell parsing/expansion differences).
+    if (process.platform === "win32") {
+      expect(safe).toBe(false);
+      return;
+    }
     expect(safe).toBe(true);
   });
 });

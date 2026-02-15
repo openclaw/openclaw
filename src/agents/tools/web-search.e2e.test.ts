@@ -31,6 +31,7 @@ const {
   isDirectPerplexityBaseUrl,
   resolvePerplexityRequestModel,
   normalizeFreshness,
+  freshnessToPerplexityRecency,
   resolveGrokApiKey,
   resolveGrokModel,
   resolveGrokInlineCitations,
@@ -125,6 +126,24 @@ describe("web_search freshness normalization", () => {
     expect(normalizeFreshness("2024-13-01to2024-01-31")).toBeUndefined();
     expect(normalizeFreshness("2024-02-30to2024-03-01")).toBeUndefined();
     expect(normalizeFreshness("2024-03-10to2024-03-01")).toBeUndefined();
+  });
+});
+
+describe("freshnessToPerplexityRecency", () => {
+  it("maps Brave shortcuts to Perplexity recency values", () => {
+    expect(freshnessToPerplexityRecency("pd")).toBe("day");
+    expect(freshnessToPerplexityRecency("pw")).toBe("week");
+    expect(freshnessToPerplexityRecency("pm")).toBe("month");
+    expect(freshnessToPerplexityRecency("py")).toBe("year");
+  });
+
+  it("returns undefined for date ranges (not supported by Perplexity)", () => {
+    expect(freshnessToPerplexityRecency("2024-01-01to2024-01-31")).toBeUndefined();
+  });
+
+  it("returns undefined for undefined/empty input", () => {
+    expect(freshnessToPerplexityRecency(undefined)).toBeUndefined();
+    expect(freshnessToPerplexityRecency("")).toBeUndefined();
   });
 });
 
