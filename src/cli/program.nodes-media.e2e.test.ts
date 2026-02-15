@@ -5,6 +5,14 @@ import { callGateway, installBaseProgramMocks, runTui, runtime } from "./program
 
 installBaseProgramMocks();
 
+function getFirstRuntimeLogLine(): string {
+  const first = runtime.log.mock.calls[0]?.[0];
+  if (typeof first !== "string") {
+    throw new Error(`Expected runtime.log first arg to be string, got ${typeof first}`);
+  }
+  return first;
+}
+
 const IOS_NODE = {
   nodeId: "ios-node",
   displayName: "iOS Node",
@@ -59,7 +67,7 @@ describe("cli program (nodes media)", () => {
       .toSorted((a, b) => a.localeCompare(b));
     expect(facings).toEqual(["back", "front"]);
 
-    const out = String(runtime.log.mock.calls[0]?.[0] ?? "");
+    const out = getFirstRuntimeLogLine();
     const mediaPaths = out
       .split("\n")
       .filter((l) => l.startsWith("MEDIA:"))
@@ -132,7 +140,7 @@ describe("cli program (nodes media)", () => {
       }),
     );
 
-    const out = String(runtime.log.mock.calls[0]?.[0] ?? "");
+    const out = getFirstRuntimeLogLine();
     const mediaPath = out.replace(/^MEDIA:/, "").trim();
     expect(mediaPath).toMatch(/openclaw-camera-clip-front-.*\.mp4$/);
 
@@ -188,7 +196,7 @@ describe("cli program (nodes media)", () => {
       }),
     );
 
-    const out = String(runtime.log.mock.calls[0]?.[0] ?? "");
+    const out = getFirstRuntimeLogLine();
     const mediaPath = out.replace(/^MEDIA:/, "").trim();
 
     try {
@@ -263,7 +271,7 @@ describe("cli program (nodes media)", () => {
       }),
     );
 
-    const out = String(runtime.log.mock.calls[0]?.[0] ?? "");
+    const out = getFirstRuntimeLogLine();
     const mediaPath = out.replace(/^MEDIA:/, "").trim();
 
     try {
@@ -356,7 +364,7 @@ describe("cli program (nodes media)", () => {
       { from: "user" },
     );
 
-    const out = String(runtime.log.mock.calls[0]?.[0] ?? "");
+    const out = getFirstRuntimeLogLine();
     const mediaPath = out.replace(/^MEDIA:/, "").trim();
     expect(mediaPath).toMatch(/openclaw-canvas-snapshot-.*\.png$/);
 
@@ -455,7 +463,7 @@ describe("cli program (nodes media)", () => {
         { from: "user" },
       );
 
-      const out = String(runtime.log.mock.calls[0]?.[0] ?? "");
+      const out = getFirstRuntimeLogLine();
       const mediaPath = out.replace(/^MEDIA:/, "").trim();
       expect(mediaPath).toMatch(/openclaw-camera-snap-front-.*\.jpg$/);
 
@@ -504,7 +512,7 @@ describe("cli program (nodes media)", () => {
         { from: "user" },
       );
 
-      const out = String(runtime.log.mock.calls[0]?.[0] ?? "");
+      const out = getFirstRuntimeLogLine();
       const mediaPath = out.replace(/^MEDIA:/, "").trim();
       expect(mediaPath).toMatch(/openclaw-camera-clip-front-.*\.mp4$/);
 

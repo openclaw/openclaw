@@ -1,6 +1,8 @@
 import { vi } from "vitest";
 
-export const callGatewayMock = vi.fn();
+// Avoid exporting inferred vitest mock types (TS2742 under pnpm + d.ts emit).
+export type CallGatewayMock = ((opts: unknown) => unknown) & ReturnType<typeof vi.fn>;
+export const callGatewayMock: CallGatewayMock = vi.fn() as unknown as CallGatewayMock;
 vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
