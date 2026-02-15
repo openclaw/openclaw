@@ -648,7 +648,7 @@
 
 .list-item {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(200px, 260px);
+  grid-template-columns: auto 1fr;
   gap: 16px;
   align-items: start;
   border: 1px solid var(--border);
@@ -687,7 +687,7 @@
 }
 
 .list-meta {
-  text-align: right;
+  text-align: left;
   color: var(--muted);
   font-size: 12px;
   display: grid;
