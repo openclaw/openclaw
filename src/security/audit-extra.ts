@@ -11,6 +11,7 @@
 export {
   collectAttackSurfaceSummaryFindings,
   collectExposureMatrixFindings,
+  collectGatewayHttpSessionKeyOverrideFindings,
   collectHooksHardeningFindings,
   collectMinimalProfileOverrideFindings,
   collectModelHygieneFindings,

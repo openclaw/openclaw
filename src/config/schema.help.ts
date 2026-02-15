@@ -58,13 +58,19 @@ export const FIELD_HELP: Record<string, string> = {
   "diagnostics.cacheTrace.includeSystem": "Include system prompt in trace output (default: true).",
   "tools.exec.applyPatch.enabled":
     "Experimental. Enables apply_patch for OpenAI models when allowed by tool policy.",
+  "tools.exec.applyPatch.workspaceOnly":
+    "Restrict apply_patch paths to the workspace directory (default: true). Set false to allow writing outside the workspace (dangerous).",
   "tools.exec.applyPatch.allowModels":
     'Optional allowlist of model ids (e.g. "gpt-5.2" or "openai/gpt-5.2").',
   "tools.exec.notifyOnExit":
     "When true (default), backgrounded exec sessions enqueue a system event and request a heartbeat on exit.",
+  "tools.exec.notifyOnExitEmptySuccess":
+    "When true, successful backgrounded exec exits with empty output still enqueue a completion system event (default: false).",
   "tools.exec.pathPrepend": "Directories to prepend to PATH for exec runs (gateway/sandbox).",
   "tools.exec.safeBins":
     "Allow stdin-only safe binaries to run without explicit allowlist entries.",
+  "tools.fs.workspaceOnly":
+    "Restrict filesystem tools (read/write/edit/apply_patch) to the workspace directory (default: false).",
   "tools.message.allowCrossContextSend":
     "Legacy override: allow cross-context sends across all providers.",
   "tools.message.crossContext.allowWithinProvider":
@@ -138,6 +144,8 @@ export const FIELD_HELP: Record<string, string> = {
     'How to handle billing/402 errors: "disable" (default, hours-long backoff), "retry" (5 min cooldown), or "notify" (no cooldown, just show error).',
   "agents.defaults.bootstrapMaxChars":
     "Max characters of each workspace bootstrap file injected into the system prompt before truncation (default: 20000).",
+  "agents.defaults.bootstrapTotalMaxChars":
+    "Max total characters across all injected workspace bootstrap files (default: 24000).",
   "agents.defaults.repoRoot":
     "Optional repository root shown in the system prompt runtime line (overrides auto-detect).",
   "agents.defaults.envelopeTimezone":
@@ -227,7 +235,7 @@ export const FIELD_HELP: Record<string, string> = {
   "memory.qmd.limits.maxInjectedChars": "Max total characters injected from QMD hits per turn.",
   "memory.qmd.limits.timeoutMs": "Per-query timeout for QMD searches (default: 4000).",
   "memory.qmd.scope":
-    "Session/channel scope for QMD recall (same syntax as session.sendPolicy; default: direct-only).",
+    "Session/channel scope for QMD recall (same syntax as session.sendPolicy; default: direct-only). Use match.rawKeyPrefix to match full agent-prefixed session keys.",
   "agents.defaults.memorySearch.cache.maxEntries":
     "Optional cap on cached embeddings (best-effort).",
   "agents.defaults.memorySearch.sync.onSearch":
@@ -319,6 +327,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Max reply-back turns between requester and target (0–5).",
   "channels.telegram.customCommands":
     "Additional Telegram bot menu commands (merged with native; conflicts ignored).",
+  "messages.suppressToolErrors":
+    "When true, suppress ⚠️ tool-error warnings from being shown to the user. The agent already sees errors in context and can retry. Default: false.",
   "messages.ackReaction": "Emoji reaction used to acknowledge inbound messages (empty disables).",
   "messages.ackReactionScope":
     'When to send ack reactions ("group-mentions", "group-all", "direct", "all").',
@@ -355,8 +365,10 @@ export const FIELD_HELP: Record<string, string> = {
     'Direct message access control ("pairing" recommended). "open" requires channels.imessage.allowFrom=["*"].',
   "channels.bluebubbles.dmPolicy":
     'Direct message access control ("pairing" recommended). "open" requires channels.bluebubbles.allowFrom=["*"].',
+  "channels.discord.dmPolicy":
+    'Direct message access control ("pairing" recommended). "open" requires channels.discord.allowFrom=["*"].',
   "channels.discord.dm.policy":
-    'Direct message access control ("pairing" recommended). "open" requires channels.discord.dm.allowFrom=["*"].',
+    'Direct message access control ("pairing" recommended). "open" requires channels.discord.allowFrom=["*"] (legacy: channels.discord.dm.allowFrom).',
   "channels.discord.retry.attempts":
     "Max retry attempts for outbound Discord API calls (default: 3).",
   "channels.discord.retry.minDelayMs": "Minimum retry delay in ms for Discord outbound calls.",
@@ -377,5 +389,7 @@ export const FIELD_HELP: Record<string, string> = {
     "Discord presence activity type (0=Playing,1=Streaming,2=Listening,3=Watching,4=Custom,5=Competing).",
   "channels.discord.activityUrl": "Discord presence streaming URL (required for activityType=1).",
   "channels.slack.dm.policy":
-    'Direct message access control ("pairing" recommended). "open" requires channels.slack.dm.allowFrom=["*"].',
+    'Direct message access control ("pairing" recommended). "open" requires channels.slack.allowFrom=["*"] (legacy: channels.slack.dm.allowFrom).',
+  "channels.slack.dmPolicy":
+    'Direct message access control ("pairing" recommended). "open" requires channels.slack.allowFrom=["*"].',
 };

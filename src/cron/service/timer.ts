@@ -357,16 +357,23 @@ function findDueJobs(state: CronServiceState): CronJob[] {
   });
 }
 
-export async function runMissedJobs(state: CronServiceState) {
+export async function runMissedJobs(
+  state: CronServiceState,
+  opts?: { skipJobIds?: ReadonlySet<string> },
+) {
   if (!state.store) {
     return;
   }
   const now = state.deps.nowMs();
+  const skipJobIds = opts?.skipJobIds;
   const missed = state.store.jobs.filter((j) => {
     if (!j.state) {
       j.state = {};
     }
     if (!j.enabled) {
+      return false;
+    }
+    if (skipJobIds?.has(j.id)) {
       return false;
     }
     if (typeof j.state.runningAtMs === "number") {
@@ -438,11 +445,15 @@ async function executeJobCore(
             : 'main job requires payload.kind="systemEvent"',
       };
     }
-    state.deps.enqueueSystemEvent(text, { agentId: job.agentId });
+    state.deps.enqueueSystemEvent(text, {
+      agentId: job.agentId,
+      contextKey: `cron:${job.id}`,
+    });
     if (job.wakeMode === "now" && state.deps.runHeartbeatOnce) {
       const reason = `cron:${job.id}`;
       const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-      const maxWaitMs = 2 * 60_000;
+      const maxWaitMs = state.deps.wakeNowHeartbeatBusyMaxWaitMs ?? 2 * 60_000;
+      const retryDelayMs = state.deps.wakeNowHeartbeatBusyRetryDelayMs ?? 250;
       const waitStartedAt = state.deps.nowMs();
 
       let heartbeatResult: HeartbeatRunResult;
@@ -458,7 +469,7 @@ async function executeJobCore(
           state.deps.requestHeartbeatNow({ reason });
           return { status: "ok", summary: text };
         }
-        await delay(250);
+        await delay(retryDelayMs);
       }
 
       if (heartbeatResult.status === "ran") {
@@ -495,7 +506,10 @@ async function executeJobCore(
     const prefix = "Cron";
     const label =
       res.status === "error" ? `${prefix} (error): ${summaryText}` : `${prefix}: ${summaryText}`;
-    state.deps.enqueueSystemEvent(label, { agentId: job.agentId });
+    state.deps.enqueueSystemEvent(label, {
+      agentId: job.agentId,
+      contextKey: `cron:${job.id}`,
+    });
     if (job.wakeMode === "now") {
       state.deps.requestHeartbeatNow({ reason: `cron:${job.id}` });
     }

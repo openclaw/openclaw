@@ -232,7 +232,7 @@ describe("createReplyToModeFilter", () => {
   });
 
   it("keeps replyToId when mode is off and reply tags are allowed", () => {
-    const filter = createReplyToModeFilter("off", { allowTagsWhenOff: true });
+    const filter = createReplyToModeFilter("off", { allowExplicitReplyTagsWhenOff: true });
     expect(filter({ text: "hi", replyToId: "1", replyToTag: true }).replyToId).toBe("1");
   });
 

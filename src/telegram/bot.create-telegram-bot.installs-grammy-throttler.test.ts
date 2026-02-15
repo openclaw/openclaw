@@ -1,151 +1,40 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../test/helpers/envelope-timestamp.js";
-import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
+import {
+  answerCallbackQuerySpy,
+  botCtorSpy,
+  getLoadConfigMock,
+  getLoadWebMediaMock,
+  getOnHandler,
+  getReadChannelAllowFromStoreMock,
+  getUpsertChannelPairingRequestMock,
+  middlewareUseSpy,
+  onSpy,
+  replySpy,
+  sendAnimationSpy,
+  sendChatActionSpy,
+  sendMessageSpy,
+  sendPhotoSpy,
+  sequentializeKey,
+  sequentializeSpy,
+  setMessageReactionSpy,
+  setMyCommandsSpy,
+  throttlerSpy,
+  useSpy,
+} from "./bot.create-telegram-bot.test-harness.js";
 import { createTelegramBot, getTelegramSequentialKey } from "./bot.js";
 import { resolveTelegramFetch } from "./fetch.js";
 
-const { sessionStorePath } = vi.hoisted(() => ({
-  sessionStorePath: `/tmp/openclaw-telegram-throttler-${Math.random().toString(16).slice(2)}.json`,
-}));
-const { loadWebMedia } = vi.hoisted(() => ({
-  loadWebMedia: vi.fn(),
-}));
-
-vi.mock("../web/media.js", () => ({
-  loadWebMedia,
-}));
-
-const { loadConfig } = vi.hoisted(() => ({
-  loadConfig: vi.fn(() => ({})),
-}));
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
-  return {
-    ...actual,
-    loadConfig,
-  };
-});
-
-vi.mock("../config/sessions.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/sessions.js")>();
-  return {
-    ...actual,
-    resolveStorePath: vi.fn((storePath) => storePath ?? sessionStorePath),
-  };
-});
-
-const { readChannelAllowFromStore, upsertChannelPairingRequest } = vi.hoisted(() => ({
-  readChannelAllowFromStore: vi.fn(async () => [] as string[]),
-  upsertChannelPairingRequest: vi.fn(async () => ({
-    code: "PAIRCODE",
-    created: true,
-  })),
-}));
-
-vi.mock("../pairing/pairing-store.js", () => ({
-  readChannelAllowFromStore,
-  upsertChannelPairingRequest,
-}));
-
-const useSpy = vi.fn();
-const middlewareUseSpy = vi.fn();
-const onSpy = vi.fn();
-const stopSpy = vi.fn();
-const commandSpy = vi.fn();
-const botCtorSpy = vi.fn();
-const answerCallbackQuerySpy = vi.fn(async () => undefined);
-const sendChatActionSpy = vi.fn();
-const setMessageReactionSpy = vi.fn(async () => undefined);
-const setMyCommandsSpy = vi.fn(async () => undefined);
-const sendMessageSpy = vi.fn(async () => ({ message_id: 77 }));
-const sendAnimationSpy = vi.fn(async () => ({ message_id: 78 }));
-const sendPhotoSpy = vi.fn(async () => ({ message_id: 79 }));
-type ApiStub = {
-  config: { use: (arg: unknown) => void };
-  answerCallbackQuery: typeof answerCallbackQuerySpy;
-  sendChatAction: typeof sendChatActionSpy;
-  setMessageReaction: typeof setMessageReactionSpy;
-  setMyCommands: typeof setMyCommandsSpy;
-  sendMessage: typeof sendMessageSpy;
-  sendAnimation: typeof sendAnimationSpy;
-  sendPhoto: typeof sendPhotoSpy;
-};
-const apiStub: ApiStub = {
-  config: { use: useSpy },
-  answerCallbackQuery: answerCallbackQuerySpy,
-  sendChatAction: sendChatActionSpy,
-  setMessageReaction: setMessageReactionSpy,
-  setMyCommands: setMyCommandsSpy,
-  sendMessage: sendMessageSpy,
-  sendAnimation: sendAnimationSpy,
-  sendPhoto: sendPhotoSpy,
-};
-
-vi.mock("grammy", () => ({
-  Bot: class {
-    api = apiStub;
-    use = middlewareUseSpy;
-    on = onSpy;
-    stop = stopSpy;
-    command = commandSpy;
-    catch = vi.fn();
-    constructor(
-      public token: string,
-      public options?: {
-        client?: { fetch?: typeof fetch; timeoutSeconds?: number };
-      },
-    ) {
-      botCtorSpy(token, options);
-    }
-  },
-  InputFile: class {},
-  webhookCallback: vi.fn(),
-}));
-
-const sequentializeMiddleware = vi.fn();
-const sequentializeSpy = vi.fn(() => sequentializeMiddleware);
-let sequentializeKey: ((ctx: unknown) => string) | undefined;
-vi.mock("@grammyjs/runner", () => ({
-  sequentialize: (keyFn: (ctx: unknown) => string) => {
-    sequentializeKey = keyFn;
-    return sequentializeSpy();
-  },
-}));
-
-const throttlerSpy = vi.fn(() => "throttler");
-
-vi.mock("@grammyjs/transformer-throttler", () => ({
-  apiThrottler: () => throttlerSpy(),
-}));
-
-vi.mock("../auto-reply/reply.js", () => {
-  const replySpy = vi.fn(async (_ctx, opts) => {
-    await opts?.onReplyStart?.();
-    return undefined;
-  });
-  return { getReplyFromConfig: replySpy, __replySpy: replySpy };
-});
-
-let replyModule: typeof import("../auto-reply/reply.js");
-
-const getOnHandler = (event: string) => {
-  const handler = onSpy.mock.calls.find((call) => call[0] === event)?.[1];
-  if (!handler) {
-    throw new Error(`Missing handler for event: ${event}`);
-  }
-  return handler as (ctx: Record<string, unknown>) => Promise<void>;
-};
+const loadConfig = getLoadConfigMock();
+const loadWebMedia = getLoadWebMediaMock();
+const readChannelAllowFromStore = getReadChannelAllowFromStoreMock();
+const upsertChannelPairingRequest = getUpsertChannelPairingRequestMock();
 
 const ORIGINAL_TZ = process.env.TZ;
 
 describe("createTelegramBot", () => {
-  beforeAll(async () => {
-    replyModule = await import("../auto-reply/reply.js");
-  });
-
   beforeEach(() => {
     process.env.TZ = "UTC";
-    resetInboundDedupe();
     loadConfig.mockReturnValue({
       agents: {
         defaults: {
@@ -165,7 +54,6 @@ describe("createTelegramBot", () => {
     middlewareUseSpy.mockReset();
     sequentializeSpy.mockReset();
     botCtorSpy.mockReset();
-    sequentializeKey = undefined;
   });
   afterEach(() => {
     process.env.TZ = ORIGINAL_TZ;
@@ -274,7 +162,6 @@ describe("createTelegramBot", () => {
   });
   it("routes callback_query payloads as messages and answers callbacks", async () => {
     onSpy.mockReset();
-    const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
     replySpy.mockReset();
 
     createTelegramBot({ token: "tok" });
@@ -309,7 +196,6 @@ describe("createTelegramBot", () => {
 
     try {
       onSpy.mockReset();
-      const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
       replySpy.mockReset();
 
       createTelegramBot({ token: "tok" });
@@ -349,7 +235,6 @@ describe("createTelegramBot", () => {
   it("requests pairing by default for unknown DM senders", async () => {
     onSpy.mockReset();
     sendMessageSpy.mockReset();
-    const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
     replySpy.mockReset();
 
     loadConfig.mockReturnValue({
@@ -388,7 +273,6 @@ describe("createTelegramBot", () => {
   it("does not resend pairing code when a request is already pending", async () => {
     onSpy.mockReset();
     sendMessageSpy.mockReset();
-    const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
     replySpy.mockReset();
 
     loadConfig.mockReturnValue({
