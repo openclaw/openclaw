@@ -253,6 +253,19 @@ describe("discord guild/channel resolution", () => {
     expect(channel?.allowed).toBe(false);
   });
 
+  it("treats empty channel config map as no channel allowlist", () => {
+    const guildInfo: DiscordGuildEntryResolved = {
+      channels: {},
+    };
+    const channel = resolveDiscordChannelConfig({
+      guildInfo,
+      channelId: "999",
+      channelName: "random",
+      channelSlug: "random",
+    });
+    expect(channel).toBeNull();
+  });
+
   it("inherits parent config for thread channels", () => {
     const guildInfo: DiscordGuildEntryResolved = {
       channels: {
@@ -344,6 +357,23 @@ describe("discord guild/channel resolution", () => {
     expect(thread?.allowed).toBe(true);
     expect(thread?.matchKey).toBe("*");
     expect(thread?.matchSource).toBe("wildcard");
+  });
+
+  it("treats empty channel config map as no thread allowlist", () => {
+    const guildInfo: DiscordGuildEntryResolved = {
+      channels: {},
+    };
+    const thread = resolveDiscordChannelConfigWithFallback({
+      guildInfo,
+      channelId: "thread-123",
+      channelName: "topic",
+      channelSlug: "topic",
+      parentId: "parent-999",
+      parentName: "general",
+      parentSlug: "general",
+      scope: "thread",
+    });
+    expect(thread).toBeNull();
   });
 });
 
