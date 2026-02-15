@@ -266,6 +266,32 @@ export async function statusAllCommand(
       : null;
 
     const updateLine = (() => {
+      const appendRegistryAndDepsStatus = (parts: string[]) => {
+        const latest = update.registry?.latestVersion;
+        if (latest) {
+          const cmp = compareSemverStrings(VERSION, latest);
+          if (cmp === 0) {
+            parts.push(`npm latest ${latest}`);
+          } else if (cmp != null && cmp < 0) {
+            parts.push(`npm update ${latest}`);
+          } else {
+            parts.push(`npm latest ${latest} (local newer)`);
+          }
+        } else if (update.registry?.error) {
+          parts.push("npm latest unknown");
+        }
+
+        if (update.deps?.status === "ok") {
+          parts.push("deps ok");
+        }
+        if (update.deps?.status === "stale") {
+          parts.push("deps stale");
+        }
+        if (update.deps?.status === "missing") {
+          parts.push("deps missing");
+        }
+      };
+
       if (update.installKind === "git" && update.git) {
         const parts: string[] = [];
         parts.push(update.git.branch ? `git ${update.git.branch}` : "git");
@@ -290,55 +316,12 @@ export async function statusAllCommand(
           parts.push("fetch failed");
         }
 
-        const latest = update.registry?.latestVersion;
-        if (latest) {
-          const cmp = compareSemverStrings(VERSION, latest);
-          if (cmp === 0) {
-            parts.push(`npm latest ${latest}`);
-          } else if (cmp != null && cmp < 0) {
-            parts.push(`npm update ${latest}`);
-          } else {
-            parts.push(`npm latest ${latest} (local newer)`);
-          }
-        } else if (update.registry?.error) {
-          parts.push("npm latest unknown");
-        }
-
-        if (update.deps?.status === "ok") {
-          parts.push("deps ok");
-        }
-        if (update.deps?.status === "stale") {
-          parts.push("deps stale");
-        }
-        if (update.deps?.status === "missing") {
-          parts.push("deps missing");
-        }
+        appendRegistryAndDepsStatus(parts);
         return parts.join(" · ");
       }
       const parts: string[] = [];
       parts.push(update.packageManager !== "unknown" ? update.packageManager : "pkg");
-      const latest = update.registry?.latestVersion;
-      if (latest) {
-        const cmp = compareSemverStrings(VERSION, latest);
-        if (cmp === 0) {
-          parts.push(`npm latest ${latest}`);
-        } else if (cmp != null && cmp < 0) {
-          parts.push(`npm update ${latest}`);
-        } else {
-          parts.push(`npm latest ${latest} (local newer)`);
-        }
-      } else if (update.registry?.error) {
-        parts.push("npm latest unknown");
-      }
-      if (update.deps?.status === "ok") {
-        parts.push("deps ok");
-      }
-      if (update.deps?.status === "stale") {
-        parts.push("deps stale");
-      }
-      if (update.deps?.status === "missing") {
-        parts.push("deps missing");
-      }
+      appendRegistryAndDepsStatus(parts);
       return parts.join(" · ");
     })();
 
