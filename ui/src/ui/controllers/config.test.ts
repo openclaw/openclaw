@@ -293,3 +293,240 @@ describe("runUpdate", () => {
     });
   });
 });
+
+describe("updateConfigFormValue with type coercion", () => {
+  it("coerces string to number when schema type is number", () => {
+    const state = createState();
+    state.configSchema = {
+      type: "object",
+      properties: {
+        models: {
+          type: "object",
+          properties: {
+            maxTokens: { type: "number" },
+          },
+        },
+      },
+    };
+    state.configSnapshot = {
+      config: {},
+      valid: true,
+      issues: [],
+      raw: "{}",
+    };
+
+    updateConfigFormValue(state, ["models", "maxTokens"], "8192");
+
+    expect(state.configForm).toEqual({
+      models: { maxTokens: 8192 },
+    });
+  });
+
+  it("coerces string to number for integer type", () => {
+    const state = createState();
+    state.configSchema = {
+      type: "object",
+      properties: {
+        gateway: {
+          type: "object",
+          properties: {
+            port: { type: "integer" },
+          },
+        },
+      },
+    };
+    state.configSnapshot = {
+      config: {},
+      valid: true,
+      issues: [],
+      raw: "{}",
+    };
+
+    updateConfigFormValue(state, ["gateway", "port"], "18789");
+
+    expect(state.configForm).toEqual({
+      gateway: { port: 18789 },
+    });
+  });
+
+  it("handles nullable number types (anyOf with null)", () => {
+    const state = createState();
+    state.configSchema = {
+      type: "object",
+      properties: {
+        models: {
+          type: "object",
+          properties: {
+            contextWindow: {
+              anyOf: [{ type: "number" }, { type: "null" }],
+            },
+          },
+        },
+      },
+    };
+    state.configSnapshot = {
+      config: {},
+      valid: true,
+      issues: [],
+      raw: "{}",
+    };
+
+    updateConfigFormValue(state, ["models", "contextWindow"], "131072");
+
+    expect(state.configForm).toEqual({
+      models: { contextWindow: 131072 },
+    });
+  });
+
+  it("preserves actual number values", () => {
+    const state = createState();
+    state.configSchema = {
+      type: "object",
+      properties: {
+        models: {
+          type: "object",
+          properties: {
+            maxTokens: { type: "number" },
+          },
+        },
+      },
+    };
+    state.configSnapshot = {
+      config: {},
+      valid: true,
+      issues: [],
+      raw: "{}",
+    };
+
+    updateConfigFormValue(state, ["models", "maxTokens"], 4096);
+
+    expect(state.configForm).toEqual({
+      models: { maxTokens: 4096 },
+    });
+  });
+
+  it("does not coerce non-numeric strings for number fields", () => {
+    const state = createState();
+    state.configSchema = {
+      type: "object",
+      properties: {
+        models: {
+          type: "object",
+          properties: {
+            maxTokens: { type: "number" },
+          },
+        },
+      },
+    };
+    state.configSnapshot = {
+      config: {},
+      valid: true,
+      issues: [],
+      raw: "{}",
+    };
+
+    updateConfigFormValue(state, ["models", "maxTokens"], "not-a-number");
+
+    expect(state.configForm).toEqual({
+      models: { maxTokens: "not-a-number" },
+    });
+  });
+
+  it("coerces empty string to undefined for number fields", () => {
+    const state = createState();
+    state.configSchema = {
+      type: "object",
+      properties: {
+        models: {
+          type: "object",
+          properties: {
+            maxTokens: { type: "number" },
+          },
+        },
+      },
+    };
+    state.configSnapshot = {
+      config: {},
+      valid: true,
+      issues: [],
+      raw: "{}",
+    };
+
+    updateConfigFormValue(state, ["models", "maxTokens"], "");
+
+    expect(state.configForm).toEqual({
+      models: { maxTokens: undefined },
+    });
+  });
+
+  it("does not coerce string fields", () => {
+    const state = createState();
+    state.configSchema = {
+      type: "object",
+      properties: {
+        models: {
+          type: "object",
+          properties: {
+            name: { type: "string" },
+          },
+        },
+      },
+    };
+    state.configSnapshot = {
+      config: {},
+      valid: true,
+      issues: [],
+      raw: "{}",
+    };
+
+    updateConfigFormValue(state, ["models", "name"], "8192");
+
+    expect(state.configForm).toEqual({
+      models: { name: "8192" },
+    });
+  });
+
+  it("rejects decimal values for integer fields", () => {
+    const state = createState();
+    state.configSchema = {
+      type: "object",
+      properties: {
+        gateway: {
+          type: "object",
+          properties: {
+            port: { type: "integer" },
+          },
+        },
+      },
+    };
+    state.configSnapshot = {
+      config: {},
+      valid: true,
+      issues: [],
+      raw: "{}",
+    };
+
+    updateConfigFormValue(state, ["gateway", "port"], "8080.5");
+
+    expect(state.configForm).toEqual({
+      gateway: { port: "8080.5" },
+    });
+  });
+
+  it("works without schema (no coercion)", () => {
+    const state = createState();
+    state.configSchema = null;
+    state.configSnapshot = {
+      config: {},
+      valid: true,
+      issues: [],
+      raw: "{}",
+    };
+
+    updateConfigFormValue(state, ["models", "maxTokens"], "8192");
+
+    expect(state.configForm).toEqual({
+      models: { maxTokens: "8192" },
+    });
+  });
+});
