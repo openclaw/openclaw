@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
+import type { RequirementConfigCheck, Requirements } from "../shared/requirements.js";
 import { evaluateEntryMetadataRequirements } from "../shared/entry-status.js";
 import { CONFIG_DIR } from "../utils.js";
 import {
@@ -17,10 +18,7 @@ import {
 } from "./skills.js";
 import { resolveBundledSkillsContext } from "./skills/bundled-context.js";
 
-export type SkillStatusConfigCheck = {
-  path: string;
-  satisfied: boolean;
-};
+export type SkillStatusConfigCheck = RequirementConfigCheck;
 
 export type SkillInstallOption = {
   id: string;
@@ -44,20 +42,8 @@ export type SkillStatusEntry = {
   disabled: boolean;
   blockedByAllowlist: boolean;
   eligible: boolean;
-  requirements: {
-    bins: string[];
-    anyBins: string[];
-    env: string[];
-    config: string[];
-    os: string[];
-  };
-  missing: {
-    bins: string[];
-    anyBins: string[];
-    env: string[];
-    config: string[];
-    os: string[];
-  };
+  requirements: Requirements;
+  missing: Requirements;
   configChecks: SkillStatusConfigCheck[];
   install: SkillInstallOption[];
 };
