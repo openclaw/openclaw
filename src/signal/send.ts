@@ -12,6 +12,7 @@ export type SignalSendOpts = {
   account?: string;
   accountId?: string;
   mediaUrl?: string;
+  mediaLocalRoots?: readonly string[];
   maxBytes?: number;
   timeoutMs?: number;
   textMode?: "markdown" | "plain";
@@ -125,7 +126,9 @@ export async function sendMessageSignal(
 
   let attachments: string[] | undefined;
   if (opts.mediaUrl?.trim()) {
-    const resolved = await resolveOutboundAttachmentFromUrl(opts.mediaUrl.trim(), maxBytes);
+    const resolved = await resolveOutboundAttachmentFromUrl(opts.mediaUrl.trim(), maxBytes, {
+      localRoots: opts.mediaLocalRoots,
+    });
     attachments = [resolved.path];
     const kind = mediaKindFromMime(resolved.contentType ?? undefined);
     if (!message && kind) {

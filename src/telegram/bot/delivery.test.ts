@@ -110,6 +110,37 @@ describe("deliverReplies", () => {
     );
   });
 
+  it("passes mediaLocalRoots to media loading", async () => {
+    const runtime = { error: vi.fn(), log: vi.fn() };
+    const sendPhoto = vi.fn().mockResolvedValue({
+      message_id: 12,
+      chat: { id: "123" },
+    });
+    const bot = { api: { sendPhoto } } as unknown as Bot;
+    const mediaLocalRoots = ["/tmp/workspace-work"];
+
+    loadWebMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("image"),
+      contentType: "image/jpeg",
+      fileName: "photo.jpg",
+    });
+
+    await deliverReplies({
+      replies: [{ mediaUrl: "/tmp/workspace-work/photo.jpg" }],
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      mediaLocalRoots,
+      replyToMode: "off",
+      textLimit: 4000,
+    });
+
+    expect(loadWebMedia).toHaveBeenCalledWith("/tmp/workspace-work/photo.jpg", {
+      localRoots: mediaLocalRoots,
+    });
+  });
+
   it("includes link_preview_options when linkPreview is false", async () => {
     const runtime = { error: vi.fn(), log: vi.fn() };
     const sendMessage = vi.fn().mockResolvedValue({

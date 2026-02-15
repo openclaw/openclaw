@@ -39,6 +39,7 @@ type DiscordSendOpts = {
   token?: string;
   accountId?: string;
   mediaUrl?: string;
+  mediaLocalRoots?: readonly string[];
   verbose?: boolean;
   rest?: RequestClient;
   replyTo?: string;
@@ -140,6 +141,7 @@ export async function sendMessageDiscord(
           threadId,
           mediaCaption ?? "",
           opts.mediaUrl,
+          opts.mediaLocalRoots,
           undefined,
           request,
           accountInfo.config.maxLinesPerMessage,
@@ -203,6 +205,7 @@ export async function sendMessageDiscord(
         channelId,
         textWithTables,
         opts.mediaUrl,
+        opts.mediaLocalRoots,
         opts.replyTo,
         request,
         accountInfo.config.maxLinesPerMessage,
