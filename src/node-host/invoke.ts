@@ -336,6 +336,39 @@ function buildExecEventPayload(payload: ExecEventPayload): ExecEventPayload {
   return { ...payload, output: text };
 }
 
+async function sendExecFinishedEvent(params: {
+  client: GatewayClient;
+  sessionKey: string;
+  runId: string;
+  cmdText: string;
+  result: {
+    stdout?: string;
+    stderr?: string;
+    error?: string | null;
+    exitCode?: number | null;
+    timedOut?: boolean;
+    success?: boolean;
+  };
+}) {
+  const combined = [params.result.stdout, params.result.stderr, params.result.error]
+    .filter(Boolean)
+    .join("\n");
+  await sendNodeEvent(
+    params.client,
+    "exec.finished",
+    buildExecEventPayload({
+      sessionKey: params.sessionKey,
+      runId: params.runId,
+      host: "node",
+      command: params.cmdText,
+      exitCode: params.result.exitCode ?? undefined,
+      timedOut: params.result.timedOut,
+      success: params.result.success,
+      output: combined,
+    }),
+  );
+}
+
 async function runViaMacAppExecHost(params: {
   approvals: ReturnType<typeof resolveExecApprovals>;
   request: ExecHostRequest;
@@ -624,21 +657,7 @@ export async function handleInvoke(
       return;
     } else {
       const result: ExecHostRunResult = response.payload;
-      const combined = [result.stdout, result.stderr, result.error].filter(Boolean).join("\n");
-      await sendNodeEvent(
-        client,
-        "exec.finished",
-        buildExecEventPayload({
-          sessionKey,
-          runId,
-          host: "node",
-          command: cmdText,
-          exitCode: result.exitCode,
-          timedOut: result.timedOut,
-          success: result.success,
-          output: combined,
-        }),
-      );
+      await sendExecFinishedEvent({ client, sessionKey, runId, cmdText, result });
       await sendInvokeResult(client, frame, {
         ok: true,
         payloadJSON: JSON.stringify(result),
@@ -790,21 +809,7 @@ export async function handleInvoke(
       result.stdout = `${result.stdout}\n${suffix}`;
     }
   }
-  const combined = [result.stdout, result.stderr, result.error].filter(Boolean).join("\n");
-  await sendNodeEvent(
-    client,
-    "exec.finished",
-    buildExecEventPayload({
-      sessionKey,
-      runId,
-      host: "node",
-      command: cmdText,
-      exitCode: result.exitCode,
-      timedOut: result.timedOut,
-      success: result.success,
-      output: combined,
-    }),
-  );
+  await sendExecFinishedEvent({ client, sessionKey, runId, cmdText, result });
 
   await sendInvokeResult(client, frame, {
     ok: true,
