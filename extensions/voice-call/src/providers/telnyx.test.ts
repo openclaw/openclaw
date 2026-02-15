@@ -22,6 +22,66 @@ function decodeBase64Url(input: string): Buffer {
   return Buffer.from(padded, "base64");
 }
 
+describe("TelnyxProvider.parseWebhookEvent", () => {
+  it("includes direction, from, and to fields for call.initiated events", () => {
+    const provider = new TelnyxProvider(
+      { apiKey: "KEY123", connectionId: "CONN456", publicKey: undefined },
+      { skipVerification: true },
+    );
+
+    const rawBody = JSON.stringify({
+      data: {
+        id: "evt_123",
+        event_type: "call.initiated",
+        payload: {
+          call_control_id: "call_abc",
+          direction: "incoming",
+          from: "+15551234567",
+          to: "+15559876543",
+          client_state: "",
+        },
+      },
+    });
+
+    const result = provider.parseWebhookEvent(createCtx({ rawBody }));
+
+    expect(result.events).toHaveLength(1);
+    const event = result.events[0];
+    expect(event?.type).toBe("call.initiated");
+    // Telnyx sends "incoming" which should be normalized to "inbound"
+    expect(event?.direction).toBe("inbound");
+    expect(event?.from).toBe("+15551234567");
+    expect(event?.to).toBe("+15559876543");
+  });
+
+  it("normalizes outgoing direction to outbound", () => {
+    const provider = new TelnyxProvider(
+      { apiKey: "KEY123", connectionId: "CONN456", publicKey: undefined },
+      { skipVerification: true },
+    );
+
+    const rawBody = JSON.stringify({
+      data: {
+        id: "evt_456",
+        event_type: "call.initiated",
+        payload: {
+          call_control_id: "call_def",
+          direction: "outgoing",
+          from: "+15559876543",
+          to: "+15551234567",
+          client_state: "",
+        },
+      },
+    });
+
+    const result = provider.parseWebhookEvent(createCtx({ rawBody }));
+
+    expect(result.events).toHaveLength(1);
+    const event = result.events[0];
+    expect(event?.direction).toBe("outbound");
+  });
+});
+
 describe("TelnyxProvider.verifyWebhook", () => {
   it("fails closed when public key is missing and skipVerification is false", () => {
     const provider = new TelnyxProvider(

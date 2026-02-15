@@ -139,7 +139,18 @@ export class TelnyxProvider implements VoiceCallProvider {
 
     switch (data.event_type) {
       case "call.initiated":
-        return { ...baseEvent, type: "call.initiated" };
+        return {
+          ...baseEvent,
+          type: "call.initiated",
+          direction:
+            data.payload?.direction === "incoming"
+              ? "inbound"
+              : data.payload?.direction === "outgoing"
+                ? "outbound"
+                : undefined,
+          from: data.payload?.from,
+          to: data.payload?.to,
+        };
 
       case "call.ringing":
         return { ...baseEvent, type: "call.ringing" };
