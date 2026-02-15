@@ -31,6 +31,7 @@ export type SessionResolution = {
   isNewSession: boolean;
   persistedThinking?: ThinkLevel;
   persistedVerbose?: VerboseLevel;
+  persistedResponseUsage?: "on" | "off" | "tokens" | "full";
 };
 
 type SessionKeyResolution = {
@@ -152,6 +153,8 @@ export function resolveSession(opts: {
     fresh && sessionEntry?.verboseLevel
       ? normalizeVerboseLevel(sessionEntry.verboseLevel)
       : undefined;
+  const persistedResponseUsage =
+    fresh && sessionEntry?.responseUsage ? sessionEntry.responseUsage : undefined;
 
   return {
     sessionId,
@@ -162,5 +165,6 @@ export function resolveSession(opts: {
     isNewSession,
     persistedThinking,
     persistedVerbose,
+    persistedResponseUsage,
   };
 }
