@@ -1,6 +1,6 @@
 import { vi } from "vitest";
 
-export function discordWebMediaMockFactory(): unknown {
+export function discordWebMediaMockFactory(): unknown: unknown {
   return {
     loadWebMedia: vi.fn().mockResolvedValue({
       buffer: Buffer.from("img"),
@@ -17,7 +17,7 @@ export function discordWebMediaMockFactory(): unknown {
   };
 }
 
-export function makeDiscordRest(): unknown {
+export function makeDiscordRest(): unknown: unknown {
   const postMock = vi.fn();
   const putMock = vi.fn();
   const getMock = vi.fn();

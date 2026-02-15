@@ -48,7 +48,7 @@ vi.mock("../config/config.js", async (importOriginal) => {
   };
 });
 
-export function getTelegramSendTestMocks(): unknown {
+export function getTelegramSendTestMocks(): unknown: unknown {
   return { botApi, botCtorSpy, loadConfig, loadWebMedia };
 }
 
