@@ -1,7 +1,9 @@
 import {
   buildChannelConfigSchema,
   DEFAULT_ACCOUNT_ID,
+  dispatchReplyWithBufferedBlockDispatcher,
   formatPairingApproveHint,
+  getReplyFromConfig,
   type ChannelPlugin,
 } from "openclaw/plugin-sdk";
 import type { NostrProfile } from "./config-schema.js";
@@ -233,19 +235,30 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
           );
 
           // Forward to OpenClaw's message pipeline
-          // TODO: Replace with proper dispatchReplyWithBufferedBlockDispatcher call
-          await (
-            runtime.channel.reply as { handleInboundMessage?: (params: unknown) => Promise<void> }
-          ).handleInboundMessage?.({
-            channel: "nostr",
-            accountId: account.accountId,
-            senderId: senderPubkey,
-            chatType: "direct",
-            chatId: senderPubkey, // For DMs, chatId is the sender's pubkey
-            text,
-            reply: async (responseText: string) => {
-              await reply(responseText);
+          await dispatchReplyWithBufferedBlockDispatcher({
+            cfg: runtime.config.loadConfig(),
+            ctx: {
+              Provider: "nostr",
+              AccountId: account.accountId,
+              Body: text,
+              From: senderPubkey,
+              To: account.publicKey,
+              SessionKey: `nostr:${account.accountId}:${senderPubkey}`,
+              ChatType: "direct",
+              SenderId: senderPubkey,
+              Timestamp: Date.now(),
             },
+            dispatcherOptions: {
+              deliver: async (payload) => {
+                await reply(payload.text ?? "");
+              },
+              onError: (err) => {
+                ctx.log?.error?.(
+                  `[${account.accountId}] Error processing message from ${senderPubkey}: ${err}`,
+                );
+              },
+            },
+            replyResolver: getReplyFromConfig,
           });
         },
         onError: (error, context) => {
