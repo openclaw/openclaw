@@ -208,4 +208,30 @@ describe("resolveSessionDeliveryTarget", () => {
       lastThreadId: undefined,
     });
   });
+
+  it("extracts telegram topic thread id from explicit targets", () => {
+    const resolved = resolveSessionDeliveryTarget({
+      entry: {
+        sessionId: "sess-5",
+        updatedAt: 1,
+        lastChannel: "telegram",
+        lastTo: "-1001111111111:topic:999",
+        lastThreadId: 999,
+      },
+      requestedChannel: "telegram",
+      explicitTo: "-1001234567890:topic:123",
+    });
+
+    expect(resolved).toEqual({
+      channel: "telegram",
+      to: "-1001234567890:topic:123",
+      accountId: undefined,
+      threadId: 123,
+      mode: "explicit",
+      lastChannel: "telegram",
+      lastTo: "-1001111111111:topic:999",
+      lastAccountId: undefined,
+      lastThreadId: 999,
+    });
+  });
 });

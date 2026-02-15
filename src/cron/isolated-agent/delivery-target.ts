@@ -12,6 +12,7 @@ import {
   resolveOutboundTarget,
   resolveSessionDeliveryTarget,
 } from "../../infra/outbound/targets.js";
+import { parseTelegramTarget } from "../../telegram/targets.js";
 
 export async function resolveDeliveryTarget(
   cfg: OpenClawConfig,
@@ -69,15 +70,20 @@ export async function resolveDeliveryTarget(
   const channel = resolved.channel ?? fallbackChannel ?? DEFAULT_CHAT_CHANNEL;
   const mode = resolved.mode as "explicit" | "implicit";
   const toCandidate = resolved.to;
+  const threadIdFromTarget =
+    channel === "telegram" && toCandidate
+      ? parseTelegramTarget(toCandidate).messageThreadId
+      : undefined;
 
   // Only carry threadId when delivering to the same recipient as the session's
   // last conversation. This prevents stale thread IDs (e.g. from a Telegram
   // supergroup topic) from being sent to a different target (e.g. a private
   // chat) where they would cause API errors.
   const threadId =
-    resolved.threadId && resolved.to && resolved.to === resolved.lastTo
+    threadIdFromTarget ??
+    (resolved.threadId && resolved.to && resolved.to === resolved.lastTo
       ? resolved.threadId
-      : undefined;
+      : undefined);
 
   if (!toCandidate) {
     return {
