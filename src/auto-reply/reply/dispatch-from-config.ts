@@ -12,6 +12,7 @@ import {
   logSessionStateChange,
 } from "../../logging/diagnostic.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { maybeApplyTtsToPayload, normalizeTtsAutoMode, resolveTtsConfig } from "../../tts/tts.js";
 import { getReplyFromConfig } from "../reply.js";
 import { formatAbortReplyText, tryFastAbortFromMessage } from "./abort.js";
@@ -251,6 +252,39 @@ export async function dispatchReplyFromConfig(params: {
   try {
     const fastAbort = await tryFastAbortFromMessage({ ctx, cfg });
     if (fastAbort.handled) {
+      // Enforce sendPolicy on abort replies — system notifications must not
+      // bypass deny rules (#6301).
+      const abortSessionKey = ctx.SessionKey;
+      const abortAgentId = resolveSessionAgentId({
+        sessionKey: abortSessionKey ?? "",
+        config: cfg,
+      });
+      const abortStorePath = resolveStorePath(cfg.session?.store, { agentId: abortAgentId });
+      let abortSessionEntry;
+      try {
+        const store = loadSessionStore(abortStorePath);
+        abortSessionEntry = abortSessionKey
+          ? (store[abortSessionKey.toLowerCase()] ?? store[abortSessionKey])
+          : undefined;
+      } catch {
+        // Best-effort: if store load fails, fall through without an entry.
+      }
+      const abortSendPolicy = resolveSendPolicy({
+        cfg,
+        entry: abortSessionEntry,
+        sessionKey: abortSessionKey,
+        channel: ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider,
+        chatType: abortSessionEntry?.chatType,
+      });
+      if (abortSendPolicy === "deny") {
+        logVerbose(
+          `dispatch-from-config: abort reply blocked by sendPolicy for ${abortSessionKey ?? "unknown"}`,
+        );
+        recordProcessed("completed", { reason: "fast_abort_send_denied" });
+        markIdle("message_completed");
+        return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
+      }
+
       const payload = {
         text: formatAbortReplyText(fastAbort.stoppedSubagents),
       } satisfies ReplyPayload;
