@@ -78,6 +78,38 @@ vi.mock("./onboarding.completion.js", () => ({
   setupOnboardingShellCompletion,
 }));
 
+function createWizardPrompter(overrides?: Partial<WizardPrompter>): WizardPrompter {
+  return {
+    intro: vi.fn(async () => {}),
+    outro: vi.fn(async () => {}),
+    note: vi.fn(async () => {}),
+    select: vi.fn(async () => "quickstart"),
+    multiselect: vi.fn(async () => []),
+    text: vi.fn(async () => ""),
+    confirm: vi.fn(async () => false),
+    progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+    ...overrides,
+  };
+}
+
+function createRuntime(opts?: { throwsOnExit?: boolean }): RuntimeEnv {
+  if (opts?.throwsOnExit) {
+    return {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn((code: number) => {
+        throw new Error(`exit:${code}`);
+      }),
+    };
+  }
+
+  return {
+    log: vi.fn(),
+    error: vi.fn(),
+    exit: vi.fn(),
+  };
+}
+
 describe("runOnboardingWizard", () => {
   it("exits when config is invalid", async () => {
     readConfigFileSnapshot.mockResolvedValueOnce({
@@ -92,24 +124,8 @@ describe("runOnboardingWizard", () => {
     });
 
     const select: WizardPrompter["select"] = vi.fn(async () => "quickstart");
-    const prompter: WizardPrompter = {
-      intro: vi.fn(async () => {}),
-      outro: vi.fn(async () => {}),
-      note: vi.fn(async () => {}),
-      select,
-      multiselect: vi.fn(async () => []),
-      text: vi.fn(async () => ""),
-      confirm: vi.fn(async () => false),
-      progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
-    };
-
-    const runtime: RuntimeEnv = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn((code: number) => {
-        throw new Error(`exit:${code}`);
-      }),
-    };
+    const prompter = createWizardPrompter({ select });
+    const runtime = createRuntime({ throwsOnExit: true });
 
     await expect(
       runOnboardingWizard(
@@ -135,23 +151,8 @@ describe("runOnboardingWizard", () => {
   it("skips prompts and setup steps when flags are set", async () => {
     const select: WizardPrompter["select"] = vi.fn(async () => "quickstart");
     const multiselect: WizardPrompter["multiselect"] = vi.fn(async () => []);
-    const prompter: WizardPrompter = {
-      intro: vi.fn(async () => {}),
-      outro: vi.fn(async () => {}),
-      note: vi.fn(async () => {}),
-      select,
-      multiselect,
-      text: vi.fn(async () => ""),
-      confirm: vi.fn(async () => false),
-      progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
-    };
-    const runtime: RuntimeEnv = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn((code: number) => {
-        throw new Error(`exit:${code}`);
-      }),
-    };
+    const prompter = createWizardPrompter({ select, multiselect });
+    const runtime = createRuntime({ throwsOnExit: true });
 
     await runOnboardingWizard(
       {
@@ -194,24 +195,8 @@ describe("runOnboardingWizard", () => {
         return "quickstart";
       });
 
-      const prompter: WizardPrompter = {
-        intro: vi.fn(async () => {}),
-        outro: vi.fn(async () => {}),
-        note: vi.fn(async () => {}),
-        select,
-        multiselect: vi.fn(async () => []),
-        text: vi.fn(async () => ""),
-        confirm: vi.fn(async () => false),
-        progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
-      };
-
-      const runtime: RuntimeEnv = {
-        log: vi.fn(),
-        error: vi.fn(),
-        exit: vi.fn((code: number) => {
-          throw new Error(`exit:${code}`);
-        }),
-      };
+      const prompter = createWizardPrompter({ select });
+      const runtime = createRuntime({ throwsOnExit: true });
 
       await runOnboardingWizard(
         {
@@ -254,22 +239,8 @@ describe("runOnboardingWizard", () => {
 
     try {
       const note: WizardPrompter["note"] = vi.fn(async () => {});
-      const prompter: WizardPrompter = {
-        intro: vi.fn(async () => {}),
-        outro: vi.fn(async () => {}),
-        note,
-        select: vi.fn(async () => "quickstart"),
-        multiselect: vi.fn(async () => []),
-        text: vi.fn(async () => ""),
-        confirm: vi.fn(async () => false),
-        progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
-      };
-
-      const runtime: RuntimeEnv = {
-        log: vi.fn(),
-        error: vi.fn(),
-        exit: vi.fn(),
-      };
+      const prompter = createWizardPrompter({ note });
+      const runtime = createRuntime();
 
       await runOnboardingWizard(
         {
