@@ -183,13 +183,10 @@ describe("Secret Reference Parsing", () => {
     });
 
     it("mix of escaped and unescaped refs", async () => {
-      const secretsConfig: SecretsConfig = {
-        providers: { gcp: { project: "test-project" } },
-      };
+      const providers = mockProviders({ real: "resolved-value" });
       const config = { key: "${gcp:real} $${gcp:literal}" };
       // This should resolve ${gcp:real} and leave ${gcp:literal} as literal
-      // We expect this to call the provider for "real" only
-      const result = await resolveConfigSecrets(config, secretsConfig);
+      const result = await resolveConfigSecrets(config, undefined, providers);
       expect(result).toEqual({ key: "resolved-value ${gcp:literal}" });
     });
 
@@ -239,9 +236,7 @@ describe("Secret Reference Parsing", () => {
 
 describe("Config Tree Walking", () => {
   it("resolves refs at nested depths", async () => {
-    const secretsConfig: SecretsConfig = {
-      providers: { gcp: { project: "test-project" } },
-    };
+    const providers = mockProviders({ "deep-secret": "deep-value" });
     const config = {
       level1: {
         level2: {
@@ -251,8 +246,8 @@ describe("Config Tree Walking", () => {
         },
       },
     };
-    const result = await resolveConfigSecrets(config, secretsConfig);
-    expect((result as Record<string, unknown>).level1.level2.level3.secret).toBeDefined();
+    const result = await resolveConfigSecrets(config, undefined, providers);
+    expect((result as Record<string, string>).level1.level2.level3.secret).toBe("deep-value");
   });
 
   it("resolves refs inside arrays", async () => {
