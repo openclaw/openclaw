@@ -31,6 +31,7 @@ import {
   inspectPathPermissions,
   safeStat,
 } from "./audit-fs.js";
+import { extensionUsesSkippedScannerPath, isPathInside } from "./scan-paths.js";
 import * as skillScanner from "./skill-scanner.js";
 
 export type SecurityAuditFinding = {
@@ -60,22 +61,6 @@ function expandTilde(p: string, env: NodeJS.ProcessEnv): string | null {
     return path.join(home, p.slice(2));
   }
   return null;
-}
-
-function isPathInside(basePath: string, candidatePath: string): boolean {
-  const base = path.resolve(basePath);
-  const candidate = path.resolve(candidatePath);
-  const rel = path.relative(base, candidate);
-  return rel === "" || (!rel.startsWith(`..${path.sep}`) && rel !== ".." && !path.isAbsolute(rel));
-}
-
-function extensionUsesSkippedScannerPath(entry: string): boolean {
-  const segments = entry.split(/[\\/]+/).filter(Boolean);
-  return segments.some(
-    (segment) =>
-      segment === "node_modules" ||
-      (segment.startsWith(".") && segment !== "." && segment !== ".."),
-  );
 }
 
 async function readPluginManifestExtensions(pluginPath: string): Promise<string[]> {

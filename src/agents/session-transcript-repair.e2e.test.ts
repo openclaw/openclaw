@@ -223,6 +223,32 @@ describe("sanitizeToolCallInputs", () => {
     expect(out.map((m) => m.role)).toEqual(["user"]);
   });
 
+  it("drops tool calls with missing or blank name/id", () => {
+    const input: AgentMessage[] = [
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call_ok", name: "read", arguments: {} },
+          { type: "toolCall", id: "call_empty_name", name: "", arguments: {} },
+          { type: "toolUse", id: "call_blank_name", name: "   ", input: {} },
+          { type: "functionCall", id: "", name: "exec", arguments: {} },
+        ],
+      },
+    ];
+
+    const out = sanitizeToolCallInputs(input);
+    const assistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
+    const toolCalls = Array.isArray(assistant.content)
+      ? assistant.content.filter((block) => {
+          const type = (block as { type?: unknown }).type;
+          return typeof type === "string" && ["toolCall", "toolUse", "functionCall"].includes(type);
+        })
+      : [];
+
+    expect(toolCalls).toHaveLength(1);
+    expect((toolCalls[0] as { id?: unknown }).id).toBe("call_ok");
+  });
+
   it("keeps valid tool calls and preserves text blocks", () => {
     const input: AgentMessage[] = [
       {

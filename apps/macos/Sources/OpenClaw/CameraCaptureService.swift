@@ -1,8 +1,8 @@
 import AVFoundation
-import OpenClawIPC
-import OpenClawKit
 import CoreGraphics
 import Foundation
+import OpenClawIPC
+import OpenClawKit
 import OSLog
 
 actor CameraCaptureService {

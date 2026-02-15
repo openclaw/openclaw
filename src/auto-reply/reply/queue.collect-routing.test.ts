@@ -365,4 +365,58 @@ describe("followup queue collect routing", () => {
     expect(calls[0]?.originatingThreadId).toBe("1706000000.000001");
     expect(calls[1]?.originatingThreadId).toBe("1706000000.000002");
   });
+
+  it("retries collect-mode batches without losing queued items", async () => {
+    const key = `test-collect-retry-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    let attempt = 0;
+    const runFollowup = async (run: FollowupRun) => {
+      attempt += 1;
+      if (attempt === 1) {
+        throw new Error("transient failure");
+      }
+      calls.push(run);
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    enqueueFollowupRun(key, createRun({ prompt: "one" }), settings);
+    enqueueFollowupRun(key, createRun({ prompt: "two" }), settings);
+
+    scheduleFollowupDrain(key, runFollowup);
+    await expect.poll(() => calls.length).toBe(1);
+    expect(calls[0]?.prompt).toContain("Queued #1\none");
+    expect(calls[0]?.prompt).toContain("Queued #2\ntwo");
+  });
+
+  it("retries overflow summary delivery without losing dropped previews", async () => {
+    const key = `test-overflow-summary-retry-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    let attempt = 0;
+    const runFollowup = async (run: FollowupRun) => {
+      attempt += 1;
+      if (attempt === 1) {
+        throw new Error("transient failure");
+      }
+      calls.push(run);
+    };
+    const settings: QueueSettings = {
+      mode: "followup",
+      debounceMs: 0,
+      cap: 1,
+      dropPolicy: "summarize",
+    };
+
+    enqueueFollowupRun(key, createRun({ prompt: "first" }), settings);
+    enqueueFollowupRun(key, createRun({ prompt: "second" }), settings);
+
+    scheduleFollowupDrain(key, runFollowup);
+    await expect.poll(() => calls.length).toBe(1);
+    expect(calls[0]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
+    expect(calls[0]?.prompt).toContain("- first");
+  });
 });

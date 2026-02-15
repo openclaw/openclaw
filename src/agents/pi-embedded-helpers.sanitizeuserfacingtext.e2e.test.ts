@@ -53,6 +53,12 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText(text)).toBe(text);
   });
 
+  it("does not rewrite conversational billing/help text without errorContext", () => {
+    const text =
+      "If your API billing is low, top up credits in your provider dashboard and retry payment verification.";
+    expect(sanitizeUserFacingText(text)).toBe(text);
+  });
+
   it("sanitizes raw API error payloads", () => {
     const raw = '{"type":"error","error":{"message":"Something exploded","type":"server_error"}}';
     expect(sanitizeUserFacingText(raw, { errorContext: true })).toBe(

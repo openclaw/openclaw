@@ -29,6 +29,13 @@ describe("model-selection", () => {
       });
     });
 
+    it("preserves nested model ids after provider prefix", () => {
+      expect(parseModelRef("nvidia/moonshotai/kimi-k2.5", "anthropic")).toEqual({
+        provider: "nvidia",
+        model: "moonshotai/kimi-k2.5",
+      });
+    });
+
     it("normalizes anthropic alias refs to canonical model ids", () => {
       expect(parseModelRef("anthropic/opus-4.6", "openai")).toEqual({
         provider: "anthropic",

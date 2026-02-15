@@ -58,6 +58,18 @@ function hasToolCallInput(block: ToolCallBlock): boolean {
   return hasInput || hasArguments;
 }
 
+function hasNonEmptyStringField(value: unknown): boolean {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function hasToolCallId(block: ToolCallBlock): boolean {
+  return hasNonEmptyStringField(block.id);
+}
+
+function hasToolCallName(block: ToolCallBlock): boolean {
+  return hasNonEmptyStringField(block.name);
+}
+
 function extractToolResultId(msg: Extract<AgentMessage, { role: "toolResult" }>): string | null {
   const toolCallId = (msg as { toolCallId?: unknown }).toolCallId;
   if (typeof toolCallId === "string" && toolCallId) {
@@ -118,7 +130,10 @@ export function repairToolCallInputs(messages: AgentMessage[]): ToolCallInputRep
     let droppedInMessage = 0;
 
     for (const block of msg.content) {
-      if (isToolCallBlock(block) && !hasToolCallInput(block)) {
+      if (
+        isToolCallBlock(block) &&
+        (!hasToolCallInput(block) || !hasToolCallId(block) || !hasToolCallName(block))
+      ) {
         droppedToolCalls += 1;
         droppedInMessage += 1;
         changed = true;

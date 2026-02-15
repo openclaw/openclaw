@@ -1,5 +1,5 @@
-import OpenClawProtocol
 import Observation
+import OpenClawProtocol
 import SwiftUI
 
 struct SkillsSettings: View {
@@ -142,7 +142,9 @@ private enum SkillsFilter: String, CaseIterable, Identifiable {
     case needsSetup
     case disabled
 
-    var id: String { self.rawValue }
+    var id: String {
+        self.rawValue
+    }
 
     var title: String {
         switch self {
@@ -171,24 +173,16 @@ private struct SkillRow: View {
     let onInstall: (SkillInstallOption, InstallTarget) -> Void
     let onSetEnv: (String, Bool) -> Void
 
-    private var missingBins: [String] { self.skill.missing.bins }
-    private var missingEnv: [String] { self.skill.missing.env }
-    private var missingConfig: [String] { self.skill.missing.config }
+    private var missingBins: [String] {
+        self.skill.missing.bins
+    }
 
-    init(
-        skill: SkillStatus,
-        isBusy: Bool,
-        connectionMode: AppState.ConnectionMode,
-        onToggleEnabled: @escaping (Bool) -> Void,
-        onInstall: @escaping (SkillInstallOption, InstallTarget) -> Void,
-        onSetEnv: @escaping (String, Bool) -> Void)
-    {
-        self.skill = skill
-        self.isBusy = isBusy
-        self.connectionMode = connectionMode
-        self.onToggleEnabled = onToggleEnabled
-        self.onInstall = onInstall
-        self.onSetEnv = onSetEnv
+    private var missingEnv: [String] {
+        self.skill.missing.env
+    }
+
+    private var missingConfig: [String] {
+        self.skill.missing.config
     }
 
     var body: some View {
@@ -274,7 +268,6 @@ private struct SkillRow: View {
             set: { self.onToggleEnabled($0) })
     }
 
-    @ViewBuilder
     private var missingSummary: some View {
         VStack(alignment: .leading, spacing: 4) {
             if self.shouldShowMissingBins {
@@ -295,7 +288,6 @@ private struct SkillRow: View {
         }
     }
 
-    @ViewBuilder
     private var configChecksView: some View {
         VStack(alignment: .leading, spacing: 4) {
             ForEach(self.skill.configChecks) { check in
@@ -326,7 +318,6 @@ private struct SkillRow: View {
         }
     }
 
-    @ViewBuilder
     private var trailingActions: some View {
         VStack(alignment: .trailing, spacing: 8) {
             if !self.installOptions.isEmpty {
@@ -438,7 +429,9 @@ private struct EnvEditorState: Identifiable {
     let envKey: String
     let isPrimary: Bool
 
-    var id: String { "\(self.skillKey)::\(self.envKey)" }
+    var id: String {
+        "\(self.skillKey)::\(self.envKey)"
+    }
 }
 
 private struct EnvEditorView: View {
