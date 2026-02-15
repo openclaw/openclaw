@@ -186,9 +186,11 @@ export class GatewayClient {
     const storedToken = this.opts.deviceIdentity
       ? loadDeviceAuthToken({ deviceId: this.opts.deviceIdentity.deviceId, role })?.token
       : null;
-    // Prefer explicitly provided credentials (e.g. CLI `--token`) over any persisted
-    // device-auth tokens. Persisted tokens are only used when no token is provided.
-    const authToken = this.opts.token ?? storedToken ?? undefined;
+    // Device-auth mode: prefer stored device token (device-specific credentials).
+    // Shared-auth mode: prefer explicit token (e.g., CLI --token, config gateway.token).
+    // This ensures paired devices continue using device tokens after config changes.
+    const authToken =
+      this.opts.deviceIdentity && storedToken ? storedToken : this.opts.token ?? storedToken ?? undefined;
     const auth =
       authToken || this.opts.password
         ? {
