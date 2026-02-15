@@ -81,6 +81,9 @@ echo "==> New version: $NEW_VER (tag: $TAG)"
 echo "==> Sync plugin versions"
 pnpm plugins:sync
 
+echo "==> Format (fix CHANGELOG etc. from plugins:sync)"
+pnpm format
+
 echo "==> Build"
 pnpm build
 
