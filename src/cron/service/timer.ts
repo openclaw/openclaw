@@ -17,6 +17,36 @@ import { ensureLoaded, persist } from "./store.js";
 const MAX_TIMER_DELAY_MS = 60_000;
 
 /**
+ * Return the minimum gap (ms) between consecutive runs of a job.
+ * If a job's `lastRunAtMs` is more recent than this, `findDueJobs` will
+ * skip it even when `nextRunAtMs` is past-due.  This prevents duplicate
+ * fires caused by re-arm timer races: when a long-running job finishes
+ * and `state.running = false` is set, a pending re-arm callback may enter
+ * `onTimer` before `nextRunAtMs` has been recomputed, finding the same job
+ * still "due".
+ *
+ * The gap is schedule-aware:
+ * - `cron` expressions have 60s minimum granularity → 30s gap is safe
+ * - `every` schedules can have arbitrary intervals → use half the interval
+ *   (capped at 30s) so we never block a legitimate next run
+ * - `at` (one-shot) jobs → no gap needed (they disable after running)
+ *
+ * See: https://github.com/openclaw/openclaw/issues/16094
+ */
+function minRefireGapMs(job: CronJob): number {
+  if (job.schedule.kind === "at") {
+    return 0;
+  }
+  if (job.schedule.kind === "every") {
+    // Use half the interval, but at most 30s.
+    const halfInterval = Math.floor(Math.max(1, job.schedule.everyMs) / 2);
+    return Math.min(halfInterval, 30_000);
+  }
+  // cron expressions: 60s minimum granularity → 30s is safe.
+  return 30_000;
+}
+
+/**
  * Maximum wall-clock time for a single job execution. Acts as a safety net
  * on top of the per-provider / per-agent timeouts to prevent one stuck job
  * from wedging the entire cron lane.
@@ -352,6 +382,13 @@ function findDueJobs(state: CronServiceState): CronJob[] {
     if (typeof j.state.runningAtMs === "number") {
       return false;
     }
+    // Guard against duplicate fires: if the job ran very recently, skip it.
+    // This catches the race where a re-arm timer callback enters onTimer
+    // after state.running is cleared but before nextRunAtMs is recomputed
+    // to the next occurrence.  See #16094.
+    if (typeof j.state.lastRunAtMs === "number" && now - j.state.lastRunAtMs < minRefireGapMs(j)) {
+      return false;
+    }
     const next = j.state.nextRunAtMs;
     return typeof next === "number" && now >= next;
   });
@@ -377,6 +414,10 @@ export async function runMissedJobs(
       return false;
     }
     if (typeof j.state.runningAtMs === "number") {
+      return false;
+    }
+    // Skip jobs that ran very recently to prevent duplicate fires (#16094).
+    if (typeof j.state.lastRunAtMs === "number" && now - j.state.lastRunAtMs < minRefireGapMs(j)) {
       return false;
     }
     const next = j.state.nextRunAtMs;
@@ -410,6 +451,10 @@ export async function runDueJobs(state: CronServiceState) {
       j.state = {};
     }
     if (!j.enabled) {
+      return false;
+    }
+    // Skip jobs that ran very recently to prevent duplicate fires (#16094).
+    if (typeof j.state.lastRunAtMs === "number" && now - j.state.lastRunAtMs < minRefireGapMs(j)) {
       return false;
     }
     if (typeof j.state.runningAtMs === "number") {
