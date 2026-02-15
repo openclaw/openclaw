@@ -21,6 +21,7 @@ type OnboardProviderAuthOptionKey = keyof Pick<
   | "xaiApiKey"
   | "litellmApiKey"
   | "qianfanApiKey"
+  | "aisaApiKey"
 >;
 
 export type OnboardProviderAuthFlag = {
@@ -165,5 +166,12 @@ export const ONBOARD_PROVIDER_AUTH_FLAGS: ReadonlyArray<OnboardProviderAuthFlag>
     cliFlag: "--qianfan-api-key",
     cliOption: "--qianfan-api-key <key>",
     description: "QIANFAN API key",
+  },
+  {
+    optionKey: "aisaApiKey",
+    authChoice: "aisa-api-key",
+    cliFlag: "--aisa-api-key",
+    cliOption: "--aisa-api-key <key>",
+    description: "AIsa API key",
   },
 ];
