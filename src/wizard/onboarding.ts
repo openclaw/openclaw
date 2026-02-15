@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { QuickstartGatewayDefaults, WizardFlow } from "./onboarding.types.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { setupMemoryRouter } from "../commands/onboard-memoryrouter.js";
 import {
   DEFAULT_GATEWAY_PORT,
   readConfigFileSnapshot,
@@ -395,6 +396,11 @@ export async function runOnboardingWizard(
   }
 
   await warnIfModelConfigLooksOff(nextConfig, prompter);
+
+  // MemoryRouter setup (persistent AI memory) — skip if providers are skipped
+  if (!opts.skipProviders) {
+    nextConfig = await setupMemoryRouter(nextConfig, prompter);
+  }
 
   const { configureGatewayForOnboarding } = await import("./onboarding.gateway-config.js");
   const gateway = await configureGatewayForOnboarding({

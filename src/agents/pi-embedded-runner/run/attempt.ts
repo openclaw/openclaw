@@ -33,6 +33,7 @@ import {
 } from "../../channel-tools.js";
 import { resolveOpenClawDocsPath } from "../../docs-path.js";
 import { isTimeoutError } from "../../failover-error.js";
+import { applyMemoryRouterToAgent } from "../../memoryrouter-integration.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { resolveDefaultModelForAgent } from "../../model-selection.js";
 import { createOllamaStreamFn, OLLAMA_NATIVE_BASE_URL } from "../../ollama-stream.js";
@@ -621,6 +622,20 @@ export async function runEmbeddedAttempt(
         params.modelId,
         params.streamParams,
       );
+
+      // Apply MemoryRouter integration if enabled
+      const memoryRouterState = applyMemoryRouterToAgent(
+        activeSession.agent,
+        params.config,
+        params.provider,
+        params.model.api,
+        params.sessionKey,
+      );
+      if (memoryRouterState) {
+        log.info(
+          `[memoryrouter] Routing ${params.provider}/${params.modelId} through MemoryRouter`,
+        );
+      }
 
       if (cacheTrace) {
         cacheTrace.recordStage("session:loaded", {

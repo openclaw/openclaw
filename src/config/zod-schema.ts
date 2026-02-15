@@ -101,6 +101,23 @@ const HttpUrlSchema = z
     return protocol === "http:" || protocol === "https:";
   }, "Expected http:// or https:// URL");
 
+const MemoryRouterSchema = z
+  .object({
+    /** Enable MemoryRouter integration. Default: false */
+    enabled: z.boolean().optional(),
+    /** Memory key (mk_xxx). Required when enabled. */
+    key: z
+      .string()
+      .regex(/^mk[_-]/)
+      .optional(),
+    /** MemoryRouter API endpoint. Override for self-hosted. Default: https://api.memoryrouter.ai/v1 */
+    endpoint: z.string().url().optional(),
+    /** Fall back to direct provider call on unsupported providers. Default: true */
+    fallbackOnUnsupported: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
+
 export const OpenClawSchema = z
   .object({
     $schema: z.string().optional(),
@@ -559,6 +576,7 @@ export const OpenClawSchema = z
       .strict()
       .optional(),
     memory: MemorySchema,
+    memoryRouter: MemoryRouterSchema,
     skills: z
       .object({
         allowBundled: z.array(z.string()).optional(),

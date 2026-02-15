@@ -1,0 +1,11 @@
+{
+  "id": "memoryrouter",
+  "name": "MemoryRouter",
+  "description": "Persistent AI memory for any model — route through MemoryRouter for automatic memory/RAG",
+  "version": "1.0.0",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

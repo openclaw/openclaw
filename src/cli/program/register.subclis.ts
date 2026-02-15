@@ -9,6 +9,7 @@ type SubCliRegistrar = (program: Command) => Promise<void> | void;
 type SubCliEntry = {
   name: string;
   description: string;
+  aliases?: string[];
   register: SubCliRegistrar;
 };
 
@@ -255,6 +256,15 @@ const entries: SubCliEntry[] = [
       mod.registerCompletionCli(program);
     },
   },
+  {
+    name: "memoryrouter",
+    aliases: ["mr"],
+    description: "MemoryRouter memory integration",
+    register: async (program) => {
+      const mod = await import("../memoryrouter-cli.js");
+      mod.registerMemoryRouterCli(program);
+    },
+  },
 ];
 
 export function getSubCliEntries(): SubCliEntry[] {
@@ -269,20 +279,76 @@ function removeCommand(program: Command, command: Command) {
   }
 }
 
+function findEntry(name: string): SubCliEntry | undefined {
+  return entries.find((candidate) => candidate.name === name || candidate.aliases?.includes(name));
+}
+
 export async function registerSubCliByName(program: Command, name: string): Promise<boolean> {
-  const entry = entries.find((candidate) => candidate.name === name);
+  const entry = findEntry(name);
   if (!entry) {
     return false;
   }
+  // Remove any existing placeholder for the main command name
   const existing = program.commands.find((cmd) => cmd.name() === entry.name);
   if (existing) {
     removeCommand(program, existing);
   }
+  // Remove any existing placeholders for aliases
+  for (const alias of entry.aliases ?? []) {
+    const aliasCmd = program.commands.find((cmd) => cmd.name() === alias);
+    if (aliasCmd) {
+      removeCommand(program, aliasCmd);
+    }
+  }
   await entry.register(program);
+  // If invoked via alias, wire commander alias on the registered command
+  if (name !== entry.name && entry.aliases?.includes(name)) {
+    const registered = program.commands.find((cmd) => cmd.name() === entry.name);
+    if (registered && !registered.aliases().includes(name)) {
+      registered.alias(name);
+    }
+  }
   return true;
 }
 
 function registerLazyCommand(program: Command, entry: SubCliEntry) {
+  const createLazyAction =
+    (placeholderCmd: Command) =>
+    async (...actionArgs: unknown[]) => {
+      // Remove all placeholders (main name + aliases) before registering
+      removeCommand(program, placeholderCmd);
+      for (const alias of entry.aliases ?? []) {
+        const aliasCmd = program.commands.find((cmd) => cmd.name() === alias);
+        if (aliasCmd) {
+          removeCommand(program, aliasCmd);
+        }
+      }
+      // Also remove the main name placeholder if triggered via alias
+      const mainCmd = program.commands.find((cmd) => cmd.name() === entry.name);
+      if (mainCmd) {
+        removeCommand(program, mainCmd);
+      }
+
+      await entry.register(program);
+      const actionCommand = actionArgs.at(-1) as Command | undefined;
+      const root = actionCommand?.parent ?? program;
+      const rawArgs = (root as Command & { rawArgs?: string[] }).rawArgs;
+      const actionArgsList = resolveActionArgs(actionCommand);
+      // Rewrite alias to canonical name so commander finds the real command
+      const cmdName = actionCommand?.name() ?? "";
+      const canonicalName =
+        cmdName === entry.name || entry.aliases?.includes(cmdName) ? entry.name : cmdName;
+      const fallbackArgv = canonicalName ? [canonicalName, ...actionArgsList] : actionArgsList;
+      const parseArgv = buildParseArgv({
+        programName: program.name(),
+        rawArgs: rawArgs
+          ? rawArgs.map((arg) => (entry.aliases?.includes(arg) ? entry.name : arg))
+          : undefined,
+        fallbackArgv,
+      });
+      await program.parseAsync(parseArgv);
+    };
+
   const placeholder = program.command(entry.name).description(entry.description);
   placeholder.allowUnknownOption(true);
   placeholder.allowExcessArguments(true);
@@ -291,6 +357,18 @@ function registerLazyCommand(program: Command, entry: SubCliEntry) {
     await entry.register(program);
     await reparseProgramFromActionArgs(program, actionArgs);
   });
+
+  // Register alias placeholders that delegate to the same entry
+  for (const alias of entry.aliases ?? []) {
+    const aliasPlaceholder = program.command(alias).description(`${entry.description} (alias)`);
+    aliasPlaceholder.allowUnknownOption(true);
+    aliasPlaceholder.allowExcessArguments(true);
+    aliasPlaceholder.action(async (...actionArgs) => {
+      removeCommand(program, aliasPlaceholder);
+      await entry.register(program);
+      await reparseProgramFromActionArgs(program, actionArgs);
+    });
+  }
 }
 
 export function registerSubCliCommands(program: Command, argv: string[] = process.argv) {
@@ -302,12 +380,13 @@ export function registerSubCliCommands(program: Command, argv: string[] = proces
   }
   const primary = getPrimaryCommand(argv);
   if (primary && shouldRegisterPrimaryOnly(argv)) {
-    const entry = entries.find((candidate) => candidate.name === primary);
+    const entry = findEntry(primary);
     if (entry) {
       registerLazyCommand(program, entry);
       return;
     }
   }
+
   for (const candidate of entries) {
     registerLazyCommand(program, candidate);
   }
