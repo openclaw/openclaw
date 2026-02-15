@@ -57,7 +57,8 @@ export function htmlToMarkdown(html: string): { text: string; title?: string } {
   const title = titleMatch ? normalizeWhitespace(stripTags(titleMatch[1])) : undefined;
   // Extract JSON-LD structured data before stripping scripts (#17137)
   const jsonLdBlocks: string[] = [];
-  const jsonLdRe = /<script[^>]+type\s*=\s*["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+  const jsonLdRe =
+    /<script[^>]+type\s*=\s*["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
   let jsonLdMatch: RegExpExecArray | null;
   while ((jsonLdMatch = jsonLdRe.exec(html)) !== null) {
     const block = jsonLdMatch[1].trim();
