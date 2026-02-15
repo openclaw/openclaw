@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const githubCopilotLoginCommand = vi.fn();
 const modelsStatusCommand = vi.fn().mockResolvedValue(undefined);
@@ -32,18 +32,28 @@ vi.mock("../commands/models.js", () => ({
 }));
 
 describe("models cli", () => {
+  let Command: typeof import("commander").Command;
+  let registerModelsCli: (typeof import("./models-cli.js"))["registerModelsCli"];
+
+  beforeAll(async () => {
+    // Load once; vi.mock above ensures command handlers are already mocked.
+    ({ Command } = await import("commander"));
+    ({ registerModelsCli } = await import("./models-cli.js"));
+  });
+
   beforeEach(() => {
     githubCopilotLoginCommand.mockClear();
     modelsStatusCommand.mockClear();
   });
 
-  it("registers github-copilot login command", { timeout: 60_000 }, async () => {
-    const { Command } = await import("commander");
-    const { registerModelsCli } = await import("./models-cli.js");
-
+  function createProgram() {
     const program = new Command();
     registerModelsCli(program);
+    return program;
+  }
 
+  it("registers github-copilot login command", async () => {
+    const program = createProgram();
     const models = program.commands.find((cmd) => cmd.name() === "models");
     expect(models).toBeTruthy();
 
@@ -65,11 +75,7 @@ describe("models cli", () => {
   });
 
   it("passes --agent to models status", async () => {
-    const { Command } = await import("commander");
-    const { registerModelsCli } = await import("./models-cli.js");
-
-    const program = new Command();
-    registerModelsCli(program);
+    const program = createProgram();
 
     await program.parseAsync(["models", "status", "--agent", "poe"], { from: "user" });
 
@@ -80,11 +86,7 @@ describe("models cli", () => {
   });
 
   it("passes parent --agent to models status", async () => {
-    const { Command } = await import("commander");
-    const { registerModelsCli } = await import("./models-cli.js");
-
-    const program = new Command();
-    registerModelsCli(program);
+    const program = createProgram();
 
     await program.parseAsync(["models", "--agent", "poe", "status"], { from: "user" });
 
@@ -95,9 +97,6 @@ describe("models cli", () => {
   });
 
   it("shows help for models auth without error exit", async () => {
-    const { Command } = await import("commander");
-    const { registerModelsCli } = await import("./models-cli.js");
-
     const program = new Command();
     program.exitOverride();
     registerModelsCli(program);

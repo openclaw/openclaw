@@ -8,6 +8,12 @@ describe("ensureOpenClawCliOnPath", () => {
   let fixtureRoot = "";
   let fixtureCount = 0;
 
+  async function makeTmpDir(): Promise<string> {
+    const tmp = path.join(fixtureRoot, `case-${fixtureCount++}`);
+    await fs.mkdir(tmp);
+    return tmp;
+  }
+
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-path-"));
   });
@@ -17,9 +23,9 @@ describe("ensureOpenClawCliOnPath", () => {
   });
 
   it("prepends the bundled app bin dir when a sibling openclaw exists", async () => {
-    const tmp = path.join(fixtureRoot, `case-${fixtureCount++}`);
+    const tmp = await makeTmpDir();
     const appBinDir = path.join(tmp, "AppBin");
-    await fs.mkdir(appBinDir, { recursive: true });
+    await fs.mkdir(appBinDir);
     const cliPath = path.join(appBinDir, "openclaw");
     await fs.writeFile(cliPath, "#!/bin/sh\necho ok\n", "utf-8");
     await fs.chmod(cliPath, 0o755);
@@ -71,13 +77,13 @@ describe("ensureOpenClawCliOnPath", () => {
   });
 
   it("prepends mise shims when available", async () => {
-    const tmp = path.join(fixtureRoot, `case-${fixtureCount++}`);
+    const tmp = await makeTmpDir();
     const originalPath = process.env.PATH;
     const originalFlag = process.env.OPENCLAW_PATH_BOOTSTRAPPED;
     const originalMiseDataDir = process.env.MISE_DATA_DIR;
     try {
       const appBinDir = path.join(tmp, "AppBin");
-      await fs.mkdir(appBinDir, { recursive: true });
+      await fs.mkdir(appBinDir);
       const appCli = path.join(appBinDir, "openclaw");
       await fs.writeFile(appCli, "#!/bin/sh\necho ok\n", "utf-8");
       await fs.chmod(appCli, 0o755);
@@ -118,12 +124,12 @@ describe("ensureOpenClawCliOnPath", () => {
   });
 
   it("only appends project-local node_modules/.bin when explicitly enabled", async () => {
-    const tmp = path.join(fixtureRoot, `case-${fixtureCount++}`);
+    const tmp = await makeTmpDir();
     const originalPath = process.env.PATH;
     const originalFlag = process.env.OPENCLAW_PATH_BOOTSTRAPPED;
     try {
       const appBinDir = path.join(tmp, "AppBin");
-      await fs.mkdir(appBinDir, { recursive: true });
+      await fs.mkdir(appBinDir);
       const appCli = path.join(appBinDir, "openclaw");
       await fs.writeFile(appCli, "#!/bin/sh\necho ok\n", "utf-8");
       await fs.chmod(appCli, 0o755);
@@ -172,7 +178,7 @@ describe("ensureOpenClawCliOnPath", () => {
   });
 
   it("prepends Linuxbrew dirs when present", async () => {
-    const tmp = path.join(fixtureRoot, `case-${fixtureCount++}`);
+    const tmp = await makeTmpDir();
     const originalPath = process.env.PATH;
     const originalFlag = process.env.OPENCLAW_PATH_BOOTSTRAPPED;
     const originalHomebrewPrefix = process.env.HOMEBREW_PREFIX;
@@ -180,7 +186,7 @@ describe("ensureOpenClawCliOnPath", () => {
     const originalXdgBinHome = process.env.XDG_BIN_HOME;
     try {
       const execDir = path.join(tmp, "exec");
-      await fs.mkdir(execDir, { recursive: true });
+      await fs.mkdir(execDir);
 
       const linuxbrewBin = path.join(tmp, ".linuxbrew", "bin");
       const linuxbrewSbin = path.join(tmp, ".linuxbrew", "sbin");

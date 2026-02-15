@@ -62,15 +62,26 @@ function createEnv(
   sandbox: DockerSetupSandbox,
   overrides: Record<string, string | undefined> = {},
 ): NodeJS.ProcessEnv {
-  return {
-    ...process.env,
+  const env: NodeJS.ProcessEnv = {
     PATH: `${sandbox.binDir}:${process.env.PATH ?? ""}`,
+    HOME: process.env.HOME ?? sandbox.rootDir,
+    LANG: process.env.LANG,
+    LC_ALL: process.env.LC_ALL,
+    TMPDIR: process.env.TMPDIR,
     DOCKER_STUB_LOG: sandbox.logPath,
     OPENCLAW_GATEWAY_TOKEN: "test-token",
     OPENCLAW_CONFIG_DIR: join(sandbox.rootDir, "config"),
     OPENCLAW_WORKSPACE_DIR: join(sandbox.rootDir, "openclaw"),
-    ...overrides,
   };
+
+  for (const [key, value] of Object.entries(overrides)) {
+    if (value === undefined) {
+      delete env[key];
+    } else {
+      env[key] = value;
+    }
+  }
+  return env;
 }
 
 function resolveBashForCompatCheck(): string | null {
