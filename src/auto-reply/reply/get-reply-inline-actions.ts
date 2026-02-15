@@ -189,13 +189,21 @@ export async function handleInlineActions(params: {
       }
 
       const toolCallId = `cmd_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+      // Map rawArgs to the tool's first required parameter so dispatch
+      // works with tools like sessions_spawn that expect e.g. { task: "..." }
+      // instead of { command: "..." }.
+      const primaryArgKey = resolveToolPrimaryArgKey(tool);
+      const toolArgs: Record<string, unknown> = {
+        command: rawArgs,
+        commandName: skillInvocation.command.name,
+        skillName: skillInvocation.command.skillName,
+      };
+      if (primaryArgKey && primaryArgKey !== "command") {
+        toolArgs[primaryArgKey] = rawArgs;
+      }
       try {
-        const result = await tool.execute(toolCallId, {
-          command: rawArgs,
-          commandName: skillInvocation.command.name,
-          skillName: skillInvocation.command.skillName,
-          // oxlint-disable-next-line typescript/no-explicit-any
-        } as any);
+        // oxlint-disable-next-line typescript/no-explicit-any
+        const result = await tool.execute(toolCallId, toolArgs as any);
         const text = extractTextFromToolResult(result) ?? "✅ Done.";
         typing.cleanup();
         return { kind: "reply", reply: { text } };
@@ -355,4 +363,32 @@ export async function handleInlineActions(params: {
     directives,
     abortedLastRun,
   };
+}
+
+/**
+ * Inspect a tool's TypeBox `parameters` schema and return the name of the
+ * first required string property.  This lets command-dispatch forward the
+ * user-supplied argument text to the correct parameter (e.g. `task` for
+ * `sessions_spawn`) instead of always using `command`.
+ */
+function resolveToolPrimaryArgKey(tool: { parameters?: Record<string, unknown> }): string | null {
+  const schema = tool.parameters;
+  if (!schema || typeof schema !== "object") {
+    return null;
+  }
+  const required = (schema as { required?: string[] }).required;
+  if (!Array.isArray(required) || required.length === 0) {
+    return null;
+  }
+  const properties = (schema as { properties?: Record<string, { type?: string }> }).properties;
+  if (!properties) {
+    return required[0] ?? null;
+  }
+  for (const key of required) {
+    const prop = properties[key];
+    if (prop && prop.type === "string") {
+      return key;
+    }
+  }
+  return required[0] ?? null;
 }

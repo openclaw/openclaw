@@ -345,6 +345,7 @@ Docs: https://docs.openclaw.ai
 - WhatsApp: convert Markdown bold/strikethrough to WhatsApp formatting. (#14285) Thanks @Raikan10.
 - WhatsApp: allow media-only sends and normalize leading blank payloads. (#14408) Thanks @karimnaguib.
 - WhatsApp: default MIME type for voice messages when Baileys omits it. (#14444) Thanks @mcaxtr.
+- Skills: map command-dispatch tool args to the tool's primary required parameter, fixing sessions_spawn "task required" errors. (#14326)
 - Telegram: handle no-text message in model picker editMessageText. (#14397) Thanks @0xRaini.
 - Telegram: surface REACTION_INVALID as non-fatal warning. (#14340) Thanks @0xRaini.
 - BlueBubbles: fix webhook auth bypass via loopback proxy trust. (#13787) Thanks @coygeek.
