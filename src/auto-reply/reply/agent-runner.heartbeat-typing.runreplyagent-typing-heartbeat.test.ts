@@ -51,6 +51,27 @@ async function withTempStateDir<T>(fn: (stateDir: string) => Promise<T>): Promis
   }
 }
 
+async function writeCorruptGeminiSessionFixture(params: {
+  stateDir: string;
+  sessionId: string;
+  persistStore: boolean;
+}) {
+  const storePath = path.join(params.stateDir, "sessions", "sessions.json");
+  const sessionEntry = { sessionId: params.sessionId, updatedAt: Date.now() };
+  const sessionStore = { main: sessionEntry };
+
+  await fs.mkdir(path.dirname(storePath), { recursive: true });
+  if (params.persistStore) {
+    await fs.writeFile(storePath, JSON.stringify(sessionStore), "utf-8");
+  }
+
+  const transcriptPath = sessions.resolveSessionTranscriptPath(params.sessionId);
+  await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
+  await fs.writeFile(transcriptPath, "bad", "utf-8");
+
+  return { storePath, sessionEntry, sessionStore, transcriptPath };
+}
+
 describe("runReplyAgent typing (heartbeat)", () => {
   installRunReplyAgentTypingHeartbeatTestHooks();
 
@@ -404,17 +425,12 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
   it("resets corrupted Gemini sessions and deletes transcripts", async () => {
     await withTempStateDir(async (stateDir) => {
-      const sessionId = "session-corrupt";
-      const storePath = path.join(stateDir, "sessions", "sessions.json");
-      const sessionEntry = { sessionId, updatedAt: Date.now() };
-      const sessionStore = { main: sessionEntry };
-
-      await fs.mkdir(path.dirname(storePath), { recursive: true });
-      await fs.writeFile(storePath, JSON.stringify(sessionStore), "utf-8");
-
-      const transcriptPath = sessions.resolveSessionTranscriptPath(sessionId);
-      await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
-      await fs.writeFile(transcriptPath, "bad", "utf-8");
+      const { storePath, sessionEntry, sessionStore, transcriptPath } =
+        await writeCorruptGeminiSessionFixture({
+          stateDir,
+          sessionId: "session-corrupt",
+          persistStore: true,
+        });
 
       runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
         throw new Error(
@@ -484,14 +500,12 @@ describe("runReplyAgent typing (heartbeat)", () => {
         .spyOn(sessions, "saveSessionStore")
         .mockRejectedValueOnce(new Error("boom"));
       try {
-        const sessionId = "session-corrupt";
-        const storePath = path.join(stateDir, "sessions", "sessions.json");
-        const sessionEntry = { sessionId, updatedAt: Date.now() };
-        const sessionStore = { main: sessionEntry };
-
-        const transcriptPath = sessions.resolveSessionTranscriptPath(sessionId);
-        await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
-        await fs.writeFile(transcriptPath, "bad", "utf-8");
+        const { storePath, sessionEntry, sessionStore, transcriptPath } =
+          await writeCorruptGeminiSessionFixture({
+            stateDir,
+            sessionId: "session-corrupt",
+            persistStore: false,
+          });
 
         runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
           throw new Error(
