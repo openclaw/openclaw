@@ -51,9 +51,9 @@ const MAX_BODY_CHARS = 4000;
 
 // Opus 4.6 GA pricing (Feb 2026)
 const PRICING = {
-  "claude-opus-4-6":            { input: 5.00, cache_read: 0.50, cache_write: 6.25, output: 25.00 },
-  "claude-sonnet-4-5-20250929": { input: 3.00, cache_read: 0.30, cache_write: 3.75, output: 15.00 },
-  "claude-haiku-4-5-20251001":  { input: 1.00, cache_read: 0.10, cache_write: 1.25, output: 5.00 },
+  "claude-opus-4-6": { input: 5.0, cache_read: 0.5, cache_write: 6.25, output: 25.0 },
+  "claude-sonnet-4-5-20250929": { input: 3.0, cache_read: 0.3, cache_write: 3.75, output: 15.0 },
+  "claude-haiku-4-5-20251001": { input: 1.0, cache_read: 0.1, cache_write: 1.25, output: 5.0 },
 };
 let totalCost = 0;
 
@@ -109,9 +109,10 @@ ${decisions.rejectedPRs.join("\n")}
 </closed_without_merge>
 </maintainer_decisions>`;
 
-  const deterministicContext = deterministicHints.length > 0
-    ? `\n<deterministic_signals>\n${deterministicHints.map((h) => `PR #${h.pr}: file_overlap=${h.jaccard}`).join("\n")}\n</deterministic_signals>`
-    : "";
+  const deterministicContext =
+    deterministicHints.length > 0
+      ? `\n<deterministic_signals>\n${deterministicHints.map((h) => `PR #${h.pr}: file_overlap=${h.jaccard}`).join("\n")}\n</deterministic_signals>`
+      : "";
 
   const userPrompt = `<new_pr>
 <title>${sanitizeUntrusted(targetPR.title, 200)}</title>
@@ -169,27 +170,35 @@ Analyze this PR and respond with the triage JSON.`;
   const prices = PRICING[MODEL] || PRICING["claude-haiku-4-5-20251001"];
   const inputCost = ((usage.input_tokens || 0) / 1_000_000) * prices.input;
   const cacheReadCost = ((usage.cache_read_input_tokens || 0) / 1_000_000) * prices.cache_read;
-  const cacheCreateCost = ((usage.cache_creation_input_tokens || 0) / 1_000_000) * prices.cache_write;
+  const cacheCreateCost =
+    ((usage.cache_creation_input_tokens || 0) / 1_000_000) * prices.cache_write;
   const outputCost = ((usage.output_tokens || 0) / 1_000_000) * prices.output;
   const callCost = inputCost + cacheReadCost + cacheCreateCost + outputCost;
   totalCost += callCost;
 
   const thinkingTokens = usage.thinking_tokens || 0;
-  console.log(`Tokens: ${usage.input_tokens || 0} in (${usage.cache_read_input_tokens || 0} cached, ${usage.cache_creation_input_tokens || 0} cache-write), ${usage.output_tokens || 0} out${thinkingTokens ? `, ${thinkingTokens} thinking` : ""}`);
+  console.log(
+    `Tokens: ${usage.input_tokens || 0} in (${usage.cache_read_input_tokens || 0} cached, ${usage.cache_creation_input_tokens || 0} cache-write), ${usage.output_tokens || 0} out${thinkingTokens ? `, ${thinkingTokens} thinking` : ""}`,
+  );
   console.log(`Cost: $${callCost.toFixed(4)} this call | $${totalCost.toFixed(4)} total`);
 
   // Extract response — try text blocks, then json blocks, then any content
-  for (const block of (data.content || [])) {
+  for (const block of data.content || []) {
     if (block.type === "text" && block.text) {
       const parsed = extractJSON(block.text);
-      if (parsed) { return parsed; }
+      if (parsed) {
+        return parsed;
+      }
     }
     if (block.type === "json") {
       return typeof block.json === "string" ? extractJSON(block.json) : block.json;
     }
   }
 
-  console.error("Failed to parse LLM response:", JSON.stringify((data.content || []).map((b) => b.type)));
+  console.error(
+    "Failed to parse LLM response:",
+    JSON.stringify((data.content || []).map((b) => b.type)),
+  );
   return null;
 }
 
@@ -208,7 +217,9 @@ async function main() {
   const budget = await checkRateBudget(gh);
   const skipFiles = !budget.ok;
   if (skipFiles) {
-    console.warn(`Low rate budget (${budget.remaining}) — skipping file fetches, semantic-only triage`);
+    console.warn(
+      `Low rate budget (${budget.remaining}) — skipping file fetches, semantic-only triage`,
+    );
   }
 
   console.log("Fetching target PR...");
@@ -216,7 +227,14 @@ async function main() {
   console.log(`Target: "${targetPR.title}" by ${targetPR.author}, ${targetPR.files.length} files`);
 
   console.log("Fetching open PRs for context...");
-  const { summaries, fileMap } = await getOpenPRSummaries(gh, ghGraphQL, ghPaginate, REPO, MAX_OPEN_PRS, skipFiles);
+  const { summaries, fileMap } = await getOpenPRSummaries(
+    gh,
+    ghGraphQL,
+    ghPaginate,
+    REPO,
+    MAX_OPEN_PRS,
+    skipFiles,
+  );
 
   // Filter target PR from context to avoid self-matching
   const contextSummaries = summaries.filter((s) => !s.startsWith(`#${prNumber} `));
@@ -224,7 +242,9 @@ async function main() {
 
   console.log("Fetching recent decisions...");
   const decisions = await getRecentDecisions(ghPaginate, REPO, MAX_HISTORY);
-  console.log(`Loaded ${decisions.mergedPRs.length} merged + ${decisions.rejectedPRs.length} rejected PRs`);
+  console.log(
+    `Loaded ${decisions.mergedPRs.length} merged + ${decisions.rejectedPRs.length} rejected PRs`,
+  );
 
   const deterministicHints = deterministicSignals(targetPR, fileMap);
   if (deterministicHints.length > 0) {
@@ -243,8 +263,14 @@ async function main() {
     triage = {
       duplicate_of: deterministicHints.filter((h) => h.jaccard > 0.5).map((h) => h.pr),
       related_to: deterministicHints.filter((h) => h.jaccard <= 0.5).map((h) => h.pr),
-      category: "chore", confidence: "low",
-      quality_signals: { focused_scope: true, has_tests: false, appropriate_size: true, references_issue: extractIssueRefs(targetPR.title + " " + targetPR.body).length > 0 },
+      category: "chore",
+      confidence: "low",
+      quality_signals: {
+        focused_scope: true,
+        has_tests: false,
+        appropriate_size: true,
+        references_issue: extractIssueRefs(targetPR.title + " " + targetPR.body).length > 0,
+      },
       suggested_action: "auto-label-only",
       reasoning: "DRY RUN — deterministic signals only",
     };

@@ -25,13 +25,21 @@ export function createGitHubClient(token) {
         },
         ...opts,
       });
-      if (res.ok) { return res.json(); }
-      const isRateLimit = res.status === 429 || (res.status === 403 && res.headers.get("x-ratelimit-remaining") === "0");
+      if (res.ok) {
+        return res.json();
+      }
+      const isRateLimit =
+        res.status === 429 ||
+        (res.status === 403 && res.headers.get("x-ratelimit-remaining") === "0");
       if (isRateLimit || res.status >= 500) {
         const resetEpoch = Number(res.headers.get("x-ratelimit-reset") || 0);
-        const waitSec = resetEpoch ? Math.max(1, resetEpoch - Math.floor(Date.now() / 1000)) : Math.pow(2, attempt);
+        const waitSec = resetEpoch
+          ? Math.max(1, resetEpoch - Math.floor(Date.now() / 1000))
+          : Math.pow(2, attempt);
         const delay = Math.min(waitSec * 1000, 60_000);
-        console.warn(`GitHub API ${res.status} on ${path}, retry in ${Math.round(delay / 1000)}s (${attempt + 1}/3)`);
+        console.warn(
+          `GitHub API ${res.status} on ${path}, retry in ${Math.round(delay / 1000)}s (${attempt + 1}/3)`,
+        );
         await new Promise((r) => setTimeout(r, delay));
         continue;
       }
@@ -68,9 +76,13 @@ export function createGitHubClient(token) {
       const perPage = Math.min(100, maxItems - items.length);
       const sep = path.includes("?") ? "&" : "?";
       const data = await gh(`${path}${sep}per_page=${perPage}&page=${page}`);
-      if (!Array.isArray(data) || data.length === 0) { break; }
+      if (!Array.isArray(data) || data.length === 0) {
+        break;
+      }
       items.push(...data);
-      if (data.length < perPage) { break; }
+      if (data.length < perPage) {
+        break;
+      }
       page++;
     }
     return items;
@@ -106,17 +118,26 @@ export async function checkRateBudget(gh) {
  * Only matches GitHub-style references: "fixes #N", "closes #N", bare "#N" at line starts.
  */
 export function extractIssueRefs(text) {
-  if (!text) { return []; }
-  const contextual = text.match(/(?:fix(?:es)?|close[sd]?|resolve[sd]?|refs?|see|relates?\s+to)\s+#(\d{1,6})/gi) || [];
+  if (!text) {
+    return [];
+  }
+  const contextual =
+    text.match(/(?:fix(?:es)?|close[sd]?|resolve[sd]?|refs?|see|relates?\s+to)\s+#(\d{1,6})/gi) ||
+    [];
   const bare = text.match(/(?:^|\n)\s*[-*]?\s*#(\d{1,6})\b/g) || [];
   const all = [...contextual, ...bare]
-    .map((m) => { const match = m.match(/#(\d{1,6})/); return match ? `#${match[1]}` : null; })
+    .map((m) => {
+      const match = m.match(/#(\d{1,6})/);
+      return match ? `#${match[1]}` : null;
+    })
     .filter(Boolean);
   return [...new Set(all)];
 }
 
 export function computeFileOverlap(filesA, filesB) {
-  if (!filesA.length || !filesB.length) { return 0; }
+  if (!filesA.length || !filesB.length) {
+    return 0;
+  }
   const setA = new Set(filesA);
   const intersection = filesB.filter((f) => setA.has(f));
   const union = new Set([...filesA, ...filesB]);
@@ -184,10 +205,14 @@ async function batchFetchFiles(ghGraphQL, owner, name, prNumbers) {
 
   for (let i = 0; i < prNumbers.length; i += BATCH_SIZE) {
     const batch = prNumbers.slice(i, i + BATCH_SIZE);
-    const aliases = batch.map((n, idx) => `pr${idx}: pullRequest(number: ${n}) {
+    const aliases = batch
+      .map(
+        (n, idx) => `pr${idx}: pullRequest(number: ${n}) {
       number
       files(first: 100) { nodes { path } }
-    }`).join("\n");
+    }`,
+      )
+      .join("\n");
 
     const query = `query { repository(owner: "${owner}", name: "${name}") { ${aliases} } }`;
     try {
@@ -196,13 +221,20 @@ async function batchFetchFiles(ghGraphQL, owner, name, prNumbers) {
       for (let idx = 0; idx < batch.length; idx++) {
         const pr = repo[`pr${idx}`];
         if (pr?.files?.nodes) {
-          fileMap.set(pr.number, pr.files.nodes.map((f) => f.path));
+          fileMap.set(
+            pr.number,
+            pr.files.nodes.map((f) => f.path),
+          );
         }
       }
     } catch (err) {
-      console.warn(`GraphQL batch file fetch failed (batch ${i}-${i + batch.length}): ${err.message}`);
+      console.warn(
+        `GraphQL batch file fetch failed (batch ${i}-${i + batch.length}): ${err.message}`,
+      );
       // Graceful degradation — PRs in this batch get empty file lists
-      for (const n of batch) { fileMap.set(n, []); }
+      for (const n of batch) {
+        fileMap.set(n, []);
+      }
     }
   }
   return fileMap;
@@ -216,8 +248,18 @@ async function batchFetchFiles(ghGraphQL, owner, name, prNumbers) {
  * instead of 500 individual REST calls.
  * If skipFiles=true, skips file fetching entirely (semantic-only triage).
  */
-export async function getOpenPRSummaries(gh, ghGraphQL, ghPaginate, repo, maxOpenPRs, skipFiles = false) {
-  const prs = await ghPaginate(`/repos/${repo}/pulls?state=open&sort=created&direction=desc`, maxOpenPRs);
+export async function getOpenPRSummaries(
+  gh,
+  ghGraphQL,
+  ghPaginate,
+  repo,
+  maxOpenPRs,
+  skipFiles = false,
+) {
+  const prs = await ghPaginate(
+    `/repos/${repo}/pulls?state=open&sort=created&direction=desc`,
+    maxOpenPRs,
+  );
   const [owner, name] = repo.split("/");
 
   let fileMap;
@@ -229,7 +271,9 @@ export async function getOpenPRSummaries(gh, ghGraphQL, ghPaginate, repo, maxOpe
     fileMap = await batchFetchFiles(ghGraphQL, owner, name, prNumbers);
     // Ensure all PRs have an entry even if GraphQL missed some
     for (const pr of prs) {
-      if (!fileMap.has(pr.number)) { fileMap.set(pr.number, []); }
+      if (!fileMap.has(pr.number)) {
+        fileMap.set(pr.number, []);
+      }
     }
   }
 
@@ -249,11 +293,17 @@ export async function getRecentDecisions(ghPaginate, repo, maxHistory) {
   const mergedPRs = merged
     .filter((pr) => pr.merged_at)
     .slice(0, maxHistory)
-    .map((pr) => `MERGED #${pr.number}: ${pr.title} (by ${pr.user?.login}, +${pr.additions}/-${pr.deletions})`);
+    .map(
+      (pr) =>
+        `MERGED #${pr.number}: ${pr.title} (by ${pr.user?.login}, +${pr.additions}/-${pr.deletions})`,
+    );
   const rejectedPRs = merged
     .filter((pr) => !pr.merged_at)
     .slice(0, maxHistory)
-    .map((pr) => `CLOSED #${pr.number}: ${pr.title} (by ${pr.user?.login}, +${pr.additions}/-${pr.deletions})`);
+    .map(
+      (pr) =>
+        `CLOSED #${pr.number}: ${pr.title} (by ${pr.user?.login}, +${pr.additions}/-${pr.deletions})`,
+    );
   return { mergedPRs, rejectedPRs };
 }
 
@@ -263,8 +313,16 @@ export const TRIAGE_SCHEMA = {
   type: "object",
   additionalProperties: false,
   properties: {
-    duplicate_of: { type: "array", items: { type: "integer" }, description: "PR numbers this is a duplicate of" },
-    related_to: { type: "array", items: { type: "integer" }, description: "PR numbers with related/overlapping work" },
+    duplicate_of: {
+      type: "array",
+      items: { type: "integer" },
+      description: "PR numbers this is a duplicate of",
+    },
+    related_to: {
+      type: "array",
+      items: { type: "integer" },
+      description: "PR numbers with related/overlapping work",
+    },
     category: { type: "string", enum: ["bug", "feature", "refactor", "test", "docs", "chore"] },
     confidence: { type: "string", enum: ["high", "medium", "low"] },
     quality_signals: {
@@ -278,31 +336,56 @@ export const TRIAGE_SCHEMA = {
       },
       required: ["focused_scope", "has_tests", "appropriate_size", "references_issue"],
     },
-    suggested_action: { type: "string", enum: ["needs-review", "likely-duplicate", "needs-discussion", "auto-label-only"] },
+    suggested_action: {
+      type: "string",
+      enum: ["needs-review", "likely-duplicate", "needs-discussion", "auto-label-only"],
+    },
     reasoning: { type: "string", description: "Brief explanation of the triage decision" },
   },
-  required: ["duplicate_of", "related_to", "category", "confidence", "quality_signals", "suggested_action", "reasoning"],
+  required: [
+    "duplicate_of",
+    "related_to",
+    "category",
+    "confidence",
+    "quality_signals",
+    "suggested_action",
+    "reasoning",
+  ],
 };
 
 // --- Prompt injection defense ---
 
 export function sanitizeUntrusted(text, maxLen) {
-  if (!text) { return ""; }
+  if (!text) {
+    return "";
+  }
   return text
     .slice(0, maxLen)
     .replace(/```/g, "'''")
-    .replace(/<\/?(?:system|human|assistant|instructions?|prompt|ignore|override)[^>]*>/gi, "[FILTERED]");
+    .replace(
+      /<\/?(?:system|human|assistant|instructions?|prompt|ignore|override)[^>]*>/gi,
+      "[FILTERED]",
+    );
 }
 
 // --- JSON extraction from LLM response ---
 
 export function extractJSON(text) {
-  try { return JSON.parse(text); } catch {}
-  const fenced = text.replace(/^```(?:json)?\n?/m, "").replace(/\n?```$/m, "").trim();
-  try { return JSON.parse(fenced); } catch {}
+  try {
+    return JSON.parse(text);
+  } catch {}
+  const fenced = text
+    .replace(/^```(?:json)?\n?/m, "")
+    .replace(/\n?```$/m, "")
+    .trim();
+  try {
+    return JSON.parse(fenced);
+  } catch {}
   const braceMatch = text.match(/\{[\s\S]*\}/);
   if (braceMatch) {
-    try { return JSON.parse(braceMatch[0]); } catch {}
+    try {
+      return JSON.parse(braceMatch[0]);
+    } catch {}
   }
   return null;
 }
@@ -310,7 +393,9 @@ export function extractJSON(text) {
 // --- Output validation ---
 
 export function validateTriageOutput(triage, knownPRNumbers) {
-  if (!triage || typeof triage !== "object") { return null; }
+  if (!triage || typeof triage !== "object") {
+    return null;
+  }
 
   const validPRs = new Set(knownPRNumbers);
 
@@ -342,7 +427,12 @@ export function validateTriageOutput(triage, knownPRNumbers) {
   }
 
   if (!triage.quality_signals || typeof triage.quality_signals !== "object") {
-    triage.quality_signals = { focused_scope: true, has_tests: false, appropriate_size: true, references_issue: false };
+    triage.quality_signals = {
+      focused_scope: true,
+      has_tests: false,
+      appropriate_size: true,
+      references_issue: false,
+    };
   }
 
   if (triage.suggested_action === "likely-duplicate" && triage.duplicate_of.length === 0) {
@@ -360,7 +450,9 @@ export function deterministicSignals(targetPR, fileMap) {
   const signals = [];
 
   for (const [prNum, prFiles] of fileMap) {
-    if (prNum === targetPR.number) { continue; }
+    if (prNum === targetPR.number) {
+      continue;
+    }
     const jaccard = computeFileOverlap(targetFiles, prFiles);
     if (jaccard > 0.3) {
       signals.push({ pr: prNum, jaccard: Math.round(jaccard * 100) / 100 });
