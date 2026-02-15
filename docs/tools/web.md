@@ -39,6 +39,19 @@ These are **not** browser automation. For JS-heavy sites or logins, use the
 
 See [Brave Search setup](/brave-search) and [Perplexity Sonar](/perplexity) for provider-specific details.
 
+### Auto-detection
+
+If no `provider` is explicitly set, OpenClaw auto-detects which provider to use based on available API keys, checking in this order:
+
+1. **Brave** — `BRAVE_API_KEY` env var or `search.apiKey` config
+2. **Gemini** — `GEMINI_API_KEY` env var or `search.gemini.apiKey` config
+3. **Perplexity** — `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` env var or `search.perplexity.apiKey` config
+4. **Grok** — `XAI_API_KEY` env var or `search.grok.apiKey` config
+
+If no keys are found, it falls back to Brave (you'll get a missing-key error prompting you to configure one).
+
+### Explicit provider
+
 Set the provider in config:
 
 ```json5
