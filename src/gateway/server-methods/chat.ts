@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentConfig, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveThinkingDefault } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
@@ -263,7 +263,12 @@ export const chatHandlers: GatewayRequestHandlers = {
     const capped = capArrayByJsonBytes(sanitized, getMaxChatHistoryMessagesBytes()).items;
     let thinkingLevel = entry?.thinkingLevel;
     if (!thinkingLevel) {
-      const configured = cfg.agents?.defaults?.thinkingDefault;
+      const agentId = resolveSessionAgentId({
+        sessionKey,
+        config: cfg,
+      });
+      const agentConfig = resolveAgentConfig(cfg, agentId);
+      const configured = agentConfig?.thinkingDefault ?? cfg.agents?.defaults?.thinkingDefault;
       if (configured) {
         thinkingLevel = configured;
       } else {
