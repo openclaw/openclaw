@@ -330,6 +330,103 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("rebuilds managed collections once when qmd update fails with null-byte ENOTDIR", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: true,
+          update: { interval: "0s", debounceMs: 0, onBoot: false },
+          paths: [],
+        },
+      },
+    } as OpenClawConfig;
+
+    let updateCalls = 0;
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "update") {
+        updateCalls += 1;
+        const child = createMockChild({ autoClose: false });
+        if (updateCalls === 1) {
+          emitAndClose(
+            child,
+            "stderr",
+            "ENOTDIR: not a directory, open '/tmp/workspace/MEMORY.md^@'",
+            1,
+          );
+          return child;
+        }
+        queueMicrotask(() => {
+          child.closeWith(0);
+        });
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager({ mode: "status" });
+    await expect(manager.sync({ reason: "manual" })).resolves.toBeUndefined();
+
+    const removeCalls = spawnMock.mock.calls
+      .map((call) => call[1] as string[])
+      .filter((args) => args[0] === "collection" && args[1] === "remove")
+      .map((args) => args[2]);
+    const addCalls = spawnMock.mock.calls
+      .map((call) => call[1] as string[])
+      .filter((args) => args[0] === "collection" && args[1] === "add")
+      .map((args) => args[args.indexOf("--name") + 1]);
+
+    expect(updateCalls).toBe(2);
+    expect(removeCalls).toEqual(["memory-root", "memory-alt", "memory-dir"]);
+    expect(addCalls).toEqual(["memory-root", "memory-alt", "memory-dir"]);
+    expect(logWarnMock).toHaveBeenCalledWith(
+      expect.stringContaining("suspected null-byte collection metadata"),
+    );
+
+    await manager.close();
+  });
+
+  it("does not rebuild collections for generic qmd update failures", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: true,
+          update: { interval: "0s", debounceMs: 0, onBoot: false },
+          paths: [],
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "update") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(
+          child,
+          "stderr",
+          "ENOTDIR: not a directory, open '/tmp/workspace/MEMORY.md'",
+          1,
+        );
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager({ mode: "status" });
+    await expect(manager.sync({ reason: "manual" })).rejects.toThrow(
+      "ENOTDIR: not a directory, open '/tmp/workspace/MEMORY.md'",
+    );
+
+    const removeCalls = spawnMock.mock.calls
+      .map((call) => call[1] as string[])
+      .filter((args) => args[0] === "collection" && args[1] === "remove");
+    expect(removeCalls).toHaveLength(0);
+
+    await manager.close();
+  });
+
   it("uses configured qmd search mode command", async () => {
     cfg = {
       ...cfg,
