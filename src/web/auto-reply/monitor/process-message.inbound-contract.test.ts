@@ -8,6 +8,7 @@ let capturedCtx: unknown;
 let capturedDispatchParams: unknown;
 let sessionDir: string | undefined;
 let sessionStorePath: string;
+let backgroundTasks: Set<Promise<unknown>>;
 
 vi.mock("../../../auto-reply/reply/provider-dispatcher.js", () => ({
   // oxlint-disable-next-line typescript/no-explicit-any
@@ -19,7 +20,12 @@ vi.mock("../../../auto-reply/reply/provider-dispatcher.js", () => ({
 }));
 
 vi.mock("./last-route.js", () => ({
-  trackBackgroundTask: () => undefined,
+  trackBackgroundTask: (tasks: Set<Promise<unknown>>, task: Promise<unknown>) => {
+    tasks.add(task);
+    task.finally(() => {
+      tasks.delete(task);
+    });
+  },
   updateLastRouteInBackground: vi.fn(),
 }));
 
@@ -29,11 +35,13 @@ describe("web processMessage inbound contract", () => {
   beforeEach(async () => {
     capturedCtx = undefined;
     capturedDispatchParams = undefined;
+    backgroundTasks = new Set();
     sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-process-message-"));
     sessionStorePath = path.join(sessionDir, "sessions.json");
   });
 
   afterEach(async () => {
+    await Promise.allSettled(Array.from(backgroundTasks));
     if (sessionDir) {
       await fs.rm(sessionDir, { recursive: true, force: true });
       sessionDir = undefined;
@@ -73,7 +81,7 @@ describe("web processMessage inbound contract", () => {
       replyResolver: (async () => undefined) as any,
       // oxlint-disable-next-line typescript/no-explicit-any
       replyLogger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} } as any,
-      backgroundTasks: new Set(),
+      backgroundTasks,
       rememberSentText: (_text: string | undefined, _opts: unknown) => {},
       echoHas: () => false,
       echoForget: () => {},
@@ -119,7 +127,7 @@ describe("web processMessage inbound contract", () => {
       replyResolver: (async () => undefined) as any,
       // oxlint-disable-next-line typescript/no-explicit-any
       replyLogger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} } as any,
-      backgroundTasks: new Set(),
+      backgroundTasks,
       rememberSentText: (_text: string | undefined, _opts: unknown) => {},
       echoHas: () => false,
       echoForget: () => {},
@@ -181,7 +189,7 @@ describe("web processMessage inbound contract", () => {
       replyResolver: (async () => undefined) as any,
       // oxlint-disable-next-line typescript/no-explicit-any
       replyLogger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} } as any,
-      backgroundTasks: new Set(),
+      backgroundTasks,
       rememberSentText: (_text: string | undefined, _opts: unknown) => {},
       echoHas: () => false,
       echoForget: () => {},
@@ -246,7 +254,7 @@ describe("web processMessage inbound contract", () => {
       replyResolver: (async () => undefined) as any,
       // oxlint-disable-next-line typescript/no-explicit-any
       replyLogger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} } as any,
-      backgroundTasks: new Set(),
+      backgroundTasks,
       rememberSentText: (_text: string | undefined, _opts: unknown) => {},
       echoHas: () => false,
       echoForget: () => {},
