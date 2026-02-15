@@ -299,6 +299,29 @@ async function promptBaseUrlAndKey(params: {
   return { baseUrl: baseUrlInput.trim(), apiKey: apiKeyInput.trim() };
 }
 
+type CustomApiRetryChoice = "baseUrl" | "model" | "both";
+
+async function promptCustomApiRetryChoice(prompter: WizardPrompter): Promise<CustomApiRetryChoice> {
+  return await prompter.select({
+    message: "What would you like to change?",
+    options: [
+      { value: "baseUrl", label: "Change base URL" },
+      { value: "model", label: "Change model" },
+      { value: "both", label: "Change base URL and model" },
+    ],
+  });
+}
+
+async function promptCustomApiModelId(prompter: WizardPrompter): Promise<string> {
+  return (
+    await prompter.text({
+      message: "Model ID",
+      placeholder: "e.g. llama3, claude-3-7-sonnet",
+      validate: (val) => (val.trim() ? undefined : "Model ID is required"),
+    })
+  ).trim();
+}
+
 function resolveProviderApi(
   compatibility: CustomApiCompatibility,
 ): "openai-completions" | "anthropic-messages" {
@@ -504,13 +527,7 @@ export async function promptCustomApiConfig(params: {
     })),
   });
 
-  let modelId = (
-    await prompter.text({
-      message: "Model ID",
-      placeholder: "e.g. llama3, claude-3-7-sonnet",
-      validate: (val) => (val.trim() ? undefined : "Model ID is required"),
-    })
-  ).trim();
+  let modelId = await promptCustomApiModelId(prompter);
 
   let compatibility: CustomApiCompatibility | null =
     compatibilityChoice === "unknown" ? null : compatibilityChoice;
@@ -536,14 +553,7 @@ export async function promptCustomApiConfig(params: {
             "This endpoint did not respond to OpenAI or Anthropic style requests.",
             "Endpoint detection",
           );
-          const retryChoice = await prompter.select({
-            message: "What would you like to change?",
-            options: [
-              { value: "baseUrl", label: "Change base URL" },
-              { value: "model", label: "Change model" },
-              { value: "both", label: "Change base URL and model" },
-            ],
-          });
+          const retryChoice = await promptCustomApiRetryChoice(prompter);
           if (retryChoice === "baseUrl" || retryChoice === "both") {
             const retryInput = await promptBaseUrlAndKey({
               prompter,
@@ -553,13 +563,7 @@ export async function promptCustomApiConfig(params: {
             apiKey = retryInput.apiKey;
           }
           if (retryChoice === "model" || retryChoice === "both") {
-            modelId = (
-              await prompter.text({
-                message: "Model ID",
-                placeholder: "e.g. llama3, claude-3-7-sonnet",
-                validate: (val) => (val.trim() ? undefined : "Model ID is required"),
-              })
-            ).trim();
+            modelId = await promptCustomApiModelId(prompter);
           }
           continue;
         }
@@ -584,14 +588,7 @@ export async function promptCustomApiConfig(params: {
     } else {
       verifySpinner.stop(`Verification failed: ${formatVerificationError(result.error)}`);
     }
-    const retryChoice = await prompter.select({
-      message: "What would you like to change?",
-      options: [
-        { value: "baseUrl", label: "Change base URL" },
-        { value: "model", label: "Change model" },
-        { value: "both", label: "Change base URL and model" },
-      ],
-    });
+    const retryChoice = await promptCustomApiRetryChoice(prompter);
     if (retryChoice === "baseUrl" || retryChoice === "both") {
       const retryInput = await promptBaseUrlAndKey({
         prompter,
@@ -601,13 +598,7 @@ export async function promptCustomApiConfig(params: {
       apiKey = retryInput.apiKey;
     }
     if (retryChoice === "model" || retryChoice === "both") {
-      modelId = (
-        await prompter.text({
-          message: "Model ID",
-          placeholder: "e.g. llama3, claude-3-7-sonnet",
-          validate: (val) => (val.trim() ? undefined : "Model ID is required"),
-        })
-      ).trim();
+      modelId = await promptCustomApiModelId(prompter);
     }
     if (compatibilityChoice === "unknown") {
       compatibility = null;
