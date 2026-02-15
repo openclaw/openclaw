@@ -17,7 +17,7 @@ describe("buildBootstrapContextFiles", () => {
   it("skips malformed bootstrap file entries at runtime", () => {
     let warned = false;
     const result = buildBootstrapContextFiles(
-      [{ name: DEFAULT_AGENTS_FILENAME, missing: false } as any],
+      [{ name: DEFAULT_AGENTS_FILENAME, missing: false } as unknown as WorkspaceBootstrapFile],
       { warn: () => (warned = true) },
     );
     expect(result).toEqual([]);
