@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { loadConfig, resolveGatewayPort } from "../config/config.js";
-import { ensureExplicitGatewayAuth, resolveExplicitGatewayAuth } from "../gateway/call.js";
+import { loadConfig } from "../config/config.js";
+import {
+  buildGatewayConnectionDetails,
+  ensureExplicitGatewayAuth,
+  resolveExplicitGatewayAuth,
+} from "../gateway/call.js";
 import { GatewayClient } from "../gateway/client.js";
 import { GATEWAY_CLIENT_CAPS } from "../gateway/protocol/client-info.js";
 import {
@@ -227,7 +231,6 @@ export function resolveGatewayConnection(opts: GatewayConnectionOptions) {
   const remote = isRemoteMode ? config.gateway?.remote : undefined;
   const authToken = config.gateway?.auth?.token;
 
-  const localPort = resolveGatewayPort(config);
   const urlOverride =
     typeof opts.url === "string" && opts.url.trim().length > 0 ? opts.url.trim() : undefined;
   const explicitAuth = resolveExplicitGatewayAuth({ token: opts.token, password: opts.password });
@@ -236,12 +239,10 @@ export function resolveGatewayConnection(opts: GatewayConnectionOptions) {
     auth: explicitAuth,
     errorHint: "Fix: pass --token or --password when using --url.",
   });
-  const url =
-    urlOverride ||
-    (typeof remote?.url === "string" && remote.url.trim().length > 0
-      ? remote.url.trim()
-      : undefined) ||
-    `ws://127.0.0.1:${localPort}`;
+  const url = buildGatewayConnectionDetails({
+    config,
+    ...(urlOverride ? { url: urlOverride } : {}),
+  }).url;
 
   const token =
     explicitAuth.token ||
