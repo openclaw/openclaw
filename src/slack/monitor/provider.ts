@@ -227,7 +227,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const handleSlackMessage = createSlackMessageHandler({ ctx, account });
 
   registerSlackMonitorEvents({ ctx, account, handleSlackMessage });
-  registerSlackMonitorSlashCommands({ ctx, account });
+  await registerSlackMonitorSlashCommands({ ctx, account });
   if (slackMode === "http" && slackHttpHandler) {
     unregisterHttpHandler = registerSlackHttpHandler({
       path: slackWebhookPath,
