@@ -1,0 +1,148 @@
+{
+  "dashboard": {
+    "id": null,
+    "title": "OpenClaw Business Metrics",
+    "tags": ["openclaw", "business", "trading", "costs"],
+    "timezone": "browser",
+    "panels": [
+      {
+        "id": 1,
+        "title": "Daily Model Costs",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "increase(openclaw_cost_usd_total[1d])",
+            "refId": "A",
+            "legendFormat": "{{provider}}/{{model}}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "currencyUSD",
+            "color": {"mode": "palette-classic"}
+          }
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}
+      },
+      {
+        "id": 2,
+        "title": "Token Efficiency",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "rate(openclaw_tokens_total{openclaw_token=\"output\"}[5m]) / rate(openclaw_tokens_total{openclaw_token=\"input\"}[5m])",
+            "refId": "A",
+            "legendFormat": "Output/Input Ratio"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}
+      },
+      {
+        "id": 3,
+        "title": "Cost Per Interaction",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "increase(openclaw_cost_usd_total[1h]) / increase(openclaw_message_processed_total{outcome=\"success\"}[1h])",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "currencyUSD",
+            "decimals": 4,
+            "thresholds": {
+              "steps": [
+                {"color": "green", "value": 0},
+                {"color": "yellow", "value": 0.10},
+                {"color": "red", "value": 0.50}
+              ]
+            }
+          }
+        },
+        "gridPos": {"h": 8, "w": 6, "x": 0, "y": 8}
+      },
+      {
+        "id": 4,
+        "title": "Success Rate",
+        "type": "stat", 
+        "targets": [
+          {
+            "expr": "rate(openclaw_message_processed_total{outcome=\"success\"}[1h]) / rate(openclaw_message_processed_total[1h])",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percentunit",
+            "thresholds": {
+              "steps": [
+                {"color": "red", "value": 0},
+                {"color": "yellow", "value": 0.8},
+                {"color": "green", "value": 0.95}
+              ]
+            }
+          }
+        },
+        "gridPos": {"h": 8, "w": 6, "x": 6, "y": 8}
+      },
+      {
+        "id": 5,
+        "title": "Hourly Usage Pattern",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "rate(openclaw_message_processed_total[1h])",
+            "refId": "A",
+            "legendFormat": "Messages/hour"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8}
+      },
+      {
+        "id": 6,
+        "title": "Model Usage Distribution",
+        "type": "piechart",
+        "targets": [
+          {
+            "expr": "sum by (openclaw_model) (increase(openclaw_tokens_total[24h]))",
+            "refId": "A",
+            "legendFormat": "{{openclaw_model}}"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16}
+      },
+      {
+        "id": 7,
+        "title": "Context Window Utilization",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "openclaw_context_tokens{openclaw_context=\"used\"} / openclaw_context_tokens{openclaw_context=\"limit\"} * 100",
+            "refId": "A",
+            "legendFormat": "Context Usage %"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percent",
+            "max": 100,
+            "thresholds": {
+              "steps": [
+                {"color": "green", "value": 0},
+                {"color": "yellow", "value": 70},
+                {"color": "red", "value": 90}
+              ]
+            }
+          }
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16}
+      }
+    ],
+    "time": {
+      "from": "now-24h",
+      "to": "now"
+    },
+    "refresh": "1m"
+  }
+}
