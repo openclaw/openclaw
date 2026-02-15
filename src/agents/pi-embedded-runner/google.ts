@@ -14,6 +14,8 @@ import {
   isGoogleModelApi,
   sanitizeGoogleTurnOrdering,
   sanitizeSessionMessagesImages,
+  stripInvalidThinkingSignatures,
+  downgradeThinkingBlocksOnModelSwitch,
 } from "../pi-embedded-helpers.js";
 import { cleanToolSchemaForGemini } from "../pi-tools.schema.js";
 import {
@@ -439,7 +441,12 @@ export async function sanitizeSessionHistory(params: {
   const sanitizedThinking = policy.normalizeAntigravityThinkingBlocks
     ? sanitizeAntigravityThinkingBlocks(sanitizedImages)
     : sanitizedImages;
-  const sanitizedToolCalls = sanitizeToolCallInputs(sanitizedThinking);
+  // Strip thinking blocks whose thinkingSignature is a bare field-name artifact from the
+  // openai-completions path (e.g. "reasoning_text"). These cannot be round-tripped through
+  // openai-responses (JSON.parse crash) or openai-completions → Copilot proxy → Anthropic
+  // ("Invalid signature in thinking block"). Must run before downgradeOpenAIReasoningBlocks.
+  const sanitizedThinkingSigs = stripInvalidThinkingSignatures(sanitizedThinking);
+  const sanitizedToolCalls = sanitizeToolCallInputs(sanitizedThinkingSigs);
   const repairedTools = policy.repairToolUseResultPairing
     ? sanitizeToolUseResultPairing(sanitizedToolCalls)
     : sanitizedToolCalls;
@@ -457,10 +464,17 @@ export async function sanitizeSessionHistory(params: {
         modelId: params.modelId,
       })
     : false;
+  // When the model/provider changes, thinking signatures from the previous provider are
+  // not valid for the new one (e.g. OpenAI reasoning JSON sent via Copilot to Claude →
+  // "Invalid signature in thinking block" HTTP 400). Convert signed thinking blocks to
+  // text so reasoning context is preserved without cross-provider signature poisoning.
+  const sanitizedModelSwitch = modelChanged
+    ? downgradeThinkingBlocksOnModelSwitch(sanitizedToolResults)
+    : sanitizedToolResults;
   const sanitizedOpenAI =
     isOpenAIResponsesApi && modelChanged
-      ? downgradeOpenAIReasoningBlocks(sanitizedToolResults)
-      : sanitizedToolResults;
+      ? downgradeOpenAIReasoningBlocks(sanitizedModelSwitch)
+      : sanitizedModelSwitch;
 
   if (hasSnapshot && (!priorSnapshot || modelChanged)) {
     appendModelSnapshot(params.sessionManager, {

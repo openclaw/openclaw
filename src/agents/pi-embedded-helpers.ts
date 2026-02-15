@@ -40,7 +40,11 @@ export {
 } from "./pi-embedded-helpers/errors.js";
 export { isGoogleModelApi, sanitizeGoogleTurnOrdering } from "./pi-embedded-helpers/google.js";
 
-export { downgradeOpenAIReasoningBlocks } from "./pi-embedded-helpers/openai.js";
+export {
+  downgradeOpenAIReasoningBlocks,
+  downgradeThinkingBlocksOnModelSwitch,
+  stripInvalidThinkingSignatures,
+} from "./pi-embedded-helpers/openai.js";
 export {
   isEmptyAssistantMessageContent,
   sanitizeSessionMessagesImages,

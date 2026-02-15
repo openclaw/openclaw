@@ -32,12 +32,22 @@ export function makeInMemorySessionManager(entries: SessionEntry[]): SessionMana
 }
 
 export function makeReasoningAssistantMessages(opts?: {
-  thinkingSignature?: "object" | "json";
+  thinkingSignature?: "object" | "json" | "base64" | "field-name";
 }): AgentMessage[] {
-  const thinkingSignature: unknown =
-    opts?.thinkingSignature === "json"
-      ? JSON.stringify({ id: "rs_test", type: "reasoning" })
-      : { id: "rs_test", type: "reasoning" };
+  const thinkingSignature: unknown = (() => {
+    switch (opts?.thinkingSignature) {
+      case "json":
+        return JSON.stringify({ id: "rs_test", type: "reasoning" });
+      case "object":
+        return { id: "rs_test", type: "reasoning" };
+      case "base64":
+        return "dGhpcyBpcyBhIGZha2UgYmFzZTY0IHNpZ25hdHVyZSB0aGF0IGlzIGxvbmcgZW5vdWdo";
+      case "field-name":
+        return "reasoning_text";
+      default:
+        return { id: "rs_test", type: "reasoning" };
+    }
+  })();
 
   // Intentional: we want to build message payloads that can carry non-string
   // signatures, but core typing currently expects a string.

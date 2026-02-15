@@ -243,7 +243,7 @@ describe("sanitizeSessionHistory", () => {
     expect(result).toEqual(messages);
   });
 
-  it("downgrades openai reasoning only when the model changes", async () => {
+  it("downgrades openai reasoning to text when the model changes", async () => {
     const sessionEntries = [
       makeModelSnapshotEntry({
         provider: "anthropic",
@@ -263,7 +263,12 @@ describe("sanitizeSessionHistory", () => {
       sessionId: "test-session",
     });
 
-    expect(result).toEqual([]);
+    // Signed thinking blocks are converted to text on model switch (context preserved).
+    expect(result).toHaveLength(1);
+    const content = (result[0] as { content: unknown[] }).content;
+    expect(content).toHaveLength(1);
+    expect((content[0] as { type: string }).type).toBe("text");
+    expect((content[0] as { text: string }).text).toBe("reasoning");
   });
 
   it("drops orphaned toolResult entries when switching from openai history to anthropic", async () => {
@@ -312,5 +317,118 @@ describe("sanitizeSessionHistory", () => {
           (msg as { toolCallId?: string }).toolCallId === "tool_01VihkDRptyLpX1ApUPe7ooU",
       ),
     ).toBe(false);
+  });
+
+  it("downgrades signed thinking blocks to text when switching from azure-foundry to copilot", async () => {
+    const sessionEntries = [
+      makeModelSnapshotEntry({
+        provider: "azure-foundry",
+        modelApi: "openai-completions",
+        modelId: "gpt-52-chat",
+      }),
+    ];
+    const sessionManager = makeInMemorySessionManager(sessionEntries);
+    const messages = makeReasoningAssistantMessages({ thinkingSignature: "json" });
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-completions",
+      provider: "github-copilot",
+      modelId: "claude-opus-4-6",
+      sessionManager,
+      sessionId: "test-session",
+    });
+
+    // Thinking block should be converted to text, not kept with invalid signature.
+    expect(result).toHaveLength(1);
+    const content = (result[0] as { content: unknown[] }).content;
+    expect(content).toHaveLength(1);
+    expect((content[0] as { type: string }).type).toBe("text");
+    expect((content[0] as { text: string }).text).toBe("reasoning");
+  });
+
+  it("downgrades base64 anthropic signatures when switching to openai-completions", async () => {
+    const sessionEntries = [
+      makeModelSnapshotEntry({
+        provider: "github-copilot",
+        modelApi: "openai-completions",
+        modelId: "claude-opus-4-6",
+      }),
+    ];
+    const sessionManager = makeInMemorySessionManager(sessionEntries);
+    const messages = makeReasoningAssistantMessages({ thinkingSignature: "base64" });
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-completions",
+      provider: "azure-foundry",
+      modelId: "deepseek-v3-2",
+      sessionManager,
+      sessionId: "test-session",
+    });
+
+    expect(result).toHaveLength(1);
+    const content = (result[0] as { content: unknown[] }).content;
+    expect(content).toHaveLength(1);
+    expect((content[0] as { type: string }).type).toBe("text");
+    expect((content[0] as { text: string }).text).toBe("reasoning");
+  });
+
+  it("keeps unsigned thinking blocks when model changes", async () => {
+    const sessionEntries = [
+      makeModelSnapshotEntry({
+        provider: "azure-foundry",
+        modelApi: "openai-completions",
+        modelId: "gpt-52-chat",
+      }),
+    ];
+    const sessionManager = makeInMemorySessionManager(sessionEntries);
+    const messages: AgentMessage[] = [
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "some reasoning" },
+          { type: "text", text: "answer" },
+        ],
+      },
+    ] as unknown as AgentMessage[];
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-completions",
+      provider: "github-copilot",
+      modelId: "claude-opus-4-6",
+      sessionManager,
+      sessionId: "test-session",
+    });
+
+    const content = (result[0] as { content: unknown[] }).content;
+    expect(content).toHaveLength(2);
+    expect((content[0] as { type: string }).type).toBe("thinking");
+    expect((content[1] as { type: string }).type).toBe("text");
+  });
+
+  it("does not downgrade thinking blocks when provider has not changed", async () => {
+    const sessionEntries = [
+      makeModelSnapshotEntry({
+        provider: "github-copilot",
+        modelApi: "openai-completions",
+        modelId: "claude-opus-4-6",
+      }),
+    ];
+    const sessionManager = makeInMemorySessionManager(sessionEntries);
+    const messages = makeReasoningAssistantMessages({ thinkingSignature: "base64" });
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-completions",
+      provider: "github-copilot",
+      modelId: "claude-opus-4-6",
+      sessionManager,
+      sessionId: "test-session",
+    });
+
+    // Same model — thinking blocks should be preserved as-is.
+    expect(result).toEqual(messages);
   });
 });
