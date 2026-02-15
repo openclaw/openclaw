@@ -110,9 +110,13 @@ export async function runAgentTurnWithFallback(params: {
           return { skip: true };
         }
         let text = payload.text;
-        if (!params.isHeartbeat && text?.includes("HEARTBEAT_OK")) {
+        // Always strip HEARTBEAT_OK from streaming text — even during heartbeat
+        // runs.  The final delivery path (heartbeat visibility / showOk) handles
+        // whether the ack should be delivered; streaming must never leak the raw
+        // token to the channel.  (#16974)
+        if (text?.includes("HEARTBEAT_OK")) {
           const stripped = stripHeartbeatToken(text, {
-            mode: "message",
+            mode: params.isHeartbeat ? "heartbeat" : "message",
           });
           if (stripped.didStrip && !didLogHeartbeatStrip) {
             didLogHeartbeatStrip = true;
