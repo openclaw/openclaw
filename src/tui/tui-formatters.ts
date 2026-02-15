@@ -2,11 +2,23 @@ import { formatRawAssistantErrorForUi } from "../agents/pi-embedded-helpers.js";
 import { stripAnsi } from "../terminal/ansi.js";
 import { formatTokenCount } from "../utils/usage-format.js";
 
-const CONTROL_CHARS_RE = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g;
 const REPLACEMENT_CHAR_RE = /\uFFFD/g;
 const LONG_TOKEN_RE = /\S{97,}/g;
 const MAX_TOKEN_CHARS = 64;
 const BINARY_LINE_REPLACEMENT_THRESHOLD = 12;
+
+function stripControlChars(text: string): string {
+  let sanitized = "";
+  for (const char of text) {
+    const code = char.charCodeAt(0);
+    const isAsciiControl = code <= 0x1f && code !== 0x09 && code !== 0x0a && code !== 0x0d;
+    const isC1Control = code >= 0x7f && code <= 0x9f;
+    if (!isAsciiControl && !isC1Control) {
+      sanitized += char;
+    }
+  }
+  return sanitized;
+}
 
 function chunkToken(token: string, maxChars: number): string[] {
   if (token.length <= maxChars) {
@@ -35,7 +47,7 @@ export function sanitizeRenderableText(text: string): string {
     return text;
   }
   const withoutAnsi = stripAnsi(text);
-  const withoutControlChars = withoutAnsi.replace(CONTROL_CHARS_RE, "");
+  const withoutControlChars = stripControlChars(withoutAnsi);
   const redacted = withoutControlChars
     .split("\n")
     .map((line) => redactBinaryLikeLine(line))
