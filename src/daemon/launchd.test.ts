@@ -1,8 +1,5 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { PassThrough } from "node:stream";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   installLaunchAgent,
   isLaunchAgentListed,
@@ -11,115 +8,68 @@ import {
   resolveLaunchAgentPlistPath,
 } from "./launchd.js";
 
-function parseLaunchctlCalls(raw: string): string[][] {
-  return raw
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => line.split(/\s+/));
-}
+const state = vi.hoisted(() => ({
+  launchctlCalls: [] as string[][],
+  listOutput: "",
+  dirs: new Set<string>(),
+  files: new Map<string, string>(),
+}));
 
-async function writeLaunchctlStub(binDir: string) {
-  if (process.platform === "win32") {
-    const stubJsPath = path.join(binDir, "launchctl.js");
-    await fs.writeFile(
-      stubJsPath,
-      [
-        'import fs from "node:fs";',
-        "const args = process.argv.slice(2);",
-        "const logPath = process.env.OPENCLAW_TEST_LAUNCHCTL_LOG;",
-        "if (logPath) {",
-        '  fs.appendFileSync(logPath, args.join("\\t") + "\\n", "utf8");',
-        "}",
-        'if (args[0] === "list") {',
-        '  const output = process.env.OPENCLAW_TEST_LAUNCHCTL_LIST_OUTPUT || "";',
-        "  process.stdout.write(output);",
-        "}",
-        "process.exit(0);",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(binDir, "launchctl.cmd"),
-      `@echo off\r\nnode "%~dp0\\launchctl.js" %*\r\n`,
-      "utf8",
-    );
-    return;
+function normalizeLaunchctlArgs(file: string, args: string[]): string[] {
+  if (file === "launchctl") {
+    return args;
   }
-
-  const shPath = path.join(binDir, "launchctl");
-  await fs.writeFile(
-    shPath,
-    [
-      "#!/bin/sh",
-      'log_path="${OPENCLAW_TEST_LAUNCHCTL_LOG:-}"',
-      'if [ -n "$log_path" ]; then',
-      '  line=""',
-      '  for arg in "$@"; do',
-      '    if [ -n "$line" ]; then',
-      '      line="$line $arg"',
-      "    else",
-      '      line="$arg"',
-      "    fi",
-      "  done",
-      '  printf \'%s\\n\' "$line" >> "$log_path"',
-      "fi",
-      'if [ "$1" = "list" ]; then',
-      "  printf '%s' \"${OPENCLAW_TEST_LAUNCHCTL_LIST_OUTPUT:-}\"",
-      "fi",
-      "exit 0",
-      "",
-    ].join("\n"),
-    "utf8",
-  );
-  await fs.chmod(shPath, 0o755);
-}
-
-async function withLaunchctlStub(
-  options: { listOutput?: string },
-  run: (context: { env: Record<string, string | undefined>; logPath: string }) => Promise<void>,
-) {
-  const originalPath = process.env.PATH;
-  const originalLogPath = process.env.OPENCLAW_TEST_LAUNCHCTL_LOG;
-  const originalListOutput = process.env.OPENCLAW_TEST_LAUNCHCTL_LIST_OUTPUT;
-
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-launchctl-test-"));
-  try {
-    const binDir = path.join(tmpDir, "bin");
-    const homeDir = path.join(tmpDir, "home");
-    const logPath = path.join(tmpDir, "launchctl.log");
-    await fs.mkdir(binDir, { recursive: true });
-    await fs.mkdir(homeDir, { recursive: true });
-
-    await writeLaunchctlStub(binDir);
-
-    process.env.OPENCLAW_TEST_LAUNCHCTL_LOG = logPath;
-    process.env.OPENCLAW_TEST_LAUNCHCTL_LIST_OUTPUT = options.listOutput ?? "";
-    process.env.PATH = `${binDir}${path.delimiter}${originalPath ?? ""}`;
-
-    await run({
-      env: {
-        HOME: homeDir,
-        OPENCLAW_PROFILE: "default",
-      },
-      logPath,
-    });
-  } finally {
-    process.env.PATH = originalPath;
-    if (originalLogPath === undefined) {
-      delete process.env.OPENCLAW_TEST_LAUNCHCTL_LOG;
-    } else {
-      process.env.OPENCLAW_TEST_LAUNCHCTL_LOG = originalLogPath;
-    }
-    if (originalListOutput === undefined) {
-      delete process.env.OPENCLAW_TEST_LAUNCHCTL_LIST_OUTPUT;
-    } else {
-      process.env.OPENCLAW_TEST_LAUNCHCTL_LIST_OUTPUT = originalListOutput;
-    }
-    await fs.rm(tmpDir, { recursive: true, force: true });
+  const idx = args.indexOf("launchctl");
+  if (idx >= 0) {
+    return args.slice(idx + 1);
   }
+  return args;
 }
+
+vi.mock("./exec-file.js", () => ({
+  execFileUtf8: vi.fn(async (file: string, args: string[]) => {
+    const call = normalizeLaunchctlArgs(file, args);
+    state.launchctlCalls.push(call);
+    if (call[0] === "list") {
+      return { stdout: state.listOutput, stderr: "", code: 0 };
+    }
+    return { stdout: "", stderr: "", code: 0 };
+  }),
+}));
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  const wrapped = {
+    ...actual,
+    access: vi.fn(async (p: string) => {
+      const key = String(p);
+      if (state.files.has(key) || state.dirs.has(key)) {
+        return;
+      }
+      throw new Error(`ENOENT: no such file or directory, access '${key}'`);
+    }),
+    mkdir: vi.fn(async (p: string) => {
+      state.dirs.add(String(p));
+    }),
+    unlink: vi.fn(async (p: string) => {
+      state.files.delete(String(p));
+    }),
+    writeFile: vi.fn(async (p: string, data: string) => {
+      const key = String(p);
+      state.files.set(key, data);
+      state.dirs.add(String(key.split("/").slice(0, -1).join("/")));
+    }),
+  };
+  return { ...wrapped, default: wrapped };
+});
+
+beforeEach(() => {
+  state.launchctlCalls.length = 0;
+  state.listOutput = "";
+  state.dirs.clear();
+  state.files.clear();
+  vi.clearAllMocks();
+});
 
 describe("launchd runtime parsing", () => {
   it("parses state, pid, and exit status", () => {
@@ -140,92 +90,66 @@ describe("launchd runtime parsing", () => {
 
 describe("launchctl list detection", () => {
   it("detects the resolved label in launchctl list", async () => {
-    await withLaunchctlStub({ listOutput: "123 0 ai.openclaw.gateway\n" }, async ({ env }) => {
-      const listed = await isLaunchAgentListed({ env });
-      expect(listed).toBe(true);
+    state.listOutput = "123 0 ai.openclaw.gateway\n";
+    const listed = await isLaunchAgentListed({
+      env: { HOME: "/Users/test", OPENCLAW_PROFILE: "default" },
     });
+    expect(listed).toBe(true);
   });
 
   it("returns false when the label is missing", async () => {
-    await withLaunchctlStub({ listOutput: "123 0 com.other.service\n" }, async ({ env }) => {
-      const listed = await isLaunchAgentListed({ env });
-      expect(listed).toBe(false);
+    state.listOutput = "123 0 com.other.service\n";
+    const listed = await isLaunchAgentListed({
+      env: { HOME: "/Users/test", OPENCLAW_PROFILE: "default" },
     });
+    expect(listed).toBe(false);
   });
 });
 
 describe("launchd bootstrap repair", () => {
   it("bootstraps and kickstarts the resolved label", async () => {
-    await withLaunchctlStub({}, async ({ env, logPath }) => {
-      const repair = await repairLaunchAgentBootstrap({ env });
-      expect(repair.ok).toBe(true);
+    const env: Record<string, string | undefined> = {
+      HOME: "/Users/test",
+      OPENCLAW_PROFILE: "default",
+    };
+    const repair = await repairLaunchAgentBootstrap({ env });
+    expect(repair.ok).toBe(true);
 
-      const calls = parseLaunchctlCalls(await fs.readFile(logPath, "utf8"));
+    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+    const label = "ai.openclaw.gateway";
+    const plistPath = resolveLaunchAgentPlistPath(env);
 
-      const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
-      const label = "ai.openclaw.gateway";
-      const plistPath = resolveLaunchAgentPlistPath(env);
-
-      expect(calls).toContainEqual(["bootstrap", domain, plistPath]);
-      expect(calls).toContainEqual(["kickstart", "-k", `${domain}/${label}`]);
-    });
+    expect(state.launchctlCalls).toContainEqual(["bootstrap", domain, plistPath]);
+    expect(state.launchctlCalls).toContainEqual(["kickstart", "-k", `${domain}/${label}`]);
   });
 });
 
 describe("launchd install", () => {
   it("enables service before bootstrap (clears persisted disabled state)", async () => {
-    const originalPath = process.env.PATH;
-    const originalLogPath = process.env.OPENCLAW_TEST_LAUNCHCTL_LOG;
+    const env: Record<string, string | undefined> = {
+      HOME: "/Users/test",
+      OPENCLAW_PROFILE: "default",
+    };
+    await installLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+      programArguments: ["node", "-e", "process.exit(0)"],
+    });
 
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-launchctl-test-"));
-    try {
-      const binDir = path.join(tmpDir, "bin");
-      const homeDir = path.join(tmpDir, "home");
-      const logPath = path.join(tmpDir, "launchctl.log");
-      await fs.mkdir(binDir, { recursive: true });
-      await fs.mkdir(homeDir, { recursive: true });
+    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+    const label = "ai.openclaw.gateway";
+    const plistPath = resolveLaunchAgentPlistPath(env);
+    const serviceId = `${domain}/${label}`;
 
-      await writeLaunchctlStub(binDir);
-
-      process.env.OPENCLAW_TEST_LAUNCHCTL_LOG = logPath;
-      process.env.PATH = `${binDir}${path.delimiter}${originalPath ?? ""}`;
-
-      const env: Record<string, string | undefined> = {
-        HOME: homeDir,
-        OPENCLAW_PROFILE: "default",
-      };
-      await installLaunchAgent({
-        env,
-        stdout: new PassThrough(),
-        programArguments: ["node", "-e", "process.exit(0)"],
-      });
-
-      const calls = parseLaunchctlCalls(await fs.readFile(logPath, "utf8"));
-
-      const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
-      const label = "ai.openclaw.gateway";
-      const plistPath = resolveLaunchAgentPlistPath(env);
-      const serviceId = `${domain}/${label}`;
-
-      const enableCalls = calls.filter((c) => c[0] === "enable" && c[1] === serviceId);
-      expect(enableCalls).toHaveLength(1);
-
-      const enableIndex = calls.findIndex((c) => c[0] === "enable" && c[1] === serviceId);
-      const bootstrapIndex = calls.findIndex(
-        (c) => c[0] === "bootstrap" && c[1] === domain && c[2] === plistPath,
-      );
-      expect(enableIndex).toBeGreaterThanOrEqual(0);
-      expect(bootstrapIndex).toBeGreaterThanOrEqual(0);
-      expect(enableIndex).toBeLessThan(bootstrapIndex);
-    } finally {
-      process.env.PATH = originalPath;
-      if (originalLogPath === undefined) {
-        delete process.env.OPENCLAW_TEST_LAUNCHCTL_LOG;
-      } else {
-        process.env.OPENCLAW_TEST_LAUNCHCTL_LOG = originalLogPath;
-      }
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    }
+    const enableIndex = state.launchctlCalls.findIndex(
+      (c) => c[0] === "enable" && c[1] === serviceId,
+    );
+    const bootstrapIndex = state.launchctlCalls.findIndex(
+      (c) => c[0] === "bootstrap" && c[1] === domain && c[2] === plistPath,
+    );
+    expect(enableIndex).toBeGreaterThanOrEqual(0);
+    expect(bootstrapIndex).toBeGreaterThanOrEqual(0);
+    expect(enableIndex).toBeLessThan(bootstrapIndex);
   });
 });
 

@@ -73,10 +73,19 @@ describe("memory search async sync", () => {
     const pending = new Promise<void>(() => {});
     (manager as unknown as { sync: () => Promise<void> }).sync = vi.fn(async () => pending);
 
-    const resolved = await Promise.race([
-      manager.search("hello").then(() => true),
-      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 1000)),
-    ]);
+    const resolved = await new Promise<boolean>((resolve, reject) => {
+      const timeout = setTimeout(() => resolve(false), 1000);
+      void manager
+        .search("hello")
+        .then(() => {
+          clearTimeout(timeout);
+          resolve(true);
+        })
+        .catch((err) => {
+          clearTimeout(timeout);
+          reject(err);
+        });
+    });
     expect(resolved).toBe(true);
   });
 });

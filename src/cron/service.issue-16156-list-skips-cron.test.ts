@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CronEvent } from "./service.js";
 import { CronService } from "./service.js";
 
@@ -12,14 +12,14 @@ const noopLogger = {
   error: vi.fn(),
 };
 
+let fixtureRoot = "";
+let caseId = 0;
+
 async function makeStorePath() {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-16156-"));
-  return {
-    storePath: path.join(dir, "cron", "jobs.json"),
-    cleanup: async () => {
-      await fs.rm(dir, { recursive: true, force: true });
-    },
-  };
+  const dir = path.join(fixtureRoot, `case-${caseId++}`);
+  const storePath = path.join(dir, "cron", "jobs.json");
+  await fs.mkdir(path.dirname(storePath), { recursive: true });
+  return { storePath };
 }
 
 function createFinishedBarrier() {
@@ -44,6 +44,16 @@ function createFinishedBarrier() {
 }
 
 describe("#16156: cron.list() must not silently advance past-due recurring jobs", () => {
+  beforeAll(async () => {
+    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-16156-"));
+  });
+
+  afterAll(async () => {
+    if (fixtureRoot) {
+      await fs.rm(fixtureRoot, { recursive: true, force: true }).catch(() => undefined);
+    }
+  });
+
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2025-12-13T00:00:00.000Z"));
@@ -119,7 +129,6 @@ describe("#16156: cron.list() must not silently advance past-due recurring jobs"
     expect(updated?.state.nextRunAtMs).toBeGreaterThan(firstDueAt);
 
     cron.stop();
-    await store.cleanup();
   });
 
   it("does not skip a cron job when status() is called while the job is past-due", async () => {
@@ -172,7 +181,6 @@ describe("#16156: cron.list() must not silently advance past-due recurring jobs"
     expect(updated?.state.lastStatus).toBe("ok");
 
     cron.stop();
-    await store.cleanup();
   });
 
   it("still fills missing nextRunAtMs via list() for enabled jobs", async () => {
@@ -226,6 +234,5 @@ describe("#16156: cron.list() must not silently advance past-due recurring jobs"
     expect(job?.state.nextRunAtMs).toBeGreaterThan(nowMs);
 
     cron.stop();
-    await store.cleanup();
   });
 });

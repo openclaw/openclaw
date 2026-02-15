@@ -64,11 +64,27 @@ describe("runGatewayLoop", () => {
 
     const closeFirst = vi.fn(async () => {});
     const closeSecond = vi.fn(async () => {});
-    const start = vi
-      .fn<StartServer>()
-      .mockResolvedValueOnce({ close: closeFirst })
-      .mockResolvedValueOnce({ close: closeSecond })
-      .mockRejectedValueOnce(new Error("stop-loop"));
+
+    const start = vi.fn<StartServer>();
+    let resolveFirst: (() => void) | null = null;
+    const startedFirst = new Promise<void>((resolve) => {
+      resolveFirst = resolve;
+    });
+    start.mockImplementationOnce(async () => {
+      resolveFirst?.();
+      return { close: closeFirst };
+    });
+
+    let resolveSecond: (() => void) | null = null;
+    const startedSecond = new Promise<void>((resolve) => {
+      resolveSecond = resolve;
+    });
+    start.mockImplementationOnce(async () => {
+      resolveSecond?.();
+      return { close: closeSecond };
+    });
+
+    start.mockRejectedValueOnce(new Error("stop-loop"));
 
     const beforeSigterm = new Set(
       process.listeners("SIGTERM") as Array<(...args: unknown[]) => void>,
@@ -80,25 +96,24 @@ describe("runGatewayLoop", () => {
       process.listeners("SIGUSR1") as Array<(...args: unknown[]) => void>,
     );
 
-    const loopPromise = import("./run-loop.js").then(({ runGatewayLoop }) =>
-      runGatewayLoop({
-        start,
-        runtime: {
-          exit: vi.fn(),
-        } as { exit: (code: number) => never },
-      }),
-    );
+    const { runGatewayLoop } = await import("./run-loop.js");
+    const loopPromise = runGatewayLoop({
+      start,
+      runtime: {
+        exit: vi.fn(),
+      } as { exit: (code: number) => never },
+    });
 
     try {
-      await vi.waitFor(() => {
-        expect(start).toHaveBeenCalledTimes(1);
-      });
+      await startedFirst;
+      expect(start).toHaveBeenCalledTimes(1);
+      await new Promise<void>((resolve) => setImmediate(resolve));
 
       process.emit("SIGUSR1");
 
-      await vi.waitFor(() => {
-        expect(start).toHaveBeenCalledTimes(2);
-      });
+      await startedSecond;
+      expect(start).toHaveBeenCalledTimes(2);
+      await new Promise<void>((resolve) => setImmediate(resolve));
 
       expect(waitForActiveTasks).toHaveBeenCalledWith(30_000);
       expect(gatewayLog.warn).toHaveBeenCalledWith(DRAIN_TIMEOUT_LOG);
