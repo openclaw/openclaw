@@ -20,8 +20,8 @@ import { createEmbeddedPiSessionEventHandler } from "./pi-embedded-subscribe.han
 import { formatReasoningMessage, stripDowngradedToolCallText } from "./pi-embedded-utils.js";
 import { hasNonzeroUsage, normalizeUsage, type UsageLike } from "./usage.js";
 
-const THINKING_TAG_SCAN_RE = /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\s*>/gi;
-const FINAL_TAG_SCAN_RE = /<\s*(\/?)\s*final\s*>/gi;
+const THINKING_TAG_SCAN_RE = /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\b[^<>]*>/gi;
+const FINAL_TAG_SCAN_RE = /<\s*(\/?)\s*final\b[^<>]*>/gi;
 const log = createSubsystemLogger("agent/embedded");
 
 export type {
@@ -48,8 +48,20 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     deltaBuffer: "",
     blockBuffer: "",
     // Track if a streamed chunk opened a <think> block (stateful across chunks).
-    blockState: { thinking: false, final: false, inlineCode: createInlineCodeState() },
-    partialBlockState: { thinking: false, final: false, inlineCode: createInlineCodeState() },
+    blockState: {
+      thinking: false,
+      final: false,
+      inlineCode: createInlineCodeState(),
+      buffer: "",
+      customHeaderThinking: false,
+    },
+    partialBlockState: {
+      thinking: false,
+      final: false,
+      inlineCode: createInlineCodeState(),
+      buffer: "",
+      customHeaderThinking: false,
+    },
     lastStreamedAssistant: undefined,
     lastStreamedAssistantCleaned: undefined,
     emittedAssistantUpdate: false,
@@ -104,9 +116,13 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     state.blockState.thinking = false;
     state.blockState.final = false;
     state.blockState.inlineCode = createInlineCodeState();
+    state.blockState.buffer = "";
+    state.blockState.customHeaderThinking = false;
     state.partialBlockState.thinking = false;
     state.partialBlockState.final = false;
     state.partialBlockState.inlineCode = createInlineCodeState();
+    state.partialBlockState.buffer = "";
+    state.partialBlockState.customHeaderThinking = false;
     state.lastStreamedAssistant = undefined;
     state.lastStreamedAssistantCleaned = undefined;
     state.emittedAssistantUpdate = false;
@@ -347,43 +363,191 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     }
   };
 
+  const detectPartialTagsOrHeaders = (
+    text: string,
+    inlineCode?: InlineCodeState,
+  ): string | null => {
+    // Check for potential partial tag at end
+    const lastOpenIndex = text.lastIndexOf("<");
+    if (lastOpenIndex !== -1 && text.length - lastOpenIndex < 200) {
+      const hasClose = text.indexOf(">", lastOpenIndex) !== -1;
+      if (!hasClose) {
+        const checkState = inlineCode ?? createInlineCodeState();
+        const tempSpans = buildCodeSpanIndex(text, checkState);
+        if (!tempSpans.isInside(lastOpenIndex)) {
+          return text.slice(lastOpenIndex);
+        }
+      }
+    }
+
+    // Check for partial custom headers
+    if (text.length > 0) {
+      const tail = text.slice(-15);
+      const keywords = ["Thinking:", "Analysis:", "Output:"];
+      for (const kw of keywords) {
+        for (let len = 3; len < kw.length; len++) {
+          const sub = kw.slice(0, len);
+          if (tail.endsWith(sub)) {
+            const matchStartInfo = text.length - len;
+            const charBefore = matchStartInfo > 0 ? text[matchStartInfo - 1] : "\n";
+            if (charBefore === "\n" || charBefore === " " || matchStartInfo === 0) {
+              const checkState = inlineCode ?? createInlineCodeState();
+              const tempSpans = buildCodeSpanIndex(text, checkState);
+              if (!tempSpans.isInside(matchStartInfo)) {
+                return text.slice(matchStartInfo);
+              }
+            }
+          }
+        }
+      }
+    }
+    return null;
+  };
+
+  const stripCustomThinkingHeaders = (
+    text: string,
+    state: { customHeaderThinking: boolean },
+    inlineStateStart: InlineCodeState,
+  ): string => {
+    const START_HEADER_RE = /(^|[\s\n])(Thinking:|Analysis:)\s*/g;
+    const END_HEADER_RE = /(?:^|\n)(Output:)\s*/g;
+
+    let processingText = text;
+    let customLastIndex = 0;
+
+    // If we are already in custom thinking, look for end
+    if (state.customHeaderThinking) {
+      const codeSpans = buildCodeSpanIndex(processingText, inlineStateStart);
+      let endMatch: RegExpExecArray | null = null;
+      let foundEnd = false;
+
+      while ((endMatch = END_HEADER_RE.exec(processingText)) !== null) {
+        const idx = endMatch.index;
+        if (codeSpans.isInside(idx)) {
+          continue;
+        }
+        customLastIndex = idx + endMatch[0].length;
+        state.customHeaderThinking = false;
+        foundEnd = true;
+        break;
+      }
+
+      if (!foundEnd) {
+        return ""; // Strip everything
+      }
+      processingText = processingText.slice(customLastIndex);
+    }
+
+    // Check for New Start Headers in remaining text
+    let textToScan = processingText;
+    let finalOutput = "";
+
+    while (true) {
+      const currentSpans = buildCodeSpanIndex(textToScan, inlineStateStart);
+      if (state.customHeaderThinking) {
+        let endMatch: RegExpExecArray | null = null;
+        let found = false;
+        END_HEADER_RE.lastIndex = 0;
+        while ((endMatch = END_HEADER_RE.exec(textToScan)) !== null) {
+          if (!currentSpans.isInside(endMatch.index)) {
+            const end = endMatch.index + endMatch[0].length;
+            textToScan = textToScan.slice(end);
+            state.customHeaderThinking = false;
+            found = true;
+            break;
+          }
+        }
+        if (!found) {
+          textToScan = "";
+          break;
+        }
+      } else {
+        let startMatch: RegExpExecArray | null = null;
+        let found = false;
+        START_HEADER_RE.lastIndex = 0;
+        while ((startMatch = START_HEADER_RE.exec(textToScan)) !== null) {
+          if (!currentSpans.isInside(startMatch.index)) {
+            const start = startMatch.index;
+            finalOutput += textToScan.slice(0, start) + (startMatch[1] || "");
+            const consumed = startMatch[0].length;
+            textToScan = textToScan.slice(start + consumed);
+            state.customHeaderThinking = true;
+            found = true;
+            break;
+          }
+        }
+        if (!found) {
+          finalOutput += textToScan;
+          textToScan = "";
+          break;
+        }
+      }
+      if (!textToScan) {
+        break;
+      }
+    }
+    return finalOutput;
+  };
+
   const stripBlockTags = (
     text: string,
-    state: { thinking: boolean; final: boolean; inlineCode?: InlineCodeState },
+    state: {
+      thinking: boolean;
+      final: boolean;
+      inlineCode?: InlineCodeState;
+      buffer: string;
+      customHeaderThinking: boolean;
+    },
   ): string => {
-    if (!text) {
-      return text;
+    // 0. Handle buffering for split tags and split headers
+    let processingText = (state.buffer || "") + (text || "");
+    state.buffer = "";
+
+    if (!processingText) {
+      return "";
+    }
+
+    // Check for partial tags or custom headers at end of chunk
+    const partialBuffer = detectPartialTagsOrHeaders(processingText, state.inlineCode);
+    if (partialBuffer) {
+      const splitIdx = processingText.length - partialBuffer.length;
+      state.buffer = partialBuffer;
+      processingText = processingText.slice(0, splitIdx);
+    }
+
+    if (!processingText && state.buffer) {
+      return "";
     }
 
     const inlineStateStart = state.inlineCode ?? createInlineCodeState();
-    const codeSpans = buildCodeSpanIndex(text, inlineStateStart);
 
-    // 1. Handle <think> blocks (stateful, strip content inside)
+    // 0.5 Handle Custom Headers (Thinking: / Analysis:)
+    processingText = stripCustomThinkingHeaders(processingText, state, inlineStateStart);
+
+    // 1. Handle <think> blocks (standard logic)
+    const resultCodeSpans = buildCodeSpanIndex(processingText, inlineStateStart);
     let processed = "";
     THINKING_TAG_SCAN_RE.lastIndex = 0;
     let lastIndex = 0;
     let inThinking = state.thinking;
-    for (const match of text.matchAll(THINKING_TAG_SCAN_RE)) {
+    for (const match of processingText.matchAll(THINKING_TAG_SCAN_RE)) {
       const idx = match.index ?? 0;
-      if (codeSpans.isInside(idx)) {
+      if (resultCodeSpans.isInside(idx)) {
         continue;
       }
       if (!inThinking) {
-        processed += text.slice(lastIndex, idx);
+        processed += processingText.slice(lastIndex, idx);
       }
       const isClose = match[1] === "/";
       inThinking = !isClose;
       lastIndex = idx + match[0].length;
     }
     if (!inThinking) {
-      processed += text.slice(lastIndex);
+      processed += processingText.slice(lastIndex);
     }
     state.thinking = inThinking;
 
-    // 2. Handle <final> blocks (stateful, strip content OUTSIDE)
-    // If enforcement is disabled, we still strip the tags themselves to prevent
-    // hallucinations (e.g. Minimax copying the style) from leaking, but we
-    // do not enforce buffering/extraction logic.
+    // 2. Handle <final> blocks...
     const finalCodeSpans = buildCodeSpanIndex(processed, inlineStateStart);
     if (!params.enforceFinalTag) {
       state.inlineCode = finalCodeSpans.inlineState;
@@ -391,7 +555,6 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       return stripTagsOutsideCodeSpans(processed, FINAL_TAG_SCAN_RE, finalCodeSpans.isInside);
     }
 
-    // If enforcement is enabled, only return text that appeared inside a <final> block.
     let result = "";
     FINAL_TAG_SCAN_RE.lastIndex = 0;
     let lastFinalIndex = 0;
@@ -423,18 +586,13 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     }
     state.final = inFinal;
 
-    // Strict Mode: If enforcing final tags, we MUST NOT return content unless
-    // we have seen a <final> tag. Otherwise, we leak "thinking out loud" text
-    // (e.g. "**Locating Manulife**...") that the model emitted without <think> tags.
     if (!everInFinal) {
       return "";
     }
 
-    // Hardened Cleanup: Remove any remaining <final> tags that might have been
-    // missed (e.g. nested tags or hallucinations) to prevent leakage.
-    const resultCodeSpans = buildCodeSpanIndex(result, inlineStateStart);
-    state.inlineCode = resultCodeSpans.inlineState;
-    return stripTagsOutsideCodeSpans(result, FINAL_TAG_SCAN_RE, resultCodeSpans.isInside);
+    const strictResultCodeSpans = buildCodeSpanIndex(result, inlineStateStart);
+    state.inlineCode = strictResultCodeSpans.inlineState;
+    return stripTagsOutsideCodeSpans(result, FINAL_TAG_SCAN_RE, strictResultCodeSpans.isInside);
   };
 
   const stripTagsOutsideCodeSpans = (
@@ -505,6 +663,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     if (!cleanedText && (!mediaUrls || mediaUrls.length === 0) && !audioAsVoice) {
       return;
     }
+
     void params.onBlockReply({
       text: cleanedText,
       mediaUrls: mediaUrls?.length ? mediaUrls : undefined,

@@ -137,6 +137,8 @@ export function handleMessageUpdate(
       thinking: false,
       final: false,
       inlineCode: createInlineCodeState(),
+      buffer: "",
+      customHeaderThinking: false,
     })
     .trim();
   if (next) {
@@ -231,7 +233,12 @@ export function handleMessageEnd(
   });
 
   const text = resolveSilentReplyFallbackText({
-    text: ctx.stripBlockTags(rawText, { thinking: false, final: false }),
+    text: ctx.stripBlockTags(rawText, {
+      thinking: false,
+      final: false,
+      buffer: "",
+      customHeaderThinking: false,
+    }),
     messagingToolSentTexts: ctx.state.messagingToolSentTexts,
   });
   const rawThinking =
@@ -389,6 +396,8 @@ export function handleMessageEnd(
   ctx.state.blockState.thinking = false;
   ctx.state.blockState.final = false;
   ctx.state.blockState.inlineCode = createInlineCodeState();
+  ctx.state.blockState.buffer = "";
+  ctx.state.blockState.customHeaderThinking = false;
   ctx.state.lastStreamedAssistant = undefined;
   ctx.state.lastStreamedAssistantCleaned = undefined;
 }

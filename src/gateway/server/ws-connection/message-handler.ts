@@ -738,7 +738,7 @@ export function attachGatewayWsMessageHandler(params: {
                 }
               } else {
                 const allowedScopes = new Set(pairedScopes);
-                const missingScope = scopes.find((scope) => !allowedScopes.has(scope));
+                const missingScope = scopes.find((scope: string) => !allowedScopes.has(scope));
                 if (missingScope) {
                   const ok = await requirePairing("scope-upgrade", paired);
                   if (!ok) {
@@ -772,8 +772,8 @@ export function attachGatewayWsMessageHandler(params: {
           });
           const declared = Array.isArray(connectParams.commands) ? connectParams.commands : [];
           const filtered = declared
-            .map((cmd) => cmd.trim())
-            .filter((cmd) => cmd.length > 0 && allowlist.has(cmd));
+            .map((cmd: string) => cmd.trim())
+            .filter((cmd: string) => cmd.length > 0 && allowlist.has(cmd));
           connectParams.commands = filtered;
         }
 
