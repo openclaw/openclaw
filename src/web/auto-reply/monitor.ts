@@ -23,7 +23,7 @@ import {
   resolveHeartbeatSeconds,
   resolveTieredPolicy,
   sleepWithAbort,
-  type TieredReconnectPolicy,
+  type ReconnectPolicy,
 } from "../reconnect.js";
 import { formatError, getWebAuthAgeMs, readWebSelfId } from "../session.js";
 import { DEFAULT_WEB_MEDIA_BYTES } from "./constants.js";
@@ -95,7 +95,11 @@ export async function monitorWebChannel(
       ? configuredMaxMb * 1024 * 1024
       : DEFAULT_WEB_MEDIA_BYTES;
   const heartbeatSeconds = resolveHeartbeatSeconds(cfg, tuning.heartbeatSeconds);
-  const tieredPolicy = resolveTieredPolicy(cfg, tuning.tieredReconnect);
+  const tieredPolicy = resolveTieredPolicy(
+    cfg,
+    tuning.tieredReconnect ??
+      (tuning.reconnect ? { tier1: tuning.reconnect as ReconnectPolicy } : undefined),
+  );
   const baseMentionConfig = buildMentionConfig(cfg);
   const groupHistoryLimit =
     cfg.channels?.whatsapp?.accounts?.[tuning.accountId ?? ""]?.historyLimit ??
@@ -421,7 +425,7 @@ export async function monitorWebChannel(
         // Escalate to next tier
         const previousTier = currentTier;
         currentTier = (currentTier + 1) as 2 | 3;
-        tierAttempts = 0;
+        tierAttempts = 1;
         const nextPolicy = getTierPolicy(tieredPolicy, currentTier);
         reconnectLogger.warn(
           {

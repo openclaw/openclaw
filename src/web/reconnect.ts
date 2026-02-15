@@ -96,8 +96,13 @@ export function resolveTieredPolicy(
 ): TieredReconnectPolicy {
   const cfgTiers = (cfg.web as { tieredReconnect?: Partial<TieredReconnectPolicy> })
     ?.tieredReconnect;
+  const legacyReconnect = cfg.web?.reconnect;
+
+  // Map legacy reconnect config to tier1 if tieredReconnect not configured
+  const tier1Base = cfgTiers?.tier1 ?? (cfgTiers ? undefined : legacyReconnect);
+
   return {
-    tier1: normalizePolicy({ ...DEFAULT_TIER1_POLICY, ...cfgTiers?.tier1, ...overrides?.tier1 }),
+    tier1: normalizePolicy({ ...DEFAULT_TIER1_POLICY, ...tier1Base, ...overrides?.tier1 }),
     tier2: normalizePolicy({ ...DEFAULT_TIER2_POLICY, ...cfgTiers?.tier2, ...overrides?.tier2 }),
     tier3: normalizePolicy({ ...DEFAULT_TIER3_POLICY, ...cfgTiers?.tier3, ...overrides?.tier3 }),
   };
