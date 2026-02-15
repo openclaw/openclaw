@@ -256,6 +256,7 @@ export async function processMessage(
       const allowed = isAllowedBlueBubblesSender({
         allowFrom: effectiveAllowFrom,
         sender: message.senderId,
+        dmPolicy,
         chatId: message.chatId ?? undefined,
         chatGuid: message.chatGuid ?? undefined,
         chatIdentifier: message.chatIdentifier ?? undefined,
@@ -963,6 +964,7 @@ export async function processReaction(
       const allowed = isAllowedBlueBubblesSender({
         allowFrom: effectiveAllowFrom,
         sender: reaction.senderId,
+        dmPolicy,
         chatId: reaction.chatId ?? undefined,
         chatGuid: reaction.chatGuid ?? undefined,
         chatIdentifier: reaction.chatIdentifier ?? undefined,

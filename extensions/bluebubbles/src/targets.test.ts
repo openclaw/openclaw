@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  isAllowedBlueBubblesSender,
   looksLikeBlueBubblesTargetId,
   normalizeBlueBubblesMessagingTarget,
   parseBlueBubblesTarget,
@@ -179,5 +180,56 @@ describe("parseBlueBubblesAllowTarget", () => {
       kind: "handle",
       handle: "+19257864429",
     });
+  });
+});
+
+describe("isAllowedBlueBubblesSender", () => {
+  it("blocks unknown senders when allowFrom is empty and dmPolicy is pairing", () => {
+    expect(
+      isAllowedBlueBubblesSender({
+        allowFrom: [],
+        sender: "+15551234567",
+        dmPolicy: "pairing",
+      }),
+    ).toBe(false);
+  });
+
+  it("blocks unknown senders when allowFrom is empty and dmPolicy is allowlist", () => {
+    expect(
+      isAllowedBlueBubblesSender({
+        allowFrom: [],
+        sender: "+15551234567",
+        dmPolicy: "allowlist",
+      }),
+    ).toBe(false);
+  });
+
+  it("allows all when allowFrom is empty and dmPolicy is omitted (backward compat)", () => {
+    expect(
+      isAllowedBlueBubblesSender({
+        allowFrom: [],
+        sender: "+15551234567",
+      }),
+    ).toBe(true);
+  });
+
+  it("allows sender when they are in allowFrom (handle match)", () => {
+    expect(
+      isAllowedBlueBubblesSender({
+        allowFrom: ["+15551234567"],
+        sender: "+15551234567",
+        dmPolicy: "pairing",
+      }),
+    ).toBe(true);
+  });
+
+  it("allows all when allowFrom contains wildcard", () => {
+    expect(
+      isAllowedBlueBubblesSender({
+        allowFrom: ["*"],
+        sender: "+15559999999",
+        dmPolicy: "pairing",
+      }),
+    ).toBe(true);
   });
 });

@@ -325,12 +325,17 @@ export function parseBlueBubblesAllowTarget(raw: string): BlueBubblesAllowTarget
 export function isAllowedBlueBubblesSender(params: {
   allowFrom: Array<string | number>;
   sender: string;
+  dmPolicy?: string;
   chatId?: number | null;
   chatGuid?: string | null;
   chatIdentifier?: string | null;
 }): boolean {
   const allowFrom = params.allowFrom.map((entry) => String(entry).trim());
   if (allowFrom.length === 0) {
+    // When policy requires pairing or allowlist, empty list = no one allowed.
+    if (params.dmPolicy === "pairing" || params.dmPolicy === "allowlist") {
+      return false;
+    }
     return true;
   }
   if (allowFrom.includes("*")) {
