@@ -73,7 +73,7 @@ describe("loginChutes", () => {
     expect(creds.email).toBe("local-user");
   });
 
-  it("supports manual flow with pasted code", async () => {
+  it("supports manual flow with pasted redirect URL", async () => {
     const fetchFn: typeof fetch = async (input) => {
       const url = urlToString(input);
       if (url === CHUTES_TOKEN_ENDPOINT) {
@@ -95,6 +95,7 @@ describe("loginChutes", () => {
       return new Response("not found", { status: 404 });
     };
 
+    let capturedState: string | null = null;
     const creds = await loginChutes({
       app: {
         clientId: "cid_test",
@@ -102,8 +103,15 @@ describe("loginChutes", () => {
         scopes: ["openid"],
       },
       manual: true,
-      onAuth: async () => {},
-      onPrompt: async () => "code_manual",
+      onAuth: async ({ url }) => {
+        capturedState = new URL(url).searchParams.get("state");
+      },
+      onPrompt: async () => {
+        if (!capturedState) {
+          throw new Error("missing state");
+        }
+        return `?code=code_manual&state=${capturedState}`;
+      },
       fetchFn,
     });
 
@@ -154,7 +162,7 @@ describe("loginChutes", () => {
         expect(parsed.searchParams.get("state")).toBe("state_456");
         expect(parsed.searchParams.get("state")).not.toBe("verifier_123");
       },
-      onPrompt: async () => "code_manual",
+      onPrompt: async () => "?code=code_manual&state=state_456",
       fetchFn,
     });
 
