@@ -135,7 +135,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
     normalizeTarget: normalizeSignalMessagingTarget,
     targetResolver: {
       looksLikeId: looksLikeSignalTargetId,
-      hint: "<E.164|uuid:ID|group:ID|signal:group:ID|signal:+E.164>",
+      hint: "<E.164|uuid:ID|group:ID|signal:group:ID|signal:+E.164|signal:<uuid>>",
     },
   },
   setup: {
