@@ -1,0 +1,16 @@
+{
+  "id": "linear",
+  "name": "Linear",
+  "description": "Search, create, and manage Linear issues from your AI assistant.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "apiKey": { "type": "string" }
+    },
+    "required": ["apiKey"]
+  },
+  "uiHints": {
+    "apiKey": { "label": "Linear API Key", "sensitive": true, "placeholder": "lin_api_..." }
+  }
+}
