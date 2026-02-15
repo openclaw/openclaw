@@ -195,7 +195,12 @@ export function resolveSessionFilePath(
   const sessionsDir = resolveSessionsDir(opts);
   const candidate = entry?.sessionFile?.trim();
   if (candidate) {
-    return resolvePathWithinSessionsDir(sessionsDir, candidate, { agentId: opts?.agentId });
+    try {
+      return resolvePathWithinSessionsDir(sessionsDir, candidate, { agentId: opts?.agentId });
+    } catch {
+      // Session file path is invalid; fall back to default path
+      // This can happen with stale sessionFile entries in sessions.json
+    }
   }
   return resolveSessionTranscriptPathInDir(sessionId, sessionsDir);
 }
