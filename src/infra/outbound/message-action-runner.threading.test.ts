@@ -294,8 +294,9 @@ describe("runMessageAction threading auto-injection", () => {
   });
 
   it("hydrates signal group reaction targetAuthorUuid from inbound cache", async () => {
+    const groupId = "imrDE/AziMTrojCb1ngE9WcREGjKxjRq30krncLOZnM=";
     recordSignalReactionTarget({
-      groupId: "group-id",
+      groupId,
       messageId: "1737630212345",
       senderId: "uuid:123e4567-e89b-12d3-a456-426614174000",
     });
@@ -314,7 +315,7 @@ describe("runMessageAction threading auto-injection", () => {
       action: "react",
       params: {
         channel: "signal",
-        target: "signal:group:group-id",
+        target: `group:${groupId}`,
         messageId: "1737630212345",
         emoji: "✅",
       },
