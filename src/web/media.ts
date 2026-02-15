@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import { STATE_DIR } from "../config/paths.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { type MediaKind, maxBytesForKind, mediaKindFromMime } from "../media/constants.js";
 import { fetchRemoteMedia } from "../media/fetch.js";
@@ -31,12 +32,13 @@ type WebMediaOptions = {
   readFile?: (filePath: string) => Promise<Buffer>;
 };
 
-function getDefaultLocalRoots(): string[] {
-  const home = os.homedir();
+export function getDefaultLocalRoots(): string[] {
   return [
     os.tmpdir(),
-    path.join(home, ".openclaw", "media"),
-    path.join(home, ".openclaw", "agents"),
+    path.join(STATE_DIR, "media"),
+    path.join(STATE_DIR, "agents"),
+    path.join(STATE_DIR, "workspace"),
+    path.join(STATE_DIR, "sandboxes"),
   ];
 }
 

@@ -3,7 +3,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { resolveConfigPath, resolveGatewayLockDir, resolveStateDir } from "../config/paths.js";
 import { acquireGatewayLock, GatewayLockError } from "./gateway-lock.js";
 
@@ -62,6 +62,36 @@ function makeProcStat(pid: number, startTime: number) {
   return `${pid} (node) ${fields.join(" ")}`;
 }
 
+type PromiseSettlement<T> =
+  | { status: "resolved"; value: T }
+  | { status: "rejected"; reason: unknown };
+
+async function settleWithFakeTimers<T>(
+  promise: Promise<T>,
+  params: { stepMs: number; maxSteps: number },
+) {
+  const wrapped: Promise<PromiseSettlement<T>> = promise.then(
+    (value) => ({ status: "resolved", value }),
+    (reason) => ({ status: "rejected", reason }),
+  );
+
+  for (let step = 0; step < params.maxSteps; step += 1) {
+    const settled = await Promise.race([wrapped, Promise.resolve(null)]);
+    if (settled) {
+      return settled;
+    }
+    await vi.advanceTimersByTimeAsync(params.stepMs);
+  }
+
+  const final = await Promise.race([wrapped, Promise.resolve(null)]);
+  if (final) {
+    return final;
+  }
+  throw new Error(
+    `promise did not settle after ${params.maxSteps} steps of ${params.stepMs}ms fake time`,
+  );
+}
+
 describe("gateway lock", () => {
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-lock-"));
@@ -71,7 +101,12 @@ describe("gateway lock", () => {
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("blocks concurrent acquisition until release", async () => {
+    vi.useFakeTimers();
     const { env, cleanup } = await makeEnv();
     const lock = await acquireGatewayLock({
       env,
@@ -81,14 +116,17 @@ describe("gateway lock", () => {
     });
     expect(lock).not.toBeNull();
 
-    await expect(
-      acquireGatewayLock({
-        env,
-        allowInTests: true,
-        timeoutMs: 80,
-        pollIntervalMs: 5,
-      }),
-    ).rejects.toBeInstanceOf(GatewayLockError);
+    const pending = acquireGatewayLock({
+      env,
+      allowInTests: true,
+      timeoutMs: 80,
+      pollIntervalMs: 5,
+    });
+    const settlement = await settleWithFakeTimers(pending, { stepMs: 5, maxSteps: 40 });
+    expect(settlement.status).toBe("rejected");
+    expect((settlement as { status: "rejected"; reason: unknown }).reason).toBeInstanceOf(
+      GatewayLockError,
+    );
 
     await lock?.release();
     const lock2 = await acquireGatewayLock({
@@ -102,6 +140,7 @@ describe("gateway lock", () => {
   });
 
   it("treats recycled linux pid as stale when start time mismatches", async () => {
+    vi.useFakeTimers();
     const { env, cleanup } = await makeEnv();
     const { lockPath, configPath } = resolveLockPath(env);
     const payload = {
@@ -136,6 +175,7 @@ describe("gateway lock", () => {
   });
 
   it("keeps lock on linux when proc access fails unless stale", async () => {
+    vi.useFakeTimers();
     const { env, cleanup } = await makeEnv();
     const { lockPath, configPath } = resolveLockPath(env);
     const payload = {
@@ -154,16 +194,19 @@ describe("gateway lock", () => {
       return readFileSync(filePath as never, encoding as never) as never;
     });
 
-    await expect(
-      acquireGatewayLock({
-        env,
-        allowInTests: true,
-        timeoutMs: 50,
-        pollIntervalMs: 5,
-        staleMs: 10_000,
-        platform: "linux",
-      }),
-    ).rejects.toBeInstanceOf(GatewayLockError);
+    const pending = acquireGatewayLock({
+      env,
+      allowInTests: true,
+      timeoutMs: 50,
+      pollIntervalMs: 5,
+      staleMs: 10_000,
+      platform: "linux",
+    });
+    const settlement = await settleWithFakeTimers(pending, { stepMs: 5, maxSteps: 30 });
+    expect(settlement.status).toBe("rejected");
+    expect((settlement as { status: "rejected"; reason: unknown }).reason).toBeInstanceOf(
+      GatewayLockError,
+    );
 
     spy.mockRestore();
 

@@ -32,6 +32,7 @@ const log = createSubsystemLogger("memory");
 const SNIPPET_HEADER_RE = /@@\s*-([0-9]+),([0-9]+)/;
 const SEARCH_PENDING_UPDATE_WAIT_MS = 500;
 const MAX_QMD_OUTPUT_CHARS = 200_000;
+const NUL_MARKER_RE = /(?:\^@|\\0|\\x00|\\u0000|null\s*byte|nul\s*byte)/i;
 
 type CollectionRoot = {
   path: string;
@@ -97,6 +98,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   private db: SqliteDatabase | null = null;
   private lastUpdateAt: number | null = null;
   private lastEmbedAt: number | null = null;
+  private attemptedNullByteCollectionRepair = false;
 
   private constructor(params: {
     cfg: OpenClawConfig;
@@ -228,32 +230,80 @@ export class QmdMemoryManager implements MemorySearchManager {
         continue;
       }
       try {
-        await this.runQmd(
-          [
-            "collection",
-            "add",
-            collection.path,
-            "--name",
-            collection.name,
-            "--mask",
-            collection.pattern,
-          ],
-          {
-            timeoutMs: this.qmd.update.commandTimeoutMs,
-          },
-        );
+        await this.addCollection(collection.path, collection.name, collection.pattern);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        // Idempotency: qmd exits non-zero if the collection name already exists.
-        if (message.toLowerCase().includes("already exists")) {
-          continue;
-        }
-        if (message.toLowerCase().includes("exists")) {
+        if (this.isCollectionAlreadyExistsError(message)) {
           continue;
         }
         log.warn(`qmd collection add failed for ${collection.name}: ${message}`);
       }
     }
+  }
+
+  private isCollectionAlreadyExistsError(message: string): boolean {
+    const lower = message.toLowerCase();
+    return lower.includes("already exists") || lower.includes("exists");
+  }
+
+  private isCollectionMissingError(message: string): boolean {
+    const lower = message.toLowerCase();
+    return (
+      lower.includes("not found") || lower.includes("does not exist") || lower.includes("missing")
+    );
+  }
+
+  private async addCollection(pathArg: string, name: string, pattern: string): Promise<void> {
+    await this.runQmd(["collection", "add", pathArg, "--name", name, "--mask", pattern], {
+      timeoutMs: this.qmd.update.commandTimeoutMs,
+    });
+  }
+
+  private async removeCollection(name: string): Promise<void> {
+    await this.runQmd(["collection", "remove", name], {
+      timeoutMs: this.qmd.update.commandTimeoutMs,
+    });
+  }
+
+  private shouldRepairNullByteCollectionError(err: unknown): boolean {
+    const message = err instanceof Error ? err.message : String(err);
+    const lower = message.toLowerCase();
+    return (
+      (lower.includes("enotdir") || lower.includes("not a directory")) &&
+      NUL_MARKER_RE.test(message)
+    );
+  }
+
+  private async tryRepairNullByteCollections(err: unknown, reason: string): Promise<boolean> {
+    if (this.attemptedNullByteCollectionRepair) {
+      return false;
+    }
+    if (!this.shouldRepairNullByteCollectionError(err)) {
+      return false;
+    }
+    this.attemptedNullByteCollectionRepair = true;
+    log.warn(
+      `qmd update failed with suspected null-byte collection metadata (${reason}); rebuilding managed collections and retrying once`,
+    );
+    for (const collection of this.qmd.collections) {
+      try {
+        await this.removeCollection(collection.name);
+      } catch (removeErr) {
+        const removeMessage = removeErr instanceof Error ? removeErr.message : String(removeErr);
+        if (!this.isCollectionMissingError(removeMessage)) {
+          log.warn(`qmd collection remove failed for ${collection.name}: ${removeMessage}`);
+        }
+      }
+      try {
+        await this.addCollection(collection.path, collection.name, collection.pattern);
+      } catch (addErr) {
+        const addMessage = addErr instanceof Error ? addErr.message : String(addErr);
+        if (!this.isCollectionAlreadyExistsError(addMessage)) {
+          log.warn(`qmd collection add failed for ${collection.name}: ${addMessage}`);
+        }
+      }
+    }
+    return true;
   }
 
   async search(
@@ -470,7 +520,14 @@ export class QmdMemoryManager implements MemorySearchManager {
       if (this.sessionExporter) {
         await this.exportSessions();
       }
-      await this.runQmd(["update"], { timeoutMs: this.qmd.update.updateTimeoutMs });
+      try {
+        await this.runQmd(["update"], { timeoutMs: this.qmd.update.updateTimeoutMs });
+      } catch (err) {
+        if (!(await this.tryRepairNullByteCollections(err, reason))) {
+          throw err;
+        }
+        await this.runQmd(["update"], { timeoutMs: this.qmd.update.updateTimeoutMs });
+      }
       const embedIntervalMs = this.qmd.update.embedIntervalMs;
       const shouldEmbed =
         Boolean(force) ||

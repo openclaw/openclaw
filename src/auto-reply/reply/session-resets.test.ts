@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { buildModelAliasIndex } from "../../agents/model-selection.js";
+import { saveSessionStore } from "../../config/sessions.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.ts";
 import { enqueueSystemEvent, resetSystemEventsForTest } from "../../infra/system-events.js";
 import { applyResetModelOverride } from "./session-reset-model.js";
@@ -32,7 +33,7 @@ afterAll(async () => {
 
 async function createStorePath(prefix: string): Promise<string> {
   const root = path.join(suiteRoot, `${prefix}${++suiteCase}`);
-  await fs.mkdir(root, { recursive: true });
+  await fs.mkdir(root);
   return path.join(root, "sessions.json");
 }
 
@@ -42,7 +43,6 @@ describe("initSessionState reset triggers in WhatsApp groups", () => {
     sessionKey: string;
     sessionId: string;
   }): Promise<void> {
-    const { saveSessionStore } = await import("../../config/sessions.js");
     await saveSessionStore(params.storePath, {
       [params.sessionKey]: {
         sessionId: params.sessionId,
