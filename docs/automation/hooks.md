@@ -207,7 +207,7 @@ Each event includes:
 
 ```typescript
 {
-  type: 'command' | 'session' | 'agent' | 'gateway',
+  type: 'command' | 'session' | 'agent' | 'gateway' | 'message',
   action: string,              // e.g., 'new', 'reset', 'stop'
   sessionKey: string,          // Session identifier
   timestamp: Date,             // When the event occurred
@@ -246,6 +246,130 @@ Triggered when the gateway starts:
 
 - **`gateway:startup`**: After channels start and hooks are loaded
 
+### Message Events
+
+Triggered during the message lifecycle. These events bridge into the workspace hook system so hooks can observe and modify agent conversations.
+
+- **`message:received`** (fire-and-forget): Fires when an inbound message arrives, before any processing. Useful for logging, analytics, or triggering side effects.
+- **`message:before`** (modifying): Fires just before the agent prompt is sent. Handlers can return `prependContext` and/or `systemPrompt` to modify the agent's input. Multiple `prependContext` values are merged with double newlines; the last `systemPrompt` wins.
+- **`message:sent`** (fire-and-forget): Fires after the agent has finished responding. Useful for post-processing, logging, or triggering follow-up actions.
+
+#### Context Fields
+
+**`message:received`**:
+
+| Field           | Type                  | Description                                |
+| --------------- | --------------------- | ------------------------------------------ |
+| `from`          | `string`              | Sender identifier (phone number, email)    |
+| `content`       | `string`              | Message body text                          |
+| `channel`       | `string`              | Originating channel (e.g., `"telegram"`)   |
+| `senderId`      | `string \| undefined` | Platform-specific sender ID                |
+| `senderName`    | `string \| undefined` | Display name of the sender                 |
+| `commandSource` | `string`              | Surface/provider that received the message |
+
+**`message:before`**:
+
+| Field           | Type                  | Description                           |
+| --------------- | --------------------- | ------------------------------------- |
+| `prompt`        | `string`              | The effective prompt about to be sent |
+| `messages`      | `AgentMessage[]`      | Current conversation history          |
+| `agentId`       | `string`              | Resolved agent ID                     |
+| `sessionId`     | `string`              | Session identifier                    |
+| `commandSource` | `string \| undefined` | Message provider/channel              |
+
+**`message:sent`**:
+
+| Field       | Type             | Description                                   |
+| ----------- | ---------------- | --------------------------------------------- |
+| `messages`  | `AgentMessage[]` | Final conversation snapshot (including reply) |
+| `sessionId` | `string`         | Session identifier                            |
+| `success`   | `boolean`        | Whether the agent completed without errors    |
+
+#### Return Values (`message:before` only)
+
+Handlers registered for `message:before` can return an `InternalHookResult`:
+
+```typescript
+interface InternalHookResult {
+  prependContext?: string; // Prepended to the prompt
+  systemPrompt?: string; // Overrides the system prompt
+}
+```
+
+Multiple handlers are merged: `prependContext` values are concatenated with `\n\n`, and the last non-undefined `systemPrompt` wins. Returning `undefined` or `void` is a no-op.
+
+#### Example HOOK.md
+
+```markdown
+---
+name: message-context-injector
+description: "Inject extra context before each agent turn"
+metadata: { "openclaw": { "emoji": "💉", "events": ["message:before"] } }
+---
+
+# Message Context Injector
+
+Adds extra context to every agent prompt.
+```
+
+#### Example Handlers
+
+**Fire-and-forget logger (`message:received`)**:
+
+```typescript
+import type { HookHandler } from "../../src/hooks/hooks.js";
+
+const handler: HookHandler = async (event) => {
+  if (event.type !== "message" || event.action !== "received") {
+    return;
+  }
+
+  console.log(`[msg-log] from=${event.context.from} channel=${event.context.channel}`);
+};
+
+export default handler;
+```
+
+**Modifying hook (`message:before`)**:
+
+```typescript
+import type { HookHandler } from "../../src/hooks/hooks.js";
+
+const handler: HookHandler = async (event) => {
+  if (event.type !== "message" || event.action !== "before") {
+    return;
+  }
+
+  return {
+    prependContext: `Current user timezone: America/New_York`,
+  };
+};
+
+export default handler;
+```
+
+**Post-response hook (`message:sent`)**:
+
+```typescript
+import type { HookHandler } from "../../src/hooks/hooks.js";
+
+const handler: HookHandler = async (event) => {
+  if (event.type !== "message" || event.action !== "sent") {
+    return;
+  }
+
+  const { success, sessionId } = event.context as {
+    success: boolean;
+    sessionId: string;
+  };
+  if (!success) {
+    console.warn(`[msg-sent] Agent failed for session ${sessionId}`);
+  }
+};
+
+export default handler;
+```
+
 ### Tool Result Hooks (Plugin API)
 
 These hooks are not event-stream listeners; they let plugins synchronously adjust tool results before OpenClaw persists them.
@@ -259,8 +383,6 @@ Planned event types:
 - **`session:start`**: When a new session begins
 - **`session:end`**: When a session ends
 - **`agent:error`**: When an agent encounters an error
-- **`message:sent`**: When a message is sent
-- **`message:received`**: When a message is received
 
 ## Creating Custom Hooks
 

@@ -8,7 +8,7 @@
 import type { WorkspaceBootstrapFile } from "../agents/workspace.js";
 import type { OpenClawConfig } from "../config/config.js";
 
-export type InternalHookEventType = "command" | "session" | "agent" | "gateway";
+export type InternalHookEventType = "command" | "session" | "agent" | "gateway" | "message";
 
 export type AgentBootstrapHookContext = {
   workspaceDir: string;
@@ -40,7 +40,14 @@ export interface InternalHookEvent {
   messages: string[];
 }
 
-export type InternalHookHandler = (event: InternalHookEvent) => Promise<void> | void;
+export interface InternalHookResult {
+  prependContext?: string;
+  systemPrompt?: string;
+}
+
+export type InternalHookHandler = (
+  event: InternalHookEvent,
+) => Promise<InternalHookResult | void> | InternalHookResult | void;
 
 /** Registry of hook handlers by event key */
 const handlers = new Map<string, InternalHookHandler[]>();
@@ -120,19 +127,36 @@ export function getRegisteredEventKeys(): string[] {
  *
  * @param event - The event to trigger
  */
-export async function triggerInternalHook(event: InternalHookEvent): Promise<void> {
+export async function triggerInternalHook(
+  event: InternalHookEvent,
+): Promise<InternalHookResult | undefined> {
   const typeHandlers = handlers.get(event.type) ?? [];
   const specificHandlers = handlers.get(`${event.type}:${event.action}`) ?? [];
 
   const allHandlers = [...typeHandlers, ...specificHandlers];
 
   if (allHandlers.length === 0) {
-    return;
+    return undefined;
   }
+
+  let merged: InternalHookResult | undefined;
 
   for (const handler of allHandlers) {
     try {
-      await handler(event);
+      const result = await handler(event);
+      if (result) {
+        if (!merged) {
+          merged = {};
+        }
+        if (result.prependContext) {
+          merged.prependContext = merged.prependContext
+            ? `${merged.prependContext}\n\n${result.prependContext}`
+            : result.prependContext;
+        }
+        if (result.systemPrompt !== undefined) {
+          merged.systemPrompt = result.systemPrompt;
+        }
+      }
     } catch (err) {
       console.error(
         `Hook error [${event.type}:${event.action}]:`,
@@ -140,6 +164,8 @@ export async function triggerInternalHook(event: InternalHookEvent): Promise<voi
       );
     }
   }
+
+  return merged;
 }
 
 /**

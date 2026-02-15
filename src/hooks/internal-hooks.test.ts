@@ -244,4 +244,211 @@ describe("hooks", () => {
       expect(results).toHaveLength(2);
     });
   });
+
+  describe("message lifecycle hooks", () => {
+    describe("message:received", () => {
+      it("fires with correct event shape", async () => {
+        const handler = vi.fn();
+        registerInternalHook("message:received", handler);
+
+        const event = createInternalHookEvent("message", "received", "sess-1", {
+          from: "+1234567890",
+          content: "hello world",
+          channel: "telegram",
+          senderId: "user-123",
+          senderName: "Alice",
+          commandSource: "telegram",
+        });
+        await triggerInternalHook(event);
+
+        expect(handler).toHaveBeenCalledOnce();
+        const calledEvent = handler.mock.calls[0][0] as InternalHookEvent;
+        expect(calledEvent.type).toBe("message");
+        expect(calledEvent.action).toBe("received");
+        expect(calledEvent.sessionKey).toBe("sess-1");
+        expect(calledEvent.context).toEqual({
+          from: "+1234567890",
+          content: "hello world",
+          channel: "telegram",
+          senderId: "user-123",
+          senderName: "Alice",
+          commandSource: "telegram",
+        });
+        expect(calledEvent.timestamp).toBeInstanceOf(Date);
+      });
+
+      it("does not fire when no hooks are registered for message:received", async () => {
+        const handler = vi.fn();
+        registerInternalHook("command:new", handler);
+
+        const event = createInternalHookEvent("message", "received", "sess-1", {
+          from: "user",
+          content: "hello",
+        });
+        await triggerInternalHook(event);
+
+        expect(handler).not.toHaveBeenCalled();
+      });
+    });
+
+    describe("message:before", () => {
+      it("returns and merges prependContext and systemPrompt", async () => {
+        registerInternalHook("message:before", () => ({
+          prependContext: "context from hook A",
+          systemPrompt: "system prompt A",
+        }));
+        registerInternalHook("message:before", () => ({
+          prependContext: "context from hook B",
+          systemPrompt: "system prompt B",
+        }));
+
+        const event = createInternalHookEvent("message", "before", "sess-1", {
+          prompt: "user message",
+          messages: [],
+          agentId: "agent-main",
+          sessionId: "sid-1",
+          commandSource: "telegram",
+        });
+        const result = await triggerInternalHook(event);
+
+        expect(result?.prependContext).toBe("context from hook A\n\ncontext from hook B");
+        expect(result?.systemPrompt).toBe("system prompt B");
+      });
+
+      it("returns undefined when no hooks are registered (no-op)", async () => {
+        const event = createInternalHookEvent("message", "before", "sess-1", {
+          prompt: "user message",
+          messages: [],
+        });
+        const result = await triggerInternalHook(event);
+
+        expect(result).toBeUndefined();
+      });
+
+      it("does not fire when no hooks are registered for message:before", async () => {
+        const handler = vi.fn();
+        registerInternalHook("message:received", handler);
+
+        const event = createInternalHookEvent("message", "before", "sess-1", {
+          prompt: "user message",
+        });
+        await triggerInternalHook(event);
+
+        expect(handler).not.toHaveBeenCalled();
+      });
+    });
+
+    describe("message:sent", () => {
+      it("fires with correct event shape", async () => {
+        const handler = vi.fn();
+        registerInternalHook("message:sent", handler);
+
+        const event = createInternalHookEvent("message", "sent", "sess-1", {
+          messages: [
+            { role: "user", content: "hi" },
+            { role: "assistant", content: "hello" },
+          ],
+          sessionId: "sid-1",
+          success: true,
+        });
+        await triggerInternalHook(event);
+
+        expect(handler).toHaveBeenCalledOnce();
+        const calledEvent = handler.mock.calls[0][0] as InternalHookEvent;
+        expect(calledEvent.type).toBe("message");
+        expect(calledEvent.action).toBe("sent");
+        expect(calledEvent.sessionKey).toBe("sess-1");
+        expect(calledEvent.context).toEqual({
+          messages: [
+            { role: "user", content: "hi" },
+            { role: "assistant", content: "hello" },
+          ],
+          sessionId: "sid-1",
+          success: true,
+        });
+        expect(calledEvent.timestamp).toBeInstanceOf(Date);
+      });
+
+      it("does not fire when no hooks are registered for message:sent", async () => {
+        const handler = vi.fn();
+        registerInternalHook("message:received", handler);
+
+        const event = createInternalHookEvent("message", "sent", "sess-1", {
+          messages: [],
+          sessionId: "sid-1",
+          success: true,
+        });
+        await triggerInternalHook(event);
+
+        expect(handler).not.toHaveBeenCalled();
+      });
+    });
+  });
+
+  describe("triggerInternalHook result merging", () => {
+    it("returns undefined when no handlers are registered", async () => {
+      const event = createInternalHookEvent("message", "before", "sess-1");
+      const result = await triggerInternalHook(event);
+      expect(result).toBeUndefined();
+    });
+
+    it("returns result when handler returns prependContext", async () => {
+      registerInternalHook("message:before", () => ({
+        prependContext: "extra context",
+      }));
+      const event = createInternalHookEvent("message", "before", "sess-1");
+      const result = await triggerInternalHook(event);
+      expect(result).toEqual({ prependContext: "extra context" });
+    });
+
+    it("merges multiple prependContext values with newlines", async () => {
+      registerInternalHook("message:before", () => ({
+        prependContext: "first",
+      }));
+      registerInternalHook("message:before", () => ({
+        prependContext: "second",
+      }));
+      const event = createInternalHookEvent("message", "before", "sess-1");
+      const result = await triggerInternalHook(event);
+      expect(result?.prependContext).toBe("first\n\nsecond");
+    });
+
+    it("last systemPrompt wins", async () => {
+      registerInternalHook("message:before", () => ({
+        systemPrompt: "prompt-a",
+      }));
+      registerInternalHook("message:before", () => ({
+        systemPrompt: "prompt-b",
+      }));
+      const event = createInternalHookEvent("message", "before", "sess-1");
+      const result = await triggerInternalHook(event);
+      expect(result?.systemPrompt).toBe("prompt-b");
+    });
+
+    it("ignores void/undefined returns from handlers", async () => {
+      registerInternalHook("message:before", () => undefined);
+      registerInternalHook("message:before", () => ({
+        prependContext: "only this",
+      }));
+      registerInternalHook("message:before", () => {});
+      const event = createInternalHookEvent("message", "before", "sess-1");
+      const result = await triggerInternalHook(event);
+      expect(result).toEqual({ prependContext: "only this" });
+    });
+
+    it("works with message event type across type and action handlers", async () => {
+      registerInternalHook("message", async () => ({
+        prependContext: "from type handler",
+      }));
+      registerInternalHook("message:received", async () => ({
+        prependContext: "from action handler",
+      }));
+      const event = createInternalHookEvent("message", "received", "sess-1", {
+        from: "user",
+        content: "hello",
+      });
+      const result = await triggerInternalHook(event);
+      expect(result?.prependContext).toBe("from type handler\n\nfrom action handler");
+    });
+  });
 });
