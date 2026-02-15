@@ -483,6 +483,16 @@ export function createGatewayHttpServer(opts: {
       const configSnapshot = loadConfig();
       const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
       const requestPath = new URL(req.url ?? "/", "http://localhost").pathname;
+
+      // Lightweight HTTP health endpoint for cloud platform probes (Cloud Run, K8s, etc.).
+      // No auth required — probes run from infrastructure and cannot pass tokens.
+      if (req.method === "GET" && requestPath === "/health") {
+        res.statusCode = 200;
+        res.setHeader("Content-Type", "application/json; charset=utf-8");
+        res.end(JSON.stringify({ ok: true }));
+        return;
+      }
+
       if (await handleHooksRequest(req, res)) {
         return;
       }

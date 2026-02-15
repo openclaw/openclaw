@@ -245,9 +245,34 @@ This avoids re-running `pnpm install` unless lockfiles change:
 ```dockerfile
 FROM node:22-bookworm
 
-# Install Bun (required for build scripts)
-RUN curl -fsSL https://bun.sh/install | bash
-ENV PATH="/root/.bun/bin:${PATH}"
+ARG BUN_VERSION=1.3.9
+
+# Install Bun (required for build scripts) from a pinned release artifact.
+RUN set -eux; \
+    apt-get update; \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      ca-certificates \
+      curl \
+      unzip; \
+    arch="$(dpkg --print-architecture)"; \
+    case "${arch}" in \
+      amd64) bun_arch="x64" ;; \
+      arm64) bun_arch="aarch64" ;; \
+      *) echo "Unsupported architecture: ${arch}" >&2; exit 1 ;; \
+    esac; \
+    bun_zip="bun-linux-${bun_arch}.zip"; \
+    base_url="https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}"; \
+    curl -fsSL "${base_url}/${bun_zip}" -o "/tmp/${bun_zip}"; \
+    curl -fsSL "${base_url}/SHASUMS256.txt" -o /tmp/SHASUMS256.txt; \
+    grep " ${bun_zip}$" /tmp/SHASUMS256.txt | sha256sum -c -; \
+    unzip -p "/tmp/${bun_zip}" "bun-linux-${bun_arch}/bun" \
+      > /usr/local/bin/bun; \
+    chmod +x /usr/local/bin/bun; \
+    rm -f "/tmp/${bun_zip}" /tmp/SHASUMS256.txt; \
+    apt-get clean; \
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
+
+ENV BUN_VERSION=${BUN_VERSION}
 
 RUN corepack enable
 
@@ -269,6 +294,32 @@ ENV NODE_ENV=production
 
 CMD ["node","dist/index.js"]
 ```
+
+### Bun pinning and upgrade policy
+
+The Dockerfile pins Bun with `ARG BUN_VERSION` and installs from the matching
+GitHub release ZIP plus `SHASUMS256.txt`. During build, the checksum for the
+selected archive is validated before Bun is copied into `/usr/local/bin`.
+
+Upgrade Bun during a maintenance window:
+
+1. Pick a target Bun release from GitHub.
+2. Update `BUN_VERSION` in `Dockerfile`.
+3. Rebuild and verify the image:
+
+```bash
+docker compose build --no-cache openclaw-gateway
+docker compose run --rm openclaw-gateway bun --version
+```
+
+4. Deploy:
+
+```bash
+docker compose up -d openclaw-gateway
+```
+
+If the checksum validation fails, stop and verify the release artifact before
+retrying.
 
 ### Channel setup (optional)
 

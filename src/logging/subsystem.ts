@@ -154,7 +154,18 @@ function formatConsoleLine(opts: {
   const displaySubsystem =
     opts.style === "json" ? opts.subsystem : formatSubsystemForConsole(opts.subsystem);
   if (opts.style === "json") {
+    // severity: GCP Cloud Logging severity level.
+    // https://cloud.google.com/logging/docs/reference/v2/rest/v2/LogEntry#LogSeverity
+    const GCP_SEVERITY: Record<string, string> = {
+      trace: "DEBUG",
+      debug: "DEBUG",
+      info: "INFO",
+      warn: "WARNING",
+      error: "ERROR",
+      fatal: "CRITICAL",
+    };
     return JSON.stringify({
+      severity: GCP_SEVERITY[opts.level] ?? "DEFAULT",
       time: new Date().toISOString(),
       level: opts.level,
       subsystem: displaySubsystem,
