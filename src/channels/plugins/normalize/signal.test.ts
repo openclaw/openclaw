@@ -14,6 +14,12 @@ describe("signal target normalization", () => {
     );
   });
 
+  it("normalizes signal:<uuid> targets", () => {
+    expect(normalizeSignalMessagingTarget("signal:123E4567-E89B-12D3-A456-426614174000")).toBe(
+      "123e4567-e89b-12d3-a456-426614174000",
+    );
+  });
+
   it("preserves case for group targets", () => {
     expect(
       normalizeSignalMessagingTarget("signal:group:VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg="),
@@ -23,6 +29,11 @@ describe("signal target normalization", () => {
   it("accepts uuid prefixes for target detection", () => {
     expect(looksLikeSignalTargetId("uuid:123e4567-e89b-12d3-a456-426614174000")).toBe(true);
     expect(looksLikeSignalTargetId("signal:uuid:123e4567-e89b-12d3-a456-426614174000")).toBe(true);
+  });
+
+  it("accepts signal:<uuid> and signal:+E164 for target detection", () => {
+    expect(looksLikeSignalTargetId("signal:123e4567-e89b-12d3-a456-426614174000")).toBe(true);
+    expect(looksLikeSignalTargetId("signal:+15550001111")).toBe(true);
   });
 
   it("accepts compact UUIDs for target detection", () => {

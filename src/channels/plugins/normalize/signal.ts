@@ -39,6 +39,18 @@ export function looksLikeSignalTargetId(raw: string): boolean {
   if (!trimmed) {
     return false;
   }
+  if (/^signal:/i.test(trimmed)) {
+    const stripped = trimmed.replace(/^signal:/i, "").trim();
+    if (!stripped) {
+      return false;
+    }
+    if (UUID_PATTERN.test(stripped) || UUID_COMPACT_PATTERN.test(stripped)) {
+      return true;
+    }
+    if (/^\+?\d{3,}$/.test(stripped)) {
+      return true;
+    }
+  }
   if (/^(signal:)?(group:|username:|u:)/i.test(trimmed)) {
     return true;
   }
