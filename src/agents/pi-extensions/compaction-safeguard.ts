@@ -34,21 +34,29 @@ const KEEP_RECENT_IMAGES_COUNT = 3;
 type ContentBlock = { type?: string; data?: string; mimeType?: string; text?: string };
 
 function isImageBlock(block: unknown): block is ContentBlock & { type: "image"; data: string } {
-  if (!block || typeof block !== "object") return false;
+  if (!block || typeof block !== "object") {
+    return false;
+  }
   const rec = block as ContentBlock;
   return rec.type === "image" && typeof rec.data === "string";
 }
 
 function getMessageContent(msg: AgentMessage): unknown[] | null {
-  if (!msg || typeof msg !== "object") return null;
+  if (!msg || typeof msg !== "object") {
+    return null;
+  }
   const rec = msg as { content?: unknown };
-  if (Array.isArray(rec.content)) return rec.content;
+  if (Array.isArray(rec.content)) {
+    return rec.content;
+  }
   return null;
 }
 
 function hasImageContent(msg: AgentMessage): boolean {
   const content = getMessageContent(msg);
-  if (!content) return false;
+  if (!content) {
+    return false;
+  }
   return content.some(isImageBlock);
 }
 
@@ -87,7 +95,9 @@ function createImagePlaceholder(
 
 function replaceImagesWithPlaceholders(msg: AgentMessage): AgentMessage {
   const content = getMessageContent(msg);
-  if (!content) return msg;
+  if (!content) {
+    return msg;
+  }
 
   let hasImages = false;
   const newContent = content.map((block) => {
@@ -98,7 +108,9 @@ function replaceImagesWithPlaceholders(msg: AgentMessage): AgentMessage {
     return block;
   });
 
-  if (!hasImages) return msg;
+  if (!hasImages) {
+    return msg;
+  }
   return { ...msg, content: newContent } as AgentMessage;
 }
 
@@ -110,7 +122,9 @@ function countImagesInMessages(messages: AgentMessage[]): { count: number; total
   let totalBytes = 0;
   for (const msg of messages) {
     const content = getMessageContent(msg);
-    if (!content) continue;
+    if (!content) {
+      continue;
+    }
     for (const block of content) {
       if (isImageBlock(block)) {
         count++;
