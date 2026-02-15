@@ -1,6 +1,11 @@
 import type { RuntimeEnv } from "../../runtime.js";
 import { logConfigUpdated } from "../../config/logging.js";
-import { resolveModelTarget, updateConfig } from "./shared.js";
+import {
+  mergePrimaryFallbackConfig,
+  type PrimaryFallbackConfig,
+  resolveModelTarget,
+  updateConfig,
+} from "./shared.js";
 
 export async function modelsSetCommand(modelRaw: string, runtime: RuntimeEnv) {
   const updated = await updateConfig((cfg) => {
@@ -10,19 +15,16 @@ export async function modelsSetCommand(modelRaw: string, runtime: RuntimeEnv) {
     if (!nextModels[key]) {
       nextModels[key] = {};
     }
-    const existingModel = cfg.agents?.defaults?.model as
-      | { primary?: string; fallbacks?: string[] }
-      | undefined;
     return {
       ...cfg,
       agents: {
         ...cfg.agents,
         defaults: {
           ...cfg.agents?.defaults,
-          model: {
-            ...(existingModel?.fallbacks ? { fallbacks: existingModel.fallbacks } : undefined),
-            primary: key,
-          },
+          model: mergePrimaryFallbackConfig(
+            cfg.agents?.defaults?.model as unknown as PrimaryFallbackConfig | undefined,
+            { primary: key },
+          ),
           models: nextModels,
         },
       },
