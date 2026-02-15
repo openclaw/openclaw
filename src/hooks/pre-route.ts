@@ -195,7 +195,7 @@ async function callOllama(
         num_predict: 8,
         temperature: 0.0,
         top_k: 1,
-        num_ctx: 1024,
+        num_ctx: 2048,
         stop: ["\n", ".", ",", " "],
       },
     }),
@@ -278,13 +278,16 @@ export async function routeMessage(
 
   // Prepend conversation context so the classifier can see the topic
   const MAX_CONTEXT_CHARS = 200;
-  let classifierInput = message;
+  const MAX_MESSAGE_CHARS = 500;
+  const truncatedMessage =
+    message.length > MAX_MESSAGE_CHARS ? message.slice(0, MAX_MESSAGE_CHARS) + "…" : message;
+  let classifierInput = truncatedMessage;
   if (recentContext && recentContext.length > 0) {
     const contextLines = recentContext.map((msg) => {
       const truncated = msg.length > MAX_CONTEXT_CHARS ? msg.slice(0, MAX_CONTEXT_CHARS) + "…" : msg;
       return `[Previous: ${truncated}]`;
     });
-    classifierInput = contextLines.join("\n") + "\n\n" + message;
+    classifierInput = contextLines.join("\n") + "\n\n" + truncatedMessage;
   }
 
   if (!baseUrl) {
