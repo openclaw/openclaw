@@ -55,6 +55,7 @@ export function resolveModel(
   const authStorage = discoverAuthStorage(resolvedAgentDir);
   const modelRegistry = discoverModels(authStorage, resolvedAgentDir);
   const model = modelRegistry.find(provider, modelId) as Model<Api> | null;
+
   if (!model) {
     const providers = cfg?.models?.providers ?? {};
     const inlineModels = buildInlineProviderModels(providers);
