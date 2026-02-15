@@ -439,5 +439,20 @@ export {
 } from "../line/markdown-to-line.js";
 export type { ProcessedLineMessage } from "../line/markdown-to-line.js";
 
+// Channel: Messenger
+export {
+  listMessengerAccountIds,
+  normalizeAccountId as normalizeMessengerAccountId,
+  resolveDefaultMessengerAccountId,
+  resolveMessengerAccount,
+} from "../messenger/accounts.js";
+export { MessengerConfigSchema } from "../messenger/config-schema.js";
+export type {
+  MessengerConfig,
+  MessengerAccountConfig,
+  ResolvedMessengerAccount,
+} from "../messenger/types.js";
+export { messengerOnboardingAdapter } from "../channels/plugins/onboarding/messenger.js";
+
 // Media utilities
 export { loadWebMedia, type WebMediaResult } from "../web/media.js";

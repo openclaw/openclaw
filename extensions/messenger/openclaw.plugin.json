@@ -1,0 +1,9 @@
+{
+  "id": "messenger",
+  "channels": ["messenger"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

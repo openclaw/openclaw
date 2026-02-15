@@ -46,6 +46,12 @@
       - any-glob-to-any-file:
           - "extensions/mattermost/**"
           - "docs/channels/mattermost.md"
+"channel: messenger":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/messenger/**"
+          - "extensions/messenger/**"
+          - "docs/channels/messenger.md"
 "channel: msteams":
   - changed-files:
       - any-glob-to-any-file:

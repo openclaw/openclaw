@@ -1,0 +1,29 @@
+{
+  "name": "@openclaw/messenger",
+  "version": "2026.2.6-3",
+  "description": "OpenClaw Facebook Messenger channel plugin",
+  "type": "module",
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "messenger",
+      "label": "Messenger",
+      "selectionLabel": "Facebook Messenger (Graph API)",
+      "docsPath": "/channels/messenger",
+      "docsLabel": "messenger",
+      "blurb": "Facebook Messenger bot via Meta Graph API.",
+      "order": 80,
+      "quickstartAllowFrom": true
+    },
+    "install": {
+      "npmSpec": "@openclaw/messenger",
+      "localPath": "extensions/messenger",
+      "defaultChoice": "npm"
+    }
+  }
+}

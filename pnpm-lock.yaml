@@ -419,6 +419,12 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/messenger:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/minimax-portal-auth:
     devDependencies:
       openclaw:

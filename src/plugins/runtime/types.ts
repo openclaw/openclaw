@@ -169,6 +169,19 @@ type BuildTemplateMessageFromPayload =
   typeof import("../../line/template-messages.js").buildTemplateMessageFromPayload;
 type MonitorLineProvider = typeof import("../../line/monitor.js").monitorLineProvider;
 
+// Messenger channel types
+type ListMessengerAccountIds = typeof import("../../messenger/accounts.js").listMessengerAccountIds;
+type ResolveDefaultMessengerAccountId =
+  typeof import("../../messenger/accounts.js").resolveDefaultMessengerAccountId;
+type ResolveMessengerAccount = typeof import("../../messenger/accounts.js").resolveMessengerAccount;
+type NormalizeMessengerAccountId = typeof import("../../messenger/accounts.js").normalizeAccountId;
+type ProbeMessengerPage = typeof import("../../messenger/probe.js").probeMessengerPage;
+type SendMessageMessenger = typeof import("../../messenger/send.js").sendMessageMessenger;
+type SendMediaMessenger = typeof import("../../messenger/send.js").sendMediaMessenger;
+type SendSenderAction = typeof import("../../messenger/send.js").sendSenderAction;
+type MonitorMessengerProvider =
+  typeof import("../../messenger/monitor.js").monitorMessengerProvider;
+
 export type RuntimeLogger = {
   debug?: (message: string, meta?: Record<string, unknown>) => void;
   info: (message: string, meta?: Record<string, unknown>) => void;
@@ -349,6 +362,17 @@ export type PluginRuntime = {
       createQuickReplyItems: CreateQuickReplyItems;
       buildTemplateMessageFromPayload: BuildTemplateMessageFromPayload;
       monitorLineProvider: MonitorLineProvider;
+    };
+    messenger: {
+      listMessengerAccountIds: ListMessengerAccountIds;
+      resolveDefaultMessengerAccountId: ResolveDefaultMessengerAccountId;
+      resolveMessengerAccount: ResolveMessengerAccount;
+      normalizeAccountId: NormalizeMessengerAccountId;
+      probeMessengerPage: ProbeMessengerPage;
+      sendMessageMessenger: SendMessageMessenger;
+      sendMediaMessenger: SendMediaMessenger;
+      sendSenderAction: SendSenderAction;
+      monitorMessengerProvider: MonitorMessengerProvider;
     };
   };
   logging: {

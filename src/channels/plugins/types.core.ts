@@ -144,6 +144,9 @@ export type ChannelAccountSnapshot = {
   profile?: unknown;
   channelAccessToken?: string;
   channelSecret?: string;
+  pageAccessToken?: string;
+  appSecret?: string;
+  verifyToken?: string;
 };
 
 export type ChannelLogSink = {
