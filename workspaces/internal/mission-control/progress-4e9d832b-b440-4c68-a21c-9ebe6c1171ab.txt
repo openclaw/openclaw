@@ -18,3 +18,11 @@
   - Included non-functional UI placeholders for status/priority/targetDate (display-only)
   - Confirmed `npm run lint` + `npm run build` pass
 
+
+---
+## 2026-02-15 21:31 - S1: App shell layout with persistent left nav
+- Added Vitest + Testing Library test harness and unit tests covering SideNav link rendering and NavLink active-state (aria-current).
+- Added vitest.config.ts and src/test/setup.ts.
+- Added missing app scaffold files (package.json, configs, public assets) so build/lint/test run in clean checkout.
+- Files changed: workspaces/internal/mission-control/vitest.config.ts, src/test/setup.ts, src/app/_components/__tests__/*, package.json, package-lock.json, plus app config/assets.
+- **Learnings:** ESLint config enforces @typescript-eslint/no-explicit-any; keep test mocks typed.
