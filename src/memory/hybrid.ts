@@ -20,10 +20,54 @@ export type HybridKeywordResult = {
   textScore: number;
 };
 
+/**
+ * Regex matching a single CJK ideograph, kana, or bopomofo character.
+ *
+ * Included ranges (letters/ideographs only, no punctuation):
+ *  - U+2E80–U+2EFF  CJK Radicals Supplement
+ *  - U+3040–U+309F  Hiragana
+ *  - U+30A0–U+30FF  Katakana
+ *  - U+3100–U+312F  Bopomofo
+ *  - U+3400–U+4DBF  CJK Unified Ideographs Extension A
+ *  - U+4E00–U+9FFF  CJK Unified Ideographs
+ *  - U+F900–U+FAFF  CJK Compatibility Ideographs
+ *
+ * Deliberately excludes CJK punctuation (U+3000–U+303F), fullwidth forms
+ * (U+FF00–U+FFEF), and other symbol blocks so punctuation remains a separator.
+ */
+const CJK_CHAR_REGEX =
+  /[\u2e80-\u2eff\u3040-\u309f\u30a0-\u30ff\u3100-\u312f\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/;
+
+/**
+ * Add spaces around every CJK character so the unicode61 tokenizer treats each
+ * character as its own token.  Non-CJK text (Latin, digits, etc.) is untouched.
+ *
+ * This must be applied symmetrically: both when **inserting** text into FTS5 and
+ * when **building the query**, so the tokens match.
+ */
+export function segmentCjk(text: string): string {
+  let out = "";
+  for (const ch of text) {
+    if (CJK_CHAR_REGEX.test(ch)) {
+      out += ` ${ch} `;
+    } else {
+      out += ch;
+    }
+  }
+  // Collapse runs of whitespace that the insertion may create.
+  return out.replace(/\s{2,}/g, " ").trim();
+}
+
 export function buildFtsQuery(raw: string): string | null {
+  // Segment CJK characters so they become individual FTS tokens.
+  const segmented = segmentCjk(raw);
+
+  // Match ASCII word tokens AND individual CJK characters.
   const tokens =
-    raw
-      .match(/[A-Za-z0-9_]+/g)
+    segmented
+      .match(
+        /[A-Za-z0-9_]+|[\u2e80-\u2eff\u3040-\u309f\u30a0-\u30ff\u3100-\u312f\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/g,
+      )
       ?.map((t) => t.trim())
       .filter(Boolean) ?? [];
   if (tokens.length === 0) {

@@ -152,12 +152,17 @@ export async function searchKeyword(params: {
     return [];
   }
 
+  // Join with the chunks table to retrieve the original (unsegmented) text for
+  // snippets.  The FTS table may contain CJK-segmented text (spaces between
+  // each character) which should not be exposed to users.
   const rows = params.db
     .prepare(
-      `SELECT id, path, source, start_line, end_line, text,\n` +
+      `SELECT f.id, f.path, f.source, f.start_line, f.end_line,\n` +
+        `       COALESCE(c.text, f.text) AS text,\n` +
         `       bm25(${params.ftsTable}) AS rank\n` +
-        `  FROM ${params.ftsTable}\n` +
-        ` WHERE ${params.ftsTable} MATCH ? AND model = ?${params.sourceFilter.sql}\n` +
+        `  FROM ${params.ftsTable} f\n` +
+        `  LEFT JOIN chunks c ON c.id = f.id\n` +
+        ` WHERE ${params.ftsTable} MATCH ? AND f.model = ?${params.sourceFilter.sql}\n` +
         ` ORDER BY rank ASC\n` +
         ` LIMIT ?`,
     )
