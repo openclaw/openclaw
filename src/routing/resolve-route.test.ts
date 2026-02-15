@@ -346,6 +346,44 @@ describe("resolveAgentRoute", () => {
     expect(route.agentId).toBe("home");
     expect(route.sessionKey).toBe("agent:home:main");
   });
+
+  test("binding agentId is trusted even when not in agents.list (#13423)", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [{ id: "specialist", default: true, workspace: "~/specialist" }],
+      },
+      bindings: [
+        {
+          agentId: "main",
+          match: { channel: "telegram", accountId: "bot-main" },
+        },
+        {
+          agentId: "specialist",
+          match: { channel: "telegram", accountId: "specialist-bot" },
+        },
+      ],
+    };
+
+    // Message to bot-main must route to "main", not fall back to "specialist"
+    const mainRoute = resolveAgentRoute({
+      cfg,
+      channel: "telegram",
+      accountId: "bot-main",
+      peer: { kind: "direct", id: "123" },
+    });
+    expect(mainRoute.agentId).toBe("main");
+    expect(mainRoute.matchedBy).toBe("binding.account");
+
+    // Message to specialist-bot routes to "specialist" as before
+    const specRoute = resolveAgentRoute({
+      cfg,
+      channel: "telegram",
+      accountId: "specialist-bot",
+      peer: { kind: "direct", id: "123" },
+    });
+    expect(specRoute.agentId).toBe("specialist");
+    expect(specRoute.matchedBy).toBe("binding.account");
+  });
 });
 
 test("dmScope=per-account-channel-peer isolates DM sessions per account, channel and sender", () => {

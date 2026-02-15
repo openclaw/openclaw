@@ -123,7 +123,11 @@ function pickFirstExistingAgentId(cfg: OpenClawConfig, agentId: string): string 
   if (match?.id?.trim()) {
     return sanitizeAgentId(match.id.trim());
   }
-  return sanitizeAgentId(resolveDefaultAgentId(cfg));
+  // Trust the requested agentId even if it is not in agents.list.
+  // Silently falling back to the default agent caused critical routing
+  // failures: messages intended for one agent were delivered to another
+  // without any indication to the user (#13423).
+  return sanitizeAgentId(trimmed);
 }
 
 function matchesChannel(
