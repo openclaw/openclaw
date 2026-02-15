@@ -1,19 +1,25 @@
-import { vi, type Mock } from "vitest";
+import { Mock, vi } from "vitest";
 
-export const messageCommand: Mock = vi.fn();
-export const statusCommand: Mock = vi.fn();
-export const configureCommand: Mock = vi.fn();
-export const configureCommandWithSections: Mock = vi.fn();
-export const setupCommand: Mock = vi.fn();
-export const onboardCommand: Mock = vi.fn();
-export const callGateway: Mock = vi.fn();
-export const runChannelLogin: Mock = vi.fn();
-export const runChannelLogout: Mock = vi.fn();
-export const runTui: Mock = vi.fn();
-export const loadAndMaybeMigrateDoctorConfig: Mock = vi.fn();
-export const ensureConfigReady: Mock = vi.fn();
-export const ensurePluginRegistryLoaded: Mock = vi.fn();
-export const runtime: { log: Mock; error: Mock; exit: Mock<() => never> } = {
+export const messageCommand: Mock<(...args: unknown[]) => unknown> = vi.fn();
+export const statusCommand: Mock<(...args: unknown[]) => unknown> = vi.fn();
+export const configureCommand: Mock<(...args: unknown[]) => unknown> = vi.fn();
+export const configureCommandWithSections: Mock<(...args: unknown[]) => unknown> = vi.fn();
+export const setupCommand: Mock<(...args: unknown[]) => unknown> = vi.fn();
+export const onboardCommand: Mock<(...args: unknown[]) => unknown> = vi.fn();
+export const callGateway: Mock<(...args: unknown[]) => unknown> = vi.fn();
+export const runChannelLogin: Mock<(...args: unknown[]) => unknown> = vi.fn();
+export const runChannelLogout: Mock<(...args: unknown[]) => unknown> = vi.fn();
+export const runTui: Mock<(...args: unknown[]) => unknown> = vi.fn();
+
+export const loadAndMaybeMigrateDoctorConfig: Mock<(...args: unknown[]) => unknown> = vi.fn();
+export const ensureConfigReady: Mock<(...args: unknown[]) => unknown> = vi.fn();
+export const ensurePluginRegistryLoaded: Mock<(...args: unknown[]) => unknown> = vi.fn();
+
+export const runtime: {
+  log: Mock<(...args: unknown[]) => void>;
+  error: Mock<(...args: unknown[]) => void>;
+  exit: Mock<(...args: unknown[]) => never>;
+} = {
   log: vi.fn(),
   error: vi.fn(),
   exit: vi.fn(() => {

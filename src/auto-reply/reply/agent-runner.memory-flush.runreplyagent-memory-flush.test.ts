@@ -22,6 +22,94 @@ async function withTempStore<T>(fn: (storePath: string) => Promise<T>): Promise<
   return await fn(path.join(dir, "sessions.json"));
 }
 
+async function runReplyAgentWithBase(params: {
+  baseRun: ReturnType<typeof createBaseRun>;
+  storePath: string;
+  sessionKey: string;
+  sessionEntry: Record<string, unknown>;
+  commandBody: string;
+  typingMode?: "instant";
+}): Promise<void> {
+  const { typing, sessionCtx, resolvedQueue, followupRun } = params.baseRun;
+  await runReplyAgent({
+    commandBody: params.commandBody,
+    followupRun,
+    queueKey: params.sessionKey,
+    resolvedQueue,
+    shouldSteer: false,
+    shouldFollowup: false,
+    isActive: false,
+    isStreaming: false,
+    typing,
+    sessionCtx,
+    sessionEntry: params.sessionEntry,
+    sessionStore: { [params.sessionKey]: params.sessionEntry },
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+    defaultModel: "anthropic/claude-opus-4-5",
+    agentCfgContextTokens: 100_000,
+    resolvedVerboseLevel: "off",
+    isNewSession: false,
+    blockStreamingEnabled: false,
+    resolvedBlockStreamingBreak: "message_end",
+    shouldInjectGroupIntro: false,
+    typingMode: params.typingMode ?? "instant",
+  });
+}
+
+async function expectMemoryFlushSkippedWithWorkspaceAccess(
+  workspaceAccess: "ro" | "none",
+): Promise<void> {
+  const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
+  runEmbeddedPiAgentMock.mockReset();
+
+  await withTempStore(async (storePath) => {
+    const sessionKey = "main";
+    const sessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 80_000,
+      compactionCount: 1,
+    };
+
+    await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+
+    const calls: Array<{ prompt?: string }> = [];
+    runEmbeddedPiAgentMock.mockImplementation(async (params: EmbeddedRunParams) => {
+      calls.push({ prompt: params.prompt });
+      return {
+        payloads: [{ text: "ok" }],
+        meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+      };
+    });
+
+    const baseRun = createBaseRun({
+      storePath,
+      sessionEntry,
+      config: {
+        agents: {
+          defaults: {
+            sandbox: { mode: "all", workspaceAccess },
+          },
+        },
+      },
+    });
+
+    await runReplyAgentWithBase({
+      baseRun,
+      storePath,
+      sessionKey,
+      sessionEntry,
+      commandBody: "hello",
+    });
+
+    expect(calls.map((call) => call.prompt)).toEqual(["hello"]);
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].memoryFlushAt).toBeUndefined();
+  });
+}
+
 beforeAll(async () => {
   fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-flush-"));
   ({ runReplyAgent } = await import("./agent-runner.js"));
@@ -60,35 +148,18 @@ describe("runReplyAgent memory flush", () => {
         meta: { agentMeta: { usage: { input: 1, output: 1 } } },
       });
 
-      const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
+      const baseRun = createBaseRun({
         storePath,
         sessionEntry,
         runOverrides: { provider: "codex-cli" },
       });
 
-      await runReplyAgent({
-        commandBody: "hello",
-        followupRun,
-        queueKey: "main",
-        resolvedQueue,
-        shouldSteer: false,
-        shouldFollowup: false,
-        isActive: false,
-        isStreaming: false,
-        typing,
-        sessionCtx,
-        sessionEntry,
-        sessionStore: { [sessionKey]: sessionEntry },
-        sessionKey,
+      await runReplyAgentWithBase({
+        baseRun,
         storePath,
-        defaultModel: "anthropic/claude-opus-4-5",
-        agentCfgContextTokens: 100_000,
-        resolvedVerboseLevel: "off",
-        isNewSession: false,
-        blockStreamingEnabled: false,
-        resolvedBlockStreamingBreak: "message_end",
-        shouldInjectGroupIntro: false,
-        typingMode: "instant",
+        sessionKey,
+        sessionEntry,
+        commandBody: "hello",
       });
 
       expect(runCliAgentMock).toHaveBeenCalledTimes(1);
@@ -125,7 +196,7 @@ describe("runReplyAgent memory flush", () => {
         };
       });
 
-      const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
+      const baseRun = createBaseRun({
         storePath,
         sessionEntry,
         config: {
@@ -143,29 +214,12 @@ describe("runReplyAgent memory flush", () => {
         runOverrides: { extraSystemPrompt: "extra system" },
       });
 
-      await runReplyAgent({
-        commandBody: "hello",
-        followupRun,
-        queueKey: "main",
-        resolvedQueue,
-        shouldSteer: false,
-        shouldFollowup: false,
-        isActive: false,
-        isStreaming: false,
-        typing,
-        sessionCtx,
-        sessionEntry,
-        sessionStore: { [sessionKey]: sessionEntry },
-        sessionKey,
+      await runReplyAgentWithBase({
+        baseRun,
         storePath,
-        defaultModel: "anthropic/claude-opus-4-5",
-        agentCfgContextTokens: 100_000,
-        resolvedVerboseLevel: "off",
-        isNewSession: false,
-        blockStreamingEnabled: false,
-        resolvedBlockStreamingBreak: "message_end",
-        shouldInjectGroupIntro: false,
-        typingMode: "instant",
+        sessionKey,
+        sessionEntry,
+        commandBody: "hello",
       });
 
       const flushCall = calls[0];
@@ -205,34 +259,17 @@ describe("runReplyAgent memory flush", () => {
         };
       });
 
-      const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
+      const baseRun = createBaseRun({
         storePath,
         sessionEntry,
       });
 
-      await runReplyAgent({
-        commandBody: "hello",
-        followupRun,
-        queueKey: "main",
-        resolvedQueue,
-        shouldSteer: false,
-        shouldFollowup: false,
-        isActive: false,
-        isStreaming: false,
-        typing,
-        sessionCtx,
-        sessionEntry,
-        sessionStore: { [sessionKey]: sessionEntry },
-        sessionKey,
+      await runReplyAgentWithBase({
+        baseRun,
         storePath,
-        defaultModel: "anthropic/claude-opus-4-5",
-        agentCfgContextTokens: 100_000,
-        resolvedVerboseLevel: "off",
-        isNewSession: false,
-        blockStreamingEnabled: false,
-        resolvedBlockStreamingBreak: "message_end",
-        shouldInjectGroupIntro: false,
-        typingMode: "instant",
+        sessionKey,
+        sessionEntry,
+        commandBody: "hello",
       });
 
       expect(calls.map((call) => call.prompt)).toEqual([DEFAULT_MEMORY_FLUSH_PROMPT, "hello"]);
@@ -263,35 +300,18 @@ describe("runReplyAgent memory flush", () => {
         meta: { agentMeta: { usage: { input: 1, output: 1 } } },
       }));
 
-      const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
+      const baseRun = createBaseRun({
         storePath,
         sessionEntry,
         config: { agents: { defaults: { compaction: { memoryFlush: { enabled: false } } } } },
       });
 
-      await runReplyAgent({
-        commandBody: "hello",
-        followupRun,
-        queueKey: "main",
-        resolvedQueue,
-        shouldSteer: false,
-        shouldFollowup: false,
-        isActive: false,
-        isStreaming: false,
-        typing,
-        sessionCtx,
-        sessionEntry,
-        sessionStore: { [sessionKey]: sessionEntry },
-        sessionKey,
+      await runReplyAgentWithBase({
+        baseRun,
         storePath,
-        defaultModel: "anthropic/claude-opus-4-5",
-        agentCfgContextTokens: 100_000,
-        resolvedVerboseLevel: "off",
-        isNewSession: false,
-        blockStreamingEnabled: false,
-        resolvedBlockStreamingBreak: "message_end",
-        shouldInjectGroupIntro: false,
-        typingMode: "instant",
+        sessionKey,
+        sessionEntry,
+        commandBody: "hello",
       });
 
       expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
@@ -328,34 +348,17 @@ describe("runReplyAgent memory flush", () => {
         };
       });
 
-      const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
+      const baseRun = createBaseRun({
         storePath,
         sessionEntry,
       });
 
-      await runReplyAgent({
-        commandBody: "hello",
-        followupRun,
-        queueKey: "main",
-        resolvedQueue,
-        shouldSteer: false,
-        shouldFollowup: false,
-        isActive: false,
-        isStreaming: false,
-        typing,
-        sessionCtx,
-        sessionEntry,
-        sessionStore: { [sessionKey]: sessionEntry },
-        sessionKey,
+      await runReplyAgentWithBase({
+        baseRun,
         storePath,
-        defaultModel: "anthropic/claude-opus-4-5",
-        agentCfgContextTokens: 100_000,
-        resolvedVerboseLevel: "off",
-        isNewSession: false,
-        blockStreamingEnabled: false,
-        resolvedBlockStreamingBreak: "message_end",
-        shouldInjectGroupIntro: false,
-        typingMode: "instant",
+        sessionKey,
+        sessionEntry,
+        commandBody: "hello",
       });
 
       expect(calls.map((call) => call.prompt)).toEqual(["hello"]);
@@ -363,136 +366,11 @@ describe("runReplyAgent memory flush", () => {
   });
 
   it("skips memory flush when the sandbox workspace is read-only", async () => {
-    const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
-    runEmbeddedPiAgentMock.mockReset();
-
-    await withTempStore(async (storePath) => {
-      const sessionKey = "main";
-      const sessionEntry = {
-        sessionId: "session",
-        updatedAt: Date.now(),
-        totalTokens: 80_000,
-        compactionCount: 1,
-      };
-
-      await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
-
-      const calls: Array<{ prompt?: string }> = [];
-      runEmbeddedPiAgentMock.mockImplementation(async (params: EmbeddedRunParams) => {
-        calls.push({ prompt: params.prompt });
-        return {
-          payloads: [{ text: "ok" }],
-          meta: { agentMeta: { usage: { input: 1, output: 1 } } },
-        };
-      });
-
-      const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
-        storePath,
-        sessionEntry,
-        config: {
-          agents: {
-            defaults: {
-              sandbox: { mode: "all", workspaceAccess: "ro" },
-            },
-          },
-        },
-      });
-
-      await runReplyAgent({
-        commandBody: "hello",
-        followupRun,
-        queueKey: "main",
-        resolvedQueue,
-        shouldSteer: false,
-        shouldFollowup: false,
-        isActive: false,
-        isStreaming: false,
-        typing,
-        sessionCtx,
-        sessionEntry,
-        sessionStore: { [sessionKey]: sessionEntry },
-        sessionKey,
-        storePath,
-        defaultModel: "anthropic/claude-opus-4-5",
-        agentCfgContextTokens: 100_000,
-        resolvedVerboseLevel: "off",
-        isNewSession: false,
-        blockStreamingEnabled: false,
-        resolvedBlockStreamingBreak: "message_end",
-        shouldInjectGroupIntro: false,
-        typingMode: "instant",
-      });
-
-      expect(calls.map((call) => call.prompt)).toEqual(["hello"]);
-
-      const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
-      expect(stored[sessionKey].memoryFlushAt).toBeUndefined();
-    });
+    await expectMemoryFlushSkippedWithWorkspaceAccess("ro");
   });
 
   it("skips memory flush when the sandbox workspace is none", async () => {
-    const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
-    runEmbeddedPiAgentMock.mockReset();
-
-    await withTempStore(async (storePath) => {
-      const sessionKey = "main";
-      const sessionEntry = {
-        sessionId: "session",
-        updatedAt: Date.now(),
-        totalTokens: 80_000,
-        compactionCount: 1,
-      };
-
-      await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
-
-      const calls: Array<{ prompt?: string }> = [];
-      runEmbeddedPiAgentMock.mockImplementation(async (params: EmbeddedRunParams) => {
-        calls.push({ prompt: params.prompt });
-        return {
-          payloads: [{ text: "ok" }],
-          meta: { agentMeta: { usage: { input: 1, output: 1 } } },
-        };
-      });
-
-      const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
-        storePath,
-        sessionEntry,
-        config: {
-          agents: {
-            defaults: {
-              sandbox: { mode: "all", workspaceAccess: "none" },
-            },
-          },
-        },
-      });
-
-      await runReplyAgent({
-        commandBody: "hello",
-        followupRun,
-        queueKey: "main",
-        resolvedQueue,
-        shouldSteer: false,
-        shouldFollowup: false,
-        isActive: false,
-        isStreaming: false,
-        typing,
-        sessionCtx,
-        sessionEntry,
-        sessionStore: { [sessionKey]: sessionEntry },
-        sessionKey,
-        storePath,
-        defaultModel: "anthropic/claude-opus-4-5",
-        agentCfgContextTokens: 100_000,
-        resolvedVerboseLevel: "off",
-        isNewSession: false,
-        blockStreamingEnabled: false,
-        resolvedBlockStreamingBreak: "message_end",
-        shouldInjectGroupIntro: false,
-        typingMode: "instant",
-      });
-
-      expect(calls.map((call) => call.prompt)).toEqual(["hello"]);
-    });
+    await expectMemoryFlushSkippedWithWorkspaceAccess("none");
   });
 
   it("increments compaction count when flush compaction completes", async () => {
@@ -524,34 +402,17 @@ describe("runReplyAgent memory flush", () => {
         };
       });
 
-      const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
+      const baseRun = createBaseRun({
         storePath,
         sessionEntry,
       });
 
-      await runReplyAgent({
-        commandBody: "hello",
-        followupRun,
-        queueKey: "main",
-        resolvedQueue,
-        shouldSteer: false,
-        shouldFollowup: false,
-        isActive: false,
-        isStreaming: false,
-        typing,
-        sessionCtx,
-        sessionEntry,
-        sessionStore: { [sessionKey]: sessionEntry },
-        sessionKey,
+      await runReplyAgentWithBase({
+        baseRun,
         storePath,
-        defaultModel: "anthropic/claude-opus-4-5",
-        agentCfgContextTokens: 100_000,
-        resolvedVerboseLevel: "off",
-        isNewSession: false,
-        blockStreamingEnabled: false,
-        resolvedBlockStreamingBreak: "message_end",
-        shouldInjectGroupIntro: false,
-        typingMode: "instant",
+        sessionKey,
+        sessionEntry,
+        commandBody: "hello",
       });
 
       const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
