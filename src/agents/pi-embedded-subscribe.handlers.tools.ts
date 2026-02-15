@@ -75,7 +75,12 @@ export async function handleToolExecutionStart(
 
   if (toolName === "read") {
     const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
-    const filePath = typeof record.path === "string" ? record.path.trim() : "";
+    const filePath =
+      typeof record.path === "string"
+        ? record.path.trim()
+        : typeof record.file_path === "string"
+          ? record.file_path.trim()
+          : "";
     if (!filePath) {
       const argsPreview = typeof args === "string" ? args.slice(0, 200) : undefined;
       ctx.log.warn(
