@@ -49,6 +49,7 @@ import {
 } from "../../pi-settings.js";
 import { toClientToolDefinitions } from "../../pi-tool-definition-adapter.js";
 import { createOpenClawCodingTools } from "../../pi-tools.js";
+import { createPromptCachingWrapper, resolvePromptCachingConfig } from "../../prompt-caching.js";
 import { resolveSandboxContext } from "../../sandbox.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import { repairSessionFileIfNeeded } from "../../session-file-repair.js";
@@ -64,6 +65,7 @@ import {
 } from "../../skills.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
+import { createTokenEfficientToolsWrapper } from "../../token-efficient-tools.js";
 import { resolveTranscriptPolicy } from "../../transcript-policy.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
@@ -619,6 +621,18 @@ export async function runEmbeddedAttempt(
         params.modelId,
         params.streamParams,
       );
+
+      // Apply Anthropic prompt caching breakpoints
+      const promptCachingConfig = resolvePromptCachingConfig(params.config);
+      if (promptCachingConfig.enabled) {
+        activeSession.agent.streamFn = createPromptCachingWrapper(
+          activeSession.agent.streamFn,
+          promptCachingConfig,
+        );
+      }
+
+      // Apply token-efficient tool use beta header for Anthropic
+      activeSession.agent.streamFn = createTokenEfficientToolsWrapper(activeSession.agent.streamFn);
 
       if (cacheTrace) {
         cacheTrace.recordStage("session:loaded", {

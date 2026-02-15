@@ -134,6 +134,12 @@ export type AgentDefaultsConfig = {
   contextPruning?: AgentContextPruningConfig;
   /** Compaction tuning and pre-compaction memory flush behavior. */
   compaction?: AgentCompactionConfig;
+  /** Anthropic prompt caching configuration. */
+  promptCaching?: AgentPromptCachingConfig;
+  /** Dynamic skill/tool loading configuration. */
+  skills?: AgentSkillsConfig;
+  /** Automatic model routing configuration. */
+  modelRouting?: AgentModelRoutingConfig;
   /** Vector memory search configuration (per-agent overrides supported). */
   memorySearch?: MemorySearchConfig;
   /** Default thinking level when no /think directive is present. */
@@ -260,6 +266,29 @@ export type AgentCompactionConfig = {
   maxHistoryShare?: number;
   /** Pre-compaction memory flush (agentic turn). Default: enabled. */
   memoryFlush?: AgentCompactionMemoryFlushConfig;
+};
+
+export type AgentPromptCachingConfig = {
+  /** Enable Anthropic prompt caching breakpoints (default: true). */
+  enabled?: boolean;
+};
+
+export type AgentSkillsConfig = {
+  /** Enable lazy loading of skills via compact index + load_skill tool (default: false). */
+  lazyLoading?: boolean;
+};
+
+export type AgentModelRoutingConfig = {
+  /** Enable automatic model routing (default: false). */
+  enabled?: boolean;
+  /** Model tier mappings (provider/model strings). */
+  models?: {
+    simple?: string;
+    medium?: string;
+    complex?: string;
+  };
+  /** Use Opus for plan/think mode, Sonnet for execution. */
+  opusPlanMode?: boolean;
 };
 
 export type AgentCompactionMemoryFlushConfig = {

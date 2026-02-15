@@ -107,6 +107,33 @@ export const AgentDefaultsSchema = z
       })
       .strict()
       .optional(),
+    promptCaching: z
+      .object({
+        enabled: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
+    skills: z
+      .object({
+        lazyLoading: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
+    modelRouting: z
+      .object({
+        enabled: z.boolean().optional(),
+        models: z
+          .object({
+            simple: z.string().optional(),
+            medium: z.string().optional(),
+            complex: z.string().optional(),
+          })
+          .strict()
+          .optional(),
+        opusPlanMode: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     thinkingDefault: z
       .union([
         z.literal("off"),
