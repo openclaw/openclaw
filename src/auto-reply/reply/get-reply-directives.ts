@@ -268,6 +268,7 @@ export async function resolveReplyDirectives(params: {
         hasReasoningDirective: false,
         hasStatusDirective: false,
         hasModelDirective: false,
+        forceModelSwitch: false,
         hasQueueDirective: false,
         queueReset: false,
       };

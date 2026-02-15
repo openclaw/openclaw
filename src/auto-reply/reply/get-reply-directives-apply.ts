@@ -126,6 +126,7 @@ export async function applyInlineDirectiveOverrides(params: {
       invalidExecNode: false,
       hasStatusDirective: false,
       hasModelDirective: false,
+      forceModelSwitch: false,
       hasQueueDirective: false,
       queueReset: false,
     };

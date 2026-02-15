@@ -32,6 +32,7 @@ export function clearInlineDirectives(cleaned: string): InlineDirectives {
     hasStatusDirective: false,
     hasModelDirective: false,
     rawModelDirective: undefined,
+    forceModelSwitch: false,
     hasQueueDirective: false,
     queueMode: undefined,
     queueReset: false,

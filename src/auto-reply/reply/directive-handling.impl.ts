@@ -9,6 +9,7 @@ import {
   resolveAgentDir,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
+import { findModelInCatalog, type ModelCatalogEntry } from "../../agents/model-catalog.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
@@ -349,6 +350,18 @@ export async function handleDirectiveOnly(params: {
     }
   }
   if (modelSelection) {
+    // Context guard: block model switches that would exceed the target model's context window
+    if (!directives.forceModelSwitch) {
+      const contextGuardError = checkModelSwitchContextGuard({
+        sessionEntry,
+        targetProvider: modelSelection.provider,
+        targetModel: modelSelection.model,
+        allowedModelCatalog,
+      });
+      if (contextGuardError) {
+        return { text: contextGuardError };
+      }
+    }
     applyModelOverrideToSessionEntry({
       entry: sessionEntry,
       selection: modelSelection,
@@ -497,4 +510,50 @@ export async function handleDirectiveOnly(params: {
     return undefined;
   }
   return { text: ack || "OK." };
+}
+
+/**
+ * Context guard: checks if switching to the target model would exceed its context window.
+ * Returns an error message string if the switch should be blocked, or undefined if safe.
+ */
+function checkModelSwitchContextGuard(params: {
+  sessionEntry: SessionEntry;
+  targetProvider: string;
+  targetModel: string;
+  allowedModelCatalog: ModelCatalogEntry[];
+}): string | undefined {
+  const { sessionEntry, targetProvider, targetModel, allowedModelCatalog } = params;
+
+  // Get current session token usage
+  const currentTokens = sessionEntry.contextTokens ?? sessionEntry.totalTokens ?? 0;
+  if (currentTokens <= 0) {
+    return undefined; // No token data available, allow the switch
+  }
+
+  // Find target model in catalog
+  const targetEntry = findModelInCatalog(allowedModelCatalog, targetProvider, targetModel);
+  const targetContextWindow = targetEntry?.contextWindow;
+  if (!targetContextWindow || targetContextWindow <= 0) {
+    return undefined; // Unknown context window, allow the switch
+  }
+
+  // Block if current usage exceeds target model's context window
+  if (currentTokens > targetContextWindow) {
+    const currentK = Math.round(currentTokens / 1000);
+    const targetK = Math.round(targetContextWindow / 1000);
+    const overageK = Math.round((currentTokens - targetContextWindow) / 1000);
+    return [
+      `⚠️ Context guard: switch blocked.`,
+      ``,
+      `Current session: ~${currentK}K tokens`,
+      `Target model (${targetProvider}/${targetModel}): ${targetK}K context window`,
+      `Over budget by: ~${overageK}K tokens`,
+      ``,
+      `Options:`,
+      `• /compact — reduce session size first`,
+      `• /model ${targetProvider}/${targetModel} --force — switch anyway (may cause truncation)`,
+    ].join("\n");
+  }
+
+  return undefined;
 }

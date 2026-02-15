@@ -8,12 +8,20 @@ export function extractModelDirective(
   rawModel?: string;
   rawProfile?: string;
   hasDirective: boolean;
+  forceSwitch: boolean;
 } {
   if (!body) {
-    return { cleaned: "", hasDirective: false };
+    return { cleaned: "", hasDirective: false, forceSwitch: false };
   }
 
-  const modelMatch = body.match(
+  // Detect --force flag before matching model directive
+  const forceSwitch = /(?:^|\s)--force(?:\s|$)/i.test(body);
+  // Strip --force from body before model matching
+  const bodyWithoutForce = forceSwitch
+    ? body.replace(/(?:^|\s)--force(?:\s|$)/i, " ").trim()
+    : body;
+
+  const modelMatch = bodyWithoutForce.match(
     /(?:^|\s)\/model(?=$|\s|:)\s*:?\s*([A-Za-z0-9_.:@-]+(?:\/[A-Za-z0-9_.:@-]+)*)?/i,
   );
 
@@ -21,7 +29,7 @@ export function extractModelDirective(
   const aliasMatch =
     modelMatch || aliases.length === 0
       ? null
-      : body.match(
+      : bodyWithoutForce.match(
           new RegExp(
             `(?:^|\\s)\\/(${aliases.map(escapeRegExp).join("|")})(?=$|\\s|:)(?:\\s*:\\s*)?`,
             "i",
@@ -39,12 +47,20 @@ export function extractModelDirective(
     rawProfile = parts.slice(1).join("@").trim() || undefined;
   }
 
-  const cleaned = match ? body.replace(match[0], " ").replace(/\s+/g, " ").trim() : body.trim();
+  // Clean the original body (including --force removal)
+  let cleaned = match
+    ? bodyWithoutForce.replace(match[0], " ").replace(/\s+/g, " ").trim()
+    : bodyWithoutForce.trim();
+  // If --force was in the original but no model directive, restore the body
+  if (!match && forceSwitch) {
+    cleaned = body.trim();
+  }
 
   return {
     cleaned,
     rawModel,
     rawProfile,
     hasDirective: !!match,
+    forceSwitch: forceSwitch && !!match,
   };
 }
