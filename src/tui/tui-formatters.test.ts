@@ -160,4 +160,27 @@ describe("sanitizeRenderableText", () => {
 
     expect(longestSegment).toBeLessThanOrEqual(32);
   });
+
+  it("preserves long filesystem paths verbatim for copy safety", () => {
+    const input =
+      "/Users/jasonshawn/PerfectXiao/a_very_long_directory_name_designed_specifically_to_test_the_line_wrapping_issue/file.txt";
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toBe(input);
+  });
+
+  it("preserves long urls verbatim for copy safety", () => {
+    const input =
+      "https://example.com/this/is/a/very/long/url/segment/that/should/remain/contiguous/when/rendered";
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toBe(input);
+  });
+
+  it("preserves long file-like underscore tokens for copy safety", () => {
+    const input = "administrators_authorized_keys_with_extra_suffix".repeat(2);
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toBe(input);
+  });
 });
