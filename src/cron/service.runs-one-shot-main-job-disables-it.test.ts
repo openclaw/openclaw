@@ -182,6 +182,7 @@ describe("CronService", () => {
     const job = await cron.add({
       name: "wakeMode now waits",
       enabled: true,
+      deleteAfterRun: false,
       schedule: { kind: "at", at: new Date(1).toISOString() },
       sessionTarget: "main",
       wakeMode: "now",
@@ -197,7 +198,7 @@ describe("CronService", () => {
       await Promise.resolve();
     }
 
-    expect(runHeartbeatOnce).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(runHeartbeatOnce).toHaveBeenCalledTimes(1));
     expect(requestHeartbeatNow).not.toHaveBeenCalled();
     expect(enqueueSystemEvent).toHaveBeenCalledWith(
       "hello",
@@ -208,8 +209,10 @@ describe("CronService", () => {
     resolveHeartbeat?.({ status: "ran", durationMs: 123 });
     await runPromise;
 
-    expect(job.state.lastStatus).toBe("ok");
-    expect(job.state.lastDurationMs).toBeGreaterThan(0);
+    const jobsAfterRun = await cron.list({ includeDisabled: true });
+    const updated = jobsAfterRun.find((j) => j.id === job.id);
+    expect(updated?.state.lastStatus).toBe("ok");
+    expect((updated?.state.lastDurationMs ?? 0) > 0).toBe(true);
 
     cron.stop();
     await store.cleanup();
@@ -296,6 +299,7 @@ describe("CronService", () => {
     const job = await cron.add({
       name: "wakeMode now fallback",
       enabled: true,
+      deleteAfterRun: false,
       schedule: { kind: "at", at: new Date(1).toISOString() },
       sessionTarget: "main",
       wakeMode: "now",
@@ -306,10 +310,11 @@ describe("CronService", () => {
 
     expect(runHeartbeatOnce).toHaveBeenCalled();
     expect(requestHeartbeatNow).toHaveBeenCalled();
-    expect(job.state.lastStatus).toBe("ok");
-    expect(job.state.lastError).toBeUndefined();
 
-    await cron.list({ includeDisabled: true });
+    const jobsAfterRun = await cron.list({ includeDisabled: true });
+    const updated = jobsAfterRun.find((j) => j.id === job.id);
+    expect(updated?.state.lastStatus).toBe("ok");
+    expect(updated?.state.lastError).toBeUndefined();
     cron.stop();
     await store.cleanup();
   });

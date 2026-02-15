@@ -24,13 +24,12 @@ import {
 
 export async function start(state: CronServiceState) {
   const startupInterruptedJobIds = new Set<string>();
-  let shouldReplayMissedJobs = false;
+
   await locked(state, async () => {
     if (!state.deps.cronEnabled) {
       state.deps.log.info({ enabled: false }, "cron: disabled");
       return;
     }
-    shouldReplayMissedJobs = true;
     await ensureLoaded(state, { skipRecompute: true });
     const jobs = state.store?.jobs ?? [];
     for (const job of jobs) {
@@ -43,6 +42,18 @@ export async function start(state: CronServiceState) {
         startupInterruptedJobIds.add(job.id);
       }
     }
+    await persist(state);
+  });
+
+  if (state.deps.cronEnabled) {
+    await runMissedJobs(state, { skipJobIds: startupInterruptedJobIds });
+  }
+
+  await locked(state, async () => {
+    if (!state.deps.cronEnabled) {
+      return;
+    }
+    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
     recomputeNextRuns(state);
     await persist(state);
     armTimer(state);
@@ -55,9 +66,6 @@ export async function start(state: CronServiceState) {
       "cron: started",
     );
   });
-  if (shouldReplayMissedJobs) {
-    await runMissedJobs(state, { skipJobIds: startupInterruptedJobIds });
-  }
 }
 
 export function stop(state: CronServiceState) {

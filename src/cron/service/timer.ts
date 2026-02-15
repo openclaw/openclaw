@@ -361,42 +361,116 @@ export async function runMissedJobs(
   state: CronServiceState,
   opts?: { skipJobIds?: ReadonlySet<string> },
 ) {
-  if (!state.store) {
-    return;
-  }
-  const now = state.deps.nowMs();
   const skipJobIds = opts?.skipJobIds;
-  const missed = state.store.jobs.filter((j) => {
-    if (!j.state) {
-      j.state = {};
+  const missedIds = await locked(state, async () => {
+    if (!state.store) {
+      return [] as string[];
     }
-    if (!j.enabled) {
-      return false;
+    const now = state.deps.nowMs();
+    const missed = state.store.jobs.filter((j) => {
+      if (!j.state) {
+        j.state = {};
+      }
+      if (!j.enabled) {
+        return false;
+      }
+      if (skipJobIds?.has(j.id)) {
+        return false;
+      }
+      if (typeof j.state.runningAtMs === "number") {
+        return false;
+      }
+      const next = j.state.nextRunAtMs;
+      if (j.schedule.kind === "at" && j.state.lastStatus) {
+        return false;
+      }
+      return typeof next === "number" && now >= next;
+    });
+
+    if (missed.length > 0) {
+      state.deps.log.info(
+        { count: missed.length, jobIds: missed.map((j) => j.id) },
+        "cron: running missed jobs after restart",
+      );
     }
-    if (skipJobIds?.has(j.id)) {
-      return false;
-    }
-    if (typeof j.state.runningAtMs === "number") {
-      return false;
-    }
-    const next = j.state.nextRunAtMs;
-    if (j.schedule.kind === "at" && j.state.lastStatus) {
-      // Any terminal status (ok, error, skipped) means the job already
-      // ran at least once.  Don't re-fire it on restart — applyJobResult
-      // disables one-shot jobs, but guard here defensively (#13845).
-      return false;
-    }
-    return typeof next === "number" && now >= next;
+    return missed.map((j) => j.id);
   });
 
-  if (missed.length > 0) {
-    state.deps.log.info(
-      { count: missed.length, jobIds: missed.map((j) => j.id) },
-      "cron: running missed jobs after restart",
-    );
-    for (const job of missed) {
-      await executeJob(state, job, now, { forced: false });
+  for (const jobId of missedIds) {
+    const prepared = await locked(state, async () => {
+      await ensureLoaded(state, { skipRecompute: true });
+      const job = state.store?.jobs.find((j) => j.id === jobId);
+      if (!job) {
+        return null;
+      }
+      if (typeof job.state.runningAtMs === "number") {
+        return null;
+      }
+      const startedAt = state.deps.nowMs();
+      job.state.runningAtMs = startedAt;
+      job.state.lastError = undefined;
+      emit(state, { jobId: job.id, action: "started", runAtMs: startedAt });
+      await persist(state);
+      return {
+        jobId: job.id,
+        startedAt,
+        executionJob: JSON.parse(JSON.stringify(job)) as CronJob,
+      };
+    });
+
+    if (!prepared) {
+      continue;
     }
+
+    let coreResult: {
+      status: "ok" | "error" | "skipped";
+      error?: string;
+      summary?: string;
+      sessionId?: string;
+      sessionKey?: string;
+    };
+    try {
+      coreResult = await executeJobCore(state, prepared.executionJob);
+    } catch (err) {
+      coreResult = { status: "error", error: String(err) };
+    }
+    const endedAt = state.deps.nowMs();
+
+    await locked(state, async () => {
+      await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+      const job = state.store?.jobs.find((j) => j.id === prepared.jobId);
+      if (!job) {
+        return;
+      }
+
+      const shouldDelete = applyJobResult(state, job, {
+        status: coreResult.status,
+        error: coreResult.error,
+        startedAt: prepared.startedAt,
+        endedAt,
+      });
+
+      emit(state, {
+        jobId: job.id,
+        action: "finished",
+        status: coreResult.status,
+        error: coreResult.error,
+        summary: coreResult.summary,
+        sessionId: coreResult.sessionId,
+        sessionKey: coreResult.sessionKey,
+        runAtMs: prepared.startedAt,
+        durationMs: job.state.lastDurationMs,
+        nextRunAtMs: job.state.nextRunAtMs,
+      });
+
+      if (shouldDelete && state.store) {
+        state.store.jobs = state.store.jobs.filter((j) => j.id !== job.id);
+        emit(state, { jobId: job.id, action: "removed" });
+      }
+
+      recomputeNextRuns(state);
+      await persist(state);
+    });
   }
 }
 
