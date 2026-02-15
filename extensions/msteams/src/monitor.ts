@@ -180,6 +180,15 @@ export async function monitorMSTeamsProvider(
               };
             }
           }
+          // The Agents SDK sends the channel conversation thread ID as
+          // activity.channelData.team.id instead of the Graph group ID.
+          // Alias the resolved team config under all known channel conversation
+          // IDs so the allowlist matcher can find it. (#9873)
+          if (entry.channelId && entry.channelId !== entry.teamId) {
+            if (!nextTeams[entry.channelId]) {
+              nextTeams[entry.channelId] = nextTeams[entry.teamId];
+            }
+          }
         });
 
         teamsConfig = nextTeams;
