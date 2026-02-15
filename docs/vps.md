@@ -15,6 +15,7 @@ deployments work at a high level.
 
 - **Railway** (one‑click + browser setup): [Railway](/install/railway)
 - **Northflank** (one‑click + browser setup): [Northflank](/install/northflank)
+- **xCloud** (managed VPS + dashboard setup): [xCloud](/install/xcloud)
 - **Oracle Cloud (Always Free)**: [Oracle](/platforms/oracle) — $0/month (Always Free, ARM; capacity/signup can be finicky)
 - **Fly.io**: [Fly.io](/install/fly)
 - **Hetzner (Docker)**: [Hetzner](/install/hetzner)
