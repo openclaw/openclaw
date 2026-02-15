@@ -233,7 +233,7 @@ pnpm vitest run --coverage
 ### CI Pipeline
 
 - **Build**: `pnpm build` (TypeScript compilation)
-- **Lint**: `pnpm lint` (typescript-eslint, type-aware)
+- **Lint**: `pnpm lint` (Oxlint, type-aware)
 - **Format**: `pnpm format:check`
 - **Tests**: `pnpm vitest run`
 
@@ -244,7 +244,7 @@ pnpm vitest run --coverage
 ```
 □ pnpm lint                         # Full project, zero NEW errors
 □ pnpm vitest run                   # All related test files pass
-□ pnpm format:fix                   # No formatting issues
+□ pnpm format                        # No formatting issues
 □ git diff --stat                   # Review what you're committing
 □ grep all callers                  # If changing function signatures
 □ Squash fix-on-fix commits         # Clean logical commits only
