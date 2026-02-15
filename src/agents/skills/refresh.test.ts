@@ -13,6 +13,18 @@ vi.mock("chokidar", () => {
   };
 });
 
+/**
+ * Test a path against the ignored array which may contain RegExps and functions.
+ */
+function isIgnored(
+  ignored: Array<RegExp | ((path: string) => boolean)>,
+  filePath: string,
+): boolean {
+  return ignored.some((rule) =>
+    typeof rule === "function" ? rule(filePath) : rule.test(filePath),
+  );
+}
+
 describe("ensureSkillsWatcher", () => {
   it("ignores node_modules, dist, .git, and Python venvs by default", async () => {
     const mod = await import("./refresh.js");
@@ -38,33 +50,42 @@ describe("ensureSkillsWatcher", () => {
     const ignored = mod.DEFAULT_SKILLS_WATCH_IGNORED;
 
     // Node/JS paths
-    expect(ignored.some((re) => re.test("/tmp/workspace/skills/node_modules/pkg/index.js"))).toBe(
-      true,
-    );
-    expect(ignored.some((re) => re.test("/tmp/workspace/skills/dist/index.js"))).toBe(true);
-    expect(ignored.some((re) => re.test("/tmp/workspace/skills/.git/config"))).toBe(true);
+    expect(isIgnored(ignored, "/tmp/workspace/skills/node_modules/pkg/index.js")).toBe(true);
+    expect(isIgnored(ignored, "/tmp/workspace/skills/dist/index.js")).toBe(true);
+    expect(isIgnored(ignored, "/tmp/workspace/skills/.git/config")).toBe(true);
 
     // Python virtual environments and caches
-    expect(ignored.some((re) => re.test("/tmp/workspace/skills/scripts/.venv/bin/python"))).toBe(
-      true,
-    );
-    expect(ignored.some((re) => re.test("/tmp/workspace/skills/venv/lib/python3.10/site.py"))).toBe(
-      true,
-    );
-    expect(ignored.some((re) => re.test("/tmp/workspace/skills/__pycache__/module.pyc"))).toBe(
-      true,
-    );
-    expect(ignored.some((re) => re.test("/tmp/workspace/skills/.mypy_cache/3.10/foo.json"))).toBe(
-      true,
-    );
-    expect(ignored.some((re) => re.test("/tmp/workspace/skills/.pytest_cache/v/cache"))).toBe(true);
+    expect(isIgnored(ignored, "/tmp/workspace/skills/scripts/.venv/bin/python")).toBe(true);
+    expect(isIgnored(ignored, "/tmp/workspace/skills/venv/lib/python3.10/site.py")).toBe(true);
+    expect(isIgnored(ignored, "/tmp/workspace/skills/__pycache__/module.pyc")).toBe(true);
+    expect(isIgnored(ignored, "/tmp/workspace/skills/.mypy_cache/3.10/foo.json")).toBe(true);
+    expect(isIgnored(ignored, "/tmp/workspace/skills/.pytest_cache/v/cache")).toBe(true);
 
     // Build artifacts and caches
-    expect(ignored.some((re) => re.test("/tmp/workspace/skills/build/output.js"))).toBe(true);
-    expect(ignored.some((re) => re.test("/tmp/workspace/skills/.cache/data.json"))).toBe(true);
+    expect(isIgnored(ignored, "/tmp/workspace/skills/build/output.js")).toBe(true);
+    expect(isIgnored(ignored, "/tmp/workspace/skills/.cache/data.json")).toBe(true);
 
     // Should NOT ignore normal skill files
-    expect(ignored.some((re) => re.test("/tmp/.hidden/skills/index.md"))).toBe(false);
-    expect(ignored.some((re) => re.test("/tmp/workspace/skills/my-skill/SKILL.md"))).toBe(false);
+    expect(isIgnored(ignored, "/tmp/workspace/skills/my-skill/SKILL.md")).toBe(false);
+    expect(isIgnored(ignored, "/tmp/workspace/skills/my-skill/index.js")).toBe(false);
+    expect(isIgnored(ignored, "/tmp/workspace/skills/my-skill/config.json")).toBe(false);
+    expect(isIgnored(ignored, "/tmp/workspace/skills/my-skill/script.py")).toBe(false);
+    expect(isIgnored(ignored, "/tmp/workspace/skills/my-skill/run.sh")).toBe(false);
+  });
+
+  it("ignores non-relevant asset files to prevent FD exhaustion", async () => {
+    const mod = await import("./refresh.js");
+    const ignored = mod.DEFAULT_SKILLS_WATCH_IGNORED;
+
+    // SVG icon packs, images, audio, video — should be ignored
+    expect(isIgnored(ignored, "/tmp/workspace/skills/icons/icon-1.svg")).toBe(true);
+    expect(isIgnored(ignored, "/tmp/workspace/skills/icons/photo.png")).toBe(true);
+    expect(isIgnored(ignored, "/tmp/workspace/skills/icons/photo.jpg")).toBe(true);
+    expect(isIgnored(ignored, "/tmp/workspace/skills/icons/photo.jpeg")).toBe(true);
+    expect(isIgnored(ignored, "/tmp/workspace/skills/assets/clip.mp3")).toBe(true);
+    expect(isIgnored(ignored, "/tmp/workspace/skills/assets/clip.mp4")).toBe(true);
+    expect(isIgnored(ignored, "/tmp/workspace/skills/assets/font.woff2")).toBe(true);
+    expect(isIgnored(ignored, "/tmp/workspace/skills/assets/data.csv")).toBe(true);
+    expect(isIgnored(ignored, "/tmp/workspace/skills/assets/archive.zip")).toBe(true);
   });
 });

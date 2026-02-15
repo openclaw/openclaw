@@ -26,7 +26,32 @@ const workspaceVersions = new Map<string, number>();
 const watchers = new Map<string, SkillsWatchState>();
 let globalVersion = 0;
 
-export const DEFAULT_SKILLS_WATCH_IGNORED: RegExp[] = [
+/**
+ * File extensions that are relevant for skill change detection.
+ * Only these files trigger a skills snapshot refresh when modified.
+ * This prevents FD exhaustion on macOS when skills contain large asset
+ * trees (e.g. icon packs with tens of thousands of SVG files).
+ * See: https://github.com/openclaw/openclaw/pull/14023
+ */
+const SKILLS_WATCH_RELEVANT_EXTENSIONS = new Set([
+  ".md",
+  ".js",
+  ".ts",
+  ".mjs",
+  ".cjs",
+  ".mts",
+  ".cts",
+  ".jsx",
+  ".tsx",
+  ".json",
+  ".yaml",
+  ".yml",
+  ".toml",
+  ".sh",
+  ".py",
+]);
+
+export const DEFAULT_SKILLS_WATCH_IGNORED: Array<RegExp | ((path: string) => boolean)> = [
   /(^|[\\/])\.git([\\/]|$)/,
   /(^|[\\/])node_modules([\\/]|$)/,
   /(^|[\\/])dist([\\/]|$)/,
@@ -39,6 +64,15 @@ export const DEFAULT_SKILLS_WATCH_IGNORED: RegExp[] = [
   // Build artifacts and caches
   /(^|[\\/])build([\\/]|$)/,
   /(^|[\\/])\.cache([\\/]|$)/,
+  // Ignore non-relevant file types to prevent FD exhaustion.
+  // Skills are defined by markdown, code, and config files — not binary assets.
+  // A skill with thousands of asset files (e.g. SVG icon packs) would otherwise
+  // cause chokidar to open one FD per file for write-finish polling.
+  (filePath: string) => {
+    const ext = path.extname(filePath).toLowerCase();
+    // Allow directories (no extension) and relevant file types
+    return ext !== "" && !SKILLS_WATCH_RELEVANT_EXTENSIONS.has(ext);
+  },
 ];
 
 function bumpVersion(current: number): number {
