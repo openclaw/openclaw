@@ -92,6 +92,12 @@ import { buildEmbeddedSandboxInfo } from "../sandbox-info.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "../session-manager-cache.js";
 import { prepareSessionManagerForRun } from "../session-manager-init.js";
 import {
+  buildSessionSummaryPrompt,
+  loadSessionSummaryState,
+  persistSessionSummaryState,
+  updateSessionSummaryState,
+} from "../session-summary.js";
+import {
   applySystemPromptOverrideToSession,
   buildEmbeddedSystemPrompt,
   createSystemPromptOverride,
@@ -660,6 +666,7 @@ export async function runEmbeddedAttempt(
         );
       }
 
+      let sessionSummaryContext = "";
       try {
         const prior = await sanitizeSessionHistory({
           messages: activeSession.messages,
@@ -678,6 +685,29 @@ export async function runEmbeddedAttempt(
         const validated = transcriptPolicy.validateAnthropicTurns
           ? validateAnthropicTurns(validatedGemini)
           : validatedGemini;
+        const priorSummaryState = await loadSessionSummaryState({
+          sessionFile: params.sessionFile,
+        });
+        const nextSummaryState = updateSessionSummaryState({
+          state: priorSummaryState,
+          messages: validated,
+        });
+        if (
+          nextSummaryState.lastProcessedMessageCount !==
+            priorSummaryState.lastProcessedMessageCount ||
+          nextSummaryState.items.length !== priorSummaryState.items.length
+        ) {
+          await persistSessionSummaryState({
+            sessionFile: params.sessionFile,
+            state: nextSummaryState,
+          }).catch((summaryErr) => {
+            log.debug(`session summary persistence skipped: ${String(summaryErr)}`);
+          });
+        }
+        sessionSummaryContext =
+          buildSessionSummaryPrompt({
+            state: nextSummaryState,
+          }) ?? "";
 
         const contextWindowTokens = resolveContextWindowInfo({
           cfg: params.config,
@@ -689,7 +719,9 @@ export async function runEmbeddedAttempt(
         const reserveTokens = resolveCompactionReserveTokensFloor(params.config);
         const staticPromptTokens = computeStaticPromptTokens({
           systemPrompt: systemPromptText,
-          prompt: params.prompt,
+          prompt: sessionSummaryContext
+            ? `${sessionSummaryContext}\n\n${params.prompt}`
+            : params.prompt,
         });
         const budgeted = planContextMessages({
           messages: validated,
@@ -712,7 +744,8 @@ export async function runEmbeddedAttempt(
           note:
             `trimmed=${budgeted.trimmed ? "yes" : "no"} ` +
             `reason=${budgeted.reason} ` +
-            `tokens=${budgeted.estimatedHistoryTokensAfter}/${budgeted.historyBudgetTokens}`,
+            `tokens=${budgeted.estimatedHistoryTokensAfter}/${budgeted.historyBudgetTokens} ` +
+            `summary=${sessionSummaryContext ? "on" : "off"}`,
         });
         if (limited.length > 0) {
           activeSession.agent.replaceMessages(limited);
@@ -955,6 +988,9 @@ export async function runEmbeddedAttempt(
               `hooks: prepended context to prompt (${hookResult.prependContext.length} chars)`,
             );
           }
+        }
+        if (sessionSummaryContext) {
+          effectivePrompt = `${sessionSummaryContext}\n\n${effectivePrompt}`;
         }
 
         log.debug(`embedded run prompt start: runId=${params.runId} sessionId=${params.sessionId}`);
