@@ -394,8 +394,14 @@ export async function discoverAllSessions(params?: {
     }
     // Do not exclude by endMs: a session can have activity in range even if it continued later.
 
-    // Extract session ID from filename (remove .jsonl)
-    const sessionId = entry.name.slice(0, -6);
+    // Extract session ID from filename (remove .jsonl, decode URI-encoded chars)
+    const raw = entry.name.slice(0, -6);
+    let sessionId: string;
+    try {
+      sessionId = decodeURIComponent(raw);
+    } catch {
+      sessionId = raw;
+    }
 
     // Try to read first user message for label extraction
     let firstUserMessage: string | undefined;

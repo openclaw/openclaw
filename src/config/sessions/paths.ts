@@ -54,7 +54,7 @@ export function resolveSessionFilePathOptions(params: {
   return undefined;
 }
 
-export const SAFE_SESSION_ID_RE = /^[a-z0-9][a-z0-9._-]{0,127}$/i;
+export const SAFE_SESSION_ID_RE = /^[a-z0-9][a-z0-9._:+-]{0,127}$/i;
 
 export function validateSessionId(sessionId: string): string {
   const trimmed = sessionId.trim();
@@ -165,7 +165,7 @@ export function resolveSessionTranscriptPathInDir(
   sessionsDir: string,
   topicId?: string | number,
 ): string {
-  const safeSessionId = validateSessionId(sessionId);
+  const safeSessionId = encodeURIComponent(validateSessionId(sessionId));
   const safeTopicId =
     typeof topicId === "string"
       ? encodeURIComponent(topicId)

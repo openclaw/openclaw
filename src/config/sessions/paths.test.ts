@@ -34,6 +34,18 @@ describe("session path safety", () => {
     expect(validateSessionId("ABC_123.hello")).toBe("ABC_123.hello");
   });
 
+  it("accepts colons and plus signs for WhatsApp-style session IDs", () => {
+    expect(validateSessionId("agent:wa-relay:whatsapp:+573144849423")).toBe(
+      "agent:wa-relay:whatsapp:+573144849423",
+    );
+    expect(validateSessionId("sess:topic+1")).toBe("sess:topic+1");
+  });
+
+  it("rejects session IDs starting with colon or plus", () => {
+    expect(() => validateSessionId(":starts-with-colon")).toThrow(/Invalid session ID/);
+    expect(() => validateSessionId("+starts-with-plus")).toThrow(/Invalid session ID/);
+  });
+
   it("rejects unsafe session IDs", () => {
     expect(() => validateSessionId("../etc/passwd")).toThrow(/Invalid session ID/);
     expect(() => validateSessionId("a/b")).toThrow(/Invalid session ID/);
@@ -46,6 +58,21 @@ describe("session path safety", () => {
     const resolved = resolveSessionTranscriptPathInDir("sess-1", sessionsDir, "topic/a+b");
 
     expect(resolved).toBe(path.resolve(sessionsDir, "sess-1-topic-topic%2Fa%2Bb.jsonl"));
+  });
+
+  it("encodes colons and plus signs in session ID filenames for cross-platform safety", () => {
+    const sessionsDir = "/tmp/openclaw/agents/main/sessions";
+    const resolved = resolveSessionTranscriptPathInDir(
+      "agent:wa-relay:whatsapp:+573144849423",
+      sessionsDir,
+    );
+
+    expect(resolved).toBe(
+      path.resolve(sessionsDir, "agent%3Awa-relay%3Awhatsapp%3A%2B573144849423.jsonl"),
+    );
+    // Verify no colons in filename (illegal on Windows)
+    const fileName = path.basename(resolved);
+    expect(fileName).not.toContain(":");
   });
 
   it("rejects unsafe sessionFile candidates that escape the sessions dir", () => {
