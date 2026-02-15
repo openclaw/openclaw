@@ -1,5 +1,5 @@
-import OpenClawKit
 import Foundation
+import OpenClawKit
 import os
 import Testing
 @testable import OpenClaw
@@ -14,7 +14,9 @@ import Testing
 
         var state: URLSessionTask.State = .suspended
 
-        func snapshotCancelCount() -> Int { self.cancelCount.withLock { $0 } }
+        func snapshotCancelCount() -> Int {
+            self.cancelCount.withLock { $0 }
+        }
 
         func resume() {
             self.state = .running
@@ -92,8 +94,13 @@ import Testing
         private let makeCount = OSAllocatedUnfairLock(initialState: 0)
         private let tasks = OSAllocatedUnfairLock(initialState: [FakeWebSocketTask]())
 
-        func snapshotMakeCount() -> Int { self.makeCount.withLock { $0 } }
-        func latestTask() -> FakeWebSocketTask? { self.tasks.withLock { $0.last } }
+        func snapshotMakeCount() -> Int {
+            self.makeCount.withLock { $0 }
+        }
+
+        func latestTask() -> FakeWebSocketTask? {
+            self.tasks.withLock { $0.last }
+        }
 
         func makeWebSocketTask(url: URL) -> WebSocketTaskBox {
             _ = url
@@ -106,8 +113,8 @@ import Testing
 
     @Test func shutdownPreventsReconnectLoopFromReceiveFailure() async throws {
         let session = FakeWebSocketSession()
-        let channel = GatewayChannelActor(
-            url: URL(string: "ws://example.invalid")!,
+        let channel = try GatewayChannelActor(
+            url: #require(URL(string: "ws://example.invalid")),
             token: nil,
             session: WebSocketSessionBox(session: session))
 

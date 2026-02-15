@@ -13,7 +13,7 @@ struct OpenClawOAuthStoreTests {
     }
 
     @Test
-    func usesEnvOverrideForOpenClawOAuthDir() throws {
+    func usesEnvOverrideForOpenClawOAuthDir() {
         let key = "OPENCLAW_OAUTH_DIR"
         let previous = ProcessInfo.processInfo.environment[key]
         defer {
