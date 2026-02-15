@@ -176,11 +176,21 @@ export function loadSessionStore(
   }
 
   // Best-effort migration: message provider → channel naming.
-  for (const entry of Object.values(store)) {
+  // Also filter out invalid entries (empty sessionFile, absolute paths from stale data)
+  const validEntries: Record<string, SessionEntry> = {};
+  for (const [key, entry] of Object.entries(store)) {
     if (!entry || typeof entry !== "object") {
       continue;
     }
     const rec = entry as unknown as Record<string, unknown>;
+    // Filter out entries with empty sessionFile or invalid paths
+    // These cause "Session file path must be within sessions directory" errors
+    const sessionFile = rec.sessionFile as string | undefined;
+    if (!sessionFile || sessionFile.startsWith("..") || sessionFile.startsWith("/")) {
+      // Skip invalid entries but log for debugging
+      continue;
+    }
+
     if (typeof rec.channel !== "string" && typeof rec.provider === "string") {
       rec.channel = rec.provider;
       delete rec.provider;
@@ -197,7 +207,9 @@ export function loadSessionStore(
     } else if ("room" in rec) {
       delete rec.room;
     }
+    validEntries[key] = entry;
   }
+  store = validEntries;
 
   // Cache the result if caching is enabled
   if (!opts.skipCache && isSessionStoreCacheEnabled()) {
