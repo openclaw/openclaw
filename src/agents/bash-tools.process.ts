@@ -65,7 +65,7 @@ const processSchema = Type.Object({
   offset: Type.Optional(Type.Number({ description: "Log offset" })),
   limit: Type.Optional(Type.Number({ description: "Log length" })),
   timeout: Type.Optional(
-    Type.Number({
+    Type.Union([Type.Number(), Type.String()], {
       description: "For poll: wait up to this many milliseconds before returning",
     }),
   ),
