@@ -169,8 +169,106 @@ bash pty:true workdir:~/project background:true command:"claude 'Your task'"
 
 ## OpenCode
 
+OpenCode is an open-source AI coding agent that supports multiple LLM providers (Claude, GPT, Gemini, Kimi, DeepSeek, etc.) with MCP support.
+
+### Commands
+
+| Command                 | Effect                                              |
+| ----------------------- | --------------------------------------------------- |
+| `opencode`              | Start interactive TUI (default)                     |
+| `opencode run "prompt"` | One-shot execution with a message                   |
+| `opencode attach <url>` | Attach to a running OpenCode server                 |
+| `opencode session list` | List all sessions                                   |
+| `opencode pr <number>`  | Checkout a GitHub PR and start OpenCode             |
+| `opencode models`       | List all available models                           |
+| `opencode mcp`          | Manage MCP servers                                  |
+
+### Flags for `opencode run`
+
+| Flag           | Effect                                                    |
+| -------------- | --------------------------------------------------------- |
+| `-m, --model`  | Model to use (e.g., `anthropic/claude-sonnet-4-5`)        |
+| `-c, --continue` | Continue the last session                               |
+| `-s, --session`  | Continue a specific session by ID                       |
+| `--fork`       | Fork session when continuing                              |
+| `--share`      | Share the session                                         |
+| `--thinking`   | Show thinking blocks                                      |
+| `--variant`    | Model variant (e.g., `high`, `max` for reasoning effort)  |
+| `-f, --file`   | Attach files to message                                   |
+| `--agent`      | Use a specific agent                                      |
+
+### Basic Usage
+
 ```bash
-bash pty:true workdir:~/project command:"opencode run 'Your task'"
+# Quick one-shot task (with PTY!)
+bash pty:true workdir:~/project command:"opencode run 'Add error handling to the API'"
+
+# Background for longer work
+bash pty:true workdir:~/project background:true command:"opencode run 'Refactor the auth module'"
+
+# With specific model
+bash pty:true workdir:~/project command:"opencode run -m openai/gpt-4o 'Your task'"
+
+# High reasoning effort variant
+bash pty:true workdir:~/project command:"opencode run --variant high 'Analyze this complex architecture'"
+```
+
+### Session Management
+
+OpenCode persists sessions, allowing you to continue conversations:
+
+```bash
+# Continue last session
+bash pty:true workdir:~/project command:"opencode run -c 'Continue fixing the bugs'"
+
+# Continue specific session
+bash pty:true workdir:~/project command:"opencode run -s abc123 'Continue from where we left off'"
+
+# Fork a session (creates a new branch of conversation)
+bash pty:true workdir:~/project command:"opencode run -c --fork 'Try a different approach'"
+
+# List sessions (run directly to see IDs)
+bash pty:true command:"opencode session list"
+```
+
+### GitHub PR Integration
+
+```bash
+# Checkout PR and start coding
+bash pty:true workdir:~/project command:"opencode pr 42 'Review and fix issues in this PR'"
+```
+
+### Multi-Model Support
+
+OpenCode supports multiple providers. Use `-m provider/model` syntax:
+
+```bash
+# Anthropic Claude
+bash pty:true command:"opencode run -m anthropic/claude-sonnet-4-5 'Your task'"
+
+# OpenAI GPT
+bash pty:true command:"opencode run -m openai/gpt-4o 'Your task'"
+
+# Google Gemini
+bash pty:true command:"opencode run -m gemini/gemini-2.5-pro 'Your task'"
+
+# DeepSeek
+bash pty:true command:"opencode run -m deepseek/deepseek-chat 'Your task'"
+
+# OpenCode Zen (curated models)
+bash pty:true command:"opencode run -m opencode/claude-opus-4-6 'Your task'"
+```
+
+### MCP (Model Context Protocol)
+
+OpenCode has built-in MCP support for extending capabilities:
+
+```bash
+# List MCP servers
+bash pty:true command:"opencode mcp list"
+
+# Add an MCP server
+bash pty:true command:"opencode mcp add my-server /path/to/server"
 ```
 
 ---
