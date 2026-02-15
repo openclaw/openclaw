@@ -1,10 +1,13 @@
 import type { Server as HttpServer } from "node:http";
 import type { WebSocketServer } from "ws";
 import type { CanvasHostHandler, CanvasHostServer } from "../canvas-host/server.js";
+import type { CliDeps } from "../cli/deps.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import { stopGmailWatcher } from "../hooks/gmail-watcher.js";
+import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 
 export function createGatewayCloseHandler(params: {
   bonjourStop: (() => Promise<void>) | null;
@@ -29,6 +32,11 @@ export function createGatewayCloseHandler(params: {
   wss: WebSocketServer;
   httpServer: HttpServer;
   httpServers?: HttpServer[];
+  port: number;
+  getConfig: () => { hooks?: { internal?: { enabled?: boolean } } };
+  defaultWorkspaceDir: string;
+  deps: CliDeps;
+  logHooks: { warn: (msg: string) => void };
 }) {
   return async (opts?: { reason?: string; restartExpectedMs?: number | null }) => {
     const reasonRaw = typeof opts?.reason === "string" ? opts.reason.trim() : "";
@@ -68,6 +76,25 @@ export function createGatewayCloseHandler(params: {
       await params.pluginServices.stop().catch(() => {});
     }
     await stopGmailWatcher();
+
+    // Plugin hook (fire-and-forget)
+    const hookRunner = getGlobalHookRunner();
+    if (hookRunner) {
+      void hookRunner.runGatewayStop({ reason }, { port: params.port });
+    }
+
+    // Internal hook (fire-and-forget, respects config flag)
+    const cfg = params.getConfig();
+    if (cfg.hooks?.internal?.enabled) {
+      const hookEvent = createInternalHookEvent("gateway", "shutdown", "gateway:shutdown", {
+        cfg,
+        deps: params.deps,
+        workspaceDir: params.defaultWorkspaceDir,
+        reason,
+      });
+      void triggerInternalHook(hookEvent);
+    }
+
     params.cron.stop();
     params.heartbeatRunner.stop();
     for (const timer of params.nodePresenceTimers.values()) {

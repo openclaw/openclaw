@@ -715,6 +715,11 @@ export async function startGatewayServer(
     wss,
     httpServer,
     httpServers,
+    port,
+    getConfig: loadConfig,
+    defaultWorkspaceDir,
+    deps,
+    logHooks,
   });
 
   return {
