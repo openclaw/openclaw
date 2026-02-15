@@ -8,10 +8,22 @@ vi.mock("../../infra/session-cost-usage.js", async () => {
     ...actual,
     loadCostUsageSummary: vi.fn(async () => ({
       updatedAt: Date.now(),
-      startDate: "2026-02-01",
-      endDate: "2026-02-02",
+      days: 2,
       daily: [],
-      totals: { totalTokens: 1, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalCost: 0 },
+      models: [],
+      totals: {
+        totalTokens: 1,
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalCost: 0,
+        inputCost: 0,
+        outputCost: 0,
+        cacheReadCost: 0,
+        cacheWriteCost: 0,
+        missingCostEntries: 0,
+      },
     })),
   };
 });
