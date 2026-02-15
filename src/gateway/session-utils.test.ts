@@ -522,3 +522,183 @@ describe("listSessionsFromStore search", () => {
     expect(missing?.totalTokensFresh).toBe(false);
   });
 });
+
+describe("listSessionsFromStore date-range filtering", () => {
+  const baseCfg = {
+    session: { mainKey: "main" },
+    agents: { list: [{ id: "main", default: true }] },
+  } as OpenClawConfig;
+
+  const hour = 3_600_000;
+  const baseTime = new Date("2024-06-15T12:00:00Z").getTime();
+
+  const makeTimedStore = (): Record<string, SessionEntry> => ({
+    "agent:main:old-session": {
+      sessionId: "sess-old",
+      createdAt: baseTime - 24 * hour,
+      updatedAt: baseTime - 12 * hour,
+      displayName: "Old Session",
+    } as SessionEntry,
+    "agent:main:mid-session": {
+      sessionId: "sess-mid",
+      createdAt: baseTime - 6 * hour,
+      updatedAt: baseTime - 3 * hour,
+      displayName: "Mid Session",
+    } as SessionEntry,
+    "agent:main:new-session": {
+      sessionId: "sess-new",
+      createdAt: baseTime - 1 * hour,
+      updatedAt: baseTime,
+      displayName: "New Session",
+    } as SessionEntry,
+  });
+
+  test("updatedAfter filters out sessions updated before the cutoff", () => {
+    const store = makeTimedStore();
+    const result = listSessionsFromStore({
+      cfg: baseCfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: { updatedAfter: baseTime - 4 * hour },
+    });
+    expect(result.sessions.length).toBe(2);
+    const ids = result.sessions.map((s) => s.sessionId);
+    expect(ids).toContain("sess-mid");
+    expect(ids).toContain("sess-new");
+  });
+
+  test("updatedBefore filters out sessions updated after the cutoff", () => {
+    const store = makeTimedStore();
+    const result = listSessionsFromStore({
+      cfg: baseCfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: { updatedBefore: baseTime - 4 * hour },
+    });
+    expect(result.sessions.length).toBe(1);
+    expect(result.sessions[0].sessionId).toBe("sess-old");
+  });
+
+  test("updatedAfter + updatedBefore define an inclusive range", () => {
+    const store = makeTimedStore();
+    const result = listSessionsFromStore({
+      cfg: baseCfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: {
+        updatedAfter: baseTime - 13 * hour,
+        updatedBefore: baseTime - 2 * hour,
+      },
+    });
+    expect(result.sessions.length).toBe(2);
+    const ids = result.sessions.map((s) => s.sessionId);
+    expect(ids).toContain("sess-old");
+    expect(ids).toContain("sess-mid");
+  });
+
+  test("createdAfter filters by creation time", () => {
+    const store = makeTimedStore();
+    const result = listSessionsFromStore({
+      cfg: baseCfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: { createdAfter: baseTime - 2 * hour },
+    });
+    expect(result.sessions.length).toBe(1);
+    expect(result.sessions[0].sessionId).toBe("sess-new");
+  });
+
+  test("createdBefore filters by creation time", () => {
+    const store = makeTimedStore();
+    const result = listSessionsFromStore({
+      cfg: baseCfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: { createdBefore: baseTime - 10 * hour },
+    });
+    expect(result.sessions.length).toBe(1);
+    expect(result.sessions[0].sessionId).toBe("sess-old");
+  });
+
+  test("createdAfter + createdBefore define an inclusive range", () => {
+    const store = makeTimedStore();
+    const result = listSessionsFromStore({
+      cfg: baseCfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: {
+        createdAfter: baseTime - 7 * hour,
+        createdBefore: baseTime - 30 * 60_000,
+      },
+    });
+    expect(result.sessions.length).toBe(2);
+    const ids = result.sessions.map((s) => s.sessionId);
+    expect(ids).toContain("sess-mid");
+    expect(ids).toContain("sess-new");
+  });
+
+  test("sessions without createdAt are treated as createdAt=0", () => {
+    const store: Record<string, SessionEntry> = {
+      "agent:main:no-created": {
+        sessionId: "sess-no-created",
+        updatedAt: baseTime,
+        displayName: "No CreatedAt",
+      } as SessionEntry,
+      "agent:main:has-created": {
+        sessionId: "sess-has-created",
+        createdAt: baseTime - 1 * hour,
+        updatedAt: baseTime,
+        displayName: "Has CreatedAt",
+      } as SessionEntry,
+    };
+    const result = listSessionsFromStore({
+      cfg: baseCfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: { createdAfter: baseTime - 2 * hour },
+    });
+    expect(result.sessions.length).toBe(1);
+    expect(result.sessions[0].sessionId).toBe("sess-has-created");
+  });
+
+  test("createdAt is included in the session output", () => {
+    const store = makeTimedStore();
+    const result = listSessionsFromStore({
+      cfg: baseCfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: {},
+    });
+    const newSession = result.sessions.find((s) => s.sessionId === "sess-new");
+    expect(newSession?.createdAt).toBe(baseTime - 1 * hour);
+  });
+
+  test("date-range filters combine with search", () => {
+    const store = makeTimedStore();
+    const result = listSessionsFromStore({
+      cfg: baseCfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: {
+        updatedAfter: baseTime - 4 * hour,
+        search: "new",
+      },
+    });
+    expect(result.sessions.length).toBe(1);
+    expect(result.sessions[0].sessionId).toBe("sess-new");
+  });
+
+  test("empty range returns no results", () => {
+    const store = makeTimedStore();
+    const result = listSessionsFromStore({
+      cfg: baseCfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: {
+        updatedAfter: baseTime + 1 * hour,
+        updatedBefore: baseTime + 2 * hour,
+      },
+    });
+    expect(result.sessions.length).toBe(0);
+  });
+});

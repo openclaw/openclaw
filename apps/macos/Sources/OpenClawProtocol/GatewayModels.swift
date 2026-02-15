@@ -924,6 +924,10 @@ public struct NodeInvokeRequestEvent: Codable, Sendable {
 public struct SessionsListParams: Codable, Sendable {
     public let limit: Int?
     public let activeminutes: Int?
+    public let updatedafter: Double?
+    public let updatedbefore: Double?
+    public let createdafter: Double?
+    public let createdbefore: Double?
     public let includeglobal: Bool?
     public let includeunknown: Bool?
     public let includederivedtitles: Bool?
@@ -936,6 +940,10 @@ public struct SessionsListParams: Codable, Sendable {
     public init(
         limit: Int?,
         activeminutes: Int?,
+        updatedafter: Double?,
+        updatedbefore: Double?,
+        createdafter: Double?,
+        createdbefore: Double?,
         includeglobal: Bool?,
         includeunknown: Bool?,
         includederivedtitles: Bool?,
@@ -947,6 +955,10 @@ public struct SessionsListParams: Codable, Sendable {
     ) {
         self.limit = limit
         self.activeminutes = activeminutes
+        self.updatedafter = updatedafter
+        self.updatedbefore = updatedbefore
+        self.createdafter = createdafter
+        self.createdbefore = createdbefore
         self.includeglobal = includeglobal
         self.includeunknown = includeunknown
         self.includederivedtitles = includederivedtitles
@@ -959,6 +971,10 @@ public struct SessionsListParams: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case limit
         case activeminutes = "activeMinutes"
+        case updatedafter = "updatedAfter"
+        case updatedbefore = "updatedBefore"
+        case createdafter = "createdAfter"
+        case createdbefore = "createdBefore"
         case includeglobal = "includeGlobal"
         case includeunknown = "includeUnknown"
         case includederivedtitles = "includeDerivedTitles"

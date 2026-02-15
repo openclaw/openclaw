@@ -21,6 +21,7 @@ export type GatewaySessionRow = {
   space?: string;
   chatType?: ChatType;
   origin?: SessionEntry["origin"];
+  createdAt?: number | null;
   updatedAt: number | null;
   sessionId?: string;
   systemSent?: boolean;

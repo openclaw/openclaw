@@ -5,6 +5,14 @@ export const SessionsListParamsSchema = Type.Object(
   {
     limit: Type.Optional(Type.Integer({ minimum: 1 })),
     activeMinutes: Type.Optional(Type.Integer({ minimum: 1 })),
+    /** Only include sessions updated at or after this timestamp (ms since epoch). */
+    updatedAfter: Type.Optional(Type.Number()),
+    /** Only include sessions updated at or before this timestamp (ms since epoch). */
+    updatedBefore: Type.Optional(Type.Number()),
+    /** Only include sessions created at or after this timestamp (ms since epoch). */
+    createdAfter: Type.Optional(Type.Number()),
+    /** Only include sessions created at or before this timestamp (ms since epoch). */
+    createdBefore: Type.Optional(Type.Number()),
     includeGlobal: Type.Optional(Type.Boolean()),
     includeUnknown: Type.Optional(Type.Boolean()),
     /**
