@@ -161,6 +161,51 @@ describe("memory index", () => {
     );
   });
 
+  it("keeps dirty false in status-only manager after prior indexing", async () => {
+    const indexStatusPath = path.join(workspaceDir, "index-status.sqlite");
+    await fs.rm(indexStatusPath, { force: true });
+    await fs.rm(`${indexStatusPath}-shm`, { force: true });
+    await fs.rm(`${indexStatusPath}-wal`, { force: true });
+
+    const cfg = {
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          memorySearch: {
+            provider: "openai",
+            model: "mock-embed",
+            store: { path: indexStatusPath, vector: { enabled: false } },
+            sync: { watch: false, onSessionStart: false, onSearch: true },
+            query: { minScore: 0, hybrid: { enabled: false } },
+          },
+        },
+        list: [{ id: "main", default: true }],
+      },
+    };
+
+    const first = await getMemorySearchManager({ cfg, agentId: "main" });
+    expect(first.manager).not.toBeNull();
+    if (!first.manager) {
+      throw new Error("manager missing");
+    }
+    await first.manager.sync?.({ reason: "test" });
+    await first.manager.close?.();
+
+    const statusOnly = await getMemorySearchManager({
+      cfg,
+      agentId: "main",
+      purpose: "status",
+    });
+    expect(statusOnly.manager).not.toBeNull();
+    if (!statusOnly.manager) {
+      throw new Error("status manager missing");
+    }
+
+    const status = statusOnly.manager.status();
+    expect(status.dirty).toBe(false);
+    await statusOnly.manager.close?.();
+  });
+
   it("reindexes when the embedding model changes", async () => {
     const indexModelPath = path.join(workspaceDir, "index-model-change.sqlite");
     await fs.rm(indexModelPath, { force: true });
