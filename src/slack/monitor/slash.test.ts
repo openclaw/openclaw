@@ -1,6 +1,52 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getSlackSlashMocks, resetSlackSlashMocks } from "./slash.test-harness.js";
 
+vi.mock("../../auto-reply/commands-registry.js", () => {
+  const usageCommand = { key: "usage", nativeName: "usage" };
+
+  return {
+    buildCommandTextFromArgs: (
+      cmd: { nativeName?: string; key: string },
+      args?: { values?: Record<string, unknown> },
+    ) => {
+      const name = cmd.nativeName ?? cmd.key;
+      const mode = args?.values?.mode;
+      return typeof mode === "string" && mode.trim() ? `/${name} ${mode.trim()}` : `/${name}`;
+    },
+    findCommandByNativeName: (name: string) => {
+      return name.trim().toLowerCase() === "usage" ? usageCommand : undefined;
+    },
+    listNativeCommandSpecsForConfig: () => [
+      {
+        name: "usage",
+        description: "Usage",
+        acceptsArgs: true,
+        args: [],
+      },
+    ],
+    parseCommandArgs: () => ({ values: {} }),
+    resolveCommandArgMenu: (params: {
+      command?: { key?: string };
+      args?: { values?: unknown };
+    }) => {
+      if (params.command?.key !== "usage") {
+        return null;
+      }
+      const values = (params.args?.values ?? {}) as Record<string, unknown>;
+      if (typeof values.mode === "string" && values.mode.trim()) {
+        return null;
+      }
+      return {
+        arg: { name: "mode", description: "mode" },
+        choices: [
+          { value: "tokens", label: "tokens" },
+          { value: "cost", label: "cost" },
+        ],
+      };
+    },
+  };
+});
+
 type RegisterFn = (params: { ctx: unknown; account: unknown }) => Promise<void>;
 let registerSlackMonitorSlashCommands: RegisterFn;
 
@@ -82,19 +128,36 @@ function createArgMenusHarness() {
 }
 
 describe("Slack native command argument menus", () => {
-  it("shows a button menu when required args are omitted", async () => {
-    const { commands, ctx, account } = createArgMenusHarness();
-    await registerCommands(ctx, account);
+  let harness: ReturnType<typeof createArgMenusHarness>;
+  let usageHandler: (args: unknown) => Promise<void>;
+  let argMenuHandler: (args: unknown) => Promise<void>;
 
-    const handler = commands.get("/usage");
-    if (!handler) {
+  beforeAll(async () => {
+    harness = createArgMenusHarness();
+    await registerCommands(harness.ctx, harness.account);
+
+    const usage = harness.commands.get("/usage");
+    if (!usage) {
       throw new Error("Missing /usage handler");
     }
+    usageHandler = usage;
 
+    const argMenu = harness.actions.get("openclaw_cmdarg");
+    if (!argMenu) {
+      throw new Error("Missing arg-menu action handler");
+    }
+    argMenuHandler = argMenu;
+  });
+
+  beforeEach(() => {
+    harness.postEphemeral.mockClear();
+  });
+
+  it("shows a button menu when required args are omitted", async () => {
     const respond = vi.fn().mockResolvedValue(undefined);
     const ack = vi.fn().mockResolvedValue(undefined);
 
-    await handler({
+    await usageHandler({
       command: {
         user_id: "U1",
         user_name: "Ada",
@@ -114,16 +177,8 @@ describe("Slack native command argument menus", () => {
   });
 
   it("dispatches the command when a menu button is clicked", async () => {
-    const { actions, ctx, account } = createArgMenusHarness();
-    await registerCommands(ctx, account);
-
-    const handler = actions.get("openclaw_cmdarg");
-    if (!handler) {
-      throw new Error("Missing arg-menu action handler");
-    }
-
     const respond = vi.fn().mockResolvedValue(undefined);
-    await handler({
+    await argMenuHandler({
       ack: vi.fn().mockResolvedValue(undefined),
       action: {
         value: encodeValue({ command: "usage", arg: "mode", value: "tokens", userId: "U1" }),
@@ -142,16 +197,8 @@ describe("Slack native command argument menus", () => {
   });
 
   it("rejects menu clicks from other users", async () => {
-    const { actions, ctx, account } = createArgMenusHarness();
-    await registerCommands(ctx, account);
-
-    const handler = actions.get("openclaw_cmdarg");
-    if (!handler) {
-      throw new Error("Missing arg-menu action handler");
-    }
-
     const respond = vi.fn().mockResolvedValue(undefined);
-    await handler({
+    await argMenuHandler({
       ack: vi.fn().mockResolvedValue(undefined),
       action: {
         value: encodeValue({ command: "usage", arg: "mode", value: "tokens", userId: "U1" }),
@@ -172,21 +219,13 @@ describe("Slack native command argument menus", () => {
   });
 
   it("falls back to postEphemeral with token when respond is unavailable", async () => {
-    const { actions, postEphemeral, ctx, account } = createArgMenusHarness();
-    await registerCommands(ctx, account);
-
-    const handler = actions.get("openclaw_cmdarg");
-    if (!handler) {
-      throw new Error("Missing arg-menu action handler");
-    }
-
-    await handler({
+    await argMenuHandler({
       ack: vi.fn().mockResolvedValue(undefined),
       action: { value: "garbage" },
       body: { user: { id: "U1" }, channel: { id: "C1" } },
     });
 
-    expect(postEphemeral).toHaveBeenCalledWith(
+    expect(harness.postEphemeral).toHaveBeenCalledWith(
       expect.objectContaining({
         token: "bot-token",
         channel: "C1",
@@ -196,21 +235,13 @@ describe("Slack native command argument menus", () => {
   });
 
   it("treats malformed percent-encoding as an invalid button (no throw)", async () => {
-    const { actions, postEphemeral, ctx, account } = createArgMenusHarness();
-    await registerCommands(ctx, account);
-
-    const handler = actions.get("openclaw_cmdarg");
-    if (!handler) {
-      throw new Error("Missing arg-menu action handler");
-    }
-
-    await handler({
+    await argMenuHandler({
       ack: vi.fn().mockResolvedValue(undefined),
       action: { value: "cmdarg|%E0%A4%A|mode|on|U1" },
       body: { user: { id: "U1" }, channel: { id: "C1" } },
     });
 
-    expect(postEphemeral).toHaveBeenCalledWith(
+    expect(harness.postEphemeral).toHaveBeenCalledWith(
       expect.objectContaining({
         token: "bot-token",
         channel: "C1",
