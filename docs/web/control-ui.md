@@ -139,6 +139,24 @@ OpenClaw **blocks** Control UI connections without device identity.
 - `https://<magicdns>/` (Serve)
 - `http://127.0.0.1:18789/` (on the gateway host)
 
+### Quick fix with Tailscale Serve
+
+If you already have Tailscale installed, one command gives you HTTPS access with a valid certificate:
+
+```bash
+tailscale serve --bg http://127.0.0.1:18789
+```
+
+Then open `https://<your-machine>.<tailnet>.ts.net/` (or `https://…/<basePath>/` if
+`gateway.controlUi.basePath` is set) in your browser. This provides:
+
+- Automatic HTTPS certificate (no manual TLS setup)
+- Tailnet-only access (secure by default)
+- No need for `allowInsecureAuth` workaround
+
+For OpenClaw's integrated Tailscale automation (auto-start/stop with the Gateway), see
+[Tailscale](/gateway/tailscale).
+
 **Downgrade example (token-only over HTTP):**
 
 ```json5

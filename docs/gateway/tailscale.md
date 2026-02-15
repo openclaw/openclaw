@@ -36,6 +36,23 @@ headers.
 To require explicit credentials, set `gateway.auth.allowTailscale: false` or
 force `gateway.auth.mode: "password"`.
 
+## Quick start (manual Tailscale Serve)
+
+If you just want HTTPS access to the Control UI without configuring OpenClaw's
+integrated Tailscale automation, run:
+
+```bash
+tailscale serve --bg http://127.0.0.1:18789
+```
+
+Then open `https://<your-machine>.<tailnet>.ts.net/` (append your
+`gateway.controlUi.basePath` if configured) — you get a valid HTTPS certificate,
+tailnet-only access, and no need for `allowInsecureAuth`.
+
+To stop serving: `tailscale serve --bg off`.
+
+For automatic start/stop with the Gateway, use the integrated config below.
+
 ## Config examples
 
 ### Tailnet-only (Serve)
