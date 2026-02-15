@@ -428,8 +428,6 @@ async function runDesearchSearch(params: {
 }): Promise<DesearchSearchResult[]> {
   const url = new URL(`${params.baseUrl.replace(/\/$/, "")}/web`);
   url.searchParams.set("query", params.query);
-  url.searchParams.set("num", String(params.count));
-  url.searchParams.set("start", "0");
 
   const res = await fetch(url.toString(), {
     method: "GET",
