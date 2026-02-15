@@ -3,26 +3,9 @@ import path from "node:path";
 import type { SandboxFsBridge, SandboxFsStat, SandboxResolvedPath } from "../sandbox/fs-bridge.js";
 import { resolveSandboxPath } from "../sandbox-paths.js";
 
-export function createHostSandboxFsBridge(rootDir: string): SandboxFsBridge {
-  const root = path.resolve(rootDir);
-
-  const resolvePath = (filePath: string, cwd?: string): SandboxResolvedPath => {
-    const resolved = resolveSandboxPath({
-      filePath,
-      cwd: cwd ?? root,
-      root,
-    });
-    const relativePath = resolved.relative
-      ? resolved.relative.split(path.sep).filter(Boolean).join(path.posix.sep)
-      : "";
-    const containerPath = relativePath ? path.posix.join("/workspace", relativePath) : "/workspace";
-    return {
-      hostPath: resolved.resolved,
-      relativePath,
-      containerPath,
-    };
-  };
-
+export function createSandboxFsBridgeFromResolver(
+  resolvePath: (filePath: string, cwd?: string) => SandboxResolvedPath,
+): SandboxFsBridge {
   return {
     resolvePath: ({ filePath, cwd }) => resolvePath(filePath, cwd),
     readFile: async ({ filePath, cwd }) => {
@@ -71,4 +54,27 @@ export function createHostSandboxFsBridge(rootDir: string): SandboxFsBridge {
       }
     },
   };
+}
+
+export function createHostSandboxFsBridge(rootDir: string): SandboxFsBridge {
+  const root = path.resolve(rootDir);
+
+  const resolvePath = (filePath: string, cwd?: string): SandboxResolvedPath => {
+    const resolved = resolveSandboxPath({
+      filePath,
+      cwd: cwd ?? root,
+      root,
+    });
+    const relativePath = resolved.relative
+      ? resolved.relative.split(path.sep).filter(Boolean).join(path.posix.sep)
+      : "";
+    const containerPath = relativePath ? path.posix.join("/workspace", relativePath) : "/workspace";
+    return {
+      hostPath: resolved.resolved,
+      relativePath,
+      containerPath,
+    };
+  };
+
+  return createSandboxFsBridgeFromResolver(resolvePath);
 }
