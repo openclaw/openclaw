@@ -105,6 +105,11 @@ export type SearchSignalResult = {
   score: number;
 };
 
+export type SignalAttribution = {
+  rank: number; // 1-indexed, 0 = absent from this signal
+  score: number; // raw signal score, 0 = absent
+};
+
 export type HybridSearchResult = {
   id: string;
   text: string;
@@ -112,6 +117,11 @@ export type HybridSearchResult = {
   importance: number;
   createdAt: string;
   score: number;
+  signals?: {
+    vector: SignalAttribution;
+    bm25: SignalAttribution;
+    graph: SignalAttribution;
+  };
 };
 
 // ============================================================================
