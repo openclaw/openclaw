@@ -62,8 +62,8 @@ export function buildThreadingToolContext(params: {
       hasRepliedRef,
     }) ?? {};
   return {
-    ...context,
     ...baseContext,
+    ...context,
     currentChannelProvider: provider!, // guaranteed non-null since dock exists
   };
 }

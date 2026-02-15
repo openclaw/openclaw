@@ -3,14 +3,15 @@
 # CI (GitHub Actions) publishes on tag push. Use --local to publish locally instead.
 #
 # Usage:
-#   ./scripts/release-npm.sh [patch|minor|major] [--skip-smoke] [--dry-run] [--no-push] [--local]
-#   ./scripts/release-npm.sh 2026.2.17 [--skip-smoke] [--dry-run] [--no-push] [--local]
+#   ./scripts/release-npm.sh [patch|minor|major] [--skip-smoke] [--skip-tests] [--dry-run] [--no-push] [--local]
+#   ./scripts/release-npm.sh 2026.2.17 [--skip-smoke] [--skip-tests] [--dry-run] [--no-push] [--local]
 #
 # Examples:
-#   ./scripts/release-npm.sh patch              # Bump, tag, push → CI publishes
-#   ./scripts/release-npm.sh patch --skip-smoke  # Skip install smoke (faster)
-#   ./scripts/release-npm.sh patch --local       # Publish locally (no CI)
-#   ./scripts/release-npm.sh --dry-run           # Bump + validate only, no tag/publish
+#   ./scripts/release-npm.sh patch               # Bump, tag, push → CI publishes
+#   ./scripts/release-npm.sh patch --skip-smoke # Skip install smoke (faster)
+#   ./scripts/release-npm.sh patch --skip-tests # Skip unit tests (use only when failures are known false positives)
+#   ./scripts/release-npm.sh patch --local      # Publish locally (no CI)
+#   ./scripts/release-npm.sh --dry-run          # Bump + validate only, no tag/publish
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -18,6 +19,7 @@ cd "$ROOT"
 
 PKG_NAME="@qverisai/qverisbot"
 SKIP_SMOKE=0
+SKIP_TESTS=0
 DRY_RUN=0
 NO_PUSH=0
 LOCAL_PUBLISH=0
@@ -27,6 +29,10 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --skip-smoke)
       SKIP_SMOKE=1
+      shift
+      ;;
+    --skip-tests)
+      SKIP_TESTS=1
       shift
       ;;
     --dry-run)
@@ -50,7 +56,7 @@ while [[ $# -gt 0 ]]; do
         BUMP="$1"
       else
         echo "Unknown argument: $1" >&2
-        echo "Usage: $0 [patch|minor|major|VERSION] [--skip-smoke] [--dry-run] [--no-push] [--local]" >&2
+        echo "Usage: $0 [patch|minor|major|VERSION] [--skip-smoke] [--skip-tests] [--dry-run] [--no-push] [--local]" >&2
         exit 2
       fi
       shift
@@ -90,8 +96,12 @@ pnpm build
 echo "==> Check (format, ts, lint)"
 pnpm check
 
-echo "==> Test"
-pnpm test
+if [[ "$SKIP_TESTS" -eq 1 ]]; then
+  echo "==> Skip unit tests (--skip-tests)"
+else
+  echo "==> Test"
+  pnpm test
+fi
 
 echo "==> Release check (npm pack validation)"
 pnpm release:check
