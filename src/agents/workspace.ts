@@ -408,10 +408,15 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
       name: DEFAULT_AGENTS_FILENAME,
       filePath: path.join(resolvedDir, DEFAULT_AGENTS_FILENAME),
     },
-    {
-      name: DEFAULT_SOUL_FILENAME,
-      filePath: path.join(resolvedDir, DEFAULT_SOUL_FILENAME),
-    },
+    // Soul injection is now optional via env var
+    ...(process.env.OPENCLAW_DISABLE_SOUL === "true"
+      ? []
+      : [
+          {
+            name: DEFAULT_SOUL_FILENAME,
+            filePath: path.join(resolvedDir, DEFAULT_SOUL_FILENAME),
+          },
+        ]),
     {
       name: DEFAULT_TOOLS_FILENAME,
       filePath: path.join(resolvedDir, DEFAULT_TOOLS_FILENAME),
