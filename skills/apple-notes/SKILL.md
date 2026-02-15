@@ -43,7 +43,7 @@ Create Notes
 
 - Add a new note: `memo notes -a`
   - Opens an interactive editor to compose the note.
-- Quick add with title: `memo notes -a "Note Title"`
+  - Note: `-a` is a boolean flag and does not accept a title argument. The note title in Apple Notes is set by memo internally and cannot be controlled via the CLI.
 
 Edit Notes
 
