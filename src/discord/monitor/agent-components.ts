@@ -71,6 +71,70 @@ function resolveDiscordChannelContext(
   return { channelName, channelSlug, channelType, isThread, parentId, parentName, parentSlug };
 }
 
+async function resolveComponentInteractionContext(params: {
+  interaction: AgentComponentInteraction;
+  label: string;
+}): Promise<{
+  channelId: string;
+  user: DiscordUser;
+  username: string;
+  userId: string;
+  replyOpts: { ephemeral?: boolean };
+  rawGuildId: string | undefined;
+  isDirectMessage: boolean;
+  memberRoleIds: string[];
+} | null> {
+  const { interaction, label } = params;
+
+  // Use interaction's actual channel_id (trusted source from Discord)
+  // This prevents channel spoofing attacks
+  const channelId = interaction.rawData.channel_id;
+  if (!channelId) {
+    logError(`${label}: missing channel_id in interaction`);
+    return null;
+  }
+
+  const user = interaction.user;
+  if (!user) {
+    logError(`${label}: missing user in interaction`);
+    return null;
+  }
+
+  let didDefer = false;
+  // Defer immediately to satisfy Discord's 3-second interaction ACK requirement.
+  // We use an ephemeral deferred reply so subsequent interaction.reply() calls
+  // can safely edit the original deferred response.
+  try {
+    await interaction.defer({ ephemeral: true });
+    didDefer = true;
+  } catch (err) {
+    logError(`${label}: failed to defer interaction: ${String(err)}`);
+  }
+  const replyOpts = didDefer ? {} : { ephemeral: true };
+
+  const username = formatUsername(user);
+  const userId = user.id;
+
+  // P1 FIX: Use rawData.guild_id as source of truth - interaction.guild can be null
+  // when guild is not cached even though guild_id is present in rawData
+  const rawGuildId = interaction.rawData.guild_id;
+  const isDirectMessage = !rawGuildId;
+  const memberRoleIds = Array.isArray(interaction.rawData.member?.roles)
+    ? interaction.rawData.member.roles.map((roleId: string) => String(roleId))
+    : [];
+
+  return {
+    channelId,
+    user,
+    username,
+    userId,
+    replyOpts,
+    rawGuildId,
+    isDirectMessage,
+    memberRoleIds,
+  };
+}
+
 async function ensureGuildComponentMemberAllowed(params: {
   interaction: AgentComponentInteraction;
   guildInfo: ReturnType<typeof resolveDiscordGuildEntry>;
@@ -314,43 +378,23 @@ export class AgentComponentButton extends Button {
 
     const { componentId } = parsed;
 
-    // P1 FIX: Use interaction's actual channel_id instead of trusting customId
-    // This prevents channel ID spoofing attacks where an attacker crafts a button
-    // with a different channelId to inject events into other sessions
-    const channelId = interaction.rawData.channel_id;
-    if (!channelId) {
-      logError("agent button: missing channel_id in interaction");
+    const interactionCtx = await resolveComponentInteractionContext({
+      interaction,
+      label: "agent button",
+    });
+    if (!interactionCtx) {
       return;
     }
-
-    const user = interaction.user;
-    if (!user) {
-      logError("agent button: missing user in interaction");
-      return;
-    }
-
-    let didDefer = false;
-    // Defer immediately to satisfy Discord's 3-second interaction ACK requirement.
-    // We use an ephemeral deferred reply so subsequent interaction.reply() calls
-    // can safely edit the original deferred response.
-    try {
-      await interaction.defer({ ephemeral: true });
-      didDefer = true;
-    } catch (err) {
-      logError(`agent button: failed to defer interaction: ${String(err)}`);
-    }
-    const replyOpts = didDefer ? {} : { ephemeral: true };
-
-    const username = formatUsername(user);
-    const userId = user.id;
-
-    // P1 FIX: Use rawData.guild_id as source of truth - interaction.guild can be null
-    // when guild is not cached even though guild_id is present in rawData
-    const rawGuildId = interaction.rawData.guild_id;
-    const isDirectMessage = !rawGuildId;
-    const memberRoleIds = Array.isArray(interaction.rawData.member?.roles)
-      ? interaction.rawData.member.roles.map((roleId: string) => String(roleId))
-      : [];
+    const {
+      channelId,
+      user,
+      username,
+      userId,
+      replyOpts,
+      rawGuildId,
+      isDirectMessage,
+      memberRoleIds,
+    } = interactionCtx;
 
     if (isDirectMessage) {
       const authorized = await ensureDmComponentAuthorized({
@@ -452,42 +496,23 @@ export class AgentSelectMenu extends StringSelectMenu {
 
     const { componentId } = parsed;
 
-    // Use interaction's actual channel_id (trusted source from Discord)
-    // This prevents channel spoofing attacks
-    const channelId = interaction.rawData.channel_id;
-    if (!channelId) {
-      logError("agent select: missing channel_id in interaction");
+    const interactionCtx = await resolveComponentInteractionContext({
+      interaction,
+      label: "agent select",
+    });
+    if (!interactionCtx) {
       return;
     }
-
-    const user = interaction.user;
-    if (!user) {
-      logError("agent select: missing user in interaction");
-      return;
-    }
-
-    let didDefer = false;
-    // Defer immediately to satisfy Discord's 3-second interaction ACK requirement.
-    // We use an ephemeral deferred reply so subsequent interaction.reply() calls
-    // can safely edit the original deferred response.
-    try {
-      await interaction.defer({ ephemeral: true });
-      didDefer = true;
-    } catch (err) {
-      logError(`agent select: failed to defer interaction: ${String(err)}`);
-    }
-    const replyOpts = didDefer ? {} : { ephemeral: true };
-
-    const username = formatUsername(user);
-    const userId = user.id;
-
-    // P1 FIX: Use rawData.guild_id as source of truth - interaction.guild can be null
-    // when guild is not cached even though guild_id is present in rawData
-    const rawGuildId = interaction.rawData.guild_id;
-    const isDirectMessage = !rawGuildId;
-    const memberRoleIds = Array.isArray(interaction.rawData.member?.roles)
-      ? interaction.rawData.member.roles.map((roleId: string) => String(roleId))
-      : [];
+    const {
+      channelId,
+      user,
+      username,
+      userId,
+      replyOpts,
+      rawGuildId,
+      isDirectMessage,
+      memberRoleIds,
+    } = interactionCtx;
 
     if (isDirectMessage) {
       const authorized = await ensureDmComponentAuthorized({
