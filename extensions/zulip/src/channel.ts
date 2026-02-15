@@ -74,11 +74,11 @@ export const zulipPlugin: ChannelPlugin<ResolvedZulipAccount> = {
   mentions: {
     stripPatterns: () => [
       // Zulip user mentions in raw Markdown look like: @**Full Name**
-      "@\\\\*\\\\*[^*]+\\\\*\\\\*",
+      "@\\*\\*[^*]+\\*\\*",
       // Wildcard mentions.
-      "\\\\B@all\\\\b",
-      "\\\\B@everyone\\\\b",
-      "\\\\B@stream\\\\b",
+      "\\B@all\\b",
+      "\\B@everyone\\b",
+      "\\B@stream\\b",
     ],
   },
   reload: { configPrefixes: ["channels.zulip"] },
@@ -183,9 +183,7 @@ export const zulipPlugin: ChannelPlugin<ResolvedZulipAccount> = {
         email: account.email ?? "",
         apiKey: account.apiKey ?? "",
       };
-      const result = await (
-        await import("./zulip/send.js")
-      ).sendZulipStreamMessage({
+      const result = await sendZulipStreamMessage({
         auth,
         stream,
         topic,

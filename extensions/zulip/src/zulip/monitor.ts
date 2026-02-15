@@ -203,10 +203,17 @@ async function pollEvents(params: {
 }): Promise<ZulipEventsResponse> {
   // Wrap the parent signal with a per-poll timeout so we don't hang forever
   // if the Zulip server goes unresponsive during long-poll.
-  const POLL_TIMEOUT_MS = 90_000;
+  const POLL_TIMEOUT_MS = 60_000;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), POLL_TIMEOUT_MS);
-  const onParentAbort = () => controller.abort();
+  let aborted = false;
+  const safeAbort = () => {
+    if (!aborted) {
+      aborted = true;
+      controller.abort();
+    }
+  };
+  const timer = setTimeout(safeAbort, POLL_TIMEOUT_MS);
+  const onParentAbort = () => safeAbort();
   params.abortSignal?.addEventListener("abort", onParentAbort, { once: true });
   try {
     return await zulipRequest<ZulipEventsResponse>({

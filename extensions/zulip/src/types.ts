@@ -45,8 +45,9 @@ export type ZulipAccountConfig = {
   mediaMaxMb?: number;
 
   /**
-   * Require @mention to respond in streams (default: true).
+   * Require @mention to respond in streams (default: false).
    * When true, the bot only replies when mentioned by name or @-syntax.
+   * If unset, derived from `alwaysReply` (default true → requireMention false).
    */
   requireMention?: boolean;
 };
