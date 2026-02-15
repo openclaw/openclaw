@@ -31,7 +31,9 @@ try {
             $env:Path = "$npmDir;$env:Path"
         }
     }
-    $updateOut = node openclaw.mjs update --channel stable --yes --no-restart 2>&1 | Out-String
+    # --non-interactive prevents shell-completion prompts that hang headless tasks
+    $env:CI = "1"
+    $updateOut = node openclaw.mjs update --channel stable --yes --no-restart --non-interactive 2>&1 | Out-String
     Add-Content -Path $LogFile -Value $updateOut
     Write-Host $updateOut
     if ($LASTEXITCODE -eq 0) {
@@ -46,7 +48,7 @@ try {
 # === Phase 2: Doctor ===
 Log "--- Phase 2: Doctor ---"
 try {
-    $doctorOut = node openclaw.mjs doctor 2>&1 | Out-String
+    $doctorOut = node openclaw.mjs doctor --non-interactive 2>&1 | Out-String
     Add-Content -Path $LogFile -Value $doctorOut
 
     if ($doctorOut -match "(ERROR|FAIL|CRITICAL)") {
