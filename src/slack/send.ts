@@ -184,7 +184,7 @@ async function uploadSlackFile(params: {
     maxBytes: params.maxBytes,
     localRoots: params.mediaLocalRoots,
   });
-  // Use the 3-step upload flow (getUploadURLExternal → PUT → completeUploadExternal)
+  // Use the 3-step upload flow (getUploadURLExternal → POST → completeUploadExternal)
   // instead of files.uploadV2 which relies on the deprecated files.upload endpoint
   // and can fail with missing_scope even when files:write is granted.
   const uploadUrlResp = await params.client.files.getUploadURLExternal({
