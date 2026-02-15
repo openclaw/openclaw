@@ -244,6 +244,40 @@ describe("deliverReplies", () => {
     );
   });
 
+  it("falls back to plain text when markdown renders to empty HTML in threaded mode", async () => {
+    const runtime = { error: vi.fn(), log: vi.fn() };
+    const sendMessage = vi.fn(async (_chatId: string, text: string) => {
+      if (text === "") {
+        throw new Error("400: Bad Request: message text is empty");
+      }
+      return {
+        message_id: 6,
+        chat: { id: "123" },
+      };
+    });
+    const bot = { api: { sendMessage } } as unknown as Bot;
+
+    await deliverReplies({
+      replies: [{ text: ">" }],
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "off",
+      textLimit: 4000,
+      thread: { id: 42, scope: "forum" },
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123",
+      ">",
+      expect.objectContaining({
+        message_thread_id: 42,
+      }),
+    );
+  });
+
   it("uses reply_to_message_id when quote text is provided", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn().mockResolvedValue({
