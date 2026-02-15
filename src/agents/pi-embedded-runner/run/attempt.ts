@@ -634,6 +634,28 @@ export async function runEmbeddedAttempt(
         );
       }
 
+      // Defense-in-depth: sanitize tool_use/tool_result pairing before every
+      // API call, not just at session load.  During multi-turn tool execution
+      // the SDK may append messages that create orphans — especially after
+      // mid-session provider switches (e.g. OpenAI → Anthropic).  (#16693)
+      if (transcriptPolicy.repairToolUseResultPairing) {
+        const innerStreamFn = activeSession.agent.streamFn;
+        activeSession.agent.streamFn = ((model, context, options) => {
+          const ctx = context as { messages?: AgentMessage[] };
+          if (Array.isArray(ctx.messages) && ctx.messages.length > 0) {
+            const sanitized = sanitizeToolUseResultPairing(ctx.messages);
+            if (sanitized !== ctx.messages) {
+              return innerStreamFn(
+                model,
+                { ...context, messages: sanitized } as typeof context,
+                options,
+              );
+            }
+          }
+          return innerStreamFn(model, context, options);
+        }) as typeof activeSession.agent.streamFn;
+      }
+
       try {
         const prior = await sanitizeSessionHistory({
           messages: activeSession.messages,
