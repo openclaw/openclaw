@@ -90,7 +90,7 @@ function applyJobResult(
           "cron: disabling one-shot job after error",
         );
       }
-    } else if (result.status === "error" && job.enabled) {
+    } else if (result.status === "error" && job.enabled !== false) {
       // Apply exponential backoff for errored jobs to prevent retry storms.
       const backoff = errorBackoffMs(job.state.consecutiveErrors ?? 1);
       const normalNext = computeJobNextRunAtMs(job, result.endedAt);
@@ -107,7 +107,7 @@ function applyJobResult(
         },
         "cron: applying error backoff",
       );
-    } else if (job.enabled) {
+    } else if (job.enabled !== false) {
       job.state.nextRunAtMs = computeJobNextRunAtMs(job, result.endedAt);
     } else {
       job.state.nextRunAtMs = undefined;
@@ -129,10 +129,11 @@ export function armTimer(state: CronServiceState) {
   const nextAt = nextWakeAtMs(state);
   if (!nextAt) {
     const jobCount = state.store?.jobs.length ?? 0;
-    const enabledCount = state.store?.jobs.filter((j) => j.enabled).length ?? 0;
+    const enabledCount = state.store?.jobs.filter((j) => j.enabled !== false).length ?? 0;
     const withNextRun =
-      state.store?.jobs.filter((j) => j.enabled && typeof j.state.nextRunAtMs === "number")
-        .length ?? 0;
+      state.store?.jobs.filter(
+        (j) => j.enabled !== false && typeof j.state.nextRunAtMs === "number",
+      ).length ?? 0;
     state.deps.log.debug(
       { jobCount, enabledCount, withNextRun },
       "cron: armTimer skipped - no jobs with nextRunAtMs",
@@ -346,7 +347,7 @@ function findDueJobs(state: CronServiceState): CronJob[] {
     if (!j.state) {
       j.state = {};
     }
-    if (!j.enabled) {
+    if (j.enabled === false) {
       return false;
     }
     if (typeof j.state.runningAtMs === "number") {
@@ -370,7 +371,7 @@ export async function runMissedJobs(
     if (!j.state) {
       j.state = {};
     }
-    if (!j.enabled) {
+    if (j.enabled === false) {
       return false;
     }
     if (skipJobIds?.has(j.id)) {
@@ -409,7 +410,7 @@ export async function runDueJobs(state: CronServiceState) {
     if (!j.state) {
       j.state = {};
     }
-    if (!j.enabled) {
+    if (j.enabled === false) {
       return false;
     }
     if (typeof j.state.runningAtMs === "number") {
