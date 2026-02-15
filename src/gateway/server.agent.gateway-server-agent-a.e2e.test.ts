@@ -285,6 +285,20 @@ describe("gateway server agent", () => {
     expect(spy).not.toHaveBeenCalled();
   });
 
+  test("agent rejects malformed agent-prefixed session keys", async () => {
+    setRegistry(defaultRegistry);
+    const res = await rpcReq(ws, "agent", {
+      message: "hi",
+      sessionKey: "agent:main",
+      idempotencyKey: "idem-agent-malformed-key",
+    });
+    expect(res.ok).toBe(false);
+    expect(res.error?.message).toContain("malformed session key");
+
+    const spy = vi.mocked(agentCommand);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
   test("agent forwards accountId to agentCommand", async () => {
     setRegistry(defaultRegistry);
     testState.allowFrom = ["+1555"];
