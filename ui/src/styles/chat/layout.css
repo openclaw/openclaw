@@ -386,6 +386,20 @@
   color: var(--text);
 }
 
+.chat-controls .btn--icon.active,
+.chat-controls .btn--icon[aria-pressed="true"] {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+}
+
+:root[data-theme="light"] .chat-controls .btn--icon.active,
+:root[data-theme="light"] .chat-controls .btn--icon[aria-pressed="true"] {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--bg));
+  background: var(--accent-subtle);
+}
+
 .btn--icon svg {
   display: block;
   width: 18px;
