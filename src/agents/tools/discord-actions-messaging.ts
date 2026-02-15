@@ -1,5 +1,6 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { DiscordActionConfig } from "../../config/config.js";
+import type { DiscordSendComponents, DiscordSendEmbeds } from "../../discord/send.shared.js";
 import {
   createThreadDiscord,
   deleteMessageDiscord,
@@ -241,8 +242,15 @@ export async function handleDiscordMessagingAction(
         readStringParam(params, "path", { trim: false }) ??
         readStringParam(params, "filePath", { trim: false });
       const replyTo = readStringParam(params, "replyTo");
-      const embeds =
-        Array.isArray(params.embeds) && params.embeds.length > 0 ? params.embeds : undefined;
+      const rawComponents = params.components;
+      const components: DiscordSendComponents | undefined =
+        Array.isArray(rawComponents) || typeof rawComponents === "function"
+          ? (rawComponents as DiscordSendComponents)
+          : undefined;
+      const rawEmbeds = params.embeds;
+      const embeds: DiscordSendEmbeds | undefined = Array.isArray(rawEmbeds)
+        ? (rawEmbeds as DiscordSendEmbeds)
+        : undefined;
 
       // Handle voice message sending
       if (asVoice) {
@@ -269,6 +277,7 @@ export async function handleDiscordMessagingAction(
         ...(accountId ? { accountId } : {}),
         mediaUrl,
         replyTo,
+        components,
         embeds,
         silent,
       });

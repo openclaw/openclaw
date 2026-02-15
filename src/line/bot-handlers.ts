@@ -6,7 +6,6 @@ import type {
   JoinEvent,
   LeaveEvent,
   PostbackEvent,
-  EventSource,
 } from "@line/bot-sdk";
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -20,6 +19,7 @@ import {
 } from "../pairing/pairing-store.js";
 import { firstDefined, isSenderAllowed, normalizeAllowFromWithStore } from "./bot-access.js";
 import {
+  getLineSourceInfo,
   buildLineMessageContext,
   buildLinePostbackContext,
   type LineInboundContext,
@@ -38,28 +38,6 @@ export interface LineHandlerContext {
   runtime: RuntimeEnv;
   mediaMaxBytes: number;
   processMessage: (ctx: LineInboundContext) => Promise<void>;
-}
-
-type LineSourceInfo = {
-  userId?: string;
-  groupId?: string;
-  roomId?: string;
-  isGroup: boolean;
-};
-
-function getSourceInfo(source: EventSource): LineSourceInfo {
-  const userId =
-    source.type === "user"
-      ? source.userId
-      : source.type === "group"
-        ? source.userId
-        : source.type === "room"
-          ? source.userId
-          : undefined;
-  const groupId = source.type === "group" ? source.groupId : undefined;
-  const roomId = source.type === "room" ? source.roomId : undefined;
-  const isGroup = source.type === "group" || source.type === "room";
-  return { userId, groupId, roomId, isGroup };
 }
 
 function resolveLineGroupConfig(params: {
@@ -129,7 +107,7 @@ async function shouldProcessLineEvent(
   context: LineHandlerContext,
 ): Promise<boolean> {
   const { cfg, account } = context;
-  const { userId, groupId, roomId, isGroup } = getSourceInfo(event.source);
+  const { userId, groupId, roomId, isGroup } = getLineSourceInfo(event.source);
   const senderId = userId ?? "";
 
   const storeAllowFrom = await readChannelAllowFromStore("line").catch(() => []);
