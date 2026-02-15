@@ -187,35 +187,38 @@ export function registerFeishuDriveTools(api: OpenClawPluginApi) {
   }
 
   api.registerTool(
-    {
-      name: "feishu_drive",
-      label: "Feishu Drive",
-      description:
-        "Feishu cloud storage operations. Actions: list, info, create_folder, move, delete",
-      parameters: FeishuDriveSchema,
-      async execute(_toolCallId, params) {
-        const p = params as FeishuDriveParams;
-        try {
-          const { client } = resolveToolClient(api.config!, p.account);
-          switch (p.action) {
-            case "list":
-              return json(await listFolder(client, p.folder_token));
-            case "info":
-              return json(await getFileInfo(client, p.file_token));
-            case "create_folder":
-              return json(await createFolder(client, p.name, p.folder_token));
-            case "move":
-              return json(await moveFile(client, p.file_token, p.type, p.folder_token));
-            case "delete":
-              return json(await deleteFile(client, p.file_token, p.type));
-            default:
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any -- exhaustive check fallback
-              return json({ error: `Unknown action: ${(p as any).action}` });
+    (ctx) => {
+      const preferredAccountId = ctx.agentAccountId;
+      return {
+        name: "feishu_drive",
+        label: "Feishu Drive",
+        description:
+          "Feishu cloud storage operations. Actions: list, info, create_folder, move, delete. In multi-account setups, this tool auto-selects the bot that received the message when available.",
+        parameters: FeishuDriveSchema,
+        async execute(_toolCallId, params) {
+          const p = params as FeishuDriveParams;
+          try {
+            const { client } = resolveToolClient(api.config!, p.account, preferredAccountId);
+            switch (p.action) {
+              case "list":
+                return json(await listFolder(client, p.folder_token));
+              case "info":
+                return json(await getFileInfo(client, p.file_token));
+              case "create_folder":
+                return json(await createFolder(client, p.name, p.folder_token));
+              case "move":
+                return json(await moveFile(client, p.file_token, p.type, p.folder_token));
+              case "delete":
+                return json(await deleteFile(client, p.file_token, p.type));
+              default:
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any -- exhaustive check fallback
+                return json({ error: `Unknown action: ${(p as any).action}` });
+            }
+          } catch (err) {
+            return json({ error: err instanceof Error ? err.message : String(err) });
           }
-        } catch (err) {
-          return json({ error: err instanceof Error ? err.message : String(err) });
-        }
-      },
+        },
+      };
     },
     { name: "feishu_drive" },
   );

@@ -33,6 +33,7 @@ describe("resolveToolClient", () => {
 
     const result = resolveToolClient(cfg, "secondary");
     expect(result.accountId).toBe("secondary");
+    expect(result.account).toBeDefined();
     expect(createFeishuClient).toHaveBeenCalledWith(
       expect.objectContaining({
         accountId: "secondary",
@@ -51,6 +52,7 @@ describe("resolveToolClient", () => {
 
     const result = resolveToolClient(cfg);
     expect(result.accountId).toBe("default");
+    expect(result.account).toBeDefined();
     expect(result.client).toBeDefined();
   });
 
@@ -63,6 +65,7 @@ describe("resolveToolClient", () => {
 
     const result = resolveToolClient(cfg);
     expect(result.accountId).toBe("default");
+    expect(result.account).toBeDefined();
     expect(createFeishuClient).toHaveBeenCalledWith(
       expect.objectContaining({
         accountId: "default",
@@ -70,6 +73,19 @@ describe("resolveToolClient", () => {
         appSecret: "top_level_secret",
       }),
     );
+  });
+
+  it("uses preferred account when account param is omitted", () => {
+    const cfg = makeConfig({
+      domain: "feishu",
+      accounts: {
+        app2: { appId: "app2_id", appSecret: "app2_secret" },
+        shixiaoheng: { appId: "sxh_id", appSecret: "sxh_secret" },
+      },
+    });
+
+    const result = resolveToolClient(cfg, undefined, "shixiaoheng");
+    expect(result.accountId).toBe("shixiaoheng");
   });
 
   it("throws for unconfigured account", () => {

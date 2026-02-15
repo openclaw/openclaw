@@ -149,20 +149,29 @@ export function listEnabledFeishuAccounts(cfg: ClawdbotConfig): ResolvedFeishuAc
  * If accountId is provided, resolves that specific account.
  * Otherwise falls back to the first enabled account (preserving current behavior).
  */
-export function resolveToolClient(cfg: ClawdbotConfig, accountId?: string) {
-  if (accountId) {
-    const account = resolveFeishuAccount({ cfg, accountId });
+export function resolveToolClient(
+  cfg: ClawdbotConfig,
+  accountId?: string,
+  preferredAccountId?: string,
+) {
+  const requested = accountId || preferredAccountId;
+  if (requested) {
+    const account = resolveFeishuAccount({ cfg, accountId: requested });
     if (!account.configured) {
-      throw new Error(`Feishu account "${accountId}" is not configured`);
+      throw new Error(`Feishu account "${requested}" is not configured`);
     }
     if (!account.enabled) {
-      throw new Error(`Feishu account "${accountId}" is disabled`);
+      throw new Error(`Feishu account "${requested}" is disabled`);
     }
-    return { client: createFeishuClient(account), accountId: account.accountId };
+    return { client: createFeishuClient(account), accountId: account.accountId, account };
   }
   const accounts = listEnabledFeishuAccounts(cfg);
   if (accounts.length === 0) {
     throw new Error("No Feishu accounts configured");
   }
-  return { client: createFeishuClient(accounts[0]), accountId: accounts[0].accountId };
+  return {
+    client: createFeishuClient(accounts[0]),
+    accountId: accounts[0].accountId,
+    account: accounts[0],
+  };
 }

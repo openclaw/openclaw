@@ -333,153 +333,176 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
 
   // Tool 0: feishu_bitable_get_meta (helper to parse URLs)
   api.registerTool(
-    {
-      name: "feishu_bitable_get_meta",
-      label: "Feishu Bitable Get Meta",
-      description:
-        "Parse a Bitable URL and get app_token, table_id, and table list. Use this first when given a /wiki/ or /base/ URL.",
-      parameters: GetMetaSchema,
-      async execute(_toolCallId, params) {
-        const { url, account } = params as { url: string; account?: string };
-        try {
-          const { client } = resolveToolClient(api.config!, account);
-          const result = await getBitableMeta(client, url);
-          return json(result);
-        } catch (err) {
-          return json({ error: err instanceof Error ? err.message : String(err) });
-        }
-      },
+    (ctx) => {
+      const preferredAccountId = ctx.agentAccountId;
+      return {
+        name: "feishu_bitable_get_meta",
+        label: "Feishu Bitable Get Meta",
+        description:
+          "Parse a Bitable URL and get app_token, table_id, and table list. Use this first when given a /wiki/ or /base/ URL. Auto-selects the bot that received the message when available.",
+        parameters: GetMetaSchema,
+        async execute(_toolCallId, params) {
+          const { url, account } = params as { url: string; account?: string };
+          try {
+            const { client } = resolveToolClient(api.config!, account, preferredAccountId);
+            const result = await getBitableMeta(client, url);
+            return json(result);
+          } catch (err) {
+            return json({ error: err instanceof Error ? err.message : String(err) });
+          }
+        },
+      };
     },
     { name: "feishu_bitable_get_meta" },
   );
 
   // Tool 1: feishu_bitable_list_fields
   api.registerTool(
-    {
-      name: "feishu_bitable_list_fields",
-      label: "Feishu Bitable List Fields",
-      description: "List all fields (columns) in a Bitable table with their types and properties",
-      parameters: ListFieldsSchema,
-      async execute(_toolCallId, params) {
-        const { app_token, table_id, account } = params as {
-          app_token: string;
-          table_id: string;
-          account?: string;
-        };
-        try {
-          const { client } = resolveToolClient(api.config!, account);
-          const result = await listFields(client, app_token, table_id);
-          return json(result);
-        } catch (err) {
-          return json({ error: err instanceof Error ? err.message : String(err) });
-        }
-      },
+    (ctx) => {
+      const preferredAccountId = ctx.agentAccountId;
+      return {
+        name: "feishu_bitable_list_fields",
+        label: "Feishu Bitable List Fields",
+        description:
+          "List all fields (columns) in a Bitable table with their types and properties. Auto-selects the bot that received the message when available.",
+        parameters: ListFieldsSchema,
+        async execute(_toolCallId, params) {
+          const { app_token, table_id, account } = params as {
+            app_token: string;
+            table_id: string;
+            account?: string;
+          };
+          try {
+            const { client } = resolveToolClient(api.config!, account, preferredAccountId);
+            const result = await listFields(client, app_token, table_id);
+            return json(result);
+          } catch (err) {
+            return json({ error: err instanceof Error ? err.message : String(err) });
+          }
+        },
+      };
     },
     { name: "feishu_bitable_list_fields" },
   );
 
   // Tool 2: feishu_bitable_list_records
   api.registerTool(
-    {
-      name: "feishu_bitable_list_records",
-      label: "Feishu Bitable List Records",
-      description: "List records (rows) from a Bitable table with pagination support",
-      parameters: ListRecordsSchema,
-      async execute(_toolCallId, params) {
-        const { app_token, table_id, page_size, page_token, account } = params as {
-          app_token: string;
-          table_id: string;
-          page_size?: number;
-          page_token?: string;
-          account?: string;
-        };
-        try {
-          const { client } = resolveToolClient(api.config!, account);
-          const result = await listRecords(client, app_token, table_id, page_size, page_token);
-          return json(result);
-        } catch (err) {
-          return json({ error: err instanceof Error ? err.message : String(err) });
-        }
-      },
+    (ctx) => {
+      const preferredAccountId = ctx.agentAccountId;
+      return {
+        name: "feishu_bitable_list_records",
+        label: "Feishu Bitable List Records",
+        description:
+          "List records (rows) from a Bitable table with pagination support. Auto-selects the bot that received the message when available.",
+        parameters: ListRecordsSchema,
+        async execute(_toolCallId, params) {
+          const { app_token, table_id, page_size, page_token, account } = params as {
+            app_token: string;
+            table_id: string;
+            page_size?: number;
+            page_token?: string;
+            account?: string;
+          };
+          try {
+            const { client } = resolveToolClient(api.config!, account, preferredAccountId);
+            const result = await listRecords(client, app_token, table_id, page_size, page_token);
+            return json(result);
+          } catch (err) {
+            return json({ error: err instanceof Error ? err.message : String(err) });
+          }
+        },
+      };
     },
     { name: "feishu_bitable_list_records" },
   );
 
   // Tool 3: feishu_bitable_get_record
   api.registerTool(
-    {
-      name: "feishu_bitable_get_record",
-      label: "Feishu Bitable Get Record",
-      description: "Get a single record by ID from a Bitable table",
-      parameters: GetRecordSchema,
-      async execute(_toolCallId, params) {
-        const { app_token, table_id, record_id, account } = params as {
-          app_token: string;
-          table_id: string;
-          record_id: string;
-          account?: string;
-        };
-        try {
-          const { client } = resolveToolClient(api.config!, account);
-          const result = await getRecord(client, app_token, table_id, record_id);
-          return json(result);
-        } catch (err) {
-          return json({ error: err instanceof Error ? err.message : String(err) });
-        }
-      },
+    (ctx) => {
+      const preferredAccountId = ctx.agentAccountId;
+      return {
+        name: "feishu_bitable_get_record",
+        label: "Feishu Bitable Get Record",
+        description:
+          "Get a single record by ID from a Bitable table. Auto-selects the bot that received the message when available.",
+        parameters: GetRecordSchema,
+        async execute(_toolCallId, params) {
+          const { app_token, table_id, record_id, account } = params as {
+            app_token: string;
+            table_id: string;
+            record_id: string;
+            account?: string;
+          };
+          try {
+            const { client } = resolveToolClient(api.config!, account, preferredAccountId);
+            const result = await getRecord(client, app_token, table_id, record_id);
+            return json(result);
+          } catch (err) {
+            return json({ error: err instanceof Error ? err.message : String(err) });
+          }
+        },
+      };
     },
     { name: "feishu_bitable_get_record" },
   );
 
   // Tool 4: feishu_bitable_create_record
   api.registerTool(
-    {
-      name: "feishu_bitable_create_record",
-      label: "Feishu Bitable Create Record",
-      description: "Create a new record (row) in a Bitable table",
-      parameters: CreateRecordSchema,
-      async execute(_toolCallId, params) {
-        const { app_token, table_id, fields, account } = params as {
-          app_token: string;
-          table_id: string;
-          fields: Record<string, unknown>;
-          account?: string;
-        };
-        try {
-          const { client } = resolveToolClient(api.config!, account);
-          const result = await createRecord(client, app_token, table_id, fields);
-          return json(result);
-        } catch (err) {
-          return json({ error: err instanceof Error ? err.message : String(err) });
-        }
-      },
+    (ctx) => {
+      const preferredAccountId = ctx.agentAccountId;
+      return {
+        name: "feishu_bitable_create_record",
+        label: "Feishu Bitable Create Record",
+        description:
+          "Create a new record (row) in a Bitable table. Auto-selects the bot that received the message when available.",
+        parameters: CreateRecordSchema,
+        async execute(_toolCallId, params) {
+          const { app_token, table_id, fields, account } = params as {
+            app_token: string;
+            table_id: string;
+            fields: Record<string, unknown>;
+            account?: string;
+          };
+          try {
+            const { client } = resolveToolClient(api.config!, account, preferredAccountId);
+            const result = await createRecord(client, app_token, table_id, fields);
+            return json(result);
+          } catch (err) {
+            return json({ error: err instanceof Error ? err.message : String(err) });
+          }
+        },
+      };
     },
     { name: "feishu_bitable_create_record" },
   );
 
   // Tool 5: feishu_bitable_update_record
   api.registerTool(
-    {
-      name: "feishu_bitable_update_record",
-      label: "Feishu Bitable Update Record",
-      description: "Update an existing record (row) in a Bitable table",
-      parameters: UpdateRecordSchema,
-      async execute(_toolCallId, params) {
-        const { app_token, table_id, record_id, fields, account } = params as {
-          app_token: string;
-          table_id: string;
-          record_id: string;
-          fields: Record<string, unknown>;
-          account?: string;
-        };
-        try {
-          const { client } = resolveToolClient(api.config!, account);
-          const result = await updateRecord(client, app_token, table_id, record_id, fields);
-          return json(result);
-        } catch (err) {
-          return json({ error: err instanceof Error ? err.message : String(err) });
-        }
-      },
+    (ctx) => {
+      const preferredAccountId = ctx.agentAccountId;
+      return {
+        name: "feishu_bitable_update_record",
+        label: "Feishu Bitable Update Record",
+        description:
+          "Update an existing record (row) in a Bitable table. Auto-selects the bot that received the message when available.",
+        parameters: UpdateRecordSchema,
+        async execute(_toolCallId, params) {
+          const { app_token, table_id, record_id, fields, account } = params as {
+            app_token: string;
+            table_id: string;
+            record_id: string;
+            fields: Record<string, unknown>;
+            account?: string;
+          };
+          try {
+            const { client } = resolveToolClient(api.config!, account, preferredAccountId);
+            const result = await updateRecord(client, app_token, table_id, record_id, fields);
+            return json(result);
+          } catch (err) {
+            return json({ error: err instanceof Error ? err.message : String(err) });
+          }
+        },
+      };
     },
     { name: "feishu_bitable_update_record" },
   );

@@ -456,48 +456,55 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
   // Use first account's config for tools configuration
   const firstAccount = accounts[0];
   const toolsCfg = resolveToolsConfig(firstAccount.config.tools);
-  const mediaMaxBytes = (firstAccount.config?.mediaMaxMb ?? 30) * 1024 * 1024;
 
   const registered: string[] = [];
 
   // Main document tool with action-based dispatch
   if (toolsCfg.doc) {
     api.registerTool(
-      {
-        name: "feishu_doc",
-        label: "Feishu Doc",
-        description:
-          "Feishu document operations. Actions: read, write, append, create, list_blocks, get_block, update_block, delete_block",
-        parameters: FeishuDocSchema,
-        async execute(_toolCallId, params) {
-          const p = params as FeishuDocParams;
-          try {
-            const { client } = resolveToolClient(api.config!, p.account);
-            switch (p.action) {
-              case "read":
-                return json(await readDoc(client, p.doc_token));
-              case "write":
-                return json(await writeDoc(client, p.doc_token, p.content, mediaMaxBytes));
-              case "append":
-                return json(await appendDoc(client, p.doc_token, p.content, mediaMaxBytes));
-              case "create":
-                return json(await createDoc(client, p.title, p.folder_token));
-              case "list_blocks":
-                return json(await listBlocks(client, p.doc_token));
-              case "get_block":
-                return json(await getBlock(client, p.doc_token, p.block_id));
-              case "update_block":
-                return json(await updateBlock(client, p.doc_token, p.block_id, p.content));
-              case "delete_block":
-                return json(await deleteBlock(client, p.doc_token, p.block_id));
-              default:
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any -- exhaustive check fallback
-                return json({ error: `Unknown action: ${(p as any).action}` });
+      (ctx) => {
+        const preferredAccountId = ctx.agentAccountId;
+        return {
+          name: "feishu_doc",
+          label: "Feishu Doc",
+          description:
+            "Feishu document operations. Actions: read, write, append, create, list_blocks, get_block, update_block, delete_block. In multi-account setups, this tool auto-selects the Feishu bot that received the message when available.",
+          parameters: FeishuDocSchema,
+          async execute(_toolCallId, params) {
+            const p = params as FeishuDocParams;
+            try {
+              const { client, account } = resolveToolClient(
+                api.config!,
+                p.account,
+                preferredAccountId,
+              );
+              const mediaMaxBytes = (account.config?.mediaMaxMb ?? 30) * 1024 * 1024;
+              switch (p.action) {
+                case "read":
+                  return json(await readDoc(client, p.doc_token));
+                case "write":
+                  return json(await writeDoc(client, p.doc_token, p.content, mediaMaxBytes));
+                case "append":
+                  return json(await appendDoc(client, p.doc_token, p.content, mediaMaxBytes));
+                case "create":
+                  return json(await createDoc(client, p.title, p.folder_token));
+                case "list_blocks":
+                  return json(await listBlocks(client, p.doc_token));
+                case "get_block":
+                  return json(await getBlock(client, p.doc_token, p.block_id));
+                case "update_block":
+                  return json(await updateBlock(client, p.doc_token, p.block_id, p.content));
+                case "delete_block":
+                  return json(await deleteBlock(client, p.doc_token, p.block_id));
+                default:
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- exhaustive check fallback
+                  return json({ error: `Unknown action: ${(p as any).action}` });
+              }
+            } catch (err) {
+              return json({ error: err instanceof Error ? err.message : String(err) });
             }
-          } catch (err) {
-            return json({ error: err instanceof Error ? err.message : String(err) });
-          }
-        },
+          },
+        };
       },
       { name: "feishu_doc" },
     );
@@ -507,26 +514,29 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
   // Keep feishu_app_scopes as independent tool
   if (toolsCfg.scopes) {
     api.registerTool(
-      {
-        name: "feishu_app_scopes",
-        label: "Feishu App Scopes",
-        description:
-          "List current app permissions (scopes). Use to debug permission issues or check available capabilities.",
-        parameters: Type.Object({
-          account: Type.Optional(
-            Type.String({ description: "Feishu account ID. Omit to use the default account." }),
-          ),
-        }),
-        async execute(_toolCallId, params) {
-          try {
-            const { account } = params as { account?: string };
-            const { client } = resolveToolClient(api.config!, account);
-            const result = await listAppScopes(client);
-            return json(result);
-          } catch (err) {
-            return json({ error: err instanceof Error ? err.message : String(err) });
-          }
-        },
+      (ctx) => {
+        const preferredAccountId = ctx.agentAccountId;
+        return {
+          name: "feishu_app_scopes",
+          label: "Feishu App Scopes",
+          description:
+            "List current app permissions (scopes). Use to debug permission issues or check available capabilities.",
+          parameters: Type.Object({
+            account: Type.Optional(
+              Type.String({ description: "Feishu account ID. Omit to use the default account." }),
+            ),
+          }),
+          async execute(_toolCallId, params) {
+            try {
+              const { account } = params as { account?: string };
+              const { client } = resolveToolClient(api.config!, account, preferredAccountId);
+              const result = await listAppScopes(client);
+              return json(result);
+            } catch (err) {
+              return json({ error: err instanceof Error ? err.message : String(err) });
+            }
+          },
+        };
       },
       { name: "feishu_app_scopes" },
     );
