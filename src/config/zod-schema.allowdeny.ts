@@ -26,6 +26,7 @@ export function createAllowDenyChannelRulesSchema() {
                   channel: z.string().optional(),
                   chatType: AllowDenyChatTypeSchema,
                   keyPrefix: z.string().optional(),
+                  rawKeyPrefix: z.string().optional(),
                 })
                 .strict()
                 .optional(),

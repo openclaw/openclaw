@@ -233,7 +233,7 @@ export const FIELD_HELP: Record<string, string> = {
   "memory.qmd.limits.maxInjectedChars": "Max total characters injected from QMD hits per turn.",
   "memory.qmd.limits.timeoutMs": "Per-query timeout for QMD searches (default: 4000).",
   "memory.qmd.scope":
-    "Session/channel scope for QMD recall (same syntax as session.sendPolicy; default: direct-only).",
+    "Session/channel scope for QMD recall (same syntax as session.sendPolicy; default: direct-only). Use match.rawKeyPrefix to match full agent-prefixed session keys.",
   "agents.defaults.memorySearch.cache.maxEntries":
     "Optional cap on cached embeddings (best-effort).",
   "agents.defaults.memorySearch.sync.onSearch":
