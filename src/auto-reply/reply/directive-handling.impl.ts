@@ -1,9 +1,8 @@
-import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ExecAsk, ExecHost, ExecSecurity } from "../../infra/exec-approvals.js";
 import type { ReplyPayload } from "../types.js";
-import type { InlineDirectives } from "./directive-handling.parse.js";
-import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "./directives.js";
+import type { HandleDirectiveOnlyParams } from "./directive-handling.params.js";
+import type { ElevatedLevel, ReasoningLevel, ThinkLevel } from "./directives.js";
 import {
   resolveAgentConfig,
   resolveAgentDir,
@@ -58,35 +57,9 @@ function resolveExecDefaults(params: {
   };
 }
 
-export async function handleDirectiveOnly(params: {
-  cfg: OpenClawConfig;
-  directives: InlineDirectives;
-  sessionEntry: SessionEntry;
-  sessionStore: Record<string, SessionEntry>;
-  sessionKey: string;
-  storePath?: string;
-  elevatedEnabled: boolean;
-  elevatedAllowed: boolean;
-  elevatedFailures?: Array<{ gate: string; key: string }>;
-  messageProviderKey?: string;
-  defaultProvider: string;
-  defaultModel: string;
-  aliasIndex: ModelAliasIndex;
-  allowedModelKeys: Set<string>;
-  allowedModelCatalog: Awaited<
-    ReturnType<typeof import("../../agents/model-catalog.js").loadModelCatalog>
-  >;
-  resetModelOverride: boolean;
-  provider: string;
-  model: string;
-  initialModelLabel: string;
-  formatModelSwitchEvent: (label: string, alias?: string) => string;
-  currentThinkLevel?: ThinkLevel;
-  currentVerboseLevel?: VerboseLevel;
-  currentReasoningLevel?: ReasoningLevel;
-  currentElevatedLevel?: ElevatedLevel;
-  surface?: string;
-}): Promise<ReplyPayload | undefined> {
+export async function handleDirectiveOnly(
+  params: HandleDirectiveOnlyParams,
+): Promise<ReplyPayload | undefined> {
   const {
     directives,
     sessionEntry,
