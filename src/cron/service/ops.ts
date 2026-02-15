@@ -23,15 +23,16 @@ import {
 } from "./timer.js";
 
 export async function start(state: CronServiceState) {
-  let startupInterruptedJobIds = new Set<string>();
+  const startupInterruptedJobIds = new Set<string>();
+  let shouldReplayMissedJobs = false;
   await locked(state, async () => {
     if (!state.deps.cronEnabled) {
       state.deps.log.info({ enabled: false }, "cron: disabled");
       return;
     }
+    shouldReplayMissedJobs = true;
     await ensureLoaded(state, { skipRecompute: true });
     const jobs = state.store?.jobs ?? [];
-    startupInterruptedJobIds = new Set<string>();
     for (const job of jobs) {
       if (typeof job.state.runningAtMs === "number") {
         state.deps.log.warn(
@@ -54,7 +55,9 @@ export async function start(state: CronServiceState) {
       "cron: started",
     );
   });
-  await runMissedJobs(state, { skipJobIds: startupInterruptedJobIds });
+  if (shouldReplayMissedJobs) {
+    await runMissedJobs(state, { skipJobIds: startupInterruptedJobIds });
+  }
 }
 
 export function stop(state: CronServiceState) {
