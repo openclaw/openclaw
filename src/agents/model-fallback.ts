@@ -16,9 +16,11 @@ import {
   buildConfiguredAllowlistKeys,
   buildModelAliasIndex,
   modelKey,
+  normalizeModelRef,
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "./model-selection.js";
+import { isLikelyContextOverflowError } from "./pi-embedded-helpers.js";
 
 type ModelCandidate = {
   provider: string;
@@ -143,8 +145,9 @@ function resolveFallbackCandidates(params: {
     : null;
   const defaultProvider = primary?.provider ?? DEFAULT_PROVIDER;
   const defaultModel = primary?.model ?? DEFAULT_MODEL;
-  const provider = String(params.provider ?? "").trim() || defaultProvider;
-  const model = String(params.model ?? "").trim() || defaultModel;
+  const providerRaw = String(params.provider ?? "").trim() || defaultProvider;
+  const modelRaw = String(params.model ?? "").trim() || defaultModel;
+  const normalizedPrimary = normalizeModelRef(providerRaw, modelRaw);
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg ?? {},
     defaultProvider,
@@ -171,7 +174,7 @@ function resolveFallbackCandidates(params: {
     candidates.push(candidate);
   };
 
-  addCandidate({ provider, model }, false);
+  addCandidate(normalizedPrimary, false);
 
   const modelFallbacks = (() => {
     if (params.fallbacksOverride !== undefined) {
@@ -270,6 +273,14 @@ export async function runWithModelFallback<T>(params: {
       };
     } catch (err) {
       if (shouldRethrowAbort(err)) {
+        throw err;
+      }
+      // Context overflow errors should be handled by the inner runner's
+      // compaction/retry logic, not by model fallback.  If one escapes as a
+      // throw, rethrow it immediately rather than trying a different model
+      // that may have a smaller context window and fail worse.
+      const errMessage = err instanceof Error ? err.message : String(err);
+      if (isLikelyContextOverflowError(errMessage)) {
         throw err;
       }
       const normalized =

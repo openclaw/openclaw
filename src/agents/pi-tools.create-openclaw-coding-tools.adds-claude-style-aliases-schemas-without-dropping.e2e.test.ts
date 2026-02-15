@@ -274,6 +274,7 @@ describe("createOpenClawCodingTools", () => {
       "sessions_history",
       "sessions_send",
       "sessions_spawn",
+      "subagents",
       "session_status",
       "image",
     ]);
@@ -296,11 +297,55 @@ describe("createOpenClawCodingTools", () => {
     expect(names.has("sessions_history")).toBe(false);
     expect(names.has("sessions_send")).toBe(false);
     expect(names.has("sessions_spawn")).toBe(false);
+    // Explicit subagent orchestration tool remains available (list/steer/kill with safeguards).
+    expect(names.has("subagents")).toBe(true);
 
     expect(names.has("read")).toBe(true);
     expect(names.has("exec")).toBe(true);
     expect(names.has("process")).toBe(true);
     expect(names.has("apply_patch")).toBe(false);
+  });
+
+  it("uses stored spawnDepth to apply leaf tool policy for flat depth-2 session keys", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-depth-policy-"));
+    const storeTemplate = path.join(tmpDir, "sessions-{agentId}.json");
+    const storePath = storeTemplate.replaceAll("{agentId}", "main");
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          "agent:main:subagent:flat": {
+            sessionId: "session-flat-depth-2",
+            updatedAt: Date.now(),
+            spawnDepth: 2,
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const tools = createOpenClawCodingTools({
+      sessionKey: "agent:main:subagent:flat",
+      config: {
+        session: {
+          store: storeTemplate,
+        },
+        agents: {
+          defaults: {
+            subagents: {
+              maxSpawnDepth: 2,
+            },
+          },
+        },
+      },
+    });
+    const names = new Set(tools.map((tool) => tool.name));
+    expect(names.has("sessions_spawn")).toBe(false);
+    expect(names.has("sessions_list")).toBe(false);
+    expect(names.has("sessions_history")).toBe(false);
+    expect(names.has("subagents")).toBe(true);
   });
   it("supports allow-only sub-agent tool policy", () => {
     const tools = createOpenClawCodingTools({
