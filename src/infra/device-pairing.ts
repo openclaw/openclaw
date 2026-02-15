@@ -168,8 +168,10 @@ function scopesAllow(requested: string[], allowed: string[]): boolean {
   if (requested.length === 0) {
     return true;
   }
+  // Empty allowed scopes means no restrictions (backward-compatible with
+  // pre-scope devices that have tokens with empty scopes).
   if (allowed.length === 0) {
-    return false;
+    return true;
   }
   const allowedSet = new Set(allowed);
   return requested.every((scope) => allowedSet.has(scope));
