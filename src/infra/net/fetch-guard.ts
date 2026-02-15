@@ -41,7 +41,7 @@ const DEFAULT_MAX_REDIRECTS = 3;
  * Check if a hostname should bypass the proxy based on NO_PROXY/no_proxy.
  * Supports comma-separated hostnames and wildcard prefixes (e.g., ".example.com").
  */
-function shouldBypassProxy(hostname: string): boolean {
+export function shouldBypassProxy(hostname: string): boolean {
   const noProxy = process.env.NO_PROXY || process.env.no_proxy;
   if (!noProxy) {
     return false;
@@ -77,7 +77,7 @@ function shouldBypassProxy(hostname: string): boolean {
  * 3. NO_PROXY/no_proxy match → no proxy
  * 4. HTTPS_PROXY/HTTP_PROXY env vars by protocol
  */
-function resolveProxyUrl(params: {
+export function resolveProxyUrl(params: {
   proxyUrl?: string;
   skipProxy?: boolean;
   protocol?: string;
