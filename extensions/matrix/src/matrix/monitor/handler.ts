@@ -176,25 +176,32 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         }
       }
 
-      const isDirectMessage = await directTracker.isDirectMessage({
+      let isDirectMessage = await directTracker.isDirectMessage({
         roomId,
         senderId,
         selfUserId,
       });
+
+      // If room is explicitly in groups config, treat as group regardless of member count
+      const roomConfigInfo = resolveMatrixRoomConfig({
+        rooms: roomsConfig,
+        roomId,
+        aliases: roomAliases,
+        name: roomName,
+      });
+      if (isDirectMessage && roomConfigInfo?.config) {
+        // Only override DM classification for explicit room matches (not wildcard)
+        // or if the config explicitly allows the room
+        if (roomConfigInfo.matchSource === "direct" || roomConfigInfo.allowed) {
+          isDirectMessage = false;
+        }
+      }
+
       const isRoom = !isDirectMessage;
 
       if (isRoom && groupPolicy === "disabled") {
         return;
       }
-
-      const roomConfigInfo = isRoom
-        ? resolveMatrixRoomConfig({
-            rooms: roomsConfig,
-            roomId,
-            aliases: roomAliases,
-            name: roomName,
-          })
-        : undefined;
       const roomConfig = roomConfigInfo?.config;
       const roomMatchMeta = roomConfigInfo
         ? `matchKey=${roomConfigInfo.matchKey ?? "none"} matchSource=${
