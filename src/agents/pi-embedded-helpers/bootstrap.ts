@@ -156,7 +156,7 @@ function clampToBudget(content: string, budget: number): string {
   if (budget <= 3) {
     return truncateUtf16Safe(content, budget);
   }
-  const safe = Math.max(1, budget - 1);
+  const safe = budget - 1;
   return `${truncateUtf16Safe(content, safe)}…`;
 }
 
