@@ -26,10 +26,12 @@ export type {
   AuthProfileFailureReason,
   AuthProfileIdRepairResult,
   AuthProfileStore,
+  ModelCooldownStats,
   OAuthCredential,
   ProfileUsageStats,
   TokenCredential,
 } from "./auth-profiles/types.js";
+export { isModelScopedFailure } from "./auth-profiles/types.js";
 export {
   calculateAuthProfileCooldownMs,
   clearAuthProfileCooldown,

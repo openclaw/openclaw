@@ -40,6 +40,22 @@ export type AuthProfileFailureReason =
   | "timeout"
   | "unknown";
 
+/** Per-model cooldown stats for rate-limit scoping */
+export type ModelCooldownStats = {
+  cooldownUntil?: number;
+  errorCount?: number;
+  lastFailureAt?: number;
+};
+
+/**
+ * Returns true if the given failure reason should be tracked per-model
+ * rather than per-profile. Rate limits are model-scoped because providers
+ * (Anthropic, Google, etc.) enforce separate quotas per model.
+ */
+export function isModelScopedFailure(reason: AuthProfileFailureReason): boolean {
+  return reason === "rate_limit";
+}
+
 /** Per-profile usage statistics for round-robin and cooldown tracking */
 export type ProfileUsageStats = {
   lastUsed?: number;
@@ -49,6 +65,12 @@ export type ProfileUsageStats = {
   errorCount?: number;
   failureCounts?: Partial<Record<AuthProfileFailureReason, number>>;
   lastFailureAt?: number;
+  /**
+   * Per-model cooldown tracking. Rate-limit errors are scoped to the specific
+   * model that was rate-limited, allowing other models on the same provider/profile
+   * to remain available. Account-level failures (billing, auth) still apply profile-wide.
+   */
+  modelCooldowns?: Record<string, ModelCooldownStats>;
 };
 
 export type AuthProfileStore = {
