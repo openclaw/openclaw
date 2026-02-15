@@ -44,7 +44,7 @@ function normalizePresenceKey(key: string | undefined): string | undefined {
 }
 
 function resolvePrimaryIPv4(): string | undefined {
-  return pickPrimaryLanIPv4() ?? os.hostname();
+
 }
 
 function initSelfPresence() {
