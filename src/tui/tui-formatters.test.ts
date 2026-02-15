@@ -148,7 +148,9 @@ describe("sanitizeRenderableText", () => {
   it("breaks very long unbroken tokens to avoid overflow", () => {
     const input = "a".repeat(140);
     const sanitized = sanitizeRenderableText(input);
-    const longestSegment = Math.max(...sanitized.split(/\s+/).map((segment) => segment.length));
+    const longestSegment = Math.max(
+      ...sanitized.split(/[\s\u200B]+/).map((segment) => segment.length),
+    );
 
     expect(longestSegment).toBeLessThanOrEqual(32);
   });
@@ -156,8 +158,40 @@ describe("sanitizeRenderableText", () => {
   it("breaks moderately long unbroken tokens to protect narrow terminals", () => {
     const input = "b".repeat(90);
     const sanitized = sanitizeRenderableText(input);
-    const longestSegment = Math.max(...sanitized.split(/\s+/).map((segment) => segment.length));
+    const longestSegment = Math.max(
+      ...sanitized.split(/[\s\u200B]+/).map((segment) => segment.length),
+    );
 
     expect(longestSegment).toBeLessThanOrEqual(32);
+  });
+
+  it("does not insert visible spaces into long tokens (#17282)", () => {
+    const path = "/Users/pia/.openclaw/workspace/skills/briefing/Briefing-Agenda.md";
+    const sanitized = sanitizeRenderableText(path);
+
+    expect(sanitized).not.toContain(" ");
+    expect(sanitized.replace(/\u200B/g, "")).toBe(path);
+  });
+
+  it("is idempotent — calling twice produces the same result", () => {
+    const input = "x".repeat(100);
+    const once = sanitizeRenderableText(input);
+    const twice = sanitizeRenderableText(once);
+
+    expect(twice).toBe(once);
+  });
+
+  it("leaves short tokens untouched", () => {
+    const input = "short token here";
+    expect(sanitizeRenderableText(input)).toBe(input);
+  });
+
+  it("preserves spaces between normal words with one long token", () => {
+    const input = "prefix " + "z".repeat(50) + " suffix";
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toContain("prefix ");
+    expect(sanitized).toContain(" suffix");
+    expect(sanitized.replace(/\u200B/g, "")).toBe(input);
   });
 });
