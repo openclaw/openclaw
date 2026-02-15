@@ -819,7 +819,12 @@ export function startHeartbeatRunner(opts: {
     if (!Number.isFinite(nextDue)) {
       return;
     }
-    const delay = Math.max(0, nextDue - now);
+    // Cap delay to avoid setTimeout 32-bit overflow (max ~24.8 days).
+    // When the capped timer fires before the agent is actually due,
+    // the run handler skips agents where `now < nextDueMs` and
+    // scheduleNext() re-arms for the remaining time.
+    const MAX_TIMEOUT_MS = 0x7fff_ffff; // 2^31 - 1
+    const delay = Math.min(Math.max(0, nextDue - now), MAX_TIMEOUT_MS);
     state.timer = setTimeout(() => {
       state.timer = null;
       requestHeartbeatNow({ reason: "interval", coalesceMs: 0 });
