@@ -56,8 +56,6 @@ export type {
   ChannelThreadingContext,
   ChannelThreadingToolContext,
   ChannelToolSend,
-  BaseProbeResult,
-  BaseTokenResolution,
 } from "../channels/plugins/types.js";
 export type { ChannelConfigSchema, ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export type {

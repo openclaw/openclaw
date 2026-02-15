@@ -8,7 +8,6 @@ import { resolveTextChunkLimit } from "../../auto-reply/chunk.js";
 import { listNativeCommandSpecsForConfig } from "../../auto-reply/commands-registry.js";
 import { listSkillCommandsForAgents } from "../../auto-reply/skill-commands.js";
 import {
-  addAllowlistUserEntriesFromConfigEntry,
   buildAllowlistResolutionSummary,
   mergeAllowlist,
   resolveAllowlistIdAdditions,
@@ -295,10 +294,30 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         if (!guild || typeof guild !== "object") {
           continue;
         }
-        addAllowlistUserEntriesFromConfigEntry(userEntries, guild);
+        const users = (guild as { users?: Array<string | number> }).users;
+        if (Array.isArray(users)) {
+          for (const entry of users) {
+            const trimmed = String(entry).trim();
+            if (trimmed && trimmed !== "*") {
+              userEntries.add(trimmed);
+            }
+          }
+        }
         const channels = (guild as { channels?: Record<string, unknown> }).channels ?? {};
         for (const channel of Object.values(channels)) {
-          addAllowlistUserEntriesFromConfigEntry(userEntries, channel);
+          if (!channel || typeof channel !== "object") {
+            continue;
+          }
+          const channelUsers = (channel as { users?: Array<string | number> }).users;
+          if (!Array.isArray(channelUsers)) {
+            continue;
+          }
+          for (const entry of channelUsers) {
+            const trimmed = String(entry).trim();
+            if (trimmed && trimmed !== "*") {
+              userEntries.add(trimmed);
+            }
+          }
         }
       }
 

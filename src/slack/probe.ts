@@ -1,8 +1,9 @@
-import type { BaseProbeResult } from "../channels/plugins/types.js";
 import { createSlackWebClient } from "./client.js";
 
-export type SlackProbe = BaseProbeResult & {
+export type SlackProbe = {
+  ok: boolean;
   status?: number | null;
+  error?: string | null;
   elapsedMs?: number | null;
   bot?: { id?: string; name?: string };
   team?: { id?: string; name?: string };

@@ -348,10 +348,7 @@ export async function prepareSlackMessage(params: {
     return null;
   }
 
-  const ackReaction = resolveAckReaction(cfg, route.agentId, {
-    channel: "slack",
-    accountId: account.accountId,
-  });
+  const ackReaction = resolveAckReaction(cfg, route.agentId);
   const ackReactionValue = ackReaction ?? "";
 
   const shouldAckReaction = () =>

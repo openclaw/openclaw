@@ -1,8 +1,9 @@
-import type { BaseProbeResult } from "../channels/plugins/types.js";
 import { signalCheck, signalRpcRequest } from "./client.js";
 
-export type SignalProbe = BaseProbeResult & {
+export type SignalProbe = {
+  ok: boolean;
   status?: number | null;
+  error?: string | null;
   elapsedMs: number;
   version?: string | null;
 };

@@ -1,4 +1,3 @@
-import type { BaseProbeResult } from "openclaw/plugin-sdk";
 import type {
   BlockStreamingCoalesceConfig,
   DmConfig,
@@ -84,10 +83,12 @@ export type IrcInboundMessage = {
   isGroup: boolean;
 };
 
-export type IrcProbe = BaseProbeResult<string> & {
+export type IrcProbe = {
+  ok: boolean;
   host: string;
   port: number;
   tls: boolean;
   nick: string;
   latencyMs?: number;
+  error?: string;
 };

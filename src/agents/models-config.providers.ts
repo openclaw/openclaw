@@ -47,33 +47,6 @@ const MINIMAX_API_COST = {
   cacheWrite: 10,
 };
 
-type ProviderModelConfig = NonNullable<ProviderConfig["models"]>[number];
-
-function buildMinimaxModel(params: {
-  id: string;
-  name: string;
-  reasoning: boolean;
-  input: ProviderModelConfig["input"];
-}): ProviderModelConfig {
-  return {
-    id: params.id,
-    name: params.name,
-    reasoning: params.reasoning,
-    input: params.input,
-    cost: MINIMAX_API_COST,
-    contextWindow: MINIMAX_DEFAULT_CONTEXT_WINDOW,
-    maxTokens: MINIMAX_DEFAULT_MAX_TOKENS,
-  };
-}
-
-function buildMinimaxTextModel(params: {
-  id: string;
-  name: string;
-  reasoning: boolean;
-}): ProviderModelConfig {
-  return buildMinimaxModel({ ...params, input: ["text"] });
-}
-
 const XIAOMI_BASE_URL = "https://api.xiaomimimo.com/anthropic";
 export const XIAOMI_DEFAULT_MODEL_ID = "mimo-v2-flash";
 const XIAOMI_DEFAULT_CONTEXT_WINDOW = 262144;
@@ -416,32 +389,51 @@ function buildMinimaxProvider(): ProviderConfig {
     baseUrl: MINIMAX_PORTAL_BASE_URL,
     api: "anthropic-messages",
     models: [
-      buildMinimaxTextModel({
+      {
         id: MINIMAX_DEFAULT_MODEL_ID,
         name: "MiniMax M2.1",
         reasoning: false,
-      }),
-      buildMinimaxTextModel({
+        input: ["text"],
+        cost: MINIMAX_API_COST,
+        contextWindow: MINIMAX_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: MINIMAX_DEFAULT_MAX_TOKENS,
+      },
+      {
         id: "MiniMax-M2.1-lightning",
         name: "MiniMax M2.1 Lightning",
         reasoning: false,
-      }),
-      buildMinimaxModel({
+        input: ["text"],
+        cost: MINIMAX_API_COST,
+        contextWindow: MINIMAX_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: MINIMAX_DEFAULT_MAX_TOKENS,
+      },
+      {
         id: MINIMAX_DEFAULT_VISION_MODEL_ID,
         name: "MiniMax VL 01",
         reasoning: false,
         input: ["text", "image"],
-      }),
-      buildMinimaxTextModel({
+        cost: MINIMAX_API_COST,
+        contextWindow: MINIMAX_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: MINIMAX_DEFAULT_MAX_TOKENS,
+      },
+      {
         id: "MiniMax-M2.5",
         name: "MiniMax M2.5",
         reasoning: true,
-      }),
-      buildMinimaxTextModel({
+        input: ["text"],
+        cost: MINIMAX_API_COST,
+        contextWindow: MINIMAX_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: MINIMAX_DEFAULT_MAX_TOKENS,
+      },
+      {
         id: "MiniMax-M2.5-Lightning",
         name: "MiniMax M2.5 Lightning",
         reasoning: true,
-      }),
+        input: ["text"],
+        cost: MINIMAX_API_COST,
+        contextWindow: MINIMAX_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: MINIMAX_DEFAULT_MAX_TOKENS,
+      },
     ],
   };
 }
@@ -451,16 +443,24 @@ function buildMinimaxPortalProvider(): ProviderConfig {
     baseUrl: MINIMAX_PORTAL_BASE_URL,
     api: "anthropic-messages",
     models: [
-      buildMinimaxTextModel({
+      {
         id: MINIMAX_DEFAULT_MODEL_ID,
         name: "MiniMax M2.1",
         reasoning: false,
-      }),
-      buildMinimaxTextModel({
+        input: ["text"],
+        cost: MINIMAX_API_COST,
+        contextWindow: MINIMAX_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: MINIMAX_DEFAULT_MAX_TOKENS,
+      },
+      {
         id: "MiniMax-M2.5",
         name: "MiniMax M2.5",
         reasoning: true,
-      }),
+        input: ["text"],
+        cost: MINIMAX_API_COST,
+        contextWindow: MINIMAX_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: MINIMAX_DEFAULT_MAX_TOKENS,
+      },
     ],
   };
 }

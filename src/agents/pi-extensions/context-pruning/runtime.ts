@@ -1,5 +1,4 @@
 import type { EffectiveContextPruningSettings } from "./settings.js";
-import { createSessionManagerRuntimeRegistry } from "../session-manager-runtime-registry.js";
 
 export type ContextPruningRuntimeValue = {
   settings: EffectiveContextPruningSettings;
@@ -8,10 +7,34 @@ export type ContextPruningRuntimeValue = {
   lastCacheTouchAt?: number | null;
 };
 
+// Session-scoped runtime registry keyed by object identity.
 // Important: this relies on Pi passing the same SessionManager object instance into
 // ExtensionContext (ctx.sessionManager) that we used when calling setContextPruningRuntime.
-const registry = createSessionManagerRuntimeRegistry<ContextPruningRuntimeValue>();
+const REGISTRY = new WeakMap<object, ContextPruningRuntimeValue>();
 
-export const setContextPruningRuntime = registry.set;
+export function setContextPruningRuntime(
+  sessionManager: unknown,
+  value: ContextPruningRuntimeValue | null,
+): void {
+  if (!sessionManager || typeof sessionManager !== "object") {
+    return;
+  }
 
-export const getContextPruningRuntime = registry.get;
+  const key = sessionManager;
+  if (value === null) {
+    REGISTRY.delete(key);
+    return;
+  }
+
+  REGISTRY.set(key, value);
+}
+
+export function getContextPruningRuntime(
+  sessionManager: unknown,
+): ContextPruningRuntimeValue | null {
+  if (!sessionManager || typeof sessionManager !== "object") {
+    return null;
+  }
+
+  return REGISTRY.get(sessionManager) ?? null;
+}

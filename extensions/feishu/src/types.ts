@@ -1,4 +1,3 @@
-import type { BaseProbeResult } from "openclaw/plugin-sdk";
 import type {
   FeishuConfigSchema,
   FeishuGroupSchema,
@@ -53,7 +52,9 @@ export type FeishuSendResult = {
   chatId: string;
 };
 
-export type FeishuProbeResult = BaseProbeResult<string> & {
+export type FeishuProbeResult = {
+  ok: boolean;
+  error?: string;
   appId?: string;
   botName?: string;
   botOpenId?: string;

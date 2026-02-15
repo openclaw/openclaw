@@ -1,4 +1,3 @@
-import type { BaseProbeResult } from "openclaw/plugin-sdk";
 import { StaticAuthProvider } from "@twurple/auth";
 import { ChatClient } from "@twurple/chat";
 import type { TwitchAccountConfig } from "./types.js";
@@ -7,7 +6,9 @@ import { normalizeToken } from "./utils/twitch.js";
 /**
  * Result of probing a Twitch account
  */
-export type ProbeTwitchResult = BaseProbeResult<string> & {
+export type ProbeTwitchResult = {
+  ok: boolean;
+  error?: string;
   username?: string;
   elapsedMs: number;
   connected?: boolean;

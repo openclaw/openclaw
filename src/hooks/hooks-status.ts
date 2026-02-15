@@ -1,7 +1,8 @@
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import type { HookEligibilityContext, HookEntry, HookInstallSpec } from "./types.js";
-import { evaluateEntryMetadataRequirements } from "../shared/entry-status.js";
+import { resolveEmojiAndHomepage } from "../shared/entry-metadata.js";
+import { evaluateRequirementsFromMetadataWithRemote } from "../shared/requirements.js";
 import { CONFIG_DIR } from "../utils.js";
 import { hasBinary, isConfigPathTruthy, resolveHookConfig } from "./config.js";
 import { loadWorkspaceHookEntries } from "./workspace.js";
@@ -100,19 +101,26 @@ function buildHookStatus(
   const managedByPlugin = entry.hook.source === "openclaw-plugin";
   const disabled = managedByPlugin ? false : hookConfig?.enabled === false;
   const always = entry.metadata?.always === true;
+  const { emoji, homepage } = resolveEmojiAndHomepage({
+    metadata: entry.metadata,
+    frontmatter: entry.frontmatter,
+  });
   const events = entry.metadata?.events ?? [];
 
-  const { emoji, homepage, required, missing, requirementsSatisfied, configChecks } =
-    evaluateEntryMetadataRequirements({
-      always,
-      metadata: entry.metadata,
-      frontmatter: entry.frontmatter,
-      hasLocalBin: hasBinary,
-      localPlatform: process.platform,
-      remote: eligibility?.remote,
-      isEnvSatisfied: (envName) => Boolean(process.env[envName] || hookConfig?.env?.[envName]),
-      isConfigSatisfied: (pathStr) => isConfigPathTruthy(config, pathStr),
-    });
+  const {
+    required,
+    missing,
+    eligible: requirementsSatisfied,
+    configChecks,
+  } = evaluateRequirementsFromMetadataWithRemote({
+    always,
+    metadata: entry.metadata,
+    hasLocalBin: hasBinary,
+    localPlatform: process.platform,
+    remote: eligibility?.remote,
+    isEnvSatisfied: (envName) => Boolean(process.env[envName] || hookConfig?.env?.[envName]),
+    isConfigSatisfied: (pathStr) => isConfigPathTruthy(config, pathStr),
+  });
 
   const eligible = !disabled && requirementsSatisfied;
 

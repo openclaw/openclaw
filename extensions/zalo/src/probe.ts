@@ -1,8 +1,9 @@
-import type { BaseProbeResult } from "openclaw/plugin-sdk";
 import { getMe, ZaloApiError, type ZaloBotInfo, type ZaloFetch } from "./api.js";
 
-export type ZaloProbeResult = BaseProbeResult<string> & {
+export type ZaloProbeResult = {
+  ok: boolean;
   bot?: ZaloBotInfo;
+  error?: string;
   elapsedMs: number;
 };
 

@@ -88,10 +88,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     logVerbose(`discord: drop message ${message.id} (empty content)`);
     return;
   }
-  const ackReaction = resolveAckReaction(cfg, route.agentId, {
-    channel: "discord",
-    accountId,
-  });
+  const ackReaction = resolveAckReaction(cfg, route.agentId);
   const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
   const shouldAckReaction = () =>
     Boolean(
