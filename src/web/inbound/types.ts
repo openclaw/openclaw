@@ -7,6 +7,26 @@ export type WebListenerCloseReason = {
   error?: unknown;
 };
 
+export type WebInboundReaction = {
+  accountId: string;
+  /** JID of the chat where reaction occurred */
+  chatId: string;
+  /** E164 of the person who reacted */
+  reactorE164: string | null;
+  /** JID of the person who reacted */
+  reactorJid: string | null;
+  /** Push name (display name) of reactor if available */
+  reactorName?: string;
+  /** The emoji reaction (empty string = removed) */
+  emoji: string;
+  /** Message ID that was reacted to */
+  targetMessageId: string;
+  /** Whether the reaction was added or removed */
+  action: "add" | "remove";
+  /** Timestamp of the reaction */
+  timestampMs?: number;
+};
+
 export type WebInboundMessage = {
   id?: string;
   from: string; // conversation id: E.164 for direct chats, group JID for groups

@@ -1,6 +1,6 @@
 import type { AnyMessageContent, proto, WAMessage } from "@whiskeysockets/baileys";
 import { DisconnectReason, isJidGroup } from "@whiskeysockets/baileys";
-import type { WebInboundMessage, WebListenerCloseReason } from "./types.js";
+import type { WebInboundMessage, WebInboundReaction, WebListenerCloseReason } from "./types.js";
 import { createInboundDebouncer } from "../../auto-reply/inbound-debounce.js";
 import { formatLocationText } from "../../channels/location.js";
 import { logVerbose, shouldLogVerbose } from "../../globals.js";
@@ -27,6 +27,8 @@ export async function monitorWebInbox(options: {
   accountId: string;
   authDir: string;
   onMessage: (msg: WebInboundMessage) => Promise<void>;
+  /** Callback for incoming reactions (optional). */
+  onReaction?: (reaction: WebInboundReaction) => Promise<void>;
   mediaMaxMb?: number;
   /** Send read receipts for incoming messages (default true). */
   sendReadReceipts?: boolean;
@@ -345,6 +347,62 @@ export async function monitorWebInbox(options: {
   };
   sock.ev.on("messages.upsert", handleMessagesUpsert);
 
+  // Handle incoming reactions
+  const handleMessagesReaction = async (
+    reactions: Array<{
+      key: import("@whiskeysockets/baileys").WAMessageKey;
+      reaction: import("@whiskeysockets/baileys").proto.IReaction;
+    }>,
+  ) => {
+    if (!options.onReaction) {
+      return;
+    }
+    for (const { key, reaction } of reactions) {
+      const chatJid = key.remoteJid;
+      if (!chatJid) {
+        continue;
+      }
+
+      // Skip status/broadcast reactions
+      if (chatJid.endsWith("@status") || chatJid.endsWith("@broadcast")) {
+        continue;
+      }
+
+      const emoji = reaction.text ?? "";
+      const action = emoji ? "add" : "remove";
+      // The reactor is in the reaction's key, not the message key
+      const reactorJid = reaction.key?.participant ?? reaction.key?.remoteJid ?? null;
+      const reactorE164 = reactorJid ? await resolveInboundJid(reactorJid) : null;
+      const targetMessageId = key.id ?? "";
+
+      const reactionEvent: WebInboundReaction = {
+        accountId: options.accountId,
+        chatId: chatJid,
+        reactorE164,
+        reactorJid,
+        emoji,
+        targetMessageId,
+        action,
+        timestampMs: reaction.senderTimestampMs ? Number(reaction.senderTimestampMs) : undefined,
+      };
+
+      if (shouldLogVerbose()) {
+        const actionText = action === "add" ? `reacted with ${emoji}` : "removed reaction";
+        logVerbose(
+          `Reaction: ${reactorE164 ?? reactorJid ?? "unknown"} ${actionText} on ${targetMessageId}`,
+        );
+      }
+
+      try {
+        await options.onReaction(reactionEvent);
+      } catch (err) {
+        inboundLogger.error({ error: String(err) }, "failed handling inbound reaction");
+        inboundConsoleLog.error(`Failed handling inbound reaction: ${String(err)}`);
+      }
+    }
+  };
+  sock.ev.on("messages.reaction", handleMessagesReaction);
+
   const handleConnectionUpdate = (
     update: Partial<import("@whiskeysockets/baileys").ConnectionState>,
   ) => {
@@ -382,14 +440,19 @@ export async function monitorWebInbox(options: {
         const messagesUpsertHandler = handleMessagesUpsert as unknown as (
           ...args: unknown[]
         ) => void;
+        const messagesReactionHandler = handleMessagesReaction as unknown as (
+          ...args: unknown[]
+        ) => void;
         const connectionUpdateHandler = handleConnectionUpdate as unknown as (
           ...args: unknown[]
         ) => void;
         if (typeof ev.off === "function") {
           ev.off("messages.upsert", messagesUpsertHandler);
+          ev.off("messages.reaction", messagesReactionHandler);
           ev.off("connection.update", connectionUpdateHandler);
         } else if (typeof ev.removeListener === "function") {
           ev.removeListener("messages.upsert", messagesUpsertHandler);
+          ev.removeListener("messages.reaction", messagesReactionHandler);
           ev.removeListener("connection.update", connectionUpdateHandler);
         }
         sock.ws?.close();
