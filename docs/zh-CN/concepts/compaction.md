@@ -28,7 +28,7 @@ x-i18n:
 
 ## 配置
 
-有关 `agents.defaults.compaction` 设置，请参阅[压缩配置与模式](/concepts/compaction)。
+有关 `agents.defaults.compaction` 设置，请参阅[会话管理与压缩深入解析](/reference/session-management-compaction)。
 
 ## 自动压缩（默认开启）
 
