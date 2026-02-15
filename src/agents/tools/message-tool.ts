@@ -105,6 +105,20 @@ function buildSendSchema(options: { includeButtons: boolean; includeCards: boole
         },
       ),
     ),
+    embeds: Type.Optional(
+      Type.Array(
+        Type.Object(
+          {},
+          {
+            additionalProperties: true,
+          },
+        ),
+        {
+          description:
+            "Discord embed objects array. Supports title, description, color, fields, author, footer, image, thumbnail, timestamp, url.",
+        },
+      ),
+    ),
   };
   if (!options.includeButtons) {
     delete props.buttons;
