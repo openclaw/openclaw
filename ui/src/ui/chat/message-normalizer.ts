@@ -88,3 +88,73 @@ export function isToolResultMessage(message: unknown): boolean {
   const role = typeof m.role === "string" ? m.role.toLowerCase() : "";
   return role === "toolresult" || role === "tool_result";
 }
+
+/**
+ * Internal system message patterns that should be hidden from WebChat UI.
+ * These are housekeeping messages injected by the Gateway for internal operations.
+ */
+const INTERNAL_MESSAGE_PATTERNS = [
+  // Memory flush prompts (compaction)
+  /Pre-compaction memory flush/i,
+  // Session reset/new greeting prompts
+  /A new session was started via \/new or \/reset/i,
+];
+
+/**
+ * Silent reply token pattern - messages starting with NO_REPLY are internal responses.
+ */
+const SILENT_REPLY_PATTERN = /^\s*NO_REPLY(?:$|\W)/;
+
+/**
+ * Extract text content from a message for pattern matching.
+ */
+function extractMessageText(message: unknown): string {
+  const m = message as Record<string, unknown>;
+  if (typeof m.content === "string") {
+    return m.content;
+  }
+  if (Array.isArray(m.content)) {
+    const parts: string[] = [];
+    for (const item of m.content) {
+      if (item && typeof item === "object") {
+        const rec = item as { type?: unknown; text?: unknown };
+        if (rec.type === "text" && typeof rec.text === "string") {
+          parts.push(rec.text);
+        }
+      }
+    }
+    return parts.join("\n");
+  }
+  if (typeof m.text === "string") {
+    return m.text;
+  }
+  return "";
+}
+
+/**
+ * Check if a message is an internal system message that should be hidden from the UI.
+ * This includes:
+ * - Memory flush prompts (pre-compaction)
+ * - Session reset/new greeting prompts
+ * - Silent reply messages (NO_REPLY responses)
+ */
+export function isInternalSystemMessage(message: unknown): boolean {
+  const text = extractMessageText(message);
+  if (!text) {
+    return false;
+  }
+
+  // Check for silent reply token (agent's internal response)
+  if (SILENT_REPLY_PATTERN.test(text)) {
+    return true;
+  }
+
+  // Check for internal system message patterns
+  for (const pattern of INTERNAL_MESSAGE_PATTERNS) {
+    if (pattern.test(text)) {
+      return true;
+    }
+  }
+
+  return false;
+}
