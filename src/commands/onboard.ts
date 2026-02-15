@@ -9,12 +9,14 @@ import { isDeprecatedAuthChoice, normalizeLegacyOnboardAuthChoice } from "./auth
 import { DEFAULT_WORKSPACE, handleReset } from "./onboard-helpers.js";
 import { runInteractiveOnboarding } from "./onboard-interactive.js";
 import { runNonInteractiveOnboarding } from "./onboard-non-interactive.js";
+import { normalizeOnboardOptionsInput } from "./onboard-option-normalization.js";
 
 export async function onboardCommand(opts: OnboardOptions, runtime: RuntimeEnv = defaultRuntime) {
   assertSupportedRuntime(runtime);
-  const originalAuthChoice = opts.authChoice;
+  const normalizedInput = normalizeOnboardOptionsInput(opts);
+  const originalAuthChoice = normalizedInput.authChoice;
   const normalizedAuthChoice = normalizeLegacyOnboardAuthChoice(originalAuthChoice);
-  if (opts.nonInteractive && isDeprecatedAuthChoice(originalAuthChoice)) {
+  if (normalizedInput.nonInteractive && isDeprecatedAuthChoice(originalAuthChoice)) {
     runtime.error(
       [
         `Auth choice "${String(originalAuthChoice)}" is deprecated.`,
@@ -30,11 +32,11 @@ export async function onboardCommand(opts: OnboardOptions, runtime: RuntimeEnv =
   if (originalAuthChoice === "codex-cli") {
     runtime.log('Auth choice "codex-cli" is deprecated; using OpenAI Codex OAuth instead.');
   }
-  const flow = opts.flow === "manual" ? ("advanced" as const) : opts.flow;
+  const flow = normalizedInput.flow === "manual" ? ("advanced" as const) : normalizedInput.flow;
   const normalizedOpts =
-    normalizedAuthChoice === opts.authChoice && flow === opts.flow
-      ? opts
-      : { ...opts, authChoice: normalizedAuthChoice, flow };
+    normalizedAuthChoice === normalizedInput.authChoice && flow === normalizedInput.flow
+      ? normalizedInput
+      : { ...normalizedInput, authChoice: normalizedAuthChoice, flow };
 
   if (normalizedOpts.nonInteractive && normalizedOpts.acceptRisk !== true) {
     runtime.error(

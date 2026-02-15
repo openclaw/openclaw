@@ -221,6 +221,21 @@ describe("cli program (smoke)", () => {
     );
   });
 
+  it("normalizes blank auth choice before calling onboard", async () => {
+    const program = buildProgram();
+    await program.parseAsync(
+      ["onboard", "--auth-choice", "   ", "--skip-channels", "--skip-skills", "--skip-health"],
+      { from: "user" },
+    );
+
+    expect(onboardCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authChoice: undefined,
+      }),
+      runtime,
+    );
+  });
+
   it("runs channels login", async () => {
     const program = buildProgram();
     await program.parseAsync(["channels", "login", "--account", "work"], {

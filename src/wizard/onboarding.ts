@@ -30,6 +30,7 @@ import {
   summarizeExistingConfig,
 } from "../commands/onboard-helpers.js";
 import { setupInternalHooks } from "../commands/onboard-hooks.js";
+import { normalizeAuthChoiceInput } from "../commands/onboard-option-normalization.js";
 import { promptRemoteGatewayConfig } from "../commands/onboard-remote.js";
 import { setupSkills } from "../commands/onboard-skills.js";
 import {
@@ -358,9 +359,10 @@ export async function runOnboardingWizard(
   const authStore = ensureAuthProfileStore(undefined, {
     allowKeychainPrompt: false,
   });
-  const authChoiceFromPrompt = opts.authChoice === undefined;
+  const normalizedAuthChoice = normalizeAuthChoiceInput(opts.authChoice);
+  const authChoiceFromPrompt = normalizedAuthChoice === undefined;
   const authChoice =
-    opts.authChoice ??
+    normalizedAuthChoice ??
     (await promptAuthChoiceGrouped({
       prompter,
       store: authStore,
