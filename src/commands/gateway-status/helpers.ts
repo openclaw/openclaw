@@ -3,6 +3,7 @@ import type { GatewayProbeResult } from "../../gateway/probe.js";
 import { resolveGatewayPort } from "../../config/config.js";
 import { pickPrimaryTailnetIPv4 } from "../../infra/tailnet.js";
 import { colorize, theme } from "../../terminal/theme.js";
+import { pickGatewaySelfPresence } from "../gateway-presence.js";
 
 type TargetKind = "explicit" | "configRemote" | "localLoopback" | "sshTunnel";
 
@@ -178,27 +179,7 @@ export function resolveAuthForTarget(
   };
 }
 
-export function pickGatewaySelfPresence(
-  presence: unknown,
-): { host?: string; ip?: string; version?: string; platform?: string } | null {
-  if (!Array.isArray(presence)) {
-    return null;
-  }
-  const entries = presence as Array<Record<string, unknown>>;
-  const self =
-    entries.find((e) => e.mode === "gateway" && e.reason === "self") ??
-    entries.find((e) => typeof e.text === "string" && String(e.text).startsWith("Gateway:")) ??
-    null;
-  if (!self) {
-    return null;
-  }
-  return {
-    host: typeof self.host === "string" ? self.host : undefined,
-    ip: typeof self.ip === "string" ? self.ip : undefined,
-    version: typeof self.version === "string" ? self.version : undefined,
-    platform: typeof self.platform === "string" ? self.platform : undefined,
-  };
-}
+export { pickGatewaySelfPresence };
 
 export function extractConfigSummary(snapshotUnknown: unknown): GatewayConfigSummary {
   const snap = snapshotUnknown as Partial<ConfigFileSnapshot> | null;
