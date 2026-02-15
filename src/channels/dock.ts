@@ -15,6 +15,8 @@ import {
   resolveChannelGroupToolsPolicy,
 } from "../config/group-policy.js";
 import { resolveDiscordAccount } from "../discord/accounts.js";
+import { resolveFeishuAccount } from "../feishu/accounts.js";
+import { resolveFeishuGroupRequireMention } from "../feishu/config.js";
 import { resolveIMessageAccount } from "../imessage/accounts.js";
 import { requireActivePluginRegistry } from "../plugins/runtime.js";
 import { normalizeAccountId } from "../routing/session-key.js";
@@ -446,6 +448,37 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
           currentThreadTs: context.ReplyToId,
           hasRepliedRef,
         };
+      },
+    },
+  },
+  feishu: {
+    id: "feishu",
+    capabilities: {
+      chatTypes: ["direct", "group"],
+      media: true,
+      blockStreaming: true,
+    },
+    config: {
+      resolveAllowFrom: ({ cfg, accountId }) =>
+        (resolveFeishuAccount({ cfg, accountId }).config.allowFrom ?? []).map((entry) =>
+          String(entry),
+        ),
+      formatAllowFrom: ({ allowFrom }) =>
+        allowFrom
+          .map((entry) => String(entry).trim())
+          .filter(Boolean)
+          .map((entry) => entry.replace(/^(feishu|lark):/i, "").toLowerCase()),
+    },
+    groups: {
+      resolveRequireMention: ({ cfg, accountId, groupId }) => {
+        if (!groupId) {
+          return true;
+        }
+        return resolveFeishuGroupRequireMention({
+          cfg,
+          accountId: accountId ?? undefined,
+          chatId: groupId,
+        });
       },
     },
   },
