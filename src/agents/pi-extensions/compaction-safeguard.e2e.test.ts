@@ -9,6 +9,7 @@ import { __testing } from "./compaction-safeguard.js";
 const {
   collectToolFailures,
   formatToolFailuresSection,
+  formatRecentMessagesSection,
   computeAdaptiveChunkRatio,
   isOversizedForSummary,
   BASE_CHUNK_RATIO,
@@ -105,6 +106,40 @@ describe("compaction-safeguard tool failures", () => {
     const failures = collectToolFailures(messages);
     const section = formatToolFailuresSection(failures);
     expect(section).toBe("");
+  });
+});
+
+describe("compaction-safeguard recent message fallback", () => {
+  it("includes text from single-block message content", () => {
+    const section = formatRecentMessagesSection([
+      {
+        role: "user",
+        content: { type: "text", text: "single block message" },
+        timestamp: Date.now(),
+      } as unknown as AgentMessage,
+    ]);
+
+    expect(section).toContain("## Recent Messages (fallback context)");
+    expect(section).toContain("**User**: single block message");
+  });
+
+  it("caps preview text length including ellipsis", () => {
+    const longText = "x".repeat(600);
+    const section = formatRecentMessagesSection([
+      {
+        role: "assistant",
+        content: longText,
+        timestamp: Date.now(),
+      },
+    ]);
+
+    const line = section
+      .split("\n")
+      .map((value) => value.trim())
+      .find((value) => value.startsWith("**Assistant**: "));
+    expect(line).toBeDefined();
+    expect(line).toMatch(/\.\.\.$/);
+    expect((line ?? "").length).toBeLessThanOrEqual(500 + "**Assistant**: ".length);
   });
 });
 
