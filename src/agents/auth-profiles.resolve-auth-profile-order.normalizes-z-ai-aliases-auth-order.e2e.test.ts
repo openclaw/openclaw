@@ -2,30 +2,6 @@ import { describe, expect, it } from "vitest";
 import { resolveAuthProfileOrder } from "./auth-profiles.js";
 
 describe("resolveAuthProfileOrder", () => {
-  const _store: AuthProfileStore = {
-    version: 1,
-    profiles: {
-      "anthropic:default": {
-        type: "api_key",
-        provider: "anthropic",
-        key: "sk-default",
-      },
-      "anthropic:work": {
-        type: "api_key",
-        provider: "anthropic",
-        key: "sk-work",
-      },
-    },
-  };
-  const _cfg = {
-    auth: {
-      profiles: {
-        "anthropic:default": { provider: "anthropic", mode: "api_key" },
-        "anthropic:work": { provider: "anthropic", mode: "api_key" },
-      },
-    },
-  };
-
   it("normalizes z.ai aliases in auth.order", () => {
     const order = resolveAuthProfileOrder({
       cfg: {
