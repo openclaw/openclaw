@@ -228,8 +228,15 @@ export const DiscordGuildChannelSchema = z
     toolsBySender: ToolPolicyBySenderSchema,
     skills: z.array(z.string()).optional(),
     enabled: z.boolean().optional(),
-    users: z.array(z.union([z.string(), z.number()])).optional(),
-    roles: z.array(z.union([z.string(), z.number()])).optional(),
+    // Transform numbers to strings to preserve precision for large Discord IDs
+    users: z
+      .array(z.union([z.string(), z.number()]))
+      .optional()
+      .transform((val) => val?.map((v) => String(v))),
+    roles: z
+      .array(z.union([z.string(), z.number()]))
+      .optional()
+      .transform((val) => val?.map((v) => String(v))),
     systemPrompt: z.string().optional(),
     includeThreadStarter: z.boolean().optional(),
     autoThread: z.boolean().optional(),
@@ -243,8 +250,15 @@ export const DiscordGuildSchema = z
     tools: ToolPolicySchema,
     toolsBySender: ToolPolicyBySenderSchema,
     reactionNotifications: z.enum(["off", "own", "all", "allowlist"]).optional(),
-    users: z.array(z.union([z.string(), z.number()])).optional(),
-    roles: z.array(z.union([z.string(), z.number()])).optional(),
+    // Transform numbers to strings to preserve precision for large Discord IDs
+    users: z
+      .array(z.union([z.string(), z.number()]))
+      .optional()
+      .transform((val) => val?.map((v) => String(v))),
+    roles: z
+      .array(z.union([z.string(), z.number()]))
+      .optional()
+      .transform((val) => val?.map((v) => String(v))),
     channels: z.record(z.string(), DiscordGuildChannelSchema.optional()).optional(),
   })
   .strict();
