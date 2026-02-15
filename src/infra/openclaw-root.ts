@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const CORE_PACKAGE_NAMES = new Set(["openclaw"]);
+const CORE_PACKAGE_NAMES = new Set(["openclaw", "@romiluz/clawmongo"]);
 
 async function readPackageName(dir: string): Promise<string | null> {
   try {
@@ -107,6 +107,18 @@ export async function resolveOpenClawPackageRoot(opts: {
   }
 
   return null;
+}
+
+export async function resolveOpenClawPackageName(): Promise<string | null> {
+  const root = await resolveOpenClawPackageRoot({
+    moduleUrl: import.meta.url,
+    argv1: process.argv[1],
+    cwd: process.cwd(),
+  });
+  if (!root) {
+    return null;
+  }
+  return readPackageName(root);
 }
 
 export function resolveOpenClawPackageRootSync(opts: {

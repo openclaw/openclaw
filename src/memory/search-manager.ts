@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
-import type { ResolvedQmdConfig } from "./backend-config.js";
+import type { ResolvedMongoDBConfig, ResolvedQmdConfig } from "./backend-config.js";
 import type {
   MemoryEmbeddingProbeResult,
   MemorySearchManager,
@@ -10,6 +10,7 @@ import { resolveMemoryBackendConfig } from "./backend-config.js";
 
 const log = createSubsystemLogger("memory");
 const QMD_MANAGER_CACHE = new Map<string, MemorySearchManager>();
+const MONGODB_MANAGER_CACHE = new Map<string, MemorySearchManager>();
 
 export type MemorySearchManagerResult = {
   manager: MemorySearchManager | null;
@@ -22,6 +23,30 @@ export async function getMemorySearchManager(params: {
   purpose?: "default" | "status";
 }): Promise<MemorySearchManagerResult> {
   const resolved = resolveMemoryBackendConfig(params);
+
+  if (resolved.backend === "mongodb" && resolved.mongodb) {
+    const cacheKey = buildMongoDBCacheKey(params.agentId, resolved.mongodb);
+    const cached = MONGODB_MANAGER_CACHE.get(cacheKey);
+    if (cached) {
+      return { manager: cached };
+    }
+    try {
+      const { MongoDBMemoryManager } = await import("./mongodb-manager.js");
+      const manager = await MongoDBMemoryManager.create({
+        cfg: params.cfg,
+        agentId: params.agentId,
+        resolved,
+      });
+      if (manager) {
+        MONGODB_MANAGER_CACHE.set(cacheKey, manager);
+        return { manager };
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log.warn(`mongodb memory unavailable; falling back to builtin: ${message}`);
+    }
+  }
+
   if (resolved.backend === "qmd" && resolved.qmd) {
     const statusOnly = params.purpose === "status";
     const cacheKey = buildQmdCacheKey(params.agentId, resolved.qmd);
@@ -214,6 +239,10 @@ class FallbackMemoryManager implements MemorySearchManager {
     this.cacheEvicted = true;
     this.onClose?.();
   }
+}
+
+function buildMongoDBCacheKey(agentId: string, config: ResolvedMongoDBConfig): string {
+  return `${agentId}:${stableSerialize(config)}`;
 }
 
 function buildQmdCacheKey(agentId: string, config: ResolvedQmdConfig): string {

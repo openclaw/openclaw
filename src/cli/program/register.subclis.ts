@@ -232,6 +232,14 @@ const entries: SubCliEntry[] = [
     },
   },
   {
+    name: "kb",
+    description: "Knowledge base management (MongoDB)",
+    register: async (program) => {
+      const mod = await import("../kb-cli.js");
+      mod.registerKBCli(program);
+    },
+  },
+  {
     name: "completion",
     description: "Generate shell completion script",
     register: async (program) => {

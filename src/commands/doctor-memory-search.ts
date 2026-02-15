@@ -4,14 +4,159 @@ import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { resolveMemoryBackendConfig } from "../memory/backend-config.js";
 import { note } from "../terminal/note.js";
 import { resolveUserPath } from "../utils.js";
+
+/**
+ * Check MongoDB backend health when backend=mongodb.
+ * Validates URI presence and attempts a connection test with timeout.
+ */
+export async function noteMongoDBBackendHealth(cfg: OpenClawConfig): Promise<void> {
+  const agentId = resolveDefaultAgentId(cfg);
+  let backendConfig;
+  try {
+    backendConfig = resolveMemoryBackendConfig({ cfg, agentId });
+  } catch {
+    // resolveMemoryBackendConfig throws when mongodb URI is missing
+    if (cfg.memory?.backend === "mongodb") {
+      note(
+        [
+          "MongoDB memory backend is configured but no URI is set.",
+          "",
+          "Fix (pick one):",
+          `- Set URI in config: ${formatCliCommand("openclaw config set memory.mongodb.uri mongodb+srv://...")}`,
+          "- Set OPENCLAW_MONGODB_URI environment variable",
+          `- Switch backend: ${formatCliCommand("openclaw config set memory.backend builtin")}`,
+        ].join("\n"),
+        "Memory (MongoDB)",
+      );
+    }
+    return;
+  }
+
+  if (backendConfig.backend !== "mongodb" || !backendConfig.mongodb) {
+    return;
+  }
+
+  const { uri, deploymentProfile } = backendConfig.mongodb;
+
+  // Connection test with timeout
+  let MongoClient: typeof import("mongodb").MongoClient;
+  try {
+    ({ MongoClient } = await import("mongodb"));
+  } catch {
+    note(
+      [
+        "MongoDB driver is not installed.",
+        "",
+        "Fix (pick one):",
+        "- Install: pnpm add mongodb",
+        `- Switch backend: ${formatCliCommand("openclaw config set memory.backend builtin")}`,
+      ].join("\n"),
+      "Memory (MongoDB)",
+    );
+    return;
+  }
+
+  const client = new MongoClient(uri, {
+    serverSelectionTimeoutMS: 5000,
+    connectTimeoutMS: 5000,
+  });
+  try {
+    await client.connect();
+    await client.db().command({ ping: 1 });
+
+    note(`MongoDB connected. Profile: ${deploymentProfile}.`, "Memory (MongoDB)");
+
+    // Check embedding coverage (embeddingStatus) while connection is still open
+    await noteEmbeddingCoverage(client, backendConfig.mongodb);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    note(
+      [
+        `MongoDB connection failed: ${message}`,
+        "",
+        "Fix (pick one):",
+        "- Check that MongoDB is running and accessible",
+        "- Verify URI credentials and network access",
+        `- Test manually: mongosh "${redactDoctorUri(uri)}"`,
+        `- Switch backend: ${formatCliCommand("openclaw config set memory.backend builtin")}`,
+      ].join("\n"),
+      "Memory (MongoDB)",
+    );
+    return;
+  } finally {
+    await client.close().catch(() => {});
+  }
+}
+
+/**
+ * Check embedding coverage across all chunk collections.
+ * Warns the user if any chunks have embeddingStatus: "failed".
+ */
+async function noteEmbeddingCoverage(
+  client: import("mongodb").MongoClient,
+  mongoCfg: { database: string; collectionPrefix: string },
+): Promise<void> {
+  try {
+    const { getMemoryStats } = await import("../memory/mongodb-analytics.js");
+    const db = client.db(mongoCfg.database);
+    const stats = await getMemoryStats(db, mongoCfg.collectionPrefix);
+
+    const { embeddingStatusCoverage } = stats;
+    if (embeddingStatusCoverage.failed > 0) {
+      note(
+        [
+          `Embedding coverage: ${embeddingStatusCoverage.failed} chunks have failed embeddings.`,
+          `  Success: ${embeddingStatusCoverage.success}`,
+          `  Failed: ${embeddingStatusCoverage.failed}`,
+          `  Pending: ${embeddingStatusCoverage.pending}`,
+          `  Total: ${embeddingStatusCoverage.total}`,
+          "",
+          "Failed chunks will be re-embedded on the next sync cycle.",
+          "If failures persist, check your embedding provider configuration.",
+        ].join("\n"),
+        "Memory (Embedding Coverage)",
+      );
+    } else if (embeddingStatusCoverage.total > 0) {
+      const successRate =
+        embeddingStatusCoverage.total > 0
+          ? Math.round((embeddingStatusCoverage.success / embeddingStatusCoverage.total) * 100)
+          : 0;
+      note(
+        `Embedding coverage: ${successRate}% (${embeddingStatusCoverage.success}/${embeddingStatusCoverage.total} chunks).`,
+        "Memory (Embedding Coverage)",
+      );
+    }
+  } catch {
+    // Silently skip — stats aggregation may fail on empty or new databases
+  }
+}
+
+function redactDoctorUri(uri: string): string {
+  try {
+    const parsed = new URL(uri);
+    if (parsed.password) {
+      parsed.password = "***";
+    }
+    if (parsed.username && parsed.username.length > 4) {
+      parsed.username = parsed.username.slice(0, 4) + "...";
+    }
+    return parsed.toString();
+  } catch {
+    return uri.replace(/:([^@]+)@/, ":***@");
+  }
+}
 
 /**
  * Check whether memory search has a usable embedding provider.
  * Runs as part of `openclaw doctor` — config-only, no network calls.
  */
 export async function noteMemorySearchHealth(cfg: OpenClawConfig): Promise<void> {
+  // Check MongoDB backend health first
+  await noteMongoDBBackendHealth(cfg);
+
   const agentId = resolveDefaultAgentId(cfg);
   const agentDir = resolveAgentDir(cfg, agentId);
   const resolved = resolveMemorySearchConfig(cfg, agentId);

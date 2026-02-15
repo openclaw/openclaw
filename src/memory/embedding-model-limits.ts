@@ -10,6 +10,9 @@ const KNOWN_EMBEDDING_MAX_INPUT_TOKENS: Record<string, number> = {
   "voyage:voyage-3": 32000,
   "voyage:voyage-3-lite": 16000,
   "voyage:voyage-code-3": 32000,
+  "voyage:voyage-4": 32000,
+  "voyage:voyage-4-lite": 16000,
+  "voyage:voyage-4-large": 32000,
 };
 
 export function resolveEmbeddingMaxInputTokens(provider: EmbeddingProvider): number {

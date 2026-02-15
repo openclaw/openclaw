@@ -1,4 +1,4 @@
-export type MemorySource = "memory" | "sessions";
+export type MemorySource = "memory" | "sessions" | "kb" | "structured";
 
 export type MemorySearchResult = {
   path: string;
@@ -22,7 +22,7 @@ export type MemorySyncProgressUpdate = {
 };
 
 export type MemoryProviderStatus = {
-  backend: "builtin" | "qmd";
+  backend: "builtin" | "qmd" | "mongodb";
   provider: string;
   model?: string;
   requestedProvider?: string;

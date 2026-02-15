@@ -245,6 +245,70 @@ memory: {
   parsed, the search manager logs a warning and returns the builtin provider
   (existing Markdown embeddings) until QMD recovers.
 
+### MongoDB memory backend
+
+Set `memory.backend = "mongodb"` to use MongoDB as the memory store.
+MongoDB provides scalable, server-based memory with full-text search,
+vector search, and hybrid retrieval. Requires MongoDB 8.0+.
+
+**Quick start**
+
+```json5
+{
+  memory: {
+    backend: "mongodb",
+    mongodb: {
+      uri: "mongodb+srv://user:pass@cluster.mongodb.net/",
+      deploymentProfile: "atlas-default",
+    },
+  },
+}
+```
+
+Or via environment:
+
+```bash
+export OPENCLAW_MONGODB_URI="mongodb+srv://user:pass@cluster.mongodb.net/"
+openclaw config set memory.backend mongodb
+```
+
+**Deployment profiles**
+
+| Profile            | When to use            | Search capabilities                    |
+| ------------------ | ---------------------- | -------------------------------------- |
+| `atlas-default`    | Atlas M10+             | Full: vector + keyword + hybrid fusion |
+| `atlas-m0`         | Atlas free tier        | Full, but limited to 3 search indexes  |
+| `community-mongot` | Self-hosted + mongot   | Full: vector + keyword + hybrid fusion |
+| `community-bare`   | Self-hosted, no mongot | Keyword only ($text fallback)          |
+
+**Search cascade**
+
+The MongoDB backend tries search methods in order of quality:
+
+1. **$scoreFusion** (8.2+, needs mongot) -- Normalized hybrid search
+2. **$rankFusion** (8.0+, needs mongot) -- Rank-based hybrid search
+3. **JS merge** -- Client-side merge of vector + keyword results
+4. **Vector only** -- $vectorSearch alone
+5. **Keyword only** -- $search with text operator
+6. **$text fallback** -- MongoDB built-in $text index (no mongot required)
+
+**Configuration reference**
+
+| Key                                | Type   | Default                 | Description                                              |
+| ---------------------------------- | ------ | ----------------------- | -------------------------------------------------------- |
+| `memory.mongodb.uri`               | string | `$OPENCLAW_MONGODB_URI` | Connection string                                        |
+| `memory.mongodb.database`          | string | `"openclaw"`            | Database name                                            |
+| `memory.mongodb.collectionPrefix`  | string | `"openclaw_"`           | Collection name prefix                                   |
+| `memory.mongodb.deploymentProfile` | string | `"atlas-default"`       | See profiles above                                       |
+| `memory.mongodb.embeddingMode`     | string | `"automated"`           | `"automated"` (Voyage AI) or `"managed"`                 |
+| `memory.mongodb.fusionMethod`      | string | `"scoreFusion"`         | Preferred: `"scoreFusion"`, `"rankFusion"`, `"js-merge"` |
+| `memory.mongodb.quantization`      | string | `"none"`                | Vector quantization: `"none"`, `"scalar"`, `"binary"`    |
+| `memory.mongodb.watchDebounceMs`   | number | `500`                   | File watcher debounce in ms                              |
+
+**Fallback behavior**: If MongoDB is unavailable at startup, OpenClaw silently
+falls back to the builtin SQLite manager (same pattern as QMD fallback). All
+MongoDB code is lazily imported via dynamic `import()` -- zero cost when not used.
+
 ### Additional memory paths
 
 If you want to index Markdown files outside the default workspace layout, add

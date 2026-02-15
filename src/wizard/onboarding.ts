@@ -14,8 +14,10 @@ import {
   resolveGatewayPort,
   writeConfigFile,
 } from "../config/config.js";
+import { resolveOpenClawPackageName } from "../infra/openclaw-root.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
+import { setupMemoryBackend } from "./onboarding-memory.js";
 import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
 
 async function requireRiskAcknowledgement(params: {
@@ -432,9 +434,15 @@ export async function runOnboardingWizard(
   await writeConfigFile(nextConfig);
   const { logConfigUpdated } = await import("../config/logging.js");
   logConfigUpdated(runtime);
-  await onboardHelpers.ensureWorkspaceAndSessions(workspaceDir, runtime, {
-    skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
-  });
+  try {
+    await onboardHelpers.ensureWorkspaceAndSessions(workspaceDir, runtime, {
+      skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
+    });
+  } catch (err) {
+    runtime.log(
+      `Warning: workspace bootstrap incomplete: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 
   if (opts.skipSkills) {
     await prompter.note("Skipping skills setup.", "Skills");
@@ -446,6 +454,15 @@ export async function runOnboardingWizard(
   // Setup hooks (session memory on /new)
   const { setupInternalHooks } = await import("../commands/onboard-hooks.js");
   nextConfig = await setupInternalHooks(nextConfig, runtime, prompter);
+
+  // Memory backend selection
+  // ClawMongo: always show (MongoDB is the whole point of this package)
+  // Upstream openclaw: only in advanced mode
+  const packageName = await resolveOpenClawPackageName();
+  const isClawMongo = packageName === "@romiluz/clawmongo";
+  if (isClawMongo || flow === "advanced") {
+    nextConfig = await setupMemoryBackend(nextConfig, prompter);
+  }
 
   nextConfig = onboardHelpers.applyWizardMetadata(nextConfig, { command: "onboard", mode });
   await writeConfigFile(nextConfig);

@@ -121,10 +121,15 @@ function mergeConfig(
   defaults: MemorySearchConfig | undefined,
   overrides: MemorySearchConfig | undefined,
   agentId: string,
+  memoryBackend?: string,
 ): ResolvedMemorySearchConfig {
   const enabled = overrides?.enabled ?? defaults?.enabled ?? true;
+  // Auto-enable sessionMemory when MongoDB backend is active (sessions are indexed by default)
+  const sessionMemoryDefault = memoryBackend === "mongodb" ? true : false;
   const sessionMemory =
-    overrides?.experimental?.sessionMemory ?? defaults?.experimental?.sessionMemory ?? false;
+    overrides?.experimental?.sessionMemory ??
+    defaults?.experimental?.sessionMemory ??
+    sessionMemoryDefault;
   const provider = overrides?.provider ?? defaults?.provider ?? "auto";
   const defaultRemote = defaults?.remote;
   const overrideRemote = overrides?.remote;
@@ -176,7 +181,13 @@ function mergeConfig(
     modelPath: overrides?.local?.modelPath ?? defaults?.local?.modelPath,
     modelCacheDir: overrides?.local?.modelCacheDir ?? defaults?.local?.modelCacheDir,
   };
-  const sources = normalizeSources(overrides?.sources ?? defaults?.sources, sessionMemory);
+  // When MongoDB backend is active and no explicit sources configured, default to ["memory", "sessions"]
+  const explicitSources = overrides?.sources ?? defaults?.sources;
+  const sourcesInput =
+    !explicitSources && memoryBackend === "mongodb"
+      ? (["memory", "sessions"] as Array<"memory" | "sessions">)
+      : explicitSources;
+  const sources = normalizeSources(sourcesInput, sessionMemory);
   const rawPaths = [...(defaults?.extraPaths ?? []), ...(overrides?.extraPaths ?? [])]
     .map((value) => value.trim())
     .filter(Boolean);
@@ -299,7 +310,8 @@ export function resolveMemorySearchConfig(
 ): ResolvedMemorySearchConfig | null {
   const defaults = cfg.agents?.defaults?.memorySearch;
   const overrides = resolveAgentConfig(cfg, agentId)?.memorySearch;
-  const resolved = mergeConfig(defaults, overrides, agentId);
+  const memoryBackend = cfg.memory?.backend;
+  const resolved = mergeConfig(defaults, overrides, agentId, memoryBackend);
   if (!resolved.enabled) {
     return null;
   }

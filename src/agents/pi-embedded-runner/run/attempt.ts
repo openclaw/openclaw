@@ -452,6 +452,7 @@ export async function runEmbeddedAttempt(
       userTimeFormat,
       contextFiles,
       memoryCitationsMode: params.config?.memory?.citations,
+      memoryBackend: params.config?.memory?.backend,
     });
     const systemPromptReport = buildSystemPromptReport({
       source: "run",

@@ -1,9 +1,28 @@
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+
+const log = createSubsystemLogger("memory:backend-config");
+
+// Known embedding model dimensions for numDimensions validation (F22)
+const KNOWN_MODEL_DIMENSIONS: Record<string, number> = {
+  "voyage-4-large": 1024,
+  "voyage-4": 1024,
+  "voyage-4-lite": 512,
+  "voyage-3": 1024,
+  "voyage-3-lite": 512,
+  "voyage-code-3": 1024,
+  "text-embedding-3-small": 1536,
+  "text-embedding-3-large": 3072,
+  "text-embedding-ada-002": 1536,
+};
 import type { SessionSendPolicyConfig } from "../config/types.base.js";
 import type {
   MemoryBackend,
   MemoryCitationsMode,
+  MemoryMongoDBDeploymentProfile,
+  MemoryMongoDBEmbeddingMode,
+  MemoryMongoDBFusionMethod,
   MemoryQmdConfig,
   MemoryQmdIndexPath,
   MemoryQmdSearchMode,
@@ -13,10 +32,39 @@ import { parseDurationMs } from "../cli/parse-duration.js";
 import { resolveUserPath } from "../utils.js";
 import { splitShellArgs } from "../utils/shell-argv.js";
 
+export type ResolvedMongoDBConfig = {
+  uri: string;
+  database: string;
+  collectionPrefix: string;
+  deploymentProfile: MemoryMongoDBDeploymentProfile;
+  embeddingMode: MemoryMongoDBEmbeddingMode;
+  fusionMethod: MemoryMongoDBFusionMethod;
+  quantization: "none" | "scalar" | "binary";
+  watchDebounceMs: number;
+  numDimensions: number;
+  maxPoolSize: number;
+  minPoolSize: number;
+  embeddingCacheTtlDays: number;
+  memoryTtlDays: number;
+  enableChangeStreams: boolean;
+  changeStreamDebounceMs: number;
+  connectTimeoutMs: number;
+  numCandidates: number;
+  maxSessionChunks: number;
+  kb: {
+    enabled: boolean;
+    chunking: { tokens: number; overlap: number };
+    autoImportPaths: string[];
+    maxDocumentSize: number;
+    autoRefreshHours: number;
+  };
+};
+
 export type ResolvedMemoryBackendConfig = {
   backend: MemoryBackend;
   citations: MemoryCitationsMode;
   qmd?: ResolvedQmdConfig;
+  mongodb?: ResolvedMongoDBConfig;
 };
 
 export type ResolvedQmdCollection = {
@@ -259,6 +307,147 @@ export function resolveMemoryBackendConfig(params: {
 }): ResolvedMemoryBackendConfig {
   const backend = params.cfg.memory?.backend ?? DEFAULT_BACKEND;
   const citations = params.cfg.memory?.citations ?? DEFAULT_CITATIONS;
+
+  if (backend === "mongodb") {
+    const mongoCfg = params.cfg.memory?.mongodb;
+    const uri = mongoCfg?.uri ?? process.env.OPENCLAW_MONGODB_URI;
+    if (!uri) {
+      throw new Error(
+        "MongoDB URI required: set memory.mongodb.uri in config or OPENCLAW_MONGODB_URI env var",
+      );
+    }
+    const deploymentProfile: MemoryMongoDBDeploymentProfile =
+      mongoCfg?.deploymentProfile ?? "atlas-default";
+    const isCommunity =
+      deploymentProfile === "community-mongot" || deploymentProfile === "community-bare";
+    const defaultEmbeddingMode: MemoryMongoDBEmbeddingMode = isCommunity ? "managed" : "automated";
+
+    const result: ResolvedMemoryBackendConfig = {
+      backend: "mongodb",
+      citations,
+      mongodb: {
+        uri,
+        database: mongoCfg?.database ?? "openclaw",
+        collectionPrefix: mongoCfg?.collectionPrefix ?? "openclaw_",
+        deploymentProfile,
+        embeddingMode: mongoCfg?.embeddingMode ?? defaultEmbeddingMode,
+        fusionMethod: mongoCfg?.fusionMethod ?? "scoreFusion",
+        quantization: mongoCfg?.quantization ?? "none",
+        watchDebounceMs:
+          typeof mongoCfg?.watchDebounceMs === "number" &&
+          Number.isFinite(mongoCfg.watchDebounceMs) &&
+          mongoCfg.watchDebounceMs >= 0
+            ? Math.floor(mongoCfg.watchDebounceMs)
+            : 500,
+        numDimensions:
+          typeof mongoCfg?.numDimensions === "number" &&
+          Number.isFinite(mongoCfg.numDimensions) &&
+          mongoCfg.numDimensions > 0
+            ? Math.floor(mongoCfg.numDimensions)
+            : 1024,
+        maxPoolSize:
+          typeof mongoCfg?.maxPoolSize === "number" &&
+          Number.isFinite(mongoCfg.maxPoolSize) &&
+          mongoCfg.maxPoolSize > 0
+            ? Math.floor(mongoCfg.maxPoolSize)
+            : 10,
+        minPoolSize:
+          typeof mongoCfg?.minPoolSize === "number" &&
+          Number.isFinite(mongoCfg.minPoolSize) &&
+          mongoCfg.minPoolSize >= 0
+            ? Math.floor(mongoCfg.minPoolSize)
+            : 2,
+        embeddingCacheTtlDays:
+          typeof mongoCfg?.embeddingCacheTtlDays === "number" &&
+          Number.isFinite(mongoCfg.embeddingCacheTtlDays) &&
+          mongoCfg.embeddingCacheTtlDays >= 0
+            ? Math.floor(mongoCfg.embeddingCacheTtlDays)
+            : 30,
+        memoryTtlDays:
+          typeof mongoCfg?.memoryTtlDays === "number" &&
+          Number.isFinite(mongoCfg.memoryTtlDays) &&
+          mongoCfg.memoryTtlDays >= 0
+            ? Math.floor(mongoCfg.memoryTtlDays)
+            : 0,
+        enableChangeStreams: mongoCfg?.enableChangeStreams === true,
+        changeStreamDebounceMs:
+          typeof mongoCfg?.changeStreamDebounceMs === "number" &&
+          Number.isFinite(mongoCfg.changeStreamDebounceMs) &&
+          mongoCfg.changeStreamDebounceMs >= 0
+            ? Math.floor(mongoCfg.changeStreamDebounceMs)
+            : 1000,
+        connectTimeoutMs:
+          typeof mongoCfg?.connectTimeoutMs === "number" &&
+          Number.isFinite(mongoCfg.connectTimeoutMs) &&
+          mongoCfg.connectTimeoutMs > 0
+            ? Math.floor(mongoCfg.connectTimeoutMs)
+            : 10_000,
+        numCandidates: Math.min(
+          typeof mongoCfg?.numCandidates === "number" &&
+            Number.isFinite(mongoCfg.numCandidates) &&
+            mongoCfg.numCandidates > 0
+            ? Math.floor(mongoCfg.numCandidates)
+            : 200,
+          10_000, // F1: hard cap at MongoDB's max numCandidates
+        ),
+        maxSessionChunks:
+          typeof mongoCfg?.maxSessionChunks === "number" &&
+          Number.isFinite(mongoCfg.maxSessionChunks) &&
+          mongoCfg.maxSessionChunks > 0
+            ? Math.floor(mongoCfg.maxSessionChunks)
+            : 50,
+        kb: {
+          enabled: mongoCfg?.kb?.enabled !== false,
+          chunking: {
+            tokens:
+              typeof mongoCfg?.kb?.chunking?.tokens === "number" &&
+              Number.isFinite(mongoCfg.kb.chunking.tokens) &&
+              mongoCfg.kb.chunking.tokens > 0
+                ? Math.floor(mongoCfg.kb.chunking.tokens)
+                : 600,
+            overlap:
+              typeof mongoCfg?.kb?.chunking?.overlap === "number" &&
+              Number.isFinite(mongoCfg.kb.chunking.overlap) &&
+              mongoCfg.kb.chunking.overlap >= 0
+                ? Math.floor(mongoCfg.kb.chunking.overlap)
+                : 100,
+          },
+          autoImportPaths: Array.isArray(mongoCfg?.kb?.autoImportPaths)
+            ? mongoCfg.kb.autoImportPaths.filter(
+                (p): p is string => typeof p === "string" && p.trim().length > 0,
+              )
+            : [],
+          maxDocumentSize:
+            typeof mongoCfg?.kb?.maxDocumentSize === "number" &&
+            Number.isFinite(mongoCfg.kb.maxDocumentSize) &&
+            mongoCfg.kb.maxDocumentSize > 0
+              ? Math.floor(mongoCfg.kb.maxDocumentSize)
+              : 10 * 1024 * 1024,
+          autoRefreshHours:
+            typeof mongoCfg?.kb?.autoRefreshHours === "number" &&
+            Number.isFinite(mongoCfg.kb.autoRefreshHours) &&
+            mongoCfg.kb.autoRefreshHours >= 0
+              ? mongoCfg.kb.autoRefreshHours
+              : 24,
+        },
+      },
+    };
+
+    // F22: numDimensions validation warning — check if configured dimensions
+    // match known model dimensions for the default embedding model
+    const resolvedNumDims = result.mongodb!.numDimensions;
+    const defaultModel = "voyage-4-large";
+    const expectedDims = KNOWN_MODEL_DIMENSIONS[defaultModel];
+    if (mongoCfg?.numDimensions && expectedDims && resolvedNumDims !== expectedDims) {
+      log.warn(
+        `numDimensions=${resolvedNumDims} may not match expected dimensions for ${defaultModel} (${expectedDims}). ` +
+          "Mismatched dimensions will cause vector search errors.",
+      );
+    }
+
+    return result;
+  }
+
   if (backend !== "qmd") {
     return { backend: "builtin", citations };
   }

@@ -41,6 +41,7 @@ function buildMemorySection(params: {
   isMinimal: boolean;
   availableTools: Set<string>;
   citationsMode?: MemoryCitationsMode;
+  memoryBackend?: string;
 }) {
   if (params.isMinimal) {
     return [];
@@ -48,10 +49,58 @@ function buildMemorySection(params: {
   if (!params.availableTools.has("memory_search") && !params.availableTools.has("memory_get")) {
     return [];
   }
-  const lines = [
-    "## Memory Recall",
-    "Before answering anything about prior work, decisions, dates, people, preferences, or todos: run memory_search on MEMORY.md + memory/*.md; then use memory_get to pull only the needed lines. If low confidence after search, say you checked.",
-  ];
+  const isMongoDBBackend = params.memoryBackend === "mongodb";
+  const lines = ["## Memory Recall"];
+  if (isMongoDBBackend) {
+    lines.push(
+      "Before answering anything about prior work, decisions, dates, people, preferences, or todos: run memory_search to recall facts from your knowledge base, structured memory, and memory files. Results come from all active sources, ranked by relevance.",
+    );
+    lines.push("");
+    lines.push("### When to use each tool");
+    lines.push(
+      "- **memory_search** — Your primary recall tool. Searches across ALL sources (memory files, knowledge base, structured memory, sessions). Use for any question about what you know.",
+    );
+    if (params.availableTools.has("kb_search")) {
+      lines.push(
+        "- **kb_search** — Dedicated knowledge base search. Use when looking for reference material, documentation, FAQs, or architecture specs that were imported into the knowledge base.",
+      );
+    }
+    if (params.availableTools.has("memory_write")) {
+      lines.push(
+        [
+          "- **memory_write** — Store structured observations to persistent memory. Use for:",
+          '  - **decision**: choices made (e.g., "We chose TypeScript for the backend")',
+          '  - **preference**: user likes/dislikes (e.g., "User prefers concise responses")',
+          '  - **fact**: objective information (e.g., "API rate limit is 100 req/min")',
+          '  - **person**: info about people (e.g., "Alice is the project manager")',
+          '  - **todo**: action items (e.g., "Migrate auth to OAuth2 by March")',
+          '  - **project**: project-level info (e.g., "Project codename is Phoenix")',
+          '  - **architecture**: technical decisions (e.g., "Using event-driven architecture")',
+          "  Type+key is the dedup key — writing the same type+key updates the existing record.",
+          "  Use MEMORY.md only for informal scratch notes and working observations.",
+        ].join("\n"),
+      );
+    }
+    // Decision tree for memory routing
+    lines.push("");
+    lines.push("### Memory Routing Guide");
+    lines.push("When storing information:");
+    if (params.availableTools.has("memory_write")) {
+      lines.push("- Structured data (decisions, preferences, facts) -> memory_write");
+    }
+    lines.push("- Informal notes, observations, plans -> MEMORY.md");
+    lines.push("");
+    lines.push("When searching:");
+    if (params.availableTools.has("kb_search")) {
+      lines.push("- Reference docs, imported files, architecture specs -> kb_search");
+    }
+    lines.push("- Personal memory + sessions -> memory_search");
+    lines.push('- Broad "what do I know about X?" -> memory_search (searches all sources)');
+  } else {
+    lines.push(
+      "Before answering anything about prior work, decisions, dates, people, preferences, or todos: run memory_search on MEMORY.md + memory/*.md; then use memory_get to pull only the needed lines. If low confidence after search, say you checked.",
+    );
+  }
   if (params.citationsMode === "off") {
     lines.push(
       "Citations are disabled: do not mention file paths or line numbers in replies unless the user explicitly asks.",
@@ -219,6 +268,8 @@ export function buildAgentSystemPrompt(params: {
     channel: string;
   };
   memoryCitationsMode?: MemoryCitationsMode;
+  /** Memory backend type, used to customize system prompt for MongoDB. */
+  memoryBackend?: string;
 }) {
   const coreToolSummaries: Record<string, string> = {
     read: "Read file contents",
@@ -379,6 +430,7 @@ export function buildAgentSystemPrompt(params: {
     isMinimal,
     availableTools,
     citationsMode: params.memoryCitationsMode,
+    memoryBackend: params.memoryBackend,
   });
   const docsSection = buildDocsSection({
     docsPath: params.docsPath,
