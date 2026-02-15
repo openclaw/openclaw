@@ -1,0 +1,19 @@
+{
+  "id": "telegram-files",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "externalUrl": {
+        "type": "string",
+        "description": "HTTPS URL where the gateway is reachable (e.g. Tailscale HTTPS). Used for Telegram Mini App button URL."
+      },
+      "allowedPaths": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Allowed filesystem paths. If empty, defaults to user home directory.",
+        "default": []
+      }
+    }
+  }
+}
