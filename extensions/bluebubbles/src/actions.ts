@@ -75,7 +75,6 @@ const PRIVATE_API_ACTIONS = new Set<ChannelMessageActionName>([
   "react",
   "edit",
   "unsend",
-  "reply",
   "sendWithEffect",
   "renameGroup",
   "setGroupIcon",
@@ -280,8 +279,11 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
     }
 
     // Handle reply action
+    // Note: do NOT assertPrivateApiEnabled() here — sendMessageBlueBubbles
+    // gracefully downgrades to a plain send when Private API is unavailable,
+    // stripping reply threading fields. This is preferable to silently
+    // dropping the message entirely (#16429).
     if (action === "reply") {
-      assertPrivateApiEnabled();
       const rawMessageId = readStringParam(params, "messageId");
       const text = readMessageText(params);
       const to = readStringParam(params, "to") ?? readStringParam(params, "target");
