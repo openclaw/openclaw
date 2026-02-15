@@ -23,6 +23,18 @@ describe("extractTextCached", () => {
     expect(extractTextCached(message)).toBe("plain text");
     expect(extractTextCached(message)).toBe("plain text");
   });
+
+  it("does not inject newline when text blocks are separated by tool blocks", () => {
+    const message = {
+      role: "assistant",
+      content: [
+        { type: "text", text: "Hello " },
+        { type: "tool_result", name: "exec", text: "ignored" },
+        { type: "text", text: "world" },
+      ],
+    };
+    expect(extractText(message)).toBe("Hello world");
+  });
 });
 
 describe("extractThinkingCached", () => {

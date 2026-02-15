@@ -60,7 +60,7 @@ export function extractText(message: unknown): string | null {
       })
       .filter((v): v is string => typeof v === "string");
     if (parts.length > 0) {
-      const joined = parts.join("\n");
+      const joined = role === "assistant" ? parts.join("") : parts.join("\n");
       const processed = role === "assistant" ? stripThinkingTags(joined) : stripEnvelope(joined);
       return processed;
     }
