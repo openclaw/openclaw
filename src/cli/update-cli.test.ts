@@ -127,6 +127,7 @@ vi.mock("../runtime.js", () => ({
   },
 }));
 
+const { spawnSync } = await import("node:child_process");
 const { runGatewayUpdate } = await import("../infra/update-runner.js");
 const { resolveOpenClawPackageRoot } = await import("../infra/openclaw-root.js");
 const { readConfigFileSnapshot, writeConfigFile } = await import("../config/config.js");
@@ -221,6 +222,15 @@ describe("update-cli", () => {
     vi.mocked(resolveNpmChannelTag).mockReset();
     vi.mocked(runCommandWithTimeout).mockReset();
     vi.mocked(runDaemonRestart).mockReset();
+    vi.mocked(spawnSync).mockReset();
+    vi.mocked(spawnSync).mockReturnValue({
+      pid: 0,
+      output: [],
+      stdout: "",
+      stderr: "",
+      status: 0,
+      signal: null,
+    });
     vi.mocked(defaultRuntime.log).mockReset();
     vi.mocked(defaultRuntime.error).mockReset();
     vi.mocked(defaultRuntime.exit).mockReset();
@@ -482,7 +492,7 @@ describe("update-cli", () => {
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 
-  it("updateCommand restarts daemon by default", async () => {
+  it("updateCommand restarts daemon via subprocess by default", async () => {
     const mockResult: UpdateRunResult = {
       status: "ok",
       mode: "git",
@@ -491,11 +501,18 @@ describe("update-cli", () => {
     };
 
     vi.mocked(runGatewayUpdate).mockResolvedValue(mockResult);
-    vi.mocked(runDaemonRestart).mockResolvedValue(true);
 
     await updateCommand({});
 
-    expect(runDaemonRestart).toHaveBeenCalled();
+    // After update, daemon restart should be spawned as a subprocess
+    // (not called in-process) to avoid stale content-hashed module references.
+    expect(spawnSync).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.arrayContaining(["gateway", "restart"]),
+      expect.objectContaining({ stdio: "inherit" }),
+    );
+    // The in-process runDaemonRestart should NOT be called
+    expect(runDaemonRestart).not.toHaveBeenCalled();
   });
 
   it("updateCommand skips restart when --no-restart is set", async () => {
@@ -507,13 +524,20 @@ describe("update-cli", () => {
     };
 
     vi.mocked(runGatewayUpdate).mockResolvedValue(mockResult);
+    vi.mocked(spawnSync).mockClear();
 
     await updateCommand({ restart: false });
 
-    expect(runDaemonRestart).not.toHaveBeenCalled();
+    // spawnSync may be called for other reasons (e.g. completion cache),
+    // but should NOT be called with gateway restart args
+    const restartCalls = vi.mocked(spawnSync).mock.calls.filter((call) => {
+      const args = call[1] as string[] | undefined;
+      return args?.includes("gateway") && args?.includes("restart");
+    });
+    expect(restartCalls).toHaveLength(0);
   });
 
-  it("updateCommand skips success message when restart does not run", async () => {
+  it("updateCommand skips success message when restart subprocess fails", async () => {
     const mockResult: UpdateRunResult = {
       status: "ok",
       mode: "git",
@@ -522,7 +546,14 @@ describe("update-cli", () => {
     };
 
     vi.mocked(runGatewayUpdate).mockResolvedValue(mockResult);
-    vi.mocked(runDaemonRestart).mockResolvedValue(false);
+    vi.mocked(spawnSync).mockReturnValue({
+      pid: 0,
+      output: [],
+      stdout: "",
+      stderr: "",
+      status: 1,
+      signal: null,
+    });
     vi.mocked(defaultRuntime.log).mockClear();
 
     await updateCommand({ restart: true });
