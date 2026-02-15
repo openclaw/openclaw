@@ -1,31 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { registerSlackMonitorSlashCommands } from "./slash.js";
+import { getDispatchMock } from "./slash.test-mocks.js";
 
-const dispatchMock = vi.fn();
-const readAllowFromStoreMock = vi.fn();
-const upsertPairingRequestMock = vi.fn();
-const resolveAgentRouteMock = vi.fn();
-
-vi.mock("../../auto-reply/reply/provider-dispatcher.js", () => ({
-  dispatchReplyWithDispatcher: (...args: unknown[]) => dispatchMock(...args),
-}));
-
-vi.mock("../../pairing/pairing-store.js", () => ({
-  readChannelAllowFromStore: (...args: unknown[]) => readAllowFromStoreMock(...args),
-  upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
-}));
-
-vi.mock("../../routing/resolve-route.js", () => ({
-  resolveAgentRoute: (...args: unknown[]) => resolveAgentRouteMock(...args),
-}));
-
-vi.mock("../../agents/identity.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../agents/identity.js")>();
-  return {
-    ...actual,
-    resolveEffectiveMessagesConfig: () => ({ responsePrefix: "" }),
-  };
-});
+const dispatchMock = getDispatchMock();
 
 function encodeValue(parts: { command: string; arg: string; value: string; userId: string }) {
   return [
@@ -84,17 +61,6 @@ function createHarness() {
 
   return { commands, actions, postEphemeral, ctx, account };
 }
-
-beforeEach(() => {
-  dispatchMock.mockReset().mockResolvedValue({ counts: { final: 1, tool: 0, block: 0 } });
-  readAllowFromStoreMock.mockReset().mockResolvedValue([]);
-  upsertPairingRequestMock.mockReset().mockResolvedValue({ code: "PAIRCODE", created: true });
-  resolveAgentRouteMock.mockReset().mockReturnValue({
-    agentId: "main",
-    sessionKey: "session:1",
-    accountId: "acct",
-  });
-});
 
 describe("Slack native command argument menus", () => {
   it("shows a button menu when required args are omitted", async () => {
