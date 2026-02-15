@@ -1,7 +1,7 @@
 import {
   BedrockClient,
-  ListFoundationModelsCommand,
-  type ListFoundationModelsCommandOutput,
+  ListInferenceProfilesCommand,
+  type ListInferenceProfilesCommandOutput,
 } from "@aws-sdk/client-bedrock";
 import type { BedrockDiscoveryConfig, ModelDefinitionConfig } from "../config/types.js";
 
@@ -15,7 +15,9 @@ const DEFAULT_COST = {
   cacheWrite: 0,
 };
 
-type BedrockModelSummary = NonNullable<ListFoundationModelsCommandOutput["modelSummaries"]>[number];
+type InferenceProfileSummary = NonNullable<
+  ListInferenceProfilesCommandOutput["inferenceProfileSummaries"]
+>[number];
 
 type BedrockDiscoveryCacheEntry = {
   expiresAt: number;
@@ -46,36 +48,47 @@ function buildCacheKey(params: {
   return JSON.stringify(params);
 }
 
-function includesTextModalities(modalities?: Array<string>): boolean {
-  return (modalities ?? []).some((entry) => entry.toLowerCase() === "text");
+function isActive(summary: InferenceProfileSummary): boolean {
+  return summary.status === "ACTIVE";
 }
 
-function isActive(summary: BedrockModelSummary): boolean {
-  const status = summary.modelLifecycle?.status;
-  return typeof status === "string" ? status.toUpperCase() === "ACTIVE" : false;
-}
-
-function mapInputModalities(summary: BedrockModelSummary): Array<"text" | "image"> {
-  const inputs = summary.inputModalities ?? [];
-  const mapped = new Set<"text" | "image">();
-  for (const modality of inputs) {
-    const lower = modality.toLowerCase();
-    if (lower === "text") {
-      mapped.add("text");
-    }
-    if (lower === "image") {
-      mapped.add("image");
-    }
-  }
-  if (mapped.size === 0) {
-    mapped.add("text");
-  }
-  return Array.from(mapped);
-}
-
-function inferReasoningSupport(summary: BedrockModelSummary): boolean {
-  const haystack = `${summary.modelId ?? ""} ${summary.modelName ?? ""}`.toLowerCase();
+function inferReasoningSupport(summary: InferenceProfileSummary): boolean {
+  const haystack =
+    `${summary.inferenceProfileId ?? ""} ${summary.inferenceProfileName ?? ""}`.toLowerCase();
   return haystack.includes("reasoning") || haystack.includes("thinking");
+}
+
+function extractProviderFromId(inferenceProfileId: string): string | undefined {
+  // e.g. "us.anthropic.claude-3-5-sonnet-20241022-v2:0" -> "anthropic"
+  const parts = inferenceProfileId.split(".");
+  if (parts.length >= 2) {
+    return parts[1].toLowerCase();
+  }
+  return undefined;
+}
+
+function matchesProviderFilter(summary: InferenceProfileSummary, filter: string[]): boolean {
+  if (filter.length === 0) {
+    return true;
+  }
+  const provider = extractProviderFromId(summary.inferenceProfileId ?? "");
+  if (!provider) {
+    return false;
+  }
+  return filter.includes(provider);
+}
+
+function shouldIncludeSummary(summary: InferenceProfileSummary, filter: string[]): boolean {
+  if (!summary.inferenceProfileId?.trim()) {
+    return false;
+  }
+  if (!matchesProviderFilter(summary, filter)) {
+    return false;
+  }
+  if (!isActive(summary)) {
+    return false;
+  }
+  return true;
 }
 
 function resolveDefaultContextWindow(config?: BedrockDiscoveryConfig): number {
@@ -88,49 +101,16 @@ function resolveDefaultMaxTokens(config?: BedrockDiscoveryConfig): number {
   return value > 0 ? value : DEFAULT_MAX_TOKENS;
 }
 
-function matchesProviderFilter(summary: BedrockModelSummary, filter: string[]): boolean {
-  if (filter.length === 0) {
-    return true;
-  }
-  const providerName =
-    summary.providerName ??
-    (typeof summary.modelId === "string" ? summary.modelId.split(".")[0] : undefined);
-  const normalized = providerName?.trim().toLowerCase();
-  if (!normalized) {
-    return false;
-  }
-  return filter.includes(normalized);
-}
-
-function shouldIncludeSummary(summary: BedrockModelSummary, filter: string[]): boolean {
-  if (!summary.modelId?.trim()) {
-    return false;
-  }
-  if (!matchesProviderFilter(summary, filter)) {
-    return false;
-  }
-  if (summary.responseStreamingSupported !== true) {
-    return false;
-  }
-  if (!includesTextModalities(summary.outputModalities)) {
-    return false;
-  }
-  if (!isActive(summary)) {
-    return false;
-  }
-  return true;
-}
-
 function toModelDefinition(
-  summary: BedrockModelSummary,
+  summary: InferenceProfileSummary,
   defaults: { contextWindow: number; maxTokens: number },
 ): ModelDefinitionConfig {
-  const id = summary.modelId?.trim() ?? "";
+  const id = summary.inferenceProfileId?.trim() ?? "";
   return {
     id,
-    name: summary.modelName?.trim() || id,
+    name: summary.inferenceProfileName?.trim() || id,
     reasoning: inferReasoningSupport(summary),
-    input: mapInputModalities(summary),
+    input: ["text"] as Array<"text" | "image">,
     cost: DEFAULT_COST,
     contextWindow: defaults.contextWindow,
     maxTokens: defaults.maxTokens,
@@ -178,19 +158,33 @@ export async function discoverBedrockModels(params: {
   const client = clientFactory(params.region);
 
   const discoveryPromise = (async () => {
-    const response = await client.send(new ListFoundationModelsCommand({}));
     const discovered: ModelDefinitionConfig[] = [];
-    for (const summary of response.modelSummaries ?? []) {
-      if (!shouldIncludeSummary(summary, providerFilter)) {
-        continue;
-      }
-      discovered.push(
-        toModelDefinition(summary, {
-          contextWindow: defaultContextWindow,
-          maxTokens: defaultMaxTokens,
+    let nextToken: string | undefined;
+
+    do {
+      const response = await client.send(
+        new ListInferenceProfilesCommand({
+          maxResults: 1000,
+          nextToken,
+          typeEquals: "SYSTEM_DEFINED",
         }),
       );
-    }
+
+      for (const summary of response.inferenceProfileSummaries ?? []) {
+        if (!shouldIncludeSummary(summary, providerFilter)) {
+          continue;
+        }
+        discovered.push(
+          toModelDefinition(summary, {
+            contextWindow: defaultContextWindow,
+            maxTokens: defaultMaxTokens,
+          }),
+        );
+      }
+
+      nextToken = response.nextToken;
+    } while (nextToken);
+
     return discovered.toSorted((a, b) => a.name.localeCompare(b.name));
   })();
 
