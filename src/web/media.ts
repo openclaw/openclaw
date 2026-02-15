@@ -1,10 +1,7 @@
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
-import { STATE_DIR } from "../config/paths.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { type MediaKind, maxBytesForKind, mediaKindFromMime } from "../media/constants.js";
 import { fetchRemoteMedia } from "../media/fetch.js";
@@ -14,6 +11,7 @@ import {
   optimizeImageToPng,
   resizeToJpeg,
 } from "../media/image-ops.js";
+import { getDefaultMediaLocalRoots } from "../media/local-roots.js";
 import { detectMime, extensionForMime } from "../media/mime.js";
 import { resolveUserPath } from "../utils.js";
 
@@ -35,44 +33,8 @@ type WebMediaOptions = {
   readFile?: (filePath: string) => Promise<Buffer>;
 };
 
-/**
- * Scans STATE_DIR for agent workspace directories matching the pattern "workspace-*"
- * and returns them as additional allowed local roots.
- */
-function getAgentWorkspaceDirsSync(): string[] {
-  try {
-    // Note: Synchronous scan on each call - acceptable for now since this is only
-    // used when validating local media paths, which is not a hot path.
-    // For better performance, could add caching with invalidation.
-    const entries = fsSync.readdirSync(STATE_DIR, { withFileTypes: true });
-    return entries
-      .filter(
-        (entry) =>
-          entry.isDirectory() &&
-          entry.name.startsWith("workspace-") &&
-          // Exclude the default "workspace" directory (handled separately)
-          entry.name !== "workspace",
-      )
-      .map((entry) => path.join(STATE_DIR, entry.name));
-  } catch {
-    // If STATE_DIR doesn't exist or isn't readable, return empty array
-    return [];
-  }
-}
-
 export function getDefaultLocalRoots(): readonly string[] {
-  const staticRoots = [
-    os.tmpdir(),
-    path.join(STATE_DIR, "media"),
-    path.join(STATE_DIR, "agents"),
-    path.join(STATE_DIR, "workspace"),
-    path.join(STATE_DIR, "sandboxes"),
-  ];
-
-  // Dynamically discover agent workspace directories (e.g., workspace-<agentId>)
-  const workspaceDirs = getAgentWorkspaceDirsSync();
-
-  return [...staticRoots, ...workspaceDirs];
+  return getDefaultMediaLocalRoots();
 }
 
 async function assertLocalMediaAllowed(

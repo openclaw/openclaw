@@ -1,4 +1,3 @@
-import fsSync, { type Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -373,37 +372,33 @@ describe("local media root guard", () => {
     );
   });
 
-  it("allows default OpenClaw state per-agent workspace-* roots", async () => {
+  it("rejects default OpenClaw state per-agent workspace-* roots without explicit local roots", async () => {
     const { STATE_DIR } = await import("../config/paths.js");
     const readFile = vi.fn(async () => Buffer.from("generated-media"));
-    const readdirSpy = vi.spyOn(fsSync, "readdirSync").mockReturnValue([
-      {
-        name: "workspace-clawdy",
-        isDirectory: () => true,
-      } as unknown as Dirent,
-      {
-        name: "workspace-main",
-        isDirectory: () => true,
-      } as unknown as Dirent,
-      {
-        name: "workspace-file",
-        isDirectory: () => false,
-      } as unknown as Dirent,
-    ]);
 
-    try {
-      await expect(
-        loadWebMedia(path.join(STATE_DIR, "workspace-clawdy", "tmp", "render.bin"), {
-          maxBytes: 1024 * 1024,
-          readFile,
-        }),
-      ).resolves.toEqual(
-        expect.objectContaining({
-          kind: "unknown",
-        }),
-      );
-    } finally {
-      readdirSpy.mockRestore();
-    }
+    await expect(
+      loadWebMedia(path.join(STATE_DIR, "workspace-clawdy", "tmp", "render.bin"), {
+        maxBytes: 1024 * 1024,
+        readFile,
+      }),
+    ).rejects.toThrow(/not under an allowed directory/i);
+  });
+
+  it("allows per-agent workspace-* paths with explicit local roots", async () => {
+    const { STATE_DIR } = await import("../config/paths.js");
+    const readFile = vi.fn(async () => Buffer.from("generated-media"));
+    const agentWorkspaceDir = path.join(STATE_DIR, "workspace-clawdy");
+
+    await expect(
+      loadWebMedia(path.join(agentWorkspaceDir, "tmp", "render.bin"), {
+        maxBytes: 1024 * 1024,
+        localRoots: [agentWorkspaceDir],
+        readFile,
+      }),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        kind: "unknown",
+      }),
+    );
   });
 });

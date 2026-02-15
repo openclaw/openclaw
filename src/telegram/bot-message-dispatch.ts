@@ -21,6 +21,7 @@ import { createReplyPrefixOptions } from "../channels/reply-prefix.js";
 import { createTypingCallbacks } from "../channels/typing.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { danger, logVerbose } from "../globals.js";
+import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
 import { deliverReplies } from "./bot/delivery.js";
 import { resolveTelegramDraftStreamingChunking } from "./draft-chunking.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
@@ -105,6 +106,7 @@ export const dispatchTelegramMessage = async ({
       ? resolveTelegramDraftStreamingChunking(cfg, route.accountId)
       : undefined;
   const draftChunker = draftChunking ? new EmbeddedBlockChunker(draftChunking) : undefined;
+  const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
   let lastPartialText = "";
   let draftText = "";
   const updateDraftFromPartial = (text?: string) => {
@@ -303,6 +305,7 @@ export const dispatchTelegramMessage = async ({
             token: opts.token,
             runtime,
             bot,
+            mediaLocalRoots,
             replyToMode,
             textLimit,
             thread: threadSpec,
@@ -357,6 +360,7 @@ export const dispatchTelegramMessage = async ({
       token: opts.token,
       runtime,
       bot,
+      mediaLocalRoots,
       replyToMode,
       textLimit,
       thread: threadSpec,

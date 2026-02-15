@@ -28,6 +28,7 @@ import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { resolveTelegramCustomCommands } from "../config/telegram-custom-commands.js";
 import { danger, logVerbose } from "../globals.js";
 import { getChildLogger } from "../logging.js";
+import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
 import {
   executePluginCommand,
@@ -465,6 +466,7 @@ export const registerTelegramNativeCommands = ({
             },
             parentPeer,
           });
+          const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
           const baseSessionKey = route.sessionKey;
           // DMs: use raw messageThreadId for thread sessions (not resolvedThreadId which is for forums)
           const dmThreadId = threadSpec.scope === "dm" ? threadSpec.id : undefined;
@@ -554,6 +556,7 @@ export const registerTelegramNativeCommands = ({
                   token: opts.token,
                   runtime,
                   bot,
+                  mediaLocalRoots,
                   replyToMode,
                   textLimit,
                   thread: threadSpec,
@@ -587,6 +590,7 @@ export const registerTelegramNativeCommands = ({
               token: opts.token,
               runtime,
               bot,
+              mediaLocalRoots,
               replyToMode,
               textLimit,
               thread: threadSpec,
