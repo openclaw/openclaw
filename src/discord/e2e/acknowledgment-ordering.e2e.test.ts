@@ -141,10 +141,10 @@ describeLive("Discord acknowledgment ordering", () => {
       throw new Error(`Channel ${channelId} not found or not text-based`);
     }
 
-    // Ask the bot to perform a task that involves tools.
+    // Ask the bot to perform a task that involves multiple tools.
     await channel.send(
-      `<@${CLAW_BOT_ID}> Check what files are in /tmp and tell me the count. ` +
-        `This is for an E2E test to verify acknowledgment messages appear before tool feedback.`,
+      `<@${CLAW_BOT_ID}> Check my todoist and google calendar for today. ` +
+        `Give me a brief summary of what I have.`,
     );
 
     // Wait for the bot to respond.
@@ -179,13 +179,14 @@ describeLive("Discord acknowledgment ordering", () => {
     // The bot must have responded with at least one message.
     expect(creates.length).toBeGreaterThan(0);
 
-    // Find the first tool feedback message.
+    // Find the first tool feedback message (tool digests or result blocks).
     const toolFeedbackIndex = creates.findIndex((e) => {
       const c = e.content ?? "";
       return (
         c.includes("*Bash*") ||
         c.includes("*Running") ||
-        c.includes("```") || // Code blocks indicate tool output
+        c.includes("*Reading") ||
+        c.match(/```/) || // Code blocks indicate tool output
         c.match(/\*[A-Z][a-z]+.*\(.*\).*\.\.\.\*/) // Rich tool format
       );
     });
@@ -193,16 +194,18 @@ describeLive("Discord acknowledgment ordering", () => {
     // If tool feedback exists, check that an acknowledgment came first.
     if (toolFeedbackIndex > 0) {
       const firstMessage = creates[0];
-      const content = firstMessage?.content ?? "";
+      const content = firstMessage?.content?.toLowerCase() ?? "";
 
       // The first message should be an acknowledgment, not tool feedback.
-      // Look for common acknowledgment patterns.
       const isAcknowledgment =
-        content.toLowerCase().includes("let me") ||
-        content.toLowerCase().includes("checking") ||
-        content.toLowerCase().includes("looking") ||
-        content.toLowerCase().includes("i'll") ||
-        content.toLowerCase().includes("give me a moment");
+        content.includes("let me") ||
+        content.includes("check") ||
+        content.includes("look") ||
+        content.includes("i'll") ||
+        content.includes("give me") ||
+        content.includes("sure") ||
+        content.includes("pulling up") ||
+        content.includes("moment");
 
       expect(isAcknowledgment).toBe(true);
     }

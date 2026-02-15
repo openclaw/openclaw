@@ -41,17 +41,27 @@ export async function handleToolExecutionStart(
   evt: AgentEvent & { toolName: string; toolCallId: string; args: unknown },
 ) {
   if (ctx.params.onBlockReplyDiscard) {
-    // Discard pre-tool text to suppress hedging (e.g., "I don't have access..."
-    // right before a successful exec). The block reply pipeline coalescer buffers
-    // text with an idle timeout, so text emitted at text_end hasn't reached the
-    // channel yet and can be safely discarded.
-    if (ctx.blockChunker?.hasBuffered()) {
-      ctx.blockChunker.reset();
+    const hasUnflushedText = ctx.blockChunker?.hasBuffered() || ctx.state.blockBuffer.length > 0;
+    if (hasUnflushedText) {
+      // Mid-stream text: tool started before text_end. Likely
+      // hedging (e.g., "I don't have access..." right before a
+      // successful exec). Discard to suppress misleading text.
+      if (ctx.blockChunker?.hasBuffered()) {
+        ctx.blockChunker.reset();
+      }
+      ctx.state.blockBuffer = "";
+      void ctx.params.onBlockReplyDiscard();
+    } else {
+      // Text already passed through text_end into the pipeline
+      // coalescer. This is intentional acknowledgment text (e.g.,
+      // "Let me check your calendar..."). Flush so it reaches
+      // the user before tool feedback.
+      if (ctx.params.onBlockReplyFlush) {
+        void ctx.params.onBlockReplyFlush();
+      }
     }
-    ctx.state.blockBuffer = "";
-    void ctx.params.onBlockReplyDiscard();
   } else {
-    // Flush pending block replies to preserve message boundaries before tool execution.
+    // No discard callback: always flush.
     ctx.flushBlockReplyBuffer();
     if (ctx.params.onBlockReplyFlush) {
       void ctx.params.onBlockReplyFlush();

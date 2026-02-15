@@ -8,7 +8,7 @@ type StubSession = {
 type SessionEventHandler = (evt: unknown) => void;
 
 describe("subscribeEmbeddedPiSession", () => {
-  it("discards pre-tool block replies when onBlockReplyDiscard is provided", () => {
+  it("flushes pre-tool block replies when text already passed through text_end", () => {
     let handler: SessionEventHandler | undefined;
     const session: StubSession = {
       subscribe: (fn) => {
@@ -23,7 +23,7 @@ describe("subscribeEmbeddedPiSession", () => {
 
     subscribeEmbeddedPiSession({
       session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
-      runId: "run-discard-test",
+      runId: "run-flush-after-text-end",
       onBlockReply,
       onBlockReplyFlush,
       onBlockReplyDiscard,
@@ -36,7 +36,71 @@ describe("subscribeEmbeddedPiSession", () => {
       message: { role: "assistant" },
     });
 
-    // Simulate hedging text that's below minChars (stays in chunker buffer)
+    // Simulate acknowledgment text
+    handler?.({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: {
+        type: "text_delta",
+        delta: "Let me check your calendar.",
+      },
+    });
+
+    // text_end drains the chunker into the pipeline
+    handler?.({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: {
+        type: "text_end",
+        content: "Let me check your calendar.",
+      },
+    });
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+
+    // Tool execution starts — chunker is empty, text already in pipeline.
+    // Should flush (preserve ack text), not discard.
+    handler?.({
+      type: "tool_execution_start",
+      toolName: "exec",
+      toolCallId: "tool-flush-1",
+      args: { command: "icalbuddy eventsToday" },
+    });
+
+    expect(onBlockReplyFlush).toHaveBeenCalledTimes(1);
+    expect(onBlockReplyDiscard).not.toHaveBeenCalled();
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("discards pre-tool block replies when text is still in chunker buffer", () => {
+    let handler: SessionEventHandler | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
+
+    const onBlockReply = vi.fn();
+    const onBlockReplyFlush = vi.fn();
+    const onBlockReplyDiscard = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
+      runId: "run-discard-mid-stream",
+      onBlockReply,
+      onBlockReplyFlush,
+      onBlockReplyDiscard,
+      blockReplyBreak: "text_end",
+      blockReplyChunking: { minChars: 500, maxChars: 1000 },
+    });
+
+    handler?.({
+      type: "message_start",
+      message: { role: "assistant" },
+    });
+
+    // Simulate hedging text — no text_end, still in chunker buffer
     handler?.({
       type: "message_update",
       message: { role: "assistant" },
@@ -46,20 +110,8 @@ describe("subscribeEmbeddedPiSession", () => {
       },
     });
 
-    // Text_end flushes the chunker to the pipeline
-    handler?.({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: {
-        type: "text_end",
-        content: "I don't have access to your calendar.",
-      },
-    });
-
-    // The text_end flush sends to onBlockReply (pipeline)
-    expect(onBlockReply).toHaveBeenCalledTimes(1);
-
-    // Tool execution starts - should discard, not flush
+    // Tool starts before text_end — text is mid-stream hedging.
+    // Should discard.
     handler?.({
       type: "tool_execution_start",
       toolName: "exec",
@@ -67,12 +119,10 @@ describe("subscribeEmbeddedPiSession", () => {
       args: { command: "icalbuddy eventsToday" },
     });
 
-    // onBlockReplyDiscard was called, not onBlockReplyFlush
     expect(onBlockReplyDiscard).toHaveBeenCalledTimes(1);
     expect(onBlockReplyFlush).not.toHaveBeenCalled();
-
-    // The block reply was only called once (from text_end, not from tool start)
-    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    // onBlockReply was never called (text stayed in chunker, never drained)
+    expect(onBlockReply).not.toHaveBeenCalled();
   });
 
   it("falls back to flush when onBlockReplyDiscard is not provided", () => {
