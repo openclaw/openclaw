@@ -13,10 +13,11 @@ import {
   type HistoryEntry,
 } from "../../auto-reply/reply/history.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
+import type { OriginatingChannelType } from "../../auto-reply/templating.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { recordInboundSession } from "../../channels/session.js";
 import { loadConfig } from "../../config/config.js";
-import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
+import { loadSessionStore, readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
 import { waitForTransportReady } from "../../infra/transport-ready.js";
 import { mediaKindFromMime } from "../../media/constants.js";
@@ -303,6 +304,40 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         types: mediaTypes,
       },
     });
+
+    // Load session to check for cross-channel delivery context.
+    // For cross-channel conversations (e.g., Telegram user talking to iMessage contact),
+    // we should route agent responses back to the original channel (Telegram),
+    // not to the current message channel (iMessage).
+    let sessionDeliveryChannel: string | undefined;
+    let sessionDeliveryTo: string | undefined;
+    try {
+      const sessionStore = loadSessionStore(storePath);
+      const sessionEntry = sessionStore[decision.route.sessionKey];
+      if (sessionEntry?.deliveryContext) {
+        const deliveryChannel = sessionEntry.deliveryContext.channel;
+        const deliveryTo = sessionEntry.deliveryContext.to;
+        // Only use deliveryContext if it differs from current channel
+        if (deliveryChannel && deliveryChannel !== "imessage" && deliveryTo) {
+          sessionDeliveryChannel = deliveryChannel;
+          sessionDeliveryTo = deliveryTo;
+          if (shouldLogVerbose()) {
+            logVerbose(
+              `imessage: cross-channel routing detected - agent responses will go to ${deliveryChannel} (${deliveryTo})`,
+            );
+          }
+        }
+      }
+    } catch (err) {
+      // Session load failed - fall back to normal iMessage routing
+      logVerbose(`imessage: failed to load session for delivery context check: ${String(err)}`);
+    }
+
+    // Override originating channel if cross-channel routing is detected
+    if (sessionDeliveryChannel && sessionDeliveryTo) {
+      ctxPayload.OriginatingChannel = sessionDeliveryChannel as OriginatingChannelType;
+      ctxPayload.OriginatingTo = sessionDeliveryTo;
+    }
 
     const updateTarget = chatTarget || decision.sender;
     await recordInboundSession({
