@@ -1,9 +1,8 @@
+import type { BaseProbeResult } from "openclaw/plugin-sdk";
 import { createMatrixClient, isBunRuntime } from "./client.js";
 
-export type MatrixProbe = {
-  ok: boolean;
+export type MatrixProbe = BaseProbeResult & {
   status?: number | null;
-  error?: string | null;
   elapsedMs: number;
   userId?: string | null;
 };

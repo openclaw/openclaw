@@ -1,12 +1,11 @@
+import type { BaseProbeResult } from "../channels/plugins/types.js";
 import { fetchWithTimeout } from "../utils/fetch-timeout.js";
 import { makeProxyFetch } from "./proxy.js";
 
 const TELEGRAM_API_BASE = "https://api.telegram.org";
 
-export type TelegramProbe = {
-  ok: boolean;
+export type TelegramProbe = BaseProbeResult & {
   status?: number | null;
-  error?: string | null;
   elapsedMs: number;
   bot?: {
     id?: number | null;
