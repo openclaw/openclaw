@@ -56,6 +56,24 @@ describe("session summary state", () => {
     expect(updated.lastProcessedMessageCount).toBe(messages.length);
   });
 
+  it("skips synthetic session summary messages", () => {
+    const updated = updateSessionSummaryState({
+      state: {
+        version: 1,
+        lastProcessedMessageCount: 0,
+        items: [],
+        updatedAt: Date.now(),
+      },
+      messages: [
+        makeMessage("user", "[SESSION_SUMMARY]\nUse this as compressed prior context."),
+        makeMessage("assistant", "normal reply"),
+      ],
+      maxItems: 10,
+    });
+
+    expect(updated.items).toEqual(["Assistant: normal reply"]);
+  });
+
   it("builds bounded prompt from most recent summary items", () => {
     const prompt = buildSessionSummaryPrompt({
       state: {

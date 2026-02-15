@@ -5,6 +5,7 @@ const SUMMARY_VERSION = 1;
 const DEFAULT_MAX_ITEMS = 60;
 const DEFAULT_MAX_ITEM_CHARS = 220;
 const DEFAULT_MAX_PROMPT_CHARS = 1200;
+const SESSION_SUMMARY_PREFIX = "[SESSION_SUMMARY]";
 
 export type SessionSummaryState = {
   version: number;
@@ -73,6 +74,9 @@ function extractMessageText(message: AgentMessage): string | null {
 function summarizeMessage(message: AgentMessage): string | null {
   const text = extractMessageText(message);
   if (!text) {
+    return null;
+  }
+  if (text.startsWith(SESSION_SUMMARY_PREFIX)) {
     return null;
   }
   const prefix = message.role === "user" ? "User" : "Assistant";
