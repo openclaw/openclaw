@@ -177,6 +177,50 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_2: LegacyConfigMigration[] = [
     },
   },
   {
+    id: "aliases.top-level",
+    describe: "Migrate top-level aliases to agents.defaults.models.*.alias",
+    apply: (raw, changes) => {
+      const aliases = getRecord(raw.aliases);
+      if (!aliases || Object.keys(aliases).length === 0) {
+        return;
+      }
+
+      const agents = ensureRecord(raw, "agents");
+      const defaults = ensureRecord(agents, "defaults");
+      const models =
+        defaults.models && typeof defaults.models === "object"
+          ? (defaults.models as Record<string, unknown>)
+          : {};
+
+      for (const [alias, targetRaw] of Object.entries(aliases)) {
+        if (typeof targetRaw !== "string") {
+          continue;
+        }
+        const target = targetRaw.trim();
+        if (!target) {
+          continue;
+        }
+        // Ensure model entry exists
+        if (!models[target]) {
+          models[target] = {};
+        }
+        const entry =
+          models[target] && typeof models[target] === "object"
+            ? (models[target] as Record<string, unknown>)
+            : {};
+        // Only set alias if not already set
+        if (!("alias" in entry)) {
+          entry.alias = alias;
+          models[target] = entry;
+        }
+      }
+
+      defaults.models = models;
+      changes.push("Migrated aliases → agents.defaults.models.*.alias.");
+      delete raw.aliases;
+    },
+  },
+  {
     id: "routing.agents-v2",
     describe: "Move routing.agents/defaultAgentId to agents.list",
     apply: (raw, changes) => {
