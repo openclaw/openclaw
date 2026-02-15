@@ -1,5 +1,10 @@
 import { format } from "node:util";
-import { mergeAllowlist, summarizeMapping, type RuntimeEnv } from "openclaw/plugin-sdk";
+import {
+  mergeAllowlist,
+  normalizeAccountId,
+  summarizeMapping,
+  type RuntimeEnv,
+} from "openclaw/plugin-sdk";
 import type { CoreConfig, ReplyToMode } from "../../types.js";
 import { resolveMatrixTargets } from "../../resolve-targets.js";
 import { getMatrixRuntime } from "../../runtime.js";
@@ -11,6 +16,12 @@ import {
   resolveSharedMatrixClient,
   stopSharedClientForAccount,
 } from "../client.js";
+import { RecoveryKeyHandler } from "../recovery-key/handler.js";
+import {
+  registerMatrixRecoveryKeyHandler,
+  unregisterMatrixRecoveryKeyHandler,
+} from "../recovery-key/registry.js";
+import { RecoveryKeyStore } from "../recovery-key/store.js";
 import { normalizeMatrixUserId } from "./allowlist.js";
 import { registerMatrixAutoJoin } from "./auto-join.js";
 import { createDirectRoomTracker } from "./direct.js";
@@ -309,19 +320,59 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   // @vector-im/matrix-bot-sdk client is already started via resolveSharedMatrixClient
   logger.info(`matrix: logged in as ${auth.userId}`);
 
-  // If E2EE is enabled, trigger device verification
+  // Initialize recovery key handler if E2EE is enabled
+  let recoveryKeyHandler: RecoveryKeyHandler | undefined;
+  logger.debug?.("matrix: checking E2EE initialization", {
+    hasEncryption: !!auth.encryption,
+    hasCrypto: !!client.crypto,
+    willInitialize: !!(auth.encryption && client.crypto),
+  });
+
   if (auth.encryption && client.crypto) {
+    logger.debug?.("matrix: starting recovery key handler initialization");
     try {
-      // Request verification from other sessions
-      const verificationRequest = await (
-        client.crypto as { requestOwnUserVerification?: () => Promise<unknown> }
-      ).requestOwnUserVerification?.();
-      if (verificationRequest) {
-        logger.info("matrix: device verification requested - please verify in another client");
+      // Determine storage path for verification state
+      const { resolveMatrixStoragePaths } = await import("../client/storage.js");
+      const storagePaths = resolveMatrixStoragePaths({
+        homeserver: auth.homeserver,
+        userId: auth.userId,
+        accessToken: auth.accessToken,
+        accountId: opts.accountId,
+      });
+
+      // Create and initialize verification store
+      const store = new RecoveryKeyStore(logger);
+      await store.initialize(storagePaths.rootDir);
+
+      // Set device ID from crypto client if not already persisted
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- bot-SDK does not expose deviceId in CryptoClient types
+      const deviceId = (client.crypto as any)?.deviceId as string | undefined;
+
+      if (deviceId && !store.getDeviceId()) {
+        await store.setDeviceVerified(false, deviceId);
+      }
+
+      // Create recovery key handler
+      recoveryKeyHandler = new RecoveryKeyHandler(client, store, logger);
+      registerMatrixRecoveryKeyHandler(recoveryKeyHandler, opts.accountId);
+      logger.debug?.("Registered recovery key handler for account", {
+        accountId: normalizeAccountId(opts.accountId),
+      });
+
+      // Log device verification status
+      if (store.isDeviceVerified() && deviceId) {
+        logger.info("matrix: device verified", {
+          deviceId,
+          verifiedAt: store.getVerifiedAt(),
+        });
+      } else {
+        logger.info(
+          "matrix: device not verified - run 'openclaw matrix verify recovery-key <key>' to enable E2EE",
+        );
       }
     } catch (err) {
-      logger.debug?.("Device verification request failed (may already be verified)", {
-        error: String(err),
+      logger.warn("matrix: failed to initialize recovery key handler", {
+        error: err instanceof Error ? err.message : String(err),
       });
     }
   }
@@ -331,6 +382,14 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       try {
         logVerboseMessage("matrix: stopping client");
         stopSharedClientForAccount(auth, opts.accountId);
+
+        // Cleanup recovery key handler
+        if (recoveryKeyHandler) {
+          unregisterMatrixRecoveryKeyHandler(opts.accountId);
+          logger.debug?.("Unregistered recovery key handler for account", {
+            accountId: normalizeAccountId(opts.accountId),
+          });
+        }
       } finally {
         setActiveMatrixClient(null, opts.accountId);
         resolve();
