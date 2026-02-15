@@ -446,6 +446,10 @@ export function parseCliJsonl(raw: string, backend: CliBackendConfig): CliOutput
         texts.push(item.text);
       }
     }
+    const part = isRecord(parsed.part) ? parsed.part : null;
+    if (part && typeof part.text === "string") {
+      texts.push(part.text);
+    }
   }
   const text = texts.join("\n").trim();
   if (!text) {
