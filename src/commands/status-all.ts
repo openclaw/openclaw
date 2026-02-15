@@ -9,6 +9,7 @@ import { resolveNodeService } from "../daemon/node-service.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
+import { resolveGatewayProbeAuth } from "../gateway/probe-auth.js";
 import { probeGateway } from "../gateway/probe.js";
 import { collectChannelStatusIssues } from "../infra/channels-status-issues.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
@@ -119,31 +120,8 @@ export async function statusAllCommand(
     const remoteUrlMissing = isRemoteMode && !remoteUrlRaw;
     const gatewayMode = isRemoteMode ? "remote" : "local";
 
-    const resolveProbeAuth = (mode: "local" | "remote") => {
-      const authToken = cfg.gateway?.auth?.token;
-      const authPassword = cfg.gateway?.auth?.password;
-      const remote = cfg.gateway?.remote;
-      const token =
-        mode === "remote"
-          ? typeof remote?.token === "string" && remote.token.trim()
-            ? remote.token.trim()
-            : undefined
-          : process.env.OPENCLAW_GATEWAY_TOKEN?.trim() ||
-            (typeof authToken === "string" && authToken.trim() ? authToken.trim() : undefined);
-      const password =
-        process.env.OPENCLAW_GATEWAY_PASSWORD?.trim() ||
-        (mode === "remote"
-          ? typeof remote?.password === "string" && remote.password.trim()
-            ? remote.password.trim()
-            : undefined
-          : typeof authPassword === "string" && authPassword.trim()
-            ? authPassword.trim()
-            : undefined);
-      return { token, password };
-    };
-
-    const localFallbackAuth = resolveProbeAuth("local");
-    const remoteAuth = resolveProbeAuth("remote");
+    const localFallbackAuth = resolveGatewayProbeAuth({ cfg, mode: "local" });
+    const remoteAuth = resolveGatewayProbeAuth({ cfg, mode: "remote" });
     const probeAuth = isRemoteMode && !remoteUrlMissing ? remoteAuth : localFallbackAuth;
 
     const gatewayProbe = await probeGateway({
