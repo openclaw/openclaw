@@ -82,6 +82,30 @@ Full setup walkthrough (28m) by VelvetShark.
 
 [Watch on YouTube](https://www.youtube.com/watch?v=5kkIJNUGFho)
 
+Full tutorial for beginners (~55m) by freeCodeCamp.org.
+
+<div
+  style={{
+    position: "relative",
+    paddingBottom: "56.25%",
+    height: 0,
+    overflow: "hidden",
+    borderRadius: 16,
+  }}
+>
+  <iframe
+    src="https://www.youtube-nocookie.com/embed/n1sfrc-RjyM"
+    title="OpenClaw Full Tutorial for Beginners – How to Set Up and Use OpenClaw (ClawdBot / MoltBot)"
+    style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%" }}
+    frameBorder="0"
+    loading="lazy"
+    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+    allowFullScreen
+  />
+</div>
+
+[Watch on YouTube](https://www.youtube.com/watch?v=n1sfrc-RjyM)
+
 ## 🆕 Fresh from Discord
 
 <CardGroup cols={2}>
