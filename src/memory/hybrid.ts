@@ -30,7 +30,7 @@ export function buildFtsQuery(raw: string): string | null {
     return null;
   }
   const quoted = tokens.map((t) => `"${t.replaceAll('"', "")}"`);
-  return quoted.join(" AND ");
+  return quoted.join(" OR ");
 }
 
 export function bm25RankToScore(rank: number): number {
