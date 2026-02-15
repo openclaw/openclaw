@@ -4,6 +4,7 @@ import { repeat } from "lit/directives/repeat.js";
 import type { SessionsListResult } from "../types.ts";
 import type { ChatItem, MessageGroup } from "../types/chat-types.ts";
 import type { ChatAttachment, ChatQueueItem } from "../ui-types.ts";
+import type { UiSettings } from "../storage.ts";
 import {
   renderMessageGroup,
   renderReadingIndicatorGroup,
@@ -51,6 +52,11 @@ export type ChatProps = {
   splitRatio?: number;
   assistantName: string;
   assistantAvatar: string | null;
+  // Auth inline prompt
+  lastError?: string | null;
+  settings?: UiSettings;
+  onSettingsChange?: (next: UiSettings) => void;
+  onConnect?: () => void;
   // Image attachments
   attachments?: ChatAttachment[];
   onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
@@ -186,6 +192,57 @@ function renderAttachmentPreview(props: ChatProps) {
   `;
 }
 
+function isAuthError(error: string | null | undefined): boolean {
+  if (!error) return false;
+  const lower = error.toLowerCase();
+  return lower.includes("unauthorized") || lower.includes("token mismatch") || lower.includes("connect failed");
+}
+
+function renderAuthPrompt(props: ChatProps) {
+  if (props.connected || !isAuthError(props.lastError) || !props.settings || !props.onSettingsChange || !props.onConnect) {
+    return nothing;
+  }
+
+  return html`
+    <div class="card" style="margin: 24px auto; max-width: 460px; padding: 24px;">
+      <div style="text-align: center; margin-bottom: 16px;">
+        <div style="font-size: 1.2em; font-weight: 600;">Gateway token required</div>
+        <div class="muted" style="margin-top: 6px;">
+          Authentication failed. Enter your gateway token to connect.
+        </div>
+      </div>
+      <div class="form-grid" style="margin-bottom: 14px;">
+        <label class="field">
+          <span>Gateway Token</span>
+          <input
+            .value=${props.settings.token}
+            @input=${(e: Event) => {
+              const v = (e.target as HTMLInputElement).value;
+              props.onSettingsChange!({ ...props.settings!, token: v });
+            }}
+            @keydown=${(e: KeyboardEvent) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                props.onConnect!();
+              }
+            }}
+            placeholder="OPENCLAW_GATEWAY_TOKEN"
+          />
+        </label>
+      </div>
+      <div class="row" style="justify-content: center; gap: 12px;">
+        <button class="btn primary" @click=${() => props.onConnect!()}>Connect</button>
+      </div>
+      <div class="muted" style="text-align: center; margin-top: 12px; font-size: 0.85em;">
+        Need help? Visit
+        <a class="session-link" href="#overview">Overview</a>
+        for full connection settings, or see the
+        <a class="session-link" href="https://docs.openclaw.ai/web/dashboard" target="_blank" rel="noreferrer">docs</a>.
+      </div>
+    </div>
+  `;
+}
+
 export function renderChat(props: ChatProps) {
   const canCompose = props.connected;
   const isBusy = props.sending || props.stream !== null;
@@ -268,6 +325,8 @@ export function renderChat(props: ChatProps) {
       ${props.disabledReason ? html`<div class="callout">${props.disabledReason}</div>` : nothing}
 
       ${props.error ? html`<div class="callout danger">${props.error}</div>` : nothing}
+
+      ${renderAuthPrompt(props)}
 
       ${
         props.focusMode
