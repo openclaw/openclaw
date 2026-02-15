@@ -14,6 +14,7 @@ import {
 import { locked } from "./locked.js";
 import { ensureLoaded, persist } from "./store.js";
 
+const MIN_TIMER_DELAY_MS = 100;
 const MAX_TIMER_DELAY_MS = 60_000;
 
 /**
@@ -143,7 +144,7 @@ export function armTimer(state: CronServiceState) {
   const delay = Math.max(nextAt - now, 0);
   // Wake at least once a minute to avoid schedule drift and recover quickly
   // when the process was paused or wall-clock time jumps.
-  const clampedDelay = Math.min(delay, MAX_TIMER_DELAY_MS);
+  const clampedDelay = Math.min(Math.max(delay, MIN_TIMER_DELAY_MS), MAX_TIMER_DELAY_MS);
   state.timer = setTimeout(async () => {
     try {
       await onTimer(state);
