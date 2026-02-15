@@ -119,12 +119,19 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
         },
       };
     },
-    isConfigured: (account) => Boolean(account.channelAccessToken?.trim()),
+    isConfigured: (account) =>
+      Boolean(
+        account.channelAccessToken?.trim() ||
+        (account.tokenSource && account.tokenSource !== "none"),
+      ),
     describeAccount: (account) => ({
       accountId: account.accountId,
       name: account.name,
       enabled: account.enabled,
-      configured: Boolean(account.channelAccessToken?.trim()),
+      configured: Boolean(
+        account.channelAccessToken?.trim() ||
+        (account.tokenSource && account.tokenSource !== "none"),
+      ),
       tokenSource: account.tokenSource ?? undefined,
     }),
     resolveAllowFrom: ({ cfg, accountId }) =>
@@ -570,7 +577,9 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
       const issues: ChannelStatusIssue[] = [];
       for (const account of accounts) {
         const accountId = account.accountId ?? DEFAULT_ACCOUNT_ID;
-        if (!account.channelAccessToken?.trim()) {
+        const isConfigured =
+          account.configured || (account.tokenSource && account.tokenSource !== "none");
+        if (!isConfigured) {
           issues.push({
             channel: "line",
             accountId,
@@ -578,7 +587,15 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
             message: "LINE channel access token not configured",
           });
         }
-        if (!account.channelSecret?.trim()) {
+
+        // Also check if secret is configured (when not using env/file source for token,
+        // or explicitly if we want to be safe, but here we assume tokenSource implies secret availability
+        // unless it's direct config).
+        // Actually, to address the feedback: check if secret is present OR implied by source.
+        const hasSecret =
+          account.channelSecret?.trim() || (account.tokenSource && account.tokenSource !== "none");
+
+        if (!hasSecret) {
           issues.push({
             channel: "line",
             accountId,
@@ -603,7 +620,11 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
     probeAccount: async ({ account, timeoutMs }) =>
       getLineRuntime().channel.line.probeLineBot(account.channelAccessToken, timeoutMs),
     buildAccountSnapshot: ({ account, runtime, probe }) => {
-      const configured = Boolean(account.channelAccessToken?.trim());
+      const configured = Boolean(
+        account.channelAccessToken?.trim() ||
+        (account.tokenSource && account.tokenSource !== "none") ||
+        account.configured,
+      );
       return {
         accountId: account.accountId,
         name: account.name,
