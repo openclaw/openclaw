@@ -585,7 +585,7 @@ type ErrorPattern = RegExp | string;
 
 const ERROR_PATTERNS = {
   rateLimit: [
-    /rate[_ ]limit|too many requests|429/,
+    /rate[_ ]limit|too many requests|\b429\b/,
     "exceeded your current quota",
     "resource has been exhausted",
     "quota exceeded",
