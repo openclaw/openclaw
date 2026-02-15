@@ -31,7 +31,11 @@ export function parseDurationMs(raw: string, opts?: DurationMsParseOptions): num
           : unit === "h"
             ? 3_600_000
             : 86_400_000;
-  const ms = Math.round(value * multiplier);
+  const product = value * multiplier;
+  if (product === 0 && value !== 0) {
+    throw new Error(`duration too small: ${raw} (underflow)`);
+  }
+  const ms = Math.round(product);
   if (!Number.isFinite(ms)) {
     throw new Error(`invalid duration: ${raw}`);
   }
