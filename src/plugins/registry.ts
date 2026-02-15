@@ -143,8 +143,8 @@ export type PluginRegistryParams = {
   runtime: PluginRuntime;
 };
 
-export function createPluginRegistry(registryParams: PluginRegistryParams) {
-  const registry: PluginRegistry = {
+export function createEmptyPluginRegistry(): PluginRegistry {
+  return {
     plugins: [],
     tools: [],
     hooks: [],
@@ -159,6 +159,10 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     commands: [],
     diagnostics: [],
   };
+}
+
+export function createPluginRegistry(registryParams: PluginRegistryParams) {
+  const registry = createEmptyPluginRegistry();
   const coreGatewayMethods = new Set(Object.keys(registryParams.coreGatewayHandlers ?? {}));
 
   const pushDiagnostic = (diag: PluginDiagnostic) => {
