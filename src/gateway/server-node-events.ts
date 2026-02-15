@@ -29,6 +29,46 @@ function compactExecEventOutput(raw: string) {
   return `${normalized.slice(0, safe)}…`;
 }
 
+type LoadedSessionEntry = ReturnType<typeof loadSessionEntry>;
+
+async function touchSessionStore(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  sessionKey: string;
+  storePath: LoadedSessionEntry["storePath"];
+  canonicalKey: LoadedSessionEntry["canonicalKey"];
+  entry: LoadedSessionEntry["entry"];
+  sessionId: string;
+  now: number;
+}) {
+  const { storePath } = params;
+  if (!storePath) {
+    return;
+  }
+  await updateSessionStore(storePath, (store) => {
+    const target = resolveGatewaySessionStoreTarget({
+      cfg: params.cfg,
+      key: params.sessionKey,
+      store,
+    });
+    pruneLegacyStoreKeys({
+      store,
+      canonicalKey: target.canonicalKey,
+      candidates: target.storeKeys,
+    });
+    store[params.canonicalKey] = {
+      sessionId: params.sessionId,
+      updatedAt: params.now,
+      thinkingLevel: params.entry?.thinkingLevel,
+      verboseLevel: params.entry?.verboseLevel,
+      reasoningLevel: params.entry?.reasoningLevel,
+      systemSent: params.entry?.systemSent,
+      sendPolicy: params.entry?.sendPolicy,
+      lastChannel: params.entry?.lastChannel,
+      lastTo: params.entry?.lastTo,
+    };
+  });
+}
+
 export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt: NodeEvent) => {
   switch (evt.event) {
     case "voice.transcript": {
@@ -57,27 +97,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       const { storePath, entry, canonicalKey } = loadSessionEntry(sessionKey);
       const now = Date.now();
       const sessionId = entry?.sessionId ?? randomUUID();
-      if (storePath) {
-        await updateSessionStore(storePath, (store) => {
-          const target = resolveGatewaySessionStoreTarget({ cfg, key: sessionKey, store });
-          pruneLegacyStoreKeys({
-            store,
-            canonicalKey: target.canonicalKey,
-            candidates: target.storeKeys,
-          });
-          store[canonicalKey] = {
-            sessionId,
-            updatedAt: now,
-            thinkingLevel: entry?.thinkingLevel,
-            verboseLevel: entry?.verboseLevel,
-            reasoningLevel: entry?.reasoningLevel,
-            systemSent: entry?.systemSent,
-            sendPolicy: entry?.sendPolicy,
-            lastChannel: entry?.lastChannel,
-            lastTo: entry?.lastTo,
-          };
-        });
-      }
+      await touchSessionStore({ cfg, sessionKey, storePath, canonicalKey, entry, sessionId, now });
 
       // Ensure chat UI clients refresh when this run completes (even though it wasn't started via chat.send).
       // This maps agent bus events (keyed by sessionId) to chat events (keyed by clientRunId).
@@ -141,27 +161,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       const { storePath, entry, canonicalKey } = loadSessionEntry(sessionKey);
       const now = Date.now();
       const sessionId = entry?.sessionId ?? randomUUID();
-      if (storePath) {
-        await updateSessionStore(storePath, (store) => {
-          const target = resolveGatewaySessionStoreTarget({ cfg, key: sessionKey, store });
-          pruneLegacyStoreKeys({
-            store,
-            canonicalKey: target.canonicalKey,
-            candidates: target.storeKeys,
-          });
-          store[canonicalKey] = {
-            sessionId,
-            updatedAt: now,
-            thinkingLevel: entry?.thinkingLevel,
-            verboseLevel: entry?.verboseLevel,
-            reasoningLevel: entry?.reasoningLevel,
-            systemSent: entry?.systemSent,
-            sendPolicy: entry?.sendPolicy,
-            lastChannel: entry?.lastChannel,
-            lastTo: entry?.lastTo,
-          };
-        });
-      }
+      await touchSessionStore({ cfg, sessionKey, storePath, canonicalKey, entry, sessionId, now });
 
       void agentCommand(
         {
