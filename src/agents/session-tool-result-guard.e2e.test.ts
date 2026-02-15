@@ -235,7 +235,9 @@ describe("installSessionToolResultGuard", () => {
     const textBlock = toolResult.content.find((b: { type: string }) => b.type === "text") as {
       text: string;
     };
+    // Persistence uses a tighter cap than in-memory context trimming.
     expect(textBlock.text.length).toBeLessThan(500_000);
+    expect(textBlock.text.length).toBeLessThan(60_000);
     expect(textBlock.text).toContain("truncated");
   });
 

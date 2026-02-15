@@ -2,13 +2,15 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { TextContent } from "@mariozechner/pi-ai";
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
-import { HARD_MAX_TOOL_RESULT_CHARS } from "./pi-embedded-runner/tool-result-truncation.js";
 import { makeMissingToolResult, sanitizeToolCallInputs } from "./session-transcript-repair.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-id.js";
 
 const GUARD_TRUNCATION_SUFFIX =
   "\n\n⚠️ [Content truncated during persistence — original exceeded size limit. " +
   "Use offset/limit parameters or request specific sections for large content.]";
+// Keep persisted tool payloads bounded so one large exec result cannot dominate
+// the next LLM turn's context window.
+const PERSISTED_TOOL_RESULT_MAX_CHARS = 50_000;
 
 /**
  * Truncate oversized text content blocks in a tool result message.
@@ -36,7 +38,7 @@ function capToolResultSize(msg: AgentMessage): AgentMessage {
     }
   }
 
-  if (totalTextChars <= HARD_MAX_TOOL_RESULT_CHARS) {
+  if (totalTextChars <= PERSISTED_TOOL_RESULT_MAX_CHARS) {
     return msg;
   }
 
@@ -52,7 +54,7 @@ function capToolResultSize(msg: AgentMessage): AgentMessage {
     const blockShare = textBlock.text.length / totalTextChars;
     const blockBudget = Math.max(
       2_000,
-      Math.floor(HARD_MAX_TOOL_RESULT_CHARS * blockShare) - GUARD_TRUNCATION_SUFFIX.length,
+      Math.floor(PERSISTED_TOOL_RESULT_MAX_CHARS * blockShare) - GUARD_TRUNCATION_SUFFIX.length,
     );
     if (textBlock.text.length <= blockBudget) {
       return block;
