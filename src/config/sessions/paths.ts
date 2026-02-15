@@ -83,13 +83,23 @@ function resolvePathWithinSessionsDir(sessionsDir: string, candidate: string): s
   const normalized = path.isAbsolute(trimmed) ? path.relative(resolvedBase, trimmed) : trimmed;
   if (!normalized || normalized.startsWith("..") || path.isAbsolute(normalized)) {
     // First check failed - path is outside the current agent's sessions dir.
-    // Widen the check to allow cross-agent session paths within the agents root.
-    // This fixes bound Discord channels where session files are in the bound agent's
-    // directory but validated against the main agent's sessions directory.
+    // Allow cross-agent session paths that land in another agent's sessions/
+    // directory. This fixes bound Discord channels where session files are in
+    // the bound agent's directory but validated against the main agent's
+    // sessions directory.
+    //
+    // Security: only allow paths matching agents/<name>/sessions/<file>, NOT
+    // arbitrary files under the agents root.
     const agentsRoot = path.resolve(resolvedBase, "..", "..");
     const candidateResolved = path.resolve(resolvedBase, trimmed);
     const relToAgents = path.relative(agentsRoot, candidateResolved);
     if (!relToAgents || relToAgents.startsWith("..") || path.isAbsolute(relToAgents)) {
+      throw new Error("Session file path must be within sessions directory");
+    }
+    // Verify the path is within a sessions/ subdirectory of some agent,
+    // not just anywhere under agents/. Pattern: <agentName>/sessions/...
+    const segments = relToAgents.split(path.sep);
+    if (segments.length < 3 || segments[1] !== "sessions") {
       throw new Error("Session file path must be within sessions directory");
     }
     return candidateResolved;
