@@ -1,0 +1,14 @@
+{
+  "name": "@openclaw/recoder-plugin",
+  "version": "2026.2.5",
+  "description": "OpenClaw plugin for Recoder.xyz - AI code generation and project management",
+  "type": "module",
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

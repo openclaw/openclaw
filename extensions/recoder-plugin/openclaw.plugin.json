@@ -1,0 +1,44 @@
+{
+  "id": "recoder-plugin",
+  "name": "Recoder",
+  "description": "Recoder.xyz integration - AI code generation, project management, and sandbox execution",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "webUrl": {
+        "type": "string",
+        "description": "Recoder web URL (default: https://web.recoder.xyz)"
+      },
+      "dockerUrl": {
+        "type": "string",
+        "description": "Docker backend URL (default: https://docker.recoder.xyz)"
+      },
+      "apiUrl": {
+        "type": "string",
+        "description": "Recoder API URL (default: https://api.recoder.xyz)"
+      },
+      "apiKey": {
+        "type": "string",
+        "description": "Recoder API key (sk_xxx_xxx format) - auto-generated per user"
+      },
+      "userId": {
+        "type": "string",
+        "description": "OpenClaw user ID for API key association"
+      },
+      "defaultTemplate": {
+        "type": "string",
+        "enum": ["react", "nextjs", "vue", "svelte", "node", "python", "vanilla"],
+        "description": "Default project template"
+      },
+      "autoStartSandbox": {
+        "type": "boolean",
+        "description": "Automatically start sandbox when creating projects"
+      },
+      "sandboxTimeoutSeconds": {
+        "type": "number",
+        "description": "Default sandbox timeout in seconds"
+      }
+    }
+  }
+}
