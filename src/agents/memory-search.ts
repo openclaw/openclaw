@@ -73,6 +73,7 @@ export type ResolvedMemorySearchConfig = {
 
 const DEFAULT_OPENAI_MODEL = "text-embedding-3-small";
 const DEFAULT_GEMINI_MODEL = "gemini-embedding-001";
+const DEFAULT_VERTEX_MODEL = "text-embedding-004";
 const DEFAULT_VOYAGE_MODEL = "voyage-4-large";
 const DEFAULT_CHUNK_TOKENS = 400;
 const DEFAULT_CHUNK_OVERLAP = 80;
@@ -171,11 +172,13 @@ function mergeConfig(
   const modelDefault =
     provider === "gemini"
       ? DEFAULT_GEMINI_MODEL
-      : provider === "openai"
-        ? DEFAULT_OPENAI_MODEL
-        : provider === "voyage"
-          ? DEFAULT_VOYAGE_MODEL
-          : undefined;
+      : provider === "google-vertex"
+        ? DEFAULT_VERTEX_MODEL
+        : provider === "openai"
+          ? DEFAULT_OPENAI_MODEL
+          : provider === "voyage"
+            ? DEFAULT_VOYAGE_MODEL
+            : undefined;
   const model = overrides?.model ?? defaults?.model ?? modelDefault ?? "";
   const local = {
     modelPath: overrides?.local?.modelPath ?? defaults?.local?.modelPath,
