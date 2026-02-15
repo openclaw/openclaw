@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { WebSocket, type ClientOptions, type CertMeta } from "ws";
 import type { DeviceIdentity } from "../infra/device-identity.js";
-import { loadDeviceAuthToken, storeDeviceAuthToken } from "../infra/device-auth-store.js";
+import {
+  clearDeviceAuthToken,
+  loadDeviceAuthToken,
+  storeDeviceAuthToken,
+} from "../infra/device-auth-store.js";
 import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
@@ -186,9 +190,12 @@ export class GatewayClient {
     const storedToken = this.opts.deviceIdentity
       ? loadDeviceAuthToken({ deviceId: this.opts.deviceIdentity.deviceId, role })?.token
       : null;
-    // Prefer explicitly provided credentials (e.g. CLI `--token`) over any persisted
-    // device-auth tokens. Persisted tokens are only used when no token is provided.
-    const authToken = this.opts.token ?? storedToken ?? undefined;
+    // Prefer stored device-auth tokens over config/env tokens. Device tokens are
+    // device-specific and should take priority. Config tokens are shared and only
+    // used when no device token is available. Explicitly provided credentials (CLI
+    // `--token`) are handled via explicitToken option (not yet implemented).
+    const authToken = storedToken ?? this.opts.token ?? undefined;
+    const canFallbackToShared = Boolean(storedToken && this.opts.token);
     const auth =
       authToken || this.opts.password
         ? {
@@ -273,6 +280,14 @@ export class GatewayClient {
           logDebug(msg);
         } else {
           logError(msg);
+        }
+        // Clear stale device token if we have both stored token and config token,
+        // allowing the next connection attempt to use the shared config token.
+        if (canFallbackToShared && this.opts.deviceIdentity) {
+          clearDeviceAuthToken({
+            deviceId: this.opts.deviceIdentity.deviceId,
+            role,
+          });
         }
         this.ws?.close(1008, "connect failed");
       });
