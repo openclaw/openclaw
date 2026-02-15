@@ -29,10 +29,28 @@ Zalo Personal 作为插件提供，不包含在核心安装中。
 
 ## 前置条件：zca-cli
 
-Gateway 网关机器必须在 `PATH` 中有可用的 `zca` 二进制文件。
+Gateway 网关机器必须在 `PATH` 中有可用的 `zca` 二进制文件。有两个兼容的实现可供选择：
+
+- **[zca-cli](https://zca-cli.dev)** — 付费版本
+- **[OpenZCA](https://openzca.com)** — 免费开源版本
+
+两者都与此插件完全兼容。安装任一版本：
+
+**OpenZCA（免费）** — 需要 Node.js 18+：
+
+```bash
+npm i -g openzca@latest
+```
+
+**zca-cli（付费）：**
+
+```bash
+curl -fsSL https://get.zca-cli.dev/install.sh | bash   # macOS/Linux
+irm https://get.zca-cli.dev/install.ps1 | iex           # Windows
+```
 
 - 验证：`zca --version`
-- 如果缺失，请安装 zca-cli（参见 `extensions/zalouser/README.md` 或上游 zca-cli 文档）。
+- 详见 `extensions/zalouser/README.md` 了解更多安装选项（shell 脚本、手动下载、npx）。
 
 ## 快速设置（新手）
 

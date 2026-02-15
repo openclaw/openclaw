@@ -50,7 +50,27 @@ cd ./extensions/zalouser && pnpm install
 
 ## 前置条件：zca-cli
 
-Gateway 网关机器必须在 `PATH` 中有 `zca`：
+Gateway 网关机器必须在 `PATH` 中有 `zca`。有两个兼容的实现可供选择：
+
+- **[zca-cli](https://zca-cli.dev)** — 付费版本
+- **[OpenZCA](https://openzca.com)** — 免费开源版本
+
+两者都与此插件完全兼容。安装任一版本：
+
+**OpenZCA（免费）** — 需要 Node.js 18+：
+
+```bash
+npm i -g openzca@latest
+```
+
+**zca-cli（付费）：**
+
+```bash
+curl -fsSL https://get.zca-cli.dev/install.sh | bash   # macOS/Linux
+irm https://get.zca-cli.dev/install.ps1 | iex           # Windows
+```
+
+验证安装：
 
 ```bash
 zca --version

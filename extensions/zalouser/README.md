@@ -1,6 +1,6 @@
 # @openclaw/zalouser
 
-OpenClaw extension for Zalo Personal Account messaging via [zca-cli](https://zca-cli.dev).
+OpenClaw extension for Zalo Personal Account messaging via the `zca` CLI ([zca-cli](https://zca-cli.dev) or [OpenZCA](https://openzca.com)).
 
 > **Warning:** Using Zalo automation may result in account suspension or ban. Use at your own risk. This is an unofficial integration.
 
@@ -14,7 +14,42 @@ OpenClaw extension for Zalo Personal Account messaging via [zca-cli](https://zca
 
 ## Prerequisites
 
-Install `zca` CLI and ensure it's in your PATH:
+Install `zca` CLI and ensure it's in your PATH. Two compatible implementations are available:
+
+- **[zca-cli](https://zca-cli.dev)** — paid version
+- **[OpenZCA](https://openzca.com)** — free, open-source version
+
+Both are fully compatible with this plugin. Install either one:
+
+### Option A: OpenZCA (free, open-source)
+
+Requires Node.js 18+.
+
+**npm (all platforms):**
+
+```bash
+npm i -g openzca@latest
+```
+
+**macOS / Linux:**
+
+```bash
+curl -fsSL https://openzca.com/install.sh | bash
+```
+
+**Windows (PowerShell):**
+
+```powershell
+irm https://openzca.com/install.ps1 | iex
+```
+
+**Or run without installing:**
+
+```bash
+npx openzca --help
+```
+
+### Option B: zca-cli (paid)
 
 **macOS / Linux:**
 
@@ -46,7 +81,7 @@ iex "& { $(irm https://get.zca-cli.dev/install.ps1) } -Version v1.0.0"
 iex "& { $(irm https://get.zca-cli.dev/install.ps1) } -Uninstall"
 ```
 
-### Manual Download
+### Manual Download (zca-cli)
 
 Download binary directly:
 
@@ -70,7 +105,7 @@ Available binaries:
 - `zca-linux-x64` - Linux x86_64
 - `zca-windows-x64.exe` - Windows
 
-See [zca-cli](https://zca-cli.dev) for manual download (binaries for macOS/Linux/Windows) or building from source.
+See [zca-cli](https://zca-cli.dev) or [OpenZCA](https://openzca.com) for more details.
 
 ## Quick Start
 
@@ -222,4 +257,4 @@ Available actions: `send`, `image`, `link`, `friends`, `groups`, `me`, `status`
 
 ## Credits
 
-Built on [zca-cli](https://zca-cli.dev) which uses [zca-js](https://github.com/RFS-ADRENO/zca-js).
+Built on [zca-cli](https://zca-cli.dev) (or the free alternative [OpenZCA](https://openzca.com)) which uses [zca-js](https://github.com/RFS-ADRENO/zca-js).

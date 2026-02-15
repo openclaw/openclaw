@@ -22,10 +22,28 @@ Zalo Personal ships as a plugin and is not bundled with the core install.
 
 ## Prerequisite: zca-cli
 
-The Gateway machine must have the `zca` binary available in `PATH`.
+The Gateway machine must have the `zca` binary available in `PATH`. Two compatible implementations are available:
+
+- **[zca-cli](https://zca-cli.dev)** — paid version
+- **[OpenZCA](https://openzca.com)** — free, open-source version
+
+Both are fully compatible with this plugin. Install either one:
+
+**OpenZCA (free)** — requires Node.js 18+:
+
+```bash
+npm i -g openzca@latest
+```
+
+**zca-cli (paid):**
+
+```bash
+curl -fsSL https://get.zca-cli.dev/install.sh | bash   # macOS/Linux
+irm https://get.zca-cli.dev/install.ps1 | iex           # Windows
+```
 
 - Verify: `zca --version`
-- If missing, install zca-cli (see `extensions/zalouser/README.md` or the upstream zca-cli docs).
+- See `extensions/zalouser/README.md` for more install options (shell scripts, manual download, npx).
 
 ## Quick setup (beginner)
 
