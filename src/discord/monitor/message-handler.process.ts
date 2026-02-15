@@ -173,7 +173,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     channel: "Discord",
     from: fromLabel,
     timestamp: resolveTimestampMs(message.timestamp),
-    body: text,
+    body: `${text} [id:${message.id} channel:${message.channelId}]`,
     chatType: isDirectMessage ? "direct" : "channel",
     senderLabel,
     previousTimestamp,
