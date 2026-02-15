@@ -108,4 +108,24 @@ describe("resolveSandboxFsPathWithMounts", () => {
       }),
     ).toThrow(/Path escapes sandbox root/);
   });
+
+  // Regression: #16379 — bind mount paths must resolve correctly
+  it("resolves host-side bind mount paths via host path matching", () => {
+    const sandbox = createSandbox({
+      docker: {
+        ...createSandbox().docker,
+        binds: ["/root/.openclaw/workspace-two:/workspace-two:ro"],
+      },
+    });
+    const mounts = buildSandboxFsMounts(sandbox);
+    const resolved = resolveSandboxFsPathWithMounts({
+      filePath: path.resolve("/root/.openclaw/workspace-two/file.txt"),
+      cwd: sandbox.workspaceDir,
+      defaultWorkspaceRoot: sandbox.workspaceDir,
+      defaultContainerRoot: sandbox.containerWorkdir,
+      mounts,
+    });
+    expect(resolved.containerPath).toBe("/workspace-two/file.txt");
+    expect(resolved.writable).toBe(false);
+  });
 });
