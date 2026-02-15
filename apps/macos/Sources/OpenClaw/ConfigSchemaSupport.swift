@@ -39,11 +39,26 @@ struct ConfigSchemaNode {
         self.raw = dict
     }
 
-    var title: String? { self.raw["title"] as? String }
-    var description: String? { self.raw["description"] as? String }
-    var enumValues: [Any]? { self.raw["enum"] as? [Any] }
-    var constValue: Any? { self.raw["const"] }
-    var explicitDefault: Any? { self.raw["default"] }
+    var title: String? {
+        self.raw["title"] as? String
+    }
+
+    var description: String? {
+        self.raw["description"] as? String
+    }
+
+    var enumValues: [Any]? {
+        self.raw["enum"] as? [Any]
+    }
+
+    var constValue: Any? {
+        self.raw["const"]
+    }
+
+    var explicitDefault: Any? {
+        self.raw["default"]
+    }
+
     var requiredKeys: Set<String> {
         Set((self.raw["required"] as? [String]) ?? [])
     }

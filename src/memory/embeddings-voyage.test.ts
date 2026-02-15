@@ -1,9 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as authModule from "../agents/model-auth.js";
+import { createVoyageEmbeddingProvider, normalizeVoyageModel } from "./embeddings-voyage.js";
 
 vi.mock("../agents/model-auth.js", () => ({
   resolveApiKeyForProvider: vi.fn(),
   requireApiKey: (auth: { apiKey?: string; mode?: string }, provider: string) => {
-    if (auth?.apiKey) return auth.apiKey;
+    if (auth?.apiKey) {
+      return auth.apiKey;
+    }
     throw new Error(`No API key resolved for provider "${provider}" (auth mode: ${auth?.mode}).`);
   },
 }));
@@ -18,16 +22,12 @@ const createFetchMock = () =>
 describe("voyage embedding provider", () => {
   afterEach(() => {
     vi.resetAllMocks();
-    vi.resetModules();
     vi.unstubAllGlobals();
   });
 
   it("configures client with correct defaults and headers", async () => {
     const fetchMock = createFetchMock();
     vi.stubGlobal("fetch", fetchMock);
-
-    const { createVoyageEmbeddingProvider } = await import("./embeddings-voyage.js");
-    const authModule = await import("../agents/model-auth.js");
 
     vi.mocked(authModule.resolveApiKeyForProvider).mockResolvedValue({
       apiKey: "voyage-key-123",
@@ -67,8 +67,6 @@ describe("voyage embedding provider", () => {
     const fetchMock = createFetchMock();
     vi.stubGlobal("fetch", fetchMock);
 
-    const { createVoyageEmbeddingProvider } = await import("./embeddings-voyage.js");
-
     const result = await createVoyageEmbeddingProvider({
       config: {} as never,
       provider: "voyage",
@@ -101,9 +99,6 @@ describe("voyage embedding provider", () => {
     })) as unknown as typeof fetch;
     vi.stubGlobal("fetch", fetchMock);
 
-    const { createVoyageEmbeddingProvider } = await import("./embeddings-voyage.js");
-    const authModule = await import("../agents/model-auth.js");
-
     vi.mocked(authModule.resolveApiKeyForProvider).mockResolvedValue({
       apiKey: "voyage-key-123",
       mode: "api-key",
@@ -129,7 +124,6 @@ describe("voyage embedding provider", () => {
   });
 
   it("normalizes model names", async () => {
-    const { normalizeVoyageModel } = await import("./embeddings-voyage.js");
     expect(normalizeVoyageModel("voyage/voyage-large-2")).toBe("voyage-large-2");
     expect(normalizeVoyageModel("voyage-4-large")).toBe("voyage-4-large");
     expect(normalizeVoyageModel("  voyage-lite  ")).toBe("voyage-lite");

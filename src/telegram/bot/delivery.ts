@@ -7,6 +7,7 @@ import type { StickerMetadata, TelegramContext } from "./types.js";
 import { chunkMarkdownTextWithMode, type ChunkMode } from "../../auto-reply/chunk.js";
 import { danger, logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { retryAsync } from "../../infra/retry.js";
 import { mediaKindFromMime } from "../../media/constants.js";
 import { fetchRemoteMedia } from "../../media/fetch.js";
 import { isGifMedia } from "../../media/mime.js";
@@ -18,6 +19,7 @@ import {
   markdownToTelegramChunks,
   markdownToTelegramHtml,
   renderTelegramHtmlText,
+  wrapFileReferencesInHtml,
 } from "../format.js";
 import { buildInlineKeyboard } from "../send.js";
 import { cacheSticker, getCachedSticker } from "../sticker-cache.js";
@@ -76,7 +78,9 @@ export async function deliverReplies(params: {
       const nested = markdownToTelegramChunks(chunk, textLimit, { tableMode: params.tableMode });
       if (!nested.length && chunk) {
         chunks.push({
-          html: markdownToTelegramHtml(chunk, { tableMode: params.tableMode }),
+          html: wrapFileReferencesInHtml(
+            markdownToTelegramHtml(chunk, { tableMode: params.tableMode, wrapFileRefs: false }),
+          ),
           text: chunk,
         });
         continue;
@@ -166,7 +170,6 @@ export async function deliverReplies(params: {
         ...(shouldAttachButtonsToMedia ? { reply_markup: replyMarkup } : {}),
         ...buildTelegramSendParams({
           replyToMessageId,
-          replyQuoteText,
           thread,
         }),
       };
@@ -400,7 +403,24 @@ export async function resolveMedia(
   if (!m?.file_id) {
     return null;
   }
-  const file = await ctx.getFile();
+
+  let file: { file_path?: string };
+  try {
+    file = await retryAsync(() => ctx.getFile(), {
+      attempts: 3,
+      minDelayMs: 1000,
+      maxDelayMs: 4000,
+      jitter: 0.2,
+      label: "telegram:getFile",
+      onRetry: ({ attempt, maxAttempts }) =>
+        logVerbose(`telegram: getFile retry ${attempt}/${maxAttempts}`),
+    });
+  } catch (err) {
+    // All retries exhausted — return null so the message still reaches the agent
+    // with a type-based placeholder (e.g. <media:audio>) instead of being dropped.
+    logVerbose(`telegram: getFile failed after retries: ${String(err)}`);
+    return null;
+  }
   if (!file.file_path) {
     throw new Error("Telegram getFile returned no file_path");
   }
@@ -480,20 +500,11 @@ async function sendTelegramVoiceFallbackText(opts: {
 function buildTelegramSendParams(opts?: {
   replyToMessageId?: number;
   thread?: TelegramThreadSpec | null;
-  replyQuoteText?: string;
 }): Record<string, unknown> {
   const threadParams = buildTelegramThreadParams(opts?.thread);
   const params: Record<string, unknown> = {};
-  const quoteText = opts?.replyQuoteText?.trim();
   if (opts?.replyToMessageId) {
-    if (quoteText) {
-      params.reply_parameters = {
-        message_id: Math.trunc(opts.replyToMessageId),
-        quote: quoteText,
-      };
-    } else {
-      params.reply_to_message_id = opts.replyToMessageId;
-    }
+    params.reply_to_message_id = opts.replyToMessageId;
   }
   if (threadParams) {
     params.message_thread_id = threadParams.message_thread_id;
@@ -518,7 +529,6 @@ async function sendTelegramText(
 ): Promise<number | undefined> {
   const baseParams = buildTelegramSendParams({
     replyToMessageId: opts?.replyToMessageId,
-    replyQuoteText: opts?.replyQuoteText,
     thread: opts?.thread,
   });
   // Add link_preview_options when link preview is disabled.

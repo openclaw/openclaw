@@ -1,0 +1,4 @@
+interface:
+  display_name: "Review PR"
+  short_description: "Review GitHub PRs without merging"
+  default_prompt: "Use $review-pr to perform a thorough, review-only GitHub PR review."

@@ -83,7 +83,7 @@ flowchart TD
 
     - [/gateway/troubleshooting#no-replies](/gateway/troubleshooting#no-replies)
     - [/channels/troubleshooting](/channels/troubleshooting)
-    - [/start/pairing](/start/pairing)
+    - [/channels/pairing](/channels/pairing)
 
   </Accordion>
 

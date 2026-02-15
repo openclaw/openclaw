@@ -5,7 +5,7 @@ import type { AuthProfileCredential, OAuthCredential } from "../agents/auth-prof
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type { ChannelDock } from "../channels/dock.js";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.js";
 import type { createVpsAwareOAuthHandlers } from "../commands/oauth-flow.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.js";
@@ -17,6 +17,7 @@ import type { WizardPrompter } from "../wizard/prompts.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
 export type { PluginRuntime } from "./runtime/types.js";
+export type { AnyAgentTool } from "../agents/tools/common.js";
 
 export type PluginLogger = {
   debug?: (message: string) => void;
@@ -140,6 +141,8 @@ export type PluginCommandContext = {
   senderId?: string;
   /** The channel/surface (e.g., "telegram", "discord") */
   channel: string;
+  /** Provider channel id (e.g., "telegram") */
+  channelId?: ChannelId;
   /** Whether the sender is on the allowlist */
   isAuthorizedSender: boolean;
   /** Raw command arguments after the command name */
@@ -148,6 +151,14 @@ export type PluginCommandContext = {
   commandBody: string;
   /** Current OpenClaw configuration */
   config: OpenClawConfig;
+  /** Raw "From" value (channel-scoped id) */
+  from?: string;
+  /** Raw "To" value (channel-scoped id) */
+  to?: string;
+  /** Account id for multi-account channels */
+  accountId?: string;
+  /** Thread/topic id if available */
+  messageThreadId?: number;
 };
 
 /**
@@ -289,6 +300,7 @@ export type PluginHookName =
   | "agent_end"
   | "before_compaction"
   | "after_compaction"
+  | "before_reset"
   | "message_received"
   | "message_sending"
   | "message_sent"
@@ -304,6 +316,7 @@ export type PluginHookName =
 export type PluginHookAgentContext = {
   agentId?: string;
   sessionKey?: string;
+  sessionId?: string;
   workspaceDir?: string;
   messageProvider?: string;
 };
@@ -329,14 +342,33 @@ export type PluginHookAgentEndEvent = {
 
 // Compaction hooks
 export type PluginHookBeforeCompactionEvent = {
+  /** Total messages in the session before any truncation or compaction */
   messageCount: number;
+  /** Messages being fed to the compaction LLM (after history-limit truncation) */
+  compactingCount?: number;
   tokenCount?: number;
+  messages?: unknown[];
+  /** Path to the session JSONL transcript. All messages are already on disk
+   *  before compaction starts, so plugins can read this file asynchronously
+   *  and process in parallel with the compaction LLM call. */
+  sessionFile?: string;
+};
+
+// before_reset hook — fired when /new or /reset clears a session
+export type PluginHookBeforeResetEvent = {
+  sessionFile?: string;
+  messages?: unknown[];
+  reason?: string;
 };
 
 export type PluginHookAfterCompactionEvent = {
   messageCount: number;
   tokenCount?: number;
   compactedCount: number;
+  /** Path to the session JSONL transcript. All pre-compaction messages are
+   *  preserved on disk, so plugins can read and process them asynchronously
+   *  without blocking the compaction pipeline. */
+  sessionFile?: string;
 };
 
 // Message context
@@ -473,6 +505,10 @@ export type PluginHookHandlerMap = {
   ) => Promise<void> | void;
   after_compaction: (
     event: PluginHookAfterCompactionEvent,
+    ctx: PluginHookAgentContext,
+  ) => Promise<void> | void;
+  before_reset: (
+    event: PluginHookBeforeResetEvent,
     ctx: PluginHookAgentContext,
   ) => Promise<void> | void;
   message_received: (

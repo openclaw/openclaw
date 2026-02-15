@@ -70,12 +70,21 @@ export async function resolveDeliveryTarget(
   const mode = resolved.mode as "explicit" | "implicit";
   const toCandidate = resolved.to;
 
+  // Only carry threadId when delivering to the same recipient as the session's
+  // last conversation. This prevents stale thread IDs (e.g. from a Telegram
+  // supergroup topic) from being sent to a different target (e.g. a private
+  // chat) where they would cause API errors.
+  const threadId =
+    resolved.threadId && resolved.to && resolved.to === resolved.lastTo
+      ? resolved.threadId
+      : undefined;
+
   if (!toCandidate) {
     return {
       channel,
       to: undefined,
       accountId: resolved.accountId,
-      threadId: resolved.threadId,
+      threadId,
       mode,
     };
   }
@@ -91,7 +100,7 @@ export async function resolveDeliveryTarget(
     channel,
     to: docked.ok ? docked.to : undefined,
     accountId: resolved.accountId,
-    threadId: resolved.threadId,
+    threadId,
     mode,
     error: docked.ok ? undefined : docked.error,
   };

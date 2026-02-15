@@ -23,3 +23,19 @@ describe("classifySessionKeyShape", () => {
     expect(classifySessionKeyShape("subagent:worker")).toBe("legacy_or_alias");
   });
 });
+
+describe("session key backward compatibility", () => {
+  it("classifies legacy :dm: session keys as valid agent keys", () => {
+    // Legacy session keys use :dm: instead of :direct:
+    // Both should be recognized as valid agent keys
+    expect(classifySessionKeyShape("agent:main:telegram:dm:123456")).toBe("agent");
+    expect(classifySessionKeyShape("agent:main:whatsapp:dm:+15551234567")).toBe("agent");
+    expect(classifySessionKeyShape("agent:main:discord:dm:user123")).toBe("agent");
+  });
+
+  it("classifies new :direct: session keys as valid agent keys", () => {
+    expect(classifySessionKeyShape("agent:main:telegram:direct:123456")).toBe("agent");
+    expect(classifySessionKeyShape("agent:main:whatsapp:direct:+15551234567")).toBe("agent");
+    expect(classifySessionKeyShape("agent:main:discord:direct:user123")).toBe("agent");
+  });
+});

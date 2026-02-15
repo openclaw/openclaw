@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { createServer } from "node:http";
 import { delimiter, dirname, join } from "node:path";
+import { isWSL2Sync } from "openclaw/plugin-sdk";
 
 const CLIENT_ID_KEYS = ["OPENCLAW_GEMINI_OAUTH_CLIENT_ID", "GEMINI_CLI_OAUTH_CLIENT_ID"];
 const CLIENT_SECRET_KEYS = [
@@ -177,32 +178,8 @@ function resolveOAuthClientConfig(): { clientId: string; clientSecret?: string }
   );
 }
 
-function isWSL(): boolean {
-  if (process.platform !== "linux") {
-    return false;
-  }
-  try {
-    const release = readFileSync("/proc/version", "utf8").toLowerCase();
-    return release.includes("microsoft") || release.includes("wsl");
-  } catch {
-    return false;
-  }
-}
-
-function isWSL2(): boolean {
-  if (!isWSL()) {
-    return false;
-  }
-  try {
-    const version = readFileSync("/proc/version", "utf8").toLowerCase();
-    return version.includes("wsl2") || version.includes("microsoft-standard");
-  } catch {
-    return false;
-  }
-}
-
 function shouldUseManualOAuthFlow(isRemote: boolean): boolean {
-  return isRemote || isWSL2();
+  return isRemote || isWSL2Sync();
 }
 
 function generatePkce(): { verifier: string; challenge: string } {
