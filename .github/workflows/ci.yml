@@ -204,6 +204,14 @@ jobs:
         if: matrix.task == 'test' && matrix.runtime == 'node'
         run: echo "OPENCLAW_VITEST_REPORT_DIR=$RUNNER_TEMP/vitest-reports" >> "$GITHUB_ENV"
 
+      - name: Configure Node test resources
+        if: matrix.task == 'test' && matrix.runtime == 'node'
+        run: |
+          # `pnpm test` runs `scripts/test-parallel.mjs`, which spawns multiple Node processes.
+          # Default heap limits have been too low on Linux CI (V8 OOM near 4GB).
+          echo "OPENCLAW_TEST_WORKERS=2" >> "$GITHUB_ENV"
+          echo "OPENCLAW_TEST_MAX_OLD_SPACE_SIZE_MB=6144" >> "$GITHUB_ENV"
+
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         run: ${{ matrix.command }}
 
