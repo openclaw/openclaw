@@ -70,6 +70,22 @@ describe("Ghost reminder bug (issue #13317)", () => {
     return { cfg, sessionKey };
   };
 
+  const expectCronEventPrompt = (
+    getReplySpy: { mock: { calls: unknown[][] } },
+    reminderText: string,
+  ) => {
+    expect(getReplySpy).toHaveBeenCalledTimes(1);
+    const calledCtx = (getReplySpy.mock.calls[0]?.[0] ?? null) as {
+      Provider?: string;
+      Body?: string;
+    } | null;
+    expect(calledCtx?.Provider).toBe("cron-event");
+    expect(calledCtx?.Body).toContain("scheduled reminder has been triggered");
+    expect(calledCtx?.Body).toContain(reminderText);
+    expect(calledCtx?.Body).not.toContain("HEARTBEAT_OK");
+    expect(calledCtx?.Body).not.toContain("heartbeat poll");
+  };
+
   it("does not use CRON_EVENT_PROMPT when only a HEARTBEAT_OK event is present", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ghost-"));
     const sendTelegram = vi.fn().mockResolvedValue({
@@ -131,13 +147,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
       });
 
       expect(result.status).toBe("ran");
-      expect(getReplySpy).toHaveBeenCalledTimes(1);
-      const calledCtx = getReplySpy.mock.calls[0]?.[0];
-      expect(calledCtx?.Provider).toBe("cron-event");
-      expect(calledCtx?.Body).toContain("scheduled reminder has been triggered");
-      expect(calledCtx?.Body).toContain("Reminder: Check Base Scout results");
-      expect(calledCtx?.Body).not.toContain("HEARTBEAT_OK");
-      expect(calledCtx?.Body).not.toContain("heartbeat poll");
+      expectCronEventPrompt(getReplySpy, "Reminder: Check Base Scout results");
       expect(sendTelegram).toHaveBeenCalled();
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
@@ -169,13 +179,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
       });
 
       expect(result.status).toBe("ran");
-      expect(getReplySpy).toHaveBeenCalledTimes(1);
-      const calledCtx = getReplySpy.mock.calls[0]?.[0];
-      expect(calledCtx?.Provider).toBe("cron-event");
-      expect(calledCtx?.Body).toContain("scheduled reminder has been triggered");
-      expect(calledCtx?.Body).toContain("Reminder: Check Base Scout results");
-      expect(calledCtx?.Body).not.toContain("HEARTBEAT_OK");
-      expect(calledCtx?.Body).not.toContain("heartbeat poll");
+      expectCronEventPrompt(getReplySpy, "Reminder: Check Base Scout results");
       expect(sendTelegram).toHaveBeenCalled();
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
