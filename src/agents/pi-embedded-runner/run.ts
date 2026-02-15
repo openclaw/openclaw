@@ -907,6 +907,7 @@ export async function runEmbeddedPiAgent(
             usage,
             lastCallUsage: lastCallUsage ?? undefined,
             promptTokens,
+            contextWindow: ctxInfo.tokens || undefined,
             compactionCount: autoCompactionCount > 0 ? autoCompactionCount : undefined,
           };
 

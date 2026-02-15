@@ -371,8 +371,15 @@ export async function runReplyAgent(params: {
     const cliSessionId = isCliProvider(providerUsed, cfg)
       ? runResult.meta.agentMeta?.sessionId?.trim()
       : undefined;
+    // Prefer the runtime-reported context window from the agent run. The model
+    // registry (`lookupContextTokens`) can return incorrect values — e.g. Z.ai
+    // reports 400K for glm-5 in the registry but the actual usable window is
+    // 200K. The runtime value comes from the resolved model config and is more
+    // reliable. See: https://github.com/openclaw/openclaw/issues/15153
+    const runtimeContextWindow = runResult.meta.agentMeta?.contextWindow;
     const contextTokensUsed =
       agentCfgContextTokens ??
+      runtimeContextWindow ??
       lookupContextTokens(modelUsed) ??
       activeSessionEntry?.contextTokens ??
       DEFAULT_CONTEXT_TOKENS;

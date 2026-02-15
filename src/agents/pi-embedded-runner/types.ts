@@ -15,6 +15,13 @@ export type EmbeddedPiAgentMeta = {
     total?: number;
   };
   /**
+   * The model's context window size as reported at runtime. This is more
+   * reliable than `lookupContextTokens()` which reads from a static model
+   * registry that may have stale or incorrect values (e.g. Z.ai reports
+   * 400K for glm-5 in the registry but the actual usable window is 200K).
+   */
+  contextWindow?: number;
+  /**
    * Usage from the last individual API call (not accumulated across tool-use
    * loops or compaction retries). Used for context-window utilization display
    * (`totalTokens` in sessions.json) because the accumulated `usage.input`
