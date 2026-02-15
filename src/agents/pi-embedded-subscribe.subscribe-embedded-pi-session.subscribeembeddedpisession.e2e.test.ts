@@ -1,5 +1,9 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
+import {
+  createStubSessionHarness,
+  extractAgentEventPayloads,
+} from "./pi-embedded-subscribe.e2e-harness.js";
 import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
 
 type StubSession = {
@@ -186,18 +190,12 @@ describe("subscribeEmbeddedPiSession", () => {
   });
 
   it("emits agent events on message_end for non-streaming assistant text", () => {
-    let handler: ((evt: unknown) => void) | undefined;
-    const session: StubSession = {
-      subscribe: (fn) => {
-        handler = fn;
-        return () => {};
-      },
-    };
+    const { session, emit } = createStubSessionHarness();
 
     const onAgentEvent = vi.fn();
 
     subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
+      session,
       runId: "run",
       onAgentEvent,
     });
@@ -207,12 +205,10 @@ describe("subscribeEmbeddedPiSession", () => {
       content: [{ type: "text", text: "Hello world" }],
     } as AssistantMessage;
 
-    handler?.({ type: "message_start", message: assistantMessage });
-    handler?.({ type: "message_end", message: assistantMessage });
+    emit({ type: "message_start", message: assistantMessage });
+    emit({ type: "message_end", message: assistantMessage });
 
-    const payloads = onAgentEvent.mock.calls
-      .map((call) => call[0]?.data as Record<string, unknown> | undefined)
-      .filter((value): value is Record<string, unknown> => Boolean(value));
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
     expect(payloads).toHaveLength(1);
     expect(payloads[0]?.text).toBe("Hello world");
     expect(payloads[0]?.delta).toBe("Hello world");
