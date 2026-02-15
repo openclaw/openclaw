@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveTelegramAccount } from "./accounts.js";
+import { resolveTelegramAccount, resolveDefaultTelegramAccountId } from "./accounts.js";
 
 describe("resolveTelegramAccount", () => {
   it("falls back to the first configured account when accountId is omitted", () => {
@@ -70,6 +70,39 @@ describe("resolveTelegramAccount", () => {
         process.env.TELEGRAM_BOT_TOKEN = prevTelegramToken;
       }
     }
+  });
+
+  it("prefers named account over default when both exist", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          botToken: "tok-default",
+          accounts: {
+            default: { botToken: "tok-default" },
+            mybot: { botToken: "tok-mybot" },
+          },
+        },
+      },
+    };
+
+    const accountId = resolveDefaultTelegramAccountId(cfg);
+    expect(accountId).toBe("mybot");
+  });
+
+  it("returns default when it is the only account", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          botToken: "tok-default",
+          accounts: {
+            default: { botToken: "tok-default" },
+          },
+        },
+      },
+    };
+
+    const accountId = resolveDefaultTelegramAccountId(cfg);
+    expect(accountId).toBe("default");
   });
 
   it("does not fall back when accountId is explicitly provided", () => {
