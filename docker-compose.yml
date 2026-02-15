@@ -25,7 +25,6 @@ services:
     ports:
       - "${OPENCLAW_GATEWAY_PORT:-18789}:18789"
       - "${OPENCLAW_BRIDGE_PORT:-18790}:18790"
-      - "3002:3000"
     init: true
     restart: unless-stopped
     command:
@@ -57,6 +56,20 @@ services:
     tty: true
     init: true
     entrypoint: ["node", "dist/index.js"]
+
+  mission-control:
+    image: node:22-bookworm-slim
+    working_dir: /app
+    environment:
+      DATABASE_URL: postgresql://postgres:claw@mission-control-db:5432/mission_control
+    volumes:
+      - ${OPENCLAW_WORKSPACE_DIR}/mission-control:/app
+    depends_on:
+      - mission-control-db
+    ports:
+      - "3002:3000"
+    restart: unless-stopped
+    command: sh -c "apt-get update -qq && apt-get install -y -qq openssl > /dev/null 2>&1 && npx prisma migrate deploy && npm run build && npm start"
 
   mission-control-db:
     image: postgres:16
