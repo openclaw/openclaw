@@ -572,6 +572,40 @@ calc-cli --expr '10 % 3'       # {"expression":"10 % 3","result":1}
 echo '2**10' | calc-cli --stdin # {"expression":"2**10","result":1024}
 ```
 
+#### date-remind（日期提醒）
+
+日期提醒 CLI（Rust 静态二进制）。源码在 `cli/date-remind/`，功能：
+
+- 内置生日和纪念日数据（编译时嵌入，无需外部文件）
+- 支持农历（含闰月）和阳历日期
+- 自动计算下次发生日期、剩余天数、年龄、生肖、星座
+- 输出 JSON 格式，~845KB
+
+**本地交叉编译**（Windows → Linux 静态二进制）：
+
+```bash
+$env:CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER='rust-lld'
+cargo build --release --target x86_64-unknown-linux-musl --manifest-path cli/date-remind/Cargo.toml
+
+# 产物：cli/date-remind/target/x86_64-unknown-linux-musl/release/date-remind (~845KB)
+```
+
+**上传到服务器**：
+
+```bash
+scp cli/date-remind/target/x86_64-unknown-linux-musl/release/date-remind root@c.leot.fun:/opt/leot_svr/tools/bin/
+ssh root@c.leot.fun chmod +x /opt/leot_svr/tools/bin/date-remind
+```
+
+**用法示例**：
+
+```bash
+date-remind summary                    # 所有人的日期摘要 JSON {total, items}
+date-remind remind --days 30           # 未来 30 天内的提醒
+date-remind remind --days 0            # 今天的提醒
+date-remind remind                     # 默认未来 7 天的提醒
+```
+
 ### 3. 启动命令加挂载
 
 在 `podman run` 命令中添加两行（对比步骤 6）：
