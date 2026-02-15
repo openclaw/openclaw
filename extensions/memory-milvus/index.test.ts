@@ -302,7 +302,7 @@ describeLive("memory-milvus plugin live tests", () => {
         const client = new MilvusClient({
           address: MILVUS_ADDRESS,
           token: MILVUS_TOKEN || undefined,
-          ssl: MILVUS_ADDRESS.startsWith("https"),
+          ssl: MILVUS_ADDRESS.startsWith("https://"),
         });
         await client.dropCollection({ collection_name: testCollectionName });
       } catch {
