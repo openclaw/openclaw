@@ -3,11 +3,27 @@ import { stripAnsi } from "../terminal/ansi.js";
 import { formatTokenCount } from "../utils/usage-format.js";
 
 const REPLACEMENT_CHAR_RE = /\uFFFD/g;
-const LONG_TOKEN_RE = /\S{97,}/g;
-const MAX_TOKEN_CHARS = 64;
+const MAX_TOKEN_CHARS = 32;
+const LONG_TOKEN_RE = /\S{33,}/g;
+const LONG_TOKEN_TEST_RE = /\S{33,}/;
 const BINARY_LINE_REPLACEMENT_THRESHOLD = 12;
 
+function hasControlChars(text: string): boolean {
+  for (const char of text) {
+    const code = char.charCodeAt(0);
+    const isAsciiControl = code <= 0x1f && code !== 0x09 && code !== 0x0a && code !== 0x0d;
+    const isC1Control = code >= 0x7f && code <= 0x9f;
+    if (isAsciiControl || isC1Control) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function stripControlChars(text: string): string {
+  if (!hasControlChars(text)) {
+    return text;
+  }
   let sanitized = "";
   for (const char of text) {
     const code = char.charCodeAt(0);
@@ -46,13 +62,26 @@ export function sanitizeRenderableText(text: string): string {
   if (!text) {
     return text;
   }
-  const withoutAnsi = stripAnsi(text);
-  const withoutControlChars = stripControlChars(withoutAnsi);
-  const redacted = withoutControlChars
-    .split("\n")
-    .map((line) => redactBinaryLikeLine(line))
-    .join("\n");
-  return redacted.replace(LONG_TOKEN_RE, (token) => chunkToken(token, MAX_TOKEN_CHARS).join(" "));
+
+  const hasAnsi = text.includes("\u001b");
+  const hasReplacementChars = text.includes("\uFFFD");
+  const hasLongTokens = LONG_TOKEN_TEST_RE.test(text);
+  const hasControls = hasControlChars(text);
+  if (!hasAnsi && !hasReplacementChars && !hasLongTokens && !hasControls) {
+    return text;
+  }
+
+  const withoutAnsi = hasAnsi ? stripAnsi(text) : text;
+  const withoutControlChars = hasControls ? stripControlChars(withoutAnsi) : withoutAnsi;
+  const redacted = hasReplacementChars
+    ? withoutControlChars
+        .split("\n")
+        .map((line) => redactBinaryLikeLine(line))
+        .join("\n")
+    : withoutControlChars;
+  return LONG_TOKEN_TEST_RE.test(redacted)
+    ? redacted.replace(LONG_TOKEN_RE, (token) => chunkToken(token, MAX_TOKEN_CHARS).join(" "))
+    : redacted;
 }
 
 export function resolveFinalAssistantText(params: {
