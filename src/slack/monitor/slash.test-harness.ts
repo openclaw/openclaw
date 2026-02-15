@@ -1,4 +1,4 @@
-import { vi } from "vitest";
+import { vi, type MockInstance } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   dispatchMock: vi.fn(),
@@ -29,10 +29,10 @@ vi.mock("../../agents/identity.js", async (importOriginal) => {
 });
 
 type SlashHarnessMocks = {
-  dispatchMock: ReturnType<typeof vi.fn>;
-  readAllowFromStoreMock: ReturnType<typeof vi.fn>;
-  upsertPairingRequestMock: ReturnType<typeof vi.fn>;
-  resolveAgentRouteMock: ReturnType<typeof vi.fn>;
+  dispatchMock: MockInstance;
+  readAllowFromStoreMock: MockInstance;
+  upsertPairingRequestMock: MockInstance;
+  resolveAgentRouteMock: MockInstance;
 };
 
 export function getSlackSlashMocks(): SlashHarnessMocks {
