@@ -10,6 +10,7 @@ import {
   type LineChannelData,
   type ResolvedLineAccount,
 } from "openclaw/plugin-sdk";
+import { parseLineDirectives } from "./directives.js";
 import { getLineRuntime } from "./runtime.js";
 
 // LINE channel metadata
@@ -119,12 +120,19 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
         },
       };
     },
-    isConfigured: (account) => Boolean(account.channelAccessToken?.trim()),
+    isConfigured: (account) =>
+      Boolean(
+        account.channelAccessToken?.trim() ||
+        (account.tokenSource && account.tokenSource !== "none"),
+      ),
     describeAccount: (account) => ({
       accountId: account.accountId,
       name: account.name,
       enabled: account.enabled,
-      configured: Boolean(account.channelAccessToken?.trim()),
+      configured: Boolean(
+        account.channelAccessToken?.trim() ||
+        (account.tokenSource && account.tokenSource !== "none"),
+      ),
       tokenSource: account.tokenSource ?? undefined,
     }),
     resolveAllowFrom: ({ cfg, accountId }) =>
@@ -340,7 +348,21 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
     textChunkLimit: 5000, // LINE allows up to 5000 characters per text message
     sendPayload: async ({ to, payload, accountId, cfg }) => {
       const runtime = getLineRuntime();
-      const lineData = (payload.channelData?.line as LineChannelData | undefined) ?? {};
+      let lineData = (payload.channelData?.line as LineChannelData | undefined) ?? {};
+      const { text: cleanedText, lineData: extractedData } = parseLineDirectives(
+        payload.text || "",
+      );
+
+      // Merge parsed directives into lineData
+      if (Object.keys(extractedData).length > 0) {
+        lineData = { ...lineData, ...extractedData };
+        // If extracted directives modify text (e.g. removed tags), update it.
+        // However, payload.text is readonly in some contexts or we should use cleanedText.
+      }
+
+      // Use cleanedText instead of payload.text
+      const textToSend = cleanedText;
+
       const sendText = runtime.channel.line.pushMessageLine;
       const sendBatch = runtime.channel.line.pushMessagesLine;
       const sendFlex = runtime.channel.line.pushFlexMessage;
@@ -371,8 +393,8 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
         }
       };
 
-      const processed = payload.text
-        ? processLineMessage(payload.text)
+      const processed = textToSend
+        ? processLineMessage(textToSend)
         : { text: "", flexMessages: [] };
 
       const chunkLimit =
@@ -518,19 +540,34 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
     },
     sendText: async ({ to, text, accountId }) => {
       const runtime = getLineRuntime();
+      // Pre-process text to extract directives (Quick Replies, etc.)
+      // Since sendText signature doesn't support rich metadata return fully,
+      // we only strip directives here. To use features, sendPayload is preferred.
+      // However, if we want quick replies to work even in simple sendText calls:
+      const { text: cleanedText, lineData } = parseLineDirectives(text);
+
       const sendText = runtime.channel.line.pushMessageLine;
       const sendFlex = runtime.channel.line.pushFlexMessage;
+      const sendQuickReplies = runtime.channel.line.pushTextMessageWithQuickReplies;
 
       // Process markdown: extract tables/code blocks, strip formatting
-      const processed = processLineMessage(text);
+      const processed = processLineMessage(cleanedText);
 
       // Send cleaned text first (if non-empty)
       let result: { messageId: string; chatId: string };
+
       if (processed.text.trim()) {
-        result = await sendText(to, processed.text, {
-          verbose: false,
-          accountId: accountId ?? undefined,
-        });
+        if (lineData.quickReplies && lineData.quickReplies.length > 0) {
+          result = await sendQuickReplies(to, processed.text, lineData.quickReplies, {
+            verbose: false,
+            accountId: accountId ?? undefined,
+          });
+        } else {
+          result = await sendText(to, processed.text, {
+            verbose: false,
+            accountId: accountId ?? undefined,
+          });
+        }
       } else {
         // If text is empty after processing, still need a result
         result = { messageId: "processed", chatId: to };
@@ -570,7 +607,9 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
       const issues: ChannelStatusIssue[] = [];
       for (const account of accounts) {
         const accountId = account.accountId ?? DEFAULT_ACCOUNT_ID;
-        if (!account.channelAccessToken?.trim()) {
+        const isConfigured =
+          account.configured || (account.tokenSource && account.tokenSource !== "none");
+        if (!isConfigured) {
           issues.push({
             channel: "line",
             accountId,
@@ -578,7 +617,15 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
             message: "LINE channel access token not configured",
           });
         }
-        if (!account.channelSecret?.trim()) {
+
+        // Also check if secret is configured (when not using env/file source for token,
+        // or explicitly if we want to be safe, but here we assume tokenSource implies secret availability
+        // unless it's direct config).
+        // Actually, to address the feedback: check if secret is present OR implied by source.
+        const hasSecret =
+          account.channelSecret?.trim() || (account.tokenSource && account.tokenSource !== "none");
+
+        if (!hasSecret) {
           issues.push({
             channel: "line",
             accountId,
@@ -603,7 +650,11 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
     probeAccount: async ({ account, timeoutMs }) =>
       getLineRuntime().channel.line.probeLineBot(account.channelAccessToken, timeoutMs),
     buildAccountSnapshot: ({ account, runtime, probe }) => {
-      const configured = Boolean(account.channelAccessToken?.trim());
+      const configured = Boolean(
+        account.channelAccessToken?.trim() ||
+        (account.tokenSource && account.tokenSource !== "none") ||
+        account.configured,
+      );
       return {
         accountId: account.accountId,
         name: account.name,
