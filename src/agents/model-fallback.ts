@@ -55,19 +55,10 @@ function shouldRethrowAbort(err: unknown): boolean {
   return isFallbackAbortError(err) && !isTimeoutError(err);
 }
 
-function resolveImageFallbackCandidates(params: {
-  cfg: OpenClawConfig | undefined;
-  defaultProvider: string;
-  modelOverride?: string;
-}): ModelCandidate[] {
-  const aliasIndex = buildModelAliasIndex({
-    cfg: params.cfg ?? {},
-    defaultProvider: params.defaultProvider,
-  });
-  const allowlist = buildConfiguredAllowlistKeys({
-    cfg: params.cfg,
-    defaultProvider: params.defaultProvider,
-  });
+function createModelCandidateCollector(allowlist: Set<string> | null | undefined): {
+  candidates: ModelCandidate[];
+  addCandidate: (candidate: ModelCandidate, enforceAllowlist: boolean) => void;
+} {
   const seen = new Set<string>();
   const candidates: ModelCandidate[] = [];
 
@@ -85,6 +76,39 @@ function resolveImageFallbackCandidates(params: {
     seen.add(key);
     candidates.push(candidate);
   };
+
+  return { candidates, addCandidate };
+}
+
+type ModelFallbackErrorHandler = (attempt: {
+  provider: string;
+  model: string;
+  error: unknown;
+  attempt: number;
+  total: number;
+}) => void | Promise<void>;
+
+type ModelFallbackRunResult<T> = {
+  result: T;
+  provider: string;
+  model: string;
+  attempts: FallbackAttempt[];
+};
+
+function resolveImageFallbackCandidates(params: {
+  cfg: OpenClawConfig | undefined;
+  defaultProvider: string;
+  modelOverride?: string;
+}): ModelCandidate[] {
+  const aliasIndex = buildModelAliasIndex({
+    cfg: params.cfg ?? {},
+    defaultProvider: params.defaultProvider,
+  });
+  const allowlist = buildConfiguredAllowlistKeys({
+    cfg: params.cfg,
+    defaultProvider: params.defaultProvider,
+  });
+  const { candidates, addCandidate } = createModelCandidateCollector(allowlist);
 
   const addRaw = (raw: string, enforceAllowlist: boolean) => {
     const resolved = resolveModelRefFromString({
@@ -156,23 +180,7 @@ function resolveFallbackCandidates(params: {
     cfg: params.cfg,
     defaultProvider,
   });
-  const seen = new Set<string>();
-  const candidates: ModelCandidate[] = [];
-
-  const addCandidate = (candidate: ModelCandidate, enforceAllowlist: boolean) => {
-    if (!candidate.provider || !candidate.model) {
-      return;
-    }
-    const key = modelKey(candidate.provider, candidate.model);
-    if (seen.has(key)) {
-      return;
-    }
-    if (enforceAllowlist && allowlist && !allowlist.has(key)) {
-      return;
-    }
-    seen.add(key);
-    candidates.push(candidate);
-  };
+  const { candidates, addCandidate } = createModelCandidateCollector(allowlist);
 
   addCandidate(normalizedPrimary, false);
 
@@ -217,19 +225,8 @@ export async function runWithModelFallback<T>(params: {
   /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
   fallbacksOverride?: string[];
   run: (provider: string, model: string) => Promise<T>;
-  onError?: (attempt: {
-    provider: string;
-    model: string;
-    error: unknown;
-    attempt: number;
-    total: number;
-  }) => void | Promise<void>;
-}): Promise<{
-  result: T;
-  provider: string;
-  model: string;
-  attempts: FallbackAttempt[];
-}> {
+  onError?: ModelFallbackErrorHandler;
+}): Promise<ModelFallbackRunResult<T>> {
   const candidates = resolveFallbackCandidates({
     cfg: params.cfg,
     provider: params.provider,
@@ -335,19 +332,8 @@ export async function runWithImageModelFallback<T>(params: {
   cfg: OpenClawConfig | undefined;
   modelOverride?: string;
   run: (provider: string, model: string) => Promise<T>;
-  onError?: (attempt: {
-    provider: string;
-    model: string;
-    error: unknown;
-    attempt: number;
-    total: number;
-  }) => void | Promise<void>;
-}): Promise<{
-  result: T;
-  provider: string;
-  model: string;
-  attempts: FallbackAttempt[];
-}> {
+  onError?: ModelFallbackErrorHandler;
+}): Promise<ModelFallbackRunResult<T>> {
   const candidates = resolveImageFallbackCandidates({
     cfg: params.cfg,
     defaultProvider: DEFAULT_PROVIDER,
