@@ -241,6 +241,24 @@ export function normalizeExecApprovals(file: ExecApprovalsFile): ExecApprovalsFi
   return normalized;
 }
 
+export function mergeExecApprovalsSocketDefaults(params: {
+  normalized: ExecApprovalsFile;
+  current?: ExecApprovalsFile;
+}): ExecApprovalsFile {
+  const currentSocketPath = params.current?.socket?.path?.trim();
+  const currentToken = params.current?.socket?.token?.trim();
+  const socketPath =
+    params.normalized.socket?.path?.trim() ?? currentSocketPath ?? resolveExecApprovalsSocketPath();
+  const token = params.normalized.socket?.token?.trim() ?? currentToken ?? "";
+  return {
+    ...params.normalized,
+    socket: {
+      path: socketPath,
+      token,
+    },
+  };
+}
+
 function generateToken(): string {
   return crypto.randomBytes(24).toString("base64url");
 }

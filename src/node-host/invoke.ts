@@ -12,12 +12,12 @@ import {
   evaluateShellAllowlist,
   requiresExecApproval,
   normalizeExecApprovals,
+  mergeExecApprovalsSocketDefaults,
   recordAllowlistUse,
   resolveExecApprovals,
   resolveSafeBins,
   ensureExecApprovals,
   readExecApprovalsSnapshot,
-  resolveExecApprovalsSocketPath,
   saveExecApprovals,
   type ExecAsk,
   type ExecApprovalsFile,
@@ -422,18 +422,7 @@ export async function handleInvoke(
       const snapshot = readExecApprovalsSnapshot();
       requireExecApprovalsBaseHash(params, snapshot);
       const normalized = normalizeExecApprovals(params.file);
-      const currentSocketPath = snapshot.file.socket?.path?.trim();
-      const currentToken = snapshot.file.socket?.token?.trim();
-      const socketPath =
-        normalized.socket?.path?.trim() ?? currentSocketPath ?? resolveExecApprovalsSocketPath();
-      const token = normalized.socket?.token?.trim() ?? currentToken ?? "";
-      const next: ExecApprovalsFile = {
-        ...normalized,
-        socket: {
-          path: socketPath,
-          token,
-        },
-      };
+      const next = mergeExecApprovalsSocketDefaults({ normalized, current: snapshot.file });
       saveExecApprovals(next);
       const nextSnapshot = readExecApprovalsSnapshot();
       const payload: ExecApprovalsSnapshot = {
