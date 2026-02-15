@@ -41,6 +41,7 @@ const TELEGRAM_MEDIA_SSRF_POLICY = {
   allowedHostnames: ["api.telegram.org"],
   allowRfc2544BenchmarkRange: true,
 };
+const EMPTY_TEXT_ERR_RE = /message text is empty/i;
 
 export async function deliverReplies(params: {
   replies: ReplyPayload[];
@@ -553,6 +554,30 @@ async function sendTelegramText(
   const linkPreviewOptions = linkPreviewEnabled ? undefined : { is_disabled: true };
   const textMode = opts?.textMode ?? "markdown";
   const htmlText = textMode === "html" ? text : markdownToTelegramHtml(text);
+  const fallbackText = opts?.plainText ?? text;
+  const hasFallbackText = fallbackText.trim().length > 0;
+  const sendPlainFallback = async () => {
+    if (!hasFallbackText) {
+      return undefined;
+    }
+    const res = await withTelegramApiErrorLogging({
+      operation: "sendMessage",
+      runtime,
+      fn: () =>
+        bot.api.sendMessage(chatId, fallbackText, {
+          ...(linkPreviewOptions ? { link_preview_options: linkPreviewOptions } : {}),
+          ...(opts?.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
+          ...baseParams,
+        }),
+    });
+    return res.message_id;
+  };
+
+  // Markdown can occasionally render to empty HTML (for example syntax-only chunks).
+  // Telegram rejects those sends, so fall back to plain text early.
+  if (!htmlText.trim()) {
+    return await sendPlainFallback();
+  }
   try {
     const res = await withTelegramApiErrorLogging({
       operation: "sendMessage",
@@ -570,21 +595,9 @@ async function sendTelegramText(
     return res.message_id;
   } catch (err) {
     const errText = formatErrorMessage(err);
-    if (PARSE_ERR_RE.test(errText)) {
-      runtime.log?.(`telegram HTML parse failed; retrying without formatting: ${errText}`);
-      const fallbackText = opts?.plainText ?? text;
-      const res = await withTelegramApiErrorLogging({
-        operation: "sendMessage",
-        runtime,
-        fn: () =>
-          bot.api.sendMessage(chatId, fallbackText, {
-            ...(linkPreviewOptions ? { link_preview_options: linkPreviewOptions } : {}),
-            ...(opts?.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
-            ...baseParams,
-          }),
-      });
-      runtime.log?.(`telegram sendMessage ok chat=${chatId} message=${res.message_id} (plain)`);
-      return res.message_id;
+    if (PARSE_ERR_RE.test(errText) || EMPTY_TEXT_ERR_RE.test(errText)) {
+      runtime.log?.(`telegram formatted send failed; retrying without formatting: ${errText}`);
+      return await sendPlainFallback();
     }
     throw err;
   }
