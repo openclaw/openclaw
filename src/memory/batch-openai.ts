@@ -1,5 +1,5 @@
 import type { OpenAiEmbeddingClient } from "./embeddings-openai.js";
-import { retryAsync } from "../infra/retry.js";
+import { postJsonWithRetry } from "./batch-http.js";
 import { applyEmbeddingBatchOutputLine } from "./batch-output.js";
 import { hashText, runWithConcurrency } from "./internal.js";
 
@@ -96,43 +96,20 @@ async function submitOpenAiBatch(params: {
     throw new Error("openai batch file upload failed: missing file id");
   }
 
-  const batchRes = await retryAsync(
-    async () => {
-      const res = await fetch(`${baseUrl}/batches`, {
-        method: "POST",
-        headers: getOpenAiHeaders(params.openAi, { json: true }),
-        body: JSON.stringify({
-          input_file_id: filePayload.id,
-          endpoint: OPENAI_BATCH_ENDPOINT,
-          completion_window: OPENAI_BATCH_COMPLETION_WINDOW,
-          metadata: {
-            source: "openclaw-memory",
-            agent: params.agentId,
-          },
-        }),
-      });
-      if (!res.ok) {
-        const text = await res.text();
-        const err = new Error(`openai batch create failed: ${res.status} ${text}`) as Error & {
-          status?: number;
-        };
-        err.status = res.status;
-        throw err;
-      }
-      return res;
-    },
-    {
-      attempts: 3,
-      minDelayMs: 300,
-      maxDelayMs: 2000,
-      jitter: 0.2,
-      shouldRetry: (err) => {
-        const status = (err as { status?: number }).status;
-        return status === 429 || (typeof status === "number" && status >= 500);
+  return await postJsonWithRetry<OpenAiBatchStatus>({
+    url: `${baseUrl}/batches`,
+    headers: getOpenAiHeaders(params.openAi, { json: true }),
+    body: {
+      input_file_id: filePayload.id,
+      endpoint: OPENAI_BATCH_ENDPOINT,
+      completion_window: OPENAI_BATCH_COMPLETION_WINDOW,
+      metadata: {
+        source: "openclaw-memory",
+        agent: params.agentId,
       },
     },
-  );
-  return (await batchRes.json()) as OpenAiBatchStatus;
+    errorPrefix: "openai batch create failed",
+  });
 }
 
 async function fetchOpenAiBatchStatus(params: {
