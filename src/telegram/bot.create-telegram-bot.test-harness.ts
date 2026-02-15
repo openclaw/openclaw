@@ -176,6 +176,56 @@ export const getOnHandler = (event: string) => {
   return handler as (ctx: Record<string, unknown>) => Promise<void>;
 };
 
+export function makeTelegramMessageCtx(params: {
+  chat: {
+    id: number;
+    type: string;
+    title?: string;
+    is_forum?: boolean;
+  };
+  from: { id: number; username?: string };
+  text: string;
+  date?: number;
+  messageId?: number;
+  messageThreadId?: number;
+}) {
+  return {
+    message: {
+      chat: params.chat,
+      from: params.from,
+      text: params.text,
+      date: params.date ?? 1736380800,
+      message_id: params.messageId ?? 42,
+      ...(params.messageThreadId === undefined
+        ? {}
+        : { message_thread_id: params.messageThreadId }),
+    },
+    me: { username: "openclaw_bot" },
+    getFile: async () => ({ download: async () => new Uint8Array() }),
+  };
+}
+
+export function makeForumGroupMessageCtx(params?: {
+  chatId?: number;
+  threadId?: number;
+  text?: string;
+  fromId?: number;
+  username?: string;
+  title?: string;
+}) {
+  return makeTelegramMessageCtx({
+    chat: {
+      id: params?.chatId ?? -1001234567890,
+      type: "supergroup",
+      title: params?.title ?? "Forum Group",
+      is_forum: true,
+    },
+    from: { id: params?.fromId ?? 12345, username: params?.username ?? "testuser" },
+    text: params?.text ?? "hello",
+    messageThreadId: params?.threadId,
+  });
+}
+
 beforeEach(() => {
   resetInboundDedupe();
   loadConfig.mockReturnValue({

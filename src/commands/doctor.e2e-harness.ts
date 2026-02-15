@@ -270,9 +270,9 @@ export async function arrangeLegacyStateMigrationTest(): Promise<unknown> {
 
   const { doctorCommand } = await import("./doctor.js");
   const runtime = {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
+    log: vi.fn() as unknown as MockFn,
+    error: vi.fn() as unknown as MockFn,
+    exit: vi.fn() as unknown as MockFn,
   };
 
   detectLegacyStateMigrations.mockClear();
