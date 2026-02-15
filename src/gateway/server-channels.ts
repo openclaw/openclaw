@@ -109,7 +109,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
 
     await Promise.all(
       accountIds.map(async (id) => {
-        try {
+          try {
         if (store.tasks.has(id)) {
           return;
         }
