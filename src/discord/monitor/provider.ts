@@ -509,7 +509,10 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     guildEntries,
   });
 
-  registerDiscordListener(client.listeners, new DiscordMessageListener(messageHandler, logger));
+  registerDiscordListener(
+    client.listeners,
+    new DiscordMessageListener(messageHandler, logger, botUserId),
+  );
   registerDiscordListener(
     client.listeners,
     new DiscordReactionListener({

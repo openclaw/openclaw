@@ -79,11 +79,16 @@ export class DiscordMessageListener extends MessageCreateListener {
   constructor(
     private handler: DiscordMessageHandler,
     private logger?: Logger,
+    private botUserId?: string,
   ) {
     super();
   }
 
   async handle(data: DiscordMessageEvent, client: Client) {
+    // Filter bot-own messages immediately to avoid unnecessary pipeline processing (#15874)
+    if (this.botUserId && data.author?.id === this.botUserId) {
+      return;
+    }
     const startedAt = Date.now();
     const task = Promise.resolve(this.handler(data, client));
     void task
