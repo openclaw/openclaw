@@ -82,7 +82,7 @@ describe("memory plugin e2e", () => {
     delete process.env.TEST_MEMORY_API_KEY;
   });
 
-  test("config schema rejects missing apiKey", async () => {
+  test("config schema rejects missing apiKey when using OpenAI", async () => {
     const { default: memoryPlugin } = await import("./index.js");
 
     expect(() => {
@@ -90,7 +90,24 @@ describe("memory plugin e2e", () => {
         embedding: {},
         dbPath,
       });
-    }).toThrow("embedding.apiKey is required");
+    }).toThrow(/embedding\.apiKey is required when using OpenAI/);
+  });
+
+  test("config schema accepts Ollama config (baseUrl, model, no apiKey)", async () => {
+    const { default: memoryPlugin } = await import("./index.js");
+
+    const config = memoryPlugin.configSchema?.parse?.({
+      embedding: {
+        baseUrl: "http://localhost:11434/v1",
+        model: "nomic-embed-text",
+      },
+      dbPath,
+    });
+
+    expect(config).toBeDefined();
+    expect(config?.embedding?.baseUrl).toBe("http://localhost:11434/v1");
+    expect(config?.embedding?.model).toBe("nomic-embed-text");
+    expect(config?.embedding?.apiKey).toBeUndefined();
   });
 
   test("config schema validates captureMaxChars range", async () => {

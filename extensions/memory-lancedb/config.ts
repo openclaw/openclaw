@@ -4,9 +4,15 @@ import { join } from "node:path";
 
 export type MemoryConfig = {
   embedding: {
+    /** "openai" = OpenAI API or any OpenAI-compatible endpoint (e.g. Ollama). */
     provider: "openai";
     model?: string;
-    apiKey: string;
+    /** Required when using OpenAI; optional when baseUrl points to a local endpoint (e.g. Ollama). */
+    apiKey?: string;
+    /** Base URL for the embeddings API (e.g. https://api.openai.com/v1 or http://localhost:11434/v1 for Ollama). */
+    baseUrl?: string;
+    /** Vector dimensions; required when model is not in the known list (e.g. Ollama models). */
+    dimensions?: number;
   };
   dbPath?: string;
   autoCapture?: boolean;
@@ -17,6 +23,7 @@ export type MemoryConfig = {
 export const MEMORY_CATEGORIES = ["preference", "fact", "decision", "entity", "other"] as const;
 export type MemoryCategory = (typeof MEMORY_CATEGORIES)[number];
 
+const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_MODEL = "text-embedding-3-small";
 export const DEFAULT_CAPTURE_MAX_CHARS = 500;
 const LEGACY_STATE_DIRS: string[] = [];
@@ -51,6 +58,9 @@ const DEFAULT_DB_PATH = resolveDefaultDbPath();
 const EMBEDDING_DIMENSIONS: Record<string, number> = {
   "text-embedding-3-small": 1536,
   "text-embedding-3-large": 3072,
+  // Ollama / OpenAI-compatible local models
+  "nomic-embed-text": 768,
+  "mxbai-embed-large": 1024,
 };
 
 function assertAllowedKeys(value: Record<string, unknown>, allowed: string[], label: string) {
@@ -61,10 +71,15 @@ function assertAllowedKeys(value: Record<string, unknown>, allowed: string[], la
   throw new Error(`${label} has unknown keys: ${unknown.join(", ")}`);
 }
 
-export function vectorDimsForModel(model: string): number {
+export function vectorDimsForModel(model: string, explicitDimensions?: number): number {
+  if (typeof explicitDimensions === "number" && explicitDimensions > 0) {
+    return explicitDimensions;
+  }
   const dims = EMBEDDING_DIMENSIONS[model];
   if (!dims) {
-    throw new Error(`Unsupported embedding model: ${model}`);
+    throw new Error(
+      `Unknown embedding model "${model}". Set embedding.dimensions for OpenAI-compatible models (e.g. Ollama).`,
+    );
   }
   return dims;
 }
@@ -79,10 +94,36 @@ function resolveEnvVars(value: string): string {
   });
 }
 
-function resolveEmbeddingModel(embedding: Record<string, unknown>): string {
-  const model = typeof embedding.model === "string" ? embedding.model : DEFAULT_MODEL;
-  vectorDimsForModel(model);
-  return model;
+function resolveEmbeddingConfig(embedding: Record<string, unknown>): {
+  model: string;
+  apiKey: string | undefined;
+  baseUrl: string;
+  dimensions: number | undefined;
+} {
+  const baseUrlRaw = typeof embedding.baseUrl === "string" ? embedding.baseUrl.trim() : "";
+  const baseUrl = baseUrlRaw || DEFAULT_OPENAI_BASE_URL;
+  const isOpenAiCloud = baseUrl === DEFAULT_OPENAI_BASE_URL || !baseUrlRaw;
+
+  const apiKeyRaw = embedding.apiKey;
+  if (isOpenAiCloud && (typeof apiKeyRaw !== "string" || !apiKeyRaw.trim())) {
+    throw new Error(
+      "embedding.apiKey is required when using OpenAI (or set embedding.baseUrl for Ollama/local).",
+    );
+  }
+  const apiKey =
+    typeof apiKeyRaw === "string" && apiKeyRaw.trim()
+      ? resolveEnvVars(apiKeyRaw.trim())
+      : undefined;
+
+  const model =
+    typeof embedding.model === "string" ? embedding.model.trim() || DEFAULT_MODEL : DEFAULT_MODEL;
+  const dimensions =
+    typeof embedding.dimensions === "number" && embedding.dimensions > 0
+      ? embedding.dimensions
+      : undefined;
+
+  vectorDimsForModel(model, dimensions);
+  return { model, apiKey, baseUrl, dimensions };
 }
 
 export const memoryConfigSchema = {
@@ -98,12 +139,12 @@ export const memoryConfigSchema = {
     );
 
     const embedding = cfg.embedding as Record<string, unknown> | undefined;
-    if (!embedding || typeof embedding.apiKey !== "string") {
-      throw new Error("embedding.apiKey is required");
+    if (!embedding || typeof embedding !== "object") {
+      throw new Error("embedding config required");
     }
-    assertAllowedKeys(embedding, ["apiKey", "model"], "embedding config");
+    assertAllowedKeys(embedding, ["apiKey", "model", "baseUrl", "dimensions"], "embedding config");
 
-    const model = resolveEmbeddingModel(embedding);
+    const { model, apiKey, baseUrl, dimensions } = resolveEmbeddingConfig(embedding);
 
     const captureMaxChars =
       typeof cfg.captureMaxChars === "number" ? Math.floor(cfg.captureMaxChars) : undefined;
@@ -118,7 +159,9 @@ export const memoryConfigSchema = {
       embedding: {
         provider: "openai",
         model,
-        apiKey: resolveEnvVars(embedding.apiKey),
+        apiKey,
+        baseUrl,
+        dimensions,
       },
       dbPath: typeof cfg.dbPath === "string" ? cfg.dbPath : DEFAULT_DB_PATH,
       autoCapture: cfg.autoCapture === true,
@@ -128,15 +171,27 @@ export const memoryConfigSchema = {
   },
   uiHints: {
     "embedding.apiKey": {
-      label: "OpenAI API Key",
+      label: "API Key",
       sensitive: true,
-      placeholder: "sk-proj-...",
-      help: "API key for OpenAI embeddings (or use ${OPENAI_API_KEY})",
+      placeholder: "sk-proj-... or leave empty for Ollama",
+      help: "Required for OpenAI; omit for Ollama or other local OpenAI-compatible endpoints",
+    },
+    "embedding.baseUrl": {
+      label: "Embeddings API URL",
+      placeholder: "http://localhost:11434/v1",
+      help: "OpenAI-compatible base URL (e.g. Ollama: http://localhost:11434/v1)",
+      advanced: true,
     },
     "embedding.model": {
       label: "Embedding Model",
-      placeholder: DEFAULT_MODEL,
-      help: "OpenAI embedding model to use",
+      placeholder: "nomic-embed-text",
+      help: "Model name (e.g. text-embedding-3-small for OpenAI, nomic-embed-text for Ollama)",
+    },
+    "embedding.dimensions": {
+      label: "Vector Dimensions",
+      placeholder: "768",
+      help: "Required for models not in the built-in list (e.g. some Ollama models)",
+      advanced: true,
     },
     dbPath: {
       label: "Database Path",

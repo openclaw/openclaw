@@ -10,7 +10,6 @@ import type * as LanceDB from "@lancedb/lancedb";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { Type } from "@sinclair/typebox";
 import { randomUUID } from "node:crypto";
-import OpenAI from "openai";
 import {
   DEFAULT_CAPTURE_MAX_CHARS,
   MEMORY_CATEGORIES,
@@ -157,25 +156,41 @@ class MemoryDB {
 }
 
 // ============================================================================
-// OpenAI Embeddings
+// OpenAI-compatible Embeddings (OpenAI, Ollama, or any /v1/embeddings endpoint)
 // ============================================================================
 
 class Embeddings {
-  private client: OpenAI;
+  private readonly baseUrl: string;
+  private readonly headers: Record<string, string>;
+  private readonly model: string;
 
-  constructor(
-    apiKey: string,
-    private model: string,
-  ) {
-    this.client = new OpenAI({ apiKey });
+  constructor(options: { baseUrl: string; apiKey?: string; model: string }) {
+    this.baseUrl = options.baseUrl.replace(/\/$/, "");
+    this.model = options.model;
+    this.headers = {
+      "Content-Type": "application/json",
+      ...(options.apiKey ? { Authorization: `Bearer ${options.apiKey}` } : {}),
+    };
   }
 
   async embed(text: string): Promise<number[]> {
-    const response = await this.client.embeddings.create({
-      model: this.model,
-      input: text,
+    const url = `${this.baseUrl}/embeddings`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: this.headers,
+      body: JSON.stringify({ model: this.model, input: text }),
     });
-    return response.data[0].embedding;
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`embeddings failed (${res.status}): ${text}`);
+    }
+    const payload = (await res.json()) as { data?: Array<{ embedding?: number[] }> };
+    const data = payload.data ?? [];
+    const vec = data[0]?.embedding;
+    if (!Array.isArray(vec)) {
+      throw new Error("embeddings response missing data[0].embedding");
+    }
+    return vec;
   }
 }
 
@@ -293,9 +308,16 @@ const memoryPlugin = {
   register(api: OpenClawPluginApi) {
     const cfg = memoryConfigSchema.parse(api.pluginConfig);
     const resolvedDbPath = api.resolvePath(cfg.dbPath!);
-    const vectorDim = vectorDimsForModel(cfg.embedding.model ?? "text-embedding-3-small");
+    const vectorDim = vectorDimsForModel(
+      cfg.embedding.model ?? "text-embedding-3-small",
+      cfg.embedding.dimensions,
+    );
     const db = new MemoryDB(resolvedDbPath, vectorDim);
-    const embeddings = new Embeddings(cfg.embedding.apiKey, cfg.embedding.model!);
+    const embeddings = new Embeddings({
+      baseUrl: cfg.embedding.baseUrl ?? "https://api.openai.com/v1",
+      apiKey: cfg.embedding.apiKey,
+      model: cfg.embedding.model!,
+    });
 
     api.logger.info(`memory-lancedb: plugin registered (db: ${resolvedDbPath}, lazy init)`);
 
