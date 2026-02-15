@@ -251,9 +251,16 @@ export function triggerOpenClawRestart(): RestartAttempt {
       if (!systemRestart.error && systemRestart.status === 0) {
         return { ok: true, method: "systemd", tried };
       }
+      // systemctl failed; fall back to SIGUSR1 (works in containers without systemd)
+      tried.push("SIGUSR1 (fallback)");
+      const emitted = emitGatewayRestart();
+      if (emitted) {
+        return { ok: true, method: "supervisor", tried };
+      }
       const detail = [
         `user: ${formatSpawnDetail(userRestart)}`,
         `system: ${formatSpawnDetail(systemRestart)}`,
+        "SIGUSR1 fallback: already emitted",
       ].join("; ");
       return { ok: false, method: "systemd", detail, tried };
     }
