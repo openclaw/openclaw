@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { buildSubagentSystemPrompt } from "./subagent-announce.js";
 import { buildAgentSystemPrompt, buildRuntimeLine } from "./system-prompt.js";
 
 describe("buildAgentSystemPrompt", () => {
@@ -101,6 +102,26 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("## OpenClaw CLI Quick Reference");
     expect(prompt).toContain("openclaw gateway restart");
     expect(prompt).toContain("Do not invent commands");
+  });
+
+  it("marks system message blocks as internal and not user-visible", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+    });
+
+    expect(prompt).toContain("`[System Message] ...` blocks are internal context");
+    expect(prompt).toContain("are not user-visible by default");
+    expect(prompt).toContain("reports completed cron/subagent work");
+    expect(prompt).toContain("rewrite it in your normal assistant voice");
+  });
+
+  it("guides subagent workflows to avoid polling loops", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+    });
+
+    expect(prompt).toContain("Completion is push-based: it will auto-announce when done.");
+    expect(prompt).toContain("Do not poll `subagents list` / `sessions_list` in a loop");
   });
 
   it("lists available tools when provided", () => {
@@ -448,5 +469,83 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("## Reactions");
     expect(prompt).toContain("Reactions are enabled for Telegram in MINIMAL mode.");
+  });
+});
+
+describe("buildSubagentSystemPrompt", () => {
+  it("includes sub-agent spawning guidance for depth-1 orchestrator when maxSpawnDepth >= 2", () => {
+    const prompt = buildSubagentSystemPrompt({
+      childSessionKey: "agent:main:subagent:abc",
+      task: "research task",
+      childDepth: 1,
+      maxSpawnDepth: 2,
+    });
+
+    expect(prompt).toContain("## Sub-Agent Spawning");
+    expect(prompt).toContain("You CAN spawn your own sub-agents");
+    expect(prompt).toContain("sessions_spawn");
+    expect(prompt).toContain("`subagents` tool");
+    expect(prompt).toContain("announce their results back to you automatically");
+    expect(prompt).toContain("Do NOT repeatedly poll `subagents list`");
+  });
+
+  it("does not include spawning guidance for depth-1 leaf when maxSpawnDepth == 1", () => {
+    const prompt = buildSubagentSystemPrompt({
+      childSessionKey: "agent:main:subagent:abc",
+      task: "research task",
+      childDepth: 1,
+      maxSpawnDepth: 1,
+    });
+
+    expect(prompt).not.toContain("## Sub-Agent Spawning");
+    expect(prompt).not.toContain("You CAN spawn");
+  });
+
+  it("includes leaf worker note for depth-2 sub-sub-agents", () => {
+    const prompt = buildSubagentSystemPrompt({
+      childSessionKey: "agent:main:subagent:abc:subagent:def",
+      task: "leaf task",
+      childDepth: 2,
+      maxSpawnDepth: 2,
+    });
+
+    expect(prompt).toContain("## Sub-Agent Spawning");
+    expect(prompt).toContain("leaf worker");
+    expect(prompt).toContain("CANNOT spawn further sub-agents");
+  });
+
+  it("uses 'parent orchestrator' label for depth-2 agents", () => {
+    const prompt = buildSubagentSystemPrompt({
+      childSessionKey: "agent:main:subagent:abc:subagent:def",
+      task: "leaf task",
+      childDepth: 2,
+      maxSpawnDepth: 2,
+    });
+
+    expect(prompt).toContain("spawned by the parent orchestrator");
+    expect(prompt).toContain("reported to the parent orchestrator");
+  });
+
+  it("uses 'main agent' label for depth-1 agents", () => {
+    const prompt = buildSubagentSystemPrompt({
+      childSessionKey: "agent:main:subagent:abc",
+      task: "orchestrator task",
+      childDepth: 1,
+      maxSpawnDepth: 2,
+    });
+
+    expect(prompt).toContain("spawned by the main agent");
+    expect(prompt).toContain("reported to the main agent");
+  });
+
+  it("defaults to depth 1 and maxSpawnDepth 1 when not provided", () => {
+    const prompt = buildSubagentSystemPrompt({
+      childSessionKey: "agent:main:subagent:abc",
+      task: "basic task",
+    });
+
+    // Should not include spawning guidance (default maxSpawnDepth is 1, depth 1 is leaf)
+    expect(prompt).not.toContain("## Sub-Agent Spawning");
+    expect(prompt).toContain("spawned by the main agent");
   });
 });

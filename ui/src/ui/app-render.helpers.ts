@@ -11,6 +11,41 @@ import { ChatState, loadChatHistory } from "./controllers/chat.ts";
 import { icons } from "./icons.ts";
 import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
 
+type SessionDefaultsSnapshot = {
+  mainSessionKey?: string;
+  mainKey?: string;
+};
+
+function resolveSidebarChatSessionKey(state: AppViewState): string {
+  const snapshot = state.hello?.snapshot as
+    | { sessionDefaults?: SessionDefaultsSnapshot }
+    | undefined;
+  const mainSessionKey = snapshot?.sessionDefaults?.mainSessionKey?.trim();
+  if (mainSessionKey) {
+    return mainSessionKey;
+  }
+  const mainKey = snapshot?.sessionDefaults?.mainKey?.trim();
+  if (mainKey) {
+    return mainKey;
+  }
+  return "main";
+}
+
+function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string) {
+  state.sessionKey = sessionKey;
+  state.chatMessage = "";
+  state.chatStream = null;
+  (state as unknown as OpenClawApp).chatStreamStartedAt = null;
+  state.chatRunId = null;
+  (state as unknown as OpenClawApp).resetToolStream();
+  (state as unknown as OpenClawApp).resetChatScroll();
+  state.applySettings({
+    ...state.settings,
+    sessionKey,
+    lastActiveSessionKey: sessionKey,
+  });
+}
+
 export function renderTab(state: AppViewState, tab: Tab) {
   const href = pathForTab(tab, state.basePath);
   return html`
@@ -29,6 +64,13 @@ export function renderTab(state: AppViewState, tab: Tab) {
           return;
         }
         event.preventDefault();
+        if (tab === "chat") {
+          const mainSessionKey = resolveSidebarChatSessionKey(state);
+          if (state.sessionKey !== mainSessionKey) {
+            resetChatStateForSessionSwitch(state, mainSessionKey);
+            void state.loadAssistantIdentity();
+          }
+        }
         state.setTab(tab);
       }}
       title=${titleForTab(tab)}
@@ -194,11 +236,6 @@ export function renderChatControls(state: AppViewState) {
     </div>
   `;
 }
-
-type SessionDefaultsSnapshot = {
-  mainSessionKey?: string;
-  mainKey?: string;
-};
 
 function resolveMainSessionKey(
   hello: AppViewState["hello"],

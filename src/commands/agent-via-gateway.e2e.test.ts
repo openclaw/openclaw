@@ -48,6 +48,31 @@ beforeEach(() => {
 });
 
 describe("agentCliCommand", () => {
+  it("uses a timer-safe max gateway timeout when --timeout is 0", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agent-cli-"));
+    const store = path.join(dir, "sessions.json");
+    mockConfig(store);
+
+    vi.mocked(callGateway).mockResolvedValue({
+      runId: "idem-1",
+      status: "ok",
+      result: {
+        payloads: [{ text: "hello" }],
+        meta: { stub: true },
+      },
+    });
+
+    try {
+      await agentCliCommand({ message: "hi", to: "+1555", timeout: "0" }, runtime);
+
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      const request = vi.mocked(callGateway).mock.calls[0]?.[0] as { timeoutMs?: number };
+      expect(request.timeoutMs).toBe(2_147_000_000);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("uses gateway by default", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agent-cli-"));
     const store = path.join(dir, "sessions.json");

@@ -102,4 +102,20 @@ describe("restart sentinel", () => {
     expect(trimmed?.length).toBeLessThanOrEqual(8001);
     expect(trimmed?.startsWith("…")).toBe(true);
   });
+
+  it("formats restart messages without volatile timestamps", () => {
+    const payloadA = {
+      kind: "restart" as const,
+      status: "ok" as const,
+      ts: 100,
+      message: "Restart requested by /restart",
+      stats: { mode: "gateway.restart", reason: "/restart" },
+    };
+    const payloadB = { ...payloadA, ts: 200 };
+    const textA = formatRestartSentinelMessage(payloadA);
+    const textB = formatRestartSentinelMessage(payloadB);
+    expect(textA).toBe(textB);
+    expect(textA).toContain("Gateway restart restart ok");
+    expect(textA).not.toContain('"ts"');
+  });
 });

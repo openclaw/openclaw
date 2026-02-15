@@ -39,7 +39,7 @@ import {
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { runReplyAgent } from "./agent-runner.js";
 import { applySessionHints } from "./body.js";
-import { buildGroupIntro } from "./groups.js";
+import { buildGroupChatContext, buildGroupIntro } from "./groups.js";
 import { buildInboundMetaSystemPrompt, buildInboundUserContextPrefix } from "./inbound-meta.js";
 import { resolveQueueSettings } from "./queue.js";
 import { routeReply } from "./route-reply.js";
@@ -171,6 +171,9 @@ export async function runPreparedReply(
   const shouldInjectGroupIntro = Boolean(
     isGroupChat && (isFirstTurnInSession || sessionEntry?.groupActivationNeedsSystemIntro),
   );
+  // Always include persistent group chat context (name, participants, reply guidance)
+  const groupChatContext = isGroupChat ? buildGroupChatContext({ sessionCtx }) : "";
+  // Behavioral intro (activation mode, lurking, etc.) only on first turn / activation needed
   const groupIntro = shouldInjectGroupIntro
     ? buildGroupIntro({
         cfg,
@@ -184,7 +187,7 @@ export async function runPreparedReply(
   const inboundMetaPrompt = buildInboundMetaSystemPrompt(
     isNewSession ? sessionCtx : { ...sessionCtx, ThreadStarterBody: undefined },
   );
-  const extraSystemPrompt = [inboundMetaPrompt, groupIntro, groupSystemPrompt]
+  const extraSystemPrompt = [inboundMetaPrompt, groupChatContext, groupIntro, groupSystemPrompt]
     .filter(Boolean)
     .join("\n\n");
   const baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
