@@ -128,6 +128,9 @@ const hasSourceMtimeChanged = (stampMtime, deps) => {
 };
 
 const shouldBuild = (deps) => {
+  if (deps.env.OPENCLAW_SKIP_BUILD === "1") {
+    return false;
+  }
   if (deps.env.OPENCLAW_FORCE_BUILD === "1") {
     return true;
   }
@@ -233,7 +236,9 @@ export async function runNodeMain(params = {}) {
   logRunner("Building TypeScript (dist is stale).", deps);
   const buildCmd = deps.platform === "win32" ? "cmd.exe" : "pnpm";
   const buildArgs =
-    deps.platform === "win32" ? ["/d", "/s", "/c", "pnpm", ...compilerArgs] : compilerArgs;
+    deps.platform === "win32"
+      ? ["/d", "/s", "/c", "npx", "tsdown", "--no-clean"]
+      : compilerArgs;
   const build = deps.spawn(buildCmd, buildArgs, {
     cwd: deps.cwd,
     env: deps.env,

@@ -12,6 +12,7 @@ import {
 } from "./message-extract.ts";
 import { isToolResultMessage, normalizeRoleForGrouping } from "./message-normalizer.ts";
 import { extractToolCards, renderToolCardSidebar } from "./tool-cards.ts";
+import { getMediaBaseUrl, parseTextWithMedia } from "./media-audio.ts";
 
 type ImageBlock = {
   url: string;
@@ -273,7 +274,23 @@ function renderGroupedMessage(
       }
       ${
         markdown
-          ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">${unsafeHTML(toSanitizedMarkdownHtml(markdown))}</div>`
+          ? (() => {
+              const baseUrl = getMediaBaseUrl();
+              const segments = parseTextWithMedia(markdown, baseUrl);
+              const hasAudio = segments.some((s) => s.type === "audio");
+              if (!hasAudio) {
+                return html`<div class="chat-text" dir="${detectTextDirection(markdown)}">${unsafeHTML(toSanitizedMarkdownHtml(markdown))}</div>`;
+              }
+              return html`<div class="chat-text" dir="${detectTextDirection(markdown)}">
+                ${segments.map((seg) =>
+                  seg.type === "text"
+                    ? seg.content
+                      ? unsafeHTML(toSanitizedMarkdownHtml(seg.content))
+                      : nothing
+                    : html`<audio controls src="${seg.playableUrl}" class="chat-tts-audio" title="Play speech"></audio>`,
+                )}
+              </div>`;
+            })()
           : nothing
       }
       ${toolCards.map((card) => renderToolCardSidebar(card, onOpenSidebar))}

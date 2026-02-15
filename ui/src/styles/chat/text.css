@@ -25,6 +25,13 @@
   overflow-wrap: break-word;
 }
 
+.chat-tts-audio {
+  display: block;
+  margin: 8px 0;
+  max-width: 100%;
+  height: 32px;
+}
+
 .chat-text :where(p, ul, ol, pre, blockquote, table) {
   margin: 0;
 }

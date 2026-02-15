@@ -115,7 +115,9 @@ export async function checkInboundAccessControl(params: {
     }
   }
 
-  // DM access control (secure defaults): "pairing" (default) / "allowlist" / "open" / "disabled".
+  // DM access control: "pairing" (default) / "allowlist" / "block" / "open" / "disabled".
+  // - pairing: unknown senders get a pairing-code reply so they can be approved.
+  // - allowlist / block: unknown senders are blocked; "block" does not send any reply (no auto-reply to unknown numbers).
   if (!params.group) {
     if (params.isFromMe && !isSamePhone) {
       logVerbose("Skipping outbound DM (fromMe); no pairing reply needed.");
@@ -141,7 +143,14 @@ export async function checkInboundAccessControl(params: {
         dmHasWildcard ||
         (normalizedAllowFrom.length > 0 && normalizedAllowFrom.includes(candidate));
       if (!allowed) {
-        if (dmPolicy === "pairing") {
+        if (dmPolicy === "block") {
+          await upsertChannelPairingRequest({
+            channel: "whatsapp",
+            id: candidate,
+            meta: { name: (params.pushName ?? "").trim() || undefined },
+          });
+          logVerbose(`Blocked unknown sender ${candidate} (dmPolicy=block, no reply sent).`);
+        } else if (dmPolicy === "pairing") {
           if (suppressPairingReply) {
             logVerbose(`Skipping pairing reply for historical DM from ${candidate}.`);
           } else {

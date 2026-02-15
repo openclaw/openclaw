@@ -3,6 +3,7 @@ import type { ToolCard } from "../types/chat-types.ts";
 import { icons } from "../icons.ts";
 import { formatToolDetail, resolveToolDisplay } from "../tool-display.ts";
 import { TOOL_INLINE_THRESHOLD } from "./constants.ts";
+import { getFirstMediaAudioUrl, getMediaBaseUrl } from "./media-audio.ts";
 import { extractTextCached } from "./message-extract.ts";
 import { isToolResultMessage } from "./message-normalizer.ts";
 import { formatToolOutputForSidebar, getTruncatedPreview } from "./tool-helpers.ts";
@@ -72,6 +73,10 @@ export function renderToolCardSidebar(card: ToolCard, onOpenSidebar?: (content: 
   const showInline = hasText && isShort;
   const isEmpty = !hasText;
 
+  const isTts = (card.name ?? display.label ?? "").toLowerCase() === "tts";
+  const ttsAudioUrl =
+    isTts && card.text ? getFirstMediaAudioUrl(card.text, getMediaBaseUrl()) : null;
+
   return html`
     <div
       class="chat-tool-card ${canClick ? "chat-tool-card--clickable" : ""}"
@@ -103,6 +108,7 @@ export function renderToolCardSidebar(card: ToolCard, onOpenSidebar?: (content: 
         ${isEmpty && !canClick ? html`<span class="chat-tool-card__status">${icons.check}</span>` : nothing}
       </div>
       ${detail ? html`<div class="chat-tool-card__detail">${detail}</div>` : nothing}
+      ${ttsAudioUrl ? html`<audio controls src="${ttsAudioUrl}" class="chat-tts-audio" title="Play speech"></audio>` : nothing}
       ${
         isEmpty
           ? html`
@@ -151,6 +157,13 @@ function extractToolText(item: Record<string, unknown>): string | undefined {
   }
   if (typeof item.content === "string") {
     return item.content;
+  }
+  if (Array.isArray(item.content)) {
+    const parts = item.content
+      .filter((b): b is Record<string, unknown> => typeof b === "object" && b != null)
+      .map((b) => (b.type === "text" && typeof b.text === "string" ? b.text : ""))
+      .filter(Boolean);
+    if (parts.length > 0) return parts.join("\n");
   }
   return undefined;
 }

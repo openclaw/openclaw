@@ -522,6 +522,15 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
         message: tools[i],
       });
     }
+  } else {
+    for (let i = 0; i < tools.length; i++) {
+      if (!isTtsToolResultMessage(tools[i])) continue;
+      items.push({
+        kind: "message",
+        key: messageKey(tools[i], i + history.length),
+        message: tools[i],
+      });
+    }
   }
 
   if (props.stream !== null) {
@@ -539,6 +548,25 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
   }
 
   return groupMessages(items);
+}
+
+function isTtsToolResultMessage(message: unknown): boolean {
+  const m = message as Record<string, unknown>;
+  const role = (typeof m.role === "string" ? m.role : "").toLowerCase();
+  if (role !== "toolresult" && role !== "tool_result") return false;
+  const name = (m.toolName ?? m.tool_name) as string | undefined;
+  if (typeof name === "string" && name.toLowerCase() === "tts") return true;
+  const content = m.content;
+  if (!Array.isArray(content)) return false;
+  for (const block of content) {
+    if (typeof block !== "object" || block === null) continue;
+    const b = block as Record<string, unknown>;
+    const kind = (typeof b.type === "string" ? b.type : "").toLowerCase();
+    if (kind !== "toolresult" && kind !== "tool_result") continue;
+    const blockName = (b.name ?? b.toolName) as string | undefined;
+    if (typeof blockName === "string" && blockName.toLowerCase() === "tts") return true;
+  }
+  return false;
 }
 
 function messageKey(message: unknown, index: number): string {

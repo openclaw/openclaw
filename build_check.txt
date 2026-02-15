@@ -1,0 +1,57 @@
+npm warn Unknown project config "allow-build-scripts". This will stop working in the next major version of npm.
+[34mℹ[39m tsdown [2mv0.20.3[22m powered by rolldown [2mv1.0.0-rc.3[22m
+[34mℹ[39m config file: [4mC:\Users\cc\.gemini\antigravity\scratch\openclaw\tsdown.config.ts[24m 
+[34mℹ[39m entry: [34msrc\index.ts[39m
+[34mℹ[39m target: [34mnode22.12.0[39m
+[34mℹ[39m tsconfig: [34mtsconfig.json[39m
+[34mℹ[39m entry: [34msrc\entry.ts[39m
+[34mℹ[39m target: [34mnode22.12.0[39m
+[34mℹ[39m tsconfig: [34mtsconfig.json[39m
+[34mℹ[39m entry: [34msrc\infra\warning-filter.ts[39m
+[34mℹ[39m target: [34mnode22.12.0[39m
+[34mℹ[39m tsconfig: [34mtsconfig.json[39m
+[34mℹ[39m entry: [34msrc\cli\daemon-cli.ts[39m
+[34mℹ[39m target: [34mnode22.12.0[39m
+[34mℹ[39m tsconfig: [34mtsconfig.json[39m
+[34mℹ[39m entry: [34msrc\plugin-sdk\index.ts[39m
+[34mℹ[39m target: [34mnode22.12.0[39m
+[34mℹ[39m tsconfig: [34mtsconfig.json[39m
+[34mℹ[39m entry: [34msrc\plugin-sdk\account-id.ts[39m
+[34mℹ[39m target: [34mnode22.12.0[39m
+[34mℹ[39m tsconfig: [34mtsconfig.json[39m
+[34mℹ[39m entry: [34msrc\extensionAPI.ts[39m
+[34mℹ[39m target: [34mnode22.12.0[39m
+[34mℹ[39m tsconfig: [34mtsconfig.json[39m
+[34mℹ[39m entry: [34msrc\hooks\llm-slug-generator.ts, src\hooks\bundled\boot-md\handler.ts, src\hooks\bundled\bootstrap-extra-files\handler.ts, src\hooks\bundled\command-logger\handler.ts, src\hooks\bundled\session-memory\handler.ts[39m
+[34mℹ[39m target: [34mnode22.12.0[39m
+[34mℹ[39m tsconfig: [34mtsconfig.json[39m
+[34mℹ[39m Build start
+[34mℹ[39m Cleaning 543 files
+[34mℹ[39m [2mdist\[22m[1mwarning-filter.js[22m  [2m1.74 kB[22m [2m│ gzip: 0.65 kB[22m
+[34mℹ[39m 1 files, total: 1.74 kB
+[34mℹ[39m [2mdist\plugin-sdk\[22m[1maccount-id.js[22m  [2m0.63 kB[22m [2m│ gzip: 0.35 kB[22m
+[34mℹ[39m 1 files, total: 0.63 kB
+[32m✔[39m Build complete in [32m543ms[39m
+[32m✔[39m Build complete in [32m598ms[39m
+
+[41m ERROR [49m Error: Build failed with 1 error:
+
+[31m[PARSE_ERROR] Error:[0m Unexpected token
+     [38;5;246m╭[0m[38;5;246m─[0m[38;5;246m[[0m src/auto-reply/reply/commands-tts.ts:287:1 [38;5;246m][0m
+     [38;5;246m│[0m
+ [38;5;246m287 │[0m }[38;5;249m;[0m
+ [38;5;240m    │[0m ┬  
+ [38;5;240m    │[0m ╰── 
+[38;5;246m─────╯[0m
+
+    at aggregateBindingErrorsIntoJsError (file:///C:/Users/cc/.gemini/antigravity/scratch/openclaw/node_modules/.pnpm/rolldown@1.0.0-rc.3/node_modules/rolldown/dist/shared/bindingify-input-options-CorDub0q.mjs:628:18)
+    at unwrapBindingResult (file:///C:/Users/cc/.gemini/antigravity/scratch/openclaw/node_modules/.pnpm/rolldown@1.0.0-rc.3/node_modules/rolldown/dist/shared/bindingify-input-options-CorDub0q.mjs:598:128)
+    at #build (file:///C:/Users/cc/.gemini/antigravity/scratch/openclaw/node_modules/.pnpm/rolldown@1.0.0-rc.3/node_modules/rolldown/dist/shared/rolldown-build-CGNuOAoF.mjs:3345:34)
+    at async build (file:///C:/Users/cc/.gemini/antigravity/scratch/openclaw/node_modules/.pnpm/rolldown@1.0.0-rc.3/node_modules/rolldown/dist/index.mjs:47:22)
+    at async Promise.all (index 0)
+    at async buildSingle (file:///C:/Users/cc/.gemini/antigravity/scratch/openclaw/node_modules/.pnpm/tsdown@0.20.3_@typescript+n_3fbf2708d84e69bfeed1819434769c68/node_modules/tsdown/dist/build-C5RQkVSf.mjs:852:19)
+    at async Promise.all (index 6)
+    at async buildWithConfigs (file:///C:/Users/cc/.gemini/antigravity/scratch/openclaw/node_modules/.pnpm/tsdown@0.20.3_@typescript+n_3fbf2708d84e69bfeed1819434769c68/node_modules/tsdown/dist/build-C5RQkVSf.mjs:813:18)
+    at async CAC.<anonymous> (file:///C:/Users/cc/.gemini/antigravity/scratch/openclaw/node_modules/.pnpm/tsdown@0.20.3_@typescript+n_3fbf2708d84e69bfeed1819434769c68/node_modules/tsdown/dist/run.mjs:23:2)
+    at async runCLI (file:///C:/Users/cc/.gemini/antigravity/scratch/openclaw/node_modules/.pnpm/tsdown@0.20.3_@typescript+n_3fbf2708d84e69bfeed1819434769c68/node_modules/tsdown/dist/run.mjs:47:3)
+

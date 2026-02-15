@@ -1,12 +1,10 @@
 import type { TlsOptions } from "node:tls";
 import type { WebSocketServer } from "ws";
-import {
-  createServer as createHttpServer,
-  type Server as HttpServer,
-  type IncomingMessage,
-  type ServerResponse,
-} from "node:http";
+import { createReadStream, statSync } from "node:fs";
+import { createServer as createHttpServer, type Server as HttpServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import type { CanvasHostHandler } from "../canvas-host/server.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
@@ -467,11 +465,11 @@ export function createGatewayHttpServer(opts: {
   } = opts;
   const httpServer: HttpServer = opts.tlsOptions
     ? createHttpsServer(opts.tlsOptions, (req, res) => {
-        void handleRequest(req, res);
-      })
+      void handleRequest(req, res);
+    })
     : createHttpServer((req, res) => {
-        void handleRequest(req, res);
-      });
+      void handleRequest(req, res);
+    });
 
   async function handleRequest(req: IncomingMessage, res: ServerResponse) {
     // Don't interfere with WebSocket upgrades; ws handles the 'upgrade' event.
@@ -484,6 +482,67 @@ export function createGatewayHttpServer(opts: {
       const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
       const requestPath = new URL(req.url ?? "/", "http://localhost").pathname;
       if (await handleHooksRequest(req, res)) {
+        return;
+      }
+      if (requestPath === "/api/media/by-path") {
+        const parsed = new URL(req.url ?? "/", "http://localhost");
+        const rawPath = parsed.searchParams.get("path");
+        if (!rawPath) {
+          res.statusCode = 400;
+          res.end("Missing path");
+          return;
+        }
+        const decoded = decodeURIComponent(rawPath);
+        const absPath = path.resolve(path.normalize(decoded));
+        const tmp = tmpdir();
+        try {
+          const stats = statSync(absPath);
+          if (!stats.isFile()) {
+            throw new Error("Not a file");
+          }
+          const rel = path.relative(tmp, absPath);
+          if (rel.startsWith("..") || path.isAbsolute(rel)) {
+            res.statusCode = 403;
+            res.end("Forbidden");
+            return;
+          }
+          const mime = absPath.endsWith(".mp3") ? "audio/mpeg" : absPath.endsWith(".wav") ? "audio/wav" : absPath.endsWith(".opus") ? "audio/opus" : "application/octet-stream";
+          res.statusCode = 200;
+          res.setHeader("Content-Type", mime);
+          res.setHeader("Content-Length", stats.size);
+          createReadStream(absPath).pipe(res);
+        } catch {
+          res.statusCode = 404;
+          res.end("Not Found");
+        }
+        return;
+      }
+      if (requestPath.startsWith("/api/media/")) {
+        const fileRel = requestPath.slice("/api/media/".length);
+        const safeSuffix = path.normalize(fileRel).replace(/^(\.\.[\/\\])+/, "");
+        const absPath = path.join(tmpdir(), safeSuffix);
+
+        // Security check: ensure it is still within tmpdir
+        if (!absPath.startsWith(tmpdir())) {
+          res.statusCode = 403;
+          res.end("Forbidden");
+          return;
+        }
+
+        try {
+          const stats = statSync(absPath);
+          if (!stats.isFile()) {
+            throw new Error("Not a file");
+          }
+          const mime = absPath.endsWith(".mp3") ? "audio/mpeg" : absPath.endsWith(".wav") ? "audio/wav" : "application/octet-stream";
+          res.statusCode = 200;
+          res.setHeader("Content-Type", mime);
+          res.setHeader("Content-Length", stats.size);
+          createReadStream(absPath).pipe(res);
+        } catch {
+          res.statusCode = 404;
+          res.end("Not Found");
+        }
         return;
       }
       if (

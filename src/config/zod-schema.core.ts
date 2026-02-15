@@ -136,7 +136,7 @@ export const ReplyToModeSchema = z.union([z.literal("off"), z.literal("first"), 
 //   - .default("allowlist") ensures runtime always resolves to "allowlist" if not provided
 export const GroupPolicySchema = z.enum(["open", "disabled", "allowlist"]);
 
-export const DmPolicySchema = z.enum(["pairing", "allowlist", "open", "disabled"]);
+export const DmPolicySchema = z.enum(["pairing", "allowlist", "block", "open", "disabled"]);
 
 export const BlockStreamingCoalesceSchema = z
   .object({

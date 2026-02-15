@@ -1,6 +1,8 @@
 import type { ReplyPayload } from "../types.js";
 import type { CommandHandler } from "./commands-types.js";
 import { logVerbose } from "../../globals.js";
+import path from "node:path";
+import { tmpdir } from "node:os";
 import {
   getLastTtsAttempt,
   getTtsMaxLength,
@@ -134,8 +136,12 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
         provider: result.provider,
         latencyMs: result.latencyMs,
       });
+
+      const relativePath = path.relative(tmpdir(), result.audioPath);
+      // Ensure forward slashes for URL
+      const urlPath = relativePath.split(path.sep).join("/");
       const payload: ReplyPayload = {
-        mediaUrl: result.audioPath,
+        mediaUrl: `/api/media/${urlPath}`,
         audioAsVoice: result.voiceCompatible === true,
       };
       return { shouldContinue: false, reply: payload };
@@ -155,6 +161,8 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
       reply: { text: `❌ Error generating audio: ${result.error ?? "unknown error"}` },
     };
   }
+
+
 
   if (action === "provider") {
     const currentProvider = getTtsProvider(config, prefsPath);
