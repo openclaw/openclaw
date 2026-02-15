@@ -13,6 +13,7 @@ import { type OpenClawConfig, loadConfig } from "../../config/config.js";
 import { applyLinkUnderstanding } from "../../link-understanding/apply.js";
 import { applyMediaUnderstanding } from "../../media-understanding/apply.js";
 import { defaultRuntime } from "../../runtime.js";
+import { screenInput } from "../../security/input-screening.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { resolveDefaultModel } from "./directive-handling.js";
@@ -163,6 +164,27 @@ export async function getReplyFromConfig(
     triggerBodyNormalized,
     bodyStripped,
   } = sessionState;
+
+  // Screen inbound messages for potential injection (skip internal/trusted sessions)
+  const isInternalSession = sessionKey.startsWith("hook:") || sessionKey.startsWith("cron:");
+  if (!isInternalSession) {
+    const channel = finalized.Provider?.trim().toLowerCase() ?? "";
+    const messageContent = finalized.Body ?? finalized.CommandBody ?? "";
+    const inputDetectionConfig = cfg.security?.inputDetection ?? {};
+    const screening = screenInput({
+      content: messageContent,
+      channel,
+      sessionKey,
+      config: inputDetectionConfig,
+    });
+    if (screening.action === "block") {
+      typing.cleanup();
+      return { text: "Message blocked by security policy" };
+    }
+    if (screening.action === "warn" && finalized.Body) {
+      finalized.Body = `[Security notice: potential injection detected (score: ${screening.score.toFixed(2)})] ${finalized.Body}`;
+    }
+  }
 
   await applyResetModelOverride({
     cfg,
