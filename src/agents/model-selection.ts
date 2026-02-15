@@ -182,14 +182,20 @@ export function resolveModelRefFromString(params: {
   if (!trimmed) {
     return null;
   }
-  if (!trimmed.includes("/")) {
-    const aliasKey = normalizeAliasKey(trimmed);
+  // Strip @profile suffix (e.g. "nvidia/model@nvidia:default" → "nvidia/model")
+  const atIdx = trimmed.indexOf("@");
+  const modelPart = atIdx >= 0 ? trimmed.slice(0, atIdx).trim() : trimmed;
+  if (!modelPart) {
+    return null;
+  }
+  if (!modelPart.includes("/")) {
+    const aliasKey = normalizeAliasKey(modelPart);
     const aliasMatch = params.aliasIndex?.byAlias.get(aliasKey);
     if (aliasMatch) {
       return { ref: aliasMatch.ref, alias: aliasMatch.alias };
     }
   }
-  const parsed = parseModelRef(trimmed, params.defaultProvider);
+  const parsed = parseModelRef(modelPart, params.defaultProvider);
   if (!parsed) {
     return null;
   }
