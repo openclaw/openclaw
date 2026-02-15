@@ -1,7 +1,7 @@
 # A2UI: Agent-to-User Interface
 
 A2UI is an open-source project, complete with a format
-optimized for representing updateable agent-generated
+optimized for representing updatable agent-generated
 UIs and an initial set of renderers, that allows agents
 to generate or populate rich user interfaces.
 
