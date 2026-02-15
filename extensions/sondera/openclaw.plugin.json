@@ -1,0 +1,77 @@
+{
+  "id": "sondera",
+  "name": "Sondera",
+  "description": "Cedar policy guardrails for OpenClaw — blocks dangerous commands, protects credentials, redacts secrets",
+  "version": "0.1.0",
+  "uiHints": {
+    "a_policyPack": {
+      "label": "Sondera Policy Pack",
+      "help": "41 security rules (sondera-*): blocks rm/sudo/curl|bash, protects credentials, redacts secrets/tokens/API keys (OpenAI, Anthropic, Stripe, etc.). File: ./extensions/sondera/policy-sondera-base.cedar"
+    },
+    "a2_openclawSystemPack": {
+      "label": "OpenClaw System Protection",
+      "help": "24 rules (openclaw-*) protecting workspace files (SOUL.md, IDENTITY.md, SKILL.md, etc.), credentials, sessions, Anthropic/Claude data, and VS Code extensions. File: ./extensions/sondera/policy-openclaw-system.cedar"
+    },
+    "a3_owaspAgenticPack": {
+      "label": "OWASP Agentic Pack (Advanced)",
+      "help": "38 additional rules (owasp-*) based on OWASP Top 10 for Agentic Applications. More restrictive — may block pip/npm from git, systemctl, cron. File: ./extensions/sondera/policy-owasp-agentic.cedar"
+    },
+    "b_lockdown": {
+      "label": "Lockdown Mode",
+      "help": "Block ALL tools. Overrides Policy Pack — add custom permit rules to allow actions."
+    },
+    "c_customRules": {
+      "label": "Custom Rules",
+      "help": "Add your own Cedar rules (on top of Policy Pack, or standalone if Pack is disabled). Docs: https://docs.sondera.ai/writing-policies/",
+      "placeholder": "@id(\"my-rule\")\nforbid(principal, action, resource)\nwhen { context.params.command like \"*dangerous*\" };"
+    },
+    "d_policyPath": {
+      "label": "Custom Policy File (Expert)",
+      "help": "Use ONLY this Cedar file. Ignores all settings above.",
+      "advanced": true,
+      "placeholder": "/path/to/my-policies.cedar"
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "description": "Docs: https://docs.sondera.ai/writing-policies/",
+    "additionalProperties": false,
+    "properties": {
+      "a_policyPack": {
+        "type": "boolean",
+        "title": "Sondera Policy Pack",
+        "description": "41 security rules (sondera-*): blocks rm/sudo/curl|bash, protects credentials, redacts secrets/tokens/API keys. [policy-sondera-base.cedar]",
+        "default": true
+      },
+      "a2_openclawSystemPack": {
+        "type": "boolean",
+        "title": "OpenClaw System Protection",
+        "description": "24 rules (openclaw-*) protecting workspace files, credentials, sessions, Anthropic/Claude data. Enable for strict protection. [policy-openclaw-system.cedar]",
+        "default": false
+      },
+      "a3_owaspAgenticPack": {
+        "type": "boolean",
+        "title": "OWASP Agentic Pack (Advanced)",
+        "description": "38 additional rules (owasp-*) based on OWASP Top 10 for Agentic Applications. More restrictive. [policy-owasp-agentic.cedar]",
+        "default": false
+      },
+      "b_lockdown": {
+        "type": "boolean",
+        "title": "Lockdown Mode",
+        "description": "Block ALL tools. Add custom permit rules to allow actions.",
+        "default": false
+      },
+      "c_customRules": {
+        "type": "string",
+        "title": "Custom Rules",
+        "description": "Cedar rules to add on top of Policy Pack."
+      },
+      "d_policyPath": {
+        "type": "string",
+        "title": "Custom Policy File (Expert)",
+        "description": "Use ONLY this Cedar file. Ignores all settings above."
+      }
+    },
+    "required": []
+  }
+}

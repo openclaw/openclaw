@@ -1,3 +1,4 @@
+import path from "node:path";
 import { describe, expect, test } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { buildCleanupPlan } from "./cleanup-utils.js";
@@ -20,7 +21,10 @@ describe("buildCleanupPlan", () => {
     expect(plan.configInsideState).toBe(true);
     expect(plan.oauthInsideState).toBe(false);
     expect(new Set(plan.workspaceDirs)).toEqual(
-      new Set(["/tmp/openclaw-workspace-1", "/tmp/openclaw-workspace-2"]),
+      new Set([
+        path.resolve("/tmp/openclaw-workspace-1"),
+        path.resolve("/tmp/openclaw-workspace-2"),
+      ]),
     );
   });
 });

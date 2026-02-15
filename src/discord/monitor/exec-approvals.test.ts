@@ -3,6 +3,7 @@ import { Routes } from "discord-api-types/v10";
 import fs from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DiscordExecApprovalConfig } from "../../config/types.discord.js";
+import { clearSessionStoreCacheForTest } from "../../config/sessions/store.js";
 import {
   buildExecApprovalCustomId,
   extractDiscordChannelId,
@@ -20,6 +21,7 @@ const writeStore = (store: Record<string, unknown>) => {
 };
 
 beforeEach(() => {
+  clearSessionStoreCacheForTest();
   writeStore({});
 });
 

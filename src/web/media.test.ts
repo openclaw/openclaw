@@ -376,9 +376,19 @@ describe("local media root guard", () => {
     const { STATE_DIR } = await import("../config/paths.js");
     const readFile = vi.fn(async () => Buffer.from("generated-media"));
 
+    // Use explicit localRoots matching the STATE_DIR-specific defaults (excluding os.tmpdir())
+    // so the test is deterministic even when STATE_DIR lives under os.tmpdir().
+    const stateDirRoots = [
+      path.join(STATE_DIR, "media"),
+      path.join(STATE_DIR, "agents"),
+      path.join(STATE_DIR, "workspace"),
+      path.join(STATE_DIR, "sandboxes"),
+    ];
+
     await expect(
       loadWebMedia(path.join(STATE_DIR, "workspace-clawdy", "tmp", "render.bin"), {
         maxBytes: 1024 * 1024,
+        localRoots: stateDirRoots,
         readFile,
       }),
     ).rejects.toThrow(/not under an allowed directory/i);

@@ -481,6 +481,16 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/sondera:
+    dependencies:
+      '@cedar-policy/cedar-wasm':
+        specifier: ^4.8.2
+        version: 4.8.2
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/telegram:
     devDependencies:
       openclaw:
@@ -836,6 +846,9 @@ packages:
 
   '@cacheable/utils@2.3.4':
     resolution: {integrity: sha512-knwKUJEYgIfwShABS1BX6JyJJTglAFcEU7EXqzTdiGCXur4voqkiJkdgZIQtWNFhynzDWERcTYv/sETMu3uJWA==}
+
+  '@cedar-policy/cedar-wasm@4.8.2':
+    resolution: {integrity: sha512-S37Kd4wP/IMZN3pdKEcsV8av7jMj4AKRovxzJEYZNTEYq0Wj4fno3dsw8xHHDXqT0dkQGTNUBuQNF8CTvOgE/Q==}
 
   '@clack/core@1.0.1':
     resolution: {integrity: sha512-WKeyK3NOBwDOzagPR5H08rFk9D/WuN705yEbuZvKqlkmoLM2woKtXb10OO2k1NoSU4SFG947i2/SCYh+2u5e4g==}
@@ -6352,6 +6365,8 @@ snapshots:
     dependencies:
       hashery: 1.4.0
       keyv: 5.6.0
+
+  '@cedar-policy/cedar-wasm@4.8.2': {}
 
   '@clack/core@1.0.1':
     dependencies:
