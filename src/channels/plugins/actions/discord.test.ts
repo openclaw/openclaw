@@ -69,7 +69,6 @@ describe("handleDiscordMessageAction", () => {
 
   it("forwards legacy embeds for send", async () => {
     sendMessageDiscord.mockClear();
-    const handleDiscordMessageAction = await loadHandleDiscordMessageAction();
 
     const embeds = [{ title: "Legacy", description: "Use components v2." }];
 
