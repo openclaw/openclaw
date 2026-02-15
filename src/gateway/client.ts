@@ -32,6 +32,7 @@ type Pending = {
   resolve: (value: unknown) => void;
   reject: (err: unknown) => void;
   expectFinal: boolean;
+  timer?: NodeJS.Timeout;
 };
 
 export type GatewayClientOptions = {
@@ -40,6 +41,11 @@ export type GatewayClientOptions = {
   tickWatchMinIntervalMs?: number;
   token?: string;
   password?: string;
+  /**
+   * Default timeout for request/response RPC over the gateway websocket.
+   * Prevents hung promises + pending map growth during partial disconnects.
+   */
+  requestTimeoutMs?: number;
   instanceId?: string;
   clientName?: GatewayClientName;
   clientDisplayName?: string;
@@ -316,6 +322,9 @@ export class GatewayClient {
         if (pending.expectFinal && status === "accepted") {
           return;
         }
+        if (pending.timer) {
+          clearTimeout(pending.timer);
+        }
         this.pending.delete(parsed.id);
         if (parsed.ok) {
           pending.resolve(parsed.payload);
@@ -359,6 +368,9 @@ export class GatewayClient {
 
   private flushPendingErrors(err: Error) {
     for (const [, p] of this.pending) {
+      if (p.timer) {
+        clearTimeout(p.timer);
+      }
       p.reject(err);
     }
     this.pending.clear();
@@ -431,11 +443,28 @@ export class GatewayClient {
       );
     }
     const expectFinal = opts?.expectFinal === true;
+    const timeoutMs =
+      typeof this.opts.requestTimeoutMs === "number" && Number.isFinite(this.opts.requestTimeoutMs)
+        ? Math.max(0, Math.floor(this.opts.requestTimeoutMs))
+        : 30_000;
+
     const p = new Promise<T>((resolve, reject) => {
+      let timer: NodeJS.Timeout | undefined;
+      if (timeoutMs > 0) {
+        timer = setTimeout(() => {
+          // Timer is firing now; clearing is harmless and makes intent explicit.
+          if (timer) {
+            clearTimeout(timer);
+          }
+          this.pending.delete(id);
+          reject(new Error(`Gateway request timeout (${method})`));
+        }, timeoutMs);
+      }
       this.pending.set(id, {
         resolve: (value) => resolve(value as T),
         reject,
         expectFinal,
+        timer,
       });
     });
     this.ws.send(JSON.stringify(frame));
