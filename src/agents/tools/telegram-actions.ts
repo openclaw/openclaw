@@ -10,6 +10,7 @@ import {
   editMessageTelegram,
   reactMessageTelegram,
   sendMessageTelegram,
+  sendPollTelegram,
   sendStickerTelegram,
 } from "../../telegram/send.js";
 import { getCacheStats, searchStickers } from "../../telegram/sticker-cache.js";
@@ -19,6 +20,7 @@ import {
   jsonResult,
   readNumberParam,
   readReactionParams,
+  readStringArrayParam,
   readStringOrNumberParam,
   readStringParam,
 } from "./common.js";
@@ -320,6 +322,39 @@ export async function handleTelegramAction(
         setName: s.setName,
       })),
     });
+  }
+
+  if (action === "sendPoll") {
+    const chatId = readStringOrNumberParam(params, "chatId", { required: true });
+    const question = readStringParam(params, "question", { required: true });
+    const options = readStringArrayParam(params, "options");
+    if (!options || options.length < 2) {
+      throw new Error("Poll requires at least 2 options.");
+    }
+    const maxSelections = readNumberParam(params, "maxSelections", { integer: true });
+    const durationSeconds = readNumberParam(params, "durationSeconds", { integer: true });
+    const allowsMultipleAnswers = typeof params.allowsMultipleAnswers === "boolean" ? params.allowsMultipleAnswers : undefined;
+    const anonymous = typeof params.anonymous === "boolean" ? params.anonymous : undefined;
+    const replyToMessageId = readNumberParam(params, "replyToMessageId", { integer: true });
+    const messageThreadId = readNumberParam(params, "messageThreadId", { integer: true });
+    const token = resolveTelegramToken(cfg, { accountId }).token;
+    if (!token) {
+      throw new Error("Telegram bot token missing.");
+    }
+    const result = await sendPollTelegram(
+      {
+        question,
+        options,
+        maxSelections,
+        durationSeconds,
+        allowsMultipleAnswers,
+        anonymous,
+        replyToMessageId,
+        messageThreadId,
+      },
+      { token, accountId: accountId ?? undefined },
+    );
+    return jsonResult({ ok: true, messageId: result.messageId, pollId: result.pollId });
   }
 
   if (action === "stickerCacheStats") {
