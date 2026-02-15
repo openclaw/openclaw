@@ -135,26 +135,67 @@ export async function resolveGeminiEmbeddingClient(
   const remoteApiKey = resolveRemoteApiKey(remote?.apiKey);
   const remoteBaseUrl = remote?.baseUrl?.trim();
 
-  const apiKey = remoteApiKey
-    ? remoteApiKey
-    : requireApiKey(
-        await resolveApiKeyForProvider({
-          provider: "google",
-          cfg: options.config,
-          agentDir: options.agentDir,
-        }),
-        "google",
-      );
+  let apiKey: string;
+  let isOAuth = false;
+
+  if (remoteApiKey) {
+    apiKey = remoteApiKey;
+  } else {
+    // Try "google" provider first, fall back to "google-antigravity" for users
+    // who authenticated via antigravity OAuth (free Gemini access).
+    let resolved: Awaited<ReturnType<typeof resolveApiKeyForProvider>> | undefined;
+    try {
+      resolved = await resolveApiKeyForProvider({
+        provider: "google",
+        cfg: options.config,
+        agentDir: options.agentDir,
+      });
+    } catch {
+      resolved = await resolveApiKeyForProvider({
+        provider: "google-antigravity",
+        cfg: options.config,
+        agentDir: options.agentDir,
+      });
+    }
+    apiKey = requireApiKey(resolved, "google");
+    if (resolved?.mode === "oauth") {
+      isOAuth = true;
+    }
+  }
+
+  // Antigravity OAuth returns a JSON string containing {token, projectId}.
+  // Extract the raw access token for use in the Authorization header.
+  let bearerToken: string | undefined;
+  if (isOAuth) {
+    try {
+      const parsed = JSON.parse(apiKey);
+      if (parsed?.token) {
+        bearerToken = parsed.token;
+      }
+    } catch {
+      // Not JSON — use the apiKey directly as a bearer token
+      bearerToken = apiKey;
+    }
+  }
 
   const providerConfig = options.config.models?.providers?.google;
   const rawBaseUrl = remoteBaseUrl || providerConfig?.baseUrl?.trim() || DEFAULT_GEMINI_BASE_URL;
   const baseUrl = normalizeGeminiBaseUrl(rawBaseUrl);
   const headerOverrides = Object.assign({}, providerConfig?.headers, remote?.headers);
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    "x-goog-api-key": apiKey,
-    ...headerOverrides,
-  };
+
+  // OAuth tokens require Authorization: Bearer header.
+  // API keys use the x-goog-api-key header.
+  const headers: Record<string, string> = bearerToken
+    ? {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${bearerToken}`,
+        ...headerOverrides,
+      }
+    : {
+        "Content-Type": "application/json",
+        "x-goog-api-key": apiKey,
+        ...headerOverrides,
+      };
   const model = normalizeGeminiModel(options.model);
   const modelPath = buildGeminiModelPath(model);
   debugLog("memory embeddings: gemini client", {
