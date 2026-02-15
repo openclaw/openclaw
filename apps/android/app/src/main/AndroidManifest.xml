@@ -23,9 +23,11 @@
         android:name="android.hardware.telephony"
         android:required="false" />
 
+    <!-- Production network policy: cleartext disabled; config wired via networkSecurityConfig. -->
     <application
         android:name=".NodeApp"
         android:allowBackup="true"
+        android:usesCleartextTraffic="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
         android:icon="@mipmap/ic_launcher"
