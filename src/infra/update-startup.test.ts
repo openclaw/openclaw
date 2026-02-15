@@ -23,10 +23,15 @@ vi.mock("../version.js", () => ({
 }));
 
 describe("update-startup", () => {
-  const originalEnv = { ...process.env };
   let suiteRoot = "";
   let suiteCase = 0;
   let tempDir: string;
+  let prevStateDir: string | undefined;
+  let prevNodeEnv: string | undefined;
+  let prevVitest: string | undefined;
+  let hadStateDir = false;
+  let hadNodeEnv = false;
+  let hadVitest = false;
 
   let resolveOpenClawPackageRoot: (typeof import("./openclaw-root.js"))["resolveOpenClawPackageRoot"];
   let checkUpdateStatus: (typeof import("./update-check.js"))["checkUpdateStatus"];
@@ -43,9 +48,18 @@ describe("update-startup", () => {
     vi.setSystemTime(new Date("2026-01-17T10:00:00Z"));
     tempDir = path.join(suiteRoot, `case-${++suiteCase}`);
     await fs.mkdir(tempDir, { recursive: true });
+    hadStateDir = Object.prototype.hasOwnProperty.call(process.env, "OPENCLAW_STATE_DIR");
+    prevStateDir = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_STATE_DIR = tempDir;
-    delete process.env.VITEST;
+
+    hadNodeEnv = Object.prototype.hasOwnProperty.call(process.env, "NODE_ENV");
+    prevNodeEnv = process.env.NODE_ENV;
     process.env.NODE_ENV = "test";
+
+    // Ensure update checks don't short-circuit in test mode.
+    hadVitest = Object.prototype.hasOwnProperty.call(process.env, "VITEST");
+    prevVitest = process.env.VITEST;
+    delete process.env.VITEST;
 
     // Perf: load mocked modules once (after timers/env are set up).
     if (!loaded) {
@@ -58,7 +72,21 @@ describe("update-startup", () => {
 
   afterEach(async () => {
     vi.useRealTimers();
-    process.env = { ...originalEnv };
+    if (hadStateDir) {
+      process.env.OPENCLAW_STATE_DIR = prevStateDir;
+    } else {
+      delete process.env.OPENCLAW_STATE_DIR;
+    }
+    if (hadNodeEnv) {
+      process.env.NODE_ENV = prevNodeEnv;
+    } else {
+      delete process.env.NODE_ENV;
+    }
+    if (hadVitest) {
+      process.env.VITEST = prevVitest;
+    } else {
+      delete process.env.VITEST;
+    }
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
