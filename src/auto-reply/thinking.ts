@@ -25,6 +25,7 @@ export const XHIGH_MODEL_REFS = [
   "openai/gpt-5.2",
   "openai-codex/gpt-5.3-codex",
   "openai-codex/gpt-5.3-codex-spark",
+  "openai-codex/gpt-5.2",
   "openai-codex/gpt-5.2-codex",
   "openai-codex/gpt-5.1-codex",
   "github-copilot/gpt-5.2-codex",
