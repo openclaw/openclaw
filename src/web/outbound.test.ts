@@ -135,6 +135,24 @@ describe("web outbound", () => {
     });
   });
 
+  it("respects explicit fileName when provided", async () => {
+    const buf = Buffer.from("pdf");
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: buf,
+      contentType: "application/pdf",
+      kind: "document",
+      fileName: "original.pdf",
+    });
+    await sendMessageWhatsApp("+1555", "doc", {
+      verbose: false,
+      mediaUrl: "/tmp/original.pdf",
+      fileName: "custom.pdf",
+    });
+    expect(sendMessage).toHaveBeenLastCalledWith("+1555", "doc", buf, "application/pdf", {
+      fileName: "custom.pdf",
+    });
+  });
+
   it("sends polls via active listener", async () => {
     const result = await sendPollWhatsApp(
       "+1555",

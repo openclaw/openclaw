@@ -60,4 +60,6 @@ export type ReplyPayload = {
   isError?: boolean;
   /** Channel-specific payload data (per-channel envelope). */
   channelData?: Record<string, unknown>;
+  /** Custom filename for document attachments. */
+  fileName?: string;
 };

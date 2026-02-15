@@ -75,7 +75,7 @@ type ChannelHandler = {
   textChunkLimit?: number;
   sendPayload?: (payload: ReplyPayload) => Promise<OutboundDeliveryResult>;
   sendText: (text: string) => Promise<OutboundDeliveryResult>;
-  sendMedia: (caption: string, mediaUrl: string) => Promise<OutboundDeliveryResult>;
+  sendMedia: (caption: string, mediaUrl: string, fileName?: string) => Promise<OutboundDeliveryResult>;
 };
 
 // Channel docking: outbound delivery delegates to plugin.outbound adapters.
@@ -169,7 +169,7 @@ function createPluginHandler(params: {
         deps: params.deps,
         silent: params.silent,
       }),
-    sendMedia: async (caption, mediaUrl) =>
+    sendMedia: async (caption, mediaUrl, fileName) =>
       sendMedia({
         cfg: params.cfg,
         to: params.to,
@@ -182,6 +182,7 @@ function createPluginHandler(params: {
         gifPlayback: params.gifPlayback,
         deps: params.deps,
         silent: params.silent,
+        fileName,
       }),
   };
 }
@@ -508,7 +509,7 @@ async function deliverOutboundPayloadsCore(
         if (isSignalChannel) {
           results.push(await sendSignalMedia(caption, url));
         } else {
-          results.push(await handler.sendMedia(caption, url));
+          results.push(await handler.sendMedia(caption, url, effectivePayload.fileName));
         }
       }
       emitMessageSent(true);

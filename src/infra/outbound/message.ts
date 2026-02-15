@@ -52,6 +52,7 @@ type MessageSendParams = {
   };
   abortSignal?: AbortSignal;
   silent?: boolean;
+  fileName?: string;
 };
 
 export type MessageSendResult = {
@@ -140,6 +141,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       text: params.content,
       mediaUrl: params.mediaUrl,
       mediaUrls: params.mediaUrls,
+      fileName: params.fileName,
     },
   ]);
   const mirrorText = normalizedPayloads

@@ -48,6 +48,7 @@ export async function executeSendAction(params: {
   bestEffort?: boolean;
   replyToId?: string;
   threadId?: string | number;
+  fileName?: string;
 }): Promise<{
   handledBy: "plugin" | "core";
   payload: unknown;
@@ -107,6 +108,7 @@ export async function executeSendAction(params: {
     mirror: params.ctx.mirror,
     abortSignal: params.ctx.abortSignal,
     silent: params.ctx.silent,
+    fileName: params.fileName,
   });
 
   return {

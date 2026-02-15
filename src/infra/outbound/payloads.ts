@@ -57,6 +57,7 @@ export function normalizeReplyPayloadsForDelivery(payloads: ReplyPayload[]): Rep
       replyToTag: payload.replyToTag || parsed.replyToTag,
       replyToCurrent: payload.replyToCurrent || parsed.replyToCurrent,
       audioAsVoice: Boolean(payload.audioAsVoice || parsed.audioAsVoice),
+      fileName: payload.fileName,
     };
     if (parsed.isSilent && mergedMedia.length === 0) {
       return [];

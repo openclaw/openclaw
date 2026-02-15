@@ -534,6 +534,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     bestEffort: bestEffort ?? undefined,
     replyToId: replyToId ?? undefined,
     threadId: resolvedThreadId ?? undefined,
+    fileName: (readStringParam(params, "fileName") || readStringParam(params, "filename")) ?? undefined,
   });
 
   return {
