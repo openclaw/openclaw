@@ -8,8 +8,10 @@ const OPENROUTER_APP_HEADERS: Record<string, string> = {
   "HTTP-Referer": "https://openclaw.ai",
   "X-Title": "OpenClaw",
 };
-const OPENAI_RESPONSES_APIS = new Set(["openai-responses", "openai-codex-responses"]);
-const OPENAI_RESPONSES_PROVIDERS = new Set(["openai", "openai-codex"]);
+// NOTE: We only force `store=true` for *direct* OpenAI Responses.
+// Codex responses (chatgpt.com/backend-api/codex/responses) require `store=false`.
+const OPENAI_RESPONSES_APIS = new Set(["openai-responses"]);
+const OPENAI_RESPONSES_PROVIDERS = new Set(["openai"]);
 
 /**
  * Resolve provider-specific extra params from model config.

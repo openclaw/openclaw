@@ -137,4 +137,27 @@ describe("applyExtraParamsToAgent", () => {
 
     expect(payload.store).toBe(false);
   });
+
+  it("does not force store=true for Codex responses (Codex requires store=false)", () => {
+    const payload = { store: false };
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      options?.onPayload?.(payload);
+      return new AssistantMessageEventStream();
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "openai-codex", "codex-mini-latest");
+
+    const model = {
+      api: "openai-codex-responses",
+      provider: "openai-codex",
+      id: "codex-mini-latest",
+      baseUrl: "https://chatgpt.com/backend-api/codex/responses",
+    } as Model<"openai-codex-responses">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, {});
+
+    expect(payload.store).toBe(false);
+  });
 });
