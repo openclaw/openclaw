@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import type { AnyAgentTool } from "./common.js";
 import { formatThinkingLevels, normalizeThinkLevel } from "../../auto-reply/thinking.js";
+import { resolveSubagentProviderLimit } from "../../config/agent-limits.js";
 import { loadConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
 import {
@@ -21,11 +22,15 @@ import {
 } from "../recursive-spawn-config.js";
 import { optionalStringEnum } from "../schema/typebox.js";
 import { buildSubagentSystemPrompt } from "../subagent-announce.js";
+import { resolveSpawnProvider } from "../subagent-provider-limits.js";
 import {
   getActiveChildCount,
+  getProviderUsage,
   registerSubagentRun,
   releaseChildSlot,
+  releaseProviderSlot,
   reserveChildSlot,
+  reserveProviderSlot,
 } from "../subagent-registry.js";
 import { jsonResult, readStringParam } from "./common.js";
 import {
@@ -61,20 +66,7 @@ function splitModelRef(ref?: string) {
   return { provider: undefined, model: trimmed };
 }
 
-function normalizeModelSelection(value: unknown): string | undefined {
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    return trimmed || undefined;
-  }
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const primary = (value as { primary?: unknown }).primary;
-  if (typeof primary === "string" && primary.trim()) {
-    return primary.trim();
-  }
-  return undefined;
-}
+// Provider + model resolution for spawn limits lives in subagent-provider-limits.ts.
 
 export function createSessionsSpawnTool(opts?: {
   agentSessionKey?: string;
@@ -201,6 +193,15 @@ export function createSessionsSpawnTool(opts?: {
           });
         }
       }
+      const targetAgentConfig = resolveAgentConfig(cfg, targetAgentId);
+      const { model: resolvedModel, provider: resolvedProvider } = resolveSpawnProvider({
+        cfg,
+        targetAgentId,
+        modelOverride,
+      });
+      const spawnProvider = resolvedProvider ?? "unknown";
+      const providerLimit = resolveSubagentProviderLimit(cfg, spawnProvider);
+
       const maxChildren = resolveMaxChildrenPerAgent(cfg, requesterAgentId);
       const reserved = reserveChildSlot(requesterInternalKey, maxChildren);
       if (!reserved) {
@@ -209,6 +210,22 @@ export function createSessionsSpawnTool(opts?: {
           status: "blocked",
           reason: "parent_limit",
           error: `Cannot spawn: ${active}/${maxChildren} children active. Wait for a child to complete.`,
+        });
+      }
+
+      const providerReservation = reserveProviderSlot(spawnProvider, providerLimit);
+      if (!providerReservation) {
+        const usage = getProviderUsage(spawnProvider);
+        releaseChildSlot(requesterInternalKey);
+        return jsonResult({
+          status: "blocked",
+          reason: "provider_limit",
+          provider: spawnProvider,
+          active: usage.active,
+          pending: usage.pending,
+          used: usage.total,
+          maxConcurrent: providerLimit,
+          error: `Cannot spawn: provider ${spawnProvider} is at capacity (${usage.total}/${providerLimit}).`,
         });
       }
 
@@ -221,11 +238,6 @@ export function createSessionsSpawnTool(opts?: {
         const parentDepth = getSubagentDepth(requesterInternalKey);
         const childDepth = parentDepth > 0 ? parentDepth + 1 : 1;
         const spawnedByKey = requesterInternalKey;
-        const targetAgentConfig = resolveAgentConfig(cfg, targetAgentId);
-        const resolvedModel =
-          normalizeModelSelection(modelOverride) ??
-          normalizeModelSelection(targetAgentConfig?.subagents?.model) ??
-          normalizeModelSelection(cfg.agents?.defaults?.subagents?.model);
 
         const resolvedThinkingDefaultRaw =
           readStringParam(targetAgentConfig?.subagents ?? {}, "thinking") ??
@@ -348,6 +360,8 @@ export function createSessionsSpawnTool(opts?: {
           label: label || undefined,
           runTimeoutSeconds,
           depth: childDepth,
+          provider: spawnProvider,
+          providerReservation,
         });
         registeredRun = true;
 
@@ -361,6 +375,7 @@ export function createSessionsSpawnTool(opts?: {
       } finally {
         if (!registeredRun) {
           releaseChildSlot(requesterInternalKey);
+          releaseProviderSlot(providerReservation);
         }
       }
     },

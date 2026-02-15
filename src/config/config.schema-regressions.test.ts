@@ -58,6 +58,43 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts subagent providerLimits values", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          subagents: {
+            providerLimits: {
+              google: 3,
+              openai: 8,
+              unknown: 3,
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects invalid subagent providerLimits values", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          subagents: {
+            providerLimits: {
+              google: 0,
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toContain("agents.defaults.subagents.providerLimits");
+    }
+  });
+
   it("rejects unknown subagent keys", () => {
     const res = validateConfigObject({
       agents: {

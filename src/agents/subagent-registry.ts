@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { loadConfig } from "../config/config.js";
 import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
@@ -26,6 +27,7 @@ export type SubagentRunRecord = {
   cleanupCompletedAt?: number;
   cleanupHandled?: boolean;
   depth?: number;
+  provider?: string;
   childKeys?: Set<string>;
 };
 
@@ -70,6 +72,85 @@ export function listAllSubagentRuns(): SubagentRunRecord[] {
 }
 
 const pendingSpawns = new Map<string, number>();
+const pendingProviderSpawns = new Map<string, Set<string>>();
+
+export type ProviderSlotReservation = {
+  provider: string;
+  token: string;
+};
+
+function normalizeProviderKey(provider: string): string {
+  return provider.trim().toLowerCase();
+}
+
+function getActiveProviderCount(provider: string): number {
+  let count = 0;
+  for (const entry of subagentRuns.values()) {
+    if (entry.endedAt) {
+      continue;
+    }
+    if (normalizeProviderKey(entry.provider ?? "") === provider) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+export function getProviderUsage(provider: string): {
+  active: number;
+  pending: number;
+  total: number;
+} {
+  const providerKey = normalizeProviderKey(provider);
+  if (!providerKey) {
+    return { active: 0, pending: 0, total: 0 };
+  }
+  const active = getActiveProviderCount(providerKey);
+  const pending = pendingProviderSpawns.get(providerKey)?.size ?? 0;
+  return {
+    active,
+    pending,
+    total: active + pending,
+  };
+}
+
+export function reserveProviderSlot(provider: string, max: number): ProviderSlotReservation | null {
+  const providerKey = normalizeProviderKey(provider);
+  if (!providerKey) {
+    return null;
+  }
+
+  const usage = getProviderUsage(providerKey);
+  if (usage.total >= max) {
+    return null;
+  }
+
+  const token = crypto.randomUUID();
+  const pending = pendingProviderSpawns.get(providerKey) ?? new Set<string>();
+  pending.add(token);
+  pendingProviderSpawns.set(providerKey, pending);
+  return {
+    provider: providerKey,
+    token,
+  };
+}
+
+export function releaseProviderSlot(reservation?: ProviderSlotReservation | null): void {
+  const providerKey = normalizeProviderKey(reservation?.provider ?? "");
+  const token = reservation?.token?.trim();
+  if (!providerKey || !token) {
+    return;
+  }
+
+  const pending = pendingProviderSpawns.get(providerKey);
+  if (!pending) {
+    return;
+  }
+  pending.delete(token);
+  if (pending.size === 0) {
+    pendingProviderSpawns.delete(providerKey);
+  }
+}
 
 export function reserveChildSlot(parentKey: string, max: number): boolean {
   const active = getActiveChildCount(parentKey);
@@ -342,6 +423,8 @@ export function registerSubagentRun(params: {
   label?: string;
   runTimeoutSeconds?: number;
   depth?: number;
+  provider?: string;
+  providerReservation?: ProviderSlotReservation | null;
 }) {
   const now = Date.now();
   const cfg = loadConfig();
@@ -349,6 +432,9 @@ export function registerSubagentRun(params: {
   const archiveAtMs = archiveAfterMs ? now + archiveAfterMs : undefined;
   const waitTimeoutMs = resolveSubagentWaitTimeoutMs(cfg, params.runTimeoutSeconds);
   const requesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
+  const provider = normalizeProviderKey(
+    params.provider ?? params.providerReservation?.provider ?? "",
+  );
   subagentRuns.set(params.runId, {
     runId: params.runId,
     childSessionKey: params.childSessionKey,
@@ -363,6 +449,7 @@ export function registerSubagentRun(params: {
     archiveAtMs,
     cleanupHandled: false,
     depth: params.depth ?? 1,
+    provider: provider || undefined,
     childKeys: new Set(),
   });
   const parentRun = getRunByChildKey(params.requesterSessionKey);
@@ -373,6 +460,7 @@ export function registerSubagentRun(params: {
     parentRun.childKeys.add(params.childSessionKey);
   }
   releaseChildSlot(params.requesterSessionKey);
+  releaseProviderSlot(params.providerReservation);
   ensureListener();
   persistSubagentRuns();
   if (archiveAfterMs) {
@@ -460,6 +548,7 @@ export function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
   subagentRuns.clear();
   resumedRuns.clear();
   pendingSpawns.clear();
+  pendingProviderSpawns.clear();
   stopSweeper();
   restoreAttempted = false;
   if (listenerStop) {

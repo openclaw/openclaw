@@ -4,8 +4,11 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_AGENT_MAX_CONCURRENT,
   DEFAULT_SUBAGENT_MAX_CONCURRENT,
+  DEFAULT_SUBAGENT_PROVIDER_LIMITS,
   resolveAgentMaxConcurrent,
   resolveSubagentMaxConcurrent,
+  resolveSubagentProviderLimit,
+  resolveSubagentProviderLimits,
 } from "./agent-limits.js";
 import { loadConfig } from "./config.js";
 import { withTempHome } from "./test-helpers.js";
@@ -40,6 +43,38 @@ describe("agent concurrency defaults", () => {
     };
     expect(resolveAgentMaxConcurrent(cfg)).toBe(1);
     expect(resolveSubagentMaxConcurrent(cfg)).toBe(1);
+  });
+
+  it("resolves default provider limits", () => {
+    expect(resolveSubagentProviderLimits({})).toEqual(DEFAULT_SUBAGENT_PROVIDER_LIMITS);
+    expect(resolveSubagentProviderLimit({}, "openai")).toBe(
+      DEFAULT_SUBAGENT_PROVIDER_LIMITS.openai,
+    );
+    expect(resolveSubagentProviderLimit({}, "custom-provider")).toBe(
+      DEFAULT_SUBAGENT_PROVIDER_LIMITS.unknown,
+    );
+  });
+
+  it("resolves configured provider limits with normalization", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          subagents: {
+            providerLimits: {
+              "g.o_o-gle": 5,
+              "z.ai": 2,
+              zai: 6,
+              unknown: 4,
+            },
+          },
+        },
+      },
+    };
+
+    const limits = resolveSubagentProviderLimits(cfg);
+    expect(limits.google).toBe(5);
+    expect(limits.zai).toBe(6);
+    expect(limits.unknown).toBe(4);
   });
 
   it("injects defaults on load", async () => {

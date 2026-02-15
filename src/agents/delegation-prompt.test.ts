@@ -15,10 +15,14 @@ describe("buildDelegationPrompt", () => {
       fleet: [
         { id: "main", model: "anthropic/claude-sonnet-4", description: "General orchestrator" },
       ],
+      providerSlots: [
+        { provider: "openai", available: 7, active: 1, pending: 0, total: 1, max: 8 },
+      ],
     });
 
     expect(prompt).toContain("Delegation Tier: Full Orchestrator");
     expect(prompt).toContain("| Agent ID | Model | Description |");
+    expect(prompt).not.toContain("## Provider Slots");
   });
 
   it("builds Tier 2 prompt that marks children as leaf workers", () => {
@@ -37,6 +41,28 @@ describe("buildDelegationPrompt", () => {
     expect(prompt).toContain("leaf workers");
   });
 
+  it("renders provider slots table for delegators", () => {
+    const prompt = buildDelegationPrompt({
+      depth: 2,
+      maxDepth: 4,
+      parentKey: "agent:main:subagent:parent",
+      childSlotsAvailable: 2,
+      maxChildrenPerAgent: 4,
+      globalSlotsAvailable: 5,
+      maxConcurrent: 8,
+      fleet: [{ id: "main", model: "anthropic/claude-sonnet-4", description: "General" }],
+      providerSlots: [
+        { provider: "google", available: 1, active: 2, pending: 0, total: 2, max: 3 },
+        { provider: "openai", available: 6, active: 1, pending: 1, total: 2, max: 8 },
+      ],
+    });
+
+    expect(prompt).toContain("## Provider Slots");
+    expect(prompt).toContain("| Provider | Available | Active | Pending | Used | Max |");
+    expect(prompt).toContain("| google | 1 | 2 | 0 | 2 | 3 |");
+    expect(prompt).toContain("| openai | 6 | 1 | 1 | 2 | 8 |");
+  });
+
   it("builds Tier 3 prompt with Leaf Worker constraints and no fleet table", () => {
     const prompt = buildDelegationPrompt({
       depth: 4,
@@ -47,10 +73,14 @@ describe("buildDelegationPrompt", () => {
       globalSlotsAvailable: 0,
       maxConcurrent: 8,
       fleet: [{ id: "main", model: "anthropic/claude-sonnet-4", description: "General" }],
+      providerSlots: [
+        { provider: "google", available: 0, active: 2, pending: 1, total: 3, max: 3 },
+      ],
     });
 
     expect(prompt).toContain("Delegation Tier: Leaf Worker");
     expect(prompt).toContain("Complete your task directly. Do not attempt to spawn subagents.");
+    expect(prompt).not.toContain("## Provider Slots");
     expect(prompt).not.toContain("| Agent ID | Model | Description |");
   });
 

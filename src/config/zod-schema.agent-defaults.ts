@@ -140,6 +140,7 @@ export const AgentDefaultsSchema = z
     subagents: z
       .object({
         maxConcurrent: z.number().int().positive().optional(),
+        providerLimits: z.record(z.string(), z.number().int().positive()).optional(),
         archiveAfterMinutes: z.number().int().positive().optional(),
         allowRecursiveSpawn: z.boolean().optional(),
         maxDepth: z.number().int().min(1).max(10).optional(),

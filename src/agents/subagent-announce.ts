@@ -30,6 +30,7 @@ import {
 } from "./pi-embedded.js";
 import { resolveMaxChildrenPerAgent, resolveMaxSpawnDepth } from "./recursive-spawn-config.js";
 import { type AnnounceQueueItem, enqueueAnnounce } from "./subagent-announce-queue.js";
+import { buildProviderUsageSummary } from "./subagent-provider-limits.js";
 import { getActiveChildCount, listAllSubagentRuns } from "./subagent-registry.js";
 import { readLatestAssistantReply } from "./tools/agent-step.js";
 import { getAncestors } from "./tools/sessions-lineage.js";
@@ -427,6 +428,7 @@ export function buildSubagentSystemPrompt(params: {
   });
 
   const parentKey = params.requesterSessionKey?.trim() || "unknown";
+  const providerSlots = buildProviderUsageSummary(cfg);
   const delegationPrompt = buildDelegationPrompt({
     depth: childDepth,
     maxDepth,
@@ -436,6 +438,7 @@ export function buildSubagentSystemPrompt(params: {
     globalSlotsAvailable,
     maxConcurrent,
     fleet,
+    providerSlots,
   });
   return `${prompt}\n${delegationPrompt}`;
 }

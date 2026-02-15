@@ -204,6 +204,8 @@ export type AgentDefaultsConfig = {
   subagents?: {
     /** Max concurrent sub-agent runs (global lane: "subagent"). Default: 1. */
     maxConcurrent?: number;
+    /** Per-provider concurrent spawn caps for subagents (normalized provider id -> max). */
+    providerLimits?: Record<string, number>;
     /** Auto-archive sub-agent sessions after N minutes (default: 60). */
     archiveAfterMinutes?: number;
     /** Allow subagents to recursively spawn their own subagents. Default: false. */

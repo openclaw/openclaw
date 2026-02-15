@@ -37,14 +37,16 @@ vi.mock("../subagent-announce.js", () => ({
   runSubagentAnnounceFlow: vi.fn(async () => true),
 }));
 
-import { createSessionsSpawnTool } from "./sessions-spawn-tool.js";
 import {
   addSubagentRunForTests,
   getActiveChildCount,
   releaseChildSlot,
+  releaseProviderSlot,
   reserveChildSlot,
+  reserveProviderSlot,
   resetSubagentRegistryForTests,
 } from "../subagent-registry.js";
+import { createSessionsSpawnTool } from "./sessions-spawn-tool.js";
 
 function baseConfig(): OpenClawConfig {
   return {
@@ -135,6 +137,190 @@ describe("sessions_spawn parent limits + target validation", () => {
     });
   });
 
+  it("blocks spawn when provider concurrency cap is reached", async () => {
+    configOverride = {
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+      agents: {
+        defaults: {
+          subagents: {
+            providerLimits: {
+              openai: 1,
+              unknown: 3,
+            },
+          },
+        },
+        list: [{ id: "main", subagents: { maxChildrenPerAgent: 3 } }],
+      },
+    };
+
+    addSubagentRunForTests({
+      runId: "openai-active",
+      childSessionKey: "agent:main:subagent:openai-active",
+      requesterSessionKey: "main",
+      requesterDisplayKey: "main",
+      task: "already running",
+      cleanup: "keep",
+      createdAt: Date.now(),
+      provider: "openai",
+    });
+
+    const result = await createTool().execute("call-provider-limit", {
+      task: "new task",
+      model: "openai/gpt-5",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "blocked",
+      reason: "provider_limit",
+      provider: "openai",
+      active: 1,
+      pending: 0,
+      used: 1,
+      maxConcurrent: 1,
+    });
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("applies provider limits independently per provider", async () => {
+    configOverride = {
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+      agents: {
+        defaults: {
+          subagents: {
+            providerLimits: {
+              openai: 1,
+              google: 1,
+              unknown: 3,
+            },
+          },
+        },
+        list: [{ id: "main", subagents: { maxChildrenPerAgent: 3 } }],
+      },
+    };
+
+    addSubagentRunForTests({
+      runId: "openai-active-2",
+      childSessionKey: "agent:main:subagent:openai-active-2",
+      requesterSessionKey: "main",
+      requesterDisplayKey: "main",
+      task: "already running",
+      cleanup: "keep",
+      createdAt: Date.now(),
+      provider: "openai",
+    });
+
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "agent") {
+        return { runId: "run-google-ok" };
+      }
+      if (request.method === "agent.wait") {
+        return { status: "timeout" };
+      }
+      return {};
+    });
+
+    const result = await createTool().execute("call-provider-isolation", {
+      task: "new task",
+      model: "google/gemini-3-pro-preview",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      runId: "run-google-ok",
+    });
+  });
+
+  it("uses unknown provider bucket when provider cannot be resolved", async () => {
+    configOverride = {
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+      agents: {
+        defaults: {
+          subagents: {
+            providerLimits: {
+              unknown: 1,
+            },
+          },
+        },
+        list: [{ id: "main", subagents: { maxChildrenPerAgent: 3 } }],
+      },
+    };
+
+    addSubagentRunForTests({
+      runId: "unknown-active",
+      childSessionKey: "agent:main:subagent:unknown-active",
+      requesterSessionKey: "main",
+      requesterDisplayKey: "main",
+      task: "already running",
+      cleanup: "keep",
+      createdAt: Date.now(),
+      provider: "unknown",
+    });
+
+    const result = await createTool().execute("call-provider-unknown", {
+      task: "new task",
+      model: "gpt-5-mini",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "blocked",
+      reason: "provider_limit",
+      provider: "unknown",
+      active: 1,
+      pending: 0,
+      used: 1,
+      maxConcurrent: 1,
+    });
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("releases provider reservation when spawn fails", async () => {
+    configOverride = {
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+      agents: {
+        defaults: {
+          subagents: {
+            providerLimits: {
+              openai: 1,
+              unknown: 3,
+            },
+          },
+        },
+        list: [{ id: "main", subagents: { maxChildrenPerAgent: 3 } }],
+      },
+    };
+
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "agent") {
+        throw new Error("spawn failed");
+      }
+      return {};
+    });
+
+    const result = await createTool().execute("call-provider-failure-release", {
+      task: "this will fail",
+      model: "openai/gpt-5",
+    });
+
+    expect(result.details).toMatchObject({ status: "error" });
+    const reservation = reserveProviderSlot("openai", 1);
+    expect(reservation).not.toBeNull();
+    releaseProviderSlot(reservation);
+  });
+
   it("returns unknown agent error before recursive-spawn checks", async () => {
     configOverride = {
       session: {
@@ -154,7 +340,9 @@ describe("sessions_spawn parent limits + target validation", () => {
     expect(result.details).toMatchObject({
       status: "error",
     });
-    expect(String((result.details as { error?: unknown }).error)).toContain('Unknown agent: "ghost"');
+    expect(String((result.details as { error?: unknown }).error)).toContain(
+      'Unknown agent: "ghost"',
+    );
     expect(String((result.details as { error?: unknown }).error)).toContain("Available: main");
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
