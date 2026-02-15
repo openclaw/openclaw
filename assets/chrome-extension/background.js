@@ -26,6 +26,9 @@ const childSessionToTab = new Map()
 /** @type {Map<number, {resolve:(v:any)=>void, reject:(e:Error)=>void}>} */
 const pending = new Map()
 
+/** @type {Map<number, () => void>} */
+const pendingReattach = new Map()
+
 function nowStack() {
   try {
     return new Error().stack || ''
@@ -427,7 +430,48 @@ function onDebuggerDetach(source, reason) {
   const tabId = source.tabId
   if (!tabId) return
   if (!tabs.has(tabId)) return
-  void detachTab(tabId, reason)
+
+  // User clicked "Cancel" on the debugging infobar — respect it
+  if (reason === 'canceled_by_user') {
+    void detachTab(tabId, reason)
+    return
+  }
+
+  // Cancel any pending reattach for this tab (rapid navigation guard)
+  const prevCleanup = pendingReattach.get(tabId)
+  if (prevCleanup) prevCleanup()
+
+  // Navigation-related detach — try to re-attach after the page loads
+  setBadge(tabId, 'connecting')
+  const cleanup = () => {
+    chrome.tabs.onUpdated.removeListener(onUpdated)
+    chrome.tabs.onRemoved.removeListener(onRemoved)
+    clearTimeout(timeout)
+    pendingReattach.delete(tabId)
+  }
+  const onUpdated = async (updatedTabId, changeInfo) => {
+    if (updatedTabId !== tabId || changeInfo.status !== 'complete') return
+    cleanup()
+    try {
+      await ensureRelayConnection()
+      await attachTab(tabId)
+    } catch {
+      void detachTab(tabId, reason)
+    }
+  }
+  const onRemoved = (removedTabId) => {
+    if (removedTabId !== tabId) return
+    cleanup()
+    void detachTab(tabId, 'tab_closed')
+  }
+  chrome.tabs.onUpdated.addListener(onUpdated)
+  chrome.tabs.onRemoved.addListener(onRemoved)
+  pendingReattach.set(tabId, cleanup)
+  // Give up after 10 seconds
+  const timeout = setTimeout(() => {
+    cleanup()
+    void detachTab(tabId, reason)
+  }, 10_000)
 }
 
 chrome.action.onClicked.addListener(() => void connectOrToggleForActiveTab())
