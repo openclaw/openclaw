@@ -391,15 +391,22 @@ describe("local media root guard", () => {
     );
   });
 
-  it("rejects default OpenClaw state per-agent workspace-* roots without explicit local roots", async () => {
+  it("rejects per-agent workspace-* roots that are not in localRoots", async () => {
     const { resolveStateDir } = await import("../config/paths.js");
     const stateDir = resolveStateDir();
     const readFile = vi.fn(async () => Buffer.from("generated-media"));
 
+    // Pass explicit localRoots without os.tmpdir() to avoid platform-specific
+    // overlap (on Linux CI, stateDir may live under /tmp which is in defaults).
     await expect(
       loadWebMedia(path.join(stateDir, "workspace-clawdy", "tmp", "render.bin"), {
         maxBytes: 1024 * 1024,
         readFile,
+        localRoots: [
+          path.join(stateDir, "media"),
+          path.join(stateDir, "workspace"),
+          path.join(stateDir, "sandboxes"),
+        ],
       }),
     ).rejects.toThrow(/not under an allowed directory/i);
   });
