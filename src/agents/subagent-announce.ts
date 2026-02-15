@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import path from "node:path";
 import { resolveQueueSettings } from "../auto-reply/reply/queue.js";
+import { resolveSubagentMaxConcurrent } from "../config/agent-limits.js";
 import { loadConfig } from "../config/config.js";
 import {
   loadSessionStore,
@@ -9,7 +10,6 @@ import {
   resolveSessionFilePath,
   resolveStorePath,
 } from "../config/sessions.js";
-import { resolveSubagentMaxConcurrent } from "../config/agent-limits.js";
 import { callGateway } from "../gateway/call.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import { isSubagentSessionKey, normalizeMainKey } from "../routing/session-key.js";
@@ -21,13 +21,13 @@ import {
   mergeDeliveryContext,
   normalizeDeliveryContext,
 } from "../utils/delivery-context.js";
+import { listAgentIds, resolveAgentConfig } from "./agent-scope.js";
+import { buildDelegationPrompt } from "./delegation-prompt.js";
 import {
   isEmbeddedPiRunActive,
   queueEmbeddedPiMessage,
   waitForEmbeddedPiRunEnd,
 } from "./pi-embedded.js";
-import { listAgentIds, resolveAgentConfig } from "./agent-scope.js";
-import { buildDelegationPrompt } from "./delegation-prompt.js";
 import { resolveMaxChildrenPerAgent, resolveMaxSpawnDepth } from "./recursive-spawn-config.js";
 import { type AnnounceQueueItem, enqueueAnnounce } from "./subagent-announce-queue.js";
 import { getActiveChildCount, listAllSubagentRuns } from "./subagent-registry.js";
@@ -372,6 +372,11 @@ export function buildSubagentSystemPrompt(params: {
     "- What you accomplished or found",
     "- Any relevant details the main agent should know",
     "- Keep it concise but informative",
+    "",
+    "## Gateway Restarts",
+    "- You can safely trigger `openclaw gateway restart --soft` if needed.",
+    "- Always use `--soft`. Never run a hard restart.",
+    "- The resilience layer will keep your session alive through the restart.",
     "",
     "## What You DON'T Do",
     "- NO user conversations (that's main agent's job)",
