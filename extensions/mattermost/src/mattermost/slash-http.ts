@@ -152,7 +152,7 @@ async function authorizeSlashInvocation(params: {
       ? channelType?.toUpperCase() === "G"
         ? "group"
         : "channel"
-      : "direct";
+      : "channel";
 
   const chatType = kind === "direct" ? "direct" : kind === "group" ? "group" : "channel";
 
