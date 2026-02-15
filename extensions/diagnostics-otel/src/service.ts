@@ -312,13 +312,25 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
             attributes["openclaw.code.location"] = meta.path.filePathWithLine;
           }
 
-          otelLogger.emit({
-            body: message,
-            severityText: logLevelName,
-            severityNumber,
-            attributes,
-            timestamp: meta?.date ?? new Date(),
-          });
+          const rawTimestamp = meta?.date ?? (logObj as Record<string, unknown>).date;
+          const timestamp =
+            rawTimestamp instanceof Date
+              ? rawTimestamp
+              : typeof rawTimestamp === "string" || typeof rawTimestamp === "number"
+                ? new Date(rawTimestamp)
+                : undefined;
+
+          try {
+            otelLogger.emit({
+              body: message,
+              severityText: logLevelName,
+              severityNumber,
+              attributes,
+              ...(timestamp && Number.isFinite(timestamp.getTime()) ? { timestamp } : {}),
+            });
+          } catch {
+            // ignore log export failures
+          }
         });
       }
 
