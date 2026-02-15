@@ -384,22 +384,34 @@ export function createDebateCallTool(opts?: {
           } as DebateCallResult);
         }
 
-        // Self-calls are always allowed
-        if (requesterAgentId !== targetId) {
-          const policy = checkA2APolicy(cfg, requesterAgentId, targetId);
-          if (!policy.allowed) {
-            // Fix 7: Security audit logging for policy denial
-            logAudit("policy_denied", { requester: requesterAgentId, target: targetId });
-            return jsonResult({
-              status: "error",
-              conclusion: null,
-              confidence: 0,
-              confidenceHistory: [],
-              rounds: [],
-              assumptions: [],
-              error: policy.error,
-            } as DebateCallResult);
-          }
+        // Fix 2: Self-call prevention (debate participant cannot be requester)
+        if (requesterAgentId === targetId) {
+          logAudit("self_call_blocked", { agent: requesterAgentId });
+          return jsonResult({
+            status: "error",
+            conclusion: null,
+            confidence: 0,
+            confidenceHistory: [],
+            rounds: [],
+            assumptions: [],
+            error: `Self-call not allowed: agent '${requesterAgentId}' cannot participate in its own debate (infinite loop prevention)`,
+          } as DebateCallResult);
+        }
+
+        // Check A2A policy
+        const policy = checkA2APolicy(cfg, requesterAgentId, targetId);
+        if (!policy.allowed) {
+          // Fix 7: Security audit logging for policy denial
+          logAudit("policy_denied", { requester: requesterAgentId, target: targetId });
+          return jsonResult({
+            status: "error",
+            conclusion: null,
+            confidence: 0,
+            confidenceHistory: [],
+            rounds: [],
+            assumptions: [],
+            error: policy.error,
+          } as DebateCallResult);
         }
       }
 

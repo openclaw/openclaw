@@ -243,17 +243,24 @@ export function createAgentCallTool(opts?: {
       const requesterAgentId = requesterSessionKey?.split(":")[1] ?? "main";
       const targetAgentId = agentId;
 
-      // Check A2A policy (unless calling self)
-      if (requesterAgentId !== targetAgentId) {
-        const policy = checkA2APolicy(cfg, requesterAgentId, targetAgentId);
-        if (!policy.allowed) {
-          // Fix 7: Security audit logging for policy denial
-          logAudit("policy_denied", { requester: requesterAgentId, target: targetAgentId, skill });
-          return jsonResult({
-            status: "forbidden",
-            error: policy.error,
-          } as AgentCallResult);
-        }
+      // Fix 2: Self-call prevention (infinite loop protection)
+      if (requesterAgentId === targetAgentId) {
+        logAudit("self_call_blocked", { agent: requesterAgentId, skill });
+        return jsonResult({
+          status: "error",
+          error: "Self-call not allowed: agent cannot invoke itself (infinite loop prevention)",
+        } as AgentCallResult);
+      }
+
+      // Check A2A policy
+      const policy = checkA2APolicy(cfg, requesterAgentId, targetAgentId);
+      if (!policy.allowed) {
+        // Fix 7: Security audit logging for policy denial
+        logAudit("policy_denied", { requester: requesterAgentId, target: targetAgentId, skill });
+        return jsonResult({
+          status: "forbidden",
+          error: policy.error,
+        } as AgentCallResult);
       }
 
       // Fix 7: Security audit logging for invocation
