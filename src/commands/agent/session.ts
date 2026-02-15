@@ -20,7 +20,8 @@ import {
   resolveStorePath,
   type SessionEntry,
 } from "../../config/sessions.js";
-import { normalizeMainKey } from "../../routing/session-key.js";
+import { buildAgentSessionKey } from "../../routing/resolve-route.js";
+import { normalizeAgentId, normalizeMainKey } from "../../routing/session-key.js";
 
 export type SessionResolution = {
   sessionId: string;
@@ -45,6 +46,8 @@ export function resolveSessionKeyForRequest(opts: {
   sessionId?: string;
   sessionKey?: string;
   agentId?: string;
+  /** Channel for DM session key routing (e.g., "whatsapp", "telegram"). */
+  channel?: string;
 }): SessionKeyResolution {
   const sessionCfg = opts.cfg.session;
   const scope = sessionCfg?.scope ?? "per-sender";
@@ -61,9 +64,32 @@ export function resolveSessionKeyForRequest(opts: {
   });
   const sessionStore = loadSessionStore(storePath);
 
-  const ctx: MsgContext | undefined = opts.to?.trim() ? { From: opts.to } : undefined;
-  let sessionKey: string | undefined =
-    explicitSessionKey ?? (ctx ? resolveSessionKey(scope, ctx, mainKey) : undefined);
+  const to = opts.to?.trim();
+  const ctx: MsgContext | undefined = to ? { From: to } : undefined;
+
+  // When a recipient (to) is provided, respect dmScope config for session isolation.
+  let sessionKey: string | undefined;
+  if (explicitSessionKey) {
+    sessionKey = explicitSessionKey;
+  } else if (to && opts.channel) {
+    // Use dmScope-aware session key builder for DMs with a known channel.
+    // Prefer explicit agentId if provided, otherwise fall back to storeAgentId.
+    const agentIdForKey = opts.agentId?.trim()
+      ? normalizeAgentId(opts.agentId)
+      : normalizeAgentId(storeAgentId);
+    const dmScope = sessionCfg?.dmScope ?? "main";
+    const identityLinks = sessionCfg?.identityLinks;
+    sessionKey = buildAgentSessionKey({
+      agentId: agentIdForKey,
+      channel: opts.channel,
+      peer: { kind: "dm", id: to },
+      dmScope,
+      identityLinks,
+    });
+  } else if (ctx) {
+    // Fallback to legacy resolver (ignores dmScope for DMs).
+    sessionKey = resolveSessionKey(scope, ctx, mainKey);
+  }
 
   // If a session id was provided, prefer to re-use its entry (by id) even when no key was derived.
   if (
@@ -113,6 +139,8 @@ export function resolveSession(opts: {
   sessionId?: string;
   sessionKey?: string;
   agentId?: string;
+  /** Channel for DM session key routing (e.g., "whatsapp", "telegram"). */
+  channel?: string;
 }): SessionResolution {
   const sessionCfg = opts.cfg.session;
   const { sessionKey, sessionStore, storePath } = resolveSessionKeyForRequest({
@@ -121,6 +149,7 @@ export function resolveSession(opts: {
     sessionId: opts.sessionId,
     sessionKey: opts.sessionKey,
     agentId: opts.agentId,
+    channel: opts.channel,
   });
   const now = Date.now();
 
