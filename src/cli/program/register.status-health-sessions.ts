@@ -115,31 +115,15 @@ export function registerStatusHealthSessionsCommands(program: Command) {
   const sessions = program
     .command("sessions")
     .description("Manage conversation sessions")
-    .option("--json", "Output as JSON", false)
-    .option("--verbose", "Verbose logging", false)
-    .option("--store <path>", "Path to session store (default: resolved from config)")
-    .option("--active <minutes>", "Only show sessions updated within the past N minutes")
     .addHelpText(
       "after",
       () =>
         `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/sessions", "docs.openclaw.ai/cli/sessions")}\n`,
-    )
-    .action(async (opts) => {
-      // Default action when no subcommand is provided - list sessions
-      setVerbose(Boolean(opts.verbose));
-      await sessionsCommand(
-        {
-          json: Boolean(opts.json),
-          store: opts.store as string | undefined,
-          active: opts.active as string | undefined,
-        },
-        defaultRuntime,
-      );
-    });
+    );
 
-  // List subcommand
+  // List subcommand (default: runs when no subcommand is given)
   sessions
-    .command("list")
+    .command("list", { isDefault: true })
     .description("List stored conversation sessions")
     .option("--json", "Output as JSON", false)
     .option("--verbose", "Verbose logging", false)
