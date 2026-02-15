@@ -181,9 +181,7 @@ describe("applyPatch", () => {
 *** End Patch`;
 
       try {
-        await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(
-          /Symlink escapes sandbox root/,
-        );
+        await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(/Symlink escapes sandbox root/);
         const stillThere = await fs.readFile(outsideFile, "utf8");
         expect(stillThere).toBe("victim\n");
       } finally {
@@ -213,6 +211,31 @@ describe("applyPatch", () => {
         expect(contents).toBe("escaped\n");
       } finally {
         await fs.rm(escapedPath, { force: true });
+      }
+    });
+  });
+
+  it("allows deleting a symlink itself even if it points outside cwd", async () => {
+    await withTempDir(async (dir) => {
+      const outsideDir = await fs.mkdtemp(path.join(path.dirname(dir), "openclaw-patch-outside-"));
+      try {
+        const outsideTarget = path.join(outsideDir, "target.txt");
+        await fs.writeFile(outsideTarget, "keep\n", "utf8");
+
+        const linkDir = path.join(dir, "link");
+        await fs.symlink(outsideDir, linkDir);
+
+        const patch = `*** Begin Patch
+*** Delete File: link
+*** End Patch`;
+
+        const result = await applyPatch(patch, { cwd: dir });
+        expect(result.summary.deleted).toEqual(["link"]);
+        await expect(fs.lstat(linkDir)).rejects.toBeDefined();
+        const outsideContents = await fs.readFile(outsideTarget, "utf8");
+        expect(outsideContents).toBe("keep\n");
+      } finally {
+        await fs.rm(outsideDir, { recursive: true, force: true });
       }
     });
   });
