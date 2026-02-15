@@ -163,6 +163,12 @@ cat > "$ENT_TMP_APP_BASE" <<'PLIST'
     <true/>
     <key>com.apple.security.personal-information.location</key>
     <true/>
+    <key>com.apple.security.personal-information.calendars</key>
+    <true/>
+    <key>com.apple.security.personal-information.reminders</key>
+    <true/>
+    <key>com.apple.security.personal-information.addressbook</key>
+    <true/>
 </dict>
 </plist>
 PLIST

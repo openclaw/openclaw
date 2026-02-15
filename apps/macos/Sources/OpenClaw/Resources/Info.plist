@@ -59,6 +59,14 @@
     <string>OpenClaw uses speech recognition to detect your Voice Wake trigger phrase.</string>
     <key>NSAppleEventsUsageDescription</key>
     <string>OpenClaw needs Automation (AppleScript) permission to drive Terminal and other apps for agent actions.</string>
+    <key>NSCalendarsUsageDescription</key>
+    <string>OpenClaw reads and creates calendar events when requested by the agent.</string>
+    <key>NSRemindersUsageDescription</key>
+    <string>OpenClaw reads reminders when requested by the agent.</string>
+    <key>NSRemindersFullAccessUsageDescription</key>
+    <string>OpenClaw reads and creates reminders when requested by the agent.</string>
+    <key>NSContactsUsageDescription</key>
+    <string>OpenClaw reads and creates contacts when requested by the agent.</string>
 
     <key>NSAppTransportSecurity</key>
     <dict>
