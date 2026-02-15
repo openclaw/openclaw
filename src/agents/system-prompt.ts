@@ -360,9 +360,7 @@ export function buildAgentSystemPrompt(params: {
       ? sandboxContainerWorkspace
       : params.workspaceDir;
   const workspaceGuidance =
-    params.sandboxInfo?.enabled && sandboxContainerWorkspace
-      ? `For read/write/edit/apply_patch, file paths resolve against host workspace: ${params.workspaceDir}. Prefer relative paths so both sandboxed exec and file tools work consistently.`
-      : "Treat this directory as the single global workspace for file operations unless explicitly instructed otherwise.";
+    "Treat this directory as the single global workspace for file operations unless explicitly instructed otherwise.";
   const safetySection = [
     "## Safety",
     "You have no independent goals: do not pursue self-preservation, replication, resource acquisition, or power-seeking; avoid long-term plans beyond the user's request.",
