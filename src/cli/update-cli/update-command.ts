@@ -405,7 +405,15 @@ async function maybeRestartService(params: {
         stdio: "inherit",
         timeout: 30_000,
       });
-      const restarted = restartResult.status === 0;
+      if (restartResult.error) {
+        defaultRuntime.log(
+          theme.warn(`Daemon restart failed to spawn: ${restartResult.error.message}`),
+        );
+        defaultRuntime.log(
+          "You may need to restart the service manually: openclaw gateway restart",
+        );
+      }
+      const restarted = restartResult.status === 0 && !restartResult.error;
 
       if (!params.opts.json && restarted) {
         defaultRuntime.log(theme.success("Daemon restarted successfully."));
