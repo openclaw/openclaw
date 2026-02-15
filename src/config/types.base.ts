@@ -51,7 +51,13 @@ export type SessionSendPolicyAction = "allow" | "deny";
 export type SessionSendPolicyMatch = {
   channel?: string;
   chatType?: ChatType;
+  /**
+   * Session key prefix match.
+   * Note: some consumers match against a normalized key (for example, stripping `agent:<id>:`).
+   */
   keyPrefix?: string;
+  /** Optional raw session-key prefix match for consumers that normalize session keys. */
+  rawKeyPrefix?: string;
 };
 export type SessionSendPolicyRule = {
   action: SessionSendPolicyAction;

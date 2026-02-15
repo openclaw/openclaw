@@ -1099,14 +1099,18 @@ public struct SessionsPatchParams: Codable, Sendable {
 
 public struct SessionsResetParams: Codable, Sendable {
     public let key: String
+    public let reason: AnyCodable?
 
     public init(
-        key: String
+        key: String,
+        reason: AnyCodable?
     ) {
         self.key = key
+        self.reason = reason
     }
     private enum CodingKeys: String, CodingKey {
         case key
+        case reason
     }
 }
 

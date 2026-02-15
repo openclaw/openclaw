@@ -1,9 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { type MockInstance, vi } from "vitest";
+import { vi } from "vitest";
 import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { createMockTypingController } from "./test-helpers.js";
+
+// Avoid exporting vitest mock types (TS2742 under pnpm + d.ts emit).
+// oxlint-disable-next-line typescript/no-explicit-any
+type AnyMock = any;
 
 type EmbeddedRunParams = {
   prompt?: string;
@@ -16,11 +20,11 @@ const state = vi.hoisted(() => ({
   runCliAgentMock: vi.fn(),
 }));
 
-export function getRunEmbeddedPiAgentMock(): MockInstance {
+export function getRunEmbeddedPiAgentMock(): AnyMock {
   return state.runEmbeddedPiAgentMock;
 }
 
-export function getRunCliAgentMock(): MockInstance {
+export function getRunCliAgentMock(): AnyMock {
   return state.runCliAgentMock;
 }
 

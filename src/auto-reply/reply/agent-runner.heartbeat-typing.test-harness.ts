@@ -1,4 +1,4 @@
-import { beforeEach, type MockInstance, vi } from "vitest";
+import { beforeAll, beforeEach, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import type { TemplateContext } from "../templating.js";
@@ -6,15 +6,34 @@ import type { GetReplyOptions } from "../types.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { createMockTypingController } from "./test-helpers.js";
 
+// Avoid exporting vitest mock types (TS2742 under pnpm + d.ts emit).
+// oxlint-disable-next-line typescript/no-explicit-any
+type AnyMock = any;
+
 const state = vi.hoisted(() => ({
   runEmbeddedPiAgentMock: vi.fn(),
 }));
 
-export function getRunEmbeddedPiAgentMock(): MockInstance {
+let runReplyAgentPromise:
+  | Promise<(typeof import("./agent-runner.js"))["runReplyAgent"]>
+  | undefined;
+
+async function getRunReplyAgent() {
+  if (!runReplyAgentPromise) {
+    runReplyAgentPromise = import("./agent-runner.js").then((m) => m.runReplyAgent);
+  }
+  return await runReplyAgentPromise;
+}
+
+export function getRunEmbeddedPiAgentMock(): AnyMock {
   return state.runEmbeddedPiAgentMock;
 }
 
 export function installRunReplyAgentTypingHeartbeatTestHooks() {
+  beforeAll(async () => {
+    // Avoid attributing the initial agent-runner import cost to the first test case.
+    await getRunReplyAgent();
+  });
   beforeEach(() => {
     state.runEmbeddedPiAgentMock.mockReset();
   });
@@ -99,7 +118,7 @@ export function createMinimalRun(params?: {
     typing,
     opts,
     run: async () => {
-      const { runReplyAgent } = await import("./agent-runner.js");
+      const runReplyAgent = await getRunReplyAgent();
       return runReplyAgent({
         commandBody: "hello",
         followupRun,

@@ -18,14 +18,53 @@ import {
   extractAssistantThinking,
   formatReasoningMessage,
 } from "../../pi-embedded-utils.js";
+import { isLikelyMutatingToolName } from "../../tool-mutation.js";
 
 type ToolMetaEntry = { toolName: string; meta?: string };
+type LastToolError = {
+  toolName: string;
+  meta?: string;
+  error?: string;
+  mutatingAction?: boolean;
+  actionFingerprint?: string;
+};
+
+const RECOVERABLE_TOOL_ERROR_KEYWORDS = [
+  "required",
+  "missing",
+  "invalid",
+  "must be",
+  "must have",
+  "needs",
+  "requires",
+] as const;
+
+function isRecoverableToolError(error: string | undefined): boolean {
+  const errorLower = (error ?? "").toLowerCase();
+  return RECOVERABLE_TOOL_ERROR_KEYWORDS.some((keyword) => errorLower.includes(keyword));
+}
+
+function shouldShowToolErrorWarning(params: {
+  lastToolError: LastToolError;
+  hasUserFacingReply: boolean;
+  suppressToolErrors: boolean;
+}): boolean {
+  const isMutatingToolError =
+    params.lastToolError.mutatingAction ?? isLikelyMutatingToolName(params.lastToolError.toolName);
+  if (isMutatingToolError) {
+    return true;
+  }
+  if (params.suppressToolErrors) {
+    return false;
+  }
+  return !params.hasUserFacingReply && !isRecoverableToolError(params.lastToolError.error);
+}
 
 export function buildEmbeddedRunPayloads(params: {
   assistantTexts: string[];
   toolMetas: ToolMetaEntry[];
   lastAssistant: AssistantMessage | undefined;
-  lastToolError?: { toolName: string; meta?: string; error?: string };
+  lastToolError?: LastToolError;
   config?: OpenClawConfig;
   sessionKey: string;
   provider?: string;
@@ -212,33 +251,38 @@ export function buildEmbeddedRunPayloads(params: {
     const lastAssistantWasToolUse = params.lastAssistant?.stopReason === "toolUse";
     const hasUserFacingReply =
       replyItems.length > 0 && !lastAssistantHasToolCalls && !lastAssistantWasToolUse;
-    // Check if this is a recoverable/internal tool error that shouldn't be shown to users
-    // when there's already a user-facing reply (the model should have retried).
-    const errorLower = (params.lastToolError.error ?? "").toLowerCase();
-    const isRecoverableError =
-      errorLower.includes("required") ||
-      errorLower.includes("missing") ||
-      errorLower.includes("invalid") ||
-      errorLower.includes("must be") ||
-      errorLower.includes("must have") ||
-      errorLower.includes("needs") ||
-      errorLower.includes("requires");
+    const shouldShowToolError = shouldShowToolErrorWarning({
+      lastToolError: params.lastToolError,
+      hasUserFacingReply,
+      suppressToolErrors: Boolean(params.config?.messages?.suppressToolErrors),
+    });
 
-    // Show tool errors only when:
-    // 1. There's no user-facing reply AND the error is not recoverable
-    // Recoverable errors (validation, missing params) are already in the model's context
-    // and shouldn't be surfaced to users since the model should retry.
-    if (!hasUserFacingReply && !isRecoverableError) {
+    // Always surface mutating tool failures so we do not silently confirm actions that did not happen.
+    // Otherwise, keep the previous behavior and only surface non-recoverable failures when no reply exists.
+    if (shouldShowToolError) {
       const toolSummary = formatToolAggregate(
         params.lastToolError.toolName,
         params.lastToolError.meta ? [params.lastToolError.meta] : undefined,
         { markdown: useMarkdown },
       );
       const errorSuffix = params.lastToolError.error ? `: ${params.lastToolError.error}` : "";
-      replyItems.push({
-        text: `⚠️ ${toolSummary} failed${errorSuffix}`,
-        isError: true,
-      });
+      const warningText = `⚠️ ${toolSummary} failed${errorSuffix}`;
+      const normalizedWarning = normalizeTextForComparison(warningText);
+      const duplicateWarning = normalizedWarning
+        ? replyItems.some((item) => {
+            if (!item.text) {
+              return false;
+            }
+            const normalizedExisting = normalizeTextForComparison(item.text);
+            return normalizedExisting.length > 0 && normalizedExisting === normalizedWarning;
+          })
+        : false;
+      if (!duplicateWarning) {
+        replyItems.push({
+          text: warningText,
+          isError: true,
+        });
+      }
     }
   }
 

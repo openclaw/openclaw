@@ -1,6 +1,13 @@
 import { join } from "node:path";
-import { afterEach, type MockInstance, vi } from "vitest";
+import { afterEach, expect, vi } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
+
+// Avoid exporting vitest mock types (TS2742 under pnpm + d.ts emit).
+// oxlint-disable-next-line typescript/no-explicit-any
+type AnyMock = any;
+// oxlint-disable-next-line typescript/no-explicit-any
+type AnyMocks = Record<string, any>;
 
 const piEmbeddedMocks = vi.hoisted(() => ({
   abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
@@ -11,19 +18,19 @@ const piEmbeddedMocks = vi.hoisted(() => ({
   isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
 }));
 
-export function getAbortEmbeddedPiRunMock(): MockInstance {
+export function getAbortEmbeddedPiRunMock(): AnyMock {
   return piEmbeddedMocks.abortEmbeddedPiRun;
 }
 
-export function getCompactEmbeddedPiSessionMock(): MockInstance {
+export function getCompactEmbeddedPiSessionMock(): AnyMock {
   return piEmbeddedMocks.compactEmbeddedPiSession;
 }
 
-export function getRunEmbeddedPiAgentMock(): MockInstance {
+export function getRunEmbeddedPiAgentMock(): AnyMock {
   return piEmbeddedMocks.runEmbeddedPiAgent;
 }
 
-export function getQueueEmbeddedPiMessageMock(): MockInstance {
+export function getQueueEmbeddedPiMessageMock(): AnyMock {
   return piEmbeddedMocks.queueEmbeddedPiMessage;
 }
 
@@ -49,7 +56,7 @@ const providerUsageMocks = vi.hoisted(() => ({
   resolveUsageProviderId: vi.fn((provider: string) => provider.split("/")[0]),
 }));
 
-export function getProviderUsageMocks(): Record<string, MockInstance> {
+export function getProviderUsageMocks(): AnyMocks {
   return providerUsageMocks;
 }
 
@@ -77,7 +84,7 @@ const modelCatalogMocks = vi.hoisted(() => ({
   resetModelCatalogCacheForTest: vi.fn(),
 }));
 
-export function getModelCatalogMocks(): Record<string, MockInstance> {
+export function getModelCatalogMocks(): AnyMocks {
   return modelCatalogMocks;
 }
 
@@ -89,7 +96,7 @@ const webSessionMocks = vi.hoisted(() => ({
   readWebSelfId: vi.fn().mockReturnValue({ e164: "+1999" }),
 }));
 
-export function getWebSessionMocks(): Record<string, MockInstance> {
+export function getWebSessionMocks(): AnyMocks {
   return webSessionMocks;
 }
 
@@ -110,11 +117,11 @@ export async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise
   );
 }
 
-export function makeCfg(home: string) {
+export function makeCfg(home: string): OpenClawConfig {
   return {
     agents: {
       defaults: {
-        model: "anthropic/claude-opus-4-5",
+        model: { primary: "anthropic/claude-opus-4-5" },
         workspace: join(home, "openclaw"),
       },
     },
@@ -124,7 +131,37 @@ export function makeCfg(home: string) {
       },
     },
     session: { store: join(home, "sessions.json") },
-  };
+  } as OpenClawConfig;
+}
+
+export async function runGreetingPromptForBareNewOrReset(params: {
+  home: string;
+  body: "/new" | "/reset";
+  getReplyFromConfig: typeof import("./reply.js").getReplyFromConfig;
+}) {
+  getRunEmbeddedPiAgentMock().mockResolvedValue({
+    payloads: [{ text: "hello" }],
+    meta: {
+      durationMs: 1,
+      agentMeta: { sessionId: "s", provider: "p", model: "m" },
+    },
+  });
+
+  const res = await params.getReplyFromConfig(
+    {
+      Body: params.body,
+      From: "+1003",
+      To: "+2000",
+      CommandAuthorized: true,
+    },
+    {},
+    makeCfg(params.home),
+  );
+  const text = Array.isArray(res) ? res[0]?.text : res?.text;
+  expect(text).toBe("hello");
+  expect(getRunEmbeddedPiAgentMock()).toHaveBeenCalledOnce();
+  const prompt = getRunEmbeddedPiAgentMock().mock.calls[0]?.[0]?.prompt ?? "";
+  expect(prompt).toContain("A new session was started via /new or /reset");
 }
 
 export function installTriggerHandlingE2eTestHooks() {

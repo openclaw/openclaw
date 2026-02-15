@@ -2,7 +2,7 @@ import "./test-helpers.js";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
 import type { WebInboundMessage } from "./inbound.js";
 import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
 import * as ssrf from "../infra/net/ssrf.js";
@@ -13,6 +13,10 @@ import {
 } from "./test-helpers.js";
 
 export { resetBaileysMocks, resetLoadConfigMock, setLoadConfigMock } from "./test-helpers.js";
+
+// Avoid exporting inferred vitest mock types (TS2742 under pnpm + d.ts emit).
+// oxlint-disable-next-line typescript/no-explicit-any
+type AnyExport = any;
 
 export const TEST_NET_IP = "203.0.113.10";
 
@@ -32,43 +36,67 @@ export async function rmDirWithRetries(
   const attempts = opts?.attempts ?? 10;
   const delayMs = opts?.delayMs ?? 5;
   // Some tests can leave async session-store writes in-flight; recursive deletion can race and throw ENOTEMPTY.
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    try {
-      await fs.rm(dir, { recursive: true, force: true });
-      return;
-    } catch (err) {
-      const code =
-        err && typeof err === "object" && "code" in err
-          ? String((err as { code?: unknown }).code)
-          : null;
-      if (code === "ENOTEMPTY" || code === "EBUSY" || code === "EPERM") {
-        await new Promise((resolve) => setTimeout(resolve, delayMs));
-        continue;
+  // Let Node handle retries (faster than re-walking the tree in JS on each retry).
+  try {
+    await fs.rm(dir, {
+      recursive: true,
+      force: true,
+      maxRetries: attempts,
+      retryDelay: delayMs,
+    });
+    return;
+  } catch {
+    // Fall back for older Node implementations (or unexpected retry behavior).
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      try {
+        await fs.rm(dir, { recursive: true, force: true });
+        return;
+      } catch (retryErr) {
+        const code =
+          retryErr && typeof retryErr === "object" && "code" in retryErr
+            ? String((retryErr as { code?: unknown }).code)
+            : null;
+        if (code === "ENOTEMPTY" || code === "EBUSY" || code === "EPERM") {
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+          continue;
+        }
+        throw retryErr;
       }
-      throw err;
     }
-  }
 
-  await fs.rm(dir, { recursive: true, force: true });
+    await fs.rm(dir, { recursive: true, force: true });
+  }
 }
 
 let previousHome: string | undefined;
 let tempHome: string | undefined;
+let tempHomeRoot: string | undefined;
+let tempHomeId = 0;
 
 export function installWebAutoReplyTestHomeHooks() {
+  beforeAll(async () => {
+    tempHomeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-web-home-suite-"));
+  });
+
   beforeEach(async () => {
     resetInboundDedupe();
     previousHome = process.env.HOME;
-    tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-web-home-"));
+    tempHome = path.join(tempHomeRoot ?? os.tmpdir(), `case-${++tempHomeId}`);
+    await fs.mkdir(tempHome, { recursive: true });
     process.env.HOME = tempHome;
   });
 
   afterEach(async () => {
     process.env.HOME = previousHome;
-    if (tempHome) {
-      await rmDirWithRetries(tempHome);
-      tempHome = undefined;
+    tempHome = undefined;
+  });
+
+  afterAll(async () => {
+    if (tempHomeRoot) {
+      await rmDirWithRetries(tempHomeRoot);
+      tempHomeRoot = undefined;
     }
+    tempHomeId = 0;
   });
 }
 
@@ -119,7 +147,7 @@ export function installWebAutoReplyUnitTestHooks(opts?: { pinDns?: boolean }) {
   });
 }
 
-export function createWebListenerFactoryCapture() {
+export function createWebListenerFactoryCapture(): AnyExport {
   let capturedOnMessage: ((msg: WebInboundMessage) => Promise<void>) | undefined;
   const listenerFactory = async (opts: {
     onMessage: (msg: WebInboundMessage) => Promise<void>;
@@ -134,7 +162,7 @@ export function createWebListenerFactoryCapture() {
   };
 }
 
-export function createWebInboundDeliverySpies() {
+export function createWebInboundDeliverySpies(): AnyExport {
   return {
     sendMedia: vi.fn(),
     reply: vi.fn().mockResolvedValue(undefined),
@@ -171,6 +199,32 @@ export async function sendWebGroupInboundMessage(params: {
     mentionedJids: params.mentionedJids,
     selfE164: params.selfE164,
     selfJid: params.selfJid,
+    sendComposing: params.spies.sendComposing,
+    reply: params.spies.reply,
+    sendMedia: params.spies.sendMedia,
+  } as WebInboundMessage);
+}
+
+export async function sendWebDirectInboundMessage(params: {
+  onMessage: (msg: WebInboundMessage) => Promise<void>;
+  body: string;
+  id: string;
+  from: string;
+  to: string;
+  spies: ReturnType<typeof createWebInboundDeliverySpies>;
+  accountId?: string;
+}) {
+  const accountId = params.accountId ?? "default";
+  await params.onMessage({
+    accountId,
+    id: params.id,
+    from: params.from,
+    conversationId: params.from,
+    to: params.to,
+    body: params.body,
+    timestamp: Date.now(),
+    chatType: "direct",
+    chatId: `direct:${params.from}`,
     sendComposing: params.spies.sendComposing,
     reply: params.spies.reply,
     sendMedia: params.spies.sendMedia,

@@ -8,6 +8,7 @@ import { dispatchChannelMessageAction } from "../../channels/plugins/message-act
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
 import { throwIfAborted } from "./abort.js";
 import { sendMessage, sendPoll } from "./message.js";
+import { extractToolPayload } from "./tool-payload.js";
 
 export type OutboundGatewayContext = {
   url?: string;
@@ -36,30 +37,6 @@ export type OutboundSendContext = {
   abortSignal?: AbortSignal;
   silent?: boolean;
 };
-
-function extractToolPayload(result: AgentToolResult<unknown>): unknown {
-  if (result.details !== undefined) {
-    return result.details;
-  }
-  const textBlock = Array.isArray(result.content)
-    ? result.content.find(
-        (block) =>
-          block &&
-          typeof block === "object" &&
-          (block as { type?: unknown }).type === "text" &&
-          typeof (block as { text?: unknown }).text === "string",
-      )
-    : undefined;
-  const text = (textBlock as { text?: string } | undefined)?.text;
-  if (text) {
-    try {
-      return JSON.parse(text);
-    } catch {
-      return text;
-    }
-  }
-  return result.content ?? result;
-}
 
 export async function executeSendAction(params: {
   ctx: OutboundSendContext;

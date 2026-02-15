@@ -1,6 +1,7 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import { applyUpdateHunk } from "./apply-patch-update.js";
@@ -66,6 +67,8 @@ type SandboxApplyPatchConfig = {
 type ApplyPatchOptions = {
   cwd: string;
   sandbox?: SandboxApplyPatchConfig;
+  /** Restrict patch paths to the workspace root (cwd). Default: true. Set false to opt out. */
+  workspaceOnly?: boolean;
   signal?: AbortSignal;
 };
 
@@ -76,10 +79,11 @@ const applyPatchSchema = Type.Object({
 });
 
 export function createApplyPatchTool(
-  options: { cwd?: string; sandbox?: SandboxApplyPatchConfig } = {},
+  options: { cwd?: string; sandbox?: SandboxApplyPatchConfig; workspaceOnly?: boolean } = {},
 ): AgentTool<typeof applyPatchSchema, ApplyPatchToolDetails> {
   const cwd = options.cwd ?? process.cwd();
   const sandbox = options.sandbox;
+  const workspaceOnly = options.workspaceOnly !== false;
 
   return {
     name: "apply_patch",
@@ -102,6 +106,7 @@ export function createApplyPatchTool(
       const result = await applyPatch(input, {
         cwd,
         sandbox,
+        workspaceOnly,
         signal,
       });
 
@@ -150,7 +155,7 @@ export async function applyPatch(
     }
 
     if (hunk.kind === "delete") {
-      const target = await resolvePatchPath(hunk.path, options);
+      const target = await resolvePatchPath(hunk.path, options, "unlink");
       await fileOps.remove(target.resolved);
       recordSummary(summary, seen, "deleted", target.display);
       continue;
@@ -249,6 +254,7 @@ async function ensureDir(filePath: string, ops: PatchFileOps) {
 async function resolvePatchPath(
   filePath: string,
   options: ApplyPatchOptions,
+  purpose: "readWrite" | "unlink" = "readWrite",
 ): Promise<{ resolved: string; display: string }> {
   if (options.sandbox) {
     const resolved = options.sandbox.bridge.resolvePath({
@@ -261,15 +267,46 @@ async function resolvePatchPath(
     };
   }
 
-  const resolved = await assertSandboxPath({
-    filePath,
-    cwd: options.cwd,
-    root: options.cwd,
-  });
+  const workspaceOnly = options.workspaceOnly !== false;
+  const resolved = workspaceOnly
+    ? (
+        await assertSandboxPath({
+          filePath,
+          cwd: options.cwd,
+          root: options.cwd,
+          allowFinalSymlink: purpose === "unlink",
+        })
+      ).resolved
+    : resolvePathFromCwd(filePath, options.cwd);
   return {
-    resolved: resolved.resolved,
-    display: toDisplayPath(resolved.resolved, options.cwd),
+    resolved,
+    display: toDisplayPath(resolved, options.cwd),
   };
+}
+
+const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
+
+function normalizeUnicodeSpaces(value: string): string {
+  return value.replace(UNICODE_SPACES, " ");
+}
+
+function expandPath(filePath: string): string {
+  const normalized = normalizeUnicodeSpaces(filePath);
+  if (normalized === "~") {
+    return os.homedir();
+  }
+  if (normalized.startsWith("~/")) {
+    return os.homedir() + normalized.slice(1);
+  }
+  return normalized;
+}
+
+function resolvePathFromCwd(filePath: string, cwd: string): string {
+  const expanded = expandPath(filePath);
+  if (path.isAbsolute(expanded)) {
+    return path.normalize(expanded);
+  }
+  return path.resolve(cwd, expanded);
 }
 
 function toDisplayPath(resolved: string, cwd: string): string {

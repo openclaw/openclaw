@@ -43,6 +43,34 @@ export type PluginUninstallOptions = {
   dryRun?: boolean;
 };
 
+function resolveFileNpmSpecToLocalPath(
+  raw: string,
+): { ok: true; path: string } | { ok: false; error: string } | null {
+  const trimmed = raw.trim();
+  if (!trimmed.toLowerCase().startsWith("file:")) {
+    return null;
+  }
+  const rest = trimmed.slice("file:".length);
+  if (!rest) {
+    return { ok: false, error: "unsupported file: spec: missing path" };
+  }
+  if (rest.startsWith("///")) {
+    // file:///abs/path -> /abs/path
+    return { ok: true, path: rest.slice(2) };
+  }
+  if (rest.startsWith("//localhost/")) {
+    // file://localhost/abs/path -> /abs/path
+    return { ok: true, path: rest.slice("//localhost".length) };
+  }
+  if (rest.startsWith("//")) {
+    return {
+      ok: false,
+      error: 'unsupported file: URL host (expected "file:<path>" or "file:///abs/path")',
+    };
+  }
+  return { ok: true, path: rest };
+}
+
 function formatPluginLine(plugin: PluginRecord, verbose = false): string {
   const status =
     plugin.status === "loaded"
@@ -484,7 +512,13 @@ export function registerPluginsCli(program: Command) {
     .argument("<path-or-spec>", "Path (.ts/.js/.zip/.tgz/.tar.gz) or an npm package spec")
     .option("-l, --link", "Link a local path instead of copying", false)
     .action(async (raw: string, opts: { link?: boolean }) => {
-      const resolved = resolveUserPath(raw);
+      const fileSpec = resolveFileNpmSpecToLocalPath(raw);
+      if (fileSpec && !fileSpec.ok) {
+        defaultRuntime.error(fileSpec.error);
+        process.exit(1);
+      }
+      const normalized = fileSpec && fileSpec.ok ? fileSpec.path : raw;
+      const resolved = resolveUserPath(normalized);
       const cfg = loadConfig();
 
       if (fs.existsSync(resolved)) {

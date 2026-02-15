@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "./types.js";
 import {
   capEntryCount,
@@ -21,6 +21,23 @@ vi.mock("../config.js", () => ({
 }));
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+let fixtureRoot = "";
+let fixtureCount = 0;
+
+async function createCaseDir(prefix: string): Promise<string> {
+  const dir = path.join(fixtureRoot, `${prefix}-${fixtureCount++}`);
+  await fs.mkdir(dir, { recursive: true });
+  return dir;
+}
+
+beforeAll(async () => {
+  fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pruning-suite-"));
+});
+
+afterAll(async () => {
+  await fs.rm(fixtureRoot, { recursive: true, force: true });
+});
 
 function makeEntry(updatedAt: number): SessionEntry {
   return { sessionId: crypto.randomUUID(), updatedAt };
@@ -251,12 +268,8 @@ describe("rotateSessionFile", () => {
   let storePath: string;
 
   beforeEach(async () => {
-    testDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-rotate-"));
+    testDir = await createCaseDir("rotate");
     storePath = path.join(testDir, "sessions.json");
-  });
-
-  afterEach(async () => {
-    await fs.rm(testDir, { recursive: true, force: true }).catch(() => undefined);
   });
 
   it("file under maxBytes: no rotation (returns false)", async () => {
@@ -285,10 +298,15 @@ describe("rotateSessionFile", () => {
   });
 
   it("multiple rotations: only keeps 3 most recent .bak files", async () => {
-    for (let i = 0; i < 5; i++) {
-      await fs.writeFile(storePath, `data-${i}-${"x".repeat(100)}`, "utf-8");
-      await rotateSessionFile(storePath, 50);
-      await new Promise((r) => setTimeout(r, 5));
+    let now = Date.now();
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => (now += 5));
+    try {
+      for (let i = 0; i < 5; i++) {
+        await fs.writeFile(storePath, `data-${i}-${"x".repeat(100)}`, "utf-8");
+        await rotateSessionFile(storePath, 50);
+      }
+    } finally {
+      nowSpy.mockRestore();
     }
 
     const files = await fs.readdir(testDir);
@@ -342,7 +360,7 @@ describe("Integration: saveSessionStore with pruning", () => {
   let mockLoadConfig: ReturnType<typeof vi.fn>;
 
   beforeEach(async () => {
-    testDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pruning-integ-"));
+    testDir = await createCaseDir("pruning-integ");
     storePath = path.join(testDir, "sessions.json");
     savedCacheTtl = process.env.OPENCLAW_SESSION_CACHE_TTL_MS;
     process.env.OPENCLAW_SESSION_CACHE_TTL_MS = "0";
@@ -354,7 +372,6 @@ describe("Integration: saveSessionStore with pruning", () => {
 
   afterEach(async () => {
     vi.restoreAllMocks();
-    await fs.rm(testDir, { recursive: true, force: true }).catch(() => undefined);
     clearSessionStoreCacheForTest();
     if (savedCacheTtl === undefined) {
       delete process.env.OPENCLAW_SESSION_CACHE_TTL_MS;

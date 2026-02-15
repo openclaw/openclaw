@@ -581,6 +581,16 @@ Max characters per workspace bootstrap file before truncation. Default: `20000`.
 }
 ```
 
+### `agents.defaults.bootstrapTotalMaxChars`
+
+Max total characters injected across all workspace bootstrap files. Default: `24000`.
+
+```json5
+{
+  agents: { defaults: { bootstrapTotalMaxChars: 24000 } },
+}
+```
+
 ### `agents.defaults.userTimezone`
 
 Timezone for system prompt context (not message timestamps). Falls back to host timezone.
@@ -1164,7 +1174,7 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
 - **`reset`**: primary reset policy. `daily` resets at `atHour` local time; `idle` resets after `idleMinutes`. When both configured, whichever expires first wins.
 - **`resetByType`**: per-type overrides (`direct`, `group`, `thread`). Legacy `dm` accepted as alias for `direct`.
 - **`mainKey`**: legacy field. Runtime now always uses `"main"` for the main direct-chat bucket.
-- **`sendPolicy`**: match by `channel`, `chatType` (`direct|group|channel`, with legacy `dm` alias), or `keyPrefix`. First deny wins.
+- **`sendPolicy`**: match by `channel`, `chatType` (`direct|group|channel`, with legacy `dm` alias), `keyPrefix`, or `rawKeyPrefix`. First deny wins.
 - **`maintenance`**: `warn` warns the active session on eviction; `enforce` applies pruning and rotation.
 
 </Accordion>
@@ -1387,6 +1397,7 @@ Controls elevated (host) exec access:
       timeoutSec: 1800,
       cleanupMs: 1800000,
       notifyOnExit: true,
+      notifyOnExitEmptySuccess: false,
       applyPatch: {
         enabled: false,
         allowModels: ["gpt-5.2"],
