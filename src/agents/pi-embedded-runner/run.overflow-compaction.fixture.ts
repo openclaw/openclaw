@@ -7,6 +7,7 @@ export function makeAttemptResult(
     aborted: false,
     timedOut: false,
     timedOutDuringCompaction: false,
+    timedOutDuringToolExecution: false,
     promptError: null,
     sessionIdUsed: "test-session",
     assistantTexts: ["Hello!"],
