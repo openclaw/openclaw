@@ -129,4 +129,16 @@ describe("extractToolResultMediaPaths", () => {
     };
     expect(extractToolResultMediaPaths(result)).toEqual([]);
   });
+
+  it("ignores MEDIA: mid-line in prose text (#16935)", () => {
+    const result = {
+      content: [
+        {
+          type: "text",
+          text: "accept `MEDIA:`-prefixed paths (lenient whitespace) when loading outbound media to prevent `ENOENT`",
+        },
+      ],
+    };
+    expect(extractToolResultMediaPaths(result)).toEqual([]);
+  });
 });
