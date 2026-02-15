@@ -107,7 +107,7 @@ jobs:
           path: formal-models-drift.diff
 
       - name: Comment on PR (informational)
-        if: steps.drift.outputs.drift == 'true'
+        if: steps.drift.outputs.drift == 'true' && github.event.pull_request.head.repo.fork == false
         uses: actions/github-script@v7
         with:
           script: |
