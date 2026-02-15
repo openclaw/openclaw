@@ -1,41 +1,7 @@
-import type { Context, Model } from "@mariozechner/pi-ai/dist/types.js";
+import type { Context } from "@mariozechner/pi-ai/dist/types.js";
 import { convertMessages } from "@mariozechner/pi-ai/dist/providers/google-shared.js";
 import { describe, expect, it } from "vitest";
-
-const asRecord = (value: unknown): Record<string, unknown> => {
-  expect(value).toBeTruthy();
-  expect(typeof value).toBe("object");
-  expect(Array.isArray(value)).toBe(false);
-  return value as Record<string, unknown>;
-};
-
-const makeModel = (id: string): Model<"google-generative-ai"> =>
-  ({
-    id,
-    name: id,
-    api: "google-generative-ai",
-    provider: "google",
-    baseUrl: "https://example.invalid",
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 1,
-    maxTokens: 1,
-  }) as Model<"google-generative-ai">;
-
-const makeGeminiCliModel = (id: string): Model<"google-gemini-cli"> =>
-  ({
-    id,
-    name: id,
-    api: "google-gemini-cli",
-    provider: "google-gemini-cli",
-    baseUrl: "https://example.invalid",
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 1,
-    maxTokens: 1,
-  }) as Model<"google-gemini-cli">;
+import { asRecord, makeGeminiCliModel, makeModel } from "./google-shared.test-helpers.js";
 
 describe("google-shared convertTools", () => {
   it("ensures function call comes after user turn, not after model turn", () => {
