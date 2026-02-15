@@ -430,6 +430,10 @@ export function attachGatewayWsMessageHandler(params: {
           close(1008, truncateCloseReason(authMessage));
         };
         if (!device) {
+          // Save requested scopes before clearing — we may restore them for
+          // Control-UI connections that pass shared-secret auth via the bypass
+          // path (allowInsecureAuth / dangerouslyDisableDeviceAuth).
+          const requestedScopes = [...scopes];
           if (scopes.length > 0) {
             scopes = [];
             connectParams.scopes = scopes;
@@ -476,6 +480,15 @@ export function attachGatewayWsMessageHandler(params: {
             });
             close(1008, "device identity required");
             return;
+          }
+
+          // Restore the originally requested scopes for Control-UI connections
+          // that authenticated via shared secret and were allowed through the
+          // bypass path.  Without this, every RPC call fails with
+          // "missing scope: operator.read" because scopes were cleared above.
+          if (isControlUi && allowControlUiBypass && sharedAuthOk && requestedScopes.length > 0) {
+            scopes = requestedScopes;
+            connectParams.scopes = scopes;
           }
         }
         if (device) {
