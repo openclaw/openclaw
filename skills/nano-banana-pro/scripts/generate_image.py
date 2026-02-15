@@ -29,6 +29,13 @@ def get_api_key(provided_key: str | None) -> str | None:
     return os.environ.get("GEMINI_API_KEY")
 
 
+def get_base_url(provided_url: str | None) -> str | None:
+    """Get base URL from argument first, then environment."""
+    if provided_url:
+        return provided_url
+    return os.environ.get("GEMINI_BASE_URL")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Generate images using Nano Banana Pro (Gemini 3 Pro Image)"
@@ -60,6 +67,10 @@ def main():
         "--api-key", "-k",
         help="Gemini API key (overrides GEMINI_API_KEY env var)"
     )
+    parser.add_argument(
+        "--base-url", "-u",
+        help="Custom base URL for API endpoint (overrides GEMINI_BASE_URL env var)"
+    )
 
     args = parser.parse_args()
 
@@ -72,13 +83,27 @@ def main():
         print("  2. Set GEMINI_API_KEY environment variable", file=sys.stderr)
         sys.exit(1)
 
+    # Get base URL (optional, for custom endpoints like LLM proxies)
+    base_url = get_base_url(args.base_url)
+
     # Import here after checking API key to avoid slow import on error
     from google import genai
     from google.genai import types
     from PIL import Image as PILImage
 
-    # Initialise client
-    client = genai.Client(api_key=api_key)
+    # Initialise client with optional custom base URL
+    if base_url:
+        # Use vertexai mode with custom base_url for proxy support
+        client = genai.Client(
+            vertexai=True,
+            http_options={
+                'base_url': base_url,
+                'headers': {'Authorization': f'Bearer {api_key}'},
+            },
+        )
+    else:
+        # Standard initialization for Google AI Studio
+        client = genai.Client(api_key=api_key)
 
     # Set up output path
     output_path = Path(args.filename)
