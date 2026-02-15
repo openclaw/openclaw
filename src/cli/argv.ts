@@ -155,6 +155,12 @@ export function shouldMigrateStateFromPath(path: string[]): boolean {
   if (primary === "health" || primary === "status" || primary === "sessions") {
     return false;
   }
+  if (primary === "config" && (secondary === "get" || secondary === "unset")) {
+    return false;
+  }
+  if (primary === "models" && (secondary === "list" || secondary === "status")) {
+    return false;
+  }
   if (primary === "memory" && secondary === "status") {
     return false;
   }

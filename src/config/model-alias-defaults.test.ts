@@ -80,4 +80,23 @@ describe("applyModelDefaults", () => {
     expect(model?.contextWindow).toBe(DEFAULT_CONTEXT_TOKENS);
     expect(model?.maxTokens).toBe(8192);
   });
+
+  it("clamps maxTokens to contextWindow", () => {
+    const cfg = {
+      models: {
+        providers: {
+          myproxy: {
+            api: "openai-completions",
+            models: [{ id: "gpt-5.2", name: "GPT-5.2", contextWindow: 32768, maxTokens: 40960 }],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const next = applyModelDefaults(cfg);
+    const model = next.models?.providers?.myproxy?.models?.[0];
+
+    expect(model?.contextWindow).toBe(32768);
+    expect(model?.maxTokens).toBe(32768);
+  });
 });

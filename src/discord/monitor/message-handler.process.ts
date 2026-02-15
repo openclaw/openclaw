@@ -4,11 +4,7 @@ import type { DiscordMessagePreflightContext } from "./message-handler.preflight
 import { resolveAckReaction, resolveHumanDelayConfig } from "../../agents/identity.js";
 import { resolveChunkMode } from "../../auto-reply/chunk.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
-import {
-  formatInboundEnvelope,
-  formatThreadStarterEnvelope,
-  resolveEnvelopeFormatOptions,
-} from "../../auto-reply/envelope.js";
+import { formatInboundEnvelope, resolveEnvelopeFormatOptions } from "../../auto-reply/envelope.js";
 import {
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
@@ -200,12 +196,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         }),
     });
   }
-  const replyContext = resolveReplyContext(message, resolveDiscordMessageText, {
-    envelope: envelopeOptions,
-  });
-  if (replyContext) {
-    combinedBody = `[Replied message - for context]\n${replyContext}\n\n${combinedBody}`;
-  }
+  const replyContext = resolveReplyContext(message, resolveDiscordMessageText);
   if (forumContextLine) {
     combinedBody = `${combinedBody}\n${forumContextLine}`;
   }
@@ -224,14 +215,8 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         resolveTimestampMs,
       });
       if (starter?.text) {
-        const starterEnvelope = formatThreadStarterEnvelope({
-          channel: "Discord",
-          author: starter.author,
-          timestamp: starter.timestamp,
-          body: starter.text,
-          envelope: envelopeOptions,
-        });
-        threadStarterBody = starterEnvelope;
+        // Keep thread starter as raw text; metadata is provided out-of-band in the system prompt.
+        threadStarterBody = starter.text;
       }
     }
     const parentName = threadParentName ?? "parent";
@@ -279,8 +264,19 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     return;
   }
 
+  const inboundHistory =
+    shouldIncludeChannelHistory && historyLimit > 0
+      ? (guildHistories.get(message.channelId) ?? []).map((entry) => ({
+          sender: entry.sender,
+          body: entry.body,
+          timestamp: entry.timestamp,
+        }))
+      : undefined;
+
   const ctxPayload = finalizeInboundContext({
     Body: combinedBody,
+    BodyForAgent: baseText ?? text,
+    InboundHistory: inboundHistory,
     RawBody: baseText,
     CommandBody: baseText,
     From: effectiveFrom,
@@ -303,6 +299,9 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     Surface: "discord" as const,
     WasMentioned: effectiveWasMentioned,
     MessageSid: message.id,
+    ReplyToId: replyContext?.id,
+    ReplyToBody: replyContext?.body,
+    ReplyToSender: replyContext?.sender,
     ParentSessionKey: autoThreadContext?.ParentSessionKey ?? threadKeys.parentSessionKey,
     ThreadStarterBody: threadStarterBody,
     ThreadLabel: threadLabel,

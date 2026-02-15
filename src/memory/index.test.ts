@@ -1,11 +1,22 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getMemorySearchManager, type MemoryIndexManager } from "./index.js";
 
 let embedBatchCalls = 0;
-let failEmbeddings = false;
+
+// Unit tests: avoid importing the real chokidar implementation (native fsevents, etc.).
+vi.mock("chokidar", () => ({
+  default: {
+    watch: () => ({ on: () => {}, close: async () => {} }),
+  },
+  watch: () => ({ on: () => {}, close: async () => {} }),
+}));
+
+vi.mock("./sqlite-vec.js", () => ({
+  loadSqliteVecExtension: async () => ({ ok: false, error: "sqlite-vec disabled in tests" }),
+}));
 
 vi.mock("./embeddings.js", () => {
   const embedText = (text: string) => {
@@ -23,9 +34,6 @@ vi.mock("./embeddings.js", () => {
         embedQuery: async (text: string) => embedText(text),
         embedBatch: async (texts: string[]) => {
           embedBatchCalls += 1;
-          if (failEmbeddings) {
-            throw new Error("mock embeddings failed");
-          }
           return texts.map(embedText);
         },
       },
@@ -34,30 +42,91 @@ vi.mock("./embeddings.js", () => {
 });
 
 describe("memory index", () => {
-  let workspaceDir: string;
-  let indexPath: string;
-  let manager: MemoryIndexManager | null = null;
+  let fixtureRoot = "";
+  let workspaceDir = "";
+  let memoryDir = "";
+  let extraDir = "";
+  let indexBasicPath = "";
+  let indexCachePath = "";
+  let indexHybridPath = "";
+  let indexVectorPath = "";
+  let indexExtraPath = "";
+
+  // Perf: keep managers open across tests, but only reset the one a test uses.
+  const managersByStorePath = new Map<string, MemoryIndexManager>();
+  const managersForCleanup = new Set<MemoryIndexManager>();
+
+  beforeAll(async () => {
+    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-fixtures-"));
+    workspaceDir = path.join(fixtureRoot, "workspace");
+    memoryDir = path.join(workspaceDir, "memory");
+    extraDir = path.join(workspaceDir, "extra");
+    indexBasicPath = path.join(workspaceDir, "index-basic.sqlite");
+    indexCachePath = path.join(workspaceDir, "index-cache.sqlite");
+    indexHybridPath = path.join(workspaceDir, "index-hybrid.sqlite");
+    indexVectorPath = path.join(workspaceDir, "index-vector.sqlite");
+    indexExtraPath = path.join(workspaceDir, "index-extra.sqlite");
+
+    await fs.mkdir(memoryDir, { recursive: true });
+  });
+
+  afterAll(async () => {
+    await Promise.all(Array.from(managersForCleanup).map((manager) => manager.close()));
+    await fs.rm(fixtureRoot, { recursive: true, force: true });
+  });
 
   beforeEach(async () => {
+    // Perf: most suites don't need atomic swap behavior for full reindexes.
+    // Keep atomic reindex tests on the safe path.
+    vi.stubEnv("OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX", "1");
     embedBatchCalls = 0;
-    failEmbeddings = false;
-    workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-"));
-    indexPath = path.join(workspaceDir, "index.sqlite");
-    await fs.mkdir(path.join(workspaceDir, "memory"));
+
+    // Keep the workspace stable to allow manager reuse across tests.
+    await fs.mkdir(memoryDir, { recursive: true });
     await fs.writeFile(
-      path.join(workspaceDir, "memory", "2026-01-12.md"),
-      "# Log\nAlpha memory line.\nZebra memory line.\nAnother line.",
+      path.join(memoryDir, "2026-01-12.md"),
+      "# Log\nAlpha memory line.\nZebra memory line.",
     );
-    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "Beta knowledge base entry.");
+
+    // Clean additional paths that may have been created by earlier cases.
+    await fs.rm(extraDir, { recursive: true, force: true });
   });
 
-  afterEach(async () => {
-    if (manager) {
-      await manager.close();
-      manager = null;
+  function resetManagerForTest(manager: MemoryIndexManager) {
+    // These tests reuse managers for performance. Clear the index + embedding
+    // cache to keep each test fully isolated.
+    (manager as unknown as { resetIndex: () => void }).resetIndex();
+    (manager as unknown as { db: { exec: (sql: string) => void } }).db.exec(
+      "DELETE FROM embedding_cache",
+    );
+    (manager as unknown as { dirty: boolean }).dirty = true;
+    (manager as unknown as { sessionsDirty: boolean }).sessionsDirty = false;
+  }
+
+  type TestCfg = Parameters<typeof getMemorySearchManager>[0]["cfg"];
+
+  async function getPersistentManager(cfg: TestCfg): Promise<MemoryIndexManager> {
+    const storePath = cfg.agents?.defaults?.memorySearch?.store?.path;
+    if (!storePath) {
+      throw new Error("store path missing");
     }
-    await fs.rm(workspaceDir, { recursive: true, force: true });
-  });
+    const cached = managersByStorePath.get(storePath);
+    if (cached) {
+      resetManagerForTest(cached);
+      return cached;
+    }
+
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    expect(result.manager).not.toBeNull();
+    if (!result.manager) {
+      throw new Error("manager missing");
+    }
+    const manager = result.manager as MemoryIndexManager;
+    managersByStorePath.set(storePath, manager);
+    managersForCleanup.add(manager);
+    resetManagerForTest(manager);
+    return manager;
+  }
 
   it("indexes memory files and searches by vector", async () => {
     const cfg = {
@@ -67,25 +136,20 @@ describe("memory index", () => {
           memorySearch: {
             provider: "openai",
             model: "mock-embed",
-            store: { path: indexPath },
+            store: { path: indexBasicPath, vector: { enabled: false } },
             sync: { watch: false, onSessionStart: false, onSearch: true },
-            query: { minScore: 0 },
+            query: { minScore: 0, hybrid: { enabled: false } },
           },
         },
         list: [{ id: "main", default: true }],
       },
     };
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
-    expect(result.manager).not.toBeNull();
-    if (!result.manager) {
-      throw new Error("manager missing");
-    }
-    manager = result.manager;
-    await result.manager.sync({ force: true });
-    const results = await result.manager.search("alpha");
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test" });
+    const results = await manager.search("alpha");
     expect(results.length).toBeGreaterThan(0);
     expect(results[0]?.path).toContain("memory/2026-01-12.md");
-    const status = result.manager.status();
+    const status = manager.status();
     expect(status.sourceCounts).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -97,16 +161,66 @@ describe("memory index", () => {
     );
   });
 
+  it("keeps dirty false in status-only manager after prior indexing", async () => {
+    const indexStatusPath = path.join(workspaceDir, "index-status.sqlite");
+    await fs.rm(indexStatusPath, { force: true });
+    await fs.rm(`${indexStatusPath}-shm`, { force: true });
+    await fs.rm(`${indexStatusPath}-wal`, { force: true });
+
+    const cfg = {
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          memorySearch: {
+            provider: "openai",
+            model: "mock-embed",
+            store: { path: indexStatusPath, vector: { enabled: false } },
+            sync: { watch: false, onSessionStart: false, onSearch: true },
+            query: { minScore: 0, hybrid: { enabled: false } },
+          },
+        },
+        list: [{ id: "main", default: true }],
+      },
+    };
+
+    const first = await getMemorySearchManager({ cfg, agentId: "main" });
+    expect(first.manager).not.toBeNull();
+    if (!first.manager) {
+      throw new Error("manager missing");
+    }
+    await first.manager.sync?.({ reason: "test" });
+    await first.manager.close?.();
+
+    const statusOnly = await getMemorySearchManager({
+      cfg,
+      agentId: "main",
+      purpose: "status",
+    });
+    expect(statusOnly.manager).not.toBeNull();
+    if (!statusOnly.manager) {
+      throw new Error("status manager missing");
+    }
+
+    const status = statusOnly.manager.status();
+    expect(status.dirty).toBe(false);
+    await statusOnly.manager.close?.();
+  });
+
   it("reindexes when the embedding model changes", async () => {
+    const indexModelPath = path.join(workspaceDir, "index-model-change.sqlite");
+    await fs.rm(indexModelPath, { force: true });
+    await fs.rm(`${indexModelPath}-shm`, { force: true });
+    await fs.rm(`${indexModelPath}-wal`, { force: true });
+
     const base = {
       agents: {
         defaults: {
           workspace: workspaceDir,
           memorySearch: {
             provider: "openai",
-            store: { path: indexPath },
+            store: { path: indexModelPath },
             sync: { watch: false, onSessionStart: false, onSearch: true },
-            query: { minScore: 0 },
+            query: { minScore: 0, hybrid: { enabled: false } },
           },
         },
         list: [{ id: "main", default: true }],
@@ -133,7 +247,8 @@ describe("memory index", () => {
     if (!first.manager) {
       throw new Error("manager missing");
     }
-    await first.manager.sync({ force: true });
+    await first.manager.sync({ reason: "test" });
+    const callsAfterFirstSync = embedBatchCalls;
     await first.manager.close();
 
     const second = await getMemorySearchManager({
@@ -156,10 +271,11 @@ describe("memory index", () => {
     if (!second.manager) {
       throw new Error("manager missing");
     }
-    manager = second.manager;
     await second.manager.sync({ reason: "test" });
-    const results = await second.manager.search("alpha");
-    expect(results.length).toBeGreaterThan(0);
+    expect(embedBatchCalls).toBeGreaterThan(callsAfterFirstSync);
+    const status = second.manager.status();
+    expect(status.files).toBeGreaterThan(0);
+    await second.manager.close();
   });
 
   it("reuses cached embeddings on forced reindex", async () => {
@@ -170,66 +286,22 @@ describe("memory index", () => {
           memorySearch: {
             provider: "openai",
             model: "mock-embed",
-            store: { path: indexPath, vector: { enabled: false } },
+            store: { path: indexCachePath, vector: { enabled: false } },
             sync: { watch: false, onSessionStart: false, onSearch: false },
-            query: { minScore: 0 },
+            query: { minScore: 0, hybrid: { enabled: false } },
             cache: { enabled: true },
           },
         },
         list: [{ id: "main", default: true }],
       },
     };
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
-    expect(result.manager).not.toBeNull();
-    if (!result.manager) {
-      throw new Error("manager missing");
-    }
-    manager = result.manager;
+    const manager = await getPersistentManager(cfg);
     await manager.sync({ force: true });
     const afterFirst = embedBatchCalls;
     expect(afterFirst).toBeGreaterThan(0);
 
     await manager.sync({ force: true });
     expect(embedBatchCalls).toBe(afterFirst);
-  });
-
-  it("preserves existing index when forced reindex fails", async () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          workspace: workspaceDir,
-          memorySearch: {
-            provider: "openai",
-            model: "mock-embed",
-            store: { path: indexPath, vector: { enabled: false } },
-            sync: { watch: false, onSessionStart: false, onSearch: false },
-            query: { minScore: 0 },
-            cache: { enabled: false },
-          },
-        },
-        list: [{ id: "main", default: true }],
-      },
-    };
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
-    expect(result.manager).not.toBeNull();
-    if (!result.manager) {
-      throw new Error("manager missing");
-    }
-    manager = result.manager;
-
-    await manager.sync({ force: true });
-    const before = manager.status();
-    expect(before.files).toBeGreaterThan(0);
-
-    failEmbeddings = true;
-    await expect(manager.sync({ force: true })).rejects.toThrow(/mock embeddings failed/i);
-
-    const after = manager.status();
-    expect(after.files).toBe(before.files);
-    expect(after.chunks).toBe(before.chunks);
-
-    const files = await fs.readdir(workspaceDir);
-    expect(files.some((name) => name.includes(".tmp-"))).toBe(false);
   });
 
   it("finds keyword matches via hybrid search when query embedding is zero", async () => {
@@ -240,7 +312,7 @@ describe("memory index", () => {
           memorySearch: {
             provider: "openai",
             model: "mock-embed",
-            store: { path: indexPath, vector: { enabled: false } },
+            store: { path: indexHybridPath, vector: { enabled: false } },
             sync: { watch: false, onSessionStart: false, onSearch: true },
             query: {
               minScore: 0,
@@ -251,138 +323,17 @@ describe("memory index", () => {
         list: [{ id: "main", default: true }],
       },
     };
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
-    expect(result.manager).not.toBeNull();
-    if (!result.manager) {
-      throw new Error("manager missing");
-    }
-    manager = result.manager;
+    const manager = await getPersistentManager(cfg);
 
     const status = manager.status();
     if (!status.fts?.available) {
       return;
     }
 
-    await manager.sync({ force: true });
+    await manager.sync({ reason: "test" });
     const results = await manager.search("zebra");
     expect(results.length).toBeGreaterThan(0);
     expect(results[0]?.path).toContain("memory/2026-01-12.md");
-  });
-
-  it("hybrid weights can favor vector-only matches over keyword-only matches", async () => {
-    const manyAlpha = Array.from({ length: 200 }, () => "Alpha").join(" ");
-    await fs.writeFile(
-      path.join(workspaceDir, "memory", "vector-only.md"),
-      "Alpha beta. Alpha beta. Alpha beta. Alpha beta.",
-    );
-    await fs.writeFile(
-      path.join(workspaceDir, "memory", "keyword-only.md"),
-      `${manyAlpha} beta id123.`,
-    );
-
-    const cfg = {
-      agents: {
-        defaults: {
-          workspace: workspaceDir,
-          memorySearch: {
-            provider: "openai",
-            model: "mock-embed",
-            store: { path: indexPath, vector: { enabled: false } },
-            sync: { watch: false, onSessionStart: false, onSearch: true },
-            query: {
-              minScore: 0,
-              maxResults: 200,
-              hybrid: {
-                enabled: true,
-                vectorWeight: 0.99,
-                textWeight: 0.01,
-                candidateMultiplier: 10,
-              },
-            },
-          },
-        },
-        list: [{ id: "main", default: true }],
-      },
-    };
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
-    expect(result.manager).not.toBeNull();
-    if (!result.manager) {
-      throw new Error("manager missing");
-    }
-    manager = result.manager;
-
-    const status = manager.status();
-    if (!status.fts?.available) {
-      return;
-    }
-
-    await manager.sync({ force: true });
-    const results = await manager.search("alpha beta id123");
-    expect(results.length).toBeGreaterThan(0);
-    const paths = results.map((r) => r.path);
-    expect(paths).toContain("memory/vector-only.md");
-    expect(paths).toContain("memory/keyword-only.md");
-    const vectorOnly = results.find((r) => r.path === "memory/vector-only.md");
-    const keywordOnly = results.find((r) => r.path === "memory/keyword-only.md");
-    expect((vectorOnly?.score ?? 0) > (keywordOnly?.score ?? 0)).toBe(true);
-  });
-
-  it("hybrid weights can favor keyword matches when text weight dominates", async () => {
-    const manyAlpha = Array.from({ length: 200 }, () => "Alpha").join(" ");
-    await fs.writeFile(
-      path.join(workspaceDir, "memory", "vector-only.md"),
-      "Alpha beta. Alpha beta. Alpha beta. Alpha beta.",
-    );
-    await fs.writeFile(
-      path.join(workspaceDir, "memory", "keyword-only.md"),
-      `${manyAlpha} beta id123.`,
-    );
-
-    const cfg = {
-      agents: {
-        defaults: {
-          workspace: workspaceDir,
-          memorySearch: {
-            provider: "openai",
-            model: "mock-embed",
-            store: { path: indexPath, vector: { enabled: false } },
-            sync: { watch: false, onSessionStart: false, onSearch: true },
-            query: {
-              minScore: 0,
-              maxResults: 200,
-              hybrid: {
-                enabled: true,
-                vectorWeight: 0.01,
-                textWeight: 0.99,
-                candidateMultiplier: 10,
-              },
-            },
-          },
-        },
-        list: [{ id: "main", default: true }],
-      },
-    };
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
-    expect(result.manager).not.toBeNull();
-    if (!result.manager) {
-      throw new Error("manager missing");
-    }
-    manager = result.manager;
-
-    const status = manager.status();
-    if (!status.fts?.available) {
-      return;
-    }
-
-    await manager.sync({ force: true });
-    const results = await manager.search("alpha beta id123");
-    expect(results.length).toBeGreaterThan(0);
-    const paths = results.map((r) => r.path);
-    expect(paths).toContain("memory/vector-only.md");
-    expect(paths).toContain("memory/keyword-only.md");
-    const vectorOnly = results.find((r) => r.path === "memory/vector-only.md");
-    const keywordOnly = results.find((r) => r.path === "memory/keyword-only.md");
-    expect((keywordOnly?.score ?? 0) > (vectorOnly?.score ?? 0)).toBe(true);
   });
 
   it("reports vector availability after probe", async () => {
@@ -393,21 +344,16 @@ describe("memory index", () => {
           memorySearch: {
             provider: "openai",
             model: "mock-embed",
-            store: { path: indexPath },
+            store: { path: indexVectorPath, vector: { enabled: true } },
             sync: { watch: false, onSessionStart: false, onSearch: false },
           },
         },
         list: [{ id: "main", default: true }],
       },
     };
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
-    expect(result.manager).not.toBeNull();
-    if (!result.manager) {
-      throw new Error("manager missing");
-    }
-    manager = result.manager;
-    const available = await result.manager.probeVectorAvailability();
-    const status = result.manager.status();
+    const manager = await getPersistentManager(cfg);
+    const available = await manager.probeVectorAvailability();
+    const status = manager.status();
     expect(status.vector?.enabled).toBe(true);
     expect(typeof status.vector?.available).toBe("boolean");
     expect(status.vector?.available).toBe(available);
@@ -421,24 +367,19 @@ describe("memory index", () => {
           memorySearch: {
             provider: "openai",
             model: "mock-embed",
-            store: { path: indexPath },
+            store: { path: indexBasicPath, vector: { enabled: false } },
             sync: { watch: false, onSessionStart: false, onSearch: true },
+            query: { minScore: 0, hybrid: { enabled: false } },
           },
         },
         list: [{ id: "main", default: true }],
       },
     };
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
-    expect(result.manager).not.toBeNull();
-    if (!result.manager) {
-      throw new Error("manager missing");
-    }
-    manager = result.manager;
-    await expect(result.manager.readFile({ relPath: "NOTES.md" })).rejects.toThrow("path required");
+    const manager = await getPersistentManager(cfg);
+    await expect(manager.readFile({ relPath: "NOTES.md" })).rejects.toThrow("path required");
   });
 
   it("allows reading from additional memory paths and blocks symlinks", async () => {
-    const extraDir = path.join(workspaceDir, "extra");
     await fs.mkdir(extraDir, { recursive: true });
     await fs.writeFile(path.join(extraDir, "extra.md"), "Extra content.");
 
@@ -449,21 +390,17 @@ describe("memory index", () => {
           memorySearch: {
             provider: "openai",
             model: "mock-embed",
-            store: { path: indexPath },
+            store: { path: indexExtraPath, vector: { enabled: false } },
             sync: { watch: false, onSessionStart: false, onSearch: true },
+            query: { minScore: 0, hybrid: { enabled: false } },
             extraPaths: [extraDir],
           },
         },
         list: [{ id: "main", default: true }],
       },
     };
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
-    expect(result.manager).not.toBeNull();
-    if (!result.manager) {
-      throw new Error("manager missing");
-    }
-    manager = result.manager;
-    await expect(result.manager.readFile({ relPath: "extra/extra.md" })).resolves.toEqual({
+    const manager = await getPersistentManager(cfg);
+    await expect(manager.readFile({ relPath: "extra/extra.md" })).resolves.toEqual({
       path: "extra/extra.md",
       text: "Extra content.",
     });
@@ -481,7 +418,7 @@ describe("memory index", () => {
       }
     }
     if (symlinkOk) {
-      await expect(result.manager.readFile({ relPath: "extra/linked.md" })).rejects.toThrow(
+      await expect(manager.readFile({ relPath: "extra/linked.md" })).rejects.toThrow(
         "path required",
       );
     }

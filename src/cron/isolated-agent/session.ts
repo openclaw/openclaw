@@ -23,6 +23,8 @@ export function resolveCronSession(params: {
     thinkingLevel: entry?.thinkingLevel,
     verboseLevel: entry?.verboseLevel,
     model: entry?.model,
+    modelOverride: entry?.modelOverride,
+    providerOverride: entry?.providerOverride,
     contextTokens: entry?.contextTokens,
     sendPolicy: entry?.sendPolicy,
     lastChannel: entry?.lastChannel,

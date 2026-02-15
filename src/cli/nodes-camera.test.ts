@@ -1,12 +1,13 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   cameraTempPath,
   parseCameraClipPayload,
   parseCameraSnapPayload,
   writeBase64ToFile,
+  writeUrlToFile,
 } from "./nodes-camera.js";
 
 describe("nodes camera helpers", () => {
@@ -60,5 +61,46 @@ describe("nodes camera helpers", () => {
     await writeBase64ToFile(out, "aGk=");
     await expect(fs.readFile(out, "utf8")).resolves.toBe("hi");
     await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("writes url payload to file", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("url-content", { status: 200 })),
+    );
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-"));
+    const out = path.join(dir, "x.bin");
+    try {
+      await writeUrlToFile(out, "https://example.com/clip.mp4");
+      await expect(fs.readFile(out, "utf8")).resolves.toBe("url-content");
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects non-https url payload", async () => {
+    await expect(writeUrlToFile("/tmp/ignored", "http://example.com/x.bin")).rejects.toThrow(
+      /only https/i,
+    );
+  });
+
+  it("rejects oversized content-length for url payload", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response("tiny", {
+            status: 200,
+            headers: { "content-length": String(999_999_999) },
+          }),
+      ),
+    );
+    await expect(writeUrlToFile("/tmp/ignored", "https://example.com/huge.bin")).rejects.toThrow(
+      /exceeds max/i,
+    );
   });
 });

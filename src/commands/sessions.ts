@@ -3,7 +3,12 @@ import { lookupContextTokens } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
 import { loadConfig } from "../config/config.js";
-import { loadSessionStore, resolveStorePath, type SessionEntry } from "../config/sessions.js";
+import {
+  loadSessionStore,
+  resolveFreshSessionTotalTokens,
+  resolveStorePath,
+  type SessionEntry,
+} from "../config/sessions.js";
 import { info } from "../globals.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { isRich, theme } from "../terminal/theme.js";
@@ -25,6 +30,7 @@ type SessionRow = {
   inputTokens?: number;
   outputTokens?: number;
   totalTokens?: number;
+  totalTokensFresh?: boolean;
   model?: string;
   contextTokens?: number;
 };
@@ -61,9 +67,15 @@ const colorByPct = (label: string, pct: number | null, rich: boolean) => {
   return theme.muted(label);
 };
 
-const formatTokensCell = (total: number, contextTokens: number | null, rich: boolean) => {
-  if (!total) {
-    return "-".padEnd(TOKENS_PAD);
+const formatTokensCell = (
+  total: number | undefined,
+  contextTokens: number | null,
+  rich: boolean,
+) => {
+  if (total === undefined) {
+    const ctxLabel = contextTokens ? formatKTokens(contextTokens) : "?";
+    const label = `unknown/${ctxLabel} (?%)`;
+    return rich ? theme.muted(label.padEnd(TOKENS_PAD)) : label.padEnd(TOKENS_PAD);
   }
   const totalLabel = formatKTokens(total);
   const ctxLabel = contextTokens ? formatKTokens(contextTokens) : "?";
@@ -154,6 +166,7 @@ function toRows(store: Record<string, SessionEntry>): SessionRow[] {
         inputTokens: entry?.inputTokens,
         outputTokens: entry?.outputTokens,
         totalTokens: entry?.totalTokens,
+        totalTokensFresh: entry?.totalTokensFresh,
         model: entry?.model,
         contextTokens: entry?.contextTokens,
       } satisfies SessionRow;
@@ -209,6 +222,9 @@ export async function sessionsCommand(
           activeMinutes: activeMinutes ?? null,
           sessions: rows.map((r) => ({
             ...r,
+            totalTokens: resolveFreshSessionTotalTokens(r) ?? null,
+            totalTokensFresh:
+              typeof r.totalTokens === "number" ? r.totalTokensFresh !== false : false,
             contextTokens:
               r.contextTokens ?? lookupContextTokens(r.model) ?? configContextTokens ?? null,
             model: r.model ?? configModel ?? null,
@@ -246,9 +262,7 @@ export async function sessionsCommand(
   for (const row of rows) {
     const model = row.model ?? configModel;
     const contextTokens = row.contextTokens ?? lookupContextTokens(model) ?? configContextTokens;
-    const input = row.inputTokens ?? 0;
-    const output = row.outputTokens ?? 0;
-    const total = row.totalTokens ?? input + output;
+    const total = resolveFreshSessionTotalTokens(row);
 
     const keyLabel = truncateKey(row.key).padEnd(KEY_PAD);
     const keyCell = rich ? theme.accent(keyLabel) : keyLabel;

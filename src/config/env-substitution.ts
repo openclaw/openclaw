@@ -22,6 +22,8 @@
 
 // Pattern for valid uppercase env var names: starts with letter or underscore,
 // followed by letters, numbers, or underscores (all uppercase)
+import { isPlainObject } from "../utils.js";
+
 const ENV_VAR_NAME_PATTERN = /^[A-Z_][A-Z0-9_]*$/;
 
 export class MissingEnvVarError extends Error {
@@ -32,15 +34,6 @@ export class MissingEnvVarError extends Error {
     super(`Missing env var "${varName}" referenced at config path: ${configPath}`);
     this.name = "MissingEnvVarError";
   }
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    Object.prototype.toString.call(value) === "[object Object]"
-  );
 }
 
 function substituteString(value: string, env: NodeJS.ProcessEnv, configPath: string): string {
@@ -97,6 +90,49 @@ function substituteString(value: string, env: NodeJS.ProcessEnv, configPath: str
   }
 
   return chunks.join("");
+}
+
+export function containsEnvVarReference(value: string): boolean {
+  if (!value.includes("$")) {
+    return false;
+  }
+
+  for (let i = 0; i < value.length; i += 1) {
+    const char = value[i];
+    if (char !== "$") {
+      continue;
+    }
+
+    const next = value[i + 1];
+    const afterNext = value[i + 2];
+
+    // Escaped: $${VAR} -> ${VAR}
+    if (next === "$" && afterNext === "{") {
+      const start = i + 3;
+      const end = value.indexOf("}", start);
+      if (end !== -1) {
+        const name = value.slice(start, end);
+        if (ENV_VAR_NAME_PATTERN.test(name)) {
+          i = end;
+          continue;
+        }
+      }
+    }
+
+    // Substitution: ${VAR} -> value
+    if (next === "{") {
+      const start = i + 2;
+      const end = value.indexOf("}", start);
+      if (end !== -1) {
+        const name = value.slice(start, end);
+        if (ENV_VAR_NAME_PATTERN.test(name)) {
+          return true;
+        }
+      }
+    }
+  }
+
+  return false;
 }
 
 function substituteAny(value: unknown, env: NodeJS.ProcessEnv, path: string): unknown {

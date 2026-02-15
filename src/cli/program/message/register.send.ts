@@ -23,7 +23,11 @@ export function registerMessageSendCommand(message: Command, helpers: MessageCli
         .option("--reply-to <id>", "Reply-to message id")
         .option("--thread-id <id>", "Thread id (Telegram forum thread)")
         .option("--gif-playback", "Treat video media as GIF playback (WhatsApp only).", false)
-        .option("--silent", "Send message silently without notification (Telegram only)", false),
+        .option(
+          "--silent",
+          "Send message silently without notification (Telegram + Discord)",
+          false,
+        ),
     )
     .action(async (opts) => {
       await helpers.runMessageAction("send", opts);

@@ -1,6 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "./types.js";
+import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveStateDir } from "./paths.js";
@@ -68,7 +69,11 @@ function resolveEffectiveAgentDir(
   if (trimmed) {
     return resolveUserPath(trimmed);
   }
-  const root = resolveStateDir(deps?.env ?? process.env, deps?.homedir ?? os.homedir);
+  const env = deps?.env ?? process.env;
+  const root = resolveStateDir(
+    env,
+    deps?.homedir ?? (() => resolveRequiredHomeDir(env, os.homedir)),
+  );
   return path.join(root, "agents", id, "agent");
 }
 

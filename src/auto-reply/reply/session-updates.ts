@@ -127,6 +127,16 @@ export async function ensureSkillSnapshot(params: {
   skillsSnapshot?: SessionEntry["skillsSnapshot"];
   systemSent: boolean;
 }> {
+  if (process.env.OPENCLAW_TEST_FAST === "1") {
+    // In fast unit-test runs we skip filesystem scanning, watchers, and session-store writes.
+    // Dedicated skills tests cover snapshot generation behavior.
+    return {
+      sessionEntry: params.sessionEntry,
+      skillsSnapshot: params.sessionEntry?.skillsSnapshot,
+      systemSent: params.sessionEntry?.systemSent ?? false,
+    };
+  }
+
   const {
     sessionEntry,
     sessionStore,
@@ -255,6 +265,7 @@ export async function incrementCompactionCount(params: {
   // If tokensAfter is provided, update the cached token counts to reflect post-compaction state
   if (tokensAfter != null && tokensAfter > 0) {
     updates.totalTokens = tokensAfter;
+    updates.totalTokensFresh = true;
     // Clear input/output breakdown since we only have the total estimate after compaction
     updates.inputTokens = undefined;
     updates.outputTokens = undefined;

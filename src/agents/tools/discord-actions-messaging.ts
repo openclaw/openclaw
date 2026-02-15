@@ -18,10 +18,12 @@ import {
   sendMessageDiscord,
   sendPollDiscord,
   sendStickerDiscord,
+  sendVoiceMessageDiscord,
   unpinMessageDiscord,
 } from "../../discord/send.js";
 import { resolveDiscordChannelId } from "../../discord/targets.js";
 import { withNormalizedTimestamp } from "../date-time.js";
+import { assertMediaNotDataUrl } from "../sandbox-paths.js";
 import {
   type ActionGate,
   jsonResult,
@@ -228,18 +230,47 @@ export async function handleDiscordMessagingAction(
         throw new Error("Discord message sends are disabled.");
       }
       const to = readStringParam(params, "to", { required: true });
+      const asVoice = params.asVoice === true;
+      const silent = params.silent === true;
       const content = readStringParam(params, "content", {
-        required: true,
+        required: !asVoice,
+        allowEmpty: true,
       });
-      const mediaUrl = readStringParam(params, "mediaUrl");
+      const mediaUrl =
+        readStringParam(params, "mediaUrl", { trim: false }) ??
+        readStringParam(params, "path", { trim: false }) ??
+        readStringParam(params, "filePath", { trim: false });
       const replyTo = readStringParam(params, "replyTo");
       const embeds =
         Array.isArray(params.embeds) && params.embeds.length > 0 ? params.embeds : undefined;
-      const result = await sendMessageDiscord(to, content, {
+
+      // Handle voice message sending
+      if (asVoice) {
+        if (!mediaUrl) {
+          throw new Error(
+            "Voice messages require a media file reference (mediaUrl, path, or filePath).",
+          );
+        }
+        if (content && content.trim()) {
+          throw new Error(
+            "Voice messages cannot include text content (Discord limitation). Remove the content parameter.",
+          );
+        }
+        assertMediaNotDataUrl(mediaUrl);
+        const result = await sendVoiceMessageDiscord(to, mediaUrl, {
+          ...(accountId ? { accountId } : {}),
+          replyTo,
+          silent,
+        });
+        return jsonResult({ ok: true, result, voiceMessage: true });
+      }
+
+      const result = await sendMessageDiscord(to, content ?? "", {
         ...(accountId ? { accountId } : {}),
         mediaUrl,
         replyTo,
         embeds,
+        silent,
       });
       return jsonResult({ ok: true, result });
     }

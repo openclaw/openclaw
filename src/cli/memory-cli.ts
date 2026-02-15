@@ -215,6 +215,34 @@ async function scanMemoryFiles(
   return { source: "memory", totalFiles, issues };
 }
 
+async function summarizeQmdIndexArtifact(manager: MemoryManager): Promise<string | null> {
+  const status = manager.status?.();
+  if (!status || status.backend !== "qmd") {
+    return null;
+  }
+  const dbPath = status.dbPath?.trim();
+  if (!dbPath) {
+    return null;
+  }
+  let stat: fsSync.Stats;
+  try {
+    stat = await fs.stat(dbPath);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") {
+      throw new Error(`QMD index file not found: ${shortenHomePath(dbPath)}`, { cause: err });
+    }
+    throw new Error(
+      `QMD index file check failed: ${shortenHomePath(dbPath)} (${code ?? "error"})`,
+      { cause: err },
+    );
+  }
+  if (!stat.isFile() || stat.size <= 0) {
+    throw new Error(`QMD index file is empty: ${shortenHomePath(dbPath)}`);
+  }
+  return `QMD index: ${shortenHomePath(dbPath)} (${stat.size} bytes)`;
+}
+
 async function scanMemorySources(params: {
   workspaceDir: string;
   agentId: string;
@@ -253,8 +281,9 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
   }> = [];
 
   for (const agentId of agentIds) {
+    const managerPurpose = opts.index ? "default" : "status";
     await withManager<MemoryManager>({
-      getManager: () => getMemorySearchManager({ cfg, agentId }),
+      getManager: () => getMemorySearchManager({ cfg, agentId, purpose: managerPurpose }),
       onMissing: (error) => defaultRuntime.log(error ?? "Memory search disabled."),
       onCloseError: (err) =>
         defaultRuntime.error(`Memory manager close failed: ${formatErrorMessage(err)}`),
@@ -632,6 +661,10 @@ export function registerMemoryCli(program: Command) {
                   }
                 },
               );
+              const qmdIndexSummary = await summarizeQmdIndexArtifact(manager);
+              if (qmdIndexSummary) {
+                defaultRuntime.log(qmdIndexSummary);
+              }
               defaultRuntime.log(`Memory index updated (${agentId}).`);
             } catch (err) {
               const message = formatErrorMessage(err);

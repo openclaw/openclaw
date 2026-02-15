@@ -1,6 +1,6 @@
 export type CryptoLike = {
   randomUUID?: (() => string) | undefined;
-  getRandomValues?: ((array: Uint8Array) => Uint8Array) | undefined;
+  getRandomValues?: (<T extends Exclude<BufferSource, ArrayBuffer>>(array: T) => T) | undefined;
 };
 
 let warnedWeakCrypto = false;

@@ -40,3 +40,42 @@ export function createNullWriter(): Writable {
     },
   });
 }
+
+export function createDaemonActionContext(params: { action: DaemonAction; json: boolean }): {
+  stdout: Writable;
+  warnings: string[];
+  emit: (payload: Omit<DaemonActionResponse, "action">) => void;
+  fail: (message: string, hints?: string[]) => void;
+} {
+  const warnings: string[] = [];
+  const stdout = params.json ? createNullWriter() : process.stdout;
+  const emit = (payload: Omit<DaemonActionResponse, "action">) => {
+    if (!params.json) {
+      return;
+    }
+    emitDaemonActionJson({
+      action: params.action,
+      ...payload,
+      warnings: payload.warnings ?? (warnings.length ? warnings : undefined),
+    });
+  };
+  const fail = (message: string, hints?: string[]) => {
+    if (params.json) {
+      emit({
+        ok: false,
+        error: message,
+        hints,
+      });
+    } else {
+      defaultRuntime.error(message);
+      if (hints?.length) {
+        for (const hint of hints) {
+          defaultRuntime.log(`Tip: ${hint}`);
+        }
+      }
+    }
+    defaultRuntime.exit(1);
+  };
+
+  return { stdout, warnings, emit, fail };
+}

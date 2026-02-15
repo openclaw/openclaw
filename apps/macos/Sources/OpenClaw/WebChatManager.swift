@@ -3,8 +3,13 @@ import Foundation
 
 /// A borderless panel that can still accept key focus (needed for typing).
 final class WebChatPanel: NSPanel {
-    override var canBecomeKey: Bool { true }
-    override var canBecomeMain: Bool { true }
+    override var canBecomeKey: Bool {
+        true
+    }
+
+    override var canBecomeMain: Bool {
+        true
+    }
 }
 
 enum WebChatPresentation {

@@ -1,6 +1,7 @@
 import type { AgentEvent, AgentMessage } from "@mariozechner/pi-agent-core";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
+import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
 import {
@@ -29,6 +30,21 @@ const stripTrailingDirective = (text: string): string => {
   return text.slice(0, openIndex);
 };
 
+export function resolveSilentReplyFallbackText(params: {
+  text: string;
+  messagingToolSentTexts: string[];
+}): string {
+  const trimmed = params.text.trim();
+  if (trimmed !== SILENT_REPLY_TOKEN) {
+    return params.text;
+  }
+  const fallback = params.messagingToolSentTexts.at(-1)?.trim();
+  if (!fallback) {
+    return params.text;
+  }
+  return fallback;
+}
+
 export function handleMessageStart(
   ctx: EmbeddedPiSubscribeContext,
   evt: AgentEvent & { message: AgentMessage },
@@ -56,6 +72,8 @@ export function handleMessageUpdate(
   if (msg?.role !== "assistant") {
     return;
   }
+
+  ctx.noteLastAssistant(msg);
 
   const assistantEvent = evt.assistantMessageEvent;
   const assistantRecord =
@@ -198,6 +216,7 @@ export function handleMessageEnd(
   }
 
   const assistantMessage = msg;
+  ctx.noteLastAssistant(assistantMessage);
   ctx.recordAssistantUsage((assistantMessage as { usage?: unknown }).usage);
   promoteThinkingTagsToBlocks(assistantMessage);
 
@@ -211,7 +230,10 @@ export function handleMessageEnd(
     rawThinking: extractAssistantThinking(assistantMessage),
   });
 
-  const text = ctx.stripBlockTags(rawText, { thinking: false, final: false });
+  const text = resolveSilentReplyFallbackText({
+    text: ctx.stripBlockTags(rawText, { thinking: false, final: false }),
+    messagingToolSentTexts: ctx.state.messagingToolSentTexts,
+  });
   const rawThinking =
     ctx.state.includeReasoning || ctx.state.streamReasoning
       ? extractAssistantThinking(assistantMessage) || extractThinkingFromTaggedText(rawText)

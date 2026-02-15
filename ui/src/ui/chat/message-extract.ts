@@ -1,45 +1,8 @@
+import { stripEnvelope } from "../../../../src/shared/chat-envelope.js";
 import { stripThinkingTags } from "../format.ts";
-
-const ENVELOPE_PREFIX = /^\[([^\]]+)\]\s*/;
-const ENVELOPE_CHANNELS = [
-  "WebChat",
-  "WhatsApp",
-  "Telegram",
-  "Signal",
-  "Slack",
-  "Discord",
-  "iMessage",
-  "Teams",
-  "Matrix",
-  "Zalo",
-  "Zalo Personal",
-  "BlueBubbles",
-];
 
 const textCache = new WeakMap<object, string | null>();
 const thinkingCache = new WeakMap<object, string | null>();
-
-function looksLikeEnvelopeHeader(header: string): boolean {
-  if (/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z\b/.test(header)) {
-    return true;
-  }
-  if (/\d{4}-\d{2}-\d{2} \d{2}:\d{2}\b/.test(header)) {
-    return true;
-  }
-  return ENVELOPE_CHANNELS.some((label) => header.startsWith(`${label} `));
-}
-
-export function stripEnvelope(text: string): string {
-  const match = text.match(ENVELOPE_PREFIX);
-  if (!match) {
-    return text;
-  }
-  const header = match[1] ?? "";
-  if (!looksLikeEnvelopeHeader(header)) {
-    return text;
-  }
-  return text.slice(match[0].length);
-}
 
 export function extractText(message: unknown): string | null {
   const m = message as Record<string, unknown>;

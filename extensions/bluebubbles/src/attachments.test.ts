@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import type { BlueBubblesAttachment } from "./types.js";
 import { downloadBlueBubblesAttachment, sendBlueBubblesAttachment } from "./attachments.js";
+import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
 
 vi.mock("./accounts.js", () => ({
   resolveBlueBubblesAccount: vi.fn(({ cfg, accountId }) => {
@@ -14,12 +15,18 @@ vi.mock("./accounts.js", () => ({
   }),
 }));
 
+vi.mock("./probe.js", () => ({
+  getCachedBlueBubblesPrivateApiStatus: vi.fn().mockReturnValue(null),
+}));
+
 const mockFetch = vi.fn();
 
 describe("downloadBlueBubblesAttachment", () => {
   beforeEach(() => {
     vi.stubGlobal("fetch", mockFetch);
     mockFetch.mockReset();
+    vi.mocked(getCachedBlueBubblesPrivateApiStatus).mockReset();
+    vi.mocked(getCachedBlueBubblesPrivateApiStatus).mockReturnValue(null);
   });
 
   afterEach(() => {
@@ -242,6 +249,8 @@ describe("sendBlueBubblesAttachment", () => {
   beforeEach(() => {
     vi.stubGlobal("fetch", mockFetch);
     mockFetch.mockReset();
+    vi.mocked(getCachedBlueBubblesPrivateApiStatus).mockReset();
+    vi.mocked(getCachedBlueBubblesPrivateApiStatus).mockReturnValue(null);
   });
 
   afterEach(() => {
@@ -341,5 +350,28 @@ describe("sendBlueBubblesAttachment", () => {
     const bodyText = decodeBody(body);
     expect(bodyText).toContain('filename="evil.mp3"');
     expect(bodyText).toContain('name="evil.mp3"');
+  });
+
+  it("downgrades attachment reply threading when private API is disabled", async () => {
+    vi.mocked(getCachedBlueBubblesPrivateApiStatus).mockReturnValueOnce(false);
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      text: () => Promise.resolve(JSON.stringify({ messageId: "msg-4" })),
+    });
+
+    await sendBlueBubblesAttachment({
+      to: "chat_guid:iMessage;-;+15551234567",
+      buffer: new Uint8Array([1, 2, 3]),
+      filename: "photo.jpg",
+      contentType: "image/jpeg",
+      replyToMessageGuid: "reply-guid-123",
+      opts: { serverUrl: "http://localhost:1234", password: "test" },
+    });
+
+    const body = mockFetch.mock.calls[0][1]?.body as Uint8Array;
+    const bodyText = decodeBody(body);
+    expect(bodyText).not.toContain('name="method"');
+    expect(bodyText).not.toContain('name="selectedMessageGuid"');
+    expect(bodyText).not.toContain('name="partIndex"');
   });
 });

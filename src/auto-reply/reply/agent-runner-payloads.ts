@@ -6,7 +6,7 @@ import { stripHeartbeatToken } from "../heartbeat.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { formatBunFetchSocketError, isBunFetchSocketError } from "./agent-runner-utils.js";
 import { createBlockReplyPayloadKey, type BlockReplyPipeline } from "./block-reply-pipeline.js";
-import { parseReplyDirectives } from "./reply-directives.js";
+import { normalizeReplyPayloadDirectives } from "./reply-delivery.js";
 import {
   applyReplyThreading,
   filterMessagingToolDuplicates,
@@ -64,24 +64,15 @@ export function buildReplyPayloads(params: {
     replyToChannel: params.replyToChannel,
     currentMessageId: params.currentMessageId,
   })
-    .map((payload) => {
-      const parsed = parseReplyDirectives(payload.text ?? "", {
-        currentMessageId: params.currentMessageId,
-        silentToken: SILENT_REPLY_TOKEN,
-      });
-      const mediaUrls = payload.mediaUrls ?? parsed.mediaUrls;
-      const mediaUrl = payload.mediaUrl ?? parsed.mediaUrl ?? mediaUrls?.[0];
-      return {
-        ...payload,
-        text: parsed.text ? parsed.text : undefined,
-        mediaUrls,
-        mediaUrl,
-        replyToId: payload.replyToId ?? parsed.replyToId,
-        replyToTag: payload.replyToTag || parsed.replyToTag,
-        replyToCurrent: payload.replyToCurrent || parsed.replyToCurrent,
-        audioAsVoice: Boolean(payload.audioAsVoice || parsed.audioAsVoice),
-      };
-    })
+    .map(
+      (payload) =>
+        normalizeReplyPayloadDirectives({
+          payload,
+          currentMessageId: params.currentMessageId,
+          silentToken: SILENT_REPLY_TOKEN,
+          parseMode: "always",
+        }).payload,
+    )
     .filter(isRenderablePayload);
 
   // Drop final payloads only when block streaming succeeded end-to-end.
