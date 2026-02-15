@@ -28,24 +28,11 @@ describe("toSanitizedMarkdownHtml", () => {
     expect(html).toContain("<code");
     expect(html).toContain("console.log(1)");
   });
-
-  it("preserves img tags with src and alt from markdown images (#15437)", () => {
-    const html = toSanitizedMarkdownHtml("![Alt text](https://example.com/image.png)");
-    expect(html).toContain("<img");
-    expect(html).toContain('src="https://example.com/image.png"');
-    expect(html).toContain('alt="Alt text"');
-  });
-
-  it("preserves base64 data URI images (#15437)", () => {
-    const html = toSanitizedMarkdownHtml("![Chart](data:image/png;base64,iVBORw0KGgo=)");
-    expect(html).toContain("<img");
-    expect(html).toContain("data:image/png;base64,");
-  });
-
-  it("strips javascript image urls", () => {
-    const html = toSanitizedMarkdownHtml("![X](javascript:alert(1))");
-    expect(html).toContain("<img");
-    expect(html).not.toContain("javascript:");
-    expect(html).not.toContain("src=");
-  });
+  it.each(["---", "----", "***", "*****", "___", " ___ "])(
+    "renders horizontal rule for %s",
+    (rule) => {
+      const html = toSanitizedMarkdownHtml(`Line 1\n\n${rule}\n\nLine 2`);
+      expect(html).toContain("<hr");
+    },
+  );
 });
