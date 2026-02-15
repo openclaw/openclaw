@@ -236,6 +236,14 @@ Triggered when agent commands are issued:
 - **`command:reset`**: When `/reset` command is issued
 - **`command:stop`**: When `/stop` command is issued
 
+### Session Events
+
+- **`session:compact:before`**: Right before compaction summarizes history
+- **`session:compact:after`**: After compaction completes with summary metadata
+
+Internal hook payloads emit these as `type: "session"` with `action: "compact:before"` / `action: "compact:after"`; listeners subscribe with the combined keys above.
+Specific handler registration uses the literal key format `${type}:${action}`. For these events, register `session:compact:before` and `session:compact:after`.
+
 ### Agent Events
 
 - **`agent:bootstrap`**: Before workspace bootstrap files are injected (hooks may mutate `context.bootstrapFiles`)
@@ -251,6 +259,13 @@ Triggered when the gateway starts:
 These hooks are not event-stream listeners; they let plugins synchronously adjust tool results before OpenClaw persists them.
 
 - **`tool_result_persist`**: transform tool results before they are written to the session transcript. Must be synchronous; return the updated tool result payload or `undefined` to keep it as-is. See [Agent Loop](/concepts/agent-loop).
+
+### Plugin Hook Events
+
+Compaction lifecycle hooks exposed through the plugin hook runner:
+
+- **`before_compaction`**: Runs before compaction with count/token metadata
+- **`after_compaction`**: Runs after compaction with compaction summary metadata
 
 ### Future Events
 
