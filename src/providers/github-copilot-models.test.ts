@@ -43,6 +43,18 @@ describe("github-copilot-models", () => {
       expect(def.contextWindow).toBe(128_000);
     });
 
+    it("uses anthropic-messages API for Claude models", () => {
+      expect(buildCopilotModelDefinition("claude-sonnet-4").api).toBe("anthropic-messages");
+      expect(buildCopilotModelDefinition("claude-opus-4.6-fast").api).toBe("anthropic-messages");
+      expect(buildCopilotModelDefinition("claude-haiku-4.5").api).toBe("anthropic-messages");
+    });
+
+    it("uses openai-responses API for non-Claude models", () => {
+      expect(buildCopilotModelDefinition("gpt-4o").api).toBe("openai-responses");
+      expect(buildCopilotModelDefinition("o3-mini").api).toBe("openai-responses");
+      expect(buildCopilotModelDefinition("gemini-3-pro-preview").api).toBe("openai-responses");
+    });
+
     it("throws on empty model id", () => {
       expect(() => buildCopilotModelDefinition("")).toThrow("Model id required");
       expect(() => buildCopilotModelDefinition("  ")).toThrow("Model id required");

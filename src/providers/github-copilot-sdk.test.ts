@@ -243,6 +243,19 @@ describe("github-copilot-sdk (provider layer)", () => {
       expect(def.maxTokens).toBe(4096);
     });
 
+    it("uses anthropic-messages API for Claude models", () => {
+      const def = buildCopilotModelDefinitionFromSdk({
+        id: "claude-sonnet-4",
+        name: "Claude Sonnet 4",
+        capabilities: {
+          supports: { vision: true, reasoningEffort: false },
+          limits: { max_context_window_tokens: 200000, max_prompt_tokens: 8192 },
+        },
+      });
+
+      expect(def.api).toBe("anthropic-messages");
+    });
+
     it("uses model id as name when name is empty", () => {
       const def = buildCopilotModelDefinitionFromSdk({
         id: "some-model",

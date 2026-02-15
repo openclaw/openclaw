@@ -86,13 +86,16 @@ export function buildCopilotModelDefinition(modelId: string): ModelDefinitionCon
   const isReasoning = REASONING_MODEL_IDS.has(id);
   const isVision = VISION_MODEL_IDS.has(id);
 
+  // Copilot exposes both /chat/completions (OpenAI) and /v1/messages (Anthropic)
+  // at the same base URL. Use the Anthropic Messages API for Claude models to get
+  // proper extended thinking with real cryptographic signatures.
+  const isClaude = id.startsWith("claude-");
+  const api = isClaude ? "anthropic-messages" : "openai-responses";
+
   return {
     id,
     name: id,
-    // pi-coding-agent's registry schema doesn't know about a "github-copilot" API.
-    // We use OpenAI-compatible responses API, while keeping the provider id as
-    // "github-copilot" (pi-ai uses that to attach Copilot-specific headers).
-    api: "openai-responses",
+    api,
     reasoning: isReasoning,
     input: isVision ? ["text", "image"] : ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },

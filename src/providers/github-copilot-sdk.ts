@@ -140,10 +140,16 @@ export function buildCopilotModelDefinitionFromSdk(model: SdkModelInfo): ModelDe
   const supportsVision = model.capabilities?.supports?.vision ?? false;
   const supportsReasoning = model.capabilities?.supports?.reasoningEffort ?? false;
 
+  // Copilot exposes both /chat/completions (OpenAI) and /v1/messages (Anthropic)
+  // at the same base URL. Use the Anthropic Messages API for Claude models to get
+  // proper extended thinking with real cryptographic signatures.
+  const isClaude = model.id.startsWith("claude-");
+  const api = isClaude ? "anthropic-messages" : "openai-responses";
+
   return {
     id: model.id,
     name: model.name || model.id,
-    api: "openai-responses",
+    api,
     reasoning: supportsReasoning,
     input: supportsVision ? ["text", "image"] : ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
