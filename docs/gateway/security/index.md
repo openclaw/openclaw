@@ -522,9 +522,10 @@ Logs and transcripts can leak sensitive info even when access controls are corre
 
 Recommendations:
 
-- Keep tool summary redaction on (`logging.redactSensitive: "tools"`; default).
+- Keep tool summary redaction on (`logging.redactSensitive: "tools"`; default). This redacts secrets in both console output and session transcripts at write time.
 - Add custom patterns for your environment via `logging.redactPatterns` (tokens, hostnames, internal URLs).
 - When sharing diagnostics, prefer `openclaw status --all` (pasteable, secrets redacted) over raw logs.
+- Session transcripts on disk never contain raw secrets when redaction is enabled — tool results are redacted before persistence while the LLM retains full context in memory.
 - Prune old session transcripts and log files if you don’t need long retention.
 
 Details: [Logging](/gateway/logging)

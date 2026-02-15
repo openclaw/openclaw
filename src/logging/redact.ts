@@ -60,9 +60,24 @@ function parsePattern(raw: string): RegExp | null {
   }
 }
 
+/**
+ * Cache compiled regex patterns to avoid re-creating RegExp objects on every call.
+ * Uses content-based comparison (JSON.stringify) so that config-provided patterns
+ * also hit the cache even when the array is a new reference each time.
+ */
+let cachedPatternKey: string | undefined;
+let cachedPatterns: RegExp[] | undefined;
+
 function resolvePatterns(value?: string[]): RegExp[] {
   const source = value?.length ? value : DEFAULT_REDACT_PATTERNS;
-  return source.map(parsePattern).filter((re): re is RegExp => Boolean(re));
+  const key = JSON.stringify(source);
+  if (key === cachedPatternKey && cachedPatterns) {
+    return cachedPatterns;
+  }
+  const compiled = source.map(parsePattern).filter((re): re is RegExp => Boolean(re));
+  cachedPatternKey = key;
+  cachedPatterns = compiled;
+  return compiled;
 }
 
 function maskToken(token: string): string {
