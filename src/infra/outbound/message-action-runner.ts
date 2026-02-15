@@ -98,6 +98,7 @@ export type RunMessageActionParams = {
   sessionKey?: string;
   agentId?: string;
   sandboxRoot?: string;
+  workspaceDir?: string;
   dryRun?: boolean;
   abortSignal?: AbortSignal;
 };
@@ -749,6 +750,7 @@ export async function runMessageAction(
   await normalizeSandboxMediaParams({
     args: params,
     sandboxRoot: input.sandboxRoot,
+    workspaceDir: input.workspaceDir,
   });
 
   await hydrateSendAttachmentParams({

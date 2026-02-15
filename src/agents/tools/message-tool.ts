@@ -302,6 +302,7 @@ type MessageToolOptions = {
   replyToMode?: "off" | "first" | "all";
   hasRepliedRef?: { value: boolean };
   sandboxRoot?: string;
+  workspaceDir?: string;
   requireExplicitTarget?: boolean;
 };
 
@@ -485,6 +486,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           ? resolveSessionAgentId({ sessionKey: options.agentSessionKey, config: cfg })
           : undefined,
         sandboxRoot: options?.sandboxRoot,
+        workspaceDir: options?.workspaceDir,
         abortSignal: signal,
       });
 

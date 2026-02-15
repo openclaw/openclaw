@@ -228,8 +228,10 @@ async function hydrateAttachmentPayload(params: {
 export async function normalizeSandboxMediaParams(params: {
   args: Record<string, unknown>;
   sandboxRoot?: string;
+  workspaceDir?: string;
 }): Promise<void> {
   const sandboxRoot = params.sandboxRoot?.trim();
+  const workspaceDir = params.workspaceDir?.trim();
   const mediaKeys: Array<"media" | "path" | "filePath"> = ["media", "path", "filePath"];
   for (const key of mediaKeys) {
     const raw = readStringParam(params.args, key, { trim: false });
@@ -237,12 +239,25 @@ export async function normalizeSandboxMediaParams(params: {
       continue;
     }
     assertMediaNotDataUrl(raw);
-    if (!sandboxRoot) {
-      continue;
+    // Try sandboxRoot first, then workspaceDir as fallback for agent workspaces
+    if (sandboxRoot) {
+      const normalized = await resolveSandboxedMediaSource({ media: raw, sandboxRoot });
+      if (normalized !== raw) {
+        params.args[key] = normalized;
+        continue;
+      }
     }
-    const normalized = await resolveSandboxedMediaSource({ media: raw, sandboxRoot });
-    if (normalized !== raw) {
-      params.args[key] = normalized;
+    if (workspaceDir && !raw.startsWith("/")) {
+      // For relative paths, try workspaceDir as the base
+      const candidate = path.join(workspaceDir, raw);
+      try {
+        const normalized = await resolveSandboxedMediaSource({ media: candidate, sandboxRoot: workspaceDir });
+        if (normalized.startsWith(workspaceDir)) {
+          params.args[key] = normalized;
+        }
+      } catch {
+        // Ignore - path not in workspaceDir
+      }
     }
   }
 }
