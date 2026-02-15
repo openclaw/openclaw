@@ -9,8 +9,8 @@
     "@microsoft/agents-hosting-extensions-teams": "^1.2.3",
     "express": "^5.2.1"
   },
-  "devDependencies": {
-    "openclaw": "workspace:*"
+  "peerDependencies": {
+    "openclaw": ">=2026.0.0"
   },
   "openclaw": {
     "extensions": [

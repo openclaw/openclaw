@@ -7,8 +7,8 @@
   "dependencies": {
     "@urbit/aura": "^3.0.0"
   },
-  "devDependencies": {
-    "openclaw": "workspace:*"
+  "peerDependencies": {
+    "openclaw": ">=2026.0.0"
   },
   "openclaw": {
     "extensions": [

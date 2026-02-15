@@ -4,8 +4,8 @@
   "private": true,
   "description": "OpenClaw LINE channel plugin",
   "type": "module",
-  "devDependencies": {
-    "openclaw": "workspace:*"
+  "peerDependencies": {
+    "openclaw": ">=2026.0.0"
   },
   "openclaw": {
     "extensions": [
