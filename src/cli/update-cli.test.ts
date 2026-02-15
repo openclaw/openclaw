@@ -144,7 +144,7 @@ describe("update-cli", () => {
 
   const createCaseDir = async (prefix: string) => {
     const dir = path.join(fixtureRoot, `${prefix}-${fixtureCount++}`);
-    await fs.mkdir(dir, { recursive: true });
+    // Tests only need a stable path; the directory does not have to exist because all I/O is mocked.
     return dir;
   };
 
