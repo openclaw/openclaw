@@ -86,13 +86,12 @@ Plans:
 2. Content stripped by output CSP rules generates a security event with the original content, the rule that triggered, and the channel
 3. Every tool call carries a W3C Trace Context ID that propagates through sub-agent spawns, and the full execution chain is recoverable from security logs using a single trace ID
 4. Trace IDs appear in security log entries for tool calls, enabling post-hoc reconstruction of "message received -> tool A called -> sub-agent spawned -> tool B called -> response sent"
-   **Plans**: TBD
+   **Plans:** 2 plans
 
 Plans:
 
-- [ ] 04-01: TBD
-- [ ] 04-02: TBD
-- [ ] 04-03: TBD
+- [ ] 04-01-PLAN.md — Per-channel output Content Security Policy with configurable rules (OUTP-01)
+- [ ] 04-02-PLAN.md — W3C Trace Context generation and propagation through tool chains (TOOL-01)
 
 ### Phase 5: Tamper-Evident Audit Infrastructure
 
@@ -121,5 +120,5 @@ Note: Phase 3 and Phase 5 only depend on Phase 1, so they could execute in paral
 | 1. Foundation & Repo Hygiene           | 0/3            | Planned     | -         |
 | 2. Input & Session Hardening           | 0/2            | Planned     | -         |
 | 3. Plugin Security                     | 0/2            | Not started | -         |
-| 4. Output Controls & Execution Tracing | 0/3            | Not started | -         |
+| 4. Output Controls & Execution Tracing | 0/2            | Planned     | -         |
 | 5. Tamper-Evident Audit Infrastructure | 0/1            | Not started | -         |
