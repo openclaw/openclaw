@@ -506,6 +506,12 @@ export function formatAssistantErrorText(
     return formatRawAssistantErrorForUi(raw);
   }
 
+  // HTML error pages from upstream proxies/servers must never reach text-only channels.
+  if (/^\s*(<html|<!doctype)/i.test(raw)) {
+    console.warn("[formatAssistantErrorText] HTML error page received:", raw.slice(0, 200));
+    return "LLM request failed (upstream returned an error page). Please try again.";
+  }
+
   // Never return raw unhandled errors - log for debugging but return safe message
   if (raw.length > 600) {
     console.warn("[formatAssistantErrorText] Long error truncated:", raw.slice(0, 200));
