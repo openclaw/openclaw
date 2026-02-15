@@ -107,11 +107,11 @@ describe("QmdMemoryManager", () => {
     logDebugMock.mockReset();
     logInfoMock.mockReset();
     tmpRoot = path.join(fixtureRoot, `case-${fixtureCount++}`);
-    await fs.mkdir(tmpRoot, { recursive: true });
+    await fs.mkdir(tmpRoot);
     workspaceDir = path.join(tmpRoot, "workspace");
-    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.mkdir(workspaceDir);
     stateDir = path.join(tmpRoot, "state");
-    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(stateDir);
     process.env.OPENCLAW_STATE_DIR = stateDir;
     cfg = {
       agents: {
