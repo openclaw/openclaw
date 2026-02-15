@@ -325,7 +325,7 @@ export const rocketchatPlugin: ChannelPlugin<ResolvedRocketchatAccount> = {
       ctx.setStatus({
         accountId: account.accountId,
         baseUrl: account.baseUrl,
-        authTokenSource: account.authTokenSource,
+        tokenSource: account.authTokenSource,
       });
       ctx.log?.info(`[${account.accountId}] starting channel`);
       return monitorRocketchatProvider({
