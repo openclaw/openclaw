@@ -16,3 +16,13 @@ export function createStubSessionHarness(): {
 
   return { session, emit: (evt: unknown) => handler?.(evt) };
 }
+
+export function extractAgentEventPayloads(calls: Array<unknown[]>): Array<Record<string, unknown>> {
+  return calls
+    .map((call) => {
+      const first = call?.[0] as { data?: unknown } | undefined;
+      const data = first?.data;
+      return data && typeof data === "object" ? (data as Record<string, unknown>) : undefined;
+    })
+    .filter((value): value is Record<string, unknown> => Boolean(value));
+}
