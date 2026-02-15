@@ -67,6 +67,8 @@ export type FollowupRun = {
     verboseLevel?: VerboseLevel;
     reasoningLevel?: ReasoningLevel;
     elevatedLevel?: ElevatedLevel;
+    /** Session-level tool profile override (e.g., "plan" from /plan on directive). */
+    sessionToolProfile?: string;
     execOverrides?: Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
     bashElevated?: {
       enabled: boolean;

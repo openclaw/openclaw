@@ -198,6 +198,7 @@ export async function applyInlineDirectiveOverrides(params: {
     directives.hasVerboseDirective ||
     directives.hasReasoningDirective ||
     directives.hasElevatedDirective ||
+    directives.hasPlanDirective ||
     directives.hasExecDirective ||
     directives.hasModelDirective ||
     directives.hasQueueDirective ||

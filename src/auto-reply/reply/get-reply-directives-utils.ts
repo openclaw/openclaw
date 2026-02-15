@@ -47,6 +47,9 @@ export function clearInlineDirectives(cleaned: string): InlineDirectives {
     rawCap: undefined,
     rawDrop: undefined,
     hasQueueOptions: false,
+    hasPlanDirective: false,
+    planLevel: undefined,
+    rawPlanLevel: undefined,
   };
 }
 

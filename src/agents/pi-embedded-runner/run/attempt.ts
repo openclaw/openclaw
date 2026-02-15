@@ -318,6 +318,7 @@ export async function runEmbeddedAttempt(
           requireExplicitMessageTarget:
             params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
           disableMessageTool: params.disableMessageTool,
+          sessionToolProfile: params.sessionToolProfile,
         });
     const tools = sanitizeToolsForGoogle({ tools: toolsRaw, provider: params.provider });
     logToolSchemasForGoogle({ tools, provider: params.provider });
@@ -426,11 +427,41 @@ export async function runEmbeddedAttempt(
     });
     const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
 
+    // Build plan mode system prompt hint if plan mode is active
+    const planModeHint =
+      params.sessionToolProfile === "plan"
+        ? `## Plan Mode (Read-Only)
+
+You MUST NOT execute changes — this supersedes all other instructions.
+
+**Allowed tools:** read, web_search, web_fetch, memory_search, memory_get, session_status, sessions_list, sessions_history, image
+**Blocked tools:** write, edit, exec, process, browser, canvas, nodes, message, cron, gateway, sessions_send, sessions_spawn
+
+To exit plan mode: \`/plan off\`
+
+### Workflow
+1. **Explore** — Gather context with read-only tools
+2. **Plan** — Capture findings, identify approach
+3. **Ask** — Clarify what you can't resolve alone
+
+### Asking Good Questions
+- Never ask what you could find out yourself
+- Batch related questions together
+- Focus on things only the user can answer: requirements, preferences, tradeoffs
+
+### Output
+When ready, present: Context → Approach → Steps → Verification
+Then wait for approval before executing.`
+        : undefined;
+    const effectiveExtraPrompt = [params.extraSystemPrompt, planModeHint]
+      .filter(Boolean)
+      .join("\n\n");
+
     const appendPrompt = buildEmbeddedSystemPrompt({
       workspaceDir: effectiveWorkspace,
       defaultThinkLevel: params.thinkLevel,
       reasoningLevel: params.reasoningLevel ?? "off",
-      extraSystemPrompt: params.extraSystemPrompt,
+      extraSystemPrompt: effectiveExtraPrompt || undefined,
       ownerNumbers: params.ownerNumbers,
       reasoningTagHint,
       heartbeatPrompt: isDefaultAgent

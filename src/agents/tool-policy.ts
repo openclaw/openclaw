@@ -1,6 +1,6 @@
 import type { AnyAgentTool } from "./tools/common.js";
 
-export type ToolProfileId = "minimal" | "coding" | "messaging" | "full";
+export type ToolProfileId = "minimal" | "coding" | "messaging" | "full" | "plan";
 
 type ToolProfilePolicy = {
   allow?: string[];
@@ -76,6 +76,19 @@ const TOOL_PROFILES: Record<ToolProfileId, ToolProfilePolicy> = {
       "sessions_history",
       "sessions_send",
       "session_status",
+    ],
+  },
+  plan: {
+    allow: [
+      "read",
+      "web_search",
+      "web_fetch",
+      "memory_search",
+      "memory_get",
+      "session_status",
+      "sessions_list",
+      "sessions_history",
+      "image",
     ],
   },
   full: {},

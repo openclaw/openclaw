@@ -1,12 +1,19 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ExecAsk, ExecHost, ExecSecurity } from "../../infra/exec-approvals.js";
 import type { MsgContext } from "../templating.js";
-import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "./directives.js";
+import type {
+  ElevatedLevel,
+  PlanLevel,
+  ReasoningLevel,
+  ThinkLevel,
+  VerboseLevel,
+} from "./directives.js";
 import type { QueueDropPolicy, QueueMode } from "./queue.js";
 import { extractModelDirective } from "../model.js";
 import {
   extractElevatedDirective,
   extractExecDirective,
+  extractPlanDirective,
   extractReasoningDirective,
   extractStatusDirective,
   extractThinkDirective,
@@ -29,6 +36,9 @@ export type InlineDirectives = {
   hasElevatedDirective: boolean;
   elevatedLevel?: ElevatedLevel;
   rawElevatedLevel?: string;
+  hasPlanDirective: boolean;
+  planLevel?: PlanLevel;
+  rawPlanLevel?: string;
   hasExecDirective: boolean;
   execHost?: ExecHost;
   execSecurity?: ExecSecurity;
@@ -100,6 +110,12 @@ export function parseInlineDirectives(
       }
     : extractElevatedDirective(reasoningCleaned);
   const {
+    cleaned: planCleaned,
+    planLevel,
+    rawLevel: rawPlanLevel,
+    hasDirective: hasPlanDirective,
+  } = extractPlanDirective(elevatedCleaned);
+  const {
     cleaned: execCleaned,
     execHost,
     execSecurity,
@@ -115,7 +131,7 @@ export function parseInlineDirectives(
     invalidAsk: invalidExecAsk,
     invalidNode: invalidExecNode,
     hasDirective: hasExecDirective,
-  } = extractExecDirective(elevatedCleaned);
+  } = extractExecDirective(planCleaned);
   const allowStatusDirective = options?.allowStatusDirective !== false;
   const { cleaned: statusCleaned, hasDirective: hasStatusDirective } = allowStatusDirective
     ? extractStatusDirective(execCleaned)
@@ -157,6 +173,9 @@ export function parseInlineDirectives(
     hasElevatedDirective,
     elevatedLevel,
     rawElevatedLevel,
+    hasPlanDirective,
+    planLevel,
+    rawPlanLevel,
     hasExecDirective,
     execHost,
     execSecurity,
@@ -203,6 +222,7 @@ export function isDirectiveOnly(params: {
     !directives.hasVerboseDirective &&
     !directives.hasReasoningDirective &&
     !directives.hasElevatedDirective &&
+    !directives.hasPlanDirective &&
     !directives.hasExecDirective &&
     !directives.hasModelDirective &&
     !directives.hasQueueDirective

@@ -217,6 +217,8 @@ export function resolveEffectiveToolPolicy(params: {
   sessionKey?: string;
   modelProvider?: string;
   modelId?: string;
+  /** Tool profile override from session (e.g., "plan" from /plan on directive). */
+  sessionToolProfile?: string;
 }) {
   const agentId = params.sessionKey ? resolveAgentIdFromSessionKey(params.sessionKey) : undefined;
   const agentConfig =
@@ -224,7 +226,8 @@ export function resolveEffectiveToolPolicy(params: {
   const agentTools = agentConfig?.tools;
   const globalTools = params.config?.tools;
 
-  const profile = agentTools?.profile ?? globalTools?.profile;
+  // Session tool profile (e.g., from /plan on) takes precedence over config profiles.
+  const profile = params.sessionToolProfile ?? agentTools?.profile ?? globalTools?.profile;
   const providerPolicy = resolveProviderToolPolicy({
     byProvider: globalTools?.byProvider,
     modelProvider: params.modelProvider,

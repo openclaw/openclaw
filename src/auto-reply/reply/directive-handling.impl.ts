@@ -2,7 +2,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { ExecAsk, ExecHost, ExecSecurity } from "../../infra/exec-approvals.js";
 import type { ReplyPayload } from "../types.js";
 import type { HandleDirectiveOnlyParams } from "./directive-handling.params.js";
-import type { ElevatedLevel, ReasoningLevel, ThinkLevel } from "./directives.js";
+import type { ElevatedLevel, PlanLevel, ReasoningLevel, ThinkLevel } from "./directives.js";
 import {
   resolveAgentConfig,
   resolveAgentDir,
@@ -81,6 +81,7 @@ export async function handleDirectiveOnly(
     currentVerboseLevel,
     currentReasoningLevel,
     currentElevatedLevel,
+    currentPlanLevel,
   } = params;
   const activeAgentId = resolveSessionAgentId({
     sessionKey: params.sessionKey,
@@ -202,6 +203,17 @@ export async function handleDirectiveOnly(
       }),
     };
   }
+  if (directives.hasPlanDirective && !directives.planLevel) {
+    if (!directives.rawPlanLevel) {
+      const level = currentPlanLevel ?? (sessionEntry.planLevel as PlanLevel | undefined) ?? "off";
+      return {
+        text: withOptions(`Current plan mode: ${level}.`, "on, off"),
+      };
+    }
+    return {
+      text: `Unrecognized plan level "${directives.rawPlanLevel}". Valid levels: on, off.`,
+    };
+  }
   if (directives.hasExecDirective) {
     if (directives.invalidExecHost) {
       return {
@@ -306,6 +318,25 @@ export async function handleDirectiveOnly(
       elevatedChanged ||
       (directives.elevatedLevel !== prevElevatedLevel && directives.elevatedLevel !== undefined);
   }
+  if (directives.hasPlanDirective && directives.planLevel) {
+    sessionEntry.planLevel = directives.planLevel;
+    if (directives.planLevel === "on") {
+      // Save previous toolProfile before overwriting
+      if (sessionEntry.toolProfile && sessionEntry.toolProfile !== "plan") {
+        sessionEntry.previousToolProfile = sessionEntry.toolProfile;
+      }
+      sessionEntry.toolProfile = "plan";
+    } else {
+      // Restore previous toolProfile if it exists
+      if (sessionEntry.previousToolProfile) {
+        sessionEntry.toolProfile = sessionEntry.previousToolProfile;
+        delete sessionEntry.previousToolProfile;
+      } else {
+        delete sessionEntry.toolProfile;
+      }
+      delete sessionEntry.planLevel;
+    }
+  }
   if (directives.hasExecDirective && directives.hasExecOptions) {
     if (directives.execHost) {
       sessionEntry.execHost = directives.execHost;
@@ -407,6 +438,15 @@ export async function handleDirectiveOnly(
     if (shouldHintDirectRuntime) {
       parts.push(formatElevatedRuntimeHint());
     }
+  }
+  if (directives.hasPlanDirective && directives.planLevel) {
+    parts.push(
+      directives.planLevel === "on"
+        ? formatDirectiveAck(
+            "Plan mode enabled. Tools: read, web_search, web_fetch, memory_search, memory_get, session_status, sessions_list, sessions_history, image. Use /plan off to exit.",
+          )
+        : formatDirectiveAck("Plan mode disabled (default tools restored)."),
+    );
   }
   if (directives.hasExecDirective && directives.hasExecOptions) {
     const execParts: string[] = [];
