@@ -108,7 +108,7 @@ export type CompactEmbeddedPiSessionParams = {
   reasoningLevel?: ReasoningLevel;
   bashElevated?: ExecElevatedDefaults;
   customInstructions?: string;
-  trigger?: "overflow" | "manual";
+  trigger?: "overflow" | "manual" | "cache_ttl" | "safeguard";
   diagId?: string;
   attempt?: number;
   maxAttempts?: number;
@@ -234,6 +234,69 @@ function classifyCompactionReason(reason?: string): string {
   return "unknown";
 }
 
+export const COMPACTION_HOOK_TIMEOUT_MS = 10_000;
+
+async function waitForHookWithTimeout(
+  hookPromise: Promise<void>,
+  opts: {
+    timeoutMs?: number;
+    onTimeout: (timeoutMs: number) => void;
+  },
+): Promise<void> {
+  const timeoutMs = Math.max(0, opts.timeoutMs ?? COMPACTION_HOOK_TIMEOUT_MS);
+  if (timeoutMs <= 0) {
+    await hookPromise;
+    return;
+  }
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
+  try {
+    await Promise.race([
+      hookPromise,
+      new Promise<void>((resolve) => {
+        timeoutHandle = setTimeout(() => {
+          timedOut = true;
+          resolve();
+        }, timeoutMs);
+        timeoutHandle.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+    }
+  }
+  if (timedOut) {
+    opts.onTimeout(timeoutMs);
+  }
+}
+
+const cloneMessageForHook = (value: unknown): unknown => {
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => cloneMessageForHook(item));
+  }
+  if (value instanceof Date || value instanceof RegExp) {
+    return structuredClone(value);
+  }
+  const source = value as Record<string, unknown>;
+  const clone: Record<string, unknown> = {};
+  for (const [key, nested] of Object.entries(source)) {
+    clone[key] = cloneMessageForHook(nested);
+  }
+  return clone;
+};
+
+const cloneMessagesForHook = (messages: readonly unknown[]): unknown[] => {
+  try {
+    return structuredClone(Array.from(messages));
+  } catch {
+    return messages.map((message) => cloneMessageForHook(message));
+  }
+};
+
 /**
  * Core compaction logic without lane queueing.
  * Use this when already inside a session/global lane to avoid deadlocks.
@@ -332,6 +395,7 @@ export async function compactEmbeddedPiSessionDirect(
   });
 
   let restoreSkillEnv: (() => void) | undefined;
+  const hookPromises: Array<Promise<unknown>> = [];
   process.chdir(effectiveWorkspace);
   try {
     const shouldLoadSkillEntries = !params.skillsSnapshot || !params.skillsSnapshot.resolvedSkills;
@@ -592,10 +656,8 @@ export async function compactEmbeddedPiSessionDirect(
         if (limited.length > 0) {
           session.agent.replaceMessages(limited);
         }
-        // Run before_compaction hooks (fire-and-forget).
-        // The session JSONL already contains all messages on disk, so plugins
-        // can read sessionFile asynchronously and process in parallel with
-        // the compaction LLM call — no need to block or wait for after_compaction.
+        // Run before_compaction hooks without blocking compaction, but bound the
+        // total wait so stuck hooks cannot hang lane cleanup.
         const hookRunner = getGlobalHookRunner();
         const hookCtx = {
           agentId: params.sessionKey?.split(":")[0] ?? "main",
@@ -605,19 +667,26 @@ export async function compactEmbeddedPiSessionDirect(
           messageProvider: params.messageChannel ?? params.messageProvider,
         };
         if (hookRunner?.hasHooks("before_compaction")) {
-          hookRunner
-            .runBeforeCompaction(
+          hookPromises.push(
+            waitForHookWithTimeout(
+              hookRunner.runBeforeCompaction(
+                {
+                  messageCount: preCompactionMessages.length,
+                  compactingCount: limited.length,
+                  messages: cloneMessagesForHook(preCompactionMessages),
+                  sessionFile: params.sessionFile,
+                },
+                hookCtx,
+              ),
               {
-                messageCount: preCompactionMessages.length,
-                compactingCount: limited.length,
-                messages: preCompactionMessages,
-                sessionFile: params.sessionFile,
+                onTimeout: (timeoutMs) => {
+                  log.warn(`before_compaction hook timed out after ${timeoutMs}ms`);
+                },
               },
-              hookCtx,
-            )
-            .catch((hookErr: unknown) => {
+            ).catch((hookErr: unknown) => {
               log.warn(`before_compaction hook failed: ${String(hookErr)}`);
-            });
+            }),
+          );
         }
 
         const diagEnabled = log.isEnabled("debug");
@@ -654,23 +723,29 @@ export async function compactEmbeddedPiSessionDirect(
           // If estimation fails, leave tokensAfter undefined
           tokensAfter = undefined;
         }
-        // Run after_compaction hooks (fire-and-forget).
-        // Also includes sessionFile for plugins that only need to act after
-        // compaction completes (e.g. analytics, cleanup).
+        // Run after_compaction hooks with the same bounded wait semantics.
         if (hookRunner?.hasHooks("after_compaction")) {
-          hookRunner
-            .runAfterCompaction(
+          hookPromises.push(
+            waitForHookWithTimeout(
+              hookRunner.runAfterCompaction(
+                {
+                  messageCount: session.messages.length,
+                  tokenCount: tokensAfter,
+                  compactedCount: limited.length - session.messages.length,
+                  messages: cloneMessagesForHook(session.messages),
+                  sessionFile: params.sessionFile,
+                },
+                hookCtx,
+              ),
               {
-                messageCount: session.messages.length,
-                tokenCount: tokensAfter,
-                compactedCount: limited.length - session.messages.length,
-                sessionFile: params.sessionFile,
+                onTimeout: (timeoutMs) => {
+                  log.warn(`after_compaction hook timed out after ${timeoutMs}ms`);
+                },
               },
-              hookCtx,
-            )
-            .catch((hookErr) => {
-              log.warn(`after_compaction hook failed: ${hookErr}`);
-            });
+            ).catch((hookErr) => {
+              log.warn(`after_compaction hook failed: ${String(hookErr)}`);
+            }),
+          );
         }
 
         const postMetrics = diagEnabled ? summarizeCompactionMessages(session.messages) : undefined;
@@ -723,6 +798,7 @@ export async function compactEmbeddedPiSessionDirect(
       reason,
     };
   } finally {
+    await Promise.allSettled(hookPromises);
     restoreSkillEnv?.();
     process.chdir(prevCwd);
   }
