@@ -35,7 +35,25 @@ export type LoggerResolvedSettings = ResolvedSettings;
 export type LogTransportRecord = Record<string, unknown>;
 export type LogTransport = (logObj: LogTransportRecord) => void;
 
-const externalTransports = new Set<LogTransport>();
+// Use Symbol.for() to store transports on globalThis so that jiti-loaded
+// plugin modules share the same Set instance as the main process.  Without
+// this, registerLogTransport() called from a plugin writes to a different
+// Set than the one buildLogger() iterates over.
+const EXTERNAL_TRANSPORTS_KEY = Symbol.for("openclaw.logging.externalTransports");
+
+type GlobalWithTransports = typeof globalThis & {
+  [key: symbol]: Set<LogTransport> | undefined;
+};
+
+function getExternalTransports(): Set<LogTransport> {
+  const g = globalThis as GlobalWithTransports;
+  if (!g[EXTERNAL_TRANSPORTS_KEY]) {
+    g[EXTERNAL_TRANSPORTS_KEY] = new Set<LogTransport>();
+  }
+  return g[EXTERNAL_TRANSPORTS_KEY];
+}
+
+const externalTransports = getExternalTransports();
 
 function attachExternalTransport(logger: TsLogger<LogObj>, transport: LogTransport): void {
   logger.attachTransport((logObj: LogObj) => {
