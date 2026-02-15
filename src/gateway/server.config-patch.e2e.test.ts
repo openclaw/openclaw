@@ -43,6 +43,54 @@ describe("gateway config methods", () => {
     expect(res.ok).toBe(false);
     expect(res.error?.message ?? "").toContain("raw must be an object");
   });
+
+  it("merges agents.list entries by id instead of replacing the full array", async () => {
+    const setRes = await rpcReq<{ ok?: boolean }>(ws, "config.set", {
+      raw: JSON.stringify({
+        agents: {
+          list: [
+            { id: "primary", default: true, workspace: "/tmp/primary" },
+            { id: "secondary", workspace: "/tmp/secondary" },
+          ],
+        },
+      }),
+    });
+    expect(setRes.ok).toBe(true);
+    const snapshotRes = await rpcReq<{ hash?: string }>(ws, "config.get", {});
+    expect(snapshotRes.ok).toBe(true);
+    expect(typeof snapshotRes.payload?.hash).toBe("string");
+
+    const patchRes = await rpcReq<{
+      config?: {
+        agents?: {
+          list?: Array<{
+            id?: string;
+            workspace?: string;
+          }>;
+        };
+      };
+    }>(ws, "config.patch", {
+      baseHash: snapshotRes.payload?.hash,
+      raw: JSON.stringify({
+        agents: {
+          list: [
+            {
+              id: "primary",
+              workspace: "/tmp/primary-updated",
+            },
+          ],
+        },
+      }),
+    });
+    expect(patchRes.ok).toBe(true);
+
+    const list = patchRes.payload?.config?.agents?.list ?? [];
+    expect(list).toHaveLength(2);
+    const primary = list.find((entry) => entry.id === "primary");
+    const secondary = list.find((entry) => entry.id === "secondary");
+    expect(primary?.workspace).toBe("/tmp/primary-updated");
+    expect(secondary?.workspace).toBe("/tmp/secondary");
+  });
 });
 
 describe("gateway server sessions", () => {
