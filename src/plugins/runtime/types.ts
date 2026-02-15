@@ -169,6 +169,49 @@ type BuildTemplateMessageFromPayload =
   typeof import("../../line/template-messages.js").buildTemplateMessageFromPayload;
 type MonitorLineProvider = typeof import("../../line/monitor.js").monitorLineProvider;
 
+// ---------------------------------------------------------------------------
+// Plugin session spawning
+// ---------------------------------------------------------------------------
+
+export type PluginSessionSpawnOptions = {
+  /** The message/prompt to process */
+  message: string;
+  /** Extra system prompt prepended to the agent's default */
+  systemPrompt?: string;
+  /** Tool policy override — deny takes precedence over allow */
+  toolPolicy?: {
+    allow?: string[];
+    deny?: string[];
+  };
+  /** Model override (e.g. "anthropic/claude-sonnet-4-20250514") */
+  model?: string;
+  /** Timeout in seconds (default: 120). 0 = no timeout. */
+  timeoutSeconds?: number;
+  /** Optional label for tracking/display */
+  label?: string;
+};
+
+export type PluginSessionSpawnResult = {
+  status: "accepted" | "error";
+  /** Session key for follow-up messages */
+  sessionKey?: string;
+  /** Run ID for tracking */
+  runId?: string;
+  /** Error message if status is "error" */
+  error?: string;
+};
+
+// ---------------------------------------------------------------------------
+// Plugin rate limiting
+// ---------------------------------------------------------------------------
+
+export type RateLimitOptions = {
+  /** Max requests per window (default: 10) */
+  maxRequests?: number;
+  /** Window size in milliseconds (default: 60000 = 1 minute) */
+  windowMs?: number;
+};
+
 export type RuntimeLogger = {
   debug?: (message: string, meta?: Record<string, unknown>) => void;
   info: (message: string, meta?: Record<string, unknown>) => void;
@@ -360,5 +403,22 @@ export type PluginRuntime = {
   };
   state: {
     resolveStateDir: ResolveStateDir;
+  };
+  /**
+   * Spawn isolated agent sessions from plugins.
+   * Sessions run the message through the LLM with a restricted tool policy.
+   */
+  sessions: {
+    spawn: (opts: PluginSessionSpawnOptions) => Promise<PluginSessionSpawnResult>;
+  };
+  /**
+   * In-memory sliding-window rate limiter for plugins.
+   * Plugins provide the key (IP, sender URL, agent ID, etc.) and limits.
+   */
+  rateLimit: {
+    /** Returns true if the request is allowed, false if rate-limited. */
+    check: (key: string, opts?: RateLimitOptions) => boolean;
+    /** Reset counters for a key. */
+    reset: (key: string) => void;
   };
 };

@@ -615,6 +615,71 @@ export default function (api) {
 }
 ```
 
+### Spawn isolated sessions
+
+Plugins can spawn isolated agent sessions with restricted tool policies.
+This is useful for processing external requests (webhooks, A2A messages)
+safely — the plugin controls which tools the session can use.
+
+```ts
+export default function (api) {
+  api.registerHttpRoute({
+    path: "/my-webhook",
+    handler: async (req, res) => {
+      const result = await api.runtime.sessions.spawn({
+        message: "Process this incoming request",
+        systemPrompt: "You are handling an external webhook. Only use web tools.",
+        toolPolicy: {
+          allow: ["web_search", "web_fetch"],
+          deny: ["exec", "write", "message"],
+        },
+        timeoutSeconds: 60,
+        label: "webhook-handler",
+      });
+
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(result));
+    },
+  });
+}
+```
+
+Options:
+
+- `message` (required): The prompt to process
+- `systemPrompt`: Extra system prompt prepended to the agent's default
+- `toolPolicy`: `{ allow?: string[], deny?: string[] }` — restrict available tools
+- `model`: Model override (e.g. `"anthropic/claude-sonnet-4-20250514"`)
+- `timeoutSeconds`: Session timeout (default: 120)
+- `label`: Label for tracking
+
+### Rate limiting
+
+Plugins can use the built-in sliding-window rate limiter to protect against
+abuse. Provide any key (IP address, sender URL, agent ID) and limits.
+
+```ts
+export default function (api) {
+  api.registerHttpRoute({
+    path: "/my-api",
+    handler: async (req, res) => {
+      const ip = req.socket.remoteAddress ?? "unknown";
+      if (!api.runtime.rateLimit.check(`ip:${ip}`, { maxRequests: 10, windowMs: 60_000 })) {
+        res.writeHead(429);
+        res.end("Rate limited");
+        return;
+      }
+      // ... handle request
+    },
+  });
+}
+```
+
+Options:
+
+- `maxRequests`: Max requests per window (default: 10)
+- `windowMs`: Window size in milliseconds (default: 60000 = 1 minute)
+
 ## Naming conventions
 
 - Gateway methods: `pluginId.action` (example: `voicecall.status`)
