@@ -68,12 +68,12 @@ Plans:
 1. A workspace-origin plugin discovered in an untrusted directory does not auto-load -- the user is prompted for explicit consent before the plugin activates
 2. A plugin that declares capability `["tools"]` in its manifest cannot access the config API, media pipeline, or other undeclared OpenClawPluginApi surfaces
 3. A plugin attempting to use an API it did not declare in its manifest receives an error, and a security event is logged
-   **Plans**: TBD
+   **Plans:** 2 plans
 
 Plans:
 
-- [ ] 03-01: TBD
-- [ ] 03-02: TBD
+- [ ] 03-01-PLAN.md — Workspace plugin consent gate (PLUG-01)
+- [ ] 03-02-PLAN.md — Capability-scoped plugin API enforcement (PLUG-02)
 
 ### Phase 4: Output Controls & Execution Tracing
 
