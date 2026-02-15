@@ -29,6 +29,7 @@ import {
   handleRestartCommand,
   handleSendPolicyCommand,
   handleStopCommand,
+  handleTotalUsageCommand,
   handleUsageCommand,
 } from "./commands-session.js";
 import { handleSubagentsCommand } from "./commands-subagents.js";
@@ -46,6 +47,7 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
       handleActivationCommand,
       handleSendPolicyCommand,
       handleUsageCommand,
+      handleTotalUsageCommand,
       handleRestartCommand,
       handleTtsCommands,
       handleHelpCommand,
