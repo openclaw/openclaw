@@ -242,8 +242,19 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
                 : `${entry.input}→${entry.guildId}`,
             );
             const existing = nextGuilds[entry.guildId] ?? {};
-            const mergedChannels = { ...sourceGuild.channels, ...existing.channels };
-            const mergedGuild = { ...sourceGuild, ...existing, channels: mergedChannels };
+            // Only produce a channels object when at least one side has channel
+            // entries.  Spreading two undefined values yields `{}`, which
+            // downstream resolveDiscordChannelConfigWithFallback treats as "all
+            // channels explicitly disallowed" — silently dropping every message.
+            const hasChannels = sourceGuild.channels || existing.channels;
+            const mergedChannels = hasChannels
+              ? { ...sourceGuild.channels, ...existing.channels }
+              : undefined;
+            const mergedGuild = {
+              ...sourceGuild,
+              ...existing,
+              ...(mergedChannels !== undefined ? { channels: mergedChannels } : {}),
+            };
             nextGuilds[entry.guildId] = mergedGuild;
             if (source.channelKey && entry.channelId) {
               const sourceChannel = sourceGuild.channels?.[source.channelKey];
