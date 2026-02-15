@@ -378,9 +378,20 @@ export function buildStatusMessage(args: StatusArgs): string {
     }
   }
 
-  const thinkLevel = args.resolvedThink ?? args.agent?.thinkingDefault ?? "off";
-  const verboseLevel = args.resolvedVerbose ?? args.agent?.verboseDefault ?? "off";
-  const reasoningLevel = args.resolvedReasoning ?? "off";
+  const thinkLevel: ThinkLevel =
+    args.resolvedThink ??
+    (args.sessionEntry?.thinkingLevel as ThinkLevel | undefined) ??
+    args.agent?.thinkingDefault ??
+    "off";
+  const verboseLevel: VerboseLevel =
+    args.resolvedVerbose ??
+    (args.sessionEntry?.verboseLevel as VerboseLevel | undefined) ??
+    args.agent?.verboseDefault ??
+    "off";
+  const reasoningLevel: ReasoningLevel =
+    args.resolvedReasoning ??
+    (args.sessionEntry?.reasoningLevel as ReasoningLevel | undefined) ??
+    "off";
   const elevatedLevel =
     args.resolvedElevated ??
     args.sessionEntry?.elevatedLevel ??
