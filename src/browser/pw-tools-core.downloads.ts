@@ -171,10 +171,14 @@ export async function armDialogViaPlaywright(opts: {
       if (state.armIdDialog !== armId) {
         return;
       }
-      if (opts.accept) {
-        await dialog.accept(opts.promptText);
-      } else {
-        await dialog.dismiss();
+      try {
+        if (opts.accept) {
+          await dialog.accept(opts.promptText);
+        } else {
+          await dialog.dismiss();
+        }
+      } catch {
+        // Ignore errors; the dialog may have closed or navigated away.
       }
     })
     .catch(() => {
