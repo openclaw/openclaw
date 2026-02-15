@@ -89,6 +89,8 @@ export type CommandOptions = {
   input?: string;
   env?: NodeJS.ProcessEnv;
   windowsVerbatimArguments?: boolean;
+  onStdoutChunk?: (chunk: string) => void;
+  onStderrChunk?: (chunk: string) => void;
 };
 
 export async function runCommandWithTimeout(
@@ -97,7 +99,7 @@ export async function runCommandWithTimeout(
 ): Promise<SpawnResult> {
   const options: CommandOptions =
     typeof optionsOrTimeout === "number" ? { timeoutMs: optionsOrTimeout } : optionsOrTimeout;
-  const { timeoutMs, cwd, input, env } = options;
+  const { timeoutMs, cwd, input, env, onStdoutChunk, onStderrChunk } = options;
   const { windowsVerbatimArguments } = options;
   const hasInput = input !== undefined;
 
@@ -156,10 +158,22 @@ export async function runCommandWithTimeout(
     }
 
     child.stdout?.on("data", (d) => {
-      stdout += d.toString();
+      const chunk = d.toString();
+      stdout += chunk;
+      try {
+        onStdoutChunk?.(chunk);
+      } catch {
+        // Best-effort callback for streaming consumers.
+      }
     });
     child.stderr?.on("data", (d) => {
-      stderr += d.toString();
+      const chunk = d.toString();
+      stderr += chunk;
+      try {
+        onStderrChunk?.(chunk);
+      } catch {
+        // Best-effort callback for streaming consumers.
+      }
     });
     child.on("error", (err) => {
       if (settled) {

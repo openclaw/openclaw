@@ -6,6 +6,8 @@ import { resolveFreshSessionTotalTokens, type SessionEntry } from "../../config/
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 
 export const DEFAULT_MEMORY_FLUSH_SOFT_TOKENS = 4000;
+export const MEMORY_FLUSH_CHECKPOINT_TEXT =
+  "🧭 Checkpoint: context is nearing limit. Running pre-compaction checkpoint now.";
 
 export const DEFAULT_MEMORY_FLUSH_PROMPT = [
   "Pre-compaction memory flush.",

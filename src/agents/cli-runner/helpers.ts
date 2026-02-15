@@ -421,30 +421,16 @@ export function parseCliJsonl(raw: string, backend: CliBackendConfig): CliOutput
   let usage: CliUsage | undefined;
   const texts: string[] = [];
   for (const line of lines) {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(line);
-    } catch {
+    const parsed = parseCliJsonlLine(line, backend);
+    if (!parsed) {
       continue;
     }
-    if (!isRecord(parsed)) {
-      continue;
+    if (!sessionId && parsed.sessionId) {
+      sessionId = parsed.sessionId;
     }
-    if (!sessionId) {
-      sessionId = pickSessionId(parsed, backend);
-    }
-    if (!sessionId && typeof parsed.thread_id === "string") {
-      sessionId = parsed.thread_id.trim();
-    }
-    if (isRecord(parsed.usage)) {
-      usage = toUsage(parsed.usage) ?? usage;
-    }
-    const item = isRecord(parsed.item) ? parsed.item : null;
-    if (item && typeof item.text === "string") {
-      const type = typeof item.type === "string" ? item.type.toLowerCase() : "";
-      if (!type || type.includes("message")) {
-        texts.push(item.text);
-      }
+    usage = parsed.usage ?? usage;
+    if (parsed.text) {
+      texts.push(parsed.text);
     }
   }
   const text = texts.join("\n").trim();
@@ -452,6 +438,36 @@ export function parseCliJsonl(raw: string, backend: CliBackendConfig): CliOutput
     return null;
   }
   return { text, sessionId, usage };
+}
+
+export function parseCliJsonlLine(
+  line: string,
+  backend: CliBackendConfig,
+): { sessionId?: string; usage?: CliUsage; text?: string } | null {
+  const trimmed = line.trim();
+  if (!trimmed) {
+    return null;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return null;
+  }
+  if (!isRecord(parsed)) {
+    return null;
+  }
+  const sessionId =
+    pickSessionId(parsed, backend) ||
+    (typeof parsed.thread_id === "string" ? parsed.thread_id.trim() : undefined);
+  const usage = isRecord(parsed.usage) ? toUsage(parsed.usage) : undefined;
+  const item = isRecord(parsed.item) ? parsed.item : null;
+  const type = item && typeof item.type === "string" ? item.type.toLowerCase() : "";
+  const text =
+    item && typeof item.text === "string" && (!type || type.includes("message"))
+      ? item.text
+      : undefined;
+  return { sessionId, usage, text };
 }
 
 export function resolveSystemPromptUsage(params: {

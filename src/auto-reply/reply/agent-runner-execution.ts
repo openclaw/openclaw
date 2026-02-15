@@ -182,6 +182,7 @@ export async function runAgentTurnWithFallback(params: {
             const cliSessionId = getCliSessionId(params.getActiveSessionEntry(), provider);
             return (async () => {
               let lifecycleTerminalEmitted = false;
+              let streamedCliText = "";
               try {
                 const result = await runCliAgent({
                   sessionId: params.followupRun.run.sessionId,
@@ -200,18 +201,38 @@ export async function runAgentTurnWithFallback(params: {
                   ownerNumbers: params.followupRun.run.ownerNumbers,
                   cliSessionId,
                   images: params.opts?.images,
+                  onStreamText: (chunk) => {
+                    if (!chunk) {
+                      return;
+                    }
+                    streamedCliText += chunk;
+                    emitAgentEvent({
+                      runId,
+                      stream: "assistant",
+                      data: { text: chunk },
+                    });
+                  },
                 });
 
-                // CLI backends don't emit streaming assistant events, so we need to
-                // emit one with the final text so server-chat can populate its buffer
-                // and send the response to TUI/WebSocket clients.
-                const cliText = result.payloads?.[0]?.text?.trim();
-                if (cliText) {
+                // Ensure we always emit assistant text even when streaming did not
+                // produce chunks (non-JSONL backends, fully buffered output, etc.).
+                const cliText = result.payloads?.[0]?.text;
+                const cliTextTrimmed = cliText?.trim();
+                if (cliTextTrimmed && !streamedCliText) {
                   emitAgentEvent({
                     runId,
                     stream: "assistant",
-                    data: { text: cliText },
+                    data: { text: cliTextTrimmed },
                   });
+                } else if (cliText && streamedCliText && cliText.startsWith(streamedCliText)) {
+                  const remainder = cliText.slice(streamedCliText.length);
+                  if (remainder.trim()) {
+                    emitAgentEvent({
+                      runId,
+                      stream: "assistant",
+                      data: { text: remainder },
+                    });
+                  }
                 }
 
                 emitAgentEvent({

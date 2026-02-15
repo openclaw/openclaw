@@ -20,6 +20,7 @@ import {
   normalizeCliModel,
   parseCliJson,
   parseCliJsonl,
+  parseCliJsonlLine,
   resolvePromptInput,
   resolveSessionIdToSend,
   resolveSystemPromptUsage,
@@ -50,6 +51,7 @@ export async function runCliAgent(params: {
   ownerNumbers?: string[];
   cliSessionId?: string;
   images?: ImageContent[];
+  onStreamText?: (chunk: string) => void;
 }): Promise<EmbeddedPiRunResult> {
   const started = Date.now();
   const workspaceResolution = resolveRunWorkspaceDir({
@@ -233,12 +235,63 @@ export async function runCliAgent(params: {
         await cleanupResumeProcesses(backend, cliSessionIdToSend);
       }
 
+      const outputMode = useResume ? (backend.resumeOutput ?? backend.output) : backend.output;
+      let jsonlStdoutBuffer = "";
+      const streamedTexts: string[] = [];
+      const processJsonlStdoutLine = (line: string) => {
+        if (!params.onStreamText) {
+          return;
+        }
+        const parsed = parseCliJsonlLine(line, backend);
+        const nextText = parsed?.text;
+        if (!nextText) {
+          return;
+        }
+        const lastIndex = streamedTexts.length - 1;
+        const previous = lastIndex >= 0 ? streamedTexts[lastIndex] : undefined;
+        if (previous !== undefined) {
+          if (nextText === previous) {
+            return;
+          }
+          if (nextText.startsWith(previous)) {
+            const delta = nextText.slice(previous.length);
+            streamedTexts[lastIndex] = nextText;
+            if (delta) {
+              params.onStreamText(delta);
+            }
+            return;
+          }
+        }
+        streamedTexts.push(nextText);
+        params.onStreamText(`${previous !== undefined ? "\n" : ""}${nextText}`);
+      };
+      const onStdoutChunk =
+        outputMode === "jsonl" && params.onStreamText
+          ? (chunk: string) => {
+              jsonlStdoutBuffer += chunk;
+              for (;;) {
+                const newlineIndex = jsonlStdoutBuffer.indexOf("\n");
+                if (newlineIndex < 0) {
+                  break;
+                }
+                const line = jsonlStdoutBuffer.slice(0, newlineIndex);
+                jsonlStdoutBuffer = jsonlStdoutBuffer.slice(newlineIndex + 1);
+                processJsonlStdoutLine(line);
+              }
+            }
+          : undefined;
+
       const result = await runCommandWithTimeout([backend.command, ...args], {
         timeoutMs: params.timeoutMs,
         cwd: workspaceDir,
         env,
         input: stdinPayload,
+        onStdoutChunk,
       });
+
+      if (outputMode === "jsonl" && params.onStreamText && jsonlStdoutBuffer.trim()) {
+        processJsonlStdoutLine(jsonlStdoutBuffer);
+      }
 
       const stdout = result.stdout.trim();
       const stderr = result.stderr.trim();
@@ -270,8 +323,6 @@ export async function runCliAgent(params: {
           status,
         });
       }
-
-      const outputMode = useResume ? (backend.resumeOutput ?? backend.output) : backend.output;
 
       if (outputMode === "text") {
         return { text: stdout, sessionId: undefined };

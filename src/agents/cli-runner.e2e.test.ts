@@ -160,6 +160,49 @@ describe("runCliAgent resume cleanup", () => {
     }
     expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
   });
+
+  it("streams JSONL assistant chunks via onStreamText before completion", async () => {
+    runExecMock.mockResolvedValue({ stdout: "", stderr: "" });
+    const line1 = JSON.stringify({
+      type: "item.completed",
+      item: { type: "agent_message", text: "Hel" },
+    });
+    const line2 = JSON.stringify({
+      type: "item.completed",
+      item: { type: "agent_message", text: "Hello" },
+    });
+    runCommandWithTimeoutMock.mockImplementationOnce(
+      async (_argv: string[], options?: { onStdoutChunk?: (chunk: string) => void }) => {
+        options?.onStdoutChunk?.(`${line1}\n`);
+        options?.onStdoutChunk?.(`${line2}\n`);
+        return {
+          stdout: `${line1}\n${line2}\n`,
+          stderr: "",
+          code: 0,
+          signal: null,
+          killed: false,
+        };
+      },
+    );
+
+    const chunks: string[] = [];
+    const result = await runCliAgent({
+      sessionId: "s-stream",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      prompt: "hi",
+      provider: "codex-cli",
+      model: "gpt-5.2-codex",
+      timeoutMs: 1_000,
+      runId: "run-stream",
+      onStreamText: (chunk) => {
+        chunks.push(chunk);
+      },
+    });
+
+    expect(result.payloads?.[0]?.text).toBe("Hel\nHello");
+    expect(chunks.join("")).toBe("Hello");
+  });
 });
 
 describe("cleanupSuspendedCliProcesses", () => {

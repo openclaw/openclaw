@@ -50,4 +50,31 @@ describe("runCommandWithTimeout", () => {
       }
     }
   });
+
+  it("emits stdout/stderr chunks to callbacks", async () => {
+    const stdoutChunks: string[] = [];
+    const stderrChunks: string[] = [];
+    const result = await runCommandWithTimeout(
+      [
+        process.execPath,
+        "-e",
+        'process.stdout.write("hello"); process.stderr.write("warn"); process.stdout.write(" world")',
+      ],
+      {
+        timeoutMs: 5_000,
+        onStdoutChunk: (chunk) => {
+          stdoutChunks.push(chunk);
+        },
+        onStderrChunk: (chunk) => {
+          stderrChunks.push(chunk);
+        },
+      },
+    );
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toBe("hello world");
+    expect(result.stderr).toBe("warn");
+    expect(stdoutChunks.join("")).toBe("hello world");
+    expect(stderrChunks.join("")).toBe("warn");
+  });
 });

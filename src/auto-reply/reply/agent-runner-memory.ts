@@ -18,6 +18,7 @@ import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { buildThreadingToolContext, resolveEnforceFinalTag } from "./agent-runner-utils.js";
 import {
+  MEMORY_FLUSH_CHECKPOINT_TEXT,
   resolveMemoryFlushContextWindowTokens,
   resolveMemoryFlushSettings,
   shouldRunMemoryFlush,
@@ -77,6 +78,14 @@ export async function runMemoryFlushIfNeeded(params: {
 
   if (!shouldFlushMemory) {
     return params.sessionEntry;
+  }
+
+  if (params.opts?.onBlockReply) {
+    try {
+      await params.opts.onBlockReply({ text: MEMORY_FLUSH_CHECKPOINT_TEXT });
+    } catch (err) {
+      logVerbose(`memory flush checkpoint delivery failed: ${String(err)}`);
+    }
   }
 
   let activeSessionEntry = params.sessionEntry;
