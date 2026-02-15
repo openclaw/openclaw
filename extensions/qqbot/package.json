@@ -1,0 +1,34 @@
+{
+  "name": "@openclaw/qqbot",
+  "version": "2026.2.3",
+  "description": "OpenClaw QQ Bot channel plugin",
+  "type": "module",
+  "dependencies": {
+    "openclaw": "workspace:*",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "qqbot",
+      "label": "QQ Bot",
+      "selectionLabel": "QQ Bot (QQ Open Platform)",
+      "detailLabel": "QQ Bot",
+      "docsPath": "/channels/qqbot",
+      "docsLabel": "qqbot",
+      "blurb": "Connect to QQ via official QQ Bot API with streaming support.",
+      "order": 36,
+      "quickstartAllowFrom": true
+    },
+    "install": {
+      "npmSpec": "@openclaw/qqbot",
+      "localPath": "extensions/qqbot",
+      "defaultChoice": "npm"
+    }
+  }
+}
