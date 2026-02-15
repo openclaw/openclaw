@@ -88,11 +88,20 @@ describe("stripReasoningTagsFromText", () => {
       expect(stripReasoningTagsFromText(input)).toBe(input);
     });
 
-    it("strips lone closing tag outside code", () => {
+    it("strips lone closing tag and everything before it (orphan close tag)", () => {
       const input = "You can start with <think and then close with </think>";
-      expect(stripReasoningTagsFromText(input)).toBe(
-        "You can start with <think and then close with",
-      );
+      expect(stripReasoningTagsFromText(input)).toBe("");
+    });
+
+    it("strips orphan closing tag and content before, keeps content after", () => {
+      const input = "thinking content here</think>actual response";
+      expect(stripReasoningTagsFromText(input)).toBe("actual response");
+    });
+
+    it("strips orphan closing tag with broken inference endpoint output", () => {
+      const input =
+        "Let me analyze this step by step...\n\nFirst, I need to consider...</think>Here is your answer.";
+      expect(stripReasoningTagsFromText(input)).toBe("Here is your answer.");
     });
 
     it("handles tags with whitespace", () => {
@@ -118,9 +127,11 @@ describe("stripReasoningTagsFromText", () => {
       expect(stripReasoningTagsFromText(input)).toBe(input);
     });
 
-    it("handles nested think patterns (first close ends block)", () => {
+    it("handles nested think patterns (orphan close strips preceding content)", () => {
+      // With nested <think> tags, the first </think> closes the block.
+      // The second </think> is orphan and strips content before it.
       const input = "<think>outer <think>inner</think> still outer</think>visible";
-      expect(stripReasoningTagsFromText(input)).toBe("still outervisible");
+      expect(stripReasoningTagsFromText(input)).toBe("visible");
     });
 
     it("strips final tag markup but preserves content (by design)", () => {
