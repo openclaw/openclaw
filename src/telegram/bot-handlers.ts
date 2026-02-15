@@ -80,6 +80,7 @@ export const registerTelegramHandlers = ({
     key: string;
     messages: Array<{ msg: Message; ctx: TelegramContext; receivedAtMs: number }>;
     timer: ReturnType<typeof setTimeout>;
+    flushing: boolean;
   };
   const textFragmentBuffer = new Map<string, TextFragmentEntry>();
   let textFragmentProcessing: Promise<void> = Promise.resolve();
@@ -207,7 +208,7 @@ export const registerTelegramHandlers = ({
     return typeof modelCfg === "string" ? modelCfg : modelCfg?.primary;
   };
 
-  const processMediaGroup = async (entry: MediaGroupEntry) => {
+  const processMediaGroup = async (entry: MediaGroupEntry): Promise<boolean> => {
     try {
       entry.messages.sort((a, b) => a.msg.message_id - b.msg.message_id);
 
@@ -228,24 +229,26 @@ export const registerTelegramHandlers = ({
 
       const storeAllowFrom = await readChannelAllowFromStore("telegram").catch(() => []);
       await processMessage(primaryEntry.ctx, allMedia, storeAllowFrom);
+      return true;
     } catch (err) {
       runtime.error?.(danger(`media group handler failed: ${String(err)}`));
+      return false;
     }
   };
 
-  const flushTextFragments = async (entry: TextFragmentEntry) => {
+  const flushTextFragments = async (entry: TextFragmentEntry): Promise<boolean> => {
     try {
       entry.messages.sort((a, b) => a.msg.message_id - b.msg.message_id);
 
       const first = entry.messages[0];
       const last = entry.messages.at(-1);
       if (!first || !last) {
-        return;
+        return true;
       }
 
       const combinedText = entry.messages.map((m) => m.msg.text ?? "").join("");
       if (!combinedText.trim()) {
-        return;
+        return true;
       }
 
       const syntheticMessage: Message = {
@@ -268,22 +271,61 @@ export const registerTelegramHandlers = ({
         storeAllowFrom,
         { messageIdOverride: String(last.msg.message_id) },
       );
+      return true;
     } catch (err) {
       runtime.error?.(danger(`text fragment handler failed: ${String(err)}`));
+      return false;
     }
+  };
+
+  const queueTextFragmentFlush = async (entry: TextFragmentEntry) => {
+    entry.flushing = true;
+    const flushed = await flushTextFragments(entry);
+    if (flushed) {
+      if (textFragmentBuffer.get(entry.key) === entry) {
+        textFragmentBuffer.delete(entry.key);
+      }
+      return;
+    }
+    entry.flushing = false;
+    scheduleTextFragmentFlush(entry);
   };
 
   const scheduleTextFragmentFlush = (entry: TextFragmentEntry) => {
     clearTimeout(entry.timer);
     entry.timer = setTimeout(async () => {
-      textFragmentBuffer.delete(entry.key);
       textFragmentProcessing = textFragmentProcessing
         .then(async () => {
-          await flushTextFragments(entry);
+          await queueTextFragmentFlush(entry);
         })
         .catch(() => undefined);
       await textFragmentProcessing;
     }, TELEGRAM_TEXT_FRAGMENT_MAX_GAP_MS);
+  };
+
+  const queueMediaGroupFlush = async (mediaGroupId: string, entry: MediaGroupEntry) => {
+    entry.flushing = true;
+    const flushed = await processMediaGroup(entry);
+    if (flushed) {
+      if (mediaGroupBuffer.get(mediaGroupId) === entry) {
+        mediaGroupBuffer.delete(mediaGroupId);
+      }
+      return;
+    }
+    entry.flushing = false;
+    scheduleMediaGroupFlush(mediaGroupId, entry);
+  };
+
+  const scheduleMediaGroupFlush = (mediaGroupId: string, entry: MediaGroupEntry) => {
+    clearTimeout(entry.timer);
+    entry.timer = setTimeout(async () => {
+      mediaGroupProcessing = mediaGroupProcessing
+        .then(async () => {
+          await queueMediaGroupFlush(mediaGroupId, entry);
+        })
+        .catch(() => undefined);
+      await mediaGroupProcessing;
+    }, mediaGroupTimeoutMs);
   };
 
   bot.on("callback_query", async (ctx) => {
@@ -809,6 +851,7 @@ export const registerTelegramHandlers = ({
           const idGap = typeof lastMsgId === "number" ? msg.message_id - lastMsgId : Infinity;
           const timeGapMs = nowMs - lastReceivedAtMs;
           const canAppend =
+            !existing.flushing &&
             idGap > 0 &&
             idGap <= TELEGRAM_TEXT_FRAGMENT_MAX_ID_GAP &&
             timeGapMs >= 0 &&
@@ -831,14 +874,15 @@ export const registerTelegramHandlers = ({
           }
 
           // Not appendable (or limits exceeded): flush buffered entry first, then continue normally.
-          clearTimeout(existing.timer);
-          textFragmentBuffer.delete(key);
-          textFragmentProcessing = textFragmentProcessing
-            .then(async () => {
-              await flushTextFragments(existing);
-            })
-            .catch(() => undefined);
-          await textFragmentProcessing;
+          if (!existing.flushing) {
+            clearTimeout(existing.timer);
+            textFragmentProcessing = textFragmentProcessing
+              .then(async () => {
+                await queueTextFragmentFlush(existing);
+              })
+              .catch(() => undefined);
+            await textFragmentProcessing;
+          }
         }
 
         const shouldStart = text.length >= TELEGRAM_TEXT_FRAGMENT_START_THRESHOLD_CHARS;
@@ -847,6 +891,7 @@ export const registerTelegramHandlers = ({
             key,
             messages: [{ msg, ctx, receivedAtMs: nowMs }],
             timer: setTimeout(() => {}, TELEGRAM_TEXT_FRAGMENT_MAX_GAP_MS),
+            flushing: false,
           };
           textFragmentBuffer.set(key, entry);
           scheduleTextFragmentFlush(entry);
@@ -858,32 +903,17 @@ export const registerTelegramHandlers = ({
       const mediaGroupId = msg.media_group_id;
       if (mediaGroupId) {
         const existing = mediaGroupBuffer.get(mediaGroupId);
-        if (existing) {
-          clearTimeout(existing.timer);
+        if (existing && !existing.flushing) {
           existing.messages.push({ msg, ctx });
-          existing.timer = setTimeout(async () => {
-            mediaGroupBuffer.delete(mediaGroupId);
-            mediaGroupProcessing = mediaGroupProcessing
-              .then(async () => {
-                await processMediaGroup(existing);
-              })
-              .catch(() => undefined);
-            await mediaGroupProcessing;
-          }, mediaGroupTimeoutMs);
+          scheduleMediaGroupFlush(mediaGroupId, existing);
         } else {
           const entry: MediaGroupEntry = {
             messages: [{ msg, ctx }],
-            timer: setTimeout(async () => {
-              mediaGroupBuffer.delete(mediaGroupId);
-              mediaGroupProcessing = mediaGroupProcessing
-                .then(async () => {
-                  await processMediaGroup(entry);
-                })
-                .catch(() => undefined);
-              await mediaGroupProcessing;
-            }, mediaGroupTimeoutMs),
+            timer: setTimeout(() => {}, mediaGroupTimeoutMs),
+            flushing: false,
           };
           mediaGroupBuffer.set(mediaGroupId, entry);
+          scheduleMediaGroupFlush(mediaGroupId, entry);
         }
         return;
       }

@@ -370,6 +370,170 @@ describe("telegram media groups", () => {
     },
     MEDIA_GROUP_TEST_TIMEOUT_MS,
   );
+
+  it(
+    "retries buffered media groups after transient processing failures",
+    async () => {
+      const { createTelegramBot } = await import("./bot.js");
+      const replyModule = await import("../auto-reply/reply.js");
+      const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
+
+      onSpy.mockReset();
+      replySpy.mockReset();
+
+      const runtimeError = vi.fn();
+      const fetchSpy = vi.spyOn(globalThis, "fetch" as never).mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        headers: { get: () => "image/png" },
+        arrayBuffer: async () => new Uint8Array([0x89, 0x50, 0x4e, 0x47]).buffer,
+      } as Response);
+      replySpy.mockRejectedValueOnce(new Error("transient media flush failure"));
+
+      createTelegramBot({
+        token: "tok",
+        testTimings: TELEGRAM_TEST_TIMINGS,
+        runtime: {
+          log: vi.fn(),
+          error: runtimeError,
+          exit: () => {
+            throw new Error("exit");
+          },
+        },
+      });
+      const handler = onSpy.mock.calls.find((call) => call[0] === "message")?.[1] as (
+        ctx: Record<string, unknown>,
+      ) => Promise<void>;
+      expect(handler).toBeDefined();
+
+      await Promise.all([
+        handler({
+          message: {
+            chat: { id: 42, type: "private" },
+            message_id: 101,
+            caption: "Retry album",
+            date: 1736380800,
+            media_group_id: "album-retry",
+            photo: [{ file_id: "retry-1" }],
+          },
+          me: { username: "openclaw_bot" },
+          getFile: async () => ({ file_path: "photos/retry-1.jpg" }),
+        }),
+        handler({
+          message: {
+            chat: { id: 42, type: "private" },
+            message_id: 102,
+            date: 1736380801,
+            media_group_id: "album-retry",
+            photo: [{ file_id: "retry-2" }],
+          },
+          me: { username: "openclaw_bot" },
+          getFile: async () => ({ file_path: "photos/retry-2.jpg" }),
+        }),
+      ]);
+
+      await sleep(MEDIA_GROUP_FLUSH_MS * 2);
+
+      expect(replySpy).toHaveBeenCalledTimes(2);
+      expect(runtimeError).toHaveBeenCalledWith(
+        expect.stringContaining("media group handler failed:"),
+      );
+      const payload = replySpy.mock.calls[1]?.[0] as { Body?: string; MediaPaths?: string[] };
+      expect(payload.Body).toContain("Retry album");
+      expect(payload.MediaPaths).toHaveLength(2);
+
+      fetchSpy.mockRestore();
+    },
+    MEDIA_GROUP_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "keeps late media items when they arrive during an in-flight flush",
+    async () => {
+      const { createTelegramBot } = await import("./bot.js");
+      const replyModule = await import("../auto-reply/reply.js");
+      const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
+
+      onSpy.mockReset();
+      replySpy.mockReset();
+
+      const fetchSpy = vi.spyOn(globalThis, "fetch" as never).mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        headers: { get: () => "image/png" },
+        arrayBuffer: async () => new Uint8Array([0x89, 0x50, 0x4e, 0x47]).buffer,
+      } as Response);
+      let releaseFirstFlush: (() => void) | undefined;
+      replySpy.mockImplementationOnce(async (_ctx, opts) => {
+        await opts?.onReplyStart?.();
+        await new Promise<void>((resolve) => {
+          releaseFirstFlush = resolve;
+        });
+      });
+
+      createTelegramBot({ token: "tok", testTimings: TELEGRAM_TEST_TIMINGS });
+      const handler = onSpy.mock.calls.find((call) => call[0] === "message")?.[1] as (
+        ctx: Record<string, unknown>,
+      ) => Promise<void>;
+      expect(handler).toBeDefined();
+
+      await Promise.all([
+        handler({
+          message: {
+            chat: { id: 42, type: "private" },
+            message_id: 401,
+            caption: "Album while flushing",
+            date: 1736380800,
+            media_group_id: "album-race",
+            photo: [{ file_id: "race-1" }],
+          },
+          me: { username: "openclaw_bot" },
+          getFile: async () => ({ file_path: "photos/race-1.jpg" }),
+        }),
+        handler({
+          message: {
+            chat: { id: 42, type: "private" },
+            message_id: 402,
+            date: 1736380801,
+            media_group_id: "album-race",
+            photo: [{ file_id: "race-2" }],
+          },
+          me: { username: "openclaw_bot" },
+          getFile: async () => ({ file_path: "photos/race-2.jpg" }),
+        }),
+      ]);
+
+      await vi.waitFor(() => {
+        expect(releaseFirstFlush).toBeTypeOf("function");
+      });
+
+      await handler({
+        message: {
+          chat: { id: 42, type: "private" },
+          message_id: 403,
+          date: 1736380802,
+          media_group_id: "album-race",
+          photo: [{ file_id: "race-3" }],
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ file_path: "photos/race-3.jpg" }),
+      });
+
+      releaseFirstFlush?.();
+      await sleep(MEDIA_GROUP_FLUSH_MS * 3);
+
+      expect(replySpy).toHaveBeenCalledTimes(2);
+      const firstPayload = replySpy.mock.calls[0]?.[0] as { MediaPaths?: string[] };
+      const secondPayload = replySpy.mock.calls[1]?.[0] as { MediaPaths?: string[] };
+      expect(firstPayload.MediaPaths).toHaveLength(2);
+      expect(secondPayload.MediaPaths).toHaveLength(1);
+
+      fetchSpy.mockRestore();
+    },
+    MEDIA_GROUP_TEST_TIMEOUT_MS,
+  );
 });
 
 describe("telegram stickers", () => {
@@ -643,6 +807,224 @@ describe("telegram text fragments", () => {
       const payload = replySpy.mock.calls[0][0] as { RawBody?: string; Body?: string };
       expect(payload.RawBody).toContain(part1.slice(0, 32));
       expect(payload.RawBody).toContain(part2.slice(0, 32));
+    },
+    TEXT_FRAGMENT_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "retries buffered text fragments after transient processing failures",
+    async () => {
+      const { createTelegramBot } = await import("./bot.js");
+      const replyModule = await import("../auto-reply/reply.js");
+      const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
+
+      onSpy.mockReset();
+      replySpy.mockReset();
+
+      const runtimeError = vi.fn();
+      replySpy.mockRejectedValueOnce(new Error("transient text flush failure"));
+
+      createTelegramBot({
+        token: "tok",
+        testTimings: TELEGRAM_TEST_TIMINGS,
+        runtime: {
+          log: vi.fn(),
+          error: runtimeError,
+          exit: () => {
+            throw new Error("exit");
+          },
+        },
+      });
+      const handler = onSpy.mock.calls.find((call) => call[0] === "message")?.[1] as (
+        ctx: Record<string, unknown>,
+      ) => Promise<void>;
+      expect(handler).toBeDefined();
+
+      const part1 = "X".repeat(4050);
+      const part2 = "Y".repeat(50);
+
+      await handler({
+        message: {
+          chat: { id: 42, type: "private" },
+          message_id: 201,
+          date: 1736380800,
+          text: part1,
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({}),
+      });
+
+      await handler({
+        message: {
+          chat: { id: 42, type: "private" },
+          message_id: 202,
+          date: 1736380801,
+          text: part2,
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({}),
+      });
+
+      await sleep(TEXT_FRAGMENT_FLUSH_MS * 2);
+
+      expect(replySpy).toHaveBeenCalledTimes(2);
+      expect(runtimeError).toHaveBeenCalledWith(
+        expect.stringContaining("text fragment handler failed:"),
+      );
+      const payload = replySpy.mock.calls[1]?.[0] as { RawBody?: string };
+      expect(payload.RawBody).toContain(part1.slice(0, 32));
+      expect(payload.RawBody).toContain(part2.slice(0, 32));
+    },
+    TEXT_FRAGMENT_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "keeps late text fragments when they arrive during an in-flight flush",
+    async () => {
+      const { createTelegramBot } = await import("./bot.js");
+      const replyModule = await import("../auto-reply/reply.js");
+      const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
+
+      onSpy.mockReset();
+      replySpy.mockReset();
+
+      let releaseFirstFlush: (() => void) | undefined;
+      replySpy.mockImplementationOnce(async (_ctx, opts) => {
+        await opts?.onReplyStart?.();
+        await new Promise<void>((resolve) => {
+          releaseFirstFlush = resolve;
+        });
+      });
+
+      createTelegramBot({ token: "tok", testTimings: TELEGRAM_TEST_TIMINGS });
+      const handler = onSpy.mock.calls.find((call) => call[0] === "message")?.[1] as (
+        ctx: Record<string, unknown>,
+      ) => Promise<void>;
+      expect(handler).toBeDefined();
+
+      const part1 = "P".repeat(4050);
+      const part2 = "Q".repeat(4050);
+
+      await handler({
+        message: {
+          chat: { id: 42, type: "private" },
+          message_id: 501,
+          date: 1736380800,
+          text: part1,
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({}),
+      });
+
+      await vi.waitFor(() => {
+        expect(releaseFirstFlush).toBeTypeOf("function");
+      });
+
+      await handler({
+        message: {
+          chat: { id: 42, type: "private" },
+          message_id: 502,
+          date: 1736380801,
+          text: part2,
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({}),
+      });
+
+      releaseFirstFlush?.();
+      await sleep(TEXT_FRAGMENT_FLUSH_MS * 3);
+
+      expect(replySpy).toHaveBeenCalledTimes(2);
+      const firstRawBody = String(replySpy.mock.calls[0]?.[0]?.RawBody ?? "");
+      const secondRawBody = String(replySpy.mock.calls[1]?.[0]?.RawBody ?? "");
+      expect(firstRawBody).toContain(part1.slice(0, 32));
+      expect(secondRawBody).toContain(part2.slice(0, 32));
+    },
+    TEXT_FRAGMENT_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "keeps retrying a failed fragment batch after key reuse",
+    async () => {
+      const { createTelegramBot } = await import("./bot.js");
+      const replyModule = await import("../auto-reply/reply.js");
+      const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
+
+      onSpy.mockReset();
+      replySpy.mockReset();
+
+      const runtimeError = vi.fn();
+      replySpy.mockRejectedValueOnce(new Error("transient text flush failure (1)"));
+      replySpy.mockRejectedValueOnce(new Error("transient text flush failure (2)"));
+
+      createTelegramBot({
+        token: "tok",
+        testTimings: TELEGRAM_TEST_TIMINGS,
+        runtime: {
+          log: vi.fn(),
+          error: runtimeError,
+          exit: () => {
+            throw new Error("exit");
+          },
+        },
+      });
+      const handler = onSpy.mock.calls.find((call) => call[0] === "message")?.[1] as (
+        ctx: Record<string, unknown>,
+      ) => Promise<void>;
+      expect(handler).toBeDefined();
+
+      const part1 = "M".repeat(4050);
+      const part2 = "N".repeat(50);
+      const nextBatch = "Z".repeat(4050);
+
+      await handler({
+        message: {
+          chat: { id: 42, type: "private" },
+          message_id: 301,
+          date: 1736380800,
+          text: part1,
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({}),
+      });
+
+      await handler({
+        message: {
+          chat: { id: 42, type: "private" },
+          message_id: 302,
+          date: 1736380801,
+          text: part2,
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({}),
+      });
+
+      // Force immediate flush of the first buffered batch, then start a new batch on the same key.
+      await handler({
+        message: {
+          chat: { id: 42, type: "private" },
+          message_id: 305,
+          date: 1736380802,
+          text: nextBatch,
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({}),
+      });
+
+      await sleep(TEXT_FRAGMENT_FLUSH_MS * 4);
+
+      expect(replySpy).toHaveBeenCalledTimes(4);
+      expect(runtimeError).toHaveBeenCalledTimes(2);
+      expect(runtimeError).toHaveBeenCalledWith(
+        expect.stringContaining("text fragment handler failed:"),
+      );
+      const rawBodies = replySpy.mock.calls.map((call) => String(call[0]?.RawBody ?? ""));
+      expect(
+        rawBodies.some(
+          (body) => body.includes(part1.slice(0, 32)) && body.includes(part2.slice(0, 32)),
+        ),
+      ).toBe(true);
+      expect(rawBodies.some((body) => body.includes(nextBatch.slice(0, 32)))).toBe(true);
     },
     TEXT_FRAGMENT_TEST_TIMEOUT_MS,
   );

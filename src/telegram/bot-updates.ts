@@ -12,6 +12,7 @@ export type MediaGroupEntry = {
     ctx: TelegramContext;
   }>;
   timer: ReturnType<typeof setTimeout>;
+  flushing: boolean;
 };
 
 export type TelegramUpdateKeyContext = {
