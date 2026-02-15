@@ -1,0 +1,15 @@
+{
+    "name": "OpenClaw Systemd Env",
+    "build": {
+        "dockerfile": "Dockerfile"
+    },
+    "privileged": true,
+    "overrideCommand": false,
+    "remoteUser": "vscode",
+    "mounts": [
+        "source=/sys/fs/cgroup,target=/sys/fs/cgroup,type=bind"
+    ],
+    "features": {
+        "ghcr.io/devcontainers/features/docker-in-docker:2": {}
+    }
+}
