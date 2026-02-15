@@ -190,6 +190,10 @@ describe("memory plugin e2e", () => {
     expect(detectCategory("We decided to use React")).toBe("decision");
     expect(detectCategory("My email is test@example.com")).toBe("entity");
     expect(detectCategory("The server is running on port 3000")).toBe("fact");
+    expect(detectCategory("我喜欢深色模式")).toBe("preference");
+    expect(detectCategory("我们决定以后都用 React")).toBe("decision");
+    expect(detectCategory("我叫小明")).toBe("entity");
+    expect(detectCategory("服务器状态是正常")).toBe("fact");
     expect(detectCategory("Random note")).toBe("other");
   });
 });
