@@ -1,0 +1,27 @@
+[Unit]
+Description=OpenClaw Gateway Service
+Documentation=https://docs.openclaw.ai/gateway
+After=network.target
+
+[Service]
+Type=simple
+User=vscode
+Environment="NODE_ENV=production"
+Environment="PATH=/home/vscode/.local/share/pnpm:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+WorkingDirectory=/workspaces/openclaw
+ExecStart=/usr/local/bin/openclaw gateway run --bind loopback --port 18789 --force
+Restart=on-failure
+RestartSec=5s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=openclaw-gateway
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/home/vscode/.openclaw
+
+[Install]
+WantedBy=default.target

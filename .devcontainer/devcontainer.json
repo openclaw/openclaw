@@ -1,0 +1,9 @@
+{
+    "name": "OpenClaw Systemd Env",
+    "build": {
+        "dockerfile": "Dockerfile"
+    },
+    "privileged": true,
+    "remoteUser": "codespace",
+    "postStartCommand": "sudo /workspaces/openclaw/.devcontainer/start-systemd.sh"
+}
