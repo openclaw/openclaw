@@ -348,4 +348,82 @@ describe("resolveModel", () => {
     expect(result.model?.id).toBe("gpt-5.3-codex");
     expect(result.model?.provider).toBe("openai-codex");
   });
+
+  it("overrides api format for openai-codex gpt-5.3-codex even when in registry", () => {
+    // This test verifies the fix for issue #13189
+    // When gpt-5.3-codex exists in the registry with wrong api format,
+    // it should be overridden to use "openai-codex-responses"
+    const registryModel = {
+      id: "gpt-5.3-codex",
+      name: "GPT-5.3 Codex",
+      provider: "openai-codex",
+      api: "openai-completions", // Wrong API format in registry
+      baseUrl: undefined, // No baseUrl or wrong baseUrl
+      reasoning: true,
+      input: ["text", "image"] as const,
+      cost: { input: 2, output: 16, cacheRead: 0.2, cacheWrite: 0 },
+      contextWindow: 300000,
+      maxTokens: 150000,
+    };
+
+    vi.mocked(discoverModels).mockReturnValue({
+      find: vi.fn((provider: string, modelId: string) => {
+        if (provider === "openai-codex" && modelId === "gpt-5.3-codex") {
+          return registryModel;
+        }
+        return null;
+      }),
+    } as unknown as ReturnType<typeof discoverModels>);
+
+    const result = resolveModel("openai-codex", "gpt-5.3-codex", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai-codex",
+      id: "gpt-5.3-codex",
+      api: "openai-codex-responses", // Should be corrected
+      baseUrl: "https://chatgpt.com/backend-api", // Should be set correctly
+      reasoning: true,
+      contextWindow: 300000,
+      maxTokens: 150000,
+    });
+  });
+
+  it("overrides api format for openai-codex gpt-5.2-codex when in registry", () => {
+    // Test that gpt-5.2-codex also gets the correct overrides
+    const registryModel = {
+      id: "gpt-5.2-codex",
+      name: "GPT-5.2 Codex",
+      provider: "openai-codex",
+      api: "openai-completions", // Wrong API format in registry
+      baseUrl: "https://wrong.example.com", // Wrong baseUrl
+      reasoning: true,
+      input: ["text", "image"] as const,
+      cost: { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0 },
+      contextWindow: 272000,
+      maxTokens: 128000,
+    };
+
+    vi.mocked(discoverModels).mockReturnValue({
+      find: vi.fn((provider: string, modelId: string) => {
+        if (provider === "openai-codex" && modelId === "gpt-5.2-codex") {
+          return registryModel;
+        }
+        return null;
+      }),
+    } as unknown as ReturnType<typeof discoverModels>);
+
+    const result = resolveModel("openai-codex", "gpt-5.2-codex", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai-codex",
+      id: "gpt-5.2-codex",
+      api: "openai-codex-responses", // Should be corrected
+      baseUrl: "https://chatgpt.com/backend-api", // Should be corrected
+      reasoning: true,
+      contextWindow: 272000,
+      maxTokens: 128000,
+    });
+  });
 });
