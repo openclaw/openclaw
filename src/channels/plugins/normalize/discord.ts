@@ -17,8 +17,8 @@ export function looksLikeDiscordTargetId(raw: string): boolean {
   if (/^(user|channel|discord):/i.test(trimmed)) {
     return true;
   }
-  if (/^\d{6,}$/.test(trimmed)) {
-    return true;
-  }
+  // Bare numeric IDs are ambiguous (could be user or channel). Don't treat them
+  // as definitive target IDs so the resolver can either lookup via directory or
+  // surface a helpful error message instead of defaulting to channel.
   return false;
 }
