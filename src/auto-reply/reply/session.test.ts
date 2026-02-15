@@ -6,6 +6,11 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { saveSessionStore } from "../../config/sessions.js";
 import { initSessionState } from "./session.js";
 
+// Perf: session-store locks are exercised elsewhere; most session tests don't need FS lock files.
+vi.mock("../../agents/session-write-lock.js", () => ({
+  acquireSessionWriteLock: async () => ({ release: async () => {} }),
+}));
+
 let suiteRoot = "";
 let suiteCase = 0;
 
@@ -27,6 +32,7 @@ async function makeCaseDir(prefix: string): Promise<string> {
 
 describe("initSessionState thread forking", () => {
   it("forks a new session from the parent session file", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const root = await makeCaseDir("openclaw-thread-session-");
     const sessionsDir = path.join(root, "sessions");
     await fs.mkdir(sessionsDir);
@@ -96,6 +102,7 @@ describe("initSessionState thread forking", () => {
       parentSession?: string;
     };
     expect(parsedHeader.parentSession).toBe(parentSessionFile);
+    warn.mockRestore();
   });
 
   it("records topic-specific session files when MessageThreadId is present", async () => {
