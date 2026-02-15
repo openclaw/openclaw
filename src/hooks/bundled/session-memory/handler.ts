@@ -19,6 +19,11 @@ import { resolveHookConfig } from "../../config.js";
 import { generateSlugViaLLM } from "../../llm-slug-generator.js";
 
 const log = createSubsystemLogger("hooks/session-memory");
+type SessionMemoryFactCheckConfig = {
+  enabled?: boolean;
+  minUserMessages?: number;
+  minAssistantMessages?: number;
+};
 
 /**
  * Read recent messages from session file for slug generation
@@ -157,7 +162,7 @@ const saveSessionToMemory: HookHandler = async (event) => {
         log.debug("Generated slug", { slug });
       }
 
-      const factCheck = hookConfig?.factCheck;
+      const factCheck = hookConfig?.factCheck as SessionMemoryFactCheckConfig | undefined;
       if (factCheck?.enabled === true && sessionContent) {
         const minUserMessages =
           typeof factCheck.minUserMessages === "number" && factCheck.minUserMessages > 0

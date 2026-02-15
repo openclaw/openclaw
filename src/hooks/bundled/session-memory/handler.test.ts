@@ -275,7 +275,9 @@ describe("session-memory hook", () => {
   });
 
   it("skips write when fact-check thresholds are not met", async () => {
-    const sessionContent = createMockSessionContent([{ role: "user", content: "single turn only" }]);
+    const sessionContent = createMockSessionContent([
+      { role: "user", content: "single turn only" },
+    ]);
     const { files } = await runNewWithPreviousSession({
       sessionContent,
       cfg: (tempDir) => ({

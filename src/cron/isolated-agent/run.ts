@@ -726,6 +726,7 @@ export async function runCronIsolatedAgentTurn(params: {
       logWarn(`[cron:${params.job.id}] ${message}`);
       return withRunSession({ status: "ok", summary, outputText });
     }
+    const deliveryTo = resolvedDelivery.to;
     const identity = resolveAgentOutboundIdentity(cfgWithAgentDefaults, agentId);
 
     // Shared subagent announce flow is text-based and prompts the main agent to
@@ -745,7 +746,7 @@ export async function runCronIsolatedAgentTurn(params: {
           const deliveryResults = await deliverOutboundPayloads({
             cfg: cfgWithAgentDefaults,
             channel: resolvedDelivery.channel,
-            to: resolvedDelivery.to,
+            to: deliveryTo,
             accountId: resolvedDelivery.accountId,
             threadId: resolvedDelivery.threadId,
             payloads: payloadsForDelivery,
@@ -823,7 +824,7 @@ export async function runCronIsolatedAgentTurn(params: {
           const deliveryResults = await deliverOutboundPayloads({
             cfg: cfgWithAgentDefaults,
             channel: resolvedDelivery.channel,
-            to: resolvedDelivery.to,
+            to: deliveryTo,
             accountId: resolvedDelivery.accountId,
             threadId: resolvedDelivery.threadId,
             payloads: payloadsForDelivery,
@@ -845,7 +846,7 @@ export async function runCronIsolatedAgentTurn(params: {
           requesterSessionKey: announceSessionKey,
           requesterOrigin: {
             channel: resolvedDelivery.channel,
-            to: resolvedDelivery.to,
+            to: deliveryTo,
             accountId: resolvedDelivery.accountId,
             threadId: resolvedDelivery.threadId,
           },

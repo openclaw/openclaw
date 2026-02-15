@@ -37,4 +37,3 @@ describe("resolveRoutedModelForMessage", () => {
     ).toBe("anthropic/claude-opus-4-5");
   });
 });
-

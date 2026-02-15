@@ -17,7 +17,11 @@ describe("resolveConfigSecrets", () => {
       models: { providers: { openrouter: { apiKey: string } } };
     };
     expect(resolved.models.providers.openrouter.apiKey).toBe("secret-value");
-    expect(exec).toHaveBeenCalledWith("op", ["read", "op://Private/OpenRouter/token"], expect.anything());
+    expect(exec).toHaveBeenCalledWith(
+      "op",
+      ["read", "op://Private/OpenRouter/token"],
+      expect.anything(),
+    );
   });
 
   it("resolves vault://path#field references", () => {
@@ -41,8 +45,10 @@ describe("resolveConfigSecrets", () => {
       throw new Error("boom");
     });
     expect(() =>
-      resolveConfigSecrets({ auth: { key: "op://private/missing/field" } }, { exec: exec as never }),
+      resolveConfigSecrets(
+        { auth: { key: "op://private/missing/field" } },
+        { exec: exec as never },
+      ),
     ).toThrow(SecretResolutionError);
   });
 });
-

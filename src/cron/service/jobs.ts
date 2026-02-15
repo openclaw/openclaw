@@ -42,7 +42,7 @@ function resolveJobSchedules(job: Pick<CronJob, "schedule" | "schedules">) {
 function ensureScheduleAnchors(
   schedules: CronJob["schedules"],
   fallbackAnchorMs: number,
-): CronJob["schedules"] {
+): NonNullable<CronJob["schedules"]> {
   return (schedules ?? []).map((schedule) =>
     schedule.kind === "every"
       ? {

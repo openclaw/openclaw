@@ -37,4 +37,3 @@ export function resolveRoutedModelForMessage(params: {
   const trimmed = candidate?.trim();
   return trimmed ? trimmed : undefined;
 }
-

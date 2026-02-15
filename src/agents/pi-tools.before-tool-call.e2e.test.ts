@@ -104,7 +104,12 @@ describe("before_tool_call hook integration", () => {
       membrane: { enabled: true, denyCommandSubstrings: ["rm -rf"] },
     });
     await expect(
-      tool.execute("call-membrane-exec", { command: "echo ok && rm -rf /tmp/x" }, undefined, undefined),
+      tool.execute(
+        "call-membrane-exec",
+        { command: "echo ok && rm -rf /tmp/x" },
+        undefined,
+        undefined,
+      ),
     ).rejects.toThrow("[membrane:command-denied]");
     expect(hookRunner.runBeforeToolCall).not.toHaveBeenCalled();
     expect(execute).not.toHaveBeenCalled();

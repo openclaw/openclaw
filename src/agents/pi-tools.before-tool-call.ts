@@ -31,7 +31,9 @@ export async function runBeforeToolCallHook(args: {
   const params = args.params;
   const membrane = args.ctx?.membrane;
   if (membrane?.enabled) {
-    const deniedTools = new Set((membrane.denyTools ?? []).map((entry) => normalizeToolName(entry)));
+    const deniedTools = new Set(
+      (membrane.denyTools ?? []).map((entry) => normalizeToolName(entry)),
+    );
     if (deniedTools.has(toolName)) {
       return { blocked: true, reason: `[membrane:tool-denied] ${toolName}` };
     }

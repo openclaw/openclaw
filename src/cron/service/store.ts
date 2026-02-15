@@ -121,7 +121,7 @@ function coerceScheduleRecord(schedule: Record<string, unknown>, fallbackAnchorM
         ? Math.max(0, Math.floor(anchorRaw))
         : typeof fallbackAnchorMs === "number" && Number.isFinite(fallbackAnchorMs)
           ? Math.max(0, Math.floor(fallbackAnchorMs))
-        : null;
+          : null;
     if (normalizedAnchor !== null && anchorRaw !== normalizedAnchor) {
       sched.anchorMs = normalizedAnchor;
     }
