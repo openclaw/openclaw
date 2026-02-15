@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawConfig, MarkdownTableMode } from "openclaw/plugin-sdk";
 import {
@@ -42,6 +43,18 @@ export type ZaloMonitorOptions = {
 export type ZaloMonitorResult = {
   stop: () => void;
 };
+
+/**
+ * Constant-time string comparison to prevent timing attacks on webhook secrets.
+ */
+function safeEqualSecret(a: string, b: string): boolean {
+  const bufA = Buffer.from(a, "utf-8");
+  const bufB = Buffer.from(b, "utf-8");
+  if (bufA.length !== bufB.length) {
+    return false;
+  }
+  return timingSafeEqual(bufA, bufB);
+}
 
 const ZALO_TEXT_LIMIT = 2000;
 const DEFAULT_MEDIA_MAX_MB = 5;
@@ -143,7 +156,7 @@ export async function handleZaloWebhookRequest(
   }
 
   const headerToken = String(req.headers["x-bot-api-secret-token"] ?? "");
-  const matching = targets.filter((entry) => entry.secret === headerToken);
+  const matching = targets.filter((entry) => safeEqualSecret(entry.secret, headerToken));
   if (matching.length === 0) {
     res.statusCode = 401;
     res.end("unauthorized");
