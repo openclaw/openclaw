@@ -889,6 +889,9 @@ export async function handleOpenResponsesHttpRequest(
         return;
       }
 
+      closed = true;
+      unsubscribe();
+
       finalUsage = finalUsage ?? createEmptyUsage();
       const errorResponse = createResponseResource({
         id: responseId,
@@ -900,11 +903,8 @@ export async function handleOpenResponsesHttpRequest(
       });
 
       writeSseEvent(res, { type: "response.failed", response: errorResponse });
-      emitAgentEvent({
-        runId: responseId,
-        stream: "lifecycle",
-        data: { phase: "error" },
-      });
+      writeDone(res);
+      res.end();
     } finally {
       if (!closed) {
         // Emit lifecycle end to trigger completion
