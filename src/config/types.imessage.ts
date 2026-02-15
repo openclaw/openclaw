@@ -54,6 +54,12 @@ export type IMessageAccountConfig = {
   mediaMaxMb?: number;
   /** Timeout for probe/RPC operations in milliseconds (default: 10000). */
   probeTimeoutMs?: number;
+  /**
+   * Poll interval in ms for history-based fallback when RPC watch does not push (0 = disabled).
+   * When set (e.g. 5000), the monitor polls imsg history periodically so messages are still
+   * delivered even if watch.subscribe does not emit real-time notifications.
+   */
+  pollIntervalMs?: number;
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
   /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
