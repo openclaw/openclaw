@@ -307,6 +307,12 @@ export function buildAllowedModelSet(params: {
 
   const allowedKeys = new Set<string>();
   const configuredProviders = (params.cfg.models?.providers ?? {}) as Record<string, unknown>;
+  // Collect providers that appear in the catalog so we can recognise
+  // built-in providers (e.g. anthropic) even when no explicit
+  // models.providers block is configured.  (#16547)
+  const catalogProviders = new Set(
+    params.catalog.map((entry) => normalizeProviderId(entry.provider)),
+  );
   for (const raw of rawAllowlist) {
     const parsed = parseModelRef(String(raw), params.defaultProvider);
     if (!parsed) {
@@ -321,6 +327,13 @@ export function buildAllowedModelSet(params: {
     } else if (configuredProviders[providerKey] != null) {
       // Explicitly configured providers should be allowlist-able even when
       // they don't exist in the curated model catalog.
+      allowedKeys.add(key);
+    } else if (catalogProviders.has(providerKey)) {
+      // Built-in providers (anthropic, openai, google, …) may not have an
+      // explicit models.providers entry.  If the catalog recognises the
+      // provider (i.e. *any* model from it was discovered), honour the
+      // user's allowlist entry even when this specific model ID hasn't been
+      // discovered yet — the user's intent is clear.  (#16547)
       allowedKeys.add(key);
     }
   }
