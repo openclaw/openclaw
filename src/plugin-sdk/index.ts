@@ -289,6 +289,8 @@ export type {
 } from "../infra/diagnostic-events.js";
 export { detectMime, extensionForMime, getFileExtension } from "../media/mime.js";
 export { extractOriginalFilename } from "../media/store.js";
+export { escapeRegExp, safeParseJson, sleep } from "../utils.js";
+export { stripAnsi } from "../terminal/ansi.js";
 
 // Channel: Discord
 export {

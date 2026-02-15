@@ -1,0 +1,19 @@
+{
+  "name": "openclaw",
+  "version": "0.0.0-workspace",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    },
+    "./plugin-sdk": {
+      "types": "./plugin-sdk.d.ts",
+      "default": "./plugin-sdk.js"
+    }
+  },
+  "dependencies": {
+    "@qverisai/qverisbot": "workspace:*"
+  }
+}

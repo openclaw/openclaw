@@ -191,4 +191,3 @@ read_when:
 
 - **出站媒体大小限制**：
   - 入站/出站均使用 `channels.feishu.mediaMaxMb` 控制最大体积（入站下载、出站抓取/处理）
-

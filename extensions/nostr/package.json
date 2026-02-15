@@ -27,7 +27,7 @@
     "install": {
       "npmSpec": "@openclaw/nostr",
       "localPath": "extensions/nostr",
-      "defaultChoice": "npm"
+      "defaultChoice": "local"
     }
   }
 }

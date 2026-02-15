@@ -6,7 +6,6 @@
  * accept a custom fetch function.
  */
 import { ProxyAgent, setGlobalDispatcher, getGlobalDispatcher, type Dispatcher } from "undici";
-
 import type { OpenClawConfig } from "../config/config.js";
 
 let originalDispatcher: Dispatcher | null = null;
@@ -21,7 +20,9 @@ let currentProxyUrl: string | null = null;
 export function setupLlmProxy(cfg: OpenClawConfig | undefined): void {
   // If a global proxy is configured, do not override it.
   // Global proxy covers LLM calls too, and keeps other subsystems (Discord, Slack, etc.) consistent.
-  if (cfg?.proxy?.trim()) return;
+  if (cfg?.proxy?.trim()) {
+    return;
+  }
 
   const proxyUrl = cfg?.models?.proxy?.trim();
 

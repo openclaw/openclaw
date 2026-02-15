@@ -3,6 +3,7 @@ summary: "X (Twitter) bot configuration and setup"
 read_when:
   - Setting up X/Twitter integration for Moltbot
 ---
+
 # X / Twitter (plugin)
 
 X (Twitter) integration via API v2. Moltbot monitors mentions of your X account and replies automatically.
@@ -39,8 +40,8 @@ moltbot plugins install ./extensions/x
       consumerSecret: "your_api_secret",
       accessToken: "your_access_token",
       accessTokenSecret: "your_access_token_secret",
-    }
-  }
+    },
+  },
 }
 ```
 
@@ -55,15 +56,15 @@ moltbot plugins install ./extensions/x
 
 ## Configuration
 
-| Option | Description | Default |
-|--------|-------------|---------|
-| `consumerKey` | API Key from X Developer Portal | required |
-| `consumerSecret` | API Secret from X Developer Portal | required |
-| `accessToken` | Access Token from X Developer Portal | required |
-| `accessTokenSecret` | Access Token Secret from X Developer Portal | required |
-| `enabled` | Enable/disable the channel | `true` |
-| `pollIntervalSeconds` | How often to check for mentions (min: 15) | `60` |
-| `allowFrom` | User ID allowlist (optional) | all users |
+| Option                | Description                                 | Default   |
+| --------------------- | ------------------------------------------- | --------- |
+| `consumerKey`         | API Key from X Developer Portal             | required  |
+| `consumerSecret`      | API Secret from X Developer Portal          | required  |
+| `accessToken`         | Access Token from X Developer Portal        | required  |
+| `accessTokenSecret`   | Access Token Secret from X Developer Portal | required  |
+| `enabled`             | Enable/disable the channel                  | `true`    |
+| `pollIntervalSeconds` | How often to check for mentions (min: 15)   | `60`      |
+| `allowFrom`           | User ID allowlist (optional)                | all users |
 
 ## Access control
 
@@ -73,9 +74,9 @@ Restrict who can trigger your bot:
 {
   channels: {
     x: {
-      allowFrom: ["123456789", "987654321"]
-    }
-  }
+      allowFrom: ["123456789", "987654321"],
+    },
+  },
 }
 ```
 
@@ -99,18 +100,18 @@ State is persisted to disk, so the bot remembers where it left off after restart
           consumerSecret: "...",
           accessToken: "...",
           accessTokenSecret: "...",
-          pollIntervalSeconds: 30
+          pollIntervalSeconds: 30,
         },
         alerts: {
           consumerKey: "...",
           consumerSecret: "...",
           accessToken: "...",
           accessTokenSecret: "...",
-          pollIntervalSeconds: 120
-        }
-      }
-    }
-  }
+          pollIntervalSeconds: 120,
+        },
+      },
+    },
+  },
 }
 ```
 
@@ -123,6 +124,7 @@ State is persisted to disk, so the bot remembers where it left off after restart
 ## Rate limits
 
 X API v2 (user context):
+
 - Mentions: 180 requests / 15 min
 - Post tweet: 200 requests / 15 min
 

@@ -44,6 +44,14 @@ export type EmbeddedRunAttemptResult = {
   messagingToolSentTexts: string[];
   messagingToolSentTargets: MessagingToolSend[];
   cloudCodeAssistFormatError: boolean;
+  /**
+   * Usage accumulated across the full attempt (including tool loops/retries).
+   */
+  attemptUsage?: NormalizedUsage;
+  /**
+   * Number of auto-compaction retries during this attempt.
+   */
+  compactionCount?: number;
   /** Client tool call detected (OpenResponses hosted tools). */
   clientToolCall?: { name: string; params: Record<string, unknown> };
 };

@@ -1,5 +1,4 @@
 import { ProxyAgent, getGlobalDispatcher, setGlobalDispatcher, type Dispatcher } from "undici";
-
 import type { OpenClawConfig } from "../config/config.js";
 
 let originalDispatcher: Dispatcher | null = null;
@@ -26,11 +25,15 @@ function resolveProxyUrl(cfg: OpenClawConfig | undefined): {
   source: GlobalFetchProxyStatus["source"];
 } {
   const direct = cfg?.proxy?.trim();
-  if (direct) return { url: direct, source: "config" };
+  if (direct) {
+    return { url: direct, source: "config" };
+  }
 
   // Back-compat: older experiments used a Discord-only proxy key.
   const legacyDiscord = (cfg?.channels?.discord as { proxy?: string } | undefined)?.proxy?.trim();
-  if (legacyDiscord) return { url: legacyDiscord, source: "legacy_discord" };
+  if (legacyDiscord) {
+    return { url: legacyDiscord, source: "legacy_discord" };
+  }
 
   return { url: null, source: "none" };
 }

@@ -30,7 +30,7 @@
     "install": {
       "npmSpec": "@openclaw/matrix",
       "localPath": "extensions/matrix",
-      "defaultChoice": "npm"
+      "defaultChoice": "local"
     }
   }
 }

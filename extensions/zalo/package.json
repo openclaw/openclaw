@@ -29,7 +29,7 @@
     "install": {
       "npmSpec": "@openclaw/zalo",
       "localPath": "extensions/zalo",
-      "defaultChoice": "npm"
+      "defaultChoice": "local"
     }
   }
 }

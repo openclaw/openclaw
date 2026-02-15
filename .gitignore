@@ -86,3 +86,4 @@ local/
 .cursor/
 /local/
 package-lock.json
+qverisai-*.tgz
