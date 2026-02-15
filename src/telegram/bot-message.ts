@@ -21,7 +21,6 @@ type TelegramMessageProcessorDeps = Omit<
   streamMode: TelegramStreamMode;
   textLimit: number;
   opts: Pick<TelegramBotOptions, "token">;
-  resolveBotTopicsEnabled: (ctx: TelegramContext) => boolean | Promise<boolean>;
 };
 
 export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDeps) => {
@@ -45,7 +44,6 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     streamMode,
     textLimit,
     opts,
-    resolveBotTopicsEnabled,
   } = deps;
 
   return async (
@@ -86,7 +84,6 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
       textLimit,
       telegramCfg,
       opts,
-      resolveBotTopicsEnabled,
     });
   };
 };

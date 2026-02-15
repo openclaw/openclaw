@@ -36,10 +36,9 @@ describe("telegram bot message processor", () => {
     resolveTelegramGroupConfig: () => ({}),
     runtime: {},
     replyToMode: "auto",
-    streamMode: "auto",
+    streamMode: "partial",
     textLimit: 4096,
     opts: {},
-    resolveBotTopicsEnabled: () => false,
   };
 
   it("dispatches when context is available", async () => {

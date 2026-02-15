@@ -88,4 +88,23 @@ describe("editMessageTelegram", () => {
       }),
     );
   });
+
+  it("disables link previews when linkPreview is false", async () => {
+    botApi.editMessageText.mockResolvedValue({ message_id: 1, chat: { id: "123" } });
+
+    await editMessageTelegram("123", 1, "https://example.com", {
+      token: "tok",
+      cfg: {},
+      linkPreview: false,
+    });
+
+    expect(botApi.editMessageText).toHaveBeenCalledTimes(1);
+    const params = (botApi.editMessageText.mock.calls[0] ?? [])[3] as Record<string, unknown>;
+    expect(params).toEqual(
+      expect.objectContaining({
+        parse_mode: "HTML",
+        link_preview_options: { is_disabled: true },
+      }),
+    );
+  });
 });
