@@ -295,6 +295,17 @@ export async function callGateway<T = Record<string, unknown>>(
         client.stop();
         stop(new Error(formatCloseError(code, reason)));
       },
+      onConnectError: (err) => {
+        if (settled || ignoreClose) {
+          return;
+        }
+        ignoreClose = true;
+        client.stop();
+        stop(
+          new Error(`gateway connection failed: ${err.message}
+${connectionDetails.message}`),
+        );
+      },
     });
 
     const timer = setTimeout(() => {
