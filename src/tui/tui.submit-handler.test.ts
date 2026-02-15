@@ -93,4 +93,28 @@ describe("createEditorSubmitHandler", () => {
     expect(sendMessage).toHaveBeenCalledWith("hello");
     expect(editor.addToHistory).toHaveBeenCalledWith("hello");
   });
+
+  it("preserves internal newlines for multiline messages", () => {
+    const editor = {
+      setText: vi.fn(),
+      addToHistory: vi.fn(),
+    };
+    const handleCommand = vi.fn();
+    const sendMessage = vi.fn();
+    const handleBangLine = vi.fn();
+
+    const onSubmit = createEditorSubmitHandler({
+      editor,
+      handleCommand,
+      sendMessage,
+      handleBangLine,
+    });
+
+    onSubmit("Line 1\nLine 2\nLine 3");
+
+    expect(sendMessage).toHaveBeenCalledWith("Line 1\nLine 2\nLine 3");
+    expect(editor.addToHistory).toHaveBeenCalledWith("Line 1\nLine 2\nLine 3");
+    expect(handleCommand).not.toHaveBeenCalled();
+    expect(handleBangLine).not.toHaveBeenCalled();
+  });
 });
