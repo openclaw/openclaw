@@ -212,6 +212,10 @@ export function extractAssistantText(msg: AssistantMessage): string {
       return false;
     }
     const rec = block as Record<string, unknown>;
+    // Filter out blocks that have a thought signature or reasoning details (Gemini 3)
+    if (rec.thought_signature || rec.reasoning_details) {
+      return false;
+    }
     return rec.type === "text" && typeof rec.text === "string";
   };
 
@@ -244,6 +248,14 @@ export function extractAssistantThinking(msg: AssistantMessage): string {
       const record = block as unknown as Record<string, unknown>;
       if (record.type === "thinking" && typeof record.thinking === "string") {
         return record.thinking.trim();
+      }
+      // Include text blocks that are actually reasoning/thoughts (Gemini 3)
+      if (
+        record.type === "text" &&
+        typeof record.text === "string" &&
+        (record.thought_signature || record.reasoning_details)
+      ) {
+        return record.text.trim();
       }
       return "";
     })
