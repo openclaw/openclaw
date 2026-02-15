@@ -73,13 +73,17 @@ export type OutboundDeliveryResult = {
 
 type Chunker = (text: string, limit: number) => string[];
 
+type SendMediaOptions = {
+  audioAsVoice?: boolean;
+};
+
 type ChannelHandler = {
   chunker: Chunker | null;
   chunkerMode?: "text" | "markdown";
   textChunkLimit?: number;
   sendPayload?: (payload: ReplyPayload) => Promise<OutboundDeliveryResult>;
   sendText: (text: string) => Promise<OutboundDeliveryResult>;
-  sendMedia: (caption: string, mediaUrl: string) => Promise<OutboundDeliveryResult>;
+  sendMedia: (caption: string, mediaUrl: string, options?: SendMediaOptions) => Promise<OutboundDeliveryResult>;
 };
 
 type ChannelHandlerParams = {
@@ -136,11 +140,12 @@ function createPluginHandler(
         ...baseCtx,
         text,
       }),
-    sendMedia: async (caption, mediaUrl) =>
+    sendMedia: async (caption, mediaUrl, options) =>
       sendMedia({
         ...baseCtx,
         text: caption,
         mediaUrl,
+        audioAsVoice: options?.audioAsVoice,
       }),
   };
 }
@@ -492,7 +497,9 @@ async function deliverOutboundPayloadsCore(
         if (isSignalChannel) {
           results.push(await sendSignalMedia(caption, url));
         } else {
-          results.push(await handler.sendMedia(caption, url));
+          results.push(await handler.sendMedia(caption, url, {
+            audioAsVoice: effectivePayload.audioAsVoice,
+          }));
         }
       }
       emitMessageSent(true);
