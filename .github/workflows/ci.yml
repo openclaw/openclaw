@@ -178,6 +178,9 @@ jobs:
     needs: [docs-scope, changed-scope, check]
     if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true')
     runs-on: blacksmith-4vcpu-ubuntu-2404
+    env:
+      NODE_OPTIONS: --max-old-space-size=4096
+      OPENCLAW_TEST_WORKERS: 2
     strategy:
       fail-fast: false
       matrix:
