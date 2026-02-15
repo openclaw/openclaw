@@ -67,8 +67,23 @@ def package_skill(skill_path, output_dir=None):
     # Create the .skill file (zip format)
     try:
         with zipfile.ZipFile(skill_filename, "w", zipfile.ZIP_DEFLATED) as zipf:
-            # Walk through the skill directory
+            # Walk through the skill directory, skipping symlinks to prevent
+            # sensitive file exfiltration (zip-slip / symlink attacks).
             for file_path in skill_path.rglob("*"):
+                # Reject symbolic links (both file and directory symlinks).
+                if file_path.is_symlink():
+                    print(f"  [SKIP] Symbolic link: {file_path}")
+                    continue
+
+                # Ensure the resolved path stays within the skill directory
+                # to prevent path traversal via crafted filenames.
+                try:
+                    resolved = file_path.resolve()
+                    resolved.relative_to(skill_path.resolve())
+                except ValueError:
+                    print(f"  [SKIP] Path escapes skill directory: {file_path}")
+                    continue
+
                 if file_path.is_file():
                     # Calculate the relative path within the zip
                     arcname = file_path.relative_to(skill_path.parent)
