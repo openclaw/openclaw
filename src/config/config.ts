@@ -25,5 +25,5 @@ export {
   clearSecretCache,
   SecretResolutionError,
   UnknownSecretProviderError,
-} from "./secret-substitution.js";
-export type { SecretsConfig } from "./secret-substitution.js";
+} from "./secret-resolution.js";
+export type { SecretsConfig, SecretProvider } from "./secret-resolution.js";
