@@ -1,7 +1,12 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ImageContent } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
-import { createAgentSession, SessionManager, SettingsManager } from "@mariozechner/pi-coding-agent";
+import {
+  createAgentSession,
+  SessionManager,
+  SettingsManager,
+  DefaultResourceLoader,
+} from "@mariozechner/pi-coding-agent";
 import fs from "node:fs/promises";
 import os from "node:os";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
@@ -31,6 +36,8 @@ import {
   listChannelSupportedActions,
   resolveChannelMessageToolHints,
 } from "../../channel-tools.js";
+import { resolveContextWindowInfo } from "../../context-window-guard.js";
+import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { resolveOpenClawDocsPath } from "../../docs-path.js";
 import { isTimeoutError } from "../../failover-error.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
@@ -38,7 +45,10 @@ import { resolveDefaultModelForAgent } from "../../model-selection.js";
 import { createOllamaStreamFn, OLLAMA_NATIVE_BASE_URL } from "../../ollama-stream.js";
 import {
   isCloudCodeAssistFormatError,
+  isEmptyAssistantMessageContent,
   resolveBootstrapMaxChars,
+  stripImageBlocksFromMessages,
+  stripImageBlocksFromSessionFile,
   validateAnthropicTurns,
   validateGeminiTurns,
 } from "../../pi-embedded-helpers.js";
@@ -518,13 +528,31 @@ export async function runEmbeddedAttempt(
       });
 
       const settingsManager = SettingsManager.create(effectiveWorkspace, agentDir);
+      // When contextTokens is configured below the model's native context window,
+      // we need to inflate Pi's reserveTokens so that Pi triggers compaction
+      // at our desired contextTokens limit instead of the model's native limit.
+      // Formula: effectiveReserve = modelContextWindow - desiredContextTokens + desiredReserve
+      const desiredReserve = resolveCompactionReserveTokensFloor(params.config);
+      const modelCtxWindow = params.model?.contextWindow ?? 128_000;
+      const desiredCtxTokens = resolveContextWindowInfo({
+        cfg: params.config,
+        provider: params.provider,
+        modelId: params.modelId,
+        modelContextWindow: params.model?.contextWindow,
+        defaultTokens: DEFAULT_CONTEXT_TOKENS,
+      }).tokens;
+      const effectiveReserve =
+        desiredCtxTokens < modelCtxWindow
+          ? modelCtxWindow - desiredCtxTokens + desiredReserve
+          : desiredReserve;
       ensurePiCompactionReserveTokens({
         settingsManager,
-        minReserveTokens: resolveCompactionReserveTokensFloor(params.config),
+        minReserveTokens: effectiveReserve,
       });
 
-      // Call for side effects (sets compaction/pruning runtime state)
-      buildEmbeddedExtensionPaths({
+      // Call for side effects (sets compaction/pruning/memory-context runtime state)
+      // AND collect extension paths so Pi loads them via ResourceLoader.
+      const embeddedExtPaths = await buildEmbeddedExtensionPaths({
         cfg: params.config,
         sessionManager,
         provider: params.provider,
@@ -534,6 +562,18 @@ export async function runEmbeddedAttempt(
 
       // Get hook runner early so it's available when creating tools
       const hookRunner = getGlobalHookRunner();
+
+      // Create a ResourceLoader with compaction/pruning/memory-context extension paths
+      let resourceLoader: DefaultResourceLoader | undefined;
+      if (embeddedExtPaths.length > 0) {
+        resourceLoader = new DefaultResourceLoader({
+          cwd: resolvedWorkspace,
+          agentDir,
+          settingsManager,
+          additionalExtensionPaths: embeddedExtPaths,
+        });
+        await resourceLoader.reload();
+      }
 
       const { builtInTools, customTools } = splitSdkTools({
         tools,
@@ -568,6 +608,7 @@ export async function runEmbeddedAttempt(
         customTools: allCustomTools,
         sessionManager,
         settingsManager,
+        ...(resourceLoader ? { resourceLoader } : {}),
       }));
       applySystemPromptOverrideToSession(session, systemPromptText);
       if (!session) {
@@ -954,12 +995,59 @@ export async function runEmbeddedAttempt(
             );
           }
 
-          // Only pass images option if there are actually images to pass
-          // This avoids potential issues with models that don't expect the images parameter
-          if (imageResult.images.length > 0) {
-            await abortable(activeSession.prompt(effectivePrompt, { images: imageResult.images }));
-          } else {
-            await abortable(activeSession.prompt(effectivePrompt));
+          const promptWithCurrentImages = async (): Promise<void> => {
+            // Only pass images option if there are actually images to pass.
+            // This avoids potential issues with models that don't expect the images parameter.
+            if (imageResult.images.length > 0) {
+              await abortable(
+                activeSession.prompt(effectivePrompt, { images: imageResult.images }),
+              );
+            } else {
+              await abortable(activeSession.prompt(effectivePrompt));
+            }
+          };
+          const hasTrailingEmptyAssistant = (): boolean => {
+            const last = activeSession.messages.at(-1);
+            return last?.role === "assistant" && isEmptyAssistantMessageContent(last);
+          };
+
+          await promptWithCurrentImages();
+
+          // Recovery phase 1: one in-run retry with the exact same payload.
+          // This protects vision-capable models from occasional transient empty replies
+          // without immediately mutating/persisting image history.
+          if (hasTrailingEmptyAssistant()) {
+            log.warn(
+              `empty assistant response — retrying once with original context: runId=${params.runId} sessionId=${params.sessionId}`,
+            );
+            await promptWithCurrentImages();
+          }
+
+          // Recovery phase 2: only after two consecutive empty replies, strip image
+          // blocks in-memory and retry once without prompt images.
+          if (hasTrailingEmptyAssistant()) {
+            const { messages: stripped, hadImages } = stripImageBlocksFromMessages(
+              activeSession.messages,
+            );
+            if (hadImages) {
+              log.warn(
+                `empty assistant response persisted after same-context retry — stripping images and retrying: runId=${params.runId} sessionId=${params.sessionId}`,
+              );
+              activeSession.agent.replaceMessages(stripped);
+              await abortable(activeSession.prompt(effectivePrompt));
+
+              // Persist image stripping only after we needed strip-retry and when this
+              // turn didn't include direct prompt images. This avoids permanent deletion
+              // on one-off empty replies from otherwise healthy vision models.
+              if (!hasTrailingEmptyAssistant() && imageResult.images.length === 0) {
+                const fileStripped = stripImageBlocksFromSessionFile(params.sessionFile);
+                if (fileStripped > 0) {
+                  log.debug(
+                    `stripped ${fileStripped} image blocks from session file: ${params.sessionFile}`,
+                  );
+                }
+              }
+            }
           }
         } catch (err) {
           promptError = err;
@@ -980,7 +1068,27 @@ export async function runEmbeddedAttempt(
         const preCompactionSessionId = activeSession.sessionId;
 
         try {
-          await abortable(waitForCompactionRetry());
+          // Compaction-specific timeout: if compaction doesn't finish within 60 seconds,
+          // give up waiting and proceed. This prevents the session from staying stuck in
+          // active=true when compaction hangs, which would block all subsequent messages.
+          // The run's main timeout (params.timeoutMs, default 600s) is too generous for this.
+          const COMPACTION_WAIT_TIMEOUT_MS = 60_000;
+          const compactionPromise = waitForCompactionRetry();
+          const compactionTimeout = new Promise<void>((_resolve, reject) => {
+            const timer = setTimeout(() => {
+              const err = new Error(
+                `compaction wait timed out after ${COMPACTION_WAIT_TIMEOUT_MS}ms`,
+              );
+              err.name = "CompactionTimeoutError";
+              reject(err);
+            }, COMPACTION_WAIT_TIMEOUT_MS);
+            // If the compaction finishes or abort fires first, clear the timer.
+            void compactionPromise.then(
+              () => clearTimeout(timer),
+              () => clearTimeout(timer),
+            );
+          });
+          await abortable(Promise.race([compactionPromise, compactionTimeout]));
         } catch (err) {
           if (isRunnerAbortError(err)) {
             if (!promptError) {
@@ -991,6 +1099,12 @@ export async function runEmbeddedAttempt(
                 `compaction wait aborted: runId=${params.runId} sessionId=${params.sessionId}`,
               );
             }
+          } else if (err instanceof Error && err.name === "CompactionTimeoutError") {
+            log.warn(
+              `embedded run compaction wait timed out: runId=${params.runId} sessionId=${params.sessionId}`,
+            );
+            // Don't treat this as a fatal error — the run completed, just compaction is slow.
+            // The session will be released in the finally block.
           } else {
             throw err;
           }

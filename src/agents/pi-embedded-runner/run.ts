@@ -879,11 +879,13 @@ export async function runEmbeddedPiAgent(
                       : authFailure
                         ? "LLM request unauthorized."
                         : "LLM request failed.");
+              const effectiveReason: FailoverReason =
+                timedOut ? "timeout" : (assistantFailoverReason ?? "unknown");
               const status =
-                resolveFailoverStatus(assistantFailoverReason ?? "unknown") ??
+                resolveFailoverStatus(effectiveReason) ??
                 (isTimeoutErrorMessage(message) ? 408 : undefined);
               throw new FailoverError(message, {
-                reason: assistantFailoverReason ?? "unknown",
+                reason: effectiveReason,
                 provider,
                 model: modelId,
                 profileId: lastProfileId,

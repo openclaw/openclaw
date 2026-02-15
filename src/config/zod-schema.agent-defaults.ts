@@ -107,6 +107,21 @@ export const AgentDefaultsSchema = z
       })
       .strict()
       .optional(),
+    memoryContext: z
+      .object({
+        enabled: z.boolean().optional(),
+        hardCapTokens: z.number().int().min(500).optional(),
+        embeddingModel: z.union([z.literal("auto"), z.literal("gemini"), z.literal("hash"), z.literal("transformer")]).optional(),
+        storagePath: z.string().optional(),
+        redaction: z.boolean().optional(),
+        knowledgeExtraction: z.boolean().optional(),
+        autoRecallMinScore: z.number().min(0).max(1).optional(),
+        maxSegments: z.number().int().min(100).optional(),
+        crossSession: z.boolean().optional(),
+        evictionDays: z.number().int().min(0).optional(),
+      })
+      .strict()
+      .optional(),
     thinkingDefault: z
       .union([
         z.literal("off"),

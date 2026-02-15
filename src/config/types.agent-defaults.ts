@@ -134,6 +134,8 @@ export type AgentDefaultsConfig = {
   contextPruning?: AgentContextPruningConfig;
   /** Compaction tuning and pre-compaction memory flush behavior. */
   compaction?: AgentCompactionConfig;
+  /** Memory context: compaction-aware conversation memory with recall (opt-in). */
+  memoryContext?: MemoryContextAgentConfig;
   /** Vector memory search configuration (per-agent overrides supported). */
   memorySearch?: MemorySearchConfig;
   /** Default thinking level when no /think directive is present. */
@@ -271,4 +273,27 @@ export type AgentCompactionMemoryFlushConfig = {
   prompt?: string;
   /** System prompt appended for the memory flush turn. */
   systemPrompt?: string;
+};
+
+export type MemoryContextAgentConfig = {
+  /** Enable memory-context extensions (default: false, opt-in). */
+  enabled?: boolean;
+  /** Hard cap on injected recalled-context tokens (default: 4000). */
+  hardCapTokens?: number;
+  /** Embedding model: "auto" (best available), "gemini", "transformer" (local ONNX), or "hash" (keyword). Cascading fallback: auto/gemini → openai → voyage → local → transformer → BM25. */
+  embeddingModel?: "auto" | "gemini" | "hash" | "transformer";
+  /** Storage path for JSONL + vectors.bin (default: ~/.openclaw/memory/context). */
+  storagePath?: string;
+  /** Redact secrets before persisting (default: true). */
+  redaction?: boolean;
+  /** Enable async knowledge extraction via LLM (default: true). */
+  knowledgeExtraction?: boolean;
+  /** Minimum similarity score for auto-recall (0-1, default: 0.7). */
+  autoRecallMinScore?: number;
+  /** Max segments in warm store (default: 20000). */
+  maxSegments?: number;
+  /** Search across all sessions (default: false). */
+  crossSession?: boolean;
+  /** Max age in days for warm store eviction (default: 90, 0 = disabled). */
+  evictionDays?: number;
 };

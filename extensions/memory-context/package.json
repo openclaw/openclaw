@@ -1,0 +1,11 @@
+{
+  "name": "openclaw-memory",
+  "version": "0.2.0",
+  "private": true,
+  "description": "OpenClaw memory-context: compaction-aware conversation memory with hybrid search and knowledge extraction",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run"
+  }
+}

@@ -1,10 +1,12 @@
 import type { DatabaseSync } from "node:sqlite";
+import { loadFts5Extension } from "./sqlite-fts5.js";
 
 export function ensureMemoryIndexSchema(params: {
   db: DatabaseSync;
   embeddingCacheTable: string;
   ftsTable: string;
   ftsEnabled: boolean;
+  fts5ExtensionPath?: string;
 }): { ftsAvailable: boolean; ftsError?: string } {
   params.db.exec(`
     CREATE TABLE IF NOT EXISTS meta (
@@ -54,23 +56,33 @@ export function ensureMemoryIndexSchema(params: {
   let ftsAvailable = false;
   let ftsError: string | undefined;
   if (params.ftsEnabled) {
-    try {
-      params.db.exec(
-        `CREATE VIRTUAL TABLE IF NOT EXISTS ${params.ftsTable} USING fts5(\n` +
-          `  text,\n` +
-          `  id UNINDEXED,\n` +
-          `  path UNINDEXED,\n` +
-          `  source UNINDEXED,\n` +
-          `  model UNINDEXED,\n` +
-          `  start_line UNINDEXED,\n` +
-          `  end_line UNINDEXED\n` +
-          `);`,
-      );
-      ftsAvailable = true;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+    // Ensure FTS5 module is available (load extension if needed)
+    const fts5 = loadFts5Extension({
+      db: params.db,
+      extensionPath: params.fts5ExtensionPath,
+    });
+    if (!fts5.ok) {
       ftsAvailable = false;
-      ftsError = message;
+      ftsError = fts5.error;
+    } else {
+      try {
+        params.db.exec(
+          `CREATE VIRTUAL TABLE IF NOT EXISTS ${params.ftsTable} USING fts5(\n` +
+            `  text,\n` +
+            `  id UNINDEXED,\n` +
+            `  path UNINDEXED,\n` +
+            `  source UNINDEXED,\n` +
+            `  model UNINDEXED,\n` +
+            `  start_line UNINDEXED,\n` +
+            `  end_line UNINDEXED\n` +
+            `);`,
+        );
+        ftsAvailable = true;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        ftsAvailable = false;
+        ftsError = message;
+      }
     }
   }
 

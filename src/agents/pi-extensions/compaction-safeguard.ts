@@ -11,6 +11,7 @@ import {
   resolveContextWindowTokens,
   summarizeInStages,
 } from "../compaction.js";
+import { getGlobalMemoryRuntime } from "../memory-context/global-runtime.js";
 import { getCompactionSafeguardRuntime } from "./compaction-safeguard-runtime.js";
 const FALLBACK_SUMMARY =
   "Summary unavailable due to context limits. Older messages were truncated.";
@@ -158,6 +159,82 @@ function formatFileOperations(readFiles: string[], modifiedFiles: string[]): str
   return `\n\n${sections.join("\n\n")}`;
 }
 
+/**
+ * Build a lightweight structured summary from message content WITHOUT calling an LLM.
+ * Extracts topics, key values, and user questions to preserve session overview.
+ */
+function buildFastStructuredSummary(messages: AgentMessage[]): string {
+  const topics = new Set<string>();
+  const keyValues: string[] = [];
+  const userQuestions: string[] = [];
+  let turnCount = 0;
+
+  for (const msg of messages) {
+    if (!msg || typeof msg !== "object") {
+      continue;
+    }
+    const role = (msg as { role?: string }).role;
+    const content = (msg as { content?: unknown }).content;
+    let text = "";
+    if (typeof content === "string") {
+      text = content;
+    } else if (Array.isArray(content)) {
+      text = (content as Array<{ type?: string; text?: string }>)
+        .filter((b) => b?.type === "text" && typeof b.text === "string")
+        .map((b) => b.text!)
+        .join(" ");
+    }
+    if (!text.trim()) {
+      continue;
+    }
+
+    if (role === "user") {
+      turnCount++;
+      // Capture first line of user messages as topic indicators
+      const firstLine = text.split("\n")[0]?.trim().slice(0, 120);
+      if (firstLine && firstLine.length > 5) {
+        if (firstLine.includes("?") || firstLine.includes("？")) {
+          if (userQuestions.length < 8) {
+            userQuestions.push(firstLine);
+          }
+        } else if (topics.size < 15) {
+          topics.add(firstLine);
+        }
+      }
+    }
+
+    // Extract key=value patterns (endpoints, ports, configs)
+    const kvMatches = text.matchAll(
+      /\b(?:endpoint|port|host|db|database|bucket|key|url|path|api)\s*[=:]\s*\S+/gi,
+    );
+    for (const m of kvMatches) {
+      if (keyValues.length < 20) {
+        const kv = m[0].trim().slice(0, 80);
+        if (!keyValues.includes(kv)) {
+          keyValues.push(kv);
+        }
+      }
+    }
+  }
+
+  const sections: string[] = [];
+  sections.push(
+    `Compacted ${turnCount} user turns (${messages.length} messages total). Full conversation archived to long-term memory and searchable via recall.`,
+  );
+
+  if (topics.size > 0) {
+    sections.push(`\n## Topics discussed\n${[...topics].map((t) => `- ${t}`).join("\n")}`);
+  }
+  if (userQuestions.length > 0) {
+    sections.push(`\n## Key questions\n${userQuestions.map((q) => `- ${q}`).join("\n")}`);
+  }
+  if (keyValues.length > 0) {
+    sections.push(`\n## Key values mentioned\n${keyValues.map((kv) => `- ${kv}`).join("\n")}`);
+  }
+
+  return sections.join("\n");
+}
+
 export default function compactionSafeguardExtension(api: ExtensionAPI): void {
   api.on("session_before_compact", async (event, ctx) => {
     const { preparation, customInstructions, signal } = event;
@@ -169,6 +246,29 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     ]);
     const toolFailureSection = formatToolFailuresSection(toolFailures);
     const fallbackSummary = `${FALLBACK_SUMMARY}${toolFailureSection}${fileOpsSummary}`;
+
+    // When memory-context is enabled, skip LLM summarization entirely.
+    // Build a fast structured summary from message metadata instead.
+    // Full messages are archived to segments.jsonl by memory-context-archive
+    // and can be recalled on demand — no need for an expensive LLM summary.
+    const sessionId = (ctx.sessionManager as unknown as { sessionId?: string }).sessionId;
+    const mcRuntime = sessionId ? getGlobalMemoryRuntime(sessionId) : undefined;
+    if (mcRuntime?.config.enabled) {
+      const allMessages = [...preparation.messagesToSummarize, ...preparation.turnPrefixMessages];
+      const fastSummary =
+        buildFastStructuredSummary(allMessages) + toolFailureSection + fileOpsSummary;
+      console.info(
+        `memory-context: fast compaction (skipped LLM summary, ${allMessages.length} messages archived to memory)`,
+      );
+      return {
+        compaction: {
+          summary: fastSummary,
+          firstKeptEntryId: preparation.firstKeptEntryId,
+          tokensBefore: preparation.tokensBefore,
+          details: { readFiles, modifiedFiles },
+        },
+      };
+    }
 
     const model = ctx.model;
     if (!model) {

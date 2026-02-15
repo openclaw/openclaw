@@ -1,10 +1,18 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
+import { createEmbeddingProvider, type EmbeddingProvider } from "../memory-context/embedding.js";
+import {
+  setGlobalMemoryRuntime,
+  type MemoryContextConfig,
+} from "../memory-context/global-runtime.js";
+import { KnowledgeStore } from "../memory-context/knowledge-store.js";
+import { WarmStore } from "../memory-context/store.js";
 import { setCompactionSafeguardRuntime } from "../pi-extensions/compaction-safeguard-runtime.js";
 import { setContextPruningRuntime } from "../pi-extensions/context-pruning/runtime.js";
 import { computeEffectiveSettings } from "../pi-extensions/context-pruning/settings.js";
@@ -15,9 +23,23 @@ import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "./cache-t
 function resolvePiExtensionPath(id: string): string {
   const self = fileURLToPath(import.meta.url);
   const dir = path.dirname(self);
-  // In dev this file is `.ts` (tsx), in production it's `.js`.
   const ext = path.extname(self) === ".ts" ? "ts" : "js";
-  return path.join(dir, "..", "pi-extensions", `${id}.${ext}`);
+  const resolved = path.join(dir, "..", "pi-extensions", `${id}.${ext}`);
+  if (ext === "js") {
+    // In dist mode, .js files may not exist for memory-context extensions;
+    // fall back to .ts source files that jiti can load.
+    if (!fs.existsSync(resolved)) {
+      const tsPath = resolved.replace(/\.js$/, ".ts");
+      if (fs.existsSync(tsPath)) {
+        return tsPath;
+      }
+      const srcPath = path.join(dir, "..", "src", "agents", "pi-extensions", `${id}.ts`);
+      if (fs.existsSync(srcPath)) {
+        return srcPath;
+      }
+    }
+  }
+  return resolved;
 }
 
 function resolveContextWindowTokens(params: {
@@ -71,13 +93,22 @@ function resolveCompactionMode(cfg?: OpenClawConfig): "default" | "safeguard" {
   return cfg?.agents?.defaults?.compaction?.mode === "safeguard" ? "safeguard" : "default";
 }
 
-export function buildEmbeddedExtensionPaths(params: {
+/**
+ * Per-session cache for memory-context resources.
+ * Avoids re-creating WarmStore / KnowledgeStore / embedding on every message.
+ */
+const memoryContextCache = new Map<
+  string,
+  { rawStore: WarmStore; knowledgeStore: KnowledgeStore; embedding: EmbeddingProvider }
+>();
+
+export async function buildEmbeddedExtensionPaths(params: {
   cfg: OpenClawConfig | undefined;
   sessionManager: SessionManager;
   provider: string;
   modelId: string;
   model: Model<Api> | undefined;
-}): string[] {
+}): Promise<string[]> {
   const paths: string[] = [];
   if (resolveCompactionMode(params.cfg) === "safeguard") {
     const compactionCfg = params.cfg?.agents?.defaults?.compaction;
@@ -94,10 +125,96 @@ export function buildEmbeddedExtensionPaths(params: {
     });
     paths.push(resolvePiExtensionPath("compaction-safeguard"));
   }
+  // context-pruning: micro-level tool result pruning (runs first in context chain)
   const pruning = buildContextPruningExtension(params);
   if (pruning.additionalExtensionPaths) {
     paths.push(...pruning.additionalExtensionPaths);
   }
+
+  // memory-context: recall injection (runs after context-pruning in context chain)
+  // + archive (runs on session_before_compact, independent of context chain)
+  const memCtxCfg = params.cfg?.agents?.defaults?.memoryContext;
+  if (memCtxCfg?.enabled) {
+    const contextWindowTokens = resolveContextWindowTokens(params);
+    const compactionCfg = params.cfg?.agents?.defaults?.compaction;
+    const storagePath = memCtxCfg.storagePath ?? "~/.openclaw/memory/context";
+    const resolvedPath = storagePath.startsWith("~")
+      ? storagePath.replace(/^~/, process.env.HOME ?? "/root")
+      : storagePath;
+
+    const config: MemoryContextConfig = {
+      enabled: true,
+      hardCapTokens: memCtxCfg.hardCapTokens ?? 4000,
+      embeddingModel: memCtxCfg.embeddingModel ?? "auto",
+      storagePath: resolvedPath,
+      redaction: memCtxCfg.redaction !== false,
+      knowledgeExtraction: memCtxCfg.knowledgeExtraction !== false,
+      maxSegments: memCtxCfg.maxSegments ?? 20000,
+      crossSession: memCtxCfg.crossSession === true,
+      autoRecallMinScore: memCtxCfg.autoRecallMinScore ?? 0.7,
+      evictionDays: memCtxCfg.evictionDays ?? 90,
+    };
+
+    // Session-level caching: reuse WarmStore / embedding across messages.
+    const sessionId =
+      (params.sessionManager as unknown as { sessionId?: string }).sessionId ?? "default";
+    let cached = memoryContextCache.get(sessionId);
+    if (!cached) {
+      // Unified embedding with cascading fallback:
+      //   gemini/auto → openai → voyage → local → transformer → noop (BM25)
+      const embedding: EmbeddingProvider = await createEmbeddingProvider(
+        params.cfg,
+        (config.embeddingModel as "gemini" | "transformer" | "hash" | "auto") ?? "auto",
+        { warn: (msg) => console.warn(msg), info: (msg) => console.info(msg) },
+      );
+      const rawStore = new WarmStore({
+        sessionId,
+        embedding,
+        coldStore: { path: resolvedPath },
+        maxSegments: config.maxSegments,
+        crossSession: config.crossSession,
+        eviction: {
+          enabled: config.evictionDays > 0,
+          maxAgeDays: config.evictionDays,
+        },
+        vectorPersist: true,
+      });
+      // KnowledgeStore and WarmStore share the same directory intentionally:
+      // KnowledgeStore writes knowledge.jsonl, WarmStore writes segments.jsonl — no collision.
+      const knowledgeStore = new KnowledgeStore(resolvedPath);
+      cached = { rawStore, knowledgeStore, embedding };
+      memoryContextCache.set(sessionId, cached);
+      console.info(`[memory-context] created new WarmStore for session=${sessionId}`);
+    } else {
+      console.info(`[memory-context] reusing cached WarmStore for session=${sessionId}`);
+    }
+    const { rawStore, knowledgeStore } = cached;
+
+    // Resolve subagent model for knowledge extraction (faster than main model).
+    const subagentModelCfg = params.cfg?.agents?.defaults?.subagents?.model;
+    const subagentPrimary =
+      typeof subagentModelCfg === "string" ? subagentModelCfg : subagentModelCfg?.primary;
+    let extractionModel: { provider: string; modelId: string } | undefined;
+    if (subagentPrimary && subagentPrimary.includes("/")) {
+      const [provider, ...rest] = subagentPrimary.split("/");
+      extractionModel = { provider, modelId: rest.join("/") };
+    }
+
+    setGlobalMemoryRuntime(sessionId, {
+      config,
+      rawStore,
+      knowledgeStore,
+      contextWindowTokens,
+      maxHistoryShare: compactionCfg?.maxHistoryShare ?? 0.5,
+      extractionModel,
+    });
+    console.info(`[memory-context] global runtime set for session=${sessionId}`);
+
+    // Push extension paths — Pi runtime will load and execute these via jiti
+    paths.push(resolvePiExtensionPath("memory-context-recall"));
+    paths.push(resolvePiExtensionPath("memory-context-archive"));
+  }
+
   return paths;
 }
 

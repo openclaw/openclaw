@@ -477,7 +477,10 @@ export class MemoryIndexManager implements MemorySearchManager {
         error: this.fts.loadError,
       },
       fallback: this.fallbackReason
-        ? { from: this.fallbackFrom ?? "local", reason: this.fallbackReason }
+        ? {
+            from: this.fallbackFrom ?? this.requestedProvider ?? "unknown",
+            reason: this.fallbackReason,
+          }
         : undefined,
       vector: {
         enabled: this.vector.enabled,
@@ -509,7 +512,11 @@ export class MemoryIndexManager implements MemorySearchManager {
 
   async probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult> {
     try {
-      await this.embedBatchWithRetry(["ping"]);
+      const embeddings = await this.embedBatchWithRetry(["ping"]);
+      const sample = embeddings?.[0];
+      if (!Array.isArray(sample) || sample.length === 0) {
+        return { ok: false, error: "Embeddings unavailable (keyword-only mode)." };
+      }
       return { ok: true };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
