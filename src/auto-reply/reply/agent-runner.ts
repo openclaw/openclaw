@@ -162,34 +162,38 @@ export async function runReplyAgent(params: {
         })
       : null;
 
-  if (shouldSteer && isStreaming) {
-    // Queue as followUp so the main agent sees the message after its
-    // current tool calls complete (followUp does not cancel tools).
-    const steered = queueEmbeddedPiMessage(followupRun.run.sessionId, followupRun.prompt);
-    if (steered && !shouldFollowup) {
-      // Fire a quick side response so the user gets an immediate
-      // answer while the main agent continues working.
-      const sideResult = await generateSideResponse({
-        message: followupRun.prompt,
-      });
-      if (activeSessionEntry && activeSessionStore && sessionKey) {
-        const updatedAt = Date.now();
-        activeSessionEntry.updatedAt = updatedAt;
-        activeSessionStore[sessionKey] = activeSessionEntry;
-        if (storePath) {
-          await updateSessionStoreEntry({
-            storePath,
-            sessionKey,
-            update: async () => ({ updatedAt }),
-          });
-        }
-      }
-      typing.cleanup();
-      if (sideResult?.text) {
-        return { text: sideResult.text };
-      }
-      return undefined;
+  if (shouldSteer && isStreaming && !shouldFollowup) {
+    // Fire a quick side response so the user gets an immediate
+    // answer while the main agent continues working.
+    const sideResult = await generateSideResponse({
+      message: followupRun.prompt,
+    });
+
+    // Only queue via followUp if the side response was an ACK
+    // (needs deeper work) or failed entirely. A FULL side
+    // response already answered the question, so injecting it
+    // into the main agent would cause a duplicate reply.
+    if (!sideResult?.isFull) {
+      queueEmbeddedPiMessage(followupRun.run.sessionId, followupRun.prompt);
     }
+
+    if (activeSessionEntry && activeSessionStore && sessionKey) {
+      const updatedAt = Date.now();
+      activeSessionEntry.updatedAt = updatedAt;
+      activeSessionStore[sessionKey] = activeSessionEntry;
+      if (storePath) {
+        await updateSessionStoreEntry({
+          storePath,
+          sessionKey,
+          update: async () => ({ updatedAt }),
+        });
+      }
+    }
+    typing.cleanup();
+    if (sideResult?.text) {
+      return { text: sideResult.text };
+    }
+    return undefined;
   }
 
   if (isActive && (shouldFollowup || resolvedQueue.mode === "steer")) {
