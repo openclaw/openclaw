@@ -227,11 +227,13 @@ describe("QmdMemoryManager", () => {
       },
     } as OpenClawConfig;
 
+    const updateSpawned = createDeferred<void>();
     let releaseUpdate: (() => void) | null = null;
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "update") {
         const child = createMockChild({ autoClose: false });
         releaseUpdate = () => child.closeWith(0);
+        updateSpawned.resolve();
         return child;
       }
       return createMockChild();
@@ -239,7 +241,7 @@ describe("QmdMemoryManager", () => {
 
     const resolved = resolveMemoryBackendConfig({ cfg, agentId });
     const createPromise = QmdMemoryManager.create({ cfg, agentId, resolved });
-    await waitForCondition(() => releaseUpdate !== null, 400);
+    await updateSpawned.promise;
     let created = false;
     void createPromise.then(() => {
       created = true;
@@ -446,6 +448,7 @@ describe("QmdMemoryManager", () => {
       },
     } as OpenClawConfig;
 
+    const firstUpdateSpawned = createDeferred<void>();
     let updateCalls = 0;
     let releaseFirstUpdate: (() => void) | null = null;
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
@@ -454,6 +457,7 @@ describe("QmdMemoryManager", () => {
         if (updateCalls === 1) {
           const first = createMockChild({ autoClose: false });
           releaseFirstUpdate = () => first.closeWith(0);
+          firstUpdateSpawned.resolve();
           return first;
         }
         return createMockChild();
@@ -471,7 +475,7 @@ describe("QmdMemoryManager", () => {
     const inFlight = manager.sync({ reason: "interval" });
     const forced = manager.sync({ reason: "manual", force: true });
 
-    await waitForCondition(() => updateCalls >= 1, 80);
+    await firstUpdateSpawned.promise;
     expect(updateCalls).toBe(1);
     if (!releaseFirstUpdate) {
       throw new Error("first update release missing");
@@ -501,6 +505,8 @@ describe("QmdMemoryManager", () => {
       },
     } as OpenClawConfig;
 
+    const firstUpdateSpawned = createDeferred<void>();
+    const secondUpdateSpawned = createDeferred<void>();
     let updateCalls = 0;
     let releaseFirstUpdate: (() => void) | null = null;
     let releaseSecondUpdate: (() => void) | null = null;
@@ -510,11 +516,13 @@ describe("QmdMemoryManager", () => {
         if (updateCalls === 1) {
           const first = createMockChild({ autoClose: false });
           releaseFirstUpdate = () => first.closeWith(0);
+          firstUpdateSpawned.resolve();
           return first;
         }
         if (updateCalls === 2) {
           const second = createMockChild({ autoClose: false });
           releaseSecondUpdate = () => second.closeWith(0);
+          secondUpdateSpawned.resolve();
           return second;
         }
         return createMockChild();
@@ -532,14 +540,14 @@ describe("QmdMemoryManager", () => {
     const inFlight = manager.sync({ reason: "interval" });
     const forcedOne = manager.sync({ reason: "manual", force: true });
 
-    await waitForCondition(() => updateCalls >= 1, 80);
+    await firstUpdateSpawned.promise;
     expect(updateCalls).toBe(1);
     if (!releaseFirstUpdate) {
       throw new Error("first update release missing");
     }
     releaseFirstUpdate();
 
-    await waitForCondition(() => updateCalls >= 2, 120);
+    await secondUpdateSpawned.promise;
     const forcedTwo = manager.sync({ reason: "manual-again", force: true });
 
     if (!releaseSecondUpdate) {
@@ -1211,17 +1219,12 @@ describe("QmdMemoryManager", () => {
   });
 });
 
-async function waitForCondition(check: () => boolean, timeoutMs: number): Promise<void> {
-  // Tests only need to yield the event loop a few times; real-time sleeps slow the suite down.
-  const maxTicks = Math.max(10, Math.min(5000, timeoutMs * 5));
-  for (let tick = 0; tick < maxTicks; tick += 1) {
-    if (check()) {
-      return;
-    }
-    await new Promise<void>((resolve) => setImmediate(resolve));
-  }
-  if (check()) {
-    return;
-  }
-  throw new Error("condition was not met in time");
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
 }
