@@ -963,6 +963,37 @@ export async function runEmbeddedAttempt(
           }
         } catch (err) {
           promptError = err;
+          // Log provider HTTP errors immediately at the source before they propagate
+          // to ensure gateway logs capture full error context for debugging.
+          // Extract HTTP status from structured fields first, then fall back to parsing the message
+          const errorMessage = describeUnknownError(err);
+          let httpStatus: number | undefined;
+          if (err && typeof err === "object") {
+            const statusCandidate =
+              (err as { status?: unknown; statusCode?: unknown }).status ??
+              (err as { statusCode?: unknown }).statusCode;
+            if (typeof statusCandidate === "number") {
+              httpStatus = statusCandidate;
+            } else if (typeof statusCandidate === "string" && /^\d+$/.test(statusCandidate)) {
+              httpStatus = Number(statusCandidate);
+            }
+          }
+          // Fall back to parsing HTTP status from error message
+          if (!httpStatus) {
+            const httpStatusMatch = errorMessage.match(/\b(\d{3})\b/);
+            httpStatus = httpStatusMatch ? Number(httpStatusMatch[1]) : undefined;
+          }
+          if (httpStatus && httpStatus >= 400) {
+            log.error(`Provider API error`, {
+              provider: params.provider,
+              model: params.modelId,
+              sessionId: params.sessionId,
+              runId: params.runId,
+              httpStatus,
+              errorMessage: errorMessage.slice(0, 2000),
+              errorType: err instanceof Error ? err.name : typeof err,
+            });
+          }
         } finally {
           log.debug(
             `embedded run prompt end: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - promptStartedAt}`,
