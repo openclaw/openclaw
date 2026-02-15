@@ -60,7 +60,6 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     channelInfo,
     channelName,
     isGuildMessage,
-    isDirectMessage,
     isGroupDm,
     baseText,
     messageText,
@@ -88,6 +87,9 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     logVerbose(`discord: drop message ${message.id} (empty content)`);
     return;
   }
+
+  const isRouteChannelSession = route.sessionKey.includes(":channel:") || route.sessionKey.includes(":group:");
+  const isRouteDirect = !isRouteChannelSession;
   const ackReaction = resolveAckReaction(cfg, route.agentId);
   const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
   const shouldAckReaction = () =>
@@ -95,7 +97,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       ackReaction &&
       shouldAckReactionGate({
         scope: ackReactionScope,
-        isDirect: isDirectMessage,
+        isDirect: isRouteDirect,
         isGroup: isGuildMessage || isGroupDm,
         isMentionableGroup: isGuildMessage,
         requireMention: Boolean(shouldRequireMention),
@@ -116,7 +118,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       )
     : null;
 
-  const fromLabel = isDirectMessage
+  const fromLabel = isRouteDirect
     ? buildDirectLabel(author)
     : buildGuildLabel({
         guild: data.guild ?? undefined,
@@ -133,7 +135,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     Boolean(threadChannelId && isForumParent && forumParentSlug) && message.id === threadChannelId;
   const forumContextLine = isForumStarter ? `[Forum parent: #${forumParentSlug}]` : null;
   const groupChannel = isGuildMessage && displayChannelSlug ? `#${displayChannelSlug}` : undefined;
-  const groupSubject = isDirectMessage ? undefined : groupChannel;
+  const groupSubject = isRouteDirect ? undefined : groupChannel;
   const untrustedChannelMetadata = isGuildMessage
     ? buildUntrustedChannelMetadata({
         source: "discord",
@@ -171,13 +173,13 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     from: fromLabel,
     timestamp: resolveTimestampMs(message.timestamp),
     body: text,
-    chatType: isDirectMessage ? "direct" : "channel",
+    chatType: isRouteDirect ? "direct" : "channel",
     senderLabel,
     previousTimestamp,
     envelope: envelopeOptions,
   });
   const shouldIncludeChannelHistory =
-    !isDirectMessage && !(isGuildMessage && channelConfig?.autoThread && !threadChannel);
+    !isRouteDirect && !(isGuildMessage && channelConfig?.autoThread && !threadChannel);
   if (shouldIncludeChannelHistory) {
     combinedBody = buildPendingHistoryContextFromMap({
       historyMap: guildHistories,
@@ -255,7 +257,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   const replyReference = replyPlan.replyReference;
   const autoThreadContext = replyPlan.autoThreadContext;
 
-  const effectiveFrom = isDirectMessage
+  const effectiveFrom = isRouteDirect
     ? `discord:${author.id}`
     : (autoThreadContext?.From ?? `discord:channel:${message.channelId}`);
   const effectiveTo = autoThreadContext?.To ?? replyTarget;
@@ -283,7 +285,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     To: effectiveTo,
     SessionKey: autoThreadContext?.SessionKey ?? threadKeys.sessionKey,
     AccountId: route.accountId,
-    ChatType: isDirectMessage ? "direct" : "channel",
+    ChatType: isRouteDirect ? "direct" : "channel",
     ConversationLabel: fromLabel,
     SenderName: senderName,
     SenderId: sender.id,
@@ -318,7 +320,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     storePath,
     sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
     ctx: ctxPayload,
-    updateLastRoute: isDirectMessage
+    updateLastRoute: isRouteDirect
       ? {
           sessionKey: route.mainSessionKey,
           channel: "discord",

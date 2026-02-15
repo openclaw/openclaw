@@ -167,4 +167,38 @@ describe("exec approval forwarder", () => {
 
     expect(getFirstDeliveryText(deliver)).toContain("Command:\n````\necho ```danger```\n````");
   });
+
+  it("forwards explicit targets in targets mode even with sessionFilter mismatch", async () => {
+    vi.useFakeTimers();
+    const deliver = vi.fn().mockResolvedValue([]);
+    const cfg = {
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "targets",
+          sessionFilter: ["telegram"],
+          targets: [{ channel: "telegram", to: "123" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    const forwarder = createExecApprovalForwarder({
+      getConfig: () => cfg,
+      deliver,
+      nowMs: () => 1000,
+      resolveSessionTarget: () => null,
+    });
+
+    await forwarder.handleRequested({
+      ...baseRequest,
+      request: {
+        ...baseRequest.request,
+        sessionKey: "agent:main:discord:channel:123",
+      },
+    });
+
+    expect(deliver).toHaveBeenCalledTimes(1);
+    await vi.runAllTimersAsync();
+    expect(deliver).toHaveBeenCalledTimes(2);
+  });
 });

@@ -80,6 +80,7 @@ function matchSessionFilter(sessionKey: string, patterns: string[]): boolean {
 function shouldForward(params: {
   config?: ExecApprovalForwardingConfig;
   request: ExecApprovalRequest;
+  mode: ExecApprovalForwardingConfig["mode"];
 }): boolean {
   const config = params.config;
   if (!config?.enabled) {
@@ -96,7 +97,8 @@ function shouldForward(params: {
       return false;
     }
   }
-  if (config.sessionFilter?.length) {
+
+  if ((params.mode === "session" || params.mode === "both") && config.sessionFilter?.length) {
     const sessionKey = params.request.request.sessionKey;
     if (!sessionKey) {
       return false;
@@ -105,6 +107,7 @@ function shouldForward(params: {
       return false;
     }
   }
+
   return true;
 }
 
@@ -251,11 +254,12 @@ export function createExecApprovalForwarder(
   const handleRequested = async (request: ExecApprovalRequest) => {
     const cfg = getConfig();
     const config = cfg.approvals?.exec;
-    if (!shouldForward({ config, request })) {
+    const mode = normalizeMode(config?.mode);
+
+    if (!shouldForward({ config, request, mode })) {
       return;
     }
 
-    const mode = normalizeMode(config?.mode);
     const targets: ForwardTarget[] = [];
     const seen = new Set<string>();
 
@@ -347,6 +351,11 @@ export function createExecApprovalForwarder(
 export function shouldForwardExecApproval(params: {
   config?: ExecApprovalForwardingConfig;
   request: ExecApprovalRequest;
+  mode?: ExecApprovalForwardingConfig["mode"];
 }): boolean {
-  return shouldForward(params);
+  const mode = normalizeMode(params.mode);
+  return shouldForward({
+    ...params,
+    mode,
+  });
 }

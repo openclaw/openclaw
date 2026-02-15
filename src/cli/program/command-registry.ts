@@ -1,6 +1,5 @@
 import type { Command } from "commander";
 import type { ProgramContext } from "./context.js";
-import { agentsListCommand } from "../../commands/agents.js";
 import { healthCommand } from "../../commands/health.js";
 import { sessionsCommand } from "../../commands/sessions.js";
 import { statusCommand } from "../../commands/status.js";
@@ -86,12 +85,12 @@ const routeSessions: RouteSpec = {
   },
 };
 
-const routeAgentsList: RouteSpec = {
-  match: (path) => path[0] === "agents" && path[1] === "list",
+const routeAgentsCommand: RouteSpec = {
+  match: (path) => path[0] === "agents",
   run: async (argv) => {
-    const json = hasFlag(argv, "--json");
-    const bindings = hasFlag(argv, "--bindings");
-    await agentsListCommand({ json, bindings }, defaultRuntime);
+    const { buildProgram } = await import("../program.js");
+    const program = buildProgram();
+    await program.parseAsync(argv);
     return true;
   },
 };
@@ -146,7 +145,7 @@ export const commandRegistry: CommandRegistration[] = [
     id: "agent",
     register: ({ program, ctx }) =>
       registerAgentCommands(program, { agentChannelOptions: ctx.agentChannelOptions }),
-    routes: [routeAgentsList],
+    routes: [routeAgentsCommand],
   },
   {
     id: "subclis",
