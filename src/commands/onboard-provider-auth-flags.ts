@@ -17,6 +17,7 @@ type OnboardProviderAuthOptionKey = keyof Pick<
   | "veniceApiKey"
   | "togetherApiKey"
   | "huggingfaceApiKey"
+  | "novitaApiKey"
   | "opencodeZenApiKey"
   | "xaiApiKey"
   | "litellmApiKey"
@@ -137,6 +138,13 @@ export const ONBOARD_PROVIDER_AUTH_FLAGS: ReadonlyArray<OnboardProviderAuthFlag>
     cliFlag: "--huggingface-api-key",
     cliOption: "--huggingface-api-key <key>",
     description: "Hugging Face API key (HF token)",
+  },
+  {
+    optionKey: "novitaApiKey",
+    authChoice: "novita-api-key",
+    cliFlag: "--novita-api-key",
+    cliOption: "--novita-api-key <key>",
+    description: "Novita API key",
   },
   {
     optionKey: "opencodeZenApiKey",

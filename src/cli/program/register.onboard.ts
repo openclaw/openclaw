@@ -108,77 +108,77 @@ export function registerOnboardCommand(program: Command) {
     .option("--skip-health", "Skip health check")
     .option("--skip-ui", "Skip Control UI/TUI prompts")
     .option("--node-manager <name>", "Node manager for skills: npm|pnpm|bun")
-    .option("--json", "Output JSON summary", false);
-
-  command.action(async (opts, commandRuntime) => {
-    await runCommandWithRuntime(defaultRuntime, async () => {
-      const installDaemon = resolveInstallDaemonFlag(commandRuntime, {
-        installDaemon: Boolean(opts.installDaemon),
+    .option("--json", "Output JSON summary", false)
+    .action(async (opts, commandRuntime) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const installDaemon = resolveInstallDaemonFlag(commandRuntime, {
+          installDaemon: Boolean(opts.installDaemon),
+        });
+        const gatewayPort =
+          typeof opts.gatewayPort === "string" ? Number.parseInt(opts.gatewayPort, 10) : undefined;
+        await onboardCommand(
+          {
+            workspace: opts.workspace as string | undefined,
+            nonInteractive: Boolean(opts.nonInteractive),
+            acceptRisk: Boolean(opts.acceptRisk),
+            flow: opts.flow as "quickstart" | "advanced" | "manual" | undefined,
+            mode: opts.mode as "local" | "remote" | undefined,
+            authChoice: opts.authChoice as AuthChoice | undefined,
+            tokenProvider: opts.tokenProvider as string | undefined,
+            token: opts.token as string | undefined,
+            tokenProfileId: opts.tokenProfileId as string | undefined,
+            tokenExpiresIn: opts.tokenExpiresIn as string | undefined,
+            anthropicApiKey: opts.anthropicApiKey as string | undefined,
+            openaiApiKey: opts.openaiApiKey as string | undefined,
+            openrouterApiKey: opts.openrouterApiKey as string | undefined,
+            aiGatewayApiKey: opts.aiGatewayApiKey as string | undefined,
+            cloudflareAiGatewayAccountId: opts.cloudflareAiGatewayAccountId as string | undefined,
+            cloudflareAiGatewayGatewayId: opts.cloudflareAiGatewayGatewayId as string | undefined,
+            cloudflareAiGatewayApiKey: opts.cloudflareAiGatewayApiKey as string | undefined,
+            moonshotApiKey: opts.moonshotApiKey as string | undefined,
+            kimiCodeApiKey: opts.kimiCodeApiKey as string | undefined,
+            geminiApiKey: opts.geminiApiKey as string | undefined,
+            zaiApiKey: opts.zaiApiKey as string | undefined,
+            xiaomiApiKey: opts.xiaomiApiKey as string | undefined,
+            qianfanApiKey: opts.qianfanApiKey as string | undefined,
+            minimaxApiKey: opts.minimaxApiKey as string | undefined,
+            syntheticApiKey: opts.syntheticApiKey as string | undefined,
+            veniceApiKey: opts.veniceApiKey as string | undefined,
+            togetherApiKey: opts.togetherApiKey as string | undefined,
+            huggingfaceApiKey: opts.huggingfaceApiKey as string | undefined,
+            novitaApiKey: opts.novitaApiKey as string | undefined,
+            opencodeZenApiKey: opts.opencodeZenApiKey as string | undefined,
+            xaiApiKey: opts.xaiApiKey as string | undefined,
+            litellmApiKey: opts.litellmApiKey as string | undefined,
+            customBaseUrl: opts.customBaseUrl as string | undefined,
+            customApiKey: opts.customApiKey as string | undefined,
+            customModelId: opts.customModelId as string | undefined,
+            customProviderId: opts.customProviderId as string | undefined,
+            customCompatibility: opts.customCompatibility as "openai" | "anthropic" | undefined,
+            gatewayPort:
+              typeof gatewayPort === "number" && Number.isFinite(gatewayPort)
+                ? gatewayPort
+                : undefined,
+            gatewayBind: opts.gatewayBind as GatewayBind | undefined,
+            gatewayAuth: opts.gatewayAuth as GatewayAuthChoice | undefined,
+            gatewayToken: opts.gatewayToken as string | undefined,
+            gatewayPassword: opts.gatewayPassword as string | undefined,
+            remoteUrl: opts.remoteUrl as string | undefined,
+            remoteToken: opts.remoteToken as string | undefined,
+            tailscale: opts.tailscale as TailscaleMode | undefined,
+            tailscaleResetOnExit: Boolean(opts.tailscaleResetOnExit),
+            reset: Boolean(opts.reset),
+            installDaemon,
+            daemonRuntime: opts.daemonRuntime as GatewayDaemonRuntime | undefined,
+            skipChannels: Boolean(opts.skipChannels),
+            skipSkills: Boolean(opts.skipSkills),
+            skipHealth: Boolean(opts.skipHealth),
+            skipUi: Boolean(opts.skipUi),
+            nodeManager: opts.nodeManager as NodeManagerChoice | undefined,
+            json: Boolean(opts.json),
+          },
+          defaultRuntime,
+        );
       });
-      const gatewayPort =
-        typeof opts.gatewayPort === "string" ? Number.parseInt(opts.gatewayPort, 10) : undefined;
-      await onboardCommand(
-        {
-          workspace: opts.workspace as string | undefined,
-          nonInteractive: Boolean(opts.nonInteractive),
-          acceptRisk: Boolean(opts.acceptRisk),
-          flow: opts.flow as "quickstart" | "advanced" | "manual" | undefined,
-          mode: opts.mode as "local" | "remote" | undefined,
-          authChoice: opts.authChoice as AuthChoice | undefined,
-          tokenProvider: opts.tokenProvider as string | undefined,
-          token: opts.token as string | undefined,
-          tokenProfileId: opts.tokenProfileId as string | undefined,
-          tokenExpiresIn: opts.tokenExpiresIn as string | undefined,
-          anthropicApiKey: opts.anthropicApiKey as string | undefined,
-          openaiApiKey: opts.openaiApiKey as string | undefined,
-          openrouterApiKey: opts.openrouterApiKey as string | undefined,
-          aiGatewayApiKey: opts.aiGatewayApiKey as string | undefined,
-          cloudflareAiGatewayAccountId: opts.cloudflareAiGatewayAccountId as string | undefined,
-          cloudflareAiGatewayGatewayId: opts.cloudflareAiGatewayGatewayId as string | undefined,
-          cloudflareAiGatewayApiKey: opts.cloudflareAiGatewayApiKey as string | undefined,
-          moonshotApiKey: opts.moonshotApiKey as string | undefined,
-          kimiCodeApiKey: opts.kimiCodeApiKey as string | undefined,
-          geminiApiKey: opts.geminiApiKey as string | undefined,
-          zaiApiKey: opts.zaiApiKey as string | undefined,
-          xiaomiApiKey: opts.xiaomiApiKey as string | undefined,
-          qianfanApiKey: opts.qianfanApiKey as string | undefined,
-          minimaxApiKey: opts.minimaxApiKey as string | undefined,
-          syntheticApiKey: opts.syntheticApiKey as string | undefined,
-          veniceApiKey: opts.veniceApiKey as string | undefined,
-          togetherApiKey: opts.togetherApiKey as string | undefined,
-          huggingfaceApiKey: opts.huggingfaceApiKey as string | undefined,
-          opencodeZenApiKey: opts.opencodeZenApiKey as string | undefined,
-          xaiApiKey: opts.xaiApiKey as string | undefined,
-          litellmApiKey: opts.litellmApiKey as string | undefined,
-          customBaseUrl: opts.customBaseUrl as string | undefined,
-          customApiKey: opts.customApiKey as string | undefined,
-          customModelId: opts.customModelId as string | undefined,
-          customProviderId: opts.customProviderId as string | undefined,
-          customCompatibility: opts.customCompatibility as "openai" | "anthropic" | undefined,
-          gatewayPort:
-            typeof gatewayPort === "number" && Number.isFinite(gatewayPort)
-              ? gatewayPort
-              : undefined,
-          gatewayBind: opts.gatewayBind as GatewayBind | undefined,
-          gatewayAuth: opts.gatewayAuth as GatewayAuthChoice | undefined,
-          gatewayToken: opts.gatewayToken as string | undefined,
-          gatewayPassword: opts.gatewayPassword as string | undefined,
-          remoteUrl: opts.remoteUrl as string | undefined,
-          remoteToken: opts.remoteToken as string | undefined,
-          tailscale: opts.tailscale as TailscaleMode | undefined,
-          tailscaleResetOnExit: Boolean(opts.tailscaleResetOnExit),
-          reset: Boolean(opts.reset),
-          installDaemon,
-          daemonRuntime: opts.daemonRuntime as GatewayDaemonRuntime | undefined,
-          skipChannels: Boolean(opts.skipChannels),
-          skipSkills: Boolean(opts.skipSkills),
-          skipHealth: Boolean(opts.skipHealth),
-          skipUi: Boolean(opts.skipUi),
-          nodeManager: opts.nodeManager as NodeManagerChoice | undefined,
-          json: Boolean(opts.json),
-        },
-        defaultRuntime,
-      );
     });
-  });
 }

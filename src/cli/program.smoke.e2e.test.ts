@@ -142,6 +142,12 @@ describe("cli program (smoke)", () => {
         field: "togetherApiKey",
       },
       {
+        authChoice: "novita-api-key",
+        flag: "--novita-api-key",
+        key: "sk-novita-test",
+        field: "novitaApiKey",
+      },
+      {
         authChoice: "moonshot-api-key-cn",
         flag: "--moonshot-api-key",
         key: "sk-moonshot-cn-test",
