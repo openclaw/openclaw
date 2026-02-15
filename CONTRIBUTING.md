@@ -31,6 +31,10 @@ Welcome to the lobster tank! 🦞
 - **Maximilian Nussbaumer** - DevOps, CI, Code Sanity
   - GitHub: [@quotentiroler](https://github.com/quotentiroler) · X: [@quotentiroler](https://x.com/quotentiroler)
 
+## Developer Reference
+
+For an in-depth guide to the codebase architecture, module dependencies, critical paths, and common pitfalls, see [`docs/DEVELOPER-REFERENCE.md`](docs/DEVELOPER-REFERENCE.md). Useful for both human contributors and AI agents.
+
 ## How to Contribute
 
 1. **Bugs & small fixes** → Open a PR!
