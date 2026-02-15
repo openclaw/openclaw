@@ -8,7 +8,7 @@ import {
   extractThinkDirective,
   extractVerboseDirective,
 } from "./reply.js";
-import { extractStatusDirective } from "./reply/directives.js";
+import { extractStatusDirective, extractPlanDirective } from "./reply/directives.js";
 
 describe("directive parsing", () => {
   it("ignores verbose directive inside URL", () => {
@@ -220,5 +220,37 @@ describe("directive parsing", () => {
     const res = extractReplyToTag("line 1\nline 2 [[reply_to_current]]\n\nline 3", "msg-2");
     expect(res.replyToId).toBe("msg-2");
     expect(res.cleaned).toBe("line 1\nline 2\n\nline 3");
+  });
+
+  // Plan directive tests
+  it("matches /plan on", () => {
+    const res = extractPlanDirective("/plan on");
+    expect(res.hasDirective).toBe(true);
+    expect(res.planLevel).toBe("on");
+  });
+
+  it("matches /plan off", () => {
+    const res = extractPlanDirective("/plan off");
+    expect(res.hasDirective).toBe(true);
+    expect(res.planLevel).toBe("off");
+  });
+
+  it("matches /plan with no arg (status query)", () => {
+    const res = extractPlanDirective("/plan");
+    expect(res.hasDirective).toBe(true);
+    expect(res.planLevel).toBeUndefined();
+  });
+
+  it("matches /plan in middle of text", () => {
+    const res = extractPlanDirective("please /plan on now");
+    expect(res.hasDirective).toBe(true);
+    expect(res.planLevel).toBe("on");
+    expect(res.cleaned).toBe("please now");
+  });
+
+  it("ignores /planning as not a directive", () => {
+    const res = extractPlanDirective("I'm /planning to do this");
+    expect(res.hasDirective).toBe(false);
+    expect(res.cleaned).toBe("I'm /planning to do this");
   });
 });

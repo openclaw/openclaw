@@ -2,7 +2,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { ExecAsk, ExecHost, ExecSecurity } from "../../infra/exec-approvals.js";
 import type { ReplyPayload } from "../types.js";
 import type { HandleDirectiveOnlyParams } from "./directive-handling.params.js";
-import type { ElevatedLevel, ReasoningLevel, ThinkLevel } from "./directives.js";
+import type { ElevatedLevel, PlanLevel, ReasoningLevel, ThinkLevel } from "./directives.js";
 import {
   resolveAgentConfig,
   resolveAgentDir,
@@ -82,6 +82,7 @@ export async function handleDirectiveOnly(
     currentVerboseLevel,
     currentReasoningLevel,
     currentElevatedLevel,
+    currentPlanLevel,
   } = params;
   const activeAgentId = resolveSessionAgentId({
     sessionKey: params.sessionKey,
@@ -203,6 +204,17 @@ export async function handleDirectiveOnly(
       }),
     };
   }
+  if (directives.hasPlanDirective && !directives.planLevel) {
+    if (!directives.rawPlanLevel) {
+      const level = currentPlanLevel ?? (sessionEntry.planLevel as PlanLevel | undefined) ?? "off";
+      return {
+        text: withOptions(`Current plan mode: ${level}.`, "on, off"),
+      };
+    }
+    return {
+      text: `Unrecognized plan level "${directives.rawPlanLevel}". Valid levels: on, off.`,
+    };
+  }
   if (directives.hasExecDirective) {
     if (directives.invalidExecHost) {
       return {
@@ -306,6 +318,15 @@ export async function handleDirectiveOnly(
     elevatedChanged =
       elevatedChanged ||
       (directives.elevatedLevel !== prevElevatedLevel && directives.elevatedLevel !== undefined);
+  }
+  if (directives.hasPlanDirective && directives.planLevel) {
+    sessionEntry.planLevel = directives.planLevel;
+    if (directives.planLevel === "on") {
+      sessionEntry.toolProfile = "plan";
+    } else {
+      delete sessionEntry.toolProfile;
+      delete sessionEntry.planLevel;
+    }
   }
   if (directives.hasExecDirective && directives.hasExecOptions) {
     if (directives.execHost) {
@@ -415,6 +436,13 @@ export async function handleDirectiveOnly(
     if (shouldHintDirectRuntime) {
       parts.push(formatElevatedRuntimeHint());
     }
+  }
+  if (directives.hasPlanDirective && directives.planLevel) {
+    parts.push(
+      directives.planLevel === "on"
+        ? formatDirectiveAck("Plan mode enabled (read-only analysis tools only).")
+        : formatDirectiveAck("Plan mode disabled (full tools restored)."),
+    );
   }
   if (directives.hasExecDirective && directives.hasExecOptions) {
     const execParts: string[] = [];

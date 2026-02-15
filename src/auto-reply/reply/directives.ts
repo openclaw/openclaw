@@ -4,6 +4,8 @@ import {
   type ElevatedLevel,
   normalizeElevatedLevel,
   normalizeNoticeLevel,
+  type PlanLevel,
+  normalizePlanLevel,
   normalizeReasoningLevel,
   normalizeThinkLevel,
   normalizeVerboseLevel,
@@ -178,6 +180,24 @@ export function extractReasoningDirective(body?: string): {
   };
 }
 
+export function extractPlanDirective(body?: string): {
+  cleaned: string;
+  planLevel?: PlanLevel;
+  rawLevel?: string;
+  hasDirective: boolean;
+} {
+  if (!body) {
+    return { cleaned: "", hasDirective: false };
+  }
+  const extracted = extractLevelDirective(body, ["plan"], normalizePlanLevel);
+  return {
+    cleaned: extracted.cleaned,
+    planLevel: extracted.level,
+    rawLevel: extracted.rawLevel,
+    hasDirective: extracted.hasDirective,
+  };
+}
+
 export function extractStatusDirective(body?: string): {
   cleaned: string;
   hasDirective: boolean;
@@ -188,5 +208,5 @@ export function extractStatusDirective(body?: string): {
   return extractSimpleDirective(body, ["status"]);
 }
 
-export type { ElevatedLevel, NoticeLevel, ReasoningLevel, ThinkLevel, VerboseLevel };
+export type { ElevatedLevel, NoticeLevel, PlanLevel, ReasoningLevel, ThinkLevel, VerboseLevel };
 export { extractExecDirective } from "./exec/directive.js";

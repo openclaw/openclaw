@@ -225,3 +225,19 @@ export function normalizeReasoningLevel(raw?: string | null): ReasoningLevel | u
   }
   return undefined;
 }
+
+export type PlanLevel = "on" | "off";
+
+export function normalizePlanLevel(raw?: string | null): PlanLevel | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const key = raw.toLowerCase();
+  if (["off", "false", "no", "0", "disable", "disabled"].includes(key)) {
+    return "off";
+  }
+  if (["on", "true", "yes", "1", "enable", "enabled"].includes(key)) {
+    return "on";
+  }
+  return undefined;
+}
