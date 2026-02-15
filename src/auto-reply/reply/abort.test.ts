@@ -1,9 +1,16 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { isAbortTrigger, tryFastAbortFromMessage } from "./abort.js";
+import {
+  getAbortMemory,
+  getAbortMemorySizeForTest,
+  isAbortTrigger,
+  resetAbortMemoryForTest,
+  setAbortMemory,
+  tryFastAbortFromMessage,
+} from "./abort.js";
 import { enqueueFollowupRun, getFollowupQueueDepth, type FollowupRun } from "./queue.js";
 import { initSessionState } from "./session.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -28,6 +35,10 @@ vi.mock("../../agents/subagent-registry.js", () => ({
 }));
 
 describe("abort detection", () => {
+  afterEach(() => {
+    resetAbortMemoryForTest();
+  });
+
   it("triggerBodyNormalized extracts /stop from RawBody for abort detection", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-abort-"));
     const storePath = path.join(root, "sessions.json");
@@ -60,6 +71,24 @@ describe("abort detection", () => {
     expect(isAbortTrigger("hello")).toBe(false);
     // /stop is NOT matched by isAbortTrigger - it's handled separately
     expect(isAbortTrigger("/stop")).toBe(false);
+  });
+
+  it("removes abort memory entry when flag is reset", () => {
+    setAbortMemory("session-1", true);
+    expect(getAbortMemory("session-1")).toBe(true);
+
+    setAbortMemory("session-1", false);
+    expect(getAbortMemory("session-1")).toBeUndefined();
+    expect(getAbortMemorySizeForTest()).toBe(0);
+  });
+
+  it("caps abort memory tracking to a bounded max size", () => {
+    for (let i = 0; i < 2105; i += 1) {
+      setAbortMemory(`session-${i}`, true);
+    }
+    expect(getAbortMemorySizeForTest()).toBe(2000);
+    expect(getAbortMemory("session-0")).toBeUndefined();
+    expect(getAbortMemory("session-2104")).toBe(true);
   });
 
   it("fast-aborts even when text commands are disabled", async () => {

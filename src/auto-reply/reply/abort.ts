@@ -22,6 +22,7 @@ import { clearSessionQueues } from "./queue.js";
 
 const ABORT_TRIGGERS = new Set(["stop", "esc", "abort", "wait", "exit", "interrupt"]);
 const ABORT_MEMORY = new Map<string, boolean>();
+const ABORT_MEMORY_MAX = 2000;
 
 export function isAbortTrigger(text?: string): boolean {
   if (!text) {
@@ -32,11 +33,51 @@ export function isAbortTrigger(text?: string): boolean {
 }
 
 export function getAbortMemory(key: string): boolean | undefined {
-  return ABORT_MEMORY.get(key);
+  const normalized = key.trim();
+  if (!normalized) {
+    return undefined;
+  }
+  return ABORT_MEMORY.get(normalized);
+}
+
+function pruneAbortMemory(): void {
+  if (ABORT_MEMORY.size <= ABORT_MEMORY_MAX) {
+    return;
+  }
+  const excess = ABORT_MEMORY.size - ABORT_MEMORY_MAX;
+  let removed = 0;
+  for (const entryKey of ABORT_MEMORY.keys()) {
+    ABORT_MEMORY.delete(entryKey);
+    removed += 1;
+    if (removed >= excess) {
+      break;
+    }
+  }
 }
 
 export function setAbortMemory(key: string, value: boolean): void {
-  ABORT_MEMORY.set(key, value);
+  const normalized = key.trim();
+  if (!normalized) {
+    return;
+  }
+  if (!value) {
+    ABORT_MEMORY.delete(normalized);
+    return;
+  }
+  // Refresh insertion order so active keys are less likely to be evicted.
+  if (ABORT_MEMORY.has(normalized)) {
+    ABORT_MEMORY.delete(normalized);
+  }
+  ABORT_MEMORY.set(normalized, true);
+  pruneAbortMemory();
+}
+
+export function getAbortMemorySizeForTest(): number {
+  return ABORT_MEMORY.size;
+}
+
+export function resetAbortMemoryForTest(): void {
+  ABORT_MEMORY.clear();
 }
 
 export function formatAbortReplyText(stoppedSubagents?: number): string {
