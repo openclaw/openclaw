@@ -20,6 +20,7 @@ import {
   normalizeCliModel,
   parseCliJson,
   parseCliJsonl,
+  resolveCliNoOutputTimeoutMs,
   resolvePromptInput,
   resolveSessionIdToSend,
   resolveSystemPromptUsage,
@@ -232,9 +233,15 @@ export async function runCliAgent(params: {
       if (useResume && cliSessionIdToSend) {
         await cleanupResumeProcesses(backend, cliSessionIdToSend);
       }
+      const noOutputTimeoutMs = resolveCliNoOutputTimeoutMs({
+        backend,
+        timeoutMs: params.timeoutMs,
+        useResume,
+      });
 
       const result = await runCommandWithTimeout([backend.command, ...args], {
         timeoutMs: params.timeoutMs,
+        noOutputTimeoutMs,
         cwd: workspaceDir,
         env,
         input: stdinPayload,
@@ -260,6 +267,27 @@ export async function runCliAgent(params: {
       }
 
       if (result.code !== 0) {
+        if (result.termination === "no-output-timeout" || result.noOutputTimedOut) {
+          const timeoutReason = `CLI produced no output for ${Math.round(noOutputTimeoutMs / 1000)}s and was terminated.`;
+          log.warn(
+            `cli watchdog timeout: provider=${params.provider} model=${modelId} session=${cliSessionIdToSend ?? params.sessionId} noOutputTimeoutMs=${noOutputTimeoutMs} pid=${result.pid ?? "unknown"}`,
+          );
+          throw new FailoverError(timeoutReason, {
+            reason: "timeout",
+            provider: params.provider,
+            model: modelId,
+            status: resolveFailoverStatus("timeout"),
+          });
+        }
+        if (result.termination === "timeout") {
+          const timeoutReason = `CLI exceeded timeout (${Math.round(params.timeoutMs / 1000)}s) and was terminated.`;
+          throw new FailoverError(timeoutReason, {
+            reason: "timeout",
+            provider: params.provider,
+            model: modelId,
+            status: resolveFailoverStatus("timeout"),
+          });
+        }
         const err = stderr || stdout || "CLI failed.";
         const reason = classifyFailoverReason(err) ?? "unknown";
         const status = resolveFailoverStatus(reason);
