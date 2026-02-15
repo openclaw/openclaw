@@ -110,8 +110,7 @@ async function sendReactionSignalCore(params: {
     ...targetAuthorParams,
   };
   const recipients =
-    normalizedRecipient ||
-    (groupId ? targetAuthorParams.targetAuthor?.trim() : undefined);
+    normalizedRecipient || (groupId ? targetAuthorParams.targetAuthor?.trim() : undefined);
   if (recipients) {
     requestParams.recipients = [recipients];
   }
