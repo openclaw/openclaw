@@ -1,7 +1,5 @@
 import type { Command } from "commander";
 import type { BrowserFormField } from "../../browser/client-actions-core.js";
-import { danger } from "../../globals.js";
-import { defaultRuntime } from "../../runtime.js";
 import { callBrowserRequest, type BrowserParentOpts } from "../browser-cli-shared.js";
 
 export type BrowserActionContext = {
@@ -36,9 +34,11 @@ export async function callBrowserAct<T = unknown>(params: {
   );
 }
 
-export function requireRef(ref: string | undefined) {
+export async function requireRef(ref: string | undefined) {
   const refValue = typeof ref === "string" ? ref.trim() : "";
   if (!refValue) {
+    const { danger } = await import("../../globals.js");
+    const { defaultRuntime } = await import("../../runtime.js");
     defaultRuntime.error(danger("ref is required"));
     defaultRuntime.exit(1);
     return null;

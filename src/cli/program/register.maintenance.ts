@@ -1,12 +1,6 @@
 import type { Command } from "commander";
-import { dashboardCommand } from "../../commands/dashboard.js";
-import { doctorCommand } from "../../commands/doctor.js";
-import { resetCommand } from "../../commands/reset.js";
-import { uninstallCommand } from "../../commands/uninstall.js";
-import { defaultRuntime } from "../../runtime.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
-import { runCommandWithRuntime } from "../cli-utils.js";
 
 export function registerMaintenanceCommands(program: Command) {
   program
@@ -26,6 +20,9 @@ export function registerMaintenanceCommands(program: Command) {
     .option("--generate-gateway-token", "Generate and configure a gateway token", false)
     .option("--deep", "Scan system services for extra gateway installs", false)
     .action(async (opts) => {
+      const { defaultRuntime } = await import("../../runtime.js");
+      const { runCommandWithRuntime } = await import("../cli-utils.js");
+      const { doctorCommand } = await import("../../commands/doctor.js");
       await runCommandWithRuntime(defaultRuntime, async () => {
         await doctorCommand(defaultRuntime, {
           workspaceSuggestions: opts.workspaceSuggestions,
@@ -49,6 +46,9 @@ export function registerMaintenanceCommands(program: Command) {
     )
     .option("--no-open", "Print URL but do not launch a browser", false)
     .action(async (opts) => {
+      const { defaultRuntime } = await import("../../runtime.js");
+      const { runCommandWithRuntime } = await import("../cli-utils.js");
+      const { dashboardCommand } = await import("../../commands/dashboard.js");
       await runCommandWithRuntime(defaultRuntime, async () => {
         await dashboardCommand(defaultRuntime, {
           noOpen: Boolean(opts.noOpen),
@@ -69,6 +69,9 @@ export function registerMaintenanceCommands(program: Command) {
     .option("--non-interactive", "Disable prompts (requires --scope + --yes)", false)
     .option("--dry-run", "Print actions without removing files", false)
     .action(async (opts) => {
+      const { defaultRuntime } = await import("../../runtime.js");
+      const { runCommandWithRuntime } = await import("../cli-utils.js");
+      const { resetCommand } = await import("../../commands/reset.js");
       await runCommandWithRuntime(defaultRuntime, async () => {
         await resetCommand(defaultRuntime, {
           scope: opts.scope,
@@ -96,6 +99,9 @@ export function registerMaintenanceCommands(program: Command) {
     .option("--non-interactive", "Disable prompts (requires --yes)", false)
     .option("--dry-run", "Print actions without removing files", false)
     .action(async (opts) => {
+      const { defaultRuntime } = await import("../../runtime.js");
+      const { runCommandWithRuntime } = await import("../cli-utils.js");
+      const { uninstallCommand } = await import("../../commands/uninstall.js");
       await runCommandWithRuntime(defaultRuntime, async () => {
         await uninstallCommand(defaultRuntime, {
           service: Boolean(opts.service),

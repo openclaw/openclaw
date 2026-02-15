@@ -1,15 +1,11 @@
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { loadDotEnv } from "../infra/dotenv.js";
-import { normalizeEnv } from "../infra/env.js";
 import { formatUncaughtError } from "../infra/errors.js";
 import { isMainModule } from "../infra/is-main.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import { installUnhandledRejectionHandler } from "../infra/unhandled-rejections.js";
-import { enableConsoleCapture } from "../logging.js";
 import { getCommandPath, getPrimaryCommand, hasHelpOrVersion } from "./argv.js";
-import { tryRouteCli } from "./route.js";
 import { normalizeWindowsArgv } from "./windows-argv.js";
 
 export function rewriteUpdateFlagArgv(argv: string[]): string[] {
@@ -63,8 +59,14 @@ export function shouldEnsureCliPath(argv: string[]): boolean {
 
 export async function runCli(argv: string[] = process.argv) {
   const normalizedArgv = normalizeWindowsArgv(argv);
-  loadDotEnv({ quiet: true });
-  normalizeEnv();
+  if (!hasHelpOrVersion(normalizedArgv)) {
+    const { loadDotEnv } = await import("../infra/dotenv.js");
+    loadDotEnv({ quiet: true });
+    // Normalize ZAI env alias (inlined to avoid importing env.ts which pulls in tslog)
+    if (!process.env.ZAI_API_KEY?.trim() && process.env.Z_AI_API_KEY?.trim()) {
+      process.env.ZAI_API_KEY = process.env.Z_AI_API_KEY;
+    }
+  }
   if (shouldEnsureCliPath(normalizedArgv)) {
     ensureOpenClawCliOnPath();
   }
@@ -72,15 +74,15 @@ export async function runCli(argv: string[] = process.argv) {
   // Enforce the minimum supported runtime before doing any work.
   assertSupportedRuntime();
 
-  if (await tryRouteCli(normalizedArgv)) {
-    return;
+  if (!hasHelpOrVersion(normalizedArgv)) {
+    const { tryRouteCli } = await import("./route.js");
+    if (await tryRouteCli(normalizedArgv)) {
+      return;
+    }
   }
 
-  // Capture all console output into structured logs while keeping stdout/stderr behavior.
-  enableConsoleCapture();
-
-  const { buildProgram } = await import("./program.js");
-  const program = buildProgram();
+  const { buildProgramShell } = await import("./program/build-program-shell.js");
+  const { program, ctx, provideChannelOptions } = buildProgramShell();
 
   // Global error handlers to prevent silent crashes from unhandled rejections/exceptions.
   // These log the error and exit gracefully instead of crashing without trace.
@@ -92,32 +94,49 @@ export async function runCli(argv: string[] = process.argv) {
   });
 
   const parseArgv = rewriteUpdateFlagArgv(normalizedArgv);
-  // Register the primary command (builtin or subcli) so help and command parsing
-  // are correct even with lazy command registration.
+  // Try to register only the specific command needed instead of all 11 groups.
+  // Falls back to full registration for unknown commands or bare `openclaw --help`.
   const primary = getPrimaryCommand(parseArgv);
-  if (primary) {
-    const { getProgramContext } = await import("./program/program-context.js");
-    const ctx = getProgramContext(program);
-    if (ctx) {
-      const { registerCoreCliByName } = await import("./program/command-registry.js");
-      await registerCoreCliByName(program, ctx, primary, parseArgv);
-    }
+
+  let commandRegistered = false;
+  if (primary && shouldRegisterPrimarySubcommand(parseArgv)) {
     const { registerSubCliByName } = await import("./program/register.subclis.js");
-    await registerSubCliByName(program, primary);
+    commandRegistered = await registerSubCliByName(program, primary);
+
+    if (!commandRegistered) {
+      // Commands that use channel options in their help text need the provider
+      // set before registration, otherwise --channel shows incomplete choices.
+      if (primary === "agent" || primary === "agents" || primary === "message") {
+        const { resolveCliChannelOptions } = await import("./channel-options.js");
+        provideChannelOptions(resolveCliChannelOptions);
+      }
+      const { registerCoreCommandByName } = await import("./program/register.core-lazy.js");
+      commandRegistered = await registerCoreCommandByName(program, ctx, primary, parseArgv);
+    }
   }
 
-  const hasBuiltinPrimary =
-    primary !== null && program.commands.some((command) => command.name() === primary);
+  if (!commandRegistered) {
+    const { resolveCliChannelOptions } = await import("./channel-options.js");
+    provideChannelOptions(resolveCliChannelOptions);
+    const { registerProgramCommands } = await import("./program/command-registry.js");
+    await registerProgramCommands(program, ctx, parseArgv);
+  }
+
   const shouldSkipPluginRegistration = shouldSkipPluginCommandRegistration({
     argv: parseArgv,
     primary,
-    hasBuiltinPrimary,
+    hasBuiltinPrimary: commandRegistered,
   });
   if (!shouldSkipPluginRegistration) {
     // Register plugin CLI commands before parsing
     const { registerPluginCliCommands } = await import("../plugins/cli.js");
     const { loadConfig } = await import("../config/config.js");
     registerPluginCliCommands(program, loadConfig());
+  }
+
+  if (!hasHelpOrVersion(parseArgv)) {
+    const { enableConsoleCapture } = await import("../logging.js");
+    enableConsoleCapture();
   }
 
   await program.parseAsync(parseArgv);

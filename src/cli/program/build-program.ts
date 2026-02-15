@@ -1,20 +1,10 @@
-import { Command } from "commander";
+import { resolveCliChannelOptions } from "../channel-options.js";
+import { buildProgramShell } from "./build-program-shell.js";
 import { registerProgramCommands } from "./command-registry.js";
-import { createProgramContext } from "./context.js";
-import { configureProgramHelp } from "./help.js";
-import { registerPreActionHooks } from "./preaction.js";
-import { setProgramContext } from "./program-context.js";
 
-export function buildProgram() {
-  const program = new Command();
-  const ctx = createProgramContext();
-  const argv = process.argv;
-
-  setProgramContext(program, ctx);
-  configureProgramHelp(program, ctx);
-  registerPreActionHooks(program, ctx.programVersion);
-
-  registerProgramCommands(program, ctx, argv);
-
+export async function buildProgram() {
+  const { program, ctx, provideChannelOptions } = buildProgramShell();
+  provideChannelOptions(resolveCliChannelOptions);
+  await registerProgramCommands(program, ctx, process.argv);
   return program;
 }

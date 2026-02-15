@@ -1,6 +1,4 @@
 import type { Command } from "commander";
-import { danger } from "../globals.js";
-import { defaultRuntime } from "../runtime.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import {
   callBrowserRequest,
@@ -8,14 +6,16 @@ import {
   type BrowserParentOpts,
 } from "./browser-cli-shared.js";
 import { registerBrowserCookiesAndStorageCommands } from "./browser-cli-state.cookies-storage.js";
-import { runCommandWithRuntime } from "./cli-utils.js";
 
 function parseOnOff(raw: string): boolean | null {
   const parsed = parseBooleanValue(raw);
   return parsed === undefined ? null : parsed;
 }
 
-function runBrowserCommand(action: () => Promise<void>) {
+async function runBrowserCommand(action: () => Promise<void>) {
+  const { danger } = await import("../globals.js");
+  const { defaultRuntime } = await import("../runtime.js");
+  const { runCommandWithRuntime } = await import("./cli-utils.js");
   return runCommandWithRuntime(defaultRuntime, action, (err) => {
     defaultRuntime.error(danger(String(err)));
     defaultRuntime.exit(1);
@@ -37,6 +37,8 @@ export function registerBrowserStateCommands(
     .argument("<height>", "Viewport height", (v: string) => Number(v))
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .action(async (width: number, height: number, opts, cmd) => {
+      const { danger } = await import("../globals.js");
+      const { defaultRuntime } = await import("../runtime.js");
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
       if (!Number.isFinite(width) || !Number.isFinite(height)) {
@@ -45,6 +47,7 @@ export function registerBrowserStateCommands(
         return;
       }
       await runBrowserCommand(async () => {
+        const { defaultRuntime } = await import("../runtime.js");
         const result = await callBrowserResize(
           parent,
           {
@@ -69,6 +72,8 @@ export function registerBrowserStateCommands(
     .argument("<on|off>", "on/off")
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .action(async (value: string, opts, cmd) => {
+      const { danger } = await import("../globals.js");
+      const { defaultRuntime } = await import("../runtime.js");
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
       const offline = parseOnOff(value);
@@ -78,6 +83,7 @@ export function registerBrowserStateCommands(
         return;
       }
       await runBrowserCommand(async () => {
+        const { defaultRuntime } = await import("../runtime.js");
         const result = await callBrowserRequest(
           parent,
           {
@@ -108,6 +114,7 @@ export function registerBrowserStateCommands(
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
       await runBrowserCommand(async () => {
+        const { defaultRuntime } = await import("../runtime.js");
         const parsed = JSON.parse(String(opts.json)) as unknown;
         if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
           throw new Error("headers json must be an object");
@@ -150,6 +157,7 @@ export function registerBrowserStateCommands(
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
       await runBrowserCommand(async () => {
+        const { defaultRuntime } = await import("../runtime.js");
         const result = await callBrowserRequest(
           parent,
           {
@@ -186,6 +194,7 @@ export function registerBrowserStateCommands(
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
       await runBrowserCommand(async () => {
+        const { defaultRuntime } = await import("../runtime.js");
         const result = await callBrowserRequest(
           parent,
           {
@@ -217,6 +226,8 @@ export function registerBrowserStateCommands(
     .argument("<dark|light|none>", "dark/light/none")
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .action(async (value: string, opts, cmd) => {
+      const { danger } = await import("../globals.js");
+      const { defaultRuntime } = await import("../runtime.js");
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
       const v = value.trim().toLowerCase();
@@ -228,6 +239,7 @@ export function registerBrowserStateCommands(
         return;
       }
       await runBrowserCommand(async () => {
+        const { defaultRuntime } = await import("../runtime.js");
         const result = await callBrowserRequest(
           parent,
           {
@@ -258,6 +270,7 @@ export function registerBrowserStateCommands(
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
       await runBrowserCommand(async () => {
+        const { defaultRuntime } = await import("../runtime.js");
         const result = await callBrowserRequest(
           parent,
           {
@@ -288,6 +301,7 @@ export function registerBrowserStateCommands(
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
       await runBrowserCommand(async () => {
+        const { defaultRuntime } = await import("../runtime.js");
         const result = await callBrowserRequest(
           parent,
           {
@@ -318,6 +332,7 @@ export function registerBrowserStateCommands(
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
       await runBrowserCommand(async () => {
+        const { defaultRuntime } = await import("../runtime.js");
         const result = await callBrowserRequest(
           parent,
           {

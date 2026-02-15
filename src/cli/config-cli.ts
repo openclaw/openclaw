@@ -1,13 +1,7 @@
 import type { Command } from "commander";
-import JSON5 from "json5";
 import type { RuntimeEnv } from "../runtime.js";
-import { readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
-import { danger, info } from "../globals.js";
-import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
-import { shortenHomePath } from "../utils.js";
-import { formatCliCommand } from "./command-format.js";
 
 type PathSegment = string;
 
@@ -67,8 +61,9 @@ function parsePath(raw: string): PathSegment[] {
   return parts.map((part) => part.trim()).filter(Boolean);
 }
 
-function parseValue(raw: string, opts: { json?: boolean }): unknown {
+async function parseValue(raw: string, opts: { json?: boolean }): Promise<unknown> {
   const trimmed = raw.trim();
+  const JSON5 = (await import("json5")).default;
   if (opts.json) {
     try {
       return JSON5.parse(trimmed);
@@ -202,17 +197,21 @@ function unsetAtPath(root: Record<string, unknown>, path: PathSegment[]): boolea
   return true;
 }
 
-async function loadValidConfig(runtime: RuntimeEnv = defaultRuntime) {
+async function loadValidConfig(runtime?: RuntimeEnv) {
+  const { readConfigFileSnapshot } = await import("../config/config.js");
+  const rt = runtime ?? (await import("../runtime.js")).defaultRuntime;
   const snapshot = await readConfigFileSnapshot();
   if (snapshot.valid) {
     return snapshot;
   }
-  runtime.error(`Config invalid at ${shortenHomePath(snapshot.path)}.`);
+  const { shortenHomePath } = await import("../utils.js");
+  const { formatCliCommand } = await import("./command-format.js");
+  rt.error(`Config invalid at ${shortenHomePath(snapshot.path)}.`);
   for (const issue of snapshot.issues) {
-    runtime.error(`- ${issue.path || "<root>"}: ${issue.message}`);
+    rt.error(`- ${issue.path || "<root>"}: ${issue.message}`);
   }
-  runtime.error(`Run \`${formatCliCommand("openclaw doctor")}\` to repair, then retry.`);
-  runtime.exit(1);
+  rt.error(`Run \`${formatCliCommand("openclaw doctor")}\` to repair, then retry.`);
+  rt.exit(1);
   return snapshot;
 }
 
@@ -225,7 +224,8 @@ function parseRequiredPath(path: string): PathSegment[] {
 }
 
 export async function runConfigGet(opts: { path: string; json?: boolean; runtime?: RuntimeEnv }) {
-  const runtime = opts.runtime ?? defaultRuntime;
+  const { danger } = await import("../globals.js");
+  const runtime = opts.runtime ?? (await import("../runtime.js")).defaultRuntime;
   try {
     const parsedPath = parseRequiredPath(opts.path);
     const snapshot = await loadValidConfig(runtime);
@@ -255,7 +255,9 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
 }
 
 export async function runConfigUnset(opts: { path: string; runtime?: RuntimeEnv }) {
-  const runtime = opts.runtime ?? defaultRuntime;
+  const { danger, info } = await import("../globals.js");
+  const { writeConfigFile } = await import("../config/config.js");
+  const runtime = opts.runtime ?? (await import("../runtime.js")).defaultRuntime;
   try {
     const parsedPath = parseRequiredPath(opts.path);
     const snapshot = await loadValidConfig(runtime);
@@ -293,6 +295,7 @@ export function registerConfigCli(program: Command) {
       [] as string[],
     )
     .action(async (opts) => {
+      const { defaultRuntime } = await import("../runtime.js");
       const {
         CONFIGURE_WIZARD_SECTIONS,
         configureCommand,
@@ -332,12 +335,15 @@ export function registerConfigCli(program: Command) {
     .argument("<value>", "Value (JSON5 or raw string)")
     .option("--json", "Parse value as JSON5 (required)", false)
     .action(async (path: string, value: string, opts) => {
+      const { defaultRuntime } = await import("../runtime.js");
+      const { danger, info } = await import("../globals.js");
+      const { writeConfigFile } = await import("../config/config.js");
       try {
         const parsedPath = parsePath(path);
         if (parsedPath.length === 0) {
           throw new Error("Path is empty.");
         }
-        const parsedValue = parseValue(value, opts);
+        const parsedValue = await parseValue(value, opts);
         const snapshot = await loadValidConfig();
         // Use snapshot.resolved (config after $include and ${ENV} resolution, but BEFORE runtime defaults)
         // instead of snapshot.config (runtime-merged with defaults).

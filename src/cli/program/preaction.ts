@@ -1,7 +1,5 @@
 import type { Command } from "commander";
-import { setVerbose } from "../../globals.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
-import { defaultRuntime } from "../../runtime.js";
 import { getCommandPath, getVerboseFlag, hasHelpOrVersion } from "../argv.js";
 import { emitCliBanner } from "../banner.js";
 import { resolveCliName } from "../cli-name.js";
@@ -38,6 +36,7 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     if (!hideBanner) {
       emitCliBanner(programVersion);
     }
+    const { setVerbose } = await import("../../globals.js");
     const verbose = getVerboseFlag(argv, { includeDebug: true });
     setVerbose(verbose);
     if (!verbose) {
@@ -46,6 +45,7 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     if (commandPath[0] === "doctor" || commandPath[0] === "completion") {
       return;
     }
+    const { defaultRuntime } = await import("../../runtime.js");
     const { ensureConfigReady } = await import("./config-guard.js");
     await ensureConfigReady({ runtime: defaultRuntime, commandPath });
     // Load plugins for commands that need channel access

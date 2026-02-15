@@ -1,7 +1,5 @@
 import type { Command } from "commander";
 import type { BrowserParentOpts } from "../browser-cli-shared.js";
-import { danger } from "../../globals.js";
-import { defaultRuntime } from "../../runtime.js";
 import { callBrowserAct, requireRef, resolveBrowserActionContext } from "./shared.js";
 
 export function registerBrowserElementCommands(
@@ -17,8 +15,10 @@ export function registerBrowserElementCommands(
     .option("--button <left|right|middle>", "Mouse button to use")
     .option("--modifiers <list>", "Comma-separated modifiers (Shift,Alt,Meta)")
     .action(async (ref: string | undefined, opts, cmd) => {
+      const { danger } = await import("../../globals.js");
+      const { defaultRuntime } = await import("../../runtime.js");
       const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
-      const refValue = requireRef(ref);
+      const refValue = await requireRef(ref);
       if (!refValue) {
         return;
       }
@@ -62,8 +62,10 @@ export function registerBrowserElementCommands(
     .option("--slowly", "Type slowly (human-like)", false)
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .action(async (ref: string | undefined, text: string, opts, cmd) => {
+      const { danger } = await import("../../globals.js");
+      const { defaultRuntime } = await import("../../runtime.js");
       const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
-      const refValue = requireRef(ref);
+      const refValue = await requireRef(ref);
       if (!refValue) {
         return;
       }
@@ -97,6 +99,8 @@ export function registerBrowserElementCommands(
     .argument("<key>", "Key to press (e.g. Enter)")
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .action(async (key: string, opts, cmd) => {
+      const { danger } = await import("../../globals.js");
+      const { defaultRuntime } = await import("../../runtime.js");
       const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
       try {
         const result = await callBrowserAct({
@@ -121,6 +125,8 @@ export function registerBrowserElementCommands(
     .argument("<ref>", "Ref id from snapshot")
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .action(async (ref: string, opts, cmd) => {
+      const { danger } = await import("../../globals.js");
+      const { defaultRuntime } = await import("../../runtime.js");
       const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
       try {
         const result = await callBrowserAct({
@@ -148,8 +154,10 @@ export function registerBrowserElementCommands(
       Number(v),
     )
     .action(async (ref: string | undefined, opts, cmd) => {
+      const { danger } = await import("../../globals.js");
+      const { defaultRuntime } = await import("../../runtime.js");
       const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
-      const refValue = requireRef(ref);
+      const refValue = await requireRef(ref);
       if (!refValue) {
         return;
       }
@@ -183,6 +191,8 @@ export function registerBrowserElementCommands(
     .argument("<endRef>", "End ref id")
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .action(async (startRef: string, endRef: string, opts, cmd) => {
+      const { danger } = await import("../../globals.js");
+      const { defaultRuntime } = await import("../../runtime.js");
       const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
       try {
         const result = await callBrowserAct({
@@ -213,6 +223,8 @@ export function registerBrowserElementCommands(
     .argument("<values...>", "Option values to select")
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .action(async (ref: string, values: string[], opts, cmd) => {
+      const { danger } = await import("../../globals.js");
+      const { defaultRuntime } = await import("../../runtime.js");
       const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
       try {
         const result = await callBrowserAct({

@@ -1,14 +1,7 @@
 import type { Command } from "commander";
-import {
-  CONFIGURE_WIZARD_SECTIONS,
-  configureCommand,
-  configureCommandWithSections,
-  parseConfigureWizardSections,
-} from "../../commands/configure.js";
-import { defaultRuntime } from "../../runtime.js";
+import { CONFIGURE_WIZARD_SECTIONS } from "../../commands/configure-sections.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
-import { runCommandWithRuntime } from "../cli-utils.js";
 
 export function registerConfigureCommand(program: Command) {
   program
@@ -26,6 +19,10 @@ export function registerConfigureCommand(program: Command) {
       [] as string[],
     )
     .action(async (opts) => {
+      const { defaultRuntime } = await import("../../runtime.js");
+      const { runCommandWithRuntime } = await import("../cli-utils.js");
+      const { configureCommand, configureCommandWithSections, parseConfigureWizardSections } =
+        await import("../../commands/configure.js");
       await runCommandWithRuntime(defaultRuntime, async () => {
         const { sections, invalid } = parseConfigureWizardSections(opts.section);
         if (sections.length === 0) {

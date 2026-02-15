@@ -29,10 +29,14 @@ vi.mock("../infra/openclaw-root.js", () => ({
   resolveOpenClawPackageRoot: vi.fn(),
 }));
 
-vi.mock("../config/config.js", () => ({
-  readConfigFileSnapshot: vi.fn(),
-  writeConfigFile: vi.fn(),
-}));
+vi.mock("../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  return {
+    ...actual,
+    readConfigFileSnapshot: vi.fn(),
+    writeConfigFile: vi.fn(),
+  };
+});
 
 vi.mock("../infra/update-check.js", () => {
   const parseSemver = (

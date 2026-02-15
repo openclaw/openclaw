@@ -1,8 +1,5 @@
 import type { Command } from "commander";
 import type { SnapshotResult } from "../browser/client.js";
-import { loadConfig } from "../config/config.js";
-import { danger } from "../globals.js";
-import { defaultRuntime } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
 import { callBrowserRequest, type BrowserParentOpts } from "./browser-cli-shared.js";
 
@@ -19,6 +16,8 @@ export function registerBrowserInspectCommands(
     .option("--element <selector>", "CSS selector for element screenshot")
     .option("--type <png|jpeg>", "Output type (default: png)", "png")
     .action(async (targetId: string | undefined, opts, cmd) => {
+      const { danger } = await import("../globals.js");
+      const { defaultRuntime } = await import("../runtime.js");
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
       try {
@@ -65,6 +64,9 @@ export function registerBrowserInspectCommands(
     .option("--labels", "Include viewport label overlay screenshot", false)
     .option("--out <path>", "Write snapshot to a file")
     .action(async (opts, cmd) => {
+      const { loadConfig } = await import("../config/config.js");
+      const { danger } = await import("../globals.js");
+      const { defaultRuntime } = await import("../runtime.js");
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
       const format = opts.format === "aria" ? "aria" : "ai";

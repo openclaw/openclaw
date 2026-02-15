@@ -1,19 +1,8 @@
 import type { Command } from "commander";
-import { DEFAULT_CHAT_CHANNEL } from "../../channels/registry.js";
-import { agentCliCommand } from "../../commands/agent-via-gateway.js";
-import {
-  agentsAddCommand,
-  agentsDeleteCommand,
-  agentsListCommand,
-  agentsSetIdentityCommand,
-} from "../../commands/agents.js";
-import { setVerbose } from "../../globals.js";
-import { defaultRuntime } from "../../runtime.js";
+import { DEFAULT_CHAT_CHANNEL } from "../../channels/defaults.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
-import { runCommandWithRuntime } from "../cli-utils.js";
 import { hasExplicitOptions } from "../command-options.js";
-import { createDefaultDeps } from "../deps.js";
 import { formatHelpExamples } from "../help-format.js";
 import { collectOption } from "./helpers.js";
 
@@ -71,10 +60,14 @@ ${formatHelpExamples([
 ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/agent")}`,
     )
     .action(async (opts) => {
+      const { setVerbose } = await import("../../globals.js");
       const verboseLevel = typeof opts.verbose === "string" ? opts.verbose.toLowerCase() : "";
       setVerbose(verboseLevel === "on");
-      // Build default deps (keeps parity with other commands; future-proofing).
+      const { createDefaultDeps } = await import("../deps.js");
       const deps = createDefaultDeps();
+      const { defaultRuntime } = await import("../../runtime.js");
+      const { runCommandWithRuntime } = await import("../cli-utils.js");
+      const { agentCliCommand } = await import("../../commands/agent-via-gateway.js");
       await runCommandWithRuntime(defaultRuntime, async () => {
         await agentCliCommand(opts, defaultRuntime, deps);
       });
@@ -95,6 +88,9 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
     .option("--json", "Output JSON instead of text", false)
     .option("--bindings", "Include routing bindings", false)
     .action(async (opts) => {
+      const { defaultRuntime } = await import("../../runtime.js");
+      const { runCommandWithRuntime } = await import("../cli-utils.js");
+      const { agentsListCommand } = await import("../../commands/agents.js");
       await runCommandWithRuntime(defaultRuntime, async () => {
         await agentsListCommand(
           { json: Boolean(opts.json), bindings: Boolean(opts.bindings) },
@@ -113,6 +109,9 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
     .option("--non-interactive", "Disable prompts; requires --workspace", false)
     .option("--json", "Output JSON summary", false)
     .action(async (name, opts, command) => {
+      const { defaultRuntime } = await import("../../runtime.js");
+      const { runCommandWithRuntime } = await import("../cli-utils.js");
+      const { agentsAddCommand } = await import("../../commands/agents.js");
       await runCommandWithRuntime(defaultRuntime, async () => {
         const hasFlags = hasExplicitOptions(command, [
           "workspace",
@@ -169,6 +168,9 @@ ${formatHelpExamples([
 `,
     )
     .action(async (opts) => {
+      const { defaultRuntime } = await import("../../runtime.js");
+      const { runCommandWithRuntime } = await import("../cli-utils.js");
+      const { agentsSetIdentityCommand } = await import("../../commands/agents.js");
       await runCommandWithRuntime(defaultRuntime, async () => {
         await agentsSetIdentityCommand(
           {
@@ -193,6 +195,9 @@ ${formatHelpExamples([
     .option("--force", "Skip confirmation", false)
     .option("--json", "Output JSON summary", false)
     .action(async (id, opts) => {
+      const { defaultRuntime } = await import("../../runtime.js");
+      const { runCommandWithRuntime } = await import("../cli-utils.js");
+      const { agentsDeleteCommand } = await import("../../commands/agents.js");
       await runCommandWithRuntime(defaultRuntime, async () => {
         await agentsDeleteCommand(
           {
@@ -206,6 +211,9 @@ ${formatHelpExamples([
     });
 
   agents.action(async () => {
+    const { defaultRuntime } = await import("../../runtime.js");
+    const { runCommandWithRuntime } = await import("../cli-utils.js");
+    const { agentsListCommand } = await import("../../commands/agents.js");
     await runCommandWithRuntime(defaultRuntime, async () => {
       await agentsListCommand({}, defaultRuntime);
     });

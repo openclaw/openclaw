@@ -1,12 +1,6 @@
 import type { Command } from "commander";
-import { healthCommand } from "../../commands/health.js";
-import { sessionsCommand } from "../../commands/sessions.js";
-import { statusCommand } from "../../commands/status.js";
-import { setVerbose } from "../../globals.js";
-import { defaultRuntime } from "../../runtime.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
-import { runCommandWithRuntime } from "../cli-utils.js";
 import { formatHelpExamples } from "../help-format.js";
 import { parsePositiveIntOrUndefined } from "./helpers.js";
 
@@ -14,9 +8,10 @@ function resolveVerbose(opts: { verbose?: boolean; debug?: boolean }): boolean {
   return Boolean(opts.verbose || opts.debug);
 }
 
-function parseTimeoutMs(timeout: unknown): number | null | undefined {
+async function parseTimeoutMs(timeout: unknown): Promise<number | null | undefined> {
   const parsed = parsePositiveIntOrUndefined(timeout);
   if (timeout !== undefined && parsed === undefined) {
+    const { defaultRuntime } = await import("../../runtime.js");
     defaultRuntime.error("--timeout must be a positive integer (milliseconds)");
     defaultRuntime.exit(1);
     return null;
@@ -56,12 +51,16 @@ export function registerStatusHealthSessionsCommands(program: Command) {
         `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/status", "docs.openclaw.ai/cli/status")}\n`,
     )
     .action(async (opts) => {
+      const { setVerbose } = await import("../../globals.js");
       const verbose = resolveVerbose(opts);
       setVerbose(verbose);
-      const timeout = parseTimeoutMs(opts.timeout);
+      const timeout = await parseTimeoutMs(opts.timeout);
       if (timeout === null) {
         return;
       }
+      const { defaultRuntime } = await import("../../runtime.js");
+      const { runCommandWithRuntime } = await import("../cli-utils.js");
+      const { statusCommand } = await import("../../commands/status.js");
       await runCommandWithRuntime(defaultRuntime, async () => {
         await statusCommand(
           {
@@ -90,12 +89,16 @@ export function registerStatusHealthSessionsCommands(program: Command) {
         `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/health", "docs.openclaw.ai/cli/health")}\n`,
     )
     .action(async (opts) => {
+      const { setVerbose } = await import("../../globals.js");
       const verbose = resolveVerbose(opts);
       setVerbose(verbose);
-      const timeout = parseTimeoutMs(opts.timeout);
+      const timeout = await parseTimeoutMs(opts.timeout);
       if (timeout === null) {
         return;
       }
+      const { defaultRuntime } = await import("../../runtime.js");
+      const { runCommandWithRuntime } = await import("../cli-utils.js");
+      const { healthCommand } = await import("../../commands/health.js");
       await runCommandWithRuntime(defaultRuntime, async () => {
         await healthCommand(
           {
@@ -133,7 +136,10 @@ export function registerStatusHealthSessionsCommands(program: Command) {
         `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/sessions", "docs.openclaw.ai/cli/sessions")}\n`,
     )
     .action(async (opts) => {
+      const { setVerbose } = await import("../../globals.js");
       setVerbose(Boolean(opts.verbose));
+      const { defaultRuntime } = await import("../../runtime.js");
+      const { sessionsCommand } = await import("../../commands/sessions.js");
       await sessionsCommand(
         {
           json: Boolean(opts.json),

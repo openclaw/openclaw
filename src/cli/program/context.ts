@@ -1,5 +1,6 @@
 import { VERSION } from "../../version.js";
-import { resolveCliChannelOptions } from "../channel-options.js";
+
+export type ChannelOptionsProvider = () => string[];
 
 export type ProgramContext = {
   programVersion: string;
@@ -8,12 +9,24 @@ export type ProgramContext = {
   agentChannelOptions: string;
 };
 
-export function createProgramContext(): ProgramContext {
-  const channelOptions = resolveCliChannelOptions();
+export function createProgramContext(getChannelOptions?: ChannelOptionsProvider): ProgramContext {
+  let cached: string[] | null = null;
+  const resolve = () => {
+    if (!cached) {
+      cached = getChannelOptions?.() ?? [];
+    }
+    return cached;
+  };
   return {
     programVersion: VERSION,
-    channelOptions,
-    messageChannelOptions: channelOptions.join("|"),
-    agentChannelOptions: ["last", ...channelOptions].join("|"),
+    get channelOptions() {
+      return resolve();
+    },
+    get messageChannelOptions() {
+      return resolve().join("|");
+    },
+    get agentChannelOptions() {
+      return ["last", ...resolve()].join("|");
+    },
   };
 }

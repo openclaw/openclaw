@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createCliProgress } from "./progress.js";
 
 describe("cli progress", () => {
-  it("logs progress when non-tty and fallback=log", () => {
+  it("logs progress when non-tty and fallback=log", async () => {
     const writes: string[] = [];
     const stream = {
       isTTY: false,
@@ -11,7 +11,7 @@ describe("cli progress", () => {
       }),
     } as unknown as NodeJS.WriteStream;
 
-    const progress = createCliProgress({
+    const progress = await createCliProgress({
       label: "Indexing memory...",
       total: 10,
       stream,
@@ -25,14 +25,14 @@ describe("cli progress", () => {
     expect(output).toContain("Indexing memory... 50%");
   });
 
-  it("does not log without a tty when fallback is none", () => {
+  it("does not log without a tty when fallback is none", async () => {
     const write = vi.fn();
     const stream = {
       isTTY: false,
       write,
     } as unknown as NodeJS.WriteStream;
 
-    const progress = createCliProgress({
+    const progress = await createCliProgress({
       label: "Nope",
       total: 2,
       stream,

@@ -45,7 +45,7 @@ assertSupportedRuntime();
 
 import { buildProgram } from "./cli/program.js";
 
-const program = buildProgram();
+const program = await buildProgram();
 
 export {
   assertWebChannel,

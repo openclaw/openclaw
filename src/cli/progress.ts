@@ -1,5 +1,3 @@
-import { spinner } from "@clack/prompts";
-import { createOscProgressController, supportsOscProgress } from "osc-progress";
 import {
   clearActiveProgressLine,
   registerActiveProgressLine,
@@ -40,7 +38,7 @@ const noopReporter: ProgressReporter = {
   done: () => {},
 };
 
-export function createCliProgress(options: ProgressOptions): ProgressReporter {
+export async function createCliProgress(options: ProgressOptions): Promise<ProgressReporter> {
   if (options.enabled === false) {
     return noopReporter;
   }
@@ -56,6 +54,7 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
   }
 
   const delayMs = typeof options.delayMs === "number" ? options.delayMs : DEFAULT_DELAY_MS;
+  const { supportsOscProgress, createOscProgressController } = await import("osc-progress");
   const canOsc = isTty && supportsOscProgress(process.env, isTty);
   const allowSpinner = isTty && (options.fallback === undefined || options.fallback === "spinner");
   const allowLine = isTty && options.fallback === "line";
@@ -81,7 +80,7 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
       })
     : null;
 
-  const spin = allowSpinner ? spinner() : null;
+  const spin = allowSpinner ? (await import("@clack/prompts")).spinner() : null;
   const renderLine = allowLine
     ? () => {
         if (!started) {
@@ -203,7 +202,7 @@ export async function withProgress<T>(
   options: ProgressOptions,
   work: (progress: ProgressReporter) => Promise<T>,
 ): Promise<T> {
-  const progress = createCliProgress(options);
+  const progress = await createCliProgress(options);
   try {
     return await work(progress);
   } finally {

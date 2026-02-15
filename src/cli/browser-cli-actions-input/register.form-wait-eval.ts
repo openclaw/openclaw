@@ -1,7 +1,5 @@
 import type { Command } from "commander";
 import type { BrowserParentOpts } from "../browser-cli-shared.js";
-import { danger } from "../../globals.js";
-import { defaultRuntime } from "../../runtime.js";
 import { callBrowserAct, readFields, resolveBrowserActionContext } from "./shared.js";
 
 export function registerBrowserFormWaitEvalCommands(
@@ -15,6 +13,8 @@ export function registerBrowserFormWaitEvalCommands(
     .option("--fields-file <path>", "Read JSON array from a file")
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .action(async (opts, cmd) => {
+      const { danger } = await import("../../globals.js");
+      const { defaultRuntime } = await import("../../runtime.js");
       const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
       try {
         const fields = await readFields({
@@ -58,6 +58,8 @@ export function registerBrowserFormWaitEvalCommands(
     )
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .action(async (selector: string | undefined, opts, cmd) => {
+      const { danger } = await import("../../globals.js");
+      const { defaultRuntime } = await import("../../runtime.js");
       const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
       try {
         const sel = selector?.trim() || undefined;
@@ -101,6 +103,8 @@ export function registerBrowserFormWaitEvalCommands(
     .option("--ref <id>", "Ref from snapshot")
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .action(async (opts, cmd) => {
+      const { danger } = await import("../../globals.js");
+      const { defaultRuntime } = await import("../../runtime.js");
       const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
       if (!opts.fn) {
         defaultRuntime.error(danger("Missing --fn"));

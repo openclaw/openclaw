@@ -79,7 +79,7 @@ export function createClackPrompter(): WizardPrompter {
     progress: (label: string): WizardProgress => {
       const spin = spinner();
       spin.start(theme.accent(label));
-      const osc = createCliProgress({
+      const oscPromise = createCliProgress({
         label,
         indeterminate: true,
         enabled: true,
@@ -88,10 +88,10 @@ export function createClackPrompter(): WizardPrompter {
       return {
         update: (message) => {
           spin.message(theme.accent(message));
-          osc.setLabel(message);
+          void oscPromise.then((osc) => osc.setLabel(message));
         },
         stop: (message) => {
-          osc.done();
+          void oscPromise.then((osc) => osc.done());
           spin.stop(message);
         },
       };
