@@ -218,4 +218,10 @@ describe("resolveUserPath", () => {
     expect(resolveUserPath("")).toBe("");
     expect(resolveUserPath("   ")).toBe("");
   });
+
+  it("returns empty string for undefined/null input instead of crashing", () => {
+    // This should not throw "Cannot read properties of undefined (reading 'trim')"
+    expect(resolveUserPath(undefined as unknown as string)).toBe("");
+    expect(resolveUserPath(null as unknown as string)).toBe("");
+  });
 });
