@@ -530,6 +530,16 @@ export function resolveModelDirectiveSelection(params: {
     return { selection: buildSelection(best.provider, best.model) };
   };
 
+  if (!rawTrimmed.includes("/") && rawLower === "default") {
+    return {
+      selection: {
+        provider: defaultProvider,
+        model: defaultModel,
+        isDefault: true,
+      },
+    };
+  }
+
   const resolved = resolveModelRefFromString({
     raw: rawTrimmed,
     defaultProvider,
