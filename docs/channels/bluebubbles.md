@@ -44,6 +44,10 @@ Status: bundled plugin that talks to the BlueBubbles macOS server over HTTP. **R
 4. Point BlueBubbles webhooks to your gateway (example: `https://your-gateway-host:3000/bluebubbles-webhook?password=<password>`).
 5. Start the gateway; it will register the webhook handler and start pairing.
 
+Security note:
+
+- Always set a webhook password. If you expose the gateway through a reverse proxy (Tailscale Serve/Funnel, nginx, Cloudflare Tunnel, ngrok), the proxy may connect to the gateway over loopback. The BlueBubbles webhook handler treats requests with forwarding headers as proxied and will not accept passwordless webhooks.
+
 ## Keeping Messages.app alive (VM / headless setups)
 
 Some macOS VM / always-on setups can end up with Messages.app going “idle” (incoming events stop until the app is opened/foregrounded). A simple workaround is to **poke Messages every 5 minutes** using an AppleScript + LaunchAgent.
@@ -300,6 +304,7 @@ Provider options:
 - `channels.bluebubbles.textChunkLimit`: Outbound chunk size in chars (default: 4000).
 - `channels.bluebubbles.chunkMode`: `length` (default) splits only when exceeding `textChunkLimit`; `newline` splits on blank lines (paragraph boundaries) before length chunking.
 - `channels.bluebubbles.mediaMaxMb`: Inbound media cap in MB (default: 8).
+- `channels.bluebubbles.mediaLocalRoots`: Explicit allowlist of absolute local directories permitted for outbound local media paths. Local path sends are denied by default unless this is configured. Per-account override: `channels.bluebubbles.accounts.<accountId>.mediaLocalRoots`.
 - `channels.bluebubbles.historyLimit`: Max group messages for context (0 disables).
 - `channels.bluebubbles.dmHistoryLimit`: DM history limit.
 - `channels.bluebubbles.actions`: Enable/disable specific actions.

@@ -128,6 +128,7 @@ describe("nodes-cli coverage", () => {
       agentId: "main",
       approved: true,
       approvalDecision: "allow-once",
+      runId: expect.any(String),
     });
     expect(invoke?.params?.timeoutMs).toBe(5000);
   });
@@ -153,6 +154,7 @@ describe("nodes-cli coverage", () => {
       agentId: "main",
       approved: true,
       approvalDecision: "allow-once",
+      runId: expect.any(String),
     });
   });
 

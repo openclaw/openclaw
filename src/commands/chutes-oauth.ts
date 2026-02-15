@@ -8,6 +8,7 @@ import {
   generateChutesPkce,
   parseOAuthCallbackInput,
 } from "../agents/chutes-oauth.js";
+import { isLoopbackHost } from "../gateway/net.js";
 
 type OAuthPrompt = {
   message: string;
@@ -44,6 +45,11 @@ async function waitForLocalCallback(params: {
     throw new Error(`Chutes OAuth redirect URI must be http:// (got ${params.redirectUri})`);
   }
   const hostname = redirectUrl.hostname || "127.0.0.1";
+  if (!isLoopbackHost(hostname)) {
+    throw new Error(
+      `Chutes OAuth redirect hostname must be loopback (got ${hostname}). Use http://127.0.0.1:<port>/...`,
+    );
+  }
   const port = redirectUrl.port ? Number.parseInt(redirectUrl.port, 10) : 80;
   const expectedPath = redirectUrl.pathname || "/";
 
@@ -150,7 +156,7 @@ export async function loginChutes(params: {
     await params.onAuth({ url });
     params.onProgress?.("Waiting for redirect URL…");
     const input = await params.onPrompt({
-      message: "Paste the redirect URL (or authorization code)",
+      message: "Paste the redirect URL",
       placeholder: `${params.app.redirectUri}?code=...&state=...`,
     });
     const parsed = parseOAuthCallbackInput(String(input), state);
@@ -170,7 +176,7 @@ export async function loginChutes(params: {
     }).catch(async () => {
       params.onProgress?.("OAuth callback not detected; paste redirect URL…");
       const input = await params.onPrompt({
-        message: "Paste the redirect URL (or authorization code)",
+        message: "Paste the redirect URL",
         placeholder: `${params.app.redirectUri}?code=...&state=...`,
       });
       const parsed = parseOAuthCallbackInput(String(input), state);

@@ -7,27 +7,15 @@ import {
   type SessionNotification,
 } from "@agentclientprotocol/sdk";
 import { spawn, type ChildProcess } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
 import * as readline from "node:readline";
 import { Readable, Writable } from "node:stream";
+import { fileURLToPath } from "node:url";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
+import { DANGEROUS_ACP_TOOLS } from "../security/dangerous-tools.js";
 
-/**
- * Tools that require explicit user approval in ACP sessions.
- * These tools can execute arbitrary code, modify the filesystem,
- * or access sensitive resources.
- */
-const DANGEROUS_ACP_TOOLS = new Set([
-  "exec",
-  "spawn",
-  "shell",
-  "sessions_spawn",
-  "sessions_send",
-  "gateway",
-  "fs_write",
-  "fs_delete",
-  "fs_move",
-  "apply_patch",
-]);
+const SAFE_AUTO_APPROVE_KINDS = new Set(["read", "search"]);
 
 type PermissionOption = RequestPermissionRequest["options"][number];
 
@@ -75,6 +63,54 @@ function parseToolNameFromTitle(title: string | undefined | null): string | unde
     return undefined;
   }
   return normalizeToolName(head);
+}
+
+function resolveToolKindForPermission(
+  params: RequestPermissionRequest,
+  toolName: string | undefined,
+): string | undefined {
+  const toolCall = params.toolCall as unknown as { kind?: unknown; title?: unknown } | undefined;
+  const kindRaw = typeof toolCall?.kind === "string" ? toolCall.kind.trim().toLowerCase() : "";
+  if (kindRaw) {
+    return kindRaw;
+  }
+  const name =
+    toolName ??
+    parseToolNameFromTitle(typeof toolCall?.title === "string" ? toolCall.title : undefined);
+  if (!name) {
+    return undefined;
+  }
+  const normalized = name.toLowerCase();
+
+  const hasToken = (token: string) => {
+    // Tool names tend to be snake_case. Avoid substring heuristics (ex: "thread" contains "read").
+    const re = new RegExp(`(?:^|[._-])${token}(?:$|[._-])`);
+    return re.test(normalized);
+  };
+
+  // Prefer a conservative classifier: only classify safe kinds when confident.
+  if (normalized === "read" || hasToken("read")) {
+    return "read";
+  }
+  if (normalized === "search" || hasToken("search") || hasToken("find")) {
+    return "search";
+  }
+  if (normalized.includes("fetch") || normalized.includes("http")) {
+    return "fetch";
+  }
+  if (normalized.includes("write") || normalized.includes("edit") || normalized.includes("patch")) {
+    return "edit";
+  }
+  if (normalized.includes("delete") || normalized.includes("remove")) {
+    return "delete";
+  }
+  if (normalized.includes("move") || normalized.includes("rename")) {
+    return "move";
+  }
+  if (normalized.includes("exec") || normalized.includes("run") || normalized.includes("bash")) {
+    return "execute";
+  }
+  return "other";
 }
 
 function resolveToolNameForPermission(params: RequestPermissionRequest): string | undefined {
@@ -158,6 +194,7 @@ export async function resolvePermissionRequest(
   const options = params.options ?? [];
   const toolTitle = params.toolCall?.title ?? "tool";
   const toolName = resolveToolNameForPermission(params);
+  const toolKind = resolveToolKindForPermission(params, toolName);
 
   if (options.length === 0) {
     log(`[permission cancelled] ${toolName ?? "unknown"}: no options available`);
@@ -166,7 +203,8 @@ export async function resolvePermissionRequest(
 
   const allowOption = pickOption(options, ["allow_once", "allow_always"]);
   const rejectOption = pickOption(options, ["reject_once", "reject_always"]);
-  const promptRequired = !toolName || DANGEROUS_ACP_TOOLS.has(toolName);
+  const isSafeKind = Boolean(toolKind && SAFE_AUTO_APPROVE_KINDS.has(toolKind));
+  const promptRequired = !toolName || !isSafeKind || DANGEROUS_ACP_TOOLS.has(toolName);
 
   if (!promptRequired) {
     const option = allowOption ?? options[0];
@@ -174,11 +212,13 @@ export async function resolvePermissionRequest(
       log(`[permission cancelled] ${toolName}: no selectable options`);
       return cancelledPermission();
     }
-    log(`[permission auto-approved] ${toolName}`);
+    log(`[permission auto-approved] ${toolName} (${toolKind ?? "unknown"})`);
     return selectedPermission(option.optionId);
   }
 
-  log(`\n[permission requested] ${toolTitle}${toolName ? ` (${toolName})` : ""}`);
+  log(
+    `\n[permission requested] ${toolTitle}${toolName ? ` (${toolName})` : ""}${toolKind ? ` [${toolKind}]` : ""}`,
+  );
   const approved = await prompt(toolName, toolTitle);
 
   if (approved && allowOption) {
@@ -223,6 +263,25 @@ function buildServerArgs(opts: AcpClientOptions): string[] {
   return args;
 }
 
+function resolveSelfEntryPath(): string | null {
+  // Prefer a path relative to the built module location (dist/acp/client.js -> dist/entry.js).
+  try {
+    const here = fileURLToPath(import.meta.url);
+    const candidate = path.resolve(path.dirname(here), "..", "entry.js");
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  } catch {
+    // ignore
+  }
+
+  const argv1 = process.argv[1]?.trim();
+  if (argv1) {
+    return path.isAbsolute(argv1) ? argv1 : path.resolve(process.cwd(), argv1);
+  }
+  return null;
+}
+
 function printSessionUpdate(notification: SessionNotification): void {
   const update = notification.update;
   if (!("sessionUpdate" in update)) {
@@ -263,13 +322,16 @@ export async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpC
   const verbose = Boolean(opts.verbose);
   const log = verbose ? (msg: string) => console.error(`[acp-client] ${msg}`) : () => {};
 
-  ensureOpenClawCliOnPath({ cwd });
-  const serverCommand = opts.serverCommand ?? "openclaw";
+  ensureOpenClawCliOnPath();
   const serverArgs = buildServerArgs(opts);
 
-  log(`spawning: ${serverCommand} ${serverArgs.join(" ")}`);
+  const entryPath = resolveSelfEntryPath();
+  const serverCommand = opts.serverCommand ?? (entryPath ? process.execPath : "openclaw");
+  const effectiveArgs = opts.serverCommand || !entryPath ? serverArgs : [entryPath, ...serverArgs];
 
-  const agent = spawn(serverCommand, serverArgs, {
+  log(`spawning: ${serverCommand} ${effectiveArgs.join(" ")}`);
+
+  const agent = spawn(serverCommand, effectiveArgs, {
     stdio: ["pipe", "pipe", "inherit"],
     cwd,
   });

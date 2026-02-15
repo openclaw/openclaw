@@ -46,7 +46,7 @@ describe("media server", () => {
     await fs.writeFile(file, "hello");
     const server = await startMediaServer(0, 5_000);
     const port = (server.address() as AddressInfo).port;
-    const res = await fetch(`http://localhost:${port}/media/file1`);
+    const res = await fetch(`http://127.0.0.1:${port}/media/file1`);
     expect(res.status).toBe(200);
     expect(await res.text()).toBe("hello");
     await waitForFileRemoval(file);
@@ -60,7 +60,7 @@ describe("media server", () => {
     await fs.utimes(file, past / 1000, past / 1000);
     const server = await startMediaServer(0, 1_000);
     const port = (server.address() as AddressInfo).port;
-    const res = await fetch(`http://localhost:${port}/media/old`);
+    const res = await fetch(`http://127.0.0.1:${port}/media/old`);
     expect(res.status).toBe(410);
     await expect(fs.stat(file)).rejects.toThrow();
     await new Promise((r) => server.close(r));
@@ -70,7 +70,7 @@ describe("media server", () => {
     const server = await startMediaServer(0, 5_000);
     const port = (server.address() as AddressInfo).port;
     // URL-encoded "../" to bypass client-side path normalization
-    const res = await fetch(`http://localhost:${port}/media/%2e%2e%2fpackage.json`);
+    const res = await fetch(`http://127.0.0.1:${port}/media/%2e%2e%2fpackage.json`);
     expect(res.status).toBe(400);
     expect(await res.text()).toBe("invalid path");
     await new Promise((r) => server.close(r));
@@ -83,7 +83,7 @@ describe("media server", () => {
 
     const server = await startMediaServer(0, 5_000);
     const port = (server.address() as AddressInfo).port;
-    const res = await fetch(`http://localhost:${port}/media/link-out`);
+    const res = await fetch(`http://127.0.0.1:${port}/media/link-out`);
     expect(res.status).toBe(400);
     expect(await res.text()).toBe("invalid path");
     await new Promise((r) => server.close(r));
@@ -94,7 +94,7 @@ describe("media server", () => {
     await fs.writeFile(file, "hello");
     const server = await startMediaServer(0, 5_000);
     const port = (server.address() as AddressInfo).port;
-    const res = await fetch(`http://localhost:${port}/media/invalid%20id`);
+    const res = await fetch(`http://127.0.0.1:${port}/media/invalid%20id`);
     expect(res.status).toBe(400);
     expect(await res.text()).toBe("invalid path");
     await new Promise((r) => server.close(r));
@@ -106,7 +106,7 @@ describe("media server", () => {
     await fs.truncate(file, MEDIA_MAX_BYTES + 1);
     const server = await startMediaServer(0, 5_000);
     const port = (server.address() as AddressInfo).port;
-    const res = await fetch(`http://localhost:${port}/media/big`);
+    const res = await fetch(`http://127.0.0.1:${port}/media/big`);
     expect(res.status).toBe(413);
     expect(await res.text()).toBe("too large");
     await new Promise((r) => server.close(r));
