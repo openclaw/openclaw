@@ -251,6 +251,8 @@ export type ChannelThreadingContext = {
   ReplyToIdFull?: string;
   ThreadLabel?: string;
   MessageThreadId?: string | number;
+  MessageSid?: string;
+  MessageSidFull?: string;
 };
 
 export type ChannelThreadingToolContext = {
@@ -265,6 +267,11 @@ export type ChannelThreadingToolContext = {
    * not forwarding/relaying a message from another conversation.
    */
   skipCrossContextDecoration?: boolean;
+  /**
+   * The message ID of the current inbound message (e.g., for Slack, this is message.ts).
+   * Tools like message actions (react, pin, etc.) use this to target the correct message.
+   */
+  message_id?: string;
 };
 
 export type ChannelMessagingAdapter = {

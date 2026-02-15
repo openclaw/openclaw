@@ -31,10 +31,12 @@ export function buildThreadingToolContext(params: {
   // Fallback for unrecognized/plugin channels (e.g., BlueBubbles before plugin registry init)
   const dock = provider ? getChannelDock(provider) : undefined;
   if (!dock?.threading?.buildToolContext) {
+    const messageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
     return {
       currentChannelId: sessionCtx.To?.trim() || undefined,
       currentChannelProvider: provider ?? (rawProvider as ChannelId),
       hasRepliedRef,
+      message_id: messageId,
     };
   }
   const context =
@@ -49,6 +51,8 @@ export function buildThreadingToolContext(params: {
         ReplyToId: sessionCtx.ReplyToId,
         ThreadLabel: sessionCtx.ThreadLabel,
         MessageThreadId: sessionCtx.MessageThreadId,
+        MessageSid: sessionCtx.MessageSid,
+        MessageSidFull: sessionCtx.MessageSidFull,
       },
       hasRepliedRef,
     }) ?? {};
