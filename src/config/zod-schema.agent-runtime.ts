@@ -471,6 +471,7 @@ export const AgentEntrySchema = z
               .strict(),
           ])
           .optional(),
+        runTimeoutSeconds: z.number().int().nonnegative().optional(),
         thinking: z.string().optional(),
       })
       .strict()

@@ -95,6 +95,45 @@ describe("config schema regressions", () => {
     }
   });
 
+  it("accepts subagent runTimeoutSeconds at defaults and per-agent scopes", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          subagents: {
+            runTimeoutSeconds: 8,
+          },
+        },
+        list: [
+          {
+            id: "main",
+            subagents: {
+              runTimeoutSeconds: 2,
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects negative subagent runTimeoutSeconds", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          subagents: {
+            runTimeoutSeconds: -1,
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toContain("agents.defaults.subagents.runTimeoutSeconds");
+    }
+  });
+
   it("rejects unknown subagent keys", () => {
     const res = validateConfigObject({
       agents: {

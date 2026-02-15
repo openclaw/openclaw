@@ -41,6 +41,8 @@ export type AgentConfig = {
     allowAgents?: string[];
     /** Per-agent default model for spawned sub-agents (string or {primary,fallbacks}). */
     model?: string | { primary?: string; fallbacks?: string[] };
+    /** Per-agent default run timeout in seconds for spawned sub-agents (0 disables timeout). */
+    runTimeoutSeconds?: number;
     /** Allow subagents to recursively spawn their own subagents. Default: false. */
     allowRecursiveSpawn?: boolean;
     /** Maximum nesting depth for recursive subagent spawning. Default: 3, range: 1-10. */

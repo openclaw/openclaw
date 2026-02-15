@@ -165,4 +165,150 @@ describe("openclaw-tools: subagents", () => {
     });
     expect(spawnedTimeout).toBe(2);
   });
+
+  it("sessions_spawn uses global default runTimeoutSeconds when param omitted", async () => {
+    resetSubagentRegistryForTests();
+    callGatewayMock.mockReset();
+    configOverride = {
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: { defaults: { subagents: { runTimeoutSeconds: 7 } } },
+    };
+    let spawnedTimeout: number | undefined;
+
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: unknown };
+      if (request.method === "agent") {
+        const params = request.params as { timeout?: number } | undefined;
+        spawnedTimeout = params?.timeout;
+        return { runId: "run-global-timeout", status: "accepted" };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools({ agentSessionKey: "main", agentChannel: "discord" }).find(
+      (candidate) => candidate.name === "sessions_spawn",
+    );
+    if (!tool) {
+      throw new Error("missing sessions_spawn tool");
+    }
+
+    const result = await tool.execute("call-global-timeout", {
+      task: "do thing",
+    });
+
+    expect(result.details).toMatchObject({ status: "accepted" });
+    expect(spawnedTimeout).toBe(7);
+  });
+
+  it("sessions_spawn prefers per-agent runTimeoutSeconds over global default", async () => {
+    resetSubagentRegistryForTests();
+    callGatewayMock.mockReset();
+    configOverride = {
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: {
+        defaults: { subagents: { runTimeoutSeconds: 7 } },
+        list: [{ id: "research", subagents: { runTimeoutSeconds: 3 } }],
+      },
+    };
+    let spawnedTimeout: number | undefined;
+
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: unknown };
+      if (request.method === "agent") {
+        const params = request.params as { timeout?: number } | undefined;
+        spawnedTimeout = params?.timeout;
+        return { runId: "run-agent-timeout", status: "accepted" };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: "agent:research:main",
+      agentChannel: "discord",
+    }).find((candidate) => candidate.name === "sessions_spawn");
+    if (!tool) {
+      throw new Error("missing sessions_spawn tool");
+    }
+
+    const result = await tool.execute("call-agent-timeout", {
+      task: "do thing",
+    });
+
+    expect(result.details).toMatchObject({ status: "accepted" });
+    expect(spawnedTimeout).toBe(3);
+  });
+
+  it("sessions_spawn explicit runTimeoutSeconds overrides config defaults", async () => {
+    resetSubagentRegistryForTests();
+    callGatewayMock.mockReset();
+    configOverride = {
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: {
+        defaults: { subagents: { runTimeoutSeconds: 7 } },
+        list: [{ id: "research", subagents: { runTimeoutSeconds: 3 } }],
+      },
+    };
+    let spawnedTimeout: number | undefined;
+
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: unknown };
+      if (request.method === "agent") {
+        const params = request.params as { timeout?: number } | undefined;
+        spawnedTimeout = params?.timeout;
+        return { runId: "run-explicit-timeout", status: "accepted" };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: "agent:research:main",
+      agentChannel: "discord",
+    }).find((candidate) => candidate.name === "sessions_spawn");
+    if (!tool) {
+      throw new Error("missing sessions_spawn tool");
+    }
+
+    const result = await tool.execute("call-explicit-timeout", {
+      task: "do thing",
+      runTimeoutSeconds: 11,
+    });
+
+    expect(result.details).toMatchObject({ status: "accepted" });
+    expect(spawnedTimeout).toBe(11);
+  });
+
+  it("sessions_spawn explicit 0 disables timeout even when config sets one", async () => {
+    resetSubagentRegistryForTests();
+    callGatewayMock.mockReset();
+    configOverride = {
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: { defaults: { subagents: { runTimeoutSeconds: 7 } } },
+    };
+    let spawnedTimeout: number | undefined;
+
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: unknown };
+      if (request.method === "agent") {
+        const params = request.params as { timeout?: number } | undefined;
+        spawnedTimeout = params?.timeout;
+        return { runId: "run-explicit-zero", status: "accepted" };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools({ agentSessionKey: "main", agentChannel: "discord" }).find(
+      (candidate) => candidate.name === "sessions_spawn",
+    );
+    if (!tool) {
+      throw new Error("missing sessions_spawn tool");
+    }
+
+    const result = await tool.execute("call-explicit-zero", {
+      task: "do thing",
+      runTimeoutSeconds: 0,
+    });
+
+    expect(result.details).toMatchObject({ status: "accepted" });
+    expect(spawnedTimeout).toBeUndefined();
+  });
 });

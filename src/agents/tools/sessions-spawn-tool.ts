@@ -19,6 +19,7 @@ import {
   resolveAllowRecursiveSpawn,
   resolveMaxChildrenPerAgent,
   resolveMaxSpawnDepth,
+  resolveSubagentRunTimeoutSeconds,
 } from "../recursive-spawn-config.js";
 import { optionalStringEnum } from "../schema/typebox.js";
 import { buildSubagentSystemPrompt } from "../subagent-announce.js";
@@ -66,6 +67,13 @@ function splitModelRef(ref?: string) {
   return { provider: undefined, model: trimmed };
 }
 
+function normalizeTimeoutSeconds(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+  return Math.max(0, Math.floor(value));
+}
+
 // Provider + model resolution for spawn limits lives in subagent-provider-limits.ts.
 
 export function createSessionsSpawnTool(opts?: {
@@ -102,20 +110,9 @@ export function createSessionsSpawnTool(opts?: {
         to: opts?.agentTo,
         threadId: opts?.agentThreadId,
       });
-      const runTimeoutSeconds = (() => {
-        const explicit =
-          typeof params.runTimeoutSeconds === "number" && Number.isFinite(params.runTimeoutSeconds)
-            ? Math.max(0, Math.floor(params.runTimeoutSeconds))
-            : undefined;
-        if (explicit !== undefined) {
-          return explicit;
-        }
-        const legacy =
-          typeof params.timeoutSeconds === "number" && Number.isFinite(params.timeoutSeconds)
-            ? Math.max(0, Math.floor(params.timeoutSeconds))
-            : undefined;
-        return legacy ?? 0;
-      })();
+      const explicitRunTimeoutSeconds =
+        normalizeTimeoutSeconds(params.runTimeoutSeconds) ??
+        normalizeTimeoutSeconds(params.timeoutSeconds);
       let modelWarning: string | undefined;
       let modelApplied = false;
 
@@ -150,6 +147,9 @@ export function createSessionsSpawnTool(opts?: {
           });
         }
       }
+
+      const runTimeoutSeconds =
+        explicitRunTimeoutSeconds ?? resolveSubagentRunTimeoutSeconds(cfg, targetAgentId);
 
       if (typeof requesterSessionKey === "string" && isSubagentSessionKey(requesterSessionKey)) {
         const currentDepth = getSubagentDepth(requesterSessionKey);

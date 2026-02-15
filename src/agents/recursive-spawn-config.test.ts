@@ -4,6 +4,7 @@ import {
   resolveAllowRecursiveSpawn,
   resolveMaxChildrenPerAgent,
   resolveMaxSpawnDepth,
+  resolveSubagentRunTimeoutSeconds,
 } from "./recursive-spawn-config.js";
 
 describe("resolveAllowRecursiveSpawn", () => {
@@ -103,5 +104,48 @@ describe("resolveMaxSpawnDepth", () => {
       agents: { defaults: { subagents: { maxDepth: 99 } } },
     };
     expect(resolveMaxSpawnDepth(cfg2, "main")).toBe(10);
+  });
+});
+
+describe("resolveSubagentRunTimeoutSeconds", () => {
+  it("returns 0 by default", () => {
+    expect(resolveSubagentRunTimeoutSeconds({}, "main")).toBe(0);
+  });
+
+  it("returns global default when set", () => {
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { subagents: { runTimeoutSeconds: 9 } } },
+    };
+    expect(resolveSubagentRunTimeoutSeconds(cfg, "main")).toBe(9);
+  });
+
+  it("per-agent overrides global", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { subagents: { runTimeoutSeconds: 9 } },
+        list: [{ id: "main", subagents: { runTimeoutSeconds: 3 } }],
+      },
+    };
+    expect(resolveSubagentRunTimeoutSeconds(cfg, "main")).toBe(3);
+  });
+
+  it("supports explicit 0 in per-agent config", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { subagents: { runTimeoutSeconds: 9 } },
+        list: [{ id: "main", subagents: { runTimeoutSeconds: 0 } }],
+      },
+    };
+    expect(resolveSubagentRunTimeoutSeconds(cfg, "main")).toBe(0);
+  });
+
+  it("floors decimal values to integers", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { subagents: { runTimeoutSeconds: 5.9 } },
+        list: [{ id: "main", subagents: { runTimeoutSeconds: 4.8 } }],
+      },
+    };
+    expect(resolveSubagentRunTimeoutSeconds(cfg, "main")).toBe(4);
   });
 });
