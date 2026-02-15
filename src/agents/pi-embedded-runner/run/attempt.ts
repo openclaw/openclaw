@@ -1,5 +1,4 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { ImageContent } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
 import { createAgentSession, SessionManager, SettingsManager } from "@mariozechner/pi-coding-agent";
 import fs from "node:fs/promises";
@@ -7,6 +6,7 @@ import os from "node:os";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
+import { emitDiagnosticEvent } from "../../../infra/diagnostic-events.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
@@ -64,6 +64,7 @@ import {
 } from "../../skills.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
+import { wrapStreamFnWithTraceContext } from "../../trace-context-propagator.js";
 import { resolveTranscriptPolicy } from "../../transcript-policy.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
@@ -99,55 +100,11 @@ import {
   selectCompactionTimeoutSnapshot,
   shouldFlagCompactionTimeout,
 } from "./compaction-timeout.js";
-import { detectAndLoadPromptImages } from "./images.js";
-
-export function injectHistoryImagesIntoMessages(
-  messages: AgentMessage[],
-  historyImagesByIndex: Map<number, ImageContent[]>,
-): boolean {
-  if (historyImagesByIndex.size === 0) {
-    return false;
-  }
-  let didMutate = false;
-
-  for (const [msgIndex, images] of historyImagesByIndex) {
-    // Bounds check: ensure index is valid before accessing
-    if (msgIndex < 0 || msgIndex >= messages.length) {
-      continue;
-    }
-    const msg = messages[msgIndex];
-    if (msg && msg.role === "user") {
-      // Convert string content to array format if needed
-      if (typeof msg.content === "string") {
-        msg.content = [{ type: "text", text: msg.content }];
-        didMutate = true;
-      }
-      if (Array.isArray(msg.content)) {
-        // Check for existing image content to avoid duplicates across turns
-        const existingImageData = new Set(
-          msg.content
-            .filter(
-              (c): c is ImageContent =>
-                c != null &&
-                typeof c === "object" &&
-                c.type === "image" &&
-                typeof c.data === "string",
-            )
-            .map((c) => c.data),
-        );
-        for (const img of images) {
-          // Only add if this image isn't already in the message
-          if (!existingImageData.has(img.data)) {
-            msg.content.push(img);
-            didMutate = true;
-          }
-        }
-      }
-    }
-  }
-
-  return didMutate;
-}
+import {
+  buildGenAiMessagesFromContext,
+  buildGenAiToolDefsFromContext,
+} from "./diagnostic-builders.js";
+import { detectAndLoadPromptImages, injectHistoryImagesIntoMessages } from "./images.js";
 
 function summarizeMessagePayload(msg: AgentMessage): { textChars: number; imageBlocks: number } {
   const content = (msg as { content?: unknown }).content;
@@ -612,6 +569,12 @@ export async function runEmbeddedAttempt(
         activeSession.agent.streamFn = streamSimple;
       }
 
+      // Wrap streamFn to inject W3C Trace Context headers for distributed tracing
+      activeSession.agent.streamFn = wrapStreamFnWithTraceContext(
+        activeSession.agent.streamFn,
+        params.sessionKey,
+      );
+
       applyExtraParamsToAgent(
         activeSession.agent,
         params.config,
@@ -632,6 +595,53 @@ export async function runEmbeddedAttempt(
         activeSession.agent.streamFn = anthropicPayloadLogger.wrapStreamFn(
           activeSession.agent.streamFn,
         );
+      }
+
+      const captureContent =
+        params.config?.diagnostics?.enabled === true &&
+        !!params.config?.diagnostics?.otel?.captureContent;
+      if (captureContent) {
+        // Capture the exact model request context at the point of the LLM call.
+        // This is more trustworthy than sampling AgentSession.state.messages from streaming events.
+        const inner = activeSession.agent.streamFn;
+        let callIndex = 0;
+        activeSession.agent.streamFn = ((model, context, options) => {
+          callIndex += 1;
+          emitDiagnosticEvent({
+            type: "model.inference.started",
+            runId: params.runId,
+            sessionId: activeSession.sessionId,
+            sessionKey: params.sessionKey,
+            channel: params.messageChannel,
+            provider: model.provider,
+            model: model.id,
+            operationName: "chat",
+            callIndex,
+            inputMessages: buildGenAiMessagesFromContext(
+              (context as { messages?: unknown }).messages,
+            ),
+            systemInstructions:
+              typeof (context as { systemPrompt?: unknown }).systemPrompt === "string" &&
+              (context as { systemPrompt?: string }).systemPrompt?.trim()
+                ? [
+                    {
+                      type: "text",
+                      content: String((context as { systemPrompt?: string }).systemPrompt),
+                    },
+                  ]
+                : undefined,
+            toolDefinitions: buildGenAiToolDefsFromContext((context as { tools?: unknown }).tools),
+            temperature:
+              typeof (options as { temperature?: unknown }).temperature === "number"
+                ? (options as { temperature?: number }).temperature
+                : undefined,
+            maxOutputTokens:
+              typeof (options as { maxTokens?: unknown }).maxTokens === "number"
+                ? (options as { maxTokens?: number }).maxTokens
+                : undefined,
+          });
+          return inner(model, context, options);
+        }) as typeof inner;
       }
 
       try {
@@ -729,6 +739,10 @@ export async function runEmbeddedAttempt(
       const subscription = subscribeEmbeddedPiSession({
         session: activeSession,
         runId: params.runId,
+        captureContent,
+        sessionKey: params.sessionKey ?? params.sessionId,
+        sessionId: params.sessionId,
+        channel: params.messageChannel,
         hookRunner: getGlobalHookRunner() ?? undefined,
         verboseLevel: params.verboseLevel,
         reasoningMode: params.reasoningLevel ?? "off",
@@ -746,7 +760,6 @@ export async function runEmbeddedAttempt(
         onAgentEvent: params.onAgentEvent,
         enforceFinalTag: params.enforceFinalTag,
         config: params.config,
-        sessionKey: params.sessionKey ?? params.sessionId,
       });
 
       const {
@@ -1125,6 +1138,8 @@ export async function runEmbeddedAttempt(
         compactionCount: getCompactionCount(),
         // Client tool call detected (OpenResponses hosted tools)
         clientToolCall: clientToolCallDetected ?? undefined,
+        systemPromptText: systemPromptText,
+        firstTokenAt: subscription?.getFirstTokenAt?.(),
       };
     } finally {
       // Always tear down the session (and release the lock) before we leave this attempt.
