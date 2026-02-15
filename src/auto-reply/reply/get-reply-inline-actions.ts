@@ -217,6 +217,23 @@ export async function handleInlineActions(params: {
     sessionCtx.BodyForAgent = rewrittenBody;
     sessionCtx.BodyStripped = rewrittenBody;
     cleanedBody = rewrittenBody;
+
+    // Apply skill-level thinking/model overrides if configured
+    if (skillInvocation.command.thinking) {
+      directives = {
+        ...directives,
+        hasThinkDirective: true,
+        thinkLevel: skillInvocation.command.thinking,
+        rawThinkLevel: skillInvocation.command.thinking,
+      };
+    }
+    if (skillInvocation.command.model) {
+      directives = {
+        ...directives,
+        hasModelDirective: true,
+        rawModelDirective: skillInvocation.command.model,
+      };
+    }
   }
 
   const sendInlineReply = async (reply?: ReplyPayload) => {

@@ -54,6 +54,8 @@ export type SkillCommandSpec = {
   description: string;
   /** Optional deterministic dispatch behavior for this command. */
   dispatch?: SkillCommandDispatchSpec;
+  thinking?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+  model?: string;
 };
 
 export type SkillsInstallPreferences = {
