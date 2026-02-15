@@ -59,6 +59,7 @@ See [Venice AI](/providers/venice).
 
 ## Transcription providers
 
+- [AssemblyAI (audio transcription)](/providers/assemblyai)
 - [Deepgram (audio transcription)](/providers/deepgram)
 
 ## Community tools
