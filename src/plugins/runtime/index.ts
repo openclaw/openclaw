@@ -71,6 +71,7 @@ import { shouldLogVerbose } from "../../globals.js";
 import { monitorIMessageProvider } from "../../imessage/monitor.js";
 import { probeIMessage } from "../../imessage/probe.js";
 import { sendMessageIMessage } from "../../imessage/send.js";
+import { onAgentEvent } from "../../infra/agent-events.js";
 import { getChannelActivity, recordChannelActivity } from "../../infra/channel-activity.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import {
@@ -108,6 +109,7 @@ import {
 } from "../../pairing/pairing-store.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
+import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { monitorSignalProvider } from "../../signal/index.js";
 import { probeSignal } from "../../signal/probe.js";
 import { sendMessageSignal } from "../../signal/send.js";
@@ -411,6 +413,10 @@ export function createPluginRuntime(): PluginRuntime {
         buildTemplateMessageFromPayload,
         monitorLineProvider,
       },
+    },
+    events: {
+      onAgentEvent,
+      onSessionTranscriptUpdate,
     },
     logging: {
       shouldLogVerbose,

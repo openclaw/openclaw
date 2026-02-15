@@ -81,6 +81,9 @@ type MediaKindFromMime = typeof import("../../media/constants.js").mediaKindFrom
 type IsVoiceCompatibleAudio = typeof import("../../media/audio.js").isVoiceCompatibleAudio;
 type GetImageMetadata = typeof import("../../media/image-ops.js").getImageMetadata;
 type ResizeToJpeg = typeof import("../../media/image-ops.js").resizeToJpeg;
+type OnAgentEvent = typeof import("../../infra/agent-events.js").onAgentEvent;
+type OnSessionTranscriptUpdate =
+  typeof import("../../sessions/transcript-events.js").onSessionTranscriptUpdate;
 type CreateMemoryGetTool = typeof import("../../agents/tools/memory-tool.js").createMemoryGetTool;
 type CreateMemorySearchTool =
   typeof import("../../agents/tools/memory-tool.js").createMemorySearchTool;
@@ -350,6 +353,10 @@ export type PluginRuntime = {
       buildTemplateMessageFromPayload: BuildTemplateMessageFromPayload;
       monitorLineProvider: MonitorLineProvider;
     };
+  };
+  events: {
+    onAgentEvent: OnAgentEvent;
+    onSessionTranscriptUpdate: OnSessionTranscriptUpdate;
   };
   logging: {
     shouldLogVerbose: ShouldLogVerbose;
