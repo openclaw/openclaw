@@ -1,6 +1,7 @@
 export { CLAUDE_CLI_PROFILE_ID, CODEX_CLI_PROFILE_ID } from "./auth-profiles/constants.js";
 export { resolveAuthProfileDisplayLabel } from "./auth-profiles/display.js";
 export { formatAuthDoctorHint } from "./auth-profiles/doctor.js";
+export { resyncExternalCliOnAuthError } from "./auth-profiles/external-cli-sync.js";
 export { resolveApiKeyForProfile } from "./auth-profiles/oauth.js";
 export { resolveAuthProfileOrder } from "./auth-profiles/order.js";
 export { resolveAuthStorePathForDisplay } from "./auth-profiles/paths.js";
