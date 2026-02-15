@@ -321,7 +321,7 @@ export function createOpenClawCodingTools(options?: {
     pathPrepend: options?.exec?.pathPrepend ?? execConfig.pathPrepend,
     safeBins: options?.exec?.safeBins ?? execConfig.safeBins,
     agentId,
-    cwd: options?.workspaceDir,
+    cwd: workspaceRoot,
     allowBackground,
     scopeKey,
     sessionKey: options?.sessionKey,
@@ -386,7 +386,7 @@ export function createOpenClawCodingTools(options?: {
       agentDir: options?.agentDir,
       sandboxRoot,
       sandboxFsBridge,
-      workspaceDir: options?.workspaceDir,
+      workspaceDir: workspaceRoot,
       sandboxed: !!sandbox,
       config: options?.config,
       pluginToolAllowlist: collectExplicitAllowlist([
