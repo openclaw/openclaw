@@ -211,7 +211,7 @@ export async function loadImageFromRef(
     const media = options?.sandbox
       ? await loadWebMedia(targetPath, {
           maxBytes: options.maxBytes,
-          localRoots: "any",
+          sandboxValidated: true,
           readFile: (filePath) =>
             options.sandbox!.bridge.readFile({ filePath, cwd: options.sandbox!.root }),
         })
