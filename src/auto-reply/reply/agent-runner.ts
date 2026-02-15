@@ -173,9 +173,21 @@ export async function runReplyAgent(params: {
           });
         }
       }
+      typing.markRunComplete();
       typing.cleanup();
       return undefined;
     }
+  }
+
+  // Heartbeat runs arriving while another run is active are silently dropped
+  // rather than enqueued as followups.  Enqueueing a heartbeat would create a
+  // duplicate agent run when the queue drains, producing extra response
+  // branches delivered to the user (see #8063).  The next heartbeat interval
+  // will re-check the session independently.
+  if (isHeartbeat && isActive) {
+    typing.markRunComplete();
+    typing.cleanup();
+    return undefined;
   }
 
   if (isActive && (shouldFollowup || resolvedQueue.mode === "steer")) {
@@ -192,6 +204,7 @@ export async function runReplyAgent(params: {
         });
       }
     }
+    typing.markRunComplete();
     typing.cleanup();
     return undefined;
   }
