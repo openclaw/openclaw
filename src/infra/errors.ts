@@ -43,6 +43,18 @@ export function formatErrorMessage(err: unknown): string {
   }
 }
 
+/** Extract diagnostic detail from a network error's cause chain (e.g. APIConnectionError). */
+export function describeNetworkError(err: unknown): string {
+  const msg = formatErrorMessage(err);
+  const cause = (err as { cause?: unknown })?.cause;
+  if (!cause) return msg;
+  const code = extractErrorCode(cause);
+  const causeMsg = cause instanceof Error ? cause.message : undefined;
+  const detail = code ?? causeMsg;
+  if (!detail || msg.includes(detail)) return msg;
+  return `${msg} (${detail})`;
+}
+
 export function formatUncaughtError(err: unknown): string {
   if (extractErrorCode(err) === "INVALID_CONFIG") {
     return formatErrorMessage(err);
