@@ -3,6 +3,20 @@ import fs from "node:fs";
 import path from "node:path";
 
 function resolvePowerShellPath(): string {
+  const comspec = process.env.COMSPEC?.trim();
+  if (comspec) {
+    const normalized = comspec.replace(/^"|"$/g, "");
+    if (path.basename(normalized).toLowerCase() === "pwsh.exe") {
+      return normalized;
+    }
+  }
+
+  const programFiles = process.env.ProgramFiles || "C:\\Program Files";
+  const pwshCandidate = path.join(programFiles, "PowerShell", "7", "pwsh.exe");
+  if (fs.existsSync(pwshCandidate)) {
+    return pwshCandidate;
+  }
+
   const systemRoot = process.env.SystemRoot || process.env.WINDIR;
   if (systemRoot) {
     const candidate = path.join(

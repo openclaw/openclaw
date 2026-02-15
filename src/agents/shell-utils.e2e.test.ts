@@ -47,7 +47,8 @@ describe("getShellConfig", () => {
   if (isWin) {
     it("uses PowerShell on Windows", () => {
       const { shell } = getShellConfig();
-      expect(shell.toLowerCase()).toContain("powershell");
+      const lower = shell.toLowerCase();
+      expect(lower.includes("powershell") || lower.includes("pwsh")).toBe(true);
     });
     return;
   }
