@@ -4,6 +4,7 @@ import { loadConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
 import { capArrayByJsonBytes } from "../../gateway/session-utils.fs.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { authorizeSessionAccess } from "../../security/session-access.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { jsonResult, readStringParam } from "./common.js";
 import {
@@ -232,6 +233,22 @@ export function createSessionsHistoryTool(opts?: {
           return jsonResult({
             status: "forbidden",
             error: "Agent-to-agent history denied by tools.agentToAgent.allow.",
+          });
+        }
+      }
+
+      // Cross-session isolation (same agent, different sessions)
+      if (!isCrossAgent && requesterInternalKey && resolvedKey !== requesterInternalKey) {
+        const accessDecision = authorizeSessionAccess({
+          callerSessionKey: requesterInternalKey,
+          targetSessionKey: resolvedKey,
+          accessType: "transcript",
+          config: cfg,
+        });
+        if (!accessDecision.allowed) {
+          return jsonResult({
+            status: "forbidden",
+            error: accessDecision.reason ?? "Cross-session access denied",
           });
         }
       }

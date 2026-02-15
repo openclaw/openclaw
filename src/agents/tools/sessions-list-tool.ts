@@ -5,6 +5,7 @@ import { loadConfig } from "../../config/config.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { callGateway } from "../../gateway/call.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { authorizeSessionAccess } from "../../security/session-access.js";
 import { jsonResult, readStringArrayParam } from "./common.js";
 import {
   createAgentToAgentPolicy,
@@ -195,13 +196,26 @@ export function createSessionsListTool(opts?: {
             alias,
             mainKey,
           });
-          const history = await callGateway<{ messages: Array<unknown> }>({
-            method: "chat.history",
-            params: { sessionKey: resolvedKey, limit: messageLimit },
-          });
-          const rawMessages = Array.isArray(history?.messages) ? history.messages : [];
-          const filtered = stripToolMessages(rawMessages);
-          row.messages = filtered.length > messageLimit ? filtered.slice(-messageLimit) : filtered;
+          // Cross-session isolation: omit message previews for other sessions
+          const canAccessTranscript =
+            !requesterInternalKey ||
+            resolvedKey === requesterInternalKey ||
+            authorizeSessionAccess({
+              callerSessionKey: requesterInternalKey,
+              targetSessionKey: resolvedKey,
+              accessType: "transcript",
+              config: cfg,
+            }).allowed;
+          if (canAccessTranscript) {
+            const history = await callGateway<{ messages: Array<unknown> }>({
+              method: "chat.history",
+              params: { sessionKey: resolvedKey, limit: messageLimit },
+            });
+            const rawMessages = Array.isArray(history?.messages) ? history.messages : [];
+            const filtered = stripToolMessages(rawMessages);
+            row.messages =
+              filtered.length > messageLimit ? filtered.slice(-messageLimit) : filtered;
+          }
         }
 
         rows.push(row);

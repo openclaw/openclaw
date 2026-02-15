@@ -5,7 +5,12 @@ import type { MemorySearchResult } from "../../memory/types.js";
 import type { AnyAgentTool } from "./common.js";
 import { resolveMemoryBackendConfig } from "../../memory/backend-config.js";
 import { getMemorySearchManager } from "../../memory/index.js";
-import { parseAgentSessionKey } from "../../routing/session-key.js";
+import {
+  normalizeMainKey,
+  parseAgentSessionKey,
+  resolveAgentIdFromSessionKey,
+} from "../../routing/session-key.js";
+import { authorizeSessionAccess } from "../../security/session-access.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveMemorySearchConfig } from "../memory-search.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
@@ -74,8 +79,13 @@ export function createMemorySearchTool(options: {
           minScore,
           sessionKey: options.agentSessionKey,
         });
+        // Cross-session isolation: filter out session transcript results the caller cannot access
+        const filteredResults = filterSessionTranscriptResults(rawResults, {
+          callerSessionKey: options.agentSessionKey,
+          config: cfg,
+        });
         const status = manager.status();
-        const decorated = decorateCitations(rawResults, includeCitations);
+        const decorated = decorateCitations(filteredResults, includeCitations);
         const resolved = resolveMemoryBackendConfig({ cfg, agentId });
         const results =
           status.backend === "qmd"
@@ -218,4 +228,59 @@ function deriveChatTypeFromSessionKey(sessionKey?: string): "direct" | "group" |
     return "group";
   }
   return "direct";
+}
+
+/**
+ * Filter memory search results to enforce cross-session transcript isolation.
+ *
+ * Results with source "sessions" are session transcript chunks. These should only
+ * be returned to the caller if they have access. Global memory files (MEMORY.md,
+ * memory/*.md) have source "memory" and are always accessible within the same agent.
+ *
+ * Since transcript files are named by sessionId (UUID) and we cannot easily map them
+ * back to session keys, we use a conservative approach: for session-source results,
+ * we check whether the caller has cross-session memory access within their agent.
+ * The main session always has access (administrative context). Non-main sessions
+ * are denied access to other sessions' transcripts.
+ */
+function filterSessionTranscriptResults(
+  results: MemorySearchResult[],
+  params: { callerSessionKey?: string; config: OpenClawConfig },
+): MemorySearchResult[] {
+  const { callerSessionKey, config } = params;
+  if (!callerSessionKey) {
+    return results;
+  }
+
+  // Check if there are any session-source results to filter
+  const hasSessionResults = results.some((r) => r.source === "sessions");
+  if (!hasSessionResults) {
+    return results;
+  }
+
+  // Check if the caller is the main session (which has full access)
+  const callerAgentId = resolveAgentIdFromSessionKey(callerSessionKey);
+  const mainKey = normalizeMainKey(config.session?.mainKey);
+  const callerMainSessionKey = `agent:${callerAgentId}:${mainKey}`;
+  if (callerSessionKey === callerMainSessionKey) {
+    return results;
+  }
+
+  // For non-main sessions, use authorizeSessionAccess to check if cross-session
+  // memory access is allowed. We use a synthetic target that represents "any other
+  // session within the same agent" since the decision is uniform.
+  const syntheticTarget = `agent:${callerAgentId}:__other_session__`;
+  const decision = authorizeSessionAccess({
+    callerSessionKey,
+    targetSessionKey: syntheticTarget,
+    accessType: "memory",
+    config,
+  });
+
+  if (decision.allowed) {
+    return results;
+  }
+
+  // Filter out session transcript results — keep only memory-source results
+  return results.filter((r) => r.source !== "sessions");
 }
