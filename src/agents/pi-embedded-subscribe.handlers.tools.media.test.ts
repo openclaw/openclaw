@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
-import { handleToolExecutionEnd } from "./pi-embedded-subscribe.handlers.tools.js";
+import {
+  handleToolExecutionEnd,
+  handleToolExecutionStart,
+} from "./pi-embedded-subscribe.handlers.tools.js";
 
 // Minimal mock context factory. Only the fields needed for the media emission path.
 function createMockContext(overrides?: {
@@ -55,6 +58,19 @@ function createMockContext(overrides?: {
 }
 
 describe("handleToolExecutionEnd media emission", () => {
+  it("does not warn for read tool when path is provided via file_path alias", async () => {
+    const ctx = createMockContext();
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "read",
+      toolCallId: "tc-1",
+      args: { file_path: "README.md" },
+    });
+
+    expect(ctx.log.warn).not.toHaveBeenCalled();
+  });
+
   it("emits media when verbose is off and tool result has MEDIA: path", async () => {
     const onToolResult = vi.fn();
     const ctx = createMockContext({ shouldEmitToolOutput: false, onToolResult });
