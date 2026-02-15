@@ -274,8 +274,19 @@ async function runCommand(
 
     child.on("error", (err) => {
       finalize(undefined, err.message);
+      // Destroy stdio streams to release pipe FDs on spawn failure
+      try {
+        child.stdout?.destroy();
+      } catch {
+        /* ignore */
+      }
+      try {
+        child.stderr?.destroy();
+      } catch {
+        /* ignore */
+      }
     });
-    child.on("exit", (code) => {
+    child.on("close", (code) => {
       finalize(code === null ? undefined : code, null);
     });
   });
