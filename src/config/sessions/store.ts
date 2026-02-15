@@ -525,7 +525,7 @@ async function saveSessionStoreUnlocked(
   // We serialize writers via the session-store lock instead.
   if (process.platform === "win32") {
     try {
-      await fs.promises.writeFile(storePath, json, "utf-8");
+      await fs.promises.writeFile(storePath, json, { encoding: "utf-8", mode: 0o600 });
     } catch (err) {
       const code =
         err && typeof err === "object" && "code" in err
