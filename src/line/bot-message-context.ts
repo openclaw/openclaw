@@ -172,7 +172,7 @@ function extractMediaPlaceholder(message: MessageEvent["message"]): string {
 }
 
 type LineRouteInfo = ReturnType<typeof resolveAgentRoute>;
-type LineSourceInfo = ReturnType<typeof getSourceInfo> & { peerId: string };
+type LineSourceInfoWithPeerId = LineSourceInfo & { peerId: string };
 
 function resolveLineConversationLabel(params: {
   isGroup: boolean;
@@ -213,7 +213,7 @@ async function finalizeLineInboundContext(params: {
   account: ResolvedLineAccount;
   event: MessageEvent | PostbackEvent;
   route: LineRouteInfo;
-  source: LineSourceInfo;
+  source: LineSourceInfoWithPeerId;
   rawBody: string;
   timestamp: number;
   messageSid: string;

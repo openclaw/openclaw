@@ -6,7 +6,6 @@ import type {
   JoinEvent,
   LeaveEvent,
   PostbackEvent,
-  EventSource,
 } from "@line/bot-sdk";
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
