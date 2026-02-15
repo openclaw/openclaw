@@ -13,6 +13,7 @@ Covered commits:
 - `b9490e95e` Runner: recover session summary after transcript rewinds
 - `827d3e48c` Runner: inject session summary only under context pressure
 - `f43c5f41f` Session: persist oversized tool payloads as file refs
+- `312f3401e` Sessions: add on-demand outputRef payload retrieval
 
 ## Design Goals
 
@@ -145,6 +146,20 @@ flowchart TD
   G --> H["Persist Compact Message to Session JSONL"]
 ```
 
+### 7) OutputRef Retrieval Path (P6)
+
+Primary file:
+
+- `src/agents/tools/sessions-history-tool.ts`
+
+Key behavior:
+
+- `sessions_history` now preserves `details.outputRef` metadata when sanitizing tool-result history.
+- Added optional on-demand retrieval parameters:
+  - `outputRefPath`
+  - `outputRefMaxChars`
+- When requested, tool resolves the session transcript path, validates the ref remains under `tool-output/`, reads payload text, and returns capped payload with `sha256Verified` integrity signal.
+
 ## Key Files Changed
 
 - `src/agents/pi-embedded-runner/context-planner.ts`
@@ -159,6 +174,8 @@ flowchart TD
 - `src/agents/pi-embedded-runner/run/attempt.e2e.test.ts`
 - `src/agents/session-tool-result-guard.ts`
 - `src/agents/session-tool-result-guard.e2e.test.ts`
+- `src/agents/tools/sessions-history-tool.ts`
+- `src/agents/openclaw-tools.sessions.e2e.test.ts`
 
 ## Automated Test Results
 
@@ -172,6 +189,17 @@ Final verification rerun completed on HEAD `f43c5f41f`:
   - Result: `6` files, `46` tests passed
 
 Historical targeted runs during implementation also passed for the same suites when executed incrementally.
+
+Additional verification after P6 (`312f3401e`):
+
+- `pnpm tsgo`
+  - Result: pass
+- `pnpm exec vitest run -c vitest.e2e.config.ts src/agents/openclaw-tools.sessions.e2e.test.ts -t sessions_history`
+  - Result: `1` file, `6` tests passed (`11` skipped)
+- `pnpm exec vitest run -c vitest.e2e.config.ts src/agents/session-tool-result-guard.e2e.test.ts src/agents/session-tool-result-guard.tool-result-persist-hook.e2e.test.ts`
+  - Result: `2` files, `14` tests passed
+- `pnpm exec vitest run -c vitest.e2e.config.ts src/agents/tool-display.e2e.test.ts`
+  - Result: `1` file, `3` tests passed
 
 ## UAT Results
 
@@ -219,8 +247,8 @@ Implemented and validated:
 - Phase 3: incremental summary sidecar, loop prevention, rewind recovery
 - Phase 4: cache-aware conditional summary injection
 - Phase 5: oversized tool payload reference persistence
+- Phase 6: on-demand `outputRef` payload retrieval in `sessions_history`
 
 Remaining follow-ups:
 
-- Read helper path for `outputRef` payloads (on-demand full retrieval).
 - Benchmark report for token/cost/latency deltas across long sessions.
