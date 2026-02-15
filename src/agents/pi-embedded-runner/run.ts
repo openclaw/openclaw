@@ -47,11 +47,13 @@ import {
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { compactEmbeddedPiSessionDirect } from "./compact.js";
+import { getDmHistoryLimitFromSessionKey } from "./history.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { resolveModel } from "./model.js";
 import { runEmbeddedAttempt } from "./run/attempt.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
+import { stripOversizedImageFromSession } from "./strip-oversized-image.js";
 import {
   truncateOversizedToolResultsInSession,
   sessionLikelyHasOversizedToolResults,
@@ -718,6 +720,26 @@ export async function runEmbeddedPiAgent(
             // Handle image size errors with a user-friendly message (no retry needed)
             const imageSizeError = parseImageSizeError(errorText);
             if (imageSizeError) {
+              // Strip the oversized image from the session file so it doesn't
+              // cause an infinite retry loop on subsequent messages.
+              if (imageSizeError.messageIndex !== undefined && params.sessionFile) {
+                try {
+                  const historyLimit = getDmHistoryLimitFromSessionKey(
+                    params.sessionKey,
+                    params.config,
+                  );
+                  await stripOversizedImageFromSession(
+                    params.sessionFile,
+                    imageSizeError.messageIndex,
+                    imageSizeError.contentIndex,
+                    { historyTurnsLimit: historyLimit },
+                  );
+                } catch (stripErr) {
+                  log.warn(
+                    `Failed to strip oversized image from session: ${describeUnknownError(stripErr)}`,
+                  );
+                }
+              }
               const maxMb = imageSizeError.maxMb;
               const maxMbLabel =
                 typeof maxMb === "number" && Number.isFinite(maxMb) ? `${maxMb}` : null;
@@ -805,23 +827,44 @@ export async function runEmbeddedPiAgent(
           const cloudCodeAssistFormatError = attempt.cloudCodeAssistFormatError;
           const imageDimensionError = parseImageDimensionError(lastAssistant?.errorMessage ?? "");
 
-          if (imageDimensionError && lastProfileId) {
-            const details = [
-              imageDimensionError.messageIndex !== undefined
-                ? `message=${imageDimensionError.messageIndex}`
-                : null,
-              imageDimensionError.contentIndex !== undefined
-                ? `content=${imageDimensionError.contentIndex}`
-                : null,
-              imageDimensionError.maxDimensionPx !== undefined
-                ? `limit=${imageDimensionError.maxDimensionPx}px`
-                : null,
-            ]
-              .filter(Boolean)
-              .join(" ");
-            log.warn(
-              `Profile ${lastProfileId} rejected image payload${details ? ` (${details})` : ""}.`,
-            );
+          if (imageDimensionError) {
+            if (lastProfileId) {
+              const details = [
+                imageDimensionError.messageIndex !== undefined
+                  ? `message=${imageDimensionError.messageIndex}`
+                  : null,
+                imageDimensionError.contentIndex !== undefined
+                  ? `content=${imageDimensionError.contentIndex}`
+                  : null,
+                imageDimensionError.maxDimensionPx !== undefined
+                  ? `limit=${imageDimensionError.maxDimensionPx}px`
+                  : null,
+              ]
+                .filter(Boolean)
+                .join(" ");
+              log.warn(
+                `Profile ${lastProfileId} rejected image payload${details ? ` (${details})` : ""}.`,
+              );
+            }
+            // Strip the rejected image from the session to prevent infinite retry loops.
+            if (imageDimensionError.messageIndex !== undefined && params.sessionFile) {
+              try {
+                const historyLimit = getDmHistoryLimitFromSessionKey(
+                  params.sessionKey,
+                  params.config,
+                );
+                await stripOversizedImageFromSession(
+                  params.sessionFile,
+                  imageDimensionError.messageIndex,
+                  imageDimensionError.contentIndex,
+                  { historyTurnsLimit: historyLimit },
+                );
+              } catch (stripErr) {
+                log.warn(
+                  `Failed to strip oversized image from session: ${describeUnknownError(stripErr)}`,
+                );
+              }
+            }
           }
 
           // Treat timeout as potential rate limit (Antigravity hangs on rate limit)
