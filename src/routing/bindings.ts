@@ -17,6 +17,33 @@ export function listBindings(cfg: OpenClawConfig): AgentBinding[] {
   return Array.isArray(cfg.bindings) ? cfg.bindings : [];
 }
 
+function resolveNormalizedBindingMatch(binding: AgentBinding): {
+  agentId: string;
+  accountId: string;
+  channelId: string;
+} | null {
+  if (!binding || typeof binding !== "object") {
+    return null;
+  }
+  const match = binding.match;
+  if (!match || typeof match !== "object") {
+    return null;
+  }
+  const channelId = normalizeBindingChannelId(match.channel);
+  if (!channelId) {
+    return null;
+  }
+  const accountId = typeof match.accountId === "string" ? match.accountId.trim() : "";
+  if (!accountId || accountId === "*") {
+    return null;
+  }
+  return {
+    agentId: normalizeAgentId(binding.agentId),
+    accountId: normalizeAccountId(accountId),
+    channelId,
+  };
+}
+
 export function listBoundAccountIds(cfg: OpenClawConfig, channelId: string): string[] {
   const normalizedChannel = normalizeBindingChannelId(channelId);
   if (!normalizedChannel) {
@@ -24,22 +51,11 @@ export function listBoundAccountIds(cfg: OpenClawConfig, channelId: string): str
   }
   const ids = new Set<string>();
   for (const binding of listBindings(cfg)) {
-    if (!binding || typeof binding !== "object") {
+    const resolved = resolveNormalizedBindingMatch(binding);
+    if (!resolved || resolved.channelId !== normalizedChannel) {
       continue;
     }
-    const match = binding.match;
-    if (!match || typeof match !== "object") {
-      continue;
-    }
-    const channel = normalizeBindingChannelId(match.channel);
-    if (!channel || channel !== normalizedChannel) {
-      continue;
-    }
-    const accountId = typeof match.accountId === "string" ? match.accountId.trim() : "";
-    if (!accountId || accountId === "*") {
-      continue;
-    }
-    ids.add(normalizeAccountId(accountId));
+    ids.add(resolved.accountId);
   }
   return Array.from(ids).toSorted((a, b) => a.localeCompare(b));
 }
@@ -54,25 +70,15 @@ export function resolveDefaultAgentBoundAccountId(
   }
   const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(cfg));
   for (const binding of listBindings(cfg)) {
-    if (!binding || typeof binding !== "object") {
+    const resolved = resolveNormalizedBindingMatch(binding);
+    if (
+      !resolved ||
+      resolved.channelId !== normalizedChannel ||
+      resolved.agentId !== defaultAgentId
+    ) {
       continue;
     }
-    if (normalizeAgentId(binding.agentId) !== defaultAgentId) {
-      continue;
-    }
-    const match = binding.match;
-    if (!match || typeof match !== "object") {
-      continue;
-    }
-    const channel = normalizeBindingChannelId(match.channel);
-    if (!channel || channel !== normalizedChannel) {
-      continue;
-    }
-    const accountId = typeof match.accountId === "string" ? match.accountId.trim() : "";
-    if (!accountId || accountId === "*") {
-      continue;
-    }
-    return normalizeAccountId(accountId);
+    return resolved.accountId;
   }
   return null;
 }
@@ -80,30 +86,17 @@ export function resolveDefaultAgentBoundAccountId(
 export function buildChannelAccountBindings(cfg: OpenClawConfig) {
   const map = new Map<string, Map<string, string[]>>();
   for (const binding of listBindings(cfg)) {
-    if (!binding || typeof binding !== "object") {
+    const resolved = resolveNormalizedBindingMatch(binding);
+    if (!resolved) {
       continue;
     }
-    const match = binding.match;
-    if (!match || typeof match !== "object") {
-      continue;
+    const byAgent = map.get(resolved.channelId) ?? new Map<string, string[]>();
+    const list = byAgent.get(resolved.agentId) ?? [];
+    if (!list.includes(resolved.accountId)) {
+      list.push(resolved.accountId);
     }
-    const channelId = normalizeBindingChannelId(match.channel);
-    if (!channelId) {
-      continue;
-    }
-    const accountId = typeof match.accountId === "string" ? match.accountId.trim() : "";
-    if (!accountId || accountId === "*") {
-      continue;
-    }
-    const agentId = normalizeAgentId(binding.agentId);
-    const byAgent = map.get(channelId) ?? new Map<string, string[]>();
-    const list = byAgent.get(agentId) ?? [];
-    const normalizedAccountId = normalizeAccountId(accountId);
-    if (!list.includes(normalizedAccountId)) {
-      list.push(normalizedAccountId);
-    }
-    byAgent.set(agentId, list);
-    map.set(channelId, byAgent);
+    byAgent.set(resolved.agentId, list);
+    map.set(resolved.channelId, byAgent);
   }
   return map;
 }
