@@ -201,6 +201,28 @@ describe("auth rate limiter", () => {
     expect(limiter.check("").allowed).toBe(false);
   });
 
+  // ---------- default config (regression: #16876) ----------
+
+  it("creates a working limiter with no config (sensible defaults)", () => {
+    limiter = createAuthRateLimiter();
+    // Should use defaults: 10 maxAttempts, 60s window, 5min lockout
+    const result = limiter.check("10.0.0.50");
+    expect(result.allowed).toBe(true);
+    expect(result.remaining).toBe(10);
+    // Record 10 failures to trigger lockout
+    for (let i = 0; i < 10; i++) {
+      limiter.recordFailure("10.0.0.50");
+    }
+    expect(limiter.check("10.0.0.50").allowed).toBe(false);
+  });
+
+  it("creates a working limiter with empty object config", () => {
+    limiter = createAuthRateLimiter({});
+    const result = limiter.check("10.0.0.51");
+    expect(result.allowed).toBe(true);
+    expect(result.remaining).toBe(10);
+  });
+
   // ---------- dispose ----------
 
   it("dispose clears all entries", () => {
