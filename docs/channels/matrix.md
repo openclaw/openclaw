@@ -192,6 +192,8 @@ Notes:
 - `channels.matrix.dm.allowFrom` accepts full Matrix user IDs (example: `@user:server`). The wizard resolves display names to user IDs when directory search finds a single exact match.
 - Do not use display names or bare localparts (example: `"Alice"` or `"alice"`). They are ambiguous and are ignored for allowlist matching. Use full `@user:server` IDs.
 
+**Important:** Even if DM is disabled (`channels.matrix.dm.policy="disabled"`), you must configure `channels.matrix.dm.allowFrom` to enable command execution (like `/model`, `/status`, `/reset`). Without it, commands will be treated as regular messages and sent to the AI model instead of being processed by the gateway.
+
 ## Rooms (groups)
 
 - Default: `channels.matrix.groupPolicy = "allowlist"` (mention-gated). Use `channels.defaults.groupPolicy` to override the default when unset.
