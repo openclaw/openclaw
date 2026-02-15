@@ -1,5 +1,6 @@
 export { runDaemonInstall } from "./install.js";
 export {
+  preloadDaemonCli,
   runDaemonRestart,
   runDaemonStart,
   runDaemonStop,

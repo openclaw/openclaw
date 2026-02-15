@@ -48,3 +48,15 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
     opts,
   });
 }
+
+/**
+ * Preload daemon-cli module and its dependencies.
+ * This ensures all required modules are loaded into memory before any update process
+ * that might delete the on-disk files.
+ */
+export async function preloadDaemonCli(): Promise<void> {
+  // Import all daemon-cli dependencies to ensure they're cached in memory
+  await import("./lifecycle-core.js");
+  await import("./shared.js");
+  await import("../../daemon/service.js");
+}

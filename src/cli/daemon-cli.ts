@@ -1,6 +1,7 @@
 export { registerDaemonCli } from "./daemon-cli/register.js";
 export { addGatewayServiceCommands } from "./daemon-cli/register-service-commands.js";
 export {
+  preloadDaemonCli,
   runDaemonInstall,
   runDaemonRestart,
   runDaemonStart,

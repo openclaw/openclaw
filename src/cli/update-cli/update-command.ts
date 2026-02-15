@@ -32,7 +32,7 @@ import { pathExists } from "../../utils.js";
 import { replaceCliName, resolveCliName } from "../cli-name.js";
 import { formatCliCommand } from "../command-format.js";
 import { installCompletion } from "../completion-cli.js";
-import { runDaemonRestart } from "../daemon-cli.js";
+import { preloadDaemonCli, runDaemonRestart } from "../daemon-cli.js";
 import { createUpdateProgress, printResult } from "./progress.js";
 import {
   DEFAULT_PACKAGE_NAME,
@@ -565,6 +565,11 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
 
   const { progress, stop } = createUpdateProgress(showProgress);
   const startedAt = Date.now();
+
+  // Preload daemon-cli module before the update to ensure all required modules
+  // are loaded into memory. This prevents errors after npm update when the old
+  // on-disk files have been deleted.
+  await preloadDaemonCli();
 
   const result = switchToPackage
     ? await runPackageInstallUpdate({

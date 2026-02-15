@@ -115,6 +115,7 @@ vi.mock("../commands/doctor.js", () => ({
 }));
 // Mock the daemon-cli module
 vi.mock("./daemon-cli.js", () => ({
+  preloadDaemonCli: vi.fn(),
   runDaemonRestart: vi.fn(),
 }));
 
