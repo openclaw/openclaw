@@ -45,6 +45,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
   meta: {
     ...meta,
     aliases: [...meta.aliases],
+    preferSessionLookupForAnnounceTarget: true,
   },
   onboarding: msteamsOnboardingAdapter,
   pairing: {
