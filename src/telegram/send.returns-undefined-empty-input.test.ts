@@ -645,6 +645,63 @@ describe("sendMessageTelegram", () => {
     });
     expect(res.messageId).toBe("59");
   });
+
+  it("preserves message_thread_id=1 for DM topics", async () => {
+    const chatId = "123";
+    const sendDocument = vi.fn().mockResolvedValue({
+      message_id: 58,
+      chat: { id: chatId },
+    });
+    const api = { sendDocument } as unknown as {
+      sendDocument: typeof sendDocument;
+    };
+
+    loadWebMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("doc"),
+      fileName: "file.pdf",
+    });
+
+    await sendMessageTelegram(chatId, "dm doc", {
+      token: "tok",
+      api,
+      mediaUrl: "https://example.com/file.pdf",
+      messageThreadId: 1,
+    });
+
+    expect(sendDocument).toHaveBeenCalledWith(chatId, expect.anything(), {
+      caption: "dm doc",
+      parse_mode: "HTML",
+      message_thread_id: 1,
+    });
+  });
+
+  it("omits message_thread_id=1 for forum general topic", async () => {
+    const chatId = "-1001234567890";
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 59,
+      chat: { id: chatId },
+    });
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    await sendMessageTelegram(chatId, "general topic message", {
+      token: "tok",
+      api,
+      messageThreadId: 1,
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      chatId,
+      "general topic message",
+      expect.objectContaining({
+        parse_mode: "HTML",
+      }),
+    );
+
+    const params = sendMessage.mock.calls[0]?.[2] as { message_thread_id?: number } | undefined;
+    expect(params?.message_thread_id).toBeUndefined();
+  });
 });
 
 describe("sendStickerTelegram", () => {
@@ -776,6 +833,48 @@ describe("sendStickerTelegram", () => {
       message_thread_id: 271,
       reply_to_message_id: 500,
     });
+  });
+
+  it("preserves message_thread_id=1 for DM stickers", async () => {
+    const chatId = "123";
+    const fileId = "CAACAgIAAxkBAAI...sticker_file_id";
+    const sendSticker = vi.fn().mockResolvedValue({
+      message_id: 107,
+      chat: { id: chatId },
+    });
+    const api = { sendSticker } as unknown as {
+      sendSticker: typeof sendSticker;
+    };
+
+    await sendStickerTelegram(chatId, fileId, {
+      token: "tok",
+      api,
+      messageThreadId: 1,
+    });
+
+    expect(sendSticker).toHaveBeenCalledWith(chatId, fileId, {
+      message_thread_id: 1,
+    });
+  });
+
+  it("omits message_thread_id=1 for forum general topic stickers", async () => {
+    const chatId = "-1001234567890";
+    const fileId = "CAACAgIAAxkBAAI...sticker_file_id";
+    const sendSticker = vi.fn().mockResolvedValue({
+      message_id: 108,
+      chat: { id: chatId },
+    });
+    const api = { sendSticker } as unknown as {
+      sendSticker: typeof sendSticker;
+    };
+
+    await sendStickerTelegram(chatId, fileId, {
+      token: "tok",
+      api,
+      messageThreadId: 1,
+    });
+
+    expect(sendSticker).toHaveBeenCalledWith(chatId, fileId, undefined);
   });
 
   it("normalizes chat ids with internal prefixes", async () => {
