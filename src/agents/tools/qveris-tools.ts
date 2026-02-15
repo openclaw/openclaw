@@ -1,5 +1,4 @@
 import { Type } from "@sinclair/typebox";
-
 import type { OpenClawConfig } from "../../config/config.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
@@ -80,7 +79,9 @@ function resolveQverisConfig(cfg?: OpenClawConfig): QverisConfig {
 }
 
 function resolveQverisEnabled(params: { config?: QverisConfig; sandboxed?: boolean }): boolean {
-  if (typeof params.config?.enabled === "boolean") return params.config.enabled;
+  if (typeof params.config?.enabled === "boolean") {
+    return params.config.enabled;
+  }
   // Enabled by default if API key is present
   return Boolean(resolveQverisApiKey(params.config));
 }
@@ -326,6 +327,7 @@ export function createQverisTools(options?: {
       } catch (parseError) {
         throw new Error(
           `Invalid JSON in params_to_tool: ${parseError instanceof Error ? parseError.message : "Unknown parse error"}`,
+          { cause: parseError },
         );
       }
 

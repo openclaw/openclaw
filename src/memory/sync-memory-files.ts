@@ -1,6 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { buildFileEntry, listMemoryFiles, type MemoryFileEntry } from "./internal.js";
+import { indexFileEntryIfChanged } from "./sync-index.js";
+import { deleteStaleIndexedPaths } from "./sync-stale.js";
 
 const log = createSubsystemLogger("memory");
 
@@ -50,53 +52,25 @@ export async function syncMemoryFiles(params: {
   }
 
   const tasks = fileEntries.map((entry) => async () => {
-    const record = params.db
-      .prepare(`SELECT hash FROM files WHERE path = ? AND source = ?`)
-      .get(entry.path, "memory") as { hash: string } | undefined;
-    if (!params.needsFullReindex && record?.hash === entry.hash) {
-      if (params.progress) {
-        params.progress.completed += 1;
-        params.progress.report({
-          completed: params.progress.completed,
-          total: params.progress.total,
-        });
-      }
-      return;
-    }
-    await params.indexFile(entry);
-    if (params.progress) {
-      params.progress.completed += 1;
-      params.progress.report({
-        completed: params.progress.completed,
-        total: params.progress.total,
-      });
-    }
+    await indexFileEntryIfChanged({
+      db: params.db,
+      source: "memory",
+      needsFullReindex: params.needsFullReindex,
+      entry,
+      indexFile: params.indexFile,
+      progress: params.progress,
+    });
   });
 
   await params.runWithConcurrency(tasks, params.concurrency);
-
-  const staleRows = params.db
-    .prepare(`SELECT path FROM files WHERE source = ?`)
-    .all("memory") as Array<{ path: string }>;
-  for (const stale of staleRows) {
-    if (activePaths.has(stale.path)) {
-      continue;
-    }
-    params.db.prepare(`DELETE FROM files WHERE path = ? AND source = ?`).run(stale.path, "memory");
-    try {
-      params.db
-        .prepare(
-          `DELETE FROM ${params.vectorTable} WHERE id IN (SELECT id FROM chunks WHERE path = ? AND source = ?)`,
-        )
-        .run(stale.path, "memory");
-    } catch {}
-    params.db.prepare(`DELETE FROM chunks WHERE path = ? AND source = ?`).run(stale.path, "memory");
-    if (params.ftsEnabled && params.ftsAvailable) {
-      try {
-        params.db
-          .prepare(`DELETE FROM ${params.ftsTable} WHERE path = ? AND source = ? AND model = ?`)
-          .run(stale.path, "memory", params.model);
-      } catch {}
-    }
-  }
+  deleteStaleIndexedPaths({
+    db: params.db,
+    source: "memory",
+    activePaths,
+    vectorTable: params.vectorTable,
+    ftsTable: params.ftsTable,
+    ftsEnabled: params.ftsEnabled,
+    ftsAvailable: params.ftsAvailable,
+    model: params.model,
+  });
 }

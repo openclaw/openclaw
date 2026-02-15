@@ -180,7 +180,7 @@ The onboarding wizard guides you through: model auth, **QVeris API key**, `web_s
 
 On Telegram, WhatsApp, Signal, iMessage, Microsoft Teams, Discord, Google Chat, Slack:
 
-- **DM pairing** (`dmPolicy="pairing"` / `channels.discord.dm.policy="pairing"` / `channels.slack.dm.policy="pairing"`): unknown senders receive a short pairing code and the bot does not process their message.
+- **DM pairing** (`dmPolicy="pairing"` / `channels.discord.dmPolicy="pairing"` / `channels.slack.dmPolicy="pairing"`; legacy: `channels.discord.dm.policy`, `channels.slack.dm.policy`): unknown senders receive a short pairing code and the bot does not process their message.
 - Approve with: `openclaw pairing approve <channel> <code>` (then the sender is added to a local allowlist store).
 - Public inbound DMs require an explicit opt-in: set `dmPolicy="open"` and include `"*"` in the channel allowlist (`allowFrom` / `channels.discord.dm.allowFrom` / `channels.slack.dm.allowFrom`).
 

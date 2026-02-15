@@ -84,7 +84,9 @@ export function resolveXAccount(
  * Check if an account is configured with required credentials.
  */
 export function isXAccountConfigured(account: XAccountConfig | null): boolean {
-  if (!account) return false;
+  if (!account) {
+    return false;
+  }
   return Boolean(
     account.consumerKey &&
     account.consumerSecret &&

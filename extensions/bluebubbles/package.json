@@ -30,7 +30,7 @@
     "install": {
       "npmSpec": "@openclaw/bluebubbles",
       "localPath": "extensions/bluebubbles",
-      "defaultChoice": "npm"
+      "defaultChoice": "local"
     }
   }
 }

@@ -90,6 +90,43 @@ export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | und
 /** Maximum consecutive schedule errors before auto-disabling a job. */
 const MAX_SCHEDULE_ERRORS = 3;
 
+function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; nowMs: number }): {
+  changed: boolean;
+  skip: boolean;
+} {
+  const { state, job, nowMs } = params;
+  let changed = false;
+
+  if (!job.state) {
+    job.state = {};
+    changed = true;
+  }
+
+  if (!job.enabled) {
+    if (job.state.nextRunAtMs !== undefined) {
+      job.state.nextRunAtMs = undefined;
+      changed = true;
+    }
+    if (job.state.runningAtMs !== undefined) {
+      job.state.runningAtMs = undefined;
+      changed = true;
+    }
+    return { changed, skip: true };
+  }
+
+  const runningAt = job.state.runningAtMs;
+  if (typeof runningAt === "number" && nowMs - runningAt > STUCK_RUN_MS) {
+    state.deps.log.warn(
+      { jobId: job.id, runningAtMs: runningAt },
+      "cron: clearing stuck running marker",
+    );
+    job.state.runningAtMs = undefined;
+    changed = true;
+  }
+
+  return { changed, skip: false };
+}
+
 export function recomputeNextRuns(state: CronServiceState): boolean {
   if (!state.store) {
     return false;
@@ -97,29 +134,12 @@ export function recomputeNextRuns(state: CronServiceState): boolean {
   let changed = false;
   const now = state.deps.nowMs();
   for (const job of state.store.jobs) {
-    if (!job.state) {
-      job.state = {};
+    const tick = normalizeJobTickState({ state, job, nowMs: now });
+    if (tick.changed) {
       changed = true;
     }
-    if (!job.enabled) {
-      if (job.state.nextRunAtMs !== undefined) {
-        job.state.nextRunAtMs = undefined;
-        changed = true;
-      }
-      if (job.state.runningAtMs !== undefined) {
-        job.state.runningAtMs = undefined;
-        changed = true;
-      }
+    if (tick.skip) {
       continue;
-    }
-    const runningAt = job.state.runningAtMs;
-    if (typeof runningAt === "number" && now - runningAt > STUCK_RUN_MS) {
-      state.deps.log.warn(
-        { jobId: job.id, runningAtMs: runningAt },
-        "cron: clearing stuck running marker",
-      );
-      job.state.runningAtMs = undefined;
-      changed = true;
     }
     // Only recompute if nextRunAtMs is missing or already past-due.
     // Preserving a still-future nextRunAtMs avoids accidentally advancing
@@ -177,29 +197,12 @@ export function recomputeNextRunsForMaintenance(state: CronServiceState): boolea
   let changed = false;
   const now = state.deps.nowMs();
   for (const job of state.store.jobs) {
-    if (!job.state) {
-      job.state = {};
+    const tick = normalizeJobTickState({ state, job, nowMs: now });
+    if (tick.changed) {
       changed = true;
     }
-    if (!job.enabled) {
-      if (job.state.nextRunAtMs !== undefined) {
-        job.state.nextRunAtMs = undefined;
-        changed = true;
-      }
-      if (job.state.runningAtMs !== undefined) {
-        job.state.runningAtMs = undefined;
-        changed = true;
-      }
+    if (tick.skip) {
       continue;
-    }
-    const runningAt = job.state.runningAtMs;
-    if (typeof runningAt === "number" && now - runningAt > STUCK_RUN_MS) {
-      state.deps.log.warn(
-        { jobId: job.id, runningAtMs: runningAt },
-        "cron: clearing stuck running marker",
-      );
-      job.state.runningAtMs = undefined;
-      changed = true;
     }
     // Only compute missing nextRunAtMs, do NOT recompute existing ones.
     // If a job was past-due but not found by findDueJobs, recomputing would

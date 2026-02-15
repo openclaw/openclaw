@@ -7,27 +7,13 @@ import {
   type SessionNotification,
 } from "@agentclientprotocol/sdk";
 import { spawn, type ChildProcess } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
 import * as readline from "node:readline";
 import { Readable, Writable } from "node:stream";
+import { fileURLToPath } from "node:url";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
-
-/**
- * Tools that require explicit user approval in ACP sessions.
- * These tools can execute arbitrary code, modify the filesystem,
- * or access sensitive resources.
- */
-const DANGEROUS_ACP_TOOLS = new Set([
-  "exec",
-  "spawn",
-  "shell",
-  "sessions_spawn",
-  "sessions_send",
-  "gateway",
-  "fs_write",
-  "fs_delete",
-  "fs_move",
-  "apply_patch",
-]);
+import { DANGEROUS_ACP_TOOLS } from "../security/dangerous-tools.js";
 
 const SAFE_AUTO_APPROVE_KINDS = new Set(["read", "search"]);
 
@@ -96,11 +82,17 @@ function resolveToolKindForPermission(
   }
   const normalized = name.toLowerCase();
 
-  // Prefer a conservative classifier: if in doubt, return "other" (prompt-required).
-  if (normalized === "read" || normalized.includes("read")) {
+  const hasToken = (token: string) => {
+    // Tool names tend to be snake_case. Avoid substring heuristics (ex: "thread" contains "read").
+    const re = new RegExp(`(?:^|[._-])${token}(?:$|[._-])`);
+    return re.test(normalized);
+  };
+
+  // Prefer a conservative classifier: only classify safe kinds when confident.
+  if (normalized === "read" || hasToken("read")) {
     return "read";
   }
-  if (normalized === "search" || normalized.includes("search") || normalized.includes("find")) {
+  if (normalized === "search" || hasToken("search") || hasToken("find")) {
     return "search";
   }
   if (normalized.includes("fetch") || normalized.includes("http")) {
@@ -271,6 +263,25 @@ function buildServerArgs(opts: AcpClientOptions): string[] {
   return args;
 }
 
+function resolveSelfEntryPath(): string | null {
+  // Prefer a path relative to the built module location (dist/acp/client.js -> dist/entry.js).
+  try {
+    const here = fileURLToPath(import.meta.url);
+    const candidate = path.resolve(path.dirname(here), "..", "entry.js");
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  } catch {
+    // ignore
+  }
+
+  const argv1 = process.argv[1]?.trim();
+  if (argv1) {
+    return path.isAbsolute(argv1) ? argv1 : path.resolve(process.cwd(), argv1);
+  }
+  return null;
+}
+
 function printSessionUpdate(notification: SessionNotification): void {
   const update = notification.update;
   if (!("sessionUpdate" in update)) {
@@ -311,13 +322,16 @@ export async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpC
   const verbose = Boolean(opts.verbose);
   const log = verbose ? (msg: string) => console.error(`[acp-client] ${msg}`) : () => {};
 
-  ensureOpenClawCliOnPath({ cwd });
-  const serverCommand = opts.serverCommand ?? "openclaw";
+  ensureOpenClawCliOnPath();
   const serverArgs = buildServerArgs(opts);
 
-  log(`spawning: ${serverCommand} ${serverArgs.join(" ")}`);
+  const entryPath = resolveSelfEntryPath();
+  const serverCommand = opts.serverCommand ?? (entryPath ? process.execPath : "openclaw");
+  const effectiveArgs = opts.serverCommand || !entryPath ? serverArgs : [entryPath, ...serverArgs];
 
-  const agent = spawn(serverCommand, serverArgs, {
+  log(`spawning: ${serverCommand} ${effectiveArgs.join(" ")}`);
+
+  const agent = spawn(serverCommand, effectiveArgs, {
     stdio: ["pipe", "pipe", "inherit"],
     cwd,
   });

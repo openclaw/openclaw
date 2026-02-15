@@ -1102,7 +1102,7 @@ export class XClientManager {
       for (const header of rateLimitHeaders) {
         const value = headers[header];
         if (value) {
-          this.logger.debug?.(`[X API] ${header}: ${value}`);
+          this.logger.debug?.(`[X API] ${header}: ${String(value)}`);
         }
       }
     }

@@ -641,7 +641,7 @@ export async function setupChannels(
   if (options?.quickstartDefaults) {
     const skipValue = "__skip__" as const;
     let initialValue: ChannelChoice | typeof skipValue =
-      options?.initialSelection?.[0] ?? quickstartDefault;
+      options?.initialSelection?.[0] ?? quickstartDefault ?? skipValue;
     while (true) {
       const { entries } = getChannelEntries();
       const choice = (await prompter.select({

@@ -15,6 +15,7 @@ import {
 } from "../infra/shell-env.js";
 import { VERSION } from "../version.js";
 import { DuplicateAgentDirError, findDuplicateAgentDirs } from "./agent-dirs.js";
+import { rotateConfigBackups } from "./backup-rotation.js";
 import {
   applyCompactionDefaults,
   applyContextPruningDefaults,
@@ -31,7 +32,7 @@ import {
   containsEnvVarReference,
   resolveConfigEnvVars,
 } from "./env-substitution.js";
-import { collectConfigEnvVars } from "./env-vars.js";
+import { applyConfigEnvVars } from "./env-vars.js";
 import { ConfigIncludeError, resolveConfigIncludes } from "./includes.js";
 import { findLegacyConfigIssues } from "./legacy.js";
 import { applyMergePatch } from "./merge-patch.js";
@@ -67,7 +68,6 @@ const SHELL_ENV_EXPECTED_KEYS = [
   "OPENCLAW_GATEWAY_PASSWORD",
 ];
 
-const CONFIG_BACKUP_COUNT = 5;
 const CONFIG_AUDIT_LOG_FILENAME = "config-audit.jsonl";
 const loggedInvalidConfigs = new Set<string>();
 
@@ -340,25 +340,6 @@ function restoreEnvRefsFromMap(
   return value;
 }
 
-async function rotateConfigBackups(configPath: string, ioFs: typeof fs.promises): Promise<void> {
-  if (CONFIG_BACKUP_COUNT <= 1) {
-    return;
-  }
-  const backupBase = `${configPath}.bak`;
-  const maxIndex = CONFIG_BACKUP_COUNT - 1;
-  await ioFs.unlink(`${backupBase}.${maxIndex}`).catch(() => {
-    // best-effort
-  });
-  for (let index = maxIndex - 1; index >= 1; index -= 1) {
-    await ioFs.rename(`${backupBase}.${index}`, `${backupBase}.${index + 1}`).catch(() => {
-      // best-effort
-    });
-  }
-  await ioFs.rename(backupBase, `${backupBase}.1`).catch(() => {
-    // best-effort
-  });
-}
-
 function resolveConfigAuditLogPath(env: NodeJS.ProcessEnv, homedir: () => string): string {
   return path.join(resolveStateDir(env, homedir), "logs", CONFIG_AUDIT_LOG_FILENAME);
 }
@@ -460,16 +441,6 @@ function warnIfConfigFromFuture(cfg: OpenClawConfig, logger: Pick<typeof console
   }
 }
 
-function applyConfigEnv(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): void {
-  const entries = collectConfigEnvVars(cfg);
-  for (const [key, value] of Object.entries(entries)) {
-    if (env[key]?.trim()) {
-      continue;
-    }
-    env[key] = value;
-  }
-}
-
 function resolveConfigPathForDeps(deps: Required<ConfigIoDeps>): string {
   if (deps.configPath) {
     return deps.configPath;
@@ -531,7 +502,7 @@ function resolveConfigForRead(
 ): ConfigReadResolution {
   // Apply config.env to process.env BEFORE substitution so ${VAR} can reference config-defined vars.
   if (resolvedIncludes && typeof resolvedIncludes === "object" && "env" in resolvedIncludes) {
-    applyConfigEnv(resolvedIncludes as OpenClawConfig, env);
+    applyConfigEnvVars(resolvedIncludes as OpenClawConfig, env);
   }
 
   return {
@@ -627,7 +598,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         throw new DuplicateAgentDirError(duplicates);
       }
 
-      applyConfigEnv(cfg, deps.env);
+      applyConfigEnvVars(cfg, deps.env);
 
       const enabled = shouldEnableShellEnvFallback(deps.env) || cfg.env?.shellEnv?.enabled === true;
       if (enabled && !shouldDeferShellEnvFallback(deps.env)) {

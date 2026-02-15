@@ -1,11 +1,7 @@
 {
   "id": "x",
-  "channels": [
-    "x"
-  ],
-  "skills": [
-    "skills/x-actions"
-  ],
+  "channels": ["x"],
+  "skills": ["skills/x-actions"],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

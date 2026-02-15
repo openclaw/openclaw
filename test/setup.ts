@@ -2,6 +2,9 @@ import { afterAll, afterEach, beforeEach, vi } from "vitest";
 
 // Ensure Vitest environment is properly set
 process.env.VITEST = "true";
+// Config validation walks plugin manifests; keep an aggressive cache in tests to avoid
+// repeated filesystem discovery across suites/workers.
+process.env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS ??= "60000";
 // Vitest vm forks can load transitive lockfile helpers many times per worker.
 // Raise listener budget to avoid noisy MaxListeners warnings and warning-stack overhead.
 const TEST_PROCESS_MAX_LISTENERS = 128;
@@ -16,15 +19,21 @@ import type {
 } from "../src/channels/plugins/types.js";
 import type { OpenClawConfig } from "../src/config/config.js";
 import type { OutboundSendDeps } from "../src/infra/outbound/deliver.js";
-import { installProcessWarningFilter } from "../src/infra/warning-filter.js";
-import { setActivePluginRegistry } from "../src/plugins/runtime.js";
-import { createTestRegistry } from "../src/test-utils/channel-plugins.js";
 import { withIsolatedTestHome } from "./test-env.js";
+
+// Set HOME/state isolation before importing any runtime OpenClaw modules.
+const testEnv = withIsolatedTestHome();
+afterAll(() => testEnv.cleanup());
+
+const [{ installProcessWarningFilter }, { setActivePluginRegistry }, { createTestRegistry }] =
+  await Promise.all([
+    import("../src/infra/warning-filter.js"),
+    import("../src/plugins/runtime.js"),
+    import("../src/test-utils/channel-plugins.js"),
+  ]);
 
 installProcessWarningFilter();
 
-const testEnv = withIsolatedTestHome();
-afterAll(() => testEnv.cleanup());
 const pickSendFn = (id: ChannelId, deps?: OutboundSendDeps) => {
   switch (id) {
     case "discord":

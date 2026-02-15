@@ -20,9 +20,20 @@ const ALLOWED_INVALID_GATEWAY_SUBCOMMANDS = new Set([
   "restart",
 ]);
 let didRunDoctorConfigFlow = false;
+let configSnapshotPromise: Promise<Awaited<ReturnType<typeof readConfigFileSnapshot>>> | null =
+  null;
 
 function formatConfigIssues(issues: Array<{ path: string; message: string }>): string[] {
   return issues.map((issue) => `- ${issue.path || "<root>"}: ${issue.message}`);
+}
+
+async function getConfigSnapshot() {
+  // Tests often mutate config fixtures; caching can make those flaky.
+  if (process.env.VITEST === "true") {
+    return readConfigFileSnapshot();
+  }
+  configSnapshotPromise ??= readConfigFileSnapshot();
+  return configSnapshotPromise;
 }
 
 export async function ensureConfigReady(params: {
@@ -38,7 +49,7 @@ export async function ensureConfigReady(params: {
     });
   }
 
-  const snapshot = await readConfigFileSnapshot();
+  const snapshot = await getConfigSnapshot();
   const commandName = commandPath[0];
   const subcommandName = commandPath[1];
   const allowInvalid = commandName

@@ -127,6 +127,7 @@ openclaw gateway
 - Config tokens override env fallback.
 - `SLACK_BOT_TOKEN` / `SLACK_APP_TOKEN` env fallback applies only to the default account.
 - `userToken` (`xoxp-...`) is config-only (no env fallback) and defaults to read-only behavior (`userTokenReadOnly: true`).
+- Optional: add `chat:write.customize` if you want outgoing messages to use the active agent identity (custom `username` and icon). `icon_emoji` uses `:emoji_name:` syntax.
 
 <Tip>
 For actions/directory reads, user token can be preferred when configured. For writes, bot token remains preferred; user-token writes are only allowed when `userTokenReadOnly: false` and bot token is unavailable.
@@ -136,17 +137,18 @@ For actions/directory reads, user token can be preferred when configured. For wr
 
 <Tabs>
   <Tab title="DM policy">
-    `channels.slack.dm.policy` controls DM access:
+    `channels.slack.dmPolicy` controls DM access (legacy: `channels.slack.dm.policy`):
 
     - `pairing` (default)
     - `allowlist`
-    - `open` (requires `dm.allowFrom` to include `"*"`)
+    - `open` (requires `channels.slack.allowFrom` to include `"*"`; legacy: `channels.slack.dm.allowFrom`)
     - `disabled`
 
     DM flags:
 
     - `dm.enabled` (default true)
-    - `dm.allowFrom`
+    - `channels.slack.allowFrom` (preferred)
+    - `dm.allowFrom` (legacy)
     - `dm.groupEnabled` (group DMs default false)
     - `dm.groupChannels` (optional MPIM allowlist)
 
@@ -232,6 +234,8 @@ Manual reply tags are supported:
 
 - `[[reply_to_current]]`
 - `[[reply_to:<id>]]`
+
+Note: `replyToMode="off"` disables implicit reply threading. Explicit `[[reply_to_*]]` tags are still honored.
 
 ## Media, chunking, and delivery
 
@@ -396,7 +400,7 @@ openclaw doctor
     Check:
 
     - `channels.slack.dm.enabled`
-    - `channels.slack.dm.policy`
+    - `channels.slack.dmPolicy` (or legacy `channels.slack.dm.policy`)
     - pairing approvals / allowlist entries
 
 ```bash
@@ -436,14 +440,13 @@ Primary reference:
 
 - [Configuration reference - Slack](/gateway/configuration-reference#slack)
 
-High-signal Slack fields:
-
-- mode/auth: `mode`, `botToken`, `appToken`, `signingSecret`, `webhookPath`, `accounts.*`
-- DM access: `dm.enabled`, `dm.policy`, `dm.allowFrom`, `dm.groupEnabled`, `dm.groupChannels`
-- channel access: `groupPolicy`, `channels.*`, `channels.*.users`, `channels.*.requireMention`
-- threading/history: `replyToMode`, `replyToModeByChatType`, `thread.*`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
-- delivery: `textChunkLimit`, `chunkMode`, `mediaMaxMb`
-- ops/features: `configWrites`, `commands.native`, `slashCommand.*`, `actions.*`, `userToken`, `userTokenReadOnly`
+  High-signal Slack fields:
+  - mode/auth: `mode`, `botToken`, `appToken`, `signingSecret`, `webhookPath`, `accounts.*`
+  - DM access: `dm.enabled`, `dmPolicy`, `allowFrom` (legacy: `dm.policy`, `dm.allowFrom`), `dm.groupEnabled`, `dm.groupChannels`
+  - channel access: `groupPolicy`, `channels.*`, `channels.*.users`, `channels.*.requireMention`
+  - threading/history: `replyToMode`, `replyToModeByChatType`, `thread.*`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
+  - delivery: `textChunkLimit`, `chunkMode`, `mediaMaxMb`
+  - ops/features: `configWrites`, `commands.native`, `slashCommand.*`, `actions.*`, `userToken`, `userTokenReadOnly`
 
 ## Related
 

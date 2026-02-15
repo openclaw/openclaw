@@ -324,6 +324,10 @@
       "destination": "/install/docker"
     },
     {
+      "source": "/podman",
+      "destination": "/install/podman"
+    },
+    {
       "source": "/doctor",
       "destination": "/gateway/doctor"
     },
@@ -804,7 +808,13 @@
               },
               {
                 "group": "Other install methods",
-                "pages": ["install/docker", "install/nix", "install/ansible", "install/bun"]
+                "pages": [
+                  "install/docker",
+                  "install/podman",
+                  "install/nix",
+                  "install/ansible",
+                  "install/bun"
+                ]
               },
               {
                 "group": "Maintenance",
@@ -1269,7 +1279,7 @@
               },
               {
                 "group": "Contributing",
-                "pages": ["help/submitting-a-pr", "help/submitting-an-issue", "ci"]
+                "pages": ["ci"]
               },
               {
                 "group": "Docs meta",
@@ -1722,12 +1732,45 @@
               {
                 "group": "Environment and debugging",
                 "pages": [
-                  "zh-CN/environment",
-                  "zh-CN/debugging",
-                  "zh-CN/testing",
-                  "zh-CN/scripts",
-                  "zh-CN/reference/session-management-compaction"
+                  "zh-CN/help/environment",
+                  "zh-CN/help/debugging",
+                  "zh-CN/help/testing",
+                  "zh-CN/help/scripts"
                 ]
+              },
+              {
+                "group": "Node 运行时",
+                "pages": ["zh-CN/install/node"]
+              },
+              {
+                "group": "压缩机制内部参考",
+                "pages": ["zh-CN/reference/session-management-compaction"]
+              },
+              {
+                "group": "开发者设置",
+                "pages": ["zh-CN/start/setup"]
+              },
+              {
+                "group": "文档元信息",
+                "pages": ["zh-CN/start/hubs", "zh-CN/start/docs-directory"]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "language": "ja",
+        "tabs": [
+          {
+            "tab": "はじめに",
+            "groups": [
+              {
+                "group": "概要",
+                "pages": ["ja-JP/index"]
+              },
+              {
+                "group": "初回セットアップ",
+                "pages": ["ja-JP/start/getting-started", "ja-JP/start/wizard"]
               }
             ]
           }

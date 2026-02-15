@@ -143,12 +143,18 @@ export async function handleZaloWebhookRequest(
   }
 
   const headerToken = String(req.headers["x-bot-api-secret-token"] ?? "");
-  const target = targets.find((entry) => entry.secret === headerToken);
-  if (!target) {
+  const matching = targets.filter((entry) => entry.secret === headerToken);
+  if (matching.length === 0) {
     res.statusCode = 401;
     res.end("unauthorized");
     return true;
   }
+  if (matching.length > 1) {
+    res.statusCode = 401;
+    res.end("ambiguous webhook target");
+    return true;
+  }
+  const target = matching[0];
 
   const body = await readJsonBodyWithLimit(req, {
     maxBytes: 1024 * 1024,

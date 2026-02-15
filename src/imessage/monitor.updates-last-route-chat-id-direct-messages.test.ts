@@ -1,104 +1,28 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { monitorIMessageProvider } from "./monitor.js";
+import { beforeAll, describe, expect, it } from "vitest";
+import {
+  flush,
+  getCloseResolve,
+  getNotificationHandler,
+  getReplyMock,
+  getRequestMock,
+  getStopMock,
+  getUpdateLastRouteMock,
+  installMonitorIMessageProviderTestHooks,
+  waitForSubscribe,
+} from "./monitor.test-harness.js";
 
-const requestMock = vi.fn();
-const stopMock = vi.fn();
-const sendMock = vi.fn();
-const replyMock = vi.fn();
-const updateLastRouteMock = vi.fn();
-const readAllowFromStoreMock = vi.fn();
-const upsertPairingRequestMock = vi.fn();
+installMonitorIMessageProviderTestHooks();
 
-let config: Record<string, unknown> = {};
-let notificationHandler: ((msg: { method: string; params?: unknown }) => void) | undefined;
-let closeResolve: (() => void) | undefined;
+let monitorIMessageProvider: typeof import("./monitor.js").monitorIMessageProvider;
 
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
-  return {
-    ...actual,
-    loadConfig: () => config,
-  };
+beforeAll(async () => {
+  ({ monitorIMessageProvider } = await import("./monitor.js"));
 });
 
-vi.mock("../auto-reply/reply.js", () => ({
-  getReplyFromConfig: (...args: unknown[]) => replyMock(...args),
-}));
-
-vi.mock("./send.js", () => ({
-  sendMessageIMessage: (...args: unknown[]) => sendMock(...args),
-}));
-
-vi.mock("../pairing/pairing-store.js", () => ({
-  readChannelAllowFromStore: (...args: unknown[]) => readAllowFromStoreMock(...args),
-  upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
-}));
-
-vi.mock("../config/sessions.js", () => ({
-  resolveStorePath: vi.fn(() => "/tmp/openclaw-sessions.json"),
-  updateLastRoute: (...args: unknown[]) => updateLastRouteMock(...args),
-  readSessionUpdatedAt: vi.fn(() => undefined),
-  recordSessionMetaFromInbound: vi.fn().mockResolvedValue(undefined),
-}));
-
-vi.mock("./client.js", () => ({
-  createIMessageRpcClient: vi.fn(async (opts: { onNotification?: typeof notificationHandler }) => {
-    notificationHandler = opts.onNotification;
-    return {
-      request: (...args: unknown[]) => requestMock(...args),
-      waitForClose: () =>
-        new Promise<void>((resolve) => {
-          closeResolve = resolve;
-        }),
-      stop: (...args: unknown[]) => stopMock(...args),
-    };
-  }),
-}));
-
-vi.mock("./probe.js", () => ({
-  probeIMessage: vi.fn(async () => ({ ok: true })),
-}));
-
-const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
-
-async function waitForSubscribe() {
-  for (let i = 0; i < 5; i += 1) {
-    if (requestMock.mock.calls.some((call) => call[0] === "watch.subscribe")) {
-      return;
-    }
-    await flush();
-  }
-}
-
-beforeEach(() => {
-  config = {
-    channels: {
-      imessage: {
-        dmPolicy: "open",
-        allowFrom: ["*"],
-        groups: { "*": { requireMention: true } },
-      },
-    },
-    session: { mainKey: "main" },
-    messages: {
-      groupChat: { mentionPatterns: ["@openclaw"] },
-    },
-  };
-  requestMock.mockReset().mockImplementation((method: string) => {
-    if (method === "watch.subscribe") {
-      return Promise.resolve({ subscription: 1 });
-    }
-    return Promise.resolve({});
-  });
-  stopMock.mockReset().mockResolvedValue(undefined);
-  sendMock.mockReset().mockResolvedValue({ messageId: "ok" });
-  replyMock.mockReset().mockResolvedValue({ text: "ok" });
-  updateLastRouteMock.mockReset();
-  readAllowFromStoreMock.mockReset().mockResolvedValue([]);
-  upsertPairingRequestMock.mockReset().mockResolvedValue({ code: "PAIRCODE", created: true });
-  notificationHandler = undefined;
-  closeResolve = undefined;
-});
+const replyMock = getReplyMock();
+const requestMock = getRequestMock();
+const stopMock = getStopMock();
+const updateLastRouteMock = getUpdateLastRouteMock();
 
 describe("monitorIMessageProvider", () => {
   it("updates last route with sender handle for direct messages", async () => {
@@ -106,7 +30,7 @@ describe("monitorIMessageProvider", () => {
     const run = monitorIMessageProvider();
     await waitForSubscribe();
 
-    notificationHandler?.({
+    getNotificationHandler()?.({
       method: "message",
       params: {
         message: {
@@ -121,7 +45,7 @@ describe("monitorIMessageProvider", () => {
     });
 
     await flush();
-    closeResolve?.();
+    getCloseResolve()?.();
     await run;
 
     expect(updateLastRouteMock).toHaveBeenCalledWith(
@@ -162,7 +86,7 @@ describe("monitorIMessageProvider", () => {
       abortController.abort();
       await flush();
 
-      closeResolve?.();
+      getCloseResolve()?.();
       await run;
     } finally {
       process.off("unhandledRejection", onUnhandled);

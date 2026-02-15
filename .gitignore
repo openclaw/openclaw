@@ -84,4 +84,6 @@ USER.md
 !.agent/workflows/
 local/
 .cursor/
+/local/
 package-lock.json
+qverisai-*.tgz

@@ -46,8 +46,8 @@ Minimal config:
       consumerSecret: "your_api_secret",
       accessToken: "your_access_token",
       accessTokenSecret: "your_access_token_secret",
-    }
-  }
+    },
+  },
 }
 ```
 
@@ -62,10 +62,10 @@ Full config with options:
       consumerSecret: "your_api_secret",
       accessToken: "your_access_token",
       accessTokenSecret: "your_access_token_secret",
-      pollIntervalSeconds: 60,     // How often to check for mentions (min: 15)
-      allowFrom: ["123456789"],    // Optional: only respond to these user IDs
-    }
-  }
+      pollIntervalSeconds: 60, // How often to check for mentions (min: 15)
+      allowFrom: ["123456789"], // Optional: only respond to these user IDs
+    },
+  },
 }
 ```
 
@@ -87,10 +87,10 @@ Full config with options:
           consumerSecret: "...",
           accessToken: "...",
           accessTokenSecret: "...",
-        }
-      }
-    }
-  }
+        },
+      },
+    },
+  },
 }
 ```
 
@@ -105,6 +105,7 @@ Full config with options:
 ## Rate Limits
 
 X API v2 rate limits (user context):
+
 - Mentions timeline: 180 requests / 15 minutes
 - Post tweet: 200 requests / 15 minutes
 

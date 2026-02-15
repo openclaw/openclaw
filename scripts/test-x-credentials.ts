@@ -10,8 +10,8 @@
  * - X_PROXY (optional, e.g., http://127.0.0.1:7890)
  */
 
-import crypto from "node:crypto";
 import { HttpsProxyAgent } from "https-proxy-agent";
+import crypto from "node:crypto";
 
 const consumerKey = process.env.X_CONSUMER_KEY || "YOUR_CONSUMER_KEY";
 const consumerSecret = process.env.X_CONSUMER_SECRET || "YOUR_CONSUMER_SECRET";
@@ -30,7 +30,7 @@ function generateOAuthSignature(
   tokenSecretVal: string,
 ): string {
   const sortedParams = Object.keys(oauthParams)
-    .sort()
+    .toSorted()
     .map((key) => `${encodeURIComponent(key)}=${encodeURIComponent(oauthParams[key])}`)
     .join("&");
 
@@ -53,7 +53,9 @@ function generateOAuthSignature(
 /**
  * Make an OAuth 1.0a authenticated request to X API
  */
-async function makeOAuthRequest(url: string): Promise<{ status: number; headers: Headers; body: unknown }> {
+async function makeOAuthRequest(
+  url: string,
+): Promise<{ status: number; headers: Headers; body: unknown }> {
   const method = "GET";
   const timestamp = Math.floor(Date.now() / 1000).toString();
   const nonce = crypto.randomBytes(16).toString("hex");
@@ -67,7 +69,13 @@ async function makeOAuthRequest(url: string): Promise<{ status: number; headers:
     oauth_version: "1.0",
   };
 
-  const signature = generateOAuthSignature(method, url, oauthParams, consumerSecret, accessTokenSecret);
+  const signature = generateOAuthSignature(
+    method,
+    url,
+    oauthParams,
+    consumerSecret,
+    accessTokenSecret,
+  );
   oauthParams.oauth_signature = signature;
 
   const authHeader =
@@ -108,8 +116,12 @@ async function testCredentials() {
   console.log("Testing X API credentials...\n");
 
   if (consumerKey === "YOUR_CONSUMER_KEY") {
-    console.error("Please set X_CONSUMER_KEY, X_CONSUMER_SECRET, X_ACCESS_TOKEN, X_ACCESS_TOKEN_SECRET");
-    console.error("Example: X_CONSUMER_KEY=xxx X_CONSUMER_SECRET=xxx ... bun scripts/test-x-credentials.ts");
+    console.error(
+      "Please set X_CONSUMER_KEY, X_CONSUMER_SECRET, X_ACCESS_TOKEN, X_ACCESS_TOKEN_SECRET",
+    );
+    console.error(
+      "Example: X_CONSUMER_KEY=xxx X_CONSUMER_SECRET=xxx ... bun scripts/test-x-credentials.ts",
+    );
     process.exit(1);
   }
 
@@ -121,7 +133,9 @@ async function testCredentials() {
 
   try {
     console.log("1. Testing GET /2/users/me (get authenticated user)...");
-    const result = await makeOAuthRequest("https://api.x.com/2/users/me?user.fields=id,username,name");
+    const result = await makeOAuthRequest(
+      "https://api.x.com/2/users/me?user.fields=id,username,name",
+    );
 
     console.log(`   HTTP Status: ${result.status}`);
     console.log(`   Response: ${JSON.stringify(result.body, null, 2)}`);
@@ -140,11 +154,15 @@ async function testCredentials() {
 
       if (result.status === 401) {
         console.error("  - 401 Unauthorized: Invalid credentials");
-        console.error("  - Check that your Consumer Key, Consumer Secret, Access Token, and Access Token Secret are correct");
+        console.error(
+          "  - Check that your Consumer Key, Consumer Secret, Access Token, and Access Token Secret are correct",
+        );
         console.error("  - Make sure you copied the full values without extra spaces");
       } else if (result.status === 403) {
         console.error("  - 403 Forbidden: App doesn't have required permissions");
-        console.error("  - Go to developer.x.com > Your App > Settings > User authentication settings");
+        console.error(
+          "  - Go to developer.x.com > Your App > Settings > User authentication settings",
+        );
         console.error("  - Enable OAuth 1.0a with 'Read and write' permissions");
         console.error("  - After changing permissions, regenerate your Access Token and Secret");
       } else if (result.status === 429) {
@@ -161,7 +179,9 @@ async function testCredentials() {
       if (limitRemaining || limitReset) {
         console.log("\nRate limit info:");
         console.log(`  Remaining: ${limitRemaining}`);
-        console.log(`  Reset: ${limitReset ? new Date(parseInt(limitReset) * 1000).toISOString() : "N/A"}`);
+        console.log(
+          `  Reset: ${limitReset ? new Date(parseInt(limitReset) * 1000).toISOString() : "N/A"}`,
+        );
       }
 
       process.exit(1);
@@ -174,4 +194,4 @@ async function testCredentials() {
   }
 }
 
-testCredentials();
+void testCredentials();

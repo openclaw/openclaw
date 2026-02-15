@@ -4,9 +4,7 @@ import type { ReplyPayload } from "../auto-reply/types.js";
 import type { ChannelHeartbeatDeps } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
-import type { CronOrigin } from "../cron/types.js";
 import type { OutboundSendDeps } from "./outbound/deliver.js";
-import type { OutboundTarget } from "./outbound/targets.js";
 import {
   resolveAgentConfig,
   resolveAgentWorkspaceDir,

@@ -225,7 +225,9 @@ export async function monitorXProvider(options: XMonitorOptions): Promise<XMonit
   const pollIntervalMs = (account.pollIntervalSeconds ?? DEFAULT_POLL_INTERVAL_SECONDS) * 1000;
 
   async function poll() {
-    if (stopped) return;
+    if (stopped) {
+      return;
+    }
 
     try {
       logger.debug?.(`Polling X mentions${sinceId ? ` since ${sinceId}` : ""}`);
@@ -237,10 +239,12 @@ export async function monitorXProvider(options: XMonitorOptions): Promise<XMonit
         statusSink?.({ lastInboundAt: Date.now() });
 
         // Process mentions in chronological order (oldest first)
-        const sorted = [...mentions].reverse();
+        const sorted = [...mentions].toReversed();
 
         for (const mention of sorted) {
-          if (stopped) break;
+          if (stopped) {
+            break;
+          }
 
           // Access control check
           const access = checkAccessControl({

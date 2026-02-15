@@ -62,7 +62,7 @@ export async function resolveDeliveryTarget(
       mode: "explicit",
     });
     return {
-      channel: origin.channel as Exclude<OutboundChannel, "none">,
+      channel: origin.channel,
       to: docked.ok ? docked.to : undefined,
       accountId: origin.accountId,
       threadId: origin.threadId,
@@ -101,7 +101,7 @@ export async function resolveDeliveryTarget(
   if (!preliminary.channel) {
     // Try origin channel as fallback before config/default
     if (useOrigin && origin?.channel) {
-      fallbackChannel = origin.channel as Exclude<OutboundChannel, "none">;
+      fallbackChannel = origin.channel;
     } else {
       try {
         const selection = await resolveMessageChannelSelection({ cfg });
