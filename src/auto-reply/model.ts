@@ -34,9 +34,17 @@ export function extractModelDirective(
   let rawModel = raw;
   let rawProfile: string | undefined;
   if (raw?.includes("@")) {
-    const parts = raw.split("@");
-    rawModel = parts[0]?.trim();
-    rawProfile = parts.slice(1).join("@").trim() || undefined;
+    // Find the last @ that could be an auth profile separator.
+    // Only treat @ as a separator when used as a trailing profile override
+    // (i.e., no '/' characters after the '@'). This preserves OpenRouter
+    // preset paths like "openrouter/@preset/model-name" and any model paths
+    // containing @ in path segments like "provider/foo@bar/baz".
+    const atIndex = raw.lastIndexOf("@");
+    const afterAt = raw.slice(atIndex + 1);
+    if (!afterAt.includes("/")) {
+      rawModel = raw.slice(0, atIndex).trim();
+      rawProfile = afterAt.trim() || undefined;
+    }
   }
 
   const cleaned = match ? body.replace(match[0], " ").replace(/\s+/g, " ").trim() : body.trim();
