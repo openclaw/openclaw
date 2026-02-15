@@ -45,7 +45,7 @@ function errorBackoffMs(consecutiveErrors: number): number {
  * Handles consecutive error tracking, exponential backoff, one-shot disable,
  * and nextRunAtMs computation. Returns `true` if the job should be deleted.
  */
-function applyJobResult(
+export function applyJobResult(
   state: CronServiceState,
   job: CronJob,
   result: {
@@ -423,7 +423,7 @@ export async function runDueJobs(state: CronServiceState) {
   }
 }
 
-async function executeJobCore(
+export async function executeJobCore(
   state: CronServiceState,
   job: CronJob,
 ): Promise<{
