@@ -139,6 +139,15 @@ const QIANFAN_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
+const ZAI_BASE_URL = "https://api.z.ai/api/paas/v4";
+const ZAI_DEFAULT_CONTEXT_WINDOW = 204800;
+const ZAI_DEFAULT_MAX_TOKENS = 131072;
+const ZAI_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
 const NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1";
 const NVIDIA_DEFAULT_MODEL_ID = "nvidia/llama-3.1-nemotron-70b-instruct";
 const NVIDIA_DEFAULT_CONTEXT_WINDOW = 131072;
@@ -149,6 +158,13 @@ const NVIDIA_DEFAULT_COST = {
   cacheRead: 0,
   cacheWrite: 0,
 };
+
+const ZAI_STATIC_MODEL_CATALOG = [
+  { id: "glm-5", name: "GLM-5", reasoning: true },
+  { id: "glm-4.7", name: "GLM-4.7", reasoning: true },
+  { id: "glm-4.7-flash", name: "GLM-4.7 Flash", reasoning: true },
+  { id: "glm-4.7-flashx", name: "GLM-4.7 FlashX", reasoning: true },
+] as const;
 
 interface OllamaModel {
   name: string;
@@ -163,6 +179,10 @@ interface OllamaModel {
 
 interface OllamaTagsResponse {
   models: OllamaModel[];
+}
+
+interface ZaiModelsResponse {
+  data?: Array<{ id?: unknown }>;
 }
 
 type VllmModelsResponse = {
@@ -224,6 +244,79 @@ async function discoverOllamaModels(baseUrl?: string): Promise<ModelDefinitionCo
   } catch (error) {
     console.warn(`Failed to discover Ollama models: ${String(error)}`);
     return [];
+  }
+}
+
+function isLikelyZaiVisionModel(id: string): boolean {
+  const lower = id.toLowerCase();
+  return lower.includes("vision") || lower.includes("-vl") || lower.includes("4.6v");
+}
+
+function toZaiModelName(id: string): string {
+  if (id.startsWith("glm-")) {
+    return id.replace(/^glm-/, "GLM-");
+  }
+  return id;
+}
+
+function buildZaiModelDefinition(params: {
+  id: string;
+  name?: string;
+  reasoning?: boolean;
+}): ModelDefinitionConfig {
+  const isVisionModel = isLikelyZaiVisionModel(params.id);
+  return {
+    id: params.id,
+    name: params.name ?? toZaiModelName(params.id),
+    reasoning: params.reasoning ?? !isVisionModel,
+    input: isVisionModel ? ["text", "image"] : ["text"],
+    cost: ZAI_DEFAULT_COST,
+    contextWindow: ZAI_DEFAULT_CONTEXT_WINDOW,
+    maxTokens: ZAI_DEFAULT_MAX_TOKENS,
+  };
+}
+
+function buildZaiStaticModels(): ModelDefinitionConfig[] {
+  return ZAI_STATIC_MODEL_CATALOG.map((entry) =>
+    buildZaiModelDefinition({ id: entry.id, name: entry.name, reasoning: entry.reasoning }),
+  );
+}
+
+async function discoverZaiModels(params: {
+  apiKey: string;
+  allowInTestEnv?: boolean;
+}): Promise<ModelDefinitionConfig[]> {
+  // Avoid live network discovery in test mode; use deterministic static defaults.
+  if (!params.allowInTestEnv && (process.env.VITEST || process.env.NODE_ENV === "test")) {
+    return buildZaiStaticModels();
+  }
+
+  try {
+    const response = await fetch(`${ZAI_BASE_URL}/models`, {
+      headers: {
+        authorization: `Bearer ${params.apiKey}`,
+      },
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) {
+      console.warn(`[zai-models] Failed to discover models: HTTP ${response.status}, using static`);
+      return buildZaiStaticModels();
+    }
+    const data = (await response.json()) as ZaiModelsResponse;
+    const ids = Array.from(
+      new Set(
+        (data.data ?? [])
+          .map((entry) => (typeof entry.id === "string" ? entry.id.trim() : ""))
+          .filter((id) => id.startsWith("glm-")),
+      ),
+    );
+    if (ids.length === 0) {
+      return buildZaiStaticModels();
+    }
+    return ids.map((id) => buildZaiModelDefinition({ id }));
+  } catch (error) {
+    console.warn(`[zai-models] Failed to discover models, using static: ${String(error)}`);
+    return buildZaiStaticModels();
   }
 }
 
@@ -554,6 +647,23 @@ async function buildOllamaProvider(configuredBaseUrl?: string): Promise<Provider
   };
 }
 
+async function buildZaiProvider(params: {
+  apiKey?: string;
+  allowInTestEnv?: boolean;
+}): Promise<ProviderConfig> {
+  const models = params.apiKey
+    ? await discoverZaiModels({
+        apiKey: params.apiKey,
+        allowInTestEnv: params.allowInTestEnv,
+      })
+    : buildZaiStaticModels();
+  return {
+    baseUrl: ZAI_BASE_URL,
+    api: "openai-completions",
+    models,
+  };
+}
+
 async function buildHuggingfaceProvider(apiKey?: string): Promise<ProviderConfig> {
   // Resolve env var name to value for discovery (GET /v1/models requires Bearer token).
   const resolvedSecret =
@@ -659,6 +769,7 @@ export function buildNvidiaProvider(): ProviderConfig {
 export async function resolveImplicitProviders(params: {
   agentDir: string;
   explicitProviders?: Record<string, ProviderConfig> | null;
+  allowTestProviderDiscovery?: boolean;
 }): Promise<ModelsConfig["providers"]> {
   const providers: Record<string, ProviderConfig> = {};
   const authStore = ensureAuthProfileStore(params.agentDir, {
@@ -800,6 +911,20 @@ export async function resolveImplicitProviders(params: {
     providers.qianfan = { ...buildQianfanProvider(), apiKey: qianfanKey };
   }
 
+  const zaiKeyFromProfile = resolveApiKeyFromProfiles({ provider: "zai", store: authStore });
+  const zaiKeyFromEnvLabel = resolveEnvApiKeyVarName("zai");
+  const zaiKeyFromEnvValue = resolveEnvApiKey("zai")?.apiKey;
+  const zaiApiKeyConfig = zaiKeyFromEnvLabel ?? zaiKeyFromProfile;
+  const zaiApiKeyDiscovery = zaiKeyFromEnvValue ?? zaiKeyFromProfile;
+  if (zaiApiKeyConfig) {
+    providers.zai = {
+      ...(await buildZaiProvider({
+        apiKey: zaiApiKeyDiscovery,
+        allowInTestEnv: params.allowTestProviderDiscovery ?? false,
+      })),
+      apiKey: zaiApiKeyConfig,
+    };
+  }
   const nvidiaKey =
     resolveEnvApiKeyVarName("nvidia") ??
     resolveApiKeyFromProfiles({ provider: "nvidia", store: authStore });
