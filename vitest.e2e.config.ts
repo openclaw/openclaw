@@ -2,6 +2,7 @@ import os from "node:os";
 import { defineConfig } from "vitest/config";
 import baseConfig from "./vitest.config.ts";
 
+const base = baseConfig as unknown as Record<string, unknown>;
 const isCI = process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true";
 const cpuCount = os.cpus().length;
 const defaultWorkers = isCI
@@ -18,7 +19,7 @@ const baseTest = (baseConfig as { test?: { exclude?: string[] } }).test ?? {};
 const exclude = (baseTest.exclude ?? []).filter((p) => p !== "**/*.e2e.test.ts");
 
 export default defineConfig({
-  ...baseConfig,
+  ...base,
   test: {
     ...baseTest,
     pool: "vmForks",
