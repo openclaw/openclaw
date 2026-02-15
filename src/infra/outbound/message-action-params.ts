@@ -81,8 +81,19 @@ export function resolveTelegramAutoThreadId(params: {
   // mirroring how Slack uses parseSlackTarget. This handles format variations
   // like `telegram:group:123:topic:456` vs `telegram:123`.
   const parsedTo = parseTelegramTarget(params.to);
+  // If the target already specifies a topic, honour it — no auto-inject needed.
+  if (parsedTo.messageThreadId != null) {
+    return undefined;
+  }
   const parsedChannel = parseTelegramTarget(context.currentChannelId);
   if (parsedTo.chatId.toLowerCase() !== parsedChannel.chatId.toLowerCase()) {
+    return undefined;
+  }
+  // Only auto-inject the cached thread when the originating channel was a
+  // forum topic (indicated by a numeric topic in the channel target).
+  // DM chats cache reply-chain message IDs as threadId, but Telegram rejects
+  // message_thread_id on non-forum chats with 400.
+  if (parsedChannel.messageThreadId == null) {
     return undefined;
   }
   return context.currentThreadTs;

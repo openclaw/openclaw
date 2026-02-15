@@ -132,7 +132,36 @@ describe("runMessageAction threading auto-injection", () => {
     expect(call?.ctx?.mirror?.sessionKey).toBe("agent:main:slack:channel:c123:thread:333.444");
   });
 
-  it("auto-injects telegram threadId from toolContext when omitted", async () => {
+  it("auto-injects telegram threadId from toolContext for forum topics", async () => {
+    mocks.executeSendAction.mockResolvedValue({
+      handledBy: "plugin",
+      payload: {},
+    });
+
+    await runMessageAction({
+      cfg: telegramConfig,
+      action: "send",
+      params: {
+        channel: "telegram",
+        target: "telegram:123",
+        message: "hi",
+      },
+      toolContext: {
+        currentChannelId: "telegram:group:123:topic:99",
+        currentThreadTs: "42",
+      },
+      agentId: "main",
+    });
+
+    const call = mocks.executeSendAction.mock.calls[0]?.[0] as {
+      threadId?: string;
+      ctx?: { params?: Record<string, unknown> };
+    };
+    expect(call?.threadId).toBe("42");
+    expect(call?.ctx?.params?.threadId).toBe("42");
+  });
+
+  it("skips telegram auto-threading for non-forum DM chats", async () => {
     mocks.executeSendAction.mockResolvedValue({
       handledBy: "plugin",
       payload: {},
@@ -157,8 +186,8 @@ describe("runMessageAction threading auto-injection", () => {
       threadId?: string;
       ctx?: { params?: Record<string, unknown> };
     };
-    expect(call?.threadId).toBe("42");
-    expect(call?.ctx?.params?.threadId).toBe("42");
+    expect(call?.threadId).toBeUndefined();
+    expect(call?.ctx?.params?.threadId).toBeUndefined();
   });
 
   it("skips telegram auto-threading when target chat differs", async () => {
@@ -203,7 +232,7 @@ describe("runMessageAction threading auto-injection", () => {
         message: "hi",
       },
       toolContext: {
-        currentChannelId: "telegram:123",
+        currentChannelId: "telegram:group:123:topic:99",
         currentThreadTs: "42",
       },
       agentId: "main",
