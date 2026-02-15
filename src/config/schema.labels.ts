@@ -237,7 +237,7 @@ export const FIELD_LABELS: Record<string, string> = {
   ...IRC_FIELD_LABELS,
   "channels.telegram.botToken": "Telegram Bot Token",
   "channels.telegram.dmPolicy": "Telegram DM Policy",
-  "channels.telegram.streamMode": "Telegram Draft Stream Mode",
+  "channels.telegram.streamMode": "Telegram Stream Mode",
   "channels.telegram.draftChunk.minChars": "Telegram Draft Chunk Min Chars",
   "channels.telegram.draftChunk.maxChars": "Telegram Draft Chunk Max Chars",
   "channels.telegram.draftChunk.breakPreference": "Telegram Draft Chunk Break Preference",

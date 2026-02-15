@@ -93,11 +93,11 @@ export type TelegramAccountConfig = {
   chunkMode?: "length" | "newline";
   /** Disable block streaming for this account. */
   blockStreaming?: boolean;
-  /** Chunking config for draft streaming in `streamMode: "block"`. */
+  /** Chunking config for Telegram stream previews in `streamMode: "block"`. */
   draftChunk?: BlockStreamingChunkConfig;
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
-  /** Draft streaming mode for Telegram (off|partial|block). Default: partial. */
+  /** Telegram stream preview mode (off|partial|block). Default: partial. */
   streamMode?: "off" | "partial" | "block";
   mediaMaxMb?: number;
   /** Telegram API client timeout in seconds (grammY ApiClientOptions). */
