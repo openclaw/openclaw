@@ -2,11 +2,13 @@ import type { AnyMessageContent, WAPresence } from "@whiskeysockets/baileys";
 import type { ActiveWebSendOptions } from "../active-listener.js";
 import { recordChannelActivity } from "../../infra/channel-activity.js";
 import { toWhatsappJid } from "../../utils.js";
+import { trackSentMessageId } from "./sent-ids.js";
 
 export function createWebSendApi(params: {
   sock: {
     sendMessage: (jid: string, content: AnyMessageContent) => Promise<unknown>;
     sendPresenceUpdate: (presence: WAPresence, jid?: string) => Promise<unknown>;
+    presenceSubscribe: (jid: string) => Promise<void>;
   };
   defaultAccountId: string;
 }) {
@@ -60,6 +62,9 @@ export function createWebSendApi(params: {
         typeof result === "object" && result && "key" in result
           ? String((result as { key?: { id?: string } }).key?.id ?? "unknown")
           : "unknown";
+      if (messageId !== "unknown") {
+        trackSentMessageId(messageId);
+      }
       return { messageId };
     },
     sendPoll: async (
@@ -107,6 +112,15 @@ export function createWebSendApi(params: {
     },
     sendComposingTo: async (to: string): Promise<void> => {
       const jid = toWhatsappJid(to);
+      // WhatsApp requires presence subscription before composing works in groups.
+      // Without this, sendPresenceUpdate("composing") silently fails for group JIDs.
+      if (jid.endsWith("@g.us")) {
+        try {
+          await params.sock.presenceSubscribe(jid);
+        } catch {
+          // Non-fatal: composing may still work in some cases
+        }
+      }
       await params.sock.sendPresenceUpdate("composing", jid);
     },
   } as const;
