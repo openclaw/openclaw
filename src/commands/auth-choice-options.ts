@@ -95,6 +95,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["qianfan-api-key"],
   },
   {
+    value: "aisa",
+    label: "AIsa",
+    hint: "China AI models, production-grade (Qwen, DeepSeek, Kimi, GLM)",
+    choices: ["aisa-api-key"],
+  },
+  {
     value: "copilot",
     label: "Copilot",
     hint: "GitHub + local proxy",
@@ -295,6 +301,11 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
     value: "minimax-api-lightning",
     label: "MiniMax M2.5 Lightning",
     hint: "Faster, higher output cost",
+  },
+  {
+    value: "aisa-api-key",
+    label: "AIsa API key",
+    hint: "China AI models (Qwen, DeepSeek, Kimi)",
   },
   { value: "custom-api-key", label: "Custom Provider" },
 ];

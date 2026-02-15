@@ -47,6 +47,7 @@ export type AuthChoice =
   | "xai-api-key"
   | "qianfan-api-key"
   | "custom-api-key"
+  | "aisa-api-key"
   | "skip";
 export type AuthChoiceGroupId =
   | "openai"
@@ -70,6 +71,7 @@ export type AuthChoiceGroupId =
   | "together"
   | "huggingface"
   | "qianfan"
+  | "aisa"
   | "xai"
   | "custom";
 export type GatewayAuthChoice = "token" | "password";
@@ -125,6 +127,7 @@ export type OnboardOptions = {
   customModelId?: string;
   customProviderId?: string;
   customCompatibility?: "openai" | "anthropic";
+  aisaApiKey?: string;
   gatewayPort?: number;
   gatewayBind?: GatewayBind;
   gatewayAuth?: GatewayAuthChoice;
