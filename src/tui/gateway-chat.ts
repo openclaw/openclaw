@@ -99,7 +99,7 @@ export class GatewayChatClient {
   private client: GatewayClient;
   private readyPromise: Promise<void>;
   private resolveReady?: () => void;
-  readonly connection: { url: string; token?: string; password?: string };
+  readonly connection: { url: string; token?: string; explicitToken?: string; password?: string };
   hello?: HelloOk;
 
   onEvent?: (evt: GatewayEvent) => void;
@@ -118,6 +118,7 @@ export class GatewayChatClient {
     this.client = new GatewayClient({
       url: resolved.url,
       token: resolved.token,
+      explicitToken: resolved.explicitToken,
       password: resolved.password,
       clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
       clientDisplayName: "openclaw-tui",
@@ -244,18 +245,17 @@ export function resolveGatewayConnection(opts: GatewayConnectionOptions) {
     ...(urlOverride ? { url: urlOverride } : {}),
   }).url;
 
-  const token =
-    explicitAuth.token ||
-    (!urlOverride
-      ? isRemoteMode
-        ? typeof remote?.token === "string" && remote.token.trim().length > 0
-          ? remote.token.trim()
-          : undefined
-        : process.env.OPENCLAW_GATEWAY_TOKEN?.trim() ||
-          (typeof authToken === "string" && authToken.trim().length > 0
-            ? authToken.trim()
-            : undefined)
-      : undefined);
+  const explicitToken = explicitAuth.token;
+  const token = !urlOverride
+    ? isRemoteMode
+      ? typeof remote?.token === "string" && remote.token.trim().length > 0
+        ? remote.token.trim()
+        : undefined
+      : process.env.OPENCLAW_GATEWAY_TOKEN?.trim() ||
+        (typeof authToken === "string" && authToken.trim().length > 0
+          ? authToken.trim()
+          : undefined)
+    : undefined;
 
   const password =
     explicitAuth.password ||
@@ -266,5 +266,5 @@ export function resolveGatewayConnection(opts: GatewayConnectionOptions) {
           : undefined)
       : undefined);
 
-  return { url, token, password };
+  return { url, token, explicitToken, password };
 }

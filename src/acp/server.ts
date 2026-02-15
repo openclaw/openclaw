@@ -22,8 +22,8 @@ export function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void> {
   const remote = isRemoteMode ? cfg.gateway?.remote : undefined;
   const auth = resolveGatewayAuth({ authConfig: cfg.gateway?.auth, env: process.env });
 
+  const explicitToken = opts.gatewayToken;
   const token =
-    opts.gatewayToken ??
     (isRemoteMode ? remote?.token?.trim() : undefined) ??
     process.env.OPENCLAW_GATEWAY_TOKEN ??
     auth.token;
@@ -43,6 +43,7 @@ export function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void> {
   const gateway = new GatewayClient({
     url: connection.url,
     token: token || undefined,
+    explicitToken: explicitToken || undefined,
     password: password || undefined,
     clientName: GATEWAY_CLIENT_NAMES.CLI,
     clientDisplayName: "ACP",

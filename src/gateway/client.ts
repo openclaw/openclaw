@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { WebSocket, type ClientOptions, type CertMeta } from "ws";
 import type { DeviceIdentity } from "../infra/device-identity.js";
-import { loadDeviceAuthToken, storeDeviceAuthToken } from "../infra/device-auth-store.js";
+import {
+  clearDeviceAuthToken,
+  loadDeviceAuthToken,
+  storeDeviceAuthToken,
+} from "../infra/device-auth-store.js";
 import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
@@ -39,6 +43,7 @@ export type GatewayClientOptions = {
   connectDelayMs?: number;
   tickWatchMinIntervalMs?: number;
   token?: string;
+  explicitToken?: string;
   password?: string;
   instanceId?: string;
   clientName?: GatewayClientName;
@@ -186,9 +191,13 @@ export class GatewayClient {
     const storedToken = this.opts.deviceIdentity
       ? loadDeviceAuthToken({ deviceId: this.opts.deviceIdentity.deviceId, role })?.token
       : null;
-    // Prefer explicitly provided credentials (e.g. CLI `--token`) over any persisted
-    // device-auth tokens. Persisted tokens are only used when no token is provided.
-    const authToken = this.opts.token ?? storedToken ?? undefined;
+    // Token priority: explicit CLI token > stored device token > passive env/config token.
+    // This preserves explicit `--token` overrides while still preferring paired device auth
+    // over shared process-level credentials.
+    const authToken = this.opts.explicitToken ?? storedToken ?? this.opts.token ?? undefined;
+    const canFallbackToShared = Boolean(
+      storedToken && (this.opts.token || this.opts.explicitToken),
+    );
     const auth =
       authToken || this.opts.password
         ? {
@@ -267,6 +276,12 @@ export class GatewayClient {
         this.opts.onHelloOk?.(helloOk);
       })
       .catch((err) => {
+        if (canFallbackToShared && this.opts.deviceIdentity) {
+          clearDeviceAuthToken({
+            deviceId: this.opts.deviceIdentity.deviceId,
+            role,
+          });
+        }
         this.opts.onConnectError?.(err instanceof Error ? err : new Error(String(err)));
         const msg = `gateway connect failed: ${String(err)}`;
         if (this.opts.mode === GATEWAY_CLIENT_MODES.PROBE) {

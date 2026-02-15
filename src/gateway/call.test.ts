@@ -8,6 +8,7 @@ const pickPrimaryLanIPv4 = vi.fn();
 let lastClientOptions: {
   url?: string;
   token?: string;
+  explicitToken?: string;
   password?: string;
   onHelloOk?: () => void | Promise<void>;
   onClose?: (code: number, reason: string) => void;
@@ -48,6 +49,7 @@ vi.mock("./client.js", () => ({
     constructor(opts: {
       url?: string;
       token?: string;
+      explicitToken?: string;
       password?: string;
       onHelloOk?: () => void | Promise<void>;
       onClose?: (code: number, reason: string) => void;
@@ -148,7 +150,8 @@ describe("callGateway url resolution", () => {
     });
 
     expect(lastClientOptions?.url).toBe("wss://override.example/ws");
-    expect(lastClientOptions?.token).toBe("explicit-token");
+    expect(lastClientOptions?.explicitToken).toBe("explicit-token");
+    expect(lastClientOptions?.token).toBeUndefined();
   });
 });
 
@@ -507,6 +510,7 @@ describe("callGateway token resolution", () => {
       token: "explicit-token",
     });
 
-    expect(lastClientOptions?.token).toBe("explicit-token");
+    expect(lastClientOptions?.explicitToken).toBe("explicit-token");
+    expect(lastClientOptions?.token).toBeUndefined();
   });
 });
