@@ -111,6 +111,7 @@ import { computeSandboxConfigHash } from "./config-hash.js";
 import { DEFAULT_SANDBOX_IMAGE, SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
 import { readRegistry, updateRegistry } from "./registry.js";
 import { resolveSandboxAgentId, resolveSandboxScopeKey, slugifySessionKey } from "./shared.js";
+import { validateSandboxSecurity } from "./validate-sandbox-security.js";
 
 const HOT_CONTAINER_WINDOW_MS = 5 * 60 * 1000;
 
@@ -240,6 +241,9 @@ export function buildSandboxCreateArgs(params: {
   labels?: Record<string, string>;
   configHash?: string;
 }) {
+  // Runtime security validation — blocks dangerous bind mounts, network modes, seccomp profiles
+  validateSandboxSecurity(params.cfg);
+
   const createdAtMs = params.createdAtMs ?? Date.now();
   const args = ["create", "--name", params.name];
   args.push("--label", "openclaw.sandbox=1");

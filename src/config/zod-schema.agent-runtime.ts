@@ -125,6 +125,25 @@ export const SandboxDockerSchema = z
     binds: z.array(z.string()).optional(),
   })
   .strict()
+  .superRefine((data, ctx) => {
+    if (data.network?.toLowerCase() === "host") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["network"],
+        message:
+          'Sandbox security: network mode "host" is blocked. ' + 'Use "bridge" or "none" instead.',
+      });
+    }
+    if (data.seccompProfile?.toLowerCase() === "unconfined") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["seccompProfile"],
+        message:
+          'Sandbox security: seccomp profile "unconfined" is blocked. ' +
+          "Use a custom seccomp profile file or omit this setting.",
+      });
+    }
+  })
   .optional();
 
 export const SandboxBrowserSchema = z

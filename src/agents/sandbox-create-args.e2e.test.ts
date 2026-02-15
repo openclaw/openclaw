@@ -94,7 +94,7 @@ describe("buildSandboxCreateArgs", () => {
     );
   });
 
-  it("emits -v flags for custom binds", () => {
+  it("emits -v flags for safe custom binds", () => {
     const cfg: SandboxDockerConfig = {
       image: "openclaw-sandbox:bookworm-slim",
       containerPrefix: "openclaw-sbx-",
@@ -103,7 +103,7 @@ describe("buildSandboxCreateArgs", () => {
       tmpfs: [],
       network: "none",
       capDrop: [],
-      binds: ["/home/user/source:/source:rw", "/var/run/docker.sock:/var/run/docker.sock"],
+      binds: ["/home/user/source:/source:rw", "/var/data/myapp:/data:ro"],
     };
 
     const args = buildSandboxCreateArgs({
@@ -124,7 +124,50 @@ describe("buildSandboxCreateArgs", () => {
       }
     }
     expect(vFlags).toContain("/home/user/source:/source:rw");
-    expect(vFlags).toContain("/var/run/docker.sock:/var/run/docker.sock");
+    expect(vFlags).toContain("/var/data/myapp:/data:ro");
+  });
+
+  it("throws on dangerous bind mounts (Docker socket)", () => {
+    const cfg: SandboxDockerConfig = {
+      image: "openclaw-sandbox:bookworm-slim",
+      containerPrefix: "openclaw-sbx-",
+      workdir: "/workspace",
+      readOnlyRoot: false,
+      tmpfs: [],
+      network: "none",
+      capDrop: [],
+      binds: ["/var/run/docker.sock:/var/run/docker.sock"],
+    };
+
+    expect(() =>
+      buildSandboxCreateArgs({
+        name: "openclaw-sbx-dangerous",
+        cfg,
+        scopeKey: "main",
+        createdAtMs: 1700000000000,
+      }),
+    ).toThrow(/blocked path/);
+  });
+
+  it("throws on network host mode", () => {
+    const cfg: SandboxDockerConfig = {
+      image: "openclaw-sandbox:bookworm-slim",
+      containerPrefix: "openclaw-sbx-",
+      workdir: "/workspace",
+      readOnlyRoot: false,
+      tmpfs: [],
+      network: "host",
+      capDrop: [],
+    };
+
+    expect(() =>
+      buildSandboxCreateArgs({
+        name: "openclaw-sbx-host",
+        cfg,
+        scopeKey: "main",
+        createdAtMs: 1700000000000,
+      }),
+    ).toThrow(/network mode "host" is blocked/);
   });
 
   it("omits -v flags when binds is empty or undefined", () => {

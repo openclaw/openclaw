@@ -11,6 +11,7 @@ import {
   resolveSandboxConfigForAgent,
   resolveSandboxToolPolicyForAgent,
 } from "../agents/sandbox.js";
+import { BLOCKED_HOST_PATHS } from "../agents/sandbox/validate-sandbox-security.js";
 import { resolveToolProfilePolicy } from "../agents/tool-policy.js";
 import { resolveBrowserConfig } from "../browser/config.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -580,6 +581,103 @@ export function collectSandboxDockerNoopFindings(cfg: OpenClawConfig): SecurityA
     remediation:
       'Enable sandbox mode (`agents.defaults.sandbox.mode="non-main"` or `"all"`) where needed, or remove unused docker settings.',
   });
+
+  return findings;
+}
+
+function isDangerousBind(bind: string): string | null {
+  const hostPath = bind.split(":")[0] ?? bind;
+  const normalized = hostPath.replace(/\/+$/, "") || "/";
+  for (const blocked of BLOCKED_HOST_PATHS) {
+    if (normalized === blocked || normalized.startsWith(blocked + "/")) {
+      return blocked;
+    }
+  }
+  return null;
+}
+
+export function collectSandboxDangerousConfigFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
+  const findings: SecurityAuditFinding[] = [];
+  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
+
+  // Collect all docker configs: defaults + per-agent
+  const configs: Array<{ source: string; docker: Record<string, unknown> }> = [];
+  const defaultDocker = cfg.agents?.defaults?.sandbox?.docker;
+  if (defaultDocker && typeof defaultDocker === "object") {
+    configs.push({
+      source: "agents.defaults.sandbox.docker",
+      docker: defaultDocker as Record<string, unknown>,
+    });
+  }
+  for (const entry of agents) {
+    if (!entry || typeof entry !== "object" || typeof entry.id !== "string") {
+      continue;
+    }
+    const agentDocker = entry.sandbox?.docker;
+    if (agentDocker && typeof agentDocker === "object") {
+      configs.push({
+        source: `agents.list.${entry.id}.sandbox.docker`,
+        docker: agentDocker as Record<string, unknown>,
+      });
+    }
+  }
+
+  for (const { source, docker } of configs) {
+    // Check dangerous bind mounts
+    const binds = Array.isArray(docker.binds) ? docker.binds : [];
+    for (const bind of binds) {
+      if (typeof bind !== "string") {
+        continue;
+      }
+      const blocked = isDangerousBind(bind);
+      if (blocked) {
+        findings.push({
+          checkId: "sandbox.dangerous_bind_mount",
+          severity: "critical",
+          title: "Dangerous bind mount in sandbox config",
+          detail: `${source}.binds contains "${bind}" which targets "${blocked}". This allows container escape by exposing sensitive host paths.`,
+          remediation: `Remove "${bind}" from ${source}.binds. Use project-specific paths instead.`,
+        });
+      }
+    }
+
+    // Check dangerous network mode
+    if (typeof docker.network === "string" && docker.network.toLowerCase() === "host") {
+      findings.push({
+        checkId: "sandbox.dangerous_network_mode",
+        severity: "critical",
+        title: "Network host mode in sandbox config",
+        detail: `${source}.network is "host" which bypasses container network isolation entirely.`,
+        remediation: `Set ${source}.network to "bridge" or "none".`,
+      });
+    }
+
+    // Check dangerous seccomp profile
+    if (
+      typeof docker.seccompProfile === "string" &&
+      docker.seccompProfile.toLowerCase() === "unconfined"
+    ) {
+      findings.push({
+        checkId: "sandbox.dangerous_seccomp_profile",
+        severity: "critical",
+        title: "Seccomp unconfined in sandbox config",
+        detail: `${source}.seccompProfile is "unconfined" which disables syscall filtering.`,
+        remediation: `Remove ${source}.seccompProfile or use a custom seccomp profile file.`,
+      });
+    }
+
+    // Check missing capDrop ALL
+    const capDrop = Array.isArray(docker.capDrop) ? docker.capDrop : undefined;
+    if (capDrop && !capDrop.some((c) => typeof c === "string" && c.toUpperCase() === "ALL")) {
+      findings.push({
+        checkId: "sandbox.weak_cap_drop",
+        severity: "warn",
+        title: "Sandbox capDrop does not include ALL",
+        detail: `${source}.capDrop does not include "ALL". Containers may retain dangerous Linux capabilities.`,
+        remediation: `Add "ALL" to ${source}.capDrop and selectively add back only needed capabilities.`,
+      });
+    }
+  }
 
   return findings;
 }
