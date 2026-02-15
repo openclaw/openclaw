@@ -202,8 +202,8 @@ describe("infra runtime", () => {
         await vi.advanceTimersByTimeAsync(0);
         expect(emitSpy).not.toHaveBeenCalledWith("SIGUSR1");
 
-        // Advance past the 30s max deferral wait
-        await vi.advanceTimersByTimeAsync(30_000);
+        // Advance past the 90s max deferral wait
+        await vi.advanceTimersByTimeAsync(90_000);
         expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
       } finally {
         process.removeListener("SIGUSR1", handler);

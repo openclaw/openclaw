@@ -9,6 +9,9 @@ const markGatewaySigusr1RestartHandled = vi.fn();
 const getActiveTaskCount = vi.fn(() => 0);
 const waitForActiveTasks = vi.fn(async () => ({ drained: true }));
 const resetAllLanes = vi.fn();
+const abortEmbeddedPiRun = vi.fn(() => false);
+const getActiveEmbeddedRunCount = vi.fn(() => 0);
+const waitForActiveEmbeddedRuns = vi.fn(async () => ({ drained: true }));
 const DRAIN_TIMEOUT_LOG = "drain timeout reached; proceeding with restart";
 const gatewayLog = {
   info: vi.fn(),
@@ -36,6 +39,13 @@ vi.mock("../../process/command-queue.js", () => ({
   resetAllLanes: () => resetAllLanes(),
 }));
 
+vi.mock("../../agents/pi-embedded-runner/runs.js", () => ({
+  abortEmbeddedPiRun: (sessionId?: string, opts?: { mode?: "all" | "compacting" }) =>
+    abortEmbeddedPiRun(sessionId, opts),
+  getActiveEmbeddedRunCount: () => getActiveEmbeddedRunCount(),
+  waitForActiveEmbeddedRuns: (timeoutMs: number) => waitForActiveEmbeddedRuns(timeoutMs),
+}));
+
 vi.mock("../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => gatewayLog,
 }));
@@ -56,7 +66,9 @@ describe("runGatewayLoop", () => {
   it("restarts after SIGUSR1 even when drain times out, and resets lanes for the new iteration", async () => {
     vi.clearAllMocks();
     getActiveTaskCount.mockReturnValueOnce(2).mockReturnValueOnce(0);
+    getActiveEmbeddedRunCount.mockReturnValueOnce(1).mockReturnValueOnce(0);
     waitForActiveTasks.mockResolvedValueOnce({ drained: false });
+    waitForActiveEmbeddedRuns.mockResolvedValueOnce({ drained: true });
 
     type StartServer = () => Promise<{
       close: (opts: { reason: string; restartExpectedMs: number | null }) => Promise<void>;
@@ -115,7 +127,10 @@ describe("runGatewayLoop", () => {
       expect(start).toHaveBeenCalledTimes(2);
       await new Promise<void>((resolve) => setImmediate(resolve));
 
-      expect(waitForActiveTasks).toHaveBeenCalledWith(30_000);
+      expect(abortEmbeddedPiRun).toHaveBeenCalledWith(undefined, { mode: "compacting" });
+      expect(waitForActiveTasks).toHaveBeenCalledWith(90_000);
+      expect(waitForActiveEmbeddedRuns).toHaveBeenCalledWith(90_000);
+      expect(abortEmbeddedPiRun).toHaveBeenCalledWith(undefined, { mode: "all" });
       expect(gatewayLog.warn).toHaveBeenCalledWith(DRAIN_TIMEOUT_LOG);
       expect(closeFirst).toHaveBeenCalledWith({
         reason: "gateway restarting",

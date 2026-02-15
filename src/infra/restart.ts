@@ -14,7 +14,10 @@ export type RestartAttempt = {
 const SPAWN_TIMEOUT_MS = 2000;
 const SIGUSR1_AUTH_GRACE_MS = 5000;
 const DEFAULT_DEFERRAL_POLL_MS = 500;
-const DEFAULT_DEFERRAL_MAX_WAIT_MS = 30_000;
+// Default deferral max wait should cover the slowest expected embedded compaction
+// (60-90s observed in production) so we don't restart mid-compaction and leave
+// session write locks held by the previous lifecycle.
+const DEFAULT_DEFERRAL_MAX_WAIT_MS = 90_000;
 
 let sigusr1AuthorizedCount = 0;
 let sigusr1AuthorizedUntil = 0;

@@ -95,6 +95,7 @@ import {
 import { splitSdkTools } from "../tool-split.js";
 import { describeUnknownError, mapThinkingLevel } from "../utils.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
+import { waitForCompactionRetryWithAggregateTimeout } from "./compaction-retry-aggregate-timeout.js";
 import {
   selectCompactionTimeoutSnapshot,
   shouldFlagCompactionTimeout,
@@ -979,8 +980,22 @@ export async function runEmbeddedAttempt(
         const preCompactionSnapshot = wasCompactingBefore || wasCompactingAfter ? null : snapshot;
         const preCompactionSessionId = activeSession.sessionId;
 
+        const COMPACTION_RETRY_AGGREGATE_TIMEOUT_MS = 60_000;
         try {
-          await abortable(waitForCompactionRetry());
+          await waitForCompactionRetryWithAggregateTimeout({
+            waitForCompactionRetry,
+            abortable,
+            aggregateTimeoutMs: COMPACTION_RETRY_AGGREGATE_TIMEOUT_MS,
+            onTimeout: () => {
+              timedOutDuringCompaction = true;
+              if (!isProbeSession) {
+                log.warn(
+                  `compaction retry aggregate timeout (${COMPACTION_RETRY_AGGREGATE_TIMEOUT_MS}ms): ` +
+                    `proceeding with pre-compaction state runId=${params.runId} sessionId=${params.sessionId}`,
+                );
+              }
+            },
+          });
         } catch (err) {
           if (isRunnerAbortError(err)) {
             if (!promptError) {
