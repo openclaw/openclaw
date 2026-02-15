@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import type { AuthProfileFailureReason, AuthProfileStore, ProfileUsageStats } from "./types.js";
+import { parseDurationMs } from "../../cli/parse-duration.js";
 import { normalizeProviderId } from "../model-selection.js";
 import { saveAuthProfileStore, updateAuthProfileStoreWithLock } from "./store.js";
 
@@ -83,28 +84,33 @@ export function calculateAuthProfileCooldownMs(errorCount: number): number {
   );
 }
 
+type BillingRecoveryMode = "disable" | "retry" | "notify";
+
 type ResolvedAuthCooldownConfig = {
   billingBackoffMs: number;
   billingMaxMs: number;
   failureWindowMs: number;
+  billingRecoveryMode: BillingRecoveryMode;
 };
+
+function resolveDuration(raw: unknown, fallback: string): number {
+  if (typeof raw === "string" && raw.trim()) {
+    try {
+      return parseDurationMs(raw, { defaultUnit: "h" });
+    } catch {
+      // Invalid duration string — fall through to default
+    }
+  }
+  return parseDurationMs(fallback, { defaultUnit: "h" });
+}
 
 function resolveAuthCooldownConfig(params: {
   cfg?: OpenClawConfig;
   providerId: string;
 }): ResolvedAuthCooldownConfig {
-  const defaults = {
-    billingBackoffHours: 5,
-    billingMaxHours: 24,
-    failureWindowHours: 24,
-  } as const;
-
-  const resolveHours = (value: unknown, fallback: number) =>
-    typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
-
   const cooldowns = params.cfg?.auth?.cooldowns;
   const billingOverride = (() => {
-    const map = cooldowns?.billingBackoffHoursByProvider;
+    const map = cooldowns?.billingBackoffByProvider;
     if (!map) {
       return undefined;
     }
@@ -116,20 +122,14 @@ function resolveAuthCooldownConfig(params: {
     return undefined;
   })();
 
-  const billingBackoffHours = resolveHours(
-    billingOverride ?? cooldowns?.billingBackoffHours,
-    defaults.billingBackoffHours,
-  );
-  const billingMaxHours = resolveHours(cooldowns?.billingMaxHours, defaults.billingMaxHours);
-  const failureWindowHours = resolveHours(
-    cooldowns?.failureWindowHours,
-    defaults.failureWindowHours,
-  );
+  const billingRecoveryMode: BillingRecoveryMode =
+    (cooldowns?.billingRecoveryMode as BillingRecoveryMode | undefined) ?? "disable";
 
   return {
-    billingBackoffMs: billingBackoffHours * 60 * 60 * 1000,
-    billingMaxMs: billingMaxHours * 60 * 60 * 1000,
-    failureWindowMs: failureWindowHours * 60 * 60 * 1000,
+    billingBackoffMs: resolveDuration(billingOverride ?? cooldowns?.billingBackoff, "5h"),
+    billingMaxMs: resolveDuration(cooldowns?.billingMax, "24h"),
+    failureWindowMs: resolveDuration(cooldowns?.failureWindow, "24h"),
+    billingRecoveryMode,
   };
 }
 
@@ -182,14 +182,31 @@ function computeNextProfileUsageStats(params: {
   };
 
   if (params.reason === "billing") {
-    const billingCount = failureCounts.billing ?? 1;
-    const backoffMs = calculateAuthProfileBillingDisableMsWithConfig({
-      errorCount: billingCount,
-      baseMs: params.cfgResolved.billingBackoffMs,
-      maxMs: params.cfgResolved.billingMaxMs,
-    });
-    updatedStats.disabledUntil = params.now + backoffMs;
-    updatedStats.disabledReason = "billing";
+    const recoveryMode = params.cfgResolved.billingRecoveryMode;
+    if (recoveryMode === "notify") {
+      // No cooldown — profile stays available for immediate retry after top-up.
+      // Still record the failure for diagnostics but don't disable.
+      // Clear any stale disable/cooldown from a previous "disable" mode.
+      updatedStats.cooldownUntil = undefined;
+      updatedStats.disabledUntil = undefined;
+      updatedStats.disabledReason = undefined;
+    } else if (recoveryMode === "retry") {
+      // Short 5-minute cooldown for replenishable credit systems.
+      // Clear any stale long disable from a previous "disable" mode.
+      updatedStats.cooldownUntil = params.now + 5 * 60 * 1000;
+      updatedStats.disabledUntil = undefined;
+      updatedStats.disabledReason = undefined;
+    } else {
+      // Default "disable": exponential backoff (5–24 hours).
+      const billingCount = failureCounts.billing ?? 1;
+      const backoffMs = calculateAuthProfileBillingDisableMsWithConfig({
+        errorCount: billingCount,
+        baseMs: params.cfgResolved.billingBackoffMs,
+        maxMs: params.cfgResolved.billingMaxMs,
+      });
+      updatedStats.disabledUntil = params.now + backoffMs;
+      updatedStats.disabledReason = "billing";
+    }
   } else {
     const backoffMs = calculateAuthProfileCooldownMs(nextErrorCount);
     updatedStats.cooldownUntil = params.now + backoffMs;

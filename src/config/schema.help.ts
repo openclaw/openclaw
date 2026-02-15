@@ -134,12 +134,14 @@ export const FIELD_HELP: Record<string, string> = {
     "Require @mention in channels before responding (default: true).",
   "auth.profiles": "Named auth profiles (provider + mode + optional email).",
   "auth.order": "Ordered auth profile IDs per provider (used for automatic failover).",
-  "auth.cooldowns.billingBackoffHours":
-    "Base backoff (hours) when a profile fails due to billing/insufficient credits (default: 5).",
-  "auth.cooldowns.billingBackoffHoursByProvider":
-    "Optional per-provider overrides for billing backoff (hours).",
-  "auth.cooldowns.billingMaxHours": "Cap (hours) for billing backoff (default: 24).",
-  "auth.cooldowns.failureWindowHours": "Failure window (hours) for backoff counters (default: 24).",
+  "auth.cooldowns.billingBackoff":
+    'Base backoff duration when a profile fails due to billing/insufficient credits (default: "5h"). Accepts duration strings like "5h", "30m", "1d".',
+  "auth.cooldowns.billingBackoffByProvider":
+    'Optional per-provider overrides for billing backoff duration (e.g. "5m").',
+  "auth.cooldowns.billingMax": 'Cap duration for billing backoff (default: "24h").',
+  "auth.cooldowns.failureWindow": 'Failure window for backoff counters (default: "24h").',
+  "auth.cooldowns.billingRecoveryMode":
+    'How to handle billing/402 errors: "disable" (default, hours-long backoff), "retry" (5 min cooldown), or "notify" (no cooldown, just show error).',
   "agents.defaults.bootstrapMaxChars":
     "Max characters of each workspace bootstrap file injected into the system prompt before truncation (default: 20000).",
   "agents.defaults.bootstrapTotalMaxChars":

@@ -28,9 +28,9 @@ import {
 import { normalizeProviderId } from "../model-selection.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import {
-  formatBillingErrorMessage,
   classifyFailoverReason,
   formatAssistantErrorText,
+  formatBillingErrorMessage,
   isAuthAssistantError,
   isBillingAssistantError,
   isCompactionFailureError,
@@ -39,6 +39,7 @@ import {
   isFailoverErrorMessage,
   parseImageSizeError,
   parseImageDimensionError,
+  parseX402PaymentInfo,
   isRateLimitAssistantError,
   isTimeoutErrorMessage,
   pickFallbackThinkingLevel,
@@ -861,6 +862,10 @@ export async function runEmbeddedPiAgent(
 
             if (fallbackConfigured) {
               // Prefer formatted error message (user-friendly) over raw errorMessage
+              const rawErrorText = lastAssistant?.errorMessage?.trim() ?? "";
+              const billingPaymentInfo = billingFailure
+                ? (parseX402PaymentInfo(rawErrorText) ?? undefined)
+                : undefined;
               const message =
                 (lastAssistant
                   ? formatAssistantErrorText(lastAssistant, {
@@ -869,13 +874,13 @@ export async function runEmbeddedPiAgent(
                       provider,
                     })
                   : undefined) ||
-                lastAssistant?.errorMessage?.trim() ||
+                rawErrorText ||
                 (timedOut
                   ? "LLM request timed out."
                   : rateLimitFailure
                     ? "LLM request rate limited."
                     : billingFailure
-                      ? formatBillingErrorMessage(provider)
+                      ? formatBillingErrorMessage(billingPaymentInfo, provider)
                       : authFailure
                         ? "LLM request unauthorized."
                         : "LLM request failed.");
@@ -888,6 +893,7 @@ export async function runEmbeddedPiAgent(
                 model: modelId,
                 profileId: lastProfileId,
                 status,
+                paymentInfo: billingPaymentInfo,
               });
             }
           }

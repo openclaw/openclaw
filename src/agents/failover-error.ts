@@ -1,4 +1,9 @@
-import { classifyFailoverReason, type FailoverReason } from "./pi-embedded-helpers.js";
+import {
+  classifyFailoverReason,
+  parseX402PaymentInfo,
+  type FailoverReason,
+  type X402PaymentInfo,
+} from "./pi-embedded-helpers.js";
 
 const TIMEOUT_HINT_RE = /timeout|timed out|deadline exceeded|context deadline exceeded/i;
 const ABORT_TIMEOUT_RE = /request was aborted|request aborted/i;
@@ -10,6 +15,8 @@ export class FailoverError extends Error {
   readonly profileId?: string;
   readonly status?: number;
   readonly code?: string;
+  /** Structured x402 payment info extracted from billing error responses. */
+  readonly paymentInfo?: X402PaymentInfo;
 
   constructor(
     message: string,
@@ -21,6 +28,7 @@ export class FailoverError extends Error {
       status?: number;
       code?: string;
       cause?: unknown;
+      paymentInfo?: X402PaymentInfo;
     },
   ) {
     super(message, { cause: params.cause });
@@ -31,6 +39,7 @@ export class FailoverError extends Error {
     this.profileId = params.profileId;
     this.status = params.status;
     this.code = params.code;
+    this.paymentInfo = params.paymentInfo;
   }
 }
 
@@ -221,6 +230,8 @@ export function coerceToFailoverError(
   const message = getErrorMessage(err) || String(err);
   const status = getStatusCode(err) ?? resolveFailoverStatus(reason);
   const code = getErrorCode(err);
+  const paymentInfo =
+    reason === "billing" ? (parseX402PaymentInfo(message) ?? undefined) : undefined;
 
   return new FailoverError(message, {
     reason,
@@ -230,5 +241,6 @@ export function coerceToFailoverError(
     status,
     code,
     cause: err instanceof Error ? err : undefined,
+    paymentInfo,
   });
 }

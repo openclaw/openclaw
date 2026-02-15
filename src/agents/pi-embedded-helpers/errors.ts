@@ -1,9 +1,146 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { FailoverReason } from "./types.js";
+import type { FailoverReason, X402PaymentInfo } from "./types.js";
 import { formatSandboxToolPolicyBlockedMessage } from "../sandbox.js";
 
-export function formatBillingErrorMessage(provider?: string): string {
+/**
+ * Attempts to extract x402 v2 payment information from a billing error payload.
+ *
+ * Providers that follow the x402 protocol embed structured payment info either in
+ * a `PAYMENT-REQUIRED` header (base64-encoded JSON) or directly in the error body
+ * (fields like `topup`, `balance`, `accepts`).
+ *
+ * The raw error text typically contains the JSON response body from the provider,
+ * possibly prefixed with the HTTP status code (e.g., "402 {\"error\":...}").
+ */
+export function parseX402PaymentInfo(raw: string): X402PaymentInfo | null {
+  if (!raw) {
+    return null;
+  }
+
+  const info: X402PaymentInfo = {};
+  let foundAny = false;
+
+  // Try to parse JSON from the error text (may be prefixed with status code)
+  const jsonCandidates: string[] = [];
+  const trimmed = raw.trim();
+  const jsonStart = trimmed.indexOf("{");
+  if (jsonStart >= 0) {
+    jsonCandidates.push(trimmed.slice(jsonStart));
+  }
+
+  for (const candidate of jsonCandidates) {
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(candidate) as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+
+    // Extract topup URL
+    if (typeof parsed.topup === "string" && parsed.topup.startsWith("http")) {
+      info.topupUrl = parsed.topup;
+      foundAny = true;
+    }
+    if (!info.topupUrl && typeof parsed.top_up === "string" && parsed.top_up.startsWith("http")) {
+      info.topupUrl = parsed.top_up;
+      foundAny = true;
+    }
+
+    // Extract balance from body
+    const balance = parsed.balance as Record<string, unknown> | undefined;
+    if (balance && typeof balance === "object") {
+      info.balance = {};
+      if (typeof balance.budgetLimit === "number") {
+        info.balance.budgetLimit = balance.budgetLimit;
+      }
+      if (typeof balance.budgetUsed === "number") {
+        info.balance.budgetUsed = balance.budgetUsed;
+      }
+      if (typeof balance.remaining === "number") {
+        info.balance.remaining = balance.remaining;
+      }
+      if (
+        info.balance.budgetLimit !== undefined ||
+        info.balance.budgetUsed !== undefined ||
+        info.balance.remaining !== undefined
+      ) {
+        foundAny = true;
+      } else {
+        info.balance = undefined;
+      }
+    }
+
+    // Extract from x402 `accepts` array
+    const accepts = parsed.accepts as Array<Record<string, unknown>> | undefined;
+    if (Array.isArray(accepts) && accepts.length > 0) {
+      const first = accepts[0];
+      if (typeof first?.scheme === "string") {
+        info.scheme = first.scheme;
+        foundAny = true;
+      }
+      if (typeof first?.amount === "string" || typeof first?.amount === "number") {
+        info.minAmountCents = Number(first.amount);
+        foundAny = true;
+      }
+      // Extract topup from accepts[].payTo or accepts[].extra.topupUrl
+      if (!info.topupUrl && typeof first?.payTo === "string" && first.payTo.startsWith("http")) {
+        info.topupUrl = first.payTo;
+        foundAny = true;
+      }
+      const extra = first?.extra as Record<string, unknown> | undefined;
+      if (
+        !info.topupUrl &&
+        extra &&
+        typeof extra.topupUrl === "string" &&
+        extra.topupUrl.startsWith("http")
+      ) {
+        info.topupUrl = extra.topupUrl;
+        foundAny = true;
+      }
+    }
+
+    if (foundAny) {
+      break;
+    }
+  }
+
+  return foundAny ? info : null;
+}
+
+/**
+ * Formats a billing error message, enriching it with x402 payment info when available.
+ * Falls back to a provider-specific or generic billing error message.
+ */
+export function formatBillingErrorMessage(
+  paymentInfo?: X402PaymentInfo | null,
+  provider?: string,
+): string {
+  if (paymentInfo) {
+    const parts: string[] = ["⚠️ Credits exhausted"];
+
+    if (paymentInfo.balance) {
+      const { remaining, budgetLimit } = paymentInfo.balance;
+      if (typeof remaining === "number" && typeof budgetLimit === "number") {
+        parts[0] = `⚠️ Credits exhausted ($${remaining.toFixed(2)} of $${budgetLimit.toFixed(2)} remaining)`;
+      } else if (typeof remaining === "number") {
+        parts[0] = `⚠️ Credits exhausted ($${remaining.toFixed(2)} remaining)`;
+      }
+    }
+
+    parts.push("— your API key has run out of credits.");
+
+    if (paymentInfo.topupUrl) {
+      parts.push(`Top up at: ${paymentInfo.topupUrl}`);
+    } else {
+      parts.push(
+        "Check your provider's billing dashboard and top up or switch to a different API key.",
+      );
+    }
+
+    return parts.join(" ");
+  }
+
   const providerName = provider?.trim();
   if (providerName) {
     return `⚠️ ${providerName} returned a billing error — your API key has run out of credits or has an insufficient balance. Check your ${providerName} billing dashboard and top up or switch to a different API key.`;
@@ -499,7 +636,8 @@ export function formatAssistantErrorText(
   }
 
   if (isBillingErrorMessage(raw)) {
-    return formatBillingErrorMessage(opts?.provider);
+    const paymentInfo = parseX402PaymentInfo(raw);
+    return formatBillingErrorMessage(paymentInfo, opts?.provider);
   }
 
   if (isLikelyHttpErrorText(raw) || isRawApiErrorPayload(raw)) {
@@ -542,7 +680,8 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
     }
 
     if (isBillingErrorMessage(trimmed)) {
-      return BILLING_ERROR_USER_MESSAGE;
+      const paymentInfo = parseX402PaymentInfo(trimmed);
+      return formatBillingErrorMessage(paymentInfo);
     }
 
     if (isRawApiErrorPayload(trimmed) || isLikelyHttpErrorText(trimmed)) {
@@ -601,7 +740,7 @@ const ERROR_PATTERNS = {
     /without sending (?:any )?chunks?/i,
   ],
   billing: [
-    /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|\b(?:got|returned|received)\s+(?:a\s+)?402\b|^\s*402\s+payment/i,
+    /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|\b(?:got|returned|received)\s+(?:a\s+)?402\b|^\s*402\b/i,
     "payment required",
     "insufficient credits",
     "credit balance",

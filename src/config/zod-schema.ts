@@ -263,10 +263,11 @@ export const OpenClawSchema = z
         order: z.record(z.string(), z.array(z.string())).optional(),
         cooldowns: z
           .object({
-            billingBackoffHours: z.number().positive().optional(),
-            billingBackoffHoursByProvider: z.record(z.string(), z.number().positive()).optional(),
-            billingMaxHours: z.number().positive().optional(),
-            failureWindowHours: z.number().positive().optional(),
+            billingBackoff: z.string().optional(),
+            billingBackoffByProvider: z.record(z.string(), z.string()).optional(),
+            billingMax: z.string().optional(),
+            failureWindow: z.string().optional(),
+            billingRecoveryMode: z.enum(["disable", "retry", "notify"]).optional(),
           })
           .strict()
           .optional(),

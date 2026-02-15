@@ -14,16 +14,26 @@ export type AuthConfig = {
   profiles?: Record<string, AuthProfileConfig>;
   order?: Record<string, string[]>;
   cooldowns?: {
-    /** Default billing backoff (hours). Default: 5. */
-    billingBackoffHours?: number;
-    /** Optional per-provider billing backoff (hours). */
-    billingBackoffHoursByProvider?: Record<string, number>;
-    /** Billing backoff cap (hours). Default: 24. */
-    billingMaxHours?: number;
+    /** Default billing backoff duration (e.g. "5h", "30m"). Default: "5h". */
+    billingBackoff?: string;
+    /** Optional per-provider billing backoff durations (e.g. { myProvider: "5m" }). */
+    billingBackoffByProvider?: Record<string, string>;
+    /** Billing backoff cap duration (e.g. "24h"). Default: "24h". */
+    billingMax?: string;
     /**
-     * Failure window for backoff counters (hours). If no failures occur within
-     * this window, counters reset. Default: 24.
+     * Failure window for backoff counters (e.g. "24h"). If no failures occur
+     * within this window, counters reset. Default: "24h".
      */
-    failureWindowHours?: number;
+    failureWindow?: string;
+    /**
+     * How to handle billing/402 errors.
+     * - "disable": (default) Disable the profile for hours (exponential backoff).
+     *   Best for provider API keys where credits require manual action.
+     * - "retry": Short 5-minute cooldown then retry. Best for prepaid credit
+     *   systems where top-ups are fast and automated.
+     * - "notify": No cooldown — just show the error and continue. The profile
+     *   stays available for immediate retry after the user tops up.
+     */
+    billingRecoveryMode?: "disable" | "retry" | "notify";
   };
 };
