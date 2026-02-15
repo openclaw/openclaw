@@ -19,7 +19,7 @@ async function resolveThreadTsFromHistory(params: {
   client: SlackWebClient;
   channelId: string;
   messageTs: string;
-}) {
+}): Promise<{ ok: true; threadTs: string | undefined } | { ok: false }> {
   try {
     const response = (await params.client.conversations.history({
       channel: params.channelId,
@@ -30,14 +30,14 @@ async function resolveThreadTsFromHistory(params: {
     })) as { messages?: Array<{ ts?: string; thread_ts?: string }> };
     const message =
       response.messages?.find((entry) => entry.ts === params.messageTs) ?? response.messages?.[0];
-    return normalizeThreadTs(message?.thread_ts);
+    return { ok: true, threadTs: normalizeThreadTs(message?.thread_ts) };
   } catch (err) {
     if (shouldLogVerbose()) {
       logVerbose(
         `slack inbound: failed to resolve thread_ts via conversations.history for channel=${params.channelId} ts=${params.messageTs}: ${String(err)}`,
       );
     }
-    return undefined;
+    return { ok: false };
   }
 }
 
@@ -49,7 +49,10 @@ export function createSlackThreadTsResolver(params: {
   const ttlMs = Math.max(0, params.cacheTtlMs ?? DEFAULT_THREAD_TS_CACHE_TTL_MS);
   const maxSize = Math.max(0, params.maxSize ?? DEFAULT_THREAD_TS_CACHE_MAX);
   const cache = new Map<string, ThreadTsCacheEntry>();
-  const inflight = new Map<string, Promise<string | undefined>>();
+  const inflight = new Map<
+    string,
+    Promise<{ ok: true; threadTs: string | undefined } | { ok: false }>
+  >();
 
   const getCached = (key: string, now: number) => {
     const entry = cache.get(key);
@@ -114,22 +117,27 @@ export function createSlackThreadTsResolver(params: {
         inflight.set(cacheKey, pending);
       }
 
-      let resolved: string | undefined;
+      let result: { ok: true; threadTs: string | undefined } | { ok: false };
       try {
-        resolved = await pending;
+        result = await pending;
       } finally {
         inflight.delete(cacheKey);
       }
 
-      setCached(cacheKey, resolved ?? null, Date.now());
+      // Only cache successful lookups. When the API call fails (ok=false)
+      // we must NOT cache the result, otherwise "API failure" is stored as
+      // "confirmed no thread_ts" and the cache is polluted for its full TTL.
+      if (result.ok) {
+        setCached(cacheKey, result.threadTs ?? null, Date.now());
+      }
 
-      if (resolved) {
+      if (result.ok && result.threadTs) {
         if (shouldLogVerbose()) {
           logVerbose(
-            `slack inbound: resolved missing thread_ts channel=${message.channel} ts=${message.ts} -> thread_ts=${resolved}`,
+            `slack inbound: resolved missing thread_ts channel=${message.channel} ts=${message.ts} -> thread_ts=${result.threadTs}`,
           );
         }
-        return { ...message, thread_ts: resolved };
+        return { ...message, thread_ts: result.threadTs };
       }
 
       if (shouldLogVerbose()) {
