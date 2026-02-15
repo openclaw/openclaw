@@ -784,7 +784,7 @@ function renderQuotedArgv(argv: string[]): string {
 export function buildSafeBinsShellCommand(params: {
   command: string;
   segments: ExecCommandSegment[];
-  segmentSatisfiedBy: ("allowlist" | "safeBins" | "skills" | null)[];
+  segmentSatisfiedBy: ("allowlist" | "safeBins" | "builtins" | "skills" | null)[];
   platform?: string | null;
 }): { ok: boolean; command?: string; reason?: string } {
   const platform = params.platform ?? null;
