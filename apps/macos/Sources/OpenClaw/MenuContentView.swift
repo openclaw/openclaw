@@ -400,7 +400,6 @@ struct MenuContent: View {
         }
     }
 
-    @ViewBuilder
     private func statusLine(label: String, color: Color) -> some View {
         HStack(spacing: 6) {
             Circle()
@@ -590,6 +589,8 @@ struct MenuContent: View {
     private struct AudioInputDevice: Identifiable, Equatable {
         let uid: String
         let name: String
-        var id: String { self.uid }
+        var id: String {
+            self.uid
+        }
     }
 }

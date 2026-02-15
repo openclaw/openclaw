@@ -110,8 +110,8 @@ struct AboutSettings: View {
     private var buildTimestamp: String? {
         guard
             let raw =
-                (Bundle.main.object(forInfoDictionaryKey: "OpenClawBuildTimestamp") as? String) ??
-                (Bundle.main.object(forInfoDictionaryKey: "OpenClawBuildTimestamp") as? String)
+            (Bundle.main.object(forInfoDictionaryKey: "OpenClawBuildTimestamp") as? String) ??
+            (Bundle.main.object(forInfoDictionaryKey: "OpenClawBuildTimestamp") as? String)
         else { return nil }
         let parser = ISO8601DateFormatter()
         parser.formatOptions = [.withInternetDateTime]

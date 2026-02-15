@@ -1,7 +1,7 @@
-import OpenClawKit
 import Foundation
 import Network
 import Observation
+import OpenClawKit
 import OSLog
 
 @MainActor
@@ -18,7 +18,10 @@ public final class GatewayDiscoveryModel {
     }
 
     public struct DiscoveredGateway: Identifiable, Equatable, Sendable {
-        public var id: String { self.stableID }
+        public var id: String {
+            self.stableID
+        }
+
         public var displayName: String
         // Resolved service endpoint (SRV + A/AAAA). Used for routing; do not trust TXT for routing.
         public var serviceHost: String?

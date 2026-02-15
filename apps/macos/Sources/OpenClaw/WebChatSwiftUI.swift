@@ -1,8 +1,8 @@
 import AppKit
+import Foundation
 import OpenClawChatUI
 import OpenClawKit
 import OpenClawProtocol
-import Foundation
 import OSLog
 import QuartzCore
 import SwiftUI
