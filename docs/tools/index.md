@@ -181,7 +181,7 @@ Optional plugin tools:
 
 Apply structured patches across one or more files. Use for multi-hunk edits.
 Experimental: enable via `tools.exec.applyPatch.enabled` (OpenAI models only).
-Optional: restrict patch paths to the workspace directory with `tools.exec.applyPatch.workspaceOnly: true`.
+`tools.exec.applyPatch.workspaceOnly` defaults to `true` (workspace-contained). Set it to `false` only if you intentionally want `apply_patch` to write/delete outside the workspace directory.
 
 ### `exec`
 

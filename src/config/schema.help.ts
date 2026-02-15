@@ -59,7 +59,7 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.exec.applyPatch.enabled":
     "Experimental. Enables apply_patch for OpenAI models when allowed by tool policy.",
   "tools.exec.applyPatch.workspaceOnly":
-    "Restrict apply_patch paths to the workspace directory (default: false).",
+    "Restrict apply_patch paths to the workspace directory (default: true). Set false to allow writing outside the workspace (dangerous).",
   "tools.exec.applyPatch.allowModels":
     'Optional allowlist of model ids (e.g. "gpt-5.2" or "openai/gpt-5.2").',
   "tools.exec.notifyOnExit":
