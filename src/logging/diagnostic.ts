@@ -19,6 +19,9 @@ type SessionRef = {
 };
 
 const sessionStates = new Map<string, SessionState>();
+const SESSION_STATE_TTL_MS = 30 * 60 * 1000;
+const SESSION_STATE_PRUNE_INTERVAL_MS = 60 * 1000;
+const SESSION_STATE_MAX_ENTRIES = 2000;
 
 const webhookStats = {
   received: 0,
@@ -28,9 +31,41 @@ const webhookStats = {
 };
 
 let lastActivityAt = 0;
+let lastSessionPruneAt = 0;
 
 function markActivity() {
   lastActivityAt = Date.now();
+}
+
+function pruneSessionStates(now = Date.now(), force = false): void {
+  const shouldPruneForSize = sessionStates.size > SESSION_STATE_MAX_ENTRIES;
+  if (!force && !shouldPruneForSize && now - lastSessionPruneAt < SESSION_STATE_PRUNE_INTERVAL_MS) {
+    return;
+  }
+  lastSessionPruneAt = now;
+
+  for (const [key, state] of sessionStates.entries()) {
+    const ageMs = now - state.lastActivity;
+    const isIdle = state.state === "idle";
+    if (isIdle && state.queueDepth <= 0 && ageMs > SESSION_STATE_TTL_MS) {
+      sessionStates.delete(key);
+    }
+  }
+
+  if (sessionStates.size <= SESSION_STATE_MAX_ENTRIES) {
+    return;
+  }
+  const excess = sessionStates.size - SESSION_STATE_MAX_ENTRIES;
+  const ordered = Array.from(sessionStates.entries()).toSorted(
+    (a, b) => a[1].lastActivity - b[1].lastActivity,
+  );
+  for (let i = 0; i < excess; i += 1) {
+    const key = ordered[i]?.[0];
+    if (!key) {
+      break;
+    }
+    sessionStates.delete(key);
+  }
 }
 
 function resolveSessionKey({ sessionKey, sessionId }: SessionRef) {
@@ -38,6 +73,7 @@ function resolveSessionKey({ sessionKey, sessionId }: SessionRef) {
 }
 
 function getSessionState(ref: SessionRef): SessionState {
+  pruneSessionStates();
   const key = resolveSessionKey(ref);
   const existing = sessionStates.get(key);
   if (existing) {
@@ -57,6 +93,7 @@ function getSessionState(ref: SessionRef): SessionState {
     queueDepth: 0,
   };
   sessionStates.set(key, created);
+  pruneSessionStates(Date.now(), true);
   return created;
 }
 
@@ -67,11 +104,13 @@ export function logWebhookReceived(params: {
 }) {
   webhookStats.received += 1;
   webhookStats.lastReceived = Date.now();
-  diag.debug(
-    `webhook received: channel=${params.channel} type=${params.updateType ?? "unknown"} chatId=${
-      params.chatId ?? "unknown"
-    } total=${webhookStats.received}`,
-  );
+  if (diag.isEnabled("debug")) {
+    diag.debug(
+      `webhook received: channel=${params.channel} type=${params.updateType ?? "unknown"} chatId=${
+        params.chatId ?? "unknown"
+      } total=${webhookStats.received}`,
+    );
+  }
   emitDiagnosticEvent({
     type: "webhook.received",
     channel: params.channel,
@@ -88,13 +127,15 @@ export function logWebhookProcessed(params: {
   durationMs?: number;
 }) {
   webhookStats.processed += 1;
-  diag.debug(
-    `webhook processed: channel=${params.channel} type=${
-      params.updateType ?? "unknown"
-    } chatId=${params.chatId ?? "unknown"} duration=${params.durationMs ?? 0}ms processed=${
-      webhookStats.processed
-    }`,
-  );
+  if (diag.isEnabled("debug")) {
+    diag.debug(
+      `webhook processed: channel=${params.channel} type=${
+        params.updateType ?? "unknown"
+      } chatId=${params.chatId ?? "unknown"} duration=${params.durationMs ?? 0}ms processed=${
+        webhookStats.processed
+      }`,
+    );
+  }
   emitDiagnosticEvent({
     type: "webhook.processed",
     channel: params.channel,
@@ -136,11 +177,13 @@ export function logMessageQueued(params: {
   const state = getSessionState(params);
   state.queueDepth += 1;
   state.lastActivity = Date.now();
-  diag.debug(
-    `message queued: sessionId=${state.sessionId ?? "unknown"} sessionKey=${
-      state.sessionKey ?? "unknown"
-    } source=${params.source} queueDepth=${state.queueDepth} sessionState=${state.state}`,
-  );
+  if (diag.isEnabled("debug")) {
+    diag.debug(
+      `message queued: sessionId=${state.sessionId ?? "unknown"} sessionKey=${
+        state.sessionKey ?? "unknown"
+      } source=${params.source} queueDepth=${state.queueDepth} sessionState=${state.state}`,
+    );
+  }
   emitDiagnosticEvent({
     type: "message.queued",
     sessionId: state.sessionId,
@@ -163,21 +206,22 @@ export function logMessageProcessed(params: {
   reason?: string;
   error?: string;
 }) {
-  const payload = `message processed: channel=${params.channel} chatId=${
-    params.chatId ?? "unknown"
-  } messageId=${params.messageId ?? "unknown"} sessionId=${
-    params.sessionId ?? "unknown"
-  } sessionKey=${params.sessionKey ?? "unknown"} outcome=${params.outcome} duration=${
-    params.durationMs ?? 0
-  }ms${params.reason ? ` reason=${params.reason}` : ""}${
-    params.error ? ` error="${params.error}"` : ""
-  }`;
-  if (params.outcome === "error") {
-    diag.error(payload);
-  } else if (params.outcome === "skipped") {
-    diag.debug(payload);
-  } else {
-    diag.debug(payload);
+  const wantsLog = params.outcome === "error" ? diag.isEnabled("error") : diag.isEnabled("debug");
+  if (wantsLog) {
+    const payload = `message processed: channel=${params.channel} chatId=${
+      params.chatId ?? "unknown"
+    } messageId=${params.messageId ?? "unknown"} sessionId=${
+      params.sessionId ?? "unknown"
+    } sessionKey=${params.sessionKey ?? "unknown"} outcome=${params.outcome} duration=${
+      params.durationMs ?? 0
+    }ms${params.reason ? ` reason=${params.reason}` : ""}${
+      params.error ? ` error="${params.error}"` : ""
+    }`;
+    if (params.outcome === "error") {
+      diag.error(payload);
+    } else {
+      diag.debug(payload);
+    }
   }
   emitDiagnosticEvent({
     type: "message.processed",
@@ -208,7 +252,7 @@ export function logSessionStateChange(
   if (params.state === "idle") {
     state.queueDepth = Math.max(0, state.queueDepth - 1);
   }
-  if (!isProbeSession) {
+  if (!isProbeSession && diag.isEnabled("debug")) {
     diag.debug(
       `session state: sessionId=${state.sessionId ?? "unknown"} sessionKey=${
         state.sessionKey ?? "unknown"
@@ -303,6 +347,7 @@ export function startDiagnosticHeartbeat() {
   }
   heartbeatInterval = setInterval(() => {
     const now = Date.now();
+    pruneSessionStates(now, true);
     const activeCount = Array.from(sessionStates.values()).filter(
       (s) => s.state === "processing",
     ).length;
@@ -361,6 +406,21 @@ export function stopDiagnosticHeartbeat() {
     clearInterval(heartbeatInterval);
     heartbeatInterval = null;
   }
+}
+
+export function getDiagnosticSessionStateCountForTest(): number {
+  return sessionStates.size;
+}
+
+export function resetDiagnosticStateForTest(): void {
+  sessionStates.clear();
+  webhookStats.received = 0;
+  webhookStats.processed = 0;
+  webhookStats.errors = 0;
+  webhookStats.lastReceived = 0;
+  lastActivityAt = 0;
+  lastSessionPruneAt = 0;
+  stopDiagnosticHeartbeat();
 }
 
 export { diag as diagnosticLogger };

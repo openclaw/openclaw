@@ -86,6 +86,52 @@ function normalizeModelKeys(values: string[]): string[] {
   return next;
 }
 
+function addModelSelectOption(params: {
+  entry: {
+    provider: string;
+    id: string;
+    name?: string;
+    contextWindow?: number;
+    reasoning?: boolean;
+  };
+  options: WizardSelectOption[];
+  seen: Set<string>;
+  aliasIndex: ReturnType<typeof buildModelAliasIndex>;
+  hasAuth: (provider: string) => boolean;
+}) {
+  const key = modelKey(params.entry.provider, params.entry.id);
+  if (params.seen.has(key)) {
+    return;
+  }
+  // Skip internal router models that can't be directly called via API.
+  if (HIDDEN_ROUTER_MODELS.has(key)) {
+    return;
+  }
+  const hints: string[] = [];
+  if (params.entry.name && params.entry.name !== params.entry.id) {
+    hints.push(params.entry.name);
+  }
+  if (params.entry.contextWindow) {
+    hints.push(`ctx ${formatTokenK(params.entry.contextWindow)}`);
+  }
+  if (params.entry.reasoning) {
+    hints.push("reasoning");
+  }
+  const aliases = params.aliasIndex.byKey.get(key);
+  if (aliases?.length) {
+    hints.push(`alias: ${aliases.join(", ")}`);
+  }
+  if (!params.hasAuth(params.entry.provider)) {
+    hints.push("auth missing");
+  }
+  params.options.push({
+    value: key,
+    label: key,
+    hint: hints.length > 0 ? hints.join(" · ") : undefined,
+  });
+  params.seen.add(key);
+}
+
 async function promptManualModel(params: {
   prompter: WizardPrompter;
   allowBlank: boolean;
@@ -226,48 +272,9 @@ export async function promptDefaultModel(
   }
 
   const seen = new Set<string>();
-  const addModelOption = (entry: {
-    provider: string;
-    id: string;
-    name?: string;
-    contextWindow?: number;
-    reasoning?: boolean;
-  }) => {
-    const key = modelKey(entry.provider, entry.id);
-    if (seen.has(key)) {
-      return;
-    }
-    // Skip internal router models that can't be directly called via API.
-    if (HIDDEN_ROUTER_MODELS.has(key)) {
-      return;
-    }
-    const hints: string[] = [];
-    if (entry.name && entry.name !== entry.id) {
-      hints.push(entry.name);
-    }
-    if (entry.contextWindow) {
-      hints.push(`ctx ${formatTokenK(entry.contextWindow)}`);
-    }
-    if (entry.reasoning) {
-      hints.push("reasoning");
-    }
-    const aliases = aliasIndex.byKey.get(key);
-    if (aliases?.length) {
-      hints.push(`alias: ${aliases.join(", ")}`);
-    }
-    if (!hasAuth(entry.provider)) {
-      hints.push("auth missing");
-    }
-    options.push({
-      value: key,
-      label: key,
-      hint: hints.length > 0 ? hints.join(" · ") : undefined,
-    });
-    seen.add(key);
-  };
 
   for (const entry of models) {
-    addModelOption(entry);
+    addModelSelectOption({ entry, options, seen, aliasIndex, hasAuth });
   }
 
   if (configuredKey && !seen.has(configuredKey)) {
@@ -392,51 +399,13 @@ export async function promptModelAllowlist(params: {
 
   const options: WizardSelectOption[] = [];
   const seen = new Set<string>();
-  const addModelOption = (entry: {
-    provider: string;
-    id: string;
-    name?: string;
-    contextWindow?: number;
-    reasoning?: boolean;
-  }) => {
-    const key = modelKey(entry.provider, entry.id);
-    if (seen.has(key)) {
-      return;
-    }
-    if (HIDDEN_ROUTER_MODELS.has(key)) {
-      return;
-    }
-    const hints: string[] = [];
-    if (entry.name && entry.name !== entry.id) {
-      hints.push(entry.name);
-    }
-    if (entry.contextWindow) {
-      hints.push(`ctx ${formatTokenK(entry.contextWindow)}`);
-    }
-    if (entry.reasoning) {
-      hints.push("reasoning");
-    }
-    const aliases = aliasIndex.byKey.get(key);
-    if (aliases?.length) {
-      hints.push(`alias: ${aliases.join(", ")}`);
-    }
-    if (!hasAuth(entry.provider)) {
-      hints.push("auth missing");
-    }
-    options.push({
-      value: key,
-      label: key,
-      hint: hints.length > 0 ? hints.join(" · ") : undefined,
-    });
-    seen.add(key);
-  };
 
   const filteredCatalog = allowedKeySet
     ? catalog.filter((entry) => allowedKeySet.has(modelKey(entry.provider, entry.id)))
     : catalog;
 
   for (const entry of filteredCatalog) {
-    addModelOption(entry);
+    addModelSelectOption({ entry, options, seen, aliasIndex, hasAuth });
   }
 
   const supplementalKeys = allowedKeySet ? allowedKeys : existingKeys;

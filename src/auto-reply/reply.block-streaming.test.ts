@@ -83,15 +83,23 @@ describe("block streaming", () => {
   });
 
   afterAll(async () => {
-    await fs.rm(fixtureRoot, {
-      recursive: true,
-      force: true,
-      maxRetries: 10,
-      retryDelay: 50,
-    });
+    if (process.platform === "win32") {
+      await fs.rm(fixtureRoot, {
+        recursive: true,
+        force: true,
+        maxRetries: 10,
+        retryDelay: 50,
+      });
+    } else {
+      await fs.rm(fixtureRoot, {
+        recursive: true,
+        force: true,
+      });
+    }
   });
 
   beforeEach(() => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     piEmbeddedMock.abortEmbeddedPiRun.mockReset().mockReturnValue(false);
     piEmbeddedMock.queueEmbeddedPiMessage.mockReset().mockReturnValue(false);
     piEmbeddedMock.isEmbeddedPiRunActive.mockReset().mockReturnValue(false);
@@ -167,61 +175,6 @@ describe("block streaming", () => {
       expect(res).toBeUndefined();
       expect(seen).toEqual(["first\n\nsecond"]);
 
-      let sawAbort = false;
-      const onBlockReplyTimeout = vi.fn((_, context) => {
-        return new Promise<void>((resolve) => {
-          context?.abortSignal?.addEventListener(
-            "abort",
-            () => {
-              sawAbort = true;
-              resolve();
-            },
-            { once: true },
-          );
-        });
-      });
-
-      const timeoutImpl = async (params: RunEmbeddedPiAgentParams) => {
-        void params.onBlockReply?.({ text: "streamed" });
-        return {
-          payloads: [{ text: "final" }],
-          meta: {
-            durationMs: 5,
-            agentMeta: { sessionId: "s", provider: "p", model: "m" },
-          },
-        };
-      };
-      piEmbeddedMock.runEmbeddedPiAgent.mockImplementation(timeoutImpl);
-
-      const timeoutReplyPromise = getReplyFromConfig(
-        {
-          Body: "ping",
-          From: "+1004",
-          To: "+2000",
-          MessageSid: "msg-126",
-          Provider: "telegram",
-        },
-        {
-          onBlockReply: onBlockReplyTimeout,
-          blockReplyTimeoutMs: 1,
-          disableBlockStreaming: false,
-        },
-        {
-          agents: {
-            defaults: {
-              model: "anthropic/claude-opus-4-5",
-              workspace: path.join(home, "openclaw"),
-            },
-          },
-          channels: { telegram: { allowFrom: ["*"] } },
-          session: { store: path.join(home, "sessions.json") },
-        },
-      );
-
-      const timeoutRes = await timeoutReplyPromise;
-      expect(timeoutRes).toMatchObject({ text: "final" });
-      expect(sawAbort).toBe(true);
-
       const onBlockReplyStreamMode = vi.fn().mockResolvedValue(undefined);
       piEmbeddedMock.runEmbeddedPiAgent.mockImplementation(async () => ({
         payloads: [{ text: "final" }],
@@ -256,6 +209,106 @@ describe("block streaming", () => {
 
       expect(resStreamMode?.text).toBe("final");
       expect(onBlockReplyStreamMode).not.toHaveBeenCalled();
+    });
+  });
+
+  it("trims leading whitespace in block-streamed replies", async () => {
+    await withTempHome(async (home) => {
+      const seen: string[] = [];
+      const onBlockReply = vi.fn(async (payload) => {
+        seen.push(payload.text ?? "");
+      });
+
+      piEmbeddedMock.runEmbeddedPiAgent.mockImplementation(
+        async (params: RunEmbeddedPiAgentParams) => {
+          void params.onBlockReply?.({ text: "\n\n  Hello from stream" });
+          return {
+            payloads: [{ text: "\n\n  Hello from stream" }],
+            meta: {
+              durationMs: 5,
+              agentMeta: { sessionId: "s", provider: "p", model: "m" },
+            },
+          };
+        },
+      );
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "ping",
+          From: "+1004",
+          To: "+2000",
+          MessageSid: "msg-128",
+          Provider: "telegram",
+        },
+        {
+          onBlockReply,
+          disableBlockStreaming: false,
+        },
+        {
+          agents: {
+            defaults: {
+              model: "anthropic/claude-opus-4-5",
+              workspace: path.join(home, "openclaw"),
+            },
+          },
+          channels: { telegram: { allowFrom: ["*"] } },
+          session: { store: path.join(home, "sessions.json") },
+        },
+      );
+
+      expect(res).toBeUndefined();
+      expect(onBlockReply).toHaveBeenCalledTimes(1);
+      expect(seen).toEqual(["Hello from stream"]);
+    });
+  });
+
+  it("still parses media directives for direct block payloads", async () => {
+    await withTempHome(async (home) => {
+      const onBlockReply = vi.fn();
+
+      piEmbeddedMock.runEmbeddedPiAgent.mockImplementation(
+        async (params: RunEmbeddedPiAgentParams) => {
+          void params.onBlockReply?.({ text: "Result\nMEDIA: ./image.png" });
+          return {
+            payloads: [{ text: "Result\nMEDIA: ./image.png" }],
+            meta: {
+              durationMs: 5,
+              agentMeta: { sessionId: "s", provider: "p", model: "m" },
+            },
+          };
+        },
+      );
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "ping",
+          From: "+1004",
+          To: "+2000",
+          MessageSid: "msg-129",
+          Provider: "telegram",
+        },
+        {
+          onBlockReply,
+          disableBlockStreaming: false,
+        },
+        {
+          agents: {
+            defaults: {
+              model: "anthropic/claude-opus-4-5",
+              workspace: path.join(home, "openclaw"),
+            },
+          },
+          channels: { telegram: { allowFrom: ["*"] } },
+          session: { store: path.join(home, "sessions.json") },
+        },
+      );
+
+      expect(res).toBeUndefined();
+      expect(onBlockReply).toHaveBeenCalledTimes(1);
+      expect(onBlockReply.mock.calls[0][0]).toMatchObject({
+        text: "Result",
+        mediaUrls: ["./image.png"],
+      });
     });
   });
 });

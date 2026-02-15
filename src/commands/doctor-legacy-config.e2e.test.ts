@@ -111,4 +111,44 @@ describe("normalizeLegacyConfigValues", () => {
       fs.rmSync(customDir, { recursive: true, force: true });
     }
   });
+
+  it("migrates Slack dm.policy/dm.allowFrom to dmPolicy/allowFrom aliases", () => {
+    const res = normalizeLegacyConfigValues({
+      channels: {
+        slack: {
+          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+        },
+      },
+    });
+
+    expect(res.config.channels?.slack?.dmPolicy).toBe("open");
+    expect(res.config.channels?.slack?.allowFrom).toEqual(["*"]);
+    expect(res.config.channels?.slack?.dm).toEqual({ enabled: true });
+    expect(res.changes).toEqual([
+      "Moved channels.slack.dm.policy → channels.slack.dmPolicy.",
+      "Moved channels.slack.dm.allowFrom → channels.slack.allowFrom.",
+    ]);
+  });
+
+  it("migrates Discord account dm.policy/dm.allowFrom to dmPolicy/allowFrom aliases", () => {
+    const res = normalizeLegacyConfigValues({
+      channels: {
+        discord: {
+          accounts: {
+            work: {
+              dm: { policy: "allowlist", allowFrom: ["123"], groupEnabled: true },
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.config.channels?.discord?.accounts?.work?.dmPolicy).toBe("allowlist");
+    expect(res.config.channels?.discord?.accounts?.work?.allowFrom).toEqual(["123"]);
+    expect(res.config.channels?.discord?.accounts?.work?.dm).toEqual({ groupEnabled: true });
+    expect(res.changes).toEqual([
+      "Moved channels.discord.accounts.work.dm.policy → channels.discord.accounts.work.dmPolicy.",
+      "Moved channels.discord.accounts.work.dm.allowFrom → channels.discord.accounts.work.allowFrom.",
+    ]);
+  });
 });

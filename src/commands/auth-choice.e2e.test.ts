@@ -1094,7 +1094,26 @@ describe("applyAuthChoice", () => {
     });
     vi.stubGlobal("fetch", fetchSpy);
 
-    const text = vi.fn().mockResolvedValue("code_manual");
+    const runtime: RuntimeEnv = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn((code: number) => {
+        throw new Error(`exit:${code}`);
+      }),
+    };
+    const text: WizardPrompter["text"] = vi.fn(async (params) => {
+      if (params.message === "Paste the redirect URL") {
+        const lastLog = runtime.log.mock.calls.at(-1)?.[0];
+        const urlLine = typeof lastLog === "string" ? lastLog : String(lastLog ?? "");
+        const urlMatch = urlLine.match(/https?:\/\/\S+/)?.[0] ?? "";
+        const state = urlMatch ? new URL(urlMatch).searchParams.get("state") : null;
+        if (!state) {
+          throw new Error("missing state in oauth URL");
+        }
+        return `?code=code_manual&state=${state}`;
+      }
+      return "code_manual";
+    });
     const select: WizardPrompter["select"] = vi.fn(
       async (params) => params.options[0]?.value as never,
     );
@@ -1109,13 +1128,6 @@ describe("applyAuthChoice", () => {
       confirm: vi.fn(async () => false),
       progress: vi.fn(() => ({ update: noop, stop: noop })),
     };
-    const runtime: RuntimeEnv = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn((code: number) => {
-        throw new Error(`exit:${code}`);
-      }),
-    };
 
     const result = await applyAuthChoice({
       authChoice: "chutes",
@@ -1127,7 +1139,7 @@ describe("applyAuthChoice", () => {
 
     expect(text).toHaveBeenCalledWith(
       expect.objectContaining({
-        message: "Paste the redirect URL (or authorization code)",
+        message: "Paste the redirect URL",
       }),
     );
     expect(result.config.auth?.profiles?.["chutes:remote-user"]).toMatchObject({

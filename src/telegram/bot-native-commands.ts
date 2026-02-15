@@ -339,7 +339,7 @@ export const registerTelegramNativeCommands = ({
       command: command.name,
       description: command.description,
     })),
-    ...pluginCatalog.commands,
+    ...(nativeEnabled ? pluginCatalog.commands : []),
     ...customCommands,
   ];
   const { commandsToRegister, totalCommands, maxCommands, overflowCount } =
@@ -357,7 +357,7 @@ export const registerTelegramNativeCommands = ({
   // Keep hidden commands callable by registering handlers for the full catalog.
   syncTelegramMenuCommands({ bot, runtime, commandsToRegister });
 
-  if (commandsToRegister.length > 0) {
+  if (commandsToRegister.length > 0 || pluginCatalog.commands.length > 0) {
     if (typeof (bot as unknown as { command?: unknown }).command !== "function") {
       logVerbose("telegram: bot.command unavailable; skipping native handlers");
     } else {

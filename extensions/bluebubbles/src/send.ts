@@ -3,11 +3,8 @@ import crypto from "node:crypto";
 import { stripMarkdown } from "openclaw/plugin-sdk";
 import { resolveBlueBubblesAccount } from "./accounts.js";
 import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
-import {
-  extractHandleFromChatGuid,
-  normalizeBlueBubblesHandle,
-  parseBlueBubblesTarget,
-} from "./targets.js";
+import { extractBlueBubblesMessageId, resolveBlueBubblesSendTarget } from "./send-helpers.js";
+import { extractHandleFromChatGuid, normalizeBlueBubblesHandle } from "./targets.js";
 import {
   blueBubblesFetchWithTimeout,
   buildBlueBubblesApiUrl,
@@ -72,57 +69,6 @@ function resolveEffectId(raw?: string): string | undefined {
     return EFFECT_MAP[compact];
   }
   return raw;
-}
-
-function resolveSendTarget(raw: string): BlueBubblesSendTarget {
-  const parsed = parseBlueBubblesTarget(raw);
-  if (parsed.kind === "handle") {
-    return {
-      kind: "handle",
-      address: normalizeBlueBubblesHandle(parsed.to),
-      service: parsed.service,
-    };
-  }
-  if (parsed.kind === "chat_id") {
-    return { kind: "chat_id", chatId: parsed.chatId };
-  }
-  if (parsed.kind === "chat_guid") {
-    return { kind: "chat_guid", chatGuid: parsed.chatGuid };
-  }
-  return { kind: "chat_identifier", chatIdentifier: parsed.chatIdentifier };
-}
-
-function extractMessageId(payload: unknown): string {
-  if (!payload || typeof payload !== "object") {
-    return "unknown";
-  }
-  const record = payload as Record<string, unknown>;
-  const data =
-    record.data && typeof record.data === "object"
-      ? (record.data as Record<string, unknown>)
-      : null;
-  const candidates = [
-    record.messageId,
-    record.messageGuid,
-    record.message_guid,
-    record.guid,
-    record.id,
-    data?.messageId,
-    data?.messageGuid,
-    data?.message_guid,
-    data?.message_id,
-    data?.guid,
-    data?.id,
-  ];
-  for (const candidate of candidates) {
-    if (typeof candidate === "string" && candidate.trim()) {
-      return candidate.trim();
-    }
-    if (typeof candidate === "number" && Number.isFinite(candidate)) {
-      return String(candidate);
-    }
-  }
-  return "unknown";
 }
 
 type BlueBubblesChatRecord = Record<string, unknown>;
@@ -365,7 +311,7 @@ async function createNewChatWithMessage(params: {
   }
   try {
     const parsed = JSON.parse(body) as unknown;
-    return { messageId: extractMessageId(parsed) };
+    return { messageId: extractBlueBubblesMessageId(parsed) };
   } catch {
     return { messageId: "ok" };
   }
@@ -400,7 +346,7 @@ export async function sendMessageBlueBubbles(
   }
   const privateApiStatus = getCachedBlueBubblesPrivateApiStatus(account.accountId);
 
-  const target = resolveSendTarget(to);
+  const target = resolveBlueBubblesSendTarget(to);
   const chatGuid = await resolveChatGuidForTarget({
     baseUrl,
     password,
@@ -477,7 +423,7 @@ export async function sendMessageBlueBubbles(
   }
   try {
     const parsed = JSON.parse(body) as unknown;
-    return { messageId: extractMessageId(parsed) };
+    return { messageId: extractBlueBubblesMessageId(parsed) };
   } catch {
     return { messageId: "ok" };
   }
