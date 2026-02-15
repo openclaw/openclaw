@@ -63,9 +63,9 @@ export type {
   OpenClawPluginApi,
   OpenClawPluginService,
   OpenClawPluginServiceContext,
-  PluginLogger,
   ProviderAuthContext,
   ProviderAuthResult,
+  PluginLogger,
 } from "../plugins/types.js";
 export type {
   GatewayRequestHandler,
