@@ -64,7 +64,7 @@ const WebSearchSchema = Type.Object({
   freshness: Type.Optional(
     Type.String({
       description:
-        "Filter results by discovery time. Brave supports 'pd', 'pw', 'pm', 'py', and date range 'YYYY-MM-DDtoYYYY-MM-DD'. Perplexity supports 'pd', 'pw', 'pm', and 'py'.",
+        "Filter results by discovery time. Brave supports 'pd', 'pw', 'pm', 'py', and date range 'YYYY-MM-DDtoYYYY-MM-DD'. Perplexity and SearXNG support 'pd', 'pw', 'pm', and 'py'.",
     }),
   ),
 });
@@ -620,7 +620,8 @@ async function runSearxngSearch(params: {
   language?: string;
   timeRange?: string;
 }): Promise<{ results: SearxngSearchResult[]; suggestions: string[]; totalResults: number }> {
-  const url = new URL("/search", params.baseUrl);
+  const baseWithSlash = params.baseUrl.endsWith("/") ? params.baseUrl : `${params.baseUrl}/`;
+  const url = new URL("search", baseWithSlash);
   url.searchParams.set("q", params.query);
   url.searchParams.set("format", "json");
   url.searchParams.set("categories", params.categories);
@@ -674,7 +675,7 @@ async function runWebSearch(params: {
       : params.provider === "perplexity"
         ? `${params.provider}:${params.query}:${params.perplexityBaseUrl ?? DEFAULT_PERPLEXITY_BASE_URL}:${params.perplexityModel ?? DEFAULT_PERPLEXITY_MODEL}:${params.freshness || "default"}`
         : params.provider === "searxng"
-          ? `${params.provider}:${params.query}:${params.count}:${params.searxngBaseUrl ?? DEFAULT_SEARXNG_BASE_URL}:${params.searxngCategories ?? "general"}:${params.search_lang || "default"}:${params.freshness || "default"}`
+          ? `${params.provider}:${params.query}:${params.count}:${params.searxngBaseUrl!}:${params.searxngCategories ?? "general"}:${params.search_lang || "default"}:${params.freshness || "default"}`
           : `${params.provider}:${params.query}:${params.grokModel ?? DEFAULT_GROK_MODEL}:${String(params.grokInlineCitations ?? false)}`,
   );
   const cached = readCache(SEARCH_CACHE, cacheKey);
@@ -752,7 +753,7 @@ async function runWebSearch(params: {
     const { results, suggestions, totalResults } = await runSearxngSearch({
       query: params.query,
       count: params.count,
-      baseUrl: params.searxngBaseUrl ?? DEFAULT_SEARXNG_BASE_URL,
+      baseUrl: params.searxngBaseUrl!,
       categories: params.searxngCategories ?? "general",
       timeoutSeconds: params.timeoutSeconds,
       language: params.search_lang,
@@ -917,10 +918,16 @@ export function createWebSearchTool(options?: {
       const search_lang = readStringParam(params, "search_lang");
       const ui_lang = readStringParam(params, "ui_lang");
       const rawFreshness = readStringParam(params, "freshness");
-      if (rawFreshness && provider !== "brave" && provider !== "perplexity") {
+      if (
+        rawFreshness &&
+        provider !== "brave" &&
+        provider !== "perplexity" &&
+        provider !== "searxng"
+      ) {
         return jsonResult({
           error: "unsupported_freshness",
-          message: "freshness is only supported by the Brave and Perplexity web_search providers.",
+          message:
+            "freshness is only supported by the Brave, Perplexity, and SearXNG web_search providers.",
           docs: "https://docs.openclaw.ai/tools/web",
         });
       }

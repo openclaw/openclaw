@@ -198,7 +198,7 @@ export const ToolsWebSearchSchema = z
       .optional(),
     searxng: z
       .object({
-        baseUrl: z.string().optional(),
+        baseUrl: z.string().url().optional(),
         categories: z.string().optional(),
       })
       .strict()
