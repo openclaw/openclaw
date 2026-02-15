@@ -8,7 +8,8 @@ import { setTelegramRuntime } from "../../extensions/telegram/src/runtime.js";
 import { whatsappPlugin } from "../../extensions/whatsapp/src/channel.js";
 import { setWhatsAppRuntime } from "../../extensions/whatsapp/src/runtime.js";
 import * as replyModule from "../auto-reply/reply.js";
-import { resolveMainSessionKey } from "../config/sessions.js";
+import { initSessionState } from "../auto-reply/reply/session.js";
+import { loadSessionStore, resolveMainSessionKey } from "../config/sessions.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -339,6 +340,74 @@ describe("resolveHeartbeatIntervalMs", () => {
       >;
       expect(finalStore[sessionKey]?.updatedAt).toBe(bumpedUpdatedAt);
     });
+  });
+
+  it("resets daily sessions when heartbeat runs after boundary", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+    try {
+      const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hb-daily-"));
+      const storePath = path.join(tmpDir, "sessions.json");
+      const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: { every: "5m", target: "last" },
+          },
+        },
+        channels: {
+          telegram: { allowFrom: ["*"], heartbeat: { showAlerts: false } },
+        },
+        session: { store: storePath },
+      };
+      const sessionKey = resolveMainSessionKey(cfg);
+      const existingSessionId = "daily-session-id";
+
+      await fs.writeFile(
+        storePath,
+        JSON.stringify(
+          {
+            [sessionKey]: {
+              sessionId: existingSessionId,
+              updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
+              lastChannel: "telegram",
+              lastTo: "telegram:123",
+            },
+          },
+          null,
+          2,
+        ),
+      );
+
+      let initResult: Awaited<ReturnType<typeof initSessionState>> | undefined;
+      replySpy.mockImplementationOnce(async (ctx, _opts, cfgOverride) => {
+        initResult = await initSessionState({
+          ctx,
+          cfg: cfgOverride ?? cfg,
+          commandAuthorized: true,
+        });
+        return { text: "" };
+      });
+
+      await runHeartbeatOnce({
+        cfg,
+        deps: {
+          getQueueSize: () => 0,
+          nowMs: () => Date.now(),
+          webAuthExists: async () => true,
+          hasActiveWebListener: () => true,
+        },
+      });
+
+      const store = loadSessionStore(storePath);
+      expect(initResult?.isNewSession).toBe(true);
+      expect(store[sessionKey]?.sessionId).not.toBe(existingSessionId);
+      replySpy.mockRestore();
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("skips WhatsApp delivery when not linked or running", async () => {

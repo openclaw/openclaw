@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { saveSessionStore } from "../../config/sessions.js";
+import { recordSessionMetaFromInbound, saveSessionStore } from "../../config/sessions.js";
 import { initSessionState } from "./session.js";
 
 let suiteRoot = "";
@@ -289,6 +289,52 @@ describe("initSessionState reset policy", () => {
 
     expect(result.isNewSession).toBe(true);
     expect(result.sessionId).not.toBe(existingSessionId);
+  });
+
+  it("does not let inbound metadata updates block daily resets for group sessions", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+    try {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-reset-daily-meta-"));
+      const storePath = path.join(root, "sessions.json");
+      const sessionKey = "agent:main:discord:channel:123";
+      const existingSessionId = "daily-session-id";
+
+      await saveSessionStore(storePath, {
+        [sessionKey]: {
+          sessionId: existingSessionId,
+          updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
+        },
+      });
+
+      const cfg = { session: { store: storePath } } as OpenClawConfig;
+      const ctx = {
+        Body: "hello",
+        SessionKey: sessionKey,
+        From: "discord:channel:123",
+        To: "channel:123",
+        ChatType: "channel",
+        Provider: "discord",
+        Surface: "discord",
+      };
+
+      await recordSessionMetaFromInbound({
+        storePath,
+        sessionKey,
+        ctx,
+      });
+
+      const result = await initSessionState({
+        ctx,
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      expect(result.sessionId).not.toBe(existingSessionId);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("treats sessions as stale before the daily reset when updated before yesterday's boundary", async () => {

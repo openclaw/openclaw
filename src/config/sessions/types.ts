@@ -108,11 +108,16 @@ export function mergeSessionEntry(
   patch: Partial<SessionEntry>,
 ): SessionEntry {
   const sessionId = patch.sessionId ?? existing?.sessionId ?? crypto.randomUUID();
-  const updatedAt = Math.max(existing?.updatedAt ?? 0, patch.updatedAt ?? 0, Date.now());
+  const now = Date.now();
+  const updatedAt =
+    typeof patch.updatedAt === "number"
+      ? Math.max(existing?.updatedAt ?? 0, patch.updatedAt)
+      : (existing?.updatedAt ?? now);
+  const resolvedUpdatedAt = !existing && updatedAt < now ? now : updatedAt;
   if (!existing) {
-    return { ...patch, sessionId, updatedAt };
+    return { ...patch, sessionId, updatedAt: resolvedUpdatedAt };
   }
-  return { ...existing, ...patch, sessionId, updatedAt };
+  return { ...existing, ...patch, sessionId, updatedAt: resolvedUpdatedAt };
 }
 
 export function resolveFreshSessionTotalTokens(
