@@ -14,7 +14,9 @@ Ollama is a local LLM runtime that makes it easy to run open-source models on yo
 
 1. Install Ollama: [https://ollama.ai](https://ollama.ai)
 
-2. Pull a model:
+2. Ensure you have Expose Ollama to the network enabled in Ollama settings
+
+3. Pull a model:
 
 ```bash
 ollama pull gpt-oss:20b
@@ -26,7 +28,7 @@ ollama pull qwen2.5-coder:32b
 ollama pull deepseek-r1:32b
 ```
 
-3. Enable Ollama for OpenClaw (any value works; Ollama doesn't require a real key):
+4. Enable Ollama for OpenClaw (any value works; Ollama doesn't require a real key):
 
 ```bash
 # Set environment variable
@@ -36,7 +38,7 @@ export OLLAMA_API_KEY="ollama-local"
 openclaw config set models.providers.ollama.apiKey "ollama-local"
 ```
 
-4. Use Ollama models:
+5. Use Ollama models:
 
 ```json5
 {
