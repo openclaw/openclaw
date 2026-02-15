@@ -686,4 +686,46 @@ describe("prependSystemEvents", () => {
       vi.useRealTimers();
     }
   });
+
+  it("keeps user cron payloads that start with Read HEARTBEAT.md", async () => {
+    try {
+      enqueueSystemEvent("Read HEARTBEAT.md if it exists. Reminder: send daily report.", {
+        sessionKey: "agent:main:main",
+      });
+
+      const result = await prependSystemEvents({
+        cfg: {} as OpenClawConfig,
+        sessionKey: "agent:main:main",
+        isMainSession: false,
+        isNewSession: false,
+        prefixedBodyBase: "User: hi",
+      });
+
+      expect(result).toContain("Read HEARTBEAT.md if it exists. Reminder: send daily report.");
+    } finally {
+      resetSystemEventsForTest();
+    }
+  });
+
+  it("still drops heartbeat poll/wake noise", async () => {
+    try {
+      enqueueSystemEvent("heartbeat poll: pending", { sessionKey: "agent:main:main" });
+      enqueueSystemEvent("heartbeat wake complete", { sessionKey: "agent:main:main" });
+      enqueueSystemEvent("Reminder: check CI at 9 PM", { sessionKey: "agent:main:main" });
+
+      const result = await prependSystemEvents({
+        cfg: {} as OpenClawConfig,
+        sessionKey: "agent:main:main",
+        isMainSession: false,
+        isNewSession: false,
+        prefixedBodyBase: "User: hi",
+      });
+
+      expect(result).toContain("Reminder: check CI at 9 PM");
+      expect(result).not.toContain("heartbeat poll");
+      expect(result).not.toContain("heartbeat wake");
+    } finally {
+      resetSystemEventsForTest();
+    }
+  });
 });
