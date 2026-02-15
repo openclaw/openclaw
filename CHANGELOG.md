@@ -522,6 +522,7 @@ Docs: https://docs.openclaw.ai
 - Slack: add mention stripPatterns for /new and /reset. (#9971) Thanks @ironbyte-rgb.
 - Chrome extension: fix bundled path resolution. (#8914) Thanks @kelvinCB.
 - Compaction/errors: allow multiple compaction retries on context overflow; show clear billing errors. (#8928, #8391) Thanks @Glucksberg.
+- Agents: skip tool extraction for aborted/errored assistant messages to prevent session corruption. (#4598) Thanks @aisling404.
 
 ## 2026.2.3
 
