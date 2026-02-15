@@ -78,6 +78,8 @@ struct RootCanvas: View {
                     userAccent: self.appModel.seamColor)
             case .quickSetup:
                 GatewayQuickSetupSheet()
+                    .environment(self.appModel)
+                    .environment(self.gatewayController)
             }
         }
         .fullScreenCover(isPresented: self.$showOnboarding) {
