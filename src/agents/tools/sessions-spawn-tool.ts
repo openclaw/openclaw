@@ -159,9 +159,13 @@ export function createSessionsSpawnTool(opts?: {
             : allowSet.size > 0
               ? Array.from(allowSet).join(", ")
               : "none";
+          const configHint =
+            allowSet.size === 0
+              ? ` Configure agents.defaults.subagents.allowAgents: ["${targetAgentId}"] or allowAgents: ["*"] to enable.`
+              : "";
           return jsonResult({
             status: "forbidden",
-            error: `agentId is not allowed for sessions_spawn (allowed: ${allowedText})`,
+            error: `agentId is not allowed for sessions_spawn (allowed: ${allowedText}).${configHint}`,
           });
         }
       }
