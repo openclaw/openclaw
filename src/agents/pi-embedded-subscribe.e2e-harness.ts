@@ -1,6 +1,6 @@
-import type { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
-
-type PiSession = Parameters<subscribeEmbeddedPiSession>[0]["session"];
+type SubscribeEmbeddedPiSession =
+  typeof import("./pi-embedded-subscribe.js").subscribeEmbeddedPiSession;
+type PiSession = Parameters<SubscribeEmbeddedPiSession>[0]["session"];
 
 export function createStubSessionHarness(): {
   session: PiSession;
