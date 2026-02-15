@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
+import { applyOnboardAuthAgentModelsAndProviders } from "./onboard-auth.config-shared.js";
 import {
   buildMinimaxApiModelDefinition,
   buildMinimaxModelDefinition,
@@ -44,20 +45,7 @@ export function applyMinimaxProviderConfig(cfg: OpenClawConfig): OpenClawConfig 
     };
   }
 
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...cfg.agents?.defaults,
-        models,
-      },
-    },
-    models: {
-      mode: cfg.models?.mode ?? "merge",
-      providers,
-    },
-  };
+  return applyOnboardAuthAgentModelsAndProviders(cfg, { agentModels: models, providers });
 }
 
 export function applyMinimaxHostedProviderConfig(
@@ -89,20 +77,7 @@ export function applyMinimaxHostedProviderConfig(
     models: mergedModels.length > 0 ? mergedModels : [hostedModel],
   };
 
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...cfg.agents?.defaults,
-        models,
-      },
-    },
-    models: {
-      mode: cfg.models?.mode ?? "merge",
-      providers,
-    },
-  };
+  return applyOnboardAuthAgentModelsAndProviders(cfg, { agentModels: models, providers });
 }
 
 export function applyMinimaxConfig(cfg: OpenClawConfig): OpenClawConfig {

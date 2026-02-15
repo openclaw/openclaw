@@ -50,6 +50,7 @@ export {
 } from "./onboard-auth.config-litellm.js";
 import {
   applyAgentDefaultModelPrimary,
+  applyOnboardAuthAgentModelsAndProviders,
   applyProviderConfigWithDefaultModel,
   applyProviderConfigWithDefaultModels,
   applyProviderConfigWithModelCatalog,
@@ -124,20 +125,7 @@ export function applyZaiProviderConfig(
     models: mergedModels.length > 0 ? mergedModels : defaultModels,
   };
 
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...cfg.agents?.defaults,
-        models,
-      },
-    },
-    models: {
-      mode: cfg.models?.mode ?? "merge",
-      providers,
-    },
-  };
+  return applyOnboardAuthAgentModelsAndProviders(cfg, { agentModels: models, providers });
 }
 
 export function applyZaiConfig(
@@ -321,20 +309,7 @@ export function applySyntheticProviderConfig(cfg: OpenClawConfig): OpenClawConfi
     models: mergedModels.length > 0 ? mergedModels : syntheticModels,
   };
 
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...cfg.agents?.defaults,
-        models,
-      },
-    },
-    models: {
-      mode: cfg.models?.mode ?? "merge",
-      providers,
-    },
-  };
+  return applyOnboardAuthAgentModelsAndProviders(cfg, { agentModels: models, providers });
 }
 
 export function applySyntheticConfig(cfg: OpenClawConfig): OpenClawConfig {
