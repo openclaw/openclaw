@@ -44,6 +44,8 @@ export type MattermostAccountConfig = {
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
   /** Outbound response prefix override for this channel/account. */
   responsePrefix?: string;
+  /** Per-action toggles (e.g. { messages: false } to disable read). */
+  actions?: Record<string, boolean | undefined>;
 };
 
 export type MattermostConfig = {

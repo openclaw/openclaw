@@ -9,6 +9,7 @@ import {
   setAccountEnabledInConfigSection,
   type ChannelPlugin,
 } from "openclaw/plugin-sdk";
+import { mattermostMessageActions } from "./actions.js";
 import { MattermostConfigSchema } from "./config-schema.js";
 import { resolveMattermostGroupRequireMention } from "./group-mentions.js";
 import {
@@ -186,6 +187,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
       return { channel: "mattermost", ...result };
     },
   },
+  actions: mattermostMessageActions,
   status: {
     defaultRuntime: {
       accountId: DEFAULT_ACCOUNT_ID,

@@ -180,6 +180,66 @@ export async function createMattermostPost(
   });
 }
 
+export type MattermostPostList = {
+  order: string[];
+  posts: Record<string, MattermostPost>;
+};
+
+export async function fetchChannelPosts(
+  client: MattermostClient,
+  channelId: string,
+  opts?: { limit?: number; before?: string; after?: string; since?: number },
+): Promise<MattermostPostList> {
+  const params = new URLSearchParams();
+  if (opts?.limit != null) {
+    params.set("per_page", String(opts.limit));
+  }
+  if (opts?.before) {
+    params.set("before", opts.before);
+  }
+  if (opts?.after) {
+    params.set("after", opts.after);
+  }
+  if (opts?.since != null) {
+    params.set("since", String(opts.since));
+  }
+  const qs = params.toString();
+  const path = `/channels/${channelId}/posts${qs ? `?${qs}` : ""}`;
+  return await client.request<MattermostPostList>(path);
+}
+
+export async function searchPosts(
+  client: MattermostClient,
+  teamId: string,
+  terms: string,
+  opts?: { channelId?: string; authorId?: string },
+): Promise<MattermostPostList> {
+  let finalTerms = terms;
+  if (opts?.channelId) {
+    finalTerms = `in:${opts.channelId} ${finalTerms}`;
+  }
+  if (opts?.authorId) {
+    finalTerms = `from:${opts.authorId} ${finalTerms}`;
+  }
+  return await client.request<MattermostPostList>(`/teams/${teamId}/posts/search`, {
+    method: "POST",
+    body: JSON.stringify({ terms: finalTerms, is_or_search: false }),
+  });
+}
+
+export async function fetchTeamChannels(
+  client: MattermostClient,
+  teamId: string,
+  opts?: { limit?: number },
+): Promise<MattermostChannel[]> {
+  const params = new URLSearchParams();
+  if (opts?.limit != null) {
+    params.set("per_page", String(opts.limit));
+  }
+  const qs = params.toString();
+  const path = `/teams/${teamId}/channels${qs ? `?${qs}` : ""}`;
+  return await client.request<MattermostChannel[]>(path);
+}
 export async function uploadMattermostFile(
   client: MattermostClient,
   params: {
