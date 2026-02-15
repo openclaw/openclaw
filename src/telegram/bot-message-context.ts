@@ -425,7 +425,12 @@ export const buildTelegramMessageContext = async ({
     }
   }
 
-  // Build bodyText - if there's audio with transcript, use transcript; otherwise use placeholder
+  // Replace audio placeholder with transcript when preflight succeeds.
+  if (hasAudio && bodyText === "<media:audio>" && preflightTranscript) {
+    bodyText = preflightTranscript;
+  }
+
+  // Build bodyText fallback for messages that still have no text.
   if (!bodyText && allMedia.length > 0) {
     if (hasAudio) {
       bodyText = preflightTranscript || "<media:audio>";
