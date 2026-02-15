@@ -65,7 +65,7 @@ describe("logger helpers", () => {
     cleanup(logPath);
   });
 
-  it("uses daily rolling default log file and prunes old ones", () => {
+  it("uses daily rolling default log file and prunes old ones", async () => {
     resetLogger();
     setLoggerOverride({ level: "info" }); // force default file path with enabled file logging
     const today = localDateString(new Date());
@@ -82,6 +82,11 @@ describe("logger helpers", () => {
 
     expect(fs.existsSync(todayPath)).toBe(true);
     expect(fs.readFileSync(todayPath, "utf-8")).toContain("roll-me");
+
+    // Pruning is deferred to setImmediate inside buildLogger; await two
+    // immediates so the nested callback is guaranteed to have executed.
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
     expect(fs.existsSync(oldPath)).toBe(false);
 
     cleanup(todayPath);

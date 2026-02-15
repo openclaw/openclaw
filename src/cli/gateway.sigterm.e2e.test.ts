@@ -86,7 +86,6 @@ describe("gateway SIGTERM", () => {
     const nodeBin = process.execPath;
     const env = {
       ...process.env,
-      OPENCLAW_NO_RESPAWN: "1",
       OPENCLAW_STATE_DIR: stateDir,
       OPENCLAW_SKIP_CHANNELS: "1",
       OPENCLAW_SKIP_GMAIL_WATCHER: "1",

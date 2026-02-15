@@ -90,9 +90,10 @@ export function isFileLogLevelEnabled(level: LogLevel): boolean {
 
 function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
   fs.mkdirSync(path.dirname(settings.file), { recursive: true });
-  // Clean up stale rolling logs when using a dated log filename.
+  // Defer log pruning to avoid blocking the event loop during startup.
   if (isRollingPath(settings.file)) {
-    pruneOldRollingLogs(path.dirname(settings.file));
+    const dir = path.dirname(settings.file);
+    setImmediate(() => pruneOldRollingLogs(dir));
   }
   const logger = new TsLogger<LogObj>({
     name: "openclaw",
