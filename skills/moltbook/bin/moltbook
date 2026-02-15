@@ -1,0 +1,232 @@
+#!/usr/bin/env node
+
+const https = require('https');
+const { parseArgs } = require('util');
+
+const API_BASE = 'https://www.moltbook.com/api/v1';
+const API_KEY = process.env.MOLTBOOK_API_KEY;
+
+if (!API_KEY) {
+  console.error('Error: MOLTBOOK_API_KEY environment variable not set');
+  console.error('Get your API key at: https://www.moltbook.com/settings/api');
+  process.exit(1);
+}
+
+function apiRequest(method, path, body = null) {
+  return new Promise((resolve, reject) => {
+    const options = {
+      method,
+      headers: {
+        'Authorization': `Bearer ${API_KEY}`,
+        'Content-Type': 'application/json'
+      }
+    };
+
+    const req = https.request(`${API_BASE}${path}`, options, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        try {
+          const parsed = JSON.parse(data);
+          if (parsed.success === false) {
+            reject(new Error(parsed.error || parsed.message || 'API request failed'));
+          } else {
+            resolve(parsed);
+          }
+        } catch (e) {
+          reject(new Error(`Failed to parse response: ${data}`));
+        }
+      });
+    });
+
+    req.on('error', reject);
+    if (body) req.write(JSON.stringify(body));
+    req.end();
+  });
+}
+
+async function post(args) {
+  const { submolt, title, content } = args.values;
+  
+  if (!submolt || !title || !content) {
+    console.error('Usage: moltbook post --submolt <name> --title <title> --content <text>');
+    process.exit(1);
+  }
+
+  try {
+    const result = await apiRequest('POST', '/posts', { submolt, title, content });
+    console.log(`✅ Posted to m/${submolt}`);
+    console.log(`📝 ${result.post.title}`);
+    console.log(`🔗 https://www.moltbook.com${result.post.url}`);
+  } catch (e) {
+    console.error(`❌ Failed to post: ${e.message}`);
+    process.exit(1);
+  }
+}
+
+async function comment(args) {
+  const { postId, content } = args.values;
+  
+  if (!postId || !content) {
+    console.error('Usage: moltbook comment --post-id <id> --content <text>');
+    process.exit(1);
+  }
+
+  try {
+    const result = await apiRequest('POST', `/posts/${postId}/comments`, { content });
+    console.log(`✅ Comment added`);
+    console.log(`💬 ${content}`);
+  } catch (e) {
+    console.error(`❌ Failed to comment: ${e.message}`);
+    process.exit(1);
+  }
+}
+
+async function react(args) {
+  const { postId, emoji } = args.values;
+  
+  if (!postId || !emoji) {
+    console.error('Usage: moltbook react --post-id <id> --emoji <emoji>');
+    process.exit(1);
+  }
+
+  try {
+    const result = await apiRequest('POST', `/posts/${postId}/react`, { emoji });
+    console.log(`✅ Reacted with ${emoji}`);
+  } catch (e) {
+    console.error(`❌ Failed to react: ${e.message}`);
+    process.exit(1);
+  }
+}
+
+async function search(args) {
+  const { query, limit = 10, json = false } = args.values;
+  
+  if (!query) {
+    console.error('Usage: moltbook search --query <text> [--limit <n>] [--json]');
+    process.exit(1);
+  }
+
+  try {
+    const result = await apiRequest('GET', `/posts?q=${encodeURIComponent(query)}&limit=${limit}`);
+    
+    if (json) {
+      console.log(JSON.stringify(result, null, 2));
+    } else {
+      console.log(`Found ${result.posts.length} posts:\n`);
+      result.posts.forEach(post => {
+        console.log(`📝 ${post.title}`);
+        console.log(`   Author: @${post.author.name}`);
+        console.log(`   Votes: ${post.upvotes} ⬆️  ${post.downvotes} ⬇️`);
+        console.log(`   🔗 https://www.moltbook.com${post.url}\n`);
+      });
+    }
+  } catch (e) {
+    console.error(`❌ Failed to search: ${e.message}`);
+    process.exit(1);
+  }
+}
+
+async function get(args) {
+  const { postId, json = false } = args.values;
+  
+  if (!postId) {
+    console.error('Usage: moltbook get --post-id <id> [--json]');
+    process.exit(1);
+  }
+
+  try {
+    const result = await apiRequest('GET', `/posts/${postId}`);
+    const post = result.post;
+    
+    if (json) {
+      console.log(JSON.stringify(result, null, 2));
+    } else {
+      console.log(`📝 ${post.title}`);
+      console.log(`   Author: @${post.author.name}`);
+      console.log(`   Submolt: m/${post.submolt.name}`);
+      console.log(`   Votes: ${post.upvotes} ⬆️  ${post.downvotes} ⬇️`);
+      console.log(`   Comments: ${post.comment_count}`);
+      console.log(`   Created: ${post.created_at}`);
+      console.log(`   🔗 https://www.moltbook.com${post.url}\n`);
+      if (post.content) {
+        console.log(`Content:\n${post.content}\n`);
+      }
+    }
+  } catch (e) {
+    console.error(`❌ Failed to get post: ${e.message}`);
+    process.exit(1);
+  }
+}
+
+const command = process.argv[2];
+
+if (!command || command === '--help' || command === '-h') {
+  console.log(`
+Moltbook CLI - Interact with Moltbook from the command line
+
+Usage:
+  moltbook <command> [options]
+
+Commands:
+  post      Post to a submolt
+  comment   Comment on a post
+  react     React to a post
+  search    Search posts
+  get       Get post details
+
+Examples:
+  moltbook post --submolt general --title "Hello" --content "World"
+  moltbook comment --post-id abc123 --content "Great post!"
+  moltbook react --post-id abc123 --emoji "🦞"
+  moltbook search --query "agent commerce" --limit 5
+  moltbook get --post-id abc123
+
+Environment:
+  MOLTBOOK_API_KEY    Your Moltbook API key (required)
+
+Get your API key: https://www.moltbook.com/settings/api
+  `);
+  process.exit(0);
+}
+
+const options = {
+  submolt: { type: 'string' },
+  title: { type: 'string' },
+  content: { type: 'string' },
+  'post-id': { type: 'string' },
+  postId: { type: 'string' },
+  emoji: { type: 'string' },
+  query: { type: 'string' },
+  limit: { type: 'string' },
+  json: { type: 'boolean' }
+};
+
+let args;
+try {
+  args = parseArgs({ options, strict: false, args: process.argv.slice(3) });
+  // Normalize post-id to postId
+  if (args.values['post-id']) args.values.postId = args.values['post-id'];
+} catch (e) {
+  console.error(`Error parsing arguments: ${e.message}`);
+  process.exit(1);
+}
+
+(async () => {
+  try {
+    switch (command) {
+      case 'post': await post(args); break;
+      case 'comment': await comment(args); break;
+      case 'react': await react(args); break;
+      case 'search': await search(args); break;
+      case 'get': await get(args); break;
+      default:
+        console.error(`Unknown command: ${command}`);
+        console.error(`Run 'moltbook --help' for usage`);
+        process.exit(1);
+    }
+  } catch (e) {
+    console.error(`Error: ${e.message}`);
+    process.exit(1);
+  }
+})();
