@@ -5,30 +5,21 @@ import path from "node:path";
 import sharp from "sharp";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { isPathWithinBase } from "../../test/helpers/paths.js";
+import { captureEnv } from "../test-utils/env.js";
 
 describe("media store", () => {
   let store: typeof import("./store.js");
   let home = "";
-  const envSnapshot: Record<string, string | undefined> = {};
-
-  const snapshotEnv = () => {
-    for (const key of ["HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "OPENCLAW_STATE_DIR"]) {
-      envSnapshot[key] = process.env[key];
-    }
-  };
-
-  const restoreEnv = () => {
-    for (const [key, value] of Object.entries(envSnapshot)) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
-  };
+  let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeAll(async () => {
-    snapshotEnv();
+    envSnapshot = captureEnv([
+      "HOME",
+      "USERPROFILE",
+      "HOMEDRIVE",
+      "HOMEPATH",
+      "OPENCLAW_STATE_DIR",
+    ]);
     home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-home-"));
     process.env.HOME = home;
     process.env.USERPROFILE = home;
@@ -45,7 +36,7 @@ describe("media store", () => {
   });
 
   afterAll(async () => {
-    restoreEnv();
+    envSnapshot.restore();
     try {
       await fs.rm(home, { recursive: true, force: true });
     } catch {
