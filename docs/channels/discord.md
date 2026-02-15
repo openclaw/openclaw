@@ -313,6 +313,23 @@ See [Slash commands](/tools/slash-commands) for command catalog and behavior.
 
   </Accordion>
 
+  <Accordion title="Ack reactions">
+    `ackReaction` sends an acknowledgement emoji while OpenClaw is processing an inbound message.
+
+    Resolution order:
+
+    - `channels.discord.accounts.<accountId>.ackReaction`
+    - `channels.discord.ackReaction`
+    - `messages.ackReaction`
+    - agent identity emoji fallback (`agents.list[].identity.emoji`, else "👀")
+
+    Notes:
+
+    - Discord accepts unicode emoji or custom emoji names.
+    - Use `""` to disable the reaction for a channel or account.
+
+  </Accordion>
+
   <Accordion title="Config writes">
     Channel-initiated config writes are enabled by default.
 

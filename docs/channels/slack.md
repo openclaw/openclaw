@@ -287,6 +287,22 @@ Available action groups in current Slack tooling:
 - `channel_id_changed` can migrate channel config keys when `configWrites` is enabled.
 - Channel topic/purpose metadata is treated as untrusted context and can be injected into routing context.
 
+## Ack reactions
+
+`ackReaction` sends an acknowledgement emoji while OpenClaw is processing an inbound message.
+
+Resolution order:
+
+- `channels.slack.accounts.<accountId>.ackReaction`
+- `channels.slack.ackReaction`
+- `messages.ackReaction`
+- agent identity emoji fallback (`agents.list[].identity.emoji`, else "👀")
+
+Notes:
+
+- Slack expects shortcodes (for example `"eyes"`).
+- Use `""` to disable the reaction for a channel or account.
+
 ## Manifest and scope checklist
 
 <AccordionGroup>

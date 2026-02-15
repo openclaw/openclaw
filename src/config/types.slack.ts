@@ -156,6 +156,11 @@ export type SlackAccountConfig = {
   heartbeat?: ChannelHeartbeatVisibilityConfig;
   /** Outbound response prefix override for this channel/account. */
   responsePrefix?: string;
+  /**
+   * Per-channel ack reaction override.
+   * Slack uses shortcodes (e.g., "eyes") rather than unicode emoji.
+   */
+  ackReaction?: string;
 };
 
 export type SlackConfig = {
