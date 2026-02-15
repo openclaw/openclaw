@@ -4,6 +4,7 @@ import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../../../auto-rep
 import type { AgentStreamParams } from "../../../commands/agent/types.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { SessionSystemPromptReport } from "../../../config/sessions/types.js";
+import type { PluginHookBeforeAgentStartResult } from "../../../plugins/types.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.js";
 import type { MessagingToolSend } from "../../pi-embedded-messaging.js";
 import type { BlockReplyChunking, ToolResultFormat } from "../../pi-embedded-subscribe.js";
@@ -90,6 +91,8 @@ export type EmbeddedRunAttemptParams = {
   streamParams?: AgentStreamParams;
   ownerNumbers?: string[];
   enforceFinalTag?: boolean;
+  /** Pre-computed hook result from run.ts to avoid double-firing before_agent_start. */
+  earlyHookResult?: PluginHookBeforeAgentStartResult;
 };
 
 export type EmbeddedRunAttemptResult = {
