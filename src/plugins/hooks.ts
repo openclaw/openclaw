@@ -8,6 +8,7 @@
 import type { PluginRegistry } from "./registry.js";
 import type {
   PluginHookAfterCompactionEvent,
+  PluginHookAfterTierTransitionEvent,
   PluginHookAfterToolCallEvent,
   PluginHookAgentContext,
   PluginHookAgentEndEvent,
@@ -17,6 +18,8 @@ import type {
   PluginHookLlmInputEvent,
   PluginHookLlmOutputEvent,
   PluginHookBeforeResetEvent,
+  PluginHookBeforeTierTransitionEvent,
+  PluginHookBeforeTierTransitionResult,
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
   PluginHookGatewayContext,
@@ -32,6 +35,7 @@ import type {
   PluginHookSessionContext,
   PluginHookSessionEndEvent,
   PluginHookSessionStartEvent,
+  PluginHookTierTransitionContext,
   PluginHookToolContext,
   PluginHookToolResultPersistContext,
   PluginHookToolResultPersistEvent,
@@ -67,6 +71,10 @@ export type {
   PluginHookGatewayContext,
   PluginHookGatewayStartEvent,
   PluginHookGatewayStopEvent,
+  PluginHookTierTransitionContext,
+  PluginHookBeforeTierTransitionEvent,
+  PluginHookBeforeTierTransitionResult,
+  PluginHookAfterTierTransitionEvent,
 };
 
 export type HookRunnerLogger = {
@@ -460,6 +468,40 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   }
 
   // =========================================================================
+  // Tier Transition Hooks
+  // =========================================================================
+
+  /**
+   * Run before_tier_transition hook.
+   * Allows plugins to override tier transition decisions.
+   * Runs sequentially.
+   */
+  async function runBeforeTierTransition(
+    event: PluginHookBeforeTierTransitionEvent,
+    ctx: PluginHookTierTransitionContext,
+  ): Promise<PluginHookBeforeTierTransitionResult | undefined> {
+    return runModifyingHook<"before_tier_transition", PluginHookBeforeTierTransitionResult>(
+      "before_tier_transition",
+      event,
+      ctx,
+      (acc, next) => ({
+        decision: next.decision ?? acc?.decision,
+      }),
+    );
+  }
+
+  /**
+   * Run after_tier_transition hook.
+   * Runs in parallel (fire-and-forget).
+   */
+  async function runAfterTierTransition(
+    event: PluginHookAfterTierTransitionEvent,
+    ctx: PluginHookTierTransitionContext,
+  ): Promise<void> {
+    return runVoidHook("after_tier_transition", event, ctx);
+  }
+
+  // =========================================================================
   // Utility
   // =========================================================================
 
@@ -500,6 +542,9 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     // Gateway hooks
     runGatewayStart,
     runGatewayStop,
+    // Tier transition hooks
+    runBeforeTierTransition,
+    runAfterTierTransition,
     // Utility
     hasHooks,
     getHookCount,

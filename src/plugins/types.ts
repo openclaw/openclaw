@@ -312,7 +312,9 @@ export type PluginHookName =
   | "session_start"
   | "session_end"
   | "gateway_start"
-  | "gateway_stop";
+  | "gateway_stop"
+  | "before_tier_transition"
+  | "after_tier_transition";
 
 // Agent context shared across agent hooks
 export type PluginHookAgentContext = {
@@ -513,6 +515,36 @@ export type PluginHookGatewayContext = {
   port?: number;
 };
 
+// before_tier_transition hook
+export type PluginHookTierTransitionContext = {
+  agentId?: string;
+  workspaceDir?: string;
+};
+
+export type PluginHookBeforeTierTransitionEvent = {
+  action: "compress" | "archive" | "promote" | "delete";
+  sourcePath: string;
+  targetPath?: string;
+  sourceTier: string;
+  targetTier?: string;
+};
+
+export type PluginHookBeforeTierTransitionResult = {
+  /** Override the transition decision: "proceed" | "skip" | "force". */
+  decision?: "proceed" | "skip" | "force";
+};
+
+// after_tier_transition hook
+export type PluginHookAfterTierTransitionEvent = {
+  action: "compress" | "archive" | "promote" | "delete";
+  sourcePath: string;
+  targetPath?: string;
+  sourceTier: string;
+  targetTier?: string;
+  success: boolean;
+  error?: string;
+};
+
 // gateway_start hook
 export type PluginHookGatewayStartEvent = {
   port: number;
@@ -586,6 +618,17 @@ export type PluginHookHandlerMap = {
   gateway_stop: (
     event: PluginHookGatewayStopEvent,
     ctx: PluginHookGatewayContext,
+  ) => Promise<void> | void;
+  before_tier_transition: (
+    event: PluginHookBeforeTierTransitionEvent,
+    ctx: PluginHookTierTransitionContext,
+  ) =>
+    | Promise<PluginHookBeforeTierTransitionResult | void>
+    | PluginHookBeforeTierTransitionResult
+    | void;
+  after_tier_transition: (
+    event: PluginHookAfterTierTransitionEvent,
+    ctx: PluginHookTierTransitionContext,
   ) => Promise<void> | void;
 };
 

@@ -8,6 +8,8 @@ export type MemorySearchResult = {
   snippet: string;
   source: MemorySource;
   citation?: string;
+  tier?: string;
+  recallCount?: number;
 };
 
 export type MemoryEmbeddingProbeResult = {
@@ -61,7 +63,7 @@ export type MemoryProviderStatus = {
 export interface MemorySearchManager {
   search(
     query: string,
-    opts?: { maxResults?: number; minScore?: number; sessionKey?: string },
+    opts?: { maxResults?: number; minScore?: number; sessionKey?: string; deepSearch?: boolean },
   ): Promise<MemorySearchResult[]>;
   readFile(params: {
     relPath: string;

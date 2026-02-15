@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { MemoryTier } from "./tier-types.js";
 
 export type MemoryFileEntry = {
   path: string;
@@ -265,6 +266,62 @@ export function remapChunkLines(chunks: MemoryChunk[], lineMap: number[] | undef
     chunk.startLine = lineMap[chunk.startLine - 1] ?? chunk.startLine;
     chunk.endLine = lineMap[chunk.endLine - 1] ?? chunk.endLine;
   }
+}
+
+/**
+ * Classify a memory file's tier based on its relative path.
+ *
+ * - `MEMORY.md` / `memory.md` at root → T4 (foundational)
+ * - `memory/daily/*` → T1 (daily)
+ * - `memory/short-term/*` → T2 (short-term)
+ * - `memory/long-term/*` → T3 (long-term)
+ * - `memory/YYYY-MM-DD*.md` (legacy root) → T1
+ * - Other `memory/*.md` (legacy root) → T2
+ */
+export function classifyMemoryTier(relPath: string): MemoryTier {
+  const normalized = normalizeRelPath(relPath);
+  if (!normalized) {
+    return "T1";
+  }
+
+  // Foundational files at workspace root
+  if (
+    normalized === "MEMORY.md" ||
+    normalized === "memory.md" ||
+    normalized === "SOUL.md" ||
+    normalized === "soul.md" ||
+    normalized === "USER.md" ||
+    normalized === "user.md"
+  ) {
+    return "T4";
+  }
+
+  // Tier subdirectories
+  if (normalized.startsWith("memory/daily/")) {
+    return "T1";
+  }
+  if (normalized.startsWith("memory/short-term/")) {
+    return "T2";
+  }
+  if (normalized.startsWith("memory/long-term/")) {
+    return "T3";
+  }
+
+  // Legacy files at memory/ root: date-prefixed → T1, others → T2
+  if (normalized.startsWith("memory/")) {
+    const filename = normalized.slice("memory/".length);
+    // Skip nested subdirectories not covered above
+    if (filename.includes("/")) {
+      return "T2";
+    }
+    // YYYY-MM-DD pattern at start of filename
+    if (/^\d{4}-\d{2}-\d{2}/.test(filename)) {
+      return "T1";
+    }
+    return "T2";
+  }
+
+  return "T1";
 }
 
 export function parseEmbedding(raw: string): number[] {

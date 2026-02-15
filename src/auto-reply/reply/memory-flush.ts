@@ -14,6 +14,14 @@ export const DEFAULT_MEMORY_FLUSH_PROMPT = [
   `If nothing to store, reply with ${SILENT_REPLY_TOKEN}.`,
 ].join(" ");
 
+export const TIERED_MEMORY_FLUSH_PROMPT = [
+  "Pre-compaction memory flush.",
+  "Store durable memories now (use memory/daily/YYYY-MM-DD.md; create memory/daily/ if needed).",
+  "Tag each entry with a topic heading (## Topic Name) for later compression.",
+  "IMPORTANT: If the file already exists, APPEND new content only and do not overwrite existing entries.",
+  `If nothing to store, reply with ${SILENT_REPLY_TOKEN}.`,
+].join(" ");
+
 export const DEFAULT_MEMORY_FLUSH_SYSTEM_PROMPT = [
   "Pre-compaction memory flush turn.",
   "The session is near auto-compaction; capture durable memories to disk.",
@@ -42,9 +50,11 @@ export function resolveMemoryFlushSettings(cfg?: OpenClawConfig): MemoryFlushSet
   if (!enabled) {
     return null;
   }
+  const tiersEnabled = cfg?.agents?.defaults?.memorySearch?.tiers?.enabled === true;
   const softThresholdTokens =
     normalizeNonNegativeInt(defaults?.softThresholdTokens) ?? DEFAULT_MEMORY_FLUSH_SOFT_TOKENS;
-  const prompt = defaults?.prompt?.trim() || DEFAULT_MEMORY_FLUSH_PROMPT;
+  const defaultPrompt = tiersEnabled ? TIERED_MEMORY_FLUSH_PROMPT : DEFAULT_MEMORY_FLUSH_PROMPT;
+  const prompt = defaults?.prompt?.trim() || defaultPrompt;
   const systemPrompt = defaults?.systemPrompt?.trim() || DEFAULT_MEMORY_FLUSH_SYSTEM_PROMPT;
   const reserveTokensFloor =
     normalizeNonNegativeInt(cfg?.agents?.defaults?.compaction?.reserveTokensFloor) ??

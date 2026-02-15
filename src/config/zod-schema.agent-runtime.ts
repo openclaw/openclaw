@@ -448,6 +448,53 @@ export const MemorySearchSchema = z
       })
       .strict()
       .optional(),
+    tiers: z
+      .object({
+        enabled: z.boolean().optional(),
+        compression: z
+          .object({
+            minAgeHours: z.number().nonnegative().optional(),
+            maxCompressedTokens: z.number().int().positive().optional(),
+            model: z.string().optional(),
+            prompt: z.string().optional(),
+          })
+          .strict()
+          .optional(),
+        archival: z
+          .object({
+            noRecallHours: z.number().nonnegative().optional(),
+            maxRecallCount: z.number().int().nonnegative().optional(),
+            recallWindowHours: z.number().nonnegative().optional(),
+          })
+          .strict()
+          .optional(),
+        promotion: z
+          .object({
+            minRecallCount: z.number().int().positive().optional(),
+            recallWindowHours: z.number().nonnegative().optional(),
+            cooldownHours: z.number().nonnegative().optional(),
+          })
+          .strict()
+          .optional(),
+        deletion: z
+          .object({
+            noRecallHours: z.number().nonnegative().optional(),
+            neverDelete: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
+        searchWeights: z
+          .object({
+            t1: z.number().nonnegative().optional(),
+            t2: z.number().nonnegative().optional(),
+            t3: z.number().nonnegative().optional(),
+            t4: z.number().nonnegative().optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .optional();

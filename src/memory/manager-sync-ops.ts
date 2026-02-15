@@ -22,7 +22,7 @@ import {
   runWithConcurrency,
   type MemoryFileEntry,
 } from "./internal.js";
-import { ensureMemoryIndexSchema } from "./memory-schema.js";
+import { ensureMemoryIndexSchema, ensureTierSchema } from "./memory-schema.js";
 import {
   buildSessionEntry,
   listSessionFilesForAgent,
@@ -272,6 +272,7 @@ class MemoryManagerSyncOps {
       this.fts.loadError = result.ftsError;
       log.warn(`fts unavailable: ${result.ftsError}`);
     }
+    ensureTierSchema(this.db);
   }
 
   private ensureWatcher() {

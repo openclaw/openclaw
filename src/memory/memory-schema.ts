@@ -79,7 +79,41 @@ export function ensureMemoryIndexSchema(params: {
   params.db.exec(`CREATE INDEX IF NOT EXISTS idx_chunks_path ON chunks(path);`);
   params.db.exec(`CREATE INDEX IF NOT EXISTS idx_chunks_source ON chunks(source);`);
 
+  // Tier columns on existing tables
+  ensureColumn(params.db, "files", "tier", "TEXT DEFAULT 'T1'");
+  ensureColumn(params.db, "chunks", "tier", "TEXT DEFAULT 'T1'");
+
   return { ftsAvailable, ...(ftsError ? { ftsError } : {}) };
+}
+
+export function ensureTierSchema(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS chunk_recall (
+      chunk_id TEXT NOT NULL,
+      recalled_at INTEGER NOT NULL,
+      session_key TEXT,
+      query TEXT,
+      score REAL,
+      tier TEXT NOT NULL DEFAULT 'T1',
+      PRIMARY KEY (chunk_id, recalled_at)
+    );
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_chunk_recall_chunk ON chunk_recall(chunk_id);`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_chunk_recall_time ON chunk_recall(recalled_at);`);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS memory_tiers (
+      path TEXT PRIMARY KEY,
+      tier TEXT NOT NULL DEFAULT 'T1',
+      promoted_at INTEGER,
+      recall_count INTEGER DEFAULT 0,
+      last_recalled_at INTEGER,
+      compressed_from TEXT,
+      compression_model TEXT,
+      compression_at INTEGER
+    );
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_memory_tiers_tier ON memory_tiers(tier);`);
 }
 
 function ensureColumn(

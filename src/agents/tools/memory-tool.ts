@@ -14,6 +14,8 @@ const MemorySearchSchema = Type.Object({
   query: Type.String(),
   maxResults: Type.Optional(Type.Number()),
   minScore: Type.Optional(Type.Number()),
+  deepSearch: Type.Optional(Type.Boolean()),
+  promoteTier: Type.Optional(Type.String()),
 });
 
 const MemoryGetSchema = Type.Object({
@@ -56,6 +58,8 @@ export function createMemorySearchTool(options: {
       const query = readStringParam(params, "query", { required: true });
       const maxResults = readNumberParam(params, "maxResults");
       const minScore = readNumberParam(params, "minScore");
+      const deepSearch = Boolean(params.deepSearch);
+      const promoteTier = readStringParam(params, "promoteTier");
       const { manager, error } = await getMemorySearchManager({
         cfg,
         agentId,
@@ -63,6 +67,30 @@ export function createMemorySearchTool(options: {
       if (!manager) {
         return jsonResult({ results: [], disabled: true, error });
       }
+
+      // Handle explicit tier promotion request
+      if (promoteTier) {
+        try {
+          const { promoteSpecificFile } = await import("../../memory/tier-archival.js");
+          const { resolveAgentWorkspaceDir } = await import("../../agents/agent-scope.js");
+          const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+          // Access the db from the manager (it's a MemoryIndexManager)
+          const indexManager = manager as unknown as { db?: unknown };
+          if (indexManager.db) {
+            const promoted = await promoteSpecificFile({
+              workspaceDir,
+              db: indexManager.db as import("node:sqlite").DatabaseSync,
+              filePath: promoteTier,
+            });
+            return jsonResult({ promoted, path: promoteTier });
+          }
+          return jsonResult({ promoted: false, error: "db not available" });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          return jsonResult({ promoted: false, error: message });
+        }
+      }
+
       try {
         const citationsMode = resolveMemoryCitationsMode(cfg);
         const includeCitations = shouldIncludeCitations({
@@ -73,6 +101,7 @@ export function createMemorySearchTool(options: {
           maxResults,
           minScore,
           sessionKey: options.agentSessionKey,
+          deepSearch,
         });
         const status = manager.status();
         const decorated = decorateCitations(rawResults, includeCitations);

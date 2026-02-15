@@ -28,6 +28,9 @@ import { isMemoryPath, normalizeExtraMemoryPaths } from "./internal.js";
 import { memoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
 import { searchKeyword, searchVector } from "./manager-search.js";
 import { memoryManagerSyncOps } from "./manager-sync-ops.js";
+import { resolveTierConfig } from "./tier-config.js";
+import { recordChunkRecalls } from "./tier-recall.js";
+import type { ResolvedTierConfig } from "./tier-types.js";
 const SNIPPET_MAX_CHARS = 700;
 const VECTOR_TABLE = "chunks_vec";
 const FTS_TABLE = "chunks_fts";
@@ -205,6 +208,7 @@ export class MemoryIndexManager implements MemorySearchManager {
       maxResults?: number;
       minScore?: number;
       sessionKey?: string;
+      deepSearch?: boolean;
     },
   ): Promise<MemorySearchResult[]> {
     void this.warmSession(opts?.sessionKey);
@@ -235,18 +239,102 @@ export class MemoryIndexManager implements MemorySearchManager {
       ? await this.searchVector(queryVec, candidates).catch(() => [])
       : [];
 
+    let results: MemorySearchResult[];
     if (!hybrid.enabled) {
-      return vectorResults.filter((entry) => entry.score >= minScore).slice(0, maxResults);
+      results = vectorResults.filter((entry) => entry.score >= minScore).slice(0, maxResults);
+    } else {
+      const merged = this.mergeHybridResults({
+        vector: vectorResults,
+        keyword: keywordResults,
+        vectorWeight: hybrid.vectorWeight,
+        textWeight: hybrid.textWeight,
+      });
+      results = merged.filter((entry) => entry.score >= minScore).slice(0, maxResults);
     }
 
-    const merged = this.mergeHybridResults({
-      vector: vectorResults,
-      keyword: keywordResults,
-      vectorWeight: hybrid.vectorWeight,
-      textWeight: hybrid.textWeight,
+    // Tier-aware weighting and filtering (when tiers enabled)
+    const tierConfig = this.resolveTierConfigCached();
+    if (tierConfig.enabled) {
+      results = this.applyTierWeighting(results, tierConfig, opts?.deepSearch ?? false);
+    }
+
+    // Record recalls for tier tracking (when tiers enabled)
+    if (tierConfig.enabled && results.length > 0) {
+      try {
+        recordChunkRecalls({
+          db: this.db,
+          results: results.map((r) => ({
+            ...r,
+            id: (r as MemorySearchResult & { id?: string }).id,
+          })),
+          query: cleaned,
+          sessionKey: opts?.sessionKey,
+        });
+      } catch {
+        // Non-critical: don't fail search if recall recording fails
+      }
+    }
+
+    return results;
+  }
+
+  private tierConfigCache: ResolvedTierConfig | null = null;
+
+  private resolveTierConfigCached(): ResolvedTierConfig {
+    if (this.tierConfigCache) {
+      return this.tierConfigCache;
+    }
+    const defaults = this.cfg.agents?.defaults?.memorySearch;
+    const overrides =
+      this.cfg.agents?.list?.find(
+        (a: { id?: string }) => a?.id === this.agentId,
+      )?.memorySearch;
+    this.tierConfigCache = resolveTierConfig(defaults, overrides);
+    return this.tierConfigCache;
+  }
+
+  private applyTierWeighting(
+    results: MemorySearchResult[],
+    tierConfig: ResolvedTierConfig,
+    deepSearch: boolean,
+  ): MemorySearchResult[] {
+    const weights = tierConfig.searchWeights;
+    const weightMap: Record<string, number> = {
+      T1: weights.t1,
+      T2: weights.t2,
+      T3: weights.t3,
+      T4: weights.t4,
+    };
+
+    // Look up tier for each result from chunks table
+    const enriched = results.map((r) => {
+      const tier = this.lookupChunkTier(r.path) ?? "T1";
+      const weight = weightMap[tier] ?? 1.0;
+      return {
+        ...r,
+        tier,
+        score: r.score * weight,
+      };
     });
 
-    return merged.filter((entry) => entry.score >= minScore).slice(0, maxResults);
+    // Filter out T3 results unless deepSearch is true
+    const filtered = deepSearch
+      ? enriched
+      : enriched.filter((r) => r.tier !== "T3");
+
+    // Re-sort by weighted score
+    return filtered.toSorted((a, b) => b.score - a.score);
+  }
+
+  private lookupChunkTier(filePath: string): string | undefined {
+    try {
+      const row = this.db
+        .prepare(`SELECT tier FROM files WHERE path = ? LIMIT 1`)
+        .get(filePath) as { tier?: string } | undefined;
+      return row?.tier ?? undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   private async searchVector(

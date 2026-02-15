@@ -61,6 +61,7 @@ import {
   resolveHeartbeatSenderContext,
 } from "./outbound/targets.js";
 import { peekSystemEventEntries } from "./system-events.js";
+import { MemoryTierService } from "../memory/tier-service.js";
 
 type HeartbeatDeps = OutboundSendDeps &
   ChannelHeartbeatDeps & {
@@ -750,6 +751,10 @@ export async function runHeartbeatOnce(opts: {
       accountId: delivery.accountId,
       indicatorType: visibility.useIndicator ? resolveIndicatorType("sent") : undefined,
     });
+
+    // Piggyback tier maintenance (fire-and-forget, non-blocking)
+    void runTierMaintenance(cfg, agentId).catch(() => {});
+
     return { status: "ran", durationMs: Date.now() - startedAt };
   } catch (err) {
     const reason = formatErrorMessage(err);
@@ -961,4 +966,21 @@ export function startHeartbeatRunner(opts: {
   opts.abortSignal?.addEventListener("abort", cleanup, { once: true });
 
   return { stop: cleanup, updateConfig };
+}
+
+const tierServiceCache = new Map<string, MemoryTierService>();
+
+async function runTierMaintenance(cfg: OpenClawConfig, agentId: string): Promise<void> {
+  const tiersEnabled = cfg.agents?.defaults?.memorySearch?.tiers?.enabled === true;
+  if (!tiersEnabled) {
+    return;
+  }
+  let service = tierServiceCache.get(agentId);
+  if (!service) {
+    service = new MemoryTierService({ cfg, agentId });
+    tierServiceCache.set(agentId, service);
+  }
+  // Run without db/callLlm for now — the service will skip if no db is provided.
+  // Full integration with db requires the MemoryIndexManager instance.
+  await service.runCycle();
 }

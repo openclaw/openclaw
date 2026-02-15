@@ -85,7 +85,10 @@ const saveSessionToMemory: HookHandler = async (event) => {
     const workspaceDir = cfg
       ? resolveAgentWorkspaceDir(cfg, agentId)
       : path.join(resolveStateDir(process.env, os.homedir), "workspace");
-    const memoryDir = path.join(workspaceDir, "memory");
+    const tiersEnabled = cfg?.agents?.defaults?.memorySearch?.tiers?.enabled === true;
+    const memoryDir = tiersEnabled
+      ? path.join(workspaceDir, "memory", "daily")
+      : path.join(workspaceDir, "memory");
     await fs.mkdir(memoryDir, { recursive: true });
 
     // Get today's date for filename

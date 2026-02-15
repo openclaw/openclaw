@@ -41,6 +41,7 @@ function buildMemorySection(params: {
   isMinimal: boolean;
   availableTools: Set<string>;
   citationsMode?: MemoryCitationsMode;
+  tiersEnabled?: boolean;
 }) {
   if (params.isMinimal) {
     return [];
@@ -52,6 +53,11 @@ function buildMemorySection(params: {
     "## Memory Recall",
     "Before answering anything about prior work, decisions, dates, people, preferences, or todos: run memory_search on MEMORY.md + memory/*.md; then use memory_get to pull only the needed lines. If low confidence after search, say you checked.",
   ];
+  if (params.tiersEnabled) {
+    lines.push(
+      "Memory is organized in tiers: T1 (today), T2 (compressed knowledge), T3 (archived, use deepSearch=true), T4 (foundational, in context above).",
+    );
+  }
   if (params.citationsMode === "off") {
     lines.push(
       "Citations are disabled: do not mention file paths or line numbers in replies unless the user explicitly asks.",
@@ -219,6 +225,7 @@ export function buildAgentSystemPrompt(params: {
     channel: string;
   };
   memoryCitationsMode?: MemoryCitationsMode;
+  memoryTiersEnabled?: boolean;
 }) {
   const coreToolSummaries: Record<string, string> = {
     read: "Read file contents",
@@ -379,6 +386,7 @@ export function buildAgentSystemPrompt(params: {
     isMinimal,
     availableTools,
     citationsMode: params.memoryCitationsMode,
+    tiersEnabled: params.memoryTiersEnabled,
   });
   const docsSection = buildDocsSection({
     docsPath: params.docsPath,

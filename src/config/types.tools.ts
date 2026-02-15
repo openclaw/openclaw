@@ -341,6 +341,58 @@ export type MemorySearchConfig = {
     /** Optional cap on cached embeddings (best-effort). */
     maxEntries?: number;
   };
+  /** Tiered memory management (default: disabled). */
+  tiers?: {
+    /** Enable tiered memory management (default: false). */
+    enabled?: boolean;
+    /** T1→T2 compression settings. */
+    compression?: {
+      /** Minimum age in hours before daily files are compressed (default: 48). */
+      minAgeHours?: number;
+      /** Max tokens per compressed topic file (default: 2000). */
+      maxCompressedTokens?: number;
+      /** Model override for compression LLM calls. */
+      model?: string;
+      /** Custom compression prompt override. */
+      prompt?: string;
+    };
+    /** T2→T3 archival settings. */
+    archival?: {
+      /** Hours without recall before archiving (default: 336 / 14 days). */
+      noRecallHours?: number;
+      /** Max recall count threshold for archival (default: 1). */
+      maxRecallCount?: number;
+      /** Window in hours for counting recalls (default: 336). */
+      recallWindowHours?: number;
+    };
+    /** T3→T2 promotion settings. */
+    promotion?: {
+      /** Minimum recall count to trigger promotion (default: 3). */
+      minRecallCount?: number;
+      /** Window in hours for counting recalls (default: 168 / 7 days). */
+      recallWindowHours?: number;
+      /** Cooldown hours after promotion to prevent ping-pong (default: 72). */
+      cooldownHours?: number;
+    };
+    /** T3 deletion settings. */
+    deletion?: {
+      /** Hours without recall before deletion (default: 2160 / 90 days). */
+      noRecallHours?: number;
+      /** Never delete archived memories (default: true). */
+      neverDelete?: boolean;
+    };
+    /** Tier-based search weight multipliers. */
+    searchWeights?: {
+      /** T1 (daily) weight multiplier (default: 1.5). */
+      t1?: number;
+      /** T2 (short-term) weight multiplier (default: 1.0). */
+      t2?: number;
+      /** T3 (long-term) weight multiplier (default: 0.5). */
+      t3?: number;
+      /** T4 (foundational) weight multiplier (default: 1.2). */
+      t4?: number;
+    };
+  };
 };
 
 export type ToolsConfig = {

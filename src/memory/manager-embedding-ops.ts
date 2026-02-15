@@ -15,6 +15,7 @@ import { enforceEmbeddingMaxInputTokens } from "./embedding-chunk-limits.js";
 import { estimateUtf8Bytes } from "./embedding-input-limits.js";
 import {
   chunkMarkdown,
+  classifyMemoryTier,
   hashText,
   parseEmbedding,
   remapChunkLines,
@@ -728,6 +729,7 @@ class MemoryManagerEmbeddingOps {
     this.db
       .prepare(`DELETE FROM chunks WHERE path = ? AND source = ?`)
       .run(entry.path, options.source);
+    const tier = classifyMemoryTier(entry.path);
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
       const embedding = embeddings[i] ?? [];
@@ -736,14 +738,15 @@ class MemoryManagerEmbeddingOps {
       );
       this.db
         .prepare(
-          `INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at, tier)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET
              hash=excluded.hash,
              model=excluded.model,
              text=excluded.text,
              embedding=excluded.embedding,
-             updated_at=excluded.updated_at`,
+             updated_at=excluded.updated_at,
+             tier=excluded.tier`,
         )
         .run(
           id,
@@ -756,6 +759,7 @@ class MemoryManagerEmbeddingOps {
           chunk.text,
           JSON.stringify(embedding),
           now,
+          tier,
         );
       if (vectorReady && embedding.length > 0) {
         try {
@@ -784,14 +788,15 @@ class MemoryManagerEmbeddingOps {
     }
     this.db
       .prepare(
-        `INSERT INTO files (path, source, hash, mtime, size) VALUES (?, ?, ?, ?, ?)
+        `INSERT INTO files (path, source, hash, mtime, size, tier) VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT(path) DO UPDATE SET
            source=excluded.source,
            hash=excluded.hash,
            mtime=excluded.mtime,
-           size=excluded.size`,
+           size=excluded.size,
+           tier=excluded.tier`,
       )
-      .run(entry.path, options.source, entry.hash, entry.mtimeMs, entry.size);
+      .run(entry.path, options.source, entry.hash, entry.mtimeMs, entry.size, tier);
   }
 }
 
