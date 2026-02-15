@@ -8,7 +8,7 @@
 import type { WorkspaceBootstrapFile } from "../agents/workspace.js";
 import type { OpenClawConfig } from "../config/config.js";
 
-export type InternalHookEventType = "command" | "session" | "agent" | "gateway";
+export type InternalHookEventType = "command" | "session" | "agent" | "gateway" | "exec";
 
 export type AgentBootstrapHookContext = {
   workspaceDir: string;
@@ -164,6 +164,59 @@ export function createInternalHookEvent(
     timestamp: new Date(),
     messages: [],
   };
+}
+
+// ── Exec completion events ─────────────────────────────────────────
+
+export type ExecCompletionHookContext = {
+  /** Unique session/process id */
+  sessionId: string;
+  /** Human-readable slug */
+  slug?: string;
+  /** Exit code (null if killed by signal) */
+  exitCode: number | null;
+  /** Signal name or number (null if exited normally) */
+  exitSignal: string | number | null;
+  /** Whether the process timed out */
+  timedOut: boolean;
+  /** Wall-clock duration in milliseconds */
+  durationMs: number;
+  /** Tail of aggregated stdout+stderr */
+  tailOutput: string;
+  /** Whether the process was backgrounded */
+  backgrounded: boolean;
+  /** Node id if this was a remote node exec */
+  nodeId?: string;
+};
+
+export type ExecCompletionHookEvent = InternalHookEvent & {
+  type: "exec";
+  action: "completed" | "failed";
+  context: ExecCompletionHookContext;
+};
+
+/**
+ * Create an exec completion hook event.
+ *
+ * Use action "completed" for exit code 0, "failed" for non-zero / signal / timeout.
+ */
+export function createExecCompletionEvent(
+  action: "completed" | "failed",
+  sessionKey: string,
+  context: ExecCompletionHookContext,
+): ExecCompletionHookEvent {
+  return {
+    type: "exec",
+    action,
+    sessionKey,
+    context,
+    timestamp: new Date(),
+    messages: [],
+  };
+}
+
+export function isExecCompletionEvent(event: InternalHookEvent): event is ExecCompletionHookEvent {
+  return event.type === "exec" && (event.action === "completed" || event.action === "failed");
 }
 
 export function isAgentBootstrapEvent(event: InternalHookEvent): event is AgentBootstrapHookEvent {

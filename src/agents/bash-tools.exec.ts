@@ -18,6 +18,8 @@ import {
   buildSafeShellCommand,
   buildSafeBinsShellCommand,
 } from "../infra/exec-approvals.js";
+import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
+import { createExecCompletionEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import { buildNodeShellCommand } from "../infra/node-shell.js";
 import {
   getShellPathFromLoginShell,
@@ -586,6 +588,27 @@ export function createExecTool(
         const errorText = typeof payloadObj.error === "string" ? payloadObj.error : "";
         const success = typeof payloadObj.success === "boolean" ? payloadObj.success : false;
         const exitCode = typeof payloadObj.exitCode === "number" ? payloadObj.exitCode : null;
+        const nodeExecDurationMs = Date.now() - startedAt;
+        const nodeExecStatus: "completed" | "failed" = success ? "completed" : "failed";
+        const nodeExecOutput = [stdout, stderr, errorText].filter(Boolean).join("\n");
+
+        // Fire exec completion hook for node exec
+        if (sessionKey) {
+          const hookEvent = createExecCompletionEvent(nodeExecStatus, sessionKey, {
+            sessionId: approvalId ?? crypto.randomUUID(),
+            exitCode,
+            exitSignal: null,
+            timedOut: false,
+            durationMs: nodeExecDurationMs,
+            tailOutput: normalizeNotifyOutput(
+              tail(nodeExecOutput, DEFAULT_NOTIFY_TAIL_CHARS),
+            ),
+            backgrounded: false,
+            nodeId,
+          });
+          void triggerInternalHook(hookEvent);
+        }
+
         return {
           content: [
             {
@@ -594,10 +617,10 @@ export function createExecTool(
             },
           ],
           details: {
-            status: success ? "completed" : "failed",
+            status: nodeExecStatus,
             exitCode,
-            durationMs: Date.now() - startedAt,
-            aggregated: [stdout, stderr, errorText].filter(Boolean).join("\n"),
+            durationMs: nodeExecDurationMs,
+            aggregated: nodeExecOutput,
             cwd: workdir,
           } satisfies ExecToolDetails,
         };
@@ -788,6 +811,22 @@ export function createExecTool(
               ? `Exec finished (gateway id=${approvalId}, session=${run.session.id}, ${exitLabel})\n${output}`
               : `Exec finished (gateway id=${approvalId}, session=${run.session.id}, ${exitLabel})`;
             emitExecSystemEvent(summary, { sessionKey: notifySessionKey, contextKey });
+
+            // Fire exec completion hook for gateway-approved exec
+            if (notifySessionKey) {
+              const gwStatus: "completed" | "failed" = outcome.status === "completed" ? "completed" : "failed";
+              const gwHookEvent = createExecCompletionEvent(gwStatus, notifySessionKey, {
+                sessionId: run.session.id,
+                slug: run.session.slug ?? undefined,
+                exitCode: outcome.exitCode ?? null,
+                exitSignal: outcome.exitSignal ?? null,
+                timedOut: outcome.timedOut ?? false,
+                durationMs: outcome.durationMs ?? 0,
+                tailOutput: output,
+                backgrounded: true,
+              });
+              void triggerInternalHook(gwHookEvent);
+            }
           })();
 
           return {

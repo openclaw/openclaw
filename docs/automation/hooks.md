@@ -1,5 +1,5 @@
 ---
-summary: "Hooks: event-driven automation for commands and lifecycle events"
+summary: "Hooks: event-driven automation for commands, exec completion, and lifecycle events"
 read_when:
   - You want event-driven automation for /new, /reset, /stop, and agent lifecycle events
   - You want to build, install, or debug hooks
@@ -207,7 +207,7 @@ Each event includes:
 
 ```typescript
 {
-  type: 'command' | 'session' | 'agent' | 'gateway',
+  type: 'command' | 'session' | 'agent' | 'gateway' | 'exec',
   action: string,              // e.g., 'new', 'reset', 'stop'
   sessionKey: string,          // Session identifier
   timestamp: Date,             // When the event occurred
@@ -245,6 +245,53 @@ Triggered when agent commands are issued:
 Triggered when the gateway starts:
 
 - **`gateway:startup`**: After channels start and hooks are loaded
+
+### Exec Events
+
+Triggered when an exec/process tool invocation finishes (local, gateway-approved, or remote node):
+
+- **`exec:completed`**: Process exited successfully (exit code 0)
+- **`exec:failed`**: Process exited with non-zero code, was killed by signal, or timed out
+- **`exec`**: General listener — fires for both completed and failed
+
+Exec events fire for **all** exec completions, not just backgrounded ones. The event context includes:
+
+```typescript
+{
+  sessionId: string;      // Process session id
+  slug?: string;          // Human-readable slug (if available)
+  exitCode: number | null;
+  exitSignal: string | number | null;
+  timedOut: boolean;
+  durationMs: number;     // Wall-clock duration
+  tailOutput: string;     // Tail of stdout+stderr
+  backgrounded: boolean;  // Whether the process was backgrounded
+  nodeId?: string;        // Node id (for remote node exec)
+}
+```
+
+**Example: notify when a long training run finishes**
+
+```typescript
+import type { HookHandler } from "../../src/hooks/hooks.js";
+import { isExecCompletionEvent } from "../../src/hooks/hooks.js";
+
+const handler: HookHandler = async (event) => {
+  if (!isExecCompletionEvent(event)) return;
+  if (!event.context.backgrounded) return;  // only care about background jobs
+
+  const { sessionId, exitCode, durationMs, tailOutput } = event.context;
+  const minutes = Math.round(durationMs / 60000);
+  console.log(`[exec-notify] Process ${sessionId} finished (code ${exitCode}) after ${minutes}m`);
+
+  // Push a message back to the session
+  event.messages.push(
+    `🏁 Background process finished (${event.action}, ${minutes}m): ${tailOutput.slice(0, 200)}`
+  );
+};
+
+export default handler;
+```
 
 ### Tool Result Hooks (Plugin API)
 

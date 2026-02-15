@@ -3,6 +3,8 @@ export * from "./internal-hooks.js";
 export type HookEventType = import("./internal-hooks.js").InternalHookEventType;
 export type HookEvent = import("./internal-hooks.js").InternalHookEvent;
 export type HookHandler = import("./internal-hooks.js").InternalHookHandler;
+export type ExecCompletionEvent = import("./internal-hooks.js").ExecCompletionHookEvent;
+export type ExecCompletionContext = import("./internal-hooks.js").ExecCompletionHookContext;
 
 export {
   registerInternalHook as registerHook,
@@ -11,4 +13,6 @@ export {
   getRegisteredEventKeys as getRegisteredHookEventKeys,
   triggerInternalHook as triggerHook,
   createInternalHookEvent as createHookEvent,
+  createExecCompletionEvent,
+  isExecCompletionEvent,
 } from "./internal-hooks.js";
