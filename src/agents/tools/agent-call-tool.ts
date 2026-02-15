@@ -19,6 +19,7 @@ import { callGateway } from "../../gateway/call.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { AGENT_LANE_NESTED } from "../lanes.js";
 import { jsonResult, readStringParam, readNumberParam } from "./common.js";
+import { extractAssistantText } from "./sessions-helpers.js";
 import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
@@ -395,10 +396,12 @@ export function createAgentCallTool(opts?: {
 
       const messages = Array.isArray(history?.messages) ? history.messages : [];
       const lastAssistant = messages.filter((m: any) => m?.role === "assistant").pop() as any;
-      const raw = lastAssistant?.content ?? "";
+
+      // Use canonical helper to extract text from content blocks
+      const raw = extractAssistantText(lastAssistant) ?? "";
 
       // Validate that we got a response
-      if (!lastAssistant || typeof raw !== "string" || raw.trim() === "") {
+      if (!lastAssistant || raw.trim() === "") {
         // Fix 6: Don't expose internal session keys in error messages
         return jsonResult({
           status: "error",
