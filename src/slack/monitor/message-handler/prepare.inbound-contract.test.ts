@@ -466,6 +466,281 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared!.ctxPayload.Body).not.toContain("thread_ts");
   });
 
+  it("uses per-thread session key for top-level DMs when replyToMode=all", async () => {
+    const slackCtx = createSlackMonitorContext({
+      cfg: {
+        channels: { slack: { enabled: true, replyToMode: "all" } },
+      } as OpenClawConfig,
+      accountId: "default",
+      botToken: "token",
+      app: { client: {} } as App,
+      runtime: {} as RuntimeEnv,
+      botUserId: "B1",
+      teamId: "T1",
+      apiAppId: "A1",
+      historyLimit: 0,
+      sessionScope: "per-sender",
+      mainKey: "main",
+      dmEnabled: true,
+      dmPolicy: "open",
+      allowFrom: [],
+      groupDmEnabled: true,
+      groupDmChannels: [],
+      defaultRequireMention: true,
+      groupPolicy: "open",
+      useAccessGroups: false,
+      reactionMode: "off",
+      reactionAllowlist: [],
+      replyToMode: "all",
+      threadHistoryScope: "thread",
+      threadInheritParent: false,
+      slashCommand: {
+        enabled: false,
+        name: "openclaw",
+        sessionPrefix: "slack:slash",
+        ephemeral: true,
+      },
+      textLimit: 4000,
+      ackReactionScope: "group-mentions",
+      mediaMaxBytes: 1024,
+      removeAckAfterReply: false,
+    });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
+
+    const account: ResolvedSlackAccount = {
+      accountId: "default",
+      enabled: true,
+      botTokenSource: "config",
+      appTokenSource: "config",
+      config: { replyToMode: "all" },
+    };
+
+    // Two separate top-level DMs should get different session keys
+    const message1: SlackMessageEvent = {
+      channel: "D123",
+      channel_type: "im",
+      user: "U1",
+      text: "What is the weather?",
+      ts: "1770865253.355799",
+    } as SlackMessageEvent;
+
+    const message2: SlackMessageEvent = {
+      channel: "D123",
+      channel_type: "im",
+      user: "U1",
+      text: "Check my Amazon orders",
+      ts: "1770866000.000000",
+    } as SlackMessageEvent;
+
+    const prepared1 = await prepareSlackMessage({
+      ctx: slackCtx,
+      account,
+      message: message1,
+      opts: { source: "message" },
+    });
+
+    const prepared2 = await prepareSlackMessage({
+      ctx: slackCtx,
+      account,
+      message: message2,
+      opts: { source: "message" },
+    });
+
+    expect(prepared1).toBeTruthy();
+    expect(prepared2).toBeTruthy();
+
+    // Each top-level message should have a unique thread-scoped session key
+    const sessionKey1 = prepared1!.ctxPayload.SessionKey;
+    const sessionKey2 = prepared2!.ctxPayload.SessionKey;
+    expect(sessionKey1).not.toBe(sessionKey2);
+    expect(sessionKey1).toContain(":thread:");
+    expect(sessionKey2).toContain(":thread:");
+    expect(sessionKey1).toContain("1770865253.355799");
+    expect(sessionKey2).toContain("1770866000.000000");
+  });
+
+  it("shares session key between top-level message and its thread reply when replyToMode=all", async () => {
+    const slackCtx = createSlackMonitorContext({
+      cfg: {
+        channels: { slack: { enabled: true, replyToMode: "all" } },
+      } as OpenClawConfig,
+      accountId: "default",
+      botToken: "token",
+      app: { client: {} } as App,
+      runtime: {} as RuntimeEnv,
+      botUserId: "B1",
+      teamId: "T1",
+      apiAppId: "A1",
+      historyLimit: 0,
+      sessionScope: "per-sender",
+      mainKey: "main",
+      dmEnabled: true,
+      dmPolicy: "open",
+      allowFrom: [],
+      groupDmEnabled: true,
+      groupDmChannels: [],
+      defaultRequireMention: true,
+      groupPolicy: "open",
+      useAccessGroups: false,
+      reactionMode: "off",
+      reactionAllowlist: [],
+      replyToMode: "all",
+      threadHistoryScope: "thread",
+      threadInheritParent: false,
+      slashCommand: {
+        enabled: false,
+        name: "openclaw",
+        sessionPrefix: "slack:slash",
+        ephemeral: true,
+      },
+      textLimit: 4000,
+      ackReactionScope: "group-mentions",
+      mediaMaxBytes: 1024,
+      removeAckAfterReply: false,
+    });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
+
+    const account: ResolvedSlackAccount = {
+      accountId: "default",
+      enabled: true,
+      botTokenSource: "config",
+      appTokenSource: "config",
+      config: { replyToMode: "all" },
+    };
+
+    // Top-level message
+    const topLevelMessage: SlackMessageEvent = {
+      channel: "D123",
+      channel_type: "im",
+      user: "U1",
+      text: "What is the weather?",
+      ts: "1770865253.355799",
+    } as SlackMessageEvent;
+
+    // Reply in the thread started by that top-level message
+    const threadReply: SlackMessageEvent = {
+      channel: "D123",
+      channel_type: "im",
+      user: "U1",
+      text: "What about tomorrow?",
+      ts: "1770865400.000000",
+      thread_ts: "1770865253.355799",
+      parent_user_id: "B1",
+    } as SlackMessageEvent;
+
+    const preparedTop = await prepareSlackMessage({
+      ctx: slackCtx,
+      account,
+      message: topLevelMessage,
+      opts: { source: "message" },
+    });
+
+    const preparedReply = await prepareSlackMessage({
+      ctx: slackCtx,
+      account,
+      message: threadReply,
+      opts: { source: "message" },
+    });
+
+    expect(preparedTop).toBeTruthy();
+    expect(preparedReply).toBeTruthy();
+
+    // Both should resolve to the same session key
+    expect(preparedTop!.ctxPayload.SessionKey).toBe(preparedReply!.ctxPayload.SessionKey);
+    expect(preparedTop!.ctxPayload.SessionKey).toContain(":thread:1770865253.355799");
+  });
+
+  it("does not use per-thread session key when replyToMode is off", async () => {
+    const slackCtx = createSlackMonitorContext({
+      cfg: {
+        channels: { slack: { enabled: true } },
+      } as OpenClawConfig,
+      accountId: "default",
+      botToken: "token",
+      app: { client: {} } as App,
+      runtime: {} as RuntimeEnv,
+      botUserId: "B1",
+      teamId: "T1",
+      apiAppId: "A1",
+      historyLimit: 0,
+      sessionScope: "per-sender",
+      mainKey: "main",
+      dmEnabled: true,
+      dmPolicy: "open",
+      allowFrom: [],
+      groupDmEnabled: true,
+      groupDmChannels: [],
+      defaultRequireMention: true,
+      groupPolicy: "open",
+      useAccessGroups: false,
+      reactionMode: "off",
+      reactionAllowlist: [],
+      replyToMode: "off",
+      threadHistoryScope: "thread",
+      threadInheritParent: false,
+      slashCommand: {
+        enabled: false,
+        name: "openclaw",
+        sessionPrefix: "slack:slash",
+        ephemeral: true,
+      },
+      textLimit: 4000,
+      ackReactionScope: "group-mentions",
+      mediaMaxBytes: 1024,
+      removeAckAfterReply: false,
+    });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
+
+    const account: ResolvedSlackAccount = {
+      accountId: "default",
+      enabled: true,
+      botTokenSource: "config",
+      appTokenSource: "config",
+      config: {},
+    };
+
+    // Two top-level messages with replyToMode=off should share the SAME session key
+    const message1: SlackMessageEvent = {
+      channel: "D123",
+      channel_type: "im",
+      user: "U1",
+      text: "first question",
+      ts: "1.000",
+    } as SlackMessageEvent;
+
+    const message2: SlackMessageEvent = {
+      channel: "D123",
+      channel_type: "im",
+      user: "U1",
+      text: "second question",
+      ts: "2.000",
+    } as SlackMessageEvent;
+
+    const prepared1 = await prepareSlackMessage({
+      ctx: slackCtx,
+      account,
+      message: message1,
+      opts: { source: "message" },
+    });
+
+    const prepared2 = await prepareSlackMessage({
+      ctx: slackCtx,
+      account,
+      message: message2,
+      opts: { source: "message" },
+    });
+
+    expect(prepared1).toBeTruthy();
+    expect(prepared2).toBeTruthy();
+
+    // Both should use the same base session key (no thread isolation)
+    expect(prepared1!.ctxPayload.SessionKey).toBe(prepared2!.ctxPayload.SessionKey);
+    expect(prepared1!.ctxPayload.SessionKey).not.toContain(":thread:");
+  });
+
   it("excludes thread metadata when thread_ts equals ts without parent_user_id", async () => {
     const message: SlackMessageEvent = {
       channel: "D123",
