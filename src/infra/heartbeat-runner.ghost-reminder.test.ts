@@ -181,4 +181,43 @@ describe("Ghost reminder bug (issue #13317)", () => {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
   });
+
+  it("uses CRON_EVENT_PROMPT for tagged cron events on interval wake", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-interval-"));
+    const sendTelegram = vi.fn().mockResolvedValue({
+      messageId: "m1",
+      chatId: "155462274",
+    });
+    const getReplySpy = vi
+      .spyOn(replyModule, "getReplyFromConfig")
+      .mockResolvedValue({ text: "Relay this cron update now" });
+
+    try {
+      const { cfg, sessionKey } = await createConfig(tmpDir);
+      enqueueSystemEvent("Cron: QMD maintenance completed", {
+        sessionKey,
+        contextKey: "cron:qmd-maintenance",
+      });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        agentId: "main",
+        reason: "interval",
+        deps: {
+          sendTelegram,
+        },
+      });
+
+      expect(result.status).toBe("ran");
+      expect(getReplySpy).toHaveBeenCalledTimes(1);
+      const calledCtx = getReplySpy.mock.calls[0]?.[0];
+      expect(calledCtx?.Provider).toBe("cron-event");
+      expect(calledCtx?.Body).toContain("scheduled reminder has been triggered");
+      expect(calledCtx?.Body).toContain("Cron: QMD maintenance completed");
+      expect(calledCtx?.Body).not.toContain("Read HEARTBEAT.md");
+      expect(sendTelegram).toHaveBeenCalled();
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
 });
