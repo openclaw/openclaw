@@ -193,4 +193,37 @@ describe("session path safety", () => {
     const opts = resolveSessionFilePathOptions({ agentId: "ops" });
     expect(opts).toEqual({ agentId: "ops" });
   });
+
+  // Regression: #16826 — sub-agent sessions must use agentId to resolve correctly
+  it("resolves sub-agent session path when agentId is provided", () => {
+    const resolved = resolveSessionTranscriptPath("sess-42", "research");
+    expect(resolved).toContain(path.join("agents", "research", "sessions", "sess-42.jsonl"));
+  });
+
+  it("resolves main agent session path when agentId is omitted", () => {
+    const resolved = resolveSessionTranscriptPath("sess-42");
+    expect(resolved).toContain(path.join("agents", "main", "sessions", "sess-42.jsonl"));
+  });
+
+  it("sub-agent and main agent resolve to different directories", () => {
+    const mainPath = resolveSessionTranscriptPath("sess-42");
+    const subPath = resolveSessionTranscriptPath("sess-42", "research");
+    expect(mainPath).not.toBe(subPath);
+    expect(mainPath).toContain(path.join("agents", "main"));
+    expect(subPath).toContain(path.join("agents", "research"));
+  });
+
+  it("resolveSessionFilePath with agentId resolves to sub-agent dir", () => {
+    const mainSessionsDir = path.dirname(resolveStorePath(undefined, { agentId: "main" }));
+    const subSessionsDir = path.dirname(resolveStorePath(undefined, { agentId: "research" }));
+    const subSessionFile = path.join(subSessionsDir, "sess-42.jsonl");
+
+    // With agentId, resolves correctly even when sessionsDir points to main agent
+    const resolved = resolveSessionFilePath(
+      "sess-42",
+      { sessionFile: subSessionFile },
+      { sessionsDir: mainSessionsDir, agentId: "research" },
+    );
+    expect(resolved).toBe(path.resolve(subSessionFile));
+  });
 });
