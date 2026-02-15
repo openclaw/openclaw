@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import path from "node:path";
 import { isTruthyEnvValue } from "./env.js";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -9,6 +10,50 @@ let cachedShellPath: string | null | undefined;
 function resolveShell(env: NodeJS.ProcessEnv): string {
   const shell = env.SHELL?.trim();
   return shell && shell.length > 0 ? shell : "/bin/sh";
+}
+
+/**
+ * Build a command that sources the appropriate RC file(s) before dumping
+ * the environment with `env -0`. Login shells (`-l`) source profile files
+ * (.zprofile, .bash_profile) but skip interactive RC files (.zshrc, .bashrc)
+ * where tools like pyenv/nvm/rbenv are commonly configured. This helper
+ * explicitly sources those RC files so their PATH modifications are captured.
+ */
+export function buildEnvDumpCommand(shell: string): string {
+  const base = path.basename(shell);
+
+  switch (base) {
+    case "zsh":
+      return '{ . "$HOME/.zshrc"; } >/dev/null 2>&1 || true; env -0';
+    case "bash":
+      return '{ . "$HOME/.bashrc"; } >/dev/null 2>&1 || true; env -0';
+    case "fish":
+      return 'set -q XDG_CONFIG_HOME; or set -l XDG_CONFIG_HOME "$HOME/.config"; source "$XDG_CONFIG_HOME/fish/config.fish" 2>/dev/null; env -0';
+    case "ksh":
+    case "ksh93":
+    case "mksh":
+      return '{ . "$HOME/.kshrc"; } >/dev/null 2>&1 || true; env -0';
+    case "tcsh":
+      // tcsh reads ~/.tcshrc first, falls back to ~/.cshrc
+      return "if ( -f ~/.tcshrc ) then; source ~/.tcshrc >& /dev/null; else; source ~/.cshrc >& /dev/null; endif; env -0";
+    case "csh":
+      return "source ~/.cshrc >& /dev/null; env -0";
+    case "nu":
+      // nushell: -l already sources env.nu (where PATH goes); config.nu
+      // cannot be conditionally sourced (parser directive). ^env calls
+      // the external env binary.
+      return "^env -0";
+    case "elvish":
+      return "try { eval (slurp < ~/.config/elvish/rc.elv) } catch e { nop }; env -0";
+    case "xonsh":
+      // xonsh -l already sources ~/.xonshrc for both login and interactive
+      return "env -0";
+    case "pwsh":
+    case "powershell":
+      return "try { . $PROFILE } catch {}; & env -0";
+    default:
+      return 'for f in "$HOME/.bashrc" "$HOME/.zshrc"; do [ -f "$f" ] && . "$f" >/dev/null 2>&1 || true; done; env -0';
+  }
 }
 
 function parseShellEnv(stdout: Buffer): Map<string, string> {
@@ -70,7 +115,7 @@ export function loadShellEnvFallback(opts: ShellEnvFallbackOptions): ShellEnvFal
 
   let stdout: Buffer;
   try {
-    stdout = exec(shell, ["-l", "-c", "env -0"], {
+    stdout = exec(shell, ["-l", "-c", buildEnvDumpCommand(shell)], {
       encoding: "buffer",
       timeout: timeoutMs,
       maxBuffer: DEFAULT_MAX_BUFFER_BYTES,
@@ -145,7 +190,7 @@ export function getShellPathFromLoginShell(opts: {
 
   let stdout: Buffer;
   try {
-    stdout = exec(shell, ["-l", "-c", "env -0"], {
+    stdout = exec(shell, ["-l", "-c", buildEnvDumpCommand(shell)], {
       encoding: "buffer",
       timeout: timeoutMs,
       maxBuffer: DEFAULT_MAX_BUFFER_BYTES,

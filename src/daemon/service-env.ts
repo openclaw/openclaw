@@ -35,10 +35,11 @@ function resolveSystemPathDirs(platform: NodeJS.Platform): string[] {
 }
 
 /**
- * Resolve common user bin directories for Linux.
- * These are paths where npm global installs and node version managers typically place binaries.
+ * Resolve common user bin directories for Linux and macOS.
+ * These are paths where npm global installs, node/python version managers,
+ * and other tool managers typically place binaries.
  */
-export function resolveLinuxUserBinDirs(
+export function resolveUserBinDirs(
   home: string | undefined,
   env?: Record<string, string | undefined>,
 ): string[] {
@@ -68,6 +69,8 @@ export function resolveLinuxUserBinDirs(
   add(appendSubdir(env?.ASDF_DATA_DIR, "shims"));
   add(appendSubdir(env?.NVM_DIR, "current/bin"));
   add(appendSubdir(env?.FNM_DIR, "current/bin"));
+  add(appendSubdir(env?.PYENV_ROOT, "shims"));
+  add(appendSubdir(env?.CONDA_PREFIX, "bin"));
 
   // Common user bin directories
   dirs.push(`${home}/.local/bin`); // XDG standard, pip, etc.
@@ -82,6 +85,11 @@ export function resolveLinuxUserBinDirs(
   dirs.push(`${home}/.local/share/pnpm`); // pnpm global bin
   dirs.push(`${home}/.bun/bin`); // Bun
 
+  // Python version managers
+  dirs.push(`${home}/.pyenv/shims`); // pyenv
+  dirs.push(`${home}/miniconda3/bin`); // Miniconda
+  dirs.push(`${home}/anaconda3/bin`); // Anaconda
+
   return dirs;
 }
 
@@ -95,9 +103,11 @@ export function getMinimalServicePathParts(options: MinimalServicePathOptions = 
   const extraDirs = options.extraDirs ?? [];
   const systemDirs = resolveSystemPathDirs(platform);
 
-  // Add Linux user bin directories (npm global, nvm, fnm, volta, etc.)
-  const linuxUserDirs =
-    platform === "linux" ? resolveLinuxUserBinDirs(options.home, options.env) : [];
+  // Add user bin directories (npm global, nvm, fnm, volta, pyenv, etc.)
+  const userDirs =
+    platform === "linux" || platform === "darwin"
+      ? resolveUserBinDirs(options.home, options.env)
+      : [];
 
   const add = (dir: string) => {
     if (!dir) {
@@ -112,7 +122,7 @@ export function getMinimalServicePathParts(options: MinimalServicePathOptions = 
     add(dir);
   }
   // User dirs first so user-installed binaries take precedence
-  for (const dir of linuxUserDirs) {
+  for (const dir of userDirs) {
     add(dir);
   }
   for (const dir of systemDirs) {
@@ -168,6 +178,10 @@ export function buildServiceEnvironment(params: {
     OPENCLAW_SERVICE_MARKER: GATEWAY_SERVICE_MARKER,
     OPENCLAW_SERVICE_KIND: GATEWAY_SERVICE_KIND,
     OPENCLAW_SERVICE_VERSION: VERSION,
+    OPENCLAW_OPENAI_PAYLOAD_LOG: env.OPENCLAW_OPENAI_PAYLOAD_LOG,
+    OPENCLAW_OPENAI_PAYLOAD_LOG_FILE: env.OPENCLAW_OPENAI_PAYLOAD_LOG_FILE,
+    OPENCLAW_ANTHROPIC_PAYLOAD_LOG: env.OPENCLAW_ANTHROPIC_PAYLOAD_LOG,
+    OPENCLAW_ANTHROPIC_PAYLOAD_LOG_FILE: env.OPENCLAW_ANTHROPIC_PAYLOAD_LOG_FILE,
   };
 }
 

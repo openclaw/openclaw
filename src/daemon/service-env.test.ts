@@ -95,19 +95,22 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     expect(result).toContain("/opt/fnm/current/bin");
   });
 
-  it("does not include Linux user directories on macOS", () => {
+  it("includes user bin directories on macOS", () => {
     const result = getMinimalServicePathParts({
       platform: "darwin",
       home: "/Users/testuser",
     });
 
-    // Should not include Linux-specific user dirs even with HOME set
-    expect(result.some((p) => p.includes(".npm-global"))).toBe(false);
-    expect(result.some((p) => p.includes(".nvm"))).toBe(false);
-
-    // Should only include macOS system directories
+    // Should include macOS system directories
     expect(result).toContain("/opt/homebrew/bin");
     expect(result).toContain("/usr/local/bin");
+
+    // Should also include user bin directories (pyenv, nvm, etc.)
+    expect(result).toContain("/Users/testuser/.local/bin");
+    expect(result).toContain("/Users/testuser/.pyenv/shims");
+    expect(result).toContain("/Users/testuser/.nvm/current/bin");
+    expect(result).toContain("/Users/testuser/miniconda3/bin");
+    expect(result).toContain("/Users/testuser/anaconda3/bin");
   });
 
   it("does not include Linux user directories on Windows", () => {

@@ -13,7 +13,7 @@ export function readTalkApiKeyFromProfile(deps: TalkApiKeyDeps = {}): string | n
   const osImpl = deps.os ?? os;
   const pathImpl = deps.path ?? path;
 
-  const home = osImpl.homedir();
+  const home = process.env.HOME || process.env.USERPROFILE || osImpl.homedir();
   const candidates = [".profile", ".zprofile", ".zshrc", ".bashrc"].map((name) =>
     pathImpl.join(home, name),
   );
