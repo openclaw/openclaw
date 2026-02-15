@@ -1,13 +1,17 @@
-/**
- * REAL scenario test - simulates actual message handling with config changes.
- * This test MUST fail if "imsg rpc not running" would occur in production.
- */
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearAllDispatchers,
   getTotalPendingReplies,
 } from "../auto-reply/reply/dispatcher-registry.js";
 import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
+import { getTotalQueueSize } from "../process/command-queue.js";
+
+async function flushMicrotasks(count = 10): Promise<void> {
+  for (let i = 0; i < count; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await Promise.resolve();
+  }
+}
 
 function createDeferred<T = void>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -19,7 +23,7 @@ function createDeferred<T = void>() {
   return { promise, resolve, reject };
 }
 
-describe("real scenario: config change during message processing", () => {
+describe("gateway restart deferral", () => {
   let replyErrors: string[] = [];
 
   beforeEach(() => {
@@ -29,12 +33,11 @@ describe("real scenario: config change during message processing", () => {
 
   afterEach(async () => {
     vi.restoreAllMocks();
-    // Wait for any pending microtasks (from markComplete()) to complete
-    await Promise.resolve();
+    await flushMicrotasks();
     clearAllDispatchers();
   });
 
-  it("should NOT restart gateway while reply delivery is in flight", async () => {
+  it("defers restart while reply delivery is in flight", async () => {
     let rpcConnected = true;
     const deliveredReplies: string[] = [];
     const deliveryStarted = createDeferred();
@@ -53,7 +56,7 @@ describe("real scenario: config change during message processing", () => {
         deliveredReplies.push(payload.text ?? "");
       },
       onError: () => {
-        // Swallow delivery errors so the test can assert on replyErrors
+        // Swallow delivery errors so the test can assert on replyErrors.
       },
     });
 
@@ -64,15 +67,11 @@ describe("real scenario: config change during message processing", () => {
     dispatcher.markComplete();
     await deliveryStarted.promise;
 
-    // At this point: markComplete flagged, delivery is in flight.
-    // pending > 0 because the in-flight delivery keeps it alive.
-    const pendingDuringDelivery = getTotalPendingReplies();
-    expect(pendingDuringDelivery).toBeGreaterThan(0);
+    // At this point: delivery is in flight; pending > 0 prevents restart.
+    expect(getTotalPendingReplies()).toBeGreaterThan(0);
 
-    // Simulate restart checks while delivery is in progress.
-    // If the tracking is broken, pending would be 0 and we'd restart.
     let restartTriggered = false;
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 3; i += 1) {
       await Promise.resolve();
       const pending = getTotalPendingReplies();
       if (pending === 0) {
@@ -83,54 +82,83 @@ describe("real scenario: config change during message processing", () => {
     }
 
     allowDelivery.resolve();
-    // Wait for delivery to complete
     await dispatcher.waitForIdle();
 
-    // Now pending should be 0 — restart can proceed
     expect(getTotalPendingReplies()).toBe(0);
-
-    // CRITICAL: delivery must have succeeded without RPC being killed
     expect(restartTriggered).toBe(false);
     expect(replyErrors).toEqual([]);
     expect(deliveredReplies).toEqual(["Configuration updated!"]);
   });
 
-  it("should keep pending > 0 until reply is actually enqueued", async () => {
+  it("keeps pending > 0 until the reply is actually enqueued", async () => {
     const allowDelivery = createDeferred();
 
     const dispatcher = createReplyDispatcher({
-      deliver: async (_payload) => {
+      deliver: async () => {
         await allowDelivery.promise;
       },
     });
 
-    // Initially: pending=1 (reservation)
     expect(getTotalPendingReplies()).toBe(1);
 
-    // Simulate command processing delay BEFORE reply is enqueued
     await Promise.resolve();
-
-    // During this delay, pending should STILL be 1 (reservation active)
     expect(getTotalPendingReplies()).toBe(1);
 
-    // Now enqueue reply
     dispatcher.sendFinalReply({ text: "Reply" });
-
-    // Now pending should be 2 (reservation + reply)
     expect(getTotalPendingReplies()).toBe(2);
 
-    // Mark complete
     dispatcher.markComplete();
-
-    // After markComplete, pending should still be > 0 if reply hasn't sent yet
-    const pendingAfterMarkComplete = getTotalPendingReplies();
-    expect(pendingAfterMarkComplete).toBeGreaterThan(0);
+    expect(getTotalPendingReplies()).toBeGreaterThan(0);
 
     allowDelivery.resolve();
-    // Wait for reply to send
+    await dispatcher.waitForIdle();
+    expect(getTotalPendingReplies()).toBe(0);
+  });
+
+  it("defers restart until reply dispatcher completes", async () => {
+    const deliveredReplies: string[] = [];
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload) => {
+        await Promise.resolve();
+        deliveredReplies.push(payload.text ?? "");
+      },
+      onError: (err) => {
+        throw err;
+      },
+    });
+
+    expect(getTotalPendingReplies()).toBe(1);
+
+    dispatcher.sendFinalReply({ text: "Configuration updated successfully!" });
+    expect(getTotalPendingReplies()).toBe(2);
+
+    dispatcher.markComplete();
+    expect(getTotalPendingReplies()).toBeGreaterThan(0);
+
     await dispatcher.waitForIdle();
 
-    // Now pending should be 0
+    expect(getTotalPendingReplies()).toBe(0);
+    expect(deliveredReplies).toEqual(["Configuration updated successfully!"]);
+    expect(getTotalQueueSize()).toBe(0);
+  });
+
+  it("clears dispatcher reservation when no replies were sent", async () => {
+    let deliverCalled = false;
+    const dispatcher = createReplyDispatcher({
+      deliver: async () => {
+        deliverCalled = true;
+      },
+    });
+
+    expect(getTotalPendingReplies()).toBe(1);
+
+    dispatcher.markComplete();
+    await flushMicrotasks();
+
+    expect(getTotalPendingReplies()).toBe(0);
+    await dispatcher.waitForIdle();
+
+    expect(deliverCalled).toBe(false);
     expect(getTotalPendingReplies()).toBe(0);
   });
 });
