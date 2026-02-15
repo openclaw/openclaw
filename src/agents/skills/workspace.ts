@@ -279,6 +279,20 @@ export function resolveSkillsPromptForRun(params: {
 }): string {
   const snapshotPrompt = params.skillsSnapshot?.prompt?.trim();
   if (snapshotPrompt) {
+    // When running inside a sandbox, the snapshot may contain bundled skill paths
+    // (e.g. /app/skills/send-files/SKILL.md) that are inaccessible from the sandbox
+    // workspace. Rewrite them to point at the synced copies under workspaceDir/skills/.
+    const bundledDir = resolveBundledSkillsDir();
+    const workspaceSkillsDir = path.resolve(params.workspaceDir, "skills");
+    if (bundledDir && workspaceSkillsDir !== path.resolve(bundledDir)) {
+      const normalizedBundled = bundledDir.endsWith("/") ? bundledDir : `${bundledDir}/`;
+      if (snapshotPrompt.includes(normalizedBundled)) {
+        const normalizedWorkspace = workspaceSkillsDir.endsWith("/")
+          ? workspaceSkillsDir
+          : `${workspaceSkillsDir}/`;
+        return snapshotPrompt.replaceAll(normalizedBundled, normalizedWorkspace);
+      }
+    }
     return snapshotPrompt;
   }
   if (params.entries && params.entries.length > 0) {

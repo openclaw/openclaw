@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { DEFAULT_SANDBOX_WORKDIR } from "./sandbox/constants.js";
 
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
 const HTTP_URL_RE = /^https?:\/\//i;
@@ -45,6 +46,17 @@ export function resolveSandboxPath(params: { filePath: string; cwd: string; root
     return { resolved, relative: "" };
   }
   if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    // Sandbox agents sometimes use container-absolute paths (e.g. /workspace/file.pdf).
+    // Try stripping the default container workdir prefix before rejecting.
+    const prefix = `${DEFAULT_SANDBOX_WORKDIR}/`;
+    if (params.filePath.startsWith(prefix)) {
+      const stripped = params.filePath.slice(prefix.length);
+      const fallback = resolveToCwd(stripped, params.cwd);
+      const fallbackRel = path.relative(rootResolved, fallback);
+      if (fallbackRel && !fallbackRel.startsWith("..") && !path.isAbsolute(fallbackRel)) {
+        return { resolved: fallback, relative: fallbackRel };
+      }
+    }
     throw new Error(`Path escapes sandbox root (${shortPath(rootResolved)}): ${params.filePath}`);
   }
   return { resolved, relative };
