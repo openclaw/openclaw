@@ -6,12 +6,12 @@
  */
 
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import type { OpenClawConfig } from "../config/config.js";
 import type { InternalHookHandler } from "./internal-hooks.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveHookConfig } from "./config.js";
 import { shouldIncludeHook } from "./config.js";
+import { buildImportUrl } from "./import-url.js";
 import { registerInternalHook } from "./internal-hooks.js";
 import { loadWorkspaceHookEntries } from "./workspace.js";
 
@@ -71,10 +71,9 @@ export async function loadInternalHooks(
       }
 
       try {
-        // Import handler module with cache-busting
-        const url = pathToFileURL(entry.hook.handlerPath).href;
-        const cacheBustedUrl = `${url}?t=${Date.now()}`;
-        const mod = (await import(cacheBustedUrl)) as Record<string, unknown>;
+        // Import handler module — only cache-bust mutable (workspace/managed) hooks
+        const importUrl = buildImportUrl(entry.hook.handlerPath, entry.hook.source);
+        const mod = (await import(importUrl)) as Record<string, unknown>;
 
         // Get handler function (default or named export)
         const exportName = entry.metadata?.export ?? "default";
@@ -136,10 +135,9 @@ export async function loadInternalHooks(
         continue;
       }
 
-      // Import the module with cache-busting to ensure fresh reload
-      const url = pathToFileURL(modulePath).href;
-      const cacheBustedUrl = `${url}?t=${Date.now()}`;
-      const mod = (await import(cacheBustedUrl)) as Record<string, unknown>;
+      // Legacy handlers are always workspace-relative, so use mtime-based cache busting
+      const importUrl = buildImportUrl(modulePath, "openclaw-workspace");
+      const mod = (await import(importUrl)) as Record<string, unknown>;
 
       // Get the handler function
       const exportName = handlerConfig.export ?? "default";
