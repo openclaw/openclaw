@@ -365,7 +365,7 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
   }
 }
 
-function generateZshCompletion(program: Command): string {
+export function generateZshCompletion(program: Command): string {
   const rootCmd = program.name();
   const script = `
 #compdef ${rootCmd}
@@ -440,15 +440,16 @@ function generateZshSubcommands(program: Command, prefix: string): string {
     script += generateZshSubcommands(cmd, `${prefix}_${cmdName.replace(/-/g, "_")}`);
 
     const subCommands = cmd.commands;
+    const zshArgs = generateZshArgs(cmd);
     if (subCommands.length > 0) {
+      const argsLine = zshArgs ? `${zshArgs} \\\n    ` : "";
       script += `
 ${funcName}() {
   local -a commands
   local -a options
   
   _arguments -C \\
-    ${generateZshArgs(cmd)} \\
-    ${generateZshSubcmdList(cmd)} \\
+    ${argsLine}${generateZshSubcmdList(cmd)} \\
     "*::arg:->args"
 
   case $state in
@@ -460,11 +461,17 @@ ${funcName}() {
   esac
 }
 `;
-    } else {
+    } else if (zshArgs) {
       script += `
 ${funcName}() {
   _arguments -C \\
-    ${generateZshArgs(cmd)}
+    ${zshArgs}
+}
+`;
+    } else {
+      script += `
+${funcName}() {
+  return 0
 }
 `;
     }

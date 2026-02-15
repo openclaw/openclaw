@@ -1,4 +1,6 @@
+import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
+import { generateZshCompletion } from "../cli/completion-cli.js";
 import { setupOnboardingShellCompletion } from "./onboarding.completion.js";
 
 describe("setupOnboardingShellCompletion", () => {
@@ -54,5 +56,17 @@ describe("setupOnboardingShellCompletion", () => {
     expect(deps.ensureCompletionCacheExists).not.toHaveBeenCalled();
     expect(deps.installCompletion).not.toHaveBeenCalled();
     expect(prompter.note).not.toHaveBeenCalled();
+  });
+});
+
+describe("generateZshCompletion", () => {
+  it("emits a no-op leaf function for commands without options", () => {
+    const program = new Command();
+    program.name("openclaw");
+    program.command("empty").description("No options");
+
+    const script = generateZshCompletion(program);
+
+    expect(script).toMatch(/_openclaw_empty\(\) \{\n  return 0\n\}/);
   });
 });
