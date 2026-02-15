@@ -35,6 +35,13 @@ export async function startTelegramWebhook(opts: {
   healthPath?: string;
   publicUrl?: string;
 }) {
+  if (!opts.secret) {
+    throw new Error(
+      "Telegram webhook mode requires a secret token. " +
+        "Set channels.telegram.webhookSecret in your config.",
+    );
+  }
+
   const path = opts.path ?? "/telegram-webhook";
   const healthPath = opts.healthPath ?? "/healthz";
   const port = opts.port ?? 8787;
