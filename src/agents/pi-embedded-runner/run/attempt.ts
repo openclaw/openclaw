@@ -69,7 +69,7 @@ import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
 import { appendCacheTtlTimestamp, isCacheTtlEligibleProvider } from "../cache-ttl.js";
 import { buildEmbeddedExtensionPaths } from "../extensions.js";
-import { applyExtraParamsToAgent } from "../extra-params.js";
+import { applyExtraParamsToAgent, applyProviderHeaderTemplatesToAgent } from "../extra-params.js";
 import {
   logToolSchemasForGoogle,
   sanitizeAntigravityThinkingBlocks,
@@ -619,6 +619,10 @@ export async function runEmbeddedAttempt(
         params.modelId,
         params.streamParams,
       );
+      applyProviderHeaderTemplatesToAgent(activeSession.agent, params.config, params.provider, {
+        sessionKey: params.sessionKey ?? params.sessionId,
+        agentId: params.agentId ?? sessionAgentId,
+      });
 
       if (cacheTrace) {
         cacheTrace.recordStage("session:loaded", {

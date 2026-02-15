@@ -332,6 +332,34 @@ Notes:
   - `maxTokens: 8192`
 - Recommended: set explicit values that match your proxy/model limits.
 
+### Provider headers and dynamic templating
+
+You can set optional `headers` on any provider in `models.providers`. Header values support **template placeholders** that are interpolated per run:
+
+- `{{session.key}}` — unique per session (e.g. for cache affinity)
+- `{{agent.id}}` — agent id for the run
+
+Example (Fireworks.ai prompt caching via `x-session-affinity`): each session is pinned to the same replica so cache hits apply:
+
+```json5
+{
+  models: {
+    providers: {
+      fireworks: {
+        baseUrl: "https://api.fireworks.ai/inference/v1",
+        apiKey: "${FIREWORKS_API_KEY}",
+        headers: {
+          "x-session-affinity": "{{session.key}}",
+        },
+        models: [{ id: "accounts/fireworks/models/...", name: "..." }],
+      },
+    },
+  },
+}
+```
+
+Static headers (no placeholders) are also supported and are merged into every request for that provider.
+
 ## CLI examples
 
 ```bash

@@ -3,6 +3,11 @@ import type { SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../config/config.js";
 import { log } from "./logger.js";
+import {
+  createProviderHeadersStreamFnWrapper,
+  resolveProviderHeaders,
+  type ProviderHeaderVars,
+} from "./provider-headers.js";
 
 const OPENROUTER_APP_HEADERS: Record<string, string> = {
   "HTTP-Referer": "https://openclaw.ai",
@@ -213,4 +218,33 @@ export function applyExtraParamsToAgent(
   // Force `store=true` for direct OpenAI/OpenAI Codex providers so multi-turn
   // server-side conversation state is preserved.
   agent.streamFn = createOpenAIResponsesStoreWrapper(agent.streamFn);
+}
+
+/**
+ * Apply provider config headers to the agent's streamFn, with optional
+ * template interpolation (e.g. {{session.key}}, {{agent.id}}) when vars are provided.
+ * Call this from the embedded runner with sessionKey and agentId so dynamic
+ * headers (e.g. Fireworks x-session-affinity) work per session.
+ *
+ * @internal Exported for testing and use from run/attempt
+ */
+export function applyProviderHeaderTemplatesToAgent(
+  agent: { streamFn?: StreamFn },
+  cfg: OpenClawConfig | undefined,
+  provider: string,
+  vars?: ProviderHeaderVars,
+): void {
+  const providerConfig = cfg?.models?.providers?.[provider];
+  const rawHeaders = providerConfig?.headers;
+  if (!rawHeaders || Object.keys(rawHeaders).length === 0) {
+    return;
+  }
+  const resolved = resolveProviderHeaders(rawHeaders, vars ?? {});
+  if (Object.keys(resolved).length === 0) {
+    return;
+  }
+  log.debug(
+    `applying provider headers for ${provider} (${Object.keys(resolved).length} header(s))`,
+  );
+  agent.streamFn = createProviderHeadersStreamFnWrapper(agent.streamFn, resolved);
 }
