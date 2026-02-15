@@ -50,6 +50,10 @@ final class GatewayProcessManager {
     private var childStopInFlight = false
     private var lastChildStdoutTail = ""
     private var lastChildStderrTail = ""
+    private var childLaunchdPasswordOverride: String?
+    private var launchdConfigSnapshotProvider: () -> LaunchAgentPlistSnapshot? = {
+        GatewayLaunchAgentManager.launchdConfigSnapshot()
+    }
     #if DEBUG
     private var testingConnection: GatewayConnection?
     #endif
@@ -70,6 +74,11 @@ final class GatewayProcessManager {
         case launchd
         case environment
         case generated
+    }
+    private enum ChildGatewayPasswordSource {
+        case config
+        case environment
+        case launchd
     }
 
     private final class ChildLogWriter: @unchecked Sendable {
@@ -396,11 +405,22 @@ final class GatewayProcessManager {
     }
 
     private func ensureLocalGatewayAuthReadyForChild() -> String? {
+        self.childLaunchdPasswordOverride = nil
         let root = OpenClawConfigFile.loadDict()
         let mode = OpenClawConfigFile.localGatewayAuthMode(root: root)?.lowercased()
-        let password = OpenClawConfigFile.localGatewayPassword(root: root)
-        if mode == "password", let password, !password.isEmpty {
-            self.appendLog("[gateway] child auth preflight: using configured password auth\n")
+        let launchdSnapshot = self.launchdConfigSnapshotProvider()
+        if mode == "password" {
+            guard let (source, password) = self.resolvePasswordAuthSourceForChild(
+                root: root,
+                launchdSnapshot: launchdSnapshot)
+            else {
+                return
+                    "gateway.auth.mode=password but no password found in gateway.auth.password, OPENCLAW_GATEWAY_PASSWORD, or launchd snapshot"
+            }
+            if source == .launchd {
+                self.childLaunchdPasswordOverride = password
+            }
+            self.appendChildPasswordAuthPreflight(source: source)
             return nil
         }
 
@@ -412,8 +432,7 @@ final class GatewayProcessManager {
             return nil
         }
 
-        let launchdToken = GatewayLaunchAgentManager
-            .launchdConfigSnapshot()?
+        let launchdToken = launchdSnapshot?
             .token?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if let launchdToken, !launchdToken.isEmpty {
@@ -442,6 +461,30 @@ final class GatewayProcessManager {
         return nil
     }
 
+    private func resolvePasswordAuthSourceForChild(
+        root: [String: Any],
+        launchdSnapshot: LaunchAgentPlistSnapshot?
+    ) -> (source: ChildGatewayPasswordSource, password: String)? {
+        if let password = OpenClawConfigFile.localGatewayPassword(root: root), !password.isEmpty {
+            return (source: .config, password: password)
+        }
+
+        let envPassword = ProcessInfo.processInfo.environment["OPENCLAW_GATEWAY_PASSWORD"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if let envPassword, !envPassword.isEmpty {
+            return (source: .environment, password: envPassword)
+        }
+
+        let launchdPassword = launchdSnapshot?
+            .password?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if let launchdPassword, !launchdPassword.isEmpty {
+            return (source: .launchd, password: launchdPassword)
+        }
+
+        return nil
+    }
+
     private func appendChildAuthPreflight(source: ChildGatewayAuthSource) {
         switch source {
         case .config:
@@ -452,6 +495,17 @@ final class GatewayProcessManager {
             self.appendLog("[gateway] child auth preflight: restored token from environment\n")
         case .generated:
             self.appendLog("[gateway] child auth preflight: generated new token and saved to config\n")
+        }
+    }
+
+    private func appendChildPasswordAuthPreflight(source: ChildGatewayPasswordSource) {
+        switch source {
+        case .config:
+            self.appendLog("[gateway] child auth preflight: using configured password auth\n")
+        case .environment:
+            self.appendLog("[gateway] child auth preflight: using environment password auth\n")
+        case .launchd:
+            self.appendLog("[gateway] child auth preflight: using launchd snapshot password auth\n")
         }
     }
 
@@ -480,6 +534,11 @@ final class GatewayProcessManager {
         process.arguments = command
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = CommandResolver.preferredPaths().joined(separator: ":")
+        if let launchdPassword = self.childLaunchdPasswordOverride {
+            env["OPENCLAW_GATEWAY_PASSWORD"] = launchdPassword
+            self.appendLog("[gateway] child auth preflight: injecting launchd snapshot password into child env\n")
+        }
+        self.childLaunchdPasswordOverride = nil
         process.environment = env
         process.currentDirectoryURL = resolution.commandWorkingDirectory.map { URL(fileURLWithPath: $0) }
 
@@ -876,6 +935,22 @@ extension GatewayProcessManager {
 
     func testAppendTail(current: String, text: String) -> String {
         self.appendedTail(current: current, text: text)
+    }
+
+    func testEnsureLocalGatewayAuthReadyForChild() -> String? {
+        self.ensureLocalGatewayAuthReadyForChild()
+    }
+
+    func testChildLaunchdPasswordOverride() -> String? {
+        self.childLaunchdPasswordOverride
+    }
+
+    func setTestingLaunchdConfigSnapshot(_ snapshot: LaunchAgentPlistSnapshot?) {
+        self.launchdConfigSnapshotProvider = { snapshot }
+    }
+
+    func resetTestingLaunchdConfigSnapshot() {
+        self.launchdConfigSnapshotProvider = { GatewayLaunchAgentManager.launchdConfigSnapshot() }
     }
 }
 #endif

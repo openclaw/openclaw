@@ -176,4 +176,146 @@ struct GatewayProcessManagerTests {
         #expect(capped.count == 2000)
         #expect(capped == String(large.suffix(2000)))
     }
+
+    @Test func childPreflightKeepsPasswordModeWhenPasswordComesFromEnvironment() async {
+        let manager = GatewayProcessManager.shared
+        manager.setTestingLaunchdConfigSnapshot(nil)
+        defer {
+            manager.resetTestingLaunchdConfigSnapshot()
+            manager.setTestingLastFailureReason(nil)
+        }
+
+        let configPath = TestIsolation.tempConfigPath()
+        defer { try? FileManager.default.removeItem(atPath: configPath) }
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_CONFIG_PATH": configPath,
+            "OPENCLAW_GATEWAY_PASSWORD": "env-pass-123",
+            "OPENCLAW_GATEWAY_TOKEN": nil,
+        ]) {
+            OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "auth": [
+                        "mode": "password",
+                    ],
+                ],
+            ])
+
+            let err = manager.testEnsureLocalGatewayAuthReadyForChild()
+            #expect(err == nil)
+            #expect(manager.testChildLaunchdPasswordOverride() == nil)
+
+            let auth = ((OpenClawConfigFile.loadDict()["gateway"] as? [String: Any])?["auth"] as? [String: Any])
+            #expect(auth?["mode"] as? String == "password")
+            #expect(auth?["token"] == nil)
+        }
+    }
+
+    @Test func childPreflightUsesLaunchdPasswordWithoutPersistingTokenMode() async {
+        let manager = GatewayProcessManager.shared
+        manager.setTestingLaunchdConfigSnapshot(LaunchAgentPlistSnapshot(
+            programArguments: [],
+            environment: [:],
+            stdoutPath: nil,
+            stderrPath: nil,
+            port: nil,
+            bind: nil,
+            token: nil,
+            password: "launchd-pass-xyz"))
+        defer {
+            manager.resetTestingLaunchdConfigSnapshot()
+            manager.setTestingLastFailureReason(nil)
+        }
+
+        let configPath = TestIsolation.tempConfigPath()
+        defer { try? FileManager.default.removeItem(atPath: configPath) }
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_CONFIG_PATH": configPath,
+            "OPENCLAW_GATEWAY_PASSWORD": nil,
+            "OPENCLAW_GATEWAY_TOKEN": nil,
+        ]) {
+            OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "auth": [
+                        "mode": "password",
+                    ],
+                ],
+            ])
+
+            let err = manager.testEnsureLocalGatewayAuthReadyForChild()
+            #expect(err == nil)
+            #expect(manager.testChildLaunchdPasswordOverride() == "launchd-pass-xyz")
+
+            let auth = ((OpenClawConfigFile.loadDict()["gateway"] as? [String: Any])?["auth"] as? [String: Any])
+            #expect(auth?["mode"] as? String == "password")
+            #expect(auth?["token"] == nil)
+        }
+    }
+
+    @Test func childPreflightFailsFastWhenPasswordModeHasNoPasswordSource() async {
+        let manager = GatewayProcessManager.shared
+        manager.setTestingLaunchdConfigSnapshot(nil)
+        defer {
+            manager.resetTestingLaunchdConfigSnapshot()
+            manager.setTestingLastFailureReason(nil)
+        }
+
+        let configPath = TestIsolation.tempConfigPath()
+        defer { try? FileManager.default.removeItem(atPath: configPath) }
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_CONFIG_PATH": configPath,
+            "OPENCLAW_GATEWAY_PASSWORD": nil,
+            "OPENCLAW_GATEWAY_TOKEN": nil,
+        ]) {
+            OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "auth": [
+                        "mode": "password",
+                    ],
+                ],
+            ])
+
+            let err = manager.testEnsureLocalGatewayAuthReadyForChild()
+            #expect(
+                err ==
+                    "gateway.auth.mode=password but no password found in gateway.auth.password, OPENCLAW_GATEWAY_PASSWORD, or launchd snapshot")
+            #expect(manager.testChildLaunchdPasswordOverride() == nil)
+
+            let auth = ((OpenClawConfigFile.loadDict()["gateway"] as? [String: Any])?["auth"] as? [String: Any])
+            #expect(auth?["mode"] as? String == "password")
+            #expect(auth?["token"] == nil)
+        }
+    }
+
+    @Test func childPreflightStillPersistsTokenModeFromEnvironmentToken() async {
+        let manager = GatewayProcessManager.shared
+        manager.setTestingLaunchdConfigSnapshot(nil)
+        defer {
+            manager.resetTestingLaunchdConfigSnapshot()
+            manager.setTestingLastFailureReason(nil)
+        }
+
+        let configPath = TestIsolation.tempConfigPath()
+        defer { try? FileManager.default.removeItem(atPath: configPath) }
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_CONFIG_PATH": configPath,
+            "OPENCLAW_GATEWAY_PASSWORD": nil,
+            "OPENCLAW_GATEWAY_TOKEN": "env-token-abc",
+        ]) {
+            OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "auth": [
+                        "mode": "token",
+                    ],
+                ],
+            ])
+
+            let err = manager.testEnsureLocalGatewayAuthReadyForChild()
+            #expect(err == nil)
+            #expect(manager.testChildLaunchdPasswordOverride() == nil)
+
+            let auth = ((OpenClawConfigFile.loadDict()["gateway"] as? [String: Any])?["auth"] as? [String: Any])
+            #expect(auth?["mode"] as? String == "token")
+            #expect(auth?["token"] as? String == "env-token-abc")
+        }
+    }
 }
