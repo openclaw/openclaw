@@ -30,6 +30,28 @@ describe("signal target normalization", () => {
     expect(looksLikeSignalTargetId("uuid:123e4567e89b12d3a456426614174000")).toBe(true);
   });
 
+  it("preserves case for group targets", () => {
+    expect(normalizeSignalMessagingTarget("group:AbC123-CaseSensitive")).toBe(
+      "group:AbC123-CaseSensitive",
+    );
+  });
+
+  it("preserves case for username targets", () => {
+    expect(normalizeSignalMessagingTarget("username:MyMixedCaseUser")).toBe(
+      "username:MyMixedCaseUser",
+    );
+  });
+
+  it("preserves case for u: shorthand targets", () => {
+    expect(normalizeSignalMessagingTarget("u:MyMixedCaseUser")).toBe("username:MyMixedCaseUser");
+  });
+
+  it("preserves case for signal:u: shorthand targets", () => {
+    expect(normalizeSignalMessagingTarget("signal:u:MyMixedCaseUser")).toBe(
+      "username:MyMixedCaseUser",
+    );
+  });
+
   it("rejects invalid uuid prefixes", () => {
     expect(looksLikeSignalTargetId("uuid:")).toBe(false);
     expect(looksLikeSignalTargetId("uuid:not-a-uuid")).toBe(false);
