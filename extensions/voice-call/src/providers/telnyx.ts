@@ -130,11 +130,20 @@ export class TelnyxProvider implements VoiceCallProvider {
       callId = data.payload?.call_control_id || "";
     }
 
+    const direction = TelnyxProvider.parseDirection(data.payload?.direction);
+    const from =
+      typeof data.payload?.from === "string" ? data.payload.from : undefined;
+    const to =
+      typeof data.payload?.to === "string" ? data.payload.to : undefined;
+
     const baseEvent = {
       id: data.id || crypto.randomUUID(),
       callId,
       providerCallId: data.payload?.call_control_id,
       timestamp: Date.now(),
+      direction,
+      from,
+      to,
     };
 
     switch (data.event_type) {
@@ -284,6 +293,22 @@ export class TelnyxProvider implements VoiceCallProvider {
       { command_id: crypto.randomUUID() },
       { allowNotFound: true },
     );
+  }
+
+  /**
+   * Parse Telnyx direction to normalized format.
+   * Telnyx uses "incoming"/"outgoing" while the normalized format uses "inbound"/"outbound".
+   */
+  private static parseDirection(
+    direction: unknown,
+  ): "inbound" | "outbound" | undefined {
+    if (direction === "incoming" || direction === "inbound") {
+      return "inbound";
+    }
+    if (direction === "outgoing" || direction === "outbound") {
+      return "outbound";
+    }
+    return undefined;
   }
 }
 
