@@ -283,6 +283,33 @@ async function createDoc(client: Lark.Client, title: string, folderToken?: strin
   };
 }
 
+async function setDocPublicPermission(
+  client: Lark.Client,
+  docToken: string,
+  access: "read" | "edit" = "read",
+) {
+  const linkShareEntity = access === "edit" ? "anyone_editable" : "anyone_readable";
+  const securityEntity = access === "edit" ? "anyone_can_edit" : "anyone_can_view";
+  const res = await client.drive.permissionPublic.patch({
+    path: { token: docToken },
+    params: { type: "docx" },
+    data: {
+      external_access: true,
+      share_entity: "anyone",
+      security_entity: securityEntity,
+      link_share_entity: linkShareEntity,
+    },
+  });
+  if (res.code !== 0) {
+    throw new Error(res.msg);
+  }
+
+  return {
+    access,
+    permission_public: res.data?.permission_public,
+  };
+}
+
 async function writeDoc(client: Lark.Client, docToken: string, markdown: string, maxBytes: number) {
   const deleted = await clearDocumentContent(client, docToken);
 
@@ -484,7 +511,16 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
               case "append":
                 return json(await appendDoc(client, p.doc_token, p.content, mediaMaxBytes));
               case "create":
-                return json(await createDoc(client, p.title, p.folder_token));
+                const created = await createDoc(client, p.title, p.folder_token);
+                if (p.public_access && created.document_id) {
+                  const publicPermission = await setDocPublicPermission(
+                    client,
+                    created.document_id,
+                    p.public_access,
+                  );
+                  return json({ ...created, public_permission: publicPermission });
+                }
+                return json(created);
               case "list_blocks":
                 return json(await listBlocks(client, p.doc_token));
               case "get_block":
