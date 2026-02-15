@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import Security
 
 @MainActor
 @Observable
@@ -47,6 +48,8 @@ final class GatewayProcessManager {
     private var childRestartTask: Task<Void, Never>?
     private var childRestartAttempts = 0
     private var childStopInFlight = false
+    private var lastChildStdoutTail = ""
+    private var lastChildStderrTail = ""
     #if DEBUG
     private var testingConnection: GatewayConnection?
     #endif
@@ -61,6 +64,39 @@ final class GatewayProcessManager {
         4_000_000_000,
         8_000_000_000,
     ]
+    private let childOutputTailLimit = 2000
+    private enum ChildGatewayAuthSource: String {
+        case config
+        case launchd
+        case environment
+        case generated
+    }
+
+    private final class ChildLogWriter: @unchecked Sendable {
+        private let queue = DispatchQueue(label: "ai.openclaw.gateway-log-writer")
+        private let handle: FileHandle?
+        private var closed = false
+
+        init(handle: FileHandle?) {
+            self.handle = handle
+        }
+
+        func append(_ data: Data) {
+            guard !data.isEmpty else { return }
+            self.queue.async {
+                guard !self.closed else { return }
+                try? self.handle?.write(contentsOf: data)
+            }
+        }
+
+        func close() {
+            self.queue.sync {
+                guard !self.closed else { return }
+                self.closed = true
+                try? self.handle?.close()
+            }
+        }
+    }
 
     private var connection: GatewayConnection {
         #if DEBUG
@@ -313,10 +349,21 @@ final class GatewayProcessManager {
         self.childRestartTask = nil
 
         let bundlePath = Bundle.main.bundleURL.path
-        _ = await GatewayLaunchAgentManager.set(
-            enabled: false,
-            bundlePath: bundlePath,
-            port: GatewayEnvironment.gatewayPort())
+        let launchdLoaded = await GatewayLaunchAgentManager.isLoaded()
+        if launchdLoaded {
+            if let disableError = await GatewayLaunchAgentManager.set(
+                enabled: false,
+                bundlePath: bundlePath,
+                port: GatewayEnvironment.gatewayPort())
+            {
+                self.appendLog("[gateway] child mode: launchd disable failed (continuing): \(disableError)\n")
+                self.logger.warning("gateway child mode launchd disable failed (continuing): \(disableError)")
+            } else {
+                self.appendLog("[gateway] child mode: launchd job disabled before spawn\n")
+            }
+        } else {
+            self.logger.debug("gateway child mode launchd disable skipped (not loaded)")
+        }
 
         if let process = self.childProcess, process.isRunning {
             let details = self.childPid.map { "pid \($0)" } ?? "pid unknown"
@@ -338,7 +385,83 @@ final class GatewayProcessManager {
             }
         }
 
+        if let authError = self.ensureLocalGatewayAuthReadyForChild() {
+            self.status = .failed(authError)
+            self.lastFailureReason = authError
+            self.appendLog("[gateway] child auth preflight failed: \(authError)\n")
+            return
+        }
+
         await self.spawnChildGateway()
+    }
+
+    private func ensureLocalGatewayAuthReadyForChild() -> String? {
+        let root = OpenClawConfigFile.loadDict()
+        let mode = OpenClawConfigFile.localGatewayAuthMode(root: root)?.lowercased()
+        let password = OpenClawConfigFile.localGatewayPassword(root: root)
+        if mode == "password", let password, !password.isEmpty {
+            self.appendLog("[gateway] child auth preflight: using configured password auth\n")
+            return nil
+        }
+
+        if let token = OpenClawConfigFile.localGatewayToken(root: root), !token.isEmpty {
+            guard OpenClawConfigFile.persistLocalGatewayTokenAuth(token) else {
+                return "Failed to normalize gateway.auth.token in config."
+            }
+            self.appendChildAuthPreflight(source: .config)
+            return nil
+        }
+
+        let launchdToken = GatewayLaunchAgentManager
+            .launchdConfigSnapshot()?
+            .token?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if let launchdToken, !launchdToken.isEmpty {
+            guard OpenClawConfigFile.persistLocalGatewayTokenAuth(launchdToken) else {
+                return "Failed to persist launchd gateway token to config."
+            }
+            self.appendChildAuthPreflight(source: .launchd)
+            return nil
+        }
+
+        let envToken = ProcessInfo.processInfo.environment["OPENCLAW_GATEWAY_TOKEN"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if let envToken, !envToken.isEmpty {
+            guard OpenClawConfigFile.persistLocalGatewayTokenAuth(envToken) else {
+                return "Failed to persist OPENCLAW_GATEWAY_TOKEN to config."
+            }
+            self.appendChildAuthPreflight(source: .environment)
+            return nil
+        }
+
+        let generatedToken = self.generateGatewayAuthToken()
+        guard OpenClawConfigFile.persistLocalGatewayTokenAuth(generatedToken) else {
+            return "Failed to generate and persist gateway.auth.token for child mode."
+        }
+        self.appendChildAuthPreflight(source: .generated)
+        return nil
+    }
+
+    private func appendChildAuthPreflight(source: ChildGatewayAuthSource) {
+        switch source {
+        case .config:
+            self.appendLog("[gateway] child auth preflight: using token from config\n")
+        case .launchd:
+            self.appendLog("[gateway] child auth preflight: restored token from launchd snapshot\n")
+        case .environment:
+            self.appendLog("[gateway] child auth preflight: restored token from environment\n")
+        case .generated:
+            self.appendLog("[gateway] child auth preflight: generated new token and saved to config\n")
+        }
+    }
+
+    private func generateGatewayAuthToken() -> String {
+        var bytes = [UInt8](repeating: 0, count: 24)
+        let status = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        if status == errSecSuccess {
+            return bytes.map { String(format: "%02x", $0) }.joined()
+        }
+        return UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
     }
 
     private func spawnChildGateway() async {
@@ -358,6 +481,24 @@ final class GatewayProcessManager {
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = CommandResolver.preferredPaths().joined(separator: ":")
         process.environment = env
+        process.currentDirectoryURL = resolution.commandWorkingDirectory.map { URL(fileURLWithPath: $0) }
+
+        self.lastChildStdoutTail = ""
+        self.lastChildStderrTail = ""
+        let redactedArgs = self.redactSensitiveArgs(command)
+        let source = resolution.commandSource?.rawValue ?? "unknown"
+        let executable = resolution.commandExecutablePath ?? command.first ?? "unknown"
+        let cwd = resolution.commandWorkingDirectory ?? FileManager.default.currentDirectoryPath
+        let pathPreview = (env["PATH"] ?? "")
+            .split(separator: ":")
+            .prefix(5)
+            .joined(separator: ":")
+        self.appendLog(
+            "[gateway] child command source=\(source) executable=\(executable) cwd=\(cwd)\n")
+        self.appendLog("[gateway] child argv: /usr/bin/env \(redactedArgs.joined(separator: " "))\n")
+        self.appendLog("[gateway] child PATH(head): \(pathPreview)\n")
+        self.logger.info(
+            "gateway child command source=\(source, privacy: .public) executable=\(executable, privacy: .public) cwd=\(cwd, privacy: .public)")
 
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
@@ -372,6 +513,7 @@ final class GatewayProcessManager {
         FileManager.default.createFile(atPath: logURL.path, contents: nil)
         let logHandle = try? FileHandle(forWritingTo: logURL)
         _ = try? logHandle?.seekToEnd()
+        let logWriter = ChildLogWriter(handle: logHandle)
 
         stdoutPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.readSafely(upToCount: 64 * 1024)
@@ -379,9 +521,10 @@ final class GatewayProcessManager {
                 handle.readabilityHandler = nil
                 return
             }
-            try? logHandle?.write(contentsOf: data)
+            logWriter.append(data)
             if let text = String(data: data, encoding: .utf8), !text.isEmpty {
                 Task { @MainActor in
+                    self?.recordChildOutputTail(text, stream: "stdout")
                     self?.appendLog(text)
                 }
             }
@@ -392,9 +535,10 @@ final class GatewayProcessManager {
                 handle.readabilityHandler = nil
                 return
             }
-            try? logHandle?.write(contentsOf: data)
+            logWriter.append(data)
             if let text = String(data: data, encoding: .utf8), !text.isEmpty {
                 Task { @MainActor in
+                    self?.recordChildOutputTail(text, stream: "stderr")
                     self?.appendLog(text)
                 }
             }
@@ -403,7 +547,7 @@ final class GatewayProcessManager {
         process.terminationHandler = { [weak self] proc in
             stdoutPipe.fileHandleForReading.readabilityHandler = nil
             stderrPipe.fileHandleForReading.readabilityHandler = nil
-            try? logHandle?.close()
+            logWriter.close()
             Task { @MainActor in
                 await self?.handleChildExit(terminationStatus: proc.terminationStatus)
             }
@@ -416,7 +560,7 @@ final class GatewayProcessManager {
             self.lastFailureReason = error.localizedDescription
             self.childProcess = nil
             self.childPid = nil
-            try? logHandle?.close()
+            logWriter.close()
             return
         }
 
@@ -434,6 +578,22 @@ final class GatewayProcessManager {
             self.refreshControlChannelIfNeeded(reason: "gateway child started")
             self.refreshLog()
             return
+        }
+
+        let hasStartupProgress =
+            !self.lastChildStdoutTail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+            !self.lastChildStderrTail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        if process.isRunning && hasStartupProgress {
+            self.appendLog("[gateway] child readiness timed out; child still running with output, waiting grace period\n")
+            if await self.waitForGatewayReady(timeout: 3) {
+                self.childRestartAttempts = 0
+                let details = "pid \(process.processIdentifier)"
+                self.clearLastFailure()
+                self.status = .running(details: details)
+                self.refreshControlChannelIfNeeded(reason: "gateway child started after grace")
+                self.refreshLog()
+                return
+            }
         }
 
         self.status = .failed("Gateway child did not become ready in time")
@@ -455,6 +615,16 @@ final class GatewayProcessManager {
 
         let reason = "child exited with status \(terminationStatus)"
         self.appendLog("[gateway] \(reason)\n")
+        if terminationStatus != 0 {
+            let stderrTail = self.lastChildStderrTail.trimmingCharacters(in: .whitespacesAndNewlines)
+            let stdoutTail = self.lastChildStdoutTail.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !stderrTail.isEmpty {
+                self.appendLog("[gateway] child stderr tail:\n\(stderrTail)\n")
+            }
+            if !stdoutTail.isEmpty {
+                self.appendLog("[gateway] child stdout tail:\n\(stdoutTail)\n")
+            }
+        }
         self.logger.warning("gateway \(reason)")
 
         guard self.desiredActive, self.launchMode == .child else {
@@ -632,6 +802,39 @@ final class GatewayProcessManager {
         }
     }
 
+    private func redactSensitiveArgs(_ args: [String]) -> [String] {
+        let redactedFlags: Set<String> = ["--token", "--password"]
+        var output: [String] = []
+        var index = 0
+        while index < args.count {
+            let arg = args[index]
+            if redactedFlags.contains(arg), index + 1 < args.count {
+                output.append(arg)
+                output.append("<redacted>")
+                index += 2
+                continue
+            }
+            output.append(arg)
+            index += 1
+        }
+        return output
+    }
+
+    private func recordChildOutputTail(_ text: String, stream: String) {
+        switch stream {
+        case "stdout":
+            self.lastChildStdoutTail = self.appendedTail(current: self.lastChildStdoutTail, text: text)
+        default:
+            self.lastChildStderrTail = self.appendedTail(current: self.lastChildStderrTail, text: text)
+        }
+    }
+
+    private func appendedTail(current: String, text: String) -> String {
+        let combined = current + text
+        if combined.count <= self.childOutputTailLimit { return combined }
+        return String(combined.suffix(self.childOutputTailLimit))
+    }
+
     private func refreshControlChannelIfNeeded(reason: String) {
         switch ControlChannel.shared.state {
         case .connected, .connecting:
@@ -665,6 +868,14 @@ extension GatewayProcessManager {
 
     func setTestingLastFailureReason(_ reason: String?) {
         self.lastFailureReason = reason
+    }
+
+    func testRedactSensitiveArgs(_ args: [String]) -> [String] {
+        self.redactSensitiveArgs(args)
+    }
+
+    func testAppendTail(current: String, text: String) -> String {
+        self.appendedTail(current: current, text: text)
     }
 }
 #endif

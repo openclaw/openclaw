@@ -67,6 +67,9 @@ struct GatewayEnvironmentStatus: Equatable {
 struct GatewayCommandResolution {
     let status: GatewayEnvironmentStatus
     let command: [String]?
+    let commandSource: CommandResolver.AppManagedOpenClawCommandSource?
+    let commandWorkingDirectory: String?
+    let commandExecutablePath: String?
 }
 
 enum GatewayEnvironment {
@@ -180,35 +183,39 @@ enum GatewayEnvironment {
                 self.logger.debug("gateway command resolve ok (\(elapsedMs, privacy: .public)ms)")
             }
         }
-        let projectRoot = CommandResolver.projectRoot()
-        let projectEntrypoint = CommandResolver.gatewayEntrypoint(in: projectRoot)
         let status = self.check()
-        let gatewayBin = CommandResolver.openclawExecutable()
-        let runtime = RuntimeLocator.resolve(searchPaths: CommandResolver.preferredPaths())
 
         guard case .ok = status.kind else {
-            return GatewayCommandResolution(status: status, command: nil)
+            return GatewayCommandResolution(
+                status: status,
+                command: nil,
+                commandSource: nil,
+                commandWorkingDirectory: nil,
+                commandExecutablePath: nil)
         }
 
         let port = self.gatewayPort()
-        if gatewayBin != nil {
-            let bind = self.preferredGatewayBind() ?? "loopback"
-            let cmd = CommandResolver.openclawCommand(
-                subcommand: "gateway",
-                extraArgs: ["--port", "\(port)", "--bind", bind, "--allow-unconfigured"],
-                configRoot: ["gateway": ["mode": "local"]])
-            return GatewayCommandResolution(status: status, command: cmd)
+        let bind = self.preferredGatewayBind() ?? "loopback"
+        let resolved = CommandResolver.appManagedOpenclawCommand(
+            subcommand: "gateway",
+            extraArgs: ["--port", "\(port)", "--bind", bind, "--allow-unconfigured"],
+            configRoot: ["gateway": ["mode": "local"]])
+
+        if resolved.source == .error || resolved.command.isEmpty {
+            return GatewayCommandResolution(
+                status: status,
+                command: nil,
+                commandSource: resolved.source,
+                commandWorkingDirectory: resolved.workingDirectory,
+                commandExecutablePath: resolved.executablePath)
         }
 
-        if let entry = projectEntrypoint,
-           case let .success(resolvedRuntime) = runtime
-        {
-            let bind = self.preferredGatewayBind() ?? "loopback"
-            let cmd = [resolvedRuntime.path, entry, "gateway", "--port", "\(port)", "--bind", bind, "--allow-unconfigured"]
-            return GatewayCommandResolution(status: status, command: cmd)
-        }
-
-        return GatewayCommandResolution(status: status, command: nil)
+        return GatewayCommandResolution(
+            status: status,
+            command: resolved.command,
+            commandSource: resolved.source,
+            commandWorkingDirectory: resolved.workingDirectory,
+            commandExecutablePath: resolved.executablePath)
     }
 
     private static func preferredGatewayBind() -> String? {

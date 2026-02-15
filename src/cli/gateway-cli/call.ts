@@ -12,6 +12,11 @@ export type GatewayRpcOpts = {
   json?: boolean;
 };
 
+export type GatewayRpcParentAuthOpts = {
+  token?: string;
+  password?: string;
+};
+
 export const gatewayCallOpts = (cmd: Command) =>
   cmd
     .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
@@ -20,6 +25,17 @@ export const gatewayCallOpts = (cmd: Command) =>
     .option("--timeout <ms>", "Timeout in ms", "10000")
     .option("--expect-final", "Wait for final response (agent)", false)
     .option("--json", "Output JSON", false);
+
+export function resolveGatewayRpcOpts(
+  opts: GatewayRpcOpts,
+  parentOpts?: GatewayRpcParentAuthOpts,
+): GatewayRpcOpts {
+  return {
+    ...opts,
+    token: opts.token ?? parentOpts?.token,
+    password: opts.password ?? parentOpts?.password,
+  };
+}
 
 export const callGatewayCli = async (method: string, opts: GatewayRpcOpts, params?: unknown) =>
   withProgress(
@@ -31,8 +47,8 @@ export const callGatewayCli = async (method: string, opts: GatewayRpcOpts, param
     async () =>
       await callGateway({
         url: opts.url,
-        token: opts.token,
-        password: opts.password,
+        token: typeof opts.token === "string" ? opts.token.trim() : opts.token,
+        password: typeof opts.password === "string" ? opts.password.trim() : opts.password,
         method,
         params,
         expectFinal: Boolean(opts.expectFinal),

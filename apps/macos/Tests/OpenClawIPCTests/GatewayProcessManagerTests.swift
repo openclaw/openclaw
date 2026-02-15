@@ -144,4 +144,36 @@ struct GatewayProcessManagerTests {
         #expect(ready)
         #expect(manager.lastFailureReason == nil)
     }
+
+    @Test func redactsTokenAndPasswordArgs() async {
+        let manager = GatewayProcessManager.shared
+        let redacted = manager.testRedactSensitiveArgs([
+            "openclaw",
+            "gateway",
+            "--token",
+            "abc123",
+            "--password",
+            "pw456",
+            "--port",
+            "18789",
+        ])
+        #expect(redacted == [
+            "openclaw",
+            "gateway",
+            "--token",
+            "<redacted>",
+            "--password",
+            "<redacted>",
+            "--port",
+            "18789",
+        ])
+    }
+
+    @Test func outputTailIsCappedToLimit() async {
+        let manager = GatewayProcessManager.shared
+        let large = String(repeating: "x", count: 3000)
+        let capped = manager.testAppendTail(current: "", text: large)
+        #expect(capped.count == 2000)
+        #expect(capped == String(large.suffix(2000)))
+    }
 }

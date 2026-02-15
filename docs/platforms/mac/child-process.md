@@ -66,6 +66,9 @@ with app environment and log routing to the existing gateway log path.
 
 Lifecycle behavior:
 
+- Before spawn, OpenClaw verifies local gateway auth config. If `gateway.auth.token`
+  is missing, it restores one from launchd/env when available or generates and
+  persists a new token automatically.
 - Crash recovery uses bounded backoff restarts.
 - After retry cap is exhausted, status moves to failed.
 - Remote mode invariant still applies: remote mode never starts a local gateway.

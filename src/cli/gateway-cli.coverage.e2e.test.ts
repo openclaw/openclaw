@@ -245,6 +245,99 @@ describe("gateway-cli coverage", () => {
     expect(runtimeErrors.join("\n")).toContain("Gateway call failed:");
   });
 
+  it("passes explicit --token through to gateway call when --url is set", async () => {
+    runtimeLogs.length = 0;
+    runtimeErrors.length = 0;
+    callGateway.mockClear();
+
+    const { registerGatewayCli } = await import("./gateway-cli.js");
+    const program = new Command();
+    program.exitOverride();
+    registerGatewayCli(program);
+
+    await program.parseAsync(
+      [
+        "gateway",
+        "call",
+        "health",
+        "--url",
+        "ws://127.0.0.1:18789",
+        "--token",
+        "test-token",
+        "--json",
+      ],
+      { from: "user" },
+    );
+
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "ws://127.0.0.1:18789",
+        token: "test-token",
+      }),
+    );
+  });
+
+  it("passes explicit --password through to gateway call when --url is set", async () => {
+    runtimeLogs.length = 0;
+    runtimeErrors.length = 0;
+    callGateway.mockClear();
+
+    const { registerGatewayCli } = await import("./gateway-cli.js");
+    const program = new Command();
+    program.exitOverride();
+    registerGatewayCli(program);
+
+    await program.parseAsync(
+      [
+        "gateway",
+        "call",
+        "health",
+        "--url",
+        "ws://127.0.0.1:18789",
+        "--password",
+        "pw-test",
+        "--json",
+      ],
+      { from: "user" },
+    );
+
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "ws://127.0.0.1:18789",
+        password: "pw-test",
+      }),
+    );
+  });
+
+  it("keeps explicit-auth failure when --url is set without credentials", async () => {
+    runtimeLogs.length = 0;
+    runtimeErrors.length = 0;
+    callGateway.mockClear();
+    callGateway.mockImplementationOnce(
+      async (opts: { url?: string; token?: string; password?: string }) => {
+        if (opts.url && !opts.token && !opts.password) {
+          throw new Error("gateway url override requires explicit credentials");
+        }
+        return { ok: true };
+      },
+    );
+
+    const { registerGatewayCli } = await import("./gateway-cli.js");
+    const program = new Command();
+    program.exitOverride();
+    registerGatewayCli(program);
+
+    await expect(
+      program.parseAsync(["gateway", "call", "health", "--url", "ws://127.0.0.1:18789"], {
+        from: "user",
+      }),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors.join("\n")).toContain(
+      "gateway url override requires explicit credentials",
+    );
+  });
+
   it("validates gateway ports and handles force/start errors", async () => {
     runtimeLogs.length = 0;
     runtimeErrors.length = 0;

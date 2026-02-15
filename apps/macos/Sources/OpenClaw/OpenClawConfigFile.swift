@@ -4,6 +4,9 @@ import OpenClawProtocol
 enum OpenClawConfigFile {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "config")
     private static let configAuditFileName = "config-audit.jsonl"
+    private static let dottedGatewayAuthModeKey = "gateway.auth.mode"
+    private static let dottedGatewayAuthTokenKey = "gateway.auth.token"
+    private static let dottedGatewayAuthPasswordKey = "gateway.auth.password"
 
     static func url() -> URL {
         OpenClawPaths.configURL
@@ -165,6 +168,67 @@ enum OpenClawConfigFile {
             return nil
         }
         return remote["password"] as? String
+    }
+
+    static func localGatewayAuthMode(root: [String: Any]? = nil) -> String? {
+        let resolvedRoot = root ?? self.loadDict()
+        guard let gateway = resolvedRoot["gateway"] as? [String: Any],
+              let auth = gateway["auth"] as? [String: Any],
+              let mode = auth["mode"] as? String
+        else {
+            return nil
+        }
+        let trimmed = mode.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    static func localGatewayToken(root: [String: Any]? = nil) -> String? {
+        let resolvedRoot = root ?? self.loadDict()
+        guard let gateway = resolvedRoot["gateway"] as? [String: Any],
+              let auth = gateway["auth"] as? [String: Any],
+              let token = auth["token"] as? String
+        else {
+            return nil
+        }
+        let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    static func localGatewayPassword(root: [String: Any]? = nil) -> String? {
+        let resolvedRoot = root ?? self.loadDict()
+        guard let gateway = resolvedRoot["gateway"] as? [String: Any],
+              let auth = gateway["auth"] as? [String: Any],
+              let password = auth["password"] as? String
+        else {
+            return nil
+        }
+        let trimmed = password.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    @discardableResult
+    static func persistLocalGatewayTokenAuth(_ token: String) -> Bool {
+        let trimmedToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedToken.isEmpty else { return false }
+
+        var root = self.loadDict()
+        // Defensive cleanup: prevent malformed dotted keys from shadowing nested gateway.auth values.
+        root.removeValue(forKey: self.dottedGatewayAuthModeKey)
+        root.removeValue(forKey: self.dottedGatewayAuthTokenKey)
+        root.removeValue(forKey: self.dottedGatewayAuthPasswordKey)
+
+        var gateway = root["gateway"] as? [String: Any] ?? [:]
+        var auth = gateway["auth"] as? [String: Any] ?? [:]
+        auth["mode"] = "token"
+        auth["token"] = trimmedToken
+        gateway["auth"] = auth
+        root["gateway"] = gateway
+
+        self.saveDict(root)
+        let reloaded = self.loadDict()
+        let persistedMode = self.localGatewayAuthMode(root: reloaded)
+        let persistedToken = self.localGatewayToken(root: reloaded)
+        return persistedMode == "token" && persistedToken == trimmedToken
     }
 
     static func gatewayPort() -> Int? {

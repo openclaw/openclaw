@@ -295,6 +295,100 @@ enum CommandResolver {
             searchPaths: searchPaths)
     }
 
+    enum AppManagedOpenClawCommandSource: String {
+        case globalBinary = "global-binary"
+        case nodeEntrypoint = "node-entrypoint"
+        case pnpmFallback = "pnpm-fallback"
+        case error = "error"
+    }
+
+    struct AppManagedOpenClawCommand {
+        let command: [String]
+        let source: AppManagedOpenClawCommandSource
+        let workingDirectory: String?
+        let executablePath: String?
+    }
+
+    static func appManagedOpenclawCommand(
+        subcommand: String,
+        extraArgs: [String] = [],
+        defaults: UserDefaults = .standard,
+        configRoot: [String: Any]? = nil,
+        searchPaths: [String]? = nil) -> AppManagedOpenClawCommand
+    {
+        let settings = self.connectionSettings(defaults: defaults, configRoot: configRoot)
+        if settings.mode == .remote {
+            let message = "App-managed gateway commands require local mode."
+            return AppManagedOpenClawCommand(
+                command: self.errorCommand(with: message),
+                source: .error,
+                workingDirectory: nil,
+                executablePath: nil)
+        }
+
+        let root = self.projectRoot()
+        let resolvedSearchPaths = searchPaths ?? self.preferredPaths()
+        let appManagedPaths = self.appManagedSearchPaths(
+            searchPaths: resolvedSearchPaths,
+            projectRoot: root)
+
+        if let openclawPath = self.openclawExecutable(searchPaths: appManagedPaths) {
+            return AppManagedOpenClawCommand(
+                command: [openclawPath, subcommand] + extraArgs,
+                source: .globalBinary,
+                workingDirectory: root.path,
+                executablePath: openclawPath)
+        }
+
+        let runtimeResult = self.runtimeResolution(searchPaths: appManagedPaths)
+        if let entry = self.gatewayEntrypoint(in: root),
+           case let .success(runtime) = runtimeResult
+        {
+            return AppManagedOpenClawCommand(
+                command: self.makeRuntimeCommand(
+                    runtime: runtime,
+                    entrypoint: entry,
+                    subcommand: subcommand,
+                    extraArgs: extraArgs),
+                source: .nodeEntrypoint,
+                workingDirectory: root.path,
+                executablePath: runtime.path)
+        }
+
+        if let pnpm = self.findExecutable(named: "pnpm", searchPaths: appManagedPaths) {
+            return AppManagedOpenClawCommand(
+                command: [pnpm, "--silent", "openclaw", subcommand] + extraArgs,
+                source: .pnpmFallback,
+                workingDirectory: root.path,
+                executablePath: pnpm)
+        }
+
+        let missingEntry = """
+        openclaw entrypoint missing (looked for dist/index.js or openclaw.mjs); run pnpm build.
+        """
+        if case let .failure(error) = runtimeResult {
+            return AppManagedOpenClawCommand(
+                command: self.runtimeErrorCommand(error),
+                source: .error,
+                workingDirectory: root.path,
+                executablePath: nil)
+        }
+        return AppManagedOpenClawCommand(
+            command: self.errorCommand(with: missingEntry),
+            source: .error,
+            workingDirectory: root.path,
+            executablePath: nil)
+    }
+
+    private static func appManagedSearchPaths(searchPaths: [String], projectRoot: URL) -> [String] {
+        #if DEBUG
+        let projectBinPath = projectRoot.appendingPathComponent("node_modules/.bin").path
+        return searchPaths.filter { $0 != projectBinPath }
+        #else
+        return searchPaths
+        #endif
+    }
+
     // MARK: - SSH helpers
 
     private static func sshNodeCommand(subcommand: String, extraArgs: [String], settings: RemoteSettings) -> [String]? {

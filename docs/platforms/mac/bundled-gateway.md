@@ -64,6 +64,9 @@ When enabled in **Settings > General > Gateway runtime**, OpenClaw starts
 
 Behavior:
 
+- OpenClaw performs an auth preflight before child spawn. If local token auth is
+  missing, it auto-repairs `gateway.auth.token` (reuse when available, otherwise
+  generate + persist) so restarts do not require manual token commands.
 - Child process is supervised by the app with bounded restart backoff.
 - If the child exits repeatedly, OpenClaw surfaces a failed state instead of infinite restarts.
 - On quit, OpenClaw prompts:

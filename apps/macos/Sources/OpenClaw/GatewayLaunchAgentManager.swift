@@ -144,14 +144,19 @@ extension GatewayLaunchAgentManager {
         timeout: Double,
         quiet: Bool) async -> CommandResult
     {
-        let command = CommandResolver.openclawCommand(
+        let resolved = CommandResolver.appManagedOpenclawCommand(
             subcommand: "gateway",
             extraArgs: self.withJsonFlag(args),
             // Launchd management must always run locally, even if remote mode is configured.
             configRoot: ["gateway": ["mode": "local"]])
+        let command = resolved.command
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = CommandResolver.preferredPaths().joined(separator: ":")
-        let response = await ShellExecutor.runDetailed(command: command, cwd: nil, env: env, timeout: timeout)
+        let response = await ShellExecutor.runDetailed(
+            command: command,
+            cwd: resolved.workingDirectory,
+            env: env,
+            timeout: timeout)
         let parsed = self.parseDaemonJson(from: response.stdout) ?? self.parseDaemonJson(from: response.stderr)
         let ok = parsed?.object["ok"] as? Bool
         let message = (parsed?.object["error"] as? String) ?? (parsed?.object["message"] as? String)
@@ -170,6 +175,10 @@ extension GatewayLaunchAgentManager {
         let exit = response.exitCode.map { "exit \($0)" } ?? (response.errorMessage ?? "failed")
         let fullMessage = detail.map { "Gateway daemon command failed (\(exit)): \($0)" }
             ?? "Gateway daemon command failed (\(exit))"
+        let source = resolved.source.rawValue
+        let executable = resolved.executablePath ?? "unknown"
+        self.logger.error(
+            "Gateway daemon command source=\(source, privacy: .public) executable=\(executable, privacy: .public)")
         self.logger.error("\(fullMessage, privacy: .public)")
         return CommandResult(success: false, payload: payload, message: detail)
     }

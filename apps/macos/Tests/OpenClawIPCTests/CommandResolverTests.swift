@@ -168,4 +168,84 @@ import Testing
             #expect(cmd[1] == "daemon")
         }
     }
+
+    @Test func appManagedPrefersGlobalBinaryOverProjectAndPnpm() async throws {
+        let defaults = self.makeDefaults()
+        defaults.set(AppState.ConnectionMode.local.rawValue, forKey: connectionModeKey)
+
+        let tmp = try makeTempDir()
+        CommandResolver.setProjectRoot(tmp.path)
+
+        let projectBin = tmp.appendingPathComponent("node_modules/.bin/openclaw")
+        try self.makeExec(at: projectBin)
+
+        let globalBinDir = tmp.appendingPathComponent("global-bin", isDirectory: true)
+        let globalOpenClaw = globalBinDir.appendingPathComponent("openclaw")
+        let pnpm = globalBinDir.appendingPathComponent("pnpm")
+        try self.makeExec(at: globalOpenClaw)
+        try self.makeExec(at: pnpm)
+
+        let resolved = CommandResolver.appManagedOpenclawCommand(
+            subcommand: "gateway",
+            defaults: defaults,
+            configRoot: [:],
+            searchPaths: [
+                tmp.appendingPathComponent("node_modules/.bin").path,
+                globalBinDir.path,
+            ])
+
+        #expect(resolved.source == .globalBinary)
+        #expect(resolved.command.first == globalOpenClaw.path)
+    }
+
+    @Test func appManagedFallsBackToNodeEntrypointBeforePnpm() async throws {
+        let defaults = self.makeDefaults()
+        defaults.set(AppState.ConnectionMode.local.rawValue, forKey: connectionModeKey)
+
+        let tmp = try makeTempDir()
+        CommandResolver.setProjectRoot(tmp.path)
+
+        let nodeBinDir = tmp.appendingPathComponent("node-bin", isDirectory: true)
+        try FileManager().createDirectory(at: nodeBinDir, withIntermediateDirectories: true)
+        let nodePath = nodeBinDir.appendingPathComponent("node")
+        try "#!/bin/sh\necho v22.0.0\n".write(to: nodePath, atomically: true, encoding: .utf8)
+        try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: nodePath.path)
+        let entryPath = tmp.appendingPathComponent("dist/index.js")
+        try self.makeExec(at: entryPath)
+
+        let resolved = CommandResolver.appManagedOpenclawCommand(
+            subcommand: "gateway",
+            defaults: defaults,
+            configRoot: [:],
+            searchPaths: [nodeBinDir.path])
+
+        #expect(resolved.source == .nodeEntrypoint)
+        #expect(resolved.command.count >= 3)
+        if resolved.command.count >= 3 {
+            #expect(resolved.command[0] == nodePath.path)
+            #expect(resolved.command[1] == entryPath.path)
+            #expect(resolved.command[2] == "gateway")
+        }
+    }
+
+    @Test func appManagedUsesPnpmAsLastFallback() async throws {
+        let defaults = self.makeDefaults()
+        defaults.set(AppState.ConnectionMode.local.rawValue, forKey: connectionModeKey)
+
+        let tmp = try makeTempDir()
+        CommandResolver.setProjectRoot(tmp.path)
+
+        let pnpmBinDir = tmp.appendingPathComponent("pnpm-bin", isDirectory: true)
+        let pnpmPath = pnpmBinDir.appendingPathComponent("pnpm")
+        try self.makeExec(at: pnpmPath)
+
+        let resolved = CommandResolver.appManagedOpenclawCommand(
+            subcommand: "gateway",
+            defaults: defaults,
+            configRoot: [:],
+            searchPaths: [pnpmBinDir.path])
+
+        #expect(resolved.source == .pnpmFallback)
+        #expect(resolved.command.prefix(4).elementsEqual([pnpmPath.path, "--silent", "openclaw", "gateway"]))
+    }
 }

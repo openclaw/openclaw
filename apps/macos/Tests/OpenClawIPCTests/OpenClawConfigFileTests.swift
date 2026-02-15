@@ -115,4 +115,64 @@ struct OpenClawConfigFileTests {
             #expect(auditRoot?["configPath"] as? String == configPath.path)
         }
     }
+
+    @MainActor
+    @Test
+    func persistLocalGatewayTokenAuthWritesNestedGatewayAuthShape() async {
+        let override = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-config-\(UUID().uuidString)")
+            .appendingPathComponent("openclaw.json")
+            .path
+
+        await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": override]) {
+            OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "port": 18789,
+                ],
+            ])
+
+            let persisted = OpenClawConfigFile.persistLocalGatewayTokenAuth("token-abc")
+            #expect(persisted)
+
+            let root = OpenClawConfigFile.loadDict()
+            let gateway = root["gateway"] as? [String: Any]
+            let auth = gateway?["auth"] as? [String: Any]
+            #expect(auth?["mode"] as? String == "token")
+            #expect(auth?["token"] as? String == "token-abc")
+            #expect((gateway?["port"] as? Int) == 18789)
+            #expect(root["gateway.auth.token"] == nil)
+            #expect(root["gateway.auth.mode"] == nil)
+        }
+    }
+
+    @MainActor
+    @Test
+    func persistLocalGatewayTokenAuthRemovesMalformedDottedAuthKeys() async {
+        let override = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-config-\(UUID().uuidString)")
+            .appendingPathComponent("openclaw.json")
+            .path
+
+        await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": override]) {
+            OpenClawConfigFile.saveDict([
+                "gateway.auth.mode": "token",
+                "gateway.auth.token": "bad-shape-token",
+                "gateway.auth.password": "bad-shape-password",
+                "gateway": [
+                    "bind": "loopback",
+                ],
+            ])
+
+            let persisted = OpenClawConfigFile.persistLocalGatewayTokenAuth("fixed-token")
+            #expect(persisted)
+
+            let root = OpenClawConfigFile.loadDict()
+            let auth = ((root["gateway"] as? [String: Any])?["auth"] as? [String: Any])
+            #expect(auth?["mode"] as? String == "token")
+            #expect(auth?["token"] as? String == "fixed-token")
+            #expect(root["gateway.auth.mode"] == nil)
+            #expect(root["gateway.auth.token"] == nil)
+            #expect(root["gateway.auth.password"] == nil)
+        }
+    }
 }
