@@ -1,18 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 let backend: "builtin" | "qmd" = "builtin";
+let searchImpl: () => Promise<unknown[]> = async () => [
+  {
+    path: "MEMORY.md",
+    startLine: 5,
+    endLine: 7,
+    score: 0.9,
+    snippet: "@@ -5,3 @@\nAssistant: noted",
+    source: "memory" as const,
+  },
+];
+let readFileImpl: () => Promise<string> = async () => "";
+
 const stubManager = {
-  search: vi.fn(async () => [
-    {
-      path: "MEMORY.md",
-      startLine: 5,
-      endLine: 7,
-      score: 0.9,
-      snippet: "@@ -5,3 @@\nAssistant: noted",
-      source: "memory" as const,
-    },
-  ]),
-  readFile: vi.fn(),
+  search: vi.fn(async () => await searchImpl()),
+  readFile: vi.fn(async () => await readFileImpl()),
   status: () => ({
     backend,
     files: 1,
@@ -37,9 +40,21 @@ vi.mock("../../memory/index.js", () => {
   };
 });
 
-import { createMemorySearchTool } from "./memory-tool.js";
+import { createMemoryGetTool, createMemorySearchTool } from "./memory-tool.js";
 
 beforeEach(() => {
+  backend = "builtin";
+  searchImpl = async () => [
+    {
+      path: "MEMORY.md",
+      startLine: 5,
+      endLine: 7,
+      score: 0.9,
+      snippet: "@@ -5,3 @@\nAssistant: noted",
+      source: "memory" as const,
+    },
+  ];
+  readFileImpl = async () => "";
   vi.clearAllMocks();
 });
 
@@ -119,5 +134,48 @@ describe("memory search citations", () => {
     const result = await tool.execute("auto_mode_group", { query: "notes" });
     const details = result.details as { results: Array<{ snippet: string }> };
     expect(details.results[0]?.snippet).not.toMatch(/Source:/);
+  });
+});
+
+describe("memory tools", () => {
+  it("does not throw when memory_search fails (e.g. embeddings 429)", async () => {
+    searchImpl = async () => {
+      throw new Error("openai embeddings failed: 429 insufficient_quota");
+    };
+
+    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const tool = createMemorySearchTool({ config: cfg });
+    expect(tool).not.toBeNull();
+    if (!tool) {
+      throw new Error("tool missing");
+    }
+
+    const result = await tool.execute("call_1", { query: "hello" });
+    expect(result.details).toEqual({
+      results: [],
+      disabled: true,
+      error: "openai embeddings failed: 429 insufficient_quota",
+    });
+  });
+
+  it("does not throw when memory_get fails", async () => {
+    readFileImpl = async () => {
+      throw new Error("path required");
+    };
+
+    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const tool = createMemoryGetTool({ config: cfg });
+    expect(tool).not.toBeNull();
+    if (!tool) {
+      throw new Error("tool missing");
+    }
+
+    const result = await tool.execute("call_2", { path: "memory/NOPE.md" });
+    expect(result.details).toEqual({
+      path: "memory/NOPE.md",
+      text: "",
+      disabled: true,
+      error: "path required",
+    });
   });
 });
