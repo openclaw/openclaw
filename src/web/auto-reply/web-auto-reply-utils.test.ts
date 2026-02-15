@@ -1,9 +1,12 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { WebInboundMsg } from "./types.js";
+import { saveSessionStore } from "../../config/sessions.js";
 import { isBotMentionedFromTargets, resolveMentionTargets } from "./mentions.js";
+import { getSessionSnapshot } from "./session-snapshot.js";
+import { elide, isLikelyWhatsAppCryptoError } from "./util.js";
 
 const makeMsg = (overrides: Partial<WebInboundMsg>): WebInboundMsg =>
   ({
@@ -114,5 +117,104 @@ describe("resolveMentionTargets with @lid mapping", () => {
     } finally {
       await fs.rm(authDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("getSessionSnapshot", () => {
+  it("uses channel reset overrides when configured", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+    try {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-snapshot-"));
+      const storePath = path.join(root, "sessions.json");
+      const sessionKey = "agent:main:whatsapp:dm:s1";
+
+      await saveSessionStore(storePath, {
+        [sessionKey]: {
+          sessionId: "snapshot-session",
+          updatedAt: new Date(2026, 0, 18, 3, 30, 0).getTime(),
+          lastChannel: "whatsapp",
+        },
+      });
+
+      const cfg = {
+        session: {
+          store: storePath,
+          reset: { mode: "daily", atHour: 4, idleMinutes: 240 },
+          resetByChannel: {
+            whatsapp: { mode: "idle", idleMinutes: 360 },
+          },
+        },
+      } as Parameters<typeof getSessionSnapshot>[0];
+
+      const snapshot = getSessionSnapshot(cfg, "whatsapp:+15550001111", true, {
+        sessionKey,
+      });
+
+      expect(snapshot.resetPolicy.mode).toBe("idle");
+      expect(snapshot.resetPolicy.idleMinutes).toBe(360);
+      expect(snapshot.fresh).toBe(true);
+      expect(snapshot.dailyResetAt).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("web auto-reply util", () => {
+  describe("elide", () => {
+    it("returns undefined for undefined input", () => {
+      expect(elide(undefined)).toBe(undefined);
+    });
+
+    it("returns input when under limit", () => {
+      expect(elide("hi", 10)).toBe("hi");
+    });
+
+    it("returns input when exactly at limit", () => {
+      expect(elide("12345", 5)).toBe("12345");
+    });
+
+    it("truncates and annotates when over limit", () => {
+      expect(elide("abcdef", 3)).toBe("abc… (truncated 3 chars)");
+    });
+  });
+
+  describe("isLikelyWhatsAppCryptoError", () => {
+    it("returns false for non-matching reasons", () => {
+      expect(isLikelyWhatsAppCryptoError(new Error("boom"))).toBe(false);
+      expect(isLikelyWhatsAppCryptoError("boom")).toBe(false);
+      expect(isLikelyWhatsAppCryptoError({ message: "bad mac" })).toBe(false);
+    });
+
+    it("matches known Baileys crypto auth errors (string)", () => {
+      expect(
+        isLikelyWhatsAppCryptoError(
+          "baileys: unsupported state or unable to authenticate data (noise-handler)",
+        ),
+      ).toBe(true);
+      expect(isLikelyWhatsAppCryptoError("bad mac in aesDecryptGCM (baileys)")).toBe(true);
+    });
+
+    it("matches known Baileys crypto auth errors (Error)", () => {
+      const err = new Error("bad mac");
+      err.stack = "at something\nat @whiskeysockets/baileys/noise-handler\n";
+      expect(isLikelyWhatsAppCryptoError(err)).toBe(true);
+    });
+
+    it("does not throw on circular objects", () => {
+      const circular: Record<string, unknown> = {};
+      circular.self = circular;
+      expect(isLikelyWhatsAppCryptoError(circular)).toBe(false);
+    });
+
+    it("handles non-string reasons without throwing", () => {
+      expect(isLikelyWhatsAppCryptoError(null)).toBe(false);
+      expect(isLikelyWhatsAppCryptoError(123)).toBe(false);
+      expect(isLikelyWhatsAppCryptoError(true)).toBe(false);
+      expect(isLikelyWhatsAppCryptoError(123n)).toBe(false);
+      expect(isLikelyWhatsAppCryptoError(Symbol("bad mac"))).toBe(false);
+      expect(isLikelyWhatsAppCryptoError(function namedFn() {})).toBe(false);
+    });
   });
 });
