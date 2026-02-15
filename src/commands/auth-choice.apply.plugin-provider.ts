@@ -1,5 +1,3 @@
-import type { OpenClawConfig } from "../config/config.js";
-import type { ProviderAuthMethod, ProviderPlugin } from "../plugins/types.js";
 import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
 import {
@@ -8,7 +6,6 @@ import {
   resolveAgentWorkspaceDir,
 } from "../agents/agent-scope.js";
 import { upsertAuthProfile } from "../agents/auth-profiles.js";
-import { normalizeProviderId } from "../agents/model-selection.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
 import { resolvePluginProviders } from "../plugins/providers.js";
@@ -16,6 +13,12 @@ import { isRemoteEnvironment } from "./oauth-env.js";
 import { createVpsAwareOAuthHandlers } from "./oauth-flow.js";
 import { applyAuthProfileConfig } from "./onboard-auth.js";
 import { openUrl } from "./onboard-helpers.js";
+import {
+  applyDefaultModel,
+  mergeConfigPatch,
+  pickAuthMethod,
+  resolveProviderMatch,
+} from "./provider-auth-helpers.js";
 
 export type PluginProviderAuthChoiceOptions = {
   authChoice: string;
@@ -24,78 +27,6 @@ export type PluginProviderAuthChoiceOptions = {
   methodId?: string;
   label: string;
 };
-
-function resolveProviderMatch(
-  providers: ProviderPlugin[],
-  rawProvider: string,
-): ProviderPlugin | null {
-  const normalized = normalizeProviderId(rawProvider);
-  return (
-    providers.find((provider) => normalizeProviderId(provider.id) === normalized) ??
-    providers.find(
-      (provider) =>
-        provider.aliases?.some((alias) => normalizeProviderId(alias) === normalized) ?? false,
-    ) ??
-    null
-  );
-}
-
-function pickAuthMethod(provider: ProviderPlugin, rawMethod?: string): ProviderAuthMethod | null {
-  const raw = rawMethod?.trim();
-  if (!raw) {
-    return null;
-  }
-  const normalized = raw.toLowerCase();
-  return (
-    provider.auth.find((method) => method.id.toLowerCase() === normalized) ??
-    provider.auth.find((method) => method.label.toLowerCase() === normalized) ??
-    null
-  );
-}
-
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
-function mergeConfigPatch<T>(base: T, patch: unknown): T {
-  if (!isPlainRecord(base) || !isPlainRecord(patch)) {
-    return patch as T;
-  }
-
-  const next: Record<string, unknown> = { ...base };
-  for (const [key, value] of Object.entries(patch)) {
-    const existing = next[key];
-    if (isPlainRecord(existing) && isPlainRecord(value)) {
-      next[key] = mergeConfigPatch(existing, value);
-    } else {
-      next[key] = value;
-    }
-  }
-  return next as T;
-}
-
-function applyDefaultModel(cfg: OpenClawConfig, model: string): OpenClawConfig {
-  const models = { ...cfg.agents?.defaults?.models };
-  models[model] = models[model] ?? {};
-
-  const existingModel = cfg.agents?.defaults?.model;
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...cfg.agents?.defaults,
-        models,
-        model: {
-          ...(existingModel && typeof existingModel === "object" && "fallbacks" in existingModel
-            ? { fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks }
-            : undefined),
-          primary: model,
-        },
-      },
-    },
-  };
-}
 
 export async function applyAuthChoicePluginProvider(
   params: ApplyAuthChoiceParams,

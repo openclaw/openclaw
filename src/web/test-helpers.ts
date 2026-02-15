@@ -44,6 +44,26 @@ vi.mock("../config/config.js", async (importOriginal) => {
   };
 });
 
+// Some web modules live under `src/web/auto-reply/*` and import config via a different
+// relative path (`../../config/config.js`). Mock both specifiers so tests stay stable
+// across refactors that move files between folders.
+vi.mock("../../config/config.js", async (importOriginal) => {
+  // `../../config/config.js` is correct for modules under `src/web/auto-reply/*`.
+  // For typing in this file (which lives in `src/web/*`), refer to the same module
+  // via the local relative path.
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  return {
+    ...actual,
+    loadConfig: () => {
+      const getter = (globalThis as Record<symbol, unknown>)[CONFIG_KEY];
+      if (typeof getter === "function") {
+        return getter();
+      }
+      return DEFAULT_CONFIG;
+    },
+  };
+});
+
 vi.mock("../media/store.js", () => ({
   saveMediaBuffer: vi.fn().mockImplementation(async (_buf: Buffer, contentType?: string) => ({
     id: "mid",

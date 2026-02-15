@@ -74,10 +74,18 @@ function coercePayload(payload: UnknownRecord) {
   if (!next.kind) {
     const hasMessage = typeof next.message === "string" && next.message.trim().length > 0;
     const hasText = typeof next.text === "string" && next.text.trim().length > 0;
+    const hasAgentTurnHint =
+      typeof next.model === "string" ||
+      typeof next.thinking === "string" ||
+      typeof next.timeoutSeconds === "number" ||
+      typeof next.allowUnsafeExternalContent === "boolean";
     if (hasMessage) {
       next.kind = "agentTurn";
     } else if (hasText) {
       next.kind = "systemEvent";
+    } else if (hasAgentTurnHint) {
+      // Accept partial agentTurn payload patches that only tweak agent-turn-only fields.
+      next.kind = "agentTurn";
     }
   }
   if (typeof next.message === "string") {

@@ -95,6 +95,18 @@ describe("markdownToTelegramHtml", () => {
     expect(res).toBe('<a href="https://example.com"><b>bold</b></a>');
   });
 
+  it("wraps punctuated file references in code tags", () => {
+    const res = markdownToTelegramHtml("See README.md. Also (backup.sh).");
+    expect(res).toContain("<code>README.md</code>.");
+    expect(res).toContain("(<code>backup.sh</code>).");
+  });
+
+  it("keeps .co domains as links", () => {
+    const res = markdownToTelegramHtml("Visit t.co and openclaw.co");
+    expect(res).toContain('<a href="http://t.co">t.co</a>');
+    expect(res).toContain('<a href="http://openclaw.co">openclaw.co</a>');
+  });
+
   it("renders spoiler tags", () => {
     const res = markdownToTelegramHtml("the answer is ||42||");
     expect(res).toBe("the answer is <tg-spoiler>42</tg-spoiler>");

@@ -59,6 +59,51 @@ export function defaultGroupActivation(requireMention: boolean): "always" | "men
   return !requireMention ? "always" : "mention";
 }
 
+/**
+ * Resolve a human-readable provider label from the raw provider string.
+ */
+function resolveProviderLabel(rawProvider: string | undefined): string {
+  const providerKey = rawProvider?.trim().toLowerCase() ?? "";
+  if (!providerKey) {
+    return "chat";
+  }
+  if (isInternalMessageChannel(providerKey)) {
+    return "WebChat";
+  }
+  const providerId = normalizeChannelId(rawProvider?.trim());
+  if (providerId) {
+    return getChannelPlugin(providerId)?.meta.label ?? providerId;
+  }
+  return `${providerKey.at(0)?.toUpperCase() ?? ""}${providerKey.slice(1)}`;
+}
+
+/**
+ * Build a persistent group-chat context block that is always included in the
+ * system prompt for group-chat sessions (every turn, not just the first).
+ *
+ * Contains: group name, participants, and an explicit instruction to reply
+ * directly instead of using the message tool.
+ */
+export function buildGroupChatContext(params: { sessionCtx: TemplateContext }): string {
+  const subject = params.sessionCtx.GroupSubject?.trim();
+  const members = params.sessionCtx.GroupMembers?.trim();
+  const providerLabel = resolveProviderLabel(params.sessionCtx.Provider);
+
+  const lines: string[] = [];
+  if (subject) {
+    lines.push(`You are in the ${providerLabel} group chat "${subject}".`);
+  } else {
+    lines.push(`You are in a ${providerLabel} group chat.`);
+  }
+  if (members) {
+    lines.push(`Participants: ${members}.`);
+  }
+  lines.push(
+    "Your replies are automatically sent to this group chat. Do not use the message tool to send to this same group — just reply normally.",
+  );
+  return lines.join(" ");
+}
+
 export function buildGroupIntro(params: {
   cfg: OpenClawConfig;
   sessionCtx: TemplateContext;
@@ -69,23 +114,7 @@ export function buildGroupIntro(params: {
   const activation =
     normalizeGroupActivation(params.sessionEntry?.groupActivation) ?? params.defaultActivation;
   const rawProvider = params.sessionCtx.Provider?.trim();
-  const providerKey = rawProvider?.toLowerCase() ?? "";
   const providerId = normalizeChannelId(rawProvider);
-  const providerLabel = (() => {
-    if (!providerKey) {
-      return "chat";
-    }
-    if (isInternalMessageChannel(providerKey)) {
-      return "WebChat";
-    }
-    if (providerId) {
-      return getChannelPlugin(providerId)?.meta.label ?? providerId;
-    }
-    return `${providerKey.at(0)?.toUpperCase() ?? ""}${providerKey.slice(1)}`;
-  })();
-  // Do not embed attacker-controlled labels (group subject, members) in system prompts.
-  // These labels are provided as user-role "untrusted context" blocks instead.
-  const subjectLine = `You are replying inside a ${providerLabel} group chat.`;
   const activationLine =
     activation === "always"
       ? "Activation: always-on (you receive every group message)."
@@ -115,15 +144,7 @@ export function buildGroupIntro(params: {
     "Be a good group participant: mostly lurk and follow the conversation; reply only when directly addressed or you can add clear value. Emoji reactions are welcome when available.";
   const styleLine =
     "Write like a human. Avoid Markdown tables. Don't type literal \\n sequences; use real line breaks sparingly.";
-  return [
-    subjectLine,
-    activationLine,
-    providerIdsLine,
-    silenceLine,
-    cautionLine,
-    lurkLine,
-    styleLine,
-  ]
+  return [activationLine, providerIdsLine, silenceLine, cautionLine, lurkLine, styleLine]
     .filter(Boolean)
     .join(" ")
     .concat(" Address the specific sender noted in the message context.");
