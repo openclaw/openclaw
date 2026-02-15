@@ -8,6 +8,7 @@
  */
 
 import { isPlainObject } from "../utils.js";
+import { AwsSecretProvider } from "./aws-secret-provider.js";
 
 // Matches ${provider:name} or ${provider:name#version}
 // Provider: lowercase alpha. Name: alphanum, hyphens, underscores, slashes, dots.
@@ -25,7 +26,16 @@ export interface SecretRef {
 export type SecretsConfig = {
   providers?: Record<
     string,
-    { project: string; cacheTtlSeconds?: number; credentialsFile?: string }
+    {
+      project?: string;
+      cacheTtlSeconds?: number;
+      credentialsFile?: string;
+      // AWS-specific
+      region?: string;
+      profile?: string;
+      roleArn?: string;
+      externalId?: string;
+    }
   >;
 };
 
@@ -283,8 +293,26 @@ export function buildSecretProviders(
   }
 
   for (const [name, config] of Object.entries(secretsConfig.providers)) {
-    if (name === "gcp" && config) {
-      providers.set("gcp", new GcpSecretProvider(config));
+    if (name === "gcp" && config && config.project) {
+      providers.set(
+        "gcp",
+        new GcpSecretProvider(
+          config as { project: string; cacheTtlSeconds?: number; credentialsFile?: string },
+        ),
+      );
+    }
+    if (name === "aws" && config && config.region) {
+      providers.set(
+        "aws",
+        new AwsSecretProvider({
+          region: config.region,
+          cacheTtlSeconds: config.cacheTtlSeconds,
+          profile: config.profile,
+          credentialsFile: config.credentialsFile,
+          roleArn: config.roleArn,
+          externalId: config.externalId,
+        }),
+      );
     }
   }
 
