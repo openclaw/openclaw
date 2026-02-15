@@ -12,6 +12,7 @@ import {
 import { classifySessionKey } from "../gateway/session-utils.js";
 import { info } from "../globals.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
+import { visibleWidth } from "../terminal/ansi.js";
 import { isRich, theme } from "../terminal/theme.js";
 
 type SessionRow = {
@@ -36,21 +37,30 @@ type SessionRow = {
   contextTokens?: number;
 };
 
-const KIND_PAD = 6;
-const KEY_PAD = 26;
-const AGE_PAD = 9;
-const MODEL_PAD = 14;
-const TOKENS_PAD = 20;
+// Helper to pad a string to a target width, accounting for ANSI codes
+const padToWidth = (text: string, width: number): string => {
+  const visible = visibleWidth(text);
+  if (visible >= width) {
+    return text;
+  }
+  return text + " ".repeat(width - visible);
+};
+
+// Helper to truncate a plain string (no ANSI) to fit within a max width
+const truncateText = (text: string, maxWidth: number): string => {
+  if (text.length <= maxWidth) {
+    return text;
+  }
+  if (maxWidth <= 10) {
+    return text.slice(0, maxWidth);
+  }
+  // Truncate with ellipsis: show start and end
+  const head = Math.floor((maxWidth - 3) * 0.6);
+  const tail = maxWidth - head - 3;
+  return `${text.slice(0, head)}...${text.slice(-tail)}`;
+};
 
 const formatKTokens = (value: number) => `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}k`;
-
-const truncateKey = (key: string) => {
-  if (key.length <= KEY_PAD) {
-    return key;
-  }
-  const head = Math.max(4, KEY_PAD - 10);
-  return `${key.slice(0, head)}...${key.slice(-6)}`;
-};
 
 const colorByPct = (label: string, pct: number | null, rich: boolean) => {
   if (!rich || pct === null) {
@@ -76,41 +86,38 @@ const formatTokensCell = (
   if (total === undefined) {
     const ctxLabel = contextTokens ? formatKTokens(contextTokens) : "?";
     const label = `unknown/${ctxLabel} (?%)`;
-    return rich ? theme.muted(label.padEnd(TOKENS_PAD)) : label.padEnd(TOKENS_PAD);
+    return rich ? theme.muted(label) : label;
   }
   const totalLabel = formatKTokens(total);
   const ctxLabel = contextTokens ? formatKTokens(contextTokens) : "?";
   const pct = contextTokens ? Math.min(999, Math.round((total / contextTokens) * 100)) : null;
   const label = `${totalLabel}/${ctxLabel} (${pct ?? "?"}%)`;
-  const padded = label.padEnd(TOKENS_PAD);
-  return colorByPct(padded, pct, rich);
+  return colorByPct(label, pct, rich);
 };
 
 const formatKindCell = (kind: SessionRow["kind"], rich: boolean) => {
-  const label = kind.padEnd(KIND_PAD);
   if (!rich) {
-    return label;
+    return kind;
   }
   if (kind === "group") {
-    return theme.accentBright(label);
+    return theme.accentBright(kind);
   }
   if (kind === "global") {
-    return theme.warn(label);
+    return theme.warn(kind);
   }
   if (kind === "direct") {
-    return theme.accent(label);
+    return theme.accent(kind);
   }
-  return theme.muted(label);
+  return theme.muted(kind);
 };
 
 const formatAgeCell = (updatedAt: number | null | undefined, rich: boolean) => {
   const ageLabel = updatedAt ? formatTimeAgo(Date.now() - updatedAt) : "unknown";
-  const padded = ageLabel.padEnd(AGE_PAD);
-  return rich ? theme.muted(padded) : padded;
+  return rich ? theme.muted(ageLabel) : ageLabel;
 };
 
 const formatModelCell = (model: string | null | undefined, rich: boolean) => {
-  const label = (model ?? "unknown").padEnd(MODEL_PAD);
+  const label = model ?? "unknown";
   return rich ? theme.info(label) : label;
 };
 
@@ -233,12 +240,36 @@ export async function sessionsCommand(
   }
 
   const rich = isRich();
+
+  // Use dynamic widths for TTY, fixed widths for pipes/CI
+  const isTTY = Boolean(process.stdout.isTTY);
+  const KIND_WIDTH = 7;
+  const AGE_WIDTH = 10;
+  const TOKENS_WIDTH = 20;
+
+  let keyWidth: number;
+  let modelWidth: number;
+
+  if (isTTY) {
+    // Dynamic sizing for interactive terminals
+    const terminalWidth = Math.max(80, (process.stdout.columns ?? 120) - 2);
+    const fixedWidth = KIND_WIDTH + AGE_WIDTH + TOKENS_WIDTH + 5; // columns + spaces
+    const remainingWidth = Math.max(40, terminalWidth - fixedWidth);
+
+    keyWidth = Math.max(20, Math.min(50, Math.floor(remainingWidth * 0.35)));
+    modelWidth = Math.max(18, Math.min(35, Math.floor(remainingWidth * 0.25)));
+  } else {
+    // Fixed widths for pipes/redirects/CI
+    keyWidth = 26;
+    modelWidth = 18;
+  }
+
   const header = [
-    "Kind".padEnd(KIND_PAD),
-    "Key".padEnd(KEY_PAD),
-    "Age".padEnd(AGE_PAD),
-    "Model".padEnd(MODEL_PAD),
-    "Tokens (ctx %)".padEnd(TOKENS_PAD),
+    padToWidth("Kind", KIND_WIDTH),
+    padToWidth("Key", keyWidth),
+    padToWidth("Age", AGE_WIDTH),
+    padToWidth("Model", modelWidth),
+    padToWidth("Tokens (ctx %)", TOKENS_WIDTH),
     "Flags",
   ].join(" ");
 
@@ -249,16 +280,24 @@ export async function sessionsCommand(
     const contextTokens = row.contextTokens ?? lookupContextTokens(model) ?? configContextTokens;
     const total = resolveFreshSessionTotalTokens(row);
 
-    const keyLabel = truncateKey(row.key).padEnd(KEY_PAD);
-    const keyCell = rich ? theme.accent(keyLabel) : keyLabel;
+    // Truncate text before applying colors
+    const truncatedKey = truncateText(row.key, keyWidth);
+    const truncatedModel = truncateText(model, modelWidth);
+
+    const kindCell = formatKindCell(row.kind, rich);
+    const keyCell = rich ? theme.accent(truncatedKey) : truncatedKey;
+    const ageCell = formatAgeCell(row.updatedAt, rich);
+    const modelCell = formatModelCell(truncatedModel, rich);
+    const tokensCell = formatTokensCell(total, contextTokens ?? null, rich);
+    const flagsCell = formatFlagsCell(row, rich);
 
     const line = [
-      formatKindCell(row.kind, rich),
-      keyCell,
-      formatAgeCell(row.updatedAt, rich),
-      formatModelCell(model, rich),
-      formatTokensCell(total, contextTokens ?? null, rich),
-      formatFlagsCell(row, rich),
+      padToWidth(kindCell, KIND_WIDTH),
+      padToWidth(keyCell, keyWidth),
+      padToWidth(ageCell, AGE_WIDTH),
+      padToWidth(modelCell, modelWidth),
+      padToWidth(tokensCell, TOKENS_WIDTH),
+      flagsCell,
     ].join(" ");
 
     runtime.log(line.trimEnd());
