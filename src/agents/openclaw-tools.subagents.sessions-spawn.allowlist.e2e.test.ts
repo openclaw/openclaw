@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { createOpenClawTools } from "./openclaw-tools.js";
 import "./test-helpers/fast-core-tools.js";
+import { createOpenClawTools } from "./openclaw-tools.js";
 import {
   getCallGatewayMock,
   resetSessionsSpawnConfigOverride,
@@ -9,6 +9,7 @@ import {
 import { resetSubagentRegistryForTests } from "./subagent-registry.js";
 
 const callGatewayMock = getCallGatewayMock();
+const setConfigOverride = setSessionsSpawnConfigOverride;
 
 describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
   beforeEach(() => {
