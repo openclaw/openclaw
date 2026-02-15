@@ -77,6 +77,31 @@ export function createEditorSubmitHandler(params: {
   };
 }
 
+export function resolveTuiSessionKey(params: {
+  raw?: string;
+  sessionScope: SessionScope;
+  currentAgentId: string;
+  sessionMainKey: string;
+}) {
+  const trimmed = (params.raw ?? "").trim();
+  if (!trimmed) {
+    if (params.sessionScope === "global") {
+      return "global";
+    }
+    return buildAgentMainSessionKey({
+      agentId: params.currentAgentId,
+      mainKey: params.sessionMainKey,
+    });
+  }
+  if (trimmed === "global" || trimmed === "unknown") {
+    return trimmed;
+  }
+  if (trimmed.startsWith("agent:")) {
+    return trimmed;
+  }
+  return `agent:${params.currentAgentId}:${trimmed}`;
+}
+
 export async function runTui(opts: TuiOptions) {
   const config = loadConfig();
   const initialSessionInput = (opts.session ?? "").trim();
@@ -298,23 +323,12 @@ export async function runTui(opts: TuiOptions) {
   };
 
   const resolveSessionKey = (raw?: string) => {
-    const trimmed = (raw ?? "").trim();
-    if (sessionScope === "global") {
-      return "global";
-    }
-    if (!trimmed) {
-      return buildAgentMainSessionKey({
-        agentId: currentAgentId,
-        mainKey: sessionMainKey,
-      });
-    }
-    if (trimmed === "global" || trimmed === "unknown") {
-      return trimmed;
-    }
-    if (trimmed.startsWith("agent:")) {
-      return trimmed;
-    }
-    return `agent:${currentAgentId}:${trimmed}`;
+    return resolveTuiSessionKey({
+      raw,
+      sessionScope,
+      currentAgentId,
+      sessionMainKey,
+    });
   };
 
   currentSessionKey = resolveSessionKey(initialSessionInput);
