@@ -1,4 +1,5 @@
 import { WebSocket } from "ws";
+import { captureEnv } from "../test-utils/env.js";
 import { connectOk, getFreePort, startGatewayServer } from "./test-helpers.js";
 
 export type GatewayWsClient = {
@@ -14,7 +15,7 @@ export type GatewayServerHarness = {
 };
 
 export async function startGatewayServerHarness(): Promise<GatewayServerHarness> {
-  const previousToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+  const envSnapshot = captureEnv(["OPENCLAW_GATEWAY_TOKEN"]);
   delete process.env.OPENCLAW_GATEWAY_TOKEN;
   const port = await getFreePort();
   const server = await startGatewayServer(port);
@@ -28,11 +29,7 @@ export async function startGatewayServerHarness(): Promise<GatewayServerHarness>
 
   const close = async () => {
     await server.close();
-    if (previousToken === undefined) {
-      delete process.env.OPENCLAW_GATEWAY_TOKEN;
-    } else {
-      process.env.OPENCLAW_GATEWAY_TOKEN = previousToken;
-    }
+    envSnapshot.restore();
   };
 
   return { port, server, openClient, close };
