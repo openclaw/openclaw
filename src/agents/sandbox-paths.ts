@@ -63,6 +63,45 @@ export async function assertSandboxPath(params: {
   return resolved;
 }
 
+export async function assertSandboxPathInRoots(params: {
+  filePath: string;
+  cwd: string;
+  roots: string[];
+  allowFinalSymlink?: boolean;
+}) {
+  const roots = Array.isArray(params.roots)
+    ? params.roots
+        .map((value) => (typeof value === "string" ? value.trim() : ""))
+        .filter(Boolean)
+        .map((value) => path.resolve(value))
+    : [];
+
+  if (roots.length === 0) {
+    return assertSandboxPath({
+      filePath: params.filePath,
+      cwd: params.cwd,
+      root: params.cwd,
+      allowFinalSymlink: params.allowFinalSymlink,
+    });
+  }
+
+  for (const root of roots) {
+    try {
+      return await assertSandboxPath({
+        filePath: params.filePath,
+        cwd: params.cwd,
+        root,
+        allowFinalSymlink: params.allowFinalSymlink,
+      });
+    } catch {
+      // Keep trying other roots.
+    }
+  }
+
+  const rootsLabel = roots.map(shortPath).join(", ");
+  throw new Error(`Path escapes allowed roots (${rootsLabel}): ${params.filePath}`);
+}
+
 export function assertMediaNotDataUrl(media: string): void {
   const raw = media.trim();
   if (DATA_URL_RE.test(raw)) {

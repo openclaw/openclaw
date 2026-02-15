@@ -71,6 +71,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Allow stdin-only safe binaries to run without explicit allowlist entries.",
   "tools.fs.workspaceOnly":
     "Restrict filesystem tools (read/write/edit/apply_patch) to the workspace directory (default: false).",
+  "tools.fs.allowRoots":
+    "Additional allowed roots for filesystem tools when tools.fs.workspaceOnly is enabled (array of paths; rejects filesystem roots like '/').",
   "tools.message.allowCrossContextSend":
     "Legacy override: allow cross-context sends across all providers.",
   "tools.message.crossContext.allowWithinProvider":

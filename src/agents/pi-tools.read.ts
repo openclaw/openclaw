@@ -4,7 +4,7 @@ import type { AnyAgentTool } from "./pi-tools.types.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import { detectMime } from "../media/mime.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
-import { assertSandboxPath } from "./sandbox-paths.js";
+import { assertSandboxPath, assertSandboxPathInRoots } from "./sandbox-paths.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
 
 // NOTE(steipete): Upstream read now does file-magic MIME detection; we keep the wrapper
@@ -302,6 +302,30 @@ export function wrapToolWorkspaceRootGuard(tool: AnyAgentTool, root: string): An
       const filePath = record?.path;
       if (typeof filePath === "string" && filePath.trim()) {
         await assertSandboxPath({ filePath, cwd: root, root });
+      }
+      return tool.execute(toolCallId, normalized ?? args, signal, onUpdate);
+    },
+  };
+}
+
+export function wrapToolWorkspaceAllowRootsGuard(
+  tool: AnyAgentTool,
+  params: { cwd: string; roots: string[] },
+): AnyAgentTool {
+  return {
+    ...tool,
+    execute: async (toolCallId, args, signal, onUpdate) => {
+      const normalized = normalizeToolParams(args);
+      const record =
+        normalized ??
+        (args && typeof args === "object" ? (args as Record<string, unknown>) : undefined);
+      const filePath = record?.path;
+      if (typeof filePath === "string" && filePath.trim()) {
+        await assertSandboxPathInRoots({
+          filePath,
+          cwd: params.cwd,
+          roots: params.roots,
+        });
       }
       return tool.execute(toolCallId, normalized ?? args, signal, onUpdate);
     },

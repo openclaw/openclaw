@@ -581,6 +581,7 @@ Additional hardening options:
 
 - `tools.exec.applyPatch.workspaceOnly: true` (default): ensures `apply_patch` cannot write/delete outside the workspace directory even when sandboxing is off. Set to `false` only if you intentionally want `apply_patch` to touch files outside the workspace.
 - `tools.fs.workspaceOnly: true` (optional): restricts `read`/`write`/`edit`/`apply_patch` paths to the workspace directory (useful if you allow absolute paths today and want a single guardrail).
+- `tools.fs.allowRoots: ["..."]` (optional): when `tools.fs.workspaceOnly` is enabled, also allow filesystem tool access inside these extra roots (absolute paths or paths relative to the workspace directory). This is useful if you need a dedicated output/temp directory outside the workspace without granting full filesystem access.
 
 ### 5) Secure baseline (copy/paste)
 

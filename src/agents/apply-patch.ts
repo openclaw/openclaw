@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import { applyUpdateHunk } from "./apply-patch-update.js";
-import { assertSandboxPath } from "./sandbox-paths.js";
+import { assertSandboxPath, assertSandboxPathInRoots } from "./sandbox-paths.js";
 
 const BEGIN_PATCH_MARKER = "*** Begin Patch";
 const END_PATCH_MARKER = "*** End Patch";
@@ -69,6 +69,8 @@ type ApplyPatchOptions = {
   sandbox?: SandboxApplyPatchConfig;
   /** Restrict patch paths to the workspace root (cwd). Default: true. Set false to opt out. */
   workspaceOnly?: boolean;
+  /** Additional allowed roots when workspaceOnly is enabled. */
+  allowedRoots?: string[];
   signal?: AbortSignal;
 };
 
@@ -79,11 +81,17 @@ const applyPatchSchema = Type.Object({
 });
 
 export function createApplyPatchTool(
-  options: { cwd?: string; sandbox?: SandboxApplyPatchConfig; workspaceOnly?: boolean } = {},
+  options: {
+    cwd?: string;
+    sandbox?: SandboxApplyPatchConfig;
+    workspaceOnly?: boolean;
+    allowedRoots?: string[];
+  } = {},
 ): AgentTool<typeof applyPatchSchema, ApplyPatchToolDetails> {
   const cwd = options.cwd ?? process.cwd();
   const sandbox = options.sandbox;
   const workspaceOnly = options.workspaceOnly !== false;
+  const allowedRoots = Array.isArray(options.allowedRoots) ? options.allowedRoots : undefined;
 
   return {
     name: "apply_patch",
@@ -107,6 +115,7 @@ export function createApplyPatchTool(
         cwd,
         sandbox,
         workspaceOnly,
+        allowedRoots,
         signal,
       });
 
@@ -268,14 +277,24 @@ async function resolvePatchPath(
   }
 
   const workspaceOnly = options.workspaceOnly !== false;
+  const allowedRoots =
+    workspaceOnly && Array.isArray(options.allowedRoots) && options.allowedRoots.length > 0
+      ? [options.cwd, ...options.allowedRoots]
+      : null;
   const resolved = workspaceOnly
-    ? (
-        await assertSandboxPath({
-          filePath,
-          cwd: options.cwd,
-          root: options.cwd,
-          allowFinalSymlink: purpose === "unlink",
-        })
+    ? (allowedRoots
+        ? await assertSandboxPathInRoots({
+            filePath,
+            cwd: options.cwd,
+            roots: allowedRoots,
+            allowFinalSymlink: purpose === "unlink",
+          })
+        : await assertSandboxPath({
+            filePath,
+            cwd: options.cwd,
+            root: options.cwd,
+            allowFinalSymlink: purpose === "unlink",
+          })
       ).resolved
     : resolvePathFromCwd(filePath, options.cwd);
   return {

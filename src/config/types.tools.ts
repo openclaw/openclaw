@@ -211,6 +211,15 @@ export type FsToolsConfig = {
    * Default: false (unrestricted, matches legacy behavior).
    */
   workspaceOnly?: boolean;
+  /**
+   * Additional allowed filesystem roots when `workspaceOnly` is enabled.
+   *
+   * - This is an escape hatch for operators who want workspace-only semantics but still need
+   *   to allow specific extra directories (e.g. a dedicated temp/output dir).
+   * - Paths may be absolute or relative to the agent workspace directory.
+   * - The filesystem root ("/" on POSIX) is rejected.
+   */
+  allowRoots?: string[];
 };
 
 export type AgentToolsConfig = {
