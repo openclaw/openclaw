@@ -109,12 +109,17 @@ const NORMALIZED_SENSITIVE_KEY_WHITELIST_SUFFIXES = SENSITIVE_KEY_WHITELIST_SUFF
 
 const SENSITIVE_PATTERNS = [/token$/i, /password/i, /secret/i, /api.?key/i];
 
-export function isSensitiveConfigPath(path: string): boolean {
+function isWhitelistedSensitivePath(path: string): boolean {
   const lowerPath = path.toLowerCase();
-  const whitelisted = NORMALIZED_SENSITIVE_KEY_WHITELIST_SUFFIXES.some((suffix) =>
-    lowerPath.endsWith(suffix),
-  );
-  return !whitelisted && SENSITIVE_PATTERNS.some((pattern) => pattern.test(path));
+  return NORMALIZED_SENSITIVE_KEY_WHITELIST_SUFFIXES.some((suffix) => lowerPath.endsWith(suffix));
+}
+
+function matchesSensitivePattern(path: string): boolean {
+  return SENSITIVE_PATTERNS.some((pattern) => pattern.test(path));
+}
+
+export function isSensitiveConfigPath(path: string): boolean {
+  return !isWhitelistedSensitivePath(path) && matchesSensitivePattern(path);
 }
 
 export function buildBaseHints(): ConfigUiHints {

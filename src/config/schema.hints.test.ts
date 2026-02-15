@@ -8,10 +8,22 @@ const { mapSensitivePaths } = __test__;
 
 describe("isSensitiveConfigPath", () => {
   it("matches whitelist suffixes case-insensitively", () => {
-    expect(isSensitiveConfigPath("maxTokens")).toBe(false);
-    expect(isSensitiveConfigPath("MAXTOKENS")).toBe(false);
-    expect(isSensitiveConfigPath("channels.irc.nickserv.passwordFile")).toBe(false);
-    expect(isSensitiveConfigPath("channels.irc.nickserv.PASSWORDFILE")).toBe(false);
+    const whitelistedPaths = [
+      "maxTokens",
+      "maxOutputTokens",
+      "maxInputTokens",
+      "maxCompletionTokens",
+      "contextTokens",
+      "totalTokens",
+      "tokenCount",
+      "tokenLimit",
+      "tokenBudget",
+      "channels.irc.nickserv.passwordFile",
+    ];
+    for (const path of whitelistedPaths) {
+      expect(isSensitiveConfigPath(path)).toBe(false);
+      expect(isSensitiveConfigPath(path.toUpperCase())).toBe(false);
+    }
   });
 
   it("keeps true sensitive keys redacted", () => {
