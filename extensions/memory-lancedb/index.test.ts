@@ -143,6 +143,8 @@ describe("memory plugin e2e", () => {
     expect(shouldCapture("My email is test@example.com")).toBe(true);
     expect(shouldCapture("Call me at +1234567890123")).toBe(true);
     expect(shouldCapture("I always want verbose output")).toBe(true);
+    expect(shouldCapture("请记住我喜欢深色模式")).toBe(true);
+    expect(shouldCapture("我决定以后都用 TypeScript")).toBe(true);
     expect(shouldCapture("x")).toBe(false);
     expect(shouldCapture("<relevant-memories>injected</relevant-memories>")).toBe(false);
     expect(shouldCapture("<system>status</system>")).toBe(false);
