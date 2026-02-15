@@ -17,6 +17,7 @@ import {
   saveConfig,
   updateConfigFormValue,
   removeConfigFormValue,
+  type ConfigState,
 } from "./controllers/config.ts";
 import {
   loadCronRuns,
@@ -84,6 +85,45 @@ function resolveAssistantAvatarUrl(state: AppViewState): string | undefined {
     return candidate;
   }
   return identity?.avatarUrl;
+}
+
+/**
+ * Ensure the agent has an entry in the config form's `agents.list` array.
+ * When the config has no explicit `agents.list` (common for single-agent
+ * setups), model/skill/tool changes silently fail because the handlers
+ * cannot find the agent by id. This helper creates the list and/or entry
+ * on demand so the subsequent `updateConfigFormValue` call succeeds.
+ *
+ * Returns the index of the agent entry, or -1 if configValue is null.
+ */
+export function ensureAgentListEntry(
+  state: ConfigState,
+  configValue: Record<string, unknown> | null,
+  agentId: string,
+): number {
+  if (!configValue) {
+    return -1;
+  }
+  const agents = configValue.agents as { list?: unknown[] } | undefined;
+  let list = agents?.list;
+  if (!Array.isArray(list)) {
+    // Create agents.list with a stub entry for this agent.
+    updateConfigFormValue(state, ["agents", "list"], [{ id: agentId }]);
+    return 0;
+  }
+  const index = list.findIndex(
+    (entry) =>
+      entry &&
+      typeof entry === "object" &&
+      "id" in entry &&
+      (entry as { id?: string }).id === agentId,
+  );
+  if (index >= 0) {
+    return index;
+  }
+  // Agent not in the list — append a stub entry.
+  updateConfigFormValue(state, ["agents", "list", list.length], { id: agentId });
+  return list.length;
 }
 
 export function renderApp(state: AppViewState) {
@@ -592,29 +632,21 @@ export function renderApp(state: AppViewState) {
                   updateConfigFormValue(state, ["agents", "list", index, "skills"], []);
                 },
                 onModelChange: (agentId, modelId) => {
-                  if (!configValue) {
-                    return;
-                  }
-                  const list = (configValue as { agents?: { list?: unknown[] } }).agents?.list;
-                  if (!Array.isArray(list)) {
-                    return;
-                  }
-                  const index = list.findIndex(
-                    (entry) =>
-                      entry &&
-                      typeof entry === "object" &&
-                      "id" in entry &&
-                      (entry as { id?: string }).id === agentId,
-                  );
+                  const index = ensureAgentListEntry(state, configValue, agentId);
                   if (index < 0) {
                     return;
                   }
-                  const basePath = ["agents", "list", index, "model"];
+                  const basePath = ["agents", "list", index, "model"] as Array<string | number>;
                   if (!modelId) {
                     removeConfigFormValue(state, basePath);
                     return;
                   }
-                  const entry = list[index] as { model?: unknown };
+                  // Re-read the list after ensureAgentListEntry may have mutated configForm.
+                  const list = (state.configForm as { agents?: { list?: unknown[] } } | null)
+                    ?.agents?.list;
+                  const entry = Array.isArray(list)
+                    ? (list[index] as { model?: unknown } | undefined)
+                    : undefined;
                   const existing = entry?.model;
                   if (existing && typeof existing === "object" && !Array.isArray(existing)) {
                     const fallbacks = (existing as { fallbacks?: unknown }).fallbacks;
@@ -628,27 +660,19 @@ export function renderApp(state: AppViewState) {
                   }
                 },
                 onModelFallbacksChange: (agentId, fallbacks) => {
-                  if (!configValue) {
-                    return;
-                  }
-                  const list = (configValue as { agents?: { list?: unknown[] } }).agents?.list;
-                  if (!Array.isArray(list)) {
-                    return;
-                  }
-                  const index = list.findIndex(
-                    (entry) =>
-                      entry &&
-                      typeof entry === "object" &&
-                      "id" in entry &&
-                      (entry as { id?: string }).id === agentId,
-                  );
+                  const index = ensureAgentListEntry(state, configValue, agentId);
                   if (index < 0) {
                     return;
                   }
-                  const basePath = ["agents", "list", index, "model"];
-                  const entry = list[index] as { model?: unknown };
+                  const basePath = ["agents", "list", index, "model"] as Array<string | number>;
+                  // Re-read the list after ensureAgentListEntry may have mutated configForm.
+                  const list = (state.configForm as { agents?: { list?: unknown[] } } | null)
+                    ?.agents?.list;
+                  const entry = Array.isArray(list)
+                    ? (list[index] as { model?: unknown } | undefined)
+                    : undefined;
                   const normalized = fallbacks.map((name) => name.trim()).filter(Boolean);
-                  const existing = entry.model;
+                  const existing = entry?.model;
                   const resolvePrimary = () => {
                     if (typeof existing === "string") {
                       return existing.trim() || null;
