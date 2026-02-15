@@ -89,6 +89,18 @@ export async function detectGlobalInstallManagerForRoot(
     }
   }
 
+  // Homebrew+Node workaround: Check if pkgRoot is under a Cellar path.
+  // On Homebrew, npm installs to /opt/homebrew/lib/node_modules but the binary
+  // symlinks point to /opt/homebrew/Cellar/node/X.Y.Z/lib/node_modules.
+  // This is always an npm install, regardless of what managers are available.
+  if (pkgReal.includes("/Cellar/node/") && pkgReal.includes("/lib/node_modules/")) {
+    for (const name of ALL_PACKAGE_NAMES) {
+      if (pkgReal.endsWith(`/node_modules/${name}`)) {
+        return "npm";
+      }
+    }
+  }
+
   const bunGlobalRoot = resolveBunGlobalRoot();
   const bunGlobalReal = await tryRealpath(bunGlobalRoot);
   for (const name of ALL_PACKAGE_NAMES) {
@@ -134,6 +146,37 @@ export function globalInstallArgs(manager: GlobalInstallManager, spec: string): 
     return ["bun", "add", "-g", spec];
   }
   return ["npm", "i", "-g", spec];
+}
+
+/**
+ * Check if pkgRoot is in a Homebrew Cellar path, and if so, return install args
+ * that target the Cellar's node_modules directly.
+ *
+ * On Homebrew+Node, `npm i -g` installs to /opt/homebrew/lib/node_modules,
+ * but the actual binary symlink points to /opt/homebrew/Cellar/node/X.Y.Z/lib/node_modules.
+ * This function returns args to install to the Cellar path directly.
+ */
+export function globalInstallArgsForCellar(
+  manager: GlobalInstallManager,
+  spec: string,
+  pkgRoot: string,
+): string[] | null {
+  if (manager !== "npm") {
+    return null;
+  }
+
+  // Check if this is a Homebrew Cellar path
+  // Pattern: /opt/homebrew/Cellar/node/X.Y.Z/lib/node_modules/openclaw
+  const cellarMatch = pkgRoot.match(/^(\/opt\/homebrew\/Cellar\/node\/[^/]+\/lib\/node_modules)\//);
+  if (!cellarMatch) {
+    return null;
+  }
+
+  const cellarNodeModules = cellarMatch[1];
+  // Install using npm with --prefix to target the Cellar path
+  // We need to install in the parent of node_modules (the lib dir)
+  const cellarLib = path.dirname(cellarNodeModules);
+  return ["npm", "install", "--prefix", cellarLib, spec];
 }
 
 export async function cleanupGlobalRenameDirs(params: {
