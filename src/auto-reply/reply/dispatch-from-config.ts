@@ -353,7 +353,17 @@ export async function dispatchReplyFromConfig(params: {
             if (shouldRouteToOriginating) {
               await sendPayloadAsync(ttsPayload, context?.abortSignal, false);
             } else {
-              dispatcher.sendBlockReply(ttsPayload);
+              // Await actual delivery so the pipeline can track success/failure.
+              // Without this, the pipeline marks the payload as "sent" before the
+              // dispatcher finishes delivering, causing lost messages when delivery
+              // fails (the pipeline drops final payloads assuming they were streamed).
+              const result = dispatcher.sendBlockReplyAsync(ttsPayload);
+              if (result.enqueued) {
+                // Suppress unhandled rejection if the pipeline times out before delivery
+                // completes — the dispatcher's onError callback handles the actual error.
+                result.delivered.catch(() => {});
+                await result.delivered;
+              }
             }
           };
           return run();
