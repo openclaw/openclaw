@@ -255,8 +255,11 @@ export async function sendMessageTelegram(
   // Only include these if actually provided to keep API calls clean.
   const messageThreadId =
     opts.messageThreadId != null ? opts.messageThreadId : target.messageThreadId;
+  // Private chats (chatId > 0) don't support message_thread_id; use "dm" scope to skip it.
+  const numericChatId = Number(chatId);
+  const threadScope = numericChatId > 0 ? ("dm" as const) : ("forum" as const);
   const threadSpec =
-    messageThreadId != null ? { id: messageThreadId, scope: "forum" as const } : undefined;
+    messageThreadId != null ? { id: messageThreadId, scope: threadScope } : undefined;
   const threadIdParams = buildTelegramThreadParams(threadSpec);
   const threadParams: Record<string, unknown> = threadIdParams ? { ...threadIdParams } : {};
   const quoteText = opts.quoteText?.trim();
@@ -850,8 +853,11 @@ export async function sendStickerTelegram(
 
   const messageThreadId =
     opts.messageThreadId != null ? opts.messageThreadId : target.messageThreadId;
+  // Private chats (chatId > 0) don't support message_thread_id; use "dm" scope to skip it.
+  const numericChatId = Number(chatId);
+  const threadScope = numericChatId > 0 ? ("dm" as const) : ("forum" as const);
   const threadSpec =
-    messageThreadId != null ? { id: messageThreadId, scope: "forum" as const } : undefined;
+    messageThreadId != null ? { id: messageThreadId, scope: threadScope } : undefined;
   const threadIdParams = buildTelegramThreadParams(threadSpec);
   const threadParams: Record<string, number> = threadIdParams ? { ...threadIdParams } : {};
   if (opts.replyToMessageId != null) {
@@ -980,8 +986,11 @@ export async function sendPollTelegram(
 
   const messageThreadId =
     opts.messageThreadId != null ? opts.messageThreadId : target.messageThreadId;
+  // Private chats (chatId > 0) don't support message_thread_id; use "dm" scope to skip it.
+  const numericChatId = Number(chatId);
+  const threadScope = numericChatId > 0 ? ("dm" as const) : ("forum" as const);
   const threadSpec =
-    messageThreadId != null ? { id: messageThreadId, scope: "forum" as const } : undefined;
+    messageThreadId != null ? { id: messageThreadId, scope: threadScope } : undefined;
   const threadIdParams = buildTelegramThreadParams(threadSpec);
 
   // Build poll options as simple strings (Grammy accepts string[] or InputPollOption[])

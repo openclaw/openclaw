@@ -472,7 +472,9 @@ describe("sendMessageTelegram", () => {
   });
 
   it("retries without message_thread_id when Telegram reports missing thread", async () => {
-    const chatId = "123";
+    // Use negative chatId (group chat) to test thread fallback behavior.
+    // Private chats (chatId > 0) proactively skip message_thread_id.
+    const chatId = "-1001234567890";
     const threadErr = new Error("400: Bad Request: message thread not found");
     const sendMessage = vi
       .fn()
@@ -608,7 +610,9 @@ describe("sendMessageTelegram", () => {
   });
 
   it("retries media sends without message_thread_id when thread is missing", async () => {
-    const chatId = "123";
+    // Use negative chatId (group chat) to test thread fallback behavior.
+    // Private chats (chatId > 0) proactively skip message_thread_id.
+    const chatId = "-1001234567890";
     const threadErr = new Error("400: Bad Request: message thread not found");
     const sendPhoto = vi
       .fn()
@@ -706,7 +710,9 @@ describe("sendStickerTelegram", () => {
   });
 
   it("retries sticker sends without message_thread_id when thread is missing", async () => {
-    const chatId = "123";
+    // Use negative chatId (group chat) to test thread fallback behavior.
+    // Private chats (chatId > 0) proactively skip message_thread_id.
+    const chatId = "-1001234567890";
     const threadErr = new Error("400: Bad Request: message thread not found");
     const sendSticker = vi
       .fn()
@@ -730,6 +736,29 @@ describe("sendStickerTelegram", () => {
     });
     expect(sendSticker).toHaveBeenNthCalledWith(2, chatId, "fileId123", undefined);
     expect(res.messageId).toBe("109");
+  });
+
+  it("skips message_thread_id for private chats", async () => {
+    // Private chat (positive chatId) - should skip message_thread_id even if provided
+    const chatId = "123456789";
+    const sendSticker = vi.fn().mockResolvedValue({
+      message_id: 110,
+      chat: { id: chatId },
+    });
+    const api = { sendSticker } as unknown as {
+      sendSticker: typeof sendSticker;
+    };
+
+    const res = await sendStickerTelegram(chatId, "fileId123", {
+      token: "tok",
+      api,
+      messageThreadId: 99,
+    });
+
+    expect(res.messageId).toBe("110");
+    expect(sendSticker).toHaveBeenCalledTimes(1);
+    // message_thread_id should NOT be included for private chats
+    expect(sendSticker).toHaveBeenCalledWith(chatId, "fileId123", undefined);
   });
 
   it("includes reply_to_message_id for threaded replies", async () => {
