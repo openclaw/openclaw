@@ -12,6 +12,7 @@ import { Type } from "@sinclair/typebox";
 import { randomUUID } from "node:crypto";
 import OpenAI from "openai";
 import {
+  DEFAULT_CAPTURE_MAX_CHARS,
   MEMORY_CATEGORIES,
   type MemoryCategory,
   memoryConfigSchema,
@@ -194,8 +195,9 @@ const MEMORY_TRIGGERS = [
   /always|never|important/i,
 ];
 
-export function shouldCapture(text: string): boolean {
-  if (text.length < 10 || text.length > 500) {
+export function shouldCapture(text: string, options?: { maxChars?: number }): boolean {
+  const maxChars = options?.maxChars ?? DEFAULT_CAPTURE_MAX_CHARS;
+  if (text.length < 10 || text.length > maxChars) {
     return false;
   }
   // Skip injected context from memory recall
@@ -570,7 +572,9 @@ const memoryPlugin = {
           }
 
           // Filter for capturable content
-          const toCapture = texts.filter((text) => text && shouldCapture(text));
+          const toCapture = texts.filter(
+            (text) => text && shouldCapture(text, { maxChars: cfg.captureMaxChars }),
+          );
           if (toCapture.length === 0) {
             return;
           }
