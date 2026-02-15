@@ -288,12 +288,87 @@ export function ensurePageState(page: Page): PageState {
   return state;
 }
 
+const STEALTH_INIT_SCRIPT = `
+// --- Stealth patches: run before any page JS ---
+
+// Hide navigator.webdriver
+Object.defineProperty(navigator, 'webdriver', {
+  get: () => undefined,
+  configurable: true,
+});
+
+// Fake navigator.plugins (Chrome PDF Plugin, Chrome PDF Viewer, Native Client)
+Object.defineProperty(navigator, 'plugins', {
+  get: () => {
+    const plugins = [
+      { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
+      { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '' },
+      { name: 'Native Client', filename: 'internal-nacl-plugin', description: '' },
+    ];
+    const arr = Object.create(PluginArray.prototype);
+    plugins.forEach((p, i) => {
+      const plugin = Object.create(Plugin.prototype, {
+        name: { value: p.name, enumerable: true },
+        filename: { value: p.filename, enumerable: true },
+        description: { value: p.description, enumerable: true },
+        length: { value: 0, enumerable: true },
+      });
+      arr[i] = plugin;
+    });
+    Object.defineProperty(arr, 'length', { value: plugins.length });
+    arr.item = (i) => arr[i] || null;
+    arr.namedItem = (name) => Array.from({length: arr.length}, (_, i) => arr[i]).find(p => p.name === name) || null;
+    arr.refresh = () => {};
+    return arr;
+  },
+  configurable: true,
+});
+
+// Ensure navigator.languages returns a realistic array
+if (!navigator.languages || navigator.languages.length === 0) {
+  Object.defineProperty(navigator, 'languages', {
+    get: () => ['en-US', 'en'],
+    configurable: true,
+  });
+}
+
+// Ensure window.chrome.runtime exists
+if (!window.chrome) {
+  Object.defineProperty(window, 'chrome', {
+    value: {},
+    writable: true,
+    configurable: true,
+  });
+}
+if (!window.chrome.runtime) {
+  window.chrome.runtime = {
+    connect: () => {},
+    sendMessage: () => {},
+  };
+}
+
+// Patch Permissions.query for notifications
+const originalQuery = Permissions.prototype.query;
+Permissions.prototype.query = function(parameters) {
+  if (parameters.name === 'notifications') {
+    return Promise.resolve({ state: Notification.permission, onchange: null });
+  }
+  return originalQuery.call(this, parameters);
+};
+
+// Ensure iframe.contentWindow behaves normally for same-origin
+// (no override needed; just prevent detection of overridden property descriptors)
+`;
+
 function observeContext(context: BrowserContext) {
   if (observedContexts.has(context)) {
     return;
   }
   observedContexts.add(context);
   ensureContextState(context);
+
+  // Inject stealth patches before any page JS runs
+  context.addInitScript(STEALTH_INIT_SCRIPT).catch(() => {});
 
   for (const page of context.pages()) {
     ensurePageState(page);

@@ -93,13 +93,14 @@ services:
       openclaw-net:
         ipv4_address: 172.20.0.10
     environment:
-      OPENCLAW_BROWSER_HEADLESS: "1" # Enable headless mode
+      OPENCLAW_BROWSER_HEADLESS: "0" # Run headed into Xvfb for WAF bypass
       OPENCLAW_BROWSER_CDP_PORT: "9222"
       OPENCLAW_BROWSER_VNC_PORT: "5900"
       OPENCLAW_BROWSER_NOVNC_PORT: "6080"
-      OPENCLAW_BROWSER_ENABLE_NOVNC: "0" # Disable VNC in headless mode
+      OPENCLAW_BROWSER_ENABLE_NOVNC: "1" # Enable noVNC for remote viewing
       OPENCLAW_BROWSER_EXTRA_ARGS: "--remote-allow-origins=*" # Allow remote CDP connections
     ports:
       - "9222:9222" # Chrome DevTools Protocol port (accessible from Docker network)
+      - "6080:6080" # noVNC web viewer
     init: true
     restart: unless-stopped

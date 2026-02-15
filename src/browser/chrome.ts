@@ -195,7 +195,7 @@ export async function launchOpenClawChrome(
       "--disable-sync",
       "--disable-background-networking",
       "--disable-component-update",
-      "--disable-features=Translate,MediaRouter",
+      "--disable-features=Translate,MediaRouter,AutomationControlled,BackForwardCache",
       "--disable-session-crashed-bubble",
       "--hide-crash-restore-bubble",
       "--password-store=basic",
@@ -214,8 +214,9 @@ export async function launchOpenClawChrome(
       args.push("--disable-dev-shm-usage");
     }
 
-    // Stealth: hide navigator.webdriver from automation detection (#80)
+    // Stealth: hide automation markers from WAF detection
     args.push("--disable-blink-features=AutomationControlled");
+    args.push("--enable-features=NetworkService,NetworkServiceInProcess");
 
     // Always open a blank tab to ensure a target exists.
     args.push("about:blank");

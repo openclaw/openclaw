@@ -39,11 +39,14 @@ CHROME_ARGS+=(
   "--no-default-browser-check"
   "--disable-dev-shm-usage"
   "--disable-background-networking"
-  "--disable-features=TranslateUI"
+  "--disable-features=AutomationControlled,BackForwardCache,TranslateUI"
+  "--enable-features=NetworkService,NetworkServiceInProcess"
+  "--disable-blink-features=AutomationControlled"
   "--disable-breakpad"
   "--disable-crash-reporter"
   "--metrics-recording-only"
   "--no-sandbox"
+  "--window-size=1280,800"
 )
 
 # Add extra args if provided
@@ -52,7 +55,7 @@ if [[ -n "${OPENCLAW_BROWSER_EXTRA_ARGS:-}" ]]; then
   CHROME_ARGS+=("${EXTRA_ARGS[@]}")
 fi
 
-chromium "${CHROME_ARGS[@]}" about:blank &
+google-chrome-stable "${CHROME_ARGS[@]}" about:blank &
 
 for _ in $(seq 1 50); do
   if curl -sS --max-time 1 "http://127.0.0.1:${CHROME_CDP_PORT}/json/version" >/dev/null; then
