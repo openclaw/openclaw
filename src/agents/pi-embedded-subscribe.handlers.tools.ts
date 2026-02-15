@@ -62,7 +62,12 @@ export async function handleToolExecutionStart(
   // Flush pending block replies to preserve message boundaries before tool execution.
   ctx.flushBlockReplyBuffer();
   if (ctx.params.onBlockReplyFlush) {
-    void ctx.params.onBlockReplyFlush();
+    try {
+      await ctx.params.onBlockReplyFlush();
+    } catch {
+      // Best-effort: don't block tool execution if flush fails.
+      // The pipeline already has its own timeout (BLOCK_REPLY_SEND_TIMEOUT_MS).
+    }
   }
 
   const rawToolName = String(evt.toolName);
