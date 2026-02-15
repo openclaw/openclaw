@@ -121,7 +121,7 @@ export const memoryConfigSchema = {
         apiKey: resolveEnvVars(embedding.apiKey),
       },
       dbPath: typeof cfg.dbPath === "string" ? cfg.dbPath : DEFAULT_DB_PATH,
-      autoCapture: cfg.autoCapture !== false,
+      autoCapture: cfg.autoCapture === true,
       autoRecall: cfg.autoRecall !== false,
       captureMaxChars: captureMaxChars ?? DEFAULT_CAPTURE_MAX_CHARS,
     };

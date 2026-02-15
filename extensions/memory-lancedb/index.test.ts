@@ -120,6 +120,21 @@ describe("memory plugin e2e", () => {
     expect(config?.captureMaxChars).toBe(1800);
   });
 
+  test("config schema keeps autoCapture disabled by default", async () => {
+    const { default: memoryPlugin } = await import("./index.js");
+
+    const config = memoryPlugin.configSchema?.parse?.({
+      embedding: {
+        apiKey: OPENAI_API_KEY,
+        model: "text-embedding-3-small",
+      },
+      dbPath,
+    });
+
+    expect(config?.autoCapture).toBe(false);
+    expect(config?.autoRecall).toBe(true);
+  });
+
   test("shouldCapture applies real capture rules", async () => {
     const { shouldCapture } = await import("./index.js");
 
