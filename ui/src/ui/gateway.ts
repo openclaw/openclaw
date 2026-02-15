@@ -71,6 +71,10 @@ export class GatewayBrowserClient {
   private connectSent = false;
   private connectTimer: number | null = null;
   private backoffMs = 800;
+  // Heartbeat detection (mirrors Node.js client behavior)
+  private lastTick: number | null = null;
+  private tickIntervalMs = 30_000;
+  private tickTimer: number | null = null;
 
   constructor(private opts: GatewayBrowserClientOptions) {}
 
@@ -81,6 +85,7 @@ export class GatewayBrowserClient {
 
   stop() {
     this.closed = true;
+    this.stopTickWatch();
     this.ws?.close();
     this.ws = null;
     this.flushPending(new Error("gateway client stopped"));
@@ -100,6 +105,7 @@ export class GatewayBrowserClient {
     this.ws.addEventListener("close", (ev) => {
       const reason = String(ev.reason ?? "");
       this.ws = null;
+      this.stopTickWatch();
       this.flushPending(new Error(`gateway closed (${ev.code}): ${reason}`));
       this.opts.onClose?.({ code: ev.code, reason });
       this.scheduleReconnect();
@@ -123,6 +129,32 @@ export class GatewayBrowserClient {
       p.reject(err);
     }
     this.pending.clear();
+  }
+
+  /**
+   * Start tick monitoring to detect zombie WebSocket connections.
+   * If no tick event is received for 2x tickIntervalMs, force reconnect.
+   * Fixes: https://github.com/openclaw/openclaw/issues/14938
+   */
+  private startTickWatch() {
+    this.stopTickWatch();
+    const interval = Math.max(this.tickIntervalMs, 1_000);
+    this.tickTimer = window.setInterval(() => {
+      if (this.closed || this.lastTick === null) {
+        return;
+      }
+      if (Date.now() - this.lastTick > this.tickIntervalMs * 2) {
+        console.warn("[gateway] tick timeout - forcing reconnect");
+        this.ws?.close(4000, "tick timeout");
+      }
+    }, interval);
+  }
+
+  private stopTickWatch() {
+    if (this.tickTimer !== null) {
+      window.clearInterval(this.tickTimer);
+      this.tickTimer = null;
+    }
   }
 
   private async sendConnect() {
@@ -225,6 +257,10 @@ export class GatewayBrowserClient {
           });
         }
         this.backoffMs = 800;
+        // Extract tick interval from server policy and start heartbeat monitoring
+        this.tickIntervalMs = hello?.policy?.tickIntervalMs ?? 30_000;
+        this.lastTick = Date.now();
+        this.startTickWatch();
         this.opts.onHello?.(hello);
       })
       .catch(() => {
@@ -246,6 +282,12 @@ export class GatewayBrowserClient {
     const frame = parsed as { type?: unknown };
     if (frame.type === "event") {
       const evt = parsed as GatewayEventFrame;
+
+      // Track tick events for heartbeat detection
+      if (evt.event === "tick") {
+        this.lastTick = Date.now();
+      }
+
       if (evt.event === "connect.challenge") {
         const payload = evt.payload as { nonce?: unknown } | undefined;
         const nonce = payload && typeof payload.nonce === "string" ? payload.nonce : null;
