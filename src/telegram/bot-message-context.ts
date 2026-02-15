@@ -32,6 +32,7 @@ import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
 import { buildPairingReply } from "../pairing/pairing-messages.js";
 import { upsertChannelPairingRequest } from "../pairing/pairing-store.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../routing/session-key.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
@@ -497,6 +498,64 @@ export const buildTelegramMessageContext = async ({
             }
           : null,
       });
+
+      // Silent ingest: run hooks on non-mentioned messages
+      const ingestEnabled = topicConfig?.ingest ?? groupConfig?.ingest;
+      if (ingestEnabled && rawBody && rawBody.trim().length > 0) {
+        const hookRunner = getGlobalHookRunner();
+        if (hookRunner) {
+          const { sanitizeUserText } = await import("../utils/sanitize.js");
+
+          const groupLabelForHook = isGroup
+            ? buildGroupLabel(msg, chatId, resolvedThreadId)
+            : undefined;
+          const senderNameForHook = buildSenderName(msg);
+          const conversationLabelForHook = isGroup
+            ? (groupLabelForHook ?? `group:${chatId}`)
+            : buildSenderLabel(msg, senderId || chatId);
+
+          const messageIdForHook =
+            typeof msg.message_id === "number" ? String(msg.message_id) : undefined;
+          const sanitizedMetadata = {
+            to: String(chatId),
+            provider: "telegram",
+            surface: "telegram",
+            threadId: resolvedThreadId,
+            originatingChannel: "telegram",
+            originatingTo: String(chatId),
+            messageId: messageIdForHook,
+            senderId: senderId || undefined,
+            senderName: sanitizeUserText(senderNameForHook),
+            senderUsername: sanitizeUserText(senderUsername),
+          };
+
+          const HOOK_TIMEOUT_MS = 5000;
+          const timeoutPromise = new Promise<void>((_, reject) => {
+            setTimeout(() => reject(new Error("Hook timeout")), HOOK_TIMEOUT_MS);
+          });
+
+          void Promise.race([
+            hookRunner.runMessageIngest(
+              {
+                from: conversationLabelForHook,
+                content: rawBody,
+                timestamp: msg.date ? msg.date * 1000 : undefined,
+                metadata: sanitizedMetadata,
+              },
+              {
+                channelId: "telegram",
+                accountId: route.accountId,
+                conversationId: String(chatId),
+              },
+            ),
+            timeoutPromise,
+          ]).catch((err) => {
+            const errorMsg = err instanceof Error ? err.message : "Unknown error";
+            logVerbose(`telegram: ingest hook failed: ${errorMsg}`);
+          });
+        }
+      }
+
       return null;
     }
   }
