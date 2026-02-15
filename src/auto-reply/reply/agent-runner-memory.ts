@@ -161,10 +161,13 @@ export async function runMemoryFlushIfNeeded(params: {
         });
       },
     });
+    // Read from the store first (most up-to-date after any compaction in the
+    // preceding reply run), then fall back to the entry snapshot (#16984).
+    const storeCompactionCount = params.sessionKey
+      ? activeSessionStore?.[params.sessionKey]?.compactionCount
+      : undefined;
     let memoryFlushCompactionCount =
-      activeSessionEntry?.compactionCount ??
-      (params.sessionKey ? activeSessionStore?.[params.sessionKey]?.compactionCount : 0) ??
-      0;
+      storeCompactionCount ?? activeSessionEntry?.compactionCount ?? 0;
     if (memoryCompactionCompleted) {
       const nextCount = await incrementCompactionCount({
         sessionEntry: activeSessionEntry,
