@@ -14,7 +14,8 @@ import {
 } from "../../routing/session-key.js";
 import {
   formatDurationCompact,
-  formatTokenShort,
+  formatTokenUsageDisplay,
+  resolveTotalTokens,
   truncateLine,
 } from "../../shared/subagents-format.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
@@ -136,55 +137,6 @@ function resolveModelDisplay(entry?: SessionEntry, fallbackModel?: string) {
     return modelRef.slice(slash + 1);
   }
   return modelRef;
-}
-
-function resolveTotalTokens(entry?: SessionEntry) {
-  if (!entry) {
-    return undefined;
-  }
-  if (typeof entry.totalTokens === "number" && Number.isFinite(entry.totalTokens)) {
-    return entry.totalTokens;
-  }
-  const input = typeof entry.inputTokens === "number" ? entry.inputTokens : 0;
-  const output = typeof entry.outputTokens === "number" ? entry.outputTokens : 0;
-  const total = input + output;
-  return total > 0 ? total : undefined;
-}
-
-function resolveIoTokens(entry?: SessionEntry) {
-  if (!entry) {
-    return undefined;
-  }
-  const input =
-    typeof entry.inputTokens === "number" && Number.isFinite(entry.inputTokens)
-      ? entry.inputTokens
-      : 0;
-  const output =
-    typeof entry.outputTokens === "number" && Number.isFinite(entry.outputTokens)
-      ? entry.outputTokens
-      : 0;
-  const total = input + output;
-  if (total <= 0) {
-    return undefined;
-  }
-  return { input, output, total };
-}
-
-function resolveUsageDisplay(entry?: SessionEntry) {
-  const io = resolveIoTokens(entry);
-  const promptCache = resolveTotalTokens(entry);
-  const parts: string[] = [];
-  if (io) {
-    const input = formatTokenShort(io.input) ?? "0";
-    const output = formatTokenShort(io.output) ?? "0";
-    parts.push(`tokens ${formatTokenShort(io.total)} (in ${input} / out ${output})`);
-  } else if (typeof promptCache === "number" && promptCache > 0) {
-    parts.push(`tokens ${formatTokenShort(promptCache)} prompt/cache`);
-  }
-  if (typeof promptCache === "number" && io && promptCache > io.total) {
-    parts.push(`prompt/cache ${formatTokenShort(promptCache)}`);
-  }
-  return parts.join(", ");
 }
 
 function resolveSubagentTarget(
@@ -470,7 +422,7 @@ export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAge
               cache,
             }).entry;
             const totalTokens = resolveTotalTokens(sessionEntry);
-            const usageText = resolveUsageDisplay(sessionEntry);
+            const usageText = formatTokenUsageDisplay(sessionEntry);
             const status = resolveRunStatus(entry);
             const runtime = formatDurationCompact(now - (entry.startedAt ?? entry.createdAt));
             const label = truncateLine(resolveRunLabel(entry), 48);
@@ -501,7 +453,7 @@ export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAge
               cache,
             }).entry;
             const totalTokens = resolveTotalTokens(sessionEntry);
-            const usageText = resolveUsageDisplay(sessionEntry);
+            const usageText = formatTokenUsageDisplay(sessionEntry);
             const status = resolveRunStatus(entry);
             const runtime = formatDurationCompact(
               (entry.endedAt ?? now) - (entry.startedAt ?? entry.createdAt),
