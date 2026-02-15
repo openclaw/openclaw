@@ -7,7 +7,9 @@ import type { ProcessSession, SessionStdin } from "./bash-process-registry.js";
 import type { ExecToolDetails } from "./bash-tools.exec.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
+import { mergePathPrepend } from "../infra/path-prepend.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
+export { applyPathPrepend, normalizePathPrepend } from "../infra/path-prepend.js";
 import { logWarn } from "../logger.js";
 import { formatSpawnError, spawnWithFallback } from "../process/spawn-utils.js";
 import {
@@ -227,63 +229,6 @@ function compactNotifyOutput(value: string, maxChars = DEFAULT_NOTIFY_SNIPPET_CH
   return `${normalized.slice(0, safe)}…`;
 }
 
-export function normalizePathPrepend(entries?: string[]) {
-  if (!Array.isArray(entries)) {
-    return [];
-  }
-  const seen = new Set<string>();
-  const normalized: string[] = [];
-  for (const entry of entries) {
-    if (typeof entry !== "string") {
-      continue;
-    }
-    const trimmed = entry.trim();
-    if (!trimmed || seen.has(trimmed)) {
-      continue;
-    }
-    seen.add(trimmed);
-    normalized.push(trimmed);
-  }
-  return normalized;
-}
-
-function mergePathPrepend(existing: string | undefined, prepend: string[]) {
-  if (prepend.length === 0) {
-    return existing;
-  }
-  const partsExisting = (existing ?? "")
-    .split(path.delimiter)
-    .map((part) => part.trim())
-    .filter(Boolean);
-  const merged: string[] = [];
-  const seen = new Set<string>();
-  for (const part of [...prepend, ...partsExisting]) {
-    if (seen.has(part)) {
-      continue;
-    }
-    seen.add(part);
-    merged.push(part);
-  }
-  return merged.join(path.delimiter);
-}
-
-export function applyPathPrepend(
-  env: Record<string, string>,
-  prepend: string[],
-  options?: { requireExisting?: boolean },
-) {
-  if (prepend.length === 0) {
-    return;
-  }
-  if (options?.requireExisting && !env.PATH) {
-    return;
-  }
-  const merged = mergePathPrepend(env.PATH, prepend);
-  if (merged) {
-    env.PATH = merged;
-  }
-}
-
 export function applyShellPath(env: Record<string, string>, shellPath?: string | null) {
   if (!shellPath) {
     return;
@@ -379,6 +324,20 @@ export async function runExecProcess(opts: {
   let stdin: SessionStdin | undefined;
   const execCommand = opts.execCommand ?? opts.command;
 
+  const spawnFallbacks = [
+    {
+      label: "no-detach",
+      options: { detached: false },
+    },
+  ];
+
+  const handleSpawnFallback = (err: unknown, fallback: { label: string }) => {
+    const errText = formatSpawnError(err);
+    const warning = `Warning: spawn failed (${errText}); retrying with ${fallback.label}.`;
+    logWarn(`exec: spawn failed (${errText}); retrying with ${fallback.label}.`);
+    opts.warnings.push(warning);
+  };
+
   // `exec` does not currently accept tool-provided stdin content. For non-PTY runs,
   // keeping stdin open can cause commands like `wc -l` (or safeBins-hardened segments)
   // to block forever waiting for input, leading to accidental backgrounding.
@@ -414,18 +373,8 @@ export async function runExecProcess(opts: {
         stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true,
       },
-      fallbacks: [
-        {
-          label: "no-detach",
-          options: { detached: false },
-        },
-      ],
-      onFallback: (err, fallback) => {
-        const errText = formatSpawnError(err);
-        const warning = `Warning: spawn failed (${errText}); retrying with ${fallback.label}.`;
-        logWarn(`exec: spawn failed (${errText}); retrying with ${fallback.label}.`);
-        opts.warnings.push(warning);
-      },
+      fallbacks: spawnFallbacks,
+      onFallback: handleSpawnFallback,
     });
     child = spawned as ChildProcessWithoutNullStreams;
     stdin = child.stdin;
@@ -481,18 +430,8 @@ export async function runExecProcess(opts: {
           stdio: ["pipe", "pipe", "pipe"],
           windowsHide: true,
         },
-        fallbacks: [
-          {
-            label: "no-detach",
-            options: { detached: false },
-          },
-        ],
-        onFallback: (fallbackErr, fallback) => {
-          const fallbackText = formatSpawnError(fallbackErr);
-          const fallbackWarning = `Warning: spawn failed (${fallbackText}); retrying with ${fallback.label}.`;
-          logWarn(`exec: spawn failed (${fallbackText}); retrying with ${fallback.label}.`);
-          opts.warnings.push(fallbackWarning);
-        },
+        fallbacks: spawnFallbacks,
+        onFallback: handleSpawnFallback,
       });
       child = spawned as ChildProcessWithoutNullStreams;
       stdin = child.stdin;
@@ -508,18 +447,8 @@ export async function runExecProcess(opts: {
         stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true,
       },
-      fallbacks: [
-        {
-          label: "no-detach",
-          options: { detached: false },
-        },
-      ],
-      onFallback: (err, fallback) => {
-        const errText = formatSpawnError(err);
-        const warning = `Warning: spawn failed (${errText}); retrying with ${fallback.label}.`;
-        logWarn(`exec: spawn failed (${errText}); retrying with ${fallback.label}.`);
-        opts.warnings.push(warning);
-      },
+      fallbacks: spawnFallbacks,
+      onFallback: handleSpawnFallback,
     });
     child = spawned as ChildProcessWithoutNullStreams;
     stdin = child.stdin;

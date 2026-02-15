@@ -1,16 +1,13 @@
 import crypto from "node:crypto";
-import path from "node:path";
 import { resolveQueueSettings } from "../auto-reply/reply/queue.js";
 import { loadConfig } from "../config/config.js";
 import {
   loadSessionStore,
   resolveAgentIdFromSessionKey,
   resolveMainSessionKey,
-  resolveSessionFilePath,
   resolveStorePath,
 } from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
-import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import { normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import {
@@ -25,10 +22,28 @@ import {
   waitForEmbeddedPiRunEnd,
 } from "./pi-embedded.js";
 import { type AnnounceQueueItem, enqueueAnnounce } from "./subagent-announce-queue.js";
+import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { readLatestAssistantReply } from "./tools/agent-step.js";
 
+function formatDurationShort(valueMs?: number) {
+  if (!valueMs || !Number.isFinite(valueMs) || valueMs <= 0) {
+    return "n/a";
+  }
+  const totalSeconds = Math.round(valueMs / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) {
+    return `${hours}h${minutes}m`;
+  }
+  if (minutes > 0) {
+    return `${minutes}m${seconds}s`;
+  }
+  return `${seconds}s`;
+}
+
 function formatTokenCount(value?: number) {
-  if (!value || !Number.isFinite(value)) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
     return "0";
   }
   if (value >= 1_000_000) {
@@ -40,65 +55,44 @@ function formatTokenCount(value?: number) {
   return String(Math.round(value));
 }
 
-function formatUsd(value?: number) {
-  if (value === undefined || !Number.isFinite(value)) {
-    return undefined;
-  }
-  if (value >= 1) {
-    return `$${value.toFixed(2)}`;
-  }
-  if (value >= 0.01) {
-    return `$${value.toFixed(2)}`;
-  }
-  return `$${value.toFixed(4)}`;
-}
-
-function resolveModelCost(params: {
-  provider?: string;
-  model?: string;
-  config: ReturnType<typeof loadConfig>;
-}):
-  | {
-      input: number;
-      output: number;
-      cacheRead: number;
-      cacheWrite: number;
-    }
-  | undefined {
-  const provider = params.provider?.trim();
-  const model = params.model?.trim();
-  if (!provider || !model) {
-    return undefined;
-  }
-  const models = params.config.models?.providers?.[provider]?.models ?? [];
-  const entry = models.find((candidate) => candidate.id === model);
-  return entry?.cost;
-}
-
-async function waitForSessionUsage(params: { sessionKey: string }) {
+async function buildCompactAnnounceStatsLine(params: {
+  sessionKey: string;
+  startedAt?: number;
+  endedAt?: number;
+}) {
   const cfg = loadConfig();
   const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
   let entry = loadSessionStore(storePath)[params.sessionKey];
-  if (!entry) {
-    return { entry, storePath };
-  }
-  const hasTokens = () =>
-    entry &&
-    (typeof entry.totalTokens === "number" ||
-      typeof entry.inputTokens === "number" ||
-      typeof entry.outputTokens === "number");
-  if (hasTokens()) {
-    return { entry, storePath };
-  }
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    entry = loadSessionStore(storePath)[params.sessionKey];
-    if (hasTokens()) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const hasTokenData =
+      typeof entry?.inputTokens === "number" ||
+      typeof entry?.outputTokens === "number" ||
+      typeof entry?.totalTokens === "number";
+    if (hasTokenData) {
       break;
     }
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    entry = loadSessionStore(storePath)[params.sessionKey];
   }
-  return { entry, storePath };
+
+  const input = typeof entry?.inputTokens === "number" ? entry.inputTokens : 0;
+  const output = typeof entry?.outputTokens === "number" ? entry.outputTokens : 0;
+  const ioTotal = input + output;
+  const promptCache = typeof entry?.totalTokens === "number" ? entry.totalTokens : undefined;
+  const runtimeMs =
+    typeof params.startedAt === "number" && typeof params.endedAt === "number"
+      ? Math.max(0, params.endedAt - params.startedAt)
+      : undefined;
+
+  const parts = [
+    `runtime ${formatDurationShort(runtimeMs)}`,
+    `tokens ${formatTokenCount(ioTotal)} (in ${formatTokenCount(input)} / out ${formatTokenCount(output)})`,
+  ];
+  if (typeof promptCache === "number" && promptCache > ioTotal) {
+    parts.push(`prompt/cache ${formatTokenCount(promptCache)}`);
+  }
+  return `Stats: ${parts.join(" • ")}`;
 }
 
 type DeliveryContextSource = Parameters<typeof deliveryContextFromSession>[0];
@@ -114,6 +108,8 @@ function resolveAnnounceOrigin(
 }
 
 async function sendAnnounce(item: AnnounceQueueItem) {
+  const requesterDepth = getSubagentDepthFromSessionStore(item.sessionKey);
+  const requesterIsSubagent = requesterDepth >= 1;
   const origin = item.origin;
   const threadId =
     origin?.threadId != null && origin.threadId !== "" ? String(origin.threadId) : undefined;
@@ -122,15 +118,14 @@ async function sendAnnounce(item: AnnounceQueueItem) {
     params: {
       sessionKey: item.sessionKey,
       message: item.prompt,
-      channel: origin?.channel,
-      accountId: origin?.accountId,
-      to: origin?.to,
-      threadId,
-      deliver: true,
+      channel: requesterIsSubagent ? undefined : origin?.channel,
+      accountId: requesterIsSubagent ? undefined : origin?.accountId,
+      to: requesterIsSubagent ? undefined : origin?.to,
+      threadId: requesterIsSubagent ? undefined : threadId,
+      deliver: !requesterIsSubagent,
       idempotencyKey: crypto.randomUUID(),
     },
-    expectFinal: true,
-    timeoutMs: 60_000,
+    timeoutMs: 15_000,
   });
 }
 
@@ -219,74 +214,6 @@ async function maybeQueueSubagentAnnounce(params: {
   return "none";
 }
 
-async function buildSubagentStatsLine(params: {
-  sessionKey: string;
-  startedAt?: number;
-  endedAt?: number;
-}) {
-  const cfg = loadConfig();
-  const { entry, storePath } = await waitForSessionUsage({
-    sessionKey: params.sessionKey,
-  });
-
-  const sessionId = entry?.sessionId;
-  const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
-  let transcriptPath: string | undefined;
-  if (sessionId && storePath) {
-    try {
-      transcriptPath = resolveSessionFilePath(sessionId, entry, {
-        agentId,
-        sessionsDir: path.dirname(storePath),
-      });
-    } catch {
-      transcriptPath = undefined;
-    }
-  }
-
-  const input = entry?.inputTokens;
-  const output = entry?.outputTokens;
-  const total =
-    entry?.totalTokens ??
-    (typeof input === "number" && typeof output === "number" ? input + output : undefined);
-  const runtimeMs =
-    typeof params.startedAt === "number" && typeof params.endedAt === "number"
-      ? Math.max(0, params.endedAt - params.startedAt)
-      : undefined;
-
-  const provider = entry?.modelProvider;
-  const model = entry?.model;
-  const costConfig = resolveModelCost({ provider, model, config: cfg });
-  const cost =
-    costConfig && typeof input === "number" && typeof output === "number"
-      ? (input * costConfig.input + output * costConfig.output) / 1_000_000
-      : undefined;
-
-  const parts: string[] = [];
-  const runtime = formatDurationCompact(runtimeMs);
-  parts.push(`runtime ${runtime ?? "n/a"}`);
-  if (typeof total === "number") {
-    const inputText = typeof input === "number" ? formatTokenCount(input) : "n/a";
-    const outputText = typeof output === "number" ? formatTokenCount(output) : "n/a";
-    const totalText = formatTokenCount(total);
-    parts.push(`tokens ${totalText} (in ${inputText} / out ${outputText})`);
-  } else {
-    parts.push("tokens n/a");
-  }
-  const costText = formatUsd(cost);
-  if (costText) {
-    parts.push(`est ${costText}`);
-  }
-  parts.push(`sessionKey ${params.sessionKey}`);
-  if (sessionId) {
-    parts.push(`sessionId ${sessionId}`);
-  }
-  if (transcriptPath) {
-    parts.push(`transcript ${transcriptPath}`);
-  }
-
-  return `Stats: ${parts.join(" \u2022 ")}`;
-}
-
 function loadSessionEntryByKey(sessionKey: string) {
   const cfg = loadConfig();
   const agentId = resolveAgentIdFromSessionKey(sessionKey);
@@ -323,49 +250,85 @@ export function buildSubagentSystemPrompt(params: {
   childSessionKey: string;
   label?: string;
   task?: string;
+  /** Depth of the child being spawned (1 = sub-agent, 2 = sub-sub-agent). */
+  childDepth?: number;
+  /** Config value: max allowed spawn depth. */
+  maxSpawnDepth?: number;
 }) {
   const taskText =
     typeof params.task === "string" && params.task.trim()
       ? params.task.replace(/\s+/g, " ").trim()
       : "{{TASK_DESCRIPTION}}";
+  const childDepth = typeof params.childDepth === "number" ? params.childDepth : 1;
+  const maxSpawnDepth = typeof params.maxSpawnDepth === "number" ? params.maxSpawnDepth : 1;
+  const canSpawn = childDepth < maxSpawnDepth;
+  const parentLabel = childDepth >= 2 ? "parent orchestrator" : "main agent";
+
   const lines = [
     "# Subagent Context",
     "",
-    "You are a **subagent** spawned by the main agent for a specific task.",
+    `You are a **subagent** spawned by the ${parentLabel} for a specific task.`,
     "",
     "## Your Role",
     `- You were created to handle: ${taskText}`,
     "- Complete this task. That's your entire purpose.",
-    "- You are NOT the main agent. Don't try to be.",
+    `- You are NOT the ${parentLabel}. Don't try to be.`,
     "",
     "## Rules",
     "1. **Stay focused** - Do your assigned task, nothing else",
-    "2. **Complete the task** - Your final message will be automatically reported to the main agent",
+    `2. **Complete the task** - Your final message will be automatically reported to the ${parentLabel}`,
     "3. **Don't initiate** - No heartbeats, no proactive actions, no side quests",
     "4. **Be ephemeral** - You may be terminated after task completion. That's fine.",
+    "5. **Trust push-based completion** - Descendant results are auto-announced back to you; do not busy-poll for status.",
     "",
     "## Output Format",
     "When complete, your final response should include:",
-    "- What you accomplished or found",
-    "- Any relevant details the main agent should know",
+    `- What you accomplished or found`,
+    `- Any relevant details the ${parentLabel} should know`,
     "- Keep it concise but informative",
     "",
     "## What You DON'T Do",
-    "- NO user conversations (that's main agent's job)",
+    `- NO user conversations (that's ${parentLabel}'s job)`,
     "- NO external messages (email, tweets, etc.) unless explicitly tasked with a specific recipient/channel",
     "- NO cron jobs or persistent state",
-    "- NO pretending to be the main agent",
-    "- Only use the `message` tool when explicitly instructed to contact a specific external recipient; otherwise return plain text and let the main agent deliver it",
+    `- NO pretending to be the ${parentLabel}`,
+    `- Only use the \`message\` tool when explicitly instructed to contact a specific external recipient; otherwise return plain text and let the ${parentLabel} deliver it`,
     "",
+  ];
+
+  if (canSpawn) {
+    lines.push(
+      "## Sub-Agent Spawning",
+      "You CAN spawn your own sub-agents for parallel or complex work using `sessions_spawn`.",
+      "Use the `subagents` tool to steer, kill, or do an on-demand status check for your spawned sub-agents.",
+      "Your sub-agents will announce their results back to you automatically (not to the main agent).",
+      "Default workflow: spawn work, continue orchestrating, and wait for auto-announced completions.",
+      "Do NOT repeatedly poll `subagents list` in a loop unless you are actively debugging or intervening.",
+      "Coordinate their work and synthesize results before reporting back.",
+      "",
+    );
+  } else if (childDepth >= 2) {
+    lines.push(
+      "## Sub-Agent Spawning",
+      "You are a leaf worker and CANNOT spawn further sub-agents. Focus on your assigned task.",
+      "",
+    );
+  }
+
+  lines.push(
     "## Session Context",
-    params.label ? `- Label: ${params.label}` : undefined,
-    params.requesterSessionKey ? `- Requester session: ${params.requesterSessionKey}.` : undefined,
-    params.requesterOrigin?.channel
-      ? `- Requester channel: ${params.requesterOrigin.channel}.`
-      : undefined,
-    `- Your session: ${params.childSessionKey}.`,
+    ...[
+      params.label ? `- Label: ${params.label}` : undefined,
+      params.requesterSessionKey
+        ? `- Requester session: ${params.requesterSessionKey}.`
+        : undefined,
+      params.requesterOrigin?.channel
+        ? `- Requester channel: ${params.requesterOrigin.channel}.`
+        : undefined,
+      `- Your session: ${params.childSessionKey}.`,
+    ].filter((line): line is string => line !== undefined),
     "",
-  ].filter((line): line is string => line !== undefined);
+  );
   return lines.join("\n");
 }
 
@@ -375,6 +338,21 @@ export type SubagentRunOutcome = {
 };
 
 export type SubagentAnnounceType = "subagent task" | "cron job";
+
+function buildAnnounceReplyInstruction(params: {
+  remainingActiveSubagentRuns: number;
+  requesterIsSubagent: boolean;
+  announceType: SubagentAnnounceType;
+}): string {
+  if (params.remainingActiveSubagentRuns > 0) {
+    const activeRunsLabel = params.remainingActiveSubagentRuns === 1 ? "run" : "runs";
+    return `There are still ${params.remainingActiveSubagentRuns} active subagent ${activeRunsLabel} for this session. If they are part of the same workflow, wait for the remaining results before sending a user update. If they are unrelated, respond normally using only the result above.`;
+  }
+  if (params.requesterIsSubagent) {
+    return "Convert this completion into a concise internal orchestration update for your parent agent in your own words. Keep this internal context private (don't mention system/log/stats/session details or announce type). If this result is duplicate or no update is needed, reply ONLY: NO_REPLY.";
+  }
+  return `A completed ${params.announceType} is ready for user delivery. Convert the result above into your normal assistant voice and send that user-facing update now. Keep this internal context private (don't mention system/log/stats/session details or announce type), and do not copy the system message verbatim. Reply ONLY: NO_REPLY if this exact result was already delivered to the user in this same turn.`;
+}
 
 export async function runSubagentAnnounceFlow(params: {
   childSessionKey: string;
@@ -396,7 +374,8 @@ export async function runSubagentAnnounceFlow(params: {
   let didAnnounce = false;
   let shouldDeleteChildSession = params.cleanup === "delete";
   try {
-    const requesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
+    let targetRequesterSessionKey = params.requesterSessionKey;
+    let targetRequesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
     const childSessionId = (() => {
       const entry = loadSessionEntryByKey(params.childSessionKey);
       return typeof entry?.sessionId === "string" && entry.sessionId.trim()
@@ -478,12 +457,19 @@ export async function runSubagentAnnounceFlow(params: {
       outcome = { status: "unknown" };
     }
 
-    // Build stats
-    const statsLine = await buildSubagentStatsLine({
-      sessionKey: params.childSessionKey,
-      startedAt: params.startedAt,
-      endedAt: params.endedAt,
-    });
+    let activeChildDescendantRuns = 0;
+    try {
+      const { countActiveDescendantRuns } = await import("./subagent-registry.js");
+      activeChildDescendantRuns = Math.max(0, countActiveDescendantRuns(params.childSessionKey));
+    } catch {
+      // Best-effort only; fall back to direct announce behavior when unavailable.
+    }
+    if (activeChildDescendantRuns > 0) {
+      // The finished run still has active descendant subagents. Defer announcing
+      // this run until descendants settle so we avoid posting in-progress updates.
+      shouldDeleteChildSession = false;
+      return false;
+    }
 
     // Build status label
     const statusLabel =
@@ -498,24 +484,70 @@ export async function runSubagentAnnounceFlow(params: {
     // Build instructional message for main agent
     const announceType = params.announceType ?? "subagent task";
     const taskLabel = params.label || params.task || "task";
-    const triggerMessage = [
-      `A ${announceType} "${taskLabel}" just ${statusLabel}.`,
+    const announceSessionId = childSessionId || "unknown";
+    const findings = reply || "(no output)";
+    let triggerMessage = "";
+
+    let requesterDepth = getSubagentDepthFromSessionStore(targetRequesterSessionKey);
+    let requesterIsSubagent = requesterDepth >= 1;
+    // If the requester subagent has already finished, bubble the announce to its
+    // requester (typically main) so descendant completion is not silently lost.
+    if (requesterIsSubagent) {
+      const { isSubagentSessionRunActive, resolveRequesterForChildSession } =
+        await import("./subagent-registry.js");
+      if (!isSubagentSessionRunActive(targetRequesterSessionKey)) {
+        const fallback = resolveRequesterForChildSession(targetRequesterSessionKey);
+        if (!fallback?.requesterSessionKey) {
+          // Without a requester fallback we cannot safely deliver this nested
+          // completion. Keep cleanup retryable so a later registry restore can
+          // recover and re-announce instead of silently dropping the result.
+          shouldDeleteChildSession = false;
+          return false;
+        }
+        targetRequesterSessionKey = fallback.requesterSessionKey;
+        targetRequesterOrigin =
+          normalizeDeliveryContext(fallback.requesterOrigin) ?? targetRequesterOrigin;
+        requesterDepth = getSubagentDepthFromSessionStore(targetRequesterSessionKey);
+        requesterIsSubagent = requesterDepth >= 1;
+      }
+    }
+
+    let remainingActiveSubagentRuns = 0;
+    try {
+      const { countActiveDescendantRuns } = await import("./subagent-registry.js");
+      remainingActiveSubagentRuns = Math.max(
+        0,
+        countActiveDescendantRuns(targetRequesterSessionKey),
+      );
+    } catch {
+      // Best-effort only; fall back to default announce instructions when unavailable.
+    }
+    const replyInstruction = buildAnnounceReplyInstruction({
+      remainingActiveSubagentRuns,
+      requesterIsSubagent,
+      announceType,
+    });
+    const statsLine = await buildCompactAnnounceStatsLine({
+      sessionKey: params.childSessionKey,
+      startedAt: params.startedAt,
+      endedAt: params.endedAt,
+    });
+    triggerMessage = [
+      `[System Message] [sessionId: ${announceSessionId}] A ${announceType} "${taskLabel}" just ${statusLabel}.`,
       "",
-      "Findings:",
-      reply || "(no output)",
+      "Result:",
+      findings,
       "",
       statsLine,
       "",
-      "Summarize this naturally for the user. Keep it brief (1-2 sentences). Flow it into the conversation naturally.",
-      `Do not mention technical details like tokens, stats, or that this was a ${announceType}.`,
-      "You can respond with NO_REPLY if no announcement is needed (e.g., internal task with no user-facing result).",
+      replyInstruction,
     ].join("\n");
 
     const queued = await maybeQueueSubagentAnnounce({
-      requesterSessionKey: params.requesterSessionKey,
+      requesterSessionKey: targetRequesterSessionKey,
       triggerMessage,
       summaryLine: taskLabel,
-      requesterOrigin,
+      requesterOrigin: targetRequesterOrigin,
     });
     if (queued === "steered") {
       didAnnounce = true;
@@ -526,29 +558,30 @@ export async function runSubagentAnnounceFlow(params: {
       return true;
     }
 
-    // Send to main agent - it will respond in its own voice
-    let directOrigin = requesterOrigin;
-    if (!directOrigin) {
-      const { entry } = loadRequesterSessionEntry(params.requesterSessionKey);
+    // Send to the requester session. For nested subagents this is an internal
+    // follow-up injection (deliver=false) so the orchestrator receives it.
+    let directOrigin = targetRequesterOrigin;
+    if (!requesterIsSubagent && !directOrigin) {
+      const { entry } = loadRequesterSessionEntry(targetRequesterSessionKey);
       directOrigin = deliveryContextFromSession(entry);
     }
     await callGateway({
       method: "agent",
       params: {
-        sessionKey: params.requesterSessionKey,
+        sessionKey: targetRequesterSessionKey,
         message: triggerMessage,
-        deliver: true,
-        channel: directOrigin?.channel,
-        accountId: directOrigin?.accountId,
-        to: directOrigin?.to,
+        deliver: !requesterIsSubagent,
+        channel: requesterIsSubagent ? undefined : directOrigin?.channel,
+        accountId: requesterIsSubagent ? undefined : directOrigin?.accountId,
+        to: requesterIsSubagent ? undefined : directOrigin?.to,
         threadId:
-          directOrigin?.threadId != null && directOrigin.threadId !== ""
+          !requesterIsSubagent && directOrigin?.threadId != null && directOrigin.threadId !== ""
             ? String(directOrigin.threadId)
             : undefined,
         idempotencyKey: crypto.randomUUID(),
       },
       expectFinal: true,
-      timeoutMs: 60_000,
+      timeoutMs: 15_000,
     });
 
     didAnnounce = true;

@@ -2,13 +2,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
+import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 
-// Avoid exporting inferred vitest mock types (TS2742 under pnpm + d.ts emit).
 export type NoopLogger = {
-  debug: ReturnType<typeof vi.fn>;
-  info: ReturnType<typeof vi.fn>;
-  warn: ReturnType<typeof vi.fn>;
-  error: ReturnType<typeof vi.fn>;
+  debug: MockFn;
+  info: MockFn;
+  warn: MockFn;
+  error: MockFn;
 };
 
 export function createNoopLogger(): NoopLogger {

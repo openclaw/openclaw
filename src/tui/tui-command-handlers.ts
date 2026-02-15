@@ -436,7 +436,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           state.sessionInfo.totalTokens = null;
           tui.requestRender();
 
-          await client.resetSession(state.currentSessionKey);
+          await client.resetSession(state.currentSessionKey, name);
           chatLog.addSystem(`session ${state.currentSessionKey} reset`);
           await loadHistory();
         } catch (err) {

@@ -33,4 +33,22 @@ describe("qmd scope", () => {
     expect(isQmdScopeAllowed(scope, "agent:agent-1:workspace:group:123")).toBe(true);
     expect(isQmdScopeAllowed(scope, "agent:agent-1:other:group:123")).toBe(false);
   });
+
+  it("supports rawKeyPrefix matches for agent-prefixed keys", () => {
+    const scope: ResolvedQmdConfig["scope"] = {
+      default: "allow",
+      rules: [{ action: "deny", match: { rawKeyPrefix: "agent:main:discord:" } }],
+    };
+    expect(isQmdScopeAllowed(scope, "agent:main:discord:channel:c123")).toBe(false);
+    expect(isQmdScopeAllowed(scope, "agent:main:slack:channel:c123")).toBe(true);
+  });
+
+  it("keeps legacy agent-prefixed keyPrefix rules working", () => {
+    const scope: ResolvedQmdConfig["scope"] = {
+      default: "allow",
+      rules: [{ action: "deny", match: { keyPrefix: "agent:main:discord:" } }],
+    };
+    expect(isQmdScopeAllowed(scope, "agent:main:discord:channel:c123")).toBe(false);
+    expect(isQmdScopeAllowed(scope, "agent:main:slack:channel:c123")).toBe(true);
+  });
 });

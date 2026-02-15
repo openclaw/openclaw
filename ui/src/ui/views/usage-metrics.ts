@@ -1,4 +1,5 @@
 import { html } from "lit";
+import { buildUsageAggregateTail } from "../../../../src/shared/usage-aggregates.js";
 import { UsageSessionEntry, UsageTotals, UsageAggregates } from "./usageTypes.ts";
 
 const CHARS_PER_TOKEN = 4;
@@ -494,6 +495,14 @@ const buildAggregatesFromSessions = (
     }
   }
 
+  const tail = buildUsageAggregateTail({
+    byChannelMap: channelMap,
+    latencyTotals,
+    dailyLatencyMap,
+    modelDailyMap,
+    dailyMap,
+  });
+
   return {
     messages,
     tools: {
@@ -512,33 +521,7 @@ const buildAggregatesFromSessions = (
     byAgent: Array.from(agentMap.entries())
       .map(([agentId, totals]) => ({ agentId, totals }))
       .toSorted((a, b) => b.totals.totalCost - a.totals.totalCost),
-    byChannel: Array.from(channelMap.entries())
-      .map(([channel, totals]) => ({ channel, totals }))
-      .toSorted((a, b) => b.totals.totalCost - a.totals.totalCost),
-    latency:
-      latencyTotals.count > 0
-        ? {
-            count: latencyTotals.count,
-            avgMs: latencyTotals.sum / latencyTotals.count,
-            minMs: latencyTotals.min === Number.POSITIVE_INFINITY ? 0 : latencyTotals.min,
-            maxMs: latencyTotals.max,
-            p95Ms: latencyTotals.p95Max,
-          }
-        : undefined,
-    dailyLatency: Array.from(dailyLatencyMap.values())
-      .map((entry) => ({
-        date: entry.date,
-        count: entry.count,
-        avgMs: entry.count ? entry.sum / entry.count : 0,
-        minMs: entry.min === Number.POSITIVE_INFINITY ? 0 : entry.min,
-        maxMs: entry.max,
-        p95Ms: entry.p95Max,
-      }))
-      .toSorted((a, b) => a.date.localeCompare(b.date)),
-    modelDaily: Array.from(modelDailyMap.values()).toSorted(
-      (a, b) => a.date.localeCompare(b.date) || b.cost - a.cost,
-    ),
-    daily: Array.from(dailyMap.values()).toSorted((a, b) => a.date.localeCompare(b.date)),
+    ...tail,
   };
 };
 

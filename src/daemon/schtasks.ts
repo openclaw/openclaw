@@ -1,16 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
-import { colorize, isRich, theme } from "../terminal/theme.js";
 import { formatGatewayServiceDescription, resolveGatewayWindowsTaskName } from "./constants.js";
+import { formatLine } from "./output.js";
 import { resolveGatewayStateDir } from "./paths.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
 import { execSchtasks } from "./schtasks-exec.js";
-
-const formatLine = (label: string, value: string) => {
-  const rich = isRich();
-  return `${colorize(rich, theme.muted, `${label}:`)} ${colorize(rich, theme.command, value)}`;
-};
 
 function resolveTaskName(env: Record<string, string | undefined>): string {
   const override = env.OPENCLAW_WINDOWS_TASK_NAME?.trim();

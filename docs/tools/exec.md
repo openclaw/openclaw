@@ -178,4 +178,4 @@ Notes:
 - Only available for OpenAI/OpenAI Codex models.
 - Tool policy still applies; `allow: ["exec"]` implicitly allows `apply_patch`.
 - Config lives under `tools.exec.applyPatch`.
-- Optional: set `tools.exec.applyPatch.workspaceOnly: true` to restrict patch paths to the workspace directory (recommended when untrusted users can trigger tool execution).
+- `tools.exec.applyPatch.workspaceOnly` defaults to `true` (workspace-contained). Set it to `false` only if you intentionally want `apply_patch` to write/delete outside the workspace directory.
