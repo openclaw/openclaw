@@ -117,6 +117,8 @@ describe("QmdMemoryManager", () => {
   });
 
   beforeEach(async () => {
+    // Reset static capability flag so tests don't leak state to each other.
+    (QmdMemoryManager as unknown as { noExpandSupported: boolean }).noExpandSupported = true;
     spawnMock.mockReset();
     spawnMock.mockImplementation(() => createMockChild());
     logWarnMock.mockReset();
@@ -217,6 +219,47 @@ describe("QmdMemoryManager", () => {
     await manager?.close();
   });
 
+  it("does not block create on collection bootstrap when waitForBootSync is false", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: {
+            interval: "0s",
+            debounceMs: 60_000,
+            onBoot: false,
+            commandTimeoutMs: 600,
+          },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    let releaseCollectionList: (() => void) | null = null;
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "collection" && args[1] === "list") {
+        const child = createMockChild({ autoClose: false });
+        releaseCollectionList = () => child.closeWith(0);
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId });
+    const createPromise = QmdMemoryManager.create({ cfg, agentId, resolved });
+    const race = await Promise.race([
+      createPromise.then(() => "created" as const),
+      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 180)),
+    ]);
+    expect(race).toBe("created");
+
+    releaseCollectionList?.();
+    const manager = await createPromise;
+    await manager?.close();
+  });
+
   it("can be configured to block startup on boot update", async () => {
     cfg = {
       ...cfg,
@@ -259,6 +302,63 @@ describe("QmdMemoryManager", () => {
     releaseUpdate?.();
     const manager = await createPromise;
     await manager?.close();
+  });
+
+  it("does not block search while boot update is in flight", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: {
+            interval: "0s",
+            debounceMs: 60_000,
+            onBoot: true,
+            updateTimeoutMs: 300,
+          },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    let releaseUpdate: (() => void) | null = null;
+    let updateStarted = false;
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "update") {
+        updateStarted = true;
+        const child = createMockChild({ autoClose: false });
+        releaseUpdate = () => child.closeWith(0);
+        return child;
+      }
+      if (args[0] === "search") {
+        const child = createMockChild({ autoClose: false });
+        setTimeout(() => {
+          child.stdout.emit("data", "[]");
+          child.closeWith(0);
+        }, 0);
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId });
+    const manager = await QmdMemoryManager.create({ cfg, agentId, resolved });
+    expect(manager).toBeTruthy();
+    if (!manager) {
+      throw new Error("manager missing");
+    }
+
+    await waitForCondition(() => updateStarted, 120);
+
+    const race = await Promise.race([
+      manager.search("test", { sessionKey: "agent:main:slack:dm:u123" }).then(() => "search"),
+      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 150)),
+    ]);
+    expect(race).toBe("search");
+
+    releaseUpdate?.();
+    await manager.close();
   });
 
   it("times out collection bootstrap commands", async () => {
@@ -518,7 +618,7 @@ describe("QmdMemoryManager", () => {
       );
     expect(searchAndQueryCalls).toEqual([
       ["search", "test", "--json", "-n", String(maxResults), "-c", "workspace"],
-      ["query", "test", "--json", "-n", String(maxResults), "-c", "workspace"],
+      ["query", "test", "--json", "--no-expand", "-n", String(maxResults), "-c", "workspace"],
     ]);
     await manager.close();
   });
@@ -671,21 +771,18 @@ describe("QmdMemoryManager", () => {
     const { manager, resolved } = await createManager();
 
     await manager.search("test", { sessionKey: "agent:main:slack:dm:u123" });
-    const searchCall = spawnMock.mock.calls.find((call) => call[1]?.[0] === "search");
+    const searchCalls = spawnMock.mock.calls
+      .filter((call) => call[1]?.[0] === "search")
+      .map((call) => call[1] as string[]);
     const maxResults = resolved.qmd?.limits.maxResults;
     if (!maxResults) {
       throw new Error("qmd maxResults missing");
     }
-    expect(searchCall?.[1]).toEqual([
-      "search",
-      "test",
-      "--json",
-      "-n",
-      String(maxResults),
-      "-c",
-      "workspace",
-      "-c",
-      "notes",
+    // With multiple collections, search runs per-collection to avoid large
+    // collections drowning out smaller ones.
+    expect(searchCalls).toEqual([
+      ["search", "test", "--json", "-n", String(maxResults), "-c", "workspace"],
+      ["search", "test", "--json", "-n", String(maxResults), "-c", "notes"],
     ]);
     await manager.close();
   });
@@ -730,9 +827,79 @@ describe("QmdMemoryManager", () => {
       .map((call) => call[1] as string[])
       .filter((args) => args[0] === "query");
     expect(queryCalls).toEqual([
-      ["query", "test", "--json", "-n", String(maxResults), "-c", "workspace"],
-      ["query", "test", "--json", "-n", String(maxResults), "-c", "notes"],
+      ["query", "test", "--json", "--no-expand", "-n", String(maxResults), "-c", "workspace"],
+      ["query", "test", "--json", "--no-expand", "-n", String(maxResults), "-c", "notes"],
     ]);
+    await manager.close();
+  });
+
+  it("recovers when qmd query reports a missing managed collection", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "query",
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "custom-4" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    let addCalls = 0;
+    let queryCalls = 0;
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "collection" && args[1] === "list") {
+        const child = createMockChild({ autoClose: false });
+        setTimeout(() => {
+          child.stdout.emit("data", "[]");
+          child.closeWith(0);
+        }, 0);
+        return child;
+      }
+      if (args[0] === "collection" && args[1] === "add") {
+        addCalls += 1;
+        const child = createMockChild({ autoClose: false });
+        setTimeout(() => {
+          if (addCalls === 1) {
+            child.stderr.emit("data", "temporary bootstrap failure");
+            child.closeWith(1);
+            return;
+          }
+          child.closeWith(0);
+        }, 0);
+        return child;
+      }
+      if (args[0] === "query") {
+        queryCalls += 1;
+        const child = createMockChild({ autoClose: false });
+        setTimeout(() => {
+          if (queryCalls === 1) {
+            child.stderr.emit("data", "Collection not found: custom-4");
+            child.closeWith(1);
+            return;
+          }
+          child.stdout.emit("data", "[]");
+          child.closeWith(0);
+        }, 0);
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId });
+    const manager = await QmdMemoryManager.create({ cfg, agentId, resolved });
+    expect(manager).toBeTruthy();
+    if (!manager) {
+      throw new Error("manager missing");
+    }
+
+    const results = await manager.search("test", { sessionKey: "agent:main:slack:dm:u123" });
+    expect(results).toEqual([]);
+    expect(addCalls).toBe(2);
+    expect(queryCalls).toBe(2);
+
     await manager.close();
   });
 
@@ -780,11 +947,96 @@ describe("QmdMemoryManager", () => {
     const searchAndQueryCalls = spawnMock.mock.calls
       .map((call) => call[1] as string[])
       .filter((args) => args[0] === "search" || args[0] === "query");
+    // Per-collection search: first collection fails with unsupported flag,
+    // so it falls back to per-collection query for all collections.
     expect(searchAndQueryCalls).toEqual([
-      ["search", "test", "--json", "-n", String(maxResults), "-c", "workspace", "-c", "notes"],
-      ["query", "test", "--json", "-n", String(maxResults), "-c", "workspace"],
-      ["query", "test", "--json", "-n", String(maxResults), "-c", "notes"],
+      ["search", "test", "--json", "-n", String(maxResults), "-c", "workspace"],
+      ["query", "test", "--json", "--no-expand", "-n", String(maxResults), "-c", "workspace"],
+      ["query", "test", "--json", "--no-expand", "-n", String(maxResults), "-c", "notes"],
     ]);
+    await manager.close();
+  });
+
+  it("falls back to plain query when --no-expand is not supported", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "query",
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    // Reset the static flag so fallback can be tested
+    (QmdMemoryManager as unknown as { noExpandSupported: boolean }).noExpandSupported = true;
+
+    let callCount = 0;
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "query") {
+        callCount++;
+        const child = createMockChild({ autoClose: false });
+        setTimeout(() => {
+          if (callCount === 1 && args.includes("--no-expand")) {
+            // First call with --no-expand: simulate unknown flag error
+            child.stderr.emit("data", "error: unknown option --no-expand");
+            child.closeWith(1);
+          } else {
+            // Retry without --no-expand: succeed
+            child.stdout.emit("data", "[]");
+            child.closeWith(0);
+          }
+        }, 0);
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId });
+    const manager = await QmdMemoryManager.create({ cfg, agentId, resolved });
+    expect(manager).toBeTruthy();
+    if (!manager) {
+      throw new Error("manager missing");
+    }
+
+    const results = await manager.search("test", { sessionKey: "agent:main:slack:dm:u123" });
+    expect(results).toEqual([]);
+
+    // Should have been called twice: once with --no-expand (failed), once without
+    const noExpandQueryCalls = spawnMock.mock.calls.filter(
+      (call) => Array.isArray(call[1]) && call[1][0] === "query",
+    );
+    expect(noExpandQueryCalls.length).toBe(2);
+    expect(noExpandQueryCalls[0][1]).toContain("--no-expand");
+    expect(noExpandQueryCalls[1][1]).not.toContain("--no-expand");
+
+    // Subsequent calls should skip --no-expand entirely
+    callCount = 0;
+    spawnMock.mockClear();
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "query") {
+        const child = createMockChild({ autoClose: false });
+        setTimeout(() => {
+          child.stdout.emit("data", "[]");
+          child.closeWith(0);
+        }, 0);
+        return child;
+      }
+      return createMockChild();
+    });
+
+    await manager.search("test2", { sessionKey: "agent:main:slack:dm:u123" });
+    const secondQueryCalls = spawnMock.mock.calls.filter(
+      (call) => Array.isArray(call[1]) && call[1][0] === "query",
+    );
+    expect(secondQueryCalls.length).toBe(1);
+    expect(secondQueryCalls[0][1]).not.toContain("--no-expand");
+
+    // Restore for other tests
+    (QmdMemoryManager as unknown as { noExpandSupported: boolean }).noExpandSupported = true;
     await manager.close();
   });
 
@@ -1286,4 +1538,15 @@ function createDeferred<T>() {
     reject = rej;
   });
   return { promise, resolve, reject };
+}
+
+async function waitForCondition(check: () => boolean, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (check()) {
+      return;
+    }
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  throw new Error("condition was not met in time");
 }
