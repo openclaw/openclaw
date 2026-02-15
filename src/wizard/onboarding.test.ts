@@ -34,28 +34,8 @@ const finalizeOnboardingWizard = vi.hoisted(() =>
       await options.prompter.note("hint", "Web search (optional)");
     }
 
-    if (options.opts.skipUi) {
-      return { launchedTui: false };
-    }
-
-    const hatch = await options.prompter.select({
-      message: "How do you want to hatch your bot?",
-      options: [],
-    });
-    if (hatch !== "tui") {
-      return { launchedTui: false };
-    }
-
-    let message: string | undefined;
-    try {
-      await fs.stat(path.join(options.workspaceDir, DEFAULT_BOOTSTRAP_FILENAME));
-      message = "Wake up, my friend!";
-    } catch {
-      message = undefined;
-    }
-
-    await runTui({ deliver: false, message });
-    return { launchedTui: true };
+    // No hatch prompt — the web app auto-opens in the browser.
+    return { launchedTui: false };
   }),
 );
 const listChannelPlugins = vi.hoisted(() => vi.fn(() => []));
@@ -306,25 +286,11 @@ describe("runOnboardingWizard", () => {
     expect(runTui).not.toHaveBeenCalled();
   });
 
-  async function runTuiHatchTest(params: {
-    writeBootstrapFile: boolean;
-    expectedMessage: string | undefined;
-  }) {
-    runTui.mockClear();
-
+  it("does not launch TUI during onboarding (web app auto-opens instead)", async () => {
     const workspaceDir = await makeCaseDir("workspace-");
-    if (params.writeBootstrapFile) {
-      await fs.writeFile(path.join(workspaceDir, DEFAULT_BOOTSTRAP_FILENAME), "{}");
-    }
+    await fs.writeFile(path.join(workspaceDir, DEFAULT_BOOTSTRAP_FILENAME), "{}");
 
-    const select: WizardPrompter["select"] = vi.fn(async (opts) => {
-      if (opts.message === "How do you want to hatch your bot?") {
-        return "tui";
-      }
-      return "quickstart";
-    });
-
-    const prompter = createWizardPrompter({ select });
+    const prompter = createWizardPrompter();
     const runtime = createRuntime({ throwsOnExit: true });
 
     await runOnboardingWizard(
@@ -343,144 +309,8 @@ describe("runOnboardingWizard", () => {
       prompter,
     );
 
-    expect(runTui).toHaveBeenCalledWith(
-      expect.objectContaining({
-        deliver: false,
-        message: params.expectedMessage,
-      }),
-    );
-  }
-
-  it("launches TUI without auto-delivery when hatching", async () => {
-    await runTuiHatchTest({ writeBootstrapFile: true, expectedMessage: "Wake up, my friend!" });
-  });
-
-  it("offers TUI hatch even without BOOTSTRAP.md", async () => {
-    await runTuiHatchTest({ writeBootstrapFile: false, expectedMessage: undefined });
-  });
-
-  it("hides Web UI hatch option when web app build is not available", async () => {
-    // Simulate a global install where the standalone build is missing.
-    ensureWebAppBuilt.mockResolvedValueOnce({
-      ok: false,
-      built: false,
-      message: "Web app standalone build not found.",
-    });
-
-    const selectCalls: { message: string; options: { value: string }[] }[] = [];
-    const select: WizardPrompter["select"] = vi.fn(async (opts) => {
-      selectCalls.push(opts as (typeof selectCalls)[0]);
-      if (opts.message === "How do you want to hatch your bot?") {
-        return "tui";
-      }
-      return "quickstart";
-    });
-
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-onboard-"));
-
-    const prompter: WizardPrompter = {
-      intro: vi.fn(async () => {}),
-      outro: vi.fn(async () => {}),
-      note: vi.fn(async () => {}),
-      select,
-      multiselect: vi.fn(async () => []),
-      text: vi.fn(async () => ""),
-      confirm: vi.fn(async () => false),
-      progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
-    };
-
-    const runtime: RuntimeEnv = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn((code: number) => {
-        throw new Error(`exit:${code}`);
-      }),
-    };
-
-    await runOnboardingWizard(
-      {
-        acceptRisk: true,
-        flow: "quickstart",
-        mode: "local",
-        workspace: workspaceDir,
-        authChoice: "skip",
-        skipProviders: true,
-        skipSkills: true,
-        skipHealth: true,
-        installDaemon: false,
-      },
-      runtime,
-      prompter,
-    );
-
-    // The hatch prompt should NOT include the "web" option.
-    const hatchCall = selectCalls.find((c) => c.message === "How do you want to hatch your bot?");
-    expect(hatchCall).toBeDefined();
-    const hatchValues = hatchCall!.options.map((o) => o.value);
-    expect(hatchValues).toContain("tui");
-    expect(hatchValues).not.toContain("web");
-    expect(hatchValues).toContain("later");
-
-    await fs.rm(workspaceDir, { recursive: true, force: true });
-  });
-
-  it("shows Web UI hatch option when web app build is available", async () => {
-    // Default mock returns ok: true — web app is available.
-    const selectCalls: { message: string; options: { value: string }[] }[] = [];
-    const select: WizardPrompter["select"] = vi.fn(async (opts) => {
-      selectCalls.push(opts as (typeof selectCalls)[0]);
-      if (opts.message === "How do you want to hatch your bot?") {
-        return "tui";
-      }
-      return "quickstart";
-    });
-
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-onboard-"));
-
-    const prompter: WizardPrompter = {
-      intro: vi.fn(async () => {}),
-      outro: vi.fn(async () => {}),
-      note: vi.fn(async () => {}),
-      select,
-      multiselect: vi.fn(async () => []),
-      text: vi.fn(async () => ""),
-      confirm: vi.fn(async () => false),
-      progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
-    };
-
-    const runtime: RuntimeEnv = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn((code: number) => {
-        throw new Error(`exit:${code}`);
-      }),
-    };
-
-    await runOnboardingWizard(
-      {
-        acceptRisk: true,
-        flow: "quickstart",
-        mode: "local",
-        workspace: workspaceDir,
-        authChoice: "skip",
-        skipProviders: true,
-        skipSkills: true,
-        skipHealth: true,
-        installDaemon: false,
-      },
-      runtime,
-      prompter,
-    );
-
-    // The hatch prompt SHOULD include the "web" option.
-    const hatchCall = selectCalls.find((c) => c.message === "How do you want to hatch your bot?");
-    expect(hatchCall).toBeDefined();
-    const hatchValues = hatchCall!.options.map((o) => o.value);
-    expect(hatchValues).toContain("tui");
-    expect(hatchValues).toContain("web");
-    expect(hatchValues).toContain("later");
-
-    await fs.rm(workspaceDir, { recursive: true, force: true });
+    // TUI should never be launched — web app is the default.
+    expect(runTui).not.toHaveBeenCalled();
   });
 
   it("shows the web search hint at the end of onboarding", async () => {

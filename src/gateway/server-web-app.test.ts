@@ -370,7 +370,8 @@ describe("server-web-app", () => {
       const resultPromise = startWebAppIfEnabled({ enabled: true }, makeLog());
       await vi.advanceTimersByTimeAsync(3_500);
       const result = await resultPromise;
-      expect(result!.port).toBe(DEFAULT_WEB_APP_PORT);
+      // Port detection picks the default port if free, or the next available.
+      expect(result!.port).toBeGreaterThanOrEqual(DEFAULT_WEB_APP_PORT);
       vi.useRealTimers();
     });
 

@@ -1,6 +1,7 @@
 import type { ChildProcess } from "node:child_process";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
+import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { GatewayWebAppConfig } from "../config/types.gateway.js";
@@ -79,6 +80,51 @@ export function hasLegacyNextBuild(webAppDir: string): boolean {
 export function isInWorkspace(webAppDir: string): boolean {
   const rootDir = path.resolve(webAppDir, "..", "..");
   return fs.existsSync(path.join(rootDir, "pnpm-workspace.yaml"));
+}
+
+// ── port detection ───────────────────────────────────────────────────────────
+
+/**
+ * Check whether a TCP port is free by attempting to bind a temporary server.
+ */
+function isPortFree(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    server.once("error", () => resolve(false));
+    server.once("listening", () => {
+      server.close(() => resolve(true));
+    });
+    server.listen(port);
+  });
+}
+
+/**
+ * Find an available port, preferring `preferred`.
+ *
+ * 1. If `preferred` is free, return it immediately.
+ * 2. Try up to 10 sequential ports (preferred+1 … preferred+10).
+ * 3. Fall back to an OS-assigned ephemeral port.
+ */
+export async function findAvailablePort(preferred: number): Promise<number> {
+  if (await isPortFree(preferred)) {
+    return preferred;
+  }
+  for (let offset = 1; offset <= 10; offset++) {
+    const candidate = preferred + offset;
+    if (candidate <= 65535 && (await isPortFree(candidate))) {
+      return candidate;
+    }
+  }
+  // OS-assigned ephemeral port as last resort.
+  return new Promise<number>((resolve, reject) => {
+    const server = net.createServer();
+    server.once("error", reject);
+    server.listen(0, () => {
+      const addr = server.address();
+      const port = typeof addr === "object" && addr ? addr.port : 0;
+      server.close(() => resolve(port));
+    });
+  });
 }
 
 // ── pre-build ────────────────────────────────────────────────────────────────
@@ -200,7 +246,11 @@ export async function startWebAppIfEnabled(
     return null;
   }
 
-  const port = cfg.port ?? DEFAULT_WEB_APP_PORT;
+  const preferredPort = cfg.port ?? DEFAULT_WEB_APP_PORT;
+  const port = await findAvailablePort(preferredPort);
+  if (port !== preferredPort) {
+    log.info(`port ${preferredPort} is busy; using port ${port} instead`);
+  }
   const devMode = cfg.dev === true;
 
   const webAppDir = resolveWebAppDir();

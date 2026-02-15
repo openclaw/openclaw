@@ -61,6 +61,23 @@ export async function startGatewaySidecars(params: {
     params.logWebApp.error(`web app failed to start: ${String(err)}`);
   }
 
+  // Auto-open the web app in the default browser on every gateway start/restart.
+  if (webApp) {
+    try {
+      const { detectBrowserOpenSupport, openUrl } = await import("../commands/onboard-helpers.js");
+      const browserSupport = await detectBrowserOpenSupport();
+      if (browserSupport.ok) {
+        const webAppUrl = `http://localhost:${webApp.port}`;
+        const opened = await openUrl(webAppUrl);
+        if (opened) {
+          params.logWebApp.info(`opened ${webAppUrl} in browser`);
+        }
+      }
+    } catch {
+      // Browser open is best-effort; don't fail gateway startup.
+    }
+  }
+
   // Start Gmail watcher if configured (hooks.gmail.account).
   if (!isTruthyEnvValue(process.env.OPENCLAW_SKIP_GMAIL_WATCHER)) {
     try {
