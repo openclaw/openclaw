@@ -165,7 +165,9 @@ function resolveCommandsAllowFromList(params: {
 
   const rawList = Array.isArray(providerList) ? providerList : globalList;
   if (!Array.isArray(rawList)) {
-    return null; // No applicable list found
+    // commands.allowFrom is configured, but there's no provider-specific list and no "*".
+    // Treat as an explicit deny for this provider (override semantics).
+    return [];
   }
 
   return formatAllowFromList({

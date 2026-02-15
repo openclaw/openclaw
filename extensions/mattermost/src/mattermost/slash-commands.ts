@@ -503,7 +503,13 @@ export function resolveCallbackUrl(params: {
   if (params.config.callbackUrl) {
     return params.config.callbackUrl;
   }
-  const host = params.gatewayHost || "localhost";
+  let host = params.gatewayHost || "localhost";
   const path = normalizeCallbackPath(params.config.callbackPath);
+
+  // Bracket IPv6 literals so the URL is valid: http://[::1]:3015/...
+  if (host.includes(":") && !(host.startsWith("[") && host.endsWith("]"))) {
+    host = `[${host}]`;
+  }
+
   return `http://${host}:${params.gatewayPort}${path}`;
 }
