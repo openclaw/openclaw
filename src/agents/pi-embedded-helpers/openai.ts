@@ -104,7 +104,20 @@ export function downgradeOpenAIReasoningBlocks(messages: AgentMessage[]): AgentM
       }
       const signature = parseOpenAIReasoningSignature(record.thinkingSignature);
       if (!signature) {
-        nextContent.push(block);
+        // thinkingSignature is present but not OpenAI format (e.g. Anthropic native
+        // "c2ln", "reasoning_content") -- keep the block unchanged.
+        if (record.thinkingSignature) {
+          nextContent.push(block);
+          continue;
+        }
+        // thinkingSignature is truly absent (proxy stripped it).  Convert non-empty
+        // thinking text to a plain text block; drop empty ones entirely.
+        if (typeof record.thinking === "string" && record.thinking.trim()) {
+          nextContent.push({ type: "text", text: record.thinking } as AssistantContentBlock);
+          changed = true;
+        } else {
+          changed = true;
+        }
         continue;
       }
       if (hasFollowingNonThinkingBlock(assistantMsg.content, i)) {

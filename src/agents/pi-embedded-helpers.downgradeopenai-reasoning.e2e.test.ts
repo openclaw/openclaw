@@ -75,4 +75,73 @@ describe("downgradeOpenAIReasoningBlocks", () => {
     // oxlint-disable-next-line typescript/no-explicit-any
     expect(downgradeOpenAIReasoningBlocks(input as any)).toEqual(input);
   });
+
+  it("converts unsigned thinking blocks to text", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "proxy stripped the signature",
+          },
+          { type: "text", text: "answer" },
+        ],
+      },
+    ];
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const result = downgradeOpenAIReasoningBlocks(input as any);
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "proxy stripped the signature" },
+          { type: "text", text: "answer" },
+        ],
+      },
+    ]);
+  });
+
+  it("drops empty unsigned thinking blocks", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "",
+          },
+          { type: "text", text: "answer" },
+        ],
+      },
+    ];
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const result = downgradeOpenAIReasoningBlocks(input as any);
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "answer" }],
+      },
+    ]);
+  });
+
+  it("drops unsigned thinking blocks without thinking field", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+          },
+        ],
+      },
+      { role: "user", content: "next" },
+    ];
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const result = downgradeOpenAIReasoningBlocks(input as any);
+    expect(result).toEqual([{ role: "user", content: "next" }]);
+  });
 });
