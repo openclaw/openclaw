@@ -1,6 +1,13 @@
 import { Type } from "@sinclair/typebox";
 import { NonEmptyString } from "./primitives.js";
 
+const WizardRunStatusSchema = Type.Union([
+  Type.Literal("running"),
+  Type.Literal("done"),
+  Type.Literal("cancelled"),
+  Type.Literal("error"),
+]);
+
 export const WizardStartParamsSchema = Type.Object(
   {
     mode: Type.Optional(Type.Union([Type.Literal("local"), Type.Literal("remote")])),
@@ -75,14 +82,7 @@ export const WizardNextResultSchema = Type.Object(
   {
     done: Type.Boolean(),
     step: Type.Optional(WizardStepSchema),
-    status: Type.Optional(
-      Type.Union([
-        Type.Literal("running"),
-        Type.Literal("done"),
-        Type.Literal("cancelled"),
-        Type.Literal("error"),
-      ]),
-    ),
+    status: Type.Optional(WizardRunStatusSchema),
     error: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
@@ -93,14 +93,7 @@ export const WizardStartResultSchema = Type.Object(
     sessionId: NonEmptyString,
     done: Type.Boolean(),
     step: Type.Optional(WizardStepSchema),
-    status: Type.Optional(
-      Type.Union([
-        Type.Literal("running"),
-        Type.Literal("done"),
-        Type.Literal("cancelled"),
-        Type.Literal("error"),
-      ]),
-    ),
+    status: Type.Optional(WizardRunStatusSchema),
     error: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
