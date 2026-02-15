@@ -56,6 +56,7 @@ TRASH
   wait_for_log() {
     local needle="$1"
     local timeout_s="${2:-45}"
+    local quiet_on_timeout="${3:-false}"
     local needle_compact
     needle_compact="$(printf "%s" "$needle" | tr -cd "[:alpha:]")"
     local start_s
@@ -91,6 +92,9 @@ TRASH
         fi
       fi
       if [ $(( $(date +%s) - start_s )) -ge "$timeout_s" ]; then
+        if [ "$quiet_on_timeout" = "true" ]; then
+          return 1
+        fi
         echo "Timeout waiting for log: $needle"
         if [ -n "${WIZARD_LOG_PATH:-}" ] && [ -f "$WIZARD_LOG_PATH" ]; then
           tail -n 140 "$WIZARD_LOG_PATH" || true
@@ -229,7 +233,7 @@ TRASH
 
   select_skip_hooks() {
     # Hooks multiselect: pick "Skip for now".
-    wait_for_log "Enable hooks?" 60 || true
+    wait_for_log "Enable hooks?" 60 true || true
     send $'"'"' \r'"'"' 0.6
   }
 
@@ -243,15 +247,15 @@ TRASH
 
   send_reset_config_only() {
     # Risk acknowledgement (default is "No").
-    wait_for_log "Continue?" 40 || true
+    wait_for_log "Continue?" 40 true || true
     send $'"'"'y\r'"'"' 0.8
     # Select reset flow for existing config.
-    wait_for_log "Config handling" 40 || true
+    wait_for_log "Config handling" 40 true || true
     send $'"'"'\e[B'"'"' 0.3
     send $'"'"'\e[B'"'"' 0.3
     send $'"'"'\r'"'"' 0.4
     # Reset scope -> Config only (default).
-    wait_for_log "Reset scope" 40 || true
+    wait_for_log "Reset scope" 40 true || true
     send $'"'"'\r'"'"' 0.4
     select_skip_hooks
   }
@@ -273,7 +277,7 @@ TRASH
     # configure --section skills still runs the configure wizard; the first prompt is gateway location.
     # Avoid log-based synchronization here; clack output can fragment ANSI sequences and break matching.
     send $'"'"'\r'"'"' 3.0
-    wait_for_log "Configure skills now?" 120 || true
+    wait_for_log "Configure skills now?" 120 true || true
     send $'"'"'n\r'"'"' 0.8
     send "" 2.0
   }
