@@ -1,23 +1,12 @@
-# Repository Guidelines
+# OpenClaw Repository Guidelines
 
-- Repo: https://github.com/openclaw/openclaw
-- GitHub issues/comments/PR comments: use literal multiline strings or `-F - <<'EOF'` (or $'...') for real newlines; never embed "\\n".
+Repository: https://github.com/openclaw/openclaw
 
-## Project Structure & Module Organization
+## Language Preference
 
-- Source code: `src/` (CLI wiring in `src/cli`, commands in `src/commands`, web provider in `src/provider-web.ts`, infra in `src/infra`, media pipeline in `src/media`).
-- Tests: colocated `*.test.ts`.
-- Docs: `docs/` (images, queue, Pi config). Built output lives in `dist/`.
-- Plugins/extensions: live under `extensions/*` (workspace packages). Keep plugin-only deps in the extension `package.json`; do not add them to the root `package.json` unless core uses them.
-- Plugins: install runs `npm install --omit=dev` in plugin dir; runtime deps must live in `dependencies`. Avoid `workspace:*` in `dependencies` (npm install breaks); put `openclaw` in `devDependencies` or `peerDependencies` instead (runtime resolves `openclaw/plugin-sdk` via jiti alias).
-- Installers served from `https://openclaw.ai/*`: live in the sibling repo `../openclaw.ai` (`public/install.sh`, `public/install-cli.sh`, `public/install.ps1`).
-- Messaging channels: always consider **all** built-in + extension channels when refactoring shared logic (routing, allowlists, pairing, command gating, onboarding, docs).
-  - Core channel docs: `docs/channels/`
-  - Core channel code: `src/telegram`, `src/discord`, `src/slack`, `src/signal`, `src/imessage`, `src/web` (WhatsApp web), `src/channels`, `src/routing`
-  - Extensions (channel plugins): `extensions/*` (e.g. `extensions/msteams`, `extensions/matrix`, `extensions/zalo`, `extensions/zalouser`, `extensions/voice-call`)
-- When adding channels/extensions/apps/docs, update `.github/labeler.yml` and create matching GitHub labels (use existing channel/extension label colors).
+- **Language:** Always respond in Chinese.
 
-## Docs Linking (Mintlify)
+## Quick Reference: Build, Test, Lint
 
 - Docs are hosted on Mintlify (docs.openclaw.ai).
 - Internal doc links in `docs/**/*.md`: root-relative, no `.md`/`.mdx` (example: `[Config](/configuration)`).
@@ -29,26 +18,33 @@
 - README (GitHub): keep absolute docs URLs (`https://docs.openclaw.ai/...`) so links work on GitHub.
 - Docs content must be generic: no personal device names/hostnames/paths; use placeholders like `user@gateway-host` and “gateway host”.
 
-## Docs i18n (zh-CN)
+# Development
 
-- `docs/zh-CN/**` is generated; do not edit unless the user explicitly asks.
-- Pipeline: update English docs → adjust glossary (`docs/.i18n/glossary.zh-CN.json`) → run `scripts/docs-i18n` → apply targeted fixes only if instructed.
-- Translation memory: `docs/.i18n/zh-CN.tm.jsonl` (generated).
-- See `docs/.i18n/README.md`.
-- The pipeline can be slow/inefficient; if it’s dragging, ping @jospalmbier on Discord instead of hacking around it.
+pnpm dev # Run CLI in dev mode
+pnpm openclaw <command> # Run specific CLI command
 
-## exe.dev VM ops (general)
+# Build & Type Checking
 
-- Access: stable path is `ssh exe.dev` then `ssh vm-name` (assume SSH key already set).
-- SSH flaky: use exe.dev web terminal or Shelley (web agent); keep a tmux session for long ops.
-- Update: `sudo npm i -g openclaw@latest` (global install needs root on `/usr/lib/node_modules`).
-- Config: use `openclaw config set ...`; ensure `gateway.mode=local` is set.
-- Discord: store raw token only (no `DISCORD_BOT_TOKEN=` prefix).
-- Restart: stop old gateway and run:
-  `pkill -9 -f openclaw-gateway || true; nohup openclaw gateway run --bind loopback --port 18789 --force > /tmp/openclaw-gateway.log 2>&1 &`
-- Verify: `openclaw channels status --probe`, `ss -ltnp | rg 18789`, `tail -n 120 /tmp/openclaw-gateway.log`.
+pnpm build # Full build (includes bundling, protocol gen, etc.)
+pnpm tsgo # TypeScript type checking only
 
-## Build, Test, and Development Commands
+# Linting & Formatting
+
+pnpm check # Run lint + format checks (run before commits)
+pnpm lint # Oxlint only
+pnpm format # Format with Oxfmt
+pnpm lint:fix # Auto-fix lint issues and format
+
+# Testing
+
+pnpm test # Run all unit tests (vitest)
+pnpm test:coverage # Run tests with coverage report
+pnpm test:watch # Watch mode for development
+pnpm test:e2e # End-to-end tests
+
+# Run a single test file
+
+pnpm vitest src/path/to/file.test.ts
 
 - Runtime baseline: Node **22+** (keep Node + Bun paths working).
 - Install deps: `pnpm install`
@@ -66,20 +62,99 @@
 - Format fix: `pnpm format:fix` (oxfmt --write)
 - Tests: `pnpm test` (vitest); coverage: `pnpm test:coverage`
 
-## Coding Style & Naming Conventions
+# Run a specific test by name
 
-- Language: TypeScript (ESM). Prefer strict typing; avoid `any`.
-- Formatting/linting via Oxlint and Oxfmt; run `pnpm check` before commits.
-- Add brief code comments for tricky or non-obvious logic.
-- Keep files concise; extract helpers instead of “V2” copies. Use existing patterns for CLI options and dependency injection via `createDefaultDeps`.
-- Aim to keep files under ~700 LOC; guideline only (not a hard guardrail). Split/refactor when it improves clarity or testability.
-- Naming: use **OpenClaw** for product/app/docs headings; use `openclaw` for CLI command, package/binary, paths, and config keys.
+pnpm vitest -t "test name pattern"
 
-## Release Channels (Naming)
+# Mobile/Platform-Specific
 
-- stable: tagged releases only (e.g. `vYYYY.M.D`), npm dist-tag `latest`.
-- beta: prerelease tags `vYYYY.M.D-beta.N`, npm dist-tag `beta` (may ship without macOS app).
-- dev: moving head on `main` (no tag; git checkout main).
+pnpm ios:build # Build iOS app
+pnpm android:run # Build and run Android app
+pnpm mac:package # Package macOS app
+
+````
+
+## Project Structure
+
+- **Source**: `src/` (CLI: `src/cli`, commands: `src/commands`, channels: `src/telegram`, `src/discord`, etc.)
+- **Tests**: Colocated `*.test.ts` files next to source
+- **Docs**: `docs/` (hosted on Mintlify at docs.openclaw.ai)
+- **Build output**: `dist/`
+- **Extensions/Plugins**: `extensions/*` (workspace packages)
+- **Mobile apps**: `apps/ios`, `apps/android`, `apps/macos`
+
+## Code Style & Conventions
+
+### Language & Types
+- **TypeScript ESM** with strict mode (`target: es2023`, `module: NodeNext`)
+- **NO `any` types** - use proper typing (enforced by oxlint)
+- Use `import type { X }` for type-only imports
+- Prefer explicit types over inference for function signatures
+
+### Imports
+- **Use `.js` extensions** for cross-package imports (ESM requirement)
+- **Import directly** - no re-export wrapper files
+- **Import order**: sorted automatically by Oxfmt (no newlines between)
+- Example: `import { foo } from "../infra/foo.js"`
+
+### Formatting & Linting
+- **Auto-formatted** by Oxfmt (4 spaces, double quotes, trailing commas)
+- **Linted** by Oxlint with TypeScript-aware rules
+- Run `pnpm check` before committing
+- Curly braces required for all blocks (enforced)
+
+### Naming Conventions
+- **Product name**: "OpenClaw" (in docs, UI, headings)
+- **CLI/binary**: `openclaw` (lowercase, in commands, paths, config keys)
+- **Files**: kebab-case (e.g., `format-time.ts`, `agent-events.ts`)
+- **Functions/variables**: camelCase
+- **Types/Interfaces**: PascalCase
+- **Constants**: UPPER_SNAKE_CASE (for true constants)
+
+### File Organization
+- Keep files **under ~700 LOC** (guideline, not strict)
+- Extract helpers instead of creating "V2" files
+- Colocate tests: `foo.ts` → `foo.test.ts`
+- E2E tests: `*.e2e.test.ts`
+
+### Error Handling
+- Use explicit error handling with try/catch
+- Return `undefined` or result types instead of throwing when appropriate
+- Validate inputs early (guard clauses)
+- Log errors with context using `tslog`
+
+### Comments
+- Add **brief comments** for tricky or non-obvious logic
+- Avoid redundant comments that just restate the code
+- Document complex algorithms or business logic
+
+## Anti-Redundancy Rules
+
+**CRITICAL: Always reuse existing code - never duplicate!**
+
+Before creating utilities, formatters, or helpers:
+1. **Search for existing implementations first**
+2. Import from the source of truth (see below)
+3. Do NOT create local copies of utilities
+
+### Source of Truth Locations
+
+#### Formatting (`src/infra/format-time/`)
+- **Time/duration**: `src/infra/format-time/format-duration.ts` (`formatDurationCompact`, `formatDurationHuman`, `formatDurationPrecise`)
+- **Relative time**: `src/infra/format-time/format-relative.ts`
+- **Date/time**: `src/infra/format-time/format-datetime.ts`
+
+Never create local `formatAge`, `formatDuration`, `formatElapsedTime` - import from centralized modules.
+
+#### Terminal Output (`src/terminal/`)
+- **Tables**: `src/terminal/table.ts` (`renderTable`)
+- **Themes/colors**: `src/terminal/theme.ts` (`theme.success`, `theme.muted`, etc.)
+- **Progress/spinners**: `src/cli/progress.ts` (uses `osc-progress` + `@clack/prompts`)
+
+#### CLI Patterns
+- **Option wiring**: `src/cli/command-options.ts`
+- **Commands**: `src/commands/`
+- **Dependency injection**: via `createDefaultDeps`
 
 ## Testing Guidelines
 
@@ -93,7 +168,9 @@
 - Pure test additions/fixes generally do **not** need a changelog entry unless they alter user-facing behavior or the user asks for one.
 - Mobile: before using a simulator, check for connected real devices (iOS + Android) and prefer them when available.
 
-## Commit & Pull Request Guidelines
+### Test Patterns
+```typescript
+import { describe, it, expect } from "vitest";
 
 **Full maintainer PR workflow (optional):** If you want the repo's end-to-end maintainer workflow (triage order, quality bar, rebase rules, commit/changelog conventions, co-contributor policy, and the `review-pr` > `prepare-pr` > `merge-pr` pipeline), see `.agents/skills/PR_WORKFLOW.md`. Maintainers may use other workflows; when a maintainer specifies a workflow, follow that. If no workflow is specified, default to PR_WORKFLOW.
 
@@ -103,27 +180,45 @@
 - PR submission template (canonical): `.github/pull_request_template.md`
 - Issue submission templates (canonical): `.github/ISSUE_TEMPLATE/`
 
-## Shorthand Commands
+## Commit & PR Guidelines
 
-- `sync`: if working tree is dirty, commit all changes (pick a sensible Conventional Commit message), then `git pull --rebase`; if rebase conflicts and cannot resolve, stop; otherwise `git push`.
+- Use `scripts/committer "<msg>" <file...>` for commits (avoids staging issues)
+- **Commit message style**: Concise, action-oriented (e.g., "CLI: add verbose flag to send")
+- **Changelog**: Keep latest released version at top (no "Unreleased" section)
+- **PR workflow**: Prefer rebase for clean history, squash when messy
+- When working on PR: add changelog entry with PR # and thank contributor
+- Run full gate before merging: `pnpm build && pnpm check && pnpm test`
 
 ## Git Notes
 
 - If `git branch -d/-D <branch>` is policy-blocked, delete the local ref directly: `git update-ref -d refs/heads/<branch>`.
 
-## Security & Configuration Tips
+## Common Patterns
 
-- Web provider stores creds at `~/.openclaw/credentials/`; rerun `openclaw login` if logged out.
-- Pi sessions live under `~/.openclaw/sessions/` by default; the base directory is not configurable.
-- Environment variables: see `~/.profile`.
-- Never commit or publish real phone numbers, videos, or live configuration values. Use obviously fake placeholders in docs, tests, and examples.
-- Release flow: always read `docs/reference/RELEASING.md` and `docs/platforms/mac/release.md` before any release work; do not ask routine questions once those docs answer them.
+### CLI Progress
+```typescript
+import { createSpinner } from "../cli/progress.js";
+const spinner = createSpinner("Loading...");
+// ... work
+spinner.stop("Done!");
+````
 
-## Troubleshooting
+### Dependency Injection
 
-- Rebrand/migration issues or legacy config/service warnings: run `openclaw doctor` (see `docs/gateway/doctor.md`).
+```typescript
+import { createDefaultDeps } from "../cli/deps.js";
+const deps = createDefaultDeps();
+```
 
-## Agent-Specific Notes
+### Theme Colors
+
+```typescript
+import { theme } from "../terminal/theme.js";
+console.log(theme.success("Success!"));
+console.log(theme.error("Error!"));
+```
+
+## Channel/Extension Development
 
 - Vocabulary: "makeup" = "mac app".
 - Never edit `node_modules` (global/Homebrew/npm/git installs too). Updates overwrite. Skill notes go in `tools.md` or `AGENTS.md`.
@@ -174,11 +269,39 @@
 - For manual `openclaw message send` messages that include `!`, use the heredoc pattern noted below to avoid the Bash tool’s escaping.
 - Release guardrails: do not change version numbers without operator’s explicit consent; always ask permission before running any npm publish/release step.
 
-## NPM + 1Password (publish/verify)
+## Documentation
 
-- Use the 1password skill; all `op` commands must run inside a fresh tmux session.
-- Sign in: `eval "$(op signin --account my.1password.com)"` (app unlocked + integration on).
-- OTP: `op read 'op://Private/Npmjs/one-time password?attribute=otp'`.
-- Publish: `npm publish --access public --otp="<otp>"` (run from the package dir).
-- Verify without local npmrc side effects: `npm view <pkg> version --userconfig "$(mktemp)"`.
-- Kill the tmux session after publish.
+- **Docs hosted**: Mintlify (docs.openclaw.ai)
+- **Internal links**: Root-relative without `.md` (e.g., `[Config](/configuration)`)
+- **Anchors**: Root-relative with hash (e.g., `[Hooks](/configuration#hooks)`)
+- **No em dashes or apostrophes** in headings (breaks Mintlify anchors)
+- Use generic placeholders (no personal device names/paths)
+
+## Platform-Specific Notes
+
+### macOS
+
+- Gateway runs as menubar app (restart via app or `scripts/restart-mac.sh`)
+- Logs: `./scripts/clawlog.sh` for unified logs
+- Packaging: `scripts/package-mac-app.sh`
+
+### iOS/Android
+
+- Check for connected real devices before using simulators
+- "Restart app" means rebuild and relaunch (not just kill/reopen)
+
+## Security
+
+- Never commit real credentials, phone numbers, or config values
+- Use fake/placeholder values in docs and tests
+- Web provider creds: `~/.openclaw/credentials/`
+- Pi sessions: `~/.openclaw/sessions/`
+
+## Multi-Agent Safety
+
+- **Do NOT** create/apply/drop git stash unless requested
+- **Do NOT** switch branches unless explicitly requested
+- **Do NOT** modify git worktrees unless requested
+- When user says "commit", scope to your changes only
+- When user says "commit all", commit everything in grouped chunks
+- Auto-resolve formatting-only changes without asking

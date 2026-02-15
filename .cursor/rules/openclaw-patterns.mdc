@@ -1,3 +1,8 @@
+---
+description: OpenClaw 项目全局规则与代码规范（语言、复用、技术栈、CLI/终端约定）
+alwaysApply: true
+---
+
 # OpenClaw Codebase Patterns
 
 ## 全局规则
@@ -31,7 +36,7 @@
 
 ### Formatting Utilities (`src/infra/`)
 
-- **Time formatting**: `src\infra\format-time`
+- **Time formatting**: `src/infra/format-time`
 
 **NEVER create local `formatAge`, `formatDuration`, `formatElapsedTime` functions - import from centralized modules.**
 
