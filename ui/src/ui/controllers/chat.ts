@@ -168,11 +168,30 @@ export async function abortChatRun(state: ChatState): Promise<boolean> {
   }
 }
 
+/**
+ * Compare session keys accounting for the agent-scoped prefix.
+ * Gateway events may use "agent:<agentId>:<baseKey>" while the UI
+ * stores just the base key (or vice-versa).
+ */
+export function sessionKeyMatches(eventKey: string, stateKey: string): boolean {
+  if (eventKey === stateKey) {
+    return true;
+  }
+  // Gateway events use agent-scoped keys: "agent:<agentId>:<baseKey>"
+  if (eventKey.startsWith("agent:") && eventKey.endsWith(`:${stateKey}`)) {
+    return true;
+  }
+  if (stateKey.startsWith("agent:") && stateKey.endsWith(`:${eventKey}`)) {
+    return true;
+  }
+  return false;
+}
+
 export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   if (!payload) {
     return null;
   }
-  if (payload.sessionKey !== state.sessionKey) {
+  if (!sessionKeyMatches(payload.sessionKey, state.sessionKey)) {
     return null;
   }
 
@@ -194,9 +213,36 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
       }
     }
   } else if (payload.state === "final") {
+    // Clear streaming state first to avoid the brief duplicate flash between
+    // optimistic append and the subsequent loadChatHistory array replacement.
     state.chatStream = null;
     state.chatRunId = null;
     state.chatStreamStartedAt = null;
+
+    // Optimistically append the final assistant message so the UI updates
+    // instantly instead of waiting for the loadChatHistory round-trip.
+    // See https://github.com/openclaw/openclaw/issues/10132
+    if (payload.message) {
+      const finalText = extractText(payload.message);
+      if (typeof finalText === "string" && finalText) {
+        // Guard against duplicate: only append if the last message is not
+        // already an assistant message with the same text.
+        const last = state.chatMessages[state.chatMessages.length - 1] as
+          | Record<string, unknown>
+          | undefined;
+        const lastText = last?.role === "assistant" ? extractText(last) : null;
+        if (lastText !== finalText) {
+          state.chatMessages = [
+            ...state.chatMessages,
+            {
+              role: "assistant",
+              content: payload.message,
+              timestamp: Date.now(),
+            },
+          ];
+        }
+      }
+    }
   } else if (payload.state === "aborted") {
     state.chatStream = null;
     state.chatRunId = null;
