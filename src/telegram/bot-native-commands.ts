@@ -171,6 +171,22 @@ async function resolveTelegramCommandAuth(params: {
   const senderId = senderIdRaw ? String(senderIdRaw) : "";
   const senderUsername = msg.from?.username ?? "";
 
+  const isGroupSenderAllowed = () =>
+    senderIdRaw != null &&
+    isSenderAllowed({
+      allow: effectiveGroupAllow,
+      senderId: String(senderIdRaw),
+      senderUsername,
+    });
+
+  const rejectNotAuthorized = async () => {
+    await withTelegramApiErrorLogging({
+      operation: "sendMessage",
+      fn: () => bot.api.sendMessage(chatId, "You are not authorized to use this command."),
+    });
+    return null;
+  };
+
   if (isGroup && groupConfig?.enabled === false) {
     await withTelegramApiErrorLogging({
       operation: "sendMessage",
@@ -186,19 +202,8 @@ async function resolveTelegramCommandAuth(params: {
     return null;
   }
   if (requireAuth && isGroup && hasGroupAllowOverride) {
-    if (
-      senderIdRaw == null ||
-      !isSenderAllowed({
-        allow: effectiveGroupAllow,
-        senderId: String(senderIdRaw),
-        senderUsername,
-      })
-    ) {
-      await withTelegramApiErrorLogging({
-        operation: "sendMessage",
-        fn: () => bot.api.sendMessage(chatId, "You are not authorized to use this command."),
-      });
-      return null;
+    if (!isGroupSenderAllowed()) {
+      return await rejectNotAuthorized();
     }
   }
 
@@ -213,19 +218,8 @@ async function resolveTelegramCommandAuth(params: {
       return null;
     }
     if (groupPolicy === "allowlist" && requireAuth) {
-      if (
-        senderIdRaw == null ||
-        !isSenderAllowed({
-          allow: effectiveGroupAllow,
-          senderId: String(senderIdRaw),
-          senderUsername,
-        })
-      ) {
-        await withTelegramApiErrorLogging({
-          operation: "sendMessage",
-          fn: () => bot.api.sendMessage(chatId, "You are not authorized to use this command."),
-        });
-        return null;
+      if (!isGroupSenderAllowed()) {
+        return await rejectNotAuthorized();
       }
     }
     const groupAllowlist = resolveGroupPolicy(chatId);
