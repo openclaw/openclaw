@@ -27,6 +27,17 @@ vi.mock("../../agents/identity.js", async (importOriginal) => {
   };
 });
 
+beforeEach(() => {
+  dispatchMock.mockReset().mockResolvedValue({ counts: { final: 1, tool: 0, block: 0 } });
+  readAllowFromStoreMock.mockReset().mockResolvedValue([]);
+  upsertPairingRequestMock.mockReset().mockResolvedValue({ code: "PAIRCODE", created: true });
+  resolveAgentRouteMock.mockReset().mockReturnValue({
+    agentId: "main",
+    sessionKey: "session:1",
+    accountId: "acct",
+  });
+});
+
 function createHarness(overrides?: {
   groupPolicy?: "open" | "allowlist";
   channelsConfig?: Record<string, { allow?: boolean; requireMention?: boolean }>;
@@ -116,17 +127,6 @@ async function runSlashHandler(params: {
 
   return { respond, ack };
 }
-
-beforeEach(() => {
-  dispatchMock.mockReset().mockResolvedValue({ counts: { final: 1, tool: 0, block: 0 } });
-  readAllowFromStoreMock.mockReset().mockResolvedValue([]);
-  upsertPairingRequestMock.mockReset().mockResolvedValue({ code: "PAIRCODE", created: true });
-  resolveAgentRouteMock.mockReset().mockReturnValue({
-    agentId: "main",
-    sessionKey: "session:1",
-    accountId: "acct",
-  });
-});
 
 describe("slack slash commands channel policy", () => {
   it("allows unlisted channels when groupPolicy is open", async () => {
