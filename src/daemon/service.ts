@@ -34,6 +34,7 @@ export type GatewayServiceInstallArgs = {
   workingDirectory?: string;
   environment?: Record<string, string | undefined>;
   description?: string;
+  watchdog?: boolean;
 };
 
 export type GatewayService = {
