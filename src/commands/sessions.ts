@@ -4,9 +4,11 @@ import { resolveConfiguredModelRef } from "../agents/model-selection.js";
 import { loadConfig } from "../config/config.js";
 import {
   loadSessionStore,
+  pickSessionStatus,
   resolveFreshSessionTotalTokens,
   resolveStorePath,
   type SessionEntry,
+  type SessionStatusFields,
 } from "../config/sessions.js";
 import { classifySessionKey } from "../gateway/session-utils.js";
 import { info } from "../globals.js";
@@ -14,26 +16,14 @@ import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import type { RuntimeEnv } from "../runtime.js";
 import { isRich, theme } from "../terminal/theme.js";
 
-type SessionRow = {
+type SessionRow = Partial<SessionStatusFields> & {
   key: string;
   kind: "direct" | "group" | "global" | "unknown";
   updatedAt: number | null;
   ageMs: number | null;
   sessionId?: string;
-  systemSent?: boolean;
-  abortedLastRun?: boolean;
-  thinkingLevel?: string;
-  verboseLevel?: string;
-  reasoningLevel?: string;
-  elevatedLevel?: string;
-  responseUsage?: string;
   groupActivation?: string;
-  inputTokens?: number;
-  outputTokens?: number;
-  totalTokens?: number;
-  totalTokensFresh?: boolean;
   model?: string;
-  contextTokens?: number;
 };
 
 const KIND_PAD = 6;
@@ -140,20 +130,9 @@ function toRows(store: Record<string, SessionEntry>): SessionRow[] {
         updatedAt,
         ageMs: updatedAt ? Date.now() - updatedAt : null,
         sessionId: entry?.sessionId,
-        systemSent: entry?.systemSent,
-        abortedLastRun: entry?.abortedLastRun,
-        thinkingLevel: entry?.thinkingLevel,
-        verboseLevel: entry?.verboseLevel,
-        reasoningLevel: entry?.reasoningLevel,
-        elevatedLevel: entry?.elevatedLevel,
-        responseUsage: entry?.responseUsage,
+        ...pickSessionStatus(entry),
         groupActivation: entry?.groupActivation,
-        inputTokens: entry?.inputTokens,
-        outputTokens: entry?.outputTokens,
-        totalTokens: entry?.totalTokens,
-        totalTokensFresh: entry?.totalTokensFresh,
         model: entry?.model,
-        contextTokens: entry?.contextTokens,
       } satisfies SessionRow;
     })
     .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));

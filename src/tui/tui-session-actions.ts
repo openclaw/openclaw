@@ -1,4 +1,6 @@
 import type { TUI } from "@mariozechner/pi-tui";
+import type { SessionStatusFieldsNullable } from "../config/sessions.js";
+import { applySessionStatusFields } from "../config/sessions.js";
 import type { SessionsPatchResult } from "../gateway/protocol/index.js";
 import {
   normalizeAgentId,
@@ -33,19 +35,11 @@ type SessionInfoDefaults = {
   contextTokens?: number | null;
 };
 
-type SessionInfoEntry = {
-  thinkingLevel?: string;
-  verboseLevel?: string;
-  reasoningLevel?: string;
+type SessionInfoEntry = SessionStatusFieldsNullable & {
   model?: string;
   modelProvider?: string;
   modelOverride?: string;
   providerOverride?: string;
-  contextTokens?: number | null;
-  inputTokens?: number | null;
-  outputTokens?: number | null;
-  totalTokens?: number | null;
-  responseUsage?: "on" | "off" | "tokens" | "full";
   updatedAt?: number | null;
   displayName?: string;
 };
@@ -179,27 +173,8 @@ export function createSessionActions(context: SessionActionContext) {
     }
 
     const next = { ...state.sessionInfo };
-    if (entry?.thinkingLevel !== undefined) {
-      next.thinkingLevel = entry.thinkingLevel;
-    }
-    if (entry?.verboseLevel !== undefined) {
-      next.verboseLevel = entry.verboseLevel;
-    }
-    if (entry?.reasoningLevel !== undefined) {
-      next.reasoningLevel = entry.reasoningLevel;
-    }
-    if (entry?.responseUsage !== undefined) {
-      next.responseUsage = entry.responseUsage;
-    }
-    if (entry?.inputTokens !== undefined) {
-      next.inputTokens = entry.inputTokens;
-    }
-    if (entry?.outputTokens !== undefined) {
-      next.outputTokens = entry.outputTokens;
-    }
-    if (entry?.totalTokens !== undefined) {
-      next.totalTokens = entry.totalTokens;
-    }
+    applySessionStatusFields(next, entry);
+    // contextTokens has special 3-way fallback logic — handle manually.
     if (entry?.contextTokens !== undefined || defaults?.contextTokens !== undefined) {
       next.contextTokens =
         entry?.contextTokens ?? defaults?.contextTokens ?? state.sessionInfo.contextTokens;

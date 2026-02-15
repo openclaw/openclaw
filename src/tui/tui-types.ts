@@ -1,3 +1,5 @@
+import type { SessionStatusFieldsNullable } from "../config/sessions.js";
+
 export type TuiOptions = {
   url?: string;
   token?: string;
@@ -24,17 +26,9 @@ export type AgentEvent = {
   data?: Record<string, unknown>;
 };
 
-export type SessionInfo = {
-  thinkingLevel?: string;
-  verboseLevel?: string;
-  reasoningLevel?: string;
+export type SessionInfo = SessionStatusFieldsNullable & {
   model?: string;
   modelProvider?: string;
-  contextTokens?: number | null;
-  inputTokens?: number | null;
-  outputTokens?: number | null;
-  totalTokens?: number | null;
-  responseUsage?: "on" | "off" | "tokens" | "full";
   updatedAt?: number | null;
   displayName?: string;
 };
