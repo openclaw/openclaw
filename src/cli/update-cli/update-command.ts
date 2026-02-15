@@ -32,7 +32,6 @@ import { pathExists } from "../../utils.js";
 import { replaceCliName, resolveCliName } from "../cli-name.js";
 import { formatCliCommand } from "../command-format.js";
 import { installCompletion } from "../completion-cli.js";
-import { runDaemonRestart } from "../daemon-cli.js";
 import { createUpdateProgress, printResult } from "./progress.js";
 import {
   DEFAULT_PACKAGE_NAME,
@@ -396,7 +395,14 @@ async function maybeRestartService(params: {
     }
 
     try {
-      const restarted = await runDaemonRestart();
+      // After update, module hashes change (e.g., daemon-cli-ABC.js → daemon-cli-XYZ.js).
+      // Spawn a new process to load the updated code, avoiding ERR_MODULE_NOT_FOUND.
+      const result = await runCommandWithTimeout({
+        cmd: CLI_NAME,
+        args: ["daemon", "restart"],
+        timeoutSeconds: 30,
+      });
+      const restarted = result.exitCode === 0;
       if (!params.opts.json && restarted) {
         defaultRuntime.log(theme.success("Daemon restarted successfully."));
         defaultRuntime.log("");
