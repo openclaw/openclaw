@@ -47,7 +47,7 @@ describe("update-startup", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-17T10:00:00Z"));
     tempDir = path.join(suiteRoot, `case-${++suiteCase}`);
-    await fs.mkdir(tempDir, { recursive: true });
+    await fs.mkdir(tempDir);
     hadStateDir = Object.prototype.hasOwnProperty.call(process.env, "OPENCLAW_STATE_DIR");
     prevStateDir = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_STATE_DIR = tempDir;
@@ -87,7 +87,6 @@ describe("update-startup", () => {
     } else {
       delete process.env.VITEST;
     }
-    await fs.rm(tempDir, { recursive: true, force: true });
   });
 
   afterAll(async () => {
