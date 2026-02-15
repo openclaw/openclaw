@@ -253,6 +253,58 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         gatewayHost: cfg.gateway?.customBindHost ?? undefined,
       });
 
+      const isLoopbackHost = (hostname: string) =>
+        hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+
+      try {
+        const mmHost = new URL(baseUrl).hostname;
+        const callbackHost = new URL(callbackUrl).hostname;
+        if (isLoopbackHost(callbackHost) && !isLoopbackHost(mmHost)) {
+          runtime.error?.(
+            `mattermost: slash commands callbackUrl resolved to ${callbackUrl} (loopback). This is unreachable from Mattermost at ${baseUrl}. Set channels.mattermost.commands.callbackUrl to a reachable URL (e.g. your public reverse proxy URL). Skipping slash command registration.`,
+          );
+          throw new Error("unreachable callbackUrl (loopback)");
+        }
+      } catch (err) {
+        // If URL parsing fails or callback is loopback/unreachable, skip registration.
+        throw err;
+      }
+
+      const commandsToRegister: import("./slash-commands.js").MattermostCommandSpec[] = [
+        ...DEFAULT_COMMAND_SPECS,
+      ];
+
+      if (slashConfig.nativeSkills === true) {
+        try {
+          const { listSkillCommandsForAgents } =
+            await import("../../../../src/auto-reply/skill-commands.js");
+          const skillCommands = listSkillCommandsForAgents({ cfg: cfg as any });
+          for (const spec of skillCommands) {
+            const name = typeof spec.name === "string" ? spec.name.trim() : "";
+            if (!name) continue;
+            const trigger = name.startsWith("oc_") ? name : `oc_${name}`;
+            commandsToRegister.push({
+              trigger,
+              description: spec.description || `Run skill ${name}`,
+              autoComplete: true,
+              autoCompleteHint: "[args]",
+            });
+          }
+        } catch (err) {
+          runtime.error?.(`mattermost: failed to list skill commands: ${String(err)}`);
+        }
+      }
+
+      // Deduplicate by trigger
+      const seen = new Set<string>();
+      const dedupedCommands = commandsToRegister.filter((cmd) => {
+        const key = cmd.trigger.trim();
+        if (!key) return false;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+
       const allRegistered: import("./slash-commands.js").MattermostRegisteredCommand[] = [];
 
       for (const team of teams) {
@@ -260,7 +312,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           client,
           teamId: team.id,
           callbackUrl,
-          commands: DEFAULT_COMMAND_SPECS,
+          commands: dedupedCommands,
           log: (msg) => runtime.log?.(msg),
         });
         allRegistered.push(...registered);
