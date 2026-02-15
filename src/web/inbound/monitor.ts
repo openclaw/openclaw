@@ -11,7 +11,11 @@ import { saveMediaBuffer } from "../../media/store.js";
 import { jidToE164, resolveJidToE164 } from "../../utils.js";
 import { createWaSocket, getStatusCode, waitForWaConnection } from "../session.js";
 import { checkInboundAccessControl } from "./access-control.js";
-import { isRecentInboundMessage } from "./dedupe.js";
+import {
+  buildFallbackInboundKey,
+  isRecentFallbackInboundMessage,
+  isRecentInboundMessage,
+} from "./dedupe.js";
 import {
   describeReplyContext,
   extractLocationData,
@@ -246,6 +250,21 @@ export async function monitorWebInbox(options: {
       if (!body) {
         body = extractMediaPlaceholder(msg.message ?? undefined);
         if (!body) {
+          continue;
+        }
+      }
+      if (!id) {
+        const fallbackKey = buildFallbackInboundKey(
+          options.accountId,
+          remoteJid,
+          messageTimestampMs,
+          from,
+          body,
+        );
+        if (isRecentFallbackInboundMessage(fallbackKey)) {
+          if (shouldLogVerbose()) {
+            logVerbose(`Skipping duplicate inbound (no id, fallback key matched): ${remoteJid}`);
+          }
           continue;
         }
       }
