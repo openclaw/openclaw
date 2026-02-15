@@ -1,3 +1,4 @@
+import type { FailoverReason } from "../agents/pi-embedded-helpers.js";
 import type { ChannelId } from "../channels/plugins/types.js";
 
 export type CronSchedule =
@@ -58,6 +59,8 @@ export type CronJobState = {
   lastRunAtMs?: number;
   lastStatus?: "ok" | "error" | "skipped";
   lastError?: string;
+  /** Classified reason for the last error (when available). */
+  lastErrorReason?: FailoverReason;
   lastDurationMs?: number;
   /** Number of consecutive execution errors (reset on success). Used for backoff. */
   consecutiveErrors?: number;
