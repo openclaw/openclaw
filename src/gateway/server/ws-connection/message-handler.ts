@@ -430,11 +430,13 @@ export function attachGatewayWsMessageHandler(params: {
           close(1008, truncateCloseReason(authMessage));
         };
         if (!device) {
-          if (scopes.length > 0) {
+          const canSkipDevice = sharedAuthOk;
+          // Only clear self-declared scopes if the client cannot skip device identity.
+          // If shared-auth succeeded (password/token auth), allow the declared scopes to persist.
+          if (!canSkipDevice && scopes.length > 0) {
             scopes = [];
             connectParams.scopes = scopes;
           }
-          const canSkipDevice = sharedAuthOk;
 
           if (isControlUi && !allowControlUiBypass) {
             const errorMessage = "control ui requires HTTPS or localhost (secure context)";
