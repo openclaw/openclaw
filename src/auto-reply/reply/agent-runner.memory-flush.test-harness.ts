@@ -3,11 +3,6 @@ import path from "node:path";
 import { vi } from "vitest";
 import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
-import {
-  embeddedPiMockFactory,
-  modelFallbackMockFactory,
-  queueMockFactory,
-} from "./agent-runner.test-harness.mocks.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 // Avoid exporting vitest mock types (TS2742 under pnpm + d.ts emit).
@@ -35,19 +30,24 @@ export function getRunCliAgentMock(): AnyMock {
 
 export type { EmbeddedRunParams };
 
-vi.mock("../../agents/model-fallback.js", () => ({
-  ...modelFallbackMockFactory(),
-}));
+vi.mock("../../agents/model-fallback.js", async () => {
+  const { modelFallbackMockFactory } = await import("./agent-runner.test-harness.mocks.js");
+  return modelFallbackMockFactory();
+});
 
 vi.mock("../../agents/cli-runner.js", () => ({
   runCliAgent: (params: unknown) => state.runCliAgentMock(params),
 }));
 
-vi.mock("../../agents/pi-embedded.js", () => ({
-  ...embeddedPiMockFactory(state),
-}));
+vi.mock("../../agents/pi-embedded.js", async () => {
+  const { embeddedPiMockFactory } = await import("./agent-runner.test-harness.mocks.js");
+  return embeddedPiMockFactory(state);
+});
 
-vi.mock("./queue.js", queueMockFactory);
+vi.mock("./queue.js", async () => {
+  const { queueMockFactory } = await import("./agent-runner.test-harness.mocks.js");
+  return await queueMockFactory();
+});
 
 export async function seedSessionStore(params: {
   storePath: string;

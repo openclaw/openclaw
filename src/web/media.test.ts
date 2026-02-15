@@ -371,4 +371,34 @@ describe("local media root guard", () => {
       }),
     );
   });
+
+  it("rejects default OpenClaw state per-agent workspace-* roots without explicit local roots", async () => {
+    const { STATE_DIR } = await import("../config/paths.js");
+    const readFile = vi.fn(async () => Buffer.from("generated-media"));
+
+    await expect(
+      loadWebMedia(path.join(STATE_DIR, "workspace-clawdy", "tmp", "render.bin"), {
+        maxBytes: 1024 * 1024,
+        readFile,
+      }),
+    ).rejects.toThrow(/not under an allowed directory/i);
+  });
+
+  it("allows per-agent workspace-* paths with explicit local roots", async () => {
+    const { STATE_DIR } = await import("../config/paths.js");
+    const readFile = vi.fn(async () => Buffer.from("generated-media"));
+    const agentWorkspaceDir = path.join(STATE_DIR, "workspace-clawdy");
+
+    await expect(
+      loadWebMedia(path.join(agentWorkspaceDir, "tmp", "render.bin"), {
+        maxBytes: 1024 * 1024,
+        localRoots: [agentWorkspaceDir],
+        readFile,
+      }),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        kind: "unknown",
+      }),
+    );
+  });
 });

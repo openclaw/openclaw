@@ -14,6 +14,7 @@ export type IMessageSendOpts = {
   region?: string;
   accountId?: string;
   mediaUrl?: string;
+  mediaLocalRoots?: readonly string[];
   maxBytes?: number;
   timeoutMs?: number;
   chatId?: number;
@@ -23,6 +24,7 @@ export type IMessageSendOpts = {
   resolveAttachmentImpl?: (
     mediaUrl: string,
     maxBytes: number,
+    options?: { localRoots?: readonly string[] },
   ) => Promise<{ path: string; contentType?: string }>;
   createClient?: (params: { cliPath: string; dbPath?: string }) => Promise<IMessageRpcClient>;
 };
@@ -76,7 +78,9 @@ export async function sendMessageIMessage(
 
   if (opts.mediaUrl?.trim()) {
     const resolveAttachmentFn = opts.resolveAttachmentImpl ?? resolveOutboundAttachmentFromUrl;
-    const resolved = await resolveAttachmentFn(opts.mediaUrl.trim(), maxBytes);
+    const resolved = await resolveAttachmentFn(opts.mediaUrl.trim(), maxBytes, {
+      localRoots: opts.mediaLocalRoots,
+    });
     filePath = resolved.path;
     if (!message.trim()) {
       const kind = mediaKindFromMime(resolved.contentType ?? undefined);

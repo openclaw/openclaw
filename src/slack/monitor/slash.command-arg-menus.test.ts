@@ -1,8 +1,16 @@
-import { describe, expect, it, vi } from "vitest";
-import { registerSlackMonitorSlashCommands } from "./slash.js";
-import { getDispatchMock } from "./slash.test-mocks.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { getSlackSlashMocks, resetSlackSlashMocks } from "./slash.test-harness.js";
 
-const dispatchMock = getDispatchMock();
+const { dispatchMock } = getSlackSlashMocks();
+
+beforeEach(() => {
+  resetSlackSlashMocks();
+});
+
+async function registerCommands(ctx: unknown, account: unknown) {
+  const { registerSlackMonitorSlashCommands } = await import("./slash.js");
+  registerSlackMonitorSlashCommands({ ctx: ctx as never, account: account as never });
+}
 
 function encodeValue(parts: { command: string; arg: string; value: string; userId: string }) {
   return [
@@ -65,7 +73,7 @@ function createHarness() {
 describe("Slack native command argument menus", () => {
   it("shows a button menu when required args are omitted", async () => {
     const { commands, ctx, account } = createHarness();
-    registerSlackMonitorSlashCommands({ ctx: ctx as never, account: account as never });
+    await registerCommands(ctx, account);
 
     const handler = commands.get("/usage");
     if (!handler) {
@@ -96,7 +104,7 @@ describe("Slack native command argument menus", () => {
 
   it("dispatches the command when a menu button is clicked", async () => {
     const { actions, ctx, account } = createHarness();
-    registerSlackMonitorSlashCommands({ ctx: ctx as never, account: account as never });
+    await registerCommands(ctx, account);
 
     const handler = actions.get("openclaw_cmdarg");
     if (!handler) {
@@ -124,7 +132,7 @@ describe("Slack native command argument menus", () => {
 
   it("rejects menu clicks from other users", async () => {
     const { actions, ctx, account } = createHarness();
-    registerSlackMonitorSlashCommands({ ctx: ctx as never, account: account as never });
+    await registerCommands(ctx, account);
 
     const handler = actions.get("openclaw_cmdarg");
     if (!handler) {
@@ -154,7 +162,7 @@ describe("Slack native command argument menus", () => {
 
   it("falls back to postEphemeral with token when respond is unavailable", async () => {
     const { actions, postEphemeral, ctx, account } = createHarness();
-    registerSlackMonitorSlashCommands({ ctx: ctx as never, account: account as never });
+    await registerCommands(ctx, account);
 
     const handler = actions.get("openclaw_cmdarg");
     if (!handler) {
@@ -178,7 +186,7 @@ describe("Slack native command argument menus", () => {
 
   it("treats malformed percent-encoding as an invalid button (no throw)", async () => {
     const { actions, postEphemeral, ctx, account } = createHarness();
-    registerSlackMonitorSlashCommands({ ctx: ctx as never, account: account as never });
+    await registerCommands(ctx, account);
 
     const handler = actions.get("openclaw_cmdarg");
     if (!handler) {

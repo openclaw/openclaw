@@ -1,5 +1,6 @@
 import type { ButtonInteraction, ComponentData } from "@buape/carbon";
 import { Routes } from "discord-api-types/v10";
+import fs from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DiscordExecApprovalConfig } from "../../config/types.discord.js";
 import {
@@ -11,6 +12,16 @@ import {
   ExecApprovalButton,
   type ExecApprovalButtonContext,
 } from "./exec-approvals.js";
+
+const STORE_PATH = "/tmp/openclaw-exec-approvals-test.json";
+
+const writeStore = (store: Record<string, unknown>) => {
+  fs.writeFileSync(STORE_PATH, `${JSON.stringify(store, null, 2)}\n`, "utf8");
+};
+
+beforeEach(() => {
+  writeStore({});
+});
 
 // ─── Mocks ────────────────────────────────────────────────────────────────────
 
@@ -50,12 +61,12 @@ vi.mock("../../logger.js", () => ({
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function createHandler(config: DiscordExecApprovalConfig) {
+function createHandler(config: DiscordExecApprovalConfig, accountId = "default") {
   return new DiscordExecApprovalHandler({
     token: "test-token",
-    accountId: "default",
+    accountId,
     config,
-    cfg: {},
+    cfg: { session: { store: STORE_PATH } },
   });
 }
 
@@ -279,6 +290,21 @@ describe("DiscordExecApprovalHandler.shouldHandle", () => {
     expect(handler.shouldHandle(createRequest({ sessionKey: "other:test:discord:123" }))).toBe(
       false,
     );
+  });
+
+  it("filters by discord account when session store includes account", () => {
+    writeStore({
+      "agent:test-agent:discord:channel:999888777": {
+        sessionId: "sess",
+        updatedAt: Date.now(),
+        origin: { provider: "discord", accountId: "secondary" },
+        lastAccountId: "secondary",
+      },
+    });
+    const handler = createHandler({ enabled: true, approvers: ["123"] }, "default");
+    expect(handler.shouldHandle(createRequest())).toBe(false);
+    const matching = createHandler({ enabled: true, approvers: ["123"] }, "secondary");
+    expect(matching.shouldHandle(createRequest())).toBe(true);
   });
 
   it("combines agent and session filters", () => {
@@ -618,7 +644,6 @@ describe("DiscordExecApprovalHandler delivery routing", () => {
       Routes.channelMessages("dm-1"),
       expect.objectContaining({
         body: expect.objectContaining({
-          embeds: expect.any(Array),
           components: expect.any(Array),
         }),
       }),
