@@ -375,6 +375,43 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
         | undefined;
 
       if (socketClient) {
+        // --- Reconnect mutex ---
+        // Upstream bug (slackapi/node-slack-sdk#2094): the close handler calls
+        // delayReconnectAttempt(this.start) fire-and-forget. When multiple close
+        // events fire in sequence (normal during socket rotation), each spawns an
+        // independent reconnect. If any hit Slack's rate limit on apps.connections.open,
+        // the failures trigger more close events → exponential reconnect storm.
+        //
+        // Fix: replace socketClient.start with a guarded version. Since the SDK's
+        // close handler reads this.start at call-time (arrow fn over `this`), our
+        // replacement is picked up automatically.
+        const originalStart = socketClient.start!.bind(socketClient);
+        let reconnectInFlight = false;
+        let lastReconnectAt = 0;
+        const RECONNECT_COOLDOWN_MS = 5_000;
+
+        socketClient.start = async (): Promise<unknown> => {
+          if (reconnectInFlight) {
+            runtime.log?.("[slack-health] reconnect already in-flight — skipping duplicate");
+            return;
+          }
+          const now = Date.now();
+          const sinceLast = now - lastReconnectAt;
+          if (sinceLast < RECONNECT_COOLDOWN_MS) {
+            runtime.log?.(
+              `[slack-health] reconnect cooldown (${Math.round(sinceLast)}ms < ${RECONNECT_COOLDOWN_MS}ms) — skipping`,
+            );
+            return;
+          }
+          reconnectInFlight = true;
+          lastReconnectAt = now;
+          try {
+            return await originalStart();
+          } finally {
+            reconnectInFlight = false;
+          }
+        };
+
         socketClient.on("close", () => {
           runtime.log?.("[slack-health] socket close event fired — SDK should auto-reconnect");
         });
@@ -418,7 +455,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
           runtime.error?.(
             `[slack-health] socket in bad state: ${stateLabel} — forcing reconnect`,
           );
-          // Force reconnect by calling start() directly
+          // The guarded start() will no-op if a reconnect is already in-flight
           if (typeof socketClient.start === "function") {
             socketClient.start().catch((err: Error) => {
               runtime.error?.(
