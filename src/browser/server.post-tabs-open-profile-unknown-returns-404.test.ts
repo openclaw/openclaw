@@ -39,6 +39,10 @@ describe("profile CRUD endpoints", () => {
     state.reachable = false;
     state.cfgAttachOnly = false;
 
+    // Ensure auth is disabled for these tests
+    vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "");
+    vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "");
+
     for (const fn of Object.values(pwMocks)) {
       fn.mockClear();
     }
