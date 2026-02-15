@@ -41,6 +41,11 @@ import {
   resolveUpdateAvailability,
 } from "./status.update.js";
 
+/** Type guard: distinguishes { error: string } from HealthSummary */
+function isHealthError(health: HealthSummary | { error: string }): health is { error: string } {
+  return typeof (health as { error?: unknown }).error === "string";
+}
+
 export async function statusCommand(
   opts: {
     json?: boolean;
@@ -107,21 +112,23 @@ export async function statusCommand(
         async () => await loadProviderUsageSummary({ timeoutMs: opts.timeoutMs }),
       )
     : undefined;
-  const health: HealthSummary | undefined = opts.deep
-    ? await withProgress(
-        {
-          label: "Checking gateway health…",
-          indeterminate: true,
-          enabled: opts.json !== true,
-        },
-        async () =>
-          await callGateway<HealthSummary>({
-            method: "health",
-            params: { probe: true },
-            timeoutMs: opts.timeoutMs,
-          }),
-      )
-    : undefined;
+  // Guard: skip health probe when gateway is unreachable (matches status-all.ts pattern)
+  const health: HealthSummary | { error: string } | undefined =
+    opts.deep && gatewayReachable
+      ? await withProgress(
+          {
+            label: "Checking gateway health…",
+            indeterminate: true,
+            enabled: opts.json !== true,
+          },
+          async () =>
+            await callGateway<HealthSummary>({
+              method: "health",
+              params: { probe: true },
+              timeoutMs: opts.timeoutMs,
+            }).catch((err) => ({ error: String(err) })),
+        )
+      : undefined;
   const lastHeartbeat =
     opts.deep && gatewayReachable
       ? await callGateway<HeartbeatEventPayload | null>({
@@ -271,7 +278,21 @@ export async function statusCommand(
   const eventsValue =
     summary.queuedSystemEvents.length > 0 ? `${summary.queuedSystemEvents.length} queued` : "none";
 
-  const probesValue = health ? ok("enabled") : muted("skipped (use --deep)");
+  const probesValue = (() => {
+    if (!opts.deep) {
+      return muted("skipped (use --deep)");
+    }
+    if (!gatewayReachable) {
+      return warn("skipped (gateway unreachable)");
+    }
+    if (!health) {
+      return muted("skipped");
+    }
+    if (isHealthError(health)) {
+      return warn("failed");
+    }
+    return ok("enabled");
+  })();
 
   const heartbeatValue = (() => {
     const parts = summary.heartbeat.agents
@@ -555,42 +576,52 @@ export async function statusCommand(
     runtime.log("");
     runtime.log(theme.heading("Health"));
     const rows: Array<Record<string, string>> = [];
-    rows.push({
-      Item: "Gateway",
-      Status: ok("reachable"),
-      Detail: `${health.durationMs}ms`,
-    });
 
-    for (const line of formatHealthChannelLines(health, { accountMode: "all" })) {
-      const colon = line.indexOf(":");
-      if (colon === -1) {
-        continue;
-      }
-      const item = line.slice(0, colon).trim();
-      const detail = line.slice(colon + 1).trim();
-      const normalized = detail.toLowerCase();
-      const status = (() => {
-        if (normalized.startsWith("ok")) {
-          return ok("OK");
+    // Handle error case (health probe failed but was caught)
+    if (isHealthError(health)) {
+      rows.push({
+        Item: "Gateway",
+        Status: warn("ERROR"),
+        Detail: health.error,
+      });
+    } else {
+      rows.push({
+        Item: "Gateway",
+        Status: ok("reachable"),
+        Detail: `${health.durationMs}ms`,
+      });
+
+      for (const line of formatHealthChannelLines(health, { accountMode: "all" })) {
+        const colon = line.indexOf(":");
+        if (colon === -1) {
+          continue;
         }
-        if (normalized.startsWith("failed")) {
+        const item = line.slice(0, colon).trim();
+        const detail = line.slice(colon + 1).trim();
+        const normalized = detail.toLowerCase();
+        const status = (() => {
+          if (normalized.startsWith("ok")) {
+            return ok("OK");
+          }
+          if (normalized.startsWith("failed")) {
+            return warn("WARN");
+          }
+          if (normalized.startsWith("not configured")) {
+            return muted("OFF");
+          }
+          if (normalized.startsWith("configured")) {
+            return ok("OK");
+          }
+          if (normalized.startsWith("linked")) {
+            return ok("LINKED");
+          }
+          if (normalized.startsWith("not linked")) {
+            return warn("UNLINKED");
+          }
           return warn("WARN");
-        }
-        if (normalized.startsWith("not configured")) {
-          return muted("OFF");
-        }
-        if (normalized.startsWith("configured")) {
-          return ok("OK");
-        }
-        if (normalized.startsWith("linked")) {
-          return ok("LINKED");
-        }
-        if (normalized.startsWith("not linked")) {
-          return warn("UNLINKED");
-        }
-        return warn("WARN");
-      })();
-      rows.push({ Item: item, Status: status, Detail: detail });
+        })();
+        rows.push({ Item: item, Status: status, Detail: detail });
+      }
     }
 
     runtime.log(
