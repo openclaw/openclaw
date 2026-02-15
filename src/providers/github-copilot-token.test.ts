@@ -72,4 +72,87 @@ describe("github-copilot token", () => {
     expect(res.baseUrl).toBe("https://api.contoso.test");
     expect(saveJsonFile).toHaveBeenCalledTimes(1);
   });
+
+  it("sends Copilot client headers on token exchange", async () => {
+    loadJsonFile.mockReturnValue(undefined);
+
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        token: "tok;proxy-ep=proxy.example.com;",
+        expires_at: Math.floor(Date.now() / 1000) + 3600,
+      }),
+    });
+
+    const { resolveCopilotApiToken, COPILOT_CLIENT_HEADERS } =
+      await import("./github-copilot-token.js");
+
+    await resolveCopilotApiToken({
+      githubToken: "ghp_test",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      loadJsonFileImpl: loadJsonFile,
+      saveJsonFileImpl: saveJsonFile,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const [, options] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    const headers = options.headers as Record<string, string>;
+
+    // Verify all client identification headers are present
+    expect(headers["User-Agent"]).toBe(COPILOT_CLIENT_HEADERS["User-Agent"]);
+    expect(headers["Editor-Version"]).toBe(COPILOT_CLIENT_HEADERS["Editor-Version"]);
+    expect(headers["Editor-Plugin-Version"]).toBe(COPILOT_CLIENT_HEADERS["Editor-Plugin-Version"]);
+    expect(headers["X-Github-Api-Version"]).toBe(COPILOT_CLIENT_HEADERS["X-Github-Api-Version"]);
+    // Authorization must still be present
+    expect(headers.Authorization).toBe("Bearer ghp_test");
+  });
+
+  it("setRuntimeApiKeyWithCopilotExchange exchanges token for github-copilot", async () => {
+    loadJsonFile.mockReturnValue(undefined);
+
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        token: "exchanged-jwt",
+        expires_at: Math.floor(Date.now() / 1000) + 3600,
+      }),
+    });
+
+    // Patch global fetch so the helper can use it
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = fetchImpl as unknown as typeof fetch;
+
+    try {
+      const { setRuntimeApiKeyWithCopilotExchange } = await import("./github-copilot-token.js");
+
+      const authStorage = { setRuntimeApiKey: vi.fn() };
+      const result = await setRuntimeApiKeyWithCopilotExchange(
+        authStorage,
+        "github-copilot",
+        "ghp_mytoken",
+        { loadJsonFileImpl: loadJsonFile, saveJsonFileImpl: saveJsonFile },
+      );
+
+      expect(authStorage.setRuntimeApiKey).toHaveBeenCalledWith("github-copilot", "exchanged-jwt");
+      expect(result).toBe("exchanged-jwt");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("setRuntimeApiKeyWithCopilotExchange passes through for other providers", async () => {
+    const { setRuntimeApiKeyWithCopilotExchange } = await import("./github-copilot-token.js");
+
+    const authStorage = { setRuntimeApiKey: vi.fn() };
+    const result = await setRuntimeApiKeyWithCopilotExchange(
+      authStorage,
+      "anthropic",
+      "sk-ant-key",
+    );
+
+    expect(authStorage.setRuntimeApiKey).toHaveBeenCalledWith("anthropic", "sk-ant-key");
+    expect(result).toBe("sk-ant-key");
+  });
 });

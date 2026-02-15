@@ -6,6 +6,7 @@ import { getApiKeyForModel, requireApiKey } from "../../agents/model-auth.js";
 import { ensureOpenClawModelsJson } from "../../agents/models-config.js";
 import { discoverAuthStorage, discoverModels } from "../../agents/pi-model-discovery.js";
 import { coerceImageAssistantText } from "../../agents/tools/image-tool.helpers.js";
+import { setRuntimeApiKeyWithCopilotExchange } from "../../providers/github-copilot-token.js";
 
 export async function describeImageWithModel(
   params: ImageDescriptionRequest,
@@ -28,12 +29,16 @@ export async function describeImageWithModel(
     preferredProfile: params.preferredProfile,
   });
   const apiKey = requireApiKey(apiKeyInfo, model.provider);
-  authStorage.setRuntimeApiKey(model.provider, apiKey);
+  const effectiveKey = await setRuntimeApiKeyWithCopilotExchange(
+    authStorage,
+    model.provider,
+    apiKey,
+  );
 
   const base64 = params.buffer.toString("base64");
   if (model.provider === "minimax") {
     const text = await minimaxUnderstandImage({
-      apiKey,
+      apiKey: effectiveKey,
       prompt: params.prompt ?? "Describe the image.",
       imageDataUrl: `data:${params.mime ?? "image/jpeg"};base64,${base64}`,
       modelBaseUrl: model.baseUrl,
@@ -54,7 +59,7 @@ export async function describeImageWithModel(
     ],
   };
   const message = await complete(model, context, {
-    apiKey,
+    apiKey: effectiveKey,
     maxTokens: params.maxTokens ?? 512,
   });
   const text = coerceImageAssistantText({

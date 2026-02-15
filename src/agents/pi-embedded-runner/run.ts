@@ -3,6 +3,7 @@ import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import type { EmbeddedPiAgentMeta, EmbeddedPiRunResult } from "./types.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
+import { setRuntimeApiKeyWithCopilotExchange } from "../../providers/github-copilot-token.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import {
@@ -338,16 +339,7 @@ export async function runEmbeddedPiAgent(
           lastProfileId = resolvedProfileId;
           return;
         }
-        if (model.provider === "github-copilot") {
-          const { resolveCopilotApiToken } =
-            await import("../../providers/github-copilot-token.js");
-          const copilotToken = await resolveCopilotApiToken({
-            githubToken: apiKeyInfo.apiKey,
-          });
-          authStorage.setRuntimeApiKey(model.provider, copilotToken.token);
-        } else {
-          authStorage.setRuntimeApiKey(model.provider, apiKeyInfo.apiKey);
-        }
+        await setRuntimeApiKeyWithCopilotExchange(authStorage, model.provider, apiKeyInfo.apiKey);
         lastProfileId = apiKeyInfo.profileId;
       };
 

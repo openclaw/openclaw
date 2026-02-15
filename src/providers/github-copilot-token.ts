@@ -4,6 +4,18 @@ import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
 
 const COPILOT_TOKEN_URL = "https://api.github.com/copilot_internal/v2/token";
 
+/**
+ * Copilot client identification headers required by GitHub internal APIs.
+ * The token exchange and usage endpoints reject or return 404 without these.
+ * Values mirror what VS Code Copilot Chat sends.
+ */
+export const COPILOT_CLIENT_HEADERS = {
+  "User-Agent": "GitHubCopilotChat/0.26.7",
+  "Editor-Version": "vscode/1.96.2",
+  "Editor-Plugin-Version": "copilot-chat/0.26.7",
+  "X-Github-Api-Version": "2025-04-01",
+} as const;
+
 export type CachedCopilotToken = {
   token: string;
   /** milliseconds since epoch */
@@ -108,11 +120,14 @@ export async function resolveCopilotApiToken(params: {
   }
 
   const fetchImpl = params.fetchImpl ?? fetch;
+  // GitHub's internal token endpoint requires Copilot-client identification
+  // headers; without them requests may 404 even with valid tokens.
   const res = await fetchImpl(COPILOT_TOKEN_URL, {
     method: "GET",
     headers: {
       Accept: "application/json",
       Authorization: `Bearer ${params.githubToken}`,
+      ...COPILOT_CLIENT_HEADERS,
     },
   });
 
@@ -134,4 +149,29 @@ export async function resolveCopilotApiToken(params: {
     source: `fetched:${COPILOT_TOKEN_URL}`,
     baseUrl: deriveCopilotApiBaseUrlFromToken(payload.token) ?? DEFAULT_COPILOT_API_BASE_URL,
   };
+}
+
+/**
+ * Set the runtime API key for a provider. When the provider is
+ * `"github-copilot"`, the raw GitHub token is exchanged for a
+ * short-lived Copilot JWT first. Other providers pass the key through.
+ *
+ * @param authStorage - pi-ai auth storage instance
+ * @param provider    - provider id (e.g. "github-copilot", "anthropic")
+ * @param apiKey      - raw API key / GitHub token
+ * @returns the effective API key (exchanged Copilot JWT or original key)
+ */
+export async function setRuntimeApiKeyWithCopilotExchange(
+  authStorage: { setRuntimeApiKey(provider: string, key: string): void },
+  provider: string,
+  apiKey: string,
+  resolveOpts?: Partial<Omit<Parameters<typeof resolveCopilotApiToken>[0], "githubToken">>,
+): Promise<string> {
+  if (provider === "github-copilot") {
+    const copilotToken = await resolveCopilotApiToken({ githubToken: apiKey, ...resolveOpts });
+    authStorage.setRuntimeApiKey(provider, copilotToken.token);
+    return copilotToken.token;
+  }
+  authStorage.setRuntimeApiKey(provider, apiKey);
+  return apiKey;
 }

@@ -4,6 +4,7 @@ import path from "node:path";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SandboxFsBridge } from "../sandbox/fs-bridge.js";
 import type { AnyAgentTool } from "./common.js";
+import { setRuntimeApiKeyWithCopilotExchange } from "../../providers/github-copilot-token.js";
 import { resolveUserPath } from "../../utils.js";
 import { getDefaultLocalRoots, loadWebMedia } from "../../web/media.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "../auth-profiles.js";
@@ -284,12 +285,16 @@ async function runImagePrompt(params: {
         agentDir: params.agentDir,
       });
       const apiKey = requireApiKey(apiKeyInfo, model.provider);
-      authStorage.setRuntimeApiKey(model.provider, apiKey);
+      const effectiveKey = await setRuntimeApiKeyWithCopilotExchange(
+        authStorage,
+        model.provider,
+        apiKey,
+      );
       const imageDataUrl = `data:${params.mimeType};base64,${params.base64}`;
 
       if (model.provider === "minimax") {
         const text = await minimaxUnderstandImage({
-          apiKey,
+          apiKey: effectiveKey,
           prompt: params.prompt,
           imageDataUrl,
           modelBaseUrl: model.baseUrl,
@@ -299,7 +304,7 @@ async function runImagePrompt(params: {
 
       const context = buildImageContext(params.prompt, params.base64, params.mimeType);
       const message = await complete(model, context, {
-        apiKey,
+        apiKey: effectiveKey,
         maxTokens: resolveImageToolMaxTokens(model.maxTokens),
       });
       const text = coerceImageAssistantText({

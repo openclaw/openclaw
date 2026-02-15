@@ -867,6 +867,13 @@ export async function resolveImplicitCopilotProvider(params: {
   // We only override baseUrl; the model list comes from pi-ai built-ins.
   return {
     baseUrl,
+    headers: {
+      "Copilot-Integration-Id": "vscode-chat",
+      "Editor-Version": "vscode/1.96.2",
+      // Always include: GitHub ignores it for non-vision requests,
+      // but missing it on vision requests causes 400.
+      "Copilot-Vision-Request": "true",
+    },
     models: [],
   } satisfies ProviderConfig;
 }

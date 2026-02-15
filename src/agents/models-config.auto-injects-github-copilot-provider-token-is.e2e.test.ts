@@ -30,11 +30,20 @@ describe("models-config", () => {
 
         const raw = await fs.readFile(path.join(agentDir, "models.json"), "utf8");
         const parsed = JSON.parse(raw) as {
-          providers: Record<string, { baseUrl?: string; models?: unknown[] }>;
+          providers: Record<
+            string,
+            { baseUrl?: string; headers?: Record<string, string>; models?: unknown[] }
+          >;
         };
 
         expect(parsed.providers["github-copilot"]?.baseUrl).toBe("https://api.copilot.example");
         expect(parsed.providers["github-copilot"]?.models?.length ?? 0).toBe(0);
+        // Verify Copilot API headers are injected for vision/integration support
+        const headers = parsed.providers["github-copilot"]?.headers;
+        expect(headers).toBeDefined();
+        expect(headers?.["Copilot-Integration-Id"]).toBe("vscode-chat");
+        expect(headers?.["Editor-Version"]).toBe("vscode/1.96.2");
+        expect(headers?.["Copilot-Vision-Request"]).toBe("true");
       } finally {
         if (previous === undefined) {
           delete process.env.COPILOT_GITHUB_TOKEN;
