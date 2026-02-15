@@ -40,22 +40,43 @@ export async function deliverWebReply(params: {
       ? [replyResult.mediaUrl]
       : [];
 
-  const sendWithRetry = async (fn: () => Promise<unknown>, label: string, maxAttempts = 3) => {
+  // Standard retry: 3 attempts with linear backoff (500ms, 1s, 1.5s).
+  // Disconnect-aware retry: when a disconnect-class error is detected, the
+  // schedule escalates to 6 attempts with exponential backoff (1s, 2s, 4s,
+  // 8s, 16s, 32s ≈ 63s total), giving the reconnection loop in
+  // monitorWebChannel time to create a new socket.  The socketRef pattern
+  // ensures each retry dereferences the *current* (potentially new) socket.
+  const STANDARD = { maxAttempts: 3, baseMs: 500, factor: 1 };
+  const DISCONNECT = { maxAttempts: 6, baseMs: 1_000, factor: 2 };
+
+  const sendWithRetry = async (fn: () => Promise<unknown>, label: string) => {
     let lastErr: unknown;
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    let strategy = STANDARD;
+
+    for (let attempt = 1; attempt <= strategy.maxAttempts; attempt++) {
       try {
         return await fn();
       } catch (err) {
         lastErr = err;
         const errText = formatError(err);
-        const isLast = attempt === maxAttempts;
-        const shouldRetry = /closed|reset|timed\\s*out|disconnect/i.test(errText);
-        if (!shouldRetry || isLast) {
+        const isDisconnect = /closed|reset|timed\s*out|disconnect|no active socket/i.test(errText);
+
+        // On first disconnect error, escalate to extended retry schedule.
+        if (isDisconnect && strategy === STANDARD) {
+          strategy = DISCONNECT;
+        }
+
+        const isLast = attempt >= strategy.maxAttempts;
+        if (!isDisconnect || isLast) {
           throw err;
         }
-        const backoffMs = 500 * attempt;
+
+        const backoffMs =
+          strategy.factor === 1
+            ? strategy.baseMs * attempt
+            : strategy.baseMs * Math.pow(strategy.factor, attempt - 1);
         logVerbose(
-          `Retrying ${label} to ${msg.from} after failure (${attempt}/${maxAttempts - 1}) in ${backoffMs}ms: ${errText}`,
+          `Retrying ${label} to ${msg.from} after failure (${attempt}/${strategy.maxAttempts}) in ${backoffMs}ms: ${errText}`,
         );
         await sleep(backoffMs);
       }

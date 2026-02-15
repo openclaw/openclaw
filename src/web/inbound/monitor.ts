@@ -34,6 +34,13 @@ export async function monitorWebInbox(options: {
   debounceMs?: number;
   /** Optional debounce gating predicate. */
   shouldDebounce?: (msg: WebInboundMessage) => boolean;
+  /**
+   * Shared mutable socket reference for cross-reconnect reply delivery.
+   * When provided, reply/sendMedia closures dereference this at call time
+   * instead of capturing the socket directly, so that reconnection in the
+   * outer monitor loop updates the socket used by in-flight messages.
+   */
+  socketRef?: { current: import("@whiskeysockets/baileys").WASocket | null };
 }) {
   const inboundLogger = getChildLogger({ module: "web-inbound" });
   const inboundConsoleLog = createSubsystemLogger("gateway/channels/whatsapp").child("inbound");
@@ -42,6 +49,17 @@ export async function monitorWebInbox(options: {
   });
   await waitForWaConnection(sock);
   const connectedAtMs = Date.now();
+
+  // Update shared socket reference so in-flight reply closures from prior
+  // connections will pick up this (live) socket on their next retry.
+  if (options.socketRef) {
+    options.socketRef.current = sock;
+  }
+
+  // Helper: resolve the "current" socket.  When a shared socketRef is
+  // provided, dereference it at call time (may be a newer socket after
+  // reconnection).  Otherwise fall back to the local `sock`.
+  const getCurrentSock = () => options.socketRef?.current ?? sock;
 
   let onCloseResolve: ((reason: WebListenerCloseReason) => void) | null = null;
   const onClose = new Promise<WebListenerCloseReason>((resolve) => {
@@ -280,16 +298,18 @@ export async function monitorWebInbox(options: {
       const chatJid = remoteJid;
       const sendComposing = async () => {
         try {
-          await sock.sendPresenceUpdate("composing", chatJid);
+          await getCurrentSock().sendPresenceUpdate("composing", chatJid);
         } catch (err) {
           logVerbose(`Presence update failed: ${String(err)}`);
         }
       };
       const reply = async (text: string) => {
-        await sock.sendMessage(chatJid, { text });
+        const currentSock = getCurrentSock();
+        await currentSock.sendMessage(chatJid, { text });
       };
       const sendMedia = async (payload: AnyMessageContent) => {
-        await sock.sendMessage(chatJid, payload);
+        const currentSock = getCurrentSock();
+        await currentSock.sendMessage(chatJid, payload);
       };
       const timestamp = messageTimestampMs;
       const mentionedJids = extractMentionedJids(msg.message as proto.IMessage | undefined);
