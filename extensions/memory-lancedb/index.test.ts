@@ -187,6 +187,12 @@ describe("memory plugin e2e", () => {
     const { detectCategory } = await import("./index.js");
 
     expect(detectCategory("I prefer dark mode")).toBe("preference");
+    expect(detectCategory("I need dark mode")).toBe("preference");
+    expect(detectCategory("I always use dark mode")).toBe("preference");
+    expect(detectCategory("I never use emojis")).toBe("preference");
+    expect(detectCategory("This is important for me")).toBe("preference");
+    expect(detectCategory("Preferuji tmavý režim")).toBe("preference");
+    expect(detectCategory("Nechci používat světlý režim")).toBe("preference");
     expect(detectCategory("We decided to use React")).toBe("decision");
     expect(detectCategory("My email is test@example.com")).toBe("entity");
     expect(detectCategory("The server is running on port 3000")).toBe("fact");
