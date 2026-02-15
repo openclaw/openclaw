@@ -1,5 +1,26 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { resolveGatewayRuntimeConfig } from "./server-runtime-config.js";
+
+const prevGatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+const prevGatewayPassword = process.env.OPENCLAW_GATEWAY_PASSWORD;
+
+beforeEach(() => {
+  delete process.env.OPENCLAW_GATEWAY_TOKEN;
+  delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+});
+
+afterEach(() => {
+  if (prevGatewayToken === undefined) {
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+  } else {
+    process.env.OPENCLAW_GATEWAY_TOKEN = prevGatewayToken;
+  }
+  if (prevGatewayPassword === undefined) {
+    delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+  } else {
+    process.env.OPENCLAW_GATEWAY_PASSWORD = prevGatewayPassword;
+  }
+});
 
 describe("resolveGatewayRuntimeConfig", () => {
   describe("trusted-proxy auth mode", () => {

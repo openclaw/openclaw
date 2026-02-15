@@ -11,6 +11,13 @@ import { restartGatewayProcessWithFreshPid } from "./process-respawn.js";
 const originalEnv = { ...process.env };
 const originalArgv = [...process.argv];
 const originalExecArgv = [...process.execArgv];
+const supervisorHintEnvVars = [
+  "LAUNCH_JOB_LABEL",
+  "LAUNCH_JOB_NAME",
+  "INVOCATION_ID",
+  "SYSTEMD_EXEC_PID",
+  "JOURNAL_STREAM",
+];
 
 function restoreEnv() {
   for (const key of Object.keys(process.env)) {
@@ -24,6 +31,12 @@ function restoreEnv() {
     } else {
       process.env[key] = value;
     }
+  }
+}
+
+function clearSupervisorHints() {
+  for (const key of supervisorHintEnvVars) {
+    delete process.env[key];
   }
 }
 
@@ -51,7 +64,7 @@ describe("restartGatewayProcessWithFreshPid", () => {
 
   it("spawns detached child with current exec argv", () => {
     delete process.env.OPENCLAW_NO_RESPAWN;
-    delete process.env.LAUNCH_JOB_LABEL;
+    clearSupervisorHints();
     process.execArgv = ["--import", "tsx"];
     process.argv = ["/usr/local/bin/node", "/repo/dist/index.js", "gateway", "run"];
     spawnMock.mockReturnValue({ pid: 4242, unref: vi.fn() });
@@ -70,6 +83,8 @@ describe("restartGatewayProcessWithFreshPid", () => {
   });
 
   it("returns failed when spawn throws", () => {
+    delete process.env.OPENCLAW_NO_RESPAWN;
+    clearSupervisorHints();
     spawnMock.mockImplementation(() => {
       throw new Error("spawn failed");
     });
