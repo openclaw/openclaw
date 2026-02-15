@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { LineAutoReplyDeps } from "./auto-reply-delivery.js";
 import { deliverLineAutoReply } from "./auto-reply-delivery.js";
 import { sendLineReplyChunks } from "./reply-chunks.js";
 
@@ -25,7 +26,7 @@ const createLocationMessage = (location: {
 });
 
 describe("deliverLineAutoReply", () => {
-  it("uses reply token for text before sending rich messages", async () => {
+  function createDeps(overrides?: Partial<LineAutoReplyDeps>) {
     const replyMessageLine = vi.fn(async () => ({}));
     const pushMessageLine = vi.fn(async () => ({}));
     const pushTextMessageWithQuickReplies = vi.fn(async () => ({}));
@@ -36,9 +37,39 @@ describe("deliverLineAutoReply", () => {
     const createQuickReplyItems = vi.fn((labels: string[]) => ({ items: labels }));
     const pushMessagesLine = vi.fn(async () => ({ messageId: "push", chatId: "u1" }));
 
+    const deps: LineAutoReplyDeps = {
+      buildTemplateMessageFromPayload: () => null,
+      processLineMessage: (text) => ({ text, flexMessages: [] }),
+      chunkMarkdownText: (text) => [text],
+      sendLineReplyChunks,
+      replyMessageLine,
+      pushMessageLine,
+      pushTextMessageWithQuickReplies,
+      createTextMessageWithQuickReplies,
+      createQuickReplyItems,
+      pushMessagesLine,
+      createFlexMessage,
+      createImageMessage,
+      createLocationMessage,
+      ...overrides,
+    };
+
+    return {
+      deps,
+      replyMessageLine,
+      pushMessageLine,
+      pushTextMessageWithQuickReplies,
+      createTextMessageWithQuickReplies,
+      createQuickReplyItems,
+      pushMessagesLine,
+    };
+  }
+
+  it("uses reply token for text before sending rich messages", async () => {
     const lineData = {
       flexMessage: { altText: "Card", contents: { type: "bubble" } },
     };
+    const { deps, replyMessageLine, pushMessagesLine, createQuickReplyItems } = createDeps();
 
     const result = await deliverLineAutoReply({
       payload: { text: "hello", channelData: { line: lineData } },
@@ -48,21 +79,7 @@ describe("deliverLineAutoReply", () => {
       replyTokenUsed: false,
       accountId: "acc",
       textLimit: 5000,
-      deps: {
-        buildTemplateMessageFromPayload: () => null,
-        processLineMessage: (text) => ({ text, flexMessages: [] }),
-        chunkMarkdownText: (text) => [text],
-        sendLineReplyChunks,
-        replyMessageLine,
-        pushMessageLine,
-        pushTextMessageWithQuickReplies,
-        createTextMessageWithQuickReplies,
-        createQuickReplyItems,
-        pushMessagesLine,
-        createFlexMessage,
-        createImageMessage,
-        createLocationMessage,
-      },
+      deps,
     });
 
     expect(result.replyTokenUsed).toBe(true);
@@ -80,20 +97,15 @@ describe("deliverLineAutoReply", () => {
   });
 
   it("uses reply token for rich-only payloads", async () => {
-    const replyMessageLine = vi.fn(async () => ({}));
-    const pushMessageLine = vi.fn(async () => ({}));
-    const pushTextMessageWithQuickReplies = vi.fn(async () => ({}));
-    const createTextMessageWithQuickReplies = vi.fn((text: string) => ({
-      type: "text" as const,
-      text,
-    }));
-    const createQuickReplyItems = vi.fn((labels: string[]) => ({ items: labels }));
-    const pushMessagesLine = vi.fn(async () => ({ messageId: "push", chatId: "u1" }));
-
     const lineData = {
       flexMessage: { altText: "Card", contents: { type: "bubble" } },
       quickReplies: ["A"],
     };
+    const { deps, replyMessageLine, pushMessagesLine, createQuickReplyItems } = createDeps({
+      processLineMessage: () => ({ text: "", flexMessages: [] }),
+      chunkMarkdownText: () => [],
+      sendLineReplyChunks: vi.fn(async () => ({ replyTokenUsed: false })),
+    });
 
     const result = await deliverLineAutoReply({
       payload: { channelData: { line: lineData } },
@@ -103,21 +115,7 @@ describe("deliverLineAutoReply", () => {
       replyTokenUsed: false,
       accountId: "acc",
       textLimit: 5000,
-      deps: {
-        buildTemplateMessageFromPayload: () => null,
-        processLineMessage: () => ({ text: "", flexMessages: [] }),
-        chunkMarkdownText: () => [],
-        sendLineReplyChunks: vi.fn(async () => ({ replyTokenUsed: false })),
-        replyMessageLine,
-        pushMessageLine,
-        pushTextMessageWithQuickReplies,
-        createTextMessageWithQuickReplies,
-        createQuickReplyItems,
-        pushMessagesLine,
-        createFlexMessage,
-        createImageMessage,
-        createLocationMessage,
-      },
+      deps,
     });
 
     expect(result.replyTokenUsed).toBe(true);
@@ -137,21 +135,19 @@ describe("deliverLineAutoReply", () => {
   });
 
   it("sends rich messages before quick-reply text so quick replies remain visible", async () => {
-    const replyMessageLine = vi.fn(async () => ({}));
-    const pushMessageLine = vi.fn(async () => ({}));
-    const pushTextMessageWithQuickReplies = vi.fn(async () => ({}));
     const createTextMessageWithQuickReplies = vi.fn((text: string, _quickReplies: string[]) => ({
       type: "text" as const,
       text,
       quickReply: { items: ["A"] },
     }));
-    const createQuickReplyItems = vi.fn((labels: string[]) => ({ items: labels }));
-    const pushMessagesLine = vi.fn(async () => ({ messageId: "push", chatId: "u1" }));
 
     const lineData = {
       flexMessage: { altText: "Card", contents: { type: "bubble" } },
       quickReplies: ["A"],
     };
+    const { deps, pushMessagesLine, replyMessageLine } = createDeps({
+      createTextMessageWithQuickReplies,
+    });
 
     await deliverLineAutoReply({
       payload: { text: "hello", channelData: { line: lineData } },
@@ -161,21 +157,7 @@ describe("deliverLineAutoReply", () => {
       replyTokenUsed: false,
       accountId: "acc",
       textLimit: 5000,
-      deps: {
-        buildTemplateMessageFromPayload: () => null,
-        processLineMessage: (text) => ({ text, flexMessages: [] }),
-        chunkMarkdownText: (text) => [text],
-        sendLineReplyChunks,
-        replyMessageLine,
-        pushMessageLine,
-        pushTextMessageWithQuickReplies,
-        createTextMessageWithQuickReplies,
-        createQuickReplyItems,
-        pushMessagesLine,
-        createFlexMessage,
-        createImageMessage,
-        createLocationMessage,
-      },
+      deps,
     });
 
     expect(pushMessagesLine).toHaveBeenCalledWith(
