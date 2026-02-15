@@ -1,10 +1,25 @@
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import crypto from "node:crypto";
+import fs from "node:fs";
+import { resolveAgentModelFallbacksOverride } from "../../agents/agent-scope.js";
+import { estimateMessagesTokens } from "../../agents/compaction.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { resolveSandboxConfigForAgent, resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
+import {
+  derivePromptTokens,
+  hasNonzeroUsage,
+  normalizeUsage,
+  type UsageLike,
+} from "../../agents/usage.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { type SessionEntry, updateSessionStoreEntry } from "../../config/sessions.js";
+import {
+  resolveAgentIdFromSessionKey,
+  resolveSessionFilePath,
+  type SessionEntry,
+  updateSessionStoreEntry,
+} from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import type { TemplateContext } from "../templating.js";
@@ -24,9 +39,107 @@ import {
 import type { FollowupRun } from "./queue.js";
 import { incrementCompactionCount } from "./session-updates.js";
 
+export function estimatePromptTokensForMemoryFlush(prompt?: string): number | undefined {
+  const trimmed = prompt?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const message: AgentMessage = { role: "user", content: trimmed, timestamp: Date.now() };
+  const tokens = estimateMessagesTokens([message]);
+  if (!Number.isFinite(tokens) || tokens <= 0) {
+    return undefined;
+  }
+  return Math.ceil(tokens);
+}
+
+export function resolveEffectivePromptTokens(
+  basePromptTokens?: number,
+  lastOutputTokens?: number,
+  promptTokenEstimate?: number,
+): number {
+  const base = Math.max(0, basePromptTokens ?? 0);
+  const output = Math.max(0, lastOutputTokens ?? 0);
+  const estimate = Math.max(0, promptTokenEstimate ?? 0);
+  // Flush gating projects the next input context by adding the previous
+  // completion and the current user prompt estimate.
+  return base + output + estimate;
+}
+
+export type SessionTranscriptUsageSnapshot = {
+  promptTokens?: number;
+  outputTokens?: number;
+};
+
+// Keep a generous near-threshold window so large assistant outputs still trigger
+// transcript reads in time to flip memory-flush gating when needed.
+const TRANSCRIPT_OUTPUT_READ_BUFFER_TOKENS = 8192;
+
+export async function readPromptTokensFromSessionLog(
+  sessionId?: string,
+  sessionEntry?: SessionEntry,
+  sessionKey?: string,
+): Promise<SessionTranscriptUsageSnapshot | undefined> {
+  if (!sessionId) {
+    return undefined;
+  }
+  const transcriptPath = (
+    sessionEntry as (SessionEntry & { transcriptPath?: string }) | undefined
+  )?.transcriptPath?.trim();
+  const sessionFile = sessionEntry?.sessionFile?.trim() || transcriptPath;
+  const agentId = sessionFile ? undefined : resolveAgentIdFromSessionKey(sessionKey);
+  const logPath =
+    sessionFile ??
+    resolveSessionFilePath(sessionId, sessionEntry, agentId ? { agentId } : undefined);
+
+  try {
+    const lines = (await fs.promises.readFile(logPath, "utf-8")).split(/\n+/);
+    let lastUsage: ReturnType<typeof normalizeUsage> | undefined;
+    for (const line of lines) {
+      if (!line.trim()) {
+        continue;
+      }
+      try {
+        const parsed = JSON.parse(line) as {
+          message?: { usage?: UsageLike };
+          usage?: UsageLike;
+        };
+        const usageRaw = parsed.message?.usage ?? parsed.usage;
+        const usage = normalizeUsage(usageRaw);
+        if (usage && hasNonzeroUsage(usage)) {
+          lastUsage = usage;
+        }
+      } catch {
+        // ignore bad lines
+      }
+    }
+    if (!lastUsage) {
+      return undefined;
+    }
+
+    const promptTokens = derivePromptTokens(lastUsage);
+    const outputRaw = lastUsage.output;
+    const outputTokens =
+      typeof outputRaw === "number" && Number.isFinite(outputRaw) && outputRaw > 0
+        ? outputRaw
+        : undefined;
+
+    if (!(typeof promptTokens === "number") && !(typeof outputTokens === "number")) {
+      return undefined;
+    }
+
+    return {
+      promptTokens,
+      outputTokens,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 export async function runMemoryFlushIfNeeded(params: {
   cfg: OpenClawConfig;
   followupRun: FollowupRun;
+  promptForEstimate?: string;
   sessionCtx: TemplateContext;
   opts?: GetReplyOptions;
   defaultModel: string;
@@ -58,28 +171,155 @@ export async function runMemoryFlushIfNeeded(params: {
     return sandboxCfg.workspaceAccess === "rw";
   })();
 
+  const isCli = isCliProvider(params.followupRun.run.provider, params.cfg);
+  const canAttemptFlush = memoryFlushWritable && !params.isHeartbeat && !isCli;
+  let entry =
+    params.sessionEntry ??
+    (params.sessionKey ? params.sessionStore?.[params.sessionKey] : undefined);
+  const contextWindowTokens = resolveMemoryFlushContextWindowTokens({
+    modelId: params.followupRun.run.model ?? params.defaultModel,
+    agentCfgContextTokens: params.agentCfgContextTokens,
+  });
+
+  const promptTokenEstimate = estimatePromptTokensForMemoryFlush(
+    params.promptForEstimate ?? params.followupRun.prompt,
+  );
+  const persistedPromptTokensRaw = entry?.totalTokens;
+  const persistedPromptTokens =
+    typeof persistedPromptTokensRaw === "number" &&
+    Number.isFinite(persistedPromptTokensRaw) &&
+    persistedPromptTokensRaw > 0
+      ? persistedPromptTokensRaw
+      : undefined;
+  const hasFreshPersistedPromptTokens =
+    typeof persistedPromptTokens === "number" && entry?.totalTokensFresh === true;
+
+  const flushThreshold =
+    contextWindowTokens -
+    memoryFlushSettings.reserveTokensFloor -
+    memoryFlushSettings.softThresholdTokens;
+
+  // When totals are stale/unknown, derive prompt + last output from transcript so memory
+  // flush can still be evaluated against projected next-input size.
+  //
+  // When totals are fresh, only read the transcript when we're close enough to the
+  // threshold that missing the last output tokens could flip the decision.
+  const shouldReadTranscriptForOutput =
+    canAttemptFlush &&
+    entry &&
+    hasFreshPersistedPromptTokens &&
+    typeof promptTokenEstimate === "number" &&
+    Number.isFinite(promptTokenEstimate) &&
+    flushThreshold > 0 &&
+    (persistedPromptTokens ?? 0) + promptTokenEstimate >=
+      flushThreshold - TRANSCRIPT_OUTPUT_READ_BUFFER_TOKENS;
+
+  const shouldReadTranscript =
+    canAttemptFlush && entry && (!hasFreshPersistedPromptTokens || shouldReadTranscriptForOutput);
+
+  const transcriptUsageSnapshot = shouldReadTranscript
+    ? await readPromptTokensFromSessionLog(
+        params.followupRun.run.sessionId,
+        entry,
+        params.sessionKey ?? params.followupRun.run.sessionKey,
+      )
+    : undefined;
+  const transcriptPromptTokens = transcriptUsageSnapshot?.promptTokens;
+  const transcriptOutputTokens = transcriptUsageSnapshot?.outputTokens;
+  const hasReliableTranscriptPromptTokens =
+    typeof transcriptPromptTokens === "number" &&
+    Number.isFinite(transcriptPromptTokens) &&
+    transcriptPromptTokens > 0;
+  const shouldPersistTranscriptPromptTokens =
+    hasReliableTranscriptPromptTokens &&
+    (!hasFreshPersistedPromptTokens ||
+      (transcriptPromptTokens ?? 0) > (persistedPromptTokens ?? 0));
+
+  if (entry && shouldPersistTranscriptPromptTokens) {
+    const nextEntry = {
+      ...entry,
+      totalTokens: transcriptPromptTokens,
+      totalTokensFresh: true,
+    };
+    entry = nextEntry;
+    if (params.sessionKey && params.sessionStore) {
+      params.sessionStore[params.sessionKey] = nextEntry;
+    }
+    if (params.storePath && params.sessionKey) {
+      try {
+        const updatedEntry = await updateSessionStoreEntry({
+          storePath: params.storePath,
+          sessionKey: params.sessionKey,
+          update: async () => ({ totalTokens: transcriptPromptTokens, totalTokensFresh: true }),
+        });
+        if (updatedEntry) {
+          entry = updatedEntry;
+          if (params.sessionStore) {
+            params.sessionStore[params.sessionKey] = updatedEntry;
+          }
+        }
+      } catch (err) {
+        logVerbose(`failed to persist derived prompt totalTokens: ${String(err)}`);
+      }
+    }
+  }
+
+  const promptTokensSnapshot = Math.max(
+    hasFreshPersistedPromptTokens ? (persistedPromptTokens ?? 0) : 0,
+    hasReliableTranscriptPromptTokens ? (transcriptPromptTokens ?? 0) : 0,
+  );
+  const hasFreshPromptTokensSnapshot =
+    promptTokensSnapshot > 0 &&
+    (hasFreshPersistedPromptTokens || hasReliableTranscriptPromptTokens);
+
+  const projectedTokenCount = hasFreshPromptTokensSnapshot
+    ? resolveEffectivePromptTokens(
+        promptTokensSnapshot,
+        transcriptOutputTokens,
+        promptTokenEstimate,
+      )
+    : undefined;
+  const tokenCountForFlush =
+    typeof projectedTokenCount === "number" &&
+    Number.isFinite(projectedTokenCount) &&
+    projectedTokenCount > 0
+      ? projectedTokenCount
+      : undefined;
+
+  // Diagnostic logging to understand why memory flush may not trigger.
+  logVerbose(
+    `memoryFlush check: sessionKey=${params.sessionKey} ` +
+      `tokenCount=${tokenCountForFlush ?? "undefined"} ` +
+      `contextWindow=${contextWindowTokens} threshold=${flushThreshold} ` +
+      `isHeartbeat=${params.isHeartbeat} isCli=${isCli} memoryFlushWritable=${memoryFlushWritable} ` +
+      `compactionCount=${entry?.compactionCount ?? 0} memoryFlushCompactionCount=${entry?.memoryFlushCompactionCount ?? "undefined"} ` +
+      `persistedPromptTokens=${persistedPromptTokens ?? "undefined"} persistedFresh=${entry?.totalTokensFresh === true} ` +
+      `promptTokensEst=${promptTokenEstimate ?? "undefined"} transcriptPromptTokens=${transcriptPromptTokens ?? "undefined"} transcriptOutputTokens=${transcriptOutputTokens ?? "undefined"} ` +
+      `projectedTokenCount=${projectedTokenCount ?? "undefined"}`,
+  );
+
   const shouldFlushMemory =
     memoryFlushSettings &&
     memoryFlushWritable &&
     !params.isHeartbeat &&
-    !isCliProvider(params.followupRun.run.provider, params.cfg) &&
+    !isCli &&
     shouldRunMemoryFlush({
-      entry:
-        params.sessionEntry ??
-        (params.sessionKey ? params.sessionStore?.[params.sessionKey] : undefined),
-      contextWindowTokens: resolveMemoryFlushContextWindowTokens({
-        modelId: params.followupRun.run.model ?? params.defaultModel,
-        agentCfgContextTokens: params.agentCfgContextTokens,
-      }),
+      entry,
+      tokenCount: tokenCountForFlush,
+      contextWindowTokens,
       reserveTokensFloor: memoryFlushSettings.reserveTokensFloor,
       softThresholdTokens: memoryFlushSettings.softThresholdTokens,
     });
 
   if (!shouldFlushMemory) {
-    return params.sessionEntry;
+    return entry ?? params.sessionEntry;
   }
 
-  let activeSessionEntry = params.sessionEntry;
+  logVerbose(
+    `memoryFlush triggered: sessionKey=${params.sessionKey} tokenCount=${tokenCountForFlush ?? "undefined"} threshold=${flushThreshold}`,
+  );
+
+  let activeSessionEntry = entry ?? params.sessionEntry;
   const activeSessionStore = params.sessionStore;
   const flushRunId = crypto.randomUUID();
   if (params.sessionKey) {
