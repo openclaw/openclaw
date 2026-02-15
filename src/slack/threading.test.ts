@@ -31,7 +31,7 @@ describe("resolveSlackThreadTargets", () => {
     expect(statusThreadTs).toBe("123");
   });
 
-  it("keeps status threading even when reply threading is off", () => {
+  it("does not thread status when reply threading is off (#16868)", () => {
     const { replyThreadTs, statusThreadTs } = resolveSlackThreadTargets({
       replyToMode: "off",
       message: {
@@ -42,7 +42,7 @@ describe("resolveSlackThreadTargets", () => {
     });
 
     expect(replyThreadTs).toBeUndefined();
-    expect(statusThreadTs).toBe("123");
+    expect(statusThreadTs).toBeUndefined();
   });
 
   it("sets messageThreadId for top-level messages when replyToMode is all", () => {

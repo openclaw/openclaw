@@ -40,6 +40,9 @@ export function resolveSlackThreadTargets(params: {
 }) {
   const { incomingThreadTs, messageTs } = resolveSlackThreadContext(params);
   const replyThreadTs = incomingThreadTs ?? (params.replyToMode === "all" ? messageTs : undefined);
-  const statusThreadTs = replyThreadTs ?? messageTs;
+  // Don't fall back to messageTs for status indicators when threading is off —
+  // posting the typing status as a reply to the user's message creates a Slack
+  // thread even though the user disabled threading.  (#16868)
+  const statusThreadTs = replyThreadTs;
   return { replyThreadTs, statusThreadTs };
 }
