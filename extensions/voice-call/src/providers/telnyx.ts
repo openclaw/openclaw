@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+
 import type { TelnyxConfig } from "../config.js";
 import type {
   EndReason,
@@ -120,7 +121,9 @@ export class TelnyxProvider implements VoiceCallProvider {
     let callId = "";
     if (data.payload?.client_state) {
       try {
-        callId = Buffer.from(data.payload.client_state, "base64").toString("utf8");
+        callId = Buffer.from(data.payload.client_state, "base64").toString(
+          "utf8",
+        );
       } catch {
         // Fallback if not valid Base64
         callId = data.payload.client_state;
@@ -158,12 +161,14 @@ export class TelnyxProvider implements VoiceCallProvider {
         };
 
       case "call.transcription":
+        // Telnyx sends transcription data in payload.transcription_data
+        // with nested transcript, is_final, and confidence fields
         return {
           ...baseEvent,
           type: "call.speech",
-          transcript: data.payload?.transcription || "",
-          isFinal: data.payload?.is_final ?? true,
-          confidence: data.payload?.confidence,
+          transcript: data.payload?.transcription_data?.transcript || data.payload?.transcription || "",
+          isFinal: data.payload?.transcription_data?.is_final ?? data.payload?.is_final ?? true,
+          confidence: data.payload?.transcription_data?.confidence ?? data.payload?.confidence,
         };
 
       case "call.hangup":
@@ -267,12 +272,17 @@ export class TelnyxProvider implements VoiceCallProvider {
 
   /**
    * Start transcription (STT) via Telnyx.
+   * @see https://developers.telnyx.com/docs/api/v2/call-control/Call-Commands#transcription_start
    */
   async startListening(input: StartListeningInput): Promise<void> {
-    await this.apiRequest(`/calls/${input.providerCallId}/actions/transcription_start`, {
-      command_id: crypto.randomUUID(),
-      language: input.language || "en",
-    });
+    await this.apiRequest(
+      `/calls/${input.providerCallId}/actions/transcription_start`,
+      {
+        command_id: crypto.randomUUID(),
+        language: input.language || "en",
+        transcription_engine: "Telnyx",
+      },
+    );
   }
 
   /**
@@ -291,6 +301,13 @@ export class TelnyxProvider implements VoiceCallProvider {
 // Telnyx-specific types
 // -----------------------------------------------------------------------------
 
+interface TelnyxTranscriptionData {
+  transcript?: string;
+  is_final?: boolean;
+  confidence?: number;
+  transcription_track?: string;
+}
+
 interface TelnyxEvent {
   id?: string;
   event_type: string;
@@ -299,6 +316,7 @@ interface TelnyxEvent {
     client_state?: string;
     text?: string;
     transcription?: string;
+    transcription_data?: TelnyxTranscriptionData;
     is_final?: boolean;
     confidence?: number;
     hangup_cause?: string;
