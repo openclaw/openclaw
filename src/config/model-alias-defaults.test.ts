@@ -4,6 +4,34 @@ import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import { applyModelDefaults } from "./defaults.js";
 
 describe("applyModelDefaults", () => {
+  it("adds default aliases even when no user models are configured", () => {
+    // Regression test: previously applyModelDefaults returned early when
+    // agents.defaults.models was empty, causing cron jobs using aliases
+    // like "sonnet" to fail with "Unknown model" errors.
+    const cfg = {} satisfies MoltbotConfig;
+    const next = applyModelDefaults(cfg);
+
+    expect(next.agents?.defaults?.models?.["anthropic/claude-opus-4-5"]?.alias).toBe("opus");
+    expect(next.agents?.defaults?.models?.["anthropic/claude-sonnet-4-5"]?.alias).toBe("sonnet");
+    expect(next.agents?.defaults?.models?.["openai/gpt-5.2"]?.alias).toBe("gpt");
+    expect(next.agents?.defaults?.models?.["openai/gpt-5-mini"]?.alias).toBe("gpt-mini");
+    expect(next.agents?.defaults?.models?.["google/gemini-3-pro-preview"]?.alias).toBe("gemini");
+    expect(next.agents?.defaults?.models?.["google/gemini-3-flash-preview"]?.alias).toBe(
+      "gemini-flash",
+    );
+  });
+
+  it("adds default aliases when agents.defaults exists but models is empty", () => {
+    const cfg = {
+      agents: {
+        defaults: {},
+      },
+    } satisfies MoltbotConfig;
+    const next = applyModelDefaults(cfg);
+
+    expect(next.agents?.defaults?.models?.["anthropic/claude-sonnet-4-5"]?.alias).toBe("sonnet");
+  });
+
   it("adds default aliases when models are present", () => {
     const cfg = {
       agents: {
