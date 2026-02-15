@@ -14,6 +14,7 @@ import {
 import {
   isLoopbackAddress,
   isTrustedProxyAddress,
+  resolveHostName,
   parseForwardedForClientIp,
   resolveGatewayClientIp,
 } from "./net.js";
@@ -56,21 +57,6 @@ function normalizeLogin(login: string): string {
   return login.trim().toLowerCase();
 }
 
-function getHostName(hostHeader?: string): string {
-  const host = (hostHeader ?? "").trim().toLowerCase();
-  if (!host) {
-    return "";
-  }
-  if (host.startsWith("[")) {
-    const end = host.indexOf("]");
-    if (end !== -1) {
-      return host.slice(1, end);
-    }
-  }
-  const [name] = host.split(":");
-  return name ?? "";
-}
-
 function headerValue(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
 }
@@ -107,7 +93,7 @@ export function isLocalDirectRequest(req?: IncomingMessage, trustedProxies?: str
     return false;
   }
 
-  const host = getHostName(req.headers?.host);
+  const host = resolveHostName(req.headers?.host);
   const hostIsLocal = host === "localhost" || host === "127.0.0.1" || host === "::1";
   const hostIsTailscaleServe = host.endsWith(".ts.net");
 

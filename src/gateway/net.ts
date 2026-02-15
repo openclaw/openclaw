@@ -25,6 +25,25 @@ export function pickPrimaryLanIPv4(): string | undefined {
   return undefined;
 }
 
+export function normalizeHostHeader(hostHeader?: string): string {
+  return (hostHeader ?? "").trim().toLowerCase();
+}
+
+export function resolveHostName(hostHeader?: string): string {
+  const host = normalizeHostHeader(hostHeader);
+  if (!host) {
+    return "";
+  }
+  if (host.startsWith("[")) {
+    const end = host.indexOf("]");
+    if (end !== -1) {
+      return host.slice(1, end);
+    }
+  }
+  const [name] = host.split(":");
+  return name ?? "";
+}
+
 export function isLoopbackAddress(ip: string | undefined): boolean {
   if (!ip) {
     return false;
