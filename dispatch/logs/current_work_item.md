@@ -2,7 +2,7 @@
 
 ## Story ID
 
-`GLZ-04`
+`V0-BOOTSTRAP`
 
 ## Canonical Backlog
 
@@ -14,15 +14,18 @@
 
 ## Epic
 
-`EPIC-GZ-01: Blind Intake Readiness`
+`EPIC-V0-COMPLETE`
 
 ## Completion Status
 
-`GLZ-03` is complete: triage now supports triaged->READY_TO_SCHEDULE transitions with blind-intake policy guards, SOP prompt failure context, and transition-safe execution.
+`GLZ-03` remains complete in historical tracking. `V0-BOOTSTRAP` is now the active v0 completion lock item.
 
 ## Suggested Focus Area
 
-Start with the commercial rollout sequence in `ai_dispatch_agile_project_package/docs/12_Sprint_Plan.md`.
-Sprint 1 focus:
+Follow the execution order in `ai_dispatch_agile_project_package/docs/12_Sprint_Plan.md` and confirm story readiness in `ai_dispatch_agile_project_package/docs/13_V0_Engineering_Readiness_Bundle.md`.
 
-- `GLZ-04`: Dispatch queue prioritization and dispatch escalation
+Sprint V0-1 focus:
+
+- `V0-BOOTSTRAP`: environment readiness, migration seed, deterministic fixture flow.
+- `V0-WORKER-LAUNCH`: worker startup contract, heartbeat, and safe shutdown behavior.
+- `GLZ-01` to `GLZ-03`: intake and scheduling transition gates.

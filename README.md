@@ -15,6 +15,7 @@ Real Dispatch uses OpenClaw as a control plane and keeps all operational truth i
 `new -> triaged -> schedulable -> scheduled -> dispatched -> onsite -> closeout_pending -> closed`
 
 Detailed dispatch-api enforcement states and phase mapping:
+
 - `dispatch/contracts/case-lifecycle-v1.md`
 
 ## Agent roles
@@ -91,8 +92,15 @@ Dispatch topology helpers:
 
 ```bash
 pnpm dispatch:stack:up
+pnpm dispatch:bootstrap      # apply migration + demo fixtures
 pnpm dispatch:stack:status
 pnpm dispatch:stack:down
+```
+
+Demo one-shot startup:
+
+```bash
+pnpm dispatch:demo:stack
 ```
 
 Dispatch CI parity gate (same command used by blocking CI):
@@ -102,6 +110,7 @@ pnpm dispatch:test:ci
 ```
 
 Dispatch gate passing criteria:
+
 - TAP output includes `dispatch/tests/001_init_migration.node.test.mjs`.
 - TAP output includes `dispatch/tests/story_08_e2e_canonical.node.test.mjs`.
 - Test summary includes `fail 0`.

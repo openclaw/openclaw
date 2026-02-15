@@ -2,7 +2,7 @@ import pg from "pg";
 
 const { Pool } = pg;
 
-const defaultConnectionString = "postgres://dispatch:dispatch@127.0.0.1:5432/dispatch";
+const defaultConnectionString = "postgres://dispatch:dispatch@postgres:5432/dispatch";
 
 let poolInstance;
 

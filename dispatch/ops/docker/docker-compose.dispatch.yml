@@ -1,6 +1,9 @@
 services:
   openclaw-gateway:
     image: ${OPENCLAW_IMAGE:-openclaw:local}
+    build:
+      context: ../..
+      dockerfile: Dockerfile
     restart: unless-stopped
     environment:
       HOME: /home/node
@@ -28,9 +31,13 @@ services:
       ]
 
   dispatch-api:
-    image: ${DISPATCH_API_IMAGE:-real-dispatch-api:local}
+    image: ${DISPATCH_API_IMAGE:-openclaw:local}
+    build:
+      context: ../..
+      dockerfile: Dockerfile
     restart: unless-stopped
     environment:
+      DISPATCH_API_HOST: ${DISPATCH_API_HOST:-0.0.0.0}
       DISPATCH_DATABASE_URL: ${DISPATCH_DATABASE_URL:-postgres://dispatch:dispatch@postgres:5432/dispatch}
       DISPATCH_OBJECT_STORE_ENDPOINT: ${DISPATCH_OBJECT_STORE_ENDPOINT:-http://minio:9000}
       DISPATCH_OBJECT_STORE_BUCKET: ${DISPATCH_OBJECT_STORE_BUCKET:-dispatch-artifacts}
@@ -41,9 +48,13 @@ services:
       - minio
     ports:
       - "${DISPATCH_API_PORT:-8080}:8080"
+    command: ["node", "dispatch/api/src/server.mjs"]
 
   dispatch-worker:
-    image: ${DISPATCH_WORKER_IMAGE:-real-dispatch-worker:local}
+    image: ${DISPATCH_WORKER_IMAGE:-openclaw:local}
+    build:
+      context: ../..
+      dockerfile: Dockerfile
     restart: unless-stopped
     environment:
       DISPATCH_DATABASE_URL: ${DISPATCH_DATABASE_URL:-postgres://dispatch:dispatch@postgres:5432/dispatch}
@@ -51,6 +62,7 @@ services:
     depends_on:
       - dispatch-api
       - postgres
+    command: ["node", "dispatch/worker/dispatch-worker-placeholder.mjs"]
 
   postgres:
     image: postgres:16

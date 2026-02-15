@@ -48,6 +48,8 @@
     "check:loc": "node --import tsx scripts/check-ts-max-loc.ts --max 500",
     "dev": "node scripts/run-node.mjs",
     "dispatch:api:start": "node dispatch/api/src/server.mjs",
+    "dispatch:bootstrap": "node dispatch/ops/bootstrap-dispatch-stack.mjs",
+    "dispatch:demo:stack": "pnpm dispatch:stack:up && pnpm dispatch:bootstrap",
     "dispatch:stack:down": "docker compose --env-file .env -f dispatch/ops/docker/docker-compose.dispatch.yml down --remove-orphans",
     "dispatch:stack:logs": "docker compose --env-file .env -f dispatch/ops/docker/docker-compose.dispatch.yml logs -f",
     "dispatch:stack:status": "docker compose --env-file .env -f dispatch/ops/docker/docker-compose.dispatch.yml ps",

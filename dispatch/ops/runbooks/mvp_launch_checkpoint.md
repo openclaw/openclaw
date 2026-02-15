@@ -10,10 +10,12 @@ This document preserves the recovery path to reach the validated state where:
 
 ```bash
 cp .env.example .env
+echo "DISPATCH_BOOTSTRAP_EVIDENCE_PATH=/tmp/dispatch-bootstrap-evidence.json" >> .env
 pnpm install   # when dependency drift is expected
 pnpm dispatch:stack:down   # optional hard reset
 pnpm dispatch:stack:up
 pnpm dispatch:stack:status
+pnpm dispatch:bootstrap
 ```
 
 If services are already up, use `pnpm dispatch:stack:up` directly after confirming status.
@@ -46,13 +48,27 @@ Run these exact commands in the chat window, in order:
 2. `dispatcher_cockpit`  
    (canonical API alias is `dispatcher.cockpit`; both are expected to route in current checkpoint)
 
+`dispatch_contract_status` output should include the bootstrap fixture IDs used by this run.
+
 Expected response:
 
 - `dispatcher_cockpit` returns HTTP 200 with an empty queue when no test tickets exist yet.
 
 ## 5) Exercise one lifecycle path from chat
 
-Use valid fixture IDs from your current DB for `account_id` and `site_id`.
+Use fixture IDs from bootstrap output (or env defaults) for `account_id` and `site_id`:
+
+- `account_id = d3f77db0-5d1a-4f9c-b0ea-111111111111`
+- `site_id = 7f6a2b2c-8f1e-4f2b-b3a1-222222222222`
+
+You can override these per-run with:
+
+- `DISPATCH_DEMO_ACCOUNT_ID`
+- `DISPATCH_DEMO_SITE_ID`
+- `DISPATCH_BOOTSTRAP_API_HEALTH_RETRIES`
+- `DISPATCH_BOOTSTRAP_API_HEALTH_DELAY_MS`
+- `DISPATCH_BOOTSTRAP_SKIP_API_READY_CHECK`
+- `DISPATCH_BOOTSTRAP_EVIDENCE_PATH`
 
 ```text
 ticket.create
@@ -86,6 +102,20 @@ node --test --test-concurrency=1 dispatch/tests/*.mjs
 ```
 
 Record summary output and include in evidence packet.
+
+Bootstrap evidence packet:
+
+- `/tmp/dispatch-bootstrap-evidence.json` must include:
+  - `timestamp`
+  - `migration.path`
+  - fixture IDs and fixture rows
+  - `counts` (accounts, sites, contacts, tickets, audit_events)
+  - `ready_check` status and attempts
+
+Negative-path check:
+
+- Run `pnpm dispatch:bootstrap` with `DISPATCH_BOOTSTRAP_SKIP_API_READY_CHECK=false` while API is intentionally unavailable.
+- Confirm bootstrap exits non-zero with explicit readiness-failure text before resuming normal work.
 
 ## Notes (known state)
 

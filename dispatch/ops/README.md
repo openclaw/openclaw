@@ -12,7 +12,13 @@ Use the root scripts for local orchestration:
 
 - `pnpm dispatch:stack:up`
 - `pnpm dispatch:stack:status`
+- `pnpm dispatch:bootstrap`
 - `pnpm dispatch:stack:down`
+
+For demo onboarding, use this sequence:
+
+- `pnpm dispatch:stack:up`
+- `pnpm dispatch:bootstrap`
 
 Runbooks and drill assets:
 
@@ -33,6 +39,7 @@ Use this sequence whenever you want to recover to the currently validated, dispa
    - `pnpm dispatch:stack:down`
    - `pnpm dispatch:stack:up`
    - `pnpm dispatch:stack:status`
+   - `pnpm dispatch:bootstrap` (or `pnpm dispatch:demo:stack` for bootstrap in one step)
 2. Restart OpenClaw gateway and confirm plugin registration:
    - `pnpm openclaw gateway restart`
    - `pnpm openclaw status --json`
@@ -48,5 +55,17 @@ If you want to verify end-to-end work path from chat, use:
 - `dispatcher_cockpit` (the created ticket should now be visible)
 - `ticket.get <ticket_id>` (or `ticket.timeline <ticket_id>`)
 - `node --test --test-concurrency=1 dispatch/tests/*.mjs`
+- `pnpm dispatch:stack:down`
+
+Bootstrap evidence:
+
+- `pnpm dispatch:demo:stack` writes deterministic fixture IDs and restart state to stdout.
+- For permanent artifact capture, set:
+  - `DISPATCH_BOOTSTRAP_EVIDENCE_PATH=./dispatch/reports/bootstrap-evidence.json`
+  - Then run `pnpm dispatch:bootstrap` and collect the generated JSON payload.
+
+Worker note:
+
+- `dispatch-worker` currently runs a minimal placeholder process to keep the container active in demo environments until background jobs are implemented.
 
 See `dispatch/ops/runbooks/mvp_launch_checkpoint.md` for exact payload examples and expected outputs.
