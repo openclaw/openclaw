@@ -34,6 +34,14 @@ afterEach(() => {
   spawnMock.mockReset();
 });
 
+function clearSupervisorHints() {
+  delete process.env.LAUNCH_JOB_LABEL;
+  delete process.env.LAUNCH_JOB_NAME;
+  delete process.env.INVOCATION_ID;
+  delete process.env.SYSTEMD_EXEC_PID;
+  delete process.env.JOURNAL_STREAM;
+}
+
 describe("restartGatewayProcessWithFreshPid", () => {
   it("returns disabled when OPENCLAW_NO_RESPAWN is set", () => {
     process.env.OPENCLAW_NO_RESPAWN = "1";
@@ -51,7 +59,7 @@ describe("restartGatewayProcessWithFreshPid", () => {
 
   it("spawns detached child with current exec argv", () => {
     delete process.env.OPENCLAW_NO_RESPAWN;
-    delete process.env.LAUNCH_JOB_LABEL;
+    clearSupervisorHints();
     process.execArgv = ["--import", "tsx"];
     process.argv = ["/usr/local/bin/node", "/repo/dist/index.js", "gateway", "run"];
     spawnMock.mockReturnValue({ pid: 4242, unref: vi.fn() });
@@ -70,6 +78,9 @@ describe("restartGatewayProcessWithFreshPid", () => {
   });
 
   it("returns failed when spawn throws", () => {
+    delete process.env.OPENCLAW_NO_RESPAWN;
+    clearSupervisorHints();
+
     spawnMock.mockImplementation(() => {
       throw new Error("spawn failed");
     });
