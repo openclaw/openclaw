@@ -1,4 +1,5 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import { dirname } from "node:path";
 
 const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
@@ -10,6 +11,7 @@ const ETSY_SHOP_RSS_URL = process.env.ETSY_SHOP_RSS_URL?.trim() ?? "";
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN?.trim() ?? "";
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID?.trim() ?? "";
 const CHECK_INTERVAL_MS = resolveCheckIntervalMs(process.env.RSS_CHECK_INTERVAL_MS);
+const HEALTH_PORT = toNumberOrUndefined(process.env.PORT) ?? 8080;
 
 type FeedItem = {
   id: string;
@@ -400,6 +402,23 @@ async function pollTelegramForCommands(): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  const healthServer = createServer((req, res) => {
+    if (req.url === "/health") {
+      res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify({ ok: true }));
+      return;
+    }
+    res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+    res.end("not found");
+  });
+  await new Promise<void>((resolve, reject) => {
+    healthServer.once("error", reject);
+    healthServer.listen(HEALTH_PORT, "0.0.0.0", () => {
+      console.log(`[rss] health server listening on http://0.0.0.0:${HEALTH_PORT}/health`);
+      resolve();
+    });
+  });
+
   console.log(
     `RSS watcher boot: ETSY_SHOP_RSS_URL present=${ETSY_SHOP_RSS_URL ? "yes" : "no"}, state_path=${STATE_PATH}`,
   );
