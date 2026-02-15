@@ -107,75 +107,82 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       return;
     }
 
-    await Promise.all(
-      accountIds.map(async (id) => {
-        if (store.tasks.has(id)) {
-          return;
+    let lastAbort: AbortController | undefined;
+    for (let accountIndex = 0; accountIndex < accountIds.length; accountIndex++) {
+      const id = accountIds[accountIndex];
+      if (accountIndex > 0) {
+        await new Promise((r) => setTimeout(r, 2000));
+        if (lastAbort?.signal.aborted) {
+          break;
         }
-        const account = plugin.config.resolveAccount(cfg, id);
-        const enabled = plugin.config.isEnabled
-          ? plugin.config.isEnabled(account, cfg)
-          : isAccountEnabled(account);
-        if (!enabled) {
-          setRuntime(channelId, id, {
-            accountId: id,
-            running: false,
-            lastError: plugin.config.disabledReason?.(account, cfg) ?? "disabled",
-          });
-          return;
-        }
-
-        let configured = true;
-        if (plugin.config.isConfigured) {
-          configured = await plugin.config.isConfigured(account, cfg);
-        }
-        if (!configured) {
-          setRuntime(channelId, id, {
-            accountId: id,
-            running: false,
-            lastError: plugin.config.unconfiguredReason?.(account, cfg) ?? "not configured",
-          });
-          return;
-        }
-
-        const abort = new AbortController();
-        store.aborts.set(id, abort);
+      }
+      if (store.tasks.has(id)) {
+        continue;
+      }
+      const account = plugin.config.resolveAccount(cfg, id);
+      const enabled = plugin.config.isEnabled
+        ? plugin.config.isEnabled(account, cfg)
+        : isAccountEnabled(account);
+      if (!enabled) {
         setRuntime(channelId, id, {
           accountId: id,
-          running: true,
-          lastStartAt: Date.now(),
-          lastError: null,
+          running: false,
+          lastError: plugin.config.disabledReason?.(account, cfg) ?? "disabled",
         });
+        continue;
+      }
 
-        const log = channelLogs[channelId];
-        const task = startAccount({
-          cfg,
+      let configured = true;
+      if (plugin.config.isConfigured) {
+        configured = await plugin.config.isConfigured(account, cfg);
+      }
+      if (!configured) {
+        setRuntime(channelId, id, {
           accountId: id,
-          account,
-          runtime: channelRuntimeEnvs[channelId],
-          abortSignal: abort.signal,
-          log,
-          getStatus: () => getRuntime(channelId, id),
-          setStatus: (next) => setRuntime(channelId, id, next),
+          running: false,
+          lastError: plugin.config.unconfiguredReason?.(account, cfg) ?? "not configured",
         });
-        const tracked = Promise.resolve(task)
-          .catch((err) => {
-            const message = formatErrorMessage(err);
-            setRuntime(channelId, id, { accountId: id, lastError: message });
-            log.error?.(`[${id}] channel exited: ${message}`);
-          })
-          .finally(() => {
-            store.aborts.delete(id);
-            store.tasks.delete(id);
-            setRuntime(channelId, id, {
-              accountId: id,
-              running: false,
-              lastStopAt: Date.now(),
-            });
+        continue;
+      }
+
+      const abort = new AbortController();
+      lastAbort = abort;
+      store.aborts.set(id, abort);
+      setRuntime(channelId, id, {
+        accountId: id,
+        running: true,
+        lastStartAt: Date.now(),
+        lastError: null,
+      });
+
+      const log = channelLogs[channelId];
+      const task = startAccount({
+        cfg,
+        accountId: id,
+        account,
+        runtime: channelRuntimeEnvs[channelId],
+        abortSignal: abort.signal,
+        log,
+        getStatus: () => getRuntime(channelId, id),
+        setStatus: (next) => setRuntime(channelId, id, next),
+      });
+      const tracked = Promise.resolve(task)
+        .catch((err) => {
+          const message = formatErrorMessage(err);
+          setRuntime(channelId, id, { accountId: id, lastError: message });
+          log.error?.(`[${id}] channel exited: ${message}`);
+        })
+        .finally(() => {
+          store.aborts.delete(id);
+          store.tasks.delete(id);
+          setRuntime(channelId, id, {
+            accountId: id,
+            running: false,
+            lastStopAt: Date.now(),
           });
-        store.tasks.set(id, tracked);
-      }),
-    );
+        });
+      store.tasks.set(id, tracked);
+    }
   };
 
   const stopChannel = async (channelId: ChannelId, accountId?: string) => {
