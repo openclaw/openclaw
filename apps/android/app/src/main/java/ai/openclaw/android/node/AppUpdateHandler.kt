@@ -187,11 +187,11 @@ class AppUpdateHandler(
                   lastNotifUpdate = now
                   if (contentLength > 0) {
                     val pct = ((totalBytes * 100) / contentLength).toInt()
-                    val mb = String.format("%.1f", totalBytes / 1048576.0)
-                    val totalMb = String.format("%.1f", contentLength / 1048576.0)
+                    val mb = String.format(Locale.US, "%.1f", totalBytes / 1048576.0)
+                    val totalMb = String.format(Locale.US, "%.1f", contentLength / 1048576.0)
                     notifManager.notify(notifId, buildProgressNotif(pct, 100, "$mb / $totalMb MB ($pct%)"))
                   } else {
-                    val mb = String.format("%.1f", totalBytes / 1048576.0)
+                    val mb = String.format(Locale.US, "%.1f", totalBytes / 1048576.0)
                     notifManager.notify(notifId, buildProgressNotif(0, 0, "${mb} MB downloaded"))
                   }
                 }
@@ -239,13 +239,15 @@ class AppUpdateHandler(
           // Use PackageInstaller session API — works from background on API 34+
           // The system handles showing the install confirmation dialog
           notifManager.cancel(notifId)
-          notifManager.notify(notifId, android.app.Notification.Builder(appContext, channelId)
-            .setSmallIcon(android.R.drawable.stat_sys_download_done)
-            .setContentTitle("Installing Update...")
-            
+          notifManager.notify(
+            notifId,
+            android.app.Notification.Builder(appContext, channelId)
+              .setSmallIcon(android.R.drawable.stat_sys_download_done)
+              .setContentTitle("Installing Update...")
               .setContentIntent(launchPi)
-              .setContentText("${String.format("%.1f", totalBytes / 1048576.0)} MB downloaded")
-            .build())
+              .setContentText("${String.format(Locale.US, "%.1f", totalBytes / 1048576.0)} MB downloaded")
+              .build(),
+          )
 
           val installer = appContext.packageManager.packageInstaller
           val params = android.content.pm.PackageInstaller.SessionParams(

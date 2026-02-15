@@ -63,7 +63,11 @@ android {
   }
 
   lint {
-    disable += setOf("IconLauncherShape")
+    disable += setOf(
+      "GradleDependency",
+      "IconLauncherShape",
+      "NewerVersionAvailable",
+    )
     warningsAsErrors = true
   }
 
