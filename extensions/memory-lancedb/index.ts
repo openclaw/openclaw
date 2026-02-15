@@ -264,7 +264,7 @@ export function shouldCapture(text: string, options?: { maxChars?: number }): bo
 
 export function detectCategory(text: string): MemoryCategory {
   const lower = text.toLowerCase();
-  if (/prefer|radši|like|love|hate|want/i.test(lower)) {
+  if (/prefer|preferuji|radši|like|love|hate|want/i.test(lower)) {
     return "preference";
   }
   if (/rozhodli|decided|will use|budeme/i.test(lower)) {
