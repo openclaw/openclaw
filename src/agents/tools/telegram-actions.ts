@@ -337,7 +337,7 @@ export async function handleTelegramAction(
     if (!poll || typeof poll !== "object") {
       throw new Error("Poll object is required");
     }
-    const threadId = readNumberParam(params, "threadId", { integer: true });
+    const messageThreadId = readNumberParam(params, "messageThreadId", { integer: true });
     const silent = typeof params.silent === "boolean" ? params.silent : undefined;
     const isAnonymous = typeof params.isAnonymous === "boolean" ? params.isAnonymous : undefined;
     const token = resolveTelegramToken(cfg, { accountId }).token;
@@ -349,7 +349,7 @@ export async function handleTelegramAction(
     const result = await sendPollTelegram(to, poll as any, {
       token,
       accountId: accountId ?? undefined,
-      messageThreadId: threadId ?? undefined,
+      messageThreadId: messageThreadId ?? undefined,
       silent,
       isAnonymous,
     });

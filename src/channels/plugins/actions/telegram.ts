@@ -212,7 +212,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
       const durationSeconds = readNumberParam(params, "pollDurationSeconds", {
         integer: true,
       });
-      const threadId = readStringParam(params, "threadId");
+      const messageThreadId = readNumberParam(params, "threadId", { integer: true });
       const silent = typeof params.silent === "boolean" ? params.silent : undefined;
       const isAnonymous = typeof params.isAnonymous === "boolean" ? params.isAnonymous : undefined;
       return await handleTelegramAction(
@@ -226,7 +226,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
             maxSelections: allowMultiselect ? options.length : 1,
             durationSeconds: durationSeconds ?? undefined,
           },
-          threadId: threadId ?? undefined,
+          messageThreadId: messageThreadId ?? undefined,
           silent,
           isAnonymous,
         },
