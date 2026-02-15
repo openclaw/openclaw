@@ -240,10 +240,12 @@ export async function sendDiscordVoiceMessage(
   const fileSize = audioBuffer.byteLength;
 
   // Step 1: Request upload URL from Discord
+  // Note: Must use rawBody with pre-serialized JSON to avoid Carbon auto-switching to FormData
+  // when it detects the 'files' field. Discord's /attachments endpoint requires application/json.
   const uploadUrlResponse = await request(
     () =>
       rest.post(`/channels/${channelId}/attachments`, {
-        body: {
+        rawBody: JSON.stringify({
           files: [
             {
               filename,
@@ -251,6 +253,9 @@ export async function sendDiscordVoiceMessage(
               id: "0",
             },
           ],
+        }),
+        headers: {
+          "Content-Type": "application/json",
         },
       }) as Promise<UploadUrlResponse>,
     "voice-upload-url",
