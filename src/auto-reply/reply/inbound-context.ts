@@ -50,9 +50,9 @@ export function finalizeInboundContext<T extends Record<string, unknown>>(
   normalized.ThreadStarterBody = normalizeTextField(normalized.ThreadStarterBody);
   normalized.ThreadHistoryBody = normalizeTextField(normalized.ThreadHistoryBody);
   if (Array.isArray(normalized.UntrustedContext)) {
-    const normalizedUntrusted = normalized.UntrustedContext
-      .map((entry) => stripLeakedProtocolLines(normalizeInboundTextNewlines(entry)))
-      .filter((entry) => Boolean(entry));
+    const normalizedUntrusted = normalized.UntrustedContext.map((entry) =>
+      stripLeakedProtocolLines(normalizeInboundTextNewlines(entry)),
+    ).filter((entry) => Boolean(entry));
     normalized.UntrustedContext = normalizedUntrusted;
   }
 
@@ -68,7 +68,9 @@ export function finalizeInboundContext<T extends Record<string, unknown>>(
       normalized.CommandBody ??
       normalized.RawBody ??
       normalized.Body);
-  normalized.BodyForAgent = stripLeakedProtocolLines(normalizeInboundTextNewlines(bodyForAgentSource));
+  normalized.BodyForAgent = stripLeakedProtocolLines(
+    normalizeInboundTextNewlines(bodyForAgentSource),
+  );
 
   const bodyForCommandsSource = opts.forceBodyForCommands
     ? (normalized.CommandBody ?? normalized.RawBody ?? normalized.Body)

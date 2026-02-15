@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { finalizeInboundContext } from "./inbound-context.js";
 
 describe("finalizeInboundContext", () => {

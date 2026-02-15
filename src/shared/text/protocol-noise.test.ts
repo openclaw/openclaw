@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { isLeakedProtocolLine, stripLeakedProtocolLines } from "./protocol-noise.js";
 
 describe("protocol noise sanitization", () => {
