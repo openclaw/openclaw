@@ -1,0 +1,40 @@
+replicaCount: 2
+image:
+  tag: v2026.2.13
+service:
+  type: ClusterIP
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "18789"
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt
+  hosts:
+    - host: openclaw.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+          servicePort: gateway
+  tls:
+    - hosts:
+        - openclaw.example.com
+      secretName: openclaw-tls
+secret:
+  create: false
+  name: openclaw-secrets
+persistence:
+  config:
+    size: 10Gi
+  workspace:
+    size: 50Gi
+resources:
+  limits:
+    cpu: "2"
+    memory: 4Gi
+  requests:
+    cpu: 500m
+    memory: 1Gi
+nodeSelector:
+  kubernetes.io/os: linux
