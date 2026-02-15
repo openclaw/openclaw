@@ -148,6 +148,9 @@ export const FeishuAccountConfigSchema = z
     renderMode: RenderModeSchema,
     streaming: StreamingModeSchema, // Enable streaming card mode (default: true)
     tools: FeishuToolsConfigSchema,
+    // Optimization flags
+    typingIndicator: z.boolean().optional(),
+    resolveSenderNames: z.boolean().optional(),
   })
   .strict();
 
@@ -186,6 +189,9 @@ export const FeishuConfigSchema = z
     tools: FeishuToolsConfigSchema,
     // Dynamic agent creation for DM users
     dynamicAgentCreation: DynamicAgentCreationSchema,
+    // Optimization flags
+    typingIndicator: z.boolean().optional().default(true),
+    resolveSenderNames: z.boolean().optional().default(true),
     // Multi-account configuration
     accounts: z.record(z.string(), FeishuAccountConfigSchema.optional()).optional(),
   })
