@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EmbeddedRunAttemptResult } from "./pi-embedded-runner/run/types.js";
 
 const runEmbeddedAttemptMock = vi.fn<Promise<EmbeddedRunAttemptResult>, [unknown]>();
@@ -31,10 +31,21 @@ beforeAll(async () => {
   ({ runEmbeddedPiAgent } = await import("./pi-embedded-runner.js"));
 });
 
+let prevOpenAiKey: string | undefined;
+
 beforeEach(() => {
   runEmbeddedAttemptMock.mockReset();
   resolveModelMock.mockReset();
   hookRunner.runBeforeAgentStart.mockClear();
+
+  // This test expects to get as far as model resolution; ensure auth lookup doesn't fail first.
+  prevOpenAiKey = process.env.OPENAI_API_KEY;
+  process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || "test-openai-key";
+});
+
+afterEach(() => {
+  if (prevOpenAiKey === undefined) delete process.env.OPENAI_API_KEY;
+  else process.env.OPENAI_API_KEY = prevOpenAiKey;
 });
 
 describe("before_agent_start run-scoped model/provider override", () => {
