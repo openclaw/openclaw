@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createOpenClawTools } from "../agents/openclaw-tools.js";
 import { resolveSessionTranscriptPath } from "../config/sessions.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { captureEnv } from "../test-utils/env.js";
 import {
   agentCommand,
   getFreePort,
@@ -16,13 +17,11 @@ installGatewayTestHooks({ scope: "suite" });
 
 let server: Awaited<ReturnType<typeof startGatewayServer>>;
 let gatewayPort: number;
-let prevGatewayPort: string | undefined;
-let prevGatewayToken: string | undefined;
 const gatewayToken = "test-token";
+let envSnapshot: ReturnType<typeof captureEnv>;
 
 beforeAll(async () => {
-  prevGatewayPort = process.env.OPENCLAW_GATEWAY_PORT;
-  prevGatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+  envSnapshot = captureEnv(["OPENCLAW_GATEWAY_PORT", "OPENCLAW_GATEWAY_TOKEN"]);
   gatewayPort = await getFreePort();
   testState.gatewayAuth = { mode: "token", token: gatewayToken };
   process.env.OPENCLAW_GATEWAY_PORT = String(gatewayPort);
@@ -32,16 +31,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await server.close();
-  if (prevGatewayPort === undefined) {
-    delete process.env.OPENCLAW_GATEWAY_PORT;
-  } else {
-    process.env.OPENCLAW_GATEWAY_PORT = prevGatewayPort;
-  }
-  if (prevGatewayToken === undefined) {
-    delete process.env.OPENCLAW_GATEWAY_TOKEN;
-  } else {
-    process.env.OPENCLAW_GATEWAY_TOKEN = prevGatewayToken;
-  }
+  envSnapshot.restore();
 });
 
 describe("sessions_send gateway loopback", () => {

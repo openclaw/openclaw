@@ -16,6 +16,7 @@ import { drainSystemEvents, peekSystemEvents } from "../infra/system-events.js";
 import { rawDataToString } from "../infra/ws.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
 import { DEFAULT_AGENT_ID, toAgentStoreSessionKey } from "../routing/session-key.js";
+import { captureEnv } from "../test-utils/env.js";
 import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { buildDeviceAuthPayload } from "./device-auth.js";
@@ -374,6 +375,7 @@ export async function startServerWithClient(
 ) {
   const { wsHeaders, ...gatewayOpts } = opts ?? {};
   let port = await getFreePort();
+  const envSnapshot = captureEnv(["OPENCLAW_GATEWAY_TOKEN"]);
   const prev = process.env.OPENCLAW_GATEWAY_TOKEN;
   if (typeof token === "string") {
     testState.gatewayAuth = { mode: "token", token };
@@ -421,7 +423,7 @@ export async function startServerWithClient(
     ws.once("error", onError);
     ws.once("close", onClose);
   });
-  return { server, ws, port, prevToken: prev };
+  return { server, ws, port, prevToken: prev, envSnapshot };
 }
 
 type ConnectResponse = {

@@ -1,5 +1,6 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { captureEnv } from "../test-utils/env.js";
 import {
   connectOk,
   installGatewayTestHooks,
@@ -12,23 +13,19 @@ installGatewayTestHooks({ scope: "suite" });
 async function withServer<T>(
   run: (ws: Awaited<ReturnType<typeof startServerWithClient>>["ws"]) => Promise<T>,
 ) {
-  const { server, ws, prevToken } = await startServerWithClient("secret");
+  const { server, ws, envSnapshot } = await startServerWithClient("secret");
   try {
     return await run(ws);
   } finally {
     ws.close();
     await server.close();
-    if (prevToken === undefined) {
-      delete process.env.OPENCLAW_GATEWAY_TOKEN;
-    } else {
-      process.env.OPENCLAW_GATEWAY_TOKEN = prevToken;
-    }
+    envSnapshot.restore();
   }
 }
 
 describe("gateway skills.status", () => {
   it("does not expose raw config values to operator.read clients", async () => {
-    const prevBundledSkillsDir = process.env.OPENCLAW_BUNDLED_SKILLS_DIR;
+    const envSnapshot = captureEnv(["OPENCLAW_BUNDLED_SKILLS_DIR"]);
     process.env.OPENCLAW_BUNDLED_SKILLS_DIR = path.join(process.cwd(), "skills");
     const secret = "discord-token-secret-abc";
     const { writeConfigFile } = await import("../config/config.js");
@@ -62,11 +59,7 @@ describe("gateway skills.status", () => {
         expect(check && "value" in check).toBe(false);
       });
     } finally {
-      if (prevBundledSkillsDir === undefined) {
-        delete process.env.OPENCLAW_BUNDLED_SKILLS_DIR;
-      } else {
-        process.env.OPENCLAW_BUNDLED_SKILLS_DIR = prevBundledSkillsDir;
-      }
+      envSnapshot.restore();
     }
   });
 });
