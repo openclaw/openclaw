@@ -22,7 +22,11 @@ import {
   normalizeUpdateChannel,
   resolveEffectiveUpdateChannel,
 } from "../infra/update-channels.js";
-import { checkUpdateStatus, compareSemverStrings } from "../infra/update-check.js";
+import {
+  checkUpdateStatus,
+  compareSemverStrings,
+  formatGitInstallLabel,
+} from "../infra/update-check.js";
 import { runExec } from "../process/exec.js";
 import { VERSION } from "../version.js";
 import { resolveControlUiLinks } from "./onboard-helpers.js";
@@ -104,21 +108,7 @@ export async function statusAllCommand(
       gitTag: update.git?.tag ?? null,
       gitBranch: update.git?.branch ?? null,
     });
-    const gitLabel =
-      update.installKind === "git"
-        ? (() => {
-            const shortSha = update.git?.sha ? update.git.sha.slice(0, 8) : null;
-            const branch =
-              update.git?.branch && update.git.branch !== "HEAD" ? update.git.branch : null;
-            const tag = update.git?.tag ?? null;
-            const parts = [
-              branch ?? (tag ? "detached" : "git"),
-              tag ? `tag ${tag}` : null,
-              shortSha ? `@ ${shortSha}` : null,
-            ].filter(Boolean);
-            return parts.join(" · ");
-          })()
-        : null;
+    const gitLabel = formatGitInstallLabel(update);
     progress.tick();
 
     progress.setLabel("Probing gateway…");

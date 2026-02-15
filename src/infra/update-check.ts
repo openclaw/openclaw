@@ -49,6 +49,21 @@ export type UpdateCheckResult = {
   registry?: RegistryStatus;
 };
 
+export function formatGitInstallLabel(update: UpdateCheckResult): string | null {
+  if (update.installKind !== "git") {
+    return null;
+  }
+  const shortSha = update.git?.sha ? update.git.sha.slice(0, 8) : null;
+  const branch = update.git?.branch && update.git.branch !== "HEAD" ? update.git.branch : null;
+  const tag = update.git?.tag ?? null;
+  const parts = [
+    branch ?? (tag ? "detached" : "git"),
+    tag ? `tag ${tag}` : null,
+    shortSha ? `@ ${shortSha}` : null,
+  ].filter(Boolean);
+  return parts.join(" · ");
+}
+
 async function exists(p: string): Promise<boolean> {
   try {
     await fs.access(p);
