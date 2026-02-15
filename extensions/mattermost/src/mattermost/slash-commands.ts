@@ -42,6 +42,8 @@ export type MattermostRegisteredCommand = {
   trigger: string;
   teamId: string;
   token: string;
+  /** True when this process created the command and should delete it on shutdown. */
+  managed: boolean;
 };
 
 /**
@@ -230,6 +232,7 @@ export async function registerSlashCommands(params: {
         trigger: spec.trigger,
         teamId,
         token: existingCmd.token,
+        managed: false,
       });
       continue;
     }
@@ -251,6 +254,7 @@ export async function registerSlashCommands(params: {
         trigger: spec.trigger,
         teamId,
         token: created.token,
+        managed: true,
       });
     } catch (err) {
       log?.(`mattermost: failed to register command /${spec.trigger}: ${String(err)}`);
@@ -270,6 +274,9 @@ export async function cleanupSlashCommands(params: {
 }): Promise<void> {
   const { client, commands, log } = params;
   for (const cmd of commands) {
+    if (!cmd.managed) {
+      continue;
+    }
     try {
       await deleteMattermostCommand(client, cmd.id);
       log?.(`mattermost: deleted command /${cmd.trigger} (id=${cmd.id})`);

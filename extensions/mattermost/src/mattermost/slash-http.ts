@@ -11,6 +11,7 @@ import {
   createReplyPrefixOptions,
   createTypingCallbacks,
   logTypingFailure,
+  resolveControlCommandGate,
 } from "openclaw/plugin-sdk";
 import type { ResolvedMattermostAccount } from "../mattermost/accounts.js";
 import { getMattermostRuntime } from "../runtime.js";
@@ -69,6 +70,271 @@ function sendJsonResponse(
   res.end(JSON.stringify(body));
 }
 
+function normalizeAllowList(entries: Array<string | number>): string[] {
+  const normalized = entries
+    .map((entry) => String(entry).trim())
+    .filter(Boolean)
+    .map((entry) => entry.toLowerCase());
+  return Array.from(new Set(normalized));
+}
+
+function isSenderAllowed(params: { senderId: string; senderName: string; allowFrom: string[] }) {
+  const { senderId, senderName, allowFrom } = params;
+  if (allowFrom.length === 0) {
+    return false;
+  }
+
+  const allowed = new Set(allowFrom.map((v) => v.toLowerCase()));
+  const id = senderId.trim().toLowerCase();
+  const name = senderName.trim().toLowerCase();
+
+  return allowed.has(id) || allowed.has(name);
+}
+
+type SlashInvocationAuth = {
+  ok: boolean;
+  denyResponse?: MattermostSlashCommandResponse;
+  commandAuthorized: boolean;
+  channelInfo: MattermostChannel | null;
+  kind: "direct" | "group" | "channel";
+  chatType: "direct" | "group" | "channel";
+  channelName: string;
+  channelDisplay: string;
+  roomLabel: string;
+};
+
+async function authorizeSlashInvocation(params: {
+  account: ResolvedMattermostAccount;
+  cfg: OpenClawConfig;
+  client: ReturnType<typeof createMattermostClient>;
+  commandText: string;
+  channelId: string;
+  senderId: string;
+  senderName: string;
+}): Promise<SlashInvocationAuth> {
+  const { account, cfg, client, commandText, channelId, senderId, senderName } = params;
+  const core = getMattermostRuntime();
+
+  // Resolve channel info so we can enforce DM vs group/channel policies.
+  let channelInfo: MattermostChannel | null = null;
+  try {
+    channelInfo = await fetchMattermostChannel(client, channelId);
+  } catch {
+    // continue without channel info
+  }
+
+  const channelType = channelInfo?.type ?? undefined;
+  const isDirectMessage = channelType?.toUpperCase() === "D";
+  const kind = isDirectMessage
+    ? "direct"
+    : channelType?.toUpperCase() === "G"
+      ? "group"
+      : "channel";
+
+  const chatType = kind === "direct" ? "direct" : kind === "group" ? "group" : "channel";
+
+  const channelName = channelInfo?.name ?? "";
+  const channelDisplay = channelInfo?.display_name ?? channelName;
+  const roomLabel = channelName ? `#${channelName}` : channelDisplay || `#${channelId}`;
+
+  const dmPolicy = account.config.dmPolicy ?? "pairing";
+  const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
+  const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
+
+  const configAllowFrom = normalizeAllowList(account.config.allowFrom ?? []);
+  const configGroupAllowFrom = normalizeAllowList(account.config.groupAllowFrom ?? []);
+  const storeAllowFrom = normalizeAllowList(
+    await core.channel.pairing.readAllowFromStore("mattermost").catch(() => []),
+  );
+  const effectiveAllowFrom = Array.from(new Set([...configAllowFrom, ...storeAllowFrom]));
+  const effectiveGroupAllowFrom = Array.from(
+    new Set([
+      ...(configGroupAllowFrom.length > 0 ? configGroupAllowFrom : configAllowFrom),
+      ...storeAllowFrom,
+    ]),
+  );
+
+  const allowTextCommands = core.channel.commands.shouldHandleTextCommands({
+    cfg,
+    surface: "mattermost",
+  });
+  const hasControlCommand = core.channel.text.hasControlCommand(commandText, cfg);
+  const useAccessGroups = cfg.commands?.useAccessGroups !== false;
+
+  const senderAllowedForCommands = isSenderAllowed({
+    senderId,
+    senderName,
+    allowFrom: effectiveAllowFrom,
+  });
+  const groupAllowedForCommands = isSenderAllowed({
+    senderId,
+    senderName,
+    allowFrom: effectiveGroupAllowFrom,
+  });
+
+  const commandGate = resolveControlCommandGate({
+    useAccessGroups,
+    authorizers: [
+      { configured: effectiveAllowFrom.length > 0, allowed: senderAllowedForCommands },
+      {
+        configured: effectiveGroupAllowFrom.length > 0,
+        allowed: groupAllowedForCommands,
+      },
+    ],
+    allowTextCommands,
+    hasControlCommand,
+  });
+
+  const commandAuthorized =
+    kind === "direct"
+      ? dmPolicy === "open" || senderAllowedForCommands
+      : commandGate.commandAuthorized;
+
+  // DM policy enforcement
+  if (kind === "direct") {
+    if (dmPolicy === "disabled") {
+      return {
+        ok: false,
+        denyResponse: {
+          response_type: "ephemeral",
+          text: "This bot is not accepting direct messages.",
+        },
+        commandAuthorized: false,
+        channelInfo,
+        kind,
+        chatType,
+        channelName,
+        channelDisplay,
+        roomLabel,
+      };
+    }
+
+    if (dmPolicy !== "open" && !senderAllowedForCommands) {
+      if (dmPolicy === "pairing") {
+        const { code } = await core.channel.pairing.upsertPairingRequest({
+          channel: "mattermost",
+          id: senderId,
+          meta: { name: senderName },
+        });
+        return {
+          ok: false,
+          denyResponse: {
+            response_type: "ephemeral",
+            text: core.channel.pairing.buildPairingReply({
+              channel: "mattermost",
+              idLine: `Your Mattermost user id: ${senderId}`,
+              code,
+            }),
+          },
+          commandAuthorized: false,
+          channelInfo,
+          kind,
+          chatType,
+          channelName,
+          channelDisplay,
+          roomLabel,
+        };
+      }
+
+      return {
+        ok: false,
+        denyResponse: {
+          response_type: "ephemeral",
+          text: "Unauthorized.",
+        },
+        commandAuthorized: false,
+        channelInfo,
+        kind,
+        chatType,
+        channelName,
+        channelDisplay,
+        roomLabel,
+      };
+    }
+  } else {
+    // Group/channel policy enforcement
+    if (groupPolicy === "disabled") {
+      return {
+        ok: false,
+        denyResponse: {
+          response_type: "ephemeral",
+          text: "Slash commands are disabled in channels.",
+        },
+        commandAuthorized: false,
+        channelInfo,
+        kind,
+        chatType,
+        channelName,
+        channelDisplay,
+        roomLabel,
+      };
+    }
+
+    if (groupPolicy === "allowlist") {
+      if (effectiveGroupAllowFrom.length === 0) {
+        return {
+          ok: false,
+          denyResponse: {
+            response_type: "ephemeral",
+            text: "Slash commands are not configured for this channel (no allowlist).",
+          },
+          commandAuthorized: false,
+          channelInfo,
+          kind,
+          chatType,
+          channelName,
+          channelDisplay,
+          roomLabel,
+        };
+      }
+      if (!groupAllowedForCommands) {
+        return {
+          ok: false,
+          denyResponse: {
+            response_type: "ephemeral",
+            text: "Unauthorized.",
+          },
+          commandAuthorized: false,
+          channelInfo,
+          kind,
+          chatType,
+          channelName,
+          channelDisplay,
+          roomLabel,
+        };
+      }
+    }
+
+    if (commandGate.shouldBlock) {
+      return {
+        ok: false,
+        denyResponse: {
+          response_type: "ephemeral",
+          text: "Unauthorized.",
+        },
+        commandAuthorized: false,
+        channelInfo,
+        kind,
+        chatType,
+        channelName,
+        channelDisplay,
+        roomLabel,
+      };
+    }
+  }
+
+  return {
+    ok: true,
+    commandAuthorized,
+    channelInfo,
+    kind,
+    chatType,
+    channelName,
+    channelDisplay,
+    roomLabel,
+  };
+}
+
 /**
  * Create the HTTP request handler for Mattermost slash command callbacks.
  *
@@ -77,7 +343,6 @@ function sendJsonResponse(
  */
 export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
   const { account, cfg, runtime, commandTokens, log } = params;
-  const core = getMattermostRuntime();
 
   const MAX_BODY_BYTES = 64 * 1024; // 64KB
 
@@ -125,6 +390,30 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
     const senderId = payload.user_id;
     const senderName = payload.user_name ?? senderId;
 
+    const client = createMattermostClient({
+      baseUrl: account.baseUrl ?? "",
+      botToken: account.botToken ?? "",
+    });
+
+    const auth = await authorizeSlashInvocation({
+      account,
+      cfg,
+      client,
+      commandText,
+      channelId,
+      senderId,
+      senderName,
+    });
+
+    if (!auth.ok) {
+      sendJsonResponse(
+        res,
+        200,
+        auth.denyResponse ?? { response_type: "ephemeral", text: "Unauthorized." },
+      );
+      return;
+    }
+
     log?.(`mattermost: slash command /${trigger} from ${senderName} in ${channelId}`);
 
     // Acknowledge immediately — we'll send the actual reply asynchronously
@@ -139,12 +428,19 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
         account,
         cfg,
         runtime,
+        client,
         commandText,
         channelId,
         senderId,
         senderName,
         teamId: payload.team_id,
         triggerId: payload.trigger_id,
+        kind: auth.kind,
+        chatType: auth.chatType,
+        channelName: auth.channelName,
+        channelDisplay: auth.channelDisplay,
+        roomLabel: auth.roomLabel,
+        commandAuthorized: auth.commandAuthorized,
         log,
       });
     } catch (err) {
@@ -165,48 +461,41 @@ async function handleSlashCommandAsync(params: {
   account: ResolvedMattermostAccount;
   cfg: OpenClawConfig;
   runtime: RuntimeEnv;
+  client: ReturnType<typeof createMattermostClient>;
   commandText: string;
   channelId: string;
   senderId: string;
   senderName: string;
   teamId: string;
+  kind: "direct" | "group" | "channel";
+  chatType: "direct" | "group" | "channel";
+  channelName: string;
+  channelDisplay: string;
+  roomLabel: string;
+  commandAuthorized: boolean;
   triggerId?: string;
   log?: (msg: string) => void;
 }) {
-  const { account, cfg, runtime, commandText, channelId, senderId, senderName, teamId, log } =
-    params;
+  const {
+    account,
+    cfg,
+    runtime,
+    client,
+    commandText,
+    channelId,
+    senderId,
+    senderName,
+    teamId,
+    kind,
+    chatType,
+    channelName,
+    channelDisplay,
+    roomLabel,
+    commandAuthorized,
+    triggerId,
+    log,
+  } = params;
   const core = getMattermostRuntime();
-
-  // Resolve channel info
-  const client = createMattermostClient({
-    baseUrl: account.baseUrl ?? "",
-    botToken: account.botToken ?? "",
-  });
-
-  let channelInfo: MattermostChannel | null = null;
-  try {
-    channelInfo = await fetchMattermostChannel(client, channelId);
-  } catch {
-    // continue without channel info
-  }
-
-  const channelType = channelInfo?.type ?? undefined;
-  const isDirectMessage = channelType?.toUpperCase() === "D";
-  const kind = isDirectMessage
-    ? "direct"
-    : channelType?.toUpperCase() === "G"
-      ? "group"
-      : "channel";
-  const chatType =
-    kind === "direct"
-      ? ("direct" as const)
-      : kind === "group"
-        ? ("group" as const)
-        : ("channel" as const);
-
-  const channelName = channelInfo?.name ?? "";
-  const channelDisplay = channelInfo?.display_name ?? channelName;
-  const roomLabel = channelName ? `#${channelName}` : channelDisplay || `#${channelId}`;
 
   const route = core.channel.routing.resolveAgentRoute({
     cfg,
@@ -248,10 +537,10 @@ async function handleSlashCommandAsync(params: {
     SenderId: senderId,
     Provider: "mattermost" as const,
     Surface: "mattermost" as const,
-    MessageSid: params.triggerId ?? `slash-${Date.now()}`,
+    MessageSid: triggerId ?? `slash-${Date.now()}`,
     Timestamp: Date.now(),
     WasMentioned: true,
-    CommandAuthorized: true, // Slash commands bypass mention requirements
+    CommandAuthorized: commandAuthorized,
     CommandSource: "native" as const,
     OriginatingChannel: "mattermost" as const,
     OriginatingTo: to,
