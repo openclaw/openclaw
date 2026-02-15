@@ -65,8 +65,9 @@ const processSchema = Type.Object({
   offset: Type.Optional(Type.Number({ description: "Log offset" })),
   limit: Type.Optional(Type.Number({ description: "Log length" })),
   timeout: Type.Optional(
-    Type.Union([Type.Number(), Type.String()], {
+    Type.Number({
       description: "For poll: wait up to this many milliseconds before returning",
+      minimum: 0,
     }),
   ),
 });
@@ -138,7 +139,7 @@ export function createProcessTool(
         eof?: boolean;
         offset?: number;
         limit?: number;
-        timeout?: number | string;
+        timeout?: unknown;
       };
 
       if (params.action === "list") {

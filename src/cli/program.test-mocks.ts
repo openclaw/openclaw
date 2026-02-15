@@ -43,6 +43,13 @@ export function installBaseProgramMocks() {
     ],
     configureCommand,
     configureCommandWithSections,
+    configureCommandFromSectionsArg: (sections: unknown, runtime: unknown) => {
+      const resolved = Array.isArray(sections) ? sections : [];
+      if (resolved.length > 0) {
+        return configureCommandWithSections(resolved, runtime);
+      }
+      return configureCommand({}, runtime);
+    },
   }));
   vi.mock("../commands/setup.js", () => ({ setupCommand }));
   vi.mock("../commands/onboard.js", () => ({ onboardCommand }));

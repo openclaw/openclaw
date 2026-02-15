@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import "./test-helpers/fast-core-tools.js";
+import { sleep } from "../utils.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import {
   getCallGatewayMock,
@@ -112,6 +113,16 @@ function setupSessionsSpawnGatewayMock(opts: {
   };
 }
 
+const waitFor = async (predicate: () => boolean, timeoutMs = 2000) => {
+  const start = Date.now();
+  while (!predicate()) {
+    if (Date.now() - start > timeoutMs) {
+      throw new Error(`timed out waiting for condition (timeoutMs=${timeoutMs})`);
+    }
+    await sleep(10);
+  }
+};
+
 describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
   beforeEach(() => {
     resetSessionsSpawnConfigOverride();
@@ -120,16 +131,14 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
   it("sessions_spawn runs cleanup flow after subagent completion", async () => {
     resetSubagentRegistryForTests();
     callGatewayMock.mockReset();
-    let patchParams: { key?: string; label?: string } = {};
+    const patchCalls: Array<{ key?: string; label?: string }> = [];
 
     const ctx = setupSessionsSpawnGatewayMock({
       includeSessionsList: true,
       includeChatHistory: true,
       onSessionsPatch: (params) => {
         const rec = params as { key?: string; label?: string } | undefined;
-        if (typeof rec?.label === "string" && rec.label.trim()) {
-          patchParams = { key: rec.key, label: rec.label };
-        }
+        patchCalls.push({ key: rec?.key, label: rec?.label });
       },
     });
 
@@ -165,18 +174,16 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
       },
     });
 
-    vi.useFakeTimers();
-    try {
-      await vi.advanceTimersByTimeAsync(500);
-    } finally {
-      vi.useRealTimers();
-    }
+    await waitFor(() => ctx.waitCalls.some((call) => call.runId === child.runId));
+    await waitFor(() => patchCalls.some((call) => call.label === "my-task"));
+    await waitFor(() => ctx.calls.filter((c) => c.method === "agent").length >= 2);
 
     const childWait = ctx.waitCalls.find((call) => call.runId === child.runId);
     expect(childWait?.timeoutMs).toBe(1000);
     // Cleanup should patch the label
-    expect(patchParams.key).toBe(child.sessionKey);
-    expect(patchParams.label).toBe("my-task");
+    const labelPatch = patchCalls.find((call) => call.label === "my-task");
+    expect(labelPatch?.key).toBe(child.sessionKey);
+    expect(labelPatch?.label).toBe("my-task");
 
     // Two agent calls: subagent spawn + main agent trigger
     const agentCalls = ctx.calls.filter((c) => c.method === "agent");
@@ -325,14 +332,14 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
       runId: "run-1",
     });
 
-    vi.useFakeTimers();
-    try {
-      await vi.advanceTimersByTimeAsync(500);
-    } finally {
-      vi.useRealTimers();
-    }
-
     const child = ctx.getChild();
+    if (!child.runId) {
+      throw new Error("missing child runId");
+    }
+    await waitFor(() => ctx.waitCalls.some((call) => call.runId === child.runId));
+    await waitFor(() => ctx.calls.filter((call) => call.method === "agent").length >= 2);
+    await waitFor(() => Boolean(deletedKey));
+
     const childWait = ctx.waitCalls.find((call) => call.runId === child.runId);
     expect(childWait?.timeoutMs).toBe(1000);
     expect(child.sessionKey?.startsWith("agent:main:subagent:")).toBe(true);
@@ -415,12 +422,7 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
       runId: "run-1",
     });
 
-    vi.useFakeTimers();
-    try {
-      await vi.advanceTimersByTimeAsync(500);
-    } finally {
-      vi.useRealTimers();
-    }
+    await waitFor(() => calls.filter((call) => call.method === "agent").length >= 2);
 
     const mainAgentCall = calls
       .filter((call) => call.method === "agent")

@@ -289,8 +289,8 @@ describe("openclaw-tools: subagents (sessions_spawn model + thinking)", () => {
       const request = opts as { method?: string; params?: unknown };
       calls.push(request);
       if (request.method === "sessions.patch") {
-        const params = request.params as { model?: unknown } | undefined;
-        if (typeof params?.model === "string" && params.model.trim()) {
+        const model = (request.params as { model?: unknown } | undefined)?.model;
+        if (model === "bad-model") {
           throw new Error("invalid model: bad-model");
         }
         return { ok: true };

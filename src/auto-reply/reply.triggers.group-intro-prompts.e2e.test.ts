@@ -127,7 +127,10 @@ describe("group intro prompts", () => {
         vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0]?.extraSystemPrompt ?? "";
       expect(extraSystemPrompt).toContain('"channel": "discord"');
       expect(extraSystemPrompt).toContain(
-        `You are replying inside a Discord group chat. Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included). ${groupParticipationNote} Address the specific sender noted in the message context.`,
+        `You are in the Discord group chat "Release Squad". Participants: Alice, Bob.`,
+      );
+      expect(extraSystemPrompt).toContain(
+        `Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included). ${groupParticipationNote} Address the specific sender noted in the message context.`,
       );
     });
   });
@@ -158,8 +161,12 @@ describe("group intro prompts", () => {
       const extraSystemPrompt =
         vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0]?.extraSystemPrompt ?? "";
       expect(extraSystemPrompt).toContain('"channel": "whatsapp"');
+      expect(extraSystemPrompt).toContain(`You are in the WhatsApp group chat "Ops".`);
       expect(extraSystemPrompt).toContain(
-        `You are replying inside a WhatsApp group chat. Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included). WhatsApp IDs: SenderId is the participant JID (group participant id). ${groupParticipationNote} Address the specific sender noted in the message context.`,
+        `WhatsApp IDs: SenderId is the participant JID (group participant id).`,
+      );
+      expect(extraSystemPrompt).toContain(
+        `Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included). WhatsApp IDs: SenderId is the participant JID (group participant id). ${groupParticipationNote} Address the specific sender noted in the message context.`,
       );
     });
   });
@@ -190,8 +197,9 @@ describe("group intro prompts", () => {
       const extraSystemPrompt =
         vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0]?.extraSystemPrompt ?? "";
       expect(extraSystemPrompt).toContain('"channel": "telegram"');
+      expect(extraSystemPrompt).toContain(`You are in the Telegram group chat "Dev Chat".`);
       expect(extraSystemPrompt).toContain(
-        `You are replying inside a Telegram group chat. Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included). ${groupParticipationNote} Address the specific sender noted in the message context.`,
+        `Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included). ${groupParticipationNote} Address the specific sender noted in the message context.`,
       );
     });
   });
