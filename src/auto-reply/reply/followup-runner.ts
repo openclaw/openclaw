@@ -23,6 +23,11 @@ import {
 import { resolveReplyToMode } from "./reply-threading.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
+import {
+  formatCompactionNotice,
+  formatCompactionVerboseSummary,
+  shouldEmitCompactionNotice,
+} from "./session-updates.js";
 import { createTypingSignaler } from "./typing-mode.js";
 
 export function createFollowupRunner(params: {
@@ -120,6 +125,7 @@ export function createFollowupRunner(params: {
         });
       }
       let autoCompactionCompleted = false;
+      let compactionStats: { tokensBefore?: number; tokensAfter?: number } | undefined;
       let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
       let fallbackProvider = queued.run.provider;
       let fallbackModel = queued.run.model;
@@ -178,6 +184,24 @@ export function createFollowupRunner(params: {
                 const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
                 if (phase === "end") {
                   autoCompactionCompleted = true;
+                  const data = evt.data as {
+                    tokensBefore?: unknown;
+                    tokensAfter?: unknown;
+                    result?: { tokensBefore?: unknown; tokensAfter?: unknown };
+                  };
+                  const rawBefore = data.tokensBefore ?? data.result?.tokensBefore;
+                  const rawAfter = data.tokensAfter ?? data.result?.tokensAfter;
+                  const tokensBefore =
+                    typeof rawBefore === "number" && Number.isFinite(rawBefore) && rawBefore > 0
+                      ? rawBefore
+                      : undefined;
+                  const tokensAfter =
+                    typeof rawAfter === "number" && Number.isFinite(rawAfter) && rawAfter > 0
+                      ? rawAfter
+                      : undefined;
+                  if (tokensBefore != null || tokensAfter != null) {
+                    compactionStats = { tokensBefore, tokensAfter };
+                  }
                 }
               },
             });
@@ -269,14 +293,29 @@ export function createFollowupRunner(params: {
           sessionStore,
           sessionKey,
           storePath,
+          tokensAfter: compactionStats?.tokensAfter,
           lastCallUsage: runResult.meta.agentMeta?.lastCallUsage,
           contextTokensUsed,
         });
-        if (queued.run.verboseLevel && queued.run.verboseLevel !== "off") {
-          const suffix = typeof count === "number" ? ` (count ${count})` : "";
-          finalPayloads.unshift({
-            text: `🧹 Auto-compaction complete${suffix}.`,
-          });
+        const verboseEnabled =
+          queued.run.verboseLevel !== undefined && queued.run.verboseLevel !== "off";
+        const compactionNoticeStats = {
+          tokensBefore: compactionStats?.tokensBefore,
+          tokensAfter: compactionStats?.tokensAfter,
+          contextTokens: contextTokensUsed,
+        };
+        const prependPayloads: ReplyPayload[] = [];
+        if (shouldEmitCompactionNotice({ cfg: queued.run.config, verboseEnabled })) {
+          prependPayloads.push({ text: formatCompactionNotice(count, compactionNoticeStats) });
+        }
+        if (queued.run.verboseLevel === "full") {
+          const verboseSummary = formatCompactionVerboseSummary(compactionNoticeStats);
+          if (verboseSummary) {
+            prependPayloads.push({ text: verboseSummary });
+          }
+        }
+        if (prependPayloads.length > 0) {
+          finalPayloads.unshift(...prependPayloads);
         }
       }
 

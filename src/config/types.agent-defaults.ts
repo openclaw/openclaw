@@ -251,6 +251,8 @@ export type AgentDefaultsConfig = {
 
 export type AgentCompactionMode = "default" | "safeguard";
 
+export type AgentCompactionNotifyMode = "verbose" | "always" | "off";
+
 export type AgentCompactionConfig = {
   /** Compaction summarization mode. */
   mode?: AgentCompactionMode;
@@ -258,6 +260,13 @@ export type AgentCompactionConfig = {
   reserveTokensFloor?: number;
   /** Max share of context window for history during safeguard pruning (0.1–0.9, default 0.5). */
   maxHistoryShare?: number;
+  /**
+   * Compaction notice behavior.
+   * - "verbose" (default): only show in verbose mode
+   * - "always": always show compaction notice
+   * - "off": never show compaction notice
+   */
+  notify?: AgentCompactionNotifyMode;
   /** Pre-compaction memory flush (agentic turn). Default: enabled. */
   memoryFlush?: AgentCompactionMemoryFlushConfig;
 };

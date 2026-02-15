@@ -12,6 +12,7 @@ import {
 } from "../../infra/format-time/format-datetime.ts";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { drainSystemEventEntries } from "../../infra/system-events.js";
+import { formatTokenCount } from "../../utils/usage-format.js";
 
 export async function prependSystemEvents(params: {
   cfg: OpenClawConfig;
@@ -283,4 +284,102 @@ export async function incrementCompactionCount(params: {
     });
   }
   return nextCount;
+}
+
+export type CompactionNotifyMode = "verbose" | "always" | "off";
+
+export type CompactionNoticeStats = {
+  tokensBefore?: number;
+  tokensAfter?: number;
+  contextTokens?: number;
+};
+
+export function resolveCompactionNotifyMode(cfg?: OpenClawConfig): CompactionNotifyMode {
+  const mode = cfg?.agents?.defaults?.compaction?.notify;
+  if (mode === "always" || mode === "off" || mode === "verbose") {
+    return mode;
+  }
+  return "verbose";
+}
+
+export function shouldEmitCompactionNotice(params: {
+  cfg?: OpenClawConfig;
+  verboseEnabled: boolean;
+}): boolean {
+  const mode = resolveCompactionNotifyMode(params.cfg);
+  if (mode === "off") {
+    return false;
+  }
+  if (mode === "always") {
+    return true;
+  }
+  return params.verboseEnabled;
+}
+
+export function formatCompactionVerboseSummary(stats?: CompactionNoticeStats): string | undefined {
+  const before =
+    typeof stats?.tokensBefore === "number" && stats.tokensBefore > 0
+      ? stats.tokensBefore
+      : undefined;
+  const after =
+    typeof stats?.tokensAfter === "number" && stats.tokensAfter > 0 ? stats.tokensAfter : undefined;
+  const context =
+    typeof stats?.contextTokens === "number" && stats.contextTokens > 0
+      ? stats.contextTokens
+      : undefined;
+
+  if (typeof before !== "number" || typeof after !== "number") {
+    return undefined;
+  }
+
+  const reducedTokens = Math.max(0, before - after);
+  const reducedPct = before > 0 ? (reducedTokens / before) * 100 : 0;
+  const lines = [
+    "📉 Compaction summary",
+    `- Tokens: ${formatTokenCount(before)} → ${formatTokenCount(after)} (${formatTokenCount(reducedTokens)} saved, ${reducedPct.toFixed(1)}%)`,
+  ];
+
+  if (typeof context === "number") {
+    const beforeWindowPct = (before / context) * 100;
+    const afterWindowPct = (after / context) * 100;
+    lines.push(
+      `- Context window: ${beforeWindowPct.toFixed(1)}% → ${afterWindowPct.toFixed(1)}% of ${formatTokenCount(context)}`,
+    );
+  }
+
+  return lines.join("\n");
+}
+export function formatCompactionNotice(count?: number, stats?: CompactionNoticeStats): string {
+  const parts: string[] = [];
+  if (typeof count === "number") {
+    parts.push(`count ${count}`);
+  }
+
+  const before =
+    typeof stats?.tokensBefore === "number" && stats.tokensBefore > 0
+      ? stats.tokensBefore
+      : undefined;
+  const after =
+    typeof stats?.tokensAfter === "number" && stats.tokensAfter > 0 ? stats.tokensAfter : undefined;
+  const context =
+    typeof stats?.contextTokens === "number" && stats.contextTokens > 0
+      ? stats.contextTokens
+      : undefined;
+
+  if (typeof before === "number" && typeof after === "number") {
+    const reducedTokens = Math.max(0, before - after);
+    const reducedPct = before > 0 ? (reducedTokens / before) * 100 : 0;
+    parts.push(
+      `${formatTokenCount(before)}→${formatTokenCount(after)} (-${reducedPct.toFixed(1)}%)`,
+    );
+
+    if (typeof context === "number") {
+      const beforeWindowPct = (before / context) * 100;
+      const afterWindowPct = (after / context) * 100;
+      parts.push(`window ${beforeWindowPct.toFixed(1)}%→${afterWindowPct.toFixed(1)}%`);
+    }
+  }
+
+  const suffix = parts.length > 0 ? ` (${parts.join(" · ")})` : "";
+  return `🧹 Context auto-compacted to keep this chat responsive${suffix}.`;
 }
