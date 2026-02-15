@@ -411,6 +411,23 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     const branch = channel === "dev" ? await readBranchName(runCommand, gitRoot, timeoutMs) : null;
     const needsCheckoutMain = channel === "dev" && branch !== DEV_BRANCH;
     gitTotalSteps = channel === "dev" ? (needsCheckoutMain ? 11 : 10) : 9;
+    const buildGitErrorResult = (reason: string): UpdateRunResult => ({
+      status: "error",
+      mode: "git",
+      root: gitRoot,
+      reason,
+      before: { sha: beforeSha, version: beforeVersion },
+      steps,
+      durationMs: Date.now() - startedAt,
+    });
+    const runGitCheckoutOrFail = async (name: string, argv: string[]) => {
+      const checkoutStep = await runStep(step(name, argv, gitRoot));
+      steps.push(checkoutStep);
+      if (checkoutStep.exitCode !== 0) {
+        return buildGitErrorResult("checkout-failed");
+      }
+      return null;
+    };
 
     const statusCheck = await runStep(
       step(
@@ -436,24 +453,15 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
 
     if (channel === "dev") {
       if (needsCheckoutMain) {
-        const checkoutStep = await runStep(
-          step(
-            `git checkout ${DEV_BRANCH}`,
-            ["git", "-C", gitRoot, "checkout", DEV_BRANCH],
-            gitRoot,
-          ),
-        );
-        steps.push(checkoutStep);
-        if (checkoutStep.exitCode !== 0) {
-          return {
-            status: "error",
-            mode: "git",
-            root: gitRoot,
-            reason: "checkout-failed",
-            before: { sha: beforeSha, version: beforeVersion },
-            steps,
-            durationMs: Date.now() - startedAt,
-          };
+        const failure = await runGitCheckoutOrFail(`git checkout ${DEV_BRANCH}`, [
+          "git",
+          "-C",
+          gitRoot,
+          "checkout",
+          DEV_BRANCH,
+        ]);
+        if (failure) {
+          return failure;
         }
       }
 
@@ -700,20 +708,16 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         };
       }
 
-      const checkoutStep = await runStep(
-        step(`git checkout ${tag}`, ["git", "-C", gitRoot, "checkout", "--detach", tag], gitRoot),
-      );
-      steps.push(checkoutStep);
-      if (checkoutStep.exitCode !== 0) {
-        return {
-          status: "error",
-          mode: "git",
-          root: gitRoot,
-          reason: "checkout-failed",
-          before: { sha: beforeSha, version: beforeVersion },
-          steps,
-          durationMs: Date.now() - startedAt,
-        };
+      const failure = await runGitCheckoutOrFail(`git checkout ${tag}`, [
+        "git",
+        "-C",
+        gitRoot,
+        "checkout",
+        "--detach",
+        tag,
+      ]);
+      if (failure) {
+        return failure;
       }
     }
 
