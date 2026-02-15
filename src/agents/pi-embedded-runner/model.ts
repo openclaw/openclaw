@@ -92,8 +92,25 @@ export function resolveModel(
       } as Model<Api>);
       return { model: fallbackModel, authStorage, modelRegistry };
     }
+
+    const configuredProviders = Object.keys(providers)
+      .map((id) => id.trim())
+      .filter(Boolean)
+      .sort();
+    const normalizedRequested = normalizeProviderId(provider);
+    const normalizedMatches = configuredProviders.filter(
+      (id) => normalizeProviderId(id) === normalizedRequested,
+    );
+
+    const detail =
+      normalizedMatches.length > 0
+        ? ` Provider mismatch: requested \"${provider}\" but configured as ${normalizedMatches.map((id) => `\"${id}\"`).join(", ")}.`
+        : configuredProviders.length > 0
+          ? ` Configured custom providers: ${configuredProviders.map((id) => `\"${id}\"`).join(", ")}.`
+          : "";
+
     return {
-      error: `Unknown model: ${provider}/${modelId}`,
+      error: `Unknown model: ${provider}/${modelId}.${detail}`,
       authStorage,
       modelRegistry,
     };

@@ -302,7 +302,7 @@ describe("resolveModel", () => {
     const result = resolveModel("google-antigravity", "claude-opus-4-6-thinking", "/tmp/agent");
 
     expect(result.model).toBeUndefined();
-    expect(result.error).toBe("Unknown model: google-antigravity/claude-opus-4-6-thinking");
+    expect(result.error).toContain("Unknown model: google-antigravity/claude-opus-4-6-thinking");
   });
 
   it("keeps unknown-model errors when no antigravity non-thinking template exists", () => {
@@ -313,13 +313,13 @@ describe("resolveModel", () => {
     const result = resolveModel("google-antigravity", "claude-opus-4-6", "/tmp/agent");
 
     expect(result.model).toBeUndefined();
-    expect(result.error).toBe("Unknown model: google-antigravity/claude-opus-4-6");
+    expect(result.error).toContain("Unknown model: google-antigravity/claude-opus-4-6");
   });
 
   it("keeps unknown-model errors for non-gpt-5 openai-codex ids", () => {
     const result = resolveModel("openai-codex", "gpt-4.1-mini", "/tmp/agent");
     expect(result.model).toBeUndefined();
-    expect(result.error).toBe("Unknown model: openai-codex/gpt-4.1-mini");
+    expect(result.error).toContain("Unknown model: openai-codex/gpt-4.1-mini");
   });
 
   it("uses codex fallback even when openai-codex provider is configured", () => {
@@ -347,5 +347,24 @@ describe("resolveModel", () => {
     expect(result.model?.api).toBe("openai-codex-responses");
     expect(result.model?.id).toBe("gpt-5.3-codex");
     expect(result.model?.provider).toBe("openai-codex");
+  });
+
+  it("includes configured provider hint when provider prefix is missing", () => {
+    const cfg = {
+      models: {
+        providers: {
+          lmproxy: {
+            baseUrl: "http://localhost:1234/v1",
+            models: [{ id: "minicpm-o-4_5", name: "MiniCPM" }],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModel("lmstudio", "minicpm-o-4_5", "/tmp/agent", cfg);
+
+    expect(result.model).toBeUndefined();
+    expect(result.error).toContain("Unknown model: lmstudio/minicpm-o-4_5.");
+    expect(result.error).toContain('Configured custom providers: "lmproxy".');
   });
 });
