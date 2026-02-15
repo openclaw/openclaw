@@ -9,7 +9,6 @@ import {
 import { resetSubagentRegistryForTests } from "./subagent-registry.js";
 
 const callGatewayMock = getCallGatewayMock();
-const setConfigOverride = setSessionsSpawnConfigOverride;
 
 describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
   beforeEach(() => {
