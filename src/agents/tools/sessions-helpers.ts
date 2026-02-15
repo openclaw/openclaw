@@ -170,7 +170,8 @@ export function boundConfidence(value: unknown): number {
 }
 
 /**
- * Check agent-to-agent policy for a single target agent.
+ * Check agent-to-agent policy for both requester and target agents.
+ * Both must be authorized for the call to proceed.
  * Returns { allowed: true } or { allowed: false, error: string }.
  */
 export function checkA2APolicy(
@@ -193,18 +194,19 @@ export function checkA2APolicy(
     allowList.filter((v) => v.trim() && v.trim() !== "*").map((v) => v.toLowerCase()),
   );
 
-  // Fix: Check both requester and target against allowlist
+  // P1 fix: Check requester is authorized to make A2A calls
   if (!allowAny && !allowSet.has(requesterAgentId.toLowerCase())) {
     return {
       allowed: false,
-      error: `Requester agent '${requesterAgentId}' not authorized to make A2A calls. Allowed: ${Array.from(allowSet).join(", ") || "(none)"}`,
+      error: `Requester agent '${requesterAgentId}' not authorized for A2A calls. Allowed: ${allowAny ? "*" : Array.from(allowSet).join(", ")}`,
     };
   }
 
+  // Check target is authorized to receive A2A calls
   if (!allowAny && !allowSet.has(targetAgentId.toLowerCase())) {
     return {
       allowed: false,
-      error: `Target agent '${targetAgentId}' not in allowlist. Allowed: ${Array.from(allowSet).join(", ") || "(none)"}`,
+      error: `Target agent '${targetAgentId}' not in allowlist. Allowed: ${allowAny ? "*" : Array.from(allowSet).join(", ")}`,
     };
   }
 

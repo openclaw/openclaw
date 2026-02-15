@@ -188,12 +188,19 @@ async function invokeAgentSkill(params: {
 
   const runId = response?.runId ?? idempotencyKey;
 
-  // Wait for completion
-  await callGateway({
+  // Wait for completion with status check
+  const waitResult = await callGateway<{ status: string; error?: string }>({
     method: "agent.wait",
     params: { runId, timeoutMs: params.timeoutMs },
     timeoutMs: params.timeoutMs + 2000,
   });
+
+  // P1 fix: Check wait status before reading history to avoid stale data
+  if (waitResult?.status !== "ok" && waitResult?.status !== "completed") {
+    throw new Error(
+      waitResult?.error ?? `Agent wait failed with status: ${waitResult?.status ?? "unknown"}`,
+    );
+  }
 
   // Get response
   const history = await callGateway<{ messages: Array<unknown> }>({
