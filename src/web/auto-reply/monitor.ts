@@ -18,10 +18,12 @@ import { setActiveWebListener } from "../active-listener.js";
 import { monitorWebInbox } from "../inbound.js";
 import {
   computeBackoff,
+  getTierPolicy,
   newConnectionId,
   resolveHeartbeatSeconds,
-  resolveReconnectPolicy,
+  resolveTieredPolicy,
   sleepWithAbort,
+  type ReconnectPolicy,
 } from "../reconnect.js";
 import { formatError, getWebAuthAgeMs, readWebSelfId } from "../session.js";
 import { DEFAULT_WEB_MEDIA_BYTES } from "./constants.js";
@@ -93,7 +95,11 @@ export async function monitorWebChannel(
       ? configuredMaxMb * 1024 * 1024
       : DEFAULT_WEB_MEDIA_BYTES;
   const heartbeatSeconds = resolveHeartbeatSeconds(cfg, tuning.heartbeatSeconds);
-  const reconnectPolicy = resolveReconnectPolicy(cfg, tuning.reconnect);
+  const tieredPolicy = resolveTieredPolicy(
+    cfg,
+    tuning.tieredReconnect ??
+      (tuning.reconnect ? { tier1: tuning.reconnect as ReconnectPolicy } : undefined),
+  );
   const baseMentionConfig = buildMentionConfig(cfg);
   const groupHistoryLimit =
     cfg.channels?.whatsapp?.accounts?.[tuning.accountId ?? ""]?.historyLimit ??
@@ -139,6 +145,8 @@ export async function monitorWebChannel(
   process.once("SIGINT", handleSigint);
 
   let reconnectAttempts = 0;
+  let currentTier: 1 | 2 | 3 = 1;
+  let tierAttempts = 0; // Attempts within current tier
 
   while (true) {
     if (stopRequested()) {
@@ -345,7 +353,10 @@ export async function monitorWebChannel(
 
     const uptimeMs = Date.now() - startedAt;
     if (uptimeMs > heartbeatSeconds * 1000) {
-      reconnectAttempts = 0; // Healthy stretch; reset the backoff.
+      // Healthy stretch; reset all retry state.
+      reconnectAttempts = 0;
+      currentTier = 1;
+      tierAttempts = 0;
     }
     status.reconnectAttempts = reconnectAttempts;
     emitStatus();
@@ -402,38 +413,56 @@ export async function monitorWebChannel(
     }
 
     reconnectAttempts += 1;
+    tierAttempts += 1;
     status.reconnectAttempts = reconnectAttempts;
     emitStatus();
-    if (reconnectPolicy.maxAttempts > 0 && reconnectAttempts >= reconnectPolicy.maxAttempts) {
-      reconnectLogger.warn(
-        {
-          connectionId,
-          status: statusCode,
-          reconnectAttempts,
-          maxAttempts: reconnectPolicy.maxAttempts,
-        },
-        "web reconnect: max attempts reached; continuing in degraded mode",
-      );
-      runtime.error(
-        `WhatsApp Web reconnect: max attempts reached (${reconnectAttempts}/${reconnectPolicy.maxAttempts}). Stopping web monitoring.`,
-      );
-      await closeListener();
-      break;
+
+    // Get current tier's policy
+    const currentPolicy = getTierPolicy(tieredPolicy, currentTier);
+
+    // Check if we need to escalate to next tier
+    if (currentPolicy.maxAttempts > 0 && tierAttempts >= currentPolicy.maxAttempts) {
+      if (currentTier < 3) {
+        // Escalate to next tier
+        const previousTier = currentTier;
+        currentTier = (currentTier + 1) as 2 | 3;
+        tierAttempts = 1;
+        const nextPolicy = getTierPolicy(tieredPolicy, currentTier);
+        reconnectLogger.warn(
+          {
+            connectionId,
+            status: statusCode,
+            reconnectAttempts,
+            previousTier,
+            newTier: currentTier,
+            tierMaxAttempts: nextPolicy.maxAttempts || "unlimited",
+          },
+          `web reconnect: escalating from tier ${previousTier} to tier ${currentTier}`,
+        );
+        runtime.error(
+          `WhatsApp Web: tier ${previousTier} exhausted (${currentPolicy.maxAttempts} attempts). Escalating to tier ${currentTier} (${nextPolicy.maxAttempts || "∞"} attempts, ${formatDurationPrecise(nextPolicy.initialMs)}-${formatDurationPrecise(nextPolicy.maxMs)} backoff).`,
+        );
+      }
+      // Tier 3 has unlimited attempts (maxAttempts: 0), so we never break
     }
 
-    const delay = computeBackoff(reconnectPolicy, reconnectAttempts);
+    // Compute delay using current tier's policy
+    const activePolicy = getTierPolicy(tieredPolicy, currentTier);
+    const delay = computeBackoff(activePolicy, tierAttempts);
     reconnectLogger.info(
       {
         connectionId,
         status: statusCode,
         reconnectAttempts,
-        maxAttempts: reconnectPolicy.maxAttempts || "unlimited",
+        tier: currentTier,
+        tierAttempts,
+        maxAttempts: activePolicy.maxAttempts || "unlimited",
         delayMs: delay,
       },
       "web reconnect: scheduling retry",
     );
     runtime.error(
-      `WhatsApp Web connection closed (status ${statusCode}). Retry ${reconnectAttempts}/${reconnectPolicy.maxAttempts || "∞"} in ${formatDurationPrecise(delay)}… (${errorStr})`,
+      `WhatsApp Web connection closed (status ${statusCode}). Tier ${currentTier} retry ${tierAttempts}/${activePolicy.maxAttempts || "∞"} in ${formatDurationPrecise(delay)}… (${errorStr})`,
     );
     await closeListener();
     try {
