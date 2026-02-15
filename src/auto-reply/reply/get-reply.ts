@@ -1,6 +1,7 @@
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
+  resolveAgentConfig,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   resolveSessionAgentId,
@@ -70,7 +71,10 @@ export async function getReplyFromConfig(
   );
   const resolvedOpts =
     mergedSkillFilter !== undefined ? { ...opts, skillFilter: mergedSkillFilter } : opts;
-  const agentCfg = cfg.agents?.defaults;
+  const agentThinkingDefault = resolveAgentConfig(cfg, agentId)?.thinkingDefault;
+  const agentCfg = agentThinkingDefault
+    ? { ...cfg.agents?.defaults, thinkingDefault: agentThinkingDefault }
+    : cfg.agents?.defaults;
   const sessionCfg = cfg.session;
   const { defaultProvider, defaultModel, aliasIndex } = resolveDefaultModel({
     cfg,

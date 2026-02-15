@@ -58,6 +58,21 @@ describe("resolveAgentConfig", () => {
     });
   });
 
+  it("returns per-agent thinking default override", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [
+          {
+            id: "om",
+            thinkingDefault: "xhigh",
+          },
+        ],
+      },
+    };
+
+    expect(resolveAgentConfig(cfg, "om")?.thinkingDefault).toBe("xhigh");
+  });
+
   it("supports per-agent model primary+fallbacks", () => {
     const cfg: OpenClawConfig = {
       agents: {

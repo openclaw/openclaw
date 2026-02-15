@@ -425,6 +425,12 @@ export function resolveThinkingDefault(params: {
   model: string;
   catalog?: ModelCatalogEntry[];
 }): ThinkLevel {
+  const perModel = params.cfg.agents?.defaults?.models?.[
+    modelKey(params.provider, params.model)
+  ]?.thinkingDefault;
+  if (perModel) {
+    return perModel;
+  }
   const configured = params.cfg.agents?.defaults?.thinkingDefault;
   if (configured) {
     return configured;
