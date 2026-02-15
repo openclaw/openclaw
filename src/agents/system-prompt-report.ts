@@ -41,13 +41,21 @@ function buildInjectedWorkspaceFiles(params: {
   injectedFiles: EmbeddedContextFile[];
   bootstrapMaxChars: number;
 }): SessionSystemPromptReport["injectedWorkspaceFiles"] {
-  const injectedByPath = new Map(params.injectedFiles.map((f) => [f.path, f.content]));
+  // Defensive: hook/plugin code can feed malformed injected file records at runtime.
+  const injectedByPath = new Map<string, string>();
   const injectedByBaseName = new Map<string, string>();
   for (const file of params.injectedFiles) {
-    const normalizedPath = file.path.replace(/\\/g, "/");
+    const injectedPath = typeof file?.path === "string" ? file.path : "";
+    const injectedContent = typeof file?.content === "string" ? file.content : "";
+    if (!injectedPath || !injectedContent) {
+      continue;
+    }
+    injectedByPath.set(injectedPath, injectedContent);
+
+    const normalizedPath = injectedPath.replace(/\\/g, "/");
     const baseName = path.posix.basename(normalizedPath);
     if (!injectedByBaseName.has(baseName)) {
-      injectedByBaseName.set(baseName, file.content);
+      injectedByBaseName.set(baseName, injectedContent);
     }
   }
   return params.bootstrapFiles.map((file) => {

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 import { buildSystemPromptReport } from "./system-prompt-report.js";
 
@@ -43,5 +44,21 @@ describe("buildSystemPromptReport", () => {
     });
 
     expect(report.injectedWorkspaceFiles[0]?.injectedChars).toBe("trimmed".length);
+  });
+
+  it("does not crash when injected file records are malformed at runtime", () => {
+    const file = makeBootstrapFile({ path: "/tmp/workspace/policies/AGENTS.md" });
+    const report = buildSystemPromptReport({
+      source: "run",
+      generatedAt: 0,
+      bootstrapMaxChars: 20_000,
+      systemPrompt: "system",
+      bootstrapFiles: [file],
+      injectedFiles: [{ content: "trimmed" } as unknown as EmbeddedContextFile],
+      skillsPrompt: "",
+      tools: [],
+    });
+
+    expect(report.injectedWorkspaceFiles[0]?.injectedChars).toBe(0);
   });
 });

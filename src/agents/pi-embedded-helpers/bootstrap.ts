@@ -196,6 +196,11 @@ export function buildBootstrapContextFiles(
   let remainingTotalChars = totalMaxChars;
   const result: EmbeddedContextFile[] = [];
   for (const file of files) {
+    // Defensive: internal hooks can mutate bootstrapFiles at runtime; ensure required fields.
+    if (typeof file?.path !== "string" || file.path.trim().length === 0) {
+      opts?.warn?.("workspace bootstrap file missing path; skipping");
+      continue;
+    }
     if (remainingTotalChars <= 0) {
       break;
     }

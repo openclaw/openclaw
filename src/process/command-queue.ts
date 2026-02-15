@@ -100,8 +100,13 @@ function drainLane(lane: string) {
           const completedCurrentGeneration = completeTask(state, taskId, taskGeneration);
           const isProbeLane = lane.startsWith("auth-probe:") || lane.startsWith("session:probe-");
           if (!isProbeLane) {
+            const errorMeta =
+              err instanceof Error
+                ? { name: err.name, message: err.message, stack: err.stack }
+                : { value: String(err) };
             diag.error(
               `lane task error: lane=${lane} durationMs=${Date.now() - startTime} error="${String(err)}"`,
+              { error: errorMeta },
             );
           }
           if (completedCurrentGeneration) {
