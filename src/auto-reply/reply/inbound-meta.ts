@@ -1,6 +1,8 @@
 import type { TemplateContext } from "../templating.js";
+import { resolveUserTimezone } from "../../agents/date-time.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveSenderLabel } from "../../channels/sender-label.js";
+import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.ts";
 
 function safeTrim(value: unknown): string | undefined {
   if (typeof value !== "string") {
@@ -46,10 +48,35 @@ export function buildInboundMetaSystemPrompt(ctx: TemplateContext): string {
   ].join("\n");
 }
 
-export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
+export function buildInboundUserContextPrefix(
+  ctx: TemplateContext,
+  opts?: { userTimezone?: string },
+): string {
   const blocks: string[] = [];
   const chatType = normalizeChatType(ctx.ChatType);
   const isDirect = !chatType || chatType === "direct";
+
+  // Inject a timestamp so the agent knows when the message was sent.
+  // Channel messages skip the gateway injectTimestamp() path, so this is
+  // the only place they get date/time awareness.
+  if (typeof ctx.Timestamp === "number" && ctx.Timestamp > 0) {
+    const date = new Date(ctx.Timestamp);
+    if (!Number.isNaN(date.getTime())) {
+      const timezone = resolveUserTimezone(opts?.userTimezone);
+      const formatted = formatZonedTimestamp(date, { timeZone: timezone });
+      if (formatted) {
+        try {
+          const dow = new Intl.DateTimeFormat("en-US", {
+            timeZone: timezone,
+            weekday: "short",
+          }).format(date);
+          blocks.push(`[${dow} ${formatted}]`);
+        } catch {
+          blocks.push(`[${formatted}]`);
+        }
+      }
+    }
+  }
 
   const conversationInfo = {
     conversation_label: isDirect ? undefined : safeTrim(ctx.ConversationLabel),
