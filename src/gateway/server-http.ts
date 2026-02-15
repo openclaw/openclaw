@@ -84,6 +84,7 @@ const GATEWAY_PROBE_STATUS_BY_PATH = new Map<string, "live" | "ready">([
   ["/ready", "ready"],
   ["/readyz", "ready"],
 ]);
+const MATTERMOST_SLASH_CALLBACK_PATH = "/api/channels/mattermost/command";
 
 function shouldEnforceDefaultPluginGatewayAuth(pathContext: PluginRoutePathContext): boolean {
   return (
@@ -189,6 +190,9 @@ function buildPluginRequestStages(params: {
     {
       name: "plugin-auth",
       run: async () => {
+        if (params.requestPath === MATTERMOST_SLASH_CALLBACK_PATH) {
+          return false;
+        }
         const pathContext =
           params.pluginPathContext ?? resolvePluginRoutePathContext(params.requestPath);
         if (
