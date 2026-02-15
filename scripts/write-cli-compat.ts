@@ -51,13 +51,23 @@ if (!resolved?.accessors) {
 const target = resolved.entry;
 const relPath = `../${target}`;
 const { accessors } = resolved;
+const missingExportError = (name: string) =>
+  `Legacy daemon CLI export "${name}" is unavailable in this build. Please upgrade OpenClaw.`;
+const buildExportLine = (name: (typeof LEGACY_DAEMON_CLI_EXPORTS)[number]) => {
+  const accessor = accessors[name];
+  if (accessor) {
+    return `export const ${name} = daemonCli.${accessor};`;
+  }
+  if (name === "registerDaemonCli") {
+    return `export const ${name} = () => { throw new Error(${JSON.stringify(missingExportError(name))}); };`;
+  }
+  return `export const ${name} = async () => { throw new Error(${JSON.stringify(missingExportError(name))}); };`;
+};
 
 const contents =
   "// Legacy shim for pre-tsdown update-cli imports.\n" +
   `import * as daemonCli from "${relPath}";\n` +
-  LEGACY_DAEMON_CLI_EXPORTS.map(
-    (name) => `export const ${name} = daemonCli.${accessors[name]};`,
-  ).join("\n") +
+  LEGACY_DAEMON_CLI_EXPORTS.map(buildExportLine).join("\n") +
   "\n";
 
 fs.mkdirSync(cliDir, { recursive: true });
