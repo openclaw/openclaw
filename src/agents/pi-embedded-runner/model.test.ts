@@ -33,13 +33,13 @@ describe("buildInlineProviderModels", () => {
         ...makeModel("alpha-model"),
         provider: "alpha",
         baseUrl: "http://alpha.local",
-        api: undefined,
+        api: "openai-completions",
       },
       {
         ...makeModel("beta-model"),
         provider: "beta",
         baseUrl: "http://beta.local",
-        api: undefined,
+        api: "openai-completions",
       },
     ]);
   });
@@ -86,6 +86,20 @@ describe("buildInlineProviderModels", () => {
 
     expect(result).toHaveLength(1);
     expect(result[0].api).toBe("anthropic-messages");
+  });
+
+  it("defaults api to openai-completions when neither model nor provider specifies it", () => {
+    const providers = {
+      custom: {
+        baseUrl: "http://localhost:4000/v1",
+        models: [makeModel("litellm-model")],
+      },
+    };
+
+    const result = buildInlineProviderModels(providers);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].api).toBe("openai-completions");
   });
 
   it("inherits both baseUrl and api from provider config", () => {

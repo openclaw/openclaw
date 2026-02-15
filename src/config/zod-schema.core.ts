@@ -67,7 +67,27 @@ export const ModelProviderSchema = z
     authHeader: z.boolean().optional(),
     models: z.array(ModelDefinitionSchema),
   })
-  .strict();
+  .strict()
+  .superRefine((provider, ctx) => {
+    if (provider.models.length === 0) {
+      return;
+    }
+    const allModelsHaveApi = provider.models.every((m) => m.api != null);
+    if (!provider.api && !allModelsHaveApi) {
+      // Extract valid values from ModelApiSchema at runtime
+      const validValues = (ModelApiSchema as z.ZodUnion<z.ZodTypeAny[]>).options
+        .map((option) => `"${(option as z.ZodLiteral<string>).value}"`)
+        .join(", ");
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["api"],
+        message:
+          'Missing "api" field. Custom providers with models should specify an API type. ' +
+          `Valid values: ${validValues}. ` +
+          'Most custom/proxy setups (e.g. LiteLLM) use "openai-completions".',
+      });
+    }
+  });
 
 export const BedrockDiscoverySchema = z
   .object({

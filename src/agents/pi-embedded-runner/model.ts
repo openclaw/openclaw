@@ -35,7 +35,7 @@ export function buildInlineProviderModels(
       ...model,
       provider: trimmed,
       baseUrl: entry?.baseUrl,
-      api: model.api ?? entry?.api,
+      api: model.api ?? entry?.api ?? "openai-completions",
     }));
   });
 }
@@ -81,7 +81,7 @@ export function resolveModel(
       const fallbackModel: Model<Api> = normalizeModelCompat({
         id: modelId,
         name: modelId,
-        api: providerCfg?.api ?? "openai-responses",
+        api: providerCfg?.api ?? "openai-completions",
         provider,
         baseUrl: providerCfg?.baseUrl,
         reasoning: false,
