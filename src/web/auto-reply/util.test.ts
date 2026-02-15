@@ -47,5 +47,14 @@ describe("web auto-reply util", () => {
       circular.self = circular;
       expect(isLikelyWhatsAppCryptoError(circular)).toBe(false);
     });
+
+    it("handles non-string reasons without throwing", () => {
+      expect(isLikelyWhatsAppCryptoError(null)).toBe(false);
+      expect(isLikelyWhatsAppCryptoError(123)).toBe(false);
+      expect(isLikelyWhatsAppCryptoError(true)).toBe(false);
+      expect(isLikelyWhatsAppCryptoError(123n)).toBe(false);
+      expect(isLikelyWhatsAppCryptoError(Symbol("bad mac"))).toBe(false);
+      expect(isLikelyWhatsAppCryptoError(function namedFn() {})).toBe(false);
+    });
   });
 });

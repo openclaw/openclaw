@@ -249,15 +249,15 @@ function buildChatCommands(): ChatCommandDefinition[] {
     defineChatCommand({
       key: "subagents",
       nativeName: "subagents",
-      description: "List/stop/log/info subagent runs for this session.",
+      description: "List, kill, log, or steer subagent runs for this session.",
       textAlias: "/subagents",
       category: "management",
       args: [
         {
           name: "action",
-          description: "list | stop | log | info | send",
+          description: "list | kill | log | info | send | steer",
           type: "string",
-          choices: ["list", "stop", "log", "info", "send"],
+          choices: ["list", "kill", "log", "info", "send", "steer"],
         },
         {
           name: "target",
@@ -272,6 +272,41 @@ function buildChatCommands(): ChatCommandDefinition[] {
         },
       ],
       argsMenu: "auto",
+    }),
+    defineChatCommand({
+      key: "kill",
+      nativeName: "kill",
+      description: "Kill a running subagent (or all).",
+      textAlias: "/kill",
+      category: "management",
+      args: [
+        {
+          name: "target",
+          description: "Label, run id, index, or all",
+          type: "string",
+        },
+      ],
+      argsMenu: "auto",
+    }),
+    defineChatCommand({
+      key: "steer",
+      nativeName: "steer",
+      description: "Send guidance to a running subagent.",
+      textAlias: "/steer",
+      category: "management",
+      args: [
+        {
+          name: "target",
+          description: "Label, run id, or index",
+          type: "string",
+        },
+        {
+          name: "message",
+          description: "Steering message",
+          type: "string",
+          captureRemaining: true,
+        },
+      ],
     }),
     defineChatCommand({
       key: "config",
@@ -582,6 +617,7 @@ function buildChatCommands(): ChatCommandDefinition[] {
   registerAlias(commands, "verbose", "/v");
   registerAlias(commands, "reasoning", "/reason");
   registerAlias(commands, "elevated", "/elev");
+  registerAlias(commands, "steer", "/tell");
 
   assertCommandRegistry(commands);
   return commands;

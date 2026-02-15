@@ -9,6 +9,7 @@ import { resolveNodeService } from "../daemon/node-service.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
+import { resolveGatewayProbeAuth } from "../gateway/probe-auth.js";
 import { probeGateway } from "../gateway/probe.js";
 import { collectChannelStatusIssues } from "../infra/channels-status-issues.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
@@ -119,31 +120,8 @@ export async function statusAllCommand(
     const remoteUrlMissing = isRemoteMode && !remoteUrlRaw;
     const gatewayMode = isRemoteMode ? "remote" : "local";
 
-    const resolveProbeAuth = (mode: "local" | "remote") => {
-      const authToken = cfg.gateway?.auth?.token;
-      const authPassword = cfg.gateway?.auth?.password;
-      const remote = cfg.gateway?.remote;
-      const token =
-        mode === "remote"
-          ? typeof remote?.token === "string" && remote.token.trim()
-            ? remote.token.trim()
-            : undefined
-          : process.env.OPENCLAW_GATEWAY_TOKEN?.trim() ||
-            (typeof authToken === "string" && authToken.trim() ? authToken.trim() : undefined);
-      const password =
-        process.env.OPENCLAW_GATEWAY_PASSWORD?.trim() ||
-        (mode === "remote"
-          ? typeof remote?.password === "string" && remote.password.trim()
-            ? remote.password.trim()
-            : undefined
-          : typeof authPassword === "string" && authPassword.trim()
-            ? authPassword.trim()
-            : undefined);
-      return { token, password };
-    };
-
-    const localFallbackAuth = resolveProbeAuth("local");
-    const remoteAuth = resolveProbeAuth("remote");
+    const localFallbackAuth = resolveGatewayProbeAuth({ cfg, mode: "local" });
+    const remoteAuth = resolveGatewayProbeAuth({ cfg, mode: "remote" });
     const probeAuth = isRemoteMode && !remoteUrlMissing ? remoteAuth : localFallbackAuth;
 
     const gatewayProbe = await probeGateway({
@@ -266,6 +244,32 @@ export async function statusAllCommand(
       : null;
 
     const updateLine = (() => {
+      const appendRegistryAndDepsStatus = (parts: string[]) => {
+        const latest = update.registry?.latestVersion;
+        if (latest) {
+          const cmp = compareSemverStrings(VERSION, latest);
+          if (cmp === 0) {
+            parts.push(`npm latest ${latest}`);
+          } else if (cmp != null && cmp < 0) {
+            parts.push(`npm update ${latest}`);
+          } else {
+            parts.push(`npm latest ${latest} (local newer)`);
+          }
+        } else if (update.registry?.error) {
+          parts.push("npm latest unknown");
+        }
+
+        if (update.deps?.status === "ok") {
+          parts.push("deps ok");
+        }
+        if (update.deps?.status === "stale") {
+          parts.push("deps stale");
+        }
+        if (update.deps?.status === "missing") {
+          parts.push("deps missing");
+        }
+      };
+
       if (update.installKind === "git" && update.git) {
         const parts: string[] = [];
         parts.push(update.git.branch ? `git ${update.git.branch}` : "git");
@@ -290,55 +294,12 @@ export async function statusAllCommand(
           parts.push("fetch failed");
         }
 
-        const latest = update.registry?.latestVersion;
-        if (latest) {
-          const cmp = compareSemverStrings(VERSION, latest);
-          if (cmp === 0) {
-            parts.push(`npm latest ${latest}`);
-          } else if (cmp != null && cmp < 0) {
-            parts.push(`npm update ${latest}`);
-          } else {
-            parts.push(`npm latest ${latest} (local newer)`);
-          }
-        } else if (update.registry?.error) {
-          parts.push("npm latest unknown");
-        }
-
-        if (update.deps?.status === "ok") {
-          parts.push("deps ok");
-        }
-        if (update.deps?.status === "stale") {
-          parts.push("deps stale");
-        }
-        if (update.deps?.status === "missing") {
-          parts.push("deps missing");
-        }
+        appendRegistryAndDepsStatus(parts);
         return parts.join(" · ");
       }
       const parts: string[] = [];
       parts.push(update.packageManager !== "unknown" ? update.packageManager : "pkg");
-      const latest = update.registry?.latestVersion;
-      if (latest) {
-        const cmp = compareSemverStrings(VERSION, latest);
-        if (cmp === 0) {
-          parts.push(`npm latest ${latest}`);
-        } else if (cmp != null && cmp < 0) {
-          parts.push(`npm update ${latest}`);
-        } else {
-          parts.push(`npm latest ${latest} (local newer)`);
-        }
-      } else if (update.registry?.error) {
-        parts.push("npm latest unknown");
-      }
-      if (update.deps?.status === "ok") {
-        parts.push("deps ok");
-      }
-      if (update.deps?.status === "stale") {
-        parts.push("deps stale");
-      }
-      if (update.deps?.status === "missing") {
-        parts.push("deps missing");
-      }
+      appendRegistryAndDepsStatus(parts);
       return parts.join(" · ");
     })();
 

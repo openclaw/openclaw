@@ -1,6 +1,7 @@
 import type { startGatewayServer } from "../../gateway/server.js";
 import type { defaultRuntime } from "../../runtime.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
+import { restartGatewayProcessWithFreshPid } from "../../infra/process-respawn.js";
 import {
   consumeGatewaySigusr1RestartAuthorization,
   isGatewaySigusr1RestartExternallyAllowed,
@@ -82,8 +83,26 @@ export async function runGatewayLoop(params: {
         clearTimeout(forceExitTimer);
         server = null;
         if (isRestart) {
-          shuttingDown = false;
-          restartResolver?.();
+          const respawn = restartGatewayProcessWithFreshPid();
+          if (respawn.mode === "spawned" || respawn.mode === "supervised") {
+            const modeLabel =
+              respawn.mode === "spawned"
+                ? `spawned pid ${respawn.pid ?? "unknown"}`
+                : "supervisor restart";
+            gatewayLog.info(`restart mode: full process restart (${modeLabel})`);
+            cleanupSignals();
+            params.runtime.exit(0);
+          } else {
+            if (respawn.mode === "failed") {
+              gatewayLog.warn(
+                `full process restart failed (${respawn.detail ?? "unknown error"}); falling back to in-process restart`,
+              );
+            } else {
+              gatewayLog.info("restart mode: in-process restart (OPENCLAW_NO_RESPAWN)");
+            }
+            shuttingDown = false;
+            restartResolver?.();
+          }
         } else {
           cleanupSignals();
           params.runtime.exit(0);

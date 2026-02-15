@@ -33,6 +33,14 @@ export function isCronRunSessionKey(sessionKey: string | undefined | null): bool
   return /^cron:[^:]+:run:[^:]+$/.test(parsed.rest);
 }
 
+export function isCronSessionKey(sessionKey: string | undefined | null): boolean {
+  const parsed = parseAgentSessionKey(sessionKey);
+  if (!parsed) {
+    return false;
+  }
+  return parsed.rest.toLowerCase().startsWith("cron:");
+}
+
 export function isSubagentSessionKey(sessionKey: string | undefined | null): boolean {
   const raw = (sessionKey ?? "").trim();
   if (!raw) {
@@ -43,6 +51,14 @@ export function isSubagentSessionKey(sessionKey: string | undefined | null): boo
   }
   const parsed = parseAgentSessionKey(raw);
   return Boolean((parsed?.rest ?? "").toLowerCase().startsWith("subagent:"));
+}
+
+export function getSubagentDepth(sessionKey: string | undefined | null): number {
+  const raw = (sessionKey ?? "").trim().toLowerCase();
+  if (!raw) {
+    return 0;
+  }
+  return raw.split(":subagent:").length - 1;
 }
 
 export function isAcpSessionKey(sessionKey: string | undefined | null): boolean {

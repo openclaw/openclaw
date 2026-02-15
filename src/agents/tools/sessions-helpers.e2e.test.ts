@@ -40,4 +40,19 @@ describe("extractAssistantText", () => {
     };
     expect(extractAssistantText(message)).toBe("HTTP 500: Internal Server Error");
   });
+
+  it("keeps normal status text that mentions billing", () => {
+    const message = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "Firebase downgraded us to the free Spark plan. Check whether billing should be re-enabled.",
+        },
+      ],
+    };
+    expect(extractAssistantText(message)).toBe(
+      "Firebase downgraded us to the free Spark plan. Check whether billing should be re-enabled.",
+    );
+  });
 });

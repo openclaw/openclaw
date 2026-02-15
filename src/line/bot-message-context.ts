@@ -60,6 +60,39 @@ function buildPeerId(source: EventSource): string {
   return "unknown";
 }
 
+function resolveLineInboundRoute(params: {
+  source: EventSource;
+  cfg: OpenClawConfig;
+  account: ResolvedLineAccount;
+}): {
+  userId?: string;
+  groupId?: string;
+  roomId?: string;
+  isGroup: boolean;
+  peerId: string;
+  route: ReturnType<typeof resolveAgentRoute>;
+} {
+  recordChannelActivity({
+    channel: "line",
+    accountId: params.account.accountId,
+    direction: "inbound",
+  });
+
+  const { userId, groupId, roomId, isGroup } = getSourceInfo(params.source);
+  const peerId = buildPeerId(params.source);
+  const route = resolveAgentRoute({
+    cfg: params.cfg,
+    channel: "line",
+    accountId: params.account.accountId,
+    peer: {
+      kind: isGroup ? "group" : "direct",
+      id: peerId,
+    },
+  });
+
+  return { userId, groupId, roomId, isGroup, peerId, route };
+}
+
 // Common LINE sticker package descriptions
 const STICKER_PACKAGES: Record<string, string> = {
   "1": "Moon & James",
@@ -299,24 +332,11 @@ async function finalizeLineInboundContext(params: {
 export async function buildLineMessageContext(params: BuildLineMessageContextParams) {
   const { event, allMedia, cfg, account } = params;
 
-  recordChannelActivity({
-    channel: "line",
-    accountId: account.accountId,
-    direction: "inbound",
-  });
-
   const source = event.source;
-  const { userId, groupId, roomId, isGroup } = getSourceInfo(source);
-  const peerId = buildPeerId(source);
-
-  const route = resolveAgentRoute({
+  const { userId, groupId, roomId, isGroup, peerId, route } = resolveLineInboundRoute({
+    source,
     cfg,
-    channel: "line",
-    accountId: account.accountId,
-    peer: {
-      kind: isGroup ? "group" : "direct",
-      id: peerId,
-    },
+    account,
   });
 
   const message = event.message;
@@ -389,24 +409,11 @@ export async function buildLinePostbackContext(params: {
 }) {
   const { event, cfg, account } = params;
 
-  recordChannelActivity({
-    channel: "line",
-    accountId: account.accountId,
-    direction: "inbound",
-  });
-
   const source = event.source;
-  const { userId, groupId, roomId, isGroup } = getSourceInfo(source);
-  const peerId = buildPeerId(source);
-
-  const route = resolveAgentRoute({
+  const { userId, groupId, roomId, isGroup, peerId, route } = resolveLineInboundRoute({
+    source,
     cfg,
-    channel: "line",
-    accountId: account.accountId,
-    peer: {
-      kind: isGroup ? "group" : "direct",
-      id: peerId,
-    },
+    account,
   });
 
   const timestamp = event.timestamp;

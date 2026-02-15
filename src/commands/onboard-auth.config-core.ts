@@ -49,6 +49,11 @@ export {
   LITELLM_DEFAULT_MODEL_ID,
 } from "./onboard-auth.config-litellm.js";
 import {
+  applyAgentDefaultModelPrimary,
+  applyProviderConfigWithDefaultModel,
+  applyProviderConfigWithDefaultModels,
+} from "./onboard-auth.config-shared.js";
+import {
   buildZaiModelDefinition,
   buildMoonshotModelDefinition,
   buildXaiModelDefinition,
@@ -221,84 +226,26 @@ function applyMoonshotProviderConfigWithBaseUrl(
     alias: models[MOONSHOT_DEFAULT_MODEL_REF]?.alias ?? "Kimi",
   };
 
-  const providers = { ...cfg.models?.providers };
-  const existingProvider = providers.moonshot;
-  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
   const defaultModel = buildMoonshotModelDefinition();
-  const hasDefaultModel = existingModels.some((model) => model.id === MOONSHOT_DEFAULT_MODEL_ID);
-  const mergedModels = hasDefaultModel ? existingModels : [...existingModels, defaultModel];
-  const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as Record<
-    string,
-    unknown
-  > as { apiKey?: string };
-  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
-  const normalizedApiKey = resolvedApiKey?.trim();
-  providers.moonshot = {
-    ...existingProviderRest,
-    baseUrl,
-    api: "openai-completions",
-    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
-    models: mergedModels.length > 0 ? mergedModels : [defaultModel],
-  };
 
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...cfg.agents?.defaults,
-        models,
-      },
-    },
-    models: {
-      mode: cfg.models?.mode ?? "merge",
-      providers,
-    },
-  };
+  return applyProviderConfigWithDefaultModel(cfg, {
+    agentModels: models,
+    providerId: "moonshot",
+    api: "openai-completions",
+    baseUrl,
+    defaultModel,
+    defaultModelId: MOONSHOT_DEFAULT_MODEL_ID,
+  });
 }
 
 export function applyMoonshotConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyMoonshotProviderConfig(cfg);
-  const existingModel = next.agents?.defaults?.model;
-  return {
-    ...next,
-    agents: {
-      ...next.agents,
-      defaults: {
-        ...next.agents?.defaults,
-        model: {
-          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
-            ? {
-                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
-              }
-            : undefined),
-          primary: MOONSHOT_DEFAULT_MODEL_REF,
-        },
-      },
-    },
-  };
+  return applyAgentDefaultModelPrimary(next, MOONSHOT_DEFAULT_MODEL_REF);
 }
 
 export function applyMoonshotConfigCn(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyMoonshotProviderConfigCn(cfg);
-  const existingModel = next.agents?.defaults?.model;
-  return {
-    ...next,
-    agents: {
-      ...next.agents,
-      defaults: {
-        ...next.agents?.defaults,
-        model: {
-          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
-            ? {
-                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
-              }
-            : undefined),
-          primary: MOONSHOT_DEFAULT_MODEL_REF,
-        },
-      },
-    },
-  };
+  return applyAgentDefaultModelPrimary(next, MOONSHOT_DEFAULT_MODEL_REF);
 }
 
 export function applyKimiCodeProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
@@ -417,47 +364,16 @@ export function applyXiaomiProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
     ...models[XIAOMI_DEFAULT_MODEL_REF],
     alias: models[XIAOMI_DEFAULT_MODEL_REF]?.alias ?? "Xiaomi",
   };
-
-  const providers = { ...cfg.models?.providers };
-  const existingProvider = providers.xiaomi;
   const defaultProvider = buildXiaomiProvider();
-  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
-  const defaultModels = defaultProvider.models ?? [];
-  const hasDefaultModel = existingModels.some((model) => model.id === XIAOMI_DEFAULT_MODEL_ID);
-  const mergedModels =
-    existingModels.length > 0
-      ? hasDefaultModel
-        ? existingModels
-        : [...existingModels, ...defaultModels]
-      : defaultModels;
-  const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as Record<
-    string,
-    unknown
-  > as { apiKey?: string };
-  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
-  const normalizedApiKey = resolvedApiKey?.trim();
-  providers.xiaomi = {
-    ...existingProviderRest,
+  const resolvedApi = defaultProvider.api ?? "openai-completions";
+  return applyProviderConfigWithDefaultModels(cfg, {
+    agentModels: models,
+    providerId: "xiaomi",
+    api: resolvedApi,
     baseUrl: defaultProvider.baseUrl,
-    api: defaultProvider.api,
-    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
-    models: mergedModels.length > 0 ? mergedModels : defaultProvider.models,
-  };
-
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...cfg.agents?.defaults,
-        models,
-      },
-    },
-    models: {
-      mode: cfg.models?.mode ?? "merge",
-      providers,
-    },
-  };
+    defaultModels: defaultProvider.models ?? [],
+    defaultModelId: XIAOMI_DEFAULT_MODEL_ID,
+  });
 }
 
 export function applyXiaomiConfig(cfg: OpenClawConfig): OpenClawConfig {
@@ -714,40 +630,16 @@ export function applyXaiProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
     alias: models[XAI_DEFAULT_MODEL_REF]?.alias ?? "Grok",
   };
 
-  const providers = { ...cfg.models?.providers };
-  const existingProvider = providers.xai;
-  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
   const defaultModel = buildXaiModelDefinition();
-  const hasDefaultModel = existingModels.some((model) => model.id === XAI_DEFAULT_MODEL_ID);
-  const mergedModels = hasDefaultModel ? existingModels : [...existingModels, defaultModel];
-  const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as Record<
-    string,
-    unknown
-  > as { apiKey?: string };
-  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
-  const normalizedApiKey = resolvedApiKey?.trim();
-  providers.xai = {
-    ...existingProviderRest,
-    baseUrl: XAI_BASE_URL,
-    api: "openai-completions",
-    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
-    models: mergedModels.length > 0 ? mergedModels : [defaultModel],
-  };
 
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...cfg.agents?.defaults,
-        models,
-      },
-    },
-    models: {
-      mode: cfg.models?.mode ?? "merge",
-      providers,
-    },
-  };
+  return applyProviderConfigWithDefaultModel(cfg, {
+    agentModels: models,
+    providerId: "xai",
+    api: "openai-completions",
+    baseUrl: XAI_BASE_URL,
+    defaultModel,
+    defaultModelId: XAI_DEFAULT_MODEL_ID,
+  });
 }
 
 export function applyXaiConfig(cfg: OpenClawConfig): OpenClawConfig {
@@ -827,53 +719,29 @@ export function applyQianfanProviderConfig(cfg: OpenClawConfig): OpenClawConfig 
     ...models[QIANFAN_DEFAULT_MODEL_REF],
     alias: models[QIANFAN_DEFAULT_MODEL_REF]?.alias ?? "QIANFAN",
   };
-
-  const providers = { ...cfg.models?.providers };
-  const existingProvider = providers.qianfan;
   const defaultProvider = buildQianfanProvider();
-  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
-  const defaultModels = defaultProvider.models ?? [];
-  const hasDefaultModel = existingModels.some((model) => model.id === QIANFAN_DEFAULT_MODEL_ID);
-  const mergedModels =
-    existingModels.length > 0
-      ? hasDefaultModel
-        ? existingModels
-        : [...existingModels, ...defaultModels]
-      : defaultModels;
-  const {
-    apiKey: existingApiKey,
-    baseUrl: existingBaseUrl,
-    api: existingApi,
-    ...existingProviderRest
-  } = (existingProvider ?? {}) as Record<string, unknown> as {
-    apiKey?: string;
-    baseUrl?: string;
-    api?: ModelApi;
-  };
-  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
-  const normalizedApiKey = resolvedApiKey?.trim();
-  providers.qianfan = {
-    ...existingProviderRest,
-    baseUrl: existingBaseUrl ?? QIANFAN_BASE_URL,
-    api: existingApi ?? "openai-completions",
-    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
-    models: mergedModels.length > 0 ? mergedModels : defaultProvider.models,
-  };
+  const existingProvider = cfg.models?.providers?.qianfan as
+    | {
+        baseUrl?: unknown;
+        api?: unknown;
+      }
+    | undefined;
+  const existingBaseUrl =
+    typeof existingProvider?.baseUrl === "string" ? existingProvider.baseUrl.trim() : "";
+  const resolvedBaseUrl = existingBaseUrl || QIANFAN_BASE_URL;
+  const resolvedApi =
+    typeof existingProvider?.api === "string"
+      ? (existingProvider.api as ModelApi)
+      : "openai-completions";
 
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...cfg.agents?.defaults,
-        models,
-      },
-    },
-    models: {
-      mode: cfg.models?.mode ?? "merge",
-      providers,
-    },
-  };
+  return applyProviderConfigWithDefaultModels(cfg, {
+    agentModels: models,
+    providerId: "qianfan",
+    api: resolvedApi,
+    baseUrl: resolvedBaseUrl,
+    defaultModels: defaultProvider.models ?? [],
+    defaultModelId: QIANFAN_DEFAULT_MODEL_ID,
+  });
 }
 
 export function applyQianfanConfig(cfg: OpenClawConfig): OpenClawConfig {
