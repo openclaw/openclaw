@@ -93,6 +93,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/voice-call/**"
+"channel: wecom":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/wecom/**"
+          - "docs/channels/wecom.md"
 "channel: whatsapp-web":
   - changed-files:
       - any-glob-to-any-file:

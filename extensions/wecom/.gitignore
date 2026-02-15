@@ -1,0 +1,23 @@
+node_modules/
+.DS_Store
+.env
+dist/
+coverage/
+.idea/
+.vscode/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Temporary files
+*.bak
+*.bak*
+*.patch
+*.swp
+*.swo
+*.tgz
+local.md
+local.sh
+test.sh
