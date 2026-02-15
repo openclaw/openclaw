@@ -36,8 +36,17 @@ function listConfiguredAccountIds(cfg: OpenClawConfig): string[] {
 }
 
 export function listTelegramAccountIds(cfg: OpenClawConfig): string[] {
+  const configured = listConfiguredAccountIds(cfg);
+  const bound = listBoundAccountIds(cfg, "telegram");
+
+  // If there's a root-level botToken or tokenFile, include the default account
+  const hasRootToken = Boolean(
+    cfg.channels?.telegram?.botToken?.trim() || cfg.channels?.telegram?.tokenFile?.trim(),
+  );
+  const includeDefault = hasRootToken && !configured.includes(DEFAULT_ACCOUNT_ID);
+
   const ids = Array.from(
-    new Set([...listConfiguredAccountIds(cfg), ...listBoundAccountIds(cfg, "telegram")]),
+    new Set([...configured, ...bound, ...(includeDefault ? [DEFAULT_ACCOUNT_ID] : [])]),
   );
   debugAccounts("listTelegramAccountIds", ids);
   if (ids.length === 0) {
