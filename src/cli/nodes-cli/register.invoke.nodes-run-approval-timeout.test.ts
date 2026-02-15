@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_EXEC_APPROVAL_TIMEOUT_MS } from "../../infra/exec-approvals.js";
 import { parseTimeoutMs } from "../nodes-run.js";
 
 /**
@@ -14,7 +15,7 @@ import { parseTimeoutMs } from "../nodes-run.js";
  * without overriding opts.timeout, so the 35s CLI default raced against the
  * 120s approval wait on the gateway side. The CLI always lost.
  *
- * The fix: override opts.timeout for the exec.approval.request call to be at
+ * The fix: override the transport timeout for exec.approval.request to be at
  * least approvalTimeoutMs + 10_000.
  */
 
@@ -48,17 +49,20 @@ describe("nodes run: approval transport timeout (#12098)", () => {
     expect(callOpts.timeoutMs).toBe(35_000);
   });
 
-  it("fix: overriding opts.timeout gives the approval enough transport time", async () => {
+  it("fix: overriding transportTimeoutMs gives the approval enough transport time", async () => {
     const { callGatewayCli } = await import("./rpc.js");
 
     const approvalTimeoutMs = 120_000;
     // Mirror the production code: parseTimeoutMs(opts.timeout) ?? 0
-    const fixedTimeout = String(Math.max(parseTimeoutMs("35000") ?? 0, approvalTimeoutMs + 10_000));
-    expect(Number(fixedTimeout)).toBe(130_000);
+    const transportTimeoutMs = Math.max(parseTimeoutMs("35000") ?? 0, approvalTimeoutMs + 10_000);
+    expect(transportTimeoutMs).toBe(130_000);
 
-    await callGatewayCli("exec.approval.request", { timeout: fixedTimeout } as never, {
-      timeoutMs: approvalTimeoutMs,
-    });
+    await callGatewayCli(
+      "exec.approval.request",
+      { timeout: "35000" } as never,
+      { timeoutMs: approvalTimeoutMs },
+      { transportTimeoutMs },
+    );
 
     expect(callGatewaySpy).toHaveBeenCalledTimes(1);
     const callOpts = callGatewaySpy.mock.calls[0][0] as Record<string, unknown>;
@@ -72,14 +76,18 @@ describe("nodes run: approval transport timeout (#12098)", () => {
     const approvalTimeoutMs = 120_000;
     const userTimeout = 200_000;
     // Mirror the production code: parseTimeoutMs preserves valid large values
-    const fixedTimeout = String(
-      Math.max(parseTimeoutMs(String(userTimeout)) ?? 0, approvalTimeoutMs + 10_000),
+    const transportTimeoutMs = Math.max(
+      parseTimeoutMs(String(userTimeout)) ?? 0,
+      approvalTimeoutMs + 10_000,
     );
-    expect(Number(fixedTimeout)).toBe(200_000);
+    expect(transportTimeoutMs).toBe(200_000);
 
-    await callGatewayCli("exec.approval.request", { timeout: fixedTimeout } as never, {
-      timeoutMs: approvalTimeoutMs,
-    });
+    await callGatewayCli(
+      "exec.approval.request",
+      { timeout: String(userTimeout) } as never,
+      { timeoutMs: approvalTimeoutMs },
+      { transportTimeoutMs },
+    );
 
     const callOpts = callGatewaySpy.mock.calls[0][0] as Record<string, unknown>;
     expect(callOpts.timeoutMs).toBe(200_000);
@@ -88,15 +96,18 @@ describe("nodes run: approval transport timeout (#12098)", () => {
   it("fix: non-numeric timeout falls back to approval floor", async () => {
     const { callGatewayCli } = await import("./rpc.js");
 
-    const approvalTimeoutMs = 120_000;
+    const approvalTimeoutMs = DEFAULT_EXEC_APPROVAL_TIMEOUT_MS;
     // parseTimeoutMs returns undefined for garbage input, ?? 0 ensures
     // Math.max picks the approval floor instead of producing NaN
-    const fixedTimeout = String(Math.max(parseTimeoutMs("foo") ?? 0, approvalTimeoutMs + 10_000));
-    expect(Number(fixedTimeout)).toBe(130_000);
+    const transportTimeoutMs = Math.max(parseTimeoutMs("foo") ?? 0, approvalTimeoutMs + 10_000);
+    expect(transportTimeoutMs).toBe(130_000);
 
-    await callGatewayCli("exec.approval.request", { timeout: fixedTimeout } as never, {
-      timeoutMs: approvalTimeoutMs,
-    });
+    await callGatewayCli(
+      "exec.approval.request",
+      { timeout: "foo" } as never,
+      { timeoutMs: approvalTimeoutMs },
+      { transportTimeoutMs },
+    );
 
     const callOpts = callGatewaySpy.mock.calls[0][0] as Record<string, unknown>;
     expect(callOpts.timeoutMs).toBe(130_000);

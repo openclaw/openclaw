@@ -13,7 +13,12 @@ export const nodesCallOpts = (cmd: Command, defaults?: { timeoutMs?: number }) =
     .option("--timeout <ms>", "Timeout in ms", String(defaults?.timeoutMs ?? 10_000))
     .option("--json", "Output JSON", false);
 
-export const callGatewayCli = async (method: string, opts: NodesRpcOpts, params?: unknown) =>
+export const callGatewayCli = async (
+  method: string,
+  opts: NodesRpcOpts,
+  params?: unknown,
+  callOpts?: { transportTimeoutMs?: number },
+) =>
   withProgress(
     {
       label: `Nodes ${method}`,
@@ -26,7 +31,7 @@ export const callGatewayCli = async (method: string, opts: NodesRpcOpts, params?
         token: opts.token,
         method,
         params,
-        timeoutMs: Number(opts.timeout ?? 10_000),
+        timeoutMs: callOpts?.transportTimeoutMs ?? Number(opts.timeout ?? 10_000),
         clientName: GATEWAY_CLIENT_NAMES.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,
       }),
