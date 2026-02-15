@@ -28,6 +28,8 @@ Sandboxing details: [Sandboxing](/gateway/sandboxing)
 - Docker Desktop (or Docker Engine) + Docker Compose v2
 - Enough disk for images + logs
 
+**Security note:** For production deployments, consider using [Docker Hardened Images (DHI)](/install/docker-hardened-images) for enhanced security and reduced vulnerabilities.
+
 ## Containerized Gateway (Docker Compose)
 
 ### Quick start (recommended)
