@@ -11,6 +11,8 @@ export type BlockReplyPipeline = {
   didStream: () => boolean;
   isAborted: () => boolean;
   hasSentPayload: (payload: ReplyPayload) => boolean;
+  hold: () => void;
+  resume: () => void;
 };
 
 export type BlockReplyBuffer = {
@@ -238,5 +240,7 @@ export function createBlockReplyPipeline(params: {
       const payloadKey = createBlockReplyPayloadKey(payload);
       return sentKeys.has(payloadKey);
     },
+    hold: () => coalescer?.hold(),
+    resume: () => coalescer?.resume(),
   };
 }
