@@ -30,8 +30,8 @@ import { readChannelAllowFromStore } from "../../../pairing/pairing-store.js";
 import { jidToE164, normalizeE164 } from "../../../utils.js";
 import { newConnectionId } from "../../reconnect.js";
 import { formatError } from "../../session.js";
-import { sendReactionWhatsApp } from "../../outbound.js";
 import { deliverWebReply } from "../deliver-reply.js";
+import { createThinkingReaction } from "./thinking-reaction.js";
 import { whatsappInboundLog, whatsappOutboundLog } from "../loggers.js";
 import { elide } from "../util.js";
 import { maybeSendAckReaction } from "./ack-reaction.js";
@@ -357,19 +357,13 @@ export async function processMessage(params: {
   });
   trackBackgroundTask(params.backgroundTasks, metaTask);
 
-  // Track whether the thinking reaction was sent so we can clean it up.
-  let thinkingReactionSent = false;
-  const removeThinkingReaction = () => {
-    if (thinkingReactionSent && params.msg.id && params.msg.chatId) {
-      thinkingReactionSent = false;
-      sendReactionWhatsApp(params.msg.chatId, params.msg.id, "", {
-        verbose: false,
-        fromMe: false,
-        participant: params.msg.senderJid,
-        accountId: params.msg.accountId,
-      }).catch(() => {});
-    }
-  };
+  // Fork: visible progress indicator for WhatsApp groups (Baileys #866 workaround).
+  const thinkingReaction = createThinkingReaction({
+    messageId: params.msg.id,
+    chatId: params.msg.chatId,
+    senderJid: params.msg.senderJid,
+    accountId: params.msg.accountId,
+  });
 
   const { queuedFinal } = await dispatchReplyWithBufferedBlockDispatcher({
     ctx: ctxPayload,
@@ -409,7 +403,7 @@ export async function processMessage(params: {
           logVerboseMessage: shouldLog,
         });
         if (info.kind === "final") {
-          removeThinkingReaction();
+          thinkingReaction.stop(); // Fork: remove 🤔
           const fromDisplay =
             params.msg.chatType === "group" ? conversationId : (params.msg.from ?? "unknown");
           const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
@@ -433,19 +427,7 @@ export async function processMessage(params: {
       },
       onReplyStart: async () => {
         await params.msg.sendComposing();
-        // Send a "thinking" reaction as a visible progress indicator.
-        // WhatsApp linked devices can't show typing indicators in groups
-        // (Baileys #866), so a reaction on the triggering message is the
-        // next best thing — visible, instant, and auto-removed on reply.
-        if (params.msg.id && params.msg.chatId) {
-          thinkingReactionSent = true;
-          sendReactionWhatsApp(params.msg.chatId, params.msg.id, "🤔", {
-            verbose: false,
-            fromMe: false,
-            participant: params.msg.senderJid,
-            accountId: params.msg.accountId,
-          }).catch(() => {});
-        }
+        thinkingReaction.start(); // Fork: 🤔 progress indicator
       },
     },
     replyOptions: {
@@ -457,9 +439,7 @@ export async function processMessage(params: {
     },
   });
 
-  // Always remove the thinking reaction when processing completes,
-  // regardless of path (final delivery, silent reply, or error).
-  removeThinkingReaction();
+  thinkingReaction.stop(); // Fork: safety net cleanup
 
   if (!queuedFinal) {
     if (shouldClearGroupHistory) {
