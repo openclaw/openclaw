@@ -287,6 +287,8 @@ class NodeRuntime(context: Context) {
       scope = scope,
       session = operatorSession,
       supportsChatSubscribe = false,
+      getApiKey = { prefs.elevenLabsApiKey.value },
+      getVoiceId = { prefs.elevenLabsVoiceId.value },
       isConnected = { operatorConnected },
     )
   }
@@ -348,6 +350,26 @@ class NodeRuntime(context: Context) {
   fun setGatewayToken(value: String) = prefs.setGatewayToken(value)
   val lastDiscoveredStableId: StateFlow<String> = prefs.lastDiscoveredStableId
   val canvasDebugStatusEnabled: StateFlow<Boolean> = prefs.canvasDebugStatusEnabled
+
+  private val _elevenLabsApiKey = MutableStateFlow(prefs.elevenLabsApiKey.value)
+  val elevenLabsApiKey: StateFlow<String> = _elevenLabsApiKey.asStateFlow()
+  fun setElevenLabsApiKey(value: String) {
+    prefs.setElevenLabsApiKey(value)
+    _elevenLabsApiKey.value = value
+  }
+
+  private val _elevenLabsVoiceId = MutableStateFlow(prefs.elevenLabsVoiceId.value)
+  val elevenLabsVoiceId: StateFlow<String> = _elevenLabsVoiceId.asStateFlow()
+  fun setElevenLabsVoiceId(value: String) {
+    prefs.setElevenLabsVoiceId(value)
+    _elevenLabsVoiceId.value = value
+  }
+
+  fun testVoice() {
+    scope.launch {
+      talkMode.speak("Testing voice output.")
+    }
+  }
 
   private var didAutoConnect = false
 

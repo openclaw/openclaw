@@ -75,6 +75,13 @@ class SecurePrefs(context: Context) {
     MutableStateFlow(prefs.getString("gateway.manual.token", "") ?: "")
   val gatewayToken: StateFlow<String> = _gatewayToken
 
+  private val _elevenLabsApiKey =
+    MutableStateFlow(prefs.getString("voice.elevenLabsApiKey", "") ?: "")
+  val elevenLabsApiKey: StateFlow<String> = _elevenLabsApiKey
+
+  private val _elevenLabsVoiceId = MutableStateFlow(prefs.getString("voice.elevenLabsVoiceId", "") ?: "")
+  val elevenLabsVoiceId: StateFlow<String> = _elevenLabsVoiceId
+
   private val _lastDiscoveredStableId =
     MutableStateFlow(
       prefs.getString("gateway.lastDiscoveredStableID", "") ?: "",
@@ -150,6 +157,18 @@ class SecurePrefs(context: Context) {
   fun setGatewayToken(value: String) {
     prefs.edit { putString("gateway.manual.token", value) }
     _gatewayToken.value = value
+  }
+
+  fun setElevenLabsApiKey(value: String) {
+    val trimmed = value.trim()
+    prefs.edit { putString("voice.elevenLabsApiKey", trimmed) }
+    _elevenLabsApiKey.value = trimmed
+  }
+
+  fun setElevenLabsVoiceId(value: String) {
+    val trimmed = value.trim()
+    prefs.edit { putString("voice.elevenLabsVoiceId", trimmed) }
+    _elevenLabsVoiceId.value = trimmed
   }
 
   fun setCanvasDebugStatusEnabled(value: Boolean) {

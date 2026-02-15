@@ -48,12 +48,19 @@ class TalkModeManager(
   private val scope: CoroutineScope,
   private val session: GatewaySession,
   private val supportsChatSubscribe: Boolean,
+  private val getApiKey: () -> String,
+  private val getVoiceId: () -> String,
   private val isConnected: () -> Boolean,
 ) {
   companion object {
     private const val tag = "TalkMode"
-    private const val defaultModelIdFallback = "eleven_v3"
-    private const val defaultOutputFormatFallback = "pcm_24000"
+    private const val defaultModelIdFallback = "eleven_multilingual_v2"
+    private const val defaultOutputFormatFallback = "mp3_44100_128"
+    // "Rachel" voice ID as a safe default if listing fails
+    private const val hardcodedFallbackVoiceId = "21m00Tcm4TlvDq8ikWAM"
+    // Buffer for client-server clock skew when filtering chat history by timestamp.
+    // See comment in finalizeTranscript() for rationale.
+    private const val CLOCK_SKEW_BUFFER_SECONDS = 5.0
   }
 
   private val mainHandler = Handler(Looper.getMainLooper())
@@ -61,6 +68,10 @@ class TalkModeManager(
 
   private val _isEnabled = MutableStateFlow(false)
   val isEnabled: StateFlow<Boolean> = _isEnabled
+
+  // ... (existing fields)
+
+  // init block removed
 
   private val _isListening = MutableStateFlow(false)
   val isListening: StateFlow<Boolean> = _isListening
@@ -95,7 +106,6 @@ class TalkModeManager(
   private var defaultModelId: String? = null
   private var currentModelId: String? = null
   private var defaultOutputFormat: String? = null
-  private var apiKey: String? = null
   private var voiceAliases: Map<String, String> = emptyMap()
   private var interruptOnSpeech: Boolean = true
   private var voiceOverrideActive = false
@@ -110,6 +120,7 @@ class TalkModeManager(
   private var streamingSource: StreamingMediaDataSource? = null
   private var pcmTrack: AudioTrack? = null
   @Volatile private var pcmStopRequested = false
+  private var currentSpeakJob: Job? = null
   private var systemTts: TextToSpeech? = null
   private var systemTtsPending: CompletableDeferred<Unit>? = null
   private var systemTtsPendingId: String? = null
@@ -130,6 +141,19 @@ class TalkModeManager(
     } else {
       Log.d(tag, "disabled")
       stop()
+    }
+  }
+
+  suspend fun speak(text: String) {
+    // We must capture the job so stopSpeaking() can cancel it to prevent hangs
+    val job = kotlinx.coroutines.currentCoroutineContext()[Job]
+    currentSpeakJob = job
+    try {
+      playAssistant(text)
+    } finally {
+      if (currentSpeakJob == job) {
+        currentSpeakJob = null
+      }
     }
   }
 
@@ -297,9 +321,13 @@ class TalkModeManager(
   private suspend fun finalizeTranscript(transcript: String) {
     listeningMode = false
     _isListening.value = false
-    _statusText.value = "Thinking…"
     lastTranscript = ""
     lastHeardAtMs = null
+
+    // Explicitly destroy the recognizer to ensure we absolutely do not listen while speaking.
+    // This prevents the "infinite loop" where the mic picks up the AI's own voice.
+    stop()
+    _statusText.value = "Thinking…"
 
     reloadConfig()
     val prompt = buildPrompt(transcript)
@@ -311,7 +339,11 @@ class TalkModeManager(
     }
 
     try {
-      val startedAt = System.currentTimeMillis().toDouble() / 1000.0
+      // Buffer accounts for NTP drift between client/server clocks and network round-trip latency.
+      // 5 seconds is conservative: typical NTP drift is <1s, but mobile devices on poor networks
+      // can experience higher variance. Without this buffer, valid responses may be filtered out
+      // as "older than request time" when the server clock is slightly behind the client.
+      val startedAt = (System.currentTimeMillis().toDouble() / 1000.0) - CLOCK_SKEW_BUFFER_SECONDS
       subscribeChatIfNeeded(session = session, sessionKey = mainSessionKey)
       Log.d(tag, "chat.send start sessionKey=${mainSessionKey.ifBlank { "main" }} chars=${prompt.length}")
       val runId = sendChat(prompt, session)
@@ -434,7 +466,10 @@ class TalkModeManager(
       if (obj["role"].asStringOrNull() != "assistant") continue
       if (sinceSeconds != null) {
         val timestamp = obj["timestamp"].asDoubleOrNull()
-        if (timestamp != null && !TalkModeRuntime.isMessageTimestampAfter(timestamp, sinceSeconds)) continue
+        if (timestamp != null && !TalkModeRuntime.isMessageTimestampAfter(timestamp, sinceSeconds)) {
+             Log.d(tag, "skipping message ts=$timestamp < since=$sinceSeconds diff=${timestamp - sinceSeconds}")
+             continue
+        }
       }
       val content = obj["content"] as? JsonArray ?: continue
       val text =
@@ -476,7 +511,7 @@ class TalkModeManager(
     }
 
     val apiKey =
-      apiKey?.trim()?.takeIf { it.isNotEmpty() }
+      getApiKey().trim().takeIf { it.isNotEmpty() }
         ?: System.getenv("ELEVENLABS_API_KEY")?.trim()
     val preferredVoice = resolvedVoice ?: currentVoiceId ?: defaultVoiceId
     val voiceId =
@@ -493,6 +528,7 @@ class TalkModeManager(
 
     try {
       val canUseElevenLabs = !voiceId.isNullOrBlank() && !apiKey.isNullOrEmpty()
+      Log.d(tag, "speak: canUseElevenLabs=$canUseElevenLabs voiceId=$voiceId hasApiKey=${!apiKey.isNullOrEmpty()}")
       if (!canUseElevenLabs) {
         if (voiceId.isNullOrBlank()) {
           Log.w(tag, "missing voiceId; falling back to system voice")
@@ -527,14 +563,24 @@ class TalkModeManager(
         Log.d(tag, "elevenlabs stream ok durMs=${SystemClock.elapsedRealtime() - ttsStarted}")
       }
     } catch (err: Throwable) {
-      Log.w(tag, "speak failed: ${err.message ?: err::class.simpleName}; falling back to system voice")
-      try {
-        _usingFallbackTts.value = true
-        _statusText.value = "Speaking (System)…"
-        speakWithSystemTts(cleaned)
-      } catch (fallbackErr: Throwable) {
-        _statusText.value = "Speak failed: ${fallbackErr.message ?: fallbackErr::class.simpleName}"
-        Log.w(tag, "system voice failed: ${fallbackErr.message ?: fallbackErr::class.simpleName}")
+      Log.w(tag, "speak failed: ${err.message ?: err::class.simpleName}")
+      
+      // If we have an API key, we expect ElevenLabs to work. 
+      // Falling back to system TTS (which is known to be broken/Error 11) masks the real issue.
+      // Instead, we show the error in the status text.
+      if (!apiKey.isNullOrEmpty()) {
+        _usingFallbackTts.value = false
+        _statusText.value = "Voice Error: ${err.message?.take(30) ?: "Unknown"}"
+      } else {
+        // Only fallback if we didn't firmly intend to use ElevenLabs
+        try {
+          _usingFallbackTts.value = true
+          _statusText.value = "Speaking (System)…"
+          speakWithSystemTts(cleaned)
+        } catch (fallbackErr: Throwable) {
+          _statusText.value = "Speak failed: ${fallbackErr.message ?: fallbackErr::class.simpleName}"
+          Log.w(tag, "system voice failed: ${fallbackErr.message ?: fallbackErr::class.simpleName}")
+        }
       }
     }
 
@@ -542,7 +588,7 @@ class TalkModeManager(
   }
 
   private suspend fun streamAndPlay(voiceId: String, apiKey: String, request: ElevenLabsRequest) {
-    stopSpeaking(resetInterrupt = false)
+    cleanupPlaybackResources()
 
     pcmStopRequested = false
     val pcmSampleRate = TalkModeRuntime.parsePcmSampleRate(request.outputFormat)
@@ -572,7 +618,7 @@ class TalkModeManager(
     player.setAudioAttributes(
       AudioAttributes.Builder()
         .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-        .setUsage(AudioAttributes.USAGE_ASSISTANT)
+        .setUsage(AudioAttributes.USAGE_MEDIA)
         .build(),
     )
     player.setOnPreparedListener {
@@ -758,25 +804,26 @@ class TalkModeManager(
   private fun stopSpeaking(resetInterrupt: Boolean = true) {
     pcmStopRequested = true
     if (!_isSpeaking.value) {
-      cleanupPlayer()
-      cleanupPcmTrack()
-      systemTts?.stop()
-      systemTtsPending?.cancel()
-      systemTtsPending = null
-      systemTtsPendingId = null
+      cleanupPlaybackResources()
       return
     }
     if (resetInterrupt) {
       val currentMs = player?.currentPosition?.toDouble() ?: 0.0
       lastInterruptedAtSeconds = currentMs / 1000.0
     }
+    cleanupPlaybackResources()
+    currentSpeakJob?.cancel()
+    currentSpeakJob = null
+    _isSpeaking.value = false
+  }
+
+  private fun cleanupPlaybackResources() {
     cleanupPlayer()
     cleanupPcmTrack()
     systemTts?.stop()
     systemTtsPending?.cancel()
     systemTtsPending = null
     systemTtsPendingId = null
-    _isSpeaking.value = false
   }
 
   private fun cleanupPlayer() {
@@ -828,7 +875,6 @@ class TalkModeManager(
         }?.toMap().orEmpty()
       val model = talk?.get("modelId")?.asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() }
       val outputFormat = talk?.get("outputFormat")?.asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() }
-      val key = talk?.get("apiKey")?.asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() }
       val interrupt = talk?.get("interruptOnSpeech")?.asBooleanOrNull()
 
       if (!isCanonicalMainSessionKey(mainSessionKey)) {
@@ -840,13 +886,11 @@ class TalkModeManager(
       defaultModelId = model ?: defaultModelIdFallback
       if (!modelOverrideActive) currentModelId = defaultModelId
       defaultOutputFormat = outputFormat ?: defaultOutputFormatFallback
-      apiKey = key ?: envKey?.takeIf { it.isNotEmpty() }
       if (interrupt != null) interruptOnSpeech = interrupt
     } catch (_: Throwable) {
       defaultVoiceId = envVoice?.takeIf { it.isNotEmpty() } ?: sagVoice?.takeIf { it.isNotEmpty() }
       defaultModelId = defaultModelIdFallback
       if (!modelOverrideActive) currentModelId = defaultModelId
-      apiKey = envKey?.takeIf { it.isNotEmpty() }
       voiceAliases = emptyMap()
       defaultOutputFormat = defaultOutputFormatFallback
     }
@@ -1115,12 +1159,17 @@ class TalkModeManager(
   }
 
   private suspend fun resolveVoiceId(preferred: String?, apiKey: String): String? {
+    // Check user preference first (Settings > Voice ID field)
+    val userVoiceId = getVoiceId().trim()
+    if (userVoiceId.isNotEmpty()) return userVoiceId
+
     val trimmed = preferred?.trim().orEmpty()
     if (trimmed.isNotEmpty()) {
       val resolved = resolveVoiceAlias(trimmed)
       if (resolved != null) return resolved
       Log.w(tag, "unknown voice alias $trimmed")
     }
+
     fallbackVoiceId?.let { return it }
 
     return try {
@@ -1137,8 +1186,8 @@ class TalkModeManager(
       Log.d(tag, "default voice selected $name (${first.voiceId})")
       first.voiceId
     } catch (err: Throwable) {
-      Log.w(tag, "list voices failed: ${err.message ?: err::class.simpleName}")
-      null
+      Log.w(tag, "list voices failed: ${err.message ?: err::class.simpleName}; using hardcoded fallback")
+      hardcodedFallbackVoiceId
     }
   }
 
@@ -1216,9 +1265,20 @@ class TalkModeManager(
             SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "Recognizer busy"
             SpeechRecognizer.ERROR_SERVER -> "Server error"
             SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "Listening"
+            11 -> "Server Disconnected" // ERROR_SERVER_DISCONNECTED
             else -> "Speech error ($error)"
           }
-        scheduleRestart(delayMs = 600)
+        
+        // Error 11 (Server Disconnected) and 4 (Server) often require a full recognizer reset
+        if (error == 11 || error == SpeechRecognizer.ERROR_SERVER || error == SpeechRecognizer.ERROR_CLIENT) {
+           Log.w(tag, "Severe speech error($error); recreating recognizer")
+           recognizer?.cancel()
+           recognizer?.destroy()
+           recognizer = null
+           mainHandler.postDelayed({ start() }, 600)
+        } else {
+           scheduleRestart(delayMs = 600)
+        }
       }
 
       override fun onResults(results: Bundle?) {

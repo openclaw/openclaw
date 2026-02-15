@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -190,8 +191,15 @@ fun SettingsSheet(viewModel: MainViewModel) {
     }
 
   val audioPermissionLauncher =
-    rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { _ ->
-      // Status text is handled by NodeRuntime.
+    rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+      if (granted) {
+        // Toggle the mode to force NodeRuntime to re-evaluate the permission state.
+        val current = viewModel.voiceWakeMode.value
+        if (current != VoiceWakeMode.Off) {
+          viewModel.setVoiceWakeMode(VoiceWakeMode.Off)
+          viewModel.setVoiceWakeMode(current)
+        }
+      }
     }
 
   val smsPermissionAvailable =
@@ -527,6 +535,45 @@ fun SettingsSheet(viewModel: MainViewModel) {
         }
       }
     }
+    item {
+      val apiKey by viewModel.elevenLabsApiKey.collectAsState()
+      OutlinedTextField(
+        value = apiKey,
+        onValueChange = viewModel::setElevenLabsApiKey,
+        label = { Text("ElevenLabs API Key (Optional)") },
+        placeholder = { Text("sk-...") },
+        modifier = Modifier.fillMaxWidth(),
+        singleLine = true,
+      )
+      val hasKey = apiKey.isNotEmpty()
+      Text(
+        if (hasKey) "Key active. Press Test to verify." else "Required if system TTS is broken (Error 11)",
+        style = MaterialTheme.typography.labelSmall,
+        color = if (hasKey) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(start = 16.dp, top = 2.dp),
+      )
+      
+      Spacer(Modifier.height(8.dp))
+      val voiceId by viewModel.elevenLabsVoiceId.collectAsState()
+      OutlinedTextField(
+        value = voiceId,
+        onValueChange = viewModel::setElevenLabsVoiceId,
+        label = { Text("Voice ID (Optional)") },
+        placeholder = { Text("e.g. 21m00Tcm4TlvDq8ikWAM") },
+        modifier = Modifier.fillMaxWidth(),
+        singleLine = true,
+      )
+
+      if (hasKey) {
+         Button(
+           onClick = viewModel::testVoice,
+           modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+         ) {
+           Text("Test Voice")
+         }
+      }
+    }
+
     item {
       OutlinedTextField(
         value = wakeWordsText,
