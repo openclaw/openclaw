@@ -4,14 +4,13 @@ import { createModelSelectionState } from "./model-selection.js";
 
 vi.mock("../../agents/model-catalog.js", () => ({
   loadModelCatalog: vi.fn(async () => [
+    { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus 4.5" },
+    { provider: "inferencer", id: "deepseek-v3-4bit-mlx", name: "DeepSeek V3" },
+    { provider: "kimi-coding", id: "k2p5", name: "Kimi K2.5" },
     { provider: "openai", id: "gpt-4o-mini", name: "GPT-4o mini" },
     { provider: "openai", id: "gpt-4o", name: "GPT-4o" },
-    { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus 4.5" },
   ]),
 }));
-
-const defaultProvider = "openai";
-const defaultModel = "gpt-4o-mini";
 
 const makeEntry = (overrides: Record<string, unknown> = {}) => ({
   sessionId: "session-id",
@@ -19,29 +18,32 @@ const makeEntry = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
-async function resolveState(params: {
-  cfg: OpenClawConfig;
-  sessionEntry: ReturnType<typeof makeEntry>;
-  sessionStore: Record<string, ReturnType<typeof makeEntry>>;
-  sessionKey: string;
-  parentSessionKey?: string;
-}) {
-  return createModelSelectionState({
-    cfg: params.cfg,
-    agentCfg: params.cfg.agents?.defaults,
-    sessionEntry: params.sessionEntry,
-    sessionStore: params.sessionStore,
-    sessionKey: params.sessionKey,
-    parentSessionKey: params.parentSessionKey,
-    defaultProvider,
-    defaultModel,
-    provider: defaultProvider,
-    model: defaultModel,
-    hasModelDirective: false,
-  });
-}
-
 describe("createModelSelectionState parent inheritance", () => {
+  const defaultProvider = "openai";
+  const defaultModel = "gpt-4o-mini";
+
+  async function resolveState(params: {
+    cfg: OpenClawConfig;
+    sessionEntry: ReturnType<typeof makeEntry>;
+    sessionStore: Record<string, ReturnType<typeof makeEntry>>;
+    sessionKey: string;
+    parentSessionKey?: string;
+  }) {
+    return createModelSelectionState({
+      cfg: params.cfg,
+      agentCfg: params.cfg.agents?.defaults,
+      sessionEntry: params.sessionEntry,
+      sessionStore: params.sessionStore,
+      sessionKey: params.sessionKey,
+      parentSessionKey: params.parentSessionKey,
+      defaultProvider,
+      defaultModel,
+      provider: defaultProvider,
+      model: defaultModel,
+      hasModelDirective: false,
+    });
+  }
+
   it("inherits parent override from explicit parentSessionKey", async () => {
     const cfg = {} as OpenClawConfig;
     const parentKey = "agent:main:discord:channel:c1";
@@ -210,5 +212,114 @@ describe("createModelSelectionState parent inheritance", () => {
 
     expect(state.provider).toBe("anthropic");
     expect(state.model).toBe("claude-opus-4-5");
+  });
+});
+
+describe("createModelSelectionState respects session model override", () => {
+  const defaultProvider = "inferencer";
+  const defaultModel = "deepseek-v3-4bit-mlx";
+
+  it("applies session modelOverride when set", async () => {
+    const cfg = {} as OpenClawConfig;
+    const sessionKey = "agent:main:main";
+    const sessionEntry = makeEntry({
+      providerOverride: "kimi-coding",
+      modelOverride: "k2p5",
+    });
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: undefined,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultProvider,
+      defaultModel,
+      provider: defaultProvider,
+      model: defaultModel,
+      hasModelDirective: false,
+    });
+
+    expect(state.provider).toBe("kimi-coding");
+    expect(state.model).toBe("k2p5");
+  });
+
+  it("falls back to default when no modelOverride is set", async () => {
+    const cfg = {} as OpenClawConfig;
+    const sessionKey = "agent:main:main";
+    const sessionEntry = makeEntry();
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: undefined,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultProvider,
+      defaultModel,
+      provider: defaultProvider,
+      model: defaultModel,
+      hasModelDirective: false,
+    });
+
+    expect(state.provider).toBe(defaultProvider);
+    expect(state.model).toBe(defaultModel);
+  });
+
+  it("respects modelOverride even when session model field differs", async () => {
+    // From issue #14783: stored override should beat last-used fallback model.
+    const cfg = {} as OpenClawConfig;
+    const sessionKey = "agent:main:main";
+    const sessionEntry = makeEntry({
+      model: "k2p5",
+      modelProvider: "kimi-coding",
+      contextTokens: 262_000,
+      providerOverride: "anthropic",
+      modelOverride: "claude-opus-4-5",
+    });
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: undefined,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultProvider,
+      defaultModel,
+      provider: defaultProvider,
+      model: defaultModel,
+      hasModelDirective: false,
+    });
+
+    expect(state.provider).toBe("anthropic");
+    expect(state.model).toBe("claude-opus-4-5");
+  });
+
+  it("uses default provider when providerOverride is not set but modelOverride is", async () => {
+    const cfg = {} as OpenClawConfig;
+    const sessionKey = "agent:main:main";
+    const sessionEntry = makeEntry({
+      modelOverride: "deepseek-v3-4bit-mlx",
+    });
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: undefined,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultProvider,
+      defaultModel,
+      provider: defaultProvider,
+      model: defaultModel,
+      hasModelDirective: false,
+    });
+
+    expect(state.provider).toBe(defaultProvider);
+    expect(state.model).toBe("deepseek-v3-4bit-mlx");
   });
 });
