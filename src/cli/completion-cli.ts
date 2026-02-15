@@ -487,7 +487,10 @@ _${rootCmd}_completion() {
     prev="\${COMP_WORDS[COMP_CWORD-1]}"
     
     # Simple top-level completion for now
-    opts="${program.commands.map((c) => c.name()).join(" ")} ${program.options.map((o) => o.flags.split(" ")[0]).join(" ")}"
+    opts="${program.commands.map((c) => c.name()).join(" ")} ${program.options
+      .map((o) => o.flags.split(" ")[0])
+      .filter(Boolean)
+      .join(" ")}"
     
     case "\${prev}" in
       ${program.commands.map((cmd) => generateBashSubcommand(cmd)).join("\n      ")}
@@ -509,7 +512,10 @@ function generateBashSubcommand(cmd: Command): string {
   // This is a naive implementation; fully recursive bash completion is complex to generate as a single string without improved state tracking.
   // For now, let's provide top-level command recognition.
   return `${cmd.name()})
-        opts="${cmd.commands.map((c) => c.name()).join(" ")} ${cmd.options.map((o) => o.flags.split(" ")[0]).join(" ")}"
+        opts="${cmd.commands.map((c) => c.name()).join(" ")} ${cmd.options
+          .map((o) => o.flags.split(" ")[0])
+          .filter(Boolean)
+          .join(" ")}"
         COMPREPLY=( $(compgen -W "\${opts}" -- \${cur}) )
         return 0
         ;;`;
