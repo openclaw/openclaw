@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveTelegramAccount } from "./accounts.js";
+import { listTelegramAccountIds, resolveTelegramAccount } from "./accounts.js";
 
 describe("resolveTelegramAccount", () => {
   it("falls back to the first configured account when accountId is omitted", () => {
@@ -93,5 +93,37 @@ describe("resolveTelegramAccount", () => {
         process.env.TELEGRAM_BOT_TOKEN = prevTelegramToken;
       }
     }
+  });
+});
+
+describe("listTelegramAccountIds", () => {
+  it("includes default account when top-level botToken is configured with named accounts", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          botToken: "tok-default",
+          accounts: {
+            life: { botToken: "tok-life" },
+          },
+        },
+      },
+    };
+
+    expect(listTelegramAccountIds(cfg)).toEqual(["default", "life"]);
+  });
+
+  it("includes default account when top-level tokenFile is configured with named accounts", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          tokenFile: "/tmp/telegram-default.token",
+          accounts: {
+            life: { botToken: "tok-life" },
+          },
+        },
+      },
+    };
+
+    expect(listTelegramAccountIds(cfg)).toEqual(["default", "life"]);
   });
 });

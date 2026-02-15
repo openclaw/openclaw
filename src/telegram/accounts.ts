@@ -35,10 +35,20 @@ function listConfiguredAccountIds(cfg: OpenClawConfig): string[] {
   return [...ids];
 }
 
+function hasConfiguredDefaultTelegramTokenSource(cfg: OpenClawConfig): boolean {
+  const telegram = cfg.channels?.telegram;
+  const botToken = telegram?.botToken?.trim();
+  const tokenFile = telegram?.tokenFile?.trim();
+  return Boolean(botToken || tokenFile);
+}
+
 export function listTelegramAccountIds(cfg: OpenClawConfig): string[] {
   const ids = Array.from(
     new Set([...listConfiguredAccountIds(cfg), ...listBoundAccountIds(cfg, "telegram")]),
   );
+  if (hasConfiguredDefaultTelegramTokenSource(cfg) && !ids.includes(DEFAULT_ACCOUNT_ID)) {
+    ids.push(DEFAULT_ACCOUNT_ID);
+  }
   debugAccounts("listTelegramAccountIds", ids);
   if (ids.length === 0) {
     return [DEFAULT_ACCOUNT_ID];
