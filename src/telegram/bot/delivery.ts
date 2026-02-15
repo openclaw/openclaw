@@ -546,6 +546,26 @@ async function sendTelegramText(
   const linkPreviewOptions = linkPreviewEnabled ? undefined : { is_disabled: true };
   const textMode = opts?.textMode ?? "markdown";
   const htmlText = textMode === "html" ? text : markdownToTelegramHtml(text);
+  const fallbackText = opts?.plainText ?? text;
+  const plainParams = {
+    ...(linkPreviewOptions ? { link_preview_options: linkPreviewOptions } : {}),
+    ...(opts?.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
+    ...baseParams,
+  };
+  const hasPlainParams = Object.keys(plainParams).length > 0;
+
+  if (!htmlText.trim() && fallbackText.trim()) {
+    runtime.log?.("telegram formatter returned empty HTML; retrying without formatting");
+    const res = await withTelegramApiErrorLogging({
+      operation: "sendMessage",
+      runtime,
+      fn: () =>
+        hasPlainParams
+          ? bot.api.sendMessage(chatId, fallbackText, plainParams)
+          : bot.api.sendMessage(chatId, fallbackText),
+    });
+    return res.message_id;
+  }
   try {
     const res = await withTelegramApiErrorLogging({
       operation: "sendMessage",
@@ -565,16 +585,13 @@ async function sendTelegramText(
     const errText = formatErrorMessage(err);
     if (PARSE_ERR_RE.test(errText)) {
       runtime.log?.(`telegram HTML parse failed; retrying without formatting: ${errText}`);
-      const fallbackText = opts?.plainText ?? text;
       const res = await withTelegramApiErrorLogging({
         operation: "sendMessage",
         runtime,
         fn: () =>
-          bot.api.sendMessage(chatId, fallbackText, {
-            ...(linkPreviewOptions ? { link_preview_options: linkPreviewOptions } : {}),
-            ...(opts?.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
-            ...baseParams,
-          }),
+          hasPlainParams
+            ? bot.api.sendMessage(chatId, fallbackText, plainParams)
+            : bot.api.sendMessage(chatId, fallbackText),
       });
       runtime.log?.(`telegram sendMessage ok chat=${chatId} message=${res.message_id} (plain)`);
       return res.message_id;

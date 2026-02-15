@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { markdownToTelegramHtml } from "./format.js";
+import { markdownToTelegramChunks, markdownToTelegramHtml } from "./format.js";
 
 describe("markdownToTelegramHtml", () => {
   it("handles core markdown-to-telegram conversions", () => {
@@ -55,6 +55,27 @@ describe("markdownToTelegramHtml", () => {
   it("renders fenced code blocks", () => {
     const res = markdownToTelegramHtml("```js\nconst x = 1;\n```");
     expect(res).toBe("<pre><code>const x = 1;\n</code></pre>");
+  });
+
+  it("auto-detects markdown tables and uses tableMode=code by default", () => {
+    const markdown = "| Name | Value |\n| --- | --- |\n| A | 1 |";
+    const autoDetected = markdownToTelegramHtml(markdown);
+    const explicitCode = markdownToTelegramHtml(markdown, { tableMode: "code" });
+    const explicitOff = markdownToTelegramHtml(markdown, { tableMode: "off" });
+
+    expect(autoDetected).toBe(explicitCode);
+    expect(autoDetected).not.toBe(explicitOff);
+    expect(autoDetected).toContain("<pre><code>");
+  });
+
+  it("falls back to escaped plain text when markdown rendering is empty", () => {
+    const res = markdownToTelegramHtml("[](<script>&)");
+    expect(res).toBe("[](&lt;script&gt;&amp;)");
+  });
+
+  it("returns a non-empty chunk when markdown rendering is empty", () => {
+    const chunks = markdownToTelegramChunks("[](<script>&)", 4096);
+    expect(chunks).toEqual([{ html: "[](&lt;script&gt;&amp;)", text: "[](<script>&)" }]);
   });
 
   it("properly nests overlapping bold and autolink (#4071)", () => {

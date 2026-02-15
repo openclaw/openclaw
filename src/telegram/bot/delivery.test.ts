@@ -1,6 +1,7 @@
 import type { Bot } from "grammy";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../../runtime.js";
+import * as telegramFormat from "../format.js";
 import { deliverReplies } from "./delivery.js";
 
 const loadWebMedia = vi.fn();
@@ -204,6 +205,35 @@ describe("deliverReplies", () => {
         message_thread_id: 42,
       }),
     );
+  });
+
+  it("falls back to plain text when formatter returns empty HTML", async () => {
+    const runtime = { error: vi.fn(), log: vi.fn() };
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 44,
+      chat: { id: "123" },
+    });
+    const bot = { api: { sendMessage } } as unknown as Bot;
+    const chunksSpy = vi
+      .spyOn(telegramFormat, "markdownToTelegramChunks")
+      .mockReturnValue([{ html: "", text: "[]()" }]);
+
+    try {
+      await deliverReplies({
+        replies: [{ text: "[]()" }],
+        chatId: "123",
+        token: "tok",
+        runtime,
+        bot,
+        replyToMode: "off",
+        textLimit: 4000,
+      });
+    } finally {
+      chunksSpy.mockRestore();
+    }
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledWith("123", "[]()");
   });
 
   it("does not include link_preview_options when linkPreview is true", async () => {
