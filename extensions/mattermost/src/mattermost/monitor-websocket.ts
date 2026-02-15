@@ -3,6 +3,8 @@ import WebSocket from "ws";
 import type { MattermostPost } from "./client.js";
 import { rawDataToString } from "./monitor-helpers.js";
 
+const WS_PING_INTERVAL_MS = 30_000;
+
 export type MattermostEventPayload = {
   event?: string;
   data?: {
@@ -27,8 +29,10 @@ export type MattermostWebSocketLike = {
   on(event: "close", listener: (code: number, reason: Buffer) => void): void;
   on(event: "error", listener: (err: unknown) => void): void;
   send(data: string): void;
+  ping(): void;
   close(): void;
   terminate(): void;
+  readyState: number;
 };
 
 export type MattermostWebSocketFactory = (url: string) => MattermostWebSocketLike;
@@ -98,6 +102,7 @@ export function createMattermostConnectOnce(
     const ws = webSocketFactory(opts.wsUrl);
     const onAbort = () => ws.terminate();
     opts.abortSignal?.addEventListener("abort", onAbort, { once: true });
+    let pingInterval: ReturnType<typeof setInterval> | null = null;
 
     try {
       return await new Promise<void>((resolve, reject) => {
@@ -135,6 +140,22 @@ export function createMattermostConnectOnce(
         });
 
         ws.on("message", async (data) => {
+          // Check for hello event to start ping interval
+          const raw = rawDataToString(data);
+          let payload: MattermostEventPayload;
+          try {
+            payload = JSON.parse(raw) as MattermostEventPayload;
+          } catch {
+            return;
+          }
+          if (payload.event === "hello" && !pingInterval) {
+            pingInterval = setInterval(() => {
+              if (ws.readyState === WebSocket.OPEN) {
+                ws.ping();
+              }
+            }, WS_PING_INTERVAL_MS);
+          }
+
           const parsed = parsePostedEvent(data);
           if (!parsed) {
             return;
@@ -147,6 +168,10 @@ export function createMattermostConnectOnce(
         });
 
         ws.on("close", (code, reason) => {
+          if (pingInterval) {
+            clearInterval(pingInterval);
+            pingInterval = null;
+          }
           const message = reasonToString(reason);
           opts.statusSink?.({
             connected: false,
@@ -174,6 +199,9 @@ export function createMattermostConnectOnce(
         });
       });
     } finally {
+      if (pingInterval) {
+        clearInterval(pingInterval);
+      }
       opts.abortSignal?.removeEventListener("abort", onAbort);
     }
   };
