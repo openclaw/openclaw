@@ -12,6 +12,12 @@ export default defineConfig([
     platform: "node",
   },
   {
+    entry: "src/cli/daemon-cli.ts",
+    env,
+    fixedExtension: false,
+    platform: "node",
+  },
+  {
     entry: "src/entry.ts",
     env,
     fixedExtension: false,
