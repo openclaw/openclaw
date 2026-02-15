@@ -406,6 +406,29 @@ export function normalizeCronJobInput(
     next.delivery = coerceDelivery(base.delivery);
   }
 
+  // Pre-check gate normalization
+  if (base.preCheck === null) {
+    next.preCheck = null; // explicit removal in patch
+  } else if (isRecord(base.preCheck)) {
+    const pc = base.preCheck;
+    const preCheck: Record<string, unknown> = {};
+    if (typeof pc.command === "string" && pc.command.trim()) {
+      preCheck.command = pc.command.trim();
+    }
+    if (typeof pc.timeoutSeconds === "number" && Number.isFinite(pc.timeoutSeconds)) {
+      preCheck.timeoutSeconds = Math.max(1, Math.floor(pc.timeoutSeconds));
+    }
+    if (typeof pc.outputMode === "string") {
+      const mode = pc.outputMode.trim().toLowerCase();
+      if (mode === "prepend" || mode === "replace" || mode === "ignore") {
+        preCheck.outputMode = mode;
+      }
+    }
+    if (preCheck.command) {
+      next.preCheck = preCheck;
+    }
+  }
+
   if ("isolation" in next) {
     delete next.isolation;
   }

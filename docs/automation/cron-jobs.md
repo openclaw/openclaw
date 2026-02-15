@@ -692,6 +692,68 @@ Immediate system event without creating a job:
 openclaw system event --mode now --text "Next heartbeat: check battery."
 ```
 
+## Pre-check gate (skip when nothing changed)
+
+Recurring jobs often wake an agent when there's nothing to act on — wasting tokens on "nothing new" responses. The **pre-check gate** runs a lightweight shell command before the agent turn; if the command fails or returns empty output, the job is skipped entirely.
+
+```bash
+openclaw cron add \
+  --name "PR review" \
+  --every "30m" \
+  --session isolated \
+  --message "Review these open PRs and flag any issues." \
+  --pre-check 'gh pr list --state open --json number | jq "if length > 0 then . else empty end"'
+```
+
+### How it works
+
+| Pre-check result          | Job outcome                                          |
+| ------------------------- | ---------------------------------------------------- |
+| Exit 0 + non-empty stdout | Job proceeds — stdout optionally included as context |
+| Exit non-zero             | Job skipped (status: `skipped`)                      |
+| Empty stdout              | Job skipped (nothing to do)                          |
+| Timeout (default: 30s)    | Job skipped                                          |
+
+### Pre-check fields
+
+| Field            | Type                                     | Default     | Description                            |
+| ---------------- | ---------------------------------------- | ----------- | -------------------------------------- |
+| `command`        | string                                   | _required_  | Shell command to execute               |
+| `timeoutSeconds` | number                                   | `30`        | Kill and skip on timeout               |
+| `outputMode`     | `"prepend"` \| `"replace"` \| `"ignore"` | `"prepend"` | How to use stdout in the agent message |
+
+### Output modes
+
+- **prepend** (default): Stdout is prepended to the agent message as `[Pre-check context]`, giving the agent the data without a separate lookup.
+- **replace**: Stdout becomes the entire agent message (useful when the script produces the full prompt).
+- **ignore**: Only the pass/fail gate matters; stdout is discarded.
+
+### Examples
+
+```bash
+# Only summarize when new mail arrived (check returns count)
+--pre-check 'python3 -c "import imaplib; m=imaplib.IMAP4_SSL(\"imap.gmail.com\"); m.login(\"...\",\"...\"); print(len(m.search(None,\"UNSEEN\")[1][0].split()))"'
+
+# Only alert when disk usage exceeds 80%
+--pre-check 'df -h / | awk "NR==2 {gsub(/%/,\"\",\$5); if(\$5>80) print \$5\"% used\"; else exit 1}"'
+
+# Only process when a file changed since last check
+--pre-check 'find /data -newer /tmp/.last-check -type f | head -5'
+
+# Only wake when API returns non-empty results
+--pre-check 'curl -sf https://api.example.com/pending | jq "if length > 0 then . else empty end"'
+```
+
+### Updating or removing a pre-check
+
+```bash
+# Update the command
+openclaw cron update <job-id> --pre-check 'new-command-here'
+
+# Remove the pre-check (job always runs)
+openclaw cron update <job-id> --pre-check ''
+```
+
 ## Gateway API surface
 
 - `cron.list`, `cron.status`, `cron.add`, `cron.update`, `cron.remove`
