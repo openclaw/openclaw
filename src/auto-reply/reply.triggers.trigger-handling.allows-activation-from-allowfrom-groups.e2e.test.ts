@@ -1,10 +1,10 @@
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import {
   getRunEmbeddedPiAgentMock,
   installTriggerHandlingE2eTestHooks,
   makeCfg,
+  runGreetingPromptForBareNewOrReset,
   withTempHome,
 } from "./reply.triggers.trigger-handling.test-harness.js";
 
@@ -89,44 +89,7 @@ describe("trigger handling", () => {
   });
   it("runs a greeting prompt for a bare /new", async () => {
     await withTempHome(async (home) => {
-      getRunEmbeddedPiAgentMock().mockResolvedValue({
-        payloads: [{ text: "hello" }],
-        meta: {
-          durationMs: 1,
-          agentMeta: { sessionId: "s", provider: "p", model: "m" },
-        },
-      });
-
-      const res = await getReplyFromConfig(
-        {
-          Body: "/new",
-          From: "+1003",
-          To: "+2000",
-          CommandAuthorized: true,
-        },
-        {},
-        {
-          agents: {
-            defaults: {
-              model: "anthropic/claude-opus-4-5",
-              workspace: join(home, "openclaw"),
-            },
-          },
-          channels: {
-            whatsapp: {
-              allowFrom: ["*"],
-            },
-          },
-          session: {
-            store: join(tmpdir(), `openclaw-session-test-${Date.now()}.json`),
-          },
-        },
-      );
-      const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toBe("hello");
-      expect(getRunEmbeddedPiAgentMock()).toHaveBeenCalledOnce();
-      const prompt = getRunEmbeddedPiAgentMock().mock.calls[0]?.[0]?.prompt ?? "";
-      expect(prompt).toContain("A new session was started via /new or /reset");
+      await runGreetingPromptForBareNewOrReset({ home, body: "/new", getReplyFromConfig });
     });
   });
 });

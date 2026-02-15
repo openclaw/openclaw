@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { afterEach, vi } from "vitest";
+import { afterEach, expect, vi } from "vitest";
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 
 // Avoid exporting vitest mock types (TS2742 under pnpm + d.ts emit).
@@ -131,6 +131,36 @@ export function makeCfg(home: string) {
     },
     session: { store: join(home, "sessions.json") },
   };
+}
+
+export async function runGreetingPromptForBareNewOrReset(params: {
+  home: string;
+  body: "/new" | "/reset";
+  getReplyFromConfig: typeof import("./reply.js").getReplyFromConfig;
+}) {
+  getRunEmbeddedPiAgentMock().mockResolvedValue({
+    payloads: [{ text: "hello" }],
+    meta: {
+      durationMs: 1,
+      agentMeta: { sessionId: "s", provider: "p", model: "m" },
+    },
+  });
+
+  const res = await params.getReplyFromConfig(
+    {
+      Body: params.body,
+      From: "+1003",
+      To: "+2000",
+      CommandAuthorized: true,
+    },
+    {},
+    makeCfg(params.home),
+  );
+  const text = Array.isArray(res) ? res[0]?.text : res?.text;
+  expect(text).toBe("hello");
+  expect(getRunEmbeddedPiAgentMock()).toHaveBeenCalledOnce();
+  const prompt = getRunEmbeddedPiAgentMock().mock.calls[0]?.[0]?.prompt ?? "";
+  expect(prompt).toContain("A new session was started via /new or /reset");
 }
 
 export function installTriggerHandlingE2eTestHooks() {
