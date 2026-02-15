@@ -121,11 +121,23 @@ export function mergeDeliveryContext(
   if (!normalizedPrimary && !normalizedFallback) {
     return undefined;
   }
+  const channelsConflict =
+    normalizedPrimary?.channel &&
+    normalizedFallback?.channel &&
+    normalizedPrimary.channel !== normalizedFallback.channel;
   return normalizeDeliveryContext({
     channel: normalizedPrimary?.channel ?? normalizedFallback?.channel,
-    to: normalizedPrimary?.to ?? normalizedFallback?.to,
-    accountId: normalizedPrimary?.accountId ?? normalizedFallback?.accountId,
-    threadId: normalizedPrimary?.threadId ?? normalizedFallback?.threadId,
+    // Keep route fields paired to the selected channel. If both inputs name
+    // different channels, do not inherit target/account/thread from fallback.
+    to: channelsConflict
+      ? normalizedPrimary?.to
+      : (normalizedPrimary?.to ?? normalizedFallback?.to),
+    accountId: channelsConflict
+      ? normalizedPrimary?.accountId
+      : (normalizedPrimary?.accountId ?? normalizedFallback?.accountId),
+    threadId: channelsConflict
+      ? normalizedPrimary?.threadId
+      : (normalizedPrimary?.threadId ?? normalizedFallback?.threadId),
   });
 }
 
