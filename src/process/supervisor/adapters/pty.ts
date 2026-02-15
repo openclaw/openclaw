@@ -1,4 +1,5 @@
 import type { ManagedRunStdin } from "../types.js";
+import { killProcessTree } from "../../kill-tree.js";
 
 type PtyExitEvent = { exitCode: number; signal?: number };
 type PtyDisposable = { dispose: () => void };
@@ -134,7 +135,9 @@ export async function createPtyAdapter(params: {
 
   const kill = (signal: NodeJS.Signals = "SIGKILL") => {
     try {
-      if (process.platform === "win32") {
+      if (signal === "SIGKILL" && typeof pty.pid === "number" && pty.pid > 0) {
+        killProcessTree(pty.pid);
+      } else if (process.platform === "win32") {
         pty.kill();
       } else {
         pty.kill(signal);

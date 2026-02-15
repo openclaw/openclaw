@@ -83,6 +83,7 @@ export function createProcessSupervisor(): ProcessSupervisor {
     let stderr = "";
     let timeoutTimer: NodeJS.Timeout | null = null;
     let noOutputTimer: NodeJS.Timeout | null = null;
+    const captureOutput = input.captureOutput !== false;
 
     const overallTimeoutMs = clampTimeout(input.timeoutMs);
     const noOutputTimeoutMs = clampTimeout(input.noOutputTimeoutMs);
@@ -95,6 +96,13 @@ export function createProcessSupervisor(): ProcessSupervisor {
       registry.updateState(runId, "exiting", { terminationReason: reason });
     };
 
+    let cancelAdapter: ((reason: TerminationReason) => void) | null = null;
+
+    const requestCancel = (reason: TerminationReason) => {
+      setForcedReason(reason);
+      cancelAdapter?.(reason);
+    };
+
     const touchOutput = () => {
       registry.touchOutput(runId);
       if (!noOutputTimeoutMs || settled) {
@@ -104,8 +112,7 @@ export function createProcessSupervisor(): ProcessSupervisor {
         clearTimeout(noOutputTimer);
       }
       noOutputTimer = setTimeout(() => {
-        setForcedReason("no-output-timeout");
-        active.get(runId)?.run.cancel("no-output-timeout");
+        requestCancel("no-output-timeout");
       }, noOutputTimeoutMs);
     };
 
@@ -150,26 +157,35 @@ export function createProcessSupervisor(): ProcessSupervisor {
         }
       };
 
+      cancelAdapter = (_reason: TerminationReason) => {
+        if (settled) {
+          return;
+        }
+        adapter.kill("SIGKILL");
+      };
+
       if (overallTimeoutMs) {
         timeoutTimer = setTimeout(() => {
-          setForcedReason("overall-timeout");
-          active.get(runId)?.run.cancel("overall-timeout");
+          requestCancel("overall-timeout");
         }, overallTimeoutMs);
       }
       if (noOutputTimeoutMs) {
         noOutputTimer = setTimeout(() => {
-          setForcedReason("no-output-timeout");
-          active.get(runId)?.run.cancel("no-output-timeout");
+          requestCancel("no-output-timeout");
         }, noOutputTimeoutMs);
       }
 
       adapter.onStdout((chunk) => {
-        stdout += chunk;
+        if (captureOutput) {
+          stdout += chunk;
+        }
         input.onStdout?.(chunk);
         touchOutput();
       });
       adapter.onStderr((chunk) => {
-        stderr += chunk;
+        if (captureOutput) {
+          stderr += chunk;
+        }
         input.onStderr?.(chunk);
         touchOutput();
       });
@@ -233,8 +249,7 @@ export function createProcessSupervisor(): ProcessSupervisor {
         stdin: adapter.stdin,
         wait: async () => await waitPromise,
         cancel: (reason = "manual-cancel") => {
-          setForcedReason(reason);
-          adapter.kill("SIGKILL");
+          requestCancel(reason);
         },
       };
 

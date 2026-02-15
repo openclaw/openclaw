@@ -448,6 +448,7 @@ export async function runExecProcess(opts: {
       cwd: opts.workdir,
       env: spawnSpec.env,
       timeoutMs,
+      captureOutput: false,
       onStdout: onSupervisorStdout,
       onStderr: handleStderr,
     };
@@ -484,6 +485,7 @@ export async function runExecProcess(opts: {
           env: spawnSpec.env,
           stdinMode: "pipe-open",
           timeoutMs,
+          captureOutput: false,
           onStdout: handleStdout,
           onStderr: handleStderr,
         });

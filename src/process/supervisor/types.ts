@@ -64,6 +64,10 @@ type SpawnBaseInput = {
   env?: NodeJS.ProcessEnv;
   timeoutMs?: number;
   noOutputTimeoutMs?: number;
+  /**
+   * When false, stdout/stderr are streamed via callbacks only and not retained in RunExit payload.
+   */
+  captureOutput?: boolean;
   onStdout?: (chunk: string) => void;
   onStderr?: (chunk: string) => void;
 };

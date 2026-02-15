@@ -64,4 +64,39 @@ describe("process supervisor", () => {
     expect(secondExit.reason).toBe("exit");
     expect(secondExit.stdout).toBe("new");
   });
+
+  it("applies overall timeout even for near-immediate timer firing", async () => {
+    const supervisor = createProcessSupervisor();
+    const run = await supervisor.spawn({
+      sessionId: "s-timeout",
+      backendId: "test",
+      mode: "child",
+      argv: [process.execPath, "-e", "setTimeout(() => {}, 10_000)"],
+      timeoutMs: 1,
+      stdinMode: "pipe-closed",
+    });
+    const exit = await run.wait();
+    expect(exit.reason).toBe("overall-timeout");
+    expect(exit.timedOut).toBe(true);
+  });
+
+  it("can stream output without retaining it in RunExit payload", async () => {
+    const supervisor = createProcessSupervisor();
+    let streamed = "";
+    const run = await supervisor.spawn({
+      sessionId: "s-capture",
+      backendId: "test",
+      mode: "child",
+      argv: [process.execPath, "-e", 'process.stdout.write("streamed")'],
+      timeoutMs: 2_000,
+      stdinMode: "pipe-closed",
+      captureOutput: false,
+      onStdout: (chunk) => {
+        streamed += chunk;
+      },
+    });
+    const exit = await run.wait();
+    expect(streamed).toBe("streamed");
+    expect(exit.stdout).toBe("");
+  });
 });
