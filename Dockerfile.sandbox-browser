@@ -17,6 +17,7 @@ RUN --mount=type=cache,id=openclaw-sandbox-bookworm-apt-cache,target=/var/cache/
     fonts-noto-color-emoji \
     git \
     gnupg \
+    openssl \
     jq \
     novnc \
     python3 \
