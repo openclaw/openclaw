@@ -77,14 +77,6 @@ function applyFooterToHtml(html?: string, footer?: string | null): string | unde
   return trimmed ? `${trimmed}${suffix}` : escapeHtml(footer);
 }
 
-function applyFooterToPlainText(text?: string, footer?: string | null): string | undefined {
-  if (!footer) {
-    return text;
-  }
-  const trimmed = text?.trim();
-  return trimmed ? `${trimmed}\n\n${footer}` : footer;
-}
-
 type TelegramChannelData = {
   buttons?: Array<Array<{ text: string; callback_data: string }>>;
   modelFooter?: TelegramModelFooterMeta;

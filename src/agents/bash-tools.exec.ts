@@ -1599,7 +1599,25 @@ export function createExecTool(
               return;
             }
             if (outcome.status === "failed") {
-              reject(new Error(outcome.reason ?? "Command failed."));
+              // Return failures as tool output (status=failed) instead of throwing.
+              // Many shell commands use non-zero exit codes for non-fatal conditions
+              // (e.g. `ls *.ts` when the glob is empty, `rg` when no matches). Throwing
+              // here aborts the whole agent run and prevents recovery.
+              resolve({
+                content: [
+                  {
+                    type: "text",
+                    text: `${getWarningText()}${outcome.reason ?? (outcome.aggregated || "(no output)")}`,
+                  },
+                ],
+                details: {
+                  status: "failed",
+                  exitCode: outcome.exitCode ?? null,
+                  durationMs: outcome.durationMs,
+                  aggregated: outcome.aggregated,
+                  cwd: run.session.cwd,
+                },
+              });
               return;
             }
             resolve({
