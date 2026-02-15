@@ -1,6 +1,7 @@
 import type { AnyMessageContent, WAPresence } from "@whiskeysockets/baileys";
 import type { ActiveWebSendOptions } from "../active-listener.js";
 import { recordChannelActivity } from "../../infra/channel-activity.js";
+import { MAX_STICKER_BYTES } from "../../media/constants.js";
 import { toWhatsappJid } from "../../utils.js";
 
 export function createWebSendApi(params: {
@@ -21,7 +22,14 @@ export function createWebSendApi(params: {
       const jid = toWhatsappJid(to);
       let payload: AnyMessageContent;
       if (mediaBuffer && mediaType) {
-        if (mediaType.startsWith("image/")) {
+        if (
+          mediaType === "image/webp" &&
+          mediaBuffer.length <= MAX_STICKER_BYTES &&
+          (text ?? "").trim() === ""
+        ) {
+          // WebP files under sticker size limit with no caption are sent as stickers.
+          payload = { sticker: mediaBuffer } as AnyMessageContent;
+        } else if (mediaType.startsWith("image/")) {
           payload = {
             image: mediaBuffer,
             caption: text || undefined,
