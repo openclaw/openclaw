@@ -22,7 +22,11 @@ import {
   normalizeUpdateChannel,
   resolveEffectiveUpdateChannel,
 } from "../infra/update-channels.js";
-import { checkUpdateStatus, compareSemverStrings } from "../infra/update-check.js";
+import {
+  checkUpdateStatus,
+  compareSemverStrings,
+  formatGitInstallLabel,
+} from "../infra/update-check.js";
 import { runExec } from "../process/exec.js";
 import { VERSION } from "../version.js";
 import { resolveControlUiLinks } from "./onboard-helpers.js";
@@ -104,21 +108,7 @@ export async function statusAllCommand(
       gitTag: update.git?.tag ?? null,
       gitBranch: update.git?.branch ?? null,
     });
-    const gitLabel =
-      update.installKind === "git"
-        ? (() => {
-            const shortSha = update.git?.sha ? update.git.sha.slice(0, 8) : null;
-            const branch =
-              update.git?.branch && update.git.branch !== "HEAD" ? update.git.branch : null;
-            const tag = update.git?.tag ?? null;
-            const parts = [
-              branch ?? (tag ? "detached" : "git"),
-              tag ? `tag ${tag}` : null,
-              shortSha ? `@ ${shortSha}` : null,
-            ].filter(Boolean);
-            return parts.join(" · ");
-          })()
-        : null;
+    const gitLabel = formatGitInstallLabel(update);
     progress.tick();
 
     progress.setLabel("Probing gateway…");
@@ -276,6 +266,32 @@ export async function statusAllCommand(
       : null;
 
     const updateLine = (() => {
+      const appendRegistryAndDepsStatus = (parts: string[]) => {
+        const latest = update.registry?.latestVersion;
+        if (latest) {
+          const cmp = compareSemverStrings(VERSION, latest);
+          if (cmp === 0) {
+            parts.push(`npm latest ${latest}`);
+          } else if (cmp != null && cmp < 0) {
+            parts.push(`npm update ${latest}`);
+          } else {
+            parts.push(`npm latest ${latest} (local newer)`);
+          }
+        } else if (update.registry?.error) {
+          parts.push("npm latest unknown");
+        }
+
+        if (update.deps?.status === "ok") {
+          parts.push("deps ok");
+        }
+        if (update.deps?.status === "stale") {
+          parts.push("deps stale");
+        }
+        if (update.deps?.status === "missing") {
+          parts.push("deps missing");
+        }
+      };
+
       if (update.installKind === "git" && update.git) {
         const parts: string[] = [];
         parts.push(update.git.branch ? `git ${update.git.branch}` : "git");
@@ -300,55 +316,12 @@ export async function statusAllCommand(
           parts.push("fetch failed");
         }
 
-        const latest = update.registry?.latestVersion;
-        if (latest) {
-          const cmp = compareSemverStrings(VERSION, latest);
-          if (cmp === 0) {
-            parts.push(`npm latest ${latest}`);
-          } else if (cmp != null && cmp < 0) {
-            parts.push(`npm update ${latest}`);
-          } else {
-            parts.push(`npm latest ${latest} (local newer)`);
-          }
-        } else if (update.registry?.error) {
-          parts.push("npm latest unknown");
-        }
-
-        if (update.deps?.status === "ok") {
-          parts.push("deps ok");
-        }
-        if (update.deps?.status === "stale") {
-          parts.push("deps stale");
-        }
-        if (update.deps?.status === "missing") {
-          parts.push("deps missing");
-        }
+        appendRegistryAndDepsStatus(parts);
         return parts.join(" · ");
       }
       const parts: string[] = [];
       parts.push(update.packageManager !== "unknown" ? update.packageManager : "pkg");
-      const latest = update.registry?.latestVersion;
-      if (latest) {
-        const cmp = compareSemverStrings(VERSION, latest);
-        if (cmp === 0) {
-          parts.push(`npm latest ${latest}`);
-        } else if (cmp != null && cmp < 0) {
-          parts.push(`npm update ${latest}`);
-        } else {
-          parts.push(`npm latest ${latest} (local newer)`);
-        }
-      } else if (update.registry?.error) {
-        parts.push("npm latest unknown");
-      }
-      if (update.deps?.status === "ok") {
-        parts.push("deps ok");
-      }
-      if (update.deps?.status === "stale") {
-        parts.push("deps stale");
-      }
-      if (update.deps?.status === "missing") {
-        parts.push("deps missing");
-      }
+      appendRegistryAndDepsStatus(parts);
       return parts.join(" · ");
     })();
 

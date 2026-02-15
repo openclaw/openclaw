@@ -4,6 +4,7 @@ import type { SessionManager } from "@mariozechner/pi-coding-agent";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { HARD_MAX_TOOL_RESULT_CHARS } from "./pi-embedded-runner/tool-result-truncation.js";
 import { makeMissingToolResult, sanitizeToolCallInputs } from "./session-transcript-repair.js";
+import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-id.js";
 
 const GUARD_TRUNCATION_SUFFIX =
   "\n\n⚠️ [Content truncated during persistence — original exceeded size limit. " +
@@ -69,45 +70,6 @@ function capToolResultSize(msg: AgentMessage): AgentMessage {
   });
 
   return { ...msg, content: newContent } as AgentMessage;
-}
-
-type ToolCall = { id: string; name?: string };
-
-function extractAssistantToolCalls(msg: Extract<AgentMessage, { role: "assistant" }>): ToolCall[] {
-  const content = msg.content;
-  if (!Array.isArray(content)) {
-    return [];
-  }
-
-  const toolCalls: ToolCall[] = [];
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const rec = block as { type?: unknown; id?: unknown; name?: unknown };
-    if (typeof rec.id !== "string" || !rec.id) {
-      continue;
-    }
-    if (rec.type === "toolCall" || rec.type === "toolUse" || rec.type === "functionCall") {
-      toolCalls.push({
-        id: rec.id,
-        name: typeof rec.name === "string" ? rec.name : undefined,
-      });
-    }
-  }
-  return toolCalls;
-}
-
-function extractToolResultId(msg: Extract<AgentMessage, { role: "toolResult" }>): string | null {
-  const toolCallId = (msg as { toolCallId?: unknown }).toolCallId;
-  if (typeof toolCallId === "string" && toolCallId) {
-    return toolCallId;
-  }
-  const toolUseId = (msg as { toolUseId?: unknown }).toolUseId;
-  if (typeof toolUseId === "string" && toolUseId) {
-    return toolUseId;
-  }
-  return null;
 }
 
 export function installSessionToolResultGuard(
@@ -206,7 +168,7 @@ export function installSessionToolResultGuard(
 
     const toolCalls =
       nextRole === "assistant"
-        ? extractAssistantToolCalls(nextMessage as Extract<AgentMessage, { role: "assistant" }>)
+        ? extractToolCallsFromAssistant(nextMessage as Extract<AgentMessage, { role: "assistant" }>)
         : [];
 
     if (allowSyntheticToolResults) {

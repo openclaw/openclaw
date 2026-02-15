@@ -16,40 +16,12 @@ import { resolveGatewayService } from "../../daemon/service.js";
 import { resolveGatewayAuth } from "../../gateway/auth.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
-import { buildDaemonServiceSnapshot, createNullWriter, emitDaemonActionJson } from "./response.js";
+import { buildDaemonServiceSnapshot, createDaemonActionContext } from "./response.js";
 import { parsePort } from "./shared.js";
 
 export async function runDaemonInstall(opts: DaemonInstallOptions) {
   const json = Boolean(opts.json);
-  const warnings: string[] = [];
-  const stdout = json ? createNullWriter() : process.stdout;
-  const emit = (payload: {
-    ok: boolean;
-    result?: string;
-    message?: string;
-    error?: string;
-    service?: {
-      label: string;
-      loaded: boolean;
-      loadedText: string;
-      notLoadedText: string;
-    };
-    hints?: string[];
-    warnings?: string[];
-  }) => {
-    if (!json) {
-      return;
-    }
-    emitDaemonActionJson({ action: "install", ...payload });
-  };
-  const fail = (message: string) => {
-    if (json) {
-      emit({ ok: false, error: message, warnings: warnings.length ? warnings : undefined });
-    } else {
-      defaultRuntime.error(message);
-    }
-    defaultRuntime.exit(1);
-  };
+  const { stdout, warnings, emit, fail } = createDaemonActionContext({ action: "install", json });
 
   if (resolveIsNixMode(process.env)) {
     fail("Nix mode detected; service install is disabled.");
@@ -88,7 +60,6 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
         result: "already-installed",
         message: `Gateway service already ${service.loadedText}.`,
         service: buildDaemonServiceSnapshot(service, loaded),
-        warnings: warnings.length ? warnings : undefined,
       });
       if (!json) {
         defaultRuntime.log(`Gateway service already ${service.loadedText}.`);

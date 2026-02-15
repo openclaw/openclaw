@@ -1,50 +1,12 @@
-import type { ModelAliasIndex } from "../../agents/model-selection.js";
-import type { OpenClawConfig } from "../../config/config.js";
-import type { SessionEntry } from "../../config/sessions.js";
-import type { MsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
-import type { InlineDirectives } from "./directive-handling.parse.js";
+import type { ApplyInlineDirectivesFastLaneParams } from "./directive-handling.params.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "./directives.js";
 import { handleDirectiveOnly } from "./directive-handling.impl.js";
 import { isDirectiveOnly } from "./directive-handling.parse.js";
 
-export async function applyInlineDirectivesFastLane(params: {
-  directives: InlineDirectives;
-  commandAuthorized: boolean;
-  ctx: MsgContext;
-  cfg: OpenClawConfig;
-  agentId?: string;
-  isGroup: boolean;
-  sessionEntry: SessionEntry;
-  sessionStore: Record<string, SessionEntry>;
-  sessionKey: string;
-  storePath?: string;
-  elevatedEnabled: boolean;
-  elevatedAllowed: boolean;
-  elevatedFailures?: Array<{ gate: string; key: string }>;
-  messageProviderKey?: string;
-  defaultProvider: string;
-  defaultModel: string;
-  aliasIndex: ModelAliasIndex;
-  allowedModelKeys: Set<string>;
-  allowedModelCatalog: Awaited<
-    ReturnType<typeof import("../../agents/model-catalog.js").loadModelCatalog>
-  >;
-  resetModelOverride: boolean;
-  provider: string;
-  model: string;
-  initialModelLabel: string;
-  formatModelSwitchEvent: (label: string, alias?: string) => string;
-  agentCfg?: NonNullable<OpenClawConfig["agents"]>["defaults"];
-  modelState: {
-    resolveDefaultThinkingLevel: () => Promise<ThinkLevel | undefined>;
-    allowedModelKeys: Set<string>;
-    allowedModelCatalog: Awaited<
-      ReturnType<typeof import("../../agents/model-catalog.js").loadModelCatalog>
-    >;
-    resetModelOverride: boolean;
-  };
-}): Promise<{ directiveAck?: ReplyPayload; provider: string; model: string }> {
+export async function applyInlineDirectivesFastLane(
+  params: ApplyInlineDirectivesFastLaneParams,
+): Promise<{ directiveAck?: ReplyPayload; provider: string; model: string }> {
   const {
     directives,
     commandAuthorized,
