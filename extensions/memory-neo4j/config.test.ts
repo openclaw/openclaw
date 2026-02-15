@@ -41,7 +41,6 @@ describe("memoryNeo4jConfigSchema.parse", () => {
       expect(config.autoCapture).toBe(true);
       expect(config.autoRecall).toBe(true);
       expect(config.coreMemory.enabled).toBe(true);
-      expect(config.coreMemory.maxEntries).toBe(50);
     });
 
     it("should parse a full config with openai provider", () => {
@@ -60,7 +59,6 @@ describe("memoryNeo4jConfigSchema.parse", () => {
         autoRecall: false,
         coreMemory: {
           enabled: false,
-          maxEntries: 100,
           refreshAtContextPercent: 75,
         },
       });
@@ -74,7 +72,6 @@ describe("memoryNeo4jConfigSchema.parse", () => {
       expect(config.autoCapture).toBe(false);
       expect(config.autoRecall).toBe(false);
       expect(config.coreMemory.enabled).toBe(false);
-      expect(config.coreMemory.maxEntries).toBe(100);
       expect(config.coreMemory.refreshAtContextPercent).toBe(75);
     });
 
@@ -234,14 +231,6 @@ describe("memoryNeo4jConfigSchema.parse", () => {
         embedding: { provider: "ollama" },
       });
       expect(config.coreMemory.enabled).toBe(true);
-    });
-
-    it("should default coreMemory.maxEntries to 50", () => {
-      const config = memoryNeo4jConfigSchema.parse({
-        neo4j: { uri: "bolt://localhost:7687", password: "" },
-        embedding: { provider: "ollama" },
-      });
-      expect(config.coreMemory.maxEntries).toBe(50);
     });
 
     it("should default refreshAtContextPercent to undefined", () => {
@@ -476,6 +465,72 @@ describe("memoryNeo4jConfigSchema.parse", () => {
     });
   });
 
+  describe("sleepCycle config section", () => {
+    it("should default sleepCycle.auto to true", () => {
+      const config = memoryNeo4jConfigSchema.parse({
+        neo4j: { uri: "bolt://localhost:7687", password: "" },
+        embedding: { provider: "ollama" },
+      });
+      expect(config.sleepCycle.auto).toBe(true);
+    });
+
+    it("should default sleepCycle.autoIntervalMs to 6 hours (21600000)", () => {
+      const config = memoryNeo4jConfigSchema.parse({
+        neo4j: { uri: "bolt://localhost:7687", password: "" },
+        embedding: { provider: "ollama" },
+      });
+      expect(config.sleepCycle.autoIntervalMs).toBe(21600000);
+    });
+
+    it("should respect explicit sleepCycle.auto = false", () => {
+      const config = memoryNeo4jConfigSchema.parse({
+        neo4j: { uri: "bolt://localhost:7687", password: "" },
+        embedding: { provider: "ollama" },
+        sleepCycle: { auto: false },
+      });
+      expect(config.sleepCycle.auto).toBe(false);
+    });
+
+    it("should respect explicit sleepCycle.autoIntervalMs", () => {
+      const config = memoryNeo4jConfigSchema.parse({
+        neo4j: { uri: "bolt://localhost:7687", password: "" },
+        embedding: { provider: "ollama" },
+        sleepCycle: { autoIntervalMs: 3600000 },
+      });
+      expect(config.sleepCycle.autoIntervalMs).toBe(3600000);
+    });
+
+    it("should throw when sleepCycle.autoIntervalMs is not positive", () => {
+      expect(() =>
+        memoryNeo4jConfigSchema.parse({
+          neo4j: { uri: "bolt://localhost:7687", password: "" },
+          embedding: { provider: "ollama" },
+          sleepCycle: { autoIntervalMs: 0 },
+        }),
+      ).toThrow("sleepCycle.autoIntervalMs must be positive");
+    });
+
+    it("should throw when sleepCycle.autoIntervalMs is negative", () => {
+      expect(() =>
+        memoryNeo4jConfigSchema.parse({
+          neo4j: { uri: "bolt://localhost:7687", password: "" },
+          embedding: { provider: "ollama" },
+          sleepCycle: { autoIntervalMs: -1000 },
+        }),
+      ).toThrow("sleepCycle.autoIntervalMs must be positive");
+    });
+
+    it("should reject unknown sleepCycle keys", () => {
+      expect(() =>
+        memoryNeo4jConfigSchema.parse({
+          neo4j: { uri: "bolt://localhost:7687", password: "" },
+          embedding: { provider: "ollama" },
+          sleepCycle: { unknownKey: true },
+        }),
+      ).toThrow("unknown keys: unknownKey");
+    });
+  });
+
   describe("extraction config section", () => {
     it("should parse extraction config when provided", () => {
       process.env.EXTRACTION_DUMMY = ""; // avoid env var issues
@@ -621,7 +676,7 @@ describe("resolveExtractionConfig", () => {
     delete process.env.EXTRACTION_MODEL;
     delete process.env.EXTRACTION_BASE_URL;
     const config = resolveExtractionConfig();
-    expect(config.model).toBe("google/gemini-2.0-flash-001");
+    expect(config.model).toBe("anthropic/claude-opus-4-6");
     expect(config.baseUrl).toBe("https://openrouter.ai/api/v1");
   });
 

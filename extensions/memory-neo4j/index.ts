@@ -32,6 +32,7 @@ import { isSemanticDuplicate, rateImportance } from "./extractor.js";
 import { extractUserMessages, extractAssistantMessages } from "./message-utils.js";
 import { Neo4jMemoryClient } from "./neo4j-client.js";
 import { hybridSearch } from "./search.js";
+import { runSleepCycle } from "./sleep-cycle.js";
 
 // ============================================================================
 // Plugin Definition
@@ -211,21 +212,19 @@ const memoryNeo4jPlugin = {
             }
 
             // 3. Store memory immediately (fast path)
-            // User-stored core memories get pinned: importance locked at 1.0,
-            // immune from decay, scoring recalculation, and pruning.
-            const isUserPinnedCore = category === "core";
+            // Core memories get importance locked at 1.0 and are immune from
+            // decay and pruning (filtered by category in the sleep cycle).
             const memoryId = randomUUID();
             await db.storeMemory({
               id: memoryId,
               text,
               embedding: vector,
-              importance: isUserPinnedCore ? 1.0 : Math.min(1, Math.max(0, importance)),
+              importance: category === "core" ? 1.0 : Math.min(1, Math.max(0, importance)),
               category,
               source: "user" as MemorySource,
               extractionStatus: extractionConfig.enabled ? "pending" : "skipped",
               agentId,
               sessionKey,
-              userPinned: isUserPinnedCore,
             });
 
             // 4. Extraction is deferred to sleep cycle (like human memory consolidation)
@@ -379,6 +378,11 @@ const memoryNeo4jPlugin = {
     const sessionLastSeen = new Map<string, number>();
     let lastTtlSweep = Date.now();
 
+    // Auto sleep cycle state
+    let lastSleepCycleAt = 0;
+    let sleepCycleRunning = false;
+    const sleepAbortController = new AbortController();
+
     /** Evict stale entries from session tracking maps older than SESSION_TTL_MS. */
     function pruneStaleSessionEntries(): void {
       const now = Date.now();
@@ -470,8 +474,7 @@ const memoryNeo4jPlugin = {
 
         try {
           const t0 = performance.now();
-          const maxEntries = cfg.coreMemory.maxEntries;
-          const coreMemories = await db.listCoreForInjection(maxEntries, agentId);
+          const coreMemories = await db.listCoreForInjection(agentId);
 
           if (coreMemories.length === 0) {
             return;
@@ -602,14 +605,10 @@ const memoryNeo4jPlugin = {
         try {
           const t0 = performance.now();
           const agentId = ctx.agentId || "default";
-          const maxEntries = cfg.coreMemory.maxEntries;
-
           api.logger.debug?.(
             `memory-neo4j: loading core memories for agent=${agentId} session=${sessionKey ?? "unknown"}`,
           );
-          // All user-pinned core memories are always included (no limit).
-          // Non-pinned core memories fill remaining slots up to maxEntries, ordered by importance.
-          const coreMemories = await db.listCoreForInjection(maxEntries, agentId);
+          const coreMemories = await db.listCoreForInjection(agentId);
           const tQuery = performance.now();
 
           if (coreMemories.length === 0) {
@@ -679,8 +678,8 @@ const memoryNeo4jPlugin = {
     //   regular memory with extractionStatus "pending".
     //
     // Phase 3 — Sleep consolidation (deferred to `openclaw memory neo4j sleep`):
-    //   The sleep cycle handles entity extraction, categorization, Pareto
-    //   scoring, promotion, and decay — mirroring hippocampal replay.
+    //   The sleep cycle handles entity extraction, categorization, and
+    //   decay — mirroring hippocampal replay.
     api.logger.debug?.(
       `memory-neo4j: autoCapture=${cfg.autoCapture}, extraction.enabled=${extractionConfig.enabled}`,
     );
@@ -721,6 +720,36 @@ const memoryNeo4jPlugin = {
           extractionConfig,
           api.logger,
         );
+
+        // Auto sleep cycle: fire-and-forget if interval has elapsed
+        if (
+          cfg.sleepCycle.auto &&
+          !sleepCycleRunning &&
+          Date.now() - lastSleepCycleAt >= cfg.sleepCycle.autoIntervalMs
+        ) {
+          sleepCycleRunning = true;
+          void (async () => {
+            try {
+              api.logger.info("memory-neo4j: [auto-sleep] starting background sleep cycle");
+              const t0 = Date.now();
+              const result = await runSleepCycle(db, embeddings, extractionConfig, api.logger, {
+                abortSignal: sleepAbortController.signal,
+                decayCurves: Object.keys(cfg.decayCurves).length > 0 ? cfg.decayCurves : undefined,
+              });
+              lastSleepCycleAt = Date.now();
+              api.logger.info(
+                `memory-neo4j: [auto-sleep] complete in ${((Date.now() - t0) / 1000).toFixed(1)}s` +
+                  ` — dedup=${result.dedup.memoriesMerged}, extracted=${result.extraction.succeeded},` +
+                  ` decayed=${result.decay.memoriesPruned}, credentials=${result.credentialScan.credentialsFound}` +
+                  (result.aborted ? " (aborted)" : ""),
+              );
+            } catch (err) {
+              api.logger.warn(`memory-neo4j: [auto-sleep] failed: ${String(err)}`);
+            } finally {
+              sleepCycleRunning = false;
+            }
+          })();
+        }
       });
     }
 
@@ -745,6 +774,7 @@ const memoryNeo4jPlugin = {
         }
       },
       stop: async () => {
+        sleepAbortController.abort();
         await db.close();
         api.logger.info("memory-neo4j: service stopped");
       },

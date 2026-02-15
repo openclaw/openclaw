@@ -42,8 +42,6 @@ export type MemoryNode = {
   sessionKey?: string;
   retrievalCount: number;
   lastRetrievedAt?: string;
-  promotedAt?: string;
-  userPinned?: boolean;
 };
 
 export type EntityNode = {
@@ -130,7 +128,6 @@ export type StoreMemoryInput = {
   extractionStatus: ExtractionStatus;
   agentId: string;
   sessionKey?: string;
-  userPinned?: boolean;
 };
 
 export type MergeEntityInput = {

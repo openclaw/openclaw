@@ -52,10 +52,6 @@
       "label": "Core Memory",
       "help": "Enable core memory bootstrap (top memories auto-loaded into context)"
     },
-    "coreMemory.maxEntries": {
-      "label": "Core Memory Max Entries",
-      "help": "Maximum number of core memories to load per session (default: 50)"
-    },
     "coreMemory.refreshAtContextPercent": {
       "label": "Core Memory Refresh %",
       "help": "Re-inject core memories when context usage reaches this percentage (1-100, optional)"
@@ -83,6 +79,14 @@
     "decayCurves": {
       "label": "Decay Curves",
       "help": "Per-category decay curve overrides. Example: {\"fact\": {\"halfLifeDays\": 60}, \"other\": {\"halfLifeDays\": 14}}"
+    },
+    "sleepCycle.auto": {
+      "label": "Auto Sleep Cycle",
+      "help": "Automatically run memory consolidation (dedup, extraction, decay) in the background (default: on)"
+    },
+    "sleepCycle.autoIntervalMs": {
+      "label": "Sleep Cycle Interval (ms)",
+      "help": "Minimum time between automatic sleep cycles (default: 6 hours = 21600000)"
     }
   },
   "configSchema": {
@@ -145,10 +149,6 @@
           "enabled": {
             "type": "boolean"
           },
-          "maxEntries": {
-            "type": "number",
-            "minimum": 1
-          },
           "refreshAtContextPercent": {
             "type": "number",
             "minimum": 1,
@@ -196,6 +196,14 @@
       "autoCaptureSkipPattern": {
         "type": "string",
         "description": "RegExp pattern to skip auto-capture for matching session keys (e.g. voice|realtime)"
+      },
+      "sleepCycle": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "auto": { "type": "boolean" },
+          "autoIntervalMs": { "type": "number", "minimum": 60000 }
+        }
       }
     },
     "required": ["neo4j"]
