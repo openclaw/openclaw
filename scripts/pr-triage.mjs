@@ -2,21 +2,24 @@
 /**
  * PR Triage — AI-powered duplicate detection and categorization.
  *
- * Single Claude Haiku call per PR with cached context of all open PRs
+ * Single Claude call per PR with cached context of all open PRs
  * and recent merge/close decisions. Outputs silent labels only — no
  * public bot comments (political risk: matplotlib/crabby-rathbun Feb 2026).
  *
- * Cost: ~$0.005/call with prompt caching. ~$15-20/month at 50 PRs/day.
+ * Default model: Claude Opus 4.6 (1M context). Override with TRIAGE_MODEL env var.
+ * Cost tracking built-in — logs per-call and cumulative costs.
  */
+
+import { appendFileSync } from "node:fs";
 
 const REPO = process.env.REPO;
 const PR_NUMBER = Number(process.env.PR_NUMBER) || 0;
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 
-if (!ANTHROPIC_API_KEY) {
-  console.error("ANTHROPIC_API_KEY is required");
-  process.exit(1);
+const DRY_RUN = !ANTHROPIC_API_KEY || process.env.DRY_RUN === "1";
+if (DRY_RUN) {
+  console.log("DRY RUN: no ANTHROPIC_API_KEY or DRY_RUN=1 — will skip LLM call and label application");
 }
 if (!GITHUB_TOKEN) {
   console.error("GITHUB_TOKEN is required");
@@ -25,10 +28,18 @@ if (!GITHUB_TOKEN) {
 
 const GITHUB_API = "https://api.github.com";
 const ANTHROPIC_API = "https://api.anthropic.com/v1/messages";
-const MODEL = "claude-haiku-4-5-20251001";
-const MAX_OPEN_PRS = 200;
-const MAX_HISTORY = 50;
-const MAX_DIFF_CHARS = 4000;
+const MODEL = process.env.TRIAGE_MODEL || "claude-opus-4-6";
+const MAX_OPEN_PRS = Number(process.env.MAX_OPEN_PRS) || 500;
+const MAX_HISTORY = Number(process.env.MAX_HISTORY) || 100;
+const MAX_DIFF_CHARS = Number(process.env.MAX_DIFF_CHARS) || 8000;
+
+// Cost tracking (per 1M tokens, as of Feb 2026)
+const PRICING = {
+  "claude-opus-4-6":          { input: 15.00, cache_read: 1.50, output: 75.00 },
+  "claude-sonnet-4-5-20250929": { input: 3.00, cache_read: 0.30, output: 15.00 },
+  "claude-haiku-4-5-20251001":  { input: 1.00, cache_read: 0.10, output: 5.00 },
+};
+let totalCost = 0;
 
 // ---------------------------------------------------------------------------
 // GitHub helpers
@@ -319,6 +330,20 @@ Respond with a single JSON object:
   }
 
   const data = await res.json();
+
+  // Cost tracking
+  const usage = data.usage || {};
+  const prices = PRICING[MODEL] || PRICING["claude-haiku-4-5-20251001"];
+  const inputCost = ((usage.input_tokens || 0) / 1_000_000) * prices.input;
+  const cacheReadCost = ((usage.cache_read_input_tokens || 0) / 1_000_000) * prices.cache_read;
+  const cacheCreateCost = ((usage.cache_creation_input_tokens || 0) / 1_000_000) * prices.input;
+  const outputCost = ((usage.output_tokens || 0) / 1_000_000) * prices.output;
+  const callCost = inputCost + cacheReadCost + cacheCreateCost + outputCost;
+  totalCost += callCost;
+
+  console.log(`Tokens: ${usage.input_tokens || 0} input (${usage.cache_read_input_tokens || 0} cached, ${usage.cache_creation_input_tokens || 0} cache-write), ${usage.output_tokens || 0} output`);
+  console.log(`Cost: $${callCost.toFixed(4)} this call | $${totalCost.toFixed(4)} total`);
+
   const text = data.content?.[0]?.text || "";
 
   // Parse JSON from response (handle potential markdown fences)
@@ -422,12 +447,17 @@ async function applyLabels(prNumber, triage) {
   }
 
   if (labels.length > 0) {
-    await gh(`/repos/${REPO}/issues/${prNumber}/labels`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ labels }),
-    });
-    console.log(`Applied labels to #${prNumber}: ${labels.join(", ")}`);
+    try {
+      await gh(`/repos/${REPO}/issues/${prNumber}/labels`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ labels }),
+      });
+      console.log(`Applied labels to #${prNumber}: ${labels.join(", ")}`);
+    } catch (err) {
+      console.warn(`Failed to apply labels (likely missing write access): ${err.message}`);
+      console.log(`Would apply to #${prNumber}: ${labels.join(", ")}`);
+    }
   }
 }
 
@@ -435,7 +465,7 @@ async function applyLabels(prNumber, triage) {
 // Summary output (GitHub Actions step summary)
 // ---------------------------------------------------------------------------
 
-function writeSummary(prNumber, triage, deterministicHints) {
+function writeSummary(prNumber, triage, deterministicHints, costInfo) {
   if (!triage) return;
 
   const lines = [
@@ -471,12 +501,15 @@ function writeSummary(prNumber, triage, deterministicHints) {
     `- References issue: ${qs.references_issue ? "yes" : "no"}`,
   );
 
+  if (costInfo) {
+    lines.push("", `**Model:** ${costInfo.model} | **Cost:** $${costInfo.totalCost.toFixed(4)}`);
+  }
+
   const summary = lines.join("\n");
   console.log(summary);
 
   // Write to GitHub Actions step summary if available
   if (process.env.GITHUB_STEP_SUMMARY) {
-    const { writeFileSync, appendFileSync } = require("node:fs");
     try {
       appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary + "\n");
     } catch {}
@@ -518,8 +551,26 @@ async function main() {
   }
 
   // 5. Single LLM call with cached context
-  console.log("Calling Claude Haiku for triage...");
-  const triage = await triagePR(targetPR, openPRSummaries, decisions, deterministicHints);
+  let triage;
+  if (DRY_RUN) {
+    console.log("\n=== DRY RUN — LLM call skipped ===");
+    console.log(`System prompt would be ~${openPRSummaries.join("\n").length + decisions.mergedPRs.join("\n").length + decisions.rejectedPRs.join("\n").length} chars (cached)`);
+    console.log(`User prompt would be ~${targetPR.title.length + targetPR.body.length + targetPR.diff.length + targetPR.files.join(", ").length} chars (fresh)`);
+    console.log(`Deterministic hints: ${JSON.stringify(deterministicHints, null, 2)}`);
+    console.log("=== END DRY RUN ===\n");
+    triage = {
+      duplicate_of: deterministicHints.filter((h) => h.sharedRefs.length > 0 || h.jaccard > 0.5).map((h) => h.pr),
+      related_to: deterministicHints.filter((h) => h.sharedRefs.length === 0 && h.jaccard <= 0.5).map((h) => h.pr),
+      category: "unknown",
+      confidence: "dry-run",
+      quality_signals: { focused_scope: true, has_tests: false, appropriate_size: true, references_issue: extractIssueRefs(targetPR.title + " " + targetPR.body).length > 0 },
+      suggested_action: "auto-label-only",
+      reasoning: "DRY RUN — deterministic signals only",
+    };
+  } else {
+    console.log(`Calling ${MODEL} for triage...`);
+    triage = await triagePR(targetPR, openPRSummaries, decisions, deterministicHints);
+  }
 
   if (!triage) {
     console.error("LLM triage failed — no valid response");
@@ -532,11 +583,15 @@ async function main() {
   }
 
   // 6. Apply labels (silent — no public comments)
-  console.log("Applying labels...");
-  await applyLabels(prNumber, triage);
+  if (!DRY_RUN) {
+    console.log("Applying labels...");
+    await applyLabels(prNumber, triage);
+  } else {
+    console.log("DRY RUN — skipping label application");
+  }
 
   // 7. Write summary (visible only in Actions run log)
-  writeSummary(prNumber, triage, deterministicHints);
+  writeSummary(prNumber, triage, deterministicHints, { model: MODEL, totalCost });
 
   console.log("Done.");
 }
