@@ -321,7 +321,31 @@ function isBinaryMediaMime(mime?: string): boolean {
   if (!mime) {
     return false;
   }
-  return mime.startsWith("image/") || mime.startsWith("audio/") || mime.startsWith("video/");
+  if (mime.startsWith("image/") || mime.startsWith("audio/") || mime.startsWith("video/")) {
+    return true;
+  }
+  if (mime === "application/octet-stream") {
+    return true;
+  }
+  if (
+    mime === "application/zip" ||
+    mime === "application/x-zip-compressed" ||
+    mime === "application/gzip" ||
+    mime === "application/x-gzip" ||
+    mime === "application/x-rar-compressed" ||
+    mime === "application/x-7z-compressed"
+  ) {
+    return true;
+  }
+  if (mime.startsWith("application/vnd.")) {
+    // Keep vendor +json/+xml payloads eligible for text extraction while
+    // treating the common binary vendor family (Office, archives, etc.) as binary.
+    if (mime.endsWith("+json") || mime.endsWith("+xml")) {
+      return false;
+    }
+    return true;
+  }
+  return false;
 }
 
 async function extractFileBlocks(params: {
