@@ -1,5 +1,10 @@
 FROM node:22-bookworm
 
+# Map container user/group IDs to the host (for bind-mounted volumes).
+# Defaults match the upstream node image user (uid/gid 1000).
+ARG OPENCLAW_UID=1000
+ARG OPENCLAW_GID=1000
+
 # Install Bun (required for build scripts)
 RUN curl -fsSL https://bun.sh/install | bash
 ENV PATH="/root/.bun/bin:${PATH}"
@@ -31,8 +36,30 @@ RUN pnpm ui:build
 
 ENV NODE_ENV=production
 
-# Allow non-root user to write temp files during runtime/tests.
-RUN chown -R node:node /app
+# Prepend the mounted OpenClaw state bin so persisted tool shims (agent-installed) are discoverable.
+ENV PATH="/home/node/.openclaw/bin:${PATH}"
+
+# Map the built-in `node` user/group to the host UID/GID, then ensure /app is writable.
+RUN set -eu; \
+    case "${OPENCLAW_GID}" in (""|*[!0-9]*|0) ;; (*) \
+      grp="$(getent group "${OPENCLAW_GID}" 2>/dev/null | cut -d: -f1 || true)"; \
+      if [ -n "$grp" ] && [ "$grp" != node ]; then \
+        echo "OPENCLAW_GID ${OPENCLAW_GID} already used by ${grp}; choose a different GID" >&2; exit 1; \
+      fi; \
+      if [ -z "$grp" ]; then \
+        usermod -g root node; \
+        groupmod -g "${OPENCLAW_GID}" node; \
+        usermod -g node node; \
+      fi ;; \
+    esac; \
+    case "${OPENCLAW_UID}" in (""|*[!0-9]*|0) ;; (*) \
+      usr="$(getent passwd "${OPENCLAW_UID}" 2>/dev/null | cut -d: -f1 || true)"; \
+      if [ -n "$usr" ] && [ "$usr" != node ]; then \
+        echo "OPENCLAW_UID ${OPENCLAW_UID} already used by ${usr}; choose a different UID" >&2; exit 1; \
+      fi; \
+      if [ -z "$usr" ] || [ "$usr" = node ]; then usermod -u "${OPENCLAW_UID}" node; fi ;; \
+    esac; \
+    chown -R node:node /app
 
 # Security hardening: Run as non-root user
 # The node:22-bookworm image includes a 'node' user (uid 1000)
