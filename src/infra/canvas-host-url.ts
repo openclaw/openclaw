@@ -62,5 +62,7 @@ export function resolveCanvasHostUrl(params: CanvasHostUrlParams) {
     return undefined;
   }
   const formatted = host.includes(":") ? `[${host}]` : host;
+  // PATCH: omit port on https
+  if (scheme === "https") return `${scheme}://${formatted}`;
   return `${scheme}://${formatted}:${port}`;
 }
