@@ -63,6 +63,12 @@ importers:
         version: 0.6.0
       '@napi-rs/canvas':
         specifier: ^0.1.89
+        version: 0.1.89
+      '@openclaw/shared-constants':
+        specifier: workspace:*
+        version: link:packages/shared-constants
+        version: 0.1.90
+        version: 0.1.91
         version: 0.1.92
       '@sinclair/typebox':
         specifier: 0.34.48
@@ -570,11 +576,20 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  packages/shared-constants:
+    devDependencies:
+      typescript:
+        specifier: ^5.0.0
+        version: 5.9.3
+
   ui:
     dependencies:
       '@noble/ed25519':
         specifier: 3.0.0
         version: 3.0.0
+      '@openclaw/shared-constants':
+        specifier: workspace:*
+        version: link:../packages/shared-constants
       dompurify:
         specifier: ^3.3.1
         version: 3.3.1
