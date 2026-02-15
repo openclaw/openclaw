@@ -2,8 +2,6 @@ name: Docker Release
 
 on:
   push:
-    branches:
-      - main
     tags:
       - "v*"
     paths-ignore:
@@ -60,6 +58,8 @@ jobs:
         with:
           context: .
           platforms: linux/amd64
+          build-args: |
+            OPENCLAW_DOCKER_APT_PACKAGES=sqlite3 jq ffmpeg
           labels: ${{ steps.meta.outputs.labels }}
           tags: ${{ steps.meta.outputs.tags }}
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-cache:amd64
@@ -109,6 +109,8 @@ jobs:
         with:
           context: .
           platforms: linux/arm64
+          build-args: |
+            OPENCLAW_DOCKER_APT_PACKAGES=sqlite3 jq ffmpeg
           labels: ${{ steps.meta.outputs.labels }}
           tags: ${{ steps.meta.outputs.tags }}
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-cache:arm64

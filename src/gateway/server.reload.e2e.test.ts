@@ -305,6 +305,51 @@ describe("gateway hot reload", () => {
 
     await server.close();
   });
+
+  it("applies binding reload and logs change", async () => {
+    const port = await getFreePort();
+    const server = await startGatewayServer(port);
+
+    const onHotReload = hoisted.getOnHotReload();
+    expect(onHotReload).toBeTypeOf("function");
+
+    const nextConfig = {
+      bindings: [
+        { agentId: "agent-a", match: { channel: "telegram" } },
+      ],
+    };
+
+    // Create a spy to capture log messages
+    const logSpy = vi.fn();
+    const originalInfo = console.info;
+    console.info = logSpy;
+
+    await onHotReload?.(
+      {
+        changedPaths: ["bindings"],
+        restartGateway: false,
+        restartReasons: [],
+        hotReasons: ["bindings"],
+        reloadHooks: false,
+        restartGmailWatcher: false,
+        restartBrowserControl: false,
+        restartCron: false,
+        restartHeartbeat: false,
+        reloadBindings: true,
+        restartChannels: new Set(),
+        noopPaths: [],
+      },
+      nextConfig,
+    );
+
+    // Restore original console.info
+    console.info = originalInfo;
+
+    // Verify that binding reload was logged
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("agent bindings reloaded"));
+
+    await server.close();
+  });
 });
 
 describe("gateway agents", () => {
