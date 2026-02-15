@@ -6,6 +6,8 @@ type TelegramAccountStatus = {
   enabled?: unknown;
   configured?: unknown;
   allowUnmentionedGroups?: unknown;
+  nativeVoiceNotes?: unknown;
+  ffmpegInstalled?: unknown;
   audit?: unknown;
 };
 
@@ -31,6 +33,8 @@ function readTelegramAccountStatus(value: ChannelAccountSnapshot): TelegramAccou
     enabled: value.enabled,
     configured: value.configured,
     allowUnmentionedGroups: value.allowUnmentionedGroups,
+    nativeVoiceNotes: value.nativeVoiceNotes,
+    ffmpegInstalled: value.ffmpegInstalled,
     audit: value.audit,
   };
 }
@@ -96,6 +100,16 @@ export function collectTelegramStatusIssues(
         message:
           "Config allows unmentioned group messages (requireMention=false). Telegram Bot API privacy mode will block most group messages unless disabled.",
         fix: "In BotFather run /setprivacy → Disable for this bot (then restart the gateway).",
+      });
+    }
+
+    if (account.nativeVoiceNotes === true && account.ffmpegInstalled === false) {
+      issues.push({
+        channel: "telegram",
+        accountId,
+        kind: "runtime",
+        message: "Telegram nativeVoiceNotes is enabled but ffmpeg is not installed.",
+        fix: "Install ffmpeg on your system to enable native voice notes (with waveforms).",
       });
     }
 

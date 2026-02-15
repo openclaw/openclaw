@@ -25,6 +25,8 @@ import { logVerbose } from "../globals.js";
 import { stripMarkdown } from "../line/markdown-to-line.js";
 import { isVoiceCompatibleAudio } from "../media/audio.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
+import { ensureCompatibleVoiceFormat } from "./compat.js";
+import { summarizeText } from "./summarize.js";
 import {
   edgeTTS,
   elevenLabsTTS,
@@ -37,7 +39,6 @@ import {
   openaiTTS,
   parseTtsDirectives,
   scheduleCleanup,
-  summarizeText,
 } from "./tts-core.js";
 export { OPENAI_TTS_MODELS, OPENAI_TTS_VOICES } from "./tts-core.js";
 
@@ -612,15 +613,23 @@ export async function textToSpeech(params: {
         }
 
         scheduleCleanup(tempDir);
-        const voiceCompatible = isVoiceCompatibleAudio({ fileName: edgeResult.audioPath });
+
+        const { audioPath, isNative } = ensureCompatibleVoiceFormat({
+          audioPath: edgeResult.audioPath,
+          channel: params.channel,
+          channelId,
+          cfg: params.cfg,
+        });
+
+        const voiceCompatible = isVoiceCompatibleAudio({ fileName: audioPath });
 
         return {
           success: true,
-          audioPath: edgeResult.audioPath,
+          audioPath,
           latencyMs: Date.now() - providerStart,
           provider,
           outputFormat: edgeResult.outputFormat,
-          voiceCompatible,
+          voiceCompatible: isNative ? true : voiceCompatible,
         };
       }
 
@@ -670,9 +679,16 @@ export async function textToSpeech(params: {
       const latencyMs = Date.now() - providerStart;
 
       const tempDir = mkdtempSync(path.join(tmpdir(), "tts-"));
-      const audioPath = path.join(tempDir, `voice-${Date.now()}${output.extension}`);
-      writeFileSync(audioPath, audioBuffer);
+      const initialAudioPath = path.join(tempDir, `voice-${Date.now()}${output.extension}`);
+      writeFileSync(initialAudioPath, audioBuffer);
       scheduleCleanup(tempDir);
+
+      const { audioPath, isNative } = ensureCompatibleVoiceFormat({
+        audioPath: initialAudioPath,
+        channel: params.channel,
+        channelId,
+        cfg: params.cfg,
+      });
 
       return {
         success: true,
@@ -680,7 +696,7 @@ export async function textToSpeech(params: {
         latencyMs,
         provider,
         outputFormat: provider === "openai" ? output.openai : output.elevenlabs,
-        voiceCompatible: output.voiceCompatible,
+        voiceCompatible: isNative ? true : output.voiceCompatible,
       };
     } catch (err) {
       lastError = formatTtsProviderError(provider, err);
@@ -904,12 +920,17 @@ export async function maybeApplyTtsToPayload(params: {
       latencyMs: result.latencyMs,
     };
 
-    const channelId = resolveChannelId(params.channel);
-    const shouldVoice = channelId === "telegram" && result.voiceCompatible === true;
+    const { audioPath, isNative } = ensureCompatibleVoiceFormat({
+      audioPath: result.audioPath,
+      channel: params.channel,
+      channelId: resolveChannelId(params.channel),
+      cfg: params.cfg,
+    });
+
     const finalPayload = {
       ...nextPayload,
-      mediaUrl: result.audioPath,
-      audioAsVoice: shouldVoice || params.payload.audioAsVoice,
+      mediaUrl: audioPath,
+      audioAsVoice: isNative || params.payload.audioAsVoice,
     };
     return finalPayload;
   }

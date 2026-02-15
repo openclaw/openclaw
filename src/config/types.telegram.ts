@@ -141,6 +141,11 @@ export type TelegramAccountConfig = {
    * Use `"auto"` to derive `[{identity.name}]` from the routed agent.
    */
   responsePrefix?: string;
+  /**
+   * Enables Telegram-native voice notes (with waveforms) by automatically
+   * transcoding TTS audio to OGG/Opus using FFmpeg.
+   */
+  nativeVoiceNotes?: boolean;
 };
 
 export type TelegramTopicConfig = {

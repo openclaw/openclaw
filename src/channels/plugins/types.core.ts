@@ -132,6 +132,8 @@ export type ChannelAccountSnapshot = {
   webhookUrl?: string;
   baseUrl?: string;
   allowUnmentionedGroups?: boolean;
+  nativeVoiceNotes?: boolean;
+  ffmpegInstalled?: boolean;
   cliPath?: string | null;
   dbPath?: string | null;
   port?: number | null;
