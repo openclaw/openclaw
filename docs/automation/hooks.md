@@ -201,14 +201,37 @@ const myHandler: HookHandler = async (event) => {
 export default myHandler;
 ```
 
+**Example: Logging all incoming messages**
+
+```typescript
+import type { HookHandler } from "../../src/hooks/hooks.js";
+
+const messageLogger: HookHandler = async (event) => {
+  // Only trigger on message:received
+  if (event.type !== "message" || event.action !== "received") {
+    return;
+  }
+
+  console.log(`[message-logger] Message received`);
+  console.log(`  From: ${event.context.from}`);
+  console.log(`  Channel: ${event.context.channelId}`);
+  console.log(`  Content: ${event.context.content}`);
+  console.log(`  Timestamp: ${event.timestamp.toISOString()}`);
+
+  // Your custom logic here (e.g., log to file, send to webhook, etc.)
+};
+
+export default messageLogger;
+```
+
 #### Event Context
 
 Each event includes:
 
 ```typescript
 {
-  type: 'command' | 'session' | 'agent' | 'gateway',
-  action: string,              // e.g., 'new', 'reset', 'stop'
+  type: 'command' | 'session' | 'agent' | 'gateway' | 'message',
+  action: string,              // e.g., 'new', 'reset', 'stop', 'received'
   sessionKey: string,          // Session identifier
   timestamp: Date,             // When the event occurred
   messages: string[],          // Push messages here to send to user
@@ -220,7 +243,19 @@ Each event includes:
     senderId?: string,
     workspaceDir?: string,
     bootstrapFiles?: WorkspaceBootstrapFile[],
-    cfg?: OpenClawConfig
+    cfg?: OpenClawConfig,
+    // message:received specific fields:
+    from?: string,             // Sender identifier
+    to?: string,               // Recipient identifier
+    content?: string,          // Message content
+    channelId?: string,        // Channel ID (e.g., 'telegram', 'discord')
+    conversationId?: string,   // Conversation/chat ID
+    messageId?: string,        // Message ID
+    senderName?: string,       // Sender display name
+    senderUsername?: string,   // Sender username
+    provider?: string,         // Provider name
+    surface?: string,          // Surface name
+    threadId?: string          // Thread ID (for threaded messages)
   }
 }
 ```
@@ -246,6 +281,16 @@ Triggered when the gateway starts:
 
 - **`gateway:startup`**: After channels start and hooks are loaded
 
+### Message Events
+
+Triggered when messages are sent or received:
+
+- **`message:received`**: When a message is received from any channel. Fires early in processing before media understanding. Content may contain raw placeholders like `<media:audio>` for media attachments that haven't been processed yet.
+
+- **`message:transcribed`**: When a message has been fully processed, including audio transcription and link understanding. At this point, `content` includes the full transcript text for audio messages. Use this hook when you need access to transcribed audio content.
+
+- **`message:sent`**: When the agent's reply has been fully dispatched to the channel. Fires after all reply payloads (block streaming, final reply, TTS) have been delivered. Use this for audit logging, analytics, or post-reply workflows.
+
 ### Tool Result Hooks (Plugin API)
 
 These hooks are not event-stream listeners; they let plugins synchronously adjust tool results before OpenClaw persists them.
@@ -259,8 +304,6 @@ Planned event types:
 - **`session:start`**: When a new session begins
 - **`session:end`**: When a session ends
 - **`agent:error`**: When an agent encounters an error
-- **`message:sent`**: When a message is sent
-- **`message:received`**: When a message is received
 
 ## Creating Custom Hooks
 

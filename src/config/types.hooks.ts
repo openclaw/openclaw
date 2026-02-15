@@ -73,7 +73,7 @@ export type HooksGmailConfig = {
 };
 
 export type InternalHookHandlerConfig = {
-  /** Event key to listen for (e.g., 'command:new', 'session:start') */
+  /** Event key to listen for (e.g., 'command:new', 'message:received', 'session:start') */
   event: string;
   /** Path to handler module (workspace-relative) */
   module: string;
