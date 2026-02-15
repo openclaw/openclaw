@@ -21,6 +21,18 @@ final class PeekabooBridgeHostCoordinator {
         return directory.appendingPathComponent(PeekabooBridgeConstants.socketName, isDirectory: false).path
     }
 
+    private static var legacySocketPaths: [String] {
+        let fileManager = FileManager.default
+        let base = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
+        let legacyDirectories = ["clawdbot", "clawdis"]
+        return legacyDirectories.map { name in
+            base.appendingPathComponent(name, isDirectory: true)
+                .appendingPathComponent(PeekabooBridgeConstants.socketName, isDirectory: false)
+                .path
+        }
+    }
+
     func setEnabled(_ enabled: Bool) async {
         if enabled {
             await self.startIfNeeded()
@@ -46,6 +58,8 @@ final class PeekabooBridgeHostCoordinator {
         }
         let allowlistedBundles: Set<String> = []
 
+        self.ensureLegacySocketSymlinks()
+
         let services = OpenClawPeekabooBridgeServices()
         let server = PeekabooBridgeServer(
             services: services,
@@ -65,6 +79,42 @@ final class PeekabooBridgeHostCoordinator {
         await host.start()
         self.logger
             .info("PeekabooBridge host started at \(Self.openclawSocketPath, privacy: .public)")
+    }
+
+    private func ensureLegacySocketSymlinks() {
+        Self.legacySocketPaths.forEach { legacyPath in
+            self.ensureLegacySocketSymlink(at: legacyPath)
+        }
+    }
+
+    private func ensureLegacySocketSymlink(at legacyPath: String) {
+        let fileManager = FileManager.default
+        let legacyDirectory = (legacyPath as NSString).deletingLastPathComponent
+        do {
+            let directoryAttributes: [FileAttributeKey: Any] = [
+                .posixPermissions: 0o700,
+            ]
+            try fileManager.createDirectory(
+                atPath: legacyDirectory,
+                withIntermediateDirectories: true,
+                attributes: directoryAttributes)
+            let linkURL = URL(fileURLWithPath: legacyPath)
+            let linkValues = try? linkURL.resourceValues(forKeys: [.isSymbolicLinkKey])
+            if linkValues?.isSymbolicLink == true {
+                let destination = try FileManager.default.destinationOfSymbolicLink(atPath: legacyPath)
+                let destinationURL = URL(fileURLWithPath: destination, relativeTo: linkURL.deletingLastPathComponent())
+                    .standardizedFileURL
+                if destinationURL.path == URL(fileURLWithPath: Self.openclawSocketPath).standardizedFileURL.path {
+                    return
+                }
+                try fileManager.removeItem(atPath: legacyPath)
+            } else if fileManager.fileExists(atPath: legacyPath) {
+                try fileManager.removeItem(atPath: legacyPath)
+            }
+            try fileManager.createSymbolicLink(atPath: legacyPath, withDestinationPath: Self.openclawSocketPath)
+        } catch {
+            self.logger.debug("Failed to create legacy PeekabooBridge socket symlink: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     private static func currentTeamID() -> String? {
