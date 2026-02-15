@@ -20,6 +20,42 @@ vi.mock("../infra/agent-events.js", () => ({
   emitAgentEvent: vi.fn(),
 }));
 
+function createToolHandlerCtx(params: {
+  runId: string;
+  sessionKey?: string;
+  agentId?: string;
+  onBlockReplyFlush?: unknown;
+}) {
+  return {
+    params: {
+      runId: params.runId,
+      session: { messages: [] },
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      onBlockReplyFlush: params.onBlockReplyFlush,
+    },
+    state: {
+      toolMetaById: new Map<string, string | undefined>(),
+      toolMetas: [] as Array<{ toolName?: string; meta?: string }>,
+      toolSummaryById: new Set<string>(),
+      lastToolError: undefined,
+      pendingMessagingTexts: new Map<string, string>(),
+      pendingMessagingTargets: new Map<string, unknown>(),
+      messagingToolSentTexts: [] as string[],
+      messagingToolSentTextsNormalized: [] as string[],
+      messagingToolSentTargets: [] as unknown[],
+      blockBuffer: "",
+    },
+    log: { debug: vi.fn(), warn: vi.fn() },
+    flushBlockReplyBuffer: vi.fn(),
+    shouldEmitToolResult: () => false,
+    shouldEmitToolOutput: () => false,
+    emitToolSummary: vi.fn(),
+    emitToolOutput: vi.fn(),
+    trimMessagingToolSent: vi.fn(),
+  };
+}
+
 describe("after_tool_call hook wiring", () => {
   beforeEach(() => {
     hookMocks.runner.hasHooks.mockReset();
@@ -36,34 +72,11 @@ describe("after_tool_call hook wiring", () => {
     const { handleToolExecutionEnd, handleToolExecutionStart } =
       await import("../agents/pi-embedded-subscribe.handlers.tools.js");
 
-    const ctx = {
-      params: {
-        runId: "test-run-1",
-        session: { messages: [] },
-        agentId: "main",
-        sessionKey: "test-session",
-        onBlockReplyFlush: undefined,
-      },
-      state: {
-        toolMetaById: new Map<string, string | undefined>(),
-        toolMetas: [] as Array<{ toolName?: string; meta?: string }>,
-        toolSummaryById: new Set<string>(),
-        lastToolError: undefined,
-        pendingMessagingTexts: new Map<string, string>(),
-        pendingMessagingTargets: new Map<string, unknown>(),
-        messagingToolSentTexts: [] as string[],
-        messagingToolSentTextsNormalized: [] as string[],
-        messagingToolSentTargets: [] as unknown[],
-        blockBuffer: "",
-      },
-      log: { debug: vi.fn(), warn: vi.fn() },
-      flushBlockReplyBuffer: vi.fn(),
-      shouldEmitToolResult: () => false,
-      shouldEmitToolOutput: () => false,
-      emitToolSummary: vi.fn(),
-      emitToolOutput: vi.fn(),
-      trimMessagingToolSent: vi.fn(),
-    };
+    const ctx = createToolHandlerCtx({
+      runId: "test-run-1",
+      agentId: "main",
+      sessionKey: "test-session",
+    });
 
     await handleToolExecutionStart(
       ctx as never,
@@ -103,32 +116,7 @@ describe("after_tool_call hook wiring", () => {
     const { handleToolExecutionEnd, handleToolExecutionStart } =
       await import("../agents/pi-embedded-subscribe.handlers.tools.js");
 
-    const ctx = {
-      params: {
-        runId: "test-run-2",
-        session: { messages: [] },
-        onBlockReplyFlush: undefined,
-      },
-      state: {
-        toolMetaById: new Map<string, string | undefined>(),
-        toolMetas: [] as Array<{ toolName?: string; meta?: string }>,
-        toolSummaryById: new Set<string>(),
-        lastToolError: undefined,
-        pendingMessagingTexts: new Map<string, string>(),
-        pendingMessagingTargets: new Map<string, unknown>(),
-        messagingToolSentTexts: [] as string[],
-        messagingToolSentTextsNormalized: [] as string[],
-        messagingToolSentTargets: [] as unknown[],
-        blockBuffer: "",
-      },
-      log: { debug: vi.fn(), warn: vi.fn() },
-      flushBlockReplyBuffer: vi.fn(),
-      shouldEmitToolResult: () => false,
-      shouldEmitToolOutput: () => false,
-      emitToolSummary: vi.fn(),
-      emitToolOutput: vi.fn(),
-      trimMessagingToolSent: vi.fn(),
-    };
+    const ctx = createToolHandlerCtx({ runId: "test-run-2" });
 
     await handleToolExecutionStart(
       ctx as never,
@@ -163,26 +151,7 @@ describe("after_tool_call hook wiring", () => {
     const { handleToolExecutionEnd } =
       await import("../agents/pi-embedded-subscribe.handlers.tools.js");
 
-    const ctx = {
-      params: { runId: "r", session: { messages: [] } },
-      state: {
-        toolMetaById: new Map<string, string | undefined>(),
-        toolMetas: [] as Array<{ toolName?: string; meta?: string }>,
-        toolSummaryById: new Set<string>(),
-        lastToolError: undefined,
-        pendingMessagingTexts: new Map<string, string>(),
-        pendingMessagingTargets: new Map<string, unknown>(),
-        messagingToolSentTexts: [] as string[],
-        messagingToolSentTextsNormalized: [] as string[],
-        messagingToolSentTargets: [] as unknown[],
-      },
-      log: { debug: vi.fn(), warn: vi.fn() },
-      shouldEmitToolResult: () => false,
-      shouldEmitToolOutput: () => false,
-      emitToolSummary: vi.fn(),
-      emitToolOutput: vi.fn(),
-      trimMessagingToolSent: vi.fn(),
-    };
+    const ctx = createToolHandlerCtx({ runId: "r" });
 
     await handleToolExecutionEnd(
       ctx as never,
