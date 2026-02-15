@@ -1,5 +1,6 @@
 import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.js";
 import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
+import { sanitizeHeaders } from "./embeddings.js";
 
 export type OpenAiEmbeddingClient = {
   baseUrl: string;
@@ -87,7 +88,8 @@ export async function resolveOpenAiEmbeddingClient(
 
   const providerConfig = options.config.models?.providers?.openai;
   const baseUrl = remoteBaseUrl || providerConfig?.baseUrl?.trim() || DEFAULT_OPENAI_BASE_URL;
-  const headerOverrides = Object.assign({}, providerConfig?.headers, remote?.headers);
+  // Merge headers while filtering out prototype pollution keys
+  const headerOverrides = sanitizeHeaders(providerConfig?.headers, remote?.headers);
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     Authorization: `Bearer ${apiKey}`,
