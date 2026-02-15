@@ -13,13 +13,16 @@ import { danger, success } from "../globals.js";
 import { getChildLogger, toPinoLikeLogger } from "../logging.js";
 import { ensureDir, resolveUserPath } from "../utils.js";
 import { VERSION } from "../version.js";
+import { bindHistoryCapture } from "../whatsapp-history/live-capture.js";
 import {
   maybeRestoreCredsFromBackup,
   readCredsJsonRaw,
   resolveDefaultWebAuthDir,
   resolveWebCredsBackupPath,
   resolveWebCredsPath,
+  resolveWebStorePath,
 } from "./auth-store.js";
+import { makeInMemoryStore } from "./wa-store.js";
 
 export {
   getWebAuthAgeMs,
@@ -90,7 +93,7 @@ async function safeSaveCreds(
 export async function createWaSocket(
   printQr: boolean,
   verbose: boolean,
-  opts: { authDir?: string; onQr?: (qr: string) => void } = {},
+  opts: { authDir?: string; onQr?: (qr: string) => void; syncFullHistory?: boolean } = {},
 ): Promise<ReturnType<typeof makeWASocket>> {
   const baseLogger = getChildLogger(
     { module: "baileys" },
@@ -104,7 +107,17 @@ export async function createWaSocket(
   const sessionLogger = getChildLogger({ module: "web-session" });
   maybeRestoreCredsFromBackup(authDir);
   const { state, saveCreds } = await useMultiFileAuthState(authDir);
+
+  const store = makeInMemoryStore({ logger });
+  store.readFromFile(resolveWebStorePath(authDir));
+  setInterval(() => {
+    store.writeToFile(resolveWebStorePath(authDir));
+  }, 10_000);
+
   const { version } = await fetchLatestBaileysVersion();
+  sessionLogger.info({ version }, "[WA-DEBUG] Baileys version fetched");
+  const syncFullHistory = opts.syncFullHistory ?? false;
+  sessionLogger.info({ syncFullHistory, authDir }, "[WA-DEBUG] Creating socket");
   const sock = makeWASocket({
     auth: {
       creds: state.creds,
@@ -113,18 +126,40 @@ export async function createWaSocket(
     version,
     logger,
     printQRInTerminal: false,
-    browser: ["openclaw", "cli", VERSION],
-    syncFullHistory: false,
-    markOnlineOnConnect: false,
+    browser: ["OpenClaw", "Chrome", "1.0.0"],
+    syncFullHistory,
+    shouldSyncHistoryMessage: () => true,
+    markOnlineOnConnect: true,
   });
+  sessionLogger.info("[WA-DEBUG] Socket created, binding store");
 
-  sock.ev.on("creds.update", () => enqueueSaveCreds(authDir, saveCreds, sessionLogger));
+  store.bind(sock.ev);
+
+  // Bind SQLite history capture for persistent, searchable message storage
+  bindHistoryCapture(sock.ev);
+
+  sock.ev.on("creds.update", () => {
+    sessionLogger.info("[WA-DEBUG] creds.update event received");
+    enqueueSaveCreds(authDir, saveCreds, sessionLogger);
+  });
   sock.ev.on(
     "connection.update",
     (update: Partial<import("@whiskeysockets/baileys").ConnectionState>) => {
       try {
-        const { connection, lastDisconnect, qr } = update;
+        const {
+          connection,
+          lastDisconnect,
+          qr,
+          receivedPendingNotifications,
+          isOnline,
+          isNewLogin,
+        } = update;
+        sessionLogger.info(
+          { connection, hasQr: !!qr, isOnline, isNewLogin, receivedPendingNotifications },
+          "[WA-DEBUG] connection.update event",
+        );
         if (qr) {
+          sessionLogger.info("[WA-DEBUG] QR code received from WhatsApp");
           opts.onQr?.(qr);
           if (printQr) {
             console.log("Scan this QR in WhatsApp (Linked Devices):");
@@ -133,6 +168,8 @@ export async function createWaSocket(
         }
         if (connection === "close") {
           const status = getStatusCode(lastDisconnect?.error);
+          const errorMsg = lastDisconnect?.error ? String(lastDisconnect.error) : "unknown";
+          sessionLogger.warn({ status, errorMsg }, "[WA-DEBUG] Connection closed");
           if (status === DisconnectReason.loggedOut) {
             console.error(
               danger(
@@ -141,8 +178,14 @@ export async function createWaSocket(
             );
           }
         }
-        if (connection === "open" && verbose) {
-          console.log(success("WhatsApp Web connected."));
+        if (connection === "connecting") {
+          sessionLogger.info("[WA-DEBUG] Connection state: connecting...");
+        }
+        if (connection === "open") {
+          sessionLogger.info("[WA-DEBUG] Connection state: OPEN - successfully connected!");
+          if (verbose) {
+            console.log(success("WhatsApp Web connected."));
+          }
         }
       } catch (err) {
         sessionLogger.error({ error: String(err) }, "connection.update handler error");
@@ -186,6 +229,8 @@ export async function waitForWaConnection(sock: ReturnType<typeof makeWASocket>)
 export function getStatusCode(err: unknown) {
   return (
     (err as { output?: { statusCode?: number } })?.output?.statusCode ??
+    // Baileys wraps disconnect errors: lastDisconnect.error.output.statusCode
+    (err as { error?: { output?: { statusCode?: number } } })?.error?.output?.statusCode ??
     (err as { status?: number })?.status
   );
 }

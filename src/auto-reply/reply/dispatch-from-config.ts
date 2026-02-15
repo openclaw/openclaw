@@ -2,6 +2,47 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
+
+/**
+ * Resolve the triggerPrefix for a channel.
+ * Returns undefined if no prefix is configured.
+ */
+function resolveTriggerPrefix(cfg: OpenClawConfig, channel: string): string | undefined {
+  // Check channel-specific config first, then defaults
+  const channelConfig = (cfg.channels as Record<string, { triggerPrefix?: string } | undefined>)?.[
+    channel
+  ];
+  return channelConfig?.triggerPrefix ?? cfg.channels?.defaults?.triggerPrefix;
+}
+
+/**
+ * Check if message passes triggerPrefix filter.
+ * Returns { pass: true, strippedBody } if prefix matches (or no prefix configured).
+ * Returns { pass: false } if prefix required but not found.
+ */
+function checkTriggerPrefix(
+  body: string,
+  prefix: string | undefined,
+): { pass: true; strippedBody: string } | { pass: false } {
+  if (!prefix) {
+    return { pass: true, strippedBody: body };
+  }
+  const trimmed = body.trim();
+  const prefixLower = prefix.toLowerCase();
+  const bodyLower = trimmed.toLowerCase();
+
+  // Check if body starts with prefix (case-insensitive)
+  if (!bodyLower.startsWith(prefixLower)) {
+    return { pass: false };
+  }
+
+  // Strip the prefix and any leading whitespace/punctuation after it
+  let stripped = trimmed.slice(prefix.length);
+  // Remove common separators (comma, colon, whitespace) after prefix
+  stripped = stripped.replace(/^[,:\s]+/, "");
+
+  return { pass: true, strippedBody: stripped || trimmed };
+}
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { loadSessionStore, resolveStorePath } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
@@ -146,6 +187,44 @@ export async function dispatchReplyFromConfig(params: {
   }
 
   const inboundAudio = isInboundAudioContext(ctx);
+
+  // Check triggerPrefix filter (e.g., "Jarvis" prefix requirement)
+  // For audio messages: transcribe first, then check prefix against transcript.
+  const triggerPrefix = resolveTriggerPrefix(cfg, channel);
+  if (triggerPrefix) {
+    let messageBody = ctx.BodyForCommands ?? ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "";
+
+    // Audio preflight: transcribe voice note before prefix check
+    if (inboundAudio && messageBody.replace(/\s/g, "").match(/^<media:audio/i)) {
+      try {
+        const { transcribeFirstAudio } = await import("../../media-understanding/audio-preflight.js");
+        const transcript = await transcribeFirstAudio({ ctx, cfg });
+        if (transcript) {
+          logVerbose(`Audio preflight transcript (${transcript.length} chars): ${transcript.substring(0, 100)}`);
+          // Use transcript for prefix check and update context
+          messageBody = transcript;
+          ctx.Body = transcript;
+          ctx.BodyForAgent = transcript;
+          ctx.RawBody = transcript;
+          ctx.CommandBody = transcript;
+          ctx.BodyForCommands = transcript;
+        } else {
+          logVerbose("Audio preflight: no transcript returned, skipping triggerPrefix check for audio");
+          messageBody = ""; // will fail prefix check below
+        }
+      } catch (err) {
+        logVerbose(`Audio preflight transcription failed: ${String(err)}`);
+        messageBody = ""; // fail prefix check on error
+      }
+    }
+
+    const prefixCheck = checkTriggerPrefix(messageBody, triggerPrefix);
+    if (!prefixCheck.pass) {
+      logVerbose(`Skipped message (triggerPrefix "${triggerPrefix}" not found in: ${messageBody.substring(0, 80)})`);
+      recordProcessed("skipped", { reason: `triggerPrefix:${triggerPrefix}` });
+      return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
+    }
+  }
   const sessionTtsAuto = resolveSessionTtsAuto(ctx, cfg);
   const hookRunner = getGlobalHookRunner();
   if (hookRunner?.hasHooks("message_received")) {

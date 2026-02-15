@@ -55,7 +55,13 @@ export async function loadProviderUsageSummary(
       (async (): Promise<ProviderUsageSnapshot> => {
         switch (auth.provider) {
           case "anthropic":
-            return await fetchClaudeUsage(auth.token, timeoutMs, fetchFn);
+            // Skip external Claude API fetch - use internal token tracking instead
+            // The external API requires OAuth scope (user:profile) we don't have
+            return {
+              provider: "anthropic",
+              displayName: PROVIDER_LABELS.anthropic,
+              windows: [],
+            };
           case "github-copilot":
             return await fetchCopilotUsage(auth.token, timeoutMs, fetchFn);
           case "google-antigravity":

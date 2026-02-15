@@ -40,4 +40,6 @@ export type WebInboundMessage = {
   mediaFileName?: string;
   mediaUrl?: string;
   wasMentioned?: boolean;
+  /** True when this message was recovered from offline catch-up (append), not real-time. */
+  isOfflineRecovery?: boolean;
 };

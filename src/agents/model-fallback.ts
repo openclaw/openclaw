@@ -299,6 +299,21 @@ export async function runWithModelFallback<T>(params: {
         status: described.status,
         code: described.code,
       });
+
+      // Log failover attempt
+      const nextCandidate = candidates[i + 1];
+      if (nextCandidate) {
+        console.warn(
+          `[model-fallback] ${candidate.provider}/${candidate.model} failed (${described.reason ?? "error"}), ` +
+            `trying ${nextCandidate.provider}/${nextCandidate.model}...`,
+        );
+      } else {
+        console.warn(
+          `[model-fallback] ${candidate.provider}/${candidate.model} failed (${described.reason ?? "error"}), ` +
+            `no more fallbacks available`,
+        );
+      }
+
       await params.onError?.({
         provider: candidate.provider,
         model: candidate.model,

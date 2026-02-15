@@ -21,6 +21,7 @@ import {
 } from "./extract.js";
 import { downloadInboundMedia } from "./media.js";
 import { createWebSendApi } from "./send-api.js";
+import { wasSentByBot, forgetSentMessageId } from "./sent-ids.js";
 
 export async function monitorWebInbox(options: {
   verbose: boolean;
@@ -34,11 +35,27 @@ export async function monitorWebInbox(options: {
   debounceMs?: number;
   /** Optional debounce gating predicate. */
   shouldDebounce?: (msg: WebInboundMessage) => boolean;
+  /** Request full history sync from WhatsApp (OPT-IN, default false). */
+  syncFullHistory?: boolean;
+  /** Max age (ms) for recovering messages received while offline. Append-type messages
+   *  newer than this window are processed on reconnect instead of being discarded.
+   *  Default: 6 hours. Set to 0 to disable offline recovery. */
+  offlineRecoveryMs?: number;
+  /** Callback for history sync events. */
+  onHistorySync?: (data: {
+    chats: number;
+    contacts: number;
+    messages: number;
+    isLatest?: boolean;
+    progress?: number | null;
+    syncType?: number | null;
+  }) => void;
 }) {
   const inboundLogger = getChildLogger({ module: "web-inbound" });
   const inboundConsoleLog = createSubsystemLogger("gateway/channels/whatsapp").child("inbound");
   const sock = await createWaSocket(false, options.verbose, {
     authDir: options.authDir,
+    syncFullHistory: options.syncFullHistory,
   });
   await waitForWaConnection(sock);
   const connectedAtMs = Date.now();
@@ -156,6 +173,13 @@ export async function monitorWebInbox(options: {
       return;
     }
     for (const msg of upsert.messages ?? []) {
+      // DEBUG: Log every message received from Baileys
+      const debugRemoteJid = msg.key?.remoteJid ?? "unknown";
+      const debugFromMe = msg.key?.fromMe ?? false;
+      inboundLogger.info(
+        { remoteJid: debugRemoteJid, fromMe: debugFromMe, type: upsert.type },
+        "DEBUG: Baileys message received",
+      );
       recordChannelActivity({
         channel: "whatsapp",
         accountId: options.accountId,
@@ -172,6 +196,11 @@ export async function monitorWebInbox(options: {
 
       const group = isJidGroup(remoteJid) === true;
       if (id) {
+        // Skip messages we sent ourselves (echo prevention for media/voice notes)
+        if (wasSentByBot(id)) {
+          forgetSentMessageId(id);
+          continue;
+        }
         const dedupeKey = `${options.accountId}:${remoteJid}:${id}`;
         if (isRecentInboundMessage(dedupeKey)) {
           continue;
@@ -182,11 +211,14 @@ export async function monitorWebInbox(options: {
       if (!from) {
         continue;
       }
+      // Fix: When fromMe is true, the sender is US (selfE164), not the chat's remoteJid
       const senderE164 = group
         ? participantJid
           ? await resolveInboundJid(participantJid)
           : null
-        : from;
+        : msg.key?.fromMe
+          ? selfE164
+          : from;
 
       let groupSubject: string | undefined;
       let groupParticipants: string[] | undefined;
@@ -198,6 +230,9 @@ export async function monitorWebInbox(options: {
       const messageTimestampMs = msg.messageTimestamp
         ? Number(msg.messageTimestamp) * 1000
         : undefined;
+
+      // Extract message body early for access control (triggerPrefix check on outbound DMs).
+      const earlyBody = extractText(msg.message ?? undefined) ?? "";
 
       const access = await checkInboundAccessControl({
         accountId: options.accountId,
@@ -211,6 +246,7 @@ export async function monitorWebInbox(options: {
         connectedAtMs,
         sock: { sendMessage: (jid, content) => sock.sendMessage(jid, content) },
         remoteJid,
+        messageBody: earlyBody,
       });
       if (!access.allowed) {
         continue;
@@ -232,9 +268,24 @@ export async function monitorWebInbox(options: {
         logVerbose(`Self-chat mode: skipping read receipt for ${id}`);
       }
 
-      // If this is history/offline catch-up, mark read above but skip auto-reply.
+      // Offline message recovery: "append" messages are history/catch-up delivered on
+      // reconnect. Instead of discarding them all, recover messages that arrived while
+      // the gateway was down (within the configured recovery window).
       if (upsert.type === "append") {
-        continue;
+        const DEFAULT_RECOVERY_MS = 6 * 60 * 60 * 1000; // 6 hours
+        const recoveryMs = options.offlineRecoveryMs ?? DEFAULT_RECOVERY_MS;
+        if (recoveryMs <= 0) {
+          continue; // recovery disabled
+        }
+        const ageMs = messageTimestampMs != null ? Date.now() - messageTimestampMs : Infinity;
+        if (ageMs > recoveryMs) {
+          continue; // too old, skip
+        }
+        const ageMin = Math.round(ageMs / 60_000);
+        inboundLogger.info(
+          { from, messageTimestampMs, ageMinutes: ageMin },
+          "Recovering offline message (append)",
+        );
       }
 
       const location = extractLocationData(msg.message ?? undefined);
@@ -278,11 +329,20 @@ export async function monitorWebInbox(options: {
       }
 
       const chatJid = remoteJid;
+      let presenceSubscribed = false;
       const sendComposing = async () => {
         try {
+          // WhatsApp requires presence subscription before composing works in groups
+          if (!presenceSubscribed && chatJid.endsWith("@g.us")) {
+            await sock.presenceSubscribe(chatJid);
+            presenceSubscribed = true;
+          }
+          // Ensure bot appears "available" before composing — WhatsApp may
+          // not relay typing indicators from devices that appear offline.
+          await sock.sendPresenceUpdate("available");
           await sock.sendPresenceUpdate("composing", chatJid);
         } catch (err) {
-          logVerbose(`Presence update failed: ${String(err)}`);
+          inboundLogger.warn({ chatJid, error: String(err) }, "[TYPING] Presence update failed");
         }
       };
       const reply = async (text: string) => {
@@ -330,6 +390,7 @@ export async function monitorWebInbox(options: {
         mediaPath,
         mediaType,
         mediaFileName,
+        isOfflineRecovery: upsert.type === "append",
       };
       try {
         const task = Promise.resolve(debouncer.enqueue(inboundMessage));
@@ -344,6 +405,50 @@ export async function monitorWebInbox(options: {
     }
   };
   sock.ev.on("messages.upsert", handleMessagesUpsert);
+
+  // History sync handler (only active when syncFullHistory is enabled)
+  if (options.syncFullHistory) {
+    const handleHistorySet = (data: {
+      chats: Array<unknown>;
+      contacts: Array<unknown>;
+      messages: Array<unknown>;
+      isLatest?: boolean;
+      progress?: number | null;
+      syncType?: number | null;
+    }) => {
+      const chatCount = data.chats?.length ?? 0;
+      const contactCount = data.contacts?.length ?? 0;
+      const messageCount = data.messages?.length ?? 0;
+
+      inboundLogger.info(
+        {
+          chats: chatCount,
+          contacts: contactCount,
+          messages: messageCount,
+          isLatest: data.isLatest,
+          progress: data.progress,
+          syncType: data.syncType,
+        },
+        "history sync received",
+      );
+      inboundConsoleLog.info(
+        `📜 History sync: ${messageCount} messages, ${chatCount} chats, ${contactCount} contacts` +
+          (data.progress != null ? ` (${Math.round(data.progress * 100)}%)` : "") +
+          (data.isLatest ? " [latest]" : ""),
+      );
+
+      // Call the optional callback
+      options.onHistorySync?.({
+        chats: chatCount,
+        contacts: contactCount,
+        messages: messageCount,
+        isLatest: data.isLatest,
+        progress: data.progress,
+        syncType: data.syncType,
+      });
+    };
+    sock.ev.on("messaging-history.set", handleHistorySet);
+  }
 
   const handleConnectionUpdate = (
     update: Partial<import("@whiskeysockets/baileys").ConnectionState>,
@@ -366,8 +471,37 @@ export async function monitorWebInbox(options: {
 
   const sendApi = createWebSendApi({
     sock: {
-      sendMessage: (jid: string, content: AnyMessageContent) => sock.sendMessage(jid, content),
+      sendMessage: (jid: string, content: AnyMessageContent, opts?: unknown) =>
+        sock.sendMessage(jid, content, opts as Parameters<typeof sock.sendMessage>[2]),
       sendPresenceUpdate: (presence, jid?: string) => sock.sendPresenceUpdate(presence, jid),
+      presenceSubscribe: (jid: string) => sock.presenceSubscribe(jid),
+      groupCreate: (subject: string, participants: string[]) =>
+        sock.groupCreate(subject, participants),
+      groupUpdateSubject: (jid: string, subject: string) => sock.groupUpdateSubject(jid, subject),
+      groupUpdateDescription: (jid: string, description: string) =>
+        sock.groupUpdateDescription(jid, description),
+      updateProfilePicture: (jid: string, img: Buffer) => sock.updateProfilePicture(jid, img),
+      groupParticipantsUpdate: (
+        jid: string,
+        participants: string[],
+        action: "add" | "remove" | "promote" | "demote",
+      ) => sock.groupParticipantsUpdate(jid, participants, action),
+      groupLeave: (jid: string) => sock.groupLeave(jid),
+      groupInviteCode: (jid: string) => sock.groupInviteCode(jid),
+      groupRevokeInvite: (jid: string) => sock.groupRevokeInvite(jid),
+      groupMetadata: (jid: string) => sock.groupMetadata(jid),
+      fetchMessageHistory: (count: number, oldestMsgKey: unknown, oldestMsgTimestamp: number) =>
+        (
+          sock as unknown as {
+            fetchMessageHistory: (count: number, key: unknown, ts: number) => Promise<string>;
+          }
+        ).fetchMessageHistory(count, oldestMsgKey, oldestMsgTimestamp),
+      requestPlaceholderResend: (messageKey: unknown) =>
+        (
+          sock as unknown as {
+            requestPlaceholderResend: (key: unknown) => Promise<string | undefined>;
+          }
+        ).requestPlaceholderResend(messageKey),
     },
     defaultAccountId: options.accountId,
   });

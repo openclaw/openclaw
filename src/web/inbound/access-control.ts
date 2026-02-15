@@ -32,6 +32,8 @@ export async function checkInboundAccessControl(params: {
     sendMessage: (jid: string, content: { text: string }) => Promise<unknown>;
   };
   remoteJid: string;
+  /** Message body - used to check triggerPrefix for outbound DM allowance */
+  messageBody?: string;
 }): Promise<InboundAccessControlResult> {
   const cfg = loadConfig();
   const account = resolveWhatsAppAccount({
@@ -118,13 +120,36 @@ export async function checkInboundAccessControl(params: {
   // DM access control (secure defaults): "pairing" (default) / "allowlist" / "open" / "disabled".
   if (!params.group) {
     if (params.isFromMe && !isSamePhone) {
-      logVerbose("Skipping outbound DM (fromMe); no pairing reply needed.");
-      return {
-        allowed: false,
-        shouldMarkRead: false,
-        isSelfChat,
-        resolvedAccountId: account.accountId,
-      };
+      // Allow outbound DMs if they match the triggerPrefix (e.g., "Jarvis hello" in any DM).
+      // This lets the owner invoke the bot from any DM conversation.
+      const triggerPrefix =
+        cfg.channels?.whatsapp?.triggerPrefix ?? cfg.channels?.defaults?.triggerPrefix;
+
+      // If no triggerPrefix configured, skip all outbound DMs (original behavior).
+      if (!triggerPrefix) {
+        logVerbose("Skipping outbound DM (fromMe); no triggerPrefix configured.");
+        return {
+          allowed: false,
+          shouldMarkRead: false,
+          isSelfChat,
+          resolvedAccountId: account.accountId,
+        };
+      }
+
+      // Check if message matches the configured triggerPrefix.
+      const bodyTrimmed = (params.messageBody ?? "").trim().toLowerCase();
+      const prefixMatches = bodyTrimmed.startsWith(triggerPrefix.toLowerCase());
+      if (!prefixMatches) {
+        logVerbose(`Skipping outbound DM (fromMe); triggerPrefix "${triggerPrefix}" not matched.`);
+        return {
+          allowed: false,
+          shouldMarkRead: false,
+          isSelfChat,
+          resolvedAccountId: account.accountId,
+        };
+      }
+      // Prefix matches - allow the outbound DM to be processed.
+      logVerbose(`Allowing outbound DM (fromMe) - triggerPrefix "${triggerPrefix}" matched.`);
     }
     if (dmPolicy === "disabled") {
       logVerbose("Blocked dm (dmPolicy: disabled)");

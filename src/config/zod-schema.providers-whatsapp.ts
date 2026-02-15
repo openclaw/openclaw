@@ -43,6 +43,7 @@ const WhatsAppSharedSchema = z.object({
   allowFrom: z.array(z.string()).optional(),
   groupAllowFrom: z.array(z.string()).optional(),
   groupPolicy: GroupPolicySchema.optional().default("allowlist"),
+  triggerPrefix: z.string().optional(),
   historyLimit: z.number().int().min(0).optional(),
   dmHistoryLimit: z.number().int().min(0).optional(),
   dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
@@ -84,6 +85,7 @@ export const WhatsAppAccountSchema = WhatsAppSharedSchema.extend({
   /** Override auth directory for this WhatsApp account (Baileys multi-file auth state). */
   authDir: z.string().optional(),
   mediaMaxMb: z.number().int().positive().optional(),
+  syncFullHistory: z.boolean().optional().default(false),
 })
   .strict()
   .superRefine((value, ctx) => {
@@ -106,6 +108,7 @@ export const WhatsAppConfigSchema = WhatsAppSharedSchema.extend({
     })
     .strict()
     .optional(),
+  syncFullHistory: z.boolean().optional().default(false),
 })
   .strict()
   .superRefine((value, ctx) => {

@@ -21,6 +21,7 @@ function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
     showThinking: false,
     loading: false,
     sending: false,
+    runId: null,
     canAbort: false,
     compactionStatus: null,
     messages: [],

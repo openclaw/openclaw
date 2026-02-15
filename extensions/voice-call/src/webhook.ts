@@ -183,8 +183,25 @@ export class VoiceCallWebhookServer {
           const url = new URL(request.url || "/", `http://${request.headers.host}`);
 
           if (url.pathname === streamPath) {
+            // Validate stream token if configured
+            const expectedToken = this.config.streaming?.streamToken;
+            if (expectedToken) {
+              const providedToken = url.searchParams.get("token");
+              if (providedToken !== expectedToken) {
+                console.warn("[voice-call] WebSocket upgrade rejected: invalid or missing token");
+                socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+                socket.destroy();
+                return;
+              }
+            }
+
             console.log("[voice-call] WebSocket upgrade for media stream");
-            this.mediaStreamHandler?.handleUpgrade(request, socket, head);
+            this.mediaStreamHandler?.handleUpgrade(
+              request,
+              socket,
+              head,
+              this.config.streaming?.expectedAccountSid,
+            );
           } else {
             socket.destroy();
           }

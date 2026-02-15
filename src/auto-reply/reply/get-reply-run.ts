@@ -49,7 +49,10 @@ import { resolveTypingMode } from "./typing-mode.js";
 import { appendUntrustedContext } from "./untrusted-context.js";
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
-type ExecOverrides = Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
+type ExecOverrides = Pick<
+  ExecToolDefaults,
+  "host" | "security" | "ask" | "node" | "maxSecurityLevel"
+>;
 
 type RunPreparedReplyParams = {
   ctx: MsgContext;

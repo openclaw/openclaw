@@ -94,6 +94,31 @@ export function readStringOrNumberParam(
   return undefined;
 }
 
+export function readBooleanParam(
+  params: Record<string, unknown>,
+  key: string,
+  options: { required?: boolean; label?: string } = {},
+): boolean | undefined {
+  const { required = false, label = key } = options;
+  const raw = params[key];
+  if (typeof raw === "boolean") {
+    return raw;
+  }
+  if (typeof raw === "string") {
+    const trimmed = raw.trim().toLowerCase();
+    if (trimmed === "true" || trimmed === "1" || trimmed === "yes") {
+      return true;
+    }
+    if (trimmed === "false" || trimmed === "0" || trimmed === "no") {
+      return false;
+    }
+  }
+  if (required) {
+    throw new Error(`${label} required`);
+  }
+  return undefined;
+}
+
 export function readNumberParam(
   params: Record<string, unknown>,
   key: string,

@@ -564,3 +564,105 @@ export type LogEntry = {
   message?: string | null;
   meta?: Record<string, unknown> | null;
 };
+
+// Provider usage types
+export type UsageWindow = {
+  label: string;
+  usedPercent: number;
+  resetAt?: number;
+};
+
+export type ProviderUsageSnapshot = {
+  provider: string;
+  displayName: string;
+  windows: UsageWindow[];
+  plan?: string;
+  error?: string;
+};
+
+export type TokenUsageSummary = {
+  provider: string;
+  displayName: string;
+  session: {
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    requestCount: number;
+    estimatedCostUSD?: number;
+  };
+  today: {
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    requestCount: number;
+    estimatedCostUSD?: number;
+  };
+  thisMonth?: {
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    requestCount: number;
+    estimatedCostUSD: number;
+    budgetPercent: number;
+    budgetUSD: number;
+  };
+  fiveHour: {
+    outputTokens: number;
+    requestCount: number;
+    estimatedPercent?: number;
+    estimatedLimit?: number;
+  };
+  rollingMinute?: {
+    inputTokens: number;
+    outputTokens: number;
+    requestCount: number;
+  };
+  estimated: {
+    tier: string;
+    fiveHourLimit: number;
+    dailyLimit: number;
+    fiveHourPercent: number;
+    dailyPercent: number;
+    fiveHourLabel?: string;
+    dailyLabel?: string;
+  };
+};
+
+export type ManusUsageSummary = {
+  tasksToday: number;
+  creditsToday: number;
+  tasksTotal: number;
+  creditsTotal: number;
+  creditsThisMonth: number;
+  lastTaskAt?: number;
+  // Budget awareness
+  monthlyBudget: number;
+  monthlyBudgetPercent: number;
+  status: "healthy" | "caution" | "warning" | "critical";
+  alerts: string[];
+};
+
+export type BudgetStatus = "healthy" | "caution" | "warning" | "critical";
+export type ThinkingRecommendation = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+
+export type BudgetAwarenessContext = {
+  status: BudgetStatus;
+  monthlyBudgetPercent: number;
+  dailyLimitPercent: number;
+  fiveHourLimitPercent: number;
+  estimatedCostToday: number;
+  estimatedCostMonth: number;
+  recommendedThinking: ThinkingRecommendation;
+  alerts: string[];
+  shouldPreferCheaperModel: boolean;
+  budgetRemaining: number;
+  contextLine: string;
+};
+
+export type UsageSummary = {
+  updatedAt: number;
+  providers: ProviderUsageSnapshot[];
+  tokenUsage?: TokenUsageSummary[];
+  manusUsage?: ManusUsageSummary;
+  budgetAwareness?: BudgetAwarenessContext;
+};

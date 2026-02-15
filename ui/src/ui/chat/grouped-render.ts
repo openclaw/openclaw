@@ -12,6 +12,7 @@ import {
 } from "./message-extract.ts";
 import { isToolResultMessage, normalizeRoleForGrouping } from "./message-normalizer.ts";
 import { extractToolCards, renderToolCardSidebar } from "./tool-cards.ts";
+import { renderCollapsibleSystem } from "./tool-compact.ts"; // fork: collapsible system msgs
 
 type ImageBlock = {
   url: string;
@@ -247,17 +248,24 @@ function renderGroupedMessage(
     "chat-bubble",
     canCopyMarkdown ? "has-copy" : "",
     opts.isStreaming ? "streaming" : "",
+    markdown ? "chat-bubble--text" : "", // fork: text bubbles get visible styling
     "fade-in",
   ]
     .filter(Boolean)
     .join(" ");
 
-  if (!markdown && hasToolCards && isToolResult) {
+  if (hasToolCards && isToolResult) {
+    // fork: compact rows handle output via sidebar click — suppress inline text
     return html`${toolCards.map((card) => renderToolCardSidebar(card, onOpenSidebar))}`;
   }
 
   if (!markdown && !hasToolCards && !hasImages) {
     return nothing;
+  }
+
+  // fork: collapsible system messages (detected by text prefix, since they may have role=user)
+  if (markdown && (role === "system" || markdown.trimStart().startsWith("System:"))) {
+    return html`<div class="chat-bubble">${renderCollapsibleSystem(markdown)}</div>`;
   }
 
   return html`

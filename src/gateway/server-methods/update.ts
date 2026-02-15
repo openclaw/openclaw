@@ -17,6 +17,18 @@ import {
 } from "../protocol/index.js";
 
 export const updateHandlers: GatewayRequestHandlers = {
+  restart: ({ params, respond }) => {
+    const delayMsRaw = (params as { delayMs?: unknown }).delayMs;
+    const delayMs =
+      typeof delayMsRaw === "number" && Number.isFinite(delayMsRaw)
+        ? Math.max(0, Math.floor(delayMsRaw))
+        : 500;
+    const restart = scheduleGatewaySigusr1Restart({
+      delayMs,
+      reason: "UI restart request",
+    });
+    respond(true, { ok: true, restart }, undefined);
+  },
   "update.run": async ({ params, respond }) => {
     if (!validateUpdateRunParams(params)) {
       respond(

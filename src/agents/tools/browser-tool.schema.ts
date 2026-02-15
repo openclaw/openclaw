@@ -32,6 +32,7 @@ const BROWSER_TOOL_ACTIONS = [
   "upload",
   "dialog",
   "act",
+  "cookies",
 ] as const;
 
 const BROWSER_TARGETS = ["sandbox", "host", "node"] as const;
@@ -109,4 +110,5 @@ export const BrowserToolSchema = Type.Object({
   accept: Type.Optional(Type.Boolean()),
   promptText: Type.Optional(Type.String()),
   request: Type.Optional(BrowserActSchema),
+  domain: Type.Optional(Type.String()),
 });

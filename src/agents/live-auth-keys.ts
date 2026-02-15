@@ -56,6 +56,10 @@ export function collectAnthropicApiKeys(): string[] {
     add(value);
   }
 
+  if (seen.size === 0 && process.env.OPENCLAW_SECURE_MODE === "1") {
+    return ["{{ANTHROPIC_API_KEY}}"];
+  }
+
   return Array.from(seen);
 }
 

@@ -24,6 +24,8 @@ import {
   discoverAllSessions,
   type DiscoveredSession,
 } from "../../infra/session-cost-usage.js";
+// token-usage-tracker removed (2026-02-10) — was applying API pricing to Max subscription.
+// Real usage tracking: Anthropic OAuth API via budget-panel plugin.
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { buildUsageAggregateTail } from "../../shared/usage-aggregates.js";
 import {
@@ -37,6 +39,8 @@ import {
   loadCombinedSessionStoreForGateway,
   loadSessionEntry,
 } from "../session-utils.js";
+
+// Token tracker init removed (2026-02-10).
 
 const COST_USAGE_CACHE_TTL_MS = 30_000;
 
@@ -842,4 +846,6 @@ export const usageHandlers: GatewayRequestHandlers = {
 
     respond(true, { logs: logs ?? [] }, undefined);
   },
+  // usage.budget removed (2026-02-10) — fake API-pricing cost model.
+  // Real budget data served by budget-panel plugin via budget.usage endpoint.
 };

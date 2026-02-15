@@ -254,32 +254,401 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
       if (gate("polls")) {
         actions.add("poll");
       }
+      // Always available when WhatsApp is configured
+      actions.add("group-create");
+      actions.add("edit");
+      actions.add("unsend");
+      actions.add("reply");
+      actions.add("sticker");
+      actions.add("renameGroup");
+      actions.add("setGroupIcon");
+      actions.add("setGroupDescription");
+      actions.add("addParticipant");
+      actions.add("removeParticipant");
+      actions.add("promoteParticipant");
+      actions.add("demoteParticipant");
+      actions.add("leaveGroup");
+      actions.add("getInviteCode");
+      actions.add("revokeInviteCode");
+      actions.add("getGroupInfo");
       return Array.from(actions);
     },
-    supportsAction: ({ action }) => action === "react",
+    supportsAction: ({ action }) => {
+      const supported = [
+        "react",
+        "group-create",
+        "edit",
+        "unsend",
+        "reply",
+        "sticker",
+        "renameGroup",
+        "setGroupIcon",
+        "setGroupDescription",
+        "addParticipant",
+        "removeParticipant",
+        "promoteParticipant",
+        "demoteParticipant",
+        "leaveGroup",
+        "getInviteCode",
+        "revokeInviteCode",
+        "getGroupInfo",
+      ];
+      return supported.includes(action);
+    },
     handleAction: async ({ action, params, cfg, accountId }) => {
-      if (action !== "react") {
-        throw new Error(`Action ${action} is not supported for provider ${meta.id}.`);
+      // Group creation
+      if (action === "group-create") {
+        const name = readStringParam(params, "name", { required: true });
+        const participantsRaw = params.participants;
+        let participants: string[] = [];
+        if (Array.isArray(participantsRaw)) {
+          participants = participantsRaw.map((p) => String(p).trim()).filter(Boolean);
+        } else if (typeof participantsRaw === "string") {
+          try {
+            const parsed = JSON.parse(participantsRaw);
+            if (Array.isArray(parsed)) {
+              participants = parsed.map((p) => String(p).trim()).filter(Boolean);
+            }
+          } catch {
+            // Not JSON, try comma-separated
+            participants = participantsRaw
+              .split(",")
+              .map((p) => p.trim())
+              .filter(Boolean);
+          }
+        }
+
+        if (participants.length === 0) {
+          return {
+            content: [
+              { type: "text", text: "Error: participants array is required (E.164 format)" },
+            ],
+          };
+        }
+
+        return await getWhatsAppRuntime().channel.whatsapp.handleWhatsAppAction(
+          { action: "group-create", name, participants, accountId: accountId ?? undefined },
+          cfg,
+        );
       }
-      const messageId = readStringParam(params, "messageId", {
-        required: true,
-      });
-      const emoji = readStringParam(params, "emoji", { allowEmpty: true });
-      const remove = typeof params.remove === "boolean" ? params.remove : undefined;
-      return await getWhatsAppRuntime().channel.whatsapp.handleWhatsAppAction(
-        {
-          action: "react",
-          chatJid:
-            readStringParam(params, "chatJid") ?? readStringParam(params, "to", { required: true }),
-          messageId,
-          emoji,
-          remove,
-          participant: readStringParam(params, "participant"),
-          accountId: accountId ?? undefined,
-          fromMe: typeof params.fromMe === "boolean" ? params.fromMe : undefined,
-        },
-        cfg,
-      );
+
+      // Edit message
+      if (action === "edit") {
+        const chatJid =
+          readStringParam(params, "chatJid") ?? readStringParam(params, "to", { required: true });
+        const messageId = readStringParam(params, "messageId", { required: true });
+        const newText =
+          readStringParam(params, "message") ?? readStringParam(params, "text", { required: true });
+        return await getWhatsAppRuntime().channel.whatsapp.handleWhatsAppAction(
+          {
+            action: "edit",
+            chatJid,
+            messageId,
+            newText,
+            fromMe: typeof params.fromMe === "boolean" ? params.fromMe : true,
+            participant: readStringParam(params, "participant"),
+            accountId: accountId ?? undefined,
+          },
+          cfg,
+        );
+      }
+
+      // Delete/unsend message
+      if (action === "unsend") {
+        const chatJid =
+          readStringParam(params, "chatJid") ?? readStringParam(params, "to", { required: true });
+        const messageId = readStringParam(params, "messageId", { required: true });
+        return await getWhatsAppRuntime().channel.whatsapp.handleWhatsAppAction(
+          {
+            action: "unsend",
+            chatJid,
+            messageId,
+            fromMe: typeof params.fromMe === "boolean" ? params.fromMe : true,
+            participant: readStringParam(params, "participant"),
+            accountId: accountId ?? undefined,
+          },
+          cfg,
+        );
+      }
+
+      // Reply to message (quote)
+      if (action === "reply") {
+        const to = readStringParam(params, "to", { required: true });
+        const text =
+          readStringParam(params, "message") ?? readStringParam(params, "text", { required: true });
+        const quotedMessageId =
+          readStringParam(params, "replyTo") ??
+          readStringParam(params, "messageId", { required: true });
+        const quotedFromMe = typeof params.quotedFromMe === "boolean" ? params.quotedFromMe : false;
+        const quotedParticipant = readStringParam(params, "quotedParticipant");
+        return await getWhatsAppRuntime().channel.whatsapp.handleWhatsAppAction(
+          {
+            action: "reply",
+            to,
+            text,
+            quotedKey: {
+              remoteJid: to,
+              id: quotedMessageId,
+              fromMe: quotedFromMe,
+              participant: quotedParticipant,
+            },
+            mediaUrl: readStringParam(params, "mediaUrl"),
+            accountId: accountId ?? undefined,
+          },
+          cfg,
+        );
+      }
+
+      // Send sticker
+      if (action === "sticker") {
+        const to = readStringParam(params, "to", { required: true });
+        const stickerPath =
+          readStringParam(params, "filePath") ??
+          readStringParam(params, "path", { required: true });
+        return await getWhatsAppRuntime().channel.whatsapp.handleWhatsAppAction(
+          { action: "sticker", to, stickerPath, accountId: accountId ?? undefined },
+          cfg,
+        );
+      }
+
+      // Rename group
+      if (action === "renameGroup") {
+        const groupJid =
+          readStringParam(params, "groupJid") ?? readStringParam(params, "to", { required: true });
+        const newName = readStringParam(params, "name", { required: true });
+        return await getWhatsAppRuntime().channel.whatsapp.handleWhatsAppAction(
+          { action: "renameGroup", groupJid, newName, accountId: accountId ?? undefined },
+          cfg,
+        );
+      }
+
+      // Set group icon
+      if (action === "setGroupIcon") {
+        const groupJid =
+          readStringParam(params, "groupJid") ?? readStringParam(params, "to", { required: true });
+        const imagePath =
+          readStringParam(params, "filePath") ??
+          readStringParam(params, "path", { required: true });
+        return await getWhatsAppRuntime().channel.whatsapp.handleWhatsAppAction(
+          { action: "setGroupIcon", groupJid, imagePath, accountId: accountId ?? undefined },
+          cfg,
+        );
+      }
+
+      // Add participants
+      if (action === "addParticipant") {
+        const groupJid =
+          readStringParam(params, "groupJid") ?? readStringParam(params, "to", { required: true });
+        const participantsRaw = params.participants;
+        let participants: string[] = [];
+        if (Array.isArray(participantsRaw)) {
+          participants = participantsRaw.map((p) => String(p).trim()).filter(Boolean);
+        } else if (typeof participantsRaw === "string") {
+          try {
+            const parsed = JSON.parse(participantsRaw);
+            if (Array.isArray(parsed)) {
+              participants = parsed.map((p) => String(p).trim()).filter(Boolean);
+            }
+          } catch {
+            participants = participantsRaw
+              .split(",")
+              .map((p) => p.trim())
+              .filter(Boolean);
+          }
+        }
+        if (participants.length === 0) {
+          return { content: [{ type: "text", text: "Error: participants array required" }] };
+        }
+        return await getWhatsAppRuntime().channel.whatsapp.handleWhatsAppAction(
+          { action: "addParticipant", groupJid, participants, accountId: accountId ?? undefined },
+          cfg,
+        );
+      }
+
+      // Remove participants
+      if (action === "removeParticipant") {
+        const groupJid =
+          readStringParam(params, "groupJid") ?? readStringParam(params, "to", { required: true });
+        const participantsRaw = params.participants;
+        let participants: string[] = [];
+        if (Array.isArray(participantsRaw)) {
+          participants = participantsRaw.map((p) => String(p).trim()).filter(Boolean);
+        } else if (typeof participantsRaw === "string") {
+          try {
+            const parsed = JSON.parse(participantsRaw);
+            if (Array.isArray(parsed)) {
+              participants = parsed.map((p) => String(p).trim()).filter(Boolean);
+            }
+          } catch {
+            participants = participantsRaw
+              .split(",")
+              .map((p) => p.trim())
+              .filter(Boolean);
+          }
+        }
+        if (participants.length === 0) {
+          return { content: [{ type: "text", text: "Error: participants array required" }] };
+        }
+        return await getWhatsAppRuntime().channel.whatsapp.handleWhatsAppAction(
+          {
+            action: "removeParticipant",
+            groupJid,
+            participants,
+            accountId: accountId ?? undefined,
+          },
+          cfg,
+        );
+      }
+
+      // Leave group
+      if (action === "leaveGroup") {
+        const groupJid =
+          readStringParam(params, "groupJid") ?? readStringParam(params, "to", { required: true });
+        return await getWhatsAppRuntime().channel.whatsapp.handleWhatsAppAction(
+          { action: "leaveGroup", groupJid, accountId: accountId ?? undefined },
+          cfg,
+        );
+      }
+
+      // Set group description
+      if (action === "setGroupDescription") {
+        const groupJid =
+          readStringParam(params, "groupJid") ?? readStringParam(params, "to", { required: true });
+        const description = readStringParam(params, "description", { required: true });
+        return await getWhatsAppRuntime().channel.whatsapp.handleWhatsAppAction(
+          {
+            action: "setGroupDescription",
+            groupJid,
+            description,
+            accountId: accountId ?? undefined,
+          },
+          cfg,
+        );
+      }
+
+      // Promote participants to admin
+      if (action === "promoteParticipant") {
+        const groupJid =
+          readStringParam(params, "groupJid") ?? readStringParam(params, "to", { required: true });
+        const participantsRaw = params.participants;
+        let participants: string[] = [];
+        if (Array.isArray(participantsRaw)) {
+          participants = participantsRaw.map((p) => String(p).trim()).filter(Boolean);
+        } else if (typeof participantsRaw === "string") {
+          try {
+            const parsed = JSON.parse(participantsRaw);
+            if (Array.isArray(parsed)) {
+              participants = parsed.map((p) => String(p).trim()).filter(Boolean);
+            }
+          } catch {
+            participants = participantsRaw
+              .split(",")
+              .map((p) => p.trim())
+              .filter(Boolean);
+          }
+        }
+        if (participants.length === 0) {
+          return { content: [{ type: "text", text: "Error: participants array required" }] };
+        }
+        return await getWhatsAppRuntime().channel.whatsapp.handleWhatsAppAction(
+          {
+            action: "promoteParticipant",
+            groupJid,
+            participants,
+            accountId: accountId ?? undefined,
+          },
+          cfg,
+        );
+      }
+
+      // Demote participants from admin
+      if (action === "demoteParticipant") {
+        const groupJid =
+          readStringParam(params, "groupJid") ?? readStringParam(params, "to", { required: true });
+        const participantsRaw = params.participants;
+        let participants: string[] = [];
+        if (Array.isArray(participantsRaw)) {
+          participants = participantsRaw.map((p) => String(p).trim()).filter(Boolean);
+        } else if (typeof participantsRaw === "string") {
+          try {
+            const parsed = JSON.parse(participantsRaw);
+            if (Array.isArray(parsed)) {
+              participants = parsed.map((p) => String(p).trim()).filter(Boolean);
+            }
+          } catch {
+            participants = participantsRaw
+              .split(",")
+              .map((p) => p.trim())
+              .filter(Boolean);
+          }
+        }
+        if (participants.length === 0) {
+          return { content: [{ type: "text", text: "Error: participants array required" }] };
+        }
+        return await getWhatsAppRuntime().channel.whatsapp.handleWhatsAppAction(
+          {
+            action: "demoteParticipant",
+            groupJid,
+            participants,
+            accountId: accountId ?? undefined,
+          },
+          cfg,
+        );
+      }
+
+      // Get invite code
+      if (action === "getInviteCode") {
+        const groupJid =
+          readStringParam(params, "groupJid") ?? readStringParam(params, "to", { required: true });
+        return await getWhatsAppRuntime().channel.whatsapp.handleWhatsAppAction(
+          { action: "getInviteCode", groupJid, accountId: accountId ?? undefined },
+          cfg,
+        );
+      }
+
+      // Revoke invite code
+      if (action === "revokeInviteCode") {
+        const groupJid =
+          readStringParam(params, "groupJid") ?? readStringParam(params, "to", { required: true });
+        return await getWhatsAppRuntime().channel.whatsapp.handleWhatsAppAction(
+          { action: "revokeInviteCode", groupJid, accountId: accountId ?? undefined },
+          cfg,
+        );
+      }
+
+      // Get group info/metadata
+      if (action === "getGroupInfo") {
+        const groupJid =
+          readStringParam(params, "groupJid") ?? readStringParam(params, "to", { required: true });
+        return await getWhatsAppRuntime().channel.whatsapp.handleWhatsAppAction(
+          { action: "getGroupInfo", groupJid, accountId: accountId ?? undefined },
+          cfg,
+        );
+      }
+
+      // React (existing)
+      if (action === "react") {
+        const messageId = readStringParam(params, "messageId", { required: true });
+        const emoji = readStringParam(params, "emoji", { allowEmpty: true });
+        const remove = typeof params.remove === "boolean" ? params.remove : undefined;
+        return await getWhatsAppRuntime().channel.whatsapp.handleWhatsAppAction(
+          {
+            action: "react",
+            chatJid:
+              readStringParam(params, "chatJid") ??
+              readStringParam(params, "to", { required: true }),
+            messageId,
+            emoji,
+            remove,
+            participant: readStringParam(params, "participant"),
+            accountId: accountId ?? undefined,
+            fromMe: typeof params.fromMe === "boolean" ? params.fromMe : undefined,
+          },
+          cfg,
+        );
+      }
+
+      throw new Error(`Action ${action} is not supported for provider ${meta.id}.`);
     },
   },
   outbound: {

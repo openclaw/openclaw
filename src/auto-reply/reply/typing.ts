@@ -100,6 +100,7 @@ export function createTypingController(params: {
 
   const triggerTyping = async () => {
     if (sealed) {
+      log?.(`[TYPING-DEBUG] triggerTyping: sealed, skipping`);
       return;
     }
     await onReplyStart?.();

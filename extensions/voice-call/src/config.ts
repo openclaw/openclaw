@@ -219,6 +219,17 @@ export const VoiceCallStreamingConfigSchema = z
     vadThreshold: z.number().min(0).max(1).default(0.5),
     /** WebSocket path for media stream connections */
     streamPath: z.string().min(1).default("/voice/stream"),
+    /**
+     * Secret token for WebSocket stream authentication.
+     * When set, WebSocket upgrade requests must include ?token=<value> to connect.
+     * Strongly recommended for public deployments.
+     */
+    streamToken: z.string().min(16).optional(),
+    /**
+     * Expected account SID for provider-specific validation (e.g., Twilio accountSid).
+     * When set, the accountSid in the stream 'start' message must match.
+     */
+    expectedAccountSid: z.string().min(1).optional(),
   })
   .strict()
   .default({

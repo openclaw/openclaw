@@ -30,9 +30,12 @@ export function buildInboundLine(params: {
   const baseLine = `${prefixStr}${msg.body}${replyContext ? `\n\n${replyContext}` : ""}`;
 
   // Wrap with standardized envelope for the agent.
+  // For DMs: use senderE164 (who actually sent) instead of chat ID (who the conversation is with).
+  // This distinguishes each sender in a shared DM (e.g. owner vs family member).
+  const dmFrom = msg.senderE164 ?? msg.from?.replace(/^whatsapp:/, "");
   return formatInboundEnvelope({
     channel: "WhatsApp",
-    from: msg.chatType === "group" ? msg.from : msg.from?.replace(/^whatsapp:/, ""),
+    from: msg.chatType === "group" ? msg.from : dmFrom,
     timestamp: msg.timestamp,
     body: baseLine,
     chatType: msg.chatType,

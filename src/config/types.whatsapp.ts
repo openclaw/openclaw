@@ -9,9 +9,27 @@ import type { DmConfig } from "./types.messages.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
 export type WhatsAppActionConfig = {
+  // Messaging
   reactions?: boolean;
   sendMessage?: boolean;
   polls?: boolean;
+  edit?: boolean;
+  unsend?: boolean;
+  reply?: boolean;
+  sticker?: boolean;
+  // Group management
+  groupCreate?: boolean;
+  renameGroup?: boolean;
+  setGroupDescription?: boolean;
+  setGroupIcon?: boolean;
+  addParticipant?: boolean;
+  removeParticipant?: boolean;
+  promoteParticipant?: boolean;
+  demoteParticipant?: boolean;
+  leaveGroup?: boolean;
+  getInviteCode?: boolean;
+  revokeInviteCode?: boolean;
+  groupMetadata?: boolean;
 };
 
 export type WhatsAppGroupConfig = {
@@ -76,6 +94,11 @@ export type WhatsAppConfig = {
    * - "allowlist": only allow group messages from senders in groupAllowFrom/allowFrom
    */
   groupPolicy?: GroupPolicy;
+  /**
+   * Require messages to start with this prefix to trigger the agent.
+   * Case-insensitive. The prefix is stripped from the message before processing.
+   */
+  triggerPrefix?: string;
   /** Max group messages to keep as history context (0 disables). */
   historyLimit?: number;
   /** Max DM turns to keep as history context. */
@@ -101,6 +124,11 @@ export type WhatsAppConfig = {
   debounceMs?: number;
   /** Heartbeat visibility settings for this channel. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /**
+   * Request full history sync from WhatsApp on connect (OPT-IN, default false).
+   * Warning: This can download thousands of messages and consume significant memory.
+   */
+  syncFullHistory?: boolean;
 };
 
 export type WhatsAppAccountConfig = {
@@ -142,6 +170,8 @@ export type WhatsAppAccountConfig = {
   blockStreaming?: boolean;
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
+  /** Per-action tool gating (default: true for all). */
+  actions?: WhatsAppActionConfig;
   groups?: Record<string, WhatsAppGroupConfig>;
   /** Acknowledgment reaction sent immediately upon message receipt. */
   ackReaction?: WhatsAppAckReactionConfig;
@@ -149,4 +179,9 @@ export type WhatsAppAccountConfig = {
   debounceMs?: number;
   /** Heartbeat visibility settings for this account. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /**
+   * Request full history sync from WhatsApp on connect (OPT-IN, default false).
+   * Warning: This can download thousands of messages and consume significant memory.
+   */
+  syncFullHistory?: boolean;
 };

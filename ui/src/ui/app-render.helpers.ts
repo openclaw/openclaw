@@ -233,6 +233,26 @@ export function renderChatControls(state: AppViewState) {
       >
         ${focusIcon}
       </button>
+      <span class="chat-controls__separator">|</span>
+      <label class="chat-controls__security" title="Max security level AI can execute">
+        <span>🛡️</span>
+        <select
+          .value=${state.settings.execSecurityLevel || "medium"}
+          @change=${(e: Event) => {
+            const next = (e.target as HTMLSelectElement).value;
+            state.applySettings({
+              ...state.settings,
+              execSecurityLevel: next as "safe" | "low" | "medium" | "high" | "critical",
+            });
+          }}
+        >
+          <option value="safe">🟢 Safe</option>
+          <option value="low">🔵 Low</option>
+          <option value="medium">🟡 Medium</option>
+          <option value="high">🟠 High</option>
+          <option value="critical">🔴 Critical</option>
+        </select>
+      </label>
     </div>
   `;
 }

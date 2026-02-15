@@ -5,9 +5,12 @@ import path from "node:path";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
+import { logVerbose } from "../../globals.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { abortEmbeddedPiRun } from "../../agents/pi-embedded-runner/runs.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import {
+  canonicalizeMainSessionAlias,
   DEFAULT_RESET_TRIGGERS,
   deriveSessionMetaPatch,
   evaluateSessionFreshness,
@@ -199,6 +202,7 @@ export async function initSessionState(params: {
   }
 
   sessionKey = resolveSessionKey(sessionScope, sessionCtxForState, mainKey);
+  sessionKey = canonicalizeMainSessionAlias({ cfg, agentId, sessionKey });
   const entry = sessionStore[sessionKey];
   const previousSessionEntry = resetTriggered && entry ? { ...entry } : undefined;
   const now = Date.now();
@@ -242,6 +246,17 @@ export async function initSessionState(params: {
     isNewSession = true;
     systemSent = false;
     abortedLastRun = false;
+    // Abort the previous session's in-flight run (may be mid-compaction).
+    // Without this, /new or /reset would wait for the old compaction to finish
+    // before the UI shows the new session — defeating the purpose of "start fresh now".
+    if (previousSessionEntry?.sessionId) {
+      const aborted = abortEmbeddedPiRun(previousSessionEntry.sessionId);
+      if (aborted) {
+        logVerbose(
+          `Aborted previous session run on reset: sessionId=${previousSessionEntry.sessionId}`,
+        );
+      }
+    }
     // When a reset trigger (/new, /reset) starts a new session, carry over
     // user-set behavior overrides (verbose, thinking, reasoning, ttsAuto)
     // so the user doesn't have to re-enable them every time.
@@ -394,6 +409,8 @@ export async function initSessionState(params: {
 
   const sessionCtx: TemplateContext = {
     ...ctx,
+    // Ensure the canonicalized session key is used (fixes "main" alias not resolving).
+    SessionKey: sessionKey,
     // Keep BodyStripped aligned with Body (best default for agent prompts).
     // RawBody is reserved for command/directive parsing and may omit context.
     BodyStripped: normalizeInboundTextNewlines(

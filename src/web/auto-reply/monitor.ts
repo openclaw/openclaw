@@ -197,6 +197,7 @@ export async function monitorWebChannel(
       sendReadReceipts: account.sendReadReceipts,
       debounceMs: inboundDebounceMs,
       shouldDebounce,
+      syncFullHistory: account.syncFullHistory,
       onMessage: async (msg: WebInboundMsg) => {
         handledMessages += 1;
         lastMessageAt = Date.now();
@@ -398,7 +399,58 @@ export async function monitorWebChannel(
         `WhatsApp session logged out. Run \`${formatCliCommand("openclaw channels login --channel web")}\` to relink.`,
       );
       await closeListener();
-      break;
+
+      // Instead of exiting, wait for re-authentication (QR relink).
+      // Check periodically if credentials have been restored.
+      const REAUTH_CHECK_INTERVAL_MS = 5000;
+      const MAX_REAUTH_WAIT_MS = 10 * 60 * 1000; // 10 minutes max wait
+      const reauthStartedAt = Date.now();
+      reconnectLogger.info(
+        { connectionId, maxWaitMs: MAX_REAUTH_WAIT_MS },
+        "web reconnect: waiting for re-authentication (QR relink)",
+      );
+      enqueueSystemEvent("WhatsApp waiting for QR relink...", {
+        sessionKey: connectRoute.sessionKey,
+      });
+
+      let reauthDetected = false;
+      while (!stopRequested() && !sigintStop && !abortSignal?.aborted) {
+        const elapsed = Date.now() - reauthStartedAt;
+        if (elapsed > MAX_REAUTH_WAIT_MS) {
+          reconnectLogger.warn(
+            { connectionId, elapsedMs: elapsed },
+            "web reconnect: reauth wait timed out",
+          );
+          break;
+        }
+        try {
+          await sleepWithAbort(REAUTH_CHECK_INTERVAL_MS, abortSignal);
+        } catch {
+          break;
+        }
+        // Check if auth credentials exist (user re-scanned QR)
+        const { webAuthExists } = await import("../auth-store.js");
+        const authExists = await webAuthExists(account.authDir);
+        if (authExists) {
+          reconnectLogger.info(
+            { connectionId },
+            "web reconnect: re-authentication detected, restarting listener",
+          );
+          enqueueSystemEvent("WhatsApp re-authenticated, reconnecting...", {
+            sessionKey: connectRoute.sessionKey,
+          });
+          reauthDetected = true;
+          reconnectAttempts = 0; // Reset backoff after successful reauth
+          break;
+        }
+      }
+
+      if (!reauthDetected) {
+        // Timed out or aborted without reauth - exit the monitor
+        break;
+      }
+      // Continue the reconnect loop with fresh credentials
+      continue;
     }
 
     reconnectAttempts += 1;

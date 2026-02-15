@@ -1,0 +1,112 @@
+/* fork: Tighter spacing and compact layout overrides */
+
+/* Reduce gap between message groups */
+.chat-group {
+  margin-bottom: 2px;
+  gap: 4px;
+}
+
+/* Default: no bubble box (tool-only messages, etc.) */
+.chat-bubble {
+  padding: 1px 0;
+  border-radius: 0;
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+/* Text messages (assistant reports) get a visible bubble */
+.chat-bubble.chat-bubble--text {
+  padding: 8px 12px;
+  margin-top: 2px;
+  border-radius: 10px;
+  background: var(--card) !important;
+  border: 1px solid var(--border) !important;
+  box-shadow: inset 0 1px 0 var(--card-highlight) !important;
+}
+
+.chat-bubble.chat-bubble--text.has-copy {
+  padding-right: 28px;
+}
+
+/* Keep user bubbles visible (right-aligned, colored) */
+.chat-group.user .chat-bubble {
+  padding: 6px 10px;
+  border-radius: 12px;
+  background: var(--accent-subtle) !important;
+  border: 1px solid transparent !important;
+}
+
+/* Tighter gap between messages in a group */
+.chat-group-messages {
+  gap: 0;
+}
+
+/* Hide footers (role + timestamp) — saves vertical space */
+.chat-group-footer {
+  display: none;
+}
+
+/* Hide avatars — saves 48px horizontal + cleaner look */
+.chat-avatar {
+  display: none;
+}
+
+/* Without avatars, messages can use full width */
+.chat-group-messages {
+  max-width: 100%;
+}
+
+/* System messages: collapsed by default */
+.chat-group.system .chat-bubble,
+.chat-group.other .chat-bubble {
+  padding: 1px 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* System message summary line (always visible) */
+.sys-summary {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  user-select: none;
+}
+
+.sys-summary__chevron {
+  display: inline-block;
+  font-size: 9px;
+  transition: transform 150ms ease-out;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.sys-summary.expanded .sys-summary__chevron {
+  transform: rotate(90deg);
+}
+
+/* System message detail (hidden by default) */
+.sys-detail {
+  display: none;
+  margin-top: 2px;
+  margin-left: 16px;
+  padding: 4px 8px;
+  font-size: 10px;
+  color: var(--muted);
+  opacity: 0.7;
+  border-left: 2px solid var(--border);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.sys-detail.visible {
+  display: block;
+}
+
+/* Chat thread: tighter padding */
+.chat-thread {
+  padding: 8px 4px;
+}

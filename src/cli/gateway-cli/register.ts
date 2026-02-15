@@ -23,6 +23,7 @@ import {
   renderBeaconLines,
 } from "./discover.js";
 import { addGatewayRunCommand } from "./run.js";
+import { addGatewayAllowlistCommands } from "./allowlist-cli.js";
 
 function runGatewayCommand(action: () => Promise<void>, label?: string) {
   return runCommandWithRuntime(defaultRuntime, action, (err) => {
@@ -250,4 +251,6 @@ export function registerGatewayCli(program: Command) {
         }
       }, "gateway discover failed");
     });
+
+  addGatewayAllowlistCommands(gateway);
 }

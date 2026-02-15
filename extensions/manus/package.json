@@ -1,0 +1,19 @@
+{
+  "name": "@openclaw/manus",
+  "version": "1.0.0",
+  "description": "Manus AI integration for OpenClaw - async research tasks with credit tracking",
+  "keywords": [
+    "ai",
+    "async",
+    "manus",
+    "openclaw",
+    "research"
+  ],
+  "license": "MIT",
+  "author": "Oscar Serra",
+  "type": "module",
+  "main": "index.ts",
+  "exports": {
+    ".": "./index.ts"
+  }
+}

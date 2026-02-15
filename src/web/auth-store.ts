@@ -24,6 +24,10 @@ export function resolveWebCredsBackupPath(authDir: string): string {
   return path.join(authDir, "creds.json.bak");
 }
 
+export function resolveWebStorePath(authDir: string): string {
+  return path.join(authDir, "baileys_store_multi.json");
+}
+
 export function hasWebCredsSync(authDir: string): boolean {
   try {
     const stats = fsSync.statSync(resolveWebCredsPath(authDir));

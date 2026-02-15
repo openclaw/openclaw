@@ -807,6 +807,7 @@ export function renderApp(state: AppViewState) {
                 showThinking,
                 loading: state.chatLoading,
                 sending: state.chatSending,
+                runId: state.chatRunId,
                 compactionStatus: state.compactionStatus,
                 assistantAvatarUrl: chatAvatarUrl,
                 messages: state.chatMessages,

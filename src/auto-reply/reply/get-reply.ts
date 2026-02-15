@@ -163,6 +163,9 @@ export async function getReplyFromConfig(
     triggerBodyNormalized,
     bodyStripped,
   } = sessionState;
+  console.log(
+    `[DEBUG] get-reply: after initSessionState isNewSession=${isNewSession} resetTriggered=${resetTriggered} bodyStripped="${bodyStripped}" triggerBodyNormalized="${triggerBodyNormalized}"`,
+  );
 
   await applyResetModelOverride({
     cfg,
@@ -280,8 +283,12 @@ export async function getReplyFromConfig(
     skillFilter: mergedSkillFilter,
   });
   if (inlineActionResult.kind === "reply") {
+    console.log(
+      `[DEBUG] get-reply: early return from inlineActionResult.kind=reply, reply=${JSON.stringify(inlineActionResult.reply)?.slice(0, 200)}`,
+    );
     return inlineActionResult.reply;
   }
+  console.log(`[DEBUG] get-reply: continuing to runPreparedReply`);
   directives = inlineActionResult.directives;
   abortedLastRun = inlineActionResult.abortedLastRun ?? abortedLastRun;
 

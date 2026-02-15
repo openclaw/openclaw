@@ -32,6 +32,7 @@ import { jidToE164, normalizeE164 } from "../../../utils.js";
 import { newConnectionId } from "../../reconnect.js";
 import { formatError } from "../../session.js";
 import { deliverWebReply } from "../deliver-reply.js";
+import { createThinkingReaction } from "./thinking-reaction.js";
 import { whatsappInboundLog, whatsappOutboundLog } from "../loggers.js";
 import { elide } from "../util.js";
 import { maybeSendAckReaction } from "./ack-reaction.js";
@@ -176,6 +177,17 @@ export async function processMessage(params: {
       });
     }
     shouldClearGroupHistory = !(params.suppressGroupHistoryClear ?? false);
+  }
+
+  // Annotate offline-recovered messages so the agent knows to review before acting.
+  if (params.msg.isOfflineRecovery) {
+    const ageMs = params.msg.timestamp ? Date.now() - params.msg.timestamp : undefined;
+    const ageLabel = ageMs != null ? `${Math.round(ageMs / 60_000)} minutes` : "unknown time";
+    combinedBody =
+      `[OFFLINE RECOVERY — This message was sent ${ageLabel} ago while you were offline. ` +
+      `Read ALL recovered messages before responding. Do NOT act on each one individually. ` +
+      `Summarize what was missed, acknowledge receipt, and ask for confirmation before taking action.]\n` +
+      combinedBody;
   }
 
   // Echo detection uses combined body so we don't respond twice.
@@ -347,6 +359,14 @@ export async function processMessage(params: {
   });
   trackBackgroundTask(params.backgroundTasks, metaTask);
 
+  // Fork: visible progress indicator for WhatsApp groups (Baileys #866 workaround).
+  const thinkingReaction = createThinkingReaction({
+    messageId: params.msg.id,
+    chatId: params.msg.chatId,
+    senderJid: params.msg.senderJid,
+    accountId: params.msg.accountId,
+  });
+
   const { queuedFinal } = await dispatchReplyWithBufferedBlockDispatcher({
     ctx: ctxPayload,
     cfg: params.cfg,
@@ -386,6 +406,7 @@ export async function processMessage(params: {
           logVerboseMessage: shouldLog,
         });
         if (info.kind === "final") {
+          thinkingReaction.stop(); // Fork: remove 🤔
           const fromDisplay =
             params.msg.chatType === "group" ? conversationId : (params.msg.from ?? "unknown");
           const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
@@ -407,7 +428,10 @@ export async function processMessage(params: {
           `Failed sending web ${label} to ${params.msg.from ?? conversationId}: ${formatError(err)}`,
         );
       },
-      onReplyStart: params.msg.sendComposing,
+      onReplyStart: async () => {
+        await params.msg.sendComposing();
+        thinkingReaction.start(); // Fork: 🤔 progress indicator
+      },
     },
     replyOptions: {
       disableBlockStreaming:
@@ -417,6 +441,8 @@ export async function processMessage(params: {
       onModelSelected,
     },
   });
+
+  thinkingReaction.stop(); // Fork: safety net cleanup
 
   if (!queuedFinal) {
     if (shouldClearGroupHistory) {

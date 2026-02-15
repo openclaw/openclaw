@@ -3,6 +3,8 @@ import type { MemoryCitationsMode } from "../config/types.memory.js";
 import type { ResolvedTimeFormat } from "./date-time.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+// Budget awareness removed — was applying API pricing to Max subscription (wrong paradigm).
+// Real usage tracking is via Anthropic OAuth API (token-panel skill).
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 
 /**
@@ -628,6 +630,11 @@ export function buildAgentSystemPrompt(params: {
     buildRuntimeLine(runtimeInfo, runtimeChannel, runtimeCapabilities, params.defaultThinkLevel),
     `Reasoning: ${reasoningLevel} (hidden unless on/stream). Toggle /reasoning; /status shows Reasoning when enabled.`,
   );
+
+  // Budget awareness injection removed (2026-02-10).
+  // Was applying API pay-per-token pricing to a flat-rate Max subscription,
+  // producing false "critical" alerts that degraded response quality.
+  // Real usage: Anthropic OAuth API via token-panel skill.
 
   return lines.filter(Boolean).join("\n");
 }

@@ -4,18 +4,31 @@ const env = {
   NODE_ENV: "production",
 };
 
+const outputOptions = {
+  codeSplitting: {
+    groups: [
+      {
+        name: "rolldown-runtime",
+        test: /rolldown[\\/]runtime/,
+      },
+    ],
+  },
+};
+
 export default defineConfig([
   {
     entry: "src/index.ts",
     env,
     fixedExtension: false,
     platform: "node",
+    outputOptions,
   },
   {
     entry: "src/entry.ts",
     env,
     fixedExtension: false,
     platform: "node",
+    outputOptions,
   },
   {
     // Ensure this module is bundled as an entry so legacy CLI shims can resolve its exports.

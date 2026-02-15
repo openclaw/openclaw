@@ -1,0 +1,16 @@
+{
+  "id": "manus",
+  "name": "Manus",
+  "description": "Manus AI integration for async research tasks with credit tracking.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": { "type": "boolean" },
+      "monthlyBudget": {
+        "type": "number",
+        "description": "Monthly credit budget for Manus tasks (default 500)."
+      }
+    }
+  }
+}

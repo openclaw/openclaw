@@ -1,0 +1,26 @@
+{
+  "id": "budget-panel",
+  "name": "Multi-Provider Budget Panel",
+  "description": "Unified budget tracking for Claude, Manus, and Gemini",
+  "version": "0.1.0",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "claudeBudget": {
+        "type": "number",
+        "default": 100,
+        "description": "Monthly Claude budget in dollars"
+      },
+      "manusBudget": {
+        "type": "number",
+        "default": 500,
+        "description": "Monthly Manus budget in credits"
+      },
+      "geminiBudget": {
+        "type": "number",
+        "default": 20,
+        "description": "Monthly Gemini budget in dollars"
+      }
+    }
+  }
+}

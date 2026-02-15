@@ -334,4 +334,49 @@ export async function browserSnapshot(
   });
 }
 
+export type BrowserCookie = {
+  name: string;
+  value: string;
+  domain: string;
+  path: string;
+  expires: number;
+  httpOnly: boolean;
+  secure: boolean;
+  sameSite: "Lax" | "None" | "Strict";
+};
+
+export type BrowserCookiesResult = {
+  ok: true;
+  targetId: string;
+  cookies: BrowserCookie[];
+};
+
+export async function browserCookies(
+  baseUrl: string | undefined,
+  opts?: {
+    targetId?: string;
+    domain?: string;
+    profile?: string;
+  },
+): Promise<BrowserCookiesResult> {
+  const q = new URLSearchParams();
+  if (opts?.targetId) {
+    q.set("targetId", opts.targetId);
+  }
+  if (opts?.profile) {
+    q.set("profile", opts.profile);
+  }
+  const queryString = q.toString();
+  const result = await fetchBrowserJson<BrowserCookiesResult>(
+    withBaseUrl(baseUrl, queryString ? `/cookies?${queryString}` : "/cookies"),
+    { timeoutMs: 10000 },
+  );
+  // Filter by domain if specified
+  if (opts?.domain) {
+    const domainFilter = opts.domain.toLowerCase();
+    result.cookies = result.cookies.filter((c) => c.domain.toLowerCase().includes(domainFilter));
+  }
+  return result;
+}
+
 // Actions beyond the basic read-only commands live in client-actions.ts.

@@ -35,5 +35,8 @@ export function applyTargetToParams(params: {
     params.args.to = target;
     return;
   }
-  throw new Error(`Action ${params.action} does not accept a target.`);
+  // For actions with mode "none" (e.g. group-create), silently ignore any target
+  // that may have been auto-injected from session context.
+  delete params.args.target;
+  return;
 }

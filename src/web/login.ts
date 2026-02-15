@@ -18,6 +18,7 @@ export async function loginWeb(
   const account = resolveWhatsAppAccount({ cfg, accountId });
   const sock = await createWaSocket(true, verbose, {
     authDir: account.authDir,
+    syncFullHistory: true,
   });
   logInfo("Waiting for WhatsApp connection...", runtime);
   try {
@@ -40,6 +41,7 @@ export async function loginWeb(
       }
       const retry = await createWaSocket(false, verbose, {
         authDir: account.authDir,
+        syncFullHistory: true,
       });
       try {
         await wait(retry);

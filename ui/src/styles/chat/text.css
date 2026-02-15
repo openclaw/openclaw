@@ -117,10 +117,53 @@
   border: 1px solid rgba(0, 0, 0, 0.1);
 }
 
+/* Jarvis voice transcript — purple italic */
+.chat-text .jarvis-voice {
+  color: #9b59b6;
+  font-style: italic;
+}
+
+:root[data-theme="light"] .chat-text .jarvis-voice {
+  color: #8e44ad;
+}
+
 .chat-text :where(hr) {
   border: none;
   border-top: 1px solid var(--border);
   margin: 1em 0;
+}
+
+/* Tables - fit within container, wrap content */
+.chat-text :where(table) {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  margin: 0.75em 0;
+  table-layout: auto;
+}
+
+.chat-text :where(th, td) {
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  text-align: left;
+  word-wrap: break-word;
+}
+
+.chat-text :where(th) {
+  background: rgba(255, 255, 255, 0.05);
+  font-weight: 600;
+}
+
+.chat-text :where(tr:nth-child(even)) {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+:root[data-theme="light"] .chat-text :where(th) {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+:root[data-theme="light"] .chat-text :where(tr:nth-child(even)) {
+  background: rgba(0, 0, 0, 0.02);
 }
 
 /* =============================================
@@ -141,4 +184,5 @@
   border-right: 3px solid var(--border);
   padding-left: 0;
   padding-right: 1em;
+}
 }

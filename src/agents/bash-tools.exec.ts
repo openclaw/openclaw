@@ -66,6 +66,7 @@ export type ExecToolDefaults = {
   security?: ExecSecurity;
   ask?: ExecAsk;
   node?: string;
+  maxSecurityLevel?: string;
   pathPrepend?: string[];
   safeBins?: string[];
   agentId?: string;

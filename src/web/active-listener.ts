@@ -8,6 +8,18 @@ export type ActiveWebSendOptions = {
   fileName?: string;
 };
 
+export type MessageKey = {
+  remoteJid: string;
+  id: string;
+  fromMe: boolean;
+  participant?: string;
+};
+
+export type QuotedMessage = {
+  key: MessageKey;
+  message?: unknown;
+};
+
 export type ActiveWebListener = {
   sendMessage: (
     to: string,
@@ -25,6 +37,73 @@ export type ActiveWebListener = {
     participant?: string,
   ) => Promise<void>;
   sendComposingTo: (to: string) => Promise<void>;
+  createGroup: (
+    subject: string,
+    participants: string[],
+  ) => Promise<{ groupId: string; subject: string }>;
+  // New capabilities
+  editMessage: (
+    chatJid: string,
+    messageId: string,
+    newText: string,
+    fromMe?: boolean,
+    participant?: string,
+  ) => Promise<void>;
+  deleteMessage: (
+    chatJid: string,
+    messageId: string,
+    fromMe?: boolean,
+    participant?: string,
+  ) => Promise<void>;
+  replyMessage: (
+    to: string,
+    text: string,
+    quotedKey: MessageKey,
+    mediaBuffer?: Buffer,
+    mediaType?: string,
+  ) => Promise<{ messageId: string }>;
+  sendSticker: (to: string, stickerBuffer: Buffer) => Promise<{ messageId: string }>;
+  // Group management
+  groupUpdateSubject: (groupJid: string, newSubject: string) => Promise<void>;
+  groupUpdateDescription: (groupJid: string, description: string) => Promise<void>;
+  groupUpdateIcon: (groupJid: string, imageBuffer: Buffer) => Promise<void>;
+  groupAddParticipants: (
+    groupJid: string,
+    participants: string[],
+  ) => Promise<{ [jid: string]: string }>;
+  groupRemoveParticipants: (
+    groupJid: string,
+    participants: string[],
+  ) => Promise<{ [jid: string]: string }>;
+  groupPromoteParticipants: (
+    groupJid: string,
+    participants: string[],
+  ) => Promise<{ [jid: string]: string }>;
+  groupDemoteParticipants: (
+    groupJid: string,
+    participants: string[],
+  ) => Promise<{ [jid: string]: string }>;
+  groupLeave: (groupJid: string) => Promise<void>;
+  groupGetInviteCode: (groupJid: string) => Promise<string>;
+  groupRevokeInviteCode: (groupJid: string) => Promise<string>;
+  groupMetadata: (groupJid: string) => Promise<{
+    id: string;
+    subject: string;
+    description?: string;
+    participants: Array<{ id: string; admin?: string }>;
+  }>;
+  fetchMessageHistory?: (
+    chatJid: string,
+    count: number,
+    oldestMsgId?: string,
+    oldestMsgFromMe?: boolean,
+    oldestMsgTimestamp?: number,
+  ) => Promise<{ ok: boolean; requestId?: string; error?: string }>;
+  requestPlaceholderResend?: (
+    chatJid: string,
+    msgId: string,
+    fromMe?: boolean,
+  ) => Promise<{ ok: boolean; requestId?: string; error?: string }>;
   close?: () => Promise<void>;
 };
 

@@ -16,6 +16,14 @@ export type CommandAuthorization = {
 };
 
 function resolveProviderFromContext(ctx: MsgContext, cfg: OpenClawConfig): ChannelId | undefined {
+  // Webchat/internal channel has no channel dock — return early to avoid
+  // falling through to channel-specific authorization (e.g. WhatsApp's
+  // enforceOwnerForCommands) which would incorrectly block commands like /new.
+  const rawProvider = ctx.Provider ?? ctx.Surface ?? ctx.OriginatingChannel;
+  if (rawProvider === "webchat" || rawProvider === "internal") {
+    return undefined;
+  }
+
   const direct =
     normalizeAnyChannelId(ctx.Provider) ??
     normalizeAnyChannelId(ctx.Surface) ??
