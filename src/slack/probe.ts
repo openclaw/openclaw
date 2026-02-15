@@ -1,3 +1,4 @@
+import { withTimeout } from "../utils/with-timeout.js";
 import { createSlackWebClient } from "./client.js";
 
 export type SlackProbe = {
@@ -9,26 +10,11 @@ export type SlackProbe = {
   team?: { id?: string; name?: string };
 };
 
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
-  if (!timeoutMs || timeoutMs <= 0) {
-    return promise;
-  }
-  let timer: NodeJS.Timeout | null = null;
-  const timeout = new Promise<T>((_, reject) => {
-    timer = setTimeout(() => reject(new Error("timeout")), timeoutMs);
-  });
-  return Promise.race([promise, timeout]).finally(() => {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  });
-}
-
 export async function probeSlack(token: string, timeoutMs = 2500): Promise<SlackProbe> {
   const client = createSlackWebClient(token);
   const start = Date.now();
   try {
-    const result = await withTimeout(client.auth.test(), timeoutMs);
+    const result = await withTimeout(client.auth.test(), timeoutMs, "timeout");
     if (!result.ok) {
       return {
         ok: false,
