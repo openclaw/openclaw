@@ -187,7 +187,7 @@ export async function fillFormViaPlaywright(opts: {
   const timeout = Math.max(500, Math.min(60_000, opts.timeoutMs ?? 8000));
   for (const field of opts.fields) {
     const ref = field.ref.trim();
-    const type = field.type.trim();
+    const type = (field.type ?? "textbox").trim();
     const rawValue = field.value;
     const value =
       typeof rawValue === "string"

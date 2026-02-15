@@ -64,6 +64,98 @@ describe("browser control server", () => {
         fields: [{ ref: "6", type: "textbox", value: "hello" }],
       });
 
+      // fill without type should default to textbox
+      pwMocks.fillFormViaPlaywright.mockClear();
+      const fillNoType = await postJson(`${base}/act`, {
+        kind: "fill",
+        fields: [{ ref: "7", value: "world" }],
+      });
+      expect(fillNoType.ok).toBe(true);
+      expect(pwMocks.fillFormViaPlaywright).toHaveBeenCalledWith({
+        cdpUrl: cdpBaseUrl,
+        targetId: "abcd1234",
+        fields: [{ ref: "7", type: "textbox", value: "world" }],
+      });
+
+      // fill with mixed fields: some with type, some without
+      pwMocks.fillFormViaPlaywright.mockClear();
+      const fillMixed = await postJson(`${base}/act`, {
+        kind: "fill",
+        fields: [
+          { ref: "8", type: "checkbox", value: true },
+          { ref: "9", value: "text here" },
+        ],
+      });
+      expect(fillMixed.ok).toBe(true);
+      expect(pwMocks.fillFormViaPlaywright).toHaveBeenCalledWith({
+        cdpUrl: cdpBaseUrl,
+        targetId: "abcd1234",
+        fields: [
+          { ref: "8", type: "checkbox", value: true },
+          { ref: "9", type: "textbox", value: "text here" },
+        ],
+      });
+
+      // fill with numeric value
+      pwMocks.fillFormViaPlaywright.mockClear();
+      const fillNumeric = await postJson(`${base}/act`, {
+        kind: "fill",
+        fields: [{ ref: "10", value: 42 }],
+      });
+      expect(fillNumeric.ok).toBe(true);
+      expect(pwMocks.fillFormViaPlaywright).toHaveBeenCalledWith({
+        cdpUrl: cdpBaseUrl,
+        targetId: "abcd1234",
+        fields: [{ ref: "10", type: "textbox", value: 42 }],
+      });
+
+      // fill with boolean value
+      pwMocks.fillFormViaPlaywright.mockClear();
+      const fillBoolean = await postJson(`${base}/act`, {
+        kind: "fill",
+        fields: [{ ref: "11", value: false }],
+      });
+      expect(fillBoolean.ok).toBe(true);
+      expect(pwMocks.fillFormViaPlaywright).toHaveBeenCalledWith({
+        cdpUrl: cdpBaseUrl,
+        targetId: "abcd1234",
+        fields: [{ ref: "11", type: "textbox", value: false }],
+      });
+
+      // fill with ref only (no type, no value)
+      pwMocks.fillFormViaPlaywright.mockClear();
+      const fillRefOnly = await postJson(`${base}/act`, {
+        kind: "fill",
+        fields: [{ ref: "12" }],
+      });
+      expect(fillRefOnly.ok).toBe(true);
+      expect(pwMocks.fillFormViaPlaywright).toHaveBeenCalledWith({
+        cdpUrl: cdpBaseUrl,
+        targetId: "abcd1234",
+        fields: [{ ref: "12", type: "textbox" }],
+      });
+
+      // fill with multiple fields, all missing type
+      pwMocks.fillFormViaPlaywright.mockClear();
+      const fillMultiNoType = await postJson(`${base}/act`, {
+        kind: "fill",
+        fields: [
+          { ref: "13", value: "first" },
+          { ref: "14", value: "second" },
+          { ref: "15", value: "third" },
+        ],
+      });
+      expect(fillMultiNoType.ok).toBe(true);
+      expect(pwMocks.fillFormViaPlaywright).toHaveBeenCalledWith({
+        cdpUrl: cdpBaseUrl,
+        targetId: "abcd1234",
+        fields: [
+          { ref: "13", type: "textbox", value: "first" },
+          { ref: "14", type: "textbox", value: "second" },
+          { ref: "15", type: "textbox", value: "third" },
+        ],
+      });
+
       const resize = await postJson(`${base}/act`, {
         kind: "resize",
         width: 800,
@@ -129,6 +221,210 @@ describe("browser control server", () => {
 
       expect(res.error).toContain("browser.evaluateEnabled=false");
       expect(pwMocks.evaluateViaPlaywright).not.toHaveBeenCalled();
+    },
+    slowTimeoutMs,
+  );
+
+  it(
+    "fill rejects empty fields array",
+    async () => {
+      const base = await startServerAndBase();
+
+      const res = await postJson(`${base}/act`, {
+        kind: "fill",
+        fields: [],
+      });
+      expect(res.error).toBe("fields are required");
+      expect(pwMocks.fillFormViaPlaywright).not.toHaveBeenCalled();
+    },
+    slowTimeoutMs,
+  );
+
+  it(
+    "fill rejects when fields is missing entirely",
+    async () => {
+      const base = await startServerAndBase();
+
+      const res = await postJson(`${base}/act`, {
+        kind: "fill",
+      });
+      expect(res.error).toBe("fields are required");
+      expect(pwMocks.fillFormViaPlaywright).not.toHaveBeenCalled();
+    },
+    slowTimeoutMs,
+  );
+
+  it(
+    "fill rejects when fields is not an array",
+    async () => {
+      const base = await startServerAndBase();
+
+      const res = await postJson(`${base}/act`, {
+        kind: "fill",
+        fields: "not-an-array",
+      });
+      expect(res.error).toBe("fields are required");
+      expect(pwMocks.fillFormViaPlaywright).not.toHaveBeenCalled();
+    },
+    slowTimeoutMs,
+  );
+
+  it(
+    "fill filters out fields without ref",
+    async () => {
+      const base = await startServerAndBase();
+
+      // all fields lack ref -> "fields are required"
+      const res = await postJson(`${base}/act`, {
+        kind: "fill",
+        fields: [{ value: "hello" }, { type: "textbox", value: "world" }],
+      });
+      expect(res.error).toBe("fields are required");
+      expect(pwMocks.fillFormViaPlaywright).not.toHaveBeenCalled();
+    },
+    slowTimeoutMs,
+  );
+
+  it(
+    "fill keeps valid fields and filters invalid ones",
+    async () => {
+      const base = await startServerAndBase();
+
+      pwMocks.fillFormViaPlaywright.mockClear();
+      const res = await postJson(`${base}/act`, {
+        kind: "fill",
+        fields: [
+          { ref: "20", value: "good" },
+          { value: "no-ref" },
+          null,
+          "string-entry",
+          { ref: "21", type: "radio", value: true },
+        ],
+      });
+      expect(res.ok).toBe(true);
+      expect(pwMocks.fillFormViaPlaywright).toHaveBeenCalledWith({
+        cdpUrl: cdpBaseUrl,
+        targetId: "abcd1234",
+        fields: [
+          { ref: "20", type: "textbox", value: "good" },
+          { ref: "21", type: "radio", value: true },
+        ],
+      });
+    },
+    slowTimeoutMs,
+  );
+
+  it(
+    "fill with empty string type defaults to textbox",
+    async () => {
+      const base = await startServerAndBase();
+
+      pwMocks.fillFormViaPlaywright.mockClear();
+      const res = await postJson(`${base}/act`, {
+        kind: "fill",
+        fields: [{ ref: "30", type: "", value: "test" }],
+      });
+      expect(res.ok).toBe(true);
+      expect(pwMocks.fillFormViaPlaywright).toHaveBeenCalledWith({
+        cdpUrl: cdpBaseUrl,
+        targetId: "abcd1234",
+        fields: [{ ref: "30", type: "textbox", value: "test" }],
+      });
+    },
+    slowTimeoutMs,
+  );
+
+  it(
+    "fill with whitespace-only type defaults to textbox",
+    async () => {
+      const base = await startServerAndBase();
+
+      pwMocks.fillFormViaPlaywright.mockClear();
+      const res = await postJson(`${base}/act`, {
+        kind: "fill",
+        fields: [{ ref: "31", type: "  ", value: "test" }],
+      });
+      expect(res.ok).toBe(true);
+      expect(pwMocks.fillFormViaPlaywright).toHaveBeenCalledWith({
+        cdpUrl: cdpBaseUrl,
+        targetId: "abcd1234",
+        fields: [{ ref: "31", type: "textbox", value: "test" }],
+      });
+    },
+    slowTimeoutMs,
+  );
+
+  it(
+    "fill preserves explicit type when provided",
+    async () => {
+      const base = await startServerAndBase();
+
+      pwMocks.fillFormViaPlaywright.mockClear();
+      const res = await postJson(`${base}/act`, {
+        kind: "fill",
+        fields: [
+          { ref: "40", type: "checkbox", value: true },
+          { ref: "41", type: "radio", value: false },
+          { ref: "42", type: "textarea", value: "long text" },
+        ],
+      });
+      expect(res.ok).toBe(true);
+      expect(pwMocks.fillFormViaPlaywright).toHaveBeenCalledWith({
+        cdpUrl: cdpBaseUrl,
+        targetId: "abcd1234",
+        fields: [
+          { ref: "40", type: "checkbox", value: true },
+          { ref: "41", type: "radio", value: false },
+          { ref: "42", type: "textarea", value: "long text" },
+        ],
+      });
+    },
+    slowTimeoutMs,
+  );
+
+  it(
+    "fill drops non-string/number/boolean values from field value",
+    async () => {
+      const base = await startServerAndBase();
+
+      pwMocks.fillFormViaPlaywright.mockClear();
+      const res = await postJson(`${base}/act`, {
+        kind: "fill",
+        fields: [
+          { ref: "50", value: { nested: true } },
+          { ref: "51", value: [1, 2, 3] },
+        ],
+      });
+      expect(res.ok).toBe(true);
+      // value should be undefined (dropped), so fields have only ref and type
+      expect(pwMocks.fillFormViaPlaywright).toHaveBeenCalledWith({
+        cdpUrl: cdpBaseUrl,
+        targetId: "abcd1234",
+        fields: [
+          { ref: "50", type: "textbox" },
+          { ref: "51", type: "textbox" },
+        ],
+      });
+    },
+    slowTimeoutMs,
+  );
+
+  it(
+    "fill with numeric ref coerces to string",
+    async () => {
+      const base = await startServerAndBase();
+
+      pwMocks.fillFormViaPlaywright.mockClear();
+      const res = await postJson(`${base}/act`, {
+        kind: "fill",
+        fields: [{ ref: 60, value: "test" }],
+      });
+      expect(res.ok).toBe(true);
+      expect(pwMocks.fillFormViaPlaywright).toHaveBeenCalledWith({
+        cdpUrl: cdpBaseUrl,
+        targetId: "abcd1234",
+        fields: [{ ref: "60", type: "textbox", value: "test" }],
+      });
     },
     slowTimeoutMs,
   );
