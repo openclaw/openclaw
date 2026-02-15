@@ -71,6 +71,16 @@ describe("buildAuthChoiceOptions", () => {
     expect(options.some((opt) => opt.value === "together-api-key")).toBe(true);
   });
 
+  it("includes StepFun auth choice", () => {
+    const store: AuthProfileStore = { version: 1, profiles: {} };
+    const options = buildAuthChoiceOptions({
+      store,
+      includeSkip: false,
+    });
+
+    expect(options.some((opt) => opt.value === "stepfun-api-key")).toBe(true);
+  });
+
   it("includes Vercel AI Gateway auth choice", () => {
     const store: AuthProfileStore = { version: 1, profiles: {} };
     const options = buildAuthChoiceOptions({

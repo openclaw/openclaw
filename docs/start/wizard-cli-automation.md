@@ -86,6 +86,17 @@ Add `--json` for a machine-readable summary.
       --gateway-bind loopback
     ```
   </Accordion>
+  <Accordion title="StepFun example">
+    ```bash
+    openclaw onboard --non-interactive \
+      --mode local \
+      --auth-choice stepfun-api-key \
+      --stepfun-api-key "$STEPFUN_API_KEY" \
+      --stepfun-endpoint cn \
+      --gateway-port 18789 \
+      --gateway-bind loopback
+    ```
+  </Accordion>
   <Accordion title="Synthetic example">
     ```bash
     openclaw onboard --non-interactive \

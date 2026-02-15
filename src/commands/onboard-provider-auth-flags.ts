@@ -9,6 +9,7 @@ type OnboardProviderAuthOptionKey = keyof Pick<
   | "cloudflareAiGatewayApiKey"
   | "moonshotApiKey"
   | "kimiCodeApiKey"
+  | "stepfunApiKey"
   | "geminiApiKey"
   | "zaiApiKey"
   | "xiaomiApiKey"
@@ -81,6 +82,13 @@ export const ONBOARD_PROVIDER_AUTH_FLAGS: ReadonlyArray<OnboardProviderAuthFlag>
     cliFlag: "--kimi-code-api-key",
     cliOption: "--kimi-code-api-key <key>",
     description: "Kimi Coding API key",
+  },
+  {
+    optionKey: "stepfunApiKey",
+    authChoice: "stepfun-api-key",
+    cliFlag: "--stepfun-api-key",
+    cliOption: "--stepfun-api-key <key>",
+    description: "StepFun API key",
   },
   {
     optionKey: "geminiApiKey",
