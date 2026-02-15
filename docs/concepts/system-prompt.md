@@ -61,6 +61,12 @@ Bootstrap files are trimmed and appended under **Project Context** so the model 
 - `BOOTSTRAP.md` (only on brand-new workspaces)
 - `MEMORY.md` and/or `memory.md` (when present in the workspace; either or both may be injected)
 
+Do not put secrets in injected workspace files (`AGENTS.md`, `SOUL.md`,
+`TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md`).
+Anything in these files can enter model context during runs. Keep credentials in
+`~/.openclaw/credentials/`, environment variables, or a secret manager, and
+store only non-sensitive placeholders in workspace files.
+
 All of these files are **injected into the context window** on every turn, which
 means they consume tokens. Keep them concise — especially `MEMORY.md`, which can
 grow over time and lead to unexpectedly high context usage and more frequent

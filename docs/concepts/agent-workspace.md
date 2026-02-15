@@ -83,6 +83,7 @@ These are the standard files OpenClaw expects inside the workspace:
 - `TOOLS.md`
   - Notes about your local tools and conventions.
   - Does not control tool availability; it is only guidance.
+  - Never store secrets here. It may be injected into model context during runs.
 
 - `HEARTBEAT.md`
   - Optional tiny checklist for heartbeat runs.
@@ -203,6 +204,10 @@ Even in a private repo, avoid storing secrets in the workspace:
 - API keys, OAuth tokens, passwords, or private credentials.
 - Anything under `~/.openclaw/`.
 - Raw dumps of chats or sensitive attachments.
+
+Remember: workspace bootstrap files are injected into model context. Keep only
+non-sensitive operational notes there and resolve credentials at runtime from a
+secret manager or environment variables.
 
 If you must store sensitive references, use placeholders and keep the real
 secret elsewhere (password manager, environment variables, or `~/.openclaw/`).

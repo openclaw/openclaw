@@ -68,7 +68,7 @@ async function ensureDevWorkspace(dir: string) {
     ),
     loadDevTemplate(
       "TOOLS.dev.md",
-      `# TOOLS.md - User Tool Notes (editable)\n\nAdd your local tool notes here.\n`,
+      `# TOOLS.md - User Tool Notes (editable)\n\nAdd your local tool notes here.\n\nSecurity: never put secrets in this file (API keys, tokens, passwords, private keys). Use env vars or a secret manager and resolve credentials at runtime.\n`,
     ),
     loadDevTemplate(
       "IDENTITY.dev.md",

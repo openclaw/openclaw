@@ -73,7 +73,7 @@ cp docs/reference/AGENTS.default.md ~/.openclaw/workspace/AGENTS.md
 ## Tools & skills
 
 - Tools live in skills; follow each skill’s `SKILL.md` when you need it.
-- Keep environment-specific notes in `TOOLS.md` (Notes for Skills).
+- Keep environment-specific notes in `TOOLS.md` (Notes for Skills), but never place secrets there.
 
 ## Backup tip (recommended)
 
