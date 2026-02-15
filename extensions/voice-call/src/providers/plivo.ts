@@ -15,6 +15,7 @@ import type {
 import type { VoiceCallProvider } from "./base.js";
 import { escapeXml } from "../voice-mapping.js";
 import { reconstructWebhookUrl, verifyPlivoWebhook } from "../webhook-security.js";
+import { parseProviderDirection } from "./direction.js";
 
 export interface PlivoProviderOptions {
   /** Override public URL origin for signature verification */
@@ -204,12 +205,7 @@ export class PlivoProvider implements VoiceCallProvider {
       callId: callIdOverride || callUuid || requestUuid,
       providerCallId: callUuid || requestUuid || undefined,
       timestamp: Date.now(),
-      direction:
-        direction === "inbound"
-          ? ("inbound" as const)
-          : direction === "outbound"
-            ? ("outbound" as const)
-            : undefined,
+      direction: parseProviderDirection(direction),
       from,
       to,
     };

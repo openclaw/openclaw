@@ -15,6 +15,7 @@ import type {
 } from "../types.js";
 import type { VoiceCallProvider } from "./base.js";
 import { verifyTelnyxWebhook } from "../webhook-security.js";
+import { parseProviderDirection } from "./direction.js";
 
 /**
  * Telnyx Voice API provider implementation.
@@ -129,12 +130,20 @@ export class TelnyxProvider implements VoiceCallProvider {
     if (!callId) {
       callId = data.payload?.call_control_id || "";
     }
+    const from = this.extractEndpointAddress(data.payload?.from);
+    const to = this.extractEndpointAddress(data.payload?.to);
+    const direction = parseProviderDirection(
+      typeof data.payload?.direction === "string" ? data.payload.direction : undefined,
+    );
 
     const baseEvent = {
       id: data.id || crypto.randomUUID(),
       callId,
       providerCallId: data.payload?.call_control_id,
       timestamp: Date.now(),
+      direction,
+      from,
+      to,
     };
 
     switch (data.event_type) {
@@ -183,6 +192,21 @@ export class TelnyxProvider implements VoiceCallProvider {
       default:
         return null;
     }
+  }
+
+  private extractEndpointAddress(value: TelnyxEndpoint): string | undefined {
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      return trimmed || undefined;
+    }
+    if (!value || typeof value !== "object") {
+      return undefined;
+    }
+    const phoneNumber =
+      (typeof value.phone_number === "string" && value.phone_number.trim()) ||
+      (typeof value.number === "string" && value.number.trim()) ||
+      undefined;
+    return phoneNumber || undefined;
   }
 
   /**
@@ -297,6 +321,9 @@ interface TelnyxEvent {
   payload?: {
     call_control_id?: string;
     client_state?: string;
+    direction?: string;
+    from?: TelnyxEndpoint;
+    to?: TelnyxEndpoint;
     text?: string;
     transcription?: string;
     is_final?: boolean;
@@ -306,6 +333,14 @@ interface TelnyxEvent {
     [key: string]: unknown;
   };
 }
+
+type TelnyxEndpoint =
+  | string
+  | {
+      phone_number?: string;
+      number?: string;
+      [key: string]: unknown;
+    };
 
 interface TelnyxCallResponse {
   data: {

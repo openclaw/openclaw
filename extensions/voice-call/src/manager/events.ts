@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import type { CallRecord, CallState, NormalizedEvent } from "../types.js";
 import type { CallManagerContext } from "./context.js";
 import { isAllowlistedCaller, normalizePhoneNumber } from "../allowlist.js";
+import { inferDirectionFromEndpoints } from "../providers/direction.js";
 import { findCall } from "./lookup.js";
 import { endCall } from "./outbound.js";
 import { addTranscriptEntry, transitionState } from "./state.js";
@@ -103,6 +104,16 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
     callIdOrProviderCallId: event.callId,
   });
 
+  const canCreateInboundCall =
+    event.type === "call.initiated" || event.type === "call.ringing" || event.type === "call.answered";
+  if (!event.direction && canCreateInboundCall) {
+    event.direction = inferDirectionFromEndpoints({
+      from: event.from,
+      to: event.to,
+      fromNumber: ctx.config.fromNumber,
+    });
+  }
+
   if (!call && event.direction === "inbound" && event.providerCallId) {
     if (!shouldAcceptInbound(ctx.config, event.from)) {
       const pid = event.providerCallId;
@@ -143,6 +154,13 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
   }
 
   if (!call) {
+    if (!event.direction && canCreateInboundCall && event.providerCallId) {
+      console.warn(
+        `[voice-call] Dropping ${event.type} without inbound direction (providerCallId: ${
+          event.providerCallId
+        }, from: ${event.from ?? "unknown"}, to: ${event.to ?? "unknown"})`,
+      );
+    }
     return;
   }
 
