@@ -159,6 +159,10 @@ export type PluginCommandContext = {
   accountId?: string;
   /** Thread/topic id if available */
   messageThreadId?: number;
+  /** Chat/channel ID (e.g., Telegram chat ID) — for message management */
+  chatId?: string;
+  /** Original message ID — for message deletion (e.g., passphrase scrubbing) */
+  messageId?: string;
 };
 
 /**

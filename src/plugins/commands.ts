@@ -240,8 +240,18 @@ export async function executePluginCommand(params: {
   to?: PluginCommandContext["to"];
   accountId?: PluginCommandContext["accountId"];
   messageThreadId?: PluginCommandContext["messageThreadId"];
+  chatId?: string;
+  messageId?: string;
 }): Promise<PluginCommandResult> {
-  const { command, args, senderId, channel, isAuthorizedSender, commandBody, config } = params;
+  const {
+    command,
+    args,
+    senderId,
+    channel,
+    isAuthorizedSender,
+    commandBody,
+    config,
+  } = params;
 
   // Check authorization
   const requireAuth = command.requireAuth !== false; // Default to true
@@ -267,6 +277,8 @@ export async function executePluginCommand(params: {
     to: params.to,
     accountId: params.accountId,
     messageThreadId: params.messageThreadId,
+    chatId: params.chatId,
+    messageId: params.messageId,
   };
 
   // Lock registry during execution to prevent concurrent modifications
