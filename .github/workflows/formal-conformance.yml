@@ -122,12 +122,21 @@ jobs:
               'If this change is intentional, follow up by updating the formal models repo or regenerating the extracted artifacts there.',
             ].join('\n');
 
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.payload.pull_request.number,
-              body,
-            });
+            try {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.pull_request.number,
+                body,
+              });
+            } catch (error) {
+              if (error?.status === 403) {
+                core.warning('Skipping informational PR comment: token cannot write issue comments (common on fork PRs).');
+                return;
+              }
+
+              throw error;
+            }
 
       - name: Summary
         run: |

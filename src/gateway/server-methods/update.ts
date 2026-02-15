@@ -6,7 +6,7 @@ import {
   type RestartSentinelPayload,
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
-import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
+import { scheduleGatewaySigusr1Restart, triggerOpenClawRestart } from "../../infra/restart.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import { runGatewayUpdate } from "../../infra/update-runner.js";
 import {
@@ -15,6 +15,52 @@ import {
   formatValidationErrors,
   validateUpdateRunParams,
 } from "../protocol/index.js";
+
+function scheduleGatewayServiceRestart(opts?: { delayMs?: number; reason?: string }): {
+  ok: true;
+  mode: "service";
+  method: "launchctl" | "systemd" | "supervisor";
+  delayMs: number;
+  reason?: string;
+  fallback: "sigusr1";
+} {
+  const delayMsRaw =
+    typeof opts?.delayMs === "number" && Number.isFinite(opts.delayMs)
+      ? Math.floor(opts.delayMs)
+      : 2000;
+  const delayMs = Math.min(Math.max(delayMsRaw, 0), 60_000);
+  const reason =
+    typeof opts?.reason === "string" && opts.reason.trim()
+      ? opts.reason.trim().slice(0, 200)
+      : undefined;
+  const method =
+    process.platform === "darwin"
+      ? "launchctl"
+      : process.platform === "linux"
+        ? "systemd"
+        : "supervisor";
+  setTimeout(() => {
+    const restart = triggerOpenClawRestart();
+    if (restart.ok) {
+      return;
+    }
+    console.warn(
+      `update.run: service restart via ${restart.method} failed (${restart.detail ?? "unknown"}); falling back to in-process SIGUSR1 restart`,
+    );
+    scheduleGatewaySigusr1Restart({
+      // Keep a short grace period so slow service-manager restarts can settle first.
+      reason: reason ?? "update.run:fallback",
+    });
+  }, delayMs);
+  return {
+    ok: true,
+    mode: "service",
+    method,
+    delayMs,
+    reason,
+    fallback: "sigusr1",
+  };
+}
 
 export const updateHandlers: GatewayRequestHandlers = {
   "update.run": async ({ params, respond }) => {
@@ -109,7 +155,7 @@ export const updateHandlers: GatewayRequestHandlers = {
       sentinelPath = null;
     }
 
-    const restart = scheduleGatewaySigusr1Restart({
+    const restart = scheduleGatewayServiceRestart({
       delayMs: restartDelayMs,
       reason: "update.run",
     });

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { CONFIG_PATH } from "../config/config.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -17,6 +17,27 @@ vi.mock("../infra/update-runner.js", () => ({
   })),
 }));
 
+vi.mock("../infra/restart.js", async () => {
+  const actual = await vi.importActual<typeof import("../infra/restart.js")>("../infra/restart.js");
+  return {
+    ...actual,
+    triggerOpenClawRestart: vi.fn(() => ({
+      ok: true,
+      method: "systemd",
+      tried: ["systemctl --user restart openclaw-gateway.service"],
+    })),
+    scheduleGatewaySigusr1Restart: vi.fn((opts?: { delayMs?: number; reason?: string }) => ({
+      ok: true,
+      pid: process.pid,
+      signal: "SIGUSR1",
+      delayMs: opts?.delayMs ?? 2000,
+      reason: opts?.reason,
+      mode: "emit",
+    })),
+  };
+});
+
+import { scheduleGatewaySigusr1Restart, triggerOpenClawRestart } from "../infra/restart.js";
 import { runGatewayUpdate } from "../infra/update-runner.js";
 import { sleep } from "../utils.js";
 import {
@@ -44,6 +65,11 @@ beforeAll(async () => {
 afterAll(async () => {
   ws.close();
   await server.close();
+});
+
+afterEach(() => {
+  vi.mocked(triggerOpenClawRestart).mockClear();
+  vi.mocked(scheduleGatewaySigusr1Restart).mockClear();
 });
 
 const connectNodeClient = async (params: {
@@ -164,74 +190,90 @@ describe("gateway role enforcement", () => {
 });
 
 describe("gateway update.run", () => {
-  test("writes sentinel and schedules restart", async () => {
-    const sigusr1 = vi.fn();
-    process.on("SIGUSR1", sigusr1);
+  test("writes sentinel and schedules service restart", async () => {
+    const id = "req-update";
+    ws.send(
+      JSON.stringify({
+        type: "req",
+        id,
+        method: "update.run",
+        params: {
+          sessionKey: "agent:main:whatsapp:dm:+15555550123",
+          restartDelayMs: 0,
+        },
+      }),
+    );
+    const res = await onceMessage<{ ok: boolean; payload?: unknown }>(
+      ws,
+      (o) => o.type === "res" && o.id === id,
+    );
+    expect(res.ok).toBe(true);
 
-    try {
-      const id = "req-update";
-      ws.send(
-        JSON.stringify({
-          type: "req",
-          id,
-          method: "update.run",
-          params: {
-            sessionKey: "agent:main:whatsapp:dm:+15555550123",
-            restartDelayMs: 0,
-          },
-        }),
-      );
-      const res = await onceMessage<{ ok: boolean; payload?: unknown }>(
-        ws,
-        (o) => o.type === "res" && o.id === id,
-      );
-      expect(res.ok).toBe(true);
+    await waitForSignal(() => vi.mocked(triggerOpenClawRestart).mock.calls.length > 0);
+    expect(triggerOpenClawRestart).toHaveBeenCalled();
+    expect(scheduleGatewaySigusr1Restart).not.toHaveBeenCalled();
 
-      await waitForSignal(() => sigusr1.mock.calls.length > 0);
-      expect(sigusr1).toHaveBeenCalled();
-
-      const sentinelPath = path.join(os.homedir(), ".openclaw", "restart-sentinel.json");
-      const raw = await fs.readFile(sentinelPath, "utf-8");
-      const parsed = JSON.parse(raw) as {
-        payload?: { kind?: string; stats?: { mode?: string } };
-      };
-      expect(parsed.payload?.kind).toBe("update");
-      expect(parsed.payload?.stats?.mode).toBe("git");
-    } finally {
-      process.off("SIGUSR1", sigusr1);
-    }
+    const sentinelPath = path.join(os.homedir(), ".openclaw", "restart-sentinel.json");
+    const raw = await fs.readFile(sentinelPath, "utf-8");
+    const parsed = JSON.parse(raw) as {
+      payload?: { kind?: string; stats?: { mode?: string } };
+    };
+    expect(parsed.payload?.kind).toBe("update");
+    expect(parsed.payload?.stats?.mode).toBe("git");
   });
 
   test("uses configured update channel", async () => {
-    const sigusr1 = vi.fn();
-    process.on("SIGUSR1", sigusr1);
+    await fs.mkdir(path.dirname(CONFIG_PATH), { recursive: true });
+    await fs.writeFile(CONFIG_PATH, JSON.stringify({ update: { channel: "beta" } }, null, 2));
+    const updateMock = vi.mocked(runGatewayUpdate);
+    updateMock.mockClear();
+    const id = "req-update-channel";
+    ws.send(
+      JSON.stringify({
+        type: "req",
+        id,
+        method: "update.run",
+        params: {
+          restartDelayMs: 0,
+        },
+      }),
+    );
+    const res = await onceMessage<{ ok: boolean; payload?: unknown }>(
+      ws,
+      (o) => o.type === "res" && o.id === id,
+    );
+    expect(res.ok).toBe(true);
+    expect(updateMock.mock.calls[0]?.[0]?.channel).toBe("beta");
+  });
 
-    try {
-      await fs.mkdir(path.dirname(CONFIG_PATH), { recursive: true });
-      await fs.writeFile(CONFIG_PATH, JSON.stringify({ update: { channel: "beta" } }, null, 2));
-      const updateMock = vi.mocked(runGatewayUpdate);
-      updateMock.mockClear();
+  test("falls back to SIGUSR1 when service restart fails", async () => {
+    vi.mocked(triggerOpenClawRestart).mockReturnValueOnce({
+      ok: false,
+      method: "systemd",
+      detail: "systemctl restart failed: unit not loaded",
+    });
 
-      const id = "req-update-channel";
-      ws.send(
-        JSON.stringify({
-          type: "req",
-          id,
-          method: "update.run",
-          params: {
-            restartDelayMs: 0,
-          },
-        }),
-      );
-      const res = await onceMessage<{ ok: boolean; payload?: unknown }>(
-        ws,
-        (o) => o.type === "res" && o.id === id,
-      );
-      expect(res.ok).toBe(true);
-      expect(updateMock).toHaveBeenCalledOnce();
-    } finally {
-      process.off("SIGUSR1", sigusr1);
-    }
+    const id = "req-update-fallback";
+    ws.send(
+      JSON.stringify({
+        type: "req",
+        id,
+        method: "update.run",
+        params: {
+          restartDelayMs: 0,
+        },
+      }),
+    );
+    const res = await onceMessage<{ ok: boolean; payload?: unknown }>(
+      ws,
+      (o) => o.type === "res" && o.id === id,
+    );
+    expect(res.ok).toBe(true);
+
+    await waitForSignal(() => vi.mocked(scheduleGatewaySigusr1Restart).mock.calls.length > 0);
+    const fallbackArgs = vi.mocked(scheduleGatewaySigusr1Restart).mock.calls[0]?.[0];
+    expect(fallbackArgs).toEqual(expect.objectContaining({ reason: "update.run" }));
+    expect(fallbackArgs).not.toHaveProperty("delayMs");
   });
 });
 
