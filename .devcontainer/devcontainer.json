@@ -4,6 +4,6 @@
         "dockerfile": "Dockerfile"
     },
     "privileged": true,
-    "overrideCommand": false,
-    "remoteUser": "vscode"
+    "remoteUser": "vscode",
+    "postStartCommand": "sudo /workspaces/openclaw/.devcontainer/start-systemd.sh"
 }
