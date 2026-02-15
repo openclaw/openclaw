@@ -154,11 +154,11 @@ export const matchesUsageQuery = (
   const key = normalizeQueryText(term.key);
   switch (key) {
     case "agent":
-      return session.agentId?.toLowerCase().includes(value) ?? false;
+      return (session.agentId?.toLowerCase() ?? "").includes(value);
     case "channel":
-      return session.channel?.toLowerCase().includes(value) ?? false;
+      return (session.channel?.toLowerCase() ?? "").includes(value);
     case "chat":
-      return session.chatType?.toLowerCase().includes(value) ?? false;
+      return (session.chatType?.toLowerCase() ?? "").includes(value);
     case "provider":
       return getSessionProviders(session).some((provider) => provider.includes(value));
     case "model":
@@ -166,7 +166,7 @@ export const matchesUsageQuery = (
     case "tool":
       return getSessionTools(session).some((tool) => tool.includes(value));
     case "label":
-      return session.label?.toLowerCase().includes(value) ?? false;
+      return (session.label?.toLowerCase() ?? "").includes(value);
     case "key":
     case "session":
     case "id":
@@ -178,7 +178,7 @@ export const matchesUsageQuery = (
       }
       return (
         session.key.toLowerCase().includes(value) ||
-        (session.sessionId?.toLowerCase().includes(value) ?? false)
+        (session.sessionId?.toLowerCase() ?? "").includes(value)
       );
     case "has":
       switch (value) {
