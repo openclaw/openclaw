@@ -12,7 +12,8 @@ import {
 import { withTempHome } from "./test-helpers.js";
 
 function envWith(overrides: Record<string, string | undefined>): NodeJS.ProcessEnv {
-  return { ...process.env, ...overrides };
+  // Hermetic env: don't inherit process.env because other tests may mutate it.
+  return { ...overrides };
 }
 
 function loadConfigForHome(home: string) {
