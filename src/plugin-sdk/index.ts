@@ -65,6 +65,7 @@ export type {
   OpenClawPluginApi,
   OpenClawPluginService,
   OpenClawPluginServiceContext,
+  PluginLogger,
   ProviderAuthContext,
   ProviderAuthResult,
 } from "../plugins/types.js";
