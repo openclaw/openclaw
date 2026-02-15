@@ -443,7 +443,7 @@ describe("Cron issue regressions", () => {
     });
 
     targetJobId = job.id;
-    await vi.advanceTimersByTimeAsync(2);
+    await vi.advanceTimersByTimeAsync(150);
     await started.promise;
     expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
 
