@@ -55,11 +55,7 @@ const API_KEY_RE =
 const INTERNAL_IP_RE =
   /(?<!\w)(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3})(?!\w)/g;
 
-function makeRule(
-  id: OutputCspRuleId,
-  pattern: RegExp,
-  replacement: string,
-): OutputCspRule {
+function makeRule(id: OutputCspRuleId, pattern: RegExp, replacement: string): OutputCspRule {
   return {
     id,
     detect(text: string) {
@@ -87,10 +83,7 @@ const RULES = new Map<OutputCspRuleId, OutputCspRule>([
 /**
  * Apply output CSP rules to text, redacting matches and collecting violations.
  */
-export function applyOutputCsp(
-  text: string,
-  rules: OutputCspRuleId[],
-): OutputCspResult {
+export function applyOutputCsp(text: string, rules: OutputCspRuleId[]): OutputCspResult {
   let current = text;
   const strippedRules: OutputCspResult["strippedRules"] = [];
 

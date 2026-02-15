@@ -41,11 +41,7 @@ describe("applyOutputCsp", () => {
     });
 
     it("does NOT match RFC 1918 addresses in URLs", () => {
-      const texts = [
-        "http://10.0.0.1/admin",
-        "http://172.16.0.1/api",
-        "http://192.168.1.1/config",
-      ];
+      const texts = ["http://10.0.0.1/admin", "http://172.16.0.1/api", "http://192.168.1.1/config"];
       for (const text of texts) {
         const result = applyOutputCsp(text, ["no-external-urls"]);
         expect(result.strippedRules).toEqual([]);
@@ -80,20 +76,18 @@ describe("applyOutputCsp", () => {
     });
 
     it("redacts fenced code blocks with language tag", () => {
-      const result = applyOutputCsp(
-        "Example:\n```typescript\nconst x: number = 1;\n```\nEnd",
-        ["no-code-blocks"],
-      );
+      const result = applyOutputCsp("Example:\n```typescript\nconst x: number = 1;\n```\nEnd", [
+        "no-code-blocks",
+      ]);
       expect(result.text).toBe("Example:\n[code block redacted]\nEnd");
     });
   });
 
   describe("no-system-info", () => {
     it("redacts kernel version strings", () => {
-      const result = applyOutputCsp(
-        "Running Linux server 5.15.0-generic #1 SMP x86_64",
-        ["no-system-info"],
-      );
+      const result = applyOutputCsp("Running Linux server 5.15.0-generic #1 SMP x86_64", [
+        "no-system-info",
+      ]);
       expect(result.text).toContain("[system info redacted]");
       expect(result.strippedRules).toHaveLength(1);
     });
@@ -107,10 +101,7 @@ describe("applyOutputCsp", () => {
 
   describe("no-api-keys", () => {
     it("redacts sk- prefixed keys", () => {
-      const result = applyOutputCsp(
-        "Key: sk-abcdefghijklmnopqrstuvwxyz",
-        ["no-api-keys"],
-      );
+      const result = applyOutputCsp("Key: sk-abcdefghijklmnopqrstuvwxyz", ["no-api-keys"]);
       expect(result.text).toBe("Key: [key redacted]");
     });
 
@@ -128,10 +119,7 @@ describe("applyOutputCsp", () => {
     });
 
     it("redacts pk_live/pk_test keys", () => {
-      const result = applyOutputCsp(
-        "Stripe: pk_live_abcdefghijklmnopqrstuvwxyz",
-        ["no-api-keys"],
-      );
+      const result = applyOutputCsp("Stripe: pk_live_abcdefghijklmnopqrstuvwxyz", ["no-api-keys"]);
       expect(result.text).toBe("Stripe: [key redacted]");
     });
   });

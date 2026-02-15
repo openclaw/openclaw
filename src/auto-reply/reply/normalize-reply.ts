@@ -1,5 +1,7 @@
 import type { ReplyPayload } from "../types.js";
 import { sanitizeUserFacingText } from "../../agents/pi-embedded-helpers.js";
+import { emitSecurityEvent } from "../../security/event-logger.js";
+import { applyOutputCsp, type OutputCspRuleId } from "../../security/output-policy.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import { HEARTBEAT_TOKEN, isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import { hasLineDirectives, parseLineDirectives } from "./line-directives.js";
@@ -18,6 +20,12 @@ export type NormalizeReplyOptions = {
   stripHeartbeat?: boolean;
   silentToken?: string;
   onSkip?: (reason: NormalizeReplySkipReason) => void;
+  /** Pre-resolved CSP rules for this channel (caller resolves from config). */
+  outputCspRules?: OutputCspRuleId[];
+  /** Channel identifier for CSP security event emission. */
+  outputCspChannel?: string;
+  /** Session key for CSP security event emission. */
+  outputCspSessionKey?: string;
 };
 
 export function normalizeReplyPayload(
@@ -64,6 +72,31 @@ export function normalizeReplyPayload(
   if (text) {
     text = sanitizeUserFacingText(text, { errorContext: Boolean(payload.isError) });
   }
+
+  // Apply output CSP rules before chunking and LINE directives
+  if (text && opts.outputCspRules && opts.outputCspRules.length > 0) {
+    const cspResult = applyOutputCsp(text, opts.outputCspRules);
+    if (cspResult.strippedRules.length > 0) {
+      for (const stripped of cspResult.strippedRules) {
+        emitSecurityEvent({
+          eventType: "output.csp.stripped",
+          timestamp: new Date().toISOString(),
+          severity: "warn",
+          channel: opts.outputCspChannel,
+          sessionKey: opts.outputCspSessionKey,
+          action: "redacted",
+          detail: `Rule ${stripped.ruleId} matched ${stripped.matches.length} pattern(s)`,
+          meta: {
+            ruleId: stripped.ruleId,
+            matchCount: stripped.matches.length,
+            originalMatches: stripped.matches.slice(0, 5),
+          },
+        });
+      }
+      text = cspResult.text;
+    }
+  }
+
   if (!text?.trim() && !hasMedia && !hasChannelData) {
     opts.onSkip?.("empty");
     return null;
