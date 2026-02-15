@@ -441,7 +441,7 @@ export async function handleDirectiveOnly(
     parts.push(
       directives.planLevel === "on"
         ? formatDirectiveAck("Plan mode enabled (read-only analysis tools only).")
-        : formatDirectiveAck("Plan mode disabled (full tools restored)."),
+        : formatDirectiveAck("Plan mode disabled (default tools restored)."),
     );
   }
   if (directives.hasExecDirective && directives.hasExecOptions) {

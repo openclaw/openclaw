@@ -318,6 +318,7 @@ export async function runEmbeddedAttempt(
           requireExplicitMessageTarget:
             params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
           disableMessageTool: params.disableMessageTool,
+          sessionToolProfile: params.sessionToolProfile,
         });
     const tools = sanitizeToolsForGoogle({ tools: toolsRaw, provider: params.provider });
     logToolSchemasForGoogle({ tools, provider: params.provider });
@@ -426,11 +427,25 @@ export async function runEmbeddedAttempt(
     });
     const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
 
+    // Build plan mode system prompt hint if plan mode is active
+    const planModeHint =
+      params.sessionToolProfile === "plan"
+        ? `You are in PLAN MODE (read-only). You can explore, search, and analyze — but cannot make changes.
+
+Allowed: reading files, searching, web lookup, viewing status
+Not allowed: writing files, running commands, sending messages, making changes
+
+Your goal is to understand the problem and propose a plan. Do not execute — wait for user approval to switch modes.`
+        : undefined;
+    const effectiveExtraPrompt = [params.extraSystemPrompt, planModeHint]
+      .filter(Boolean)
+      .join("\n\n");
+
     const appendPrompt = buildEmbeddedSystemPrompt({
       workspaceDir: effectiveWorkspace,
       defaultThinkLevel: params.thinkLevel,
       reasoningLevel: params.reasoningLevel ?? "off",
-      extraSystemPrompt: params.extraSystemPrompt,
+      extraSystemPrompt: effectiveExtraPrompt || undefined,
       ownerNumbers: params.ownerNumbers,
       reasoningTagHint,
       heartbeatPrompt: isDefaultAgent

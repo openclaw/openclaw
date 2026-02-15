@@ -114,6 +114,16 @@ export async function persistInlineDirectives(params: {
         (directives.elevatedLevel !== prevElevatedLevel && directives.elevatedLevel !== undefined);
       updated = true;
     }
+    if (directives.hasPlanDirective && directives.planLevel) {
+      sessionEntry.planLevel = directives.planLevel;
+      if (directives.planLevel === "on") {
+        sessionEntry.toolProfile = "plan";
+      } else {
+        delete sessionEntry.toolProfile;
+        delete sessionEntry.planLevel;
+      }
+      updated = true;
+    }
     if (directives.hasExecDirective && directives.hasExecOptions) {
       if (directives.execHost) {
         sessionEntry.execHost = directives.execHost;

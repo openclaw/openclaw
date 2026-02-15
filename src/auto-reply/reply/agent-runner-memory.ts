@@ -146,6 +146,7 @@ export async function runMemoryFlushIfNeeded(params: {
           thinkLevel: params.followupRun.run.thinkLevel,
           verboseLevel: params.followupRun.run.verboseLevel,
           reasoningLevel: params.followupRun.run.reasoningLevel,
+          sessionToolProfile: params.followupRun.run.sessionToolProfile,
           execOverrides: params.followupRun.run.execOverrides,
           bashElevated: params.followupRun.run.bashElevated,
           timeoutMs: params.followupRun.run.timeoutMs,

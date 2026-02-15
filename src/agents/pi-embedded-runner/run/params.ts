@@ -73,6 +73,8 @@ export type RunEmbeddedPiAgentParams = {
   thinkLevel?: ThinkLevel;
   verboseLevel?: VerboseLevel;
   reasoningLevel?: ReasoningLevel;
+  /** Session-level tool profile override (e.g., "plan" from /plan on directive). */
+  sessionToolProfile?: string;
   toolResultFormat?: ToolResultFormat;
   execOverrides?: Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
   bashElevated?: ExecElevatedDefaults;

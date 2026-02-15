@@ -106,6 +106,8 @@ export type CompactEmbeddedPiSessionParams = {
   model?: string;
   thinkLevel?: ThinkLevel;
   reasoningLevel?: ReasoningLevel;
+  /** Session-level tool profile override (e.g., "plan" from /plan on directive). */
+  sessionToolProfile?: string;
   bashElevated?: ExecElevatedDefaults;
   customInstructions?: string;
   trigger?: "overflow" | "manual";
@@ -383,6 +385,7 @@ export async function compactEmbeddedPiSessionDirect(
       modelProvider: model.provider,
       modelId,
       modelAuthMode: resolveModelAuthMode(model.provider, params.config),
+      sessionToolProfile: params.sessionToolProfile,
     });
     const tools = sanitizeToolsForGoogle({ tools: toolsRaw, provider });
     logToolSchemasForGoogle({ tools, provider });

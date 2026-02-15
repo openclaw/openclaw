@@ -183,6 +183,8 @@ export function createOpenClawCodingTools(options?: {
   disableMessageTool?: boolean;
   /** Whether the sender is an owner (required for owner-only tools). */
   senderIsOwner?: boolean;
+  /** Session-level tool profile override (e.g., "plan" from /plan on directive). */
+  sessionToolProfile?: string;
 }): AnyAgentTool[] {
   const execToolName = "exec";
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
@@ -201,6 +203,7 @@ export function createOpenClawCodingTools(options?: {
     sessionKey: options?.sessionKey,
     modelProvider: options?.modelProvider,
     modelId: options?.modelId,
+    sessionToolProfile: options?.sessionToolProfile,
   });
   const groupPolicy = resolveGroupToolPolicy({
     config: options?.config,

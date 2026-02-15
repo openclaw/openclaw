@@ -421,6 +421,7 @@ export async function runPreparedReply(
       verboseLevel: resolvedVerboseLevel,
       reasoningLevel: resolvedReasoningLevel,
       elevatedLevel: resolvedElevatedLevel,
+      sessionToolProfile: sessionEntry?.toolProfile ?? undefined,
       execOverrides,
       bashElevated: {
         enabled: elevatedEnabled,
