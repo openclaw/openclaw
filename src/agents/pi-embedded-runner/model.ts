@@ -23,6 +23,70 @@ type InlineProviderConfig = {
 
 export { buildModelAliasLines };
 
+// google-antigravity OAuth provider wraps Anthropic/Gemini models via Google's API.
+// When antigravity updates their model catalog (e.g., claude-opus-4-6-thinking),
+// OpenClaw's pi-ai registry may not have the new ID yet. This fallback maps new
+// claude-opus-4-6 variants to their claude-opus-4-5 equivalents for forward-compat.
+function resolveAntigravityOpus46ForwardCompatModel(
+  provider: string,
+  modelId: string,
+  modelRegistry: ModelRegistry,
+): Model<Api> | undefined {
+  const normalizedProvider = normalizeProviderId(provider);
+  if (normalizedProvider !== "google-antigravity") {
+    return undefined;
+  }
+
+  const trimmedModelId = modelId.trim();
+  const lower = trimmedModelId.toLowerCase();
+
+  // Match claude-opus-4-6, claude-opus-4-6-thinking, claude-opus-4.6, etc.
+  const isOpus46 =
+    lower === ANTHROPIC_OPUS_46_MODEL_ID ||
+    lower === ANTHROPIC_OPUS_46_DOT_MODEL_ID ||
+    lower.startsWith(`${ANTHROPIC_OPUS_46_MODEL_ID}-`) ||
+    lower.startsWith(`${ANTHROPIC_OPUS_46_DOT_MODEL_ID}-`);
+  if (!isOpus46) {
+    return undefined;
+  }
+
+  // Build candidate template IDs by replacing 4-6 with 4-5
+  const templateIds: string[] = [];
+  if (lower.startsWith(ANTHROPIC_OPUS_46_MODEL_ID)) {
+    templateIds.push(lower.replace(ANTHROPIC_OPUS_46_MODEL_ID, "claude-opus-4-5"));
+  }
+  if (lower.startsWith(ANTHROPIC_OPUS_46_DOT_MODEL_ID)) {
+    templateIds.push(lower.replace(ANTHROPIC_OPUS_46_DOT_MODEL_ID, "claude-opus-4.5"));
+  }
+  templateIds.push(...ANTHROPIC_OPUS_TEMPLATE_MODEL_IDS);
+
+  // Try to find a template model in the registry for google-antigravity
+  for (const templateId of [...new Set(templateIds)].filter(Boolean)) {
+    const template = modelRegistry.find(normalizedProvider, templateId) as Model<Api> | null;
+    if (template) {
+      return normalizeModelCompat({
+        ...template,
+        id: trimmedModelId,
+        name: trimmedModelId,
+      } as Model<Api>);
+    }
+  }
+
+  // If no template found in registry, create a synthetic model definition
+  // google-antigravity uses anthropic-messages API for Claude models
+  return normalizeModelCompat({
+    id: trimmedModelId,
+    name: trimmedModelId,
+    api: "anthropic-messages",
+    provider: normalizedProvider,
+    reasoning: lower.includes("thinking"),
+    input: ["text", "image"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: DEFAULT_CONTEXT_TOKENS,
+    maxTokens: DEFAULT_CONTEXT_TOKENS,
+  } as Model<Api>);
+}
+
 export function buildInlineProviderModels(
   providers: Record<string, InlineProviderConfig>,
 ): InlineModelEntry[] {
@@ -75,6 +139,14 @@ export function resolveModel(
     const forwardCompat = resolveForwardCompatModel(provider, modelId, modelRegistry);
     if (forwardCompat) {
       return { model: forwardCompat, authStorage, modelRegistry };
+    }
+    const antigravityForwardCompat = resolveAntigravityOpus46ForwardCompatModel(
+      provider,
+      modelId,
+      modelRegistry,
+    );
+    if (antigravityForwardCompat) {
+      return { model: antigravityForwardCompat, authStorage, modelRegistry };
     }
     const providerCfg = providers[provider];
     if (providerCfg || modelId.startsWith("mock-")) {
