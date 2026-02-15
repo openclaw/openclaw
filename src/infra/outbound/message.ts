@@ -31,6 +31,8 @@ export type MessageGatewayOptions = {
 type MessageSendParams = {
   to: string;
   content: string;
+  /** Active agent id for per-agent outbound media root scoping. */
+  agentId?: string;
   channel?: string;
   mediaUrl?: string;
   mediaUrls?: string[];
@@ -179,6 +181,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       cfg,
       channel: outboundChannel,
       to: resolvedTarget.to,
+      agentId: params.agentId,
       accountId: params.accountId,
       payloads: normalizedPayloads,
       replyToId: params.replyToId,
