@@ -190,11 +190,18 @@ export function resolveBrowserConfig(
     controlPort,
   );
   const cdpProtocol = cdpInfo.parsed.protocol === "https:" ? "https" : "http";
+
+  // In headless/noSandbox environments (servers), prefer "openclaw" profile over "chrome"
+  // because Chrome extension relay requires a GUI browser which isn't available headless.
+  // Issue: https://github.com/openclaw/openclaw/issues/14895
+  const preferOpenClawProfile = headless || noSandbox;
   const defaultProfile =
     defaultProfileFromConfig ??
-    (profiles[DEFAULT_BROWSER_DEFAULT_PROFILE_NAME]
-      ? DEFAULT_BROWSER_DEFAULT_PROFILE_NAME
-      : DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME);
+    (preferOpenClawProfile && profiles[DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME]
+      ? DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME
+      : profiles[DEFAULT_BROWSER_DEFAULT_PROFILE_NAME]
+        ? DEFAULT_BROWSER_DEFAULT_PROFILE_NAME
+        : DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME);
 
   return {
     enabled,
