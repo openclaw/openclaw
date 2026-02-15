@@ -38,15 +38,26 @@ type DebounceBuffer<T> = {
   timeout: ReturnType<typeof setTimeout> | null;
 };
 
+const DEFAULT_RETRY_ATTEMPTS = 3;
+const DEFAULT_RETRY_BASE_MS = 500;
+
 export function createInboundDebouncer<T>(params: {
   debounceMs: number;
   buildKey: (item: T) => string | null | undefined;
   shouldDebounce?: (item: T) => boolean;
   onFlush: (items: T[]) => Promise<void>;
   onError?: (err: unknown, items: T[]) => void;
+  /** Max retry attempts when flush fails (default: 3). */
+  retryAttempts?: number;
+  /** Base delay in ms for exponential backoff (default: 500). */
+  retryBaseMs?: number;
 }) {
   const buffers = new Map<string, DebounceBuffer<T>>();
   const debounceMs = Math.max(0, Math.trunc(params.debounceMs));
+  const retryAttempts = params.retryAttempts ?? DEFAULT_RETRY_ATTEMPTS;
+  const retryBaseMs = params.retryBaseMs ?? DEFAULT_RETRY_BASE_MS;
+
+  const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
   const flushBuffer = async (key: string, buffer: DebounceBuffer<T>) => {
     buffers.delete(key);
@@ -57,11 +68,23 @@ export function createInboundDebouncer<T>(params: {
     if (buffer.items.length === 0) {
       return;
     }
-    try {
-      await params.onFlush(buffer.items);
-    } catch (err) {
-      params.onError?.(err, buffer.items);
+    // Retry with exponential backoff when flush fails (e.g. session store
+    // lock contention).  This prevents silent message loss when a cron job
+    // or other operation holds the lock temporarily.
+    // See: https://github.com/openclaw/openclaw/issues/17421
+    let lastErr: unknown;
+    for (let attempt = 0; attempt <= retryAttempts; attempt++) {
+      try {
+        await params.onFlush(buffer.items);
+        return;
+      } catch (err) {
+        lastErr = err;
+        if (attempt < retryAttempts) {
+          await delay(retryBaseMs * 2 ** attempt);
+        }
+      }
     }
+    params.onError?.(lastErr, buffer.items);
   };
 
   const flushKey = async (key: string) => {
@@ -90,7 +113,9 @@ export function createInboundDebouncer<T>(params: {
       if (key && buffers.has(key)) {
         await flushKey(key);
       }
-      await params.onFlush([item]);
+      // Route non-debounced messages (media, control commands) through
+      // flushBuffer so they also benefit from retry-on-lock-contention.
+      await flushBuffer("__immediate__", { items: [item], timeout: null });
       return;
     }
 
