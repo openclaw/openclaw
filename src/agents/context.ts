@@ -30,11 +30,39 @@ const loadPromise = (async () => {
   }
 })();
 
+/**
+ * Synchronous fallback: read contextWindow from the user's config file.
+ * This is available immediately (no async discovery) so the first call
+ * before MODEL_CACHE is populated still returns the correct value.
+ */
+function lookupContextTokensFromConfig(modelId: string): number | undefined {
+  try {
+    const cfg = loadConfig();
+    const providers = cfg?.models?.providers;
+    if (!providers || typeof providers !== "object") {
+      return undefined;
+    }
+    for (const provider of Object.values(providers)) {
+      const models = Array.isArray((provider as { models?: unknown }).models)
+        ? ((provider as { models: unknown[] }).models as ModelEntry[])
+        : [];
+      for (const m of models) {
+        if (m?.id === modelId && typeof m.contextWindow === "number" && m.contextWindow > 0) {
+          return m.contextWindow;
+        }
+      }
+    }
+  } catch {
+    // Config not available — fall through.
+  }
+  return undefined;
+}
+
 export function lookupContextTokens(modelId?: string): number | undefined {
   if (!modelId) {
     return undefined;
   }
   // Best-effort: kick off loading, but don't block.
   void loadPromise;
-  return MODEL_CACHE.get(modelId);
+  return MODEL_CACHE.get(modelId) ?? lookupContextTokensFromConfig(modelId);
 }
