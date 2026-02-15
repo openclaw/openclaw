@@ -640,7 +640,7 @@ openclaw message poll --channel telegram --target 123456789 \
 
     Poll constraints (Telegram):
 
-    - `--poll-option` supports 2-12 options
+    - `--poll-option` supports 2-10 options
     - `--poll-duration-seconds` supports 5-600
     - use `--poll-public` to make the poll non-anonymous
 
