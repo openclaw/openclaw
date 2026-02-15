@@ -87,10 +87,10 @@ type RequiredParamGroup = {
   label?: string;
 };
 
-const NON_RETRYABLE_SUFFIX = " [NON-RETRYABLE]";
+const RETRY_GUIDANCE_SUFFIX = " Supply correct parameters before retrying.";
 
-function nonRetryableValidationError(message: string): Error {
-  return new Error(`${message}${NON_RETRYABLE_SUFFIX}`);
+function parameterValidationError(message: string): Error {
+  return new Error(`${message}.${RETRY_GUIDANCE_SUFFIX}`);
 }
 
 export const CLAUDE_PARAM_GROUPS = {
@@ -251,7 +251,7 @@ export function assertRequiredParams(
   toolName: string,
 ): void {
   if (!record || typeof record !== "object") {
-    throw nonRetryableValidationError(`Missing parameters for ${toolName}`);
+    throw parameterValidationError(`Missing parameters for ${toolName}`);
   }
 
   const missingLabels: string[] = [];
@@ -279,7 +279,7 @@ export function assertRequiredParams(
   if (missingLabels.length > 0) {
     const joined = missingLabels.join(", ");
     const noun = missingLabels.length === 1 ? "parameter" : "parameters";
-    throw nonRetryableValidationError(`Missing required ${noun}: ${joined}`);
+    throw parameterValidationError(`Missing required ${noun}: ${joined}`);
   }
 }
 
