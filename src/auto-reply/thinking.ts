@@ -1,4 +1,4 @@
-export type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+export type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 export type VerboseLevel = "off" | "on" | "full";
 export type NoticeLevel = "off" | "on" | "full";
 export type ElevatedLevel = "off" | "on" | "ask" | "full";
@@ -63,10 +63,11 @@ export function normalizeThinkLevel(raw?: string | null): ThinkLevel | undefined
   if (["mid", "med", "medium", "thinkharder", "think-harder", "harder"].includes(key)) {
     return "medium";
   }
-  if (
-    ["high", "ultra", "ultrathink", "think-hard", "thinkhardest", "highest", "max"].includes(key)
-  ) {
+  if (["high", "ultra", "ultrathink", "think-hard", "thinkhardest", "highest"].includes(key)) {
     return "high";
+  }
+  if (["max", "maximum"].includes(key)) {
+    return "max";
   }
   if (["think"].includes(key)) {
     return "minimal";
@@ -86,6 +87,17 @@ export function supportsXHighThinking(provider?: string | null, model?: string |
   return XHIGH_MODEL_IDS.has(modelKey);
 }
 
+export function resolveMaxThinkLevel(
+  level: ThinkLevel | undefined,
+  provider?: string | null,
+  model?: string | null,
+): ThinkLevel | undefined {
+  if (!level || level !== "max") {
+    return level;
+  }
+  return supportsXHighThinking(provider, model) ? "xhigh" : "high";
+}
+
 export function listThinkingLevels(provider?: string | null, model?: string | null): ThinkLevel[] {
   const levels: ThinkLevel[] = ["off", "minimal", "low", "medium", "high"];
   if (supportsXHighThinking(provider, model)) {
@@ -98,7 +110,9 @@ export function listThinkingLevelLabels(provider?: string | null, model?: string
   if (isBinaryThinkingProvider(provider)) {
     return ["off", "on"];
   }
-  return listThinkingLevels(provider, model);
+  const levels = listThinkingLevels(provider, model).slice();
+  levels.push("max");
+  return levels;
 }
 
 export function formatThinkingLevels(

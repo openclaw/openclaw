@@ -3,11 +3,12 @@ import fs from "node:fs";
 import path from "node:path";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentConfig, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveThinkingDefault } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
+import { normalizeThinkLevel, resolveMaxThinkLevel } from "../../auto-reply/thinking.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
@@ -261,14 +262,19 @@ export const chatHandlers: GatewayRequestHandlers = {
     const sliced = rawMessages.length > max ? rawMessages.slice(-max) : rawMessages;
     const sanitized = stripEnvelopeFromMessages(sliced);
     const capped = capArrayByJsonBytes(sanitized, getMaxChatHistoryMessagesBytes()).items;
+    const agentId = resolveSessionAgentId({
+      sessionKey,
+      config: cfg,
+    });
+    const { provider, model } = resolveSessionModelRef(cfg, entry, agentId);
+
     let thinkingLevel = entry?.thinkingLevel;
     if (!thinkingLevel) {
-      const configured = cfg.agents?.defaults?.thinkingDefault;
+      const agentConfig = resolveAgentConfig(cfg, agentId);
+      const configured = agentConfig?.thinkingDefault ?? cfg.agents?.defaults?.thinkingDefault;
       if (configured) {
         thinkingLevel = configured;
       } else {
-        const sessionAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
-        const { provider, model } = resolveSessionModelRef(cfg, entry, sessionAgentId);
         const catalog = await context.loadGatewayModelCatalog();
         thinkingLevel = resolveThinkingDefault({
           cfg,
@@ -278,6 +284,14 @@ export const chatHandlers: GatewayRequestHandlers = {
         });
       }
     }
+
+    if (thinkingLevel) {
+      const normalized = normalizeThinkLevel(thinkingLevel);
+      if (normalized) {
+        thinkingLevel = resolveMaxThinkLevel(normalized, provider, model) ?? thinkingLevel;
+      }
+    }
+
     const verboseLevel = entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;
     respond(true, {
       sessionKey,

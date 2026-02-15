@@ -31,6 +31,7 @@ import {
   type ElevatedLevel,
   formatXHighModelHint,
   normalizeThinkLevel,
+  resolveMaxThinkLevel,
   type ReasoningLevel,
   supportsXHighThinking,
   type ThinkLevel,
@@ -298,6 +299,7 @@ export async function runPreparedReply(
   if (!resolvedThinkLevel) {
     resolvedThinkLevel = await modelState.resolveDefaultThinkingLevel();
   }
+  resolvedThinkLevel = resolveMaxThinkLevel(resolvedThinkLevel, provider, model);
   if (resolvedThinkLevel === "xhigh" && !supportsXHighThinking(provider, model)) {
     const explicitThink = directives.hasThinkDirective && directives.thinkLevel !== undefined;
     if (explicitThink) {

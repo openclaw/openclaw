@@ -1,12 +1,18 @@
 import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
+import { resolveMaxThinkLevel } from "../../auto-reply/thinking.js";
 
-export function mapThinkingLevel(level?: ThinkLevel): ThinkingLevel {
+export function mapThinkingLevel(
+  level?: ThinkLevel,
+  provider?: string | null,
+  model?: string | null,
+): ThinkingLevel {
   // pi-agent-core supports "xhigh"; OpenClaw enables it for specific models.
   if (!level) {
     return "off";
   }
-  return level;
+  const resolved = resolveMaxThinkLevel(level, provider, model) ?? level;
+  return resolved === "max" ? "high" : resolved;
 }
 
 export function describeUnknownError(error: unknown): string {

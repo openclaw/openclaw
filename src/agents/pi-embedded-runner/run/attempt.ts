@@ -563,7 +563,7 @@ export async function runEmbeddedAttempt(
         authStorage: params.authStorage,
         modelRegistry: params.modelRegistry,
         model: params.model,
-        thinkingLevel: mapThinkingLevel(params.thinkLevel),
+        thinkingLevel: mapThinkingLevel(params.thinkLevel, params.provider, params.modelId),
         tools: builtInTools,
         customTools: allCustomTools,
         sessionManager,

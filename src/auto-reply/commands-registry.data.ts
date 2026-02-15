@@ -6,7 +6,7 @@ import type {
 import { listChannelDocks } from "../channels/dock.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { COMMAND_ARG_FORMATTERS } from "./commands-args.js";
-import { listThinkingLevels } from "./thinking.js";
+import { listThinkingLevelLabels } from "./thinking.js";
 
 type DefineChatCommandInput = {
   key: string;
@@ -466,9 +466,9 @@ function buildChatCommands(): ChatCommandDefinition[] {
       args: [
         {
           name: "level",
-          description: "off, minimal, low, medium, high, xhigh",
+          description: "off, minimal, low, medium, high, xhigh, max",
           type: "string",
-          choices: ({ provider, model }) => listThinkingLevels(provider, model),
+          choices: ({ provider, model }) => listThinkingLevelLabels(provider, model),
         },
       ],
       argsMenu: "auto",

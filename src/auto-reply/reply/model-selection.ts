@@ -393,7 +393,7 @@ export async function createModelSelectionState(params: {
       catalog: catalogForThinking,
     });
     defaultThinkingLevel =
-      resolved ?? (agentCfg?.thinkingDefault as ThinkLevel | undefined) ?? "off";
+      (agentCfg?.thinkingDefault as ThinkLevel | undefined) ?? resolved ?? "off";
     return defaultThinkingLevel;
   };
 

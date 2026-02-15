@@ -38,6 +38,10 @@ describe("normalizeThinkLevel", () => {
   it("accepts on as low", () => {
     expect(normalizeThinkLevel("on")).toBe("low");
   });
+
+  it("accepts max", () => {
+    expect(normalizeThinkLevel("max")).toBe("max");
+  });
 });
 
 describe("listThinkingLevels", () => {
@@ -68,6 +72,7 @@ describe("listThinkingLevelLabels", () => {
 
   it("returns full levels for non-ZAI", () => {
     expect(listThinkingLevelLabels("openai", "gpt-4.1-mini")).toContain("low");
+    expect(listThinkingLevelLabels("openai", "gpt-4.1-mini")).toContain("max");
     expect(listThinkingLevelLabels("openai", "gpt-4.1-mini")).not.toContain("on");
   });
 });
