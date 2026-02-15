@@ -11,6 +11,13 @@ import { restartGatewayProcessWithFreshPid } from "./process-respawn.js";
 const originalEnv = { ...process.env };
 const originalArgv = [...process.argv];
 const originalExecArgv = [...process.execArgv];
+const supervisorHintEnvVars = [
+  "LAUNCH_JOB_LABEL",
+  "LAUNCH_JOB_NAME",
+  "INVOCATION_ID",
+  "SYSTEMD_EXEC_PID",
+  "JOURNAL_STREAM",
+];
 
 function restoreEnv() {
   for (const key of Object.keys(process.env)) {
@@ -27,20 +34,18 @@ function restoreEnv() {
   }
 }
 
+function clearSupervisorHints() {
+  for (const key of supervisorHintEnvVars) {
+    delete process.env[key];
+  }
+}
+
 afterEach(() => {
   restoreEnv();
   process.argv = [...originalArgv];
   process.execArgv = [...originalExecArgv];
   spawnMock.mockReset();
 });
-
-function clearSupervisorHints() {
-  delete process.env.LAUNCH_JOB_LABEL;
-  delete process.env.LAUNCH_JOB_NAME;
-  delete process.env.INVOCATION_ID;
-  delete process.env.SYSTEMD_EXEC_PID;
-  delete process.env.JOURNAL_STREAM;
-}
 
 describe("restartGatewayProcessWithFreshPid", () => {
   it("returns disabled when OPENCLAW_NO_RESPAWN is set", () => {
@@ -80,7 +85,6 @@ describe("restartGatewayProcessWithFreshPid", () => {
   it("returns failed when spawn throws", () => {
     delete process.env.OPENCLAW_NO_RESPAWN;
     clearSupervisorHints();
-
     spawnMock.mockImplementation(() => {
       throw new Error("spawn failed");
     });

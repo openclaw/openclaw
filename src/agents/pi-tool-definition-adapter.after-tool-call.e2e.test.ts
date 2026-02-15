@@ -61,11 +61,13 @@ describe("pi tool definition adapter after_tool_call", () => {
     expect(result.details).toMatchObject({ ok: true });
     expect(hookMocks.runner.runAfterToolCall).toHaveBeenCalledTimes(1);
     expect(hookMocks.runner.runAfterToolCall).toHaveBeenCalledWith(
-      {
+      expect.objectContaining({
         toolName: "read",
         params: { mode: "safe" },
-        result,
-      },
+        result: expect.objectContaining({
+          details: expect.objectContaining({ ok: true }),
+        }),
+      }),
       { toolName: "read" },
     );
   });

@@ -132,6 +132,11 @@ export type AgentDefaultsConfig = {
   cliBackends?: Record<string, CliBackendConfig>;
   /** Opt-in: prune old tool results from the LLM context to reduce token usage. */
   contextPruning?: AgentContextPruningConfig;
+  /** Tool-result duration metadata injection/normalization controls. */
+  toolResultDurations?: {
+    /** Enable duration field injection/normalization for tool results (default: true). */
+    enabled?: boolean;
+  };
   /** Compaction tuning and pre-compaction memory flush behavior. */
   compaction?: AgentCompactionConfig;
   /** Vector memory search configuration (per-agent overrides supported). */

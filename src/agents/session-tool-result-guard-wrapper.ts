@@ -22,6 +22,7 @@ export function guardSessionManager(
     sessionKey?: string;
     inputProvenance?: InputProvenance;
     allowSyntheticToolResults?: boolean;
+    normalizeToolResultDurationsForTranscript?: boolean;
   },
 ): GuardedSessionManager {
   if (typeof (sessionManager as GuardedSessionManager).flushPendingToolResults === "function") {
@@ -55,6 +56,7 @@ export function guardSessionManager(
       applyInputProvenanceToUserMessage(message, opts?.inputProvenance),
     transformToolResultForPersistence: transform,
     allowSyntheticToolResults: opts?.allowSyntheticToolResults,
+    normalizeToolResultDurationsForTranscript: opts?.normalizeToolResultDurationsForTranscript,
   });
   (sessionManager as GuardedSessionManager).flushPendingToolResults = guard.flushPendingToolResults;
   return sessionManager as GuardedSessionManager;

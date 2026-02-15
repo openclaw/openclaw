@@ -64,6 +64,7 @@ import {
 } from "../../skills.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
+import { isToolResultDurationTrackingEnabled } from "../../tool-result-durations.js";
 import { resolveTranscriptPolicy } from "../../transcript-policy.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
@@ -499,6 +500,7 @@ export async function runEmbeddedAttempt(
         provider: params.provider,
         modelId: params.modelId,
       });
+      const recordToolResultDurations = isToolResultDurationTrackingEnabled(params.config);
 
       await prewarmSessionFile(params.sessionFile);
       sessionManager = guardSessionManager(SessionManager.open(params.sessionFile), {
@@ -506,6 +508,7 @@ export async function runEmbeddedAttempt(
         sessionKey: params.sessionKey,
         inputProvenance: params.inputProvenance,
         allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
+        normalizeToolResultDurationsForTranscript: recordToolResultDurations,
       });
       trackSessionManagerAccess(params.sessionFile);
 
@@ -538,6 +541,7 @@ export async function runEmbeddedAttempt(
       const { builtInTools, customTools } = splitSdkTools({
         tools,
         sandboxEnabled: !!sandbox?.enabled,
+        recordToolResultDurations,
       });
 
       // Add client tools (OpenResponses hosted tools) to customTools
@@ -551,6 +555,9 @@ export async function runEmbeddedAttempt(
             {
               agentId: sessionAgentId,
               sessionKey: params.sessionKey,
+            },
+            {
+              recordDurationMetadata: recordToolResultDurations,
             },
           )
         : [];

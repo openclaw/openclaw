@@ -90,6 +90,12 @@ export const AgentDefaultsSchema = z
       })
       .strict()
       .optional(),
+    toolResultDurations: z
+      .object({
+        enabled: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     compaction: z
       .object({
         mode: z.union([z.literal("default"), z.literal("safeguard")]).optional(),
