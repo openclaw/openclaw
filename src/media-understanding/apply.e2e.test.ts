@@ -859,4 +859,62 @@ describe("applyMediaUnderstanding", () => {
     expect(result.appliedFile).toBe(true);
     expect(ctx.Body).toContain("中文内容");
   });
+
+  it("skips binary application/vnd office attachments even when bytes look printable", async () => {
+    const { applyMediaUnderstanding } = await loadApply();
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-"));
+    const filePath = path.join(dir, "report.xlsx");
+    // ZIP-based Office docs can have printable-leading bytes.
+    const pseudoZip = Buffer.from("PK\u0003\u0004[Content_Types].xml xl/workbook.xml", "utf8");
+    await fs.writeFile(filePath, pseudoZip);
+
+    const ctx: MsgContext = {
+      Body: "<media:file>",
+      MediaPath: filePath,
+      MediaType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    };
+    const cfg: OpenClawConfig = {
+      tools: {
+        media: {
+          audio: { enabled: false },
+          image: { enabled: false },
+          video: { enabled: false },
+        },
+      },
+    };
+
+    const result = await applyMediaUnderstanding({ ctx, cfg });
+
+    expect(result.appliedFile).toBe(false);
+    expect(ctx.Body).toBe("<media:file>");
+    expect(ctx.Body).not.toContain("<file");
+  });
+
+  it("keeps vendor +json attachments eligible for text extraction", async () => {
+    const { applyMediaUnderstanding } = await loadApply();
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-"));
+    const filePath = path.join(dir, "payload.bin");
+    await fs.writeFile(filePath, '{"ok":true,"source":"vendor-json"}');
+
+    const ctx: MsgContext = {
+      Body: "<media:file>",
+      MediaPath: filePath,
+      MediaType: "application/vnd.api+json",
+    };
+    const cfg: OpenClawConfig = {
+      tools: {
+        media: {
+          audio: { enabled: false },
+          image: { enabled: false },
+          video: { enabled: false },
+        },
+      },
+    };
+
+    const result = await applyMediaUnderstanding({ ctx, cfg });
+
+    expect(result.appliedFile).toBe(true);
+    expect(ctx.Body).toContain("<file");
+    expect(ctx.Body).toContain("vendor-json");
+  });
 });
