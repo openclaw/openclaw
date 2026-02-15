@@ -5,7 +5,7 @@ import { formatToolDetail, resolveToolDisplay } from "../tool-display.ts";
 import { TOOL_INLINE_THRESHOLD } from "./constants.ts";
 import { extractTextCached } from "./message-extract.ts";
 import { isToolResultMessage } from "./message-normalizer.ts";
-import { formatToolOutputForSidebar, getTruncatedPreview } from "./tool-helpers.ts";
+import { formatToolOutputForSidebar, formatOutputLength } from "./tool-helpers.ts";
 
 export function extractToolCards(message: unknown): ToolCard[] {
   const m = message as Record<string, unknown>;
@@ -48,13 +48,20 @@ export function extractToolCards(message: unknown): ToolCard[] {
   return cards;
 }
 
+/**
+ * Render a tool card with collapsible details.
+ * - Short outputs (<80 chars) are shown inline
+ * - Medium outputs show a 2-line preview with expand option
+ * - All outputs can open in sidebar for full view
+ */
 export function renderToolCardSidebar(card: ToolCard, onOpenSidebar?: (content: string) => void) {
   const display = resolveToolDisplay({ name: card.name, args: card.args });
   const detail = formatToolDetail(display);
   const hasText = Boolean(card.text?.trim());
+  const textLength = card.text?.length ?? 0;
 
   const canClick = Boolean(onOpenSidebar);
-  const handleClick = canClick
+  const handleOpenSidebar = canClick
     ? () => {
         if (hasText) {
           onOpenSidebar!(formatToolOutputForSidebar(card.text!));
@@ -67,29 +74,58 @@ export function renderToolCardSidebar(card: ToolCard, onOpenSidebar?: (content: 
       }
     : undefined;
 
-  const isShort = hasText && (card.text?.length ?? 0) <= TOOL_INLINE_THRESHOLD;
-  const showCollapsed = hasText && !isShort;
-  const showInline = hasText && isShort;
+  const isShort = hasText && textLength <= TOOL_INLINE_THRESHOLD;
   const isEmpty = !hasText;
 
+  // Short inline output - show directly
+  if (isShort) {
+    return html`
+      <div
+        class="chat-tool-card ${canClick ? "chat-tool-card--clickable" : ""}"
+        @click=${handleOpenSidebar}
+        role=${canClick ? "button" : nothing}
+        tabindex=${canClick ? "0" : nothing}
+        @keydown=${canClick ? handleKeydown(handleOpenSidebar) : nothing}
+      >
+        <div class="chat-tool-card__header">
+          <div class="chat-tool-card__title">
+            <span class="chat-tool-card__icon">${icons[display.icon]}</span>
+            <span>${display.label}</span>
+          </div>
+          <span class="chat-tool-card__status">${icons.check}</span>
+        </div>
+        ${detail ? html`<div class="chat-tool-card__detail">${detail}</div>` : nothing}
+        <div class="chat-tool-card__inline">${card.text}</div>
+      </div>
+    `;
+  }
+
+  // Empty result - compact card
+  if (isEmpty) {
+    return html`
+      <div
+        class="chat-tool-card ${canClick ? "chat-tool-card--clickable" : ""}"
+        @click=${handleOpenSidebar}
+        role=${canClick ? "button" : nothing}
+        tabindex=${canClick ? "0" : nothing}
+        @keydown=${canClick ? handleKeydown(handleOpenSidebar) : nothing}
+      >
+        <div class="chat-tool-card__header">
+          <div class="chat-tool-card__title">
+            <span class="chat-tool-card__icon">${icons[display.icon]}</span>
+            <span>${display.label}</span>
+          </div>
+          <span class="chat-tool-card__status">${icons.check}</span>
+        </div>
+        ${detail ? html`<div class="chat-tool-card__detail">${detail}</div>` : nothing}
+        <div class="chat-tool-card__status-text">Completed</div>
+      </div>
+    `;
+  }
+
+  // Expandable output - collapsed by default with details/summary
   return html`
-    <div
-      class="chat-tool-card ${canClick ? "chat-tool-card--clickable" : ""}"
-      @click=${handleClick}
-      role=${canClick ? "button" : nothing}
-      tabindex=${canClick ? "0" : nothing}
-      @keydown=${
-        canClick
-          ? (e: KeyboardEvent) => {
-              if (e.key !== "Enter" && e.key !== " ") {
-                return;
-              }
-              e.preventDefault();
-              handleClick?.();
-            }
-          : nothing
-      }
-    >
+    <div class="chat-tool-card">
       <div class="chat-tool-card__header">
         <div class="chat-tool-card__title">
           <span class="chat-tool-card__icon">${icons[display.icon]}</span>
@@ -97,27 +133,60 @@ export function renderToolCardSidebar(card: ToolCard, onOpenSidebar?: (content: 
         </div>
         ${
           canClick
-            ? html`<span class="chat-tool-card__action">${hasText ? "View" : ""} ${icons.check}</span>`
-            : nothing
+            ? html`
+              <button
+                class="chat-tool-card__action"
+                @click=${(e: Event) => {
+                  e.stopPropagation();
+                  handleOpenSidebar?.();
+                }}
+                title="View in sidebar"
+              >
+                Open ${icons.check}
+              </button>
+            `
+            : html`<span class="chat-tool-card__status">${icons.check}</span>`
         }
-        ${isEmpty && !canClick ? html`<span class="chat-tool-card__status">${icons.check}</span>` : nothing}
       </div>
       ${detail ? html`<div class="chat-tool-card__detail">${detail}</div>` : nothing}
-      ${
-        isEmpty
-          ? html`
-              <div class="chat-tool-card__status-text muted">Completed</div>
-            `
-          : nothing
-      }
-      ${
-        showCollapsed
-          ? html`<div class="chat-tool-card__preview mono">${getTruncatedPreview(card.text!)}</div>`
-          : nothing
-      }
-      ${showInline ? html`<div class="chat-tool-card__inline mono">${card.text}</div>` : nothing}
+      <details class="chat-tool-card__details">
+        <summary class="chat-tool-card__summary">
+          <span class="chat-tool-card__summary-text">Show output</span>
+          <span class="chat-tool-card__summary-meta">${formatOutputLength(textLength)}</span>
+        </summary>
+        <div class="chat-tool-card__output">${card.text}</div>
+      </details>
     </div>
   `;
+}
+
+/**
+ * Render multiple tool cards in a compact group.
+ */
+export function renderToolCardsGroup(cards: ToolCard[], onOpenSidebar?: (content: string) => void) {
+  if (cards.length === 0) {
+    return nothing;
+  }
+
+  if (cards.length === 1) {
+    return renderToolCardSidebar(cards[0], onOpenSidebar);
+  }
+
+  return html`
+    <div class="chat-tool-group">
+      ${cards.map((card) => renderToolCardSidebar(card, onOpenSidebar))}
+    </div>
+  `;
+}
+
+function handleKeydown(handler?: () => void) {
+  return (e: KeyboardEvent) => {
+    if (e.key !== "Enter" && e.key !== " ") {
+      return;
+    }
+    e.preventDefault();
+    handler?.();
+  };
 }
 
 function normalizeContent(content: unknown): Array<Record<string, unknown>> {
