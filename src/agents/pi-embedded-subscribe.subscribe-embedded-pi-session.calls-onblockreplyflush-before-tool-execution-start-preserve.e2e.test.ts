@@ -7,6 +7,9 @@ type StubSession = {
 
 type SessionEventHandler = (evt: unknown) => void;
 
+/** Flush pending microtasks so the async event handler chain settles. */
+const flushMicrotasks = () => new Promise<void>((r) => setTimeout(r, 0));
+
 describe("subscribeEmbeddedPiSession", () => {
   const _THINKING_TAG_CASES = [
     { tag: "think", open: "<think>", close: "</think>" },
@@ -15,7 +18,7 @@ describe("subscribeEmbeddedPiSession", () => {
     { tag: "antthinking", open: "<antthinking>", close: "</antthinking>" },
   ] as const;
 
-  it("calls onBlockReplyFlush before tool_execution_start to preserve message boundaries", () => {
+  it("calls onBlockReplyFlush before tool_execution_start to preserve message boundaries", async () => {
     let handler: SessionEventHandler | undefined;
     const session: StubSession = {
       subscribe: (fn) => {
@@ -60,6 +63,7 @@ describe("subscribeEmbeddedPiSession", () => {
       args: { command: "echo hello" },
     });
 
+    await flushMicrotasks();
     expect(onBlockReplyFlush).toHaveBeenCalledTimes(1);
 
     // Another tool - should flush again
@@ -70,9 +74,10 @@ describe("subscribeEmbeddedPiSession", () => {
       args: { path: "/tmp/test.txt" },
     });
 
+    await flushMicrotasks();
     expect(onBlockReplyFlush).toHaveBeenCalledTimes(2);
   });
-  it("flushes buffered block chunks before tool execution", () => {
+  it("flushes buffered block chunks before tool execution", async () => {
     let handler: SessionEventHandler | undefined;
     const session: StubSession = {
       subscribe: (fn) => {
@@ -116,6 +121,7 @@ describe("subscribeEmbeddedPiSession", () => {
       args: { command: "echo flush" },
     });
 
+    await flushMicrotasks();
     expect(onBlockReply).toHaveBeenCalledTimes(1);
     expect(onBlockReply.mock.calls[0]?.[0]?.text).toBe("Short chunk.");
     expect(onBlockReplyFlush).toHaveBeenCalledTimes(1);
