@@ -28,6 +28,34 @@ Troubleshooting: [/automation/troubleshooting](/automation/troubleshooting)
   - **Isolated**: run a dedicated agent turn in `cron:<jobId>`, with delivery (announce by default or none).
 - Wakeups are first-class: a job can request “wake now” vs “next heartbeat”.
 
+## Troubleshooting (fast)
+
+### 1) Multi-profile / multi-gateway cross server confusion
+
+Cron state is **per Gateway**, not per profile. If you run multiple profiles (or multiple
+Gateways on different ports), each Gateway has its own `storePath` (jobs.json) and its
+own scheduler loop.
+
+Symptoms:
+- You create a job but can’t see it from another profile/terminal.
+- `cron status` shows a different `storePath` than you expected.
+
+Fix:
+- Always confirm **which Gateway** you are talking to (profile + port).
+- When debugging, record these three things together: `{gateway port, storePath, jobId}`.
+
+### 2) nextWakeAtMs is null means "no eligible future job", not "scheduler is dead"
+
+`nextWakeAtMs` is only set when the scheduler has at least one **enabled** job with a
+future `nextRunAtMs`.
+
+Checklist:
+- After `cron add`, verify the created job includes `enabled: true` and
+  `state.nextRunAtMs`.
+- Re-run `cron status` and confirm `nextWakeAtMs` matches the job’s next run time.
+- If the payload is meant to notify a user, the payload message must explicitly instruct
+  the agent to call the `message` tool; otherwise the job may run “silently”.
+
 ## Quick start (actionable)
 
 Create a one-shot reminder, verify it exists, and run it immediately:
