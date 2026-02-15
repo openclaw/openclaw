@@ -39,6 +39,7 @@ import { createFollowupRunner } from "./followup-runner.js";
 import { enqueueFollowupRun, type FollowupRun, type QueueSettings } from "./queue.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
+import { evaluateAndApplyThinkingEscalation } from "./thinking-escalation.js";
 import { createTypingSignaler } from "./typing-mode.js";
 
 const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
@@ -388,6 +389,21 @@ export async function runReplyAgent(params: {
       contextTokensUsed,
       systemPromptReport: runResult.meta.systemPromptReport,
       cliSessionId,
+    });
+
+    // Evaluate and apply thinking escalation based on context window usage
+    await evaluateAndApplyThinkingEscalation({
+      cfg,
+      sessionEntry: activeSessionEntry,
+      sessionStore: activeSessionStore,
+      sessionKey,
+      storePath,
+      contextTokensUsed,
+      totalTokens: usage?.total,
+      currentThinkLevel: followupRun.run.thinkLevel,
+      provider: providerUsed,
+      model: modelUsed,
+      updateSessionStoreEntry,
     });
 
     // Drain any late tool/block deliveries before deciding there's "nothing to send".
