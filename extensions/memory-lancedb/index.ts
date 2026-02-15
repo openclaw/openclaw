@@ -264,16 +264,16 @@ export function shouldCapture(text: string, options?: { maxChars?: number }): bo
 
 export function detectCategory(text: string): MemoryCategory {
   const lower = text.toLowerCase();
-  if (/prefer|radši|like|love|hate|want/i.test(lower)) {
+  if (/prefer|radši|like|love|hate|want|喜欢|偏好|讨厌|爱|想要|需要/i.test(lower)) {
     return "preference";
   }
-  if (/rozhodli|decided|will use|budeme/i.test(lower)) {
+  if (/rozhodli|decided|will use|budeme|决定|以后用|就这么定/i.test(lower)) {
     return "decision";
   }
-  if (/\+\d{10,}|@[\w.-]+\.\w+|is called|jmenuje se/i.test(lower)) {
+  if (/\+\d{10,}|@[\w.-]+\.\w+|is called|jmenuje se|我叫|名字是/i.test(lower)) {
     return "entity";
   }
-  if (/is|are|has|have|je|má|jsou/i.test(lower)) {
+  if (/is|are|has|have|je|má|jsou|是|有/i.test(lower)) {
     return "fact";
   }
   return "other";
