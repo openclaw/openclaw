@@ -1140,13 +1140,16 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
   // Clean up slash commands on shutdown
   if (slashEnabled) {
     const onAbortCleanup = () => {
+      // Snapshot registered commands before deactivating state
+      const commands = getSlashCommandState(account.accountId)?.registeredCommands ?? [];
+      // Deactivate state immediately to prevent race with re-activation
+      deactivateSlashCommands(account.accountId);
+      // Then clean up remote registrations asynchronously
       void cleanupSlashCommands({
         client,
-        commands: getSlashCommandState(account.accountId)?.registeredCommands ?? [],
+        commands,
         log: (msg) => runtime.log?.(msg),
-      })
-        .then(() => deactivateSlashCommands(account.accountId))
-        .catch((err) => runtime.error?.(`mattermost: slash cleanup failed: ${String(err)}`));
+      }).catch((err) => runtime.error?.(`mattermost: slash cleanup failed: ${String(err)}`));
     };
     opts.abortSignal?.addEventListener("abort", onAbortCleanup, { once: true });
   }
