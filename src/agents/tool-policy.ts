@@ -250,9 +250,12 @@ export function stripPluginOnlyAllowlist(
       hasCoreEntry = true;
       continue;
     }
-    const isPluginEntry =
-      entry === "group:plugins" || pluginIds.has(entry) || pluginTools.has(entry);
     const expanded = expandToolGroups([entry]);
+    const isPluginEntry =
+      entry === "group:plugins" ||
+      pluginIds.has(entry) ||
+      pluginTools.has(entry) ||
+      expanded.some((tool) => pluginTools.has(tool));
     const isCoreEntry = expanded.some((tool) => coreTools.has(tool));
     if (isCoreEntry) {
       hasCoreEntry = true;
