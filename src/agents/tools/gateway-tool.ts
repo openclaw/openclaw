@@ -138,20 +138,21 @@ export function createGatewayTool(opts?: {
           : undefined;
       const gatewayOpts = { gatewayUrl, gatewayToken, timeoutMs };
 
-      if (action === "config.get") {
-        const result = await callGatewayTool("config.get", gatewayOpts, {});
-        return jsonResult({ ok: true, result });
-      }
-      if (action === "config.schema") {
-        const result = await callGatewayTool("config.schema", gatewayOpts, {});
-        return jsonResult({ ok: true, result });
-      }
-      if (action === "config.apply") {
+      const resolveConfigWriteParams = async (): Promise<{
+        raw: string;
+        baseHash: string;
+        sessionKey: string | undefined;
+        note: string | undefined;
+        restartDelayMs: number | undefined;
+      }> => {
         const raw = readStringParam(params, "raw", { required: true });
         let baseHash = readStringParam(params, "baseHash");
         if (!baseHash) {
           const snapshot = await callGatewayTool("config.get", gatewayOpts, {});
           baseHash = resolveBaseHashFromSnapshot(snapshot);
+        }
+        if (!baseHash) {
+          throw new Error("Missing baseHash from config snapshot.");
         }
         const sessionKey =
           typeof params.sessionKey === "string" && params.sessionKey.trim()
@@ -163,6 +164,20 @@ export function createGatewayTool(opts?: {
           typeof params.restartDelayMs === "number" && Number.isFinite(params.restartDelayMs)
             ? Math.floor(params.restartDelayMs)
             : undefined;
+        return { raw, baseHash, sessionKey, note, restartDelayMs };
+      };
+
+      if (action === "config.get") {
+        const result = await callGatewayTool("config.get", gatewayOpts, {});
+        return jsonResult({ ok: true, result });
+      }
+      if (action === "config.schema") {
+        const result = await callGatewayTool("config.schema", gatewayOpts, {});
+        return jsonResult({ ok: true, result });
+      }
+      if (action === "config.apply") {
+        const { raw, baseHash, sessionKey, note, restartDelayMs } =
+          await resolveConfigWriteParams();
         const result = await callGatewayTool("config.apply", gatewayOpts, {
           raw,
           baseHash,
@@ -173,22 +188,8 @@ export function createGatewayTool(opts?: {
         return jsonResult({ ok: true, result });
       }
       if (action === "config.patch") {
-        const raw = readStringParam(params, "raw", { required: true });
-        let baseHash = readStringParam(params, "baseHash");
-        if (!baseHash) {
-          const snapshot = await callGatewayTool("config.get", gatewayOpts, {});
-          baseHash = resolveBaseHashFromSnapshot(snapshot);
-        }
-        const sessionKey =
-          typeof params.sessionKey === "string" && params.sessionKey.trim()
-            ? params.sessionKey.trim()
-            : opts?.agentSessionKey?.trim() || undefined;
-        const note =
-          typeof params.note === "string" && params.note.trim() ? params.note.trim() : undefined;
-        const restartDelayMs =
-          typeof params.restartDelayMs === "number" && Number.isFinite(params.restartDelayMs)
-            ? Math.floor(params.restartDelayMs)
-            : undefined;
+        const { raw, baseHash, sessionKey, note, restartDelayMs } =
+          await resolveConfigWriteParams();
         const result = await callGatewayTool("config.patch", gatewayOpts, {
           raw,
           baseHash,
