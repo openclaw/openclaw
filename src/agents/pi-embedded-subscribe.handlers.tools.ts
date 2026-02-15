@@ -10,6 +10,7 @@ import { normalizeTextForComparison } from "./pi-embedded-helpers.js";
 import { isMessagingTool, isMessagingToolSendAction } from "./pi-embedded-messaging.js";
 import {
   extractToolErrorMessage,
+  extractToolResultMediaPaths,
   extractToolResultText,
   extractMessagingToolSend,
   isToolResultError,
@@ -74,7 +75,12 @@ export async function handleToolExecutionStart(
 
   if (toolName === "read") {
     const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
-    const filePath = typeof record.path === "string" ? record.path.trim() : "";
+    const filePath =
+      typeof record.path === "string"
+        ? record.path.trim()
+        : typeof record.file_path === "string"
+          ? record.file_path.trim()
+          : "";
     if (!filePath) {
       const argsPreview = typeof args === "string" ? args.slice(0, 200) : undefined;
       ctx.log.warn(
@@ -263,6 +269,20 @@ export async function handleToolExecutionEnd(
     const outputText = extractToolResultText(sanitizedResult);
     if (outputText) {
       ctx.emitToolOutput(toolName, meta, outputText);
+    }
+  }
+
+  // Deliver media from tool results when the verbose emitToolOutput path is off.
+  // When shouldEmitToolOutput() is true, emitToolOutput already delivers media
+  // via parseReplyDirectives (MEDIA: text extraction), so skip to avoid duplicates.
+  if (ctx.params.onToolResult && !isToolError && !ctx.shouldEmitToolOutput()) {
+    const mediaPaths = extractToolResultMediaPaths(result);
+    if (mediaPaths.length > 0) {
+      try {
+        void ctx.params.onToolResult({ mediaUrls: mediaPaths });
+      } catch {
+        // ignore delivery failures
+      }
     }
   }
 

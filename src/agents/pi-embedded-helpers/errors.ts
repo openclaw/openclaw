@@ -107,6 +107,8 @@ const ERROR_PREFIX_RE =
   /^(?:error|api\s*error|openai\s*error|anthropic\s*error|gateway\s*error|request failed|failed|exception)[:\s-]+/i;
 const CONTEXT_OVERFLOW_ERROR_HEAD_RE =
   /^(?:context overflow:|request_too_large\b|request size exceeds\b|request exceeds the maximum size\b|context length exceeded\b|maximum context length\b|prompt is too long\b|exceeds model context window\b)/i;
+const BILLING_ERROR_HEAD_RE =
+  /^(?:error[:\s-]+)?billing(?:\s+error)?(?:[:\s-]+|$)|^(?:error[:\s-]+)?(?:credit balance|insufficient credits?|payment required|http\s*402\b)/i;
 const HTTP_STATUS_PREFIX_RE = /^(?:http\s*)?(\d{3})\s+(.+)$/i;
 const HTTP_STATUS_CODE_PREFIX_RE = /^(?:http\s*)?(\d{3})(?:\s+([\s\S]+))?$/i;
 const HTML_ERROR_PREFIX_RE = /^\s*(?:<!doctype\s+html\b|<html\b)/i;
@@ -235,6 +237,18 @@ function shouldRewriteContextOverflowText(raw: string): boolean {
     isLikelyHttpErrorText(raw) ||
     ERROR_PREFIX_RE.test(raw) ||
     CONTEXT_OVERFLOW_ERROR_HEAD_RE.test(raw)
+  );
+}
+
+function shouldRewriteBillingText(raw: string): boolean {
+  if (!isBillingErrorMessage(raw)) {
+    return false;
+  }
+  return (
+    isRawApiErrorPayload(raw) ||
+    isLikelyHttpErrorText(raw) ||
+    ERROR_PREFIX_RE.test(raw) ||
+    BILLING_ERROR_HEAD_RE.test(raw)
   );
 }
 
@@ -480,6 +494,10 @@ export function formatAssistantErrorText(
     return transientCopy;
   }
 
+  if (isTimeoutErrorMessage(raw)) {
+    return "LLM request timed out.";
+  }
+
   if (isBillingErrorMessage(raw)) {
     return formatBillingErrorMessage(opts?.provider);
   }
@@ -543,6 +561,13 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
     }
   }
 
+  // Preserve legacy behavior for explicit billing-head text outside known
+  // error contexts (e.g., "billing: please upgrade your plan"), while
+  // keeping conversational billing mentions untouched.
+  if (shouldRewriteBillingText(trimmed)) {
+    return BILLING_ERROR_USER_MESSAGE;
+  }
+
   // Strip leading blank lines (including whitespace-only lines) without clobbering indentation on
   // the first content line (e.g. markdown/code blocks).
   const withoutLeadingEmptyLines = stripped.replace(/^(?:[ \t]*\r?\n)+/, "");
@@ -568,7 +593,13 @@ const ERROR_PATTERNS = {
     "usage limit",
   ],
   overloaded: [/overloaded_error|"type"\s*:\s*"overloaded_error"/i, "overloaded"],
-  timeout: ["timeout", "timed out", "deadline exceeded", "context deadline exceeded"],
+  timeout: [
+    "timeout",
+    "timed out",
+    "deadline exceeded",
+    "context deadline exceeded",
+    /without sending (?:any )?chunks?/i,
+  ],
   billing: [
     /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|\b(?:got|returned|received)\s+(?:a\s+)?402\b|^\s*402\s+payment/i,
     "payment required",
@@ -636,8 +667,18 @@ export function isBillingErrorMessage(raw: string): boolean {
   if (!value) {
     return false;
   }
-
-  return matchesErrorPatterns(value, ERROR_PATTERNS.billing);
+  if (matchesErrorPatterns(value, ERROR_PATTERNS.billing)) {
+    return true;
+  }
+  if (!BILLING_ERROR_HEAD_RE.test(raw)) {
+    return false;
+  }
+  return (
+    value.includes("upgrade") ||
+    value.includes("credits") ||
+    value.includes("payment") ||
+    value.includes("plan")
+  );
 }
 
 export function isMissingToolCallInputError(raw: string): boolean {

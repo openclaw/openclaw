@@ -53,6 +53,23 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText(text)).toBe(text);
   });
 
+  it("does not rewrite conversational billing/help text without errorContext", () => {
+    const text =
+      "If your API billing is low, top up credits in your provider dashboard and retry payment verification.";
+    expect(sanitizeUserFacingText(text)).toBe(text);
+  });
+
+  it("does not rewrite normal text that mentions billing and plan", () => {
+    const text =
+      "Firebase downgraded us to the free Spark plan; check whether we need to re-enable billing.";
+    expect(sanitizeUserFacingText(text)).toBe(text);
+  });
+
+  it("rewrites billing error-shaped text", () => {
+    const text = "billing: please upgrade your plan";
+    expect(sanitizeUserFacingText(text)).toContain("billing error");
+  });
+
   it("sanitizes raw API error payloads", () => {
     const raw = '{"type":"error","error":{"message":"Something exploded","type":"server_error"}}';
     expect(sanitizeUserFacingText(raw, { errorContext: true })).toBe(

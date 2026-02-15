@@ -72,7 +72,10 @@ describe("CronService interval/cron jobs fire on time", () => {
     const jobs = await cron.list({ includeDisabled: true });
     const updated = jobs.find((current) => current.id === job.id);
 
-    expect(enqueueSystemEvent).toHaveBeenCalledWith("tick", { agentId: undefined });
+    expect(enqueueSystemEvent).toHaveBeenCalledWith(
+      "tick",
+      expect.objectContaining({ agentId: undefined }),
+    );
     expect(updated?.state.lastStatus).toBe("ok");
     // nextRunAtMs must advance by at least one full interval past the due time.
     expect(updated?.state.nextRunAtMs).toBeGreaterThanOrEqual(firstDueAt + 10_000);
@@ -120,7 +123,10 @@ describe("CronService interval/cron jobs fire on time", () => {
     const jobs = await cron.list({ includeDisabled: true });
     const updated = jobs.find((current) => current.id === job.id);
 
-    expect(enqueueSystemEvent).toHaveBeenCalledWith("cron-tick", { agentId: undefined });
+    expect(enqueueSystemEvent).toHaveBeenCalledWith(
+      "cron-tick",
+      expect.objectContaining({ agentId: undefined }),
+    );
     expect(updated?.state.lastStatus).toBe("ok");
     // nextRunAtMs should be the next whole-minute boundary (60s later).
     expect(updated?.state.nextRunAtMs).toBe(firstDueAt + 60_000);

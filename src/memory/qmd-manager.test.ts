@@ -690,6 +690,104 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("runs qmd query per collection when query mode has multiple collection filters", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "query",
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [
+            { path: workspaceDir, pattern: "**/*.md", name: "workspace" },
+            { path: path.join(workspaceDir, "notes"), pattern: "**/*.md", name: "notes" },
+          ],
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "query") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(child, "stdout", "[]");
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager, resolved } = await createManager();
+    const maxResults = resolved.qmd?.limits.maxResults;
+    if (!maxResults) {
+      throw new Error("qmd maxResults missing");
+    }
+
+    await expect(
+      manager.search("test", { sessionKey: "agent:main:slack:dm:u123" }),
+    ).resolves.toEqual([]);
+
+    const queryCalls = spawnMock.mock.calls
+      .map((call) => call[1] as string[])
+      .filter((args) => args[0] === "query");
+    expect(queryCalls).toEqual([
+      ["query", "test", "--json", "-n", String(maxResults), "-c", "workspace"],
+      ["query", "test", "--json", "-n", String(maxResults), "-c", "notes"],
+    ]);
+    await manager.close();
+  });
+
+  it("uses per-collection query fallback when search mode rejects flags", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "search",
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [
+            { path: workspaceDir, pattern: "**/*.md", name: "workspace" },
+            { path: path.join(workspaceDir, "notes"), pattern: "**/*.md", name: "notes" },
+          ],
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "search") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(child, "stderr", "unknown flag: --json", 2);
+        return child;
+      }
+      if (args[0] === "query") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(child, "stdout", "[]");
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager, resolved } = await createManager();
+    const maxResults = resolved.qmd?.limits.maxResults;
+    if (!maxResults) {
+      throw new Error("qmd maxResults missing");
+    }
+
+    await expect(
+      manager.search("test", { sessionKey: "agent:main:slack:dm:u123" }),
+    ).resolves.toEqual([]);
+
+    const searchAndQueryCalls = spawnMock.mock.calls
+      .map((call) => call[1] as string[])
+      .filter((args) => args[0] === "search" || args[0] === "query");
+    expect(searchAndQueryCalls).toEqual([
+      ["search", "test", "--json", "-n", String(maxResults), "-c", "workspace", "-c", "notes"],
+      ["query", "test", "--json", "-n", String(maxResults), "-c", "workspace"],
+      ["query", "test", "--json", "-n", String(maxResults), "-c", "notes"],
+    ]);
+    await manager.close();
+  });
+
   it("fails closed when no managed collections are configured", async () => {
     cfg = {
       ...cfg,

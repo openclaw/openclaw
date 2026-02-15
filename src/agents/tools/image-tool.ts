@@ -14,6 +14,7 @@ import { runWithImageModelFallback } from "../model-fallback.js";
 import { resolveConfiguredModelRef } from "../model-selection.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import { discoverAuthStorage, discoverModels } from "../pi-model-discovery.js";
+import { normalizeWorkspaceDir } from "../workspace-dir.js";
 import {
   coerceImageAssistantText,
   coerceImageModelConfig,
@@ -354,20 +355,11 @@ export function createImageTool(options?: {
 
   const localRoots = (() => {
     const roots = getDefaultLocalRoots();
-    const workspaceDir = options?.workspaceDir?.trim();
+    const workspaceDir = normalizeWorkspaceDir(options?.workspaceDir);
     if (!workspaceDir) {
       return roots;
     }
-    const expanded = workspaceDir.startsWith("~") ? resolveUserPath(workspaceDir) : workspaceDir;
-    const resolved = path.resolve(expanded);
-    // Defensive: never allow "/" as an implicit media root.
-    if (resolved === path.parse(resolved).root) {
-      return roots;
-    }
-    if (!roots.includes(resolved)) {
-      roots.push(resolved);
-    }
-    return roots;
+    return Array.from(new Set([...roots, workspaceDir]));
   })();
 
   return {
@@ -460,7 +452,7 @@ export function createImageTool(options?: {
         : sandboxConfig
           ? await loadWebMedia(resolvedPath ?? resolvedImage, {
               maxBytes,
-              localRoots: "any",
+              sandboxValidated: true,
               readFile: (filePath) =>
                 sandboxConfig.bridge.readFile({ filePath, cwd: sandboxConfig.root }),
             })
