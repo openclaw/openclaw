@@ -68,6 +68,40 @@ Get PR with specific fields:
 gh api repos/owner/repo/pulls/55 --jq '.title, .state, .user.login'
 ```
 
+## GraphQL API
+
+For advanced operations like GitHub Projects V2, use `gh api graphql`:
+
+```bash
+gh api graphql -f query='
+  query {
+    repository(owner: "owner", name: "repo") {
+      projectsV2(first: 5) {
+        nodes { id title }
+      }
+    }
+  }
+'
+```
+
+When a mutation name is unknown, introspect the schema first:
+
+```bash
+gh api graphql -f query='{ __type(name: "Mutation") { fields { name description } } }' --jq '.data.__type.fields[] | select(.name | test("project"; "i")) | "\(.name): \(.description)"'
+```
+
+Pass variables with `-F`:
+
+```bash
+gh api graphql -f query='
+  mutation($projectId: ID!, $title: String!) {
+    addProjectV2DraftIssue(input: {projectId: $projectId, title: $title}) {
+      projectItem { id }
+    }
+  }
+' -F projectId="PVT_xxx" -F title="New item"
+```
+
 ## JSON Output
 
 Most commands support `--json` for structured output. You can use `--jq` to filter:
