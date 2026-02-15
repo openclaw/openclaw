@@ -446,15 +446,24 @@ export function createNodesTool(options?: {
               sessionKey,
             };
 
+            // HTTP timeout must exceed invoke timeout to avoid premature cancellation
+            const invokeGatewayOpts = invokeTimeoutMs
+              ? { ...gatewayOpts, timeoutMs: invokeTimeoutMs + 5_000 }
+              : gatewayOpts;
+
             // First attempt without approval flags.
             try {
-              const raw = await callGatewayTool<{ payload?: unknown }>("node.invoke", gatewayOpts, {
-                nodeId,
-                command: "system.run",
-                params: runParams,
-                timeoutMs: invokeTimeoutMs,
-                idempotencyKey: crypto.randomUUID(),
-              });
+              const raw = await callGatewayTool<{ payload?: unknown }>(
+                "node.invoke",
+                invokeGatewayOpts,
+                {
+                  nodeId,
+                  command: "system.run",
+                  params: runParams,
+                  timeoutMs: invokeTimeoutMs,
+                  idempotencyKey: crypto.randomUUID(),
+                },
+              );
               return jsonResult(raw?.payload ?? {});
             } catch (firstErr) {
               const msg = firstErr instanceof Error ? firstErr.message : String(firstErr);
@@ -499,18 +508,22 @@ export function createNodesTool(options?: {
             }
 
             // Retry with the approval decision.
-            const raw = await callGatewayTool<{ payload?: unknown }>("node.invoke", gatewayOpts, {
-              nodeId,
-              command: "system.run",
-              params: {
-                ...runParams,
-                runId: approvalId,
-                approved: true,
-                approvalDecision,
+            const raw = await callGatewayTool<{ payload?: unknown }>(
+              "node.invoke",
+              invokeGatewayOpts,
+              {
+                nodeId,
+                command: "system.run",
+                params: {
+                  ...runParams,
+                  runId: approvalId,
+                  approved: true,
+                  approvalDecision,
+                },
+                timeoutMs: invokeTimeoutMs,
+                idempotencyKey: crypto.randomUUID(),
               },
-              timeoutMs: invokeTimeoutMs,
-              idempotencyKey: crypto.randomUUID(),
-            });
+            );
             return jsonResult(raw?.payload ?? {});
           }
           case "invoke": {
@@ -531,7 +544,11 @@ export function createNodesTool(options?: {
               }
             }
             const invokeTimeoutMs = parseTimeoutMs(params.invokeTimeoutMs);
-            const raw = await callGatewayTool("node.invoke", gatewayOpts, {
+            // HTTP timeout must exceed invoke timeout to avoid premature cancellation
+            const invokeGatewayOpts = invokeTimeoutMs
+              ? { ...gatewayOpts, timeoutMs: invokeTimeoutMs + 5_000 }
+              : gatewayOpts;
+            const raw = await callGatewayTool("node.invoke", invokeGatewayOpts, {
               nodeId,
               command: invokeCommand,
               params: invokeParams,
