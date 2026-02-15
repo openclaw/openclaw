@@ -182,3 +182,56 @@
 - Publish: `npm publish --access public --otp="<otp>"` (run from the package dir).
 - Verify without local npmrc side effects: `npm view <pkg> version --userconfig "$(mktemp)"`.
 - Kill the tmux session after publish.
+
+## Post-PR Workspace Cleanup
+
+After a PR is merged or closed, clean up the local workspace using **git commands only** — never use Edit/Write tools to revert file contents.
+
+### Discard local changes (dirty working tree)
+
+```bash
+# Discard ALL unstaged changes across the repo
+git restore .
+
+# Remove untracked files and directories (if any)
+git clean -fd
+
+# Pull latest main
+git pull --rebase
+```
+
+### Delete stale local branches
+
+After a PR is merged/closed, delete the corresponding local branch:
+
+```bash
+# Delete a single branch
+git branch -D <branch-name>
+
+# Delete all local branches that have been merged into main
+git branch --merged main | grep -v main | xargs -r git branch -d
+
+# Prune remote-tracking refs for deleted remote branches
+git fetch --prune
+```
+
+### Recovery from Edit failures
+
+If an Edit tool call fails with "Could not find the exact text", and the goal is to discard or revert changes:
+
+1. **Do NOT retry the Edit.** The file contents have drifted from what you expect.
+2. **Use git to discard:** `git restore <file>` reverts a single file to HEAD.
+3. **If the entire working tree is dirty:** `git restore .` discards all changes.
+4. **If you need a clean slate:** `git checkout main && git pull --rebase && git restore . && git clean -fd`.
+
+Never attempt to manually reconstruct file contents via Edit when git can restore them in one command.
+
+### Full post-merge cleanup sequence
+
+```bash
+git switch main
+git pull --rebase
+git restore .
+git clean -fd
+git fetch --prune
+```
