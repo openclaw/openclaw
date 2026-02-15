@@ -34,6 +34,17 @@ export type GeminiBatchOutputLine = {
 };
 
 const GEMINI_BATCH_MAX_REQUESTS = 50000;
+const GEMINI_UPLOAD_TIMEOUT_MS = 120_000; // 2min for large file uploads
+const GEMINI_API_TIMEOUT_MS = 30_000; // 30s for API calls
+const GEMINI_DOWNLOAD_TIMEOUT_MS = 60_000; // 1min for downloads
+
+/** Check if error is a timeout from AbortSignal.timeout() (works for both Error and DOMException) */
+function isTimeoutError(err: unknown): boolean {
+  return (
+    typeof err === "object" && err !== null && (err as { name?: string }).name === "TimeoutError"
+  );
+}
+
 const debugEmbeddings = isTruthyEnvValue(process.env.OPENCLAW_DEBUG_MEMORY_EMBEDDINGS);
 const log = createSubsystemLogger("memory/embeddings");
 
@@ -134,22 +145,33 @@ async function submitGeminiBatch(params: {
     baseUrl,
     requests: params.requests.length,
   });
-  const fileRes = await fetch(uploadUrl, {
-    method: "POST",
-    headers: {
-      ...getGeminiHeaders(params.gemini, { json: false }),
-      "Content-Type": uploadPayload.contentType,
-    },
-    body: uploadPayload.body,
-  });
-  if (!fileRes.ok) {
-    const text = await fileRes.text();
-    throw new Error(`gemini batch file upload failed: ${fileRes.status} ${text}`);
-  }
-  const filePayload = (await fileRes.json()) as { name?: string; file?: { name?: string } };
-  const fileId = filePayload.name ?? filePayload.file?.name;
-  if (!fileId) {
-    throw new Error("gemini batch file upload failed: missing file id");
+  let fileId: string;
+  try {
+    const fileRes = await fetch(uploadUrl, {
+      method: "POST",
+      headers: {
+        ...getGeminiHeaders(params.gemini, { json: false }),
+        "Content-Type": uploadPayload.contentType,
+      },
+      body: uploadPayload.body,
+      signal: AbortSignal.timeout(GEMINI_UPLOAD_TIMEOUT_MS),
+    });
+    if (!fileRes.ok) {
+      const text = await fileRes.text();
+      throw new Error(`gemini batch file upload failed: ${fileRes.status} ${text}`);
+    }
+    const filePayload = (await fileRes.json()) as { name?: string; file?: { name?: string } };
+    fileId = filePayload.name ?? filePayload.file?.name ?? "";
+    if (!fileId) {
+      throw new Error("gemini batch file upload failed: missing file id");
+    }
+  } catch (err) {
+    if (isTimeoutError(err)) {
+      throw new Error(`Gemini batch upload timed out after ${GEMINI_UPLOAD_TIMEOUT_MS}ms`, {
+        cause: err,
+      });
+    }
+    throw err;
   }
 
   const batchBody = {
@@ -166,21 +188,31 @@ async function submitGeminiBatch(params: {
     batchEndpoint,
     fileId,
   });
-  const batchRes = await fetch(batchEndpoint, {
-    method: "POST",
-    headers: getGeminiHeaders(params.gemini, { json: true }),
-    body: JSON.stringify(batchBody),
-  });
-  if (batchRes.ok) {
-    return (await batchRes.json()) as GeminiBatchStatus;
+  try {
+    const batchRes = await fetch(batchEndpoint, {
+      method: "POST",
+      headers: getGeminiHeaders(params.gemini, { json: true }),
+      body: JSON.stringify(batchBody),
+      signal: AbortSignal.timeout(GEMINI_API_TIMEOUT_MS),
+    });
+    if (batchRes.ok) {
+      return (await batchRes.json()) as GeminiBatchStatus;
+    }
+    const text = await batchRes.text();
+    if (batchRes.status === 404) {
+      throw new Error(
+        "gemini batch create failed: 404 (asyncBatchEmbedContent not available for this model/baseUrl). Disable remote.batch.enabled or switch providers.",
+      );
+    }
+    throw new Error(`gemini batch create failed: ${batchRes.status} ${text}`);
+  } catch (err) {
+    if (isTimeoutError(err)) {
+      throw new Error(`Gemini batch create timed out after ${GEMINI_API_TIMEOUT_MS}ms`, {
+        cause: err,
+      });
+    }
+    throw err;
   }
-  const text = await batchRes.text();
-  if (batchRes.status === 404) {
-    throw new Error(
-      "gemini batch create failed: 404 (asyncBatchEmbedContent not available for this model/baseUrl). Disable remote.batch.enabled or switch providers.",
-    );
-  }
-  throw new Error(`gemini batch create failed: ${batchRes.status} ${text}`);
 }
 
 async function fetchGeminiBatchStatus(params: {
@@ -193,14 +225,24 @@ async function fetchGeminiBatchStatus(params: {
     : `batches/${params.batchName}`;
   const statusUrl = `${baseUrl}/${name}`;
   debugLog("memory embeddings: gemini batch status", { statusUrl });
-  const res = await fetch(statusUrl, {
-    headers: getGeminiHeaders(params.gemini, { json: true }),
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`gemini batch status failed: ${res.status} ${text}`);
+  try {
+    const res = await fetch(statusUrl, {
+      headers: getGeminiHeaders(params.gemini, { json: true }),
+      signal: AbortSignal.timeout(GEMINI_API_TIMEOUT_MS),
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`gemini batch status failed: ${res.status} ${text}`);
+    }
+    return (await res.json()) as GeminiBatchStatus;
+  } catch (err) {
+    if (isTimeoutError(err)) {
+      throw new Error(`Gemini batch status poll timed out after ${GEMINI_API_TIMEOUT_MS}ms`, {
+        cause: err,
+      });
+    }
+    throw err;
   }
-  return (await res.json()) as GeminiBatchStatus;
 }
 
 async function fetchGeminiFileContent(params: {
@@ -211,14 +253,24 @@ async function fetchGeminiFileContent(params: {
   const file = params.fileId.startsWith("files/") ? params.fileId : `files/${params.fileId}`;
   const downloadUrl = `${baseUrl}/${file}:download`;
   debugLog("memory embeddings: gemini batch download", { downloadUrl });
-  const res = await fetch(downloadUrl, {
-    headers: getGeminiHeaders(params.gemini, { json: true }),
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`gemini batch file content failed: ${res.status} ${text}`);
+  try {
+    const res = await fetch(downloadUrl, {
+      headers: getGeminiHeaders(params.gemini, { json: true }),
+      signal: AbortSignal.timeout(GEMINI_DOWNLOAD_TIMEOUT_MS),
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`gemini batch file content failed: ${res.status} ${text}`);
+    }
+    return await res.text();
+  } catch (err) {
+    if (isTimeoutError(err)) {
+      throw new Error(`Gemini batch download timed out after ${GEMINI_DOWNLOAD_TIMEOUT_MS}ms`, {
+        cause: err,
+      });
+    }
+    throw err;
   }
-  return await res.text();
 }
 
 function parseGeminiBatchOutput(text: string): GeminiBatchOutputLine[] {
