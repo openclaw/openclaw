@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
+import { captureEnv } from "../test-utils/env.js";
 import { MINIMAX_API_BASE_URL, MINIMAX_CN_API_BASE_URL } from "./onboard-auth.js";
 import { OPENAI_DEFAULT_MODEL } from "./openai-model-default.js";
 
@@ -10,20 +11,6 @@ type RuntimeMock = {
   log: () => void;
   error: (msg: string) => never;
   exit: (code: number) => never;
-};
-
-type EnvSnapshot = {
-  home: string | undefined;
-  stateDir: string | undefined;
-  configPath: string | undefined;
-  skipChannels: string | undefined;
-  skipGmail: string | undefined;
-  skipCron: string | undefined;
-  skipCanvas: string | undefined;
-  token: string | undefined;
-  password: string | undefined;
-  customApiKey: string | undefined;
-  disableConfigCache: string | undefined;
 };
 
 type OnboardEnv = {
@@ -47,49 +34,23 @@ async function removeDirWithRetry(dir: string): Promise<void> {
   }
 }
 
-function captureEnv(): EnvSnapshot {
-  return {
-    home: process.env.HOME,
-    stateDir: process.env.OPENCLAW_STATE_DIR,
-    configPath: process.env.OPENCLAW_CONFIG_PATH,
-    skipChannels: process.env.OPENCLAW_SKIP_CHANNELS,
-    skipGmail: process.env.OPENCLAW_SKIP_GMAIL_WATCHER,
-    skipCron: process.env.OPENCLAW_SKIP_CRON,
-    skipCanvas: process.env.OPENCLAW_SKIP_CANVAS_HOST,
-    token: process.env.OPENCLAW_GATEWAY_TOKEN,
-    password: process.env.OPENCLAW_GATEWAY_PASSWORD,
-    customApiKey: process.env.CUSTOM_API_KEY,
-    disableConfigCache: process.env.OPENCLAW_DISABLE_CONFIG_CACHE,
-  };
-}
-
-function restoreEnvVar(key: keyof NodeJS.ProcessEnv, value: string | undefined): void {
-  if (value == null) {
-    delete process.env[key];
-    return;
-  }
-  process.env[key] = value;
-}
-
-function restoreEnv(prev: EnvSnapshot): void {
-  restoreEnvVar("HOME", prev.home);
-  restoreEnvVar("OPENCLAW_STATE_DIR", prev.stateDir);
-  restoreEnvVar("OPENCLAW_CONFIG_PATH", prev.configPath);
-  restoreEnvVar("OPENCLAW_SKIP_CHANNELS", prev.skipChannels);
-  restoreEnvVar("OPENCLAW_SKIP_GMAIL_WATCHER", prev.skipGmail);
-  restoreEnvVar("OPENCLAW_SKIP_CRON", prev.skipCron);
-  restoreEnvVar("OPENCLAW_SKIP_CANVAS_HOST", prev.skipCanvas);
-  restoreEnvVar("OPENCLAW_GATEWAY_TOKEN", prev.token);
-  restoreEnvVar("OPENCLAW_GATEWAY_PASSWORD", prev.password);
-  restoreEnvVar("CUSTOM_API_KEY", prev.customApiKey);
-  restoreEnvVar("OPENCLAW_DISABLE_CONFIG_CACHE", prev.disableConfigCache);
-}
-
 async function withOnboardEnv(
   prefix: string,
   run: (ctx: OnboardEnv) => Promise<void>,
 ): Promise<void> {
-  const prev = captureEnv();
+  const prev = captureEnv([
+    "HOME",
+    "OPENCLAW_STATE_DIR",
+    "OPENCLAW_CONFIG_PATH",
+    "OPENCLAW_SKIP_CHANNELS",
+    "OPENCLAW_SKIP_GMAIL_WATCHER",
+    "OPENCLAW_SKIP_CRON",
+    "OPENCLAW_SKIP_CANVAS_HOST",
+    "OPENCLAW_GATEWAY_TOKEN",
+    "OPENCLAW_GATEWAY_PASSWORD",
+    "CUSTOM_API_KEY",
+    "OPENCLAW_DISABLE_CONFIG_CACHE",
+  ]);
 
   process.env.OPENCLAW_SKIP_CHANNELS = "1";
   process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
@@ -120,7 +81,7 @@ async function withOnboardEnv(
     await run({ configPath, runtime });
   } finally {
     await removeDirWithRetry(tempHome);
-    restoreEnv(prev);
+    prev.restore();
   }
 }
 
