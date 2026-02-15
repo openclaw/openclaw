@@ -17,6 +17,8 @@ import type {
   PluginHookBeforeResetEvent,
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
+  PluginHookBeforeToolResultEvent,
+  PluginHookBeforeToolResultResult,
   PluginHookGatewayContext,
   PluginHookGatewayStartEvent,
   PluginHookGatewayStopEvent,
@@ -53,6 +55,8 @@ export type {
   PluginHookToolContext,
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
+  PluginHookBeforeToolResultEvent,
+  PluginHookBeforeToolResultResult,
   PluginHookAfterToolCallEvent,
   PluginHookToolResultPersistContext,
   PluginHookToolResultPersistEvent,
@@ -316,6 +320,27 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   }
 
   /**
+   * Run before_tool_result hook.
+   * Allows plugins to modify or block tool results before the LLM sees them.
+   * Runs sequentially in priority order.
+   */
+  async function runBeforeToolResult(
+    event: PluginHookBeforeToolResultEvent,
+    ctx: PluginHookToolContext,
+  ): Promise<PluginHookBeforeToolResultResult | undefined> {
+    return runModifyingHook<"before_tool_result", PluginHookBeforeToolResultResult>(
+      "before_tool_result",
+      event,
+      ctx,
+      (acc, next) => ({
+        content: next.content ?? acc?.content,
+        block: next.block ?? acc?.block,
+        blockReason: next.blockReason ?? acc?.blockReason,
+      }),
+    );
+  }
+
+  /**
    * Run after_tool_call hook.
    * Runs in parallel (fire-and-forget).
    */
@@ -468,6 +493,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     runMessageSent,
     // Tool hooks
     runBeforeToolCall,
+    runBeforeToolResult,
     runAfterToolCall,
     runToolResultPersist,
     // Session hooks
