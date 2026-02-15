@@ -9,6 +9,7 @@ type ChannelAuthOptions = {
   channel?: string;
   account?: string;
   verbose?: boolean;
+  qrPngPath?: string;
 };
 
 export async function runChannelLogin(
@@ -34,6 +35,7 @@ export async function runChannelLogin(
     runtime,
     verbose: Boolean(opts.verbose),
     channelInput,
+    qrPngPath: opts.qrPngPath,
   });
 }
 

@@ -12,12 +12,14 @@ export async function loginWeb(
   waitForConnection?: typeof waitForWaConnection,
   runtime: RuntimeEnv = defaultRuntime,
   accountId?: string,
+  opts?: { qrPngPath?: string },
 ) {
   const wait = waitForConnection ?? waitForWaConnection;
   const cfg = loadConfig();
   const account = resolveWhatsAppAccount({ cfg, accountId });
   const sock = await createWaSocket(true, verbose, {
     authDir: account.authDir,
+    qrPngPath: opts?.qrPngPath,
   });
   logInfo("Waiting for WhatsApp connection...", runtime);
   try {

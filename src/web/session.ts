@@ -7,6 +7,7 @@ import {
 } from "@whiskeysockets/baileys";
 import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
+import { resolve } from "node:path";
 import qrcode from "qrcode-terminal";
 import { formatCliCommand } from "../cli/command-format.js";
 import { danger, success } from "../globals.js";
@@ -20,6 +21,7 @@ import {
   resolveWebCredsBackupPath,
   resolveWebCredsPath,
 } from "./auth-store.js";
+import { renderQrPngBase64 } from "./qr-image.js";
 
 export {
   getWebAuthAgeMs,
@@ -90,7 +92,12 @@ async function safeSaveCreds(
 export async function createWaSocket(
   printQr: boolean,
   verbose: boolean,
-  opts: { authDir?: string; onQr?: (qr: string) => void } = {},
+  opts: {
+    authDir?: string;
+    onQr?: (qr: string) => void;
+    /** If set, save QR code as PNG file (path or dir). Default filename: whatsapp-qr.png */
+    qrPngPath?: string;
+  } = {},
 ): Promise<ReturnType<typeof makeWASocket>> {
   const baseLogger = getChildLogger(
     { module: "baileys" },
@@ -121,12 +128,24 @@ export async function createWaSocket(
   sock.ev.on("creds.update", () => enqueueSaveCreds(authDir, saveCreds, sessionLogger));
   sock.ev.on(
     "connection.update",
-    (update: Partial<import("@whiskeysockets/baileys").ConnectionState>) => {
+    async (update: Partial<import("@whiskeysockets/baileys").ConnectionState>) => {
       try {
         const { connection, lastDisconnect, qr } = update;
         if (qr) {
           opts.onQr?.(qr);
-          if (printQr) {
+          if (opts.qrPngPath) {
+            const pngPath = opts.qrPngPath.endsWith(".png")
+              ? opts.qrPngPath
+              : resolve(opts.qrPngPath, "whatsapp-qr.png");
+            const dir = resolve(pngPath, "..");
+            if (!fsSync.existsSync(dir)) {
+              fsSync.mkdirSync(dir, { recursive: true });
+            }
+            const base64 = await renderQrPngBase64(qr, { scale: 8, marginModules: 4 });
+            fsSync.writeFileSync(pngPath, Buffer.from(base64, "base64"));
+            console.log(`QR code saved to: ${pngPath}`);
+            console.log("Scan this QR in WhatsApp → Linked Devices");
+          } else if (printQr) {
             console.log("Scan this QR in WhatsApp (Linked Devices):");
             qrcode.generate(qr, { small: true });
           }
