@@ -411,6 +411,7 @@ export type PluginHookToolContext = {
   agentId?: string;
   sessionKey?: string;
   toolName: string;
+  toolCallId?: string;
 };
 
 // before_tool_call hook
