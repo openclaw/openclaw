@@ -6,8 +6,11 @@ import {
   getReadAllowFromStoreMock,
   getNotificationHandler,
   getReplyMock,
+  getRequestMock,
   getSendMock,
+  getStopMock,
   getUpsertPairingRequestMock,
+  getUpdateLastRouteMock,
   installMonitorIMessageProviderTestHooks,
   setConfigMock,
   waitForSubscribe,
@@ -25,9 +28,12 @@ function startMonitor() {
   return monitorIMessageProvider();
 }
 const replyMock = getReplyMock();
+const requestMock = getRequestMock();
 const sendMock = getSendMock();
 const readAllowFromStoreMock = getReadAllowFromStoreMock();
+const stopMock = getStopMock();
 const upsertPairingRequestMock = getUpsertPairingRequestMock();
+const updateLastRouteMock = getUpdateLastRouteMock();
 
 type TestConfig = {
   channels: Record<string, unknown> & { imessage: Record<string, unknown> };
@@ -48,7 +54,15 @@ function notifyMessage(message: unknown) {
 }
 
 async function closeMonitor() {
-  for (let i = 0; i < 20; i += 1) {
+  for (let i = 0; i < 50; i += 1) {
+    const close = getCloseResolve();
+    if (close) {
+      close();
+      return;
+    }
+    await Promise.resolve();
+  }
+  for (let i = 0; i < 5; i += 1) {
     const close = getCloseResolve();
     if (close) {
       close();
@@ -558,5 +572,76 @@ describe("monitorIMessageProvider", () => {
     await run;
 
     expect(replyMock).not.toHaveBeenCalled();
+  });
+
+  it("updates last route with sender handle for direct messages", async () => {
+    replyMock.mockResolvedValueOnce({ text: "ok" });
+    const run = startMonitor();
+    await waitForSubscribe();
+
+    getNotificationHandler()?.({
+      method: "message",
+      params: {
+        message: {
+          id: 4,
+          chat_id: 7,
+          sender: "+15550004444",
+          is_from_me: false,
+          text: "hey",
+          is_group: false,
+        },
+      },
+    });
+
+    await flush();
+    await closeMonitor();
+    await run;
+
+    expect(updateLastRouteMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deliveryContext: expect.objectContaining({
+          channel: "imessage",
+          to: "+15550004444",
+        }),
+      }),
+    );
+  });
+
+  it("does not trigger unhandledRejection when aborting during shutdown", async () => {
+    requestMock.mockImplementation((method: string) => {
+      if (method === "watch.subscribe") {
+        return Promise.resolve({ subscription: 1 });
+      }
+      if (method === "watch.unsubscribe") {
+        return Promise.reject(new Error("imsg rpc closed"));
+      }
+      return Promise.resolve({});
+    });
+
+    const abortController = new AbortController();
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandled);
+
+    try {
+      const run = monitorIMessageProvider({
+        abortSignal: abortController.signal,
+      });
+      await waitForSubscribe();
+      await flush();
+
+      abortController.abort();
+      await flush();
+
+      await closeMonitor();
+      await run;
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+
+    expect(unhandled).toHaveLength(0);
+    expect(stopMock).toHaveBeenCalled();
   });
 });
