@@ -26,7 +26,6 @@ import {
   upsertChannelPairingRequest,
 } from "../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
-import { buildUntrustedChannelMetadata } from "../../security/channel-metadata.js";
 import {
   normalizeAllowList,
   normalizeAllowListLower,
@@ -38,6 +37,7 @@ import { buildSlackSlashCommandMatcher, resolveSlackSlashCommandConfig } from ".
 import { normalizeSlackChannelType } from "./context.js";
 import { isSlackChannelAllowedByPolicy } from "./policy.js";
 import { deliverSlackSlashReplies } from "./replies.js";
+import { resolveSlackRoomContextHints } from "./room-context.js";
 
 type SlackBlock = { type: string; [key: string]: unknown };
 
@@ -387,18 +387,11 @@ export function registerSlackMonitorSlashCommands(params: {
         },
       });
 
-      const untrustedChannelMetadata = isRoomish
-        ? buildUntrustedChannelMetadata({
-            source: "slack",
-            label: "Slack channel description",
-            entries: [channelInfo?.topic, channelInfo?.purpose],
-          })
-        : undefined;
-      const systemPromptParts = [channelConfig?.systemPrompt?.trim() || null].filter(
-        (entry): entry is string => Boolean(entry),
-      );
-      const groupSystemPrompt =
-        systemPromptParts.length > 0 ? systemPromptParts.join("\n\n") : undefined;
+      const { untrustedChannelMetadata, groupSystemPrompt } = resolveSlackRoomContextHints({
+        isRoomish,
+        channelInfo,
+        channelConfig,
+      });
 
       const ctxPayload = finalizeInboundContext({
         Body: prompt,

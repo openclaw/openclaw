@@ -35,7 +35,6 @@ import { buildPairingReply } from "../../../pairing/pairing-messages.js";
 import { upsertChannelPairingRequest } from "../../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../../routing/session-key.js";
-import { buildUntrustedChannelMetadata } from "../../../security/channel-metadata.js";
 import { reactSlackMessage } from "../../actions.js";
 import { sendMessageSlack } from "../../send.js";
 import { resolveSlackThreadContext } from "../../threading.js";
@@ -49,6 +48,7 @@ import {
   resolveSlackThreadHistory,
   resolveSlackThreadStarter,
 } from "../media.js";
+import { resolveSlackRoomContextHints } from "../room-context.js";
 
 export async function prepareSlackMessage(params: {
   ctx: SlackMonitorContext;
@@ -452,18 +452,11 @@ export async function prepareSlackMessage(params: {
 
   const slackTo = isDirectMessage ? `user:${message.user}` : `channel:${message.channel}`;
 
-  const untrustedChannelMetadata = isRoomish
-    ? buildUntrustedChannelMetadata({
-        source: "slack",
-        label: "Slack channel description",
-        entries: [channelInfo?.topic, channelInfo?.purpose],
-      })
-    : undefined;
-  const systemPromptParts = [channelConfig?.systemPrompt?.trim() || null].filter(
-    (entry): entry is string => Boolean(entry),
-  );
-  const groupSystemPrompt =
-    systemPromptParts.length > 0 ? systemPromptParts.join("\n\n") : undefined;
+  const { untrustedChannelMetadata, groupSystemPrompt } = resolveSlackRoomContextHints({
+    isRoomish,
+    channelInfo,
+    channelConfig,
+  });
 
   let threadStarterBody: string | undefined;
   let threadHistoryBody: string | undefined;
