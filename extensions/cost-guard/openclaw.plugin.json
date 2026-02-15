@@ -1,0 +1,51 @@
+{
+  "id": "cost-guard",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "dailyBudgetUsd": { "type": "number", "minimum": 0 },
+      "monthlyBudgetUsd": { "type": "number", "minimum": 0 },
+      "warningThreshold": { "type": "number", "minimum": 0, "maximum": 1 },
+      "hardStop": { "type": "boolean" },
+      "providerLimits": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "object",
+          "properties": {
+            "dailyUsd": { "type": "number", "minimum": 0 },
+            "monthlyUsd": { "type": "number", "minimum": 0 }
+          },
+          "additionalProperties": false
+        }
+      }
+    }
+  },
+  "uiHints": {
+    "dailyBudgetUsd": {
+      "label": "Daily Budget (USD)",
+      "placeholder": "5",
+      "help": "Maximum daily API spend in USD. Agent responses are blocked when exceeded."
+    },
+    "monthlyBudgetUsd": {
+      "label": "Monthly Budget (USD)",
+      "placeholder": "50",
+      "help": "Maximum monthly API spend in USD."
+    },
+    "warningThreshold": {
+      "label": "Warning Threshold",
+      "placeholder": "0.8",
+      "help": "Fraction of budget (0–1) at which a warning is injected into agent context.",
+      "advanced": true
+    },
+    "hardStop": {
+      "label": "Hard Stop",
+      "help": "When enabled, responses are blocked once the budget is exceeded."
+    },
+    "providerLimits": {
+      "label": "Per-Provider Limits",
+      "help": "Optional per-provider budget overrides.",
+      "advanced": true
+    }
+  }
+}
