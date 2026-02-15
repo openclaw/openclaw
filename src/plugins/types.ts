@@ -307,6 +307,7 @@ export type PluginHookName =
   | "before_tool_call"
   | "after_tool_call"
   | "tool_result_persist"
+  | "message_persist"
   | "session_start"
   | "session_end"
   | "gateway_start"
@@ -458,6 +459,27 @@ export type PluginHookToolResultPersistResult = {
   message?: AgentMessage;
 };
 
+// message_persist hook
+export type PluginHookMessagePersistContext = {
+  agentId?: string;
+  sessionKey?: string;
+};
+
+export type PluginHookMessagePersistEvent = {
+  /**
+   * The message about to be written to the session transcript.
+   * Handlers may return a modified message (e.g. encrypt content).
+   * Applies to all message roles (user, assistant, system, toolResult, etc.).
+   */
+  message: AgentMessage;
+  /** The role of the message being persisted. */
+  role?: string;
+};
+
+export type PluginHookMessagePersistResult = {
+  message?: AgentMessage;
+};
+
 // Session context
 export type PluginHookSessionContext = {
   agentId?: string;
@@ -535,6 +557,10 @@ export type PluginHookHandlerMap = {
     event: PluginHookToolResultPersistEvent,
     ctx: PluginHookToolResultPersistContext,
   ) => PluginHookToolResultPersistResult | void;
+  message_persist: (
+    event: PluginHookMessagePersistEvent,
+    ctx: PluginHookMessagePersistContext,
+  ) => PluginHookMessagePersistResult | void;
   session_start: (
     event: PluginHookSessionStartEvent,
     ctx: PluginHookSessionContext,

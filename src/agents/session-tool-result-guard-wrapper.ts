@@ -50,9 +50,30 @@ export function guardSessionManager(
       }
     : undefined;
 
+  const messagePersistTransform = hookRunner?.hasHooks("message_persist")
+    ? (message: Parameters<typeof hookRunner.runMessagePersist>[0]["message"]) => {
+        const out = hookRunner.runMessagePersist(
+          {
+            message,
+            role: (message as { role?: string }).role,
+          },
+          {
+            agentId: opts?.agentId,
+            sessionKey: opts?.sessionKey,
+          },
+        );
+        return out?.message ?? message;
+      }
+    : undefined;
+
   const guard = installSessionToolResultGuard(sessionManager, {
-    transformMessageForPersistence: (message) =>
-      applyInputProvenanceToUserMessage(message, opts?.inputProvenance),
+    transformMessageForPersistence: (message) => {
+      let msg = applyInputProvenanceToUserMessage(message, opts?.inputProvenance);
+      if (messagePersistTransform) {
+        msg = messagePersistTransform(msg);
+      }
+      return msg;
+    },
     transformToolResultForPersistence: transform,
     allowSyntheticToolResults: opts?.allowSyntheticToolResults,
   });
