@@ -30,9 +30,13 @@ export function getRunCliAgentMock(): AnyMock {
 
 export type { EmbeddedRunParams };
 
+async function loadHarnessMocks() {
+  const { loadAgentRunnerHarnessMockBundle } = await import("./agent-runner.test-harness.mocks.js");
+  return await loadAgentRunnerHarnessMockBundle(state);
+}
+
 vi.mock("../../agents/model-fallback.js", async () => {
-  const { modelFallbackMockFactory } = await import("./agent-runner.test-harness.mocks.js");
-  return modelFallbackMockFactory();
+  return (await loadHarnessMocks()).modelFallback;
 });
 
 vi.mock("../../agents/cli-runner.js", () => ({
@@ -40,13 +44,11 @@ vi.mock("../../agents/cli-runner.js", () => ({
 }));
 
 vi.mock("../../agents/pi-embedded.js", async () => {
-  const { embeddedPiMockFactory } = await import("./agent-runner.test-harness.mocks.js");
-  return embeddedPiMockFactory(state);
+  return (await loadHarnessMocks()).embeddedPi;
 });
 
 vi.mock("./queue.js", async () => {
-  const { queueMockFactory } = await import("./agent-runner.test-harness.mocks.js");
-  return await queueMockFactory();
+  return (await loadHarnessMocks()).queue;
 });
 
 export async function seedSessionStore(params: {
