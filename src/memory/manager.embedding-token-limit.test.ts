@@ -1,36 +1,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { getEmbedBatchMock, resetEmbeddingMocks } from "./embedding.test-mocks.js";
 import { getMemorySearchManager, type MemoryIndexManager } from "./index.js";
 
-const embedBatch = vi.fn(async (texts: string[]) => texts.map(() => [0, 1, 0]));
-const embedQuery = vi.fn(async () => [0, 1, 0]);
-
-// Unit tests: avoid importing the real chokidar implementation (native fsevents, etc.).
-vi.mock("chokidar", () => ({
-  default: {
-    watch: () => ({ on: () => {}, close: async () => {} }),
-  },
-  watch: () => ({ on: () => {}, close: async () => {} }),
-}));
-
-vi.mock("./sqlite-vec.js", () => ({
-  loadSqliteVecExtension: async () => ({ ok: false, error: "sqlite-vec disabled in tests" }),
-}));
-
-vi.mock("./embeddings.js", () => ({
-  createEmbeddingProvider: async () => ({
-    requestedProvider: "openai",
-    provider: {
-      id: "mock",
-      model: "mock-embed",
-      maxInputTokens: 8192,
-      embedQuery,
-      embedBatch,
-    },
-  }),
-}));
+const embedBatch = getEmbedBatchMock();
 
 describe("memory embedding token limits", () => {
   let fixtureRoot: string;
@@ -102,10 +77,7 @@ describe("memory embedding token limits", () => {
   });
 
   beforeEach(async () => {
-    embedBatch.mockReset();
-    embedQuery.mockReset();
-    embedBatch.mockImplementation(async (texts: string[]) => texts.map(() => [0, 1, 0]));
-    embedQuery.mockImplementation(async () => [0, 1, 0]);
+    resetEmbeddingMocks();
 
     await fs.rm(memoryDir, { recursive: true, force: true });
     await fs.mkdir(memoryDir, { recursive: true });
