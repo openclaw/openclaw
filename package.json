@@ -118,6 +118,7 @@
     "@aws-sdk/client-bedrock": "^3.990.0",
     "@buape/carbon": "0.14.0",
     "@clack/prompts": "^1.0.1",
+    "@github/copilot-sdk": "0.1.22",
     "@grammyjs/runner": "^2.0.3",
     "@grammyjs/transformer-throttler": "^1.2.1",
     "@homebridge/ciao": "^1.3.5",

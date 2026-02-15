@@ -52,6 +52,38 @@ const DEFAULT_CLAUDE_BACKEND: CliBackendConfig = {
   serialize: true,
 };
 
+// Copilot CLI model aliases — map friendly short names to the exact model ids
+// accepted by `copilot --model`. Run `copilot --model list` for the latest.
+const COPILOT_MODEL_ALIASES: Record<string, string> = {
+  // Claude
+  opus: "claude-opus-4.6",
+  "opus-4.6": "claude-opus-4.6",
+  "opus-4.6-fast": "claude-opus-4.6-fast",
+  "opus-4.5": "claude-opus-4.5",
+  sonnet: "claude-sonnet-4.5",
+  "sonnet-4.5": "claude-sonnet-4.5",
+  "sonnet-4": "claude-sonnet-4",
+  haiku: "claude-haiku-4.5",
+  "haiku-4.5": "claude-haiku-4.5",
+  // Gemini
+  gemini: "gemini-3-pro-preview",
+  "gemini-3-pro": "gemini-3-pro-preview",
+  // GPT
+  "gpt-5": "gpt-5",
+  "gpt-5-mini": "gpt-5-mini",
+  "gpt-5.1": "gpt-5.1",
+  "gpt-5.2": "gpt-5.2",
+  codex: "gpt-5.3-codex",
+  "codex-max": "gpt-5.1-codex-max",
+};
+
+const DEFAULT_COPILOT_BACKEND: CliBackendConfig = {
+  command: "copilot",
+  output: "text",
+  input: "arg",
+  modelAliases: COPILOT_MODEL_ALIASES,
+};
+
 const DEFAULT_CODEX_BACKEND: CliBackendConfig = {
   command: "codex",
   args: ["exec", "--json", "--color", "never", "--sandbox", "read-only", "--skip-git-repo-check"],
@@ -113,6 +145,7 @@ export function resolveCliBackendIds(cfg?: OpenClawConfig): Set<string> {
   const ids = new Set<string>([
     normalizeBackendKey("claude-cli"),
     normalizeBackendKey("codex-cli"),
+    normalizeBackendKey("copilot-cli"),
   ]);
   const configured = cfg?.agents?.defaults?.cliBackends ?? {};
   for (const key of Object.keys(configured)) {
@@ -139,6 +172,17 @@ export function resolveCliBackendConfig(
   }
   if (normalized === "codex-cli") {
     const merged = mergeBackendConfig(DEFAULT_CODEX_BACKEND, override);
+    const command = merged.command?.trim();
+    if (!command) {
+      return null;
+    }
+    return { id: normalized, config: { ...merged, command } };
+  }
+  // copilot-cli uses the Copilot SDK (not a generic CLI subprocess).
+  // Return a stub config so callers recognise it as a valid backend; the actual
+  // execution path is handled in copilot-runner.ts.
+  if (normalized === "copilot-cli") {
+    const merged = mergeBackendConfig(DEFAULT_COPILOT_BACKEND, override);
     const command = merged.command?.trim();
     if (!command) {
       return null;
