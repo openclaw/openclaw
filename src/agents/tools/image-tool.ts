@@ -358,9 +358,14 @@ export function createImageTool(options?: {
     if (!workspaceDir) {
       return roots;
     }
-    const normalized = workspaceDir.startsWith("~") ? resolveUserPath(workspaceDir) : workspaceDir;
-    if (!roots.includes(normalized)) {
-      roots.push(normalized);
+    const expanded = workspaceDir.startsWith("~") ? resolveUserPath(workspaceDir) : workspaceDir;
+    const resolved = path.resolve(expanded);
+    // Defensive: never allow "/" as an implicit media root.
+    if (resolved === path.parse(resolved).root) {
+      return roots;
+    }
+    if (!roots.includes(resolved)) {
+      roots.push(resolved);
     }
     return roots;
   })();

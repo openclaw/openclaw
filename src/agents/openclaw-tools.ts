@@ -60,11 +60,12 @@ export function createOpenClawTools(options?: {
   /** If true, omit the message tool from the tool list. */
   disableMessageTool?: boolean;
 }): AnyAgentTool[] {
+  const workspaceDir = options?.workspaceDir?.trim() || process.cwd();
   const imageTool = options?.agentDir?.trim()
     ? createImageTool({
         config: options?.config,
         agentDir: options.agentDir,
-        workspaceDir: options?.workspaceDir,
+        workspaceDir,
         sandbox:
           options?.sandboxRoot && options?.sandboxFsBridge
             ? { root: options.sandboxRoot, bridge: options.sandboxFsBridge }
@@ -157,7 +158,7 @@ export function createOpenClawTools(options?: {
   const pluginTools = resolvePluginTools({
     context: {
       config: options?.config,
-      workspaceDir: options?.workspaceDir,
+      workspaceDir,
       agentDir: options?.agentDir,
       agentId: resolveSessionAgentId({
         sessionKey: options?.agentSessionKey,
