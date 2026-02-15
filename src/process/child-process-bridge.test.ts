@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { attachChildProcessBridge } from "./child-process-bridge.js";
 
@@ -63,7 +64,8 @@ describe("attachChildProcessBridge", () => {
   });
 
   it("forwards SIGTERM to the wrapped child", async () => {
-    const childPath = path.resolve(process.cwd(), "test/fixtures/child-process-bridge/child.js");
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const childPath = path.resolve(here, "../../test/fixtures/child-process-bridge/child.js");
 
     const beforeSigterm = new Set(process.listeners("SIGTERM"));
     const child = spawn(process.execPath, [childPath], {
