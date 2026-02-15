@@ -18,6 +18,8 @@ export type TelegramActionConfig = {
   editMessage?: boolean;
   /** Enable sticker actions (send and search). */
   sticker?: boolean;
+  /** Enable forum topic creation. */
+  createForumTopic?: boolean;
 };
 
 export type TelegramNetworkConfig = {
