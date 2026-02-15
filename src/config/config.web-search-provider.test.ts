@@ -2,11 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { validateConfigObject } from "./config.js";
 
 vi.mock("../runtime.js", () => ({
-  defaultRuntime: { info: vi.fn(), error: vi.fn(), warn: vi.fn() },
+  defaultRuntime: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
 }));
 
-const { __testing_provider } = await import("../agents/tools/web-search.js");
-const { resolveSearchProvider } = __testing_provider;
+const { __testing } = await import("../agents/tools/web-search.js");
+const { resolveSearchProvider } = __testing;
 
 describe("web search provider config", () => {
   it("accepts perplexity provider and config", () => {
