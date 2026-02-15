@@ -397,6 +397,17 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
           });
         }
 
+        // Send flex messages (detail tables) before template (buttons/pagination)
+        // so the detail content appears first in the chat. (#17308)
+        for (const flexMsg of processed.flexMessages) {
+          // LINE SDK expects FlexContainer but we receive contents as unknown
+          const flexContents = flexMsg.contents as Parameters<typeof sendFlex>[2];
+          lastResult = await sendFlex(to, flexMsg.altText, flexContents, {
+            verbose: false,
+            accountId: accountId ?? undefined,
+          });
+        }
+
         if (lineData.templateMessage) {
           const template = buildTemplate(lineData.templateMessage);
           if (template) {
@@ -409,15 +420,6 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
 
         if (lineData.location) {
           lastResult = await sendLocation(to, lineData.location, {
-            verbose: false,
-            accountId: accountId ?? undefined,
-          });
-        }
-
-        for (const flexMsg of processed.flexMessages) {
-          // LINE SDK expects FlexContainer but we receive contents as unknown
-          const flexContents = flexMsg.contents as Parameters<typeof sendFlex>[2];
-          lastResult = await sendFlex(to, flexMsg.altText, flexContents, {
             verbose: false,
             accountId: accountId ?? undefined,
           });
@@ -459,6 +461,15 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
             contents: lineData.flexMessage.contents,
           });
         }
+        // Push flex messages (detail tables) before template (buttons/pagination)
+        // so the detail content appears first in the chat. (#17308)
+        for (const flexMsg of processed.flexMessages) {
+          quickReplyMessages.push({
+            type: "flex",
+            altText: flexMsg.altText.slice(0, 400),
+            contents: flexMsg.contents,
+          });
+        }
         if (lineData.templateMessage) {
           const template = buildTemplate(lineData.templateMessage);
           if (template) {
@@ -472,13 +483,6 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
             address: lineData.location.address.slice(0, 100),
             latitude: lineData.location.latitude,
             longitude: lineData.location.longitude,
-          });
-        }
-        for (const flexMsg of processed.flexMessages) {
-          quickReplyMessages.push({
-            type: "flex",
-            altText: flexMsg.altText.slice(0, 400),
-            contents: flexMsg.contents,
           });
         }
         for (const url of mediaUrls) {
