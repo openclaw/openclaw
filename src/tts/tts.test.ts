@@ -51,6 +51,7 @@ const {
   summarizeText,
   resolveOutputFormat,
   resolveEdgeOutputFormat,
+  formatTtsError,
 } = _test;
 
 describe("tts", () => {
@@ -442,6 +443,96 @@ describe("tts", () => {
           expect(provider).toBe("edge");
         },
       );
+    });
+
+    it("uses explicitly configured provider even when API key is missing", () => {
+      withEnv(
+        {
+          OPENAI_API_KEY: undefined,
+          ELEVENLABS_API_KEY: undefined,
+          XI_API_KEY: undefined,
+        },
+        () => {
+          const cfg = {
+            ...baseCfg,
+            messages: {
+              tts: {
+                provider: "openai",
+              },
+            },
+          };
+          const config = resolveTtsConfig(cfg);
+          const provider = getTtsProvider(config, "/tmp/tts-prefs-explicit.json");
+          expect(provider).toBe("openai");
+        },
+      );
+    });
+  });
+
+  describe("formatTtsError", () => {
+    it("formats error with message correctly", () => {
+      const error = new Error("Connection refused");
+      const result = formatTtsError("openai", error);
+      expect(result).toBe("openai: Connection refused");
+    });
+
+    it("handles error with undefined message", () => {
+      const error = new Error();
+      (error as { message: undefined }).message = undefined as unknown as string;
+      const result = formatTtsError("edge", error);
+      expect(result).not.toContain("undefined");
+      expect(result).toContain("edge");
+    });
+
+    it("handles error with empty message", () => {
+      const error = new Error("");
+      const result = formatTtsError("elevenlabs", error);
+      expect(result).not.toBe("elevenlabs: ");
+      expect(result).toContain("elevenlabs");
+    });
+
+    it("handles AbortError specially", () => {
+      const error = new Error("Aborted");
+      error.name = "AbortError";
+      const result = formatTtsError("openai", error);
+      expect(result).toBe("openai: request timed out");
+    });
+
+    it("handles string throws directly", () => {
+      const result = formatTtsError("openai", "Connection failed");
+      expect(result).toBe("openai: Connection failed");
+    });
+
+    it("handles empty string throws", () => {
+      const result = formatTtsError("openai", "  ");
+      expect(result).toBe("openai: unknown error");
+    });
+
+    it("handles plain objects with message property", () => {
+      const result = formatTtsError("edge", { message: "API limit exceeded" });
+      expect(result).toBe("edge: API limit exceeded");
+    });
+
+    it("handles plain objects with error property", () => {
+      const result = formatTtsError("elevenlabs", { error: "Invalid voice ID" });
+      expect(result).toBe("elevenlabs: Invalid voice ID");
+    });
+
+    it("handles plain objects by serializing to JSON", () => {
+      const result = formatTtsError("openai", { code: 429, status: "rate_limited" });
+      expect(result).toContain("openai:");
+      expect(result).toContain("429");
+      expect(result).toContain("rate_limited");
+    });
+
+    it("handles null gracefully", () => {
+      const result = formatTtsError("edge", null);
+      expect(result).toBe("edge: unknown error");
+    });
+
+    it("handles undefined gracefully", () => {
+      const result = formatTtsError("edge", undefined);
+      expect(result).toBe("edge: unknown error");
     });
   });
 

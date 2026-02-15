@@ -512,6 +512,72 @@ export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
   return [primary, ...TTS_PROVIDERS.filter((provider) => provider !== primary)];
 }
 
+/**
+ * Formats a TTS provider error message, handling cases where the thrown value
+ * may not be an Error instance (e.g., string, object) or error.message is undefined.
+ */
+export function formatTtsError(provider: string, error: unknown): string {
+  // Handle null/undefined explicitly to avoid "provider: undefined" output
+  if (error === null || error === undefined) {
+    return `${provider}: unknown error`;
+  }
+
+  // Handle string throws directly
+  if (typeof error === "string") {
+    return `${provider}: ${error.trim() || "unknown error"}`;
+  }
+
+  // Handle Error instances
+  if (error instanceof Error) {
+    if (error.name === "AbortError") {
+      return `${provider}: request timed out`;
+    }
+    const message = error.message?.trim();
+    if (message) {
+      return `${provider}: ${message}`;
+    }
+    // Fallback to error name when message is unavailable
+    if (error.name && error.name !== "Error") {
+      return `${provider}: ${error.name}`;
+    }
+  }
+
+  // Handle plain objects - try to extract useful info
+  if (error !== null && typeof error === "object") {
+    // Check for common error-like properties
+    const obj = error as Record<string, unknown>;
+    if (typeof obj.message === "string" && obj.message.trim()) {
+      return `${provider}: ${obj.message.trim()}`;
+    }
+    if (typeof obj.error === "string" && obj.error.trim()) {
+      return `${provider}: ${obj.error.trim()}`;
+    }
+    // Try JSON for objects with meaningful content
+    try {
+      const json = JSON.stringify(error);
+      if (json !== "{}" && json.length < 200) {
+        return `${provider}: ${json}`;
+      }
+    } catch {
+      // JSON.stringify failed, fall through
+    }
+  }
+
+  // Handle remaining primitive types (number, boolean, symbol, bigint, function)
+  // These all have sensible string representations
+  if (typeof error === "number" || typeof error === "boolean" || typeof error === "bigint") {
+    return `${provider}: ${String(error)}`;
+  }
+  if (typeof error === "function") {
+    return `${provider}: ${error.name || "unknown error"}`;
+  }
+  if (typeof error === "symbol") {
+    return `${provider}: ${error.description || "unknown error"}`;
+  }
+
+  return `${provider}: unknown error`;
+}
+
 export function isTtsProviderConfigured(config: ResolvedTtsConfig, provider: TtsProvider): boolean {
   if (provider === "edge") {
     return config.edge.enabled;
@@ -683,7 +749,7 @@ export async function textToSpeech(params: {
         voiceCompatible: output.voiceCompatible,
       };
     } catch (err) {
-      lastError = formatTtsProviderError(provider, err);
+      lastError = formatTtsError(provider, err);
     }
   }
 
@@ -772,7 +838,7 @@ export async function textToSpeechTelephony(params: {
         sampleRate: output.sampleRate,
       };
     } catch (err) {
-      lastError = formatTtsProviderError(provider, err);
+      lastError = formatTtsError(provider, err);
     }
   }
 
@@ -938,4 +1004,5 @@ export const _test = {
   summarizeText,
   resolveOutputFormat,
   resolveEdgeOutputFormat,
+  formatTtsError,
 };
