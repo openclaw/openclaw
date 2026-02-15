@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 const noop = () => {};
 let lifecycleHandler:
@@ -39,16 +39,24 @@ vi.mock("./subagent-registry.store.js", () => ({
 }));
 
 describe("subagent registry steer restarts", () => {
+  let mod: typeof import("./subagent-registry.js");
+
+  beforeAll(async () => {
+    mod = await import("./subagent-registry.js");
+  });
+
+  const flushAnnounce = async () => {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  };
+
   afterEach(async () => {
-    announceSpy.mockClear();
+    announceSpy.mockReset();
+    announceSpy.mockResolvedValue(true);
     lifecycleHandler = undefined;
-    const mod = await import("./subagent-registry.js");
     mod.resetSubagentRegistryForTests({ persist: false });
   });
 
   it("suppresses announce for interrupted runs and only announces the replacement run", async () => {
-    const mod = await import("./subagent-registry.js");
-
     mod.registerSubagentRun({
       runId: "run-old",
       childSessionKey: "agent:main:subagent:steer",
@@ -70,7 +78,7 @@ describe("subagent registry steer restarts", () => {
       data: { phase: "end" },
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await flushAnnounce();
     expect(announceSpy).not.toHaveBeenCalled();
 
     const replaced = mod.replaceSubagentRunAfterSteer({
@@ -90,7 +98,7 @@ describe("subagent registry steer restarts", () => {
       data: { phase: "end" },
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await flushAnnounce();
     expect(announceSpy).toHaveBeenCalledTimes(1);
 
     const announce = announceSpy.mock.calls[0]?.[0] as { childRunId?: string };
@@ -98,8 +106,6 @@ describe("subagent registry steer restarts", () => {
   });
 
   it("restores announce for a finished run when steer replacement dispatch fails", async () => {
-    const mod = await import("./subagent-registry.js");
-
     mod.registerSubagentRun({
       runId: "run-failed-restart",
       childSessionKey: "agent:main:subagent:failed-restart",
@@ -117,11 +123,11 @@ describe("subagent registry steer restarts", () => {
       data: { phase: "end" },
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await flushAnnounce();
     expect(announceSpy).not.toHaveBeenCalled();
 
     expect(mod.clearSubagentRunSteerRestart("run-failed-restart")).toBe(true);
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await flushAnnounce();
 
     expect(announceSpy).toHaveBeenCalledTimes(1);
     const announce = announceSpy.mock.calls[0]?.[0] as { childRunId?: string };
@@ -129,7 +135,6 @@ describe("subagent registry steer restarts", () => {
   });
 
   it("marks killed runs terminated and inactive", async () => {
-    const mod = await import("./subagent-registry.js");
     const childSessionKey = "agent:main:subagent:killed";
 
     mod.registerSubagentRun({
@@ -156,7 +161,6 @@ describe("subagent registry steer restarts", () => {
   });
 
   it("retries deferred parent cleanup after a descendant announces", async () => {
-    const mod = await import("./subagent-registry.js");
     let parentAttempts = 0;
     announceSpy.mockImplementation(async (params: unknown) => {
       const typed = params as { childRunId?: string };
@@ -189,14 +193,14 @@ describe("subagent registry steer restarts", () => {
       runId: "run-parent",
       data: { phase: "end" },
     });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await flushAnnounce();
 
     lifecycleHandler?.({
       stream: "lifecycle",
       runId: "run-child",
       data: { phase: "end" },
     });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await flushAnnounce();
 
     const childRunIds = announceSpy.mock.calls.map(
       (call) => (call[0] as { childRunId?: string }).childRunId,
