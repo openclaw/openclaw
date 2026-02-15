@@ -15,6 +15,7 @@ import { locked } from "./locked.js";
 import { ensureLoaded, persist } from "./store.js";
 
 const MAX_TIMER_DELAY_MS = 60_000;
+const MIN_TIMER_DELAY_MS = 500;
 
 /**
  * Maximum wall-clock time for a single job execution. Acts as a safety net
@@ -140,7 +141,9 @@ export function armTimer(state: CronServiceState) {
     return;
   }
   const now = state.deps.nowMs();
-  const delay = Math.max(nextAt - now, 0);
+  const rawDelay = Math.max(nextAt - now, 0);
+  // Guard against spin-loop when nextAt is in the past (delay=0).
+  const delay = rawDelay === 0 ? MIN_TIMER_DELAY_MS : rawDelay;
   // Wake at least once a minute to avoid schedule drift and recover quickly
   // when the process was paused or wall-clock time jumps.
   const clampedDelay = Math.min(delay, MAX_TIMER_DELAY_MS);
