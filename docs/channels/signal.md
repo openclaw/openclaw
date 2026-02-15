@@ -195,6 +195,7 @@ Groups:
 
 - `channels.signal.groupPolicy = open | allowlist | disabled`.
 - `channels.signal.groupAllowFrom` controls who can trigger in groups when `allowlist` is set.
+- **Important:** Signal group IDs are Base64-encoded and **case-sensitive**. When configuring `groups` allowlists, copy the exact ID from logs or `signal-cli listGroups` — `group:ABC123` and `group:abc123` are different groups.
 
 ## How it works (behavior)
 
@@ -245,6 +246,9 @@ Config:
 - DMs: `signal:+15551234567` (or plain E.164).
 - UUID DMs: `uuid:<id>` (or bare UUID).
 - Groups: `signal:group:<groupId>`.
+  - Group IDs are **Base64-encoded and case-sensitive** (e.g., `group:AbCdEf123+/=`).
+  - When configuring allowlists, use the exact case as returned by `signal-cli` or message logs.
+  - To find group IDs: check gateway logs for incoming group messages or use `signal-cli listGroups`.
 - Usernames: `username:<name>` (if supported by your Signal account).
 
 ## Troubleshooting
