@@ -4,11 +4,16 @@ import { Routes } from "discord-api-types/v10";
 import { inspect } from "node:util";
 import type { HistoryEntry } from "../../auto-reply/reply/history.js";
 import type { OpenClawConfig, ReplyToMode } from "../../config/config.js";
-import type { RuntimeEnv } from "../../runtime.js";
 import { resolveTextChunkLimit } from "../../auto-reply/chunk.js";
 import { listNativeCommandSpecsForConfig } from "../../auto-reply/commands-registry.js";
 import { listSkillCommandsForAgents } from "../../auto-reply/skill-commands.js";
-import { mergeAllowlist, summarizeMapping } from "../../channels/allowlists/resolve-utils.js";
+import {
+  buildAllowlistResolutionSummary,
+  mergeAllowlist,
+  resolveAllowlistIdAdditions,
+  patchAllowlistUsersInConfigEntries,
+  summarizeMapping,
+} from "../../channels/allowlists/resolve-utils.js";
 import {
   isNativeCommandsExplicitlyDisabled,
   resolveNativeCommandsEnabled,
@@ -19,6 +24,7 @@ import { danger, logVerbose, shouldLogVerbose, warn } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createDiscordRetryRunner } from "../../infra/retry-policy.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { createNonExitingRuntime, type RuntimeEnv } from "../../runtime.js";
 import { resolveDiscordAccount } from "../accounts.js";
 import { attachDiscordGatewayLogging } from "../gateway-logging.js";
 import { getDiscordGatewayEmitter, waitForDiscordGatewayStop } from "../monitor.gateway.js";
@@ -137,13 +143,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     );
   }
 
-  const runtime: RuntimeEnv = opts.runtime ?? {
-    log: console.log,
-    error: console.error,
-    exit: (code: number): never => {
-      throw new Error(`exit ${code}`);
-    },
-  };
+  const runtime: RuntimeEnv = opts.runtime ?? createNonExitingRuntime();
 
   const discordCfg = account.config;
   const dmConfig = discordCfg.dm;
@@ -162,7 +162,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       ),
     );
   }
-  let allowFrom = dmConfig?.allowFrom;
+  let allowFrom = discordCfg.allowFrom ?? dmConfig?.allowFrom;
   const mediaMaxBytes = (opts.mediaMaxMb ?? discordCfg.mediaMaxMb ?? 8) * 1024 * 1024;
   const textLimit = resolveTextChunkLimit(cfg, "discord", account.accountId, {
     fallbackLimit: 2000,
@@ -173,7 +173,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   );
   const replyToMode = opts.replyToMode ?? discordCfg.replyToMode ?? "off";
   const dmEnabled = dmConfig?.enabled ?? true;
-  const dmPolicy = dmConfig?.policy ?? "pairing";
+  const dmPolicy = discordCfg.dmPolicy ?? dmConfig?.policy ?? "pairing";
   const groupDmEnabled = dmConfig?.groupEnabled ?? false;
   const groupDmChannels = dmConfig?.groupChannels;
   const nativeEnabled = resolveNativeCommandsEnabled({
@@ -337,13 +337,8 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
             token,
             entries: Array.from(userEntries),
           });
-          const resolvedMap = new Map(resolvedUsers.map((entry) => [entry.input, entry]));
-          const mapping = resolvedUsers
-            .filter((entry) => entry.resolved && entry.id)
-            .map((entry) => `${entry.input}→${entry.id}`);
-          const unresolved = resolvedUsers
-            .filter((entry) => !entry.resolved)
-            .map((entry) => entry.input);
+          const { resolvedMap, mapping, unresolved } =
+            buildAllowlistResolutionSummary(resolvedUsers);
 
           const nextGuilds = { ...guildEntries };
           for (const [guildKey, guildConfig] of Object.entries(guildEntries ?? {})) {
@@ -353,41 +348,15 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
             const nextGuild = { ...guildConfig } as Record<string, unknown>;
             const users = (guildConfig as { users?: Array<string | number> }).users;
             if (Array.isArray(users) && users.length > 0) {
-              const additions: string[] = [];
-              for (const entry of users) {
-                const trimmed = String(entry).trim();
-                const resolved = resolvedMap.get(trimmed);
-                if (resolved?.resolved && resolved.id) {
-                  additions.push(resolved.id);
-                }
-              }
+              const additions = resolveAllowlistIdAdditions({ existing: users, resolvedMap });
               nextGuild.users = mergeAllowlist({ existing: users, additions });
             }
             const channels = (guildConfig as { channels?: Record<string, unknown> }).channels ?? {};
             if (channels && typeof channels === "object") {
-              const nextChannels: Record<string, unknown> = { ...channels };
-              for (const [channelKey, channelConfig] of Object.entries(channels)) {
-                if (!channelConfig || typeof channelConfig !== "object") {
-                  continue;
-                }
-                const channelUsers = (channelConfig as { users?: Array<string | number> }).users;
-                if (!Array.isArray(channelUsers) || channelUsers.length === 0) {
-                  continue;
-                }
-                const additions: string[] = [];
-                for (const entry of channelUsers) {
-                  const trimmed = String(entry).trim();
-                  const resolved = resolvedMap.get(trimmed);
-                  if (resolved?.resolved && resolved.id) {
-                    additions.push(resolved.id);
-                  }
-                }
-                nextChannels[channelKey] = {
-                  ...channelConfig,
-                  users: mergeAllowlist({ existing: channelUsers, additions }),
-                };
-              }
-              nextGuild.channels = nextChannels;
+              nextGuild.channels = patchAllowlistUsersInConfigEntries({
+                entries: channels,
+                resolvedMap,
+              });
             }
             nextGuilds[guildKey] = nextGuild;
           }

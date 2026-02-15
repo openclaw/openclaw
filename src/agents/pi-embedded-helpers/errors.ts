@@ -13,6 +13,20 @@ export function formatBillingErrorMessage(provider?: string): string {
 
 export const BILLING_ERROR_USER_MESSAGE = formatBillingErrorMessage();
 
+const RATE_LIMIT_ERROR_USER_MESSAGE = "⚠️ API rate limit reached. Please try again later.";
+const OVERLOADED_ERROR_USER_MESSAGE =
+  "The AI service is temporarily overloaded. Please try again in a moment.";
+
+function formatRateLimitOrOverloadedErrorCopy(raw: string): string | undefined {
+  if (isRateLimitErrorMessage(raw)) {
+    return RATE_LIMIT_ERROR_USER_MESSAGE;
+  }
+  if (isOverloadedErrorMessage(raw)) {
+    return OVERLOADED_ERROR_USER_MESSAGE;
+  }
+  return undefined;
+}
+
 export function isContextOverflowError(errorMessage?: string): boolean {
   if (!errorMessage) {
     return false;
@@ -93,6 +107,8 @@ const ERROR_PREFIX_RE =
   /^(?:error|api\s*error|openai\s*error|anthropic\s*error|gateway\s*error|request failed|failed|exception)[:\s-]+/i;
 const CONTEXT_OVERFLOW_ERROR_HEAD_RE =
   /^(?:context overflow:|request_too_large\b|request size exceeds\b|request exceeds the maximum size\b|context length exceeded\b|maximum context length\b|prompt is too long\b|exceeds model context window\b)/i;
+const BILLING_ERROR_HEAD_RE =
+  /^(?:error[:\s-]+)?billing(?:\s+error)?(?:[:\s-]+|$)|^(?:error[:\s-]+)?(?:credit balance|insufficient credits?|payment required|http\s*402\b)/i;
 const HTTP_STATUS_PREFIX_RE = /^(?:http\s*)?(\d{3})\s+(.+)$/i;
 const HTTP_STATUS_CODE_PREFIX_RE = /^(?:http\s*)?(\d{3})(?:\s+([\s\S]+))?$/i;
 const HTML_ERROR_PREFIX_RE = /^\s*(?:<!doctype\s+html\b|<html\b)/i;
@@ -221,6 +237,18 @@ function shouldRewriteContextOverflowText(raw: string): boolean {
     isLikelyHttpErrorText(raw) ||
     ERROR_PREFIX_RE.test(raw) ||
     CONTEXT_OVERFLOW_ERROR_HEAD_RE.test(raw)
+  );
+}
+
+function shouldRewriteBillingText(raw: string): boolean {
+  if (!isBillingErrorMessage(raw)) {
+    return false;
+  }
+  return (
+    isRawApiErrorPayload(raw) ||
+    isLikelyHttpErrorText(raw) ||
+    ERROR_PREFIX_RE.test(raw) ||
+    BILLING_ERROR_HEAD_RE.test(raw)
   );
 }
 
@@ -461,8 +489,13 @@ export function formatAssistantErrorText(
     return `LLM request rejected: ${invalidRequest[1]}`;
   }
 
-  if (isOverloadedErrorMessage(raw)) {
-    return "The AI service is temporarily overloaded. Please try again in a moment.";
+  const transientCopy = formatRateLimitOrOverloadedErrorCopy(raw);
+  if (transientCopy) {
+    return transientCopy;
+  }
+
+  if (isTimeoutErrorMessage(raw)) {
+    return "LLM request timed out.";
   }
 
   if (isBillingErrorMessage(raw)) {
@@ -488,7 +521,7 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
   const stripped = stripFinalTagsFromText(text);
   const trimmed = stripped.trim();
   if (!trimmed) {
-    return stripped;
+    return "";
   }
 
   // Only apply error-pattern rewrites when the caller knows this text is an error payload.
@@ -517,8 +550,9 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
     }
 
     if (ERROR_PREFIX_RE.test(trimmed)) {
-      if (isOverloadedErrorMessage(trimmed) || isRateLimitErrorMessage(trimmed)) {
-        return "The AI service is temporarily overloaded. Please try again in a moment.";
+      const prefixedCopy = formatRateLimitOrOverloadedErrorCopy(trimmed);
+      if (prefixedCopy) {
+        return prefixedCopy;
       }
       if (isTimeoutErrorMessage(trimmed)) {
         return "LLM request timed out.";
@@ -527,7 +561,17 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
     }
   }
 
-  return collapseConsecutiveDuplicateBlocks(stripped);
+  // Preserve legacy behavior for explicit billing-head text outside known
+  // error contexts (e.g., "billing: please upgrade your plan"), while
+  // keeping conversational billing mentions untouched.
+  if (shouldRewriteBillingText(trimmed)) {
+    return BILLING_ERROR_USER_MESSAGE;
+  }
+
+  // Strip leading blank lines (including whitespace-only lines) without clobbering indentation on
+  // the first content line (e.g. markdown/code blocks).
+  const withoutLeadingEmptyLines = stripped.replace(/^(?:[ \t]*\r?\n)+/, "");
+  return collapseConsecutiveDuplicateBlocks(withoutLeadingEmptyLines);
 }
 
 export function isRateLimitAssistantError(msg: AssistantMessage | undefined): boolean {
@@ -549,7 +593,13 @@ const ERROR_PATTERNS = {
     "usage limit",
   ],
   overloaded: [/overloaded_error|"type"\s*:\s*"overloaded_error"/i, "overloaded"],
-  timeout: ["timeout", "timed out", "deadline exceeded", "context deadline exceeded"],
+  timeout: [
+    "timeout",
+    "timed out",
+    "deadline exceeded",
+    "context deadline exceeded",
+    /without sending (?:any )?chunks?/i,
+  ],
   billing: [
     /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|\b(?:got|returned|received)\s+(?:a\s+)?402\b|^\s*402\s+payment/i,
     "payment required",
@@ -617,8 +667,18 @@ export function isBillingErrorMessage(raw: string): boolean {
   if (!value) {
     return false;
   }
-
-  return matchesErrorPatterns(value, ERROR_PATTERNS.billing);
+  if (matchesErrorPatterns(value, ERROR_PATTERNS.billing)) {
+    return true;
+  }
+  if (!BILLING_ERROR_HEAD_RE.test(raw)) {
+    return false;
+  }
+  return (
+    value.includes("upgrade") ||
+    value.includes("credits") ||
+    value.includes("payment") ||
+    value.includes("plan")
+  );
 }
 
 export function isMissingToolCallInputError(raw: string): boolean {

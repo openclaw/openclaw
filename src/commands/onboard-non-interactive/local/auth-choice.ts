@@ -15,6 +15,7 @@ import {
   applyQianfanConfig,
   applyKimiCodeConfig,
   applyMinimaxApiConfig,
+  applyMinimaxApiConfigCn,
   applyMinimaxConfig,
   applyMoonshotConfig,
   applyMoonshotConfigCn,
@@ -452,7 +453,9 @@ export async function applyNonInteractiveAuthChoice(params: {
     });
   }
 
-  if (authChoice === "moonshot-api-key") {
+  const applyMoonshotApiKeyChoice = async (
+    applyConfig: (cfg: OpenClawConfig) => OpenClawConfig,
+  ): Promise<OpenClawConfig | null> => {
     const resolved = await resolveNonInteractiveApiKey({
       provider: "moonshot",
       cfg: baseConfig,
@@ -472,30 +475,15 @@ export async function applyNonInteractiveAuthChoice(params: {
       provider: "moonshot",
       mode: "api_key",
     });
-    return applyMoonshotConfig(nextConfig);
+    return applyConfig(nextConfig);
+  };
+
+  if (authChoice === "moonshot-api-key") {
+    return await applyMoonshotApiKeyChoice(applyMoonshotConfig);
   }
 
   if (authChoice === "moonshot-api-key-cn") {
-    const resolved = await resolveNonInteractiveApiKey({
-      provider: "moonshot",
-      cfg: baseConfig,
-      flagValue: opts.moonshotApiKey,
-      flagName: "--moonshot-api-key",
-      envVar: "MOONSHOT_API_KEY",
-      runtime,
-    });
-    if (!resolved) {
-      return null;
-    }
-    if (resolved.source !== "profile") {
-      await setMoonshotApiKey(resolved.key);
-    }
-    nextConfig = applyAuthProfileConfig(nextConfig, {
-      profileId: "moonshot:default",
-      provider: "moonshot",
-      mode: "api_key",
-    });
-    return applyMoonshotConfigCn(nextConfig);
+    return await applyMoonshotApiKeyChoice(applyMoonshotConfigCn);
   }
 
   if (authChoice === "kimi-code-api-key") {
@@ -570,10 +558,14 @@ export async function applyNonInteractiveAuthChoice(params: {
   if (
     authChoice === "minimax-cloud" ||
     authChoice === "minimax-api" ||
+    authChoice === "minimax-api-key-cn" ||
     authChoice === "minimax-api-lightning"
   ) {
+    const isCn = authChoice === "minimax-api-key-cn";
+    const providerId = isCn ? "minimax-cn" : "minimax";
+    const profileId = `${providerId}:default`;
     const resolved = await resolveNonInteractiveApiKey({
-      provider: "minimax",
+      provider: providerId,
       cfg: baseConfig,
       flagValue: opts.minimaxApiKey,
       flagName: "--minimax-api-key",
@@ -584,16 +576,18 @@ export async function applyNonInteractiveAuthChoice(params: {
       return null;
     }
     if (resolved.source !== "profile") {
-      await setMinimaxApiKey(resolved.key);
+      await setMinimaxApiKey(resolved.key, undefined, profileId);
     }
     nextConfig = applyAuthProfileConfig(nextConfig, {
-      profileId: "minimax:default",
-      provider: "minimax",
+      profileId,
+      provider: providerId,
       mode: "api_key",
     });
     const modelId =
-      authChoice === "minimax-api-lightning" ? "MiniMax-M2.1-lightning" : "MiniMax-M2.1";
-    return applyMinimaxApiConfig(nextConfig, modelId);
+      authChoice === "minimax-api-lightning" ? "MiniMax-M2.5-Lightning" : "MiniMax-M2.5";
+    return isCn
+      ? applyMinimaxApiConfigCn(nextConfig, modelId)
+      : applyMinimaxApiConfig(nextConfig, modelId);
   }
 
   if (authChoice === "minimax") {

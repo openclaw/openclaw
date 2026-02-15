@@ -7,7 +7,9 @@ import type { ProcessSession, SessionStdin } from "./bash-process-registry.js";
 import type { ExecToolDetails } from "./bash-tools.exec.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
+import { mergePathPrepend } from "../infra/path-prepend.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
+export { applyPathPrepend, normalizePathPrepend } from "../infra/path-prepend.js";
 import { logWarn } from "../logger.js";
 import { formatSpawnError, spawnWithFallback } from "../process/spawn-utils.js";
 import {
@@ -84,13 +86,14 @@ export const DEFAULT_MAX_OUTPUT = clampWithDefault(
 );
 export const DEFAULT_PENDING_MAX_OUTPUT = clampWithDefault(
   readEnvInt("OPENCLAW_BASH_PENDING_MAX_OUTPUT_CHARS"),
-  200_000,
+  30_000,
   1_000,
   200_000,
 );
 export const DEFAULT_PATH =
   process.env.PATH ?? "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 export const DEFAULT_NOTIFY_TAIL_CHARS = 400;
+const DEFAULT_NOTIFY_SNIPPET_CHARS = 180;
 export const DEFAULT_APPROVAL_TIMEOUT_MS = 120_000;
 export const DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS = 130_000;
 const DEFAULT_APPROVAL_RUNNING_NOTICE_MS = 10_000;
@@ -214,61 +217,16 @@ export function normalizeNotifyOutput(value: string) {
   return value.replace(/\s+/g, " ").trim();
 }
 
-export function normalizePathPrepend(entries?: string[]) {
-  if (!Array.isArray(entries)) {
-    return [];
+function compactNotifyOutput(value: string, maxChars = DEFAULT_NOTIFY_SNIPPET_CHARS) {
+  const normalized = normalizeNotifyOutput(value);
+  if (!normalized) {
+    return "";
   }
-  const seen = new Set<string>();
-  const normalized: string[] = [];
-  for (const entry of entries) {
-    if (typeof entry !== "string") {
-      continue;
-    }
-    const trimmed = entry.trim();
-    if (!trimmed || seen.has(trimmed)) {
-      continue;
-    }
-    seen.add(trimmed);
-    normalized.push(trimmed);
+  if (normalized.length <= maxChars) {
+    return normalized;
   }
-  return normalized;
-}
-
-function mergePathPrepend(existing: string | undefined, prepend: string[]) {
-  if (prepend.length === 0) {
-    return existing;
-  }
-  const partsExisting = (existing ?? "")
-    .split(path.delimiter)
-    .map((part) => part.trim())
-    .filter(Boolean);
-  const merged: string[] = [];
-  const seen = new Set<string>();
-  for (const part of [...prepend, ...partsExisting]) {
-    if (seen.has(part)) {
-      continue;
-    }
-    seen.add(part);
-    merged.push(part);
-  }
-  return merged.join(path.delimiter);
-}
-
-export function applyPathPrepend(
-  env: Record<string, string>,
-  prepend: string[],
-  options?: { requireExisting?: boolean },
-) {
-  if (prepend.length === 0) {
-    return;
-  }
-  if (options?.requireExisting && !env.PATH) {
-    return;
-  }
-  const merged = mergePathPrepend(env.PATH, prepend);
-  if (merged) {
-    env.PATH = merged;
-  }
+  const safe = Math.max(1, maxChars - 1);
+  return `${normalized.slice(0, safe)}…`;
 }
 
 export function applyShellPath(env: Record<string, string>, shellPath?: string | null) {
@@ -300,9 +258,12 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
   const exitLabel = session.exitSignal
     ? `signal ${session.exitSignal}`
     : `code ${session.exitCode ?? 0}`;
-  const output = normalizeNotifyOutput(
+  const output = compactNotifyOutput(
     tail(session.tail || session.aggregated || "", DEFAULT_NOTIFY_TAIL_CHARS),
   );
+  if (status === "completed" && !output && session.notifyOnExitEmptySuccess !== true) {
+    return;
+  }
   const summary = output
     ? `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel}) :: ${output}`
     : `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel})`;
@@ -338,6 +299,9 @@ export function emitExecSystemEvent(
 
 export async function runExecProcess(opts: {
   command: string;
+  // Execute this instead of `command` (which is kept for display/session/logging).
+  // Used to sanitize safeBins execution while preserving the original user input.
+  execCommand?: string;
   workdir: string;
   env: Record<string, string>;
   sandbox?: BashSandboxConfig;
@@ -347,6 +311,7 @@ export async function runExecProcess(opts: {
   maxOutput: number;
   pendingMaxOutput: number;
   notifyOnExit: boolean;
+  notifyOnExitEmptySuccess?: boolean;
   scopeKey?: string;
   sessionKey?: string;
   timeoutSec: number;
@@ -357,6 +322,56 @@ export async function runExecProcess(opts: {
   let child: ChildProcessWithoutNullStreams | null = null;
   let pty: PtyHandle | null = null;
   let stdin: SessionStdin | undefined;
+  const execCommand = opts.execCommand ?? opts.command;
+
+  const spawnFallbacks = [
+    {
+      label: "no-detach",
+      options: { detached: false },
+    },
+  ];
+
+  const handleSpawnFallback = (err: unknown, fallback: { label: string }) => {
+    const errText = formatSpawnError(err);
+    const warning = `Warning: spawn failed (${errText}); retrying with ${fallback.label}.`;
+    logWarn(`exec: spawn failed (${errText}); retrying with ${fallback.label}.`);
+    opts.warnings.push(warning);
+  };
+
+  const spawnShellChild = async (
+    shell: string,
+    shellArgs: string[],
+  ): Promise<ChildProcessWithoutNullStreams> => {
+    const { child: spawned } = await spawnWithFallback({
+      argv: [shell, ...shellArgs, execCommand],
+      options: {
+        cwd: opts.workdir,
+        env: opts.env,
+        detached: process.platform !== "win32",
+        stdio: ["pipe", "pipe", "pipe"],
+        windowsHide: true,
+      },
+      fallbacks: spawnFallbacks,
+      onFallback: handleSpawnFallback,
+    });
+    return spawned as ChildProcessWithoutNullStreams;
+  };
+
+  // `exec` does not currently accept tool-provided stdin content. For non-PTY runs,
+  // keeping stdin open can cause commands like `wc -l` (or safeBins-hardened segments)
+  // to block forever waiting for input, leading to accidental backgrounding.
+  // For interactive flows, callers should use `pty: true` (stdin kept open).
+  const maybeCloseNonPtyStdin = () => {
+    if (opts.usePty) {
+      return;
+    }
+    try {
+      // Signal EOF immediately so stdin-only commands can terminate.
+      child?.stdin?.end();
+    } catch {
+      // ignore stdin close errors
+    }
+  };
 
   if (opts.sandbox) {
     const { child: spawned } = await spawnWithFallback({
@@ -364,7 +379,7 @@ export async function runExecProcess(opts: {
         "docker",
         ...buildDockerExecArgs({
           containerName: opts.sandbox.containerName,
-          command: opts.command,
+          command: execCommand,
           workdir: opts.containerWorkdir ?? opts.sandbox.containerWorkdir,
           env: opts.env,
           tty: opts.usePty,
@@ -377,21 +392,12 @@ export async function runExecProcess(opts: {
         stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true,
       },
-      fallbacks: [
-        {
-          label: "no-detach",
-          options: { detached: false },
-        },
-      ],
-      onFallback: (err, fallback) => {
-        const errText = formatSpawnError(err);
-        const warning = `Warning: spawn failed (${errText}); retrying with ${fallback.label}.`;
-        logWarn(`exec: spawn failed (${errText}); retrying with ${fallback.label}.`);
-        opts.warnings.push(warning);
-      },
+      fallbacks: spawnFallbacks,
+      onFallback: handleSpawnFallback,
     });
     child = spawned as ChildProcessWithoutNullStreams;
     stdin = child.stdin;
+    maybeCloseNonPtyStdin();
   } else if (opts.usePty) {
     const { shell, args: shellArgs } = getShellConfig();
     try {
@@ -403,7 +409,7 @@ export async function runExecProcess(opts: {
       if (!spawnPty) {
         throw new Error("PTY support is unavailable (node-pty spawn not found).");
       }
-      pty = spawnPty(shell, [...shellArgs, opts.command], {
+      pty = spawnPty(shell, [...shellArgs, execCommand], {
         cwd: opts.workdir,
         env: opts.env,
         name: process.env.TERM ?? "xterm-256color",
@@ -434,57 +440,14 @@ export async function runExecProcess(opts: {
       const warning = `Warning: PTY spawn failed (${errText}); retrying without PTY for \`${opts.command}\`.`;
       logWarn(`exec: PTY spawn failed (${errText}); retrying without PTY for "${opts.command}".`);
       opts.warnings.push(warning);
-      const { child: spawned } = await spawnWithFallback({
-        argv: [shell, ...shellArgs, opts.command],
-        options: {
-          cwd: opts.workdir,
-          env: opts.env,
-          detached: process.platform !== "win32",
-          stdio: ["pipe", "pipe", "pipe"],
-          windowsHide: true,
-        },
-        fallbacks: [
-          {
-            label: "no-detach",
-            options: { detached: false },
-          },
-        ],
-        onFallback: (fallbackErr, fallback) => {
-          const fallbackText = formatSpawnError(fallbackErr);
-          const fallbackWarning = `Warning: spawn failed (${fallbackText}); retrying with ${fallback.label}.`;
-          logWarn(`exec: spawn failed (${fallbackText}); retrying with ${fallback.label}.`);
-          opts.warnings.push(fallbackWarning);
-        },
-      });
-      child = spawned as ChildProcessWithoutNullStreams;
+      child = await spawnShellChild(shell, shellArgs);
       stdin = child.stdin;
     }
   } else {
     const { shell, args: shellArgs } = getShellConfig();
-    const { child: spawned } = await spawnWithFallback({
-      argv: [shell, ...shellArgs, opts.command],
-      options: {
-        cwd: opts.workdir,
-        env: opts.env,
-        detached: process.platform !== "win32",
-        stdio: ["pipe", "pipe", "pipe"],
-        windowsHide: true,
-      },
-      fallbacks: [
-        {
-          label: "no-detach",
-          options: { detached: false },
-        },
-      ],
-      onFallback: (err, fallback) => {
-        const errText = formatSpawnError(err);
-        const warning = `Warning: spawn failed (${errText}); retrying with ${fallback.label}.`;
-        logWarn(`exec: spawn failed (${errText}); retrying with ${fallback.label}.`);
-        opts.warnings.push(warning);
-      },
-    });
-    child = spawned as ChildProcessWithoutNullStreams;
+    child = await spawnShellChild(shell, shellArgs);
     stdin = child.stdin;
+    maybeCloseNonPtyStdin();
   }
 
   const session = {
@@ -493,6 +456,7 @@ export async function runExecProcess(opts: {
     scopeKey: opts.scopeKey,
     sessionKey: opts.sessionKey,
     notifyOnExit: opts.notifyOnExit,
+    notifyOnExitEmptySuccess: opts.notifyOnExitEmptySuccess === true,
     exitNotified: false,
     child: child ?? undefined,
     stdin,

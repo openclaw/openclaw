@@ -6,6 +6,7 @@ import type { sendMessageIMessage } from "../../imessage/send.js";
 import type { sendMessageSlack } from "../../slack/send.js";
 import type { sendMessageTelegram } from "../../telegram/send.js";
 import type { sendMessageWhatsApp } from "../../web/outbound.js";
+import type { OutboundIdentity } from "./identity.js";
 import type { NormalizedOutboundPayload } from "./payloads.js";
 import type { OutboundChannel } from "./targets.js";
 import {
@@ -21,10 +22,12 @@ import {
   appendAssistantMessageToSessionTranscript,
   resolveMirroredTranscriptText,
 } from "../../config/sessions.js";
+import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { markdownToSignalTextChunks, type SignalTextStyleRange } from "../../signal/format.js";
 import { sendMessageSignal } from "../../signal/send.js";
 import { throwIfAborted } from "./abort.js";
+import { ackDelivery, enqueueDelivery, failDelivery } from "./delivery-queue.js";
 import { normalizeReplyPayloadsForDelivery } from "./payloads.js";
 
 export type { NormalizedOutboundPayload } from "./payloads.js";
@@ -84,9 +87,11 @@ async function createChannelHandler(params: {
   accountId?: string;
   replyToId?: string | null;
   threadId?: string | number | null;
+  identity?: OutboundIdentity;
   deps?: OutboundSendDeps;
   gifPlayback?: boolean;
   silent?: boolean;
+  mediaLocalRoots?: readonly string[];
 }): Promise<ChannelHandler> {
   const outbound = await loadChannelOutboundAdapter(params.channel);
   if (!outbound?.sendText || !outbound?.sendMedia) {
@@ -100,9 +105,11 @@ async function createChannelHandler(params: {
     accountId: params.accountId,
     replyToId: params.replyToId,
     threadId: params.threadId,
+    identity: params.identity,
     deps: params.deps,
     gifPlayback: params.gifPlayback,
     silent: params.silent,
+    mediaLocalRoots: params.mediaLocalRoots,
   });
   if (!handler) {
     throw new Error(`Outbound not configured for channel: ${params.channel}`);
@@ -118,9 +125,11 @@ function createPluginHandler(params: {
   accountId?: string;
   replyToId?: string | null;
   threadId?: string | number | null;
+  identity?: OutboundIdentity;
   deps?: OutboundSendDeps;
   gifPlayback?: boolean;
   silent?: boolean;
+  mediaLocalRoots?: readonly string[];
 }): ChannelHandler | null {
   const outbound = params.outbound;
   if (!outbound?.sendText || !outbound?.sendMedia) {
@@ -144,9 +153,11 @@ function createPluginHandler(params: {
             accountId: params.accountId,
             replyToId: params.replyToId,
             threadId: params.threadId,
+            identity: params.identity,
             gifPlayback: params.gifPlayback,
             deps: params.deps,
             silent: params.silent,
+            mediaLocalRoots: params.mediaLocalRoots,
             payload,
           })
       : undefined,
@@ -158,9 +169,11 @@ function createPluginHandler(params: {
         accountId: params.accountId,
         replyToId: params.replyToId,
         threadId: params.threadId,
+        identity: params.identity,
         gifPlayback: params.gifPlayback,
         deps: params.deps,
         silent: params.silent,
+        mediaLocalRoots: params.mediaLocalRoots,
       }),
     sendMedia: async (caption, mediaUrl) =>
       sendMedia({
@@ -171,14 +184,18 @@ function createPluginHandler(params: {
         accountId: params.accountId,
         replyToId: params.replyToId,
         threadId: params.threadId,
+        identity: params.identity,
         gifPlayback: params.gifPlayback,
         deps: params.deps,
         silent: params.silent,
+        mediaLocalRoots: params.mediaLocalRoots,
       }),
   };
 }
 
-export async function deliverOutboundPayloads(params: {
+const isAbortError = (err: unknown): boolean => err instanceof Error && err.name === "AbortError";
+
+type DeliverOutboundPayloadsCoreParams = {
   cfg: OpenClawConfig;
   channel: Exclude<OutboundChannel, "none">;
   to: string;
@@ -186,12 +203,15 @@ export async function deliverOutboundPayloads(params: {
   payloads: ReplyPayload[];
   replyToId?: string | null;
   threadId?: string | number | null;
+  identity?: OutboundIdentity;
   deps?: OutboundSendDeps;
   gifPlayback?: boolean;
   abortSignal?: AbortSignal;
   bestEffort?: boolean;
   onError?: (err: unknown, payload: NormalizedOutboundPayload) => void;
   onPayload?: (payload: NormalizedOutboundPayload) => void;
+  /** Active agent id for media local-root scoping. */
+  agentId?: string;
   mirror?: {
     sessionKey: string;
     agentId?: string;
@@ -199,12 +219,86 @@ export async function deliverOutboundPayloads(params: {
     mediaUrls?: string[];
   };
   silent?: boolean;
-}): Promise<OutboundDeliveryResult[]> {
+};
+
+type DeliverOutboundPayloadsParams = DeliverOutboundPayloadsCoreParams & {
+  /** @internal Skip write-ahead queue (used by crash-recovery to avoid re-enqueueing). */
+  skipQueue?: boolean;
+};
+
+export async function deliverOutboundPayloads(
+  params: DeliverOutboundPayloadsParams,
+): Promise<OutboundDeliveryResult[]> {
+  const { channel, to, payloads } = params;
+
+  // Write-ahead delivery queue: persist before sending, remove after success.
+  const queueId = params.skipQueue
+    ? null
+    : await enqueueDelivery({
+        channel,
+        to,
+        accountId: params.accountId,
+        payloads,
+        threadId: params.threadId,
+        replyToId: params.replyToId,
+        bestEffort: params.bestEffort,
+        gifPlayback: params.gifPlayback,
+        silent: params.silent,
+        mirror: params.mirror,
+      }).catch(() => null); // Best-effort — don't block delivery if queue write fails.
+
+  // Wrap onError to detect partial failures under bestEffort mode.
+  // When bestEffort is true, per-payload errors are caught and passed to onError
+  // without throwing — so the outer try/catch never fires. We track whether any
+  // payload failed so we can call failDelivery instead of ackDelivery.
+  let hadPartialFailure = false;
+  const wrappedParams = params.onError
+    ? {
+        ...params,
+        onError: (err: unknown, payload: NormalizedOutboundPayload) => {
+          hadPartialFailure = true;
+          params.onError!(err, payload);
+        },
+      }
+    : params;
+
+  try {
+    const results = await deliverOutboundPayloadsCore(wrappedParams);
+    if (queueId) {
+      if (hadPartialFailure) {
+        await failDelivery(queueId, "partial delivery failure (bestEffort)").catch(() => {});
+      } else {
+        await ackDelivery(queueId).catch(() => {}); // Best-effort cleanup.
+      }
+    }
+    return results;
+  } catch (err) {
+    if (queueId) {
+      if (isAbortError(err)) {
+        await ackDelivery(queueId).catch(() => {});
+      } else {
+        await failDelivery(queueId, err instanceof Error ? err.message : String(err)).catch(
+          () => {},
+        );
+      }
+    }
+    throw err;
+  }
+}
+
+/** Core delivery logic (extracted for queue wrapper). */
+async function deliverOutboundPayloadsCore(
+  params: DeliverOutboundPayloadsCoreParams,
+): Promise<OutboundDeliveryResult[]> {
   const { cfg, channel, to, payloads } = params;
   const accountId = params.accountId;
   const deps = params.deps;
   const abortSignal = params.abortSignal;
   const sendSignal = params.deps?.sendSignal ?? sendMessageSignal;
+  const mediaLocalRoots = getAgentScopedMediaLocalRoots(
+    cfg,
+    params.agentId ?? params.mirror?.agentId,
+  );
   const results: OutboundDeliveryResult[] = [];
   const handler = await createChannelHandler({
     cfg,
@@ -214,8 +308,10 @@ export async function deliverOutboundPayloads(params: {
     accountId,
     replyToId: params.replyToId,
     threadId: params.threadId,
+    identity: params.identity,
     gifPlayback: params.gifPlayback,
     silent: params.silent,
+    mediaLocalRoots,
   });
   const textLimit = handler.chunker
     ? resolveTextChunkLimit(cfg, channel, accountId, {
@@ -318,6 +414,7 @@ export async function deliverOutboundPayloads(params: {
         accountId: accountId ?? undefined,
         textMode: "plain",
         textStyles: formatted.styles,
+        mediaLocalRoots,
       })),
     };
   };

@@ -1,6 +1,10 @@
+import { constants as fsConstants } from "node:fs";
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveChannelMediaMaxBytes, type OpenClawConfig } from "openclaw/plugin-sdk";
+import { resolveBlueBubblesAccount } from "./accounts.js";
 import { sendBlueBubblesAttachment } from "./attachments.js";
 import { resolveBlueBubblesMessageId } from "./monitor.js";
 import { getBlueBubblesRuntime } from "./runtime.js";
@@ -30,6 +34,141 @@ function resolveLocalMediaPath(source: string): string {
   } catch {
     throw new Error(`Invalid file:// URL: ${source}`);
   }
+}
+
+function expandHomePath(input: string): string {
+  if (input === "~") {
+    return os.homedir();
+  }
+  if (input.startsWith("~/") || input.startsWith(`~${path.sep}`)) {
+    return path.join(os.homedir(), input.slice(2));
+  }
+  return input;
+}
+
+function resolveConfiguredPath(input: string): string {
+  const trimmed = input.trim();
+  if (!trimmed) {
+    throw new Error("Empty mediaLocalRoots entry is not allowed");
+  }
+  if (trimmed.startsWith("file://")) {
+    let parsed: string;
+    try {
+      parsed = fileURLToPath(trimmed);
+    } catch {
+      throw new Error(`Invalid file:// URL in mediaLocalRoots: ${input}`);
+    }
+    if (!path.isAbsolute(parsed)) {
+      throw new Error(`mediaLocalRoots entries must be absolute paths: ${input}`);
+    }
+    return parsed;
+  }
+  const resolved = expandHomePath(trimmed);
+  if (!path.isAbsolute(resolved)) {
+    throw new Error(`mediaLocalRoots entries must be absolute paths: ${input}`);
+  }
+  return resolved;
+}
+
+function isPathInsideRoot(candidate: string, root: string): boolean {
+  const normalizedCandidate = path.normalize(candidate);
+  const normalizedRoot = path.normalize(root);
+  const rootWithSep = normalizedRoot.endsWith(path.sep)
+    ? normalizedRoot
+    : normalizedRoot + path.sep;
+  if (process.platform === "win32") {
+    const candidateLower = normalizedCandidate.toLowerCase();
+    const rootLower = normalizedRoot.toLowerCase();
+    const rootWithSepLower = rootWithSep.toLowerCase();
+    return candidateLower === rootLower || candidateLower.startsWith(rootWithSepLower);
+  }
+  return normalizedCandidate === normalizedRoot || normalizedCandidate.startsWith(rootWithSep);
+}
+
+function resolveMediaLocalRoots(params: { cfg: OpenClawConfig; accountId?: string }): string[] {
+  const account = resolveBlueBubblesAccount({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
+  return (account.config.mediaLocalRoots ?? [])
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+}
+
+async function assertLocalMediaPathAllowed(params: {
+  localPath: string;
+  localRoots: string[];
+  accountId?: string;
+}): Promise<{ data: Buffer; realPath: string; sizeBytes: number }> {
+  if (params.localRoots.length === 0) {
+    throw new Error(
+      `Local BlueBubbles media paths are disabled by default. Set channels.bluebubbles.mediaLocalRoots${
+        params.accountId
+          ? ` or channels.bluebubbles.accounts.${params.accountId}.mediaLocalRoots`
+          : ""
+      } to explicitly allow local file directories.`,
+    );
+  }
+
+  const resolvedLocalPath = path.resolve(params.localPath);
+  const supportsNoFollow = process.platform !== "win32" && "O_NOFOLLOW" in fsConstants;
+  const openFlags = fsConstants.O_RDONLY | (supportsNoFollow ? fsConstants.O_NOFOLLOW : 0);
+
+  for (const rootEntry of params.localRoots) {
+    const resolvedRootInput = resolveConfiguredPath(rootEntry);
+    const relativeToRoot = path.relative(resolvedRootInput, resolvedLocalPath);
+    if (
+      relativeToRoot.startsWith("..") ||
+      path.isAbsolute(relativeToRoot) ||
+      relativeToRoot === ""
+    ) {
+      continue;
+    }
+
+    let rootReal: string;
+    try {
+      rootReal = await fs.realpath(resolvedRootInput);
+    } catch {
+      rootReal = path.resolve(resolvedRootInput);
+    }
+    const candidatePath = path.resolve(rootReal, relativeToRoot);
+
+    if (!isPathInsideRoot(candidatePath, rootReal)) {
+      continue;
+    }
+
+    let handle: Awaited<ReturnType<typeof fs.open>> | null = null;
+    try {
+      handle = await fs.open(candidatePath, openFlags);
+      const realPath = await fs.realpath(candidatePath);
+      if (!isPathInsideRoot(realPath, rootReal)) {
+        continue;
+      }
+
+      const stat = await handle.stat();
+      if (!stat.isFile()) {
+        continue;
+      }
+      const realStat = await fs.stat(realPath);
+      if (stat.ino !== realStat.ino || stat.dev !== realStat.dev) {
+        continue;
+      }
+
+      const data = await handle.readFile();
+      return { data, realPath, sizeBytes: stat.size };
+    } catch {
+      // Try next configured root.
+      continue;
+    } finally {
+      if (handle) {
+        await handle.close().catch(() => {});
+      }
+    }
+  }
+
+  throw new Error(
+    `Local media path is not under any configured mediaLocalRoots entry: ${params.localPath}`,
+  );
 }
 
 function resolveFilenameFromSource(source?: string): string | undefined {
@@ -88,6 +227,7 @@ export async function sendBlueBubblesMedia(params: {
       cfg.channels?.bluebubbles?.mediaMaxMb,
     accountId,
   });
+  const mediaLocalRoots = resolveMediaLocalRoots({ cfg, accountId });
 
   let buffer: Uint8Array;
   let resolvedContentType = contentType ?? undefined;
@@ -121,24 +261,27 @@ export async function sendBlueBubblesMedia(params: {
       resolvedContentType = resolvedContentType ?? fetched.contentType ?? undefined;
       resolvedFilename = resolvedFilename ?? fetched.fileName;
     } else {
-      const localPath = resolveLocalMediaPath(source);
-      const fs = await import("node:fs/promises");
+      const localPath = expandHomePath(resolveLocalMediaPath(source));
+      const localFile = await assertLocalMediaPathAllowed({
+        localPath,
+        localRoots: mediaLocalRoots,
+        accountId,
+      });
       if (typeof maxBytes === "number" && maxBytes > 0) {
-        const stats = await fs.stat(localPath);
-        assertMediaWithinLimit(stats.size, maxBytes);
+        assertMediaWithinLimit(localFile.sizeBytes, maxBytes);
       }
-      const data = await fs.readFile(localPath);
+      const data = localFile.data;
       assertMediaWithinLimit(data.byteLength, maxBytes);
       buffer = new Uint8Array(data);
       if (!resolvedContentType) {
         const detected = await core.media.detectMime({
           buffer: data,
-          filePath: localPath,
+          filePath: localFile.realPath,
         });
         resolvedContentType = detected ?? undefined;
       }
       if (!resolvedFilename) {
-        resolvedFilename = resolveFilenameFromSource(localPath);
+        resolvedFilename = resolveFilenameFromSource(localFile.realPath);
       }
     }
   }

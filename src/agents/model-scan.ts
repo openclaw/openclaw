@@ -8,6 +8,7 @@ import {
   type Tool,
 } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
+import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
 
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
 const DEFAULT_TIMEOUT_MS = 12_000;
@@ -95,26 +96,6 @@ function normalizeCreatedAtMs(value: unknown): number | null {
     return Math.round(value);
   }
   return Math.round(value * 1000);
-}
-
-function inferParamBFromIdOrName(text: string): number | null {
-  const raw = text.toLowerCase();
-  const matches = raw.matchAll(/(?:^|[^a-z0-9])[a-z]?(\d+(?:\.\d+)?)b(?:[^a-z0-9]|$)/g);
-  let best: number | null = null;
-  for (const match of matches) {
-    const numRaw = match[1];
-    if (!numRaw) {
-      continue;
-    }
-    const value = Number(numRaw);
-    if (!Number.isFinite(value) || value <= 0) {
-      continue;
-    }
-    if (best === null || value > best) {
-      best = value;
-    }
-  }
-  return best;
 }
 
 function parseModality(modality: string | null): Array<"text" | "image"> {
