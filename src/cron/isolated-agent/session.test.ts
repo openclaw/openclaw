@@ -70,4 +70,57 @@ describe("resolveCronSession", () => {
     expect(result.sessionEntry.providerOverride).toBeUndefined();
     expect(result.sessionEntry.model).toBeUndefined();
   });
+
+  it("always generates a new sessionId for cron keys", () => {
+    vi.mocked(loadSessionStore).mockReturnValue({
+      "agent:main:cron:test-job": {
+        sessionId: "existing-session-id",
+        updatedAt: 1000,
+      },
+    });
+
+    const result = resolveCronSession({
+      cfg: {} as OpenClawConfig,
+      sessionKey: "agent:main:cron:test-job",
+      agentId: "main",
+      nowMs: Date.now(),
+    });
+
+    expect(result.sessionEntry.sessionId).not.toBe("existing-session-id");
+    expect(result.isNewSession).toBe(true);
+  });
+
+  it("reuses existing sessionId for non-cron hook keys", () => {
+    vi.mocked(loadSessionStore).mockReturnValue({
+      "agent:main:hook:fizzy:card-461": {
+        sessionId: "existing-session-id",
+        updatedAt: 1000,
+        model: "claude-opus-4-5",
+      },
+    });
+
+    const result = resolveCronSession({
+      cfg: {} as OpenClawConfig,
+      sessionKey: "agent:main:hook:fizzy:card-461",
+      agentId: "main",
+      nowMs: Date.now(),
+    });
+
+    expect(result.sessionEntry.sessionId).toBe("existing-session-id");
+    expect(result.isNewSession).toBe(false);
+  });
+
+  it("generates new sessionId for non-cron keys with no existing entry", () => {
+    vi.mocked(loadSessionStore).mockReturnValue({});
+
+    const result = resolveCronSession({
+      cfg: {} as OpenClawConfig,
+      sessionKey: "agent:main:hook:webhook:new-key",
+      agentId: "main",
+      nowMs: Date.now(),
+    });
+
+    expect(result.sessionEntry.sessionId).toBeDefined();
+    expect(result.isNewSession).toBe(true);
+  });
 });
