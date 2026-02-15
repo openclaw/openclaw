@@ -132,8 +132,12 @@ If the access token (device) changes, a new store is created and the bot must be
 re-verified for encrypted rooms.
 
 **Device verification:**
-When E2EE is enabled, the bot will request verification from your other sessions on startup.
-Open Element (or another client) and approve the verification request to establish trust.
+When E2EE is enabled, verify the device to enable message decryption in encrypted rooms.
+OpenClaw supports two verification methods:
+
+1. **Interactive verification** - Use Element (or another client) to initiate emoji verification with the bot's device
+2. **Recovery key verification** - Use CLI command `openclaw matrix verify recovery-key` for non-interactive verification (see below)
+
 Once verified, the bot can decrypt messages in encrypted rooms.
 
 ## Multi-account
@@ -176,6 +180,126 @@ Notes:
 - Base channel settings (DM policy, group policy, mention gating, etc.) apply to all accounts unless overridden per account.
 - Use `bindings[].match.accountId` to route each account to a different agent.
 - Crypto state is stored per account + access token (separate key stores per account).
+
+### Recovery Key Verification
+
+For CLI-friendly, non-interactive device verification, OpenClaw supports verification via Matrix recovery key instead of interactive emoji verification.
+
+**What is recovery key verification?**
+
+- Recovery keys are 58-character Base58-encoded keys generated in Element (Settings → Security & Privacy → Secure Backup)
+- They decrypt your cross-signing keys and key backup without requiring another logged-in session
+- Ideal for headless/server deployments where interactive verification is impractical
+- One-time verification: device stays verified across gateway restarts
+
+**Prerequisites:**
+
+1. Matrix account with secret storage configured
+2. Recovery key generated in Element (or compatible client)
+3. OpenClaw gateway running with Matrix E2EE enabled (`channels.matrix.encryption: true`)
+
+#### Multi-Account Verification Support
+
+When using multi-account configuration, each Matrix account has independent device verification state. Use the `--account` flag to specify which account to verify.
+
+**Account-specific verification:**
+
+- Each account maintains its own verification status and recovery key tracking
+- Verification state is stored per account at `~/.openclaw/state/matrix/accounts/<accountId>/`
+- Recovery keys can be reused across different accounts (replay protection is account-scoped)
+- When `--account` is omitted, commands operate on the "default" account
+
+**Commands:**
+
+Check device verification status:
+
+```bash
+# Default account
+openclaw matrix verify status
+
+# Specific account
+openclaw matrix verify status --account work
+```
+
+Verify device with recovery key:
+
+```bash
+# Default account
+openclaw matrix verify recovery-key "EsTc 5rr1 4Jhp Uc18 hwCn 2b9T LSvj 5h4T TkP8 bdeK JGTa"
+
+# Specific account
+openclaw matrix verify recovery-key "EsTc 5rr1 4Jhp Uc18 hwCn 2b9T LSvj 5h4T TkP8 bdeK JGTa" --account work
+```
+
+Read recovery key from file (recommended for security):
+
+```bash
+# Default account
+openclaw matrix verify recovery-key --file ~/.matrix/recovery.key
+
+# Specific account
+openclaw matrix verify recovery-key --file ~/.matrix/recovery.key --account work
+```
+
+JSON output for scripting:
+
+```bash
+# Default account
+openclaw matrix verify recovery-key --json --file ~/.matrix/recovery.key
+
+# Specific account
+openclaw matrix verify recovery-key --json --file ~/.matrix/recovery.key --account work
+```
+
+**Setting up recovery in Element:**
+
+1. Open Element → Settings → Security & Privacy → Secure Backup
+2. Click "Set up Secure Backup" (if not already enabled)
+3. Generate a recovery key (or use existing one)
+4. **Save the recovery key securely** (58-character string with spaces)
+5. Enable key backup to restore message history
+
+**Security notes:**
+
+- Recovery keys are never logged to console or files
+- Used keys are tracked for 24 hours to prevent replay attacks
+- Store recovery keys securely (password manager, encrypted file)
+- Rotate recovery key in Element if compromised
+
+**Troubleshooting:**
+
+_"Secret storage not configured"_
+
+- Set up Secure Backup in Element first
+- Generate a recovery key and save it
+- For multi-account setups: ensure backup is configured for the specific account you're verifying
+
+_"Recovery key incorrect"_
+
+- Verify key copied correctly (exactly 58 characters, spaces optional)
+- Check for typos or truncated paste
+- Ensure key matches current account (not from different device)
+- For multi-account setups: confirm you're using the recovery key for the correct account
+
+_"Matrix account 'work' not found or E2EE not enabled"_
+
+- Verify the account is configured in `channels.matrix.accounts`
+- Ensure `encryption: true` is set for that account (top-level or per-account)
+- Check account ID matches exactly (case-insensitive)
+
+_"Device verified but messages don't decrypt"_
+
+- Bot-SDK limitation: backup restoration returns 0 sessions
+- Device can decrypt new messages after verification
+- Use Element to manually restore message history from backup
+
+_"Verification status differs between accounts"_
+
+- Each account maintains independent verification state
+- Verify each account's device separately using `--account` flag
+- Check per-account verification status with `openclaw matrix verify status --account <id>`
+
+For detailed setup and testing procedures, see `/matrix/recovery-key` in the OpenClaw source repository.
 
 ## Routing model
 

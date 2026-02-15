@@ -113,6 +113,13 @@ const coreEntries: CoreCliEntry[] = [
       mod.registerBrowserCli(program);
     },
   },
+  {
+    commands: [{ name: "matrix", description: "Matrix commands" }],
+    register: async ({ program }) => {
+      const mod = await import("../matrix-cli.js");
+      mod.registerMatrixCli(program);
+    },
+  },
 ];
 
 export function getCoreCliCommandNames(): string[] {

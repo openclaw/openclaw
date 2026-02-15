@@ -78,6 +78,7 @@ const READ_METHODS = new Set([
   "chat.history",
   "config.get",
   "talk.config",
+  "matrix.verify.status",
 ]);
 const WRITE_METHODS = new Set([
   "send",
@@ -94,6 +95,7 @@ const WRITE_METHODS = new Set([
   "chat.send",
   "chat.abort",
   "browser.request",
+  "matrix.verify.recoveryKey",
 ]);
 
 function authorizeGatewayMethod(method: string, client: GatewayRequestOptions["client"]) {

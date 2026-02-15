@@ -128,6 +128,10 @@ import {
   LogsTailParamsSchema,
   type LogsTailResult,
   LogsTailResultSchema,
+  type MatrixVerifyRecoveryKeyParams,
+  MatrixVerifyRecoveryKeyParamsSchema,
+  type MatrixVerifyStatusParams,
+  MatrixVerifyStatusParamsSchema,
   type ModelsListParams,
   ModelsListParamsSchema,
   type NodeDescribeParams,
@@ -358,6 +362,12 @@ export const validateExecApprovalsNodeSetParams = ajv.compile<ExecApprovalsNodeS
   ExecApprovalsNodeSetParamsSchema,
 );
 export const validateLogsTailParams = ajv.compile<LogsTailParams>(LogsTailParamsSchema);
+export const validateMatrixVerifyRecoveryKeyParams = ajv.compile<MatrixVerifyRecoveryKeyParams>(
+  MatrixVerifyRecoveryKeyParamsSchema,
+);
+export const validateMatrixVerifyStatusParams = ajv.compile<MatrixVerifyStatusParams>(
+  MatrixVerifyStatusParamsSchema,
+);
 export const validateChatHistoryParams = ajv.compile(ChatHistoryParamsSchema);
 export const validateChatSendParams = ajv.compile(ChatSendParamsSchema);
 export const validateChatAbortParams = ajv.compile<ChatAbortParams>(ChatAbortParamsSchema);
