@@ -237,7 +237,7 @@ export async function collectChannelSecurityFindings(params: {
             detail:
               "Discord slash commands are enabled, but neither an owner allowFrom list nor any per-guild/channel users allowlist is configured; /… commands will be rejected for everyone.",
             remediation:
-              "Add your user id to channels.discord.dm.allowFrom (or approve yourself via pairing), or configure channels.discord.guilds.<id>.users.",
+              "Add your user id to channels.discord.allowFrom (or approve yourself via pairing), or configure channels.discord.guilds.<id>.users.",
           });
         }
       }
@@ -277,12 +277,23 @@ export async function collectChannelSecurityFindings(params: {
             remediation: "Set commands.useAccessGroups=true (recommended).",
           });
         } else {
-          const dmAllowFromRaw = (account as { dm?: { allowFrom?: unknown } } | null)?.dm
-            ?.allowFrom;
-          const dmAllowFrom = Array.isArray(dmAllowFromRaw) ? dmAllowFromRaw : [];
+          const allowFromRaw = (
+            account as
+              | { config?: { allowFrom?: unknown }; dm?: { allowFrom?: unknown } }
+              | null
+              | undefined
+          )?.config?.allowFrom;
+          const legacyAllowFromRaw = (
+            account as { dm?: { allowFrom?: unknown } } | null | undefined
+          )?.dm?.allowFrom;
+          const allowFrom = Array.isArray(allowFromRaw)
+            ? allowFromRaw
+            : Array.isArray(legacyAllowFromRaw)
+              ? legacyAllowFromRaw
+              : [];
           const storeAllowFrom = await readChannelAllowFromStore("slack").catch(() => []);
           const ownerAllowFromConfigured =
-            normalizeAllowFromList([...dmAllowFrom, ...storeAllowFrom]).length > 0;
+            normalizeAllowFromList([...allowFrom, ...storeAllowFrom]).length > 0;
           const channels = (slackCfg.channels as Record<string, unknown> | undefined) ?? {};
           const hasAnyChannelUsersAllowlist = Object.values(channels).some((value) => {
             if (!value || typeof value !== "object") {
@@ -299,7 +310,7 @@ export async function collectChannelSecurityFindings(params: {
               detail:
                 "Slack slash/native commands are enabled, but neither an owner allowFrom list nor any channels.<id>.users allowlist is configured; /… commands will be rejected for everyone.",
               remediation:
-                "Approve yourself via pairing (recommended), or set channels.slack.dm.allowFrom and/or channels.slack.channels.<id>.users.",
+                "Approve yourself via pairing (recommended), or set channels.slack.allowFrom and/or channels.slack.channels.<id>.users.",
             });
           }
         }

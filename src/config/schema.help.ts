@@ -59,7 +59,7 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.exec.applyPatch.enabled":
     "Experimental. Enables apply_patch for OpenAI models when allowed by tool policy.",
   "tools.exec.applyPatch.workspaceOnly":
-    "Restrict apply_patch paths to the workspace directory (default: false).",
+    "Restrict apply_patch paths to the workspace directory (default: true). Set false to allow writing outside the workspace (dangerous).",
   "tools.exec.applyPatch.allowModels":
     'Optional allowlist of model ids (e.g. "gpt-5.2" or "openai/gpt-5.2").',
   "tools.exec.notifyOnExit":
@@ -233,7 +233,7 @@ export const FIELD_HELP: Record<string, string> = {
   "memory.qmd.limits.maxInjectedChars": "Max total characters injected from QMD hits per turn.",
   "memory.qmd.limits.timeoutMs": "Per-query timeout for QMD searches (default: 4000).",
   "memory.qmd.scope":
-    "Session/channel scope for QMD recall (same syntax as session.sendPolicy; default: direct-only).",
+    "Session/channel scope for QMD recall (same syntax as session.sendPolicy; default: direct-only). Use match.rawKeyPrefix to match full agent-prefixed session keys.",
   "agents.defaults.memorySearch.cache.maxEntries":
     "Optional cap on cached embeddings (best-effort).",
   "agents.defaults.memorySearch.sync.onSearch":
@@ -325,6 +325,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Max reply-back turns between requester and target (0–5).",
   "channels.telegram.customCommands":
     "Additional Telegram bot menu commands (merged with native; conflicts ignored).",
+  "messages.suppressToolErrors":
+    "When true, suppress ⚠️ tool-error warnings from being shown to the user. The agent already sees errors in context and can retry. Default: false.",
   "messages.ackReaction": "Emoji reaction used to acknowledge inbound messages (empty disables).",
   "messages.ackReactionScope":
     'When to send ack reactions ("group-mentions", "group-all", "direct", "all").',
@@ -333,11 +335,11 @@ export const FIELD_HELP: Record<string, string> = {
   "channels.telegram.dmPolicy":
     'Direct message access control ("pairing" recommended). "open" requires channels.telegram.allowFrom=["*"].',
   "channels.telegram.streamMode":
-    "Draft streaming mode for Telegram replies (off | partial | block). Separate from block streaming; requires private topics + sendMessageDraft.",
+    "Live stream preview mode for Telegram replies (off | partial | block). Separate from block streaming; uses sendMessage + editMessageText.",
   "channels.telegram.draftChunk.minChars":
-    'Minimum chars before emitting a Telegram draft update when channels.telegram.streamMode="block" (default: 200).',
+    'Minimum chars before emitting a Telegram stream preview update when channels.telegram.streamMode="block" (default: 200).',
   "channels.telegram.draftChunk.maxChars":
-    'Target max size for a Telegram draft update chunk when channels.telegram.streamMode="block" (default: 800; clamped to channels.telegram.textChunkLimit).',
+    'Target max size for a Telegram stream preview chunk when channels.telegram.streamMode="block" (default: 800; clamped to channels.telegram.textChunkLimit).',
   "channels.telegram.draftChunk.breakPreference":
     "Preferred breakpoints for Telegram draft chunks (paragraph | newline | sentence). Default: paragraph.",
   "channels.telegram.retry.attempts":
@@ -364,13 +366,15 @@ export const FIELD_HELP: Record<string, string> = {
   "channels.discord.dmPolicy":
     'Direct message access control ("pairing" recommended). "open" requires channels.discord.allowFrom=["*"].',
   "channels.discord.dm.policy":
-    'Direct message access control ("pairing" recommended). "open" requires channels.discord.dm.allowFrom=["*"].',
+    'Direct message access control ("pairing" recommended). "open" requires channels.discord.allowFrom=["*"] (legacy: channels.discord.dm.allowFrom).',
   "channels.discord.retry.attempts":
     "Max retry attempts for outbound Discord API calls (default: 3).",
   "channels.discord.retry.minDelayMs": "Minimum retry delay in ms for Discord outbound calls.",
   "channels.discord.retry.maxDelayMs": "Maximum retry delay cap in ms for Discord outbound calls.",
   "channels.discord.retry.jitter": "Jitter factor (0-1) applied to Discord retry delays.",
   "channels.discord.maxLinesPerMessage": "Soft max line count per Discord message (default: 17).",
+  "channels.discord.ui.components.accentColor":
+    "Accent color for Discord component containers (hex). Set per account via channels.discord.accounts.<id>.ui.components.accentColor.",
   "channels.discord.intents.presence":
     "Enable the Guild Presences privileged intent. Must also be enabled in the Discord Developer Portal. Allows tracking user activities (e.g. Spotify). Default: false.",
   "channels.discord.intents.guildMembers":
@@ -385,7 +389,7 @@ export const FIELD_HELP: Record<string, string> = {
     "Discord presence activity type (0=Playing,1=Streaming,2=Listening,3=Watching,4=Custom,5=Competing).",
   "channels.discord.activityUrl": "Discord presence streaming URL (required for activityType=1).",
   "channels.slack.dm.policy":
-    'Direct message access control ("pairing" recommended). "open" requires channels.slack.dm.allowFrom=["*"].',
+    'Direct message access control ("pairing" recommended). "open" requires channels.slack.allowFrom=["*"] (legacy: channels.slack.dm.allowFrom).',
   "channels.slack.dmPolicy":
     'Direct message access control ("pairing" recommended). "open" requires channels.slack.allowFrom=["*"].',
 };

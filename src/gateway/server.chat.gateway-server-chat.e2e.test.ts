@@ -48,6 +48,36 @@ async function waitFor(condition: () => boolean, timeoutMs = 1500) {
 }
 
 describe("gateway server chat", () => {
+  test("sanitizes inbound chat.send message text and rejects null bytes", async () => {
+    const nullByteRes = await rpcReq(ws, "chat.send", {
+      sessionKey: "main",
+      message: "hello\u0000world",
+      idempotencyKey: "idem-null-byte-1",
+    });
+    expect(nullByteRes.ok).toBe(false);
+    expect((nullByteRes.error as { message?: string } | undefined)?.message ?? "").toMatch(
+      /null bytes/i,
+    );
+
+    const spy = vi.mocked(getReplyFromConfig);
+    spy.mockClear();
+    const callsBeforeSanitized = spy.mock.calls.length;
+    const sanitizedRes = await rpcReq(ws, "chat.send", {
+      sessionKey: "main",
+      message: "Cafe\u0301\u0007\tline",
+      idempotencyKey: "idem-sanitized-1",
+    });
+    expect(sanitizedRes.ok).toBe(true);
+
+    await waitFor(() => spy.mock.calls.length > callsBeforeSanitized);
+    const ctx = spy.mock.calls.at(-1)?.[0] as
+      | { Body?: string; RawBody?: string; BodyForCommands?: string }
+      | undefined;
+    expect(ctx?.Body).toBe("Café\tline");
+    expect(ctx?.RawBody).toBe("Café\tline");
+    expect(ctx?.BodyForCommands).toBe("Café\tline");
+  });
+
   test("handles chat send and history flows", async () => {
     const tempDirs: string[] = [];
     let webchatWs: WebSocket | undefined;

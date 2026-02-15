@@ -1,7 +1,8 @@
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import type { HookEligibilityContext, HookEntry, HookInstallSpec } from "./types.js";
-import { evaluateRequirementsFromMetadata } from "../shared/requirements.js";
+import { resolveEmojiAndHomepage } from "../shared/entry-metadata.js";
+import { evaluateRequirementsFromMetadataWithRemote } from "../shared/requirements.js";
 import { CONFIG_DIR } from "../utils.js";
 import { hasBinary, isConfigPathTruthy, resolveHookConfig } from "./config.js";
 import { loadWorkspaceHookEntries } from "./workspace.js";
@@ -100,13 +101,10 @@ function buildHookStatus(
   const managedByPlugin = entry.hook.source === "openclaw-plugin";
   const disabled = managedByPlugin ? false : hookConfig?.enabled === false;
   const always = entry.metadata?.always === true;
-  const emoji = entry.metadata?.emoji ?? entry.frontmatter.emoji;
-  const homepageRaw =
-    entry.metadata?.homepage ??
-    entry.frontmatter.homepage ??
-    entry.frontmatter.website ??
-    entry.frontmatter.url;
-  const homepage = homepageRaw?.trim() ? homepageRaw.trim() : undefined;
+  const { emoji, homepage } = resolveEmojiAndHomepage({
+    metadata: entry.metadata,
+    frontmatter: entry.frontmatter,
+  });
   const events = entry.metadata?.events ?? [];
 
   const {
@@ -114,14 +112,12 @@ function buildHookStatus(
     missing,
     eligible: requirementsSatisfied,
     configChecks,
-  } = evaluateRequirementsFromMetadata({
+  } = evaluateRequirementsFromMetadataWithRemote({
     always,
     metadata: entry.metadata,
     hasLocalBin: hasBinary,
-    hasRemoteBin: eligibility?.remote?.hasBin,
-    hasRemoteAnyBin: eligibility?.remote?.hasAnyBin,
     localPlatform: process.platform,
-    remotePlatforms: eligibility?.remote?.platforms,
+    remote: eligibility?.remote,
     isEnvSatisfied: (envName) => Boolean(process.env[envName] || hookConfig?.env?.[envName]),
     isConfigSatisfied: (pathStr) => isConfigPathTruthy(config, pathStr),
   });

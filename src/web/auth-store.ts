@@ -33,7 +33,7 @@ export function hasWebCredsSync(authDir: string): boolean {
   }
 }
 
-function readCredsJsonRaw(filePath: string): string | null {
+export function readCredsJsonRaw(filePath: string): string | null {
   try {
     if (!fsSync.existsSync(filePath)) {
       return null;

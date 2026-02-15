@@ -102,6 +102,7 @@ describe("runMessageAction threading auto-injection", () => {
     });
 
     const call = mocks.executeSendAction.mock.calls[0]?.[0];
+    expect(call?.ctx?.agentId).toBe("main");
     expect(call?.ctx?.mirror?.sessionKey).toBe("agent:main:slack:channel:c123:thread:111.222");
   });
 

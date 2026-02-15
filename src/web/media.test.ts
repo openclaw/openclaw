@@ -329,7 +329,76 @@ describe("local media root guard", () => {
   });
 
   it("allows any path when localRoots is 'any'", async () => {
-    const result = await loadWebMedia(tinyPngFile, 1024 * 1024, { localRoots: "any" });
+    const result = await loadWebMedia(tinyPngFile, {
+      maxBytes: 1024 * 1024,
+      localRoots: "any",
+      readFile: (filePath) => fs.readFile(filePath),
+    });
     expect(result.kind).toBe("image");
+  });
+
+  it("rejects filesystem root entries in localRoots", async () => {
+    await expect(
+      loadWebMedia(tinyPngFile, 1024 * 1024, {
+        localRoots: [path.parse(tinyPngFile).root],
+      }),
+    ).rejects.toThrow(/refuses filesystem root/i);
+  });
+
+  it("allows default OpenClaw state workspace and sandbox roots", async () => {
+    const { STATE_DIR } = await import("../config/paths.js");
+    const readFile = vi.fn(async () => Buffer.from("generated-media"));
+
+    await expect(
+      loadWebMedia(path.join(STATE_DIR, "workspace", "tmp", "render.bin"), {
+        maxBytes: 1024 * 1024,
+        readFile,
+      }),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        kind: "unknown",
+      }),
+    );
+
+    await expect(
+      loadWebMedia(path.join(STATE_DIR, "sandboxes", "session-1", "frame.bin"), {
+        maxBytes: 1024 * 1024,
+        readFile,
+      }),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        kind: "unknown",
+      }),
+    );
+  });
+
+  it("rejects default OpenClaw state per-agent workspace-* roots without explicit local roots", async () => {
+    const { STATE_DIR } = await import("../config/paths.js");
+    const readFile = vi.fn(async () => Buffer.from("generated-media"));
+
+    await expect(
+      loadWebMedia(path.join(STATE_DIR, "workspace-clawdy", "tmp", "render.bin"), {
+        maxBytes: 1024 * 1024,
+        readFile,
+      }),
+    ).rejects.toThrow(/not under an allowed directory/i);
+  });
+
+  it("allows per-agent workspace-* paths with explicit local roots", async () => {
+    const { STATE_DIR } = await import("../config/paths.js");
+    const readFile = vi.fn(async () => Buffer.from("generated-media"));
+    const agentWorkspaceDir = path.join(STATE_DIR, "workspace-clawdy");
+
+    await expect(
+      loadWebMedia(path.join(agentWorkspaceDir, "tmp", "render.bin"), {
+        maxBytes: 1024 * 1024,
+        localRoots: [agentWorkspaceDir],
+        readFile,
+      }),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        kind: "unknown",
+      }),
+    );
   });
 });

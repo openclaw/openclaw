@@ -44,6 +44,7 @@ import {
   wrapToolParamNormalization,
 } from "./pi-tools.read.js";
 import { cleanToolSchemaForGemini, normalizeToolParameters } from "./pi-tools.schema.js";
+import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import {
   applyToolPolicyPipeline,
   buildDefaultToolPolicyPipelineSteps,
@@ -51,8 +52,10 @@ import {
 import {
   applyOwnerOnlyToolPolicy,
   collectExplicitAllowlist,
+  mergeAlsoAllowPolicy,
   resolveToolProfilePolicy,
 } from "./tool-policy.js";
+import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
 function isOpenAIProvider(provider?: string) {
   const normalized = provider?.trim().toLowerCase();
@@ -217,15 +220,8 @@ export function createOpenClawCodingTools(options?: {
   const profilePolicy = resolveToolProfilePolicy(profile);
   const providerProfilePolicy = resolveToolProfilePolicy(providerProfile);
 
-  const mergeAlsoAllow = (policy: typeof profilePolicy, alsoAllow?: string[]) => {
-    if (!policy?.allow || !Array.isArray(alsoAllow) || alsoAllow.length === 0) {
-      return policy;
-    }
-    return { ...policy, allow: Array.from(new Set([...policy.allow, ...alsoAllow])) };
-  };
-
-  const profilePolicyWithAlsoAllow = mergeAlsoAllow(profilePolicy, profileAlsoAllow);
-  const providerProfilePolicyWithAlsoAllow = mergeAlsoAllow(
+  const profilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(profilePolicy, profileAlsoAllow);
+  const providerProfilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(
     providerProfilePolicy,
     providerProfileAlsoAllow,
   );
@@ -235,7 +231,10 @@ export function createOpenClawCodingTools(options?: {
     options?.exec?.scopeKey ?? options?.sessionKey ?? (agentId ? `agent:${agentId}` : undefined);
   const subagentPolicy =
     isSubagentSessionKey(options?.sessionKey) && options?.sessionKey
-      ? resolveSubagentToolPolicy(options.config)
+      ? resolveSubagentToolPolicy(
+          options.config,
+          getSubagentDepthFromSessionStore(options.sessionKey, { cfg: options.config }),
+        )
       : undefined;
   const allowBackground = isToolAllowedByPolicies("process", [
     profilePolicyWithAlsoAllow,
@@ -253,10 +252,12 @@ export function createOpenClawCodingTools(options?: {
   const sandboxRoot = sandbox?.workspaceDir;
   const sandboxFsBridge = sandbox?.fsBridge;
   const allowWorkspaceWrites = sandbox?.workspaceAccess !== "ro";
-  const workspaceRoot = options?.workspaceDir ?? process.cwd();
+  const workspaceRoot = resolveWorkspaceRoot(options?.workspaceDir);
   const workspaceOnly = fsConfig.workspaceOnly === true;
   const applyPatchConfig = execConfig.applyPatch;
-  const applyPatchWorkspaceOnly = workspaceOnly || applyPatchConfig?.workspaceOnly === true;
+  // Secure by default: apply_patch is workspace-contained unless explicitly disabled.
+  // (tools.fs.workspaceOnly is a separate umbrella flag for read/write/edit/apply_patch.)
+  const applyPatchWorkspaceOnly = workspaceOnly || applyPatchConfig?.workspaceOnly !== false;
   const applyPatchEnabled =
     !!applyPatchConfig?.enabled &&
     isOpenAIProvider(options?.modelProvider) &&
@@ -273,12 +274,11 @@ export function createOpenClawCodingTools(options?: {
   const base = (codingTools as unknown as AnyAgentTool[]).flatMap((tool) => {
     if (tool.name === readTool.name) {
       if (sandboxRoot) {
-        return [
-          createSandboxedReadTool({
-            root: sandboxRoot,
-            bridge: sandboxFsBridge!,
-          }),
-        ];
+        const sandboxed = createSandboxedReadTool({
+          root: sandboxRoot,
+          bridge: sandboxFsBridge!,
+        });
+        return [workspaceOnly ? wrapToolWorkspaceRootGuard(sandboxed, sandboxRoot) : sandboxed];
       }
       const freshReadTool = createReadTool(workspaceRoot);
       const wrapped = createOpenClawReadTool(freshReadTool);
@@ -321,7 +321,7 @@ export function createOpenClawCodingTools(options?: {
     pathPrepend: options?.exec?.pathPrepend ?? execConfig.pathPrepend,
     safeBins: options?.exec?.safeBins ?? execConfig.safeBins,
     agentId,
-    cwd: options?.workspaceDir,
+    cwd: workspaceRoot,
     allowBackground,
     scopeKey,
     sessionKey: options?.sessionKey,
@@ -362,8 +362,18 @@ export function createOpenClawCodingTools(options?: {
     ...(sandboxRoot
       ? allowWorkspaceWrites
         ? [
-            createSandboxedEditTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
-            createSandboxedWriteTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
+            workspaceOnly
+              ? wrapToolWorkspaceRootGuard(
+                  createSandboxedEditTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
+                  sandboxRoot,
+                )
+              : createSandboxedEditTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
+            workspaceOnly
+              ? wrapToolWorkspaceRootGuard(
+                  createSandboxedWriteTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
+                  sandboxRoot,
+                )
+              : createSandboxedWriteTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
           ]
         : []
       : []),
@@ -386,7 +396,7 @@ export function createOpenClawCodingTools(options?: {
       agentDir: options?.agentDir,
       sandboxRoot,
       sandboxFsBridge,
-      workspaceDir: options?.workspaceDir,
+      workspaceDir: workspaceRoot,
       sandboxed: !!sandbox,
       config: options?.config,
       pluginToolAllowlist: collectExplicitAllowlist([

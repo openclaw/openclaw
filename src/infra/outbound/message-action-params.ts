@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type {
@@ -200,8 +201,12 @@ async function hydrateAttachmentPayload(params: {
       channel: params.channel,
       accountId: params.accountId,
     });
-    // localRoots: "any" — media paths are already validated by normalizeSandboxMediaList above.
-    const media = await loadWebMedia(mediaSource, maxBytes, { localRoots: "any" });
+    // mediaSource already validated by normalizeSandboxMediaList; allow bypass but force explicit readFile.
+    const media = await loadWebMedia(mediaSource, {
+      maxBytes,
+      sandboxValidated: true,
+      readFile: (filePath: string) => fs.readFile(filePath),
+    });
     params.args.buffer = media.buffer.toString("base64");
     if (!contentTypeParam && media.contentType) {
       params.args.contentType = media.contentType;

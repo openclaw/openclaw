@@ -13,6 +13,7 @@ import {
   DmPolicySchema,
   ExecutableTokenSchema,
   GroupPolicySchema,
+  HexColorSchema,
   MarkdownConfigSchema,
   MSTeamsReplyStyleSchema,
   ProviderCommandsSchema,
@@ -142,6 +143,7 @@ export const TelegramAccountSchemaBase = z
     heartbeat: ChannelHeartbeatVisibilitySchema,
     linkPreview: z.boolean().optional(),
     responsePrefix: z.string().optional(),
+    ackReaction: z.string().optional(),
   })
   .strict();
 
@@ -211,7 +213,7 @@ export const TelegramConfigSchema = TelegramAccountSchemaBase.extend({
 export const DiscordDmSchema = z
   .object({
     enabled: z.boolean().optional(),
-    policy: DmPolicySchema.optional().default("pairing"),
+    policy: DmPolicySchema.optional(),
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     groupEnabled: z.boolean().optional(),
     groupChannels: z.array(z.union([z.string(), z.number()])).optional(),
@@ -246,6 +248,18 @@ export const DiscordGuildSchema = z
     channels: z.record(z.string(), DiscordGuildChannelSchema.optional()).optional(),
   })
   .strict();
+
+const DiscordUiSchema = z
+  .object({
+    components: z
+      .object({
+        accentColor: HexColorSchema.optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict()
+  .optional();
 
 export const DiscordAccountSchema = z
   .object({
@@ -312,6 +326,7 @@ export const DiscordAccountSchema = z
       })
       .strict()
       .optional(),
+    ui: DiscordUiSchema,
     intents: z
       .object({
         presence: z.boolean().optional(),
@@ -327,6 +342,7 @@ export const DiscordAccountSchema = z
       .strict()
       .optional(),
     responsePrefix: z.string().optional(),
+    ackReaction: z.string().optional(),
     activity: z.string().optional(),
     status: z.enum(["online", "dnd", "idle", "invisible"]).optional(),
     activityType: z
@@ -459,7 +475,7 @@ export const GoogleChatConfigSchema = GoogleChatAccountSchema.extend({
 export const SlackDmSchema = z
   .object({
     enabled: z.boolean().optional(),
-    policy: DmPolicySchema.optional().default("pairing"),
+    policy: DmPolicySchema.optional(),
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     groupEnabled: z.boolean().optional(),
     groupChannels: z.array(z.union([z.string(), z.number()])).optional(),
@@ -558,6 +574,7 @@ export const SlackAccountSchema = z
     channels: z.record(z.string(), SlackChannelSchema.optional()).optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
     responsePrefix: z.string().optional(),
+    ackReaction: z.string().optional(),
   })
   .strict()
   .superRefine((value, ctx) => {
@@ -740,7 +757,9 @@ export const IrcAccountSchemaBase = z
   })
   .strict();
 
-export const IrcAccountSchema = IrcAccountSchemaBase.superRefine((value, ctx) => {
+type IrcBaseConfig = z.infer<typeof IrcAccountSchemaBase>;
+
+function refineIrcAllowFromAndNickserv(value: IrcBaseConfig, ctx: z.RefinementCtx): void {
   requireOpenAllowFrom({
     policy: value.dmPolicy,
     allowFrom: value.allowFrom,
@@ -755,25 +774,16 @@ export const IrcAccountSchema = IrcAccountSchemaBase.superRefine((value, ctx) =>
       message: "channels.irc.nickserv.register=true requires channels.irc.nickserv.registerEmail",
     });
   }
+}
+
+export const IrcAccountSchema = IrcAccountSchemaBase.superRefine((value, ctx) => {
+  refineIrcAllowFromAndNickserv(value, ctx);
 });
 
 export const IrcConfigSchema = IrcAccountSchemaBase.extend({
   accounts: z.record(z.string(), IrcAccountSchema.optional()).optional(),
 }).superRefine((value, ctx) => {
-  requireOpenAllowFrom({
-    policy: value.dmPolicy,
-    allowFrom: value.allowFrom,
-    ctx,
-    path: ["allowFrom"],
-    message: 'channels.irc.dmPolicy="open" requires channels.irc.allowFrom to include "*"',
-  });
-  if (value.nickserv?.register && !value.nickserv.registerEmail?.trim()) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["nickserv", "registerEmail"],
-      message: "channels.irc.nickserv.register=true requires channels.irc.nickserv.registerEmail",
-    });
-  }
+  refineIrcAllowFromAndNickserv(value, ctx);
 });
 
 export const IMessageAccountSchemaBase = z

@@ -15,6 +15,7 @@ export function isQmdScopeAllowed(scope: ResolvedQmdConfig["scope"], sessionKey?
   const channel = parsed.channel;
   const chatType = parsed.chatType;
   const normalizedKey = parsed.normalizedKey ?? "";
+  const rawKey = sessionKey?.trim().toLowerCase() ?? "";
   for (const rule of scope.rules ?? []) {
     if (!rule) {
       continue;
@@ -26,8 +27,22 @@ export function isQmdScopeAllowed(scope: ResolvedQmdConfig["scope"], sessionKey?
     if (match.chatType && match.chatType !== chatType) {
       continue;
     }
-    if (match.keyPrefix && !normalizedKey.startsWith(match.keyPrefix)) {
+    const normalizedPrefix = match.keyPrefix?.trim().toLowerCase() || undefined;
+    const rawPrefix = match.rawKeyPrefix?.trim().toLowerCase() || undefined;
+
+    if (rawPrefix && !rawKey.startsWith(rawPrefix)) {
       continue;
+    }
+    if (normalizedPrefix) {
+      // Backward compat: older configs used `keyPrefix: "agent:<id>:..."` to match raw keys.
+      const isLegacyRaw = normalizedPrefix.startsWith("agent:");
+      if (isLegacyRaw) {
+        if (!rawKey.startsWith(normalizedPrefix)) {
+          continue;
+        }
+      } else if (!normalizedKey.startsWith(normalizedPrefix)) {
+        continue;
+      }
     }
     return rule.action === "allow";
   }

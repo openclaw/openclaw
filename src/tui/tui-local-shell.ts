@@ -107,6 +107,8 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
 
     await new Promise<void>((resolve) => {
       const child = spawnCommand(cmd, {
+        // Intentionally a shell: this is an operator-only local TUI feature (prefixed with `!`)
+        // and is gated behind an explicit in-session approval prompt.
         shell: true,
         cwd: getCwd(),
         env,

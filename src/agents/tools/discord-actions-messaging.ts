@@ -1,5 +1,6 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { DiscordActionConfig } from "../../config/config.js";
+import type { DiscordSendComponents, DiscordSendEmbeds } from "../../discord/send.shared.js";
 import {
   createThreadDiscord,
   deleteMessageDiscord,
@@ -23,6 +24,7 @@ import {
 } from "../../discord/send.js";
 import { resolveDiscordChannelId } from "../../discord/targets.js";
 import { withNormalizedTimestamp } from "../date-time.js";
+import { assertMediaNotDataUrl } from "../sandbox-paths.js";
 import {
   type ActionGate,
   jsonResult,
@@ -240,14 +242,21 @@ export async function handleDiscordMessagingAction(
         readStringParam(params, "path", { trim: false }) ??
         readStringParam(params, "filePath", { trim: false });
       const replyTo = readStringParam(params, "replyTo");
-      const embeds =
-        Array.isArray(params.embeds) && params.embeds.length > 0 ? params.embeds : undefined;
+      const rawComponents = params.components;
+      const components: DiscordSendComponents | undefined =
+        Array.isArray(rawComponents) || typeof rawComponents === "function"
+          ? (rawComponents as DiscordSendComponents)
+          : undefined;
+      const rawEmbeds = params.embeds;
+      const embeds: DiscordSendEmbeds | undefined = Array.isArray(rawEmbeds)
+        ? (rawEmbeds as DiscordSendEmbeds)
+        : undefined;
 
       // Handle voice message sending
       if (asVoice) {
         if (!mediaUrl) {
           throw new Error(
-            "Voice messages require a local media file path (mediaUrl, path, or filePath).",
+            "Voice messages require a media file reference (mediaUrl, path, or filePath).",
           );
         }
         if (content && content.trim()) {
@@ -255,11 +264,7 @@ export async function handleDiscordMessagingAction(
             "Voice messages cannot include text content (Discord limitation). Remove the content parameter.",
           );
         }
-        if (mediaUrl.startsWith("http://") || mediaUrl.startsWith("https://")) {
-          throw new Error(
-            "Voice messages require a local file path, not a URL. Download the file first.",
-          );
-        }
+        assertMediaNotDataUrl(mediaUrl);
         const result = await sendVoiceMessageDiscord(to, mediaUrl, {
           ...(accountId ? { accountId } : {}),
           replyTo,
@@ -272,6 +277,7 @@ export async function handleDiscordMessagingAction(
         ...(accountId ? { accountId } : {}),
         mediaUrl,
         replyTo,
+        components,
         embeds,
         silent,
       });

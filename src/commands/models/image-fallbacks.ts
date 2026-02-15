@@ -5,8 +5,11 @@ import { logConfigUpdated } from "../../config/logging.js";
 import {
   DEFAULT_PROVIDER,
   ensureFlagCompatibility,
+  mergePrimaryFallbackConfig,
+  type PrimaryFallbackConfig,
   modelKey,
   resolveModelTarget,
+  resolveModelKeysFromEntries,
   updateConfig,
 } from "./shared.js";
 
@@ -47,29 +50,12 @@ export async function modelsImageFallbacksAddCommand(modelRaw: string, runtime: 
     if (!nextModels[targetKey]) {
       nextModels[targetKey] = {};
     }
-    const aliasIndex = buildModelAliasIndex({
-      cfg,
-      defaultProvider: DEFAULT_PROVIDER,
-    });
     const existing = cfg.agents?.defaults?.imageModel?.fallbacks ?? [];
-    const existingKeys = existing
-      .map((entry) =>
-        resolveModelRefFromString({
-          raw: String(entry ?? ""),
-          defaultProvider: DEFAULT_PROVIDER,
-          aliasIndex,
-        }),
-      )
-      .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
-      .map((entry) => modelKey(entry.ref.provider, entry.ref.model));
+    const existingKeys = resolveModelKeysFromEntries({ cfg, entries: existing });
 
     if (existingKeys.includes(targetKey)) {
       return cfg;
     }
-
-    const existingModel = cfg.agents?.defaults?.imageModel as
-      | { primary?: string; fallbacks?: string[] }
-      | undefined;
 
     return {
       ...cfg,
@@ -77,10 +63,10 @@ export async function modelsImageFallbacksAddCommand(modelRaw: string, runtime: 
         ...cfg.agents,
         defaults: {
           ...cfg.agents?.defaults,
-          imageModel: {
-            ...(existingModel?.primary ? { primary: existingModel.primary } : undefined),
-            fallbacks: [...existing, targetKey],
-          },
+          imageModel: mergePrimaryFallbackConfig(
+            cfg.agents?.defaults?.imageModel as unknown as PrimaryFallbackConfig | undefined,
+            { fallbacks: [...existing, targetKey] },
+          ),
           models: nextModels,
         },
       },
@@ -118,20 +104,16 @@ export async function modelsImageFallbacksRemoveCommand(modelRaw: string, runtim
       throw new Error(`Image fallback not found: ${targetKey}`);
     }
 
-    const existingModel = cfg.agents?.defaults?.imageModel as
-      | { primary?: string; fallbacks?: string[] }
-      | undefined;
-
     return {
       ...cfg,
       agents: {
         ...cfg.agents,
         defaults: {
           ...cfg.agents?.defaults,
-          imageModel: {
-            ...(existingModel?.primary ? { primary: existingModel.primary } : undefined),
-            fallbacks: filtered,
-          },
+          imageModel: mergePrimaryFallbackConfig(
+            cfg.agents?.defaults?.imageModel as unknown as PrimaryFallbackConfig | undefined,
+            { fallbacks: filtered },
+          ),
         },
       },
     };
@@ -145,19 +127,16 @@ export async function modelsImageFallbacksRemoveCommand(modelRaw: string, runtim
 
 export async function modelsImageFallbacksClearCommand(runtime: RuntimeEnv) {
   await updateConfig((cfg) => {
-    const existingModel = cfg.agents?.defaults?.imageModel as
-      | { primary?: string; fallbacks?: string[] }
-      | undefined;
     return {
       ...cfg,
       agents: {
         ...cfg.agents,
         defaults: {
           ...cfg.agents?.defaults,
-          imageModel: {
-            ...(existingModel?.primary ? { primary: existingModel.primary } : undefined),
-            fallbacks: [],
-          },
+          imageModel: mergePrimaryFallbackConfig(
+            cfg.agents?.defaults?.imageModel as unknown as PrimaryFallbackConfig | undefined,
+            { fallbacks: [] },
+          ),
         },
       },
     };

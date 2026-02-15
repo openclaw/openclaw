@@ -24,8 +24,8 @@ import {
 } from "../daemon-cli/lifecycle-core.js";
 import {
   buildDaemonServiceSnapshot,
-  createNullWriter,
-  emitDaemonActionJson,
+  createDaemonActionContext,
+  installDaemonServiceAndEmit,
 } from "../daemon-cli/response.js";
 import { formatRuntimeStatus, parsePort } from "../daemon-cli/shared.js";
 
@@ -100,45 +100,7 @@ function resolveNodeDefaults(
 
 export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
   const json = Boolean(opts.json);
-  const warnings: string[] = [];
-  const stdout = json ? createNullWriter() : process.stdout;
-  const emit = (payload: {
-    ok: boolean;
-    result?: string;
-    message?: string;
-    error?: string;
-    service?: {
-      label: string;
-      loaded: boolean;
-      loadedText: string;
-      notLoadedText: string;
-    };
-    hints?: string[];
-    warnings?: string[];
-  }) => {
-    if (!json) {
-      return;
-    }
-    emitDaemonActionJson({ action: "install", ...payload });
-  };
-  const fail = (message: string, hints?: string[]) => {
-    if (json) {
-      emit({
-        ok: false,
-        error: message,
-        hints,
-        warnings: warnings.length ? warnings : undefined,
-      });
-    } else {
-      defaultRuntime.error(message);
-      if (hints?.length) {
-        for (const hint of hints) {
-          defaultRuntime.log(`Tip: ${hint}`);
-        }
-      }
-    }
-    defaultRuntime.exit(1);
-  };
+  const { stdout, warnings, emit, fail } = createDaemonActionContext({ action: "install", json });
 
   if (resolveIsNixMode(process.env)) {
     fail("Nix mode detected; service install is disabled.");
@@ -202,31 +164,22 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
       },
     });
 
-  try {
-    await service.install({
-      env: process.env,
-      stdout,
-      programArguments,
-      workingDirectory,
-      environment,
-      description,
-    });
-  } catch (err) {
-    fail(`Node install failed: ${String(err)}`);
-    return;
-  }
-
-  let installed = true;
-  try {
-    installed = await service.isLoaded({ env: process.env });
-  } catch {
-    installed = true;
-  }
-  emit({
-    ok: true,
-    result: "installed",
-    service: buildDaemonServiceSnapshot(service, installed),
-    warnings: warnings.length ? warnings : undefined,
+  await installDaemonServiceAndEmit({
+    serviceNoun: "Node",
+    service,
+    warnings,
+    emit,
+    fail,
+    install: async () => {
+      await service.install({
+        env: process.env,
+        stdout,
+        programArguments,
+        workingDirectory,
+        environment,
+        description,
+      });
+    },
   });
 }
 

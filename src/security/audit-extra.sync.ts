@@ -16,6 +16,8 @@ import { resolveBrowserConfig } from "../browser/config.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { resolveNodeCommandAllowlist } from "../gateway/node-command-policy.js";
+import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
+import { pickSandboxToolPolicy } from "./audit-tool-policy.js";
 
 export type SecurityAuditFinding = {
   checkId: string;
@@ -142,26 +144,6 @@ const WEAK_TIER_MODEL_PATTERNS: Array<{ id: string; re: RegExp; label: string }>
   { id: "anthropic.haiku", re: /\bhaiku\b/i, label: "Haiku tier (smaller model)" },
 ];
 
-function inferParamBFromIdOrName(text: string): number | null {
-  const raw = text.toLowerCase();
-  const matches = raw.matchAll(/(?:^|[^a-z0-9])[a-z]?(\d+(?:\.\d+)?)b(?:[^a-z0-9]|$)/g);
-  let best: number | null = null;
-  for (const match of matches) {
-    const numRaw = match[1];
-    if (!numRaw) {
-      continue;
-    }
-    const value = Number(numRaw);
-    if (!Number.isFinite(value) || value <= 0) {
-      continue;
-    }
-    if (best === null || value > best) {
-      best = value;
-    }
-  }
-  return best;
-}
-
 function isGptModel(id: string): boolean {
   return /\bgpt-/i.test(id);
 }
@@ -184,36 +166,6 @@ function isClaude45OrHigher(id: string): boolean {
 function extractAgentIdFromSource(source: string): string | null {
   const match = source.match(/^agents\.list\.([^.]*)\./);
   return match?.[1] ?? null;
-}
-
-function unionAllow(base?: string[], extra?: string[]): string[] | undefined {
-  if (!Array.isArray(extra) || extra.length === 0) {
-    return base;
-  }
-  if (!Array.isArray(base) || base.length === 0) {
-    return Array.from(new Set(["*", ...extra]));
-  }
-  return Array.from(new Set([...base, ...extra]));
-}
-
-function pickToolPolicy(config?: {
-  allow?: string[];
-  alsoAllow?: string[];
-  deny?: string[];
-}): SandboxToolPolicy | null {
-  if (!config) {
-    return null;
-  }
-  const allow = Array.isArray(config.allow)
-    ? unionAllow(config.allow, config.alsoAllow)
-    : Array.isArray(config.alsoAllow) && config.alsoAllow.length > 0
-      ? unionAllow(undefined, config.alsoAllow)
-      : undefined;
-  const deny = Array.isArray(config.deny) ? config.deny : undefined;
-  if (!allow && !deny) {
-    return null;
-  }
-  return { allow, deny };
 }
 
 function hasConfiguredDockerConfig(
@@ -284,12 +236,12 @@ function resolveToolPolicies(params: {
     policies.push(profilePolicy);
   }
 
-  const globalPolicy = pickToolPolicy(params.cfg.tools ?? undefined);
+  const globalPolicy = pickSandboxToolPolicy(params.cfg.tools ?? undefined);
   if (globalPolicy) {
     policies.push(globalPolicy);
   }
 
-  const agentPolicy = pickToolPolicy(params.agentTools);
+  const agentPolicy = pickSandboxToolPolicy(params.agentTools);
   if (agentPolicy) {
     policies.push(agentPolicy);
   }

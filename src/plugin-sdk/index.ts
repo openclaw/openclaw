@@ -121,11 +121,18 @@ export {
   MarkdownTableModeSchema,
   normalizeAllowFrom,
   requireOpenAllowFrom,
+  TtsAutoSchema,
+  TtsConfigSchema,
+  TtsModeSchema,
+  TtsProviderSchema,
 } from "../config/zod-schema.core.js";
 export { ToolPolicySchema } from "../config/zod-schema.agent-runtime.js";
 export type { RuntimeEnv } from "../runtime.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
 export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
+export { formatAllowFromLowercase } from "./allow-from.js";
+export { resolveChannelAccountConfigBasePath } from "./config-paths.js";
+export { chunkTextForOutbound } from "./text-chunking.js";
 export type { ChatType } from "../channels/chat-type.js";
 /** @deprecated Use ChatType instead */
 export type { RoutePeerKind } from "../routing/resolve-route.js";
@@ -138,6 +145,8 @@ export {
   listDevicePairing,
   rejectDevicePairing,
 } from "../infra/device-pairing.js";
+export { createDedupeCache } from "../infra/dedupe.js";
+export type { DedupeCache } from "../infra/dedupe.js";
 export { formatErrorMessage } from "../infra/errors.js";
 export {
   DEFAULT_WEBHOOK_BODY_TIMEOUT_MS,
@@ -222,7 +231,10 @@ export {
   listWhatsAppDirectoryPeersFromConfig,
 } from "../channels/plugins/directory-config.js";
 export type { AllowlistMatch } from "../channels/plugins/allowlist-match.js";
-export { formatAllowlistMatchMeta } from "../channels/plugins/allowlist-match.js";
+export {
+  formatAllowlistMatchMeta,
+  resolveAllowlistMatchSimple,
+} from "../channels/plugins/allowlist-match.js";
 export { optionalStringEnum, stringEnum } from "../agents/schema/typebox.js";
 export type { PollInput } from "../polls.js";
 
@@ -310,6 +322,12 @@ export {
   looksLikeIMessageTargetId,
   normalizeIMessageMessagingTarget,
 } from "../channels/plugins/normalize/imessage.js";
+export {
+  parseChatAllowTargetPrefixes,
+  parseChatTargetPrefixesOrThrow,
+  resolveServicePrefixedAllowTarget,
+  resolveServicePrefixedTarget,
+} from "../imessage/target-parsing-helpers.js";
 
 // Channel: Slack
 export {
@@ -320,6 +338,7 @@ export {
   resolveSlackReplyToMode,
   type ResolvedSlackAccount,
 } from "../slack/accounts.js";
+export { extractSlackToolSend, listSlackMessageActions } from "../slack/message-actions.js";
 export { slackOnboardingAdapter } from "../channels/plugins/onboarding/slack.js";
 export {
   looksLikeSlackTargetId,
@@ -340,6 +359,10 @@ export {
   normalizeTelegramMessagingTarget,
 } from "../channels/plugins/normalize/telegram.js";
 export { collectTelegramStatusIssues } from "../channels/plugins/status-issues/telegram.js";
+export {
+  parseTelegramReplyToMessageId,
+  parseTelegramThreadId,
+} from "../telegram/outbound-params.js";
 export { type TelegramProbe } from "../telegram/probe.js";
 
 // Channel: Signal
@@ -363,6 +386,7 @@ export {
   type ResolvedWhatsAppAccount,
 } from "../web/accounts.js";
 export { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "../whatsapp/normalize.js";
+export { resolveWhatsAppOutboundTarget } from "../whatsapp/resolve-outbound-target.js";
 export { whatsappOnboardingAdapter } from "../channels/plugins/onboarding/whatsapp.js";
 export { resolveWhatsAppHeartbeatRecipients } from "../channels/plugins/whatsapp-heartbeat.js";
 export {

@@ -18,6 +18,7 @@ import {
 } from "../commands/auth-choice.js";
 import { applyPrimaryModel, promptDefaultModel } from "../commands/model-picker.js";
 import { setupChannels } from "../commands/onboard-channels.js";
+import { applyOnboardingLocalWorkspaceConfig } from "../commands/onboard-config.js";
 import { promptCustomApiConfig } from "../commands/onboard-custom.js";
 import {
   applyWizardMetadata,
@@ -352,20 +353,7 @@ export async function runOnboardingWizard(
 
   const workspaceDir = resolveUserPath(workspaceInput.trim() || DEFAULT_WORKSPACE);
 
-  let nextConfig: OpenClawConfig = {
-    ...baseConfig,
-    agents: {
-      ...baseConfig.agents,
-      defaults: {
-        ...baseConfig.agents?.defaults,
-        workspace: workspaceDir,
-      },
-    },
-    gateway: {
-      ...baseConfig.gateway,
-      mode: "local",
-    },
-  };
+  let nextConfig: OpenClawConfig = applyOnboardingLocalWorkspaceConfig(baseConfig, workspaceDir);
 
   const authStore = ensureAuthProfileStore(undefined, {
     allowKeychainPrompt: false,
