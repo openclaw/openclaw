@@ -1,5 +1,6 @@
 import type { UsageProviderId } from "./provider-usage.types.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
+import { isAbortError } from "./unhandled-rejections.js";
 
 export const DEFAULT_TIMEOUT_MS = 5000;
 
@@ -55,6 +56,12 @@ export const withTimeout = async <T>(work: Promise<T>, ms: number, fallback: T):
         timeout = setTimeout(() => resolve(fallback), ms);
       }),
     ]);
+  } catch (e) {
+    // Catch AbortError from fetch timeouts and return fallback instead of crashing
+    if (isAbortError(e)) {
+      return fallback;
+    }
+    throw e;
   } finally {
     if (timeout) {
       clearTimeout(timeout);
