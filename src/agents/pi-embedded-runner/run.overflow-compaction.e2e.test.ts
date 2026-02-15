@@ -5,31 +5,6 @@ vi.mock("../../utils.js", () => ({
   resolveUserPath: vi.fn((p: string) => p),
 }));
 
-vi.mock("../auth-profiles.js", () => ({
-  markAuthProfileFailure: vi.fn(async () => {}),
-  markAuthProfileGood: vi.fn(async () => {}),
-  markAuthProfileUsed: vi.fn(async () => {}),
-}));
-
-vi.mock("../usage.js", () => ({
-  normalizeUsage: vi.fn((usage?: unknown) =>
-    usage && typeof usage === "object" ? usage : undefined,
-  ),
-  derivePromptTokens: vi.fn(
-    (usage?: { input?: number; cacheRead?: number; cacheWrite?: number }) => {
-      if (!usage) {
-        return undefined;
-      }
-      const input = usage.input ?? 0;
-      const cacheRead = usage.cacheRead ?? 0;
-      const cacheWrite = usage.cacheWrite ?? 0;
-      const sum = input + cacheRead + cacheWrite;
-      return sum > 0 ? sum : undefined;
-    },
-  ),
-  hasNonzeroUsage: vi.fn(() => false),
-}));
-
 vi.mock("../pi-embedded-helpers.js", async () => {
   return {
     isCompactionFailureError: (msg?: string) => {
