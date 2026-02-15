@@ -1,0 +1,70 @@
+/* Emoji autocomplete popup — positioned above compose area */
+.emoji-autocomplete-wrap {
+  position: relative;
+}
+
+.emoji-autocomplete {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  right: 0;
+  margin-bottom: 4px;
+  max-height: 312px; /* ~8 items × 39px */
+  overflow-y: auto;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 8px);
+  box-shadow:
+    0 -4px 16px rgba(0, 0, 0, 0.3),
+    0 -1px 4px rgba(0, 0, 0, 0.2);
+  z-index: 50;
+  padding: 4px;
+}
+
+.emoji-autocomplete__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm, 6px);
+  cursor: pointer;
+  font-size: 14px;
+  font-family: var(--font-body);
+  color: var(--text);
+  transition: background 80ms ease-out;
+}
+
+.emoji-autocomplete__item:hover,
+.emoji-autocomplete__item--selected {
+  background: var(--bg-hover);
+}
+
+.emoji-autocomplete__emoji {
+  font-size: 20px;
+  line-height: 1;
+  width: 24px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.emoji-autocomplete__name {
+  color: var(--muted);
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Light theme */
+:root[data-theme="light"] .emoji-autocomplete {
+  background: #fff;
+  border-color: rgba(16, 24, 40, 0.12);
+  box-shadow:
+    0 -4px 16px rgba(16, 24, 40, 0.1),
+    0 -1px 4px rgba(16, 24, 40, 0.06);
+}
+
+:root[data-theme="light"] .emoji-autocomplete__item:hover,
+:root[data-theme="light"] .emoji-autocomplete__item--selected {
+  background: #f1f5f9;
+}
