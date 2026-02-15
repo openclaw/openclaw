@@ -3,15 +3,27 @@
   "kind": "memory",
   "uiHints": {
     "embedding.apiKey": {
-      "label": "OpenAI API Key",
+      "label": "Embedding API Key",
       "sensitive": true,
-      "placeholder": "sk-proj-...",
-      "help": "API key for OpenAI embeddings (or use ${OPENAI_API_KEY})"
+      "placeholder": "sk-proj-... (or lm-studio)",
+      "help": "API key for your OpenAI-compatible embeddings endpoint"
     },
     "embedding.model": {
       "label": "Embedding Model",
       "placeholder": "text-embedding-3-small",
-      "help": "OpenAI embedding model to use"
+      "help": "Embedding model id (any OpenAI-compatible endpoint)"
+    },
+    "embedding.baseUrl": {
+      "label": "Embedding Base URL",
+      "placeholder": "http://127.0.0.1:1234/v1",
+      "help": "Optional OpenAI-compatible embeddings endpoint",
+      "advanced": true
+    },
+    "embedding.dimensions": {
+      "label": "Embedding Dimensions",
+      "placeholder": "768",
+      "help": "Optional vector size override for custom embedding models",
+      "advanced": true
     },
     "dbPath": {
       "label": "Database Path",
@@ -45,8 +57,14 @@
             "type": "string"
           },
           "model": {
-            "type": "string",
-            "enum": ["text-embedding-3-small", "text-embedding-3-large"]
+            "type": "string"
+          },
+          "baseUrl": {
+            "type": "string"
+          },
+          "dimensions": {
+            "type": "integer",
+            "minimum": 1
           }
         },
         "required": ["apiKey"]
