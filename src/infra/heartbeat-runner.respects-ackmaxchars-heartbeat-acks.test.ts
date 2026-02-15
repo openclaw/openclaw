@@ -33,15 +33,21 @@ describe("resolveHeartbeatIntervalMs", () => {
   async function seedSessionStore(
     storePath: string,
     sessionKey: string,
-    session: { lastChannel: string; lastProvider: string; lastTo: string },
+    session: {
+      sessionId?: string;
+      updatedAt?: number;
+      lastChannel: string;
+      lastProvider: string;
+      lastTo: string;
+    },
   ) {
     await fs.writeFile(
       storePath,
       JSON.stringify(
         {
           [sessionKey]: {
-            sessionId: "sid",
-            updatedAt: Date.now(),
+            sessionId: session.sessionId ?? "sid",
+            updatedAt: session.updatedAt ?? Date.now(),
             ...session,
           },
         },
@@ -49,6 +55,24 @@ describe("resolveHeartbeatIntervalMs", () => {
         2,
       ),
     );
+  }
+
+  async function withTempHeartbeatSandbox<T>(
+    fn: (ctx: {
+      tmpDir: string;
+      storePath: string;
+      replySpy: ReturnType<typeof vi.spyOn>;
+    }) => Promise<T>,
+  ) {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hb-"));
+    const storePath = path.join(tmpDir, "sessions.json");
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    try {
+      return await fn({ tmpDir, storePath, replySpy });
+    } finally {
+      replySpy.mockRestore();
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
   }
 
   async function withTempTelegramHeartbeatSandbox<T>(
@@ -77,10 +101,7 @@ describe("resolveHeartbeatIntervalMs", () => {
   }
 
   it("respects ackMaxChars for heartbeat acks", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hb-"));
-    const storePath = path.join(tmpDir, "sessions.json");
-    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
-    try {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
@@ -97,22 +118,11 @@ describe("resolveHeartbeatIntervalMs", () => {
       };
       const sessionKey = resolveMainSessionKey(cfg);
 
-      await fs.writeFile(
-        storePath,
-        JSON.stringify(
-          {
-            [sessionKey]: {
-              sessionId: "sid",
-              updatedAt: Date.now(),
-              lastChannel: "whatsapp",
-              lastProvider: "whatsapp",
-              lastTo: "+1555",
-            },
-          },
-          null,
-          2,
-        ),
-      );
+      await seedSessionStore(storePath, sessionKey, {
+        lastChannel: "whatsapp",
+        lastProvider: "whatsapp",
+        lastTo: "+1555",
+      });
 
       replySpy.mockResolvedValue({ text: "HEARTBEAT_OK 🦞" });
       const sendWhatsApp = vi.fn().mockResolvedValue({
@@ -132,17 +142,11 @@ describe("resolveHeartbeatIntervalMs", () => {
       });
 
       expect(sendWhatsApp).toHaveBeenCalled();
-    } finally {
-      replySpy.mockRestore();
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    }
+    });
   });
 
   it("sends HEARTBEAT_OK when visibility.showOk is true", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hb-"));
-    const storePath = path.join(tmpDir, "sessions.json");
-    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
-    try {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
@@ -158,22 +162,11 @@ describe("resolveHeartbeatIntervalMs", () => {
       };
       const sessionKey = resolveMainSessionKey(cfg);
 
-      await fs.writeFile(
-        storePath,
-        JSON.stringify(
-          {
-            [sessionKey]: {
-              sessionId: "sid",
-              updatedAt: Date.now(),
-              lastChannel: "whatsapp",
-              lastProvider: "whatsapp",
-              lastTo: "+1555",
-            },
-          },
-          null,
-          2,
-        ),
-      );
+      await seedSessionStore(storePath, sessionKey, {
+        lastChannel: "whatsapp",
+        lastProvider: "whatsapp",
+        lastTo: "+1555",
+      });
 
       replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
       const sendWhatsApp = vi.fn().mockResolvedValue({
@@ -194,17 +187,11 @@ describe("resolveHeartbeatIntervalMs", () => {
 
       expect(sendWhatsApp).toHaveBeenCalledTimes(1);
       expect(sendWhatsApp).toHaveBeenCalledWith("+1555", "HEARTBEAT_OK", expect.any(Object));
-    } finally {
-      replySpy.mockRestore();
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    }
+    });
   });
 
   it("skips heartbeat LLM calls when visibility disables all output", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hb-"));
-    const storePath = path.join(tmpDir, "sessions.json");
-    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
-    try {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
@@ -225,22 +212,11 @@ describe("resolveHeartbeatIntervalMs", () => {
       };
       const sessionKey = resolveMainSessionKey(cfg);
 
-      await fs.writeFile(
-        storePath,
-        JSON.stringify(
-          {
-            [sessionKey]: {
-              sessionId: "sid",
-              updatedAt: Date.now(),
-              lastChannel: "whatsapp",
-              lastProvider: "whatsapp",
-              lastTo: "+1555",
-            },
-          },
-          null,
-          2,
-        ),
-      );
+      await seedSessionStore(storePath, sessionKey, {
+        lastChannel: "whatsapp",
+        lastProvider: "whatsapp",
+        lastTo: "+1555",
+      });
 
       const sendWhatsApp = vi.fn().mockResolvedValue({
         messageId: "m1",
@@ -261,17 +237,11 @@ describe("resolveHeartbeatIntervalMs", () => {
       expect(replySpy).not.toHaveBeenCalled();
       expect(sendWhatsApp).not.toHaveBeenCalled();
       expect(result).toEqual({ status: "skipped", reason: "alerts-disabled" });
-    } finally {
-      replySpy.mockRestore();
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    }
+    });
   });
 
   it("skips delivery for markup-wrapped HEARTBEAT_OK", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hb-"));
-    const storePath = path.join(tmpDir, "sessions.json");
-    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
-    try {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
@@ -287,22 +257,11 @@ describe("resolveHeartbeatIntervalMs", () => {
       };
       const sessionKey = resolveMainSessionKey(cfg);
 
-      await fs.writeFile(
-        storePath,
-        JSON.stringify(
-          {
-            [sessionKey]: {
-              sessionId: "sid",
-              updatedAt: Date.now(),
-              lastChannel: "whatsapp",
-              lastProvider: "whatsapp",
-              lastTo: "+1555",
-            },
-          },
-          null,
-          2,
-        ),
-      );
+      await seedSessionStore(storePath, sessionKey, {
+        lastChannel: "whatsapp",
+        lastProvider: "whatsapp",
+        lastTo: "+1555",
+      });
 
       replySpy.mockResolvedValue({ text: "<b>HEARTBEAT_OK</b>" });
       const sendWhatsApp = vi.fn().mockResolvedValue({
@@ -322,17 +281,11 @@ describe("resolveHeartbeatIntervalMs", () => {
       });
 
       expect(sendWhatsApp).not.toHaveBeenCalled();
-    } finally {
-      replySpy.mockRestore();
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    }
+    });
   });
 
   it("does not regress updatedAt when restoring heartbeat sessions", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hb-"));
-    const storePath = path.join(tmpDir, "sessions.json");
-    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
-    try {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const originalUpdatedAt = 1000;
       const bumpedUpdatedAt = 2000;
       const cfg: OpenClawConfig = {
@@ -350,22 +303,12 @@ describe("resolveHeartbeatIntervalMs", () => {
       };
       const sessionKey = resolveMainSessionKey(cfg);
 
-      await fs.writeFile(
-        storePath,
-        JSON.stringify(
-          {
-            [sessionKey]: {
-              sessionId: "sid",
-              updatedAt: originalUpdatedAt,
-              lastChannel: "whatsapp",
-              lastProvider: "whatsapp",
-              lastTo: "+1555",
-            },
-          },
-          null,
-          2,
-        ),
-      );
+      await seedSessionStore(storePath, sessionKey, {
+        updatedAt: originalUpdatedAt,
+        lastChannel: "whatsapp",
+        lastProvider: "whatsapp",
+        lastTo: "+1555",
+      });
 
       replySpy.mockImplementationOnce(async () => {
         const raw = await fs.readFile(storePath, "utf-8");
@@ -395,17 +338,11 @@ describe("resolveHeartbeatIntervalMs", () => {
         { updatedAt?: number } | undefined
       >;
       expect(finalStore[sessionKey]?.updatedAt).toBe(bumpedUpdatedAt);
-    } finally {
-      replySpy.mockRestore();
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    }
+    });
   });
 
   it("skips WhatsApp delivery when not linked or running", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hb-"));
-    const storePath = path.join(tmpDir, "sessions.json");
-    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
-    try {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
@@ -418,22 +355,11 @@ describe("resolveHeartbeatIntervalMs", () => {
       };
       const sessionKey = resolveMainSessionKey(cfg);
 
-      await fs.writeFile(
-        storePath,
-        JSON.stringify(
-          {
-            [sessionKey]: {
-              sessionId: "sid",
-              updatedAt: Date.now(),
-              lastChannel: "whatsapp",
-              lastProvider: "whatsapp",
-              lastTo: "+1555",
-            },
-          },
-          null,
-          2,
-        ),
-      );
+      await seedSessionStore(storePath, sessionKey, {
+        lastChannel: "whatsapp",
+        lastProvider: "whatsapp",
+        lastTo: "+1555",
+      });
 
       replySpy.mockResolvedValue({ text: "Heartbeat alert" });
       const sendWhatsApp = vi.fn().mockResolvedValue({
@@ -455,10 +381,7 @@ describe("resolveHeartbeatIntervalMs", () => {
       expect(res.status).toBe("skipped");
       expect(res).toMatchObject({ reason: "whatsapp-not-linked" });
       expect(sendWhatsApp).not.toHaveBeenCalled();
-    } finally {
-      replySpy.mockRestore();
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    }
+    });
   });
 
   async function expectTelegramHeartbeatAccountId(params: {
