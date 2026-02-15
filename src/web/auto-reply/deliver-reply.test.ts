@@ -15,6 +15,7 @@ vi.mock("../../utils.js", async (importOriginal) => {
 });
 
 const { loadWebMedia } = await import("../media.js");
+const { sleep } = await import("../../utils.js");
 
 function makeMsg(): WebInboundMsg {
   return {
@@ -50,6 +51,28 @@ describe("deliverWebReply", () => {
     expect(replyLogger.info).toHaveBeenCalledWith(expect.any(Object), "auto-reply sent (text)");
   });
 
+  it("retries text send on transient failure", async () => {
+    const msg = makeMsg();
+    (msg.reply as unknown as { mockRejectedValueOnce: (v: unknown) => void }).mockRejectedValueOnce(
+      new Error("connection closed"),
+    );
+    (msg.reply as unknown as { mockResolvedValueOnce: (v: unknown) => void }).mockResolvedValueOnce(
+      undefined,
+    );
+
+    await deliverWebReply({
+      replyResult: { text: "hi" },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 200,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(msg.reply).toHaveBeenCalledTimes(2);
+    expect(sleep).toHaveBeenCalledWith(500);
+  });
+
   it("sends image media with caption and then remaining text", async () => {
     const msg = makeMsg();
     (
@@ -78,6 +101,35 @@ describe("deliverWebReply", () => {
     );
     expect(msg.reply).toHaveBeenCalledWith("aaa");
     expect(replyLogger.info).toHaveBeenCalledWith(expect.any(Object), "auto-reply sent (media)");
+  });
+
+  it("retries media send on transient failure", async () => {
+    const msg = makeMsg();
+    (
+      loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
+    ).mockResolvedValueOnce({
+      buffer: Buffer.from("img"),
+      contentType: "image/jpeg",
+      kind: "image",
+    });
+    (
+      msg.sendMedia as unknown as { mockRejectedValueOnce: (v: unknown) => void }
+    ).mockRejectedValueOnce(new Error("socket reset"));
+    (
+      msg.sendMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
+    ).mockResolvedValueOnce(undefined);
+
+    await deliverWebReply({
+      replyResult: { text: "caption", mediaUrl: "http://example.com/img.jpg" },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 200,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(msg.sendMedia).toHaveBeenCalledTimes(2);
+    expect(sleep).toHaveBeenCalledWith(500);
   });
 
   it("falls back to text-only when the first media send fails", async () => {
