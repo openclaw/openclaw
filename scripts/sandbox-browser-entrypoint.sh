@@ -43,7 +43,6 @@ CHROME_ARGS+=(
   "--disable-breakpad"
   "--disable-crash-reporter"
   "--metrics-recording-only"
-  "--no-sandbox"
 )
 
 chromium "${CHROME_ARGS[@]}" about:blank &

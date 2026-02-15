@@ -20,6 +20,8 @@ RUN apt-get update \
     xvfb \
   && rm -rf /var/lib/apt/lists/*
 
+RUN useradd --create-home --shell /bin/bash --uid 10001 openclaw
+
 COPY scripts/sandbox-browser-entrypoint.sh /usr/local/bin/openclaw-sandbox-browser
 RUN chmod +x /usr/local/bin/openclaw-sandbox-browser
 
@@ -28,5 +30,7 @@ USER sandbox
 WORKDIR /home/sandbox
 
 EXPOSE 9222 5900 6080
+
+USER openclaw
 
 CMD ["openclaw-sandbox-browser"]
