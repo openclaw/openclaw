@@ -1,0 +1,178 @@
+import { describe, expect, it, vi } from "vitest";
+import { appendCdpPath, getHeadersWithAuth } from "./cdp.helpers.js";
+import { __test } from "./client-fetch.js";
+import { shouldRejectBrowserMutation } from "./csrf.js";
+import { toBoolean } from "./routes/utils.js";
+import { resolveTargetIdFromTabs } from "./target-id.js";
+
+describe("toBoolean", () => {
+  it("parses yes/no and 1/0", () => {
+    expect(toBoolean("yes")).toBe(true);
+    expect(toBoolean("1")).toBe(true);
+    expect(toBoolean("no")).toBe(false);
+    expect(toBoolean("0")).toBe(false);
+  });
+
+  it("returns undefined for on/off strings", () => {
+    expect(toBoolean("on")).toBeUndefined();
+    expect(toBoolean("off")).toBeUndefined();
+  });
+
+  it("passes through boolean values", () => {
+    expect(toBoolean(true)).toBe(true);
+    expect(toBoolean(false)).toBe(false);
+  });
+});
+
+describe("browser target id resolution", () => {
+  it("resolves exact ids", () => {
+    const res = resolveTargetIdFromTabs("FULL", [{ targetId: "AAA" }, { targetId: "FULL" }]);
+    expect(res).toEqual({ ok: true, targetId: "FULL" });
+  });
+
+  it("resolves unique prefixes (case-insensitive)", () => {
+    const res = resolveTargetIdFromTabs("57a01309", [
+      { targetId: "57A01309E14B5DEE0FB41F908515A2FC" },
+    ]);
+    expect(res).toEqual({
+      ok: true,
+      targetId: "57A01309E14B5DEE0FB41F908515A2FC",
+    });
+  });
+
+  it("fails on ambiguous prefixes", () => {
+    const res = resolveTargetIdFromTabs("57A0", [
+      { targetId: "57A01309E14B5DEE0FB41F908515A2FC" },
+      { targetId: "57A0BEEF000000000000000000000000" },
+    ]);
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.reason).toBe("ambiguous");
+      expect(res.matches?.length).toBe(2);
+    }
+  });
+
+  it("fails when no tab matches", () => {
+    const res = resolveTargetIdFromTabs("NOPE", [{ targetId: "AAA" }]);
+    expect(res).toEqual({ ok: false, reason: "not_found" });
+  });
+});
+
+describe("browser CSRF loopback mutation guard", () => {
+  it("rejects mutating methods from non-loopback origin", () => {
+    expect(
+      shouldRejectBrowserMutation({
+        method: "POST",
+        origin: "https://evil.example",
+      }),
+    ).toBe(true);
+  });
+
+  it("allows mutating methods from loopback origin", () => {
+    expect(
+      shouldRejectBrowserMutation({
+        method: "POST",
+        origin: "http://127.0.0.1:18789",
+      }),
+    ).toBe(false);
+
+    expect(
+      shouldRejectBrowserMutation({
+        method: "POST",
+        origin: "http://localhost:18789",
+      }),
+    ).toBe(false);
+  });
+
+  it("allows mutating methods without origin/referer (non-browser clients)", () => {
+    expect(
+      shouldRejectBrowserMutation({
+        method: "POST",
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects mutating methods with origin=null", () => {
+    expect(
+      shouldRejectBrowserMutation({
+        method: "POST",
+        origin: "null",
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects mutating methods from non-loopback referer", () => {
+    expect(
+      shouldRejectBrowserMutation({
+        method: "POST",
+        referer: "https://evil.example/attack",
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects cross-site mutations via Sec-Fetch-Site when present", () => {
+    expect(
+      shouldRejectBrowserMutation({
+        method: "POST",
+        secFetchSite: "cross-site",
+      }),
+    ).toBe(true);
+  });
+
+  it("does not reject non-mutating methods", () => {
+    expect(
+      shouldRejectBrowserMutation({
+        method: "GET",
+        origin: "https://evil.example",
+      }),
+    ).toBe(false);
+
+    expect(
+      shouldRejectBrowserMutation({
+        method: "OPTIONS",
+        origin: "https://evil.example",
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("cdp.helpers", () => {
+  it("preserves query params when appending CDP paths", () => {
+    const url = appendCdpPath("https://example.com?token=abc", "/json/version");
+    expect(url).toBe("https://example.com/json/version?token=abc");
+  });
+
+  it("appends paths under a base prefix", () => {
+    const url = appendCdpPath("https://example.com/chrome/?token=abc", "json/list");
+    expect(url).toBe("https://example.com/chrome/json/list?token=abc");
+  });
+
+  it("adds basic auth headers when credentials are present", () => {
+    const headers = getHeadersWithAuth("https://user:pass@example.com");
+    expect(headers.Authorization).toBe(`Basic ${Buffer.from("user:pass").toString("base64")}`);
+  });
+
+  it("keeps preexisting authorization headers", () => {
+    const headers = getHeadersWithAuth("https://user:pass@example.com", {
+      Authorization: "Bearer token",
+    });
+    expect(headers.Authorization).toBe("Bearer token");
+  });
+});
+
+describe("fetchBrowserJson loopback auth (bridge auth registry)", () => {
+  it("falls back to per-port bridge auth when config auth is not available", async () => {
+    const port = 18765;
+    const getBridgeAuthForPort = vi.fn((candidate: number) =>
+      candidate === port ? { token: "registry-token" } : undefined,
+    );
+    const init = __test.withLoopbackBrowserAuth(`http://127.0.0.1:${port}/`, undefined, {
+      loadConfig: () => ({}),
+      resolveBrowserControlAuth: () => ({}),
+      getBridgeAuthForPort,
+    });
+    const headers = new Headers(init.headers ?? {});
+    expect(headers.get("authorization")).toBe("Bearer registry-token");
+    expect(getBridgeAuthForPort).toHaveBeenCalledWith(port);
+  });
+});
