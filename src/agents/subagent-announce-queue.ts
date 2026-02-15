@@ -20,6 +20,8 @@ export type AnnounceQueueItem = {
   sessionKey: string;
   origin?: DeliveryContext;
   originKey?: string;
+  /** Stable idempotency key for delivery — reused across retries to prevent duplicate announces. */
+  idempotencyKey?: string;
 };
 
 export type AnnounceQueueSettings = {
