@@ -120,12 +120,31 @@ export function registerSlashCommandRoute(api: OpenClawPluginApi) {
   // Collect callback paths from both top-level and per-account config.
   // Command registration uses account.config.commands, so the HTTP route
   // registration must include any account-specific callbackPath overrides.
+  // Also extract the pathname from an explicit callbackUrl when it differs
+  // from callbackPath, so that Mattermost callbacks hit a registered route.
   const callbackPaths = new Set<string>();
+
+  const addCallbackPaths = (
+    raw: Partial<import("./slash-commands.js").MattermostSlashCommandConfig> | undefined,
+  ) => {
+    const resolved = resolveSlashCommandConfig(raw);
+    callbackPaths.add(resolved.callbackPath);
+    if (resolved.callbackUrl) {
+      try {
+        const urlPath = new URL(resolved.callbackUrl).pathname;
+        if (urlPath && urlPath !== resolved.callbackPath) {
+          callbackPaths.add(urlPath);
+        }
+      } catch {
+        // Invalid URL — ignore, will be caught during registration
+      }
+    }
+  };
 
   const commandsRaw = mmConfig?.commands as
     | Partial<import("./slash-commands.js").MattermostSlashCommandConfig>
     | undefined;
-  callbackPaths.add(resolveSlashCommandConfig(commandsRaw).callbackPath);
+  addCallbackPaths(commandsRaw);
 
   const accountsRaw = (mmConfig?.accounts ?? {}) as Record<string, unknown>;
   for (const accountId of Object.keys(accountsRaw)) {
@@ -133,7 +152,7 @@ export function registerSlashCommandRoute(api: OpenClawPluginApi) {
     const accountCommandsRaw = accountCfg?.commands as
       | Partial<import("./slash-commands.js").MattermostSlashCommandConfig>
       | undefined;
-    callbackPaths.add(resolveSlashCommandConfig(accountCommandsRaw).callbackPath);
+    addCallbackPaths(accountCommandsRaw);
   }
 
   const routeHandler = async (req: IncomingMessage, res: ServerResponse) => {
