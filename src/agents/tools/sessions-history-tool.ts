@@ -239,7 +239,7 @@ export function createSessionsHistoryTool(opts?: {
       const limit =
         typeof params.limit === "number" && Number.isFinite(params.limit)
           ? Math.max(1, Math.floor(params.limit))
-          : undefined;
+          : 20;
       const includeTools = Boolean(params.includeTools);
       const result = await callGateway<{ messages: Array<unknown> }>({
         method: "chat.history",
