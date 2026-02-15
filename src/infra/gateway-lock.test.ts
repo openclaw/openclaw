@@ -62,36 +62,6 @@ function makeProcStat(pid: number, startTime: number) {
   return `${pid} (node) ${fields.join(" ")}`;
 }
 
-type PromiseSettlement<T> =
-  | { status: "resolved"; value: T }
-  | { status: "rejected"; reason: unknown };
-
-async function settleWithFakeTimers<T>(
-  promise: Promise<T>,
-  params: { stepMs: number; maxSteps: number },
-) {
-  const wrapped: Promise<PromiseSettlement<T>> = promise.then(
-    (value) => ({ status: "resolved", value }),
-    (reason) => ({ status: "rejected", reason }),
-  );
-
-  for (let step = 0; step < params.maxSteps; step += 1) {
-    const settled = await Promise.race([wrapped, Promise.resolve(null)]);
-    if (settled) {
-      return settled;
-    }
-    await vi.advanceTimersByTimeAsync(params.stepMs);
-  }
-
-  const final = await Promise.race([wrapped, Promise.resolve(null)]);
-  if (final) {
-    return final;
-  }
-  throw new Error(
-    `promise did not settle after ${params.maxSteps} steps of ${params.stepMs}ms fake time`,
-  );
-}
-
 describe("gateway lock", () => {
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-lock-"));
@@ -106,7 +76,7 @@ describe("gateway lock", () => {
   });
 
   it("blocks concurrent acquisition until release", async () => {
-    vi.useFakeTimers();
+    vi.useRealTimers();
     const { env, cleanup } = await makeEnv();
     const lock = await acquireGatewayLock({
       env,
@@ -122,11 +92,7 @@ describe("gateway lock", () => {
       timeoutMs: 80,
       pollIntervalMs: 5,
     });
-    const settlement = await settleWithFakeTimers(pending, { stepMs: 5, maxSteps: 40 });
-    expect(settlement.status).toBe("rejected");
-    expect((settlement as { status: "rejected"; reason: unknown }).reason).toBeInstanceOf(
-      GatewayLockError,
-    );
+    await expect(pending).rejects.toBeInstanceOf(GatewayLockError);
 
     await lock?.release();
     const lock2 = await acquireGatewayLock({
@@ -175,7 +141,7 @@ describe("gateway lock", () => {
   });
 
   it("keeps lock on linux when proc access fails unless stale", async () => {
-    vi.useFakeTimers();
+    vi.useRealTimers();
     const { env, cleanup } = await makeEnv();
     const { lockPath, configPath } = resolveLockPath(env);
     const payload = {
@@ -202,11 +168,7 @@ describe("gateway lock", () => {
       staleMs: 10_000,
       platform: "linux",
     });
-    const settlement = await settleWithFakeTimers(pending, { stepMs: 5, maxSteps: 30 });
-    expect(settlement.status).toBe("rejected");
-    expect((settlement as { status: "rejected"; reason: unknown }).reason).toBeInstanceOf(
-      GatewayLockError,
-    );
+    await expect(pending).rejects.toBeInstanceOf(GatewayLockError);
 
     spy.mockRestore();
 

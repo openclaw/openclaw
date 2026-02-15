@@ -99,9 +99,10 @@ async function execLaunchctl(
   args: string[],
 ): Promise<{ stdout: string; stderr: string; code: number }> {
   try {
-    const { stdout, stderr } = await execFileAsync("launchctl", args, {
-      encoding: "utf8",
-    });
+    const isWindows = process.platform === "win32";
+    const file = isWindows ? (process.env.ComSpec ?? "cmd.exe") : "launchctl";
+    const fileArgs = isWindows ? ["/d", "/s", "/c", "launchctl", ...args] : args;
+    const { stdout, stderr } = await execFileAsync(file, fileArgs, { encoding: "utf8" });
     return {
       stdout: String(stdout ?? ""),
       stderr: String(stderr ?? ""),
