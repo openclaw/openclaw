@@ -29,22 +29,11 @@ const formatConfigArgs: CommandArgsFormatter = (values) => {
   if (!action) {
     return undefined;
   }
+  const rest = formatSetUnsetArgAction(action, { path, value });
   if (action === "show" || action === "get") {
     return path ? `${action} ${path}` : action;
   }
-  if (action === "unset") {
-    return path ? `${action} ${path}` : action;
-  }
-  if (action === "set") {
-    if (!path) {
-      return action;
-    }
-    if (!value) {
-      return `${action} ${path}`;
-    }
-    return `${action} ${path}=${value}`;
-  }
-  return action;
+  return rest;
 };
 
 const formatDebugArgs: CommandArgsFormatter = (values) => {
@@ -54,23 +43,31 @@ const formatDebugArgs: CommandArgsFormatter = (values) => {
   if (!action) {
     return undefined;
   }
+  const rest = formatSetUnsetArgAction(action, { path, value });
   if (action === "show" || action === "reset") {
     return action;
   }
+  return rest;
+};
+
+function formatSetUnsetArgAction(
+  action: string,
+  params: { path: string | undefined; value: string | undefined },
+): string {
   if (action === "unset") {
-    return path ? `${action} ${path}` : action;
+    return params.path ? `${action} ${params.path}` : action;
   }
   if (action === "set") {
-    if (!path) {
+    if (!params.path) {
       return action;
     }
-    if (!value) {
-      return `${action} ${path}`;
+    if (!params.value) {
+      return `${action} ${params.path}`;
     }
-    return `${action} ${path}=${value}`;
+    return `${action} ${params.path}=${params.value}`;
   }
   return action;
-};
+}
 
 const formatQueueArgs: CommandArgsFormatter = (values) => {
   const mode = normalizeArgValue(values.mode);
