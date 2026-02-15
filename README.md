@@ -1,6 +1,7 @@
 # Money Maker Bot
 
 > A financial intelligence assistant built on [Clawdbot](https://github.com/clawdbot/clawdbot) - your AI-powered edge for sports betting, NFT trading, and portfolio analysis.
+
 # 🦞 OpenClaw — Personal AI Assistant
 
 <p align="center">
@@ -91,6 +92,7 @@ export OPENSEA_API_KEY="your-opensea-api-key"
 ---
 
 ## Original Clawdbot Documentation
+
 <p align="center">
   <a href="https://github.com/openclaw/openclaw/actions/workflows/ci.yml?branch=main"><img src="https://img.shields.io/github/actions/workflow/status/openclaw/openclaw/ci.yml?branch=main&style=for-the-badge" alt="CI status"></a>
   <a href="https://github.com/openclaw/openclaw/releases"><img src="https://img.shields.io/github/v/release/openclaw/openclaw?include_prereleases&style=for-the-badge" alt="GitHub release"></a>

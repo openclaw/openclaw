@@ -77,8 +77,8 @@ Configure alerts for price movements:
 nft_alerts:
   collections:
     - slug: "mutantapeyachtclub"
-      floor_below: 5.0  # Alert if floor drops below 5 ETH
-      floor_above: 8.0  # Alert if floor rises above 8 ETH
+      floor_below: 5.0 # Alert if floor drops below 5 ETH
+      floor_above: 8.0 # Alert if floor rises above 8 ETH
   telegram:
     enabled: true
     chat_id: "your-chat-id"
@@ -89,7 +89,7 @@ nft_alerts:
 ### Market Analysis
 
 ```
-Analyze the NFT market sentiment based on the last 7 days of trading volume 
+Analyze the NFT market sentiment based on the last 7 days of trading volume
 across the top 10 collections. Are we in accumulation or distribution?
 ```
 
@@ -102,7 +102,7 @@ Find any NFTs listed significantly below floor price in the MAYC collection.
 ### Portfolio Tracking
 
 ```
-I own BAYC #1234, MAYC #5678, and Azuki #9012. 
+I own BAYC #1234, MAYC #5678, and Azuki #9012.
 What's my total portfolio value and how has it changed this week?
 ```
 

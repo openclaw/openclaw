@@ -71,6 +71,7 @@ curl -s "https://api.reservoir.tools/sales/v6?collection=0xbc4ca0eda7647a8ab7c20
 ```
 
 Contract addresses:
+
 - BAYC: `0xbc4ca0eda7647a8ab7c2061c2e118a18a936f13d`
 - MAYC: `0x60e4d786628fea6478f785a6d7e704777c86a7c6`
 - CryptoPunks: `0xb47e3cd837ddf8e4c57f05d70ab865de6e193bbb`

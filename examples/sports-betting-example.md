@@ -17,14 +17,14 @@ export ODDS_API_KEY="your-api-key-here"
 Ask your bot to compare spreads across sportsbooks:
 
 ```
-Compare the spreads for tonight's NFL games across DraftKings, FanDuel, and BetMGM. 
+Compare the spreads for tonight's NFL games across DraftKings, FanDuel, and BetMGM.
 Highlight any games where the spread differs by 2 or more points.
 ```
 
 ### NBA Moneyline Analysis
 
 ```
-Show me the moneyline odds for all NBA games today. 
+Show me the moneyline odds for all NBA games today.
 Which games have the biggest discrepancy between books?
 ```
 
@@ -86,7 +86,7 @@ alerts:
 The bot can help with stake sizing:
 
 ```
-I have a $1000 bankroll. Using the Kelly Criterion, 
+I have a $1000 bankroll. Using the Kelly Criterion,
 what should I bet on a -110 line where I estimate 55% win probability?
 ```
 
