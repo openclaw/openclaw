@@ -181,7 +181,9 @@ describe("applyPatch", () => {
 *** End Patch`;
 
       try {
-        await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(/Symlink escapes sandbox root/);
+        await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(
+          /Symlink escapes sandbox root/,
+        );
         const stillThere = await fs.readFile(outsideFile, "utf8");
         expect(stillThere).toBe("victim\n");
       } finally {
