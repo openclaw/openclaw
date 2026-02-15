@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { MsgContext } from "../templating.js";
 import { buildCommandContext, handleCommands } from "./commands.js";
@@ -94,6 +94,10 @@ function buildParams(commandBody: string, cfg: OpenClawConfig, ctxOverrides?: Pa
 }
 
 describe("handleCommands /allowlist", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("lists config + store allowFrom entries", async () => {
     readChannelAllowFromStoreMock.mockResolvedValueOnce(["456"]);
 
@@ -144,6 +148,92 @@ describe("handleCommands /allowlist", () => {
       entry: "789",
     });
     expect(result.reply?.text).toContain("DM allowlist added");
+  });
+
+  it("removes Slack DM allowlist entries from canonical allowFrom and deletes legacy dm.allowFrom", async () => {
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      valid: true,
+      parsed: {
+        channels: {
+          slack: {
+            allowFrom: ["U111", "U222"],
+            dm: { allowFrom: ["U111", "U222"] },
+            configWrites: true,
+          },
+        },
+      },
+    });
+    validateConfigObjectWithPluginsMock.mockImplementation((config: unknown) => ({
+      ok: true,
+      config,
+    }));
+
+    const cfg = {
+      commands: { text: true, config: true },
+      channels: {
+        slack: {
+          allowFrom: ["U111", "U222"],
+          dm: { allowFrom: ["U111", "U222"] },
+          configWrites: true,
+        },
+      },
+    } as OpenClawConfig;
+
+    const params = buildParams("/allowlist remove dm U111", cfg, {
+      Provider: "slack",
+      Surface: "slack",
+    });
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(writeConfigFileMock).toHaveBeenCalledTimes(1);
+    const written = writeConfigFileMock.mock.calls[0]?.[0] as OpenClawConfig;
+    expect(written.channels?.slack?.allowFrom).toEqual(["U222"]);
+    expect(written.channels?.slack?.dm?.allowFrom).toBeUndefined();
+    expect(result.reply?.text).toContain("channels.slack.allowFrom");
+  });
+
+  it("removes Discord DM allowlist entries from canonical allowFrom and deletes legacy dm.allowFrom", async () => {
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      valid: true,
+      parsed: {
+        channels: {
+          discord: {
+            allowFrom: ["111", "222"],
+            dm: { allowFrom: ["111", "222"] },
+            configWrites: true,
+          },
+        },
+      },
+    });
+    validateConfigObjectWithPluginsMock.mockImplementation((config: unknown) => ({
+      ok: true,
+      config,
+    }));
+
+    const cfg = {
+      commands: { text: true, config: true },
+      channels: {
+        discord: {
+          allowFrom: ["111", "222"],
+          dm: { allowFrom: ["111", "222"] },
+          configWrites: true,
+        },
+      },
+    } as OpenClawConfig;
+
+    const params = buildParams("/allowlist remove dm 111", cfg, {
+      Provider: "discord",
+      Surface: "discord",
+    });
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(writeConfigFileMock).toHaveBeenCalledTimes(1);
+    const written = writeConfigFileMock.mock.calls[0]?.[0] as OpenClawConfig;
+    expect(written.channels?.discord?.allowFrom).toEqual(["222"]);
+    expect(written.channels?.discord?.dm?.allowFrom).toBeUndefined();
+    expect(result.reply?.text).toContain("channels.discord.allowFrom");
   });
 });
 
