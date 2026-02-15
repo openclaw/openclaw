@@ -211,22 +211,12 @@ export const TelegramConfigSchema = TelegramAccountSchemaBase.extend({
 export const DiscordDmSchema = z
   .object({
     enabled: z.boolean().optional(),
-    policy: DmPolicySchema.optional().default("pairing"),
+    policy: DmPolicySchema.optional(),
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     groupEnabled: z.boolean().optional(),
     groupChannels: z.array(z.union([z.string(), z.number()])).optional(),
   })
-  .strict()
-  .superRefine((value, ctx) => {
-    requireOpenAllowFrom({
-      policy: value.policy,
-      allowFrom: value.allowFrom,
-      ctx,
-      path: ["allowFrom"],
-      message:
-        'channels.discord.dm.policy="open" requires channels.discord.dm.allowFrom to include "*"',
-    });
-  });
+  .strict();
 
 export const DiscordGuildChannelSchema = z
   .object({
@@ -304,6 +294,10 @@ export const DiscordAccountSchema = z
       .strict()
       .optional(),
     replyToMode: ReplyToModeSchema.optional(),
+    // Aliases for channels.discord.dm.policy / channels.discord.dm.allowFrom. Prefer these for
+    // inheritance in multi-account setups (shallow merge works; nested dm object doesn't).
+    dmPolicy: DmPolicySchema.optional(),
+    allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     dm: DiscordDmSchema.optional(),
     guilds: z.record(z.string(), DiscordGuildSchema.optional()).optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
@@ -371,6 +365,19 @@ export const DiscordAccountSchema = z
         path: ["activityType"],
       });
     }
+
+    const dmPolicy = value.dmPolicy ?? value.dm?.policy ?? "pairing";
+    const allowFrom = value.allowFrom ?? value.dm?.allowFrom;
+    const allowFromPath =
+      value.allowFrom !== undefined ? (["allowFrom"] as const) : (["dm", "allowFrom"] as const);
+    requireOpenAllowFrom({
+      policy: dmPolicy,
+      allowFrom,
+      ctx,
+      path: [...allowFromPath],
+      message:
+        'channels.discord.dmPolicy="open" requires channels.discord.allowFrom (or channels.discord.dm.allowFrom) to include "*"',
+    });
   });
 
 export const DiscordConfigSchema = DiscordAccountSchema.extend({
@@ -452,23 +459,13 @@ export const GoogleChatConfigSchema = GoogleChatAccountSchema.extend({
 export const SlackDmSchema = z
   .object({
     enabled: z.boolean().optional(),
-    policy: DmPolicySchema.optional().default("pairing"),
+    policy: DmPolicySchema.optional(),
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     groupEnabled: z.boolean().optional(),
     groupChannels: z.array(z.union([z.string(), z.number()])).optional(),
     replyToMode: ReplyToModeSchema.optional(),
   })
-  .strict()
-  .superRefine((value, ctx) => {
-    requireOpenAllowFrom({
-      policy: value.policy,
-      allowFrom: value.allowFrom,
-      ctx,
-      path: ["allowFrom"],
-      message:
-        'channels.slack.dm.policy="open" requires channels.slack.dm.allowFrom to include "*"',
-    });
-  });
+  .strict();
 
 export const SlackChannelSchema = z
   .object({
@@ -553,14 +550,32 @@ export const SlackAccountSchema = z
       })
       .strict()
       .optional(),
+    // Aliases for channels.slack.dm.policy / channels.slack.dm.allowFrom. Prefer these for
+    // inheritance in multi-account setups (shallow merge works; nested dm object doesn't).
+    dmPolicy: DmPolicySchema.optional(),
+    allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     dm: SlackDmSchema.optional(),
     channels: z.record(z.string(), SlackChannelSchema.optional()).optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
     responsePrefix: z.string().optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, ctx) => {
+    const dmPolicy = value.dmPolicy ?? value.dm?.policy ?? "pairing";
+    const allowFrom = value.allowFrom ?? value.dm?.allowFrom;
+    const allowFromPath =
+      value.allowFrom !== undefined ? (["allowFrom"] as const) : (["dm", "allowFrom"] as const);
+    requireOpenAllowFrom({
+      policy: dmPolicy,
+      allowFrom,
+      ctx,
+      path: [...allowFromPath],
+      message:
+        'channels.slack.dmPolicy="open" requires channels.slack.allowFrom (or channels.slack.dm.allowFrom) to include "*"',
+    });
+  });
 
-export const SlackConfigSchema = SlackAccountSchema.extend({
+export const SlackConfigSchema = SlackAccountSchema.safeExtend({
   mode: z.enum(["socket", "http"]).optional().default("socket"),
   signingSecret: z.string().optional().register(sensitive),
   webhookPath: z.string().optional().default("/slack/events"),

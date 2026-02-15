@@ -148,7 +148,14 @@ function registerLazyCoreCommand(
   placeholder.allowUnknownOption(true);
   placeholder.allowExcessArguments(true);
   placeholder.action(async (...actionArgs) => {
-    removeCommand(program, placeholder);
+    // Some registrars install multiple top-level commands (e.g. status/health/sessions).
+    // Remove placeholders/old registrations for all names in the entry before re-registering.
+    for (const cmd of entry.commands) {
+      const existing = program.commands.find((c) => c.name() === cmd.name);
+      if (existing) {
+        removeCommand(program, existing);
+      }
+    }
     await entry.register({ program, ctx, argv: process.argv });
     const actionCommand = actionArgs.at(-1) as Command | undefined;
     const root = actionCommand?.parent ?? program;

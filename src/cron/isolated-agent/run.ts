@@ -28,7 +28,12 @@ import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
 import { getSkillsSnapshotVersion } from "../../agents/skills/refresh.js";
 import { runSubagentAnnounceFlow } from "../../agents/subagent-announce.js";
+import {
+  countActiveDescendantRuns,
+  listDescendantRunsForRequester,
+} from "../../agents/subagent-registry.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
+import { readLatestAssistantReply } from "../../agents/tools/agent-step.js";
 import { deriveSessionTotalTokens, hasNonzeroUsage } from "../../agents/usage.js";
 import { ensureAgentWorkspace } from "../../agents/workspace.js";
 import {
@@ -36,6 +41,7 @@ import {
   normalizeVerboseLevel,
   supportsXHighThinking,
 } from "../../auto-reply/thinking.js";
+import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
 import {
   resolveAgentMainSessionKey,
@@ -94,6 +100,152 @@ function resolveCronDeliveryBestEffort(job: CronJob): boolean {
   return false;
 }
 
+const CRON_SUBAGENT_WAIT_POLL_MS = 500;
+const CRON_SUBAGENT_WAIT_MIN_MS = 30_000;
+const CRON_SUBAGENT_FINAL_REPLY_GRACE_MS = 5_000;
+
+function isLikelyInterimCronMessage(value: string): boolean {
+  const text = value.trim();
+  if (!text) {
+    return true;
+  }
+  const normalized = text.toLowerCase().replace(/\s+/g, " ");
+  const words = normalized.split(" ").filter(Boolean).length;
+  const interimHints = [
+    "on it",
+    "pulling everything together",
+    "give me a few",
+    "give me a few min",
+    "few minutes",
+    "let me compile",
+    "i'll gather",
+    "i will gather",
+    "working on it",
+    "retrying now",
+    "should be about",
+    "should have your summary",
+    "subagent spawned",
+    "spawned a subagent",
+    "it'll auto-announce when done",
+    "it will auto-announce when done",
+    "auto-announce when done",
+    "both subagents are running",
+    "wait for them to report back",
+  ];
+  return words <= 45 && interimHints.some((hint) => normalized.includes(hint));
+}
+
+function expectsSubagentFollowup(value: string): boolean {
+  const normalized = value.trim().toLowerCase().replace(/\s+/g, " ");
+  if (!normalized) {
+    return false;
+  }
+  const hints = [
+    "subagent spawned",
+    "spawned a subagent",
+    "auto-announce when done",
+    "both subagents are running",
+    "wait for them to report back",
+  ];
+  return hints.some((hint) => normalized.includes(hint));
+}
+
+async function readDescendantSubagentFallbackReply(params: {
+  sessionKey: string;
+  runStartedAt: number;
+}): Promise<string | undefined> {
+  const descendants = listDescendantRunsForRequester(params.sessionKey)
+    .filter(
+      (entry) =>
+        typeof entry.endedAt === "number" &&
+        entry.endedAt >= params.runStartedAt &&
+        entry.childSessionKey.trim().length > 0,
+    )
+    .toSorted((a, b) => (a.endedAt ?? 0) - (b.endedAt ?? 0));
+  if (descendants.length === 0) {
+    return undefined;
+  }
+
+  const latestByChild = new Map<string, (typeof descendants)[number]>();
+  for (const entry of descendants) {
+    const childKey = entry.childSessionKey.trim();
+    if (!childKey) {
+      continue;
+    }
+    const current = latestByChild.get(childKey);
+    if (!current || (entry.endedAt ?? 0) >= (current.endedAt ?? 0)) {
+      latestByChild.set(childKey, entry);
+    }
+  }
+
+  const replies: string[] = [];
+  const latestRuns = [...latestByChild.values()]
+    .toSorted((a, b) => (a.endedAt ?? 0) - (b.endedAt ?? 0))
+    .slice(-4);
+  for (const entry of latestRuns) {
+    const reply = (await readLatestAssistantReply({ sessionKey: entry.childSessionKey }))?.trim();
+    if (!reply || reply.toUpperCase() === SILENT_REPLY_TOKEN.toUpperCase()) {
+      continue;
+    }
+    replies.push(reply);
+  }
+  if (replies.length === 0) {
+    return undefined;
+  }
+  if (replies.length === 1) {
+    return replies[0];
+  }
+  return replies.join("\n\n");
+}
+
+async function waitForDescendantSubagentSummary(params: {
+  sessionKey: string;
+  initialReply?: string;
+  timeoutMs: number;
+  observedActiveDescendants?: boolean;
+}): Promise<string | undefined> {
+  const initialReply = params.initialReply?.trim();
+  const deadline = Date.now() + Math.max(CRON_SUBAGENT_WAIT_MIN_MS, Math.floor(params.timeoutMs));
+  let sawActiveDescendants = params.observedActiveDescendants === true;
+  let drainedAtMs: number | undefined;
+  while (Date.now() < deadline) {
+    const activeDescendants = countActiveDescendantRuns(params.sessionKey);
+    if (activeDescendants > 0) {
+      sawActiveDescendants = true;
+      drainedAtMs = undefined;
+      await new Promise((resolve) => setTimeout(resolve, CRON_SUBAGENT_WAIT_POLL_MS));
+      continue;
+    }
+    if (!sawActiveDescendants) {
+      return initialReply;
+    }
+    if (!drainedAtMs) {
+      drainedAtMs = Date.now();
+    }
+    const latest = (await readLatestAssistantReply({ sessionKey: params.sessionKey }))?.trim();
+    if (
+      latest &&
+      latest.toUpperCase() !== SILENT_REPLY_TOKEN.toUpperCase() &&
+      (latest !== initialReply || !isLikelyInterimCronMessage(latest))
+    ) {
+      return latest;
+    }
+    if (Date.now() - drainedAtMs >= CRON_SUBAGENT_FINAL_REPLY_GRACE_MS) {
+      return undefined;
+    }
+    await new Promise((resolve) => setTimeout(resolve, CRON_SUBAGENT_WAIT_POLL_MS));
+  }
+  const latest = (await readLatestAssistantReply({ sessionKey: params.sessionKey }))?.trim();
+  if (
+    latest &&
+    latest.toUpperCase() !== SILENT_REPLY_TOKEN.toUpperCase() &&
+    (latest !== initialReply || !isLikelyInterimCronMessage(latest))
+  ) {
+    return latest;
+  }
+  return undefined;
+}
+
 export type RunCronAgentTurnResult = {
   status: "ok" | "error" | "skipped";
   summary?: string;
@@ -121,6 +273,7 @@ export async function runCronIsolatedAgentTurn(params: {
   agentId?: string;
   lane?: string;
 }): Promise<RunCronAgentTurnResult> {
+  const isFastTestEnv = process.env.OPENCLAW_TEST_FAST === "1";
   const defaultAgentId = resolveDefaultAgentId(params.cfg);
   const requestedAgentId =
     typeof params.agentId === "string" && params.agentId.trim()
@@ -162,7 +315,7 @@ export async function runCronIsolatedAgentTurn(params: {
   const agentDir = resolveAgentDir(params.cfg, agentId);
   const workspace = await ensureAgentWorkspace({
     dir: workspaceDirRaw,
-    ensureBootstrapFiles: !agentCfg?.skipBootstrap,
+    ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
   });
   const workspaceDir = workspace.dir;
 
@@ -232,6 +385,9 @@ export async function runCronIsolatedAgentTurn(params: {
     ? `${agentSessionKey}:run:${runSessionId}`
     : agentSessionKey;
   const persistSessionEntry = async () => {
+    if (isFastTestEnv) {
+      return;
+    }
     cronSession.store[agentSessionKey] = cronSession.sessionEntry;
     if (runSessionKey !== agentSessionKey) {
       cronSession.store[runSessionKey] = cronSession.sessionEntry;
@@ -364,24 +520,30 @@ export async function runCronIsolatedAgentTurn(params: {
       `${commandBody}\n\nReturn your summary as plain text; it will be delivered automatically. If the task explicitly calls for messaging a specific external recipient, note who/where it should go instead of sending it yourself.`.trim();
   }
 
-  const existingSnapshot = cronSession.sessionEntry.skillsSnapshot;
-  const skillsSnapshotVersion = getSkillsSnapshotVersion(workspaceDir);
-  const needsSkillsSnapshot =
-    !existingSnapshot || existingSnapshot.version !== skillsSnapshotVersion;
-  const skillsSnapshot = needsSkillsSnapshot
-    ? buildWorkspaceSkillSnapshot(workspaceDir, {
+  let skillsSnapshot = cronSession.sessionEntry.skillsSnapshot;
+  if (isFastTestEnv) {
+    // Fast unit-test mode: avoid scanning the workspace and writing session stores.
+    skillsSnapshot = skillsSnapshot ?? { prompt: "", skills: [] };
+  } else {
+    const existingSnapshot = cronSession.sessionEntry.skillsSnapshot;
+    const skillsSnapshotVersion = getSkillsSnapshotVersion(workspaceDir);
+    const needsSkillsSnapshot =
+      !existingSnapshot || existingSnapshot.version !== skillsSnapshotVersion;
+    if (needsSkillsSnapshot) {
+      skillsSnapshot = buildWorkspaceSkillSnapshot(workspaceDir, {
         config: cfgWithAgentDefaults,
         eligibility: { remote: getRemoteSkillEligibility() },
         snapshotVersion: skillsSnapshotVersion,
-      })
-    : cronSession.sessionEntry.skillsSnapshot;
-  if (needsSkillsSnapshot && skillsSnapshot) {
-    cronSession.sessionEntry = {
-      ...cronSession.sessionEntry,
-      updatedAt: Date.now(),
-      skillsSnapshot,
-    };
-    await persistSessionEntry();
+      });
+      if (skillsSnapshot) {
+        cronSession.sessionEntry = {
+          ...cronSession.sessionEntry,
+          updatedAt: Date.now(),
+          skillsSnapshot,
+        };
+        await persistSessionEntry();
+      }
+    }
   }
 
   // Persist systemSent before the run, mirroring the inbound auto-reply behavior.
@@ -497,11 +659,11 @@ export async function runCronIsolatedAgentTurn(params: {
     await persistSessionEntry();
   }
   const firstText = payloads[0]?.text ?? "";
-  const summary = pickSummaryFromPayloads(payloads) ?? pickSummaryFromOutput(firstText);
-  const outputText = pickLastNonEmptyTextFromPayloads(payloads);
-  const synthesizedText = outputText?.trim() || summary?.trim() || undefined;
+  let summary = pickSummaryFromPayloads(payloads) ?? pickSummaryFromOutput(firstText);
+  let outputText = pickLastNonEmptyTextFromPayloads(payloads);
+  let synthesizedText = outputText?.trim() || summary?.trim() || undefined;
   const deliveryPayload = pickLastDeliverablePayload(payloads);
-  const deliveryPayloads =
+  let deliveryPayloads =
     deliveryPayload !== undefined
       ? [deliveryPayload]
       : synthesizedText
@@ -558,9 +720,12 @@ export async function runCronIsolatedAgentTurn(params: {
     }
     const identity = resolveAgentOutboundIdentity(cfgWithAgentDefaults, agentId);
 
-    // Shared subagent announce flow is text-based. When we have an explicit sender
-    // identity to preserve, prefer direct outbound delivery even for plain-text payloads.
-    if (deliveryPayloadHasStructuredContent || identity) {
+    // Shared subagent announce flow is text-based and prompts the main agent to
+    // summarize. When we have an explicit delivery target (delivery.to), sender
+    // identity, or structured content, prefer direct outbound delivery to send
+    // the actual cron output without summarization.
+    const hasExplicitDeliveryTarget = Boolean(deliveryPlan.to);
+    if (deliveryPayloadHasStructuredContent || identity || hasExplicitDeliveryTarget) {
       try {
         const payloadsForDelivery =
           deliveryPayloadHasStructuredContent && deliveryPayloads.length > 0
@@ -596,9 +761,56 @@ export async function runCronIsolatedAgentTurn(params: {
         typeof params.job.name === "string" && params.job.name.trim()
           ? params.job.name.trim()
           : `cron:${params.job.id}`;
+      const initialSynthesizedText = synthesizedText.trim();
+      let activeSubagentRuns = countActiveDescendantRuns(agentSessionKey);
+      const expectedSubagentFollowup = expectsSubagentFollowup(initialSynthesizedText);
+      const hadActiveDescendants = activeSubagentRuns > 0;
+      if (activeSubagentRuns > 0 || expectedSubagentFollowup) {
+        let finalReply = await waitForDescendantSubagentSummary({
+          sessionKey: agentSessionKey,
+          initialReply: initialSynthesizedText,
+          timeoutMs,
+          observedActiveDescendants: activeSubagentRuns > 0 || expectedSubagentFollowup,
+        });
+        activeSubagentRuns = countActiveDescendantRuns(agentSessionKey);
+        if (
+          !finalReply &&
+          activeSubagentRuns === 0 &&
+          (hadActiveDescendants || expectedSubagentFollowup)
+        ) {
+          finalReply = await readDescendantSubagentFallbackReply({
+            sessionKey: agentSessionKey,
+            runStartedAt,
+          });
+        }
+        if (finalReply && activeSubagentRuns === 0) {
+          outputText = finalReply;
+          summary = pickSummaryFromOutput(finalReply) ?? summary;
+          synthesizedText = finalReply;
+          deliveryPayloads = [{ text: finalReply }];
+        }
+      }
+      if (activeSubagentRuns > 0) {
+        // Parent orchestration is still in progress; avoid announcing a partial
+        // update to the main requester.
+        return withRunSession({ status: "ok", summary, outputText });
+      }
+      if (
+        (hadActiveDescendants || expectedSubagentFollowup) &&
+        synthesizedText.trim() === initialSynthesizedText &&
+        isLikelyInterimCronMessage(initialSynthesizedText) &&
+        initialSynthesizedText.toUpperCase() !== SILENT_REPLY_TOKEN.toUpperCase()
+      ) {
+        // Descendants existed but no post-orchestration synthesis arrived, so
+        // suppress stale parent text like "on it, pulling everything together".
+        return withRunSession({ status: "ok", summary, outputText });
+      }
+      if (synthesizedText.toUpperCase() === SILENT_REPLY_TOKEN.toUpperCase()) {
+        return withRunSession({ status: "ok", summary, outputText });
+      }
       try {
         const didAnnounce = await runSubagentAnnounceFlow({
-          childSessionKey: runSessionKey,
+          childSessionKey: agentSessionKey,
           childRunId: `${params.job.id}:${runSessionId}`,
           requesterSessionKey: announceSessionKey,
           requesterOrigin: {

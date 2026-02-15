@@ -436,7 +436,11 @@ public struct PollParams: Codable, Sendable {
     public let question: String
     public let options: [String]
     public let maxselections: Int?
+    public let durationseconds: Int?
     public let durationhours: Int?
+    public let silent: Bool?
+    public let isanonymous: Bool?
+    public let threadid: String?
     public let channel: String?
     public let accountid: String?
     public let idempotencykey: String
@@ -446,7 +450,11 @@ public struct PollParams: Codable, Sendable {
         question: String,
         options: [String],
         maxselections: Int?,
+        durationseconds: Int?,
         durationhours: Int?,
+        silent: Bool?,
+        isanonymous: Bool?,
+        threadid: String?,
         channel: String?,
         accountid: String?,
         idempotencykey: String
@@ -455,7 +463,11 @@ public struct PollParams: Codable, Sendable {
         self.question = question
         self.options = options
         self.maxselections = maxselections
+        self.durationseconds = durationseconds
         self.durationhours = durationhours
+        self.silent = silent
+        self.isanonymous = isanonymous
+        self.threadid = threadid
         self.channel = channel
         self.accountid = accountid
         self.idempotencykey = idempotencykey
@@ -465,7 +477,11 @@ public struct PollParams: Codable, Sendable {
         case question
         case options
         case maxselections = "maxSelections"
+        case durationseconds = "durationSeconds"
         case durationhours = "durationHours"
+        case silent
+        case isanonymous = "isAnonymous"
+        case threadid = "threadId"
         case channel
         case accountid = "accountId"
         case idempotencykey = "idempotencyKey"
@@ -1026,6 +1042,7 @@ public struct SessionsPatchParams: Codable, Sendable {
     public let execnode: AnyCodable?
     public let model: AnyCodable?
     public let spawnedby: AnyCodable?
+    public let spawndepth: AnyCodable?
     public let sendpolicy: AnyCodable?
     public let groupactivation: AnyCodable?
 
@@ -1043,6 +1060,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         execnode: AnyCodable?,
         model: AnyCodable?,
         spawnedby: AnyCodable?,
+        spawndepth: AnyCodable?,
         sendpolicy: AnyCodable?,
         groupactivation: AnyCodable?
     ) {
@@ -1059,6 +1077,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         self.execnode = execnode
         self.model = model
         self.spawnedby = spawnedby
+        self.spawndepth = spawndepth
         self.sendpolicy = sendpolicy
         self.groupactivation = groupactivation
     }
@@ -1076,6 +1095,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         case execnode = "execNode"
         case model
         case spawnedby = "spawnedBy"
+        case spawndepth = "spawnDepth"
         case sendpolicy = "sendPolicy"
         case groupactivation = "groupActivation"
     }
@@ -1083,14 +1103,18 @@ public struct SessionsPatchParams: Codable, Sendable {
 
 public struct SessionsResetParams: Codable, Sendable {
     public let key: String
+    public let reason: AnyCodable?
 
     public init(
-        key: String
+        key: String,
+        reason: AnyCodable?
     ) {
         self.key = key
+        self.reason = reason
     }
     private enum CodingKeys: String, CodingKey {
         case key
+        case reason
     }
 }
 

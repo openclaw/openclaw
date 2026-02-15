@@ -1,29 +1,10 @@
 import type { ChannelOutboundAdapter } from "../types.js";
 import { markdownToTelegramHtmlChunks } from "../../../telegram/format.js";
+import {
+  parseTelegramReplyToMessageId,
+  parseTelegramThreadId,
+} from "../../../telegram/outbound-params.js";
 import { sendMessageTelegram } from "../../../telegram/send.js";
-
-function parseReplyToMessageId(replyToId?: string | null) {
-  if (!replyToId) {
-    return undefined;
-  }
-  const parsed = Number.parseInt(replyToId, 10);
-  return Number.isFinite(parsed) ? parsed : undefined;
-}
-
-function parseThreadId(threadId?: string | number | null) {
-  if (threadId == null) {
-    return undefined;
-  }
-  if (typeof threadId === "number") {
-    return Number.isFinite(threadId) ? Math.trunc(threadId) : undefined;
-  }
-  const trimmed = threadId.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  const parsed = Number.parseInt(trimmed, 10);
-  return Number.isFinite(parsed) ? parsed : undefined;
-}
 
 export const telegramOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
@@ -32,8 +13,8 @@ export const telegramOutbound: ChannelOutboundAdapter = {
   textChunkLimit: 4000,
   sendText: async ({ to, text, accountId, deps, replyToId, threadId }) => {
     const send = deps?.sendTelegram ?? sendMessageTelegram;
-    const replyToMessageId = parseReplyToMessageId(replyToId);
-    const messageThreadId = parseThreadId(threadId);
+    const replyToMessageId = parseTelegramReplyToMessageId(replyToId);
+    const messageThreadId = parseTelegramThreadId(threadId);
     const result = await send(to, text, {
       verbose: false,
       textMode: "html",
@@ -45,8 +26,8 @@ export const telegramOutbound: ChannelOutboundAdapter = {
   },
   sendMedia: async ({ to, text, mediaUrl, accountId, deps, replyToId, threadId }) => {
     const send = deps?.sendTelegram ?? sendMessageTelegram;
-    const replyToMessageId = parseReplyToMessageId(replyToId);
-    const messageThreadId = parseThreadId(threadId);
+    const replyToMessageId = parseTelegramReplyToMessageId(replyToId);
+    const messageThreadId = parseTelegramThreadId(threadId);
     const result = await send(to, text, {
       verbose: false,
       mediaUrl,
@@ -59,8 +40,8 @@ export const telegramOutbound: ChannelOutboundAdapter = {
   },
   sendPayload: async ({ to, payload, accountId, deps, replyToId, threadId }) => {
     const send = deps?.sendTelegram ?? sendMessageTelegram;
-    const replyToMessageId = parseReplyToMessageId(replyToId);
-    const messageThreadId = parseThreadId(threadId);
+    const replyToMessageId = parseTelegramReplyToMessageId(replyToId);
+    const messageThreadId = parseTelegramThreadId(threadId);
     const telegramData = payload.channelData?.telegram as
       | { buttons?: Array<Array<{ text: string; callback_data: string }>>; quoteText?: string }
       | undefined;

@@ -23,6 +23,7 @@ import {
 } from "../../discord/send.js";
 import { resolveDiscordChannelId } from "../../discord/targets.js";
 import { withNormalizedTimestamp } from "../date-time.js";
+import { assertMediaNotDataUrl } from "../sandbox-paths.js";
 import {
   type ActionGate,
   jsonResult,
@@ -247,7 +248,7 @@ export async function handleDiscordMessagingAction(
       if (asVoice) {
         if (!mediaUrl) {
           throw new Error(
-            "Voice messages require a local media file path (mediaUrl, path, or filePath).",
+            "Voice messages require a media file reference (mediaUrl, path, or filePath).",
           );
         }
         if (content && content.trim()) {
@@ -255,11 +256,7 @@ export async function handleDiscordMessagingAction(
             "Voice messages cannot include text content (Discord limitation). Remove the content parameter.",
           );
         }
-        if (mediaUrl.startsWith("http://") || mediaUrl.startsWith("https://")) {
-          throw new Error(
-            "Voice messages require a local file path, not a URL. Download the file first.",
-          );
-        }
+        assertMediaNotDataUrl(mediaUrl);
         const result = await sendVoiceMessageDiscord(to, mediaUrl, {
           ...(accountId ? { accountId } : {}),
           replyTo,

@@ -22,19 +22,20 @@ import { addWildcardAllowFrom, promptAccountId } from "./helpers.js";
 const channel = "discord" as const;
 
 function setDiscordDmPolicy(cfg: OpenClawConfig, dmPolicy: DmPolicy) {
-  const allowFrom =
-    dmPolicy === "open" ? addWildcardAllowFrom(cfg.channels?.discord?.dm?.allowFrom) : undefined;
+  const existingAllowFrom =
+    cfg.channels?.discord?.allowFrom ?? cfg.channels?.discord?.dm?.allowFrom;
+  const allowFrom = dmPolicy === "open" ? addWildcardAllowFrom(existingAllowFrom) : undefined;
   return {
     ...cfg,
     channels: {
       ...cfg.channels,
       discord: {
         ...cfg.channels?.discord,
+        dmPolicy,
+        ...(allowFrom ? { allowFrom } : {}),
         dm: {
           ...cfg.channels?.discord?.dm,
           enabled: cfg.channels?.discord?.dm?.enabled ?? true,
-          policy: dmPolicy,
-          ...(allowFrom ? { allowFrom } : {}),
         },
       },
     },
@@ -156,10 +157,10 @@ function setDiscordAllowFrom(cfg: OpenClawConfig, allowFrom: string[]): OpenClaw
       ...cfg.channels,
       discord: {
         ...cfg.channels?.discord,
+        allowFrom,
         dm: {
           ...cfg.channels?.discord?.dm,
           enabled: cfg.channels?.discord?.dm?.enabled ?? true,
-          allowFrom,
         },
       },
     },
@@ -184,7 +185,8 @@ async function promptDiscordAllowFrom(params: {
       : resolveDefaultDiscordAccountId(params.cfg);
   const resolved = resolveDiscordAccount({ cfg: params.cfg, accountId });
   const token = resolved.token;
-  const existing = params.cfg.channels?.discord?.dm?.allowFrom ?? [];
+  const existing =
+    params.cfg.channels?.discord?.allowFrom ?? params.cfg.channels?.discord?.dm?.allowFrom ?? [];
   await params.prompter.note(
     [
       "Allowlist Discord DMs by username (we resolve to user ids).",
@@ -263,9 +265,10 @@ async function promptDiscordAllowFrom(params: {
 const dmPolicy: ChannelOnboardingDmPolicy = {
   label: "Discord",
   channel,
-  policyKey: "channels.discord.dm.policy",
-  allowFromKey: "channels.discord.dm.allowFrom",
-  getCurrent: (cfg) => cfg.channels?.discord?.dm?.policy ?? "pairing",
+  policyKey: "channels.discord.dmPolicy",
+  allowFromKey: "channels.discord.allowFrom",
+  getCurrent: (cfg) =>
+    cfg.channels?.discord?.dmPolicy ?? cfg.channels?.discord?.dm?.policy ?? "pairing",
   setPolicy: (cfg, policy) => setDiscordDmPolicy(cfg, policy),
   promptAllowFrom: promptDiscordAllowFrom,
 };

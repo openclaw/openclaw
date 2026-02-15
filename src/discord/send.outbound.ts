@@ -1,7 +1,9 @@
 import type { RequestClient } from "@buape/carbon";
 import type { APIChannel } from "discord-api-types/v10";
 import { ChannelType, Routes } from "discord-api-types/v10";
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
+import path from "node:path";
 import type { RetryConfig } from "../infra/retry.js";
 import type { PollInput } from "../polls.js";
 import type { DiscordSendResult } from "./send.types.js";
@@ -9,7 +11,11 @@ import { resolveChunkMode } from "../auto-reply/chunk.js";
 import { loadConfig } from "../config/config.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { convertMarkdownTables } from "../markdown/tables.js";
+import { maxBytesForKind } from "../media/constants.js";
+import { extensionForMime } from "../media/mime.js";
+import { loadWebMediaRaw } from "../web/media.js";
 import { resolveDiscordAccount } from "./accounts.js";
 import {
   buildDiscordSendError,
@@ -306,6 +312,19 @@ type VoiceMessageOpts = {
   silent?: boolean;
 };
 
+async function materializeVoiceMessageInput(mediaUrl: string): Promise<{ filePath: string }> {
+  // Security: reuse the standard media loader so we apply SSRF guards + allowed-local-root checks.
+  // Then write to a private temp file so ffmpeg/ffprobe never sees the original URL/path string.
+  const media = await loadWebMediaRaw(mediaUrl, maxBytesForKind("audio"));
+  const extFromName = media.fileName ? path.extname(media.fileName) : "";
+  const extFromMime = media.contentType ? extensionForMime(media.contentType) : "";
+  const ext = extFromName || extFromMime || ".bin";
+  const tempDir = resolvePreferredOpenClawTmpDir();
+  const filePath = path.join(tempDir, `voice-src-${crypto.randomUUID()}${ext}`);
+  await fs.writeFile(filePath, media.buffer, { mode: 0o600 });
+  return { filePath };
+}
+
 /**
  * Send a voice message to Discord.
  *
@@ -321,19 +340,31 @@ export async function sendVoiceMessageDiscord(
   audioPath: string,
   opts: VoiceMessageOpts = {},
 ): Promise<DiscordSendResult> {
-  const cfg = loadConfig();
-  const accountInfo = resolveDiscordAccount({
-    cfg,
-    accountId: opts.accountId,
-  });
-  const { token, rest, request } = createDiscordClient(opts, cfg);
-  const recipient = await parseAndResolveRecipient(to, opts.accountId);
-  const { channelId } = await resolveChannelId(rest, recipient, request);
-
-  // Convert to OGG/Opus if needed
-  const { path: oggPath, cleanup } = await ensureOggOpus(audioPath);
+  const { filePath: localInputPath } = await materializeVoiceMessageInput(audioPath);
+  let oggPath: string | null = null;
+  let oggCleanup = false;
+  let token: string | undefined;
+  let rest: RequestClient | undefined;
+  let channelId: string | undefined;
 
   try {
+    const cfg = loadConfig();
+    const accountInfo = resolveDiscordAccount({
+      cfg,
+      accountId: opts.accountId,
+    });
+    const client = createDiscordClient(opts, cfg);
+    token = client.token;
+    rest = client.rest;
+    const request = client.request;
+    const recipient = await parseAndResolveRecipient(to, opts.accountId);
+    channelId = (await resolveChannelId(rest, recipient, request)).channelId;
+
+    // Convert to OGG/Opus if needed
+    const ogg = await ensureOggOpus(localInputPath);
+    oggPath = ogg.path;
+    oggCleanup = ogg.cleanup;
+
     // Get voice message metadata (duration and waveform)
     const metadata = await getVoiceMessageMetadata(oggPath);
 
@@ -362,20 +393,28 @@ export async function sendVoiceMessageDiscord(
       channelId: String(result.channel_id ?? channelId),
     };
   } catch (err) {
-    throw await buildDiscordSendError(err, {
-      channelId,
-      rest,
-      token,
-      hasMedia: true,
-    });
+    if (channelId && rest && token) {
+      throw await buildDiscordSendError(err, {
+        channelId,
+        rest,
+        token,
+        hasMedia: true,
+      });
+    }
+    throw err;
   } finally {
     // Clean up temporary OGG file if we created one
-    if (cleanup) {
+    if (oggCleanup && oggPath) {
       try {
         await fs.unlink(oggPath);
       } catch {
         // Ignore cleanup errors
       }
+    }
+    try {
+      await fs.unlink(localInputPath);
+    } catch {
+      // Ignore cleanup errors
     }
   }
 }

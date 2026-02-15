@@ -3,25 +3,24 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import * as tar from "tar";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { extractArchive, resolveArchiveKind, resolvePackedRootDir } from "./archive.js";
 
-const tempDirs: string[] = [];
+let fixtureRoot = "";
+let fixtureCount = 0;
 
-async function makeTempDir() {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-archive-"));
-  tempDirs.push(dir);
+async function makeTempDir(prefix = "case") {
+  const dir = path.join(fixtureRoot, `${prefix}-${fixtureCount++}`);
+  await fs.mkdir(dir, { recursive: true });
   return dir;
 }
 
-afterEach(async () => {
-  for (const dir of tempDirs.splice(0)) {
-    try {
-      await fs.rm(dir, { recursive: true, force: true });
-    } catch {
-      // ignore cleanup failures
-    }
-  }
+beforeAll(async () => {
+  fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-archive-"));
+});
+
+afterAll(async () => {
+  await fs.rm(fixtureRoot, { recursive: true, force: true });
 });
 
 describe("archive utils", () => {
