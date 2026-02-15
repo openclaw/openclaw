@@ -66,21 +66,21 @@ describe("buildTelegramMessageContext DM topic threadId in deliveryContext (#889
     recordInboundSessionMock.mockClear();
   });
 
-  it("passes threadId to updateLastRoute for DM topics", async () => {
+  it("does not pass threadId for DM even when message_thread_id is present", async () => {
     const ctx = await buildCtx({
       message: {
         chat: { id: 1234, type: "private" },
-        message_thread_id: 42, // DM Topic ID
+        message_thread_id: 42, // DM Topic ID — should be ignored
       },
     });
 
     expect(ctx).not.toBeNull();
     expect(recordInboundSessionMock).toHaveBeenCalled();
 
-    // Check that updateLastRoute includes threadId
+    // DMs should never include threadId, even if message_thread_id is present
     const updateLastRoute = getUpdateLastRoute() as { threadId?: string } | undefined;
     expect(updateLastRoute).toBeDefined();
-    expect(updateLastRoute?.threadId).toBe("42");
+    expect(updateLastRoute?.threadId).toBeUndefined();
   });
 
   it("does not pass threadId for regular DM without topic", async () => {

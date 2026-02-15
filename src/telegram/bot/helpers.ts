@@ -45,13 +45,7 @@ export function resolveTelegramThreadSpec(params: {
       scope: params.isForum ? "forum" : "none",
     };
   }
-  if (params.messageThreadId == null) {
-    return { scope: "dm" };
-  }
-  return {
-    id: params.messageThreadId,
-    scope: "dm",
-  };
+  return { scope: "dm" };
 }
 
 /**

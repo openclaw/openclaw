@@ -37,7 +37,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     editMessageTelegram.mockReset();
   });
 
-  it("streams drafts in private threads and forwards thread id", async () => {
+  it("streams drafts in private chats without thread id", async () => {
     const draftStream = {
       update: vi.fn(),
       flush: vi.fn().mockResolvedValue(undefined),
@@ -67,7 +67,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       isGroup: false,
       resolvedThreadId: undefined,
       replyThreadId: 777,
-      threadSpec: { id: 777, scope: "dm" },
+      threadSpec: { scope: "dm" },
       historyKey: undefined,
       historyLimit: 0,
       groupHistories: new Map(),
@@ -104,13 +104,13 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(createTelegramDraftStream).toHaveBeenCalledWith(
       expect.objectContaining({
         chatId: 123,
-        thread: { id: 777, scope: "dm" },
+        thread: { scope: "dm" },
       }),
     );
     expect(draftStream.update).toHaveBeenCalledWith("Hello");
     expect(deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
-        thread: { id: 777, scope: "dm" },
+        thread: { scope: "dm" },
       }),
     );
     expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
@@ -143,7 +143,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       isGroup: false,
       resolvedThreadId: undefined,
       replyThreadId: 777,
-      threadSpec: { id: 777, scope: "dm" },
+      threadSpec: { scope: "dm" },
       historyKey: undefined,
       historyLimit: 0,
       groupHistories: new Map(),
@@ -218,7 +218,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       isGroup: false,
       resolvedThreadId: undefined,
       replyThreadId: 777,
-      threadSpec: { id: 777, scope: "dm" },
+      threadSpec: { scope: "dm" },
       historyKey: undefined,
       historyLimit: 0,
       groupHistories: new Map(),
@@ -287,7 +287,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       isGroup: false,
       resolvedThreadId: undefined,
       replyThreadId: 777,
-      threadSpec: { id: 777, scope: "dm" },
+      threadSpec: { scope: "dm" },
       historyKey: undefined,
       historyLimit: 0,
       groupHistories: new Map(),
