@@ -96,6 +96,22 @@ export function patchAllowlistUsersInConfigEntries<
   return nextEntries as TEntries;
 }
 
+export function addAllowlistUserEntriesFromConfigEntry(target: Set<string>, entry: unknown): void {
+  if (!entry || typeof entry !== "object") {
+    return;
+  }
+  const users = (entry as { users?: Array<string | number> }).users;
+  if (!Array.isArray(users)) {
+    return;
+  }
+  for (const value of users) {
+    const trimmed = String(value).trim();
+    if (trimmed && trimmed !== "*") {
+      target.add(trimmed);
+    }
+  }
+}
+
 export function summarizeMapping(
   label: string,
   mapping: string[],

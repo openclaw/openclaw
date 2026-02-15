@@ -5,6 +5,7 @@ import type { MonitorSlackOpts } from "./types.js";
 import { resolveTextChunkLimit } from "../../auto-reply/chunk.js";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "../../auto-reply/reply/history.js";
 import {
+  addAllowlistUserEntriesFromConfigEntry,
   buildAllowlistResolutionSummary,
   mergeAllowlist,
   patchAllowlistUsersInConfigEntries,
@@ -305,19 +306,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       if (channelsConfig && Object.keys(channelsConfig).length > 0) {
         const userEntries = new Set<string>();
         for (const channel of Object.values(channelsConfig)) {
-          if (!channel || typeof channel !== "object") {
-            continue;
-          }
-          const channelUsers = (channel as { users?: Array<string | number> }).users;
-          if (!Array.isArray(channelUsers)) {
-            continue;
-          }
-          for (const entry of channelUsers) {
-            const trimmed = String(entry).trim();
-            if (trimmed && trimmed !== "*") {
-              userEntries.add(trimmed);
-            }
-          }
+          addAllowlistUserEntriesFromConfigEntry(userEntries, channel);
         }
 
         if (userEntries.size > 0) {
