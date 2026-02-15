@@ -141,6 +141,11 @@ export type TelegramAccountConfig = {
    * Use `"auto"` to derive `[{identity.name}]` from the routed agent.
    */
   responsePrefix?: string;
+  /**
+   * Per-channel ack reaction override.
+   * Telegram expects unicode emoji (e.g., "👀") rather than shortcodes.
+   */
+  ackReaction?: string;
 };
 
 export type TelegramTopicConfig = {
