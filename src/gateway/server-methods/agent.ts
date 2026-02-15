@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { listAgentIds } from "../../agents/agent-scope.js";
-import { BARE_SESSION_RESET_PROMPT } from "../../auto-reply/reply/session-reset-prompt.js";
+import { DEFAULT_GREETING_PROMPT } from "../../auto-reply/reply/session-reset-prompt.js";
 import { agentCommand } from "../../commands/agent.js";
 import { loadConfig } from "../../config/config.js";
 import {
@@ -337,7 +337,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       } else {
         // Keep bare /new and /reset behavior aligned with chat.send:
         // reset first, then run a fresh-session greeting prompt in-place.
-        message = BARE_SESSION_RESET_PROMPT;
+        message = cfg.session?.greetingPrompt ?? DEFAULT_GREETING_PROMPT;
         skipTimestampInjection = true;
       }
     }

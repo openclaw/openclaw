@@ -18,7 +18,7 @@ import {
   writeCache,
 } from "./web-shared.js";
 
-const SEARCH_PROVIDERS = ["brave", "perplexity", "grok"] as const;
+const SEARCH_PROVIDERS = ["brave", "perplexity", "grok", "searxng"] as const;
 const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
 
@@ -64,7 +64,7 @@ const WebSearchSchema = Type.Object({
   freshness: Type.Optional(
     Type.String({
       description:
-        "Filter results by discovery time. Brave supports 'pd', 'pw', 'pm', 'py', and date range 'YYYY-MM-DDtoYYYY-MM-DD'. Perplexity supports 'pd', 'pw', 'pm', and 'py'.",
+        "Filter results by discovery time. Brave supports 'pd', 'pw', 'pm', 'py', and date range 'YYYY-MM-DDtoYYYY-MM-DD'. Perplexity and SearXNG support 'pd', 'pw', 'pm', and 'py'.",
     }),
   ),
 });
@@ -133,6 +133,26 @@ type PerplexitySearchResponse = {
     };
   }>;
   citations?: string[];
+};
+
+type SearxngConfig = {
+  baseUrl?: string;
+  categories?: string;
+};
+
+type SearxngSearchResult = {
+  title?: string;
+  url?: string;
+  content?: string;
+  engine?: string;
+  category?: string;
+};
+
+type SearxngSearchResponse = {
+  query?: string;
+  number_of_results?: number;
+  results?: SearxngSearchResult[];
+  suggestions?: string[];
 };
 
 type PerplexityBaseUrlHint = "direct" | "openrouter";
@@ -205,6 +225,14 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
       docs: "https://docs.openclaw.ai/tools/web",
     };
   }
+  if (provider === "searxng") {
+    return {
+      error: "missing_searxng_url",
+      message:
+        "web_search (searxng) needs a SearXNG instance URL. Set SEARXNG_URL in the Gateway environment, or configure tools.web.search.searxng.baseUrl.",
+      docs: "https://docs.openclaw.ai/tools/web",
+    };
+  }
   return {
     error: "missing_brave_api_key",
     message: `web_search needs a Brave Search API key. Run \`${formatCliCommand("openclaw configure --section web")}\` to store it, or set BRAVE_API_KEY in the Gateway environment.`,
@@ -222,6 +250,9 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
   }
   if (raw === "grok") {
     return "grok";
+  }
+  if (raw === "searxng") {
+    return "searxng";
   }
   if (raw === "brave") {
     return "brave";
@@ -365,6 +396,37 @@ function resolveGrokModel(grok?: GrokConfig): string {
 
 function resolveGrokInlineCitations(grok?: GrokConfig): boolean {
   return grok?.inlineCitations === true;
+}
+
+function resolveSearxngConfig(search?: WebSearchConfig): SearxngConfig {
+  if (!search || typeof search !== "object") {
+    return {};
+  }
+  const searxng = "searxng" in search ? search.searxng : undefined;
+  if (!searxng || typeof searxng !== "object") {
+    return {};
+  }
+  return searxng as SearxngConfig;
+}
+
+function resolveSearxngBaseUrl(searxng?: SearxngConfig): string | undefined {
+  const fromConfig =
+    searxng && "baseUrl" in searxng && typeof searxng.baseUrl === "string"
+      ? searxng.baseUrl.trim()
+      : "";
+  if (fromConfig) {
+    return fromConfig;
+  }
+  const fromEnv = normalizeApiKey(process.env.SEARXNG_URL);
+  return fromEnv || undefined;
+}
+
+function resolveSearxngCategories(searxng?: SearxngConfig): string {
+  const fromConfig =
+    searxng && "categories" in searxng && typeof searxng.categories === "string"
+      ? searxng.categories.trim()
+      : "";
+  return fromConfig || "general";
 }
 
 function resolveSearchCount(value: unknown, fallback: number): number {
@@ -549,6 +611,46 @@ async function runGrokSearch(params: {
   return { content, citations, inlineCitations };
 }
 
+async function runSearxngSearch(params: {
+  query: string;
+  count: number;
+  baseUrl: string;
+  categories: string;
+  timeoutSeconds: number;
+  language?: string;
+  timeRange?: string;
+}): Promise<{ results: SearxngSearchResult[]; suggestions: string[]; totalResults: number }> {
+  const baseWithSlash = params.baseUrl.endsWith("/") ? params.baseUrl : `${params.baseUrl}/`;
+  const url = new URL("search", baseWithSlash);
+  url.searchParams.set("q", params.query);
+  url.searchParams.set("format", "json");
+  url.searchParams.set("categories", params.categories);
+  if (params.language) {
+    url.searchParams.set("language", params.language);
+  }
+  if (params.timeRange) {
+    url.searchParams.set("time_range", params.timeRange);
+  }
+
+  const res = await fetch(url.toString(), {
+    method: "GET",
+    headers: { Accept: "application/json" },
+    signal: withTimeout(undefined, params.timeoutSeconds * 1000),
+  });
+
+  if (!res.ok) {
+    const detail = await readResponseText(res);
+    throw new Error(`SearXNG API error (${res.status}): ${detail || res.statusText}`);
+  }
+
+  const data = (await res.json()) as SearxngSearchResponse;
+  const results = Array.isArray(data.results) ? data.results.slice(0, params.count) : [];
+  const suggestions = Array.isArray(data.suggestions) ? data.suggestions : [];
+  const totalResults = typeof data.number_of_results === "number" ? data.number_of_results : 0;
+
+  return { results, suggestions, totalResults };
+}
+
 async function runWebSearch(params: {
   query: string;
   count: number;
@@ -564,13 +666,17 @@ async function runWebSearch(params: {
   perplexityModel?: string;
   grokModel?: string;
   grokInlineCitations?: boolean;
+  searxngBaseUrl?: string;
+  searxngCategories?: string;
 }): Promise<Record<string, unknown>> {
   const cacheKey = normalizeCacheKey(
     params.provider === "brave"
       ? `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || "default"}:${params.ui_lang || "default"}:${params.freshness || "default"}`
       : params.provider === "perplexity"
         ? `${params.provider}:${params.query}:${params.perplexityBaseUrl ?? DEFAULT_PERPLEXITY_BASE_URL}:${params.perplexityModel ?? DEFAULT_PERPLEXITY_MODEL}:${params.freshness || "default"}`
-        : `${params.provider}:${params.query}:${params.grokModel ?? DEFAULT_GROK_MODEL}:${String(params.grokInlineCitations ?? false)}`,
+        : params.provider === "searxng"
+          ? `${params.provider}:${params.query}:${params.count}:${params.searxngBaseUrl!}:${params.searxngCategories ?? "general"}:${params.search_lang || "default"}:${params.freshness || "default"}`
+          : `${params.provider}:${params.query}:${params.grokModel ?? DEFAULT_GROK_MODEL}:${String(params.grokInlineCitations ?? false)}`,
   );
   const cached = readCache(SEARCH_CACHE, cacheKey);
   if (cached) {
@@ -630,6 +736,58 @@ async function runWebSearch(params: {
       content: wrapWebContent(content),
       citations,
       inlineCitations,
+    };
+    writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+    return payload;
+  }
+
+  if (params.provider === "searxng") {
+    const freshnessToTimeRange: Record<string, string> = {
+      pd: "day",
+      pw: "week",
+      pm: "month",
+      py: "year",
+    };
+    const timeRange = params.freshness ? freshnessToTimeRange[params.freshness] : undefined;
+
+    const { results, suggestions, totalResults } = await runSearxngSearch({
+      query: params.query,
+      count: params.count,
+      baseUrl: params.searxngBaseUrl!,
+      categories: params.searxngCategories ?? "general",
+      timeoutSeconds: params.timeoutSeconds,
+      language: params.search_lang,
+      timeRange,
+    });
+
+    const mapped = results.map((entry) => {
+      const description = entry.content ?? "";
+      const title = entry.title ?? "";
+      const url = entry.url ?? "";
+      const rawSiteName = resolveSiteName(url);
+      return {
+        title: title ? wrapWebContent(title, "web_search") : "",
+        url,
+        description: description ? wrapWebContent(description, "web_search") : "",
+        siteName: rawSiteName || undefined,
+        engine: entry.engine || undefined,
+      };
+    });
+
+    const payload = {
+      query: params.query,
+      provider: params.provider,
+      count: mapped.length,
+      totalResults,
+      tookMs: Date.now() - start,
+      externalContent: {
+        untrusted: true,
+        source: "web_search",
+        provider: params.provider,
+        wrapped: true,
+      },
+      results: mapped,
+      suggestions,
     };
     writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
     return payload;
@@ -714,13 +872,16 @@ export function createWebSearchTool(options?: {
   const provider = resolveSearchProvider(search);
   const perplexityConfig = resolvePerplexityConfig(search);
   const grokConfig = resolveGrokConfig(search);
+  const searxngConfig = resolveSearxngConfig(search);
 
   const description =
     provider === "perplexity"
       ? "Search the web using Perplexity Sonar (direct or via OpenRouter). Returns AI-synthesized answers with citations from real-time web search."
       : provider === "grok"
         ? "Search the web using xAI Grok. Returns AI-synthesized answers with citations from real-time web search."
-        : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
+        : provider === "searxng"
+          ? "Search the web using a SearXNG metasearch instance. Returns titles, URLs, and snippets aggregated from multiple search engines."
+          : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
 
   return {
     label: "Web Search",
@@ -728,14 +889,23 @@ export function createWebSearchTool(options?: {
     description,
     parameters: WebSearchSchema,
     execute: async (_toolCallId, args) => {
+      const searxngBaseUrl =
+        provider === "searxng" ? resolveSearxngBaseUrl(searxngConfig) : undefined;
+
+      if (provider === "searxng" && !searxngBaseUrl) {
+        return jsonResult(missingSearchKeyPayload(provider));
+      }
+
       const perplexityAuth =
         provider === "perplexity" ? resolvePerplexityApiKey(perplexityConfig) : undefined;
       const apiKey =
-        provider === "perplexity"
-          ? perplexityAuth?.apiKey
-          : provider === "grok"
-            ? resolveGrokApiKey(grokConfig)
-            : resolveSearchApiKey(search);
+        provider === "searxng"
+          ? "unused" // SearXNG doesn't need an API key
+          : provider === "perplexity"
+            ? perplexityAuth?.apiKey
+            : provider === "grok"
+              ? resolveGrokApiKey(grokConfig)
+              : resolveSearchApiKey(search);
 
       if (!apiKey) {
         return jsonResult(missingSearchKeyPayload(provider));
@@ -748,10 +918,16 @@ export function createWebSearchTool(options?: {
       const search_lang = readStringParam(params, "search_lang");
       const ui_lang = readStringParam(params, "ui_lang");
       const rawFreshness = readStringParam(params, "freshness");
-      if (rawFreshness && provider !== "brave" && provider !== "perplexity") {
+      if (
+        rawFreshness &&
+        provider !== "brave" &&
+        provider !== "perplexity" &&
+        provider !== "searxng"
+      ) {
         return jsonResult({
           error: "unsupported_freshness",
-          message: "freshness is only supported by the Brave and Perplexity web_search providers.",
+          message:
+            "freshness is only supported by the Brave, Perplexity, and SearXNG web_search providers.",
           docs: "https://docs.openclaw.ai/tools/web",
         });
       }
@@ -783,6 +959,8 @@ export function createWebSearchTool(options?: {
         perplexityModel: resolvePerplexityModel(perplexityConfig),
         grokModel: resolveGrokModel(grokConfig),
         grokInlineCitations: resolveGrokInlineCitations(grokConfig),
+        searxngBaseUrl,
+        searxngCategories: resolveSearxngCategories(searxngConfig),
       });
       return jsonResult(result);
     },

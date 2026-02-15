@@ -43,7 +43,7 @@ import { buildGroupChatContext, buildGroupIntro } from "./groups.js";
 import { buildInboundMetaSystemPrompt, buildInboundUserContextPrefix } from "./inbound-meta.js";
 import { resolveQueueSettings } from "./queue.js";
 import { routeReply } from "./route-reply.js";
-import { BARE_SESSION_RESET_PROMPT } from "./session-reset-prompt.js";
+import { DEFAULT_GREETING_PROMPT } from "./session-reset-prompt.js";
 import { ensureSkillSnapshot, prependSystemEvents } from "./session-updates.js";
 import { resolveTypingMode } from "./typing-mode.js";
 import { appendUntrustedContext } from "./untrusted-context.js";
@@ -207,7 +207,8 @@ export async function runPreparedReply(
   const isBareSessionReset =
     isNewSession &&
     ((baseBodyTrimmedRaw.length === 0 && rawBodyTrimmed.length > 0) || isBareNewOrReset);
-  const baseBodyFinal = isBareSessionReset ? BARE_SESSION_RESET_PROMPT : baseBody;
+  const greetingPrompt = sessionCfg?.greetingPrompt ?? DEFAULT_GREETING_PROMPT;
+  const baseBodyFinal = isBareSessionReset ? greetingPrompt : baseBody;
   const inboundUserContext = buildInboundUserContextPrefix(
     isNewSession
       ? {
