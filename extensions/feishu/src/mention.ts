@@ -9,6 +9,19 @@ export type MentionTarget = {
   key: string; // Placeholder in original message, e.g. @_user_1
 };
 
+function escapeRegExp(input: string): string {
+  return input.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function hasMentionTagForOpenId(message: string, openId: string): boolean {
+  const id = escapeRegExp(openId);
+  const pattern = new RegExp(
+    `<at\\b[^>]*\\b(?:id|user_id)\\s*=\\s*(?:"${id}"|'${id}'|${id})[^>]*>`,
+    "i",
+  );
+  return pattern.test(message);
+}
+
 /**
  * Extract mention targets from message event (excluding the bot itself)
  */
@@ -91,7 +104,7 @@ export function formatMentionAllForText(): string {
  * Format @mention for card message (lark_md)
  */
 export function formatMentionForCard(target: MentionTarget): string {
-  return `<at id=${target.openId}></at>`;
+  return `<at id="${target.openId}"></at>`;
 }
 
 /**
@@ -109,7 +122,12 @@ export function buildMentionedMessage(targets: MentionTarget[], message: string)
     return message;
   }
 
-  const mentionParts = targets.map((t) => formatMentionForText(t));
+  const mentionParts = targets
+    .filter((t) => !hasMentionTagForOpenId(message, t.openId))
+    .map((t) => formatMentionForText(t));
+  if (mentionParts.length === 0) {
+    return message;
+  }
   return `${mentionParts.join(" ")} ${message}`;
 }
 
@@ -121,6 +139,11 @@ export function buildMentionedCardContent(targets: MentionTarget[], message: str
     return message;
   }
 
-  const mentionParts = targets.map((t) => formatMentionForCard(t));
+  const mentionParts = targets
+    .filter((t) => !hasMentionTagForOpenId(message, t.openId))
+    .map((t) => formatMentionForCard(t));
+  if (mentionParts.length === 0) {
+    return message;
+  }
   return `${mentionParts.join(" ")} ${message}`;
 }

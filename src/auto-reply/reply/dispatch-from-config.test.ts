@@ -355,6 +355,7 @@ describe("dispatchReplyFromConfig", () => {
         content: "/search hello",
         timestamp: 1710000000000,
         metadata: expect.objectContaining({
+          hookSource: "dispatch_from_config",
           originatingChannel: "Telegram",
           originatingTo: "telegram:999",
           messageId: "sid-full",
@@ -440,5 +441,69 @@ describe("dispatchReplyFromConfig", () => {
         reason: "duplicate",
       }),
     );
+  });
+
+  it("suppresses native feishu dispatch while trigger dispatch is in-flight", async () => {
+    mocks.tryFastAbortFromMessage.mockResolvedValue({
+      handled: false,
+      aborted: false,
+    });
+
+    let releaseTrigger: (() => void) | undefined;
+    const triggerStarted = new Promise<void>((resolve) => {
+      releaseTrigger = resolve;
+    });
+
+    const triggerResolver = vi.fn(async () => {
+      await triggerStarted;
+      return { text: "trigger done" } satisfies ReplyPayload;
+    });
+    const nativeResolver = vi.fn(async () => ({ text: "native done" }) as ReplyPayload);
+
+    const triggerCtx = buildTestCtx({
+      Provider: "feishu",
+      Surface: "feishu",
+      SessionKey: "agent:pm:feishu:group:oc_chat_1",
+      MessageSid: "trigger:oc_chat_1:123",
+      To: "chat:oc_chat_1",
+    });
+    const nativeCtx = buildTestCtx({
+      Provider: "feishu",
+      Surface: "feishu",
+      SessionKey: "agent:pm:feishu:group:oc_chat_1",
+      MessageSid: "om_native_123",
+      To: "chat:oc_chat_1",
+    });
+
+    const triggerDispatch = dispatchReplyFromConfig({
+      ctx: triggerCtx,
+      cfg: { diagnostics: { enabled: true } } as OpenClawConfig,
+      dispatcher: createDispatcher(),
+      replyResolver: triggerResolver,
+    });
+
+    await Promise.resolve();
+
+    const nativeDispatcher = createDispatcher();
+    await dispatchReplyFromConfig({
+      ctx: nativeCtx,
+      cfg: { diagnostics: { enabled: true } } as OpenClawConfig,
+      dispatcher: nativeDispatcher,
+      replyResolver: nativeResolver,
+    });
+
+    expect(nativeResolver).not.toHaveBeenCalled();
+    expect(nativeDispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "feishu",
+        outcome: "skipped",
+        reason: "busy_trigger_dispatch",
+      }),
+    );
+
+    releaseTrigger?.();
+    await triggerDispatch;
+    expect(triggerResolver).toHaveBeenCalledTimes(1);
   });
 });

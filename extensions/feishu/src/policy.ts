@@ -72,13 +72,15 @@ export function resolveFeishuReplyPolicy(params: {
   isDirectMessage: boolean;
   globalConfig?: FeishuConfig;
   groupConfig?: FeishuGroupConfig;
-}): { requireMention: boolean } {
+}): { requireMention: boolean; replyOnAtAll: boolean } {
   if (params.isDirectMessage) {
-    return { requireMention: false };
+    return { requireMention: false, replyOnAtAll: false };
   }
 
   const requireMention =
     params.groupConfig?.requireMention ?? params.globalConfig?.requireMention ?? true;
+  const replyOnAtAll =
+    params.groupConfig?.replyOnAtAll ?? params.globalConfig?.replyOnAtAll ?? false;
 
-  return { requireMention };
+  return { requireMention, replyOnAtAll };
 }

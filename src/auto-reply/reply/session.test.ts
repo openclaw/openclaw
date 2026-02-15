@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { saveSessionStore } from "../../config/sessions.js";
+import { clearInternalHooks, registerInternalHook } from "../../hooks/internal-hooks.js";
 import { initSessionState } from "./session.js";
 
 let suiteRoot = "";
@@ -465,6 +466,98 @@ describe("initSessionState reset policy", () => {
 
     expect(result.isNewSession).toBe(false);
     expect(result.sessionId).toBe(existingSessionId);
+  });
+
+  it("fires command:new internal hook on auto rollover", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+    clearInternalHooks();
+    try {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-reset-hook-auto-"));
+      const storePath = path.join(root, "sessions.json");
+      const sessionKey = "agent:main:whatsapp:dm:s-hook";
+      const existingSessionId = "hook-auto-session";
+      await saveSessionStore(storePath, {
+        [sessionKey]: {
+          sessionId: existingSessionId,
+          updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
+        },
+      });
+
+      const hook = vi.fn<(event: unknown) => Promise<void>>(async () => {});
+      registerInternalHook("command:new", hook);
+
+      const cfg = { session: { store: storePath } } as OpenClawConfig;
+      const result = await initSessionState({
+        ctx: { Body: "hello", SessionKey: sessionKey },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      expect(result.resetTriggered).toBe(false);
+      expect(hook).toHaveBeenCalledTimes(1);
+      const firstCall = hook.mock.calls[0];
+      expect(firstCall).toBeDefined();
+      const event = firstCall?.[0] as {
+        type?: string;
+        action?: string;
+        context?: { commandSource?: string; previousSessionEntry?: { sessionId?: string } };
+      };
+      expect(event.type).toBe("command");
+      expect(event.action).toBe("new");
+      expect(event.context?.commandSource).toBe("auto-rollover");
+      expect(event.context?.previousSessionEntry?.sessionId).toBe(existingSessionId);
+    } finally {
+      clearInternalHooks();
+      vi.useRealTimers();
+    }
+  });
+
+  it("fires command:new internal hook on auto rollover", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+    clearInternalHooks();
+    try {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-reset-hook-auto-"));
+      const storePath = path.join(root, "sessions.json");
+      const sessionKey = "agent:main:whatsapp:dm:s-hook";
+      const existingSessionId = "hook-auto-session";
+      await saveSessionStore(storePath, {
+        [sessionKey]: {
+          sessionId: existingSessionId,
+          updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
+        },
+      });
+
+      const hook = vi.fn<(event: unknown) => Promise<void>>(async () => {});
+      registerInternalHook("command:new", hook);
+
+      const cfg = { session: { store: storePath } } as OpenClawConfig;
+      const result = await initSessionState({
+        ctx: { Body: "hello", SessionKey: sessionKey },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      expect(result.resetTriggered).toBe(false);
+      expect(hook).toHaveBeenCalledTimes(1);
+      const firstCall = hook.mock.calls[0];
+      expect(firstCall).toBeDefined();
+      const event = firstCall?.[0] as {
+        type?: string;
+        action?: string;
+        context?: { commandSource?: string; previousSessionEntry?: { sessionId?: string } };
+      };
+      expect(event.type).toBe("command");
+      expect(event.action).toBe("new");
+      expect(event.context?.commandSource).toBe("auto-rollover");
+      expect(event.context?.previousSessionEntry?.sessionId).toBe(existingSessionId);
+    } finally {
+      clearInternalHooks();
+      vi.useRealTimers();
+    }
   });
 });
 

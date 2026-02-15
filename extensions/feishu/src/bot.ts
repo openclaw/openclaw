@@ -1,16 +1,16 @@
-import type { ClawdbotConfig, RuntimeEnv } from "openclaw/plugin-sdk";
+import type { OpenClawConfig, RuntimeEnv } from "openclaw/plugin-sdk";
 import {
   buildPendingHistoryContextFromMap,
   recordPendingHistoryEntryIfEnabled,
   clearHistoryEntriesIfEnabled,
   DEFAULT_GROUP_HISTORY_LIMIT,
+  emitMessageReceived,
   type HistoryEntry,
 } from "openclaw/plugin-sdk";
 import type { FeishuMessageContext, FeishuMediaInfo, ResolvedFeishuAccount } from "./types.js";
 import type { DynamicAgentCreationConfig } from "./types.js";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
-import { tryRecordMessage } from "./dedup.js";
 import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
 import { downloadImageFeishu, downloadMessageResourceFeishu } from "./media.js";
 import { extractMentionTargets, extractMessageBody, isMentionForwardRequest } from "./mention.js";
@@ -23,6 +23,39 @@ import {
 import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu, sendMessageFeishu } from "./send.js";
+
+// --- Message deduplication ---
+// Prevent duplicate processing when WebSocket reconnects or Feishu redelivers messages.
+// Scoped per account so multi-bot processes don't suppress cross-account deliveries.
+const DEDUP_TTL_MS = 30 * 60 * 1000; // 30 minutes
+const DEDUP_MAX_SIZE = 5_000;
+const DEDUP_CLEANUP_INTERVAL_MS = 5 * 60 * 1000; // cleanup every 5 minutes
+const processedMessageIds = new Map<string, number>();
+let lastCleanupTime = Date.now();
+
+function tryRecordMessage(messageId: string, accountId?: string): boolean {
+  const now = Date.now();
+
+  // Throttled cleanup: evict expired entries at most once per interval
+  if (now - lastCleanupTime > DEDUP_CLEANUP_INTERVAL_MS) {
+    for (const [id, ts] of processedMessageIds) {
+      if (now - ts > DEDUP_TTL_MS) processedMessageIds.delete(id);
+    }
+    lastCleanupTime = now;
+  }
+
+  const dedupKey = accountId ? `${accountId}:${messageId}` : messageId;
+  if (processedMessageIds.has(dedupKey)) return false;
+
+  // Evict oldest entries if cache is full
+  if (processedMessageIds.size >= DEDUP_MAX_SIZE) {
+    const first = processedMessageIds.keys().next().value!;
+    processedMessageIds.delete(first);
+  }
+
+  processedMessageIds.set(dedupKey, now);
+  return true;
+}
 
 // --- Permission error extraction ---
 // Extract permission grant URL from Feishu API error response.
@@ -186,8 +219,42 @@ function parseMessageContent(content: string, messageType: string): string {
 function checkBotMentioned(event: FeishuMessageEvent, botOpenId?: string): boolean {
   const mentions = event.message.mentions ?? [];
   if (mentions.length === 0) return false;
-  if (!botOpenId) return false;
-  return mentions.some((m) => m.id.open_id === botOpenId);
+  // Compatibility fallback: if bot identity is unavailable, treat any explicit mention as addressed.
+  if (!botOpenId) return mentions.length > 0;
+  return mentions.some(
+    (m) => m.id.open_id === botOpenId || m.id.user_id === botOpenId || m.id.union_id === botOpenId,
+  );
+}
+
+function checkAtAllMentioned(event: FeishuMessageEvent): boolean {
+  const mentions = event.message.mentions ?? [];
+  for (const mention of mentions) {
+    const idCandidates = [mention.id.user_id, mention.id.open_id, mention.id.union_id]
+      .map((value) => value?.toLowerCase())
+      .filter(Boolean);
+    if (idCandidates.includes("all")) {
+      return true;
+    }
+
+    const mentionKey = mention.key.toLowerCase();
+    if (mentionKey.includes('user_id="all"') || mentionKey.includes("id=all")) {
+      return true;
+    }
+
+    const mentionName = mention.name.trim().toLowerCase();
+    if (mentionName === "all" || mentionName === "everyone" || mentionName === "所有人") {
+      return true;
+    }
+  }
+
+  const parsedText = parseMessageContent(event.message.content, event.message.message_type);
+
+  // Feishu sends @all as literal "@_all" in text (no mentions array, no XML tags)
+  if (/(?:^|\s)@_all(?:\s|$)/i.test(parsedText)) {
+    return true;
+  }
+
+  return /<at\b[^>]*\b(?:user_id|id)\s*=\s*["']?all["']?[^>]*>/i.test(parsedText);
 }
 
 function stripBotMention(
@@ -201,6 +268,60 @@ function stripBotMention(
     result = result.replace(new RegExp(mention.key, "g"), "").trim();
   }
   return result;
+}
+
+const RESET_COMMAND_TOKEN_RE = /(^|\s)(\/(?:new|reset))(?=\s|$)/i;
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function stripFeishuMentionTokensForCommand(
+  text: string,
+  mentions?: FeishuMessageEvent["message"]["mentions"],
+): string {
+  let result = text;
+  result = result.replace(/(?:^|\s)@_all(?=\s|$)/gi, " ");
+  result = result.replace(/<at\b[^>]*\b(?:user_id|id)\s*=\s*["']?all["']?[^>]*>/gi, " ");
+
+  for (const mention of mentions ?? []) {
+    if (mention.key) {
+      result = result.split(mention.key).join(" ");
+    }
+    const mentionName = mention.name.trim();
+    if (mentionName) {
+      const escapedName = escapeRegExp(mentionName);
+      result = result.replace(new RegExp(`(?:^|\\s)@${escapedName}(?=\\s|$)`, "gi"), " ");
+    }
+  }
+
+  return result.replace(/\s+/g, " ").trim();
+}
+
+function extractAtAllResetCommandSource(params: {
+  text: string;
+  mentionedAll: boolean;
+  mentions?: FeishuMessageEvent["message"]["mentions"];
+}): string | undefined {
+  if (!params.mentionedAll) {
+    return undefined;
+  }
+
+  const normalizedText = params.text.replace(/\s+/g, " ").trim();
+  if (!normalizedText) {
+    return undefined;
+  }
+
+  const match = RESET_COMMAND_TOKEN_RE.exec(normalizedText);
+  if (!match) {
+    return undefined;
+  }
+
+  const commandStart = (match.index ?? 0) + match[1].length;
+  const commandToken = match[2].toLowerCase();
+  const suffixRaw = normalizedText.slice(commandStart + match[2].length);
+  const cleanedSuffix = stripFeishuMentionTokensForCommand(suffixRaw, params.mentions);
+  return cleanedSuffix ? `${commandToken} ${cleanedSuffix}` : commandToken;
 }
 
 /**
@@ -305,7 +426,7 @@ function inferPlaceholder(messageType: string): string {
  * Similar to Discord's resolveMediaList().
  */
 async function resolveFeishuMediaList(params: {
-  cfg: ClawdbotConfig;
+  cfg: OpenClawConfig;
   messageId: string;
   messageType: string;
   content: string;
@@ -460,6 +581,7 @@ export function parseFeishuMessageEvent(
 ): FeishuMessageContext {
   const rawContent = parseMessageContent(event.message.content, event.message.message_type);
   const mentionedBot = checkBotMentioned(event, botOpenId);
+  const mentionedAll = event.message.chat_type === "group" ? checkAtAllMentioned(event) : false;
   const content = stripBotMention(rawContent, event.message.mentions);
 
   const ctx: FeishuMessageContext = {
@@ -469,6 +591,7 @@ export function parseFeishuMessageEvent(
     senderOpenId: event.sender.sender_id.open_id || "",
     chatType: event.message.chat_type,
     mentionedBot,
+    mentionedAll,
     rootId: event.message.root_id || undefined,
     parentId: event.message.parent_id || undefined,
     content,
@@ -490,7 +613,7 @@ export function parseFeishuMessageEvent(
 }
 
 export async function handleFeishuMessage(params: {
-  cfg: ClawdbotConfig;
+  cfg: OpenClawConfig;
   event: FeishuMessageEvent;
   botOpenId?: string;
   runtime?: RuntimeEnv;
@@ -502,19 +625,26 @@ export async function handleFeishuMessage(params: {
   // Resolve account with merged config
   const account = resolveFeishuAccount({ cfg, accountId });
   const feishuCfg = account.config;
+  const disableBlockStreamingFromConfig =
+    typeof feishuCfg?.blockStreaming === "boolean" ? !feishuCfg.blockStreaming : undefined;
 
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
 
-  // Dedup check: skip if this message was already processed
+  // Dedup check: skip if this message was already processed by this account
   const messageId = event.message.message_id;
-  if (!tryRecordMessage(messageId)) {
-    log(`feishu: skipping duplicate message ${messageId}`);
+  if (!tryRecordMessage(messageId, account.accountId)) {
+    log(`feishu: skipping duplicate message ${messageId} (account=${account.accountId})`);
     return;
   }
 
   let ctx = parseFeishuMessageEvent(event, botOpenId);
   const isGroup = ctx.chatType === "group";
+
+  if (event.sender.sender_type === "bot" || (botOpenId && ctx.senderOpenId === botOpenId)) {
+    log(`feishu[${account.accountId}]: ignoring bot-origin message in ${ctx.chatId}`);
+    return;
+  }
 
   // Resolve sender display name (best-effort) so the agent can attribute messages correctly.
   const senderResult = await resolveFeishuSenderName({
@@ -557,6 +687,7 @@ export async function handleFeishuMessage(params: {
   const dmPolicy = feishuCfg?.dmPolicy ?? "pairing";
   const configAllowFrom = feishuCfg?.allowFrom ?? [];
   const useAccessGroups = cfg.commands?.useAccessGroups !== false;
+  let atAllResetCommandSource: string | undefined;
 
   if (isGroup) {
     const groupPolicy = feishuCfg?.groupPolicy ?? "open";
@@ -591,38 +722,87 @@ export async function handleFeishuMessage(params: {
       }
     }
 
-    const { requireMention } = resolveFeishuReplyPolicy({
+    const { requireMention, replyOnAtAll } = resolveFeishuReplyPolicy({
       isDirectMessage: false,
       globalConfig: feishuCfg,
       groupConfig,
     });
 
+    atAllResetCommandSource = extractAtAllResetCommandSource({
+      text: ctx.content,
+      mentionedAll: ctx.mentionedAll === true,
+      mentions: event.message.mentions,
+    });
+
     if (requireMention && !ctx.mentionedBot) {
-      log(
-        `feishu[${account.accountId}]: message in group ${ctx.chatId} did not mention bot, recording to history`,
-      );
-      if (chatHistories) {
-        recordPendingHistoryEntryIfEnabled({
-          historyMap: chatHistories,
-          historyKey: ctx.chatId,
-          limit: historyLimit,
-          entry: {
-            sender: ctx.senderOpenId,
-            body: `${ctx.senderName ?? ctx.senderOpenId}: ${ctx.content}`,
+      if (replyOnAtAll && ctx.mentionedAll) {
+        log(
+          `feishu[${account.accountId}]: group ${ctx.chatId} triggered by @all mention (replyOnAtAll=true)`,
+        );
+      } else if (atAllResetCommandSource) {
+        log(`feishu[${account.accountId}]: group ${ctx.chatId} accepted @all reset command bypass`);
+      } else {
+        log(
+          `feishu[${account.accountId}]: message in group ${ctx.chatId} did not mention bot, recording to history`,
+        );
+        if (chatHistories) {
+          recordPendingHistoryEntryIfEnabled({
+            historyMap: chatHistories,
+            historyKey: ctx.chatId,
+            limit: historyLimit,
+            entry: {
+              sender: ctx.senderOpenId,
+              body: `${ctx.senderName ?? ctx.senderOpenId}: ${ctx.content}`,
+              timestamp: Date.now(),
+              messageId: ctx.messageId,
+            },
+          });
+        }
+
+        // Emit message_received hook so plugins (e.g. bot-company) can journal
+        // non-@mention messages. The metadata shape mirrors dispatch-from-config.
+        const mentionsForHook = (event.message.mentions ?? []).map((m) => ({
+          userId: m.id.open_id ?? m.id.user_id ?? "",
+          userName: m.name,
+        }));
+        emitMessageReceived(
+          {
+            from: `feishu:${ctx.senderOpenId}`,
+            content: ctx.content,
             timestamp: Date.now(),
-            messageId: ctx.messageId,
+            metadata: {
+              provider: "feishu",
+              surface: "feishu",
+              to: `chat:${ctx.chatId}`,
+              messageId: ctx.messageId,
+              senderId: ctx.senderOpenId,
+              senderName: ctx.senderName ?? ctx.senderOpenId,
+              rootId: ctx.rootId,
+              parentId: ctx.parentId,
+              msgType: ctx.contentType,
+              mentionsJson: JSON.stringify(mentionsForHook),
+              eventId: event.message.message_id,
+              hookSource: "feishu_extension_ingress",
+            },
           },
-        });
+          {
+            channelId: "feishu",
+            accountId: account.accountId,
+            conversationId: `chat:${ctx.chatId}`,
+          },
+        );
+
+        return;
       }
-      return;
     }
   } else {
   }
 
   try {
     const core = getFeishuRuntime();
+    const commandSource = atAllResetCommandSource ?? ctx.content;
     const shouldComputeCommandAuthorized = core.channel.commands.shouldComputeCommandAuthorized(
-      ctx.content,
+      commandSource,
       cfg,
     );
     const storeAllowFrom =
@@ -670,18 +850,55 @@ export async function handleFeishuMessage(params: {
       return;
     }
 
-    const commandAllowFrom = isGroup ? (groupConfig?.allowFrom ?? []) : effectiveDmAllowFrom;
-    const senderAllowedForCommands = resolveFeishuAllowlistMatch({
-      allowFrom: commandAllowFrom,
-      senderId: ctx.senderOpenId,
-      senderName: ctx.senderName,
-    }).allowed;
+    const commandAuthorizer = isGroup
+      ? (() => {
+          const groupSenderAllowFrom = groupConfig?.allowFrom ?? [];
+          if (groupSenderAllowFrom.length > 0) {
+            const senderAllowed = resolveFeishuAllowlistMatch({
+              allowFrom: groupSenderAllowFrom,
+              senderId: ctx.senderOpenId,
+              senderName: ctx.senderName,
+            }).allowed;
+            return {
+              configured: true,
+              allowed: senderAllowed,
+            };
+          }
+
+          const commandGroupPolicy = feishuCfg?.groupPolicy ?? "open";
+          if (commandGroupPolicy === "open") {
+            return {
+              configured: true,
+              allowed: true,
+            };
+          }
+
+          const commandGroupAllowFrom = feishuCfg?.groupAllowFrom ?? [];
+          const groupAllowedForCommands = resolveFeishuAllowlistMatch({
+            allowFrom: commandGroupAllowFrom,
+            senderId: ctx.chatId,
+            senderName: undefined,
+          }).allowed;
+          return {
+            configured: commandGroupAllowFrom.length > 0,
+            allowed: groupAllowedForCommands,
+          };
+        })()
+      : (() => {
+          const senderAllowed = resolveFeishuAllowlistMatch({
+            allowFrom: effectiveDmAllowFrom,
+            senderId: ctx.senderOpenId,
+            senderName: ctx.senderName,
+          }).allowed;
+          return {
+            configured: effectiveDmAllowFrom.length > 0,
+            allowed: senderAllowed,
+          };
+        })();
     const commandAuthorized = shouldComputeCommandAuthorized
       ? core.channel.commands.resolveCommandAuthorizedFromAuthorizers({
           useAccessGroups,
-          authorizers: [
-            { configured: commandAllowFrom.length > 0, allowed: senderAllowedForCommands },
-          ],
+          authorizers: [commandAuthorizer],
         })
       : undefined;
 
@@ -856,18 +1073,24 @@ export async function handleFeishuMessage(params: {
         chatId: ctx.chatId,
         replyToMessageId: ctx.messageId,
         accountId: account.accountId,
+        disableBlockStreaming: disableBlockStreamingFromConfig,
+        enableThinkingCard: false,
       });
 
       log(`feishu[${account.accountId}]: dispatching permission error notification to agent`);
 
-      await core.channel.reply.dispatchReplyFromConfig({
-        ctx: permissionCtx,
-        cfg,
-        dispatcher: permDispatcher,
-        replyOptions: permReplyOptions,
-      });
-
-      markPermIdle();
+      await (async () => {
+        try {
+          await core.channel.reply.dispatchReplyFromConfig({
+            ctx: permissionCtx,
+            cfg,
+            dispatcher: permDispatcher,
+            replyOptions: permReplyOptions,
+          });
+        } finally {
+          markPermIdle();
+        }
+      })();
     }
 
     const body = core.channel.reply.formatAgentEnvelope({
@@ -908,12 +1131,18 @@ export async function handleFeishuMessage(params: {
           }))
         : undefined;
 
+    // Serialize raw Feishu mentions for downstream plugins (e.g. bot-company journal).
+    const mentionsForCtx = (event.message.mentions ?? []).map((m) => ({
+      user_id: m.id.open_id ?? m.id.user_id ?? "",
+      name: m.name,
+    }));
+
     const ctxPayload = core.channel.reply.finalizeInboundContext({
       Body: combinedBody,
       BodyForAgent: ctx.content,
       InboundHistory: inboundHistory,
-      RawBody: ctx.content,
-      CommandBody: ctx.content,
+      RawBody: commandSource,
+      CommandBody: commandSource,
       From: feishuFrom,
       To: feishuTo,
       SessionKey: route.sessionKey,
@@ -931,29 +1160,44 @@ export async function handleFeishuMessage(params: {
       CommandAuthorized: commandAuthorized,
       OriginatingChannel: "feishu" as const,
       OriginatingTo: feishuTo,
+      RootId: ctx.rootId,
+      ParentId: ctx.parentId,
+      MsgType: ctx.contentType,
+      MentionsJson: JSON.stringify(mentionsForCtx),
       ...mediaPayload,
     });
 
-    const { dispatcher, replyOptions, markDispatchIdle } = createFeishuReplyDispatcher({
-      cfg,
-      agentId: route.agentId,
-      runtime: runtime as RuntimeEnv,
-      chatId: ctx.chatId,
-      replyToMessageId: ctx.messageId,
-      mentionTargets: ctx.mentionTargets,
-      accountId: account.accountId,
-    });
+    const { dispatcher, replyOptions, markDispatchIdle, finalizeThinkingCard } =
+      createFeishuReplyDispatcher({
+        cfg,
+        agentId: route.agentId,
+        runtime: runtime as RuntimeEnv,
+        chatId: ctx.chatId,
+        replyToMessageId: ctx.messageId,
+        mentionTargets: ctx.mentionTargets,
+        accountId: account.accountId,
+        disableBlockStreaming: disableBlockStreamingFromConfig,
+      });
 
     log(`feishu[${account.accountId}]: dispatching to agent (session=${route.sessionKey})`);
 
-    const { queuedFinal, counts } = await core.channel.reply.dispatchReplyFromConfig({
-      ctx: ctxPayload,
-      cfg,
-      dispatcher,
-      replyOptions,
-    });
-
-    markDispatchIdle();
+    const { queuedFinal, counts } = await (async () => {
+      try {
+        return await core.channel.reply.dispatchReplyFromConfig({
+          ctx: ctxPayload,
+          cfg,
+          dispatcher,
+          replyOptions: {
+            ...replyOptions,
+            disableBlockStreaming:
+              replyOptions.disableBlockStreaming ?? disableBlockStreamingFromConfig,
+          },
+        });
+      } finally {
+        markDispatchIdle();
+        await finalizeThinkingCard();
+      }
+    })();
 
     if (isGroup && historyKey && chatHistories) {
       clearHistoryEntriesIfEnabled({

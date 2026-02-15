@@ -4,7 +4,11 @@ import { parseFeishuMessageEvent } from "./bot.js";
 // Helper to build a minimal FeishuMessageEvent for testing
 function makeEvent(
   chatType: "p2p" | "group",
-  mentions?: Array<{ key: string; name: string; id: { open_id?: string } }>,
+  mentions?: Array<{
+    key: string;
+    name: string;
+    id: { open_id?: string; user_id?: string; union_id?: string };
+  }>,
 ) {
   return {
     sender: {
@@ -46,19 +50,27 @@ describe("parseFeishuMessageEvent – mentionedBot", () => {
     expect(ctx.mentionedBot).toBe(false);
   });
 
-  it("returns mentionedBot=false when botOpenId is undefined (unknown bot)", () => {
+  it("returns mentionedBot=true when botOpenId is undefined (compat fallback)", () => {
     const event = makeEvent("group", [
       { key: "@_user_1", name: "Alice", id: { open_id: "ou_alice" } },
     ]);
     const ctx = parseFeishuMessageEvent(event as any, undefined);
-    expect(ctx.mentionedBot).toBe(false);
+    expect(ctx.mentionedBot).toBe(true);
   });
 
-  it("returns mentionedBot=false when botOpenId is empty string (probe failed)", () => {
+  it("returns mentionedBot=true when botOpenId is empty string (probe failed)", () => {
     const event = makeEvent("group", [
       { key: "@_user_1", name: "Alice", id: { open_id: "ou_alice" } },
     ]);
     const ctx = parseFeishuMessageEvent(event as any, "");
-    expect(ctx.mentionedBot).toBe(false);
+    expect(ctx.mentionedBot).toBe(true);
+  });
+
+  it("returns mentionedBot=true when botOpenId matches user_id fallback", () => {
+    const event = makeEvent("group", [
+      { key: "@_user_1", name: "Bot", id: { open_id: "ou_other", user_id: "u_bot_123" } },
+    ]);
+    const ctx = parseFeishuMessageEvent(event as any, "u_bot_123");
+    expect(ctx.mentionedBot).toBe(true);
   });
 });

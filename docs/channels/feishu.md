@@ -444,18 +444,18 @@ openclaw pairing list feishu
 
 ### Message limits
 
-- `textChunkLimit`: outbound text chunk size (default: 2000 chars)
+- `textChunkLimit`: outbound text chunk size (default: 4000 chars)
 - `mediaMaxMb`: media upload/download limit (default: 30MB)
 
 ### Streaming
 
-Feishu supports streaming replies via interactive cards. When enabled, the bot updates a card as it generates text.
+Feishu supports true streaming replies. When enabled, the bot sends an initial message and progressively edits/patches it as text is generated.
 
 ```json5
 {
   channels: {
     feishu: {
-      streaming: true, // enable streaming card output (default true)
+      streaming: true, // enable true streaming output (default true)
       blockStreaming: true, // enable block-level streaming (default true)
     },
   },
@@ -463,6 +463,12 @@ Feishu supports streaming replies via interactive cards. When enabled, the bot u
 ```
 
 Set `streaming: false` to wait for the full reply before sending.
+
+Notes:
+
+- `streaming` uses partial text updates for low-latency output.
+- `blockStreaming` controls block-level chunk delivery when partial streaming is disabled.
+- `renderMode: "raw"` streams via text edits; `"auto"`/`"card"` stream via interactive card patching.
 
 ### Multi-agent routing
 
@@ -540,7 +546,7 @@ Key options:
 | `channels.feishu.groupAllowFrom`                  | Group allowlist                 | -         |
 | `channels.feishu.groups.<chat_id>.requireMention` | Require @mention                | `true`    |
 | `channels.feishu.groups.<chat_id>.enabled`        | Enable group                    | `true`    |
-| `channels.feishu.textChunkLimit`                  | Message chunk size              | `2000`    |
+| `channels.feishu.textChunkLimit`                  | Message chunk size              | `4000`    |
 | `channels.feishu.mediaMaxMb`                      | Media size limit                | `30`      |
 | `channels.feishu.streaming`                       | Enable streaming card output    | `true`    |
 | `channels.feishu.blockStreaming`                  | Enable block streaming          | `true`    |

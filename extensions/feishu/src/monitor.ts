@@ -57,6 +57,8 @@ function registerEventHandlers(
   eventDispatcher.register({
     "im.message.receive_v1": async (data) => {
       try {
+        // Keep raw inbound payload for debugging mention parsing edge cases.
+        log(`feishu[${accountId}]: inbound message payload=${JSON.stringify(data)}`);
         const event = data as unknown as FeishuMessageEvent;
         const promise = handleFeishuMessage({
           cfg,

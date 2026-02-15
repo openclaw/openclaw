@@ -70,6 +70,21 @@ describe("handleFeishuMessage command authorization", () => {
     } as unknown as PluginRuntime);
   });
 
+  const buildGroupEvent = (messageId: string, text: string): FeishuMessageEvent => ({
+    sender: {
+      sender_id: {
+        open_id: "ou-attacker",
+      },
+    },
+    message: {
+      message_id: messageId,
+      chat_id: "oc-group",
+      chat_type: "group",
+      message_type: "text",
+      content: JSON.stringify({ text }),
+    },
+  });
+
   it("uses authorizer resolution instead of hardcoded CommandAuthorized=true", async () => {
     const cfg: ClawdbotConfig = {
       commands: { useAccessGroups: true },
@@ -212,14 +227,15 @@ describe("handleFeishuMessage command authorization", () => {
     expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
   });
 
-  it("computes group command authorization from group allowFrom", async () => {
+  it("authorizes group commands when groupPolicy is open", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(true);
-    mockResolveCommandAuthorizedFromAuthorizers.mockReturnValue(false);
+    mockResolveCommandAuthorizedFromAuthorizers.mockReturnValue(true);
 
     const cfg: ClawdbotConfig = {
       commands: { useAccessGroups: true },
       channels: {
         feishu: {
+          groupPolicy: "open",
           groups: {
             "oc-group": {
               requireMention: false,
@@ -252,14 +268,166 @@ describe("handleFeishuMessage command authorization", () => {
 
     expect(mockResolveCommandAuthorizedFromAuthorizers).toHaveBeenCalledWith({
       useAccessGroups: true,
-      authorizers: [{ configured: false, allowed: false }],
+      authorizers: [{ configured: true, allowed: true }],
     });
     expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
       expect.objectContaining({
         ChatType: "group",
-        CommandAuthorized: false,
+        CommandAuthorized: true,
         SenderId: "ou-attacker",
       }),
     );
+  });
+
+  it("authorizes group commands when groupAllowFrom contains the chat id", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(true);
+    mockResolveCommandAuthorizedFromAuthorizers.mockReturnValue(true);
+
+    const cfg: ClawdbotConfig = {
+      commands: { useAccessGroups: true },
+      channels: {
+        feishu: {
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["oc-group"],
+          groups: {
+            "oc-group": {
+              requireMention: false,
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-attacker",
+        },
+      },
+      message: {
+        message_id: "msg-group-command-auth-group-allowlist",
+        chat_id: "oc-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "/status" }),
+      },
+    };
+
+    await handleFeishuMessage({
+      cfg,
+      event,
+      runtime: { log: vi.fn(), error: vi.fn() } as RuntimeEnv,
+    });
+
+    expect(mockResolveCommandAuthorizedFromAuthorizers).toHaveBeenCalledWith({
+      useAccessGroups: true,
+      authorizers: [{ configured: true, allowed: true }],
+    });
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ChatType: "group",
+        CommandAuthorized: true,
+        SenderId: "ou-attacker",
+      }),
+    );
+  });
+
+  it("extracts /new from '@_all ... /new' and bypasses mention gating", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(true);
+    mockResolveCommandAuthorizedFromAuthorizers.mockReturnValue(true);
+
+    const cfg: ClawdbotConfig = {
+      commands: { useAccessGroups: true },
+      channels: {
+        feishu: {
+          groupPolicy: "open",
+          groups: {
+            "oc-group": {
+              requireMention: true,
+              replyOnAtAll: false,
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    await handleFeishuMessage({
+      cfg,
+      event: buildGroupEvent("msg-group-atall-mixed-new", "@_all 哈哈哈 /new"),
+      runtime: { log: vi.fn(), error: vi.fn() } as RuntimeEnv,
+    });
+
+    expect(mockShouldComputeCommandAuthorized).toHaveBeenCalledWith("/new", cfg);
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        RawBody: "/new",
+        CommandBody: "/new",
+        CommandAuthorized: true,
+      }),
+    );
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it("extracts /new from '... /new @_all' and strips trailing @all token", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(true);
+    mockResolveCommandAuthorizedFromAuthorizers.mockReturnValue(true);
+
+    const cfg: ClawdbotConfig = {
+      commands: { useAccessGroups: true },
+      channels: {
+        feishu: {
+          groupPolicy: "open",
+          groups: {
+            "oc-group": {
+              requireMention: true,
+              replyOnAtAll: false,
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    await handleFeishuMessage({
+      cfg,
+      event: buildGroupEvent("msg-group-tail-atall-new", "你们都来 /new @_all"),
+      runtime: { log: vi.fn(), error: vi.fn() } as RuntimeEnv,
+    });
+
+    expect(mockShouldComputeCommandAuthorized).toHaveBeenCalledWith("/new", cfg);
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        RawBody: "/new",
+        CommandBody: "/new",
+        CommandAuthorized: true,
+      }),
+    );
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not bypass mention gating for @all messages without reset command", async () => {
+    const cfg: ClawdbotConfig = {
+      commands: { useAccessGroups: true },
+      channels: {
+        feishu: {
+          groupPolicy: "open",
+          groups: {
+            "oc-group": {
+              requireMention: true,
+              replyOnAtAll: false,
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    await handleFeishuMessage({
+      cfg,
+      event: buildGroupEvent("msg-group-atall-no-command", "@_all 哈哈哈"),
+      runtime: { log: vi.fn(), error: vi.fn() } as RuntimeEnv,
+    });
+
+    expect(mockShouldComputeCommandAuthorized).not.toHaveBeenCalled();
+    expect(mockFinalizeInboundContext).not.toHaveBeenCalled();
+    expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
   });
 });

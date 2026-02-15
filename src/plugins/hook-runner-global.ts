@@ -3,6 +3,10 @@
  *
  * Singleton hook runner that's initialized when plugins are loaded
  * and can be called from anywhere in the codebase.
+ *
+ * Uses globalThis with Symbol.for() keys to survive Rollup chunk splitting.
+ * Without this, the bundler inlines this module into multiple chunks,
+ * each with its own independent `let globalHookRunner = null`.
  */
 
 import type { PluginRegistry } from "./registry.js";
@@ -12,16 +16,18 @@ import { createHookRunner, type HookRunner } from "./hooks.js";
 
 const log = createSubsystemLogger("plugins");
 
-let globalHookRunner: HookRunner | null = null;
-let globalRegistry: PluginRegistry | null = null;
+const RUNNER_KEY = Symbol.for("openclaw.globalHookRunner");
+const REGISTRY_KEY = Symbol.for("openclaw.globalPluginRegistry");
+
+const g = globalThis as Record<symbol, unknown>;
 
 /**
  * Initialize the global hook runner with a plugin registry.
  * Called once when plugins are loaded during gateway startup.
  */
 export function initializeGlobalHookRunner(registry: PluginRegistry): void {
-  globalRegistry = registry;
-  globalHookRunner = createHookRunner(registry, {
+  g[REGISTRY_KEY] = registry;
+  g[RUNNER_KEY] = createHookRunner(registry, {
     logger: {
       debug: (msg) => log.debug(msg),
       warn: (msg) => log.warn(msg),
@@ -41,7 +47,7 @@ export function initializeGlobalHookRunner(registry: PluginRegistry): void {
  * Returns null if plugins haven't been loaded yet.
  */
 export function getGlobalHookRunner(): HookRunner | null {
-  return globalHookRunner;
+  return (g[RUNNER_KEY] as HookRunner) ?? null;
 }
 
 /**
@@ -49,14 +55,14 @@ export function getGlobalHookRunner(): HookRunner | null {
  * Returns null if plugins haven't been loaded yet.
  */
 export function getGlobalPluginRegistry(): PluginRegistry | null {
-  return globalRegistry;
+  return (g[REGISTRY_KEY] as PluginRegistry) ?? null;
 }
 
 /**
  * Check if any hooks are registered for a given hook name.
  */
 export function hasGlobalHooks(hookName: Parameters<HookRunner["hasHooks"]>[0]): boolean {
-  return globalHookRunner?.hasHooks(hookName) ?? false;
+  return getGlobalHookRunner()?.hasHooks(hookName) ?? false;
 }
 
 export async function runGlobalGatewayStopSafely(params: {
@@ -83,6 +89,6 @@ export async function runGlobalGatewayStopSafely(params: {
  * Reset the global hook runner (for testing).
  */
 export function resetGlobalHookRunner(): void {
-  globalHookRunner = null;
-  globalRegistry = null;
+  g[RUNNER_KEY] = undefined;
+  g[REGISTRY_KEY] = undefined;
 }

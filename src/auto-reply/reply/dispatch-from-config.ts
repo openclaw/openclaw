@@ -21,6 +21,42 @@ import { isRoutableChannel, routeReply } from "./route-reply.js";
 const AUDIO_PLACEHOLDER_RE = /^<media:audio>(\s*\([^)]*\))?$/i;
 const AUDIO_HEADER_RE = /^\[Audio\b/i;
 
+const activeFeishuDispatchBySession = new Map<string, { messageId: string }>();
+
+const isTriggerMessageId = (value?: string | null): boolean =>
+  Boolean(value && value.startsWith("trigger:"));
+
+const shouldSuppressFeishuInboundWhileTriggerRunning = (params: {
+  channel: string;
+  sessionKey?: string;
+  messageId?: string;
+}): boolean => {
+  const { channel, sessionKey, messageId } = params;
+  if (channel !== "feishu" || !sessionKey || !messageId || isTriggerMessageId(messageId)) {
+    return false;
+  }
+  const active = activeFeishuDispatchBySession.get(sessionKey);
+  return Boolean(active && isTriggerMessageId(active.messageId));
+};
+
+const markFeishuDispatchActive = (params: {
+  channel: string;
+  sessionKey?: string;
+  messageId?: string;
+}): (() => void) => {
+  const { channel, sessionKey, messageId } = params;
+  if (channel !== "feishu" || !sessionKey || !messageId) {
+    return () => {};
+  }
+  activeFeishuDispatchBySession.set(sessionKey, { messageId });
+  return () => {
+    const current = activeFeishuDispatchBySession.get(sessionKey);
+    if (current?.messageId === messageId) {
+      activeFeishuDispatchBySession.delete(sessionKey);
+    }
+  };
+};
+
 const normalizeMediaType = (value: string): string => value.split(";")[0]?.trim().toLowerCase();
 
 const isInboundAudioContext = (ctx: FinalizedMsgContext): boolean => {
@@ -145,6 +181,17 @@ export async function dispatchReplyFromConfig(params: {
     return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
   }
 
+  if (shouldSuppressFeishuInboundWhileTriggerRunning({ channel, sessionKey, messageId })) {
+    recordProcessed("skipped", { reason: "busy_trigger_dispatch" });
+    return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
+  }
+
+  const clearActiveFeishuDispatch = markFeishuDispatchActive({
+    channel,
+    sessionKey,
+    messageId,
+  });
+
   const inboundAudio = isInboundAudioContext(ctx);
   const sessionTtsAuto = resolveSessionTtsAuto(ctx, cfg);
   const hookRunner = getGlobalHookRunner();
@@ -184,6 +231,11 @@ export async function dispatchReplyFromConfig(params: {
             senderName: ctx.SenderName,
             senderUsername: ctx.SenderUsername,
             senderE164: ctx.SenderE164,
+            rootId: (ctx as Record<string, unknown>).RootId,
+            parentId: (ctx as Record<string, unknown>).ParentId,
+            msgType: (ctx as Record<string, unknown>).MsgType,
+            mentionsJson: (ctx as Record<string, unknown>).MentionsJson,
+            hookSource: "dispatch_from_config",
           },
         },
         {
@@ -451,5 +503,7 @@ export async function dispatchReplyFromConfig(params: {
     recordProcessed("error", { error: String(err) });
     markIdle("message_error");
     throw err;
+  } finally {
+    clearActiveFeishuDispatch();
   }
 }
