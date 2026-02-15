@@ -653,7 +653,11 @@ export async function runEmbeddedAttempt(
 
       const queueHandle: EmbeddedPiQueueHandle = {
         queueMessage: async (text: string) => {
-          await activeSession.steer(text);
+          // Use followUp instead of steer so the current turn's
+          // tool calls complete before the user message is injected.
+          // steer() skips remaining tools ("Skipped due to queued
+          // user message"), while followUp() lets work finish.
+          await activeSession.followUp(text);
         },
         isStreaming: () => activeSession.isStreaming,
         isCompacting: () => subscription.isCompacting(),
