@@ -73,8 +73,10 @@ export async function reactSlackMessage(
   emoji: string,
   opts: SlackActionClientOpts = {},
 ) {
-  const client = await getClient(opts);
+  const token = resolveToken(opts.token, opts.accountId);
+  const client = opts.client ?? createSlackWebClient(token);
   await client.reactions.add({
+    token,
     channel: channelId,
     timestamp: messageId,
     name: normalizeEmoji(emoji),
@@ -87,8 +89,10 @@ export async function removeSlackReaction(
   emoji: string,
   opts: SlackActionClientOpts = {},
 ) {
-  const client = await getClient(opts);
+  const token = resolveToken(opts.token, opts.accountId);
+  const client = opts.client ?? createSlackWebClient(token);
   await client.reactions.remove({
+    token,
     channel: channelId,
     timestamp: messageId,
     name: normalizeEmoji(emoji),
@@ -100,7 +104,8 @@ export async function removeOwnSlackReactions(
   messageId: string,
   opts: SlackActionClientOpts = {},
 ): Promise<string[]> {
-  const client = await getClient(opts);
+  const token = resolveToken(opts.token, opts.accountId);
+  const client = opts.client ?? createSlackWebClient(token);
   const userId = await resolveBotUserId(client);
   const reactions = await listSlackReactions(channelId, messageId, { client });
   const toRemove = new Set<string>();
@@ -120,6 +125,7 @@ export async function removeOwnSlackReactions(
   await Promise.all(
     Array.from(toRemove, (name) =>
       client.reactions.remove({
+        token,
         channel: channelId,
         timestamp: messageId,
         name,
