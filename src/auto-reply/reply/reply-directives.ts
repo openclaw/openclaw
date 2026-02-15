@@ -30,6 +30,9 @@ export function parseReplyDirectives(
     text = replyParsed.text;
   }
 
+  // Strip TTS tags [[tts]]...[[/tts]] to prevent them from being sent to users
+  text = text.replace(/\[\[\s*tts\s*\]\]([\s\S]*?)\[\[\s*\/tts\s*\]\]/gi, "$1");
+
   const silentToken = options.silentToken ?? SILENT_REPLY_TOKEN;
   const isSilent = isSilentReplyText(text, silentToken);
   if (isSilent) {
