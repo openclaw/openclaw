@@ -4,6 +4,7 @@ import {
   resetModelCatalogCacheForTest,
 } from "../agents/model-catalog.js";
 import { loadConfig } from "../config/config.js";
+import { resolveAgentDir } from "../agents/agent-scope.js";
 
 export type GatewayModelChoice = ModelCatalogEntry;
 
@@ -14,6 +15,11 @@ export function __resetModelCatalogCacheForTest() {
   resetModelCatalogCacheForTest();
 }
 
-export async function loadGatewayModelCatalog(): Promise<GatewayModelChoice[]> {
-  return await loadModelCatalog({ config: loadConfig() });
+export async function loadGatewayModelCatalog(agentId?: string): Promise<GatewayModelChoice[]> {
+  const cfg = loadConfig();
+  
+  // If agentId is provided, use the agent-specific directory for model discovery
+  const agentDir = agentId ? resolveAgentDir(cfg, agentId) : undefined;
+  
+  return await loadModelCatalog({ config: cfg, agentDir });
 }
