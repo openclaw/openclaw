@@ -186,6 +186,12 @@ async function scanLaunchdDir(params: {
     if (marker === "openclaw" && isOpenClawGatewayLaunchdService(label, contents)) {
       continue;
     }
+    // Skip plists that merely reference .openclaw/ paths (e.g., workspace scripts)
+    // but don't actually run the gateway. Only flag services that look like gateway
+    // processes — their ProgramArguments should contain "gateway". (#15849)
+    if (marker === "openclaw" && !contents.toLowerCase().includes("gateway")) {
+      continue;
+    }
     results.push({
       platform: "darwin",
       label,
@@ -231,6 +237,10 @@ async function scanSystemdDir(params: {
       continue;
     }
     if (marker === "openclaw" && isOpenClawGatewaySystemdService(name, contents)) {
+      continue;
+    }
+    // Skip units that merely reference .openclaw/ paths but don't run the gateway (#15849)
+    if (marker === "openclaw" && !contents.toLowerCase().includes("gateway")) {
       continue;
     }
     results.push({
