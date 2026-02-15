@@ -4,6 +4,7 @@ import {
   extractTextFromMessage,
   extractThinkingFromMessage,
   isCommandMessage,
+  sanitizeRenderableText,
 } from "./tui-formatters.js";
 
 describe("extractTextFromMessage", () => {
@@ -58,6 +59,24 @@ describe("extractTextFromMessage", () => {
 
     expect(text).toBe("[thinking]\nponder\n\nhello");
   });
+
+  it("sanitizes ANSI and control chars from string content", () => {
+    const text = extractTextFromMessage({
+      role: "assistant",
+      content: "Hello\x1b[31m red\x1b[0m\x00world",
+    });
+
+    expect(text).toBe("Hello redworld");
+  });
+
+  it("redacts heavily corrupted binary-like lines", () => {
+    const text = extractTextFromMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "������������������������" }],
+    });
+
+    expect(text).toBe("[binary data omitted]");
+  });
 });
 
 describe("extractThinkingFromMessage", () => {
@@ -104,5 +123,15 @@ describe("isCommandMessage", () => {
     expect(isCommandMessage({ command: true })).toBe(true);
     expect(isCommandMessage({ command: false })).toBe(false);
     expect(isCommandMessage({})).toBe(false);
+  });
+});
+
+describe("sanitizeRenderableText", () => {
+  it("breaks very long unbroken tokens to avoid overflow", () => {
+    const input = "a".repeat(140);
+    const sanitized = sanitizeRenderableText(input);
+    const longestSegment = Math.max(...sanitized.split(/\s+/).map((segment) => segment.length));
+
+    expect(longestSegment).toBeLessThanOrEqual(64);
   });
 });
