@@ -1,0 +1,20 @@
+{
+  "name": "@openclaw/stateful-ssh",
+  "version": "2026.2.9",
+  "private": true,
+  "description": "OpenClaw Stateful SSH tool plugin",
+  "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.48",
+    "ssh2": "^1.15.0"
+  },
+  "devDependencies": {
+    "@types/ssh2": "^1.15.0",
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

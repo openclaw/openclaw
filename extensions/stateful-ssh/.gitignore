@@ -1,0 +1,8 @@
+# IDE settings
+.idea/
+
+# Claude Code local settings
+.claude/settings.local.json
+
+# Dependencies
+node_modules/
