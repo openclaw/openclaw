@@ -408,6 +408,8 @@ export async function runReplyAgent(params: {
       contextTokensUsed,
       totalTokens: usage?.total,
       currentThinkLevel: followupRun.run.thinkLevel,
+      provider: providerUsed,
+      model: modelUsed,
       updateSessionStoreEntry,
     });
 

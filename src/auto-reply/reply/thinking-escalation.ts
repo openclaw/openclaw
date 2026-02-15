@@ -1,6 +1,6 @@
-import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { listThinkingLevels, type ThinkLevel } from "../../auto-reply/thinking.js";
 
 // Type for the updateSessionStoreEntry function from sessions.js
 type UpdateSessionStoreEntryFn = (params: {
@@ -18,6 +18,8 @@ export type ThinkingEscalationParams = {
   contextTokensUsed: number | undefined;
   totalTokens: number | undefined;
   currentThinkLevel: ThinkLevel | undefined;
+  provider?: string | undefined;
+  model?: string | undefined;
 };
 
 // Order of thinking levels from lowest to highest
@@ -95,6 +97,8 @@ export async function evaluateAndApplyThinkingEscalation(
     contextTokensUsed,
     totalTokens,
     currentThinkLevel,
+    provider,
+    model,
     updateSessionStoreEntry,
   } = params;
 
@@ -116,9 +120,25 @@ export async function evaluateAndApplyThinkingEscalation(
   }
 
   // Find the target thinking level based on current context usage
-  const targetLevel = findEscalationTarget(contextPercent, escalationConfig.thresholds);
+  let targetLevel = findEscalationTarget(contextPercent, escalationConfig.thresholds);
   if (!targetLevel) {
     return { didEscalate: false };
+  }
+
+  // Validate that the target level is supported by the current provider/model.
+  // If not, fall back to the highest supported level.
+  // Only validate when we have provider or model info to check against.
+  if (provider || model) {
+    const supportedLevels = listThinkingLevels(provider, model);
+    if (!supportedLevels.includes(targetLevel)) {
+      // Pick the highest supported level (last in the ordered array)
+      const fallback =
+        supportedLevels.length > 0 ? supportedLevels[supportedLevels.length - 1] : undefined;
+      if (!fallback || fallback === "off") {
+        return { didEscalate: false };
+      }
+      targetLevel = fallback;
+    }
   }
 
   // Only escalate, never downgrade
