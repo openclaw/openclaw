@@ -147,7 +147,7 @@ export function buildServiceEnvironment(params: {
   token?: string;
   launchdLabel?: string;
 }): Record<string, string | undefined> {
-  const { env, port, token, launchdLabel } = params;
+  const { env, port, launchdLabel } = params;
   const profile = env.OPENCLAW_PROFILE;
   const resolvedLaunchdLabel =
     launchdLabel ||
@@ -162,7 +162,9 @@ export function buildServiceEnvironment(params: {
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_CONFIG_PATH: configPath,
     OPENCLAW_GATEWAY_PORT: String(port),
-    OPENCLAW_GATEWAY_TOKEN: token,
+    // Do not hardcode OPENCLAW_GATEWAY_TOKEN in service file.
+    // Gateway reads token from config file at runtime, allowing token rotation
+    // without reinstalling the service.
     OPENCLAW_LAUNCHD_LABEL: resolvedLaunchdLabel,
     OPENCLAW_SYSTEMD_UNIT: systemdUnit,
     OPENCLAW_SERVICE_MARKER: GATEWAY_SERVICE_MARKER,
