@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveAgentMaxConcurrent } from "../config/agent-limits.js";
 import { loadConfig } from "../config/config.js";
+import { logVerbose } from "../globals.js";
 import { computeBackoff, sleepWithAbort } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { formatDurationPrecise } from "../infra/format-time/format-duration.ts";
@@ -57,6 +58,14 @@ const TELEGRAM_POLL_RESTART_POLICY = {
   factor: 1.8,
   jitter: 0.25,
 };
+
+/**
+ * Health check interval: how often to ping Telegram API to detect stale connections.
+ * After inactivity, NAT/firewalls may silently drop TCP connections, causing the
+ * long-polling socket to hang indefinitely. This watchdog detects and recovers from that.
+ */
+const HEALTH_CHECK_INTERVAL_MS = 2 * 60 * 1000; // 2 minutes
+const HEALTH_CHECK_TIMEOUT_MS = 10 * 1000; // 10 seconds
 
 const isGetUpdatesConflict = (err: unknown) => {
   if (!err || typeof err !== "object") {
@@ -173,15 +182,76 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
 
     while (!opts.abortSignal?.aborted) {
       const runner = run(bot, createTelegramRunnerOptions(cfg));
+      let healthCheckTimer: ReturnType<typeof setTimeout> | undefined;
+      let staleConnectionDetected = false;
+
       const stopOnAbort = () => {
         if (opts.abortSignal?.aborted) {
           void runner.stop();
         }
       };
+
+      // Health check watchdog: periodically ping Telegram API to detect stale connections.
+      // If the connection is dead (NAT timeout, firewall drop), the health check will fail
+      // and we'll restart the runner.
+      // Uses a self-scheduling loop instead of setInterval to prevent overlapping checks
+      // when a health check takes longer than the interval period.
+      const startHealthCheck = () => {
+        const scheduleNext = () => {
+          healthCheckTimer = setTimeout(async () => {
+            if (opts.abortSignal?.aborted) {
+              return;
+            }
+            try {
+              let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+              const timeoutPromise = new Promise<never>((_, reject) => {
+                timeoutHandle = setTimeout(
+                  () => reject(new Error("Health check timeout")),
+                  HEALTH_CHECK_TIMEOUT_MS,
+                );
+              });
+              try {
+                await Promise.race([bot.api.getMe(), timeoutPromise]);
+              } finally {
+                if (timeoutHandle) clearTimeout(timeoutHandle);
+              }
+              logVerbose("[telegram] Health check passed");
+            } catch (err) {
+              if (opts.abortSignal?.aborted) {
+                return;
+              }
+              // Health check failed - connection is likely stale
+              staleConnectionDetected = true;
+              (opts.runtime?.error ?? console.error)(
+                `[telegram] Health check failed (stale connection detected): ${formatErrorMessage(err)}; restarting polling...`,
+              );
+              void runner.stop();
+              return; // Don't schedule next check; runner restart will create a new watchdog
+            }
+            scheduleNext();
+          }, HEALTH_CHECK_INTERVAL_MS);
+        };
+        scheduleNext();
+      };
+
+      const stopHealthCheck = () => {
+        if (healthCheckTimer) {
+          clearTimeout(healthCheckTimer);
+          healthCheckTimer = undefined;
+        }
+      };
+
       opts.abortSignal?.addEventListener("abort", stopOnAbort, { once: true });
+      startHealthCheck();
+
       try {
         // runner.task() returns a promise that resolves when the runner stops
         await runner.task();
+        if (staleConnectionDetected) {
+          // Runner was stopped due to health check failure; continue to restart
+          restartAttempts = 0; // Reset backoff since this is a controlled restart
+          continue;
+        }
         return;
       } catch (err) {
         if (opts.abortSignal?.aborted) {
@@ -208,6 +278,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
           throw sleepErr;
         }
       } finally {
+        stopHealthCheck();
         opts.abortSignal?.removeEventListener("abort", stopOnAbort);
       }
     }
