@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { captureFullEnv } from "../test-utils/env.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 
@@ -8,27 +9,12 @@ vi.mock("node:child_process", () => ({
 
 import { restartGatewayProcessWithFreshPid } from "./process-respawn.js";
 
-const originalEnv = { ...process.env };
 const originalArgv = [...process.argv];
 const originalExecArgv = [...process.execArgv];
-
-function restoreEnv() {
-  for (const key of Object.keys(process.env)) {
-    if (!(key in originalEnv)) {
-      delete process.env[key];
-    }
-  }
-  for (const [key, value] of Object.entries(originalEnv)) {
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
-  }
-}
+const envSnapshot = captureFullEnv();
 
 afterEach(() => {
-  restoreEnv();
+  envSnapshot.restore();
   process.argv = [...originalArgv];
   process.execArgv = [...originalExecArgv];
   spawnMock.mockReset();

@@ -17,6 +17,27 @@ export function captureEnv(keys: string[]) {
   };
 }
 
+export function captureFullEnv() {
+  const snapshot: Record<string, string | undefined> = { ...process.env };
+
+  return {
+    restore() {
+      for (const key of Object.keys(process.env)) {
+        if (!(key in snapshot)) {
+          delete process.env[key];
+        }
+      }
+      for (const [key, value] of Object.entries(snapshot)) {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      }
+    },
+  };
+}
+
 export function withEnv<T>(env: Record<string, string | undefined>, fn: () => T): T {
   const snapshot = captureEnv(Object.keys(env));
   try {
