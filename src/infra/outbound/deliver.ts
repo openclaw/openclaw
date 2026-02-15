@@ -533,5 +533,25 @@ async function deliverOutboundPayloadsCore(
       });
     }
   }
+
+  // Invoke message_sent hook for plugin integrations
+  const hookRunner = getGlobalHookRunner();
+  if (hookRunner?.hasHooks("message_sent") && results.length > 0) {
+    const combinedText = payloads.map((p) => p.text ?? "").join("\n");
+    hookRunner.runMessageSent(
+      {
+        to,
+        content: combinedText,
+        success: true,
+      },
+      {
+        channel,
+        accountId,
+        agentId: params.mirror?.agentId,
+        sessionKey: params.mirror?.sessionKey,
+      },
+    );
+  }
+
   return results;
 }
