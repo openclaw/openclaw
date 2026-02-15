@@ -62,6 +62,8 @@ describe("signal event handler typing + read receipts", () => {
       ignoreAttachments: true,
       sendReadReceipts: true,
       readReceiptsViaDaemon: false,
+      injectLinkPreviews: true,
+      preserveTextStyles: true,
       fetchAttachment: async () => null,
       deliverReplies: async () => {},
       resolveSignalReactionTargets: () => [],

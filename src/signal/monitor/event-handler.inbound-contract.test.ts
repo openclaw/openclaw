@@ -1,13 +1,16 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../../auto-reply/templating.js";
+import type { SignalEventHandlerDeps } from "./event-handler.types.js";
 import { expectInboundContextContract } from "../../../test/helpers/inbound-contract.js";
 
 let capturedCtx: MsgContext | undefined;
+let capturedCtxs: MsgContext[] = [];
 
 vi.mock("../../auto-reply/dispatch.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../auto-reply/dispatch.js")>();
   const dispatchInboundMessage = vi.fn(async (params: { ctx: MsgContext }) => {
     capturedCtx = params.ctx;
+    capturedCtxs.push(params.ctx);
     return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
   });
   return {
@@ -20,10 +23,724 @@ vi.mock("../../auto-reply/dispatch.js", async (importOriginal) => {
 
 import { createSignalEventHandler } from "./event-handler.js";
 
+function createTestHandler(overrides: Partial<SignalEventHandlerDeps> = {}) {
+  return createSignalEventHandler({
+    // oxlint-disable-next-line typescript/no-explicit-any
+    runtime: { log: () => {}, error: () => {} } as any,
+    // oxlint-disable-next-line typescript/no-explicit-any
+    cfg: { messages: { inbound: { debounceMs: 0 } } } as any,
+    baseUrl: "http://localhost",
+    accountId: "default",
+    historyLimit: 0,
+    groupHistories: new Map(),
+    textLimit: 4000,
+    dmPolicy: "open",
+    allowFrom: ["*"],
+    groupAllowFrom: ["*"],
+    groupPolicy: "open",
+    reactionMode: "off",
+    reactionAllowlist: [],
+    mediaMaxBytes: 1024,
+    ignoreAttachments: true,
+    sendReadReceipts: false,
+    readReceiptsViaDaemon: false,
+    injectLinkPreviews: true,
+    preserveTextStyles: true,
+    fetchAttachment: async () => null,
+    deliverReplies: async () => {},
+    resolveSignalReactionTargets: () => [],
+    // oxlint-disable-next-line typescript/no-explicit-any
+    isSignalReactionMessage: () => false as any,
+    shouldEmitSignalReactionNotification: () => false,
+    buildSignalReactionSystemEventText: () => "reaction",
+    ...overrides,
+  });
+}
+
+function makeReceiveEvent(
+  dataMessage: Record<string, unknown>,
+  envelope: Record<string, unknown> = {},
+) {
+  return {
+    event: "receive",
+    data: JSON.stringify({
+      envelope: {
+        sourceNumber: "+15550001111",
+        sourceName: "Alice",
+        timestamp: 1700000000000,
+        dataMessage: {
+          message: "",
+          attachments: [],
+          ...dataMessage,
+        },
+        ...envelope,
+      },
+    }),
+  };
+}
+
+beforeEach(() => {
+  capturedCtx = undefined;
+  capturedCtxs = [];
+});
+
 describe("signal createSignalEventHandler inbound contract", () => {
   it("passes a finalized MsgContext to dispatchInboundMessage", async () => {
-    capturedCtx = undefined;
+    const handler = createTestHandler();
 
+    await handler(
+      makeReceiveEvent({
+        message: "hi",
+        groupInfo: { groupId: "g1", groupName: "Test Group" },
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    expectInboundContextContract(capturedCtx!);
+    // Sender should appear as prefix in group messages (no redundant [from:] suffix)
+    expect(String(capturedCtx?.Body ?? "")).toContain("Alice");
+    expect(String(capturedCtx?.Body ?? "")).toMatch(/Alice.*:/);
+    expect(String(capturedCtx?.Body ?? "")).not.toContain("[from:");
+  });
+
+  it("maps all attachments to plural media fields and preserves first-item aliases", async () => {
+    const fetchAttachment = vi.fn(async (params: { attachment?: { id?: string | null } }) => {
+      const id = params.attachment?.id;
+      if (id === "att-1") {
+        return { path: "/tmp/signal-att-1.jpg", contentType: "image/jpeg" };
+      }
+      if (id === "att-2") {
+        return { path: "/tmp/signal-att-2.png", contentType: "image/png" };
+      }
+      return null;
+    });
+
+    const handler = createTestHandler({
+      ignoreAttachments: false,
+      fetchAttachment,
+    });
+
+    await handler(
+      makeReceiveEvent({
+        attachments: [
+          { id: "att-1", contentType: "image/jpeg" },
+          { id: "att-2", contentType: "image/png" },
+        ],
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    expectInboundContextContract(capturedCtx!);
+    expect(fetchAttachment).toHaveBeenCalledTimes(2);
+    expect(capturedCtx?.MediaPath).toBe("/tmp/signal-att-1.jpg");
+    expect(capturedCtx?.MediaType).toBe("image/jpeg");
+    expect(capturedCtx?.MediaUrl).toBe("/tmp/signal-att-1.jpg");
+    expect(capturedCtx?.MediaPaths).toEqual(["/tmp/signal-att-1.jpg", "/tmp/signal-att-2.png"]);
+    expect(capturedCtx?.MediaUrls).toEqual(["/tmp/signal-att-1.jpg", "/tmp/signal-att-2.png"]);
+    expect(capturedCtx?.MediaTypes).toEqual(["image/jpeg", "image/png"]);
+  });
+
+  it("keeps media type array aligned with media paths when content type is missing", async () => {
+    const fetchAttachment = vi.fn(async (params: { attachment?: { id?: string | null } }) => {
+      const id = params.attachment?.id;
+      if (id === "att-1") {
+        return { path: "/tmp/signal-att-1.bin" };
+      }
+      if (id === "att-2") {
+        return { path: "/tmp/signal-att-2.png", contentType: "image/png" };
+      }
+      return null;
+    });
+
+    const handler = createTestHandler({
+      ignoreAttachments: false,
+      fetchAttachment,
+    });
+
+    await handler(
+      makeReceiveEvent({
+        attachments: [{ id: "att-1" }, { id: "att-2", contentType: "image/png" }],
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    expect(capturedCtx?.MediaPaths).toEqual(["/tmp/signal-att-1.bin", "/tmp/signal-att-2.png"]);
+    expect(capturedCtx?.MediaTypes).toEqual(["application/octet-stream", "image/png"]);
+    expect(capturedCtx?.MediaType).toBe("application/octet-stream");
+  });
+
+  it("keeps successful attachments when one attachment fetch fails", async () => {
+    const fetchAttachment = vi.fn(async (params: { attachment?: { id?: string | null } }) => {
+      const id = params.attachment?.id;
+      if (id === "att-1") {
+        throw new Error("network timeout");
+      }
+      if (id === "att-2") {
+        return { path: "/tmp/signal-att-2.png", contentType: "image/png" };
+      }
+      return null;
+    });
+
+    const handler = createTestHandler({
+      ignoreAttachments: false,
+      fetchAttachment,
+    });
+
+    await handler(
+      makeReceiveEvent({
+        attachments: [
+          { id: "att-1", contentType: "image/jpeg" },
+          { id: "att-2", contentType: "image/png" },
+        ],
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    expect(fetchAttachment).toHaveBeenCalledTimes(2);
+    expect(capturedCtx?.MediaPaths).toEqual(["/tmp/signal-att-2.png"]);
+    expect(capturedCtx?.MediaPath).toBe("/tmp/signal-att-2.png");
+    expect(capturedCtx?.MediaType).toBe("image/png");
+  });
+
+  it("maps quote metadata to reply context fields", async () => {
+    const handler = createTestHandler();
+
+    await handler(
+      makeReceiveEvent({
+        message: "reply with quote",
+        quote: {
+          id: 9001,
+          text: "original message",
+          authorUuid: "123e4567-e89b-12d3-a456-426614174000",
+        },
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    expectInboundContextContract(capturedCtx!);
+    expect(capturedCtx?.ReplyToId).toBe("9001");
+    expect(capturedCtx?.ReplyToSender).toBe("123e4567-e89b-12d3-a456-426614174000");
+    expect(capturedCtx?.ReplyToBody).toBe("original message");
+    expect(capturedCtx?.ReplyToIsQuote).toBe(true);
+  });
+
+  it("falls back quote reply metadata to timestamp and author number", async () => {
+    const handler = createTestHandler();
+
+    await handler(
+      makeReceiveEvent({
+        message: "reply with quote",
+        quote: {
+          timestamp: 1700000000111,
+          text: "fallback author message",
+          authorNumber: "+15550002222",
+          author: "fallback",
+        },
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    expectInboundContextContract(capturedCtx!);
+    expect(capturedCtx?.ReplyToId).toBe("1700000000111");
+    expect(capturedCtx?.ReplyToSender).toBe("+15550002222");
+    expect(capturedCtx?.ReplyToBody).toBe("fallback author message");
+    expect(capturedCtx?.ReplyToIsQuote).toBe(true);
+  });
+
+  it("sets reply body to undefined when quoted text is missing", async () => {
+    const handler = createTestHandler();
+
+    await handler(
+      makeReceiveEvent({
+        message: "reply with empty quote",
+        quote: {
+          id: 9002,
+          text: "   ",
+          authorUuid: "123e4567-e89b-12d3-a456-426614174001",
+        },
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    expect(capturedCtx?.ReplyToId).toBe("9002");
+    expect(capturedCtx?.ReplyToSender).toBe("123e4567-e89b-12d3-a456-426614174001");
+    expect(capturedCtx?.ReplyToBody).toBeUndefined();
+    expect(capturedCtx?.ReplyToIsQuote).toBe(true);
+  });
+
+  it("does not debounce a reply when it arrives after plain text", async () => {
+    const handler = createTestHandler({
+      // oxlint-disable-next-line typescript/no-explicit-any
+      cfg: { messages: { inbound: { debounceMs: 50 } } } as any,
+    });
+
+    await handler(makeReceiveEvent({ message: "plain text" }));
+    await handler(
+      makeReceiveEvent({
+        message: "reply text",
+        quote: { id: 42, text: "quoted", author: "+15559990000" },
+      }),
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 90));
+
+    expect(capturedCtxs).toHaveLength(2);
+    expect(capturedCtxs[0]?.BodyForCommands).toBe("plain text");
+    expect(capturedCtxs[0]?.ReplyToId).toBeUndefined();
+    expect(capturedCtxs[1]?.BodyForCommands).toBe("reply text");
+    expect(capturedCtxs[1]?.ReplyToId).toBe("42");
+    expect(capturedCtxs[1]?.ReplyToBody).toBe("quoted");
+    expect(capturedCtxs[1]?.ReplyToSender).toBe("+15559990000");
+    expect(capturedCtxs[1]?.ReplyToIsQuote).toBe(true);
+  });
+
+  it("does not debounce poll vote entries", async () => {
+    const handler = createTestHandler({
+      // oxlint-disable-next-line typescript/no-explicit-any
+      cfg: { messages: { inbound: { debounceMs: 50 } } } as any,
+    });
+
+    await handler(
+      makeReceiveEvent({
+        pollVote: {
+          authorNumber: "+15551234567",
+          targetSentTimestamp: 1234567890,
+          optionIndexes: [0],
+          voteCount: 1,
+        },
+      }),
+    );
+    await handler(
+      makeReceiveEvent({
+        pollVote: {
+          authorNumber: "+15551234567",
+          targetSentTimestamp: 1234567890,
+          optionIndexes: [0, 2],
+          voteCount: 1,
+        },
+      }),
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 90));
+
+    expect(capturedCtxs).toHaveLength(2);
+    expect(capturedCtxs[0]?.BodyForCommands).toBe("[Poll vote]");
+    expect(capturedCtxs[0]?.UntrustedContext).toContain("Poll vote on #1234567890: option(s) 0");
+    expect(capturedCtxs[1]?.BodyForCommands).toBe("[Poll vote]");
+    expect(capturedCtxs[1]?.UntrustedContext).toContain("Poll vote on #1234567890: option(s) 0, 2");
+  });
+
+  it("does not debounce poll creation and poll closed placeholder entries", async () => {
+    const handler = createTestHandler({
+      // oxlint-disable-next-line typescript/no-explicit-any
+      cfg: { messages: { inbound: { debounceMs: 50 } } } as any,
+    });
+
+    await handler(
+      makeReceiveEvent({
+        pollCreate: {
+          question: "Lunch?",
+          allowMultiple: false,
+          options: ["Pizza", "Sushi"],
+        },
+      }),
+    );
+    await handler(
+      makeReceiveEvent({
+        pollTerminate: {
+          targetSentTimestamp: 1234567890,
+        },
+      }),
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 90));
+
+    expect(capturedCtxs).toHaveLength(2);
+    expect(capturedCtxs[0]?.BodyForCommands).toBe("[Poll] Lunch?");
+    expect(capturedCtxs[0]?.UntrustedContext).toContain('Poll: "Lunch?" — Options: Pizza, Sushi');
+    expect(capturedCtxs[1]?.BodyForCommands).toBe("[Poll closed]");
+    expect(capturedCtxs[1]?.UntrustedContext).toContain("Poll #1234567890 closed");
+  });
+
+  it("does not debounce shared contact placeholder entries", async () => {
+    const handler = createTestHandler({
+      // oxlint-disable-next-line typescript/no-explicit-any
+      cfg: { messages: { inbound: { debounceMs: 50 } } } as any,
+    });
+
+    await handler(
+      makeReceiveEvent({
+        contacts: [{ name: { display: "Jane Doe" }, phone: [{ value: "+15551234567" }] }],
+      }),
+    );
+    await handler(
+      makeReceiveEvent({
+        contacts: [{ name: { display: "John Smith" }, phone: [{ value: "+15557654321" }] }],
+      }),
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 90));
+
+    expect(capturedCtxs).toHaveLength(2);
+    expect(capturedCtxs[0]?.BodyForCommands).toBe("<media:contact>");
+    expect(capturedCtxs[0]?.UntrustedContext).toContain("Shared contact: Jane Doe (+15551234567)");
+    expect(capturedCtxs[1]?.BodyForCommands).toBe("<media:contact>");
+    expect(capturedCtxs[1]?.UntrustedContext).toContain(
+      "Shared contact: John Smith (+15557654321)",
+    );
+  });
+
+  it("merges plain text entries and preserves link preview metadata", async () => {
+    const handler = createTestHandler({
+      // oxlint-disable-next-line typescript/no-explicit-any
+      cfg: { messages: { inbound: { debounceMs: 50 } } } as any,
+    });
+
+    await handler(
+      makeReceiveEvent({
+        message: "first plain text",
+      }),
+    );
+    await handler(
+      makeReceiveEvent({
+        message: "second with preview",
+        previews: [
+          {
+            url: "https://example.com/post",
+            title: "Example Post",
+            description: "A useful summary",
+          },
+        ],
+      }),
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 90));
+
+    expect(capturedCtxs).toHaveLength(1);
+    expect(capturedCtx?.BodyForCommands).toBe("first plain text\\nsecond with preview");
+    expect(capturedCtx?.UntrustedContext).toContain(
+      "Link preview: Example Post - A useful summary (https://example.com/post)",
+    );
+  });
+
+  it("OR-merges wasMentioned when debounced entries are flushed", async () => {
+    const handler = createTestHandler({
+      // oxlint-disable-next-line typescript/no-explicit-any
+      cfg: {
+        messages: {
+          inbound: { debounceMs: 250 },
+          groupChat: { mentionPatterns: ["\\b@?openclaw\\b"] },
+        },
+        channels: {
+          signal: {
+            groups: {
+              "*": { requireMention: false },
+            },
+          },
+        },
+      } as any,
+    });
+
+    await handler(
+      makeReceiveEvent({
+        message: "hey openclaw",
+        groupInfo: { groupId: "g1", groupName: "Test Group" },
+      }),
+    );
+    await handler(
+      makeReceiveEvent({
+        message: "follow-up",
+        groupInfo: { groupId: "g1", groupName: "Test Group" },
+      }),
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 320));
+
+    expect(capturedCtxs).toHaveLength(1);
+    expect(capturedCtx?.BodyForCommands).toBe("hey openclaw\\nfollow-up");
+    expect(capturedCtx?.WasMentioned).toBe(true);
+  });
+
+  it("keeps wasMentioned falsey when no debounced entry mentions the bot", async () => {
+    const handler = createTestHandler({
+      // oxlint-disable-next-line typescript/no-explicit-any
+      cfg: {
+        messages: {
+          inbound: { debounceMs: 250 },
+          groupChat: { mentionPatterns: ["\\b@?openclaw\\b"] },
+        },
+        channels: {
+          signal: {
+            groups: {
+              "*": { requireMention: false },
+            },
+          },
+        },
+      } as any,
+    });
+
+    await handler(
+      makeReceiveEvent({
+        message: "hello team",
+        groupInfo: { groupId: "g1", groupName: "Test Group" },
+      }),
+    );
+    await handler(
+      makeReceiveEvent({
+        message: "follow-up without mention",
+        groupInfo: { groupId: "g1", groupName: "Test Group" },
+      }),
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 320));
+
+    expect(capturedCtxs).toHaveLength(1);
+    expect(capturedCtx?.BodyForCommands).toBe("hello team\\nfollow-up without mention");
+    expect([false, undefined]).toContain(capturedCtx?.WasMentioned);
+  });
+
+  it("handles sticker messages with sticker placeholder, downloaded media, and metadata", async () => {
+    const fetchAttachment = vi.fn(async (params: { attachment?: { id?: string | null } }) => {
+      const id = params.attachment?.id;
+      if (id === "sticker-att-1") {
+        return { path: "/tmp/signal-sticker-1.webp", contentType: "image/webp" };
+      }
+      return null;
+    });
+
+    const handler = createTestHandler({
+      ignoreAttachments: false,
+      fetchAttachment,
+    });
+
+    await handler(
+      makeReceiveEvent({
+        sticker: {
+          packId: "signal-pack-1",
+          stickerId: 42,
+          attachment: {
+            id: "sticker-att-1",
+            contentType: "image/webp",
+          },
+        },
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    expectInboundContextContract(capturedCtx!);
+    expect(fetchAttachment).toHaveBeenCalledTimes(1);
+    expect(capturedCtx?.BodyForCommands).toBe("<media:sticker>");
+    expect(capturedCtx?.MediaPath).toBe("/tmp/signal-sticker-1.webp");
+    expect(capturedCtx?.MediaType).toBe("image/webp");
+    expect(capturedCtx?.MediaUrl).toBe("/tmp/signal-sticker-1.webp");
+    expect(capturedCtx?.MediaPaths).toEqual(["/tmp/signal-sticker-1.webp"]);
+    expect(capturedCtx?.MediaUrls).toEqual(["/tmp/signal-sticker-1.webp"]);
+    expect(capturedCtx?.MediaTypes).toEqual(["image/webp"]);
+    expect(capturedCtx?.UntrustedContext).toContain("Signal sticker packId: signal-pack-1");
+    expect(capturedCtx?.UntrustedContext).toContain("Signal stickerId: 42");
+  });
+
+  it("passes attachment dimensions into media context fields", async () => {
+    const fetchAttachment = vi.fn(async (params: { attachment?: { id?: string | null } }) => {
+      if (params.attachment?.id === "img-att-1") {
+        return { path: "/tmp/signal-img-1.jpg", contentType: "image/jpeg" };
+      }
+      if (params.attachment?.id === "img-att-2") {
+        return { path: "/tmp/signal-img-2.png", contentType: "image/png" };
+      }
+      return null;
+    });
+
+    const handler = createTestHandler({
+      ignoreAttachments: false,
+      fetchAttachment,
+    });
+
+    await handler(
+      makeReceiveEvent({
+        attachments: [
+          {
+            id: "img-att-1",
+            contentType: "image/jpeg",
+            width: 4000,
+            height: 3000,
+          },
+          {
+            id: "img-att-2",
+            contentType: "image/png",
+            width: 1920,
+            height: 1080,
+          },
+        ],
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    expectInboundContextContract(capturedCtx!);
+    expect(capturedCtx?.MediaDimension).toEqual({ width: 4000, height: 3000 });
+    expect(capturedCtx?.MediaDimensions).toEqual([
+      { width: 4000, height: 3000 },
+      { width: 1920, height: 1080 },
+    ]);
+  });
+
+  it("threads attachment captions into media caption context fields", async () => {
+    const fetchAttachment = vi.fn(async (params: { attachment?: { id?: string | null } }) => {
+      if (params.attachment?.id === "img-cap-1") {
+        return { path: "/tmp/signal-cap-1.jpg", contentType: "image/jpeg" };
+      }
+      if (params.attachment?.id === "img-cap-2") {
+        return { path: "/tmp/signal-cap-2.png", contentType: "image/png" };
+      }
+      return null;
+    });
+
+    const handler = createTestHandler({
+      ignoreAttachments: false,
+      fetchAttachment,
+    });
+
+    await handler(
+      makeReceiveEvent({
+        attachments: [
+          {
+            id: "img-cap-1",
+            contentType: "image/jpeg",
+            caption: "sunset",
+          },
+          {
+            id: "img-cap-2",
+            contentType: "image/png",
+            caption: "mountain",
+          },
+        ],
+      }),
+    );
+
+    const ctx = capturedCtx as MsgContext & {
+      MediaCaption?: string;
+      MediaCaptions?: string[];
+    };
+    expect(ctx).toBeTruthy();
+    expect(ctx.MediaCaption).toBe("sunset");
+    expect(ctx.MediaCaptions).toEqual(["sunset", "mountain"]);
+  });
+
+  it("tracks edit target timestamp for edited messages", async () => {
+    const handler = createTestHandler();
+
+    await handler({
+      event: "receive",
+      data: JSON.stringify({
+        envelope: {
+          sourceNumber: "+15550001111",
+          sourceName: "Alice",
+          timestamp: 1700000000999,
+          editMessage: {
+            targetSentTimestamp: 1700000000111,
+            dataMessage: {
+              message: "edited text",
+              attachments: [],
+            },
+          },
+        },
+      }),
+    });
+
+    const ctx = capturedCtx as MsgContext & {
+      EditTargetTimestamp?: number;
+    };
+    expect(ctx).toBeTruthy();
+    expect(ctx.EditTargetTimestamp).toBe(1700000000111);
+    expect(ctx.BodyForCommands).toBe("edited text");
+  });
+
+  it("adds link preview metadata to untrusted context", async () => {
+    const handler = createTestHandler();
+
+    await handler(
+      makeReceiveEvent({
+        message: "check this",
+        previews: [
+          {
+            url: "https://example.com/post",
+            title: "Example Post",
+            description: "A useful summary",
+          },
+        ],
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    expect(capturedCtx?.UntrustedContext).toContain(
+      "Link preview: Example Post - A useful summary (https://example.com/post)",
+    );
+  });
+
+  it("formats signal text styles into markdown in the message body", async () => {
+    const handler = createTestHandler();
+
+    await handler(
+      makeReceiveEvent({
+        message: "hello world",
+        textStyles: [
+          { style: "BOLD", start: 0, length: 5 },
+          { style: "ITALIC", start: 6, length: 5 },
+        ],
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    expect(capturedCtx?.BodyForCommands).toBe("**hello** _world_");
+  });
+
+  it("skips link preview injection when injectLinkPreviews is false", async () => {
+    const handler = createTestHandler({
+      injectLinkPreviews: false,
+    });
+
+    await handler(
+      makeReceiveEvent({
+        message: "check this",
+        previews: [
+          {
+            url: "https://example.com/post",
+            title: "Example Post",
+            description: "A useful summary",
+          },
+        ],
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    const untrusted = capturedCtx?.UntrustedContext?.join("\n") ?? "";
+    expect(untrusted).not.toContain("Link preview");
+    expect(untrusted).not.toContain("https://example.com/post");
+  });
+
+  it("skips text style formatting when preserveTextStyles is false", async () => {
+    const handler = createTestHandler({
+      preserveTextStyles: false,
+    });
+
+    await handler(
+      makeReceiveEvent({
+        message: "hello world",
+        textStyles: [
+          { style: "BOLD", start: 0, length: 5 },
+          { style: "ITALIC", start: 6, length: 5 },
+        ],
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    expect(capturedCtx?.BodyForCommands).toBe("hello world");
+    expect(capturedCtx?.BodyForCommands).not.toContain("**");
+    expect(capturedCtx?.BodyForCommands).not.toContain("_");
+  });
+
+  it("applies link previews and text styles by default when toggles are undefined", async () => {
+    // Create handler with deps that have undefined toggles (mimicking runtime behavior)
     const handler = createSignalEventHandler({
       // oxlint-disable-next-line typescript/no-explicit-any
       runtime: { log: () => {}, error: () => {} } as any,
@@ -44,6 +761,9 @@ describe("signal createSignalEventHandler inbound contract", () => {
       ignoreAttachments: true,
       sendReadReceipts: false,
       readReceiptsViaDaemon: false,
+      // Intentionally pass undefined to test default behavior
+      injectLinkPreviews: undefined as unknown as boolean,
+      preserveTextStyles: undefined as unknown as boolean,
       fetchAttachment: async () => null,
       deliverReplies: async () => {},
       resolveSignalReactionTargets: () => [],
@@ -53,27 +773,451 @@ describe("signal createSignalEventHandler inbound contract", () => {
       buildSignalReactionSystemEventText: () => "reaction",
     });
 
-    await handler({
-      event: "receive",
-      data: JSON.stringify({
-        envelope: {
-          sourceNumber: "+15550001111",
-          sourceName: "Alice",
-          timestamp: 1700000000000,
-          dataMessage: {
-            message: "hi",
-            attachments: [],
-            groupInfo: { groupId: "g1", groupName: "Test Group" },
+    await handler(
+      makeReceiveEvent({
+        message: "hello world",
+        textStyles: [
+          { style: "BOLD", start: 0, length: 5 },
+          { style: "ITALIC", start: 6, length: 5 },
+        ],
+        previews: [
+          {
+            url: "https://example.com",
+            title: "Example",
+            description: "Test",
           },
+        ],
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    // Text styles should be applied (default true)
+    expect(capturedCtx?.BodyForCommands).toBe("**hello** _world_");
+    // Link previews should be in untrusted context (default true)
+    const untrusted = capturedCtx?.UntrustedContext?.join("\n") ?? "";
+    expect(untrusted).toContain("Link preview: Example - Test (https://example.com)");
+  });
+
+  it("applies link previews and text styles when explicitly set to true", async () => {
+    const handler = createTestHandler({
+      injectLinkPreviews: true,
+      preserveTextStyles: true,
+    });
+
+    await handler(
+      makeReceiveEvent({
+        message: "hello world",
+        textStyles: [
+          { style: "MONOSPACE", start: 0, length: 5 },
+          { style: "STRIKETHROUGH", start: 6, length: 5 },
+        ],
+        previews: [
+          {
+            url: "https://test.com/page",
+            title: "Test Page",
+          },
+        ],
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    // Text styles should be applied
+    expect(capturedCtx?.BodyForCommands).toBe("`hello` ~~world~~");
+    // Link previews should be in untrusted context
+    const untrusted = capturedCtx?.UntrustedContext?.join("\n") ?? "";
+    expect(untrusted).toContain("Link preview: Test Page (https://test.com/page)");
+  });
+
+  it("preserveTextStyles: false does not affect link preview injection", async () => {
+    const handler = createTestHandler({
+      preserveTextStyles: false,
+      injectLinkPreviews: true,
+    });
+
+    await handler(
+      makeReceiveEvent({
+        message: "check this out",
+        textStyles: [{ style: "BOLD", start: 0, length: 5 }],
+        previews: [
+          {
+            url: "https://independent.com",
+            title: "Independent Test",
+          },
+        ],
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    // Text styles should NOT be applied
+    expect(capturedCtx?.BodyForCommands).toBe("check this out");
+    expect(capturedCtx?.BodyForCommands).not.toContain("**");
+    // Link previews SHOULD still be injected
+    const untrusted = capturedCtx?.UntrustedContext?.join("\n") ?? "";
+    expect(untrusted).toContain("Link preview: Independent Test (https://independent.com)");
+  });
+
+  it("injectLinkPreviews: false does not affect text style formatting", async () => {
+    const handler = createTestHandler({
+      injectLinkPreviews: false,
+      preserveTextStyles: true,
+    });
+
+    await handler(
+      makeReceiveEvent({
+        message: "styled text",
+        textStyles: [
+          { style: "BOLD", start: 0, length: 6 },
+          { style: "ITALIC", start: 7, length: 4 },
+        ],
+        previews: [
+          {
+            url: "https://should-not-appear.com",
+            title: "Should Not Appear",
+          },
+        ],
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    // Text styles SHOULD be applied
+    expect(capturedCtx?.BodyForCommands).toBe("**styled** _text_");
+    // Link previews should NOT be injected
+    const untrusted = capturedCtx?.UntrustedContext?.join("\n") ?? "";
+    expect(untrusted).not.toContain("Link preview");
+    expect(untrusted).not.toContain("https://should-not-appear.com");
+  });
+
+  it("injectLinkPreviews: false with no previews does not cause errors", async () => {
+    const handler = createTestHandler({
+      injectLinkPreviews: false,
+    });
+
+    await handler(
+      makeReceiveEvent({
+        message: "plain message with no previews",
+        // No previews field at all
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    expect(capturedCtx?.BodyForCommands).toBe("plain message with no previews");
+    // UntrustedContext should be undefined or not contain link previews
+    expect(capturedCtx?.UntrustedContext).toBeUndefined();
+  });
+
+  it("preserveTextStyles: false with no text styles does not cause errors", async () => {
+    const handler = createTestHandler({
+      preserveTextStyles: false,
+    });
+
+    await handler(
+      makeReceiveEvent({
+        message: "plain message",
+        // No textStyles field at all
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    expect(capturedCtx?.BodyForCommands).toBe("plain message");
+  });
+
+  it("both toggles false with no data does not cause errors", async () => {
+    const handler = createTestHandler({
+      injectLinkPreviews: false,
+      preserveTextStyles: false,
+    });
+
+    await handler(
+      makeReceiveEvent({
+        message: "completely plain message",
+        // No previews, no textStyles
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    expect(capturedCtx?.BodyForCommands).toBe("completely plain message");
+    expect(capturedCtx?.UntrustedContext).toBeUndefined();
+  });
+
+  it("both toggles false with data present still processes message correctly", async () => {
+    const handler = createTestHandler({
+      injectLinkPreviews: false,
+      preserveTextStyles: false,
+    });
+
+    await handler(
+      makeReceiveEvent({
+        message: "message with both features",
+        textStyles: [
+          { style: "BOLD", start: 0, length: 7 },
+          { style: "SPOILER", start: 13, length: 4 },
+        ],
+        previews: [
+          {
+            url: "https://blocked.com",
+            title: "Blocked",
+            description: "Should not appear",
+          },
+        ],
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    // Plain text, no formatting
+    expect(capturedCtx?.BodyForCommands).toBe("message with both features");
+    expect(capturedCtx?.BodyForCommands).not.toContain("**");
+    expect(capturedCtx?.BodyForCommands).not.toContain("||");
+    // No link previews in untrusted context
+    const untrusted = capturedCtx?.UntrustedContext?.join("\n") ?? "";
+    expect(untrusted).not.toContain("Link preview");
+    expect(untrusted).not.toContain("https://blocked.com");
+  });
+
+  it("applies text styles correctly when message contains mentions", async () => {
+    const handler = createTestHandler();
+
+    // Message: "\uFFFC check this out" (16 chars)
+    // After mention expansion: "@550e8400-e29b-41d4-a716-446655440000 check this out" (52 chars)
+    // Original textStyle BOLD at {start: 2, length: 5} should target "check" in the expanded text
+    // After expansion, "check" starts at position 38 (mention is 37 chars: @ + 36-char UUID)
+    await handler(
+      makeReceiveEvent({
+        message: "\uFFFC check this out",
+        mentions: [
+          {
+            uuid: "550e8400-e29b-41d4-a716-446655440000",
+            start: 0,
+            length: 1,
+          },
+        ],
+        textStyles: [
+          { style: "BOLD", start: 2, length: 5 }, // "check" in original message
+        ],
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    // The mention should be expanded and the BOLD style should apply to "check"
+    expect(capturedCtx?.BodyForCommands).toContain("@550e8400-e29b-41d4-a716-446655440000");
+    expect(capturedCtx?.BodyForCommands).toContain("**check**");
+    expect(capturedCtx?.BodyForCommands).toBe(
+      "@550e8400-e29b-41d4-a716-446655440000 **check** this out",
+    );
+  });
+
+  it("keeps a style span aligned when it starts at a mention placeholder", async () => {
+    const handler = createTestHandler();
+
+    await handler(
+      makeReceiveEvent({
+        message: "\uFFFC check",
+        mentions: [
+          {
+            uuid: "550e8400-e29b-41d4-a716-446655440000",
+            start: 0,
+            length: 1,
+          },
+        ],
+        textStyles: [
+          { style: "BOLD", start: 0, length: 7 }, // entire raw message
+        ],
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    expect(capturedCtx?.BodyForCommands).toBe("**@550e8400-e29b-41d4-a716-446655440000 check**");
+  });
+
+  it("adds shared contact metadata to untrusted context and uses contact placeholder", async () => {
+    const handler = createTestHandler();
+
+    await handler(
+      makeReceiveEvent({
+        contacts: [
+          {
+            name: {
+              display: "Jane Doe",
+              given: "Jane",
+              family: "Doe",
+            },
+            phone: [{ value: "+15551234567", type: "mobile" }],
+            email: [{ value: "jane@example.com", type: "work" }],
+            organization: "Acme Corp",
+          },
+        ],
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    expect(capturedCtx?.UntrustedContext).toContain(
+      "Shared contact: Jane Doe (+15551234567, jane@example.com, Acme Corp)",
+    );
+    expect(capturedCtx?.BodyForCommands).toBe("<media:contact>");
+  });
+
+  it("includes both message text and contact context when contact has message", async () => {
+    const handler = createTestHandler();
+
+    await handler(
+      makeReceiveEvent({
+        message: "Here's John's info",
+        contacts: [
+          {
+            name: {
+              given: "John",
+              family: "Smith",
+            },
+            phone: [{ value: "+15559876543" }],
+            email: [{ value: "john@example.org" }],
+          },
+        ],
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    expect(capturedCtx?.BodyForCommands).toBe("Here's John's info");
+    expect(capturedCtx?.UntrustedContext).toContain(
+      "Shared contact: John Smith (+15559876543, john@example.org)",
+    );
+  });
+
+  it("renders poll creation with question and options", async () => {
+    const handler = createTestHandler();
+
+    await handler(
+      makeReceiveEvent({
+        pollCreate: {
+          question: "What's for lunch?",
+          allowMultiple: false,
+          options: ["Pizza", "Sushi", "Tacos"],
         },
       }),
-    });
+    );
 
     expect(capturedCtx).toBeTruthy();
     expectInboundContextContract(capturedCtx!);
-    // Sender should appear as prefix in group messages (no redundant [from:] suffix)
-    expect(String(capturedCtx?.Body ?? "")).toContain("Alice");
-    expect(String(capturedCtx?.Body ?? "")).toMatch(/Alice.*:/);
-    expect(String(capturedCtx?.Body ?? "")).not.toContain("[from:");
+    expect(capturedCtx?.BodyForCommands).toBe("[Poll] What's for lunch?");
+    expect(capturedCtx?.UntrustedContext).toContain(
+      'Poll: "What\'s for lunch?" — Options: Pizza, Sushi, Tacos',
+    );
+  });
+
+  it("renders multi-select poll creation", async () => {
+    const handler = createTestHandler();
+
+    await handler(
+      makeReceiveEvent({
+        pollCreate: {
+          question: "Pick your favorites",
+          allowMultiple: true,
+          options: ["Coffee", "Tea", "Water"],
+        },
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    expectInboundContextContract(capturedCtx!);
+    expect(capturedCtx?.BodyForCommands).toBe("[Poll] Pick your favorites");
+    expect(capturedCtx?.UntrustedContext).toContain(
+      'Poll: "Pick your favorites" — Options: Coffee, Tea, Water (multiple selections allowed)',
+    );
+  });
+
+  it("renders poll vote with option indexes", async () => {
+    const handler = createTestHandler();
+
+    await handler(
+      makeReceiveEvent({
+        pollVote: {
+          authorNumber: "+15551234567",
+          targetSentTimestamp: 1234567890,
+          optionIndexes: [1, 3],
+          voteCount: 2,
+        },
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    expectInboundContextContract(capturedCtx!);
+    expect(capturedCtx?.BodyForCommands).toBe("[Poll vote]");
+    expect(capturedCtx?.UntrustedContext).toContain("Poll vote on #1234567890: option(s) 1, 3");
+  });
+
+  it("renders poll termination", async () => {
+    const handler = createTestHandler();
+
+    await handler(
+      makeReceiveEvent({
+        pollTerminate: {
+          targetSentTimestamp: 1234567890,
+        },
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    expectInboundContextContract(capturedCtx!);
+    expect(capturedCtx?.BodyForCommands).toBe("[Poll closed]");
+    expect(capturedCtx?.UntrustedContext).toContain("Poll #1234567890 closed");
+  });
+
+  it("uses Untitled placeholder for null question with empty options", async () => {
+    const handler = createTestHandler();
+
+    await handler(
+      makeReceiveEvent({
+        pollCreate: {
+          question: null,
+          allowMultiple: false,
+          options: [],
+        },
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    expectInboundContextContract(capturedCtx!);
+    expect(capturedCtx?.BodyForCommands).toBe("[Poll] Untitled");
+    expect(capturedCtx?.UntrustedContext).toContain('Poll: "Untitled"');
+  });
+
+  it("does not include poll creator author fields in poll vote context", async () => {
+    const handler = createTestHandler();
+
+    await handler(
+      makeReceiveEvent({
+        pollVote: {
+          authorNumber: null,
+          authorUuid: "abc-123-uuid",
+          targetSentTimestamp: 1234567890,
+          optionIndexes: [0, 2],
+          voteCount: 2,
+        },
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    expectInboundContextContract(capturedCtx!);
+    expect(capturedCtx?.BodyForCommands).toBe("[Poll vote]");
+    expect(capturedCtx?.UntrustedContext).toContain("Poll vote on #1234567890: option(s) 0, 2");
+    expect(capturedCtx?.UntrustedContext).not.toContain("abc-123-uuid");
+  });
+
+  it("preserves message body when poll is present", async () => {
+    const handler = createTestHandler();
+
+    await handler(
+      makeReceiveEvent({
+        message: "Check out this poll",
+        pollCreate: {
+          question: "Lunch?",
+          allowMultiple: false,
+          options: ["Pizza", "Sushi"],
+        },
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    expectInboundContextContract(capturedCtx!);
+    expect(capturedCtx?.BodyForCommands).toBe("Check out this poll");
+    expect(capturedCtx?.UntrustedContext).toContain('Poll: "Lunch?" — Options: Pizza, Sushi');
   });
 });

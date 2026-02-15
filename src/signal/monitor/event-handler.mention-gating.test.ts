@@ -38,6 +38,8 @@ function createBaseDeps(overrides: Record<string, unknown> = {}) {
     ignoreAttachments: true,
     sendReadReceipts: false,
     readReceiptsViaDaemon: false,
+    injectLinkPreviews: true,
+    preserveTextStyles: true,
     fetchAttachment: async () => null,
     deliverReplies: async () => {},
     resolveSignalReactionTargets: () => [],
@@ -53,6 +55,11 @@ type GroupEventOpts = {
   message?: string;
   attachments?: unknown[];
   quoteText?: string;
+  textStyles?: Array<{
+    style?: string;
+    start?: number;
+    length?: number;
+  }> | null;
   mentions?: Array<{
     uuid?: string;
     number?: string;
@@ -73,6 +80,7 @@ function makeGroupEvent(opts: GroupEventOpts) {
           message: opts.message ?? "",
           attachments: opts.attachments ?? [],
           quote: opts.quoteText ? { text: opts.quoteText } : undefined,
+          textStyles: opts.textStyles ?? undefined,
           mentions: opts.mentions ?? undefined,
           groupInfo: { groupId: "g1", groupName: "Test Group" },
         },
@@ -208,6 +216,26 @@ describe("signal mention gating", () => {
     );
 
     await handler(makeGroupEvent({ message: "/help" }));
+    expect(capturedCtx).toBeTruthy();
+  });
+
+  it("detects control commands even when text style markers wrap the command", async () => {
+    capturedCtx = undefined;
+    const handler = createSignalEventHandler(
+      createBaseDeps({
+        cfg: {
+          messages: { inbound: { debounceMs: 0 }, groupChat: { mentionPatterns: ["@bot"] } },
+          channels: { signal: { groups: { "*": { requireMention: true } } } },
+        },
+      }),
+    );
+
+    await handler(
+      makeGroupEvent({
+        message: "/help",
+        textStyles: [{ style: "BOLD", start: 0, length: 5 }],
+      }),
+    );
     expect(capturedCtx).toBeTruthy();
   });
 
