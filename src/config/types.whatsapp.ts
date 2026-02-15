@@ -12,6 +12,7 @@ export type WhatsAppActionConfig = {
   reactions?: boolean;
   sendMessage?: boolean;
   polls?: boolean;
+  groupAdmin?: boolean;
 };
 
 export type WhatsAppGroupConfig = {
