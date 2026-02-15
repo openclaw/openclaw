@@ -7,6 +7,7 @@ import {
   ensureFlagCompatibility,
   modelKey,
   resolveModelTarget,
+  resolveModelKeysFromEntries,
   updateConfig,
 } from "./shared.js";
 
@@ -47,21 +48,8 @@ export async function modelsFallbacksAddCommand(modelRaw: string, runtime: Runti
     if (!nextModels[targetKey]) {
       nextModels[targetKey] = {};
     }
-    const aliasIndex = buildModelAliasIndex({
-      cfg,
-      defaultProvider: DEFAULT_PROVIDER,
-    });
     const existing = cfg.agents?.defaults?.model?.fallbacks ?? [];
-    const existingKeys = existing
-      .map((entry) =>
-        resolveModelRefFromString({
-          raw: String(entry ?? ""),
-          defaultProvider: DEFAULT_PROVIDER,
-          aliasIndex,
-        }),
-      )
-      .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
-      .map((entry) => modelKey(entry.ref.provider, entry.ref.model));
+    const existingKeys = resolveModelKeysFromEntries({ cfg, entries: existing });
 
     if (existingKeys.includes(targetKey)) {
       return cfg;

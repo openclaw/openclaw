@@ -91,6 +91,26 @@ export function resolveModelTarget(params: { raw: string; cfg: OpenClawConfig })
   return resolved.ref;
 }
 
+export function resolveModelKeysFromEntries(params: {
+  cfg: OpenClawConfig;
+  entries: readonly unknown[];
+}): string[] {
+  const aliasIndex = buildModelAliasIndex({
+    cfg: params.cfg,
+    defaultProvider: DEFAULT_PROVIDER,
+  });
+  return params.entries
+    .map((entry) =>
+      resolveModelRefFromString({
+        raw: String(entry ?? ""),
+        defaultProvider: DEFAULT_PROVIDER,
+        aliasIndex,
+      }),
+    )
+    .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
+    .map((entry) => modelKey(entry.ref.provider, entry.ref.model));
+}
+
 export function buildAllowlistSet(cfg: OpenClawConfig): Set<string> {
   const allowed = new Set<string>();
   const models = cfg.agents?.defaults?.models ?? {};
