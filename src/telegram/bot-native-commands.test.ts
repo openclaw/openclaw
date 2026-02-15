@@ -115,7 +115,7 @@ describe("registerTelegramNativeCommands", () => {
     expect(registeredCommands).toHaveLength(100);
     expect(registeredCommands).toEqual(customCommands.slice(0, 100));
     expect(runtimeLog).toHaveBeenCalledWith(
-      "Telegram limits bots to 100 commands. 120 configured; registering first 100. Use channels.telegram.commands.native: false to disable, or reduce plugin/skill/custom commands.",
+      "Telegram limits bots to 100 commands. 120 configured; registering first 100 (0 bundled skill commands deprioritized). Use skills.allowBundled to limit which bundled skills register as commands, or channels.telegram.commands.native: false to disable native commands entirely.",
     );
   });
 });

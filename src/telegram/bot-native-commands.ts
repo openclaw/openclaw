@@ -334,13 +334,28 @@ export const registerTelegramNativeCommands = ({
   for (const issue of pluginCatalog.issues) {
     runtime.error?.(danger(issue));
   }
+  // Partition skill-derived native commands into bundled vs non-bundled so
+  // workspace/user skills are registered before bundled ones.  When the list
+  // is truncated to the Telegram 100-command limit, bundled skill commands
+  // are dropped first, ensuring workspace skills survive.
+  const bundledSkillNames = new Set(
+    skillCommands.filter((sc) => sc.bundled).map((sc) => sc.name.toLowerCase()),
+  );
+  const nativeBundled: Array<{ command: string; description: string }> = [];
+  const nativeNonBundled: Array<{ command: string; description: string }> = [];
+  for (const command of nativeCommands) {
+    const entry = { command: command.name, description: command.description };
+    if (bundledSkillNames.has(command.name.toLowerCase())) {
+      nativeBundled.push(entry);
+    } else {
+      nativeNonBundled.push(entry);
+    }
+  }
   const allCommandsFull: Array<{ command: string; description: string }> = [
-    ...nativeCommands.map((command) => ({
-      command: command.name,
-      description: command.description,
-    })),
+    ...nativeNonBundled,
     ...(nativeEnabled ? pluginCatalog.commands : []),
     ...customCommands,
+    ...nativeBundled,
   ];
   const { commandsToRegister, totalCommands, maxCommands, overflowCount } =
     buildCappedTelegramMenuCommands({
@@ -349,8 +364,9 @@ export const registerTelegramNativeCommands = ({
   if (overflowCount > 0) {
     runtime.log?.(
       `Telegram limits bots to ${maxCommands} commands. ` +
-        `${totalCommands} configured; registering first ${maxCommands}. ` +
-        `Use channels.telegram.commands.native: false to disable, or reduce plugin/skill/custom commands.`,
+        `${totalCommands} configured; registering first ${maxCommands} (${nativeBundled.length} bundled skill commands deprioritized). ` +
+        `Use skills.allowBundled to limit which bundled skills register as commands, ` +
+        `or channels.telegram.commands.native: false to disable native commands entirely.`,
     );
   }
   // Telegram only limits the setMyCommands payload (menu entries).
