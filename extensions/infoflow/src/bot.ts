@@ -172,12 +172,6 @@ export async function handleGroupChatMessage(params: HandleGroupChatParams): Pro
   // Extract sender name from header or fallback to fromuser
   const senderName = String(header?.username ?? header?.nickname ?? msgData.username ?? fromuser);
 
-  if (verbose) {
-    console.log(
-      `[infoflow] group chat: fromuser=${fromuser}, groupid=${groupid}, wasMentioned=${wasMentioned}`,
-    );
-  }
-
   // Delegate to the common message handler (group chat)
   await handleInfoflowMessage({
     cfg,
@@ -208,6 +202,19 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
   const account = resolveInfoflowAccount({ cfg, accountId });
   const core = getInfoflowRuntime();
   const verbose = core.logging.shouldLogVerbose();
+
+  if (verbose) {
+    console.log(`[infoflow] handleInfoflowMessage invoked:`, {
+      accountId,
+      chatType: event.chatType,
+      fromuser: event.fromuser,
+      groupId: event.groupId,
+      senderName: event.senderName,
+      messageId: event.messageId,
+      timestamp: event.timestamp,
+      wasMentioned: event.wasMentioned,
+    });
+  }
 
   const isGroup = chatType === "group";
   // Convert groupId (number) to string for peerId since routing expects string
