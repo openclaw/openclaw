@@ -1,0 +1,17 @@
+[phases.setup]
+nixPkgs = ["python311", "nodejs_22", "pnpm"]
+
+[phases.install]
+cmds = [
+  "python3 -m pip install --upgrade pip",
+  "pip3 install -r requirements.txt",
+  "pnpm install --no-frozen-lockfile"
+]
+
+[phases.build]
+cmds = [
+  "echo 'Skipping UI build on Railway'"
+]
+
+[start]
+cmd = "python3 -m openclaw.app"
