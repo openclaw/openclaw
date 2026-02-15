@@ -136,6 +136,8 @@ export class OpenClawApp extends LitElement {
   @state() chatThinkingLevel: string | null = null;
   @state() chatQueue: ChatQueueItem[] = [];
   @state() chatAttachments: ChatAttachment[] = [];
+  @state() chatInputHistory: string[] = this.loadInputHistory();
+  @state() chatInputHistoryIndex = -1;
   @state() chatManualRefreshInFlight = false;
   // Sidebar state for tool output viewing
   @state() sidebarOpen = false;
@@ -444,11 +446,73 @@ export class OpenClawApp extends LitElement {
     messageOverride?: string,
     opts?: Parameters<typeof handleSendChatInternal>[2],
   ) {
+    // Add to input history before sending (including slash commands - they're often repeated)
+    const messageToSend = messageOverride ?? this.chatMessage;
+    const trimmedMessage = messageToSend.trim();
+    if (trimmedMessage) {
+      this.addToInputHistory(trimmedMessage);
+    }
+    this.chatInputHistoryIndex = -1;
+
     await handleSendChatInternal(
       this as unknown as Parameters<typeof handleSendChatInternal>[0],
       messageOverride,
       opts,
     );
+  }
+
+  handleInputHistoryNavigate(direction: "up" | "down") {
+    const history = this.chatInputHistory;
+    if (history.length === 0) {
+      return;
+    }
+
+    if (direction === "up") {
+      if (this.chatInputHistoryIndex < history.length - 1) {
+        this.chatInputHistoryIndex++;
+        this.chatMessage = history[history.length - 1 - this.chatInputHistoryIndex];
+      }
+    } else {
+      if (this.chatInputHistoryIndex > 0) {
+        this.chatInputHistoryIndex--;
+        this.chatMessage = history[history.length - 1 - this.chatInputHistoryIndex];
+      } else if (this.chatInputHistoryIndex === 0) {
+        this.chatInputHistoryIndex = -1;
+        this.chatMessage = "";
+      }
+    }
+  }
+
+  private loadInputHistory(): string[] {
+    try {
+      const stored = localStorage.getItem("openclaw:inputHistory");
+      if (!stored) {
+        return [];
+      }
+      const parsed = JSON.parse(stored);
+      if (!Array.isArray(parsed)) {
+        return [];
+      }
+      return parsed.filter((item): item is string => typeof item === "string");
+    } catch {
+      return [];
+    }
+  }
+
+  private addToInputHistory(message: string) {
+    // Don't add duplicates of the last entry
+    if (
+      this.chatInputHistory.length > 0 &&
+      this.chatInputHistory[this.chatInputHistory.length - 1] === message
+    ) {
+      return;
+    }
+    this.chatInputHistory = [...this.chatInputHistory, message].slice(-100);
+    try {
+      localStorage.setItem("openclaw:inputHistory", JSON.stringify(this.chatInputHistory));
+    } catch {
+      // Ignore storage errors
+    }
   }
 
   async handleWhatsAppStart(force: boolean) {
