@@ -3,14 +3,17 @@ import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { loadConfig } from "../config/config.js";
 import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-events.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
+import { stripHeartbeatToken } from "../auto-reply/heartbeat.js";
 import { loadSessionEntry } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
 
 /**
  * Check if webchat broadcasts should be suppressed for heartbeat runs.
- * Returns true if the run is a heartbeat and showOk is false.
+ * Checks both showOk (for HEARTBEAT_OK acknowledgments) and showAlerts (for alert messages).
+ * @param runId - The agent run ID
+ * @param text - Optional response text to check if it's a HEARTBEAT_OK-only message
  */
-function shouldSuppressHeartbeatBroadcast(runId: string): boolean {
+function shouldSuppressHeartbeatBroadcast(runId: string, text?: string): boolean {
   const runContext = getAgentRunContext(runId);
   if (!runContext?.isHeartbeat) {
     return false;
@@ -19,6 +22,17 @@ function shouldSuppressHeartbeatBroadcast(runId: string): boolean {
   try {
     const cfg = loadConfig();
     const visibility = resolveHeartbeatVisibility({ cfg, channel: "webchat" });
+    
+    // If we have response text, determine if it's a HEARTBEAT_OK-only message
+    if (text) {
+      const stripped = stripHeartbeatToken(text, { mode: "heartbeat" });
+      const isOkOnly = stripped.shouldSkip;
+      
+      // For OK-only messages, check showOk; for alerts, check showAlerts
+      return isOkOnly ? !visibility.showOk : !visibility.showAlerts;
+    }
+    
+    // Fallback: if no text provided, use showOk (maintains backward compatibility)
     return !visibility.showOk;
   } catch {
     // Default to suppressing if we can't load config
@@ -251,7 +265,7 @@ export function createAgentEventHandler({
       },
     };
     // Suppress webchat broadcast for heartbeat runs when showOk is false
-    if (!shouldSuppressHeartbeatBroadcast(clientRunId)) {
+    if (!shouldSuppressHeartbeatBroadcast(clientRunId, text)) {
       broadcast("chat", payload, { dropIfSlow: true });
     }
     nodeSendToSession(sessionKey, "chat", payload);
@@ -284,7 +298,7 @@ export function createAgentEventHandler({
             : undefined,
       };
       // Suppress webchat broadcast for heartbeat runs when showOk is false
-      if (!shouldSuppressHeartbeatBroadcast(clientRunId)) {
+      if (!shouldSuppressHeartbeatBroadcast(clientRunId, text)) {
         broadcast("chat", payload);
       }
       nodeSendToSession(sessionKey, "chat", payload);
