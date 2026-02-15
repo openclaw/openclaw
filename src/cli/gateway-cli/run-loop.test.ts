@@ -15,7 +15,9 @@ const resetAllLanes = vi.fn();
 const restartGatewayProcessWithFreshPid = vi.fn<
   () => { mode: "spawned" | "supervised" | "disabled" | "failed"; pid?: number; detail?: string }
 >(() => ({ mode: "disabled" }));
-const abortEmbeddedPiRun = vi.fn(() => false);
+const abortEmbeddedPiRun = vi.fn(
+  (_sessionId?: string, _opts?: { mode?: "all" | "compacting" }) => false,
+);
 const getActiveEmbeddedRunCount = vi.fn(() => 0);
 const waitForActiveEmbeddedRuns = vi.fn(async (_timeoutMs: number) => ({ drained: true }));
 const DRAIN_TIMEOUT_LOG = "drain timeout reached; proceeding with restart";

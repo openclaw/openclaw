@@ -45,9 +45,10 @@ export function queueEmbeddedPiMessage(sessionId: string, text: string): boolean
  */
 export function abortEmbeddedPiRun(sessionId: string): boolean;
 export function abortEmbeddedPiRun(
-  sessionId?: string,
-  opts?: { mode?: "all" | "compacting" },
+  sessionId: undefined,
+  opts: { mode: "all" | "compacting" },
 ): boolean;
+export function abortEmbeddedPiRun(): boolean;
 export function abortEmbeddedPiRun(
   sessionId?: string,
   opts?: { mode?: "all" | "compacting" },
