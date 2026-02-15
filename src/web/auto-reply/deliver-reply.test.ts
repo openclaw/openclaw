@@ -80,7 +80,7 @@ describe("deliverWebReply", () => {
     });
 
     expect(msg.reply).toHaveBeenCalledTimes(2);
-    expect(sleep).toHaveBeenCalledWith(500);
+    expect(sleep).toHaveBeenCalledWith(1000);
   });
 
   it("sends image media with caption and then remaining text", async () => {
@@ -147,7 +147,7 @@ describe("deliverWebReply", () => {
     });
 
     expect(msg.sendMedia).toHaveBeenCalledTimes(2);
-    expect(sleep).toHaveBeenCalledWith(500);
+    expect(sleep).toHaveBeenCalledWith(1000);
   });
 
   it("falls back to text-only when the first media send fails", async () => {
