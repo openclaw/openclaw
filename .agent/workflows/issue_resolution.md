@@ -1,31 +1,33 @@
 ---
-description: Strict protocol for resolving issues (Branch -> Fix -> Verify x3 -> PR)
+description: How to resolve an issue in the OpenClaw codebase.
 ---
 
-# Issue Resolution Protocol
+1.  **Analyze the Issue**:
+    - Read the issue description carefully.
+    - Identify the core problem and expected behavior.
+    - Search for existing solutions or similar issues.
 
-1.  **Preparation**
-    - [ ] **Check for Existing PRs**: Search for open PRs related to the issue.
-      - **Prioritize**: Issues WITHOUT open PRs.
-      - **Exception**: High-value issues with weak/stalled existing PRs may be picked up if our solution is significantly more robust.
-    - [ ] **Create Branch**: Always create a new branch from `main`.
-      - `git checkout main`
-      - `git pull`
-      - `git checkout -b <type>/<description>` (e.g. `refactor/nostr-dispatcher`)
+2.  **Reproduce the Issue**:
+    - Create a minimal reproduction test case.
+    - Verify the failure with the test case.
 
-2.  **Implementation**
-    - [ ] **Plan**: Create/Update `implementation_plan.md` (detailed).
-    - [ ] **Brutal Plan Review**: rigorously review the plan. Do NOT write code until the plan is approved.
-    - [ ] **Code**: Implement the fix or feature.
+3.  **Plan the Fix**:
+    - Create an `implementation_plan.md` artifact.
+    - Outline the proposed changes and verification steps.
+    - **Brutal Review**: Review the plan critically for edge cases and regressions.
 
-3.  **Verification (The "Brutal Review")**
-    - [ ] **Local Testing**: Run relevant tests (`pnpm test`, etc.).
-    - [ ] **Review Pass 1 (Logic)**: Check for logical errors, edge cases, and regression risks.
-    - [ ] **Review Pass 2 (Style/Standards)**: Check for linting, typing, and code style.
-    - [ ] **Review Pass 3 (Sanity)**: Final "vibe check" and holistic review.
-    - [ ] **CI Check**: Check emails for any CI notifications (if applicable).
+4.  **Implement the Fix**:
+    - Write the code to fix the issue.
+    - Follow the project's coding standards and style guide.
 
-4.  **Finalization**
-    - [ ] **Wait for Command**: Do NOT propose to commit. Wait for the user to explicitly ask you to commit.
-    - [ ] **Commit**: Only after the user says "Commit", execute the commit.
-    - [ ] **Done**: Stop here. Do NOT create a PR. Do NOT ask to create a PR. Wait for the user to handle the PR or give further instructions.
+5.  **Verify the Fix**:
+    - Run the reproduction test case to confirm the fix.
+    - Run the full test suite for the affected component.
+    - **Critical**: Run a full project type check (`pnpm exec tsc --noEmit`) to catch cross-module type errors (e.g., TS2742).
+    - Perform manual verification if applicable.
+
+6.  **Finalize**:
+    - Review the changes again ("Brutal Review").
+    - Commit the changes with a descriptive message.
+    - Push the branch and create a Pull Request.
+    - Check CI status and address any failures.
