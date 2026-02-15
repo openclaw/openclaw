@@ -86,10 +86,8 @@ describe("enableConsoleCapture", () => {
     console.warn("[EventQueue] Slow listener detected");
     expect(warn).toHaveBeenCalledTimes(1);
     const firstArg = String(warn.mock.calls[0]?.[0] ?? "");
-    // Timestamp uses local time with timezone offset instead of UTC "Z" suffix
-    expect(firstArg).toMatch(
-      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2} \[EventQueue\]/,
-    );
+    // Timestamp format is now HH:MM:SS in local time (respects TZ)
+    expect(firstArg).toMatch(/^\d{2}:\d{2}:\d{2} \[EventQueue\]/);
     vi.useRealTimers();
   });
 

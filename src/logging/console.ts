@@ -149,26 +149,27 @@ function isEpipeError(err: unknown): boolean {
   return code === "EPIPE" || code === "EIO";
 }
 
-export function formatConsoleTimestamp(style: ConsoleStyle): string {
+function formatConsoleTimestamp(style: ConsoleStyle): string {
   const now = new Date();
   if (style === "pretty") {
-    const h = String(now.getHours()).padStart(2, "0");
-    const m = String(now.getMinutes()).padStart(2, "0");
-    const s = String(now.getSeconds()).padStart(2, "0");
-    return `${h}:${m}:${s}`;
+    // Use Intl to explicitly respect TZ env var (more robust than Date.getHours())
+    try {
+      return new Intl.DateTimeFormat("en-GB", {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false,
+        timeZone: process.env.TZ || undefined,
+      }).format(now);
+    } catch {
+      // Fallback if TZ is invalid
+      const hh = String(now.getHours()).padStart(2, "0");
+      const mm = String(now.getMinutes()).padStart(2, "0");
+      const ss = String(now.getSeconds()).padStart(2, "0");
+      return `${hh}:${mm}:${ss}`;
+    }
   }
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, "0");
-  const day = String(now.getDate()).padStart(2, "0");
-  const h = String(now.getHours()).padStart(2, "0");
-  const m = String(now.getMinutes()).padStart(2, "0");
-  const s = String(now.getSeconds()).padStart(2, "0");
-  const ms = String(now.getMilliseconds()).padStart(3, "0");
-  const tzOffset = now.getTimezoneOffset();
-  const tzSign = tzOffset <= 0 ? "+" : "-";
-  const tzHours = String(Math.floor(Math.abs(tzOffset) / 60)).padStart(2, "0");
-  const tzMinutes = String(Math.abs(tzOffset) % 60).padStart(2, "0");
-  return `${year}-${month}-${day}T${h}:${m}:${s}.${ms}${tzSign}${tzHours}:${tzMinutes}`;
+  return now.toISOString();
 }
 
 function hasTimestampPrefix(value: string): boolean {

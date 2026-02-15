@@ -176,7 +176,19 @@ function formatConsoleLine(opts: {
   const displayMessage = stripRedundantSubsystemPrefixForConsole(opts.message, displaySubsystem);
   const time = (() => {
     if (opts.style === "pretty") {
-      return color.gray(new Date().toISOString().slice(11, 19));
+      const now = new Date();
+      try {
+        const formatted = new Intl.DateTimeFormat("en-GB", {
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+          hour12: false,
+          timeZone: process.env.TZ || undefined,
+        }).format(now);
+        return color.gray(formatted);
+      } catch {
+        return color.gray(now.toISOString().slice(11, 19));
+      }
     }
     if (loggingState.consoleTimestampPrefix) {
       return color.gray(new Date().toISOString());
