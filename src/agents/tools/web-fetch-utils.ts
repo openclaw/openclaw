@@ -55,6 +55,17 @@ function normalizeWhitespace(value: string): string {
 export function htmlToMarkdown(html: string): { text: string; title?: string } {
   const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
   const title = titleMatch ? normalizeWhitespace(stripTags(titleMatch[1])) : undefined;
+  // Extract JSON-LD structured data before stripping scripts (#17137)
+  const jsonLdBlocks: string[] = [];
+  const jsonLdRe =
+    /<script[^>]+type\s*=\s*["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+  let jsonLdMatch: RegExpExecArray | null;
+  while ((jsonLdMatch = jsonLdRe.exec(html)) !== null) {
+    const block = jsonLdMatch[1].trim();
+    if (block) {
+      jsonLdBlocks.push(block);
+    }
+  }
   let text = html
     .replace(/<script[\s\S]*?<\/script>/gi, "")
     .replace(/<style[\s\S]*?<\/style>/gi, "")
@@ -80,6 +91,10 @@ export function htmlToMarkdown(html: string): { text: string; title?: string } {
     .replace(/<\/(p|div|section|article|header|footer|table|tr|ul|ol)>/gi, "\n");
   text = stripTags(text);
   text = normalizeWhitespace(text);
+  if (jsonLdBlocks.length > 0) {
+    const jsonLdSection = jsonLdBlocks.map((block) => `\`\`\`json\n${block}\n\`\`\``).join("\n");
+    text = `${text}\n\n## Structured Data (JSON-LD)\n\n${jsonLdSection}`;
+  }
   return { text, title };
 }
 
