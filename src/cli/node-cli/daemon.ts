@@ -22,7 +22,11 @@ import {
   runServiceStop,
   runServiceUninstall,
 } from "../daemon-cli/lifecycle-core.js";
-import { buildDaemonServiceSnapshot, createDaemonActionContext } from "../daemon-cli/response.js";
+import {
+  buildDaemonServiceSnapshot,
+  createDaemonActionContext,
+  installDaemonServiceAndEmit,
+} from "../daemon-cli/response.js";
 import { formatRuntimeStatus, parsePort } from "../daemon-cli/shared.js";
 
 type NodeDaemonInstallOptions = {
@@ -160,31 +164,22 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
       },
     });
 
-  try {
-    await service.install({
-      env: process.env,
-      stdout,
-      programArguments,
-      workingDirectory,
-      environment,
-      description,
-    });
-  } catch (err) {
-    fail(`Node install failed: ${String(err)}`);
-    return;
-  }
-
-  let installed = true;
-  try {
-    installed = await service.isLoaded({ env: process.env });
-  } catch {
-    installed = true;
-  }
-  emit({
-    ok: true,
-    result: "installed",
-    service: buildDaemonServiceSnapshot(service, installed),
-    warnings: warnings.length ? warnings : undefined,
+  await installDaemonServiceAndEmit({
+    serviceNoun: "Node",
+    service,
+    warnings,
+    emit,
+    fail,
+    install: async () => {
+      await service.install({
+        env: process.env,
+        stdout,
+        programArguments,
+        workingDirectory,
+        environment,
+        description,
+      });
+    },
   });
 }
 

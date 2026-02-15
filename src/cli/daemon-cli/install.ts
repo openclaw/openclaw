@@ -16,7 +16,11 @@ import { resolveGatewayService } from "../../daemon/service.js";
 import { resolveGatewayAuth } from "../../gateway/auth.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
-import { buildDaemonServiceSnapshot, createDaemonActionContext } from "./response.js";
+import {
+  buildDaemonServiceSnapshot,
+  createDaemonActionContext,
+  installDaemonServiceAndEmit,
+} from "./response.js";
 import { parsePort } from "./shared.js";
 
 export async function runDaemonInstall(opts: DaemonInstallOptions) {
@@ -154,29 +158,20 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     config: cfg,
   });
 
-  try {
-    await service.install({
-      env: process.env,
-      stdout,
-      programArguments,
-      workingDirectory,
-      environment,
-    });
-  } catch (err) {
-    fail(`Gateway install failed: ${String(err)}`);
-    return;
-  }
-
-  let installed = true;
-  try {
-    installed = await service.isLoaded({ env: process.env });
-  } catch {
-    installed = true;
-  }
-  emit({
-    ok: true,
-    result: "installed",
-    service: buildDaemonServiceSnapshot(service, installed),
-    warnings: warnings.length ? warnings : undefined,
+  await installDaemonServiceAndEmit({
+    serviceNoun: "Gateway",
+    service,
+    warnings,
+    emit,
+    fail,
+    install: async () => {
+      await service.install({
+        env: process.env,
+        stdout,
+        programArguments,
+        workingDirectory,
+        environment,
+      });
+    },
   });
 }
