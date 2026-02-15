@@ -1,3 +1,4 @@
+import { t } from "../i18n/index.js";
 import { isTelegramVoiceCompatibleAudio } from "../media/audio.js";
 
 export function resolveTelegramVoiceDecision(opts: {
@@ -15,7 +16,7 @@ export function resolveTelegramVoiceDecision(opts: {
   const fileName = opts.fileName ?? "unknown";
   return {
     useVoice: false,
-    reason: `media is ${contentType} (${fileName})`,
+    reason: t("telegram.media.voice_as_audio", { mediaType: contentType, filename: fileName }),
   };
 }
 
@@ -27,9 +28,7 @@ export function resolveTelegramVoiceSend(opts: {
 }): { useVoice: boolean } {
   const decision = resolveTelegramVoiceDecision(opts);
   if (decision.reason && opts.logFallback) {
-    opts.logFallback(
-      `Telegram voice requested but ${decision.reason}; sending as audio file instead.`,
-    );
+    opts.logFallback(decision.reason);
   }
   return { useVoice: decision.useVoice };
 }

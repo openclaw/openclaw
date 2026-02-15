@@ -1,3 +1,4 @@
+import { t } from "../i18n/index.js";
 import { detectMime } from "../media/mime.js";
 import { type SavedMedia, saveMediaBuffer } from "../media/store.js";
 
@@ -18,11 +19,11 @@ export async function getTelegramFile(
     { signal: AbortSignal.timeout(timeoutMs) },
   );
   if (!res.ok) {
-    throw new Error(`getFile failed: ${res.status} ${res.statusText}`);
+    throw new Error(t("telegram.errors.get_file_failed", { status: res.status, statusText: res.statusText }));
   }
   const json = (await res.json()) as { ok: boolean; result?: TelegramFileInfo };
   if (!json.ok || !json.result?.file_path) {
-    throw new Error("getFile returned no file_path");
+    throw new Error(t("telegram.errors.get_file_no_path"));
   }
   return json.result;
 }
@@ -34,12 +35,12 @@ export async function downloadTelegramFile(
   timeoutMs = 60_000,
 ): Promise<SavedMedia> {
   if (!info.file_path) {
-    throw new Error("file_path missing");
+    throw new Error(t("telegram.errors.file_path_missing"));
   }
   const url = `https://api.telegram.org/file/bot${token}/${info.file_path}`;
   const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
   if (!res.ok || !res.body) {
-    throw new Error(`Failed to download telegram file: HTTP ${res.status}`);
+    throw new Error(t("telegram.errors.download_failed", { status: res.status }));
   }
   const array = Buffer.from(await res.arrayBuffer());
   const mime = await detectMime({

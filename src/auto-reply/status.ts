@@ -36,6 +36,7 @@ import {
   resolveModelCostConfig,
 } from "../utils/usage-format.js";
 import { VERSION } from "../version.js";
+import { t } from "../i18n/index.js";
 import {
   listChatCommands,
   listChatCommandsForConfig,
@@ -492,13 +493,13 @@ export function buildStatusMessage(args: StatusArgs): string {
 }
 
 const CATEGORY_LABELS: Record<CommandCategory, string> = {
-  session: "Session",
-  options: "Options",
-  status: "Status",
-  management: "Management",
-  media: "Media",
-  tools: "Tools",
-  docks: "Docks",
+  session: t("categories.session"),
+  options: t("categories.options"),
+  status: t("categories.status"),
+  management: t("categories.management"),
+  media: t("categories.media"),
+  tools: t("categories.tools"),
+  docks: t("categories.docks"),
 };
 
 const CATEGORY_ORDER: CommandCategory[] = [
@@ -528,10 +529,10 @@ function groupCommandsByCategory(
 }
 
 export function buildHelpMessage(cfg?: OpenClawConfig): string {
-  const lines = ["ℹ️ Help", ""];
+  const lines = [t("help.title"), ""];
 
-  lines.push("Session");
-  lines.push("  /new  |  /reset  |  /compact [instructions]  |  /stop");
+  lines.push(t("help.session_section"));
+  lines.push(t("help.session_commands"));
   lines.push("");
 
   const optionParts = ["/think <level>", "/model <id>", "/verbose on|off"];
@@ -541,19 +542,19 @@ export function buildHelpMessage(cfg?: OpenClawConfig): string {
   if (cfg?.commands?.debug === true) {
     optionParts.push("/debug");
   }
-  lines.push("Options");
+  lines.push(t("help.options_section"));
   lines.push(`  ${optionParts.join("  |  ")}`);
   lines.push("");
 
-  lines.push("Status");
-  lines.push("  /status  |  /whoami  |  /context");
+  lines.push(t("help.status_section"));
+  lines.push(t("help.status_commands"));
   lines.push("");
 
-  lines.push("Skills");
-  lines.push("  /skill <name> [input]");
+  lines.push(t("help.skills_section"));
+  lines.push(t("help.skills_commands"));
 
   lines.push("");
-  lines.push("More: /commands for full list");
+  lines.push(t("help.more_commands"));
 
   return lines.join("\n");
 }
@@ -672,7 +673,7 @@ export function buildCommandsMessagePaginated(
   const items = buildCommandItems(commands, pluginCommands);
 
   if (!isTelegram) {
-    const lines = ["ℹ️ Slash commands", ""];
+    const lines = [t("help.title"), ""];
     lines.push(formatCommandList(items));
     return {
       text: lines.join("\n").trim(),
@@ -690,7 +691,7 @@ export function buildCommandsMessagePaginated(
   const endIndex = startIndex + COMMANDS_PER_PAGE;
   const pageItems = items.slice(startIndex, endIndex);
 
-  const lines = [`ℹ️ Commands (${currentPage}/${totalPages})`, ""];
+  const lines = [`ℹ️ ${t("help.title")} (${currentPage}/${totalPages})`, ""];
   lines.push(formatCommandList(pageItems));
 
   return {

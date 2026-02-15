@@ -18,6 +18,7 @@ import {
   normalizeOutboundPayloadsForJson,
 } from "../../infra/outbound/payloads.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
+import { t } from "../../i18n/index.js";
 
 type RunResult = Awaited<
   ReturnType<(typeof import("../../agents/pi-embedded.js"))["runEmbeddedPiAgent"]>
@@ -152,7 +153,7 @@ export async function deliverAgentCommandResult(params: {
   }
 
   if (!payloads || payloads.length === 0) {
-    runtime.log("No reply from agent.");
+    runtime.log(t("commands.agent.no_reply"));
     return { payloads: [], meta: result.meta };
   }
 

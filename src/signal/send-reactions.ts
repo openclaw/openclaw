@@ -6,6 +6,7 @@ import { loadConfig } from "../config/config.js";
 import { resolveSignalAccount } from "./accounts.js";
 import { signalRpcRequest } from "./client.js";
 import { resolveSignalRpcContext } from "./rpc-context.js";
+import { t } from "../i18n/index.js";
 
 export type SignalReactionOpts = {
   baseUrl?: string;
@@ -150,10 +151,10 @@ export async function sendReactionSignal(
     remove: false,
     opts,
     errors: {
-      missingRecipient: "Recipient or groupId is required for Signal reaction",
-      invalidTargetTimestamp: "Valid targetTimestamp is required for Signal reaction",
-      missingEmoji: "Emoji is required for Signal reaction",
-      missingTargetAuthor: "targetAuthor is required for group reactions",
+      missingRecipient: t("signal.reactions.missing_recipient"),
+      invalidTargetTimestamp: t("signal.reactions.invalid_target_timestamp"),
+      missingEmoji: t("signal.reactions.missing_emoji"),
+      missingTargetAuthor: t("signal.reactions.missing_target_author"),
     },
   });
 }
@@ -178,10 +179,10 @@ export async function removeReactionSignal(
     remove: true,
     opts,
     errors: {
-      missingRecipient: "Recipient or groupId is required for Signal reaction removal",
-      invalidTargetTimestamp: "Valid targetTimestamp is required for Signal reaction removal",
-      missingEmoji: "Emoji is required for Signal reaction removal",
-      missingTargetAuthor: "targetAuthor is required for group reaction removal",
+      missingRecipient: t("signal.reactions.missing_recipient"),
+      invalidTargetTimestamp: t("signal.reactions.invalid_target_timestamp"),
+      missingEmoji: t("signal.reactions.missing_emoji"),
+      missingTargetAuthor: t("signal.reactions.missing_target_author"),
     },
   });
 }

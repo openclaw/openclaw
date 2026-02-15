@@ -6,6 +6,7 @@ import type {
 } from "@grammyjs/types";
 import { type ApiClientOptions, Bot, HttpError, InputFile } from "grammy";
 import type { RetryConfig } from "../infra/retry.js";
+import { t } from "../i18n/index.js";
 import { loadConfig } from "../config/config.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { logVerbose } from "../globals.js";
@@ -116,7 +117,7 @@ function resolveToken(explicit: string | undefined, params: { accountId: string;
   }
   if (!params.token) {
     throw new Error(
-      `Telegram bot token missing for account "${params.accountId}" (set channels.telegram.accounts.${params.accountId}.botToken/tokenFile or TELEGRAM_BOT_TOKEN for default).`,
+      t("channels.telegram.errors.bot_token_missing", { accountId: params.accountId })
     );
   }
   return params.token.trim();
@@ -125,7 +126,7 @@ function resolveToken(explicit: string | undefined, params: { accountId: string;
 function normalizeChatId(to: string): string {
   const trimmed = to.trim();
   if (!trimmed) {
-    throw new Error("Recipient is required for Telegram sends");
+    throw new Error(t("channels.telegram.errors.recipient_required"));
   }
 
   // Common internal prefixes that sometimes leak into outbound sends.
@@ -143,7 +144,7 @@ function normalizeChatId(to: string): string {
   }
 
   if (!normalized) {
-    throw new Error("Recipient is required for Telegram sends");
+    throw new Error(t("channels.telegram.errors.recipient_required"));
   }
   if (normalized.startsWith("@")) {
     return normalized;
@@ -167,14 +168,14 @@ function normalizeMessageId(raw: string | number): number {
   if (typeof raw === "string") {
     const value = raw.trim();
     if (!value) {
-      throw new Error("Message id is required for Telegram actions");
+      throw new Error(t("channels.telegram.errors.message_id_required"));
     }
     const parsed = Number.parseInt(value, 10);
     if (Number.isFinite(parsed)) {
       return parsed;
     }
   }
-  throw new Error("Message id is required for Telegram actions");
+  throw new Error(t("channels.telegram.errors.message_id_required"));
 }
 
 function isTelegramThreadNotFoundError(err: unknown): boolean {
@@ -292,7 +293,7 @@ export async function sendMessageTelegram(
     return new Error(
       [
         `Telegram send failed: chat not found (chat_id=${chatId}).`,
-        "Likely: bot not started in DM, bot removed from group/channel, group migrated (new -100… id), or wrong bot token.",
+        t("telegram.errors.chat_not_found"),
         `Input was: ${JSON.stringify(to)}.`,
       ].join(" "),
     );
@@ -632,7 +633,7 @@ export async function reactMessageTelegram(
       ? []
       : [{ type: "emoji", emoji: trimmedEmoji as ReactionTypeEmoji["emoji"] }];
   if (typeof api.setMessageReaction !== "function") {
-    throw new Error("Telegram reactions are unavailable in this bot API.");
+    throw new Error(t("telegram.errors.reactions_unavailable"));
   }
   try {
     await requestWithDiag(() => api.setMessageReaction(chatId, messageId, reactions), "reaction");
@@ -866,7 +867,7 @@ export async function sendStickerTelegram(
     return new Error(
       [
         `Telegram send failed: chat not found (chat_id=${chatId}).`,
-        "Likely: bot not started in DM, bot removed from group/channel, group migrated (new -100… id), or wrong bot token.",
+        t("telegram.errors.chat_not_found"),
         `Input was: ${JSON.stringify(to)}.`,
       ].join(" "),
     );
@@ -998,7 +999,7 @@ export async function sendPollTelegram(
     return new Error(
       [
         `Telegram send failed: chat not found (chat_id=${chatId}).`,
-        "Likely: bot not started in DM, bot removed from group/channel, group migrated (new -100… id), or wrong bot token.",
+        t("telegram.errors.chat_not_found"),
         `Input was: ${JSON.stringify(to)}.`,
       ].join(" "),
     );

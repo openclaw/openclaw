@@ -17,6 +17,7 @@ import {
   normalizePayloadToSystemText,
   normalizeRequiredName,
 } from "./normalize.js";
+import { t } from "../../i18n/index.js";
 
 const STUCK_RUN_MS = 2 * 60 * 60 * 1000;
 
@@ -33,23 +34,23 @@ function resolveEveryAnchorMs(params: {
 
 export function assertSupportedJobSpec(job: Pick<CronJob, "sessionTarget" | "payload">) {
   if (job.sessionTarget === "main" && job.payload.kind !== "systemEvent") {
-    throw new Error('main cron jobs require payload.kind="systemEvent"');
+    throw new Error(t("cron.main_jobs_require_system_event"));
   }
   if (job.sessionTarget === "isolated" && job.payload.kind !== "agentTurn") {
-    throw new Error('isolated cron jobs require payload.kind="agentTurn"');
+    throw new Error(t("cron.isolated_jobs_require_agent_turn"));
   }
 }
 
 function assertDeliverySupport(job: Pick<CronJob, "sessionTarget" | "delivery">) {
   if (job.delivery && job.sessionTarget !== "isolated") {
-    throw new Error('cron delivery config is only supported for sessionTarget="isolated"');
+    throw new Error(t("cron.delivery_config_isolated_only"));
   }
 }
 
 export function findJobOrThrow(state: CronServiceState, id: string) {
   const job = state.store?.jobs.find((j) => j.id === id);
   if (!job) {
-    throw new Error(`unknown cron job id: ${id}`);
+    throw new Error(t("cron.unknown_job_id", { id }));
   }
   return job;
 }
@@ -418,13 +419,13 @@ function buildLegacyDeliveryPatch(
 function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
   if (patch.kind === "systemEvent") {
     if (typeof patch.text !== "string" || patch.text.length === 0) {
-      throw new Error('cron.update payload.kind="systemEvent" requires text');
+      throw new Error(t("cron.system_event_requires_text"));
     }
     return { kind: "systemEvent", text: patch.text };
   }
 
   if (typeof patch.message !== "string" || patch.message.length === 0) {
-    throw new Error('cron.update payload.kind="agentTurn" requires message');
+    throw new Error(t("cron.agent_turn_requires_message"));
   }
 
   return {

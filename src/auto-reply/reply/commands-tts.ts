@@ -1,6 +1,7 @@
 import type { ReplyPayload } from "../types.js";
 import type { CommandHandler } from "./commands-types.js";
 import { logVerbose } from "../../globals.js";
+import { t } from "../../i18n/index.js";
 import {
   getLastTtsAttempt,
   getTtsMaxLength,
@@ -44,27 +45,25 @@ function ttsUsage(): ReplyPayload {
   // Keep usage in one place so help/validation stays consistent.
   return {
     text:
-      `🔊 **TTS (Text-to-Speech) Help**\n\n` +
-      `**Commands:**\n` +
-      `• /tts on — Enable automatic TTS for replies\n` +
-      `• /tts off — Disable TTS\n` +
-      `• /tts status — Show current settings\n` +
-      `• /tts provider [name] — View/change provider\n` +
-      `• /tts limit [number] — View/change text limit\n` +
-      `• /tts summary [on|off] — View/change auto-summary\n` +
-      `• /tts audio <text> — Generate audio from text\n\n` +
-      `**Providers:**\n` +
-      `• edge — Free, fast (default)\n` +
-      `• openai — High quality (requires API key)\n` +
-      `• elevenlabs — Premium voices (requires API key)\n\n` +
-      `**Text Limit (default: 1500, max: 4096):**\n` +
-      `When text exceeds the limit:\n` +
-      `• Summary ON: AI summarizes, then generates audio\n` +
-      `• Summary OFF: Truncates text, then generates audio\n\n` +
-      `**Examples:**\n` +
-      `/tts provider edge\n` +
-      `/tts limit 2000\n` +
-      `/tts audio Hello, this is a test!`,
+      `${t("auto_reply.tts.help_title")}\n\n` +
+      `${t("auto_reply.tts.commands_title")}\n` +
+      `${t("auto_reply.tts.command_on")}\n` +
+      `${t("auto_reply.tts.command_off")}\n` +
+      `${t("auto_reply.tts.command_status")}\n` +
+      `${t("auto_reply.tts.command_provider_view")}\n` +
+      `${t("auto_reply.tts.command_limit_view")}\n` +
+      `${t("auto_reply.tts.command_summary")}\n` +
+      `${t("auto_reply.tts.command_audio")}\n\n` +
+      `${t("auto_reply.tts.providers_title")}\n` +
+      `${t("auto_reply.tts.provider_edge")}\n` +
+      `${t("auto_reply.tts.provider_openai_tts")}\n` +
+      `${t("auto_reply.tts.provider_elevenlabs_tts")}\n\n` +
+      `${t("auto_reply.tts.text_limit_title")}\n` +
+      `${t("auto_reply.tts.text_limit_desc")}\n` +
+      `${t("auto_reply.tts.summary_on")}\n` +
+      `${t("auto_reply.tts.summary_off")}\n\n` +
+      `${t("auto_reply.tts.examples_title")}\n` +
+      `${t("auto_reply.tts.examples_text")}`,
   };
 }
 
@@ -95,12 +94,12 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
 
   if (action === "on") {
     setTtsEnabled(prefsPath, true);
-    return { shouldContinue: false, reply: { text: "🔊 TTS enabled." } };
+    return { shouldContinue: false, reply: { text: t("auto_reply.tts.enabled") } };
   }
 
   if (action === "off") {
     setTtsEnabled(prefsPath, false);
-    return { shouldContinue: false, reply: { text: "🔇 TTS disabled." } };
+    return { shouldContinue: false, reply: { text: t("auto_reply.tts.disabled") } };
   }
 
   if (action === "audio") {
@@ -108,10 +107,7 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
       return {
         shouldContinue: false,
         reply: {
-          text:
-            `🎤 Generate audio from text.\n\n` +
-            `Usage: /tts audio <text>\n` +
-            `Example: /tts audio Hello, this is a test!`,
+          text: `${t("auto_reply.tts.audio_usage_title")}\n\n${t("auto_reply.tts.audio_usage_text")}`,
         },
       };
     }
@@ -152,7 +148,7 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
     });
     return {
       shouldContinue: false,
-      reply: { text: `❌ Error generating audio: ${result.error ?? "unknown error"}` },
+      reply: { text: t("auto_reply.tts.error_generating", { error: result.error ?? "unknown error" }) },
     };
   }
 
@@ -166,12 +162,12 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
         shouldContinue: false,
         reply: {
           text:
-            `🎙️ TTS provider\n` +
-            `Primary: ${currentProvider}\n` +
-            `OpenAI key: ${hasOpenAI ? "✅" : "❌"}\n` +
-            `ElevenLabs key: ${hasElevenLabs ? "✅" : "❌"}\n` +
-            `Edge enabled: ${hasEdge ? "✅" : "❌"}\n` +
-            `Usage: /tts provider openai | elevenlabs | edge`,
+            `${t("auto_reply.tts.provider_title")}\n` +
+            `${t("auto_reply.tts.provider_primary")}: ${currentProvider}\n` +
+            `${t("auto_reply.tts.provider_openai_key")}: ${hasOpenAI ? "✅" : "❌"}\n` +
+            `${t("auto_reply.tts.provider_elevenlabs_key")}: ${hasElevenLabs ? "✅" : "❌"}\n` +
+            `${t("auto_reply.tts.provider_edge_enabled")}: ${hasEdge ? "✅" : "❌"}\n` +
+            `${t("auto_reply.tts.provider_usage")}`,
         },
       };
     }
@@ -184,7 +180,7 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
     setTtsProvider(prefsPath, requested);
     return {
       shouldContinue: false,
-      reply: { text: `✅ TTS provider set to ${requested}.` },
+      reply: { text: t("auto_reply.tts.provider_set", { provider: requested }) },
     };
   }
 
@@ -194,12 +190,7 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
       return {
         shouldContinue: false,
         reply: {
-          text:
-            `📏 TTS limit: ${currentLimit} characters.\n\n` +
-            `Text longer than this triggers summary (if enabled).\n` +
-            `Range: 100-4096 chars (Telegram max).\n\n` +
-            `To change: /tts limit <number>\n` +
-            `Example: /tts limit 2000`,
+          text: `${t("auto_reply.tts.limit_title", { limit: currentLimit })}\n\n${t("auto_reply.tts.limit_description")}`,
         },
       };
     }
@@ -207,13 +198,13 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
     if (!Number.isFinite(next) || next < 100 || next > 4096) {
       return {
         shouldContinue: false,
-        reply: { text: "❌ Limit must be between 100 and 4096 characters." },
+        reply: { text: t("auto_reply.tts.limit_invalid") },
       };
     }
     setTtsMaxLength(prefsPath, next);
     return {
       shouldContinue: false,
-      reply: { text: `✅ TTS limit set to ${next} characters.` },
+      reply: { text: t("auto_reply.tts.limit_set", { limit: next }) },
     };
   }
 
@@ -224,12 +215,7 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
       return {
         shouldContinue: false,
         reply: {
-          text:
-            `📝 TTS auto-summary: ${enabled ? "on" : "off"}.\n\n` +
-            `When text exceeds ${maxLen} chars:\n` +
-            `• ON: summarizes text, then generates audio\n` +
-            `• OFF: truncates text, then generates audio\n\n` +
-            `To change: /tts summary on | off`,
+          text: `${t("auto_reply.tts.summary_title", { enabled: enabled ? t("auto_reply.tts.status_on") : t("auto_reply.tts.status_off") })}\n\n${t("auto_reply.tts.summary_description", { maxLen })}`,
         },
       };
     }
@@ -241,7 +227,7 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
     return {
       shouldContinue: false,
       reply: {
-        text: requested === "on" ? "✅ TTS auto-summary enabled." : "❌ TTS auto-summary disabled.",
+        text: requested === "on" ? t("auto_reply.tts.summary_enabled") : t("auto_reply.tts.summary_disabled"),
       },
     };
   }
@@ -254,22 +240,25 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
     const summarize = isSummarizationEnabled(prefsPath);
     const last = getLastTtsAttempt();
     const lines = [
-      "📊 TTS status",
-      `State: ${enabled ? "✅ enabled" : "❌ disabled"}`,
-      `Provider: ${provider} (${hasKey ? "✅ configured" : "❌ not configured"})`,
-      `Text limit: ${maxLength} chars`,
-      `Auto-summary: ${summarize ? "on" : "off"}`,
+      t("auto_reply.tts.status_title"),
+      `${t("auto_reply.tts.status_state")}: ${enabled ? t("auto_reply.tts.status_enabled") : t("auto_reply.tts.status_disabled")}`,
+      `${t("auto_reply.tts.status_provider")}: ${provider} (${hasKey ? t("auto_reply.tts.status_configured") : t("auto_reply.tts.status_not_configured")})`,
+      `${t("auto_reply.tts.status_text_limit")}: ${maxLength} chars`,
+      `${t("auto_reply.tts.status_auto_summary")}: ${summarize ? t("auto_reply.tts.status_on") : t("auto_reply.tts.status_off")}`,
     ];
     if (last) {
       const timeAgo = Math.round((Date.now() - last.timestamp) / 1000);
       lines.push("");
-      lines.push(`Last attempt (${timeAgo}s ago): ${last.success ? "✅" : "❌"}`);
-      lines.push(`Text: ${last.textLength} chars${last.summarized ? " (summarized)" : ""}`);
+      lines.push(`${t("auto_reply.tts.status_last_attempt", { timeAgo })}: ${last.success ? "✅" : "❌"}`);
+      lines.push(t("auto_reply.tts.status_text_chars", { 
+        textLength: last.textLength, 
+        summarized: last.summarized ? t("auto_reply.tts.status_text_summarized") : ""
+      }));
       if (last.success) {
-        lines.push(`Provider: ${last.provider ?? "unknown"}`);
-        lines.push(`Latency: ${last.latencyMs ?? 0}ms`);
+        lines.push(`${t("auto_reply.tts.status_provider_used")}: ${last.provider ?? "unknown"}`);
+        lines.push(`${t("auto_reply.tts.status_latency")}: ${last.latencyMs ?? 0}ms`);
       } else if (last.error) {
-        lines.push(`Error: ${last.error}`);
+        lines.push(`${t("auto_reply.tts.status_error")}: ${last.error}`);
       }
     }
     return { shouldContinue: false, reply: { text: lines.join("\n") } };

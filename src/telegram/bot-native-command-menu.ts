@@ -1,5 +1,6 @@
 import type { Bot } from "grammy";
 import type { RuntimeEnv } from "../runtime.js";
+import { t } from "../i18n/index.js";
 import {
   normalizeTelegramCommandName,
   TELEGRAM_COMMAND_NAME_PATTERN,
@@ -31,20 +32,20 @@ export function buildPluginTelegramMenuCommands(params: {
     const normalized = normalizeTelegramCommandName(spec.name);
     if (!normalized || !TELEGRAM_COMMAND_NAME_PATTERN.test(normalized)) {
       issues.push(
-        `Plugin command "/${spec.name}" is invalid for Telegram (use a-z, 0-9, underscore; max 32 chars).`,
+        t("telegram.commands.plugin_invalid_name", { command: `/${spec.name}` }),
       );
       continue;
     }
     const description = spec.description.trim();
     if (!description) {
-      issues.push(`Plugin command "/${normalized}" is missing a description.`);
+      issues.push(t("telegram.commands.plugin_missing_description", { command: `/${normalized}` }));
       continue;
     }
     if (existingCommands.has(normalized)) {
       if (pluginCommandNames.has(normalized)) {
-        issues.push(`Plugin command "/${normalized}" is duplicated.`);
+        issues.push(t("telegram.commands.plugin_duplicated", { command: `/${normalized}` }));
       } else {
-        issues.push(`Plugin command "/${normalized}" conflicts with an existing Telegram command.`);
+        issues.push(t("telegram.commands.plugin_name_conflict", { command: `/${normalized}` }));
       }
       continue;
     }

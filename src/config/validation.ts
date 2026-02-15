@@ -11,6 +11,7 @@ import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import { isRecord } from "../utils.js";
 import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-dirs.js";
+import { t } from "../i18n/index.js";
 import { applyAgentDefaults, applyModelDefaults, applySessionDefaults } from "./defaults.js";
 import { findLegacyConfigIssues } from "./legacy.js";
 import { OpenClawSchema } from "./zod-schema.js";
@@ -57,7 +58,7 @@ function validateIdentityAvatar(config: OpenClawConfig): ConfigValidationIssue[]
     if (avatar.startsWith("~")) {
       issues.push({
         path: `agents.list.${index}.identity.avatar`,
-        message: "identity.avatar must be a workspace-relative path, http(s) URL, or data URI.",
+        message: t("config.validation.avatar_invalid_format"),
       });
       continue;
     }
@@ -65,7 +66,7 @@ function validateIdentityAvatar(config: OpenClawConfig): ConfigValidationIssue[]
     if (hasScheme && !WINDOWS_ABS_RE.test(avatar)) {
       issues.push({
         path: `agents.list.${index}.identity.avatar`,
-        message: "identity.avatar must be a workspace-relative path, http(s) URL, or data URI.",
+        message: t("config.validation.avatar_invalid_format"),
       });
       continue;
     }
@@ -76,7 +77,7 @@ function validateIdentityAvatar(config: OpenClawConfig): ConfigValidationIssue[]
     if (!isWorkspaceAvatarPath(avatar, workspaceDir)) {
       issues.push({
         path: `agents.list.${index}.identity.avatar`,
-        message: "identity.avatar must stay within the agent workspace.",
+        message: t("config.validation.avatar_outside_workspace"),
       });
     }
   }
@@ -256,7 +257,7 @@ function validateConfigObjectWithPluginsBase(
       if (!allowedChannels.has(trimmed)) {
         issues.push({
           path: `channels.${trimmed}`,
-          message: `unknown channel id: ${trimmed}`,
+          message: t("config.validation.unknown_channel_id", { channelId: trimmed }),
         });
       }
     }
@@ -273,7 +274,7 @@ function validateConfigObjectWithPluginsBase(
     }
     const trimmed = target.trim();
     if (!trimmed) {
-      issues.push({ path, message: "heartbeat target must not be empty" });
+      issues.push({ path, message: t("config.validation.heartbeat_target_empty") });
       return;
     }
     const normalized = trimmed.toLowerCase();
@@ -297,7 +298,7 @@ function validateConfigObjectWithPluginsBase(
     if (heartbeatChannelIds.has(normalized)) {
       return;
     }
-    issues.push({ path, message: `unknown heartbeat target: ${target}` });
+    issues.push({ path, message: t("config.validation.unknown_heartbeat_target", { target }) });
   };
 
   validateHeartbeatTarget(
@@ -327,7 +328,7 @@ function validateConfigObjectWithPluginsBase(
       if (!knownIds.has(pluginId)) {
         issues.push({
           path: `plugins.entries.${pluginId}`,
-          message: `plugin not found: ${pluginId}`,
+          message: t("config.validation.plugin_not_found", { pluginId }),
         });
       }
     }
@@ -341,7 +342,7 @@ function validateConfigObjectWithPluginsBase(
     if (!knownIds.has(pluginId)) {
       issues.push({
         path: "plugins.allow",
-        message: `plugin not found: ${pluginId}`,
+        message: t("config.validation.plugin_not_found", { pluginId }),
       });
     }
   }
@@ -354,7 +355,7 @@ function validateConfigObjectWithPluginsBase(
     if (!knownIds.has(pluginId)) {
       issues.push({
         path: "plugins.deny",
-        message: `plugin not found: ${pluginId}`,
+        message: t("config.validation.plugin_not_found", { pluginId }),
       });
     }
   }
@@ -363,7 +364,7 @@ function validateConfigObjectWithPluginsBase(
   if (typeof memorySlot === "string" && memorySlot.trim() && !knownIds.has(memorySlot)) {
     issues.push({
       path: "plugins.slots.memory",
-      message: `plugin not found: ${memorySlot}`,
+      message: t("config.validation.plugin_not_found", { pluginId: memorySlot }),
     });
   }
 
@@ -410,14 +411,14 @@ function validateConfigObjectWithPluginsBase(
           for (const error of res.errors) {
             issues.push({
               path: `plugins.entries.${pluginId}.config`,
-              message: `invalid config: ${error}`,
+              message: t("config.validation.invalid_config", { error }),
             });
           }
         }
       } else {
         issues.push({
           path: `plugins.entries.${pluginId}`,
-          message: `plugin schema missing for ${pluginId}`,
+          message: t("config.validation.plugin_schema_missing", { pluginId }),
         });
       }
     }
@@ -425,7 +426,7 @@ function validateConfigObjectWithPluginsBase(
     if (!enabled && entryHasConfig) {
       warnings.push({
         path: `plugins.entries.${pluginId}`,
-        message: `plugin disabled (${reason ?? "disabled"}) but config is present`,
+        message: t("config.validation.plugin_disabled_with_config", { reason: reason ?? "disabled" }),
       });
     }
   }

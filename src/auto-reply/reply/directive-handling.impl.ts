@@ -13,6 +13,7 @@ import { type SessionEntry, updateSessionStore } from "../../config/sessions.js"
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
+import { t } from "../../i18n/index.js";
 import { formatThinkingLevels, formatXHighModelHint, supportsXHighThinking } from "../thinking.js";
 import {
   maybeHandleModelDirectiveInfo,
@@ -138,35 +139,38 @@ export async function handleDirectiveOnly(
       const level = currentThinkLevel ?? "off";
       return {
         text: withOptions(
-          `Current thinking level: ${level}.`,
+          t("auto_reply.directives.current_thinking_level", { level }),
           formatThinkingLevels(resolvedProvider, resolvedModel),
         ),
       };
     }
     return {
-      text: `Unrecognized thinking level "${directives.rawThinkLevel}". Valid levels: ${formatThinkingLevels(resolvedProvider, resolvedModel)}.`,
+      text: t("auto_reply.directives.unrecognized_thinking_level", { 
+        level: directives.rawThinkLevel,
+        validLevels: formatThinkingLevels(resolvedProvider, resolvedModel)
+      }),
     };
   }
   if (directives.hasVerboseDirective && !directives.verboseLevel) {
     if (!directives.rawVerboseLevel) {
       const level = currentVerboseLevel ?? "off";
       return {
-        text: withOptions(`Current verbose level: ${level}.`, "on, full, off"),
+        text: withOptions(t("auto_reply.directives.current_verbose_level", { level }), "on, full, off"),
       };
     }
     return {
-      text: `Unrecognized verbose level "${directives.rawVerboseLevel}". Valid levels: off, on, full.`,
+      text: t("auto_reply.directives.unrecognized_verbose_level", { level: directives.rawVerboseLevel }),
     };
   }
   if (directives.hasReasoningDirective && !directives.reasoningLevel) {
     if (!directives.rawReasoningLevel) {
       const level = currentReasoningLevel ?? "off";
       return {
-        text: withOptions(`Current reasoning level: ${level}.`, "on, off, stream"),
+        text: withOptions(t("auto_reply.directives.current_reasoning_level", { level }), "on, off, stream"),
       };
     }
     return {
-      text: `Unrecognized reasoning level "${directives.rawReasoningLevel}". Valid levels: on, off, stream.`,
+      text: t("auto_reply.directives.unrecognized_reasoning_level", { level: directives.rawReasoningLevel }),
     };
   }
   if (directives.hasElevatedDirective && !directives.elevatedLevel) {
@@ -183,7 +187,7 @@ export async function handleDirectiveOnly(
       const level = currentElevatedLevel ?? "off";
       return {
         text: [
-          withOptions(`Current elevated level: ${level}.`, "on, off, ask, full"),
+          withOptions(t("auto_reply.directives.current_elevated_level", { level }), "on, off, ask, full"),
           shouldHintDirectRuntime ? formatElevatedRuntimeHint() : null,
         ]
           .filter(Boolean)
@@ -191,7 +195,7 @@ export async function handleDirectiveOnly(
       };
     }
     return {
-      text: `Unrecognized elevated level "${directives.rawElevatedLevel}". Valid levels: off, on, ask, full.`,
+      text: t("auto_reply.directives.unrecognized_elevated_level", { level: directives.rawElevatedLevel }),
     };
   }
   if (directives.hasElevatedDirective && (!elevatedEnabled || !elevatedAllowed)) {

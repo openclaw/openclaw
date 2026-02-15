@@ -6,6 +6,7 @@ import path from "node:path";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import { applyUpdateHunk } from "./apply-patch-update.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
+import { t } from "../i18n/index.js";
 
 const BEGIN_PATCH_MARKER = "*** Begin Patch";
 const END_PATCH_MARKER = "*** End Patch";
@@ -95,7 +96,7 @@ export function createApplyPatchTool(
       const params = args as { input?: string };
       const input = typeof params.input === "string" ? params.input : "";
       if (!input.trim()) {
-        throw new Error("Provide a patch input.");
+        throw new Error(t("agents.tools.patch_input_required"));
       }
       if (signal?.aborted) {
         const err = new Error("Aborted");
@@ -124,7 +125,7 @@ export async function applyPatch(
 ): Promise<ApplyPatchResult> {
   const parsed = parsePatchText(input);
   if (parsed.hunks.length === 0) {
-    throw new Error("No files were modified.");
+    throw new Error(t("agents.tools.no_files_modified"));
   }
 
   const summary: ApplyPatchSummary = {
@@ -323,7 +324,7 @@ function toDisplayPath(resolved: string, cwd: string): string {
 function parsePatchText(input: string): { hunks: Hunk[]; patch: string } {
   const trimmed = input.trim();
   if (!trimmed) {
-    throw new Error("Invalid patch: input is empty.");
+    throw new Error(t("agents.tools.invalid_patch_empty"));
   }
 
   const lines = trimmed.split(/\r?\n/);

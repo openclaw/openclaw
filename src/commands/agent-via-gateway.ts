@@ -14,6 +14,7 @@ import {
 } from "../utils/message-channel.js";
 import { agentCommand } from "./agent.js";
 import { resolveSessionKeyForRequest } from "./agent/session.js";
+import { t } from "../i18n/index.js";
 
 type AgentGatewayResult = {
   payloads?: Array<{
@@ -123,7 +124,7 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
 
   const response = await withProgress(
     {
-      label: "Waiting for agent reply…",
+      label: t("commands.agent.waiting_for_reply"),
       indeterminate: true,
       enabled: opts.json !== true,
     },

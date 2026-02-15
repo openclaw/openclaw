@@ -1,5 +1,6 @@
 import type { CommandHandler } from "./commands-types.js";
 import { logVerbose } from "../../globals.js";
+import { t } from "../../i18n/index.js";
 import { listSkillCommandsForAgents } from "../skill-commands.js";
 import {
   buildCommandsMessage,
@@ -95,7 +96,7 @@ export function buildCommandsPaginationKeyboard(
 
   if (currentPage > 1) {
     buttons.push({
-      text: "◀ Prev",
+      text: t("auto_reply.navigation.prev"),
       callback_data: `commands_page_${currentPage - 1}${suffix}`,
     });
   }
@@ -107,7 +108,7 @@ export function buildCommandsPaginationKeyboard(
 
   if (currentPage < totalPages) {
     buttons.push({
-      text: "Next ▶",
+      text: t("auto_reply.navigation.next"),
       callback_data: `commands_page_${currentPage + 1}${suffix}`,
     });
   }
@@ -183,22 +184,22 @@ export const handleWhoamiCommand: CommandHandler = async (params, allowTextComma
   }
   const senderId = params.ctx.SenderId ?? "";
   const senderUsername = params.ctx.SenderUsername ?? "";
-  const lines = ["🧭 Identity", `Channel: ${params.command.channel}`];
+  const lines = [t("auto_reply.identity.title"), `${t("auto_reply.identity.channel")}: ${params.command.channel}`];
   if (senderId) {
-    lines.push(`User id: ${senderId}`);
+    lines.push(`${t("auto_reply.identity.user_id")}: ${senderId}`);
   }
   if (senderUsername) {
     const handle = senderUsername.startsWith("@") ? senderUsername : `@${senderUsername}`;
-    lines.push(`Username: ${handle}`);
+    lines.push(`${t("auto_reply.identity.username")}: ${handle}`);
   }
   if (params.ctx.ChatType === "group" && params.ctx.From) {
-    lines.push(`Chat: ${params.ctx.From}`);
+    lines.push(`${t("auto_reply.identity.chat")}: ${params.ctx.From}`);
   }
   if (params.ctx.MessageThreadId != null) {
-    lines.push(`Thread: ${params.ctx.MessageThreadId}`);
+    lines.push(`${t("auto_reply.identity.thread")}: ${params.ctx.MessageThreadId}`);
   }
   if (senderId) {
-    lines.push(`AllowFrom: ${senderId}`);
+    lines.push(`${t("auto_reply.identity.allow_from")}: ${senderId}`);
   }
   return { shouldContinue: false, reply: { text: lines.join("\n") } };
 };

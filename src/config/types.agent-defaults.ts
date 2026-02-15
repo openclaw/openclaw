@@ -114,6 +114,8 @@ export type AgentDefaultsConfig = {
   userTimezone?: string;
   /** Time format in system prompt: auto (OS preference), 12-hour, or 24-hour. */
   timeFormat?: "auto" | "12" | "24";
+  /** Locale for user interface language (supported: "en", "uk", "de", "es", "fr", "pt", "ja", "zh", "pl", "tr"). */
+  locale?: string;
   /**
    * Envelope timestamp timezone: "utc" (default), "local", "user", or an IANA timezone string.
    */

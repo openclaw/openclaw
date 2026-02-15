@@ -18,6 +18,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import type { RetryRunner } from "../infra/retry-policy.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { t } from "../i18n/index.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -46,12 +47,12 @@ export async function getAudioDuration(filePath: string): Promise<number> {
     ]);
     const duration = parseFloat(stdout.trim());
     if (isNaN(duration)) {
-      throw new Error("Could not parse duration");
+      throw new Error(t("discord.voice_message.duration_parse_error"));
     }
     return Math.round(duration * 100) / 100; // Round to 2 decimal places
   } catch (err) {
     const errMessage = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to get audio duration: ${errMessage}`, { cause: err });
+    throw new Error(t("discord.voice_message.duration_failed", { error: errMessage }), { cause: err });
   }
 }
 
@@ -152,7 +153,7 @@ export async function ensureOggOpus(filePath: string): Promise<{ path: string; c
   // Defense-in-depth: callers should never hand ffmpeg/ffprobe a URL/protocol path.
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)) {
     throw new Error(
-      `Voice message conversion requires a local file path; received a URL/protocol source: ${trimmed}`,
+      t("discord.voice_message.url_not_allowed", { path: trimmed })
     );
   }
 
@@ -257,7 +258,7 @@ export async function sendDiscordVoiceMessage(
   );
 
   if (!uploadUrlResponse.attachments?.[0]) {
-    throw new Error("Failed to get upload URL for voice message");
+    throw new Error(t("discord.voice_message.upload_url_failed"));
   }
 
   const { upload_url, upload_filename } = uploadUrlResponse.attachments[0];
@@ -273,7 +274,7 @@ export async function sendDiscordVoiceMessage(
   });
 
   if (!uploadResponse.ok) {
-    throw new Error(`Failed to upload voice message: ${uploadResponse.status}`);
+    throw new Error(t("discord.voice_message.upload_failed", { status: uploadResponse.status }));
   }
 
   // Step 3: Send the message with voice message flag and metadata

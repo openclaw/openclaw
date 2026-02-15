@@ -1,4 +1,5 @@
 import type { AllowlistMatch } from "../channels/allowlist-match.js";
+import { t } from "../i18n/index.js";
 
 export type NormalizedAllowFrom = {
   entries: string[];
@@ -25,7 +26,7 @@ function warnInvalidAllowFromEntries(entries: string[]) {
         "[telegram] Invalid allowFrom entry:",
         JSON.stringify(entry),
         "- allowFrom/groupAllowFrom authorization requires numeric Telegram sender IDs only.",
-        'If you had "@username" entries, re-run onboarding (it resolves @username to IDs) or replace them manually.',
+        t("telegram.errors.username_resolve_help"),
       ].join(" "),
     );
   }

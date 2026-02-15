@@ -16,6 +16,7 @@ import {
   setAbortMemory,
   stopSubagentsForRequester,
 } from "./abort.js";
+import { t } from "../../i18n/index.js";
 import { clearSessionQueues } from "./queue.js";
 
 function resolveSessionEntryForKey(
@@ -64,7 +65,7 @@ export const handleActivationCommand: CommandHandler = async (params, allowTextC
   if (!params.isGroup) {
     return {
       shouldContinue: false,
-      reply: { text: "⚙️ Group activation only applies to group chats." },
+      reply: { text: t("auto_reply.session.group_activation_only") },
     };
   }
   if (!params.command.isAuthorizedSender) {
@@ -76,7 +77,7 @@ export const handleActivationCommand: CommandHandler = async (params, allowTextC
   if (!activationCommand.mode) {
     return {
       shouldContinue: false,
-      reply: { text: "⚙️ Usage: /activation mention|always" },
+      reply: { text: t("auto_reply.session.activation_usage") },
     };
   }
   if (params.sessionEntry && params.sessionStore && params.sessionKey) {
@@ -93,7 +94,7 @@ export const handleActivationCommand: CommandHandler = async (params, allowTextC
   return {
     shouldContinue: false,
     reply: {
-      text: `⚙️ Group activation set to ${activationCommand.mode}.`,
+      text: t("auto_reply.session.group_activation_set", { mode: activationCommand.mode }),
     },
   };
 };
@@ -115,7 +116,7 @@ export const handleSendPolicyCommand: CommandHandler = async (params, allowTextC
   if (!sendPolicyCommand.mode) {
     return {
       shouldContinue: false,
-      reply: { text: "⚙️ Usage: /send on|off|inherit" },
+      reply: { text: t("auto_reply.session.send_usage") },
     };
   }
   if (params.sessionEntry && params.sessionStore && params.sessionKey) {
@@ -140,7 +141,7 @@ export const handleSendPolicyCommand: CommandHandler = async (params, allowTextC
         : "off";
   return {
     shouldContinue: false,
-    reply: { text: `⚙️ Send policy set to ${label}.` },
+    reply: { text: t("auto_reply.session.send_policy_set", { label }) },
   };
 };
 

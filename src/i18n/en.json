@@ -3,126 +3,178 @@
     "help": { "description": "Help and commands." },
     "commands": { "description": "List all commands." },
     "status": { "description": "Current status." },
-    "skill": { "description": "Run a skill." },
+    "skill": { 
+      "description": "Run a skill.",
+      "args": {
+        "name": "Skill name",
+        "input": "Skill input"
+      }
+    },
+    "dock": { "description": "Switch to {dock} for replies." },
     "approve": { "description": "Approve or reject requests." },
     "context": { "description": "How context works." },
-    "tts": { "description": "Manage text-to-speech (TTS)." },
     "whoami": { "description": "Show your ID." },
-    "subagents": { "description": "Manage session subagents." },
-    "config": { "description": "Show or change config." },
-    "debug": { "description": "Real-time debugging." },
-    "usage": { "description": "Token usage and cost." },
-    "stop": { "description": "Stop current request." },
-    "restart": { "description": "Restart OpenClaw." },
-    "activation": { "description": "Group activation mode." },
-    "send": { "description": "Send policy." },
     "reset": { "description": "Reset current session." },
     "new": { "description": "Start a new session." },
+    "stop": { "description": "Stop current request." },
+    "allowlist": { "description": "Manage allowlist." },
+    "subagents": { "description": "Manage session subagents." },
     "compact": { "description": "Compact session context." },
-    "think": { "description": "Thinking level." },
-    "verbose": { "description": "Verbose mode." },
-    "reasoning": { "description": "Reasoning display." },
-    "elevated": { "description": "Elevated privileges." },
-    "exec": { "description": "Exec settings for session." },
-    "model": { "description": "Show or change model." },
-    "models": { "description": "List models and providers." },
-    "queue": { "description": "Queue settings." },
-    "bash": { "description": "Run a command in terminal." },
-    "allowlist": { "description": "Manage allowlist." }
+    "tts": { "description": "Manage text-to-speech (TTS)." },
+    "uninstall": {
+      "nix_mode_disabled": "Nix mode detected; service uninstall is disabled.",
+      "service_check_failed": "Gateway service check failed: {error}",
+      "service_stop_failed": "Gateway stop failed: {error}",
+      "service_uninstall_failed": "Gateway uninstall failed: {error}",
+      "non_interactive_needs_yes": "Non-interactive mode requires --yes.",
+      "non_interactive_needs_scopes": "Non-interactive mode requires explicit scopes (use --all).",
+      "select_components": "Uninstall which components?",
+      "option_service": "Gateway service",
+      "option_service_hint": "launchd / systemd / schtasks",
+      "option_state": "State + config",
+      "option_state_hint": "~/.openclaw",
+      "option_workspace": "Workspace",
+      "option_workspace_hint": "agent files",
+      "option_app": "macOS app",
+      "option_app_hint": "/Applications/OpenClaw.app",
+      "proceed_confirm": "Proceed with uninstall?",
+      "cancelled": "Uninstall cancelled.",
+      "nothing_selected": "Nothing selected.",
+      "dry_run_service": "[dry-run] remove gateway service",
+      "service_not_loaded": "Gateway service {status}.",
+      "cli_still_installed": "CLI still installed. Remove via npm/pnpm if desired.",
+      "workspaces_preserved": "Tip: workspaces were preserved. Re-run with --workspace to remove them."
+    },
+    "agent": {
+      "no_reply": "No reply from agent.",
+      "waiting_for_reply": "Waiting for agent reply…"
+    },
+    "shared": {
+      "config_invalid": "Config invalid:\n{issues}",
+      "fix_config": "Fix the config or run {command}."
+    }
+  },
+  "agents": {
+    "tools": {
+      "image_size_error": "Image could not be reduced below {maxMb}MB (got {gotMb}MB)",
+      "patch_input_required": "Provide a patch input.",
+      "no_files_modified": "No files were modified.",
+      "invalid_patch_empty": "Invalid patch: input is empty."
+    }
   },
   "system": {
-    "session_reset": "Session has been reset.",
-    "session_new": "New session started.",
-    "request_stopped": "Request stopped.",
-    "restarting": "Restarting OpenClaw...",
-    "model_changed": "Model changed to {model}.",
-    "model_set": "Model set to {model}.",
-    "model_reset": "Model reset to default ({model}).",
-    "config_updated": "Configuration updated.",
-    "no_permission": "You don't have permission to do this.",
-    "not_found": "Not found.",
-    "error_generic": "An error occurred. Please try again.",
-    "thinking_set": "Thinking level set to {level}.",
-    "thinking_disabled": "Thinking disabled.",
-    "verbose_on": "Verbose mode enabled.",
-    "verbose_off": "Verbose mode disabled.",
-    "verbose_full": "Verbose logging set to full.",
-    "reasoning_on": "Reasoning display enabled.",
-    "reasoning_off": "Reasoning display disabled.",
-    "reasoning_stream": "Reasoning stream enabled (Telegram only).",
-    "elevated_on": "Elevated privileges enabled.",
-    "elevated_off": "Elevated privileges disabled.",
-    "elevated_ask": "Elevated mode set to ask (approvals may still apply).",
-    "elevated_full": "Elevated mode set to full (auto-approve).",
-    "tts_on": "TTS enabled.",
-    "tts_off": "TTS disabled.",
-    "queue_updated": "Queue settings updated.",
-    "queue_reset": "Queue mode reset to default.",
-    "compact_done": "Context compacted.",
-    "compacted": "Compacted",
-    "compaction_skipped": "Compaction skipped",
-    "compaction_failed": "Compaction failed",
-    "approval_pending": "Approval pending.",
-    "approved": "Approved.",
-    "rejected": "Rejected.",
-    "failed": "Failed",
-    "success": "Success",
-    "warning": "Warning",
-    "error": "Error",
-    "loading": "Loading",
-    "connected": "Connected",
-    "disconnected": "Disconnected",
-    "ready": "Ready",
-    "stopped": "Stopped",
-    "running": "Running",
-    "enabled": "Enabled",
-    "disabled": "Disabled",
-    "on": "On",
-    "off": "Off",
-    "active": "Active",
-    "inactive": "Inactive"
+    "elevated_full": "Elevated FULL — exec runs on host with auto-approval.",
+    "elevated_ask": "Elevated ASK — exec runs on host; approvals may still apply.",
+    "elevated_off": "Elevated OFF — exec stays in sandbox.",
+    "reasoning_stream": "Reasoning STREAM — emit live <think>.",
+    "reasoning_on": "Reasoning ON — include <think>.",
+    "reasoning_off": "Reasoning OFF — hide <think>."
   },
-  "status": {
-    "model": "Model",
-    "session": "Session",
-    "context": "Context",
-    "compactions": "Compactions",
-    "runtime": "Runtime",
-    "think": "Think",
-    "verbose": "Verbose",
-    "reasoning": "Reasoning",
-    "elevated": "Elevated",
-    "activation": "Activation",
-    "queue": "Queue",
-    "cost": "Cost",
-    "usage": "Usage",
-    "current": "Current",
-    "current_model": "Current: {model}",
-    "current_thinking": "Current thinking level: {level}",
-    "current_verbose": "Current verbose level: {level}",
-    "current_reasoning": "Current reasoning level: {level}",
-    "current_elevated": "Current elevated level: {level}",
-    "current_queue": "Current queue settings: mode={mode}, debounce={debounce}ms, cap={cap}, drop={drop}.",
-    "current_exec": "Current exec defaults: host={host}, security={security}, ask={ask}, node={node}.",
-    "usage_none": "Usage: no provider usage available.",
-    "no_credentials": "No credentials",
-    "not_logged_in": "Not logged in",
-    "model_unavailable": "Model not allowed.",
-    "session_na": "Session n/a",
-    "invalid": "Invalid",
-    "unknown": "Unknown",
-    "none": "None"
-  },
-  "help": {
-    "title": "Help",
-    "session_section": "Session",
-    "options_section": "Options", 
-    "status_section": "Status",
-    "skills_section": "Skills",
-    "more_commands": "More: /commands for full list",
-    "session_commands": "/new  |  /reset  |  /compact [instructions]  |  /stop",
-    "status_commands": "/status  |  /whoami  |  /context",
-    "skills_commands": "/skill <name> [input]"
+  "auto_reply": {
+    "compaction_unavailable": "⚙️ Compaction unavailable (missing session id).",
+    "navigation": {
+      "prev": "◀ Prev",
+      "next": "Next ▶"
+    },
+    "identity": {
+      "title": "🧭 Identity",
+      "channel": "Channel",
+      "user_id": "User id",
+      "username": "Username",
+      "chat": "Chat",
+      "thread": "Thread",
+      "allow_from": "AllowFrom"
+    },
+    "compaction": {
+      "compacted_with_tokens": "Compacted ({tokensBefore} → {tokensAfter})",
+      "compacted_before_tokens": "Compacted ({tokensBefore} before)",
+      "compacted_simple": "Compacted",
+      "skipped": "Compaction skipped",
+      "failed": "Compaction failed"
+    },
+    "tts": {
+      "enabled": "🔊 TTS enabled.",
+      "disabled": "🔇 TTS disabled.",
+      "error_generating": "❌ Error generating audio: {error}",
+      "provider_set": "✅ TTS provider set to {provider}.",
+      "limit_invalid": "❌ Limit must be between 100 and 4096 characters.",
+      "limit_set": "✅ TTS limit set to {limit} characters.",
+      "help_title": "🔊 **TTS (Text-to-Speech) Help**",
+      "commands_title": "**Commands:**",
+      "command_on": "• /tts on — Enable automatic TTS for replies",
+      "command_off": "• /tts off — Disable TTS",
+      "command_status": "• /tts status — Show current settings",
+      "command_provider_view": "• /tts provider [name] — View/change provider",
+      "command_limit_view": "• /tts limit [number] — View/change text limit",
+      "command_summary": "• /tts summary [on|off] — View/change auto-summary",
+      "command_audio": "• /tts audio <text> — Generate audio from text",
+      "providers_title": "**Providers:**",
+      "provider_edge": "• edge — Free, fast (default)",
+      "provider_openai_tts": "• openai — High quality (requires API key)",
+      "provider_elevenlabs_tts": "• elevenlabs — Premium voices (requires API key)",
+      "text_limit_title": "**Text Limit (default: 1500, max: 4096):**",
+      "text_limit_desc": "When text exceeds the limit:",
+      "summary_on": "• Summary ON: AI summarizes, then generates audio",
+      "summary_off": "• Summary OFF: Truncates text, then generates audio",
+      "examples_title": "**Examples:**",
+      "examples_text": "/tts provider edge\\n/tts limit 2000\\n/tts audio Hello, this is a test!",
+      "audio_usage_title": "🎤 Generate audio from text.",
+      "audio_usage_text": "Usage: /tts audio <text>\\nExample: /tts audio Hello, this is a test!",
+      "provider_title": "🎙️ TTS provider",
+      "provider_primary": "Primary",
+      "provider_openai_key": "OpenAI key",
+      "provider_elevenlabs_key": "ElevenLabs key",
+      "provider_edge_enabled": "Edge enabled",
+      "provider_usage": "Usage: /tts provider openai | elevenlabs | edge",
+      "limit_title": "📏 TTS limit: {limit} characters.",
+      "limit_description": "Text longer than this triggers summary (if enabled).\\nRange: 100-4096 chars (Telegram max).\\n\\nTo change: /tts limit <number>\\nExample: /tts limit 2000",
+      "summary_title": "📝 TTS auto-summary: {enabled}.",
+      "summary_description": "When text exceeds {maxLen} chars:\\n• ON: summarizes text, then generates audio\\n• OFF: truncates text, then generates audio\\n\\nTo change: /tts summary on | off",
+      "summary_enabled": "✅ TTS auto-summary enabled.",
+      "summary_disabled": "❌ TTS auto-summary disabled.",
+      "status_title": "📊 TTS status",
+      "status_state": "State",
+      "status_provider": "Provider",
+      "status_text_limit": "Text limit",
+      "status_auto_summary": "Auto-summary",
+      "status_last_attempt": "Last attempt ({timeAgo}s ago)",
+      "status_text_chars": "Text: {textLength} chars{summarized}",
+      "status_text_summarized": " (summarized)",
+      "status_provider_used": "Provider",
+      "status_latency": "Latency",
+      "status_error": "Error",
+      "status_enabled": "✅ enabled",
+      "status_disabled": "❌ disabled", 
+      "status_configured": "✅ configured",
+      "status_not_configured": "❌ not configured",
+      "status_on": "on",
+      "status_off": "off"
+    },
+    "tools": {
+      "not_available": "❌ Tool not available: {toolName}",
+      "done": "✅ Done."
+    },
+    "directives": {
+      "current_thinking_level": "Current thinking level: {level}.",
+      "unrecognized_thinking_level": "Unrecognized thinking level \"{level}\". Valid levels: {validLevels}.",
+      "current_verbose_level": "Current verbose level: {level}.",
+      "unrecognized_verbose_level": "Unrecognized verbose level \"{level}\". Valid levels: off, on, full.",
+      "current_reasoning_level": "Current reasoning level: {level}.",
+      "unrecognized_reasoning_level": "Unrecognized reasoning level \"{level}\". Valid levels: on, off, stream.",
+      "current_elevated_level": "Current elevated level: {level}.",
+      "unrecognized_elevated_level": "Unrecognized elevated level \"{level}\". Valid levels: off, on, ask, full."
+    },
+    "session": {
+      "group_activation_only": "⚙️ Group activation only applies to group chats.",
+      "activation_usage": "⚙️ Usage: /activation mention|always",
+      "group_activation_set": "⚙️ Group activation set to {mode}.",
+      "send_usage": "⚙️ Usage: /send on|off|inherit",
+      "send_policy_set": "⚙️ Send policy set to {label}."
+    },
+    "bash": {
+      "disabled": "⚠️ bash is disabled. Set commands.bash=true to enable. Docs: https://docs.openclaw.ai/tools/slash-commands#config",
+      "unrecognized_request": "⚠️ Unrecognized bash request."
+    }
   },
   "categories": {
     "session": "Session",
@@ -133,64 +185,166 @@
     "tools": "Tools",
     "docks": "Docks"
   },
-  "validation": {
-    "required": "This field is required",
-    "invalid_format": "Invalid format",
-    "invalid_port": "Invalid port",
-    "invalid_url": "Invalid URL: must be http or https",
-    "invalid_hostname": "Invalid hostname",
-    "invalid_json": "Invalid JSON",
-    "command_empty": "Command name cannot be empty",
-    "command_invalid": "Command name must start with a letter and contain only letters, numbers, hyphens, and underscores",
-    "model_required": "Model ID is required"
+  "help": {
+    "title": "ℹ️ Help",
+    "session_section": "Session",
+    "session_commands": "  /new  |  /reset  |  /compact [instructions]  |  /stop",
+    "options_section": "Options",
+    "status_section": "Status", 
+    "status_commands": "  /status  |  /whoami  |  /context",
+    "skills_section": "Skills",
+    "skills_commands": "  /skill <name> [input]",
+    "more_commands": "More: /commands for full list"
   },
-  "actions": {
-    "save": "Save",
-    "cancel": "Cancel", 
-    "reset": "Reset",
-    "update": "Update",
-    "delete": "Delete",
-    "remove": "Remove",
-    "add": "Add",
-    "create": "Create",
-    "edit": "Edit",
-    "load": "Load",
-    "export": "Export",
-    "import": "Import",
-    "enable": "Enable",
-    "disable": "Disable",
-    "start": "Start",
-    "stop": "Stop",
-    "restart": "Restart",
-    "connect": "Connect",
-    "disconnect": "Disconnect",
-    "approve": "Approve",
-    "reject": "Reject",
-    "select": "Select",
-    "choose": "Choose",
-    "configure": "Configure",
-    "install": "Install",
-    "uninstall": "Uninstall"
+  "config": {
+    "validation": {
+      "avatar_invalid_format": "identity.avatar must be a workspace-relative path, http(s) URL, or data URI.",
+      "avatar_outside_workspace": "identity.avatar must stay within the agent workspace.",
+      "unknown_channel_id": "unknown channel id: {channelId}",
+      "heartbeat_target_empty": "heartbeat target must not be empty",
+      "unknown_heartbeat_target": "unknown heartbeat target: {target}",
+      "plugin_not_found": "plugin not found: {pluginId}",
+      "invalid_config": "invalid config: {error}",
+      "plugin_schema_missing": "plugin schema missing for {pluginId}",
+      "plugin_disabled_with_config": "plugin disabled ({reason}) but config is present"
+    }
   },
-  "prompts": {
-    "are_you_sure": "Are you sure?",
-    "confirm_action": "Confirm action",
-    "enter_value": "Enter value",
-    "choose_option": "Choose option",
-    "select_item": "Select item",
-    "model_picker": "Models in /model picker (multi-select)",
-    "model_provider": "Model/auth provider",
-    "reset_scope": "Reset scope",
-    "reset_cancelled": "Reset cancelled.",
-    "onboarding_mode": "Onboarding mode",
-    "configuration": "Configuration",
-    "model_configured": "Model configured",
-    "model_check": "Model check"
+  "channels": {
+    "telegram": {
+      "errors": {
+        "recipient_required": "Recipient is required for Telegram sends",
+        "message_id_required": "Message id is required for Telegram actions",
+        "bot_token_missing": "Telegram bot token missing for account \"{accountId}\" (set channels.telegram.accounts.{accountId}.botToken/tokenFile or TELEGRAM_BOT_TOKEN for default)."
+      }
+    }
+  },
+  "pairing": {
+    "access_not_configured": "OpenClaw: access not configured.",
+    "pairing_code": "Pairing code: {code}",
+    "ask_owner_approve": "Ask the bot owner to approve with:"
+  },
+  "sessions": {
+    "invalid_label_string": "invalid label: must be a string",
+    "invalid_label_empty": "invalid label: empty",
+    "invalid_label_too_long": "invalid label: too long (max {max})"
+  },
+  "cron": {
+    "main_jobs_require_system_event": "main cron jobs require payload.kind=\"systemEvent\"",
+    "isolated_jobs_require_agent_turn": "isolated cron jobs require payload.kind=\"agentTurn\"",
+    "delivery_config_isolated_only": "cron delivery config is only supported for sessionTarget=\"isolated\"",
+    "unknown_job_id": "unknown cron job id: {id}",
+    "system_event_requires_text": "cron.update payload.kind=\"systemEvent\" requires text",
+    "agent_turn_requires_message": "cron.update payload.kind=\"agentTurn\" requires message",
+    "job_name_required": "cron job name is required"
+  },
+  "telegram": {
+    "errors": {
+      "no_response_generated": "No response generated. Please try again.",
+      "group_disabled": "This group is disabled.",
+      "topic_disabled": "This topic is disabled.",
+      "not_authorized": "You are not authorized to use this command.",
+      "group_commands_disabled": "Telegram group commands are disabled.",
+      "group_not_allowed": "This group is not allowed.",
+      "file_too_large": "⚠️ File too large. Maximum size is {limitMb}MB.",
+      "bot_token_missing": "Telegram bot token missing for account \"{accountId}\" (set channels.telegram.accounts.{accountId}.botToken/tokenFile or TELEGRAM_BOT_TOKEN for default).",
+      "webhook_secret_required": "Set channels.telegram.webhookSecret in your config.",
+      "reactions_unavailable": "Telegram reactions are unavailable in this bot API.",
+      "chat_not_found": "Likely: bot not started in DM, bot removed from group/channel, group migrated (new -100… id), or wrong bot token.",
+      "get_file_failed": "getFile failed: {status} {statusText}",
+      "get_file_no_path": "getFile returned no file_path",
+      "file_path_missing": "file_path missing",
+      "download_failed": "Failed to download telegram file: HTTP {status}",
+      "username_resolve_help": "If you had \"@username\" entries, re-run onboarding (it resolves @username to IDs) or replace them manually.",
+      "delivery_get_file_no_path": "Telegram getFile returned no file_path",
+      "delivery_fetch_unavailable": "fetch is not available; set channels.telegram.proxy in config"
+    },
+    "commands": {
+      "limits_warning": "Telegram limits bots to 100 commands. {configured} configured; registering first 100. Use channels.telegram.commands.native: false to disable, or reduce plugin/skill/custom commands.",
+      "plugin_invalid_name": "Plugin command \"{command}\" is invalid for Telegram (use a-z, 0-9, underscore; max 32 chars).",
+      "plugin_name_conflict": "Plugin command \"{command}\" conflicts with an existing Telegram command.",
+      "plugin_duplicated": "Plugin command \"{command}\" is duplicated.",
+      "plugin_missing_description": "Plugin command \"{command}\" is missing a description."
+    },
+    "provider_selection": {
+      "select_provider": "Select a provider:",
+      "no_providers": "No providers available.",
+      "unknown_provider": "Unknown provider: {provider}\n\nSelect a provider:"
+    },
+    "media": {
+      "voice_as_audio": "Telegram voice requested but media is {mediaType} ({filename}); sending as audio file instead."
+    },
+    "monitor": {
+      "polling_error": "Telegram {reason}: {error}; retrying in {delay}.",
+      "getupdates_conflict": "getUpdates conflict",
+      "network_error": "network error"
+    }
+  },
+  "discord": {
+    "voice_message": {
+      "duration_parse_error": "Could not parse duration",
+      "duration_failed": "Failed to get audio duration: {error}",
+      "url_not_allowed": "Voice message conversion requires a local file path; received a URL/protocol source: {path}",
+      "upload_url_failed": "Failed to get upload URL for voice message",
+      "upload_failed": "Failed to upload voice message: {status}"
+    }
+  },
+  "slack": {
+    "actions": {
+      "bot_token_required": "SLACK_BOT_TOKEN or channels.slack.botToken is required for Slack actions",
+      "emoji_required": "Emoji is required for Slack reactions",
+      "bot_user_id_failed": "Failed to resolve Slack bot user id"
+    }
+  },
+  "signal": {
+    "reactions": {
+      "missing_recipient": "Signal reactions require recipient or group ID",
+      "invalid_target_timestamp": "Invalid target timestamp for Signal reaction",
+      "missing_emoji": "Emoji is required for Signal reactions",
+      "missing_target_author": "Target author is required for group Signal reactions"
+    }
   },
   "tts": {
-    "status": "TTS status",
-    "conversion_failed": "TTS conversion failed",
-    "action": "TTS action",
-    "actions_help": "TTS Actions:\n"
+    "errors": {
+      "text_too_long": "Text too long ({length} chars, max {maxLength})",
+      "conversion_failed": "TTS conversion failed: {error}",
+      "no_api_key": "No API key for {provider}",
+      "no_providers_available": "no providers available",
+      "edge_disabled": "edge: disabled",
+      "edge_unsupported_telephony": "edge: unsupported for telephony",
+      "invalid_voice_id": "Invalid voiceId format",
+      "elevenlabs_api_error": "ElevenLabs API error ({status})",
+      "openai_api_error": "OpenAI TTS API error ({status})",
+      "invalid_model": "Invalid model: {model}",
+      "invalid_voice": "Invalid voice: {voice}",
+      "language_code_invalid": "languageCode must be a 2-letter ISO 639-1 code (e.g. en, de, fr)",
+      "normalization_invalid": "applyTextNormalization must be one of: auto, on, off",
+      "seed_invalid": "seed must be between 0 and 4294967295",
+      "range_invalid": "{label} must be between {min} and {max}",
+      "target_length_invalid": "Invalid targetLength: {targetLength}",
+      "summary_model_unknown": "Unknown summary model: {provider}/{model}",
+      "summarization_timeout": "Summarization timed out",
+      "no_summary_returned": "No summary returned",
+      "request_timeout": "{provider}: request timed out"
+    },
+    "warnings": {
+      "unsupported_provider": "unsupported provider \"{provider}\"",
+      "invalid_openai_voice": "invalid OpenAI voice \"{voice}\"",
+      "invalid_elevenlabs_voice": "invalid ElevenLabs voiceId \"{voiceId}\"",
+      "invalid_stability": "invalid stability value",
+      "invalid_similarity": "invalid similarityBoost value",
+      "invalid_style": "invalid style value",
+      "invalid_speed": "invalid speed value",
+      "invalid_speaker_boost": "invalid useSpeakerBoost value"
+    },
+    "system_prompt": {
+      "voice_enabled": "Voice (TTS) is enabled.",
+      "inbound_only": "Only use TTS when the user's last message includes audio/voice.",
+      "tagged_only": "Only use TTS when you include [[tts]] or [[tts:text]] tags.",
+      "keep_short": "Keep spoken text ≤{maxLength} chars to avoid auto-summary (summary {summarize}).",
+      "use_directives": "Use [[tts:...]] and optional [[tts:text]]...[[/tts:text]] to control voice/expressiveness."
+    },
+    "summarization": {
+      "prompt": "You are an assistant that summarizes texts concisely while keeping the most important information. Summarize the text to approximately {targetLength} characters. Maintain the original tone and style. Reply only with the summary, without additional explanations.\n\n<text_to_summarize>\n{text}\n</text_to_summarize>"
+    }
   }
 }

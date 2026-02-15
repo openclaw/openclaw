@@ -1,34 +1,128 @@
 {
   "commands": {
-    "help": { "description": "帮助和命令。" },
-    "commands": { "description": "列出所有命令。" },
-    "status": { "description": "当前状态。" },
-    "skill": { "description": "运行技能。" },
-    "approve": { "description": "批准或拒绝请求。" },
-    "context": { "description": "上下文的工作原理。" },
-    "tts": { "description": "管理文本转语音（TTS）。" },
-    "whoami": { "description": "显示您的 ID。" },
-    "subagents": { "description": "管理会话子代理。" },
-    "config": { "description": "显示或更改配置。" },
-    "debug": { "description": "实时调试。" },
-    "usage": { "description": "令牌使用量和成本。" },
-    "stop": { "description": "停止当前请求。" },
-    "restart": { "description": "重启 OpenClaw。" },
-    "activation": { "description": "群组激活模式。" },
-    "send": { "description": "发送策略。" },
-    "reset": { "description": "重置当前会话。" },
-    "new": { "description": "开始新会话。" },
-    "compact": { "description": "压缩会话上下文。" },
-    "think": { "description": "思考级别。" },
-    "verbose": { "description": "详细模式。" },
-    "reasoning": { "description": "推理显示。" },
-    "elevated": { "description": "提升权限。" },
-    "exec": { "description": "会话的 exec 设置。" },
-    "model": { "description": "显示或更改模型。" },
-    "models": { "description": "列出模型和提供商。" },
-    "queue": { "description": "队列设置。" },
-    "bash": { "description": "在终端中运行命令。" },
-    "allowlist": { "description": "管理允许列表。" }
+    "help": {
+      "description": "帮助和命令。"
+    },
+    "commands": {
+      "description": "列出所有命令。"
+    },
+    "status": {
+      "description": "当前状态。"
+    },
+    "skill": {
+      "description": "运行技能。"
+    },
+    "approve": {
+      "description": "批准或拒绝请求。"
+    },
+    "context": {
+      "description": "上下文的工作原理。"
+    },
+    "tts": {
+      "description": "管理文本转语音（TTS）。"
+    },
+    "whoami": {
+      "description": "显示您的 ID。"
+    },
+    "subagents": {
+      "description": "管理会话子代理。"
+    },
+    "config": {
+      "description": "显示或更改配置。"
+    },
+    "debug": {
+      "description": "实时调试。"
+    },
+    "usage": {
+      "description": "令牌使用量和成本。"
+    },
+    "stop": {
+      "description": "停止当前请求。"
+    },
+    "restart": {
+      "description": "重启 OpenClaw。"
+    },
+    "activation": {
+      "description": "群组激活模式。"
+    },
+    "send": {
+      "description": "发送策略。"
+    },
+    "reset": {
+      "description": "重置当前会话。"
+    },
+    "new": {
+      "description": "开始新会话。"
+    },
+    "compact": {
+      "description": "压缩会话上下文。"
+    },
+    "think": {
+      "description": "思考级别。"
+    },
+    "verbose": {
+      "description": "详细模式。"
+    },
+    "reasoning": {
+      "description": "推理显示。"
+    },
+    "elevated": {
+      "description": "提升权限。"
+    },
+    "exec": {
+      "description": "会话的 exec 设置。"
+    },
+    "model": {
+      "description": "显示或更改模型。"
+    },
+    "models": {
+      "description": "列出模型和提供商。"
+    },
+    "queue": {
+      "description": "队列设置。"
+    },
+    "bash": {
+      "description": "在终端中运行命令。"
+    },
+    "allowlist": {
+      "description": "管理允许列表。"
+    },
+    "uninstall": {
+      "nix_mode_disabled": "Nix mode detected; service uninstall is disabled.",
+      "service_check_failed": "Gateway service check failed: {error}",
+      "service_stop_failed": "Gateway stop failed: {error}",
+      "service_uninstall_failed": "Gateway uninstall failed: {error}",
+      "non_interactive_needs_yes": "Non-interactive mode requires --yes.",
+      "non_interactive_needs_scopes": "Non-interactive mode requires explicit scopes (use --all).",
+      "select_components": "Uninstall which components?",
+      "option_service": "Gateway service",
+      "option_service_hint": "launchd / systemd / schtasks",
+      "option_state": "State + config",
+      "option_state_hint": "~/.openclaw",
+      "option_workspace": "Workspace",
+      "option_workspace_hint": "agent files",
+      "option_app": "macOS app",
+      "option_app_hint": "/Applications/OpenClaw.app",
+      "proceed_confirm": "Proceed with uninstall?",
+      "cancelled": "Uninstall cancelled.",
+      "nothing_selected": "Nothing selected.",
+      "dry_run_service": "[dry-run] remove gateway service",
+      "service_not_loaded": "Gateway service {status}.",
+      "cli_still_installed": "CLI still installed. Remove via npm/pnpm if desired.",
+      "workspaces_preserved": "Tip: workspaces were preserved. Re-run with --workspace to remove them."
+    },
+    "agent": {
+      "no_reply": "No reply from agent.",
+      "waiting_for_reply": "Waiting for agent reply…"
+    },
+    "shared": {
+      "config_invalid": "Config invalid:\n{issues}",
+      "fix_config": "Fix the config or run {command}.",
+      "normalized_id": "Normalized agent id to \"{id}\".",
+      "already_exists": "Agent \"{id}\" already exists.",
+      "name_required": "Agent name is required in non-interactive mode.",
+      "non_interactive_needs_workspace": "Non-interactive mode requires --workspace. Re-run without flags to use the wizard."
+    }
   },
   "system": {
     "session_reset": "会话已重置。",
@@ -116,7 +210,7 @@
   "help": {
     "title": "帮助",
     "session_section": "会话",
-    "options_section": "选项", 
+    "options_section": "选项",
     "status_section": "状态",
     "skills_section": "技能",
     "more_commands": "更多：/commands 查看完整列表",
@@ -126,7 +220,7 @@
   },
   "categories": {
     "session": "会话",
-    "options": "选项", 
+    "options": "选项",
     "status": "状态",
     "management": "管理",
     "media": "媒体",
@@ -146,7 +240,7 @@
   },
   "actions": {
     "save": "保存",
-    "cancel": "取消", 
+    "cancel": "取消",
     "reset": "重置",
     "update": "更新",
     "delete": "删除",
@@ -191,6 +285,326 @@
     "status": "TTS 状态",
     "conversion_failed": "TTS 转换失败",
     "action": "TTS 操作",
-    "actions_help": "TTS 操作：\n"
+    "actions_help": "TTS 操作：\n",
+    "errors": {
+      "text_too_long": "TODO-ZH: Text too long ({length} chars, max {maxLength})",
+      "conversion_failed": "TODO-ZH: TTS conversion failed: {error}",
+      "no_api_key": "TODO-ZH: No API key for {provider}",
+      "no_providers_available": "TODO-ZH: no providers available",
+      "edge_disabled": "TODO-ZH: edge: disabled",
+      "edge_unsupported_telephony": "TODO-ZH: edge: unsupported for telephony",
+      "invalid_voice_id": "TODO-ZH: Invalid voiceId format",
+      "elevenlabs_api_error": "TODO-ZH: ElevenLabs API error ({status})",
+      "openai_api_error": "TODO-ZH: OpenAI TTS API error ({status})",
+      "invalid_model": "TODO-ZH: Invalid model: {model}",
+      "invalid_voice": "TODO-ZH: Invalid voice: {voice}",
+      "language_code_invalid": "TODO-ZH: languageCode must be a 2-letter ISO 639-1 code (e.g. en, de, fr)",
+      "normalization_invalid": "TODO-ZH: applyTextNormalization must be one of: auto, on, off",
+      "seed_invalid": "TODO-ZH: seed must be between 0 and 4294967295",
+      "range_invalid": "TODO-ZH: {label} must be between {min} and {max}",
+      "target_length_invalid": "TODO-ZH: Invalid targetLength: {targetLength}",
+      "summary_model_unknown": "TODO-ZH: Unknown summary model: {provider}/{model}",
+      "summarization_timeout": "TODO-ZH: Summarization timed out",
+      "no_summary_returned": "TODO-ZH: No summary returned",
+      "request_timeout": "TODO-ZH: {provider}: request timed out"
+    },
+    "warnings": {
+      "unsupported_provider": "TODO-ZH: unsupported provider \"{provider}\"",
+      "invalid_openai_voice": "TODO-ZH: invalid OpenAI voice \"{voice}\"",
+      "invalid_elevenlabs_voice": "TODO-ZH: invalid ElevenLabs voiceId \"{voiceId}\"",
+      "invalid_stability": "TODO-ZH: invalid stability value",
+      "invalid_similarity": "TODO-ZH: invalid similarityBoost value",
+      "invalid_style": "TODO-ZH: invalid style value",
+      "invalid_speed": "TODO-ZH: invalid speed value",
+      "invalid_speaker_boost": "TODO-ZH: invalid useSpeakerBoost value"
+    },
+    "system_prompt": {
+      "voice_enabled": "TODO-ZH: Voice (TTS) is enabled.",
+      "inbound_only": "TODO-ZH: Only use TTS when the user's last message includes audio/voice.",
+      "tagged_only": "TODO-ZH: Only use TTS when you include [[tts]] or [[tts:text]] tags.",
+      "keep_short": "TODO-ZH: Keep spoken text ≤{maxLength} chars to avoid auto-summary (summary {summarize}).",
+      "use_directives": "TODO-ZH: Use [[tts:...]] and optional [[tts:text]]...[[/tts:text]] to control voice/expressiveness."
+    },
+    "summarization": {
+      "prompt": "TODO-ZH: You are an assistant that summarizes texts concisely while keeping the most important information. Summarize the text to approximately {targetLength} characters. Maintain the original tone and style. Reply only with the summary, without additional explanations.\n\n<text_to_summarize>\n{text}\n</text_to_summarize>"
+    }
+  },
+  "config": {
+    "validation": {
+      "avatar_invalid_format": "identity.avatar必须是工作区相对路径、http(s) URL或data URI。",
+      "avatar_outside_workspace": "identity.avatar必须保持在代理工作区内。",
+      "unknown_channel_id": "未知频道ID: {channelId}",
+      "heartbeat_target_empty": "心跳目标不能为空",
+      "unknown_heartbeat_target": "未知心跳目标: {target}",
+      "plugin_not_found": "找不到插件: {pluginId}",
+      "invalid_config": "无效配置: {error}",
+      "plugin_schema_missing": "{pluginId}缺少插件架构",
+      "plugin_disabled_with_config": "插件已禁用（{reason}）但配置存在"
+    }
+  },
+  "channels": {
+    "telegram": {
+      "errors": {
+        "recipient_required": "Telegram发送需要收件人",
+        "message_id_required": "Telegram操作需要消息ID",
+        "bot_token_missing": "账户\"{accountId}\"缺少Telegram机器人令牌（设置channels.telegram.accounts.{accountId}.botToken/tokenFile或默认的TELEGRAM_BOT_TOKEN）。"
+      }
+    }
+  },
+  "gateway": {
+    "hooks": {
+      "payload_too_large": "payload too large",
+      "request_timeout": "request body timeout",
+      "text_required": "text required",
+      "message_required": "message required",
+      "mapping_requires_text": "hook mapping requires text",
+      "mapping_requires_message": "hook mapping requires message",
+      "mapping_failed": "hook mapping failed"
+    },
+    "http": {
+      "unauthorized": "Unauthorized",
+      "too_many_attempts": "Too many failed authentication attempts. Please try again later.",
+      "payload_too_large": "Payload too large",
+      "missing_user_message": "Missing user message in {context}",
+      "internal_error": "internal error",
+      "invalid_request": "invalid request",
+      "invalid_tool_config": "invalid tool configuration"
+    },
+    "nodes": {
+      "not_connected": "node not connected",
+      "failed_to_send": "failed to send invoke to node",
+      "invoke_timeout": "node invoke timed out"
+    },
+    "chat": {
+      "null_bytes": "message must not contain null bytes",
+      "transcript_path_not_resolved": "transcript path not resolved",
+      "transcript_not_found": "transcript file not found"
+    },
+    "tools": {
+      "memory_disabled": "memory tools are disabled in tests{suffix}. ",
+      "tool_not_available": "Tool not available: {toolName}",
+      "execution_failed": "tool execution failed"
+    },
+    "server": {
+      "raw_stream_logging": "raw stream logging enabled",
+      "raw_stream_override": "raw stream log path override"
+    },
+    "approvals": {
+      "raw_command_needs_params": "rawCommand requires params.command",
+      "approval_override_needs_id": "approval override requires params.runId",
+      "exec_approvals_unavailable": "exec approvals unavailable"
+    }
+  },
+  "auto_reply": {
+    "compaction_unavailable": "⚙️ Compaction unavailable (missing session id).",
+    "navigation": {
+      "prev": "◀ Prev",
+      "next": "Next ▶"
+    },
+    "identity": {
+      "title": "🧭 Identity",
+      "channel": "Channel",
+      "user_id": "User id",
+      "username": "Username",
+      "chat": "Chat",
+      "thread": "Thread",
+      "allow_from": "AllowFrom"
+    },
+    "compaction": {
+      "compacted_with_tokens": "Compacted ({tokensBefore} → {tokensAfter})",
+      "compacted_before_tokens": "Compacted ({tokensBefore} before)",
+      "compacted_simple": "Compacted",
+      "skipped": "Compaction skipped",
+      "failed": "Compaction failed"
+    },
+    "tts": {
+      "enabled": "🔊 TTS enabled.",
+      "disabled": "🔇 TTS disabled.",
+      "error_generating": "❌ Error generating audio: {error}",
+      "provider_set": "✅ TTS provider set to {provider}.",
+      "limit_invalid": "❌ Limit must be between 100 and 4096 characters.",
+      "limit_set": "✅ TTS limit set to {limit} characters.",
+      "help_title": "🔊 **TTS (Text-to-Speech) Help**",
+      "commands_title": "**Commands:**",
+      "command_on": "• /tts on — Enable automatic TTS for replies",
+      "command_off": "• /tts off — Disable TTS",
+      "command_provider": "• /tts provider <name> — Set TTS provider",
+      "command_limit": "• /tts limit <chars> — Set character limit",
+      "command_status": "• /tts status — Show current settings",
+      "command_provider_view": "• /tts provider [name] — View/change provider",
+      "command_limit_view": "• /tts limit [number] — View/change text limit",
+      "command_summary": "• /tts summary [on|off] — View/change auto-summary",
+      "command_audio": "• /tts audio <text> — Generate audio from text",
+      "providers_title": "**Providers:**",
+      "provider_edge": "• edge — Free, fast (default)",
+      "provider_openai_tts": "• openai — High quality (requires API key)",
+      "provider_elevenlabs_tts": "• elevenlabs — Premium voices (requires API key)",
+      "text_limit_title": "**Text Limit (default: 1500, max: 4096):**",
+      "text_limit_desc": "When text exceeds the limit:",
+      "summary_on": "• Summary ON: AI summarizes, then generates audio",
+      "summary_off": "• Summary OFF: Truncates text, then generates audio",
+      "examples_title": "**Examples:**",
+      "examples_text": "/tts provider edge\\n/tts limit 2000\\n/tts audio Hello, this is a test!",
+      "audio_usage_title": "🎤 Generate audio from text.",
+      "audio_usage_text": "Usage: /tts audio <text>\\nExample: /tts audio Hello, this is a test!",
+      "provider_title": "🎙️ TTS provider",
+      "provider_primary": "Primary",
+      "provider_openai_key": "OpenAI key",
+      "provider_elevenlabs_key": "ElevenLabs key",
+      "provider_edge_enabled": "Edge enabled",
+      "provider_usage": "Usage: /tts provider openai | elevenlabs | edge",
+      "limit_title": "📏 TTS limit: {limit} characters.",
+      "limit_description": "Text longer than this triggers summary (if enabled).\\nRange: 100-4096 chars (Telegram max).\\n\\nTo change: /tts limit <number>\\nExample: /tts limit 2000",
+      "summary_title": "📝 TTS auto-summary: {enabled}.",
+      "summary_description": "When text exceeds {maxLen} chars:\\n• ON: summarizes text, then generates audio\\n• OFF: truncates text, then generates audio\\n\\nTo change: /tts summary on | off",
+      "summary_enabled": "✅ TTS auto-summary enabled.",
+      "summary_disabled": "❌ TTS auto-summary disabled.",
+      "status_title": "📊 TTS status",
+      "status_state": "State",
+      "status_provider": "Provider",
+      "status_text_limit": "Text limit",
+      "status_auto_summary": "Auto-summary",
+      "status_last_attempt": "Last attempt ({timeAgo}s ago)",
+      "status_text_chars": "Text: {textLength} chars{summarized}",
+      "status_text_summarized": " (summarized)",
+      "status_provider_used": "Provider",
+      "status_latency": "Latency",
+      "status_error": "Error",
+      "status_enabled": "✅ enabled",
+      "status_disabled": "❌ disabled",
+      "status_configured": "✅ configured",
+      "status_not_configured": "❌ not configured",
+      "status_on": "on",
+      "status_off": "off"
+    },
+    "tools": {
+      "not_available": "❌ Tool not available: {toolName}",
+      "done": "✅ Done."
+    },
+    "directives": {
+      "current_thinking_level": "Current thinking level: {level}.",
+      "unrecognized_thinking_level": "Unrecognized thinking level \"{level}\". Valid levels: {validLevels}.",
+      "current_verbose_level": "Current verbose level: {level}.",
+      "unrecognized_verbose_level": "Unrecognized verbose level \"{level}\". Valid levels: off, on, full.",
+      "current_reasoning_level": "Current reasoning level: {level}.",
+      "unrecognized_reasoning_level": "Unrecognized reasoning level \"{level}\". Valid levels: on, off, stream.",
+      "current_elevated_level": "Current elevated level: {level}.",
+      "unrecognized_elevated_level": "Unrecognized elevated level \"{level}\". Valid levels: off, on, ask, full."
+    },
+    "session": {
+      "group_activation_only": "⚙️ Group activation only applies to group chats.",
+      "activation_usage": "⚙️ Usage: /activation mention|always",
+      "group_activation_set": "⚙️ Group activation set to {mode}.",
+      "send_usage": "⚙️ Usage: /send on|off|inherit",
+      "send_policy_set": "⚙️ Send policy set to {label}.",
+      "usage_cost": "💸 Usage cost\\n{sessionLine}\\n{todayLine}\\n{last30Line}",
+      "usage_usage": "⚙️ Usage: /usage off|tokens|full|cost",
+      "usage_footer_set": "⚙️ Usage footer: {mode}.",
+      "restart_disabled": "⚠️ /restart is disabled. Set commands.restart=true to enable.",
+      "restarting_sigusr1": "⚙️ Restarting OpenClaw in-process (SIGUSR1); back in a few seconds.",
+      "restart_failed": "⚠️ Restart failed ({method}).{detail}",
+      "restarting_method": "⚙️ Restarting OpenClaw via {method}; give me a few seconds to come back online.",
+      "agent_aborted": "⚙️ Agent was aborted."
+    },
+    "bash": {
+      "disabled": "⚠️ bash is disabled. Set commands.bash=true to enable. Docs: https://docs.openclaw.ai/tools/slash-commands#config",
+      "unrecognized_request": "⚠️ Unrecognized bash request."
+    }
+  },
+  "pairing": {
+    "access_not_configured": "OpenClaw: access not configured.",
+    "pairing_code": "Pairing code: {code}",
+    "ask_owner_approve": "Ask the bot owner to approve with:"
+  },
+  "sessions": {
+    "invalid_label_string": "invalid label: must be a string",
+    "invalid_label_empty": "invalid label: empty",
+    "invalid_label_too_long": "invalid label: too long (max {max})"
+  },
+  "cron": {
+    "main_jobs_require_system_event": "main cron jobs require payload.kind=\"systemEvent\"",
+    "isolated_jobs_require_agent_turn": "isolated cron jobs require payload.kind=\"agentTurn\"",
+    "delivery_config_isolated_only": "cron delivery config is only supported for sessionTarget=\"isolated\"",
+    "unknown_job_id": "unknown cron job id: {id}",
+    "system_event_requires_text": "cron.update payload.kind=\"systemEvent\" requires text",
+    "agent_turn_requires_message": "cron.update payload.kind=\"agentTurn\" requires message",
+    "job_name_required": "cron job name is required"
+  },
+  "telegram": {
+    "errors": {
+      "no_response_generated": "No response generated. Please try again.",
+      "group_disabled": "This group is disabled.",
+      "topic_disabled": "This topic is disabled.",
+      "not_authorized": "You are not authorized to use this command.",
+      "group_commands_disabled": "Telegram group commands are disabled.",
+      "group_not_allowed": "This group is not allowed.",
+      "no_providers_available": "No providers available.",
+      "file_too_large": "⚠️ File too large. Maximum size is {limitMb}MB.",
+      "bot_token_missing": "Telegram bot token missing for account \"{accountId}\" (set channels.telegram.accounts.{accountId}.botToken/tokenFile or TELEGRAM_BOT_TOKEN for default).",
+      "webhook_secret_required": "Set channels.telegram.webhookSecret in your config.",
+      "reactions_unavailable": "Telegram reactions are unavailable in this bot API.",
+      "chat_not_found": "Likely: bot not started in DM, bot removed from group/channel, group migrated (new -100… id), or wrong bot token.",
+      "get_file_failed": "getFile failed: {status} {statusText}",
+      "get_file_no_path": "getFile returned no file_path",
+      "file_path_missing": "file_path missing",
+      "download_failed": "Failed to download telegram file: HTTP {status}",
+      "username_resolve_help": "If you had \"@username\" entries, re-run onboarding (it resolves @username to IDs) or replace them manually.",
+      "delivery_get_file_no_path": "Telegram getFile returned no file_path",
+      "delivery_fetch_unavailable": "fetch is not available; set channels.telegram.proxy in config"
+    },
+    "commands": {
+      "limits_warning": "Telegram limits bots to 100 commands. {configured} configured; registering first 100. Use channels.telegram.commands.native: false to disable, or reduce plugin/skill/custom commands.",
+      "plugin_invalid_name": "Plugin command \"{command}\" is invalid for Telegram (use a-z, 0-9, underscore; max 32 chars).",
+      "plugin_name_conflict": "Plugin command \"{command}\" conflicts with an existing Telegram command.",
+      "plugin_duplicated": "Plugin command \"{command}\" is duplicated.",
+      "plugin_missing_description": "Plugin command \"{command}\" is missing a description."
+    },
+    "provider_selection": {
+      "select_provider": "Select a provider:",
+      "no_providers": "No providers available.",
+      "unknown_provider": "Unknown provider: {provider}\n\nSelect a provider:"
+    },
+    "media": {
+      "voice_as_audio": "Telegram voice requested but media is {mediaType} ({filename}); sending as audio file instead."
+    },
+    "monitor": {
+      "polling_error": "Telegram {reason}: {error}; retrying in {delay}.",
+      "getupdates_conflict": "getUpdates conflict",
+      "network_error": "network error"
+    },
+    "unknown_chat_title": "未知",
+    "sticker_from": "来自"
+  },
+  "discord": {
+    "voice_message": {
+      "duration_parse_error": "Could not parse duration",
+      "duration_failed": "Failed to get audio duration: {error}",
+      "url_not_allowed": "Voice message conversion requires a local file path; received a URL/protocol source: {path}",
+      "upload_url_failed": "Failed to get upload URL for voice message",
+      "upload_failed": "Failed to upload voice message: {status}"
+    }
+  },
+  "slack": {
+    "actions": {
+      "bot_token_required": "SLACK_BOT_TOKEN or channels.slack.botToken is required for Slack actions",
+      "emoji_required": "Emoji is required for Slack reactions",
+      "bot_user_id_failed": "Failed to resolve Slack bot user id"
+    }
+  },
+  "signal": {
+    "reactions": {
+      "missing_recipient": "Signal reactions require recipient or group ID",
+      "invalid_target_timestamp": "Invalid target timestamp for Signal reaction",
+      "missing_emoji": "Emoji is required for Signal reactions",
+      "missing_target_author": "Target author is required for group Signal reactions"
+    }
+  },
+  "agents": {
+    "tools": {
+      "image_size_error": "Image could not be reduced below {maxMb}MB (got {gotMb}MB)",
+      "patch_input_required": "Provide a patch input.",
+      "no_files_modified": "No files were modified.",
+      "invalid_patch_empty": "Invalid patch: input is empty."
+    }
   }
 }

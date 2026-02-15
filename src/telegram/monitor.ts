@@ -1,6 +1,7 @@
 import { type RunOptions, run } from "@grammyjs/runner";
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { t } from "../i18n/index.js";
 import { resolveAgentMaxConcurrent } from "../config/agent-limits.js";
 import { loadConfig } from "../config/config.js";
 import { computeBackoff, sleepWithAbort } from "../infra/backoff.js";
@@ -112,7 +113,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
     const token = opts.token?.trim() || account.token;
     if (!token) {
       throw new Error(
-        `Telegram bot token missing for account "${account.accountId}" (set channels.telegram.accounts.${account.accountId}.botToken/tokenFile or TELEGRAM_BOT_TOKEN for default).`,
+        t("telegram.errors.bot_token_missing", { accountId: account.accountId }),
       );
     }
 
@@ -194,10 +195,16 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         }
         restartAttempts += 1;
         const delayMs = computeBackoff(TELEGRAM_POLL_RESTART_POLICY, restartAttempts);
-        const reason = isConflict ? "getUpdates conflict" : "network error";
+        const reason = isConflict 
+          ? t("telegram.monitor.getupdates_conflict") 
+          : t("telegram.monitor.network_error");
         const errMsg = formatErrorMessage(err);
         (opts.runtime?.error ?? console.error)(
-          `Telegram ${reason}: ${errMsg}; retrying in ${formatDurationPrecise(delayMs)}.`,
+          t("telegram.monitor.polling_error", { 
+            reason, 
+            error: errMsg, 
+            delay: formatDurationPrecise(delayMs) 
+          }),
         );
         try {
           await sleepWithAbort(delayMs, opts.abortSignal);

@@ -8,6 +8,7 @@ import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import { killProcessTree } from "../../agents/shell-utils.js";
 import { logVerbose } from "../../globals.js";
 import { clampInt } from "../../utils.js";
+import { t } from "../../i18n/index.js";
 import { formatElevatedUnavailableMessage } from "./elevated-unavailable.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 
@@ -188,7 +189,7 @@ export async function handleBashChatCommand(params: {
 }): Promise<ReplyPayload> {
   if (params.cfg.commands?.bash !== true) {
     return {
-      text: "⚠️ bash is disabled. Set commands.bash=true to enable. Docs: https://docs.openclaw.ai/tools/slash-commands#config",
+      text: t("auto_reply.bash.disabled"),
     };
   }
 
@@ -221,7 +222,7 @@ export async function handleBashChatCommand(params: {
   }).trim();
   const request = parseBashRequest(rawBody);
   if (!request) {
-    return { text: "⚠️ Unrecognized bash request." };
+    return { text: t("auto_reply.bash.unrecognized_request") };
   }
 
   const liveJob = ensureActiveJobState();

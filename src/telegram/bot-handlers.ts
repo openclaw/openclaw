@@ -1,6 +1,7 @@
 import type { Message } from "@grammyjs/types";
 import type { TelegramMediaRef } from "./bot-message-context.js";
 import type { TelegramContext } from "./bot/types.js";
+import { t } from "../i18n/index.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { hasControlCommand } from "../auto-reply/command-detection.js";
 import {
@@ -531,7 +532,7 @@ export const registerTelegramHandlers = ({
 
         if (modelCallback.type === "providers" || modelCallback.type === "back") {
           if (providers.length === 0) {
-            await editMessageWithButtons("No providers available.", []);
+            await editMessageWithButtons(t("telegram.provider_selection.no_providers"), []);
             return;
           }
           const providerInfos: ProviderInfo[] = providers.map((p) => ({
@@ -539,7 +540,7 @@ export const registerTelegramHandlers = ({
             count: byProvider.get(p)?.size ?? 0,
           }));
           const buttons = buildProviderKeyboard(providerInfos);
-          await editMessageWithButtons("Select a provider:", buttons);
+          await editMessageWithButtons(t("telegram.provider_selection.select_provider"), buttons);
           return;
         }
 
@@ -554,7 +555,7 @@ export const registerTelegramHandlers = ({
             }));
             const buttons = buildProviderKeyboard(providerInfos);
             await editMessageWithButtons(
-              `Unknown provider: ${provider}\n\nSelect a provider:`,
+              t("telegram.provider_selection.unknown_provider", { provider }),
               buttons,
             );
             return;
@@ -645,7 +646,7 @@ export const registerTelegramHandlers = ({
 
       const oldChatId = String(msg.chat.id);
       const newChatId = String(msg.migrate_to_chat_id);
-      const chatTitle = msg.chat.title ?? "Unknown";
+      const chatTitle = msg.chat.title ?? t("telegram.unknown_chat_title");
 
       runtime.log?.(warn(`[telegram] Group migrated: "${chatTitle}" ${oldChatId} → ${newChatId}`));
 
@@ -899,7 +900,7 @@ export const registerTelegramHandlers = ({
             operation: "sendMessage",
             runtime,
             fn: () =>
-              bot.api.sendMessage(chatId, `⚠️ File too large. Maximum size is ${limitMb}MB.`, {
+              bot.api.sendMessage(chatId, t("telegram.errors.file_too_large", { limitMb }), {
                 reply_to_message_id: msg.message_id,
               }),
           }).catch(() => {});

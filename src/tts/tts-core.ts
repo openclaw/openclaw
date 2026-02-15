@@ -2,6 +2,7 @@ import { completeSimple, type TextContent } from "@mariozechner/pi-ai";
 import { EdgeTTS } from "node-edge-tts";
 import { rmSync } from "node:fs";
 import type { OpenClawConfig } from "../config/config.js";
+import { t } from "../i18n/index.js";
 import type {
   ResolvedTtsConfig,
   ResolvedTtsModelOverrides,
@@ -34,7 +35,11 @@ function normalizeElevenLabsBaseUrl(baseUrl: string): string {
 
 function requireInRange(value: number, min: number, max: number, label: string): void {
   if (!Number.isFinite(value) || value < min || value > max) {
-    throw new Error(`${label} must be between ${min} and ${max}`);
+    throw new Error(t("tts.errors.range_invalid", { 
+      label, 
+      min: min.toString(), 
+      max: max.toString() 
+    }));
   }
 }
 
@@ -52,7 +57,7 @@ function normalizeLanguageCode(code?: string): string | undefined {
   }
   const normalized = trimmed.toLowerCase();
   if (!/^[a-z]{2}$/.test(normalized)) {
-    throw new Error("languageCode must be a 2-letter ISO 639-1 code (e.g. en, de, fr)");
+    throw new Error(t("tts.errors.language_code_invalid"));
   }
   return normalized;
 }
@@ -66,7 +71,7 @@ function normalizeApplyTextNormalization(mode?: string): "auto" | "on" | "off" |
   if (normalized === "auto" || normalized === "on" || normalized === "off") {
     return normalized;
   }
-  throw new Error("applyTextNormalization must be one of: auto, on, off");
+  throw new Error(t("tts.errors.normalization_invalid"));
 }
 
 function normalizeSeed(seed?: number): number | undefined {
@@ -75,7 +80,7 @@ function normalizeSeed(seed?: number): number | undefined {
   }
   const next = Math.floor(seed);
   if (!Number.isFinite(next) || next < 0 || next > 4_294_967_295) {
-    throw new Error("seed must be between 0 and 4294967295");
+    throw new Error(t("tts.errors.seed_invalid"));
   }
   return next;
 }
@@ -142,7 +147,7 @@ export function parseTtsDirectives(
             if (rawValue === "openai" || rawValue === "elevenlabs" || rawValue === "edge") {
               overrides.provider = rawValue;
             } else {
-              warnings.push(`unsupported provider "${rawValue}"`);
+              warnings.push(t("tts.warnings.unsupported_provider", { provider: rawValue }));
             }
             break;
           case "voice":
@@ -154,7 +159,7 @@ export function parseTtsDirectives(
             if (isValidOpenAIVoice(rawValue)) {
               overrides.openai = { ...overrides.openai, voice: rawValue };
             } else {
-              warnings.push(`invalid OpenAI voice "${rawValue}"`);
+              warnings.push(t("tts.warnings.invalid_openai_voice", { voice: rawValue }));
             }
             break;
           case "voiceid":
@@ -167,7 +172,7 @@ export function parseTtsDirectives(
             if (isValidVoiceId(rawValue)) {
               overrides.elevenlabs = { ...overrides.elevenlabs, voiceId: rawValue };
             } else {
-              warnings.push(`invalid ElevenLabs voiceId "${rawValue}"`);
+              warnings.push(t("tts.warnings.invalid_elevenlabs_voice", { voiceId: rawValue }));
             }
             break;
           case "model":
@@ -193,7 +198,7 @@ export function parseTtsDirectives(
             {
               const value = parseNumberValue(rawValue);
               if (value == null) {
-                warnings.push("invalid stability value");
+                warnings.push(t("tts.warnings.invalid_stability"));
                 break;
               }
               requireInRange(value, 0, 1, "stability");
@@ -212,7 +217,7 @@ export function parseTtsDirectives(
             {
               const value = parseNumberValue(rawValue);
               if (value == null) {
-                warnings.push("invalid similarityBoost value");
+                warnings.push(t("tts.warnings.invalid_similarity"));
                 break;
               }
               requireInRange(value, 0, 1, "similarityBoost");
@@ -229,7 +234,7 @@ export function parseTtsDirectives(
             {
               const value = parseNumberValue(rawValue);
               if (value == null) {
-                warnings.push("invalid style value");
+                warnings.push(t("tts.warnings.invalid_style"));
                 break;
               }
               requireInRange(value, 0, 1, "style");
@@ -246,7 +251,7 @@ export function parseTtsDirectives(
             {
               const value = parseNumberValue(rawValue);
               if (value == null) {
-                warnings.push("invalid speed value");
+                warnings.push(t("tts.warnings.invalid_speed"));
                 break;
               }
               requireInRange(value, 0.5, 2, "speed");
@@ -266,7 +271,7 @@ export function parseTtsDirectives(
             {
               const value = parseBooleanValue(rawValue);
               if (value == null) {
-                warnings.push("invalid useSpeakerBoost value");
+                warnings.push(t("tts.warnings.invalid_speaker_boost"));
                 break;
               }
               overrides.elevenlabs = {
@@ -426,14 +431,17 @@ export async function summarizeText(params: {
 }): Promise<SummarizeResult> {
   const { text, targetLength, cfg, config, timeoutMs } = params;
   if (targetLength < 100 || targetLength > 10_000) {
-    throw new Error(`Invalid targetLength: ${targetLength}`);
+    throw new Error(t("tts.errors.target_length_invalid", { targetLength: targetLength.toString() }));
   }
 
   const startTime = Date.now();
   const { ref } = resolveSummaryModelRef(cfg, config);
   const resolved = resolveModel(ref.provider, ref.model, undefined, cfg);
   if (!resolved.model) {
-    throw new Error(resolved.error ?? `Unknown summary model: ${ref.provider}/${ref.model}`);
+    throw new Error(resolved.error ?? t("tts.errors.summary_model_unknown", { 
+      provider: ref.provider, 
+      model: ref.model 
+    }));
   }
   const apiKey = requireApiKey(
     await getApiKeyForModel({ model: resolved.model, cfg }),
@@ -451,11 +459,10 @@ export async function summarizeText(params: {
           messages: [
             {
               role: "user",
-              content:
-                `You are an assistant that summarizes texts concisely while keeping the most important information. ` +
-                `Summarize the text to approximately ${targetLength} characters. Maintain the original tone and style. ` +
-                `Reply only with the summary, without additional explanations.\n\n` +
-                `<text_to_summarize>\n${text}\n</text_to_summarize>`,
+              content: t("tts.summarization.prompt", { 
+                targetLength: targetLength.toString(), 
+                text 
+              }),
               timestamp: Date.now(),
             },
           ],
@@ -476,7 +483,7 @@ export async function summarizeText(params: {
         .trim();
 
       if (!summary) {
-        throw new Error("No summary returned");
+        throw new Error(t("tts.errors.no_summary_returned"));
       }
 
       return {
@@ -491,7 +498,7 @@ export async function summarizeText(params: {
   } catch (err) {
     const error = err as Error;
     if (error.name === "AbortError") {
-      throw new Error("Summarization timed out", { cause: err });
+      throw new Error(t("tts.errors.summarization_timeout"), { cause: err });
     }
     throw err;
   }
@@ -538,7 +545,7 @@ export async function elevenLabsTTS(params: {
     timeoutMs,
   } = params;
   if (!isValidVoiceId(voiceId)) {
-    throw new Error("Invalid voiceId format");
+    throw new Error(t("tts.errors.invalid_voice_id"));
   }
   assertElevenLabsVoiceSettings(voiceSettings);
   const normalizedLanguage = normalizeLanguageCode(languageCode);
@@ -579,7 +586,7 @@ export async function elevenLabsTTS(params: {
     });
 
     if (!response.ok) {
-      throw new Error(`ElevenLabs API error (${response.status})`);
+      throw new Error(t("tts.errors.elevenlabs_api_error", { status: response.status.toString() }));
     }
 
     return Buffer.from(await response.arrayBuffer());
@@ -599,10 +606,10 @@ export async function openaiTTS(params: {
   const { text, apiKey, model, voice, responseFormat, timeoutMs } = params;
 
   if (!isValidOpenAIModel(model)) {
-    throw new Error(`Invalid model: ${model}`);
+    throw new Error(t("tts.errors.invalid_model", { model }));
   }
   if (!isValidOpenAIVoice(voice)) {
-    throw new Error(`Invalid voice: ${voice}`);
+    throw new Error(t("tts.errors.invalid_voice", { voice }));
   }
 
   const controller = new AbortController();
@@ -625,7 +632,7 @@ export async function openaiTTS(params: {
     });
 
     if (!response.ok) {
-      throw new Error(`OpenAI TTS API error (${response.status})`);
+      throw new Error(t("tts.errors.openai_api_error", { status: response.status.toString() }));
     }
 
     return Buffer.from(await response.arrayBuffer());

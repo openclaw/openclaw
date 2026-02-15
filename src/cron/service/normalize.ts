@@ -1,14 +1,15 @@
 import type { CronPayload } from "../types.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { truncateUtf16Safe } from "../../utils.js";
+import { t } from "../../i18n/index.js";
 
 export function normalizeRequiredName(raw: unknown) {
   if (typeof raw !== "string") {
-    throw new Error("cron job name is required");
+    throw new Error(t("cron.job_name_required"));
   }
   const name = raw.trim();
   if (!name) {
-    throw new Error("cron job name is required");
+    throw new Error(t("cron.job_name_required"));
   }
   return name;
 }

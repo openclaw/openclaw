@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import type { CommandHandler } from "./commands-types.js";
+import { t } from "../../i18n/index.js";
 import {
   abortEmbeddedPiRun,
   compactEmbeddedPiSession,
@@ -60,7 +61,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   if (!params.sessionEntry?.sessionId) {
     return {
       shouldContinue: false,
-      reply: { text: "⚙️ Compaction unavailable (missing session id)." },
+      reply: { text: t("auto_reply.compaction_unavailable") },
     };
   }
   const sessionId = params.sessionEntry.sessionId;
@@ -111,12 +112,17 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   const compactLabel = result.ok
     ? result.compacted
       ? result.result?.tokensBefore != null && result.result?.tokensAfter != null
-        ? `Compacted (${formatTokenCount(result.result.tokensBefore)} → ${formatTokenCount(result.result.tokensAfter)})`
+        ? t("auto_reply.compaction.compacted_with_tokens", { 
+            tokensBefore: formatTokenCount(result.result.tokensBefore),
+            tokensAfter: formatTokenCount(result.result.tokensAfter)
+          })
         : result.result?.tokensBefore
-          ? `Compacted (${formatTokenCount(result.result.tokensBefore)} before)`
-          : "Compacted"
-      : "Compaction skipped"
-    : "Compaction failed";
+          ? t("auto_reply.compaction.compacted_before_tokens", {
+              tokensBefore: formatTokenCount(result.result.tokensBefore)
+            })
+          : t("auto_reply.compaction.compacted_simple")
+      : t("auto_reply.compaction.skipped")
+    : t("auto_reply.compaction.failed");
   if (result.ok && result.compacted) {
     await incrementCompactionCount({
       sessionEntry: params.sessionEntry,

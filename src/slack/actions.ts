@@ -5,6 +5,7 @@ import { resolveSlackAccount } from "./accounts.js";
 import { createSlackWebClient } from "./client.js";
 import { sendMessageSlack } from "./send.js";
 import { resolveSlackBotToken } from "./token.js";
+import { t } from "../i18n/index.js";
 
 export type SlackActionClientOpts = {
   accountId?: string;
@@ -41,7 +42,7 @@ function resolveToken(explicit?: string, accountId?: string) {
         explicit,
       )} source=${account.botTokenSource ?? "unknown"}`,
     );
-    throw new Error("SLACK_BOT_TOKEN or channels.slack.botToken is required for Slack actions");
+    throw new Error(t("slack.actions.bot_token_required"));
   }
   return token;
 }
@@ -49,7 +50,7 @@ function resolveToken(explicit?: string, accountId?: string) {
 function normalizeEmoji(raw: string) {
   const trimmed = raw.trim();
   if (!trimmed) {
-    throw new Error("Emoji is required for Slack reactions");
+    throw new Error(t("slack.actions.emoji_required"));
   }
   return trimmed.replace(/^:+|:+$/g, "");
 }
@@ -62,7 +63,7 @@ async function getClient(opts: SlackActionClientOpts = {}) {
 async function resolveBotUserId(client: WebClient) {
   const auth = await client.auth.test();
   if (!auth?.user_id) {
-    throw new Error("Failed to resolve Slack bot user id");
+    throw new Error(t("slack.actions.bot_user_id_failed"));
   }
   return auth.user_id;
 }

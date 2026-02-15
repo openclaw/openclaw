@@ -1,19 +1,21 @@
+import { t } from "../i18n/index.js";
+
 export const SESSION_LABEL_MAX_LENGTH = 64;
 
 export type ParsedSessionLabel = { ok: true; label: string } | { ok: false; error: string };
 
 export function parseSessionLabel(raw: unknown): ParsedSessionLabel {
   if (typeof raw !== "string") {
-    return { ok: false, error: "invalid label: must be a string" };
+    return { ok: false, error: t("sessions.invalid_label_string") };
   }
   const trimmed = raw.trim();
   if (!trimmed) {
-    return { ok: false, error: "invalid label: empty" };
+    return { ok: false, error: t("sessions.invalid_label_empty") };
   }
   if (trimmed.length > SESSION_LABEL_MAX_LENGTH) {
     return {
       ok: false,
-      error: `invalid label: too long (max ${SESSION_LABEL_MAX_LENGTH})`,
+      error: t("sessions.invalid_label_too_long", { max: SESSION_LABEL_MAX_LENGTH }),
     };
   }
   return { ok: true, label: trimmed };

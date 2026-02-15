@@ -24,6 +24,7 @@ import { normalizeChannelId } from "../channels/plugins/index.js";
 import { logVerbose } from "../globals.js";
 import { stripMarkdown } from "../line/markdown-to-line.js";
 import { isVoiceCompatibleAudio } from "../media/audio.js";
+import { t } from "../i18n/index.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import {
   edgeTTS,
@@ -356,15 +357,15 @@ export function buildTtsSystemPromptHint(cfg: OpenClawConfig): string | undefine
   const summarize = isSummarizationEnabled(prefsPath) ? "on" : "off";
   const autoHint =
     autoMode === "inbound"
-      ? "Only use TTS when the user's last message includes audio/voice."
+      ? t("tts.system_prompt.inbound_only")
       : autoMode === "tagged"
-        ? "Only use TTS when you include [[tts]] or [[tts:text]] tags."
+        ? t("tts.system_prompt.tagged_only")
         : undefined;
   return [
-    "Voice (TTS) is enabled.",
+    t("tts.system_prompt.voice_enabled"),
     autoHint,
-    `Keep spoken text ≤${maxLength} chars to avoid auto-summary (summary ${summarize}).`,
-    "Use [[tts:...]] and optional [[tts:text]]...[[/tts:text]] to control voice/expressiveness.",
+    t("tts.system_prompt.keep_short", { maxLength: maxLength.toString(), summarize }),
+    t("tts.system_prompt.use_directives"),
   ]
     .filter(Boolean)
     .join("\n");
@@ -522,7 +523,7 @@ export function isTtsProviderConfigured(config: ResolvedTtsConfig, provider: Tts
 function formatTtsProviderError(provider: TtsProvider, err: unknown): string {
   const error = err instanceof Error ? err : new Error(String(err));
   if (error.name === "AbortError") {
-    return `${provider}: request timed out`;
+    return t("tts.errors.request_timeout", { provider });
   }
   return `${provider}: ${error.message}`;
 }
@@ -542,7 +543,10 @@ export async function textToSpeech(params: {
   if (params.text.length > config.maxTextLength) {
     return {
       success: false,
-      error: `Text too long (${params.text.length} chars, max ${config.maxTextLength})`,
+      error: t("tts.errors.text_too_long", { 
+        length: params.text.length.toString(), 
+        maxLength: config.maxTextLength.toString() 
+      }),
     };
   }
 
@@ -558,7 +562,7 @@ export async function textToSpeech(params: {
     try {
       if (provider === "edge") {
         if (!config.edge.enabled) {
-          lastError = "edge: disabled";
+          lastError = t("tts.errors.edge_disabled");
           continue;
         }
 
@@ -626,7 +630,7 @@ export async function textToSpeech(params: {
 
       const apiKey = resolveTtsApiKey(config, provider);
       if (!apiKey) {
-        lastError = `No API key for ${provider}`;
+        lastError = t("tts.errors.no_api_key", { provider });
         continue;
       }
 
@@ -689,7 +693,9 @@ export async function textToSpeech(params: {
 
   return {
     success: false,
-    error: `TTS conversion failed: ${lastError || "no providers available"}`,
+    error: t("tts.errors.conversion_failed", { 
+      error: lastError || t("tts.errors.no_providers_available") 
+    }),
   };
 }
 
@@ -704,7 +710,10 @@ export async function textToSpeechTelephony(params: {
   if (params.text.length > config.maxTextLength) {
     return {
       success: false,
-      error: `Text too long (${params.text.length} chars, max ${config.maxTextLength})`,
+      error: t("tts.errors.text_too_long", { 
+        length: params.text.length.toString(), 
+        maxLength: config.maxTextLength.toString() 
+      }),
     };
   }
 
@@ -717,13 +726,13 @@ export async function textToSpeechTelephony(params: {
     const providerStart = Date.now();
     try {
       if (provider === "edge") {
-        lastError = "edge: unsupported for telephony";
+        lastError = t("tts.errors.edge_unsupported_telephony");
         continue;
       }
 
       const apiKey = resolveTtsApiKey(config, provider);
       if (!apiKey) {
-        lastError = `No API key for ${provider}`;
+        lastError = t("tts.errors.no_api_key", { provider });
         continue;
       }
 
@@ -778,7 +787,9 @@ export async function textToSpeechTelephony(params: {
 
   return {
     success: false,
-    error: `TTS conversion failed: ${lastError || "no providers available"}`,
+    error: t("tts.errors.conversion_failed", { 
+      error: lastError || t("tts.errors.no_providers_available") 
+    }),
   };
 }
 
