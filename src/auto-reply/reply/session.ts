@@ -27,6 +27,7 @@ import {
   updateSessionStore,
 } from "../../config/sessions.js";
 import { archiveSessionTranscripts } from "../../gateway/session-utils.fs.js";
+import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
@@ -223,9 +224,12 @@ export async function initSessionState(params: {
     resetType,
     resetOverride: channelReset,
   });
-  const freshEntry = entry
-    ? evaluateSessionFreshness({ updatedAt: entry.updatedAt, now, policy: resetPolicy }).fresh
-    : false;
+  const freshness = entry
+    ? evaluateSessionFreshness({ updatedAt: entry.updatedAt, now, policy: resetPolicy })
+    : undefined;
+  const freshEntry = freshness?.fresh ?? false;
+  const autoRolloverPreviousEntry =
+    !resetTriggered && entry && !freshEntry ? { ...entry } : undefined;
 
   if (!isNewSession && freshEntry) {
     sessionId = entry.sessionId;
@@ -380,6 +384,18 @@ export async function initSessionState(params: {
         }),
     },
   );
+
+  // Auto daily/idle rollover does not pass through /new command handling,
+  // so fire the same internal hook to preserve session memory snapshots.
+  if (isNewSession && autoRolloverPreviousEntry?.sessionId) {
+    const hookEvent = createInternalHookEvent("command", "new", sessionKey, {
+      sessionEntry,
+      previousSessionEntry: autoRolloverPreviousEntry,
+      commandSource: "auto-rollover",
+      cfg,
+    });
+    await triggerInternalHook(hookEvent);
+  }
 
   // Archive old transcript so it doesn't accumulate on disk (#14869).
   if (previousSessionEntry?.sessionId) {
