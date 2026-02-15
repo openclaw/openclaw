@@ -125,6 +125,8 @@ export type ToolEventRecipientRegistry = {
   add: (runId: string, connId: string) => void;
   get: (runId: string) => ReadonlySet<string> | undefined;
   markFinal: (runId: string) => void;
+  /** Dispose resources and stop periodic cleanup. Call on shutdown. */
+  dispose: () => void;
 };
 
 type ToolRecipientEntry = {
@@ -135,6 +137,8 @@ type ToolRecipientEntry = {
 
 const TOOL_EVENT_RECIPIENT_TTL_MS = 10 * 60 * 1000;
 const TOOL_EVENT_RECIPIENT_FINAL_GRACE_MS = 30 * 1000;
+// Interval for periodic cleanup to prevent memory leaks during idle periods
+const TOOL_EVENT_PRUNE_INTERVAL_MS = 60 * 1000;
 
 export function createToolEventRecipientRegistry(): ToolEventRecipientRegistry {
   const recipients = new Map<string, ToolRecipientEntry>();
@@ -153,6 +157,15 @@ export function createToolEventRecipientRegistry(): ToolEventRecipientRegistry {
       }
     }
   };
+
+  // Periodic cleanup ensures stale entries are removed even during idle periods.
+  // Without this, entries could accumulate if no add/get calls occur after
+  // agent runs complete, leading to unbounded memory growth in long-running servers.
+  const pruneTimer = setInterval(prune, TOOL_EVENT_PRUNE_INTERVAL_MS);
+  // Allow the process to exit even if the timer is still active
+  if (pruneTimer.unref) {
+    pruneTimer.unref();
+  }
 
   const add = (runId: string, connId: string) => {
     if (!runId || !connId) {
@@ -191,7 +204,12 @@ export function createToolEventRecipientRegistry(): ToolEventRecipientRegistry {
     prune();
   };
 
-  return { add, get, markFinal };
+  const dispose = () => {
+    clearInterval(pruneTimer);
+    recipients.clear();
+  };
+
+  return { add, get, markFinal, dispose };
 }
 
 export type ChatEventBroadcast = (
