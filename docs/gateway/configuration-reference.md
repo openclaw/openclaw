@@ -211,6 +211,11 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
       textChunkLimit: 2000,
       chunkMode: "length", // length | newline
       maxLinesPerMessage: 17,
+      ui: {
+        components: {
+          accentColor: "#5865F2",
+        },
+      },
       retry: {
         attempts: 3,
         minDelayMs: 500,
@@ -227,6 +232,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 - Guild slugs are lowercase with spaces replaced by `-`; channel keys use the slugged name (no `#`). Prefer guild IDs.
 - Bot-authored messages are ignored by default. `allowBots: true` enables them (own messages still filtered).
 - `maxLinesPerMessage` (default 17) splits tall messages even when under 2000 chars.
+- `channels.discord.ui.components.accentColor` sets the accent color for Discord components v2 containers.
 
 **Reaction notification modes:** `off` (none), `own` (bot's messages, default), `all` (all messages), `allowlist` (from `guilds.<id>.users` on all messages).
 

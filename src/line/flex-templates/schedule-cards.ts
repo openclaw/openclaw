@@ -28,6 +28,21 @@ function buildTitleSubtitleHeader(params: { title: string; subtitle?: string }):
   return headerContents;
 }
 
+function buildCardHeaderSections(headerContents: FlexComponent[]): FlexComponent[] {
+  return [
+    {
+      type: "box",
+      layout: "vertical",
+      contents: headerContents,
+      paddingBottom: "lg",
+    } as FlexBox,
+    {
+      type: "separator",
+      color: "#EEEEEE",
+    },
+  ];
+}
+
 function createMegaBubbleWithFooter(params: {
   bodyContents: FlexComponent[];
   footer?: string;
@@ -101,16 +116,7 @@ export function createReceiptCard(params: {
   const headerContents = buildTitleSubtitleHeader({ title, subtitle });
 
   const bodyContents: FlexComponent[] = [
-    {
-      type: "box",
-      layout: "vertical",
-      contents: headerContents,
-      paddingBottom: "lg",
-    } as FlexBox,
-    {
-      type: "separator",
-      color: "#EEEEEE",
-    },
+    ...buildCardHeaderSections(headerContents),
     {
       type: "box",
       layout: "vertical",
@@ -448,16 +454,7 @@ export function createAgendaCard(params: {
   });
 
   const bodyContents: FlexComponent[] = [
-    {
-      type: "box",
-      layout: "vertical",
-      contents: headerContents,
-      paddingBottom: "lg",
-    } as FlexBox,
-    {
-      type: "separator",
-      color: "#EEEEEE",
-    },
+    ...buildCardHeaderSections(headerContents),
     {
       type: "box",
       layout: "vertical",
