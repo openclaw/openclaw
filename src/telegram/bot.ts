@@ -221,8 +221,8 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         rawUpdateLogger.debug(`telegram update log failed: ${String(err)}`);
       }
     }
-    await next();
     recordUpdateId(ctx);
+    await next();
   });
 
   const historyLimit = Math.max(
