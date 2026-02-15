@@ -905,7 +905,8 @@ export async function maybeApplyTtsToPayload(params: {
     };
 
     const channelId = resolveChannelId(params.channel);
-    const shouldVoice = channelId === "telegram" && result.voiceCompatible === true;
+    // Enable voice for Telegram and BlueBubbles (both support native voice messages)
+    const shouldVoice = (channelId === "telegram" || channelId === "bluebubbles") && result.voiceCompatible === true;
     const finalPayload = {
       ...nextPayload,
       mediaUrl: result.audioPath,
