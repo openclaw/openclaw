@@ -89,8 +89,8 @@ final class HealthStore {
         }
     }
 
-    // Test-only escape hatch: the HealthStore is a process-wide singleton but
-    // state derivation is pure from `snapshot` + `lastError`.
+    /// Test-only escape hatch: the HealthStore is a process-wide singleton but
+    /// state derivation is pure from `snapshot` + `lastError`.
     func __setSnapshotForTest(_ snapshot: HealthSnapshot?, lastError: String? = nil) {
         self.snapshot = snapshot
         self.lastError = lastError

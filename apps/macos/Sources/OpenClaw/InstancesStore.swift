@@ -1,8 +1,8 @@
-import OpenClawKit
-import OpenClawProtocol
 import Cocoa
 import Foundation
 import Observation
+import OpenClawKit
+import OpenClawProtocol
 import OSLog
 
 struct InstanceInfo: Identifiable, Codable {
