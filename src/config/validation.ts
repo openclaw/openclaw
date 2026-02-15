@@ -11,6 +11,7 @@ import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import { isRecord } from "../utils.js";
 import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-dirs.js";
+import { warnUnsafeNumericIds } from "./validation-numeric-ids.js";
 import { applyAgentDefaults, applyModelDefaults, applySessionDefaults } from "./defaults.js";
 import { findLegacyConfigIssues } from "./legacy.js";
 import { OpenClawSchema } from "./zod-schema.js";
@@ -261,6 +262,9 @@ function validateConfigObjectWithPluginsBase(
       }
     }
   }
+
+  // Warn about numeric IDs that lose precision after JSON.parse (e.g. Discord snowflakes).
+  warnings.push(...warnUnsafeNumericIds(raw));
 
   const heartbeatChannelIds = new Set<string>();
   for (const channelId of CHANNEL_IDS) {
