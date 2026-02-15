@@ -87,6 +87,12 @@ type RequiredParamGroup = {
   label?: string;
 };
 
+const NON_RETRYABLE_SUFFIX = " [NON-RETRYABLE]";
+
+function nonRetryableValidationError(message: string): Error {
+  return new Error(`${message}${NON_RETRYABLE_SUFFIX}`);
+}
+
 export const CLAUDE_PARAM_GROUPS = {
   read: [{ keys: ["path", "file_path"], label: "path (path or file_path)" }],
   write: [
@@ -245,7 +251,7 @@ export function assertRequiredParams(
   toolName: string,
 ): void {
   if (!record || typeof record !== "object") {
-    throw new Error(`Missing parameters for ${toolName}`);
+    throw nonRetryableValidationError(`Missing parameters for ${toolName}`);
   }
 
   for (const group of groups) {
@@ -265,7 +271,7 @@ export function assertRequiredParams(
 
     if (!satisfied) {
       const label = group.label ?? group.keys.join(" or ");
-      throw new Error(`Missing required parameter: ${label}`);
+      throw nonRetryableValidationError(`Missing required parameter: ${label}`);
     }
   }
 }

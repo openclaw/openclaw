@@ -115,8 +115,14 @@ describe("createOpenClawCodingTools", () => {
       await expect(wrapped.execute("tool-2", { content: "x" })).rejects.toThrow(
         /Missing required parameter/,
       );
+      await expect(wrapped.execute("tool-2", { content: "x" })).rejects.toThrow(
+        /\[NON-RETRYABLE\]/,
+      );
       await expect(wrapped.execute("tool-3", { file_path: "   ", content: "x" })).rejects.toThrow(
         /Missing required parameter/,
+      );
+      await expect(wrapped.execute("tool-3", { file_path: "   ", content: "x" })).rejects.toThrow(
+        /\[NON-RETRYABLE\]/,
       );
     });
   });
