@@ -67,7 +67,30 @@ const buildFlags = (entry?: SessionEntry): string[] => {
   return flags;
 };
 
-export async function getStatusSummary(): Promise<StatusSummary> {
+export function redactSensitiveStatusSummary(summary: StatusSummary): StatusSummary {
+  return {
+    ...summary,
+    sessions: {
+      ...summary.sessions,
+      paths: [],
+      defaults: {
+        model: null,
+        contextTokens: null,
+      },
+      recent: [],
+      byAgent: summary.sessions.byAgent.map((entry) => ({
+        ...entry,
+        path: "[redacted]",
+        recent: [],
+      })),
+    },
+  };
+}
+
+export async function getStatusSummary(
+  options: { includeSensitive?: boolean } = {},
+): Promise<StatusSummary> {
+  const { includeSensitive = true } = options;
   const cfg = loadConfig();
   const linkContext = await resolveLinkChannelContext(cfg);
   const agentList = listAgentsForGateway(cfg);
@@ -179,7 +202,7 @@ export async function getStatusSummary(): Promise<StatusSummary> {
   const recent = allSessions.slice(0, 10);
   const totalSessions = allSessions.length;
 
-  return {
+  const summary: StatusSummary = {
     linkChannel: linkContext
       ? {
           id: linkContext.plugin.id,
@@ -205,4 +228,5 @@ export async function getStatusSummary(): Promise<StatusSummary> {
       byAgent,
     },
   };
+  return includeSensitive ? summary : redactSensitiveStatusSummary(summary);
 }
