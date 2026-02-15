@@ -61,7 +61,6 @@ const AUTH_CHOICE_GROUP_DEFS: {
   {
     value: "stepfun",
     label: "StepFun (Step 3.5 Flash)",
-    hint: "API key",
     choices: ["stepfun-api-key"],
   },
   {
