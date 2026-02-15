@@ -21,7 +21,7 @@ export function extractText(message: unknown): string | null {
         }
         return null;
       })
-      .filter((v): v is string => typeof v === "string");
+      .filter((v): v is string => typeof v === "string" && v.length > 0);
     if (parts.length > 0) {
       const joined = parts.join("\n");
       const processed = role === "assistant" ? stripThinkingTags(joined) : stripEnvelope(joined);
