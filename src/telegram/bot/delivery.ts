@@ -7,6 +7,7 @@ import type { StickerMetadata, TelegramContext } from "./types.js";
 import { chunkMarkdownTextWithMode, type ChunkMode } from "../../auto-reply/chunk.js";
 import { danger, logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { retryAsync } from "../../infra/retry.js";
 import { mediaKindFromMime } from "../../media/constants.js";
 import { fetchRemoteMedia } from "../../media/fetch.js";
 import { isGifMedia } from "../../media/mime.js";
@@ -402,7 +403,24 @@ export async function resolveMedia(
   if (!m?.file_id) {
     return null;
   }
-  const file = await ctx.getFile();
+
+  let file: { file_path?: string };
+  try {
+    file = await retryAsync(() => ctx.getFile(), {
+      attempts: 3,
+      minDelayMs: 1000,
+      maxDelayMs: 4000,
+      jitter: 0.2,
+      label: "telegram:getFile",
+      onRetry: ({ attempt, maxAttempts }) =>
+        logVerbose(`telegram: getFile retry ${attempt}/${maxAttempts}`),
+    });
+  } catch (err) {
+    // All retries exhausted — return null so the message still reaches the agent
+    // with a type-based placeholder (e.g. <media:audio>) instead of being dropped.
+    logVerbose(`telegram: getFile failed after retries: ${String(err)}`);
+    return null;
+  }
   if (!file.file_path) {
     throw new Error("Telegram getFile returned no file_path");
   }
