@@ -239,6 +239,9 @@ describe("runCronIsolatedAgentTurn", () => {
       expect(call?.sessionKey).toBe("agent:ops:cron:job-ops");
       expect(call?.workspaceDir).toBe(opsWorkspace);
       expect(call?.sessionFile).toContain(path.join("agents", "ops"));
+      // agentDir must point to the requested agent's dir so auth profiles
+      // (e.g. Ollama API keys) are loaded from the correct location (#14426).
+      expect((call as { agentDir?: string }).agentDir).toContain(path.join("agents", "ops"));
     });
   });
 
