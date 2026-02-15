@@ -7,7 +7,12 @@ import type { OpenClawConfig, ReplyToMode } from "../../config/config.js";
 import { resolveTextChunkLimit } from "../../auto-reply/chunk.js";
 import { listNativeCommandSpecsForConfig } from "../../auto-reply/commands-registry.js";
 import { listSkillCommandsForAgents } from "../../auto-reply/skill-commands.js";
-import { mergeAllowlist, summarizeMapping } from "../../channels/allowlists/resolve-utils.js";
+import {
+  buildAllowlistResolutionSummary,
+  mergeAllowlist,
+  resolveAllowlistIdAdditions,
+  summarizeMapping,
+} from "../../channels/allowlists/resolve-utils.js";
 import {
   isNativeCommandsExplicitlyDisabled,
   resolveNativeCommandsEnabled,
@@ -331,13 +336,8 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
             token,
             entries: Array.from(userEntries),
           });
-          const resolvedMap = new Map(resolvedUsers.map((entry) => [entry.input, entry]));
-          const mapping = resolvedUsers
-            .filter((entry) => entry.resolved && entry.id)
-            .map((entry) => `${entry.input}→${entry.id}`);
-          const unresolved = resolvedUsers
-            .filter((entry) => !entry.resolved)
-            .map((entry) => entry.input);
+          const { resolvedMap, mapping, unresolved } =
+            buildAllowlistResolutionSummary(resolvedUsers);
 
           const nextGuilds = { ...guildEntries };
           for (const [guildKey, guildConfig] of Object.entries(guildEntries ?? {})) {
@@ -347,14 +347,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
             const nextGuild = { ...guildConfig } as Record<string, unknown>;
             const users = (guildConfig as { users?: Array<string | number> }).users;
             if (Array.isArray(users) && users.length > 0) {
-              const additions: string[] = [];
-              for (const entry of users) {
-                const trimmed = String(entry).trim();
-                const resolved = resolvedMap.get(trimmed);
-                if (resolved?.resolved && resolved.id) {
-                  additions.push(resolved.id);
-                }
-              }
+              const additions = resolveAllowlistIdAdditions({ existing: users, resolvedMap });
               nextGuild.users = mergeAllowlist({ existing: users, additions });
             }
             const channels = (guildConfig as { channels?: Record<string, unknown> }).channels ?? {};
@@ -368,14 +361,10 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
                 if (!Array.isArray(channelUsers) || channelUsers.length === 0) {
                   continue;
                 }
-                const additions: string[] = [];
-                for (const entry of channelUsers) {
-                  const trimmed = String(entry).trim();
-                  const resolved = resolvedMap.get(trimmed);
-                  if (resolved?.resolved && resolved.id) {
-                    additions.push(resolved.id);
-                  }
-                }
+                const additions = resolveAllowlistIdAdditions({
+                  existing: channelUsers,
+                  resolvedMap,
+                });
                 nextChannels[channelKey] = {
                   ...channelConfig,
                   users: mergeAllowlist({ existing: channelUsers, additions }),
