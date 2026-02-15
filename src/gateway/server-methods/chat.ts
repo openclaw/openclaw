@@ -8,6 +8,7 @@ import { resolveThinkingDefault } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
+import { BARE_SESSION_RESET_PROMPT } from "../../auto-reply/reply/session-reset-prompt.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
@@ -40,6 +41,9 @@ import {
 import { formatForLog } from "../ws-log.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
+import { sessionsHandlers } from "./sessions.js";
+
+const RESET_COMMAND_RE = /^\/(new|reset)(?:\s+([\s\S]*))?$/i;
 
 type TranscriptAppendResult = {
   ok: boolean;
@@ -452,6 +456,67 @@ export const chatHandlers: GatewayRequestHandlers = {
       );
       respond(true, { ok: true, aborted: res.aborted, runIds: res.runIds });
       return;
+    }
+
+    // Check for session reset commands (/new, /reset)
+    const resetCommandMatch = inboundMessage.match(RESET_COMMAND_RE);
+    if (resetCommandMatch && sessionKey) {
+      const resetReason = resetCommandMatch[1]?.toLowerCase() === "new" ? "new" : "reset";
+      try {
+        // Call sessions.reset to reset the session
+        await new Promise<void>((resolve, reject) => {
+          const resetRespond: typeof respond = (ok, payload, error) => {
+            if (!ok) {
+              reject(error ?? new Error("sessions.reset failed"));
+              return;
+            }
+            // Session reset successful - extract new session info
+            const payloadObj = payload as
+              | {
+                  key?: unknown;
+                  entry?: {
+                    sessionId?: unknown;
+                  };
+                }
+              | undefined;
+            const newSessionId =
+              payloadObj?.entry && typeof payloadObj.entry.sessionId === "string"
+                ? payloadObj.entry.sessionId
+                : undefined;
+            if (newSessionId && entry) {
+              entry.sessionId = newSessionId;
+            }
+            resolve();
+          };
+
+          void sessionsHandlers["sessions.reset"]({
+            req: {
+              type: "req",
+              id: `${clientRunId}:reset`,
+              method: "sessions.reset",
+            },
+            params: {
+              key: sessionKey,
+              reason: resetReason,
+            },
+            context,
+            client,
+            isWebchatConnect: () => false,
+            respond: resetRespond,
+          });
+        });
+
+        // Replace bare /new or /reset with greeting prompt
+        const postResetMessage = resetCommandMatch[2]?.trim() ?? "";
+        if (postResetMessage) {
+          parsedMessage = postResetMessage;
+        } else {
+          parsedMessage = BARE_SESSION_RESET_PROMPT;
+        }
+      } catch (err) {
+        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
+        return;
+      }
     }
 
     const cached = context.dedupe.get(`chat:${clientRunId}`);
