@@ -22,9 +22,20 @@ vi.mock("../infra/agent-events.js", () => ({
   }),
 }));
 
+vi.mock("../config/config.js", () => ({
+  loadConfig: vi.fn(() => ({
+    agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
+  })),
+}));
+
 const announceSpy = vi.fn(async () => true);
 vi.mock("./subagent-announce.js", () => ({
   runSubagentAnnounceFlow: (...args: unknown[]) => announceSpy(...args),
+}));
+
+vi.mock("./subagent-registry.store.js", () => ({
+  loadSubagentRegistryFromDisk: vi.fn(() => new Map()),
+  saveSubagentRegistryToDisk: vi.fn(() => {}),
 }));
 
 describe("subagent registry steer restarts", () => {
@@ -32,7 +43,7 @@ describe("subagent registry steer restarts", () => {
     announceSpy.mockClear();
     lifecycleHandler = undefined;
     const mod = await import("./subagent-registry.js");
-    mod.resetSubagentRegistryForTests();
+    mod.resetSubagentRegistryForTests({ persist: false });
   });
 
   it("suppresses announce for interrupted runs and only announces the replacement run", async () => {
