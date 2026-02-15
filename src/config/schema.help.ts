@@ -123,6 +123,8 @@ export const FIELD_HELP: Record<string, string> = {
     "If true, Slack thread sessions inherit the parent channel transcript (default: false).",
   "channels.slack.thread.initialHistoryLimit":
     "Maximum number of existing Slack thread messages to fetch when starting a new thread session (default: 20, set to 0 to disable).",
+  "channels.slack.thread.stickyRouting":
+    "Route all thread messages to the bot without @mention after the bot first replies in the thread (default: true).",
   "channels.mattermost.botToken":
     "Bot token from Mattermost System Console -> Integrations -> Bot Accounts.",
   "channels.mattermost.baseUrl":

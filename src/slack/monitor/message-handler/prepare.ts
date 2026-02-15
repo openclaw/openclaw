@@ -197,8 +197,14 @@ export async function prepareSlackMessage(params: {
     },
   });
 
+  const chatType = isDirectMessage ? "direct" : isRoom ? "channel" : "group";
+  const chatTypeReplyOverride =
+    account.replyToModeByChatType?.[chatType] ??
+    (isDirectMessage ? account.dm?.replyToMode : undefined);
+  const replyToMode = chatTypeReplyOverride ?? ctx.replyToMode;
+
   const baseSessionKey = route.sessionKey;
-  const threadContext = resolveSlackThreadContext({ message, replyToMode: ctx.replyToMode });
+  const threadContext = resolveSlackThreadContext({ message, replyToMode });
   const threadTs = threadContext.incomingThreadTs;
   const isThreadReply = threadContext.isThreadReply;
   const threadKeys = resolveThreadSessionKeys({
@@ -231,7 +237,8 @@ export async function prepareSlackMessage(params: {
     !isDirectMessage &&
     ctx.botUserId &&
     message.thread_ts &&
-    message.parent_user_id === ctx.botUserId,
+    (message.parent_user_id === ctx.botUserId ||
+      ctx.stickyThreadTracker?.isActive(message.channel, message.thread_ts)),
   );
 
   const sender = message.user ? await ctx.resolveUserName(message.user) : null;
@@ -655,6 +662,7 @@ export async function prepareSlackMessage(params: {
     channelConfig,
     replyTarget,
     ctxPayload,
+    replyToMode,
     isDirectMessage,
     isRoomish,
     historyKey,

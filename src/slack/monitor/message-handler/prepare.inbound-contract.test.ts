@@ -301,6 +301,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
       enabled: true,
       botTokenSource: "config",
       appTokenSource: "config",
+      replyToMode: "all",
       config: { replyToMode: "all" },
     };
 

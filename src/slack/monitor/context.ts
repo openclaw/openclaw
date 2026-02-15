@@ -4,6 +4,7 @@ import type { OpenClawConfig, SlackReactionNotificationMode } from "../../config
 import type { DmPolicy, GroupPolicy } from "../../config/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { SlackMessageEvent } from "../types.js";
+import type { StickyThreadTracker } from "./sticky-threads.js";
 import { formatAllowlistMatchMeta } from "../../channels/allowlist-match.js";
 import { resolveSessionKey, type SessionScope } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
@@ -89,6 +90,8 @@ export type SlackMonitorContext = {
   replyToMode: "off" | "first" | "all";
   threadHistoryScope: "thread" | "channel";
   threadInheritParent: boolean;
+  stickyRouting: boolean;
+  stickyThreadTracker: StickyThreadTracker | null;
   slashCommand: Required<import("../../config/config.js").SlackSlashCommandConfig>;
   textLimit: number;
   ackReactionScope: string;
@@ -150,6 +153,8 @@ export function createSlackMonitorContext(params: {
   replyToMode: SlackMonitorContext["replyToMode"];
   threadHistoryScope: SlackMonitorContext["threadHistoryScope"];
   threadInheritParent: SlackMonitorContext["threadInheritParent"];
+  stickyRouting: boolean;
+  stickyThreadTracker: StickyThreadTracker | null;
   slashCommand: SlackMonitorContext["slashCommand"];
   textLimit: number;
   ackReactionScope: string;
@@ -412,6 +417,8 @@ export function createSlackMonitorContext(params: {
     replyToMode: params.replyToMode,
     threadHistoryScope: params.threadHistoryScope,
     threadInheritParent: params.threadInheritParent,
+    stickyRouting: params.stickyRouting,
+    stickyThreadTracker: params.stickyThreadTracker,
     slashCommand: params.slashCommand,
     textLimit: params.textLimit,
     ackReactionScope: params.ackReactionScope,
