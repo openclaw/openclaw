@@ -283,6 +283,35 @@ async function createDoc(client: Lark.Client, title: string, folderToken?: strin
   };
 }
 
+async function setDocPublicPermission(
+  client: Lark.Client,
+  docToken: string,
+  access: "read" | "edit" = "read",
+) {
+  const linkShareEntity = access === "edit" ? "anyone_editable" : "anyone_readable";
+  const securityEntity = access === "edit" ? "anyone_can_edit" : "anyone_can_view";
+  const res = await client.drive.permissionPublic.patch({
+    path: { token: docToken },
+    params: { type: "docx" },
+    data: {
+      external_access: true,
+      share_entity: "anyone",
+      security_entity: securityEntity,
+      link_share_entity: linkShareEntity,
+    },
+  });
+  if (res.code !== 0) {
+    throw new Error(res.msg);
+  }
+
+  return {
+    success: true,
+    doc_token: docToken,
+    access,
+    permission_public: res.data?.permission_public,
+  };
+}
+
 async function writeDoc(client: Lark.Client, docToken: string, markdown: string, maxBytes: number) {
   const deleted = await clearDocumentContent(client, docToken);
 
@@ -470,7 +499,7 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
         name: "feishu_doc",
         label: "Feishu Doc",
         description:
-          "Feishu document operations. Actions: read, write, append, create, list_blocks, get_block, update_block, delete_block",
+          "Feishu document operations. Actions: read, write, append, create, set_public_permission, list_blocks, get_block, update_block, delete_block",
         parameters: FeishuDocSchema,
         async execute(_toolCallId, params) {
           const p = params as FeishuDocParams;
@@ -485,6 +514,8 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
                 return json(await appendDoc(client, p.doc_token, p.content, mediaMaxBytes));
               case "create":
                 return json(await createDoc(client, p.title, p.folder_token));
+              case "set_public_permission":
+                return json(await setDocPublicPermission(client, p.doc_token, p.access ?? "read"));
               case "list_blocks":
                 return json(await listBlocks(client, p.doc_token));
               case "get_block":
