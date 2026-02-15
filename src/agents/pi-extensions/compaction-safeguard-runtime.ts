@@ -3,6 +3,7 @@ import { createSessionManagerRuntimeRegistry } from "./session-manager-runtime-r
 export type CompactionSafeguardRuntimeValue = {
   maxHistoryShare?: number;
   contextWindowTokens?: number;
+  customInstructions?: string;
 };
 
 const registry = createSessionManagerRuntimeRegistry<CompactionSafeguardRuntimeValue>();
