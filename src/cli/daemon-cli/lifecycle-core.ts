@@ -57,6 +57,30 @@ function createActionIO(params: { action: DaemonAction; json: boolean }) {
   return { stdout, emit, fail };
 }
 
+async function handleServiceNotLoaded(params: {
+  serviceNoun: string;
+  service: GatewayService;
+  loaded: boolean;
+  renderStartHints: () => string[];
+  json: boolean;
+  emit: ReturnType<typeof createActionIO>["emit"];
+}) {
+  const hints = await maybeAugmentSystemdHints(params.renderStartHints());
+  params.emit({
+    ok: true,
+    result: "not-loaded",
+    message: `${params.serviceNoun} service ${params.service.notLoadedText}.`,
+    hints,
+    service: buildDaemonServiceSnapshot(params.service, params.loaded),
+  });
+  if (!params.json) {
+    defaultRuntime.log(`${params.serviceNoun} service ${params.service.notLoadedText}.`);
+    for (const hint of hints) {
+      defaultRuntime.log(`Start with: ${hint}`);
+    }
+  }
+}
+
 export async function runServiceUninstall(params: {
   serviceNoun: string;
   service: GatewayService;
@@ -126,20 +150,14 @@ export async function runServiceStart(params: {
     return;
   }
   if (!loaded) {
-    const hints = await maybeAugmentSystemdHints(params.renderStartHints());
-    emit({
-      ok: true,
-      result: "not-loaded",
-      message: `${params.serviceNoun} service ${params.service.notLoadedText}.`,
-      hints,
-      service: buildDaemonServiceSnapshot(params.service, loaded),
+    await handleServiceNotLoaded({
+      serviceNoun: params.serviceNoun,
+      service: params.service,
+      loaded,
+      renderStartHints: params.renderStartHints,
+      json,
+      emit,
     });
-    if (!json) {
-      defaultRuntime.log(`${params.serviceNoun} service ${params.service.notLoadedText}.`);
-      for (const hint of hints) {
-        defaultRuntime.log(`Start with: ${hint}`);
-      }
-    }
     return;
   }
   try {
@@ -227,20 +245,14 @@ export async function runServiceRestart(params: {
     return false;
   }
   if (!loaded) {
-    const hints = await maybeAugmentSystemdHints(params.renderStartHints());
-    emit({
-      ok: true,
-      result: "not-loaded",
-      message: `${params.serviceNoun} service ${params.service.notLoadedText}.`,
-      hints,
-      service: buildDaemonServiceSnapshot(params.service, loaded),
+    await handleServiceNotLoaded({
+      serviceNoun: params.serviceNoun,
+      service: params.service,
+      loaded,
+      renderStartHints: params.renderStartHints,
+      json,
+      emit,
     });
-    if (!json) {
-      defaultRuntime.log(`${params.serviceNoun} service ${params.service.notLoadedText}.`);
-      for (const hint of hints) {
-        defaultRuntime.log(`Start with: ${hint}`);
-      }
-    }
     return false;
   }
   try {
