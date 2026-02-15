@@ -195,6 +195,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     cfg,
     accountId: account.accountId,
     botToken,
+    userToken: slackCfg.userToken?.trim(),
     app,
     runtime,
     botUserId,

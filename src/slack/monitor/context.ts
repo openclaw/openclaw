@@ -52,6 +52,7 @@ export type SlackMonitorContext = {
   cfg: OpenClawConfig;
   accountId: string;
   botToken: string;
+  userToken?: string;
   app: App;
   runtime: RuntimeEnv;
 
@@ -125,6 +126,7 @@ export function createSlackMonitorContext(params: {
   cfg: OpenClawConfig;
   accountId: string;
   botToken: string;
+  userToken?: string;
   app: App;
   runtime: RuntimeEnv;
 
@@ -389,6 +391,7 @@ export function createSlackMonitorContext(params: {
     cfg: params.cfg,
     accountId: params.accountId,
     botToken: params.botToken,
+    userToken: params.userToken,
     app: params.app,
     runtime: params.runtime,
     botUserId: params.botUserId,
