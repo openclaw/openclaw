@@ -597,6 +597,8 @@ export async function runCronIsolatedAgentTurn(params: {
           agentId,
           messageChannel,
           agentAccountId: resolvedDelivery.accountId,
+          messageTo: resolvedDelivery.to,
+          messageThreadId: resolvedDelivery.threadId,
           sessionFile,
           workspaceDir,
           config: cfgWithAgentDefaults,
