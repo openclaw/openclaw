@@ -29,6 +29,8 @@ export type ResolveAgentRouteInput = {
   peer?: RoutePeer | null;
   /** Parent peer for threads — used for binding inheritance when peer doesn't match directly. */
   parentPeer?: RoutePeer | null;
+  /** Telegram forum topic ID for topic-level routing. */
+  topicId?: string | null;
   guildId?: string | null;
   teamId?: string | null;
   /** Discord member role IDs — used for role-based agent routing. */
@@ -45,6 +47,7 @@ export type ResolvedAgentRoute = {
   mainSessionKey: string;
   /** Match description for debugging/logging. */
   matchedBy:
+    | "binding.peer+topic"
     | "binding.peer"
     | "binding.peer.parent"
     | "binding.guild+roles"
@@ -145,6 +148,7 @@ type NormalizedPeerConstraint =
 type NormalizedBindingMatch = {
   accountPattern: string;
   peer: NormalizedPeerConstraint;
+  topicId: string | null;
   guildId: string | null;
   teamId: string | null;
   roles: string[] | null;
@@ -157,6 +161,7 @@ type EvaluatedBinding = {
 
 type BindingScope = {
   peer: RoutePeer | null;
+  topicId: string;
   guildId: string;
   teamId: string;
   memberRoleIds: Set<string>;
@@ -232,6 +237,7 @@ function normalizeBindingMatch(
     | {
         accountId?: string | undefined;
         peer?: { kind?: string; id?: string } | undefined;
+        topicId?: string | undefined;
         guildId?: string | undefined;
         teamId?: string | undefined;
         roles?: string[] | undefined;
@@ -242,6 +248,7 @@ function normalizeBindingMatch(
   return {
     accountPattern: (match?.accountId ?? "").trim(),
     peer: normalizePeerConstraint(match?.peer),
+    topicId: normalizeId(match?.topicId) || null,
     guildId: normalizeId(match?.guildId) || null,
     teamId: normalizeId(match?.teamId) || null,
     roles: Array.isArray(rawRoles) && rawRoles.length > 0 ? rawRoles : null,
@@ -260,6 +267,10 @@ function hasRolesConstraint(match: NormalizedBindingMatch): boolean {
   return Boolean(match.roles);
 }
 
+function hasTopicConstraint(match: NormalizedBindingMatch): boolean {
+  return Boolean(match.topicId);
+}
+
 function matchesBindingScope(match: NormalizedBindingMatch, scope: BindingScope): boolean {
   if (match.peer.state === "invalid") {
     return false;
@@ -268,6 +279,9 @@ function matchesBindingScope(match: NormalizedBindingMatch, scope: BindingScope)
     if (!scope.peer || scope.peer.kind !== match.peer.kind || scope.peer.id !== match.peer.id) {
       return false;
     }
+  }
+  if (match.topicId && match.topicId !== scope.topicId) {
+    return false;
   }
   if (match.guildId && match.guildId !== scope.guildId) {
     return false;
@@ -292,6 +306,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
   const peer = input.peer ? { kind: input.peer.kind, id: normalizeId(input.peer.id) } : null;
   const guildId = normalizeId(input.guildId);
   const teamId = normalizeId(input.teamId);
+  const topicId = normalizeId(input.topicId);
   const memberRoleIds = input.memberRoleIds ?? [];
   const memberRoleIdSet = new Set(memberRoleIds);
 
@@ -352,6 +367,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
     ? { kind: input.parentPeer.kind, id: normalizeId(input.parentPeer.id) }
     : null;
   const baseScope = {
+    topicId,
     guildId,
     teamId,
     memberRoleIds: memberRoleIdSet,
@@ -363,6 +379,13 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
     scopePeer: RoutePeer | null;
     predicate: (candidate: EvaluatedBinding) => boolean;
   }> = [
+    {
+      matchedBy: "binding.peer+topic",
+      enabled: Boolean(peer && topicId),
+      scopePeer: peer,
+      predicate: (candidate) =>
+        candidate.match.peer.state === "valid" && hasTopicConstraint(candidate.match),
+    },
     {
       matchedBy: "binding.peer",
       enabled: Boolean(peer),

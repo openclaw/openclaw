@@ -76,6 +76,8 @@ export type AgentBinding = {
     channel: string;
     accountId?: string;
     peer?: { kind: ChatType; id: string };
+    /** Telegram forum topic ID — routes to a specific topic within a group. */
+    topicId?: string;
     guildId?: string;
     teamId?: string;
     /** Discord role IDs used for role-based routing. */

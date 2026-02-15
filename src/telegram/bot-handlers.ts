@@ -177,6 +177,7 @@ export const registerTelegramHandlers = ({
         id: peerId,
       },
       parentPeer,
+      topicId: resolvedThreadId != null ? String(resolvedThreadId) : undefined,
     });
     const baseSessionKey = route.sessionKey;
     const dmThreadId = !params.isGroup ? params.messageThreadId : undefined;

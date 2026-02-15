@@ -459,6 +459,7 @@ export const registerTelegramNativeCommands = ({
               id: isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : String(chatId),
             },
             parentPeer,
+            topicId: resolvedThreadId != null ? String(resolvedThreadId) : undefined,
           });
           const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
           const baseSessionKey = route.sessionKey;

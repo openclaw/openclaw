@@ -745,4 +745,93 @@ describe("role-based agent routing", () => {
     expect(route.agentId).toBe("guild-roles");
     expect(route.matchedBy).toBe("binding.guild+roles");
   });
+
+  test("topicId binding matches specific forum topic", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "topic-agent",
+          match: {
+            channel: "telegram",
+            peer: { kind: "group" as ChatType, id: "-1001234567890" },
+            topicId: "315",
+          },
+        },
+        {
+          agentId: "group-agent",
+          match: {
+            channel: "telegram",
+            peer: { kind: "group" as ChatType, id: "-1001234567890" },
+          },
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "telegram",
+      peer: { kind: "group", id: "-1001234567890" },
+      topicId: "315",
+    });
+    expect(route.agentId).toBe("topic-agent");
+    expect(route.matchedBy).toBe("binding.peer+topic");
+  });
+
+  test("topicId binding does not match different topic", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "topic-agent",
+          match: {
+            channel: "telegram",
+            peer: { kind: "group" as ChatType, id: "-1001234567890" },
+            topicId: "315",
+          },
+        },
+        {
+          agentId: "group-agent",
+          match: {
+            channel: "telegram",
+            peer: { kind: "group" as ChatType, id: "-1001234567890" },
+          },
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "telegram",
+      peer: { kind: "group", id: "-1001234567890" },
+      topicId: "999",
+    });
+    expect(route.agentId).toBe("group-agent");
+    expect(route.matchedBy).toBe("binding.peer");
+  });
+
+  test("no topicId in input falls back to peer binding without topic constraint", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "topic-agent",
+          match: {
+            channel: "telegram",
+            peer: { kind: "group" as ChatType, id: "-1001234567890" },
+            topicId: "315",
+          },
+        },
+        {
+          agentId: "group-agent",
+          match: {
+            channel: "telegram",
+            peer: { kind: "group" as ChatType, id: "-1001234567890" },
+          },
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "telegram",
+      peer: { kind: "group", id: "-1001234567890" },
+    });
+    expect(route.agentId).toBe("group-agent");
+    expect(route.matchedBy).toBe("binding.peer");
+  });
 });
