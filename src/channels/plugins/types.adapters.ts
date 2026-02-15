@@ -83,6 +83,8 @@ export type ChannelOutboundContext = {
   identity?: OutboundIdentity;
   deps?: OutboundSendDeps;
   silent?: boolean;
+  /** When true, audio should be sent as a voice message bubble (with waveform) instead of a file attachment. */
+  audioAsVoice?: boolean;
 };
 
 export type ChannelOutboundPayloadContext = ChannelOutboundContext & {

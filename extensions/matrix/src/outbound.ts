@@ -22,7 +22,7 @@ export const matrixOutbound: ChannelOutboundAdapter = {
       roomId: result.roomId,
     };
   },
-  sendMedia: async ({ to, text, mediaUrl, deps, replyToId, threadId, accountId }) => {
+  sendMedia: async ({ to, text, mediaUrl, deps, replyToId, threadId, accountId, audioAsVoice }) => {
     const send = deps?.sendMatrix ?? sendMessageMatrix;
     const resolvedThreadId =
       threadId !== undefined && threadId !== null ? String(threadId) : undefined;
@@ -31,6 +31,7 @@ export const matrixOutbound: ChannelOutboundAdapter = {
       replyToId: replyToId ?? undefined,
       threadId: resolvedThreadId,
       accountId: accountId ?? undefined,
+      audioAsVoice: audioAsVoice ?? undefined,
     });
     return {
       channel: "matrix",
