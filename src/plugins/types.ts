@@ -319,12 +319,26 @@ export type PluginHookAgentContext = {
   sessionId?: string;
   workspaceDir?: string;
   messageProvider?: string;
+  messageChannel?: string;
+  accountId?: string;
+  senderId?: string;
+  senderName?: string;
+  senderUsername?: string;
+  senderE164?: string;
+  runId?: string;
+  model?: unknown;
+  modelRegistry?: unknown;
 };
 
 // before_agent_start hook
 export type PluginHookBeforeAgentStartEvent = {
   prompt: string;
   messages?: unknown[];
+  tools?: Array<{
+    name: string;
+    description?: string;
+    parameters?: Record<string, unknown>;
+  }>;
 };
 
 export type PluginHookBeforeAgentStartResult = {
