@@ -27,21 +27,11 @@ import {
   loadProviderUsageSummary,
   resolveUsageProviderId,
 } from "../../infra/provider-usage.js";
+import { maskApiKey } from "../../utils/mask-api-key.js";
 import { normalizeGroupActivation } from "../group-activation.js";
 import { buildStatusMessage } from "../status.js";
 import { getFollowupQueueDepth, resolveQueueSettings } from "./queue.js";
 import { resolveSubagentLabel } from "./subagents-utils.js";
-
-function formatApiKeySnippet(apiKey: string): string {
-  const compact = apiKey.replace(/\s+/g, "");
-  if (!compact) {
-    return "unknown";
-  }
-  const edge = compact.length >= 12 ? 6 : 4;
-  const head = compact.slice(0, edge);
-  const tail = compact.slice(-edge);
-  return `${head}…${tail}`;
-}
 
 function resolveModelAuthLabel(
   provider?: string,
@@ -77,10 +67,10 @@ function resolveModelAuthLabel(
       return `oauth${label ? ` (${label})` : ""}`;
     }
     if (profile.type === "token") {
-      const snippet = formatApiKeySnippet(profile.token);
+      const snippet = maskApiKey(profile.token);
       return `token ${snippet}${label ? ` (${label})` : ""}`;
     }
-    const snippet = formatApiKeySnippet(profile.key ?? "");
+    const snippet = maskApiKey(profile.key ?? "");
     return `api-key ${snippet}${label ? ` (${label})` : ""}`;
   }
 
@@ -89,12 +79,12 @@ function resolveModelAuthLabel(
     if (envKey.source.includes("OAUTH_TOKEN")) {
       return `oauth (${envKey.source})`;
     }
-    return `api-key ${formatApiKeySnippet(envKey.apiKey)} (${envKey.source})`;
+    return `api-key ${maskApiKey(envKey.apiKey)} (${envKey.source})`;
   }
 
   const customKey = getCustomProviderApiKey(cfg, providerKey);
   if (customKey) {
-    return `api-key ${formatApiKeySnippet(customKey)} (models.json)`;
+    return `api-key ${maskApiKey(customKey)} (models.json)`;
   }
 
   return "unknown";

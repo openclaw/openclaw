@@ -23,6 +23,7 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
+import { maskApiKey } from "../../utils/mask-api-key.js";
 import { resolveAgentDir } from "../agent-scope.js";
 import {
   ensureAuthProfileStore,
@@ -52,17 +53,6 @@ const SessionStatusToolSchema = Type.Object({
   sessionKey: Type.Optional(Type.String()),
   model: Type.Optional(Type.String()),
 });
-
-function formatApiKeySnippet(apiKey: string): string {
-  const compact = apiKey.replace(/\s+/g, "");
-  if (!compact) {
-    return "unknown";
-  }
-  const edge = compact.length >= 12 ? 6 : 4;
-  const head = compact.slice(0, edge);
-  const tail = compact.slice(-edge);
-  return `${head}…${tail}`;
-}
 
 function resolveModelAuthLabel(params: {
   provider?: string;
@@ -102,9 +92,9 @@ function resolveModelAuthLabel(params: {
       return `oauth${label ? ` (${label})` : ""}`;
     }
     if (profile.type === "token") {
-      return `token ${formatApiKeySnippet(profile.token)}${label ? ` (${label})` : ""}`;
+      return `token ${maskApiKey(profile.token)}${label ? ` (${label})` : ""}`;
     }
-    return `api-key ${formatApiKeySnippet(profile.key ?? "")}${label ? ` (${label})` : ""}`;
+    return `api-key ${maskApiKey(profile.key ?? "")}${label ? ` (${label})` : ""}`;
   }
 
   const envKey = resolveEnvApiKey(providerKey);
@@ -112,12 +102,12 @@ function resolveModelAuthLabel(params: {
     if (envKey.source.includes("OAUTH_TOKEN")) {
       return `oauth (${envKey.source})`;
     }
-    return `api-key ${formatApiKeySnippet(envKey.apiKey)} (${envKey.source})`;
+    return `api-key ${maskApiKey(envKey.apiKey)} (${envKey.source})`;
   }
 
   const customKey = getCustomProviderApiKey(params.cfg, providerKey);
   if (customKey) {
-    return `api-key ${formatApiKeySnippet(customKey)} (models.json)`;
+    return `api-key ${maskApiKey(customKey)} (models.json)`;
   }
 
   return "unknown";
