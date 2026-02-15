@@ -336,8 +336,20 @@ export function buildStatusMessage(args: StatusArgs): string {
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
-  const provider = entry?.providerOverride ?? resolved.provider ?? DEFAULT_PROVIDER;
-  let model = entry?.modelOverride ?? resolved.model ?? DEFAULT_MODEL;
+  // Prefer actual runtime model (set after fallback) over user-configured overrides.
+  // Select provider+model as a consistent pair to avoid mismatches.
+  const hasRuntimeModel = entry?.modelProvider != null && entry?.model != null;
+  const hasOverrideModel = entry?.providerOverride != null || entry?.modelOverride != null;
+  const provider = hasRuntimeModel
+    ? entry.modelProvider
+    : hasOverrideModel
+      ? (entry?.providerOverride ?? resolved.provider ?? DEFAULT_PROVIDER)
+      : (resolved.provider ?? DEFAULT_PROVIDER);
+  let model = hasRuntimeModel
+    ? entry.model
+    : hasOverrideModel
+      ? (entry?.modelOverride ?? resolved.model ?? DEFAULT_MODEL)
+      : (resolved.model ?? DEFAULT_MODEL);
   let contextTokens =
     entry?.contextTokens ??
     args.agent?.contextTokens ??
