@@ -36,4 +36,26 @@ describe("config schema regressions", () => {
 
     expect(res.ok).toBe(true);
   });
+
+  it("accepts tools.web.fetch readability and firecrawl config", () => {
+    const res = validateConfigObject({
+      tools: {
+        web: {
+          fetch: {
+            readability: true,
+            firecrawl: {
+              enabled: true,
+              apiKey: "firecrawl-test-key",
+              baseUrl: "https://api.firecrawl.dev",
+              onlyMainContent: true,
+              maxAgeMs: 60_000,
+              timeoutSeconds: 30,
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
 });
