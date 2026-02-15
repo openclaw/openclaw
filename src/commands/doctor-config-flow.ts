@@ -3,6 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
+import {
+  isNumericTelegramUserId,
+  normalizeTelegramAllowFromEntry,
+} from "../channels/telegram/allow-from.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
   OpenClawSchema,
@@ -141,18 +145,6 @@ function noteOpencodeProviderOverrides(cfg: OpenClawConfig) {
   );
 
   note(lines.join("\n"), "OpenCode Zen");
-}
-
-function normalizeTelegramAllowFromEntry(raw: unknown): string {
-  const base = typeof raw === "string" ? raw : typeof raw === "number" ? String(raw) : "";
-  return base
-    .trim()
-    .replace(/^(telegram|tg):/i, "")
-    .trim();
-}
-
-function isNumericTelegramUserId(raw: string): boolean {
-  return /^\d+$/.test(raw);
 }
 
 type TelegramAllowFromUsernameHit = { path: string; entry: string };
