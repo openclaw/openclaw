@@ -59,6 +59,22 @@ function runBrowserCommand(action: () => Promise<void>) {
   });
 }
 
+function logBrowserTabs(tabs: BrowserTab[], json?: boolean) {
+  if (json) {
+    defaultRuntime.log(JSON.stringify({ tabs }, null, 2));
+    return;
+  }
+  if (tabs.length === 0) {
+    defaultRuntime.log("No tabs (browser closed or no targets).");
+    return;
+  }
+  defaultRuntime.log(
+    tabs
+      .map((t, i) => `${i + 1}. ${t.title || "(untitled)"}\n   ${t.url}\n   id: ${t.targetId}`)
+      .join("\n"),
+  );
+}
+
 export function registerBrowserManageCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
@@ -161,21 +177,7 @@ export function registerBrowserManageCommands(
           { timeoutMs: 3000 },
         );
         const tabs = result.tabs ?? [];
-        if (parent?.json) {
-          defaultRuntime.log(JSON.stringify({ tabs }, null, 2));
-          return;
-        }
-        if (tabs.length === 0) {
-          defaultRuntime.log("No tabs (browser closed or no targets).");
-          return;
-        }
-        defaultRuntime.log(
-          tabs
-            .map(
-              (t, i) => `${i + 1}. ${t.title || "(untitled)"}\n   ${t.url}\n   id: ${t.targetId}`,
-            )
-            .join("\n"),
-        );
+        logBrowserTabs(tabs, parent?.json);
       });
     });
 
@@ -199,21 +201,7 @@ export function registerBrowserManageCommands(
           { timeoutMs: 10_000 },
         );
         const tabs = result.tabs ?? [];
-        if (parent?.json) {
-          defaultRuntime.log(JSON.stringify({ tabs }, null, 2));
-          return;
-        }
-        if (tabs.length === 0) {
-          defaultRuntime.log("No tabs (browser closed or no targets).");
-          return;
-        }
-        defaultRuntime.log(
-          tabs
-            .map(
-              (t, i) => `${i + 1}. ${t.title || "(untitled)"}\n   ${t.url}\n   id: ${t.targetId}`,
-            )
-            .join("\n"),
-        );
+        logBrowserTabs(tabs, parent?.json);
       });
     });
 
