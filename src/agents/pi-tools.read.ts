@@ -4,7 +4,7 @@ import type { AnyAgentTool } from "./pi-tools.types.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import { detectMime } from "../media/mime.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
-import { assertSandboxPath } from "./sandbox-paths.js";
+import { assertSandboxPath, resolveSandboxPath } from "./sandbox-paths.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
 
 // NOTE(steipete): Upstream read now does file-magic MIME detection; we keep the wrapper
@@ -291,7 +291,11 @@ export function wrapToolParamNormalization(
   };
 }
 
-export function wrapToolWorkspaceRootGuard(tool: AnyAgentTool, root: string): AnyAgentTool {
+export function wrapToolWorkspaceRootGuard(
+  tool: AnyAgentTool,
+  root: string,
+  opts?: { additionalRoots?: string[] },
+): AnyAgentTool {
   return {
     ...tool,
     execute: async (toolCallId, args, signal, onUpdate) => {
@@ -301,7 +305,25 @@ export function wrapToolWorkspaceRootGuard(tool: AnyAgentTool, root: string): An
         (args && typeof args === "object" ? (args as Record<string, unknown>) : undefined);
       const filePath = record?.path;
       if (typeof filePath === "string" && filePath.trim()) {
-        await assertSandboxPath({ filePath, cwd: root, root });
+        try {
+          await assertSandboxPath({ filePath, cwd: root, root });
+        } catch (err) {
+          // Check if the path falls within any additional allowed root (e.g. bind mounts).
+          if (opts?.additionalRoots?.length) {
+            const isAllowed = opts.additionalRoots.some((allowedRoot) => {
+              try {
+                resolveSandboxPath({ filePath, cwd: root, root: allowedRoot });
+                return true;
+              } catch {
+                return false;
+              }
+            });
+            if (isAllowed) {
+              return tool.execute(toolCallId, normalized ?? args, signal, onUpdate);
+            }
+          }
+          throw err;
+        }
       }
       return tool.execute(toolCallId, normalized ?? args, signal, onUpdate);
     },
