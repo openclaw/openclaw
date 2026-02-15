@@ -9,6 +9,7 @@ import { resolveStateDir } from "../config/paths.js";
 import { resolveArchiveKind } from "../infra/archive.js";
 import { installPluginFromNpmSpec, installPluginFromPath } from "../plugins/install.js";
 import { recordPluginInstall } from "../plugins/installs.js";
+import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
 import { applyExclusiveSlotSelection } from "../plugins/slots.js";
 import { resolvePluginSourceRoots, formatPluginSourceForTable } from "../plugins/source-display.js";
 import { buildPluginStatusReport } from "../plugins/status.js";
@@ -591,6 +592,9 @@ export function registerPluginsCli(program: Command) {
           defaultRuntime.error(result.error);
           process.exit(1);
         }
+        // Plugin CLI registrars may have warmed the manifest registry cache before install;
+        // force a rescan so config validation sees the freshly installed plugin.
+        clearPluginManifestRegistryCache();
 
         let next = enablePluginInConfig(cfg, result.pluginId);
         const source: "archive" | "path" = resolveArchiveKind(resolved) ? "archive" : "path";
@@ -640,6 +644,8 @@ export function registerPluginsCli(program: Command) {
         defaultRuntime.error(result.error);
         process.exit(1);
       }
+      // Ensure config validation sees newly installed plugin(s) even if the cache was warmed at startup.
+      clearPluginManifestRegistryCache();
 
       let next = enablePluginInConfig(cfg, result.pluginId);
       next = recordPluginInstall(next, {
