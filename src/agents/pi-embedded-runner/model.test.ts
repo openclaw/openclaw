@@ -322,6 +322,81 @@ describe("resolveModel", () => {
     expect(result.error).toBe("Unknown model: openai-codex/gpt-4.1-mini");
   });
 
+  it("builds a generic forward-compat fallback for opus-4-6 on arbitrary providers", () => {
+    const templateModel = {
+      id: "claude-opus-4-5",
+      name: "Claude Opus 4.5",
+      provider: "bedrock",
+      api: "bedrock-converse",
+      baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+      reasoning: true,
+      input: ["text", "image"] as const,
+      cost: { input: 3, output: 15, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 64000,
+    };
+
+    vi.mocked(discoverModels).mockReturnValue({
+      find: vi.fn((provider: string, modelId: string) => {
+        if (provider === "bedrock" && modelId === "claude-opus-4-5") {
+          return templateModel;
+        }
+        return null;
+      }),
+    } as unknown as ReturnType<typeof discoverModels>);
+
+    const result = resolveModel("bedrock", "claude-opus-4-6", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "bedrock",
+      id: "claude-opus-4-6",
+      api: "bedrock-converse",
+      baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+      reasoning: true,
+    });
+  });
+
+  it("builds a generic forward-compat fallback for opus-4-6-thinking on arbitrary providers", () => {
+    const templateModel = {
+      id: "claude-opus-4-5-thinking",
+      name: "Claude Opus 4.5 Thinking",
+      provider: "my-proxy",
+      api: "anthropic-messages",
+      baseUrl: "https://proxy.example.com",
+      reasoning: true,
+      input: ["text"] as const,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 64000,
+    };
+
+    vi.mocked(discoverModels).mockReturnValue({
+      find: vi.fn((provider: string, modelId: string) => {
+        if (provider === "my-proxy" && modelId === "claude-opus-4-5-thinking") {
+          return templateModel;
+        }
+        return null;
+      }),
+    } as unknown as ReturnType<typeof discoverModels>);
+
+    const result = resolveModel("my-proxy", "claude-opus-4-6-thinking", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "my-proxy",
+      id: "claude-opus-4-6-thinking",
+      api: "anthropic-messages",
+      baseUrl: "https://proxy.example.com",
+    });
+  });
+
+  it("generic forward-compat does not fire for non-opus-4-6 models", () => {
+    const result = resolveModel("bedrock", "claude-sonnet-4-5", "/tmp/agent");
+    expect(result.model).toBeUndefined();
+    expect(result.error).toBe("Unknown model: bedrock/claude-sonnet-4-5");
+  });
+
   it("uses codex fallback even when openai-codex provider is configured", () => {
     // This test verifies the ordering: codex fallback must fire BEFORE the generic providerCfg fallback.
     // If ordering is wrong, the generic fallback would use api: "openai-responses" (the default)
