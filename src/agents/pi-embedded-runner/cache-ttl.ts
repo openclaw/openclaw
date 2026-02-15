@@ -11,7 +11,7 @@ export type CacheTtlEntryData = {
 export function isCacheTtlEligibleProvider(provider: string, modelId: string): boolean {
   const normalizedProvider = provider.toLowerCase();
   const normalizedModelId = modelId.toLowerCase();
-  if (normalizedProvider === "anthropic") {
+  if (normalizedProvider === "anthropic" || normalizedProvider === "google-vertex") {
     return true;
   }
   if (normalizedProvider === "openrouter" && normalizedModelId.startsWith("anthropic/")) {
