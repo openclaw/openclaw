@@ -90,6 +90,7 @@ export type TuiStateAccess = {
   sessionScope: SessionScope;
   agents: AgentSummary[];
   currentAgentId: string;
+  currentAgentDefinitionId: string | null;
   currentSessionKey: string;
   currentSessionId: string | null;
   activeChatRunId: string | null;

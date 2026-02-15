@@ -18,6 +18,7 @@ import {
   resolveOpenClawMetadata,
   resolveHookInvocationPolicy,
 } from "./frontmatter.js";
+import { loadAllJsonHooks } from "./json-loader.js";
 
 type HookPackageManifest = {
   name?: string;
@@ -195,6 +196,7 @@ function loadHookEntries(
     config?: OpenClawConfig;
     managedHooksDir?: string;
     bundledHooksDir?: string;
+    stateDir?: string;
   },
 ): HookEntry[] {
   const managedHooksDir = opts?.managedHooksDir ?? path.join(CONFIG_DIR, "hooks");
@@ -242,13 +244,36 @@ function loadHookEntries(
     merged.set(hook.name, hook);
   }
 
+  // Load JSON-based shell hooks for snapshot visibility.
+  // Shell hook execution is handled by internal-hooks.ts/shell-runner.ts;
+  // including them here ensures they appear in the hook snapshot.
+  const stateDir = opts?.stateDir ?? CONFIG_DIR;
+  const jsonHookEntries = loadAllJsonHooks({ stateDir, workspaceDir });
+  for (const jsonEntry of jsonHookEntries) {
+    const cmdBase = jsonEntry.command.split(/\s+/)[0] ?? "shell";
+    const hookName = `json:${jsonEntry.event}:${path.basename(cmdBase)}`;
+    if (!merged.has(hookName)) {
+      merged.set(hookName, {
+        name: hookName,
+        description: `Shell hook for ${jsonEntry.event}: ${jsonEntry.command}`,
+        source: "openclaw-managed",
+        filePath: "",
+        baseDir: stateDir,
+        handlerPath: "",
+      });
+    }
+  }
+
   return Array.from(merged.values()).map((hook) => {
     let frontmatter: ParsedHookFrontmatter = {};
-    try {
-      const raw = fs.readFileSync(hook.filePath, "utf-8");
-      frontmatter = parseFrontmatter(raw);
-    } catch {
-      // ignore malformed hooks
+    // JSON hooks have no filePath — skip reading
+    if (hook.filePath) {
+      try {
+        const raw = fs.readFileSync(hook.filePath, "utf-8");
+        frontmatter = parseFrontmatter(raw);
+      } catch {
+        // ignore malformed hooks
+      }
     }
     return {
       hook,
@@ -265,6 +290,7 @@ export function buildWorkspaceHookSnapshot(
     config?: OpenClawConfig;
     managedHooksDir?: string;
     bundledHooksDir?: string;
+    stateDir?: string;
     entries?: HookEntry[];
     eligibility?: HookEligibilityContext;
     snapshotVersion?: number;
@@ -289,6 +315,7 @@ export function loadWorkspaceHookEntries(
     config?: OpenClawConfig;
     managedHooksDir?: string;
     bundledHooksDir?: string;
+    stateDir?: string;
   },
 ): HookEntry[] {
   return loadHookEntries(workspaceDir, opts);

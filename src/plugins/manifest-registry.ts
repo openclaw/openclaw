@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import type { OpenClawConfig } from "../config/config.js";
+import type { PluginMcpServerConfig } from "./manifest.js";
 import type { PluginConfigUiHint, PluginDiagnostic, PluginKind, PluginOrigin } from "./types.js";
 import { resolveUserPath } from "../utils.js";
 import { normalizePluginsConfig, type NormalizedPluginsConfig } from "./config-state.js";
@@ -23,6 +24,14 @@ export type PluginManifestRecord = {
   schemaCacheKey?: string;
   configSchema?: Record<string, unknown>;
   configUiHints?: Record<string, PluginConfigUiHint>;
+  /** Relative path to commands directory within the plugin. */
+  commands?: string;
+  /** Relative path to agents directory within the plugin. */
+  agents?: string;
+  /** Relative path to hooks directory within the plugin. */
+  hooks?: string;
+  /** MCP server configurations declared by this plugin. */
+  mcpServers?: Record<string, PluginMcpServerConfig>;
 };
 
 export type PluginManifestRegistry = {
@@ -85,7 +94,7 @@ function buildRecord(params: {
   schemaCacheKey?: string;
   configSchema?: Record<string, unknown>;
 }): PluginManifestRecord {
-  return {
+  const record: PluginManifestRecord = {
     id: params.manifest.id,
     name: normalizeManifestLabel(params.manifest.name) ?? params.candidate.packageName,
     description:
@@ -104,6 +113,22 @@ function buildRecord(params: {
     configSchema: params.configSchema,
     configUiHints: params.manifest.uiHints,
   };
+
+  // Propagate declarative extension fields when present
+  if (params.manifest.commands) {
+    record.commands = params.manifest.commands;
+  }
+  if (params.manifest.agents) {
+    record.agents = params.manifest.agents;
+  }
+  if (params.manifest.hooks) {
+    record.hooks = params.manifest.hooks;
+  }
+  if (params.manifest.mcpServers) {
+    record.mcpServers = params.manifest.mcpServers;
+  }
+
+  return record;
 }
 
 export function loadPluginManifestRegistry(params: {

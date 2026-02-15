@@ -96,6 +96,43 @@ const routeAgentsList: RouteSpec = {
   },
 };
 
+const routeMarkdownCommand: RouteSpec = {
+  match: (path) => path[0] === "command" && path.length >= 2,
+  run: async (argv) => {
+    // Extract the command name: first positional arg after "command"
+    const commandIdx = argv.indexOf("command");
+    if (commandIdx === -1) {
+      return false;
+    }
+    // Find the first non-flag positional arg after "command"
+    let commandName = "";
+    for (let i = commandIdx + 1; i < argv.length; i++) {
+      if (!argv[i].startsWith("-")) {
+        commandName = argv[i];
+        break;
+      }
+    }
+    if (!commandName) {
+      return false;
+    }
+
+    const { resolveMarkdownCommand } = await import("../../tui/markdown-commands.js");
+    const remainingArgs = argv
+      .slice(commandIdx + 1)
+      .filter((a) => a !== commandName && !a.startsWith("-"))
+      .join(" ");
+    const prompt = resolveMarkdownCommand(commandName, remainingArgs || undefined);
+    if (!prompt) {
+      console.error(`Unknown command: ${commandName}`);
+      return false;
+    }
+
+    const { agentCommand } = await import("../../commands/agent.js");
+    await agentCommand({ message: prompt, agentId: "default" });
+    return true;
+  },
+};
+
 const routeMemoryStatus: RouteSpec = {
   match: (path) => path[0] === "memory" && path[1] === "status",
   run: async (argv) => {
@@ -160,6 +197,15 @@ export const commandRegistry: CommandRegistration[] = [
   {
     id: "browser",
     register: ({ program }) => registerBrowserCli(program),
+  },
+  {
+    id: "markdown-commands",
+    register: () => {
+      // Markdown commands are registered dynamically at runtime
+      // via the TUI system (already integrated in tui/markdown-commands.ts).
+      // CLI routing handles "openclaw command <name>" via the route below.
+    },
+    routes: [routeMarkdownCommand],
   },
 ];
 

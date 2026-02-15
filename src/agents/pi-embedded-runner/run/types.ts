@@ -9,6 +9,7 @@ import type { MessagingToolSend } from "../../pi-embedded-messaging.js";
 import type { BlockReplyChunking, ToolResultFormat } from "../../pi-embedded-subscribe.js";
 import type { AuthStorage, ModelRegistry } from "../../pi-model-discovery.js";
 import type { SkillSnapshot } from "../../skills.js";
+import type { AnyAgentTool } from "../../tools/common.js";
 import type { ClientToolDefinition } from "./params.js";
 
 export type EmbeddedRunAttemptParams = {
@@ -44,6 +45,8 @@ export type EmbeddedRunAttemptParams = {
   images?: ImageContent[];
   /** Optional client-provided tools (OpenResponses hosted tools). */
   clientTools?: ClientToolDefinition[];
+  /** Extra tools from MCP servers or other sources. */
+  extraTools?: AnyAgentTool[];
   /** Disable built-in tools for this run (LLM-only mode). */
   disableTools?: boolean;
   provider: string;

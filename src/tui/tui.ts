@@ -84,6 +84,7 @@ export async function runTui(opts: TuiOptions) {
   let sessionMainKey = normalizeMainKey(config.session?.mainKey);
   let agentDefaultId = resolveDefaultAgentId(config);
   let currentAgentId = agentDefaultId;
+  let currentAgentDefinitionId: string | null = null;
   let agents: AgentSummary[] = [];
   const agentNames = new Map<string, string>();
   let currentSessionKey = "";
@@ -138,6 +139,12 @@ export async function runTui(opts: TuiOptions) {
     },
     set currentAgentId(value) {
       currentAgentId = value;
+    },
+    get currentAgentDefinitionId() {
+      return currentAgentDefinitionId;
+    },
+    set currentAgentDefinitionId(value) {
+      currentAgentDefinitionId = value;
     },
     get currentSessionKey() {
       return currentSessionKey;
@@ -475,6 +482,7 @@ export async function runTui(opts: TuiOptions) {
       ? `${sessionKeyLabel} (${sessionInfo.displayName})`
       : sessionKeyLabel;
     const agentLabel = formatAgentLabel(currentAgentId);
+    const agentDefLabel = currentAgentDefinitionId ? `type:${currentAgentDefinitionId}` : null;
     const modelLabel = sessionInfo.model
       ? sessionInfo.modelProvider
         ? `${sessionInfo.modelProvider}/${sessionInfo.model}`
@@ -488,6 +496,7 @@ export async function runTui(opts: TuiOptions) {
       reasoning === "on" ? "reasoning" : reasoning === "stream" ? "reasoning:stream" : null;
     const footerParts = [
       `agent ${agentLabel}`,
+      agentDefLabel,
       `session ${sessionLabel}`,
       modelLabel,
       think !== "off" ? `think ${think}` : null,

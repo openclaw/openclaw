@@ -45,6 +45,7 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
     { name: "status", description: "Show gateway status summary" },
     { name: "agent", description: "Switch agent (or open picker)" },
     { name: "agents", description: "Open agent picker" },
+    { name: "agent-type", description: "Switch agent personality/definition" },
     { name: "session", description: "Switch session (or open picker)" },
     { name: "sessions", description: "Open session picker" },
     {
@@ -156,6 +157,7 @@ export function helpText(options: SlashCommandOptions = {}): string {
     "/commands",
     "/status",
     "/agent <id> (or /agents)",
+    "/agent-type <definition-id>",
     "/session <key> (or /sessions)",
     "/model <provider/model> (or /models)",
     `/think <${thinkLevels}>`,

@@ -243,7 +243,12 @@ export async function runEmbeddedAttempt(
           hasRepliedRef: params.hasRepliedRef,
           modelHasVision,
         });
-    const tools = sanitizeToolsForGoogle({ tools: toolsRaw, provider: params.provider });
+    const sanitizedTools = sanitizeToolsForGoogle({ tools: toolsRaw, provider: params.provider });
+    // Merge extra tools (e.g. from MCP servers) after sanitization
+    const tools =
+      params.extraTools && params.extraTools.length > 0
+        ? [...sanitizedTools, ...params.extraTools]
+        : sanitizedTools;
     logToolSchemasForGoogle({ tools, provider: params.provider });
 
     const machineName = await getMachineDisplayName();

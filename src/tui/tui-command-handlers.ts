@@ -7,11 +7,13 @@ import type {
   TuiOptions,
   TuiStateAccess,
 } from "./tui-types.js";
+import { listAgentDefinitionIds } from "../agents/definitions/resolver.js";
 import {
   formatThinkingLevels,
   normalizeUsageDisplay,
   resolveResponseUsageMode,
 } from "../auto-reply/thinking.js";
+import { loadConfig } from "../config/config.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { formatRelativeTime } from "../utils/time-format.js";
 import { helpText, parseCommand } from "./commands.js";
@@ -270,6 +272,27 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       case "agents":
         await openAgentSelector();
         break;
+      case "agent-type": {
+        const config = loadConfig();
+        const definitionIds = listAgentDefinitionIds(config, state.currentAgentId);
+        if (definitionIds.length === 0) {
+          chatLog.addSystem("no agent definitions found");
+          break;
+        }
+        if (!args) {
+          chatLog.addSystem(`available definitions: ${definitionIds.join(", ")}`);
+          break;
+        }
+        if (!definitionIds.includes(args)) {
+          chatLog.addSystem(
+            `definition '${args}' not found. available: ${definitionIds.join(", ")}`,
+          );
+          break;
+        }
+        state.currentAgentDefinitionId = args;
+        chatLog.addSystem(`agent definition set to ${args}`);
+        break;
+      }
       case "session":
         if (!args) {
           await openSessionSelector();

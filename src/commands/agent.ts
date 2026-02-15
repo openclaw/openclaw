@@ -11,6 +11,12 @@ import { clearSessionAuthProfileOverride } from "../agents/auth-profiles/session
 import { runCliAgent } from "../agents/cli-runner.js";
 import { getCliSessionId } from "../agents/cli-session.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import {
+  findAgentDefinition,
+  resolveDefinitionSystemPrompt,
+} from "../agents/definitions/resolver.js";
+import { loadMcpConfig } from "../agents/mcp/config.js";
+import { McpServerManager } from "../agents/mcp/lifecycle.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runWithModelFallback } from "../agents/model-fallback.js";
 import {
@@ -98,6 +104,30 @@ export async function agentCommand(
   const sessionAgentId = agentIdOverride ?? resolveAgentIdFromSessionKey(opts.sessionKey?.trim());
   const workspaceDirRaw = resolveAgentWorkspaceDir(cfg, sessionAgentId);
   const agentDir = resolveAgentDir(cfg, sessionAgentId);
+
+  // Resolve agent definition system prompt
+  const agentDefinition = findAgentDefinition(cfg, sessionAgentId, sessionAgentId);
+  const definitionPrompt = agentDefinition
+    ? resolveDefinitionSystemPrompt(agentDefinition)
+    : undefined;
+  const combinedExtraSystemPrompt =
+    [definitionPrompt, opts.extraSystemPrompt].filter(Boolean).join("\n\n") || undefined;
+
+  // Load MCP configuration and start servers
+  const mcpConfig = loadMcpConfig(agentDir);
+  let mcpManager: McpServerManager | null = null;
+  let mcpTools: import("../agents/tools/common.js").AnyAgentTool[] = [];
+  if (mcpConfig && Object.keys(mcpConfig.servers).length > 0) {
+    mcpManager = new McpServerManager();
+    await mcpManager.startAll(mcpConfig);
+    mcpTools = mcpManager.getAgentTools();
+    if (mcpTools.length > 0) {
+      console.log(
+        `\x1b[36m[agent]\x1b[0m ${mcpTools.length} MCP tool(s) loaded from ${mcpManager.connectedCount} server(s)`,
+      );
+    }
+  }
+
   const workspace = await ensureAgentWorkspace({
     dir: workspaceDirRaw,
     ensureBootstrapFiles: !agentCfg?.skipBootstrap,
@@ -409,7 +439,7 @@ export async function agentCommand(
               thinkLevel: resolvedThinkLevel,
               timeoutMs,
               runId,
-              extraSystemPrompt: opts.extraSystemPrompt,
+              extraSystemPrompt: combinedExtraSystemPrompt,
               cliSessionId,
               images: opts.images,
               streamParams: opts.streamParams,
@@ -451,7 +481,8 @@ export async function agentCommand(
             runId,
             lane: opts.lane,
             abortSignal: opts.abortSignal,
-            extraSystemPrompt: opts.extraSystemPrompt,
+            extraSystemPrompt: combinedExtraSystemPrompt,
+            extraTools: mcpTools.length > 0 ? mcpTools : undefined,
             streamParams: opts.streamParams,
             agentDir,
             onAgentEvent: (evt) => {
@@ -527,5 +558,8 @@ export async function agentCommand(
     });
   } finally {
     clearAgentRunContext(runId);
+    if (mcpManager) {
+      await mcpManager.shutdownAll().catch(() => {});
+    }
   }
 }
