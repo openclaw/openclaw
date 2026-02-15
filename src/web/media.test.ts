@@ -413,15 +413,28 @@ describe("local media root guard", () => {
   });
 
   it("rejects default OpenClaw state per-agent workspace-* roots without explicit local roots", async () => {
-    const stateDir = resolveStateDir();
-    const readFile = vi.fn(async () => Buffer.from("generated-media"));
+    // The test harness may set HOME to a temp directory under os.tmpdir(),
+    // making all homedir-relative paths fall under the tmpdir default root.
+    // Use an absolute path outside /tmp to ensure no default root matches.
+    const stateDir = "/var/openclaw-guard-reject-test";
+    const prev = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    try {
+      const readFile = vi.fn(async () => Buffer.from("generated-media"));
 
-    await expect(
-      loadWebMedia(path.join(stateDir, "workspace-clawdy", "tmp", "render.bin"), {
-        maxBytes: 1024 * 1024,
-        readFile,
-      }),
-    ).rejects.toMatchObject({ code: "path-not-allowed" });
+      await expect(
+        loadWebMedia(path.join(stateDir, "workspace-clawdy", "tmp", "render.bin"), {
+          maxBytes: 1024 * 1024,
+          readFile,
+        }),
+      ).rejects.toMatchObject({ code: "path-not-allowed" });
+    } finally {
+      if (prev === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = prev;
+      }
+    }
   });
 
   it("allows per-agent workspace-* paths with explicit local roots", async () => {
