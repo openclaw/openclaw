@@ -227,6 +227,104 @@ describe("launchd install", () => {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
   });
+
+  it("cleans up plist file when bootstrap fails", async () => {
+    const originalPath = process.env.PATH;
+    const originalLogPath = process.env.OPENCLAW_TEST_LAUNCHCTL_LOG;
+
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-launchctl-test-"));
+    try {
+      const binDir = path.join(tmpDir, "bin");
+      const homeDir = path.join(tmpDir, "home");
+      const logPath = path.join(tmpDir, "launchctl.log");
+      await fs.mkdir(binDir, { recursive: true });
+      await fs.mkdir(homeDir, { recursive: true });
+
+      // Create a failing launchctl stub (fails on bootstrap command)
+      const stubPath = path.join(
+        binDir,
+        process.platform === "win32" ? "launchctl.cmd" : "launchctl",
+      );
+      const stubScript =
+        process.platform === "win32"
+          ? [
+              "@echo off",
+              'set "log_path=%OPENCLAW_TEST_LAUNCHCTL_LOG%"',
+              'if not "%log_path%"=="" (',
+              '  echo %* >> "%log_path%"',
+              ")",
+              'if "%1"=="bootstrap" (',
+              "  echo Operation not permitted >&2",
+              "  exit /b 1",
+              ")",
+              "exit /b 0",
+            ].join("\r\n")
+          : [
+              "#!/bin/sh",
+              'log_path="${OPENCLAW_TEST_LAUNCHCTL_LOG:-}"',
+              'if [ -n "$log_path" ]; then',
+              '  line=""',
+              '  for arg in "$@"; do',
+              '    if [ -n "$line" ]; then',
+              '      line="$line $arg"',
+              "    else",
+              '      line="$arg"',
+              "    fi",
+              "  done",
+              '  printf \'%s\\n\' "$line" >> "$log_path"',
+              "fi",
+              'if [ "$1" = "bootstrap" ]; then',
+              '  printf "Operation not permitted\\n" >&2',
+              "  exit 1",
+              "fi",
+              "exit 0",
+            ].join("\n");
+
+      await fs.writeFile(stubPath, stubScript, "utf8");
+      if (process.platform !== "win32") {
+        await fs.chmod(stubPath, 0o755);
+      }
+
+      process.env.OPENCLAW_TEST_LAUNCHCTL_LOG = logPath;
+      process.env.PATH = `${binDir}${path.delimiter}${originalPath ?? ""}`;
+
+      const env: Record<string, string | undefined> = {
+        HOME: homeDir,
+        OPENCLAW_PROFILE: "default",
+      };
+
+      let installError: Error | null = null;
+      try {
+        await installLaunchAgent({
+          env,
+          stdout: new PassThrough(),
+          programArguments: ["node", "-e", "process.exit(0)"],
+        });
+      } catch (err) {
+        installError = err as Error;
+      }
+
+      // Verify that bootstrap failed
+      expect(installError).toBeTruthy();
+      expect(installError?.message).toContain("launchctl bootstrap failed");
+
+      // Verify that the plist file was cleaned up
+      const plistPath = resolveLaunchAgentPlistPath(env);
+      const plistExists = await fs
+        .access(plistPath)
+        .then(() => true)
+        .catch(() => false);
+      expect(plistExists).toBe(false);
+    } finally {
+      process.env.PATH = originalPath;
+      if (originalLogPath === undefined) {
+        delete process.env.OPENCLAW_TEST_LAUNCHCTL_LOG;
+      } else {
+        process.env.OPENCLAW_TEST_LAUNCHCTL_LOG = originalLogPath;
+      }
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("resolveLaunchAgentPlistPath", () => {
