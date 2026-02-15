@@ -146,8 +146,27 @@ export type DiagnosticEventInput = DiagnosticEventPayload extends infer Event
     ? Omit<Event, "seq" | "ts">
     : never
   : never;
-let seq = 0;
-const listeners = new Set<(evt: DiagnosticEventPayload) => void>();
+
+// Use globalThis to share state across module bundles (main + plugins).
+// This ensures events emitted by the gateway reach plugin listeners.
+const GLOBAL_KEY = "__openclaw_diagnostic_events__";
+type DiagnosticGlobalState = {
+  seq: number;
+  listeners: Set<(evt: DiagnosticEventPayload) => void>;
+};
+
+function getGlobalState(): DiagnosticGlobalState {
+  const g = globalThis as unknown as Record<string, DiagnosticGlobalState | undefined>;
+  if (!g[GLOBAL_KEY]) {
+    g[GLOBAL_KEY] = {
+      seq: 0,
+      listeners: new Set(),
+    };
+  }
+  return g[GLOBAL_KEY];
+}
+
+const state = getGlobalState();
 
 export function isDiagnosticsEnabled(config?: OpenClawConfig): boolean {
   return config?.diagnostics?.enabled === true;
@@ -156,10 +175,10 @@ export function isDiagnosticsEnabled(config?: OpenClawConfig): boolean {
 export function emitDiagnosticEvent(event: DiagnosticEventInput) {
   const enriched = {
     ...event,
-    seq: (seq += 1),
+    seq: (state.seq += 1),
     ts: Date.now(),
   } satisfies DiagnosticEventPayload;
-  for (const listener of listeners) {
+  for (const listener of state.listeners) {
     try {
       listener(enriched);
     } catch {
@@ -169,11 +188,11 @@ export function emitDiagnosticEvent(event: DiagnosticEventInput) {
 }
 
 export function onDiagnosticEvent(listener: (evt: DiagnosticEventPayload) => void): () => void {
-  listeners.add(listener);
-  return () => listeners.delete(listener);
+  state.listeners.add(listener);
+  return () => state.listeners.delete(listener);
 }
 
 export function resetDiagnosticEventsForTest(): void {
-  seq = 0;
-  listeners.clear();
+  state.seq = 0;
+  state.listeners.clear();
 }
