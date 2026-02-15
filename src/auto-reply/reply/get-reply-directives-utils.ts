@@ -45,3 +45,23 @@ export function clearInlineDirectives(cleaned: string): InlineDirectives {
     hasQueueOptions: false,
   };
 }
+
+export function clearExecInlineDirectives(directives: InlineDirectives): InlineDirectives {
+  return {
+    ...directives,
+    hasExecDirective: false,
+    execHost: undefined,
+    execSecurity: undefined,
+    execAsk: undefined,
+    execNode: undefined,
+    rawExecHost: undefined,
+    rawExecSecurity: undefined,
+    rawExecAsk: undefined,
+    rawExecNode: undefined,
+    hasExecOptions: false,
+    invalidExecHost: false,
+    invalidExecSecurity: false,
+    invalidExecAsk: false,
+    invalidExecNode: false,
+  };
+}
