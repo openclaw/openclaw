@@ -1,0 +1,9 @@
+{
+  "id": "rocketchat",
+  "channels": ["rocketchat"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

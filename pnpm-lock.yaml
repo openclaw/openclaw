@@ -469,6 +469,12 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/rocketchat:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/signal:
     devDependencies:
       openclaw:
