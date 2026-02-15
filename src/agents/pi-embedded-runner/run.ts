@@ -2,7 +2,9 @@ import fs from "node:fs/promises";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import type { EmbeddedPiAgentMeta, EmbeddedPiRunResult } from "./types.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import {
@@ -198,12 +200,44 @@ export async function runEmbeddedPiAgent(
       }
       const prevCwd = process.cwd();
 
-      const provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
-      const modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
+      let provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
+      let modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
       const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
       const fallbackConfigured =
         (params.config?.agents?.defaults?.model?.fallbacks?.length ?? 0) > 0;
       await ensureOpenClawModelsJson(params.config, agentDir);
+
+      // Run before_agent_start hook to allow plugins to override the model
+      // before session creation. Only the model field is consumed here;
+      // systemPrompt and prependContext are consumed later in attempt.ts.
+      const hookRunner = getGlobalHookRunner();
+      if (hookRunner?.hasHooks("before_agent_start")) {
+        try {
+          const hookAgentId =
+            typeof params.agentId === "string" && params.agentId.trim()
+              ? normalizeAgentId(params.agentId)
+              : undefined;
+          const hookResult = await hookRunner.runBeforeAgentStart(
+            { prompt: params.prompt },
+            {
+              agentId: hookAgentId,
+              sessionKey: params.sessionKey,
+              workspaceDir: params.workspaceDir,
+              messageProvider: params.messageProvider ?? undefined,
+            },
+          );
+          if (hookResult?.model) {
+            const slashIdx = hookResult.model.indexOf("/");
+            if (slashIdx > 0) {
+              provider = hookResult.model.slice(0, slashIdx);
+              modelId = hookResult.model.slice(slashIdx + 1);
+              log.info(`hooks: before_agent_start overrode model to ${provider}/${modelId}`);
+            }
+          }
+        } catch (hookErr) {
+          log.warn(`before_agent_start hook (model phase) failed: ${String(hookErr)}`);
+        }
+      }
 
       const { model, error, authStorage, modelRegistry } = resolveModel(
         provider,

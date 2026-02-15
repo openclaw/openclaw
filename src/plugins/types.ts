@@ -330,6 +330,8 @@ export type PluginHookBeforeAgentStartEvent = {
 export type PluginHookBeforeAgentStartResult = {
   systemPrompt?: string;
   prependContext?: string;
+  /** Override the model for this turn (e.g. "openrouter/anthropic/claude-sonnet-4.5"). */
+  model?: string;
 };
 
 // agent_end hook
