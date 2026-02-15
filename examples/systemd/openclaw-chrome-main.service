@@ -1,0 +1,32 @@
+[Unit]
+Description=OpenClaw Chrome Main CDP (port 18804)
+After=network-online.target openclaw-xvfb.service
+Wants=network-online.target
+Requires=openclaw-xvfb.service
+
+[Service]
+Type=simple
+Environment=DISPLAY=:100
+Environment=HOME=%h
+Environment=XDG_RUNTIME_DIR=/run/user/%U
+ExecStart=/usr/bin/google-chrome-stable \
+  --remote-debugging-address=127.0.0.1 \
+  --remote-debugging-port=18804 \
+  --user-data-dir=%h/chrome-profiles/main-openclaw \
+  --profile-directory=Default \
+  --no-first-run \
+  --no-default-browser-check \
+  --disable-background-networking \
+  --disable-sync \
+  --disable-features=Translate,MediaRouter,DialMediaRouteProvider,CastMediaRouteProvider,GlobalMediaControlsCastStartStop \
+  --disable-component-extensions-with-background-pages \
+  --disable-zeroconf \
+  --disable-extensions \
+  --disable-component-update \
+  --window-size=1365,1024 \
+  https://x.com/home
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,6 @@
+{
+  "EnableMediaRouter": false,
+  "MediaRouterCastAllowAllIPs": false,
+  "AccessCodeCastEnabled": false,
+  "LocalDiscoveryEnabled": false
+}

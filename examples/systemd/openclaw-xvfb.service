@@ -1,0 +1,12 @@
+[Unit]
+Description=OpenClaw virtual display :100 for browser automation
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/Xvfb :100 -screen 0 1920x1080x24 -nolisten tcp -ac
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target
