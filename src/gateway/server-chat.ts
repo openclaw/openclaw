@@ -382,37 +382,53 @@ export function createAgentEventHandler({
       }
       if (!isAborted && evt.stream === "assistant" && typeof evt.data?.text === "string") {
         emitChatDelta(sessionKey, clientRunId, evt.seq, evt.data.text);
-      } else if (!isAborted && (lifecyclePhase === "end" || lifecyclePhase === "error")) {
-        if (chatLink) {
-          const finished = chatRunState.registry.shift(evt.runId);
-          if (!finished) {
-            clearAgentRunContext(evt.runId);
-            return;
-          }
+      }
+    }
+
+    // Handle lifecycle end/error regardless of sessionKey presence
+    if (!isAborted && (lifecyclePhase === "end" || lifecyclePhase === "error")) {
+      if (chatLink) {
+        const finished = chatRunState.registry.shift(evt.runId);
+        if (!finished) {
+          clearAgentRunContext(evt.runId);
+          return;
+        }
+        emitChatFinal(
+          finished.sessionKey,
+          finished.clientRunId,
+          evt.seq,
+          lifecyclePhase === "error" ? "error" : "done",
+          evt.data?.error,
+        );
+      } else if (sessionKey) {
+        emitChatFinal(
+          sessionKey,
+          evt.runId,
+          evt.seq,
+          lifecyclePhase === "error" ? "error" : "done",
+          evt.data?.error,
+        );
+      } else {
+        // Fallback when sessionKey is undefined: attempt to resolve from registry
+        const resolvedKey = resolveSessionKeyForRun(evt.runId);
+        if (resolvedKey) {
           emitChatFinal(
-            finished.sessionKey,
-            finished.clientRunId,
-            evt.seq,
-            lifecyclePhase === "error" ? "error" : "done",
-            evt.data?.error,
-          );
-        } else {
-          emitChatFinal(
-            sessionKey,
+            resolvedKey,
             evt.runId,
             evt.seq,
             lifecyclePhase === "error" ? "error" : "done",
             evt.data?.error,
           );
         }
-      } else if (isAborted && (lifecyclePhase === "end" || lifecyclePhase === "error")) {
-        chatRunState.abortedRuns.delete(clientRunId);
-        chatRunState.abortedRuns.delete(evt.runId);
-        chatRunState.buffers.delete(clientRunId);
-        chatRunState.deltaSentAt.delete(clientRunId);
-        if (chatLink) {
-          chatRunState.registry.remove(evt.runId, clientRunId, sessionKey);
-        }
+        // If still undefined, chat:final will not be emitted, but at least we tried
+      }
+    } else if (isAborted && (lifecyclePhase === "end" || lifecyclePhase === "error")) {
+      chatRunState.abortedRuns.delete(clientRunId);
+      chatRunState.abortedRuns.delete(evt.runId);
+      chatRunState.buffers.delete(clientRunId);
+      chatRunState.deltaSentAt.delete(clientRunId);
+      if (chatLink) {
+        chatRunState.registry.remove(evt.runId, clientRunId, sessionKey);
       }
     }
 
