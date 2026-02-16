@@ -750,10 +750,7 @@ export async function runEmbeddedAttempt(
           messages: normalizedForAimlapi.messages,
         });
 
-        if (
-          normalizedForAimlapi.messages.length > 0 ||
-          normalizedForAimlapi.replacedCount > 0
-        ) {
+        if (normalizedForAimlapi.messages.length > 0 || normalizedForAimlapi.replacedCount > 0) {
           activeSession.agent.replaceMessages(normalizedForAimlapi.messages);
         }
       } catch (err) {

@@ -52,7 +52,7 @@ describe("applyAuthChoice", () => {
     "CLOUDFLARE_AI_GATEWAY_API_KEY",
     "SSH_TTY",
     "CHUTES_CLIENT_ID",
-    "AIMLAPI_API_KEY"
+    "AIMLAPI_API_KEY",
   ]);
   let tempStateDir: string | null = null;
 

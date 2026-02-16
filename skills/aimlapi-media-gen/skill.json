@@ -1,8 +1,6 @@
 {
   "name": "aimlapi-media-gen",
   "description": "Generate images or videos via AIMLAPI from prompts.",
-  "env": [
-    "AIMLAPI_API_KEY"
-  ],
+  "env": ["AIMLAPI_API_KEY"],
   "primaryEnv": "AIMLAPI_API_KEY"
 }
