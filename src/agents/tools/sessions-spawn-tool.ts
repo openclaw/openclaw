@@ -85,7 +85,9 @@ function buildTaskSpec(params: {
   }
   if (params.reportBack !== false) {
     lines.push("");
-    lines.push("When done, report your results including evidence of each success criterion being met.");
+    lines.push(
+      "When done, report your results including evidence of each success criterion being met.",
+    );
   }
   lines.push("[/TASK_SPEC]");
   return lines.join("\n");
@@ -153,13 +155,19 @@ export function createSessionsSpawnTool(opts?: {
       const constraints = Array.isArray(params.constraints)
         ? (params.constraints as string[]).filter((s) => typeof s === "string" && s.trim())
         : undefined;
-      const reportBack =
-        typeof params.reportBack === "boolean" ? params.reportBack : undefined;
+      const reportBack = typeof params.reportBack === "boolean" ? params.reportBack : undefined;
       const hasStructuredFields = Boolean(
         objective || successCriteria?.length || expectedOutputs?.length || constraints?.length,
       );
       const task = hasStructuredFields
-        ? buildTaskSpec({ task: rawTask, objective, successCriteria, expectedOutputs, constraints, reportBack })
+        ? buildTaskSpec({
+            task: rawTask,
+            objective,
+            successCriteria,
+            expectedOutputs,
+            constraints,
+            reportBack,
+          })
         : rawTask;
       const label = typeof params.label === "string" ? params.label.trim() : "";
       const requestedAgentId = readStringParam(params, "agentId");

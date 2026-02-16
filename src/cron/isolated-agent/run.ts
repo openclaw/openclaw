@@ -1,7 +1,7 @@
 import type { MessagingToolSend } from "../../agents/pi-embedded-messaging.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { AgentDefaultsConfig } from "../../config/types.js";
 import type { CronQualityCheckConfig } from "../../config/types.cron.js";
+import type { AgentDefaultsConfig } from "../../config/types.js";
 import type { CronJob } from "../types.js";
 import {
   resolveAgentConfig,
@@ -142,7 +142,9 @@ function buildCronJobSpec(job: CronJob, formattedTime: string): string {
   lines.push(job.payload.kind === "agentTurn" ? job.payload.message : job.payload.text);
   lines.push("[/CRON_JOB_SPEC]");
   lines.push("");
-  lines.push("Execute the task above. This spec is self-contained — do not rely on prior session context.");
+  lines.push(
+    "Execute the task above. This spec is self-contained — do not rely on prior session context.",
+  );
   return lines.join("\n");
 }
 
@@ -624,11 +626,14 @@ export async function runCronIsolatedAgentTurn(params: {
   // Quality gate: check cron output before delivery.
   // Skip for heartbeat-only responses, structured content (media), and heartbeat ack text.
   const isHeartbeatText = synthesizedText?.toUpperCase().startsWith(HEARTBEAT_TOKEN) ?? false;
-  if (deliveryRequested && !skipHeartbeatDelivery && !deliveryPayloadHasStructuredContent && !isHeartbeatText && synthesizedText) {
-    const qcResult = checkCronOutputQuality(
-      synthesizedText,
-      params.cfg.cron?.qualityCheck,
-    );
+  if (
+    deliveryRequested &&
+    !skipHeartbeatDelivery &&
+    !deliveryPayloadHasStructuredContent &&
+    !isHeartbeatText &&
+    synthesizedText
+  ) {
+    const qcResult = checkCronOutputQuality(synthesizedText, params.cfg.cron?.qualityCheck);
     if (!qcResult.pass) {
       logWarn(
         `[cron:${params.job.id}] Quality gate blocked delivery: ${qcResult.reason}. ` +

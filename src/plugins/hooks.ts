@@ -352,10 +352,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
       event,
       ctx,
       (acc, next) => ({
-        appendContent: [
-          ...(acc?.appendContent ?? []),
-          ...(next.appendContent ?? []),
-        ],
+        appendContent: [...(acc?.appendContent ?? []), ...(next.appendContent ?? [])],
       }),
     );
   }

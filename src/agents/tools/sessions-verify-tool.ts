@@ -4,15 +4,9 @@ import path from "node:path";
 import type { AnyAgentTool } from "./common.js";
 import { loadConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
+import { listSubagentRunsForRequester, type SubagentRunRecord } from "../subagent-registry.js";
 import { jsonResult, readStringParam, readNumberParam } from "./common.js";
-import {
-  resolveInternalSessionKey,
-  resolveMainSessionAlias,
-} from "./sessions-helpers.js";
-import {
-  listSubagentRunsForRequester,
-  type SubagentRunRecord,
-} from "../subagent-registry.js";
+import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
 
 const SessionsVerifyToolSchema = Type.Object({
   sessionKey: Type.String({
@@ -45,15 +39,14 @@ function findRunBySessionKey(
   return runs.find((r) => r.childSessionKey === childSessionKey);
 }
 
-async function checkArtifacts(
-  patterns: string[],
-): Promise<{ pattern: string; found: boolean }[]> {
+async function checkArtifacts(patterns: string[]): Promise<{ pattern: string; found: boolean }[]> {
   const results: { pattern: string; found: boolean }[] = [];
   for (const pattern of patterns) {
     if (pattern.includes("*") || pattern.includes("?")) {
       // Simple glob: list parent dir and match basename
       const dir = path.dirname(pattern);
-      const basePat = path.basename(pattern)
+      const basePat = path
+        .basename(pattern)
         .replace(/[.+^${}()|[\]\\]/g, "\\$&")
         .replace(/\*/g, ".*")
         .replace(/\?/g, ".");
@@ -130,9 +123,7 @@ async function checkTranscriptPatterns(
   }
 }
 
-export function createSessionsVerifyTool(opts?: {
-  agentSessionKey?: string;
-}): AnyAgentTool {
+export function createSessionsVerifyTool(opts?: { agentSessionKey?: string }): AnyAgentTool {
   return {
     label: "Sessions",
     name: "sessions_verify",
@@ -146,14 +137,10 @@ export function createSessionsVerifyTool(opts?: {
       const params = args as Record<string, unknown>;
       const sessionKey = readStringParam(params, "sessionKey", { required: true });
       const expectedArtifacts = Array.isArray(params.expectedArtifacts)
-        ? (params.expectedArtifacts as string[]).filter(
-            (s) => typeof s === "string" && s.trim(),
-          )
+        ? (params.expectedArtifacts as string[]).filter((s) => typeof s === "string" && s.trim())
         : [];
       const requiredPatterns = Array.isArray(params.requiredPatterns)
-        ? (params.requiredPatterns as string[]).filter(
-            (s) => typeof s === "string" && s.trim(),
-          )
+        ? (params.requiredPatterns as string[]).filter((s) => typeof s === "string" && s.trim())
         : [];
       const timeoutSeconds = readNumberParam(params, "timeoutSeconds") ?? 30;
       const timeoutMs = Math.min(timeoutSeconds, 120) * 1000;
@@ -207,9 +194,8 @@ export function createSessionsVerifyTool(opts?: {
       }
 
       // Check artifacts
-      const artifactChecks = expectedArtifacts.length > 0
-        ? await checkArtifacts(expectedArtifacts)
-        : [];
+      const artifactChecks =
+        expectedArtifacts.length > 0 ? await checkArtifacts(expectedArtifacts) : [];
 
       // Check transcript patterns
       const transcriptChecks =
@@ -221,11 +207,7 @@ export function createSessionsVerifyTool(opts?: {
       const artifactsOk = artifactChecks.every((a) => a.found);
       const patternsOk = transcriptChecks.patternResults.every((p) => p.found);
       const overallStatus =
-        runStatus === "error"
-          ? "failed"
-          : artifactsOk && patternsOk
-            ? "passed"
-            : "failed";
+        runStatus === "error" ? "failed" : artifactsOk && patternsOk ? "passed" : "failed";
 
       // Build human-readable summary
       const summaryParts: string[] = [];
@@ -239,9 +221,7 @@ export function createSessionsVerifyTool(opts?: {
       }
       if (transcriptChecks.patternResults.length > 0) {
         const matched = transcriptChecks.patternResults.filter((p) => p.found).length;
-        summaryParts.push(
-          `Patterns: ${matched}/${transcriptChecks.patternResults.length} matched`,
-        );
+        summaryParts.push(`Patterns: ${matched}/${transcriptChecks.patternResults.length} matched`);
       }
 
       return jsonResult({
@@ -250,8 +230,7 @@ export function createSessionsVerifyTool(opts?: {
         sessionKey,
         runStatus,
         runtimeSeconds: Math.round(
-          ((currentRun.endedAt ?? Date.now()) -
-            (currentRun.startedAt ?? currentRun.createdAt)) /
+          ((currentRun.endedAt ?? Date.now()) - (currentRun.startedAt ?? currentRun.createdAt)) /
             1000,
         ),
         checks: {
