@@ -97,6 +97,8 @@ The Gateway is the single source of truth for sessions, routing, and channel con
 
 <Steps>
   <Step title="Install OpenClaw">
+    **NEW** [Quick Start Guide (10 Minutes)](guides/quick-start-guide.md) ← Start here!
+
     ```bash
     npm install -g openclaw@latest
     ```

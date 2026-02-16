@@ -1,0 +1,63 @@
+{
+  "_comment": "Multi-channel setup with security best practices",
+  "agent": {
+    "model": "anthropic/claude-3-opus-20240229",
+    "temperature": 0.5,
+    "maxTokens": 8192
+  },
+  "agents": {
+    "defaults": {
+      "sandbox": {
+        "mode": "non-main",
+        "allowlist": ["bash", "read"],
+        "denylist": ["write", "edit"]
+      }
+    }
+  },
+  "channels": {
+    "whatsapp": {
+      "enabled": true,
+      "allowFrom": ["+15550000000"],
+      "groups": {
+        "123456789@g.us": {
+          "requireMention": true
+        }
+      }
+    },
+    "telegram": {
+      "botToken": "${TELEGRAM_BOT_TOKEN}",
+      "allowFrom": ["12345678"],
+      "dmPolicy": "pairing"
+    },
+    "discord": {
+      "token": "${DISCORD_BOT_TOKEN}",
+      "allowFrom": ["123456789012345678"],
+      "guilds": ["987654321098765432"],
+      "dmPolicy": "pairing"
+    }
+  },
+  "gateway": {
+    "port": 18789,
+    "bind": "127.0.0.1",
+    "auth": {
+      "mode": "password",
+      "password": "${GATEWAY_PASSWORD}"
+    },
+    "tailscale": {
+      "mode": "off"
+    }
+  },
+  "tools": {
+    "exec": {
+      "enabled": true,
+      "approvals": "required",
+      "elevated": {
+        "policy": "allow-known-senders"
+      }
+    },
+    "browser": {
+      "enabled": true,
+      "color": "#FF4500"
+    }
+  }
+}

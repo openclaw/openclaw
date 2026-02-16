@@ -1,0 +1,32 @@
+{
+  "_comment": "Minimal WhatsApp setup - perfect for beginners",
+  "agent": {
+    "model": "anthropic/claude-3-5-sonnet-20240620",
+    "temperature": 0.7,
+    "maxTokens": 4096
+  },
+  "channels": {
+    "whatsapp": {
+      "enabled": true,
+      "allowFrom": ["*"],
+      "groups": {}
+    }
+  },
+  "gateway": {
+    "port": 18789,
+    "bind": "127.0.0.1",
+    "auth": {
+      "mode": "password",
+      "password": "change-me-please"
+    }
+  },
+  "tools": {
+    "browser": {
+      "enabled": false
+    },
+    "exec": {
+      "enabled": true,
+      "approvals": "required"
+    }
+  }
+}

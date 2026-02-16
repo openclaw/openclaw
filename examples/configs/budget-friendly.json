@@ -1,0 +1,33 @@
+{
+  "_comment": "Cost-optimized setup using cheaper models",
+  "agent": {
+    "model": "anthropic/claude-3-haiku-20240307",
+    "temperature": 0.7,
+    "maxTokens": 2048,
+    "thinking": {
+      "level": "off"
+    }
+  },
+  "channels": {
+    "whatsapp": {
+      "enabled": true,
+      "allowFrom": ["YOUR_NUMBER_HERE"]
+    }
+  },
+  "gateway": {
+    "port": 18789,
+    "bind": "127.0.0.1"
+  },
+  "tools": {
+    "browser": {
+      "enabled": false
+    },
+    "canvas": {
+      "enabled": false
+    },
+    "exec": {
+      "enabled": true,
+      "approvals": "required"
+    }
+  }
+}
