@@ -200,8 +200,9 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
           acc?.prependContext && next.prependContext
             ? `${acc.prependContext}\n\n${next.prependContext}`
             : (next.prependContext ?? acc?.prependContext),
-        modelOverride: next.modelOverride ?? acc?.modelOverride,
-        providerOverride: next.providerOverride ?? acc?.providerOverride,
+        // Keep the first defined override so higher-priority hooks win.
+        modelOverride: acc?.modelOverride ?? next.modelOverride,
+        providerOverride: acc?.providerOverride ?? next.providerOverride,
       }),
     );
   }
