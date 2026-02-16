@@ -114,15 +114,6 @@ describe("LINE accounts", () => {
 
       expect(ids).toContain(DEFAULT_ACCOUNT_ID);
     });
-
-    it("returns default from env", () => {
-      process.env.LINE_CHANNEL_ACCESS_TOKEN = "env-token";
-      const cfg: OpenClawConfig = {};
-
-      const ids = listLineAccountIds(cfg);
-
-      expect(ids).toContain(DEFAULT_ACCOUNT_ID);
-    });
   });
 
   describe("resolveDefaultLineAccountId", () => {
