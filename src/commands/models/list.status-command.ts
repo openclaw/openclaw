@@ -15,6 +15,7 @@ import {
   resolveAuthStorePathForDisplay,
   resolveProfileUnusableUntilForDisplay,
 } from "../../agents/auth-profiles.js";
+import { resolveCliProvidersReadiness } from "../../agents/cli-backend-readiness.js";
 import { resolveEnvApiKey } from "../../agents/model-auth.js";
 import {
   buildModelAliasIndex,
@@ -192,10 +193,19 @@ export async function modelsStatusCommand(
       return hasAny;
     });
   const providerAuthMap = new Map(providerAuth.map((entry) => [entry.provider, entry]));
-  const missingProvidersInUse = Array.from(providersInUse)
-    .filter((provider) => !providerAuthMap.has(provider))
+  const cliProvidersInUse = Array.from(providersInUse)
+    .filter((provider) => isCliProvider(provider, cfg))
+    .toSorted((a, b) => a.localeCompare(b));
+  const nonCliProvidersInUse = Array.from(providersInUse)
     .filter((provider) => !isCliProvider(provider, cfg))
     .toSorted((a, b) => a.localeCompare(b));
+  const missingProvidersInUse = nonCliProvidersInUse
+    .filter((provider) => !providerAuthMap.has(provider))
+    .toSorted((a, b) => a.localeCompare(b));
+  const cliReadiness = resolveCliProvidersReadiness({
+    providers: cliProvidersInUse,
+    cfg,
+  });
 
   const probeProfileIds = (() => {
     if (!opts.probeProfile) {
@@ -282,6 +292,9 @@ export async function modelsStatusCommand(
   const oauthProfiles = authHealth.profiles.filter(
     (profile) => profile.type === "oauth" || profile.type === "token",
   );
+  const oauthProfilesInUse = oauthProfiles.filter((profile) =>
+    nonCliProvidersInUse.includes(profile.provider),
+  );
 
   const unusableProfiles = (() => {
     const now = Date.now();
@@ -316,10 +329,12 @@ export async function modelsStatusCommand(
   })();
 
   const checkStatus = (() => {
+    const hasCliReadinessFailures = cliReadiness.some((entry) => entry.status !== "ready");
     const hasExpiredOrMissing =
-      oauthProfiles.some((profile) => ["expired", "missing"].includes(profile.status)) ||
-      missingProvidersInUse.length > 0;
-    const hasExpiring = oauthProfiles.some((profile) => profile.status === "expiring");
+      oauthProfilesInUse.some((profile) => ["expired", "missing"].includes(profile.status)) ||
+      missingProvidersInUse.length > 0 ||
+      hasCliReadinessFailures;
+    const hasExpiring = oauthProfilesInUse.some((profile) => profile.status === "expiring");
     if (hasExpiredOrMissing) {
       return 1;
     }
@@ -359,6 +374,10 @@ export async function modelsStatusCommand(
             },
             providersWithOAuth: providersWithOauth,
             missingProvidersInUse,
+            cliReadiness: {
+              providersInUse: cliProvidersInUse,
+              backends: cliReadiness,
+            },
             providers: providerAuth,
             unusableProfiles,
             oauth: {
@@ -547,6 +566,31 @@ export async function modelsStatusCommand(
           ? `Run \`claude setup-token\`, then \`${formatCliCommand("openclaw models auth setup-token")}\` or \`${formatCliCommand("openclaw configure")}\`.`
           : `Run \`${formatCliCommand("openclaw configure")}\` or set an API key env var.`;
       runtime.log(`- ${theme.heading(provider)} ${hint}`);
+    }
+  }
+
+  if (cliProvidersInUse.length > 0) {
+    runtime.log("");
+    runtime.log(colorize(rich, theme.heading, "CLI backend readiness"));
+    for (const entry of cliReadiness) {
+      const statusColor =
+        entry.status === "ready"
+          ? theme.success
+          : entry.status === "command_unresolvable"
+            ? theme.warn
+            : theme.error;
+      const status = colorize(rich, statusColor, entry.status);
+      const commandLabel = colorize(rich, theme.info, entry.command || "-");
+      const resolved = entry.resolvedPath
+        ? colorize(rich, theme.muted, ` (${shortenHomePath(entry.resolvedPath)})`)
+        : "";
+      runtime.log(`- ${theme.heading(entry.provider)} ${status} ${commandLabel}${resolved}`);
+      if (entry.status !== "ready") {
+        runtime.log(`  ${colorize(rich, theme.warn, entry.detail)}`);
+        if (entry.hint) {
+          runtime.log(`  ${colorize(rich, theme.muted, entry.hint)}`);
+        }
+      }
     }
   }
 
