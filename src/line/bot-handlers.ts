@@ -10,6 +10,7 @@ import type {
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { LineGroupConfig, ResolvedLineAccount } from "./types.js";
+import { resolveDmPolicy, resolveGroupPolicy } from "../channels/policy-resolve.js";
 import { danger, logVerbose } from "../globals.js";
 import { resolvePairingIdLabel } from "../pairing/pairing-labels.js";
 import { buildPairingReply } from "../pairing/pairing-messages.js";
@@ -129,9 +130,15 @@ async function shouldProcessLineEvent(
     allowFrom: groupAllowFrom,
     storeAllowFrom,
   });
-  const dmPolicy = account.config.dmPolicy ?? "pairing";
+  const dmPolicy = resolveDmPolicy({
+    accountPolicy: account.config.dmPolicy,
+    defaultPolicy: "pairing",
+  });
   const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
-  const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
+  const groupPolicy = resolveGroupPolicy({
+    accountPolicy: account.config.groupPolicy,
+    defaultPolicy: defaultGroupPolicy ?? "allowlist",
+  });
 
   if (isGroup) {
     if (groupConfig?.enabled === false) {
