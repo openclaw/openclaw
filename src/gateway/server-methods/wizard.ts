@@ -1,4 +1,3 @@
-import type { ErrorObject } from "ajv";
 import { randomUUID } from "node:crypto";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -6,37 +5,13 @@ import { WizardSession } from "../../wizard/session.js";
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   validateWizardCancelParams,
   validateWizardNextParams,
   validateWizardStartParams,
   validateWizardStatusParams,
 } from "../protocol/index.js";
 import { formatForLog } from "../ws-log.js";
-
-type Validator<T> = ((params: unknown) => params is T) & {
-  errors?: ErrorObject[] | null;
-};
-
-function assertValidParams<T>(
-  params: unknown,
-  validate: Validator<T>,
-  method: string,
-  respond: RespondFn,
-): params is T {
-  if (validate(params)) {
-    return true;
-  }
-  respond(
-    false,
-    undefined,
-    errorShape(
-      ErrorCodes.INVALID_REQUEST,
-      `invalid ${method} params: ${formatValidationErrors(validate.errors)}`,
-    ),
-  );
-  return false;
-}
+import { assertValidParams } from "./validation.js";
 
 function readWizardStatus(session: WizardSession) {
   return {
