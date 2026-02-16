@@ -148,7 +148,9 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     });
 
     // fnm on macOS defaults to ~/Library/Application Support/fnm
-    const fnmIndex = result.indexOf("/Users/testuser/Library/Application Support/fnm/aliases/default/bin");
+    const fnmIndex = result.indexOf(
+      "/Users/testuser/Library/Application Support/fnm/aliases/default/bin",
+    );
     const homebrewIndex = result.indexOf("/opt/homebrew/bin");
 
     expect(fnmIndex).toBeGreaterThan(-1);
