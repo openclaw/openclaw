@@ -109,6 +109,15 @@ function uniqueNonEmptyStrings(values: string[]): string[] {
   return unique;
 }
 
+function escapeSlackMrkdwn(value: string): string {
+  return value
+    .replaceAll("\\", "\\\\")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replace(/([*_`~])/g, "\\$1");
+}
+
 function collectRichTextFragments(value: unknown, out: string[]): void {
   if (!value || typeof value !== "object") {
     return;
@@ -289,7 +298,7 @@ function formatInteractionConfirmationText(params: {
   userId?: string;
 }): string {
   const actor = params.userId?.trim() ? ` by <@${params.userId.trim()}>` : "";
-  return `:white_check_mark: *${params.selectedLabel}* selected${actor}`;
+  return `:white_check_mark: *${escapeSlackMrkdwn(params.selectedLabel)}* selected${actor}`;
 }
 
 function summarizeViewState(values: unknown): ModalInputSummary[] {

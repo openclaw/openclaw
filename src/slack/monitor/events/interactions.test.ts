@@ -220,6 +220,55 @@ describe("registerSlackInteractionEvents", () => {
     );
   });
 
+  it("escapes mrkdwn characters in confirmation labels", async () => {
+    enqueueSystemEventMock.mockReset();
+    const { ctx, app, getHandler } = createContext();
+    registerSlackInteractionEvents({ ctx: ctx as never });
+    const handler = getHandler();
+    expect(handler).toBeTruthy();
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    await handler!({
+      ack,
+      body: {
+        user: { id: "U556" },
+        channel: { id: "C1" },
+        message: {
+          ts: "111.223",
+          blocks: [{ type: "actions", block_id: "select_block", elements: [] }],
+        },
+      },
+      action: {
+        type: "static_select",
+        action_id: "openclaw:pick",
+        block_id: "select_block",
+        selected_option: {
+          text: { type: "plain_text", text: "Canary_*`~<&>" },
+          value: "canary",
+        },
+      },
+    });
+
+    expect(ack).toHaveBeenCalled();
+    expect(app.client.chat.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "C1",
+        ts: "111.223",
+        blocks: [
+          {
+            type: "context",
+            elements: [
+              {
+                type: "mrkdwn",
+                text: ":white_check_mark: *Canary\\_\\*\\`\\~&lt;&amp;&gt;* selected by <@U556>",
+              },
+            ],
+          },
+        ],
+      }),
+    );
+  });
+
   it("falls back to container channel and message timestamps", async () => {
     enqueueSystemEventMock.mockReset();
     const { ctx, app, getHandler, resolveSessionKey } = createContext();
