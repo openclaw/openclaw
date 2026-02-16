@@ -34,6 +34,22 @@ export function readBooleanParam(
   return undefined;
 }
 
+export function readCurrentMessageIdAlias(params: {
+  args: Record<string, unknown>;
+  key: string;
+  currentMessageId?: string;
+}): string | undefined {
+  const raw = readStringParam(params.args, params.key);
+  if (!raw) {
+    return undefined;
+  }
+  const normalized = raw.trim().toLowerCase();
+  if (normalized !== "current") {
+    return raw;
+  }
+  return params.currentMessageId?.trim() || undefined;
+}
+
 export function resolveSlackAutoThreadId(params: {
   to: string;
   toolContext?: ChannelThreadingToolContext;

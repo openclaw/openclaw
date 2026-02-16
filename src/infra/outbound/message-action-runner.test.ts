@@ -817,3 +817,69 @@ describe("runMessageAction accountId defaults", () => {
     expect(ctx.params.accountId).toBe("ops");
   });
 });
+
+describe("runMessageAction react current message alias", () => {
+  const handleAction = vi.fn(async ({ params }: { params: Record<string, unknown> }) =>
+    jsonResult({ ok: true, messageId: params.messageId }),
+  );
+  const reactPlugin: ChannelPlugin = {
+    id: "discord",
+    meta: {
+      id: "discord",
+      label: "Discord",
+      selectionLabel: "Discord",
+      docsPath: "/channels/discord",
+      blurb: "Discord test plugin.",
+    },
+    capabilities: { chatTypes: ["direct"] },
+    config: {
+      listAccountIds: () => ["default"],
+      resolveAccount: () => ({}),
+    },
+    actions: {
+      listActions: () => ["react"],
+      handleAction,
+    },
+  };
+
+  beforeEach(() => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "discord",
+          source: "test",
+          plugin: reactPlugin,
+        },
+      ]),
+    );
+    handleAction.mockClear();
+  });
+
+  afterEach(() => {
+    setActivePluginRegistry(createTestRegistry([]));
+    vi.clearAllMocks();
+  });
+
+  it("maps messageId=current to the triggering message id from tool context", async () => {
+    await runMessageAction({
+      cfg: {} as OpenClawConfig,
+      action: "react",
+      params: {
+        channel: "discord",
+        target: "channel:123",
+        messageId: "current",
+        emoji: "✅",
+      },
+      toolContext: {
+        currentChannelId: "channel:123",
+        currentChannelProvider: "discord",
+        currentThreadTs: "987654321",
+      },
+      dryRun: false,
+    });
+
+    expect(handleAction).toHaveBeenCalled();
+    const ctx = handleAction.mock.calls[0]?.[0] as { params: Record<string, unknown> };
+    expect(ctx.params.messageId).toBe("987654321");
+  });
+});

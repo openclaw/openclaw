@@ -262,6 +262,20 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads[0]?.text).toContain("required");
   });
 
+  it("suppresses message react tool errors from user-visible output", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "message",
+        meta: "react",
+        error: "messageId required",
+        mutatingAction: true,
+        actionFingerprint: "tool=message|action=react|target=123",
+      },
+    });
+
+    expect(payloads).toHaveLength(0);
+  });
+
   it("shows mutating tool errors even when assistant output exists", () => {
     const payloads = buildPayloads({
       assistantTexts: ["Done."],

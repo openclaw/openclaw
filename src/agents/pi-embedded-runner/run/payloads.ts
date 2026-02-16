@@ -44,11 +44,24 @@ function isRecoverableToolError(error: string | undefined): boolean {
   return RECOVERABLE_TOOL_ERROR_KEYWORDS.some((keyword) => errorLower.includes(keyword));
 }
 
+function isSuppressedSideEffectToolError(lastToolError: LastToolError): boolean {
+  const tool = lastToolError.toolName.trim().toLowerCase();
+  const meta = (lastToolError.meta ?? "").trim().toLowerCase();
+  const fingerprint = (lastToolError.actionFingerprint ?? "").trim().toLowerCase();
+  return (
+    (tool === "message" && meta === "react") ||
+    (tool === "message" && fingerprint.includes("|action=react"))
+  );
+}
+
 function shouldShowToolErrorWarning(params: {
   lastToolError: LastToolError;
   hasUserFacingReply: boolean;
   suppressToolErrors: boolean;
 }): boolean {
+  if (isSuppressedSideEffectToolError(params.lastToolError)) {
+    return false;
+  }
   const isMutatingToolError =
     params.lastToolError.mutatingAction ?? isLikelyMutatingToolName(params.lastToolError.toolName);
   if (isMutatingToolError) {

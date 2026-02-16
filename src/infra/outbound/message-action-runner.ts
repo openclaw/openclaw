@@ -35,6 +35,7 @@ import {
   parseButtonsParam,
   parseCardParam,
   readBooleanParam,
+  readCurrentMessageIdAlias,
   resolveSlackAutoThreadId,
   resolveTelegramAutoThreadId,
 } from "./message-action-params.js";
@@ -741,6 +742,18 @@ export async function runMessageAction(
   }
 
   applyTargetToParams({ action, args: params });
+
+  if (action === "react") {
+    const resolvedMessageId = readCurrentMessageIdAlias({
+      args: params,
+      key: "messageId",
+      currentMessageId: input.toolContext?.currentThreadTs,
+    });
+    if (resolvedMessageId) {
+      params.messageId = resolvedMessageId;
+    }
+  }
+
   if (actionRequiresTarget(action)) {
     if (!actionHasTarget(action, params)) {
       throw new Error(`Action ${action} requires a target.`);
