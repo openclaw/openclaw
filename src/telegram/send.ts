@@ -27,6 +27,7 @@ import { splitTelegramCaption } from "./caption.js";
 import { resolveTelegramFetch } from "./fetch.js";
 import { renderTelegramHtmlText } from "./format.js";
 import { isRecoverableTelegramNetworkError } from "./network-errors.js";
+import { recordSentPoll } from "./poll-vote-cache.js";
 import { makeProxyFetch } from "./proxy.js";
 import { recordSentMessage } from "./sent-message-cache.js";
 import { parseTelegramTarget, stripTelegramInternalPrefixes } from "./targets.js";
@@ -1054,6 +1055,15 @@ export async function sendPollTelegram(
   const pollId = result?.poll?.id;
   if (result?.message_id) {
     recordSentMessage(chatId, result.message_id);
+  }
+  if (pollId) {
+    recordSentPoll({
+      pollId,
+      chatId: resolvedChatId,
+      question: normalizedPoll.question,
+      options: normalizedPoll.options,
+      accountId: account.accountId,
+    });
   }
 
   recordChannelActivity({
