@@ -74,6 +74,7 @@ function createMockBridge(overrides: Partial<Record<string, unknown>> = {}) {
       success: true,
       result: { content: "attachment data" },
     })),
+    screenshot: vi.fn(async () => ({ success: true, path: "/tmp/screenshot.png", size_bytes: 61000 })),
     ...overrides,
   } as unknown as BridgeClient;
 }
@@ -138,7 +139,7 @@ describe("happy path: PLANNING → DONE", () => {
     // 3. Read full contract
     expect(db.getContract).toHaveBeenCalledWith(7);
 
-    // 4. Two chrome_task calls: execution + QA
+    // 4. Two chrome_task calls: execution + QA (screenshot uses separate endpoint)
     const mcpCalls = (bridge.mcpCall as ReturnType<typeof vi.fn>).mock.calls;
     const chromeCalls = mcpCalls.filter((c: unknown[]) => c[0] === "chrome_task");
     expect(chromeCalls.length).toBe(2);
@@ -273,7 +274,7 @@ describe("retry path: QA fail → retry → DONE", () => {
     const loop = createVmAgentLoop({ hostname: HOSTNAME, pollIntervalMs: POLL_MS, db, bridge });
     await loop.start({ logger });
 
-    // 4 chrome_task calls total
+    // 4 chrome_task calls total: exec + QA-fail + exec + QA-pass (screenshot uses separate endpoint)
     const mcpCalls = (bridge.mcpCall as ReturnType<typeof vi.fn>).mock.calls;
     const chromeCalls = mcpCalls.filter((c: unknown[]) => c[0] === "chrome_task");
     expect(chromeCalls.length).toBe(4);
@@ -867,7 +868,7 @@ describe("autonomous loop lifecycle", () => {
     await loop.stop({ logger });
   });
 
-  it("does not start new contract while current one is in-flight", async () => {
+  it("does not start new contract while current one is in-flight (sequential processing)", async () => {
     const contractA = makeContract({ id: 70, intent: "Slow task" });
     const contractB = makeContract({ id: 71, intent: "Fast task" });
     const claimedA = makeContract({ ...contractA, state: "IMPLEMENTING", claimed_by: HOSTNAME });
@@ -918,6 +919,147 @@ describe("autonomous loop lifecycle", () => {
     // Resolve A's execution
     resolveA!();
     await startPromise;
+
+    await loop.stop({ logger });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Block 8: Screenshot capture after QA passes
+// ---------------------------------------------------------------------------
+
+describe("screenshot capture after QA pass", () => {
+  it("calls bridge.screenshot() after QA passes", async () => {
+    const contract = makeContract({ id: 77 });
+    const claimed = makeContract({ ...contract, state: "IMPLEMENTING", claimed_by: HOSTNAME });
+
+    const bridge = createMockBridge();
+    const db = createMockDb({
+      pollContracts: vi.fn(async () => [contract]),
+      claimContract: vi.fn(async () => claimed),
+      getContract: vi.fn(async () => claimed),
+      updateContract: vi.fn(async () => claimed),
+    });
+    const logger = makeLogger();
+
+    const loop = createVmAgentLoop({ hostname: HOSTNAME, pollIntervalMs: POLL_MS, db, bridge });
+    await loop.start({ logger });
+
+    // bridge.screenshot() should be called once
+    expect(bridge.screenshot).toHaveBeenCalledTimes(1);
+
+    // 2 chrome_task calls only: exec + QA (screenshot uses separate endpoint)
+    const mcpCalls = (bridge.mcpCall as ReturnType<typeof vi.fn>).mock.calls;
+    const chromeCalls = mcpCalls.filter((c: unknown[]) => c[0] === "chrome_task");
+    expect(chromeCalls.length).toBe(2);
+
+    // Final updateContract includes screenshot_path in qa_results
+    const updateCalls = (db.updateContract as ReturnType<typeof vi.fn>).mock.calls;
+    const lastUpdate = updateCalls[updateCalls.length - 1];
+    expect(lastUpdate[1].state).toBe("DONE");
+    expect(lastUpdate[1].qa_results.screenshot_path).toBeTruthy();
+
+    await loop.stop({ logger });
+  });
+
+  it("screenshot save_path includes contract ID for unique filename", async () => {
+    const contract = makeContract({ id: 77 });
+    const claimed = makeContract({ ...contract, state: "IMPLEMENTING", claimed_by: HOSTNAME });
+
+    const bridge = createMockBridge();
+    const db = createMockDb({
+      pollContracts: vi.fn(async () => [contract]),
+      claimContract: vi.fn(async () => claimed),
+      getContract: vi.fn(async () => claimed),
+      updateContract: vi.fn(async () => claimed),
+    });
+    const logger = makeLogger();
+
+    const loop = createVmAgentLoop({ hostname: HOSTNAME, pollIntervalMs: POLL_MS, db, bridge });
+    await loop.start({ logger });
+
+    const ssCall = (bridge.screenshot as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(ssCall[0]).toBe("/tmp/cos-qa-77.png");
+
+    await loop.stop({ logger });
+  });
+
+  it("qa_results.screenshot_path matches the save_path passed to bridge.screenshot()", async () => {
+    const contract = makeContract({ id: 77 });
+    const claimed = makeContract({ ...contract, state: "IMPLEMENTING", claimed_by: HOSTNAME });
+
+    const bridge = createMockBridge();
+    const db = createMockDb({
+      pollContracts: vi.fn(async () => [contract]),
+      claimContract: vi.fn(async () => claimed),
+      getContract: vi.fn(async () => claimed),
+      updateContract: vi.fn(async () => claimed),
+    });
+    const logger = makeLogger();
+
+    const loop = createVmAgentLoop({ hostname: HOSTNAME, pollIntervalMs: POLL_MS, db, bridge });
+    await loop.start({ logger });
+
+    const updateCalls = (db.updateContract as ReturnType<typeof vi.fn>).mock.calls;
+    const lastUpdate = updateCalls[updateCalls.length - 1];
+    expect(lastUpdate[1].qa_results.screenshot_path).toBe("/tmp/cos-qa-77.png");
+
+    await loop.stop({ logger });
+  });
+
+  it("screenshot failure is non-fatal — still marks DONE", async () => {
+    const contract = makeContract({ id: 78 });
+    const claimed = makeContract({ ...contract, state: "IMPLEMENTING", claimed_by: HOSTNAME });
+
+    const bridge = createMockBridge({
+      screenshot: vi.fn(async () => ({ success: false, error: "Browser not responding" })),
+    });
+
+    const db = createMockDb({
+      pollContracts: vi.fn(async () => [contract]),
+      claimContract: vi.fn(async () => claimed),
+      getContract: vi.fn(async () => claimed),
+      updateContract: vi.fn(async () => claimed),
+    });
+    const logger = makeLogger();
+
+    const loop = createVmAgentLoop({ hostname: HOSTNAME, pollIntervalMs: POLL_MS, db, bridge });
+    await loop.start({ logger });
+
+    // Still marked DONE despite screenshot failure
+    const updateCalls = (db.updateContract as ReturnType<typeof vi.fn>).mock.calls;
+    const lastUpdate = updateCalls[updateCalls.length - 1];
+    expect(lastUpdate[1].state).toBe("DONE");
+    expect(lastUpdate[1].qa_results.passed).toBe(true);
+    // screenshot_path should be null when screenshot fails
+    expect(lastUpdate[1].qa_results.screenshot_path).toBeNull();
+
+    await loop.stop({ logger });
+  });
+
+  it("no screenshot taken when QA is skipped (null qa_doc)", async () => {
+    const contract = makeContract({ id: 79, qa_doc: null });
+    const claimed = makeContract({ ...contract, state: "IMPLEMENTING", claimed_by: HOSTNAME });
+
+    const bridge = createMockBridge();
+    const db = createMockDb({
+      pollContracts: vi.fn(async () => [contract]),
+      claimContract: vi.fn(async () => claimed),
+      getContract: vi.fn(async () => claimed),
+      updateContract: vi.fn(async () => claimed),
+    });
+    const logger = makeLogger();
+
+    const loop = createVmAgentLoop({ hostname: HOSTNAME, pollIntervalMs: POLL_MS, db, bridge });
+    await loop.start({ logger });
+
+    // bridge.screenshot() should NOT be called when QA is skipped
+    expect(bridge.screenshot).not.toHaveBeenCalled();
+
+    // Only 1 chrome_task call (execution only, no QA)
+    const mcpCalls = (bridge.mcpCall as ReturnType<typeof vi.fn>).mock.calls;
+    const chromeCalls = mcpCalls.filter((c: unknown[]) => c[0] === "chrome_task");
+    expect(chromeCalls.length).toBe(1);
 
     await loop.stop({ logger });
   });

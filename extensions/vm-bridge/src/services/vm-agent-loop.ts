@@ -177,9 +177,22 @@ export function createVmAgentLoop(options: VmAgentLoopOptions) {
 
       if (passed) {
         logEntries.push(`Attempt ${attemptCount}: QA PASSED — ${truncate(qaOutput, 200)}`);
+
+        // Take screenshot via CDP (best-effort)
+        let screenshotPath: string | null = null;
+        try {
+          const ssPath = `/tmp/cos-qa-${full.id}.png`;
+          const ssResult = await bridge.screenshot(ssPath, profile);
+          if (ssResult.success) {
+            screenshotPath = ssPath;
+          }
+        } catch {
+          // Screenshot is best-effort
+        }
+
         await db.updateContract(full.id, {
           state: "DONE",
-          qa_results: { passed: true, details: qaOutput },
+          qa_results: { passed: true, details: qaOutput, screenshot_path: screenshotPath },
           execution_log: logEntries.join("\n"),
           attempt_count: attemptCount,
           completed_at: new Date(),

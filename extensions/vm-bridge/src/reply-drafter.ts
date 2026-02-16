@@ -85,6 +85,15 @@ export async function draftReply(
     const draftData = draftResult.result as Record<string, unknown> | undefined;
     const draftId = draftData?.draft_id as string | undefined;
     if (draftId) {
+      // Attach QA screenshot if available (best-effort)
+      const screenshotPath = (contract.qa_results as Record<string, unknown>)?.screenshot_path as string | undefined;
+      if (screenshotPath) {
+        try {
+          await bridge.addAttachmentToDraft(draftId, screenshotPath, "xcellerate");
+        } catch {
+          // Attachment is best-effort — draft still valid without it
+        }
+      }
       return { draftId, replyContent };
     }
   }

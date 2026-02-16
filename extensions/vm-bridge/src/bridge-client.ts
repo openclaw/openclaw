@@ -97,4 +97,23 @@ export class BridgeClient {
   async enrichmentsGet(platform: string, messageId: string) {
     return this.mcpCall("enrichments_get", { platform, message_id: messageId });
   }
+
+  async addAttachmentToDraft(draftId: string, filePath: string, account = "xcellerate") {
+    return this.mcpCall("add_attachment_to_draft", { draft_id: draftId, file_path: filePath, account });
+  }
+
+  /** Capture a Chrome tab screenshot via CDP and save to disk. */
+  async screenshot(savePath: string, profile = "default", url?: string): Promise<McpCallResult> {
+    try {
+      const resp = await fetch(`${this.url}/screenshot`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ save_path: savePath, profile, ...(url ? { url } : {}) }),
+        signal: AbortSignal.timeout(30_000),
+      });
+      return (await resp.json()) as McpCallResult;
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
 }
