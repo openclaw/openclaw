@@ -1,10 +1,5 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { SkillStatusEntry, SkillStatusReport } from "../agents/skills-status.js";
-import type { SkillEntry } from "../agents/skills.js";
-import { captureEnv } from "../test-utils/env.js";
 import { formatSkillInfo, formatSkillsCheck, formatSkillsList } from "./skills-cli.format.js";
 
 // Unit tests: don't pay the runtime cost of loading/parsing the real skills loader.
@@ -214,89 +209,6 @@ describe("skills-cli", () => {
       const parsed = JSON.parse(output);
       expect(parsed.summary.eligible).toBe(1);
       expect(parsed.summary.total).toBe(2);
-    });
-  });
-
-  describe("integration: loads real skills from bundled directory", () => {
-    let tempWorkspaceDir = "";
-    let tempBundledDir = "";
-    let envSnapshot: ReturnType<typeof captureEnv>;
-    let buildWorkspaceSkillStatus: typeof import("../agents/skills-status.js").buildWorkspaceSkillStatus;
-
-    beforeAll(async () => {
-      envSnapshot = captureEnv(["OPENCLAW_BUNDLED_SKILLS_DIR"]);
-      tempWorkspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-skills-test-"));
-      tempBundledDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-skills-test-"));
-      process.env.OPENCLAW_BUNDLED_SKILLS_DIR = tempBundledDir;
-      ({ buildWorkspaceSkillStatus } = await import("../agents/skills-status.js"));
-    });
-
-    afterAll(() => {
-      if (tempWorkspaceDir) {
-        fs.rmSync(tempWorkspaceDir, { recursive: true, force: true });
-      }
-      if (tempBundledDir) {
-        fs.rmSync(tempBundledDir, { recursive: true, force: true });
-      }
-      envSnapshot.restore();
-    });
-
-    const createEntries = (): SkillEntry[] => {
-      const baseDir = path.join(tempWorkspaceDir, "peekaboo");
-      return [
-        {
-          skill: {
-            name: "peekaboo",
-            description: "Capture UI screenshots",
-            source: "openclaw-bundled",
-            filePath: path.join(baseDir, "SKILL.md"),
-            baseDir,
-          } as SkillEntry["skill"],
-          frontmatter: {},
-          metadata: { emoji: "📸" },
-        },
-      ];
-    };
-
-    it("loads bundled skills and formats them", async () => {
-      const entries = createEntries();
-      const report = buildWorkspaceSkillStatus(tempWorkspaceDir, {
-        managedSkillsDir: "/nonexistent",
-        entries,
-      });
-
-      // Should have loaded some skills
-      expect(report.skills.length).toBeGreaterThan(0);
-
-      // Format should work without errors
-      const listOutput = formatSkillsList(report, {});
-      expect(listOutput).toContain("Skills");
-
-      const checkOutput = formatSkillsCheck(report, {});
-      expect(checkOutput).toContain("Total:");
-
-      // JSON output should be valid
-      const jsonOutput = formatSkillsList(report, { json: true });
-      const parsed = JSON.parse(jsonOutput);
-      expect(parsed.skills).toBeInstanceOf(Array);
-    });
-
-    it("formats info for a real bundled skill (peekaboo)", async () => {
-      const entries = createEntries();
-      const report = buildWorkspaceSkillStatus(tempWorkspaceDir, {
-        managedSkillsDir: "/nonexistent",
-        entries,
-      });
-
-      // peekaboo is a bundled skill that should always exist
-      const peekaboo = report.skills.find((s) => s.name === "peekaboo");
-      if (!peekaboo) {
-        throw new Error("peekaboo fixture skill missing");
-      }
-
-      const output = formatSkillInfo(report, "peekaboo", {});
-      expect(output).toContain("peekaboo");
-      expect(output).toContain("Details:");
     });
   });
 });

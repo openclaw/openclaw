@@ -2,6 +2,7 @@ import { Type } from "@sinclair/typebox";
 import type { CronDelivery, CronMessageChannel } from "../../cron/types.js";
 import { loadConfig } from "../../config/config.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
+import { normalizeHttpWebhookUrl } from "../../cron/webhook-url.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { isRecord, truncateUtf16Safe } from "../../utils.js";
@@ -217,10 +218,9 @@ JOB SCHEMA (for add action):
   "name": "string (optional)",
   "schedule": { ... },      // Required: when to run
   "payload": { ... },       // Required: what to execute
-  "delivery": { ... },      // Optional: announce summary (isolated only)
+  "delivery": { ... },      // Optional: announce summary or webhook POST
   "sessionTarget": "main" | "isolated",  // Required
-  "enabled": true | false,  // Optional, default true
-  "notify": true | false    // Optional webhook opt-in; set true for user-facing reminders
+  "enabled": true | false   // Optional, default true
 }
 
 SCHEDULE TYPES (schedule.kind):
@@ -239,15 +239,17 @@ PAYLOAD TYPES (payload.kind):
 - "agentTurn": Runs agent with message (isolated sessions only)
   { "kind": "agentTurn", "message": "<prompt>", "model": "<optional>", "thinking": "<optional>", "timeoutSeconds": <optional> }
 
-DELIVERY (isolated-only, top-level):
-  { "mode": "none|announce", "channel": "<optional>", "to": "<optional>", "bestEffort": <optional-bool> }
+DELIVERY (top-level):
+  { "mode": "none|announce|webhook", "channel": "<optional>", "to": "<optional>", "bestEffort": <optional-bool> }
   - Default for isolated agentTurn jobs (when delivery omitted): "announce"
-  - If the task needs to send to a specific chat/recipient, set delivery.channel/to here; do not call messaging tools inside the run.
+  - announce: send to chat channel (optional channel/to target)
+  - webhook: send finished-run event as HTTP POST to delivery.to (URL required)
+  - If the task needs to send to a specific chat/recipient, set announce delivery.channel/to; do not call messaging tools inside the run.
 
 CRITICAL CONSTRAINTS:
 - sessionTarget="main" REQUIRES payload.kind="systemEvent"
 - sessionTarget="isolated" REQUIRES payload.kind="agentTurn"
-- For reminders users should be notified about, set notify=true.
+- For webhook callbacks, use delivery.mode="webhook" with delivery.to set to a URL.
 Default: prefer isolated agentTurn jobs unless the user explicitly wants a main-session system event.
 
 WAKE MODES (for wake action):
@@ -294,7 +296,6 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
               "payload",
               "delivery",
               "enabled",
-              "notify",
               "description",
               "deleteAfterRun",
               "agentId",
@@ -352,11 +353,25 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
             const delivery = isRecord(deliveryValue) ? deliveryValue : undefined;
             const modeRaw = typeof delivery?.mode === "string" ? delivery.mode : "";
             const mode = modeRaw.trim().toLowerCase();
+            if (mode === "webhook") {
+              const webhookUrl = normalizeHttpWebhookUrl(delivery?.to);
+              if (!webhookUrl) {
+                throw new Error(
+                  'delivery.mode="webhook" requires delivery.to to be a valid http(s) URL',
+                );
+              }
+              if (delivery) {
+                delivery.to = webhookUrl;
+              }
+            }
+
             const hasTarget =
               (typeof delivery?.channel === "string" && delivery.channel.trim()) ||
               (typeof delivery?.to === "string" && delivery.to.trim());
             const shouldInfer =
-              (deliveryValue == null || delivery) && mode !== "none" && !hasTarget;
+              (deliveryValue == null || delivery) &&
+              (mode === "" || mode === "announce") &&
+              !hasTarget;
             if (shouldInfer) {
               const inferred = inferDeliveryFromSessionKey(opts.agentSessionKey);
               if (inferred) {
