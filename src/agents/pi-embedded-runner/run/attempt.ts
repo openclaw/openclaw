@@ -42,6 +42,7 @@ import {
   validateAnthropicTurns,
   validateGeminiTurns,
 } from "../../pi-embedded-helpers.js";
+import { downgradeOpenAIReasoningBlocks } from "../../pi-embedded-helpers.js";
 import { subscribeEmbeddedPiSession } from "../../pi-embedded-subscribe.js";
 import {
   ensurePiCompactionReserveTokens,
@@ -661,9 +662,10 @@ export async function runEmbeddedAttempt(
         const limited = transcriptPolicy.repairToolUseResultPairing
           ? sanitizeToolUseResultPairing(truncated)
           : truncated;
-        cacheTrace?.recordStage("session:limited", { messages: limited });
-        if (limited.length > 0) {
-          activeSession.agent.replaceMessages(limited);
+        const reasoningSafeHistory = downgradeOpenAIReasoningBlocks(limited);
+        cacheTrace?.recordStage("session:limited", { messages: reasoningSafeHistory });
+        if (reasoningSafeHistory.length > 0) {
+          activeSession.agent.replaceMessages(reasoningSafeHistory);
         }
       } catch (err) {
         await flushPendingToolResultsAfterIdle({
