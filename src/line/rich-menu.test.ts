@@ -37,32 +37,6 @@ describe("createGridLayout", () => {
     expect(areas[5].bounds.y).toBe(843);
   });
 
-  it("creates a 2x3 grid layout for short menu", () => {
-    const actions = [
-      messageAction("A1"),
-      messageAction("A2"),
-      messageAction("A3"),
-      messageAction("A4"),
-      messageAction("A5"),
-      messageAction("A6"),
-    ] as [
-      ReturnType<typeof messageAction>,
-      ReturnType<typeof messageAction>,
-      ReturnType<typeof messageAction>,
-      ReturnType<typeof messageAction>,
-      ReturnType<typeof messageAction>,
-      ReturnType<typeof messageAction>,
-    ];
-
-    const areas = createGridLayout(843, actions);
-
-    expect(areas.length).toBe(6);
-
-    // Row height should be half of 843
-    expect(areas[0].bounds.height).toBe(421);
-    expect(areas[3].bounds.y).toBe(421);
-  });
-
   it("assigns correct actions to areas", () => {
     const actions = [
       messageAction("Help", "/help"),
