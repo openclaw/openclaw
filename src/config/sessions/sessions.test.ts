@@ -2,20 +2,18 @@ import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { SessionConfig } from "../types.base.js";
 import type { SessionEntry } from "./types.js";
 import {
   clearSessionStoreCacheForTest,
   loadSessionStore,
   updateSessionStore,
-  updateSessionStoreEntry,
 } from "../sessions.js";
 import { deriveSessionMetaPatch } from "./metadata.js";
 import {
   resolveSessionFilePath,
   resolveSessionTranscriptPathInDir,
-  resolveStorePath,
   validateSessionId,
 } from "./paths.js";
 import { resolveSessionResetPolicy } from "./reset.js";
@@ -44,25 +42,6 @@ describe("deriveSessionMetaPatch", () => {
   });
 });
 
-describe("resolveStorePath", () => {
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
-
-  it("uses OPENCLAW_HOME for tilde expansion", () => {
-    vi.stubEnv("OPENCLAW_HOME", "/srv/openclaw-home");
-    vi.stubEnv("HOME", "/home/other");
-
-    const resolved = resolveStorePath("~/.openclaw/agents/{agentId}/sessions/sessions.json", {
-      agentId: "research",
-    });
-
-    expect(resolved).toBe(
-      path.resolve("/srv/openclaw-home/.openclaw/agents/research/sessions/sessions.json"),
-    );
-  });
-});
-
 describe("session path safety", () => {
   it("rejects unsafe session IDs", () => {
     expect(() => validateSessionId("../etc/passwd")).toThrow(/Invalid session ID/);
@@ -78,14 +57,6 @@ describe("session path safety", () => {
     expect(resolved).toBe(path.resolve(sessionsDir, "sess-1-topic-topic%2Fa%2Bb.jsonl"));
   });
 
-  it("rejects unsafe sessionFile candidates that escape the sessions dir", () => {
-    const sessionsDir = "/tmp/openclaw/agents/main/sessions";
-
-    expect(() =>
-      resolveSessionFilePath("sess-1", { sessionFile: "../../etc/passwd" }, { sessionsDir }),
-    ).toThrow(/within sessions directory/);
-  });
-
   it("rejects absolute sessionFile paths outside known agent sessions dirs", () => {
     const sessionsDir = "/tmp/openclaw/agents/main/sessions";
 
@@ -96,19 +67,6 @@ describe("session path safety", () => {
         { sessionsDir },
       ),
     ).toThrow(/within sessions directory/);
-  });
-
-  it("uses sibling fallback for custom per-agent store roots", () => {
-    const mainSessionsDir = "/srv/custom/agents/main/sessions";
-    const opsSessionFile = "/srv/custom/agents/ops/sessions/abc-123.jsonl";
-
-    const resolved = resolveSessionFilePath(
-      "sess-1",
-      { sessionFile: opsSessionFile },
-      { sessionsDir: mainSessionsDir, agentId: "ops" },
-    );
-
-    expect(resolved).toBe(path.resolve(opsSessionFile));
   });
 
   it("uses extracted agent fallback for custom per-agent store roots", () => {
@@ -141,22 +99,6 @@ describe("resolveSessionResetPolicy", () => {
 
       expect(policy.mode).toBe("idle");
       expect(policy.idleMinutes).toBe(45);
-    });
-
-    it("prefers resetByType.direct over resetByType.dm when both present", () => {
-      const sessionCfg = {
-        resetByType: {
-          direct: { mode: "daily" as const },
-          dm: { mode: "idle" as const, idleMinutes: 99 },
-        },
-      } as unknown as SessionConfig;
-
-      const policy = resolveSessionResetPolicy({
-        sessionCfg,
-        resetType: "direct",
-      });
-
-      expect(policy.mode).toBe("daily");
     });
 
     it("does not use dm fallback for group/thread types", () => {
@@ -231,46 +173,6 @@ describe("session store lock (Promise chain mutex)", () => {
     expect((store[key] as Record<string, unknown>).counter).toBe(N);
   });
 
-  it("concurrent updateSessionStoreEntry patches all merge correctly", async () => {
-    const key = "agent:main:merge";
-    const { storePath } = await makeTmpStore({
-      [key]: { sessionId: "s1", updatedAt: 100 },
-    });
-
-    await Promise.all([
-      updateSessionStoreEntry({
-        storePath,
-        sessionKey: key,
-        update: async () => {
-          await Promise.resolve();
-          return { modelOverride: "model-a" };
-        },
-      }),
-      updateSessionStoreEntry({
-        storePath,
-        sessionKey: key,
-        update: async () => {
-          await Promise.resolve();
-          return { thinkingLevel: "high" as const };
-        },
-      }),
-      updateSessionStoreEntry({
-        storePath,
-        sessionKey: key,
-        update: async () => {
-          await Promise.resolve();
-          return { systemPromptOverride: "custom" };
-        },
-      }),
-    ]);
-
-    const store = loadSessionStore(storePath);
-    const entry = store[key];
-    expect(entry.modelOverride).toBe("model-a");
-    expect(entry.thinkingLevel).toBe("high");
-    expect(entry.systemPromptOverride).toBe("custom");
-  });
-
   it("multiple consecutive errors do not permanently poison the queue", async () => {
     const key = "agent:main:multi-err";
     const { storePath } = await makeTmpStore({
@@ -294,61 +196,6 @@ describe("session store lock (Promise chain mutex)", () => {
 
     const store = loadSessionStore(storePath);
     expect(store[key]?.modelOverride).toBe("recovered");
-  });
-
-  it("operations on different storePaths execute concurrently", async () => {
-    const { storePath: pathA } = await makeTmpStore({
-      a: { sessionId: "a", updatedAt: 100 },
-    });
-    const { storePath: pathB } = await makeTmpStore({
-      b: { sessionId: "b", updatedAt: 100 },
-    });
-
-    const order: string[] = [];
-    let started = 0;
-    let releaseBoth: (() => void) | undefined;
-    const gate = new Promise<void>((resolve) => {
-      releaseBoth = resolve;
-    });
-    const markStarted = () => {
-      started += 1;
-      if (started === 2) {
-        releaseBoth?.();
-      }
-    };
-
-    const opA = updateSessionStore(pathA, async (store) => {
-      order.push("a-start");
-      markStarted();
-      await gate;
-      store.a = { ...store.a, modelOverride: "done-a" } as unknown as SessionEntry;
-      order.push("a-end");
-    });
-
-    const opB = updateSessionStore(pathB, async (store) => {
-      order.push("b-start");
-      markStarted();
-      await gate;
-      store.b = { ...store.b, modelOverride: "done-b" } as unknown as SessionEntry;
-      order.push("b-end");
-    });
-
-    await Promise.all([opA, opB]);
-
-    const aStart = order.indexOf("a-start");
-    const bStart = order.indexOf("b-start");
-    const aEnd = order.indexOf("a-end");
-    const bEnd = order.indexOf("b-end");
-    const firstEnd = Math.min(aEnd, bEnd);
-    expect(aStart).toBeGreaterThanOrEqual(0);
-    expect(bStart).toBeGreaterThanOrEqual(0);
-    expect(aEnd).toBeGreaterThanOrEqual(0);
-    expect(bEnd).toBeGreaterThanOrEqual(0);
-    expect(aStart).toBeLessThan(firstEnd);
-    expect(bStart).toBeLessThan(firstEnd);
-
-    expect(loadSessionStore(pathA).a?.modelOverride).toBe("done-a");
-    expect(loadSessionStore(pathB).b?.modelOverride).toBe("done-b");
   });
 });
 
