@@ -86,6 +86,44 @@ describe("Integration: saveSessionStore with pruning", () => {
     expect(loaded.fresh).toBeDefined();
   });
 
+  it("archives transcript files for stale sessions pruned on write", async () => {
+    mockLoadConfig.mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "7d",
+          maxEntries: 500,
+          rotateBytes: 10_485_760,
+        },
+      },
+    });
+
+    const now = Date.now();
+    const staleSessionId = "stale-session";
+    const freshSessionId = "fresh-session";
+    const store: Record<string, SessionEntry> = {
+      stale: { sessionId: staleSessionId, updatedAt: now - 30 * DAY_MS },
+      fresh: { sessionId: freshSessionId, updatedAt: now },
+    };
+    const staleTranscript = path.join(testDir, `${staleSessionId}.jsonl`);
+    const freshTranscript = path.join(testDir, `${freshSessionId}.jsonl`);
+    await fs.writeFile(staleTranscript, '{"type":"session"}\n', "utf-8");
+    await fs.writeFile(freshTranscript, '{"type":"session"}\n', "utf-8");
+
+    await saveSessionStore(storePath, store);
+
+    const loaded = loadSessionStore(storePath);
+    expect(loaded.stale).toBeUndefined();
+    expect(loaded.fresh).toBeDefined();
+    await expect(fs.stat(staleTranscript)).rejects.toThrow();
+    await expect(fs.stat(freshTranscript)).resolves.toBeDefined();
+    const dirEntries = await fs.readdir(testDir);
+    const archived = dirEntries.filter((entry) =>
+      entry.startsWith(`${staleSessionId}.jsonl.deleted.`),
+    );
+    expect(archived).toHaveLength(1);
+  });
+
   it("saveSessionStore skips enforcement when maintenance mode is warn", async () => {
     mockLoadConfig.mockReturnValue({
       session: {

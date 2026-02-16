@@ -6,6 +6,7 @@ import type { SessionMaintenanceConfig, SessionMaintenanceMode } from "../types.
 import { acquireSessionWriteLock } from "../../agents/session-write-lock.js";
 import { parseByteSize } from "../../cli/parse-bytes.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
+import { archiveSessionTranscripts } from "../../gateway/session-utils.fs.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   deliveryContextFromSession,
@@ -301,13 +302,14 @@ export function resolveMaintenanceConfig(): ResolvedSessionMaintenanceConfig {
 export function pruneStaleEntries(
   store: Record<string, SessionEntry>,
   overrideMaxAgeMs?: number,
-  opts: { log?: boolean } = {},
+  opts: { log?: boolean; onPruned?: (params: { key: string; entry: SessionEntry }) => void } = {},
 ): number {
   const maxAgeMs = overrideMaxAgeMs ?? resolveMaintenanceConfig().pruneAfterMs;
   const cutoffMs = Date.now() - maxAgeMs;
   let pruned = 0;
   for (const [key, entry] of Object.entries(store)) {
     if (entry?.updatedAt != null && entry.updatedAt < cutoffMs) {
+      opts.onPruned?.({ key, entry });
       delete store[key];
       pruned++;
     }
@@ -510,8 +512,23 @@ async function saveSessionStoreUnlocked(
       }
     } else {
       // Prune stale entries and cap total count before serializing.
-      pruneStaleEntries(store, maintenance.pruneAfterMs);
+      const prunedSessionFiles = new Map<string, string | undefined>();
+      pruneStaleEntries(store, maintenance.pruneAfterMs, {
+        onPruned: ({ entry }) => {
+          if (!prunedSessionFiles.has(entry.sessionId) || entry.sessionFile) {
+            prunedSessionFiles.set(entry.sessionId, entry.sessionFile);
+          }
+        },
+      });
       capEntryCount(store, maintenance.maxEntries);
+      for (const [sessionId, sessionFile] of prunedSessionFiles) {
+        archiveSessionTranscripts({
+          sessionId,
+          storePath,
+          sessionFile,
+          reason: "deleted",
+        });
+      }
 
       // Rotate the on-disk file if it exceeds the size threshold.
       await rotateSessionFile(storePath, maintenance.rotateBytes);
