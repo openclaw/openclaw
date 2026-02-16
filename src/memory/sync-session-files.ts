@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { SessionFileEntry } from "./session-files.js";
+import type { SyncProgressState } from "./sync-progress.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   buildSessionEntry,
@@ -7,22 +8,16 @@ import {
   sessionPathForFile,
 } from "./session-files.js";
 import { indexFileEntryIfChanged } from "./sync-index.js";
+import { bumpSyncProgressCompleted, bumpSyncProgressTotal } from "./sync-progress.js";
 import { deleteStaleIndexedPaths } from "./sync-stale.js";
 
 const log = createSubsystemLogger("memory");
-
-type ProgressState = {
-  completed: number;
-  total: number;
-  label?: string;
-  report: (update: { completed: number; total: number; label?: string }) => void;
-};
 
 export async function syncSessionFiles(params: {
   agentId: string;
   db: DatabaseSync;
   needsFullReindex: boolean;
-  progress?: ProgressState;
+  progress?: SyncProgressState;
   batchEnabled: boolean;
   concurrency: number;
   runWithConcurrency: <T>(tasks: Array<() => Promise<T>>, concurrency: number) => Promise<T[]>;
@@ -46,35 +41,20 @@ export async function syncSessionFiles(params: {
     concurrency: params.concurrency,
   });
 
-  if (params.progress) {
-    params.progress.total += files.length;
-    params.progress.report({
-      completed: params.progress.completed,
-      total: params.progress.total,
-      label: params.batchEnabled ? "Indexing session files (batch)..." : "Indexing session files…",
-    });
-  }
+  bumpSyncProgressTotal(
+    params.progress,
+    files.length,
+    params.batchEnabled ? "Indexing session files (batch)..." : "Indexing session files…",
+  );
 
   const tasks = files.map((absPath) => async () => {
     if (!indexAll && !params.dirtyFiles.has(absPath)) {
-      if (params.progress) {
-        params.progress.completed += 1;
-        params.progress.report({
-          completed: params.progress.completed,
-          total: params.progress.total,
-        });
-      }
+      bumpSyncProgressCompleted(params.progress);
       return;
     }
     const entry = await buildSessionEntry(absPath);
     if (!entry) {
-      if (params.progress) {
-        params.progress.completed += 1;
-        params.progress.report({
-          completed: params.progress.completed,
-          total: params.progress.total,
-        });
-      }
+      bumpSyncProgressCompleted(params.progress);
       return;
     }
     await indexFileEntryIfChanged({
