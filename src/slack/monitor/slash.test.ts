@@ -5,6 +5,7 @@ vi.mock("../../auto-reply/commands-registry.js", () => {
   const usageCommand = { key: "usage", nativeName: "usage" };
   const reportCommand = { key: "report", nativeName: "report" };
   const reportCompactCommand = { key: "reportcompact", nativeName: "reportcompact" };
+  const reportExternalCommand = { key: "reportexternal", nativeName: "reportexternal" };
   const reportLongCommand = { key: "reportlong", nativeName: "reportlong" };
   const unsafeConfirmCommand = { key: "unsafeconfirm", nativeName: "unsafeconfirm" };
 
@@ -36,6 +37,9 @@ vi.mock("../../auto-reply/commands-registry.js", () => {
       if (normalized === "reportcompact") {
         return reportCompactCommand;
       }
+      if (normalized === "reportexternal") {
+        return reportExternalCommand;
+      }
       if (normalized === "reportlong") {
         return reportLongCommand;
       }
@@ -60,6 +64,12 @@ vi.mock("../../auto-reply/commands-registry.js", () => {
       {
         name: "reportcompact",
         description: "ReportCompact",
+        acceptsArgs: true,
+        args: [],
+      },
+      {
+        name: "reportexternal",
+        description: "ReportExternal",
         acceptsArgs: true,
         args: [],
       },
@@ -130,6 +140,15 @@ vi.mock("../../auto-reply/commands-registry.js", () => {
           ],
         };
       }
+      if (params.command?.key === "reportexternal") {
+        return {
+          arg: { name: "period", description: "period" },
+          choices: Array.from({ length: 140 }, (_v, i) => ({
+            value: `period-${i + 1}`,
+            label: `Period ${i + 1}`,
+          })),
+        };
+      }
       if (params.command?.key === "unsafeconfirm") {
         return {
           arg: { name: "mode_*`~<&>", description: "mode" },
@@ -195,6 +214,7 @@ function findFirstActionsBlock(payload: { blocks?: Array<{ type: string }> }) {
 function createArgMenusHarness() {
   const commands = new Map<string, (args: unknown) => Promise<void>>();
   const actions = new Map<string, (args: unknown) => Promise<void>>();
+  const options = new Map<string, (args: unknown) => Promise<void>>();
 
   const postEphemeral = vi.fn().mockResolvedValue({ ok: true });
   const app = {
@@ -204,6 +224,9 @@ function createArgMenusHarness() {
     },
     action: (id: string, handler: (args: unknown) => Promise<void>) => {
       actions.set(id, handler);
+    },
+    options: (id: string, handler: (args: unknown) => Promise<void>) => {
+      options.set(id, handler);
     },
   };
 
@@ -240,7 +263,7 @@ function createArgMenusHarness() {
     config: { commands: { native: true, nativeSkills: false } },
   } as unknown;
 
-  return { commands, actions, postEphemeral, ctx, account };
+  return { commands, actions, options, postEphemeral, ctx, account };
 }
 
 describe("Slack native command argument menus", () => {
@@ -248,9 +271,11 @@ describe("Slack native command argument menus", () => {
   let usageHandler: (args: unknown) => Promise<void>;
   let reportHandler: (args: unknown) => Promise<void>;
   let reportCompactHandler: (args: unknown) => Promise<void>;
+  let reportExternalHandler: (args: unknown) => Promise<void>;
   let reportLongHandler: (args: unknown) => Promise<void>;
   let unsafeConfirmHandler: (args: unknown) => Promise<void>;
   let argMenuHandler: (args: unknown) => Promise<void>;
+  let argMenuOptionsHandler: (args: unknown) => Promise<void>;
 
   beforeAll(async () => {
     harness = createArgMenusHarness();
@@ -271,6 +296,11 @@ describe("Slack native command argument menus", () => {
       throw new Error("Missing /reportcompact handler");
     }
     reportCompactHandler = reportCompact;
+    const reportExternal = harness.commands.get("/reportexternal");
+    if (!reportExternal) {
+      throw new Error("Missing /reportexternal handler");
+    }
+    reportExternalHandler = reportExternal;
     const reportLong = harness.commands.get("/reportlong");
     if (!reportLong) {
       throw new Error("Missing /reportlong handler");
@@ -287,6 +317,11 @@ describe("Slack native command argument menus", () => {
       throw new Error("Missing arg-menu action handler");
     }
     argMenuHandler = argMenu;
+    const argMenuOptions = harness.options.get("openclaw_cmdarg");
+    if (!argMenuOptions) {
+      throw new Error("Missing arg-menu options handler");
+    }
+    argMenuOptionsHandler = argMenuOptions;
   });
 
   beforeEach(() => {
@@ -496,6 +531,77 @@ describe("Slack native command argument menus", () => {
     expect(dispatchMock).toHaveBeenCalledTimes(1);
     const call = dispatchMock.mock.calls[0]?.[0] as { ctx?: { Body?: string } };
     expect(call.ctx?.Body).toBe("/reportcompact quarter");
+  });
+
+  it("shows an external_select menu when choices exceed static_select options max", async () => {
+    const respond = vi.fn().mockResolvedValue(undefined);
+    const ack = vi.fn().mockResolvedValue(undefined);
+
+    await reportExternalHandler({
+      command: {
+        user_id: "U1",
+        user_name: "Ada",
+        channel_id: "C1",
+        channel_name: "directmessage",
+        text: "",
+        trigger_id: "t1",
+      },
+      ack,
+      respond,
+    });
+
+    expect(respond).toHaveBeenCalledTimes(1);
+    const payload = respond.mock.calls[0]?.[0] as {
+      blocks?: Array<{ type: string; block_id?: string }>;
+    };
+    const actions = findFirstActionsBlock(payload);
+    const element = actions?.elements?.[0];
+    expect(element?.type).toBe("external_select");
+    expect(element?.action_id).toBe("openclaw_cmdarg");
+    expect(payload.blocks?.find((block) => block.type === "actions")?.block_id).toContain(
+      "openclaw_cmdarg_ext:",
+    );
+  });
+
+  it("serves filtered options for external_select menus", async () => {
+    const respond = vi.fn().mockResolvedValue(undefined);
+    const ack = vi.fn().mockResolvedValue(undefined);
+
+    await reportExternalHandler({
+      command: {
+        user_id: "U1",
+        user_name: "Ada",
+        channel_id: "C1",
+        channel_name: "directmessage",
+        text: "",
+        trigger_id: "t1",
+      },
+      ack,
+      respond,
+    });
+
+    const payload = respond.mock.calls[0]?.[0] as {
+      blocks?: Array<{ type: string; block_id?: string }>;
+    };
+    const blockId = payload.blocks?.find((block) => block.type === "actions")?.block_id;
+    expect(blockId).toContain("openclaw_cmdarg_ext:");
+
+    const ackOptions = vi.fn().mockResolvedValue(undefined);
+    await argMenuOptionsHandler({
+      ack: ackOptions,
+      body: {
+        user: { id: "U1" },
+        value: "period 12",
+        actions: [{ block_id: blockId }],
+      },
+    });
+
+    expect(ackOptions).toHaveBeenCalledTimes(1);
+    const optionsPayload = ackOptions.mock.calls[0]?.[0] as {
+      options?: Array<{ text?: { text?: string }; value?: string }>;
+    };
+    const optionTexts = (optionsPayload.options ?? []).map((option) => option.text?.text ?? "");
+    expect(optionTexts.some((text) => text.includes("Period 12"))).toBe(true);
   });
 
   it("rejects menu clicks from other users", async () => {
