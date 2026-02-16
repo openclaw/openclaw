@@ -17,13 +17,15 @@ const MAX_IMAGE_DIMENSION_PX = 2000;
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const log = createSubsystemLogger("agents/tool-images");
 
-// Valid base64 character set (standard + URL-safe variants)
-const BASE64_REGEX = /^[A-Za-z0-9+/=_-]*$/;
+// Valid base64: alphanumeric, +, /, with 0-2 trailing = padding only
+// This regex ensures = only appears at the end as valid padding
+const BASE64_REGEX = /^[A-Za-z0-9+/]*={0,2}$/;
 
 /**
  * Validates and normalizes base64 image data before processing.
  * - Strips data URL prefixes (e.g., "data:image/png;base64,")
- * - Validates base64 character set
+ * - Converts URL-safe base64 to standard base64 (- → +, _ → /)
+ * - Validates base64 character set and structure
  * - Ensures the string is not empty after trimming
  *
  * Returns the cleaned base64 string or throws an error if invalid.
@@ -41,16 +43,15 @@ function validateAndNormalizeBase64(base64: string): string {
     throw new Error("Base64 data is empty");
   }
 
-  // Check for valid base64 characters
+  // Normalize URL-safe base64 to standard base64
+  // URL-safe uses - instead of + and _ instead of /
+  data = data.replace(/-/g, "+").replace(/_/g, "/");
+
+  // Check for valid base64 characters and structure
+  // The regex ensures = only appears as 0-2 trailing padding chars
   // Node's Buffer.from silently ignores invalid chars, but Anthropic API rejects them
   if (!BASE64_REGEX.test(data)) {
-    throw new Error("Base64 data contains invalid characters");
-  }
-
-  // Validate base64 padding (should be 0, 1, or 2 '=' chars at end)
-  const paddingMatch = data.match(/=+$/);
-  if (paddingMatch && paddingMatch[0].length > 2) {
-    throw new Error("Base64 data has invalid padding");
+    throw new Error("Base64 data contains invalid characters or malformed padding");
   }
 
   // Check that length is valid for base64 (must be multiple of 4 when padded)
