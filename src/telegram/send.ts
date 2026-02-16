@@ -74,6 +74,8 @@ type TelegramReactionOpts = {
 
 const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
 const THREAD_NOT_FOUND_RE = /400:\s*Bad Request:\s*message thread not found/i;
+const MESSAGE_NOT_MODIFIED_RE =
+  /400:\s*Bad Request:\s*message is not modified|MESSAGE_NOT_MODIFIED/i;
 const diagLogger = createSubsystemLogger("telegram/diagnostic");
 
 function createTelegramHttpLogger(cfg: ReturnType<typeof loadConfig>) {
@@ -180,6 +182,10 @@ function normalizeMessageId(raw: string | number): number {
 
 function isTelegramThreadNotFoundError(err: unknown): boolean {
   return THREAD_NOT_FOUND_RE.test(formatErrorMessage(err));
+}
+
+function isTelegramMessageNotModifiedError(err: unknown): boolean {
+  return MESSAGE_NOT_MODIFIED_RE.test(formatErrorMessage(err));
 }
 
 function hasMessageThreadIdParam(params?: Record<string, unknown>): boolean {
@@ -730,10 +736,15 @@ export async function editMessageTelegram(
     verbose: opts.verbose,
   });
   const logHttpError = createTelegramHttpLogger(cfg);
-  const requestWithDiag = <T>(fn: () => Promise<T>, label?: string) =>
+  const requestWithDiag = <T>(
+    fn: () => Promise<T>,
+    label?: string,
+    shouldLog?: (err: unknown) => boolean,
+  ) =>
     withTelegramApiErrorLogging({
       operation: label ?? "request",
       fn: () => request(fn, label),
+      shouldLog,
     }).catch((err) => {
       logHttpError(label ?? "request", err);
       throw err;
@@ -768,7 +779,12 @@ export async function editMessageTelegram(
   await requestWithDiag(
     () => api.editMessageText(chatId, messageId, htmlText, editParams),
     "editMessage",
+    (err) => !isTelegramMessageNotModifiedError(err),
   ).catch(async (err) => {
+    if (isTelegramMessageNotModifiedError(err)) {
+      return;
+    }
+
     // Telegram rejects malformed HTML. Fall back to plain text.
     const errText = formatErrorMessage(err);
     if (PARSE_ERR_RE.test(errText)) {
@@ -788,7 +804,13 @@ export async function editMessageTelegram(
             ? api.editMessageText(chatId, messageId, text, plainParams)
             : api.editMessageText(chatId, messageId, text),
         "editMessage-plain",
-      );
+        (plainErr) => !isTelegramMessageNotModifiedError(plainErr),
+      ).catch((plainErr) => {
+        if (isTelegramMessageNotModifiedError(plainErr)) {
+          return;
+        }
+        throw plainErr;
+      });
     }
     throw err;
   });

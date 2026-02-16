@@ -1321,6 +1321,22 @@ describe("editMessageTelegram", () => {
     );
   });
 
+  it("treats 'message is not modified' as success", async () => {
+    botApi.editMessageText.mockRejectedValueOnce(
+      new Error(
+        "400: Bad Request: message is not modified: specified new message content and reply markup are exactly the same as a current content and reply markup of the message",
+      ),
+    );
+
+    await expect(
+      editMessageTelegram("123", 1, "hi", {
+        token: "tok",
+        cfg: {},
+      }),
+    ).resolves.toEqual({ ok: true, messageId: "1", chatId: "123" });
+    expect(botApi.editMessageText).toHaveBeenCalledTimes(1);
+  });
+
   it("disables link previews when linkPreview is false", async () => {
     botApi.editMessageText.mockResolvedValue({ message_id: 1, chat: { id: "123" } });
 
