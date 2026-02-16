@@ -1,0 +1,200 @@
+[
+  {
+    "id": "unknown_command_static",
+    "text": "Unknown command. Use /help.",
+    "expect": "allow",
+    "description": "Default response for unknown slash commands"
+  },
+  {
+    "id": "owner_unknown_command_debug",
+    "text": "Unknown command. Use /help, /status.",
+    "expect": "allow",
+    "description": "Owner-only debug response with status hint"
+  },
+  {
+    "id": "normal_reply_unicode",
+    "text": "Hello! How can I help you today?",
+    "expect": "allow",
+    "description": "Normal assistant reply"
+  },
+  {
+    "id": "diag_heartbeat",
+    "text": "HEARTBEAT REPORT",
+    "expect": "drop",
+    "description": "Internal heartbeat diagnostics should not reach users"
+  },
+  {
+    "id": "diag_cron_gateway_disconnected",
+    "text": "CRON GATEWAY DISCONNECTED",
+    "expect": "drop",
+    "description": "Cron system diagnostics leak"
+  },
+  {
+    "id": "diag_gateway_closed",
+    "text": "Gateway closed (normal closure, no specific reason)",
+    "expect": "drop",
+    "description": "Gateway lifecycle leak"
+  },
+  {
+    "id": "diag_http_400",
+    "text": "400 status code (no body)",
+    "expect": "drop",
+    "description": "HTTP error diagnostics should not reach users"
+  },
+  {
+    "id": "diag_http_401",
+    "text": "401 status code",
+    "expect": "drop",
+    "description": "Auth error diagnostics leak"
+  },
+  {
+    "id": "diag_http_403",
+    "text": "403 status code",
+    "expect": "drop",
+    "description": "Forbidden error diagnostics leak"
+  },
+  {
+    "id": "diag_ws_localhost",
+    "text": "ws://127.0.0.1:8787",
+    "expect": "drop",
+    "description": "Internal WebSocket URLs should not leak"
+  },
+  {
+    "id": "diag_run_id",
+    "text": "Run ID: 123456",
+    "expect": "drop",
+    "description": "Internal run IDs should not reach users"
+  },
+  {
+    "id": "diag_status_error",
+    "text": "Status: error",
+    "expect": "drop",
+    "description": "Internal status diagnostics"
+  },
+  {
+    "id": "diag_configuration_file",
+    "text": "Configuration file: ~/.openclaw/openclaw.json",
+    "expect": "drop",
+    "description": "Config path leaks reveal system structure"
+  },
+  {
+    "id": "diag_bind_address",
+    "text": "Bind address: 127.0.0.1",
+    "expect": "drop",
+    "description": "Internal bind address leak"
+  },
+  {
+    "id": "diag_no_data",
+    "text": "NO_DATA",
+    "expect": "drop",
+    "description": "Sentinel/placeholder leak"
+  },
+  {
+    "id": "diag_no_context",
+    "text": "NO_CONTEXT",
+    "expect": "drop",
+    "description": "Internal context sentinel leak"
+  },
+  {
+    "id": "diag_no_content",
+    "text": "NOCONTENT",
+    "expect": "drop",
+    "description": "Missing content sentinel leak"
+  },
+  {
+    "id": "diag_no_message_content",
+    "text": "NO_MESSAGE_CONTENT_HERE",
+    "expect": "drop",
+    "description": "Template placeholder leak"
+  },
+  {
+    "id": "diag_no_api_key",
+    "text": "NO_API_KEY",
+    "expect": "drop",
+    "description": "Missing credential sentinel leak"
+  },
+  {
+    "id": "diag_tool_validation_failed",
+    "text": "tool call validation failed",
+    "expect": "drop",
+    "description": "Tool runtime error should not reach users"
+  },
+  {
+    "id": "diag_not_in_request_tools",
+    "text": "not in request.tools",
+    "expect": "drop",
+    "description": "Tool policy error leak"
+  },
+  {
+    "id": "diag_sessions_send",
+    "text": "sessions_send",
+    "expect": "drop",
+    "description": "Internal tool name leak"
+  },
+  {
+    "id": "diag_function_call",
+    "text": "function_call",
+    "expect": "drop",
+    "description": "Function call scaffolding leak"
+  },
+  {
+    "id": "diag_media_prefix",
+    "text": "MEDIA:/path/to/file.jpg",
+    "expect": "drop",
+    "description": "Internal media path prefix leak"
+  },
+  {
+    "id": "wrapper_reply_tag",
+    "text": "<reply>Hello</reply>",
+    "expect": "strip_wrapper",
+    "description": "Reply wrapper tags should be stripped"
+  },
+  {
+    "id": "wrapper_no_reply",
+    "text": "<NO_REPLY>",
+    "expect": "drop",
+    "description": "NO_REPLY sentinel should not reach users"
+  },
+  {
+    "id": "wrapper_no_reply_underscore",
+    "text": "_NO_REPLY",
+    "expect": "drop",
+    "description": "Underscore NO_REPLY variant"
+  },
+  {
+    "id": "wrapper_no_reply_dash",
+    "text": "NO-REPLY",
+    "expect": "drop",
+    "description": "Dash NO-REPLY variant"
+  },
+  {
+    "id": "wrapper_tool_schema",
+    "text": "<tool_schema>",
+    "expect": "drop",
+    "description": "Tool schema scaffolding leak"
+  },
+  {
+    "id": "wrapper_search_web",
+    "text": "<searchWeb>",
+    "expect": "drop",
+    "description": "Web search scaffolding leak"
+  },
+  {
+    "id": "diag_gateway_timeout",
+    "text": "gateway timeout after 30000ms",
+    "expect": "drop",
+    "description": "Gateway timeout diagnostics"
+  },
+  {
+    "id": "diag_connect_refused",
+    "text": "connect ECONNREFUSED",
+    "expect": "drop",
+    "description": "Connection error diagnostics"
+  },
+  {
+    "id": "diag_tts_scaffolding",
+    "text": "TTS_AUDIO_PLACEHOLDER",
+    "expect": "drop",
+    "description": "TTS scaffolding placeholder"
+  }
+]
