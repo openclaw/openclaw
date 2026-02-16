@@ -1,5 +1,0 @@
-# Ignore dependencies and temp files
-**/node_modules/
-tally_helper.ps1
-
-.env

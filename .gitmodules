@@ -1,6 +1,3 @@
-[submodule "workspace/AutifyME"]
-	path = workspace/AutifyME
-	url = https://github.com/akeshr/AutifyME.git
-[submodule "workspace/Pavisha"]
-	path = workspace/Pavisha
-	url = https://github.com/PRIYASUMANKESHRI/PAVISHA.git
+[submodule "workspace"]
+	path = workspace
+	url = https://github.com/akeshr/openclaw-workspace.git
