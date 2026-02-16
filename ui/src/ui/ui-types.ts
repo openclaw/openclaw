@@ -19,7 +19,6 @@ export type CronFormState = {
   description: string;
   agentId: string;
   enabled: boolean;
-  notify: boolean;
   scheduleKind: "at" | "every" | "cron";
   scheduleAt: string;
   everyAmount: string;
@@ -30,7 +29,7 @@ export type CronFormState = {
   wakeMode: "next-heartbeat" | "now";
   payloadKind: "systemEvent" | "agentTurn";
   payloadText: string;
-  deliveryMode: "none" | "announce";
+  deliveryMode: "none" | "announce" | "webhook";
   deliveryChannel: string;
   deliveryTo: string;
   timeoutSeconds: string;

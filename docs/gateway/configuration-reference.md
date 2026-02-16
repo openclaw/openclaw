@@ -2320,7 +2320,7 @@ Current builds no longer include the TCP bridge. Nodes connect over the Gateway 
   cron: {
     enabled: true,
     maxConcurrentRuns: 2,
-    webhook: "https://example.invalid/cron-finished", // optional, must be http:// or https://
+    webhook: "https://example.invalid/legacy", // deprecated fallback for stored notify:true jobs
     webhookToken: "replace-with-dedicated-token", // optional bearer token for outbound webhook auth
     sessionRetention: "24h", // duration string or false
   },
@@ -2328,8 +2328,8 @@ Current builds no longer include the TCP bridge. Nodes connect over the Gateway 
 ```
 
 - `sessionRetention`: how long to keep completed cron sessions before pruning. Default: `24h`.
-- `webhook`: finished-run webhook endpoint, only used when the job has `notify: true`.
-- `webhookToken`: dedicated bearer token for webhook auth, if omitted no auth header is sent.
+- `webhookToken`: bearer token used for cron webhook POST delivery (`delivery.mode = "webhook"`), if omitted no auth header is sent.
+- `webhook`: deprecated legacy fallback webhook URL (http/https) used only for stored jobs that still have `notify: true`.
 
 See [Cron Jobs](/automation/cron-jobs).
 
