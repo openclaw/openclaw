@@ -13,11 +13,19 @@ function safeTrim(value: unknown): string | undefined {
 export function buildInboundMetaSystemPrompt(ctx: TemplateContext): string {
   const chatType = normalizeChatType(ctx.ChatType);
   const isDirect = !chatType || chatType === "direct";
+  const messageId = safeTrim(ctx.MessageSid);
+  const messageIdFull = safeTrim(ctx.MessageSidFull);
+  const replyToId = safeTrim(ctx.ReplyToId);
+  const chatId = safeTrim(ctx.OriginatingTo);
 
   // Keep system metadata strictly free of attacker-controlled strings (sender names, group subjects, etc.).
   // Those belong in the user-role "untrusted context" blocks.
   const payload = {
     schema: "openclaw.inbound_meta.v1",
+    message_id: messageId,
+    message_id_full: messageIdFull && messageIdFull !== messageId ? messageIdFull : undefined,
+    chat_id: chatId,
+    reply_to_id: replyToId,
     channel: safeTrim(ctx.OriginatingChannel) ?? safeTrim(ctx.Surface) ?? safeTrim(ctx.Provider),
     provider: safeTrim(ctx.Provider),
     surface: safeTrim(ctx.Surface),
