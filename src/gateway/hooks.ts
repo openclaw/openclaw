@@ -177,8 +177,13 @@ export function extractHookToken(req: IncomingMessage): string | undefined {
 export async function readJsonBody(
   req: IncomingMessage,
   maxBytes: number,
+  timeoutMs?: number,
 ): Promise<{ ok: true; value: unknown } | { ok: false; error: string }> {
-  const result = await readJsonBodyWithLimit(req, { maxBytes, emptyObjectOnEmpty: true });
+  const result = await readJsonBodyWithLimit(req, {
+    maxBytes,
+    timeoutMs,
+    emptyObjectOnEmpty: true,
+  });
   if (result.ok) {
     return result;
   }
