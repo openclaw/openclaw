@@ -158,6 +158,12 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
   threading: {
     resolveReplyToMode: ({ cfg }) => cfg.channels?.discord?.replyToMode ?? "off",
   },
+  agentPrompt: {
+    messageToolHints: () => [
+      "- Discord components: set `components` when sending messages to include buttons, selects, or v2 containers.",
+      "- Forms: add `components.modal` (title, fields). OpenClaw adds a trigger button and routes submissions as new messages.",
+    ],
+  },
   messaging: {
     normalizeTarget: normalizeDiscordMessagingTarget,
     targetResolver: {
@@ -285,28 +291,31 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
     chunker: null,
     textChunkLimit: 2000,
     pollMaxOptions: 10,
-    sendText: async ({ to, text, accountId, deps, replyToId }) => {
+    sendText: async ({ to, text, accountId, deps, replyToId, silent }) => {
       const send = deps?.sendDiscord ?? getDiscordRuntime().channel.discord.sendMessageDiscord;
       const result = await send(to, text, {
         verbose: false,
         replyTo: replyToId ?? undefined,
         accountId: accountId ?? undefined,
+        silent: silent ?? undefined,
       });
       return { channel: "discord", ...result };
     },
-    sendMedia: async ({ to, text, mediaUrl, accountId, deps, replyToId }) => {
+    sendMedia: async ({ to, text, mediaUrl, accountId, deps, replyToId, silent }) => {
       const send = deps?.sendDiscord ?? getDiscordRuntime().channel.discord.sendMessageDiscord;
       const result = await send(to, text, {
         verbose: false,
         mediaUrl,
         replyTo: replyToId ?? undefined,
         accountId: accountId ?? undefined,
+        silent: silent ?? undefined,
       });
       return { channel: "discord", ...result };
     },
-    sendPoll: async ({ to, poll, accountId }) =>
+    sendPoll: async ({ to, poll, accountId, silent }) =>
       await getDiscordRuntime().channel.discord.sendPollDiscord(to, poll, {
         accountId: accountId ?? undefined,
+        silent: silent ?? undefined,
       }),
   },
   status: {

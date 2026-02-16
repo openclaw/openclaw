@@ -1,13 +1,12 @@
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
-import {
-  buildWorkspaceSkillStatus,
-  type SkillStatusEntry,
-  type SkillStatusReport,
-} from "../agents/skills-status.js";
-import { formatSkillInfo, formatSkillsCheck, formatSkillsList } from "./skills-cli.js";
+import { describe, expect, it, vi } from "vitest";
+import type { SkillStatusEntry, SkillStatusReport } from "../agents/skills-status.js";
+import { formatSkillInfo, formatSkillsCheck, formatSkillsList } from "./skills-cli.format.js";
+
+// Unit tests: don't pay the runtime cost of loading/parsing the real skills loader.
+vi.mock("@mariozechner/pi-coding-agent", () => ({
+  loadSkillsFromDir: () => ({ skills: [] }),
+  formatSkillsForPrompt: () => "",
+}));
 
 function createMockSkill(overrides: Partial<SkillStatusEntry> = {}): SkillStatusEntry {
   return {
@@ -210,67 +209,6 @@ describe("skills-cli", () => {
       const parsed = JSON.parse(output);
       expect(parsed.summary.eligible).toBe(1);
       expect(parsed.summary.total).toBe(2);
-    });
-  });
-
-  describe("integration: loads real skills from bundled directory", () => {
-    function resolveBundledSkillsDir(): string | undefined {
-      const moduleDir = path.dirname(fileURLToPath(import.meta.url));
-      const root = path.resolve(moduleDir, "..", "..");
-      const candidate = path.join(root, "skills");
-      if (fs.existsSync(candidate)) {
-        return candidate;
-      }
-      return undefined;
-    }
-
-    it("loads bundled skills and formats them", () => {
-      const bundledDir = resolveBundledSkillsDir();
-      if (!bundledDir) {
-        // Skip if skills dir not found (e.g., in CI without skills)
-        return;
-      }
-
-      const report = buildWorkspaceSkillStatus("/tmp", {
-        managedSkillsDir: "/nonexistent",
-      });
-
-      // Should have loaded some skills
-      expect(report.skills.length).toBeGreaterThan(0);
-
-      // Format should work without errors
-      const listOutput = formatSkillsList(report, {});
-      expect(listOutput).toContain("Skills");
-
-      const checkOutput = formatSkillsCheck(report, {});
-      expect(checkOutput).toContain("Total:");
-
-      // JSON output should be valid
-      const jsonOutput = formatSkillsList(report, { json: true });
-      const parsed = JSON.parse(jsonOutput);
-      expect(parsed.skills).toBeInstanceOf(Array);
-    });
-
-    it("formats info for a real bundled skill (peekaboo)", () => {
-      const bundledDir = resolveBundledSkillsDir();
-      if (!bundledDir) {
-        return;
-      }
-
-      const report = buildWorkspaceSkillStatus("/tmp", {
-        managedSkillsDir: "/nonexistent",
-      });
-
-      // peekaboo is a bundled skill that should always exist
-      const peekaboo = report.skills.find((s) => s.name === "peekaboo");
-      if (!peekaboo) {
-        // Skip if peekaboo not found
-        return;
-      }
-
-      const output = formatSkillInfo(report, "peekaboo", {});
-      expect(output).toContain("peekaboo");
-      expect(output).toContain("Details:");
     });
   });
 });

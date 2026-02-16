@@ -191,6 +191,10 @@ export function splitMediaFromOutput(raw: string): {
         if (invalidParts.length > 0) {
           pieces.push(invalidParts.join(" "));
         }
+      } else if (looksLikeLocalPath) {
+        // Strip MEDIA: lines with local paths even when invalid (e.g. absolute paths
+        // from internal tools like TTS). They should never leak as visible text.
+        foundMediaToken = true;
       } else {
         // If no valid media was found in this match, keep the original token text.
         pieces.push(match[0]);

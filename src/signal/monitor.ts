@@ -1,12 +1,12 @@
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SignalReactionNotificationMode } from "../config/types.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { chunkTextWithMode, resolveChunkMode, resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "../auto-reply/reply/history.js";
 import { loadConfig } from "../config/config.js";
 import { waitForTransportReady } from "../infra/transport-ready.js";
 import { saveMediaBuffer } from "../media/store.js";
+import { createNonExitingRuntime, type RuntimeEnv } from "../runtime.js";
 import { normalizeE164 } from "../utils.js";
 import { resolveSignalAccount } from "./accounts.js";
 import { signalCheck, signalRpcRequest } from "./client.js";
@@ -57,15 +57,7 @@ export type MonitorSignalOpts = {
 };
 
 function resolveRuntime(opts: MonitorSignalOpts): RuntimeEnv {
-  return (
-    opts.runtime ?? {
-      log: console.log,
-      error: console.error,
-      exit: (code: number): never => {
-        throw new Error(`exit ${code}`);
-      },
-    }
-  );
+  return opts.runtime ?? createNonExitingRuntime();
 }
 
 function normalizeAllowList(raw?: Array<string | number>): string[] {

@@ -22,6 +22,13 @@ export type DiagnosticUsageEvent = DiagnosticBaseEvent & {
     promptTokens?: number;
     total?: number;
   };
+  lastCallUsage?: {
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+    total?: number;
+  };
   context?: {
     limit?: number;
     used?: number;

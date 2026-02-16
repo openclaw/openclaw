@@ -29,6 +29,7 @@ import {
   buildTelegramGroupPeerId,
   buildTelegramParentPeer,
   resolveTelegramForumThreadId,
+  resolveTelegramGroupAllowFromContext,
 } from "./bot/helpers.js";
 import { migrateTelegramGroupConfig } from "./group-migration.js";
 import { resolveTelegramInlineButtonsScope } from "./inline-buttons.js";
@@ -57,11 +58,21 @@ export const registerTelegramHandlers = ({
   processMessage,
   logger,
 }: RegisterTelegramHandlerParams) => {
+  const DEFAULT_TEXT_FRAGMENT_MAX_GAP_MS = 1500;
   const TELEGRAM_TEXT_FRAGMENT_START_THRESHOLD_CHARS = 4000;
-  const TELEGRAM_TEXT_FRAGMENT_MAX_GAP_MS = 1500;
+  const TELEGRAM_TEXT_FRAGMENT_MAX_GAP_MS =
+    typeof opts.testTimings?.textFragmentGapMs === "number" &&
+    Number.isFinite(opts.testTimings.textFragmentGapMs)
+      ? Math.max(10, Math.floor(opts.testTimings.textFragmentGapMs))
+      : DEFAULT_TEXT_FRAGMENT_MAX_GAP_MS;
   const TELEGRAM_TEXT_FRAGMENT_MAX_ID_GAP = 1;
   const TELEGRAM_TEXT_FRAGMENT_MAX_PARTS = 12;
   const TELEGRAM_TEXT_FRAGMENT_MAX_TOTAL_CHARS = 50_000;
+  const mediaGroupTimeoutMs =
+    typeof opts.testTimings?.mediaGroupFlushMs === "number" &&
+    Number.isFinite(opts.testTimings.mediaGroupFlushMs)
+      ? Math.max(10, Math.floor(opts.testTimings.mediaGroupFlushMs))
+      : MEDIA_GROUP_TIMEOUT_MS;
 
   const mediaGroupBuffer = new Map<string, MediaGroupEntry>();
   let mediaGroupProcessing: Promise<void> = Promise.resolve();
@@ -216,7 +227,11 @@ export const registerTelegramHandlers = ({
         }
       }
 
-      const storeAllowFrom = await readChannelAllowFromStore("telegram").catch(() => []);
+      const storeAllowFrom = await readChannelAllowFromStore(
+        "telegram",
+        process.env,
+        accountId,
+      ).catch(() => []);
       await processMessage(primaryEntry.ctx, allMedia, storeAllowFrom);
     } catch (err) {
       runtime.error?.(danger(`media group handler failed: ${String(err)}`));
@@ -247,7 +262,11 @@ export const registerTelegramHandlers = ({
         date: last.msg.date ?? first.msg.date,
       };
 
-      const storeAllowFrom = await readChannelAllowFromStore("telegram").catch(() => []);
+      const storeAllowFrom = await readChannelAllowFromStore(
+        "telegram",
+        process.env,
+        accountId,
+      ).catch(() => []);
       const baseCtx = first.ctx;
       const getFile =
         typeof baseCtx.getFile === "function" ? baseCtx.getFile.bind(baseCtx) : async () => ({});
@@ -317,17 +336,16 @@ export const registerTelegramHandlers = ({
 
       const messageThreadId = callbackMessage.message_thread_id;
       const isForum = callbackMessage.chat.is_forum === true;
-      const resolvedThreadId = resolveTelegramForumThreadId({
+      const groupAllowContext = await resolveTelegramGroupAllowFromContext({
+        chatId,
+        accountId,
         isForum,
         messageThreadId,
+        groupAllowFrom,
+        resolveTelegramGroupConfig,
       });
-      const { groupConfig, topicConfig } = resolveTelegramGroupConfig(chatId, resolvedThreadId);
-      const storeAllowFrom = await readChannelAllowFromStore("telegram").catch(() => []);
-      const groupAllowOverride = firstDefined(topicConfig?.allowFrom, groupConfig?.allowFrom);
-      const effectiveGroupAllow = normalizeAllowFromWithStore({
-        allowFrom: groupAllowOverride ?? groupAllowFrom,
-        storeAllowFrom,
-      });
+      const { resolvedThreadId, storeAllowFrom, groupConfig, topicConfig, effectiveGroupAllow } =
+        groupAllowContext;
       const effectiveDmAllow = normalizeAllowFromWithStore({
         allowFrom: telegramCfg.allowFrom,
         storeAllowFrom,
@@ -347,7 +365,7 @@ export const registerTelegramHandlers = ({
           );
           return;
         }
-        if (typeof groupAllowOverride !== "undefined") {
+        if (groupAllowContext.hasGroupAllowOverride) {
           const allowed =
             senderId &&
             isSenderAllowed({
@@ -688,18 +706,22 @@ export const registerTelegramHandlers = ({
       const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
       const messageThreadId = msg.message_thread_id;
       const isForum = msg.chat.is_forum === true;
-      const resolvedThreadId = resolveTelegramForumThreadId({
+      const groupAllowContext = await resolveTelegramGroupAllowFromContext({
+        chatId,
+        accountId,
         isForum,
         messageThreadId,
+        groupAllowFrom,
+        resolveTelegramGroupConfig,
       });
-      const storeAllowFrom = await readChannelAllowFromStore("telegram").catch(() => []);
-      const { groupConfig, topicConfig } = resolveTelegramGroupConfig(chatId, resolvedThreadId);
-      const groupAllowOverride = firstDefined(topicConfig?.allowFrom, groupConfig?.allowFrom);
-      const effectiveGroupAllow = normalizeAllowFromWithStore({
-        allowFrom: groupAllowOverride ?? groupAllowFrom,
+      const {
+        resolvedThreadId,
         storeAllowFrom,
-      });
-      const hasGroupAllowOverride = typeof groupAllowOverride !== "undefined";
+        groupConfig,
+        topicConfig,
+        effectiveGroupAllow,
+        hasGroupAllowOverride,
+      } = groupAllowContext;
 
       if (isGroup) {
         if (groupConfig?.enabled === false) {
@@ -859,7 +881,7 @@ export const registerTelegramHandlers = ({
               })
               .catch(() => undefined);
             await mediaGroupProcessing;
-          }, MEDIA_GROUP_TIMEOUT_MS);
+          }, mediaGroupTimeoutMs);
         } else {
           const entry: MediaGroupEntry = {
             messages: [{ msg, ctx }],
@@ -871,7 +893,7 @@ export const registerTelegramHandlers = ({
                 })
                 .catch(() => undefined);
               await mediaGroupProcessing;
-            }, MEDIA_GROUP_TIMEOUT_MS),
+            }, mediaGroupTimeoutMs),
           };
           mediaGroupBuffer.set(mediaGroupId, entry);
         }

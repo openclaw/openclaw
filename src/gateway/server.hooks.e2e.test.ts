@@ -3,10 +3,9 @@ import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
 import { drainSystemEvents, peekSystemEvents } from "../infra/system-events.js";
 import {
   cronIsolatedRun,
-  getFreePort,
   installGatewayTestHooks,
-  startGatewayServer,
   testState,
+  withGatewayServer,
   waitForSystemEvent,
 } from "./test-helpers.js";
 
@@ -20,9 +19,7 @@ describe("gateway server hooks", () => {
     testState.agentsConfig = {
       list: [{ id: "main", default: true }, { id: "hooks" }],
     };
-    const port = await getFreePort();
-    const server = await startGatewayServer(port);
-    try {
+    await withGatewayServer(async ({ port }) => {
       const resNoAuth = await fetch(`http://127.0.0.1:${port}/hooks/wake`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -194,9 +191,108 @@ describe("gateway server hooks", () => {
         body: "{",
       });
       expect(resBadJson.status).toBe(400);
-    } finally {
-      await server.close();
-    }
+    });
+  });
+
+  test("rejects request sessionKey unless hooks.allowRequestSessionKey is enabled", async () => {
+    testState.hooksConfig = { enabled: true, token: "hook-secret" };
+    await withGatewayServer(async ({ port }) => {
+      const denied = await fetch(`http://127.0.0.1:${port}/hooks/agent`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer hook-secret",
+        },
+        body: JSON.stringify({
+          message: "Do it",
+          sessionKey: "agent:main:dm:u99999",
+        }),
+      });
+      expect(denied.status).toBe(400);
+      const deniedBody = (await denied.json()) as { error?: string };
+      expect(deniedBody.error).toContain("hooks.allowRequestSessionKey");
+    });
+  });
+
+  test("respects hooks session policy for request + mapping session keys", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: "hook-secret",
+      allowRequestSessionKey: true,
+      allowedSessionKeyPrefixes: ["hook:"],
+      defaultSessionKey: "hook:ingress",
+      mappings: [
+        {
+          match: { path: "mapped-ok" },
+          action: "agent",
+          messageTemplate: "Mapped: {{payload.subject}}",
+          sessionKey: "hook:mapped:{{payload.id}}",
+        },
+        {
+          match: { path: "mapped-bad" },
+          action: "agent",
+          messageTemplate: "Mapped: {{payload.subject}}",
+          sessionKey: "agent:main:main",
+        },
+      ],
+    };
+    await withGatewayServer(async ({ port }) => {
+      cronIsolatedRun.mockReset();
+      cronIsolatedRun.mockResolvedValue({ status: "ok", summary: "done" });
+
+      const defaultRoute = await fetch(`http://127.0.0.1:${port}/hooks/agent`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer hook-secret",
+        },
+        body: JSON.stringify({ message: "No key" }),
+      });
+      expect(defaultRoute.status).toBe(202);
+      await waitForSystemEvent();
+      const defaultCall = cronIsolatedRun.mock.calls[0]?.[0] as { sessionKey?: string } | undefined;
+      expect(defaultCall?.sessionKey).toBe("hook:ingress");
+      drainSystemEvents(resolveMainKey());
+
+      cronIsolatedRun.mockReset();
+      cronIsolatedRun.mockResolvedValue({ status: "ok", summary: "done" });
+      const mappedOk = await fetch(`http://127.0.0.1:${port}/hooks/mapped-ok`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer hook-secret",
+        },
+        body: JSON.stringify({ subject: "hello", id: "42" }),
+      });
+      expect(mappedOk.status).toBe(202);
+      await waitForSystemEvent();
+      const mappedCall = cronIsolatedRun.mock.calls[0]?.[0] as { sessionKey?: string } | undefined;
+      expect(mappedCall?.sessionKey).toBe("hook:mapped:42");
+      drainSystemEvents(resolveMainKey());
+
+      const requestBadPrefix = await fetch(`http://127.0.0.1:${port}/hooks/agent`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer hook-secret",
+        },
+        body: JSON.stringify({
+          message: "Bad key",
+          sessionKey: "agent:main:main",
+        }),
+      });
+      expect(requestBadPrefix.status).toBe(400);
+
+      const mappedBadPrefix = await fetch(`http://127.0.0.1:${port}/hooks/mapped-bad`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer hook-secret",
+        },
+        body: JSON.stringify({ subject: "hello" }),
+      });
+      expect(mappedBadPrefix.status).toBe(400);
+    });
   });
 
   test("enforces hooks.allowedAgentIds for explicit agent routing", async () => {
@@ -216,9 +312,7 @@ describe("gateway server hooks", () => {
     testState.agentsConfig = {
       list: [{ id: "main", default: true }, { id: "hooks" }],
     };
-    const port = await getFreePort();
-    const server = await startGatewayServer(port);
-    try {
+    await withGatewayServer(async ({ port }) => {
       cronIsolatedRun.mockReset();
       cronIsolatedRun.mockResolvedValueOnce({
         status: "ok",
@@ -285,9 +379,7 @@ describe("gateway server hooks", () => {
       const mappedDeniedBody = (await resMappedDenied.json()) as { error?: string };
       expect(mappedDeniedBody.error).toContain("hooks.allowedAgentIds");
       expect(peekSystemEvents(resolveMainKey()).length).toBe(0);
-    } finally {
-      await server.close();
-    }
+    });
   });
 
   test("denies explicit agentId when hooks.allowedAgentIds is empty", async () => {
@@ -299,9 +391,7 @@ describe("gateway server hooks", () => {
     testState.agentsConfig = {
       list: [{ id: "main", default: true }, { id: "hooks" }],
     };
-    const port = await getFreePort();
-    const server = await startGatewayServer(port);
-    try {
+    await withGatewayServer(async ({ port }) => {
       const resDenied = await fetch(`http://127.0.0.1:${port}/hooks/agent`, {
         method: "POST",
         headers: {
@@ -314,8 +404,57 @@ describe("gateway server hooks", () => {
       const deniedBody = (await resDenied.json()) as { error?: string };
       expect(deniedBody.error).toContain("hooks.allowedAgentIds");
       expect(peekSystemEvents(resolveMainKey()).length).toBe(0);
-    } finally {
-      await server.close();
-    }
+    });
+  });
+
+  test("throttles repeated hook auth failures and resets after success", async () => {
+    testState.hooksConfig = { enabled: true, token: "hook-secret" };
+    await withGatewayServer(async ({ port }) => {
+      const firstFail = await fetch(`http://127.0.0.1:${port}/hooks/wake`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer wrong",
+        },
+        body: JSON.stringify({ text: "blocked" }),
+      });
+      expect(firstFail.status).toBe(401);
+
+      let throttled: Response | null = null;
+      for (let i = 0; i < 20; i++) {
+        throttled = await fetch(`http://127.0.0.1:${port}/hooks/wake`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: "Bearer wrong",
+          },
+          body: JSON.stringify({ text: "blocked" }),
+        });
+      }
+      expect(throttled?.status).toBe(429);
+      expect(throttled?.headers.get("retry-after")).toBeTruthy();
+
+      const allowed = await fetch(`http://127.0.0.1:${port}/hooks/wake`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer hook-secret",
+        },
+        body: JSON.stringify({ text: "auth reset" }),
+      });
+      expect(allowed.status).toBe(200);
+      await waitForSystemEvent();
+      drainSystemEvents(resolveMainKey());
+
+      const failAfterSuccess = await fetch(`http://127.0.0.1:${port}/hooks/wake`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer wrong",
+        },
+        body: JSON.stringify({ text: "blocked" }),
+      });
+      expect(failAfterSuccess.status).toBe(401);
+    });
   });
 });
