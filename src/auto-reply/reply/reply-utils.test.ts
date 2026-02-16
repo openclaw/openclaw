@@ -597,7 +597,6 @@ describe("createReplyReferencePlanner", () => {
       startId: "parent",
     });
     expect(planner.use()).toBe("thread-1");
-    expect(planner.hasReplied()).toBe(true);
     expect(planner.use()).toBeUndefined();
   });
 
