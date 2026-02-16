@@ -1,5 +1,6 @@
 import type { SlackActionMiddlewareArgs, SlackCommandMiddlewareArgs } from "@slack/bolt";
 import type { ChatCommandDefinition, CommandArgs } from "../../auto-reply/commands-registry.js";
+import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { ResolvedSlackAccount } from "../accounts.js";
 import type { SlackMonitorContext } from "./context.js";
 import { formatAllowlistMatchMeta } from "../../channels/allowlist-match.js";
@@ -449,44 +450,7 @@ export async function registerSlackMonitorSlashCommands(params: {
         accountId: route.accountId,
       });
 
-      const { counts } = await dispatchReplyWithDispatcher({
-        ctx: ctxPayload,
-        cfg,
-        dispatcherOptions: {
-          ...prefixOptions,
-          deliver: async (payload) => {
-            const [
-              { deliverSlackSlashReplies },
-              { resolveChunkMode },
-              { resolveMarkdownTableMode },
-            ] = await Promise.all([
-              import("./replies.js"),
-              import("../../auto-reply/chunk.js"),
-              import("../../config/markdown-tables.js"),
-            ]);
-            await deliverSlackSlashReplies({
-              replies: [payload],
-              respond,
-              ephemeral: slashCommand.ephemeral,
-              textLimit: ctx.textLimit,
-              chunkMode: resolveChunkMode(cfg, "slack", route.accountId),
-              tableMode: resolveMarkdownTableMode({
-                cfg,
-                channel: "slack",
-                accountId: route.accountId,
-              }),
-            });
-          },
-          onError: (err, info) => {
-            runtime.error?.(danger(`slack slash ${info.kind} reply failed: ${String(err)}`));
-          },
-        },
-        replyOptions: {
-          skillFilter: channelConfig?.skills,
-          onModelSelected,
-        },
-      });
-      if (counts.final + counts.tool + counts.block === 0) {
+      const deliverSlashPayloads = async (replies: ReplyPayload[]) => {
         const [{ deliverSlackSlashReplies }, { resolveChunkMode }, { resolveMarkdownTableMode }] =
           await Promise.all([
             import("./replies.js"),
@@ -494,7 +458,7 @@ export async function registerSlackMonitorSlashCommands(params: {
             import("../../config/markdown-tables.js"),
           ]);
         await deliverSlackSlashReplies({
-          replies: [],
+          replies,
           respond,
           ephemeral: slashCommand.ephemeral,
           textLimit: ctx.textLimit,
@@ -505,6 +469,25 @@ export async function registerSlackMonitorSlashCommands(params: {
             accountId: route.accountId,
           }),
         });
+      };
+
+      const { counts } = await dispatchReplyWithDispatcher({
+        ctx: ctxPayload,
+        cfg,
+        dispatcherOptions: {
+          ...prefixOptions,
+          deliver: async (payload) => deliverSlashPayloads([payload]),
+          onError: (err, info) => {
+            runtime.error?.(danger(`slack slash ${info.kind} reply failed: ${String(err)}`));
+          },
+        },
+        replyOptions: {
+          skillFilter: channelConfig?.skills,
+          onModelSelected,
+        },
+      });
+      if (counts.final + counts.tool + counts.block === 0) {
+        await deliverSlashPayloads([]);
       }
     } catch (err) {
       runtime.error?.(danger(`slack slash handler failed: ${String(err)}`));
