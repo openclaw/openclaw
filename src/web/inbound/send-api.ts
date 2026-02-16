@@ -71,12 +71,14 @@ export function createWebSendApi(params: {
       } else {
         payload = { text };
       }
-      const miscOptions: MiscMessageGenerationOptions | undefined =
-        sendOptions?.linkPreview === false
-          ? // Baileys typing removed linkPreview from public options, but runtime still accepts it.
-            ({ linkPreview: null } as unknown as MiscMessageGenerationOptions)
-          : undefined;
-      const result = await params.sock.sendMessage(jid, payload, miscOptions);
+      let result;
+      if (sendOptions?.linkPreview === false) {
+        // Baileys types have changed across releases; keep backward-compatible runtime behavior.
+        const miscOptions = { linkPreview: null } as unknown as MiscMessageGenerationOptions;
+        result = await params.sock.sendMessage(jid, payload, miscOptions);
+      } else {
+        result = await params.sock.sendMessage(jid, payload);
+      }
       const accountId = sendOptions?.accountId ?? params.defaultAccountId;
       recordWhatsAppOutbound(accountId);
       const messageId = resolveOutboundMessageId(result);
