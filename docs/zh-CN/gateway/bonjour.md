@@ -29,11 +29,11 @@ OpenClaw 使用 Bonjour（mDNS / DNS‑SD）作为**仅限局域网的便捷方�
 
 1. 在 Gateway 网关主机上运行 DNS 服务器（可通过 Tailnet 访问）。
 2. 在专用区域下发布 `_openclaw-gw._tcp` 的 DNS‑SD 记录
-   （示例：`openclaw.internal.`）。
+   （示例：`openclaw.internal`）。
 3. 配置 Tailscale **分割 DNS**，使你选择的域名通过该
    DNS 服务器为客户端（包括 iOS）解析。
 
-OpenClaw 支持任何发现域名；`openclaw.internal.` 只是一个示例。
+OpenClaw 支持任何发现域名；`openclaw.internal` 只是一个示例。
 iOS/Android 节点同时浏览 `local.` 和你配置的广域域名。
 
 ### Gateway 网关配置（推荐）
@@ -54,12 +54,12 @@ openclaw dns setup --apply
 这会安装 CoreDNS 并配置它：
 
 - 仅在 Gateway 网关的 Tailscale 接口上监听 53 端口
-- 从 `~/.openclaw/dns/<domain>.db` 提供你选择的域名服务（示例：`openclaw.internal.`）
+- 从 `~/.openclaw/dns/<domain>.db` 提供你选择的域名服务（示例：`openclaw.internal`）
 
 从 Tailnet 连接的机器上验证：
 
 ```bash
-dns-sd -B _openclaw-gw._tcp openclaw.internal.
+dns-sd -B _openclaw-gw._tcp openclaw.internal
 dig @<TAILNET_IPV4> -p 53 _openclaw-gw._tcp.openclaw.internal PTR +short
 ```
 

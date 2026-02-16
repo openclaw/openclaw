@@ -117,8 +117,8 @@ Full environment variable reference: [Environment vars](/help/environment).
   <Card title="Onboarding Wizard (details)" href="/start/wizard">
     Full CLI wizard reference and advanced options.
   </Card>
-  <Card title="macOS app onboarding" href="/start/onboarding">
-    First run flow for the macOS app.
+  <Card title="Setup (advanced deployment)" href="/start/setup">
+    Remote gateways, updates, and deployment paths.
   </Card>
 </Columns>
 
@@ -132,4 +132,4 @@ Full environment variable reference: [Environment vars](/help/environment).
 
 - DM safety and approvals: [Pairing](/channels/pairing)
 - Connect more channels: [Channels](/channels)
-- Advanced workflows and from source: [Setup](/start/setup)
+- Advanced deployment workflows: [Setup](/start/setup)

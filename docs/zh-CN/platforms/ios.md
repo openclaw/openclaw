@@ -29,7 +29,7 @@ x-i18n:
 - Gateway 网关运行在另一台设备上（macOS、Linux 或通过 WSL2 的 Windows）。
 - 网络路径：
   - 通过 Bonjour 的同一 LAN，**或**
-  - 通过单播 DNS-SD 的 Tailnet（示例域：`openclaw.internal.`），**或**
+  - 通过单播 DNS-SD 的 Tailnet（示例域：`openclaw.internal`），**或**
   - 手动主机/端口（备选）。
 
 ## 快速开始（配对 + 连接）
@@ -64,7 +64,7 @@ Gateway 网关在 `local.` 上广播 `_openclaw-gw._tcp`。iOS 应用会自动�
 
 ### Tailnet（跨网络）
 
-如果 mDNS 被阻止，使用单播 DNS-SD 区域（选择一个域；示例：`openclaw.internal.`）和 Tailscale 分割 DNS。
+如果 mDNS 被阻止，使用单播 DNS-SD 区域（选择一个域；示例：`openclaw.internal`）和 Tailscale 分割 DNS。
 参见 [Bonjour](/gateway/bonjour) 了解 CoreDNS 示例。
 
 ### 手动主机/端口

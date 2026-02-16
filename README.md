@@ -84,25 +84,9 @@ Upgrading? [Updating guide](https://docs.openclaw.ai/install/updating) (and run 
 Switch channels (git + npm): `openclaw update --channel stable|beta|dev`.
 Details: [Development channels](https://docs.openclaw.ai/install/development-channels).
 
-## From source (development)
+## Deployment focus
 
-Prefer `pnpm` for builds from source. Bun is optional for running TypeScript directly.
-
-```bash
-git clone https://github.com/openclaw/openclaw.git
-cd openclaw
-
-pnpm install
-pnpm ui:build # auto-installs UI deps on first run
-pnpm build
-
-pnpm openclaw onboard --install-daemon
-
-# Dev loop (auto-reload on TS changes)
-pnpm gateway:watch
-```
-
-Note: `pnpm openclaw ...` runs TypeScript directly (via `tsx`). `pnpm build` produces `dist/` for running via Node / the packaged `openclaw` binary.
+This repo’s docs are focused on deploying and operating the Gateway. Companion apps are distributed separately; app development is out of scope here.
 
 ## Security defaults (DM access)
 
@@ -279,7 +263,7 @@ Send these in WhatsApp/Telegram/Slack/Google Chat/Microsoft Teams/WebChat (group
 
 The Gateway alone delivers a great experience. All apps are optional and add extra features.
 
-If you plan to build/run companion apps, follow the platform runbooks below.
+If you use companion apps, follow the platform runbooks below (usage only; app development isn’t covered here).
 
 ### macOS (OpenClaw.app) (optional)
 

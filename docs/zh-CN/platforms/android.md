@@ -72,7 +72,7 @@ dns-sd -B _openclaw-gw._tcp local.
 
 Android NSD/mDNS 发现无法跨网络。如果你的 Android 节点和 Gateway 网关在不同网络但通过 Tailscale 连接，请改用 Wide-Area Bonjour / unicast DNS-SD：
 
-1. 在 Gateway 网关主机上设置 DNS-SD 区域（示例 `openclaw.internal.`）并发布 `_openclaw-gw._tcp` 记录。
+1. 在 Gateway 网关主机上设置 DNS-SD 区域（示例 `openclaw.internal`）并发布 `_openclaw-gw._tcp` 记录。
 2. 配置 Tailscale split DNS，将你选择的域指向该 DNS 服务器。
 
 详情和示例 CoreDNS 配置：[Bonjour](/gateway/bonjour)。

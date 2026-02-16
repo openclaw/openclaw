@@ -3268,7 +3268,7 @@ TLS：
 
 ### `discovery.wideArea`（广域 Bonjour / 单播 DNS‑SD）
 
-启用后，Gateway 网关在 `~/.openclaw/dns/` 下使用配置的发现域（示例：`openclaw.internal.`）为 `_openclaw-gw._tcp` 写入单播 DNS-SD 区域。
+启用后，Gateway 网关在 `~/.openclaw/dns/` 下使用配置的发现域（示例：`openclaw.internal`）为 `_openclaw-gw._tcp` 写入单播 DNS-SD 区域。
 
 要使 iOS/Android 跨网络发现（跨地域访问），请配合以下使用：
 

@@ -2,7 +2,6 @@
 summary: "iOS node app: connect to the Gateway, pairing, canvas, and troubleshooting"
 read_when:
   - Pairing or reconnecting the iOS node
-  - Running the iOS app from source
   - Debugging gateway discovery or canvas commands
 title: "iOS App"
 ---
@@ -22,7 +21,7 @@ Availability: internal preview. The iOS app is not publicly distributed yet.
 - Gateway running on another device (macOS, Linux, or Windows via WSL2).
 - Network path:
   - Same LAN via Bonjour, **or**
-  - Tailnet via unicast DNS-SD (example domain: `openclaw.internal.`), **or**
+  - Tailnet via unicast DNS-SD (example domain: `openclaw.internal`), **or**
   - Manual host/port (fallback).
 
 ## Quick start (pair + connect)
@@ -57,8 +56,8 @@ The Gateway advertises `_openclaw-gw._tcp` on `local.`. The iOS app lists these 
 
 ### Tailnet (cross-network)
 
-If mDNS is blocked, use a unicast DNS-SD zone (choose a domain; example: `openclaw.internal.`) and Tailscale split DNS.
-See [Bonjour](/gateway/bonjour) for the CoreDNS example.
+If mDNS is blocked, use a unicast DNS-SD zone (choose a domain; example: `openclaw.internal`) and Tailscale split DNS.
+Run `openclaw dns setup --apply` on the gateway host, then follow [Bonjour](/gateway/bonjour) for the CoreDNS example.
 
 ### Manual host/port
 

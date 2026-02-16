@@ -173,7 +173,7 @@ openclaw gateway uninstall
 `gateway discover` 扫描 Gateway 网关信标（`_openclaw-gw._tcp`）。
 
 - 组播 DNS-SD：`local.`
-- 单播 DNS-SD（广域 Bonjour）：选择一个域（示例：`openclaw.internal.`）并设置分割 DNS + DNS 服务器；参见 [/gateway/bonjour](/gateway/bonjour)
+- 单播 DNS-SD（广域 Bonjour）：选择一个域（示例：`openclaw.internal`）并设置分割 DNS + DNS 服务器；参见 [/gateway/bonjour](/gateway/bonjour)
 
 只有启用了 Bonjour 发现（默认）的 Gateway 网关才会广播信标。
 

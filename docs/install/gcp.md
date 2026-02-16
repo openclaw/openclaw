@@ -479,15 +479,15 @@ For automation or CI/CD pipelines, create a dedicated service account with minim
 1. Create a service account:
 
    ```bash
-   gcloud iam service-accounts create openclaw-deploy \
-     --display-name="OpenClaw Deployment"
+   gcloud iam service-accounts create openclaw-gateway-deploy \
+     --display-name="OpenClaw Gateway Deploy"
    ```
 
 2. Grant Compute Instance Admin role (or narrower custom role):
 
    ```bash
    gcloud projects add-iam-policy-binding my-openclaw-project \
-     --member="serviceAccount:openclaw-deploy@my-openclaw-project.iam.gserviceaccount.com" \
+     --member="serviceAccount:openclaw-gateway-deploy@my-openclaw-project.iam.gserviceaccount.com" \
      --role="roles/compute.instanceAdmin.v1"
    ```
 

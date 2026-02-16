@@ -1,8 +1,10 @@
 ---
-summary: "Advanced setup and development workflows for OpenClaw"
+summary: "Advanced setup and deployment workflows for OpenClaw"
 read_when:
   - Setting up a new machine
   - You want “latest + greatest” without breaking your personal setup
+  - Running a remote Gateway on a server
+  - Planning backups and state locations
 title: "Setup"
 ---
 
@@ -13,19 +15,57 @@ If you are setting up for the first time, start with [Getting Started](/start/ge
 For wizard details, see [Onboarding Wizard](/start/wizard).
 </Note>
 
-Last updated: 2026-01-01
+Last updated: 2026-02-15
 
 ## TL;DR
 
 - **Tailoring lives outside the repo:** `~/.openclaw/workspace` (workspace) + `~/.openclaw/openclaw.json` (config).
-- **Stable workflow:** install the macOS app; let it run the bundled Gateway.
-- **Bleeding edge workflow:** run the Gateway yourself via `pnpm gateway:watch`, then let the macOS app attach in Local mode.
+- **Deployment-first:** run the Gateway via the CLI or a service manager (launchd/systemd). App development is out of scope here.
+- **Remote access:** prefer Tailscale Serve/Funnel or SSH tunnels; keep auth enabled.
 
-## Prereqs (from source)
+## Deployment paths
 
-- Node `>=22`
-- `pnpm`
-- Docker (optional; only for containerized setup/e2e — see [Docker](/install/docker))
+### Local host (recommended)
+
+Install the CLI and run the onboarding wizard to install a background service:
+
+```bash
+npm install -g openclaw@latest
+openclaw onboard --install-daemon
+```
+
+Start/stop the Gateway as needed:
+
+```bash
+openclaw gateway --port 18789 --verbose
+```
+
+### Remote Gateway (server)
+
+For a small Linux VM or headless host:
+
+1. Install the CLI (or use Docker).
+2. Bind to a secure interface and keep auth enabled.
+3. Expose access with Tailscale or SSH tunnels.
+
+Example (tailnet-only bind):
+
+```bash
+openclaw gateway --bind tailnet --port 18789
+```
+
+Details: [Remote access](/gateway/remote) · [Tailscale](/gateway/tailscale)
+
+### Containerized deployments
+
+If you want a hosted or containerized setup, use the platform guides:
+
+- [Docker](/install/docker)
+- [Fly](/install/fly)
+- [Render](/install/render)
+- [Railway](/install/railway)
+- [Northflank](/install/northflank)
+- [GCP VM](/install/gcp)
 
 ## Tailoring strategy (so updates don’t hurt)
 
@@ -40,87 +80,12 @@ Bootstrap once:
 openclaw setup
 ```
 
-From inside this repo, use the local CLI entry:
-
-```bash
-openclaw setup
-```
-
 If you don’t have a global install yet, run it via `pnpm openclaw setup`.
 
-## Run the Gateway from this repo
+### Secrets checklist (template)
 
-After `pnpm build`, you can run the packaged CLI directly:
-
-```bash
-node openclaw.mjs gateway --port 18789 --verbose
-```
-
-## Stable workflow (macOS app first)
-
-1. Install + launch **OpenClaw.app** (menu bar).
-2. Complete the onboarding/permissions checklist (TCC prompts).
-3. Ensure Gateway is **Local** and running (the app manages it).
-4. Link surfaces (example: WhatsApp):
-
-```bash
-openclaw channels login
-```
-
-5. Sanity check:
-
-```bash
-openclaw health
-```
-
-If onboarding is not available in your build:
-
-- Run `openclaw setup`, then `openclaw channels login`, then start the Gateway manually (`openclaw gateway`).
-
-## Bleeding edge workflow (Gateway in a terminal)
-
-Goal: work on the TypeScript Gateway, get hot reload, keep the macOS app UI attached.
-
-### 0) (Optional) Run the macOS app from source too
-
-If you also want the macOS app on the bleeding edge:
-
-```bash
-./scripts/restart-mac.sh
-```
-
-### 1) Start the dev Gateway
-
-```bash
-pnpm install
-pnpm gateway:watch
-```
-
-`gateway:watch` runs the gateway in watch mode and reloads on TypeScript changes.
-
-### 2) Point the macOS app at your running Gateway
-
-In **OpenClaw.app**:
-
-- Connection Mode: **Local**
-  The app will attach to the running gateway on the configured port.
-
-### 3) Verify
-
-- In-app Gateway status should read **“Using existing gateway …”**
-- Or via CLI:
-
-```bash
-openclaw health
-```
-
-### Common footguns
-
-- **Wrong port:** Gateway WS defaults to `ws://127.0.0.1:18789`; keep app + CLI on the same port.
-- **Where state lives:**
-  - Credentials: `~/.openclaw/credentials/`
-  - Sessions: `~/.openclaw/agents/<agentId>/sessions/`
-  - Logs: `/tmp/openclaw/`
+If you’re deploying on a server, keep secrets out of your config file and version control.
+Use the repo’s `secret-template.json` as a checklist and store the filled copy somewhere private.
 
 ## Credential storage map
 
@@ -138,7 +103,8 @@ Use this when debugging auth or deciding what to back up:
 ## Updating (without wrecking your setup)
 
 - Keep `~/.openclaw/workspace` and `~/.openclaw/` as “your stuff”; don’t put personal prompts/config into the `openclaw` repo.
-- Updating source: `git pull` + `pnpm install` (when lockfile changed) + keep using `pnpm gateway:watch`.
+- Updating CLI: `openclaw update` (or `npm update -g openclaw`).
+- Updating Docker deployments: rebuild the image and redeploy on your host.
 
 ## Linux (systemd user service)
 
@@ -157,6 +123,6 @@ user service (no lingering needed). See [Gateway runbook](/gateway) for the syst
 
 - [Gateway runbook](/gateway) (flags, supervision, ports)
 - [Gateway configuration](/gateway/configuration) (config schema + examples)
-- [Discord](/channels/discord) and [Telegram](/channels/telegram) (reply tags + replyToMode settings)
-- [OpenClaw assistant setup](/start/openclaw)
-- [macOS app](/platforms/macos) (gateway lifecycle)
+- [Remote access](/gateway/remote)
+- [Security](/gateway/security)
+- [Channels](/channels) (auth + allowlists)

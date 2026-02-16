@@ -65,7 +65,7 @@ More debugging notes: [Bonjour](/gateway/bonjour).
 
 Android NSD/mDNS discovery won’t cross networks. If your Android node and the gateway are on different networks but connected via Tailscale, use Wide-Area Bonjour / unicast DNS-SD instead:
 
-1. Set up a DNS-SD zone (example `openclaw.internal.`) on the gateway host and publish `_openclaw-gw._tcp` records.
+1. Run `openclaw dns setup --apply` on the gateway host to publish `_openclaw-gw._tcp` under your discovery domain (example: `openclaw.internal`).
 2. Configure Tailscale split DNS for your chosen domain pointing at that DNS server.
 
 Details and example CoreDNS config: [Bonjour](/gateway/bonjour).
