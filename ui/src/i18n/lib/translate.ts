@@ -38,7 +38,7 @@ class I18nManager {
     // Lazy load translations if needed
     if (!this.translations[locale]) {
       try {
-        let module;
+        let module: Record<string, TranslationMap>;
         if (locale === "zh-CN") {
           module = await import("../locales/zh-CN.ts");
         } else if (locale === "zh-TW") {
@@ -48,7 +48,7 @@ class I18nManager {
         } else {
           return;
         }
-        this.translations[locale] = module[locale.replace("-", "_")];
+        this.translations[locale] = module[locale.replace("-", "_")] as TranslationMap;
       } catch (e) {
         console.error(`Failed to load locale: ${locale}`, e);
         return;
