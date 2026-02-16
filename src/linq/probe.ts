@@ -1,6 +1,6 @@
-import type { LinqProbe } from "./types.js";
 import { loadConfig } from "../config/config.js";
 import { resolveLinqAccount } from "./accounts.js";
+import type { LinqProbe } from "./types.js";
 
 const LINQ_API_BASE = "https://api.linqapp.com/api/partner/v3";
 

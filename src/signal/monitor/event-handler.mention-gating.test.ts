@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import type { MsgContext } from "../../auto-reply/templating.js";
 import { buildDispatchInboundCaptureMock } from "../../../test/helpers/dispatch-inbound-capture.js";
+import type { MsgContext } from "../../auto-reply/templating.js";
 import { createBaseSignalEventHandlerDeps } from "./event-handler.test-harness.js";
 
 let capturedCtx: MsgContext | undefined;

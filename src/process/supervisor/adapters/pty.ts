@@ -1,5 +1,5 @@
-import type { ManagedRunStdin } from "../types.js";
 import { killProcessTree } from "../../kill-tree.js";
+import type { ManagedRunStdin } from "../types.js";
 import { toStringEnv } from "./env.js";
 
 type PtyExitEvent = { exitCode: number; signal?: number };

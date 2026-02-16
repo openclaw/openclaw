@@ -11,14 +11,14 @@
  * that's used by both run.ts (early invocation) and attempt.ts (fallback invocation).
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createHookRunner } from "./hooks.js";
+import { createEmptyPluginRegistry, type PluginRegistry } from "./registry.js";
 import type {
   PluginHookBeforeAgentStartEvent,
   PluginHookBeforeAgentStartResult,
   PluginHookAgentContext,
   TypedPluginHookRegistration,
 } from "./types.js";
-import { createHookRunner } from "./hooks.js";
-import { createEmptyPluginRegistry, type PluginRegistry } from "./registry.js";
 
 function addBeforeAgentStartHook(
   registry: PluginRegistry,
