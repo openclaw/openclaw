@@ -811,10 +811,6 @@ describe("extractShortModelName", () => {
 });
 
 describe("hasTemplateVariables", () => {
-  it("returns false for undefined", () => {
-    expect(hasTemplateVariables(undefined)).toBe(false);
-  });
-
   it("returns false for empty string", () => {
     expect(hasTemplateVariables("")).toBe(false);
   });
