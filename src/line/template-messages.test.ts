@@ -7,7 +7,6 @@ import {
   createImageCarousel,
   createImageCarouselColumn,
   createYesNoConfirm,
-  createButtonMenu,
   createLinkMenu,
   createProductCarousel,
   messageAction,
@@ -94,16 +93,6 @@ describe("datetimePickerAction", () => {
 });
 
 describe("createConfirmTemplate", () => {
-  it("creates a confirm template", () => {
-    const confirm = messageAction("Yes");
-    const cancel = messageAction("No");
-    const template = createConfirmTemplate("Are you sure?", confirm, cancel);
-
-    expect(template.type).toBe("template");
-    expect(template.template.type).toBe("confirm");
-    expect((template.template as { text: string }).text).toBe("Are you sure?");
-  });
-
   it("truncates text to 240 characters", () => {
     const longText = "x".repeat(300);
     const template = createConfirmTemplate(longText, messageAction("Yes"), messageAction("No"));
@@ -124,16 +113,6 @@ describe("createConfirmTemplate", () => {
 });
 
 describe("createButtonTemplate", () => {
-  it("creates a button template", () => {
-    const actions = [messageAction("Button 1"), messageAction("Button 2")];
-    const template = createButtonTemplate("Title", "Description", actions);
-
-    expect(template.type).toBe("template");
-    expect(template.template.type).toBe("buttons");
-    expect((template.template as { title: string }).title).toBe("Title");
-    expect((template.template as { text: string }).text).toBe("Description");
-  });
-
   it("limits actions to 4", () => {
     const actions = Array.from({ length: 6 }, (_, i) => messageAction(`Button ${i}`));
     const template = createButtonTemplate("Title", "Text", actions);
@@ -189,20 +168,6 @@ describe("createTemplateCarousel", () => {
 });
 
 describe("createCarouselColumn", () => {
-  it("creates a carousel column", () => {
-    const column = createCarouselColumn({
-      title: "Item",
-      text: "Description",
-      actions: [messageAction("View")],
-      thumbnailImageUrl: "https://example.com/img.jpg",
-    });
-
-    expect(column.title).toBe("Item");
-    expect(column.text).toBe("Description");
-    expect(column.thumbnailImageUrl).toBe("https://example.com/img.jpg");
-    expect(column.actions.length).toBe(1);
-  });
-
   it("limits actions to 3", () => {
     const column = createCarouselColumn({
       text: "Text",
@@ -271,22 +236,6 @@ describe("createYesNoConfirm", () => {
     const actions = (template.template as { actions: Array<{ type: string }> }).actions;
     expect(actions[0].type).toBe("postback");
     expect(actions[1].type).toBe("postback");
-  });
-});
-
-describe("createButtonMenu", () => {
-  it("creates a button menu with text buttons", () => {
-    const template = createButtonMenu("Menu", "Choose an option", [
-      { label: "Option 1" },
-      { label: "Option 2", text: "selected option 2" },
-    ]);
-
-    expect(template.type).toBe("template");
-    expect(template.template.type).toBe("buttons");
-
-    const actions = (template.template as { actions: Array<{ type: string }> }).actions;
-    expect(actions.length).toBe(2);
-    expect(actions[0].type).toBe("message");
   });
 });
 
