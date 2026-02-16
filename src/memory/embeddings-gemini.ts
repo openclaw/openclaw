@@ -1,6 +1,7 @@
 import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.js";
 import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { parseGeminiAuth } from "../infra/gemini-auth.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
 export type GeminiEmbeddingClient = {
@@ -35,39 +36,6 @@ function resolveRemoteApiKey(remoteApiKey?: string): string | undefined {
     return process.env[trimmed]?.trim();
   }
   return trimmed;
-}
-
-/**
- * Parse Gemini API key and return appropriate auth headers.
- * Supports both traditional API keys and OAuth JSON format.
- *
- * OAuth format: `{"token": "...", "projectId": "..."}`
- */
-function parseGeminiAuth(apiKey: string): { headers: Record<string, string> } {
-  // Try parsing as OAuth JSON format
-  if (apiKey.startsWith("{")) {
-    try {
-      const parsed = JSON.parse(apiKey) as { token?: string; projectId?: string };
-      if (typeof parsed.token === "string" && parsed.token) {
-        return {
-          headers: {
-            Authorization: `Bearer ${parsed.token}`,
-            "Content-Type": "application/json",
-          },
-        };
-      }
-    } catch {
-      // Parse failed, fallback to API key mode
-    }
-  }
-
-  // Default: traditional API key
-  return {
-    headers: {
-      "x-goog-api-key": apiKey,
-      "Content-Type": "application/json",
-    },
-  };
 }
 
 function normalizeGeminiModel(model: string): string {
