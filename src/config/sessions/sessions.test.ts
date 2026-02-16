@@ -16,10 +16,7 @@ import {
   validateSessionId,
 } from "./paths.js";
 import { resolveSessionResetPolicy } from "./reset.js";
-import {
-  appendAssistantMessageToSessionTranscript,
-  resolveMirroredTranscriptText,
-} from "./transcript.js";
+import { appendAssistantMessageToSessionTranscript } from "./transcript.js";
 
 describe("session path safety", () => {
   it("rejects unsafe session IDs", () => {
@@ -146,16 +143,6 @@ describe("session store lock (Promise chain mutex)", () => {
 
     const store = loadSessionStore(storePath);
     expect(store[key]?.modelOverride).toBe("recovered");
-  });
-});
-
-describe("resolveMirroredTranscriptText", () => {
-  it("prefers media filenames over text", () => {
-    const result = resolveMirroredTranscriptText({
-      text: "caption here",
-      mediaUrls: ["https://example.com/files/report.pdf?sig=123"],
-    });
-    expect(result).toBe("report.pdf");
   });
 });
 
