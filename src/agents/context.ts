@@ -55,7 +55,7 @@ const loadPromise = (async () => {
     const agentDir = resolveOpenClawAgentDir();
     const authStorage = discoverAuthStorage(agentDir);
     const modelRegistry = discoverModels(authStorage, agentDir);
-    const models = modelRegistry.getAll() as ModelEntry[];
+    const models = modelRegistry.getAvailable() as ModelEntry[];
     for (const m of models) {
       if (!m?.id) {
         continue;
