@@ -238,25 +238,84 @@ function createCronEventHarness() {
   return { onEvent, waitFor, events };
 }
 
+async function createMainOneShotHarness() {
+  ensureDir(fixturesRoot);
+  const store = await makeStorePath();
+  const enqueueSystemEvent = vi.fn();
+  const requestHeartbeatNow = vi.fn();
+  const events = createCronEventHarness();
+
+  const cron = new CronService({
+    storePath: store.storePath,
+    cronEnabled: true,
+    log: noopLogger,
+    enqueueSystemEvent,
+    requestHeartbeatNow,
+    runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" })),
+    onEvent: events.onEvent,
+  });
+  await cron.start();
+  return { store, cron, enqueueSystemEvent, requestHeartbeatNow, events };
+}
+
+async function createIsolatedAnnounceHarness(runIsolatedAgentJob: ReturnType<typeof vi.fn>) {
+  ensureDir(fixturesRoot);
+  const store = await makeStorePath();
+  const enqueueSystemEvent = vi.fn();
+  const requestHeartbeatNow = vi.fn();
+  const events = createCronEventHarness();
+
+  const cron = new CronService({
+    storePath: store.storePath,
+    cronEnabled: true,
+    log: noopLogger,
+    enqueueSystemEvent,
+    requestHeartbeatNow,
+    runIsolatedAgentJob,
+    onEvent: events.onEvent,
+  });
+
+  await cron.start();
+  return { store, cron, enqueueSystemEvent, requestHeartbeatNow, events };
+}
+
+async function addDefaultIsolatedAnnounceJob(cron: CronService, name: string) {
+  const runAt = new Date("2025-12-13T00:00:01.000Z");
+  const job = await cron.add({
+    enabled: true,
+    name,
+    schedule: { kind: "at", at: runAt.toISOString() },
+    sessionTarget: "isolated",
+    wakeMode: "now",
+    payload: { kind: "agentTurn", message: "do it" },
+    delivery: { mode: "announce" },
+  });
+  return { job, runAt };
+}
+
+async function loadLegacyDeliveryMigration(rawJob: Record<string, unknown>) {
+  ensureDir(fixturesRoot);
+  const store = await makeStorePath();
+  writeStoreFile(store.storePath, { version: 1, jobs: [rawJob] });
+
+  const cron = new CronService({
+    storePath: store.storePath,
+    cronEnabled: true,
+    log: noopLogger,
+    enqueueSystemEvent: vi.fn(),
+    requestHeartbeatNow: vi.fn(),
+    runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" })),
+  });
+  await cron.start();
+  const jobs = await cron.list({ includeDisabled: true });
+  const job = jobs.find((j) => j.id === rawJob.id);
+  return { store, cron, job };
+}
+
 describe("CronService", () => {
   it("runs a one-shot main job and disables it after success when requested", async () => {
-    ensureDir(fixturesRoot);
-    const store = await makeStorePath();
-    const enqueueSystemEvent = vi.fn();
-    const requestHeartbeatNow = vi.fn();
-    const events = createCronEventHarness();
-
-    const cron = new CronService({
-      storePath: store.storePath,
-      cronEnabled: true,
-      log: noopLogger,
-      enqueueSystemEvent,
-      requestHeartbeatNow,
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" })),
-      onEvent: events.onEvent,
-    });
-
-    await cron.start();
+    const { store, cron, enqueueSystemEvent, requestHeartbeatNow, events } =
+      await createMainOneShotHarness();
     const atMs = Date.parse("2025-12-13T00:00:02.000Z");
     const job = await cron.add({
       name: "one-shot hello",
@@ -289,23 +348,8 @@ describe("CronService", () => {
   });
 
   it("runs a one-shot job and deletes it after success by default", async () => {
-    ensureDir(fixturesRoot);
-    const store = await makeStorePath();
-    const enqueueSystemEvent = vi.fn();
-    const requestHeartbeatNow = vi.fn();
-    const events = createCronEventHarness();
-
-    const cron = new CronService({
-      storePath: store.storePath,
-      cronEnabled: true,
-      log: noopLogger,
-      enqueueSystemEvent,
-      requestHeartbeatNow,
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" })),
-      onEvent: events.onEvent,
-    });
-
-    await cron.start();
+    const { store, cron, enqueueSystemEvent, requestHeartbeatNow, events } =
+      await createMainOneShotHarness();
     const atMs = Date.parse("2025-12-13T00:00:02.000Z");
     const job = await cron.add({
       name: "one-shot delete",
@@ -502,39 +546,12 @@ describe("CronService", () => {
   });
 
   it("runs an isolated job and posts summary to main", async () => {
-    ensureDir(fixturesRoot);
-    const store = await makeStorePath();
-    const enqueueSystemEvent = vi.fn();
-    const requestHeartbeatNow = vi.fn();
-    const runIsolatedAgentJob = vi.fn(async () => ({
-      status: "ok" as const,
-      summary: "done",
-    }));
-    const events = createCronEventHarness();
+    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const, summary: "done" }));
+    const { store, cron, enqueueSystemEvent, requestHeartbeatNow, events } =
+      await createIsolatedAnnounceHarness(runIsolatedAgentJob);
+    const { job, runAt } = await addDefaultIsolatedAnnounceJob(cron, "weekly");
 
-    const cron = new CronService({
-      storePath: store.storePath,
-      cronEnabled: true,
-      log: noopLogger,
-      enqueueSystemEvent,
-      requestHeartbeatNow,
-      runIsolatedAgentJob,
-      onEvent: events.onEvent,
-    });
-
-    await cron.start();
-    const atMs = Date.parse("2025-12-13T00:00:01.000Z");
-    const job = await cron.add({
-      enabled: true,
-      name: "weekly",
-      schedule: { kind: "at", at: new Date(atMs).toISOString() },
-      sessionTarget: "isolated",
-      wakeMode: "now",
-      payload: { kind: "agentTurn", message: "do it" },
-      delivery: { mode: "announce" },
-    });
-
-    vi.setSystemTime(new Date("2025-12-13T00:00:01.000Z"));
+    vi.setSystemTime(runAt);
     await vi.runOnlyPendingTimersAsync();
 
     await events.waitFor(
@@ -551,40 +568,16 @@ describe("CronService", () => {
   });
 
   it("does not post isolated summary to main when run already delivered output", async () => {
-    ensureDir(fixturesRoot);
-    const store = await makeStorePath();
-    const enqueueSystemEvent = vi.fn();
-    const requestHeartbeatNow = vi.fn();
     const runIsolatedAgentJob = vi.fn(async () => ({
       status: "ok" as const,
       summary: "done",
       delivered: true,
     }));
-    const events = createCronEventHarness();
+    const { store, cron, enqueueSystemEvent, requestHeartbeatNow, events } =
+      await createIsolatedAnnounceHarness(runIsolatedAgentJob);
 
-    const cron = new CronService({
-      storePath: store.storePath,
-      cronEnabled: true,
-      log: noopLogger,
-      enqueueSystemEvent,
-      requestHeartbeatNow,
-      runIsolatedAgentJob,
-      onEvent: events.onEvent,
-    });
-
-    await cron.start();
-    const atMs = Date.parse("2025-12-13T00:00:01.000Z");
-    const job = await cron.add({
-      enabled: true,
-      name: "weekly delivered",
-      schedule: { kind: "at", at: new Date(atMs).toISOString() },
-      sessionTarget: "isolated",
-      wakeMode: "now",
-      payload: { kind: "agentTurn", message: "do it" },
-      delivery: { mode: "announce" },
-    });
-
-    vi.setSystemTime(new Date("2025-12-13T00:00:01.000Z"));
+    const { job, runAt } = await addDefaultIsolatedAnnounceJob(cron, "weekly delivered");
+    vi.setSystemTime(runAt);
     await vi.runOnlyPendingTimersAsync();
 
     await events.waitFor(
@@ -598,11 +591,6 @@ describe("CronService", () => {
   });
 
   it("migrates legacy payload.provider to payload.channel on load", async () => {
-    ensureDir(fixturesRoot);
-    const store = await makeStorePath();
-    const enqueueSystemEvent = vi.fn();
-    const requestHeartbeatNow = vi.fn();
-
     const rawJob = {
       id: "legacy-1",
       name: "legacy",
@@ -621,21 +609,7 @@ describe("CronService", () => {
       },
       state: {},
     };
-
-    writeStoreFile(store.storePath, { version: 1, jobs: [rawJob] });
-
-    const cron = new CronService({
-      storePath: store.storePath,
-      cronEnabled: true,
-      log: noopLogger,
-      enqueueSystemEvent,
-      requestHeartbeatNow,
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" })),
-    });
-
-    await cron.start();
-    const jobs = await cron.list({ includeDisabled: true });
-    const job = jobs.find((j) => j.id === rawJob.id);
+    const { store, cron, job } = await loadLegacyDeliveryMigration(rawJob);
     // Legacy delivery fields are migrated to the top-level delivery object
     const delivery = job?.delivery as unknown as Record<string, unknown>;
     expect(delivery?.channel).toBe("telegram");
@@ -648,11 +622,6 @@ describe("CronService", () => {
   });
 
   it("canonicalizes payload.channel casing on load", async () => {
-    ensureDir(fixturesRoot);
-    const store = await makeStorePath();
-    const enqueueSystemEvent = vi.fn();
-    const requestHeartbeatNow = vi.fn();
-
     const rawJob = {
       id: "legacy-2",
       name: "legacy",
@@ -671,21 +640,7 @@ describe("CronService", () => {
       },
       state: {},
     };
-
-    writeStoreFile(store.storePath, { version: 1, jobs: [rawJob] });
-
-    const cron = new CronService({
-      storePath: store.storePath,
-      cronEnabled: true,
-      log: noopLogger,
-      enqueueSystemEvent,
-      requestHeartbeatNow,
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" })),
-    });
-
-    await cron.start();
-    const jobs = await cron.list({ includeDisabled: true });
-    const job = jobs.find((j) => j.id === rawJob.id);
+    const { store, cron, job } = await loadLegacyDeliveryMigration(rawJob);
     // Legacy delivery fields are migrated to the top-level delivery object
     const delivery = job?.delivery as unknown as Record<string, unknown>;
     expect(delivery?.channel).toBe("telegram");
@@ -695,40 +650,16 @@ describe("CronService", () => {
   });
 
   it("posts last output to main even when isolated job errors", async () => {
-    ensureDir(fixturesRoot);
-    const store = await makeStorePath();
-    const enqueueSystemEvent = vi.fn();
-    const requestHeartbeatNow = vi.fn();
     const runIsolatedAgentJob = vi.fn(async () => ({
       status: "error" as const,
       summary: "last output",
       error: "boom",
     }));
-    const events = createCronEventHarness();
+    const { store, cron, enqueueSystemEvent, requestHeartbeatNow, events } =
+      await createIsolatedAnnounceHarness(runIsolatedAgentJob);
+    const { job, runAt } = await addDefaultIsolatedAnnounceJob(cron, "isolated error test");
 
-    const cron = new CronService({
-      storePath: store.storePath,
-      cronEnabled: true,
-      log: noopLogger,
-      enqueueSystemEvent,
-      requestHeartbeatNow,
-      runIsolatedAgentJob,
-      onEvent: events.onEvent,
-    });
-
-    await cron.start();
-    const atMs = Date.parse("2025-12-13T00:00:01.000Z");
-    const job = await cron.add({
-      name: "isolated error test",
-      enabled: true,
-      schedule: { kind: "at", at: new Date(atMs).toISOString() },
-      sessionTarget: "isolated",
-      wakeMode: "now",
-      payload: { kind: "agentTurn", message: "do it" },
-      delivery: { mode: "announce" },
-    });
-
-    vi.setSystemTime(new Date("2025-12-13T00:00:01.000Z"));
+    vi.setSystemTime(runAt);
     await vi.runOnlyPendingTimersAsync();
     await events.waitFor(
       (evt) => evt.jobId === job.id && evt.action === "finished" && evt.status === "error",

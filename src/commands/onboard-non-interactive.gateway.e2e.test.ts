@@ -1,9 +1,8 @@
 import fs from "node:fs/promises";
-import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
+import { getFreePortBlockWithPermissionFallback } from "../test-utils/ports.js";
 
 const gatewayClientCalls: Array<{
   url?: string;
@@ -41,49 +40,17 @@ vi.mock("../gateway/client.js", () => ({
 }));
 
 async function getFreePort(): Promise<number> {
-  try {
-    return await new Promise((resolve, reject) => {
-      const srv = createServer();
-      srv.on("error", (err) => {
-        srv.close();
-        reject(err);
-      });
-      srv.listen(0, "127.0.0.1", () => {
-        const addr = srv.address();
-        if (!addr || typeof addr === "string") {
-          srv.close();
-          reject(new Error("failed to acquire free port"));
-          return;
-        }
-        const port = addr.port;
-        srv.close((err) => {
-          if (err) {
-            reject(err);
-          } else {
-            resolve(port);
-          }
-        });
-      });
-    });
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException | undefined)?.code;
-    if (code === "EPERM" || code === "EACCES") {
-      return 30_000 + (process.pid % 10_000);
-    }
-    throw err;
-  }
+  return await getFreePortBlockWithPermissionFallback({
+    offsets: [0],
+    fallbackBase: 30_000,
+  });
 }
 
 async function getFreeGatewayPort(): Promise<number> {
-  try {
-    return await getDeterministicFreePortBlock({ offsets: [0, 1, 2, 4] });
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException | undefined)?.code;
-    if (code === "EPERM" || code === "EACCES") {
-      return 40_000 + (process.pid % 10_000);
-    }
-    throw err;
-  }
+  return await getFreePortBlockWithPermissionFallback({
+    offsets: [0, 1, 2, 4],
+    fallbackBase: 40_000,
+  });
 }
 
 const runtime = {
@@ -95,6 +62,19 @@ const runtime = {
     throw new Error(`exit:${code}`);
   },
 };
+
+async function expectGatewayTokenAuth(params: {
+  authConfig: unknown;
+  token: string;
+  env: NodeJS.ProcessEnv;
+}) {
+  const { authorizeGatewayConnect, resolveGatewayAuth } = await import("../gateway/auth.js");
+  const auth = resolveGatewayAuth({ authConfig: params.authConfig, env: params.env });
+  const resNoToken = await authorizeGatewayConnect({ auth, connectAuth: { token: undefined } });
+  expect(resNoToken.ok).toBe(false);
+  const resToken = await authorizeGatewayConnect({ auth, connectAuth: { token: params.token } });
+  expect(resToken.ok).toBe(true);
+}
 
 describe("onboard (non-interactive): gateway and remote auth", () => {
   const prev = {
@@ -183,12 +163,11 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     expect(cfg?.gateway?.auth?.mode).toBe("token");
     expect(cfg?.gateway?.auth?.token).toBe(token);
 
-    const { authorizeGatewayConnect, resolveGatewayAuth } = await import("../gateway/auth.js");
-    const auth = resolveGatewayAuth({ authConfig: cfg.gateway?.auth, env: process.env });
-    const resNoToken = await authorizeGatewayConnect({ auth, connectAuth: { token: undefined } });
-    expect(resNoToken.ok).toBe(false);
-    const resToken = await authorizeGatewayConnect({ auth, connectAuth: { token } });
-    expect(resToken.ok).toBe(true);
+    await expectGatewayTokenAuth({
+      authConfig: cfg.gateway?.auth,
+      token,
+      env: process.env,
+    });
 
     await fs.rm(stateDir, { recursive: true, force: true });
   }, 60_000);
@@ -274,12 +253,11 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     const token = cfg.gateway?.auth?.token ?? "";
     expect(token.length).toBeGreaterThan(8);
 
-    const { authorizeGatewayConnect, resolveGatewayAuth } = await import("../gateway/auth.js");
-    const auth = resolveGatewayAuth({ authConfig: cfg.gateway?.auth, env: process.env });
-    const resNoToken = await authorizeGatewayConnect({ auth, connectAuth: { token: undefined } });
-    expect(resNoToken.ok).toBe(false);
-    const resToken = await authorizeGatewayConnect({ auth, connectAuth: { token } });
-    expect(resToken.ok).toBe(true);
+    await expectGatewayTokenAuth({
+      authConfig: cfg.gateway?.auth,
+      token,
+      env: process.env,
+    });
 
     await fs.rm(stateDir, { recursive: true, force: true });
   }, 60_000);

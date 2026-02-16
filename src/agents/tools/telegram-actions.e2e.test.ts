@@ -28,6 +28,29 @@ vi.mock("../../telegram/send.js", () => ({
 }));
 
 describe("handleTelegramAction", () => {
+  const defaultReactionAction = {
+    action: "react",
+    chatId: "123",
+    messageId: "456",
+    emoji: "✅",
+  } as const;
+
+  function reactionConfig(reactionLevel: "minimal" | "extensive" | "off" | "ack"): OpenClawConfig {
+    return {
+      channels: { telegram: { botToken: "tok", reactionLevel } },
+    } as OpenClawConfig;
+  }
+
+  async function expectReactionAdded(reactionLevel: "minimal" | "extensive") {
+    await handleTelegramAction(defaultReactionAction, reactionConfig(reactionLevel));
+    expect(reactMessageTelegram).toHaveBeenCalledWith(
+      "123",
+      456,
+      "✅",
+      expect.objectContaining({ token: "tok", remove: false }),
+    );
+  }
+
   beforeEach(() => {
     reactMessageTelegram.mockClear();
     sendMessageTelegram.mockClear();
@@ -46,24 +69,7 @@ describe("handleTelegramAction", () => {
   });
 
   it("adds reactions when reactionLevel is minimal", async () => {
-    const cfg = {
-      channels: { telegram: { botToken: "tok", reactionLevel: "minimal" } },
-    } as OpenClawConfig;
-    await handleTelegramAction(
-      {
-        action: "react",
-        chatId: "123",
-        messageId: "456",
-        emoji: "✅",
-      },
-      cfg,
-    );
-    expect(reactMessageTelegram).toHaveBeenCalledWith(
-      "123",
-      456,
-      "✅",
-      expect.objectContaining({ token: "tok", remove: false }),
-    );
+    await expectReactionAdded("minimal");
   });
 
   it("surfaces non-fatal reaction warnings", async () => {
@@ -71,18 +77,7 @@ describe("handleTelegramAction", () => {
       ok: false,
       warning: "Reaction unavailable: ✅",
     });
-    const cfg = {
-      channels: { telegram: { botToken: "tok", reactionLevel: "minimal" } },
-    } as OpenClawConfig;
-    const result = await handleTelegramAction(
-      {
-        action: "react",
-        chatId: "123",
-        messageId: "456",
-        emoji: "✅",
-      },
-      cfg,
-    );
+    const result = await handleTelegramAction(defaultReactionAction, reactionConfig("minimal"));
     const textPayload = result.content.find((item) => item.type === "text");
     expect(textPayload?.type).toBe("text");
     const parsed = JSON.parse((textPayload as { type: "text"; text: string }).text) as {
@@ -98,24 +93,7 @@ describe("handleTelegramAction", () => {
   });
 
   it("adds reactions when reactionLevel is extensive", async () => {
-    const cfg = {
-      channels: { telegram: { botToken: "tok", reactionLevel: "extensive" } },
-    } as OpenClawConfig;
-    await handleTelegramAction(
-      {
-        action: "react",
-        chatId: "123",
-        messageId: "456",
-        emoji: "✅",
-      },
-      cfg,
-    );
-    expect(reactMessageTelegram).toHaveBeenCalledWith(
-      "123",
-      456,
-      "✅",
-      expect.objectContaining({ token: "tok", remove: false }),
-    );
+    await expectReactionAdded("extensive");
   });
 
   it("removes reactions on empty emoji", async () => {
@@ -174,9 +152,7 @@ describe("handleTelegramAction", () => {
   });
 
   it("removes reactions when remove flag set", async () => {
-    const cfg = {
-      channels: { telegram: { botToken: "tok", reactionLevel: "extensive" } },
-    } as OpenClawConfig;
+    const cfg = reactionConfig("extensive");
     await handleTelegramAction(
       {
         action: "react",
@@ -196,9 +172,7 @@ describe("handleTelegramAction", () => {
   });
 
   it("blocks reactions when reactionLevel is off", async () => {
-    const cfg = {
-      channels: { telegram: { botToken: "tok", reactionLevel: "off" } },
-    } as OpenClawConfig;
+    const cfg = reactionConfig("off");
     await expect(
       handleTelegramAction(
         {
@@ -213,9 +187,7 @@ describe("handleTelegramAction", () => {
   });
 
   it("blocks reactions when reactionLevel is ack", async () => {
-    const cfg = {
-      channels: { telegram: { botToken: "tok", reactionLevel: "ack" } },
-    } as OpenClawConfig;
+    const cfg = reactionConfig("ack");
     await expect(
       handleTelegramAction(
         {

@@ -7,12 +7,22 @@ const makeResponse = (status: number, body: unknown): Response => {
   return new Response(payload, { status, headers });
 };
 
+const toRequestUrl = (input: Parameters<typeof fetch>[0]): string =>
+  typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+
+const createAntigravityFetch = (
+  handler: (url: string, init?: Parameters<typeof fetch>[1]) => Promise<Response> | Response,
+) =>
+  vi.fn<Parameters<typeof fetch>, ReturnType<typeof fetch>>(async (input, init) =>
+    handler(toRequestUrl(input), init),
+  );
+
+const getRequestBody = (init?: Parameters<typeof fetch>[1]) =>
+  typeof init?.body === "string" ? init.body : undefined;
+
 describe("fetchAntigravityUsage", () => {
   it("returns 3 windows when both endpoints succeed", async () => {
-    const mockFetch = vi.fn<Parameters<typeof fetch>, ReturnType<typeof fetch>>(async (input) => {
-      const url =
-        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-
+    const mockFetch = createAntigravityFetch(async (url) => {
       if (url.includes("loadCodeAssist")) {
         return makeResponse(200, {
           availablePromptCredits: 750,
@@ -69,10 +79,7 @@ describe("fetchAntigravityUsage", () => {
   });
 
   it("returns Credits only when loadCodeAssist succeeds but fetchAvailableModels fails", async () => {
-    const mockFetch = vi.fn<Parameters<typeof fetch>, ReturnType<typeof fetch>>(async (input) => {
-      const url =
-        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-
+    const mockFetch = createAntigravityFetch(async (url) => {
       if (url.includes("loadCodeAssist")) {
         return makeResponse(200, {
           availablePromptCredits: 250,
@@ -103,10 +110,7 @@ describe("fetchAntigravityUsage", () => {
   });
 
   it("returns model IDs when fetchAvailableModels succeeds but loadCodeAssist fails", async () => {
-    const mockFetch = vi.fn<Parameters<typeof fetch>, ReturnType<typeof fetch>>(async (input) => {
-      const url =
-        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-
+    const mockFetch = createAntigravityFetch(async (url) => {
       if (url.includes("loadCodeAssist")) {
         return makeResponse(500, "Internal server error");
       }
@@ -144,27 +148,22 @@ describe("fetchAntigravityUsage", () => {
 
   it("uses cloudaicompanionProject string as project id", async () => {
     let capturedBody: string | undefined;
-    const mockFetch = vi.fn<Parameters<typeof fetch>, ReturnType<typeof fetch>>(
-      async (input, init) => {
-        const url =
-          typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const mockFetch = createAntigravityFetch(async (url, init) => {
+      if (url.includes("loadCodeAssist")) {
+        return makeResponse(200, {
+          availablePromptCredits: 900,
+          planInfo: { monthlyPromptCredits: 1000 },
+          cloudaicompanionProject: "projects/alpha",
+        });
+      }
 
-        if (url.includes("loadCodeAssist")) {
-          return makeResponse(200, {
-            availablePromptCredits: 900,
-            planInfo: { monthlyPromptCredits: 1000 },
-            cloudaicompanionProject: "projects/alpha",
-          });
-        }
+      if (url.includes("fetchAvailableModels")) {
+        capturedBody = getRequestBody(init);
+        return makeResponse(200, { models: {} });
+      }
 
-        if (url.includes("fetchAvailableModels")) {
-          capturedBody = init?.body?.toString();
-          return makeResponse(200, { models: {} });
-        }
-
-        return makeResponse(404, "not found");
-      },
-    );
+      return makeResponse(404, "not found");
+    });
 
     await fetchAntigravityUsage("token-123", 5000, mockFetch);
 
@@ -173,27 +172,22 @@ describe("fetchAntigravityUsage", () => {
 
   it("uses cloudaicompanionProject object id when present", async () => {
     let capturedBody: string | undefined;
-    const mockFetch = vi.fn<Parameters<typeof fetch>, ReturnType<typeof fetch>>(
-      async (input, init) => {
-        const url =
-          typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const mockFetch = createAntigravityFetch(async (url, init) => {
+      if (url.includes("loadCodeAssist")) {
+        return makeResponse(200, {
+          availablePromptCredits: 900,
+          planInfo: { monthlyPromptCredits: 1000 },
+          cloudaicompanionProject: { id: "projects/beta" },
+        });
+      }
 
-        if (url.includes("loadCodeAssist")) {
-          return makeResponse(200, {
-            availablePromptCredits: 900,
-            planInfo: { monthlyPromptCredits: 1000 },
-            cloudaicompanionProject: { id: "projects/beta" },
-          });
-        }
+      if (url.includes("fetchAvailableModels")) {
+        capturedBody = getRequestBody(init);
+        return makeResponse(200, { models: {} });
+      }
 
-        if (url.includes("fetchAvailableModels")) {
-          capturedBody = init?.body?.toString();
-          return makeResponse(200, { models: {} });
-        }
-
-        return makeResponse(404, "not found");
-      },
-    );
+      return makeResponse(404, "not found");
+    });
 
     await fetchAntigravityUsage("token-123", 5000, mockFetch);
 
@@ -201,10 +195,7 @@ describe("fetchAntigravityUsage", () => {
   });
 
   it("returns error snapshot when both endpoints fail", async () => {
-    const mockFetch = vi.fn<Parameters<typeof fetch>, ReturnType<typeof fetch>>(async (input) => {
-      const url =
-        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-
+    const mockFetch = createAntigravityFetch(async (url) => {
       if (url.includes("loadCodeAssist")) {
         return makeResponse(403, { error: { message: "Access denied" } });
       }
@@ -226,10 +217,7 @@ describe("fetchAntigravityUsage", () => {
   });
 
   it("returns Token expired when fetchAvailableModels returns 401 and no windows", async () => {
-    const mockFetch = vi.fn<Parameters<typeof fetch>, ReturnType<typeof fetch>>(async (input) => {
-      const url =
-        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-
+    const mockFetch = createAntigravityFetch(async (url) => {
       if (url.includes("loadCodeAssist")) {
         return makeResponse(500, "Boom");
       }
@@ -248,10 +236,7 @@ describe("fetchAntigravityUsage", () => {
   });
 
   it("extracts plan info from currentTier.name", async () => {
-    const mockFetch = vi.fn<Parameters<typeof fetch>, ReturnType<typeof fetch>>(async (input) => {
-      const url =
-        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-
+    const mockFetch = createAntigravityFetch(async (url) => {
       if (url.includes("loadCodeAssist")) {
         return makeResponse(200, {
           availablePromptCredits: 500,
@@ -274,10 +259,7 @@ describe("fetchAntigravityUsage", () => {
   });
 
   it("falls back to planType when currentTier.name is missing", async () => {
-    const mockFetch = vi.fn<Parameters<typeof fetch>, ReturnType<typeof fetch>>(async (input) => {
-      const url =
-        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-
+    const mockFetch = createAntigravityFetch(async (url) => {
       if (url.includes("loadCodeAssist")) {
         return makeResponse(200, {
           availablePromptCredits: 500,
@@ -300,10 +282,7 @@ describe("fetchAntigravityUsage", () => {
 
   it("includes reset times in model windows", async () => {
     const resetTime = "2026-01-10T12:00:00Z";
-    const mockFetch = vi.fn<Parameters<typeof fetch>, ReturnType<typeof fetch>>(async (input) => {
-      const url =
-        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-
+    const mockFetch = createAntigravityFetch(async (url) => {
       if (url.includes("loadCodeAssist")) {
         return makeResponse(500, "Error");
       }
@@ -328,10 +307,7 @@ describe("fetchAntigravityUsage", () => {
   });
 
   it("parses string numbers correctly", async () => {
-    const mockFetch = vi.fn<Parameters<typeof fetch>, ReturnType<typeof fetch>>(async (input) => {
-      const url =
-        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-
+    const mockFetch = createAntigravityFetch(async (url) => {
       if (url.includes("loadCodeAssist")) {
         return makeResponse(200, {
           availablePromptCredits: "600",
@@ -364,10 +340,7 @@ describe("fetchAntigravityUsage", () => {
   });
 
   it("skips internal models", async () => {
-    const mockFetch = vi.fn<Parameters<typeof fetch>, ReturnType<typeof fetch>>(async (input) => {
-      const url =
-        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-
+    const mockFetch = createAntigravityFetch(async (url) => {
       if (url.includes("loadCodeAssist")) {
         return makeResponse(200, {
           availablePromptCredits: 500,
@@ -395,10 +368,7 @@ describe("fetchAntigravityUsage", () => {
   });
 
   it("sorts models by usage and shows individual model IDs", async () => {
-    const mockFetch = vi.fn<Parameters<typeof fetch>, ReturnType<typeof fetch>>(async (input) => {
-      const url =
-        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-
+    const mockFetch = createAntigravityFetch(async (url) => {
       if (url.includes("loadCodeAssist")) {
         return makeResponse(500, "Error");
       }
@@ -440,10 +410,7 @@ describe("fetchAntigravityUsage", () => {
   });
 
   it("returns Token expired error on 401 from loadCodeAssist", async () => {
-    const mockFetch = vi.fn<Parameters<typeof fetch>, ReturnType<typeof fetch>>(async (input) => {
-      const url =
-        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-
+    const mockFetch = createAntigravityFetch(async (url) => {
       if (url.includes("loadCodeAssist")) {
         return makeResponse(401, { error: { message: "Unauthorized" } });
       }
@@ -459,10 +426,7 @@ describe("fetchAntigravityUsage", () => {
   });
 
   it("handles empty models array gracefully", async () => {
-    const mockFetch = vi.fn<Parameters<typeof fetch>, ReturnType<typeof fetch>>(async (input) => {
-      const url =
-        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-
+    const mockFetch = createAntigravityFetch(async (url) => {
       if (url.includes("loadCodeAssist")) {
         return makeResponse(200, {
           availablePromptCredits: 800,
@@ -486,10 +450,7 @@ describe("fetchAntigravityUsage", () => {
   });
 
   it("handles missing credits fields gracefully", async () => {
-    const mockFetch = vi.fn<Parameters<typeof fetch>, ReturnType<typeof fetch>>(async (input) => {
-      const url =
-        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-
+    const mockFetch = createAntigravityFetch(async (url) => {
       if (url.includes("loadCodeAssist")) {
         return makeResponse(200, { planType: "Free" });
       }
@@ -517,10 +478,7 @@ describe("fetchAntigravityUsage", () => {
   });
 
   it("handles invalid reset time gracefully", async () => {
-    const mockFetch = vi.fn<Parameters<typeof fetch>, ReturnType<typeof fetch>>(async (input) => {
-      const url =
-        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-
+    const mockFetch = createAntigravityFetch(async (url) => {
       if (url.includes("loadCodeAssist")) {
         return makeResponse(500, "Error");
       }
@@ -546,10 +504,7 @@ describe("fetchAntigravityUsage", () => {
   });
 
   it("handles network errors with graceful degradation", async () => {
-    const mockFetch = vi.fn<Parameters<typeof fetch>, ReturnType<typeof fetch>>(async (input) => {
-      const url =
-        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-
+    const mockFetch = createAntigravityFetch(async (url) => {
       if (url.includes("loadCodeAssist")) {
         throw new Error("Network failure");
       }

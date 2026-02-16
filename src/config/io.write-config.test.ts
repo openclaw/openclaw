@@ -1,8 +1,7 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { captureEnv } from "../test-utils/env.js";
+import { describe, expect, it, vi } from "vitest";
+import { withTempHome } from "./home-env.test-harness.js";
 import { createConfigIO } from "./io.js";
 
 describe("config io write", () => {
@@ -11,69 +10,31 @@ describe("config io write", () => {
     error: () => {},
   };
 
-  let fixtureRoot = "";
-  let caseId = 0;
+  async function writeConfigAndCreateIo(params: {
+    home: string;
+    initialConfig: Record<string, unknown>;
+    env?: NodeJS.ProcessEnv;
+  }) {
+    const configPath = path.join(params.home, ".openclaw", "openclaw.json");
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.writeFile(configPath, JSON.stringify(params.initialConfig, null, 2), "utf-8");
 
-  async function withTempHome(prefix: string, fn: (home: string) => Promise<void>): Promise<void> {
-    const safePrefix = prefix.trim().replace(/[^a-zA-Z0-9._-]+/g, "-") || "tmp";
-    const home = path.join(fixtureRoot, `${safePrefix}${caseId++}`);
-    await fs.mkdir(path.join(home, ".openclaw"), { recursive: true });
-
-    const snapshot = captureEnv([
-      "HOME",
-      "USERPROFILE",
-      "HOMEDRIVE",
-      "HOMEPATH",
-      "OPENCLAW_STATE_DIR",
-    ]);
-    process.env.HOME = home;
-    process.env.USERPROFILE = home;
-    process.env.OPENCLAW_STATE_DIR = path.join(home, ".openclaw");
-
-    if (process.platform === "win32") {
-      const match = home.match(/^([A-Za-z]:)(.*)$/);
-      if (match) {
-        process.env.HOMEDRIVE = match[1];
-        process.env.HOMEPATH = match[2] || "\\";
-      }
-    }
-
-    try {
-      await fn(home);
-    } finally {
-      snapshot.restore();
-    }
+    const io = createConfigIO({
+      env: params.env ?? {},
+      homedir: () => params.home,
+      logger: silentLogger,
+    });
+    const snapshot = await io.readConfigFileSnapshot();
+    expect(snapshot.valid).toBe(true);
+    return { configPath, io, snapshot };
   }
-
-  beforeAll(async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-config-io-"));
-  });
-
-  afterAll(async () => {
-    if (!fixtureRoot) {
-      return;
-    }
-    await fs.rm(fixtureRoot, { recursive: true, force: true });
-  });
 
   it("persists caller changes onto resolved config without leaking runtime defaults", async () => {
     await withTempHome("openclaw-config-io-", async (home) => {
-      const configPath = path.join(home, ".openclaw", "openclaw.json");
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(
-        configPath,
-        JSON.stringify({ gateway: { port: 18789 } }, null, 2),
-        "utf-8",
-      );
-
-      const io = createConfigIO({
-        env: {} as NodeJS.ProcessEnv,
-        homedir: () => home,
-        logger: silentLogger,
+      const { configPath, io, snapshot } = await writeConfigAndCreateIo({
+        home,
+        initialConfig: { gateway: { port: 18789 } },
       });
-
-      const snapshot = await io.readConfigFileSnapshot();
-      expect(snapshot.valid).toBe(true);
 
       const next = structuredClone(snapshot.config);
       next.gateway = {
@@ -99,40 +60,25 @@ describe("config io write", () => {
 
   it("preserves env var references when writing", async () => {
     await withTempHome("openclaw-config-io-", async (home) => {
-      const configPath = path.join(home, ".openclaw", "openclaw.json");
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(
-        configPath,
-        JSON.stringify(
-          {
-            agents: {
-              defaults: {
-                cliBackends: {
-                  codex: {
-                    command: "codex",
-                    env: {
-                      OPENAI_API_KEY: "${OPENAI_API_KEY}",
-                    },
+      const { configPath, io, snapshot } = await writeConfigAndCreateIo({
+        home,
+        env: { OPENAI_API_KEY: "sk-secret" } as NodeJS.ProcessEnv,
+        initialConfig: {
+          agents: {
+            defaults: {
+              cliBackends: {
+                codex: {
+                  command: "codex",
+                  env: {
+                    OPENAI_API_KEY: "${OPENAI_API_KEY}",
                   },
                 },
               },
             },
-            gateway: { port: 18789 },
           },
-          null,
-          2,
-        ),
-        "utf-8",
-      );
-
-      const io = createConfigIO({
-        env: { OPENAI_API_KEY: "sk-secret" } as NodeJS.ProcessEnv,
-        homedir: () => home,
-        logger: silentLogger,
+          gateway: { port: 18789 },
+        },
       });
-
-      const snapshot = await io.readConfigFileSnapshot();
-      expect(snapshot.valid).toBe(true);
 
       const next = structuredClone(snapshot.config);
       next.gateway = {
@@ -158,38 +104,22 @@ describe("config io write", () => {
 
   it("does not reintroduce Slack/Discord legacy dm.policy defaults when writing", async () => {
     await withTempHome("openclaw-config-io-", async (home) => {
-      const configPath = path.join(home, ".openclaw", "openclaw.json");
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(
-        configPath,
-        JSON.stringify(
-          {
-            channels: {
-              discord: {
-                dmPolicy: "pairing",
-                dm: { enabled: true, policy: "pairing" },
-              },
-              slack: {
-                dmPolicy: "pairing",
-                dm: { enabled: true, policy: "pairing" },
-              },
+      const { configPath, io, snapshot } = await writeConfigAndCreateIo({
+        home,
+        initialConfig: {
+          channels: {
+            discord: {
+              dmPolicy: "pairing",
+              dm: { enabled: true, policy: "pairing" },
             },
-            gateway: { port: 18789 },
+            slack: {
+              dmPolicy: "pairing",
+              dm: { enabled: true, policy: "pairing" },
+            },
           },
-          null,
-          2,
-        ),
-        "utf-8",
-      );
-
-      const io = createConfigIO({
-        env: {} as NodeJS.ProcessEnv,
-        homedir: () => home,
-        logger: silentLogger,
+          gateway: { port: 18789 },
+        },
       });
-
-      const snapshot = await io.readConfigFileSnapshot();
-      expect(snapshot.valid).toBe(true);
 
       const next = structuredClone(snapshot.config);
       // Simulate doctor removing legacy keys while keeping dm enabled.

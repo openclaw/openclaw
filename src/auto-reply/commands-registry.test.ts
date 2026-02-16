@@ -171,6 +171,28 @@ describe("commands registry", () => {
 });
 
 describe("commands registry args", () => {
+  function createUsageModeCommand(
+    argsParsing: ChatCommandDefinition["argsParsing"] = "positional",
+    description = "mode",
+  ): ChatCommandDefinition {
+    return {
+      key: "usage",
+      description: "usage",
+      textAliases: [],
+      scope: "both",
+      argsMenu: "auto",
+      argsParsing,
+      args: [
+        {
+          name: "mode",
+          description,
+          type: "string",
+          choices: ["off", "tokens", "full", "cost"],
+        },
+      ],
+    };
+  }
+
   it("parses positional args and captureRemaining", () => {
     const command: ChatCommandDefinition = {
       key: "debug",
@@ -209,22 +231,7 @@ describe("commands registry args", () => {
   });
 
   it("resolves auto arg menus when missing a choice arg", () => {
-    const command: ChatCommandDefinition = {
-      key: "usage",
-      description: "usage",
-      textAliases: [],
-      scope: "both",
-      argsMenu: "auto",
-      argsParsing: "positional",
-      args: [
-        {
-          name: "mode",
-          description: "mode",
-          type: "string",
-          choices: ["off", "tokens", "full", "cost"],
-        },
-      ],
-    };
+    const command = createUsageModeCommand();
 
     const menu = resolveCommandArgMenu({ command, args: undefined, cfg: {} as never });
     expect(menu?.arg.name).toBe("mode");
@@ -237,22 +244,7 @@ describe("commands registry args", () => {
   });
 
   it("does not show menus when arg already provided", () => {
-    const command: ChatCommandDefinition = {
-      key: "usage",
-      description: "usage",
-      textAliases: [],
-      scope: "both",
-      argsMenu: "auto",
-      argsParsing: "positional",
-      args: [
-        {
-          name: "mode",
-          description: "mode",
-          type: "string",
-          choices: ["off", "tokens", "full", "cost"],
-        },
-      ],
-    };
+    const command = createUsageModeCommand();
 
     const menu = resolveCommandArgMenu({
       command,
@@ -299,22 +291,7 @@ describe("commands registry args", () => {
   });
 
   it("does not show menus when args were provided as raw text only", () => {
-    const command: ChatCommandDefinition = {
-      key: "usage",
-      description: "usage",
-      textAliases: [],
-      scope: "both",
-      argsMenu: "auto",
-      argsParsing: "none",
-      args: [
-        {
-          name: "mode",
-          description: "on or off",
-          type: "string",
-          choices: ["off", "tokens", "full", "cost"],
-        },
-      ],
-    };
+    const command = createUsageModeCommand("none", "on or off");
 
     const menu = resolveCommandArgMenu({
       command,
