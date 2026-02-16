@@ -40,27 +40,6 @@ const ORIGINAL_TZ = process.env.TZ;
 describe("createTelegramBot", () => {
   beforeEach(() => {
     process.env.TZ = "UTC";
-    loadConfig.mockReturnValue({
-      agents: {
-        defaults: {
-          envelopeTimezone: "utc",
-        },
-      },
-      channels: {
-        telegram: { dmPolicy: "open", allowFrom: ["*"] },
-      },
-    });
-    readChannelAllowFromStore.mockReset().mockResolvedValue([]);
-    upsertChannelPairingRequest
-      .mockReset()
-      .mockResolvedValue({ code: "PAIRCODE", created: true } as const);
-
-    // Some tests override reply behavior; keep a stable baseline between tests.
-    replySpy.mockReset();
-    replySpy.mockImplementation(async (_ctx, opts) => {
-      await opts?.onReplyStart?.();
-      return undefined;
-    });
   });
   afterEach(() => {
     process.env.TZ = ORIGINAL_TZ;
