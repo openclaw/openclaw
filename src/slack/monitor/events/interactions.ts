@@ -18,6 +18,7 @@ type SelectOption = {
 };
 
 type InteractionSummary = {
+  interactionType?: "block_action" | "view_submission";
   actionId: string;
   blockId?: string;
   actionType?: string;
@@ -31,6 +32,19 @@ type InteractionSummary = {
   userId?: string;
   channelId?: string;
   messageTs?: string;
+};
+
+type ModalInputSummary = {
+  blockId: string;
+  actionId: string;
+  actionType?: string;
+  value?: string;
+  selectedValues?: string[];
+  selectedLabels?: string[];
+  selectedDate?: string;
+  selectedTime?: string;
+  selectedDateTime?: number;
+  inputValue?: string;
 };
 
 function readOptionValues(options: unknown): string[] | undefined {
@@ -108,6 +122,30 @@ function isBulkActionsBlock(block: InteractionMessageBlock): boolean {
   );
 }
 
+function summarizeViewState(values: unknown): ModalInputSummary[] {
+  if (!values || typeof values !== "object") {
+    return [];
+  }
+  const entries: ModalInputSummary[] = [];
+  for (const [blockId, blockValue] of Object.entries(values as Record<string, unknown>)) {
+    if (!blockValue || typeof blockValue !== "object") {
+      continue;
+    }
+    for (const [actionId, rawAction] of Object.entries(blockValue as Record<string, unknown>)) {
+      if (!rawAction || typeof rawAction !== "object") {
+        continue;
+      }
+      const actionSummary = summarizeAction(rawAction as Record<string, unknown>);
+      entries.push({
+        blockId,
+        actionId,
+        ...actionSummary,
+      });
+    }
+  }
+  return entries;
+}
+
 export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContext }) {
   const { ctx } = params;
   if (typeof ctx.app.action !== "function") {
@@ -144,6 +182,7 @@ export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContex
       const messageTs = typedBody.message?.ts;
       const actionSummary = summarizeAction(typedAction);
       const eventPayload: InteractionSummary = {
+        interactionType: "block_action",
         actionId,
         blockId,
         ...actionSummary,
@@ -234,6 +273,53 @@ export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContex
           // Action was acknowledged and system event enqueued even when response updates fail.
         }
       }
+    },
+  );
+
+  if (typeof ctx.app.view !== "function") {
+    return;
+  }
+
+  // Handle OpenClaw modal submissions with callback_ids scoped by our prefix.
+  ctx.app.view(
+    new RegExp(`^${OPENCLAW_ACTION_PREFIX}`),
+    async ({ ack, body }: { ack: () => Promise<void>; body: unknown }) => {
+      await ack();
+
+      const typedBody = body as {
+        user?: { id?: string };
+        team?: { id?: string };
+        view?: {
+          id?: string;
+          callback_id?: string;
+          state?: { values?: unknown };
+        };
+      };
+
+      const callbackId = typedBody.view?.callback_id ?? "unknown";
+      const userId = typedBody.user?.id ?? "unknown";
+      const viewId = typedBody.view?.id;
+      const inputs = summarizeViewState(typedBody.view?.state?.values);
+      const eventPayload = {
+        interactionType: "view_submission",
+        actionId: `view:${callbackId}`,
+        callbackId,
+        viewId,
+        userId,
+        teamId: typedBody.team?.id,
+        inputs,
+      };
+
+      ctx.runtime.log?.(
+        `slack:interaction view_submission callback=${callbackId} user=${userId} inputs=${inputs.length}`,
+      );
+
+      enqueueSystemEvent(`Slack interaction: ${JSON.stringify(eventPayload)}`, {
+        sessionKey: ctx.resolveSlackSystemEventSessionKey({}),
+        contextKey: ["slack:interaction:view", callbackId, viewId, userId]
+          .filter(Boolean)
+          .join(":"),
+      });
     },
   );
 }

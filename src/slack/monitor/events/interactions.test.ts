@@ -18,11 +18,28 @@ type RegisteredHandler = (args: {
   respond?: (payload: { text: string; response_type: string }) => Promise<void>;
 }) => Promise<void>;
 
+type RegisteredViewHandler = (args: {
+  ack: () => Promise<void>;
+  body: {
+    user?: { id?: string };
+    team?: { id?: string };
+    view?: {
+      id?: string;
+      callback_id?: string;
+      state?: { values?: Record<string, Record<string, Record<string, unknown>>> };
+    };
+  };
+}) => Promise<void>;
+
 function createContext() {
   let handler: RegisteredHandler | null = null;
+  let viewHandler: RegisteredViewHandler | null = null;
   const app = {
     action: vi.fn((_matcher: RegExp, next: RegisteredHandler) => {
       handler = next;
+    }),
+    view: vi.fn((_matcher: RegExp, next: RegisteredViewHandler) => {
+      viewHandler = next;
     }),
     client: {
       chat: {
@@ -37,7 +54,14 @@ function createContext() {
     runtime: { log: runtimeLog },
     resolveSlackSystemEventSessionKey: resolveSessionKey,
   };
-  return { ctx, app, runtimeLog, resolveSessionKey, getHandler: () => handler };
+  return {
+    ctx,
+    app,
+    runtimeLog,
+    resolveSessionKey,
+    getHandler: () => handler,
+    getViewHandler: () => viewHandler,
+  };
 }
 
 describe("registerSlackInteractionEvents", () => {
@@ -140,5 +164,71 @@ describe("registerSlackInteractionEvents", () => {
     expect(payload.actionType).toBe("static_select");
     expect(payload.selectedValues).toEqual(["canary"]);
     expect(app.client.chat.update).not.toHaveBeenCalled();
+  });
+
+  it("captures modal submissions and enqueues view submission event", async () => {
+    enqueueSystemEventMock.mockReset();
+    const { ctx, getViewHandler, resolveSessionKey } = createContext();
+    registerSlackInteractionEvents({ ctx: ctx as never });
+    const viewHandler = getViewHandler();
+    expect(viewHandler).toBeTruthy();
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    await viewHandler!({
+      ack,
+      body: {
+        user: { id: "U777" },
+        team: { id: "T1" },
+        view: {
+          id: "V123",
+          callback_id: "openclaw:deploy_form",
+          state: {
+            values: {
+              env_block: {
+                env_select: {
+                  type: "static_select",
+                  selected_option: {
+                    text: { type: "plain_text", text: "Production" },
+                    value: "prod",
+                  },
+                },
+              },
+              notes_block: {
+                notes_input: {
+                  type: "plain_text_input",
+                  value: "ship now",
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(ack).toHaveBeenCalled();
+    expect(resolveSessionKey).toHaveBeenCalledWith({});
+    expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
+    const [eventText] = enqueueSystemEventMock.mock.calls[0] as [string];
+    const payload = JSON.parse(eventText.replace("Slack interaction: ", "")) as {
+      interactionType: string;
+      actionId: string;
+      callbackId: string;
+      viewId: string;
+      userId: string;
+      inputs: Array<{ actionId: string; selectedValues?: string[]; inputValue?: string }>;
+    };
+    expect(payload).toMatchObject({
+      interactionType: "view_submission",
+      actionId: "view:openclaw:deploy_form",
+      callbackId: "openclaw:deploy_form",
+      viewId: "V123",
+      userId: "U777",
+    });
+    expect(payload.inputs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ actionId: "env_select", selectedValues: ["prod"] }),
+        expect.objectContaining({ actionId: "notes_input", inputValue: "ship now" }),
+      ]),
+    );
   });
 });
