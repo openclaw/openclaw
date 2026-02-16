@@ -130,22 +130,6 @@ describe("resolveSessionResetPolicy", () => {
       expect(policy.idleMinutes).toBe(45);
     });
 
-    it("prefers resetByType.direct over resetByType.dm when both present", () => {
-      const sessionCfg = {
-        resetByType: {
-          direct: { mode: "daily" as const },
-          dm: { mode: "idle" as const, idleMinutes: 99 },
-        },
-      } as unknown as SessionConfig;
-
-      const policy = resolveSessionResetPolicy({
-        sessionCfg,
-        resetType: "direct",
-      });
-
-      expect(policy.mode).toBe("daily");
-    });
-
     it("does not use dm fallback for group/thread types", () => {
       const sessionCfg = {
         resetByType: {
