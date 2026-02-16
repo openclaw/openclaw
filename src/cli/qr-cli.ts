@@ -40,7 +40,7 @@ export function registerQrCli(program: Command) {
     .description("Generate an iOS pairing QR code and setup code")
     .option(
       "--remote",
-      "Prefer gateway.remote.url (or tailscale serve/funnel) for the setup payload (ignores device-pair publicUrl)",
+      "Use gateway.remote.url and gateway.remote token/password (ignores device-pair publicUrl)",
       false,
     )
     .option("--url <url>", "Override gateway URL used in the setup payload")
@@ -69,6 +69,7 @@ export function registerQrCli(program: Command) {
 
         const token = typeof opts.token === "string" ? opts.token.trim() : "";
         const password = typeof opts.password === "string" ? opts.password.trim() : "";
+        const wantsRemote = opts.remote === true;
         if (token) {
           cfg.gateway.auth.mode = "token";
           cfg.gateway.auth.token = token;
@@ -77,8 +78,6 @@ export function registerQrCli(program: Command) {
           cfg.gateway.auth.mode = "password";
           cfg.gateway.auth.password = password;
         }
-
-        const wantsRemote = opts.remote === true;
         if (wantsRemote && !token && !password) {
           const remoteToken =
             typeof cfg.gateway?.remote?.token === "string" ? cfg.gateway.remote.token.trim() : "";
@@ -86,9 +85,6 @@ export function registerQrCli(program: Command) {
             typeof cfg.gateway?.remote?.password === "string"
               ? cfg.gateway.remote.password.trim()
               : "";
-
-          // In remote mode, prefer the client-side remote credentials. These are expected to match the
-          // remote gateway's auth settings (gateway.remote.token/password ~= gateway.auth.token/password).
           if (remoteToken) {
             cfg.gateway.auth.mode = "token";
             cfg.gateway.auth.token = remoteToken;
@@ -100,30 +96,34 @@ export function registerQrCli(program: Command) {
           }
         }
 
-        if (wantsRemote && !opts.url && !opts.publicUrl) {
-          const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
-          const remoteUrl = cfg.gateway?.remote?.url;
-          const hasRemoteUrl = typeof remoteUrl === "string" && remoteUrl.trim().length > 0;
-          const hasTailscaleServe = tailscaleMode === "serve" || tailscaleMode === "funnel";
-          if (!hasRemoteUrl && !hasTailscaleServe) {
-            throw new Error(
-              "qr --remote requires gateway.remote.url (or gateway.tailscale.mode=serve/funnel).",
-            );
-          }
-        }
-
-        const publicUrl =
+        const explicitUrl =
           typeof opts.url === "string" && opts.url.trim()
             ? opts.url.trim()
             : typeof opts.publicUrl === "string" && opts.publicUrl.trim()
               ? opts.publicUrl.trim()
-              : wantsRemote
-                ? undefined
-                : readDevicePairPublicUrlFromConfig(cfg);
+              : undefined;
+        if (wantsRemote && !explicitUrl) {
+          const existing = cfg.plugins?.entries?.["device-pair"];
+          if (existing && typeof existing === "object") {
+            cfg.plugins = {
+              ...cfg.plugins,
+              entries: {
+                ...cfg.plugins?.entries,
+                "device-pair": {
+                  ...existing,
+                  config: {
+                    ...existing.config,
+                    publicUrl: undefined,
+                  },
+                },
+              },
+            };
+          }
+        }
+        const publicUrl = explicitUrl ?? readDevicePairPublicUrlFromConfig(cfg);
 
         const resolved = await resolvePairingSetupFromConfig(cfg, {
           publicUrl,
-          forceSecure: wantsRemote || undefined,
           runCommandWithTimeout: async (argv, runOpts) =>
             await runCommandWithTimeout(argv, {
               timeoutMs: runOpts.timeoutMs,

@@ -169,6 +169,14 @@ const entries: SubCliEntry[] = [
     },
   },
   {
+    name: "qr",
+    description: "Generate iOS pairing QR/setup code",
+    register: async (program) => {
+      const mod = await import("../qr-cli.js");
+      mod.registerQrCli(program);
+    },
+  },
+  {
     name: "pairing",
     description: "Pairing helpers",
     register: async (program) => {

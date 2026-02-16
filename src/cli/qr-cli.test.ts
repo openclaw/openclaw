@@ -118,14 +118,14 @@ describe("registerQrCli", () => {
   it("uses gateway.remote.url when --remote is set (ignores device-pair publicUrl)", async () => {
     loadConfig.mockReturnValue({
       gateway: {
-        auth: { mode: "token", token: "local-tok" },
         remote: { url: "wss://remote.example.com:444", token: "remote-tok" },
+        auth: { mode: "token", token: "local-tok" },
       },
       plugins: {
         entries: {
           "device-pair": {
             config: {
-              publicUrl: "ws://plugin.example.com:18789",
+              publicUrl: "wss://wrong.example.com:443",
             },
           },
         },
@@ -134,7 +134,6 @@ describe("registerQrCli", () => {
 
     const program = new Command();
     registerQrCli(program);
-
     await program.parseAsync(["qr", "--setup-code-only", "--remote"], { from: "user" });
 
     const expected = encodePairingSetupCode({
@@ -144,21 +143,35 @@ describe("registerQrCli", () => {
     expect(runtime.log).toHaveBeenCalledWith(expected);
   });
 
-  it("errors when --remote is set but no remote URL is configured", async () => {
+  it("reports gateway.remote.url as source in --remote json output", async () => {
     loadConfig.mockReturnValue({
       gateway: {
-        bind: "custom",
-        customBindHost: "gateway.local",
-        auth: { mode: "token", token: "tok" },
+        remote: { url: "wss://remote.example.com:444", token: "remote-tok" },
+        auth: { mode: "token", token: "local-tok" },
+      },
+      plugins: {
+        entries: {
+          "device-pair": {
+            config: {
+              publicUrl: "wss://wrong.example.com:443",
+            },
+          },
+        },
       },
     });
 
     const program = new Command();
     registerQrCli(program);
+    await program.parseAsync(["qr", "--json", "--remote"], { from: "user" });
 
-    await expect(program.parseAsync(["qr", "--remote"], { from: "user" })).rejects.toThrow("exit");
-
-    const output = runtime.error.mock.calls.map((call) => String(call[0] ?? "")).join("\n");
-    expect(output).toContain("qr --remote requires");
+    const payload = JSON.parse(String(runtime.log.mock.calls.at(-1)?.[0] ?? "{}")) as {
+      setupCode?: string;
+      gatewayUrl?: string;
+      auth?: string;
+      urlSource?: string;
+    };
+    expect(payload.gatewayUrl).toBe("wss://remote.example.com:444");
+    expect(payload.auth).toBe("token");
+    expect(payload.urlSource).toBe("gateway.remote.url");
   });
 });
