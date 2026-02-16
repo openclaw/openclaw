@@ -39,6 +39,33 @@ struct RootCanvas: View {
         }
     }
 
+    enum StartupPresentationRoute: Equatable {
+        case none
+        case onboarding
+        case settings
+    }
+
+    static func startupPresentationRoute(
+        gatewayConnected: Bool,
+        hasConnectedOnce: Bool,
+        onboardingComplete: Bool,
+        hasExistingGatewayConfig: Bool,
+        shouldPresentOnLaunch: Bool) -> StartupPresentationRoute
+    {
+        if gatewayConnected {
+            return .none
+        }
+        // On first run or explicit launch onboarding state, onboarding always wins.
+        if shouldPresentOnLaunch || !hasConnectedOnce || !onboardingComplete {
+            return .onboarding
+        }
+        // Settings auto-open is a recovery path for previously-connected installs only.
+        if !hasExistingGatewayConfig {
+            return .settings
+        }
+        return .none
+    }
+
     var body: some View {
         ZStack {
             CanvasContent(
@@ -184,21 +211,22 @@ struct RootCanvas: View {
 
         guard !self.didEvaluateOnboarding else { return }
         self.didEvaluateOnboarding = true
-        // If we've connected before or have a saved connection config, don't force onboarding on launch.
-        // Auto-connect + Settings cover recovery without blocking the UI behind onboarding.
-        if self.hasConnectedOnce || self.onboardingComplete || self.hasExistingGatewayConfig() {
-            return
+        let route = Self.startupPresentationRoute(
+            gatewayConnected: self.appModel.gatewayServerName != nil,
+            hasConnectedOnce: self.hasConnectedOnce,
+            onboardingComplete: self.onboardingComplete,
+            hasExistingGatewayConfig: self.hasExistingGatewayConfig(),
+            shouldPresentOnLaunch: OnboardingStateStore.shouldPresentOnLaunch(appModel: self.appModel))
+        switch route {
+        case .none:
+            break
+        case .onboarding:
+            self.onboardingAllowSkip = true
+            self.showOnboarding = true
+        case .settings:
+            self.didAutoOpenSettings = true
+            self.presentedSheet = .settings
         }
-        guard OnboardingStateStore.shouldPresentOnLaunch(appModel: self.appModel) else { return }
-        self.onboardingAllowSkip = true
-        self.showOnboarding = true
-    }
-
-    private func shouldAutoOpenSettings() -> Bool {
-        if self.appModel.gatewayServerName != nil { return false }
-        if !self.hasConnectedOnce { return true }
-        if !self.onboardingComplete { return true }
-        return !self.hasExistingGatewayConfig()
     }
 
     private func hasExistingGatewayConfig() -> Bool {
@@ -210,7 +238,13 @@ struct RootCanvas: View {
     private func maybeAutoOpenSettings() {
         guard !self.didAutoOpenSettings else { return }
         guard !self.showOnboarding else { return }
-        guard self.shouldAutoOpenSettings() else { return }
+        let route = Self.startupPresentationRoute(
+            gatewayConnected: self.appModel.gatewayServerName != nil,
+            hasConnectedOnce: self.hasConnectedOnce,
+            onboardingComplete: self.onboardingComplete,
+            hasExistingGatewayConfig: self.hasExistingGatewayConfig(),
+            shouldPresentOnLaunch: false)
+        guard route == .settings else { return }
         self.didAutoOpenSettings = true
         self.presentedSheet = .settings
     }
