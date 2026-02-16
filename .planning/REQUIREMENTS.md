@@ -62,26 +62,26 @@ Requirements for live testing stabilization. Each maps to roadmap phases.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| AGNT-01 | — | Pending |
-| AGNT-02 | — | Pending |
-| AGNT-03 | — | Pending |
-| AGNT-04 | — | Pending |
-| AGNT-05 | — | Pending |
-| AGNT-06 | — | Pending |
-| GATE-01 | — | Pending |
-| GATE-02 | — | Pending |
-| BMED-01 | — | Pending |
-| BMED-02 | — | Pending |
-| WHAP-01 | — | Pending |
-| TINF-01 | — | Pending |
-| TINF-02 | — | Pending |
-| TINF-03 | — | Pending |
+| TINF-01 | Phase 6 | Pending |
+| TINF-02 | Phase 6 | Pending |
+| TINF-03 | Phase 6 | Pending |
+| AGNT-01 | Phase 7 | Pending |
+| AGNT-02 | Phase 7 | Pending |
+| AGNT-03 | Phase 7 | Pending |
+| AGNT-04 | Phase 7 | Pending |
+| AGNT-05 | Phase 7 | Pending |
+| AGNT-06 | Phase 7 | Pending |
+| GATE-01 | Phase 7 | Pending |
+| GATE-02 | Phase 7 | Pending |
+| BMED-01 | Phase 8 | Pending |
+| BMED-02 | Phase 8 | Pending |
+| WHAP-01 | Phase 8 | Pending |
 
 **Coverage:**
 - v1.1 requirements: 14 total
-- Mapped to phases: 0
-- Unmapped: 14 ⚠️
+- Mapped to phases: 14
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-02-16*
-*Last updated: 2026-02-16 after initial definition*
+*Last updated: 2026-02-16 after roadmap creation*

@@ -5,15 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-02-16)
 
 **Core value:** Inbound messages from any channel cannot manipulate the agent into leaking system prompts, accessing unauthorized tools, exfiltrating user data, or affecting other channels' sessions.
-**Current focus:** v1.1 Live Testing & Stabilization
+**Current focus:** Phase 6 — Test Infrastructure
 
 ## Current Position
 
-Milestone: v1.1 Live Testing & Stabilization
-Phase: Not started (defining requirements)
-Plan: —
-Status: Defining requirements
-Last activity: 2026-02-16 — Milestone v1.1 started
+Phase: 6 of 8 (Test Infrastructure)
+Plan: 0 of ? in current phase
+Status: Ready to plan
+Last activity: 2026-02-16 — v1.1 roadmap created
+
+Progress: [███████████████████░░░░░░░░░░░] 65% (11/~17 plans across all milestones)
 
 ## Performance Metrics
 
@@ -24,11 +25,17 @@ Last activity: 2026-02-16 — Milestone v1.1 started
 - Average: ~5 min/plan
 - 115 tests added, 0 regressions
 
+**v1.1:** No plans completed yet.
+
 ## Accumulated Context
 
 ### Decisions
 
 Full decision log in PROJECT.md Key Decisions table.
+
+- v1.0 shipped and archived; fresh requirements for v1.1
+- v1.1 focuses on stabilization, not new features
+- Phases 7 and 8 can run in parallel after Phase 6
 
 ### Pending Todos
 
@@ -36,10 +43,11 @@ None.
 
 ### Blockers/Concerns
 
-- Pre-existing flaky test: `src/infra/gateway-lock.test.ts` "blocks concurrent acquisition until release" — times out intermittently
+- Pre-existing flaky test: `src/infra/gateway-lock.test.ts` — times out intermittently, unrelated to current work
+- Live test current pass/fail state unknown — discovery is part of Phase 6
 
 ## Session Continuity
 
 Last session: 2026-02-16
-Stopped at: v1.1 milestone defining requirements
-Resume with: Continue requirements definition
+Stopped at: v1.1 roadmap created
+Resume with: `/gsd:plan-phase 6`
