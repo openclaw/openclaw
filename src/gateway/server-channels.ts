@@ -172,6 +172,24 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               running: false,
               lastStopAt: Date.now(),
             });
+
+            // Auto-restart channels that stopped unexpectedly (not aborted).
+            // This prevents silent death when a provider's monitor loop exits
+            // due to transient failures or internal runner exhaustion.
+            if (!abort.signal.aborted) {
+              const restartDelay = 5_000;
+              log.error?.(
+                `[${id}] channel stopped unexpectedly; scheduling restart in ${restartDelay}ms`,
+              );
+              setTimeout(() => {
+                if (abort.signal.aborted) {
+                  return;
+                }
+                startChannel(channelId, id).catch((restartErr) => {
+                  log.error?.(`[${id}] auto-restart failed: ${formatErrorMessage(restartErr)}`);
+                });
+              }, restartDelay);
+            }
           });
         store.tasks.set(id, tracked);
       }),

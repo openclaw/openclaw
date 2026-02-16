@@ -170,17 +170,22 @@ describe("monitorTelegramProvider (grammY)", () => {
 
   it("retries on recoverable network errors", async () => {
     const networkError = Object.assign(new Error("timeout"), { code: "ETIMEDOUT" });
+    const abort = new AbortController();
     runSpy
       .mockImplementationOnce(() => ({
         task: () => Promise.reject(networkError),
         stop: vi.fn(),
       }))
-      .mockImplementationOnce(() => ({
-        task: () => Promise.resolve(),
-        stop: vi.fn(),
-      }));
+      .mockImplementationOnce(() => {
+        // After the retry succeeds, abort to stop the monitor
+        abort.abort();
+        return {
+          task: () => Promise.resolve(),
+          stop: vi.fn(),
+        };
+      });
 
-    await monitorTelegramProvider({ token: "tok" });
+    await monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
 
     expect(computeBackoff).toHaveBeenCalled();
     expect(sleepWithAbort).toHaveBeenCalled();

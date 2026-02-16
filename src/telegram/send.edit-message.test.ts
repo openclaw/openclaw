@@ -89,6 +89,20 @@ describe("editMessageTelegram", () => {
     );
   });
 
+  it("silently ignores 'message is not modified' errors", async () => {
+    botApi.editMessageText.mockRejectedValueOnce(
+      new Error("400: Bad Request: message is not modified"),
+    );
+
+    const result = await editMessageTelegram("123", 1, "same text", {
+      token: "tok",
+      cfg: {},
+    });
+
+    expect(botApi.editMessageText).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ ok: true, messageId: "1", chatId: "123" });
+  });
+
   it("disables link previews when linkPreview is false", async () => {
     botApi.editMessageText.mockResolvedValue({ message_id: 1, chat: { id: "123" } });
 

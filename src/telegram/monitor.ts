@@ -58,6 +58,9 @@ const TELEGRAM_POLL_RESTART_POLICY = {
   jitter: 0.25,
 };
 
+/** Max consecutive clean-stop restarts before giving up. */
+const MAX_CLEAN_STOP_RESTARTS = 10;
+
 const isGetUpdatesConflict = (err: unknown) => {
   if (!err || typeof err !== "object") {
     return false;
@@ -168,8 +171,11 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       return;
     }
 
-    // Use grammyjs/runner for concurrent update processing
+    // Use grammyjs/runner for concurrent update processing.
+    // The runner may stop cleanly when maxRetryTime is exhausted on transient
+    // errors — in that case we restart with backoff instead of exiting.
     let restartAttempts = 0;
+    let cleanStopRestarts = 0;
 
     while (!opts.abortSignal?.aborted) {
       const runner = run(bot, createTelegramRunnerOptions(cfg));
@@ -182,7 +188,35 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       try {
         // runner.task() returns a promise that resolves when the runner stops
         await runner.task();
-        return;
+
+        // If aborted, exit cleanly
+        if (opts.abortSignal?.aborted) {
+          return;
+        }
+
+        // Runner stopped without error — this happens when grammY exhausts
+        // maxRetryTime on transient failures. Restart with backoff instead
+        // of silently dying.
+        cleanStopRestarts += 1;
+        if (cleanStopRestarts > MAX_CLEAN_STOP_RESTARTS) {
+          (opts.runtime?.error ?? console.error)(
+            `[telegram] Runner stopped cleanly ${cleanStopRestarts} times — giving up. Check network connectivity.`,
+          );
+          return;
+        }
+
+        restartAttempts += 1;
+        const delayMs = computeBackoff(TELEGRAM_POLL_RESTART_POLICY, restartAttempts);
+        (opts.runtime?.error ?? console.error)(
+          `[telegram] Runner stopped unexpectedly (clean exit ${cleanStopRestarts}/${MAX_CLEAN_STOP_RESTARTS}); restarting in ${formatDurationPrecise(delayMs)}.`,
+        );
+        try {
+          await sleepWithAbort(delayMs, opts.abortSignal);
+        } catch {
+          if (opts.abortSignal?.aborted) {
+            return;
+          }
+        }
       } catch (err) {
         if (opts.abortSignal?.aborted) {
           throw err;
@@ -192,6 +226,8 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         if (!isConflict && !isRecoverable) {
           throw err;
         }
+        // Reset clean-stop counter on error-based restarts (different failure mode)
+        cleanStopRestarts = 0;
         restartAttempts += 1;
         const delayMs = computeBackoff(TELEGRAM_POLL_RESTART_POLICY, restartAttempts);
         const reason = isConflict ? "getUpdates conflict" : "network error";

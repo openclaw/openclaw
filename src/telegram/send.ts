@@ -769,8 +769,14 @@ export async function editMessageTelegram(
     () => api.editMessageText(chatId, messageId, htmlText, editParams),
     "editMessage",
   ).catch(async (err) => {
-    // Telegram rejects malformed HTML. Fall back to plain text.
     const errText = formatErrorMessage(err);
+
+    // Benign: Telegram rejects edits when content hasn't changed. Silently ignore.
+    if (/message is not modified/i.test(errText)) {
+      return;
+    }
+
+    // Telegram rejects malformed HTML. Fall back to plain text.
     if (PARSE_ERR_RE.test(errText)) {
       if (opts.verbose) {
         console.warn(`telegram HTML parse failed, retrying as plain text: ${errText}`);
