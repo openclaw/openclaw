@@ -237,6 +237,7 @@ function WorkspacePageInner() {
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<WebSession[]>([]);
   const [sidebarRefreshKey, setSidebarRefreshKey] = useState(0);
+  const [streamingSessionIds, setStreamingSessionIds] = useState<Set<string>>(new Set());
 
   // Cron jobs state
   const [cronJobs, setCronJobs] = useState<CronJob[]>([]);
@@ -302,6 +303,29 @@ function WorkspacePageInner() {
 
   const refreshSessions = useCallback(() => {
     setSidebarRefreshKey((k) => k + 1);
+  }, []);
+
+  // Poll for active (streaming) agent runs so the sidebar can show indicators.
+  useEffect(() => {
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const res = await fetch("/api/chat/active");
+        if (cancelled) {return;}
+        const data = await res.json();
+        const ids: string[] = data.sessionIds ?? [];
+        setStreamingSessionIds((prev) => {
+          // Only update state if the set actually changed (avoid re-renders).
+          if (prev.size === ids.length && ids.every((id) => prev.has(id))) {return prev;}
+          return new Set(ids);
+        });
+      } catch {
+        // ignore
+      }
+    };
+    void poll();
+    const id = setInterval(poll, 3_000);
+    return () => { cancelled = true; clearInterval(id); };
   }, []);
 
   // Fetch cron jobs for sidebar
@@ -540,6 +564,11 @@ function WorkspacePageInner() {
     setContent({ kind: "none" });
     router.replace("/workspace", { scroll: false });
   }, [router]);
+
+  // Insert a file mention into the chat editor when a sidebar item is dropped on the chat input
+  const handleSidebarExternalDrop = useCallback((node: TreeNode) => {
+    chatRef.current?.insertFileMention?.(node.name, node.path);
+  }, []);
 
   // Handle file search selection: navigate sidebar to the file's location and open it
   const handleFileSearchSelect = useCallback(
@@ -819,6 +848,7 @@ function WorkspacePageInner() {
         onFileSearchSelect={handleFileSearchSelect}
         workspaceRoot={workspaceRoot}
         onGoToChat={handleGoToChat}
+        onExternalDrop={handleSidebarExternalDrop}
       />
 
       {/* Main content */}
@@ -880,6 +910,7 @@ function WorkspacePageInner() {
                 <ChatPanel
                   ref={chatRef}
                   sessionTitle={activeSessionTitle}
+                  initialSessionId={activeSessionId ?? undefined}
                   onActiveSessionChange={(id) => {
                     setActiveSessionId(id);
                   }}
@@ -890,6 +921,7 @@ function WorkspacePageInner() {
                 sessions={sessions}
                 activeSessionId={activeSessionId}
                 activeSessionTitle={activeSessionTitle}
+                streamingSessionIds={streamingSessionIds}
                 onSelectSession={(sessionId) => {
                   setActiveSessionId(sessionId);
                   void chatRef.current?.loadSession(sessionId);

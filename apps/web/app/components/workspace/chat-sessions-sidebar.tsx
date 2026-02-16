@@ -15,6 +15,8 @@ type ChatSessionsSidebarProps = {
 	activeSessionId: string | null;
 	/** Title of the currently active session (shown in the header). */
 	activeSessionTitle?: string;
+	/** Session IDs with an actively running agent stream. */
+	streamingSessionIds?: Set<string>;
 	onSelectSession: (sessionId: string) => void;
 	onNewSession: () => void;
 };
@@ -75,6 +77,7 @@ export function ChatSessionsSidebar({
 	sessions,
 	activeSessionId,
 	activeSessionTitle: _activeSessionTitle,
+	streamingSessionIds,
 	onSelectSession,
 	onNewSession,
 }: ChatSessionsSidebarProps) {
@@ -158,25 +161,34 @@ export function ChatSessionsSidebar({
 								>
 									{group.label}
 								</div>
-								{group.sessions.map((session) => {
-									const isActive = session.id === activeSessionId;
-									const isHovered = session.id === hoveredId;
-									return (
-										<button
-											key={session.id}
-											type="button"
-											onClick={() => handleSelect(session.id)}
-											onMouseEnter={() => setHoveredId(session.id)}
-											onMouseLeave={() => setHoveredId(null)}
-											className="w-full text-left px-2 py-2 rounded-lg transition-colors cursor-pointer"
-											style={{
-												background: isActive
-													? "var(--color-accent-light)"
-													: isHovered
-														? "var(--color-surface-hover)"
-														: "transparent",
-											}}
-										>
+							{group.sessions.map((session) => {
+								const isActive = session.id === activeSessionId;
+								const isHovered = session.id === hoveredId;
+								const isStreamingSession = streamingSessionIds?.has(session.id) ?? false;
+								return (
+									<button
+										key={session.id}
+										type="button"
+										onClick={() => handleSelect(session.id)}
+										onMouseEnter={() => setHoveredId(session.id)}
+										onMouseLeave={() => setHoveredId(null)}
+										className="w-full text-left px-2 py-2 rounded-lg transition-colors cursor-pointer"
+										style={{
+											background: isActive
+												? "var(--color-accent-light)"
+												: isHovered
+													? "var(--color-surface-hover)"
+													: "transparent",
+										}}
+									>
+										<div className="flex items-center gap-1.5">
+											{isStreamingSession && (
+												<span
+													className="inline-block w-1.5 h-1.5 rounded-full flex-shrink-0 animate-pulse"
+													style={{ background: "var(--color-accent)" }}
+													title="Agent is running"
+												/>
+											)}
 											<div
 												className="text-xs font-medium truncate"
 												style={{
@@ -187,23 +199,32 @@ export function ChatSessionsSidebar({
 											>
 												{session.title || "Untitled chat"}
 											</div>
-											<div className="flex items-center gap-2 mt-0.5">
+										</div>
+										<div className="flex items-center gap-2 mt-0.5" style={{ paddingLeft: isStreamingSession ? "calc(0.375rem + 6px)" : undefined }}>
+											{isStreamingSession && (
+												<span
+													className="text-[10px] font-medium"
+													style={{ color: "var(--color-accent)" }}
+												>
+													Streaming
+												</span>
+											)}
+											<span
+												className="text-[10px]"
+												style={{ color: "var(--color-text-muted)" }}
+											>
+												{timeAgo(session.updatedAt)}
+											</span>
+											{session.messageCount > 0 && (
 												<span
 													className="text-[10px]"
 													style={{ color: "var(--color-text-muted)" }}
 												>
-													{timeAgo(session.updatedAt)}
+													{session.messageCount} msg{session.messageCount !== 1 ? "s" : ""}
 												</span>
-												{session.messageCount > 0 && (
-													<span
-														className="text-[10px]"
-														style={{ color: "var(--color-text-muted)" }}
-													>
-														{session.messageCount} msg{session.messageCount !== 1 ? "s" : ""}
-													</span>
-												)}
-											</div>
-										</button>
+											)}
+										</div>
+									</button>
 									);
 								})}
 							</div>

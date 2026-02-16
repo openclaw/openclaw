@@ -456,6 +456,8 @@ type ChatPanelProps = {
 	compact?: boolean;
 	/** Override the header title when a session is active (e.g. show the session's actual title). */
 	sessionTitle?: string;
+	/** Session ID to auto-load on mount (for non-file panels that remount after navigation). */
+	initialSessionId?: string;
 	/** Called when file content may have changed after agent edits. */
 	onFileChanged?: (newContent: string) => void;
 	/** Called when active session changes (for external sidebar highlighting). */
@@ -470,6 +472,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 			fileContext,
 			compact,
 			sessionTitle,
+			initialSessionId,
 			onFileChanged,
 			onActiveSessionChange,
 			onSessionsChange,
@@ -619,6 +622,14 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 						return false; // No active run
 					}
 
+					// If the run already completed (still in the grace
+					// period), skip the expensive SSE replay -- the
+					// persisted messages we already loaded are final.
+					if (res.headers.get("X-Run-Active") === "false") {
+						res.body.cancel();
+						return false;
+					}
+
 					setIsReconnecting(true);
 
 					const parser = createStreamParser();
@@ -629,6 +640,10 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 					let frameRequested = false;
 
 					const updateUI = () => {
+						// Guard: if the session was switched while a
+						// rAF was pending, don't overwrite the new
+						// session's messages with stale data.
+						if (abort.signal.aborted) {return;}
 						const assistantMsg = {
 							id: reconnectMsgId,
 							role: "assistant" as const,
@@ -685,10 +700,12 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 					updateUI();
 
 					// Mark all messages as saved (server persisted them)
-					for (const m of baseMessages) {
-						savedMessageIdsRef.current.add(m.id);
+					if (!abort.signal.aborted) {
+						for (const m of baseMessages) {
+							savedMessageIdsRef.current.add(m.id);
+						}
+						savedMessageIdsRef.current.add(reconnectMsgId);
 					}
-					savedMessageIdsRef.current.add(reconnectMsgId);
 
 					setIsReconnecting(false);
 					reconnectAbortRef.current = null;
@@ -800,13 +817,15 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 								};
 							},
 						);
-						if (!cancelled) {
-							setMessages(uiMessages);
-						}
+					if (!cancelled) {
+						setMessages(uiMessages);
+					}
 
-						// If there was a streaming message, try to
-						// reconnect to the active agent run.
-						if (hasStreaming && !cancelled) {
+						// Always try to reconnect to a potentially
+						// active agent run. The stream endpoint returns
+						// 404 gracefully if no run exists, avoiding the
+						// 2-second persistence timing gap for _streaming.
+						if (!cancelled) {
 							await attemptReconnect(
 								latest.id,
 								uiMessages,
@@ -823,6 +842,20 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 			};
 			// eslint-disable-next-line react-hooks/exhaustive-deps -- stable setters
 		}, [filePath, attemptReconnect]);
+
+		// ── Non-file panel: auto-restore session on mount ──
+		// When the main ChatPanel remounts after navigation (e.g. user viewed
+		// a file then returned to chat), re-load the previously active session
+		// and reconnect to any active stream.
+		const initialSessionHandled = useRef(false);
+		useEffect(() => {
+			if (filePath || !initialSessionId || initialSessionHandled.current) {
+				return;
+			}
+			initialSessionHandled.current = true;
+			void handleSessionSelect(initialSessionId);
+			// eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount
+		}, []);
 
 		// ── Post-stream side-effects (file-reload, session refresh) ──
 		// Message persistence is handled server-side by ActiveRunManager,
@@ -1063,13 +1096,11 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 
 					setMessages(uiMessages);
 
-					// Reconnect to active stream if one exists.
-					if (hasStreaming) {
-						await attemptReconnect(
-							sessionId,
-							uiMessages,
-						);
-					}
+					// Always try to reconnect -- the stream endpoint
+					// returns 404 gracefully if no active run exists,
+					// and this avoids missing runs whose _streaming
+					// flag hasn't been persisted yet.
+					await attemptReconnect(sessionId, uiMessages);
 				} catch (err) {
 					console.error("Error loading session:", err);
 				} finally {
@@ -1485,7 +1516,8 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 						className={compact ? "" : "max-w-[720px] mx-auto"}
 					>
 						<div
-							className="rounded-3xl overflow-hidden"
+							data-chat-drop-target=""
+							className="rounded-3xl overflow-hidden chat-input-drop-target"
 							style={{
 								background:
 									"var(--color-chat-input-bg)",
@@ -1744,6 +1776,17 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 					}
 					onSelect={handleFilesSelected}
 				/>
+
+				{/* Drop highlight for sidebar drag-and-drop */}
+				<style>{`
+					.chat-input-drop-target[data-drag-hover] {
+						outline: 2px dashed var(--color-accent) !important;
+						outline-offset: -2px;
+						box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-accent) 15%, transparent),
+						            0 0 32px rgba(0,0,0,0.07) !important;
+						transition: outline 150ms ease, box-shadow 150ms ease;
+					}
+				`}</style>
 			</div>
 		);
 	},

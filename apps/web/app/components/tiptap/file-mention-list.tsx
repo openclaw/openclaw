@@ -16,7 +16,10 @@ import { createPortal } from "react-dom";
 type SuggestItem = {
 	name: string;
 	path: string;
-	type: "folder" | "file" | "document" | "database";
+	type: "folder" | "file" | "document" | "database" | "object" | "entry";
+	icon?: string;
+	objectName?: string;
+	entryId?: string;
 };
 
 export type FileMentionListRef = {
@@ -31,12 +34,15 @@ type FileMentionListProps = {
 
 // ── File type helpers ──
 
-function getFileCategory(
-	name: string,
-	type: string,
-): "folder" | "image" | "video" | "audio" | "pdf" | "code" | "document" | "database" | "other" {
+type FileCategory =
+	| "folder" | "image" | "video" | "audio" | "pdf" | "code"
+	| "document" | "database" | "object" | "entry" | "other";
+
+function getFileCategory(name: string, type: string): FileCategory {
 	if (type === "folder") {return "folder";}
 	if (type === "database") {return "database";}
+	if (type === "object") {return "object";}
+	if (type === "entry") {return "entry";}
 	const ext = name.split(".").pop()?.toLowerCase() ?? "";
 	if (
 		["jpg", "jpeg", "png", "gif", "webp", "svg", "bmp", "ico", "tiff", "heic"].includes(ext)
@@ -66,6 +72,8 @@ const categoryColors: Record<string, { bg: string; fg: string }> = {
 	code: { bg: "rgba(59, 130, 246, 0.12)", fg: "#3b82f6" },
 	document: { bg: "rgba(107, 114, 128, 0.12)", fg: "#6b7280" },
 	database: { bg: "rgba(168, 85, 247, 0.12)", fg: "#a855f7" },
+	object: { bg: "rgba(14, 165, 233, 0.12)", fg: "#0ea5e9" },
+	entry: { bg: "rgba(34, 197, 94, 0.12)", fg: "#22c55e" },
 	other: { bg: "rgba(107, 114, 128, 0.08)", fg: "#9ca3af" },
 };
 
@@ -132,6 +140,24 @@ function MiniIcon({ category }: { category: string }) {
 					<ellipse cx="12" cy="5" rx="9" ry="3" />
 					<path d="M3 5V19A9 3 0 0 0 21 19V5" />
 					<path d="M3 12A9 3 0 0 0 21 12" />
+				</svg>
+			);
+		case "object":
+			return (
+				<svg {...props}>
+					<rect x="3" y="3" width="7" height="7" rx="1" />
+					<rect x="14" y="3" width="7" height="7" rx="1" />
+					<rect x="3" y="14" width="7" height="7" rx="1" />
+					<rect x="14" y="14" width="7" height="7" rx="1" />
+				</svg>
+			);
+		case "entry":
+			return (
+				<svg {...props}>
+					<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+					<circle cx="9" cy="7" r="4" />
+					<path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+					<path d="M16 3.13a4 4 0 0 1 0 7.75" />
 				</svg>
 			);
 		default:
@@ -218,8 +244,8 @@ const FileMentionList = forwardRef<FileMentionListRef, FileMentionListProps>(
 							className="text-[12px]"
 							style={{ color: "var(--color-text-muted)" }}
 						>
-							Searching files...
-						</span>
+						Searching...
+					</span>
 					</div>
 				</div>
 			);
@@ -240,7 +266,7 @@ const FileMentionList = forwardRef<FileMentionListRef, FileMentionListProps>(
 						className="text-[12px]"
 						style={{ color: "var(--color-text-muted)" }}
 					>
-						No files found
+						No results found
 					</span>
 				</div>
 			);
@@ -259,64 +285,85 @@ const FileMentionList = forwardRef<FileMentionListRef, FileMentionListProps>(
 					maxHeight: 300,
 				}}
 			>
-				{items.map((item, index) => {
-					const category = getFileCategory(item.name, item.type);
-					const colors = categoryColors[category] ?? categoryColors.other;
-					const short = shortenPath(item.path);
+			{items.map((item, index) => {
+				const category = getFileCategory(item.name, item.type);
+				const colors = categoryColors[category] ?? categoryColors.other;
+				const hasEmoji = item.icon && /\p{Emoji_Presentation}/u.test(item.icon);
+				const isDbItem = item.type === "object" || item.type === "entry";
+				const sublabel = item.type === "entry" && item.objectName
+					? item.objectName
+					: isDbItem
+						? item.type
+						: shortenPath(item.path);
 
-					return (
-						<button
-							key={item.path}
-							type="button"
-							className="w-full flex items-center gap-2.5 px-3 py-1.5 text-left transition-colors"
-							style={{
-								background:
-									index === selectedIndex
-										? "var(--color-surface-hover)"
-										: "transparent",
-							}}
-							onClick={() => selectItem(index)}
-							onMouseEnter={() => setSelectedIndex(index)}
+				return (
+					<button
+						key={item.path}
+						type="button"
+						className="w-full flex items-center gap-2.5 px-3 py-1.5 text-left transition-colors"
+						style={{
+							background:
+								index === selectedIndex
+									? "var(--color-surface-hover)"
+									: "transparent",
+						}}
+						onClick={() => selectItem(index)}
+						onMouseEnter={() => setSelectedIndex(index)}
+					>
+						<div
+							className="w-6 h-6 rounded-md flex items-center justify-center flex-shrink-0"
+							style={{ background: colors.bg, color: colors.fg }}
 						>
-							<div
-								className="w-6 h-6 rounded-md flex items-center justify-center flex-shrink-0"
-								style={{ background: colors.bg, color: colors.fg }}
-							>
+							{hasEmoji ? (
+								<span className="text-[13px] leading-none">{item.icon}</span>
+							) : (
 								<MiniIcon category={category} />
-							</div>
-							<div className="min-w-0 flex-1">
-								<div
-									className="text-[12px] font-medium truncate"
-									style={{ color: "var(--color-text)" }}
-								>
-									{item.name}
-								</div>
-								<div
-									className="text-[10px] truncate"
-									style={{ color: "var(--color-text-muted)" }}
-									title={item.path}
-								>
-									{short}
-								</div>
-							</div>
-							{item.type === "folder" && (
-								<svg
-									width="12"
-									height="12"
-									viewBox="0 0 24 24"
-									fill="none"
-									stroke="currentColor"
-									strokeWidth="2"
-									strokeLinecap="round"
-									strokeLinejoin="round"
-									className="flex-shrink-0 opacity-40"
-								>
-									<path d="m9 18 6-6-6-6" />
-								</svg>
 							)}
-						</button>
-					);
-				})}
+						</div>
+						<div className="min-w-0 flex-1">
+							<div
+								className="text-[12px] font-medium truncate"
+								style={{ color: "var(--color-text)" }}
+							>
+								{item.name}
+							</div>
+							<div
+								className="text-[10px] truncate flex items-center gap-1"
+								style={{ color: "var(--color-text-muted)" }}
+								title={isDbItem ? sublabel : item.path}
+							>
+								{isDbItem && (
+									<span
+										className="inline-block rounded px-1 py-px text-[9px] font-medium leading-tight"
+										style={{
+											background: colors.bg,
+											color: colors.fg,
+										}}
+									>
+										{item.type}
+									</span>
+								)}
+								{sublabel}
+							</div>
+						</div>
+						{item.type === "folder" && (
+							<svg
+								width="12"
+								height="12"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								strokeWidth="2"
+								strokeLinecap="round"
+								strokeLinejoin="round"
+								className="flex-shrink-0 opacity-40"
+							>
+								<path d="m9 18 6-6-6-6" />
+							</svg>
+						)}
+					</button>
+				);
+			})}
 			</div>
 		);
 	},

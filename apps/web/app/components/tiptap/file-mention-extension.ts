@@ -7,10 +7,16 @@ export const chatFileMentionPluginKey = new PluginKey("chatFileMention");
 export type FileMentionAttrs = {
 	label: string;
 	path: string;
+	/** Distinguish between file, object, and entry mentions */
+	mentionType?: "file" | "object" | "entry";
+	/** Object name for entry mentions */
+	objectName?: string;
 };
 
-/** Resolve mention pill colors from the filename extension. */
-function mentionColors(label: string): { bg: string; fg: string } {
+/** Resolve mention pill colors from the mention type or filename extension. */
+function mentionColors(label: string, mentionType?: string): { bg: string; fg: string } {
+	if (mentionType === "object") {return { bg: "rgba(14,165,233,0.15)", fg: "#0ea5e9" };}
+	if (mentionType === "entry") {return { bg: "rgba(34,197,94,0.15)", fg: "#22c55e" };}
 	const ext = label.split(".").pop()?.toLowerCase() ?? "";
 	if (
 		["jpg", "jpeg", "png", "gif", "webp", "svg", "bmp", "ico", "tiff", "heic"].includes(ext)
@@ -53,6 +59,8 @@ export const FileMentionNode = Node.create({
 		return {
 			label: { default: "" },
 			path: { default: "" },
+			mentionType: { default: "file" },
+			objectName: { default: "" },
 		};
 	},
 
@@ -62,7 +70,8 @@ export const FileMentionNode = Node.create({
 
 	renderHTML({ HTMLAttributes }) {
 		const label = (HTMLAttributes.label as string) || "file";
-		const colors = mentionColors(label);
+		const mType = HTMLAttributes.mentionType as string | undefined;
+		const colors = mentionColors(label, mType);
 		return [
 			"span",
 			mergeAttributes(

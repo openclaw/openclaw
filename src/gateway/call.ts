@@ -328,7 +328,12 @@ export async function callGateway<T = Record<string, unknown>>(
         const doAbort = async () => {
           if (opts.onAbort) {
             try {
-              await opts.onAbort(client);
+              // Cap the best-effort abort RPC at 3 seconds so a slow
+              // or broken gateway can't hang the process indefinitely.
+              await Promise.race([
+                opts.onAbort(client),
+                new Promise<void>((r) => setTimeout(r, 3_000)),
+              ]);
             } catch {
               // best-effort; swallow errors
             }

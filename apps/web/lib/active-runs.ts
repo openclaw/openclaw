@@ -104,6 +104,17 @@ export function hasActiveRun(sessionId: string): boolean {
 	return run !== undefined && run.status === "running";
 }
 
+/** Return the session IDs of all currently running agent runs. */
+export function getRunningSessionIds(): string[] {
+	const ids: string[] = [];
+	for (const [sessionId, run] of activeRuns) {
+		if (run.status === "running") {
+			ids.push(sessionId);
+		}
+	}
+	return ids;
+}
+
 /**
  * Subscribe to an active run's SSE events.
  *
@@ -148,6 +159,19 @@ export function abortRun(sessionId: string): boolean {
 	if (!run || run.status !== "running") {return false;}
 	run.abortController.abort();
 	run.childProcess.kill("SIGTERM");
+
+	// Fallback: if the child doesn't exit within 5 seconds after
+	// SIGTERM (e.g. the CLI's best-effort chat.abort RPC hangs),
+	// send SIGKILL to force-terminate.
+	const killTimer = setTimeout(() => {
+		try {
+			if (run.status === "running") {
+				run.childProcess.kill("SIGKILL");
+			}
+		} catch { /* already dead */ }
+	}, 5_000);
+	run.childProcess.once("close", () => clearTimeout(killTimer));
+
 	return true;
 }
 

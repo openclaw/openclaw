@@ -86,8 +86,10 @@ function shortenPath(path: string): string {
 }
 
 /**
- * Serialize the editor content to plain text with file mention markers.
+ * Serialize the editor content to plain text with mention markers.
  * Returns { text, mentionedFiles }.
+ * Objects serialize as `[object: name]`, entries as `[entry: objectName/label]`,
+ * and files as `[file: path]`.
  */
 function serializeContent(editor: ReturnType<typeof useEditor>): {
 	text: string;
@@ -102,15 +104,24 @@ function serializeContent(editor: ReturnType<typeof useEditor>): {
 		if (node.type.name === "chatFileMention") {
 			const label = node.attrs.label as string;
 			const path = node.attrs.path as string;
+			const mType = node.attrs.mentionType as string;
+			const objectName = node.attrs.objectName as string;
+
 			mentionedFiles.push({ name: label, path });
-			parts.push(`[file: ${path}]`);
+
+			if (mType === "object") {
+				parts.push(`[object: ${label}]`);
+			} else if (mType === "entry") {
+				parts.push(`[entry: ${objectName ? `${objectName}/` : ""}${label}]`);
+			} else {
+				parts.push(`[file: ${path}]`);
+			}
 			return false;
 		}
 		if (node.isText && node.text) {
 			parts.push(node.text);
 		}
 		if (node.type.name === "paragraph" && parts.length > 0) {
-			// Add newline between paragraphs (except the first)
 			const lastPart = parts[parts.length - 1];
 			if (lastPart !== undefined && lastPart !== "\n") {
 				parts.push("\n");
@@ -147,7 +158,6 @@ function createChatFileMentionSuggestion() {
 					}) => {
 						// For folders: update the query text to navigate into the folder
 						if (props.type === "folder") {
-							// Replace the current @query with @folderpath/
 							const shortPath = shortenPath(props.path);
 							editor
 								.chain()
@@ -158,7 +168,12 @@ function createChatFileMentionSuggestion() {
 							return;
 						}
 
-						// For files: insert mention node + trailing space
+						// Determine mention type for objects/entries
+						const mentionType =
+							props.type === "object" ? "object"
+								: props.type === "entry" ? "entry"
+									: "file";
+
 						editor
 							.chain()
 							.focus()
@@ -169,6 +184,8 @@ function createChatFileMentionSuggestion() {
 									attrs: {
 										label: props.name,
 										path: props.path,
+										mentionType,
+										objectName: props.objectName ?? "",
 									},
 								},
 								{ type: "text", text: " " },

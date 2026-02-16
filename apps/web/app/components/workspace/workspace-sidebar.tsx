@@ -31,6 +31,8 @@ type WorkspaceSidebarProps = {
 	workspaceRoot?: string | null;
 	/** Navigate to the main chat / home panel. */
 	onGoToChat?: () => void;
+	/** Called when a tree node is dragged and dropped onto an external target (e.g. chat input). */
+	onExternalDrop?: (node: TreeNode) => void;
 };
 
 function WorkspaceLogo() {
@@ -404,6 +406,7 @@ export function WorkspaceSidebar({
 	onFileSearchSelect,
 	workspaceRoot,
 	onGoToChat,
+	onExternalDrop,
 }: WorkspaceSidebarProps) {
 	const isBrowsing = browseDir != null;
 
@@ -521,16 +524,17 @@ export function WorkspaceSidebar({
 						/>
 					</div>
 				) : (
-				<FileManagerTree
-					tree={tree}
-					activePath={activePath}
-					onSelect={onSelect}
-					onRefresh={onRefresh}
-					parentDir={parentDir}
-					onNavigateUp={onNavigateUp}
-					browseDir={browseDir}
-					workspaceRoot={workspaceRoot}
-				/>
+			<FileManagerTree
+				tree={tree}
+				activePath={activePath}
+				onSelect={onSelect}
+				onRefresh={onRefresh}
+				parentDir={parentDir}
+				onNavigateUp={onNavigateUp}
+				browseDir={browseDir}
+				workspaceRoot={workspaceRoot}
+				onExternalDrop={onExternalDrop}
+			/>
 				)}
 			</div>
 

@@ -52,6 +52,8 @@ type FileManagerTreeProps = {
   browseDir?: string | null;
   /** Absolute path of the workspace root. Nodes matching this path are rendered as a special non-collapsible workspace entry point. */
   workspaceRoot?: string | null;
+  /** Called when a node is dragged and dropped outside the tree onto an external drop target (e.g. chat input). */
+  onExternalDrop?: (node: TreeNode) => void;
 };
 
 // --- System file detection (client-side mirror) ---
@@ -700,12 +702,41 @@ function flattenVisible(tree: TreeNode[], expanded: Set<string>): TreeNode[] {
 
 // --- Main Exported Component ---
 
-export function FileManagerTree({ tree, activePath, onSelect, onRefresh, compact, parentDir, onNavigateUp, browseDir: _browseDir, workspaceRoot }: FileManagerTreeProps) {
+export function FileManagerTree({ tree, activePath, onSelect, onRefresh, compact, parentDir, onNavigateUp, browseDir: _browseDir, workspaceRoot, onExternalDrop }: FileManagerTreeProps) {
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(() => new Set());
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [renamingPath, setRenamingPath] = useState<string | null>(null);
   const [dragOverPath, setDragOverPath] = useState<string | null>(null);
   const [activeNode, setActiveNode] = useState<TreeNode | null>(null);
+
+  // Track pointer position during @dnd-kit drags for cross-component drops.
+  // Capture-phase listener on window works even when @dnd-kit has pointer capture.
+  const pointerPosRef = useRef({ x: 0, y: 0 });
+  useEffect(() => {
+    if (!activeNode) {return;}
+
+    const onPointerMove = (e: PointerEvent) => {
+      pointerPosRef.current = { x: e.clientX, y: e.clientY };
+
+      // Toggle visual drop indicator on external chat drop target
+      const el = document.elementFromPoint(e.clientX, e.clientY);
+      const target = el?.closest("[data-chat-drop-target]") as HTMLElement | null;
+      const prev = document.querySelector("[data-drag-hover]");
+      if (target && !target.hasAttribute("data-drag-hover")) {
+        target.setAttribute("data-drag-hover", "");
+      }
+      if (prev && prev !== target) {
+        prev.removeAttribute("data-drag-hover");
+      }
+    };
+
+    window.addEventListener("pointermove", onPointerMove, true);
+    return () => {
+      window.removeEventListener("pointermove", onPointerMove, true);
+      // Clean up any lingering highlight
+      document.querySelector("[data-drag-hover]")?.removeAttribute("data-drag-hover");
+    };
+  }, [activeNode]);
 
   // Context menu state
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; target: ContextMenuTarget } | null>(null);
@@ -799,7 +830,17 @@ export function FileManagerTree({ tree, activePath, onSelect, onRefresh, compact
         return;
       }
 
-      if (!overData?.node) {return;}
+      // No @dnd-kit droppable: check for external drop targets (e.g. chat input)
+      if (!overData?.node) {
+        if (onExternalDrop) {
+          const { x, y } = pointerPosRef.current;
+          const el = document.elementFromPoint(x, y);
+          if (el?.closest("[data-chat-drop-target]")) {
+            onExternalDrop(source);
+          }
+        }
+        return;
+      }
 
       const target = overData.node;
 
@@ -817,12 +858,13 @@ export function FileManagerTree({ tree, activePath, onSelect, onRefresh, compact
         onRefresh();
       }
     },
-    [onRefresh],
+    [onRefresh, onExternalDrop],
   );
 
   const handleDragCancel = useCallback(() => {
     setActiveNode(null);
     setDragOverPath(null);
+    document.querySelector("[data-drag-hover]")?.removeAttribute("data-drag-hover");
   }, []);
 
   // Context menu handlers
