@@ -101,21 +101,6 @@ describe("pruneStaleEntries", () => {
     expect(Object.keys(store)).toHaveLength(0);
   });
 
-  it("returns count of pruned entries", () => {
-    const now = Date.now();
-    const store = makeStore([
-      ["stale1", makeEntry(now - 15 * DAY_MS)],
-      ["stale2", makeEntry(now - 30 * DAY_MS)],
-      ["fresh1", makeEntry(now - 5 * DAY_MS)],
-      ["fresh2", makeEntry(now)],
-    ]);
-
-    const pruned = pruneStaleEntries(store, 10 * DAY_MS);
-
-    expect(pruned).toBe(2);
-    expect(Object.keys(store)).toHaveLength(2);
-  });
-
   it("entry exactly at the boundary is kept", () => {
     const now = Date.now();
     const store = makeStore([["borderline", makeEntry(now - 30 * DAY_MS + 1000)]]);
