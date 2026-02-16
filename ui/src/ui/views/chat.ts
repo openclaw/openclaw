@@ -215,7 +215,13 @@ function renderSessionTabs(props: ChatProps) {
   `;
 }
 
-function renderAutosuggestMenu(props: ChatProps, textareaEl: HTMLTextAreaElement | null) {
+function renderAutosuggestMenu(
+  props: ChatProps,
+  textareaEl: HTMLTextAreaElement | null,
+  showSlashMenu: boolean,
+  showAtMenu: boolean,
+  menuFilter: string,
+) {
   if (!showSlashMenu && !showAtMenu) {
     return nothing;
   }
@@ -694,7 +700,7 @@ export function renderChat(props: ChatProps) {
               @paste=${(e: ClipboardEvent) => handlePaste(e, props)}
               placeholder=${composePlaceholder}
             ></textarea>
-            ${renderAutosuggestMenu(props, textareaEl)}
+            ${renderAutosuggestMenu(props, textareaEl, showSlashMenu, showAtMenu, menuFilter)}
           </label>
           <div class="chat-compose__actions">
             <button
