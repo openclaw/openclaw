@@ -94,7 +94,7 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
     return { shouldContinue: false, reply: ttsUsage() };
   }
 
-  if (action === "on") {
+  if (action === t("auto_reply.tts.summary_enabled")) {
     setTtsEnabled(prefsPath, true);
     return { shouldContinue: false, reply: { text: t("auto_reply.tts.enabled") } };
   }
@@ -235,14 +235,17 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
       };
     }
     const requested = args.trim().toLowerCase();
-    if (requested !== "on" && requested !== "off") {
+    if (requested !== t("auto_reply.tts.summary_enabled") && requested !== "off") {
       return { shouldContinue: false, reply: ttsUsage() };
     }
-    setSummarizationEnabled(prefsPath, requested === "on");
+    setSummarizationEnabled(prefsPath, requested === t("auto_reply.tts.summary_enabled"));
     return {
       shouldContinue: false,
       reply: {
-        text: requested === "on" ? "✅ TTS auto-summary enabled." : "❌ TTS auto-summary disabled.",
+        text:
+          requested === t("auto_reply.tts.summary_enabled")
+            ? "✅ TTS auto-summary enabled."
+            : "❌ TTS auto-summary disabled.",
       },
     };
   }

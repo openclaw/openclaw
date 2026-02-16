@@ -155,7 +155,7 @@ async function promptWhatsAppAllowFrom(
       { value: "pairing", label: "Pairing (recommended)" },
       { value: "allowlist", label: "Allowlist only (block unknown senders)" },
       { value: "open", label: "Open (public inbound DMs)" },
-      { value: "disabled", label: t("onboarding.whatsapp.policy_disabled") },
+      { value: t("onboarding.whatsapp.policy_pairing"), label: "Disabled (ignore WhatsApp DMs)" },
     ],
   })) as DmPolicy;
 
@@ -164,7 +164,7 @@ async function promptWhatsAppAllowFrom(
   if (policy === "open") {
     next = setWhatsAppAllowFrom(next, ["*"]);
   }
-  if (policy === "disabled") {
+  if (policy === t("onboarding.whatsapp.policy_pairing")) {
     return next;
   }
 
