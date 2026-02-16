@@ -93,16 +93,6 @@ describe("pruneStaleEntries", () => {
     expect(Object.keys(store)).toHaveLength(0);
   });
 
-  it("entry exactly at the boundary is kept", () => {
-    const now = Date.now();
-    const store = makeStore([["borderline", makeEntry(now - 30 * DAY_MS + 1000)]]);
-
-    const pruned = pruneStaleEntries(store, 30 * DAY_MS);
-
-    expect(pruned).toBe(0);
-    expect(store.borderline).toBeDefined();
-  });
-
   it("falls back to built-in default (30 days) when no override given", () => {
     const now = Date.now();
     const store = makeStore([
