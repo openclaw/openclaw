@@ -33,14 +33,14 @@ describe("tui command handlers", () => {
       noteLocalRunId: vi.fn(),
     });
 
-    await handleCommand("/context");
+    await handleCommand("/unknowncmd hello");
 
     expect(addSystem).not.toHaveBeenCalled();
-    expect(addUser).toHaveBeenCalledWith("/context");
+    expect(addUser).toHaveBeenCalledWith("/unknowncmd hello");
     expect(sendChat).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionKey: "agent:main:main",
-        message: "/context",
+        message: "/unknowncmd hello",
       }),
     );
     expect(requestRender).toHaveBeenCalled();

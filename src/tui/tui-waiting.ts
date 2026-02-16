@@ -4,6 +4,12 @@ type MinimalTheme = {
   accentSoft: (s: string) => string;
 };
 
+/** Detect whether the user has requested reduced motion. */
+export function prefersReducedMotion(env?: NodeJS.ProcessEnv): boolean {
+  const e = env ?? process.env;
+  return Boolean(e.REDUCE_MOTION || e.NO_MOTION);
+}
+
 export const defaultWaitingPhrases = [
   "flibbertigibbeting",
   "kerfuffling",
@@ -23,6 +29,10 @@ export function pickWaitingPhrase(tick: number, phrases = defaultWaitingPhrases)
 }
 
 export function shimmerText(theme: MinimalTheme, text: string, tick: number) {
+  // Respect reduced motion preference: show static dim text.
+  if (prefersReducedMotion()) {
+    return theme.dim(text);
+  }
   const width = 6;
   const hi = (ch: string) => theme.bold(theme.accentSoft(ch));
 

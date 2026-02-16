@@ -221,6 +221,7 @@ export async function runTui(opts: TuiOptions) {
   let autoMessageSent = false;
   let sessionInfo: SessionInfo = {};
   let lastCtrlCAt = 0;
+  let runStartedAt: number | null = null;
   let activityStatus = "idle";
   let connectionStatus = "connecting";
   let statusTimeout: NodeJS.Timeout | null = null;
@@ -348,6 +349,12 @@ export async function runTui(opts: TuiOptions) {
     },
     set lastCtrlCAt(value) {
       lastCtrlCAt = value;
+    },
+    get runStartedAt() {
+      return runStartedAt;
+    },
+    set runStartedAt(value) {
+      runStartedAt = value;
     },
   };
 
@@ -621,7 +628,8 @@ export async function runTui(opts: TuiOptions) {
       : "unknown";
     const tokens = formatTokens(sessionInfo.totalTokens ?? null, sessionInfo.contextTokens ?? null);
     const think = sessionInfo.thinkingLevel ?? "off";
-    const verbose = sessionInfo.verboseLevel ?? "off";
+    const rawVerbose = sessionInfo.verboseLevel ?? "off";
+    const verbose = rawVerbose === "on" ? "compact" : rawVerbose;
     const reasoning = sessionInfo.reasoningLevel ?? "off";
     const reasoningLabel =
       reasoning === "on" ? "reasoning" : reasoning === "stream" ? "reasoning:stream" : null;
@@ -635,7 +643,9 @@ export async function runTui(opts: TuiOptions) {
       reasoningLabel,
       tokens,
     ].filter(Boolean);
-    footer.setText(theme.dim(footerParts.join(" | ")));
+    const shortcuts =
+      "Ctrl+O verbose · Ctrl+L model · Ctrl+G agent · Ctrl+P session · Ctrl+T think · Esc abort";
+    footer.setText(theme.dim(footerParts.join(" | ") + "\n" + shortcuts));
   };
 
   const { openOverlay, closeOverlay } = createOverlayHandlers(tui, editor);
@@ -673,11 +683,45 @@ export async function runTui(opts: TuiOptions) {
     abortActive,
   } = sessionActions;
 
+  /** Format a duration in ms as human-readable string (e.g. "1m 6s", "3.2s"). */
+  const formatDuration = (ms: number): string => {
+    const totalSeconds = Math.max(0, ms / 1000);
+    if (totalSeconds < 60) {
+      return totalSeconds < 10 ? `${totalSeconds.toFixed(1)}s` : `${Math.round(totalSeconds)}s`;
+    }
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = Math.round(totalSeconds % 60);
+    return `${minutes}m ${seconds}s`;
+  };
+
+  let completionTimeout: NodeJS.Timeout | null = null;
+
+  /** Show a brief "Completed in Xm Ys" message that auto-clears after 4s. */
+  const showCompletionDuration = (durationMs: number) => {
+    if (completionTimeout) {
+      clearTimeout(completionTimeout);
+      completionTimeout = null;
+    }
+    const label = formatDuration(durationMs);
+    ensureStatusText();
+    statusText?.setText(theme.dim(`✓ Completed in ${label} | ${connectionStatus}`));
+    tui.requestRender();
+    completionTimeout = setTimeout(() => {
+      completionTimeout = null;
+      // Only clear if still showing a completion message (not overridden by new activity).
+      if (!busyStates.has(activityStatus)) {
+        renderStatus();
+        tui.requestRender();
+      }
+    }, 4000);
+  };
+
   const { handleChatEvent, handleAgentEvent } = createEventHandlers({
     chatLog,
     tui,
     state,
     setActivityStatus,
+    showCompletionDuration,
     refreshSessionInfo,
     loadHistory,
     isLocalRunId,
@@ -751,10 +795,42 @@ export async function runTui(opts: TuiOptions) {
     process.exit(0);
   };
   editor.onCtrlO = () => {
-    toolsExpanded = !toolsExpanded;
+    // Cycle through 3 verbose levels: off → compact → full → off
+    const current = sessionInfo.verboseLevel ?? "off";
+    let next: string;
+    let nextExpanded: boolean;
+    let label: string;
+    if (current === "off") {
+      next = "on";
+      nextExpanded = false;
+      label = "verbose: compact";
+    } else if (current === "on") {
+      next = "full";
+      nextExpanded = true;
+      label = "verbose: full";
+    } else {
+      next = "off";
+      nextExpanded = false;
+      label = "verbose: off";
+    }
+    toolsExpanded = nextExpanded;
     chatLog.setToolsExpanded(toolsExpanded);
-    setActivityStatus(toolsExpanded ? "tools expanded" : "tools collapsed");
+    setActivityStatus(label);
     tui.requestRender();
+    // Patch the server-side session to sync the verbose level.
+    void (async () => {
+      try {
+        const result = await client.patchSession({
+          key: currentSessionKey,
+          verboseLevel: next,
+        });
+        applySessionInfoFromPatch(result);
+        updateFooter();
+        tui.requestRender();
+      } catch {
+        // Best-effort: if the patch fails, the local UI already updated.
+      }
+    })();
   };
   editor.onCtrlL = () => {
     void openModelSelector();

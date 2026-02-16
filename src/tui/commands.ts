@@ -3,8 +3,9 @@ import type { OpenClawConfig } from "../config/types.js";
 import { listChatCommands, listChatCommandsForConfig } from "../auto-reply/commands-registry.js";
 import { formatThinkingLevels, listThinkingLevelLabels } from "../auto-reply/thinking.js";
 import { getMarkdownSlashCommands } from "./markdown-commands.js";
+import { listThemeNames } from "./theme/theme-registry.js";
 
-const VERBOSE_LEVELS = ["on", "off"];
+const VERBOSE_LEVELS = ["off", "compact", "full"];
 const REASONING_LEVELS = ["on", "off"];
 const ELEVATED_LEVELS = ["on", "off", "ask", "full"];
 const ACTIVATION_LEVELS = ["mention", "always"];
@@ -115,6 +116,25 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
           label: value,
         })),
     },
+    {
+      name: "theme",
+      description: "Switch color theme",
+      getArgumentCompletions: (prefix) =>
+        listThemeNames()
+          .filter((v) => v.startsWith(prefix.toLowerCase()))
+          .map((value) => ({ value, label: value })),
+    },
+    { name: "context", description: "Show context window usage" },
+    {
+      name: "export",
+      description: "Export conversation (markdown|json)",
+      getArgumentCompletions: (prefix) =>
+        ["markdown", "json"]
+          .filter((v) => v.startsWith(prefix.toLowerCase()))
+          .map((value) => ({ value, label: value })),
+    },
+    { name: "doctor", description: "Run diagnostics check" },
+    { name: "stats", description: "Show session statistics" },
     { name: "abort", description: "Abort active run" },
     { name: "new", description: "Reset the session" },
     { name: "reset", description: "Reset the session" },
@@ -161,12 +181,17 @@ export function helpText(options: SlashCommandOptions = {}): string {
     "/session <key> (or /sessions)",
     "/model <provider/model> (or /models)",
     `/think <${thinkLevels}>`,
-    "/verbose <on|off>",
+    "/verbose <off|compact|full>",
     "/reasoning <on|off>",
     "/usage <off|tokens|full>",
     "/elevated <on|off|ask|full>",
     "/elev <on|off|ask|full>",
     "/activation <mention|always>",
+    "/theme <name>",
+    "/context",
+    "/export <markdown|json> [path]",
+    "/doctor",
+    "/stats",
     "/new or /reset",
     "/abort",
     "/settings",

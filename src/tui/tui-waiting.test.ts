@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { buildWaitingStatusMessage, pickWaitingPhrase } from "./tui-waiting.js";
+import {
+  buildWaitingStatusMessage,
+  pickWaitingPhrase,
+  prefersReducedMotion,
+  shimmerText,
+} from "./tui-waiting.js";
 
 const theme = {
   dim: (s: string) => `<d>${s}</d>`,
@@ -16,6 +21,33 @@ describe("tui-waiting", () => {
     expect(pickWaitingPhrase(10, phrases)).toBe("b");
     expect(pickWaitingPhrase(20, phrases)).toBe("c");
     expect(pickWaitingPhrase(30, phrases)).toBe("a");
+  });
+
+  it("prefersReducedMotion returns false by default", () => {
+    expect(prefersReducedMotion({})).toBe(false);
+  });
+
+  it("prefersReducedMotion returns true when REDUCE_MOTION is set", () => {
+    expect(prefersReducedMotion({ REDUCE_MOTION: "1" })).toBe(true);
+  });
+
+  it("prefersReducedMotion returns true when NO_MOTION is set", () => {
+    expect(prefersReducedMotion({ NO_MOTION: "true" })).toBe(true);
+  });
+
+  it("shimmerText returns static dim text when reduced motion is preferred", () => {
+    const original = process.env.REDUCE_MOTION;
+    process.env.REDUCE_MOTION = "1";
+    try {
+      const result = shimmerText(theme, "hello", 5);
+      expect(result).toBe("<d>hello</d>");
+    } finally {
+      if (original === undefined) {
+        delete process.env.REDUCE_MOTION;
+      } else {
+        process.env.REDUCE_MOTION = original;
+      }
+    }
   });
 
   it("buildWaitingStatusMessage includes shimmer markup and metadata", () => {

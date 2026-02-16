@@ -36,6 +36,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     activityStatus: "idle",
     statusTimeout: null,
     lastCtrlCAt: 0,
+    runStartedAt: null,
     ...overrides,
   });
 
@@ -474,5 +475,143 @@ describe("tui-event-handlers: handleAgentEvent", () => {
 
     expect(chatLog.dropAssistant).toHaveBeenCalledWith("run-silent");
     expect(chatLog.finalizeAssistant).not.toHaveBeenCalled();
+  });
+
+  it("sets runStartedAt on the first delta event", () => {
+    const state = makeState({ activeChatRunId: null, runStartedAt: null });
+    const { chatLog, tui, setActivityStatus } = makeContext(state);
+    const { handleChatEvent } = createEventHandlers({
+      chatLog,
+      tui,
+      state,
+      setActivityStatus,
+    });
+
+    expect(state.runStartedAt).toBeNull();
+
+    handleChatEvent({
+      runId: "run-timing",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "hello" },
+    });
+
+    expect(state.runStartedAt).toBeTypeOf("number");
+    expect(state.runStartedAt).toBeGreaterThan(0);
+  });
+
+  it("calls showCompletionDuration on run final with message", () => {
+    const state = makeState({ activeChatRunId: null, runStartedAt: null });
+    const { chatLog, tui, setActivityStatus } = makeContext(state);
+    const showCompletionDuration = vi.fn();
+    const { handleChatEvent } = createEventHandlers({
+      chatLog,
+      tui,
+      state,
+      setActivityStatus,
+      showCompletionDuration,
+    });
+
+    handleChatEvent({
+      runId: "run-dur",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "start" },
+    });
+
+    expect(state.runStartedAt).toBeTypeOf("number");
+
+    handleChatEvent({
+      runId: "run-dur",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "done" }] },
+    });
+
+    expect(showCompletionDuration).toHaveBeenCalledTimes(1);
+    expect(showCompletionDuration).toHaveBeenCalledWith(expect.any(Number));
+    expect(state.runStartedAt).toBeNull();
+  });
+
+  it("calls showCompletionDuration on run aborted", () => {
+    const state = makeState({ activeChatRunId: null, runStartedAt: null });
+    const { chatLog, tui, setActivityStatus } = makeContext(state);
+    const showCompletionDuration = vi.fn();
+    const { handleChatEvent } = createEventHandlers({
+      chatLog,
+      tui,
+      state,
+      setActivityStatus,
+      showCompletionDuration,
+    });
+
+    handleChatEvent({
+      runId: "run-abort",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "start" },
+    });
+
+    handleChatEvent({
+      runId: "run-abort",
+      sessionKey: state.currentSessionKey,
+      state: "aborted",
+    });
+
+    expect(showCompletionDuration).toHaveBeenCalledTimes(1);
+    expect(state.runStartedAt).toBeNull();
+  });
+
+  it("calls showCompletionDuration on run error", () => {
+    const state = makeState({ activeChatRunId: null, runStartedAt: null });
+    const { chatLog, tui, setActivityStatus } = makeContext(state);
+    const showCompletionDuration = vi.fn();
+    const { handleChatEvent } = createEventHandlers({
+      chatLog,
+      tui,
+      state,
+      setActivityStatus,
+      showCompletionDuration,
+    });
+
+    handleChatEvent({
+      runId: "run-err",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "start" },
+    });
+
+    handleChatEvent({
+      runId: "run-err",
+      sessionKey: state.currentSessionKey,
+      state: "error",
+      errorMessage: "something broke",
+    });
+
+    expect(showCompletionDuration).toHaveBeenCalledTimes(1);
+    expect(state.runStartedAt).toBeNull();
+  });
+
+  it("does not call showCompletionDuration when no delta was received (no runStartedAt)", () => {
+    const state = makeState({ activeChatRunId: null, runStartedAt: null });
+    const { chatLog, tui, setActivityStatus } = makeContext(state);
+    const showCompletionDuration = vi.fn();
+    const { handleChatEvent } = createEventHandlers({
+      chatLog,
+      tui,
+      state,
+      setActivityStatus,
+      showCompletionDuration,
+    });
+
+    // Final without preceding delta — runStartedAt stays null.
+    handleChatEvent({
+      runId: "run-no-delta",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "done" }] },
+    });
+
+    expect(showCompletionDuration).not.toHaveBeenCalled();
   });
 });

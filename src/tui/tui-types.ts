@@ -110,4 +110,6 @@ export type TuiStateAccess = {
   activityStatus: string;
   statusTimeout: ReturnType<typeof setTimeout> | null;
   lastCtrlCAt: number;
+  /** Timestamp (ms) when the current run started (first delta received). */
+  runStartedAt: number | null;
 };

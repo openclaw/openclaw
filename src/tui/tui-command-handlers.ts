@@ -22,6 +22,12 @@ import {
   createSearchableSelectList,
   createSettingsList,
 } from "./components/selectors.js";
+import {
+  getActiveThemeName,
+  hasTheme,
+  listThemeNames,
+  setActiveTheme,
+} from "./theme/theme-registry.js";
 import { formatStatusSummary } from "./tui-status-summary.js";
 
 type CommandHandlerContext = {
@@ -332,23 +338,30 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           chatLog.addSystem(`think failed: ${String(err)}`);
         }
         break;
-      case "verbose":
+      case "verbose": {
         if (!args) {
-          chatLog.addSystem("usage: /verbose <on|off>");
+          chatLog.addSystem("usage: /verbose <off|compact|full>");
           break;
         }
+        // Map user-facing "compact" to the server-side "on" value.
+        const verboseArg = args === "compact" ? "on" : args;
+        const verboseLabel = verboseArg === "on" ? "compact" : args;
         try {
           const result = await client.patchSession({
             key: state.currentSessionKey,
-            verboseLevel: args,
+            verboseLevel: verboseArg,
           });
-          chatLog.addSystem(`verbose set to ${args}`);
+          // Sync local toolsExpanded state with the verbose level.
+          state.toolsExpanded = verboseArg === "full";
+          chatLog.setToolsExpanded(state.toolsExpanded);
+          chatLog.addSystem(`verbose set to ${verboseLabel}`);
           applySessionInfoFromPatch(result);
           await loadHistory();
         } catch (err) {
           chatLog.addSystem(`verbose failed: ${String(err)}`);
         }
         break;
+      }
       case "reasoning":
         if (!args) {
           chatLog.addSystem("usage: /reasoning <on|off>");
@@ -427,6 +440,184 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           chatLog.addSystem(`activation failed: ${String(err)}`);
         }
         break;
+      case "theme": {
+        if (!args) {
+          const names = listThemeNames();
+          const current = getActiveThemeName();
+          chatLog.addSystem(`Current theme: ${current}\nAvailable: ${names.join(", ")}`);
+          break;
+        }
+        if (hasTheme(args)) {
+          setActiveTheme(args);
+          chatLog.addSystem(`theme set to ${args}`);
+        } else {
+          chatLog.addSystem(`unknown theme: ${args}\nAvailable: ${listThemeNames().join(", ")}`);
+        }
+        break;
+      }
+      case "context": {
+        const info = state.sessionInfo;
+        const total = info.totalTokens ?? 0;
+        const context = info.contextTokens ?? 0;
+        const input = info.inputTokens ?? 0;
+        const output = info.outputTokens ?? 0;
+        if (!context) {
+          chatLog.addSystem("No context window info available. Send a message first.");
+          break;
+        }
+        const pct = Math.min(100, Math.round((total / context) * 100));
+        const barWidth = 40;
+        const filled = Math.round((pct / 100) * barWidth);
+        const empty = barWidth - filled;
+        const barChar = pct > 80 ? "█" : pct > 50 ? "▓" : "░";
+        const bar = barChar.repeat(filled) + "·".repeat(empty);
+        const color = pct > 80 ? "🔴" : pct > 50 ? "🟡" : "🟢";
+        const lines = [
+          `${color} Context window: ${pct}% used`,
+          `[${bar}] ${total.toLocaleString()} / ${context.toLocaleString()} tokens`,
+          `  Input: ${input.toLocaleString()} | Output: ${output.toLocaleString()} | Remaining: ${(context - total).toLocaleString()}`,
+        ];
+        chatLog.addSystem(lines.join("\n"));
+        break;
+      }
+      case "export": {
+        const exportParts = args.split(/\s+/);
+        const format = exportParts[0] || "markdown";
+        if (!["markdown", "json"].includes(format)) {
+          chatLog.addSystem("usage: /export <markdown|json> [path]");
+          break;
+        }
+        try {
+          const raw = await client.loadHistory({ sessionKey: state.currentSessionKey });
+          // The gateway returns either an array directly or an object with messages/entries.
+          const entries: unknown[] = Array.isArray(raw)
+            ? raw
+            : raw && typeof raw === "object" && Array.isArray(raw.messages)
+              ? (raw.messages as unknown[])
+              : raw && typeof raw === "object" && Array.isArray(raw.entries)
+                ? (raw.entries as unknown[])
+                : [];
+          if (entries.length === 0) {
+            chatLog.addSystem("no conversation history to export");
+            break;
+          }
+          let content: string;
+          if (format === "json") {
+            content = JSON.stringify(entries, null, 2);
+          } else {
+            const mdLines: string[] = [];
+            mdLines.push(`# Conversation Export`);
+            mdLines.push(`Session: ${state.currentSessionKey}`);
+            mdLines.push(`Date: ${new Date().toISOString()}`);
+            mdLines.push("");
+            for (const entry of entries) {
+              const msg = (entry && typeof entry === "object" ? entry : {}) as Record<
+                string,
+                unknown
+              >;
+              const rawRole = msg.role;
+              const role = typeof rawRole === "string" ? rawRole : "unknown";
+              const rawText = msg.text ?? msg.content;
+              const text = typeof rawText === "string" ? rawText : "";
+              mdLines.push(`## ${role.charAt(0).toUpperCase() + role.slice(1)}`);
+              mdLines.push(text);
+              mdLines.push("");
+            }
+            content = mdLines.join("\n");
+          }
+          const pathArg = exportParts.slice(1).join(" ").trim();
+          if (pathArg) {
+            const fs = await import("node:fs/promises");
+            await fs.writeFile(pathArg, content, "utf-8");
+            chatLog.addSystem(`exported ${format} to ${pathArg} (${entries.length} messages)`);
+          } else {
+            chatLog.addSystem(
+              `Export (${entries.length} messages, ${content.length} chars, ${format}):\n${content.slice(0, 500)}${content.length > 500 ? "\n… (truncated, use /export markdown <path> to save)" : ""}`,
+            );
+          }
+        } catch (err) {
+          chatLog.addSystem(`export failed: ${String(err)}`);
+        }
+        break;
+      }
+      case "doctor": {
+        const checks: string[] = [];
+        // Connection check
+        checks.push(state.isConnected ? "✓ Gateway connected" : "✗ Gateway disconnected");
+        // Model check
+        const model = state.sessionInfo.model;
+        checks.push(
+          model
+            ? `✓ Model: ${state.sessionInfo.modelProvider ?? ""}/${model}`
+            : "✗ No model configured",
+        );
+        // Context window check
+        const ctxTokens = state.sessionInfo.contextTokens;
+        const totalTokens = state.sessionInfo.totalTokens ?? 0;
+        if (ctxTokens) {
+          const pctUsed = Math.round((totalTokens / ctxTokens) * 100);
+          checks.push(
+            pctUsed > 80
+              ? `⚠ Context: ${pctUsed}% used (${totalTokens.toLocaleString()}/${ctxTokens.toLocaleString()})`
+              : `✓ Context: ${pctUsed}% used`,
+          );
+        } else {
+          checks.push("- Context: not available yet");
+        }
+        // Session check
+        checks.push(`✓ Session: ${state.currentSessionKey}`);
+        checks.push(`✓ Agent: ${state.currentAgentId}`);
+        // Verbose check
+        const verbLevel = state.sessionInfo.verboseLevel ?? "off";
+        checks.push(`  Verbose: ${verbLevel === "on" ? "compact" : verbLevel}`);
+        // Health from gateway
+        try {
+          const status = await client.getStatus();
+          if (status && typeof status === "object") {
+            const summary = status as GatewayStatusSummary;
+            if (summary.providerSummary?.length) {
+              checks.push(`✓ Providers: ${summary.providerSummary.join(", ")}`);
+            }
+            if (summary.mcpServers?.length) {
+              checks.push(
+                `✓ MCP Servers: ${summary.mcpServers.map((s) => `${s.name} (${s.tools} tools)`).join(", ")}`,
+              );
+            }
+          }
+        } catch {
+          checks.push("⚠ Could not fetch gateway status");
+        }
+        chatLog.addSystem(`Diagnostics:\n${checks.join("\n")}`);
+        break;
+      }
+      case "stats": {
+        const info = state.sessionInfo;
+        const lines: string[] = [];
+        lines.push("Session Statistics:");
+        lines.push(`  Model: ${info.modelProvider ?? "?"}/${info.model ?? "?"}`);
+        lines.push(`  Thinking: ${info.thinkingLevel ?? "off"}`);
+        lines.push(
+          `  Verbose: ${(info.verboseLevel ?? "off") === "on" ? "compact" : (info.verboseLevel ?? "off")}`,
+        );
+        lines.push(`  Reasoning: ${info.reasoningLevel ?? "off"}`);
+        if (info.contextTokens) {
+          const used = info.totalTokens ?? 0;
+          const remaining = info.contextTokens - used;
+          const pct = Math.round((used / info.contextTokens) * 100);
+          lines.push(
+            `  Context: ${used.toLocaleString()} / ${info.contextTokens.toLocaleString()} (${pct}%)`,
+          );
+          lines.push(`  Remaining: ${remaining.toLocaleString()} tokens`);
+        }
+        if (info.inputTokens != null) {
+          lines.push(`  Input tokens: ${info.inputTokens.toLocaleString()}`);
+        }
+        if (info.outputTokens != null) {
+          lines.push(`  Output tokens: ${info.outputTokens.toLocaleString()}`);
+        }
+        chatLog.addSystem(lines.join("\n"));
+        break;
+      }
       case "new":
       case "reset":
         try {

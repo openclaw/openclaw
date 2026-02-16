@@ -9,6 +9,8 @@ type EventHandlerContext = {
   tui: TUI;
   state: TuiStateAccess;
   setActivityStatus: (text: string) => void;
+  /** Show a brief completion message that auto-clears after a timeout. */
+  showCompletionDuration?: (durationMs: number) => void;
   refreshSessionInfo?: () => Promise<void>;
   loadHistory?: () => Promise<void>;
   isLocalRunId?: (runId: string) => boolean;
@@ -22,6 +24,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     tui,
     state,
     setActivityStatus,
+    showCompletionDuration,
     refreshSessionInfo,
     loadHistory,
     isLocalRunId,
@@ -85,6 +88,16 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
   };
 
+  /** Emit turn duration when a run finishes and reset the timer. */
+  const emitTurnDuration = (runId: string) => {
+    if (state.activeChatRunId !== runId || state.runStartedAt === null) {
+      return;
+    }
+    const durationMs = Date.now() - state.runStartedAt;
+    state.runStartedAt = null;
+    showCompletionDuration?.(durationMs);
+  };
+
   const hasConcurrentActiveRun = (runId: string) => {
     const activeRunId = state.activeChatRunId;
     if (!activeRunId || activeRunId === runId) {
@@ -126,6 +139,10 @@ export function createEventHandlers(context: EventHandlerContext) {
       state.activeChatRunId = evt.runId;
     }
     if (evt.state === "delta") {
+      // Track the run start time on the very first delta.
+      if (state.runStartedAt === null) {
+        state.runStartedAt = Date.now();
+      }
       const displayText = streamAssembler.ingestDelta(evt.runId, evt.message, state.showThinking);
       if (!displayText) {
         return;
@@ -139,6 +156,9 @@ export function createEventHandlers(context: EventHandlerContext) {
         maybeRefreshHistoryForRun(evt.runId);
         chatLog.dropAssistant(evt.runId);
         noteFinalizedRun(evt.runId);
+        if (wasActiveRun) {
+          emitTurnDuration(evt.runId);
+        }
         clearActiveRunIfMatch(evt.runId);
         if (wasActiveRun) {
           setActivityStatus("idle");
@@ -155,6 +175,9 @@ export function createEventHandlers(context: EventHandlerContext) {
         }
         streamAssembler.drop(evt.runId);
         noteFinalizedRun(evt.runId);
+        if (wasActiveRun) {
+          emitTurnDuration(evt.runId);
+        }
         clearActiveRunIfMatch(evt.runId);
         if (wasActiveRun) {
           setActivityStatus("idle");
@@ -180,6 +203,9 @@ export function createEventHandlers(context: EventHandlerContext) {
         chatLog.finalizeAssistant(finalText, evt.runId);
       }
       noteFinalizedRun(evt.runId);
+      if (wasActiveRun) {
+        emitTurnDuration(evt.runId);
+      }
       clearActiveRunIfMatch(evt.runId);
       if (wasActiveRun) {
         setActivityStatus(stopReason === "error" ? "error" : "idle");
@@ -192,6 +218,9 @@ export function createEventHandlers(context: EventHandlerContext) {
       chatLog.addSystem("run aborted");
       streamAssembler.drop(evt.runId);
       sessionRuns.delete(evt.runId);
+      if (wasActiveRun) {
+        emitTurnDuration(evt.runId);
+      }
       clearActiveRunIfMatch(evt.runId);
       if (wasActiveRun) {
         setActivityStatus("aborted");
@@ -204,6 +233,9 @@ export function createEventHandlers(context: EventHandlerContext) {
       chatLog.addSystem(`run error: ${evt.errorMessage ?? "unknown"}`);
       streamAssembler.drop(evt.runId);
       sessionRuns.delete(evt.runId);
+      if (wasActiveRun) {
+        emitTurnDuration(evt.runId);
+      }
       clearActiveRunIfMatch(evt.runId);
       if (wasActiveRun) {
         setActivityStatus("error");
