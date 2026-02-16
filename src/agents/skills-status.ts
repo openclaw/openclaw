@@ -65,6 +65,7 @@ function selectPreferredInstallSpec(
   if (install.length === 0) {
     return undefined;
   }
+
   const indexed = install.map((spec, index) => ({ spec, index }));
   const findKind = (kind: SkillInstallSpec["kind"]) =>
     indexed.find((item) => item.spec.kind === kind);
@@ -73,38 +74,32 @@ function selectPreferredInstallSpec(
   const nodeSpec = findKind("node");
   const goSpec = findKind("go");
   const uvSpec = findKind("uv");
-
+  const downloadSpec = findKind("download");
   const brewAvailable = hasBinary("brew");
 
-  if (prefs.preferBrew && brewAvailable && brewSpec) {
-    return brewSpec;
+  // Table-driven preference chain; first match wins.
+  const pickers: Array<() => { spec: SkillInstallSpec; index: number } | undefined> = [
+    () => (prefs.preferBrew && brewAvailable ? brewSpec : undefined),
+    () => uvSpec,
+    () => nodeSpec,
+    // Only prefer brew when available to avoid guaranteed failure on Linux/Docker.
+    () => (brewAvailable ? brewSpec : undefined),
+    () => goSpec,
+    // Prefer download over an unavailable brew spec.
+    () => downloadSpec,
+    // Last resort: surface descriptive brew-missing error instead of "no installer found".
+    () => brewSpec,
+    () => indexed[0],
+  ];
+
+  for (const pick of pickers) {
+    const selected = pick();
+    if (selected) {
+      return selected;
+    }
   }
-  if (uvSpec) {
-    return uvSpec;
-  }
-  if (nodeSpec) {
-    return nodeSpec;
-  }
-  // Only prefer brew when it is actually installed; otherwise skip to
-  // alternatives so Linux/Docker environments without brew get a working
-  // install option instead of a guaranteed failure.
-  if (brewSpec && brewAvailable) {
-    return brewSpec;
-  }
-  if (goSpec) {
-    return goSpec;
-  }
-  // Prefer download over an unavailable brew spec.
-  const downloadSpec = findKind("download");
-  if (downloadSpec) {
-    return downloadSpec;
-  }
-  // Last resort: return brew spec even without brew so the caller can
-  // surface a descriptive error rather than "no installer found".
-  if (brewSpec) {
-    return brewSpec;
-  }
-  return indexed[0];
+
+  return undefined;
 }
 
 function normalizeInstallOptions(
