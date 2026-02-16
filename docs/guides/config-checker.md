@@ -5,6 +5,7 @@ Use the configuration checker to validate your `openclaw.json` setup and catch c
 ## 1. What it is
 
 The checker validates your configuration against security best practices and common pitfalls. It warns you about:
+
 - Insecure passwords
 - Exposed ports
 - Permissive channel access
@@ -34,19 +35,23 @@ node scripts/check-common-mistakes.js
 The script performs the following validation checks:
 
 ### Security Issues
+
 - **Passwords**: Warns if using weak passwords like "admin" or "change-me".
 - **AllowFrom**: Warns if `allowFrom` contains `"*"` (allow all) or is missing.
 - **Gateway Binding**: Warns if `gateway.bind` is set to `0.0.0.0` (all interfaces) which exposes the gateway to the network.
 - **Exec Tool**: Errors if `exec` is enabled without requiring approvals (`approvals: "off"`).
 
 ### Cost Optimization
+
 - **Models**: Checks if expensive models (like Opus or large contexts) are configured and warns to monitor costs.
 - **Tokens**: Warns if `maxTokens` is set extremely high.
 
 ### Environment Variables
+
 - Scans the config for `${VAR_NAME}` patterns and reports any that are not set in the current environment.
 
 ### DM Policies
+
 - Flag channels with specific misconfigurations like `dmPolicy: "open"` combined with `allowFrom: "*"`.
 
 ## 4. Example Output
@@ -72,6 +77,7 @@ Running Configuration Checks...
 You can add this to your CI/CD pipeline or as a pre-start hook to prevent bad configs from being deployed.
 
 Example `package.json` script:
+
 ```json
 "scripts": {
   "prestart": "node scripts/check-common-mistakes.js"

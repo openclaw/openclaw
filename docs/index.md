@@ -102,6 +102,7 @@ The Gateway is the single source of truth for sessions, routing, and channel con
     ```bash
     npm install -g openclaw@latest
     ```
+
   </Step>
   <Step title="Onboard and install the service">
     ```bash

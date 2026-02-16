@@ -4,11 +4,11 @@ These templates are designed to help you get started quickly with OpenClaw. Choo
 
 ## 1. Available Templates
 
-| Template | Description | Use Case |
-| :--- | :--- | :--- |
-| **[basic-whatsapp.json](basic-whatsapp.json)** | Minimal WhatsApp setup. | **Beginners.** Best for first-time setup and testing. |
+| Template                                                       | Description                                                | Use Case                                                      |
+| :------------------------------------------------------------- | :--------------------------------------------------------- | :------------------------------------------------------------ |
+| **[basic-whatsapp.json](basic-whatsapp.json)**                 | Minimal WhatsApp setup.                                    | **Beginners.** Best for first-time setup and testing.         |
 | **[multi-channel-advanced.json](multi-channel-advanced.json)** | Advanced multi-channel setup with security best practices. | **Power Users.** If you want to use multiple channels safely. |
-| **[budget-friendly.json](budget-friendly.json)** | Cost-optimized setup using cheaper models. | **Budget Conscious.** If you want to keep API costs low. |
+| **[budget-friendly.json](budget-friendly.json)**               | Cost-optimized setup using cheaper models.                 | **Budget Conscious.** If you want to keep API costs low.      |
 
 ## 2. Setup Instructions
 
@@ -40,19 +40,19 @@ These templates are designed to help you get started quickly with OpenClaw. Choo
 
 ## 4. Configuration Comparison
 
-| Feature | Basic | Advanced | Budget |
-| :--- | :--- | :--- | :--- |
-| **Primary Channel** | WhatsApp | WhatsApp, Telegram, Discord | WhatsApp |
-| **Model** | Sonnet 3.5 | Opus 3 | Haiku 3 |
-| **Security** | Password Auth | Env Vars, Strict allowFrom | Basic |
-| **Browser Tool** | Disabled | Enabled | Disabled |
-| **Est. Cost** | Medium | High | Low |
+| Feature             | Basic         | Advanced                    | Budget   |
+| :------------------ | :------------ | :-------------------------- | :------- |
+| **Primary Channel** | WhatsApp      | WhatsApp, Telegram, Discord | WhatsApp |
+| **Model**           | Sonnet 3.5    | Opus 3                      | Haiku 3  |
+| **Security**        | Password Auth | Env Vars, Strict allowFrom  | Basic    |
+| **Browser Tool**    | Disabled      | Enabled                     | Disabled |
+| **Est. Cost**       | Medium        | High                        | Low      |
 
 ## 5. Troubleshooting
 
 - **Config won't load**: Run `openclaw config validate` or check for JSON syntax errors (missing commas are common).
 - **Channel not starting**: Check logs `openclaw gateway --verbose`.
-- **Env vars not working**: Ensure variables are exported in your shell *before* starting openclaw.
+- **Env vars not working**: Ensure variables are exported in your shell _before_ starting openclaw.
 
 ## 6. Customization Tips
 
@@ -69,6 +69,7 @@ These templates are designed to help you get started quickly with OpenClaw. Choo
 ## 8. Pro Tips
 
 > [!TIP]
+>
 > - **Start Simple**: Begin with the `basic` template to ensure your system works.
 > - **Test Locally**: Run `openclaw` locally before deploying to a server.
 > - **Use `check-config`**: Run our config checker to catch common mistakes.

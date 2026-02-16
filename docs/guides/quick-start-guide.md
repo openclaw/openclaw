@@ -27,9 +27,11 @@ openclaw --version
 ```
 
 ### Common Installation Errors
+
 > [!WARNING]
 > **Command not found?**
 > If you see `command not found: openclaw` after installing, your npm binary path might not be in your system PATH.
+>
 > - **Windows**: Restart your terminal.
 > - **macOS/Linux**: You might need to add npm global bin to your PATH or use `sudo` (not recommended, fix permissions instead).
 
@@ -42,6 +44,7 @@ openclaw onboard --install-daemon
 ```
 
 **What to expect:**
+
 1.  **Welcome**: It will greet you.
 2.  **Model Selection**: Choose your AI provider (Anthropic is best for OpenClaw).
 3.  **API Key**: Paste your API key when prompted.
@@ -102,16 +105,17 @@ Here is a minimal working config example:
 
 ## 6. Common Issues & Fixes
 
-| Issue | Likely Cause | Fix |
-| :--- | :--- | :--- |
-| **Gateway won't start** | Port 18789 is in use | Check if another instance is running (`openclaw doctor`) or change port in config. |
-| **WhatsApp not connecting** | QR code expired or network issue | Restart the gateway to get a new QR code. Ensure your phone and computer are online. |
-| **No response** | 1. Logic loop<br>2. API error<br>3. Wrong number | 1. Check terminal logs.<br>2. Check API key credit.<br>3. Verify `allowFrom` in config. |
-| **High API costs** | Using expensive model | Switch to `claude-3-haiku` or similar in config. |
+| Issue                       | Likely Cause                                     | Fix                                                                                     |
+| :-------------------------- | :----------------------------------------------- | :-------------------------------------------------------------------------------------- |
+| **Gateway won't start**     | Port 18789 is in use                             | Check if another instance is running (`openclaw doctor`) or change port in config.      |
+| **WhatsApp not connecting** | QR code expired or network issue                 | Restart the gateway to get a new QR code. Ensure your phone and computer are online.    |
+| **No response**             | 1. Logic loop<br>2. API error<br>3. Wrong number | 1. Check terminal logs.<br>2. Check API key credit.<br>3. Verify `allowFrom` in config. |
+| **High API costs**          | Using expensive model                            | Switch to `claude-3-haiku` or similar in config.                                        |
 
 ## 7. Next Steps
 
 Now that you're running:
+
 - **Add more channels**: Connect Telegram, Discord, or Slack.
 - **Enable Voice**: Set up Voice Wake on macOS/iOS.
 - **Browse Skills**: easy-to-add capabilities for your agent.
@@ -130,6 +134,7 @@ Now that you're running:
   }
 }
 ```
+
 </details>
 
 <details>
@@ -143,11 +148,13 @@ Now that you're running:
   }
 }
 ```
+
 </details>
 
 ## 9. Troubleshooting Commands
 
 If things get stuck:
+
 - `openclaw doctor`: Diagnoses common configuration and environment issues.
 - `openclaw gateway --verbose`: Runs the gateway with detailed logs.
 - `openclaw channels status`: Checks the connection status of your channels.
