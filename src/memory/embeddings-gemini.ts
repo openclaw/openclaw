@@ -37,6 +37,39 @@ function resolveRemoteApiKey(remoteApiKey?: string): string | undefined {
   return trimmed;
 }
 
+/**
+ * Parse Gemini API key and return appropriate auth headers.
+ * Supports both traditional API keys and OAuth JSON format.
+ *
+ * OAuth format: `{"token": "...", "projectId": "..."}`
+ */
+function parseGeminiAuth(apiKey: string): { headers: Record<string, string> } {
+  // Try parsing as OAuth JSON format
+  if (apiKey.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(apiKey) as { token?: string; projectId?: string };
+      if (typeof parsed.token === "string" && parsed.token) {
+        return {
+          headers: {
+            Authorization: `Bearer ${parsed.token}`,
+            "Content-Type": "application/json",
+          },
+        };
+      }
+    } catch {
+      // Parse failed, fallback to API key mode
+    }
+  }
+
+  // Default: traditional API key
+  return {
+    headers: {
+      "x-goog-api-key": apiKey,
+      "Content-Type": "application/json",
+    },
+  };
+}
+
 function normalizeGeminiModel(model: string): string {
   const trimmed = model.trim();
   if (!trimmed) {
@@ -150,9 +183,9 @@ export async function resolveGeminiEmbeddingClient(
   const rawBaseUrl = remoteBaseUrl || providerConfig?.baseUrl?.trim() || DEFAULT_GEMINI_BASE_URL;
   const baseUrl = normalizeGeminiBaseUrl(rawBaseUrl);
   const headerOverrides = Object.assign({}, providerConfig?.headers, remote?.headers);
+  const authHeaders = parseGeminiAuth(apiKey);
   const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    "x-goog-api-key": apiKey,
+    ...authHeaders.headers,
     ...headerOverrides,
   };
   const model = normalizeGeminiModel(options.model);
