@@ -9,6 +9,7 @@ import type { GatewayPresenceUpdate } from "discord-api-types/v10";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { DiscordAccountConfig } from "../../config/types.discord.js";
+import type { DiscordComponentEntry, DiscordModalEntry } from "../components.js";
 import type { DiscordChannelConfigResolved } from "./allow-list.js";
 import { buildAgentSessionKey } from "../../routing/resolve-route.js";
 import {
@@ -246,6 +247,37 @@ describe("discord component interactions", () => {
     return { interaction, acknowledge, reply };
   };
 
+  const createButtonEntry = (
+    overrides: Partial<DiscordComponentEntry> = {},
+  ): DiscordComponentEntry => ({
+    id: "btn_1",
+    kind: "button",
+    label: "Approve",
+    messageId: "msg-1",
+    sessionKey: "session-1",
+    agentId: "agent-1",
+    accountId: "default",
+    ...overrides,
+  });
+
+  const createModalEntry = (overrides: Partial<DiscordModalEntry> = {}): DiscordModalEntry => ({
+    id: "mdl_1",
+    title: "Details",
+    messageId: "msg-2",
+    sessionKey: "session-2",
+    agentId: "agent-2",
+    accountId: "default",
+    fields: [
+      {
+        id: "fld_1",
+        name: "name",
+        label: "Name",
+        type: "text",
+      },
+    ],
+    ...overrides,
+  });
+
   beforeEach(() => {
     clearDiscordComponentEntries();
     lastDispatchCtx = undefined;
@@ -264,17 +296,7 @@ describe("discord component interactions", () => {
 
   it("routes button clicks with reply references", async () => {
     registerDiscordComponentEntries({
-      entries: [
-        {
-          id: "btn_1",
-          kind: "button",
-          label: "Approve",
-          messageId: "msg-1",
-          sessionKey: "session-1",
-          agentId: "agent-1",
-          accountId: "default",
-        },
-      ],
+      entries: [createButtonEntry()],
       modals: [],
     });
 
@@ -293,18 +315,7 @@ describe("discord component interactions", () => {
 
   it("keeps reusable buttons active after use", async () => {
     registerDiscordComponentEntries({
-      entries: [
-        {
-          id: "btn_1",
-          kind: "button",
-          label: "Approve",
-          messageId: "msg-1",
-          sessionKey: "session-1",
-          agentId: "agent-1",
-          accountId: "default",
-          reusable: true,
-        },
-      ],
+      entries: [createButtonEntry({ reusable: true })],
       modals: [],
     });
 
@@ -323,14 +334,7 @@ describe("discord component interactions", () => {
 
   it("blocks buttons when allowedUsers does not match", async () => {
     registerDiscordComponentEntries({
-      entries: [
-        {
-          id: "btn_1",
-          kind: "button",
-          label: "Approve",
-          allowedUsers: ["999"],
-        },
-      ],
+      entries: [createButtonEntry({ allowedUsers: ["999"] })],
       modals: [],
     });
 
@@ -347,24 +351,7 @@ describe("discord component interactions", () => {
   it("routes modal submissions with field values", async () => {
     registerDiscordComponentEntries({
       entries: [],
-      modals: [
-        {
-          id: "mdl_1",
-          title: "Details",
-          messageId: "msg-2",
-          sessionKey: "session-2",
-          agentId: "agent-2",
-          accountId: "default",
-          fields: [
-            {
-              id: "fld_1",
-              name: "name",
-              label: "Name",
-              type: "text",
-            },
-          ],
-        },
-      ],
+      modals: [createModalEntry()],
     });
 
     const modal = createDiscordComponentModal(
@@ -388,25 +375,7 @@ describe("discord component interactions", () => {
   it("keeps reusable modal entries active after submission", async () => {
     registerDiscordComponentEntries({
       entries: [],
-      modals: [
-        {
-          id: "mdl_1",
-          title: "Details",
-          messageId: "msg-2",
-          sessionKey: "session-2",
-          agentId: "agent-2",
-          accountId: "default",
-          reusable: true,
-          fields: [
-            {
-              id: "fld_1",
-              name: "name",
-              label: "Name",
-              type: "text",
-            },
-          ],
-        },
-      ],
+      modals: [createModalEntry({ reusable: true })],
     });
 
     const modal = createDiscordComponentModal(
