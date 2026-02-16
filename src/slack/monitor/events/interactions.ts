@@ -70,6 +70,23 @@ function readOptionLabels(options: unknown): string[] | undefined {
   return labels.length > 0 ? labels : undefined;
 }
 
+function uniqueNonEmptyStrings(values: string[]): string[] {
+  const unique: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of values) {
+    if (typeof entry !== "string") {
+      continue;
+    }
+    const trimmed = entry.trim();
+    if (!trimmed || seen.has(trimmed)) {
+      continue;
+    }
+    seen.add(trimmed);
+    unique.push(trimmed);
+  }
+  return unique;
+}
+
 function summarizeAction(
   action: Record<string, unknown>,
 ): Omit<InteractionSummary, "actionId" | "blockId"> {
@@ -89,7 +106,7 @@ function summarizeAction(
     value?: string;
   };
   const actionType = typed.type;
-  const selectedValues = [
+  const selectedValues = uniqueNonEmptyStrings([
     ...(typed.selected_option?.value ? [typed.selected_option.value] : []),
     ...(readOptionValues(typed.selected_options) ?? []),
     ...(typed.selected_user ? [typed.selected_user] : []),
@@ -98,11 +115,11 @@ function summarizeAction(
     ...(Array.isArray(typed.selected_channels) ? typed.selected_channels : []),
     ...(typed.selected_conversation ? [typed.selected_conversation] : []),
     ...(Array.isArray(typed.selected_conversations) ? typed.selected_conversations : []),
-  ].filter((entry) => typeof entry === "string" && entry.trim().length > 0);
-  const selectedLabels = [
+  ]);
+  const selectedLabels = uniqueNonEmptyStrings([
     ...(typed.selected_option?.text?.text ? [typed.selected_option.text.text] : []),
     ...(readOptionLabels(typed.selected_options) ?? []),
-  ].filter((entry) => typeof entry === "string" && entry.trim().length > 0);
+  ]);
 
   return {
     actionType,
