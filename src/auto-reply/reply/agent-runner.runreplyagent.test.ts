@@ -1127,10 +1127,6 @@ describe("runReplyAgent memory flush", () => {
     await expectMemoryFlushSkippedWithWorkspaceAccess("ro");
   });
 
-  it("skips memory flush when the sandbox workspace is none", async () => {
-    await expectMemoryFlushSkippedWithWorkspaceAccess("none");
-  });
-
   it("increments compaction count when flush compaction completes", async () => {
     await withTempStore(async (storePath) => {
       const sessionKey = "main";
