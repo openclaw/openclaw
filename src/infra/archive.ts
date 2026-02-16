@@ -5,6 +5,7 @@ import path from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import * as tar from "tar";
+import { resolveSafeBaseDir } from "./path-safety.js";
 
 export type ArchiveKind = "tar" | "zip";
 
@@ -99,11 +100,6 @@ export async function withTimeout<T>(
       clearTimeout(timeoutId);
     }
   }
-}
-
-function resolveSafeBaseDir(destDir: string): string {
-  const resolved = path.resolve(destDir);
-  return resolved.endsWith(path.sep) ? resolved : `${resolved}${path.sep}`;
 }
 
 // Path hygiene.
