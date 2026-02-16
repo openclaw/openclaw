@@ -120,6 +120,9 @@ describe("buildAgentSystemPrompt", () => {
       workspaceDir: "/tmp/openclaw",
     });
 
+    expect(prompt).toContain(
+      "For long waits, avoid rapid poll loops: use exec with enough yieldMs or process(action=poll, timeout=<ms>).",
+    );
     expect(prompt).toContain("Completion is push-based: it will auto-announce when done.");
     expect(prompt).toContain("Do not poll `subagents list` / `sessions_list` in a loop");
   });
