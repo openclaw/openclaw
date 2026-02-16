@@ -105,7 +105,7 @@ Want “groups can only see folder X” instead of “no host access”? Keep `w
         docker: {
           binds: [
             // hostPath:containerPath:mode
-            "~/FriendsShared:/data:ro",
+            "/home/user/FriendsShared:/data:ro",
           ],
         },
       },
