@@ -1,13 +1,26 @@
+import type { AgentEvent } from "@mariozechner/pi-agent-core";
 import { describe, expect, it, vi } from "vitest";
+import type { MessagingToolSend } from "./pi-embedded-messaging.js";
+import type {
+  ToolCallSummary,
+  ToolHandlerContext,
+} from "./pi-embedded-subscribe.handlers.types.js";
 import {
   handleToolExecutionEnd,
   handleToolExecutionStart,
 } from "./pi-embedded-subscribe.handlers.tools.js";
 
-function createTestContext() {
+type ToolExecutionStartEvent = Extract<AgentEvent, { type: "tool_execution_start" }>;
+type ToolExecutionEndEvent = Extract<AgentEvent, { type: "tool_execution_end" }>;
+
+function createTestContext(): {
+  ctx: ToolHandlerContext;
+  warn: ReturnType<typeof vi.fn>;
+  onBlockReplyFlush: ReturnType<typeof vi.fn>;
+} {
   const onBlockReplyFlush = vi.fn();
   const warn = vi.fn();
-  const ctx = {
+  const ctx: ToolHandlerContext = {
     params: {
       runId: "run-test",
       onBlockReplyFlush,
@@ -21,20 +34,24 @@ function createTestContext() {
       warn,
     },
     state: {
-      toolMetaById: new Map<string, string | undefined>(),
+      toolMetaById: new Map<string, ToolCallSummary>(),
+      toolMetas: [],
       toolSummaryById: new Set<string>(),
-      pendingMessagingTargets: new Map<string, unknown>(),
+      pendingMessagingTargets: new Map<string, MessagingToolSend>(),
       pendingMessagingTexts: new Map<string, string>(),
+      pendingMessagingMediaUrls: new Map<string, string>(),
       messagingToolSentTexts: [],
       messagingToolSentTextsNormalized: [],
+      messagingToolSentMediaUrls: [],
       messagingToolSentTargets: [],
       successfulCronAdds: 0,
-      toolMetas: [],
     },
     shouldEmitToolResult: () => false,
+    shouldEmitToolOutput: () => false,
     emitToolSummary: vi.fn(),
+    emitToolOutput: vi.fn(),
     trimMessagingToolSent: vi.fn(),
-  } as const;
+  };
 
   return { ctx, warn, onBlockReplyFlush };
 }
@@ -43,15 +60,14 @@ describe("handleToolExecutionStart read path checks", () => {
   it("does not warn when read tool uses file_path alias", async () => {
     const { ctx, warn, onBlockReplyFlush } = createTestContext();
 
-    await handleToolExecutionStart(
-      ctx as never,
-      {
-        type: "tool_execution_start",
-        toolName: "read",
-        toolCallId: "tool-1",
-        args: { file_path: "/tmp/example.txt" },
-      } as never,
-    );
+    const evt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "read",
+      toolCallId: "tool-1",
+      args: { file_path: "/tmp/example.txt" },
+    };
+
+    await handleToolExecutionStart(ctx, evt);
 
     expect(onBlockReplyFlush).toHaveBeenCalledTimes(1);
     expect(warn).not.toHaveBeenCalled();
@@ -60,15 +76,14 @@ describe("handleToolExecutionStart read path checks", () => {
   it("warns when read tool has neither path nor file_path", async () => {
     const { ctx, warn } = createTestContext();
 
-    await handleToolExecutionStart(
-      ctx as never,
-      {
-        type: "tool_execution_start",
-        toolName: "read",
-        toolCallId: "tool-2",
-        args: {},
-      } as never,
-    );
+    const evt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "read",
+      toolCallId: "tool-2",
+      args: {},
+    };
+
+    await handleToolExecutionStart(ctx, evt);
 
     expect(warn).toHaveBeenCalledTimes(1);
     expect(String(warn.mock.calls[0]?.[0] ?? "")).toContain("read tool called without path");
@@ -126,5 +141,129 @@ describe("handleToolExecutionEnd cron.add commitment tracking", () => {
     );
 
     expect(ctx.state.successfulCronAdds).toBe(0);
+  });
+});
+
+describe("messaging tool media URL tracking", () => {
+  it("tracks mediaUrl arg from messaging tool as pending", async () => {
+    const { ctx } = createTestContext();
+
+    const evt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-m1",
+      args: { action: "send", to: "channel:123", content: "hi", mediaUrl: "file:///img.jpg" },
+    };
+
+    await handleToolExecutionStart(ctx, evt);
+
+    expect(ctx.state.pendingMessagingMediaUrls.get("tool-m1")).toBe("file:///img.jpg");
+  });
+
+  it("commits pending media URL on tool success", async () => {
+    const { ctx } = createTestContext();
+
+    // Simulate start
+    const startEvt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-m2",
+      args: { action: "send", to: "channel:123", content: "hi", mediaUrl: "file:///img.jpg" },
+    };
+
+    await handleToolExecutionStart(ctx, startEvt);
+
+    // Simulate successful end
+    const endEvt: ToolExecutionEndEvent = {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-m2",
+      isError: false,
+      result: { ok: true },
+    };
+
+    await handleToolExecutionEnd(ctx, endEvt);
+
+    expect(ctx.state.messagingToolSentMediaUrls).toContain("file:///img.jpg");
+    expect(ctx.state.pendingMessagingMediaUrls.has("tool-m2")).toBe(false);
+  });
+
+  it("trims messagingToolSentMediaUrls to 200 on commit (FIFO)", async () => {
+    const { ctx } = createTestContext();
+
+    // Replace mock with a real trim that replicates production cap logic.
+    const MAX = 200;
+    ctx.trimMessagingToolSent = () => {
+      if (ctx.state.messagingToolSentTexts.length > MAX) {
+        const overflow = ctx.state.messagingToolSentTexts.length - MAX;
+        ctx.state.messagingToolSentTexts.splice(0, overflow);
+        ctx.state.messagingToolSentTextsNormalized.splice(0, overflow);
+      }
+      if (ctx.state.messagingToolSentTargets.length > MAX) {
+        const overflow = ctx.state.messagingToolSentTargets.length - MAX;
+        ctx.state.messagingToolSentTargets.splice(0, overflow);
+      }
+      if (ctx.state.messagingToolSentMediaUrls.length > MAX) {
+        const overflow = ctx.state.messagingToolSentMediaUrls.length - MAX;
+        ctx.state.messagingToolSentMediaUrls.splice(0, overflow);
+      }
+    };
+
+    // Pre-fill with 200 URLs (url-0 .. url-199)
+    for (let i = 0; i < 200; i++) {
+      ctx.state.messagingToolSentMediaUrls.push(`file:///img-${i}.jpg`);
+    }
+    expect(ctx.state.messagingToolSentMediaUrls).toHaveLength(200);
+
+    // Commit one more via start → end
+    const startEvt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-cap",
+      args: { action: "send", to: "channel:123", content: "hi", mediaUrl: "file:///img-new.jpg" },
+    };
+    await handleToolExecutionStart(ctx, startEvt);
+
+    const endEvt: ToolExecutionEndEvent = {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-cap",
+      isError: false,
+      result: { ok: true },
+    };
+    await handleToolExecutionEnd(ctx, endEvt);
+
+    // Should be capped at 200, oldest removed, newest appended.
+    expect(ctx.state.messagingToolSentMediaUrls).toHaveLength(200);
+    expect(ctx.state.messagingToolSentMediaUrls[0]).toBe("file:///img-1.jpg");
+    expect(ctx.state.messagingToolSentMediaUrls[199]).toBe("file:///img-new.jpg");
+    expect(ctx.state.messagingToolSentMediaUrls).not.toContain("file:///img-0.jpg");
+  });
+
+  it("discards pending media URL on tool error", async () => {
+    const { ctx } = createTestContext();
+
+    const startEvt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-m3",
+      args: { action: "send", to: "channel:123", content: "hi", mediaUrl: "file:///img.jpg" },
+    };
+
+    await handleToolExecutionStart(ctx, startEvt);
+
+    const endEvt: ToolExecutionEndEvent = {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-m3",
+      isError: true,
+      result: "Error: failed",
+    };
+
+    await handleToolExecutionEnd(ctx, endEvt);
+
+    expect(ctx.state.messagingToolSentMediaUrls).toHaveLength(0);
+    expect(ctx.state.pendingMessagingMediaUrls.has("tool-m3")).toBe(false);
+>>>>>>> 018297172 (test(media-dedup): add missing coverage for Discord media dedup wiring)
   });
 });
