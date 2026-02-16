@@ -3,6 +3,15 @@ import type { OpenClawConfig } from "../config/config.js";
 import { startHeartbeatRunner } from "./heartbeat-runner.js";
 
 describe("startHeartbeatRunner", () => {
+  function startDefaultRunner(runOnce: (typeof startHeartbeatRunner)[0]["runOnce"]) {
+    return startHeartbeatRunner({
+      cfg: {
+        agents: { defaults: { heartbeat: { every: "30m" } } },
+      } as OpenClawConfig,
+      runOnce,
+    });
+  }
+
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
@@ -14,12 +23,7 @@ describe("startHeartbeatRunner", () => {
 
     const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
 
-    const runner = startHeartbeatRunner({
-      cfg: {
-        agents: { defaults: { heartbeat: { every: "30m" } } },
-      } as OpenClawConfig,
-      runOnce: runSpy,
-    });
+    const runner = startDefaultRunner(runSpy);
 
     await vi.advanceTimersByTimeAsync(30 * 60_000 + 1_000);
 
@@ -69,12 +73,7 @@ describe("startHeartbeatRunner", () => {
       return { status: "ran", durationMs: 1 };
     });
 
-    const runner = startHeartbeatRunner({
-      cfg: {
-        agents: { defaults: { heartbeat: { every: "30m" } } },
-      } as OpenClawConfig,
-      runOnce: runSpy,
-    });
+    const runner = startDefaultRunner(runSpy);
 
     // First heartbeat fires and throws
     await vi.advanceTimersByTimeAsync(30 * 60_000 + 1_000);
@@ -124,12 +123,7 @@ describe("startHeartbeatRunner", () => {
 
     const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
 
-    const runner = startHeartbeatRunner({
-      cfg: {
-        agents: { defaults: { heartbeat: { every: "30m" } } },
-      } as OpenClawConfig,
-      runOnce: runSpy,
-    });
+    const runner = startDefaultRunner(runSpy);
 
     runner.stop();
 

@@ -328,30 +328,42 @@ describe("local embedding normalization", () => {
     vi.unstubAllGlobals();
   });
 
-  it("normalizes local embeddings to magnitude ~1.0", async () => {
-    const unnormalizedVector = [2.35, 3.45, 0.63, 4.3, 1.2, 5.1, 2.8, 3.9];
-    const resolveModelFileMock = vi.fn(async () => "/fake/model.gguf");
-
-    importNodeLlamaCppMock.mockResolvedValue({
-      getLlama: async () => ({
-        loadModel: vi.fn().mockResolvedValue({
-          createEmbeddingContext: vi.fn().mockResolvedValue({
-            getEmbeddingFor: vi.fn().mockResolvedValue({
-              vector: new Float32Array(unnormalizedVector),
-            }),
-          }),
-        }),
-      }),
-      resolveModelFile: resolveModelFileMock,
-      LlamaLogLevel: { error: 0 },
-    });
-
-    const result = await createEmbeddingProvider({
+  async function createLocalProviderForTest() {
+    return createEmbeddingProvider({
       config: {} as never,
       provider: "local",
       model: "",
       fallback: "none",
     });
+  }
+
+  function mockSingleLocalEmbeddingVector(
+    vector: number[],
+    resolveModelFile: (modelPath: string, modelDirectory?: string) => Promise<string> = async () =>
+      "/fake/model.gguf",
+  ): void {
+    importNodeLlamaCppMock.mockResolvedValue({
+      getLlama: async () => ({
+        loadModel: vi.fn().mockResolvedValue({
+          createEmbeddingContext: vi.fn().mockResolvedValue({
+            getEmbeddingFor: vi.fn().mockResolvedValue({
+              vector: new Float32Array(vector),
+            }),
+          }),
+        }),
+      }),
+      resolveModelFile,
+      LlamaLogLevel: { error: 0 },
+    });
+  }
+
+  it("normalizes local embeddings to magnitude ~1.0", async () => {
+    const unnormalizedVector = [2.35, 3.45, 0.63, 4.3, 1.2, 5.1, 2.8, 3.9];
+    const resolveModelFileMock = vi.fn(async () => "/fake/model.gguf");
+
+    mockSingleLocalEmbeddingVector(unnormalizedVector, resolveModelFileMock);
+
+    const result = await createLocalProviderForTest();
 
     const embedding = await result.provider.embedQuery("test query");
 
@@ -364,26 +376,9 @@ describe("local embedding normalization", () => {
   it("handles zero vector without division by zero", async () => {
     const zeroVector = [0, 0, 0, 0];
 
-    importNodeLlamaCppMock.mockResolvedValue({
-      getLlama: async () => ({
-        loadModel: vi.fn().mockResolvedValue({
-          createEmbeddingContext: vi.fn().mockResolvedValue({
-            getEmbeddingFor: vi.fn().mockResolvedValue({
-              vector: new Float32Array(zeroVector),
-            }),
-          }),
-        }),
-      }),
-      resolveModelFile: async () => "/fake/model.gguf",
-      LlamaLogLevel: { error: 0 },
-    });
+    mockSingleLocalEmbeddingVector(zeroVector);
 
-    const result = await createEmbeddingProvider({
-      config: {} as never,
-      provider: "local",
-      model: "",
-      fallback: "none",
-    });
+    const result = await createLocalProviderForTest();
 
     const embedding = await result.provider.embedQuery("test");
 
@@ -394,26 +389,9 @@ describe("local embedding normalization", () => {
   it("sanitizes non-finite values before normalization", async () => {
     const nonFiniteVector = [1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY];
 
-    importNodeLlamaCppMock.mockResolvedValue({
-      getLlama: async () => ({
-        loadModel: vi.fn().mockResolvedValue({
-          createEmbeddingContext: vi.fn().mockResolvedValue({
-            getEmbeddingFor: vi.fn().mockResolvedValue({
-              vector: new Float32Array(nonFiniteVector),
-            }),
-          }),
-        }),
-      }),
-      resolveModelFile: async () => "/fake/model.gguf",
-      LlamaLogLevel: { error: 0 },
-    });
+    mockSingleLocalEmbeddingVector(nonFiniteVector);
 
-    const result = await createEmbeddingProvider({
-      config: {} as never,
-      provider: "local",
-      model: "",
-      fallback: "none",
-    });
+    const result = await createLocalProviderForTest();
 
     const embedding = await result.provider.embedQuery("test");
 
@@ -444,12 +422,7 @@ describe("local embedding normalization", () => {
       LlamaLogLevel: { error: 0 },
     });
 
-    const result = await createEmbeddingProvider({
-      config: {} as never,
-      provider: "local",
-      model: "",
-      fallback: "none",
-    });
+    const result = await createLocalProviderForTest();
 
     const embeddings = await result.provider.embedBatch(["text1", "text2", "text3"]);
 

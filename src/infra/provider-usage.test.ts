@@ -10,6 +10,48 @@ import {
   type UsageSummary,
 } from "./provider-usage.js";
 
+const minimaxRemainsEndpoint = "api.minimaxi.com/v1/api/openplatform/coding_plan/remains";
+
+function makeResponse(status: number, body: unknown): Response {
+  const payload = typeof body === "string" ? body : JSON.stringify(body);
+  const headers = typeof body === "string" ? undefined : { "Content-Type": "application/json" };
+  return new Response(payload, { status, headers });
+}
+
+function toRequestUrl(input: Parameters<typeof fetch>[0]): string {
+  return typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+}
+
+function createMinimaxOnlyFetch(payload: unknown) {
+  return vi.fn<Parameters<typeof fetch>, ReturnType<typeof fetch>>(async (input) => {
+    if (toRequestUrl(input).includes(minimaxRemainsEndpoint)) {
+      return makeResponse(200, payload);
+    }
+    return makeResponse(404, "not found");
+  });
+}
+
+async function expectMinimaxUsage(
+  payload: unknown,
+  expectedUsedPercent: number,
+  expectedPlan?: string,
+) {
+  const mockFetch = createMinimaxOnlyFetch(payload);
+
+  const summary = await loadProviderUsageSummary({
+    now: Date.UTC(2026, 0, 7, 0, 0, 0),
+    auth: [{ provider: "minimax", token: "token-1b" }],
+    fetch: mockFetch,
+  });
+
+  const minimax = summary.providers.find((p) => p.provider === "minimax");
+  expect(minimax?.windows[0]?.usedPercent).toBe(expectedUsedPercent);
+  if (expectedPlan !== undefined) {
+    expect(minimax?.plan).toBe(expectedPlan);
+  }
+  expect(mockFetch).toHaveBeenCalled();
+}
+
 describe("provider usage formatting", () => {
   it("returns null when no usage is available", () => {
     const summary: UsageSummary = { updatedAt: 0, providers: [] };
@@ -71,15 +113,8 @@ describe("provider usage formatting", () => {
 
 describe("provider usage loading", () => {
   it("loads usage snapshots with injected auth", async () => {
-    const makeResponse = (status: number, body: unknown): Response => {
-      const payload = typeof body === "string" ? body : JSON.stringify(body);
-      const headers = typeof body === "string" ? undefined : { "Content-Type": "application/json" };
-      return new Response(payload, { status, headers });
-    };
-
     const mockFetch = vi.fn<Parameters<typeof fetch>, ReturnType<typeof fetch>>(async (input) => {
-      const url =
-        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      const url = toRequestUrl(input);
       if (url.includes("api.anthropic.com")) {
         return makeResponse(200, {
           five_hour: { utilization: 20, resets_at: "2026-01-07T01:00:00Z" },
@@ -103,7 +138,7 @@ describe("provider usage loading", () => {
           },
         });
       }
-      if (url.includes("api.minimaxi.com/v1/api/openplatform/coding_plan/remains")) {
+      if (url.includes(minimaxRemainsEndpoint)) {
         return makeResponse(200, {
           base_resp: { status_code: 0, status_msg: "ok" },
           data: {
@@ -138,115 +173,55 @@ describe("provider usage loading", () => {
   });
 
   it("handles nested MiniMax usage payloads", async () => {
-    const makeResponse = (status: number, body: unknown): Response => {
-      const payload = typeof body === "string" ? body : JSON.stringify(body);
-      const headers = typeof body === "string" ? undefined : { "Content-Type": "application/json" };
-      return new Response(payload, { status, headers });
-    };
-
-    const mockFetch = vi.fn<Parameters<typeof fetch>, ReturnType<typeof fetch>>(async (input) => {
-      const url =
-        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-      if (url.includes("api.minimaxi.com/v1/api/openplatform/coding_plan/remains")) {
-        return makeResponse(200, {
-          base_resp: { status_code: 0, status_msg: "ok" },
-          data: {
-            plan_name: "Coding Plan",
-            usage: {
-              prompt_limit: 200,
-              prompt_remain: 50,
-              next_reset_time: "2026-01-07T05:00:00Z",
-            },
+    await expectMinimaxUsage(
+      {
+        base_resp: { status_code: 0, status_msg: "ok" },
+        data: {
+          plan_name: "Coding Plan",
+          usage: {
+            prompt_limit: 200,
+            prompt_remain: 50,
+            next_reset_time: "2026-01-07T05:00:00Z",
           },
-        });
-      }
-      return makeResponse(404, "not found");
-    });
-
-    const summary = await loadProviderUsageSummary({
-      now: Date.UTC(2026, 0, 7, 0, 0, 0),
-      auth: [{ provider: "minimax", token: "token-1b" }],
-      fetch: mockFetch,
-    });
-
-    const minimax = summary.providers.find((p) => p.provider === "minimax");
-    expect(minimax?.windows[0]?.usedPercent).toBe(75);
-    expect(minimax?.plan).toBe("Coding Plan");
-    expect(mockFetch).toHaveBeenCalled();
+        },
+      },
+      75,
+      "Coding Plan",
+    );
   });
 
   it("prefers MiniMax count-based usage when percent looks inverted", async () => {
-    const makeResponse = (status: number, body: unknown): Response => {
-      const payload = typeof body === "string" ? body : JSON.stringify(body);
-      const headers = typeof body === "string" ? undefined : { "Content-Type": "application/json" };
-      return new Response(payload, { status, headers });
-    };
-
-    const mockFetch = vi.fn<Parameters<typeof fetch>, ReturnType<typeof fetch>>(async (input) => {
-      const url =
-        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-      if (url.includes("api.minimaxi.com/v1/api/openplatform/coding_plan/remains")) {
-        return makeResponse(200, {
-          base_resp: { status_code: 0, status_msg: "ok" },
-          data: {
-            prompt_limit: 200,
-            prompt_remain: 150,
-            usage_percent: 75,
-            next_reset_time: "2026-01-07T05:00:00Z",
-          },
-        });
-      }
-      return makeResponse(404, "not found");
-    });
-
-    const summary = await loadProviderUsageSummary({
-      now: Date.UTC(2026, 0, 7, 0, 0, 0),
-      auth: [{ provider: "minimax", token: "token-1b" }],
-      fetch: mockFetch,
-    });
-
-    const minimax = summary.providers.find((p) => p.provider === "minimax");
-    expect(minimax?.windows[0]?.usedPercent).toBe(25);
-    expect(mockFetch).toHaveBeenCalled();
+    await expectMinimaxUsage(
+      {
+        base_resp: { status_code: 0, status_msg: "ok" },
+        data: {
+          prompt_limit: 200,
+          prompt_remain: 150,
+          usage_percent: 75,
+          next_reset_time: "2026-01-07T05:00:00Z",
+        },
+      },
+      25,
+    );
   });
 
   it("handles MiniMax model_remains usage payloads", async () => {
-    const makeResponse = (status: number, body: unknown): Response => {
-      const payload = typeof body === "string" ? body : JSON.stringify(body);
-      const headers = typeof body === "string" ? undefined : { "Content-Type": "application/json" };
-      return new Response(payload, { status, headers });
-    };
-
-    const mockFetch = vi.fn<Parameters<typeof fetch>, ReturnType<typeof fetch>>(async (input) => {
-      const url =
-        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-      if (url.includes("api.minimaxi.com/v1/api/openplatform/coding_plan/remains")) {
-        return makeResponse(200, {
-          base_resp: { status_code: 0, status_msg: "ok" },
-          model_remains: [
-            {
-              start_time: 1736217600,
-              end_time: 1736235600,
-              remains_time: 600,
-              current_interval_total_count: 120,
-              current_interval_usage_count: 30,
-              model_name: "MiniMax-M2.1",
-            },
-          ],
-        });
-      }
-      return makeResponse(404, "not found");
-    });
-
-    const summary = await loadProviderUsageSummary({
-      now: Date.UTC(2026, 0, 7, 0, 0, 0),
-      auth: [{ provider: "minimax", token: "token-1b" }],
-      fetch: mockFetch,
-    });
-
-    const minimax = summary.providers.find((p) => p.provider === "minimax");
-    expect(minimax?.windows[0]?.usedPercent).toBe(25);
-    expect(mockFetch).toHaveBeenCalled();
+    await expectMinimaxUsage(
+      {
+        base_resp: { status_code: 0, status_msg: "ok" },
+        model_remains: [
+          {
+            start_time: 1736217600,
+            end_time: 1736235600,
+            remains_time: 600,
+            current_interval_total_count: 120,
+            current_interval_usage_count: 30,
+            model_name: "MiniMax-M2.1",
+          },
+        ],
+      },
+      25,
+    );
   });
 
   it("discovers Claude usage from token auth profiles", async () => {

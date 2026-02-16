@@ -14,6 +14,11 @@ const state = vi.hoisted(() => ({
 
 const abs = (p: string) => path.resolve(p);
 const fx = (...parts: string[]) => path.join(FIXTURE_BASE, ...parts);
+const vitestRootWithSep = `${abs(VITEST_FS_BASE)}${path.sep}`;
+const isFixturePath = (p: string) => {
+  const resolved = abs(p);
+  return resolved === vitestRootWithSep.slice(0, -1) || resolved.startsWith(vitestRootWithSep);
+};
 
 function setFile(p: string, content = "") {
   state.entries.set(abs(p), { kind: "file", content });
@@ -21,23 +26,16 @@ function setFile(p: string, content = "") {
 
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
-  const pathMod = await import("node:path");
-  const absInMock = (p: string) => pathMod.resolve(p);
-  const vitestRoot = `${absInMock(VITEST_FS_BASE)}${pathMod.sep}`;
-  const isFixturePath = (p: string) => {
-    const resolved = absInMock(p);
-    return resolved === vitestRoot.slice(0, -1) || resolved.startsWith(vitestRoot);
-  };
   const wrapped = {
     ...actual,
     existsSync: (p: string) =>
-      isFixturePath(p) ? state.entries.has(absInMock(p)) : actual.existsSync(p),
+      isFixturePath(p) ? state.entries.has(abs(p)) : actual.existsSync(p),
     readFileSync: (p: string, encoding?: unknown) => {
       if (!isFixturePath(p)) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         return actual.readFileSync(p as any, encoding as any) as unknown;
       }
-      const entry = state.entries.get(absInMock(p));
+      const entry = state.entries.get(abs(p));
       if (!entry || entry.kind !== "file") {
         throw new Error(`ENOENT: no such file, open '${p}'`);
       }
@@ -48,7 +46,7 @@ vi.mock("node:fs", async (importOriginal) => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         return actual.statSync(p as any) as unknown;
       }
-      const entry = state.entries.get(absInMock(p));
+      const entry = state.entries.get(abs(p));
       if (!entry) {
         throw new Error(`ENOENT: no such file or directory, stat '${p}'`);
       }
@@ -58,22 +56,13 @@ vi.mock("node:fs", async (importOriginal) => {
       };
     },
     realpathSync: (p: string) =>
-      isFixturePath(p)
-        ? (state.realpaths.get(absInMock(p)) ?? absInMock(p))
-        : actual.realpathSync(p),
+      isFixturePath(p) ? (state.realpaths.get(abs(p)) ?? abs(p)) : actual.realpathSync(p),
   };
   return { ...wrapped, default: wrapped };
 });
 
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
-  const pathMod = await import("node:path");
-  const absInMock = (p: string) => pathMod.resolve(p);
-  const vitestRoot = `${absInMock(VITEST_FS_BASE)}${pathMod.sep}`;
-  const isFixturePath = (p: string) => {
-    const resolved = absInMock(p);
-    return resolved === vitestRoot.slice(0, -1) || resolved.startsWith(vitestRoot);
-  };
   const wrapped = {
     ...actual,
     readFile: async (p: string, encoding?: unknown) => {
@@ -81,7 +70,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         return (await actual.readFile(p as any, encoding as any)) as unknown;
       }
-      const entry = state.entries.get(absInMock(p));
+      const entry = state.entries.get(abs(p));
       if (!entry || entry.kind !== "file") {
         throw new Error(`ENOENT: no such file, open '${p}'`);
       }

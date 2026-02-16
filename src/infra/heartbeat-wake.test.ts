@@ -8,6 +8,25 @@ import {
 } from "./heartbeat-wake.js";
 
 describe("heartbeat-wake", () => {
+  async function expectRetryAfterDefaultDelay(params: {
+    handler: ReturnType<typeof vi.fn>;
+    initialReason: string;
+    expectedRetryReason: string;
+  }) {
+    setHeartbeatWakeHandler(params.handler);
+    requestHeartbeatNow({ reason: params.initialReason, coalesceMs: 0 });
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(params.handler).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(500);
+    expect(params.handler).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(500);
+    expect(params.handler).toHaveBeenCalledTimes(2);
+    expect(params.handler.mock.calls[1]?.[0]).toEqual({ reason: params.expectedRetryReason });
+  }
+
   beforeEach(() => {
     resetHeartbeatWakeStateForTests();
   });
@@ -44,19 +63,11 @@ describe("heartbeat-wake", () => {
       .fn()
       .mockResolvedValueOnce({ status: "skipped", reason: "requests-in-flight" })
       .mockResolvedValueOnce({ status: "ran", durationMs: 1 });
-    setHeartbeatWakeHandler(handler);
-
-    requestHeartbeatNow({ reason: "interval", coalesceMs: 0 });
-
-    await vi.advanceTimersByTimeAsync(1);
-    expect(handler).toHaveBeenCalledTimes(1);
-
-    await vi.advanceTimersByTimeAsync(500);
-    expect(handler).toHaveBeenCalledTimes(1);
-
-    await vi.advanceTimersByTimeAsync(500);
-    expect(handler).toHaveBeenCalledTimes(2);
-    expect(handler.mock.calls[1]?.[0]).toEqual({ reason: "interval" });
+    await expectRetryAfterDefaultDelay({
+      handler,
+      initialReason: "interval",
+      expectedRetryReason: "interval",
+    });
   });
 
   it("keeps retry cooldown even when a sooner request arrives", async () => {
@@ -87,19 +98,11 @@ describe("heartbeat-wake", () => {
       .fn()
       .mockRejectedValueOnce(new Error("boom"))
       .mockResolvedValueOnce({ status: "skipped", reason: "disabled" });
-    setHeartbeatWakeHandler(handler);
-
-    requestHeartbeatNow({ reason: "exec-event", coalesceMs: 0 });
-
-    await vi.advanceTimersByTimeAsync(1);
-    expect(handler).toHaveBeenCalledTimes(1);
-
-    await vi.advanceTimersByTimeAsync(500);
-    expect(handler).toHaveBeenCalledTimes(1);
-
-    await vi.advanceTimersByTimeAsync(500);
-    expect(handler).toHaveBeenCalledTimes(2);
-    expect(handler.mock.calls[1]?.[0]).toEqual({ reason: "exec-event" });
+    await expectRetryAfterDefaultDelay({
+      handler,
+      initialReason: "exec-event",
+      expectedRetryReason: "exec-event",
+    });
   });
 
   it("stale disposer does not clear a newer handler", async () => {

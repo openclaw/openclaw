@@ -2,20 +2,25 @@ import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 
+type MockSpawnChild = EventEmitter & {
+  stdout?: EventEmitter & { setEncoding?: (enc: string) => void };
+  kill?: (signal?: string) => void;
+};
+
+function createMockSpawnChild() {
+  const child = new EventEmitter() as MockSpawnChild;
+  const stdout = new EventEmitter() as MockSpawnChild["stdout"];
+  stdout!.setEncoding = vi.fn();
+  child.stdout = stdout;
+  child.kill = vi.fn();
+  return { child, stdout };
+}
+
 vi.mock("node:child_process", () => {
   const spawn = vi.fn(() => {
-    const child = new EventEmitter() as EventEmitter & {
-      stdout?: EventEmitter & { setEncoding?: (enc: string) => void };
-      kill?: (signal?: string) => void;
-    };
-    const stdout = new EventEmitter() as EventEmitter & {
-      setEncoding?: (enc: string) => void;
-    };
-    stdout.setEncoding = vi.fn();
-    child.stdout = stdout;
-    child.kill = vi.fn();
+    const { child, stdout } = createMockSpawnChild();
     process.nextTick(() => {
-      stdout.emit(
+      stdout?.emit(
         "data",
         [
           "user steipete",
@@ -60,16 +65,7 @@ describe("ssh-config", () => {
 
   it("returns null when ssh -G fails", async () => {
     spawnMock.mockImplementationOnce(() => {
-      const child = new EventEmitter() as EventEmitter & {
-        stdout?: EventEmitter & { setEncoding?: (enc: string) => void };
-        kill?: (signal?: string) => void;
-      };
-      const stdout = new EventEmitter() as EventEmitter & {
-        setEncoding?: (enc: string) => void;
-      };
-      stdout.setEncoding = vi.fn();
-      child.stdout = stdout;
-      child.kill = vi.fn();
+      const { child } = createMockSpawnChild();
       process.nextTick(() => {
         child.emit("exit", 1);
       });

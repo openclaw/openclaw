@@ -1,6 +1,7 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
+import type { IncomingMessage } from "node:http";
 import { EventEmitter } from "node:events";
 import { describe, expect, it } from "vitest";
+import { createMockServerResponse } from "../test-utils/mock-http-response.js";
 import {
   installRequestBodyLimitGuard,
   isRequestBodyLimitError,
@@ -52,24 +53,6 @@ function createMockRequest(params: {
   return req;
 }
 
-function createMockResponse(): ServerResponse & { body?: string } {
-  const headers: Record<string, string> = {};
-  const res = {
-    headersSent: false,
-    statusCode: 200,
-    setHeader: (key: string, value: string) => {
-      headers[key.toLowerCase()] = value;
-      return res;
-    },
-    end: (body?: string) => {
-      res.headersSent = true;
-      res.body = body;
-      return res;
-    },
-  } as unknown as ServerResponse & { body?: string };
-  return res;
-}
-
 describe("http body limits", () => {
   it("reads body within max bytes", async () => {
     const req = createMockRequest({ chunks: ['{"ok":true}'] });
@@ -104,7 +87,7 @@ describe("http body limits", () => {
       headers: { "content-length": "9999" },
       emitEnd: false,
     });
-    const res = createMockResponse();
+    const res = createMockServerResponse();
     const guard = installRequestBodyLimitGuard(req, res, { maxBytes: 128 });
     expect(guard.isTripped()).toBe(true);
     expect(guard.code()).toBe("PAYLOAD_TOO_LARGE");
@@ -113,7 +96,7 @@ describe("http body limits", () => {
 
   it("guard rejects streamed oversized body", async () => {
     const req = createMockRequest({ chunks: ["small", "x".repeat(256)], emitEnd: false });
-    const res = createMockResponse();
+    const res = createMockServerResponse();
     const guard = installRequestBodyLimitGuard(req, res, { maxBytes: 128, responseFormat: "text" });
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(guard.isTripped()).toBe(true);
