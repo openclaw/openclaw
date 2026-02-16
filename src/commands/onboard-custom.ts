@@ -40,12 +40,25 @@ function isAzureUrl(baseUrl: string): boolean {
  *   => https://my-resource.services.ai.azure.com/openai/deployments/gpt-5-nano
  */
 function transformAzureUrl(baseUrl: string, modelId: string): string {
-  const normalizedUrl = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
-  // Check if the URL already includes the deployment path
-  if (normalizedUrl.includes("/openai/deployments/")) {
-    return normalizedUrl;
+  // Use URL API to properly handle query parameters in the base URL
+  try {
+    const url = new URL(baseUrl);
+    // Check if the URL already includes the deployment path
+    if (url.pathname.includes("/openai/deployments/")) {
+      return baseUrl;
+    }
+    // Append the deployment path
+    const normalizedPath = url.pathname.endsWith("/") ? url.pathname.slice(0, -1) : url.pathname;
+    url.pathname = `${normalizedPath}/openai/deployments/${modelId}`;
+    return url.toString();
+  } catch {
+    // Fallback to simple string manipulation if URL parsing fails
+    const normalizedUrl = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
+    if (normalizedUrl.includes("/openai/deployments/")) {
+      return normalizedUrl;
+    }
+    return `${normalizedUrl}/openai/deployments/${modelId}`;
   }
-  return `${normalizedUrl}/openai/deployments/${modelId}`;
 }
 
 export type CustomApiCompatibility = "openai" | "anthropic";
@@ -286,7 +299,9 @@ async function requestAnthropicVerification(params: {
   apiKey: string;
   modelId: string;
 }): Promise<VerificationResult> {
-  // Transform Azure URLs to include the deployment path
+  // Note: Azure AI Foundry exposes OpenAI-compatible API, not Anthropic.
+  // The transform below produces an invalid URL for Anthropic, which is
+  // intentional - verification should fail for invalid endpoints.
   const resolvedUrl = isAzureUrl(params.baseUrl)
     ? transformAzureUrl(params.baseUrl, params.modelId)
     : params.baseUrl;
