@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { wrapFetchWithAbortSignal } from "./fetch.js";
+import { resolveFetch, wrapFetchWithAbortSignal } from "./fetch.js";
 
 describe("wrapFetchWithAbortSignal", () => {
   it("adds duplex for requests with a body", async () => {
@@ -181,5 +181,32 @@ describe("wrapFetchWithAbortSignal", () => {
 
     expect(addEventListener).not.toHaveBeenCalled();
     expect(removeEventListener).not.toHaveBeenCalled();
+  });
+
+  it("returns the same function when called with an already wrapped fetch", () => {
+    const fetchImpl = vi.fn(async () => ({ ok: true }) as Response);
+    const wrapped = wrapFetchWithAbortSignal(fetchImpl);
+
+    expect(wrapFetchWithAbortSignal(wrapped)).toBe(wrapped);
+    expect(resolveFetch(wrapped)).toBe(wrapped);
+  });
+
+  it("keeps preconnect bound to the original fetch implementation", () => {
+    const preconnectSpy = vi.fn(function (this: unknown) {
+      return this;
+    });
+    const fetchImpl = vi.fn(async () => ({ ok: true }) as Response) as typeof fetch & {
+      preconnect: (url: string, init?: { credentials?: RequestCredentials }) => unknown;
+    };
+    fetchImpl.preconnect = preconnectSpy;
+
+    const wrapped = wrapFetchWithAbortSignal(fetchImpl) as typeof fetch & {
+      preconnect: (url: string, init?: { credentials?: RequestCredentials }) => unknown;
+    };
+
+    const seenThis = wrapped.preconnect("https://example.com");
+
+    expect(preconnectSpy).toHaveBeenCalledOnce();
+    expect(seenThis).toBe(fetchImpl);
   });
 });
