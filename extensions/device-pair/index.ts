@@ -1,6 +1,6 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import os from "node:os";
-import { approveDevicePairing, listDevicePairing, renderQrPngBase64 } from "openclaw/plugin-sdk";
+import { approveDevicePairing, listDevicePairing } from "openclaw/plugin-sdk";
 import qrcode from "qrcode-terminal";
 
 function renderQrAscii(data: string): Promise<string> {
@@ -445,12 +445,8 @@ export default function register(api: OpenClawPluginApi) {
 
       if (action === "qr") {
         const setupCode = encodeSetupCode(payload);
-        const [qrBase64, qrAscii] = await Promise.all([
-          renderQrPngBase64(setupCode),
-          renderQrAscii(setupCode),
-        ]);
+        const qrAscii = await renderQrAscii(setupCode);
         const authLabel = auth.label ?? "auth";
-        const dataUrl = `data:image/png;base64,${qrBase64}`;
 
         const channel = ctx.channel;
         const target = ctx.senderId?.trim() || ctx.from?.trim() || ctx.to?.trim() || "";
@@ -459,11 +455,20 @@ export default function register(api: OpenClawPluginApi) {
           try {
             const send = api.runtime?.channel?.telegram?.sendMessageTelegram;
             if (send) {
-              await send(target, "Scan this QR code with the OpenClaw iOS app:", {
+              await send(
+                target,
+                [
+                  "Scan this QR code with the OpenClaw iOS app:",
+                  "",
+                  "```",
+                  qrAscii,
+                  "```",
+                ].join("\n"),
+                {
                 ...(ctx.messageThreadId != null ? { messageThreadId: ctx.messageThreadId } : {}),
                 ...(ctx.accountId ? { accountId: ctx.accountId } : {}),
-                mediaUrl: dataUrl,
-              });
+                },
+              );
               return {
                 text: [
                   `Gateway: ${payload.url}`,
@@ -491,23 +496,7 @@ export default function register(api: OpenClawPluginApi) {
           "After scanning, run `/pair approve` to complete pairing.",
         ];
 
-        // TUI (gateway-client) needs ASCII, WebUI can render markdown images
-        const isTui = target === "gateway-client" || channel !== "webchat";
-
-        if (!isTui) {
-          // WebUI: markdown image only
-          return {
-            text: [
-              "Scan this QR code with the OpenClaw iOS app:",
-              "",
-              `![Pairing QR](${dataUrl})`,
-              "",
-              ...infoLines,
-            ].join("\n"),
-          };
-        }
-
-        // CLI/TUI: ASCII QR only
+        // WebUI + CLI/TUI: ASCII QR
         return {
           text: [
             "Scan this QR code with the OpenClaw iOS app:",
