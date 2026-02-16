@@ -559,12 +559,13 @@ const memoryNeo4jPlugin = {
           // Feature 1: Filter out low-relevance results below min RRF score
           results = results.filter((r) => r.score >= cfg.autoRecallMinScore);
 
-          // Feature 2: Deduplicate against core memories already in context
-          const sessionKey = ctx.sessionKey ?? "";
-          const coreIds = coreMemoryIdsBySession.get(sessionKey);
-          if (coreIds) {
-            results = results.filter((r) => !coreIds.has(r.id));
-          }
+          // Feature 2: (Removed) Core memory dedup was filtering relevant core memories
+          // from auto-recall results because they were "already in context" from bootstrap.
+          // Problem: by mid-session, bootstrap core memories are buried deep in context
+          // ("lost in the middle"), so the model forgets them. Filtering them from auto-recall
+          // prevented re-surfacing at the point of relevance. Duplicate injection is harmless —
+          // same content appears in both core bootstrap and relevant-memories sections,
+          // reinforcing important context with recency.
 
           // Feature 3: Filter out memories related to completed tasks
           const workspaceDir = ctx.workspaceDir;
