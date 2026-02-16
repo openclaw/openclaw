@@ -16,6 +16,14 @@ import { sanitizeChatSendMessageInput } from "./chat.js";
 import { createExecApprovalHandlers } from "./exec-approval.js";
 import { logsHandlers } from "./logs.js";
 
+vi.mock("../../commands/status.js", () => ({
+  getStatusSummary: vi.fn().mockResolvedValue({ ok: true }),
+}));
+
+type HealthStatusHandlerParams = Parameters<
+  (typeof import("./health.js"))["healthHandlers"]["status"]
+>[0];
+
 describe("waitForAgentJob", () => {
   it("maps lifecycle end events with aborted=true to timeout", async () => {
     const runId = `run-timeout-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -443,6 +451,41 @@ describe("exec approval handlers", () => {
       undefined,
     );
     expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+  });
+});
+
+describe("gateway healthHandlers.status scope handling", () => {
+  beforeEach(async () => {
+    const status = await import("../../commands/status.js");
+    vi.mocked(status.getStatusSummary).mockClear();
+  });
+
+  it("requests redacted status for non-admin clients", async () => {
+    const respond = vi.fn();
+    const status = await import("../../commands/status.js");
+    const { healthHandlers } = await import("./health.js");
+
+    await healthHandlers.status({
+      respond,
+      client: { connect: { role: "operator", scopes: ["operator.read"] } },
+    } as HealthStatusHandlerParams);
+
+    expect(vi.mocked(status.getStatusSummary)).toHaveBeenCalledWith({ includeSensitive: false });
+    expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+  });
+
+  it("requests full status for admin clients", async () => {
+    const respond = vi.fn();
+    const status = await import("../../commands/status.js");
+    const { healthHandlers } = await import("./health.js");
+
+    await healthHandlers.status({
+      respond,
+      client: { connect: { role: "operator", scopes: ["operator.admin"] } },
+    } as HealthStatusHandlerParams);
+
+    expect(vi.mocked(status.getStatusSummary)).toHaveBeenCalledWith({ includeSensitive: true });
+    expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
   });
 });
 
