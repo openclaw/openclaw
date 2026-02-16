@@ -13,6 +13,13 @@ const resolveMediaDir = () => path.join(resolveConfigDir(), "media");
 export const MEDIA_MAX_BYTES = 5 * 1024 * 1024; // 5MB default
 const MAX_BYTES = MEDIA_MAX_BYTES;
 const DEFAULT_TTL_MS = 2 * 60 * 1000; // 2 minutes
+const CLEANUP_INTERVAL_MS = 60 * 1000; // Throttle cleanup to once per minute
+let lastCleanupTime = 0;
+
+export function resetCleanupThrottleForTest() {
+  lastCleanupTime = 0;
+}
+
 type RequestImpl = typeof httpRequest;
 type ResolvePinnedHostnameImpl = typeof resolvePinnedHostname;
 
@@ -85,21 +92,33 @@ export async function ensureMediaDir() {
 }
 
 export async function cleanOldMedia(ttlMs = DEFAULT_TTL_MS) {
-  const mediaDir = await ensureMediaDir();
-  const entries = await fs.readdir(mediaDir).catch(() => []);
   const now = Date.now();
-  await Promise.all(
-    entries.map(async (file) => {
-      const full = path.join(mediaDir, file);
-      const stat = await fs.stat(full).catch(() => null);
-      if (!stat) {
-        return;
-      }
-      if (now - stat.mtimeMs > ttlMs) {
-        await fs.rm(full).catch(() => {});
-      }
-    }),
-  );
+  if (now - lastCleanupTime < CLEANUP_INTERVAL_MS) {
+    return;
+  }
+  lastCleanupTime = now;
+
+  const mediaDir = await ensureMediaDir();
+
+  const cleanDir = async (dir: string) => {
+    const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
+    await Promise.all(
+      entries.map(async (entry) => {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          await cleanDir(full);
+          // Optionally remove empty directories here, but skipping for safety
+        } else if (entry.isFile()) {
+          const stat = await fs.stat(full).catch(() => null);
+          if (stat && now - stat.mtimeMs > ttlMs) {
+            await fs.rm(full).catch(() => {});
+          }
+        }
+      }),
+    );
+  };
+
+  await cleanDir(mediaDir);
 }
 
 function looksLikeUrl(src: string) {
@@ -240,6 +259,7 @@ export async function saveMediaBuffer(
   }
   const dir = path.join(resolveMediaDir(), subdir);
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+  void cleanOldMedia().catch(() => {});
   const uuid = crypto.randomUUID();
   const headerExt = extensionForMime(contentType?.split(";")[0]?.trim() ?? undefined);
   const mime = await detectMime({ buffer, headerMime: contentType });
