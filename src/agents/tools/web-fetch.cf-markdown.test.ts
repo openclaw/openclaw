@@ -1,28 +1,14 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import * as ssrf from "../../infra/net/ssrf.js";
+import { describe, expect, it, vi } from "vitest";
 import * as logger from "../../logger.js";
+import {
+  createBaseWebFetchToolConfig,
+  installWebFetchSsrfHarness,
+} from "./web-fetch.test-harness.js";
+import "./web-fetch.test-mocks.js";
 import { createWebFetchTool } from "./web-tools.js";
 
-// Avoid dynamic-importing heavy readability deps in this unit test suite.
-vi.mock("./web-fetch-utils.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("./web-fetch-utils.js")>("./web-fetch-utils.js");
-  return {
-    ...actual,
-    extractReadableContent: vi.fn().mockResolvedValue({
-      title: "HTML Page",
-      text: "HTML Page\n\nContent here.",
-    }),
-  };
-});
-
-const lookupMock = vi.fn();
-const resolvePinnedHostname = ssrf.resolvePinnedHostname;
-const baseToolConfig = {
-  config: {
-    tools: { web: { fetch: { cacheTtlMinutes: 0, firecrawl: { enabled: false } } } },
-  },
-} as const;
+const baseToolConfig = createBaseWebFetchToolConfig();
+installWebFetchSsrfHarness();
 
 function makeHeaders(map: Record<string, string>): { get: (key: string) => string | null } {
   return {
@@ -49,22 +35,6 @@ function htmlResponse(body: string): Response {
 }
 
 describe("web_fetch Cloudflare Markdown for Agents", () => {
-  const priorFetch = global.fetch;
-
-  beforeEach(() => {
-    lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
-    vi.spyOn(ssrf, "resolvePinnedHostname").mockImplementation((hostname) =>
-      resolvePinnedHostname(hostname, lookupMock),
-    );
-  });
-
-  afterEach(() => {
-    // @ts-expect-error restore
-    global.fetch = priorFetch;
-    lookupMock.mockReset();
-    vi.restoreAllMocks();
-  });
-
   it("sends Accept header preferring text/markdown", async () => {
     const fetchSpy = vi.fn().mockResolvedValue(markdownResponse("# Test Page\n\nHello world."));
     // @ts-expect-error mock fetch

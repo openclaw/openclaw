@@ -1,4 +1,4 @@
-import { afterEach, beforeEach } from "vitest";
+import { afterEach, beforeEach, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 
@@ -46,6 +46,28 @@ export function unsetEnv(vars: string[]) {
   for (const envVar of vars) {
     delete process.env[envVar];
   }
+}
+
+export const COPILOT_TOKEN_ENV_VARS = ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"];
+
+export async function withUnsetCopilotTokenEnv<T>(fn: () => Promise<T>): Promise<T> {
+  return withTempEnv(COPILOT_TOKEN_ENV_VARS, async () => {
+    unsetEnv(COPILOT_TOKEN_ENV_VARS);
+    return fn();
+  });
+}
+
+export function mockCopilotTokenExchangeSuccess() {
+  const fetchMock = vi.fn().mockResolvedValue({
+    ok: true,
+    status: 200,
+    json: async () => ({
+      token: "copilot-token;proxy-ep=proxy.copilot.example",
+      expires_at: Math.floor(Date.now() / 1000) + 3600,
+    }),
+  });
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  return fetchMock;
 }
 
 export const MODELS_CONFIG_IMPLICIT_ENV_VARS = [

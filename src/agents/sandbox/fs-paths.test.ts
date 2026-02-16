@@ -6,37 +6,10 @@ import {
   parseSandboxBindMount,
   resolveSandboxFsPathWithMounts,
 } from "./fs-paths.js";
+import { createSandboxTestContext } from "./test-fixtures.js";
 
 function createSandbox(overrides?: Partial<SandboxContext>): SandboxContext {
-  return {
-    enabled: true,
-    sessionKey: "sandbox:test",
-    workspaceDir: "/tmp/workspace",
-    agentWorkspaceDir: "/tmp/workspace",
-    workspaceAccess: "rw",
-    containerName: "openclaw-sbx-test",
-    containerWorkdir: "/workspace",
-    docker: {
-      image: "openclaw-sandbox:bookworm-slim",
-      containerPrefix: "openclaw-sbx-",
-      network: "none",
-      user: "1000:1000",
-      workdir: "/workspace",
-      readOnlyRoot: false,
-      tmpfs: [],
-      capDrop: [],
-      seccompProfile: "",
-      apparmorProfile: "",
-      setupCommand: "",
-      binds: [],
-      dns: [],
-      extraHosts: [],
-      pidsLimit: 0,
-    },
-    tools: { allow: ["*"], deny: [] },
-    browserAllowHostControl: false,
-    ...overrides,
-  };
+  return createSandboxTestContext({ overrides });
 }
 
 describe("parseSandboxBindMount", () => {
