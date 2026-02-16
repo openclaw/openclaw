@@ -69,6 +69,11 @@ apps/ios/*.dSYM.zip
 # provisioning profiles (local)
 apps/ios/*.mobileprovision
 
+# Azure Function build artifacts
+azure-function/dist/
+azure-function/node_modules/
+azure-function/local.settings.json
+
 # Local untracked files
 .local/
 docs/.local/

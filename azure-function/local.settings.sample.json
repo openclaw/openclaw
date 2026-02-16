@@ -1,0 +1,12 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "FUNCTIONS_WORKER_RUNTIME": "node",
+    "TELEGRAM_BOT_TOKEN": "<your-telegram-bot-token>",
+    "TELEGRAM_WEBHOOK_SECRET": "<your-webhook-secret>",
+    "GITHUB_TOKEN": "<your-github-token>",
+    "AZURE_STORAGE_CONNECTION_STRING": "UseDevelopmentStorage=true",
+    "OPENCLAW_AGENT_ID": "default"
+  }
+}

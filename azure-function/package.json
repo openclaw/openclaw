@@ -1,0 +1,27 @@
+{
+  "name": "openclaw-azure-function",
+  "version": "1.0.0",
+  "private": true,
+  "description": "OpenClaw serverless Azure Function (Node.js v4 programming model)",
+  "type": "module",
+  "main": "dist/src/functions/*.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "func start",
+    "prestart": "npm run build"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "dependencies": {
+    "@azure/data-tables": "^13.3.0",
+    "@azure/functions": "^4.6.0",
+    "@azure/storage-blob": "^12.26.0",
+    "grammy": "^1.35.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0",
+    "azure-functions-core-tools": "^4.0.0"
+  }
+}
