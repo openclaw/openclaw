@@ -18,8 +18,11 @@ function buildModel(): Model<"openai-responses"> {
   };
 }
 
-function extractInputTypes(payload: Record<string, unknown> | undefined) {
-  const input = Array.isArray(payload?.input) ? payload.input : [];
+function extractInput(payload: Record<string, unknown> | undefined) {
+  return Array.isArray(payload?.input) ? payload.input : [];
+}
+
+function extractInputTypes(input: unknown[]) {
   return input
     .map((item) =>
       item && typeof item === "object" ? (item as Record<string, unknown>).type : undefined,
@@ -58,7 +61,11 @@ async function runAbortedOpenAIResponsesStream(params: {
   );
 
   await stream.result();
-  return extractInputTypes(payload);
+  const input = extractInput(payload);
+  return {
+    input,
+    types: extractInputTypes(input),
+  };
 }
 
 describe("openai-responses reasoning replay", () => {
@@ -106,7 +113,7 @@ describe("openai-responses reasoning replay", () => {
       timestamp: Date.now(),
     };
 
-    const types = await runAbortedOpenAIResponsesStream({
+    const { input, types } = await runAbortedOpenAIResponsesStream({
       messages: [
         {
           role: "user",
@@ -174,7 +181,7 @@ describe("openai-responses reasoning replay", () => {
       ],
     };
 
-    const types = await runAbortedOpenAIResponsesStream({
+    const { types } = await runAbortedOpenAIResponsesStream({
       messages: [
         { role: "user", content: "Hi", timestamp: Date.now() },
         assistantWithText,
