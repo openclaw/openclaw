@@ -69,6 +69,13 @@ const discordComponentButtonSchema = Type.Object({
   url: Type.Optional(Type.String()),
   emoji: Type.Optional(discordComponentEmojiSchema),
   disabled: Type.Optional(Type.Boolean()),
+  allowedUsers: Type.Optional(
+    Type.Array(
+      Type.String({
+        description: "Discord user ids or names allowed to interact with this button.",
+      }),
+    ),
+  ),
 });
 
 const discordComponentSelectSchema = Type.Object({

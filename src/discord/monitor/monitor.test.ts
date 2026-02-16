@@ -321,6 +321,29 @@ describe("discord component interactions", () => {
     expect(resolveDiscordComponentEntry({ id: "btn_1", consume: false })).not.toBeNull();
   });
 
+  it("blocks buttons when allowedUsers does not match", async () => {
+    registerDiscordComponentEntries({
+      entries: [
+        {
+          id: "btn_1",
+          kind: "button",
+          label: "Approve",
+          allowedUsers: ["999"],
+        },
+      ],
+      modals: [],
+    });
+
+    const button = createDiscordComponentButton(createComponentContext());
+    const { interaction, reply } = createComponentButtonInteraction();
+
+    await button.run(interaction, { cid: "btn_1" } as ComponentData);
+
+    expect(reply).toHaveBeenCalledWith({ content: "You are not authorized to use this button." });
+    expect(dispatchReplyMock).not.toHaveBeenCalled();
+    expect(resolveDiscordComponentEntry({ id: "btn_1", consume: false })).not.toBeNull();
+  });
+
   it("routes modal submissions with field values", async () => {
     registerDiscordComponentEntries({
       entries: [],
