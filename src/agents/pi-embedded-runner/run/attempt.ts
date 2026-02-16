@@ -607,6 +607,20 @@ export async function runEmbeddedAttempt(
           typeof providerConfig?.baseUrl === "string" ? providerConfig.baseUrl.trim() : "";
         const ollamaBaseUrl = modelBaseUrl || providerBaseUrl || OLLAMA_NATIVE_BASE_URL;
         activeSession.agent.streamFn = createOllamaStreamFn(ollamaBaseUrl);
+      } else if (params.model.provider === "github-copilot") {
+        // Copilot SDK: use the official @github/copilot-sdk which bundles the
+        // Copilot CLI binary. The CLI handles rate-limit retries (jittered
+        // backoff, retry-after header parsing) at the HTTP transport layer.
+        const { createCopilotSdkStreamFn } =
+          await import("../../../providers/copilot-sdk-stream.js");
+        const githubToken =
+          (
+            process.env.COPILOT_GITHUB_TOKEN ??
+            process.env.GH_TOKEN ??
+            process.env.GITHUB_TOKEN ??
+            ""
+          ).trim() || undefined;
+        activeSession.agent.streamFn = createCopilotSdkStreamFn(githubToken);
       } else {
         // Force a stable streamFn reference so vitest can reliably mock @mariozechner/pi-ai.
         activeSession.agent.streamFn = streamSimple;
