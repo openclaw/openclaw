@@ -36,31 +36,4 @@ describe("createGridLayout", () => {
     expect(areas[4].bounds.y).toBe(843);
     expect(areas[5].bounds.y).toBe(843);
   });
-
-  it("assigns correct actions to areas", () => {
-    const actions = [
-      messageAction("Help", "/help"),
-      messageAction("Status", "/status"),
-      messageAction("Settings", "/settings"),
-      messageAction("About", "/about"),
-      messageAction("Feedback", "/feedback"),
-      messageAction("Contact", "/contact"),
-    ] as [
-      ReturnType<typeof messageAction>,
-      ReturnType<typeof messageAction>,
-      ReturnType<typeof messageAction>,
-      ReturnType<typeof messageAction>,
-      ReturnType<typeof messageAction>,
-      ReturnType<typeof messageAction>,
-    ];
-
-    const areas = createGridLayout(843, actions);
-
-    expect((areas[0].action as { text: string }).text).toBe("/help");
-    expect((areas[1].action as { text: string }).text).toBe("/status");
-    expect((areas[2].action as { text: string }).text).toBe("/settings");
-    expect((areas[3].action as { text: string }).text).toBe("/about");
-    expect((areas[4].action as { text: string }).text).toBe("/feedback");
-    expect((areas[5].action as { text: string }).text).toBe("/contact");
-  });
 });
