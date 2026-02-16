@@ -184,10 +184,74 @@ describe("registerSlackInteractionEvents", () => {
     const payload = JSON.parse(eventText.replace("Slack interaction: ", "")) as {
       actionType: string;
       selectedValues?: string[];
+      selectedLabels?: string[];
     };
     expect(payload.actionType).toBe("static_select");
     expect(payload.selectedValues).toEqual(["canary"]);
+    expect(payload.selectedLabels).toEqual(["Canary"]);
     expect(app.client.chat.update).not.toHaveBeenCalled();
+  });
+
+  it("captures expanded selection and temporal payload fields", async () => {
+    enqueueSystemEventMock.mockReset();
+    const { ctx, getHandler } = createContext();
+    registerSlackInteractionEvents({ ctx: ctx as never });
+    const handler = getHandler();
+    expect(handler).toBeTruthy();
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    await handler!({
+      ack,
+      body: {
+        user: { id: "U321" },
+        channel: { id: "C2" },
+        message: { ts: "222.333" },
+      },
+      action: {
+        type: "multi_conversations_select",
+        action_id: "openclaw:route",
+        selected_user: "U777",
+        selected_users: ["U888"],
+        selected_channel: "C777",
+        selected_channels: ["C888"],
+        selected_conversation: "G777",
+        selected_conversations: ["G888"],
+        selected_options: [
+          { text: { type: "plain_text", text: "Alpha" }, value: "alpha" },
+          { text: { type: "plain_text", text: "Beta" }, value: "beta" },
+        ],
+        selected_date: "2026-02-16",
+        selected_time: "14:30",
+        selected_date_time: 1_771_700_200,
+      },
+    });
+
+    expect(ack).toHaveBeenCalled();
+    expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
+    const [eventText] = enqueueSystemEventMock.mock.calls[0] as [string];
+    const payload = JSON.parse(eventText.replace("Slack interaction: ", "")) as {
+      actionType: string;
+      selectedValues?: string[];
+      selectedLabels?: string[];
+      selectedDate?: string;
+      selectedTime?: string;
+      selectedDateTime?: number;
+    };
+    expect(payload.actionType).toBe("multi_conversations_select");
+    expect(payload.selectedValues).toEqual([
+      "alpha",
+      "beta",
+      "U777",
+      "U888",
+      "C777",
+      "C888",
+      "G777",
+      "G888",
+    ]);
+    expect(payload.selectedLabels).toEqual(["Alpha", "Beta"]);
+    expect(payload.selectedDate).toBe("2026-02-16");
+    expect(payload.selectedTime).toBe("14:30");
+    expect(payload.selectedDateTime).toBe(1_771_700_200);
   });
 
   it("captures modal submissions and enqueues view submission event", async () => {
@@ -258,6 +322,104 @@ describe("registerSlackInteractionEvents", () => {
       expect.arrayContaining([
         expect.objectContaining({ actionId: "env_select", selectedValues: ["prod"] }),
         expect.objectContaining({ actionId: "notes_input", inputValue: "ship now" }),
+      ]),
+    );
+  });
+
+  it("captures modal input labels and picker values across block types", async () => {
+    enqueueSystemEventMock.mockReset();
+    const { ctx, getViewHandler } = createContext();
+    registerSlackInteractionEvents({ ctx: ctx as never });
+    const viewHandler = getViewHandler();
+    expect(viewHandler).toBeTruthy();
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    await viewHandler!({
+      ack,
+      body: {
+        user: { id: "U444" },
+        view: {
+          id: "V400",
+          callback_id: "openclaw:routing_form",
+          state: {
+            values: {
+              env_block: {
+                env_select: {
+                  type: "static_select",
+                  selected_option: {
+                    text: { type: "plain_text", text: "Production" },
+                    value: "prod",
+                  },
+                },
+              },
+              assignee_block: {
+                assignee_select: {
+                  type: "users_select",
+                  selected_user: "U900",
+                },
+              },
+              channel_block: {
+                channel_select: {
+                  type: "channels_select",
+                  selected_channel: "C900",
+                },
+              },
+              convo_block: {
+                convo_select: {
+                  type: "conversations_select",
+                  selected_conversation: "G900",
+                },
+              },
+              date_block: {
+                date_select: {
+                  type: "datepicker",
+                  selected_date: "2026-02-16",
+                },
+              },
+              time_block: {
+                time_select: {
+                  type: "timepicker",
+                  selected_time: "12:45",
+                },
+              },
+              datetime_block: {
+                datetime_select: {
+                  type: "datetimepicker",
+                  selected_date_time: 1_771_632_300,
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(ack).toHaveBeenCalled();
+    expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
+    const [eventText] = enqueueSystemEventMock.mock.calls[0] as [string];
+    const payload = JSON.parse(eventText.replace("Slack interaction: ", "")) as {
+      inputs: Array<{
+        actionId: string;
+        selectedValues?: string[];
+        selectedLabels?: string[];
+        selectedDate?: string;
+        selectedTime?: string;
+        selectedDateTime?: number;
+      }>;
+    };
+    expect(payload.inputs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          actionId: "env_select",
+          selectedValues: ["prod"],
+          selectedLabels: ["Production"],
+        }),
+        expect.objectContaining({ actionId: "assignee_select", selectedValues: ["U900"] }),
+        expect.objectContaining({ actionId: "channel_select", selectedValues: ["C900"] }),
+        expect.objectContaining({ actionId: "convo_select", selectedValues: ["G900"] }),
+        expect.objectContaining({ actionId: "date_select", selectedDate: "2026-02-16" }),
+        expect.objectContaining({ actionId: "time_select", selectedTime: "12:45" }),
+        expect.objectContaining({ actionId: "datetime_select", selectedDateTime: 1_771_632_300 }),
       ]),
     );
   });

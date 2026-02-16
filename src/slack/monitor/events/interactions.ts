@@ -99,13 +99,16 @@ function summarizeAction(
     ...(typed.selected_conversation ? [typed.selected_conversation] : []),
     ...(Array.isArray(typed.selected_conversations) ? typed.selected_conversations : []),
   ].filter((entry) => typeof entry === "string" && entry.trim().length > 0);
-  const selectedLabels = readOptionLabels(typed.selected_options);
+  const selectedLabels = [
+    ...(typed.selected_option?.text?.text ? [typed.selected_option.text.text] : []),
+    ...(readOptionLabels(typed.selected_options) ?? []),
+  ].filter((entry) => typeof entry === "string" && entry.trim().length > 0);
 
   return {
     actionType,
     value: typed.value,
     selectedValues: selectedValues.length > 0 ? selectedValues : undefined,
-    selectedLabels,
+    selectedLabels: selectedLabels.length > 0 ? selectedLabels : undefined,
     selectedDate: typed.selected_date,
     selectedTime: typed.selected_time,
     selectedDateTime:
