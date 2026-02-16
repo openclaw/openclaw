@@ -188,7 +188,9 @@ export class VoiceCallWebhookServer {
           console.log(
             `[voice-call] Auto-ending call ${disconnectedCall.callId} on stream disconnect`,
           );
-          void this.manager.endCall(disconnectedCall.callId).catch(() => {});
+          void this.manager.endCall(disconnectedCall.callId).catch((err) => {
+            console.warn(`[voice-call] Failed to auto-end call ${disconnectedCall.callId}:`, err);
+          });
         }
         if (this.provider.name === "twilio") {
           (this.provider as TwilioProvider).unregisterCallStream(callId);
