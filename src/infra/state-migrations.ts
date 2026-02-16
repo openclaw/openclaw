@@ -20,6 +20,7 @@ import {
   DEFAULT_MAIN_KEY,
   normalizeAgentId,
 } from "../routing/session-key.js";
+import { isWithinDir } from "./path-safety.js";
 import {
   ensureDir,
   existsDir,
@@ -360,11 +361,6 @@ function isDirPath(filePath: string): boolean {
   }
 }
 
-function isWithinDir(targetPath: string, rootDir: string): boolean {
-  const relative = path.relative(path.resolve(rootDir), path.resolve(targetPath));
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
-}
-
 function isLegacyTreeSymlinkMirror(currentDir: string, realTargetDir: string): boolean {
   let entries: fs.Dirent[];
   try {
@@ -395,7 +391,7 @@ function isLegacyTreeSymlinkMirror(currentDir: string, realTargetDir: string): b
       } catch {
         return false;
       }
-      if (!isWithinDir(resolvedRealTarget, realTargetDir)) {
+      if (!isWithinDir(realTargetDir, resolvedRealTarget)) {
         return false;
       }
       continue;
