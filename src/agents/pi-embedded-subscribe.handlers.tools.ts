@@ -380,7 +380,15 @@ export async function handleToolExecutionEnd(
   // Deliver media from tool results when the verbose emitToolOutput path is off.
   // When shouldEmitToolOutput() is true, emitToolOutput already delivers media
   // via parseReplyDirectives (MEDIA: text extraction), so skip to avoid duplicates.
-  if (ctx.params.onToolResult && !isToolError && !ctx.shouldEmitToolOutput()) {
+  // Also skip for messaging tool send actions (e.g., Discord "message send"), which
+  // send messages (including media) directly, to prevent duplicate delivery.
+  const isMessagingSendAction = Boolean(pendingTarget);
+  if (
+    ctx.params.onToolResult &&
+    !isToolError &&
+    !ctx.shouldEmitToolOutput() &&
+    !isMessagingSendAction
+  ) {
     const mediaPaths = extractToolResultMediaPaths(result);
     if (mediaPaths.length > 0) {
       try {
