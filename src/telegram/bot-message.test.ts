@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const buildTelegramMessageContext = vi.hoisted(() => vi.fn());
 const dispatchTelegramMessage = vi.hoisted(() => vi.fn());
+const triggerInternalHook = vi.hoisted(() => vi.fn());
+const createInternalHookEvent = vi.hoisted(() => vi.fn());
 
 vi.mock("./bot-message-context.js", () => ({
   buildTelegramMessageContext,
@@ -11,12 +13,19 @@ vi.mock("./bot-message-dispatch.js", () => ({
   dispatchTelegramMessage,
 }));
 
+vi.mock("../hooks/internal-hooks.js", () => ({
+  triggerInternalHook,
+  createInternalHookEvent,
+}));
+
 import { createTelegramMessageProcessor } from "./bot-message.js";
 
 describe("telegram bot message processor", () => {
   beforeEach(() => {
     buildTelegramMessageContext.mockReset();
     dispatchTelegramMessage.mockReset();
+    triggerInternalHook.mockReset();
+    createInternalHookEvent.mockReset();
   });
 
   const baseDeps = {
