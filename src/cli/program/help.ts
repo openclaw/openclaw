@@ -2,12 +2,14 @@ import type { Command } from "commander";
 import type { ProgramContext } from "./context.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { isRich, theme } from "../../terminal/theme.js";
+import { escapeRegExp } from "../../utils.js";
 import { formatCliBannerLine, hasEmittedCliBanner } from "../banner.js";
 import { replaceCliName, resolveCliName } from "../cli-name.js";
 import { getCoreCliCommandsWithSubcommands } from "./command-registry.js";
 import { getSubCliCommandsWithSubcommands } from "./register.subclis.js";
 
 const CLI_NAME = resolveCliName();
+const CLI_NAME_PATTERN = escapeRegExp(CLI_NAME);
 const ROOT_COMMANDS_WITH_SUBCOMMANDS = new Set([
   ...getCoreCliCommandsWithSubcommands(),
   ...getSubCliCommandsWithSubcommands(),
@@ -70,7 +72,7 @@ export function configureProgramHelp(program: Command, ctx: ProgramContext) {
   const formatHelpOutput = (str: string) => {
     let output = str;
     const isRootHelp = new RegExp(
-      `^Usage:\\s+${CLI_NAME}\\s+\\[options\\]\\s+\\[command\\]\\s*$`,
+      `^Usage:\\s+${CLI_NAME_PATTERN}\\s+\\[options\\]\\s+\\[command\\]\\s*$`,
       "m",
     ).test(output);
     if (isRootHelp && /^Commands:/m.test(output)) {
