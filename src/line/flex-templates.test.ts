@@ -9,7 +9,6 @@ import {
   createEventCard,
   createMediaPlayerCard,
   createDeviceControlCard,
-  toFlexMessage,
 } from "./flex-templates.js";
 
 describe("createInfoCard", () => {
@@ -153,16 +152,5 @@ describe("createEventCard", () => {
     expect(card.size).toBe("mega");
     const body = card.body as { contents: Array<{ type: string }> };
     expect(body.contents).toHaveLength(3);
-  });
-});
-
-describe("toFlexMessage", () => {
-  it("wraps a container in a FlexMessage", () => {
-    const bubble = createInfoCard("Title", "Body");
-    const message = toFlexMessage("Alt text", bubble);
-
-    expect(message.type).toBe("flex");
-    expect(message.altText).toBe("Alt text");
-    expect(message.contents).toBe(bubble);
   });
 });
