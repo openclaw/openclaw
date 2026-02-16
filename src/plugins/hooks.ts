@@ -9,6 +9,7 @@ import type { PluginRegistry } from "./registry.js";
 import type {
   PluginHookAfterCompactionEvent,
   PluginHookAfterToolCallEvent,
+  PluginHookAfterToolCallResult,
   PluginHookAgentContext,
   PluginHookAgentEndEvent,
   PluginHookBeforeAgentStartEvent,
@@ -399,13 +400,24 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
 
   /**
    * Run after_tool_call hook.
-   * Runs in parallel (fire-and-forget).
+   * Runs sequentially. Handlers may return `{ appendContent }` to add text
+   * items to the tool result the LLM sees on the next turn.
    */
   async function runAfterToolCall(
     event: PluginHookAfterToolCallEvent,
     ctx: PluginHookToolContext,
-  ): Promise<void> {
-    return runVoidHook("after_tool_call", event, ctx);
+  ): Promise<PluginHookAfterToolCallResult | undefined> {
+    return runModifyingHook<"after_tool_call", PluginHookAfterToolCallResult>(
+      "after_tool_call",
+      event,
+      ctx,
+      (acc, next) => ({
+        appendContent: [
+          ...(acc?.appendContent ?? []),
+          ...(next.appendContent ?? []),
+        ],
+      }),
+    );
   }
 
   /**
