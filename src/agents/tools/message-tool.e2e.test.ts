@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import type { MessageActionRunResult } from "../../infra/outbound/message-action-runner.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -90,6 +90,97 @@ describe("message tool path passthrough", () => {
     const call = mocks.runMessageAction.mock.calls[0]?.[0];
     expect(call?.params?.filePath).toBe("./tmp/note.m4a");
     expect(call?.params?.media).toBeUndefined();
+  });
+});
+
+describe("message tool schema scoping", () => {
+  const telegramPlugin: ChannelPlugin = {
+    id: "telegram",
+    meta: {
+      id: "telegram",
+      label: "Telegram",
+      selectionLabel: "Telegram",
+      docsPath: "/channels/telegram",
+      blurb: "Telegram test plugin.",
+    },
+    capabilities: { chatTypes: ["direct", "group"], media: true },
+    config: {
+      listAccountIds: () => ["default"],
+      resolveAccount: () => ({}),
+    },
+    actions: {
+      listActions: () => ["send", "react"] as const,
+      supportsButtons: () => true,
+    },
+  };
+
+  const discordPlugin: ChannelPlugin = {
+    id: "discord",
+    meta: {
+      id: "discord",
+      label: "Discord",
+      selectionLabel: "Discord",
+      docsPath: "/channels/discord",
+      blurb: "Discord test plugin.",
+    },
+    capabilities: { chatTypes: ["direct", "group"], media: true },
+    config: {
+      listAccountIds: () => ["default"],
+      resolveAccount: () => ({}),
+    },
+    actions: {
+      listActions: () => ["send", "poll"] as const,
+    },
+  };
+
+  afterEach(() => {
+    setActivePluginRegistry(createTestRegistry([]));
+  });
+
+  it("hides discord components when scoped to telegram", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "telegram", source: "test", plugin: telegramPlugin },
+        { pluginId: "discord", source: "test", plugin: discordPlugin },
+      ]),
+    );
+
+    const tool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "telegram",
+    });
+    const properties =
+      (tool.parameters as { properties?: Record<string, unknown> }).properties ?? {};
+    const actionEnum = (properties.action as { enum?: string[] } | undefined)?.enum ?? [];
+
+    expect(properties.components).toBeUndefined();
+    expect(properties.buttons).toBeDefined();
+    expect(actionEnum).toContain("send");
+    expect(actionEnum).toContain("react");
+    expect(actionEnum).not.toContain("poll");
+  });
+
+  it("shows discord components when scoped to discord", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "telegram", source: "test", plugin: telegramPlugin },
+        { pluginId: "discord", source: "test", plugin: discordPlugin },
+      ]),
+    );
+
+    const tool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "discord",
+    });
+    const properties =
+      (tool.parameters as { properties?: Record<string, unknown> }).properties ?? {};
+    const actionEnum = (properties.action as { enum?: string[] } | undefined)?.enum ?? [];
+
+    expect(properties.components).toBeDefined();
+    expect(properties.buttons).toBeUndefined();
+    expect(actionEnum).toContain("send");
+    expect(actionEnum).toContain("poll");
+    expect(actionEnum).not.toContain("react");
   });
 });
 
