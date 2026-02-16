@@ -5,25 +5,24 @@ import { WizardSession } from "../../wizard/session.js";
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   validateWizardCancelParams,
   validateWizardNextParams,
   validateWizardStartParams,
   validateWizardStatusParams,
 } from "../protocol/index.js";
 import { formatForLog } from "../ws-log.js";
+import { assertValidParams } from "./validation.js";
+
+function readWizardStatus(session: WizardSession) {
+  return {
+    status: session.getStatus(),
+    error: session.getError(),
+  };
+}
 
 export const wizardHandlers: GatewayRequestHandlers = {
   "wizard.start": async ({ params, respond, context }) => {
-    if (!validateWizardStartParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid wizard.start params: ${formatValidationErrors(validateWizardStartParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateWizardStartParams, "wizard.start", respond)) {
       return;
     }
     const running = context.findRunningWizard();
@@ -47,15 +46,7 @@ export const wizardHandlers: GatewayRequestHandlers = {
     respond(true, { sessionId, ...result }, undefined);
   },
   "wizard.next": async ({ params, respond, context }) => {
-    if (!validateWizardNextParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid wizard.next params: ${formatValidationErrors(validateWizardNextParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateWizardNextParams, "wizard.next", respond)) {
       return;
     }
     const sessionId = params.sessionId;
@@ -84,15 +75,7 @@ export const wizardHandlers: GatewayRequestHandlers = {
     respond(true, result, undefined);
   },
   "wizard.cancel": ({ params, respond, context }) => {
-    if (!validateWizardCancelParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid wizard.cancel params: ${formatValidationErrors(validateWizardCancelParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateWizardCancelParams, "wizard.cancel", respond)) {
       return;
     }
     const sessionId = params.sessionId;
@@ -102,23 +85,12 @@ export const wizardHandlers: GatewayRequestHandlers = {
       return;
     }
     session.cancel();
-    const status = {
-      status: session.getStatus(),
-      error: session.getError(),
-    };
+    const status = readWizardStatus(session);
     context.wizardSessions.delete(sessionId);
     respond(true, status, undefined);
   },
   "wizard.status": ({ params, respond, context }) => {
-    if (!validateWizardStatusParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid wizard.status params: ${formatValidationErrors(validateWizardStatusParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateWizardStatusParams, "wizard.status", respond)) {
       return;
     }
     const sessionId = params.sessionId;
@@ -127,10 +99,7 @@ export const wizardHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "wizard not found"));
       return;
     }
-    const status = {
-      status: session.getStatus(),
-      error: session.getError(),
-    };
+    const status = readWizardStatus(session);
     if (status.status !== "running") {
       context.wizardSessions.delete(sessionId);
     }

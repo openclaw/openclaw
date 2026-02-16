@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { normalizeFingerprint } from "../tls/fingerprint.js";
 import { isPrivateIpAddress } from "./ssrf.js";
 
 describe("ssrf ip classification", () => {
@@ -28,5 +29,13 @@ describe("ssrf ip classification", () => {
     expect(isPrivateIpAddress("93.184.216.34")).toBe(false);
     expect(isPrivateIpAddress("2606:4700:4700::1111")).toBe(false);
     expect(isPrivateIpAddress("2001:db8::1")).toBe(false);
+  });
+});
+
+describe("normalizeFingerprint", () => {
+  it("strips sha256 prefixes and separators", () => {
+    expect(normalizeFingerprint("sha256:AA:BB:cc")).toBe("aabbcc");
+    expect(normalizeFingerprint("SHA-256 11-22-33")).toBe("112233");
+    expect(normalizeFingerprint("aa:bb:cc")).toBe("aabbcc");
   });
 });
