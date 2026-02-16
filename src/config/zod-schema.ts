@@ -91,6 +91,19 @@ const MemorySchema = z
   .strict()
   .optional();
 
+const ScaffoldsSchema = z
+  .object({
+    reasoning: z
+      .object({
+        enabled: z.boolean().optional(),
+        phase: z.literal(0).optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict()
+  .optional();
+
 export const OpenClawSchema = z
   .object({
     meta: z
@@ -243,6 +256,7 @@ export const OpenClawSchema = z
       })
       .strict()
       .optional(),
+    scaffolds: ScaffoldsSchema,
     auth: z
       .object({
         profiles: z

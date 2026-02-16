@@ -29,3 +29,16 @@ export * from "./types.tts.js";
 export * from "./types.tools.js";
 export * from "./types.whatsapp.js";
 export * from "./types.memory.js";
+
+// --- Scaffolds (Phase 0) -------------------------------------------------
+
+export type ReasoningScaffoldsPhase0Config = {
+  /** Gate for Phase 0 scaffolds (no-op placeholder in this phase). */
+  enabled?: boolean;
+  /** Reserved for forward compatibility; must be 0 when set. */
+  phase?: 0;
+};
+
+export type ScaffoldsConfig = {
+  reasoning?: ReasoningScaffoldsPhase0Config;
+};

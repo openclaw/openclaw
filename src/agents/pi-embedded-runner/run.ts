@@ -3,6 +3,7 @@ import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import type { EmbeddedPiAgentMeta, EmbeddedPiRunResult } from "./types.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
+import { applyEmbeddedRunScaffolds } from "../../scaffolds/index.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import {
@@ -818,6 +819,12 @@ export async function runEmbeddedPiAgent(
             inlineToolResultsAllowed: false,
           });
 
+          const scaffoldedPayloads = applyEmbeddedRunScaffolds({
+            payloads,
+            // Phase 0: config key is not yet part of OpenClawConfig's public type.
+            config: params.config as any,
+          });
+
           log.debug(
             `embedded run done: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - started} aborted=${aborted}`,
           );
@@ -835,7 +842,7 @@ export async function runEmbeddedPiAgent(
             });
           }
           return {
-            payloads: payloads.length ? payloads : undefined,
+            payloads: scaffoldedPayloads.length ? scaffoldedPayloads : undefined,
             meta: {
               durationMs: Date.now() - started,
               agentMeta,
