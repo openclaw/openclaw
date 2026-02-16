@@ -237,6 +237,8 @@ export class Neo4jMemoryClient {
       const session = this.driver!.session();
       try {
         const now = new Date().toISOString();
+        // Layer 3: taskId is optional — only set on the node when provided
+        const taskIdClause = input.taskId ? ", taskId: $taskId" : "";
         const result = await session.run(
           `CREATE (m:Memory {
             id: $id, text: $text, embedding: $embedding,
@@ -245,12 +247,13 @@ export class Neo4jMemoryClient {
             agentId: $agentId, sessionKey: $sessionKey,
             createdAt: $createdAt, updatedAt: $updatedAt,
             retrievalCount: $retrievalCount, lastRetrievedAt: $lastRetrievedAt,
-            extractionRetries: $extractionRetries
+            extractionRetries: $extractionRetries${taskIdClause}
           })
           RETURN m.id AS id`,
           {
             ...input,
             sessionKey: input.sessionKey ?? null,
+            taskId: input.taskId ?? null,
             createdAt: now,
             updatedAt: now,
             retrievalCount: 0,
@@ -444,6 +447,7 @@ export class Neo4jMemoryClient {
              WHERE score >= $minScore ${agentFilter}
              RETURN node.id AS id, node.text AS text, node.category AS category,
                     node.importance AS importance, node.createdAt AS createdAt,
+                    node.taskId AS taskId,
                     score AS similarity
              ORDER BY score DESC`,
             {
@@ -461,6 +465,7 @@ export class Neo4jMemoryClient {
             importance: r.get("importance") as number,
             createdAt: String(r.get("createdAt") ?? ""),
             score: r.get("similarity") as number,
+            taskId: (r.get("taskId") as string) ?? undefined,
           }));
         } finally {
           await session.close();
@@ -495,6 +500,7 @@ export class Neo4jMemoryClient {
              WHERE true ${agentFilter}
              RETURN node.id AS id, node.text AS text, node.category AS category,
                     node.importance AS importance, node.createdAt AS createdAt,
+                    node.taskId AS taskId,
                     score AS bm25Score
              ORDER BY score DESC
              LIMIT $limit`,
@@ -513,6 +519,7 @@ export class Neo4jMemoryClient {
             importance: r.get("importance") as number,
             createdAt: String(r.get("createdAt") ?? ""),
             rawScore: r.get("bm25Score") as number,
+            taskId: (r.get("taskId") as string) ?? undefined,
           }));
 
           if (records.length === 0) {
@@ -585,6 +592,7 @@ export class Neo4jMemoryClient {
              WITH entity, collect({
                id: m.id, text: m.text, category: m.category,
                importance: m.importance, createdAt: m.createdAt,
+               taskId: m.taskId,
                score: coalesce(rm.confidence, 1.0)
              }) AS directResults
 
@@ -596,6 +604,7 @@ export class Neo4jMemoryClient {
              WITH directResults, collect({
                id: m2.id, text: m2.text, category: m2.category,
                importance: m2.importance, createdAt: m2.createdAt,
+               taskId: m2.taskId,
                score: reduce(s = 1.0, r IN rels | s * coalesce(r.confidence, 0.7)) * coalesce(rm2.confidence, 1.0)
              }) AS hopResults
 
@@ -604,6 +613,7 @@ export class Neo4jMemoryClient {
              WITH row WHERE row.id IS NOT NULL
              RETURN row.id AS id, row.text AS text, row.category AS category,
                     row.importance AS importance, row.createdAt AS createdAt,
+                    row.taskId AS taskId,
                     max(row.score) AS graphScore`,
             { query: escaped, firingThreshold, ...(agentId ? { agentId } : {}) },
           );
@@ -625,6 +635,7 @@ export class Neo4jMemoryClient {
                 importance: record.get("importance") as number,
                 createdAt: String(record.get("createdAt") ?? ""),
                 score,
+                taskId: (record.get("taskId") as string) ?? undefined,
               });
             }
           }
@@ -723,6 +734,62 @@ export class Neo4jMemoryClient {
         await session.close();
       }
     });
+  }
+
+  // --------------------------------------------------------------------------
+  // Layer 3: Task Metadata Operations
+  // --------------------------------------------------------------------------
+
+  /**
+   * Find memories linked to a specific task ID.
+   * Used by recall filter and sleep cycle to identify task-related memories.
+   */
+  async findMemoriesByTaskId(
+    taskId: string,
+    agentId?: string,
+  ): Promise<Array<{ id: string; text: string; category: string; importance: number }>> {
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      const agentFilter = agentId ? "AND m.agentId = $agentId" : "";
+      const result = await session.run(
+        `MATCH (m:Memory)
+         WHERE m.taskId = $taskId ${agentFilter}
+         RETURN m.id AS id, m.text AS text, m.category AS category, m.importance AS importance
+         ORDER BY m.createdAt ASC`,
+        { taskId, ...(agentId ? { agentId } : {}) },
+      );
+      return result.records.map((r) => ({
+        id: r.get("id") as string,
+        text: r.get("text") as string,
+        category: r.get("category") as string,
+        importance: r.get("importance") as number,
+      }));
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
+   * Bulk-clear taskId from memories (e.g., when the task-memory link is no longer needed).
+   * Sets taskId to null rather than deleting the memory.
+   */
+  async clearTaskIdFromMemories(taskId: string, agentId?: string): Promise<number> {
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      const agentFilter = agentId ? "AND m.agentId = $agentId" : "";
+      const result = await session.run(
+        `MATCH (m:Memory)
+         WHERE m.taskId = $taskId ${agentFilter}
+         SET m.taskId = null
+         RETURN count(m) AS cleared`,
+        { taskId, ...(agentId ? { agentId } : {}) },
+      );
+      return (result.records[0]?.get("cleared") as number) ?? 0;
+    } finally {
+      await session.close();
+    }
   }
 
   // --------------------------------------------------------------------------
@@ -2084,6 +2151,55 @@ export class Neo4jMemoryClient {
         { ids },
       );
       return (result.records[0]?.get("removed") as number) ?? 0;
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
+   * Search memories by keywords using the fulltext (BM25) index.
+   * Returns memories whose text matches any of the given keywords.
+   * Used by the sleep cycle task-memory cleanup phase to find memories
+   * related to completed tasks.
+   */
+  async searchMemoriesByKeywords(
+    keywords: string[],
+    limit: number = 50,
+    agentId?: string,
+  ): Promise<Array<{ id: string; text: string; category: string }>> {
+    if (keywords.length === 0) {
+      return [];
+    }
+
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      // Build a Lucene OR query from the keywords
+      const escaped = keywords.map((k) => escapeLucene(k.trim())).filter((k) => k.length > 0);
+      if (escaped.length === 0) {
+        return [];
+      }
+      const query = escaped.join(" OR ");
+      const agentFilter = agentId ? "AND node.agentId = $agentId" : "";
+      const result = await session.run(
+        `CALL db.index.fulltext.queryNodes('memory_fulltext_index', $query)
+         YIELD node, score
+         WHERE true ${agentFilter}
+         RETURN node.id AS id, node.text AS text, node.category AS category
+         ORDER BY score DESC
+         LIMIT $limit`,
+        {
+          query,
+          limit: neo4j.int(Math.floor(limit)),
+          ...(agentId ? { agentId } : {}),
+        },
+      );
+
+      return result.records.map((r) => ({
+        id: r.get("id") as string,
+        text: r.get("text") as string,
+        category: r.get("category") as string,
+      }));
     } finally {
       await session.close();
     }
