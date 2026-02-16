@@ -10,8 +10,6 @@ import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { queueEmbeddedPiMessage } from "../../agents/pi-embedded.js";
 import { hasNonzeroUsage } from "../../agents/usage.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
-import { resolveOpenClawAgentDir } from "../../agents/agent-paths.js";
 import {
   resolveAgentIdFromSessionKey,
   resolveSessionFilePath,
@@ -212,11 +210,11 @@ export async function runReplyAgent(params: {
   // If memory flush flagged a force compaction (after flush captured context),
   // reset the session now so the main turn starts fresh.
   // The post-compaction hook will inject CONTEXT.md + temp_memory.md on bootstrap.
-  if ((activeSessionEntry as any)?.forceCompaction && sessionKey && storePath) {
+  if (activeSessionEntry?.forceCompaction && sessionKey && storePath) {
     logVerbose(`memory flush: force compaction flagged, resetting session context`);
     const nextSessionId = crypto.randomUUID();
     const nextCompactionCount = (activeSessionEntry?.compactionCount ?? 0) + 1;
-    delete (activeSessionEntry as any).forceCompaction;
+    delete activeSessionEntry.forceCompaction;
     try {
       const updatedEntry = await updateSessionStoreEntry({
         storePath,

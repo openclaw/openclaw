@@ -101,6 +101,8 @@ export type SessionEntry = {
   lastThreadId?: string | number;
   skillsSnapshot?: SessionSkillSnapshot;
   systemPromptReport?: SessionSystemPromptReport;
+  /** Flag set by memory flush to trigger immediate compaction. */
+  forceCompaction?: boolean;
 };
 
 export function mergeSessionEntry(

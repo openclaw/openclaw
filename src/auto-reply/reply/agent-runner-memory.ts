@@ -120,7 +120,7 @@ export async function runMemoryFlushIfNeeded(params: {
     return {
       ...activeSessionEntry,
       forceCompaction: true, // Custom flag we'll handle in agent-runner.ts
-    } as any;
+    } as SessionEntry;
   }
 
   const flushRunId = crypto.randomUUID();
@@ -144,9 +144,9 @@ export async function runMemoryFlushIfNeeded(params: {
       model: params.followupRun.run.model,
       agentDir: params.followupRun.run.agentDir,
       fallbacksOverride: resolveAgentModelFallbacksOverride(
-            params.followupRun.run.config,
-            resolveAgentIdFromSessionKey(params.followupRun.run.sessionKey),
-          ),
+        params.followupRun.run.config,
+        resolveAgentIdFromSessionKey(params.followupRun.run.sessionKey),
+      ),
       run: (provider, model) => {
         const authProfileId =
           provider === params.followupRun.run.provider
@@ -244,7 +244,7 @@ export async function runMemoryFlushIfNeeded(params: {
       return {
         ...activeSessionEntry,
         forceCompaction: true,
-      } as any;
+      } as SessionEntry;
     }
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);
@@ -263,7 +263,7 @@ export async function runMemoryFlushIfNeeded(params: {
       return {
         ...activeSessionEntry,
         forceCompaction: true,
-      } as any;
+      } as SessionEntry;
     }
   }
 

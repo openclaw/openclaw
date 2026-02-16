@@ -553,6 +553,39 @@ export async function runEmbeddedPiAgent(
               log.warn(
                 `context overflow persisted after in-attempt compaction (attempt ${overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}, maxHistoryShare=${escalationShare}); retrying prompt without additional compaction for ${provider}/${modelId}`,
               );
+              // Trigger an explicit compaction with escalated share instead of
+              // relying on SDK auto-compaction which won't use escalationShare
+              const compactResult = await compactEmbeddedPiSessionDirect({
+                sessionId: params.sessionId,
+                sessionKey: params.sessionKey,
+                messageChannel: params.messageChannel,
+                messageProvider: params.messageProvider,
+                agentAccountId: params.agentAccountId,
+                authProfileId: lastProfileId,
+                sessionFile: params.sessionFile,
+                workspaceDir: resolvedWorkspace,
+                agentDir,
+                config: params.config,
+                skillsSnapshot: params.skillsSnapshot,
+                senderIsOwner: params.senderIsOwner,
+                provider,
+                model: modelId,
+                runId: params.runId,
+                thinkLevel,
+                reasoningLevel: params.reasoningLevel,
+                bashElevated: params.bashElevated,
+                extraSystemPrompt: params.extraSystemPrompt,
+                ownerNumbers: params.ownerNumbers,
+                trigger: "overflow",
+                diagId: overflowDiagId,
+                attempt: overflowCompactionAttempts,
+                maxAttempts: MAX_OVERFLOW_COMPACTION_ATTEMPTS,
+                maxHistoryShareOverride: escalationShare,
+              });
+              if (compactResult.compacted) {
+                autoCompactionCount += 1;
+                log.info(`post-SDK escalation compaction succeeded (share=${escalationShare}) for ${provider}/${modelId}`);
+              }
               continue;
             }
             // Attempt explicit overflow compaction only when this attempt did not

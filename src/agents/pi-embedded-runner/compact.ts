@@ -58,7 +58,7 @@ import {
 } from "../skills.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import { compactWithSafetyTimeout } from "./compaction-safety-timeout.js";
-import { setCompactionSafeguardRuntime } from "../pi-extensions/compaction-safeguard-runtime.js";
+import { getCompactionSafeguardRuntime, setCompactionSafeguardRuntime } from "../pi-extensions/compaction-safeguard-runtime.js";
 import { buildEmbeddedExtensionPaths } from "./extensions.js";
 import {
   logToolSchemasForGoogle,
@@ -539,8 +539,11 @@ export async function compactEmbeddedPiSessionDirect(
       });
 
       // Apply progressive maxHistoryShare override for escalating compaction
+      // Merge with existing runtime to preserve contextWindowTokens
       if (typeof params.maxHistoryShareOverride === "number") {
+        const existingRuntime = getCompactionSafeguardRuntime(sessionManager);
         setCompactionSafeguardRuntime(sessionManager, {
+          ...existingRuntime,
           maxHistoryShare: params.maxHistoryShareOverride,
         });
       }
