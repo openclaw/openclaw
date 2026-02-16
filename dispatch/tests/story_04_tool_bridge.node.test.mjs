@@ -31,11 +31,7 @@ function run(command, args, input = undefined) {
   });
   if (result.status !== 0) {
     throw new Error(
-      [
-        `Command failed: ${command} ${args.join(" ")}`,
-        result.stdout,
-        result.stderr,
-      ]
+      [`Command failed: ${command} ${args.join(" ")}`, result.stdout, result.stderr]
         .filter(Boolean)
         .join("\n"),
     );
@@ -285,6 +281,51 @@ test("bridge forwards allowlisted tools and propagates request + correlation int
   assert.ok(requestLog);
   assert.equal(requestLog.request_id, createRequestId);
   assert.equal(requestLog.correlation_id, createCorrelationId);
+});
+
+test("bridge traceparent inputs become trace_id on API audit rows", async () => {
+  const traceParent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+  const expectedTraceId = "4bf92f3577b34da6a3ce929d0e0e4736";
+  const traceState = "congo=t61rcWkgMzE,rojo=00f067aa0ba902b7";
+  const traceRequestId = "31000000-0000-4000-8000-000000000011";
+
+  const ticketFromTrace = await invokeDispatchAction({
+    baseUrl: dispatchApiBaseUrl,
+    toolName: "ticket.create",
+    actorId: "dispatcher-bridge-trace",
+    actorRole: "dispatcher",
+    actorType: "AGENT",
+    requestId: traceRequestId,
+    correlationId: "corr-story04-traceparent-create",
+    traceParent,
+    traceState,
+    payload: {
+      account_id: accountId,
+      site_id: siteId,
+      summary: "Traceparent bridge ticket",
+      description: "Trace context should propagate through API command path",
+    },
+  });
+
+  assert.equal(ticketFromTrace.status, 201);
+  assert.equal(ticketFromTrace.request_id, traceRequestId);
+
+  const ticketId = ticketFromTrace.data.id;
+  const auditTraceId = psql(
+    `SELECT trace_id FROM audit_events WHERE ticket_id = '${ticketId}' ORDER BY created_at ASC, id ASC LIMIT 1;`,
+  ).trim();
+  assert.equal(auditTraceId, expectedTraceId);
+
+  const timeline = await invokeDispatchAction({
+    baseUrl: dispatchApiBaseUrl,
+    toolName: "ticket.timeline",
+    actorId: "dispatcher-bridge-trace",
+    actorRole: "dispatcher",
+    correlationId: "corr-story04-traceparent-timeline",
+    ticketId,
+  });
+  assert.equal(timeline.status, 200);
+  assert.equal(timeline.data.events.length >= 1, true);
 });
 
 test("bridge rejects unknown tools fail closed", async () => {

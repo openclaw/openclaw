@@ -22,6 +22,7 @@ const siteId = "00000000-0000-0000-0000-000000000062";
 const requestId = "91000000-0000-4000-8000-000000000001";
 const correlationId = "corr-story09-create";
 const traceId = "trace-story09-create";
+const traceParent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
 
 let app;
 const infoLogs = [];
@@ -34,11 +35,7 @@ function run(command, args, input = undefined) {
   });
   if (result.status !== 0) {
     throw new Error(
-      [
-        `Command failed: ${command} ${args.join(" ")}`,
-        result.stdout,
-        result.stderr,
-      ]
+      [`Command failed: ${command} ${args.join(" ")}`, result.stdout, result.stderr]
         .filter(Boolean)
         .join("\n"),
     );
@@ -350,4 +347,39 @@ test("structured logs include request/correlation fields and metrics counters ex
   assert.ok(notFoundLog);
   assert.equal(typeof notFoundLog.correlation_id, "string");
   assert.notEqual(notFoundLog.correlation_id.trim(), "");
+});
+
+test("traceparent header is used for trace_id and takes precedence over legacy x-trace-id", async () => {
+  const traceRequestId = "91000000-0000-4000-8000-000000000002";
+  const precedenceCreate = await post(
+    "/tickets",
+    {
+      "Idempotency-Key": traceRequestId,
+      "X-Actor-Id": "dispatcher-story09",
+      "X-Actor-Role": "dispatcher",
+      "X-Tool-Name": "ticket.create",
+      "X-Correlation-Id": "corr-story09-traceparent-precedence",
+      traceparent: traceParent,
+      tracestate: "congo=t61rcWkgMzE,rojo=00f067aa0ba902b7",
+      "X-Trace-Id": "legacy-trace-id-ignored",
+    },
+    {
+      account_id: accountId,
+      site_id: siteId,
+      summary: "Story 09 traceparent precedence",
+    },
+  );
+  assert.equal(precedenceCreate.status, 201);
+
+  const infoEntries = parseLogs(infoLogs);
+  const precedenceLog = infoEntries.find(
+    (entry) =>
+      entry.endpoint === "/tickets" &&
+      entry.request_id === traceRequestId &&
+      entry.status === 201 &&
+      entry.replay === false,
+  );
+  assert.ok(precedenceLog);
+  assert.equal(precedenceLog.trace_id, "4bf92f3577b34da6a3ce929d0e0e4736");
+  assert.equal(precedenceLog.trace_parent, traceParent);
 });

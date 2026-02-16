@@ -11,7 +11,7 @@ PR plan: `real-dispatch-agile-package/03-Delivery/03-PR-Plan.md`
 
 ## Focus Story
 
-`E1-F1-S1`
+`E1-F2-S1`
 
 ## Planned Sprint 1 story sequence
 

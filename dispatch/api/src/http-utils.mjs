@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { extractTraceContextFromHeaders } from "../../../packages/dispatch-contracts/src/index.mjs";
 
 const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -71,11 +72,7 @@ export function requireHeader(headers, headerName, code, message) {
 
 export function requireUuidField(value, fieldName) {
   if (!isUuid(value)) {
-    throw new HttpError(
-      400,
-      "INVALID_REQUEST",
-      `Field '${fieldName}' must be a valid UUID`,
-    );
+    throw new HttpError(400, "INVALID_REQUEST", `Field '${fieldName}' must be a valid UUID`);
   }
 }
 
@@ -93,6 +90,25 @@ export function buildCorrelationId(headers) {
   return lowerHeader(headers, "x-correlation-id")?.trim() ?? randomUUID();
 }
 
+export function buildTraceContext(headers = {}) {
+  const context = extractTraceContextFromHeaders(headers);
+  if (!context || !context.traceId) {
+    return {
+      traceId: null,
+      traceParent: null,
+      traceState: null,
+      traceSource: null,
+    };
+  }
+
+  return {
+    traceId: context.traceId,
+    traceParent: context.traceParent ?? null,
+    traceState: context.traceState ?? null,
+    traceSource: context.source ?? null,
+  };
+}
+
 export function buildTraceId(headers) {
-  return lowerHeader(headers, "x-trace-id")?.trim() ?? null;
+  return buildTraceContext(headers).traceId;
 }

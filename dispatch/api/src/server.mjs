@@ -17,6 +17,7 @@ import { closePool, getPool } from "./db.mjs";
 import {
   HttpError,
   buildCorrelationId,
+  buildTraceContext,
   buildTraceId,
   ensureObject,
   errorBody,
@@ -6001,7 +6002,10 @@ export function createDispatchApiServer(options = {}) {
     const url = new URL(request.url ?? "/", "http://localhost");
     const route = resolveRoute(requestMethod, url.pathname);
     const correlationId = buildCorrelationId(request.headers);
-    const traceId = buildTraceId(request.headers);
+    const traceContext = buildTraceContext(request.headers);
+    const traceId = traceContext.traceId;
+    const traceParent = traceContext.traceParent ?? null;
+    const traceState = traceContext.traceState ?? null;
 
     if (!route) {
       sendJson(response, 404, {
@@ -6440,6 +6444,8 @@ export function createDispatchApiServer(options = {}) {
         request_id: requestId,
         correlation_id: correlationId,
         trace_id: traceId,
+        trace_parent: traceParent,
+        trace_state: traceState,
         actor_type: actor.actorType,
         actor_id: actor.actorId,
         actor_role: actor.actorRole,
@@ -6479,6 +6485,8 @@ export function createDispatchApiServer(options = {}) {
         request_id: requestId,
         correlation_id: correlationId,
         trace_id: traceId,
+        trace_parent: traceParent,
+        trace_state: traceState,
         actor_type: actor?.actorType ?? null,
         actor_id: actor?.actorId ?? null,
         actor_role: actor?.actorRole ?? null,
