@@ -453,18 +453,18 @@ src/<module>/
 
 > Apply to every PR that touches networking, user input, shell execution, or secrets.
 
-| Check | Description |
-|-------|-------------|
-| **SSRF** | Validate the **resolved IP**, not just hostname. Use `fetchWithSsrFGuard()`. (PR #17762) |
-| **Error exposure** | Never send stack traces or internal paths to user-supplied callback URLs. (PR #17762) |
-| **External content** | All untrusted content must be wrapped with `externalContent` metadata. (PR #17703) |
-| **Path traversal** | `path.basename()` user-supplied names; reject path separators. A skill name like `../../etc` = arbitrary deletion. (PR #17503) |
-| **Shell injection** | Never interpolate user strings into shell commands. Use `execFile` with arg arrays. (PR #17667) |
-| **Prompt injection** | PR titles, file paths, user text in LLM prompts can hijack the model. Escape or sandbox. (PR #17349) |
-| **curl \| sh** | Don't. Use checksummed package downloads. (PR #17661) |
-| **Honest UA** | Automated HTTP requests must not impersonate real browsers. (PR #17768) |
-| **Key cleanup** | Zero secret buffers in `finally` blocks, not just success paths. (PR #17454) |
-| **Exec approvals** | Any new shell/exec code path must go through the exec-approval system. (PR #17667) |
+| Check                | Description                                                                                                                    |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| **SSRF**             | Validate the **resolved IP**, not just hostname. Use `fetchWithSsrFGuard()`. (PR #17762)                                       |
+| **Error exposure**   | Never send stack traces or internal paths to user-supplied callback URLs. (PR #17762)                                          |
+| **External content** | All untrusted content must be wrapped with `externalContent` metadata. (PR #17703)                                             |
+| **Path traversal**   | `path.basename()` user-supplied names; reject path separators. A skill name like `../../etc` = arbitrary deletion. (PR #17503) |
+| **Shell injection**  | Never interpolate user strings into shell commands. Use `execFile` with arg arrays. (PR #17667)                                |
+| **Prompt injection** | PR titles, file paths, user text in LLM prompts can hijack the model. Escape or sandbox. (PR #17349)                           |
+| **curl \| sh**       | Don't. Use checksummed package downloads. (PR #17661)                                                                          |
+| **Honest UA**        | Automated HTTP requests must not impersonate real browsers. (PR #17768)                                                        |
+| **Key cleanup**      | Zero secret buffers in `finally` blocks, not just success paths. (PR #17454)                                                   |
+| **Exec approvals**   | Any new shell/exec code path must go through the exec-approval system. (PR #17667)                                             |
 
 ---
 
