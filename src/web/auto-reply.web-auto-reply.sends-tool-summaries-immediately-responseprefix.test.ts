@@ -200,7 +200,7 @@ describe("web auto-reply", () => {
     expect(resolver).toHaveBeenCalled();
     const resolverArg = resolver.mock.calls[0][0];
     expect(resolverArg.Body).toContain("[Richbot]");
-    expect(resolverArg.Body).not.toContain("[openclaw]");
+    expect(resolverArg.Body).not.toContain("[agent-zero]");
     resetLoadConfigMock();
   });
   it("does not derive responsePrefix from identity.name when unset", async () => {

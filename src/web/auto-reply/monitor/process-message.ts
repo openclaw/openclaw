@@ -264,7 +264,7 @@ export async function processMessage(params: {
   const responsePrefix =
     prefixOptions.responsePrefix ??
     (configuredResponsePrefix === undefined && isSelfChat
-      ? (resolveIdentityNamePrefix(params.cfg, params.route.agentId) ?? "[openclaw]")
+      ? (resolveIdentityNamePrefix(params.cfg, params.route.agentId) ?? "[agent-zero]")
       : undefined);
 
   const inboundHistory =

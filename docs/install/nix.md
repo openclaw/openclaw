@@ -13,7 +13,7 @@ The recommended way to run OpenClaw with Nix is via **[nix-openclaw](https://git
 
 ## Quick Start
 
-Paste this to your AI agent (Claude, Cursor, etc.):
+Paste this to your Agent (Claude, Cursor, etc.):
 
 ```text
 I want to set up nix-openclaw on my Mac.

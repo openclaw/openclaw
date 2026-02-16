@@ -79,7 +79,7 @@ export function loadShellEnvFallback(opts: ShellEnvFallbackOptions): ShellEnvFal
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    logger.warn(`[openclaw] shell env fallback failed: ${msg}`);
+    logger.warn(`[agent-zero] shell env fallback failed: ${msg}`);
     lastAppliedKeys = [];
     return { ok: false, error: msg, applied: [] };
   }

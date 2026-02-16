@@ -36,7 +36,7 @@ describe("canvas host state dir defaults", () => {
       expect(actualRoot).toBe(expectedRoot);
       const indexPath = path.join(expectedRoot, "index.html");
       const indexContents = await fs.readFile(indexPath, "utf8");
-      expect(indexContents).toContain("OpenClaw Canvas");
+      expect(indexContents).toContain("agent-zero Canvas");
     } finally {
       await handler.close();
       await fs.rm(tempRoot, { recursive: true, force: true });

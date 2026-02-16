@@ -155,7 +155,7 @@ describe("config identity defaults", () => {
     await withTempHome(async (home) => {
       const cfg = await writeAndLoadConfig(home, {
         messages: {
-          messagePrefix: "[openclaw]",
+          messagePrefix: "[agent-zero]",
           responsePrefix: "🦞",
         },
         channels: {
@@ -248,7 +248,7 @@ describe("config identity defaults", () => {
             {
               id: "main",
               identity: {
-                name: "OpenClaw",
+                name: "agent-zero",
                 theme: "space lobster",
                 emoji: "🦞",
               },

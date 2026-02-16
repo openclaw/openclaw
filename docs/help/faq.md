@@ -264,7 +264,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 
 ### Im stuck whats the fastest way to get unstuck
 
-Use a local AI agent that can **see your machine**. That is far more effective than asking
+Use a local Agent that can **see your machine**. That is far more effective than asking
 in Discord, because most "I'm stuck" cases are **local config or environment issues** that
 remote helpers cannot inspect.
 

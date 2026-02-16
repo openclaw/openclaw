@@ -64,7 +64,7 @@ Plugins can register:
 - Background services
 - Optional config validation
 - **Skills** (by listing `skills` directories in the plugin manifest)
-- **Auto-reply commands** (execute without invoking the AI agent)
+- **Auto-reply commands** (execute without invoking the Agent)
 
 Plugins run **in‑process** with the Gateway, so treat them as trusted code.
 Tool authoring guide: [Plugin agent tools](/plugins/agent-tools).
@@ -539,7 +539,7 @@ export default function (api) {
 ### Register auto-reply commands
 
 Plugins can register custom slash commands that execute **without invoking the
-AI agent**. This is useful for toggle commands, status checks, or quick actions
+Agent**. This is useful for toggle commands, status checks, or quick actions
 that don't need LLM processing.
 
 ```ts
@@ -589,7 +589,7 @@ api.registerCommand({
 
 Notes:
 
-- Plugin commands are processed **before** built-in commands and the AI agent
+- Plugin commands are processed **before** built-in commands and the Agent
 - Commands are registered globally and work across all channels
 - Command names are case-insensitive (`/MyStatus` matches `/mystatus`)
 - Command names must start with a letter and contain only letters, numbers, hyphens, and underscores

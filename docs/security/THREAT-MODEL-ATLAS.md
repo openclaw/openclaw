@@ -34,7 +34,7 @@ This is a living document maintained by the OpenClaw community. See [CONTRIBUTIN
 
 ### 1.1 Purpose
 
-This threat model documents adversarial threats to the OpenClaw AI agent platform and ClawHub skill marketplace, using the MITRE ATLAS framework designed specifically for AI/ML systems.
+This threat model documents adversarial threats to the OpenClaw Agent platform and ClawHub skill marketplace, using the MITRE ATLAS framework designed specifically for AI/ML systems.
 
 ### 1.2 Scope
 

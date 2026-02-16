@@ -70,7 +70,7 @@ export async function minimaxUnderstandImage(params: {
     headers: {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
-      "MM-API-Source": "OpenClaw",
+      "MM-API-Source": "agent-zero",
     },
     body: JSON.stringify({
       prompt,

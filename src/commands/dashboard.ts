@@ -60,7 +60,7 @@ export async function dashboardCommand(
   }
 
   if (opened) {
-    runtime.log("Opened in your browser. Keep that tab to control OpenClaw.");
+    runtime.log("Opened in your browser. Keep that tab to control agent-zero.");
   } else if (hint) {
     runtime.log(hint);
   }

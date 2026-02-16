@@ -175,7 +175,7 @@ export async function runConfigureWizard(
 ) {
   try {
     printWizardHeader(runtime);
-    intro(opts.command === "update" ? "OpenClaw update wizard" : "OpenClaw configure");
+    intro(opts.command === "update" ? "agent-zero update wizard" : "agent-zero configure");
     const prompter = createClackPrompter();
 
     const snapshot = await readConfigFileSnapshot();
