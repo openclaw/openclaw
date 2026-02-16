@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // ---------- mocks ----------
 
@@ -193,8 +193,12 @@ function makeParams(overrides?: Record<string, unknown>) {
 // ---------- tests ----------
 
 describe("runCronIsolatedAgentTurn — skill filter", () => {
+  let previousFastTestEnv: string | undefined;
+
   beforeEach(() => {
     vi.clearAllMocks();
+    previousFastTestEnv = process.env.OPENCLAW_TEST_FAST;
+    delete process.env.OPENCLAW_TEST_FAST;
     buildWorkspaceSkillSnapshotMock.mockReturnValue({
       prompt: "<available_skills></available_skills>",
       resolvedSkills: [],
@@ -214,6 +218,14 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       systemSent: false,
       isNewSession: true,
     });
+  });
+
+  afterEach(() => {
+    if (previousFastTestEnv == null) {
+      delete process.env.OPENCLAW_TEST_FAST;
+      return;
+    }
+    process.env.OPENCLAW_TEST_FAST = previousFastTestEnv;
   });
 
   it("passes agent-level skillFilter to buildWorkspaceSkillSnapshot", async () => {
