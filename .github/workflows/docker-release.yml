@@ -13,6 +13,10 @@ on:
       - ".agents/**"
       - "skills/**"
 
+concurrency:
+  group: docker-release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
