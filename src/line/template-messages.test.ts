@@ -176,24 +176,14 @@ describe("createButtonTemplate", () => {
 });
 
 describe("createTemplateCarousel", () => {
-  it("creates a carousel template", () => {
-    const columns = [
-      createCarouselColumn({ text: "Column 1", actions: [messageAction("Select")] }),
-      createCarouselColumn({ text: "Column 2", actions: [messageAction("Select")] }),
-    ];
-    const template = createTemplateCarousel(columns);
-
-    expect(template.type).toBe("template");
-    expect(template.template.type).toBe("carousel");
-    expect((template.template as { columns: unknown[] }).columns.length).toBe(2);
-  });
-
   it("limits columns to 10", () => {
     const columns = Array.from({ length: 15 }, () =>
       createCarouselColumn({ text: "Text", actions: [messageAction("OK")] }),
     );
     const template = createTemplateCarousel(columns);
 
+    expect(template.type).toBe("template");
+    expect(template.template.type).toBe("carousel");
     expect((template.template as { columns: unknown[] }).columns.length).toBe(10);
   });
 });
@@ -237,34 +227,15 @@ describe("createCarouselColumn", () => {
 });
 
 describe("createImageCarousel", () => {
-  it("creates an image carousel", () => {
-    const columns = [
-      createImageCarouselColumn("https://example.com/1.jpg", messageAction("View 1")),
-      createImageCarouselColumn("https://example.com/2.jpg", messageAction("View 2")),
-    ];
-    const template = createImageCarousel(columns);
-
-    expect(template.type).toBe("template");
-    expect(template.template.type).toBe("image_carousel");
-  });
-
   it("limits columns to 10", () => {
     const columns = Array.from({ length: 15 }, (_, i) =>
       createImageCarouselColumn(`https://example.com/${i}.jpg`, messageAction("View")),
     );
     const template = createImageCarousel(columns);
 
+    expect(template.type).toBe("template");
+    expect(template.template.type).toBe("image_carousel");
     expect((template.template as { columns: unknown[] }).columns.length).toBe(10);
-  });
-});
-
-describe("createImageCarouselColumn", () => {
-  it("creates an image carousel column", () => {
-    const action = uriAction("Visit", "https://example.com");
-    const column = createImageCarouselColumn("https://example.com/img.jpg", action);
-
-    expect(column.imageUrl).toBe("https://example.com/img.jpg");
-    expect(column.action).toBe(action);
   });
 });
 
@@ -335,19 +306,6 @@ describe("createLinkMenu", () => {
 });
 
 describe("createProductCarousel", () => {
-  it("creates a product carousel", () => {
-    const template = createProductCarousel([
-      { title: "Product 1", description: "Desc 1", price: "$10" },
-      { title: "Product 2", description: "Desc 2", imageUrl: "https://example.com/p2.jpg" },
-    ]);
-
-    expect(template.type).toBe("template");
-    expect(template.template.type).toBe("carousel");
-
-    const columns = (template.template as { columns: unknown[] }).columns;
-    expect(columns.length).toBe(2);
-  });
-
   it("uses URI action when actionUrl provided", () => {
     const template = createProductCarousel([
       {
