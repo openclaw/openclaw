@@ -1,3 +1,4 @@
+import type { TelegramActionConfig } from "../../../config/types.telegram.js";
 import type { ChannelMessageActionAdapter, ChannelMessageActionName } from "../types.js";
 import {
   createActionGate,
@@ -46,7 +47,10 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     if (accounts.length === 0) {
       return [];
     }
-    const gate = createActionGate(cfg.channels?.telegram?.actions);
+    // Union of all accounts' action gates (any account enabling an action makes it available)
+    const gates = accounts.map((a) => createActionGate(a.config.actions));
+    const gate = (key: keyof TelegramActionConfig, defaultValue = true) =>
+      gates.some((g) => g(key, defaultValue));
     const actions = new Set<ChannelMessageActionName>(["send"]);
     if (gate("reactions")) {
       actions.add("react");
