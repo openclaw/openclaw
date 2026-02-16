@@ -304,6 +304,7 @@ export type PluginHookName =
   | "after_compaction"
   | "before_reset"
   | "message_received"
+  | "before_message_dispatch"
   | "message_sending"
   | "message_sent"
   | "before_tool_call"
@@ -415,6 +416,42 @@ export type PluginHookMessageReceivedEvent = {
   content: string;
   timestamp?: number;
   metadata?: Record<string, unknown>;
+};
+
+// before_message_dispatch hook
+// Allows plugins to block inbound messages before agent/LLM processing.
+// This enables permission checks, rate limiting, or content filtering
+// before incurring LLM costs.
+export type PluginHookBeforeMessageDispatchEvent = {
+  /** Sender identifier (platform-specific) */
+  from: string;
+  /** Message content */
+  content: string;
+  /** Session key for this conversation */
+  sessionKey?: string;
+  /** Platform-specific sender ID */
+  senderId?: string;
+  /** Sender display name */
+  senderName?: string;
+  /** Sender username/handle */
+  senderUsername?: string;
+  /** Thread ID if in a thread */
+  threadId?: string;
+  /** Message timestamp */
+  timestamp?: number;
+  /** Additional platform-specific metadata */
+  metadata?: Record<string, unknown>;
+};
+
+export type PluginHookBeforeMessageDispatchResult = {
+  /** If true, stop processing - don't call agent/LLM */
+  block?: boolean;
+  /** Reason for blocking (for logging/debugging) */
+  blockReason?: string;
+  /** Direct response to send instead of calling agent */
+  response?: string;
+  /** Arbitrary context to pass downstream to agent via ctx */
+  context?: Record<string, unknown>;
 };
 
 // message_sending hook
@@ -551,6 +588,13 @@ export type PluginHookHandlerMap = {
     event: PluginHookMessageReceivedEvent,
     ctx: PluginHookMessageContext,
   ) => Promise<void> | void;
+  before_message_dispatch: (
+    event: PluginHookBeforeMessageDispatchEvent,
+    ctx: PluginHookMessageContext,
+  ) =>
+    | Promise<PluginHookBeforeMessageDispatchResult | void>
+    | PluginHookBeforeMessageDispatchResult
+    | void;
   message_sending: (
     event: PluginHookMessageSendingEvent,
     ctx: PluginHookMessageContext,

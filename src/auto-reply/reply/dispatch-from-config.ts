@@ -197,6 +197,75 @@ export async function dispatchReplyFromConfig(params: {
       });
   }
 
+  // Run before_message_dispatch hook - allows plugins to block messages before LLM processing.
+  // This is useful for permission checks, rate limiting, or content filtering.
+  if (hookRunner?.hasHooks("before_message_dispatch")) {
+    const timestamp =
+      typeof ctx.Timestamp === "number" && Number.isFinite(ctx.Timestamp)
+        ? ctx.Timestamp
+        : undefined;
+    const content =
+      typeof ctx.BodyForCommands === "string"
+        ? ctx.BodyForCommands
+        : typeof ctx.RawBody === "string"
+          ? ctx.RawBody
+          : typeof ctx.Body === "string"
+            ? ctx.Body
+            : "";
+    const channelId = (ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider ?? "").toLowerCase();
+    const conversationId = ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? undefined;
+
+    try {
+      const dispatchResult = await hookRunner.runBeforeMessageDispatch(
+        {
+          from: ctx.From ?? "",
+          content,
+          sessionKey: ctx.SessionKey,
+          senderId: ctx.SenderId,
+          senderName: ctx.SenderName,
+          senderUsername: ctx.SenderUsername,
+          threadId: ctx.MessageThreadId != null ? String(ctx.MessageThreadId) : undefined,
+          timestamp,
+          metadata: {
+            to: ctx.To,
+            provider: ctx.Provider,
+            surface: ctx.Surface,
+            originatingChannel: ctx.OriginatingChannel,
+            originatingTo: ctx.OriginatingTo,
+          },
+        },
+        {
+          channelId,
+          accountId: ctx.AccountId,
+          conversationId,
+        },
+      );
+
+      if (dispatchResult?.block) {
+        // Hook blocked this message - send response directly if provided
+        let queuedFinal = false;
+        if (dispatchResult.response) {
+          queuedFinal = dispatcher.sendFinalReply({ text: dispatchResult.response });
+        }
+        recordProcessed("skipped", {
+          reason: dispatchResult.blockReason ?? "blocked_by_hook",
+        });
+        return { queuedFinal, counts: dispatcher.getQueuedCounts() };
+      }
+
+      // If hook provided context, store it for downstream use
+      // (Note: ctx is readonly in strict mode, so this requires FinalizedMsgContext
+      // to have an optional hookContext field, or we pass it another way)
+      if (dispatchResult?.context) {
+        // Attach hook context to metadata for downstream access
+        (ctx as { HookContext?: Record<string, unknown> }).HookContext = dispatchResult.context;
+      }
+    } catch (err) {
+      logVerbose(`dispatch-from-config: before_message_dispatch hook failed: ${String(err)}`);
+      // Continue processing on hook failure - don't block messages due to hook errors
+    }
+  }
+
   // Check if we should route replies to originating channel instead of dispatcher.
   // Only route when the originating channel is DIFFERENT from the current surface.
   // This handles cross-provider routing (e.g., message from Telegram being processed
