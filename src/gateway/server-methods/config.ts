@@ -38,6 +38,7 @@ import {
   validateConfigSetParams,
 } from "../protocol/index.js";
 import { resolveBaseHashParam } from "./base-hash.js";
+import { parseRestartRequestParams } from "./restart-request.js";
 import { assertValidParams } from "./validation.js";
 
 function requireConfigBaseHash(
@@ -152,19 +153,7 @@ function resolveConfigRestartRequest(params: unknown): {
   deliveryContext: ReturnType<typeof extractDeliveryInfo>["deliveryContext"];
   threadId: ReturnType<typeof extractDeliveryInfo>["threadId"];
 } {
-  const sessionKey =
-    typeof (params as { sessionKey?: unknown }).sessionKey === "string"
-      ? (params as { sessionKey?: string }).sessionKey?.trim() || undefined
-      : undefined;
-  const note =
-    typeof (params as { note?: unknown }).note === "string"
-      ? (params as { note?: string }).note?.trim() || undefined
-      : undefined;
-  const restartDelayMsRaw = (params as { restartDelayMs?: unknown }).restartDelayMs;
-  const restartDelayMs =
-    typeof restartDelayMsRaw === "number" && Number.isFinite(restartDelayMsRaw)
-      ? Math.max(0, Math.floor(restartDelayMsRaw))
-      : undefined;
+  const { sessionKey, note, restartDelayMs } = parseRestartRequestParams(params);
 
   // Extract deliveryContext + threadId for routing after restart
   // Supports both :thread: (most channels) and :topic: (Telegram)

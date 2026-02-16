@@ -10,6 +10,7 @@ import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import { runGatewayUpdate } from "../../infra/update-runner.js";
 import { validateUpdateRunParams } from "../protocol/index.js";
+import { parseRestartRequestParams } from "./restart-request.js";
 import { assertValidParams } from "./validation.js";
 
 export const updateHandlers: GatewayRequestHandlers = {
@@ -17,19 +18,7 @@ export const updateHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateUpdateRunParams, "update.run", respond)) {
       return;
     }
-    const sessionKey =
-      typeof (params as { sessionKey?: unknown }).sessionKey === "string"
-        ? (params as { sessionKey?: string }).sessionKey?.trim() || undefined
-        : undefined;
-    const note =
-      typeof (params as { note?: unknown }).note === "string"
-        ? (params as { note?: string }).note?.trim() || undefined
-        : undefined;
-    const restartDelayMsRaw = (params as { restartDelayMs?: unknown }).restartDelayMs;
-    const restartDelayMs =
-      typeof restartDelayMsRaw === "number" && Number.isFinite(restartDelayMsRaw)
-        ? Math.max(0, Math.floor(restartDelayMsRaw))
-        : undefined;
+    const { sessionKey, note, restartDelayMs } = parseRestartRequestParams(params);
     const timeoutMsRaw = (params as { timeoutMs?: unknown }).timeoutMs;
     const timeoutMs =
       typeof timeoutMsRaw === "number" && Number.isFinite(timeoutMsRaw)
