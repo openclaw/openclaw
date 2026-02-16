@@ -19,6 +19,40 @@ function createDockerConfig(overrides?: Partial<SandboxDockerConfig>): SandboxDo
   };
 }
 
+type DockerArrayField = "tmpfs" | "capDrop" | "dns" | "extraHosts" | "binds";
+
+const ORDER_SENSITIVE_ARRAY_CASES: ReadonlyArray<{
+  field: DockerArrayField;
+  before: string[];
+  after: string[];
+}> = [
+  {
+    field: "tmpfs",
+    before: ["/tmp", "/var/tmp", "/run"],
+    after: ["/run", "/var/tmp", "/tmp"],
+  },
+  {
+    field: "capDrop",
+    before: ["ALL", "CHOWN"],
+    after: ["CHOWN", "ALL"],
+  },
+  {
+    field: "dns",
+    before: ["1.1.1.1", "8.8.8.8"],
+    after: ["8.8.8.8", "1.1.1.1"],
+  },
+  {
+    field: "extraHosts",
+    before: ["host.docker.internal:host-gateway", "db.local:10.0.0.5"],
+    after: ["db.local:10.0.0.5", "host.docker.internal:host-gateway"],
+  },
+  {
+    field: "binds",
+    before: ["/tmp/workspace:/workspace:rw", "/tmp/cache:/cache:ro"],
+    after: ["/tmp/cache:/cache:ro", "/tmp/workspace:/workspace:rw"],
+  },
+];
+
 describe("computeSandboxConfigHash", () => {
   it("ignores object key order", () => {
     const shared = {
@@ -49,7 +83,7 @@ describe("computeSandboxConfigHash", () => {
     expect(left).toBe(right);
   });
 
-  it("treats primitive array order as significant", () => {
+  it.each(ORDER_SENSITIVE_ARRAY_CASES)("treats $field order as significant", (testCase) => {
     const shared = {
       workspaceAccess: "rw" as const,
       workspaceDir: "/tmp/workspace",
@@ -58,14 +92,14 @@ describe("computeSandboxConfigHash", () => {
     const left = computeSandboxConfigHash({
       ...shared,
       docker: createDockerConfig({
-        dns: ["1.1.1.1", "8.8.8.8"],
-      }),
+        [testCase.field]: testCase.before,
+      } as Partial<SandboxDockerConfig>),
     });
     const right = computeSandboxConfigHash({
       ...shared,
       docker: createDockerConfig({
-        dns: ["8.8.8.8", "1.1.1.1"],
-      }),
+        [testCase.field]: testCase.after,
+      } as Partial<SandboxDockerConfig>),
     });
     expect(left).not.toBe(right);
   });
