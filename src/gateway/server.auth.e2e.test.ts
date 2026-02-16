@@ -1707,5 +1707,110 @@ describe("gateway server auth/connect", () => {
         ws.close();
       });
     });
+
+    test("allows internal connection with valid token in trusted-proxy mode", async () => {
+      testState.gatewayBind = "lan";
+      testState.gatewayAuth = {
+        mode: "trusted-proxy",
+        trustedProxy: { userHeader: "x-forwarded-user" },
+        token: "test-token-123",
+      };
+      const { writeConfigFile } = await import("../config/config.js");
+      await writeConfigFile({
+        gateway: { trustedProxies: ["10.0.0.1"] }, // 127.0.0.1 is NOT trusted
+      });
+
+      await withGatewayServer(async ({ port }) => {
+        const ws = new WebSocket(`ws://127.0.0.1:${port}`, {
+          headers: { origin: "https://localhost" },
+        });
+        await new Promise<void>((resolve) => ws.once("open", resolve));
+
+        const res = await connectReq(ws, {
+          skipDefaultAuth: true,
+          token: "test-token-123",
+          client: {
+            id: GATEWAY_CLIENT_NAMES.TEST,
+            version: "1.0.0",
+            platform: "test",
+            mode: GATEWAY_CLIENT_MODES.TEST,
+          },
+        });
+        expect(res.ok).toBe(true);
+        ws.close();
+      });
+    });
+
+    test("allows internal connection with valid token and no device identity", async () => {
+      testState.gatewayBind = "lan";
+      testState.gatewayAuth = {
+        mode: "trusted-proxy",
+        trustedProxy: { userHeader: "x-forwarded-user" },
+        token: "test-token-123",
+      };
+      const { writeConfigFile } = await import("../config/config.js");
+      await writeConfigFile({
+        gateway: { trustedProxies: ["10.0.0.1"] }, // 127.0.0.1 is NOT trusted
+      });
+
+      await withGatewayServer(async ({ port }) => {
+        const ws = new WebSocket(`ws://127.0.0.1:${port}`, {
+          headers: { origin: "https://localhost" },
+        });
+        await new Promise<void>((resolve) => ws.once("open", resolve));
+
+        const res = await connectReq(ws, {
+          skipDefaultAuth: true,
+          token: "test-token-123",
+          device: null,
+          client: {
+            id: GATEWAY_CLIENT_NAMES.TEST,
+            version: "1.0.0",
+            platform: "test",
+            mode: GATEWAY_CLIENT_MODES.TEST,
+          },
+        });
+        expect(res.ok).toBe(true);
+        ws.close();
+      });
+    });
+
+    test("proxy connection uses trusted-proxy method, not token fallback", async () => {
+      testState.gatewayBind = "lan";
+      testState.gatewayAuth = {
+        mode: "trusted-proxy",
+        trustedProxy: { userHeader: "x-forwarded-user" },
+        token: "test-token-123",
+      };
+      const { writeConfigFile } = await import("../config/config.js");
+      await writeConfigFile({
+        gateway: { trustedProxies: ["127.0.0.1"] }, // 127.0.0.1 IS trusted
+      });
+
+      await withGatewayServer(async ({ port }) => {
+        const ws = new WebSocket(`ws://127.0.0.1:${port}`, {
+          headers: {
+            origin: "https://localhost",
+            "x-forwarded-user": "testuser",
+          },
+        });
+        await new Promise<void>((resolve) => ws.once("open", resolve));
+
+        // Even though we send a token, proxy auth should take priority
+        const res = await connectReq(ws, {
+          skipDefaultAuth: true,
+          token: "test-token-123",
+          device: null,
+          client: {
+            id: GATEWAY_CLIENT_NAMES.TEST,
+            version: "1.0.0",
+            platform: "test",
+            mode: GATEWAY_CLIENT_MODES.TEST,
+          },
+        });
+        expect(res.ok).toBe(true);
+        ws.close();
+      });
+    });
   });
 });

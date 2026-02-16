@@ -543,3 +543,191 @@ describe("trusted-proxy auth", () => {
     expect(res.user).toBe("nick@example.com");
   });
 });
+
+describe("trusted-proxy shared-secret fallback", () => {
+  const trustedProxyConfig = {
+    userHeader: "x-forwarded-user",
+  };
+
+  const untrustedReq = {
+    socket: { remoteAddress: "127.0.0.1" },
+    headers: {
+      host: "gateway.local",
+      "x-forwarded-user": "nick@example.com",
+    },
+  } as never;
+
+  // trustedProxies: ["10.0.0.1"] means 127.0.0.1 is NOT trusted
+  const untrustedProxies = ["10.0.0.1"];
+
+  it("trusted-proxy via proxy succeeds (unchanged)", async () => {
+    const res = await authorizeGatewayConnect({
+      auth: {
+        mode: "trusted-proxy",
+        allowTailscale: false,
+        trustedProxy: trustedProxyConfig,
+        token: "server-token",
+      },
+      connectAuth: null,
+      trustedProxies: ["10.0.0.1"],
+      req: {
+        socket: { remoteAddress: "10.0.0.1" },
+        headers: {
+          host: "gateway.local",
+          "x-forwarded-user": "nick@example.com",
+        },
+      } as never,
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.method).toBe("trusted-proxy");
+    expect(res.user).toBe("nick@example.com");
+  });
+
+  it("rejects untrusted IP when no token/password configured (unchanged)", async () => {
+    const res = await authorizeGatewayConnect({
+      auth: {
+        mode: "trusted-proxy",
+        allowTailscale: false,
+        trustedProxy: trustedProxyConfig,
+      },
+      connectAuth: null,
+      trustedProxies: untrustedProxies,
+      req: untrustedReq,
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("trusted_proxy_untrusted_source");
+  });
+
+  it("falls back to token when untrusted IP provides valid token", async () => {
+    const res = await authorizeGatewayConnect({
+      auth: {
+        mode: "trusted-proxy",
+        allowTailscale: false,
+        trustedProxy: trustedProxyConfig,
+        token: "server-token",
+      },
+      connectAuth: { token: "server-token" },
+      trustedProxies: untrustedProxies,
+      req: untrustedReq,
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.method).toBe("token");
+  });
+
+  it("rejects untrusted IP with invalid token", async () => {
+    const res = await authorizeGatewayConnect({
+      auth: {
+        mode: "trusted-proxy",
+        allowTailscale: false,
+        trustedProxy: trustedProxyConfig,
+        token: "server-token",
+      },
+      connectAuth: { token: "wrong-token" },
+      trustedProxies: untrustedProxies,
+      req: untrustedReq,
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("token_mismatch");
+  });
+
+  it("falls back to password when untrusted IP provides valid password", async () => {
+    const res = await authorizeGatewayConnect({
+      auth: {
+        mode: "trusted-proxy",
+        allowTailscale: false,
+        trustedProxy: trustedProxyConfig,
+        password: "server-pass",
+      },
+      connectAuth: { password: "server-pass" },
+      trustedProxies: untrustedProxies,
+      req: untrustedReq,
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.method).toBe("password");
+  });
+
+  it("rejects untrusted IP with invalid password", async () => {
+    const res = await authorizeGatewayConnect({
+      auth: {
+        mode: "trusted-proxy",
+        allowTailscale: false,
+        trustedProxy: trustedProxyConfig,
+        password: "server-pass",
+      },
+      connectAuth: { password: "wrong-pass" },
+      trustedProxies: untrustedProxies,
+      req: untrustedReq,
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("password_mismatch");
+  });
+
+  it("rejects when client provides token but no server token configured", async () => {
+    const res = await authorizeGatewayConnect({
+      auth: {
+        mode: "trusted-proxy",
+        allowTailscale: false,
+        trustedProxy: trustedProxyConfig,
+        // no token or password configured on server
+      },
+      connectAuth: { token: "client-token" },
+      trustedProxies: untrustedProxies,
+      req: untrustedReq,
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("trusted_proxy_untrusted_source");
+  });
+
+  it("rejects when rate limited during fallback", async () => {
+    const limiter = createLimiterSpy();
+    limiter.check.mockReturnValue({ allowed: false, remaining: 0, retryAfterMs: 5000 });
+
+    const res = await authorizeGatewayConnect({
+      auth: {
+        mode: "trusted-proxy",
+        allowTailscale: false,
+        trustedProxy: trustedProxyConfig,
+        token: "server-token",
+      },
+      connectAuth: { token: "server-token" },
+      trustedProxies: untrustedProxies,
+      req: untrustedReq,
+      rateLimiter: limiter,
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("rate_limited");
+    expect(res.rateLimited).toBe(true);
+  });
+
+  it("uses proxy method when request comes from trusted proxy even if token is provided", async () => {
+    const res = await authorizeGatewayConnect({
+      auth: {
+        mode: "trusted-proxy",
+        allowTailscale: false,
+        trustedProxy: trustedProxyConfig,
+        token: "server-token",
+      },
+      connectAuth: { token: "server-token" },
+      trustedProxies: ["127.0.0.1"],
+      req: {
+        socket: { remoteAddress: "127.0.0.1" },
+        headers: {
+          host: "gateway.local",
+          "x-forwarded-user": "nick@example.com",
+        },
+      } as never,
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.method).toBe("trusted-proxy");
+    expect(res.user).toBe("nick@example.com");
+  });
+});
