@@ -15,6 +15,7 @@ import {
   applyQianfanConfig,
   applyKimiCodeConfig,
   applyMinimaxApiConfig,
+  applyMinimaxApiConfigCn,
   applyMinimaxConfig,
   applyMoonshotConfig,
   applyMoonshotConfigCn,
@@ -23,7 +24,9 @@ import {
   applySyntheticConfig,
   applyVeniceConfig,
   applyTogetherConfig,
+  applyHuggingfaceConfig,
   applyVercelAiGatewayConfig,
+  applyLitellmConfig,
   applyXaiConfig,
   applyXiaomiConfig,
   applyZaiConfig,
@@ -32,6 +35,7 @@ import {
   setQianfanApiKey,
   setGeminiApiKey,
   setKimiCodingApiKey,
+  setLitellmApiKey,
   setMinimaxApiKey,
   setMoonshotApiKey,
   setOpencodeZenApiKey,
@@ -40,11 +44,19 @@ import {
   setXaiApiKey,
   setVeniceApiKey,
   setTogetherApiKey,
+  setHuggingfaceApiKey,
   setVercelAiGatewayApiKey,
   setXiaomiApiKey,
   setZaiApiKey,
 } from "../../onboard-auth.js";
+import {
+  applyCustomApiConfig,
+  CustomApiError,
+  parseNonInteractiveCustomApiFlags,
+  resolveCustomProviderId,
+} from "../../onboard-custom.js";
 import { applyOpenAIConfig } from "../../openai-model-default.js";
+import { detectZaiEndpoint } from "../../zai-endpoint-detect.js";
 import { resolveNonInteractiveApiKey } from "../api-keys.js";
 
 export async function applyNonInteractiveAuthChoice(params: {
@@ -73,6 +85,17 @@ export async function applyNonInteractiveAuthChoice(params: {
       [
         'Auth choice "setup-token" requires interactive mode.',
         'Use "--auth-choice token" with --token and --token-provider anthropic.',
+      ].join("\n"),
+    );
+    runtime.exit(1);
+    return null;
+  }
+
+  if (authChoice === "vllm") {
+    runtime.error(
+      [
+        'Auth choice "vllm" requires interactive mode.',
+        "Use interactive onboard/configure to enter base URL, API key, and model ID.",
       ].join("\n"),
     );
     runtime.exit(1);
@@ -179,7 +202,13 @@ export async function applyNonInteractiveAuthChoice(params: {
     return applyGoogleGeminiModelDefault(nextConfig).next;
   }
 
-  if (authChoice === "zai-api-key") {
+  if (
+    authChoice === "zai-api-key" ||
+    authChoice === "zai-coding-global" ||
+    authChoice === "zai-coding-cn" ||
+    authChoice === "zai-global" ||
+    authChoice === "zai-cn"
+  ) {
     const resolved = await resolveNonInteractiveApiKey({
       provider: "zai",
       cfg: baseConfig,
@@ -199,7 +228,33 @@ export async function applyNonInteractiveAuthChoice(params: {
       provider: "zai",
       mode: "api_key",
     });
-    return applyZaiConfig(nextConfig);
+
+    // Determine endpoint from authChoice or detect from the API key.
+    let endpoint: "global" | "cn" | "coding-global" | "coding-cn" | undefined;
+    let modelIdOverride: string | undefined;
+
+    if (authChoice === "zai-coding-global") {
+      endpoint = "coding-global";
+    } else if (authChoice === "zai-coding-cn") {
+      endpoint = "coding-cn";
+    } else if (authChoice === "zai-global") {
+      endpoint = "global";
+    } else if (authChoice === "zai-cn") {
+      endpoint = "cn";
+    } else {
+      const detected = await detectZaiEndpoint({ apiKey: resolved.key });
+      if (detected) {
+        endpoint = detected.endpoint;
+        modelIdOverride = detected.modelId;
+      } else {
+        endpoint = "global";
+      }
+    }
+
+    return applyZaiConfig(nextConfig, {
+      endpoint,
+      ...(modelIdOverride ? { modelId: modelIdOverride } : {}),
+    });
   }
 
   if (authChoice === "xiaomi-api-key") {
@@ -314,6 +369,29 @@ export async function applyNonInteractiveAuthChoice(params: {
     return applyOpenrouterConfig(nextConfig);
   }
 
+  if (authChoice === "litellm-api-key") {
+    const resolved = await resolveNonInteractiveApiKey({
+      provider: "litellm",
+      cfg: baseConfig,
+      flagValue: opts.litellmApiKey,
+      flagName: "--litellm-api-key",
+      envVar: "LITELLM_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (resolved.source !== "profile") {
+      await setLitellmApiKey(resolved.key);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "litellm:default",
+      provider: "litellm",
+      mode: "api_key",
+    });
+    return applyLitellmConfig(nextConfig);
+  }
+
   if (authChoice === "ai-gateway-api-key") {
     const resolved = await resolveNonInteractiveApiKey({
       provider: "vercel-ai-gateway",
@@ -375,7 +453,9 @@ export async function applyNonInteractiveAuthChoice(params: {
     });
   }
 
-  if (authChoice === "moonshot-api-key") {
+  const applyMoonshotApiKeyChoice = async (
+    applyConfig: (cfg: OpenClawConfig) => OpenClawConfig,
+  ): Promise<OpenClawConfig | null> => {
     const resolved = await resolveNonInteractiveApiKey({
       provider: "moonshot",
       cfg: baseConfig,
@@ -395,30 +475,15 @@ export async function applyNonInteractiveAuthChoice(params: {
       provider: "moonshot",
       mode: "api_key",
     });
-    return applyMoonshotConfig(nextConfig);
+    return applyConfig(nextConfig);
+  };
+
+  if (authChoice === "moonshot-api-key") {
+    return await applyMoonshotApiKeyChoice(applyMoonshotConfig);
   }
 
   if (authChoice === "moonshot-api-key-cn") {
-    const resolved = await resolveNonInteractiveApiKey({
-      provider: "moonshot",
-      cfg: baseConfig,
-      flagValue: opts.moonshotApiKey,
-      flagName: "--moonshot-api-key",
-      envVar: "MOONSHOT_API_KEY",
-      runtime,
-    });
-    if (!resolved) {
-      return null;
-    }
-    if (resolved.source !== "profile") {
-      await setMoonshotApiKey(resolved.key);
-    }
-    nextConfig = applyAuthProfileConfig(nextConfig, {
-      profileId: "moonshot:default",
-      provider: "moonshot",
-      mode: "api_key",
-    });
-    return applyMoonshotConfigCn(nextConfig);
+    return await applyMoonshotApiKeyChoice(applyMoonshotConfigCn);
   }
 
   if (authChoice === "kimi-code-api-key") {
@@ -493,10 +558,14 @@ export async function applyNonInteractiveAuthChoice(params: {
   if (
     authChoice === "minimax-cloud" ||
     authChoice === "minimax-api" ||
+    authChoice === "minimax-api-key-cn" ||
     authChoice === "minimax-api-lightning"
   ) {
+    const isCn = authChoice === "minimax-api-key-cn";
+    const providerId = isCn ? "minimax-cn" : "minimax";
+    const profileId = `${providerId}:default`;
     const resolved = await resolveNonInteractiveApiKey({
-      provider: "minimax",
+      provider: providerId,
       cfg: baseConfig,
       flagValue: opts.minimaxApiKey,
       flagName: "--minimax-api-key",
@@ -507,16 +576,18 @@ export async function applyNonInteractiveAuthChoice(params: {
       return null;
     }
     if (resolved.source !== "profile") {
-      await setMinimaxApiKey(resolved.key);
+      await setMinimaxApiKey(resolved.key, undefined, profileId);
     }
     nextConfig = applyAuthProfileConfig(nextConfig, {
-      profileId: "minimax:default",
-      provider: "minimax",
+      profileId,
+      provider: providerId,
       mode: "api_key",
     });
     const modelId =
-      authChoice === "minimax-api-lightning" ? "MiniMax-M2.1-lightning" : "MiniMax-M2.1";
-    return applyMinimaxApiConfig(nextConfig, modelId);
+      authChoice === "minimax-api-lightning" ? "MiniMax-M2.5-Lightning" : "MiniMax-M2.5";
+    return isCn
+      ? applyMinimaxApiConfigCn(nextConfig, modelId)
+      : applyMinimaxApiConfig(nextConfig, modelId);
   }
 
   if (authChoice === "minimax") {
@@ -567,6 +638,88 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return applyTogetherConfig(nextConfig);
+  }
+
+  if (authChoice === "huggingface-api-key") {
+    const resolved = await resolveNonInteractiveApiKey({
+      provider: "huggingface",
+      cfg: baseConfig,
+      flagValue: opts.huggingfaceApiKey,
+      flagName: "--huggingface-api-key",
+      envVar: "HF_TOKEN",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (resolved.source !== "profile") {
+      await setHuggingfaceApiKey(resolved.key);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "huggingface:default",
+      provider: "huggingface",
+      mode: "api_key",
+    });
+    return applyHuggingfaceConfig(nextConfig);
+  }
+
+  if (authChoice === "custom-api-key") {
+    try {
+      const customAuth = parseNonInteractiveCustomApiFlags({
+        baseUrl: opts.customBaseUrl,
+        modelId: opts.customModelId,
+        compatibility: opts.customCompatibility,
+        apiKey: opts.customApiKey,
+        providerId: opts.customProviderId,
+      });
+      const resolvedProviderId = resolveCustomProviderId({
+        config: nextConfig,
+        baseUrl: customAuth.baseUrl,
+        providerId: customAuth.providerId,
+      });
+      const resolvedCustomApiKey = await resolveNonInteractiveApiKey({
+        provider: resolvedProviderId.providerId,
+        cfg: baseConfig,
+        flagValue: customAuth.apiKey,
+        flagName: "--custom-api-key",
+        envVar: "CUSTOM_API_KEY",
+        envVarName: "CUSTOM_API_KEY",
+        runtime,
+        required: false,
+      });
+      const result = applyCustomApiConfig({
+        config: nextConfig,
+        baseUrl: customAuth.baseUrl,
+        modelId: customAuth.modelId,
+        compatibility: customAuth.compatibility,
+        apiKey: resolvedCustomApiKey?.key,
+        providerId: customAuth.providerId,
+      });
+      if (result.providerIdRenamedFrom && result.providerId) {
+        runtime.log(
+          `Custom provider ID "${result.providerIdRenamedFrom}" already exists for a different base URL. Using "${result.providerId}".`,
+        );
+      }
+      return result.config;
+    } catch (err) {
+      if (err instanceof CustomApiError) {
+        switch (err.code) {
+          case "missing_required":
+          case "invalid_compatibility":
+            runtime.error(err.message);
+            break;
+          default:
+            runtime.error(`Invalid custom provider config: ${err.message}`);
+            break;
+        }
+        runtime.exit(1);
+        return null;
+      }
+      const reason = err instanceof Error ? err.message : String(err);
+      runtime.error(`Invalid custom provider config: ${reason}`);
+      runtime.exit(1);
+      return null;
+    }
   }
 
   if (

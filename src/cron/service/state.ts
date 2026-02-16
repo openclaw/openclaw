@@ -35,9 +35,17 @@ export type CronServiceDeps = {
   resolveSessionStorePath?: (agentId?: string) => string;
   /** Path to the session store (sessions.json) for reaper use. */
   sessionStorePath?: string;
-  enqueueSystemEvent: (text: string, opts?: { agentId?: string }) => void;
+  enqueueSystemEvent: (text: string, opts?: { agentId?: string; contextKey?: string }) => void;
   requestHeartbeatNow: (opts?: { reason?: string }) => void;
-  runHeartbeatOnce?: (opts?: { reason?: string }) => Promise<HeartbeatRunResult>;
+  runHeartbeatOnce?: (opts?: { reason?: string; agentId?: string }) => Promise<HeartbeatRunResult>;
+  /**
+   * WakeMode=now: max time to wait for runHeartbeatOnce to stop returning
+   * { status:"skipped", reason:"requests-in-flight" } before falling back to
+   * requestHeartbeatNow.
+   */
+  wakeNowHeartbeatBusyMaxWaitMs?: number;
+  /** WakeMode=now: delay between runHeartbeatOnce retries while busy. */
+  wakeNowHeartbeatBusyRetryDelayMs?: number;
   runIsolatedAgentJob: (params: { job: CronJob; message: string }) => Promise<{
     status: "ok" | "error" | "skipped";
     summary?: string;
@@ -46,6 +54,12 @@ export type CronServiceDeps = {
     error?: string;
     sessionId?: string;
     sessionKey?: string;
+    /**
+     * `true` when the isolated run already delivered its output to the target
+     * channel (including matching messaging-tool sends). See:
+     * https://github.com/openclaw/openclaw/issues/15692
+     */
+    delivered?: boolean;
   }>;
   onEvent?: (evt: CronEvent) => void;
 };

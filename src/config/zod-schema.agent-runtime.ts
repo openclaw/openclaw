@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { parseDurationMs } from "../cli/parse-duration.js";
+import { AgentModelSchema } from "./zod-schema.agent-model.js";
 import {
   GroupChatSchema,
   HumanDelaySchema,
@@ -7,6 +8,7 @@ import {
   ToolsLinksSchema,
   ToolsMediaSchema,
 } from "./zod-schema.core.js";
+import { sensitive } from "./zod-schema.sensitive.js";
 
 export const HeartbeatSchema = z
   .object({
@@ -123,6 +125,58 @@ export const SandboxDockerSchema = z
     binds: z.array(z.string()).optional(),
   })
   .strict()
+  .superRefine((data, ctx) => {
+    if (data.binds) {
+      for (let i = 0; i < data.binds.length; i += 1) {
+        const bind = data.binds[i]?.trim() ?? "";
+        if (!bind) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["binds", i],
+            message: "Sandbox security: bind mount entry must be a non-empty string.",
+          });
+          continue;
+        }
+        const firstColon = bind.indexOf(":");
+        const source = (firstColon <= 0 ? bind : bind.slice(0, firstColon)).trim();
+        if (!source.startsWith("/")) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["binds", i],
+            message:
+              `Sandbox security: bind mount "${bind}" uses a non-absolute source path "${source}". ` +
+              "Only absolute POSIX paths are supported for sandbox binds.",
+          });
+        }
+      }
+    }
+    if (data.network?.trim().toLowerCase() === "host") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["network"],
+        message:
+          'Sandbox security: network mode "host" is blocked. Use "bridge" or "none" instead.',
+      });
+    }
+    if (data.seccompProfile?.trim().toLowerCase() === "unconfined") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["seccompProfile"],
+        message:
+          'Sandbox security: seccomp profile "unconfined" is blocked. ' +
+          "Use a custom seccomp profile file or omit this setting.",
+      });
+    }
+    if (data.apparmorProfile?.trim().toLowerCase() === "unconfined") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["apparmorProfile"],
+        message:
+          'Sandbox security: apparmor profile "unconfined" is blocked. ' +
+          "Use a named AppArmor profile or omit this setting.",
+      });
+    }
+  })
   .optional();
 
 export const SandboxBrowserSchema = z
@@ -138,6 +192,7 @@ export const SandboxBrowserSchema = z
     allowHostControl: z.boolean().optional(),
     autoStart: z.boolean().optional(),
     autoStartTimeoutMs: z.number().int().positive().optional(),
+    binds: z.array(z.string()).optional(),
   })
   .strict()
   .optional();
@@ -172,13 +227,13 @@ export const ToolsWebSearchSchema = z
   .object({
     enabled: z.boolean().optional(),
     provider: z.union([z.literal("brave"), z.literal("perplexity"), z.literal("grok")]).optional(),
-    apiKey: z.string().optional(),
+    apiKey: z.string().optional().register(sensitive),
     maxResults: z.number().int().positive().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
     cacheTtlMinutes: z.number().nonnegative().optional(),
     perplexity: z
       .object({
-        apiKey: z.string().optional(),
+        apiKey: z.string().optional().register(sensitive),
         baseUrl: z.string().optional(),
         model: z.string().optional(),
       })
@@ -186,7 +241,7 @@ export const ToolsWebSearchSchema = z
       .optional(),
     grok: z
       .object({
-        apiKey: z.string().optional(),
+        apiKey: z.string().optional().register(sensitive),
         model: z.string().optional(),
         inlineCitations: z.boolean().optional(),
       })
@@ -244,6 +299,47 @@ export const ElevatedAllowFromSchema = z
   .record(z.string(), z.array(z.union([z.string(), z.number()])))
   .optional();
 
+const ToolExecApplyPatchSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    workspaceOnly: z.boolean().optional(),
+    allowModels: z.array(z.string()).optional(),
+  })
+  .strict()
+  .optional();
+
+const ToolExecBaseShape = {
+  host: z.enum(["sandbox", "gateway", "node"]).optional(),
+  security: z.enum(["deny", "allowlist", "full"]).optional(),
+  ask: z.enum(["off", "on-miss", "always"]).optional(),
+  node: z.string().optional(),
+  pathPrepend: z.array(z.string()).optional(),
+  safeBins: z.array(z.string()).optional(),
+  backgroundMs: z.number().int().positive().optional(),
+  timeoutSec: z.number().int().positive().optional(),
+  cleanupMs: z.number().int().positive().optional(),
+  notifyOnExit: z.boolean().optional(),
+  notifyOnExitEmptySuccess: z.boolean().optional(),
+  applyPatch: ToolExecApplyPatchSchema,
+} as const;
+
+const AgentToolExecSchema = z
+  .object({
+    ...ToolExecBaseShape,
+    approvalRunningNoticeMs: z.number().int().nonnegative().optional(),
+  })
+  .strict()
+  .optional();
+
+const ToolExecSchema = z.object(ToolExecBaseShape).strict().optional();
+
+const ToolFsSchema = z
+  .object({
+    workspaceOnly: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
+
 export const AgentSandboxSchema = z
   .object({
     mode: z.union([z.literal("off"), z.literal("non-main"), z.literal("all")]).optional(),
@@ -273,29 +369,8 @@ export const AgentToolsSchema = z
       })
       .strict()
       .optional(),
-    exec: z
-      .object({
-        host: z.enum(["sandbox", "gateway", "node"]).optional(),
-        security: z.enum(["deny", "allowlist", "full"]).optional(),
-        ask: z.enum(["off", "on-miss", "always"]).optional(),
-        node: z.string().optional(),
-        pathPrepend: z.array(z.string()).optional(),
-        safeBins: z.array(z.string()).optional(),
-        backgroundMs: z.number().int().positive().optional(),
-        timeoutSec: z.number().int().positive().optional(),
-        approvalRunningNoticeMs: z.number().int().nonnegative().optional(),
-        cleanupMs: z.number().int().positive().optional(),
-        notifyOnExit: z.boolean().optional(),
-        applyPatch: z
-          .object({
-            enabled: z.boolean().optional(),
-            allowModels: z.array(z.string()).optional(),
-          })
-          .strict()
-          .optional(),
-      })
-      .strict()
-      .optional(),
+    exec: AgentToolExecSchema,
+    fs: ToolFsSchema,
     sandbox: z
       .object({
         tools: ToolPolicySchema,
@@ -332,7 +407,7 @@ export const MemorySearchSchema = z
     remote: z
       .object({
         baseUrl: z.string().optional(),
-        apiKey: z.string().optional(),
+        apiKey: z.string().optional().register(sensitive),
         headers: z.record(z.string(), z.string()).optional(),
         batch: z
           .object({
@@ -428,15 +503,7 @@ export const MemorySearchSchema = z
   })
   .strict()
   .optional();
-export const AgentModelSchema = z.union([
-  z.string(),
-  z
-    .object({
-      primary: z.string().optional(),
-      fallbacks: z.array(z.string()).optional(),
-    })
-    .strict(),
-]);
+export { AgentModelSchema };
 export const AgentEntrySchema = z
   .object({
     id: z.string(),
@@ -484,6 +551,12 @@ export const ToolsSchema = z
     web: ToolsWebSchema,
     media: ToolsMediaSchema,
     links: ToolsLinksSchema,
+    sessions: z
+      .object({
+        visibility: z.enum(["self", "tree", "agent", "all"]).optional(),
+      })
+      .strict()
+      .optional(),
     message: z
       .object({
         allowCrossContextSend: z.boolean().optional(),
@@ -525,28 +598,8 @@ export const ToolsSchema = z
       })
       .strict()
       .optional(),
-    exec: z
-      .object({
-        host: z.enum(["sandbox", "gateway", "node"]).optional(),
-        security: z.enum(["deny", "allowlist", "full"]).optional(),
-        ask: z.enum(["off", "on-miss", "always"]).optional(),
-        node: z.string().optional(),
-        pathPrepend: z.array(z.string()).optional(),
-        safeBins: z.array(z.string()).optional(),
-        backgroundMs: z.number().int().positive().optional(),
-        timeoutSec: z.number().int().positive().optional(),
-        cleanupMs: z.number().int().positive().optional(),
-        notifyOnExit: z.boolean().optional(),
-        applyPatch: z
-          .object({
-            enabled: z.boolean().optional(),
-            allowModels: z.array(z.string()).optional(),
-          })
-          .strict()
-          .optional(),
-      })
-      .strict()
-      .optional(),
+    exec: ToolExecSchema,
+    fs: ToolFsSchema,
     subagents: z
       .object({
         tools: ToolPolicySchema,

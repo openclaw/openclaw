@@ -28,13 +28,13 @@ import {
 import { normalizeProviderId } from "../model-selection.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import {
-  BILLING_ERROR_USER_MESSAGE,
+  formatBillingErrorMessage,
   classifyFailoverReason,
   formatAssistantErrorText,
   isAuthAssistantError,
   isBillingAssistantError,
   isCompactionFailureError,
-  isContextOverflowError,
+  isLikelyContextOverflowError,
   isFailoverAssistantError,
   isFailoverErrorMessage,
   parseImageSizeError,
@@ -44,7 +44,7 @@ import {
   pickFallbackThinkingLevel,
   type FailoverReason,
 } from "../pi-embedded-helpers.js";
-import { normalizeUsage, type UsageLike } from "../usage.js";
+import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { compactEmbeddedPiSessionDirect } from "./compact.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
@@ -80,6 +80,10 @@ type UsageAccumulator = {
   cacheRead: number;
   cacheWrite: number;
   total: number;
+  /** Cache fields from the most recent API call (not accumulated). */
+  lastCacheRead: number;
+  lastCacheWrite: number;
+  lastInput: number;
 };
 
 const createUsageAccumulator = (): UsageAccumulator => ({
@@ -88,7 +92,14 @@ const createUsageAccumulator = (): UsageAccumulator => ({
   cacheRead: 0,
   cacheWrite: 0,
   total: 0,
+  lastCacheRead: 0,
+  lastCacheWrite: 0,
+  lastInput: 0,
 });
+
+function createCompactionDiagId(): string {
+  return `ovf-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
 
 const hasUsageValues = (
   usage: ReturnType<typeof normalizeUsage>,
@@ -112,6 +123,12 @@ const mergeUsageIntoAccumulator = (
   target.total +=
     usage.total ??
     (usage.input ?? 0) + (usage.output ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
+  // Track the most recent API call's cache fields for accurate context-size reporting.
+  // Accumulated cache totals inflate context size when there are multiple tool-call round-trips,
+  // since each call reports cacheRead ≈ current_context_size.
+  target.lastCacheRead = usage.cacheRead ?? 0;
+  target.lastCacheWrite = usage.cacheWrite ?? 0;
+  target.lastInput = usage.input ?? 0;
 };
 
 const toNormalizedUsage = (usage: UsageAccumulator) => {
@@ -124,13 +141,21 @@ const toNormalizedUsage = (usage: UsageAccumulator) => {
   if (!hasUsage) {
     return undefined;
   }
-  const derivedTotal = usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+  // Use the LAST API call's cache fields for context-size calculation.
+  // The accumulated cacheRead/cacheWrite inflate context size because each tool-call
+  // round-trip reports cacheRead ≈ current_context_size, and summing N calls gives
+  // N × context_size which gets clamped to contextWindow (e.g. 200k).
+  // See: https://github.com/openclaw/openclaw/issues/13698
+  //
+  // We use lastInput/lastCacheRead/lastCacheWrite (from the most recent API call) for
+  // cache-related fields, but keep accumulated output (total generated text this turn).
+  const lastPromptTokens = usage.lastInput + usage.lastCacheRead + usage.lastCacheWrite;
   return {
-    input: usage.input || undefined,
+    input: usage.lastInput || undefined,
     output: usage.output || undefined,
-    cacheRead: usage.cacheRead || undefined,
-    cacheWrite: usage.cacheWrite || undefined,
-    total: usage.total || derivedTotal || undefined,
+    cacheRead: usage.lastCacheRead || undefined,
+    cacheWrite: usage.lastCacheWrite || undefined,
+    total: lastPromptTokens + usage.output || undefined,
   };
 };
 
@@ -387,6 +412,7 @@ export async function runEmbeddedPiAgent(
       let overflowCompactionAttempts = 0;
       let toolResultTruncationAttempted = false;
       const usageAccumulator = createUsageAccumulator();
+      let lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
       let autoCompactionCount = 0;
       try {
         while (true) {
@@ -448,21 +474,33 @@ export async function runEmbeddedPiAgent(
             onToolResult: params.onToolResult,
             onAgentEvent: params.onAgentEvent,
             extraSystemPrompt: params.extraSystemPrompt,
+            inputProvenance: params.inputProvenance,
             streamParams: params.streamParams,
             ownerNumbers: params.ownerNumbers,
             enforceFinalTag: params.enforceFinalTag,
           });
 
-          const { aborted, promptError, timedOut, sessionIdUsed, lastAssistant } = attempt;
-          mergeUsageIntoAccumulator(
-            usageAccumulator,
-            attempt.attemptUsage ?? normalizeUsage(lastAssistant?.usage as UsageLike),
-          );
-          autoCompactionCount += Math.max(0, attempt.compactionCount ?? 0);
+          const {
+            aborted,
+            promptError,
+            timedOut,
+            timedOutDuringCompaction,
+            sessionIdUsed,
+            lastAssistant,
+          } = attempt;
+          const lastAssistantUsage = normalizeUsage(lastAssistant?.usage as UsageLike);
+          const attemptUsage = attempt.attemptUsage ?? lastAssistantUsage;
+          mergeUsageIntoAccumulator(usageAccumulator, attemptUsage);
+          // Keep prompt size from the latest model call so session totalTokens
+          // reflects current context usage, not accumulated tool-loop usage.
+          lastRunPromptUsage = lastAssistantUsage ?? attemptUsage;
+          const attemptCompactionCount = Math.max(0, attempt.compactionCount ?? 0);
+          autoCompactionCount += attemptCompactionCount;
           const formattedAssistantErrorText = lastAssistant
             ? formatAssistantErrorText(lastAssistant, {
                 cfg: params.config,
                 sessionKey: params.sessionKey ?? params.sessionId,
+                provider,
               })
             : undefined;
           const assistantErrorText =
@@ -474,14 +512,14 @@ export async function runEmbeddedPiAgent(
             ? (() => {
                 if (promptError) {
                   const errorText = describeUnknownError(promptError);
-                  if (isContextOverflowError(errorText)) {
+                  if (isLikelyContextOverflowError(errorText)) {
                     return { text: errorText, source: "promptError" as const };
                   }
                   // Prompt submission failed with a non-overflow error. Do not
                   // inspect prior assistant errors from history for this attempt.
                   return null;
                 }
-                if (assistantErrorText && isContextOverflowError(assistantErrorText)) {
+                if (assistantErrorText && isLikelyContextOverflowError(assistantErrorText)) {
                   return { text: assistantErrorText, source: "assistantError" as const };
                 }
                 return null;
@@ -489,20 +527,45 @@ export async function runEmbeddedPiAgent(
             : null;
 
           if (contextOverflowError) {
+            const overflowDiagId = createCompactionDiagId();
             const errorText = contextOverflowError.text;
             const msgCount = attempt.messagesSnapshot?.length ?? 0;
             log.warn(
               `[context-overflow-diag] sessionKey=${params.sessionKey ?? params.sessionId} ` +
                 `provider=${provider}/${modelId} source=${contextOverflowError.source} ` +
                 `messages=${msgCount} sessionFile=${params.sessionFile} ` +
-                `compactionAttempts=${overflowCompactionAttempts} error=${errorText.slice(0, 200)}`,
+                `diagId=${overflowDiagId} compactionAttempts=${overflowCompactionAttempts} ` +
+                `error=${errorText.slice(0, 200)}`,
             );
             const isCompactionFailure = isCompactionFailureError(errorText);
-            // Attempt auto-compaction on context overflow (not compaction_failure)
+            const hadAttemptLevelCompaction = attemptCompactionCount > 0;
+            // If this attempt already compacted (SDK auto-compaction), avoid immediately
+            // running another explicit compaction for the same overflow trigger.
             if (
               !isCompactionFailure &&
+              hadAttemptLevelCompaction &&
               overflowCompactionAttempts < MAX_OVERFLOW_COMPACTION_ATTEMPTS
             ) {
+              overflowCompactionAttempts++;
+              log.warn(
+                `context overflow persisted after in-attempt compaction (attempt ${overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}); retrying prompt without additional compaction for ${provider}/${modelId}`,
+              );
+              continue;
+            }
+            // Attempt explicit overflow compaction only when this attempt did not
+            // already auto-compact.
+            if (
+              !isCompactionFailure &&
+              !hadAttemptLevelCompaction &&
+              overflowCompactionAttempts < MAX_OVERFLOW_COMPACTION_ATTEMPTS
+            ) {
+              if (log.isEnabled("debug")) {
+                log.debug(
+                  `[compaction-diag] decision diagId=${overflowDiagId} branch=compact ` +
+                    `isCompactionFailure=${isCompactionFailure} hasOversizedToolResults=unknown ` +
+                    `attempt=${overflowCompactionAttempts + 1} maxAttempts=${MAX_OVERFLOW_COMPACTION_ATTEMPTS}`,
+                );
+              }
               overflowCompactionAttempts++;
               log.warn(
                 `context overflow detected (attempt ${overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}); attempting auto-compaction for ${provider}/${modelId}`,
@@ -522,11 +585,16 @@ export async function runEmbeddedPiAgent(
                 senderIsOwner: params.senderIsOwner,
                 provider,
                 model: modelId,
+                runId: params.runId,
                 thinkLevel,
                 reasoningLevel: params.reasoningLevel,
                 bashElevated: params.bashElevated,
                 extraSystemPrompt: params.extraSystemPrompt,
                 ownerNumbers: params.ownerNumbers,
+                trigger: "overflow",
+                diagId: overflowDiagId,
+                attempt: overflowCompactionAttempts,
+                maxAttempts: MAX_OVERFLOW_COMPACTION_ATTEMPTS,
               });
               if (compactResult.compacted) {
                 autoCompactionCount += 1;
@@ -550,6 +618,13 @@ export async function runEmbeddedPiAgent(
                 : false;
 
               if (hasOversized) {
+                if (log.isEnabled("debug")) {
+                  log.debug(
+                    `[compaction-diag] decision diagId=${overflowDiagId} branch=truncate_tool_results ` +
+                      `isCompactionFailure=${isCompactionFailure} hasOversizedToolResults=${hasOversized} ` +
+                      `attempt=${overflowCompactionAttempts} maxAttempts=${MAX_OVERFLOW_COMPACTION_ATTEMPTS}`,
+                  );
+                }
                 toolResultTruncationAttempted = true;
                 log.warn(
                   `[context-overflow-recovery] Attempting tool result truncation for ${provider}/${modelId} ` +
@@ -572,7 +647,25 @@ export async function runEmbeddedPiAgent(
                 log.warn(
                   `[context-overflow-recovery] Tool result truncation did not help: ${truncResult.reason ?? "unknown"}`,
                 );
+              } else if (log.isEnabled("debug")) {
+                log.debug(
+                  `[compaction-diag] decision diagId=${overflowDiagId} branch=give_up ` +
+                    `isCompactionFailure=${isCompactionFailure} hasOversizedToolResults=${hasOversized} ` +
+                    `attempt=${overflowCompactionAttempts} maxAttempts=${MAX_OVERFLOW_COMPACTION_ATTEMPTS}`,
+                );
               }
+            }
+            if (
+              (isCompactionFailure ||
+                overflowCompactionAttempts >= MAX_OVERFLOW_COMPACTION_ATTEMPTS ||
+                toolResultTruncationAttempted) &&
+              log.isEnabled("debug")
+            ) {
+              log.debug(
+                `[compaction-diag] decision diagId=${overflowDiagId} branch=give_up ` +
+                  `isCompactionFailure=${isCompactionFailure} hasOversizedToolResults=unknown ` +
+                  `attempt=${overflowCompactionAttempts} maxAttempts=${MAX_OVERFLOW_COMPACTION_ATTEMPTS}`,
+              );
             }
             const kind = isCompactionFailure ? "compaction_failure" : "context_overflow";
             return {
@@ -732,7 +825,9 @@ export async function runEmbeddedPiAgent(
           }
 
           // Treat timeout as potential rate limit (Antigravity hangs on rate limit)
-          const shouldRotate = (!aborted && failoverFailure) || timedOut;
+          // But exclude post-prompt compaction timeouts (model succeeded; no profile issue)
+          const shouldRotate =
+            (!aborted && failoverFailure) || (timedOut && !timedOutDuringCompaction);
 
           if (shouldRotate) {
             if (lastProfileId) {
@@ -771,6 +866,7 @@ export async function runEmbeddedPiAgent(
                   ? formatAssistantErrorText(lastAssistant, {
                       cfg: params.config,
                       sessionKey: params.sessionKey ?? params.sessionId,
+                      provider,
                     })
                   : undefined) ||
                 lastAssistant?.errorMessage?.trim() ||
@@ -779,7 +875,7 @@ export async function runEmbeddedPiAgent(
                   : rateLimitFailure
                     ? "LLM request rate limited."
                     : billingFailure
-                      ? BILLING_ERROR_USER_MESSAGE
+                      ? formatBillingErrorMessage(provider)
                       : authFailure
                         ? "LLM request unauthorized."
                         : "LLM request failed.");
@@ -797,11 +893,20 @@ export async function runEmbeddedPiAgent(
           }
 
           const usage = toNormalizedUsage(usageAccumulator);
+          // Extract the last individual API call's usage for context-window
+          // utilization display. The accumulated `usage` sums input tokens
+          // across all calls (tool-use loops, compaction retries), which
+          // overstates the actual context size. `lastCallUsage` reflects only
+          // the final call, giving an accurate snapshot of current context.
+          const lastCallUsage = normalizeUsage(lastAssistant?.usage as UsageLike);
+          const promptTokens = derivePromptTokens(lastRunPromptUsage);
           const agentMeta: EmbeddedPiAgentMeta = {
             sessionId: sessionIdUsed,
             provider: lastAssistant?.provider ?? provider,
             model: lastAssistant?.model ?? model.id,
             usage,
+            lastCallUsage: lastCallUsage ?? undefined,
+            promptTokens,
             compactionCount: autoCompactionCount > 0 ? autoCompactionCount : undefined,
           };
 
@@ -812,11 +917,37 @@ export async function runEmbeddedPiAgent(
             lastToolError: attempt.lastToolError,
             config: params.config,
             sessionKey: params.sessionKey ?? params.sessionId,
+            provider,
             verboseLevel: params.verboseLevel,
             reasoningLevel: params.reasoningLevel,
             toolResultFormat: resolvedToolResultFormat,
             inlineToolResultsAllowed: false,
           });
+
+          // Timeout aborts can leave the run without any assistant payloads.
+          // Emit an explicit timeout error instead of silently completing, so
+          // callers do not lose the turn as an orphaned user message.
+          if (timedOut && !timedOutDuringCompaction && payloads.length === 0) {
+            return {
+              payloads: [
+                {
+                  text:
+                    "Request timed out before a response was generated. " +
+                    "Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
+                  isError: true,
+                },
+              ],
+              meta: {
+                durationMs: Date.now() - started,
+                agentMeta,
+                aborted,
+                systemPromptReport: attempt.systemPromptReport,
+              },
+              didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+              messagingToolSentTexts: attempt.messagingToolSentTexts,
+              messagingToolSentTargets: attempt.messagingToolSentTargets,
+            };
+          }
 
           log.debug(
             `embedded run done: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - started} aborted=${aborted}`,

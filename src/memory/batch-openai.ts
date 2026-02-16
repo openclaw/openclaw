@@ -1,6 +1,8 @@
 import type { OpenAiEmbeddingClient } from "./embeddings-openai.js";
-import { retryAsync } from "../infra/retry.js";
-import { hashText } from "./internal.js";
+import { postJsonWithRetry } from "./batch-http.js";
+import { applyEmbeddingBatchOutputLine } from "./batch-output.js";
+import { buildBatchHeaders, normalizeBatchBaseUrl, splitBatchRequests } from "./batch-utils.js";
+import { hashText, runWithConcurrency } from "./internal.js";
 
 export type OpenAiBatchRequest = {
   custom_id: string;
@@ -35,43 +37,12 @@ export const OPENAI_BATCH_ENDPOINT = "/v1/embeddings";
 const OPENAI_BATCH_COMPLETION_WINDOW = "24h";
 const OPENAI_BATCH_MAX_REQUESTS = 50000;
 
-function getOpenAiBaseUrl(openAi: OpenAiEmbeddingClient): string {
-  return openAi.baseUrl?.replace(/\/$/, "") ?? "";
-}
-
-function getOpenAiHeaders(
-  openAi: OpenAiEmbeddingClient,
-  params: { json: boolean },
-): Record<string, string> {
-  const headers = openAi.headers ? { ...openAi.headers } : {};
-  if (params.json) {
-    if (!headers["Content-Type"] && !headers["content-type"]) {
-      headers["Content-Type"] = "application/json";
-    }
-  } else {
-    delete headers["Content-Type"];
-    delete headers["content-type"];
-  }
-  return headers;
-}
-
-function splitOpenAiBatchRequests(requests: OpenAiBatchRequest[]): OpenAiBatchRequest[][] {
-  if (requests.length <= OPENAI_BATCH_MAX_REQUESTS) {
-    return [requests];
-  }
-  const groups: OpenAiBatchRequest[][] = [];
-  for (let i = 0; i < requests.length; i += OPENAI_BATCH_MAX_REQUESTS) {
-    groups.push(requests.slice(i, i + OPENAI_BATCH_MAX_REQUESTS));
-  }
-  return groups;
-}
-
 async function submitOpenAiBatch(params: {
   openAi: OpenAiEmbeddingClient;
   requests: OpenAiBatchRequest[];
   agentId: string;
 }): Promise<OpenAiBatchStatus> {
-  const baseUrl = getOpenAiBaseUrl(params.openAi);
+  const baseUrl = normalizeBatchBaseUrl(params.openAi);
   const jsonl = params.requests.map((request) => JSON.stringify(request)).join("\n");
   const form = new FormData();
   form.append("purpose", "batch");
@@ -83,7 +54,7 @@ async function submitOpenAiBatch(params: {
 
   const fileRes = await fetch(`${baseUrl}/files`, {
     method: "POST",
-    headers: getOpenAiHeaders(params.openAi, { json: false }),
+    headers: buildBatchHeaders(params.openAi, { json: false }),
     body: form,
   });
   if (!fileRes.ok) {
@@ -95,52 +66,29 @@ async function submitOpenAiBatch(params: {
     throw new Error("openai batch file upload failed: missing file id");
   }
 
-  const batchRes = await retryAsync(
-    async () => {
-      const res = await fetch(`${baseUrl}/batches`, {
-        method: "POST",
-        headers: getOpenAiHeaders(params.openAi, { json: true }),
-        body: JSON.stringify({
-          input_file_id: filePayload.id,
-          endpoint: OPENAI_BATCH_ENDPOINT,
-          completion_window: OPENAI_BATCH_COMPLETION_WINDOW,
-          metadata: {
-            source: "openclaw-memory",
-            agent: params.agentId,
-          },
-        }),
-      });
-      if (!res.ok) {
-        const text = await res.text();
-        const err = new Error(`openai batch create failed: ${res.status} ${text}`) as Error & {
-          status?: number;
-        };
-        err.status = res.status;
-        throw err;
-      }
-      return res;
-    },
-    {
-      attempts: 3,
-      minDelayMs: 300,
-      maxDelayMs: 2000,
-      jitter: 0.2,
-      shouldRetry: (err) => {
-        const status = (err as { status?: number }).status;
-        return status === 429 || (typeof status === "number" && status >= 500);
+  return await postJsonWithRetry<OpenAiBatchStatus>({
+    url: `${baseUrl}/batches`,
+    headers: buildBatchHeaders(params.openAi, { json: true }),
+    body: {
+      input_file_id: filePayload.id,
+      endpoint: OPENAI_BATCH_ENDPOINT,
+      completion_window: OPENAI_BATCH_COMPLETION_WINDOW,
+      metadata: {
+        source: "openclaw-memory",
+        agent: params.agentId,
       },
     },
-  );
-  return (await batchRes.json()) as OpenAiBatchStatus;
+    errorPrefix: "openai batch create failed",
+  });
 }
 
 async function fetchOpenAiBatchStatus(params: {
   openAi: OpenAiEmbeddingClient;
   batchId: string;
 }): Promise<OpenAiBatchStatus> {
-  const baseUrl = getOpenAiBaseUrl(params.openAi);
+  const baseUrl = normalizeBatchBaseUrl(params.openAi);
   const res = await fetch(`${baseUrl}/batches/${params.batchId}`, {
-    headers: getOpenAiHeaders(params.openAi, { json: true }),
+    headers: buildBatchHeaders(params.openAi, { json: true }),
   });
   if (!res.ok) {
     const text = await res.text();
@@ -153,9 +101,9 @@ async function fetchOpenAiFileContent(params: {
   openAi: OpenAiEmbeddingClient;
   fileId: string;
 }): Promise<string> {
-  const baseUrl = getOpenAiBaseUrl(params.openAi);
+  const baseUrl = normalizeBatchBaseUrl(params.openAi);
   const res = await fetch(`${baseUrl}/files/${params.fileId}/content`, {
-    headers: getOpenAiHeaders(params.openAi, { json: true }),
+    headers: buildBatchHeaders(params.openAi, { json: true }),
   });
   if (!res.ok) {
     const text = await res.text();
@@ -245,41 +193,6 @@ async function waitForOpenAiBatch(params: {
   }
 }
 
-async function runWithConcurrency<T>(tasks: Array<() => Promise<T>>, limit: number): Promise<T[]> {
-  if (tasks.length === 0) {
-    return [];
-  }
-  const resolvedLimit = Math.max(1, Math.min(limit, tasks.length));
-  const results: T[] = Array.from({ length: tasks.length });
-  let next = 0;
-  let firstError: unknown = null;
-
-  const workers = Array.from({ length: resolvedLimit }, async () => {
-    while (true) {
-      if (firstError) {
-        return;
-      }
-      const index = next;
-      next += 1;
-      if (index >= tasks.length) {
-        return;
-      }
-      try {
-        results[index] = await tasks[index]();
-      } catch (err) {
-        firstError = err;
-        return;
-      }
-    }
-  });
-
-  await Promise.allSettled(workers);
-  if (firstError) {
-    throw firstError;
-  }
-  return results;
-}
-
 export async function runOpenAiEmbeddingBatches(params: {
   openAi: OpenAiEmbeddingClient;
   agentId: string;
@@ -293,7 +206,7 @@ export async function runOpenAiEmbeddingBatches(params: {
   if (params.requests.length === 0) {
     return new Map();
   }
-  const groups = splitOpenAiBatchRequests(params.requests);
+  const groups = splitBatchRequests(params.requests, OPENAI_BATCH_MAX_REQUESTS);
   const byCustomId = new Map<string, number[]>();
 
   const tasks = groups.map((group, groupIndex) => async () => {
@@ -348,32 +261,7 @@ export async function runOpenAiEmbeddingBatches(params: {
     const remaining = new Set(group.map((request) => request.custom_id));
 
     for (const line of outputLines) {
-      const customId = line.custom_id;
-      if (!customId) {
-        continue;
-      }
-      remaining.delete(customId);
-      if (line.error?.message) {
-        errors.push(`${customId}: ${line.error.message}`);
-        continue;
-      }
-      const response = line.response;
-      const statusCode = response?.status_code ?? 0;
-      if (statusCode >= 400) {
-        const message =
-          response?.body?.error?.message ??
-          (typeof response?.body === "string" ? response.body : undefined) ??
-          "unknown error";
-        errors.push(`${customId}: ${message}`);
-        continue;
-      }
-      const data = response?.body?.data ?? [];
-      const embedding = data[0]?.embedding ?? [];
-      if (embedding.length === 0) {
-        errors.push(`${customId}: empty embedding`);
-        continue;
-      }
-      byCustomId.set(customId, embedding);
+      applyEmbeddingBatchOutputLine({ line, remaining, errors, byCustomId });
     }
 
     if (errors.length > 0) {

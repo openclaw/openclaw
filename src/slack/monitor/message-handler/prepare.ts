@@ -35,15 +35,20 @@ import { buildPairingReply } from "../../../pairing/pairing-messages.js";
 import { upsertChannelPairingRequest } from "../../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../../routing/session-key.js";
-import { buildUntrustedChannelMetadata } from "../../../security/channel-metadata.js";
 import { reactSlackMessage } from "../../actions.js";
 import { sendMessageSlack } from "../../send.js";
 import { resolveSlackThreadContext } from "../../threading.js";
 import { resolveSlackAllowListMatch, resolveSlackUserAllowed } from "../allow-list.js";
 import { resolveSlackEffectiveAllowFrom } from "../auth.js";
 import { resolveSlackChannelConfig } from "../channel-config.js";
+import { stripSlackMentionsForCommandDetection } from "../commands.js";
 import { normalizeSlackChannelType, type SlackMonitorContext } from "../context.js";
-import { resolveSlackMedia, resolveSlackThreadStarter } from "../media.js";
+import {
+  resolveSlackMedia,
+  resolveSlackThreadHistory,
+  resolveSlackThreadStarter,
+} from "../media.js";
+import { resolveSlackRoomContextHints } from "../room-context.js";
 
 export async function prepareSlackMessage(params: {
   ctx: SlackMonitorContext;
@@ -249,7 +254,9 @@ export async function prepareSlackMessage(params: {
     cfg,
     surface: "slack",
   });
-  const hasControlCommandInMessage = hasControlCommand(message.text ?? "", cfg);
+  // Strip Slack mentions (<@U123>) before command detection so "@Labrador /new" is recognized
+  const textForCommandDetection = stripSlackMentionsForCommandDetection(message.text ?? "");
+  const hasControlCommandInMessage = hasControlCommand(textForCommandDetection, cfg);
 
   const ownerAuthorized = resolveSlackAllowListMatch({
     allowList: allowFromLower,
@@ -335,12 +342,16 @@ export async function prepareSlackMessage(params: {
     token: ctx.botToken,
     maxBytes: ctx.mediaMaxBytes,
   });
-  const rawBody = (message.text ?? "").trim() || media?.placeholder || "";
+  const mediaPlaceholder = media ? media.map((m) => m.placeholder).join(" ") : undefined;
+  const rawBody = (message.text ?? "").trim() || mediaPlaceholder || "";
   if (!rawBody) {
     return null;
   }
 
-  const ackReaction = resolveAckReaction(cfg, route.agentId);
+  const ackReaction = resolveAckReaction(cfg, route.agentId, {
+    channel: "slack",
+    accountId: account.accountId,
+  });
   const ackReactionValue = ackReaction ?? "";
 
   const shouldAckReaction = () =>
@@ -396,7 +407,11 @@ export async function prepareSlackMessage(params: {
       GroupSubject: isRoomish ? roomLabel : undefined,
       From: slackFrom,
     }) ?? (isDirectMessage ? senderName : roomLabel);
-  const textWithId = `${rawBody}\n[slack message id: ${message.ts} channel: ${message.channel}]`;
+  const threadInfo =
+    isThreadReply && threadTs
+      ? ` thread_ts: ${threadTs}${message.parent_user_id ? ` parent_user_id: ${message.parent_user_id}` : ""}`
+      : "";
+  const textWithId = `${rawBody}\n[slack message id: ${message.ts} channel: ${message.channel}${threadInfo}]`;
   const storePath = resolveStorePath(ctx.cfg.session?.store, {
     agentId: route.agentId,
   });
@@ -440,20 +455,15 @@ export async function prepareSlackMessage(params: {
 
   const slackTo = isDirectMessage ? `user:${message.user}` : `channel:${message.channel}`;
 
-  const untrustedChannelMetadata = isRoomish
-    ? buildUntrustedChannelMetadata({
-        source: "slack",
-        label: "Slack channel description",
-        entries: [channelInfo?.topic, channelInfo?.purpose],
-      })
-    : undefined;
-  const systemPromptParts = [channelConfig?.systemPrompt?.trim() || null].filter(
-    (entry): entry is string => Boolean(entry),
-  );
-  const groupSystemPrompt =
-    systemPromptParts.length > 0 ? systemPromptParts.join("\n\n") : undefined;
+  const { untrustedChannelMetadata, groupSystemPrompt } = resolveSlackRoomContextHints({
+    isRoomish,
+    channelInfo,
+    channelConfig,
+  });
 
   let threadStarterBody: string | undefined;
+  let threadHistoryBody: string | undefined;
+  let threadSessionPreviousTimestamp: number | undefined;
   let threadLabel: string | undefined;
   let threadStarterMedia: Awaited<ReturnType<typeof resolveSlackMedia>> = null;
   if (isThreadReply && threadTs) {
@@ -475,18 +485,78 @@ export async function prepareSlackMessage(params: {
           maxBytes: ctx.mediaMaxBytes,
         });
         if (threadStarterMedia) {
+          const starterPlaceholders = threadStarterMedia.map((m) => m.placeholder).join(", ");
           logVerbose(
-            `slack: hydrated thread starter file ${threadStarterMedia.placeholder} from root message`,
+            `slack: hydrated thread starter file ${starterPlaceholders} from root message`,
           );
         }
       }
     } else {
       threadLabel = `Slack thread ${roomLabel}`;
     }
+
+    // Fetch full thread history for new thread sessions
+    // This provides context of previous messages (including bot replies) in the thread
+    // Use the thread session key (not base session key) to determine if this is a new session
+    const threadInitialHistoryLimit = account.config?.thread?.initialHistoryLimit ?? 20;
+    threadSessionPreviousTimestamp = readSessionUpdatedAt({
+      storePath,
+      sessionKey, // Thread-specific session key
+    });
+    if (threadInitialHistoryLimit > 0 && !threadSessionPreviousTimestamp) {
+      const threadHistory = await resolveSlackThreadHistory({
+        channelId: message.channel,
+        threadTs,
+        client: ctx.app.client,
+        currentMessageTs: message.ts,
+        limit: threadInitialHistoryLimit,
+      });
+
+      if (threadHistory.length > 0) {
+        // Batch resolve user names to avoid N sequential API calls
+        const uniqueUserIds = [
+          ...new Set(threadHistory.map((m) => m.userId).filter((id): id is string => Boolean(id))),
+        ];
+        const userMap = new Map<string, { name?: string }>();
+        await Promise.all(
+          uniqueUserIds.map(async (id) => {
+            const user = await ctx.resolveUserName(id);
+            if (user) {
+              userMap.set(id, user);
+            }
+          }),
+        );
+
+        const historyParts: string[] = [];
+        for (const historyMsg of threadHistory) {
+          const msgUser = historyMsg.userId ? userMap.get(historyMsg.userId) : null;
+          const msgSenderName =
+            msgUser?.name ?? (historyMsg.botId ? `Bot (${historyMsg.botId})` : "Unknown");
+          const isBot = Boolean(historyMsg.botId);
+          const role = isBot ? "assistant" : "user";
+          const msgWithId = `${historyMsg.text}\n[slack message id: ${historyMsg.ts ?? "unknown"} channel: ${message.channel}]`;
+          historyParts.push(
+            formatInboundEnvelope({
+              channel: "Slack",
+              from: `${msgSenderName} (${role})`,
+              timestamp: historyMsg.ts ? Math.round(Number(historyMsg.ts) * 1000) : undefined,
+              body: msgWithId,
+              chatType: "channel",
+              envelope: envelopeOptions,
+            }),
+          );
+        }
+        threadHistoryBody = historyParts.join("\n\n");
+        logVerbose(
+          `slack: populated thread history with ${threadHistory.length} messages for new session`,
+        );
+      }
+    }
   }
 
   // Use thread starter media if current message has none
   const effectiveMedia = media ?? threadStarterMedia;
+  const firstMedia = effectiveMedia?.[0];
 
   const inboundHistory =
     isRoomish && ctx.historyLimit > 0
@@ -522,12 +592,23 @@ export async function prepareSlackMessage(params: {
     MessageThreadId: threadContext.messageThreadId,
     ParentSessionKey: threadKeys.parentSessionKey,
     ThreadStarterBody: threadStarterBody,
+    ThreadHistoryBody: threadHistoryBody,
+    IsFirstThreadTurn:
+      isThreadReply && threadTs && !threadSessionPreviousTimestamp ? true : undefined,
     ThreadLabel: threadLabel,
     Timestamp: message.ts ? Math.round(Number(message.ts) * 1000) : undefined,
     WasMentioned: isRoomish ? effectiveWasMentioned : undefined,
-    MediaPath: effectiveMedia?.path,
-    MediaType: effectiveMedia?.contentType,
-    MediaUrl: effectiveMedia?.path,
+    MediaPath: firstMedia?.path,
+    MediaType: firstMedia?.contentType,
+    MediaUrl: firstMedia?.path,
+    MediaPaths:
+      effectiveMedia && effectiveMedia.length > 0 ? effectiveMedia.map((m) => m.path) : undefined,
+    MediaUrls:
+      effectiveMedia && effectiveMedia.length > 0 ? effectiveMedia.map((m) => m.path) : undefined,
+    MediaTypes:
+      effectiveMedia && effectiveMedia.length > 0
+        ? effectiveMedia.map((m) => m.contentType ?? "")
+        : undefined,
     CommandAuthorized: commandAuthorized,
     OriginatingChannel: "slack" as const,
     OriginatingTo: slackTo,

@@ -18,6 +18,7 @@ vi.mock("../../auto-reply/dispatch.js", async (importOriginal) => {
 });
 
 import { createSignalEventHandler } from "./event-handler.js";
+import { renderSignalMentions } from "./mentions.js";
 
 function createBaseDeps(overrides: Record<string, unknown> = {}) {
   return {
@@ -53,6 +54,12 @@ type GroupEventOpts = {
   message?: string;
   attachments?: unknown[];
   quoteText?: string;
+  mentions?: Array<{
+    uuid?: string;
+    number?: string;
+    start?: number;
+    length?: number;
+  }> | null;
 };
 
 function makeGroupEvent(opts: GroupEventOpts) {
@@ -67,6 +74,7 @@ function makeGroupEvent(opts: GroupEventOpts) {
           message: opts.message ?? "",
           attachments: opts.attachments ?? [],
           quote: opts.quoteText ? { text: opts.quoteText } : undefined,
+          mentions: opts.mentions ?? undefined,
           groupInfo: { groupId: "g1", groupName: "Test Group" },
         },
       },
@@ -202,5 +210,95 @@ describe("signal mention gating", () => {
 
     await handler(makeGroupEvent({ message: "/help" }));
     expect(capturedCtx).toBeTruthy();
+  });
+
+  it("hydrates mention placeholders before trimming so offsets stay aligned", async () => {
+    capturedCtx = undefined;
+    const handler = createSignalEventHandler(
+      createBaseDeps({
+        cfg: {
+          messages: { inbound: { debounceMs: 0 }, groupChat: { mentionPatterns: ["@bot"] } },
+          channels: { signal: { groups: { "*": { requireMention: false } } } },
+        },
+      }),
+    );
+
+    const placeholder = "\uFFFC";
+    const message = `\n${placeholder} hi ${placeholder}`;
+    const firstStart = message.indexOf(placeholder);
+    const secondStart = message.indexOf(placeholder, firstStart + 1);
+
+    await handler(
+      makeGroupEvent({
+        message,
+        mentions: [
+          { uuid: "123e4567", start: firstStart, length: placeholder.length },
+          { number: "+15550002222", start: secondStart, length: placeholder.length },
+        ],
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    const body = String(capturedCtx?.Body ?? "");
+    expect(body).toContain("@123e4567 hi @+15550002222");
+    expect(body).not.toContain(placeholder);
+  });
+
+  it("counts mention metadata replacements toward requireMention gating", async () => {
+    capturedCtx = undefined;
+    const handler = createSignalEventHandler(
+      createBaseDeps({
+        cfg: {
+          messages: { inbound: { debounceMs: 0 }, groupChat: { mentionPatterns: ["@123e4567"] } },
+          channels: { signal: { groups: { "*": { requireMention: true } } } },
+        },
+      }),
+    );
+
+    const placeholder = "\uFFFC";
+    const message = ` ${placeholder} ping`;
+    const start = message.indexOf(placeholder);
+
+    await handler(
+      makeGroupEvent({
+        message,
+        mentions: [{ uuid: "123e4567", start, length: placeholder.length }],
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    expect(String(capturedCtx?.Body ?? "")).toContain("@123e4567");
+    expect(capturedCtx?.WasMentioned).toBe(true);
+  });
+});
+
+describe("renderSignalMentions", () => {
+  const PLACEHOLDER = "\uFFFC";
+
+  it("returns the original message when no mentions are provided", () => {
+    const message = `${PLACEHOLDER} ping`;
+    expect(renderSignalMentions(message, null)).toBe(message);
+    expect(renderSignalMentions(message, [])).toBe(message);
+  });
+
+  it("replaces placeholder code points using mention metadata", () => {
+    const message = `${PLACEHOLDER} hi ${PLACEHOLDER}!`;
+    const normalized = renderSignalMentions(message, [
+      { uuid: "abc-123", start: 0, length: 1 },
+      { number: "+15550005555", start: message.lastIndexOf(PLACEHOLDER), length: 1 },
+    ]);
+
+    expect(normalized).toBe("@abc-123 hi @+15550005555!");
+  });
+
+  it("skips mentions that lack identifiers or out-of-bounds spans", () => {
+    const message = `${PLACEHOLDER} hi`;
+    const normalized = renderSignalMentions(message, [
+      { name: "ignored" },
+      { uuid: "valid", start: 0, length: 1 },
+      { number: "+1555", start: 999, length: 1 },
+    ]);
+
+    expect(normalized).toBe("@valid hi");
   });
 });
