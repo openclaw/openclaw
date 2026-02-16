@@ -19,8 +19,9 @@ def ts_to_seconds(ts: str) -> int:
 
 def with_timestamp_url(url: str, ts: str) -> str:
     sec = ts_to_seconds(ts)
-    joiner = '&' if '?' in url else '?'
-    return f"{url}{joiner}t={sec}s"
+    base_url = url.split('#', 1)[0]  # drop fragment so query params are honored
+    joiner = '&' if '?' in base_url else '?'
+    return f"{base_url}{joiner}t={sec}s"
 
 
 def run_extract(url: str) -> str:
