@@ -594,6 +594,46 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
+  it("does not overwrite preview with subsequent final payloads", async () => {
+    const draftStream = createDraftStream(999);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Checking..." });
+        // First final payload: model text → edits the preview.
+        await dispatcherOptions.deliver({ text: "Here are your results" }, { kind: "final" });
+        // Second final payload: tool error warning → should NOT overwrite the preview.
+        await dispatcherOptions.deliver(
+          { text: "\u26a0\ufe0f \ud83d\udee0\ufe0f Exec: cmd failed: error" },
+          { kind: "final" },
+        );
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "999" });
+
+    await dispatchWithContext({ context: createContext() });
+
+    // Preview should be edited only once with the first final payload.
+    expect(editMessageTelegram).toHaveBeenCalledTimes(1);
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      999,
+      "Here are your results",
+      expect.any(Object),
+    );
+    // Second final payload should fall through to deliverReplies as a new message.
+    expect(deliverReplies).toHaveBeenCalledTimes(1);
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [expect.objectContaining({ text: "\u26a0\ufe0f \ud83d\udee0\ufe0f Exec: cmd failed: error" })],
+      }),
+    );
+    // Preview should NOT be cleared since it was finalized via edit.
+    expect(draftStream.clear).not.toHaveBeenCalled();
+  });
+
   it("does not force new message on first assistant message start", async () => {
     const draftStream = createDraftStream(999);
     createTelegramDraftStream.mockReturnValue(draftStream);
