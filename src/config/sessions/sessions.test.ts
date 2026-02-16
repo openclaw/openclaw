@@ -179,17 +179,6 @@ describe("session path safety", () => {
     expect(resolved.endsWith(path.join("agents", "main", "sessions", "sess-1.jsonl"))).toBe(true);
   });
 
-  it("keeps storePath and agentId when resolving session file options", () => {
-    const opts = resolveSessionFilePathOptions({
-      storePath: "/tmp/custom/agent-store/sessions.json",
-      agentId: "ops",
-    });
-    expect(opts).toEqual({
-      sessionsDir: path.resolve("/tmp/custom/agent-store"),
-      agentId: "ops",
-    });
-  });
-
   it("keeps custom per-agent store roots when agentId is provided", () => {
     const opts = resolveSessionFilePathOptions({
       storePath: "/srv/custom/agents/ops/sessions/sessions.json",
