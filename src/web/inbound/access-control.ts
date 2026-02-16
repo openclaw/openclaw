@@ -1,6 +1,5 @@
 import { loadConfig } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
-import { buildPairingReply } from "../../pairing/pairing-messages.js";
 import {
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
@@ -28,10 +27,6 @@ export async function checkInboundAccessControl(params: {
   messageTimestampMs?: number;
   connectedAtMs?: number;
   pairingGraceMs?: number;
-  sock: {
-    sendMessage: (jid: string, content: { text: string }) => Promise<unknown>;
-  };
-  remoteJid: string;
 }): Promise<InboundAccessControlResult> {
   const cfg = loadConfig();
   const account = resolveWhatsAppAccount({
@@ -149,7 +144,7 @@ export async function checkInboundAccessControl(params: {
           if (suppressPairingReply) {
             logVerbose(`Skipping pairing reply for historical DM from ${candidate}.`);
           } else {
-            const { code, created } = await upsertChannelPairingRequest({
+            const { created } = await upsertChannelPairingRequest({
               channel: "whatsapp",
               id: candidate,
               accountId: account.accountId,
@@ -159,17 +154,6 @@ export async function checkInboundAccessControl(params: {
               logVerbose(
                 `whatsapp pairing request sender=${candidate} name=${params.pushName ?? "unknown"}`,
               );
-              try {
-                await params.sock.sendMessage(params.remoteJid, {
-                  text: buildPairingReply({
-                    channel: "whatsapp",
-                    idLine: `Your WhatsApp phone number: ${candidate}`,
-                    code,
-                  }),
-                });
-              } catch (err) {
-                logVerbose(`whatsapp pairing reply failed for ${candidate}: ${String(err)}`);
-              }
             }
           }
         } else {

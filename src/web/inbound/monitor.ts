@@ -209,8 +209,6 @@ export async function monitorWebInbox(options: {
         isFromMe: Boolean(msg.key?.fromMe),
         messageTimestampMs,
         connectedAtMs,
-        sock: { sendMessage: (jid, content) => sock.sendMessage(jid, content) },
-        remoteJid,
       });
       if (!access.allowed) {
         continue;

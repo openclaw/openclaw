@@ -182,13 +182,7 @@ describe("web monitor inbox", () => {
     sock.ev.emit("messages.upsert", upsertBlocked);
     await new Promise((resolve) => setImmediate(resolve));
     expect(onMessage).not.toHaveBeenCalled();
-    expect(sock.sendMessage).toHaveBeenCalledTimes(1);
-    expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
-      text: expect.stringContaining("Your WhatsApp phone number: +999"),
-    });
-    expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
-      text: expect.stringContaining("Pairing code: PAIRCODE"),
-    });
+    expect(sock.sendMessage).not.toHaveBeenCalled();
 
     const upsertBlockedAgain = {
       type: "notify",
@@ -208,7 +202,7 @@ describe("web monitor inbox", () => {
     sock.ev.emit("messages.upsert", upsertBlockedAgain);
     await new Promise((resolve) => setImmediate(resolve));
     expect(onMessage).not.toHaveBeenCalled();
-    expect(sock.sendMessage).toHaveBeenCalledTimes(1);
+    expect(sock.sendMessage).not.toHaveBeenCalled();
 
     // Message from self should be allowed
     const upsertSelf = {

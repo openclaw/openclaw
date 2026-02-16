@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  sendMessageMock,
   setAccessControlTestConfig,
   setupAccessControlTestHarness,
   upsertPairingRequestMock,
@@ -19,15 +18,12 @@ async function checkUnauthorizedWorkDmSender() {
     group: false,
     pushName: "Stranger",
     isFromMe: false,
-    sock: { sendMessage: sendMessageMock },
-    remoteJid: "15550001111@s.whatsapp.net",
   });
 }
 
 function expectSilentlyBlocked(result: { allowed: boolean }) {
   expect(result.allowed).toBe(false);
   expect(upsertPairingRequestMock).not.toHaveBeenCalled();
-  expect(sendMessageMock).not.toHaveBeenCalled();
 }
 
 describe("checkInboundAccessControl pairing grace", () => {
@@ -44,8 +40,6 @@ describe("checkInboundAccessControl pairing grace", () => {
       messageTimestampMs,
       connectedAtMs,
       pairingGraceMs: 30_000,
-      sock: { sendMessage: sendMessageMock },
-      remoteJid: "15550001111@s.whatsapp.net",
     });
   }
 
@@ -54,15 +48,13 @@ describe("checkInboundAccessControl pairing grace", () => {
 
     expect(result.allowed).toBe(false);
     expect(upsertPairingRequestMock).not.toHaveBeenCalled();
-    expect(sendMessageMock).not.toHaveBeenCalled();
   });
 
-  it("sends pairing replies for live DMs", async () => {
+  it("records pairing request but does not reply for live DMs", async () => {
     const result = await runPairingGraceCase(1_000_000 - 10_000);
 
     expect(result.allowed).toBe(false);
     expect(upsertPairingRequestMock).toHaveBeenCalled();
-    expect(sendMessageMock).toHaveBeenCalled();
   });
 });
 
