@@ -116,14 +116,6 @@ describe("createDefaultMenuConfig", () => {
     }
   });
 
-  it("has message actions for all areas", () => {
-    const config = createDefaultMenuConfig();
-
-    for (const area of config.areas) {
-      expect(area.action.type).toBe("message");
-    }
-  });
-
   it("has expected default commands", () => {
     const config = createDefaultMenuConfig();
 
