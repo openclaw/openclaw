@@ -1,28 +1,29 @@
 # Next Story Recommendation
 
-Canonical backlog source:
-
-- `ai_dispatch_agile_project_package/backlog/backlog.csv`
+**Canonical planning source:** `real-dispatch-agile-package/README.md`  
+Backlog: `real-dispatch-agile-package/02-Backlog/02-Stories.md`  
+Sprint plan: `real-dispatch-agile-package/03-Delivery/01-Sprint-Plan.md`  
+PR plan: `real-dispatch-agile-package/03-Delivery/03-PR-Plan.md`
 
 ## Readiness Note
 
-The backlog is in v0 completion mode and now includes an execution-ready pack for the engineering team.
+Current backlog is in post-v0 transition mode and now tracks vNext readiness work in `E#-F#-S#` story form.
 
-- Readiness pack: `ai_dispatch_agile_project_package/docs/13_V0_Engineering_Readiness_Bundle.md`
-- Core plan: `ai_dispatch_agile_project_package/docs/12_Sprint_Plan.md`
+- Readiness pack: `real-dispatch-agile-package/02-Backlog/02-Stories.md`
+- Core plan: `real-dispatch-agile-package/03-Delivery/01-Sprint-Plan.md`
 
 ## Next active story is
 
-`GLZ-09`
+`E12-F1-S1`
 
 ## Recommended sequence
 
-`V0-BOOTSTRAP` -> `V0-WORKER-LAUNCH` -> `GLZ-01` -> `GLZ-02` -> `GLZ-03` -> `V0-E2E-LOCK` -> `GLZ-04` -> `GLZ-05` -> `GLZ-06` -> `GLZ-07` -> `GLZ-08` -> `GLZ-09` -> `GLZ-10` -> `GLZ-11` -> `GLZ-12` -> `V0-LAUNCH-GATE`.
+`E1` -> `E2` -> `E3` -> `E4` -> `E5` -> `E6` -> `E7` -> `E11` -> `E12`.
 
 ## Immediate action now
 
-1. Confirm `GLZ-09` acceptance criteria are testable and evidence requirements are deterministic.
-2. Confirm owner role availability (`Product Architect`, `Automation Lead`) and blind-closeout policy boundaries are in place.
-3. Implement/verify one negative-path escalation trigger when ambiguity or high-risk evidence gaps require manual closeout.
-4. After `GLZ-09` completes, confirm `GLZ-12` acceptance criteria (operator override, autonomy pause, rollback, and evidence replay retention) are testable.
-5. Execute required acceptance checks before opening `V0-LAUNCH-GATE`.
+1. Confirm `E12-F1-S1` acceptance criteria are testable and evidence requirements are deterministic.
+2. Confirm owner role availability (`Product Architect`, `Automation Lead`) and escalation policy boundaries are in place.
+3. Implement/verify one negative-path escalation trigger when ambiguity or high-risk evidence gaps require manual handoff.
+4. After `E12-F1-S1` completes, confirm `E7-F2-S1` acceptance criteria (operator override, autonomy pause, rollback, and evidence replay retention) are testable.
+5. Execute required acceptance checks before opening PR handoff for closeout readiness.

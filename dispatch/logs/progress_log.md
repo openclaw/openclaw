@@ -1,3 +1,5 @@
+> DEPRECATED: historical process log. Legacy `GLZ-*`, `MVP-*`, and `V0-*` identifiers are kept for continuity only and are not authoritative. Current planning source-of-truth is `real-dispatch-agile-package/README.md`.
+
 ## 2026-02-14 09:35 PST
 
 ### Process checkpoint: launch reproducibility capture
@@ -1184,7 +1186,7 @@ Files Modified:
 - `dispatch/tests/mvp_04_evidence_hardening.node.test.mjs`
 - `dispatch/tests/story_07_evidence_api.node.test.mjs`
 - `dispatch/tests/story_08_e2e_canonical.node.test.mjs`
-- `ai_dispatch_agile_project_package/backlog/backlog.csv`
+- `real-dispatch-agile-package/02-Backlog/02-Stories.md`
 - `dispatch/logs/backlog_status.md`
 - `dispatch/logs/current_work_item.md`
 - `dispatch/logs/next_story_recommendation.md`
@@ -1237,7 +1239,7 @@ Files Modified:
 - `package.json`
 - `README.md`
 - `docs/reference/RELEASING.md`
-- `ai_dispatch_agile_project_package/backlog/backlog.csv`
+- `real-dispatch-agile-package/02-Backlog/02-Stories.md`
 - `dispatch/logs/backlog_status.md`
 - `dispatch/logs/current_work_item.md`
 - `dispatch/logs/next_story_recommendation.md`
@@ -1296,7 +1298,7 @@ Files Modified:
 - `dispatch/ops/runbooks/auth_policy_failure.md`
 - `dispatch/ops/runbooks/mvp_06_on_call_drill.md`
 - `dispatch/tests/mvp_06_operability.node.test.mjs`
-- `ai_dispatch_agile_project_package/backlog/backlog.csv`
+- `real-dispatch-agile-package/02-Backlog/02-Stories.md`
 - `dispatch/logs/backlog_status.md`
 - `dispatch/logs/current_work_item.md`
 - `dispatch/logs/next_story_recommendation.md`
@@ -1362,7 +1364,7 @@ Files Modified:
 - `dispatch/api/README.md`
 - `dispatch/tools-plugin/README.md`
 - `dispatch/README.md`
-- `ai_dispatch_agile_project_package/backlog/backlog.csv`
+- `real-dispatch-agile-package/02-Backlog/02-Stories.md`
 - `dispatch/logs/backlog_status.md`
 - `dispatch/logs/current_work_item.md`
 - `dispatch/logs/next_story_recommendation.md`
@@ -1448,7 +1450,7 @@ Corrected sprint tracking drift by reconciling canonical backlog state with exec
 
 Changes:
 
-- Set `ai_dispatch_agile_project_package/backlog/backlog.csv` to reflect no outstanding work items.
+- Set `real-dispatch-agile-package/02-Backlog/02-Stories.md` to reflect no outstanding work items.
 - Updated process logs to remove `MVP-08` as an active item and mark it as the last completed story:
   - `dispatch/logs/backlog_status.md`
   - `dispatch/logs/current_work_item.md`

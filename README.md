@@ -76,6 +76,14 @@ Role policies and transition boundaries are defined in `/AGENTS.md`.
 - [OpenClaw reuse plan](docs/concepts/openclaw-reuse-plan.md)
 - [Dispatch setup guide](docs/start/openclaw.md)
 
+Canonical agile planning source:
+
+- [real-dispatch-agile-package](real-dispatch-agile-package/README.md)
+- [Definition of Done](real-dispatch-agile-package/02-Backlog/00-Definition-of-Done.md)
+- [Stories and epic sequence](real-dispatch-agile-package/02-Backlog/02-Stories.md)
+- [Release gates](real-dispatch-agile-package/03-Delivery/00-Release-Gates.md)
+- [PR plan](real-dispatch-agile-package/03-Delivery/03-PR-Plan.md)
+
 ## Development quickstart
 
 Runtime baseline: **Node 22+**.

@@ -1,30 +1,25 @@
 # Backlog Status
 
-Canonical backlog source:
-
-- `ai_dispatch_agile_project_package/backlog/backlog.csv`
-
-Backlog hygiene rules:
-
-- Keep active backlog items only in the canonical CSV above.
-- Do not duplicate backlog rows in this log.
-- Completed story history remains in `dispatch/logs/progress_log.md`.
+**Canonical planning source:** `real-dispatch-agile-package/README.md`  
+Backlog: `real-dispatch-agile-package/02-Backlog/02-Stories.md`  
+Sprint plan: `real-dispatch-agile-package/03-Delivery/01-Sprint-Plan.md`  
+PR plan: `real-dispatch-agile-package/03-Delivery/03-PR-Plan.md`
 
 Current active item:
 
-- `GLZ-09` (blind closeout candidate heuristics + manual escalation path).
-- Last completed work: `GLZ-11` (alerts, dashboard telemetry, and control-path readiness).
+- `E12-F1-S1` (publish operational runbooks and runbook evidence checks).
+- Last completed work: `E11-F1-S1` (evidence schema baseline).
 
 Current planning cadence:
 
-- Active sprint focus: `Sprint V0-3` (blocking pass into `V0-4`).
-- Active epic families: `EPIC-GZ-03`, `EPIC-GZ-04`, and `EPIC-V0-COMPLETE`.
+- Active sprint focus aligns with `real-dispatch-agile-package/03-Delivery/01-Sprint-Plan.md`.
+- Active epic families: `E12`, `E7`, and `E6`.
 
 Engineering handoff readiness:
 
 - Handoff contract now lives in:
-  - `ai_dispatch_agile_project_package/docs/12_Sprint_Plan.md`
-  - `ai_dispatch_agile_project_package/docs/13_V0_Engineering_Readiness_Bundle.md`
+  - `real-dispatch-agile-package/03-Delivery/01-Sprint-Plan.md`
+  - `real-dispatch-agile-package/03-Delivery/03-PR-Plan.md`
 - Blocker priority now is:
-  - `GLZ-09` must pass before downstream `GLZ-10` and closeout billing chain can be considered production-ready.
-  - `GLZ-12` requires operator/override evidence controls and rollback proof before `V0-LAUNCH-GATE`.
+  - `E12-F1-S1` must complete before closeout + rollout handoff can be considered production-ready.
+  - `E7-F2-S1` requires operator/override evidence controls and rollback proof before PR-ready controls are marked complete.

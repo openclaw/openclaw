@@ -1,17 +1,18 @@
 # Agent Review Summary (Ground Truth Contract)
 
-Generated from:
-- `ai_dispatch_agile_project_package/README.md`
-- `ai_dispatch_agile_project_package/docs/00_INDEX.md`
-- `ai_dispatch_agile_project_package/docs/01_PRD_v0.md`
-- `ai_dispatch_agile_project_package/docs/02_Workflows_and_State_Machine.md`
-- `ai_dispatch_agile_project_package/docs/03_System_Architecture.md`
-- `ai_dispatch_agile_project_package/docs/04_Data_Model.md`
-- `ai_dispatch_agile_project_package/docs/05_API_Spec_OpenAPI.yaml`
-- `ai_dispatch_agile_project_package/backlog/backlog.csv`
-- `ai_dispatch_agile_project_package/backlog/acceptance_criteria_checklist.md`
-- `ai_dispatch_agile_project_package/docs/11_Decision_Register.md`
-- `ai_dispatch_agile_project_package/schemas/audit_event.schema.json`
+Canonical planning source:
+
+- `real-dispatch-agile-package/README.md`
+- `real-dispatch-agile-package/00-Executive/01-Overview.md`
+- `real-dispatch-agile-package/00-Executive/02-Current-vs-Target.md`
+- `real-dispatch-agile-package/01-Architecture/01-Plane-Boundaries.md`
+- `real-dispatch-agile-package/01-Architecture/02-Repo-Layout-Target.md`
+- `real-dispatch-agile-package/01-Architecture/03-Contracts.md`
+- `real-dispatch-agile-package/02-Backlog/00-Definition-of-Done.md`
+- `real-dispatch-agile-package/02-Backlog/01-Epics.md`
+- `real-dispatch-agile-package/02-Backlog/02-Stories.md`
+- `real-dispatch-agile-package/03-Delivery/00-Release-Gates.md`
+- `real-dispatch-agile-package/03-Delivery/03-PR-Plan.md`
 
 ## 1) Canonical State Machine (v0)
 
@@ -38,6 +39,7 @@ Primary states and transitions:
 - `INVOICED -> CLOSED` (payment recorded / closure criteria met)
 
 Fail-closed rules (mandatory):
+
 - Invalid transitions are rejected.
 - Any mutation without idempotency key is rejected.
 - Completion without required evidence is rejected.
@@ -60,6 +62,7 @@ Closed mutating tools for v0 (must map 1:1 to command endpoints):
 - `billing.generate_invoice` -> `POST /tickets/{ticketId}/billing/generate-invoice`
 
 Enforcement boundary:
+
 - Agents never mutate directly.
 - Tool bridge allowlists by role/session.
 - `dispatch-api` is authoritative for authz + state transition + idempotency + audit.
@@ -75,6 +78,7 @@ Mandatory behavior for all command endpoints:
 - No duplicate transitions or duplicate audit events on safe replay.
 
 Reference storage pattern:
+
 - `idempotency_keys` table with unique key `(actor_id, endpoint, request_id)` plus request hash and cached response.
 
 ## 4) Audit Event Schema (Mandatory Fields)
@@ -91,14 +95,17 @@ Every successful mutation writes append-only audit event data including:
 - `created_at`
 
 Schema minimum required fields from JSON schema:
+
 - `id`, `ticket_id`, `actor`, `tool_name`, `request_id`, `created_at`
 
 Related transition record:
+
 - `ticket_state_transitions` includes `ticket_id`, `from`, `to`, `audit_event_id`, `timestamp`.
 
 ## 5) v0 Acceptance Criteria (Ship Gate)
 
 A. Enforcement and correctness:
+
 - all mutations only via dispatch-api command endpoints
 - all commands require idempotency
 - replay is deterministic and duplicate-safe
@@ -107,25 +114,30 @@ A. Enforcement and correctness:
 - server-side role/tool/state authz enforced
 
 B. Audit truth:
+
 - every successful mutation writes audit with actor/tool/before/after/correlation
 - timeline endpoint returns ordered complete events
 - correlation IDs propagate ingress -> tool bridge -> dispatch-api -> audit
 
 C. Evidence enforcement:
+
 - completion fails when required evidence missing
 - evidence references retrievable and object-store backed
 - no-signature requires explicit reason
 
 D. Closed toolset:
+
 - per-role allowlist enforced in bridge
 - unknown tools rejected
 - invocation envelope logged with request/correlation ids
 
 E. E2E proof:
+
 - canonical scenario passes locally and in CI
 - fail-closed policy-violation test exists
 
 F. Operability:
+
 - structured logs for every request
 - basic metrics for requests/errors/transitions
 - runbooks for stuck scheduling, completion rejected, idempotency conflicts
