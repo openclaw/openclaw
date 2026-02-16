@@ -1,5 +1,28 @@
 import { describe, expect, it } from "vitest";
-import { getHandlerFromModule } from "./load-module.js";
+import { getHandlerFromModule, isCjsInEsmError } from "./load-module.js";
+
+describe("isCjsInEsmError", () => {
+  it("returns true for 'module is not defined'", () => {
+    expect(isCjsInEsmError(new Error("module is not defined in ES module scope"))).toBe(true);
+  });
+
+  it("returns true for 'require is not defined'", () => {
+    expect(isCjsInEsmError(new Error("require is not defined in ES module scope"))).toBe(true);
+  });
+
+  it("returns true for ReferenceError mentioning module", () => {
+    expect(isCjsInEsmError(new ReferenceError("module is not defined"))).toBe(true);
+  });
+
+  it("returns true for ReferenceError mentioning require", () => {
+    expect(isCjsInEsmError(new ReferenceError("require is not defined"))).toBe(true);
+  });
+
+  it("returns false for other errors", () => {
+    expect(isCjsInEsmError(new Error("ENOENT: file not found"))).toBe(false);
+    expect(isCjsInEsmError(new SyntaxError("unexpected token"))).toBe(false);
+  });
+});
 
 describe("getHandlerFromModule", () => {
   it("returns function when default export is a function", () => {

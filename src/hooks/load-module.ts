@@ -13,7 +13,10 @@ const require = createRequire(import.meta.url);
 /** True if the error indicates the module is CJS but was loaded as ESM. */
 export function isCjsInEsmError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err);
-  return /module is not defined|ReferenceError.*\bmodule\b/.test(msg);
+  return (
+    /module is not defined|ReferenceError.*\bmodule\b/.test(msg) ||
+    /require is not defined|ReferenceError.*\brequire\b/.test(msg)
+  );
 }
 
 /**

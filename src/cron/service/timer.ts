@@ -168,9 +168,10 @@ export function armTimer(state: CronServiceState) {
     });
   }, clampedDelay);
   const nowForLog = state.deps.nowMs();
+  // Only log when nextAt or delay changed, so we avoid one line per second when something
+  // (e.g. cron list/status) calls armTimer in a tight loop with the same schedule.
   const skipLog =
     lastArmLog &&
-    nowForLog - lastArmLog.atMs < ARM_LOG_DEBOUNCE_MS &&
     lastArmLog.nextAt === nextAt &&
     lastArmLog.delayMs === clampedDelay;
   if (!skipLog) {
