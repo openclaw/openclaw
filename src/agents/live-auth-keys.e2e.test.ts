@@ -19,6 +19,7 @@ describe("isAnthropicBillingError", () => {
     const samples = [
       "HTTP 402 Payment Required",
       "status: 402",
+      "status code 402",
       "error code 402",
       '{"status":402,"type":"error"}',
       '{"code":402,"message":"payment required"}',

@@ -320,6 +320,34 @@ describe("runOnboardingWizard", () => {
     expect(runTui).not.toHaveBeenCalled();
   });
 
+  it("does not prompt for a default model after choosing claude-code-cli", async () => {
+    promptAuthChoiceGrouped.mockResolvedValueOnce("claude-code-cli");
+    promptDefaultModel.mockClear();
+    applyAuthChoice.mockClear();
+
+    const prompter = createWizardPrompter();
+    const runtime = createRuntime({ throwsOnExit: true });
+
+    await runOnboardingWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        installDaemon: false,
+        skipProviders: true,
+        skipSkills: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      runtime,
+      prompter,
+    );
+
+    expect(applyAuthChoice).toHaveBeenCalledWith(
+      expect.objectContaining({ authChoice: "claude-code-cli" }),
+    );
+    expect(promptDefaultModel).not.toHaveBeenCalled();
+  });
+
   async function runTuiHatchTest(params: {
     writeBootstrapFile: boolean;
     expectedMessage: string | undefined;

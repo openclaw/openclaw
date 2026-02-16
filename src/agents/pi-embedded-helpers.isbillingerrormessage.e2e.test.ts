@@ -46,6 +46,11 @@ describe("isBillingErrorMessage", () => {
     const samples = [
       "Your credit balance is too low to access the Anthropic API.",
       "insufficient credits",
+      "insufficient_quota",
+      "exceeded your current quota",
+      "billing hard limit reached",
+      "out of credits",
+      "credits exhausted",
       "Payment Required",
       "HTTP 402 Payment Required",
       "plans & billing",
@@ -82,6 +87,7 @@ describe("isBillingErrorMessage", () => {
     const realErrors = [
       "HTTP 402 Payment Required",
       "status: 402",
+      "status code 402",
       "error code 402",
       "http 402",
       "status=402 payment required",
@@ -320,6 +326,8 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("no api key found")).toBe("auth");
     expect(classifyFailoverReason("429 too many requests")).toBe("rate_limit");
     expect(classifyFailoverReason("resource has been exhausted")).toBe("rate_limit");
+    expect(classifyFailoverReason("insufficient_quota")).toBe("billing");
+    expect(classifyFailoverReason("exceeded your current quota")).toBe("billing");
     expect(
       classifyFailoverReason(
         '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',

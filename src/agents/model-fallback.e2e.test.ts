@@ -236,6 +236,14 @@ describe("runWithModelFallback", () => {
     });
   });
 
+  it("falls back on insufficient_quota billing errors", async () => {
+    await expectFallsBackToHaiku({
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      firstError: new Error("Error: insufficient_quota"),
+    });
+  });
+
   it("falls back to configured primary for override credential validation errors", async () => {
     const cfg = makeCfg();
     const run = vi.fn().mockImplementation(async (provider, model) => {

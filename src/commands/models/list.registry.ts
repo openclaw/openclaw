@@ -11,6 +11,7 @@ import {
   ANTIGRAVITY_OPUS_46_FORWARD_COMPAT_CANDIDATES,
   resolveForwardCompatModel,
 } from "../../agents/model-forward-compat.js";
+import { isCliProvider } from "../../agents/model-selection.js";
 import { ensureOpenClawModelsJson } from "../../agents/models-config.js";
 import { ensurePiAuthJsonFromAuthProfiles } from "../../agents/pi-auth-json.js";
 import type { ModelRegistry } from "../../agents/pi-model-discovery.js";
@@ -191,6 +192,22 @@ export function toModelRow(params: {
 }): ModelRow {
   const { model, key, tags, aliases = [], availableKeys, cfg, authStore } = params;
   if (!model) {
+    const slashIndex = key.indexOf("/");
+    const provider = slashIndex > 0 ? key.slice(0, slashIndex) : "";
+    const modelId = slashIndex > 0 ? key.slice(slashIndex + 1) : key;
+    if (provider && isCliProvider(provider, cfg)) {
+      const aliasTags = aliases.length > 0 ? [`alias:${aliases.join(",")}`] : [];
+      return {
+        key,
+        name: modelId || key,
+        input: "text",
+        contextWindow: null,
+        local: true,
+        available: true,
+        tags: [...tags, "cli", ...aliasTags],
+        missing: false,
+      };
+    }
     return {
       key,
       name: key,

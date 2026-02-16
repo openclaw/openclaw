@@ -231,6 +231,31 @@ describe("modelsStatusCommand auth overview", () => {
     );
   });
 
+  it("does not mark cli providers as missing auth", async () => {
+    const localRuntime = createRuntime();
+    const originalProfiles = { ...mocks.store.profiles };
+    mocks.store.profiles = {};
+    const originalEnvImpl = mocks.resolveEnvApiKey.getMockImplementation();
+    mocks.resolveEnvApiKey.mockImplementation(() => null);
+
+    try {
+      await withAgentScopeOverrides(
+        {
+          primary: "claude-cli/opus-4.6",
+          fallbacks: [],
+        },
+        async () => {
+          await modelsStatusCommand({ json: true, agent: "main" }, localRuntime as never);
+          const payload = JSON.parse(String((localRuntime.log as vi.Mock).mock.calls[0][0]));
+          expect(payload.auth.missingProvidersInUse).toEqual([]);
+        },
+      );
+    } finally {
+      mocks.store.profiles = originalProfiles;
+      mocks.resolveEnvApiKey.mockImplementation(originalEnvImpl);
+    }
+  });
+
   it("labels defaults when --agent has no overrides", async () => {
     const localRuntime = createRuntime();
     await withAgentScopeOverrides(

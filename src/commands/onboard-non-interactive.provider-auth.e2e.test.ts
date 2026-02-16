@@ -20,7 +20,12 @@ type OnboardEnv = {
 
 type ProviderAuthConfigSnapshot = {
   auth?: { profiles?: Record<string, { provider?: string; mode?: string }> };
-  agents?: { defaults?: { model?: { primary?: string } } };
+  agents?: {
+    defaults?: {
+      model?: { primary?: string };
+      cliBackends?: Record<string, { command?: string }>;
+    };
+  };
   models?: {
     providers?: Record<
       string,
@@ -293,6 +298,30 @@ describe("onboard (non-interactive): provider auth", () => {
         expect(profile.provider).toBe("anthropic");
         expect(profile.token).toBe(cleanToken);
       }
+    });
+  }, 60_000);
+
+  it("configures Claude Code CLI as default model in non-interactive mode", async () => {
+    await withOnboardEnv("openclaw-onboard-claude-code-cli-", async (env) => {
+      const cfg = await runOnboardingAndReadConfig(env, {
+        authChoice: "claude-code-cli",
+      });
+
+      expect(cfg.agents?.defaults?.model?.primary).toBe("claude-cli/opus-4.6");
+      const command = cfg.agents?.defaults?.cliBackends?.["claude-cli"]?.command;
+      if (command) {
+        expect(command.toLowerCase()).toContain("claude");
+      }
+    });
+  }, 60_000);
+
+  it("maps legacy claude-cli auth choice to claude-code-cli flow", async () => {
+    await withOnboardEnv("openclaw-onboard-claude-cli-legacy-", async (env) => {
+      const cfg = await runOnboardingAndReadConfig(env, {
+        authChoice: "claude-cli",
+      });
+
+      expect(cfg.agents?.defaults?.model?.primary).toBe("claude-cli/opus-4.6");
     });
   }, 60_000);
 

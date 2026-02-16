@@ -12,8 +12,11 @@ export const AUTH_CHOICE_LEGACY_ALIASES_FOR_CLI: ReadonlyArray<AuthChoice> = [
 export function normalizeLegacyOnboardAuthChoice(
   authChoice: AuthChoice | undefined,
 ): AuthChoice | undefined {
-  if (authChoice === "oauth" || authChoice === "claude-cli") {
+  if (authChoice === "oauth") {
     return "setup-token";
+  }
+  if (authChoice === "claude-cli") {
+    return "claude-code-cli";
   }
   if (authChoice === "codex-cli") {
     return "openai-codex";
