@@ -1,4 +1,4 @@
-import { isBlockedHostname, isPrivateIpAddress } from "openclaw/plugin-sdk";
+import { isBlockedHostname, isPrivateIpAddress } from "smart-agent-neo/plugin-sdk";
 
 export type UrbitBaseUrlValidation =
   | { ok: true; baseUrl: string; hostname: string }

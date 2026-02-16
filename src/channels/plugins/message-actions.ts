@@ -1,9 +1,9 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { SmartAgentNeoConfig } from "../../config/config.js";
 import type { ChannelMessageActionContext, ChannelMessageActionName } from "./types.js";
 import { getChannelPlugin, listChannelPlugins } from "./index.js";
 
-export function listChannelMessageActions(cfg: OpenClawConfig): ChannelMessageActionName[] {
+export function listChannelMessageActions(cfg: SmartAgentNeoConfig): ChannelMessageActionName[] {
   const actions = new Set<ChannelMessageActionName>(["send", "broadcast"]);
   for (const plugin of listChannelPlugins()) {
     const list = plugin.actions?.listActions?.({ cfg });
@@ -17,7 +17,7 @@ export function listChannelMessageActions(cfg: OpenClawConfig): ChannelMessageAc
   return Array.from(actions);
 }
 
-export function supportsChannelMessageButtons(cfg: OpenClawConfig): boolean {
+export function supportsChannelMessageButtons(cfg: SmartAgentNeoConfig): boolean {
   for (const plugin of listChannelPlugins()) {
     if (plugin.actions?.supportsButtons?.({ cfg })) {
       return true;
@@ -27,7 +27,7 @@ export function supportsChannelMessageButtons(cfg: OpenClawConfig): boolean {
 }
 
 export function supportsChannelMessageButtonsForChannel(params: {
-  cfg: OpenClawConfig;
+  cfg: SmartAgentNeoConfig;
   channel?: string;
 }): boolean {
   if (!params.channel) {
@@ -37,7 +37,7 @@ export function supportsChannelMessageButtonsForChannel(params: {
   return plugin?.actions?.supportsButtons?.({ cfg: params.cfg }) === true;
 }
 
-export function supportsChannelMessageCards(cfg: OpenClawConfig): boolean {
+export function supportsChannelMessageCards(cfg: SmartAgentNeoConfig): boolean {
   for (const plugin of listChannelPlugins()) {
     if (plugin.actions?.supportsCards?.({ cfg })) {
       return true;
@@ -47,7 +47,7 @@ export function supportsChannelMessageCards(cfg: OpenClawConfig): boolean {
 }
 
 export function supportsChannelMessageCardsForChannel(params: {
-  cfg: OpenClawConfig;
+  cfg: SmartAgentNeoConfig;
   channel?: string;
 }): boolean {
   if (!params.channel) {

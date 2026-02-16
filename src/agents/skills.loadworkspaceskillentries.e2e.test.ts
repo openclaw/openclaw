@@ -5,14 +5,14 @@ import { describe, expect, it } from "vitest";
 import { loadWorkspaceSkillEntries } from "./skills.js";
 
 async function setupWorkspaceWithProsePlugin() {
-  const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-"));
+  const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "smart-agent-neo-"));
   const managedDir = path.join(workspaceDir, ".managed");
   const bundledDir = path.join(workspaceDir, ".bundled");
-  const pluginRoot = path.join(workspaceDir, ".openclaw", "extensions", "open-prose");
+  const pluginRoot = path.join(workspaceDir, ".smart-agent-neo", "extensions", "open-prose");
 
   await fs.mkdir(path.join(pluginRoot, "skills", "prose"), { recursive: true });
   await fs.writeFile(
-    path.join(pluginRoot, "openclaw.plugin.json"),
+    path.join(pluginRoot, "smart-agent-neo.plugin.json"),
     JSON.stringify(
       {
         id: "open-prose",
@@ -36,7 +36,7 @@ async function setupWorkspaceWithProsePlugin() {
 
 describe("loadWorkspaceSkillEntries", () => {
   it("handles an empty managed skills dir without throwing", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-"));
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "smart-agent-neo-"));
     const managedDir = path.join(workspaceDir, ".managed");
     await fs.mkdir(managedDir, { recursive: true });
 

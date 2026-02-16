@@ -16,7 +16,7 @@ async function makeTempDir(prefix = "case") {
 }
 
 beforeAll(async () => {
-  fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-archive-"));
+  fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "smart-agent-neo-archive-"));
 });
 
 afterAll(async () => {

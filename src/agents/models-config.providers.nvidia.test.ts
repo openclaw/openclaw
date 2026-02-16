@@ -8,7 +8,7 @@ import { buildNvidiaProvider, resolveImplicitProviders } from "./models-config.p
 
 describe("NVIDIA provider", () => {
   it("should include nvidia when NVIDIA_API_KEY is configured", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    const agentDir = mkdtempSync(join(tmpdir(), "smart-agent-neo-test-"));
     const envSnapshot = captureEnv(["NVIDIA_API_KEY"]);
     process.env.NVIDIA_API_KEY = "test-key";
 
@@ -22,7 +22,7 @@ describe("NVIDIA provider", () => {
   });
 
   it("resolves the nvidia api key value from env", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    const agentDir = mkdtempSync(join(tmpdir(), "smart-agent-neo-test-"));
     const envSnapshot = captureEnv(["NVIDIA_API_KEY"]);
     process.env.NVIDIA_API_KEY = "nvidia-test-api-key";
 
@@ -59,7 +59,7 @@ describe("NVIDIA provider", () => {
 
 describe("MiniMax implicit provider (#15275)", () => {
   it("should use anthropic-messages API for API-key provider", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    const agentDir = mkdtempSync(join(tmpdir(), "smart-agent-neo-test-"));
     const envSnapshot = captureEnv(["MINIMAX_API_KEY"]);
     process.env.MINIMAX_API_KEY = "test-key";
 
@@ -76,7 +76,7 @@ describe("MiniMax implicit provider (#15275)", () => {
 
 describe("vLLM provider", () => {
   it("should not include vllm when no API key is configured", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    const agentDir = mkdtempSync(join(tmpdir(), "smart-agent-neo-test-"));
     const envSnapshot = captureEnv(["VLLM_API_KEY"]);
     delete process.env.VLLM_API_KEY;
 
@@ -89,7 +89,7 @@ describe("vLLM provider", () => {
   });
 
   it("should include vllm when VLLM_API_KEY is set", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    const agentDir = mkdtempSync(join(tmpdir(), "smart-agent-neo-test-"));
     const envSnapshot = captureEnv(["VLLM_API_KEY"]);
     process.env.VLLM_API_KEY = "test-key";
 

@@ -12,7 +12,7 @@ Status: external CLI integration. Gateway talks to `signal-cli` over HTTP JSON-R
 
 ## Prerequisites
 
-- OpenClaw installed on your server (Linux flow below tested on Ubuntu 24).
+- SmartAgentNeo installed on your server (Linux flow below tested on Ubuntu 24).
 - `signal-cli` available on the host where the gateway runs.
 - A phone number that can receive one verification SMS (for SMS registration path).
 - Browser access for Signal captcha (`signalcaptchas.org`) during registration.
@@ -22,10 +22,10 @@ Status: external CLI integration. Gateway talks to `signal-cli` over HTTP JSON-R
 1. Use a **separate Signal number** for the bot (recommended).
 2. Install `signal-cli` (Java required if you use the JVM build).
 3. Choose one setup path:
-   - **Path A (QR link):** `signal-cli link -n "OpenClaw"` and scan with Signal.
+   - **Path A (QR link):** `signal-cli link -n "SmartAgentNeo"` and scan with Signal.
    - **Path B (SMS register):** register a dedicated number with captcha + SMS verification.
-4. Configure OpenClaw and restart the gateway.
-5. Send a first DM and approve pairing (`openclaw pairing approve signal <CODE>`).
+4. Configure SmartAgentNeo and restart the gateway.
+5. Send a first DM and approve pairing (`smart-agent-neo pairing approve signal <CODE>`).
 
 Minimal config:
 
@@ -80,7 +80,7 @@ Disable with:
 
 1. Install `signal-cli` (JVM or native build).
 2. Link a bot account:
-   - `signal-cli link -n "OpenClaw"` then scan the QR in Signal.
+   - `signal-cli link -n "SmartAgentNeo"` then scan the QR in Signal.
 3. Configure Signal and start the gateway.
 
 Example:
@@ -138,20 +138,20 @@ signal-cli -a +<BOT_PHONE_NUMBER> register --captcha '<SIGNALCAPTCHA_URL>'
 signal-cli -a +<BOT_PHONE_NUMBER> verify <VERIFICATION_CODE>
 ```
 
-4. Configure OpenClaw, restart gateway, verify channel:
+4. Configure SmartAgentNeo, restart gateway, verify channel:
 
 ```bash
 # If you run the gateway as a user systemd service:
-systemctl --user restart openclaw-gateway
+systemctl --user restart smart-agent-neo-gateway
 
 # Then verify:
-openclaw doctor
-openclaw channels status --probe
+smart-agent-neo doctor
+smart-agent-neo channels status --probe
 ```
 
 5. Pair your DM sender:
    - Send any message to the bot number.
-   - Approve code on the server: `openclaw pairing approve signal <PAIRING_CODE>`.
+   - Approve code on the server: `smart-agent-neo pairing approve signal <PAIRING_CODE>`.
    - Save the bot number as a contact on your phone to avoid "Unknown contact".
 
 Important: registering a phone number account with `signal-cli` can de-authenticate the main Signal app session for that number. Prefer a dedicated bot number, or use QR link mode if you need to keep your existing phone app setup.
@@ -164,7 +164,7 @@ Upstream references:
 
 ## External daemon mode (httpUrl)
 
-If you want to manage `signal-cli` yourself (slow JVM cold starts, container init, or shared CPUs), run the daemon separately and point OpenClaw at it:
+If you want to manage `signal-cli` yourself (slow JVM cold starts, container init, or shared CPUs), run the daemon separately and point SmartAgentNeo at it:
 
 ```json5
 {
@@ -177,7 +177,7 @@ If you want to manage `signal-cli` yourself (slow JVM cold starts, container ini
 }
 ```
 
-This skips auto-spawn and the startup wait inside OpenClaw. For slow starts when auto-spawning, set `channels.signal.startupTimeoutMs`.
+This skips auto-spawn and the startup wait inside SmartAgentNeo. For slow starts when auto-spawning, set `channels.signal.startupTimeoutMs`.
 
 ## Access control (DMs + groups)
 
@@ -186,8 +186,8 @@ DMs:
 - Default: `channels.signal.dmPolicy = "pairing"`.
 - Unknown senders receive a pairing code; messages are ignored until approved (codes expire after 1 hour).
 - Approve via:
-  - `openclaw pairing list signal`
-  - `openclaw pairing approve signal <CODE>`
+  - `smart-agent-neo pairing list signal`
+  - `smart-agent-neo pairing approve signal <CODE>`
 - Pairing is the default token exchange for Signal DMs. Details: [Pairing](/channels/pairing)
 - UUID-only senders (from `sourceUuid`) are stored as `uuid:<id>` in `channels.signal.allowFrom`.
 
@@ -213,8 +213,8 @@ Groups:
 
 ## Typing + read receipts
 
-- **Typing indicators**: OpenClaw sends typing signals via `signal-cli sendTyping` and refreshes them while a reply is running.
-- **Read receipts**: when `channels.signal.sendReadReceipts` is true, OpenClaw forwards read receipts for allowed DMs.
+- **Typing indicators**: SmartAgentNeo sends typing signals via `signal-cli sendTyping` and refreshes them while a reply is running.
+- **Read receipts**: when `channels.signal.sendReadReceipts` is true, SmartAgentNeo forwards read receipts for allowed DMs.
 - Signal-cli does not expose read receipts for groups.
 
 ## Reactions (message tool)
@@ -252,17 +252,17 @@ Config:
 Run this ladder first:
 
 ```bash
-openclaw status
-openclaw gateway status
-openclaw logs --follow
-openclaw doctor
-openclaw channels status --probe
+smart-agent-neo status
+smart-agent-neo gateway status
+smart-agent-neo logs --follow
+smart-agent-neo doctor
+smart-agent-neo channels status --probe
 ```
 
 Then confirm DM pairing state if needed:
 
 ```bash
-openclaw pairing list signal
+smart-agent-neo pairing list signal
 ```
 
 Common failures:
@@ -270,15 +270,15 @@ Common failures:
 - Daemon reachable but no replies: verify account/daemon settings (`httpUrl`, `account`) and receive mode.
 - DMs ignored: sender is pending pairing approval.
 - Group messages ignored: group sender/mention gating blocks delivery.
-- Config validation errors after edits: run `openclaw doctor --fix`.
+- Config validation errors after edits: run `smart-agent-neo doctor --fix`.
 - Signal missing from diagnostics: confirm `channels.signal.enabled: true`.
 
 Extra checks:
 
 ```bash
-openclaw pairing list signal
+smart-agent-neo pairing list signal
 pgrep -af signal-cli
-grep -i "signal" "/tmp/openclaw/openclaw-$(date +%Y-%m-%d).log" | tail -20
+grep -i "signal" "/tmp/betterbrand/smart-agent-neo-$(date +%Y-%m-%d).log" | tail -20
 ```
 
 For triage flow: [/channels/troubleshooting](/channels/troubleshooting).

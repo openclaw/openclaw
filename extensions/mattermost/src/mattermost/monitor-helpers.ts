@@ -1,5 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
-export { createDedupeCache, rawDataToString } from "openclaw/plugin-sdk";
+import type { SmartAgentNeoConfig } from "smart-agent-neo/plugin-sdk";
+export { createDedupeCache, rawDataToString } from "smart-agent-neo/plugin-sdk";
 
 export type ResponsePrefixContext = {
   model?: string;
@@ -55,9 +55,9 @@ function normalizeAgentId(value: string | undefined | null): string {
   );
 }
 
-type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
+type AgentEntry = NonNullable<NonNullable<SmartAgentNeoConfig["agents"]>["list"]>[number];
 
-function listAgents(cfg: OpenClawConfig): AgentEntry[] {
+function listAgents(cfg: SmartAgentNeoConfig): AgentEntry[] {
   const list = cfg.agents?.list;
   if (!Array.isArray(list)) {
     return [];
@@ -65,12 +65,12 @@ function listAgents(cfg: OpenClawConfig): AgentEntry[] {
   return list.filter((entry): entry is AgentEntry => Boolean(entry && typeof entry === "object"));
 }
 
-function resolveAgentEntry(cfg: OpenClawConfig, agentId: string): AgentEntry | undefined {
+function resolveAgentEntry(cfg: SmartAgentNeoConfig, agentId: string): AgentEntry | undefined {
   const id = normalizeAgentId(agentId);
   return listAgents(cfg).find((entry) => normalizeAgentId(entry.id) === id);
 }
 
-export function resolveIdentityName(cfg: OpenClawConfig, agentId: string): string | undefined {
+export function resolveIdentityName(cfg: SmartAgentNeoConfig, agentId: string): string | undefined {
   const entry = resolveAgentEntry(cfg, agentId);
   return entry?.identity?.name?.trim() || undefined;
 }

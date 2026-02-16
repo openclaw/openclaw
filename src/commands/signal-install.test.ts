@@ -134,7 +134,7 @@ describe("pickAsset", () => {
 
 describe("extractSignalCliArchive", () => {
   it("rejects zip slip path traversal", async () => {
-    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-signal-install-"));
+    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), "smart-agent-neo-signal-install-"));
     try {
       const archivePath = path.join(workDir, "bad.zip");
       const extractDir = path.join(workDir, "extract");
@@ -153,7 +153,7 @@ describe("extractSignalCliArchive", () => {
   });
 
   it("extracts tar.gz archives", async () => {
-    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-signal-install-"));
+    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), "smart-agent-neo-signal-install-"));
     try {
       const archivePath = path.join(workDir, "ok.tgz");
       const extractDir = path.join(workDir, "extract");

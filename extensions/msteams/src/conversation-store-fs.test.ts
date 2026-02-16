@@ -13,11 +13,11 @@ describe("msteams conversation store (fs)", () => {
   });
 
   it("filters and prunes expired entries (but keeps legacy ones)", async () => {
-    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-store-"));
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "smart-agent-neo-msteams-store-"));
 
     const env: NodeJS.ProcessEnv = {
       ...process.env,
-      OPENCLAW_STATE_DIR: stateDir,
+      SMART_AGENT_NEO_STATE_DIR: stateDir,
     };
 
     const store = createMSTeamsConversationStoreFs({ env, ttlMs: 1_000 });

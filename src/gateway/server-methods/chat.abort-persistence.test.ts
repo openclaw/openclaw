@@ -78,7 +78,7 @@ afterEach(() => {
 
 describe("chat abort transcript persistence", () => {
   it("persists run-scoped abort partial with rpc metadata and idempotency", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-chat-abort-run-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "smart-agent-neo-chat-abort-run-"));
     const transcriptPath = path.join(dir, "sess-main.jsonl");
     const sessionId = "sess-main";
     const runId = "idem-abort-run-1";
@@ -135,7 +135,7 @@ describe("chat abort transcript persistence", () => {
     expect(persisted[0]).toMatchObject({
       stopReason: "stop",
       idempotencyKey: `${runId}:assistant`,
-      openclawAbort: {
+      smartAgentNeoAbort: {
         aborted: true,
         origin: "rpc",
         runId,
@@ -144,7 +144,7 @@ describe("chat abort transcript persistence", () => {
   });
 
   it("persists session-scoped abort partials with rpc metadata", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-chat-abort-session-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "smart-agent-neo-chat-abort-session-"));
     const transcriptPath = path.join(dir, "sess-main.jsonl");
     const sessionId = "sess-main";
     await writeTranscriptHeader(transcriptPath, sessionId);
@@ -195,7 +195,7 @@ describe("chat abort transcript persistence", () => {
 
     expect(runAPersisted).toMatchObject({
       idempotencyKey: "run-a:assistant",
-      openclawAbort: {
+      smartAgentNeoAbort: {
         aborted: true,
         origin: "rpc",
         runId: "run-a",
@@ -205,7 +205,7 @@ describe("chat abort transcript persistence", () => {
   });
 
   it("persists /stop partials with stop-command metadata", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-chat-stop-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "smart-agent-neo-chat-stop-"));
     const transcriptPath = path.join(dir, "sess-main.jsonl");
     const sessionId = "sess-main";
     await writeTranscriptHeader(transcriptPath, sessionId);
@@ -249,7 +249,7 @@ describe("chat abort transcript persistence", () => {
 
     expect(persisted).toMatchObject({
       idempotencyKey: "run-stop-1:assistant",
-      openclawAbort: {
+      smartAgentNeoAbort: {
         aborted: true,
         origin: "stop-command",
         runId: "run-stop-1",

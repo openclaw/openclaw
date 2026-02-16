@@ -1,13 +1,13 @@
 {
-  "name": "@openclaw/line",
+  "name": "@smart-agent-neo/line",
   "version": "2026.2.16",
   "private": true,
-  "description": "OpenClaw LINE channel plugin",
+  "description": "SmartAgentNeo LINE channel plugin",
   "type": "module",
   "devDependencies": {
-    "openclaw": "workspace:*"
+    "smart-agent-neo": "workspace:*"
   },
-  "openclaw": {
+  "smart-agent-neo": {
     "extensions": [
       "./index.ts"
     ],
@@ -22,7 +22,7 @@
       "quickstartAllowFrom": true
     },
     "install": {
-      "npmSpec": "@openclaw/line",
+      "npmSpec": "@smart-agent-neo/line",
       "localPath": "extensions/line",
       "defaultChoice": "npm"
     }

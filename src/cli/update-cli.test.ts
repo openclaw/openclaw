@@ -26,8 +26,8 @@ vi.mock("../infra/update-runner.js", () => ({
   runGatewayUpdate: vi.fn(),
 }));
 
-vi.mock("../infra/openclaw-root.js", () => ({
-  resolveOpenClawPackageRoot: vi.fn(),
+vi.mock("../infra/smart-agent-neo-root.js", () => ({
+  resolveSmartAgentNeoPackageRoot: vi.fn(),
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -93,7 +93,7 @@ vi.mock("../runtime.js", () => ({
 }));
 
 const { runGatewayUpdate } = await import("../infra/update-runner.js");
-const { resolveOpenClawPackageRoot } = await import("../infra/openclaw-root.js");
+const { resolveSmartAgentNeoPackageRoot } = await import("../infra/smart-agent-neo-root.js");
 const { readConfigFileSnapshot, writeConfigFile } = await import("../config/config.js");
 const { checkUpdateStatus, fetchNpmTagVersion, resolveNpmChannelTag } =
   await import("../infra/update-check.js");
@@ -114,7 +114,7 @@ describe("update-cli", () => {
   };
 
   beforeAll(async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-tests-"));
+    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "smart-agent-neo-update-tests-"));
   });
 
   afterAll(async () => {
@@ -142,11 +142,11 @@ describe("update-cli", () => {
   };
 
   const setupNonInteractiveDowngrade = async () => {
-    const tempDir = await createCaseDir("openclaw-update");
+    const tempDir = await createCaseDir("smart-agent-neo-update");
     setTty(false);
     readPackageVersion.mockResolvedValue("2.0.0");
 
-    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(tempDir);
+    vi.mocked(resolveSmartAgentNeoPackageRoot).mockResolvedValue(tempDir);
     vi.mocked(checkUpdateStatus).mockResolvedValue({
       root: tempDir,
       installKind: "package",
@@ -178,7 +178,7 @@ describe("update-cli", () => {
     confirm.mockReset();
     select.mockReset();
     vi.mocked(runGatewayUpdate).mockReset();
-    vi.mocked(resolveOpenClawPackageRoot).mockReset();
+    vi.mocked(resolveSmartAgentNeoPackageRoot).mockReset();
     vi.mocked(readConfigFileSnapshot).mockReset();
     vi.mocked(writeConfigFile).mockReset();
     vi.mocked(checkUpdateStatus).mockReset();
@@ -192,7 +192,7 @@ describe("update-cli", () => {
     readPackageName.mockReset();
     readPackageVersion.mockReset();
     resolveGlobalManager.mockReset();
-    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(process.cwd());
+    vi.mocked(resolveSmartAgentNeoPackageRoot).mockResolvedValue(process.cwd());
     vi.mocked(readConfigFileSnapshot).mockResolvedValue(baseSnapshot);
     vi.mocked(fetchNpmTagVersion).mockResolvedValue({
       tag: "latest",
@@ -234,7 +234,7 @@ describe("update-cli", () => {
       signal: null,
       killed: false,
     });
-    readPackageName.mockResolvedValue("openclaw");
+    readPackageName.mockResolvedValue("smart-agent-neo");
     readPackageVersion.mockResolvedValue("1.0.0");
     resolveGlobalManager.mockResolvedValue("npm");
     setTty(false);
@@ -278,7 +278,7 @@ describe("update-cli", () => {
     await updateStatusCommand({ json: false });
 
     const logs = vi.mocked(defaultRuntime.log).mock.calls.map((call) => call[0]);
-    expect(logs.join("\n")).toContain("OpenClaw update status");
+    expect(logs.join("\n")).toContain("SmartAgentNeo update status");
   });
 
   it("updateStatusCommand emits JSON", async () => {
@@ -305,9 +305,9 @@ describe("update-cli", () => {
   });
 
   it("defaults to stable channel for package installs when unset", async () => {
-    const tempDir = await createCaseDir("openclaw-update");
+    const tempDir = await createCaseDir("smart-agent-neo-update");
 
-    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(tempDir);
+    vi.mocked(resolveSmartAgentNeoPackageRoot).mockResolvedValue(tempDir);
     vi.mocked(checkUpdateStatus).mockResolvedValue({
       root: tempDir,
       installKind: "package",
@@ -352,9 +352,9 @@ describe("update-cli", () => {
   });
 
   it("falls back to latest when beta tag is older than release", async () => {
-    const tempDir = await createCaseDir("openclaw-update");
+    const tempDir = await createCaseDir("smart-agent-neo-update");
 
-    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(tempDir);
+    vi.mocked(resolveSmartAgentNeoPackageRoot).mockResolvedValue(tempDir);
     vi.mocked(readConfigFileSnapshot).mockResolvedValue({
       ...baseSnapshot,
       config: { update: { channel: "beta" } },
@@ -389,9 +389,9 @@ describe("update-cli", () => {
   });
 
   it("honors --tag override", async () => {
-    const tempDir = await createCaseDir("openclaw-update");
+    const tempDir = await createCaseDir("smart-agent-neo-update");
 
-    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(tempDir);
+    vi.mocked(resolveSmartAgentNeoPackageRoot).mockResolvedValue(tempDir);
     vi.mocked(runGatewayUpdate).mockResolvedValue({
       status: "ok",
       mode: "npm",
@@ -561,11 +561,11 @@ describe("update-cli", () => {
   });
 
   it("updateWizardCommand offers dev checkout and forwards selections", async () => {
-    const tempDir = await createCaseDir("openclaw-update-wizard");
-    const envSnapshot = captureEnv(["OPENCLAW_GIT_DIR"]);
+    const tempDir = await createCaseDir("smart-agent-neo-update-wizard");
+    const envSnapshot = captureEnv(["SMART_AGENT_NEO_GIT_DIR"]);
     try {
       setTty(true);
-      process.env.OPENCLAW_GIT_DIR = tempDir;
+      process.env.SMART_AGENT_NEO_GIT_DIR = tempDir;
 
       vi.mocked(checkUpdateStatus).mockResolvedValue({
         root: "/test/path",

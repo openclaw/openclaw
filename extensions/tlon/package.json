@@ -1,16 +1,16 @@
 {
-  "name": "@openclaw/tlon",
+  "name": "@smart-agent-neo/tlon",
   "version": "2026.2.16",
   "private": true,
-  "description": "OpenClaw Tlon/Urbit channel plugin",
+  "description": "SmartAgentNeo Tlon/Urbit channel plugin",
   "type": "module",
   "dependencies": {
     "@urbit/aura": "^3.0.0"
   },
   "devDependencies": {
-    "openclaw": "workspace:*"
+    "smart-agent-neo": "workspace:*"
   },
-  "openclaw": {
+  "smart-agent-neo": {
     "extensions": [
       "./index.ts"
     ],
@@ -25,7 +25,7 @@
       "quickstartAllowFrom": true
     },
     "install": {
-      "npmSpec": "@openclaw/tlon",
+      "npmSpec": "@smart-agent-neo/tlon",
       "localPath": "extensions/tlon",
       "defaultChoice": "npm"
     }

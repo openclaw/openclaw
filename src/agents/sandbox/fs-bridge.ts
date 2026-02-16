@@ -199,7 +199,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       "sh",
       "-c",
       script,
-      "moltbot-sandbox-fs",
+      "neobot-sandbox-fs",
     ];
     if (options.args?.length) {
       dockerArgs.push(...options.args);

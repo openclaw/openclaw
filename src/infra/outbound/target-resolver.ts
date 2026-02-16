@@ -3,7 +3,7 @@ import type {
   ChannelDirectoryEntryKind,
   ChannelId,
 } from "../../channels/plugins/types.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { SmartAgentNeoConfig } from "../../config/config.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { buildDirectoryCacheKey, DirectoryCache } from "./directory-cache.js";
@@ -30,7 +30,7 @@ export type ResolveMessagingTargetResult =
   | { ok: false; error: Error; candidates?: ChannelDirectoryEntry[] };
 
 export async function resolveChannelTarget(params: {
-  cfg: OpenClawConfig;
+  cfg: SmartAgentNeoConfig;
   channel: ChannelId;
   input: string;
   accountId?: string | null;
@@ -213,7 +213,7 @@ function resolveMatch(params: {
 }
 
 async function listDirectoryEntries(params: {
-  cfg: OpenClawConfig;
+  cfg: SmartAgentNeoConfig;
   channel: ChannelId;
   accountId?: string | null;
   kind: ChannelDirectoryEntryKind;
@@ -249,7 +249,7 @@ async function listDirectoryEntries(params: {
 }
 
 async function getDirectoryEntries(params: {
-  cfg: OpenClawConfig;
+  cfg: SmartAgentNeoConfig;
   channel: ChannelId;
   accountId?: string | null;
   kind: ChannelDirectoryEntryKind;
@@ -323,7 +323,7 @@ function pickAmbiguousMatch(
 }
 
 export async function resolveMessagingTarget(params: {
-  cfg: OpenClawConfig;
+  cfg: SmartAgentNeoConfig;
   channel: ChannelId;
   input: string;
   accountId?: string | null;
@@ -453,7 +453,7 @@ export async function resolveMessagingTarget(params: {
 }
 
 export async function lookupDirectoryDisplay(params: {
-  cfg: OpenClawConfig;
+  cfg: SmartAgentNeoConfig;
   channel: ChannelId;
   targetId: string;
   accountId?: string | null;

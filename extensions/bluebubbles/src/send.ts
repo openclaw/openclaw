@@ -1,6 +1,6 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import type { SmartAgentNeoConfig } from "smart-agent-neo/plugin-sdk";
 import crypto from "node:crypto";
-import { stripMarkdown } from "openclaw/plugin-sdk";
+import { stripMarkdown } from "smart-agent-neo/plugin-sdk";
 import { resolveBlueBubblesAccount } from "./accounts.js";
 import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
 import { extractBlueBubblesMessageId, resolveBlueBubblesSendTarget } from "./send-helpers.js";
@@ -16,7 +16,7 @@ export type BlueBubblesSendOpts = {
   password?: string;
   accountId?: string;
   timeoutMs?: number;
-  cfg?: OpenClawConfig;
+  cfg?: SmartAgentNeoConfig;
   /** Message GUID to reply to (reply threading) */
   replyToMessageGuid?: string;
   /** Part index for reply (default: 0) */

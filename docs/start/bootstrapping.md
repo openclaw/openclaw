@@ -16,8 +16,8 @@ for the first time.
 
 ## What bootstrapping does
 
-On the first agent run, OpenClaw bootstraps the workspace (default
-`~/.openclaw/workspace`):
+On the first agent run, SmartAgentNeo bootstraps the workspace (default
+`~/.smart-agent-neo/workspace`):
 
 - Seeds `AGENTS.md`, `BOOTSTRAP.md`, `IDENTITY.md`, `USER.md`.
 - Runs a short Q&A ritual (one question at a time).
@@ -32,7 +32,7 @@ machine.
 
 <Note>
 When the Gateway runs on another machine, edit workspace files on the gateway
-host (for example, `user@gateway-host:~/.openclaw/workspace`).
+host (for example, `user@gateway-host:~/.smart-agent-neo/workspace`).
 </Note>
 
 ## Related docs

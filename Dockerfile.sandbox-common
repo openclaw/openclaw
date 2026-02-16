@@ -1,4 +1,4 @@
-ARG BASE_IMAGE=openclaw-sandbox:bookworm-slim
+ARG BASE_IMAGE=smart-agent-neo-sandbox:bookworm-slim
 FROM ${BASE_IMAGE}
 
 USER root

@@ -7,7 +7,7 @@ import { parseSchtasksQuery, readScheduledTaskCommand, resolveTaskScriptPath } f
 describe("schtasks runtime parsing", () => {
   it("parses status and last run info", () => {
     const output = [
-      "TaskName: \\OpenClaw Gateway",
+      "TaskName: \\SmartAgentNeo Gateway",
       "Status: Ready",
       "Last Run Time: 1/8/2026 1:23:45 AM",
       "Last Run Result: 0x0",
@@ -21,7 +21,7 @@ describe("schtasks runtime parsing", () => {
 
   it("parses running status", () => {
     const output = [
-      "TaskName: \\OpenClaw Gateway",
+      "TaskName: \\SmartAgentNeo Gateway",
       "Status: Running",
       "Last Run Time: 1/8/2026 1:23:45 AM",
       "Last Run Result: 0x0",
@@ -35,40 +35,40 @@ describe("schtasks runtime parsing", () => {
 });
 
 describe("resolveTaskScriptPath", () => {
-  it("uses default path when OPENCLAW_PROFILE is unset", () => {
+  it("uses default path when SMART_AGENT_NEO_PROFILE is unset", () => {
     const env = { USERPROFILE: "C:\\Users\\test" };
     expect(resolveTaskScriptPath(env)).toBe(
-      path.join("C:\\Users\\test", ".openclaw", "gateway.cmd"),
+      path.join("C:\\Users\\test", ".smart-agent-neo", "gateway.cmd"),
     );
   });
 
-  it("uses profile-specific path when OPENCLAW_PROFILE is set to a custom value", () => {
-    const env = { USERPROFILE: "C:\\Users\\test", OPENCLAW_PROFILE: "jbphoenix" };
+  it("uses profile-specific path when SMART_AGENT_NEO_PROFILE is set to a custom value", () => {
+    const env = { USERPROFILE: "C:\\Users\\test", SMART_AGENT_NEO_PROFILE: "jbphoenix" };
     expect(resolveTaskScriptPath(env)).toBe(
-      path.join("C:\\Users\\test", ".openclaw-jbphoenix", "gateway.cmd"),
+      path.join("C:\\Users\\test", ".smart-agent-neo-jbphoenix", "gateway.cmd"),
     );
   });
 
-  it("prefers OPENCLAW_STATE_DIR over profile-derived defaults", () => {
+  it("prefers SMART_AGENT_NEO_STATE_DIR over profile-derived defaults", () => {
     const env = {
       USERPROFILE: "C:\\Users\\test",
-      OPENCLAW_PROFILE: "rescue",
-      OPENCLAW_STATE_DIR: "C:\\State\\openclaw",
+      SMART_AGENT_NEO_PROFILE: "rescue",
+      SMART_AGENT_NEO_STATE_DIR: "C:\\State\\smart-agent-neo",
     };
-    expect(resolveTaskScriptPath(env)).toBe(path.join("C:\\State\\openclaw", "gateway.cmd"));
+    expect(resolveTaskScriptPath(env)).toBe(path.join("C:\\State\\smart-agent-neo", "gateway.cmd"));
   });
 
   it("falls back to HOME when USERPROFILE is not set", () => {
-    const env = { HOME: "/home/test", OPENCLAW_PROFILE: "default" };
-    expect(resolveTaskScriptPath(env)).toBe(path.join("/home/test", ".openclaw", "gateway.cmd"));
+    const env = { HOME: "/home/test", SMART_AGENT_NEO_PROFILE: "default" };
+    expect(resolveTaskScriptPath(env)).toBe(path.join("/home/test", ".smart-agent-neo", "gateway.cmd"));
   });
 });
 
 describe("readScheduledTaskCommand", () => {
   it("parses script with quoted arguments containing spaces", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-schtasks-test-"));
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "smart-agent-neo-schtasks-test-"));
     try {
-      const scriptPath = path.join(tmpDir, ".openclaw", "gateway.cmd");
+      const scriptPath = path.join(tmpDir, ".smart-agent-neo", "gateway.cmd");
       await fs.mkdir(path.dirname(scriptPath), { recursive: true });
       // Use forward slashes which work in Windows cmd and avoid escape parsing issues
       await fs.writeFile(
@@ -77,7 +77,7 @@ describe("readScheduledTaskCommand", () => {
         "utf8",
       );
 
-      const env = { USERPROFILE: tmpDir, OPENCLAW_PROFILE: "default" };
+      const env = { USERPROFILE: tmpDir, SMART_AGENT_NEO_PROFILE: "default" };
       const result = await readScheduledTaskCommand(env);
       expect(result).toEqual({
         programArguments: ["C:/Program Files/Node/node.exe", "gateway.js"],
@@ -88,9 +88,9 @@ describe("readScheduledTaskCommand", () => {
   });
 
   it("returns null when script does not exist", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-schtasks-test-"));
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "smart-agent-neo-schtasks-test-"));
     try {
-      const env = { USERPROFILE: tmpDir, OPENCLAW_PROFILE: "default" };
+      const env = { USERPROFILE: tmpDir, SMART_AGENT_NEO_PROFILE: "default" };
       const result = await readScheduledTaskCommand(env);
       expect(result).toBeNull();
     } finally {
@@ -99,9 +99,9 @@ describe("readScheduledTaskCommand", () => {
   });
 
   it("returns null when script has no command", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-schtasks-test-"));
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "smart-agent-neo-schtasks-test-"));
     try {
-      const scriptPath = path.join(tmpDir, ".openclaw", "gateway.cmd");
+      const scriptPath = path.join(tmpDir, ".smart-agent-neo", "gateway.cmd");
       await fs.mkdir(path.dirname(scriptPath), { recursive: true });
       await fs.writeFile(
         scriptPath,
@@ -109,7 +109,7 @@ describe("readScheduledTaskCommand", () => {
         "utf8",
       );
 
-      const env = { USERPROFILE: tmpDir, OPENCLAW_PROFILE: "default" };
+      const env = { USERPROFILE: tmpDir, SMART_AGENT_NEO_PROFILE: "default" };
       const result = await readScheduledTaskCommand(env);
       expect(result).toBeNull();
     } finally {
@@ -118,31 +118,31 @@ describe("readScheduledTaskCommand", () => {
   });
 
   it("parses full script with all components", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-schtasks-test-"));
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "smart-agent-neo-schtasks-test-"));
     try {
-      const scriptPath = path.join(tmpDir, ".openclaw", "gateway.cmd");
+      const scriptPath = path.join(tmpDir, ".smart-agent-neo", "gateway.cmd");
       await fs.mkdir(path.dirname(scriptPath), { recursive: true });
       await fs.writeFile(
         scriptPath,
         [
           "@echo off",
-          "rem OpenClaw Gateway",
-          "cd /d C:\\Projects\\openclaw",
+          "rem SmartAgentNeo Gateway",
+          "cd /d C:\\Projects\\smart-agent-neo",
           "set NODE_ENV=production",
-          "set OPENCLAW_PORT=18789",
+          "set SMART_AGENT_NEO_PORT=18789",
           "node gateway.js --verbose",
         ].join("\r\n"),
         "utf8",
       );
 
-      const env = { USERPROFILE: tmpDir, OPENCLAW_PROFILE: "default" };
+      const env = { USERPROFILE: tmpDir, SMART_AGENT_NEO_PROFILE: "default" };
       const result = await readScheduledTaskCommand(env);
       expect(result).toEqual({
         programArguments: ["node", "gateway.js", "--verbose"],
-        workingDirectory: "C:\\Projects\\openclaw",
+        workingDirectory: "C:\\Projects\\smart-agent-neo",
         environment: {
           NODE_ENV: "production",
-          OPENCLAW_PORT: "18789",
+          SMART_AGENT_NEO_PORT: "18789",
         },
       });
     } finally {
@@ -150,25 +150,25 @@ describe("readScheduledTaskCommand", () => {
     }
   });
   it("parses command with Windows backslash paths", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-schtasks-test-"));
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "smart-agent-neo-schtasks-test-"));
     try {
-      const scriptPath = path.join(tmpDir, ".openclaw", "gateway.cmd");
+      const scriptPath = path.join(tmpDir, ".smart-agent-neo", "gateway.cmd");
       await fs.mkdir(path.dirname(scriptPath), { recursive: true });
       await fs.writeFile(
         scriptPath,
         [
           "@echo off",
-          '"C:\\Program Files\\nodejs\\node.exe" C:\\Users\\test\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js gateway --port 18789',
+          '"C:\\Program Files\\nodejs\\node.exe" C:\\Users\\test\\AppData\\Roaming\\npm\\node_modules\\smart-agent-neo\\dist\\index.js gateway --port 18789',
         ].join("\r\n"),
         "utf8",
       );
 
-      const env = { USERPROFILE: tmpDir, OPENCLAW_PROFILE: "default" };
+      const env = { USERPROFILE: tmpDir, SMART_AGENT_NEO_PROFILE: "default" };
       const result = await readScheduledTaskCommand(env);
       expect(result).toEqual({
         programArguments: [
           "C:\\Program Files\\nodejs\\node.exe",
-          "C:\\Users\\test\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js",
+          "C:\\Users\\test\\AppData\\Roaming\\npm\\node_modules\\smart-agent-neo\\dist\\index.js",
           "gateway",
           "--port",
           "18789",
@@ -180,25 +180,25 @@ describe("readScheduledTaskCommand", () => {
   });
 
   it("preserves UNC paths in command arguments", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-schtasks-test-"));
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "smart-agent-neo-schtasks-test-"));
     try {
-      const scriptPath = path.join(tmpDir, ".openclaw", "gateway.cmd");
+      const scriptPath = path.join(tmpDir, ".smart-agent-neo", "gateway.cmd");
       await fs.mkdir(path.dirname(scriptPath), { recursive: true });
       await fs.writeFile(
         scriptPath,
         [
           "@echo off",
-          '"\\\\fileserver\\OpenClaw Share\\node.exe" "\\\\fileserver\\OpenClaw Share\\dist\\index.js" gateway --port 18789',
+          '"\\\\fileserver\\SmartAgentNeo Share\\node.exe" "\\\\fileserver\\SmartAgentNeo Share\\dist\\index.js" gateway --port 18789',
         ].join("\r\n"),
         "utf8",
       );
 
-      const env = { USERPROFILE: tmpDir, OPENCLAW_PROFILE: "default" };
+      const env = { USERPROFILE: tmpDir, SMART_AGENT_NEO_PROFILE: "default" };
       const result = await readScheduledTaskCommand(env);
       expect(result).toEqual({
         programArguments: [
-          "\\\\fileserver\\OpenClaw Share\\node.exe",
-          "\\\\fileserver\\OpenClaw Share\\dist\\index.js",
+          "\\\\fileserver\\SmartAgentNeo Share\\node.exe",
+          "\\\\fileserver\\SmartAgentNeo Share\\dist\\index.js",
           "gateway",
           "--port",
           "18789",

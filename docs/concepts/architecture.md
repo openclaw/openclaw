@@ -20,8 +20,8 @@ Last updated: 2026-01-22
   declare `role: node` with explicit caps/commands.
 - One Gateway per host; it is the only place that opens a WhatsApp session.
 - The **canvas host** is served by the Gateway HTTP server under:
-  - `/__openclaw__/canvas/` (agent-editable HTML/CSS/JS)
-  - `/__openclaw__/a2ui/` (A2UI host)
+  - `/__smart-agent-neo__/canvas/` (agent-editable HTML/CSS/JS)
+  - `/__smart-agent-neo__/a2ui/` (A2UI host)
     It uses the same port as the Gateway (default `18789`).
 
 ## Components and flows
@@ -84,7 +84,7 @@ sequenceDiagram
 - After handshake:
   - Requests: `{type:"req", id, method, params}` → `{type:"res", id, ok, payload|error}`
   - Events: `{type:"event", event, payload, seq?, stateVersion?}`
-- If `OPENCLAW_GATEWAY_TOKEN` (or `--token`) is set, `connect.params.auth.token`
+- If `SMART_AGENT_NEO_GATEWAY_TOKEN` (or `--token`) is set, `connect.params.auth.token`
   must match or the socket closes.
 - Idempotency keys are required for side‑effecting methods (`send`, `agent`) to
   safely retry; the server keeps a short‑lived dedupe cache.
@@ -125,7 +125,7 @@ Details: [Gateway protocol](/gateway/protocol), [Pairing](/channels/pairing),
 
 ## Operations snapshot
 
-- Start: `openclaw gateway` (foreground, logs to stdout).
+- Start: `smart-agent-neo gateway` (foreground, logs to stdout).
 - Health: `health` over WS (also included in `hello-ok`).
 - Supervision: launchd/systemd for auto‑restart.
 

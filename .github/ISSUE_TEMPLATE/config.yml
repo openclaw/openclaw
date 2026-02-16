@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: Onboarding
-    url: https://discord.gg/clawd
-    about: New to OpenClaw? Join Discord for setup guidance from Krill in \#help.
+    url: https://discord.gg/neo
+    about: New to SmartAgentNeo? Join Discord for setup guidance from Krill in \#help.
   - name: Support
-    url: https://discord.gg/clawd
+    url: https://discord.gg/neo
     about: Get help from Krill and the community on Discord in \#help.

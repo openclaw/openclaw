@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import type { OpenClawConfig } from "../config/config.js";
+import type { SmartAgentNeoConfig } from "../config/config.js";
 import type { MsgContext, TemplateContext } from "./templating.js";
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 
@@ -27,12 +27,12 @@ export function createSandboxMediaContexts(mediaPath: string): {
   return { ctx, sessionCtx: { ...ctx } };
 }
 
-export function createSandboxMediaStageConfig(home: string): OpenClawConfig {
+export function createSandboxMediaStageConfig(home: string): SmartAgentNeoConfig {
   return {
     agents: {
       defaults: {
         model: "anthropic/claude-opus-4-5",
-        workspace: join(home, "openclaw"),
+        workspace: join(home, "smart-agent-neo"),
         sandbox: {
           mode: "non-main",
           workspaceRoot: join(home, "sandboxes"),
@@ -41,5 +41,5 @@ export function createSandboxMediaStageConfig(home: string): OpenClawConfig {
     },
     channels: { whatsapp: { allowFrom: ["*"] } },
     session: { store: join(home, "sessions.json") },
-  } as OpenClawConfig;
+  } as SmartAgentNeoConfig;
 }

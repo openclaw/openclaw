@@ -107,7 +107,7 @@ describe("resolveSkillCommandInvocation", () => {
 
 describe("listSkillCommandsForAgents", () => {
   it("merges command names across agents and de-duplicates", async () => {
-    const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-"));
+    const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "smart-agent-neo-skills-"));
     const mainWorkspace = path.join(baseDir, "main");
     const researchWorkspace = path.join(baseDir, "research");
     await fs.mkdir(mainWorkspace, { recursive: true });

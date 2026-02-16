@@ -4,7 +4,7 @@ description: Query Google Places API (New) via the goplaces CLI for text search,
 homepage: https://github.com/steipete/goplaces
 metadata:
   {
-    "openclaw":
+    "smart-agent-neo":
       {
         "emoji": "📍",
         "requires": { "bins": ["goplaces"], "env": ["GOOGLE_PLACES_API_KEY"] },

@@ -2,7 +2,7 @@ import type { Command } from "commander";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { sleep } from "openclaw/plugin-sdk";
+import { sleep } from "smart-agent-neo/plugin-sdk";
 import type { VoiceCallConfig } from "./config.js";
 import type { VoiceCallRuntime } from "./runtime.js";
 import { resolveUserPath } from "./utils.js";
@@ -27,7 +27,7 @@ function resolveMode(input: string): "off" | "serve" | "funnel" {
 }
 
 function resolveDefaultStorePath(config: VoiceCallConfig): string {
-  const preferred = path.join(os.homedir(), ".openclaw", "voice-calls");
+  const preferred = path.join(os.homedir(), ".smart-agent-neo", "voice-calls");
   const resolvedPreferred = resolveUserPath(preferred);
   const existing =
     [resolvedPreferred].find((dir) => {
@@ -51,7 +51,7 @@ export function registerVoiceCallCli(params: {
   const root = program
     .command("voicecall")
     .description("Voice call utilities")
-    .addHelpText("after", () => `\nDocs: https://docs.openclaw.ai/cli/voicecall\n`);
+    .addHelpText("after", () => `\nDocs: https://docs.smart-agent-neo.ai/cli/voicecall\n`);
 
   root
     .command("call")

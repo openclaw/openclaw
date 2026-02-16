@@ -15,11 +15,11 @@ For model selection rules, see [/concepts/models](/concepts/models).
 
 - Model refs use `provider/model` (example: `opencode/claude-opus-4-6`).
 - If you set `agents.defaults.models`, it becomes the allowlist.
-- CLI helpers: `openclaw onboard`, `openclaw models list`, `openclaw models set <provider/model>`.
+- CLI helpers: `smart-agent-neo onboard`, `smart-agent-neo models list`, `smart-agent-neo models set <provider/model>`.
 
 ## Built-in providers (pi-ai catalog)
 
-OpenClaw ships with the pi‑ai catalog. These providers require **no**
+SmartAgentNeo ships with the pi‑ai catalog. These providers require **no**
 `models.providers` config; just set auth + pick a model.
 
 ### OpenAI
@@ -27,7 +27,7 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Provider: `openai`
 - Auth: `OPENAI_API_KEY`
 - Example model: `openai/gpt-5.1-codex`
-- CLI: `openclaw onboard --auth-choice openai-api-key`
+- CLI: `smart-agent-neo onboard --auth-choice openai-api-key`
 
 ```json5
 {
@@ -40,7 +40,7 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Provider: `anthropic`
 - Auth: `ANTHROPIC_API_KEY` or `claude setup-token`
 - Example model: `anthropic/claude-opus-4-6`
-- CLI: `openclaw onboard --auth-choice token` (paste setup-token) or `openclaw models auth paste-token --provider anthropic`
+- CLI: `smart-agent-neo onboard --auth-choice token` (paste setup-token) or `smart-agent-neo models auth paste-token --provider anthropic`
 
 ```json5
 {
@@ -53,7 +53,7 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Provider: `openai-codex`
 - Auth: OAuth (ChatGPT)
 - Example model: `openai-codex/gpt-5.3-codex`
-- CLI: `openclaw onboard --auth-choice openai-codex` or `openclaw models auth login --provider openai-codex`
+- CLI: `smart-agent-neo onboard --auth-choice openai-codex` or `smart-agent-neo models auth login --provider openai-codex`
 
 ```json5
 {
@@ -66,7 +66,7 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Provider: `opencode`
 - Auth: `OPENCODE_API_KEY` (or `OPENCODE_ZEN_API_KEY`)
 - Example model: `opencode/claude-opus-4-6`
-- CLI: `openclaw onboard --auth-choice opencode-zen`
+- CLI: `smart-agent-neo onboard --auth-choice opencode-zen`
 
 ```json5
 {
@@ -79,19 +79,19 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Provider: `google`
 - Auth: `GEMINI_API_KEY`
 - Example model: `google/gemini-3-pro-preview`
-- CLI: `openclaw onboard --auth-choice gemini-api-key`
+- CLI: `smart-agent-neo onboard --auth-choice gemini-api-key`
 
 ### Google Vertex, Antigravity, and Gemini CLI
 
 - Providers: `google-vertex`, `google-antigravity`, `google-gemini-cli`
 - Auth: Vertex uses gcloud ADC; Antigravity/Gemini CLI use their respective auth flows
 - Antigravity OAuth is shipped as a bundled plugin (`google-antigravity-auth`, disabled by default).
-  - Enable: `openclaw plugins enable google-antigravity-auth`
-  - Login: `openclaw models auth login --provider google-antigravity --set-default`
+  - Enable: `smart-agent-neo plugins enable google-antigravity-auth`
+  - Login: `smart-agent-neo models auth login --provider google-antigravity --set-default`
 - Gemini CLI OAuth is shipped as a bundled plugin (`google-gemini-cli-auth`, disabled by default).
-  - Enable: `openclaw plugins enable google-gemini-cli-auth`
-  - Login: `openclaw models auth login --provider google-gemini-cli --set-default`
-  - Note: you do **not** paste a client id or secret into `openclaw.json`. The CLI login flow stores
+  - Enable: `smart-agent-neo plugins enable google-gemini-cli-auth`
+  - Login: `smart-agent-neo models auth login --provider google-gemini-cli --set-default`
+  - Note: you do **not** paste a client id or secret into `smart-agent-neo.json`. The CLI login flow stores
     tokens in auth profiles on the gateway host.
 
 ### Z.AI (GLM)
@@ -99,7 +99,7 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Provider: `zai`
 - Auth: `ZAI_API_KEY`
 - Example model: `zai/glm-4.7`
-- CLI: `openclaw onboard --auth-choice zai-api-key`
+- CLI: `smart-agent-neo onboard --auth-choice zai-api-key`
   - Aliases: `z.ai/*` and `z-ai/*` normalize to `zai/*`
 
 ### Vercel AI Gateway
@@ -107,7 +107,7 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Provider: `vercel-ai-gateway`
 - Auth: `AI_GATEWAY_API_KEY`
 - Example model: `vercel-ai-gateway/anthropic/claude-opus-4.6`
-- CLI: `openclaw onboard --auth-choice ai-gateway-api-key`
+- CLI: `smart-agent-neo onboard --auth-choice ai-gateway-api-key`
 
 ### Other built-in providers
 
@@ -120,7 +120,7 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
   - OpenAI-compatible base URL: `https://api.cerebras.ai/v1`.
 - Mistral: `mistral` (`MISTRAL_API_KEY`)
 - GitHub Copilot: `github-copilot` (`COPILOT_GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN`)
-- Hugging Face Inference: `huggingface` (`HUGGINGFACE_HUB_TOKEN` or `HF_TOKEN`) — OpenAI-compatible router; example model: `huggingface/deepseek-ai/DeepSeek-R1`; CLI: `openclaw onboard --auth-choice huggingface-api-key`. See [Hugging Face (Inference)](/providers/huggingface).
+- Hugging Face Inference: `huggingface` (`HUGGINGFACE_HUB_TOKEN` or `HF_TOKEN`) — OpenAI-compatible router; example model: `huggingface/deepseek-ai/DeepSeek-R1`; CLI: `smart-agent-neo onboard --auth-choice huggingface-api-key`. See [Hugging Face (Inference)](/providers/huggingface).
 
 ## Providers via `models.providers` (custom/base URL)
 
@@ -188,8 +188,8 @@ Qwen provides OAuth access to Qwen Coder + Vision via a device-code flow.
 Enable the bundled plugin, then log in:
 
 ```bash
-openclaw plugins enable qwen-portal-auth
-openclaw models auth login --provider qwen-portal --set-default
+smart-agent-neo plugins enable qwen-portal-auth
+smart-agent-neo models auth login --provider qwen-portal --set-default
 ```
 
 Model refs:
@@ -206,7 +206,7 @@ Synthetic provides Anthropic-compatible models behind the `synthetic` provider:
 - Provider: `synthetic`
 - Auth: `SYNTHETIC_API_KEY`
 - Example model: `synthetic/hf:MiniMaxAI/MiniMax-M2.1`
-- CLI: `openclaw onboard --auth-choice synthetic-api-key`
+- CLI: `smart-agent-neo onboard --auth-choice synthetic-api-key`
 
 ```json5
 {
@@ -324,7 +324,7 @@ Example (OpenAI‑compatible):
 Notes:
 
 - For custom providers, `reasoning`, `input`, `cost`, `contextWindow`, and `maxTokens` are optional.
-  When omitted, OpenClaw defaults to:
+  When omitted, SmartAgentNeo defaults to:
   - `reasoning: false`
   - `input: ["text"]`
   - `cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }`
@@ -335,9 +335,9 @@ Notes:
 ## CLI examples
 
 ```bash
-openclaw onboard --auth-choice opencode-zen
-openclaw models set opencode/claude-opus-4-6
-openclaw models list
+smart-agent-neo onboard --auth-choice opencode-zen
+smart-agent-neo models set opencode/claude-opus-4-6
+smart-agent-neo models list
 ```
 
 See also: [/gateway/configuration](/gateway/configuration) for full configuration examples.

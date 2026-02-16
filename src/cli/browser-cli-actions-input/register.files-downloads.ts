@@ -61,7 +61,7 @@ export function registerBrowserFilesAndDownloadsCommands(
     .description("Arm file upload for the next file chooser")
     .argument(
       "<paths...>",
-      "File paths to upload (must be within OpenClaw temp uploads dir, e.g. /tmp/openclaw/uploads/file.pdf)",
+      "File paths to upload (must be within SmartAgentNeo temp uploads dir, e.g. /tmp/smart-agent-neo/uploads/file.pdf)",
     )
     .option("--ref <ref>", "Ref id from snapshot to click after arming")
     .option("--input-ref <ref>", "Ref id for <input type=file> to set directly")
@@ -110,7 +110,7 @@ export function registerBrowserFilesAndDownloadsCommands(
     .description("Wait for the next download (and save it)")
     .argument(
       "[path]",
-      "Save path within openclaw temp downloads dir (default: /tmp/openclaw/downloads/...; fallback: os.tmpdir()/openclaw/downloads/...)",
+      "Save path within smart-agent-neo temp downloads dir (default: /tmp/smart-agent-neo/downloads/...; fallback: os.tmpdir()/smart-agent-neo/downloads/...)",
     )
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .option(
@@ -133,7 +133,7 @@ export function registerBrowserFilesAndDownloadsCommands(
     .argument("<ref>", "Ref id from snapshot to click")
     .argument(
       "<path>",
-      "Save path within openclaw temp downloads dir (e.g. report.pdf or /tmp/openclaw/downloads/report.pdf)",
+      "Save path within smart-agent-neo temp downloads dir (e.g. report.pdf or /tmp/smart-agent-neo/downloads/report.pdf)",
     )
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .option(

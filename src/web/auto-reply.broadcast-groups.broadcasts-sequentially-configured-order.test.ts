@@ -1,6 +1,6 @@
 import "./test-helpers.js";
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { SmartAgentNeoConfig } from "../config/config.js";
 import {
   monitorWebChannelWithCapture,
   sendWebDirectInboundAndCollectSessionKeys,
@@ -29,7 +29,7 @@ describe("broadcast groups", () => {
         strategy: "sequential",
         "+1000": ["alfred", "baerbel"],
       },
-    } satisfies OpenClawConfig);
+    } satisfies SmartAgentNeoConfig);
 
     const { seen, resolver } = await sendWebDirectInboundAndCollectSessionKeys();
 
@@ -49,7 +49,7 @@ describe("broadcast groups", () => {
         strategy: "sequential",
         "123@g.us": ["alfred", "baerbel"],
       },
-    } satisfies OpenClawConfig);
+    } satisfies SmartAgentNeoConfig);
 
     const resolver = vi.fn().mockResolvedValue({ text: "ok" });
 
@@ -129,7 +129,7 @@ describe("broadcast groups", () => {
         strategy: "parallel",
         "+1000": ["alfred", "baerbel"],
       },
-    } satisfies OpenClawConfig);
+    } satisfies SmartAgentNeoConfig);
 
     const sendMedia = vi.fn();
     const reply = vi.fn().mockResolvedValue(undefined);

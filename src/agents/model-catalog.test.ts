@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { SmartAgentNeoConfig } from "../config/config.js";
 import { __setModelCatalogImportForTest, loadModelCatalog } from "./model-catalog.js";
 import {
   installModelCatalogTestHooks,
@@ -14,7 +14,7 @@ describe("loadModelCatalog", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const getCallCount = mockCatalogImportFailThenRecover();
 
-    const cfg = {} as OpenClawConfig;
+    const cfg = {} as SmartAgentNeoConfig;
     const first = await loadModelCatalog({ config: cfg });
     expect(first).toEqual([]);
 
@@ -48,7 +48,7 @@ describe("loadModelCatalog", () => {
         }) as unknown as PiSdkModule,
     );
 
-    const result = await loadModelCatalog({ config: {} as OpenClawConfig });
+    const result = await loadModelCatalog({ config: {} as SmartAgentNeoConfig });
     expect(result).toEqual([{ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }]);
     expect(warnSpy).toHaveBeenCalledTimes(1);
   });
@@ -80,7 +80,7 @@ describe("loadModelCatalog", () => {
         }) as unknown as PiSdkModule,
     );
 
-    const result = await loadModelCatalog({ config: {} as OpenClawConfig });
+    const result = await loadModelCatalog({ config: {} as SmartAgentNeoConfig });
     expect(result).toContainEqual(
       expect.objectContaining({
         provider: "openai-codex",

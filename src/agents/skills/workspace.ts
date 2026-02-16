@@ -6,7 +6,7 @@ import {
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { SmartAgentNeoConfig } from "../../config/config.js";
 import type {
   ParsedSkillFrontmatter,
   SkillEligibilityContext,
@@ -22,7 +22,7 @@ import { shouldIncludeSkill } from "./config.js";
 import { normalizeSkillFilter } from "./filter.js";
 import {
   parseFrontmatter,
-  resolveOpenClawMetadata,
+  resolveSmartAgentNeoMetadata,
   resolveSkillInvocationPolicy,
 } from "./frontmatter.js";
 import { resolvePluginSkillDirs } from "./plugin-skills.js";
@@ -46,7 +46,7 @@ function debugSkillCommandOnce(
 
 function filterSkillEntries(
   entries: SkillEntry[],
-  config?: OpenClawConfig,
+  config?: SmartAgentNeoConfig,
   skillFilter?: string[],
   eligibility?: SkillEligibilityContext,
 ): SkillEntry[] {
@@ -104,7 +104,7 @@ function resolveUniqueSkillCommandName(base: string, used: Set<string>): string 
 function loadSkillEntries(
   workspaceDir: string,
   opts?: {
-    config?: OpenClawConfig;
+    config?: SmartAgentNeoConfig;
     managedSkillsDir?: string;
     bundledSkillsDir?: string;
   },
@@ -141,19 +141,19 @@ function loadSkillEntries(
   const bundledSkills = bundledSkillsDir
     ? loadSkills({
         dir: bundledSkillsDir,
-        source: "openclaw-bundled",
+        source: "smart-agent-neo-bundled",
       })
     : [];
   const extraSkills = mergedExtraDirs.flatMap((dir) => {
     const resolved = resolveUserPath(dir);
     return loadSkills({
       dir: resolved,
-      source: "openclaw-extra",
+      source: "smart-agent-neo-extra",
     });
   });
   const managedSkills = loadSkills({
     dir: managedSkillsDir,
-    source: "openclaw-managed",
+    source: "smart-agent-neo-managed",
   });
   const personalAgentsSkillsDir = path.resolve(os.homedir(), ".agents", "skills");
   const personalAgentsSkills = loadSkills({
@@ -167,7 +167,7 @@ function loadSkillEntries(
   });
   const workspaceSkills = loadSkills({
     dir: workspaceSkillsDir,
-    source: "openclaw-workspace",
+    source: "smart-agent-neo-workspace",
   });
 
   const merged = new Map<string, Skill>();
@@ -202,7 +202,7 @@ function loadSkillEntries(
     return {
       skill,
       frontmatter,
-      metadata: resolveOpenClawMetadata(frontmatter),
+      metadata: resolveSmartAgentNeoMetadata(frontmatter),
       invocation: resolveSkillInvocationPolicy(frontmatter),
     };
   });
@@ -212,7 +212,7 @@ function loadSkillEntries(
 export function buildWorkspaceSkillSnapshot(
   workspaceDir: string,
   opts?: {
-    config?: OpenClawConfig;
+    config?: SmartAgentNeoConfig;
     managedSkillsDir?: string;
     bundledSkillsDir?: string;
     entries?: SkillEntry[];
@@ -251,7 +251,7 @@ export function buildWorkspaceSkillSnapshot(
 export function buildWorkspaceSkillsPrompt(
   workspaceDir: string,
   opts?: {
-    config?: OpenClawConfig;
+    config?: SmartAgentNeoConfig;
     managedSkillsDir?: string;
     bundledSkillsDir?: string;
     entries?: SkillEntry[];
@@ -279,7 +279,7 @@ export function buildWorkspaceSkillsPrompt(
 export function resolveSkillsPromptForRun(params: {
   skillsSnapshot?: SkillSnapshot;
   entries?: SkillEntry[];
-  config?: OpenClawConfig;
+  config?: SmartAgentNeoConfig;
   workspaceDir: string;
 }): string {
   const snapshotPrompt = params.skillsSnapshot?.prompt?.trim();
@@ -299,7 +299,7 @@ export function resolveSkillsPromptForRun(params: {
 export function loadWorkspaceSkillEntries(
   workspaceDir: string,
   opts?: {
-    config?: OpenClawConfig;
+    config?: SmartAgentNeoConfig;
     managedSkillsDir?: string;
     bundledSkillsDir?: string;
   },
@@ -349,7 +349,7 @@ function resolveSyncedSkillDestinationPath(params: {
 export async function syncSkillsToWorkspace(params: {
   sourceWorkspaceDir: string;
   targetWorkspaceDir: string;
-  config?: OpenClawConfig;
+  config?: SmartAgentNeoConfig;
   managedSkillsDir?: string;
   bundledSkillsDir?: string;
 }) {
@@ -408,7 +408,7 @@ export async function syncSkillsToWorkspace(params: {
 
 export function filterWorkspaceSkillEntries(
   entries: SkillEntry[],
-  config?: OpenClawConfig,
+  config?: SmartAgentNeoConfig,
 ): SkillEntry[] {
   return filterSkillEntries(entries, config);
 }
@@ -416,7 +416,7 @@ export function filterWorkspaceSkillEntries(
 export function buildWorkspaceSkillCommandSpecs(
   workspaceDir: string,
   opts?: {
-    config?: OpenClawConfig;
+    config?: SmartAgentNeoConfig;
     managedSkillsDir?: string;
     bundledSkillsDir?: string;
     entries?: SkillEntry[];

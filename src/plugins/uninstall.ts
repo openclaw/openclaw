@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { OpenClawConfig } from "../config/config.js";
+import type { SmartAgentNeoConfig } from "../config/config.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolvePluginInstallDir } from "./install.js";
 import { defaultSlotIdForKey } from "./slots.js";
@@ -17,7 +17,7 @@ export type UninstallActions = {
 export type UninstallPluginResult =
   | {
       ok: true;
-      config: OpenClawConfig;
+      config: SmartAgentNeoConfig;
       pluginId: string;
       actions: UninstallActions;
       warnings: string[];
@@ -63,9 +63,9 @@ export function resolveUninstallDirectoryTarget(params: {
  * Returns a new config with the plugin removed from entries, installs, allow, load.paths, and slots.
  */
 export function removePluginFromConfig(
-  cfg: OpenClawConfig,
+  cfg: SmartAgentNeoConfig,
   pluginId: string,
-): { config: OpenClawConfig; actions: Omit<UninstallActions, "directory"> } {
+): { config: SmartAgentNeoConfig; actions: Omit<UninstallActions, "directory"> } {
   const actions: Omit<UninstallActions, "directory"> = {
     entry: false,
     install: false,
@@ -155,7 +155,7 @@ export function removePluginFromConfig(
     delete cleanedPlugins.slots;
   }
 
-  const config: OpenClawConfig = {
+  const config: SmartAgentNeoConfig = {
     ...cfg,
     plugins: Object.keys(cleanedPlugins).length > 0 ? cleanedPlugins : undefined,
   };
@@ -164,7 +164,7 @@ export function removePluginFromConfig(
 }
 
 export type UninstallPluginParams = {
-  config: OpenClawConfig;
+  config: SmartAgentNeoConfig;
   pluginId: string;
   deleteFiles?: boolean;
   extensionsDir?: string;

@@ -29,7 +29,7 @@ describe("registerSubCliCommands", () => {
 
   beforeEach(() => {
     process.env = { ...originalEnv };
-    delete process.env.OPENCLAW_DISABLE_LAZY_SUBCOMMANDS;
+    delete process.env.SMART_AGENT_NEO_DISABLE_LAZY_SUBCOMMANDS;
     registerAcpCli.mockClear();
     acpAction.mockClear();
     registerNodesCli.mockClear();
@@ -42,7 +42,7 @@ describe("registerSubCliCommands", () => {
   });
 
   it("registers only the primary placeholder and dispatches", async () => {
-    process.argv = ["node", "openclaw", "acp"];
+    process.argv = ["node", "smart-agent-neo", "acp"];
     const program = new Command();
     registerSubCliCommands(program, process.argv);
 
@@ -55,21 +55,21 @@ describe("registerSubCliCommands", () => {
   });
 
   it("registers placeholders for all subcommands when no primary", () => {
-    process.argv = ["node", "openclaw"];
+    process.argv = ["node", "smart-agent-neo"];
     const program = new Command();
     registerSubCliCommands(program, process.argv);
 
     const names = program.commands.map((cmd) => cmd.name());
     expect(names).toContain("acp");
     expect(names).toContain("gateway");
-    expect(names).toContain("clawbot");
+    expect(names).toContain("neobot");
     expect(registerAcpCli).not.toHaveBeenCalled();
   });
 
   it("re-parses argv for lazy subcommands", async () => {
-    process.argv = ["node", "openclaw", "nodes", "list"];
+    process.argv = ["node", "smart-agent-neo", "nodes", "list"];
     const program = new Command();
-    program.name("openclaw");
+    program.name("smart-agent-neo");
     registerSubCliCommands(program, process.argv);
 
     expect(program.commands.map((cmd) => cmd.name())).toEqual(["nodes"]);
@@ -81,9 +81,9 @@ describe("registerSubCliCommands", () => {
   });
 
   it("replaces placeholder when registering a subcommand by name", async () => {
-    process.argv = ["node", "openclaw", "acp", "--help"];
+    process.argv = ["node", "smart-agent-neo", "acp", "--help"];
     const program = new Command();
-    program.name("openclaw");
+    program.name("smart-agent-neo");
     registerSubCliCommands(program, process.argv);
 
     await registerSubCliByName(program, "acp");
@@ -91,7 +91,7 @@ describe("registerSubCliCommands", () => {
     const names = program.commands.map((cmd) => cmd.name());
     expect(names.filter((name) => name === "acp")).toHaveLength(1);
 
-    await program.parseAsync(["node", "openclaw", "acp"], { from: "user" });
+    await program.parseAsync(["node", "smart-agent-neo", "acp"], { from: "user" });
     expect(registerAcpCli).toHaveBeenCalledTimes(1);
     expect(acpAction).toHaveBeenCalledTimes(1);
   });

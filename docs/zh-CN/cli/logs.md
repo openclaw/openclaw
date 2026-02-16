@@ -2,7 +2,7 @@
 read_when:
   - 你需要远程跟踪 Gateway 网关日志（无需 SSH）
   - 你需要 JSON 日志行用于工具处理
-summary: "`openclaw logs` 的 CLI 参考（通过 RPC 跟踪 Gateway 网关日志）"
+summary: "`smart-agent-neo logs` 的 CLI 参考（通过 RPC 跟踪 Gateway 网关日志）"
 title: logs
 x-i18n:
   generated_at: "2026-02-03T07:44:57Z"
@@ -13,7 +13,7 @@ x-i18n:
   workflow: 15
 ---
 
-# `openclaw logs`
+# `smart-agent-neo logs`
 
 通过 RPC 跟踪 Gateway 网关文件日志（在远程模式下可用）。
 
@@ -24,8 +24,8 @@ x-i18n:
 ## 示例
 
 ```bash
-openclaw logs
-openclaw logs --follow
-openclaw logs --json
-openclaw logs --limit 500
+smart-agent-neo logs
+smart-agent-neo logs --follow
+smart-agent-neo logs --json
+smart-agent-neo logs --limit 500
 ```

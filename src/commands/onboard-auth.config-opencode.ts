@@ -1,8 +1,8 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { SmartAgentNeoConfig } from "../config/config.js";
 import { OPENCODE_ZEN_DEFAULT_MODEL_REF } from "../agents/opencode-zen-models.js";
 import { applyAgentDefaultModelPrimary } from "./onboard-auth.config-shared.js";
 
-export function applyOpencodeZenProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+export function applyOpencodeZenProviderConfig(cfg: SmartAgentNeoConfig): SmartAgentNeoConfig {
   // Use the built-in opencode provider from pi-ai; only seed the allowlist alias.
   const models = { ...cfg.agents?.defaults?.models };
   models[OPENCODE_ZEN_DEFAULT_MODEL_REF] = {
@@ -22,7 +22,7 @@ export function applyOpencodeZenProviderConfig(cfg: OpenClawConfig): OpenClawCon
   };
 }
 
-export function applyOpencodeZenConfig(cfg: OpenClawConfig): OpenClawConfig {
+export function applyOpencodeZenConfig(cfg: SmartAgentNeoConfig): SmartAgentNeoConfig {
   const next = applyOpencodeZenProviderConfig(cfg);
   return applyAgentDefaultModelPrimary(next, OPENCODE_ZEN_DEFAULT_MODEL_REF);
 }

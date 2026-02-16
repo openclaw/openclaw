@@ -17,7 +17,7 @@ import {
   type UserSelectMenuInteraction,
 } from "@buape/carbon";
 import { ButtonStyle, ChannelType } from "discord-api-types/v10";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { SmartAgentNeoConfig } from "../../config/config.js";
 import type { DiscordAccountConfig } from "../../config/types.discord.js";
 import { resolveHumanDelayConfig } from "../../agents/identity.js";
 import { resolveChunkMode, resolveTextChunkLimit } from "../../auto-reply/chunk.js";
@@ -327,7 +327,7 @@ async function ensureAgentComponentInteractionAllowed(params: {
 }
 
 export type AgentComponentContext = {
-  cfg: OpenClawConfig;
+  cfg: SmartAgentNeoConfig;
   accountId: string;
   discordConfig?: DiscordAccountConfig;
   runtime?: RuntimeEnv;
@@ -1436,7 +1436,7 @@ class DiscordComponentChannelSelect extends ChannelSelectMenu {
 }
 
 class DiscordComponentModal extends Modal {
-  title = "OpenClaw form";
+  title = "SmartAgentNeo form";
   customId = "*";
   components = [];
   customIdParser = parseDiscordModalCustomIdForCarbon;

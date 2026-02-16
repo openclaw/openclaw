@@ -1,15 +1,15 @@
-import type { OpenClawConfig } from "../../../config/config.js";
+import type { SmartAgentNeoConfig } from "../../../config/config.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import type { OnboardOptions } from "../../onboard-types.js";
 import { randomToken } from "../../onboard-helpers.js";
 
 export function applyNonInteractiveGatewayConfig(params: {
-  nextConfig: OpenClawConfig;
+  nextConfig: SmartAgentNeoConfig;
   opts: OnboardOptions;
   runtime: RuntimeEnv;
   defaultPort: number;
 }): {
-  nextConfig: OpenClawConfig;
+  nextConfig: SmartAgentNeoConfig;
   port: number;
   bind: string;
   authMode: string;

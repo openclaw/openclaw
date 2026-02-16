@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { SmartAgentNeoConfig } from "../config/config.js";
 import type { DiscordGuildChannelConfig, DiscordGuildEntry } from "../config/types.js";
 import { isRecord } from "../utils.js";
 import { resolveDiscordAccount } from "./accounts.js";
@@ -66,7 +66,7 @@ function listConfiguredGuildChannelKeys(
 }
 
 export function collectDiscordAuditChannelIds(params: {
-  cfg: OpenClawConfig;
+  cfg: SmartAgentNeoConfig;
   accountId?: string | null;
 }) {
   const account = resolveDiscordAccount({

@@ -1,5 +1,5 @@
 import type * as Lark from "@larksuiteoapi/node-sdk";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import type { SmartAgentNeoPluginApi } from "smart-agent-neo/plugin-sdk";
 import { listEnabledFeishuAccounts } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { FeishuDriveSchema, type FeishuDriveParams } from "./drive-schema.js";
@@ -168,7 +168,7 @@ async function deleteFile(client: Lark.Client, fileToken: string, type: string) 
 
 // ============ Tool Registration ============
 
-export function registerFeishuDriveTools(api: OpenClawPluginApi) {
+export function registerFeishuDriveTools(api: SmartAgentNeoPluginApi) {
   if (!api.config) {
     api.logger.debug?.("feishu_drive: No config available, skipping drive tools");
     return;

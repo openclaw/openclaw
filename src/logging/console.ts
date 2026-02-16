@@ -1,6 +1,6 @@
 import { createRequire } from "node:module";
 import util from "node:util";
-import type { OpenClawConfig } from "../config/types.js";
+import type { SmartAgentNeoConfig } from "../config/types.js";
 import { isVerbose } from "../globals.js";
 import { stripAnsi } from "../terminal/ansi.js";
 import { readLoggingConfig } from "./config.js";
@@ -17,11 +17,11 @@ type ConsoleSettings = {
 export type ConsoleLoggerSettings = ConsoleSettings;
 
 const requireConfig = createRequire(import.meta.url);
-type ConsoleConfigLoader = () => OpenClawConfig["logging"] | undefined;
+type ConsoleConfigLoader = () => SmartAgentNeoConfig["logging"] | undefined;
 const loadConfigFallbackDefault: ConsoleConfigLoader = () => {
   try {
     const loaded = requireConfig("../config/config.js") as {
-      loadConfig?: () => OpenClawConfig;
+      loadConfig?: () => SmartAgentNeoConfig;
     };
     return loaded.loadConfig?.().logging;
   } catch {
@@ -38,7 +38,7 @@ function normalizeConsoleLevel(level?: string): LogLevel {
   if (isVerbose()) {
     return "debug";
   }
-  if (!level && process.env.VITEST === "true" && process.env.OPENCLAW_TEST_CONSOLE !== "1") {
+  if (!level && process.env.VITEST === "true" && process.env.SMART_AGENT_NEO_TEST_CONSOLE !== "1") {
     return "silent";
   }
   return normalizeLogLevel(level, "info");
@@ -55,7 +55,7 @@ function normalizeConsoleStyle(style?: string): ConsoleStyle {
 }
 
 function resolveConsoleSettings(): ConsoleSettings {
-  let cfg: OpenClawConfig["logging"] | undefined =
+  let cfg: SmartAgentNeoConfig["logging"] | undefined =
     (loggingState.overrideSettings as LoggerSettings | null) ?? readLoggingConfig();
   if (!cfg) {
     if (loggingState.resolvingConsoleSettings) {

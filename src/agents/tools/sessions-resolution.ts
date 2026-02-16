@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { SmartAgentNeoConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
 import { isAcpSessionKey, normalizeMainKey } from "../../routing/session-key.js";
 
@@ -7,7 +7,7 @@ function normalizeKey(value?: string) {
   return trimmed ? trimmed : undefined;
 }
 
-export function resolveMainSessionAlias(cfg: OpenClawConfig) {
+export function resolveMainSessionAlias(cfg: SmartAgentNeoConfig) {
   const mainKey = normalizeMainKey(cfg.session?.mainKey);
   const scope = cfg.session?.scope ?? "per-sender";
   const alias = scope === "global" ? "global" : mainKey;

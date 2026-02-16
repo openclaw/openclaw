@@ -2,16 +2,16 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { SmartAgentNeoConfig } from "../config/config.js";
 import type { ExecApprovalsResolved } from "../infra/exec-approvals.js";
 import { captureEnv } from "../test-utils/env.js";
 
-const bundledPluginsDirSnapshot = captureEnv(["OPENCLAW_BUNDLED_PLUGINS_DIR"]);
+const bundledPluginsDirSnapshot = captureEnv(["SMART_AGENT_NEO_BUNDLED_PLUGINS_DIR"]);
 
 beforeAll(() => {
-  process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.join(
+  process.env.SMART_AGENT_NEO_BUNDLED_PLUGINS_DIR = path.join(
     os.tmpdir(),
-    "openclaw-test-no-bundled-extensions",
+    "smart-agent-neo-test-no-bundled-extensions",
   );
 });
 
@@ -67,15 +67,15 @@ vi.mock("../infra/exec-approvals.js", async (importOriginal) => {
   return { ...mod, resolveExecApprovals: () => approvals };
 });
 
-describe("createOpenClawCodingTools safeBins", () => {
+describe("createSmartAgentNeoCodingTools safeBins", () => {
   it("threads tools.exec.safeBins into exec allowlist checks", async () => {
     if (process.platform === "win32") {
       return;
     }
 
-    const { createOpenClawCodingTools } = await import("./pi-tools.js");
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-safe-bins-"));
-    const cfg: OpenClawConfig = {
+    const { createSmartAgentNeoCodingTools } = await import("./pi-tools.js");
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "smart-agent-neo-safe-bins-"));
+    const cfg: SmartAgentNeoConfig = {
       tools: {
         exec: {
           host: "gateway",
@@ -86,7 +86,7 @@ describe("createOpenClawCodingTools safeBins", () => {
       },
     };
 
-    const tools = createOpenClawCodingTools({
+    const tools = createSmartAgentNeoCodingTools({
       config: cfg,
       sessionKey: "agent:main:main",
       workspaceDir: tmpDir,
@@ -96,10 +96,10 @@ describe("createOpenClawCodingTools safeBins", () => {
     expect(execTool).toBeDefined();
 
     const marker = `safe-bins-${Date.now()}`;
-    const envSnapshot = captureEnv(["OPENCLAW_SHELL_ENV_TIMEOUT_MS"]);
+    const envSnapshot = captureEnv(["SMART_AGENT_NEO_SHELL_ENV_TIMEOUT_MS"]);
     const result = await (async () => {
       try {
-        process.env.OPENCLAW_SHELL_ENV_TIMEOUT_MS = "1000";
+        process.env.SMART_AGENT_NEO_SHELL_ENV_TIMEOUT_MS = "1000";
         return await execTool!.execute("call1", {
           command: `echo ${marker}`,
           workdir: tmpDir,
@@ -119,13 +119,13 @@ describe("createOpenClawCodingTools safeBins", () => {
       return;
     }
 
-    const { createOpenClawCodingTools } = await import("./pi-tools.js");
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-safe-bins-expand-"));
+    const { createSmartAgentNeoCodingTools } = await import("./pi-tools.js");
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "smart-agent-neo-safe-bins-expand-"));
 
     const secret = `TOP_SECRET_${Date.now()}`;
     fs.writeFileSync(path.join(tmpDir, "secret.txt"), `${secret}\n`, "utf8");
 
-    const cfg: OpenClawConfig = {
+    const cfg: SmartAgentNeoConfig = {
       tools: {
         exec: {
           host: "gateway",
@@ -136,7 +136,7 @@ describe("createOpenClawCodingTools safeBins", () => {
       },
     };
 
-    const tools = createOpenClawCodingTools({
+    const tools = createSmartAgentNeoCodingTools({
       config: cfg,
       sessionKey: "agent:main:main",
       workspaceDir: tmpDir,

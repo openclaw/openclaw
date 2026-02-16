@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { SmartAgentNeoConfig } from "../../config/config.js";
 import { slackPlugin } from "../../../extensions/slack/src/channel.js";
 import { telegramPlugin } from "../../../extensions/telegram/src/channel.js";
 import { whatsappPlugin } from "../../../extensions/whatsapp/src/channel.js";
@@ -29,7 +29,7 @@ const slackConfig = {
       appToken: "xapp-test",
     },
   },
-} as OpenClawConfig;
+} as SmartAgentNeoConfig;
 
 const whatsappConfig = {
   channels: {
@@ -37,7 +37,7 @@ const whatsappConfig = {
       allowFrom: ["*"],
     },
   },
-} as OpenClawConfig;
+} as SmartAgentNeoConfig;
 
 async function withSandbox(test: (sandboxDir: string) => Promise<void>) {
   const sandboxDir = await fs.mkdtemp(path.join(os.tmpdir(), "msg-sandbox-"));
@@ -49,7 +49,7 @@ async function withSandbox(test: (sandboxDir: string) => Promise<void>) {
 }
 
 const runDryAction = (params: {
-  cfg: OpenClawConfig;
+  cfg: SmartAgentNeoConfig;
   action: "send" | "thread-reply" | "broadcast";
   actionParams: Record<string, unknown>;
   toolContext?: Record<string, unknown>;
@@ -67,7 +67,7 @@ const runDryAction = (params: {
   });
 
 const runDrySend = (params: {
-  cfg: OpenClawConfig;
+  cfg: SmartAgentNeoConfig;
   actionParams: Record<string, unknown>;
   toolContext?: Record<string, unknown>;
   abortSignal?: AbortSignal;
@@ -284,7 +284,7 @@ describe("runMessageAction context isolation", () => {
           token: "tg-test",
         },
       },
-    } as OpenClawConfig;
+    } as SmartAgentNeoConfig;
 
     const result = await runDrySend({
       cfg: multiConfig,
@@ -322,7 +322,7 @@ describe("runMessageAction context isolation", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as SmartAgentNeoConfig;
 
     await expect(
       runDrySend({
@@ -435,7 +435,7 @@ describe("runMessageAction sendAttachment hydration", () => {
           password: "test-password",
         },
       },
-    } as OpenClawConfig;
+    } as SmartAgentNeoConfig;
 
     const result = await runMessageAction({
       cfg,
@@ -469,7 +469,7 @@ describe("runMessageAction sendAttachment hydration", () => {
           password: "test-password",
         },
       },
-    } as OpenClawConfig;
+    } as SmartAgentNeoConfig;
     await withSandbox(async (sandboxDir) => {
       await runMessageAction({
         cfg,
@@ -631,7 +631,7 @@ describe("runMessageAction media caption behavior", () => {
           enabled: true,
         },
       },
-    } as OpenClawConfig;
+    } as SmartAgentNeoConfig;
 
     const result = await runMessageAction({
       cfg,
@@ -711,7 +711,7 @@ describe("runMessageAction card-only send behavior", () => {
           enabled: true,
         },
       },
-    } as OpenClawConfig;
+    } as SmartAgentNeoConfig;
 
     const card = {
       type: "AdaptiveCard",
@@ -782,7 +782,7 @@ describe("runMessageAction accountId defaults", () => {
 
   it("propagates defaultAccountId into params", async () => {
     await runMessageAction({
-      cfg: {} as OpenClawConfig,
+      cfg: {} as SmartAgentNeoConfig,
       action: "send",
       params: {
         channel: "discord",

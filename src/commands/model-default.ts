@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { SmartAgentNeoConfig } from "../config/config.js";
 import type { AgentModelListConfig } from "../config/types.js";
 
 export function resolvePrimaryModel(model?: AgentModelListConfig | string): string | undefined {
@@ -12,10 +12,10 @@ export function resolvePrimaryModel(model?: AgentModelListConfig | string): stri
 }
 
 export function applyAgentDefaultPrimaryModel(params: {
-  cfg: OpenClawConfig;
+  cfg: SmartAgentNeoConfig;
   model: string;
   legacyModels?: Set<string>;
-}): { next: OpenClawConfig; changed: boolean } {
+}): { next: SmartAgentNeoConfig; changed: boolean } {
   const current = resolvePrimaryModel(params.cfg.agents?.defaults?.model)?.trim();
   const normalizedCurrent = current && params.legacyModels?.has(current) ? params.model : current;
   if (normalizedCurrent === params.model) {

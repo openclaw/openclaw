@@ -1,13 +1,13 @@
 {
-  "name": "@openclaw/imessage",
+  "name": "@smart-agent-neo/imessage",
   "version": "2026.2.16",
   "private": true,
-  "description": "OpenClaw iMessage channel plugin",
+  "description": "SmartAgentNeo iMessage channel plugin",
   "type": "module",
   "devDependencies": {
-    "openclaw": "workspace:*"
+    "smart-agent-neo": "workspace:*"
   },
-  "openclaw": {
+  "smart-agent-neo": {
     "extensions": [
       "./index.ts"
     ]

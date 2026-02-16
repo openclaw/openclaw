@@ -1,6 +1,6 @@
 ---
 summary: "Production plan for reliable interactive process supervision (PTY + non-PTY) with explicit ownership, unified lifecycle, and deterministic cleanup"
-owner: "openclaw"
+owner: "smart-agent-neo"
 status: "in-progress"
 last_updated: "2026-02-15"
 title: "PTY and Process Supervision Plan"

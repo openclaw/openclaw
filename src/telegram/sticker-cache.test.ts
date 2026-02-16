@@ -14,11 +14,11 @@ vi.mock("../config/paths.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/paths.js")>();
   return {
     ...actual,
-    STATE_DIR: "/tmp/openclaw-test-sticker-cache",
+    STATE_DIR: "/tmp/smart-agent-neo-test-sticker-cache",
   };
 });
 
-const TEST_CACHE_DIR = "/tmp/openclaw-test-sticker-cache/telegram";
+const TEST_CACHE_DIR = "/tmp/smart-agent-neo-test-sticker-cache/telegram";
 const TEST_CACHE_FILE = path.join(TEST_CACHE_DIR, "sticker-cache.json");
 
 describe("sticker-cache", () => {

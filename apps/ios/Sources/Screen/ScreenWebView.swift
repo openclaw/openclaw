@@ -1,4 +1,4 @@
-import OpenClawKit
+import SmartAgentNeoKit
 import SwiftUI
 import WebKit
 

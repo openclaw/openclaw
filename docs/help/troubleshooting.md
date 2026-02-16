@@ -1,7 +1,7 @@
 ---
-summary: "Symptom first troubleshooting hub for OpenClaw"
+summary: "Symptom first troubleshooting hub for SmartAgentNeo"
 read_when:
-  - OpenClaw is not working and you need the fastest path to a fix
+  - SmartAgentNeo is not working and you need the fastest path to a fix
   - You want a triage flow before diving into deep runbooks
 title: "Troubleshooting"
 ---
@@ -15,30 +15,30 @@ If you only have 2 minutes, use this page as a triage front door.
 Run this exact ladder in order:
 
 ```bash
-openclaw status
-openclaw status --all
-openclaw gateway probe
-openclaw gateway status
-openclaw doctor
-openclaw channels status --probe
-openclaw logs --follow
+smart-agent-neo status
+smart-agent-neo status --all
+smart-agent-neo gateway probe
+smart-agent-neo gateway status
+smart-agent-neo doctor
+smart-agent-neo channels status --probe
+smart-agent-neo logs --follow
 ```
 
 Good output in one line:
 
-- `openclaw status` → shows configured channels and no obvious auth errors.
-- `openclaw status --all` → full report is present and shareable.
-- `openclaw gateway probe` → expected gateway target is reachable.
-- `openclaw gateway status` → `Runtime: running` and `RPC probe: ok`.
-- `openclaw doctor` → no blocking config/service errors.
-- `openclaw channels status --probe` → channels report `connected` or `ready`.
-- `openclaw logs --follow` → steady activity, no repeating fatal errors.
+- `smart-agent-neo status` → shows configured channels and no obvious auth errors.
+- `smart-agent-neo status --all` → full report is present and shareable.
+- `smart-agent-neo gateway probe` → expected gateway target is reachable.
+- `smart-agent-neo gateway status` → `Runtime: running` and `RPC probe: ok`.
+- `smart-agent-neo doctor` → no blocking config/service errors.
+- `smart-agent-neo channels status --probe` → channels report `connected` or `ready`.
+- `smart-agent-neo logs --follow` → steady activity, no repeating fatal errors.
 
 ## Decision tree
 
 ```mermaid
 flowchart TD
-  A[OpenClaw is not working] --> B{What breaks first}
+  A[SmartAgentNeo is not working] --> B{What breaks first}
   B --> C[No replies]
   B --> D[Dashboard or Control UI will not connect]
   B --> E[Gateway will not start or service not running]
@@ -59,11 +59,11 @@ flowchart TD
 <AccordionGroup>
   <Accordion title="No replies">
     ```bash
-    openclaw status
-    openclaw gateway status
-    openclaw channels status --probe
-    openclaw pairing list <channel>
-    openclaw logs --follow
+    smart-agent-neo status
+    smart-agent-neo gateway status
+    smart-agent-neo channels status --probe
+    smart-agent-neo pairing list <channel>
+    smart-agent-neo logs --follow
     ```
 
     Good output looks like:
@@ -89,16 +89,16 @@ flowchart TD
 
   <Accordion title="Dashboard or Control UI will not connect">
     ```bash
-    openclaw status
-    openclaw gateway status
-    openclaw logs --follow
-    openclaw doctor
-    openclaw channels status --probe
+    smart-agent-neo status
+    smart-agent-neo gateway status
+    smart-agent-neo logs --follow
+    smart-agent-neo doctor
+    smart-agent-neo channels status --probe
     ```
 
     Good output looks like:
 
-    - `Dashboard: http://...` is shown in `openclaw gateway status`
+    - `Dashboard: http://...` is shown in `smart-agent-neo gateway status`
     - `RPC probe: ok`
     - No auth loop in logs
 
@@ -118,11 +118,11 @@ flowchart TD
 
   <Accordion title="Gateway will not start or service installed but not running">
     ```bash
-    openclaw status
-    openclaw gateway status
-    openclaw logs --follow
-    openclaw doctor
-    openclaw channels status --probe
+    smart-agent-neo status
+    smart-agent-neo gateway status
+    smart-agent-neo logs --follow
+    smart-agent-neo doctor
+    smart-agent-neo channels status --probe
     ```
 
     Good output looks like:
@@ -147,11 +147,11 @@ flowchart TD
 
   <Accordion title="Channel connects but messages do not flow">
     ```bash
-    openclaw status
-    openclaw gateway status
-    openclaw logs --follow
-    openclaw doctor
-    openclaw channels status --probe
+    smart-agent-neo status
+    smart-agent-neo gateway status
+    smart-agent-neo logs --follow
+    smart-agent-neo doctor
+    smart-agent-neo channels status --probe
     ```
 
     Good output looks like:
@@ -175,12 +175,12 @@ flowchart TD
 
   <Accordion title="Cron or heartbeat did not fire or did not deliver">
     ```bash
-    openclaw status
-    openclaw gateway status
-    openclaw cron status
-    openclaw cron list
-    openclaw cron runs --id <jobId> --limit 20
-    openclaw logs --follow
+    smart-agent-neo status
+    smart-agent-neo gateway status
+    smart-agent-neo cron status
+    smart-agent-neo cron list
+    smart-agent-neo cron runs --id <jobId> --limit 20
+    smart-agent-neo logs --follow
     ```
 
     Good output looks like:
@@ -206,11 +206,11 @@ flowchart TD
 
   <Accordion title="Node is paired but tool fails camera canvas screen exec">
     ```bash
-    openclaw status
-    openclaw gateway status
-    openclaw nodes status
-    openclaw nodes describe --node <idOrNameOrIp>
-    openclaw logs --follow
+    smart-agent-neo status
+    smart-agent-neo gateway status
+    smart-agent-neo nodes status
+    smart-agent-neo nodes describe --node <idOrNameOrIp>
+    smart-agent-neo logs --follow
     ```
 
     Good output looks like:
@@ -236,17 +236,17 @@ flowchart TD
 
   <Accordion title="Browser tool fails">
     ```bash
-    openclaw status
-    openclaw gateway status
-    openclaw browser status
-    openclaw logs --follow
-    openclaw doctor
+    smart-agent-neo status
+    smart-agent-neo gateway status
+    smart-agent-neo browser status
+    smart-agent-neo logs --follow
+    smart-agent-neo doctor
     ```
 
     Good output looks like:
 
     - Browser status shows `running: true` and a chosen browser/profile.
-    - `openclaw` profile starts or `chrome` relay has an attached tab.
+    - `smart-agent-neo` profile starts or `chrome` relay has an attached tab.
 
     Common log signatures:
 

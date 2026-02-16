@@ -1,7 +1,7 @@
 import { join, parse } from "node:path";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 
-vi.mock("openclaw/plugin-sdk", () => ({
+vi.mock("smart-agent-neo/plugin-sdk", () => ({
   isWSL2Sync: () => false,
 }));
 

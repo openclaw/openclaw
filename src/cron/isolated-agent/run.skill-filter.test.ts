@@ -198,8 +198,8 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
   let previousFastTestEnv: string | undefined;
   beforeEach(() => {
     vi.clearAllMocks();
-    previousFastTestEnv = process.env.OPENCLAW_TEST_FAST;
-    delete process.env.OPENCLAW_TEST_FAST;
+    previousFastTestEnv = process.env.SMART_AGENT_NEO_TEST_FAST;
+    delete process.env.SMART_AGENT_NEO_TEST_FAST;
     buildWorkspaceSkillSnapshotMock.mockReturnValue({
       prompt: "<available_skills></available_skills>",
       resolvedSkills: [],
@@ -223,10 +223,10 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
 
   afterEach(() => {
     if (previousFastTestEnv == null) {
-      delete process.env.OPENCLAW_TEST_FAST;
+      delete process.env.SMART_AGENT_NEO_TEST_FAST;
       return;
     }
-    process.env.OPENCLAW_TEST_FAST = previousFastTestEnv;
+    process.env.SMART_AGENT_NEO_TEST_FAST = previousFastTestEnv;
   });
 
   it("passes agent-level skillFilter to buildWorkspaceSkillSnapshot", async () => {

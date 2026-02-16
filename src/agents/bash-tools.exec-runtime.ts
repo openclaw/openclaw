@@ -84,7 +84,7 @@ export const DEFAULT_MAX_OUTPUT = clampWithDefault(
   200_000,
 );
 export const DEFAULT_PENDING_MAX_OUTPUT = clampWithDefault(
-  readEnvInt("OPENCLAW_BASH_PENDING_MAX_OUTPUT_CHARS"),
+  readEnvInt("SMART_AGENT_NEO_BASH_PENDING_MAX_OUTPUT_CHARS"),
   30_000,
   1_000,
   200_000,

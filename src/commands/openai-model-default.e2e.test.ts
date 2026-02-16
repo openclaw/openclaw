@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { SmartAgentNeoConfig } from "../config/config.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { applyDefaultModelChoice } from "./auth-choice.default-model.js";
 import {
@@ -34,7 +34,7 @@ function makePrompter(): WizardPrompter {
 }
 
 function expectPrimaryModelChanged(
-  applied: { changed: boolean; next: OpenClawConfig },
+  applied: { changed: boolean; next: SmartAgentNeoConfig },
   primary: string,
 ) {
   expect(applied.changed).toBe(true);
@@ -42,8 +42,8 @@ function expectPrimaryModelChanged(
 }
 
 function expectConfigUnchanged(
-  applied: { changed: boolean; next: OpenClawConfig },
-  cfg: OpenClawConfig,
+  applied: { changed: boolean; next: SmartAgentNeoConfig },
+  cfg: SmartAgentNeoConfig,
 ) {
   expect(applied.changed).toBe(false);
   expect(applied.next).toEqual(cfg);
@@ -58,8 +58,8 @@ describe("applyDefaultModelChoice", () => {
       setDefaultModel: false,
       defaultModel,
       // Simulate a provider function that does not explicitly add the entry.
-      applyProviderConfig: (config: OpenClawConfig) => config,
-      applyDefaultConfig: (config: OpenClawConfig) => config,
+      applyProviderConfig: (config: SmartAgentNeoConfig) => config,
+      applyDefaultConfig: (config: SmartAgentNeoConfig) => config,
       noteAgentModel,
       prompter: makePrompter(),
     });
@@ -75,8 +75,8 @@ describe("applyDefaultModelChoice", () => {
       config: {},
       setDefaultModel: false,
       defaultModel,
-      applyProviderConfig: (config: OpenClawConfig) => config,
-      applyDefaultConfig: (config: OpenClawConfig) => config,
+      applyProviderConfig: (config: SmartAgentNeoConfig) => config,
+      applyDefaultConfig: (config: SmartAgentNeoConfig) => config,
       noteAgentModel: async () => {},
       prompter: makePrompter(),
     });
@@ -91,7 +91,7 @@ describe("applyDefaultModelChoice", () => {
       config: {},
       setDefaultModel: true,
       defaultModel,
-      applyProviderConfig: (config: OpenClawConfig) => config,
+      applyProviderConfig: (config: SmartAgentNeoConfig) => config,
       applyDefaultConfig: () => ({
         agents: {
           defaults: {
@@ -111,13 +111,13 @@ describe("applyDefaultModelChoice", () => {
 
 describe("applyGoogleGeminiModelDefault", () => {
   it("sets gemini default when model is unset", () => {
-    const cfg: OpenClawConfig = { agents: { defaults: {} } };
+    const cfg: SmartAgentNeoConfig = { agents: { defaults: {} } };
     const applied = applyGoogleGeminiModelDefault(cfg);
     expectPrimaryModelChanged(applied, GOOGLE_GEMINI_DEFAULT_MODEL);
   });
 
   it("overrides existing model", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: SmartAgentNeoConfig = {
       agents: { defaults: { model: "anthropic/claude-opus-4-5" } },
     };
     const applied = applyGoogleGeminiModelDefault(cfg);
@@ -125,7 +125,7 @@ describe("applyGoogleGeminiModelDefault", () => {
   });
 
   it("no-ops when already gemini default", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: SmartAgentNeoConfig = {
       agents: { defaults: { model: GOOGLE_GEMINI_DEFAULT_MODEL } },
     };
     const applied = applyGoogleGeminiModelDefault(cfg);
@@ -169,13 +169,13 @@ describe("applyOpenAIConfig", () => {
 
 describe("applyOpenAICodexModelDefault", () => {
   it("sets openai-codex default when model is unset", () => {
-    const cfg: OpenClawConfig = { agents: { defaults: {} } };
+    const cfg: SmartAgentNeoConfig = { agents: { defaults: {} } };
     const applied = applyOpenAICodexModelDefault(cfg);
     expectPrimaryModelChanged(applied, OPENAI_CODEX_DEFAULT_MODEL);
   });
 
   it("sets openai-codex default when model is openai/*", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: SmartAgentNeoConfig = {
       agents: { defaults: { model: OPENAI_DEFAULT_MODEL } },
     };
     const applied = applyOpenAICodexModelDefault(cfg);
@@ -183,7 +183,7 @@ describe("applyOpenAICodexModelDefault", () => {
   });
 
   it("does not override openai-codex/*", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: SmartAgentNeoConfig = {
       agents: { defaults: { model: OPENAI_CODEX_DEFAULT_MODEL } },
     };
     const applied = applyOpenAICodexModelDefault(cfg);
@@ -191,7 +191,7 @@ describe("applyOpenAICodexModelDefault", () => {
   });
 
   it("does not override non-openai models", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: SmartAgentNeoConfig = {
       agents: { defaults: { model: "anthropic/claude-opus-4-5" } },
     };
     const applied = applyOpenAICodexModelDefault(cfg);
@@ -201,7 +201,7 @@ describe("applyOpenAICodexModelDefault", () => {
 
 describe("applyOpencodeZenModelDefault", () => {
   it("sets opencode default when model is unset", () => {
-    const cfg: OpenClawConfig = { agents: { defaults: {} } };
+    const cfg: SmartAgentNeoConfig = { agents: { defaults: {} } };
     const applied = applyOpencodeZenModelDefault(cfg);
     expectPrimaryModelChanged(applied, OPENCODE_ZEN_DEFAULT_MODEL);
   });
@@ -209,7 +209,7 @@ describe("applyOpencodeZenModelDefault", () => {
   it("overrides existing model", () => {
     const cfg = {
       agents: { defaults: { model: "anthropic/claude-opus-4-5" } },
-    } as OpenClawConfig;
+    } as SmartAgentNeoConfig;
     const applied = applyOpencodeZenModelDefault(cfg);
     expectPrimaryModelChanged(applied, OPENCODE_ZEN_DEFAULT_MODEL);
   });
@@ -217,7 +217,7 @@ describe("applyOpencodeZenModelDefault", () => {
   it("no-ops when already opencode-zen default", () => {
     const cfg = {
       agents: { defaults: { model: OPENCODE_ZEN_DEFAULT_MODEL } },
-    } as OpenClawConfig;
+    } as SmartAgentNeoConfig;
     const applied = applyOpencodeZenModelDefault(cfg);
     expectConfigUnchanged(applied, cfg);
   });
@@ -225,13 +225,13 @@ describe("applyOpencodeZenModelDefault", () => {
   it("no-ops when already legacy opencode-zen default", () => {
     const cfg = {
       agents: { defaults: { model: "opencode-zen/claude-opus-4-5" } },
-    } as OpenClawConfig;
+    } as SmartAgentNeoConfig;
     const applied = applyOpencodeZenModelDefault(cfg);
     expectConfigUnchanged(applied, cfg);
   });
 
   it("preserves fallbacks when setting primary", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: SmartAgentNeoConfig = {
       agents: {
         defaults: {
           model: {

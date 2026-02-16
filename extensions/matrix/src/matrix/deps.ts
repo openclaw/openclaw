@@ -1,4 +1,4 @@
-import type { RuntimeEnv } from "openclaw/plugin-sdk";
+import type { RuntimeEnv } from "smart-agent-neo/plugin-sdk";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";

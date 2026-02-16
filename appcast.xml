@@ -1,27 +1,27 @@
 <?xml version="1.0" standalone="yes"?>
 <rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
     <channel>
-        <title>OpenClaw</title>
+        <title>SmartAgentNeo</title>
         <item>
             <title>2026.2.14</title>
             <pubDate>Sun, 15 Feb 2026 04:24:34 +0100</pubDate>
-            <link>https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml</link>
+            <link>https://raw.githubusercontent.com/betterbrand/smart-agent-neo/main/appcast.xml</link>
             <sparkle:version>202602140</sparkle:version>
             <sparkle:shortVersionString>2026.2.14</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description><![CDATA[<h2>OpenClaw 2026.2.14</h2>
+            <description><![CDATA[<h2>SmartAgentNeo 2026.2.14</h2>
 <h3>Changes</h3>
 <ul>
-<li>Telegram: add poll sending via <code>openclaw message poll</code> (duration seconds, silent delivery, anonymity controls). (#16209) Thanks @robbyczgw-cla.</li>
-<li>Slack/Discord: add <code>dmPolicy</code> + <code>allowFrom</code> config aliases for DM access control; legacy <code>dm.policy</code> + <code>dm.allowFrom</code> keys remain supported and <code>openclaw doctor --fix</code> can migrate them.</li>
+<li>Telegram: add poll sending via <code>smart-agent-neo message poll</code> (duration seconds, silent delivery, anonymity controls). (#16209) Thanks @robbyczgw-cla.</li>
+<li>Slack/Discord: add <code>dmPolicy</code> + <code>allowFrom</code> config aliases for DM access control; legacy <code>dm.policy</code> + <code>dm.allowFrom</code> keys remain supported and <code>smart-agent-neo doctor --fix</code> can migrate them.</li>
 <li>Discord: allow exec approval prompts to target channels or both DM+channel via <code>channels.discord.execApprovals.target</code>. (#16051) Thanks @leonnardo.</li>
 <li>Sandbox: add <code>sandbox.browser.binds</code> to configure browser-container bind mounts separately from exec containers. (#16230) Thanks @seheepeak.</li>
 <li>Discord: add debug logging for message routing decisions to improve <code>--debug</code> tracing. (#16202) Thanks @jayleekr.</li>
 </ul>
 <h3>Fixes</h3>
 <ul>
-<li>CLI/Plugins: ensure <code>openclaw message send</code> exits after successful delivery across plugin-backed channels so one-shot sends do not hang. (#16491) Thanks @yinghaosang.</li>
-<li>CLI/Plugins: run registered plugin <code>gateway_stop</code> hooks before <code>openclaw message</code> exits (success and failure paths), so plugin-backed channels can clean up one-shot CLI resources. (#16580) Thanks @gumadeiras.</li>
+<li>CLI/Plugins: ensure <code>smart-agent-neo message send</code> exits after successful delivery across plugin-backed channels so one-shot sends do not hang. (#16491) Thanks @yinghaosang.</li>
+<li>CLI/Plugins: run registered plugin <code>gateway_stop</code> hooks before <code>smart-agent-neo message</code> exits (success and failure paths), so plugin-backed channels can clean up one-shot CLI resources. (#16580) Thanks @gumadeiras.</li>
 <li>WhatsApp: honor per-account <code>dmPolicy</code> overrides (account-level settings now take precedence over channel defaults for inbound DMs). (#10082) Thanks @mcaxtr.</li>
 <li>Telegram: when <code>channels.telegram.commands.native</code> is <code>false</code>, exclude plugin commands from <code>setMyCommands</code> menu registration while keeping plugin slash handlers callable. (#15132) Thanks @Glucksberg.</li>
 <li>LINE: return 200 OK for Developers Console "Verify" requests (<code>{"events":[]}</code>) without <code>X-Line-Signature</code>, while still requiring signatures for real deliveries. (#16582) Thanks @arosstale.</li>
@@ -34,8 +34,8 @@
 <li>BlueBubbles: include sender identity in group chat envelopes and pass clean message text to the agent prompt, aligning with iMessage/Signal formatting. (#16210) Thanks @zerone0x.</li>
 <li>CLI: fix lazy core command registration so top-level maintenance commands (<code>doctor</code>, <code>dashboard</code>, <code>reset</code>, <code>uninstall</code>) resolve correctly instead of exposing a non-functional <code>maintenance</code> placeholder command.</li>
 <li>CLI/Dashboard: when <code>gateway.bind=lan</code>, generate localhost dashboard URLs to satisfy browser secure-context requirements while preserving non-LAN bind behavior. (#16434) Thanks @BinHPdev.</li>
-<li>TUI/Gateway: resolve local gateway target URL from <code>gateway.bind</code> mode (tailnet/lan) instead of hardcoded localhost so <code>openclaw tui</code> connects when gateway is non-loopback. (#16299) Thanks @cortexuvula.</li>
-<li>TUI: honor explicit <code>--session <key></code> in <code>openclaw tui</code> even when <code>session.scope</code> is <code>global</code>, so named sessions no longer collapse into shared global history. (#16575) Thanks @cinqu.</li>
+<li>TUI/Gateway: resolve local gateway target URL from <code>gateway.bind</code> mode (tailnet/lan) instead of hardcoded localhost so <code>smart-agent-neo tui</code> connects when gateway is non-loopback. (#16299) Thanks @cortexuvula.</li>
+<li>TUI: honor explicit <code>--session <key></code> in <code>smart-agent-neo tui</code> even when <code>session.scope</code> is <code>global</code>, so named sessions no longer collapse into shared global history. (#16575) Thanks @cinqu.</li>
 <li>TUI: use available terminal width for session name display in searchable select lists. (#16238) Thanks @robbyczgw-cla.</li>
 <li>TUI: refactor searchable select list description layout and add regression coverage for ANSI-highlight width bounds.</li>
 <li>TUI: preserve in-flight streaming replies when a different run finalizes concurrently (avoid clearing active run or reloading history mid-stream). (#10704) Thanks @axschr73.</li>
@@ -50,7 +50,7 @@
 <li>Discord: prefer gateway guild id when logging inbound messages so cached-miss guilds do not appear as <code>guild=dm</code>. Thanks @thewilloftheshadow.</li>
 <li>Discord: treat empty per-guild <code>channels: {}</code> config maps as no channel allowlist (not deny-all), so <code>groupPolicy: "open"</code> guilds without explicit channel entries continue to receive messages. (#16714) Thanks @xqliu.</li>
 <li>Models/CLI: guard <code>models status</code> string trimming paths to prevent crashes from malformed non-string config values. (#16395) Thanks @BinHPdev.</li>
-<li>Gateway/Subagents: preserve queued announce items and summary state on delivery errors, retry failed announce drains, and avoid dropping unsent announcements on timeout/failure. (#16729) Thanks @Clawdette-Workspace.</li>
+<li>Gateway/Subagents: preserve queued announce items and summary state on delivery errors, retry failed announce drains, and avoid dropping unsent announcements on timeout/failure. (#16729) Thanks @Neoette-Workspace.</li>
 <li>Gateway/Sessions: abort active embedded runs and clear queued session work before <code>sessions.reset</code>, returning unavailable if the run does not stop in time. (#16576) Thanks @Grynn.</li>
 <li>Sessions/Agents: harden transcript path resolution for mismatched agent context by preserving explicit store roots and adding safe absolute-path fallback to the correct agent sessions directory. (#16288) Thanks @robbyczgw-cla.</li>
 <li>Agents: add a safety timeout around embedded <code>session.compact()</code> to ensure stalled compaction runs settle and release blocked session lanes. (#16331) Thanks @BinHPdev.</li>
@@ -88,7 +88,7 @@
 <li>Outbound/Memory: bound directory cache growth with max-size eviction and proactive TTL pruning to prevent long-running gateways from accumulating unbounded directory entries. (#5140) Thanks @coygeek and @vignesh07.</li>
 <li>Skills/Memory: remove disconnected nodes from remote-skills cache to prevent stale node metadata from accumulating over long uptimes. (#6760) Thanks @coygeek.</li>
 <li>Sandbox/Tools: make sandbox file tools bind-mount aware (including absolute container paths) and enforce read-only bind semantics for writes. (#16379) Thanks @tasaankaeris.</li>
-<li>Media/Security: allow local media reads from OpenClaw state <code>workspace/</code> and <code>sandboxes/</code> roots by default so generated workspace media can be delivered without unsafe global path bypasses. (#15541) Thanks @lanceji.</li>
+<li>Media/Security: allow local media reads from SmartAgentNeo state <code>workspace/</code> and <code>sandboxes/</code> roots by default so generated workspace media can be delivered without unsafe global path bypasses. (#15541) Thanks @lanceji.</li>
 <li>Media/Security: harden local media allowlist bypasses by requiring an explicit <code>readFile</code> override when callers mark paths as validated, and reject filesystem-root <code>localRoots</code> entries. (#16739)</li>
 <li>Discord/Security: harden voice message media loading (SSRF + allowed-local-root checks) so tool-supplied paths/URLs cannot be used to probe internal URLs or read arbitrary local files.</li>
 <li>Security/BlueBubbles: require explicit <code>mediaLocalRoots</code> allowlists for local outbound media path reads to prevent local file disclosure. (#16322) Thanks @mbelinky.</li>
@@ -98,7 +98,7 @@
 <li>Security/Zalo: reject ambiguous shared-path webhook routing when multiple webhook targets match the same secret.</li>
 <li>Security/Nostr: require loopback source and block cross-origin profile mutation/import attempts. Thanks @vincentkoc.</li>
 <li>Security/Signal: harden signal-cli archive extraction during install to prevent path traversal outside the install root.</li>
-<li>Security/Hooks: restrict hook transform modules to <code>~/.openclaw/hooks/transforms</code> (prevents path traversal/escape module loads via config). Config note: <code>hooks.transformsDir</code> must now be within that directory. Thanks @akhmittra.</li>
+<li>Security/Hooks: restrict hook transform modules to <code>~/.smart-agent-neo/hooks/transforms</code> (prevents path traversal/escape module loads via config). Config note: <code>hooks.transformsDir</code> must now be within that directory. Thanks @akhmittra.</li>
 <li>Security/Hooks: ignore hook package manifest entries that point outside the package directory (prevents out-of-tree handler loads during hook discovery).</li>
 <li>Security/Archive: enforce archive extraction entry/size limits to prevent resource exhaustion from high-expansion ZIP/TAR archives. Thanks @vincentkoc.</li>
 <li>Security/Media: reject oversized base64-backed input media before decoding to avoid large allocations. Thanks @vincentkoc.</li>
@@ -108,7 +108,7 @@
 <li>Security/iMessage: keep DM pairing-store identities out of group allowlist authorization (prevents cross-context command authorization). Thanks @vincentkoc.</li>
 <li>Security/Google Chat: deprecate <code>users/<email></code> allowlists (treat <code>users/...</code> as immutable user id only); keep raw email allowlists for usability. Thanks @vincentkoc.</li>
 <li>Security/Google Chat: reject ambiguous shared-path webhook routing when multiple webhook targets verify successfully (prevents cross-account policy-context misrouting). Thanks @vincentkoc.</li>
-<li>Telegram/Security: require numeric Telegram sender IDs for allowlist authorization (reject <code>@username</code> principals), auto-resolve <code>@username</code> to IDs in <code>openclaw doctor --fix</code> (when possible), and warn in <code>openclaw security audit</code> when legacy configs contain usernames. Thanks @vincentkoc.</li>
+<li>Telegram/Security: require numeric Telegram sender IDs for allowlist authorization (reject <code>@username</code> principals), auto-resolve <code>@username</code> to IDs in <code>smart-agent-neo doctor --fix</code> (when possible), and warn in <code>smart-agent-neo security audit</code> when legacy configs contain usernames. Thanks @vincentkoc.</li>
 <li>Telegram/Security: reject Telegram webhook startup when <code>webhookSecret</code> is missing or empty (prevents unauthenticated webhook request forgery). Thanks @yueyueL.</li>
 <li>Security/Windows: avoid shell invocation when spawning child processes to prevent cmd.exe metacharacter injection via untrusted CLI arguments (e.g. agent prompt text).</li>
 <li>Telegram: set webhook callback timeout handling to <code>onTimeout: "return"</code> (10s) so long-running update processing no longer emits webhook 500s and retry storms. (#16763) Thanks @chansearrington.</li>
@@ -118,8 +118,8 @@
 <li>Security/Agents: enforce workspace-root path bounds for <code>apply_patch</code> in non-sandbox mode to block traversal and symlink escape writes. Thanks @p80n-sec.</li>
 <li>Security/Agents: enforce symlink-escape checks for <code>apply_patch</code> delete hunks under <code>workspaceOnly</code>, while still allowing deleting the symlink itself. Thanks @p80n-sec.</li>
 <li>Security/Agents (macOS): prevent shell injection when writing Claude CLI keychain credentials. (#15924) Thanks @aether-ai-agent.</li>
-<li>macOS: hard-limit unkeyed <code>openclaw://agent</code> deep links and ignore <code>deliver</code> / <code>to</code> / <code>channel</code> unless a valid unattended key is provided. Thanks @Cillian-Collins.</li>
-<li>Scripts/Security: validate GitHub logins and avoid shell invocation in <code>scripts/update-clawtributors.ts</code> to prevent command injection via malicious commit records. Thanks @scanleale.</li>
+<li>macOS: hard-limit unkeyed <code>smart-agent-neo://agent</code> deep links and ignore <code>deliver</code> / <code>to</code> / <code>channel</code> unless a valid unattended key is provided. Thanks @Cillian-Collins.</li>
+<li>Scripts/Security: validate GitHub logins and avoid shell invocation in <code>scripts/update-neo-contributors.ts</code> to prevent command injection via malicious commit records. Thanks @scanleale.</li>
 <li>Security: fix Chutes manual OAuth login state validation by requiring the full redirect URL (reject code-only pastes) (thanks @aether-ai-agent).</li>
 <li>Security/Gateway: harden tool-supplied <code>gatewayUrl</code> overrides by restricting them to loopback or the configured <code>gateway.remote.url</code>. Thanks @p80n-sec.</li>
 <li>Security/Gateway: block <code>system.execApprovals.*</code> via <code>node.invoke</code> (use <code>exec.approvals.node.*</code> instead). Thanks @christos-eth.</li>
@@ -136,18 +136,18 @@
 <li>Security/Voice Call: require valid Twilio webhook signatures even when ngrok free tier loopback compatibility mode is enabled. Thanks @p80n-sec.</li>
 <li>Security/Discovery: stop treating Bonjour TXT records as authoritative routing (prefer resolved service endpoints) and prevent discovery from overriding stored TLS pins; autoconnect now requires a previously trusted gateway. Thanks @simecek.</li>
 </ul>
-<p><a href="https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md">View full changelog</a></p>
+<p><a href="https://github.com/betterbrand/smart-agent-neo/blob/main/CHANGELOG.md">View full changelog</a></p>
 ]]></description>
-            <enclosure url="https://github.com/openclaw/openclaw/releases/download/v2026.2.14/OpenClaw-2026.2.14.zip" length="22914034" type="application/octet-stream" sparkle:edSignature="lR3nuq46/akMIN8RFDpMkTE0VOVoDVG53Xts589LryMGEtUvJxRQDtHBXfx7ZvToTq6CFKG+L5Kq/4rUspMoAQ=="/>
+            <enclosure url="https://github.com/betterbrand/smart-agent-neo/releases/download/v2026.2.14/SmartAgentNeo-2026.2.14.zip" length="22914034" type="application/octet-stream" sparkle:edSignature="lR3nuq46/akMIN8RFDpMkTE0VOVoDVG53Xts589LryMGEtUvJxRQDtHBXfx7ZvToTq6CFKG+L5Kq/4rUspMoAQ=="/>
         </item>
         <item>
             <title>2026.2.15</title>
             <pubDate>Mon, 16 Feb 2026 05:04:34 +0100</pubDate>
-            <link>https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml</link>
+            <link>https://raw.githubusercontent.com/betterbrand/smart-agent-neo/main/appcast.xml</link>
             <sparkle:version>11213</sparkle:version>
             <sparkle:shortVersionString>2026.2.15</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description><![CDATA[<h2>OpenClaw 2026.2.15</h2>
+            <description><![CDATA[<h2>SmartAgentNeo 2026.2.15</h2>
 <h3>Changes</h3>
 <ul>
 <li>Discord: unlock rich interactive agent prompts with Components v2 (buttons, selects, modals, and attachment-backed file blocks) so for native interaction through Discord. Thanks @thewilloftheshadow.</li>
@@ -204,18 +204,18 @@
 <li>TUI: preserve copy-sensitive long tokens (URLs/paths/file-like identifiers) during wrapping and overflow sanitization so wrapped output no longer inserts spaces that corrupt copy/paste values. (#17515, #17466, #17505) Thanks @abe238, @trevorpan, and @JasonCry.</li>
 <li>CLI/Build: make legacy daemon CLI compatibility shim generation tolerant of minimal tsdown daemon export sets, while preserving restart/register compatibility aliases and surfacing explicit errors for unavailable legacy daemon commands. Thanks @vignesh07.</li>
 </ul>
-<p><a href="https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md">View full changelog</a></p>
+<p><a href="https://github.com/betterbrand/smart-agent-neo/blob/main/CHANGELOG.md">View full changelog</a></p>
 ]]></description>
-            <enclosure url="https://github.com/openclaw/openclaw/releases/download/v2026.2.15/OpenClaw-2026.2.15.zip" length="22896513" type="application/octet-stream" sparkle:edSignature="MLGsd2NeHXFRH1Or0bFQnAjqfuuJDuhl1mvKFIqTQcRvwbeyvOyyLXrqSbmaOgJR3wBQBKLs6jYQ9dQ/3R8RCg=="/>
+            <enclosure url="https://github.com/betterbrand/smart-agent-neo/releases/download/v2026.2.15/SmartAgentNeo-2026.2.15.zip" length="22896513" type="application/octet-stream" sparkle:edSignature="MLGsd2NeHXFRH1Or0bFQnAjqfuuJDuhl1mvKFIqTQcRvwbeyvOyyLXrqSbmaOgJR3wBQBKLs6jYQ9dQ/3R8RCg=="/>
         </item>
         <item>
             <title>2026.2.13</title>
             <pubDate>Sat, 14 Feb 2026 04:30:23 +0100</pubDate>
-            <link>https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml</link>
+            <link>https://raw.githubusercontent.com/betterbrand/smart-agent-neo/main/appcast.xml</link>
             <sparkle:version>9846</sparkle:version>
             <sparkle:shortVersionString>2026.2.13</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description><![CDATA[<h2>OpenClaw 2026.2.13</h2>
+            <description><![CDATA[<h2>SmartAgentNeo 2026.2.13</h2>
 <h3>Changes</h3>
 <ul>
 <li>Discord: send voice messages with waveform previews from local audio files (including silent delivery). (#7253) Thanks @nyanjou.</li>
@@ -247,7 +247,7 @@
 <li>OpenAI Codex/Spark: implement end-to-end <code>gpt-5.3-codex-spark</code> support across fallback/thinking/model resolution and <code>models list</code> forward-compat visibility. (#14990, #15174) Thanks @L-U-C-K-Y, @loiie45e.</li>
 <li>Agents/Codex: allow <code>gpt-5.3-codex-spark</code> in forward-compat fallback, live model filtering, and thinking presets, and fix model-picker recognition for spark. (#14990) Thanks @L-U-C-K-Y.</li>
 <li>Models/Codex: resolve configured <code>openai-codex/gpt-5.3-codex-spark</code> through forward-compat fallback during <code>models list</code>, so it is not incorrectly tagged as missing when runtime resolution succeeds. (#15174) Thanks @loiie45e.</li>
-<li>OpenAI Codex/Auth: bridge OpenClaw OAuth profiles into <code>pi</code> <code>auth.json</code> so model discovery and models-list registry resolution can use Codex OAuth credentials. (#15184) Thanks @loiie45e.</li>
+<li>OpenAI Codex/Auth: bridge SmartAgentNeo OAuth profiles into <code>pi</code> <code>auth.json</code> so model discovery and models-list registry resolution can use Codex OAuth credentials. (#15184) Thanks @loiie45e.</li>
 <li>Auth/OpenAI Codex: share OAuth login handling across onboarding and <code>models auth login --provider openai-codex</code>, keep onboarding alive when OAuth fails, and surface a direct OAuth help note instead of terminating the wizard. (#15406, follow-up to #14552) Thanks @zhiluo20.</li>
 <li>Onboarding/Providers: add vLLM as an onboarding provider with model discovery, auth profile wiring, and non-interactive auth-choice validation. (#12577) Thanks @gejifeng.</li>
 <li>Onboarding/Providers: preserve Hugging Face auth intent in auth-choice remapping (<code>tokenProvider=huggingface</code> with <code>authChoice=apiKey</code>) and skip env-override prompts when an explicit token is provided. (#13472) Thanks @Josephrp.</li>
@@ -266,23 +266,23 @@
 <li>Sessions/Agents: pass <code>agentId</code> through status and usage transcript-resolution paths (auto-reply, gateway usage APIs, and session cost/log loaders) so non-default agents can resolve absolute session files without path-validation failures. (#15103) Thanks @jalehman.</li>
 <li>Sessions: archive previous transcript files on <code>/new</code> and <code>/reset</code> session resets (including gateway <code>sessions.reset</code>) so stale transcripts do not accumulate on disk. (#14869) Thanks @mcaxtr.</li>
 <li>Status/Sessions: stop clamping derived <code>totalTokens</code> to context-window size, keep prompt-token snapshots wired through session accounting, and surface context usage as unknown when fresh snapshot data is missing to avoid false 100% reports. (#15114) Thanks @echoVic.</li>
-<li>CLI/Completion: route plugin-load logs to stderr and write generated completion scripts directly to stdout to avoid <code>source <(openclaw completion ...)</code> corruption. (#15481) Thanks @arosstale.</li>
+<li>CLI/Completion: route plugin-load logs to stderr and write generated completion scripts directly to stdout to avoid <code>source <(smart-agent-neo completion ...)</code> corruption. (#15481) Thanks @arosstale.</li>
 <li>CLI: lazily load outbound provider dependencies and remove forced success-path exits so commands terminate naturally without killing intentional long-running foreground actions. (#12906) Thanks @DrCrinkle.</li>
 <li>Security/Gateway + ACP: block high-risk tools (<code>sessions_spawn</code>, <code>sessions_send</code>, <code>gateway</code>, <code>whatsapp_login</code>) from HTTP <code>/tools/invoke</code> by default with <code>gateway.tools.{allow,deny}</code> overrides, and harden ACP permission selection to fail closed when tool identity/options are ambiguous while supporting <code>allow_always</code>/<code>reject_always</code>. (#15390) Thanks @aether-ai-agent.</li>
 <li>Security/Gateway: breaking default-behavior change - canvas IP-based auth fallback now only accepts machine-scoped addresses (RFC1918, link-local, ULA IPv6, CGNAT); public-source IP matches now require bearer token auth. (#14661) Thanks @sumleo.</li>
 <li>Security/Link understanding: block loopback/internal host patterns and private/mapped IPv6 addresses in extracted URL handling to close SSRF bypasses in link CLI flows. (#15604) Thanks @AI-Reviewer-QS.</li>
-<li>Security/Browser: constrain <code>POST /trace/stop</code>, <code>POST /wait/download</code>, and <code>POST /download</code> output paths to OpenClaw temp roots and reject traversal/escape paths.</li>
+<li>Security/Browser: constrain <code>POST /trace/stop</code>, <code>POST /wait/download</code>, and <code>POST /download</code> output paths to SmartAgentNeo temp roots and reject traversal/escape paths.</li>
 <li>Security/Canvas: serve A2UI assets via the shared safe-open path (<code>openFileWithinRoot</code>) to close traversal/TOCTOU gaps, with traversal and symlink regression coverage. (#10525) Thanks @abdelsfane.</li>
 <li>Security/WhatsApp: enforce <code>0o600</code> on <code>creds.json</code> and <code>creds.json.bak</code> on save/backup/restore paths to reduce credential file exposure. (#10529) Thanks @abdelsfane.</li>
 <li>Security/Gateway: sanitize and truncate untrusted WebSocket header values in pre-handshake close logs to reduce log-poisoning risk. Thanks @thewilloftheshadow.</li>
 <li>Security/Audit: add misconfiguration checks for sandbox Docker config with sandbox mode off, ineffective <code>gateway.nodes.denyCommands</code> entries, global minimal tool-profile overrides by agent profiles, and permissive extension-plugin tool reachability.</li>
 <li>Security/Audit: distinguish external webhooks (<code>hooks.enabled</code>) from internal hooks (<code>hooks.internal.enabled</code>) in attack-surface summaries to avoid false exposure signals when only internal hooks are enabled. (#13474) Thanks @mcaxtr.</li>
-<li>Security/Onboarding: clarify multi-user DM isolation remediation with explicit <code>openclaw config set session.dmScope ...</code> commands in security audit, doctor security, and channel onboarding guidance. (#13129) Thanks @VintLin.</li>
+<li>Security/Onboarding: clarify multi-user DM isolation remediation with explicit <code>smart-agent-neo config set session.dmScope ...</code> commands in security audit, doctor security, and channel onboarding guidance. (#13129) Thanks @VintLin.</li>
 <li>Agents/Nodes: harden node exec approval decision handling in the <code>nodes</code> tool run path by failing closed on unexpected approval decisions, and add regression coverage for approval-required retry/deny/timeout flows. (#4726) Thanks @rmorse.</li>
 <li>Android/Nodes: harden <code>app.update</code> by requiring HTTPS and gateway-host URL matching plus SHA-256 verification, stream URL camera downloads to disk with size guards to avoid memory spikes, and stop signing release builds with debug keys. (#13541) Thanks @smartprogrammer93.</li>
 <li>Routing: enforce strict binding-scope matching across peer/guild/team/roles so peer-scoped Discord/Slack bindings no longer match unrelated guild/team contexts or fallback tiers. (#15274) Thanks @lailoo.</li>
 <li>Exec/Allowlist: allow multiline heredoc bodies (<code><<</code>, <code><<-</code>) while keeping multiline non-heredoc shell commands blocked, so exec approval parsing permits heredoc input safely without allowing general newline command chaining. (#13811) Thanks @mcaxtr.</li>
-<li>Config: preserve <code>${VAR}</code> env references when writing config files so <code>openclaw config set/apply/patch</code> does not persist secrets to disk. Thanks @thewilloftheshadow.</li>
+<li>Config: preserve <code>${VAR}</code> env references when writing config files so <code>smart-agent-neo config set/apply/patch</code> does not persist secrets to disk. Thanks @thewilloftheshadow.</li>
 <li>Config: remove a cross-request env-snapshot race in config writes by carrying read-time env context into write calls per request, preserving <code>${VAR}</code> refs safely under concurrent gateway config mutations. (#11560) Thanks @akoscz.</li>
 <li>Config: log overwrite audit entries (path, backup target, and hash transition) whenever an existing config file is replaced, improving traceability for unexpected config clobbers.</li>
 <li>Config: keep legacy audio transcription migration strict by rejecting non-string/unsafe command tokens while still migrating valid custom script executables. (#5042) Thanks @shayan919293.</li>
@@ -301,13 +301,13 @@
 <li>Cron: add regression coverage for announce-mode isolated jobs so runs that already report <code>delivered: true</code> do not enqueue duplicate main-session relays, including delivery configs where <code>mode</code> is omitted and defaults to announce. (#15737) Thanks @brandonwise.</li>
 <li>Cron: honor <code>deleteAfterRun</code> in isolated announce delivery by mapping it to subagent announce cleanup mode, so cron run sessions configured for deletion are removed after completion. (#15368) Thanks @arosstale.</li>
 <li>Web tools/web_fetch: prefer <code>text/markdown</code> responses for Cloudflare Markdown for Agents, add <code>cf-markdown</code> extraction for markdown bodies, and redact fetched URLs in <code>x-markdown-tokens</code> debug logs to avoid leaking raw paths/query params. (#15376) Thanks @Yaxuan42.</li>
-<li>Clawdock: avoid Zsh readonly variable collisions in helper scripts. (#15501) Thanks @nkelner.</li>
+<li>Neodock: avoid Zsh readonly variable collisions in helper scripts. (#15501) Thanks @nkelner.</li>
 <li>Memory: switch default local embedding model to the QAT <code>embeddinggemma-300m-qat-Q8_0</code> variant for better quality at the same footprint. (#15429) Thanks @azade-c.</li>
 <li>Docs/Mermaid: remove hardcoded Mermaid init theme blocks from four docs diagrams so dark mode inherits readable theme defaults. (#15157) Thanks @heytulsiprasad.</li>
 </ul>
-<p><a href="https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md">View full changelog</a></p>
+<p><a href="https://github.com/betterbrand/smart-agent-neo/blob/main/CHANGELOG.md">View full changelog</a></p>
 ]]></description>
-            <enclosure url="https://github.com/openclaw/openclaw/releases/download/v2026.2.13/OpenClaw-2026.2.13.zip" length="22902077" type="application/octet-stream" sparkle:edSignature="RpkwlPtB2yN7UOYZWfthV5grhDUcbhcHMeicdRA864Vo/P0Hnq5aHKmSvcbWkjHut96TC57bX+AeUrL7txpLCg=="/>
+            <enclosure url="https://github.com/betterbrand/smart-agent-neo/releases/download/v2026.2.13/SmartAgentNeo-2026.2.13.zip" length="22902077" type="application/octet-stream" sparkle:edSignature="RpkwlPtB2yN7UOYZWfthV5grhDUcbhcHMeicdRA864Vo/P0Hnq5aHKmSvcbWkjHut96TC57bX+AeUrL7txpLCg=="/>
         </item>
     </channel>
 </rss>

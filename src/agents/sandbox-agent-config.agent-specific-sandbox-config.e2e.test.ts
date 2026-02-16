@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { SmartAgentNeoConfig } from "../config/config.js";
 
 type SpawnCall = {
   command: string;
@@ -51,7 +51,7 @@ vi.mock("../skills.js", async (importOriginal) => {
 let resolveSandboxContext: typeof import("./sandbox.js").resolveSandboxContext;
 let resolveSandboxConfigForAgent: typeof import("./sandbox.js").resolveSandboxConfigForAgent;
 
-async function resolveContext(config: OpenClawConfig, sessionKey: string, workspaceDir: string) {
+async function resolveContext(config: SmartAgentNeoConfig, sessionKey: string, workspaceDir: string) {
   return resolveSandboxContext({
     config,
     sessionKey,
@@ -81,19 +81,19 @@ describe("Agent-specific sandbox config", () => {
   });
 
   it("should use agent-specific workspaceRoot", async () => {
-    const cfg: OpenClawConfig = {
+    const cfg: SmartAgentNeoConfig = {
       agents: {
         defaults: {
           sandbox: {
             mode: "all",
             scope: "agent",
-            workspaceRoot: "~/.openclaw/sandboxes",
+            workspaceRoot: "~/.smart-agent-neo/sandboxes",
           },
         },
         list: [
           {
             id: "isolated",
-            workspace: "~/openclaw-isolated",
+            workspace: "~/smart-agent-neo-isolated",
             sandbox: {
               mode: "all",
               scope: "agent",
@@ -111,7 +111,7 @@ describe("Agent-specific sandbox config", () => {
   });
 
   it("should prefer agent config over global for multiple agents", async () => {
-    const cfg: OpenClawConfig = {
+    const cfg: SmartAgentNeoConfig = {
       agents: {
         defaults: {
           sandbox: {
@@ -122,14 +122,14 @@ describe("Agent-specific sandbox config", () => {
         list: [
           {
             id: "main",
-            workspace: "~/openclaw",
+            workspace: "~/smart-agent-neo",
             sandbox: {
               mode: "off",
             },
           },
           {
             id: "family",
-            workspace: "~/openclaw-family",
+            workspace: "~/smart-agent-neo-family",
             sandbox: {
               mode: "all",
               scope: "agent",
@@ -156,7 +156,7 @@ describe("Agent-specific sandbox config", () => {
   });
 
   it("should prefer agent-specific sandbox tool policy", async () => {
-    const cfg: OpenClawConfig = {
+    const cfg: SmartAgentNeoConfig = {
       agents: {
         defaults: {
           sandbox: {
@@ -167,7 +167,7 @@ describe("Agent-specific sandbox config", () => {
         list: [
           {
             id: "restricted",
-            workspace: "~/openclaw-restricted",
+            workspace: "~/smart-agent-neo-restricted",
             sandbox: {
               mode: "all",
               scope: "agent",
@@ -203,7 +203,7 @@ describe("Agent-specific sandbox config", () => {
   });
 
   it("should use global sandbox config when no agent-specific config exists", async () => {
-    const cfg: OpenClawConfig = {
+    const cfg: SmartAgentNeoConfig = {
       agents: {
         defaults: {
           sandbox: {
@@ -214,7 +214,7 @@ describe("Agent-specific sandbox config", () => {
         list: [
           {
             id: "main",
-            workspace: "~/openclaw",
+            workspace: "~/smart-agent-neo",
           },
         ],
       },
@@ -227,7 +227,7 @@ describe("Agent-specific sandbox config", () => {
   });
 
   it("should allow agent-specific docker setupCommand overrides", async () => {
-    const cfg: OpenClawConfig = {
+    const cfg: SmartAgentNeoConfig = {
       agents: {
         defaults: {
           sandbox: {
@@ -241,7 +241,7 @@ describe("Agent-specific sandbox config", () => {
         list: [
           {
             id: "work",
-            workspace: "~/openclaw-work",
+            workspace: "~/smart-agent-neo-work",
             sandbox: {
               mode: "all",
               scope: "agent",
@@ -262,7 +262,7 @@ describe("Agent-specific sandbox config", () => {
   });
 
   it("should ignore agent-specific docker overrides when scope is shared", async () => {
-    const cfg: OpenClawConfig = {
+    const cfg: SmartAgentNeoConfig = {
       agents: {
         defaults: {
           sandbox: {
@@ -276,7 +276,7 @@ describe("Agent-specific sandbox config", () => {
         list: [
           {
             id: "work",
-            workspace: "~/openclaw-work",
+            workspace: "~/smart-agent-neo-work",
             sandbox: {
               mode: "all",
               scope: "shared",
@@ -298,7 +298,7 @@ describe("Agent-specific sandbox config", () => {
   });
 
   it("should allow agent-specific docker settings beyond setupCommand", async () => {
-    const cfg: OpenClawConfig = {
+    const cfg: SmartAgentNeoConfig = {
       agents: {
         defaults: {
           sandbox: {
@@ -313,7 +313,7 @@ describe("Agent-specific sandbox config", () => {
         list: [
           {
             id: "work",
-            workspace: "~/openclaw-work",
+            workspace: "~/smart-agent-neo-work",
             sandbox: {
               mode: "all",
               scope: "agent",
@@ -335,7 +335,7 @@ describe("Agent-specific sandbox config", () => {
   });
 
   it("should override with agent-specific sandbox mode 'off'", async () => {
-    const cfg: OpenClawConfig = {
+    const cfg: SmartAgentNeoConfig = {
       agents: {
         defaults: {
           sandbox: {
@@ -346,7 +346,7 @@ describe("Agent-specific sandbox config", () => {
         list: [
           {
             id: "main",
-            workspace: "~/openclaw",
+            workspace: "~/smart-agent-neo",
             sandbox: {
               mode: "off",
             },
@@ -361,7 +361,7 @@ describe("Agent-specific sandbox config", () => {
   });
 
   it("should use agent-specific sandbox mode 'all'", async () => {
-    const cfg: OpenClawConfig = {
+    const cfg: SmartAgentNeoConfig = {
       agents: {
         defaults: {
           sandbox: {
@@ -371,7 +371,7 @@ describe("Agent-specific sandbox config", () => {
         list: [
           {
             id: "family",
-            workspace: "~/openclaw-family",
+            workspace: "~/smart-agent-neo-family",
             sandbox: {
               mode: "all",
               scope: "agent",
@@ -392,7 +392,7 @@ describe("Agent-specific sandbox config", () => {
   });
 
   it("should use agent-specific scope", async () => {
-    const cfg: OpenClawConfig = {
+    const cfg: SmartAgentNeoConfig = {
       agents: {
         defaults: {
           sandbox: {
@@ -403,7 +403,7 @@ describe("Agent-specific sandbox config", () => {
         list: [
           {
             id: "work",
-            workspace: "~/openclaw-work",
+            workspace: "~/smart-agent-neo-work",
             sandbox: {
               mode: "all",
               scope: "agent",
@@ -420,7 +420,7 @@ describe("Agent-specific sandbox config", () => {
   });
 
   it("includes session_status in default sandbox allowlist", async () => {
-    const cfg: OpenClawConfig = {
+    const cfg: SmartAgentNeoConfig = {
       agents: {
         defaults: {
           sandbox: {
@@ -436,7 +436,7 @@ describe("Agent-specific sandbox config", () => {
   });
 
   it("includes image in default sandbox allowlist", async () => {
-    const cfg: OpenClawConfig = {
+    const cfg: SmartAgentNeoConfig = {
       agents: {
         defaults: {
           sandbox: {
@@ -452,7 +452,7 @@ describe("Agent-specific sandbox config", () => {
   });
 
   it("injects image into explicit sandbox allowlists", async () => {
-    const cfg: OpenClawConfig = {
+    const cfg: SmartAgentNeoConfig = {
       tools: {
         sandbox: {
           tools: {

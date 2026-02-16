@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { SmartAgentNeoConfig } from "../config/config.js";
 
 const mocks = vi.hoisted(() => ({
-  loadConfig: vi.fn<() => OpenClawConfig>(),
-  writeConfigFile: vi.fn(async (_cfg: OpenClawConfig) => {}),
+  loadConfig: vi.fn<() => SmartAgentNeoConfig>(),
+  writeConfigFile: vi.fn(async (_cfg: SmartAgentNeoConfig) => {}),
 }));
 
 vi.mock("../config/config.js", async (importOriginal) => {
@@ -25,7 +25,7 @@ describe("ensureBrowserControlAuth", () => {
   });
 
   it("returns existing auth and skips writes", async () => {
-    const cfg: OpenClawConfig = {
+    const cfg: SmartAgentNeoConfig = {
       gateway: {
         auth: {
           token: "already-set",
@@ -41,7 +41,7 @@ describe("ensureBrowserControlAuth", () => {
   });
 
   it("auto-generates and persists a token when auth is missing", async () => {
-    const cfg: OpenClawConfig = {
+    const cfg: SmartAgentNeoConfig = {
       browser: {
         enabled: true,
       },
@@ -63,7 +63,7 @@ describe("ensureBrowserControlAuth", () => {
   });
 
   it("skips auto-generation in test env", async () => {
-    const cfg: OpenClawConfig = {
+    const cfg: SmartAgentNeoConfig = {
       browser: {
         enabled: true,
       },
@@ -80,7 +80,7 @@ describe("ensureBrowserControlAuth", () => {
   });
 
   it("respects explicit password mode", async () => {
-    const cfg: OpenClawConfig = {
+    const cfg: SmartAgentNeoConfig = {
       gateway: {
         auth: {
           mode: "password",
@@ -99,7 +99,7 @@ describe("ensureBrowserControlAuth", () => {
   });
 
   it("reuses auth from latest config snapshot", async () => {
-    const cfg: OpenClawConfig = {
+    const cfg: SmartAgentNeoConfig = {
       browser: {
         enabled: true,
       },

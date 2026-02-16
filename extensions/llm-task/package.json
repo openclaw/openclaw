@@ -1,13 +1,13 @@
 {
-  "name": "@openclaw/llm-task",
+  "name": "@smart-agent-neo/llm-task",
   "version": "2026.2.16",
   "private": true,
-  "description": "OpenClaw JSON-only LLM task plugin",
+  "description": "SmartAgentNeo JSON-only LLM task plugin",
   "type": "module",
   "devDependencies": {
-    "openclaw": "workspace:*"
+    "smart-agent-neo": "workspace:*"
   },
-  "openclaw": {
+  "smart-agent-neo": {
     "extensions": [
       "./index.ts"
     ]

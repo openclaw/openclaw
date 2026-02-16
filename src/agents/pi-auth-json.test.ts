@@ -7,7 +7,7 @@ import { ensurePiAuthJsonFromAuthProfiles } from "./pi-auth-json.js";
 
 describe("ensurePiAuthJsonFromAuthProfiles", () => {
   it("writes openai-codex oauth credentials into auth.json for pi-coding-agent discovery", async () => {
-    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "smart-agent-neo-agent-"));
 
     saveAuthProfileStore(
       {

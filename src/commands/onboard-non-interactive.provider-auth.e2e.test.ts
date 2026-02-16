@@ -56,32 +56,32 @@ async function withOnboardEnv(
 ): Promise<void> {
   const prev = captureEnv([
     "HOME",
-    "OPENCLAW_STATE_DIR",
-    "OPENCLAW_CONFIG_PATH",
-    "OPENCLAW_SKIP_CHANNELS",
-    "OPENCLAW_SKIP_GMAIL_WATCHER",
-    "OPENCLAW_SKIP_CRON",
-    "OPENCLAW_SKIP_CANVAS_HOST",
-    "OPENCLAW_GATEWAY_TOKEN",
-    "OPENCLAW_GATEWAY_PASSWORD",
+    "SMART_AGENT_NEO_STATE_DIR",
+    "SMART_AGENT_NEO_CONFIG_PATH",
+    "SMART_AGENT_NEO_SKIP_CHANNELS",
+    "SMART_AGENT_NEO_SKIP_GMAIL_WATCHER",
+    "SMART_AGENT_NEO_SKIP_CRON",
+    "SMART_AGENT_NEO_SKIP_CANVAS_HOST",
+    "SMART_AGENT_NEO_GATEWAY_TOKEN",
+    "SMART_AGENT_NEO_GATEWAY_PASSWORD",
     "CUSTOM_API_KEY",
-    "OPENCLAW_DISABLE_CONFIG_CACHE",
+    "SMART_AGENT_NEO_DISABLE_CONFIG_CACHE",
   ]);
 
-  process.env.OPENCLAW_SKIP_CHANNELS = "1";
-  process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
-  process.env.OPENCLAW_SKIP_CRON = "1";
-  process.env.OPENCLAW_SKIP_CANVAS_HOST = "1";
-  process.env.OPENCLAW_DISABLE_CONFIG_CACHE = "1";
-  delete process.env.OPENCLAW_GATEWAY_TOKEN;
-  delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+  process.env.SMART_AGENT_NEO_SKIP_CHANNELS = "1";
+  process.env.SMART_AGENT_NEO_SKIP_GMAIL_WATCHER = "1";
+  process.env.SMART_AGENT_NEO_SKIP_CRON = "1";
+  process.env.SMART_AGENT_NEO_SKIP_CANVAS_HOST = "1";
+  process.env.SMART_AGENT_NEO_DISABLE_CONFIG_CACHE = "1";
+  delete process.env.SMART_AGENT_NEO_GATEWAY_TOKEN;
+  delete process.env.SMART_AGENT_NEO_GATEWAY_PASSWORD;
   delete process.env.CUSTOM_API_KEY;
 
   const tempHome = await makeTempWorkspace(prefix);
-  const configPath = path.join(tempHome, "openclaw.json");
+  const configPath = path.join(tempHome, "smart-agent-neo.json");
   process.env.HOME = tempHome;
-  process.env.OPENCLAW_STATE_DIR = tempHome;
-  process.env.OPENCLAW_CONFIG_PATH = configPath;
+  process.env.SMART_AGENT_NEO_STATE_DIR = tempHome;
+  process.env.SMART_AGENT_NEO_CONFIG_PATH = configPath;
 
   const runtime = createThrowingRuntime();
 
@@ -147,7 +147,7 @@ async function expectApiKeyProfile(params: {
 
 describe("onboard (non-interactive): provider auth", () => {
   it("stores MiniMax API key and uses global baseUrl by default", async () => {
-    await withOnboardEnv("openclaw-onboard-minimax-", async (env) => {
+    await withOnboardEnv("smart-agent-neo-onboard-minimax-", async (env) => {
       const cfg = await runOnboardingAndReadConfig(env, {
         authChoice: "minimax-api",
         minimaxApiKey: "sk-minimax-test",
@@ -166,7 +166,7 @@ describe("onboard (non-interactive): provider auth", () => {
   }, 60_000);
 
   it("supports MiniMax CN API endpoint auth choice", async () => {
-    await withOnboardEnv("openclaw-onboard-minimax-cn-", async (env) => {
+    await withOnboardEnv("smart-agent-neo-onboard-minimax-cn-", async (env) => {
       const cfg = await runOnboardingAndReadConfig(env, {
         authChoice: "minimax-api-key-cn",
         minimaxApiKey: "sk-minimax-test",
@@ -185,7 +185,7 @@ describe("onboard (non-interactive): provider auth", () => {
   }, 60_000);
 
   it("stores Z.AI API key and uses global baseUrl by default", async () => {
-    await withOnboardEnv("openclaw-onboard-zai-", async (env) => {
+    await withOnboardEnv("smart-agent-neo-onboard-zai-", async (env) => {
       const cfg = await runOnboardingAndReadConfig(env, {
         authChoice: "zai-api-key",
         zaiApiKey: "zai-test-key",
@@ -200,7 +200,7 @@ describe("onboard (non-interactive): provider auth", () => {
   }, 60_000);
 
   it("supports Z.AI CN coding endpoint auth choice", async () => {
-    await withOnboardEnv("openclaw-onboard-zai-cn-", async (env) => {
+    await withOnboardEnv("smart-agent-neo-onboard-zai-cn-", async (env) => {
       const cfg = await runOnboardingAndReadConfig(env, {
         authChoice: "zai-coding-cn",
         zaiApiKey: "zai-test-key",
@@ -213,7 +213,7 @@ describe("onboard (non-interactive): provider auth", () => {
   }, 60_000);
 
   it("stores xAI API key and sets default model", async () => {
-    await withOnboardEnv("openclaw-onboard-xai-", async (env) => {
+    await withOnboardEnv("smart-agent-neo-onboard-xai-", async (env) => {
       const rawKey = "xai-test-\r\nkey";
       const cfg = await runOnboardingAndReadConfig(env, {
         authChoice: "xai-api-key",
@@ -228,7 +228,7 @@ describe("onboard (non-interactive): provider auth", () => {
   }, 60_000);
 
   it("stores Vercel AI Gateway API key and sets default model", async () => {
-    await withOnboardEnv("openclaw-onboard-ai-gateway-", async (env) => {
+    await withOnboardEnv("smart-agent-neo-onboard-ai-gateway-", async (env) => {
       const cfg = await runOnboardingAndReadConfig(env, {
         authChoice: "ai-gateway-api-key",
         aiGatewayApiKey: "gateway-test-key",
@@ -248,7 +248,7 @@ describe("onboard (non-interactive): provider auth", () => {
   }, 60_000);
 
   it("stores token auth profile", async () => {
-    await withOnboardEnv("openclaw-onboard-token-", async ({ configPath, runtime }) => {
+    await withOnboardEnv("smart-agent-neo-onboard-token-", async ({ configPath, runtime }) => {
       const cleanToken = `sk-ant-oat01-${"a".repeat(80)}`;
       const token = `${cleanToken.slice(0, 30)}\r${cleanToken.slice(30)}`;
 
@@ -276,7 +276,7 @@ describe("onboard (non-interactive): provider auth", () => {
   }, 60_000);
 
   it("stores OpenAI API key and sets OpenAI default model", async () => {
-    await withOnboardEnv("openclaw-onboard-openai-", async (env) => {
+    await withOnboardEnv("smart-agent-neo-onboard-openai-", async (env) => {
       const cfg = await runOnboardingAndReadConfig(env, {
         authChoice: "openai-api-key",
         openaiApiKey: "sk-openai-test",
@@ -287,7 +287,7 @@ describe("onboard (non-interactive): provider auth", () => {
   }, 60_000);
 
   it("rejects vLLM auth choice in non-interactive mode", async () => {
-    await withOnboardEnv("openclaw-onboard-vllm-non-interactive-", async ({ runtime }) => {
+    await withOnboardEnv("smart-agent-neo-onboard-vllm-non-interactive-", async ({ runtime }) => {
       await expect(
         runNonInteractiveOnboardingWithDefaults(runtime, {
           authChoice: "vllm",
@@ -298,7 +298,7 @@ describe("onboard (non-interactive): provider auth", () => {
   }, 60_000);
 
   it("stores LiteLLM API key and sets default model", async () => {
-    await withOnboardEnv("openclaw-onboard-litellm-", async (env) => {
+    await withOnboardEnv("smart-agent-neo-onboard-litellm-", async (env) => {
       const cfg = await runOnboardingAndReadConfig(env, {
         authChoice: "litellm-api-key",
         litellmApiKey: "litellm-test-key",
@@ -318,14 +318,14 @@ describe("onboard (non-interactive): provider auth", () => {
   it.each([
     {
       name: "stores Cloudflare AI Gateway API key and metadata",
-      prefix: "openclaw-onboard-cf-gateway-",
+      prefix: "smart-agent-neo-onboard-cf-gateway-",
       options: {
         authChoice: "cloudflare-ai-gateway-api-key",
       },
     },
     {
       name: "infers Cloudflare auth choice from API key flags",
-      prefix: "openclaw-onboard-cf-gateway-infer-",
+      prefix: "smart-agent-neo-onboard-cf-gateway-infer-",
       options: {},
     },
   ])(
@@ -361,7 +361,7 @@ describe("onboard (non-interactive): provider auth", () => {
   );
 
   it("infers Together auth choice from --together-api-key and sets default model", async () => {
-    await withOnboardEnv("openclaw-onboard-together-infer-", async (env) => {
+    await withOnboardEnv("smart-agent-neo-onboard-together-infer-", async (env) => {
       const cfg = await runOnboardingAndReadConfig(env, {
         togetherApiKey: "together-test-key",
       });
@@ -378,7 +378,7 @@ describe("onboard (non-interactive): provider auth", () => {
   }, 60_000);
 
   it("infers QIANFAN auth choice from --qianfan-api-key and sets default model", async () => {
-    await withOnboardEnv("openclaw-onboard-qianfan-infer-", async (env) => {
+    await withOnboardEnv("smart-agent-neo-onboard-qianfan-infer-", async (env) => {
       const cfg = await runOnboardingAndReadConfig(env, {
         qianfanApiKey: "qianfan-test-key",
       });
@@ -395,7 +395,7 @@ describe("onboard (non-interactive): provider auth", () => {
   }, 60_000);
 
   it("configures a custom provider from non-interactive flags", async () => {
-    await withOnboardEnv("openclaw-onboard-custom-provider-", async ({ configPath, runtime }) => {
+    await withOnboardEnv("smart-agent-neo-onboard-custom-provider-", async ({ configPath, runtime }) => {
       await runNonInteractiveOnboardingWithDefaults(runtime, {
         authChoice: "custom-api-key",
         customBaseUrl: "https://llm.example.com/v1",
@@ -418,7 +418,7 @@ describe("onboard (non-interactive): provider auth", () => {
 
   it("infers custom provider auth choice from custom flags", async () => {
     await withOnboardEnv(
-      "openclaw-onboard-custom-provider-infer-",
+      "smart-agent-neo-onboard-custom-provider-infer-",
       async ({ configPath, runtime }) => {
         await runNonInteractiveOnboardingWithDefaults(runtime, {
           customBaseUrl: "https://models.custom.local/v1",
@@ -442,7 +442,7 @@ describe("onboard (non-interactive): provider auth", () => {
 
   it("uses CUSTOM_API_KEY env fallback for non-interactive custom provider auth", async () => {
     await withOnboardEnv(
-      "openclaw-onboard-custom-provider-env-fallback-",
+      "smart-agent-neo-onboard-custom-provider-env-fallback-",
       async ({ configPath, runtime }) => {
         process.env.CUSTOM_API_KEY = "custom-env-key";
         await runCustomLocalNonInteractive(runtime);
@@ -453,7 +453,7 @@ describe("onboard (non-interactive): provider auth", () => {
 
   it("uses matching profile fallback for non-interactive custom provider auth", async () => {
     await withOnboardEnv(
-      "openclaw-onboard-custom-provider-profile-fallback-",
+      "smart-agent-neo-onboard-custom-provider-profile-fallback-",
       async ({ configPath, runtime }) => {
         const { upsertAuthProfile } = await import("../agents/auth-profiles.js");
         upsertAuthProfile({
@@ -472,7 +472,7 @@ describe("onboard (non-interactive): provider auth", () => {
 
   it("fails custom provider auth when compatibility is invalid", async () => {
     await withOnboardEnv(
-      "openclaw-onboard-custom-provider-invalid-compat-",
+      "smart-agent-neo-onboard-custom-provider-invalid-compat-",
       async ({ runtime }) => {
         await expect(
           runNonInteractiveOnboardingWithDefaults(runtime, {
@@ -488,7 +488,7 @@ describe("onboard (non-interactive): provider auth", () => {
   }, 60_000);
 
   it("fails custom provider auth when explicit provider id is invalid", async () => {
-    await withOnboardEnv("openclaw-onboard-custom-provider-invalid-id-", async ({ runtime }) => {
+    await withOnboardEnv("smart-agent-neo-onboard-custom-provider-invalid-id-", async ({ runtime }) => {
       await expect(
         runNonInteractiveOnboardingWithDefaults(runtime, {
           authChoice: "custom-api-key",
@@ -505,7 +505,7 @@ describe("onboard (non-interactive): provider auth", () => {
 
   it("fails inferred custom auth when required flags are incomplete", async () => {
     await withOnboardEnv(
-      "openclaw-onboard-custom-provider-missing-required-",
+      "smart-agent-neo-onboard-custom-provider-missing-required-",
       async ({ runtime }) => {
         await expect(
           runNonInteractiveOnboardingWithDefaults(runtime, {

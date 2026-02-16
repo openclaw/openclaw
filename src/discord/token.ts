@@ -1,5 +1,5 @@
 import type { BaseTokenResolution } from "../channels/plugins/types.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { SmartAgentNeoConfig } from "../config/config.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 
 export type DiscordTokenSource = "env" | "config" | "none";
@@ -20,7 +20,7 @@ export function normalizeDiscordToken(raw?: string | null): string | undefined {
 }
 
 export function resolveDiscordToken(
-  cfg?: OpenClawConfig,
+  cfg?: SmartAgentNeoConfig,
   opts: { accountId?: string | null; envToken?: string | null } = {},
 ): DiscordTokenResolution {
   const accountId = normalizeAccountId(opts.accountId);

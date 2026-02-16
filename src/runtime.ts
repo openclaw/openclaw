@@ -11,7 +11,7 @@ function shouldEmitRuntimeLog(env: NodeJS.ProcessEnv = process.env): boolean {
   if (env.VITEST !== "true") {
     return true;
   }
-  if (env.OPENCLAW_TEST_RUNTIME_LOG === "1") {
+  if (env.SMART_AGENT_NEO_TEST_RUNTIME_LOG === "1") {
     return true;
   }
   const maybeMockedLog = console.log as unknown as { mock?: unknown };

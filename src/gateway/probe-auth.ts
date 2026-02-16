@@ -1,7 +1,7 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { SmartAgentNeoConfig } from "../config/config.js";
 
 export function resolveGatewayProbeAuth(params: {
-  cfg: OpenClawConfig;
+  cfg: SmartAgentNeoConfig;
   mode: "local" | "remote";
   env?: NodeJS.ProcessEnv;
 }): { token?: string; password?: string } {
@@ -15,11 +15,11 @@ export function resolveGatewayProbeAuth(params: {
       ? typeof remote?.token === "string" && remote.token.trim()
         ? remote.token.trim()
         : undefined
-      : env.OPENCLAW_GATEWAY_TOKEN?.trim() ||
+      : env.SMART_AGENT_NEO_GATEWAY_TOKEN?.trim() ||
         (typeof authToken === "string" && authToken.trim() ? authToken.trim() : undefined);
 
   const password =
-    env.OPENCLAW_GATEWAY_PASSWORD?.trim() ||
+    env.SMART_AGENT_NEO_GATEWAY_PASSWORD?.trim() ||
     (params.mode === "remote"
       ? typeof remote?.password === "string" && remote.password.trim()
         ? remote.password.trim()

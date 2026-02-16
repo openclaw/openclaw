@@ -33,13 +33,13 @@ vi.mock("node:fs", async (importOriginal) => {
   return { ...wrapped, default: wrapped };
 });
 
-let ensureOpenClawCliOnPath: typeof import("./path-env.js").ensureOpenClawCliOnPath;
+let ensureSmartAgentNeoCliOnPath: typeof import("./path-env.js").ensureSmartAgentNeoCliOnPath;
 
-describe("ensureOpenClawCliOnPath", () => {
+describe("ensureSmartAgentNeoCliOnPath", () => {
   const envKeys = [
     "PATH",
-    "OPENCLAW_PATH_BOOTSTRAPPED",
-    "OPENCLAW_ALLOW_PROJECT_LOCAL_BIN",
+    "SMART_AGENT_NEO_PATH_BOOTSTRAPPED",
+    "SMART_AGENT_NEO_ALLOW_PROJECT_LOCAL_BIN",
     "MISE_DATA_DIR",
     "HOMEBREW_PREFIX",
     "HOMEBREW_BREW_FILE",
@@ -48,7 +48,7 @@ describe("ensureOpenClawCliOnPath", () => {
   let envSnapshot: Record<(typeof envKeys)[number], string | undefined>;
 
   beforeAll(async () => {
-    ({ ensureOpenClawCliOnPath } = await import("./path-env.js"));
+    ({ ensureSmartAgentNeoCliOnPath } = await import("./path-env.js"));
   });
 
   beforeEach(() => {
@@ -72,18 +72,18 @@ describe("ensureOpenClawCliOnPath", () => {
     }
   });
 
-  it("prepends the bundled app bin dir when a sibling openclaw exists", () => {
-    const tmp = abs("/tmp/openclaw-path/case-bundled");
+  it("prepends the bundled app bin dir when a sibling smart-agent-neo exists", () => {
+    const tmp = abs("/tmp/smart-agent-neo-path/case-bundled");
     const appBinDir = path.join(tmp, "AppBin");
-    const cliPath = path.join(appBinDir, "openclaw");
+    const cliPath = path.join(appBinDir, "smart-agent-neo");
     setDir(tmp);
     setDir(appBinDir);
     setExe(cliPath);
 
     process.env.PATH = "/usr/bin";
-    delete process.env.OPENCLAW_PATH_BOOTSTRAPPED;
+    delete process.env.SMART_AGENT_NEO_PATH_BOOTSTRAPPED;
 
-    ensureOpenClawCliOnPath({
+    ensureSmartAgentNeoCliOnPath({
       execPath: cliPath,
       cwd: tmp,
       homeDir: tmp,
@@ -96,8 +96,8 @@ describe("ensureOpenClawCliOnPath", () => {
 
   it("is idempotent", () => {
     process.env.PATH = "/bin";
-    process.env.OPENCLAW_PATH_BOOTSTRAPPED = "1";
-    ensureOpenClawCliOnPath({
+    process.env.SMART_AGENT_NEO_PATH_BOOTSTRAPPED = "1";
+    ensureSmartAgentNeoCliOnPath({
       execPath: "/tmp/does-not-matter",
       cwd: "/tmp",
       homeDir: "/tmp",
@@ -107,9 +107,9 @@ describe("ensureOpenClawCliOnPath", () => {
   });
 
   it("prepends mise shims when available", () => {
-    const tmp = abs("/tmp/openclaw-path/case-mise");
+    const tmp = abs("/tmp/smart-agent-neo-path/case-mise");
     const appBinDir = path.join(tmp, "AppBin");
-    const appCli = path.join(appBinDir, "openclaw");
+    const appCli = path.join(appBinDir, "smart-agent-neo");
     setDir(tmp);
     setDir(appBinDir);
     setExe(appCli);
@@ -121,9 +121,9 @@ describe("ensureOpenClawCliOnPath", () => {
 
     process.env.MISE_DATA_DIR = miseDataDir;
     process.env.PATH = "/usr/bin";
-    delete process.env.OPENCLAW_PATH_BOOTSTRAPPED;
+    delete process.env.SMART_AGENT_NEO_PATH_BOOTSTRAPPED;
 
-    ensureOpenClawCliOnPath({
+    ensureSmartAgentNeoCliOnPath({
       execPath: appCli,
       cwd: tmp,
       homeDir: tmp,
@@ -139,23 +139,23 @@ describe("ensureOpenClawCliOnPath", () => {
   });
 
   it("only appends project-local node_modules/.bin when explicitly enabled", () => {
-    const tmp = abs("/tmp/openclaw-path/case-project-local");
+    const tmp = abs("/tmp/smart-agent-neo-path/case-project-local");
     const appBinDir = path.join(tmp, "AppBin");
-    const appCli = path.join(appBinDir, "openclaw");
+    const appCli = path.join(appBinDir, "smart-agent-neo");
     setDir(tmp);
     setDir(appBinDir);
     setExe(appCli);
 
     const localBinDir = path.join(tmp, "node_modules", ".bin");
-    const localCli = path.join(localBinDir, "openclaw");
+    const localCli = path.join(localBinDir, "smart-agent-neo");
     setDir(path.join(tmp, "node_modules"));
     setDir(localBinDir);
     setExe(localCli);
 
     process.env.PATH = "/usr/bin";
-    delete process.env.OPENCLAW_PATH_BOOTSTRAPPED;
+    delete process.env.SMART_AGENT_NEO_PATH_BOOTSTRAPPED;
 
-    ensureOpenClawCliOnPath({
+    ensureSmartAgentNeoCliOnPath({
       execPath: appCli,
       cwd: tmp,
       homeDir: tmp,
@@ -165,9 +165,9 @@ describe("ensureOpenClawCliOnPath", () => {
     expect(withoutOptIn.includes(localBinDir)).toBe(false);
 
     process.env.PATH = "/usr/bin";
-    delete process.env.OPENCLAW_PATH_BOOTSTRAPPED;
+    delete process.env.SMART_AGENT_NEO_PATH_BOOTSTRAPPED;
 
-    ensureOpenClawCliOnPath({
+    ensureSmartAgentNeoCliOnPath({
       execPath: appCli,
       cwd: tmp,
       homeDir: tmp,
@@ -182,7 +182,7 @@ describe("ensureOpenClawCliOnPath", () => {
   });
 
   it("prepends Linuxbrew dirs when present", () => {
-    const tmp = abs("/tmp/openclaw-path/case-linuxbrew");
+    const tmp = abs("/tmp/smart-agent-neo-path/case-linuxbrew");
     const execDir = path.join(tmp, "exec");
     setDir(tmp);
     setDir(execDir);
@@ -195,12 +195,12 @@ describe("ensureOpenClawCliOnPath", () => {
     setDir(linuxbrewSbin);
 
     process.env.PATH = "/usr/bin";
-    delete process.env.OPENCLAW_PATH_BOOTSTRAPPED;
+    delete process.env.SMART_AGENT_NEO_PATH_BOOTSTRAPPED;
     delete process.env.HOMEBREW_PREFIX;
     delete process.env.HOMEBREW_BREW_FILE;
     delete process.env.XDG_BIN_HOME;
 
-    ensureOpenClawCliOnPath({
+    ensureSmartAgentNeoCliOnPath({
       execPath: path.join(execDir, "node"),
       cwd: tmp,
       homeDir: tmp,

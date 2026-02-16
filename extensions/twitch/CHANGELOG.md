@@ -4,73 +4,73 @@
 
 ### Changes
 
-- Version alignment with core OpenClaw release numbers.
+- Version alignment with core SmartAgentNeo release numbers.
 
 ## 2026.2.15
 
 ### Changes
 
-- Version alignment with core OpenClaw release numbers.
+- Version alignment with core SmartAgentNeo release numbers.
 
 ## 2026.2.14
 
 ### Changes
 
-- Version alignment with core OpenClaw release numbers.
+- Version alignment with core SmartAgentNeo release numbers.
 
 ## 2026.2.13
 
 ### Changes
 
-- Version alignment with core OpenClaw release numbers.
+- Version alignment with core SmartAgentNeo release numbers.
 
 ## 2026.2.6-3
 
 ### Changes
 
-- Version alignment with core OpenClaw release numbers.
+- Version alignment with core SmartAgentNeo release numbers.
 
 ## 2026.2.6-2
 
 ### Changes
 
-- Version alignment with core OpenClaw release numbers.
+- Version alignment with core SmartAgentNeo release numbers.
 
 ## 2026.2.6
 
 ### Changes
 
-- Version alignment with core OpenClaw release numbers.
+- Version alignment with core SmartAgentNeo release numbers.
 
 ## 2026.2.4
 
 ### Changes
 
-- Version alignment with core OpenClaw release numbers.
+- Version alignment with core SmartAgentNeo release numbers.
 
 ## 2026.2.2
 
 ### Changes
 
-- Version alignment with core OpenClaw release numbers.
+- Version alignment with core SmartAgentNeo release numbers.
 
 ## 2026.1.31
 
 ### Changes
 
-- Version alignment with core OpenClaw release numbers.
+- Version alignment with core SmartAgentNeo release numbers.
 
 ## 2026.1.30
 
 ### Changes
 
-- Version alignment with core OpenClaw release numbers.
+- Version alignment with core SmartAgentNeo release numbers.
 
 ## 2026.1.29
 
 ### Changes
 
-- Version alignment with core OpenClaw release numbers.
+- Version alignment with core SmartAgentNeo release numbers.
 
 ## 2026.1.23
 
@@ -89,5 +89,5 @@
 ### Improvements
 
 - Added proper configuration schema with Zod validation
-- Added plugin descriptor (openclaw.plugin.json)
+- Added plugin descriptor (smart-agent-neo.plugin.json)
 - Added comprehensive README and documentation

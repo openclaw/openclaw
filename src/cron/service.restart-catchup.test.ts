@@ -9,7 +9,7 @@ import {
 } from "./service.test-harness.js";
 
 const noopLogger = createNoopLogger();
-const { makeStorePath } = createCronStoreHarness({ prefix: "openclaw-cron-" });
+const { makeStorePath } = createCronStoreHarness({ prefix: "smart-agent-neo-cron-" });
 installCronTestHooks({
   logger: noopLogger,
   baseTimeIso: "2025-12-13T17:00:00.000Z",

@@ -1,5 +1,5 @@
 import Foundation
-import OpenClawKit
+import SmartAgentNeoKit
 
 @MainActor
 final class GatewayHealthMonitor {

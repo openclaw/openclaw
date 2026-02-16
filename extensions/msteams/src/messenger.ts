@@ -7,7 +7,7 @@ import {
   type ReplyPayload,
   SILENT_REPLY_TOKEN,
   sleep,
-} from "openclaw/plugin-sdk";
+} from "smart-agent-neo/plugin-sdk";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import type { StoredConversationReference } from "./conversation-store.js";
 import { classifyMSTeamsSendError } from "./errors.js";

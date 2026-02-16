@@ -1,14 +1,14 @@
 ---
-summary: "CLI reference for `openclaw setup` (initialize config + workspace)"
+summary: "CLI reference for `smart-agent-neo setup` (initialize config + workspace)"
 read_when:
   - You’re doing first-run setup without the full onboarding wizard
   - You want to set the default workspace path
 title: "setup"
 ---
 
-# `openclaw setup`
+# `smart-agent-neo setup`
 
-Initialize `~/.openclaw/openclaw.json` and the agent workspace.
+Initialize `~/.smart-agent-neo/smart-agent-neo.json` and the agent workspace.
 
 Related:
 
@@ -18,12 +18,12 @@ Related:
 ## Examples
 
 ```bash
-openclaw setup
-openclaw setup --workspace ~/.openclaw/workspace
+smart-agent-neo setup
+smart-agent-neo setup --workspace ~/.smart-agent-neo/workspace
 ```
 
 To run the wizard via setup:
 
 ```bash
-openclaw setup --wizard
+smart-agent-neo setup --wizard
 ```

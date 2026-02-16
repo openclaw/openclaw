@@ -6,7 +6,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { SessionEntry } from "./types.js";
 import { clearSessionStoreCacheForTest, loadSessionStore, saveSessionStore } from "./store.js";
 
-// Keep integration tests deterministic: never read a real openclaw.json.
+// Keep integration tests deterministic: never read a real smart-agent-neo.json.
 vi.mock("../config.js", () => ({
   loadConfig: vi.fn().mockReturnValue({}),
 }));
@@ -33,7 +33,7 @@ describe("Integration: saveSessionStore with pruning", () => {
   let mockLoadConfig: ReturnType<typeof vi.fn>;
 
   beforeAll(async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pruning-integ-"));
+    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "smart-agent-neo-pruning-integ-"));
   });
 
   afterAll(async () => {
@@ -43,8 +43,8 @@ describe("Integration: saveSessionStore with pruning", () => {
   beforeEach(async () => {
     testDir = await createCaseDir("pruning-integ");
     storePath = path.join(testDir, "sessions.json");
-    savedCacheTtl = process.env.OPENCLAW_SESSION_CACHE_TTL_MS;
-    process.env.OPENCLAW_SESSION_CACHE_TTL_MS = "0";
+    savedCacheTtl = process.env.SMART_AGENT_NEO_SESSION_CACHE_TTL_MS;
+    process.env.SMART_AGENT_NEO_SESSION_CACHE_TTL_MS = "0";
     clearSessionStoreCacheForTest();
 
     const configModule = await import("../config.js");
@@ -55,9 +55,9 @@ describe("Integration: saveSessionStore with pruning", () => {
     vi.restoreAllMocks();
     clearSessionStoreCacheForTest();
     if (savedCacheTtl === undefined) {
-      delete process.env.OPENCLAW_SESSION_CACHE_TTL_MS;
+      delete process.env.SMART_AGENT_NEO_SESSION_CACHE_TTL_MS;
     } else {
-      process.env.OPENCLAW_SESSION_CACHE_TTL_MS = savedCacheTtl;
+      process.env.SMART_AGENT_NEO_SESSION_CACHE_TTL_MS = savedCacheTtl;
     }
   });
 

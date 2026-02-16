@@ -1,9 +1,9 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
 import type { ModelRegistry } from "../../agents/pi-model-discovery.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { SmartAgentNeoConfig } from "../../config/config.js";
 import type { ModelRow } from "./list.types.js";
-import { resolveOpenClawAgentDir } from "../../agents/agent-paths.js";
+import { resolveSmartAgentNeoAgentDir } from "../../agents/agent-paths.js";
 import { listProfilesForProvider } from "../../agents/auth-profiles.js";
 import {
   getCustomProviderApiKey,
@@ -14,7 +14,7 @@ import {
   ANTIGRAVITY_OPUS_46_FORWARD_COMPAT_CANDIDATES,
   resolveForwardCompatModel,
 } from "../../agents/model-forward-compat.js";
-import { ensureOpenClawModelsJson } from "../../agents/models-config.js";
+import { ensureSmartAgentNeoModelsJson } from "../../agents/models-config.js";
 import { discoverAuthStorage, discoverModels } from "../../agents/pi-model-discovery.js";
 import {
   formatErrorWithStack,
@@ -25,7 +25,7 @@ import { isLocalBaseUrl, modelKey } from "./shared.js";
 
 const hasAuthForProvider = (
   provider: string,
-  cfg?: OpenClawConfig,
+  cfg?: SmartAgentNeoConfig,
   authStore?: AuthProfileStore,
 ) => {
   if (!cfg || !authStore) {
@@ -98,9 +98,9 @@ function loadAvailableModels(registry: ModelRegistry): Model<Api>[] {
   }
 }
 
-export async function loadModelRegistry(cfg: OpenClawConfig) {
-  await ensureOpenClawModelsJson(cfg);
-  const agentDir = resolveOpenClawAgentDir();
+export async function loadModelRegistry(cfg: SmartAgentNeoConfig) {
+  await ensureSmartAgentNeoModelsJson(cfg);
+  const agentDir = resolveSmartAgentNeoAgentDir();
   const authStorage = discoverAuthStorage(agentDir);
   const registry = discoverModels(authStorage, agentDir);
   const appended = appendAntigravityForwardCompatModels(registry.getAll(), registry);
@@ -184,7 +184,7 @@ export function toModelRow(params: {
   tags: string[];
   aliases?: string[];
   availableKeys?: Set<string>;
-  cfg?: OpenClawConfig;
+  cfg?: SmartAgentNeoConfig;
   authStore?: AuthProfileStore;
 }): ModelRow {
   const { model, key, tags, aliases = [], availableKeys, cfg, authStore } = params;

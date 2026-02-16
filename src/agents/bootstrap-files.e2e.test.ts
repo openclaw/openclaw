@@ -26,7 +26,7 @@ describe("resolveBootstrapFilesForRun", () => {
       ];
     });
 
-    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    const workspaceDir = await makeTempWorkspace("smart-agent-neo-bootstrap-");
     const files = await resolveBootstrapFilesForRun({ workspaceDir });
 
     expect(files.some((file) => file.name === "EXTRA.md")).toBe(true);
@@ -51,7 +51,7 @@ describe("resolveBootstrapContextForRun", () => {
       ];
     });
 
-    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    const workspaceDir = await makeTempWorkspace("smart-agent-neo-bootstrap-");
     const result = await resolveBootstrapContextForRun({ workspaceDir });
     const extra = result.contextFiles.find(
       (file) => file.path === path.join(workspaceDir, "EXTRA.md"),

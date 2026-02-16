@@ -10,7 +10,7 @@ import {
 } from "../commands/auth-token.js";
 import { loadConfig } from "../config/config.js";
 import { isTruthyEnvValue } from "../infra/env.js";
-import { resolveOpenClawAgentDir } from "./agent-paths.js";
+import { resolveSmartAgentNeoAgentDir } from "./agent-paths.js";
 import {
   type AuthProfileCredential,
   ensureAuthProfileStore,
@@ -18,14 +18,14 @@ import {
 } from "./auth-profiles.js";
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
 import { normalizeProviderId, parseModelRef } from "./model-selection.js";
-import { ensureOpenClawModelsJson } from "./models-config.js";
+import { ensureSmartAgentNeoModelsJson } from "./models-config.js";
 import { discoverAuthStorage, discoverModels } from "./pi-model-discovery.js";
 
-const LIVE = isTruthyEnvValue(process.env.LIVE) || isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST);
-const SETUP_TOKEN_RAW = process.env.OPENCLAW_LIVE_SETUP_TOKEN?.trim() ?? "";
-const SETUP_TOKEN_VALUE = process.env.OPENCLAW_LIVE_SETUP_TOKEN_VALUE?.trim() ?? "";
-const SETUP_TOKEN_PROFILE = process.env.OPENCLAW_LIVE_SETUP_TOKEN_PROFILE?.trim() ?? "";
-const SETUP_TOKEN_MODEL = process.env.OPENCLAW_LIVE_SETUP_TOKEN_MODEL?.trim() ?? "";
+const LIVE = isTruthyEnvValue(process.env.LIVE) || isTruthyEnvValue(process.env.SMART_AGENT_NEO_LIVE_TEST);
+const SETUP_TOKEN_RAW = process.env.SMART_AGENT_NEO_LIVE_SETUP_TOKEN?.trim() ?? "";
+const SETUP_TOKEN_VALUE = process.env.SMART_AGENT_NEO_LIVE_SETUP_TOKEN_VALUE?.trim() ?? "";
+const SETUP_TOKEN_PROFILE = process.env.SMART_AGENT_NEO_LIVE_SETUP_TOKEN_PROFILE?.trim() ?? "";
+const SETUP_TOKEN_MODEL = process.env.SMART_AGENT_NEO_LIVE_SETUP_TOKEN_MODEL?.trim() ?? "";
 
 const ENABLED = LIVE && Boolean(SETUP_TOKEN_RAW || SETUP_TOKEN_VALUE || SETUP_TOKEN_PROFILE);
 const describeLive = ENABLED ? describe : describe.skip;
@@ -75,7 +75,7 @@ async function resolveTokenSource(): Promise<TokenSource> {
     if (error) {
       throw new Error(`Invalid setup-token: ${error}`);
     }
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-setup-token-"));
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "smart-agent-neo-setup-token-"));
     const profileId = `anthropic:setup-token-live-${randomUUID()}`;
     const store = ensureAuthProfileStore(tempDir, {
       allowKeychainPrompt: false,
@@ -95,7 +95,7 @@ async function resolveTokenSource(): Promise<TokenSource> {
     };
   }
 
-  const agentDir = resolveOpenClawAgentDir();
+  const agentDir = resolveSmartAgentNeoAgentDir();
   const store = ensureAuthProfileStore(agentDir, {
     allowKeychainPrompt: false,
   });
@@ -113,13 +113,13 @@ async function resolveTokenSource(): Promise<TokenSource> {
 
   if (SETUP_TOKEN_RAW && SETUP_TOKEN_RAW !== "1" && SETUP_TOKEN_RAW !== "auto") {
     throw new Error(
-      "OPENCLAW_LIVE_SETUP_TOKEN did not look like a setup-token. Use OPENCLAW_LIVE_SETUP_TOKEN_VALUE for raw tokens.",
+      "SMART_AGENT_NEO_LIVE_SETUP_TOKEN did not look like a setup-token. Use SMART_AGENT_NEO_LIVE_SETUP_TOKEN_VALUE for raw tokens.",
     );
   }
 
   if (candidates.length === 0) {
     throw new Error(
-      "No Anthropics setup-token profiles found. Set OPENCLAW_LIVE_SETUP_TOKEN_VALUE or OPENCLAW_LIVE_SETUP_TOKEN_PROFILE.",
+      "No Anthropics setup-token profiles found. Set SMART_AGENT_NEO_LIVE_SETUP_TOKEN_VALUE or SMART_AGENT_NEO_LIVE_SETUP_TOKEN_PROFILE.",
     );
   }
   return { agentDir, profileId: pickSetupTokenProfile(candidates) };
@@ -162,7 +162,7 @@ describeLive("live anthropic setup-token", () => {
       const tokenSource = await resolveTokenSource();
       try {
         const cfg = loadConfig();
-        await ensureOpenClawModelsJson(cfg, tokenSource.agentDir);
+        await ensureSmartAgentNeoModelsJson(cfg, tokenSource.agentDir);
 
         const authStorage = discoverAuthStorage(tokenSource.agentDir);
         const modelRegistry = discoverModels(authStorage, tokenSource.agentDir);

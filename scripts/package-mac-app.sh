@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Build and bundle OpenClaw into a minimal .app we can open.
-# Outputs to dist/OpenClaw.app
+# Build and bundle SmartAgentNeo into a minimal .app we can open.
+# Outputs to dist/SmartAgentNeo.app
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-APP_ROOT="$ROOT_DIR/dist/OpenClaw.app"
+APP_ROOT="$ROOT_DIR/dist/SmartAgentNeo.app"
 BUILD_ROOT="$ROOT_DIR/apps/macos/.build"
-PRODUCT="OpenClaw"
-BUNDLE_ID="${BUNDLE_ID:-ai.openclaw.mac.debug}"
+PRODUCT="SmartAgentNeo"
+BUNDLE_ID="${BUNDLE_ID:-ai.smartagentneo.mac.debug}"
 PKG_VERSION="$(cd "$ROOT_DIR" && node -p "require('./package.json').version" 2>/dev/null || echo "0.0.0")"
 BUILD_TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 GIT_COMMIT=$(cd "$ROOT_DIR" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
@@ -23,7 +23,7 @@ fi
 IFS=' ' read -r -a BUILD_ARCHS <<< "$BUILD_ARCHS_VALUE"
 PRIMARY_ARCH="${BUILD_ARCHS[0]}"
 SPARKLE_PUBLIC_ED_KEY="${SPARKLE_PUBLIC_ED_KEY:-AGCY8w5vHirVfGGDGc8Szc5iuOqupZSh9pMj/Qs67XI=}"
-SPARKLE_FEED_URL="${SPARKLE_FEED_URL:-https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml}"
+SPARKLE_FEED_URL="${SPARKLE_FEED_URL:-https://raw.githubusercontent.com/betterbrand/smart-agent-neo/main/appcast.xml}"
 AUTO_CHECKS=true
 if [[ "$BUNDLE_ID" == *.debug ]]; then
   SPARKLE_FEED_URL=""
@@ -140,7 +140,7 @@ mkdir -p "$APP_ROOT/Contents/Resources"
 mkdir -p "$APP_ROOT/Contents/Frameworks"
 
 echo "📄 Copying Info.plist template"
-INFO_PLIST_SRC="$ROOT_DIR/apps/macos/Sources/OpenClaw/Resources/Info.plist"
+INFO_PLIST_SRC="$ROOT_DIR/apps/macos/Sources/SmartAgentNeo/Resources/Info.plist"
 if [ ! -f "$INFO_PLIST_SRC" ]; then
   echo "ERROR: Info.plist template missing at $INFO_PLIST_SRC" >&2
   exit 1
@@ -149,8 +149,8 @@ cp "$INFO_PLIST_SRC" "$APP_ROOT/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier ${BUNDLE_ID}" "$APP_ROOT/Contents/Info.plist" || true
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${APP_VERSION}" "$APP_ROOT/Contents/Info.plist" || true
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${APP_BUILD}" "$APP_ROOT/Contents/Info.plist" || true
-/usr/libexec/PlistBuddy -c "Set :OpenClawBuildTimestamp ${BUILD_TS}" "$APP_ROOT/Contents/Info.plist" || true
-/usr/libexec/PlistBuddy -c "Set :OpenClawGitCommit ${GIT_COMMIT}" "$APP_ROOT/Contents/Info.plist" || true
+/usr/libexec/PlistBuddy -c "Set :SmartAgentNeoBuildTimestamp ${BUILD_TS}" "$APP_ROOT/Contents/Info.plist" || true
+/usr/libexec/PlistBuddy -c "Set :SmartAgentNeoGitCommit ${GIT_COMMIT}" "$APP_ROOT/Contents/Info.plist" || true
 /usr/libexec/PlistBuddy -c "Set :SUFeedURL ${SPARKLE_FEED_URL}" "$APP_ROOT/Contents/Info.plist" \
   || /usr/libexec/PlistBuddy -c "Add :SUFeedURL string ${SPARKLE_FEED_URL}" "$APP_ROOT/Contents/Info.plist" || true
 /usr/libexec/PlistBuddy -c "Set :SUPublicEDKey ${SPARKLE_PUBLIC_ED_KEY}" "$APP_ROOT/Contents/Info.plist" \
@@ -162,17 +162,17 @@ else
 fi
 
 echo "🚚 Copying binary"
-cp "$BIN_PRIMARY" "$APP_ROOT/Contents/MacOS/OpenClaw"
+cp "$BIN_PRIMARY" "$APP_ROOT/Contents/MacOS/SmartAgentNeo"
 if [[ "${#BUILD_ARCHS[@]}" -gt 1 ]]; then
   BIN_INPUTS=()
   for arch in "${BUILD_ARCHS[@]}"; do
     BIN_INPUTS+=("$(bin_for_arch "$arch")")
   done
-  /usr/bin/lipo -create "${BIN_INPUTS[@]}" -output "$APP_ROOT/Contents/MacOS/OpenClaw"
+  /usr/bin/lipo -create "${BIN_INPUTS[@]}" -output "$APP_ROOT/Contents/MacOS/SmartAgentNeo"
 fi
-chmod +x "$APP_ROOT/Contents/MacOS/OpenClaw"
+chmod +x "$APP_ROOT/Contents/MacOS/SmartAgentNeo"
 # SwiftPM outputs ad-hoc signed binaries; strip the signature before install_name_tool to avoid warnings.
-/usr/bin/codesign --remove-signature "$APP_ROOT/Contents/MacOS/OpenClaw" 2>/dev/null || true
+/usr/bin/codesign --remove-signature "$APP_ROOT/Contents/MacOS/SmartAgentNeo" 2>/dev/null || true
 
 SPARKLE_FRAMEWORK_PRIMARY="$(sparkle_framework_for_arch "$PRIMARY_ARCH")"
 if [ -d "$SPARKLE_FRAMEWORK_PRIMARY" ]; then
@@ -201,11 +201,11 @@ else
 fi
 
 echo "🖼  Copying app icon"
-cp "$ROOT_DIR/apps/macos/Sources/OpenClaw/Resources/OpenClaw.icns" "$APP_ROOT/Contents/Resources/OpenClaw.icns"
+cp "$ROOT_DIR/apps/macos/Sources/SmartAgentNeo/Resources/SmartAgentNeo.icns" "$APP_ROOT/Contents/Resources/SmartAgentNeo.icns"
 
 echo "📦 Copying device model resources"
 rm -rf "$APP_ROOT/Contents/Resources/DeviceModels"
-cp -R "$ROOT_DIR/apps/macos/Sources/OpenClaw/Resources/DeviceModels" "$APP_ROOT/Contents/Resources/DeviceModels"
+cp -R "$ROOT_DIR/apps/macos/Sources/SmartAgentNeo/Resources/DeviceModels" "$APP_ROOT/Contents/Resources/DeviceModels"
 
 echo "📦 Copying model catalog"
 MODEL_CATALOG_SRC="$ROOT_DIR/node_modules/@mariozechner/pi-ai/dist/models.generated.js"
@@ -216,13 +216,13 @@ else
   echo "WARN: model catalog missing at $MODEL_CATALOG_SRC (continuing)" >&2
 fi
 
-echo "📦 Copying OpenClawKit resources"
-OPENCLAWKIT_BUNDLE="$(build_path_for_arch "$PRIMARY_ARCH")/$BUILD_CONFIG/OpenClawKit_OpenClawKit.bundle"
-if [ -d "$OPENCLAWKIT_BUNDLE" ]; then
-  rm -rf "$APP_ROOT/Contents/Resources/OpenClawKit_OpenClawKit.bundle"
-  cp -R "$OPENCLAWKIT_BUNDLE" "$APP_ROOT/Contents/Resources/OpenClawKit_OpenClawKit.bundle"
+echo "📦 Copying SmartAgentNeoKit resources"
+SMARTAGENTNEOKIT_BUNDLE="$(build_path_for_arch "$PRIMARY_ARCH")/$BUILD_CONFIG/SmartAgentNeoKit_SmartAgentNeoKit.bundle"
+if [ -d "$SMARTAGENTNEOKIT_BUNDLE" ]; then
+  rm -rf "$APP_ROOT/Contents/Resources/SmartAgentNeoKit_SmartAgentNeoKit.bundle"
+  cp -R "$SMARTAGENTNEOKIT_BUNDLE" "$APP_ROOT/Contents/Resources/SmartAgentNeoKit_SmartAgentNeoKit.bundle"
 else
-  echo "WARN: OpenClawKit resource bundle not found at $OPENCLAWKIT_BUNDLE (continuing)" >&2
+  echo "WARN: SmartAgentNeoKit resource bundle not found at $SMARTAGENTNEOKIT_BUNDLE (continuing)" >&2
 fi
 
 echo "📦 Copying Textual resources"
@@ -252,8 +252,8 @@ else
   fi
 fi
 
-echo "⏹  Stopping any running OpenClaw"
-killall -q OpenClaw 2>/dev/null || true
+echo "⏹  Stopping any running SmartAgentNeo"
+killall -q SmartAgentNeo 2>/dev/null || true
 
 echo "🔏 Signing bundle (auto-selects signing identity if SIGN_IDENTITY is unset)"
 "$ROOT_DIR/scripts/codesign-mac-app.sh" "$APP_ROOT"

@@ -24,7 +24,7 @@ type HeldLock = {
   lockPath: string;
 };
 
-const HELD_LOCKS_KEY = Symbol.for("openclaw.fileLockHeldLocks");
+const HELD_LOCKS_KEY = Symbol.for("smart-agent-neo.fileLockHeldLocks");
 
 function resolveHeldLocks(): Map<string, HeldLock> {
   const proc = process as NodeJS.Process & {

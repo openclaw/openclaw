@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { SmartAgentNeoConfig } from "../config/config.js";
 import {
   loadConfig,
   resolveConfigPath,
@@ -8,7 +8,7 @@ import {
 import { buildCleanupPlan } from "./cleanup-utils.js";
 
 export function resolveCleanupPlanFromDisk(): {
-  cfg: OpenClawConfig;
+  cfg: SmartAgentNeoConfig;
   stateDir: string;
   configPath: string;
   oauthDir: string;

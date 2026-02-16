@@ -1,11 +1,11 @@
 import Foundation
 import Network
 import Testing
-@testable import OpenClaw
+@testable import SmartAgentNeo
 
 @Suite(.serialized) struct GatewayConnectionSecurityTests {
     private func clearTLSFingerprint(stableID: String) {
-        let suite = UserDefaults(suiteName: "ai.openclaw.shared") ?? .standard
+        let suite = UserDefaults(suiteName: "ai.smartagentneo.shared") ?? .standard
         suite.removeObject(forKey: "gateway.tls.\(stableID)")
     }
 
@@ -16,7 +16,7 @@ import Testing
 
         GatewayTLSStore.saveFingerprint("11", stableID: stableID)
 
-        let endpoint: NWEndpoint = .service(name: "Test", type: "_openclaw-gw._tcp", domain: "local.", interface: nil)
+        let endpoint: NWEndpoint = .service(name: "Test", type: "_smart-agent-neo-gw._tcp", domain: "local.", interface: nil)
         let gateway = GatewayDiscoveryModel.DiscoveredGateway(
             name: "Test",
             endpoint: endpoint,
@@ -43,7 +43,7 @@ import Testing
         defer { clearTLSFingerprint(stableID: stableID) }
         clearTLSFingerprint(stableID: stableID)
 
-        let endpoint: NWEndpoint = .service(name: "Test", type: "_openclaw-gw._tcp", domain: "local.", interface: nil)
+        let endpoint: NWEndpoint = .service(name: "Test", type: "_smart-agent-neo-gw._tcp", domain: "local.", interface: nil)
         let gateway = GatewayDiscoveryModel.DiscoveredGateway(
             name: "Test",
             endpoint: endpoint,
@@ -81,7 +81,7 @@ import Testing
         defaults.removeObject(forKey: "gateway.preferredStableID")
         defaults.set(stableID, forKey: "gateway.lastDiscoveredStableID")
 
-        let endpoint: NWEndpoint = .service(name: "Test", type: "_openclaw-gw._tcp", domain: "local.", interface: nil)
+        let endpoint: NWEndpoint = .service(name: "Test", type: "_smart-agent-neo-gw._tcp", domain: "local.", interface: nil)
         let gateway = GatewayDiscoveryModel.DiscoveredGateway(
             name: "Test",
             endpoint: endpoint,

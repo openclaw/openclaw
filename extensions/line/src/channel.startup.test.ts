@@ -1,4 +1,4 @@
-import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk";
+import type { SmartAgentNeoConfig, PluginRuntime } from "smart-agent-neo/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
 import { linePlugin } from "./channel.js";
 import { setLineRuntime } from "./runtime.js";
@@ -34,7 +34,7 @@ function createStartAccountCtx(params: { token: string; secret: string; runtime:
       channelSecret: params.secret,
       config: {},
     },
-    cfg: {} as OpenClawConfig,
+    cfg: {} as SmartAgentNeoConfig,
     runtime: params.runtime,
     abortSignal: undefined,
     log: { info: vi.fn(), debug: vi.fn() },

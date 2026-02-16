@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installProcessWarningFilter, shouldIgnoreWarning } from "./warning-filter.js";
 
-const warningFilterKey = Symbol.for("openclaw.warning-filter");
+const warningFilterKey = Symbol.for("smart-agent-neo.warning-filter");
 const baseEmitWarning = process.emitWarning.bind(process);
 
 function resetWarningFilterInstallState(): void {
@@ -85,10 +85,10 @@ describe("warning filter", () => {
       await new Promise((resolve) => setImmediate(resolve));
       expect(seenWarnings.find((warning) => warning.code === "DEP0060")).toBeUndefined();
 
-      emitWarning("Visible warning", { type: "Warning", code: "OPENCLAW_TEST_WARNING" });
+      emitWarning("Visible warning", { type: "Warning", code: "SMART_AGENT_NEO_TEST_WARNING" });
       await new Promise((resolve) => setImmediate(resolve));
       expect(
-        seenWarnings.find((warning) => warning.code === "OPENCLAW_TEST_WARNING"),
+        seenWarnings.find((warning) => warning.code === "SMART_AGENT_NEO_TEST_WARNING"),
       ).toBeDefined();
     } finally {
       process.off("warning", onWarning);

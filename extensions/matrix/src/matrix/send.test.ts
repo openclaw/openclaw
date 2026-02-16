@@ -1,4 +1,4 @@
-import type { PluginRuntime } from "openclaw/plugin-sdk";
+import type { PluginRuntime } from "smart-agent-neo/plugin-sdk";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { setMatrixRuntime } from "../runtime.js";
 

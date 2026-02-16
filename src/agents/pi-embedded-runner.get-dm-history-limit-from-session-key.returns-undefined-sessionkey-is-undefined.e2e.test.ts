@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { SmartAgentNeoConfig } from "../config/config.js";
 import { getDmHistoryLimitFromSessionKey } from "./pi-embedded-runner.js";
 
 describe("getDmHistoryLimitFromSessionKey", () => {
@@ -12,25 +12,25 @@ describe("getDmHistoryLimitFromSessionKey", () => {
   it("returns dmHistoryLimit for telegram provider", () => {
     const config = {
       channels: { telegram: { dmHistoryLimit: 15 } },
-    } as OpenClawConfig;
+    } as SmartAgentNeoConfig;
     expect(getDmHistoryLimitFromSessionKey("telegram:dm:123", config)).toBe(15);
   });
   it("returns dmHistoryLimit for whatsapp provider", () => {
     const config = {
       channels: { whatsapp: { dmHistoryLimit: 20 } },
-    } as OpenClawConfig;
+    } as SmartAgentNeoConfig;
     expect(getDmHistoryLimitFromSessionKey("whatsapp:dm:123", config)).toBe(20);
   });
   it("returns dmHistoryLimit for agent-prefixed session keys", () => {
     const config = {
       channels: { telegram: { dmHistoryLimit: 10 } },
-    } as OpenClawConfig;
+    } as SmartAgentNeoConfig;
     expect(getDmHistoryLimitFromSessionKey("agent:main:telegram:dm:123", config)).toBe(10);
   });
   it("strips thread suffix from dm session keys", () => {
     const config = {
       channels: { telegram: { dmHistoryLimit: 10, dms: { "123": { historyLimit: 7 } } } },
-    } as OpenClawConfig;
+    } as SmartAgentNeoConfig;
     expect(getDmHistoryLimitFromSessionKey("agent:main:telegram:dm:123:thread:999", config)).toBe(
       7,
     );
@@ -42,7 +42,7 @@ describe("getDmHistoryLimitFromSessionKey", () => {
       channels: {
         telegram: { dms: { "user:thread:abc": { historyLimit: 9 } } },
       },
-    } as OpenClawConfig;
+    } as SmartAgentNeoConfig;
     expect(getDmHistoryLimitFromSessionKey("agent:main:telegram:dm:user:thread:abc", config)).toBe(
       9,
     );
@@ -53,7 +53,7 @@ describe("getDmHistoryLimitFromSessionKey", () => {
         slack: { historyLimit: 10, dmHistoryLimit: 15 },
         discord: { historyLimit: 8 },
       },
-    } as OpenClawConfig;
+    } as SmartAgentNeoConfig;
     expect(getDmHistoryLimitFromSessionKey("agent:beta:slack:channel:c1", config)).toBe(10);
     expect(getDmHistoryLimitFromSessionKey("discord:channel:123456", config)).toBe(8);
   });
@@ -62,18 +62,18 @@ describe("getDmHistoryLimitFromSessionKey", () => {
       channels: {
         telegram: { dmHistoryLimit: 15, historyLimit: 10 },
       },
-    } as OpenClawConfig;
+    } as SmartAgentNeoConfig;
     // "slash" is not dm, channel, or group
     expect(getDmHistoryLimitFromSessionKey("telegram:slash:123", config)).toBeUndefined();
   });
   it("returns undefined for unknown provider", () => {
     const config = {
       channels: { telegram: { dmHistoryLimit: 15 } },
-    } as OpenClawConfig;
+    } as SmartAgentNeoConfig;
     expect(getDmHistoryLimitFromSessionKey("unknown:dm:123", config)).toBeUndefined();
   });
   it("returns undefined when provider config has no dmHistoryLimit", () => {
-    const config = { channels: { telegram: {} } } as OpenClawConfig;
+    const config = { channels: { telegram: {} } } as SmartAgentNeoConfig;
     expect(getDmHistoryLimitFromSessionKey("telegram:dm:123", config)).toBeUndefined();
   });
   it("handles all supported providers", () => {
@@ -91,7 +91,7 @@ describe("getDmHistoryLimitFromSessionKey", () => {
     for (const provider of providers) {
       const config = {
         channels: { [provider]: { dmHistoryLimit: 5 } },
-      } as OpenClawConfig;
+      } as SmartAgentNeoConfig;
       expect(getDmHistoryLimitFromSessionKey(`${provider}:dm:123`, config)).toBe(5);
     }
   });
@@ -116,7 +116,7 @@ describe("getDmHistoryLimitFromSessionKey", () => {
             dms: { user123: { historyLimit: 7 } },
           },
         },
-      } as OpenClawConfig;
+      } as SmartAgentNeoConfig;
       expect(getDmHistoryLimitFromSessionKey(`${provider}:dm:user123`, configWithOverride)).toBe(7);
 
       // Test fallback to provider default when user not in dms
@@ -138,7 +138,7 @@ describe("getDmHistoryLimitFromSessionKey", () => {
           dms: { "123": { historyLimit: 5 } },
         },
       },
-    } as OpenClawConfig;
+    } as SmartAgentNeoConfig;
     expect(getDmHistoryLimitFromSessionKey("telegram:dm:123", config)).toBe(5);
   });
   it("returns historyLimit for channel sessions for all providers", () => {
@@ -156,7 +156,7 @@ describe("getDmHistoryLimitFromSessionKey", () => {
     for (const provider of providers) {
       const config = {
         channels: { [provider]: { historyLimit: 12 } },
-      } as OpenClawConfig;
+      } as SmartAgentNeoConfig;
       expect(getDmHistoryLimitFromSessionKey(`${provider}:channel:123`, config)).toBe(12);
       expect(getDmHistoryLimitFromSessionKey(`agent:main:${provider}:channel:456`, config)).toBe(
         12,
@@ -169,7 +169,7 @@ describe("getDmHistoryLimitFromSessionKey", () => {
         discord: { historyLimit: 15 },
         slack: { historyLimit: 10 },
       },
-    } as OpenClawConfig;
+    } as SmartAgentNeoConfig;
     expect(getDmHistoryLimitFromSessionKey("discord:group:123", config)).toBe(15);
     expect(getDmHistoryLimitFromSessionKey("agent:main:slack:group:abc", config)).toBe(10);
   });
@@ -178,7 +178,7 @@ describe("getDmHistoryLimitFromSessionKey", () => {
       channels: {
         discord: { dmHistoryLimit: 10 }, // only dmHistoryLimit, no historyLimit
       },
-    } as OpenClawConfig;
+    } as SmartAgentNeoConfig;
     expect(getDmHistoryLimitFromSessionKey("discord:channel:123", config)).toBeUndefined();
   });
 
@@ -186,7 +186,7 @@ describe("getDmHistoryLimitFromSessionKey", () => {
     it("accepts both legacy :dm: and new :direct: session keys", () => {
       const config = {
         channels: { telegram: { dmHistoryLimit: 10 } },
-      } as OpenClawConfig;
+      } as SmartAgentNeoConfig;
       // Legacy format with :dm:
       expect(getDmHistoryLimitFromSessionKey("telegram:dm:123", config)).toBe(10);
       expect(getDmHistoryLimitFromSessionKey("agent:main:telegram:dm:123", config)).toBe(10);

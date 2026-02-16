@@ -15,14 +15,14 @@ x-i18n:
 
 # Hooks
 
-Hooks 提供了一个可扩展的事件驱动系统，用于响应智能体命令和事件自动执行操作。Hooks 从目录中自动发现，可以通过 CLI 命令管理，类似于 OpenClaw 中 Skills 的工作方式。
+Hooks 提供了一个可扩展的事件驱动系统，用于响应智能体命令和事件自动执行操作。Hooks 从目录中自动发现，可以通过 CLI 命令管理，类似于 SmartAgentNeo 中 Skills 的工作方式。
 
 ## 入门指南
 
 Hooks 是在事件发生时运行的小脚本。有两种类型：
 
 - **Hooks**（本页）：当智能体事件触发时在 Gateway 网关内运行，如 `/new`、`/reset`、`/stop` 或生命周期事件。
-- **Webhooks**：外部 HTTP webhooks，让其他系统触发 OpenClaw 中的工作。参见 [Webhook Hooks](/automation/webhook) 或使用 `openclaw webhooks` 获取 Gmail 助手命令。
+- **Webhooks**：外部 HTTP webhooks，让其他系统触发 SmartAgentNeo 中的工作。参见 [Webhook Hooks](/automation/webhook) 或使用 `smart-agent-neo webhooks` 获取 Gmail 助手命令。
 
 Hooks 也可以捆绑在插件中；参见 [插件](/tools/plugin#plugin-hooks)。
 
@@ -42,53 +42,53 @@ hooks 系统允许你：
 - 在发出 `/new` 时将会话上下文保存到记忆
 - 记录所有命令以供审计
 - 在智能体生命周期事件上触发自定义自动化
-- 在不修改核心代码的情况下扩展 OpenClaw 的行为
+- 在不修改核心代码的情况下扩展 SmartAgentNeo 的行为
 
 ## 入门
 
 ### 捆绑的 Hooks
 
-OpenClaw 附带三个自动发现的捆绑 hooks：
+SmartAgentNeo 附带三个自动发现的捆绑 hooks：
 
-- **💾 session-memory**：当你发出 `/new` 时将会话上下文保存到智能体工作区（默认 `~/.openclaw/workspace/memory/`）
-- **📝 command-logger**：将所有命令事件记录到 `~/.openclaw/logs/commands.log`
+- **💾 session-memory**：当你发出 `/new` 时将会话上下文保存到智能体工作区（默认 `~/.smart-agent-neo/workspace/memory/`）
+- **📝 command-logger**：将所有命令事件记录到 `~/.smart-agent-neo/logs/commands.log`
 - **🚀 boot-md**：当 Gateway 网关启动时运行 `BOOT.md`（需要启用内部 hooks）
 
 列出可用的 hooks：
 
 ```bash
-openclaw hooks list
+smart-agent-neo hooks list
 ```
 
 启用一个 hook：
 
 ```bash
-openclaw hooks enable session-memory
+smart-agent-neo hooks enable session-memory
 ```
 
 检查 hook 状态：
 
 ```bash
-openclaw hooks check
+smart-agent-neo hooks check
 ```
 
 获取详细信息：
 
 ```bash
-openclaw hooks info session-memory
+smart-agent-neo hooks info session-memory
 ```
 
 ### 新手引导
 
-在新手引导期间（`openclaw onboard`），你将被提示启用推荐的 hooks。向导会自动发现符合条件的 hooks 并呈现供选择。
+在新手引导期间（`smart-agent-neo onboard`），你将被提示启用推荐的 hooks。向导会自动发现符合条件的 hooks 并呈现供选择。
 
 ## Hook 发现
 
 Hooks 从三个目录自动发现（按优先级顺序）：
 
 1. **工作区 hooks**：`<workspace>/hooks/`（每智能体，最高优先级）
-2. **托管 hooks**：`~/.openclaw/hooks/`（用户安装，跨工作区共享）
-3. **捆绑 hooks**：`<openclaw>/dist/hooks/bundled/`（随 OpenClaw 附带）
+2. **托管 hooks**：`~/.smart-agent-neo/hooks/`（用户安装，跨工作区共享）
+3. **捆绑 hooks**：`<smart-agent-neo>/dist/hooks/bundled/`（随 SmartAgentNeo 附带）
 
 托管 hook 目录可以是**单个 hook** 或 **hook 包**（包目录）。
 
@@ -102,10 +102,10 @@ my-hook/
 
 ## Hook 包（npm/archives）
 
-Hook 包是标准的 npm 包，通过 `package.json` 中的 `openclaw.hooks` 导出一个或多个 hooks。使用以下命令安装：
+Hook 包是标准的 npm 包，通过 `package.json` 中的 `smart-agent-neo.hooks` 导出一个或多个 hooks。使用以下命令安装：
 
 ```bash
-openclaw hooks install <path-or-spec>
+smart-agent-neo hooks install <path-or-spec>
 ```
 
 示例 `package.json`：
@@ -114,14 +114,14 @@ openclaw hooks install <path-or-spec>
 {
   "name": "@acme/my-hooks",
   "version": "0.1.0",
-  "openclaw": {
+  "smart-agent-neo": {
     "hooks": ["./hooks/my-hook", "./hooks/other-hook"]
   }
 }
 ```
 
 每个条目指向包含 `HOOK.md` 和 `handler.ts`（或 `index.ts`）的 hook 目录。
-Hook 包可以附带依赖；它们将安装在 `~/.openclaw/hooks/<id>` 下。
+Hook 包可以附带依赖；它们将安装在 `~/.smart-agent-neo/hooks/<id>` 下。
 
 ## Hook 结构
 
@@ -133,9 +133,9 @@ Hook 包可以附带依赖；它们将安装在 `~/.openclaw/hooks/<id>` 下。
 ---
 name: my-hook
 description: "Short description of what this hook does"
-homepage: https://docs.openclaw.ai/automation/hooks#my-hook
+homepage: https://docs.smart-agent-neo.ai/automation/hooks#my-hook
 metadata:
-  { "openclaw": { "emoji": "🔗", "events": ["command:new"], "requires": { "bins": ["node"] } } }
+  { "smart-agent-neo": { "emoji": "🔗", "events": ["command:new"], "requires": { "bins": ["node"] } } }
 ---
 
 # My Hook
@@ -159,7 +159,7 @@ No configuration needed.
 
 ### 元数据字段
 
-`metadata.openclaw` 对象支持：
+`metadata.smart-agent-neo` 对象支持：
 
 - **`emoji`**：CLI 的显示表情符号（例如 `"💾"`）
 - **`events`**：要监听的事件数组（例如 `["command:new", "command:reset"]`）
@@ -219,7 +219,7 @@ export default myHandler;
     senderId?: string,
     workspaceDir?: string,
     bootstrapFiles?: WorkspaceBootstrapFile[],
-    cfg?: OpenClawConfig
+    cfg?: SmartAgentNeoConfig
   }
 }
 ```
@@ -247,7 +247,7 @@ export default myHandler;
 
 ### 工具结果 Hooks（插件 API）
 
-这些 hooks 不是事件流监听器；它们让插件在 OpenClaw 持久化工具结果之前同步调整它们。
+这些 hooks 不是事件流监听器；它们让插件在 SmartAgentNeo 持久化工具结果之前同步调整它们。
 
 - **`tool_result_persist`**：在工具结果写入会话记录之前转换它们。必须是同步的；返回更新后的工具结果负载或 `undefined` 保持原样。参见 [智能体循环](/concepts/agent-loop)。
 
@@ -266,13 +266,13 @@ export default myHandler;
 ### 1. 选择位置
 
 - **工作区 hooks**（`<workspace>/hooks/`）：每智能体，最高优先级
-- **托管 hooks**（`~/.openclaw/hooks/`）：跨工作区共享
+- **托管 hooks**（`~/.smart-agent-neo/hooks/`）：跨工作区共享
 
 ### 2. 创建目录结构
 
 ```bash
-mkdir -p ~/.openclaw/hooks/my-hook
-cd ~/.openclaw/hooks/my-hook
+mkdir -p ~/.smart-agent-neo/hooks/my-hook
+cd ~/.smart-agent-neo/hooks/my-hook
 ```
 
 ### 3. 创建 HOOK.md
@@ -281,7 +281,7 @@ cd ~/.openclaw/hooks/my-hook
 ---
 name: my-hook
 description: "Does something useful"
-metadata: { "openclaw": { "emoji": "🎯", "events": ["command:new"] } }
+metadata: { "smart-agent-neo": { "emoji": "🎯", "events": ["command:new"] } }
 ---
 
 # My Custom Hook
@@ -310,10 +310,10 @@ export default handler;
 
 ```bash
 # Verify hook is discovered
-openclaw hooks list
+smart-agent-neo hooks list
 
 # Enable it
-openclaw hooks enable my-hook
+smart-agent-neo hooks enable my-hook
 
 # Restart your gateway process (menu bar app restart on macOS, or restart your dev process)
 
@@ -407,46 +407,46 @@ Hooks 可以有自定义配置：
 
 ```bash
 # List all hooks
-openclaw hooks list
+smart-agent-neo hooks list
 
 # Show only eligible hooks
-openclaw hooks list --eligible
+smart-agent-neo hooks list --eligible
 
 # Verbose output (show missing requirements)
-openclaw hooks list --verbose
+smart-agent-neo hooks list --verbose
 
 # JSON output
-openclaw hooks list --json
+smart-agent-neo hooks list --json
 ```
 
 ### Hook 信息
 
 ```bash
 # Show detailed info about a hook
-openclaw hooks info session-memory
+smart-agent-neo hooks info session-memory
 
 # JSON output
-openclaw hooks info session-memory --json
+smart-agent-neo hooks info session-memory --json
 ```
 
 ### 检查资格
 
 ```bash
 # Show eligibility summary
-openclaw hooks check
+smart-agent-neo hooks check
 
 # JSON output
-openclaw hooks check --json
+smart-agent-neo hooks check --json
 ```
 
 ### 启用/禁用
 
 ```bash
 # Enable a hook
-openclaw hooks enable session-memory
+smart-agent-neo hooks enable session-memory
 
 # Disable a hook
-openclaw hooks disable command-logger
+smart-agent-neo hooks disable command-logger
 ```
 
 ## 捆绑的 Hooks
@@ -459,7 +459,7 @@ openclaw hooks disable command-logger
 
 **要求**：必须配置 `workspace.dir`
 
-**输出**：`<workspace>/memory/YYYY-MM-DD-slug.md`（默认为 `~/.openclaw/workspace`）
+**输出**：`<workspace>/memory/YYYY-MM-DD-slug.md`（默认为 `~/.smart-agent-neo/workspace`）
 
 **功能**：
 
@@ -487,7 +487,7 @@ openclaw hooks disable command-logger
 **启用**：
 
 ```bash
-openclaw hooks enable session-memory
+smart-agent-neo hooks enable session-memory
 ```
 
 ### command-logger
@@ -498,7 +498,7 @@ openclaw hooks enable session-memory
 
 **要求**：无
 
-**输出**：`~/.openclaw/logs/commands.log`
+**输出**：`~/.smart-agent-neo/logs/commands.log`
 
 **功能**：
 
@@ -517,19 +517,19 @@ openclaw hooks enable session-memory
 
 ```bash
 # View recent commands
-tail -n 20 ~/.openclaw/logs/commands.log
+tail -n 20 ~/.smart-agent-neo/logs/commands.log
 
 # Pretty-print with jq
-cat ~/.openclaw/logs/commands.log | jq .
+cat ~/.smart-agent-neo/logs/commands.log | jq .
 
 # Filter by action
-grep '"action":"new"' ~/.openclaw/logs/commands.log | jq .
+grep '"action":"new"' ~/.smart-agent-neo/logs/commands.log | jq .
 ```
 
 **启用**：
 
 ```bash
-openclaw hooks enable command-logger
+smart-agent-neo hooks enable command-logger
 ```
 
 ### boot-md
@@ -550,7 +550,7 @@ openclaw hooks enable command-logger
 **启用**：
 
 ```bash
-openclaw hooks enable boot-md
+smart-agent-neo hooks enable boot-md
 ```
 
 ## 最佳实践
@@ -607,13 +607,13 @@ const handler: HookHandler = async (event) => {
 尽可能在元数据中指定确切事件：
 
 ```yaml
-metadata: { "openclaw": { "events": ["command:new"] } } # Specific
+metadata: { "smart-agent-neo": { "events": ["command:new"] } } # Specific
 ```
 
 而不是：
 
 ```yaml
-metadata: { "openclaw": { "events": ["command"] } } # General - more overhead
+metadata: { "smart-agent-neo": { "events": ["command"] } } # General - more overhead
 ```
 
 ## 调试
@@ -633,7 +633,7 @@ Registered hook: boot-md -> gateway:startup
 列出所有发现的 hooks：
 
 ```bash
-openclaw hooks list --verbose
+smart-agent-neo hooks list --verbose
 ```
 
 ### 检查注册
@@ -652,7 +652,7 @@ const handler: HookHandler = async (event) => {
 检查为什么 hook 不符合条件：
 
 ```bash
-openclaw hooks info my-hook
+smart-agent-neo hooks info my-hook
 ```
 
 在输出中查找缺失的要求。
@@ -665,10 +665,10 @@ openclaw hooks info my-hook
 
 ```bash
 # macOS
-./scripts/clawlog.sh -f
+./scripts/neolog.sh -f
 
 # Other platforms
-tail -f ~/.openclaw/gateway.log
+tail -f ~/.smart-agent-neo/gateway.log
 ```
 
 ### 直接测试 Hooks
@@ -744,20 +744,20 @@ Gateway 网关启动
 1. 检查目录结构：
 
    ```bash
-   ls -la ~/.openclaw/hooks/my-hook/
+   ls -la ~/.smart-agent-neo/hooks/my-hook/
    # Should show: HOOK.md, handler.ts
    ```
 
 2. 验证 HOOK.md 格式：
 
    ```bash
-   cat ~/.openclaw/hooks/my-hook/HOOK.md
+   cat ~/.smart-agent-neo/hooks/my-hook/HOOK.md
    # Should have YAML frontmatter with name and metadata
    ```
 
 3. 列出所有发现的 hooks：
    ```bash
-   openclaw hooks list
+   smart-agent-neo hooks list
    ```
 
 ### Hook 不符合条件
@@ -765,7 +765,7 @@ Gateway 网关启动
 检查要求：
 
 ```bash
-openclaw hooks info my-hook
+smart-agent-neo hooks info my-hook
 ```
 
 查找缺失的：
@@ -780,7 +780,7 @@ openclaw hooks info my-hook
 1. 验证 hook 已启用：
 
    ```bash
-   openclaw hooks list
+   smart-agent-neo hooks list
    # Should show ✓ next to enabled hooks
    ```
 
@@ -788,7 +788,7 @@ openclaw hooks info my-hook
 
 3. 检查 Gateway 网关日志中的错误：
    ```bash
-   ./scripts/clawlog.sh | grep hook
+   ./scripts/neolog.sh | grep hook
    ```
 
 ### 处理程序错误
@@ -827,8 +827,8 @@ node -e "import('./path/to/handler.ts').then(console.log)"
 1. 创建 hook 目录：
 
    ```bash
-   mkdir -p ~/.openclaw/hooks/my-hook
-   mv ./hooks/handlers/my-handler.ts ~/.openclaw/hooks/my-hook/handler.ts
+   mkdir -p ~/.smart-agent-neo/hooks/my-hook
+   mv ./hooks/handlers/my-handler.ts ~/.smart-agent-neo/hooks/my-hook/handler.ts
    ```
 
 2. 创建 HOOK.md：
@@ -837,7 +837,7 @@ node -e "import('./path/to/handler.ts').then(console.log)"
    ---
    name: my-hook
    description: "My custom hook"
-   metadata: { "openclaw": { "emoji": "🎯", "events": ["command:new"] } }
+   metadata: { "smart-agent-neo": { "emoji": "🎯", "events": ["command:new"] } }
    ---
 
    # My Hook
@@ -862,7 +862,7 @@ node -e "import('./path/to/handler.ts').then(console.log)"
 
 4. 验证并重启你的 Gateway 网关进程：
    ```bash
-   openclaw hooks list
+   smart-agent-neo hooks list
    # Should show: 🎯 my-hook ✓
    ```
 
@@ -877,6 +877,6 @@ node -e "import('./path/to/handler.ts').then(console.log)"
 ## 另请参阅
 
 - [CLI 参考：hooks](/cli/hooks)
-- [捆绑 Hooks README](https://github.com/openclaw/openclaw/tree/main/src/hooks/bundled)
+- [捆绑 Hooks README](https://github.com/betterbrand/smart-agent-neo/tree/main/src/hooks/bundled)
 - [Webhook Hooks](/automation/webhook)
 - [配置](/gateway/configuration#hooks)

@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { installEmbeddingManagerFixture } from "./embedding-manager.test-harness.js";
 
 const fx = installEmbeddingManagerFixture({
-  fixturePrefix: "openclaw-mem-",
+  fixturePrefix: "smart-agent-neo-mem-",
   largeTokens: 1250,
   smallTokens: 200,
   createCfg: ({ workspaceDir, indexPath, tokens }) => ({

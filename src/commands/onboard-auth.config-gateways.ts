@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { SmartAgentNeoConfig } from "../config/config.js";
 import {
   buildCloudflareAiGatewayModelDefinition,
   resolveCloudflareAiGatewayBaseUrl,
@@ -12,7 +12,7 @@ import {
   VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
 } from "./onboard-auth.credentials.js";
 
-export function applyVercelAiGatewayProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+export function applyVercelAiGatewayProviderConfig(cfg: SmartAgentNeoConfig): SmartAgentNeoConfig {
   const models = { ...cfg.agents?.defaults?.models };
   models[VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF] = {
     ...models[VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF],
@@ -32,9 +32,9 @@ export function applyVercelAiGatewayProviderConfig(cfg: OpenClawConfig): OpenCla
 }
 
 export function applyCloudflareAiGatewayProviderConfig(
-  cfg: OpenClawConfig,
+  cfg: SmartAgentNeoConfig,
   params?: { accountId?: string; gatewayId?: string },
-): OpenClawConfig {
+): SmartAgentNeoConfig {
   const models = { ...cfg.agents?.defaults?.models };
   models[CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF] = {
     ...models[CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF],
@@ -77,15 +77,15 @@ export function applyCloudflareAiGatewayProviderConfig(
   });
 }
 
-export function applyVercelAiGatewayConfig(cfg: OpenClawConfig): OpenClawConfig {
+export function applyVercelAiGatewayConfig(cfg: SmartAgentNeoConfig): SmartAgentNeoConfig {
   const next = applyVercelAiGatewayProviderConfig(cfg);
   return applyAgentDefaultModelPrimary(next, VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF);
 }
 
 export function applyCloudflareAiGatewayConfig(
-  cfg: OpenClawConfig,
+  cfg: SmartAgentNeoConfig,
   params?: { accountId?: string; gatewayId?: string },
-): OpenClawConfig {
+): SmartAgentNeoConfig {
   const next = applyCloudflareAiGatewayProviderConfig(cfg, params);
   return applyAgentDefaultModelPrimary(next, CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF);
 }

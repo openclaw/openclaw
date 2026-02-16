@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { SmartAgentNeoConfig } from "../../config/config.js";
 import { isSubagentSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import {
   listSpawnedSessionKeys,
@@ -20,7 +20,7 @@ export type SessionAccessResult =
   | { allowed: true }
   | { allowed: false; error: string; status: "forbidden" };
 
-export function resolveSessionToolsVisibility(cfg: OpenClawConfig): SessionToolsVisibility {
+export function resolveSessionToolsVisibility(cfg: SmartAgentNeoConfig): SessionToolsVisibility {
   const raw = (cfg.tools as { sessions?: { visibility?: unknown } } | undefined)?.sessions
     ?.visibility;
   const value = typeof raw === "string" ? raw.trim().toLowerCase() : "";
@@ -31,7 +31,7 @@ export function resolveSessionToolsVisibility(cfg: OpenClawConfig): SessionTools
 }
 
 export function resolveEffectiveSessionToolsVisibility(params: {
-  cfg: OpenClawConfig;
+  cfg: SmartAgentNeoConfig;
   sandboxed: boolean;
 }): SessionToolsVisibility {
   const visibility = resolveSessionToolsVisibility(params.cfg);
@@ -45,12 +45,12 @@ export function resolveEffectiveSessionToolsVisibility(params: {
   return visibility;
 }
 
-export function resolveSandboxSessionToolsVisibility(cfg: OpenClawConfig): "spawned" | "all" {
+export function resolveSandboxSessionToolsVisibility(cfg: SmartAgentNeoConfig): "spawned" | "all" {
   return cfg.agents?.defaults?.sandbox?.sessionToolsVisibility ?? "spawned";
 }
 
 export function resolveSandboxedSessionToolContext(params: {
-  cfg: OpenClawConfig;
+  cfg: SmartAgentNeoConfig;
   agentSessionKey?: string;
   sandboxed?: boolean;
 }): {
@@ -87,7 +87,7 @@ export function resolveSandboxedSessionToolContext(params: {
   };
 }
 
-export function createAgentToAgentPolicy(cfg: OpenClawConfig): AgentToAgentPolicy {
+export function createAgentToAgentPolicy(cfg: SmartAgentNeoConfig): AgentToAgentPolicy {
   const routingA2A = cfg.tools?.agentToAgent;
   const enabled = routingA2A?.enabled === true;
   const allowPatterns = Array.isArray(routingA2A?.allow) ? routingA2A.allow : [];

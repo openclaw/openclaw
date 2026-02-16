@@ -1,12 +1,12 @@
 ---
-summary: "CLI reference for `openclaw security` (audit and fix common security footguns)"
+summary: "CLI reference for `smart-agent-neo security` (audit and fix common security footguns)"
 read_when:
   - You want to run a quick security audit on config/state
   - You want to apply safe “fix” suggestions (chmod, tighten defaults)
 title: "security"
 ---
 
-# `openclaw security`
+# `smart-agent-neo security`
 
 Security tools (audit + optional fixes).
 
@@ -17,9 +17,9 @@ Related:
 ## Audit
 
 ```bash
-openclaw security audit
-openclaw security audit --deep
-openclaw security audit --fix
+smart-agent-neo security audit
+smart-agent-neo security audit --deep
+smart-agent-neo security audit --fix
 ```
 
 The audit warns when multiple DM senders share the main session and recommends **secure DM mode**: `session.dmScope="per-channel-peer"` (or `per-account-channel-peer` for multi-account channels) for shared inboxes.

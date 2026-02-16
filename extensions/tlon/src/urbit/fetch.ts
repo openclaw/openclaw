@@ -1,5 +1,5 @@
-import type { LookupFn, SsrFPolicy } from "openclaw/plugin-sdk";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk";
+import type { LookupFn, SsrFPolicy } from "smart-agent-neo/plugin-sdk";
+import { fetchWithSsrFGuard } from "smart-agent-neo/plugin-sdk";
 import { validateUrbitBaseUrl } from "./base-url.js";
 import { UrbitUrlError } from "./errors.js";
 

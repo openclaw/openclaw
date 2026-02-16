@@ -9,12 +9,12 @@ title: "Discovery and Transports"
 
 # Discovery & transports
 
-OpenClaw has two distinct problems that look similar on the surface:
+SmartAgentNeo has two distinct problems that look similar on the surface:
 
 1. **Operator remote control**: the macOS menu bar app controlling a gateway running elsewhere.
 2. **Node pairing**: iOS/Android (and future nodes) finding a gateway and pairing securely.
 
-The design goal is to keep all network discovery/advertising in the **Node Gateway** (`openclaw gateway`) and keep clients (mac app, iOS) as consumers.
+The design goal is to keep all network discovery/advertising in the **Node Gateway** (`smart-agent-neo gateway`) and keep clients (mac app, iOS) as consumers.
 
 ## Terms
 
@@ -56,7 +56,7 @@ Troubleshooting and beacon details: [Bonjour](/gateway/bonjour).
 #### Service beacon details
 
 - Service types:
-  - `_openclaw-gw._tcp` (gateway transport beacon)
+  - `_smart-agent-neo-gw._tcp` (gateway transport beacon)
 - TXT keys (non-secret):
   - `role=gateway`
   - `lanHost=<hostname>.local`
@@ -65,7 +65,7 @@ Troubleshooting and beacon details: [Bonjour](/gateway/bonjour).
   - `gatewayTls=1` (only when TLS is enabled)
   - `gatewayTlsSha256=<sha256>` (only when TLS is enabled and fingerprint is available)
   - `canvasPort=<port>` (canvas host port; currently the same as `gatewayPort` when the canvas host is enabled)
-  - `cliPath=<path>` (optional; absolute path to a runnable `openclaw` entrypoint or binary)
+  - `cliPath=<path>` (optional; absolute path to a runnable `smart-agent-neo` entrypoint or binary)
   - `tailnetDns=<magicdns>` (optional hint; auto-detected when Tailscale is available)
 
 Security notes:
@@ -77,11 +77,11 @@ Security notes:
 
 Disable/override:
 
-- `OPENCLAW_DISABLE_BONJOUR=1` disables advertising.
-- `gateway.bind` in `~/.openclaw/openclaw.json` controls the Gateway bind mode.
-- `OPENCLAW_SSH_PORT` overrides the SSH port advertised in TXT (defaults to 22).
-- `OPENCLAW_TAILNET_DNS` publishes a `tailnetDns` hint (MagicDNS).
-- `OPENCLAW_CLI_PATH` overrides the advertised CLI path.
+- `SMART_AGENT_NEO_DISABLE_BONJOUR=1` disables advertising.
+- `gateway.bind` in `~/.smart-agent-neo/smart-agent-neo.json` controls the Gateway bind mode.
+- `SMART_AGENT_NEO_SSH_PORT` overrides the SSH port advertised in TXT (defaults to 22).
+- `SMART_AGENT_NEO_TAILNET_DNS` publishes a `tailnetDns` hint (MagicDNS).
+- `SMART_AGENT_NEO_CLI_PATH` overrides the advertised CLI path.
 
 ### 2) Tailnet (cross-network)
 

@@ -34,7 +34,7 @@ Status: production-ready for DMs + channels via Slack app integrations. Default 
         - install app and copy **Bot Token** (`xoxb-...`)
       </Step>
 
-      <Step title="Configure OpenClaw">
+      <Step title="Configure SmartAgentNeo">
 
 ```json5
 {
@@ -74,7 +74,7 @@ SLACK_BOT_TOKEN=xoxb-...
       <Step title="Start gateway">
 
 ```bash
-openclaw gateway
+smart-agent-neo gateway
 ```
 
       </Step>
@@ -92,7 +92,7 @@ openclaw gateway
 
       </Step>
 
-      <Step title="Configure OpenClaw HTTP mode">
+      <Step title="Configure SmartAgentNeo HTTP mode">
 
 ```json5
 {
@@ -152,7 +152,7 @@ For actions/directory reads, user token can be preferred when configured. For wr
     - `dm.groupEnabled` (group DMs default false)
     - `dm.groupChannels` (optional MPIM allowlist)
 
-    Pairing in DMs uses `openclaw pairing approve slack <code>`.
+    Pairing in DMs uses `smart-agent-neo pairing approve slack <code>`.
 
   </Tab>
 
@@ -205,7 +205,7 @@ For actions/directory reads, user token can be preferred when configured. For wr
 Default slash command settings:
 
 - `enabled: false`
-- `name: "openclaw"`
+- `name: "smart-agent-neo"`
 - `sessionPrefix: "slack:slash"`
 - `ephemeral: true`
 
@@ -289,7 +289,7 @@ Available action groups in current Slack tooling:
 
 ## Ack reactions
 
-`ackReaction` sends an acknowledgement emoji while OpenClaw is processing an inbound message.
+`ackReaction` sends an acknowledgement emoji while SmartAgentNeo is processing an inbound message.
 
 Resolution order:
 
@@ -311,12 +311,12 @@ Notes:
 ```json
 {
   "display_information": {
-    "name": "OpenClaw",
-    "description": "Slack connector for OpenClaw"
+    "name": "SmartAgentNeo",
+    "description": "Slack connector for SmartAgentNeo"
   },
   "features": {
     "bot_user": {
-      "display_name": "OpenClaw",
+      "display_name": "SmartAgentNeo",
       "always_online": false
     },
     "app_home": {
@@ -325,8 +325,8 @@ Notes:
     },
     "slash_commands": [
       {
-        "command": "/openclaw",
-        "description": "Send a message to OpenClaw",
+        "command": "/smart-agent-neo",
+        "description": "Send a message to SmartAgentNeo",
         "should_escape": false
       }
     ]
@@ -405,9 +405,9 @@ Notes:
     Useful commands:
 
 ```bash
-openclaw channels status --probe
-openclaw logs --follow
-openclaw doctor
+smart-agent-neo channels status --probe
+smart-agent-neo logs --follow
+smart-agent-neo doctor
 ```
 
   </Accordion>
@@ -420,7 +420,7 @@ openclaw doctor
     - pairing approvals / allowlist entries
 
 ```bash
-openclaw pairing list slack
+smart-agent-neo pairing list slack
 ```
 
   </Accordion>

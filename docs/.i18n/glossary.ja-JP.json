@@ -1,5 +1,5 @@
 [
-  { "source": "OpenClaw", "target": "OpenClaw" },
+  { "source": "SmartAgentNeo", "target": "SmartAgentNeo" },
   { "source": "Gateway", "target": "Gateway" },
   { "source": "Pi", "target": "Pi" },
   { "source": "Skills", "target": "Skills" },

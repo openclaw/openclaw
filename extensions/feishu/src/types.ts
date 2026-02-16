@@ -1,4 +1,4 @@
-import type { BaseProbeResult } from "openclaw/plugin-sdk";
+import type { BaseProbeResult } from "smart-agent-neo/plugin-sdk";
 import type {
   FeishuConfigSchema,
   FeishuGroupSchema,

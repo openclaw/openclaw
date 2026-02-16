@@ -1,6 +1,6 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "name": "OpenClaw",
+  "name": "SmartAgentNeo",
   "description": "Self-hosted gateway that connects WhatsApp, Telegram, Discord, iMessage, and more to AI coding agents. Run a single Gateway process on your own machine and message your AI assistant from anywhere.",
   "theme": "mint",
   "icons": {
@@ -36,12 +36,12 @@
     "links": [
       {
         "label": "GitHub",
-        "href": "https://github.com/openclaw/openclaw",
+        "href": "https://github.com/betterbrand/smart-agent-neo",
         "icon": "github"
       },
       {
         "label": "Releases",
-        "href": "https://github.com/openclaw/openclaw/releases",
+        "href": "https://github.com/betterbrand/smart-agent-neo/releases",
         "icon": "package"
       }
     ]
@@ -260,28 +260,28 @@
       "destination": "/nodes/camera"
     },
     {
-      "source": "/clawd",
-      "destination": "/start/openclaw"
+      "source": "/neo",
+      "destination": "/start/smart-agent-neo"
     },
     {
-      "source": "/start/clawd",
-      "destination": "/start/openclaw"
+      "source": "/start/neo",
+      "destination": "/start/smart-agent-neo"
     },
     {
-      "source": "/start/clawd/",
-      "destination": "/start/openclaw"
+      "source": "/start/neo/",
+      "destination": "/start/smart-agent-neo"
     },
     {
-      "source": "/clawhub",
-      "destination": "/tools/clawhub"
+      "source": "/neohub",
+      "destination": "/tools/neohub"
     },
     {
-      "source": "/clawdhub",
-      "destination": "/tools/clawhub"
+      "source": "/neohub",
+      "destination": "/tools/neohub"
     },
     {
-      "source": "/tools/clawdhub",
-      "destination": "/tools/clawhub"
+      "source": "/tools/neohub",
+      "destination": "/tools/neohub"
     },
     {
       "source": "/configuration",
@@ -827,7 +827,7 @@
               },
               {
                 "group": "Guides",
-                "pages": ["start/openclaw"]
+                "pages": ["start/smart-agent-neo"]
               }
             ]
           },
@@ -996,7 +996,7 @@
                   "tools/slash-commands",
                   "tools/skills",
                   "tools/skills-config",
-                  "tools/clawhub",
+                  "tools/neohub",
                   "tools/plugin"
                 ]
               },
@@ -1338,7 +1338,7 @@
               },
               {
                 "group": "指南",
-                "pages": ["zh-CN/start/openclaw"]
+                "pages": ["zh-CN/start/smart-agent-neo"]
               }
             ]
           },
@@ -1513,7 +1513,7 @@
                   "zh-CN/tools/slash-commands",
                   "zh-CN/tools/skills",
                   "zh-CN/tools/skills-config",
-                  "zh-CN/tools/clawhub",
+                  "zh-CN/tools/neohub",
                   "zh-CN/tools/plugin"
                 ]
               },

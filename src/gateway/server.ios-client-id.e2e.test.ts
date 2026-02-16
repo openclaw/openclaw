@@ -8,8 +8,8 @@ let port = 0;
 let previousToken: string | undefined;
 
 beforeAll(async () => {
-  previousToken = process.env.OPENCLAW_GATEWAY_TOKEN;
-  process.env.OPENCLAW_GATEWAY_TOKEN = "test-gateway-token-1234567890";
+  previousToken = process.env.SMART_AGENT_NEO_GATEWAY_TOKEN;
+  process.env.SMART_AGENT_NEO_GATEWAY_TOKEN = "test-gateway-token-1234567890";
   port = await getFreePort();
   server = await startGatewayServer(port);
 });
@@ -17,9 +17,9 @@ beforeAll(async () => {
 afterAll(async () => {
   await server?.close();
   if (previousToken === undefined) {
-    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.SMART_AGENT_NEO_GATEWAY_TOKEN;
   } else {
-    process.env.OPENCLAW_GATEWAY_TOKEN = previousToken;
+    process.env.SMART_AGENT_NEO_GATEWAY_TOKEN = previousToken;
   }
 });
 
@@ -62,8 +62,8 @@ function connectReq(
 }
 
 test.each([
-  { clientId: "openclaw-ios", platform: "ios" },
-  { clientId: "openclaw-android", platform: "android" },
+  { clientId: "smart-agent-neo-ios", platform: "ios" },
+  { clientId: "smart-agent-neo-android", platform: "android" },
 ])("accepts $clientId as a valid gateway client id", async ({ clientId, platform }) => {
   const ws = new WebSocket(`ws://127.0.0.1:${port}`);
   await new Promise<void>((resolve) => ws.once("open", resolve));

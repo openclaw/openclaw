@@ -2,7 +2,7 @@
 read_when:
   - 你想管理智能体钩子
   - 你想安装或更新钩子
-summary: CLI 参考：`openclaw hooks`（智能体钩子）
+summary: CLI 参考：`smart-agent-neo hooks`（智能体钩子）
 title: hooks
 x-i18n:
   generated_at: "2026-02-03T10:04:32Z"
@@ -13,7 +13,7 @@ x-i18n:
   workflow: 15
 ---
 
-# `openclaw hooks`
+# `smart-agent-neo hooks`
 
 管理智能体钩子（针对 `/new`、`/reset` 等命令以及 Gateway 网关启动的事件驱动自动化）。
 
@@ -25,7 +25,7 @@ x-i18n:
 ## 列出所有钩子
 
 ```bash
-openclaw hooks list
+smart-agent-neo hooks list
 ```
 
 列出从工作区、托管目录和内置目录中发现的所有钩子。
@@ -50,7 +50,7 @@ Ready:
 **示例（详细模式）：**
 
 ```bash
-openclaw hooks list --verbose
+smart-agent-neo hooks list --verbose
 ```
 
 显示不符合条件的钩子缺失的要求。
@@ -58,7 +58,7 @@ openclaw hooks list --verbose
 **示例（JSON）：**
 
 ```bash
-openclaw hooks list --json
+smart-agent-neo hooks list --json
 ```
 
 返回结构化 JSON，供程序化使用。
@@ -66,7 +66,7 @@ openclaw hooks list --json
 ## 获取钩子信息
 
 ```bash
-openclaw hooks info <name>
+smart-agent-neo hooks info <name>
 ```
 
 显示特定钩子的详细信息。
@@ -82,7 +82,7 @@ openclaw hooks info <name>
 **示例：**
 
 ```bash
-openclaw hooks info session-memory
+smart-agent-neo hooks info session-memory
 ```
 
 **输出：**
@@ -93,10 +93,10 @@ openclaw hooks info session-memory
 Save session context to memory when /new command is issued
 
 Details:
-  Source: openclaw-bundled
-  Path: /path/to/openclaw/hooks/bundled/session-memory/HOOK.md
-  Handler: /path/to/openclaw/hooks/bundled/session-memory/handler.ts
-  Homepage: https://docs.openclaw.ai/automation/hooks#session-memory
+  Source: smart-agent-neo-bundled
+  Path: /path/to/smart-agent-neo/hooks/bundled/session-memory/HOOK.md
+  Handler: /path/to/smart-agent-neo/hooks/bundled/session-memory/handler.ts
+  Homepage: https://docs.smart-agent-neo.ai/automation/hooks#session-memory
   Events: command:new
 
 Requirements:
@@ -106,7 +106,7 @@ Requirements:
 ## 检查钩子资格
 
 ```bash
-openclaw hooks check
+smart-agent-neo hooks check
 ```
 
 显示钩子资格状态摘要（有多少已就绪，有多少未就绪）。
@@ -128,12 +128,12 @@ Not ready: 0
 ## 启用钩子
 
 ```bash
-openclaw hooks enable <name>
+smart-agent-neo hooks enable <name>
 ```
 
-通过将特定钩子添加到配置（`~/.openclaw/config.json`）来启用它。
+通过将特定钩子添加到配置（`~/.smart-agent-neo/config.json`）来启用它。
 
-**注意：** 由插件管理的钩子在 `openclaw hooks list` 中显示 `plugin:<id>`，
+**注意：** 由插件管理的钩子在 `smart-agent-neo hooks list` 中显示 `plugin:<id>`，
 无法在此处启用/禁用。请改为启用/禁用该插件。
 
 **参数：**
@@ -143,7 +143,7 @@ openclaw hooks enable <name>
 **示例：**
 
 ```bash
-openclaw hooks enable session-memory
+smart-agent-neo hooks enable session-memory
 ```
 
 **输出：**
@@ -165,7 +165,7 @@ openclaw hooks enable session-memory
 ## 禁用钩子
 
 ```bash
-openclaw hooks disable <name>
+smart-agent-neo hooks disable <name>
 ```
 
 通过更新配置来禁用特定钩子。
@@ -177,7 +177,7 @@ openclaw hooks disable <name>
 **示例：**
 
 ```bash
-openclaw hooks disable command-logger
+smart-agent-neo hooks disable command-logger
 ```
 
 **输出：**
@@ -193,14 +193,14 @@ openclaw hooks disable command-logger
 ## 安装钩子
 
 ```bash
-openclaw hooks install <path-or-spec>
+smart-agent-neo hooks install <path-or-spec>
 ```
 
 从本地文件夹/压缩包或 npm 安装钩子包。
 
 **执行操作：**
 
-- 将钩子包复制到 `~/.openclaw/hooks/<id>`
+- 将钩子包复制到 `~/.smart-agent-neo/hooks/<id>`
 - 在 `hooks.internal.entries.*` 中启用已安装的钩子
 - 在 `hooks.internal.installs` 下记录安装信息
 
@@ -214,23 +214,23 @@ openclaw hooks install <path-or-spec>
 
 ```bash
 # 本地目录
-openclaw hooks install ./my-hook-pack
+smart-agent-neo hooks install ./my-hook-pack
 
 # 本地压缩包
-openclaw hooks install ./my-hook-pack.zip
+smart-agent-neo hooks install ./my-hook-pack.zip
 
 # NPM 包
-openclaw hooks install @openclaw/my-hook-pack
+smart-agent-neo hooks install @smart-agent-neo/my-hook-pack
 
 # 链接本地目录而不复制
-openclaw hooks install -l ./my-hook-pack
+smart-agent-neo hooks install -l ./my-hook-pack
 ```
 
 ## 更新钩子
 
 ```bash
-openclaw hooks update <id>
-openclaw hooks update --all
+smart-agent-neo hooks update <id>
+smart-agent-neo hooks update --all
 ```
 
 更新已安装的钩子包（仅限 npm 安装）。
@@ -249,10 +249,10 @@ openclaw hooks update --all
 **启用：**
 
 ```bash
-openclaw hooks enable session-memory
+smart-agent-neo hooks enable session-memory
 ```
 
-**输出：** `~/.openclaw/workspace/memory/YYYY-MM-DD-slug.md`
+**输出：** `~/.smart-agent-neo/workspace/memory/YYYY-MM-DD-slug.md`
 
 **参见：** [session-memory 文档](/automation/hooks#session-memory)
 
@@ -263,22 +263,22 @@ openclaw hooks enable session-memory
 **启用：**
 
 ```bash
-openclaw hooks enable command-logger
+smart-agent-neo hooks enable command-logger
 ```
 
-**输出：** `~/.openclaw/logs/commands.log`
+**输出：** `~/.smart-agent-neo/logs/commands.log`
 
 **查看日志：**
 
 ```bash
 # 最近的命令
-tail -n 20 ~/.openclaw/logs/commands.log
+tail -n 20 ~/.smart-agent-neo/logs/commands.log
 
 # 格式化输出
-cat ~/.openclaw/logs/commands.log | jq .
+cat ~/.smart-agent-neo/logs/commands.log | jq .
 
 # 按操作过滤
-grep '"action":"new"' ~/.openclaw/logs/commands.log | jq .
+grep '"action":"new"' ~/.smart-agent-neo/logs/commands.log | jq .
 ```
 
 **参见：** [command-logger 文档](/automation/hooks#command-logger)
@@ -292,7 +292,7 @@ grep '"action":"new"' ~/.openclaw/logs/commands.log | jq .
 **启用**：
 
 ```bash
-openclaw hooks enable boot-md
+smart-agent-neo hooks enable boot-md
 ```
 
 **参见：** [boot-md 文档](/automation/hooks#boot-md)

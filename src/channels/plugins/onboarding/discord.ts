@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../../../config/config.js";
+import type { SmartAgentNeoConfig } from "../../../config/config.js";
 import type { DiscordGuildEntry } from "../../../config/types.discord.js";
 import type { DmPolicy } from "../../../config/types.js";
 import type { WizardPrompter } from "../../../wizard/prompts.js";
@@ -29,7 +29,7 @@ function addDiscordWildcardAllowFrom(allowFrom?: string[] | null): string[] {
 
 const channel = "discord" as const;
 
-function setDiscordDmPolicy(cfg: OpenClawConfig, dmPolicy: DmPolicy) {
+function setDiscordDmPolicy(cfg: SmartAgentNeoConfig, dmPolicy: DmPolicy) {
   const existingAllowFrom =
     cfg.channels?.discord?.allowFrom ?? cfg.channels?.discord?.dm?.allowFrom;
   const allowFrom =
@@ -65,10 +65,10 @@ async function noteDiscordTokenHelp(prompter: WizardPrompter): Promise<void> {
 }
 
 function patchDiscordConfigForAccount(
-  cfg: OpenClawConfig,
+  cfg: SmartAgentNeoConfig,
   accountId: string,
   patch: Record<string, unknown>,
-): OpenClawConfig {
+): SmartAgentNeoConfig {
   if (accountId === DEFAULT_ACCOUNT_ID) {
     return {
       ...cfg,
@@ -103,21 +103,21 @@ function patchDiscordConfigForAccount(
 }
 
 function setDiscordGroupPolicy(
-  cfg: OpenClawConfig,
+  cfg: SmartAgentNeoConfig,
   accountId: string,
   groupPolicy: "open" | "allowlist" | "disabled",
-): OpenClawConfig {
+): SmartAgentNeoConfig {
   return patchDiscordConfigForAccount(cfg, accountId, { groupPolicy });
 }
 
 function setDiscordGuildChannelAllowlist(
-  cfg: OpenClawConfig,
+  cfg: SmartAgentNeoConfig,
   accountId: string,
   entries: Array<{
     guildKey: string;
     channelKey?: string;
   }>,
-): OpenClawConfig {
+): SmartAgentNeoConfig {
   const baseGuilds =
     accountId === DEFAULT_ACCOUNT_ID
       ? (cfg.channels?.discord?.guilds ?? {})
@@ -137,7 +137,7 @@ function setDiscordGuildChannelAllowlist(
   return patchDiscordConfigForAccount(cfg, accountId, { guilds });
 }
 
-function setDiscordAllowFrom(cfg: OpenClawConfig, allowFrom: string[]): OpenClawConfig {
+function setDiscordAllowFrom(cfg: SmartAgentNeoConfig, allowFrom: string[]): SmartAgentNeoConfig {
   return {
     ...cfg,
     channels: {
@@ -162,10 +162,10 @@ function parseDiscordAllowFromInput(raw: string): string[] {
 }
 
 async function promptDiscordAllowFrom(params: {
-  cfg: OpenClawConfig;
+  cfg: SmartAgentNeoConfig;
   prompter: WizardPrompter;
   accountId?: string;
-}): Promise<OpenClawConfig> {
+}): Promise<SmartAgentNeoConfig> {
   const accountId =
     params.accountId && normalizeAccountId(params.accountId)
       ? (normalizeAccountId(params.accountId) ?? DEFAULT_ACCOUNT_ID)

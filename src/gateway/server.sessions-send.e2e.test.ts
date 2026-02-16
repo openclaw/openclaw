@@ -12,7 +12,7 @@ import {
   testState,
 } from "./test-helpers.js";
 
-const { createOpenClawTools } = await import("../agents/openclaw-tools.js");
+const { createSmartAgentNeoTools } = await import("../agents/smart-agent-neo-tools.js");
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -22,11 +22,11 @@ const gatewayToken = "test-token";
 let envSnapshot: ReturnType<typeof captureEnv>;
 
 beforeAll(async () => {
-  envSnapshot = captureEnv(["OPENCLAW_GATEWAY_PORT", "OPENCLAW_GATEWAY_TOKEN"]);
+  envSnapshot = captureEnv(["SMART_AGENT_NEO_GATEWAY_PORT", "SMART_AGENT_NEO_GATEWAY_TOKEN"]);
   gatewayPort = await getFreePort();
   testState.gatewayAuth = { mode: "token", token: gatewayToken };
-  process.env.OPENCLAW_GATEWAY_PORT = String(gatewayPort);
-  process.env.OPENCLAW_GATEWAY_TOKEN = gatewayToken;
+  process.env.SMART_AGENT_NEO_GATEWAY_PORT = String(gatewayPort);
+  process.env.SMART_AGENT_NEO_GATEWAY_TOKEN = gatewayToken;
   server = await startGatewayServer(gatewayPort);
 });
 
@@ -80,7 +80,7 @@ describe("sessions_send gateway loopback", () => {
       });
     });
 
-    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_send");
+    const tool = createSmartAgentNeoTools().find((candidate) => candidate.name === "sessions_send");
     if (!tool) {
       throw new Error("missing sessions_send tool");
     }
@@ -113,9 +113,9 @@ describe("sessions_send gateway loopback", () => {
 describe("sessions_send label lookup", () => {
   it("finds session by label and sends message", { timeout: 60_000 }, async () => {
     // This is an operator feature; enable broader session tool targeting for this test.
-    const configPath = process.env.OPENCLAW_CONFIG_PATH;
+    const configPath = process.env.SMART_AGENT_NEO_CONFIG_PATH;
     if (!configPath) {
-      throw new Error("OPENCLAW_CONFIG_PATH missing in gateway test environment");
+      throw new Error("SMART_AGENT_NEO_CONFIG_PATH missing in gateway test environment");
     }
     await fs.mkdir(path.dirname(configPath), { recursive: true });
     await fs.writeFile(
@@ -165,7 +165,7 @@ describe("sessions_send label lookup", () => {
       timeoutMs: 5000,
     });
 
-    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_send");
+    const tool = createSmartAgentNeoTools().find((candidate) => candidate.name === "sessions_send");
     if (!tool) {
       throw new Error("missing sessions_send tool");
     }
@@ -187,7 +187,7 @@ describe("sessions_send label lookup", () => {
   });
 
   it("returns error when label not found", { timeout: 60_000 }, async () => {
-    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_send");
+    const tool = createSmartAgentNeoTools().find((candidate) => candidate.name === "sessions_send");
     if (!tool) {
       throw new Error("missing sessions_send tool");
     }
@@ -203,7 +203,7 @@ describe("sessions_send label lookup", () => {
   });
 
   it("returns error when neither sessionKey nor label provided", { timeout: 60_000 }, async () => {
-    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_send");
+    const tool = createSmartAgentNeoTools().find((candidate) => candidate.name === "sessions_send");
     if (!tool) {
       throw new Error("missing sessions_send tool");
     }

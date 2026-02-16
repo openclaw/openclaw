@@ -1,4 +1,4 @@
-# OpenClaw Fly.io PRIVATE deployment configuration
+# SmartAgentNeo Fly.io PRIVATE deployment configuration
 # Use this template for hardened deployments with no public IP exposure.
 #
 # This config is suitable when:
@@ -9,7 +9,7 @@
 #
 # See https://fly.io/docs/reference/configuration/
 
-app = "my-openclaw" # change to your app name
+app = "my-smart-agent-neo" # change to your app name
 primary_region = "iad" # change to your closest region
 
 [build]
@@ -17,8 +17,8 @@ dockerfile = "Dockerfile"
 
 [env]
 NODE_ENV = "production"
-OPENCLAW_PREFER_PNPM = "1"
-OPENCLAW_STATE_DIR = "/data"
+SMART_AGENT_NEO_PREFER_PNPM = "1"
+SMART_AGENT_NEO_STATE_DIR = "/data"
 NODE_OPTIONS = "--max-old-space-size=1536"
 
 [processes]
@@ -35,5 +35,5 @@ size = "shared-cpu-2x"
 memory = "2048mb"
 
 [mounts]
-source = "openclaw_data"
+source = "smart-agent-neo_data"
 destination = "/data"

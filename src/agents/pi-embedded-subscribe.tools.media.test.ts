@@ -49,7 +49,7 @@ describe("extractToolResultMediaPaths", () => {
   });
 
   it("falls back to details.path when image content exists but no MEDIA: text", () => {
-    // Pi SDK read tool doesn't include MEDIA: but OpenClaw imageResult
+    // Pi SDK read tool doesn't include MEDIA: but SmartAgentNeo imageResult
     // sets details.path as fallback.
     const result = {
       content: [

@@ -1,4 +1,4 @@
-import type { OpenClawConfig, RuntimeEnv } from "openclaw/plugin-sdk";
+import type { SmartAgentNeoConfig, RuntimeEnv } from "smart-agent-neo/plugin-sdk";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
 import type { MSTeamsAdapter } from "./messenger.js";
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";
@@ -23,7 +23,7 @@ export type MSTeamsActivityHandler = {
 };
 
 export type MSTeamsMessageHandlerDeps = {
-  cfg: OpenClawConfig;
+  cfg: SmartAgentNeoConfig;
   runtime: RuntimeEnv;
   appId: string;
   adapter: MSTeamsAdapter;

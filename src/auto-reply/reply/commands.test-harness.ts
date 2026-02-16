@@ -1,11 +1,11 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { SmartAgentNeoConfig } from "../../config/config.js";
 import type { MsgContext } from "../templating.js";
 import { buildCommandContext } from "./commands.js";
 import { parseInlineDirectives } from "./directive-handling.js";
 
 export function buildCommandTestParams(
   commandBody: string,
-  cfg: OpenClawConfig,
+  cfg: SmartAgentNeoConfig,
   ctxOverrides?: Partial<MsgContext>,
   options?: {
     workspaceDir?: string;

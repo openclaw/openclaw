@@ -27,7 +27,7 @@ export function createCronStoreHarness(options?: { prefix?: string }) {
   let caseId = 0;
 
   beforeAll(async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), options?.prefix ?? "openclaw-cron-"));
+    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), options?.prefix ?? "smart-agent-neo-cron-"));
   });
 
   afterAll(async () => {

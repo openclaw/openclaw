@@ -1,5 +1,5 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
+import type { SmartAgentNeoPluginApi } from "smart-agent-neo/plugin-sdk";
+import { emptyPluginConfigSchema } from "smart-agent-neo/plugin-sdk";
 import { createDiagnosticsOtelService } from "./src/service.js";
 
 const plugin = {
@@ -7,7 +7,7 @@ const plugin = {
   name: "Diagnostics OpenTelemetry",
   description: "Export diagnostics events to OpenTelemetry",
   configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
+  register(api: SmartAgentNeoPluginApi) {
     api.registerService(createDiagnosticsOtelService());
   },
 };

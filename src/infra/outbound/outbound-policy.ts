@@ -3,7 +3,7 @@ import type {
   ChannelMessageActionName,
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { SmartAgentNeoConfig } from "../../config/config.js";
 import {
   getChannelMessageAdapter,
   type CrossContextComponentsBuilder,
@@ -91,7 +91,7 @@ export function enforceCrossContextPolicy(params: {
   action: ChannelMessageActionName;
   args: Record<string, unknown>;
   toolContext?: ChannelThreadingToolContext;
-  cfg: OpenClawConfig;
+  cfg: SmartAgentNeoConfig;
 }): void {
   const currentTarget = params.toolContext?.currentChannelId?.trim();
   if (!currentTarget) {
@@ -139,7 +139,7 @@ export function enforceCrossContextPolicy(params: {
 }
 
 export async function buildCrossContextDecoration(params: {
-  cfg: OpenClawConfig;
+  cfg: SmartAgentNeoConfig;
   channel: ChannelId;
   target: string;
   toolContext?: ChannelThreadingToolContext;

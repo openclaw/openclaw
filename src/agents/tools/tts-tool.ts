@@ -1,5 +1,5 @@
 import { Type } from "@sinclair/typebox";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { SmartAgentNeoConfig } from "../../config/config.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import type { AnyAgentTool } from "./common.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
@@ -15,7 +15,7 @@ const TtsToolSchema = Type.Object({
 });
 
 export function createTtsTool(opts?: {
-  config?: OpenClawConfig;
+  config?: SmartAgentNeoConfig;
   agentChannel?: GatewayMessageChannel;
 }): AnyAgentTool {
   return {

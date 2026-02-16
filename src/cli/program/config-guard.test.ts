@@ -17,7 +17,7 @@ function makeSnapshot() {
     valid: true,
     issues: [],
     legacyIssues: [],
-    path: "/tmp/openclaw.json",
+    path: "/tmp/smart-agent-neo.json",
   };
 }
 

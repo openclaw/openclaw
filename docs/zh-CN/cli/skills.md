@@ -2,7 +2,7 @@
 read_when:
   - 你想查看哪些 Skills 可用并准备好运行
   - 你想调试 Skills 缺少的二进制文件/环境变量/配置
-summary: "`openclaw skills` 的 CLI 参考（列出/信息/检查）和 skill 资格"
+summary: "`smart-agent-neo skills` 的 CLI 参考（列出/信息/检查）和 skill 资格"
 title: skills
 x-i18n:
   generated_at: "2026-02-03T07:45:14Z"
@@ -13,7 +13,7 @@ x-i18n:
   workflow: 15
 ---
 
-# `openclaw skills`
+# `smart-agent-neo skills`
 
 检查 Skills（内置 + 工作区 + 托管覆盖）并查看哪些符合条件，哪些缺少要求。
 
@@ -21,13 +21,13 @@ x-i18n:
 
 - Skills 系统：[Skills](/tools/skills)
 - Skills 配置：[Skills 配置](/tools/skills-config)
-- ClawHub 安装：[ClawHub](/tools/clawhub)
+- NeoHub 安装：[NeoHub](/tools/neohub)
 
 ## 命令
 
 ```bash
-openclaw skills list
-openclaw skills list --eligible
-openclaw skills info <name>
-openclaw skills check
+smart-agent-neo skills list
+smart-agent-neo skills list --eligible
+smart-agent-neo skills info <name>
+smart-agent-neo skills check
 ```

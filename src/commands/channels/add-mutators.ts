@@ -1,16 +1,16 @@
 import type { ChannelId, ChannelSetupInput } from "../../channels/plugins/types.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { SmartAgentNeoConfig } from "../../config/config.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 
 type ChatChannel = ChannelId;
 
 export function applyAccountName(params: {
-  cfg: OpenClawConfig;
+  cfg: SmartAgentNeoConfig;
   channel: ChatChannel;
   accountId: string;
   name?: string;
-}): OpenClawConfig {
+}): SmartAgentNeoConfig {
   const accountId = normalizeAccountId(params.accountId);
   const plugin = getChannelPlugin(params.channel);
   const apply = plugin?.setup?.applyAccountName;
@@ -18,11 +18,11 @@ export function applyAccountName(params: {
 }
 
 export function applyChannelAccountConfig(params: {
-  cfg: OpenClawConfig;
+  cfg: SmartAgentNeoConfig;
   channel: ChatChannel;
   accountId: string;
   input: ChannelSetupInput;
-}): OpenClawConfig {
+}): SmartAgentNeoConfig {
   const accountId = normalizeAccountId(params.accountId);
   const plugin = getChannelPlugin(params.channel);
   const apply = plugin?.setup?.applyAccountConfig;

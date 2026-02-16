@@ -1,4 +1,4 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import type { SmartAgentNeoPluginApi } from "smart-agent-neo/plugin-sdk";
 
 type ElevenLabsVoice = {
   voice_id: string;
@@ -73,7 +73,7 @@ function findVoice(voices: ElevenLabsVoice[], query: string): ElevenLabsVoice | 
   return partial ?? null;
 }
 
-export default function register(api: OpenClawPluginApi) {
+export default function register(api: SmartAgentNeoPluginApi) {
   api.registerCommand({
     name: "voice",
     description: "List/set ElevenLabs Talk voice (affects iOS Talk playback).",

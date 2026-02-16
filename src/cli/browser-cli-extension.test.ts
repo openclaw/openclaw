@@ -127,7 +127,7 @@ function writeManifest(dir: string) {
 
 describe("bundled extension resolver (fs-mocked)", () => {
   it("walks up to find the assets directory", () => {
-    const root = abs("/tmp/openclaw-ext-root");
+    const root = abs("/tmp/smart-agent-neo-ext-root");
     const here = path.join(root, "dist", "cli");
     const assets = path.join(root, "assets", "chrome-extension");
 
@@ -138,7 +138,7 @@ describe("bundled extension resolver (fs-mocked)", () => {
   });
 
   it("prefers the nearest assets directory", () => {
-    const root = abs("/tmp/openclaw-ext-root-nearest");
+    const root = abs("/tmp/smart-agent-neo-ext-root-nearest");
     const here = path.join(root, "dist", "cli");
     const distAssets = path.join(root, "dist", "assets", "chrome-extension");
     const rootAssets = path.join(root, "assets", "chrome-extension");
@@ -153,7 +153,7 @@ describe("bundled extension resolver (fs-mocked)", () => {
 
 describe("browser extension install (fs-mocked)", () => {
   it("installs into the state dir (never node_modules)", async () => {
-    const tmp = abs("/tmp/openclaw-ext-install");
+    const tmp = abs("/tmp/smart-agent-neo-ext-install");
     const sourceDir = path.join(tmp, "source-ext");
     writeManifest(sourceDir);
     setFile(path.join(sourceDir, "test.txt"), "ok");
@@ -167,9 +167,9 @@ describe("browser extension install (fs-mocked)", () => {
   });
 
   it("copies extension path to clipboard", async () => {
-    const prev = process.env.OPENCLAW_STATE_DIR;
-    const tmp = abs("/tmp/openclaw-ext-path");
-    process.env.OPENCLAW_STATE_DIR = tmp;
+    const prev = process.env.SMART_AGENT_NEO_STATE_DIR;
+    const tmp = abs("/tmp/smart-agent-neo-ext-path");
+    process.env.SMART_AGENT_NEO_STATE_DIR = tmp;
 
     try {
       copyToClipboard.mockResolvedValue(true);
@@ -190,9 +190,9 @@ describe("browser extension install (fs-mocked)", () => {
       expect(copyToClipboard).toHaveBeenCalledWith(dir);
     } finally {
       if (prev === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
+        delete process.env.SMART_AGENT_NEO_STATE_DIR;
       } else {
-        process.env.OPENCLAW_STATE_DIR = prev;
+        process.env.SMART_AGENT_NEO_STATE_DIR = prev;
       }
     }
   });

@@ -1,18 +1,18 @@
 ---
 title: "Showcase"
-description: "Real-world OpenClaw projects from the community"
-summary: "Community-built projects and integrations powered by OpenClaw"
+description: "Real-world SmartAgentNeo projects from the community"
+summary: "Community-built projects and integrations powered by SmartAgentNeo"
 ---
 
 # Showcase
 
-Real projects from the community. See what people are building with OpenClaw.
+Real projects from the community. See what people are building with SmartAgentNeo.
 
 <Info>
-**Want to be featured?** Share your project in [#showcase on Discord](https://discord.gg/clawd) or [tag @openclaw on X](https://x.com/openclaw).
+**Want to be featured?** Share your project in [#showcase on Discord](https://discord.gg/neo) or [tag @smart-agent-neo on X](https://x.com/smart-agent-neo).
 </Info>
 
-## 🎥 OpenClaw in Action
+## 🎥 SmartAgentNeo in Action
 
 Full setup walkthrough (28m) by VelvetShark.
 
@@ -27,7 +27,7 @@ Full setup walkthrough (28m) by VelvetShark.
 >
   <iframe
     src="https://www.youtube-nocookie.com/embed/SaWSPZoPX34"
-    title="OpenClaw: The self-hosted AI that Siri should have been (Full setup)"
+    title="SmartAgentNeo: The self-hosted AI that Siri should have been (Full setup)"
     style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%" }}
     frameBorder="0"
     loading="lazy"
@@ -49,7 +49,7 @@ Full setup walkthrough (28m) by VelvetShark.
 >
   <iframe
     src="https://www.youtube-nocookie.com/embed/mMSKQvlmFuQ"
-    title="OpenClaw showcase video"
+    title="SmartAgentNeo showcase video"
     style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%" }}
     frameBorder="0"
     loading="lazy"
@@ -71,7 +71,7 @@ Full setup walkthrough (28m) by VelvetShark.
 >
   <iframe
     src="https://www.youtube-nocookie.com/embed/5kkIJNUGFho"
-    title="OpenClaw community showcase"
+    title="SmartAgentNeo community showcase"
     style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%" }}
     frameBorder="0"
     loading="lazy"
@@ -89,17 +89,17 @@ Full setup walkthrough (28m) by VelvetShark.
 <Card title="PR Review → Telegram Feedback" icon="code-pull-request" href="https://x.com/i/status/2010878524543131691">
   **@bangnokia** • `review` `github` `telegram`
 
-OpenCode finishes the change → opens a PR → OpenClaw reviews the diff and replies in Telegram with “minor suggestions” plus a clear merge verdict (including critical fixes to apply first).
+OpenCode finishes the change → opens a PR → SmartAgentNeo reviews the diff and replies in Telegram with “minor suggestions” plus a clear merge verdict (including critical fixes to apply first).
 
-  <img src="/assets/showcase/pr-review-telegram.jpg" alt="OpenClaw PR review feedback delivered in Telegram" />
+  <img src="/assets/showcase/pr-review-telegram.jpg" alt="SmartAgentNeo PR review feedback delivered in Telegram" />
 </Card>
 
 <Card title="Wine Cellar Skill in Minutes" icon="wine-glass" href="https://x.com/i/status/2010916352454791216">
   **@prades_maxime** • `skills` `local` `csv`
 
-Asked “Robby” (@openclaw) for a local wine cellar skill. It requests a sample CSV export + where to store it, then builds/tests the skill fast (962 bottles in the example).
+Asked “Robby” (@smart-agent-neo) for a local wine cellar skill. It requests a sample CSV export + where to store it, then builds/tests the skill fast (962 bottles in the example).
 
-  <img src="/assets/showcase/wine-cellar-skill.jpg" alt="OpenClaw building a local wine cellar skill from CSV" />
+  <img src="/assets/showcase/wine-cellar-skill.jpg" alt="SmartAgentNeo building a local wine cellar skill from CSV" />
 </Card>
 
 <Card title="Tesco Shop Autopilot" icon="cart-shopping" href="https://x.com/i/status/2009724862470689131">
@@ -121,7 +121,7 @@ Hotkey a screen region → Gemini vision → instant Markdown in your clipboard.
 <Card title="Agents UI" icon="window-maximize" href="https://releaseflow.net/kitze/agents-ui">
   **@kitze** • `ui` `skills` `sync`
 
-Desktop app to manage skills/commands across Agents, Claude, Codex, and OpenClaw.
+Desktop app to manage skills/commands across Agents, Claude, Codex, and SmartAgentNeo.
 
   <img src="/assets/showcase/agents-ui.jpg" alt="Agents UI app" />
 </Card>
@@ -134,28 +134,28 @@ Wraps papla.media TTS and sends results as Telegram voice notes (no annoying aut
   <img src="/assets/showcase/papla-tts.jpg" alt="Telegram voice note output from TTS" />
 </Card>
 
-<Card title="CodexMonitor" icon="eye" href="https://clawhub.com/odrobnik/codexmonitor">
+<Card title="CodexMonitor" icon="eye" href="https://neohub.com/odrobnik/codexmonitor">
   **@odrobnik** • `devtools` `codex` `brew`
 
 Homebrew-installed helper to list/inspect/watch local OpenAI Codex sessions (CLI + VS Code).
 
-  <img src="/assets/showcase/codexmonitor.png" alt="CodexMonitor on ClawHub" />
+  <img src="/assets/showcase/codexmonitor.png" alt="CodexMonitor on NeoHub" />
 </Card>
 
-<Card title="Bambu 3D Printer Control" icon="print" href="https://clawhub.com/tobiasbischoff/bambu-cli">
+<Card title="Bambu 3D Printer Control" icon="print" href="https://neohub.com/tobiasbischoff/bambu-cli">
   **@tobiasbischoff** • `hardware` `3d-printing` `skill`
 
 Control and troubleshoot BambuLab printers: status, jobs, camera, AMS, calibration, and more.
 
-  <img src="/assets/showcase/bambu-cli.png" alt="Bambu CLI skill on ClawHub" />
+  <img src="/assets/showcase/bambu-cli.png" alt="Bambu CLI skill on NeoHub" />
 </Card>
 
-<Card title="Vienna Transport (Wiener Linien)" icon="train" href="https://clawhub.com/hjanuschka/wienerlinien">
+<Card title="Vienna Transport (Wiener Linien)" icon="train" href="https://neohub.com/hjanuschka/wienerlinien">
   **@hjanuschka** • `travel` `transport` `skill`
 
 Real-time departures, disruptions, elevator status, and routing for Vienna's public transport.
 
-  <img src="/assets/showcase/wienerlinien.png" alt="Wiener Linien skill on ClawHub" />
+  <img src="/assets/showcase/wienerlinien.png" alt="Wiener Linien skill on NeoHub" />
 </Card>
 
 <Card title="ParentPay School Meals" icon="utensils" href="#">
@@ -164,10 +164,10 @@ Real-time departures, disruptions, elevator status, and routing for Vienna's pub
 Automated UK school meal booking via ParentPay. Uses mouse coordinates for reliable table cell clicking.
 </Card>
 
-<Card title="R2 Upload (Send Me My Files)" icon="cloud-arrow-up" href="https://clawhub.com/skills/r2-upload">
+<Card title="R2 Upload (Send Me My Files)" icon="cloud-arrow-up" href="https://neohub.com/skills/r2-upload">
   **@julianengel** • `files` `r2` `presigned-urls`
 
-Upload to Cloudflare R2/S3 and generate secure presigned download links. Perfect for remote OpenClaw instances.
+Upload to Cloudflare R2/S3 and generate secure presigned download links. Perfect for remote SmartAgentNeo instances.
 </Card>
 
 <Card title="iOS App via Telegram" icon="mobile" href="#">
@@ -188,13 +188,13 @@ Personal AI health assistant integrating Oura ring data with calendar, appointme
 <Card title="Kev's Dream Team (14+ Agents)" icon="robot" href="https://github.com/adam91holt/orchestrated-ai-articles">
   **@adam91holt** • `multi-agent` `orchestration` `architecture` `manifesto`
 
-14+ agents under one gateway with Opus 4.5 orchestrator delegating to Codex workers. Comprehensive [technical write-up](https://github.com/adam91holt/orchestrated-ai-articles) covering the Dream Team roster, model selection, sandboxing, webhooks, heartbeats, and delegation flows. [Clawdspace](https://github.com/adam91holt/clawdspace) for agent sandboxing. [Blog post](https://adams-ai-journey.ghost.io/2026-the-year-of-the-orchestrator/).
+14+ agents under one gateway with Opus 4.5 orchestrator delegating to Codex workers. Comprehensive [technical write-up](https://github.com/adam91holt/orchestrated-ai-articles) covering the Dream Team roster, model selection, sandboxing, webhooks, heartbeats, and delegation flows. [Neospace](https://github.com/adam91holt/neospace) for agent sandboxing. [Blog post](https://adams-ai-journey.ghost.io/2026-the-year-of-the-orchestrator/).
 </Card>
 
 <Card title="Linear CLI" icon="terminal" href="https://github.com/Finesssee/linear-cli">
   **@NessZerra** • `devtools` `linear` `cli` `issues`
 
-CLI for Linear that integrates with agentic workflows (Claude Code, OpenClaw). Manage issues, projects, and workflows from the terminal. First external PR merged!
+CLI for Linear that integrates with agentic workflows (Claude Code, SmartAgentNeo). Manage issues, projects, and workflows from the terminal. First external PR merged!
 </Card>
 
 <Card title="Beeper CLI" icon="message" href="https://github.com/blqke/beepcli">
@@ -212,23 +212,23 @@ Read, send, and archive messages via Beeper Desktop. Uses Beeper local MCP API s
 <Card title="Winix Air Purifier Control" icon="wind" href="https://x.com/antonplex/status/2010518442471006253">
   **@antonplex** • `automation` `hardware` `air-quality`
 
-Claude Code discovered and confirmed the purifier controls, then OpenClaw takes over to manage room air quality.
+Claude Code discovered and confirmed the purifier controls, then SmartAgentNeo takes over to manage room air quality.
 
-  <img src="/assets/showcase/winix-air-purifier.jpg" alt="Winix air purifier control via OpenClaw" />
+  <img src="/assets/showcase/winix-air-purifier.jpg" alt="Winix air purifier control via SmartAgentNeo" />
 </Card>
 
 <Card title="Pretty Sky Camera Shots" icon="camera" href="https://x.com/signalgaining/status/2010523120604746151">
   **@signalgaining** • `automation` `camera` `skill` `images`
 
-Triggered by a roof camera: ask OpenClaw to snap a sky photo whenever it looks pretty — it designed a skill and took the shot.
+Triggered by a roof camera: ask SmartAgentNeo to snap a sky photo whenever it looks pretty — it designed a skill and took the shot.
 
-  <img src="/assets/showcase/roof-camera-sky.jpg" alt="Roof camera sky snapshot captured by OpenClaw" />
+  <img src="/assets/showcase/roof-camera-sky.jpg" alt="Roof camera sky snapshot captured by SmartAgentNeo" />
 </Card>
 
 <Card title="Visual Morning Briefing Scene" icon="robot" href="https://x.com/buddyhadry/status/2010005331925954739">
   **@buddyhadry** • `automation` `briefing` `images` `telegram`
 
-A scheduled prompt generates a single "scene" image each morning (weather, tasks, date, favorite post/quote) via a OpenClaw persona.
+A scheduled prompt generates a single "scene" image each morning (weather, tasks, date, favorite post/quote) via a SmartAgentNeo persona.
 </Card>
 
 <Card title="Padel Court Booking" icon="calendar-check" href="https://github.com/joshp123/padel-cli">
@@ -260,13 +260,13 @@ Searches job listings, matches against CV keywords, and returns relevant opportu
 <Card title="Jira Skill Builder" icon="diagram-project" href="https://x.com/jdrhyne/status/2008336434827002232">
   **@jdrhyne** • `automation` `jira` `skill` `devtools`
 
-OpenClaw connected to Jira, then generated a new skill on the fly (before it existed on ClawHub).
+SmartAgentNeo connected to Jira, then generated a new skill on the fly (before it existed on NeoHub).
 </Card>
 
 <Card title="Todoist Skill via Telegram" icon="list-check" href="https://x.com/iamsubhrajyoti/status/2009949389884920153">
   **@iamsubhrajyoti** • `automation` `todoist` `skill` `telegram`
 
-Automated Todoist tasks and had OpenClaw generate the skill directly in Telegram chat.
+Automated Todoist tasks and had SmartAgentNeo generate the skill directly in Telegram chat.
 </Card>
 
 <Card title="TradingView Analysis" icon="chart-line">
@@ -290,7 +290,7 @@ Watches company Slack channel, responds helpfully, and forwards notifications to
 <Card title="xuezh Chinese Learning" icon="language" href="https://github.com/joshp123/xuezh">
   **@joshp123** • `learning` `voice` `skill`
   
-  Chinese learning engine with pronunciation feedback and study flows via OpenClaw.
+  Chinese learning engine with pronunciation feedback and study flows via SmartAgentNeo.
   
   <img src="/assets/showcase/xuezh-pronunciation.jpeg" alt="xuezh pronunciation feedback" />
 </Card>
@@ -319,16 +319,16 @@ Watches company Slack channel, responds helpfully, and forwards notifications to
 
 <CardGroup cols={2}>
 
-<Card title="Clawdia Phone Bridge" icon="phone" href="https://github.com/alejandroOPI/clawdia-bridge">
+<Card title="Neoia Phone Bridge" icon="phone" href="https://github.com/alejandroOPI/neoia-bridge">
   **@alejandroOPI** • `voice` `vapi` `bridge`
   
-  Vapi voice assistant ↔ OpenClaw HTTP bridge. Near real-time phone calls with your agent.
+  Vapi voice assistant ↔ SmartAgentNeo HTTP bridge. Near real-time phone calls with your agent.
 </Card>
 
-<Card title="OpenRouter Transcription" icon="microphone" href="https://clawhub.com/obviyus/openrouter-transcribe">
+<Card title="OpenRouter Transcription" icon="microphone" href="https://neohub.com/obviyus/openrouter-transcribe">
   **@obviyus** • `transcription` `multilingual` `skill`
 
-Multi-lingual audio transcription via OpenRouter (Gemini, etc). Available on ClawHub.
+Multi-lingual audio transcription via OpenRouter (Gemini, etc). Available on NeoHub.
 </Card>
 
 </CardGroup>
@@ -337,26 +337,26 @@ Multi-lingual audio transcription via OpenRouter (Gemini, etc). Available on Cla
 
 <CardGroup cols={2}>
 
-<Card title="Home Assistant Add-on" icon="home" href="https://github.com/ngutman/openclaw-ha-addon">
+<Card title="Home Assistant Add-on" icon="home" href="https://github.com/ngutman/smart-agent-neo-ha-addon">
   **@ngutman** • `homeassistant` `docker` `raspberry-pi`
   
-  OpenClaw gateway running on Home Assistant OS with SSH tunnel support and persistent state.
+  SmartAgentNeo gateway running on Home Assistant OS with SSH tunnel support and persistent state.
 </Card>
 
-<Card title="Home Assistant Skill" icon="toggle-on" href="https://clawhub.com/skills/homeassistant">
-  **ClawHub** • `homeassistant` `skill` `automation`
+<Card title="Home Assistant Skill" icon="toggle-on" href="https://neohub.com/skills/homeassistant">
+  **NeoHub** • `homeassistant` `skill` `automation`
   
   Control and automate Home Assistant devices via natural language.
 </Card>
 
-<Card title="Nix Packaging" icon="snowflake" href="https://github.com/openclaw/nix-openclaw">
-  **@openclaw** • `nix` `packaging` `deployment`
+<Card title="Nix Packaging" icon="snowflake" href="https://github.com/smart-agent-neo/nix-smart-agent-neo">
+  **@smart-agent-neo** • `nix` `packaging` `deployment`
   
-  Batteries-included nixified OpenClaw configuration for reproducible deployments.
+  Batteries-included nixified SmartAgentNeo configuration for reproducible deployments.
 </Card>
 
-<Card title="CalDAV Calendar" icon="calendar" href="https://clawhub.com/skills/caldav-calendar">
-  **ClawHub** • `calendar` `caldav` `skill`
+<Card title="CalDAV Calendar" icon="calendar" href="https://neohub.com/skills/caldav-calendar">
+  **NeoHub** • `calendar` `caldav` `skill`
   
   Calendar skill using khal/vdirsyncer. Self-hosted calendar integration.
 </Card>
@@ -370,7 +370,7 @@ Multi-lingual audio transcription via OpenRouter (Gemini, etc). Available on Cla
 <Card title="GoHome Automation" icon="house-signal" href="https://github.com/joshp123/gohome">
   **@joshp123** • `home` `nix` `grafana`
   
-  Nix-native home automation with OpenClaw as the interface, plus beautiful Grafana dashboards.
+  Nix-native home automation with SmartAgentNeo as the interface, plus beautiful Grafana dashboards.
   
   <img src="/assets/showcase/gohome-grafana.png" alt="GoHome Grafana dashboard" />
 </Card>
@@ -392,7 +392,7 @@ Multi-lingual audio transcription via OpenRouter (Gemini, etc). Available on Cla
 <Card title="StarSwap Marketplace" icon="star" href="https://star-swap.com/">
   **Community** • `marketplace` `astronomy` `webapp`
   
-  Full astronomy gear marketplace. Built with/around the OpenClaw ecosystem.
+  Full astronomy gear marketplace. Built with/around the SmartAgentNeo ecosystem.
 </Card>
 
 </CardGroup>
@@ -405,7 +405,7 @@ Have something to share? We'd love to feature it!
 
 <Steps>
   <Step title="Share It">
-    Post in [#showcase on Discord](https://discord.gg/clawd) or [tweet @openclaw](https://x.com/openclaw)
+    Post in [#showcase on Discord](https://discord.gg/neo) or [tweet @smart-agent-neo](https://x.com/smart-agent-neo)
   </Step>
   <Step title="Include Details">
     Tell us what it does, link to the repo/demo, share a screenshot if you have one

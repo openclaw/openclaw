@@ -1,6 +1,6 @@
-name: OpenClaw
+name: SmartAgentNeo
 options:
-  bundleIdPrefix: ai.openclaw
+  bundleIdPrefix: ai.smart-agent-neo
   deploymentTarget:
     iOS: "18.0"
   xcodeVersion: "16.0"
@@ -10,33 +10,33 @@ settings:
     SWIFT_VERSION: "6.0"
 
 packages:
-  OpenClawKit:
-    path: ../shared/OpenClawKit
+  SmartAgentNeoKit:
+    path: ../shared/SmartAgentNeoKit
   Swabble:
     path: ../../Swabble
 
 schemes:
-  OpenClaw:
+  SmartAgentNeo:
     shared: true
     build:
       targets:
-        OpenClaw: all
+        SmartAgentNeo: all
     test:
       targets:
-        - OpenClawTests
+        - SmartAgentNeoTests
 
 targets:
-  OpenClaw:
+  SmartAgentNeo:
     type: application
     platform: iOS
     sources:
       - path: Sources
     dependencies:
-      - package: OpenClawKit
-      - package: OpenClawKit
-        product: OpenClawChatUI
-      - package: OpenClawKit
-        product: OpenClawProtocol
+      - package: SmartAgentNeoKit
+      - package: SmartAgentNeoKit
+        product: SmartAgentNeoChatUI
+      - package: SmartAgentNeoKit
+        product: SmartAgentNeoProtocol
       - package: Swabble
         product: SwabbleKit
       - sdk: AppIntents.framework
@@ -71,15 +71,15 @@ targets:
         CODE_SIGN_IDENTITY: "Apple Development"
         CODE_SIGN_STYLE: Manual
         DEVELOPMENT_TEAM: Y5PE65HELJ
-        PRODUCT_BUNDLE_IDENTIFIER: ai.openclaw.ios
-        PROVISIONING_PROFILE_SPECIFIER: "ai.openclaw.ios Development"
+        PRODUCT_BUNDLE_IDENTIFIER: ai.smartagentneo.ios
+        PROVISIONING_PROFILE_SPECIFIER: "ai.smartagentneo.ios Development"
         SWIFT_VERSION: "6.0"
         SWIFT_STRICT_CONCURRENCY: complete
         ENABLE_APPINTENTS_METADATA: NO
     info:
       path: Sources/Info.plist
       properties:
-        CFBundleDisplayName: OpenClaw
+        CFBundleDisplayName: SmartAgentNeo
         CFBundleIconName: AppIcon
         CFBundleShortVersionString: "2026.2.16"
         CFBundleVersion: "20260216"
@@ -88,16 +88,16 @@ targets:
           UIApplicationSupportsMultipleScenes: false
         UIBackgroundModes:
           - audio
-        NSLocalNetworkUsageDescription: OpenClaw discovers and connects to your OpenClaw gateway on the local network.
+        NSLocalNetworkUsageDescription: SmartAgentNeo discovers and connects to your SmartAgentNeo gateway on the local network.
         NSAppTransportSecurity:
           NSAllowsArbitraryLoadsInWebContent: true
         NSBonjourServices:
-          - _openclaw-gw._tcp
-        NSCameraUsageDescription: OpenClaw can capture photos or short video clips when requested via the gateway.
-        NSLocationWhenInUseUsageDescription: OpenClaw uses your location when you allow location sharing.
-        NSLocationAlwaysAndWhenInUseUsageDescription: OpenClaw can share your location in the background when you enable Always.
-        NSMicrophoneUsageDescription: OpenClaw needs microphone access for voice wake.
-        NSSpeechRecognitionUsageDescription: OpenClaw uses on-device speech recognition for voice wake.
+          - _smart-agent-neo-gw._tcp
+        NSCameraUsageDescription: SmartAgentNeo can capture photos or short video clips when requested via the gateway.
+        NSLocationWhenInUseUsageDescription: SmartAgentNeo uses your location when you allow location sharing.
+        NSLocationAlwaysAndWhenInUseUsageDescription: SmartAgentNeo can share your location in the background when you enable Always.
+        NSMicrophoneUsageDescription: SmartAgentNeo needs microphone access for voice wake.
+        NSSpeechRecognitionUsageDescription: SmartAgentNeo uses on-device speech recognition for voice wake.
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationPortraitUpsideDown
@@ -109,26 +109,26 @@ targets:
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
 
-  OpenClawTests:
+  SmartAgentNeoTests:
     type: bundle.unit-test
     platform: iOS
     sources:
       - path: Tests
     dependencies:
-      - target: OpenClaw
+      - target: SmartAgentNeo
       - package: Swabble
         product: SwabbleKit
       - sdk: AppIntents.framework
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: ai.openclaw.ios.tests
+        PRODUCT_BUNDLE_IDENTIFIER: ai.smartagentneo.ios.tests
         SWIFT_VERSION: "6.0"
         SWIFT_STRICT_CONCURRENCY: complete
-        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/OpenClaw.app/OpenClaw"
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/SmartAgentNeo.app/SmartAgentNeo"
         BUNDLE_LOADER: "$(TEST_HOST)"
     info:
       path: Tests/Info.plist
       properties:
-        CFBundleDisplayName: OpenClawTests
+        CFBundleDisplayName: SmartAgentNeoTests
         CFBundleShortVersionString: "2026.2.16"
         CFBundleVersion: "20260216"

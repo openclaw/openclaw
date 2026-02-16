@@ -1,10 +1,10 @@
 import Foundation
 import Testing
-@testable import OpenClaw
+@testable import SmartAgentNeo
 
 @Suite struct VoiceWakePreferencesTests {
     @Test func sanitizeTriggerWordsTrimsAndDropsEmpty() {
-        #expect(VoiceWakePreferences.sanitizeTriggerWords([" openclaw ", "", " \nclaude\t"]) == ["openclaw", "claude"])
+        #expect(VoiceWakePreferences.sanitizeTriggerWords([" smart-agent-neo ", "", " \nclaude\t"]) == ["smart-agent-neo", "claude"])
     }
 
     @Test func sanitizeTriggerWordsFallsBackToDefaultsWhenEmpty() {
@@ -24,7 +24,7 @@ import Testing
     }
 
     @Test func displayStringUsesSanitizedWords() {
-        #expect(VoiceWakePreferences.displayString(for: ["", " "]) == "openclaw, claude")
+        #expect(VoiceWakePreferences.displayString(for: ["", " "]) == "smart-agent-neo, claude")
     }
 
     @Test func loadAndSaveTriggerWordsRoundTrip() {

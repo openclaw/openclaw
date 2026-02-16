@@ -8,7 +8,7 @@ title: "OpenResponses API"
 
 # OpenResponses API (HTTP)
 
-OpenClaw’s Gateway can serve an OpenResponses-compatible `POST /v1/responses` endpoint.
+SmartAgentNeo’s Gateway can serve an OpenResponses-compatible `POST /v1/responses` endpoint.
 
 This endpoint is **disabled by default**. Enable it in config first.
 
@@ -16,7 +16,7 @@ This endpoint is **disabled by default**. Enable it in config first.
 - Same port as the Gateway (WS + HTTP multiplex): `http://<gateway-host>:<port>/v1/responses`
 
 Under the hood, requests are executed as a normal Gateway agent run (same codepath as
-`openclaw agent`), so routing/permissions/config match your Gateway.
+`smart-agent-neo agent`), so routing/permissions/config match your Gateway.
 
 ## Authentication
 
@@ -26,24 +26,24 @@ Uses the Gateway auth configuration. Send a bearer token:
 
 Notes:
 
-- When `gateway.auth.mode="token"`, use `gateway.auth.token` (or `OPENCLAW_GATEWAY_TOKEN`).
-- When `gateway.auth.mode="password"`, use `gateway.auth.password` (or `OPENCLAW_GATEWAY_PASSWORD`).
+- When `gateway.auth.mode="token"`, use `gateway.auth.token` (or `SMART_AGENT_NEO_GATEWAY_TOKEN`).
+- When `gateway.auth.mode="password"`, use `gateway.auth.password` (or `SMART_AGENT_NEO_GATEWAY_PASSWORD`).
 - If `gateway.auth.rateLimit` is configured and too many auth failures occur, the endpoint returns `429` with `Retry-After`.
 
 ## Choosing an agent
 
 No custom headers required: encode the agent id in the OpenResponses `model` field:
 
-- `model: "openclaw:<agentId>"` (example: `"openclaw:main"`, `"openclaw:beta"`)
+- `model: "smart-agent-neo:<agentId>"` (example: `"smart-agent-neo:main"`, `"smart-agent-neo:beta"`)
 - `model: "agent:<agentId>"` (alias)
 
-Or target a specific OpenClaw agent by header:
+Or target a specific SmartAgentNeo agent by header:
 
-- `x-openclaw-agent-id: <agentId>` (default: `main`)
+- `x-smart-agent-neo-agent-id: <agentId>` (default: `main`)
 
 Advanced:
 
-- `x-openclaw-session-key: <sessionKey>` to fully control session routing.
+- `x-smart-agent-neo-session-key: <sessionKey>` to fully control session routing.
 
 ## Enabling the endpoint
 
@@ -311,9 +311,9 @@ Non-streaming:
 curl -sS http://127.0.0.1:18789/v1/responses \
   -H 'Authorization: Bearer YOUR_TOKEN' \
   -H 'Content-Type: application/json' \
-  -H 'x-openclaw-agent-id: main' \
+  -H 'x-smart-agent-neo-agent-id: main' \
   -d '{
-    "model": "openclaw",
+    "model": "smart-agent-neo",
     "input": "hi"
   }'
 ```
@@ -324,9 +324,9 @@ Streaming:
 curl -N http://127.0.0.1:18789/v1/responses \
   -H 'Authorization: Bearer YOUR_TOKEN' \
   -H 'Content-Type: application/json' \
-  -H 'x-openclaw-agent-id: main' \
+  -H 'x-smart-agent-neo-agent-id: main' \
   -d '{
-    "model": "openclaw",
+    "model": "smart-agent-neo",
     "stream": true,
     "input": "hi"
   }'

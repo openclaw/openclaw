@@ -1,5 +1,5 @@
 # ── App classes ───────────────────────────────────────────────────
--keep class ai.openclaw.android.** { *; }
+-keep class ai.smartagentneo.android.** { *; }
 
 # ── Bouncy Castle ─────────────────────────────────────────────────
 -keep class org.bouncycastle.** { *; }

@@ -1,8 +1,8 @@
 {
-  "name": "@openclaw/twitch",
+  "name": "@smart-agent-neo/twitch",
   "version": "2026.2.16",
   "private": true,
-  "description": "OpenClaw Twitch channel plugin",
+  "description": "SmartAgentNeo Twitch channel plugin",
   "type": "module",
   "dependencies": {
     "@twurple/api": "^8.0.3",
@@ -11,9 +11,9 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "openclaw": "workspace:*"
+    "smart-agent-neo": "workspace:*"
   },
-  "openclaw": {
+  "smart-agent-neo": {
     "extensions": [
       "./index.ts"
     ]

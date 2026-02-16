@@ -1,5 +1,5 @@
 import { Type } from "@sinclair/typebox";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { SmartAgentNeoConfig } from "../../config/config.js";
 import type { AnyAgentTool } from "./common.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { wrapWebContent } from "../../security/external-content.js";
@@ -69,7 +69,7 @@ const WebSearchSchema = Type.Object({
   ),
 });
 
-type WebSearchConfig = NonNullable<OpenClawConfig["tools"]>["web"] extends infer Web
+type WebSearchConfig = NonNullable<SmartAgentNeoConfig["tools"]>["web"] extends infer Web
   ? Web extends { search?: infer Search }
     ? Search
     : undefined
@@ -161,7 +161,7 @@ function extractGrokContent(data: GrokSearchResponse): {
   return { text, annotationCitations: [] };
 }
 
-function resolveSearchConfig(cfg?: OpenClawConfig): WebSearchConfig {
+function resolveSearchConfig(cfg?: SmartAgentNeoConfig): WebSearchConfig {
   const search = cfg?.tools?.web?.search;
   if (!search || typeof search !== "object") {
     return undefined;
@@ -194,7 +194,7 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
       error: "missing_perplexity_api_key",
       message:
         "web_search (perplexity) needs an API key. Set PERPLEXITY_API_KEY or OPENROUTER_API_KEY in the Gateway environment, or configure tools.web.search.perplexity.apiKey.",
-      docs: "https://docs.openclaw.ai/tools/web",
+      docs: "https://docs.smart-agent-neo.ai/tools/web",
     };
   }
   if (provider === "grok") {
@@ -202,13 +202,13 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
       error: "missing_xai_api_key",
       message:
         "web_search (grok) needs an xAI API key. Set XAI_API_KEY in the Gateway environment, or configure tools.web.search.grok.apiKey.",
-      docs: "https://docs.openclaw.ai/tools/web",
+      docs: "https://docs.smart-agent-neo.ai/tools/web",
     };
   }
   return {
     error: "missing_brave_api_key",
-    message: `web_search needs a Brave Search API key. Run \`${formatCliCommand("openclaw configure --section web")}\` to store it, or set BRAVE_API_KEY in the Gateway environment.`,
-    docs: "https://docs.openclaw.ai/tools/web",
+    message: `web_search needs a Brave Search API key. Run \`${formatCliCommand("smart-agent-neo configure --section web")}\` to store it, or set BRAVE_API_KEY in the Gateway environment.`,
+    docs: "https://docs.smart-agent-neo.ai/tools/web",
   };
 }
 
@@ -478,8 +478,8 @@ async function runPerplexitySearch(params: {
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${params.apiKey}`,
-      "HTTP-Referer": "https://openclaw.ai",
-      "X-Title": "OpenClaw Web Search",
+      "HTTP-Referer": "https://smart-agent-neo.ai",
+      "X-Title": "SmartAgentNeo Web Search",
     },
     body: JSON.stringify(body),
     signal: withTimeout(undefined, params.timeoutSeconds * 1000),
@@ -706,7 +706,7 @@ async function runWebSearch(params: {
 }
 
 export function createWebSearchTool(options?: {
-  config?: OpenClawConfig;
+  config?: SmartAgentNeoConfig;
   sandboxed?: boolean;
 }): AnyAgentTool | null {
   const search = resolveSearchConfig(options?.config);
@@ -755,7 +755,7 @@ export function createWebSearchTool(options?: {
         return jsonResult({
           error: "unsupported_freshness",
           message: "freshness is only supported by the Brave and Perplexity web_search providers.",
-          docs: "https://docs.openclaw.ai/tools/web",
+          docs: "https://docs.smart-agent-neo.ai/tools/web",
         });
       }
       const freshness = rawFreshness ? normalizeFreshness(rawFreshness) : undefined;
@@ -764,7 +764,7 @@ export function createWebSearchTool(options?: {
           error: "invalid_freshness",
           message:
             "freshness must be one of pd, pw, pm, py, or a range like YYYY-MM-DDtoYYYY-MM-DD.",
-          docs: "https://docs.openclaw.ai/tools/web",
+          docs: "https://docs.smart-agent-neo.ai/tools/web",
         });
       }
       const result = await runWebSearch({

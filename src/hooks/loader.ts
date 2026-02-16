@@ -7,7 +7,7 @@
 
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import type { OpenClawConfig } from "../config/config.js";
+import type { SmartAgentNeoConfig } from "../config/config.js";
 import type { InternalHookHandler } from "./internal-hooks.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveHookConfig } from "./config.js";
@@ -24,7 +24,7 @@ const log = createSubsystemLogger("hooks:loader");
  * 1. Directory-based discovery (bundled, managed, workspace)
  * 2. Legacy config handlers (backwards compatibility)
  *
- * @param cfg - OpenClaw configuration
+ * @param cfg - SmartAgentNeo configuration
  * @param workspaceDir - Workspace directory for hook discovery
  * @returns Number of handlers successfully loaded
  *
@@ -37,7 +37,7 @@ const log = createSubsystemLogger("hooks:loader");
  * ```
  */
 export async function loadInternalHooks(
-  cfg: OpenClawConfig,
+  cfg: SmartAgentNeoConfig,
   workspaceDir: string,
   opts?: {
     managedHooksDir?: string;

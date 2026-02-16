@@ -1,5 +1,5 @@
-import type { ClawdbotConfig } from "openclaw/plugin-sdk";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import type { NeobotConfig } from "smart-agent-neo/plugin-sdk";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "smart-agent-neo/plugin-sdk/account-id";
 import type {
   FeishuConfig,
   FeishuAccountConfig,
@@ -10,7 +10,7 @@ import type {
 /**
  * List all configured account IDs from the accounts field.
  */
-function listConfiguredAccountIds(cfg: ClawdbotConfig): string[] {
+function listConfiguredAccountIds(cfg: NeobotConfig): string[] {
   const accounts = (cfg.channels?.feishu as FeishuConfig)?.accounts;
   if (!accounts || typeof accounts !== "object") {
     return [];
@@ -22,7 +22,7 @@ function listConfiguredAccountIds(cfg: ClawdbotConfig): string[] {
  * List all Feishu account IDs.
  * If no accounts are configured, returns [DEFAULT_ACCOUNT_ID] for backward compatibility.
  */
-export function listFeishuAccountIds(cfg: ClawdbotConfig): string[] {
+export function listFeishuAccountIds(cfg: NeobotConfig): string[] {
   const ids = listConfiguredAccountIds(cfg);
   if (ids.length === 0) {
     // Backward compatibility: no accounts configured, use default
@@ -34,7 +34,7 @@ export function listFeishuAccountIds(cfg: ClawdbotConfig): string[] {
 /**
  * Resolve the default account ID.
  */
-export function resolveDefaultFeishuAccountId(cfg: ClawdbotConfig): string {
+export function resolveDefaultFeishuAccountId(cfg: NeobotConfig): string {
   const ids = listFeishuAccountIds(cfg);
   if (ids.includes(DEFAULT_ACCOUNT_ID)) {
     return DEFAULT_ACCOUNT_ID;
@@ -46,7 +46,7 @@ export function resolveDefaultFeishuAccountId(cfg: ClawdbotConfig): string {
  * Get the raw account-specific config.
  */
 function resolveAccountConfig(
-  cfg: ClawdbotConfig,
+  cfg: NeobotConfig,
   accountId: string,
 ): FeishuAccountConfig | undefined {
   const accounts = (cfg.channels?.feishu as FeishuConfig)?.accounts;
@@ -60,7 +60,7 @@ function resolveAccountConfig(
  * Merge top-level config with account-specific config.
  * Account-specific fields override top-level fields.
  */
-function mergeFeishuAccountConfig(cfg: ClawdbotConfig, accountId: string): FeishuConfig {
+function mergeFeishuAccountConfig(cfg: NeobotConfig, accountId: string): FeishuConfig {
   const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
 
   // Extract base config (exclude accounts field to avoid recursion)
@@ -101,7 +101,7 @@ export function resolveFeishuCredentials(cfg?: FeishuConfig): {
  * Resolve a complete Feishu account with merged config.
  */
 export function resolveFeishuAccount(params: {
-  cfg: ClawdbotConfig;
+  cfg: NeobotConfig;
   accountId?: string | null;
 }): ResolvedFeishuAccount {
   const accountId = normalizeAccountId(params.accountId);
@@ -137,7 +137,7 @@ export function resolveFeishuAccount(params: {
 /**
  * List all enabled and configured accounts.
  */
-export function listEnabledFeishuAccounts(cfg: ClawdbotConfig): ResolvedFeishuAccount[] {
+export function listEnabledFeishuAccounts(cfg: NeobotConfig): ResolvedFeishuAccount[] {
   return listFeishuAccountIds(cfg)
     .map((accountId) => resolveFeishuAccount({ cfg, accountId }))
     .filter((account) => account.enabled && account.configured);

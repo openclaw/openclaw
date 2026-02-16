@@ -154,7 +154,7 @@ export function registerQrCli(program: Command) {
 
         const lines: string[] = [
           theme.heading("Pairing QR"),
-          "Scan this with the OpenClaw iOS app (Onboarding -> Scan QR).",
+          "Scan this with the SmartAgentNeo iOS app (Onboarding -> Scan QR).",
           "",
         ];
 
@@ -170,8 +170,8 @@ export function registerQrCli(program: Command) {
           `${theme.muted("Source:")} ${resolved.urlSource}`,
           "",
           "Approve after scan with:",
-          `  ${theme.command("openclaw devices list")}`,
-          `  ${theme.command("openclaw devices approve <requestId>")}`,
+          `  ${theme.command("smart-agent-neo devices list")}`,
+          `  ${theme.command("smart-agent-neo devices approve <requestId>")}`,
         );
 
         defaultRuntime.log(lines.join("\n"));

@@ -1,9 +1,9 @@
 import Foundation
 import Network
-import OpenClawKit
+import SmartAgentNeoKit
 
 final class NetworkStatusService: @unchecked Sendable {
-    func currentStatus(timeoutMs: Int = 1500) async -> OpenClawNetworkStatusPayload {
+    func currentStatus(timeoutMs: Int = 1500) async -> OpenNeoNetworkStatusPayload {
         await withCheckedContinuation { cont in
             let monitor = NWPathMonitor()
             let queue = DispatchQueue(label: "bot.molt.ios.network-status")
@@ -25,29 +25,29 @@ final class NetworkStatusService: @unchecked Sendable {
         }
     }
 
-    private static func payload(from path: NWPath) -> OpenClawNetworkStatusPayload {
-        let status: OpenClawNetworkPathStatus = switch path.status {
+    private static func payload(from path: NWPath) -> OpenNeoNetworkStatusPayload {
+        let status: OpenNeoNetworkPathStatus = switch path.status {
         case .satisfied: .satisfied
         case .requiresConnection: .requiresConnection
         case .unsatisfied: .unsatisfied
         @unknown default: .unsatisfied
         }
 
-        var interfaces: [OpenClawNetworkInterfaceType] = []
+        var interfaces: [OpenNeoNetworkInterfaceType] = []
         if path.usesInterfaceType(.wifi) { interfaces.append(.wifi) }
         if path.usesInterfaceType(.cellular) { interfaces.append(.cellular) }
         if path.usesInterfaceType(.wiredEthernet) { interfaces.append(.wired) }
         if interfaces.isEmpty { interfaces.append(.other) }
 
-        return OpenClawNetworkStatusPayload(
+        return OpenNeoNetworkStatusPayload(
             status: status,
             isExpensive: path.isExpensive,
             isConstrained: path.isConstrained,
             interfaces: interfaces)
     }
 
-    private static func fallbackPayload() -> OpenClawNetworkStatusPayload {
-        OpenClawNetworkStatusPayload(
+    private static func fallbackPayload() -> OpenNeoNetworkStatusPayload {
+        OpenNeoNetworkStatusPayload(
             status: .unsatisfied,
             isExpensive: false,
             isConstrained: false,

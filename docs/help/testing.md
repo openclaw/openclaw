@@ -9,7 +9,7 @@ title: "Testing"
 
 # Testing
 
-OpenClaw has three Vitest suites (unit/integration, e2e, live) and a small set of Docker runners.
+SmartAgentNeo has three Vitest suites (unit/integration, e2e, live) and a small set of Docker runners.
 
 This doc is a “how we test” guide:
 
@@ -53,9 +53,9 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - No real keys required
   - Should be fast and stable
 - Pool note:
-  - OpenClaw uses Vitest `vmForks` on Node 22/23 for faster unit shards.
-  - On Node 24+, OpenClaw automatically falls back to regular `forks` to avoid Node VM linking errors (`ERR_VM_MODULE_LINK_FAILURE` / `module is already linked`).
-  - Override manually with `OPENCLAW_TEST_VM_FORKS=0` (force `forks`) or `OPENCLAW_TEST_VM_FORKS=1` (force `vmForks`).
+  - SmartAgentNeo uses Vitest `vmForks` on Node 22/23 for faster unit shards.
+  - On Node 24+, SmartAgentNeo automatically falls back to regular `forks` to avoid Node VM linking errors (`ERR_VM_MODULE_LINK_FAILURE` / `module is already linked`).
+  - Override manually with `SMART_AGENT_NEO_TEST_VM_FORKS=0` (force `forks`) or `SMART_AGENT_NEO_TEST_VM_FORKS=1` (force `vmForks`).
 
 ### E2E (gateway smoke)
 
@@ -67,8 +67,8 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - Uses adaptive workers (CI: 2-4, local: 4-8).
   - Runs in silent mode by default to reduce console I/O overhead.
 - Useful overrides:
-  - `OPENCLAW_E2E_WORKERS=<n>` to force worker count (capped at 16).
-  - `OPENCLAW_E2E_VERBOSE=1` to re-enable verbose console output.
+  - `SMART_AGENT_NEO_E2E_WORKERS=<n>` to force worker count (capped at 16).
+  - `SMART_AGENT_NEO_E2E_VERBOSE=1` to re-enable verbose console output.
 - Scope:
   - Multi-instance gateway end-to-end behavior
   - WebSocket/HTTP surfaces, node pairing, and heavier networking
@@ -82,7 +82,7 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
 - Command: `pnpm test:live`
 - Config: `vitest.live.config.ts`
 - Files: `src/**/*.live.test.ts`
-- Default: **enabled** by `pnpm test:live` (sets `OPENCLAW_LIVE_TEST=1`)
+- Default: **enabled** by `pnpm test:live` (sets `SMART_AGENT_NEO_LIVE_TEST=1`)
 - Scope:
   - “Does this provider/model actually work _today_ with real creds?”
   - Catch provider format changes, tool-calling quirks, auth issues, and rate limit behavior
@@ -91,7 +91,7 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - Costs money / uses rate limits
   - Prefer running narrowed subsets instead of “everything”
   - Live runs will source `~/.profile` to pick up missing API keys
-  - Anthropic key rotation: set `OPENCLAW_LIVE_ANTHROPIC_KEYS="sk-...,sk-..."` (or `OPENCLAW_LIVE_ANTHROPIC_KEY=sk-...`) or multiple `ANTHROPIC_API_KEY*` vars; tests will retry on rate limits
+  - Anthropic key rotation: set `SMART_AGENT_NEO_LIVE_ANTHROPIC_KEYS="sk-...,sk-..."` (or `SMART_AGENT_NEO_LIVE_ANTHROPIC_KEY=sk-...`) or multiple `ANTHROPIC_API_KEY*` vars; tests will retry on rate limits
 
 ## Which suite should I run?
 
@@ -116,22 +116,22 @@ Live tests are split into two layers so we can isolate failures:
   - Use `getApiKeyForModel` to select models you have creds for
   - Run a small completion per model (and targeted regressions where needed)
 - How to enable:
-  - `pnpm test:live` (or `OPENCLAW_LIVE_TEST=1` if invoking Vitest directly)
-- Set `OPENCLAW_LIVE_MODELS=modern` (or `all`, alias for modern) to actually run this suite; otherwise it skips to keep `pnpm test:live` focused on gateway smoke
+  - `pnpm test:live` (or `SMART_AGENT_NEO_LIVE_TEST=1` if invoking Vitest directly)
+- Set `SMART_AGENT_NEO_LIVE_MODELS=modern` (or `all`, alias for modern) to actually run this suite; otherwise it skips to keep `pnpm test:live` focused on gateway smoke
 - How to select models:
-  - `OPENCLAW_LIVE_MODELS=modern` to run the modern allowlist (Opus/Sonnet/Haiku 4.5, GPT-5.x + Codex, Gemini 3, GLM 4.7, MiniMax M2.1, Grok 4)
-  - `OPENCLAW_LIVE_MODELS=all` is an alias for the modern allowlist
-  - or `OPENCLAW_LIVE_MODELS="openai/gpt-5.2,anthropic/claude-opus-4-6,..."` (comma allowlist)
+  - `SMART_AGENT_NEO_LIVE_MODELS=modern` to run the modern allowlist (Opus/Sonnet/Haiku 4.5, GPT-5.x + Codex, Gemini 3, GLM 4.7, MiniMax M2.1, Grok 4)
+  - `SMART_AGENT_NEO_LIVE_MODELS=all` is an alias for the modern allowlist
+  - or `SMART_AGENT_NEO_LIVE_MODELS="openai/gpt-5.2,anthropic/claude-opus-4-6,..."` (comma allowlist)
 - How to select providers:
-  - `OPENCLAW_LIVE_PROVIDERS="google,google-antigravity,google-gemini-cli"` (comma allowlist)
+  - `SMART_AGENT_NEO_LIVE_PROVIDERS="google,google-antigravity,google-gemini-cli"` (comma allowlist)
 - Where keys come from:
   - By default: profile store and env fallbacks
-  - Set `OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS=1` to enforce **profile store** only
+  - Set `SMART_AGENT_NEO_LIVE_REQUIRE_PROFILE_KEYS=1` to enforce **profile store** only
 - Why this exists:
   - Separates “provider API is broken / key is invalid” from “gateway agent pipeline is broken”
   - Contains small, isolated regressions (example: OpenAI Responses/Codex Responses reasoning replay + tool-call flows)
 
-### Layer 2: Gateway + dev agent smoke (what “@openclaw” actually does)
+### Layer 2: Gateway + dev agent smoke (what “@smart-agent-neo” actually does)
 
 - Test: `src/gateway/gateway-models.profiles.live.test.ts`
 - Goal:
@@ -148,13 +148,13 @@ Live tests are split into two layers so we can isolate failures:
   - image probe: the test attaches a generated PNG (cat + randomized code) and expects the model to return `cat <CODE>`.
   - Implementation reference: `src/gateway/gateway-models.profiles.live.test.ts` and `src/gateway/live-image-probe.ts`.
 - How to enable:
-  - `pnpm test:live` (or `OPENCLAW_LIVE_TEST=1` if invoking Vitest directly)
+  - `pnpm test:live` (or `SMART_AGENT_NEO_LIVE_TEST=1` if invoking Vitest directly)
 - How to select models:
   - Default: modern allowlist (Opus/Sonnet/Haiku 4.5, GPT-5.x + Codex, Gemini 3, GLM 4.7, MiniMax M2.1, Grok 4)
-  - `OPENCLAW_LIVE_GATEWAY_MODELS=all` is an alias for the modern allowlist
-  - Or set `OPENCLAW_LIVE_GATEWAY_MODELS="provider/model"` (or comma list) to narrow
+  - `SMART_AGENT_NEO_LIVE_GATEWAY_MODELS=all` is an alias for the modern allowlist
+  - Or set `SMART_AGENT_NEO_LIVE_GATEWAY_MODELS="provider/model"` (or comma list) to narrow
 - How to select providers (avoid “OpenRouter everything”):
-  - `OPENCLAW_LIVE_GATEWAY_PROVIDERS="google,google-antigravity,google-gemini-cli,openai,anthropic,zai,minimax"` (comma allowlist)
+  - `SMART_AGENT_NEO_LIVE_GATEWAY_PROVIDERS="google,google-antigravity,google-gemini-cli,openai,anthropic,zai,minimax"` (comma allowlist)
 - Tool + image probes are always on in this live test:
   - `read` probe + `exec+read` probe (tool stress)
   - image probe runs when the model advertises image input support
@@ -168,8 +168,8 @@ Live tests are split into two layers so we can isolate failures:
 Tip: to see what you can test on your machine (and the exact `provider/model` ids), run:
 
 ```bash
-openclaw models list
-openclaw models list --json
+smart-agent-neo models list
+smart-agent-neo models list --json
 ```
 
 ## Live: Anthropic setup-token smoke
@@ -177,19 +177,19 @@ openclaw models list --json
 - Test: `src/agents/anthropic.setup-token.live.test.ts`
 - Goal: verify Claude Code CLI setup-token (or a pasted setup-token profile) can complete an Anthropic prompt.
 - Enable:
-  - `pnpm test:live` (or `OPENCLAW_LIVE_TEST=1` if invoking Vitest directly)
-  - `OPENCLAW_LIVE_SETUP_TOKEN=1`
+  - `pnpm test:live` (or `SMART_AGENT_NEO_LIVE_TEST=1` if invoking Vitest directly)
+  - `SMART_AGENT_NEO_LIVE_SETUP_TOKEN=1`
 - Token sources (pick one):
-  - Profile: `OPENCLAW_LIVE_SETUP_TOKEN_PROFILE=anthropic:setup-token-test`
-  - Raw token: `OPENCLAW_LIVE_SETUP_TOKEN_VALUE=sk-ant-oat01-...`
+  - Profile: `SMART_AGENT_NEO_LIVE_SETUP_TOKEN_PROFILE=anthropic:setup-token-test`
+  - Raw token: `SMART_AGENT_NEO_LIVE_SETUP_TOKEN_VALUE=sk-ant-oat01-...`
 - Model override (optional):
-  - `OPENCLAW_LIVE_SETUP_TOKEN_MODEL=anthropic/claude-opus-4-6`
+  - `SMART_AGENT_NEO_LIVE_SETUP_TOKEN_MODEL=anthropic/claude-opus-4-6`
 
 Setup example:
 
 ```bash
-openclaw models auth paste-token --provider anthropic --profile-id anthropic:setup-token-test
-OPENCLAW_LIVE_SETUP_TOKEN=1 OPENCLAW_LIVE_SETUP_TOKEN_PROFILE=anthropic:setup-token-test pnpm test:live src/agents/anthropic.setup-token.live.test.ts
+smart-agent-neo models auth paste-token --provider anthropic --profile-id anthropic:setup-token-test
+SMART_AGENT_NEO_LIVE_SETUP_TOKEN=1 SMART_AGENT_NEO_LIVE_SETUP_TOKEN_PROFILE=anthropic:setup-token-test pnpm test:live src/agents/anthropic.setup-token.live.test.ts
 ```
 
 ## Live: CLI backend smoke (Claude Code CLI or other local CLIs)
@@ -197,29 +197,29 @@ OPENCLAW_LIVE_SETUP_TOKEN=1 OPENCLAW_LIVE_SETUP_TOKEN_PROFILE=anthropic:setup-to
 - Test: `src/gateway/gateway-cli-backend.live.test.ts`
 - Goal: validate the Gateway + agent pipeline using a local CLI backend, without touching your default config.
 - Enable:
-  - `pnpm test:live` (or `OPENCLAW_LIVE_TEST=1` if invoking Vitest directly)
-  - `OPENCLAW_LIVE_CLI_BACKEND=1`
+  - `pnpm test:live` (or `SMART_AGENT_NEO_LIVE_TEST=1` if invoking Vitest directly)
+  - `SMART_AGENT_NEO_LIVE_CLI_BACKEND=1`
 - Defaults:
   - Model: `claude-cli/claude-sonnet-4-5`
   - Command: `claude`
   - Args: `["-p","--output-format","json","--dangerously-skip-permissions"]`
 - Overrides (optional):
-  - `OPENCLAW_LIVE_CLI_BACKEND_MODEL="claude-cli/claude-opus-4-6"`
-  - `OPENCLAW_LIVE_CLI_BACKEND_MODEL="codex-cli/gpt-5.3-codex"`
-  - `OPENCLAW_LIVE_CLI_BACKEND_COMMAND="/full/path/to/claude"`
-  - `OPENCLAW_LIVE_CLI_BACKEND_ARGS='["-p","--output-format","json","--permission-mode","bypassPermissions"]'`
-  - `OPENCLAW_LIVE_CLI_BACKEND_CLEAR_ENV='["ANTHROPIC_API_KEY","ANTHROPIC_API_KEY_OLD"]'`
-  - `OPENCLAW_LIVE_CLI_BACKEND_IMAGE_PROBE=1` to send a real image attachment (paths are injected into the prompt).
-  - `OPENCLAW_LIVE_CLI_BACKEND_IMAGE_ARG="--image"` to pass image file paths as CLI args instead of prompt injection.
-  - `OPENCLAW_LIVE_CLI_BACKEND_IMAGE_MODE="repeat"` (or `"list"`) to control how image args are passed when `IMAGE_ARG` is set.
-  - `OPENCLAW_LIVE_CLI_BACKEND_RESUME_PROBE=1` to send a second turn and validate resume flow.
-- `OPENCLAW_LIVE_CLI_BACKEND_DISABLE_MCP_CONFIG=0` to keep Claude Code CLI MCP config enabled (default disables MCP config with a temporary empty file).
+  - `SMART_AGENT_NEO_LIVE_CLI_BACKEND_MODEL="claude-cli/claude-opus-4-6"`
+  - `SMART_AGENT_NEO_LIVE_CLI_BACKEND_MODEL="codex-cli/gpt-5.3-codex"`
+  - `SMART_AGENT_NEO_LIVE_CLI_BACKEND_COMMAND="/full/path/to/claude"`
+  - `SMART_AGENT_NEO_LIVE_CLI_BACKEND_ARGS='["-p","--output-format","json","--permission-mode","bypassPermissions"]'`
+  - `SMART_AGENT_NEO_LIVE_CLI_BACKEND_CLEAR_ENV='["ANTHROPIC_API_KEY","ANTHROPIC_API_KEY_OLD"]'`
+  - `SMART_AGENT_NEO_LIVE_CLI_BACKEND_IMAGE_PROBE=1` to send a real image attachment (paths are injected into the prompt).
+  - `SMART_AGENT_NEO_LIVE_CLI_BACKEND_IMAGE_ARG="--image"` to pass image file paths as CLI args instead of prompt injection.
+  - `SMART_AGENT_NEO_LIVE_CLI_BACKEND_IMAGE_MODE="repeat"` (or `"list"`) to control how image args are passed when `IMAGE_ARG` is set.
+  - `SMART_AGENT_NEO_LIVE_CLI_BACKEND_RESUME_PROBE=1` to send a second turn and validate resume flow.
+- `SMART_AGENT_NEO_LIVE_CLI_BACKEND_DISABLE_MCP_CONFIG=0` to keep Claude Code CLI MCP config enabled (default disables MCP config with a temporary empty file).
 
 Example:
 
 ```bash
-OPENCLAW_LIVE_CLI_BACKEND=1 \
-  OPENCLAW_LIVE_CLI_BACKEND_MODEL="claude-cli/claude-sonnet-4-5" \
+SMART_AGENT_NEO_LIVE_CLI_BACKEND=1 \
+  SMART_AGENT_NEO_LIVE_CLI_BACKEND_MODEL="claude-cli/claude-sonnet-4-5" \
   pnpm test:live src/gateway/gateway-cli-backend.live.test.ts
 ```
 
@@ -228,17 +228,17 @@ OPENCLAW_LIVE_CLI_BACKEND=1 \
 Narrow, explicit allowlists are fastest and least flaky:
 
 - Single model, direct (no gateway):
-  - `OPENCLAW_LIVE_MODELS="openai/gpt-5.2" pnpm test:live src/agents/models.profiles.live.test.ts`
+  - `SMART_AGENT_NEO_LIVE_MODELS="openai/gpt-5.2" pnpm test:live src/agents/models.profiles.live.test.ts`
 
 - Single model, gateway smoke:
-  - `OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.2" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
+  - `SMART_AGENT_NEO_LIVE_GATEWAY_MODELS="openai/gpt-5.2" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
 
 - Tool calling across several providers:
-  - `OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.2,anthropic/claude-opus-4-6,google/gemini-3-flash-preview,zai/glm-4.7,minimax/minimax-m2.1" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
+  - `SMART_AGENT_NEO_LIVE_GATEWAY_MODELS="openai/gpt-5.2,anthropic/claude-opus-4-6,google/gemini-3-flash-preview,zai/glm-4.7,minimax/minimax-m2.1" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
 
 - Google focus (Gemini API key + Antigravity):
-  - Gemini (API key): `OPENCLAW_LIVE_GATEWAY_MODELS="google/gemini-3-flash-preview" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
-  - Antigravity (OAuth): `OPENCLAW_LIVE_GATEWAY_MODELS="google-antigravity/claude-opus-4-6-thinking,google-antigravity/gemini-3-pro-high" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
+  - Gemini (API key): `SMART_AGENT_NEO_LIVE_GATEWAY_MODELS="google/gemini-3-flash-preview" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
+  - Antigravity (OAuth): `SMART_AGENT_NEO_LIVE_GATEWAY_MODELS="google-antigravity/claude-opus-4-6-thinking,google-antigravity/gemini-3-pro-high" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
 
 Notes:
 
@@ -246,8 +246,8 @@ Notes:
 - `google-antigravity/...` uses the Antigravity OAuth bridge (Cloud Code Assist-style agent endpoint).
 - `google-gemini-cli/...` uses the local Gemini CLI on your machine (separate auth + tooling quirks).
 - Gemini API vs Gemini CLI:
-  - API: OpenClaw calls Google’s hosted Gemini API over HTTP (API key / profile auth); this is what most users mean by “Gemini”.
-  - CLI: OpenClaw shells out to a local `gemini` binary; it has its own auth and can behave differently (streaming/tool support/version skew).
+  - API: SmartAgentNeo calls Google’s hosted Gemini API over HTTP (API key / profile auth); this is what most users mean by “Gemini”.
+  - CLI: SmartAgentNeo shells out to a local `gemini` binary; it has its own auth and can behave differently (streaming/tool support/version skew).
 
 ## Live: model matrix (what we cover)
 
@@ -266,7 +266,7 @@ This is the “common models” run we expect to keep working:
 - MiniMax: `minimax/minimax-m2.1`
 
 Run gateway smoke with tools + image:
-`OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.2,openai-codex/gpt-5.3-codex,anthropic/claude-opus-4-6,google/gemini-3-pro-preview,google/gemini-3-flash-preview,google-antigravity/claude-opus-4-6-thinking,google-antigravity/gemini-3-flash,zai/glm-4.7,minimax/minimax-m2.1" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
+`SMART_AGENT_NEO_LIVE_GATEWAY_MODELS="openai/gpt-5.2,openai-codex/gpt-5.3-codex,anthropic/claude-opus-4-6,google/gemini-3-pro-preview,google/gemini-3-flash-preview,google-antigravity/claude-opus-4-6-thinking,google-antigravity/gemini-3-flash,zai/glm-4.7,minimax/minimax-m2.1" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
 
 ### Baseline: tool calling (Read + optional Exec)
 
@@ -287,13 +287,13 @@ Optional additional coverage (nice to have):
 
 ### Vision: image send (attachment → multimodal message)
 
-Include at least one image-capable model in `OPENCLAW_LIVE_GATEWAY_MODELS` (Claude/Gemini/OpenAI vision-capable variants, etc.) to exercise the image probe.
+Include at least one image-capable model in `SMART_AGENT_NEO_LIVE_GATEWAY_MODELS` (Claude/Gemini/OpenAI vision-capable variants, etc.) to exercise the image probe.
 
 ### Aggregators / alternate gateways
 
 If you have keys enabled, we also support testing via:
 
-- OpenRouter: `openrouter/...` (hundreds of models; use `openclaw models scan` to find tool+image capable candidates)
+- OpenRouter: `openrouter/...` (hundreds of models; use `smart-agent-neo models scan` to find tool+image capable candidates)
 - OpenCode Zen: `opencode/...` (auth via `OPENCODE_API_KEY` / `OPENCODE_ZEN_API_KEY`)
 
 More providers you can include in the live matrix (if you have creds/config):
@@ -308,10 +308,10 @@ Tip: don’t try to hardcode “all models” in docs. The authoritative list is
 Live tests discover credentials the same way the CLI does. Practical implications:
 
 - If the CLI works, live tests should find the same keys.
-- If a live test says “no creds”, debug the same way you’d debug `openclaw models list` / model selection.
+- If a live test says “no creds”, debug the same way you’d debug `smart-agent-neo models list` / model selection.
 
-- Profile store: `~/.openclaw/credentials/` (preferred; what “profile keys” means in the tests)
-- Config: `~/.openclaw/openclaw.json` (or `OPENCLAW_CONFIG_PATH`)
+- Profile store: `~/.smart-agent-neo/credentials/` (preferred; what “profile keys” means in the tests)
+- Config: `~/.smart-agent-neo/smart-agent-neo.json` (or `SMART_AGENT_NEO_CONFIG_PATH`)
 
 If you want to rely on env keys (e.g. exported in your `~/.profile`), run local tests after `source ~/.profile`, or use the Docker runners below (they can mount `~/.profile` into the container).
 
@@ -332,11 +332,11 @@ These run `pnpm test:live` inside the repo Docker image, mounting your local con
 
 Useful env vars:
 
-- `OPENCLAW_CONFIG_DIR=...` (default: `~/.openclaw`) mounted to `/home/node/.openclaw`
-- `OPENCLAW_WORKSPACE_DIR=...` (default: `~/.openclaw/workspace`) mounted to `/home/node/.openclaw/workspace`
-- `OPENCLAW_PROFILE_FILE=...` (default: `~/.profile`) mounted to `/home/node/.profile` and sourced before running tests
-- `OPENCLAW_LIVE_GATEWAY_MODELS=...` / `OPENCLAW_LIVE_MODELS=...` to narrow the run
-- `OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS=1` to ensure creds come from the profile store (not env)
+- `SMART_AGENT_NEO_CONFIG_DIR=...` (default: `~/.smart-agent-neo`) mounted to `/home/node/.smart-agent-neo`
+- `SMART_AGENT_NEO_WORKSPACE_DIR=...` (default: `~/.smart-agent-neo/workspace`) mounted to `/home/node/.smart-agent-neo/workspace`
+- `SMART_AGENT_NEO_PROFILE_FILE=...` (default: `~/.profile`) mounted to `/home/node/.profile` and sourced before running tests
+- `SMART_AGENT_NEO_LIVE_GATEWAY_MODELS=...` / `SMART_AGENT_NEO_LIVE_MODELS=...` to narrow the run
+- `SMART_AGENT_NEO_LIVE_REQUIRE_PROFILE_KEYS=1` to ensure creds come from the profile store (not env)
 
 ## Docs sanity
 

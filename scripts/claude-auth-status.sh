@@ -1,11 +1,11 @@
 #!/bin/bash
 # Claude Code Authentication Status Checker
-# Checks both Claude Code and OpenClaw auth status
+# Checks both Claude Code and SmartAgentNeo auth status
 
 set -euo pipefail
 
 CLAUDE_CREDS="$HOME/.claude/.credentials.json"
-OPENCLAW_AUTH="$HOME/.openclaw/agents/main/agent/auth-profiles.json"
+SMART_AGENT_NEO_AUTH="$HOME/.smart-agent-neo/agents/main/agent/auth-profiles.json"
 
 # Colors for terminal output
 RED='\033[0;31m'
@@ -17,7 +17,7 @@ NC='\033[0m' # No Color
 OUTPUT_MODE="${1:-full}"
 
 fetch_models_status_json() {
-    openclaw models status --json 2>/dev/null || true
+    smart-agent-neo models status --json 2>/dev/null || true
 }
 
 STATUS_JSON="$(fetch_models_status_json)"
@@ -103,7 +103,7 @@ check_claude_code_auth() {
     calc_status_from_expires "$expires_at"
 }
 
-check_openclaw_auth() {
+check_smart-agent-neo_auth() {
     if [ "$USE_JSON" -eq 1 ]; then
         local api_keys
         api_keys=$(json_anthropic_api_key_count)
@@ -122,7 +122,7 @@ check_openclaw_auth() {
         return $?
     fi
 
-    if [ ! -f "$OPENCLAW_AUTH" ]; then
+    if [ ! -f "$SMART_AGENT_NEO_AUTH" ]; then
         echo "MISSING"
         return 1
     fi
@@ -131,7 +131,7 @@ check_openclaw_auth() {
     expires=$(jq -r '
         [.profiles | to_entries[] | select(.value.provider == "anthropic") | .value.expires]
         | max // 0
-    ' "$OPENCLAW_AUTH" 2>/dev/null || echo "0")
+    ' "$SMART_AGENT_NEO_AUTH" 2>/dev/null || echo "0")
 
     calc_status_from_expires "$expires"
 }
@@ -139,26 +139,26 @@ check_openclaw_auth() {
 # JSON output mode
 if [ "$OUTPUT_MODE" = "json" ]; then
     claude_status=$(check_claude_code_auth 2>/dev/null || true)
-    openclaw_status=$(check_openclaw_auth 2>/dev/null || true)
+    smart-agent-neo_status=$(check_smart-agent-neo_auth 2>/dev/null || true)
 
     claude_expires=0
-    openclaw_expires=0
+    smart-agent-neo_expires=0
     if [ "$USE_JSON" -eq 1 ]; then
         claude_expires=$(json_expires_for_claude_cli)
-        openclaw_expires=$(json_expires_for_anthropic_any)
+        smart-agent-neo_expires=$(json_expires_for_anthropic_any)
     else
         claude_expires=$(jq -r '.claudeAiOauth.expiresAt // 0' "$CLAUDE_CREDS" 2>/dev/null || echo "0")
-        openclaw_expires=$(jq -r '.profiles["anthropic:default"].expires // 0' "$OPENCLAW_AUTH" 2>/dev/null || echo "0")
+        smart-agent-neo_expires=$(jq -r '.profiles["anthropic:default"].expires // 0' "$SMART_AGENT_NEO_AUTH" 2>/dev/null || echo "0")
     fi
 
     jq -n \
         --arg cs "$claude_status" \
         --arg ce "$claude_expires" \
-        --arg bs "$openclaw_status" \
-        --arg be "$openclaw_expires" \
+        --arg bs "$smart-agent-neo_status" \
+        --arg be "$smart-agent-neo_expires" \
         '{
             claude_code: {status: $cs, expires_at_ms: ($ce | tonumber)},
-            openclaw: {status: $bs, expires_at_ms: ($be | tonumber)},
+            smart-agent-neo: {status: $bs, expires_at_ms: ($be | tonumber)},
             needs_reauth: (($cs | startswith("EXPIRED") or startswith("EXPIRING") or startswith("MISSING")) or ($bs | startswith("EXPIRED") or startswith("EXPIRING") or startswith("MISSING")))
         }'
     exit 0
@@ -167,19 +167,19 @@ fi
 # Simple output mode (for scripts/widgets)
 if [ "$OUTPUT_MODE" = "simple" ]; then
     claude_status=$(check_claude_code_auth 2>/dev/null || true)
-    openclaw_status=$(check_openclaw_auth 2>/dev/null || true)
+    smart-agent-neo_status=$(check_smart-agent-neo_auth 2>/dev/null || true)
 
     if [[ "$claude_status" == EXPIRED* ]] || [[ "$claude_status" == MISSING* ]]; then
         echo "CLAUDE_EXPIRED"
         exit 1
-    elif [[ "$openclaw_status" == EXPIRED* ]] || [[ "$openclaw_status" == MISSING* ]]; then
-        echo "OPENCLAW_EXPIRED"
+    elif [[ "$smart-agent-neo_status" == EXPIRED* ]] || [[ "$smart-agent-neo_status" == MISSING* ]]; then
+        echo "SMART_AGENT_NEO_EXPIRED"
         exit 1
     elif [[ "$claude_status" == EXPIRING* ]]; then
         echo "CLAUDE_EXPIRING"
         exit 2
-    elif [[ "$openclaw_status" == EXPIRING* ]]; then
-        echo "OPENCLAW_EXPIRING"
+    elif [[ "$smart-agent-neo_status" == EXPIRING* ]]; then
+        echo "SMART_AGENT_NEO_EXPIRING"
         exit 2
     else
         echo "OK"
@@ -228,7 +228,7 @@ else
 fi
 
 echo ""
-echo "OpenClaw Auth (~/.openclaw/agents/main/agent/auth-profiles.json):"
+echo "SmartAgentNeo Auth (~/.smart-agent-neo/agents/main/agent/auth-profiles.json):"
 if [ "$USE_JSON" -eq 1 ]; then
     best_profile=$(json_best_anthropic_profile)
     expires=$(json_expires_for_anthropic_any)
@@ -239,11 +239,11 @@ else
         | map(select(.value.provider == "anthropic"))
         | sort_by(.value.expires) | reverse
         | .[0].key // "none"
-    ' "$OPENCLAW_AUTH" 2>/dev/null || echo "none")
+    ' "$SMART_AGENT_NEO_AUTH" 2>/dev/null || echo "none")
     expires=$(jq -r '
         [.profiles | to_entries[] | select(.value.provider == "anthropic") | .value.expires]
         | max // 0
-    ' "$OPENCLAW_AUTH" 2>/dev/null || echo "0")
+    ' "$SMART_AGENT_NEO_AUTH" 2>/dev/null || echo "0")
     api_keys=0
 fi
 
@@ -253,7 +253,7 @@ if [ "$expires" -le 0 ] && [ "$api_keys" -gt 0 ]; then
     echo -e "  Status: ${GREEN}OK${NC} (API key)"
 elif [ "$expires" -le 0 ]; then
     echo -e "  Status: ${RED}NOT FOUND${NC}"
-    echo "  Note: Run 'openclaw doctor --yes' to sync from Claude Code"
+    echo "  Note: Run 'smart-agent-neo doctor --yes' to sync from Claude Code"
 else
     now_ms=$(( $(date +%s) * 1000 ))
     diff_ms=$((expires - now_ms))
@@ -262,7 +262,7 @@ else
 
     if [ "$diff_ms" -lt 0 ]; then
         echo -e "  Status: ${RED}EXPIRED${NC}"
-        echo "  Note: Run 'openclaw doctor --yes' to sync from Claude Code"
+        echo "  Note: Run 'smart-agent-neo doctor --yes' to sync from Claude Code"
     elif [ "$diff_ms" -lt 3600000 ]; then
         echo -e "  Status: ${YELLOW}EXPIRING SOON (${mins}m remaining)${NC}"
     else
@@ -273,8 +273,8 @@ fi
 
 echo ""
 echo "=== Service Status ==="
-if systemctl --user is-active openclaw >/dev/null 2>&1; then
-    echo -e "OpenClaw service: ${GREEN}running${NC}"
+if systemctl --user is-active smart-agent-neo >/dev/null 2>&1; then
+    echo -e "SmartAgentNeo service: ${GREEN}running${NC}"
 else
-    echo -e "OpenClaw service: ${RED}NOT running${NC}"
+    echo -e "SmartAgentNeo service: ${RED}NOT running${NC}"
 fi

@@ -27,7 +27,7 @@ describe("directive behavior", () => {
           agents: {
             defaults: {
               model: { primary: "anthropic/claude-opus-4-5" },
-              workspace: path.join(home, "openclaw"),
+              workspace: path.join(home, "smart-agent-neo"),
               models: {
                 "anthropic/claude-opus-4-5": {},
                 "moonshot/kimi-k2-0905-preview": { alias: "Kimi" },
@@ -68,7 +68,7 @@ describe("directive behavior", () => {
   it("stores auth profile overrides on /model directive", async () => {
     await withTempHome(async (home) => {
       const storePath = path.join(home, "sessions.json");
-      const authDir = path.join(home, ".openclaw", "agents", "main", "agent");
+      const authDir = path.join(home, ".smart-agent-neo", "agents", "main", "agent");
       await fs.mkdir(authDir, { recursive: true, mode: 0o700 });
       await fs.writeFile(
         path.join(authDir, "auth-profiles.json"),
@@ -95,7 +95,7 @@ describe("directive behavior", () => {
           agents: {
             defaults: {
               model: { primary: "openai/gpt-4.1-mini" },
-              workspace: path.join(home, "openclaw"),
+              workspace: path.join(home, "smart-agent-neo"),
               models: {
                 "openai/gpt-4.1-mini": {},
                 "anthropic/claude-opus-4-5": { alias: "Opus" },
@@ -126,7 +126,7 @@ describe("directive behavior", () => {
           agents: {
             defaults: {
               model: { primary: "openai/gpt-4.1-mini" },
-              workspace: path.join(home, "openclaw"),
+              workspace: path.join(home, "smart-agent-neo"),
               models: {
                 "openai/gpt-4.1-mini": {},
                 "anthropic/claude-opus-4-5": { alias: "Opus" },
@@ -160,7 +160,7 @@ describe("directive behavior", () => {
           agents: {
             defaults: {
               model: { primary: "openai/gpt-4.1-mini" },
-              workspace: path.join(home, "openclaw"),
+              workspace: path.join(home, "smart-agent-neo"),
             },
           },
           tools: { elevated: { allowFrom: { whatsapp: ["*"] } } },
@@ -191,7 +191,7 @@ describe("directive behavior", () => {
           agents: {
             defaults: {
               model: { primary: "openai/gpt-4.1-mini" },
-              workspace: path.join(home, "openclaw"),
+              workspace: path.join(home, "smart-agent-neo"),
             },
           },
           channels: { whatsapp: { allowFrom: ["*"] } },

@@ -75,7 +75,7 @@ describe("validateBindMounts", () => {
   });
 
   it("blocks symlink escapes into blocked directories", () => {
-    const dir = mkdtempSync(join(tmpdir(), "openclaw-sbx-"));
+    const dir = mkdtempSync(join(tmpdir(), "smart-agent-neo-sbx-"));
     const link = join(dir, "etc-link");
     symlinkSync("/etc", link);
     const run = () => validateBindMounts([`${link}/passwd:/mnt/passwd:ro`]);
@@ -128,7 +128,7 @@ describe("validateSeccompProfile", () => {
 
 describe("validateApparmorProfile", () => {
   it("allows named profile/undefined", () => {
-    expect(() => validateApparmorProfile("openclaw-sandbox")).not.toThrow();
+    expect(() => validateApparmorProfile("smart-agent-neo-sandbox")).not.toThrow();
     expect(() => validateApparmorProfile(undefined)).not.toThrow();
   });
 
@@ -146,7 +146,7 @@ describe("validateSandboxSecurity", () => {
         binds: ["/home/user/src:/src:rw"],
         network: "none",
         seccompProfile: "/tmp/seccomp.json",
-        apparmorProfile: "openclaw-sandbox",
+        apparmorProfile: "smart-agent-neo-sandbox",
       }),
     ).not.toThrow();
   });

@@ -24,7 +24,7 @@ type PiTranslator struct {
 
 func NewPiTranslator(srcLang, tgtLang string, glossary []GlossaryEntry, thinking string) (*PiTranslator, error) {
 	options := pi.DefaultOneShotOptions()
-	options.AppName = "openclaw-docs-i18n"
+	options.AppName = "smart-agent-neo-docs-i18n"
 	options.WorkDir = "/tmp"
 	options.Mode = pi.ModeDragons
 	options.Dragons = pi.DragonsOptions{

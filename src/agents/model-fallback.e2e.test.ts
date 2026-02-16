@@ -3,13 +3,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { SmartAgentNeoConfig } from "../config/config.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
 import { saveAuthProfileStore } from "./auth-profiles.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
 import { runWithModelFallback } from "./model-fallback.js";
 
-function makeCfg(overrides: Partial<OpenClawConfig> = {}): OpenClawConfig {
+function makeCfg(overrides: Partial<SmartAgentNeoConfig> = {}): SmartAgentNeoConfig {
   return {
     agents: {
       defaults: {
@@ -20,7 +20,7 @@ function makeCfg(overrides: Partial<OpenClawConfig> = {}): OpenClawConfig {
       },
     },
     ...overrides,
-  } as OpenClawConfig;
+  } as SmartAgentNeoConfig;
 }
 
 async function expectFallsBackToHaiku(params: {
@@ -121,7 +121,7 @@ describe("runWithModelFallback", () => {
   });
 
   it("skips providers when all profiles are in cooldown", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-"));
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "smart-agent-neo-auth-"));
     const provider = `cooldown-test-${crypto.randomUUID()}`;
     const profileId = `${provider}:default`;
 
@@ -178,7 +178,7 @@ describe("runWithModelFallback", () => {
   });
 
   it("does not skip when any profile is available", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-"));
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "smart-agent-neo-auth-"));
     const provider = `cooldown-mixed-${crypto.randomUUID()}`;
     const profileA = `${provider}:a`;
     const profileB = `${provider}:b`;
@@ -279,7 +279,7 @@ describe("runWithModelFallback", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as SmartAgentNeoConfig;
 
     const calls: Array<{ provider: string; model: string }> = [];
 
@@ -316,7 +316,7 @@ describe("runWithModelFallback", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as SmartAgentNeoConfig;
 
     const calls: Array<{ provider: string; model: string }> = [];
 

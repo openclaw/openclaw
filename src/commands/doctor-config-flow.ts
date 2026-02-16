@@ -1,7 +1,7 @@
 import type { ZodIssue } from "zod";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { OpenClawConfig } from "../config/config.js";
+import type { SmartAgentNeoConfig } from "../config/config.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
 import {
   isNumericTelegramUserId,
@@ -9,7 +9,7 @@ import {
 } from "../channels/telegram/allow-from.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
-  OpenClawSchema,
+  SmartAgentNeoSchema,
   CONFIG_PATH,
   migrateLegacyConfig,
   readConfigFileSnapshot,
@@ -74,11 +74,11 @@ function resolvePathTarget(root: unknown, path: Array<string | number>): unknown
   return current;
 }
 
-function stripUnknownConfigKeys(config: OpenClawConfig): {
-  config: OpenClawConfig;
+function stripUnknownConfigKeys(config: SmartAgentNeoConfig): {
+  config: SmartAgentNeoConfig;
   removed: string[];
 } {
-  const parsed = OpenClawSchema.safeParse(config);
+  const parsed = SmartAgentNeoSchema.safeParse(config);
   if (parsed.success) {
     return { config, removed: [] };
   }
@@ -110,7 +110,7 @@ function stripUnknownConfigKeys(config: OpenClawConfig): {
   return { config: next, removed };
 }
 
-function noteOpencodeProviderOverrides(cfg: OpenClawConfig) {
+function noteOpencodeProviderOverrides(cfg: SmartAgentNeoConfig) {
   const providers = cfg.models?.providers;
   if (!providers) {
     return;
@@ -163,7 +163,7 @@ function asObjectRecord(value: unknown): Record<string, unknown> | null {
 }
 
 function collectTelegramAccountScopes(
-  cfg: OpenClawConfig,
+  cfg: SmartAgentNeoConfig,
 ): Array<{ prefix: string; account: Record<string, unknown> }> {
   const scopes: Array<{ prefix: string; account: Record<string, unknown> }> = [];
   const telegram = asObjectRecord(cfg.channels?.telegram);
@@ -229,7 +229,7 @@ function collectTelegramAllowFromLists(
   return refs;
 }
 
-function scanTelegramAllowFromUsernameEntries(cfg: OpenClawConfig): TelegramAllowFromUsernameHit[] {
+function scanTelegramAllowFromUsernameEntries(cfg: SmartAgentNeoConfig): TelegramAllowFromUsernameHit[] {
   const hits: TelegramAllowFromUsernameHit[] = [];
 
   const scanList = (pathLabel: string, list: unknown) => {
@@ -257,8 +257,8 @@ function scanTelegramAllowFromUsernameEntries(cfg: OpenClawConfig): TelegramAllo
   return hits;
 }
 
-async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig): Promise<{
-  config: OpenClawConfig;
+async function maybeRepairTelegramAllowFromUsernames(cfg: SmartAgentNeoConfig): Promise<{
+  config: SmartAgentNeoConfig;
   changes: string[];
 }> {
   const hits = scanTelegramAllowFromUsernameEntries(cfg);
@@ -404,7 +404,7 @@ type DiscordIdListRef = {
 };
 
 function collectDiscordAccountScopes(
-  cfg: OpenClawConfig,
+  cfg: SmartAgentNeoConfig,
 ): Array<{ prefix: string; account: Record<string, unknown> }> {
   const scopes: Array<{ prefix: string; account: Record<string, unknown> }> = [];
   const discord = asObjectRecord(cfg.channels?.discord);
@@ -484,7 +484,7 @@ function collectDiscordIdLists(
   return refs;
 }
 
-function scanDiscordNumericIdEntries(cfg: OpenClawConfig): DiscordNumericIdHit[] {
+function scanDiscordNumericIdEntries(cfg: SmartAgentNeoConfig): DiscordNumericIdHit[] {
   const hits: DiscordNumericIdHit[] = [];
   const scanList = (pathLabel: string, list: unknown) => {
     if (!Array.isArray(list)) {
@@ -507,8 +507,8 @@ function scanDiscordNumericIdEntries(cfg: OpenClawConfig): DiscordNumericIdHit[]
   return hits;
 }
 
-function maybeRepairDiscordNumericIds(cfg: OpenClawConfig): {
-  config: OpenClawConfig;
+function maybeRepairDiscordNumericIds(cfg: SmartAgentNeoConfig): {
+  config: SmartAgentNeoConfig;
   changes: string[];
 } {
   const hits = scanDiscordNumericIdEntries(cfg);
@@ -560,8 +560,8 @@ async function maybeMigrateLegacyConfig(): Promise<string[]> {
     return changes;
   }
 
-  const targetDir = path.join(home, ".openclaw");
-  const targetPath = path.join(targetDir, "openclaw.json");
+  const targetDir = path.join(home, ".smart-agent-neo");
+  const targetPath = path.join(targetDir, "smart-agent-neo.json");
   try {
     await fs.access(targetPath);
     return changes;
@@ -570,9 +570,9 @@ async function maybeMigrateLegacyConfig(): Promise<string[]> {
   }
 
   const legacyCandidates = [
-    path.join(home, ".clawdbot", "clawdbot.json"),
+    path.join(home, ".neobot", "neobot.json"),
     path.join(home, ".moldbot", "moldbot.json"),
-    path.join(home, ".moltbot", "moltbot.json"),
+    path.join(home, ".neobot", "neobot.json"),
   ];
 
   let legacyPath: string | null = null;
@@ -620,7 +620,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
 
   let snapshot = await readConfigFileSnapshot();
   const baseCfg = snapshot.config ?? {};
-  let cfg: OpenClawConfig = baseCfg;
+  let cfg: SmartAgentNeoConfig = baseCfg;
   let candidate = structuredClone(baseCfg);
   let pendingChanges = false;
   let shouldWriteConfig = false;
@@ -654,7 +654,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       }
     } else {
       fixHints.push(
-        `Run "${formatCliCommand("openclaw doctor --fix")}" to apply legacy migrations.`,
+        `Run "${formatCliCommand("smart-agent-neo doctor --fix")}" to apply legacy migrations.`,
       );
     }
   }
@@ -667,7 +667,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     if (shouldRepair) {
       cfg = normalized.config;
     } else {
-      fixHints.push(`Run "${formatCliCommand("openclaw doctor --fix")}" to apply these changes.`);
+      fixHints.push(`Run "${formatCliCommand("smart-agent-neo doctor --fix")}" to apply these changes.`);
     }
   }
 
@@ -679,7 +679,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     if (shouldRepair) {
       cfg = autoEnable.config;
     } else {
-      fixHints.push(`Run "${formatCliCommand("openclaw doctor --fix")}" to apply these changes.`);
+      fixHints.push(`Run "${formatCliCommand("smart-agent-neo doctor --fix")}" to apply these changes.`);
     }
   }
 
@@ -705,7 +705,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       note(
         [
           `- Telegram allowFrom contains ${hits.length} non-numeric entries (e.g. ${hits[0]?.entry ?? "@"}); Telegram authorization requires numeric sender IDs.`,
-          `- Run "${formatCliCommand("openclaw doctor --fix")}" to auto-resolve @username entries to numeric IDs (requires a Telegram bot token).`,
+          `- Run "${formatCliCommand("smart-agent-neo doctor --fix")}" to auto-resolve @username entries to numeric IDs (requires a Telegram bot token).`,
         ].join("\n"),
         "Doctor warnings",
       );
@@ -716,7 +716,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       note(
         [
           `- Discord allowlists contain ${discordHits.length} numeric entries (e.g. ${discordHits[0]?.path}=${discordHits[0]?.entry}).`,
-          `- Discord IDs must be strings; run "${formatCliCommand("openclaw doctor --fix")}" to convert numeric IDs to quoted strings.`,
+          `- Discord IDs must be strings; run "${formatCliCommand("smart-agent-neo doctor --fix")}" to convert numeric IDs to quoted strings.`,
         ].join("\n"),
         "Doctor warnings",
       );
@@ -733,7 +733,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       note(lines, "Doctor changes");
     } else {
       note(lines, "Unknown config keys");
-      fixHints.push('Run "openclaw doctor --fix" to remove these keys.');
+      fixHints.push('Run "smart-agent-neo doctor --fix" to remove these keys.');
     }
   }
 

@@ -12,7 +12,7 @@ import path from "node:path";
 import * as readline from "node:readline";
 import { Readable, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
-import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
+import { ensureSmartAgentNeoCliOnPath } from "../infra/path-env.js";
 import { DANGEROUS_ACP_TOOLS } from "../security/dangerous-tools.js";
 
 const SAFE_AUTO_APPROVE_KINDS = new Set(["read", "search"]);
@@ -322,11 +322,11 @@ export async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpC
   const verbose = Boolean(opts.verbose);
   const log = verbose ? (msg: string) => console.error(`[acp-client] ${msg}`) : () => {};
 
-  ensureOpenClawCliOnPath();
+  ensureSmartAgentNeoCliOnPath();
   const serverArgs = buildServerArgs(opts);
 
   const entryPath = resolveSelfEntryPath();
-  const serverCommand = opts.serverCommand ?? (entryPath ? process.execPath : "openclaw");
+  const serverCommand = opts.serverCommand ?? (entryPath ? process.execPath : "smart-agent-neo");
   const effectiveArgs = opts.serverCommand || !entryPath ? serverArgs : [entryPath, ...serverArgs];
 
   log(`spawning: ${serverCommand} ${effectiveArgs.join(" ")}`);
@@ -363,7 +363,7 @@ export async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpC
       fs: { readTextFile: true, writeTextFile: true },
       terminal: true,
     },
-    clientInfo: { name: "openclaw-acp-client", version: "1.0.0" },
+    clientInfo: { name: "smart-agent-neo-acp-client", version: "1.0.0" },
   });
 
   log("creating session");
@@ -387,7 +387,7 @@ export async function runAcpClientInteractive(opts: AcpClientOptions = {}): Prom
     output: process.stdout,
   });
 
-  console.log("OpenClaw ACP client");
+  console.log("SmartAgentNeo ACP client");
   console.log(`Session: ${sessionId}`);
   console.log('Type a prompt, or "exit" to quit.\n');
 

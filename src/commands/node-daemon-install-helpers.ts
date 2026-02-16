@@ -60,7 +60,7 @@ export async function buildNodeInstallPlan(params: {
 
   const environment = buildNodeServiceEnvironment({ env: params.env });
   const description = formatNodeServiceDescription({
-    version: environment.OPENCLAW_SERVICE_VERSION,
+    version: environment.SMART_AGENT_NEO_SERVICE_VERSION,
   });
 
   return { programArguments, workingDirectory, environment, description };

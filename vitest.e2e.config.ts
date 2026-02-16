@@ -8,12 +8,12 @@ const cpuCount = os.cpus().length;
 const defaultWorkers = isCI
   ? Math.min(4, Math.max(2, Math.floor(cpuCount * 0.5)))
   : Math.min(8, Math.max(4, Math.floor(cpuCount * 0.6)));
-const requestedWorkers = Number.parseInt(process.env.OPENCLAW_E2E_WORKERS ?? "", 10);
+const requestedWorkers = Number.parseInt(process.env.SMART_AGENT_NEO_E2E_WORKERS ?? "", 10);
 const e2eWorkers =
   Number.isFinite(requestedWorkers) && requestedWorkers > 0
     ? Math.min(16, requestedWorkers)
     : defaultWorkers;
-const verboseE2E = process.env.OPENCLAW_E2E_VERBOSE === "1";
+const verboseE2E = process.env.SMART_AGENT_NEO_E2E_VERBOSE === "1";
 
 const baseTest = (baseConfig as { test?: { exclude?: string[] } }).test ?? {};
 const exclude = (baseTest.exclude ?? []).filter((p) => p !== "**/*.e2e.test.ts");

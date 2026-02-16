@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CliDeps } from "../cli/deps.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { SmartAgentNeoConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { RuntimeEnv } from "../runtime.js";
 
@@ -50,7 +50,7 @@ describe("deliverAgentCommandResult", () => {
     runtime?: RuntimeEnv;
     resultText?: string;
   }) {
-    const cfg = {} as OpenClawConfig;
+    const cfg = {} as SmartAgentNeoConfig;
     const deps = {} as CliDeps;
     const runtime = params.runtime ?? createRuntime();
     const result = createResult(params.resultText);

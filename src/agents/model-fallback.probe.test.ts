@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { SmartAgentNeoConfig } from "../config/config.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
 
 // Mock auth-profiles module — must be before importing model-fallback
@@ -23,7 +23,7 @@ const mockedGetSoonestCooldownExpiry = vi.mocked(getSoonestCooldownExpiry);
 const mockedIsProfileInCooldown = vi.mocked(isProfileInCooldown);
 const mockedResolveAuthProfileOrder = vi.mocked(resolveAuthProfileOrder);
 
-function makeCfg(overrides: Partial<OpenClawConfig> = {}): OpenClawConfig {
+function makeCfg(overrides: Partial<SmartAgentNeoConfig> = {}): SmartAgentNeoConfig {
   return {
     agents: {
       defaults: {
@@ -34,7 +34,7 @@ function makeCfg(overrides: Partial<OpenClawConfig> = {}): OpenClawConfig {
       },
     },
     ...overrides,
-  } as OpenClawConfig;
+  } as SmartAgentNeoConfig;
 }
 
 describe("runWithModelFallback – probe logic", () => {
@@ -152,7 +152,7 @@ describe("runWithModelFallback – probe logic", () => {
           },
         },
       },
-    } as Partial<OpenClawConfig>);
+    } as Partial<SmartAgentNeoConfig>);
 
     // Override: ALL providers in cooldown for this test
     mockedIsProfileInCooldown.mockReturnValue(true);
@@ -294,7 +294,7 @@ describe("runWithModelFallback – probe logic", () => {
           },
         },
       },
-    } as Partial<OpenClawConfig>);
+    } as Partial<SmartAgentNeoConfig>);
 
     const almostExpired = NOW + 30 * 1000;
     mockedGetSoonestCooldownExpiry.mockReturnValue(almostExpired);

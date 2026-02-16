@@ -1,6 +1,6 @@
-import type { OpenClawConfig } from "./types.js";
+import type { SmartAgentNeoConfig } from "./types.js";
 
-export function collectConfigEnvVars(cfg?: OpenClawConfig): Record<string, string> {
+export function collectConfigEnvVars(cfg?: SmartAgentNeoConfig): Record<string, string> {
   const envConfig = cfg?.env;
   if (!envConfig) {
     return {};
@@ -31,7 +31,7 @@ export function collectConfigEnvVars(cfg?: OpenClawConfig): Record<string, strin
 }
 
 export function applyConfigEnvVars(
-  cfg: OpenClawConfig,
+  cfg: SmartAgentNeoConfig,
   env: NodeJS.ProcessEnv = process.env,
 ): void {
   const entries = collectConfigEnvVars(cfg);

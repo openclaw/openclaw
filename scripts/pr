@@ -612,8 +612,8 @@ prepare_validate_commit() {
   local subject
   subject=$(git log -1 --pretty=%s)
 
-  echo "$subject" | rg -q "openclaw#$pr_number" || {
-    echo "ERROR: commit subject missing openclaw#$pr_number"
+  echo "$subject" | rg -q "smart-agent-neo#$pr_number" || {
+    echo "ERROR: commit subject missing smart-agent-neo#$pr_number"
     exit 1
   }
 

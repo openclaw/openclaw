@@ -1,4 +1,4 @@
-import type { OpenClawApp } from "./app.ts";
+import type { SmartAgentNeoApp } from "./app.ts";
 import type { AgentsListResult } from "./types.ts";
 import { refreshChat } from "./app-chat.ts";
 import {
@@ -186,33 +186,33 @@ export async function refreshActiveTab(host: SettingsHost) {
     await loadChannelsTab(host);
   }
   if (host.tab === "instances") {
-    await loadPresence(host as unknown as OpenClawApp);
+    await loadPresence(host as unknown as SmartAgentNeoApp);
   }
   if (host.tab === "sessions") {
-    await loadSessions(host as unknown as OpenClawApp);
+    await loadSessions(host as unknown as SmartAgentNeoApp);
   }
   if (host.tab === "cron") {
     await loadCron(host);
   }
   if (host.tab === "skills") {
-    await loadSkills(host as unknown as OpenClawApp);
+    await loadSkills(host as unknown as SmartAgentNeoApp);
   }
   if (host.tab === "agents") {
-    await loadAgents(host as unknown as OpenClawApp);
-    await loadConfig(host as unknown as OpenClawApp);
+    await loadAgents(host as unknown as SmartAgentNeoApp);
+    await loadConfig(host as unknown as SmartAgentNeoApp);
     const agentIds = host.agentsList?.agents?.map((entry) => entry.id) ?? [];
     if (agentIds.length > 0) {
-      void loadAgentIdentities(host as unknown as OpenClawApp, agentIds);
+      void loadAgentIdentities(host as unknown as SmartAgentNeoApp, agentIds);
     }
     const agentId =
       host.agentsSelectedId ?? host.agentsList?.defaultId ?? host.agentsList?.agents?.[0]?.id;
     if (agentId) {
-      void loadAgentIdentity(host as unknown as OpenClawApp, agentId);
+      void loadAgentIdentity(host as unknown as SmartAgentNeoApp, agentId);
       if (host.agentsPanel === "skills") {
-        void loadAgentSkills(host as unknown as OpenClawApp, agentId);
+        void loadAgentSkills(host as unknown as SmartAgentNeoApp, agentId);
       }
       if (host.agentsPanel === "channels") {
-        void loadChannels(host as unknown as OpenClawApp, false);
+        void loadChannels(host as unknown as SmartAgentNeoApp, false);
       }
       if (host.agentsPanel === "cron") {
         void loadCron(host);
@@ -220,10 +220,10 @@ export async function refreshActiveTab(host: SettingsHost) {
     }
   }
   if (host.tab === "nodes") {
-    await loadNodes(host as unknown as OpenClawApp);
-    await loadDevices(host as unknown as OpenClawApp);
-    await loadConfig(host as unknown as OpenClawApp);
-    await loadExecApprovals(host as unknown as OpenClawApp);
+    await loadNodes(host as unknown as SmartAgentNeoApp);
+    await loadDevices(host as unknown as SmartAgentNeoApp);
+    await loadConfig(host as unknown as SmartAgentNeoApp);
+    await loadExecApprovals(host as unknown as SmartAgentNeoApp);
   }
   if (host.tab === "chat") {
     await refreshChat(host as unknown as Parameters<typeof refreshChat>[0]);
@@ -233,16 +233,16 @@ export async function refreshActiveTab(host: SettingsHost) {
     );
   }
   if (host.tab === "config") {
-    await loadConfigSchema(host as unknown as OpenClawApp);
-    await loadConfig(host as unknown as OpenClawApp);
+    await loadConfigSchema(host as unknown as SmartAgentNeoApp);
+    await loadConfig(host as unknown as SmartAgentNeoApp);
   }
   if (host.tab === "debug") {
-    await loadDebug(host as unknown as OpenClawApp);
+    await loadDebug(host as unknown as SmartAgentNeoApp);
     host.eventLog = host.eventLogBuffer;
   }
   if (host.tab === "logs") {
     host.logsAtBottom = true;
-    await loadLogs(host as unknown as OpenClawApp, { reset: true });
+    await loadLogs(host as unknown as SmartAgentNeoApp, { reset: true });
     scheduleLogsScroll(host as unknown as Parameters<typeof scheduleLogsScroll>[0], true);
   }
 }
@@ -251,7 +251,7 @@ export function inferBasePath() {
   if (typeof window === "undefined") {
     return "";
   }
-  const configured = window.__OPENCLAW_CONTROL_UI_BASE_PATH__;
+  const configured = window.__SMART_AGENT_NEO_CONTROL_UI_BASE_PATH__;
   if (typeof configured === "string" && configured.trim()) {
     return normalizeBasePath(configured);
   }
@@ -404,26 +404,26 @@ export function syncUrlWithSessionKey(host: SettingsHost, sessionKey: string, re
 
 export async function loadOverview(host: SettingsHost) {
   await Promise.all([
-    loadChannels(host as unknown as OpenClawApp, false),
-    loadPresence(host as unknown as OpenClawApp),
-    loadSessions(host as unknown as OpenClawApp),
-    loadCronStatus(host as unknown as OpenClawApp),
-    loadDebug(host as unknown as OpenClawApp),
+    loadChannels(host as unknown as SmartAgentNeoApp, false),
+    loadPresence(host as unknown as SmartAgentNeoApp),
+    loadSessions(host as unknown as SmartAgentNeoApp),
+    loadCronStatus(host as unknown as SmartAgentNeoApp),
+    loadDebug(host as unknown as SmartAgentNeoApp),
   ]);
 }
 
 export async function loadChannelsTab(host: SettingsHost) {
   await Promise.all([
-    loadChannels(host as unknown as OpenClawApp, true),
-    loadConfigSchema(host as unknown as OpenClawApp),
-    loadConfig(host as unknown as OpenClawApp),
+    loadChannels(host as unknown as SmartAgentNeoApp, true),
+    loadConfigSchema(host as unknown as SmartAgentNeoApp),
+    loadConfig(host as unknown as SmartAgentNeoApp),
   ]);
 }
 
 export async function loadCron(host: SettingsHost) {
   await Promise.all([
-    loadChannels(host as unknown as OpenClawApp, false),
-    loadCronStatus(host as unknown as OpenClawApp),
-    loadCronJobs(host as unknown as OpenClawApp),
+    loadChannels(host as unknown as SmartAgentNeoApp, false),
+    loadCronStatus(host as unknown as SmartAgentNeoApp),
+    loadCronJobs(host as unknown as SmartAgentNeoApp),
   ]);
 }

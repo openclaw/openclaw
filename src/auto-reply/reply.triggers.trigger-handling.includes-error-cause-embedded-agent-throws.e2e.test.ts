@@ -59,7 +59,7 @@ describe("trigger handling", () => {
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toBe(
-        "⚠️ Agent failed before reply: sandbox is not defined.\nLogs: openclaw logs --follow",
+        "⚠️ Agent failed before reply: sandbox is not defined.\nLogs: smart-agent-neo logs --follow",
       );
       expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
     });

@@ -1,4 +1,4 @@
-import type { SsrFPolicy } from "openclaw/plugin-sdk";
+import type { SsrFPolicy } from "smart-agent-neo/plugin-sdk";
 import { validateUrbitBaseUrl } from "./base-url.js";
 import { UrbitUrlError } from "./errors.js";
 

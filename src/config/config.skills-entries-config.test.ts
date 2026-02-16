@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { OpenClawSchema } from "./zod-schema.js";
+import { SmartAgentNeoSchema } from "./zod-schema.js";
 
 describe("skills entries config schema", () => {
   it("accepts custom fields under config", () => {
-    const res = OpenClawSchema.safeParse({
+    const res = SmartAgentNeoSchema.safeParse({
       skills: {
         entries: {
           "custom-skill": {
@@ -21,7 +21,7 @@ describe("skills entries config schema", () => {
   });
 
   it("rejects unknown top-level fields", () => {
-    const res = OpenClawSchema.safeParse({
+    const res = SmartAgentNeoSchema.safeParse({
       skills: {
         entries: {
           "custom-skill": {

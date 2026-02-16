@@ -1,6 +1,6 @@
-import OpenClawChatUI
-import OpenClawKit
-import OpenClawProtocol
+import SmartAgentNeoChatUI
+import SmartAgentNeoKit
+import SmartAgentNeoProtocol
 import Observation
 import SwiftUI
 import UIKit
@@ -205,7 +205,7 @@ final class NodeAppModel {
         }()
         guard !userAction.isEmpty else { return }
 
-        guard let name = OpenClawCanvasA2UIAction.extractActionName(userAction) else { return }
+        guard let name = SmartAgentNeoCanvasA2UIAction.extractActionName(userAction) else { return }
         let actionId: String = {
             let id = (userAction["id"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             return id.isEmpty ? UUID().uuidString : id
@@ -227,15 +227,15 @@ final class NodeAppModel {
             deviceName: UIDevice.current.name,
             interfaceIdiom: UIDevice.current.userInterfaceIdiom)
         let instanceId = (UserDefaults.standard.string(forKey: "node.instanceId") ?? "ios-node").lowercased()
-        let contextJSON = OpenClawCanvasA2UIAction.compactJSON(userAction["context"])
+        let contextJSON = SmartAgentNeoCanvasA2UIAction.compactJSON(userAction["context"])
         let sessionKey = self.mainSessionKey
 
-        let messageContext = OpenClawCanvasA2UIAction.AgentMessageContext(
+        let messageContext = SmartAgentNeoCanvasA2UIAction.AgentMessageContext(
             actionName: name,
             session: .init(key: sessionKey, surfaceId: surfaceId),
             component: .init(id: sourceComponentId, host: host, instanceId: instanceId),
             contextJSON: contextJSON)
-        let message = OpenClawCanvasA2UIAction.formatAgentMessage(messageContext)
+        let message = SmartAgentNeoCanvasA2UIAction.formatAgentMessage(messageContext)
 
         let ok: Bool
         var errorText: String?
@@ -260,7 +260,7 @@ final class NodeAppModel {
             }
         }
 
-        let js = OpenClawCanvasA2UIAction.jsDispatchA2UIActionStatus(actionId: actionId, ok: ok, error: errorText)
+        let js = SmartAgentNeoCanvasA2UIAction.jsDispatchA2UIActionStatus(actionId: actionId, ok: ok, error: errorText)
         do {
             _ = try await self.screen.eval(javaScript: js)
         } catch {
@@ -372,7 +372,7 @@ final class NodeAppModel {
         }
     }
 
-    func requestLocationPermissions(mode: OpenClawLocationMode) async -> Bool {
+    func requestLocationPermissions(mode: SmartAgentNeoLocationMode) async -> Bool {
         guard mode != .off else { return true }
         let status = await self.locationService.ensureAuthorization(mode: mode)
         switch status {
@@ -549,7 +549,7 @@ final class NodeAppModel {
                 if await self.isGatewayHealthMonitorDisabled() { return true }
                 do {
                     let data = try await self.operatorGateway.request(method: "health", paramsJSON: nil, timeoutSeconds: 6)
-                    guard let decoded = try? JSONDecoder().decode(OpenClawGatewayHealthOK.self, from: data) else {
+                    guard let decoded = try? JSONDecoder().decode(SmartAgentNeoGatewayHealthOK.self, from: data) else {
                         return false
                     }
                     return decoded.ok ?? false
@@ -664,7 +664,7 @@ final class NodeAppModel {
         }
 
         // iOS gateway forwards to the gateway; no local auth prompts here.
-        // (Key-based unattended auth is handled on macOS for openclaw:// links.)
+        // (Key-based unattended auth is handled on macOS for smart-agent-neo:// links.)
         let data = try JSONEncoder().encode(link)
         guard let json = String(bytes: data, encoding: .utf8) else {
             throw NSError(domain: "NodeAppModel", code: 2, userInfo: [
@@ -685,7 +685,7 @@ final class NodeAppModel {
             return BridgeInvokeResponse(
                 id: req.id,
                 ok: false,
-                error: OpenClawNodeError(
+                error: SmartAgentNeoNodeError(
                     code: .backgroundUnavailable,
                     message: "NODE_BACKGROUND_UNAVAILABLE: canvas/camera/screen commands require foreground"))
         }
@@ -694,7 +694,7 @@ final class NodeAppModel {
             return BridgeInvokeResponse(
                 id: req.id,
                 ok: false,
-                error: OpenClawNodeError(
+                error: SmartAgentNeoNodeError(
                     code: .unavailable,
                     message: "CAMERA_DISABLED: enable Camera in iOS Settings → Camera → Allow Camera"))
         }
@@ -707,12 +707,12 @@ final class NodeAppModel {
                 return BridgeInvokeResponse(
                     id: req.id,
                     ok: false,
-                    error: OpenClawNodeError(code: .invalidRequest, message: "INVALID_REQUEST: unknown command"))
+                    error: SmartAgentNeoNodeError(code: .invalidRequest, message: "INVALID_REQUEST: unknown command"))
             case .handlerUnavailable:
                 return BridgeInvokeResponse(
                     id: req.id,
                     ok: false,
-                    error: OpenClawNodeError(code: .unavailable, message: "node handler unavailable"))
+                    error: SmartAgentNeoNodeError(code: .unavailable, message: "node handler unavailable"))
             }
         } catch {
             if command.hasPrefix("camera.") {
@@ -722,7 +722,7 @@ final class NodeAppModel {
             return BridgeInvokeResponse(
                 id: req.id,
                 ok: false,
-                error: OpenClawNodeError(code: .unavailable, message: error.localizedDescription))
+                error: SmartAgentNeoNodeError(code: .unavailable, message: error.localizedDescription))
         }
     }
 
@@ -737,7 +737,7 @@ final class NodeAppModel {
             return BridgeInvokeResponse(
                 id: req.id,
                 ok: false,
-                error: OpenClawNodeError(
+                error: SmartAgentNeoNodeError(
                     code: .unavailable,
                     message: "LOCATION_DISABLED: enable Location in Settings"))
         }
@@ -745,12 +745,12 @@ final class NodeAppModel {
             return BridgeInvokeResponse(
                 id: req.id,
                 ok: false,
-                error: OpenClawNodeError(
+                error: SmartAgentNeoNodeError(
                     code: .backgroundUnavailable,
                     message: "LOCATION_BACKGROUND_UNAVAILABLE: background location requires Always"))
         }
-        let params = (try? Self.decodeParams(OpenClawLocationGetParams.self, from: req.paramsJSON)) ??
-            OpenClawLocationGetParams()
+        let params = (try? Self.decodeParams(SmartAgentNeoLocationGetParams.self, from: req.paramsJSON)) ??
+            SmartAgentNeoLocationGetParams()
         let desired = params.desiredAccuracy ??
             (self.isLocationPreciseEnabled() ? .precise : .balanced)
         let status = self.locationService.authorizationStatus()
@@ -758,7 +758,7 @@ final class NodeAppModel {
             return BridgeInvokeResponse(
                 id: req.id,
                 ok: false,
-                error: OpenClawNodeError(
+                error: SmartAgentNeoNodeError(
                     code: .unavailable,
                     message: "LOCATION_PERMISSION_REQUIRED: grant Location permission"))
         }
@@ -766,7 +766,7 @@ final class NodeAppModel {
             return BridgeInvokeResponse(
                 id: req.id,
                 ok: false,
-                error: OpenClawNodeError(
+                error: SmartAgentNeoNodeError(
                     code: .unavailable,
                     message: "LOCATION_PERMISSION_REQUIRED: enable Always for background access"))
         }
@@ -776,7 +776,7 @@ final class NodeAppModel {
             maxAgeMs: params.maxAgeMs,
             timeoutMs: params.timeoutMs)
         let isPrecise = self.locationService.accuracyAuthorization() == .fullAccuracy
-        let payload = OpenClawLocationPayload(
+        let payload = SmartAgentNeoLocationPayload(
             lat: location.coordinate.latitude,
             lon: location.coordinate.longitude,
             accuracyMeters: location.horizontalAccuracy,
@@ -792,10 +792,10 @@ final class NodeAppModel {
 
     private func handleCanvasInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
         switch req.command {
-        case OpenClawCanvasCommand.present.rawValue:
+        case SmartAgentNeoCanvasCommand.present.rawValue:
             // iOS ignores placement hints; canvas always fills the screen.
-            let params = (try? Self.decodeParams(OpenClawCanvasPresentParams.self, from: req.paramsJSON)) ??
-                OpenClawCanvasPresentParams()
+            let params = (try? Self.decodeParams(SmartAgentNeoCanvasPresentParams.self, from: req.paramsJSON)) ??
+                SmartAgentNeoCanvasPresentParams()
             let url = params.url?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             if url.isEmpty {
                 self.screen.showDefaultCanvas()
@@ -803,20 +803,20 @@ final class NodeAppModel {
                 self.screen.navigate(to: url)
             }
             return BridgeInvokeResponse(id: req.id, ok: true)
-        case OpenClawCanvasCommand.hide.rawValue:
+        case SmartAgentNeoCanvasCommand.hide.rawValue:
             self.screen.showDefaultCanvas()
             return BridgeInvokeResponse(id: req.id, ok: true)
-        case OpenClawCanvasCommand.navigate.rawValue:
-            let params = try Self.decodeParams(OpenClawCanvasNavigateParams.self, from: req.paramsJSON)
+        case SmartAgentNeoCanvasCommand.navigate.rawValue:
+            let params = try Self.decodeParams(SmartAgentNeoCanvasNavigateParams.self, from: req.paramsJSON)
             self.screen.navigate(to: params.url)
             return BridgeInvokeResponse(id: req.id, ok: true)
-        case OpenClawCanvasCommand.evalJS.rawValue:
-            let params = try Self.decodeParams(OpenClawCanvasEvalParams.self, from: req.paramsJSON)
+        case SmartAgentNeoCanvasCommand.evalJS.rawValue:
+            let params = try Self.decodeParams(SmartAgentNeoCanvasEvalParams.self, from: req.paramsJSON)
             let result = try await self.screen.eval(javaScript: params.javaScript)
             let payload = try Self.encodePayload(["result": result])
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
-        case OpenClawCanvasCommand.snapshot.rawValue:
-            let params = try? Self.decodeParams(OpenClawCanvasSnapshotParams.self, from: req.paramsJSON)
+        case SmartAgentNeoCanvasCommand.snapshot.rawValue:
+            let params = try? Self.decodeParams(SmartAgentNeoCanvasSnapshotParams.self, from: req.paramsJSON)
             let format = params?.format ?? .jpeg
             let maxWidth: CGFloat? = {
                 if let raw = params?.maxWidth, raw > 0 { return CGFloat(raw) }
@@ -840,19 +840,19 @@ final class NodeAppModel {
             return BridgeInvokeResponse(
                 id: req.id,
                 ok: false,
-                error: OpenClawNodeError(code: .invalidRequest, message: "INVALID_REQUEST: unknown command"))
+                error: SmartAgentNeoNodeError(code: .invalidRequest, message: "INVALID_REQUEST: unknown command"))
         }
     }
 
     private func handleCanvasA2UIInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
         let command = req.command
         switch command {
-        case OpenClawCanvasA2UICommand.reset.rawValue:
+        case SmartAgentNeoCanvasA2UICommand.reset.rawValue:
             guard let a2uiUrl = await self.resolveA2UIHostURL() else {
                 return BridgeInvokeResponse(
                     id: req.id,
                     ok: false,
-                    error: OpenClawNodeError(
+                    error: SmartAgentNeoNodeError(
                         code: .unavailable,
                         message: "A2UI_HOST_NOT_CONFIGURED: gateway did not advertise canvas host"))
             }
@@ -861,32 +861,32 @@ final class NodeAppModel {
                 return BridgeInvokeResponse(
                     id: req.id,
                     ok: false,
-                    error: OpenClawNodeError(
+                    error: SmartAgentNeoNodeError(
                         code: .unavailable,
                         message: "A2UI_HOST_UNAVAILABLE: A2UI host not reachable"))
             }
 
             let json = try await self.screen.eval(javaScript: """
             (() => {
-              const host = globalThis.openclawA2UI;
-              if (!host) return JSON.stringify({ ok: false, error: "missing openclawA2UI" });
+              const host = globalThis.smartAgentNeoA2UI;
+              if (!host) return JSON.stringify({ ok: false, error: "missing smartAgentNeoA2UI" });
               return JSON.stringify(host.reset());
             })()
             """)
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
-        case OpenClawCanvasA2UICommand.push.rawValue, OpenClawCanvasA2UICommand.pushJSONL.rawValue:
-            let messages: [OpenClawKit.AnyCodable]
-            if command == OpenClawCanvasA2UICommand.pushJSONL.rawValue {
-                let params = try Self.decodeParams(OpenClawCanvasA2UIPushJSONLParams.self, from: req.paramsJSON)
-                messages = try OpenClawCanvasA2UIJSONL.decodeMessagesFromJSONL(params.jsonl)
+        case SmartAgentNeoCanvasA2UICommand.push.rawValue, SmartAgentNeoCanvasA2UICommand.pushJSONL.rawValue:
+            let messages: [SmartAgentNeoKit.AnyCodable]
+            if command == SmartAgentNeoCanvasA2UICommand.pushJSONL.rawValue {
+                let params = try Self.decodeParams(SmartAgentNeoCanvasA2UIPushJSONLParams.self, from: req.paramsJSON)
+                messages = try SmartAgentNeoCanvasA2UIJSONL.decodeMessagesFromJSONL(params.jsonl)
             } else {
                 do {
-                    let params = try Self.decodeParams(OpenClawCanvasA2UIPushParams.self, from: req.paramsJSON)
+                    let params = try Self.decodeParams(SmartAgentNeoCanvasA2UIPushParams.self, from: req.paramsJSON)
                     messages = params.messages
                 } catch {
                     // Be forgiving: some clients still send JSONL payloads to `canvas.a2ui.push`.
-                    let params = try Self.decodeParams(OpenClawCanvasA2UIPushJSONLParams.self, from: req.paramsJSON)
-                    messages = try OpenClawCanvasA2UIJSONL.decodeMessagesFromJSONL(params.jsonl)
+                    let params = try Self.decodeParams(SmartAgentNeoCanvasA2UIPushJSONLParams.self, from: req.paramsJSON)
+                    messages = try SmartAgentNeoCanvasA2UIJSONL.decodeMessagesFromJSONL(params.jsonl)
                 }
             }
 
@@ -894,7 +894,7 @@ final class NodeAppModel {
                 return BridgeInvokeResponse(
                     id: req.id,
                     ok: false,
-                    error: OpenClawNodeError(
+                    error: SmartAgentNeoNodeError(
                         code: .unavailable,
                         message: "A2UI_HOST_NOT_CONFIGURED: gateway did not advertise canvas host"))
             }
@@ -903,17 +903,17 @@ final class NodeAppModel {
                 return BridgeInvokeResponse(
                     id: req.id,
                     ok: false,
-                    error: OpenClawNodeError(
+                    error: SmartAgentNeoNodeError(
                         code: .unavailable,
                         message: "A2UI_HOST_UNAVAILABLE: A2UI host not reachable"))
             }
 
-            let messagesJSON = try OpenClawCanvasA2UIJSONL.encodeMessagesJSONArray(messages)
+            let messagesJSON = try SmartAgentNeoCanvasA2UIJSONL.encodeMessagesJSONArray(messages)
             let js = """
             (() => {
               try {
-                const host = globalThis.openclawA2UI;
-                if (!host) return JSON.stringify({ ok: false, error: "missing openclawA2UI" });
+                const host = globalThis.smartAgentNeoA2UI;
+                if (!host) return JSON.stringify({ ok: false, error: "missing smartAgentNeoA2UI" });
                 const messages = \(messagesJSON);
                 return JSON.stringify(host.applyMessages(messages));
               } catch (e) {
@@ -927,24 +927,24 @@ final class NodeAppModel {
             return BridgeInvokeResponse(
                 id: req.id,
                 ok: false,
-                error: OpenClawNodeError(code: .invalidRequest, message: "INVALID_REQUEST: unknown command"))
+                error: SmartAgentNeoNodeError(code: .invalidRequest, message: "INVALID_REQUEST: unknown command"))
         }
     }
 
     private func handleCameraInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
         switch req.command {
-        case OpenClawCameraCommand.list.rawValue:
+        case SmartAgentNeoCameraCommand.list.rawValue:
             let devices = await self.camera.listDevices()
             struct Payload: Codable {
                 var devices: [CameraController.CameraDeviceInfo]
             }
             let payload = try Self.encodePayload(Payload(devices: devices))
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
-        case OpenClawCameraCommand.snap.rawValue:
+        case SmartAgentNeoCameraCommand.snap.rawValue:
             self.showCameraHUD(text: "Taking photo…", kind: .photo)
             self.triggerCameraFlash()
-            let params = (try? Self.decodeParams(OpenClawCameraSnapParams.self, from: req.paramsJSON)) ??
-                OpenClawCameraSnapParams()
+            let params = (try? Self.decodeParams(SmartAgentNeoCameraSnapParams.self, from: req.paramsJSON)) ??
+                SmartAgentNeoCameraSnapParams()
             let res = try await self.camera.snap(params: params)
 
             struct Payload: Codable {
@@ -960,9 +960,9 @@ final class NodeAppModel {
                 height: res.height))
             self.showCameraHUD(text: "Photo captured", kind: .success, autoHideSeconds: 1.6)
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
-        case OpenClawCameraCommand.clip.rawValue:
-            let params = (try? Self.decodeParams(OpenClawCameraClipParams.self, from: req.paramsJSON)) ??
-                OpenClawCameraClipParams()
+        case SmartAgentNeoCameraCommand.clip.rawValue:
+            let params = (try? Self.decodeParams(SmartAgentNeoCameraClipParams.self, from: req.paramsJSON)) ??
+                SmartAgentNeoCameraClipParams()
 
             let suspended = (params.includeAudio ?? true) ? self.voiceWake.suspendForExternalAudioCapture() : false
             defer { self.voiceWake.resumeAfterExternalAudioCapture(wasSuspended: suspended) }
@@ -987,13 +987,13 @@ final class NodeAppModel {
             return BridgeInvokeResponse(
                 id: req.id,
                 ok: false,
-                error: OpenClawNodeError(code: .invalidRequest, message: "INVALID_REQUEST: unknown command"))
+                error: SmartAgentNeoNodeError(code: .invalidRequest, message: "INVALID_REQUEST: unknown command"))
         }
     }
 
     private func handleScreenRecordInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
-        let params = (try? Self.decodeParams(OpenClawScreenRecordParams.self, from: req.paramsJSON)) ??
-            OpenClawScreenRecordParams()
+        let params = (try? Self.decodeParams(SmartAgentNeoScreenRecordParams.self, from: req.paramsJSON)) ??
+            SmartAgentNeoScreenRecordParams()
         if let format = params.format, format.lowercased() != "mp4" {
             throw NSError(domain: "Screen", code: 30, userInfo: [
                 NSLocalizedDescriptionKey: "INVALID_REQUEST: screen format must be mp4",
@@ -1029,14 +1029,14 @@ final class NodeAppModel {
     }
 
     private func handleSystemNotify(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
-        let params = try Self.decodeParams(OpenClawSystemNotifyParams.self, from: req.paramsJSON)
+        let params = try Self.decodeParams(SmartAgentNeoSystemNotifyParams.self, from: req.paramsJSON)
         let title = params.title.trimmingCharacters(in: .whitespacesAndNewlines)
         let body = params.body.trimmingCharacters(in: .whitespacesAndNewlines)
         if title.isEmpty, body.isEmpty {
             return BridgeInvokeResponse(
                 id: req.id,
                 ok: false,
-                error: OpenClawNodeError(code: .invalidRequest, message: "INVALID_REQUEST: empty notification"))
+                error: SmartAgentNeoNodeError(code: .invalidRequest, message: "INVALID_REQUEST: empty notification"))
         }
 
         let finalStatus = await self.requestNotificationAuthorizationIfNeeded()
@@ -1044,7 +1044,7 @@ final class NodeAppModel {
             return BridgeInvokeResponse(
                 id: req.id,
                 ok: false,
-                error: OpenClawNodeError(code: .unavailable, message: "NOT_AUTHORIZED: notifications"))
+                error: SmartAgentNeoNodeError(code: .unavailable, message: "NOT_AUTHORIZED: notifications"))
         }
 
         let addResult = await self.runNotificationCall(timeoutSeconds: 2.0) { [notificationCenter] in
@@ -1077,19 +1077,19 @@ final class NodeAppModel {
             return BridgeInvokeResponse(
                 id: req.id,
                 ok: false,
-                error: OpenClawNodeError(code: .unavailable, message: "NOTIFICATION_FAILED: \(error.message)"))
+                error: SmartAgentNeoNodeError(code: .unavailable, message: "NOTIFICATION_FAILED: \(error.message)"))
         }
         return BridgeInvokeResponse(id: req.id, ok: true)
     }
 
     private func handleChatPushInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
-        let params = try Self.decodeParams(OpenClawChatPushParams.self, from: req.paramsJSON)
+        let params = try Self.decodeParams(SmartAgentNeoChatPushParams.self, from: req.paramsJSON)
         let text = params.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else {
             return BridgeInvokeResponse(
                 id: req.id,
                 ok: false,
-                error: OpenClawNodeError(code: .invalidRequest, message: "INVALID_REQUEST: empty chat.push text"))
+                error: SmartAgentNeoNodeError(code: .invalidRequest, message: "INVALID_REQUEST: empty chat.push text"))
         }
 
         let finalStatus = await self.requestNotificationAuthorizationIfNeeded()
@@ -1097,7 +1097,7 @@ final class NodeAppModel {
         if finalStatus == .authorized || finalStatus == .provisional || finalStatus == .ephemeral {
             let addResult = await self.runNotificationCall(timeoutSeconds: 2.0) { [notificationCenter] in
                 let content = UNMutableNotificationContent()
-                content.title = "OpenClaw"
+                content.title = "SmartAgentNeo"
                 content.body = text
                 content.sound = .default
                 content.userInfo = ["messageId": messageId]
@@ -1111,7 +1111,7 @@ final class NodeAppModel {
                 return BridgeInvokeResponse(
                     id: req.id,
                     ok: false,
-                    error: OpenClawNodeError(code: .unavailable, message: "NOTIFICATION_FAILED: \(error.message)"))
+                    error: SmartAgentNeoNodeError(code: .unavailable, message: "NOTIFICATION_FAILED: \(error.message)"))
             }
         }
 
@@ -1122,7 +1122,7 @@ final class NodeAppModel {
             }
         }
 
-        let payload = OpenClawChatPushPayload(messageId: messageId)
+        let payload = SmartAgentNeoChatPushPayload(messageId: messageId)
         let json = try Self.encodePayload(payload)
         return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
     }
@@ -1184,11 +1184,11 @@ final class NodeAppModel {
 
     private func handleDeviceInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
         switch req.command {
-        case OpenClawDeviceCommand.status.rawValue:
+        case SmartAgentNeoDeviceCommand.status.rawValue:
             let payload = try await self.deviceStatusService.status()
             let json = try Self.encodePayload(payload)
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
-        case OpenClawDeviceCommand.info.rawValue:
+        case SmartAgentNeoDeviceCommand.info.rawValue:
             let payload = self.deviceStatusService.info()
             let json = try Self.encodePayload(payload)
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
@@ -1196,13 +1196,13 @@ final class NodeAppModel {
             return BridgeInvokeResponse(
                 id: req.id,
                 ok: false,
-                error: OpenClawNodeError(code: .invalidRequest, message: "INVALID_REQUEST: unknown command"))
+                error: SmartAgentNeoNodeError(code: .invalidRequest, message: "INVALID_REQUEST: unknown command"))
         }
     }
 
     private func handlePhotosInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
-        let params = (try? Self.decodeParams(OpenClawPhotosLatestParams.self, from: req.paramsJSON)) ??
-            OpenClawPhotosLatestParams()
+        let params = (try? Self.decodeParams(SmartAgentNeoPhotosLatestParams.self, from: req.paramsJSON)) ??
+            SmartAgentNeoPhotosLatestParams()
         let payload = try await self.photosService.latest(params: params)
         let json = try Self.encodePayload(payload)
         return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
@@ -1210,14 +1210,14 @@ final class NodeAppModel {
 
     private func handleContactsInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
         switch req.command {
-        case OpenClawContactsCommand.search.rawValue:
-            let params = (try? Self.decodeParams(OpenClawContactsSearchParams.self, from: req.paramsJSON)) ??
-                OpenClawContactsSearchParams()
+        case SmartAgentNeoContactsCommand.search.rawValue:
+            let params = (try? Self.decodeParams(SmartAgentNeoContactsSearchParams.self, from: req.paramsJSON)) ??
+                SmartAgentNeoContactsSearchParams()
             let payload = try await self.contactsService.search(params: params)
             let json = try Self.encodePayload(payload)
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
-        case OpenClawContactsCommand.add.rawValue:
-            let params = try Self.decodeParams(OpenClawContactsAddParams.self, from: req.paramsJSON)
+        case SmartAgentNeoContactsCommand.add.rawValue:
+            let params = try Self.decodeParams(SmartAgentNeoContactsAddParams.self, from: req.paramsJSON)
             let payload = try await self.contactsService.add(params: params)
             let json = try Self.encodePayload(payload)
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
@@ -1225,20 +1225,20 @@ final class NodeAppModel {
             return BridgeInvokeResponse(
                 id: req.id,
                 ok: false,
-                error: OpenClawNodeError(code: .invalidRequest, message: "INVALID_REQUEST: unknown command"))
+                error: SmartAgentNeoNodeError(code: .invalidRequest, message: "INVALID_REQUEST: unknown command"))
         }
     }
 
     private func handleCalendarInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
         switch req.command {
-        case OpenClawCalendarCommand.events.rawValue:
-            let params = (try? Self.decodeParams(OpenClawCalendarEventsParams.self, from: req.paramsJSON)) ??
-                OpenClawCalendarEventsParams()
+        case SmartAgentNeoCalendarCommand.events.rawValue:
+            let params = (try? Self.decodeParams(SmartAgentNeoCalendarEventsParams.self, from: req.paramsJSON)) ??
+                SmartAgentNeoCalendarEventsParams()
             let payload = try await self.calendarService.events(params: params)
             let json = try Self.encodePayload(payload)
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
-        case OpenClawCalendarCommand.add.rawValue:
-            let params = try Self.decodeParams(OpenClawCalendarAddParams.self, from: req.paramsJSON)
+        case SmartAgentNeoCalendarCommand.add.rawValue:
+            let params = try Self.decodeParams(SmartAgentNeoCalendarAddParams.self, from: req.paramsJSON)
             let payload = try await self.calendarService.add(params: params)
             let json = try Self.encodePayload(payload)
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
@@ -1246,20 +1246,20 @@ final class NodeAppModel {
             return BridgeInvokeResponse(
                 id: req.id,
                 ok: false,
-                error: OpenClawNodeError(code: .invalidRequest, message: "INVALID_REQUEST: unknown command"))
+                error: SmartAgentNeoNodeError(code: .invalidRequest, message: "INVALID_REQUEST: unknown command"))
         }
     }
 
     private func handleRemindersInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
         switch req.command {
-        case OpenClawRemindersCommand.list.rawValue:
-            let params = (try? Self.decodeParams(OpenClawRemindersListParams.self, from: req.paramsJSON)) ??
-                OpenClawRemindersListParams()
+        case SmartAgentNeoRemindersCommand.list.rawValue:
+            let params = (try? Self.decodeParams(SmartAgentNeoRemindersListParams.self, from: req.paramsJSON)) ??
+                SmartAgentNeoRemindersListParams()
             let payload = try await self.remindersService.list(params: params)
             let json = try Self.encodePayload(payload)
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
-        case OpenClawRemindersCommand.add.rawValue:
-            let params = try Self.decodeParams(OpenClawRemindersAddParams.self, from: req.paramsJSON)
+        case SmartAgentNeoRemindersCommand.add.rawValue:
+            let params = try Self.decodeParams(SmartAgentNeoRemindersAddParams.self, from: req.paramsJSON)
             let payload = try await self.remindersService.add(params: params)
             let json = try Self.encodePayload(payload)
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
@@ -1267,21 +1267,21 @@ final class NodeAppModel {
             return BridgeInvokeResponse(
                 id: req.id,
                 ok: false,
-                error: OpenClawNodeError(code: .invalidRequest, message: "INVALID_REQUEST: unknown command"))
+                error: SmartAgentNeoNodeError(code: .invalidRequest, message: "INVALID_REQUEST: unknown command"))
         }
     }
 
     private func handleMotionInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
         switch req.command {
-        case OpenClawMotionCommand.activity.rawValue:
-            let params = (try? Self.decodeParams(OpenClawMotionActivityParams.self, from: req.paramsJSON)) ??
-                OpenClawMotionActivityParams()
+        case SmartAgentNeoMotionCommand.activity.rawValue:
+            let params = (try? Self.decodeParams(SmartAgentNeoMotionActivityParams.self, from: req.paramsJSON)) ??
+                SmartAgentNeoMotionActivityParams()
             let payload = try await self.motionService.activities(params: params)
             let json = try Self.encodePayload(payload)
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
-        case OpenClawMotionCommand.pedometer.rawValue:
-            let params = (try? Self.decodeParams(OpenClawPedometerParams.self, from: req.paramsJSON)) ??
-                OpenClawPedometerParams()
+        case SmartAgentNeoMotionCommand.pedometer.rawValue:
+            let params = (try? Self.decodeParams(SmartAgentNeoPedometerParams.self, from: req.paramsJSON)) ??
+                SmartAgentNeoPedometerParams()
             let payload = try await self.motionService.pedometer(params: params)
             let json = try Self.encodePayload(payload)
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
@@ -1289,30 +1289,30 @@ final class NodeAppModel {
             return BridgeInvokeResponse(
                 id: req.id,
                 ok: false,
-                error: OpenClawNodeError(code: .invalidRequest, message: "INVALID_REQUEST: unknown command"))
+                error: SmartAgentNeoNodeError(code: .invalidRequest, message: "INVALID_REQUEST: unknown command"))
         }
     }
 
     private func handleTalkInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
         switch req.command {
-        case OpenClawTalkCommand.pttStart.rawValue:
+        case SmartAgentNeoTalkCommand.pttStart.rawValue:
             self.pttVoiceWakeSuspended = self.voiceWake.suspendForExternalAudioCapture()
             let payload = try await self.talkMode.beginPushToTalk()
             let json = try Self.encodePayload(payload)
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
-        case OpenClawTalkCommand.pttStop.rawValue:
+        case SmartAgentNeoTalkCommand.pttStop.rawValue:
             let payload = await self.talkMode.endPushToTalk()
             self.voiceWake.resumeAfterExternalAudioCapture(wasSuspended: self.pttVoiceWakeSuspended)
             self.pttVoiceWakeSuspended = false
             let json = try Self.encodePayload(payload)
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
-        case OpenClawTalkCommand.pttCancel.rawValue:
+        case SmartAgentNeoTalkCommand.pttCancel.rawValue:
             let payload = await self.talkMode.cancelPushToTalk()
             self.voiceWake.resumeAfterExternalAudioCapture(wasSuspended: self.pttVoiceWakeSuspended)
             self.pttVoiceWakeSuspended = false
             let json = try Self.encodePayload(payload)
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
-        case OpenClawTalkCommand.pttOnce.rawValue:
+        case SmartAgentNeoTalkCommand.pttOnce.rawValue:
             self.pttVoiceWakeSuspended = self.voiceWake.suspendForExternalAudioCapture()
             defer {
                 self.voiceWake.resumeAfterExternalAudioCapture(wasSuspended: self.pttVoiceWakeSuspended)
@@ -1325,7 +1325,7 @@ final class NodeAppModel {
             return BridgeInvokeResponse(
                 id: req.id,
                 ok: false,
-                error: OpenClawNodeError(code: .invalidRequest, message: "INVALID_REQUEST: unknown command"))
+                error: SmartAgentNeoNodeError(code: .invalidRequest, message: "INVALID_REQUEST: unknown command"))
         }
     }
 
@@ -1342,105 +1342,105 @@ private extension NodeAppModel {
             }
         }
 
-        register([OpenClawLocationCommand.get.rawValue]) { [weak self] req in
+        register([SmartAgentNeoLocationCommand.get.rawValue]) { [weak self] req in
             guard let self else { throw NodeCapabilityRouter.RouterError.handlerUnavailable }
             return try await self.handleLocationInvoke(req)
         }
 
         register([
-            OpenClawCanvasCommand.present.rawValue,
-            OpenClawCanvasCommand.hide.rawValue,
-            OpenClawCanvasCommand.navigate.rawValue,
-            OpenClawCanvasCommand.evalJS.rawValue,
-            OpenClawCanvasCommand.snapshot.rawValue,
+            SmartAgentNeoCanvasCommand.present.rawValue,
+            SmartAgentNeoCanvasCommand.hide.rawValue,
+            SmartAgentNeoCanvasCommand.navigate.rawValue,
+            SmartAgentNeoCanvasCommand.evalJS.rawValue,
+            SmartAgentNeoCanvasCommand.snapshot.rawValue,
         ]) { [weak self] req in
             guard let self else { throw NodeCapabilityRouter.RouterError.handlerUnavailable }
             return try await self.handleCanvasInvoke(req)
         }
 
         register([
-            OpenClawCanvasA2UICommand.reset.rawValue,
-            OpenClawCanvasA2UICommand.push.rawValue,
-            OpenClawCanvasA2UICommand.pushJSONL.rawValue,
+            SmartAgentNeoCanvasA2UICommand.reset.rawValue,
+            SmartAgentNeoCanvasA2UICommand.push.rawValue,
+            SmartAgentNeoCanvasA2UICommand.pushJSONL.rawValue,
         ]) { [weak self] req in
             guard let self else { throw NodeCapabilityRouter.RouterError.handlerUnavailable }
             return try await self.handleCanvasA2UIInvoke(req)
         }
 
         register([
-            OpenClawCameraCommand.list.rawValue,
-            OpenClawCameraCommand.snap.rawValue,
-            OpenClawCameraCommand.clip.rawValue,
+            SmartAgentNeoCameraCommand.list.rawValue,
+            SmartAgentNeoCameraCommand.snap.rawValue,
+            SmartAgentNeoCameraCommand.clip.rawValue,
         ]) { [weak self] req in
             guard let self else { throw NodeCapabilityRouter.RouterError.handlerUnavailable }
             return try await self.handleCameraInvoke(req)
         }
 
-        register([OpenClawScreenCommand.record.rawValue]) { [weak self] req in
+        register([SmartAgentNeoScreenCommand.record.rawValue]) { [weak self] req in
             guard let self else { throw NodeCapabilityRouter.RouterError.handlerUnavailable }
             return try await self.handleScreenRecordInvoke(req)
         }
 
-        register([OpenClawSystemCommand.notify.rawValue]) { [weak self] req in
+        register([SmartAgentNeoSystemCommand.notify.rawValue]) { [weak self] req in
             guard let self else { throw NodeCapabilityRouter.RouterError.handlerUnavailable }
             return try await self.handleSystemNotify(req)
         }
 
-        register([OpenClawChatCommand.push.rawValue]) { [weak self] req in
+        register([SmartAgentNeoChatCommand.push.rawValue]) { [weak self] req in
             guard let self else { throw NodeCapabilityRouter.RouterError.handlerUnavailable }
             return try await self.handleChatPushInvoke(req)
         }
 
         register([
-            OpenClawDeviceCommand.status.rawValue,
-            OpenClawDeviceCommand.info.rawValue,
+            SmartAgentNeoDeviceCommand.status.rawValue,
+            SmartAgentNeoDeviceCommand.info.rawValue,
         ]) { [weak self] req in
             guard let self else { throw NodeCapabilityRouter.RouterError.handlerUnavailable }
             return try await self.handleDeviceInvoke(req)
         }
 
-        register([OpenClawPhotosCommand.latest.rawValue]) { [weak self] req in
+        register([SmartAgentNeoPhotosCommand.latest.rawValue]) { [weak self] req in
             guard let self else { throw NodeCapabilityRouter.RouterError.handlerUnavailable }
             return try await self.handlePhotosInvoke(req)
         }
 
         register([
-            OpenClawContactsCommand.search.rawValue,
-            OpenClawContactsCommand.add.rawValue,
+            SmartAgentNeoContactsCommand.search.rawValue,
+            SmartAgentNeoContactsCommand.add.rawValue,
         ]) { [weak self] req in
             guard let self else { throw NodeCapabilityRouter.RouterError.handlerUnavailable }
             return try await self.handleContactsInvoke(req)
         }
 
         register([
-            OpenClawCalendarCommand.events.rawValue,
-            OpenClawCalendarCommand.add.rawValue,
+            SmartAgentNeoCalendarCommand.events.rawValue,
+            SmartAgentNeoCalendarCommand.add.rawValue,
         ]) { [weak self] req in
             guard let self else { throw NodeCapabilityRouter.RouterError.handlerUnavailable }
             return try await self.handleCalendarInvoke(req)
         }
 
         register([
-            OpenClawRemindersCommand.list.rawValue,
-            OpenClawRemindersCommand.add.rawValue,
+            SmartAgentNeoRemindersCommand.list.rawValue,
+            SmartAgentNeoRemindersCommand.add.rawValue,
         ]) { [weak self] req in
             guard let self else { throw NodeCapabilityRouter.RouterError.handlerUnavailable }
             return try await self.handleRemindersInvoke(req)
         }
 
         register([
-            OpenClawMotionCommand.activity.rawValue,
-            OpenClawMotionCommand.pedometer.rawValue,
+            SmartAgentNeoMotionCommand.activity.rawValue,
+            SmartAgentNeoMotionCommand.pedometer.rawValue,
         ]) { [weak self] req in
             guard let self else { throw NodeCapabilityRouter.RouterError.handlerUnavailable }
             return try await self.handleMotionInvoke(req)
         }
 
         register([
-            OpenClawTalkCommand.pttStart.rawValue,
-            OpenClawTalkCommand.pttStop.rawValue,
-            OpenClawTalkCommand.pttCancel.rawValue,
-            OpenClawTalkCommand.pttOnce.rawValue,
+            SmartAgentNeoTalkCommand.pttStart.rawValue,
+            SmartAgentNeoTalkCommand.pttStop.rawValue,
+            SmartAgentNeoTalkCommand.pttCancel.rawValue,
+            SmartAgentNeoTalkCommand.pttOnce.rawValue,
         ]) { [weak self] req in
             guard let self else { throw NodeCapabilityRouter.RouterError.handlerUnavailable }
             return try await self.handleTalkInvoke(req)
@@ -1449,9 +1449,9 @@ private extension NodeAppModel {
         return NodeCapabilityRouter(handlers: handlers)
     }
 
-    func locationMode() -> OpenClawLocationMode {
+    func locationMode() -> SmartAgentNeoLocationMode {
         let raw = UserDefaults.standard.string(forKey: "location.enabledMode") ?? "off"
-        return OpenClawLocationMode(rawValue: raw) ?? .off
+        return SmartAgentNeoLocationMode(rawValue: raw) ?? .off
     }
 
     func isLocationPreciseEnabled() -> Bool {
@@ -1671,7 +1671,7 @@ private extension NodeAppModel {
                             BridgeInvokeResponse(
                                 id: req.id,
                                 ok: false,
-                                error: OpenClawNodeError(
+                                error: SmartAgentNeoNodeError(
                                     code: .invalidRequest,
                                     message: "INVALID_REQUEST: operator session cannot invoke node commands"))
                         })
@@ -1760,7 +1760,7 @@ private extension NodeAppModel {
                                 return BridgeInvokeResponse(
                                     id: req.id,
                                     ok: false,
-                                    error: OpenClawNodeError(
+                                    error: SmartAgentNeoNodeError(
                                         code: .unavailable,
                                         message: "UNAVAILABLE: node not ready"))
                             }
@@ -1871,12 +1871,12 @@ private extension NodeAppModel {
 
     func legacyClientIdFallback(currentClientId: String, error: Error) -> String? {
         let normalizedClientId = currentClientId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard normalizedClientId == "openclaw-ios" else { return nil }
+        guard normalizedClientId == "smart-agent-neo-ios" else { return nil }
         let message = error.localizedDescription.lowercased()
         guard message.contains("invalid connect params"), message.contains("/client/id") else {
             return nil
         }
-        return "moltbot-ios"
+        return "neobot-ios"
     }
 
     func isOperatorConnected() async -> Bool {

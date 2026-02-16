@@ -88,7 +88,7 @@ export async function stopBrowserControlService(): Promise<void> {
       }
     }
   } catch (err) {
-    logService.warn(`openclaw browser stop failed: ${String(err)}`);
+    logService.warn(`smart-agent-neo browser stop failed: ${String(err)}`);
   }
 
   state = null;

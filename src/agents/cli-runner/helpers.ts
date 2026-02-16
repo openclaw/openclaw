@@ -5,7 +5,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { SmartAgentNeoConfig } from "../../config/config.js";
 import type { CliBackendConfig } from "../../config/types.js";
 import type { EmbeddedContextFile } from "../pi-embedded-helpers.js";
 import { buildTtsSystemPromptHint } from "../../tts/tts.js";
@@ -49,7 +49,7 @@ export type CliOutput = {
 
 export function buildSystemPrompt(params: {
   workspaceDir: string;
-  config?: OpenClawConfig;
+  config?: SmartAgentNeoConfig;
   defaultThinkLevel?: ThinkLevel;
   extraSystemPrompt?: string;
   ownerNumbers?: string[];
@@ -71,7 +71,7 @@ export function buildSystemPrompt(params: {
     workspaceDir: params.workspaceDir,
     cwd: process.cwd(),
     runtime: {
-      host: "openclaw",
+      host: "smart-agent-neo",
       os: `${os.type()} ${os.release()}`,
       arch: os.arch(),
       node: process.version,
@@ -332,7 +332,7 @@ export function appendImagePathsToPrompt(prompt: string, paths: string[]): strin
 export async function writeCliImages(
   images: ImageContent[],
 ): Promise<{ paths: string[]; cleanup: () => Promise<void> }> {
-  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-images-"));
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "smart-agent-neo-cli-images-"));
   const paths: string[] = [];
   for (let i = 0; i < images.length; i += 1) {
     const image = images[i];

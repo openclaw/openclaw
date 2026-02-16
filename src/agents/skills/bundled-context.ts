@@ -29,7 +29,7 @@ export function resolveBundledSkillsContext(
   if (cachedBundledContext?.dir === dir) {
     return { dir, names: new Set(cachedBundledContext.names) };
   }
-  const result = loadSkillsFromDir({ dir, source: "openclaw-bundled" });
+  const result = loadSkillsFromDir({ dir, source: "smart-agent-neo-bundled" });
   for (const skill of result.skills) {
     if (skill.name.trim()) {
       names.add(skill.name);

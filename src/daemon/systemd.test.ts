@@ -59,45 +59,45 @@ describe("systemd runtime parsing", () => {
 });
 
 describe("resolveSystemdUserUnitPath", () => {
-  it("uses default service name when OPENCLAW_PROFILE is unset", () => {
+  it("uses default service name when SMART_AGENT_NEO_PROFILE is unset", () => {
     const env = { HOME: "/home/test" };
     expect(resolveSystemdUserUnitPath(env)).toBe(
-      "/home/test/.config/systemd/user/openclaw-gateway.service",
+      "/home/test/.config/systemd/user/smart-agent-neo-gateway.service",
     );
   });
 
-  it("uses profile-specific service name when OPENCLAW_PROFILE is set to a custom value", () => {
-    const env = { HOME: "/home/test", OPENCLAW_PROFILE: "jbphoenix" };
+  it("uses profile-specific service name when SMART_AGENT_NEO_PROFILE is set to a custom value", () => {
+    const env = { HOME: "/home/test", SMART_AGENT_NEO_PROFILE: "jbphoenix" };
     expect(resolveSystemdUserUnitPath(env)).toBe(
-      "/home/test/.config/systemd/user/openclaw-gateway-jbphoenix.service",
+      "/home/test/.config/systemd/user/smart-agent-neo-gateway-jbphoenix.service",
     );
   });
 
-  it("prefers OPENCLAW_SYSTEMD_UNIT over OPENCLAW_PROFILE", () => {
+  it("prefers SMART_AGENT_NEO_SYSTEMD_UNIT over SMART_AGENT_NEO_PROFILE", () => {
     const env = {
       HOME: "/home/test",
-      OPENCLAW_PROFILE: "jbphoenix",
-      OPENCLAW_SYSTEMD_UNIT: "custom-unit",
+      SMART_AGENT_NEO_PROFILE: "jbphoenix",
+      SMART_AGENT_NEO_SYSTEMD_UNIT: "custom-unit",
     };
     expect(resolveSystemdUserUnitPath(env)).toBe(
       "/home/test/.config/systemd/user/custom-unit.service",
     );
   });
 
-  it("handles OPENCLAW_SYSTEMD_UNIT with .service suffix", () => {
+  it("handles SMART_AGENT_NEO_SYSTEMD_UNIT with .service suffix", () => {
     const env = {
       HOME: "/home/test",
-      OPENCLAW_SYSTEMD_UNIT: "custom-unit.service",
+      SMART_AGENT_NEO_SYSTEMD_UNIT: "custom-unit.service",
     };
     expect(resolveSystemdUserUnitPath(env)).toBe(
       "/home/test/.config/systemd/user/custom-unit.service",
     );
   });
 
-  it("trims whitespace from OPENCLAW_SYSTEMD_UNIT", () => {
+  it("trims whitespace from SMART_AGENT_NEO_SYSTEMD_UNIT", () => {
     const env = {
       HOME: "/home/test",
-      OPENCLAW_SYSTEMD_UNIT: "  custom-unit  ",
+      SMART_AGENT_NEO_SYSTEMD_UNIT: "  custom-unit  ",
     };
     expect(resolveSystemdUserUnitPath(env)).toBe(
       "/home/test/.config/systemd/user/custom-unit.service",
@@ -107,8 +107,8 @@ describe("resolveSystemdUserUnitPath", () => {
 
 describe("splitArgsPreservingQuotes", () => {
   it("splits on whitespace outside quotes", () => {
-    expect(splitArgsPreservingQuotes('/usr/bin/openclaw gateway start --name "My Bot"')).toEqual([
-      "/usr/bin/openclaw",
+    expect(splitArgsPreservingQuotes('/usr/bin/smart-agent-neo gateway start --name "My Bot"')).toEqual([
+      "/usr/bin/smart-agent-neo",
       "gateway",
       "start",
       "--name",
@@ -118,32 +118,32 @@ describe("splitArgsPreservingQuotes", () => {
 
   it("supports systemd-style backslash escaping", () => {
     expect(
-      splitArgsPreservingQuotes('openclaw --name "My \\"Bot\\"" --foo bar', {
+      splitArgsPreservingQuotes('smart-agent-neo --name "My \\"Bot\\"" --foo bar', {
         escapeMode: "backslash",
       }),
-    ).toEqual(["openclaw", "--name", 'My "Bot"', "--foo", "bar"]);
+    ).toEqual(["smart-agent-neo", "--name", 'My "Bot"', "--foo", "bar"]);
   });
 
   it("supports schtasks-style escaped quotes while preserving other backslashes", () => {
     expect(
-      splitArgsPreservingQuotes('openclaw --path "C:\\\\Program Files\\\\OpenClaw"', {
+      splitArgsPreservingQuotes('smart-agent-neo --path "C:\\\\Program Files\\\\SmartAgentNeo"', {
         escapeMode: "backslash-quote-only",
       }),
-    ).toEqual(["openclaw", "--path", "C:\\\\Program Files\\\\OpenClaw"]);
+    ).toEqual(["smart-agent-neo", "--path", "C:\\\\Program Files\\\\SmartAgentNeo"]);
 
     expect(
-      splitArgsPreservingQuotes('openclaw --label "My \\"Quoted\\" Name"', {
+      splitArgsPreservingQuotes('smart-agent-neo --label "My \\"Quoted\\" Name"', {
         escapeMode: "backslash-quote-only",
       }),
-    ).toEqual(["openclaw", "--label", 'My "Quoted" Name']);
+    ).toEqual(["smart-agent-neo", "--label", 'My "Quoted" Name']);
   });
 });
 
 describe("parseSystemdExecStart", () => {
   it("preserves quoted arguments", () => {
-    const execStart = '/usr/bin/openclaw gateway start --name "My Bot"';
+    const execStart = '/usr/bin/smart-agent-neo gateway start --name "My Bot"';
     expect(parseSystemdExecStart(execStart)).toEqual([
-      "/usr/bin/openclaw",
+      "/usr/bin/smart-agent-neo",
       "gateway",
       "start",
       "--name",

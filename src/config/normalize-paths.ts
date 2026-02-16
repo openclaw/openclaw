@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "./types.js";
+import type { SmartAgentNeoConfig } from "./types.js";
 import { isPlainObject, resolveUserPath } from "../utils.js";
 
 const PATH_VALUE_RE = /^~(?=$|[\\/])/;
@@ -60,7 +60,7 @@ function normalizeAny(key: string | undefined, value: unknown): unknown {
  * Goal: accept `~/...` consistently across config file + env overrides, while
  * keeping the surface area small and predictable.
  */
-export function normalizeConfigPaths(cfg: OpenClawConfig): OpenClawConfig {
+export function normalizeConfigPaths(cfg: SmartAgentNeoConfig): SmartAgentNeoConfig {
   if (!cfg || typeof cfg !== "object") {
     return cfg;
   }

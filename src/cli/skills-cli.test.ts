@@ -48,7 +48,7 @@ describe("skills-cli", () => {
       const report = createMockReport([]);
       const output = formatSkillsList(report, {});
       expect(output).toContain("No skills found");
-      expect(output).toContain("npx clawhub");
+      expect(output).toContain("npx neohub");
     });
 
     it("formats skills list with eligible skill", () => {
@@ -128,7 +128,7 @@ describe("skills-cli", () => {
       const report = createMockReport([]);
       const output = formatSkillInfo(report, "unknown-skill", {});
       expect(output).toContain("not found");
-      expect(output).toContain("npx clawhub");
+      expect(output).toContain("npx neohub");
     });
 
     it("shows detailed info for a skill", () => {
@@ -188,7 +188,7 @@ describe("skills-cli", () => {
       expect(output).toContain("ready-2");
       expect(output).toContain("not-ready");
       expect(output).toContain("go"); // missing binary
-      expect(output).toContain("npx clawhub");
+      expect(output).toContain("npx neohub");
     });
 
     it("outputs JSON with --json flag", () => {
@@ -210,10 +210,10 @@ describe("skills-cli", () => {
     let buildWorkspaceSkillStatus: typeof import("../agents/skills-status.js").buildWorkspaceSkillStatus;
 
     beforeAll(async () => {
-      envSnapshot = captureEnv(["OPENCLAW_BUNDLED_SKILLS_DIR"]);
-      tempWorkspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-skills-test-"));
-      tempBundledDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-skills-test-"));
-      process.env.OPENCLAW_BUNDLED_SKILLS_DIR = tempBundledDir;
+      envSnapshot = captureEnv(["SMART_AGENT_NEO_BUNDLED_SKILLS_DIR"]);
+      tempWorkspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "smart-agent-neo-skills-test-"));
+      tempBundledDir = fs.mkdtempSync(path.join(os.tmpdir(), "smart-agent-neo-bundled-skills-test-"));
+      process.env.SMART_AGENT_NEO_BUNDLED_SKILLS_DIR = tempBundledDir;
       ({ buildWorkspaceSkillStatus } = await import("../agents/skills-status.js"));
     });
 
@@ -234,7 +234,7 @@ describe("skills-cli", () => {
           skill: {
             name: "peekaboo",
             description: "Capture UI screenshots",
-            source: "openclaw-bundled",
+            source: "smart-agent-neo-bundled",
             filePath: path.join(baseDir, "SKILL.md"),
             baseDir,
           } as SkillEntry["skill"],

@@ -14,30 +14,30 @@ type CommandOptions = Record<string, unknown>;
 
 const SANDBOX_EXAMPLES = {
   main: [
-    ["openclaw sandbox list", "List all sandbox containers."],
-    ["openclaw sandbox list --browser", "List only browser containers."],
-    ["openclaw sandbox recreate --all", "Recreate all containers."],
-    ["openclaw sandbox recreate --session main", "Recreate a specific session."],
-    ["openclaw sandbox recreate --agent mybot", "Recreate agent containers."],
-    ["openclaw sandbox explain", "Explain effective sandbox config."],
+    ["smart-agent-neo sandbox list", "List all sandbox containers."],
+    ["smart-agent-neo sandbox list --browser", "List only browser containers."],
+    ["smart-agent-neo sandbox recreate --all", "Recreate all containers."],
+    ["smart-agent-neo sandbox recreate --session main", "Recreate a specific session."],
+    ["smart-agent-neo sandbox recreate --agent mybot", "Recreate agent containers."],
+    ["smart-agent-neo sandbox explain", "Explain effective sandbox config."],
   ],
   list: [
-    ["openclaw sandbox list", "List all sandbox containers."],
-    ["openclaw sandbox list --browser", "List only browser containers."],
-    ["openclaw sandbox list --json", "JSON output."],
+    ["smart-agent-neo sandbox list", "List all sandbox containers."],
+    ["smart-agent-neo sandbox list --browser", "List only browser containers."],
+    ["smart-agent-neo sandbox list --json", "JSON output."],
   ],
   recreate: [
-    ["openclaw sandbox recreate --all", "Recreate all containers."],
-    ["openclaw sandbox recreate --session main", "Recreate a specific session."],
-    ["openclaw sandbox recreate --agent mybot", "Recreate a specific agent (includes sub-agents)."],
-    ["openclaw sandbox recreate --browser --all", "Recreate only browser containers."],
-    ["openclaw sandbox recreate --all --force", "Skip confirmation."],
+    ["smart-agent-neo sandbox recreate --all", "Recreate all containers."],
+    ["smart-agent-neo sandbox recreate --session main", "Recreate a specific session."],
+    ["smart-agent-neo sandbox recreate --agent mybot", "Recreate a specific agent (includes sub-agents)."],
+    ["smart-agent-neo sandbox recreate --browser --all", "Recreate only browser containers."],
+    ["smart-agent-neo sandbox recreate --all --force", "Skip confirmation."],
   ],
   explain: [
-    ["openclaw sandbox explain", "Show effective sandbox config."],
-    ["openclaw sandbox explain --session agent:main:main", "Explain a specific session."],
-    ["openclaw sandbox explain --agent work", "Explain an agent sandbox."],
-    ["openclaw sandbox explain --json", "JSON output."],
+    ["smart-agent-neo sandbox explain", "Show effective sandbox config."],
+    ["smart-agent-neo sandbox explain --session agent:main:main", "Explain a specific session."],
+    ["smart-agent-neo sandbox explain --agent work", "Explain an agent sandbox."],
+    ["smart-agent-neo sandbox explain --json", "JSON output."],
   ],
 } as const;
 
@@ -67,7 +67,7 @@ export function registerSandboxCli(program: Command) {
     .addHelpText(
       "after",
       () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/sandbox", "docs.openclaw.ai/cli/sandbox")}\n`,
+        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/sandbox", "docs.smart-agent-neo.ai/cli/sandbox")}\n`,
     )
     .action(() => {
       sandbox.help({ error: true });

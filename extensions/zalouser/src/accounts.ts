@@ -1,9 +1,9 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import type { SmartAgentNeoConfig } from "smart-agent-neo/plugin-sdk";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "smart-agent-neo/plugin-sdk/account-id";
 import type { ResolvedZalouserAccount, ZalouserAccountConfig, ZalouserConfig } from "./types.js";
 import { runZca, parseJsonOutput } from "./zca.js";
 
-function listConfiguredAccountIds(cfg: OpenClawConfig): string[] {
+function listConfiguredAccountIds(cfg: SmartAgentNeoConfig): string[] {
   const accounts = (cfg.channels?.zalouser as ZalouserConfig | undefined)?.accounts;
   if (!accounts || typeof accounts !== "object") {
     return [];
@@ -11,7 +11,7 @@ function listConfiguredAccountIds(cfg: OpenClawConfig): string[] {
   return Object.keys(accounts).filter(Boolean);
 }
 
-export function listZalouserAccountIds(cfg: OpenClawConfig): string[] {
+export function listZalouserAccountIds(cfg: SmartAgentNeoConfig): string[] {
   const ids = listConfiguredAccountIds(cfg);
   if (ids.length === 0) {
     return [DEFAULT_ACCOUNT_ID];
@@ -19,7 +19,7 @@ export function listZalouserAccountIds(cfg: OpenClawConfig): string[] {
   return ids.toSorted((a, b) => a.localeCompare(b));
 }
 
-export function resolveDefaultZalouserAccountId(cfg: OpenClawConfig): string {
+export function resolveDefaultZalouserAccountId(cfg: SmartAgentNeoConfig): string {
   const zalouserConfig = cfg.channels?.zalouser as ZalouserConfig | undefined;
   if (zalouserConfig?.defaultAccount?.trim()) {
     return zalouserConfig.defaultAccount.trim();
@@ -32,7 +32,7 @@ export function resolveDefaultZalouserAccountId(cfg: OpenClawConfig): string {
 }
 
 function resolveAccountConfig(
-  cfg: OpenClawConfig,
+  cfg: SmartAgentNeoConfig,
   accountId: string,
 ): ZalouserAccountConfig | undefined {
   const accounts = (cfg.channels?.zalouser as ZalouserConfig | undefined)?.accounts;
@@ -42,7 +42,7 @@ function resolveAccountConfig(
   return accounts[accountId] as ZalouserAccountConfig | undefined;
 }
 
-function mergeZalouserAccountConfig(cfg: OpenClawConfig, accountId: string): ZalouserAccountConfig {
+function mergeZalouserAccountConfig(cfg: SmartAgentNeoConfig, accountId: string): ZalouserAccountConfig {
   const raw = (cfg.channels?.zalouser ?? {}) as ZalouserConfig;
   const { accounts: _ignored, defaultAccount: _ignored2, ...base } = raw;
   const account = resolveAccountConfig(cfg, accountId) ?? {};
@@ -68,7 +68,7 @@ export async function checkZcaAuthenticated(profile: string): Promise<boolean> {
 }
 
 export async function resolveZalouserAccount(params: {
-  cfg: OpenClawConfig;
+  cfg: SmartAgentNeoConfig;
   accountId?: string | null;
 }): Promise<ResolvedZalouserAccount> {
   const accountId = normalizeAccountId(params.accountId);
@@ -91,7 +91,7 @@ export async function resolveZalouserAccount(params: {
 }
 
 export function resolveZalouserAccountSync(params: {
-  cfg: OpenClawConfig;
+  cfg: SmartAgentNeoConfig;
   accountId?: string | null;
 }): ResolvedZalouserAccount {
   const accountId = normalizeAccountId(params.accountId);
@@ -113,7 +113,7 @@ export function resolveZalouserAccountSync(params: {
 }
 
 export async function listEnabledZalouserAccounts(
-  cfg: OpenClawConfig,
+  cfg: SmartAgentNeoConfig,
 ): Promise<ResolvedZalouserAccount[]> {
   const ids = listZalouserAccountIds(cfg);
   const accounts = await Promise.all(

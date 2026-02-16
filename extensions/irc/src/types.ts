@@ -1,4 +1,4 @@
-import type { BaseProbeResult } from "openclaw/plugin-sdk";
+import type { BaseProbeResult } from "smart-agent-neo/plugin-sdk";
 import type {
   BlockStreamingCoalesceConfig,
   DmConfig,
@@ -7,8 +7,8 @@ import type {
   GroupToolPolicyBySenderConfig,
   GroupToolPolicyConfig,
   MarkdownConfig,
-  OpenClawConfig,
-} from "openclaw/plugin-sdk";
+  SmartAgentNeoConfig,
+} from "smart-agent-neo/plugin-sdk";
 
 export type IrcChannelConfig = {
   requireMention?: boolean;
@@ -64,8 +64,8 @@ export type IrcConfig = IrcAccountConfig & {
   accounts?: Record<string, IrcAccountConfig>;
 };
 
-export type CoreConfig = OpenClawConfig & {
-  channels?: OpenClawConfig["channels"] & {
+export type CoreConfig = SmartAgentNeoConfig & {
+  channels?: SmartAgentNeoConfig["channels"] & {
     irc?: IrcConfig;
   };
 };

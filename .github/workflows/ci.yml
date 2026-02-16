@@ -86,7 +86,7 @@ jobs:
             case "$path" in
               # Generated protocol models are already covered by protocol:check and
               # should not force the full native macOS lane.
-              apps/macos/Sources/OpenClawProtocol/*|apps/shared/OpenClawKit/Sources/OpenClawProtocol/*)
+              apps/macos/Sources/SmartAgentNeoProtocol/*|apps/shared/SmartAgentNeoKit/Sources/SmartAgentNeoProtocol/*)
                 ;;
               apps/macos/*|apps/ios/*|apps/shared/*|Swabble/*)
                 run_macos=true
@@ -100,7 +100,7 @@ jobs:
             esac
 
             case "$path" in
-              src/*|test/*|extensions/*|packages/*|scripts/*|ui/*|.github/*|openclaw.mjs|package.json|pnpm-lock.yaml|pnpm-workspace.yaml|tsconfig*.json|vitest*.ts|tsdown.config.ts|.oxlintrc.json|.oxfmtrc.jsonc)
+              src/*|test/*|extensions/*|packages/*|scripts/*|ui/*|.github/*|smart-agent-neo.mjs|package.json|pnpm-lock.yaml|pnpm-workspace.yaml|tsconfig*.json|vitest*.ts|tsdown.config.ts|.oxlintrc.json|.oxfmtrc.jsonc)
                 run_node=true
                 ;;
             esac
@@ -202,15 +202,15 @@ jobs:
 
       - name: Configure vitest JSON reports
         if: matrix.task == 'test' && matrix.runtime == 'node'
-        run: echo "OPENCLAW_VITEST_REPORT_DIR=$RUNNER_TEMP/vitest-reports" >> "$GITHUB_ENV"
+        run: echo "SMART_AGENT_NEO_VITEST_REPORT_DIR=$RUNNER_TEMP/vitest-reports" >> "$GITHUB_ENV"
 
       - name: Configure Node test resources
         if: matrix.task == 'test' && matrix.runtime == 'node'
         run: |
           # `pnpm test` runs `scripts/test-parallel.mjs`, which spawns multiple Node processes.
           # Default heap limits have been too low on Linux CI (V8 OOM near 4GB).
-          echo "OPENCLAW_TEST_WORKERS=2" >> "$GITHUB_ENV"
-          echo "OPENCLAW_TEST_MAX_OLD_SPACE_SIZE_MB=6144" >> "$GITHUB_ENV"
+          echo "SMART_AGENT_NEO_TEST_WORKERS=2" >> "$GITHUB_ENV"
+          echo "SMART_AGENT_NEO_TEST_MAX_OLD_SPACE_SIZE_MB=6144" >> "$GITHUB_ENV"
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         run: ${{ matrix.command }}
@@ -218,7 +218,7 @@ jobs:
       - name: Summarize slowest tests
         if: matrix.task == 'test' && matrix.runtime == 'node'
         run: |
-          node scripts/vitest-slowest.mjs --dir "$OPENCLAW_VITEST_REPORT_DIR" --top 50 --out "$RUNNER_TEMP/vitest-slowest.md" > /dev/null
+          node scripts/vitest-slowest.mjs --dir "$SMART_AGENT_NEO_VITEST_REPORT_DIR" --top 50 --out "$RUNNER_TEMP/vitest-slowest.md" > /dev/null
           echo "Slowest test summary written to $RUNNER_TEMP/vitest-slowest.md"
 
       - name: Upload vitest reports
@@ -227,7 +227,7 @@ jobs:
         with:
           name: vitest-reports-${{ runner.os }}-${{ matrix.runtime }}
           path: |
-            ${{ env.OPENCLAW_VITEST_REPORT_DIR }}
+            ${{ env.SMART_AGENT_NEO_VITEST_REPORT_DIR }}
             ${{ runner.temp }}/vitest-slowest.md
 
   # Types, lint, and format check.
@@ -298,7 +298,7 @@ jobs:
       NODE_OPTIONS: --max-old-space-size=4096
       # Keep total concurrency predictable on the 4 vCPU runner:
       # `scripts/test-parallel.mjs` runs some vitest suites in parallel processes.
-      OPENCLAW_TEST_WORKERS: 2
+      SMART_AGENT_NEO_TEST_WORKERS: 2
     defaults:
       run:
         shell: bash
@@ -393,7 +393,7 @@ jobs:
 
       - name: Configure vitest JSON reports
         if: matrix.task == 'test'
-        run: echo "OPENCLAW_VITEST_REPORT_DIR=$RUNNER_TEMP/vitest-reports" >> "$GITHUB_ENV"
+        run: echo "SMART_AGENT_NEO_VITEST_REPORT_DIR=$RUNNER_TEMP/vitest-reports" >> "$GITHUB_ENV"
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         run: ${{ matrix.command }}
@@ -401,7 +401,7 @@ jobs:
       - name: Summarize slowest tests
         if: matrix.task == 'test'
         run: |
-          node scripts/vitest-slowest.mjs --dir "$OPENCLAW_VITEST_REPORT_DIR" --top 50 --out "$RUNNER_TEMP/vitest-slowest.md" > /dev/null
+          node scripts/vitest-slowest.mjs --dir "$SMART_AGENT_NEO_VITEST_REPORT_DIR" --top 50 --out "$RUNNER_TEMP/vitest-slowest.md" > /dev/null
           echo "Slowest test summary written to $RUNNER_TEMP/vitest-slowest.md"
 
       - name: Upload vitest reports
@@ -410,7 +410,7 @@ jobs:
         with:
           name: vitest-reports-${{ runner.os }}-${{ matrix.runtime }}
           path: |
-            ${{ env.OPENCLAW_VITEST_REPORT_DIR }}
+            ${{ env.SMART_AGENT_NEO_VITEST_REPORT_DIR }}
             ${{ runner.temp }}/vitest-slowest.md
 
   # Consolidated macOS job: runs TS tests + Swift lint/build/test sequentially
@@ -524,7 +524,7 @@ jobs:
       - name: iOS tests
         run: |
           set -euo pipefail
-          RESULT_BUNDLE_PATH="$RUNNER_TEMP/Clawdis-iOS.xcresult"
+          RESULT_BUNDLE_PATH="$RUNNER_TEMP/Neois-iOS.xcresult"
           DEST_ID="$(
             python3 - <<'PY'
           import json
@@ -603,8 +603,8 @@ jobs:
           )"
           echo "Using iOS Simulator id: $DEST_ID"
           xcodebuild test \
-            -project apps/ios/Clawdis.xcodeproj \
-            -scheme Clawdis \
+            -project apps/ios/Neois.xcodeproj \
+            -scheme Neois \
             -destination "platform=iOS Simulator,id=$DEST_ID" \
             -resultBundlePath "$RESULT_BUNDLE_PATH" \
             -enableCodeCoverage YES
@@ -612,20 +612,20 @@ jobs:
       - name: iOS coverage summary
         run: |
           set -euo pipefail
-          RESULT_BUNDLE_PATH="$RUNNER_TEMP/Clawdis-iOS.xcresult"
+          RESULT_BUNDLE_PATH="$RUNNER_TEMP/Neois-iOS.xcresult"
           xcrun xccov view --report --only-targets "$RESULT_BUNDLE_PATH"
 
       - name: iOS coverage gate (43%)
         run: |
           set -euo pipefail
-          RESULT_BUNDLE_PATH="$RUNNER_TEMP/Clawdis-iOS.xcresult"
+          RESULT_BUNDLE_PATH="$RUNNER_TEMP/Neois-iOS.xcresult"
           RESULT_BUNDLE_PATH="$RESULT_BUNDLE_PATH" python3 - <<'PY'
           import json
           import os
           import subprocess
           import sys
 
-          target_name = "Clawdis.app"
+          target_name = "Neois.app"
           minimum = 0.43
 
           report = json.loads(

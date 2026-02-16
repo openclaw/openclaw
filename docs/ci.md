@@ -1,6 +1,6 @@
 ---
 title: CI Pipeline
-description: How the OpenClaw CI pipeline works
+description: How the SmartAgentNeo CI pipeline works
 ---
 
 # CI Pipeline

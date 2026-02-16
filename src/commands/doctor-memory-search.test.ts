@@ -1,6 +1,6 @@
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { SmartAgentNeoConfig } from "../config/config.js";
 
 const note = vi.hoisted(() => vi.fn());
 const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "agent-default"));
@@ -29,7 +29,7 @@ import { noteMemorySearchHealth } from "./doctor-memory-search.js";
 import { detectLegacyWorkspaceDirs } from "./doctor-workspace.js";
 
 describe("noteMemorySearchHealth", () => {
-  const cfg = {} as OpenClawConfig;
+  const cfg = {} as SmartAgentNeoConfig;
 
   async function expectNoWarningWithConfiguredRemoteApiKey(provider: string) {
     resolveMemorySearchConfig.mockReturnValue({
@@ -85,7 +85,7 @@ describe("noteMemorySearchHealth", () => {
 
 describe("detectLegacyWorkspaceDirs", () => {
   it("returns active workspace and no legacy dirs", () => {
-    const workspaceDir = "/home/user/openclaw";
+    const workspaceDir = "/home/user/smart-agent-neo";
     const detection = detectLegacyWorkspaceDirs({ workspaceDir });
     expect(detection.activeWorkspace).toBe(path.resolve(workspaceDir));
     expect(detection.legacyDirs).toEqual([]);

@@ -148,10 +148,10 @@ Use `scripts/committer` with explicit file paths.
 
 Required subject format:
 
-- `fix: <summary> (openclaw#<PR>) thanks @<author>`
+- `fix: <summary> (smart-agent-neo#<PR>) thanks @<author>`
 
 ```sh
-commit_msg="fix: <summary> (openclaw#$pr_number) thanks @$contrib"
+commit_msg="fix: <summary> (smart-agent-neo#$pr_number) thanks @$contrib"
 scripts/committer "$commit_msg" <changed file 1> <changed file 2> ...
 ```
 
@@ -161,7 +161,7 @@ Post-commit validation (mandatory):
 
 ```sh
 subject=$(git log -1 --pretty=%s)
-echo "$subject" | rg -q "openclaw#$pr_number" || { echo "ERROR: commit subject missing openclaw#$pr_number"; exit 1; }
+echo "$subject" | rg -q "smart-agent-neo#$pr_number" || { echo "ERROR: commit subject missing smart-agent-neo#$pr_number"; exit 1; }
 echo "$subject" | rg -q "thanks @$contrib" || { echo "ERROR: commit subject missing thanks @$contrib"; exit 1; }
 ```
 

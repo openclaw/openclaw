@@ -118,9 +118,9 @@ describe("sessions.usage", () => {
 
   it("resolves store entries by sessionId when queried via discovered agent-prefixed key", async () => {
     const storeKey = "agent:opus:slack:dm:u123";
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-usage-test-"));
-    const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
-    process.env.OPENCLAW_STATE_DIR = stateDir;
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "smart-agent-neo-usage-test-"));
+    const envSnapshot = captureEnv(["SMART_AGENT_NEO_STATE_DIR"]);
+    process.env.SMART_AGENT_NEO_STATE_DIR = stateDir;
 
     try {
       const agentSessionsDir = path.join(stateDir, "agents", "opus", "sessions");

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { SmartAgentNeoConfig } from "../../config/config.js";
 import type { OutboundDeliveryJson } from "./format.js";
 import { telegramPlugin } from "../../../extensions/telegram/src/channel.js";
 import { whatsappPlugin } from "../../../extensions/whatsapp/src/channel.js";
@@ -42,7 +42,7 @@ describe("delivery-queue", () => {
   let tmpDir: string;
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-dq-test-"));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "smart-agent-neo-dq-test-"));
   });
 
   afterEach(() => {
@@ -400,7 +400,7 @@ describe("delivery-queue", () => {
 });
 
 describe("DirectoryCache", () => {
-  const cfg = {} as OpenClawConfig;
+  const cfg = {} as SmartAgentNeoConfig;
 
   afterEach(() => {
     vi.useRealTimers();
@@ -612,13 +612,13 @@ const slackConfig = {
       appToken: "xapp-test",
     },
   },
-} as OpenClawConfig;
+} as SmartAgentNeoConfig;
 
 const discordConfig = {
   channels: {
     discord: {},
   },
-} as OpenClawConfig;
+} as SmartAgentNeoConfig;
 
 describe("outbound policy", () => {
   it("blocks cross-provider sends by default", () => {
@@ -639,7 +639,7 @@ describe("outbound policy", () => {
       tools: {
         message: { crossContext: { allowAcrossProviders: true } },
       },
-    } as OpenClawConfig;
+    } as SmartAgentNeoConfig;
 
     expect(() =>
       enforceCrossContextPolicy({
@@ -656,7 +656,7 @@ describe("outbound policy", () => {
     const cfg = {
       ...slackConfig,
       tools: { message: { crossContext: { allowWithinProvider: false } } },
-    } as OpenClawConfig;
+    } as SmartAgentNeoConfig;
 
     expect(() =>
       enforceCrossContextPolicy({
@@ -692,7 +692,7 @@ describe("outbound policy", () => {
 });
 
 describe("resolveOutboundSessionRoute", () => {
-  const baseConfig = {} as OpenClawConfig;
+  const baseConfig = {} as SmartAgentNeoConfig;
 
   it("builds Slack thread session keys", async () => {
     const route = await resolveOutboundSessionRoute({
@@ -724,7 +724,7 @@ describe("resolveOutboundSessionRoute", () => {
   });
 
   it("treats Telegram usernames as DMs when unresolved", async () => {
-    const cfg = { session: { dmScope: "per-channel-peer" } } as OpenClawConfig;
+    const cfg = { session: { dmScope: "per-channel-peer" } } as SmartAgentNeoConfig;
     const route = await resolveOutboundSessionRoute({
       cfg,
       channel: "telegram",
@@ -744,7 +744,7 @@ describe("resolveOutboundSessionRoute", () => {
           alice: ["discord:123"],
         },
       },
-    } as OpenClawConfig;
+    } as SmartAgentNeoConfig;
 
     const route = await resolveOutboundSessionRoute({
       cfg,
@@ -769,7 +769,7 @@ describe("resolveOutboundSessionRoute", () => {
   });
 
   it("treats Zalo Personal DM targets as direct sessions", async () => {
-    const cfg = { session: { dmScope: "per-channel-peer" } } as OpenClawConfig;
+    const cfg = { session: { dmScope: "per-channel-peer" } } as SmartAgentNeoConfig;
     const route = await resolveOutboundSessionRoute({
       cfg,
       channel: "zalouser",
@@ -790,7 +790,7 @@ describe("resolveOutboundSessionRoute", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as SmartAgentNeoConfig;
 
     const route = await resolveOutboundSessionRoute({
       cfg,
@@ -890,7 +890,7 @@ describe("resolveOutboundTarget", () => {
   });
 
   it("rejects whatsapp with empty target even when allowFrom configured", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: SmartAgentNeoConfig = {
       channels: { whatsapp: { allowFrom: ["+1555"] } },
     };
     const res = resolveOutboundTarget({

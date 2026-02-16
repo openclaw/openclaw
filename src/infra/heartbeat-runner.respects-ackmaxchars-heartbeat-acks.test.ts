@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { SmartAgentNeoConfig } from "../config/config.js";
 import * as replyModule from "../auto-reply/reply.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
@@ -19,7 +19,7 @@ describe("resolveHeartbeatIntervalMs", () => {
     storePath: string;
     heartbeat: Record<string, unknown>;
     channels: Record<string, unknown>;
-  }): OpenClawConfig {
+  }): SmartAgentNeoConfig {
     return {
       agents: {
         defaults: {
@@ -34,7 +34,7 @@ describe("resolveHeartbeatIntervalMs", () => {
 
   async function seedMainSession(
     storePath: string,
-    cfg: OpenClawConfig,
+    cfg: SmartAgentNeoConfig,
     session: {
       sessionId?: string;
       updatedAt?: number;
@@ -114,7 +114,7 @@ describe("resolveHeartbeatIntervalMs", () => {
       replySpy: ReturnType<typeof vi.spyOn>;
     }) => Promise<T>,
   ) {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hb-"));
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "smart-agent-neo-hb-"));
     const storePath = path.join(tmpDir, "sessions.json");
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
     try {

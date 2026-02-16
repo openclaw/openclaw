@@ -2,7 +2,7 @@ import { vi } from "vitest";
 import { buildTelegramMessageContext } from "./bot-message-context.js";
 
 export const baseTelegramMessageContextConfig = {
-  agents: { defaults: { model: "anthropic/claude-opus-4-5", workspace: "/tmp/openclaw" } },
+  agents: { defaults: { model: "anthropic/claude-opus-4-5", workspace: "/tmp/smart-agent-neo" } },
   channels: { telegram: {} },
   messages: { groupChat: { mentionPatterns: [] } },
 } as never;

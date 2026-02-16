@@ -3,7 +3,7 @@
 swabble is a Swift 6.2 wake-word hook daemon. The CLI targets macOS 26 (SpeechAnalyzer + SpeechTranscriber). The shared `SwabbleKit` target is multi-platform and exposes wake-word gating utilities for iOS/macOS apps.
 
 - **Local-only**: Speech.framework on-device models; zero network usage.
-- **Wake word**: Default `clawd` (aliases `claude`), optional `--no-wake` bypass.
+- **Wake word**: Default `neo` (aliases `claude`), optional `--no-wake` bypass.
 - **SwabbleKit**: Shared wake gate utilities (gap-based gating when you provide speech segments).
 - **Hooks**: Run any command with prefix/env, cooldown, min_chars, timeout.
 - **Services**: launchd helper stubs for start/stop/install.
@@ -66,7 +66,7 @@ All commands accept Commander runtime flags (`-v/--verbose`, `--json-output`, `-
 ```json
 {
   "audio": {"deviceName": "", "deviceIndex": -1, "sampleRate": 16000, "channels": 1},
-  "wake": {"enabled": true, "word": "clawd", "aliases": ["claude"]},
+  "wake": {"enabled": true, "word": "neo", "aliases": ["claude"]},
   "hook": {
     "command": "",
     "args": [],

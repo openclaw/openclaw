@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { SmartAgentNeoConfig } from "../config/config.js";
 
 const { getMemorySearchManagerMock } = vi.hoisted(() => ({
   getMemorySearchManagerMock: vi.fn(),
@@ -20,7 +20,7 @@ describe("startGatewayMemoryBackend", () => {
     const cfg = {
       agents: { list: [{ id: "main", default: true }] },
       memory: { backend: "builtin" },
-    } as OpenClawConfig;
+    } as SmartAgentNeoConfig;
     const log = { info: vi.fn(), warn: vi.fn() };
 
     await startGatewayMemoryBackend({ cfg, log });
@@ -34,7 +34,7 @@ describe("startGatewayMemoryBackend", () => {
     const cfg = {
       agents: { list: [{ id: "ops", default: true }, { id: "main" }] },
       memory: { backend: "qmd", qmd: {} },
-    } as OpenClawConfig;
+    } as SmartAgentNeoConfig;
     const log = { info: vi.fn(), warn: vi.fn() };
     getMemorySearchManagerMock.mockResolvedValue({ manager: { search: vi.fn() } });
 
@@ -58,7 +58,7 @@ describe("startGatewayMemoryBackend", () => {
     const cfg = {
       agents: { list: [{ id: "main", default: true }, { id: "ops" }] },
       memory: { backend: "qmd", qmd: {} },
-    } as OpenClawConfig;
+    } as SmartAgentNeoConfig;
     const log = { info: vi.fn(), warn: vi.fn() };
     getMemorySearchManagerMock
       .mockResolvedValueOnce({ manager: null, error: "qmd missing" })

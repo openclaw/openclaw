@@ -1,12 +1,12 @@
 {
-  "name": "@openclaw/irc",
+  "name": "@smart-agent-neo/irc",
   "version": "2026.2.16",
-  "description": "OpenClaw IRC channel plugin",
+  "description": "SmartAgentNeo IRC channel plugin",
   "type": "module",
   "devDependencies": {
-    "openclaw": "workspace:*"
+    "smart-agent-neo": "workspace:*"
   },
-  "openclaw": {
+  "smart-agent-neo": {
     "extensions": [
       "./index.ts"
     ]

@@ -1,0 +1,5 @@
+import SmartAgentNeoKit
+import SmartAgentNeoProtocol
+
+typealias ProtoAnyCodable = SmartAgentNeoProtocol.AnyCodable
+typealias KitAnyCodable = SmartAgentNeoKit.AnyCodable

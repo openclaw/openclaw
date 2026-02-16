@@ -1,6 +1,6 @@
 import type { HistoryEntry } from "../../auto-reply/reply/history.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { SmartAgentNeoConfig } from "../../config/config.js";
 import type { DmPolicy, GroupPolicy, SignalReactionNotificationMode } from "../../config/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { SignalSender } from "../identity.js";
@@ -69,7 +69,7 @@ export type SignalReceivePayload = {
 
 export type SignalEventHandlerDeps = {
   runtime: RuntimeEnv;
-  cfg: OpenClawConfig;
+  cfg: SmartAgentNeoConfig;
   baseUrl: string;
   account?: string;
   accountId: string;

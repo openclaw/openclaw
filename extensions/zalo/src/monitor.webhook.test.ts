@@ -1,5 +1,5 @@
 import type { AddressInfo } from "node:net";
-import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk";
+import type { SmartAgentNeoConfig, PluginRuntime } from "smart-agent-neo/plugin-sdk";
 import { createServer } from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import type { ResolvedZaloAccount } from "./types.js";
@@ -37,7 +37,7 @@ describe("handleZaloWebhookRequest", () => {
     const unregister = registerZaloWebhookTarget({
       token: "tok",
       account,
-      config: {} as OpenClawConfig,
+      config: {} as SmartAgentNeoConfig,
       runtime: {},
       core,
       secret: "secret",
@@ -85,7 +85,7 @@ describe("handleZaloWebhookRequest", () => {
     const unregisterA = registerZaloWebhookTarget({
       token: "tok",
       account,
-      config: {} as OpenClawConfig,
+      config: {} as SmartAgentNeoConfig,
       runtime: {},
       core,
       secret: "secret",
@@ -96,7 +96,7 @@ describe("handleZaloWebhookRequest", () => {
     const unregisterB = registerZaloWebhookTarget({
       token: "tok",
       account,
-      config: {} as OpenClawConfig,
+      config: {} as SmartAgentNeoConfig,
       runtime: {},
       core,
       secret: "secret",

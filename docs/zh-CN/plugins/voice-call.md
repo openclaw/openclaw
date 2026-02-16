@@ -1,6 +1,6 @@
 ---
 read_when:
-  - 你想从 OpenClaw 发起出站语音通话
+  - 你想从 SmartAgentNeo 发起出站语音通话
   - 你正在配置或开发 voice-call 插件
 summary: Voice Call 插件：通过 Twilio/Telnyx/Plivo 进行出站 + 入站通话（插件安装 + 配置 + CLI）
 title: Voice Call 插件
@@ -15,7 +15,7 @@ x-i18n:
 
 # Voice Call（插件）
 
-通过插件为 OpenClaw 提供语音通话。支持出站通知和带有入站策略的多轮对话。
+通过插件为 SmartAgentNeo 提供语音通话。支持出站通知和带有入站策略的多轮对话。
 
 当前提供商：
 
@@ -29,7 +29,7 @@ x-i18n:
 - 安装插件
 - 重启 Gateway 网关
 - 在 `plugins.entries.voice-call.config` 下配置
-- 使用 `openclaw voicecall ...` 或 `voice_call` 工具
+- 使用 `smart-agent-neo voicecall ...` 或 `voice_call` 工具
 
 ## 运行位置（本地 vs 远程）
 
@@ -42,7 +42,7 @@ Voice Call 插件运行在 **Gateway 网关进程内部**。
 ### 选项 A：从 npm 安装（推荐）
 
 ```bash
-openclaw plugins install @openclaw/voice-call
+smart-agent-neo plugins install @smart-agent-neo/voice-call
 ```
 
 之后重启 Gateway 网关。
@@ -50,7 +50,7 @@ openclaw plugins install @openclaw/voice-call
 ### 选项 B：从本地文件夹安装（开发，不复制）
 
 ```bash
-openclaw plugins install ./extensions/voice-call
+smart-agent-neo plugins install ./extensions/voice-call
 cd ./extensions/voice-call && pnpm install
 ```
 
@@ -218,13 +218,13 @@ Voice Call 使用核心 `messages.tts` 配置（OpenAI 或 ElevenLabs）进行�
 ## CLI
 
 ```bash
-openclaw voicecall call --to "+15555550123" --message "Hello from OpenClaw"
-openclaw voicecall continue --call-id <id> --message "Any questions?"
-openclaw voicecall speak --call-id <id> --message "One moment"
-openclaw voicecall end --call-id <id>
-openclaw voicecall status --call-id <id>
-openclaw voicecall tail
-openclaw voicecall expose --mode funnel
+smart-agent-neo voicecall call --to "+15555550123" --message "Hello from SmartAgentNeo"
+smart-agent-neo voicecall continue --call-id <id> --message "Any questions?"
+smart-agent-neo voicecall speak --call-id <id> --message "One moment"
+smart-agent-neo voicecall end --call-id <id>
+smart-agent-neo voicecall status --call-id <id>
+smart-agent-neo voicecall tail
+smart-agent-neo voicecall expose --mode funnel
 ```
 
 ## 智能体工具

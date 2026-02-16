@@ -86,7 +86,7 @@ describe("resolveTelegramFetch", () => {
   });
 
   it("honors env enable override", async () => {
-    vi.stubEnv("OPENCLAW_TELEGRAM_ENABLE_AUTO_SELECT_FAMILY", "1");
+    vi.stubEnv("SMART_AGENT_NEO_TELEGRAM_ENABLE_AUTO_SELECT_FAMILY", "1");
     globalThis.fetch = vi.fn(async () => ({})) as unknown as typeof fetch;
     resolveTelegramFetch();
     expect(setDefaultAutoSelectFamily).toHaveBeenCalledWith(true);
@@ -99,8 +99,8 @@ describe("resolveTelegramFetch", () => {
   });
 
   it("env disable override wins over config", async () => {
-    vi.stubEnv("OPENCLAW_TELEGRAM_ENABLE_AUTO_SELECT_FAMILY", "0");
-    vi.stubEnv("OPENCLAW_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY", "1");
+    vi.stubEnv("SMART_AGENT_NEO_TELEGRAM_ENABLE_AUTO_SELECT_FAMILY", "0");
+    vi.stubEnv("SMART_AGENT_NEO_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY", "1");
     globalThis.fetch = vi.fn(async () => ({})) as unknown as typeof fetch;
     resolveTelegramFetch(undefined, { network: { autoSelectFamily: true } });
     expect(setDefaultAutoSelectFamily).toHaveBeenCalledWith(false);

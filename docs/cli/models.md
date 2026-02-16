@@ -1,12 +1,12 @@
 ---
-summary: "CLI reference for `openclaw models` (status/list/set/scan, aliases, fallbacks, auth)"
+summary: "CLI reference for `smart-agent-neo models` (status/list/set/scan, aliases, fallbacks, auth)"
 read_when:
   - You want to change default models or view provider auth status
   - You want to scan available models/providers and debug auth profiles
 title: "models"
 ---
 
-# `openclaw models`
+# `smart-agent-neo models`
 
 Model discovery, scanning, and configuration (default model, fallbacks, auth profiles).
 
@@ -18,26 +18,26 @@ Related:
 ## Common commands
 
 ```bash
-openclaw models status
-openclaw models list
-openclaw models set <model-or-alias>
-openclaw models scan
+smart-agent-neo models status
+smart-agent-neo models list
+smart-agent-neo models set <model-or-alias>
+smart-agent-neo models scan
 ```
 
-`openclaw models status` shows the resolved default/fallbacks plus an auth overview.
+`smart-agent-neo models status` shows the resolved default/fallbacks plus an auth overview.
 When provider usage snapshots are available, the OAuth/token status section includes
 provider usage headers.
 Add `--probe` to run live auth probes against each configured provider profile.
 Probes are real requests (may consume tokens and trigger rate limits).
 Use `--agent <id>` to inspect a configured agent’s model/auth state. When omitted,
-the command uses `OPENCLAW_AGENT_DIR`/`PI_CODING_AGENT_DIR` if set, otherwise the
+the command uses `SMART_AGENT_NEO_AGENT_DIR`/`PI_CODING_AGENT_DIR` if set, otherwise the
 configured default agent.
 
 Notes:
 
 - `models set <model-or-alias>` accepts `provider/model` or an alias.
 - Model refs are parsed by splitting on the **first** `/`. If the model ID includes `/` (OpenRouter-style), include the provider prefix (example: `openrouter/moonshotai/kimi-k2`).
-- If you omit the provider, OpenClaw treats the input as an alias or a model for the **default provider** (only works when there is no `/` in the model ID).
+- If you omit the provider, SmartAgentNeo treats the input as an alias or a model for the **default provider** (only works when there is no `/` in the model ID).
 
 ### `models status`
 
@@ -52,26 +52,26 @@ Options:
 - `--probe-timeout <ms>`
 - `--probe-concurrency <n>`
 - `--probe-max-tokens <n>`
-- `--agent <id>` (configured agent id; overrides `OPENCLAW_AGENT_DIR`/`PI_CODING_AGENT_DIR`)
+- `--agent <id>` (configured agent id; overrides `SMART_AGENT_NEO_AGENT_DIR`/`PI_CODING_AGENT_DIR`)
 
 ## Aliases + fallbacks
 
 ```bash
-openclaw models aliases list
-openclaw models fallbacks list
+smart-agent-neo models aliases list
+smart-agent-neo models fallbacks list
 ```
 
 ## Auth profiles
 
 ```bash
-openclaw models auth add
-openclaw models auth login --provider <id>
-openclaw models auth setup-token
-openclaw models auth paste-token
+smart-agent-neo models auth add
+smart-agent-neo models auth login --provider <id>
+smart-agent-neo models auth setup-token
+smart-agent-neo models auth paste-token
 ```
 
 `models auth login` runs a provider plugin’s auth flow (OAuth/API key). Use
-`openclaw plugins list` to see which providers are installed.
+`smart-agent-neo plugins list` to see which providers are installed.
 
 Notes:
 

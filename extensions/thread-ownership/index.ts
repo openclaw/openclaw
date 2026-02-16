@@ -1,11 +1,11 @@
-import type { OpenClawConfig, OpenClawPluginApi } from "openclaw/plugin-sdk";
+import type { SmartAgentNeoConfig, SmartAgentNeoPluginApi } from "smart-agent-neo/plugin-sdk";
 
 type ThreadOwnershipConfig = {
   forwarderUrl?: string;
   abTestChannels?: string[];
 };
 
-type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
+type AgentEntry = NonNullable<NonNullable<SmartAgentNeoConfig["agents"]>["list"]>[number];
 
 // In-memory set of {channel}:{thread} keys where this agent was @-mentioned.
 // Entries expire after 5 minutes.
@@ -21,7 +21,7 @@ function cleanExpiredMentions(): void {
   }
 }
 
-function resolveOwnershipAgent(config: OpenClawConfig): { id: string; name: string } {
+function resolveOwnershipAgent(config: SmartAgentNeoConfig): { id: string; name: string } {
   const list = Array.isArray(config.agents?.list)
     ? config.agents.list.filter((entry): entry is AgentEntry =>
         Boolean(entry && typeof entry === "object"),
@@ -39,7 +39,7 @@ function resolveOwnershipAgent(config: OpenClawConfig): { id: string; name: stri
   return { id, name };
 }
 
-export default function register(api: OpenClawPluginApi) {
+export default function register(api: SmartAgentNeoPluginApi) {
   const pluginCfg = (api.pluginConfig ?? {}) as ThreadOwnershipConfig;
   const forwarderUrl = (
     pluginCfg.forwarderUrl ??

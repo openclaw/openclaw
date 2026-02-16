@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { SmartAgentNeoConfig } from "../config/config.js";
 import { startHeartbeatRunner } from "./heartbeat-runner.js";
 
 describe("startHeartbeatRunner", () => {
@@ -7,7 +7,7 @@ describe("startHeartbeatRunner", () => {
     return startHeartbeatRunner({
       cfg: {
         agents: { defaults: { heartbeat: { every: "30m" } } },
-      } as OpenClawConfig,
+      } as SmartAgentNeoConfig,
       runOnce,
     });
   }
@@ -40,7 +40,7 @@ describe("startHeartbeatRunner", () => {
           { id: "ops", heartbeat: { every: "15m" } },
         ],
       },
-    } as OpenClawConfig);
+    } as SmartAgentNeoConfig);
 
     await vi.advanceTimersByTimeAsync(10 * 60_000 + 1_000);
 
@@ -95,7 +95,7 @@ describe("startHeartbeatRunner", () => {
 
     const cfg = {
       agents: { defaults: { heartbeat: { every: "30m" } } },
-    } as OpenClawConfig;
+    } as SmartAgentNeoConfig;
 
     // Start runner A
     const runnerA = startHeartbeatRunner({ cfg, runOnce: runSpy1 });
@@ -148,7 +148,7 @@ describe("startHeartbeatRunner", () => {
     const runner = startHeartbeatRunner({
       cfg: {
         agents: { defaults: { heartbeat: { every: "30m" } } },
-      } as OpenClawConfig,
+      } as SmartAgentNeoConfig,
       runOnce: runSpy,
     });
 

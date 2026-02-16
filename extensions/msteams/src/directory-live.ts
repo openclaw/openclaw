@@ -1,4 +1,4 @@
-import type { ChannelDirectoryEntry } from "openclaw/plugin-sdk";
+import type { ChannelDirectoryEntry } from "smart-agent-neo/plugin-sdk";
 import {
   escapeOData,
   fetchGraphJson,

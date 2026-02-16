@@ -1,5 +1,5 @@
 ---
-summary: "How OpenClaw sandboxing works: modes, scopes, workspace access, and images"
+summary: "How SmartAgentNeo sandboxing works: modes, scopes, workspace access, and images"
 title: Sandboxing
 read_when: "You want a dedicated explanation of sandboxing or need to tune agents.defaults.sandbox."
 status: active
@@ -7,7 +7,7 @@ status: active
 
 # Sandboxing
 
-OpenClaw can run **tools inside Docker containers** to reduce blast radius.
+SmartAgentNeo can run **tools inside Docker containers** to reduce blast radius.
 This is **optional** and controlled by configuration (`agents.defaults.sandbox` or
 `agents.list[].sandbox`). If sandboxing is off, tools run on the host.
 The Gateway stays on the host; tool execution runs in an isolated sandbox
@@ -54,13 +54,13 @@ Not sandboxed:
 
 `agents.defaults.sandbox.workspaceAccess` controls **what the sandbox can see**:
 
-- `"none"` (default): tools see a sandbox workspace under `~/.openclaw/sandboxes`.
+- `"none"` (default): tools see a sandbox workspace under `~/.smart-agent-neo/sandboxes`.
 - `"ro"`: mounts the agent workspace read-only at `/agent` (disables `write`/`edit`/`apply_patch`).
 - `"rw"`: mounts the agent workspace read/write at `/workspace`.
 
 Inbound media is copied into the active sandbox workspace (`media/inbound/*`).
 Skills note: the `read` tool is sandbox-rooted. With `workspaceAccess: "none"`,
-OpenClaw mirrors eligible skills into the sandbox workspace (`.../skills`) so
+SmartAgentNeo mirrors eligible skills into the sandbox workspace (`.../skills`) so
 they can be read. With `"rw"`, workspace skills are readable from
 `/workspace/skills`.
 
@@ -105,14 +105,14 @@ Example (read-only source + an extra data directory):
 Security notes:
 
 - Binds bypass the sandbox filesystem: they expose host paths with whatever mode you set (`:ro` or `:rw`).
-- OpenClaw blocks dangerous bind sources (for example: `docker.sock`, `/etc`, `/proc`, `/sys`, `/dev`, and parent mounts that would expose them).
+- SmartAgentNeo blocks dangerous bind sources (for example: `docker.sock`, `/etc`, `/proc`, `/sys`, `/dev`, and parent mounts that would expose them).
 - Sensitive mounts (secrets, SSH keys, service credentials) should be `:ro` unless absolutely required.
 - Combine with `workspaceAccess: "ro"` if you only need read access to the workspace; bind modes stay independent.
 - See [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) for how binds interact with tool policy and elevated exec.
 
 ## Images + setup
 
-Default image: `openclaw-sandbox:bookworm-slim`
+Default image: `smart-agent-neo-sandbox:bookworm-slim`
 
 Build it once:
 
@@ -166,7 +166,7 @@ globally or per-agent, sandboxing doesn’t bring it back.
 
 Debugging:
 
-- Use `openclaw sandbox explain` to inspect effective sandbox mode, tool policy, and fix-it config keys.
+- Use `smart-agent-neo sandbox explain` to inspect effective sandbox mode, tool policy, and fix-it config keys.
 - See [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) for the “why is this blocked?” mental model.
   Keep it locked down.
 

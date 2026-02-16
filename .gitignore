@@ -27,11 +27,11 @@ apps/android/.cxx/
 *.bun-build
 apps/macos/.build/
 apps/shared/MoltbotKit/.build/
-apps/shared/OpenClawKit/.build/
-apps/shared/OpenClawKit/Package.resolved
+apps/shared/SmartAgentNeoKit/.build/
+apps/shared/SmartAgentNeoKit/Package.resolved
 **/ModuleCache/
 bin/
-bin/clawdbot-mac
+bin/neobot-mac
 bin/docs-list
 apps/macos/.build-local/
 apps/macos/.swiftpm/
@@ -41,8 +41,8 @@ apps/ios/*.xcodeproj/
 apps/ios/*.xcworkspace/
 apps/ios/.swiftpm/
 vendor/
-apps/ios/Clawdbot.xcodeproj/
-apps/ios/Clawdbot.xcodeproj/**
+apps/ios/Neobot.xcodeproj/
+apps/ios/Neobot.xcodeproj/**
 apps/macos/.build/**
 **/*.bun-build
 apps/ios/*.xcfilelist

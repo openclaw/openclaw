@@ -1,8 +1,8 @@
 {
-  "name": "@openclaw/memory-lancedb",
+  "name": "@smart-agent-neo/memory-lancedb",
   "version": "2026.2.16",
   "private": true,
-  "description": "OpenClaw LanceDB-backed long-term memory plugin with auto-recall/capture",
+  "description": "SmartAgentNeo LanceDB-backed long-term memory plugin with auto-recall/capture",
   "type": "module",
   "dependencies": {
     "@lancedb/lancedb": "^0.26.2",
@@ -10,9 +10,9 @@
     "openai": "^6.22.0"
   },
   "devDependencies": {
-    "openclaw": "workspace:*"
+    "smart-agent-neo": "workspace:*"
   },
-  "openclaw": {
+  "smart-agent-neo": {
     "extensions": [
       "./index.ts"
     ]

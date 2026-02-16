@@ -132,7 +132,7 @@ describe("runReplyAgent authProfileId fallback scoping", () => {
         skillsSnapshot: {},
         provider: "anthropic",
         model: "claude-opus",
-        authProfileId: "anthropic:openclaw",
+        authProfileId: "anthropic:smart-agent-neo",
         authProfileIdSource: "manual",
         thinkLevel: "low",
         verboseLevel: "off",
@@ -257,7 +257,7 @@ describe("runReplyAgent auto-compaction token update", () => {
   }
 
   it("updates totalTokens after auto-compaction using lastCallUsage", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compact-tokens-"));
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "smart-agent-neo-compact-tokens-"));
     const storePath = path.join(tmp, "sessions.json");
     const sessionKey = "main";
     const sessionEntry = {
@@ -331,7 +331,7 @@ describe("runReplyAgent auto-compaction token update", () => {
   });
 
   it("updates totalTokens from lastCallUsage even without compaction", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-usage-last-"));
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "smart-agent-neo-usage-last-"));
     const storePath = path.join(tmp, "sessions.json");
     const sessionKey = "main";
     const sessionEntry = {
@@ -789,7 +789,7 @@ describe("runReplyAgent messaging tool suppression", () => {
 
   it("persists usage fields even when replies are suppressed", async () => {
     const storePath = path.join(
-      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-store-")),
+      await fs.mkdtemp(path.join(os.tmpdir(), "smart-agent-neo-session-store-")),
       "sessions.json",
     );
     const sessionKey = "main";
@@ -822,7 +822,7 @@ describe("runReplyAgent messaging tool suppression", () => {
 
   it("persists totalTokens from promptTokens when snapshot is available", async () => {
     const storePath = path.join(
-      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-store-")),
+      await fs.mkdtemp(path.join(os.tmpdir(), "smart-agent-neo-session-store-")),
       "sessions.json",
     );
     const sessionKey = "main";

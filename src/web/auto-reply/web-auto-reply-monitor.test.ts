@@ -11,7 +11,7 @@ let sessionDir: string | undefined;
 let sessionStorePath: string;
 
 beforeEach(async () => {
-  sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-group-gating-"));
+  sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "smart-agent-neo-group-gating-"));
   sessionStorePath = path.join(sessionDir, "sessions.json");
   await fs.writeFile(sessionStorePath, "{}");
 });
@@ -247,7 +247,7 @@ describe("applyGroupGating", () => {
           groups: { "*": { requireMention: false } },
         },
       },
-      messages: { groupChat: { mentionPatterns: ["@openclaw"] } },
+      messages: { groupChat: { mentionPatterns: ["@smart-agent-neo"] } },
     });
 
     const { result } = runGroupGating({
@@ -287,7 +287,7 @@ describe("buildInboundLine", () => {
   it("prefixes group messages with sender", () => {
     const line = buildInboundLine({
       cfg: {
-        agents: { defaults: { workspace: "/tmp/openclaw" } },
+        agents: { defaults: { workspace: "/tmp/smart-agent-neo" } },
         channels: { whatsapp: { messagePrefix: "" } },
       } as never,
       agentId: "main",
@@ -309,7 +309,7 @@ describe("buildInboundLine", () => {
   it("includes reply-to context blocks when replyToBody is present", () => {
     const line = buildInboundLine({
       cfg: {
-        agents: { defaults: { workspace: "/tmp/openclaw" } },
+        agents: { defaults: { workspace: "/tmp/smart-agent-neo" } },
         channels: { whatsapp: { messagePrefix: "" } },
       } as never,
       agentId: "main",
@@ -333,7 +333,7 @@ describe("buildInboundLine", () => {
   it("applies the WhatsApp messagePrefix when configured", () => {
     const line = buildInboundLine({
       cfg: {
-        agents: { defaults: { workspace: "/tmp/openclaw" } },
+        agents: { defaults: { workspace: "/tmp/smart-agent-neo" } },
         channels: { whatsapp: { messagePrefix: "[PFX]" } },
       } as never,
       agentId: "main",

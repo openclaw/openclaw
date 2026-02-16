@@ -1,6 +1,6 @@
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { SmartAgentNeoConfig } from "../config/config.js";
 import type { TelegramAccountConfig } from "../config/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { STATE_DIR } from "../config/paths.js";
@@ -47,7 +47,7 @@ describe("registerTelegramNativeCommands", () => {
     deliveryMocks.deliverReplies.mockResolvedValue({ delivered: true });
   });
 
-  const buildParams = (cfg: OpenClawConfig, accountId = "default") => ({
+  const buildParams = (cfg: SmartAgentNeoConfig, accountId = "default") => ({
     bot: {
       api: {
         setMyCommands: vi.fn().mockResolvedValue(undefined),
@@ -77,7 +77,7 @@ describe("registerTelegramNativeCommands", () => {
   });
 
   it("scopes skill commands when account binding exists", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: SmartAgentNeoConfig = {
       agents: {
         list: [{ id: "main", default: true }, { id: "butler" }],
       },
@@ -98,7 +98,7 @@ describe("registerTelegramNativeCommands", () => {
   });
 
   it("scopes skill commands to default agent without a matching binding (#15599)", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: SmartAgentNeoConfig = {
       agents: {
         list: [{ id: "main", default: true }, { id: "butler" }],
       },
@@ -113,7 +113,7 @@ describe("registerTelegramNativeCommands", () => {
   });
 
   it("truncates Telegram command registration to 100 commands", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: SmartAgentNeoConfig = {
       commands: { native: false },
     };
     const customCommands = Array.from({ length: 120 }, (_, index) => ({
@@ -152,7 +152,7 @@ describe("registerTelegramNativeCommands", () => {
   it("passes agent-scoped media roots for plugin command replies with media", async () => {
     const commandHandlers = new Map<string, (ctx: unknown) => Promise<void>>();
     const sendMessage = vi.fn().mockResolvedValue(undefined);
-    const cfg: OpenClawConfig = {
+    const cfg: SmartAgentNeoConfig = {
       agents: {
         list: [{ id: "main", default: true }, { id: "work" }],
       },

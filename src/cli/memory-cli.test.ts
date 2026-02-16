@@ -40,7 +40,7 @@ describe("memory cli", () => {
       files: 0,
       chunks: 0,
       dirty: false,
-      workspaceDir: "/tmp/openclaw",
+      workspaceDir: "/tmp/smart-agent-neo",
       dbPath: "/tmp/memory.sqlite",
       provider: "openai",
       model: "text-embedding-3-small",

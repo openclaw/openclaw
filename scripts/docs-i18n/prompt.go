@@ -60,8 +60,8 @@ Rules:
 - Use neutral documentation tone; prefer “你/你的”, avoid “您/您的”.
 - Insert a space between Latin characters and CJK text (W3C CLREQ), e.g., “Gateway 网关”, “Skills 配置”.
 - Use Chinese quotation marks “ and ” for Chinese prose; keep ASCII quotes inside code spans/blocks or literal CLI/keys.
-- Keep product names in English: OpenClaw, Pi, WhatsApp, Telegram, Discord, iMessage, Slack, Microsoft Teams, Google Chat, Signal.
-- For the OpenClaw Gateway, use “Gateway 网关”.
+- Keep product names in English: SmartAgentNeo, Pi, WhatsApp, Telegram, Discord, iMessage, Slack, Microsoft Teams, Google Chat, Signal.
+- For the SmartAgentNeo Gateway, use “Gateway 网关”.
 - Keep these terms in English: Skills, local loopback, Tailscale.
 - Never output an empty response; if unsure, return the source text unchanged.
 
@@ -92,7 +92,7 @@ Rules:
 - Use neutral documentation tone; avoid overly formal honorifics (e.g., avoid “〜でございます”).
 - Use Japanese quotation marks 「 and 」 for Japanese prose; keep ASCII quotes inside code spans/blocks or literal CLI/keys.
 - Do not add or remove spacing around Latin text just because it borders Japanese; keep spacing stable unless required by Japanese grammar.
-- Keep product names in English: OpenClaw, Pi, WhatsApp, Telegram, Discord, iMessage, Slack, Microsoft Teams, Google Chat, Signal.
+- Keep product names in English: SmartAgentNeo, Pi, WhatsApp, Telegram, Discord, iMessage, Slack, Microsoft Teams, Google Chat, Signal.
 - Keep these terms in English: Skills, local loopback, Tailscale.
 - Never output an empty response; if unsure, return the source text unchanged.
 
@@ -121,7 +121,7 @@ Rules:
 - Do not remove, reorder, or summarize content.
 - Use fluent, idiomatic technical language in the target language; avoid slang or jokes.
 - Use neutral documentation tone.
-- Keep product names in English: OpenClaw, Pi, WhatsApp, Telegram, Discord, iMessage, Slack, Microsoft Teams, Google Chat, Signal.
+- Keep product names in English: SmartAgentNeo, Pi, WhatsApp, Telegram, Discord, iMessage, Slack, Microsoft Teams, Google Chat, Signal.
 - Keep these terms in English: Skills, local loopback, Tailscale.
 - Never output an empty response; if unsure, return the source text unchanged.
 

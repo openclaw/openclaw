@@ -10,7 +10,7 @@ export function registerDaemonCli(program: Command) {
     .addHelpText(
       "after",
       () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/gateway", "docs.openclaw.ai/cli/gateway")}\n`,
+        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/gateway", "docs.smart-agent-neo.ai/cli/gateway")}\n`,
     );
 
   addGatewayServiceCommands(daemon, {

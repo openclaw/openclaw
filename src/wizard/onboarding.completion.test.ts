@@ -10,12 +10,12 @@ function createPrompter(confirmValue = false) {
 
 function createDeps() {
   return {
-    resolveCliName: () => "openclaw",
+    resolveCliName: () => "smart-agent-neo",
     checkShellCompletionStatus: vi.fn(async () => ({
       shell: "zsh",
       profileInstalled: false,
       cacheExists: false,
-      cachePath: "/tmp/openclaw.zsh",
+      cachePath: "/tmp/smart-agent-neo.zsh",
       usesSlowPattern: false,
     })),
     ensureCompletionCacheExists: vi.fn(async () => true),
@@ -31,8 +31,8 @@ describe("setupOnboardingShellCompletion", () => {
     await setupOnboardingShellCompletion({ flow: "quickstart", prompter, deps });
 
     expect(prompter.confirm).not.toHaveBeenCalled();
-    expect(deps.ensureCompletionCacheExists).toHaveBeenCalledWith("openclaw");
-    expect(deps.installCompletion).toHaveBeenCalledWith("zsh", true, "openclaw");
+    expect(deps.ensureCompletionCacheExists).toHaveBeenCalledWith("smart-agent-neo");
+    expect(deps.installCompletion).toHaveBeenCalledWith("zsh", true, "smart-agent-neo");
     expect(prompter.note).toHaveBeenCalled();
   });
 

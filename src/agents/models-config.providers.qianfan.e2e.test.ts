@@ -7,7 +7,7 @@ import { resolveImplicitProviders } from "./models-config.providers.js";
 
 describe("Qianfan provider", () => {
   it("should include qianfan when QIANFAN_API_KEY is configured", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    const agentDir = mkdtempSync(join(tmpdir(), "smart-agent-neo-test-"));
     const envSnapshot = captureEnv(["QIANFAN_API_KEY"]);
     process.env.QIANFAN_API_KEY = "test-key";
 

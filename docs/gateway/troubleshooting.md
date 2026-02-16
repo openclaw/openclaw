@@ -16,29 +16,29 @@ Start at [/help/troubleshooting](/help/troubleshooting) if you want the fast tri
 Run these first, in this order:
 
 ```bash
-openclaw status
-openclaw gateway status
-openclaw logs --follow
-openclaw doctor
-openclaw channels status --probe
+smart-agent-neo status
+smart-agent-neo gateway status
+smart-agent-neo logs --follow
+smart-agent-neo doctor
+smart-agent-neo channels status --probe
 ```
 
 Expected healthy signals:
 
-- `openclaw gateway status` shows `Runtime: running` and `RPC probe: ok`.
-- `openclaw doctor` reports no blocking config/service issues.
-- `openclaw channels status --probe` shows connected/ready channels.
+- `smart-agent-neo gateway status` shows `Runtime: running` and `RPC probe: ok`.
+- `smart-agent-neo doctor` reports no blocking config/service issues.
+- `smart-agent-neo channels status --probe` shows connected/ready channels.
 
 ## No replies
 
 If channels are up but nothing answers, check routing and policy before reconnecting anything.
 
 ```bash
-openclaw status
-openclaw channels status --probe
-openclaw pairing list <channel>
-openclaw config get channels
-openclaw logs --follow
+smart-agent-neo status
+smart-agent-neo channels status --probe
+smart-agent-neo pairing list <channel>
+smart-agent-neo config get channels
+smart-agent-neo logs --follow
 ```
 
 Look for:
@@ -64,11 +64,11 @@ Related:
 When dashboard/control UI will not connect, validate URL, auth mode, and secure context assumptions.
 
 ```bash
-openclaw gateway status
-openclaw status
-openclaw logs --follow
-openclaw doctor
-openclaw gateway status --json
+smart-agent-neo gateway status
+smart-agent-neo status
+smart-agent-neo logs --follow
+smart-agent-neo doctor
+smart-agent-neo gateway status --json
 ```
 
 Look for:
@@ -94,11 +94,11 @@ Related:
 Use this when service is installed but process does not stay up.
 
 ```bash
-openclaw gateway status
-openclaw status
-openclaw logs --follow
-openclaw doctor
-openclaw gateway status --deep
+smart-agent-neo gateway status
+smart-agent-neo status
+smart-agent-neo logs --follow
+smart-agent-neo doctor
+smart-agent-neo gateway status --deep
 ```
 
 Look for:
@@ -109,7 +109,7 @@ Look for:
 
 Common signatures:
 
-- `Gateway start blocked: set gateway.mode=local` → local gateway mode is not enabled. Fix: set `gateway.mode="local"` in your config (or run `openclaw configure`). If you are running OpenClaw via Podman using the dedicated `openclaw` user, the config lives at `~openclaw/.openclaw/openclaw.json`.
+- `Gateway start blocked: set gateway.mode=local` → local gateway mode is not enabled. Fix: set `gateway.mode="local"` in your config (or run `smart-agent-neo configure`). If you are running SmartAgentNeo via Podman using the dedicated `smart-agent-neo` user, the config lives at `~smart-agent-neo/.smart-agent-neo/smart-agent-neo.json`.
 - `refusing to bind gateway ... without auth` → non-loopback bind without token/password.
 - `another gateway instance is already listening` / `EADDRINUSE` → port conflict.
 
@@ -124,11 +124,11 @@ Related:
 If channel state is connected but message flow is dead, focus on policy, permissions, and channel specific delivery rules.
 
 ```bash
-openclaw channels status --probe
-openclaw pairing list <channel>
-openclaw status --deep
-openclaw logs --follow
-openclaw config get channels
+smart-agent-neo channels status --probe
+smart-agent-neo pairing list <channel>
+smart-agent-neo status --deep
+smart-agent-neo logs --follow
+smart-agent-neo config get channels
 ```
 
 Look for:
@@ -155,11 +155,11 @@ Related:
 If cron or heartbeat did not run or did not deliver, verify scheduler state first, then delivery target.
 
 ```bash
-openclaw cron status
-openclaw cron list
-openclaw cron runs --id <jobId> --limit 20
-openclaw system heartbeat last
-openclaw logs --follow
+smart-agent-neo cron status
+smart-agent-neo cron list
+smart-agent-neo cron runs --id <jobId> --limit 20
+smart-agent-neo system heartbeat last
+smart-agent-neo logs --follow
 ```
 
 Look for:
@@ -186,11 +186,11 @@ Related:
 If a node is paired but tools fail, isolate foreground, permission, and approval state.
 
 ```bash
-openclaw nodes status
-openclaw nodes describe --node <idOrNameOrIp>
-openclaw approvals get --node <idOrNameOrIp>
-openclaw logs --follow
-openclaw status
+smart-agent-neo nodes status
+smart-agent-neo nodes describe --node <idOrNameOrIp>
+smart-agent-neo approvals get --node <idOrNameOrIp>
+smart-agent-neo logs --follow
+smart-agent-neo status
 ```
 
 Look for:
@@ -217,11 +217,11 @@ Related:
 Use this when browser tool actions fail even though the gateway itself is healthy.
 
 ```bash
-openclaw browser status
-openclaw browser start --browser-profile openclaw
-openclaw browser profiles
-openclaw logs --follow
-openclaw doctor
+smart-agent-neo browser status
+smart-agent-neo browser start --browser-profile smart-agent-neo
+smart-agent-neo browser profiles
+smart-agent-neo logs --follow
+smart-agent-neo doctor
 ```
 
 Look for:
@@ -250,10 +250,10 @@ Most post-upgrade breakage is config drift or stricter defaults now being enforc
 ### 1) Auth and URL override behavior changed
 
 ```bash
-openclaw gateway status
-openclaw config get gateway.mode
-openclaw config get gateway.remote.url
-openclaw config get gateway.auth.mode
+smart-agent-neo gateway status
+smart-agent-neo config get gateway.mode
+smart-agent-neo config get gateway.remote.url
+smart-agent-neo config get gateway.auth.mode
 ```
 
 What to check:
@@ -269,10 +269,10 @@ Common signatures:
 ### 2) Bind and auth guardrails are stricter
 
 ```bash
-openclaw config get gateway.bind
-openclaw config get gateway.auth.token
-openclaw gateway status
-openclaw logs --follow
+smart-agent-neo config get gateway.bind
+smart-agent-neo config get gateway.auth.token
+smart-agent-neo gateway status
+smart-agent-neo logs --follow
 ```
 
 What to check:
@@ -288,10 +288,10 @@ Common signatures:
 ### 3) Pairing and device identity state changed
 
 ```bash
-openclaw devices list
-openclaw pairing list <channel>
-openclaw logs --follow
-openclaw doctor
+smart-agent-neo devices list
+smart-agent-neo pairing list <channel>
+smart-agent-neo logs --follow
+smart-agent-neo doctor
 ```
 
 What to check:
@@ -307,8 +307,8 @@ Common signatures:
 If the service config and runtime still disagree after checks, reinstall service metadata from the same profile/state directory:
 
 ```bash
-openclaw gateway install --force
-openclaw gateway restart
+smart-agent-neo gateway install --force
+smart-agent-neo gateway restart
 ```
 
 Related:

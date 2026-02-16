@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { SmartAgentNeoConfig } from "../../config/config.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
 import { getPrimaryCommand, hasHelpOrVersion } from "../argv.js";
 import { reparseProgramFromActionArgs } from "./action-reparse.js";
@@ -13,7 +13,7 @@ type SubCliEntry = {
 };
 
 const shouldRegisterPrimaryOnly = (argv: string[]) => {
-  if (isTruthyEnvValue(process.env.OPENCLAW_DISABLE_LAZY_SUBCOMMANDS)) {
+  if (isTruthyEnvValue(process.env.SMART_AGENT_NEO_DISABLE_LAZY_SUBCOMMANDS)) {
     return false;
   }
   if (hasHelpOrVersion(argv)) {
@@ -23,10 +23,10 @@ const shouldRegisterPrimaryOnly = (argv: string[]) => {
 };
 
 const shouldEagerRegisterSubcommands = (_argv: string[]) => {
-  return isTruthyEnvValue(process.env.OPENCLAW_DISABLE_LAZY_SUBCOMMANDS);
+  return isTruthyEnvValue(process.env.SMART_AGENT_NEO_DISABLE_LAZY_SUBCOMMANDS);
 };
 
-const loadConfig = async (): Promise<OpenClawConfig> => {
+const loadConfig = async (): Promise<SmartAgentNeoConfig> => {
   const mod = await import("../../config/config.js");
   return mod.loadConfig();
 };
@@ -177,11 +177,11 @@ const entries: SubCliEntry[] = [
     },
   },
   {
-    name: "clawbot",
-    description: "Legacy clawbot command aliases",
+    name: "neobot",
+    description: "Legacy neobot command aliases",
     register: async (program) => {
-      const mod = await import("../clawbot-cli.js");
-      mod.registerClawbotCli(program);
+      const mod = await import("../neobot-cli.js");
+      mod.registerNeobotCli(program);
     },
   },
   {

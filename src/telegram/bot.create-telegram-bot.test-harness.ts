@@ -12,7 +12,7 @@ type ReplyOpts =
   | undefined;
 
 const { sessionStorePath } = vi.hoisted(() => ({
-  sessionStorePath: `/tmp/openclaw-telegram-${Math.random().toString(16).slice(2)}.json`,
+  sessionStorePath: `/tmp/smart-agent-neo-telegram-${Math.random().toString(16).slice(2)}.json`,
 }));
 
 const { loadWebMedia } = vi.hoisted((): { loadWebMedia: AnyMock } => ({
@@ -117,7 +117,7 @@ export const editMessageTextSpy: AnyAsyncMock = vi.fn(async () => ({ message_id:
 export const setMessageReactionSpy: AnyAsyncMock = vi.fn(async () => undefined);
 export const setMyCommandsSpy: AnyAsyncMock = vi.fn(async () => undefined);
 export const getMeSpy: AnyAsyncMock = vi.fn(async () => ({
-  username: "openclaw_bot",
+  username: "smart-agent-neo_bot",
   has_topics_enabled: true,
 }));
 export const sendMessageSpy: AnyAsyncMock = vi.fn(async () => ({ message_id: 77 }));
@@ -229,7 +229,7 @@ export function makeTelegramMessageCtx(params: {
         ? {}
         : { message_thread_id: params.messageThreadId }),
     },
-    me: { username: "openclaw_bot" },
+    me: { username: "smart-agent-neo_bot" },
     getFile: async () => ({ download: async () => new Uint8Array() }),
   };
 }
@@ -300,7 +300,7 @@ beforeEach(() => {
   setMyCommandsSpy.mockResolvedValue(undefined);
   getMeSpy.mockReset();
   getMeSpy.mockResolvedValue({
-    username: "openclaw_bot",
+    username: "smart-agent-neo_bot",
     has_topics_enabled: true,
   });
   editMessageTextSpy.mockReset();

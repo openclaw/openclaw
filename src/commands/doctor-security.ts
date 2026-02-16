@@ -1,5 +1,5 @@
 import type { ChannelId } from "../channels/plugins/types.js";
-import type { OpenClawConfig, GatewayBindMode } from "../config/config.js";
+import type { SmartAgentNeoConfig, GatewayBindMode } from "../config/config.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -8,9 +8,9 @@ import { isLoopbackHost, resolveGatewayBindHost } from "../gateway/net.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
 import { note } from "../terminal/note.js";
 
-export async function noteSecurityWarnings(cfg: OpenClawConfig) {
+export async function noteSecurityWarnings(cfg: SmartAgentNeoConfig) {
   const warnings: string[] = [];
-  const auditHint = `- Run: ${formatCliCommand("openclaw security audit --deep")}`;
+  const auditHint = `- Run: ${formatCliCommand("smart-agent-neo security audit --deep")}`;
 
   // ===========================================
   // GATEWAY NETWORK EXPOSURE CHECK
@@ -48,19 +48,19 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
       const authFixLines =
         resolvedAuth.mode === "password"
           ? [
-              `  Fix: ${formatCliCommand("openclaw configure")} to set a password`,
-              `  Or switch to token: ${formatCliCommand("openclaw config set gateway.auth.mode token")}`,
+              `  Fix: ${formatCliCommand("smart-agent-neo configure")} to set a password`,
+              `  Or switch to token: ${formatCliCommand("smart-agent-neo config set gateway.auth.mode token")}`,
             ]
           : [
-              `  Fix: ${formatCliCommand("openclaw doctor --fix")} to generate a token`,
+              `  Fix: ${formatCliCommand("smart-agent-neo doctor --fix")} to generate a token`,
               `  Or set token directly: ${formatCliCommand(
-                "openclaw config set gateway.auth.mode token",
+                "smart-agent-neo config set gateway.auth.mode token",
               )}`,
             ];
       warnings.push(
         `- CRITICAL: Gateway bound to ${bindDescriptor} without authentication.`,
         `  Anyone on your network (or internet if port-forwarded) can fully control your agent.`,
-        `  Fix: ${formatCliCommand("openclaw config set gateway.bind loopback")}`,
+        `  Fix: ${formatCliCommand("smart-agent-neo config set gateway.bind loopback")}`,
         ...authFixLines,
       );
     } else {
@@ -125,7 +125,7 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
     if (dmScope === "main" && isMultiUserDm) {
       warnings.push(
         `- ${params.label} DMs: multiple senders share the main session; run: ` +
-          formatCliCommand('openclaw config set session.dmScope "per-channel-peer"') +
+          formatCliCommand('smart-agent-neo config set session.dmScope "per-channel-peer"') +
           ' (or "per-account-channel-peer" for multi-account channels) to isolate sessions.',
       );
     }

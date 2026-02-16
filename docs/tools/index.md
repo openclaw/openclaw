@@ -1,20 +1,20 @@
 ---
-summary: "Agent tool surface for OpenClaw (browser, canvas, nodes, message, cron) replacing legacy `openclaw-*` skills"
+summary: "Agent tool surface for SmartAgentNeo (browser, canvas, nodes, message, cron) replacing legacy `smart-agent-neo-*` skills"
 read_when:
   - Adding or modifying agent tools
-  - Retiring or changing `openclaw-*` skills
+  - Retiring or changing `smart-agent-neo-*` skills
 title: "Tools"
 ---
 
-# Tools (OpenClaw)
+# Tools (SmartAgentNeo)
 
-OpenClaw exposes **first-class agent tools** for browser, canvas, nodes, and cron.
-These replace the old `openclaw-*` skills: the tools are typed, no shelling,
+SmartAgentNeo exposes **first-class agent tools** for browser, canvas, nodes, and cron.
+These replace the old `smart-agent-neo-*` skills: the tools are typed, no shelling,
 and the agent should rely on them directly.
 
 ## Disabling tools
 
-You can globally allow/deny tools via `tools.allow` / `tools.deny` in `openclaw.json`
+You can globally allow/deny tools via `tools.allow` / `tools.deny` in `smart-agent-neo.json`
 (deny wins). This prevents disallowed tools from being sent to model providers.
 
 ```json5
@@ -27,7 +27,7 @@ Notes:
 
 - Matching is case-insensitive.
 - `*` wildcards are supported (`"*"` means all tools).
-- If `tools.allow` only references unknown or unloaded plugin tool names, OpenClaw logs a warning and ignores the allowlist so core tools stay available.
+- If `tools.allow` only references unknown or unloaded plugin tool names, SmartAgentNeo logs a warning and ignores the allowlist so core tools stay available.
 
 ## Tool profiles (base allowlist)
 
@@ -151,7 +151,7 @@ Available groups:
 - `group:automation`: `cron`, `gateway`
 - `group:messaging`: `message`
 - `group:nodes`: `nodes`
-- `group:openclaw`: all built-in OpenClaw tools (excludes provider plugins)
+- `group:smart-agent-neo`: all built-in SmartAgentNeo tools (excludes provider plugins)
 
 Example (allow only file tools + browser):
 
@@ -207,7 +207,7 @@ Notes:
 - If `process` is disallowed, `exec` runs synchronously and ignores `yieldMs`/`background`.
 - `elevated` is gated by `tools.elevated` plus any `agents.list[].tools.elevated` override (both must allow) and is an alias for `host=gateway` + `security=full`.
 - `elevated` only changes behavior when the agent is sandboxed (otherwise it’s a no-op).
-- `host=node` can target a macOS companion app or a headless node host (`openclaw node run`).
+- `host=node` can target a macOS companion app or a headless node host (`smart-agent-neo node run`).
 - gateway/node approvals and allowlists: [Exec approvals](/tools/exec-approvals).
 
 ### `process`
@@ -235,7 +235,7 @@ Core parameters:
 
 Notes:
 
-- Requires a Brave API key (recommended: `openclaw configure --section web`, or set `BRAVE_API_KEY`).
+- Requires a Brave API key (recommended: `smart-agent-neo configure --section web`, or set `BRAVE_API_KEY`).
 - Enable via `tools.web.search.enabled`.
 - Responses are cached (default 15 min).
 - See [Web tools](/tools/web) for setup.
@@ -261,7 +261,7 @@ Notes:
 
 ### `browser`
 
-Control the dedicated OpenClaw-managed browser.
+Control the dedicated SmartAgentNeo-managed browser.
 
 Core actions:
 
@@ -313,7 +313,7 @@ Notes:
 - Uses gateway `node.invoke` under the hood.
 - If no `node` is provided, the tool picks a default (single connected node or local mac node).
 - A2UI is v0.8 only (no `createSurface`); the CLI rejects v0.9 JSONL with line errors.
-- Quick smoke: `openclaw nodes canvas a2ui push --node <id> --text "Hello from A2UI"`.
+- Quick smoke: `smart-agent-neo nodes canvas a2ui push --node <id> --text "Hello from A2UI"`.
 
 ### `nodes`
 
@@ -415,7 +415,7 @@ Restart or apply updates to the running Gateway process (in-place).
 
 Core actions:
 
-- `restart` (authorizes + sends `SIGUSR1` for in-process restart; `openclaw gateway` restart in-place)
+- `restart` (authorizes + sends `SIGUSR1` for in-process restart; `smart-agent-neo gateway` restart in-place)
 - `config.get` / `config.schema`
 - `config.apply` (validate + write config + restart + wake)
 - `config.patch` (merge partial update + restart + wake)
@@ -449,7 +449,7 @@ Notes:
 - `sessions_spawn` is non-blocking and returns `status: "accepted"` immediately.
 - `sessions_send` runs a reply‑back ping‑pong (reply `REPLY_SKIP` to stop; max turns via `session.agentToAgent.maxPingPongTurns`, 0–5).
 - After the ping‑pong, the target agent runs an **announce step**; reply `ANNOUNCE_SKIP` to suppress the announcement.
-- Sandbox clamp: when the current session is sandboxed and `agents.defaults.sandbox.sessionToolsVisibility: "spawned"`, OpenClaw clamps `tools.sessions.visibility` to `tree`.
+- Sandbox clamp: when the current session is sandboxed and `agents.defaults.sandbox.sessionToolsVisibility: "spawned"`, SmartAgentNeo clamps `tools.sessions.visibility` to `tree`.
 
 ### `agents_list`
 

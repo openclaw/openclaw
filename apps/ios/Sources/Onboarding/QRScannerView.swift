@@ -1,4 +1,4 @@
-import OpenClawKit
+import SmartAgentNeoKit
 import SwiftUI
 import VisionKit
 
@@ -72,7 +72,7 @@ struct QRScannerView: UIViewControllerRepresentable {
                     return
                 }
 
-                // Fall back to deep link URL format (openclaw://gateway?...).
+                // Fall back to deep link URL format (smart-agent-neo://gateway?...).
                 if let url = URL(string: payload),
                    let route = DeepLinkParser.parse(url),
                    case let .gateway(link) = route

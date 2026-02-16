@@ -1,4 +1,4 @@
-import type { ClawdbotConfig } from "openclaw/plugin-sdk";
+import type { NeobotConfig } from "smart-agent-neo/plugin-sdk";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 
@@ -16,7 +16,7 @@ export type TypingIndicatorState = {
  * Add a typing indicator (reaction) to a message
  */
 export async function addTypingIndicator(params: {
-  cfg: ClawdbotConfig;
+  cfg: NeobotConfig;
   messageId: string;
   accountId?: string;
 }): Promise<TypingIndicatorState> {
@@ -50,7 +50,7 @@ export async function addTypingIndicator(params: {
  * Remove a typing indicator (reaction) from a message
  */
 export async function removeTypingIndicator(params: {
-  cfg: ClawdbotConfig;
+  cfg: NeobotConfig;
   state: TypingIndicatorState;
   accountId?: string;
 }): Promise<void> {

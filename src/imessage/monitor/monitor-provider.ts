@@ -43,7 +43,7 @@ import { normalizeAllowList, resolveRuntime } from "./runtime.js";
 
 /**
  * Try to detect remote host from an SSH wrapper script like:
- *   exec ssh -T openclaw@192.168.64.3 /opt/homebrew/bin/imsg "$@"
+ *   exec ssh -T smart-agent-neo@192.168.64.3 /opt/homebrew/bin/imsg "$@"
  *   exec ssh -T mac-mini imsg "$@"
  * Returns the user@host or host portion if found, undefined otherwise.
  */
@@ -55,7 +55,7 @@ async function detectRemoteHostFromCliPath(cliPath: string): Promise<string | un
       : cliPath;
     const content = await fs.readFile(expanded, "utf8");
 
-    // Match user@host pattern first (e.g., openclaw@192.168.64.3)
+    // Match user@host pattern first (e.g., smart-agent-neo@192.168.64.3)
     const userHostMatch = content.match(/\bssh\b[^\n]*?\s+([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+)/);
     if (userHostMatch) {
       return userHostMatch[1];

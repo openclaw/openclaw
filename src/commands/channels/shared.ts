@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { SmartAgentNeoConfig } from "../../config/config.js";
 import { type ChannelId, getChannelPlugin } from "../../channels/plugins/index.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
@@ -8,7 +8,7 @@ export type ChatChannel = ChannelId;
 
 export async function requireValidConfig(
   runtime: RuntimeEnv = defaultRuntime,
-): Promise<OpenClawConfig | null> {
+): Promise<SmartAgentNeoConfig | null> {
   return await requireValidConfigSnapshot(runtime);
 }
 

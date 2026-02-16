@@ -108,7 +108,7 @@ function createArgMenusHarness() {
     channelsConfig: undefined,
     slashCommand: {
       enabled: true,
-      name: "openclaw",
+      name: "smart-agent-neo",
       ephemeral: true,
       sessionPrefix: "slack:slash",
     },
@@ -142,7 +142,7 @@ describe("Slack native command argument menus", () => {
     }
     usageHandler = usage;
 
-    const argMenu = harness.actions.get("openclaw_cmdarg");
+    const argMenu = harness.actions.get("smart-agent-neo_cmdarg");
     if (!argMenu) {
       throw new Error("Missing arg-menu action handler");
     }
@@ -290,7 +290,7 @@ function createPolicyHarness(overrides?: {
     channelsConfig: overrides?.channelsConfig,
     slashCommand: {
       enabled: true,
-      name: "openclaw",
+      name: "smart-agent-neo",
       ephemeral: true,
       sessionPrefix: "slack:slash",
     },

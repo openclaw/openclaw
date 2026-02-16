@@ -9,7 +9,7 @@ title: "Streaming and Chunking"
 
 # Streaming + chunking
 
-OpenClaw has two separate “streaming” layers:
+SmartAgentNeo has two separate “streaming” layers:
 
 - **Block streaming (channels):** emit completed **blocks** as the assistant writes. These are normal channel messages (not token deltas).
 - **Token-ish streaming (Telegram only):** update a temporary **preview message** with partial text while generating.
@@ -67,7 +67,7 @@ Block chunking is implemented by `EmbeddedBlockChunker`:
 
 ## Coalescing (merge streamed blocks)
 
-When block streaming is enabled, OpenClaw can **merge consecutive block chunks**
+When block streaming is enabled, SmartAgentNeo can **merge consecutive block chunks**
 before sending them out. This reduces “single-line spam” while still providing
 progressive output.
 

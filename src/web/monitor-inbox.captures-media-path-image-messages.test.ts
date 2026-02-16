@@ -88,7 +88,7 @@ describe("web monitor inbox", () => {
   });
 
   it("logs inbound bodies to file", async () => {
-    const logPath = path.join(os.tmpdir(), `openclaw-log-test-${crypto.randomUUID()}.log`);
+    const logPath = path.join(os.tmpdir(), `smart-agent-neo-log-test-${crypto.randomUUID()}.log`);
     setLoggerOverride({ level: "trace", file: logPath });
 
     const onMessage = vi.fn();
@@ -206,7 +206,7 @@ describe("web monitor inbox", () => {
             ephemeralMessage: {
               message: {
                 extendedTextMessage: {
-                  text: "oh hey @Clawd UK !",
+                  text: "oh hey @Neo UK !",
                   contextInfo: { mentionedJid: ["123@s.whatsapp.net"] },
                 },
               },
@@ -224,7 +224,7 @@ describe("web monitor inbox", () => {
       expect.objectContaining({
         chatType: "group",
         conversationId: "424242@g.us",
-        body: "oh hey @Clawd UK !",
+        body: "oh hey @Neo UK !",
         mentionedJids: ["123@s.whatsapp.net"],
         senderE164: "+888",
       }),

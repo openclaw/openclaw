@@ -2,7 +2,7 @@ import { vi } from "vitest";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 
 export const baseConfigSnapshot = {
-  path: "/tmp/openclaw.json",
+  path: "/tmp/smart-agent-neo.json",
   exists: true,
   raw: "{}",
   parsed: {},

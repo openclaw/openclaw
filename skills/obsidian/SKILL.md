@@ -4,7 +4,7 @@ description: Work with Obsidian vaults (plain Markdown notes) and automate via o
 homepage: https://help.obsidian.md
 metadata:
   {
-    "openclaw":
+    "smart-agent-neo":
       {
         "emoji": "💎",
         "requires": { "bins": ["obsidian-cli"] },

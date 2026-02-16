@@ -1,8 +1,8 @@
-# ClawDock <!-- omit in toc -->
+# NeoDock <!-- omit in toc -->
 
-Stop typing `docker-compose` commands. Just type `clawdock-start`.
+Stop typing `docker-compose` commands. Just type `neodock-start`.
 
-Inspired by Simon Willison's [Running OpenClaw in Docker](https://til.simonwillison.net/llms/openclaw-docker).
+Inspired by Simon Willison's [Running SmartAgentNeo in Docker](https://til.simonwillison.net/llms/smart-agent-neo-docker).
 
 - [Quickstart](#quickstart)
 - [Available Commands](#available-commands)
@@ -25,49 +25,49 @@ Inspired by Simon Willison's [Running OpenClaw in Docker](https://til.simonwilli
 **Install:**
 
 ```bash
-mkdir -p ~/.clawdock && curl -sL https://raw.githubusercontent.com/openclaw/openclaw/main/scripts/shell-helpers/clawdock-helpers.sh -o ~/.clawdock/clawdock-helpers.sh
+mkdir -p ~/.neodock && curl -sL https://raw.githubusercontent.com/betterbrand/smart-agent-neo/main/scripts/shell-helpers/neodock-helpers.sh -o ~/.neodock/neodock-helpers.sh
 ```
 
 ```bash
-echo 'source ~/.clawdock/clawdock-helpers.sh' >> ~/.zshrc && source ~/.zshrc
+echo 'source ~/.neodock/neodock-helpers.sh' >> ~/.zshrc && source ~/.zshrc
 ```
 
 **See what you get:**
 
 ```bash
-clawdock-help
+neodock-help
 ```
 
-On first command, ClawDock auto-detects your OpenClaw directory:
+On first command, NeoDock auto-detects your SmartAgentNeo directory:
 
-- Checks common paths (`~/openclaw`, `~/workspace/openclaw`, etc.)
+- Checks common paths (`~/smart-agent-neo`, `~/workspace/smart-agent-neo`, etc.)
 - If found, asks you to confirm
-- Saves to `~/.clawdock/config`
+- Saves to `~/.neodock/config`
 
 **First time setup:**
 
 ```bash
-clawdock-start
+neodock-start
 ```
 
 ```bash
-clawdock-fix-token
+neodock-fix-token
 ```
 
 ```bash
-clawdock-dashboard
+neodock-dashboard
 ```
 
 If you see "pairing required":
 
 ```bash
-clawdock-devices
+neodock-devices
 ```
 
 And approve the request for the specific device:
 
 ```bash
-clawdock-approve <request-id>
+neodock-approve <request-id>
 ```
 
 ## Available Commands
@@ -76,51 +76,51 @@ clawdock-approve <request-id>
 
 | Command            | Description                     |
 | ------------------ | ------------------------------- |
-| `clawdock-start`   | Start the gateway               |
-| `clawdock-stop`    | Stop the gateway                |
-| `clawdock-restart` | Restart the gateway             |
-| `clawdock-status`  | Check container status          |
-| `clawdock-logs`    | View live logs (follows output) |
+| `neodock-start`   | Start the gateway               |
+| `neodock-stop`    | Stop the gateway                |
+| `neodock-restart` | Restart the gateway             |
+| `neodock-status`  | Check container status          |
+| `neodock-logs`    | View live logs (follows output) |
 
 ### Container Access
 
 | Command                   | Description                                    |
 | ------------------------- | ---------------------------------------------- |
-| `clawdock-shell`          | Interactive shell inside the gateway container |
-| `clawdock-cli <command>`  | Run OpenClaw CLI commands                      |
-| `clawdock-exec <command>` | Execute arbitrary commands in the container    |
+| `neodock-shell`          | Interactive shell inside the gateway container |
+| `neodock-cli <command>`  | Run SmartAgentNeo CLI commands                      |
+| `neodock-exec <command>` | Execute arbitrary commands in the container    |
 
 ### Web UI & Devices
 
 | Command                 | Description                                |
 | ----------------------- | ------------------------------------------ |
-| `clawdock-dashboard`    | Open web UI in browser with authentication |
-| `clawdock-devices`      | List device pairing requests               |
-| `clawdock-approve <id>` | Approve a device pairing request           |
+| `neodock-dashboard`    | Open web UI in browser with authentication |
+| `neodock-devices`      | List device pairing requests               |
+| `neodock-approve <id>` | Approve a device pairing request           |
 
 ### Setup & Configuration
 
 | Command              | Description                                       |
 | -------------------- | ------------------------------------------------- |
-| `clawdock-fix-token` | Configure gateway authentication token (run once) |
+| `neodock-fix-token` | Configure gateway authentication token (run once) |
 
 ### Maintenance
 
 | Command            | Description                                      |
 | ------------------ | ------------------------------------------------ |
-| `clawdock-rebuild` | Rebuild the Docker image                         |
-| `clawdock-clean`   | Remove all containers and volumes (destructive!) |
+| `neodock-rebuild` | Rebuild the Docker image                         |
+| `neodock-clean`   | Remove all containers and volumes (destructive!) |
 
 ### Utilities
 
 | Command              | Description                               |
 | -------------------- | ----------------------------------------- |
-| `clawdock-health`    | Run gateway health check                  |
-| `clawdock-token`     | Display the gateway authentication token  |
-| `clawdock-cd`        | Jump to the OpenClaw project directory    |
-| `clawdock-config`    | Open the OpenClaw config directory        |
-| `clawdock-workspace` | Open the workspace directory              |
-| `clawdock-help`      | Show all available commands with examples |
+| `neodock-health`    | Run gateway health check                  |
+| `neodock-token`     | Display the gateway authentication token  |
+| `neodock-cd`        | Jump to the SmartAgentNeo project directory    |
+| `neodock-config`    | Open the SmartAgentNeo config directory        |
+| `neodock-workspace` | Open the workspace directory              |
+| `neodock-help`      | Show all available commands with examples |
 
 ## Common Workflows
 
@@ -129,19 +129,19 @@ clawdock-approve <request-id>
 **Restart the gateway:**
 
 ```bash
-clawdock-restart
+neodock-restart
 ```
 
 **Check container status:**
 
 ```bash
-clawdock-status
+neodock-status
 ```
 
 **View live logs:**
 
 ```bash
-clawdock-logs
+neodock-logs
 ```
 
 ### Set Up WhatsApp Bot
@@ -149,13 +149,13 @@ clawdock-logs
 **Shell into the container:**
 
 ```bash
-clawdock-shell
+neodock-shell
 ```
 
 **Inside the container, login to WhatsApp:**
 
 ```bash
-openclaw channels login --channel whatsapp --verbose
+smart-agent-neo channels login --channel whatsapp --verbose
 ```
 
 Scan the QR code with WhatsApp on your phone.
@@ -163,7 +163,7 @@ Scan the QR code with WhatsApp on your phone.
 **Verify connection:**
 
 ```bash
-openclaw status
+smart-agent-neo status
 ```
 
 ### Troubleshooting Device Pairing
@@ -171,13 +171,13 @@ openclaw status
 **Check for pending pairing requests:**
 
 ```bash
-clawdock-devices
+neodock-devices
 ```
 
 **Copy the Request ID from the "Pending" table, then approve:**
 
 ```bash
-clawdock-approve <request-id>
+neodock-approve <request-id>
 ```
 
 Then refresh your browser.
@@ -187,13 +187,13 @@ Then refresh your browser.
 If you see "gateway token mismatch" errors:
 
 ```bash
-clawdock-fix-token
+neodock-fix-token
 ```
 
 This will:
 
 1. Read the token from your `.env` file
-2. Configure it in the OpenClaw config
+2. Configure it in the SmartAgentNeo config
 3. Restart the gateway
 4. Verify the configuration
 
@@ -209,18 +209,18 @@ docker ps
 
 - Docker and Docker Compose installed
 - Bash or Zsh shell
-- OpenClaw project (from `docker-setup.sh`)
+- SmartAgentNeo project (from `docker-setup.sh`)
 
 ## Development
 
 **Test with fresh config (mimics first-time install):**
 
 ```bash
-unset CLAWDOCK_DIR && rm -f ~/.clawdock/config && source scripts/shell-helpers/clawdock-helpers.sh
+unset NEODOCK_DIR && rm -f ~/.neodock/config && source scripts/shell-helpers/neodock-helpers.sh
 ```
 
 Then run any command to trigger auto-detect:
 
 ```bash
-clawdock-start
+neodock-start
 ```

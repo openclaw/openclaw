@@ -1,5 +1,5 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
+import type { SmartAgentNeoPluginApi } from "smart-agent-neo/plugin-sdk";
+import { emptyPluginConfigSchema } from "smart-agent-neo/plugin-sdk";
 import { slackPlugin } from "./src/channel.js";
 import { setSlackRuntime } from "./src/runtime.js";
 
@@ -8,7 +8,7 @@ const plugin = {
   name: "Slack",
   description: "Slack channel plugin",
   configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
+  register(api: SmartAgentNeoPluginApi) {
     setSlackRuntime(api.runtime);
     api.registerChannel({ plugin: slackPlugin });
   },

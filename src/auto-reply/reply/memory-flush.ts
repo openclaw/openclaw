@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { SmartAgentNeoConfig } from "../../config/config.js";
 import { lookupContextTokens } from "../../agents/context.js";
 import { resolveCronStyleNow } from "../../agents/current-time.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
@@ -39,7 +39,7 @@ function formatDateStampInTimezone(nowMs: number, timezone: string): string {
 
 export function resolveMemoryFlushPromptForRun(params: {
   prompt: string;
-  cfg?: OpenClawConfig;
+  cfg?: SmartAgentNeoConfig;
   nowMs?: number;
 }): string {
   const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
@@ -71,7 +71,7 @@ const normalizeNonNegativeInt = (value: unknown): number | null => {
   return int >= 0 ? int : null;
 };
 
-export function resolveMemoryFlushSettings(cfg?: OpenClawConfig): MemoryFlushSettings | null {
+export function resolveMemoryFlushSettings(cfg?: SmartAgentNeoConfig): MemoryFlushSettings | null {
   const defaults = cfg?.agents?.defaults?.compaction?.memoryFlush;
   const enabled = defaults?.enabled ?? true;
   if (!enabled) {

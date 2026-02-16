@@ -1,4 +1,4 @@
-import { MarkdownConfigSchema, buildChannelConfigSchema } from "openclaw/plugin-sdk";
+import { MarkdownConfigSchema, buildChannelConfigSchema } from "smart-agent-neo/plugin-sdk";
 import { z } from "zod";
 
 const allowFromEntry = z.union([z.string(), z.number()]);

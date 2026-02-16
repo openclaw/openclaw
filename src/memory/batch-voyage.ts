@@ -84,7 +84,7 @@ async function submitVoyageBatch(params: {
         input_type: "document",
       },
       metadata: {
-        source: "clawdbot-memory",
+        source: "neobot-memory",
         agent: params.agentId,
       },
     },

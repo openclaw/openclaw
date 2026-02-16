@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { SmartAgentNeoConfig } from "../config/config.js";
 import {
   applyModelAllowlist,
   applyModelFallbacksFromSelection,
@@ -69,7 +69,7 @@ describe("promptDefaultModel", () => {
       return first?.value ?? "";
     });
     const prompter = makePrompter({ select });
-    const config = { agents: { defaults: {} } } as OpenClawConfig;
+    const config = { agents: { defaults: {} } } as SmartAgentNeoConfig;
 
     await promptDefaultModel({
       config,
@@ -102,7 +102,7 @@ describe("promptDefaultModel", () => {
       .mockResolvedValueOnce("sk-vllm-test")
       .mockResolvedValueOnce("meta-llama/Meta-Llama-3-8B-Instruct");
     const prompter = makePrompter({ select, text: text as never });
-    const config = { agents: { defaults: {} } } as OpenClawConfig;
+    const config = { agents: { defaults: {} } } as SmartAgentNeoConfig;
 
     const result = await promptDefaultModel({
       config,
@@ -111,7 +111,7 @@ describe("promptDefaultModel", () => {
       includeManual: false,
       includeVllm: true,
       ignoreAllowlist: true,
-      agentDir: "/tmp/openclaw-agent",
+      agentDir: "/tmp/smart-agent-neo-agent",
     });
 
     expect(upsertAuthProfileWithLock).toHaveBeenCalledWith(
@@ -138,7 +138,7 @@ describe("promptModelAllowlist", () => {
 
     const multiselect = createSelectAllMultiselect();
     const prompter = makePrompter({ multiselect });
-    const config = { agents: { defaults: {} } } as OpenClawConfig;
+    const config = { agents: { defaults: {} } } as SmartAgentNeoConfig;
 
     await promptModelAllowlist({ config, prompter });
 
@@ -167,7 +167,7 @@ describe("promptModelAllowlist", () => {
 
     const multiselect = createSelectAllMultiselect();
     const prompter = makePrompter({ multiselect });
-    const config = { agents: { defaults: {} } } as OpenClawConfig;
+    const config = { agents: { defaults: {} } } as SmartAgentNeoConfig;
 
     await promptModelAllowlist({
       config,
@@ -193,7 +193,7 @@ describe("applyModelAllowlist", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as SmartAgentNeoConfig;
 
     const next = applyModelAllowlist(config, ["openai/gpt-5.2"]);
     expect(next.agents?.defaults?.models).toEqual({
@@ -210,7 +210,7 @@ describe("applyModelAllowlist", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as SmartAgentNeoConfig;
 
     const next = applyModelAllowlist(config, []);
     expect(next.agents?.defaults?.models).toBeUndefined();
@@ -225,7 +225,7 @@ describe("applyModelFallbacksFromSelection", () => {
           model: { primary: "anthropic/claude-opus-4-5" },
         },
       },
-    } as OpenClawConfig;
+    } as SmartAgentNeoConfig;
 
     const next = applyModelFallbacksFromSelection(config, [
       "anthropic/claude-opus-4-5",
@@ -244,7 +244,7 @@ describe("applyModelFallbacksFromSelection", () => {
           model: { primary: "anthropic/claude-opus-4-5", fallbacks: ["openai/gpt-5.2"] },
         },
       },
-    } as OpenClawConfig;
+    } as SmartAgentNeoConfig;
 
     const next = applyModelFallbacksFromSelection(config, ["openai/gpt-5.2"]);
     expect(next.agents?.defaults?.model).toEqual({

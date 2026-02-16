@@ -11,7 +11,7 @@ vi.mock("./agent.js", () => ({
   agentCommand: vi.fn(),
 }));
 
-import type { OpenClawConfig } from "../config/config.js";
+import type { SmartAgentNeoConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import * as configModule from "../config/config.js";
 import { callGateway } from "../gateway/call.js";
@@ -26,7 +26,7 @@ const runtime: RuntimeEnv = {
 
 const configSpy = vi.spyOn(configModule, "loadConfig");
 
-function mockConfig(storePath: string, overrides?: Partial<OpenClawConfig>) {
+function mockConfig(storePath: string, overrides?: Partial<SmartAgentNeoConfig>) {
   configSpy.mockReturnValue({
     agents: {
       defaults: {
@@ -45,9 +45,9 @@ function mockConfig(storePath: string, overrides?: Partial<OpenClawConfig>) {
 
 async function withTempStore(
   fn: (ctx: { dir: string; store: string }) => Promise<void>,
-  overrides?: Partial<OpenClawConfig>,
+  overrides?: Partial<SmartAgentNeoConfig>,
 ) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agent-cli-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "smart-agent-neo-agent-cli-"));
   const store = path.join(dir, "sessions.json");
   mockConfig(store, overrides);
   try {

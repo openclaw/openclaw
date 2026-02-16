@@ -18,29 +18,29 @@ x-i18n:
 
 ## 概述
 
-OpenClaw 可以在隔离的 Docker 容器中运行智能体以确保安全。`sandbox` 命令帮助你管理这些容器，特别是在更新或配置更改后。
+SmartAgentNeo 可以在隔离的 Docker 容器中运行智能体以确保安全。`sandbox` 命令帮助你管理这些容器，特别是在更新或配置更改后。
 
 ## 命令
 
-### `openclaw sandbox explain`
+### `smart-agent-neo sandbox explain`
 
 检查**生效的**沙箱模式/作用域/工作区访问权限、沙箱工具策略和提权门控（附带修复配置的键路径）。
 
 ```bash
-openclaw sandbox explain
-openclaw sandbox explain --session agent:main:main
-openclaw sandbox explain --agent work
-openclaw sandbox explain --json
+smart-agent-neo sandbox explain
+smart-agent-neo sandbox explain --session agent:main:main
+smart-agent-neo sandbox explain --agent work
+smart-agent-neo sandbox explain --json
 ```
 
-### `openclaw sandbox list`
+### `smart-agent-neo sandbox list`
 
 列出所有沙箱容器及其状态和配置。
 
 ```bash
-openclaw sandbox list
-openclaw sandbox list --browser  # List only browser containers
-openclaw sandbox list --json     # JSON output
+smart-agent-neo sandbox list
+smart-agent-neo sandbox list --browser  # List only browser containers
+smart-agent-neo sandbox list --json     # JSON output
 ```
 
 **输出包括：**
@@ -51,16 +51,16 @@ openclaw sandbox list --json     # JSON output
 - 空闲时间（自上次使用以来的时间）
 - 关联的会话/智能体
 
-### `openclaw sandbox recreate`
+### `smart-agent-neo sandbox recreate`
 
 移除沙箱容器以强制使用更新的镜像/配置重新创建。
 
 ```bash
-openclaw sandbox recreate --all                # Recreate all containers
-openclaw sandbox recreate --session main       # Specific session
-openclaw sandbox recreate --agent mybot        # Specific agent
-openclaw sandbox recreate --browser            # Only browser containers
-openclaw sandbox recreate --all --force        # Skip confirmation
+smart-agent-neo sandbox recreate --all                # Recreate all containers
+smart-agent-neo sandbox recreate --session main       # Specific session
+smart-agent-neo sandbox recreate --agent mybot        # Specific agent
+smart-agent-neo sandbox recreate --browser            # Only browser containers
+smart-agent-neo sandbox recreate --all --force        # Skip confirmation
 ```
 
 **选项：**
@@ -79,14 +79,14 @@ openclaw sandbox recreate --all --force        # Skip confirmation
 
 ```bash
 # Pull new image
-docker pull openclaw-sandbox:latest
-docker tag openclaw-sandbox:latest openclaw-sandbox:bookworm-slim
+docker pull smart-agent-neo-sandbox:latest
+docker tag smart-agent-neo-sandbox:latest smart-agent-neo-sandbox:bookworm-slim
 
 # Update config to use new image
 # Edit config: agents.defaults.sandbox.docker.image (or agents.list[].sandbox.docker.image)
 
 # Recreate containers
-openclaw sandbox recreate --all
+smart-agent-neo sandbox recreate --all
 ```
 
 ### 更改沙箱配置后
@@ -95,22 +95,22 @@ openclaw sandbox recreate --all
 # Edit config: agents.defaults.sandbox.* (or agents.list[].sandbox.*)
 
 # Recreate to apply new config
-openclaw sandbox recreate --all
+smart-agent-neo sandbox recreate --all
 ```
 
 ### 更改 setupCommand 后
 
 ```bash
-openclaw sandbox recreate --all
+smart-agent-neo sandbox recreate --all
 # or just one agent:
-openclaw sandbox recreate --agent family
+smart-agent-neo sandbox recreate --agent family
 ```
 
 ### 仅针对特定智能体
 
 ```bash
 # Update only one agent's containers
-openclaw sandbox recreate --agent alfred
+smart-agent-neo sandbox recreate --agent alfred
 ```
 
 ## 为什么需要这个？
@@ -121,13 +121,13 @@ openclaw sandbox recreate --agent alfred
 - 容器仅在空闲 24 小时后才被清理
 - 经常使用的智能体会无限期保持旧容器运行
 
-**解决方案：** 使用 `openclaw sandbox recreate` 强制移除旧容器。它们会在下次需要时自动使用当前设置重新创建。
+**解决方案：** 使用 `smart-agent-neo sandbox recreate` 强制移除旧容器。它们会在下次需要时自动使用当前设置重新创建。
 
-提示：优先使用 `openclaw sandbox recreate` 而不是手动 `docker rm`。它使用 Gateway 网关的容器命名规则，避免在作用域/会话键更改时出现不匹配。
+提示：优先使用 `smart-agent-neo sandbox recreate` 而不是手动 `docker rm`。它使用 Gateway 网关的容器命名规则，避免在作用域/会话键更改时出现不匹配。
 
 ## 配置
 
-沙箱设置位于 `~/.openclaw/openclaw.json` 的 `agents.defaults.sandbox` 下（每个智能体的覆盖设置在 `agents.list[].sandbox` 中）：
+沙箱设置位于 `~/.smart-agent-neo/smart-agent-neo.json` 的 `agents.defaults.sandbox` 下（每个智能体的覆盖设置在 `agents.list[].sandbox` 中）：
 
 ```jsonc
 {
@@ -137,8 +137,8 @@ openclaw sandbox recreate --agent alfred
         "mode": "all", // off, non-main, all
         "scope": "agent", // session, agent, shared
         "docker": {
-          "image": "openclaw-sandbox:bookworm-slim",
-          "containerPrefix": "openclaw-sbx-",
+          "image": "smart-agent-neo-sandbox:bookworm-slim",
+          "containerPrefix": "smart-agent-neo-sbx-",
           // ... more Docker options
         },
         "prune": {

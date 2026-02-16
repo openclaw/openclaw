@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { SmartAgentNeoConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { monitorLineProvider } from "./monitor.js";
 
@@ -9,7 +9,7 @@ describe("monitorLineProvider fail-closed webhook auth", () => {
       monitorLineProvider({
         channelAccessToken: "token",
         channelSecret: "   ",
-        config: {} as OpenClawConfig,
+        config: {} as SmartAgentNeoConfig,
         runtime: {} as RuntimeEnv,
       }),
     ).rejects.toThrow("LINE webhook mode requires a non-empty channel secret.");
@@ -20,7 +20,7 @@ describe("monitorLineProvider fail-closed webhook auth", () => {
       monitorLineProvider({
         channelAccessToken: "   ",
         channelSecret: "secret",
-        config: {} as OpenClawConfig,
+        config: {} as SmartAgentNeoConfig,
         runtime: {} as RuntimeEnv,
       }),
     ).rejects.toThrow("LINE webhook mode requires a non-empty channel access token.");

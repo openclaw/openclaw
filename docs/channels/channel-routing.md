@@ -7,7 +7,7 @@ title: "Channel Routing"
 
 # Channels & routing
 
-OpenClaw routes replies **back to the channel where a message came from**. The
+SmartAgentNeo routes replies **back to the channel where a message came from**. The
 model does not choose a channel; routing is deterministic and controlled by the
 host configuration.
 
@@ -58,7 +58,7 @@ The matched agent determines which workspace and session store are used.
 
 ## Broadcast groups (run multiple agents)
 
-Broadcast groups let you run **multiple agents** for the same peer **when OpenClaw would normally reply** (for example: in WhatsApp groups, after mention/activation gating).
+Broadcast groups let you run **multiple agents** for the same peer **when SmartAgentNeo would normally reply** (for example: in WhatsApp groups, after mention/activation gating).
 
 Config:
 
@@ -84,7 +84,7 @@ Example:
 ```json5
 {
   agents: {
-    list: [{ id: "support", name: "Support", workspace: "~/.openclaw/workspace-support" }],
+    list: [{ id: "support", name: "Support", workspace: "~/.smart-agent-neo/workspace-support" }],
   },
   bindings: [
     { match: { channel: "slack", teamId: "T123" }, agentId: "support" },
@@ -95,9 +95,9 @@ Example:
 
 ## Session storage
 
-Session stores live under the state directory (default `~/.openclaw`):
+Session stores live under the state directory (default `~/.smart-agent-neo`):
 
-- `~/.openclaw/agents/<agentId>/sessions/sessions.json`
+- `~/.smart-agent-neo/agents/<agentId>/sessions/sessions.json`
 - JSONL transcripts live alongside the store
 
 You can override the store path via `session.store` and `{agentId}` templating.

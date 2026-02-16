@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../../config/types.js";
+import type { SmartAgentNeoConfig } from "../../config/types.js";
 import { resolveUserTimezone } from "../../agents/date-time.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.ts";
 
@@ -36,7 +36,7 @@ export interface TimestampInjectionOptions {
  * these handlers, so there is no double-stamping risk. The detection
  * pattern is a safety net for edge cases.
  *
- * @see https://github.com/moltbot/moltbot/issues/3658
+ * @see https://github.com/neobot/neobot/issues/3658
  */
 export function injectTimestamp(message: string, opts?: TimestampInjectionOptions): string {
   if (!message.trim()) {
@@ -71,9 +71,9 @@ export function injectTimestamp(message: string, opts?: TimestampInjectionOption
 }
 
 /**
- * Build TimestampInjectionOptions from an OpenClawConfig.
+ * Build TimestampInjectionOptions from an SmartAgentNeoConfig.
  */
-export function timestampOptsFromConfig(cfg: OpenClawConfig): TimestampInjectionOptions {
+export function timestampOptsFromConfig(cfg: SmartAgentNeoConfig): TimestampInjectionOptions {
   return {
     timezone: resolveUserTimezone(cfg.agents?.defaults?.userTimezone),
   };

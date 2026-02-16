@@ -101,7 +101,7 @@ const HttpUrlSchema = z
     return protocol === "http:" || protocol === "https:";
   }, "Expected http:// or https:// URL");
 
-export const OpenClawSchema = z
+export const SmartAgentNeoSchema = z
   .object({
     $schema: z.string().optional(),
     meta: z
@@ -229,7 +229,7 @@ export const OpenClawSchema = z
               .object({
                 cdpPort: z.number().int().min(1).max(65535).optional(),
                 cdpUrl: z.string().optional(),
-                driver: z.union([z.literal("clawd"), z.literal("extension")]).optional(),
+                driver: z.union([z.literal("neo"), z.literal("extension")]).optional(),
                 color: HexColorSchema,
               })
               .strict()

@@ -5,7 +5,7 @@ import CoreMotion
 import CryptoKit
 import EventKit
 import Foundation
-import OpenClawKit
+import SmartAgentNeoKit
 import Network
 import Observation
 import Photos
@@ -682,7 +682,7 @@ final class GatewayConnectionController {
         if manualClientId?.isEmpty == false {
             return manualClientId!
         }
-        return "openclaw-ios"
+        return "smart-agent-neo-ios"
     }
 
     private func resolveManualPort(host: String, port: Int, useTLS: Bool) -> Int? {
@@ -712,29 +712,29 @@ final class GatewayConnectionController {
     }
 
     private func currentCaps() -> [String] {
-        var caps = [OpenClawCapability.canvas.rawValue, OpenClawCapability.screen.rawValue]
+        var caps = [SmartAgentNeoCapability.canvas.rawValue, SmartAgentNeoCapability.screen.rawValue]
 
         // Default-on: if the key doesn't exist yet, treat it as enabled.
         let cameraEnabled =
             UserDefaults.standard.object(forKey: "camera.enabled") == nil
                 ? true
                 : UserDefaults.standard.bool(forKey: "camera.enabled")
-        if cameraEnabled { caps.append(OpenClawCapability.camera.rawValue) }
+        if cameraEnabled { caps.append(SmartAgentNeoCapability.camera.rawValue) }
 
         let voiceWakeEnabled = UserDefaults.standard.bool(forKey: VoiceWakePreferences.enabledKey)
-        if voiceWakeEnabled { caps.append(OpenClawCapability.voiceWake.rawValue) }
+        if voiceWakeEnabled { caps.append(SmartAgentNeoCapability.voiceWake.rawValue) }
 
         let locationModeRaw = UserDefaults.standard.string(forKey: "location.enabledMode") ?? "off"
-        let locationMode = OpenClawLocationMode(rawValue: locationModeRaw) ?? .off
-        if locationMode != .off { caps.append(OpenClawCapability.location.rawValue) }
+        let locationMode = SmartAgentNeoLocationMode(rawValue: locationModeRaw) ?? .off
+        if locationMode != .off { caps.append(SmartAgentNeoCapability.location.rawValue) }
 
-        caps.append(OpenClawCapability.device.rawValue)
-        caps.append(OpenClawCapability.photos.rawValue)
-        caps.append(OpenClawCapability.contacts.rawValue)
-        caps.append(OpenClawCapability.calendar.rawValue)
-        caps.append(OpenClawCapability.reminders.rawValue)
+        caps.append(SmartAgentNeoCapability.device.rawValue)
+        caps.append(SmartAgentNeoCapability.photos.rawValue)
+        caps.append(SmartAgentNeoCapability.contacts.rawValue)
+        caps.append(SmartAgentNeoCapability.calendar.rawValue)
+        caps.append(SmartAgentNeoCapability.reminders.rawValue)
         if Self.motionAvailable() {
-            caps.append(OpenClawCapability.motion.rawValue)
+            caps.append(SmartAgentNeoCapability.motion.rawValue)
         }
 
         return caps
@@ -742,54 +742,54 @@ final class GatewayConnectionController {
 
     private func currentCommands() -> [String] {
         var commands: [String] = [
-            OpenClawCanvasCommand.present.rawValue,
-            OpenClawCanvasCommand.hide.rawValue,
-            OpenClawCanvasCommand.navigate.rawValue,
-            OpenClawCanvasCommand.evalJS.rawValue,
-            OpenClawCanvasCommand.snapshot.rawValue,
-            OpenClawCanvasA2UICommand.push.rawValue,
-            OpenClawCanvasA2UICommand.pushJSONL.rawValue,
-            OpenClawCanvasA2UICommand.reset.rawValue,
-            OpenClawScreenCommand.record.rawValue,
-            OpenClawSystemCommand.notify.rawValue,
-            OpenClawChatCommand.push.rawValue,
-            OpenClawTalkCommand.pttStart.rawValue,
-            OpenClawTalkCommand.pttStop.rawValue,
-            OpenClawTalkCommand.pttCancel.rawValue,
-            OpenClawTalkCommand.pttOnce.rawValue,
+            SmartAgentNeoCanvasCommand.present.rawValue,
+            SmartAgentNeoCanvasCommand.hide.rawValue,
+            SmartAgentNeoCanvasCommand.navigate.rawValue,
+            SmartAgentNeoCanvasCommand.evalJS.rawValue,
+            SmartAgentNeoCanvasCommand.snapshot.rawValue,
+            SmartAgentNeoCanvasA2UICommand.push.rawValue,
+            SmartAgentNeoCanvasA2UICommand.pushJSONL.rawValue,
+            SmartAgentNeoCanvasA2UICommand.reset.rawValue,
+            SmartAgentNeoScreenCommand.record.rawValue,
+            SmartAgentNeoSystemCommand.notify.rawValue,
+            SmartAgentNeoChatCommand.push.rawValue,
+            SmartAgentNeoTalkCommand.pttStart.rawValue,
+            SmartAgentNeoTalkCommand.pttStop.rawValue,
+            SmartAgentNeoTalkCommand.pttCancel.rawValue,
+            SmartAgentNeoTalkCommand.pttOnce.rawValue,
         ]
 
         let caps = Set(self.currentCaps())
-        if caps.contains(OpenClawCapability.camera.rawValue) {
-            commands.append(OpenClawCameraCommand.list.rawValue)
-            commands.append(OpenClawCameraCommand.snap.rawValue)
-            commands.append(OpenClawCameraCommand.clip.rawValue)
+        if caps.contains(SmartAgentNeoCapability.camera.rawValue) {
+            commands.append(SmartAgentNeoCameraCommand.list.rawValue)
+            commands.append(SmartAgentNeoCameraCommand.snap.rawValue)
+            commands.append(SmartAgentNeoCameraCommand.clip.rawValue)
         }
-        if caps.contains(OpenClawCapability.location.rawValue) {
-            commands.append(OpenClawLocationCommand.get.rawValue)
+        if caps.contains(SmartAgentNeoCapability.location.rawValue) {
+            commands.append(SmartAgentNeoLocationCommand.get.rawValue)
         }
-        if caps.contains(OpenClawCapability.device.rawValue) {
-            commands.append(OpenClawDeviceCommand.status.rawValue)
-            commands.append(OpenClawDeviceCommand.info.rawValue)
+        if caps.contains(SmartAgentNeoCapability.device.rawValue) {
+            commands.append(SmartAgentNeoDeviceCommand.status.rawValue)
+            commands.append(SmartAgentNeoDeviceCommand.info.rawValue)
         }
-        if caps.contains(OpenClawCapability.photos.rawValue) {
-            commands.append(OpenClawPhotosCommand.latest.rawValue)
+        if caps.contains(SmartAgentNeoCapability.photos.rawValue) {
+            commands.append(SmartAgentNeoPhotosCommand.latest.rawValue)
         }
-        if caps.contains(OpenClawCapability.contacts.rawValue) {
-            commands.append(OpenClawContactsCommand.search.rawValue)
-            commands.append(OpenClawContactsCommand.add.rawValue)
+        if caps.contains(SmartAgentNeoCapability.contacts.rawValue) {
+            commands.append(SmartAgentNeoContactsCommand.search.rawValue)
+            commands.append(SmartAgentNeoContactsCommand.add.rawValue)
         }
-        if caps.contains(OpenClawCapability.calendar.rawValue) {
-            commands.append(OpenClawCalendarCommand.events.rawValue)
-            commands.append(OpenClawCalendarCommand.add.rawValue)
+        if caps.contains(SmartAgentNeoCapability.calendar.rawValue) {
+            commands.append(SmartAgentNeoCalendarCommand.events.rawValue)
+            commands.append(SmartAgentNeoCalendarCommand.add.rawValue)
         }
-        if caps.contains(OpenClawCapability.reminders.rawValue) {
-            commands.append(OpenClawRemindersCommand.list.rawValue)
-            commands.append(OpenClawRemindersCommand.add.rawValue)
+        if caps.contains(SmartAgentNeoCapability.reminders.rawValue) {
+            commands.append(SmartAgentNeoRemindersCommand.list.rawValue)
+            commands.append(SmartAgentNeoRemindersCommand.add.rawValue)
         }
-        if caps.contains(OpenClawCapability.motion.rawValue) {
-            commands.append(OpenClawMotionCommand.activity.rawValue)
-            commands.append(OpenClawMotionCommand.pedometer.rawValue)
+        if caps.contains(SmartAgentNeoCapability.motion.rawValue) {
+            commands.append(SmartAgentNeoMotionCommand.activity.rawValue)
+            commands.append(SmartAgentNeoMotionCommand.pedometer.rawValue)
         }
 
         return commands

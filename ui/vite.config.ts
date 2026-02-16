@@ -19,7 +19,7 @@ function normalizeBase(input: string): string {
 }
 
 export default defineConfig(() => {
-  const envBase = process.env.OPENCLAW_CONTROL_UI_BASE_PATH?.trim();
+  const envBase = process.env.SMART_AGENT_NEO_CONTROL_UI_BASE_PATH?.trim();
   const base = envBase ? normalizeBase(envBase) : "./";
   return {
     base,

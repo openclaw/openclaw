@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { SmartAgentNeoConfig } from "../config/config.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import * as replyModule from "../auto-reply/reply.js";
 import { whatsappOutbound } from "../channels/plugins/outbound/whatsapp.js";
@@ -97,7 +97,7 @@ beforeAll(async () => {
   ]);
   setActivePluginRegistry(testRegistry);
 
-  fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-heartbeat-suite-"));
+  fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "smart-agent-neo-heartbeat-suite-"));
 });
 
 beforeEach(() => {
@@ -168,7 +168,7 @@ describe("resolveHeartbeatPrompt", () => {
   });
 
   it("uses a trimmed override when configured", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: SmartAgentNeoConfig = {
       agents: { defaults: { heartbeat: { prompt: "  ping  " } } },
     };
     expect(resolveHeartbeatPrompt(cfg)).toBe("ping");
@@ -177,7 +177,7 @@ describe("resolveHeartbeatPrompt", () => {
 
 describe("isHeartbeatEnabledForAgent", () => {
   it("enables only explicit heartbeat agents when configured", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: SmartAgentNeoConfig = {
       agents: {
         defaults: { heartbeat: { every: "30m" } },
         list: [{ id: "main" }, { id: "ops", heartbeat: { every: "1h" } }],
@@ -188,7 +188,7 @@ describe("isHeartbeatEnabledForAgent", () => {
   });
 
   it("falls back to default agent when no explicit heartbeat entries", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: SmartAgentNeoConfig = {
       agents: {
         defaults: { heartbeat: { every: "30m" } },
         list: [{ id: "main" }, { id: "ops" }],
@@ -206,7 +206,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
   };
 
   it("respects target none", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: SmartAgentNeoConfig = {
       agents: { defaults: { heartbeat: { target: "none" } } },
     };
     expect(resolveHeartbeatDeliveryTarget({ cfg, entry: baseEntry })).toEqual({
@@ -219,7 +219,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
   });
 
   it("uses last route by default", () => {
-    const cfg: OpenClawConfig = {};
+    const cfg: SmartAgentNeoConfig = {};
     const entry = {
       ...baseEntry,
       lastChannel: "whatsapp" as const,
@@ -235,7 +235,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
   });
 
   it("normalizes explicit WhatsApp targets when allowFrom is '*'", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: SmartAgentNeoConfig = {
       agents: {
         defaults: {
           heartbeat: { target: "whatsapp", to: "whatsapp:(555) 123" },
@@ -253,7 +253,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
   });
 
   it("skips when last route is webchat", () => {
-    const cfg: OpenClawConfig = {};
+    const cfg: SmartAgentNeoConfig = {};
     const entry = {
       ...baseEntry,
       lastChannel: "webchat" as const,
@@ -269,7 +269,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
   });
 
   it("rejects WhatsApp target not in allowFrom (no silent fallback)", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: SmartAgentNeoConfig = {
       agents: { defaults: { heartbeat: { target: "whatsapp", to: "+1999" } } },
       channels: { whatsapp: { allowFrom: ["+1555", "+1666"] } },
     };
@@ -288,7 +288,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
   });
 
   it("normalizes prefixed WhatsApp group targets for heartbeat delivery", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: SmartAgentNeoConfig = {
       channels: { whatsapp: { allowFrom: ["+1555"] } },
     };
     const entry = {
@@ -306,7 +306,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
   });
 
   it("uses explicit heartbeat accountId when provided", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: SmartAgentNeoConfig = {
       agents: {
         defaults: {
           heartbeat: { target: "telegram", to: "123", accountId: "work" },
@@ -324,7 +324,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
   });
 
   it("skips when explicit heartbeat accountId is unknown", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: SmartAgentNeoConfig = {
       agents: {
         defaults: {
           heartbeat: { target: "telegram", to: "123", accountId: "missing" },
@@ -342,7 +342,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
   });
 
   it("prefers per-agent heartbeat overrides when provided", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: SmartAgentNeoConfig = {
       agents: { defaults: { heartbeat: { target: "telegram", to: "123" } } },
     };
     const heartbeat = { target: "whatsapp", to: "+1555" } as const;
@@ -364,7 +364,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
 
 describe("resolveHeartbeatSenderContext", () => {
   it("prefers delivery accountId for allowFrom resolution", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: SmartAgentNeoConfig = {
       channels: {
         telegram: {
           allowFrom: ["111"],
@@ -397,7 +397,7 @@ describe("resolveHeartbeatSenderContext", () => {
 
 describe("runHeartbeatOnce", () => {
   it("skips when agent heartbeat is not enabled", async () => {
-    const cfg: OpenClawConfig = {
+    const cfg: SmartAgentNeoConfig = {
       agents: {
         defaults: { heartbeat: { every: "30m" } },
         list: [{ id: "main" }, { id: "ops", heartbeat: { every: "1h" } }],
@@ -412,7 +412,7 @@ describe("runHeartbeatOnce", () => {
   });
 
   it("skips outside active hours", async () => {
-    const cfg: OpenClawConfig = {
+    const cfg: SmartAgentNeoConfig = {
       agents: {
         defaults: {
           userTimezone: "UTC",
@@ -440,7 +440,7 @@ describe("runHeartbeatOnce", () => {
     const storePath = path.join(tmpDir, "sessions.json");
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
     try {
-      const cfg: OpenClawConfig = {
+      const cfg: SmartAgentNeoConfig = {
         agents: {
           defaults: {
             workspace: tmpDir,
@@ -493,7 +493,7 @@ describe("runHeartbeatOnce", () => {
     const storePath = path.join(tmpDir, "sessions.json");
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
     try {
-      const cfg: OpenClawConfig = {
+      const cfg: SmartAgentNeoConfig = {
         agents: {
           defaults: {
             heartbeat: { every: "30m", prompt: "Default prompt" },
@@ -559,7 +559,7 @@ describe("runHeartbeatOnce", () => {
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
     const agentId = "ops";
     try {
-      const cfg: OpenClawConfig = {
+      const cfg: SmartAgentNeoConfig = {
         agents: {
           defaults: {
             heartbeat: { every: "30m", prompt: "Default prompt" },
@@ -636,7 +636,7 @@ describe("runHeartbeatOnce", () => {
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
     try {
       const groupId = "120363401234567890@g.us";
-      const cfg: OpenClawConfig = {
+      const cfg: SmartAgentNeoConfig = {
         agents: {
           defaults: {
             workspace: tmpDir,
@@ -713,7 +713,7 @@ describe("runHeartbeatOnce", () => {
     const storePath = path.join(tmpDir, "sessions.json");
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
     try {
-      const cfg: OpenClawConfig = {
+      const cfg: SmartAgentNeoConfig = {
         agents: {
           defaults: {
             workspace: tmpDir,
@@ -764,7 +764,7 @@ describe("runHeartbeatOnce", () => {
     const storePath = path.join(tmpDir, "sessions.json");
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
     try {
-      const cfg: OpenClawConfig = {
+      const cfg: SmartAgentNeoConfig = {
         agents: {
           defaults: {
             workspace: tmpDir,
@@ -831,7 +831,7 @@ describe("runHeartbeatOnce", () => {
     const storePath = path.join(tmpDir, "sessions.json");
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
     try {
-      const cfg: OpenClawConfig = {
+      const cfg: SmartAgentNeoConfig = {
         agents: {
           defaults: {
             workspace: tmpDir,
@@ -893,11 +893,11 @@ describe("runHeartbeatOnce", () => {
   });
 
   it("loads the default agent session from templated stores", async () => {
-    const tmpDir = await createCaseDir("openclaw-hb");
+    const tmpDir = await createCaseDir("smart-agent-neo-hb");
     const storeTemplate = path.join(tmpDir, "agents", "{agentId}", "sessions.json");
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
     try {
-      const cfg: OpenClawConfig = {
+      const cfg: SmartAgentNeoConfig = {
         agents: {
           defaults: { workspace: tmpDir, heartbeat: { every: "5m" } },
           list: [{ id: "work", default: true }],
@@ -956,7 +956,7 @@ describe("runHeartbeatOnce", () => {
   });
 
   it("skips heartbeat when HEARTBEAT.md is effectively empty (saves API calls)", async () => {
-    const tmpDir = await createCaseDir("openclaw-hb");
+    const tmpDir = await createCaseDir("smart-agent-neo-hb");
     const storePath = path.join(tmpDir, "sessions.json");
     const workspaceDir = path.join(tmpDir, "workspace");
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
@@ -970,7 +970,7 @@ describe("runHeartbeatOnce", () => {
         "utf-8",
       );
 
-      const cfg: OpenClawConfig = {
+      const cfg: SmartAgentNeoConfig = {
         agents: {
           defaults: {
             workspace: workspaceDir,
@@ -1027,7 +1027,7 @@ describe("runHeartbeatOnce", () => {
   });
 
   it("does not skip wake-triggered heartbeat when HEARTBEAT.md is effectively empty", async () => {
-    const tmpDir = await createCaseDir("openclaw-hb");
+    const tmpDir = await createCaseDir("smart-agent-neo-hb");
     const storePath = path.join(tmpDir, "sessions.json");
     const workspaceDir = path.join(tmpDir, "workspace");
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
@@ -1039,7 +1039,7 @@ describe("runHeartbeatOnce", () => {
         "utf-8",
       );
 
-      const cfg: OpenClawConfig = {
+      const cfg: SmartAgentNeoConfig = {
         agents: {
           defaults: {
             workspace: workspaceDir,
@@ -1094,7 +1094,7 @@ describe("runHeartbeatOnce", () => {
   });
 
   it("runs heartbeat when HEARTBEAT.md has actionable content", async () => {
-    const tmpDir = await createCaseDir("openclaw-hb");
+    const tmpDir = await createCaseDir("smart-agent-neo-hb");
     const storePath = path.join(tmpDir, "sessions.json");
     const workspaceDir = path.join(tmpDir, "workspace");
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
@@ -1108,7 +1108,7 @@ describe("runHeartbeatOnce", () => {
         "utf-8",
       );
 
-      const cfg: OpenClawConfig = {
+      const cfg: SmartAgentNeoConfig = {
         agents: {
           defaults: {
             workspace: workspaceDir,
@@ -1163,7 +1163,7 @@ describe("runHeartbeatOnce", () => {
   });
 
   it("runs heartbeat when HEARTBEAT.md does not exist (lets LLM decide)", async () => {
-    const tmpDir = await createCaseDir("openclaw-hb");
+    const tmpDir = await createCaseDir("smart-agent-neo-hb");
     const storePath = path.join(tmpDir, "sessions.json");
     const workspaceDir = path.join(tmpDir, "workspace");
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
@@ -1171,7 +1171,7 @@ describe("runHeartbeatOnce", () => {
       await fs.mkdir(workspaceDir, { recursive: true });
       // Don't create HEARTBEAT.md - it doesn't exist
 
-      const cfg: OpenClawConfig = {
+      const cfg: SmartAgentNeoConfig = {
         agents: {
           defaults: {
             workspace: workspaceDir,

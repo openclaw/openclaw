@@ -5,7 +5,7 @@ import {
   normalizeDeviceAuthScopes,
 } from "../../../src/shared/device-auth.js";
 
-const STORAGE_KEY = "openclaw.device.auth.v1";
+const STORAGE_KEY = "smart-agent-neo.device.auth.v1";
 
 function readStore(): DeviceAuthStore | null {
   try {

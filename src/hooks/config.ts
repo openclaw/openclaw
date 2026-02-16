@@ -1,4 +1,4 @@
-import type { OpenClawConfig, HookConfig } from "../config/config.js";
+import type { SmartAgentNeoConfig, HookConfig } from "../config/config.js";
 import type { HookEligibilityContext, HookEntry } from "./types.js";
 import {
   hasBinary,
@@ -16,12 +16,12 @@ const DEFAULT_CONFIG_VALUES: Record<string, boolean> = {
 
 export { hasBinary, resolveConfigPath, resolveRuntimePlatform };
 
-export function isConfigPathTruthy(config: OpenClawConfig | undefined, pathStr: string): boolean {
+export function isConfigPathTruthy(config: SmartAgentNeoConfig | undefined, pathStr: string): boolean {
   return isConfigPathTruthyWithDefaults(config, pathStr, DEFAULT_CONFIG_VALUES);
 }
 
 export function resolveHookConfig(
-  config: OpenClawConfig | undefined,
+  config: SmartAgentNeoConfig | undefined,
   hookKey: string,
 ): HookConfig | undefined {
   const hooks = config?.hooks?.internal?.entries;
@@ -37,13 +37,13 @@ export function resolveHookConfig(
 
 export function shouldIncludeHook(params: {
   entry: HookEntry;
-  config?: OpenClawConfig;
+  config?: SmartAgentNeoConfig;
   eligibility?: HookEligibilityContext;
 }): boolean {
   const { entry, config, eligibility } = params;
   const hookKey = resolveHookKey(entry.hook.name, entry);
   const hookConfig = resolveHookConfig(config, hookKey);
-  const pluginManaged = entry.hook.source === "openclaw-plugin";
+  const pluginManaged = entry.hook.source === "smart-agent-neo-plugin";
   const osList = entry.metadata?.os ?? [];
   const remotePlatforms = eligibility?.remote?.platforms ?? [];
 

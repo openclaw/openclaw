@@ -52,14 +52,14 @@ Before any substantive review or prep work, **always rebase the PR branch onto c
 
 - Create commits with `scripts/committer "<msg>" <file...>`; avoid manual `git add`/`git commit` so staging stays scoped.
 - Follow concise, action-oriented commit messages (e.g., `CLI: add verbose flag to send`).
-- During `prepare-pr`, use this commit subject format: `fix: <summary> (openclaw#<PR>) thanks @<pr-author>`.
+- During `prepare-pr`, use this commit subject format: `fix: <summary> (smart-agent-neo#<PR>) thanks @<pr-author>`.
 - Group related changes; avoid bundling unrelated refactors.
 - Changelog workflow: keep the latest released version at the top (no `Unreleased`); after publishing, bump the version and start a new top section.
 - When working on a PR: add a changelog entry with the PR number and thank the contributor.
 - When working on an issue: reference the issue in the changelog entry.
 - Pure test additions/fixes generally do **not** need a changelog entry unless they alter user-facing behavior or the user asks for one.
 
-## Co-contributor and clawtributors
+## Co-contributor and neo-contributors
 
 - If we squash, add the PR author as a co-contributor in the commit body using a `Co-authored-by:` trailer.
 - When maintainer prepares and merges the PR, add the maintainer as an additional `Co-authored-by:` trailer too.
@@ -67,7 +67,7 @@ Before any substantive review or prep work, **always rebase the PR branch onto c
 - For squash merges, set `--author-email` to a reviewer-owned email with fallback candidates; if merge fails due to author-email validation, retry once with the next candidate.
 - If you review a PR and later do work on it, land via merge/squash (no direct-main commits) and always add the PR author as a co-contributor.
 - When merging a PR: leave a PR comment that explains exactly what we did, include the SHA hashes, and record the comment URL in the final report.
-- When merging a PR from a new contributor: run `bun scripts/update-clawtributors.ts` to add their avatar to the README "Thanks to all clawtributors" list, then commit the regenerated README.
+- When merging a PR from a new contributor: run `bun scripts/update-neo-contributors.ts` to add their avatar to the README "Thanks to all neo-contributors" list, then commit the regenerated README.
 
 ## Review mode vs landing mode
 
@@ -79,7 +79,7 @@ Before any substantive review or prep work, **always rebase the PR branch onto c
 - Before starting a review when a GH Issue/PR is pasted: use an isolated `.worktrees/pr-<PR>` checkout from `origin/main`. Do not require a clean main checkout, and do not run `git pull` in a dirty main checkout.
 - PR review calls: prefer a single `gh pr view --json ...` to batch metadata/comments; run `gh pr diff` only when needed.
 - PRs should summarize scope, note testing performed, and mention any user-facing changes or new flags.
-- Read `docs/help/submitting-a-pr.md` ([Submitting a PR](https://docs.openclaw.ai/help/submitting-a-pr)) for what we expect from contributors.
+- Read `docs/help/submitting-a-pr.md` ([Submitting a PR](https://docs.smart-agent-neo.ai/help/submitting-a-pr)) for what we expect from contributors.
 
 ## Unified workflow
 
@@ -178,4 +178,4 @@ Maintainer checkpoint after merge:
 
 - Were any refactors intentionally deferred and now need follow-up issue(s)?
 - Did this reveal broader architecture or test gaps we should address?
-- Run `bun scripts/update-clawtributors.ts` if the contributor is new.
+- Run `bun scripts/update-neo-contributors.ts` if the contributor is new.

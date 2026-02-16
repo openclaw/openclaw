@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { SmartAgentNeoConfig } from "../config/config.js";
 import type { ReplyDispatcher } from "./reply/reply-dispatcher.js";
 import { dispatchInboundMessage, withReplyDispatcher } from "./dispatch.js";
 import { buildTestCtx } from "./reply/test-ctx.js";
@@ -81,7 +81,7 @@ describe("withReplyDispatcher", () => {
 
     await dispatchInboundMessage({
       ctx: buildTestCtx(),
-      cfg: {} as OpenClawConfig,
+      cfg: {} as SmartAgentNeoConfig,
       dispatcher,
       replyResolver: async () => ({ text: "ok" }),
     });

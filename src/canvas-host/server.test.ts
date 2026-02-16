@@ -62,7 +62,7 @@ describe("canvas host", () => {
   };
 
   beforeAll(async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-canvas-fixtures-"));
+    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "smart-agent-neo-canvas-fixtures-"));
   });
 
   afterAll(async () => {
@@ -73,8 +73,8 @@ describe("canvas host", () => {
     const out = injectCanvasLiveReload("<html><body>Hello</body></html>");
     expect(out).toContain(CANVAS_WS_PATH);
     expect(out).toContain("location.reload");
-    expect(out).toContain("openclawCanvasA2UIAction");
-    expect(out).toContain("openclawSendUserAction");
+    expect(out).toContain("smartAgentNeoCanvasA2UIAction");
+    expect(out).toContain("smartAgentNeoSendUserAction");
   });
 
   it("creates a default index.html when missing", async () => {
@@ -93,7 +93,7 @@ describe("canvas host", () => {
       const html = await res.text();
       expect(res.status).toBe(200);
       expect(html).toContain("Interactive test page");
-      expect(html).toContain("openclawSendUserAction");
+      expect(html).toContain("smartAgentNeoSendUserAction");
       expect(html).toContain(CANVAS_WS_PATH);
     } finally {
       await server.close();
@@ -260,7 +260,7 @@ describe("canvas host", () => {
     try {
       await fs.stat(bundlePath);
     } catch {
-      await fs.writeFile(bundlePath, "window.openclawA2UI = {};", "utf8");
+      await fs.writeFile(bundlePath, "window.smartAgentNeoA2UI = {};", "utf8");
       createdBundle = true;
     }
 
@@ -276,18 +276,18 @@ describe("canvas host", () => {
     });
 
     try {
-      const res = await fetch(`http://127.0.0.1:${server.port}/__openclaw__/a2ui/`);
+      const res = await fetch(`http://127.0.0.1:${server.port}/__smart-agent-neo__/a2ui/`);
       const html = await res.text();
       expect(res.status).toBe(200);
-      expect(html).toContain("openclaw-a2ui-host");
-      expect(html).toContain("openclawCanvasA2UIAction");
+      expect(html).toContain("smart-agent-neo-a2ui-host");
+      expect(html).toContain("smartAgentNeoCanvasA2UIAction");
 
       const bundleRes = await fetch(
-        `http://127.0.0.1:${server.port}/__openclaw__/a2ui/a2ui.bundle.js`,
+        `http://127.0.0.1:${server.port}/__smart-agent-neo__/a2ui/a2ui.bundle.js`,
       );
       const js = await bundleRes.text();
       expect(bundleRes.status).toBe(200);
-      expect(js).toContain("openclawA2UI");
+      expect(js).toContain("smartAgentNeoA2UI");
       const traversalRes = await fetch(
         `http://127.0.0.1:${server.port}${A2UI_PATH}/%2e%2e%2fpackage.json`,
       );

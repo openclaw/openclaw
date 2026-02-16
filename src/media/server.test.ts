@@ -36,7 +36,7 @@ describe("media server", () => {
   let port = 0;
 
   beforeAll(async () => {
-    MEDIA_DIR = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-test-"));
+    MEDIA_DIR = await fs.mkdtemp(path.join(os.tmpdir(), "smart-agent-neo-media-test-"));
     server = await startMediaServer(0, 1_000);
     port = (server.address() as AddressInfo).port;
   });

@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { SmartAgentNeoConfig } from "../config/config.js";
 import type { ProviderAuthMethod, ProviderPlugin } from "../plugins/types.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 
@@ -58,7 +58,7 @@ export function mergeConfigPatch<T>(base: T, patch: unknown): T {
   return next as T;
 }
 
-export function applyDefaultModel(cfg: OpenClawConfig, model: string): OpenClawConfig {
+export function applyDefaultModel(cfg: SmartAgentNeoConfig, model: string): SmartAgentNeoConfig {
   const models = { ...cfg.agents?.defaults?.models };
   models[model] = models[model] ?? {};
 

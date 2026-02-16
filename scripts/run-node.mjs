@@ -128,7 +128,7 @@ const hasSourceMtimeChanged = (stampMtime, deps) => {
 };
 
 const shouldBuild = (deps) => {
-  if (deps.env.OPENCLAW_FORCE_BUILD === "1") {
+  if (deps.env.SMART_AGENT_NEO_FORCE_BUILD === "1") {
     return true;
   }
   const stamp = readBuildStamp(deps);
@@ -170,14 +170,14 @@ const shouldBuild = (deps) => {
 };
 
 const logRunner = (message, deps) => {
-  if (deps.env.OPENCLAW_RUNNER_LOG === "0") {
+  if (deps.env.SMART_AGENT_NEO_RUNNER_LOG === "0") {
     return;
   }
-  deps.stderr.write(`[openclaw] ${message}\n`);
+  deps.stderr.write(`[smart-agent-neo] ${message}\n`);
 };
 
-const runOpenClaw = async (deps) => {
-  const nodeProcess = deps.spawn(deps.execPath, ["openclaw.mjs", ...deps.args], {
+const runSmartAgentNeo = async (deps) => {
+  const nodeProcess = deps.spawn(deps.execPath, ["smart-agent-neo.mjs", ...deps.args], {
     cwd: deps.cwd,
     env: deps.env,
     stdio: "inherit",
@@ -227,7 +227,7 @@ export async function runNodeMain(params = {}) {
   deps.configFiles = [path.join(deps.cwd, "tsconfig.json"), path.join(deps.cwd, "package.json")];
 
   if (!shouldBuild(deps)) {
-    return await runOpenClaw(deps);
+    return await runSmartAgentNeo(deps);
   }
 
   logRunner("Building TypeScript (dist is stale).", deps);
@@ -250,7 +250,7 @@ export async function runNodeMain(params = {}) {
     return buildRes.exitCode;
   }
   writeBuildStamp(deps);
-  return await runOpenClaw(deps);
+  return await runSmartAgentNeo(deps);
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {

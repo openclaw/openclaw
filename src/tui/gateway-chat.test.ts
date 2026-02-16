@@ -5,8 +5,8 @@ const resolveGatewayPort = vi.fn();
 const pickPrimaryTailnetIPv4 = vi.fn();
 const pickPrimaryLanIPv4 = vi.fn();
 
-const originalEnvToken = process.env.OPENCLAW_GATEWAY_TOKEN;
-const originalEnvPassword = process.env.OPENCLAW_GATEWAY_PASSWORD;
+const originalEnvToken = process.env.SMART_AGENT_NEO_GATEWAY_TOKEN;
+const originalEnvPassword = process.env.SMART_AGENT_NEO_GATEWAY_PASSWORD;
 
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
@@ -36,21 +36,21 @@ describe("resolveGatewayConnection", () => {
     resolveGatewayPort.mockReturnValue(18789);
     pickPrimaryTailnetIPv4.mockReturnValue(undefined);
     pickPrimaryLanIPv4.mockReturnValue(undefined);
-    delete process.env.OPENCLAW_GATEWAY_TOKEN;
-    delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+    delete process.env.SMART_AGENT_NEO_GATEWAY_TOKEN;
+    delete process.env.SMART_AGENT_NEO_GATEWAY_PASSWORD;
   });
 
   afterEach(() => {
     if (originalEnvToken === undefined) {
-      delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      delete process.env.SMART_AGENT_NEO_GATEWAY_TOKEN;
     } else {
-      process.env.OPENCLAW_GATEWAY_TOKEN = originalEnvToken;
+      process.env.SMART_AGENT_NEO_GATEWAY_TOKEN = originalEnvToken;
     }
 
     if (originalEnvPassword === undefined) {
-      delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+      delete process.env.SMART_AGENT_NEO_GATEWAY_PASSWORD;
     } else {
-      process.env.OPENCLAW_GATEWAY_PASSWORD = originalEnvPassword;
+      process.env.SMART_AGENT_NEO_GATEWAY_PASSWORD = originalEnvPassword;
     }
   });
 

@@ -1,4 +1,4 @@
-import type { RuntimeEnv } from "openclaw/plugin-sdk";
+import type { RuntimeEnv } from "smart-agent-neo/plugin-sdk";
 import { formatChangesDate } from "./utils.js";
 
 export async function fetchGroupChanges(

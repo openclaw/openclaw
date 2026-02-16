@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { SmartAgentNeoConfig } from "../../config/config.js";
 import type { ChannelId } from "./types.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 
@@ -21,7 +21,7 @@ function resolveAccountConfig(accounts: ChannelConfigWithAccounts["accounts"], a
 }
 
 export function resolveChannelConfigWrites(params: {
-  cfg: OpenClawConfig;
+  cfg: SmartAgentNeoConfig;
   channelId?: ChannelId | null;
   accountId?: string | null;
 }): boolean {

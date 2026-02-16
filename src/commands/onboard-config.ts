@@ -1,9 +1,9 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { SmartAgentNeoConfig } from "../config/config.js";
 
 export function applyOnboardingLocalWorkspaceConfig(
-  baseConfig: OpenClawConfig,
+  baseConfig: SmartAgentNeoConfig,
   workspaceDir: string,
-): OpenClawConfig {
+): SmartAgentNeoConfig {
   return {
     ...baseConfig,
     agents: {

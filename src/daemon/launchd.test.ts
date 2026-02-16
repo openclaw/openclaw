@@ -90,9 +90,9 @@ describe("launchd runtime parsing", () => {
 
 describe("launchctl list detection", () => {
   it("detects the resolved label in launchctl list", async () => {
-    state.listOutput = "123 0 ai.openclaw.gateway\n";
+    state.listOutput = "123 0 ai.smartagentneo.gateway\n";
     const listed = await isLaunchAgentListed({
-      env: { HOME: "/Users/test", OPENCLAW_PROFILE: "default" },
+      env: { HOME: "/Users/test", SMART_AGENT_NEO_PROFILE: "default" },
     });
     expect(listed).toBe(true);
   });
@@ -100,7 +100,7 @@ describe("launchctl list detection", () => {
   it("returns false when the label is missing", async () => {
     state.listOutput = "123 0 com.other.service\n";
     const listed = await isLaunchAgentListed({
-      env: { HOME: "/Users/test", OPENCLAW_PROFILE: "default" },
+      env: { HOME: "/Users/test", SMART_AGENT_NEO_PROFILE: "default" },
     });
     expect(listed).toBe(false);
   });
@@ -110,13 +110,13 @@ describe("launchd bootstrap repair", () => {
   it("bootstraps and kickstarts the resolved label", async () => {
     const env: Record<string, string | undefined> = {
       HOME: "/Users/test",
-      OPENCLAW_PROFILE: "default",
+      SMART_AGENT_NEO_PROFILE: "default",
     };
     const repair = await repairLaunchAgentBootstrap({ env });
     expect(repair.ok).toBe(true);
 
     const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
-    const label = "ai.openclaw.gateway";
+    const label = "ai.smartagentneo.gateway";
     const plistPath = resolveLaunchAgentPlistPath(env);
 
     expect(state.launchctlCalls).toContainEqual(["bootstrap", domain, plistPath]);
@@ -128,7 +128,7 @@ describe("launchd install", () => {
   it("enables service before bootstrap (clears persisted disabled state)", async () => {
     const env: Record<string, string | undefined> = {
       HOME: "/Users/test",
-      OPENCLAW_PROFILE: "default",
+      SMART_AGENT_NEO_PROFILE: "default",
     };
     await installLaunchAgent({
       env,
@@ -137,7 +137,7 @@ describe("launchd install", () => {
     });
 
     const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
-    const label = "ai.openclaw.gateway";
+    const label = "ai.smartagentneo.gateway";
     const plistPath = resolveLaunchAgentPlistPath(env);
     const serviceId = `${domain}/${label}`;
 
@@ -154,49 +154,49 @@ describe("launchd install", () => {
 });
 
 describe("resolveLaunchAgentPlistPath", () => {
-  it("uses default label when OPENCLAW_PROFILE is unset", () => {
+  it("uses default label when SMART_AGENT_NEO_PROFILE is unset", () => {
     const env = { HOME: "/Users/test" };
     expect(resolveLaunchAgentPlistPath(env)).toBe(
-      "/Users/test/Library/LaunchAgents/ai.openclaw.gateway.plist",
+      "/Users/test/Library/LaunchAgents/ai.smartagentneo.gateway.plist",
     );
   });
 
-  it("uses profile-specific label when OPENCLAW_PROFILE is set to a custom value", () => {
-    const env = { HOME: "/Users/test", OPENCLAW_PROFILE: "jbphoenix" };
+  it("uses profile-specific label when SMART_AGENT_NEO_PROFILE is set to a custom value", () => {
+    const env = { HOME: "/Users/test", SMART_AGENT_NEO_PROFILE: "jbphoenix" };
     expect(resolveLaunchAgentPlistPath(env)).toBe(
-      "/Users/test/Library/LaunchAgents/ai.openclaw.jbphoenix.plist",
+      "/Users/test/Library/LaunchAgents/ai.smartagentneo.jbphoenix.plist",
     );
   });
 
-  it("prefers OPENCLAW_LAUNCHD_LABEL over OPENCLAW_PROFILE", () => {
+  it("prefers SMART_AGENT_NEO_LAUNCHD_LABEL over SMART_AGENT_NEO_PROFILE", () => {
     const env = {
       HOME: "/Users/test",
-      OPENCLAW_PROFILE: "jbphoenix",
-      OPENCLAW_LAUNCHD_LABEL: "com.custom.label",
+      SMART_AGENT_NEO_PROFILE: "jbphoenix",
+      SMART_AGENT_NEO_LAUNCHD_LABEL: "com.custom.label",
     };
     expect(resolveLaunchAgentPlistPath(env)).toBe(
       "/Users/test/Library/LaunchAgents/com.custom.label.plist",
     );
   });
 
-  it("trims whitespace from OPENCLAW_LAUNCHD_LABEL", () => {
+  it("trims whitespace from SMART_AGENT_NEO_LAUNCHD_LABEL", () => {
     const env = {
       HOME: "/Users/test",
-      OPENCLAW_LAUNCHD_LABEL: "  com.custom.label  ",
+      SMART_AGENT_NEO_LAUNCHD_LABEL: "  com.custom.label  ",
     };
     expect(resolveLaunchAgentPlistPath(env)).toBe(
       "/Users/test/Library/LaunchAgents/com.custom.label.plist",
     );
   });
 
-  it("ignores empty OPENCLAW_LAUNCHD_LABEL and falls back to profile", () => {
+  it("ignores empty SMART_AGENT_NEO_LAUNCHD_LABEL and falls back to profile", () => {
     const env = {
       HOME: "/Users/test",
-      OPENCLAW_PROFILE: "myprofile",
-      OPENCLAW_LAUNCHD_LABEL: "   ",
+      SMART_AGENT_NEO_PROFILE: "myprofile",
+      SMART_AGENT_NEO_LAUNCHD_LABEL: "   ",
     };
     expect(resolveLaunchAgentPlistPath(env)).toBe(
-      "/Users/test/Library/LaunchAgents/ai.openclaw.myprofile.plist",
+      "/Users/test/Library/LaunchAgents/ai.smartagentneo.myprofile.plist",
     );
   });
 });

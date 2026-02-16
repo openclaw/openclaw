@@ -4,7 +4,7 @@ import {
   type OAuthCredentials,
   type OAuthProvider,
 } from "@mariozechner/pi-ai";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { SmartAgentNeoConfig } from "../../config/config.js";
 import type { AuthProfileStore } from "./types.js";
 import { withFileLock } from "../../infra/file-lock.js";
 import { refreshQwenPortalCredentials } from "../../providers/qwen-portal-oauth.js";
@@ -93,7 +93,7 @@ async function refreshOAuthTokenWithLock(params: {
 }
 
 async function tryResolveOAuthProfile(params: {
-  cfg?: OpenClawConfig;
+  cfg?: SmartAgentNeoConfig;
   store: AuthProfileStore;
   profileId: string;
   agentDir?: string;
@@ -134,7 +134,7 @@ async function tryResolveOAuthProfile(params: {
 }
 
 export async function resolveApiKeyForProfile(params: {
-  cfg?: OpenClawConfig;
+  cfg?: SmartAgentNeoConfig;
   store: AuthProfileStore;
   profileId: string;
   agentDir?: string;

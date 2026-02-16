@@ -13,7 +13,7 @@ const noopLogger = {
 };
 
 async function makeStorePath() {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-migrate-"));
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "smart-agent-neo-cron-migrate-"));
   return {
     dir,
     storePath: path.join(dir, "cron", "jobs.json"),

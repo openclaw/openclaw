@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { SmartAgentNeoConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
@@ -16,14 +16,14 @@ const VERIFY_TIMEOUT_MS = 10000;
 export type CustomApiCompatibility = "openai" | "anthropic";
 type CustomApiCompatibilityChoice = CustomApiCompatibility | "unknown";
 export type CustomApiResult = {
-  config: OpenClawConfig;
+  config: SmartAgentNeoConfig;
   providerId?: string;
   modelId?: string;
   providerIdRenamedFrom?: string;
 };
 
 export type ApplyCustomApiConfigParams = {
-  config: OpenClawConfig;
+  config: SmartAgentNeoConfig;
   baseUrl: string;
   modelId: string;
   compatibility: CustomApiCompatibility;
@@ -67,7 +67,7 @@ export class CustomApiError extends Error {
 }
 
 export type ResolveCustomProviderIdParams = {
-  config: OpenClawConfig;
+  config: SmartAgentNeoConfig;
   baseUrl: string;
   providerId?: string;
 };
@@ -140,7 +140,7 @@ function resolveUniqueEndpointId(params: {
 
 function resolveAliasError(params: {
   raw: string;
-  cfg: OpenClawConfig;
+  cfg: SmartAgentNeoConfig;
   modelRef: string;
 }): string | undefined {
   const trimmed = params.raw.trim();
@@ -459,7 +459,7 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
   const normalizedApiKey =
     params.apiKey?.trim() || (existingApiKey ? existingApiKey.trim() : undefined);
 
-  let config: OpenClawConfig = {
+  let config: SmartAgentNeoConfig = {
     ...params.config,
     models: {
       ...params.config.models,
@@ -510,7 +510,7 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
 export async function promptCustomApiConfig(params: {
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
-  config: OpenClawConfig;
+  config: SmartAgentNeoConfig;
 }): Promise<CustomApiResult> {
   const { prompter, runtime, config } = params;
 

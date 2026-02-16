@@ -25,12 +25,12 @@ export function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void> {
   const token =
     opts.gatewayToken ??
     (isRemoteMode ? remote?.token?.trim() : undefined) ??
-    process.env.OPENCLAW_GATEWAY_TOKEN ??
+    process.env.SMART_AGENT_NEO_GATEWAY_TOKEN ??
     auth.token;
   const password =
     opts.gatewayPassword ??
     (isRemoteMode ? remote?.password?.trim() : undefined) ??
-    process.env.OPENCLAW_GATEWAY_PASSWORD ??
+    process.env.SMART_AGENT_NEO_GATEWAY_PASSWORD ??
     auth.password;
 
   let agent: AcpGatewayAgent | null = null;
@@ -147,7 +147,7 @@ function parseArgs(args: string[]): AcpServerOptions {
 }
 
 function printHelp(): void {
-  console.log(`Usage: openclaw acp [options]
+  console.log(`Usage: smart-agent-neo acp [options]
 
 Gateway-backed ACP server for IDE integration.
 

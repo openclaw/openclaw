@@ -1,7 +1,7 @@
 ---
-summary: "Use NVIDIA's OpenAI-compatible API in OpenClaw"
+summary: "Use NVIDIA's OpenAI-compatible API in SmartAgentNeo"
 read_when:
-  - You want to use NVIDIA models in OpenClaw
+  - You want to use NVIDIA models in SmartAgentNeo
   - You need NVIDIA_API_KEY setup
 title: "NVIDIA"
 ---
@@ -16,8 +16,8 @@ Export the key once, then run onboarding and set an NVIDIA model:
 
 ```bash
 export NVIDIA_API_KEY="nvapi-..."
-openclaw onboard --auth-choice skip
-openclaw models set nvidia/nvidia/llama-3.1-nemotron-70b-instruct
+smart-agent-neo onboard --auth-choice skip
+smart-agent-neo models set nvidia/nvidia/llama-3.1-nemotron-70b-instruct
 ```
 
 If you still pass `--token`, remember it lands in shell history and `ps` output; prefer the env var when possible.

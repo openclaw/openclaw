@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { CliDeps } from "../cli/deps.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { SmartAgentNeoConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { agentCommand } from "../commands/agent.js";
@@ -73,7 +73,7 @@ async function loadBootFile(
 }
 
 function snapshotMainSessionMapping(params: {
-  cfg: OpenClawConfig;
+  cfg: SmartAgentNeoConfig;
   sessionKey: string;
 }): SessionMappingSnapshot {
   const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
@@ -135,7 +135,7 @@ async function restoreMainSessionMapping(
 }
 
 export async function runBootOnce(params: {
-  cfg: OpenClawConfig;
+  cfg: SmartAgentNeoConfig;
   deps: CliDeps;
   workspaceDir: string;
 }): Promise<BootRunResult> {

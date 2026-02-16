@@ -1,5 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
-import { createReplyPrefixOptions } from "openclaw/plugin-sdk";
+import type { SmartAgentNeoConfig } from "smart-agent-neo/plugin-sdk";
+import { createReplyPrefixOptions } from "smart-agent-neo/plugin-sdk";
 import { describe, expect, it } from "vitest";
 import { mattermostPlugin } from "./channel.js";
 
@@ -48,7 +48,7 @@ describe("mattermostPlugin", () => {
     });
 
     it("uses account responsePrefix overrides", () => {
-      const cfg: OpenClawConfig = {
+      const cfg: SmartAgentNeoConfig = {
         channels: {
           mattermost: {
             responsePrefix: "[Channel]",

@@ -17,10 +17,10 @@ describe("config discord", () => {
 
   it("loads discord guild map + dm group settings", async () => {
     await withTempHome(async (home) => {
-      const configDir = path.join(home, ".openclaw");
+      const configDir = path.join(home, ".smart-agent-neo");
       await fs.mkdir(configDir, { recursive: true });
       await fs.writeFile(
-        path.join(configDir, "openclaw.json"),
+        path.join(configDir, "smart-agent-neo.json"),
         JSON.stringify(
           {
             channels: {
@@ -30,7 +30,7 @@ describe("config discord", () => {
                   enabled: true,
                   allowFrom: ["steipete"],
                   groupEnabled: true,
-                  groupChannels: ["openclaw-dm"],
+                  groupChannels: ["smart-agent-neo-dm"],
                 },
                 actions: {
                   emojiUploads: true,
@@ -39,7 +39,7 @@ describe("config discord", () => {
                 },
                 guilds: {
                   "123": {
-                    slug: "friends-of-openclaw",
+                    slug: "friends-of-smart-agent-neo",
                     requireMention: false,
                     users: ["steipete"],
                     channels: {
@@ -60,11 +60,11 @@ describe("config discord", () => {
 
       expect(cfg.channels?.discord?.enabled).toBe(true);
       expect(cfg.channels?.discord?.dm?.groupEnabled).toBe(true);
-      expect(cfg.channels?.discord?.dm?.groupChannels).toEqual(["openclaw-dm"]);
+      expect(cfg.channels?.discord?.dm?.groupChannels).toEqual(["smart-agent-neo-dm"]);
       expect(cfg.channels?.discord?.actions?.emojiUploads).toBe(true);
       expect(cfg.channels?.discord?.actions?.stickerUploads).toBe(false);
       expect(cfg.channels?.discord?.actions?.channels).toBe(true);
-      expect(cfg.channels?.discord?.guilds?.["123"]?.slug).toBe("friends-of-openclaw");
+      expect(cfg.channels?.discord?.guilds?.["123"]?.slug).toBe("friends-of-smart-agent-neo");
       expect(cfg.channels?.discord?.guilds?.["123"]?.channels?.general?.allow).toBe(true);
     });
   });

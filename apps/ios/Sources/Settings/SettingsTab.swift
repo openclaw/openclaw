@@ -1,4 +1,4 @@
-import OpenClawKit
+import SmartAgentNeoKit
 import Network
 import Observation
 import os
@@ -18,7 +18,7 @@ struct SettingsTab: View {
     @AppStorage("talk.background.enabled") private var talkBackgroundEnabled: Bool = false
     @AppStorage("talk.voiceDirectiveHint.enabled") private var talkVoiceDirectiveHintEnabled: Bool = true
     @AppStorage("camera.enabled") private var cameraEnabled: Bool = true
-    @AppStorage("location.enabledMode") private var locationEnabledModeRaw: String = OpenClawLocationMode.off.rawValue
+    @AppStorage("location.enabledMode") private var locationEnabledModeRaw: String = SmartAgentNeoLocationMode.off.rawValue
     @AppStorage("location.preciseEnabled") private var locationPreciseEnabled: Bool = true
     @AppStorage("screen.preventSleep") private var preventSleep: Bool = true
     @AppStorage("gateway.preferredStableID") private var preferredGatewayStableID: String = ""
@@ -38,7 +38,7 @@ struct SettingsTab: View {
 
     @State private var connectingGatewayID: String?
     @State private var localIPAddress: String?
-    @State private var lastLocationModeRaw: String = OpenClawLocationMode.off.rawValue
+    @State private var lastLocationModeRaw: String = SmartAgentNeoLocationMode.off.rawValue
     @State private var gatewayToken: String = ""
     @State private var gatewayPassword: String = ""
     @State private var talkElevenLabsApiKey: String = ""
@@ -51,7 +51,7 @@ struct SettingsTab: View {
     @State private var showResetOnboardingAlert: Bool = false
     @State private var suppressCredentialPersist: Bool = false
 
-    private let gatewayLogger = Logger(subsystem: "ai.openclaw.ios", category: "GatewaySettings")
+    private let gatewayLogger = Logger(subsystem: "ai.smartagentneo.ios", category: "GatewaySettings")
 
     var body: some View {
         NavigationStack {
@@ -282,9 +282,9 @@ struct SettingsTab: View {
                             .foregroundStyle(.secondary)
 
                         Picker("Location Access", selection: self.$locationEnabledModeRaw) {
-                            Text("Off").tag(OpenClawLocationMode.off.rawValue)
-                            Text("While Using").tag(OpenClawLocationMode.whileUsing.rawValue)
-                            Text("Always").tag(OpenClawLocationMode.always.rawValue)
+                            Text("Off").tag(SmartAgentNeoLocationMode.off.rawValue)
+                            Text("While Using").tag(SmartAgentNeoLocationMode.whileUsing.rawValue)
+                            Text("Always").tag(SmartAgentNeoLocationMode.always.rawValue)
                         }
                         .pickerStyle(.segmented)
 
@@ -296,7 +296,7 @@ struct SettingsTab: View {
                             .foregroundStyle(.secondary)
 
                         Toggle("Prevent Sleep", isOn: self.$preventSleep)
-                        Text("Keeps the screen awake while OpenClaw is open.")
+                        Text("Keeps the screen awake while SmartAgentNeo is open.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
@@ -409,7 +409,7 @@ struct SettingsTab: View {
             .onChange(of: self.locationEnabledModeRaw) { _, newValue in
                 let previous = self.lastLocationModeRaw
                 self.lastLocationModeRaw = newValue
-                guard let mode = OpenClawLocationMode(rawValue: newValue) else { return }
+                guard let mode = SmartAgentNeoLocationMode(rawValue: newValue) else { return }
                 Task {
                     let granted = await self.appModel.requestLocationPermissions(mode: mode)
                     if !granted {
@@ -518,8 +518,8 @@ struct SettingsTab: View {
         return "iOS \(v.majorVersion).\(v.minorVersion).\(v.patchVersion)"
     }
 
-    private var locationMode: OpenClawLocationMode {
-        OpenClawLocationMode(rawValue: self.locationEnabledModeRaw) ?? .off
+    private var locationMode: SmartAgentNeoLocationMode {
+        SmartAgentNeoLocationMode(rawValue: self.locationEnabledModeRaw) ?? .off
     }
 
     private func appVersion() -> String {

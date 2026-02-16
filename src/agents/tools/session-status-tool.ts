@@ -1,5 +1,5 @@
 import { Type } from "@sinclair/typebox";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { SmartAgentNeoConfig } from "../../config/config.js";
 import type { AnyAgentTool } from "./common.js";
 import { normalizeGroupActivation } from "../../auto-reply/group-activation.js";
 import { getFollowupQueueDepth, resolveQueueSettings } from "../../auto-reply/reply/queue.js";
@@ -66,7 +66,7 @@ function formatApiKeySnippet(apiKey: string): string {
 
 function resolveModelAuthLabel(params: {
   provider?: string;
-  cfg: OpenClawConfig;
+  cfg: SmartAgentNeoConfig;
   sessionEntry?: SessionEntry;
   agentDir?: string;
 }): string | undefined {
@@ -164,7 +164,7 @@ function resolveSessionEntry(params: {
 }
 
 function resolveSessionKeyFromSessionId(params: {
-  cfg: OpenClawConfig;
+  cfg: SmartAgentNeoConfig;
   sessionId: string;
   agentId?: string;
 }): string | null {
@@ -186,7 +186,7 @@ function resolveSessionKeyFromSessionId(params: {
 }
 
 async function resolveModelOverride(params: {
-  cfg: OpenClawConfig;
+  cfg: SmartAgentNeoConfig;
   raw: string;
   sessionEntry?: SessionEntry;
   agentId: string;
@@ -250,7 +250,7 @@ async function resolveModelOverride(params: {
 
 export function createSessionStatusTool(opts?: {
   agentSessionKey?: string;
-  config?: OpenClawConfig;
+  config?: SmartAgentNeoConfig;
 }): AnyAgentTool {
   return {
     label: "Session Status",

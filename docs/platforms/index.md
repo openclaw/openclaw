@@ -8,7 +8,7 @@ title: "Platforms"
 
 # Platforms
 
-OpenClaw core is written in TypeScript. **Node is the recommended runtime**.
+SmartAgentNeo core is written in TypeScript. **Node is the recommended runtime**.
 Bun is not recommended for the Gateway (WhatsApp/Telegram bugs).
 
 Companion apps exist for macOS (menu bar app) and mobile nodes (iOS/Android). Windows and
@@ -36,18 +36,18 @@ Native companion apps for Windows are also planned; the Gateway is recommended v
 - Install guide: [Getting Started](/start/getting-started)
 - Gateway runbook: [Gateway](/gateway)
 - Gateway configuration: [Configuration](/gateway/configuration)
-- Service status: `openclaw gateway status`
+- Service status: `smart-agent-neo gateway status`
 
 ## Gateway service install (CLI)
 
 Use one of these (all supported):
 
-- Wizard (recommended): `openclaw onboard --install-daemon`
-- Direct: `openclaw gateway install`
-- Configure flow: `openclaw configure` → select **Gateway service**
-- Repair/migrate: `openclaw doctor` (offers to install or fix the service)
+- Wizard (recommended): `smart-agent-neo onboard --install-daemon`
+- Direct: `smart-agent-neo gateway install`
+- Configure flow: `smart-agent-neo configure` → select **Gateway service**
+- Repair/migrate: `smart-agent-neo doctor` (offers to install or fix the service)
 
 The service target depends on OS:
 
-- macOS: LaunchAgent (`bot.molt.gateway` or `bot.molt.<profile>`; legacy `com.openclaw.*`)
-- Linux/WSL2: systemd user service (`openclaw-gateway[-<profile>].service`)
+- macOS: LaunchAgent (`bot.molt.gateway` or `bot.molt.<profile>`; legacy `com.smart-agent-neo.*`)
+- Linux/WSL2: systemd user service (`smart-agent-neo-gateway[-<profile>].service`)

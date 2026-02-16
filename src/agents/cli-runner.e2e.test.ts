@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { SmartAgentNeoConfig } from "../config/config.js";
 import { runCliAgent } from "./cli-runner.js";
 import { resolveCliNoOutputTimeoutMs } from "./cli-runner/helpers.js";
 
@@ -154,7 +154,7 @@ describe("runCliAgent with process supervisor", () => {
   });
 
   it("falls back to per-agent workspace when workspaceDir is missing", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-runner-"));
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "smart-agent-neo-cli-runner-"));
     const fallbackWorkspace = path.join(tempDir, "workspace-main");
     await fs.mkdir(fallbackWorkspace, { recursive: true });
     const cfg = {
@@ -163,7 +163,7 @@ describe("runCliAgent with process supervisor", () => {
           workspace: fallbackWorkspace,
         },
       },
-    } satisfies OpenClawConfig;
+    } satisfies SmartAgentNeoConfig;
 
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({

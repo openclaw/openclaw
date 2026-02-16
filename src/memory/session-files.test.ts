@@ -24,7 +24,7 @@ describe("buildSessionEntry", () => {
     // Line 7: user message
     const jsonlLines = [
       JSON.stringify({ type: "custom", customType: "model-snapshot", data: {} }),
-      JSON.stringify({ type: "custom", customType: "openclaw.cache-ttl", data: {} }),
+      JSON.stringify({ type: "custom", customType: "smart-agent-neo.cache-ttl", data: {} }),
       JSON.stringify({ type: "session-meta", agentId: "test" }),
       JSON.stringify({ type: "message", message: { role: "user", content: "Hello world" } }),
       JSON.stringify({ type: "custom", customType: "tool-result", data: {} }),

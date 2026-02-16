@@ -75,10 +75,10 @@ describe("logger helpers", () => {
     resetLogger();
     setLoggerOverride({ level: "info" }); // force default file path with enabled file logging
     const today = localDateString(new Date());
-    const todayPath = path.join(DEFAULT_LOG_DIR, `openclaw-${today}.log`);
+    const todayPath = path.join(DEFAULT_LOG_DIR, `smart-agent-neo-${today}.log`);
 
     // create an old file to be pruned
-    const oldPath = path.join(DEFAULT_LOG_DIR, "openclaw-2000-01-01.log");
+    const oldPath = path.join(DEFAULT_LOG_DIR, "smart-agent-neo-2000-01-01.log");
     fs.mkdirSync(DEFAULT_LOG_DIR, { recursive: true });
     fs.writeFileSync(oldPath, "old");
     fs.utimesSync(oldPath, new Date(0), new Date(0));
@@ -150,7 +150,7 @@ describe("stripRedundantSubsystemPrefixForConsole", () => {
 });
 
 function pathForTest() {
-  const file = path.join(os.tmpdir(), `openclaw-log-${crypto.randomUUID()}.log`);
+  const file = path.join(os.tmpdir(), `smart-agent-neo-log-${crypto.randomUUID()}.log`);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   return file;
 }

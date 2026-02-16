@@ -18,4 +18,4 @@ export {
   validateConfigObjectRawWithPlugins,
   validateConfigObjectWithPlugins,
 } from "./validation.js";
-export { OpenClawSchema } from "./zod-schema.js";
+export { SmartAgentNeoSchema } from "./zod-schema.js";

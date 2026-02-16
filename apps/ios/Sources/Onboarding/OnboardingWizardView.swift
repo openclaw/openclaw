@@ -1,5 +1,5 @@
 import CoreImage
-import OpenClawKit
+import SmartAgentNeoKit
 import PhotosUI
 import SwiftUI
 import UIKit
@@ -292,7 +292,7 @@ struct OnboardingWizardView: View {
                 .font(.largeTitle.weight(.bold))
                 .padding(.bottom, 8)
 
-            Text("Connect to your OpenClaw gateway")
+            Text("Connect to your SmartAgentNeo gateway")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -517,17 +517,17 @@ struct OnboardingWizardView: View {
 
             if self.issue.needsPairing {
                 Section {
-                    Button("Copy: openclaw devices list") {
-                        UIPasteboard.general.string = "openclaw devices list"
+                    Button("Copy: smart-agent-neo devices list") {
+                        UIPasteboard.general.string = "smart-agent-neo devices list"
                     }
 
                     if let id = self.issue.requestId {
-                        Button("Copy: openclaw devices approve \(id)") {
-                            UIPasteboard.general.string = "openclaw devices approve \(id)"
+                        Button("Copy: smart-agent-neo devices approve \(id)") {
+                            UIPasteboard.general.string = "smart-agent-neo devices approve \(id)"
                         }
                     } else {
-                        Button("Copy: openclaw devices approve <requestId>") {
-                            UIPasteboard.general.string = "openclaw devices approve <requestId>"
+                        Button("Copy: smart-agent-neo devices approve <requestId>") {
+                            UIPasteboard.general.string = "smart-agent-neo devices approve <requestId>"
                         }
                     }
                 } header: {
@@ -597,7 +597,7 @@ struct OnboardingWizardView: View {
             Button {
                 self.onClose()
             } label: {
-                Text("Open OpenClaw")
+                Text("Open SmartAgentNeo")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
@@ -711,12 +711,12 @@ struct OnboardingWizardView: View {
                     self.manualPort = port
                     self.manualTLS = useTLS
                 case .discovered:
-                    self.manualHost = "openclaw.local"
+                    self.manualHost = "smart-agent-neo.local"
                     self.manualPort = 18789
                     self.manualTLS = true
                 }
             } else {
-                self.manualHost = "openclaw.local"
+                self.manualHost = "smart-agent-neo.local"
                 self.manualPort = 18789
                 self.manualTLS = true
             }
@@ -725,7 +725,7 @@ struct OnboardingWizardView: View {
         if self.selectedMode == nil {
             self.selectedMode = OnboardingStateStore.lastMode()
         }
-        if self.selectedMode == .developerLocal && self.manualHost == "openclaw.local" {
+        if self.selectedMode == .developerLocal && self.manualHost == "smart-agent-neo.local" {
             self.manualHost = "localhost"
             self.manualTLS = false
         }
@@ -780,15 +780,15 @@ struct OnboardingWizardView: View {
 
     private func applyModeDefaults(_ mode: OnboardingConnectionMode) {
         let host = self.manualHost.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let hostIsDefaultLike = host.isEmpty || host == "openclaw.local" || host == "localhost"
+        let hostIsDefaultLike = host.isEmpty || host == "smart-agent-neo.local" || host == "localhost"
 
         switch mode {
         case .homeNetwork:
-            if hostIsDefaultLike { self.manualHost = "openclaw.local" }
+            if hostIsDefaultLike { self.manualHost = "smart-agent-neo.local" }
             self.manualTLS = true
             if self.manualPort <= 0 || self.manualPort > 65535 { self.manualPort = 18789 }
         case .remoteDomain:
-            if host == "openclaw.local" || host == "localhost" { self.manualHost = "" }
+            if host == "smart-agent-neo.local" || host == "localhost" { self.manualHost = "" }
             self.manualTLS = true
             if self.manualPort <= 0 || self.manualPort > 65535 { self.manualPort = 18789 }
         case .developerLocal:

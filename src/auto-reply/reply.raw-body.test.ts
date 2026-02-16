@@ -30,11 +30,11 @@ vi.mock("../web/session.js", () => ({
 
 import { getReplyFromConfig } from "./reply.js";
 
-const { withTempHome } = createTempHomeHarness({ prefix: "openclaw-rawbody-" });
+const { withTempHome } = createTempHomeHarness({ prefix: "smart-agent-neo-rawbody-" });
 
 describe("RawBody directive parsing", () => {
   beforeEach(() => {
-    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    vi.stubEnv("SMART_AGENT_NEO_TEST_FAST", "1");
     agentMocks.runEmbeddedPiAgent.mockReset();
     agentMocks.loadModelCatalog.mockReset();
     agentMocks.loadModelCatalog.mockResolvedValue([

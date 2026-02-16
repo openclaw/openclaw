@@ -1,15 +1,15 @@
-import OpenClawKit
+import SmartAgentNeoKit
 import Foundation
 import Testing
 
 @Suite struct DeepLinkParserTests {
     @Test func parseRejectsUnknownHost() {
-        let url = URL(string: "openclaw://nope?message=hi")!
+        let url = URL(string: "smart-agent-neo://nope?message=hi")!
         #expect(DeepLinkParser.parse(url) == nil)
     }
 
     @Test func parseHostIsCaseInsensitive() {
-        let url = URL(string: "openclaw://AGENT?message=Hello")!
+        let url = URL(string: "smart-agent-neo://AGENT?message=Hello")!
         #expect(DeepLinkParser.parse(url) == .agent(.init(
             message: "Hello",
             sessionKey: nil,
@@ -21,19 +21,19 @@ import Testing
             key: nil)))
     }
 
-    @Test func parseRejectsNonOpenClawScheme() {
+    @Test func parseRejectsNonSmartAgentNeoScheme() {
         let url = URL(string: "https://example.com/agent?message=hi")!
         #expect(DeepLinkParser.parse(url) == nil)
     }
 
     @Test func parseRejectsEmptyMessage() {
-        let url = URL(string: "openclaw://agent?message=%20%20%0A")!
+        let url = URL(string: "smart-agent-neo://agent?message=%20%20%0A")!
         #expect(DeepLinkParser.parse(url) == nil)
     }
 
     @Test func parseAgentLinkParsesCommonFields() {
         let url =
-            URL(string: "openclaw://agent?message=Hello&deliver=1&sessionKey=node-test&thinking=low&timeoutSeconds=30")!
+            URL(string: "smart-agent-neo://agent?message=Hello&deliver=1&sessionKey=node-test&thinking=low&timeoutSeconds=30")!
         #expect(
             DeepLinkParser.parse(url) == .agent(
                 .init(
@@ -50,7 +50,7 @@ import Testing
     @Test func parseAgentLinkParsesTargetRoutingFields() {
         let url =
             URL(
-                string: "openclaw://agent?message=Hello%20World&deliver=1&to=%2B15551234567&channel=whatsapp&key=secret")!
+                string: "smart-agent-neo://agent?message=Hello%20World&deliver=1&to=%2B15551234567&channel=whatsapp&key=secret")!
         #expect(
             DeepLinkParser.parse(url) == .agent(
                 .init(
@@ -65,7 +65,7 @@ import Testing
     }
 
     @Test func parseRejectsNegativeTimeoutSeconds() {
-        let url = URL(string: "openclaw://agent?message=Hello&timeoutSeconds=-1")!
+        let url = URL(string: "smart-agent-neo://agent?message=Hello&timeoutSeconds=-1")!
         #expect(DeepLinkParser.parse(url) == .agent(.init(
             message: "Hello",
             sessionKey: nil,
@@ -79,10 +79,10 @@ import Testing
 
     @Test func parseGatewayLinkParsesCommonFields() {
         let url = URL(
-            string: "openclaw://gateway?host=openclaw.local&port=18789&tls=1&token=abc&password=def")!
+            string: "smart-agent-neo://gateway?host=smart-agent-neo.local&port=18789&tls=1&token=abc&password=def")!
         #expect(
             DeepLinkParser.parse(url) == .gateway(
-                .init(host: "openclaw.local", port: 18789, tls: true, token: "abc", password: "def")))
+                .init(host: "smart-agent-neo.local", port: 18789, tls: true, token: "abc", password: "def")))
     }
 
     @Test func parseGatewaySetupCodeParsesBase64UrlPayload() {

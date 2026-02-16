@@ -1,4 +1,4 @@
-import type { MSTeamsConfig } from "openclaw/plugin-sdk";
+import type { MSTeamsConfig } from "smart-agent-neo/plugin-sdk";
 
 export type MSTeamsCredentials = {
   appId: string;

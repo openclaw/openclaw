@@ -14,12 +14,12 @@ const mockedExecDockerRaw = vi.mocked(execDockerRaw);
 function createSandbox(overrides?: Partial<SandboxContext>): SandboxContext {
   return createSandboxTestContext({
     overrides: {
-      containerName: "moltbot-sbx-test",
+      containerName: "neobot-sbx-test",
       ...overrides,
     },
     dockerOverrides: {
-      image: "moltbot-sandbox:bookworm-slim",
-      containerPrefix: "moltbot-sbx-",
+      image: "neobot-sandbox:bookworm-slim",
+      containerPrefix: "neobot-sbx-",
     },
   });
 }
@@ -84,7 +84,7 @@ describe("sandbox fs bridge shell compatibility", () => {
 
     const args = mockedExecDockerRaw.mock.calls.at(-1)?.[0] ?? [];
     expect(args).toEqual(
-      expect.arrayContaining(["moltbot-sbx-test", "sh", "-c", 'set -eu; cat -- "$1"']),
+      expect.arrayContaining(["neobot-sbx-test", "sh", "-c", 'set -eu; cat -- "$1"']),
     );
     expect(args.at(-1)).toBe("/workspace-two/README.md");
   });

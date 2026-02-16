@@ -9,14 +9,14 @@ import { loadPluginManifestRegistry } from "./manifest-registry.js";
 const tempDirs: string[] = [];
 
 function makeTempDir() {
-  const dir = path.join(os.tmpdir(), `openclaw-manifest-registry-${randomUUID()}`);
+  const dir = path.join(os.tmpdir(), `smart-agent-neo-manifest-registry-${randomUUID()}`);
   fs.mkdirSync(dir, { recursive: true });
   tempDirs.push(dir);
   return dir;
 }
 
 function writeManifest(dir: string, manifest: Record<string, unknown>) {
-  fs.writeFileSync(path.join(dir, "openclaw.plugin.json"), JSON.stringify(manifest), "utf-8");
+  fs.writeFileSync(path.join(dir, "smart-agent-neo.plugin.json"), JSON.stringify(manifest), "utf-8");
 }
 
 afterEach(() => {

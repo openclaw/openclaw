@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { SmartAgentNeoConfig } from "../../config/config.js";
 import type { AuthProfileStore } from "./types.js";
 import { normalizeProviderId } from "../model-selection.js";
 import { listProfilesForProvider } from "./profiles.js";
@@ -18,7 +18,7 @@ function resolveProfileUnusableUntil(stats: {
 }
 
 export function resolveAuthProfileOrder(params: {
-  cfg?: OpenClawConfig;
+  cfg?: SmartAgentNeoConfig;
   store: AuthProfileStore;
   provider: string;
   preferredProfile?: string;

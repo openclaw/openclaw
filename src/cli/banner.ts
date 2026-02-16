@@ -39,7 +39,7 @@ export function formatCliBannerLine(version: string, options: BannerOptions = {}
   const commitLabel = commit ?? "unknown";
   const tagline = pickTagline(options);
   const rich = options.richTty ?? isRich();
-  const title = "🦞 OpenClaw";
+  const title = "🦞 SmartAgentNeo";
   const prefix = "🦞 ";
   const columns = options.columns ?? process.stdout.columns ?? 120;
   const plainFullLine = `${title} ${version} (${commitLabel}) — ${tagline}`;
@@ -70,7 +70,7 @@ const LOBSTER_ASCII = [
   "██░███░██░▀▀░██░▄▄▄██░█░█░██░█████░████░▀▀░██░█░█░██",
   "██░▀▀▀░██░█████░▀▀▀██░██▄░██░▀▀▄██░▀▀░█░██░██▄▀▄▀▄██",
   "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
-  "                  🦞 OPENCLAW 🦞                    ",
+  "                  🦞 SMART_AGENT_NEO 🦞                    ",
   " ",
 ];
 
@@ -94,11 +94,11 @@ export function formatCliBannerArt(options: BannerOptions = {}): string {
   };
 
   const colored = LOBSTER_ASCII.map((line) => {
-    if (line.includes("OPENCLAW")) {
+    if (line.includes("SMART_AGENT_NEO")) {
       return (
         theme.muted("              ") +
         theme.accent("🦞") +
-        theme.info(" OPENCLAW ") +
+        theme.info(" SMART_AGENT_NEO ") +
         theme.accent("🦞")
       );
     }

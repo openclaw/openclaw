@@ -4,7 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 async function withTempDir<T>(run: (dir: string) => Promise<T>): Promise<T> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-run-node-"));
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "smart-agent-neo-run-node-"));
   try {
     return await run(dir);
   } finally {
@@ -50,8 +50,8 @@ describe("run-node script", () => {
           args: ["--version"],
           env: {
             ...process.env,
-            OPENCLAW_FORCE_BUILD: "1",
-            OPENCLAW_RUNNER_LOG: "0",
+            SMART_AGENT_NEO_FORCE_BUILD: "1",
+            SMART_AGENT_NEO_RUNNER_LOG: "0",
           },
           spawn,
           execPath: process.execPath,
@@ -61,7 +61,7 @@ describe("run-node script", () => {
         expect(exitCode).toBe(0);
         await expect(fs.readFile(argsPath, "utf-8")).resolves.toContain("exec tsdown --no-clean");
         await expect(fs.readFile(indexPath, "utf-8")).resolves.toContain("sentinel");
-        expect(nodeCalls).toEqual([[process.execPath, "openclaw.mjs", "--version"]]);
+        expect(nodeCalls).toEqual([[process.execPath, "smart-agent-neo.mjs", "--version"]]);
       });
     },
   );

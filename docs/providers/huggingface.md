@@ -1,14 +1,14 @@
 ---
 summary: "Hugging Face Inference setup (auth + model selection)"
 read_when:
-  - You want to use Hugging Face Inference with OpenClaw
+  - You want to use Hugging Face Inference with SmartAgentNeo
   - You need the HF token env var or CLI auth choice
 title: "Hugging Face (Inference)"
 ---
 
 # Hugging Face (Inference)
 
-[Hugging Face Inference Providers](https://huggingface.co/docs/inference-providers) offer OpenAI-compatible chat completions through a single router API. You get access to many models (DeepSeek, Llama, and more) with one token. OpenClaw uses the **OpenAI-compatible endpoint** (chat completions only); for text-to-image, embeddings, or speech use the [HF inference clients](https://huggingface.co/docs/api-inference/quicktour) directly.
+[Hugging Face Inference Providers](https://huggingface.co/docs/inference-providers) offer OpenAI-compatible chat completions through a single router API. You get access to many models (DeepSeek, Llama, and more) with one token. SmartAgentNeo uses the **OpenAI-compatible endpoint** (chat completions only); for text-to-image, embeddings, or speech use the [HF inference clients](https://huggingface.co/docs/api-inference/quicktour) directly.
 
 - Provider: `huggingface`
 - Auth: `HUGGINGFACE_HUB_TOKEN` or `HF_TOKEN` (fine-grained token with **Make calls to Inference Providers**)
@@ -21,7 +21,7 @@ title: "Hugging Face (Inference)"
 2. Run onboarding and choose **Hugging Face** in the provider dropdown, then enter your API key when prompted:
 
 ```bash
-openclaw onboard --auth-choice huggingface-api-key
+smart-agent-neo onboard --auth-choice huggingface-api-key
 ```
 
 3. In the **Default Hugging Face model** dropdown, pick the model you want (the list is loaded from the Inference API when you have a valid token; otherwise a built-in list is shown). Your choice is saved as the default model.
@@ -40,7 +40,7 @@ openclaw onboard --auth-choice huggingface-api-key
 ## Non-interactive example
 
 ```bash
-openclaw onboard --non-interactive \
+smart-agent-neo onboard --non-interactive \
   --mode local \
   --auth-choice huggingface-api-key \
   --huggingface-api-key "$HF_TOKEN"
@@ -51,12 +51,12 @@ This will set `huggingface/deepseek-ai/DeepSeek-R1` as the default model.
 ## Environment note
 
 If the Gateway runs as a daemon (launchd/systemd), make sure `HUGGINGFACE_HUB_TOKEN` or `HF_TOKEN`
-is available to that process (for example, in `~/.openclaw/.env` or via
+is available to that process (for example, in `~/.smart-agent-neo/.env` or via
 `env.shellEnv`).
 
 ## Model discovery and onboarding dropdown
 
-OpenClaw discovers models by calling the **Inference endpoint directly**:
+SmartAgentNeo discovers models by calling the **Inference endpoint directly**:
 
 ```bash
 GET https://router.huggingface.co/v1/models
@@ -64,7 +64,7 @@ GET https://router.huggingface.co/v1/models
 
 (Optional: send `Authorization: Bearer $HUGGINGFACE_HUB_TOKEN` or `$HF_TOKEN` for the full list; some endpoints return a subset without auth.) The response is OpenAI-style `{ "object": "list", "data": [ { "id": "Qwen/Qwen3-8B", "owned_by": "Qwen", ... }, ... ] }`.
 
-When you configure a Hugging Face API key (via onboarding, `HUGGINGFACE_HUB_TOKEN`, or `HF_TOKEN`), OpenClaw uses this GET to discover available chat-completion models. During **interactive onboarding**, after you enter your token you see a **Default Hugging Face model** dropdown populated from that list (or the built-in catalog if the request fails). At runtime (e.g. Gateway startup), when a key is present, OpenClaw again calls **GET** `https://router.huggingface.co/v1/models` to refresh the catalog. The list is merged with a built-in catalog (for metadata like context window and cost). If the request fails or no key is set, only the built-in catalog is used.
+When you configure a Hugging Face API key (via onboarding, `HUGGINGFACE_HUB_TOKEN`, or `HF_TOKEN`), SmartAgentNeo uses this GET to discover available chat-completion models. During **interactive onboarding**, after you enter your token you see a **Default Hugging Face model** dropdown populated from that list (or the built-in catalog if the request fails). At runtime (e.g. Gateway startup), when a key is present, SmartAgentNeo again calls **GET** `https://router.huggingface.co/v1/models` to refresh the catalog. The list is merged with a built-in catalog (for metadata like context window and cost). If the request fails or no key is set, only the built-in catalog is used.
 
 ## Model names and editable options
 

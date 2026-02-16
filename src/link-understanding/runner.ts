@@ -1,5 +1,5 @@
 import type { MsgContext } from "../auto-reply/templating.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { SmartAgentNeoConfig } from "../config/config.js";
 import type { LinkModelConfig, LinkToolsConfig } from "../config/types.tools.js";
 import { applyTemplate } from "../auto-reply/templating.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
@@ -105,7 +105,7 @@ async function runLinkEntries(params: {
 }
 
 export async function runLinkUnderstanding(params: {
-  cfg: OpenClawConfig;
+  cfg: SmartAgentNeoConfig;
   ctx: MsgContext;
   message?: string;
 }): Promise<LinkUnderstandingResult> {

@@ -8,7 +8,7 @@ import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../plugins/hook-runner-global.js";
-import { loadOpenClawPlugins } from "../plugins/loader.js";
+import { loadSmartAgentNeoPlugins } from "../plugins/loader.js";
 import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
 
 const EMPTY_PLUGIN_SCHEMA = { type: "object", additionalProperties: false, properties: {} };
@@ -19,7 +19,7 @@ function writeTempPlugin(params: { dir: string; id: string; body: string }): str
   const file = path.join(pluginDir, `${params.id}.mjs`);
   fs.writeFileSync(file, params.body, "utf-8");
   fs.writeFileSync(
-    path.join(pluginDir, "openclaw.plugin.json"),
+    path.join(pluginDir, "smart-agent-neo.plugin.json"),
     JSON.stringify(
       {
         id: params.id,
@@ -76,8 +76,8 @@ describe("tool_result_persist hook", () => {
   });
 
   it("loads tool_result_persist hooks without breaking persistence", () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-toolpersist-"));
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "smart-agent-neo-toolpersist-"));
+    process.env.SMART_AGENT_NEO_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
 
     const pluginA = writeTempPlugin({
       dir: tmp,
@@ -103,7 +103,7 @@ describe("tool_result_persist hook", () => {
 } };`,
     });
 
-    const registry = loadOpenClawPlugins({
+    const registry = loadSmartAgentNeoPlugins({
       cache: false,
       workspaceDir: tmp,
       config: {

@@ -9,7 +9,7 @@ title: "Audio and Voice Notes"
 
 ## What works
 
-- **Media understanding (audio)**: If audio understanding is enabled (or auto‑detected), OpenClaw:
+- **Media understanding (audio)**: If audio understanding is enabled (or auto‑detected), SmartAgentNeo:
   1. Locates the first audio attachment (local path or URL) and downloads it if needed.
   2. Enforces `maxBytes` before sending to each model entry.
   3. Runs the first eligible model entry in order (provider or CLI).
@@ -21,7 +21,7 @@ title: "Audio and Voice Notes"
 ## Auto-detection (default)
 
 If you **don’t configure models** and `tools.media.audio.enabled` is **not** set to `false`,
-OpenClaw auto-detects in this order and stops at the first working option:
+SmartAgentNeo auto-detects in this order and stops at the first working option:
 
 1. **Local CLIs** (if installed)
    - `sherpa-onnx-offline` (requires `SHERPA_ONNX_MODEL_DIR` with encoder/decoder/joiner/tokens)
@@ -109,11 +109,11 @@ Note: Binary detection is best-effort across macOS/Linux/Windows; ensure the CLI
 
 ## Mention Detection in Groups
 
-When `requireMention: true` is set for a group chat, OpenClaw now transcribes audio **before** checking for mentions. This allows voice notes to be processed even when they contain mentions.
+When `requireMention: true` is set for a group chat, SmartAgentNeo now transcribes audio **before** checking for mentions. This allows voice notes to be processed even when they contain mentions.
 
 **How it works:**
 
-1. If a voice message has no text body and the group requires mentions, OpenClaw performs a "preflight" transcription.
+1. If a voice message has no text body and the group requires mentions, SmartAgentNeo performs a "preflight" transcription.
 2. The transcript is checked for mention patterns (e.g., `@BotName`, emoji triggers).
 3. If a mention is found, the message proceeds through the full reply pipeline.
 4. The transcript is used for mention detection so voice notes can pass the mention gate.

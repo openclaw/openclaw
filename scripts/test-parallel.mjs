@@ -50,12 +50,12 @@ const isWindowsCi = isCI && isWindows;
 const nodeMajor = Number.parseInt(process.versions.node.split(".")[0] ?? "", 10);
 // vmForks is a big win for transform/import heavy suites, but Node 24 had
 // regressions with Vitest's vm runtime in this repo. Keep it opt-out via
-// OPENCLAW_TEST_VM_FORKS=0, and let users force-enable with =1.
+// SMART_AGENT_NEO_TEST_VM_FORKS=0, and let users force-enable with =1.
 const supportsVmForks = Number.isFinite(nodeMajor) ? nodeMajor !== 24 : true;
 const useVmForks =
-  process.env.OPENCLAW_TEST_VM_FORKS === "1" ||
-  (process.env.OPENCLAW_TEST_VM_FORKS !== "0" && !isWindows && supportsVmForks);
-const disableIsolation = process.env.OPENCLAW_TEST_NO_ISOLATE === "1";
+  process.env.SMART_AGENT_NEO_TEST_VM_FORKS === "1" ||
+  (process.env.SMART_AGENT_NEO_TEST_VM_FORKS !== "0" && !isWindows && supportsVmForks);
+const disableIsolation = process.env.SMART_AGENT_NEO_TEST_NO_ISOLATE === "1";
 const runs = [
   ...(useVmForks
     ? [
@@ -112,7 +112,7 @@ const runs = [
     ],
   },
 ];
-const shardOverride = Number.parseInt(process.env.OPENCLAW_TEST_SHARDS ?? "", 10);
+const shardOverride = Number.parseInt(process.env.SMART_AGENT_NEO_TEST_SHARDS ?? "", 10);
 const shardCount = isWindowsCi
   ? Number.isFinite(shardOverride) && shardOverride > 1
     ? shardOverride
@@ -120,11 +120,11 @@ const shardCount = isWindowsCi
   : 1;
 const windowsCiArgs = isWindowsCi ? ["--dangerouslyIgnoreUnhandledErrors"] : [];
 const silentArgs =
-  process.env.OPENCLAW_TEST_SHOW_PASSED_LOGS === "1" ? [] : ["--silent=passed-only"];
+  process.env.SMART_AGENT_NEO_TEST_SHOW_PASSED_LOGS === "1" ? [] : ["--silent=passed-only"];
 const rawPassthroughArgs = process.argv.slice(2);
 const passthroughArgs =
   rawPassthroughArgs[0] === "--" ? rawPassthroughArgs.slice(1) : rawPassthroughArgs;
-const rawTestProfile = process.env.OPENCLAW_TEST_PROFILE?.trim().toLowerCase();
+const rawTestProfile = process.env.SMART_AGENT_NEO_TEST_PROFILE?.trim().toLowerCase();
 const testProfile =
   rawTestProfile === "low" ||
   rawTestProfile === "max" ||
@@ -132,16 +132,16 @@ const testProfile =
   rawTestProfile === "serial"
     ? rawTestProfile
     : "normal";
-const overrideWorkers = Number.parseInt(process.env.OPENCLAW_TEST_WORKERS ?? "", 10);
+const overrideWorkers = Number.parseInt(process.env.SMART_AGENT_NEO_TEST_WORKERS ?? "", 10);
 const resolvedOverride =
   Number.isFinite(overrideWorkers) && overrideWorkers > 0 ? overrideWorkers : null;
 // Keep gateway serial on Windows CI and CI by default; run in parallel locally
-// for lower wall-clock time. CI can opt in via OPENCLAW_TEST_PARALLEL_GATEWAY=1.
+// for lower wall-clock time. CI can opt in via SMART_AGENT_NEO_TEST_PARALLEL_GATEWAY=1.
 const keepGatewaySerial =
   isWindowsCi ||
-  process.env.OPENCLAW_TEST_SERIAL_GATEWAY === "1" ||
+  process.env.SMART_AGENT_NEO_TEST_SERIAL_GATEWAY === "1" ||
   testProfile === "serial" ||
-  (isCI && process.env.OPENCLAW_TEST_PARALLEL_GATEWAY !== "1");
+  (isCI && process.env.SMART_AGENT_NEO_TEST_PARALLEL_GATEWAY !== "1");
 const parallelRuns = keepGatewaySerial ? runs.filter((entry) => entry.name !== "gateway") : runs;
 const serialRuns = keepGatewaySerial ? runs.filter((entry) => entry.name === "gateway") : [];
 const localWorkers = Math.max(4, Math.min(16, os.cpus().length));
@@ -210,7 +210,7 @@ const WARNING_SUPPRESSION_FLAGS = [
 const DEFAULT_CI_MAX_OLD_SPACE_SIZE_MB = 4096;
 const maxOldSpaceSizeMb = (() => {
   // CI can hit Node heap limits (especially on large suites). Allow override, default to 4GB.
-  const raw = process.env.OPENCLAW_TEST_MAX_OLD_SPACE_SIZE_MB ?? "";
+  const raw = process.env.SMART_AGENT_NEO_TEST_MAX_OLD_SPACE_SIZE_MB ?? "";
   const parsed = Number.parseInt(raw, 10);
   if (Number.isFinite(parsed) && parsed > 0) {
     return parsed;
@@ -222,7 +222,7 @@ const maxOldSpaceSizeMb = (() => {
 })();
 
 function resolveReportDir() {
-  const raw = process.env.OPENCLAW_VITEST_REPORT_DIR?.trim();
+  const raw = process.env.SMART_AGENT_NEO_VITEST_REPORT_DIR?.trim();
   if (!raw) {
     return null;
   }

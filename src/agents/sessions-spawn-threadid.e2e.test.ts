@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { createOpenClawTools } from "./openclaw-tools.js";
+import { createSmartAgentNeoTools } from "./smart-agent-neo-tools.js";
 import "./test-helpers/fast-core-tools.js";
 import {
   callGatewayMock,
   setSubagentsConfigOverride,
-} from "./openclaw-tools.subagents.test-harness.js";
+} from "./smart-agent-neo-tools.subagents.test-harness.js";
 import {
   listSubagentRunsForRequester,
   resetSubagentRegistryForTests,
@@ -35,7 +35,7 @@ describe("sessions_spawn requesterOrigin threading", () => {
   });
 
   it("captures threadId in requesterOrigin", async () => {
-    const tool = createOpenClawTools({
+    const tool = createSmartAgentNeoTools({
       agentSessionKey: "main",
       agentChannel: "telegram",
       agentTo: "telegram:123",
@@ -60,7 +60,7 @@ describe("sessions_spawn requesterOrigin threading", () => {
   });
 
   it("stores requesterOrigin without threadId when none is provided", async () => {
-    const tool = createOpenClawTools({
+    const tool = createSmartAgentNeoTools({
       agentSessionKey: "main",
       agentChannel: "telegram",
       agentTo: "telegram:123",

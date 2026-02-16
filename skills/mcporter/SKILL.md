@@ -4,7 +4,7 @@ description: Use the mcporter CLI to list, configure, auth, and call MCP servers
 homepage: http://mcporter.dev
 metadata:
   {
-    "openclaw":
+    "smart-agent-neo":
       {
         "emoji": "📦",
         "requires": { "bins": ["mcporter"] },

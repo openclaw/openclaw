@@ -4,7 +4,7 @@ import { parseTimeoutMs } from "../nodes-run.js";
 
 /**
  * Regression test for #12098:
- * `openclaw nodes run` times out after 35s because the CLI transport timeout
+ * `smart-agent-neo nodes run` times out after 35s because the CLI transport timeout
  * (35s default) is shorter than the exec approval timeout (120s). The
  * exec.approval.request call must use a transport timeout at least as long
  * as the approval timeout so the gateway has enough time to collect the

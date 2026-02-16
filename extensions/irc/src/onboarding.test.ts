@@ -1,4 +1,4 @@
-import type { RuntimeEnv, WizardPrompter } from "openclaw/plugin-sdk";
+import type { RuntimeEnv, WizardPrompter } from "smart-agent-neo/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
 import type { CoreConfig } from "./types.js";
 import { ircOnboardingAdapter } from "./onboarding.js";
@@ -19,19 +19,19 @@ describe("irc onboarding", () => {
           return "6697";
         }
         if (message === "IRC nick") {
-          return "openclaw-bot";
+          return "smart-agent-neo-bot";
         }
         if (message === "IRC username") {
-          return "openclaw";
+          return "smart-agent-neo";
         }
         if (message === "IRC real name") {
-          return "OpenClaw Bot";
+          return "SmartAgentNeo Bot";
         }
         if (message.startsWith("Auto-join IRC channels")) {
-          return "#openclaw, #ops";
+          return "#smart-agent-neo, #ops";
         }
         if (message.startsWith("IRC channels allowlist")) {
-          return "#openclaw, #ops";
+          return "#smart-agent-neo, #ops";
         }
         throw new Error(`Unexpected prompt: ${message}`);
       }) as WizardPrompter["text"],
@@ -66,11 +66,11 @@ describe("irc onboarding", () => {
     expect(result.accountId).toBe("default");
     expect(result.cfg.channels?.irc?.enabled).toBe(true);
     expect(result.cfg.channels?.irc?.host).toBe("irc.libera.chat");
-    expect(result.cfg.channels?.irc?.nick).toBe("openclaw-bot");
+    expect(result.cfg.channels?.irc?.nick).toBe("smart-agent-neo-bot");
     expect(result.cfg.channels?.irc?.tls).toBe(true);
-    expect(result.cfg.channels?.irc?.channels).toEqual(["#openclaw", "#ops"]);
+    expect(result.cfg.channels?.irc?.channels).toEqual(["#smart-agent-neo", "#ops"]);
     expect(result.cfg.channels?.irc?.groupPolicy).toBe("allowlist");
-    expect(Object.keys(result.cfg.channels?.irc?.groups ?? {})).toEqual(["#openclaw", "#ops"]);
+    expect(Object.keys(result.cfg.channels?.irc?.groups ?? {})).toEqual(["#smart-agent-neo", "#ops"]);
   });
 
   it("writes DM allowFrom to top-level config for non-default account prompts", async () => {
@@ -99,7 +99,7 @@ describe("irc onboarding", () => {
           accounts: {
             work: {
               host: "irc.libera.chat",
-              nick: "openclaw-work",
+              nick: "smart-agent-neo-work",
             },
           },
         },

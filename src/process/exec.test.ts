@@ -13,18 +13,18 @@ describe("runCommandWithTimeout", () => {
   });
 
   it("merges custom env with process.env", async () => {
-    const envSnapshot = captureEnv(["OPENCLAW_BASE_ENV"]);
-    process.env.OPENCLAW_BASE_ENV = "base";
+    const envSnapshot = captureEnv(["SMART_AGENT_NEO_BASE_ENV"]);
+    process.env.SMART_AGENT_NEO_BASE_ENV = "base";
     try {
       const result = await runCommandWithTimeout(
         [
           process.execPath,
           "-e",
-          'process.stdout.write((process.env.OPENCLAW_BASE_ENV ?? "") + "|" + (process.env.OPENCLAW_TEST_ENV ?? ""))',
+          'process.stdout.write((process.env.SMART_AGENT_NEO_BASE_ENV ?? "") + "|" + (process.env.SMART_AGENT_NEO_TEST_ENV ?? ""))',
         ],
         {
           timeoutMs: 5_000,
-          env: { OPENCLAW_TEST_ENV: "ok" },
+          env: { SMART_AGENT_NEO_TEST_ENV: "ok" },
         },
       );
 

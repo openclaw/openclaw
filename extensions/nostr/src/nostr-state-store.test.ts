@@ -1,4 +1,4 @@
-import type { PluginRuntime } from "openclaw/plugin-sdk";
+import type { PluginRuntime } from "smart-agent-neo/plugin-sdk";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -11,17 +11,17 @@ import {
 import { setNostrRuntime } from "./runtime.js";
 
 async function withTempStateDir<T>(fn: (dir: string) => Promise<T>) {
-  const previous = process.env.OPENCLAW_STATE_DIR;
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-nostr-"));
-  process.env.OPENCLAW_STATE_DIR = dir;
+  const previous = process.env.SMART_AGENT_NEO_STATE_DIR;
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "smart-agent-neo-nostr-"));
+  process.env.SMART_AGENT_NEO_STATE_DIR = dir;
   setNostrRuntime({
     state: {
       resolveStateDir: (env, homedir) => {
-        const override = env.OPENCLAW_STATE_DIR?.trim() || env.OPENCLAW_STATE_DIR?.trim();
+        const override = env.SMART_AGENT_NEO_STATE_DIR?.trim() || env.SMART_AGENT_NEO_STATE_DIR?.trim();
         if (override) {
           return override;
         }
-        return path.join(homedir(), ".openclaw");
+        return path.join(homedir(), ".smart-agent-neo");
       },
     },
   } as PluginRuntime);
@@ -29,9 +29,9 @@ async function withTempStateDir<T>(fn: (dir: string) => Promise<T>) {
     return await fn(dir);
   } finally {
     if (previous === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
+      delete process.env.SMART_AGENT_NEO_STATE_DIR;
     } else {
-      process.env.OPENCLAW_STATE_DIR = previous;
+      process.env.SMART_AGENT_NEO_STATE_DIR = previous;
     }
     await fs.rm(dir, { recursive: true, force: true });
   }

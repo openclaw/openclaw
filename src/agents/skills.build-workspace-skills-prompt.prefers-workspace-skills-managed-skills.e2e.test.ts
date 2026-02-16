@@ -7,7 +7,7 @@ import { buildWorkspaceSkillsPrompt } from "./skills.js";
 
 describe("buildWorkspaceSkillsPrompt", () => {
   it("prefers workspace skills over managed skills", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-"));
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "smart-agent-neo-"));
     const managedDir = path.join(workspaceDir, ".managed");
     const bundledDir = path.join(workspaceDir, ".bundled");
     const managedSkillDir = path.join(managedDir, "demo-skill");
@@ -44,7 +44,7 @@ describe("buildWorkspaceSkillsPrompt", () => {
     expect(prompt).not.toContain(path.join(bundledSkillDir, "SKILL.md"));
   });
   it("gates by bins, config, and always", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-"));
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "smart-agent-neo-"));
     const skillsDir = path.join(workspaceDir, "skills");
     const binDir = path.join(workspaceDir, "bin");
     const originalPath = process.env.PATH;
@@ -53,31 +53,31 @@ describe("buildWorkspaceSkillsPrompt", () => {
       dir: path.join(skillsDir, "bin-skill"),
       name: "bin-skill",
       description: "Needs a bin",
-      metadata: '{"openclaw":{"requires":{"bins":["fakebin"]}}}',
+      metadata: '{"smart-agent-neo":{"requires":{"bins":["fakebin"]}}}',
     });
     await writeSkill({
       dir: path.join(skillsDir, "anybin-skill"),
       name: "anybin-skill",
       description: "Needs any bin",
-      metadata: '{"openclaw":{"requires":{"anyBins":["missingbin","fakebin"]}}}',
+      metadata: '{"smart-agent-neo":{"requires":{"anyBins":["missingbin","fakebin"]}}}',
     });
     await writeSkill({
       dir: path.join(skillsDir, "config-skill"),
       name: "config-skill",
       description: "Needs config",
-      metadata: '{"openclaw":{"requires":{"config":["browser.enabled"]}}}',
+      metadata: '{"smart-agent-neo":{"requires":{"config":["browser.enabled"]}}}',
     });
     await writeSkill({
       dir: path.join(skillsDir, "always-skill"),
       name: "always-skill",
       description: "Always on",
-      metadata: '{"openclaw":{"always":true,"requires":{"env":["MISSING"]}}}',
+      metadata: '{"smart-agent-neo":{"always":true,"requires":{"env":["MISSING"]}}}',
     });
     await writeSkill({
       dir: path.join(skillsDir, "env-skill"),
       name: "env-skill",
       description: "Needs env",
-      metadata: '{"openclaw":{"requires":{"env":["ENV_KEY"]},"primaryEnv":"ENV_KEY"}}',
+      metadata: '{"smart-agent-neo":{"requires":{"env":["ENV_KEY"]},"primaryEnv":"ENV_KEY"}}',
     });
 
     try {
@@ -113,13 +113,13 @@ describe("buildWorkspaceSkillsPrompt", () => {
     }
   });
   it("uses skillKey for config lookups", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-"));
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "smart-agent-neo-"));
     const skillDir = path.join(workspaceDir, "skills", "alias-skill");
     await writeSkill({
       dir: skillDir,
       name: "alias-skill",
       description: "Uses skillKey",
-      metadata: '{"openclaw":{"skillKey":"alias"}}',
+      metadata: '{"smart-agent-neo":{"skillKey":"alias"}}',
     });
 
     const prompt = buildWorkspaceSkillsPrompt(workspaceDir, {

@@ -6,7 +6,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { expectSingleNpmInstallIgnoreScriptsCall } from "../test-utils/exec-assertions.js";
 import { isAddressInUseError } from "./gmail-watcher.js";
 
-const fixtureRoot = path.join(os.tmpdir(), `openclaw-hook-install-${randomUUID()}`);
+const fixtureRoot = path.join(os.tmpdir(), `smart-agent-neo-hook-install-${randomUUID()}`);
 let tempDirIndex = 0;
 
 const fixturesDir = path.resolve(process.cwd(), "test", "fixtures", "hooks-install");
@@ -153,9 +153,9 @@ describe("installHooksFromPath", () => {
     fs.writeFileSync(
       path.join(pkgDir, "package.json"),
       JSON.stringify({
-        name: "@openclaw/test-hooks",
+        name: "@smart-agent-neo/test-hooks",
         version: "0.0.1",
-        openclaw: { hooks: ["./hooks/one-hook"] },
+        smart-agent-neo: { hooks: ["./hooks/one-hook"] },
         dependencies: { "left-pad": "1.3.0" },
       }),
       "utf-8",
@@ -166,7 +166,7 @@ describe("installHooksFromPath", () => {
         "---",
         "name: one-hook",
         "description: One hook",
-        'metadata: {"openclaw":{"events":["command:new"]}}',
+        'metadata: {"smart-agent-neo":{"events":["command:new"]}}',
         "---",
         "",
         "# One Hook",
@@ -207,7 +207,7 @@ describe("installHooksFromPath", () => {
         "---",
         "name: my-hook",
         "description: My hook",
-        'metadata: {"openclaw":{"events":["command:new"]}}',
+        'metadata: {"smart-agent-neo":{"events":["command:new"]}}',
         "---",
         "",
         "# My Hook",
@@ -248,7 +248,7 @@ describe("installHooksFromNpmSpec", () => {
 
     const hooksDir = path.join(stateDir, "hooks");
     const result = await installHooksFromNpmSpec({
-      spec: "@openclaw/test-hooks@0.0.1",
+      spec: "@smart-agent-neo/test-hooks@0.0.1",
       hooksDir,
       logger: { info: () => {}, warn: () => {} },
     });
@@ -268,7 +268,7 @@ describe("installHooksFromNpmSpec", () => {
       throw new Error("expected npm pack call");
     }
     const [argv, options] = packCall;
-    expect(argv).toEqual(["npm", "pack", "@openclaw/test-hooks@0.0.1", "--ignore-scripts"]);
+    expect(argv).toEqual(["npm", "pack", "@smart-agent-neo/test-hooks@0.0.1", "--ignore-scripts"]);
     expect(options?.env).toMatchObject({ NPM_CONFIG_IGNORE_SCRIPTS: "true" });
 
     expect(packTmpDir).not.toBe("");

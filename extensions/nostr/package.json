@@ -1,16 +1,16 @@
 {
-  "name": "@openclaw/nostr",
+  "name": "@smart-agent-neo/nostr",
   "version": "2026.2.16",
-  "description": "OpenClaw Nostr channel plugin for NIP-04 encrypted DMs",
+  "description": "SmartAgentNeo Nostr channel plugin for NIP-04 encrypted DMs",
   "type": "module",
   "dependencies": {
     "nostr-tools": "^2.23.1",
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "openclaw": "workspace:*"
+    "smart-agent-neo": "workspace:*"
   },
-  "openclaw": {
+  "smart-agent-neo": {
     "extensions": [
       "./index.ts"
     ],
@@ -25,7 +25,7 @@
       "quickstartAllowFrom": true
     },
     "install": {
-      "npmSpec": "@openclaw/nostr",
+      "npmSpec": "@smart-agent-neo/nostr",
       "localPath": "extensions/nostr",
       "defaultChoice": "npm"
     }

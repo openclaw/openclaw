@@ -1,14 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
-import { resolveOpenClawAgentDir } from "./agent-paths.js";
+import type { SmartAgentNeoConfig } from "../config/config.js";
+import { resolveSmartAgentNeoAgentDir } from "./agent-paths.js";
 import {
   CUSTOM_PROXY_MODELS_CONFIG,
   installModelsConfigTestHooks,
   withModelsTempHome as withTempHome,
 } from "./models-config.e2e-harness.js";
-import { ensureOpenClawModelsJson } from "./models-config.js";
+import { ensureSmartAgentNeoModelsJson } from "./models-config.js";
 
 installModelsConfigTestHooks();
 
@@ -18,7 +18,7 @@ describe("models-config", () => {
       const prevKey = process.env.MINIMAX_API_KEY;
       process.env.MINIMAX_API_KEY = "sk-minimax-test";
       try {
-        const cfg: OpenClawConfig = {
+        const cfg: SmartAgentNeoConfig = {
           models: {
             providers: {
               minimax: {
@@ -40,9 +40,9 @@ describe("models-config", () => {
           },
         };
 
-        await ensureOpenClawModelsJson(cfg);
+        await ensureSmartAgentNeoModelsJson(cfg);
 
-        const modelPath = path.join(resolveOpenClawAgentDir(), "models.json");
+        const modelPath = path.join(resolveSmartAgentNeoAgentDir(), "models.json");
         const raw = await fs.readFile(modelPath, "utf8");
         const parsed = JSON.parse(raw) as {
           providers: Record<string, { apiKey?: string; models?: Array<{ id: string }> }>;
@@ -61,7 +61,7 @@ describe("models-config", () => {
   });
   it("merges providers by default", async () => {
     await withTempHome(async () => {
-      const agentDir = resolveOpenClawAgentDir();
+      const agentDir = resolveSmartAgentNeoAgentDir();
       await fs.mkdir(agentDir, { recursive: true });
       await fs.writeFile(
         path.join(agentDir, "models.json"),
@@ -93,7 +93,7 @@ describe("models-config", () => {
         "utf8",
       );
 
-      await ensureOpenClawModelsJson(CUSTOM_PROXY_MODELS_CONFIG);
+      await ensureSmartAgentNeoModelsJson(CUSTOM_PROXY_MODELS_CONFIG);
 
       const raw = await fs.readFile(path.join(agentDir, "models.json"), "utf8");
       const parsed = JSON.parse(raw) as {

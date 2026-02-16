@@ -1,13 +1,13 @@
 {
-  "name": "@openclaw/google-antigravity-auth",
+  "name": "@smart-agent-neo/google-antigravity-auth",
   "version": "2026.2.16",
   "private": true,
-  "description": "OpenClaw Google Antigravity OAuth provider plugin",
+  "description": "SmartAgentNeo Google Antigravity OAuth provider plugin",
   "type": "module",
   "devDependencies": {
-    "openclaw": "workspace:*"
+    "smart-agent-neo": "workspace:*"
   },
-  "openclaw": {
+  "smart-agent-neo": {
     "extensions": [
       "./index.ts"
     ]

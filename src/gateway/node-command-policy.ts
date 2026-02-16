@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { SmartAgentNeoConfig } from "../config/config.js";
 import type { NodeSession } from "./node-registry.js";
 
 const CANVAS_COMMANDS = [
@@ -133,7 +133,7 @@ function normalizePlatformId(platform?: string, deviceFamily?: string): string {
 }
 
 export function resolveNodeCommandAllowlist(
-  cfg: OpenClawConfig,
+  cfg: SmartAgentNeoConfig,
   node?: Pick<NodeSession, "platform" | "deviceFamily">,
 ): Set<string> {
   const platformId = normalizePlatformId(node?.platform, node?.deviceFamily);

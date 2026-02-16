@@ -7,7 +7,7 @@ import type {
   LeaveEvent,
   PostbackEvent,
 } from "@line/bot-sdk";
-import type { OpenClawConfig } from "../config/config.js";
+import type { SmartAgentNeoConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { LineGroupConfig, ResolvedLineAccount } from "./types.js";
 import { danger, logVerbose } from "../globals.js";
@@ -33,7 +33,7 @@ interface MediaRef {
 }
 
 export interface LineHandlerContext {
-  cfg: OpenClawConfig;
+  cfg: SmartAgentNeoConfig;
   account: ResolvedLineAccount;
   runtime: RuntimeEnv;
   mediaMaxBytes: number;

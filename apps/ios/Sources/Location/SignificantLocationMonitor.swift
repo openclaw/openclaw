@@ -1,6 +1,6 @@
 import CoreLocation
 import Foundation
-import OpenClawKit
+import SmartAgentNeoKit
 
 /// Monitors significant location changes and pushes `location.update`
 /// events to the gateway so the severance hook can determine whether
@@ -9,7 +9,7 @@ import OpenClawKit
 enum SignificantLocationMonitor {
     static func startIfNeeded(
         locationService: any LocationServicing,
-        locationMode: OpenClawLocationMode,
+        locationMode: SmartAgentNeoLocationMode,
         gateway: GatewayNodeSession
     ) {
         guard locationMode == .always else { return }

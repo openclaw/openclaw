@@ -52,7 +52,7 @@ describe("gateway server chat", () => {
       __setMaxChatHistoryMessagesBytesForTest(historyMaxBytes);
       await connectOk(ws);
 
-      const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+      const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "smart-agent-neo-gw-"));
       tempDirs.push(sessionDir);
       testState.sessionStorePath = path.join(sessionDir, "sessions.json");
 
@@ -133,7 +133,7 @@ describe("gateway server chat", () => {
     try {
       await connectOk(ws);
 
-      const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+      const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "smart-agent-neo-gw-"));
       tempDirs.push(sessionDir);
       testState.sessionStorePath = path.join(sessionDir, "sessions.json");
 

@@ -18,7 +18,7 @@ describe("memory manager sync failures", () => {
     embedBatch.mockImplementation(async () => {
       throw new Error("openai embeddings failed: 400 bad request");
     });
-    workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-"));
+    workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "smart-agent-neo-mem-"));
     indexPath = path.join(workspaceDir, "index.sqlite");
     await fs.mkdir(path.join(workspaceDir, "memory"));
     await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "Hello");

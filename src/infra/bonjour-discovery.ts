@@ -29,7 +29,7 @@ export type GatewayBonjourDiscoverOpts = {
 };
 
 const DEFAULT_TIMEOUT_MS = 2000;
-const GATEWAY_SERVICE_TYPE = "_openclaw-gw._tcp";
+const GATEWAY_SERVICE_TYPE = "_smart-agent-neo-gw._tcp";
 
 function decodeDnsSdEscapes(value: string): string {
   let decoded = false;
@@ -191,7 +191,7 @@ function parseDnsSdBrowse(stdout: string): string[] {
     if (!line.includes("Add")) {
       continue;
     }
-    const match = line.match(/_openclaw-gw\._tcp\.?\s+(.+)$/);
+    const match = line.match(/_smart-agent-neo-gw\._tcp\.?\s+(.+)$/);
     if (match?.[1]) {
       instances.add(decodeDnsSdEscapes(match[1].trim()));
     }
@@ -379,7 +379,7 @@ async function discoverWideAreaViaTailnetDns(
     if (!ptrName) {
       continue;
     }
-    const instanceName = ptrName.replace(/\.?_openclaw-gw\._tcp\..*$/, "");
+    const instanceName = ptrName.replace(/\.?_smart-agent-neo-gw\._tcp\..*$/, "");
 
     const srv = await run(["dig", "+short", "+time=1", "+tries=1", nameserverArg, ptrName, "SRV"], {
       timeoutMs: Math.max(1, Math.min(350, budget)),

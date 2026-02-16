@@ -56,7 +56,7 @@ async function writeSessionStore(
   home: string,
   entries: Record<string, Record<string, unknown>> = {},
 ) {
-  const dir = path.join(home, ".openclaw", "sessions");
+  const dir = path.join(home, ".smart-agent-neo", "sessions");
   await fs.mkdir(dir, { recursive: true });
   const storePath = path.join(dir, "sessions.json");
   await fs.writeFile(
@@ -217,7 +217,7 @@ describe("runCronIsolatedAgentTurn", () => {
 
       const cfg = makeCfg(
         home,
-        path.join(home, ".openclaw", "agents", "{agentId}", "sessions", "sessions.json"),
+        path.join(home, ".smart-agent-neo", "agents", "{agentId}", "sessions", "sessions.json"),
         {
           agents: {
             defaults: { workspace: path.join(home, "default-workspace") },

@@ -1,5 +1,5 @@
 name: Bug report
-description: Report a defect or unexpected behavior in OpenClaw.
+description: Report a defect or unexpected behavior in SmartAgentNeo.
 title: "[Bug]: "
 labels:
   - bug
@@ -46,7 +46,7 @@ body:
   - type: input
     id: version
     attributes:
-      label: OpenClaw version
+      label: SmartAgentNeo version
       description: Exact version/build tested.
       placeholder: 2026.2.13
     validations:
@@ -63,7 +63,7 @@ body:
     id: install_method
     attributes:
       label: Install method
-      description: How OpenClaw was installed or launched.
+      description: How SmartAgentNeo was installed or launched.
       placeholder: npm global / pnpm dev / docker / mac app
   - type: textarea
     id: logs

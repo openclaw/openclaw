@@ -8,10 +8,10 @@ RUN corepack enable
 
 WORKDIR /app
 
-ARG OPENCLAW_DOCKER_APT_PACKAGES=""
-RUN if [ -n "$OPENCLAW_DOCKER_APT_PACKAGES" ]; then \
+ARG SMART_AGENT_NEO_DOCKER_APT_PACKAGES=""
+RUN if [ -n "$SMART_AGENT_NEO_DOCKER_APT_PACKAGES" ]; then \
       apt-get update && \
-      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $OPENCLAW_DOCKER_APT_PACKAGES && \
+      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $SMART_AGENT_NEO_DOCKER_APT_PACKAGES && \
       apt-get clean && \
       rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*; \
     fi
@@ -26,7 +26,7 @@ RUN pnpm install --frozen-lockfile
 COPY . .
 RUN pnpm build
 # Force pnpm for UI build (Bun may fail on ARM/Synology architectures)
-ENV OPENCLAW_PREFER_PNPM=1
+ENV SMART_AGENT_NEO_PREFER_PNPM=1
 RUN pnpm ui:build
 
 ENV NODE_ENV=production
@@ -43,6 +43,6 @@ USER node
 # Binds to loopback (127.0.0.1) by default for security.
 #
 # For container platforms requiring external health checks:
-#   1. Set OPENCLAW_GATEWAY_TOKEN or OPENCLAW_GATEWAY_PASSWORD env var
-#   2. Override CMD: ["node","openclaw.mjs","gateway","--allow-unconfigured","--bind","lan"]
-CMD ["node", "openclaw.mjs", "gateway", "--allow-unconfigured"]
+#   1. Set SMART_AGENT_NEO_GATEWAY_TOKEN or SMART_AGENT_NEO_GATEWAY_PASSWORD env var
+#   2. Override CMD: ["node","smart-agent-neo.mjs","gateway","--allow-unconfigured","--bind","lan"]
+CMD ["node", "smart-agent-neo.mjs", "gateway", "--allow-unconfigured"]

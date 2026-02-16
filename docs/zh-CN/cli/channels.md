@@ -2,7 +2,7 @@
 read_when:
   - 你想添加/删除渠道账户（WhatsApp/Telegram/Discord/Google Chat/Slack/Mattermost（插件）/Signal/iMessage）
   - 你想检查渠道状态或跟踪渠道日志
-summary: "`openclaw channels` 的 CLI 参考（账户、状态、登录/登出、日志）"
+summary: "`smart-agent-neo channels` 的 CLI 参考（账户、状态、登录/登出、日志）"
 title: channels
 x-i18n:
   generated_at: "2026-02-03T07:44:51Z"
@@ -13,7 +13,7 @@ x-i18n:
   workflow: 15
 ---
 
-# `openclaw channels`
+# `smart-agent-neo channels`
 
 管理 Gateway 网关上的聊天渠道账户及其运行时状态。
 
@@ -25,43 +25,43 @@ x-i18n:
 ## 常用命令
 
 ```bash
-openclaw channels list
-openclaw channels status
-openclaw channels capabilities
-openclaw channels capabilities --channel discord --target channel:123
-openclaw channels resolve --channel slack "#general" "@jane"
-openclaw channels logs --channel all
+smart-agent-neo channels list
+smart-agent-neo channels status
+smart-agent-neo channels capabilities
+smart-agent-neo channels capabilities --channel discord --target channel:123
+smart-agent-neo channels resolve --channel slack "#general" "@jane"
+smart-agent-neo channels logs --channel all
 ```
 
 ## 添加/删除账户
 
 ```bash
-openclaw channels add --channel telegram --token <bot-token>
-openclaw channels remove --channel telegram --delete
+smart-agent-neo channels add --channel telegram --token <bot-token>
+smart-agent-neo channels remove --channel telegram --delete
 ```
 
-提示：`openclaw channels add --help` 显示每个渠道的标志（token、app token、signal-cli 路径等）。
+提示：`smart-agent-neo channels add --help` 显示每个渠道的标志（token、app token、signal-cli 路径等）。
 
 ## 登录/登出（交互式）
 
 ```bash
-openclaw channels login --channel whatsapp
-openclaw channels logout --channel whatsapp
+smart-agent-neo channels login --channel whatsapp
+smart-agent-neo channels logout --channel whatsapp
 ```
 
 ## 故障排除
 
-- 运行 `openclaw status --deep` 进行全面探测。
-- 使用 `openclaw doctor` 获取引导式修复。
-- `openclaw channels list` 输出 `Claude: HTTP 403 ... user:profile` → 用量快照需要 `user:profile` 权限范围。使用 `--no-usage`，或提供 claude.ai 会话密钥（`CLAUDE_WEB_SESSION_KEY` / `CLAUDE_WEB_COOKIE`），或通过 Claude Code CLI 重新授权。
+- 运行 `smart-agent-neo status --deep` 进行全面探测。
+- 使用 `smart-agent-neo doctor` 获取引导式修复。
+- `smart-agent-neo channels list` 输出 `Claude: HTTP 403 ... user:profile` → 用量快照需要 `user:profile` 权限范围。使用 `--no-usage`，或提供 claude.ai 会话密钥（`CLAUDE_WEB_SESSION_KEY` / `CLAUDE_WEB_COOKIE`），或通过 Claude Code CLI 重新授权。
 
 ## 能力探测
 
 获取提供商能力提示（可用的 intents/scopes）以及静态功能支持：
 
 ```bash
-openclaw channels capabilities
-openclaw channels capabilities --channel discord --target channel:123
+smart-agent-neo channels capabilities
+smart-agent-neo channels capabilities --channel discord --target channel:123
 ```
 
 说明：
@@ -75,9 +75,9 @@ openclaw channels capabilities --channel discord --target channel:123
 使用提供商目录将渠道/用户名称解析为 ID：
 
 ```bash
-openclaw channels resolve --channel slack "#general" "@jane"
-openclaw channels resolve --channel discord "My Server/#support" "@someone"
-openclaw channels resolve --channel matrix "Project Room"
+smart-agent-neo channels resolve --channel slack "#general" "@jane"
+smart-agent-neo channels resolve --channel discord "My Server/#support" "@someone"
+smart-agent-neo channels resolve --channel matrix "Project Room"
 ```
 
 说明：

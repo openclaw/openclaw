@@ -17,17 +17,17 @@ UI surfaces.
 
 Canvas state is stored under Application Support:
 
-- `~/Library/Application Support/OpenClaw/canvas/<session>/...`
+- `~/Library/Application Support/SmartAgentNeo/canvas/<session>/...`
 
 The Canvas panel serves those files via a **custom URL scheme**:
 
-- `openclaw-canvas://<session>/<path>`
+- `smart-agent-neo-canvas://<session>/<path>`
 
 Examples:
 
-- `openclaw-canvas://main/` → `<canvasRoot>/main/index.html`
-- `openclaw-canvas://main/assets/app.css` → `<canvasRoot>/main/assets/app.css`
-- `openclaw-canvas://main/widgets/todo/` → `<canvasRoot>/main/widgets/todo/index.html`
+- `smart-agent-neo-canvas://main/` → `<canvasRoot>/main/index.html`
+- `smart-agent-neo-canvas://main/assets/app.css` → `<canvasRoot>/main/assets/app.css`
+- `smart-agent-neo-canvas://main/widgets/todo/` → `<canvasRoot>/main/widgets/todo/index.html`
 
 If no `index.html` exists at the root, the app shows a **built‑in scaffold page**.
 
@@ -53,10 +53,10 @@ Canvas is exposed via the **Gateway WebSocket**, so the agent can:
 CLI examples:
 
 ```bash
-openclaw nodes canvas present --node <id>
-openclaw nodes canvas navigate --node <id> --url "/"
-openclaw nodes canvas eval --node <id> --js "document.title"
-openclaw nodes canvas snapshot --node <id>
+smart-agent-neo nodes canvas present --node <id>
+smart-agent-neo nodes canvas navigate --node <id> --url "/"
+smart-agent-neo nodes canvas eval --node <id> --js "document.title"
+smart-agent-neo nodes canvas snapshot --node <id>
 ```
 
 Notes:
@@ -73,7 +73,7 @@ A2UI host page on first open.
 Default A2UI host URL:
 
 ```
-http://<gateway-host>:18789/__openclaw__/a2ui/
+http://<gateway-host>:18789/__smart-agent-neo__/a2ui/
 ```
 
 ### A2UI commands (v0.8)
@@ -95,25 +95,25 @@ cat > /tmp/a2ui-v0.8.jsonl <<'EOFA2'
 {"beginRendering":{"surfaceId":"main","root":"root"}}
 EOFA2
 
-openclaw nodes canvas a2ui push --jsonl /tmp/a2ui-v0.8.jsonl --node <id>
+smart-agent-neo nodes canvas a2ui push --jsonl /tmp/a2ui-v0.8.jsonl --node <id>
 ```
 
 Quick smoke:
 
 ```bash
-openclaw nodes canvas a2ui push --node <id> --text "Hello from A2UI"
+smart-agent-neo nodes canvas a2ui push --node <id> --text "Hello from A2UI"
 ```
 
 ## Triggering agent runs from Canvas
 
 Canvas can trigger new agent runs via deep links:
 
-- `openclaw://agent?...`
+- `smart-agent-neo://agent?...`
 
 Example (in JS):
 
 ```js
-window.location.href = "openclaw://agent?message=Review%20this%20design";
+window.location.href = "smart-agent-neo://agent?message=Review%20this%20design";
 ```
 
 The app prompts for confirmation unless a valid key is provided.

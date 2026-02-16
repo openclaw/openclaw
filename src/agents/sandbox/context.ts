@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { SmartAgentNeoConfig } from "../../config/config.js";
 import type { SandboxContext, SandboxWorkspaceInfo } from "./types.js";
 import { DEFAULT_BROWSER_EVALUATE_ENABLED } from "../../browser/constants.js";
 import { ensureBrowserControlAuth, resolveBrowserControlAuth } from "../../browser/control-auth.js";
@@ -20,7 +20,7 @@ import { ensureSandboxWorkspace } from "./workspace.js";
 async function ensureSandboxWorkspaceLayout(params: {
   cfg: ReturnType<typeof resolveSandboxConfigForAgent>;
   rawSessionKey: string;
-  config?: OpenClawConfig;
+  config?: SmartAgentNeoConfig;
   workspaceDir?: string;
 }): Promise<{
   agentWorkspaceDir: string;
@@ -64,7 +64,7 @@ async function ensureSandboxWorkspaceLayout(params: {
   return { agentWorkspaceDir, scopeKey, sandboxWorkspaceDir, workspaceDir };
 }
 
-function resolveSandboxSession(params: { config?: OpenClawConfig; sessionKey?: string }) {
+function resolveSandboxSession(params: { config?: SmartAgentNeoConfig; sessionKey?: string }) {
   const rawSessionKey = params.sessionKey?.trim();
   if (!rawSessionKey) {
     return null;
@@ -83,7 +83,7 @@ function resolveSandboxSession(params: { config?: OpenClawConfig; sessionKey?: s
 }
 
 export async function resolveSandboxContext(params: {
-  config?: OpenClawConfig;
+  config?: SmartAgentNeoConfig;
   sessionKey?: string;
   workspaceDir?: string;
 }): Promise<SandboxContext | null> {
@@ -157,7 +157,7 @@ export async function resolveSandboxContext(params: {
 }
 
 export async function ensureSandboxWorkspaceForSession(params: {
-  config?: OpenClawConfig;
+  config?: SmartAgentNeoConfig;
   sessionKey?: string;
   workspaceDir?: string;
 }): Promise<SandboxWorkspaceInfo | null> {

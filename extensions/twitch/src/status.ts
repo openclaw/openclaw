@@ -4,7 +4,7 @@
  * Detects and reports configuration issues for Twitch accounts.
  */
 
-import type { ChannelStatusIssue } from "openclaw/plugin-sdk";
+import type { ChannelStatusIssue } from "smart-agent-neo/plugin-sdk";
 import type { ChannelAccountSnapshot } from "./types.js";
 import { getAccountConfig } from "./config.js";
 import { resolveTwitchToken } from "./token.js";

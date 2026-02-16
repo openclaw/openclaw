@@ -23,7 +23,7 @@ import {
 describe("infra store", () => {
   describe("state migrations fs", () => {
     it("treats array session stores as invalid", async () => {
-      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-store-"));
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "smart-agent-neo-session-store-"));
       const storePath = path.join(dir, "sessions.json");
       await fs.writeFile(storePath, "[]", "utf-8");
 
@@ -35,14 +35,14 @@ describe("infra store", () => {
 
   describe("voicewake store", () => {
     it("returns defaults when missing", async () => {
-      const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-voicewake-"));
+      const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "smart-agent-neo-voicewake-"));
       const cfg = await loadVoiceWakeConfig(baseDir);
       expect(cfg.triggers).toEqual(defaultVoiceWakeTriggers());
       expect(cfg.updatedAtMs).toBe(0);
     });
 
     it("sanitizes and persists triggers", async () => {
-      const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-voicewake-"));
+      const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "smart-agent-neo-voicewake-"));
       const saved = await setVoiceWakeTriggers(["  hi  ", "", "  there "], baseDir);
       expect(saved.triggers).toEqual(["hi", "there"]);
       expect(saved.updatedAtMs).toBeGreaterThan(0);
@@ -53,7 +53,7 @@ describe("infra store", () => {
     });
 
     it("falls back to defaults when triggers empty", async () => {
-      const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-voicewake-"));
+      const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "smart-agent-neo-voicewake-"));
       const saved = await setVoiceWakeTriggers(["", "   "], baseDir);
       expect(saved.triggers).toEqual(defaultVoiceWakeTriggers());
     });

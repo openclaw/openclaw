@@ -17,7 +17,7 @@ let fixtureRoot = "";
 let caseId = 0;
 
 beforeAll(async () => {
-  fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pairing-"));
+  fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "smart-agent-neo-pairing-"));
 });
 
 afterAll(async () => {
@@ -27,10 +27,10 @@ afterAll(async () => {
 });
 
 async function withTempStateDir<T>(fn: (stateDir: string) => Promise<T>) {
-  const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+  const envSnapshot = captureEnv(["SMART_AGENT_NEO_STATE_DIR"]);
   const dir = path.join(fixtureRoot, `case-${caseId++}`);
   await fs.mkdir(dir, { recursive: true });
-  process.env.OPENCLAW_STATE_DIR = dir;
+  process.env.SMART_AGENT_NEO_STATE_DIR = dir;
   try {
     return await fn(dir);
   } finally {

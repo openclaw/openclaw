@@ -1,7 +1,7 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { SmartAgentNeoConfig } from "../config/config.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "./agent-scope.js";
 
-export function listAgentWorkspaceDirs(cfg: OpenClawConfig): string[] {
+export function listAgentWorkspaceDirs(cfg: SmartAgentNeoConfig): string[] {
   const dirs = new Set<string>();
   const list = cfg.agents?.list;
   if (Array.isArray(list)) {

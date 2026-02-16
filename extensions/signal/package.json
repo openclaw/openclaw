@@ -1,13 +1,13 @@
 {
-  "name": "@openclaw/signal",
+  "name": "@smart-agent-neo/signal",
   "version": "2026.2.16",
   "private": true,
-  "description": "OpenClaw Signal channel plugin",
+  "description": "SmartAgentNeo Signal channel plugin",
   "type": "module",
   "devDependencies": {
-    "openclaw": "workspace:*"
+    "smart-agent-neo": "workspace:*"
   },
-  "openclaw": {
+  "smart-agent-neo": {
     "extensions": [
       "./index.ts"
     ]

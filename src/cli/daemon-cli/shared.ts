@@ -68,11 +68,11 @@ export function pickProbeHostForBind(
 }
 
 const SAFE_DAEMON_ENV_KEYS = [
-  "OPENCLAW_PROFILE",
-  "OPENCLAW_STATE_DIR",
-  "OPENCLAW_CONFIG_PATH",
-  "OPENCLAW_GATEWAY_PORT",
-  "OPENCLAW_NIX_MODE",
+  "SMART_AGENT_NEO_PROFILE",
+  "SMART_AGENT_NEO_STATE_DIR",
+  "SMART_AGENT_NEO_CONFIG_PATH",
+  "SMART_AGENT_NEO_GATEWAY_PORT",
+  "SMART_AGENT_NEO_NIX_MODE",
 ];
 
 export function filterDaemonEnv(env: Record<string, string> | undefined): Record<string, string> {
@@ -121,7 +121,7 @@ export function renderRuntimeHints(
     }
   })();
   if (runtime.missingUnit) {
-    hints.push(`Service not installed. Run: ${formatCliCommand("openclaw gateway install", env)}`);
+    hints.push(`Service not installed. Run: ${formatCliCommand("smart-agent-neo gateway install", env)}`);
     if (fileLog) {
       hints.push(`File logs: ${fileLog}`);
     }
@@ -136,10 +136,10 @@ export function renderRuntimeHints(
       hints.push(`Launchd stdout (if installed): ${logs.stdoutPath}`);
       hints.push(`Launchd stderr (if installed): ${logs.stderrPath}`);
     } else if (process.platform === "linux") {
-      const unit = resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
+      const unit = resolveGatewaySystemdServiceName(env.SMART_AGENT_NEO_PROFILE);
       hints.push(`Logs: journalctl --user -u ${unit}.service -n 200 --no-pager`);
     } else if (process.platform === "win32") {
-      const task = resolveGatewayWindowsTaskName(env.OPENCLAW_PROFILE);
+      const task = resolveGatewayWindowsTaskName(env.SMART_AGENT_NEO_PROFILE);
       hints.push(`Logs: schtasks /Query /TN "${task}" /V /FO LIST`);
     }
   }
@@ -148,10 +148,10 @@ export function renderRuntimeHints(
 
 export function renderGatewayServiceStartHints(env: NodeJS.ProcessEnv = process.env): string[] {
   const base = [
-    formatCliCommand("openclaw gateway install", env),
-    formatCliCommand("openclaw gateway", env),
+    formatCliCommand("smart-agent-neo gateway install", env),
+    formatCliCommand("smart-agent-neo gateway", env),
   ];
-  const profile = env.OPENCLAW_PROFILE;
+  const profile = env.SMART_AGENT_NEO_PROFILE;
   switch (process.platform) {
     case "darwin": {
       const label = resolveGatewayLaunchAgentLabel(profile);

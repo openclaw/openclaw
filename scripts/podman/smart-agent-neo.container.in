@@ -1,0 +1,26 @@
+# SmartAgentNeo gateway — Podman Quadlet (rootless)
+# Installed by setup-podman.sh into smart-agent-neo's ~/.config/containers/systemd/
+# {{SMART_AGENT_NEO_HOME}} is replaced at install time.
+
+[Unit]
+Description=SmartAgentNeo gateway (rootless Podman)
+
+[Container]
+Image=smart-agent-neo:local
+ContainerName=smart-agent-neo
+UserNS=keep-id
+Volume={{SMART_AGENT_NEO_HOME}}/.smart-agent-neo:/home/node/.smart-agent-neo
+EnvironmentFile={{SMART_AGENT_NEO_HOME}}/.smart-agent-neo/.env
+Environment=HOME=/home/node
+Environment=TERM=xterm-256color
+PublishPort=18789:18789
+PublishPort=18790:18790
+Pull=never
+Exec=node dist/index.js gateway --bind lan --port 18789
+
+[Service]
+TimeoutStartSec=300
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

@@ -133,8 +133,8 @@ describe("detectImageReferences", () => {
   it("detects multiple images in [media attached: ...] format", () => {
     // Multi-file format uses separate brackets on separate lines
     const prompt = `[media attached: 2 files]
-[media attached 1/2: /Users/tyleryust/.openclaw/media/IMG_6430.jpeg (image/jpeg)]
-[media attached 2/2: /Users/tyleryust/.openclaw/media/IMG_6431.jpeg (image/jpeg)]
+[media attached 1/2: /Users/tyleryust/.smart-agent-neo/media/IMG_6430.jpeg (image/jpeg)]
+[media attached 2/2: /Users/tyleryust/.smart-agent-neo/media/IMG_6431.jpeg (image/jpeg)]
 what about these images?`;
     const refs = detectImageReferences(prompt);
 
@@ -173,7 +173,7 @@ what is this?`;
 
   it("handles paths with spaces in filename", () => {
     // URL after | is https, not a local path, so only the local path should be detected
-    const prompt = `[media attached: /Users/test/.openclaw/media/ChatGPT Image Apr 21, 2025.png (image/png) | https://example.com/same.png]
+    const prompt = `[media attached: /Users/test/.smart-agent-neo/media/ChatGPT Image Apr 21, 2025.png (image/png) | https://example.com/same.png]
 what is this?`;
     const refs = detectImageReferences(prompt);
 
@@ -207,7 +207,7 @@ describe("modelSupportsImages", () => {
 
 describe("loadImageFromRef", () => {
   it("allows sandbox-validated host paths outside default media roots", async () => {
-    const sandboxParent = await fs.mkdtemp(path.join(os.homedir(), "openclaw-sandbox-image-"));
+    const sandboxParent = await fs.mkdtemp(path.join(os.homedir(), "smart-agent-neo-sandbox-image-"));
     try {
       const sandboxRoot = path.join(sandboxParent, "sandbox");
       await fs.mkdir(sandboxRoot, { recursive: true });

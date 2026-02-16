@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { SmartAgentNeoConfig } from "../../config/types.smart-agent-neo.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
@@ -27,7 +27,7 @@ import {
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
-import { loadOpenClawPlugins } from "../../plugins/loader.js";
+import { loadSmartAgentNeoPlugins } from "../../plugins/loader.js";
 import {
   ErrorCodes,
   errorShape,
@@ -112,7 +112,7 @@ function parseValidateConfigFromRawOrRespond(
   requestName: string,
   snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>,
   respond: RespondFn,
-): { config: OpenClawConfig; schema: ConfigSchemaResponse } | null {
+): { config: SmartAgentNeoConfig; schema: ConfigSchemaResponse } | null {
   const rawValue = parseRawConfigOrRespond(params, requestName, respond);
   if (!rawValue) {
     return null;
@@ -205,7 +205,7 @@ async function tryWriteRestartSentinelPayload(
 function loadSchemaWithPlugins(): ConfigSchemaResponse {
   const cfg = loadConfig();
   const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
-  const pluginRegistry = loadOpenClawPlugins({
+  const pluginRegistry = loadSmartAgentNeoPlugins({
     config: cfg,
     cache: true,
     workspaceDir,
@@ -217,7 +217,7 @@ function loadSchemaWithPlugins(): ConfigSchemaResponse {
     },
   });
   // Note: We can't easily cache this, as there are no callback that can invalidate
-  // our cache. However, both loadConfig() and loadOpenClawPlugins() already cache
+  // our cache. However, both loadConfig() and loadSmartAgentNeoPlugins() already cache
   // their results, and buildConfigSchema() is just a cheap transformation.
   return buildConfigSchema({
     plugins: pluginRegistry.plugins.map((plugin) => ({

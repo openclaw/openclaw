@@ -29,7 +29,7 @@ export type IrcAccountConfig = {
   nick?: string;
   /** IRC USER field username (defaults to nick). */
   username?: string;
-  /** IRC USER field realname (default: OpenClaw). */
+  /** IRC USER field realname (default: SmartAgentNeo). */
   realname?: string;
   /** Optional IRC server password (sensitive). */
   password?: string;
@@ -50,7 +50,7 @@ export type IrcAccountConfig = {
     /** Email used with NickServ REGISTER. */
     registerEmail?: string;
   };
-  /** Auto-join channel list at connect (example: ["#openclaw"]). */
+  /** Auto-join channel list at connect (example: ["#smart-agent-neo"]). */
   channels?: string[];
   /** Direct message access policy (default: pairing). */
   dmPolicy?: DmPolicy;

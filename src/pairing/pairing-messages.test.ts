@@ -6,8 +6,8 @@ describe("buildPairingReply", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeEach(() => {
-    envSnapshot = captureEnv(["OPENCLAW_PROFILE"]);
-    process.env.OPENCLAW_PROFILE = "isolated";
+    envSnapshot = captureEnv(["SMART_AGENT_NEO_PROFILE"]);
+    process.env.SMART_AGENT_NEO_PROFILE = "isolated";
   });
 
   afterEach(() => {
@@ -52,9 +52,9 @@ describe("buildPairingReply", () => {
       const text = buildPairingReply(testCase);
       expect(text).toContain(testCase.idLine);
       expect(text).toContain(`Pairing code: ${testCase.code}`);
-      // CLI commands should respect OPENCLAW_PROFILE when set (most tests run with isolated profile)
+      // CLI commands should respect SMART_AGENT_NEO_PROFILE when set (most tests run with isolated profile)
       const commandRe = new RegExp(
-        `(?:openclaw|openclaw) --profile isolated pairing approve ${testCase.channel} ${testCase.code}`,
+        `(?:smart-agent-neo|smart-agent-neo) --profile isolated pairing approve ${testCase.channel} ${testCase.code}`,
       );
       expect(text).toMatch(commandRe);
     });

@@ -61,14 +61,14 @@ function validatePluginId(pluginId: string): string | null {
   return null;
 }
 
-async function ensureOpenClawExtensions(manifest: PackageManifest) {
+async function ensureSmartAgentNeoExtensions(manifest: PackageManifest) {
   const extensions = manifest[MANIFEST_KEY]?.extensions;
   if (!Array.isArray(extensions)) {
-    throw new Error("package.json missing openclaw.extensions");
+    throw new Error("package.json missing smart-agent-neo.extensions");
   }
   const list = extensions.map((e) => (typeof e === "string" ? e.trim() : "")).filter(Boolean);
   if (list.length === 0) {
-    throw new Error("package.json openclaw.extensions is empty");
+    throw new Error("package.json smart-agent-neo.extensions is empty");
   }
   return list;
 }
@@ -157,7 +157,7 @@ async function installPluginFromPackageDir(params: {
 
   let extensions: string[];
   try {
-    extensions = await ensureOpenClawExtensions(manifest);
+    extensions = await ensureSmartAgentNeoExtensions(manifest);
   } catch (err) {
     return { ok: false, error: String(err) };
   }
@@ -206,12 +206,12 @@ async function installPluginFromPackageDir(params: {
       );
     } else if (scanSummary.warn > 0) {
       logger.warn?.(
-        `Plugin "${pluginId}" has ${scanSummary.warn} suspicious code pattern(s). Run "openclaw security audit --deep" for details.`,
+        `Plugin "${pluginId}" has ${scanSummary.warn} suspicious code pattern(s). Run "smart-agent-neo security audit --deep" for details.`,
       );
     }
   } catch (err) {
     logger.warn?.(
-      `Plugin "${pluginId}" code safety scan failed (${String(err)}). Installation continues; run "openclaw security audit --deep" after install.`,
+      `Plugin "${pluginId}" code safety scan failed (${String(err)}). Installation continues; run "smart-agent-neo security audit --deep" after install.`,
     );
   }
 
@@ -308,7 +308,7 @@ export async function installPluginFromArchive(params: {
     return { ok: false, error: `unsupported archive: ${archivePath}` };
   }
 
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-plugin-"));
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "smart-agent-neo-plugin-"));
   try {
     const extractDir = path.join(tmpDir, "extract");
     await fs.mkdir(extractDir, { recursive: true });
@@ -433,7 +433,7 @@ export async function installPluginFromNpmSpec(params: {
     return { ok: false, error: specError };
   }
 
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-npm-pack-"));
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "smart-agent-neo-npm-pack-"));
   try {
     logger.info?.(`Downloading ${spec}…`);
     const res = await runCommandWithTimeout(["npm", "pack", spec, "--ignore-scripts"], {

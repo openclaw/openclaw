@@ -1,7 +1,7 @@
 ---
 summary: "Zalo personal account support via zca-cli (QR login), capabilities, and configuration"
 read_when:
-  - Setting up Zalo Personal for OpenClaw
+  - Setting up Zalo Personal for SmartAgentNeo
   - Debugging Zalo Personal login or message flow
 title: "Zalo Personal"
 ---
@@ -16,8 +16,8 @@ Status: experimental. This integration automates a **personal Zalo account** via
 
 Zalo Personal ships as a plugin and is not bundled with the core install.
 
-- Install via CLI: `openclaw plugins install @openclaw/zalouser`
-- Or from a source checkout: `openclaw plugins install ./extensions/zalouser`
+- Install via CLI: `smart-agent-neo plugins install @smart-agent-neo/zalouser`
+- Or from a source checkout: `smart-agent-neo plugins install ./extensions/zalouser`
 - Details: [Plugins](/tools/plugin)
 
 ## Prerequisite: zca-cli
@@ -31,7 +31,7 @@ The Gateway machine must have the `zca` binary available in `PATH`.
 
 1. Install the plugin (see above).
 2. Login (QR, on the Gateway machine):
-   - `openclaw channels login --channel zalouser`
+   - `smart-agent-neo channels login --channel zalouser`
    - Scan the QR code in the terminal with the Zalo mobile app.
 3. Enable the channel:
 
@@ -64,9 +64,9 @@ Channel id is `zalouser` to make it explicit this automates a **personal Zalo us
 Use the directory CLI to discover peers/groups and their IDs:
 
 ```bash
-openclaw directory self --channel zalouser
-openclaw directory peers list --channel zalouser --query "name"
-openclaw directory groups list --channel zalouser --query "work"
+smart-agent-neo directory self --channel zalouser
+smart-agent-neo directory peers list --channel zalouser --query "name"
+smart-agent-neo directory groups list --channel zalouser --query "work"
 ```
 
 ## Limits
@@ -81,8 +81,8 @@ openclaw directory groups list --channel zalouser --query "work"
 
 Approve via:
 
-- `openclaw pairing list zalouser`
-- `openclaw pairing approve zalouser <code>`
+- `smart-agent-neo pairing list zalouser`
+- `smart-agent-neo pairing approve zalouser <code>`
 
 ## Group access (optional)
 
@@ -92,7 +92,7 @@ Approve via:
   - `channels.zalouser.groups` (keys are group IDs or names)
 - Block all groups: `channels.zalouser.groupPolicy = "disabled"`.
 - The configure wizard can prompt for group allowlists.
-- On startup, OpenClaw resolves group/user names in allowlists to IDs and logs the mapping; unresolved entries are kept as typed.
+- On startup, SmartAgentNeo resolves group/user names in allowlists to IDs and logs the mapping; unresolved entries are kept as typed.
 
 Example:
 
@@ -136,5 +136,5 @@ Accounts map to zca profiles. Example:
 
 **Login doesn’t stick:**
 
-- `openclaw channels status --probe`
-- Re-login: `openclaw channels logout --channel zalouser && openclaw channels login --channel zalouser`
+- `smart-agent-neo channels status --probe`
+- Re-login: `smart-agent-neo channels logout --channel zalouser && smart-agent-neo channels login --channel zalouser`

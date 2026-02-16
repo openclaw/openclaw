@@ -1,6 +1,6 @@
-import OpenClawKit
+import SmartAgentNeoKit
 import Testing
-@testable import OpenClaw
+@testable import SmartAgentNeo
 
 @Suite struct IOSGatewayChatTransportTests {
     @Test func requestsFailFastWhenGatewayNotConnected() async {

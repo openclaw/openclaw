@@ -42,7 +42,7 @@ jobs:
             Please add updates or it will be closed.
           close-issue-message: |
             Closing due to inactivity.
-            If this is still an issue, please retry on the latest OpenClaw release and share updated details.
+            If this is still an issue, please retry on the latest SmartAgentNeo release and share updated details.
             If you are absolutely sure it still happens on the latest release, open a new issue with fresh repro steps.
           close-issue-reason: not_planned
           close-pr-message: |

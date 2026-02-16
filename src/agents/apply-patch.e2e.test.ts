@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { applyPatch } from "./apply-patch.js";
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>) {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-patch-"));
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "smart-agent-neo-patch-"));
   try {
     return await fn(dir);
   } finally {
@@ -95,7 +95,7 @@ describe("applyPatch", () => {
 
   it("rejects absolute paths outside cwd by default", async () => {
     await withTempDir(async (dir) => {
-      const escapedPath = path.join(os.tmpdir(), `openclaw-apply-patch-${Date.now()}.txt`);
+      const escapedPath = path.join(os.tmpdir(), `smart-agent-neo-apply-patch-${Date.now()}.txt`);
 
       const patch = `*** Begin Patch
 *** Add File: ${escapedPath}
@@ -219,7 +219,7 @@ describe("applyPatch", () => {
 
   it("allows deleting a symlink itself even if it points outside cwd", async () => {
     await withTempDir(async (dir) => {
-      const outsideDir = await fs.mkdtemp(path.join(path.dirname(dir), "openclaw-patch-outside-"));
+      const outsideDir = await fs.mkdtemp(path.join(path.dirname(dir), "smart-agent-neo-patch-outside-"));
       try {
         const outsideTarget = path.join(outsideDir, "target.txt");
         await fs.writeFile(outsideTarget, "keep\n", "utf8");

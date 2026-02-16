@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { SmartAgentNeoConfig } from "../../config/config.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import {
   ensureAuthProfileStore,
@@ -12,7 +12,7 @@ export type NonInteractiveApiKeySource = "flag" | "env" | "profile";
 
 async function resolveApiKeyFromProfiles(params: {
   provider: string;
-  cfg: OpenClawConfig;
+  cfg: SmartAgentNeoConfig;
   agentDir?: string;
 }): Promise<string | null> {
   const store = ensureAuthProfileStore(params.agentDir);
@@ -41,7 +41,7 @@ async function resolveApiKeyFromProfiles(params: {
 
 export async function resolveNonInteractiveApiKey(params: {
   provider: string;
-  cfg: OpenClawConfig;
+  cfg: SmartAgentNeoConfig;
   flagValue?: string;
   flagName: string;
   envVar: string;

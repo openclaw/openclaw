@@ -1,4 +1,4 @@
-import type { PluginRuntime } from "openclaw/plugin-sdk";
+import type { PluginRuntime } from "smart-agent-neo/plugin-sdk";
 
 let runtime: PluginRuntime | null = null;
 

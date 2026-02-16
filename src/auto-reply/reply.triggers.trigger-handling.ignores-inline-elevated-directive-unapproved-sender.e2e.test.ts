@@ -51,7 +51,7 @@ describe("trigger handling", () => {
         agents: {
           defaults: {
             model: "anthropic/claude-opus-4-5",
-            workspace: join(home, "openclaw"),
+            workspace: join(home, "smart-agent-neo"),
           },
         },
         tools: { elevated: { allowFrom: { discord: ["steipete"] } } },
@@ -86,7 +86,7 @@ describe("trigger handling", () => {
         agents: {
           defaults: {
             model: "anthropic/claude-opus-4-5",
-            workspace: join(home, "openclaw"),
+            workspace: join(home, "smart-agent-neo"),
           },
         },
         tools: {

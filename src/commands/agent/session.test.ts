@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { SmartAgentNeoConfig } from "../../config/config.js";
 
 const mocks = vi.hoisted(() => ({
   loadSessionStore: vi.fn(),
@@ -51,7 +51,7 @@ describe("resolveSessionKeyForRequest", () => {
     mocks.listAgentIds.mockReturnValue(["main"]);
   });
 
-  const baseCfg: OpenClawConfig = {};
+  const baseCfg: SmartAgentNeoConfig = {};
 
   it("returns sessionKey when --to resolves a session key via context", async () => {
     mocks.resolveStorePath.mockReturnValue(MAIN_STORE_PATH);

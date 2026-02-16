@@ -53,9 +53,9 @@ Status: production-ready for bot DMs + groups via grammY. Long polling is the de
   <Step title="Start gateway and approve first DM">
 
 ```bash
-openclaw gateway
-openclaw pairing list telegram
-openclaw pairing approve telegram <CODE>
+smart-agent-neo gateway
+smart-agent-neo pairing list telegram
+smart-agent-neo pairing approve telegram <CODE>
 ```
 
     Pairing codes expire after 1 hour.
@@ -114,14 +114,14 @@ Token resolution order is account-aware. In practice, config values win over env
 
     `channels.telegram.allowFrom` accepts numeric Telegram user IDs. `telegram:` / `tg:` prefixes are accepted and normalized.
     The onboarding wizard accepts `@username` input and resolves it to numeric IDs.
-    If you upgraded and your config contains `@username` allowlist entries, run `openclaw doctor --fix` to resolve them (best-effort; requires a Telegram bot token).
+    If you upgraded and your config contains `@username` allowlist entries, run `smart-agent-neo doctor --fix` to resolve them (best-effort; requires a Telegram bot token).
 
     ### Finding your Telegram user ID
 
     Safer (no third-party bot):
 
     1. DM your bot.
-    2. Run `openclaw logs --follow`.
+    2. Run `smart-agent-neo logs --follow`.
     3. Read `from.id`.
 
     Official Bot API method:
@@ -202,7 +202,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     Getting the group chat ID:
 
     - forward a group message to `@userinfobot` / `@getidsbot`
-    - or read `chat.id` from `openclaw logs --follow`
+    - or read `chat.id` from `smart-agent-neo logs --follow`
     - or inspect Bot API `getUpdates`
 
   </Tab>
@@ -214,7 +214,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 - Routing is deterministic: Telegram inbound replies back to Telegram (the model does not pick channels).
 - Inbound messages normalize into the shared channel envelope with reply metadata and media placeholders.
 - Group sessions are isolated by group ID. Forum topics append `:topic:<threadId>` to keep topics isolated.
-- DM messages can carry `message_thread_id`; OpenClaw routes them with thread-aware session keys and preserves thread ID for replies.
+- DM messages can carry `message_thread_id`; SmartAgentNeo routes them with thread-aware session keys and preserves thread ID for replies.
 - Long polling uses grammY runner with per-chat/per-thread sequencing. Overall runner sink concurrency uses `agents.defaults.maxConcurrent`.
 - Telegram Bot API has no read-receipt support (`sendReadReceipts` does not apply).
 
@@ -222,7 +222,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
 <AccordionGroup>
   <Accordion title="Live stream preview (message edits)">
-    OpenClaw can stream partial replies by sending a temporary Telegram message and editing it as text arrives.
+    SmartAgentNeo can stream partial replies by sending a temporary Telegram message and editing it as text arrives.
 
     Requirement:
 
@@ -244,11 +244,11 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     This works in direct chats and groups/topics.
 
-    For text-only replies, OpenClaw keeps the same preview message and performs a final edit in place (no second message).
+    For text-only replies, SmartAgentNeo keeps the same preview message and performs a final edit in place (no second message).
 
-    For complex replies (for example media payloads), OpenClaw falls back to normal final delivery and then cleans up the preview message.
+    For complex replies (for example media payloads), SmartAgentNeo falls back to normal final delivery and then cleans up the preview message.
 
-    `streamMode` is separate from block streaming. When block streaming is explicitly enabled for Telegram, OpenClaw skips the preview stream to avoid double-streaming.
+    `streamMode` is separate from block streaming. When block streaming is explicitly enabled for Telegram, SmartAgentNeo skips the preview stream to avoid double-streaming.
 
     Telegram-only reasoning stream:
 
@@ -262,7 +262,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     - Markdown-ish text is rendered to Telegram-safe HTML.
     - Raw model HTML is escaped to reduce Telegram parse failures.
-    - If Telegram rejects parsed HTML, OpenClaw retries as plain text.
+    - If Telegram rejects parsed HTML, SmartAgentNeo retries as plain text.
 
     Link previews are enabled by default and can be disabled with `channels.telegram.linkPreview: false`.
 
@@ -506,7 +506,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     Sticker cache file:
 
-    - `~/.openclaw/telegram/sticker-cache.json`
+    - `~/.smart-agent-neo/telegram/sticker-cache.json`
 
     Stickers are described once (when possible) and cached to reduce repeated vision calls.
 
@@ -551,7 +551,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
   <Accordion title="Reaction notifications">
     Telegram reactions arrive as `message_reaction` updates (separate from message payloads).
 
-    When enabled, OpenClaw enqueues system events like:
+    When enabled, SmartAgentNeo enqueues system events like:
 
     - `Telegram reaction added: 👍 by Alice (@alice) on msg 42`
 
@@ -572,7 +572,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
   </Accordion>
 
   <Accordion title="Ack reactions">
-    `ackReaction` sends an acknowledgement emoji while OpenClaw is processing an inbound message.
+    `ackReaction` sends an acknowledgement emoji while SmartAgentNeo is processing an inbound message.
 
     Resolution order:
 
@@ -641,8 +641,8 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     CLI send target can be numeric chat ID or username:
 
 ```bash
-openclaw message send --channel telegram --target 123456789 --message "hi"
-openclaw message send --channel telegram --target @name --message "hi"
+smart-agent-neo message send --channel telegram --target 123456789 --message "hi"
+smart-agent-neo message send --channel telegram --target @name --message "hi"
 ```
 
   </Accordion>
@@ -656,8 +656,8 @@ openclaw message send --channel telegram --target @name --message "hi"
     - If `requireMention=false`, Telegram privacy mode must allow full visibility.
       - BotFather: `/setprivacy` -> Disable
       - then remove + re-add bot to group
-    - `openclaw channels status` warns when config expects unmentioned group messages.
-    - `openclaw channels status --probe` can check explicit numeric group IDs; wildcard `"*"` cannot be membership-probed.
+    - `smart-agent-neo channels status` warns when config expects unmentioned group messages.
+    - `smart-agent-neo channels status --probe` can check explicit numeric group IDs; wildcard `"*"` cannot be membership-probed.
     - quick session test: `/activation always`.
 
   </Accordion>
@@ -666,7 +666,7 @@ openclaw message send --channel telegram --target @name --message "hi"
 
     - when `channels.telegram.groups` exists, group must be listed (or include `"*"`)
     - verify bot membership in group
-    - review logs: `openclaw logs --follow` for skip reasons
+    - review logs: `smart-agent-neo logs --follow` for skip reasons
 
   </Accordion>
 
@@ -702,9 +702,9 @@ Primary reference:
 - `channels.telegram.botToken`: bot token (BotFather).
 - `channels.telegram.tokenFile`: read token from file path.
 - `channels.telegram.dmPolicy`: `pairing | allowlist | open | disabled` (default: pairing).
-- `channels.telegram.allowFrom`: DM allowlist (numeric Telegram user IDs). `open` requires `"*"`. `openclaw doctor --fix` can resolve legacy `@username` entries to IDs.
+- `channels.telegram.allowFrom`: DM allowlist (numeric Telegram user IDs). `open` requires `"*"`. `smart-agent-neo doctor --fix` can resolve legacy `@username` entries to IDs.
 - `channels.telegram.groupPolicy`: `open | allowlist | disabled` (default: allowlist).
-- `channels.telegram.groupAllowFrom`: group sender allowlist (numeric Telegram user IDs). `openclaw doctor --fix` can resolve legacy `@username` entries to IDs.
+- `channels.telegram.groupAllowFrom`: group sender allowlist (numeric Telegram user IDs). `smart-agent-neo doctor --fix` can resolve legacy `@username` entries to IDs.
 - `channels.telegram.groups`: per-group defaults + allowlist (use `"*"` for global defaults).
   - `channels.telegram.groups.<id>.groupPolicy`: per-group override for groupPolicy (`open | allowlist | disabled`).
   - `channels.telegram.groups.<id>.requireMention`: mention gating default.

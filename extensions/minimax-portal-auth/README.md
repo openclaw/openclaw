@@ -1,4 +1,4 @@
-# MiniMax OAuth (OpenClaw plugin)
+# MiniMax OAuth (SmartAgentNeo plugin)
 
 OAuth provider plugin for **MiniMax** (OAuth).
 
@@ -7,19 +7,19 @@ OAuth provider plugin for **MiniMax** (OAuth).
 Bundled plugins are disabled by default. Enable this one:
 
 ```bash
-openclaw plugins enable minimax-portal-auth
+smart-agent-neo plugins enable minimax-portal-auth
 ```
 
 Restart the Gateway after enabling.
 
 ```bash
-openclaw gateway restart
+smart-agent-neo gateway restart
 ```
 
 ## Authenticate
 
 ```bash
-openclaw models auth login --provider minimax-portal --set-default
+smart-agent-neo models auth login --provider minimax-portal --set-default
 ```
 
 You will be prompted to select an endpoint:

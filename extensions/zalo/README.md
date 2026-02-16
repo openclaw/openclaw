@@ -1,17 +1,17 @@
-# @openclaw/zalo
+# @smart-agent-neo/zalo
 
-Zalo channel plugin for OpenClaw (Bot API).
+Zalo channel plugin for SmartAgentNeo (Bot API).
 
 ## Install (local checkout)
 
 ```bash
-openclaw plugins install ./extensions/zalo
+smart-agent-neo plugins install ./extensions/zalo
 ```
 
 ## Install (npm)
 
 ```bash
-openclaw plugins install @openclaw/zalo
+smart-agent-neo plugins install @smart-agent-neo/zalo
 ```
 
 Onboarding: select Zalo and confirm the install prompt to fetch the plugin automatically.

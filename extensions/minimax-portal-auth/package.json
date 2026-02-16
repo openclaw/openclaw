@@ -1,13 +1,13 @@
 {
-  "name": "@openclaw/minimax-portal-auth",
+  "name": "@smart-agent-neo/minimax-portal-auth",
   "version": "2026.2.16",
   "private": true,
-  "description": "OpenClaw MiniMax Portal OAuth provider plugin",
+  "description": "SmartAgentNeo MiniMax Portal OAuth provider plugin",
   "type": "module",
   "devDependencies": {
-    "openclaw": "workspace:*"
+    "smart-agent-neo": "workspace:*"
   },
-  "openclaw": {
+  "smart-agent-neo": {
     "extensions": [
       "./index.ts"
     ]

@@ -13,19 +13,19 @@ Use this page when a node is visible in status but node tools fail.
 ## Command ladder
 
 ```bash
-openclaw status
-openclaw gateway status
-openclaw logs --follow
-openclaw doctor
-openclaw channels status --probe
+smart-agent-neo status
+smart-agent-neo gateway status
+smart-agent-neo logs --follow
+smart-agent-neo doctor
+smart-agent-neo channels status --probe
 ```
 
 Then run node specific checks:
 
 ```bash
-openclaw nodes status
-openclaw nodes describe --node <idOrNameOrIp>
-openclaw approvals get --node <idOrNameOrIp>
+smart-agent-neo nodes status
+smart-agent-neo nodes describe --node <idOrNameOrIp>
+smart-agent-neo approvals get --node <idOrNameOrIp>
 ```
 
 Healthy signals:
@@ -41,9 +41,9 @@ Healthy signals:
 Quick check and fix:
 
 ```bash
-openclaw nodes describe --node <idOrNameOrIp>
-openclaw nodes canvas snapshot --node <idOrNameOrIp>
-openclaw logs --follow
+smart-agent-neo nodes describe --node <idOrNameOrIp>
+smart-agent-neo nodes canvas snapshot --node <idOrNameOrIp>
+smart-agent-neo logs --follow
 ```
 
 If you see `NODE_BACKGROUND_UNAVAILABLE`, bring the node app to the foreground and retry.
@@ -67,10 +67,10 @@ These are different gates:
 Quick checks:
 
 ```bash
-openclaw devices list
-openclaw nodes status
-openclaw approvals get --node <idOrNameOrIp>
-openclaw approvals allowlist add --node <idOrNameOrIp> "/usr/bin/uname"
+smart-agent-neo devices list
+smart-agent-neo nodes status
+smart-agent-neo approvals get --node <idOrNameOrIp>
+smart-agent-neo approvals allowlist add --node <idOrNameOrIp> "/usr/bin/uname"
 ```
 
 If pairing is missing, approve the node device first.
@@ -90,10 +90,10 @@ If pairing is fine but `system.run` fails, fix exec approvals/allowlist.
 ## Fast recovery loop
 
 ```bash
-openclaw nodes status
-openclaw nodes describe --node <idOrNameOrIp>
-openclaw approvals get --node <idOrNameOrIp>
-openclaw logs --follow
+smart-agent-neo nodes status
+smart-agent-neo nodes describe --node <idOrNameOrIp>
+smart-agent-neo approvals get --node <idOrNameOrIp>
+smart-agent-neo logs --follow
 ```
 
 If still stuck:

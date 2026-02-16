@@ -1,13 +1,13 @@
 {
-  "name": "@openclaw/whatsapp",
+  "name": "@smart-agent-neo/whatsapp",
   "version": "2026.2.16",
   "private": true,
-  "description": "OpenClaw WhatsApp channel plugin",
+  "description": "SmartAgentNeo WhatsApp channel plugin",
   "type": "module",
   "devDependencies": {
-    "openclaw": "workspace:*"
+    "smart-agent-neo": "workspace:*"
   },
-  "openclaw": {
+  "smart-agent-neo": {
     "extensions": [
       "./index.ts"
     ]

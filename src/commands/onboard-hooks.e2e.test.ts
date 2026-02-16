@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { SmartAgentNeoConfig } from "../config/config.js";
 import type { HookStatusReport } from "../hooks/hooks-status.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
@@ -54,7 +54,7 @@ describe("onboard-hooks", () => {
     eligible: boolean,
   ) => ({
     ...params,
-    source: "openclaw-bundled" as const,
+    source: "smart-agent-neo-bundled" as const,
     pluginId: undefined,
     homepage: undefined,
     always: false,
@@ -81,7 +81,7 @@ describe("onboard-hooks", () => {
 
   const createMockHookReport = (eligible = true): HookStatusReport => ({
     workspaceDir: "/mock/workspace",
-    managedHooksDir: "/mock/.openclaw/hooks",
+    managedHooksDir: "/mock/.smart-agent-neo/hooks",
     hooks: [
       createMockHook(
         {
@@ -114,7 +114,7 @@ describe("onboard-hooks", () => {
 
   async function runSetupInternalHooks(params: {
     selected: string[];
-    cfg?: OpenClawConfig;
+    cfg?: SmartAgentNeoConfig;
     eligible?: boolean;
   }) {
     const { buildWorkspaceHookStatus } = await import("../hooks/hooks-status.js");
@@ -182,7 +182,7 @@ describe("onboard-hooks", () => {
     });
 
     it("should preserve existing hooks config when enabled", async () => {
-      const cfg: OpenClawConfig = {
+      const cfg: SmartAgentNeoConfig = {
         hooks: {
           enabled: true,
           path: "/webhook",
@@ -204,7 +204,7 @@ describe("onboard-hooks", () => {
     });
 
     it("should preserve existing config when user skips", async () => {
-      const cfg: OpenClawConfig = {
+      const cfg: SmartAgentNeoConfig = {
         agents: { defaults: { workspace: "/workspace" } },
       };
       const { result } = await runSetupInternalHooks({
@@ -230,7 +230,7 @@ describe("onboard-hooks", () => {
 
       // Second note should confirm configuration
       expect(noteCalls[1][0]).toContain("Enabled 1 hook: session-memory");
-      expect(noteCalls[1][0]).toMatch(/(?:openclaw|openclaw)( --profile isolated)? hooks list/);
+      expect(noteCalls[1][0]).toMatch(/(?:smart-agent-neo|smart-agent-neo)( --profile isolated)? hooks list/);
     });
   });
 });

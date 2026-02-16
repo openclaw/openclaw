@@ -57,7 +57,7 @@ export type CronServiceDeps = {
     /**
      * `true` when the isolated run already delivered its output to the target
      * channel (including matching messaging-tool sends). See:
-     * https://github.com/openclaw/openclaw/issues/15692
+     * https://github.com/betterbrand/smart-agent-neo/issues/15692
      */
     delivered?: boolean;
   }>;

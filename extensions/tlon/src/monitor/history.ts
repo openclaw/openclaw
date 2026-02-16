@@ -1,4 +1,4 @@
-import type { RuntimeEnv } from "openclaw/plugin-sdk";
+import type { RuntimeEnv } from "smart-agent-neo/plugin-sdk";
 import { extractMessageText } from "./utils.js";
 
 export type TlonHistoryEntry = {

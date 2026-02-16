@@ -172,29 +172,29 @@ describe("gateway hot reload", () => {
   let prevSkipProviders: string | undefined;
 
   beforeEach(() => {
-    prevSkipChannels = process.env.OPENCLAW_SKIP_CHANNELS;
-    prevSkipGmail = process.env.OPENCLAW_SKIP_GMAIL_WATCHER;
-    prevSkipProviders = process.env.OPENCLAW_SKIP_PROVIDERS;
-    process.env.OPENCLAW_SKIP_CHANNELS = "0";
-    delete process.env.OPENCLAW_SKIP_GMAIL_WATCHER;
-    delete process.env.OPENCLAW_SKIP_PROVIDERS;
+    prevSkipChannels = process.env.SMART_AGENT_NEO_SKIP_CHANNELS;
+    prevSkipGmail = process.env.SMART_AGENT_NEO_SKIP_GMAIL_WATCHER;
+    prevSkipProviders = process.env.SMART_AGENT_NEO_SKIP_PROVIDERS;
+    process.env.SMART_AGENT_NEO_SKIP_CHANNELS = "0";
+    delete process.env.SMART_AGENT_NEO_SKIP_GMAIL_WATCHER;
+    delete process.env.SMART_AGENT_NEO_SKIP_PROVIDERS;
   });
 
   afterEach(() => {
     if (prevSkipChannels === undefined) {
-      delete process.env.OPENCLAW_SKIP_CHANNELS;
+      delete process.env.SMART_AGENT_NEO_SKIP_CHANNELS;
     } else {
-      process.env.OPENCLAW_SKIP_CHANNELS = prevSkipChannels;
+      process.env.SMART_AGENT_NEO_SKIP_CHANNELS = prevSkipChannels;
     }
     if (prevSkipGmail === undefined) {
-      delete process.env.OPENCLAW_SKIP_GMAIL_WATCHER;
+      delete process.env.SMART_AGENT_NEO_SKIP_GMAIL_WATCHER;
     } else {
-      process.env.OPENCLAW_SKIP_GMAIL_WATCHER = prevSkipGmail;
+      process.env.SMART_AGENT_NEO_SKIP_GMAIL_WATCHER = prevSkipGmail;
     }
     if (prevSkipProviders === undefined) {
-      delete process.env.OPENCLAW_SKIP_PROVIDERS;
+      delete process.env.SMART_AGENT_NEO_SKIP_PROVIDERS;
     } else {
-      process.env.OPENCLAW_SKIP_PROVIDERS = prevSkipProviders;
+      process.env.SMART_AGENT_NEO_SKIP_PROVIDERS = prevSkipProviders;
     }
   });
 

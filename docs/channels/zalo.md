@@ -13,15 +13,15 @@ Status: experimental. Direct messages only; groups coming soon per Zalo docs.
 
 Zalo ships as a plugin and is not bundled with the core install.
 
-- Install via CLI: `openclaw plugins install @openclaw/zalo`
+- Install via CLI: `smart-agent-neo plugins install @smart-agent-neo/zalo`
 - Or select **Zalo** during onboarding and confirm the install prompt
 - Details: [Plugins](/tools/plugin)
 
 ## Quick setup (beginner)
 
 1. Install the Zalo plugin:
-   - From a source checkout: `openclaw plugins install ./extensions/zalo`
-   - From npm (if published): `openclaw plugins install @openclaw/zalo`
+   - From a source checkout: `smart-agent-neo plugins install ./extensions/zalo`
+   - From npm (if published): `smart-agent-neo plugins install @smart-agent-neo/zalo`
    - Or pick **Zalo** in onboarding and confirm the install prompt
 2. Set the token:
    - Env: `ZALO_BOT_TOKEN=...`
@@ -102,8 +102,8 @@ Multi-account support: use `channels.zalo.accounts` with per-account tokens and 
 
 - Default: `channels.zalo.dmPolicy = "pairing"`. Unknown senders receive a pairing code; messages are ignored until approved (codes expire after 1 hour).
 - Approve via:
-  - `openclaw pairing list zalo`
-  - `openclaw pairing approve zalo <CODE>`
+  - `smart-agent-neo pairing list zalo`
+  - `smart-agent-neo pairing approve zalo <CODE>`
 - Pairing is the default token exchange. Details: [Pairing](/channels/pairing)
 - `channels.zalo.allowFrom` accepts numeric user IDs (no username lookup available).
 
@@ -141,15 +141,15 @@ Multi-account support: use `channels.zalo.accounts` with per-account tokens and 
 ## Delivery targets (CLI/cron)
 
 - Use a chat id as the target.
-- Example: `openclaw message send --channel zalo --target 123456789 --message "hi"`.
+- Example: `smart-agent-neo message send --channel zalo --target 123456789 --message "hi"`.
 
 ## Troubleshooting
 
 **Bot doesn't respond:**
 
-- Check that the token is valid: `openclaw channels status --probe`
+- Check that the token is valid: `smart-agent-neo channels status --probe`
 - Verify the sender is approved (pairing or allowFrom)
-- Check gateway logs: `openclaw logs --follow`
+- Check gateway logs: `smart-agent-neo logs --follow`
 
 **Webhook not receiving events:**
 

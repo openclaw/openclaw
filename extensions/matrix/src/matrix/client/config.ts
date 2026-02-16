@@ -1,5 +1,5 @@
 import { MatrixClient } from "@vector-im/matrix-bot-sdk";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "smart-agent-neo/plugin-sdk/account-id";
 import type { CoreConfig } from "../../types.js";
 import type { MatrixAuth, MatrixResolvedConfig } from "./types.js";
 import { getMatrixRuntime } from "../../runtime.js";
@@ -175,7 +175,7 @@ export async function resolveMatrixAuth(params?: {
       type: "m.login.password",
       identifier: { type: "m.id.user", user: resolved.userId },
       password: resolved.password,
-      initial_device_display_name: resolved.deviceName ?? "OpenClaw Gateway",
+      initial_device_display_name: resolved.deviceName ?? "SmartAgentNeo Gateway",
     }),
   });
 

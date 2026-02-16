@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { SmartAgentNeoConfig } from "../config/config.js";
 import { peekSystemEvents } from "../infra/system-events.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { normalizeE164 } from "../utils.js";
@@ -95,7 +95,7 @@ async function receiveSignalPayloads(params: {
 
 function getDirectSignalEventsFor(sender: string) {
   const route = resolveAgentRoute({
-    cfg: config as OpenClawConfig,
+    cfg: config as SmartAgentNeoConfig,
     channel: "signal",
     accountId: "default",
     peer: { kind: "direct", id: normalizeE164(sender) },

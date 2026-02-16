@@ -23,7 +23,7 @@ describe("trigger handling", () => {
     await withTempHome(async (home) => {
       const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
       const cfg = makeCfg(home);
-      const agentDir = join(home, ".openclaw", "agents", "main", "agent");
+      const agentDir = join(home, ".smart-agent-neo", "agents", "main", "agent");
       await fs.mkdir(agentDir, { recursive: true });
       await fs.writeFile(
         join(agentDir, "auth-profiles.json"),

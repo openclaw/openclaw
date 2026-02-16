@@ -3,7 +3,7 @@ import { sequentialize } from "@grammyjs/runner";
 import { apiThrottler } from "@grammyjs/transformer-throttler";
 import { type Message, type UserFromGetMe, ReactionTypeEmoji } from "@grammyjs/types";
 import { Bot, webhookCallback } from "grammy";
-import type { OpenClawConfig, ReplyToMode } from "../config/config.js";
+import type { SmartAgentNeoConfig, ReplyToMode } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveTextChunkLimit } from "../auto-reply/chunk.js";
@@ -55,7 +55,7 @@ export type TelegramBotOptions = {
   mediaMaxMb?: number;
   replyToMode?: ReplyToMode;
   proxyFetch?: typeof fetch;
-  config?: OpenClawConfig;
+  config?: SmartAgentNeoConfig;
   updateOffset?: {
     lastUpdateId?: number | null;
     onUpdateId?: (updateId: number) => void | Promise<void>;

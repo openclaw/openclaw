@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { SmartAgentNeoConfig } from "../../config/config.js";
 
 vi.mock("../../config/sessions.js", () => ({
   loadSessionStore: vi.fn(),
@@ -23,7 +23,7 @@ describe("resolveCronSession", () => {
     });
 
     const result = resolveCronSession({
-      cfg: {} as OpenClawConfig,
+      cfg: {} as SmartAgentNeoConfig,
       sessionKey: "agent:main:cron:test-job",
       agentId: "main",
       nowMs: Date.now(),
@@ -46,7 +46,7 @@ describe("resolveCronSession", () => {
     });
 
     const result = resolveCronSession({
-      cfg: {} as OpenClawConfig,
+      cfg: {} as SmartAgentNeoConfig,
       sessionKey: "agent:main:cron:test-job",
       agentId: "main",
       nowMs: Date.now(),
@@ -60,7 +60,7 @@ describe("resolveCronSession", () => {
     vi.mocked(loadSessionStore).mockReturnValue({});
 
     const result = resolveCronSession({
-      cfg: {} as OpenClawConfig,
+      cfg: {} as SmartAgentNeoConfig,
       sessionKey: "agent:main:cron:new-job",
       agentId: "main",
       nowMs: Date.now(),

@@ -1,4 +1,4 @@
-import type { AgentElevatedAllowFromConfig, OpenClawConfig } from "../../config/config.js";
+import type { AgentElevatedAllowFromConfig, SmartAgentNeoConfig } from "../../config/config.js";
 import type { MsgContext } from "../templating.js";
 import { resolveAgentConfig } from "../../agents/agent-scope.js";
 import { getChannelDock } from "../../channels/dock.js";
@@ -132,7 +132,7 @@ function isApprovedElevatedSender(params: {
 }
 
 export function resolveElevatedPermissions(params: {
-  cfg: OpenClawConfig;
+  cfg: SmartAgentNeoConfig;
   agentId: string;
   ctx: MsgContext;
   provider: string;

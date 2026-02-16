@@ -335,7 +335,7 @@ describe("callGateway url override auth requirements", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeEach(() => {
-    envSnapshot = captureEnv(["OPENCLAW_GATEWAY_TOKEN", "OPENCLAW_GATEWAY_PASSWORD"]);
+    envSnapshot = captureEnv(["SMART_AGENT_NEO_GATEWAY_TOKEN", "SMART_AGENT_NEO_GATEWAY_PASSWORD"]);
     loadConfig.mockReset();
     resolveGatewayPort.mockReset();
     pickPrimaryTailnetIPv4.mockReset();
@@ -353,8 +353,8 @@ describe("callGateway url override auth requirements", () => {
   });
 
   it("throws when url override is set without explicit credentials", async () => {
-    process.env.OPENCLAW_GATEWAY_TOKEN = "env-token";
-    process.env.OPENCLAW_GATEWAY_PASSWORD = "env-password";
+    process.env.SMART_AGENT_NEO_GATEWAY_TOKEN = "env-token";
+    process.env.SMART_AGENT_NEO_GATEWAY_PASSWORD = "env-password";
     loadConfig.mockReturnValue({
       gateway: {
         mode: "local",
@@ -372,7 +372,7 @@ describe("callGateway password resolution", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeEach(() => {
-    envSnapshot = captureEnv(["OPENCLAW_GATEWAY_PASSWORD"]);
+    envSnapshot = captureEnv(["SMART_AGENT_NEO_GATEWAY_PASSWORD"]);
     loadConfig.mockReset();
     resolveGatewayPort.mockReset();
     pickPrimaryTailnetIPv4.mockReset();
@@ -381,7 +381,7 @@ describe("callGateway password resolution", () => {
     startMode = "hello";
     closeCode = 1006;
     closeReason = "";
-    delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+    delete process.env.SMART_AGENT_NEO_GATEWAY_PASSWORD;
     resolveGatewayPort.mockReturnValue(18789);
     pickPrimaryTailnetIPv4.mockReturnValue(undefined);
   });
@@ -405,7 +405,7 @@ describe("callGateway password resolution", () => {
   });
 
   it("prefers env password over local config password", async () => {
-    process.env.OPENCLAW_GATEWAY_PASSWORD = "from-env";
+    process.env.SMART_AGENT_NEO_GATEWAY_PASSWORD = "from-env";
     loadConfig.mockReturnValue({
       gateway: {
         mode: "local",
@@ -434,7 +434,7 @@ describe("callGateway password resolution", () => {
   });
 
   it("prefers env password over remote password in remote mode", async () => {
-    process.env.OPENCLAW_GATEWAY_PASSWORD = "from-env";
+    process.env.SMART_AGENT_NEO_GATEWAY_PASSWORD = "from-env";
     loadConfig.mockReturnValue({
       gateway: {
         mode: "remote",
@@ -449,7 +449,7 @@ describe("callGateway password resolution", () => {
   });
 
   it("uses explicit password when url override is set", async () => {
-    process.env.OPENCLAW_GATEWAY_PASSWORD = "from-env";
+    process.env.SMART_AGENT_NEO_GATEWAY_PASSWORD = "from-env";
     loadConfig.mockReturnValue({
       gateway: {
         mode: "local",
@@ -471,7 +471,7 @@ describe("callGateway token resolution", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeEach(() => {
-    envSnapshot = captureEnv(["OPENCLAW_GATEWAY_TOKEN"]);
+    envSnapshot = captureEnv(["SMART_AGENT_NEO_GATEWAY_TOKEN"]);
     loadConfig.mockReset();
     resolveGatewayPort.mockReset();
     pickPrimaryTailnetIPv4.mockReset();
@@ -480,7 +480,7 @@ describe("callGateway token resolution", () => {
     startMode = "hello";
     closeCode = 1006;
     closeReason = "";
-    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.SMART_AGENT_NEO_GATEWAY_TOKEN;
     resolveGatewayPort.mockReturnValue(18789);
     pickPrimaryTailnetIPv4.mockReturnValue(undefined);
   });
@@ -490,7 +490,7 @@ describe("callGateway token resolution", () => {
   });
 
   it("uses explicit token when url override is set", async () => {
-    process.env.OPENCLAW_GATEWAY_TOKEN = "env-token";
+    process.env.SMART_AGENT_NEO_GATEWAY_TOKEN = "env-token";
     loadConfig.mockReturnValue({
       gateway: {
         mode: "local",

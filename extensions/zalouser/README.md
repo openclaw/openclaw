@@ -1,6 +1,6 @@
-# @openclaw/zalouser
+# @smart-agent-neo/zalouser
 
-OpenClaw extension for Zalo Personal Account messaging via [zca-cli](https://zca-cli.dev).
+SmartAgentNeo extension for Zalo Personal Account messaging via [zca-cli](https://zca-cli.dev).
 
 > **Warning:** Using Zalo automation may result in account suspension or ban. Use at your own risk. This is an unofficial integration.
 
@@ -77,7 +77,7 @@ See [zca-cli](https://zca-cli.dev) for manual download (binaries for macOS/Linux
 ### Option 1: Onboarding Wizard (Recommended)
 
 ```bash
-openclaw onboard
+smart-agent-neo onboard
 # Select "Zalo Personal" from channel list
 # Follow QR code login flow
 ```
@@ -85,14 +85,14 @@ openclaw onboard
 ### Option 2: Login (QR, on the Gateway machine)
 
 ```bash
-openclaw channels login --channel zalouser
+smart-agent-neo channels login --channel zalouser
 # Scan QR code with Zalo app
 ```
 
 ### Send a Message
 
 ```bash
-openclaw message send --channel zalouser --target <threadId> --message "Hello from OpenClaw!"
+smart-agent-neo message send --channel zalouser --target <threadId> --message "Hello from SmartAgentNeo!"
 ```
 
 ## Configuration
@@ -127,19 +127,19 @@ channels:
 ### Authentication
 
 ```bash
-openclaw channels login --channel zalouser              # Login via QR
-openclaw channels login --channel zalouser --account work
-openclaw channels status --probe
-openclaw channels logout --channel zalouser
+smart-agent-neo channels login --channel zalouser              # Login via QR
+smart-agent-neo channels login --channel zalouser --account work
+smart-agent-neo channels status --probe
+smart-agent-neo channels logout --channel zalouser
 ```
 
 ### Directory (IDs, contacts, groups)
 
 ```bash
-openclaw directory self --channel zalouser
-openclaw directory peers list --channel zalouser --query "name"
-openclaw directory groups list --channel zalouser --query "work"
-openclaw directory groups members --channel zalouser --group-id <id>
+smart-agent-neo directory self --channel zalouser
+smart-agent-neo directory peers list --channel zalouser --query "name"
+smart-agent-neo directory groups list --channel zalouser --query "work"
+smart-agent-neo directory groups members --channel zalouser --group-id <id>
 ```
 
 ### Account Management
@@ -156,16 +156,16 @@ zca account label <profile> "Work Account"
 
 ```bash
 # Text
-openclaw message send --channel zalouser --target <threadId> --message "message"
+smart-agent-neo message send --channel zalouser --target <threadId> --message "message"
 
 # Media (URL)
-openclaw message send --channel zalouser --target <threadId> --message "caption" --media-url "https://example.com/img.jpg"
+smart-agent-neo message send --channel zalouser --target <threadId> --message "caption" --media-url "https://example.com/img.jpg"
 ```
 
 ### Listener
 
 The listener runs inside the Gateway when the channel is enabled. For debugging,
-use `openclaw channels logs --channel zalouser` or run `zca listen` directly.
+use `smart-agent-neo channels logs --channel zalouser` or run `zca listen` directly.
 
 ### Data Access
 
@@ -191,8 +191,8 @@ zca me id
 Use `--profile` or `-p` to work with multiple accounts:
 
 ```bash
-openclaw channels login --channel zalouser --account work
-openclaw message send --channel zalouser --account work --target <id> --message "Hello"
+smart-agent-neo channels login --channel zalouser --account work
+smart-agent-neo message send --channel zalouser --account work --target <id> --message "Hello"
 ZCA_PROFILE=work zca listen
 ```
 

@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import type { SmartAgentNeoConfig } from "smart-agent-neo/plugin-sdk";
 import type { ResolvedBlueBubblesAccount } from "./accounts.js";
 import type { BlueBubblesAccountConfig } from "./types.js";
 import { getBlueBubblesRuntime } from "./runtime.js";
@@ -10,7 +10,7 @@ export type BlueBubblesRuntimeEnv = {
 
 export type BlueBubblesMonitorOptions = {
   account: ResolvedBlueBubblesAccount;
-  config: OpenClawConfig;
+  config: SmartAgentNeoConfig;
   runtime: BlueBubblesRuntimeEnv;
   abortSignal: AbortSignal;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
@@ -21,7 +21,7 @@ export type BlueBubblesCoreRuntime = ReturnType<typeof getBlueBubblesRuntime>;
 
 export type WebhookTarget = {
   account: ResolvedBlueBubblesAccount;
-  config: OpenClawConfig;
+  config: SmartAgentNeoConfig;
   runtime: BlueBubblesRuntimeEnv;
   core: BlueBubblesCoreRuntime;
   path: string;

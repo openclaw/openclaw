@@ -32,7 +32,7 @@ describe("buildTelegramMessageContext audio transcript body", () => {
         },
       } as never,
       cfg: {
-        agents: { defaults: { model: "anthropic/claude-opus-4-5", workspace: "/tmp/openclaw" } },
+        agents: { defaults: { model: "anthropic/claude-opus-4-5", workspace: "/tmp/smart-agent-neo" } },
         channels: { telegram: {} },
         messages: { groupChat: { mentionPatterns: ["\\bbot\\b"] } },
       } as never,

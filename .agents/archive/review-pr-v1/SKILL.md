@@ -168,7 +168,7 @@ Review correctness, design, performance, and ergonomics.
 
 8. Perform a security review
 
-Assume OpenClaw subagents run with full disk access, including git, gh, and shell. Check auth, input validation, secrets, dependencies, tool safety, and privacy.
+Assume SmartAgentNeo subagents run with full disk access, including git, gh, and shell. Check auth, input validation, secrets, dependencies, tool safety, and privacy.
 
 9. Review tests and verification
 

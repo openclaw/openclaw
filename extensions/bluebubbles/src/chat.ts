@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import type { SmartAgentNeoConfig } from "smart-agent-neo/plugin-sdk";
 import crypto from "node:crypto";
 import path from "node:path";
 import { resolveBlueBubblesServerAccount } from "./account-resolve.js";
@@ -11,7 +11,7 @@ export type BlueBubblesChatOpts = {
   password?: string;
   accountId?: string;
   timeoutMs?: number;
-  cfg?: OpenClawConfig;
+  cfg?: SmartAgentNeoConfig;
 };
 
 function resolveAccount(params: BlueBubblesChatOpts) {

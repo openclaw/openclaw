@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { SmartAgentNeoConfig } from "../../config/config.js";
 import type { ExecAsk, ExecHost, ExecSecurity } from "../../infra/exec-approvals.js";
 import type { ReplyPayload } from "../types.js";
 import type { HandleDirectiveOnlyParams } from "./directive-handling.params.js";
@@ -28,7 +28,7 @@ import {
 } from "./directive-handling.shared.js";
 
 function resolveExecDefaults(params: {
-  cfg: OpenClawConfig;
+  cfg: SmartAgentNeoConfig;
   sessionEntry?: SessionEntry;
   agentId?: string;
 }): { host: ExecHost; security: ExecSecurity; ask: ExecAsk; node?: string } {

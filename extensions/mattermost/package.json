@@ -1,13 +1,13 @@
 {
-  "name": "@openclaw/mattermost",
+  "name": "@smart-agent-neo/mattermost",
   "version": "2026.2.16",
   "private": true,
-  "description": "OpenClaw Mattermost channel plugin",
+  "description": "SmartAgentNeo Mattermost channel plugin",
   "type": "module",
   "devDependencies": {
-    "openclaw": "workspace:*"
+    "smart-agent-neo": "workspace:*"
   },
-  "openclaw": {
+  "smart-agent-neo": {
     "extensions": [
       "./index.ts"
     ],
@@ -21,7 +21,7 @@
       "order": 65
     },
     "install": {
-      "npmSpec": "@openclaw/mattermost",
+      "npmSpec": "@smart-agent-neo/mattermost",
       "localPath": "extensions/mattermost",
       "defaultChoice": "npm"
     }

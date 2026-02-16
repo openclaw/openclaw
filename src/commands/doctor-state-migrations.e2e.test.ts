@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { SmartAgentNeoConfig } from "../config/config.js";
 import {
   autoMigrateLegacyStateDir,
   autoMigrateLegacyState,
@@ -15,7 +15,7 @@ import {
 let tempRoot: string | null = null;
 
 async function makeTempRoot() {
-  const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-"));
+  const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "smart-agent-neo-doctor-"));
   tempRoot = root;
   return root;
 }
@@ -51,12 +51,12 @@ function writeLegacySessionsFixture(params: {
 
 async function detectAndRunMigrations(params: {
   root: string;
-  cfg: OpenClawConfig;
+  cfg: SmartAgentNeoConfig;
   now?: () => number;
 }) {
   const detected = await detectLegacyStateMigrations({
     cfg: params.cfg,
-    env: { OPENCLAW_STATE_DIR: params.root } as NodeJS.ProcessEnv,
+    env: { SMART_AGENT_NEO_STATE_DIR: params.root } as NodeJS.ProcessEnv,
   });
   await runLegacyStateMigrations({ detected, now: params.now });
 }
@@ -70,7 +70,7 @@ function readSessionsStore(targetDir: string) {
 
 async function runAndReadSessionsStore(params: {
   root: string;
-  cfg: OpenClawConfig;
+  cfg: SmartAgentNeoConfig;
   targetDir: string;
   now?: () => number;
 }) {
@@ -88,8 +88,8 @@ const DIR_LINK_TYPE = process.platform === "win32" ? "junction" : "dir";
 
 function getStateDirMigrationPaths(root: string) {
   return {
-    targetDir: path.join(root, ".openclaw"),
-    legacyDir: path.join(root, ".clawdbot"),
+    targetDir: path.join(root, ".smart-agent-neo"),
+    legacyDir: path.join(root, ".neobot"),
   };
 }
 
@@ -109,13 +109,13 @@ async function runStateDirMigration(root: string, env = {} as NodeJS.ProcessEnv)
 
 async function runAutoMigrateLegacyStateWithLog(params: {
   root: string;
-  cfg: OpenClawConfig;
+  cfg: SmartAgentNeoConfig;
   now?: () => number;
 }) {
   const log = { info: vi.fn(), warn: vi.fn() };
   const result = await autoMigrateLegacyState({
     cfg: params.cfg,
-    env: { OPENCLAW_STATE_DIR: params.root } as NodeJS.ProcessEnv,
+    env: { SMART_AGENT_NEO_STATE_DIR: params.root } as NodeJS.ProcessEnv,
     log,
     now: params.now,
   });
@@ -132,7 +132,7 @@ function expectTargetAlreadyExistsWarning(result: StateDirMigrationResult, targe
 describe("doctor legacy state migrations", () => {
   it("migrates legacy sessions into agents/<id>/sessions", async () => {
     const root = await makeTempRoot();
-    const cfg: OpenClawConfig = {};
+    const cfg: SmartAgentNeoConfig = {};
     const legacySessionsDir = writeLegacySessionsFixture({
       root,
       sessions: {
@@ -150,7 +150,7 @@ describe("doctor legacy state migrations", () => {
 
     const detected = await detectLegacyStateMigrations({
       cfg,
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+      env: { SMART_AGENT_NEO_STATE_DIR: root } as NodeJS.ProcessEnv,
     });
     const result = await runLegacyStateMigrations({
       detected,
@@ -178,7 +178,7 @@ describe("doctor legacy state migrations", () => {
 
   it("migrates legacy agent dir with conflict fallback", async () => {
     const root = await makeTempRoot();
-    const cfg: OpenClawConfig = {};
+    const cfg: SmartAgentNeoConfig = {};
 
     const legacyAgentDir = path.join(root, "agent");
     fs.mkdirSync(legacyAgentDir, { recursive: true });
@@ -191,7 +191,7 @@ describe("doctor legacy state migrations", () => {
 
     const detected = await detectLegacyStateMigrations({
       cfg,
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+      env: { SMART_AGENT_NEO_STATE_DIR: root } as NodeJS.ProcessEnv,
     });
     await runLegacyStateMigrations({ detected, now: () => 123 });
 
@@ -202,7 +202,7 @@ describe("doctor legacy state migrations", () => {
 
   it("auto-migrates legacy agent dir on startup", async () => {
     const root = await makeTempRoot();
-    const cfg: OpenClawConfig = {};
+    const cfg: SmartAgentNeoConfig = {};
 
     const legacyAgentDir = path.join(root, "agent");
     fs.mkdirSync(legacyAgentDir, { recursive: true });
@@ -218,7 +218,7 @@ describe("doctor legacy state migrations", () => {
 
   it("auto-migrates legacy sessions on startup", async () => {
     const root = await makeTempRoot();
-    const cfg: OpenClawConfig = {};
+    const cfg: SmartAgentNeoConfig = {};
     const legacySessionsDir = writeLegacySessionsFixture({
       root,
       sessions: {
@@ -246,7 +246,7 @@ describe("doctor legacy state migrations", () => {
 
   it("migrates legacy WhatsApp auth files without touching oauth.json", async () => {
     const root = await makeTempRoot();
-    const cfg: OpenClawConfig = {};
+    const cfg: SmartAgentNeoConfig = {};
 
     const oauthDir = path.join(root, "credentials");
     fs.mkdirSync(oauthDir, { recursive: true });
@@ -256,7 +256,7 @@ describe("doctor legacy state migrations", () => {
 
     const detected = await detectLegacyStateMigrations({
       cfg,
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+      env: { SMART_AGENT_NEO_STATE_DIR: root } as NodeJS.ProcessEnv,
     });
     await runLegacyStateMigrations({ detected, now: () => 123 });
 
@@ -269,7 +269,7 @@ describe("doctor legacy state migrations", () => {
 
   it("migrates legacy Telegram pairing allowFrom store to account-scoped default file", async () => {
     const root = await makeTempRoot();
-    const cfg: OpenClawConfig = {};
+    const cfg: SmartAgentNeoConfig = {};
 
     const oauthDir = path.join(root, "credentials");
     fs.mkdirSync(oauthDir, { recursive: true });
@@ -288,7 +288,7 @@ describe("doctor legacy state migrations", () => {
 
     const detected = await detectLegacyStateMigrations({
       cfg,
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+      env: { SMART_AGENT_NEO_STATE_DIR: root } as NodeJS.ProcessEnv,
     });
     expect(detected.pairingAllowFrom.hasLegacyTelegram).toBe(true);
 
@@ -305,10 +305,10 @@ describe("doctor legacy state migrations", () => {
 
   it("no-ops when nothing detected", async () => {
     const root = await makeTempRoot();
-    const cfg: OpenClawConfig = {};
+    const cfg: SmartAgentNeoConfig = {};
     const detected = await detectLegacyStateMigrations({
       cfg,
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+      env: { SMART_AGENT_NEO_STATE_DIR: root } as NodeJS.ProcessEnv,
     });
     const result = await runLegacyStateMigrations({ detected });
     expect(result.changes).toEqual([]);
@@ -316,7 +316,7 @@ describe("doctor legacy state migrations", () => {
 
   it("routes legacy state to the default agent entry", async () => {
     const root = await makeTempRoot();
-    const cfg: OpenClawConfig = {
+    const cfg: SmartAgentNeoConfig = {
       agents: { list: [{ id: "alpha", default: true }] },
     };
     writeLegacySessionsFixture({
@@ -338,7 +338,7 @@ describe("doctor legacy state migrations", () => {
 
   it("honors session.mainKey when seeding the direct-chat bucket", async () => {
     const root = await makeTempRoot();
-    const cfg: OpenClawConfig = { session: { mainKey: "work" } };
+    const cfg: SmartAgentNeoConfig = { session: { mainKey: "work" } };
     writeLegacySessionsFixture({
       root,
       sessions: {
@@ -360,7 +360,7 @@ describe("doctor legacy state migrations", () => {
 
   it("canonicalizes legacy main keys inside the target sessions store", async () => {
     const root = await makeTempRoot();
-    const cfg: OpenClawConfig = {};
+    const cfg: SmartAgentNeoConfig = {};
     const targetDir = path.join(root, "agents", "main", "sessions");
     writeJson5(path.join(targetDir, "sessions.json"), {
       main: { sessionId: "legacy", updatedAt: 10 },
@@ -379,7 +379,7 @@ describe("doctor legacy state migrations", () => {
 
   it("prefers the newest entry when collapsing main aliases", async () => {
     const root = await makeTempRoot();
-    const cfg: OpenClawConfig = { session: { mainKey: "work" } };
+    const cfg: SmartAgentNeoConfig = { session: { mainKey: "work" } };
     const targetDir = path.join(root, "agents", "main", "sessions");
     writeJson5(path.join(targetDir, "sessions.json"), {
       "agent:main:main": { sessionId: "legacy", updatedAt: 50 },
@@ -398,7 +398,7 @@ describe("doctor legacy state migrations", () => {
 
   it("lowercases agent session keys during canonicalization", async () => {
     const root = await makeTempRoot();
-    const cfg: OpenClawConfig = {};
+    const cfg: SmartAgentNeoConfig = {};
     const targetDir = path.join(root, "agents", "main", "sessions");
     writeJson5(path.join(targetDir, "sessions.json"), {
       "agent:main:slack:channel:C123": { sessionId: "legacy", updatedAt: 10 },
@@ -416,7 +416,7 @@ describe("doctor legacy state migrations", () => {
 
   it("auto-migrates when only target sessions contain legacy keys", async () => {
     const root = await makeTempRoot();
-    const cfg: OpenClawConfig = {};
+    const cfg: SmartAgentNeoConfig = {};
     const targetDir = path.join(root, "agents", "main", "sessions");
     writeJson5(path.join(targetDir, "sessions.json"), {
       main: { sessionId: "legacy", updatedAt: 10 },
@@ -448,7 +448,7 @@ describe("doctor legacy state migrations", () => {
     fs.mkdirSync(legacyDir, { recursive: true });
 
     const result = await runStateDirMigration(root, {
-      OPENCLAW_STATE_DIR: "/custom/state",
+      SMART_AGENT_NEO_STATE_DIR: "/custom/state",
     } as NodeJS.ProcessEnv);
 
     expect(result.skipped).toBe(true);

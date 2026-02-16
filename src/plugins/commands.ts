@@ -5,15 +5,15 @@
  * These commands are processed before built-in commands and before agent invocation.
  */
 
-import type { OpenClawConfig } from "../config/config.js";
+import type { SmartAgentNeoConfig } from "../config/config.js";
 import type {
-  OpenClawPluginCommandDefinition,
+  SmartAgentNeoPluginCommandDefinition,
   PluginCommandContext,
   PluginCommandResult,
 } from "./types.js";
 import { logVerbose } from "../globals.js";
 
-type RegisteredPluginCommand = OpenClawPluginCommandDefinition & {
+type RegisteredPluginCommand = SmartAgentNeoPluginCommandDefinition & {
   pluginId: string;
 };
 
@@ -107,7 +107,7 @@ export type CommandRegistrationResult = {
  */
 export function registerPluginCommand(
   pluginId: string,
-  command: OpenClawPluginCommandDefinition,
+  command: SmartAgentNeoPluginCommandDefinition,
 ): CommandRegistrationResult {
   // Prevent registration while commands are being processed
   if (registryLocked) {
@@ -235,7 +235,7 @@ export async function executePluginCommand(params: {
   channelId?: PluginCommandContext["channelId"];
   isAuthorizedSender: boolean;
   commandBody: string;
-  config: OpenClawConfig;
+  config: SmartAgentNeoConfig;
   from?: PluginCommandContext["from"];
   to?: PluginCommandContext["to"];
   accountId?: PluginCommandContext["accountId"];

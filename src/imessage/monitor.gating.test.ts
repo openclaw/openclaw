@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { SmartAgentNeoConfig } from "../config/config.js";
 import type { IMessagePayload } from "./monitor/types.js";
 import {
   buildIMessageInboundContext,
@@ -7,7 +7,7 @@ import {
 } from "./monitor/inbound-processing.js";
 import { parseIMessageNotification } from "./monitor/parse-notification.js";
 
-function baseCfg(): OpenClawConfig {
+function baseCfg(): SmartAgentNeoConfig {
   return {
     channels: {
       imessage: {
@@ -19,13 +19,13 @@ function baseCfg(): OpenClawConfig {
     },
     session: { mainKey: "main" },
     messages: {
-      groupChat: { mentionPatterns: ["@openclaw"] },
+      groupChat: { mentionPatterns: ["@smart-agent-neo"] },
     },
-  } as unknown as OpenClawConfig;
+  } as unknown as SmartAgentNeoConfig;
 }
 
 function resolve(params: {
-  cfg?: OpenClawConfig;
+  cfg?: SmartAgentNeoConfig;
   message: IMessagePayload;
   storeAllowFrom?: string[];
 }) {
@@ -48,7 +48,7 @@ function resolve(params: {
   });
 }
 
-function buildDispatchContextPayload(params: { cfg: OpenClawConfig; message: IMessagePayload }) {
+function buildDispatchContextPayload(params: { cfg: SmartAgentNeoConfig; message: IMessagePayload }) {
   const { cfg, message } = params;
   const groupHistories = new Map();
   const decision = resolveIMessageInboundDecision({
@@ -113,7 +113,7 @@ describe("imessage monitor gating + envelope builders", () => {
       chat_id: 42,
       sender: "+15550002222",
       is_from_me: false,
-      text: "@openclaw ping",
+      text: "@smart-agent-neo ping",
       is_group: true,
       chat_name: "Lobster Squad",
       participants: ["+1555", "+1556"],
@@ -231,12 +231,12 @@ describe("imessage monitor gating + envelope builders", () => {
         chat_id: 123,
         sender: "+15550001111",
         is_from_me: false,
-        text: "@openclaw hello",
+        text: "@smart-agent-neo hello",
         is_group: true,
       },
       opts: {},
-      messageText: "@openclaw hello",
-      bodyText: "@openclaw hello",
+      messageText: "@smart-agent-neo hello",
+      bodyText: "@smart-agent-neo hello",
       allowFrom: ["*"],
       groupAllowFrom: [],
       groupPolicy: "open",
@@ -263,12 +263,12 @@ describe("imessage monitor gating + envelope builders", () => {
         chat_id: 202,
         sender: "+15550003333",
         is_from_me: false,
-        text: "@openclaw hi",
+        text: "@smart-agent-neo hi",
         is_group: true,
       },
       opts: {},
-      messageText: "@openclaw hi",
-      bodyText: "@openclaw hi",
+      messageText: "@smart-agent-neo hi",
+      bodyText: "@smart-agent-neo hi",
       allowFrom: ["*"],
       groupAllowFrom: ["chat_id:101"],
       groupPolicy: "allowlist",
@@ -287,12 +287,12 @@ describe("imessage monitor gating + envelope builders", () => {
         chat_id: 101,
         sender: "+15550003333",
         is_from_me: false,
-        text: "@openclaw ok",
+        text: "@smart-agent-neo ok",
         is_group: true,
       },
       opts: {},
-      messageText: "@openclaw ok",
-      bodyText: "@openclaw ok",
+      messageText: "@smart-agent-neo ok",
+      bodyText: "@smart-agent-neo ok",
       allowFrom: ["*"],
       groupAllowFrom: ["chat_id:101"],
       groupPolicy: "allowlist",
@@ -319,12 +319,12 @@ describe("imessage monitor gating + envelope builders", () => {
         chat_id: 303,
         sender: "+15550003333",
         is_from_me: false,
-        text: "@openclaw hi",
+        text: "@smart-agent-neo hi",
         is_group: true,
       },
       opts: {},
-      messageText: "@openclaw hi",
-      bodyText: "@openclaw hi",
+      messageText: "@smart-agent-neo hi",
+      bodyText: "@smart-agent-neo hi",
       allowFrom: ["*"],
       groupAllowFrom: [],
       groupPolicy: "disabled",
