@@ -6,6 +6,12 @@ type FetchWithPreconnect = typeof fetch & {
 
 type RequestInitWithDuplex = RequestInit & { duplex?: "half" };
 
+const wrapFetchWithAbortSignalMarker = Symbol.for("openclaw.fetch.abort-signal-wrapped");
+
+type FetchWithAbortSignalMarker = typeof fetch & {
+  [wrapFetchWithAbortSignalMarker]?: true;
+};
+
 function withDuplex(
   init: RequestInit | undefined,
   input: RequestInfo | URL,
@@ -28,6 +34,10 @@ function withDuplex(
 }
 
 export function wrapFetchWithAbortSignal(fetchImpl: typeof fetch): typeof fetch {
+  if ((fetchImpl as FetchWithAbortSignalMarker)[wrapFetchWithAbortSignalMarker]) {
+    return fetchImpl;
+  }
+
   const wrapped = ((input: RequestInfo | URL, init?: RequestInit) => {
     const patchedInit = withDuplex(init, input);
     const signal = patchedInit?.signal;
@@ -73,13 +83,21 @@ export function wrapFetchWithAbortSignal(fetchImpl: typeof fetch): typeof fetch 
     }
   }) as FetchWithPreconnect;
 
+  const wrappedFetch = Object.assign(wrapped, fetchImpl) as FetchWithPreconnect;
   const fetchWithPreconnect = fetchImpl as FetchWithPreconnect;
-  wrapped.preconnect =
+  wrappedFetch.preconnect =
     typeof fetchWithPreconnect.preconnect === "function"
       ? fetchWithPreconnect.preconnect.bind(fetchWithPreconnect)
       : () => {};
 
-  return Object.assign(wrapped, fetchImpl);
+  Object.defineProperty(wrappedFetch, wrapFetchWithAbortSignalMarker, {
+    value: true,
+    enumerable: false,
+    configurable: false,
+    writable: false,
+  });
+
+  return wrappedFetch;
 }
 
 export function resolveFetch(fetchImpl?: typeof fetch): typeof fetch | undefined {
