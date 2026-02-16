@@ -16,6 +16,7 @@ struct SettingsTab: View {
     @AppStorage("talk.enabled") private var talkEnabled: Bool = false
     @AppStorage("talk.button.enabled") private var talkButtonEnabled: Bool = true
     @AppStorage("talk.background.enabled") private var talkBackgroundEnabled: Bool = false
+    @AppStorage("talk.voiceDirectiveHint.enabled") private var talkVoiceDirectiveHintEnabled: Bool = true
     @AppStorage("camera.enabled") private var cameraEnabled: Bool = true
     @AppStorage("location.enabledMode") private var locationEnabledModeRaw: String = OpenClawLocationMode.off.rawValue
     @AppStorage("location.preciseEnabled") private var locationPreciseEnabled: Bool = true
@@ -258,6 +259,10 @@ struct SettingsTab: View {
                             .foregroundStyle(.secondary)
                         Toggle("Background Listening", isOn: self.$talkBackgroundEnabled)
                         Text("Keep listening when the app is in the background. Uses more battery.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                        Toggle("Voice Directive Hint", isOn: self.$talkVoiceDirectiveHintEnabled)
+                        Text("Include ElevenLabs voice switching instructions in the Talk Mode prompt. Disable to save tokens.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                         // Keep this separate so users can hide the side bubble without disabling Talk Mode.
