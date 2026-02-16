@@ -1,4 +1,5 @@
-import { parseConfigValue } from "./config-value.js";
+import { parseSetUnsetCommand } from "./commands-setunset.js";
+import { parseSlashCommandOrNull } from "./commands-slash-parse.js";
 
 export type DebugCommand =
   | { action: "show" }
@@ -8,60 +9,31 @@ export type DebugCommand =
   | { action: "error"; message: string };
 
 export function parseDebugCommand(raw: string): DebugCommand | null {
-  const trimmed = raw.trim();
-  if (!trimmed.toLowerCase().startsWith("/debug")) {
+  const parsed = parseSlashCommandOrNull(raw, "/debug", {
+    invalidMessage: "Invalid /debug syntax.",
+  });
+  if (!parsed) {
     return null;
   }
-  const rest = trimmed.slice("/debug".length).trim();
-  if (!rest) {
-    return { action: "show" };
+  if (!parsed.ok) {
+    return { action: "error", message: parsed.message };
   }
-
-  const match = rest.match(/^(\S+)(?:\s+([\s\S]+))?$/);
-  if (!match) {
-    return { action: "error", message: "Invalid /debug syntax." };
-  }
-  const action = match[1].toLowerCase();
-  const args = (match[2] ?? "").trim();
+  const { action, args } = parsed;
 
   switch (action) {
     case "show":
       return { action: "show" };
     case "reset":
       return { action: "reset" };
-    case "unset": {
-      if (!args) {
-        return { action: "error", message: "Usage: /debug unset path" };
-      }
-      return { action: "unset", path: args };
-    }
+    case "unset":
     case "set": {
-      if (!args) {
-        return {
-          action: "error",
-          message: "Usage: /debug set path=value",
-        };
+      const parsed = parseSetUnsetCommand({ slash: "/debug", action, args });
+      if (parsed.kind === "error") {
+        return { action: "error", message: parsed.message };
       }
-      const eqIndex = args.indexOf("=");
-      if (eqIndex <= 0) {
-        return {
-          action: "error",
-          message: "Usage: /debug set path=value",
-        };
-      }
-      const path = args.slice(0, eqIndex).trim();
-      const rawValue = args.slice(eqIndex + 1);
-      if (!path) {
-        return {
-          action: "error",
-          message: "Usage: /debug set path=value",
-        };
-      }
-      const parsed = parseConfigValue(rawValue);
-      if (parsed.error) {
-        return { action: "error", message: parsed.error };
-      }
-      return { action: "set", path, value: parsed.value };
+      return parsed.kind === "set"
+        ? { action: "set", path: parsed.path, value: parsed.value }
+        : { action: "unset", path: parsed.path };
     }
     default:
       return {
