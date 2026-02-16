@@ -322,6 +322,147 @@ describe("registerSlackInteractionEvents", () => {
     );
   });
 
+  it("renders date/time/datetime picker selections in confirmation rows", async () => {
+    enqueueSystemEventMock.mockReset();
+    const { ctx, app, getHandler } = createContext();
+    registerSlackInteractionEvents({ ctx: ctx as never });
+    const handler = getHandler();
+    expect(handler).toBeTruthy();
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    await handler!({
+      ack,
+      body: {
+        user: { id: "U333" },
+        channel: { id: "C3" },
+        message: {
+          ts: "555.666",
+          text: "fallback",
+          blocks: [
+            {
+              type: "actions",
+              block_id: "date_block",
+              elements: [{ type: "datepicker", action_id: "openclaw:date" }],
+            },
+            {
+              type: "actions",
+              block_id: "time_block",
+              elements: [{ type: "timepicker", action_id: "openclaw:time" }],
+            },
+            {
+              type: "actions",
+              block_id: "datetime_block",
+              elements: [{ type: "datetimepicker", action_id: "openclaw:datetime" }],
+            },
+          ],
+        },
+      },
+      action: {
+        type: "datepicker",
+        action_id: "openclaw:date",
+        block_id: "date_block",
+        selected_date: "2026-02-16",
+      },
+    });
+
+    await handler!({
+      ack,
+      body: {
+        user: { id: "U333" },
+        channel: { id: "C3" },
+        message: {
+          ts: "555.667",
+          text: "fallback",
+          blocks: [
+            {
+              type: "actions",
+              block_id: "time_block",
+              elements: [{ type: "timepicker", action_id: "openclaw:time" }],
+            },
+          ],
+        },
+      },
+      action: {
+        type: "timepicker",
+        action_id: "openclaw:time",
+        block_id: "time_block",
+        selected_time: "14:30",
+      },
+    });
+
+    await handler!({
+      ack,
+      body: {
+        user: { id: "U333" },
+        channel: { id: "C3" },
+        message: {
+          ts: "555.668",
+          text: "fallback",
+          blocks: [
+            {
+              type: "actions",
+              block_id: "datetime_block",
+              elements: [{ type: "datetimepicker", action_id: "openclaw:datetime" }],
+            },
+          ],
+        },
+      },
+      action: {
+        type: "datetimepicker",
+        action_id: "openclaw:datetime",
+        block_id: "datetime_block",
+        selected_date_time: selectedDateTimeEpoch,
+      },
+    });
+
+    expect(app.client.chat.update).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        channel: "C3",
+        ts: "555.666",
+        blocks: [
+          {
+            type: "context",
+            elements: [{ type: "mrkdwn", text: ":white_check_mark: *2026-02-16* selected" }],
+          },
+          expect.anything(),
+          expect.anything(),
+        ],
+      }),
+    );
+    expect(app.client.chat.update).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        channel: "C3",
+        ts: "555.667",
+        blocks: [
+          {
+            type: "context",
+            elements: [{ type: "mrkdwn", text: ":white_check_mark: *14:30* selected" }],
+          },
+        ],
+      }),
+    );
+    expect(app.client.chat.update).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        channel: "C3",
+        ts: "555.668",
+        blocks: [
+          {
+            type: "context",
+            elements: [
+              {
+                type: "mrkdwn",
+                text: `:white_check_mark: *${new Date(selectedDateTimeEpoch * 1000).toISOString()}* selected`,
+              },
+            ],
+          },
+        ],
+      }),
+    );
+  });
+
   it("captures expanded selection and temporal payload fields", async () => {
     enqueueSystemEventMock.mockReset();
     const { ctx, getHandler } = createContext();
@@ -707,3 +848,4 @@ describe("registerSlackInteractionEvents", () => {
     expect(options.sessionKey).toBe("agent:main:slack:channel:C99");
   });
 });
+const selectedDateTimeEpoch = 1_771_632_300;
