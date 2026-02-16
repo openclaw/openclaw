@@ -287,7 +287,9 @@ function computeNextProfileUsageStats(params: {
     });
     updatedStats.disabledUntil = params.now + backoffMs;
     updatedStats.disabledReason = "billing";
-  } else {
+  } else if (params.reason !== "timeout") {
+    // Timeouts are not auth/rate failures — don't cooldown the profile.
+    // The LLM was just slow; retrying immediately is fine.
     const backoffMs = calculateAuthProfileCooldownMs(nextErrorCount);
     updatedStats.cooldownUntil = params.now + backoffMs;
   }
