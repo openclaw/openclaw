@@ -301,7 +301,10 @@ export function renderApp(state: AppViewState) {
                 },
                 onRefresh: () => loadSessions(state),
                 onPatch: (key, patch) => patchSession(state, key, patch),
-                onDelete: (key) => deleteSession(state, key),
+                onDelete: async (key) => {
+                  await deleteSession(state, key);
+                  await loadSessions(state);
+                },
               })
             : nothing
         }
