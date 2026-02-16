@@ -40,6 +40,8 @@ export default function register(api: {
     request_id: Type.Optional(Type.String({ minLength: 1 })),
     correlation_id: Type.Optional(Type.String({ minLength: 1 })),
     trace_id: Type.Optional(Type.String({ minLength: 1 })),
+    trace_parent: Type.Optional(Type.String({ minLength: 1 })),
+    trace_state: Type.Optional(Type.String({ minLength: 1 })),
   };
 
   const toolDescriptions = {
@@ -198,6 +200,8 @@ export default function register(api: {
               requestId: readString(params, "request_id"),
               correlationId: readString(params, "correlation_id"),
               traceId: readString(params, "trace_id"),
+              traceParent: readString(params, "trace_parent"),
+              traceState: readString(params, "trace_state"),
               ticketId: readString(params, "ticket_id"),
               payload: asObject(params.payload),
             });

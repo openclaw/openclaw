@@ -71,11 +71,7 @@ export function requireHeader(headers, headerName, code, message) {
 
 export function requireUuidField(value, fieldName) {
   if (!isUuid(value)) {
-    throw new HttpError(
-      400,
-      "INVALID_REQUEST",
-      `Field '${fieldName}' must be a valid UUID`,
-    );
+    throw new HttpError(400, "INVALID_REQUEST", `Field '${fieldName}' must be a valid UUID`);
   }
 }
 
@@ -95,4 +91,16 @@ export function buildCorrelationId(headers) {
 
 export function buildTraceId(headers) {
   return lowerHeader(headers, "x-trace-id")?.trim() ?? null;
+}
+
+export function buildTraceContext(headers) {
+  const traceParent = lowerHeader(headers, "traceparent")?.trim();
+  const traceState = lowerHeader(headers, "tracestate")?.trim();
+  const traceId = buildTraceId(headers);
+
+  return {
+    traceId: traceId && traceId !== "" ? traceId : null,
+    traceParent: traceParent && traceParent !== "" ? traceParent : null,
+    traceState: traceState && traceState !== "" ? traceState : null,
+  };
 }

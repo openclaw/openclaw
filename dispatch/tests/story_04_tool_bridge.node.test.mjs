@@ -31,11 +31,7 @@ function run(command, args, input = undefined) {
   });
   if (result.status !== 0) {
     throw new Error(
-      [
-        `Command failed: ${command} ${args.join(" ")}`,
-        result.stdout,
-        result.stderr,
-      ]
+      [`Command failed: ${command} ${args.join(" ")}`, result.stdout, result.stderr]
         .filter(Boolean)
         .join("\n"),
     );
@@ -180,6 +176,8 @@ test("bridge forwards allowlisted tools and propagates request + correlation int
     actorType: "AGENT",
     requestId: createRequestId,
     correlationId: createCorrelationId,
+    traceParent: "00-4bf92f3577b34da6a3ce929d0e0e4736a-00f067aa0ba902b7-01",
+    traceState: "congo=t61rcWkgMzE,rojo=00f067aa0ba902b7",
     logger,
     payload: {
       account_id: accountId,
@@ -215,6 +213,19 @@ test("bridge forwards allowlisted tools and propagates request + correlation int
   assert.equal(createAuditRow[6], "");
   assert.equal(createAuditRow[7], "");
   assert.equal(createAuditRow[8], "NEW");
+  const createAuditPayloadRow = psql(`
+    SELECT payload::text
+    FROM audit_events
+    WHERE ticket_id = '${ticketId}'
+    ORDER BY created_at ASC, id ASC
+    LIMIT 1;
+  `).trim();
+  const createAuditPayload = JSON.parse(createAuditPayloadRow);
+  assert.equal(
+    createAuditPayload.trace_parent,
+    "00-4bf92f3577b34da6a3ce929d0e0e4736a-00f067aa0ba902b7-01",
+  );
+  assert.equal(createAuditPayload.trace_state, "congo=t61rcWkgMzE,rojo=00f067aa0ba902b7");
 
   const triage = await invokeDispatchAction({
     baseUrl: dispatchApiBaseUrl,

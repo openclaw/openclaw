@@ -17,7 +17,7 @@ import { closePool, getPool } from "./db.mjs";
 import {
   HttpError,
   buildCorrelationId,
-  buildTraceId,
+  buildTraceContext,
   ensureObject,
   errorBody,
   isUuid,
@@ -1338,8 +1338,22 @@ async function insertAuditEvent(client, params) {
     requestId,
     correlationId,
     traceId,
+    traceParent,
+    traceState,
     payload,
   } = params;
+  const payloadWithTrace =
+    payload == null
+      ? {}
+      : payload && typeof payload === "object" && !Array.isArray(payload)
+        ? { ...payload }
+        : { value: payload };
+  if (traceParent != null) {
+    payloadWithTrace.trace_parent = traceParent;
+  }
+  if (traceState != null) {
+    payloadWithTrace.trace_state = traceState;
+  }
 
   const auditResult = await client.query(
     `
@@ -1370,7 +1384,7 @@ async function insertAuditEvent(client, params) {
       traceId,
       beforeState,
       afterState,
-      payload,
+      payloadWithTrace,
     ],
   );
 
@@ -2148,8 +2162,17 @@ async function findOpenIntakeDuplicate(client, payload) {
 }
 
 async function linkDuplicateIntakeAttempt(client, context = {}) {
-  const { payload, existingTicket, actor, requestId, correlationId, traceId, blindIntakePolicy } =
-    context;
+  const {
+    payload,
+    existingTicket,
+    actor,
+    requestId,
+    correlationId,
+    traceId,
+    traceParent,
+    traceState,
+    blindIntakePolicy,
+  } = context;
   if (!payload || !existingTicket || !actor || !blindIntakePolicy) {
     throw new HttpError(409, "DUPLICATE_INTAKE", "Duplicate blind intake request detected", {
       duplicate_ticket_id: existingTicket?.id ?? null,
@@ -2168,6 +2191,8 @@ async function linkDuplicateIntakeAttempt(client, context = {}) {
     requestId,
     correlationId,
     traceId,
+    traceParent,
+    traceState,
     payload: {
       endpoint: "/tickets/intake",
       requested_at: nowIso(),
@@ -3367,7 +3392,17 @@ async function runWithIdempotency(params) {
 }
 
 async function createTicketMutation(client, context) {
-  const { body, actor, requestId, correlationId, traceId, metrics, authRuntime } = context;
+  const {
+    body,
+    actor,
+    requestId,
+    correlationId,
+    traceId,
+    traceParent,
+    traceState,
+    metrics,
+    authRuntime,
+  } = context;
   ensureObject(body);
   requireUuidField(body.account_id, "account_id");
   requireUuidField(body.site_id, "site_id");
@@ -3416,6 +3451,8 @@ async function createTicketMutation(client, context) {
     requestId,
     correlationId,
     traceId,
+    traceParent,
+    traceState,
     payload: {
       endpoint: "/tickets",
       requested_at: nowIso(),
@@ -3436,6 +3473,8 @@ async function blindIntakeMutation(client, context) {
     requestId,
     correlationId,
     traceId,
+    traceParent,
+    traceState,
     metrics,
     authRuntime,
     blindIntakePolicy,
@@ -3537,6 +3576,8 @@ async function blindIntakeMutation(client, context) {
     requestId,
     correlationId,
     traceId,
+    traceParent,
+    traceState,
     payload: {
       endpoint: "/tickets/intake",
       requested_at: nowIso(),
@@ -3590,6 +3631,8 @@ async function triageTicketMutation(client, context) {
     requestId,
     correlationId,
     traceId,
+    traceParent,
+    traceState,
     metrics,
     authRuntime,
     blindIntakePolicy,
@@ -3698,6 +3741,8 @@ async function triageTicketMutation(client, context) {
       requestId,
       correlationId,
       traceId,
+      traceParent,
+      traceState,
       payload: {
         endpoint: "/tickets/{ticketId}/triage",
         requested_at: nowIso(),
@@ -3718,6 +3763,8 @@ async function triageTicketMutation(client, context) {
       requestId,
       correlationId,
       traceId,
+      traceParent,
+      traceState,
       payload: {
         endpoint: "/tickets/{ticketId}/triage",
         requested_at: nowIso(),
@@ -3737,6 +3784,8 @@ async function triageTicketMutation(client, context) {
       requestId,
       correlationId,
       traceId,
+      traceParent,
+      traceState,
       payload: {
         endpoint: "/tickets/{ticketId}/triage",
         requested_at: nowIso(),
@@ -3769,8 +3818,18 @@ async function triageTicketMutation(client, context) {
 }
 
 async function proposeScheduleMutation(client, context) {
-  const { ticketId, body, actor, requestId, correlationId, traceId, metrics, authRuntime } =
-    context;
+  const {
+    ticketId,
+    body,
+    actor,
+    requestId,
+    correlationId,
+    traceId,
+    traceParent,
+    traceState,
+    metrics,
+    authRuntime,
+  } = context;
   ensureObject(body);
   ensureArrayField(body.options, "options");
   if (body.options.length === 0) {
@@ -3825,6 +3884,8 @@ async function proposeScheduleMutation(client, context) {
     requestId,
     correlationId,
     traceId,
+    traceParent,
+    traceState,
     payload: {
       endpoint: "/tickets/{ticketId}/schedule/propose",
       requested_at: nowIso(),
@@ -3841,8 +3902,18 @@ async function proposeScheduleMutation(client, context) {
 }
 
 async function confirmScheduleMutation(client, context) {
-  const { ticketId, body, actor, requestId, correlationId, traceId, metrics, authRuntime } =
-    context;
+  const {
+    ticketId,
+    body,
+    actor,
+    requestId,
+    correlationId,
+    traceId,
+    traceParent,
+    traceState,
+    metrics,
+    authRuntime,
+  } = context;
   ensureObject(body);
   const start = parseIsoDate(body.start, "start");
   const end = parseIsoDate(body.end, "end");
@@ -3882,6 +3953,8 @@ async function confirmScheduleMutation(client, context) {
     requestId,
     correlationId,
     traceId,
+    traceParent,
+    traceState,
     payload: {
       endpoint: "/tickets/{ticketId}/schedule/confirm",
       requested_at: nowIso(),
@@ -3896,8 +3969,18 @@ async function confirmScheduleMutation(client, context) {
 }
 
 async function dispatchAssignmentMutation(client, context) {
-  const { ticketId, body, actor, requestId, correlationId, traceId, metrics, authRuntime } =
-    context;
+  const {
+    ticketId,
+    body,
+    actor,
+    requestId,
+    correlationId,
+    traceId,
+    traceParent,
+    traceState,
+    metrics,
+    authRuntime,
+  } = context;
   ensureObject(body);
   requireUuidField(body.tech_id, "tech_id");
   if (body.provider_id != null) {
@@ -4040,6 +4123,8 @@ async function dispatchAssignmentMutation(client, context) {
     requestId,
     correlationId,
     traceId,
+    traceParent,
+    traceState,
     payload: {
       endpoint: "/tickets/{ticketId}/assignment/dispatch",
       requested_at: nowIso(),
@@ -4061,7 +4146,17 @@ async function dispatchAssignmentMutation(client, context) {
 }
 
 async function assignmentRecommendMutation(client, context) {
-  const { ticketId, body, actor, requestId, correlationId, traceId, authRuntime } = context;
+  const {
+    ticketId,
+    body,
+    actor,
+    requestId,
+    correlationId,
+    traceId,
+    traceParent,
+    traceState,
+    authRuntime,
+  } = context;
   ensureObject(body);
   const serviceType = normalizeServiceType(body.service_type);
   const recommendationLimit = parseRecommendationLimit(body.recommendation_limit);
@@ -4147,6 +4242,8 @@ async function assignmentRecommendMutation(client, context) {
     requestId,
     correlationId,
     traceId,
+    traceParent,
+    traceState,
     payload: {
       endpoint: "/tickets/{ticketId}/assignment/recommend",
       requested_at: evaluatedAt,
@@ -4170,8 +4267,18 @@ async function assignmentRecommendMutation(client, context) {
 }
 
 async function holdScheduleMutation(client, context) {
-  const { ticketId, body, actor, requestId, correlationId, traceId, metrics, authRuntime } =
-    context;
+  const {
+    ticketId,
+    body,
+    actor,
+    requestId,
+    correlationId,
+    traceId,
+    traceParent,
+    traceState,
+    metrics,
+    authRuntime,
+  } = context;
   ensureObject(body);
   const holdReason = parseHoldReason(body.hold_reason);
   const confirmationWindow = parseSchedulingWindow(body.confirmation_window, "confirmation_window");
@@ -4254,6 +4361,8 @@ async function holdScheduleMutation(client, context) {
     requestId,
     correlationId,
     traceId,
+    traceParent,
+    traceState,
     payload: {
       endpoint: "/tickets/{ticketId}/schedule/hold",
       requested_at: nowIso(),
@@ -4279,8 +4388,18 @@ async function holdScheduleMutation(client, context) {
 }
 
 async function releaseScheduleMutation(client, context) {
-  const { ticketId, body, actor, requestId, correlationId, traceId, metrics, authRuntime } =
-    context;
+  const {
+    ticketId,
+    body,
+    actor,
+    requestId,
+    correlationId,
+    traceId,
+    traceParent,
+    traceState,
+    metrics,
+    authRuntime,
+  } = context;
   ensureObject(body);
   const confirmationLog = parseHoldConfirmationLog(body.customer_confirmation_log);
 
@@ -4379,6 +4498,8 @@ async function releaseScheduleMutation(client, context) {
     requestId,
     correlationId,
     traceId,
+    traceParent,
+    traceState,
     payload: {
       endpoint: "/tickets/{ticketId}/schedule/release",
       requested_at: nowIso(),
@@ -4410,8 +4531,18 @@ async function releaseScheduleMutation(client, context) {
 }
 
 async function rollbackScheduleMutation(client, context) {
-  const { ticketId, body, actor, requestId, correlationId, traceId, metrics, authRuntime } =
-    context;
+  const {
+    ticketId,
+    body,
+    actor,
+    requestId,
+    correlationId,
+    traceId,
+    traceParent,
+    traceState,
+    metrics,
+    authRuntime,
+  } = context;
   ensureObject(body);
   const confirmationId = parseRollbackConfirmationId(body.confirmation_id);
   const reason = normalizeOptionalString(body.reason, "reason");
@@ -4510,6 +4641,8 @@ async function rollbackScheduleMutation(client, context) {
     requestId,
     correlationId,
     traceId,
+    traceParent,
+    traceState,
     payload: {
       endpoint: "/tickets/{ticketId}/schedule/rollback",
       requested_at: nowIso(),
@@ -4673,8 +4806,18 @@ async function autonomyRollbackMutation(client, context) {
 }
 
 async function techCheckInMutation(client, context) {
-  const { ticketId, body, actor, requestId, correlationId, traceId, metrics, authRuntime } =
-    context;
+  const {
+    ticketId,
+    body,
+    actor,
+    requestId,
+    correlationId,
+    traceId,
+    traceParent,
+    traceState,
+    metrics,
+    authRuntime,
+  } = context;
   ensureObject(body);
   const timestamp = parseIsoDate(body.timestamp, "timestamp");
   if (body.location != null) {
@@ -4709,6 +4852,8 @@ async function techCheckInMutation(client, context) {
     requestId,
     correlationId,
     traceId,
+    traceParent,
+    traceState,
     payload: {
       endpoint: "/tickets/{ticketId}/tech/check-in",
       requested_at: nowIso(),
@@ -4740,8 +4885,18 @@ async function techCheckInMutation(client, context) {
 }
 
 async function techRequestChangeMutation(client, context) {
-  const { ticketId, body, actor, requestId, correlationId, traceId, metrics, authRuntime } =
-    context;
+  const {
+    ticketId,
+    body,
+    actor,
+    requestId,
+    correlationId,
+    traceId,
+    traceParent,
+    traceState,
+    metrics,
+    authRuntime,
+  } = context;
   ensureObject(body);
   ensureString(body.approval_type, "approval_type");
   ensureString(body.reason, "reason");
@@ -4827,6 +4982,8 @@ async function techRequestChangeMutation(client, context) {
     requestId,
     correlationId,
     traceId,
+    traceParent,
+    traceState,
     payload: {
       endpoint: "/tickets/{ticketId}/tech/request-change",
       requested_at: nowIso(),
@@ -4854,8 +5011,18 @@ async function techRequestChangeMutation(client, context) {
 }
 
 async function approvalDecideMutation(client, context) {
-  const { ticketId, body, actor, requestId, correlationId, traceId, metrics, authRuntime } =
-    context;
+  const {
+    ticketId,
+    body,
+    actor,
+    requestId,
+    correlationId,
+    traceId,
+    traceParent,
+    traceState,
+    metrics,
+    authRuntime,
+  } = context;
   ensureObject(body);
   requireUuidField(body.approval_id, "approval_id");
   ensureString(body.decision, "decision");
@@ -4948,6 +5115,8 @@ async function approvalDecideMutation(client, context) {
     requestId,
     correlationId,
     traceId,
+    traceParent,
+    traceState,
     payload: {
       endpoint: "/tickets/{ticketId}/approval/decide",
       requested_at: nowIso(),
@@ -4973,6 +5142,8 @@ async function qaVerifyMutation(client, context) {
     requestId,
     correlationId,
     traceId,
+    traceParent,
+    traceState,
     metrics,
     authRuntime,
     objectStoreSchemes,
@@ -5165,6 +5336,8 @@ async function qaVerifyMutation(client, context) {
     requestId,
     correlationId,
     traceId,
+    traceParent,
+    traceState,
     payload: {
       endpoint: "/tickets/{ticketId}/qa/verify",
       requested_at: nowIso(),
@@ -5184,8 +5357,18 @@ async function qaVerifyMutation(client, context) {
 }
 
 async function billingGenerateInvoiceMutation(client, context) {
-  const { ticketId, body, actor, requestId, correlationId, traceId, metrics, authRuntime } =
-    context;
+  const {
+    ticketId,
+    body,
+    actor,
+    requestId,
+    correlationId,
+    traceId,
+    traceParent,
+    traceState,
+    metrics,
+    authRuntime,
+  } = context;
   ensureObject(body);
 
   const existing = await getTicketForUpdate(client, ticketId);
@@ -5217,6 +5400,8 @@ async function billingGenerateInvoiceMutation(client, context) {
     requestId,
     correlationId,
     traceId,
+    traceParent,
+    traceState,
     payload: {
       endpoint: "/tickets/{ticketId}/billing/generate-invoice",
       requested_at: nowIso(),
@@ -5232,7 +5417,17 @@ async function billingGenerateInvoiceMutation(client, context) {
 }
 
 async function addEvidenceMutation(client, context) {
-  const { ticketId, body, actor, requestId, correlationId, traceId, authRuntime } = context;
+  const {
+    ticketId,
+    body,
+    actor,
+    requestId,
+    correlationId,
+    traceId,
+    traceParent,
+    traceState,
+    authRuntime,
+  } = context;
   ensureObject(body);
   ensureString(body.kind, "kind");
   ensureString(body.uri, "uri");
@@ -5281,6 +5476,8 @@ async function addEvidenceMutation(client, context) {
     requestId,
     correlationId,
     traceId,
+    traceParent,
+    traceState,
     payload: {
       endpoint: "/tickets/{ticketId}/evidence",
       requested_at: nowIso(),
@@ -5303,6 +5500,8 @@ async function techCompleteMutation(client, context) {
     requestId,
     correlationId,
     traceId,
+    traceParent,
+    traceState,
     metrics,
     authRuntime,
     objectStoreSchemes,
@@ -5448,6 +5647,8 @@ async function techCompleteMutation(client, context) {
     requestId,
     correlationId,
     traceId,
+    traceParent,
+    traceState,
     payload: {
       endpoint: "/tickets/{ticketId}/tech/complete",
       requested_at: nowIso(),
@@ -5473,6 +5674,8 @@ async function closeoutCandidateMutation(client, context) {
     requestId,
     correlationId,
     traceId,
+    traceParent,
+    traceState,
     metrics,
     authRuntime,
     objectStoreSchemes,
@@ -5640,6 +5843,8 @@ async function closeoutCandidateMutation(client, context) {
     requestId,
     correlationId,
     traceId,
+    traceParent,
+    traceState,
     payload: {
       endpoint: "/tickets/{ticketId}/closeout/candidate",
       requested_at: nowIso(),
@@ -6001,7 +6206,7 @@ export function createDispatchApiServer(options = {}) {
     const url = new URL(request.url ?? "/", "http://localhost");
     const route = resolveRoute(requestMethod, url.pathname);
     const correlationId = buildCorrelationId(request.headers);
-    const traceId = buildTraceId(request.headers);
+    const { traceId, traceParent, traceState } = buildTraceContext(request.headers);
 
     if (!route) {
       sendJson(response, 404, {
@@ -6421,6 +6626,8 @@ export function createDispatchApiServer(options = {}) {
             requestId,
             correlationId,
             traceId,
+            traceParent,
+            traceState,
             metrics,
             authRuntime,
             objectStoreSchemes,

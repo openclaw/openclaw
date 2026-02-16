@@ -103,6 +103,20 @@ function resolveTraceId(traceId) {
   return readNonEmptyString(traceId, "trace_id");
 }
 
+function resolveTraceParent(traceParent) {
+  if (traceParent == null || traceParent === "") {
+    return null;
+  }
+  return readNonEmptyString(traceParent, "trace_parent");
+}
+
+function resolveTraceState(traceState) {
+  if (traceState == null || traceState === "") {
+    return null;
+  }
+  return readNonEmptyString(traceState, "trace_state");
+}
+
 function resolveToolSpec(toolName) {
   const normalized = readNonEmptyString(toolName, "tool_name");
   const spec = getDispatchToolPolicy(normalized);
@@ -188,6 +202,8 @@ export async function invokeDispatchAction(params) {
   const requestId = resolveRequestId(params.requestId);
   const correlationId = resolveCorrelationId(params.correlationId);
   const traceId = resolveTraceId(params.traceId);
+  const traceParent = resolveTraceParent(params.traceParent);
+  const traceState = resolveTraceState(params.traceState);
   const ticketId = resolveTicketId(spec, params.ticketId);
   const endpoint = resolveEndpoint(spec, ticketId);
   const baseUrl = normalizeBaseUrl(params.baseUrl);
@@ -217,7 +233,12 @@ export async function invokeDispatchAction(params) {
     "x-tool-name": spec.tool_name,
   };
 
-  if (traceId) {
+  if (traceParent) {
+    headers.traceparent = traceParent;
+    if (traceState) {
+      headers.tracestate = traceState;
+    }
+  } else if (traceId) {
     headers["x-trace-id"] = traceId;
   }
 
