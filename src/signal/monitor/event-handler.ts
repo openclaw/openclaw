@@ -445,7 +445,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
               conversationLabel: groupLabel ?? `dm:${senderPeerId}`,
             },
           );
-        } catch {
+        } catch (err) {
+          logVerbose(danger(`signal reaction dispatch failed: ${String(err)}`));
           // Fallback to deferred on dispatch failure
           enqueueSystemEvent(text, { sessionKey: route.sessionKey, contextKey });
         }
