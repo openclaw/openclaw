@@ -56,24 +56,29 @@ export function configureProgramHelp(program: Command, ctx: ProgramContext) {
     subcommandTerm: (cmd) => theme.command(cmd.name()),
   });
 
+  const formatHelpOutput = (str: string) => {
+    let output = str;
+    const isRootHelp = new RegExp(
+      `^Usage:\\s+${CLI_NAME}\\s+\\[options\\]\\s+\\[command\\]\\s*$`,
+      "m",
+    ).test(output);
+    if (isRootHelp && /^Commands:/m.test(output)) {
+      output = output.replace(/^Commands:/m, `Commands:\n  ${theme.muted(ROOT_COMMANDS_HINT)}`);
+    }
+
+    return output
+      .replace(/^Usage:/gm, theme.heading("Usage:"))
+      .replace(/^Options:/gm, theme.heading("Options:"))
+      .replace(/^Commands:/gm, theme.heading("Commands:"));
+  };
+
   program.configureOutput({
     writeOut: (str) => {
-      let output = str;
-      const isRootHelp = new RegExp(
-        `^Usage:\\s+${CLI_NAME}\\s+\\[options\\]\\s+\\[command\\]\\s*$`,
-        "m",
-      ).test(output);
-      if (isRootHelp && /^Commands:/m.test(output)) {
-        output = output.replace(/^Commands:/m, `Commands:\n  ${theme.muted(ROOT_COMMANDS_HINT)}`);
-      }
-
-      const colored = output
-        .replace(/^Usage:/gm, theme.heading("Usage:"))
-        .replace(/^Options:/gm, theme.heading("Options:"))
-        .replace(/^Commands:/gm, theme.heading("Commands:"));
-      process.stdout.write(colored);
+      process.stdout.write(formatHelpOutput(str));
     },
-    writeErr: (str) => process.stderr.write(str),
+    writeErr: (str) => {
+      process.stderr.write(formatHelpOutput(str));
+    },
     outputError: (str, write) => write(theme.error(str)),
   });
 
