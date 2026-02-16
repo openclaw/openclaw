@@ -1,11 +1,33 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-export PATH="$HOME/.nvm/versions/node/v22.14.0/bin:/opt/homebrew/bin:$PATH"
+# Dynamic PATH setup - detect common package manager locations
+if command -v brew >/dev/null 2>&1; then
+  export PATH="$(brew --prefix)/bin:$PATH"
+fi
+
+# Ensure node/npm/pnpm are in PATH from nvm if available
+if [ -f "$HOME/.nvm/nvm.sh" ]; then
+  source "$HOME/.nvm/nvm.sh"
+fi
 
 # Paths
 DEV_ROOT="$(cd "$(dirname "$0")" && pwd)"
-INSTALLED="$HOME/.nvm/versions/node/v22.14.0/lib/node_modules/openclaw"
+# Dynamically find OpenClaw installation
+if command -v openclaw >/dev/null 2>&1; then
+  # Find openclaw binary location and derive installation path
+  OPENCLAW_BIN="$(which openclaw)"
+  if [[ "$OPENCLAW_BIN" == *"/node_modules/.bin/"* ]]; then
+    # Global npm/pnpm installation
+    INSTALLED="$(dirname "$(dirname "$OPENCLAW_BIN")")/openclaw"
+  else
+    # Direct binary installation - try common locations
+    INSTALLED="$(npm root -g 2>/dev/null || echo "/usr/local/lib/node_modules")/openclaw"
+  fi
+else
+  echo "✗ openclaw command not found. Please install OpenClaw first."
+  exit 1
+fi
 UI_DIR="$DEV_ROOT/ui"
 BUILD_OUT="$DEV_ROOT/dist/control-ui"
 INSTALL_TARGET="$INSTALLED/dist/control-ui"
@@ -50,7 +72,17 @@ echo "→ Patched: $(du -sh "$INSTALL_TARGET" | cut -f1)"
 # 5. Restart live gateway
 echo ""
 echo "→ Restarting live gateway..."
-PID=$(/usr/sbin/lsof -i :18789 -P -t 2>/dev/null | head -1 || true)
+# Try to find and restart gateway using portable approach
+if command -v lsof >/dev/null 2>&1; then
+  PID=$(lsof -i :18789 -P -t 2>/dev/null | head -1 || true)
+elif command -v openclaw >/dev/null 2>&1; then
+  # Use openclaw gateway restart if lsof not available
+  openclaw gateway restart 2>/dev/null || echo "  Gateway restart command failed"
+  PID=""
+else
+  echo "  Cannot restart gateway (no lsof or openclaw command found)"
+  PID=""
+fi
 if [ -n "$PID" ]; then
   kill "$PID" 2>/dev/null || true
   sleep 2
