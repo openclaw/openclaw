@@ -81,9 +81,15 @@ A typical skill includes:
 
 - A `SKILL.md` file with the primary description and usage.
 - Optional configs, scripts, or supporting files used by the skill.
-- Metadata such as tags, summary, and install requirements.
+- Metadata such as tags, summary, install requirements, and capabilities.
 
-ClawHub uses metadata to power discovery and safely expose skill capabilities.
+ClawHub uses metadata to power discovery and display skill capabilities.
+Skills declare what system access they need via `capabilities` in frontmatter
+(e.g., `shell`, `filesystem`, `network`). OpenClaw enforces these at runtime —
+community skills that use tools without declaring the matching capability are
+blocked. See [Skills](/tools/skills#gating-load-time-filters) for the
+full capability reference.
+
 The registry also tracks usage signals (such as stars and downloads) to improve
 ranking and visibility.
 
@@ -103,7 +109,17 @@ ClawHub is open by default. Anyone can upload skills, but a GitHub account must
 be at least one week old to publish. This helps slow down abuse without blocking
 legitimate contributors.
 
-Reporting and moderation:
+### Capabilities and enforcement
+
+Skills declare `capabilities` in their SKILL.md frontmatter to describe what
+system access they need. ClawHub displays these to users before install.
+OpenClaw enforces them at runtime — community skills that attempt to use tools
+without the matching declared capability are blocked. Skills with no capabilities
+are treated as read-only (model-only instructions, no tool access).
+
+Available capabilities: `shell`, `filesystem`, `network`, `browser`, `sessions`.
+
+### Reporting and moderation
 
 - Any signed in user can report a skill.
 - Report reasons are required and recorded.

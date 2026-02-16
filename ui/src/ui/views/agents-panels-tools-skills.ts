@@ -14,6 +14,7 @@ import { groupSkills } from "./skills-grouping.ts";
 import {
   computeSkillMissing,
   computeSkillReasons,
+  renderCapabilityChips,
   renderSkillStatusChips,
 } from "./skills-shared.ts";
 
@@ -449,6 +450,7 @@ function renderAgentSkillRow(
         <div class="list-title">${skill.emoji ? `${skill.emoji} ` : ""}${skill.name}</div>
         <div class="list-sub">${skill.description}</div>
         ${renderSkillStatusChips({ skill })}
+        ${renderCapabilityChips(skill.capabilities)}
         ${
           missing.length > 0
             ? html`<div class="muted" style="margin-top: 6px;">Missing: ${missing.join(", ")}</div>`

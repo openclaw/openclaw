@@ -6,6 +6,7 @@ import { groupSkills } from "./skills-grouping.ts";
 import {
   computeSkillMissing,
   computeSkillReasons,
+  renderCapabilityChips,
   renderSkillStatusChips,
 } from "./skills-shared.ts";
 
@@ -109,6 +110,7 @@ function renderSkill(skill: SkillStatusEntry, props: SkillsProps) {
         </div>
         <div class="list-sub">${clampText(skill.description, 140)}</div>
         ${renderSkillStatusChips({ skill, showBundledBadge })}
+        ${renderCapabilityChips(skill.capabilities)}
         ${
           missing.length > 0
             ? html`

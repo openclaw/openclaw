@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { hasErrnoCode } from "../infra/errors.js";
 import { isPathInside } from "./scan-paths.js";
+import type { SkillCapability } from "../agents/skills/types.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -239,6 +240,231 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
   }
 
   return findings;
+}
+
+// ---------------------------------------------------------------------------
+// SKILL.md content scanner
+// ---------------------------------------------------------------------------
+// These rules scan natural language content (not code) for prompt injection,
+// suspicious patterns, and capability mismatches.
+//
+// CLAWHUB ALIGNMENT: The suspicious.* patterns below match ClawHub's
+// FLAG_RULES in clawhub/convex/lib/moderation.ts. Keep them in sync.
+
+type MarkdownRule = {
+  ruleId: string;
+  severity: SkillScanSeverity;
+  message: string;
+  pattern: RegExp;
+};
+
+const SKILL_MD_RULES: MarkdownRule[] = [
+  // --- Prompt injection patterns (from external-content.ts SUSPICIOUS_PATTERNS) ---
+  {
+    ruleId: "prompt-injection-override",
+    severity: "critical",
+    message: "Prompt injection: attempts to override previous instructions",
+    pattern: /ignore\s+(all\s+)?(previous|prior|above)\s+(instructions?|prompts?)/i,
+  },
+  {
+    ruleId: "prompt-injection-disregard",
+    severity: "critical",
+    message: "Prompt injection: attempts to disregard instructions",
+    pattern: /disregard\s+(all\s+)?(previous|prior|above)/i,
+  },
+  {
+    ruleId: "prompt-injection-forget",
+    severity: "critical",
+    message: "Prompt injection: attempts to reset agent behavior",
+    pattern: /forget\s+(everything|all|your)\s+(instructions?|rules?|guidelines?)/i,
+  },
+  {
+    ruleId: "role-override",
+    severity: "critical",
+    message: "Prompt injection: role override attempt",
+    pattern: /you\s+are\s+now\s+(a|an)\s+/i,
+  },
+  {
+    ruleId: "system-tag-injection",
+    severity: "critical",
+    message: "Prompt injection: system/role tag injection",
+    pattern: /<\/?system>|\]\s*\n?\s*\[?(system|assistant|user)\]?:/i,
+  },
+  {
+    ruleId: "boundary-spoofing",
+    severity: "critical",
+    message: "Boundary marker spoofing detected",
+    pattern: /<<<\s*EXTERNAL_UNTRUSTED_CONTENT\s*>>>/i,
+  },
+  {
+    ruleId: "destructive-command",
+    severity: "critical",
+    message: "Destructive command pattern detected",
+    pattern: /rm\s+-rf|delete\s+all\s+(emails?|files?|data)/i,
+  },
+
+  // --- ClawHub FLAG_RULES alignment (clawhub/convex/lib/moderation.ts) ---
+  {
+    ruleId: "suspicious.keyword",
+    severity: "critical",
+    message: "Suspicious keyword detected (malware/stealer/phishing)",
+    pattern: /(malware|stealer|phish|phishing|keylogger)/i,
+  },
+  {
+    ruleId: "suspicious.secrets",
+    severity: "warn",
+    message: "References to secrets or credentials",
+    pattern: /(api[-_ ]?key|private key|secret).*(?:send|post|fetch|upload|exfil)/i,
+  },
+  {
+    ruleId: "suspicious.webhook",
+    severity: "warn",
+    message: "Webhook or external communication endpoint",
+    pattern: /(discord\.gg|hooks\.slack)/i,
+  },
+  {
+    ruleId: "suspicious.script",
+    severity: "critical",
+    message: "Pipe-to-shell pattern detected",
+    pattern: /(curl[^\n]+\|\s*(sh|bash))/i,
+  },
+  {
+    ruleId: "suspicious.url_shortener",
+    severity: "warn",
+    message: "URL shortener detected (potential phishing vector)",
+    pattern: /(bit\.ly|tinyurl\.com|t\.co|goo\.gl|is\.gd)/i,
+  },
+
+  // --- Capability inflation ---
+  {
+    ruleId: "capability-inflation",
+    severity: "warn",
+    message: "Claims unrestricted system access",
+    pattern: /you\s+have\s+(full|unrestricted|unlimited)\s+access/i,
+  },
+  {
+    ruleId: "new-instructions",
+    severity: "warn",
+    message: "Attempts to inject new instructions",
+    pattern: /new\s+instructions?:/i,
+  },
+
+  // --- Hidden content ---
+  {
+    ruleId: "zero-width-chars",
+    severity: "warn",
+    message: "Suspicious zero-width character cluster detected",
+    pattern: /[\u200B\u200C\u200D\uFEFF]{3,}/,
+  },
+];
+
+/**
+ * Capability mismatch rules — detect when SKILL.md content references
+ * tools/actions that aren't declared in the skill's capabilities.
+ */
+const CAPABILITY_MISMATCH_PATTERNS: Array<{
+  capability: SkillCapability;
+  pattern: RegExp;
+  label: string;
+}> = [
+  {
+    capability: "shell",
+    pattern: /\b(exec|run\s+command|shell|terminal|bash|subprocess|child.process)\b/i,
+    label: "shell commands",
+  },
+  {
+    capability: "filesystem",
+    pattern: /\b(write\s+file|edit\s+file|create\s+file|save\s+to|modify\s+file|delete\s+file|fs_write)\b/i,
+    label: "file mutations",
+  },
+  {
+    capability: "sessions",
+    pattern: /\b(spawn\s+agent|sessions?_spawn|sessions?_send|subagent|cross.session)\b/i,
+    label: "session orchestration",
+  },
+  {
+    capability: "network",
+    pattern: /\b(fetch\s+url|web_search|web_fetch|http\s+request|outbound\s+request)\b/i,
+    label: "network access",
+  },
+];
+
+export type SkillMarkdownScanResult = {
+  severity: SkillScanSeverity | "clean";
+  findings: SkillScanFinding[];
+};
+
+/**
+ * Scan SKILL.md content for prompt injection, suspicious patterns, and
+ * capability mismatches.
+ *
+ * @param content - Raw SKILL.md content (including frontmatter)
+ * @param filePath - Path for reporting
+ * @param declaredCapabilities - Capabilities from frontmatter (if any)
+ */
+export function scanSkillMarkdown(
+  content: string,
+  filePath: string,
+  declaredCapabilities?: SkillCapability[],
+): SkillMarkdownScanResult {
+  const findings: SkillScanFinding[] = [];
+  const lines = content.split("\n");
+  const matched = new Set<string>();
+
+  // --- Pattern rules ---
+  for (const rule of SKILL_MD_RULES) {
+    if (matched.has(rule.ruleId)) {
+      continue;
+    }
+    for (let i = 0; i < lines.length; i++) {
+      if (rule.pattern.test(lines[i])) {
+        findings.push({
+          ruleId: rule.ruleId,
+          severity: rule.severity,
+          file: filePath,
+          line: i + 1,
+          message: rule.message,
+          evidence: truncateEvidence(lines[i].trim()),
+        });
+        matched.add(rule.ruleId);
+        break;
+      }
+    }
+  }
+
+  // --- Capability mismatch detection ---
+  const capSet = new Set<string>(declaredCapabilities ?? []);
+  for (const mismatch of CAPABILITY_MISMATCH_PATTERNS) {
+    if (capSet.has(mismatch.capability)) {
+      continue; // Declared, no mismatch
+    }
+    for (let i = 0; i < lines.length; i++) {
+      if (mismatch.pattern.test(lines[i])) {
+        findings.push({
+          ruleId: `capability-mismatch.${mismatch.capability}`,
+          severity: "warn",
+          file: filePath,
+          line: i + 1,
+          message: `References ${mismatch.label} but does not declare "${mismatch.capability}" capability`,
+          evidence: truncateEvidence(lines[i].trim()),
+        });
+        break;
+      }
+    }
+  }
+
+  // Determine overall severity
+  const hasCritical = findings.some((f) => f.severity === "critical");
+  const hasWarn = findings.some((f) => f.severity === "warn");
+  const severity: SkillMarkdownScanResult["severity"] = hasCritical
+    ? "critical"
+    : hasWarn
+      ? "warn"
+      : findings.length > 0
+        ? "info"
+        : "clean";
+
+  return { severity, findings };
 }
 
 // ---------------------------------------------------------------------------

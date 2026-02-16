@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import type { LogEntry, LogLevel } from "../types.ts";
 
 const LEVELS: LogLevel[] = ["trace", "debug", "info", "warn", "error", "fatal"];
+const CATEGORY_FILTERS = [{ id: "security", label: "Security" }] as const;
 
 export type LogsProps = {
   loading: boolean;
@@ -10,10 +11,12 @@ export type LogsProps = {
   entries: LogEntry[];
   filterText: string;
   levelFilters: Record<LogLevel, boolean>;
+  categoryFilter: string | null;
   autoFollow: boolean;
   truncated: boolean;
   onFilterTextChange: (next: string) => void;
   onLevelToggle: (level: LogLevel, enabled: boolean) => void;
+  onCategoryToggle: (category: string | null) => void;
   onToggleAutoFollow: (next: boolean) => void;
   onRefresh: () => void;
   onExport: (lines: string[], label: string) => void;
@@ -45,13 +48,17 @@ function matchesFilter(entry: LogEntry, needle: string) {
 export function renderLogs(props: LogsProps) {
   const needle = props.filterText.trim().toLowerCase();
   const levelFiltered = LEVELS.some((level) => !props.levelFilters[level]);
+  const categoryFiltered = props.categoryFilter !== null;
   const filtered = props.entries.filter((entry) => {
     if (entry.level && !props.levelFilters[entry.level]) {
       return false;
     }
+    if (categoryFiltered && entry.category !== props.categoryFilter) {
+      return false;
+    }
     return matchesFilter(entry, needle);
   });
-  const exportLabel = needle || levelFiltered ? "filtered" : "visible";
+  const exportLabel = needle || levelFiltered || categoryFiltered ? "filtered" : "visible";
 
   return html`
     <section class="card">
@@ -109,6 +116,20 @@ export function renderLogs(props: LogsProps) {
                   props.onLevelToggle(level, (e.target as HTMLInputElement).checked)}
               />
               <span>${level}</span>
+            </label>
+          `,
+        )}
+        <span style="border-left: 1px solid var(--border); margin: 0 4px;"></span>
+        ${CATEGORY_FILTERS.map(
+          (cat) => html`
+            <label class="chip log-chip ${props.categoryFilter === cat.id ? "active" : ""}">
+              <input
+                type="checkbox"
+                .checked=${props.categoryFilter === cat.id}
+                @change=${() =>
+                  props.onCategoryToggle(props.categoryFilter === cat.id ? null : cat.id)}
+              />
+              <span>${cat.label}</span>
             </label>
           `,
         )}

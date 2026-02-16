@@ -1111,6 +1111,12 @@
   border-color: var(--danger-subtle);
 }
 
+.log-chip.active {
+  color: var(--info);
+  border-color: rgba(59, 130, 246, 0.5);
+  background: rgba(59, 130, 246, 0.1);
+}
+
 .log-subsystem {
   color: var(--muted);
   font-family: var(--mono);

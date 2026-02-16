@@ -215,6 +215,7 @@ export type AppViewState = {
   logsEntries: LogEntry[];
   logsFilterText: string;
   logsLevelFilters: Record<LogLevel, boolean>;
+  logsCategoryFilter: string | null;
   logsAutoFollow: boolean;
   logsTruncated: boolean;
   logsCursor: number | null;

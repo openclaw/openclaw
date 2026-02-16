@@ -215,6 +215,18 @@ If a macOS node is paired, the Gateway can invoke `system.run` on that node. Thi
 - Controlled on the Mac via **Settings → Exec approvals** (security + ask + allowlist).
 - If you don’t want remote execution, set security to **deny** and remove node pairing for that Mac.
 
+## Skill security
+
+Community skills (installed from ClawHub) are subject to runtime security enforcement:
+
+- **Capabilities**: Skills declare what system access they need (`shell`, `filesystem`, `network`, `browser`, `sessions`) in `metadata.openclaw.capabilities`. No capabilities = read-only. Community skills that use tools without declaring the matching capability are blocked at runtime.
+- **SKILL.md scanning**: Content is scanned for prompt injection patterns, capability inflation, and boundary spoofing before entering the system prompt. Skills with critical findings are blocked from loading.
+- **Trust tiers**: Skills are classified as `builtin`, `community`, or `local`. Only `community` skills (installed from ClawHub) are subject to enforcement — builtin and local skills are exempt. Author verification may be introduced in a future release to provide an additional trust signal.
+- **Command dispatch gating**: Community skills using `command-dispatch: tool` can't dispatch to dangerous tools without declaring the matching capability.
+- **Audit logging**: All security events are tagged with `category: "security"` and include session context.
+
+Use `openclaw skills check` for a security overview and `openclaw skills info <name>` for per-skill details. See [Skills CLI](/cli/skills) for full command reference.
+
 ## Dynamic skills (watcher / remote nodes)
 
 OpenClaw can refresh the skills list mid-session:
@@ -222,7 +234,7 @@ OpenClaw can refresh the skills list mid-session:
 - **Skills watcher**: changes to `SKILL.md` can update the skills snapshot on the next agent turn.
 - **Remote nodes**: connecting a macOS node can make macOS-only skills eligible (based on bin probing).
 
-Treat skill folders as **trusted code** and restrict who can modify them.
+Restrict who can modify skill folders. Community skills are subject to scanning and capability enforcement (see above), but local and workspace skills are treated as trusted — if someone can write to your skill folders, they can inject instructions into the system prompt.
 
 ## The Threat Model
 

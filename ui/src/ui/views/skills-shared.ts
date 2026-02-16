@@ -1,5 +1,13 @@
 import { html, nothing } from "lit";
-import type { SkillStatusEntry } from "../types.ts";
+import type { SkillCapability, SkillStatusEntry } from "../types.ts";
+
+const CAPABILITY_LABELS: Record<SkillCapability, { icon: string; label: string }> = {
+  shell: { icon: ">_", label: "Shell" },
+  filesystem: { icon: "fs", label: "Filesystem" },
+  network: { icon: "net", label: "Network" },
+  browser: { icon: "www", label: "Browser" },
+  sessions: { icon: "ses", label: "Sessions" },
+};
 
 export function computeSkillMissing(skill: SkillStatusEntry): string[] {
   return [
@@ -19,6 +27,41 @@ export function computeSkillReasons(skill: SkillStatusEntry): string[] {
     reasons.push("blocked by allowlist");
   }
   return reasons;
+}
+
+export function renderCapabilityChips(capabilities: SkillCapability[]) {
+  if (!capabilities || capabilities.length === 0) {
+    return nothing;
+  }
+  return html`
+    <div class="chip-row" style="margin-top: 6px;">
+      ${capabilities.map((cap) => {
+        const info = CAPABILITY_LABELS[cap];
+        const isHighRisk = cap === "shell" || cap === "sessions";
+        return html`
+          <span class="chip ${isHighRisk ? "chip-warn" : ""}" title="${info?.label ?? cap}">
+            ${info?.icon ?? cap} ${info?.label ?? cap}
+          </span>
+        `;
+      })}
+    </div>
+  `;
+}
+
+export function renderScanBadge(scanResult?: { severity: string; findings: string[] }) {
+  if (!scanResult) {
+    return nothing;
+  }
+  switch (scanResult.severity) {
+    case "critical":
+      return html`<span class="chip chip-danger" title="${scanResult.findings.join("; ")}">✗ blocked</span>`;
+    case "warn":
+      return html`<span class="chip chip-warn" title="${scanResult.findings.join("; ")}">⚠ warning</span>`;
+    case "info":
+      return html`<span class="chip" title="${scanResult.findings.join("; ")}">ℹ notice</span>`;
+    default:
+      return nothing;
+  }
 }
 
 export function renderSkillStatusChips(params: {
@@ -47,6 +90,7 @@ export function renderSkillStatusChips(params: {
             `
           : nothing
       }
+      ${renderScanBadge(skill.scanResult)}
     </div>
   `;
 }

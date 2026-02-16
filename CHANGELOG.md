@@ -10,6 +10,8 @@ Docs: https://docs.openclaw.ai
 - Discord/Allowlist: canonicalize resolved Discord allowlist names to IDs and split resolution flow for clearer fail-closed behavior.
 - Memory/FTS: add Korean stop-word filtering and particle-aware keyword extraction (including mixed Korean/English stems) for query expansion in FTS-only search mode. (#18899) Thanks @ruypang.
 - iOS/Talk: prefetch TTS segments and suppress expected speech-cancellation errors for smoother talk playback. (#22833) Thanks @ngutman.
+- Skills/Security: defense-in-depth security hardening for community skills (ClawHub installs). Adds capability declarations (`shell`, `filesystem`, `network`, `browser`, `sessions`), trust tier classification (builtin/verified/community/local), SKILL.md content scanning (blocks prompt injection, capability inflation, boundary spoofing), skill-aware tool policy enforcement (denies undeclared dangerous tools for community skills), command-dispatch gating, and before-tool-call audit monitoring with session context. Community skills that fail critical scanning are blocked from loading. `openclaw skills list/info/check` now show capabilities, trust tiers, scan results, and runtime policy.
+- Skills/Logging: all security-related log entries tagged with `category: "security"` for filtering. Skills CLI commands output structured JSON to the file logger (no more ASCII tables in logs). Web UI Logs tab adds a "Security" filter chip for security-only event views.
 
 ### Breaking
 

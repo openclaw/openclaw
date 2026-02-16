@@ -1,5 +1,31 @@
 import type { Skill } from "@mariozechner/pi-coding-agent";
 
+// ---------------------------------------------------------------------------
+// Skill capabilities — what system access a skill needs.
+// Maps to existing TOOL_GROUPS in tool-policy.ts.
+//
+// CLAWHUB ALIGNMENT: This exact enum is shared between OpenClaw (load-time
+// validation) and ClawHub (publish-time validation). If you add a value here,
+// add it to clawhub/convex/lib/skillCapabilities.ts too.
+//
+// Frontmatter usage (under metadata.openclaw):
+//   openclaw:
+//     capabilities: [shell, filesystem]
+//
+// No capabilities declared = read-only, model-only skill.
+// ---------------------------------------------------------------------------
+export const SKILL_CAPABILITIES = [
+  "shell", // exec, process — run shell commands
+  "filesystem", // write, edit, apply_patch — file mutations (read is always allowed)
+  "network", // web_search, web_fetch — outbound HTTP
+  "browser", // browser — browser automation
+  "sessions", // sessions_spawn, sessions_send — cross-session orchestration
+  "messaging", // message — send messages to configured channels
+  "scheduling", // cron — schedule recurring jobs
+] as const;
+
+export type SkillCapability = (typeof SKILL_CAPABILITIES)[number];
+
 export type SkillInstallSpec = {
   id?: string;
   kind: "brew" | "node" | "go" | "uv" | "download";
@@ -30,6 +56,7 @@ export type OpenClawSkillMetadata = {
     config?: string[];
   };
   install?: SkillInstallSpec[];
+  capabilities?: SkillCapability[];
 };
 
 export type SkillInvocationPolicy = {
@@ -63,11 +90,17 @@ export type SkillsInstallPreferences = {
 
 export type ParsedSkillFrontmatter = Record<string, string>;
 
+export type SkillScanResult = {
+  severity: "clean" | "info" | "warn" | "critical";
+  findings: Array<{ ruleId: string; severity: string; message: string; line: number }>;
+};
+
 export type SkillEntry = {
   skill: Skill;
   frontmatter: ParsedSkillFrontmatter;
   metadata?: OpenClawSkillMetadata;
   invocation?: SkillInvocationPolicy;
+  scanResult?: SkillScanResult;
 };
 
 export type SkillEligibilityContext = {

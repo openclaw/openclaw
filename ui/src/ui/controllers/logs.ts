@@ -1,5 +1,5 @@
 import type { GatewayBrowserClient } from "../gateway.ts";
-import type { LogEntry, LogLevel } from "../types.ts";
+import type { LogCategory, LogEntry, LogLevel } from "../types.ts";
 
 export type LogsState = {
   client: GatewayBrowserClient | null;
@@ -75,11 +75,30 @@ export function parseLogLine(line: string): LogEntry {
     }
 
     let message: string | null = null;
-    if (typeof obj["1"] === "string") {
+    let category: LogCategory | null = null;
+
+    // tslog puts metadata object in "1" and message in "2" when meta is provided
+    const metaObj =
+      obj["1"] && typeof obj["1"] === "object" && !Array.isArray(obj["1"])
+        ? (obj["1"] as Record<string, unknown>)
+        : null;
+
+    if (metaObj) {
+      // Message is in "2" when meta object occupies "1"
+      if (typeof obj["2"] === "string") {
+        message = obj["2"];
+      }
+      if (typeof metaObj.category === "string") {
+        category = metaObj.category as LogCategory;
+      }
+    } else if (typeof obj["1"] === "string") {
       message = obj["1"];
-    } else if (!contextObj && typeof obj["0"] === "string") {
+    }
+
+    if (!message && !contextObj && typeof obj["0"] === "string") {
       message = obj["0"];
-    } else if (typeof obj.message === "string") {
+    }
+    if (!message && typeof obj.message === "string") {
       message = obj.message;
     }
 
@@ -90,6 +109,7 @@ export function parseLogLine(line: string): LogEntry {
       subsystem,
       message: message ?? line,
       meta: meta ?? undefined,
+      category,
     };
   } catch {
     return { raw: line, message: line };
