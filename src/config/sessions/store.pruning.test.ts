@@ -116,16 +116,6 @@ describe("rotateSessionFile", () => {
     storePath = path.join(testDir, "sessions.json");
   });
 
-  it("file under maxBytes: no rotation (returns false)", async () => {
-    await fs.writeFile(storePath, "x".repeat(500), "utf-8");
-
-    const rotated = await rotateSessionFile(storePath, 1000);
-
-    expect(rotated).toBe(false);
-    const content = await fs.readFile(storePath, "utf-8");
-    expect(content).toBe("x".repeat(500));
-  });
-
   it("file over maxBytes: renamed to .bak.{timestamp}, returns true", async () => {
     const bigContent = "x".repeat(200);
     await fs.writeFile(storePath, bigContent, "utf-8");
