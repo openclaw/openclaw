@@ -437,30 +437,44 @@ export function createTelegramBot(opts: TelegramBotOptions) {
 
       // Enqueue system event for each added reaction
       if (telegramCfg?.reactionDelivery === "immediate") {
-        const { getReactionDebouncer } = await import("../infra/reaction-dispatch/index.js");
-        const debouncer = getReactionDebouncer(telegramCfg.reactionBundleWindowMs);
+        try {
+          const { getReactionDebouncer } = await import("../infra/reaction-dispatch/index.js");
+          const debouncer = getReactionDebouncer(telegramCfg.reactionBundleWindowMs);
 
-        for (const r of addedReactions) {
-          await debouncer.enqueue(
-            {
-              emoji: r.emoji,
-              actorLabel: senderLabel,
-              actorId: user?.id ? String(user.id) : undefined,
-              action: "added",
-              ts: Date.now(),
-            },
-            {
-              channel: "telegram",
-              accountId: account.accountId,
-              sessionKey,
-              messageId: String(messageId),
-              conversationLabel: isGroup ? `group:${chatId}` : `dm:${chatId}`,
-            },
+          for (const r of addedReactions) {
+            await debouncer.enqueue(
+              {
+                emoji: r.emoji,
+                actorLabel: senderLabel,
+                actorId: user?.id ? String(user.id) : undefined,
+                action: "added",
+                ts: Date.now(),
+              },
+              {
+                channel: "telegram",
+                accountId: account.accountId,
+                sessionKey,
+                messageId: String(messageId),
+                conversationLabel: isGroup ? `group:${chatId}` : `dm:${chatId}`,
+              },
+            );
+          }
+          logVerbose(
+            `telegram: ${addedReactions.length} reaction(s) enqueued for immediate dispatch on msg ${messageId}`,
           );
+        } catch (err) {
+          logVerbose(
+            `telegram: reaction dispatch failed, falling back to deferred: ${String(err)}`,
+          );
+          for (const r of addedReactions) {
+            const emoji = r.emoji;
+            const text = `Telegram reaction added: ${emoji} by ${senderLabel} on msg ${messageId}`;
+            enqueueSystemEvent(text, {
+              sessionKey,
+              contextKey: `telegram:reaction:add:${chatId}:${messageId}:${user?.id ?? "anon"}:${emoji}`,
+            });
+          }
         }
-        logVerbose(
-          `telegram: ${addedReactions.length} reaction(s) enqueued for immediate dispatch on msg ${messageId}`,
-        );
       } else {
         for (const r of addedReactions) {
           const emoji = r.emoji;

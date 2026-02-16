@@ -2,6 +2,7 @@ import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { ReactionBundleContext } from "./types.js";
 import { loadConfig } from "../../config/config.js";
 import { resolveStorePath } from "../../config/sessions.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { buildReactionPrompt } from "./context-builder.js";
 
 function resolveReactionReplyPayload(
@@ -38,7 +39,8 @@ export async function dispatchReactionEvent(bundle: ReactionBundleContext): Prom
     // Note: loadSessionStore reads from disk on each call. This is acceptable
     // because reactions are debounced, keeping call frequency low.
     const sessionCfg = cfg.session;
-    const storePath = resolveStorePath(sessionCfg?.store);
+    const agentId = resolveAgentIdFromSessionKey(bundle.sessionKey);
+    const storePath = resolveStorePath(sessionCfg?.store, { agentId });
     const sessionStore = loadSessionStore(storePath);
     const entry = sessionStore[bundle.sessionKey];
 
@@ -81,6 +83,5 @@ export async function dispatchReactionEvent(bundle: ReactionBundleContext): Prom
       `[reaction-dispatch] dispatchReactionEvent failed for session=${bundle.sessionKey} account=${bundle.accountId}:`,
       err,
     );
-    throw err;
   }
 }

@@ -433,6 +433,9 @@ async function handleDiscordReactionEvent(params: {
         : channelName
           ? `#${normalizeDiscordSlug(channelName)}`
           : `#${data.channel_id}`;
+      const authorLabel = message?.author ? formatDiscordUserTag(message.author) : undefined;
+      const baseText = `Discord reaction ${action}: ${emojiLabel} by ${actorLabel} on ${guildSlug} ${channelLabel} msg ${data.message_id}`;
+      const text = authorLabel ? `${baseText} from ${authorLabel}` : baseText;
       const route = resolveAgentRoute({
         cfg: params.cfg,
         channel: "discord",
@@ -445,35 +448,45 @@ async function handleDiscordReactionEvent(params: {
         },
         parentPeer: parentId ? { kind: "channel", id: parentId } : undefined,
       });
-      const { getReactionDebouncer } = await import("../../infra/reaction-dispatch/index.js");
-      const debouncer = getReactionDebouncer(guildInfo.reactionBundleWindowMs);
+      try {
+        const { getReactionDebouncer } = await import("../../infra/reaction-dispatch/index.js");
+        const debouncer = getReactionDebouncer(guildInfo.reactionBundleWindowMs);
 
-      const reactedMessageContent = guildInfo.reactionIncludeMessage
-        ? message?.content || undefined
-        : undefined;
-      const reactedMessageAuthor =
-        guildInfo.reactionIncludeMessage && message?.author
-          ? formatDiscordUserTag(message.author)
+        const reactedMessageContent = guildInfo.reactionIncludeMessage
+          ? message?.content || undefined
           : undefined;
+        const reactedMessageAuthor =
+          guildInfo.reactionIncludeMessage && message?.author
+            ? formatDiscordUserTag(message.author)
+            : undefined;
 
-      await debouncer.enqueue(
-        {
-          emoji: emojiLabel,
-          actorLabel,
-          actorId: user.id,
-          action,
-          ts: Date.now(),
-        },
-        {
-          channel: "discord",
-          accountId: params.accountId,
+        await debouncer.enqueue(
+          {
+            emoji: emojiLabel,
+            actorLabel,
+            actorId: user.id,
+            action,
+            ts: Date.now(),
+          },
+          {
+            channel: "discord",
+            accountId: params.accountId,
+            sessionKey: route.sessionKey,
+            messageId: data.message_id,
+            reactedMessageContent,
+            reactedMessageAuthor,
+            conversationLabel: `${guildSlug} ${channelLabel}`,
+          },
+        );
+      } catch (err) {
+        params.logger.error(
+          danger(`discord reaction dispatch failed, falling back to deferred: ${String(err)}`),
+        );
+        enqueueSystemEvent(text, {
           sessionKey: route.sessionKey,
-          messageId: data.message_id,
-          reactedMessageContent,
-          reactedMessageAuthor,
-          conversationLabel: `${guildSlug} ${channelLabel}`,
-        },
-      );
+          contextKey: `discord:reaction:${action}:${data.message_id}:${user.id}:${emojiLabel}`,
+        });
+      }
     } else {
       // Deferred path — use upstream helper
       emitReactionWithAuthor(message);

@@ -1442,25 +1442,37 @@ export async function processReaction(
       : `${senderLabel} reacted with ${reaction.emoji} [[reply_to:${messageDisplayId}]]${chatLabel}`;
 
   if (account.config.reactionDelivery === "immediate") {
-    const { getReactionDebouncer } = await import("openclaw/reaction-dispatch");
-    const debouncer = getReactionDebouncer(account.config.reactionBundleWindowMs);
+    try {
+      const { getReactionDebouncer } = await import("openclaw/reaction-dispatch");
+      const debouncer = getReactionDebouncer(account.config.reactionBundleWindowMs);
 
-    await debouncer.enqueue(
-      {
-        emoji: reaction.emoji,
-        actorLabel: senderLabel,
-        actorId: reaction.senderId,
-        action: reaction.action,
-        ts: Date.now(),
-      },
-      {
-        channel: "bluebubbles",
-        accountId: account.accountId,
+      await debouncer.enqueue(
+        {
+          emoji: reaction.emoji,
+          actorLabel: senderLabel,
+          actorId: reaction.senderId,
+          action: reaction.action,
+          ts: Date.now(),
+        },
+        {
+          channel: "bluebubbles",
+          accountId: account.accountId,
+          sessionKey: route.sessionKey,
+          messageId: reaction.messageId,
+          conversationLabel: reaction.isGroup ? `group:${peerId}` : `dm:${peerId}`,
+        },
+      );
+    } catch (err) {
+      logVerbose(
+        core,
+        runtime,
+        `reaction dispatch failed, falling back to deferred: ${String(err)}`,
+      );
+      core.system.enqueueSystemEvent(text, {
         sessionKey: route.sessionKey,
-        messageId: reaction.messageId,
-        conversationLabel: reaction.isGroup ? `group:${peerId}` : `dm:${peerId}`,
-      },
-    );
+        contextKey: `bluebubbles:reaction:${reaction.action}:${peerId}:${reaction.messageId}:${reaction.senderId}:${reaction.emoji}`,
+      });
+    }
   } else {
     core.system.enqueueSystemEvent(text, {
       sessionKey: route.sessionKey,

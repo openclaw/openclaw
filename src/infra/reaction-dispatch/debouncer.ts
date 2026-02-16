@@ -6,7 +6,7 @@ type ReactionDebounceItem = {
   context: Omit<ReactionBundleContext, "reactions">;
 };
 
-const DEFAULT_BUNDLE_WINDOW_MS = 2000;
+export const DEFAULT_BUNDLE_WINDOW_MS = 2000;
 
 export function createReactionDebouncer(params: {
   bundleWindowMs?: number;
