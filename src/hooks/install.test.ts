@@ -45,102 +45,96 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
+function writeArchiveFixture(params: { fileName: string; contents: Buffer }) {
+  const stateDir = makeTempDir();
+  const workDir = makeTempDir();
+  const archivePath = path.join(workDir, params.fileName);
+  fs.writeFileSync(archivePath, params.contents);
+  return {
+    stateDir,
+    archivePath,
+    hooksDir: path.join(stateDir, "hooks"),
+  };
+}
+
 describe("installHooksFromArchive", () => {
-  it("installs hook packs from zip archives", async () => {
-    const stateDir = makeTempDir();
-    const workDir = makeTempDir();
-    const archivePath = path.join(workDir, "hooks.zip");
-    fs.writeFileSync(archivePath, zipHooksBuffer);
-
-    const hooksDir = path.join(stateDir, "hooks");
-    const result = await installHooksFromArchive({ archivePath, hooksDir });
+  it.each([
+    {
+      name: "zip",
+      fileName: "hooks.zip",
+      contents: zipHooksBuffer,
+      expectedPackId: "zip-hooks",
+      expectedHook: "zip-hook",
+    },
+    {
+      name: "tar",
+      fileName: "hooks.tar",
+      contents: tarHooksBuffer,
+      expectedPackId: "tar-hooks",
+      expectedHook: "tar-hook",
+    },
+  ])("installs hook packs from $name archives", async (tc) => {
+    const fixture = writeArchiveFixture({ fileName: tc.fileName, contents: tc.contents });
+    const result = await installHooksFromArchive({
+      archivePath: fixture.archivePath,
+      hooksDir: fixture.hooksDir,
+    });
 
     expect(result.ok).toBe(true);
     if (!result.ok) {
       return;
     }
-    expect(result.hookPackId).toBe("zip-hooks");
-    expect(result.hooks).toContain("zip-hook");
-    expect(result.targetDir).toBe(path.join(stateDir, "hooks", "zip-hooks"));
-    expect(fs.existsSync(path.join(result.targetDir, "hooks", "zip-hook", "HOOK.md"))).toBe(true);
+    expect(result.hookPackId).toBe(tc.expectedPackId);
+    expect(result.hooks).toContain(tc.expectedHook);
+    expect(result.targetDir).toBe(path.join(fixture.stateDir, "hooks", tc.expectedPackId));
+    expect(fs.existsSync(path.join(result.targetDir, "hooks", tc.expectedHook, "HOOK.md"))).toBe(
+      true,
+    );
   });
 
-  it("rejects zip archives with traversal entries", async () => {
-    const stateDir = makeTempDir();
-    const workDir = makeTempDir();
-    const archivePath = path.join(workDir, "traversal.zip");
-    fs.writeFileSync(archivePath, zipTraversalBuffer);
-
-    const hooksDir = path.join(stateDir, "hooks");
-    const result = await installHooksFromArchive({ archivePath, hooksDir });
+  it.each([
+    {
+      name: "zip",
+      fileName: "traversal.zip",
+      contents: zipTraversalBuffer,
+      expectedDetail: "archive entry",
+    },
+    {
+      name: "tar",
+      fileName: "traversal.tar",
+      contents: tarTraversalBuffer,
+      expectedDetail: "escapes destination",
+    },
+  ])("rejects $name archives with traversal entries", async (tc) => {
+    const fixture = writeArchiveFixture({ fileName: tc.fileName, contents: tc.contents });
+    const result = await installHooksFromArchive({
+      archivePath: fixture.archivePath,
+      hooksDir: fixture.hooksDir,
+    });
 
     expect(result.ok).toBe(false);
     if (result.ok) {
       return;
     }
     expect(result.error).toContain("failed to extract archive");
-    expect(result.error).toContain("archive entry");
+    expect(result.error).toContain(tc.expectedDetail);
   });
 
-  it("installs hook packs from tar archives", async () => {
-    const stateDir = makeTempDir();
-    const workDir = makeTempDir();
-    const archivePath = path.join(workDir, "hooks.tar");
-    fs.writeFileSync(archivePath, tarHooksBuffer);
-
-    const hooksDir = path.join(stateDir, "hooks");
-    const result = await installHooksFromArchive({ archivePath, hooksDir });
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      return;
-    }
-    expect(result.hookPackId).toBe("tar-hooks");
-    expect(result.hooks).toContain("tar-hook");
-    expect(result.targetDir).toBe(path.join(stateDir, "hooks", "tar-hooks"));
-  });
-
-  it("rejects tar archives with traversal entries", async () => {
-    const stateDir = makeTempDir();
-    const workDir = makeTempDir();
-    const archivePath = path.join(workDir, "traversal.tar");
-    fs.writeFileSync(archivePath, tarTraversalBuffer);
-
-    const hooksDir = path.join(stateDir, "hooks");
-    const result = await installHooksFromArchive({ archivePath, hooksDir });
-
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      return;
-    }
-    expect(result.error).toContain("failed to extract archive");
-    expect(result.error).toContain("escapes destination");
-  });
-
-  it("rejects hook packs with traversal-like ids", async () => {
-    const stateDir = makeTempDir();
-    const workDir = makeTempDir();
-    const archivePath = path.join(workDir, "hooks.tar");
-    fs.writeFileSync(archivePath, tarEvilIdBuffer);
-
-    const hooksDir = path.join(stateDir, "hooks");
-    const result = await installHooksFromArchive({ archivePath, hooksDir });
-
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      return;
-    }
-    expect(result.error).toContain("reserved path segment");
-  });
-
-  it("rejects hook packs with reserved ids", async () => {
-    const stateDir = makeTempDir();
-    const workDir = makeTempDir();
-    const archivePath = path.join(workDir, "hooks.tar");
-    fs.writeFileSync(archivePath, tarReservedIdBuffer);
-
-    const hooksDir = path.join(stateDir, "hooks");
-    const result = await installHooksFromArchive({ archivePath, hooksDir });
+  it.each([
+    {
+      name: "traversal-like ids",
+      contents: tarEvilIdBuffer,
+    },
+    {
+      name: "reserved ids",
+      contents: tarReservedIdBuffer,
+    },
+  ])("rejects hook packs with $name", async (tc) => {
+    const fixture = writeArchiveFixture({ fileName: "hooks.tar", contents: tc.contents });
+    const result = await installHooksFromArchive({
+      archivePath: fixture.archivePath,
+      hooksDir: fixture.hooksDir,
+    });
 
     expect(result.ok).toBe(false);
     if (result.ok) {
@@ -201,9 +195,7 @@ describe("installHooksFromPath", () => {
       expectedCwd: res.targetDir,
     });
   });
-});
 
-describe("installHooksFromPath", () => {
   it("installs a single hook directory", async () => {
     const stateDir = makeTempDir();
     const workDir = makeTempDir();
