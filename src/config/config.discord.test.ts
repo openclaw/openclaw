@@ -15,6 +15,66 @@ describe("config discord", () => {
     process.env.HOME = previousHome;
   });
 
+  it("coerces numeric Discord IDs to strings (Snowflake overflow prevention)", async () => {
+    await withTempHome(async (home) => {
+      const configDir = path.join(home, ".openclaw");
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(
+        path.join(configDir, "openclaw.json"),
+        JSON.stringify(
+          {
+            channels: {
+              discord: {
+                enabled: true,
+                dm: {
+                  enabled: true,
+                  // numeric IDs that fit in JS Number (should be coerced to string)
+                  allowFrom: [123456789, "steipete"],
+                  groupChannels: [987654321],
+                },
+                guilds: {
+                  "111": {
+                    users: [42, "admin"],
+                    roles: [99],
+                    channels: {
+                      general: { users: [7], roles: [8] },
+                    },
+                  },
+                },
+                execApprovals: {
+                  enabled: false,
+                  approvers: [12345],
+                },
+              },
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+
+      const cfg = loadConfig();
+      const discord = cfg.channels?.discord;
+
+      // DM allowFrom: numeric 123456789 → string "123456789"
+      expect(discord?.dm?.allowFrom).toEqual(["123456789", "steipete"]);
+      expect(discord?.dm?.groupChannels).toEqual(["987654321"]);
+
+      // Guild users/roles coerced
+      const guild = discord?.guilds?.["111"];
+      expect(guild?.users).toEqual(["42", "admin"]);
+      expect(guild?.roles).toEqual(["99"]);
+
+      // Channel users/roles coerced
+      expect(guild?.channels?.general?.users).toEqual(["7"]);
+      expect(guild?.channels?.general?.roles).toEqual(["8"]);
+
+      // Exec approvals coerced
+      expect(discord?.execApprovals?.approvers).toEqual(["12345"]);
+    });
+  });
+
   it("loads discord guild map + dm group settings", async () => {
     await withTempHome(async (home) => {
       const configDir = path.join(home, ".openclaw");

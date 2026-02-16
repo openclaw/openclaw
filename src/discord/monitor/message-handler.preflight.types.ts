@@ -95,8 +95,8 @@ export type DiscordMessagePreflightParams = {
   replyToMode: ReplyToMode;
   dmEnabled: boolean;
   groupDmEnabled: boolean;
-  groupDmChannels?: Array<string | number>;
-  allowFrom?: Array<string | number>;
+  groupDmChannels?: Array<string>;
+  allowFrom?: Array<string>;
   guildEntries?: Record<string, DiscordGuildEntryResolved>;
   ackReactionScope: DiscordMessagePreflightContext["ackReactionScope"];
   groupPolicy: DiscordMessagePreflightContext["groupPolicy"];

@@ -306,6 +306,12 @@ export const CliBackendSchema = z
   })
   .strict();
 
+/**
+ * Zod schema that accepts string or number but always coerces to string.
+ * Prevents JS Number precision loss on large integer IDs (e.g. Discord Snowflake > 2^53).
+ */
+export const StringIdSchema = z.union([z.string(), z.number()]).transform(String);
+
 export const normalizeAllowFrom = (values?: Array<string | number>): string[] =>
   (values ?? []).map((v) => String(v).trim()).filter(Boolean);
 
