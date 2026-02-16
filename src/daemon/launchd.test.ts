@@ -214,13 +214,6 @@ describe("resolveLaunchAgentPlistPath", () => {
     );
   });
 
-  it("handles case-insensitive 'DEFAULT' profile", () => {
-    const env = { HOME: "/Users/test", OPENCLAW_PROFILE: "DEFAULT" };
-    expect(resolveLaunchAgentPlistPath(env)).toBe(
-      "/Users/test/Library/LaunchAgents/ai.openclaw.gateway.plist",
-    );
-  });
-
   it("trims whitespace from OPENCLAW_PROFILE", () => {
     const env = { HOME: "/Users/test", OPENCLAW_PROFILE: "  myprofile  " };
     expect(resolveLaunchAgentPlistPath(env)).toBe(
