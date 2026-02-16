@@ -15,6 +15,7 @@ function makeContract(overrides: Partial<Contract> = {}): Contract {
     system_ref: {},
     message_id: "msg-1",
     message_platform: "outlook",
+    message_account: null,
     sender_email: "jennifer@vvgtruck.com",
     sender_name: "Jennifer Holt",
     attachment_ids: [],

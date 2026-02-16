@@ -1,6 +1,8 @@
 /**
- * VM Agent Loop — polls for PLANNING contracts, claims, executes via Chrome,
- * runs QA, handles retries, and updates contract state.
+ * VM Agent Loop — polls for PLANNING contracts, claims them, then:
+ *   1. Executes via SSH/Bash (bridge.task with chrome: false)
+ *   2. Validates via Chrome browser (bridge.task with chrome: true)
+ *   3. Takes a screenshot for the reply email
  *
  * This is the VM-side counterpart to the Mac-side poller service.
  * The poller ingests emails and creates contracts; this loop executes them.
@@ -112,12 +114,12 @@ export function createVmAgentLoop(options: VmAgentLoopOptions) {
     while (attemptCount < full.max_attempts) {
       attemptCount++;
 
-      // --- Execute ---
+      // --- Execute (SSH/Bash — no Chrome) ---
       const execPrompt = buildExecPrompt(full, attachments, previousFailure, attemptCount);
       let execResult: McpCallResult;
 
       try {
-        execResult = await bridge.mcpCall("chrome_task", { prompt: execPrompt, profile });
+        execResult = await bridge.task(execPrompt, { chrome: false });
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
         logEntries.push(`Attempt ${attemptCount}: Execution error — ${errMsg}`);
@@ -156,11 +158,12 @@ export function createVmAgentLoop(options: VmAgentLoopOptions) {
         return;
       }
 
-      const qaPrompt = buildQaPrompt(full, profile);
+      // --- QA (Chrome browser validation) ---
+      const qaPrompt = buildQaPrompt(full);
       let qaResult: McpCallResult;
 
       try {
-        qaResult = await bridge.mcpCall("chrome_task", { prompt: qaPrompt, profile });
+        qaResult = await bridge.task(qaPrompt, { chrome: true, profile });
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
         logEntries.push(`Attempt ${attemptCount}: QA error — ${errMsg}`);
@@ -178,16 +181,22 @@ export function createVmAgentLoop(options: VmAgentLoopOptions) {
       if (passed) {
         logEntries.push(`Attempt ${attemptCount}: QA PASSED — ${truncate(qaOutput, 200)}`);
 
-        // Take screenshot via CDP (best-effort)
+        // Take screenshot via CDP — retry once on failure
         let screenshotPath: string | null = null;
-        try {
-          const ssPath = `/tmp/cos-qa-${full.id}.png`;
-          const ssResult = await bridge.screenshot(ssPath, profile);
-          if (ssResult.success) {
-            screenshotPath = ssPath;
+        const ssPath = `/tmp/cos-qa-${full.id}.png`;
+        for (let attempt = 0; attempt < 2; attempt++) {
+          try {
+            const ssResult = await bridge.screenshot(ssPath, profile);
+            if (ssResult.success) {
+              screenshotPath = ssPath;
+              break;
+            }
+          } catch {
+            // Will retry or fall through
           }
-        } catch {
-          // Screenshot is best-effort
+        }
+        if (!screenshotPath) {
+          logger.warn(`[vm-agent-loop] screenshot failed for contract #${full.id} after 2 attempts`);
         }
 
         await db.updateContract(full.id, {
@@ -262,6 +271,22 @@ function buildExecPrompt(
     parts.push(`\nProject: ${contract.project_id}`);
   }
 
+  // Include system reference for SSH/deployment context
+  const sysRef = contract.system_ref ?? {};
+  if (sysRef.ec2_instance_id || sysRef.repo_path || sysRef.domain) {
+    parts.push("\n--- System Context ---");
+    if (sysRef.ec2_instance_id) {
+      parts.push(`EC2 Instance: ${sysRef.ec2_instance_id}`);
+      parts.push(`SSH: Use 'aws ssm start-session --target ${sysRef.ec2_instance_id}' to connect.`);
+    }
+    if (sysRef.repo_path) {
+      parts.push(`Application code: ${sysRef.repo_path}`);
+    }
+    if (sysRef.domain) {
+      parts.push(`Application URL: https://${sysRef.domain}`);
+    }
+  }
+
   if (attachments.length > 0) {
     parts.push("\n--- Attachments ---");
     for (const att of attachments) {
@@ -282,14 +307,22 @@ function buildExecPrompt(
   return parts.join("\n");
 }
 
-function buildQaPrompt(contract: Contract, _profile: string): string {
-  return [
-    "Verify the following QA criteria. Report PASS if all criteria are met, or FAIL with details if not.",
+function buildQaPrompt(contract: Contract): string {
+  const parts = [
+    "Verify the following QA criteria using the Chrome browser. Report PASS if all criteria are met, or FAIL with details if not.",
     "",
     `QA Criteria: ${contract.qa_doc}`,
     "",
     `Original task: ${contract.intent}`,
-  ].join("\n");
+  ];
+
+  const domain = (contract.system_ref ?? {}).domain as string | undefined;
+  if (domain) {
+    parts.push("");
+    parts.push(`Application URL: https://${domain}`);
+  }
+
+  return parts.join("\n");
 }
 
 // ---------------------------------------------------------------------------

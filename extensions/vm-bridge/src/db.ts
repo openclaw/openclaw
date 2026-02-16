@@ -16,6 +16,7 @@ export type Contract = {
   system_ref: Record<string, unknown>;
   message_id: string | null;
   message_platform: string | null;
+  message_account: string | null;
   sender_email: string | null;
   sender_name: string | null;
   attachment_ids: string[];
@@ -38,7 +39,8 @@ export type Contact = {
   id: number;
   email: string;
   name: string | null;
-  roles: Record<string, string>;
+  communication_style: string | null;
+  role_ids: string[];
   project_ids: string[];
 };
 
@@ -99,14 +101,15 @@ export class Db {
     system_ref?: Record<string, unknown>;
     message_id?: string;
     message_platform?: string;
+    message_account?: string;
     sender_email?: string;
     sender_name?: string;
     attachment_ids?: string[];
   }): Promise<Contract> {
     const res = await this.pool.query<Contract>(
       `INSERT INTO cos_contracts
-        (intent, qa_doc, owner, project_id, system_ref, message_id, message_platform, sender_email, sender_name, attachment_ids)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        (intent, qa_doc, owner, project_id, system_ref, message_id, message_platform, message_account, sender_email, sender_name, attachment_ids)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
        RETURNING *`,
       [
         data.intent,
@@ -116,6 +119,7 @@ export class Db {
         JSON.stringify(data.system_ref ?? {}),
         data.message_id ?? null,
         data.message_platform ?? null,
+        data.message_account ?? null,
         data.sender_email ?? null,
         data.sender_name ?? null,
         data.attachment_ids ?? [],
@@ -137,7 +141,8 @@ export class Db {
     updates: Partial<Pick<Contract,
       "state" | "claimed_by" | "qa_results" | "execution_log" |
       "attempt_count" | "reply_sent" | "reply_draft_id" | "reply_content" |
-      "checkpoint1_msg_id" | "checkpoint2_msg_id" | "completed_at" | "claimed_at"
+      "checkpoint1_msg_id" | "checkpoint2_msg_id" | "completed_at" | "claimed_at" |
+      "message_account"
     >>,
   ): Promise<Contract | null> {
     const setClauses: string[] = ["updated_at = NOW()"];
@@ -212,11 +217,32 @@ export class Db {
   // --- Contacts ---
 
   async getContactByEmail(email: string): Promise<Contact | null> {
-    const res = await this.pool.query<Contact>(
-      "SELECT * FROM cos_contacts WHERE email = $1",
+    const res = await this.pool.query<{
+      id: number;
+      email: string;
+      name: string | null;
+      communication_style: string | null;
+      project_ids: string[] | null;
+    }>(
+      "SELECT id, email, name, communication_style, project_ids FROM contacts WHERE email = $1",
       [email.toLowerCase()],
     );
-    return res.rows[0] ?? null;
+    const row = res.rows[0];
+    if (!row) return null;
+
+    const rolesRes = await this.pool.query<{ role_id: string }>(
+      "SELECT role_id FROM contact_roles WHERE contact_id = $1",
+      [row.id],
+    );
+
+    return {
+      id: row.id,
+      email: row.email,
+      name: row.name,
+      communication_style: row.communication_style,
+      role_ids: rolesRes.rows.map((r) => r.role_id),
+      project_ids: row.project_ids ?? [],
+    };
   }
 
   // --- Projects ---

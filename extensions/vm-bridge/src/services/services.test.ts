@@ -107,10 +107,10 @@ describe("bridge-health service", () => {
 describe("poller service", () => {
   const CONFIG: VmBridgeConfig = {
     database: { host: "localhost", port: 5433, user: "postgres", password: "test", database: "test" },
-    polling: { intervalMs: 60_000, accounts: ["xcellerate"], zoomEnabled: false, emailDaysBack: 1, maxEmailsPerRun: 20 },
+    polling: { intervalMs: 60_000, accounts: ["xcellerate", "vvg"], zoomEnabled: false, emailDaysBack: 1, maxEmailsPerRun: 20 },
     bridge: { url: "http://localhost:8585", healthCheckMs: 30_000 },
     classifier: { provider: "openai", model: "gpt-4o-mini" },
-    checkpoints: { zoomSelfChannel: "ch-self", replyPrefix: "CONTRACT:" },
+    checkpoints: { selfEmail: "mike@test.com", selfAccount: "xcellerate", replyPrefix: "CONTRACT:" },
     vms: {},
     projects: {},
   };
@@ -126,7 +126,6 @@ describe("poller service", () => {
     } as unknown as Db;
 
     const bridge = {
-      ingestEmails: vi.fn(async () => ({ success: true, result: { contracts_created: 0, skipped: 0, needs_review: 0 } })),
       messagesList: vi.fn(async () => ({ success: true, result: { messages: [] } })),
       enrichmentsGet: vi.fn(async () => ({ success: true, result: {} })),
       mcpCall: vi.fn(async () => ({ success: true })),
@@ -157,8 +156,9 @@ describe("poller service", () => {
 
     await service.start({ logger });
 
-    // Should have called ingestion at least once
-    expect(bridge.ingestEmails).toHaveBeenCalledWith("xcellerate", 1, 20);
+    // Should have called messagesList for each polling account
+    expect(bridge.messagesList).toHaveBeenCalledWith("outlook", 1, 20, "xcellerate");
+    expect(bridge.messagesList).toHaveBeenCalledWith("outlook", 1, 20, "vvg");
     expect(db.findCompletedContracts).toHaveBeenCalled();
     expect(db.findStuckContracts).toHaveBeenCalled();
 
@@ -177,6 +177,7 @@ describe("poller service", () => {
       system_ref: {},
       message_id: null,
       message_platform: null,
+      message_account: null,
       sender_email: null,
       sender_name: null,
       attachment_ids: [],
@@ -210,7 +211,7 @@ describe("poller service", () => {
 
   it("logs errors but does not crash on tick failure", async () => {
     const { db, bridge, notifier } = createMockDeps();
-    (bridge.ingestEmails as any).mockRejectedValue(new Error("network error"));
+    (bridge.messagesList as any).mockRejectedValue(new Error("network error"));
     const service = createPollerService(db, CONFIG, bridge, notifier);
     const logger = makeLogger();
 
@@ -230,13 +231,13 @@ describe("poller service", () => {
     const logger = makeLogger();
 
     await service.start({ logger });
-    const callsBefore = (bridge.ingestEmails as any).mock.calls.length;
+    const callsBefore = (bridge.messagesList as any).mock.calls.length;
 
     await service.stop({ logger });
 
     // Advance time — no more calls
     await vi.advanceTimersByTimeAsync(120_000);
-    expect((bridge.ingestEmails as any).mock.calls.length).toBe(callsBefore);
+    expect((bridge.messagesList as any).mock.calls.length).toBe(callsBefore);
     expect(logger.info).toHaveBeenCalledWith("[vm-bridge] Poller stopped");
   });
 });

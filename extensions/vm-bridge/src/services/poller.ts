@@ -44,36 +44,99 @@ export function createPollerService(
   }
 
   async function ingestAndClassify() {
-    // 1. Ingest emails for each account
+    // 1. Ingest emails for each account — classify, dispatch, and create cos_contracts
     for (const account of config.polling.accounts) {
       try {
-        const result = await bridge.ingestEmails(
-          account,
-          config.polling.emailDaysBack,
-          config.polling.maxEmailsPerRun,
-        );
-        const data = result.result as Record<string, unknown> | undefined;
-        const created = (data?.contracts_created as number) ?? 0;
-        const skipped = (data?.skipped as number) ?? 0;
-        const needsReview = (data?.needs_review as number) ?? 0;
+        const result = await bridge.messagesList("outlook", config.polling.emailDaysBack, config.polling.maxEmailsPerRun, account);
+        const messages = (result.result as Record<string, unknown>)?.messages as Array<Record<string, unknown>> | undefined;
 
-        if (created > 0 || needsReview > 0) {
-          logger.info(
-            `[vm-bridge] Ingested ${account}: ${created} contracts, ${needsReview} review, ${skipped} skipped`,
-          );
-        }
+        if (messages && messages.length > 0) {
+          let created = 0;
+          let skipped = 0;
 
-        // Process needs_review items — the existing ingest_emails already classifies,
-        // but for items it flags as needs_review, we notify via email
-        const reviewItems = data?.review_items as Array<Record<string, unknown>> | undefined;
-        if (reviewItems) {
-          for (const item of reviewItems) {
-            await notifier.notifyReview(
-              (item.subject as string) ?? "",
-              (item.body as string) ?? "",
-              (item.sender as string) ?? "",
-              "Classified as needs_review by ingestion",
+          for (const msg of messages) {
+            const msgId = (msg.platform_message_id as string) ?? (msg.id as string);
+            if (!msgId) continue;
+
+            // Dedup via enrichment check
+            const enrichment = await bridge.enrichmentsGet("outlook", msgId);
+            const enrichData = enrichment.result as Record<string, unknown> | undefined;
+            if (enrichData?.ingestion) continue; // Already processed
+            skipped++;
+
+            const classification = await classifyMessage(
+              {
+                subject: (msg.subject as string) ?? undefined,
+                body: (msg.content as string) ?? "",
+                sender_email: (msg.sender_email as string) ?? "",
+                sender_name: (msg.sender_name as string) ?? "",
+                platform: "outlook",
+              },
+              bridge,
+              config.classifier.model,
             );
+
+            // Mark as processed
+            await bridge.mcpCall("enrichments_save", {
+              platform: "outlook",
+              message_id: msgId,
+              enrichment_type: "ingestion",
+              data: { classification: classification.classification, processed_at: new Date().toISOString() },
+            });
+
+            if (classification.classification === "actionable") {
+              const dispatch = await dispatchMessage(
+                (msg.sender_email as string) ?? "",
+                (msg.content as string) ?? "",
+                (msg.subject as string) ?? undefined,
+                db,
+                config.classifier.model,
+              );
+
+              if (dispatch.matched) {
+                // Resolve sender_name: API sometimes returns email as name
+                let senderName = (msg.sender_name as string) ?? "";
+                const senderEmail = (msg.sender_email as string) ?? "";
+                if (!senderName || senderName.includes("@")) {
+                  const contact = await db.getContactByEmail(senderEmail);
+                  if (contact?.name) senderName = contact.name;
+                }
+
+                const contract = await createContract(db, {
+                  dispatch,
+                  message_id: msgId,
+                  message_platform: "outlook",
+                  message_account: account,
+                  sender_email: senderEmail,
+                  sender_name: senderName,
+                });
+
+                const cp1MsgId = await notifier.notifyCheckpoint1(contract);
+                if (cp1MsgId) {
+                  await db.updateContract(contract.id, { checkpoint1_msg_id: cp1MsgId });
+                }
+                created++;
+                logger.info(`[vm-bridge] Created contract #${contract.id} from ${account} email`);
+              } else if ((dispatch.confidence ?? 0) < 0.7) {
+                await notifier.notifyReview(
+                  (msg.subject as string) ?? "",
+                  (msg.content as string) ?? "",
+                  (msg.sender_email as string) ?? "",
+                  "Low confidence project match",
+                );
+              }
+            } else if (classification.classification === "needs_review") {
+              await notifier.notifyReview(
+                (msg.subject as string) ?? "",
+                (msg.content as string) ?? "",
+                (msg.sender_email as string) ?? "",
+                classification.reasoning,
+              );
+            }
+          }
+
+          if (created > 0) {
+            logger.info(`[vm-bridge] Email ingestion ${account}: ${created} contracts from ${messages.length} messages`);
           }
         }
       } catch (err) {
@@ -125,12 +188,20 @@ export function createPollerService(
               );
 
               if (dispatch.matched) {
+                let zoomSenderName = (msg.sender_name as string) ?? "";
+                const zoomSenderEmail = (msg.sender_email as string) ?? "";
+                if (!zoomSenderName || zoomSenderName.includes("@")) {
+                  const contact = await db.getContactByEmail(zoomSenderEmail);
+                  if (contact?.name) zoomSenderName = contact.name;
+                }
+
                 const contract = await createContract(db, {
                   dispatch,
                   message_id: msgId,
                   message_platform: "zoom",
-                  sender_email: (msg.sender_email as string) ?? "",
-                  sender_name: (msg.sender_name as string) ?? "",
+                  message_account: config.polling.accounts[0],
+                  sender_email: zoomSenderEmail,
+                  sender_name: zoomSenderName,
                 });
 
                 const cp1MsgId = await notifier.notifyCheckpoint1(contract);
@@ -161,9 +232,8 @@ export function createPollerService(
       }
     }
 
-    // 3. For contracts created by ingest_emails() (state=RAW, no checkpoint yet),
-    //    send checkpoint 1 notifications. These were created by the universal
-    //    MCP's ingestion pipeline, not by our dispatcher above.
+    // 3. Safety net: send checkpoint 1 for any RAW contracts that don't have
+    //    one yet (e.g. manually inserted contracts or edge cases).
     const rawContracts = await db.findRawContracts();
     for (const contract of rawContracts) {
       try {
@@ -181,7 +251,7 @@ export function createPollerService(
     const completed = await db.findCompletedContracts();
     for (const contract of completed) {
       try {
-        const draft = await draftReply(contract, db, bridge);
+        const draft = await draftReply(contract, db, bridge, logger);
         if (draft) {
           await db.updateContract(contract.id, {
             reply_draft_id: draft.draftId,

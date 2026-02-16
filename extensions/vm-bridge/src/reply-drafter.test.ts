@@ -15,6 +15,7 @@ function makeContract(overrides: Partial<Contract> = {}): Contract {
     system_ref: {},
     message_id: "msg-outlook-42",
     message_platform: "outlook",
+    message_account: null,
     sender_email: "jennifer@vvgtruck.com",
     sender_name: "Jennifer Holt",
     attachment_ids: [],
@@ -111,17 +112,18 @@ describe("reply drafter: screenshot attachment", () => {
     expect(result!.replyContent).toBeTruthy();
   });
 
-  it("uses xcellerate account for attachment by default", async () => {
+  it("uses message_account for attachment (falls back to xcellerate)", async () => {
     const bridge = createMockBridge();
     const db = createMockDb();
     const contract = makeContract({
+      message_account: null,
       qa_results: { passed: true, screenshot_path: "/tmp/cos-qa-42.png" },
     });
 
     await draftReply(contract, db, bridge);
 
     const attachCall = (bridge.addAttachmentToDraft as ReturnType<typeof vi.fn>).mock.calls[0];
-    expect(attachCall[2]).toBe("xcellerate"); // account parameter
+    expect(attachCall[2]).toBe("xcellerate"); // fallback account
   });
 
   it("skips attachment for Zoom contracts (synthetic draft)", async () => {
@@ -137,5 +139,113 @@ describe("reply drafter: screenshot attachment", () => {
     expect(result).not.toBeNull();
     expect(result!.draftId).toMatch(/^zoom:/);
     expect(bridge.addAttachmentToDraft).not.toHaveBeenCalled();
+  });
+});
+
+describe("reply drafter: screenshot guarantee warnings", () => {
+  it("logs warning when DONE contract has no screenshot_path", async () => {
+    const bridge = createMockBridge();
+    const db = createMockDb();
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const contract = makeContract({
+      state: "DONE",
+      qa_results: { passed: true },  // no screenshot_path
+    });
+
+    await draftReply(contract, db, bridge, logger);
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("screenshot"),
+    );
+  });
+
+  it("does NOT warn when screenshot_path is present", async () => {
+    const bridge = createMockBridge();
+    const db = createMockDb();
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const contract = makeContract({
+      state: "DONE",
+      qa_results: { passed: true, screenshot_path: "/tmp/cos-qa-42.png" },
+    });
+
+    await draftReply(contract, db, bridge, logger);
+
+    // No screenshot warning (may have other logs)
+    const screenshotWarnings = (logger.warn as ReturnType<typeof vi.fn>).mock.calls
+      .filter((args: unknown[]) => typeof args[0] === "string" && args[0].includes("screenshot"));
+    expect(screenshotWarnings).toHaveLength(0);
+  });
+
+  it("logs warning when addAttachmentToDraft fails", async () => {
+    const bridge = createMockBridge();
+    (bridge.addAttachmentToDraft as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error("File not found"),
+    );
+    const db = createMockDb();
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const contract = makeContract({
+      qa_results: { passed: true, screenshot_path: "/tmp/cos-qa-42.png" },
+    });
+
+    const result = await draftReply(contract, db, bridge, logger);
+
+    // Draft still returned (non-fatal)
+    expect(result).not.toBeNull();
+    expect(result!.draftId).toBe("draft-abc");
+
+    // But a warning was logged about the attachment failure
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("attach"),
+    );
+  });
+});
+
+describe("reply drafter: account-aware replies", () => {
+  it("uses contract.message_account for createReplyDraft", async () => {
+    const bridge = createMockBridge();
+    const db = createMockDb();
+    const contract = makeContract({
+      message_account: "vvg",
+      message_platform: "outlook",
+      qa_results: { passed: true },
+    });
+
+    await draftReply(contract, db, bridge);
+
+    const draftCall = (bridge.createReplyDraft as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(draftCall[2]).toBe("vvg"); // account parameter (3rd arg)
+  });
+
+  it("uses contract.message_account for addAttachmentToDraft", async () => {
+    const bridge = createMockBridge();
+    const db = createMockDb();
+    const contract = makeContract({
+      message_account: "vvg",
+      message_platform: "outlook",
+      qa_results: { passed: true, screenshot_path: "/tmp/cos-qa-42.png" },
+    });
+
+    await draftReply(contract, db, bridge);
+
+    const attachCall = (bridge.addAttachmentToDraft as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(attachCall[2]).toBe("vvg"); // account parameter (3rd arg)
+  });
+
+  it("falls back to 'xcellerate' when message_account is null", async () => {
+    const bridge = createMockBridge();
+    const db = createMockDb();
+    const contract = makeContract({
+      message_account: null,
+      message_platform: "outlook",
+      qa_results: { passed: true, screenshot_path: "/tmp/cos-qa-42.png" },
+    });
+
+    await draftReply(contract, db, bridge);
+
+    const draftCall = (bridge.createReplyDraft as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(draftCall[2]).toBe("xcellerate");
+
+    const attachCall = (bridge.addAttachmentToDraft as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(attachCall[2]).toBe("xcellerate");
   });
 });
