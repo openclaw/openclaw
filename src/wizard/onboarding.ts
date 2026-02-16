@@ -334,7 +334,7 @@ export async function runOnboardingWizard(
   const workspaceDir = resolveUserPath(workspaceInput.trim() || onboardHelpers.DEFAULT_WORKSPACE);
 
   try {
-    await ensureWorkspaceAndSessions(workspaceDir, runtime, {
+    await onboardHelpers.ensureWorkspaceAndSessions(workspaceDir, runtime, {
       skipBootstrap: Boolean(baseConfig.agents?.defaults?.skipBootstrap),
     });
   } catch (err) {
