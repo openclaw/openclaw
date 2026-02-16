@@ -580,20 +580,18 @@ export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContex
     },
   );
 
-  const viewClosed = (
-    ctx.app as unknown as {
-      viewClosed?: (
-        matcher: RegExp,
-        handler: (args: { ack: () => Promise<void>; body: unknown }) => Promise<void>,
-      ) => void;
-    }
-  ).viewClosed;
-  if (typeof viewClosed !== "function") {
+  const appWithViewClosed = ctx.app as unknown as {
+    viewClosed?: (
+      matcher: RegExp,
+      handler: (args: { ack: () => Promise<void>; body: unknown }) => Promise<void>,
+    ) => void;
+  };
+  if (typeof appWithViewClosed.viewClosed !== "function") {
     return;
   }
 
   // Handle modal close events so agent workflows can react to cancelled forms.
-  viewClosed(
+  appWithViewClosed.viewClosed(
     new RegExp(`^${OPENCLAW_ACTION_PREFIX}`),
     async ({ ack, body }: { ack: () => Promise<void>; body: unknown }) => {
       await ack();
