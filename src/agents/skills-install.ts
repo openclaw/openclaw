@@ -275,10 +275,15 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
 
   const brewExe = hasBinary("brew") ? "brew" : resolveBrewExecutable();
   if (spec.kind === "brew" && !brewExe) {
+    const formula = spec.formula ?? "this package";
+    const hint =
+      process.platform === "linux"
+        ? `Homebrew is not installed. Install it from https://brew.sh or install "${formula}" manually using your system package manager (e.g. apt, dnf, pacman).`
+        : "Homebrew is not installed. Install it from https://brew.sh";
     return withWarnings(
       {
         ok: false,
-        message: "brew not installed",
+        message: `brew not installed — ${hint}`,
         stdout: "",
         stderr: "",
         code: null,
@@ -307,7 +312,8 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
       return withWarnings(
         {
           ok: false,
-          message: "uv not installed (install via brew)",
+          message:
+            "uv not installed — install manually: https://docs.astral.sh/uv/getting-started/installation/",
           stdout: "",
           stderr: "",
           code: null,
@@ -350,11 +356,51 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
           warnings,
         );
       }
+    } else if (hasBinary("apt-get")) {
+      // Check for passwordless sudo before attempting apt — avoids hanging
+      // in containers or environments where sudo is missing or requires a password.
+      const sudoCheck = await runCommandWithTimeout(["sudo", "-n", "true"], {
+        timeoutMs: 5_000,
+      });
+      if (sudoCheck.code !== 0) {
+        return withWarnings(
+          {
+            ok: false,
+            message:
+              "go not installed — apt-get is available but sudo is not usable (missing or requires a password). Install manually: https://go.dev/doc/install",
+            stdout: "",
+            stderr: "",
+            code: null,
+          },
+          warnings,
+        );
+      }
+      // Update package lists first — on fresh containers apt lists are typically empty.
+      await runCommandWithTimeout(["sudo", "apt-get", "update", "-qq"], {
+        timeoutMs,
+      });
+      const aptResult = await runCommandWithTimeout(
+        ["sudo", "apt-get", "install", "-y", "golang-go"],
+        { timeoutMs },
+      );
+      if (aptResult.code !== 0) {
+        return withWarnings(
+          {
+            ok: false,
+            message:
+              "go not installed — automatic install via apt failed. Install manually: https://go.dev/doc/install",
+            stdout: aptResult.stdout.trim(),
+            stderr: aptResult.stderr.trim(),
+            code: aptResult.code,
+          },
+          warnings,
+        );
+      }
     } else {
       return withWarnings(
         {
           ok: false,
-          message: "go not installed (install via brew)",
+          message: "go not installed — install manually: https://go.dev/doc/install",
           stdout: "",
           stderr: "",
           code: null,

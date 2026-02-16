@@ -74,7 +74,9 @@ function selectPreferredInstallSpec(
   const goSpec = findKind("go");
   const uvSpec = findKind("uv");
 
-  if (prefs.preferBrew && hasBinary("brew") && brewSpec) {
+  const brewAvailable = hasBinary("brew");
+
+  if (prefs.preferBrew && brewAvailable && brewSpec) {
     return brewSpec;
   }
   if (uvSpec) {
@@ -83,11 +85,24 @@ function selectPreferredInstallSpec(
   if (nodeSpec) {
     return nodeSpec;
   }
-  if (brewSpec) {
+  // Only prefer brew when it is actually installed; otherwise skip to
+  // alternatives so Linux/Docker environments without brew get a working
+  // install option instead of a guaranteed failure.
+  if (brewSpec && brewAvailable) {
     return brewSpec;
   }
   if (goSpec) {
     return goSpec;
+  }
+  // Prefer download over an unavailable brew spec.
+  const downloadSpec = findKind("download");
+  if (downloadSpec) {
+    return downloadSpec;
+  }
+  // Last resort: return brew spec even without brew so the caller can
+  // surface a descriptive error rather than "no installer found".
+  if (brewSpec) {
+    return brewSpec;
   }
   return indexed[0];
 }
