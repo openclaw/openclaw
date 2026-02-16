@@ -156,6 +156,20 @@ The **installer script** is the recommended way to install OpenClaw. It handles 
   </Card>
 </CardGroup>
 
+## VPS deployment guides
+
+<CardGroup cols={2}>
+  <Card title="Hetzner (Native + Tailscale)" href="/install/hetzner-native" icon="server">
+    Personal assistant on Hetzner CX22 (~$4/mo) with Tailscale and Telegram. No Docker.
+  </Card>
+  <Card title="Hetzner (Docker)" href="/install/hetzner" icon="container">
+    Docker-based production deployment on Hetzner with persistent state.
+  </Card>
+  <Card title="Oracle Cloud" href="/platforms/oracle" icon="cloud">
+    Free ARM VPS with Tailscale networking.
+  </Card>
+</CardGroup>
+
 ## After install
 
 Verify everything is working:

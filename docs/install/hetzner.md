@@ -14,8 +14,12 @@ title: "Hetzner"
 
 Run a persistent OpenClaw Gateway on a Hetzner VPS using Docker, with durable state, baked-in binaries, and safe restart behavior.
 
-If you want “OpenClaw 24/7 for ~$5”, this is the simplest reliable setup.
+If you want "OpenClaw 24/7 for ~$5", this is the simplest reliable setup.
 Hetzner pricing changes; pick the smallest Debian/Ubuntu VPS and scale up if you hit OOMs.
+
+<Note>
+Prefer a lighter-weight native install (no Docker)? See [Hetzner (Native + Tailscale)](/install/hetzner-native) — uses the system Node.js, systemd, and Tailscale Serve for a ~$4/mo personal assistant setup.
+</Note>
 
 ## What are we doing (simple terms)?
 
