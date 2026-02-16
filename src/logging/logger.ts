@@ -6,6 +6,15 @@ import type { OpenClawConfig } from "../config/types.js";
 import type { ConsoleStyle } from "./console.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { readLoggingConfig } from "./config.js";
+import {
+  type ContextualError,
+  type OperationContext,
+  createContextualError,
+  formatContextualError,
+  getCurrentOperation,
+  sanitizeContextualErrorForSlack,
+  sanitizeError,
+} from "./error-context.js";
 import { type LogLevel, levelToMinLevel, normalizeLogLevel } from "./levels.js";
 import { loggingState } from "./state.js";
 
@@ -249,4 +258,55 @@ function pruneOldRollingLogs(dir: string): void {
   } catch {
     // ignore missing dir or read errors
   }
+}
+
+// ===== Error Context Integration =====
+
+export type { ContextualError, OperationContext };
+export { createContextualError, sanitizeError, sanitizeContextualErrorForSlack };
+
+/**
+ * Log an error with full context (session, operation, breadcrumbs).
+ * Automatically pulls context from the current operation stack if available.
+ */
+export function logErrorWithContext(
+  err: unknown,
+  context?: Partial<OperationContext>,
+): ContextualError {
+  const logger = getLogger();
+  const currentOp = getCurrentOperation();
+
+  const { message, sanitized } = sanitizeError(err);
+  const contextualErr = createContextualError(message, {
+    code:
+      err instanceof Error && "code" in err ? String((err as { code?: unknown }).code) : undefined,
+    context: {
+      ...currentOp,
+      ...context,
+    },
+    originalError: err instanceof Error ? err : undefined,
+  });
+  contextualErr.sanitized = sanitized;
+
+  // Log with structured context
+  logger.error({
+    message: contextualErr.message,
+    code: contextualErr.code,
+    sessionKey: contextualErr.context.sessionKey,
+    operation: contextualErr.context.operation,
+    tool: contextualErr.context.tool,
+    breadcrumbs: contextualErr.context.breadcrumbs,
+    sanitized: contextualErr.sanitized,
+    formatted: formatContextualError(contextualErr),
+  });
+
+  return contextualErr;
+}
+
+/**
+ * Get a sanitized error message safe for external delivery (e.g., Slack).
+ */
+export function getSafeErrorMessage(err: unknown): string {
+  const { message } = sanitizeError(err);
+  return message;
 }
