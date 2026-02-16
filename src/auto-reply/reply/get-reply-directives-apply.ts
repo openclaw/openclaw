@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { MsgContext } from "../templating.js";
-import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
+import type { ElevatedLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import type { createModelSelectionState } from "./model-selection.js";
 import type { TypingController } from "./typing.js";
@@ -13,6 +13,7 @@ import {
   isDirectiveOnly,
   persistInlineDirectives,
 } from "./directive-handling.js";
+import { resolveCurrentDirectiveLevels } from "./directive-handling.levels.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
@@ -122,19 +123,17 @@ export async function applyInlineDirectiveOverrides(params: {
       typing.cleanup();
       return { kind: "reply", reply: undefined };
     }
-    const resolvedDefaultThinkLevel =
-      (sessionEntry?.thinkingLevel as ThinkLevel | undefined) ??
-      (agentCfg?.thinkingDefault as ThinkLevel | undefined) ??
-      (await modelState.resolveDefaultThinkingLevel());
+    const {
+      currentThinkLevel: resolvedDefaultThinkLevel,
+      currentVerboseLevel,
+      currentReasoningLevel,
+      currentElevatedLevel,
+    } = await resolveCurrentDirectiveLevels({
+      sessionEntry,
+      agentCfg,
+      resolveDefaultThinkingLevel: () => modelState.resolveDefaultThinkingLevel(),
+    });
     const currentThinkLevel = resolvedDefaultThinkLevel;
-    const currentVerboseLevel =
-      (sessionEntry?.verboseLevel as VerboseLevel | undefined) ??
-      (agentCfg?.verboseDefault as VerboseLevel | undefined);
-    const currentReasoningLevel =
-      (sessionEntry?.reasoningLevel as ReasoningLevel | undefined) ?? "off";
-    const currentElevatedLevel =
-      (sessionEntry?.elevatedLevel as ElevatedLevel | undefined) ??
-      (agentCfg?.elevatedDefault as ElevatedLevel | undefined);
     const directiveReply = await handleDirectiveOnly({
       cfg,
       directives,
