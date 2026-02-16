@@ -32,7 +32,7 @@ openclaw onboard --auth-choice qianfan-api-key
 
 ## Related Documentation
 
-- [OpenClaw Configuration](/configuration)
+- [OpenClaw Configuration](/gateway/configuration)
 - [Model Providers](/concepts/model-providers)
-- [Agent Setup](/agents)
+- [Agent Setup](/concepts/agent)
 - [Qianfan API Documentation](https://cloud.baidu.com/doc/qianfan-api/s/3m7of64lb)

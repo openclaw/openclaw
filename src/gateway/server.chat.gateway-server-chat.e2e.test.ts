@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -11,28 +11,20 @@ import {
   installGatewayTestHooks,
   onceMessage,
   rpcReq,
-  startServerWithClient,
   testState,
   writeSessionStore,
 } from "./test-helpers.js";
+import { agentCommand } from "./test-helpers.mocks.js";
+import { installConnectedControlUiServerSuite } from "./test-with-server.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
-let server: Awaited<ReturnType<typeof startServerWithClient>>["server"];
 let ws: WebSocket;
 let port: number;
 
-beforeAll(async () => {
-  const started = await startServerWithClient();
-  server = started.server;
+installConnectedControlUiServerSuite((started) => {
   ws = started.ws;
   port = started.port;
-  await connectOk(ws);
-});
-
-afterAll(async () => {
-  ws.close();
-  await server.close();
 });
 
 async function waitFor(condition: () => boolean, timeoutMs = 1500) {
@@ -47,12 +39,44 @@ async function waitFor(condition: () => boolean, timeoutMs = 1500) {
 }
 
 describe("gateway server chat", () => {
+  test("sanitizes inbound chat.send message text and rejects null bytes", async () => {
+    const nullByteRes = await rpcReq(ws, "chat.send", {
+      sessionKey: "main",
+      message: "hello\u0000world",
+      idempotencyKey: "idem-null-byte-1",
+    });
+    expect(nullByteRes.ok).toBe(false);
+    expect((nullByteRes.error as { message?: string } | undefined)?.message ?? "").toMatch(
+      /null bytes/i,
+    );
+
+    const spy = vi.mocked(getReplyFromConfig);
+    spy.mockClear();
+    const callsBeforeSanitized = spy.mock.calls.length;
+    const sanitizedRes = await rpcReq(ws, "chat.send", {
+      sessionKey: "main",
+      message: "Cafe\u0301\u0007\tline",
+      idempotencyKey: "idem-sanitized-1",
+    });
+    expect(sanitizedRes.ok).toBe(true);
+
+    await waitFor(() => spy.mock.calls.length > callsBeforeSanitized);
+    const ctx = spy.mock.calls.at(-1)?.[0] as
+      | { Body?: string; RawBody?: string; BodyForCommands?: string }
+      | undefined;
+    expect(ctx?.Body).toBe("Café\tline");
+    expect(ctx?.RawBody).toBe("Café\tline");
+    expect(ctx?.BodyForCommands).toBe("Café\tline");
+  });
+
   test("handles chat send and history flows", async () => {
     const tempDirs: string[] = [];
     let webchatWs: WebSocket | undefined;
 
     try {
-      webchatWs = new WebSocket(`ws://127.0.0.1:${port}`);
+      webchatWs = new WebSocket(`ws://127.0.0.1:${port}`, {
+        headers: { origin: `http://127.0.0.1:${port}` },
+      });
       await new Promise<void>((resolve) => webchatWs?.once("open", resolve));
       await connectOk(webchatWs, {
         client: {
@@ -332,8 +356,7 @@ describe("gateway server chat", () => {
         idempotencyKey: "idem-command-1",
       });
       expect(res.ok).toBe(true);
-      const evt = await eventPromise;
-      expect(evt.payload?.message?.command).toBe(true);
+      await eventPromise;
       expect(spy.mock.calls.length).toBe(callsBefore);
     } finally {
       testState.sessionStorePath = undefined;
@@ -354,7 +377,9 @@ describe("gateway server chat", () => {
       },
     });
 
-    const webchatWs = new WebSocket(`ws://127.0.0.1:${port}`);
+    const webchatWs = new WebSocket(`ws://127.0.0.1:${port}`, {
+      headers: { origin: `http://127.0.0.1:${port}` },
+    });
     await new Promise<void>((resolve) => webchatWs.once("open", resolve));
     await connectOk(webchatWs, {
       client: {

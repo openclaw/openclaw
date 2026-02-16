@@ -1,6 +1,11 @@
 import { Mock, vi } from "vitest";
 
 type SlackHandler = (args: unknown) => Promise<void>;
+type SlackProviderMonitor = (params: {
+  botToken: string;
+  appToken: string;
+  abortSignal: AbortSignal;
+}) => Promise<unknown>;
 
 const slackTestState: {
   config: Record<string, unknown>;
@@ -41,6 +46,57 @@ export async function waitForSlackEvent(name: string) {
     }
     await flush();
   }
+}
+
+export function startSlackMonitor(
+  monitorSlackProvider: SlackProviderMonitor,
+  opts?: { botToken?: string; appToken?: string },
+) {
+  const controller = new AbortController();
+  const run = monitorSlackProvider({
+    botToken: opts?.botToken ?? "bot-token",
+    appToken: opts?.appToken ?? "app-token",
+    abortSignal: controller.signal,
+  });
+  return { controller, run };
+}
+
+export async function getSlackHandlerOrThrow(name: string) {
+  await waitForSlackEvent(name);
+  const handler = getSlackHandlers()?.get(name);
+  if (!handler) {
+    throw new Error(`Slack ${name} handler not registered`);
+  }
+  return handler;
+}
+
+export async function stopSlackMonitor(params: {
+  controller: AbortController;
+  run: Promise<unknown>;
+}) {
+  await flush();
+  params.controller.abort();
+  await params.run;
+}
+
+export async function runSlackEventOnce(
+  monitorSlackProvider: SlackProviderMonitor,
+  name: string,
+  args: unknown,
+  opts?: { botToken?: string; appToken?: string },
+) {
+  const { controller, run } = startSlackMonitor(monitorSlackProvider, opts);
+  const handler = await getSlackHandlerOrThrow(name);
+  await handler(args);
+  await stopSlackMonitor({ controller, run });
+}
+
+export async function runSlackMessageOnce(
+  monitorSlackProvider: SlackProviderMonitor,
+  args: unknown,
+  opts?: { botToken?: string; appToken?: string },
+) {
+  await runSlackEventOnce(monitorSlackProvider, "message", args, opts);
 }
 
 export const defaultSlackTestConfig = () => ({

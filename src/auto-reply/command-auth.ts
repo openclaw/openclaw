@@ -126,6 +126,41 @@ function resolveOwnerAllowFromList(params: {
   });
 }
 
+/**
+ * Resolves the commands.allowFrom list for a given provider.
+ * Returns the provider-specific list if defined, otherwise the "*" global list.
+ * Returns null if commands.allowFrom is not configured at all (fall back to channel allowFrom).
+ */
+function resolveCommandsAllowFromList(params: {
+  dock?: ChannelDock;
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  providerId?: ChannelId;
+}): string[] | null {
+  const { dock, cfg, accountId, providerId } = params;
+  const commandsAllowFrom = cfg.commands?.allowFrom;
+  if (!commandsAllowFrom || typeof commandsAllowFrom !== "object") {
+    return null; // Not configured, fall back to channel allowFrom
+  }
+
+  // Check provider-specific list first, then fall back to global "*"
+  const providerKey = providerId ?? "";
+  const providerList = commandsAllowFrom[providerKey];
+  const globalList = commandsAllowFrom["*"];
+
+  const rawList = Array.isArray(providerList) ? providerList : globalList;
+  if (!Array.isArray(rawList)) {
+    return null; // No applicable list found
+  }
+
+  return formatAllowFromList({
+    dock,
+    cfg,
+    accountId,
+    allowFrom: rawList,
+  });
+}
+
 function resolveSenderCandidates(params: {
   dock?: ChannelDock;
   providerId?: ChannelId;
@@ -175,6 +210,15 @@ export function resolveCommandAuthorization(params: {
   const dock = providerId ? getChannelDock(providerId) : undefined;
   const from = (ctx.From ?? "").trim();
   const to = (ctx.To ?? "").trim();
+
+  // Check if commands.allowFrom is configured (separate command authorization)
+  const commandsAllowFromList = resolveCommandsAllowFromList({
+    dock,
+    cfg,
+    accountId: ctx.AccountId,
+    providerId,
+  });
+
   const allowFromRaw = dock?.config?.resolveAllowFrom
     ? dock.config.resolveAllowFrom({ cfg, accountId: ctx.AccountId })
     : [];
@@ -256,7 +300,21 @@ export function resolveCommandAuthorization(params: {
       : ownerAllowlistConfigured
         ? senderIsOwner
         : allowAll || ownerCandidatesForCommands.length === 0 || Boolean(matchedCommandOwner);
-  const isAuthorizedSender = commandAuthorized && isOwnerForCommands;
+
+  // If commands.allowFrom is configured, use it for command authorization
+  // Otherwise, fall back to existing behavior (channel allowFrom + owner checks)
+  let isAuthorizedSender: boolean;
+  if (commandsAllowFromList !== null) {
+    // commands.allowFrom is configured - use it for authorization
+    const commandsAllowAll = commandsAllowFromList.some((entry) => entry.trim() === "*");
+    const matchedCommandsAllowFrom = commandsAllowFromList.length
+      ? senderCandidates.find((candidate) => commandsAllowFromList.includes(candidate))
+      : undefined;
+    isAuthorizedSender = commandsAllowAll || Boolean(matchedCommandsAllowFrom);
+  } else {
+    // Fall back to existing behavior
+    isAuthorizedSender = commandAuthorized && isOwnerForCommands;
+  }
 
   return {
     providerId,

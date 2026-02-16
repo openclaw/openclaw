@@ -1,15 +1,16 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BrowserServerState } from "./server-context.js";
+import * as cdpModule from "./cdp.js";
+import * as pwAiModule from "./pw-ai-module.js";
+import "./server-context.chrome-test-harness.js";
+import { createBrowserRouteContext } from "./server-context.js";
 
-vi.mock("./chrome.js", () => ({
-  isChromeCdpReady: vi.fn(async () => true),
-  isChromeReachable: vi.fn(async () => true),
-  launchOpenClawChrome: vi.fn(async () => {
-    throw new Error("unexpected launch");
-  }),
-  resolveOpenClawUserDataDir: vi.fn(() => "/tmp/openclaw"),
-  stopOpenClawChrome: vi.fn(async () => {}),
-}));
+const originalFetch = globalThis.fetch;
+
+afterEach(() => {
+  globalThis.fetch = originalFetch;
+  vi.restoreAllMocks();
+});
 
 function makeState(
   profile: "remote" | "openclaw",
@@ -46,7 +47,6 @@ function makeState(
 
 describe("browser server-context remote profile tab operations", () => {
   it("uses Playwright tab operations when available", async () => {
-    vi.resetModules();
     const listPagesViaPlaywright = vi.fn(async () => [
       { targetId: "T1", title: "Tab 1", url: "https://a.example", type: "page" },
     ]);
@@ -58,11 +58,11 @@ describe("browser server-context remote profile tab operations", () => {
     }));
     const closePageByTargetIdViaPlaywright = vi.fn(async () => {});
 
-    vi.doMock("./pw-ai.js", () => ({
+    vi.spyOn(pwAiModule, "getPwAiModule").mockResolvedValue({
       listPagesViaPlaywright,
       createPageViaPlaywright,
       closePageByTargetIdViaPlaywright,
-    }));
+    } as Awaited<ReturnType<typeof pwAiModule.getPwAiModule>>);
 
     const fetchMock = vi.fn(async () => {
       throw new Error("unexpected fetch");
@@ -70,7 +70,6 @@ describe("browser server-context remote profile tab operations", () => {
 
     global.fetch = fetchMock;
 
-    const { createBrowserRouteContext } = await import("./server-context.js");
     const state = makeState("remote");
     const ctx = createBrowserRouteContext({ getState: () => state });
     const remote = ctx.forProfile("remote");
@@ -91,7 +90,6 @@ describe("browser server-context remote profile tab operations", () => {
   });
 
   it("prefers lastTargetId for remote profiles when targetId is omitted", async () => {
-    vi.resetModules();
     const responses = [
       // ensureTabAvailable() calls listTabs twice
       [
@@ -121,7 +119,7 @@ describe("browser server-context remote profile tab operations", () => {
       return next;
     });
 
-    vi.doMock("./pw-ai.js", () => ({
+    vi.spyOn(pwAiModule, "getPwAiModule").mockResolvedValue({
       listPagesViaPlaywright,
       createPageViaPlaywright: vi.fn(async () => {
         throw new Error("unexpected create");
@@ -129,7 +127,7 @@ describe("browser server-context remote profile tab operations", () => {
       closePageByTargetIdViaPlaywright: vi.fn(async () => {
         throw new Error("unexpected close");
       }),
-    }));
+    } as Awaited<ReturnType<typeof pwAiModule.getPwAiModule>>);
 
     const fetchMock = vi.fn(async () => {
       throw new Error("unexpected fetch");
@@ -137,7 +135,6 @@ describe("browser server-context remote profile tab operations", () => {
 
     global.fetch = fetchMock;
 
-    const { createBrowserRouteContext } = await import("./server-context.js");
     const state = makeState("remote");
     const ctx = createBrowserRouteContext({ getState: () => state });
     const remote = ctx.forProfile("remote");
@@ -149,16 +146,15 @@ describe("browser server-context remote profile tab operations", () => {
   });
 
   it("uses Playwright focus for remote profiles when available", async () => {
-    vi.resetModules();
     const listPagesViaPlaywright = vi.fn(async () => [
       { targetId: "T1", title: "Tab 1", url: "https://a.example", type: "page" },
     ]);
     const focusPageByTargetIdViaPlaywright = vi.fn(async () => {});
 
-    vi.doMock("./pw-ai.js", () => ({
+    vi.spyOn(pwAiModule, "getPwAiModule").mockResolvedValue({
       listPagesViaPlaywright,
       focusPageByTargetIdViaPlaywright,
-    }));
+    } as Awaited<ReturnType<typeof pwAiModule.getPwAiModule>>);
 
     const fetchMock = vi.fn(async () => {
       throw new Error("unexpected fetch");
@@ -166,7 +162,6 @@ describe("browser server-context remote profile tab operations", () => {
 
     global.fetch = fetchMock;
 
-    const { createBrowserRouteContext } = await import("./server-context.js");
     const state = makeState("remote");
     const ctx = createBrowserRouteContext({ getState: () => state });
     const remote = ctx.forProfile("remote");
@@ -181,12 +176,11 @@ describe("browser server-context remote profile tab operations", () => {
   });
 
   it("does not swallow Playwright runtime errors for remote profiles", async () => {
-    vi.resetModules();
-    vi.doMock("./pw-ai.js", () => ({
+    vi.spyOn(pwAiModule, "getPwAiModule").mockResolvedValue({
       listPagesViaPlaywright: vi.fn(async () => {
         throw new Error("boom");
       }),
-    }));
+    } as Awaited<ReturnType<typeof pwAiModule.getPwAiModule>>);
 
     const fetchMock = vi.fn(async () => {
       throw new Error("unexpected fetch");
@@ -194,7 +188,6 @@ describe("browser server-context remote profile tab operations", () => {
 
     global.fetch = fetchMock;
 
-    const { createBrowserRouteContext } = await import("./server-context.js");
     const state = makeState("remote");
     const ctx = createBrowserRouteContext({ getState: () => state });
     const remote = ctx.forProfile("remote");
@@ -204,12 +197,7 @@ describe("browser server-context remote profile tab operations", () => {
   });
 
   it("falls back to /json/list when Playwright is not available", async () => {
-    vi.resetModules();
-    vi.doMock("./pw-ai.js", () => ({
-      listPagesViaPlaywright: undefined,
-      createPageViaPlaywright: undefined,
-      closePageByTargetIdViaPlaywright: undefined,
-    }));
+    vi.spyOn(pwAiModule, "getPwAiModule").mockResolvedValue(null);
 
     const fetchMock = vi.fn(async (url: unknown) => {
       const u = String(url);
@@ -232,7 +220,6 @@ describe("browser server-context remote profile tab operations", () => {
 
     global.fetch = fetchMock;
 
-    const { createBrowserRouteContext } = await import("./server-context.js");
     const state = makeState("remote");
     const ctx = createBrowserRouteContext({ getState: () => state });
     const remote = ctx.forProfile("remote");
@@ -245,15 +232,7 @@ describe("browser server-context remote profile tab operations", () => {
 
 describe("browser server-context tab selection state", () => {
   it("updates lastTargetId when openTab is created via CDP", async () => {
-    vi.resetModules();
-    vi.doUnmock("./pw-ai.js");
-    vi.doMock("./cdp.js", async () => {
-      const actual = await vi.importActual<typeof import("./cdp.js")>("./cdp.js");
-      return {
-        ...actual,
-        createTargetViaCdp: vi.fn(async () => ({ targetId: "CREATED" })),
-      };
-    });
+    vi.spyOn(cdpModule, "createTargetViaCdp").mockResolvedValue({ targetId: "CREATED" });
 
     const fetchMock = vi.fn(async (url: unknown) => {
       const u = String(url);
@@ -276,7 +255,6 @@ describe("browser server-context tab selection state", () => {
 
     global.fetch = fetchMock;
 
-    const { createBrowserRouteContext } = await import("./server-context.js");
     const state = makeState("openclaw");
     const ctx = createBrowserRouteContext({ getState: () => state });
     const openclaw = ctx.forProfile("openclaw");

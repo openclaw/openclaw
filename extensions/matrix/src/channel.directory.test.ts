@@ -1,8 +1,27 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CoreConfig } from "./types.js";
 import { matrixPlugin } from "./channel.js";
 import { setMatrixRuntime } from "./runtime.js";
+
+vi.mock("@vector-im/matrix-bot-sdk", () => ({
+  ConsoleLogger: class {
+    trace = vi.fn();
+    debug = vi.fn();
+    info = vi.fn();
+    warn = vi.fn();
+    error = vi.fn();
+  },
+  MatrixClient: class {},
+  LogService: {
+    setLogger: vi.fn(),
+    warn: vi.fn(),
+    info: vi.fn(),
+    debug: vi.fn(),
+  },
+  SimpleFsStorageProvider: class {},
+  RustSdkCryptoStorageProvider: class {},
+}));
 
 describe("matrix directory", () => {
   beforeEach(() => {
@@ -60,5 +79,66 @@ describe("matrix directory", () => {
         { kind: "group", id: "#alias:example.org" },
       ]),
     );
+  });
+
+  it("resolves replyToMode from account config", () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          replyToMode: "off",
+          accounts: {
+            Assistant: {
+              replyToMode: "all",
+            },
+          },
+        },
+      },
+    } as unknown as CoreConfig;
+
+    expect(matrixPlugin.threading?.resolveReplyToMode).toBeTruthy();
+    expect(
+      matrixPlugin.threading?.resolveReplyToMode?.({
+        cfg,
+        accountId: "assistant",
+        chatType: "direct",
+      }),
+    ).toBe("all");
+    expect(
+      matrixPlugin.threading?.resolveReplyToMode?.({
+        cfg,
+        accountId: "default",
+        chatType: "direct",
+      }),
+    ).toBe("off");
+  });
+
+  it("resolves group mention policy from account config", () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          groups: {
+            "!room:example.org": { requireMention: true },
+          },
+          accounts: {
+            Assistant: {
+              groups: {
+                "!room:example.org": { requireMention: false },
+              },
+            },
+          },
+        },
+      },
+    } as unknown as CoreConfig;
+
+    expect(matrixPlugin.groups.resolveRequireMention({ cfg, groupId: "!room:example.org" })).toBe(
+      true,
+    );
+    expect(
+      matrixPlugin.groups.resolveRequireMention({
+        cfg,
+        accountId: "assistant",
+        groupId: "!room:example.org",
+      }),
+    ).toBe(false);
   });
 });

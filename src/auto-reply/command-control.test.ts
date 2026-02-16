@@ -211,6 +211,146 @@ describe("resolveCommandAuthorization", () => {
     expect(auth.senderIsOwner).toBe(true);
     expect(auth.ownerList).toEqual(["123"]);
   });
+
+  describe("commands.allowFrom", () => {
+    const commandsAllowFromConfig = {
+      commands: {
+        allowFrom: {
+          "*": ["user123"],
+        },
+      },
+      channels: { whatsapp: { allowFrom: ["+different"] } },
+    } as OpenClawConfig;
+
+    function makeWhatsAppContext(senderId: string): MsgContext {
+      return {
+        Provider: "whatsapp",
+        Surface: "whatsapp",
+        From: `whatsapp:${senderId}`,
+        SenderId: senderId,
+      } as MsgContext;
+    }
+
+    function resolveWithCommandsAllowFrom(senderId: string, commandAuthorized: boolean) {
+      return resolveCommandAuthorization({
+        ctx: makeWhatsAppContext(senderId),
+        cfg: commandsAllowFromConfig,
+        commandAuthorized,
+      });
+    }
+
+    it("uses commands.allowFrom global list when configured", () => {
+      const authorizedAuth = resolveWithCommandsAllowFrom("user123", true);
+
+      expect(authorizedAuth.isAuthorizedSender).toBe(true);
+
+      const unauthorizedAuth = resolveWithCommandsAllowFrom("otheruser", true);
+
+      expect(unauthorizedAuth.isAuthorizedSender).toBe(false);
+    });
+
+    it("ignores commandAuthorized when commands.allowFrom is configured", () => {
+      const authorizedAuth = resolveWithCommandsAllowFrom("user123", false);
+
+      expect(authorizedAuth.isAuthorizedSender).toBe(true);
+
+      const unauthorizedAuth = resolveWithCommandsAllowFrom("otheruser", false);
+
+      expect(unauthorizedAuth.isAuthorizedSender).toBe(false);
+    });
+
+    it("uses commands.allowFrom provider-specific list over global", () => {
+      const cfg = {
+        commands: {
+          allowFrom: {
+            "*": ["globaluser"],
+            whatsapp: ["+15551234567"],
+          },
+        },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+      } as OpenClawConfig;
+
+      // User in global list but not in whatsapp-specific list
+      const globalUserCtx = {
+        Provider: "whatsapp",
+        Surface: "whatsapp",
+        From: "whatsapp:globaluser",
+        SenderId: "globaluser",
+      } as MsgContext;
+
+      const globalAuth = resolveCommandAuthorization({
+        ctx: globalUserCtx,
+        cfg,
+        commandAuthorized: true,
+      });
+
+      // Provider-specific list overrides global, so globaluser is not authorized
+      expect(globalAuth.isAuthorizedSender).toBe(false);
+
+      // User in whatsapp-specific list
+      const whatsappUserCtx = {
+        Provider: "whatsapp",
+        Surface: "whatsapp",
+        From: "whatsapp:+15551234567",
+        SenderE164: "+15551234567",
+      } as MsgContext;
+
+      const whatsappAuth = resolveCommandAuthorization({
+        ctx: whatsappUserCtx,
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(whatsappAuth.isAuthorizedSender).toBe(true);
+    });
+
+    it("falls back to channel allowFrom when commands.allowFrom not set", () => {
+      const cfg = {
+        channels: { whatsapp: { allowFrom: ["+15551234567"] } },
+      } as OpenClawConfig;
+
+      const authorizedCtx = {
+        Provider: "whatsapp",
+        Surface: "whatsapp",
+        From: "whatsapp:+15551234567",
+        SenderE164: "+15551234567",
+      } as MsgContext;
+
+      const auth = resolveCommandAuthorization({
+        ctx: authorizedCtx,
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(auth.isAuthorizedSender).toBe(true);
+    });
+
+    it("allows all senders when commands.allowFrom includes wildcard", () => {
+      const cfg = {
+        commands: {
+          allowFrom: {
+            "*": ["*"],
+          },
+        },
+        channels: { whatsapp: { allowFrom: ["+specific"] } },
+      } as OpenClawConfig;
+
+      const anyUserCtx = {
+        Provider: "whatsapp",
+        Surface: "whatsapp",
+        From: "whatsapp:anyuser",
+        SenderId: "anyuser",
+      } as MsgContext;
+
+      const auth = resolveCommandAuthorization({
+        ctx: anyUserCtx,
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(auth.isAuthorizedSender).toBe(true);
+    });
+  });
 });
 
 describe("control command parsing", () => {
