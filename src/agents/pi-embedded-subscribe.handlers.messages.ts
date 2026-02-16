@@ -188,6 +188,7 @@ export function handleMessageUpdate(
       });
       ctx.state.emittedAssistantUpdate = true;
       if (ctx.params.onPartialReply && ctx.state.shouldEmitPartialReplies) {
+        ctx.state.hadUserFacingReply = true;
         void ctx.params.onPartialReply({
           text: cleanedText,
           mediaUrls: hasMedia ? mediaUrls : undefined,

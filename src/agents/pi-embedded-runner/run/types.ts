@@ -31,6 +31,7 @@ export type EmbeddedRunAttemptResult = {
   systemPromptReport?: SessionSystemPromptReport;
   messagesSnapshot: AgentMessage[];
   assistantTexts: string[];
+  hasUserFacingStreamedReply?: boolean;
   toolMetas: Array<{ toolName: string; meta?: string }>;
   lastAssistant: AssistantMessage | undefined;
   lastToolError?: {

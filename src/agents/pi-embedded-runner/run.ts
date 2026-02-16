@@ -968,6 +968,7 @@ export async function runEmbeddedPiAgent(
 
           const payloads = buildEmbeddedRunPayloads({
             assistantTexts: attempt.assistantTexts,
+            hasUserFacingStreamedReply: attempt.hasUserFacingStreamedReply,
             toolMetas: attempt.toolMetas,
             lastAssistant: attempt.lastAssistant,
             lastToolError: attempt.lastToolError,

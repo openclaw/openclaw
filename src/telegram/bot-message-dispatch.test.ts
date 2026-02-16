@@ -275,6 +275,35 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.stop).toHaveBeenCalled();
   });
 
+  it("delivers only the recovered final answer when no warning payload is emitted", async () => {
+    const draftStream = createDraftStream(999);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Checking alternatives..." });
+        await dispatcherOptions.deliver({ text: "Recovered final answer" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "999" });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "block" });
+
+    expect(deliverReplies).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [expect.objectContaining({ text: expect.stringContaining("⚠️") })],
+      }),
+    );
+    expect(editMessageTelegram).toHaveBeenCalledTimes(1);
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      999,
+      "Recovered final answer",
+      expect.any(Object),
+    );
+  });
+
   it("falls back to normal delivery when preview final is too long to edit", async () => {
     const draftStream = createDraftStream(999);
     createTelegramDraftStream.mockReturnValue(draftStream);

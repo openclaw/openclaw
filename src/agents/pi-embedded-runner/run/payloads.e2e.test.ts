@@ -207,6 +207,50 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads[0]?.text).toContain("recovered");
   });
 
+  it("does not add tool error fallback when streamed user-facing output exists", () => {
+    const payloads = buildPayloads({
+      assistantTexts: [],
+      hasUserFacingStreamedReply: true,
+      lastAssistant: makeAssistant({
+        stopReason: "toolUse",
+        errorMessage: undefined,
+        content: [
+          {
+            type: "toolCall",
+            id: "toolu_02",
+            name: "web_fetch",
+            arguments: { url: "https://example.com" },
+          },
+        ],
+      }),
+      lastToolError: { toolName: "exec", error: "command not found" },
+    });
+
+    expect(payloads).toHaveLength(0);
+  });
+
+  it("does not add bash tool error fallback when streamed user-facing output exists", () => {
+    const payloads = buildPayloads({
+      assistantTexts: [],
+      hasUserFacingStreamedReply: true,
+      lastAssistant: makeAssistant({
+        stopReason: "toolUse",
+        errorMessage: undefined,
+        content: [
+          {
+            type: "toolCall",
+            id: "toolu_03",
+            name: "web_fetch",
+            arguments: { url: "https://example.com" },
+          },
+        ],
+      }),
+      lastToolError: { toolName: "bash", error: "command not found" },
+    });
+
+    expect(payloads).toHaveLength(0);
+  });
+
   it("suppresses recoverable tool errors containing 'required' for non-mutating tools", () => {
     const payloads = buildPayloads({
       lastToolError: { toolName: "browser", error: "url required" },

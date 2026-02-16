@@ -53,6 +53,17 @@ function shouldShowToolErrorWarning(params: {
   if (params.suppressToolErrorWarnings) {
     return false;
   }
+  const normalizedToolName = params.lastToolError.toolName.trim().toLowerCase();
+  // Exec/bash can fail as part of an intermediate attempt while the agent
+  // successfully recovers via fallback tools in the same turn.
+  // If a user-facing reply was already produced, suppress this warning to avoid
+  // leaking transient tool failures into channel output.
+  if (
+    params.hasUserFacingReply &&
+    (normalizedToolName === "exec" || normalizedToolName === "bash")
+  ) {
+    return false;
+  }
   const isMutatingToolError =
     params.lastToolError.mutatingAction ?? isLikelyMutatingToolName(params.lastToolError.toolName);
   if (isMutatingToolError) {
@@ -66,6 +77,7 @@ function shouldShowToolErrorWarning(params: {
 
 export function buildEmbeddedRunPayloads(params: {
   assistantTexts: string[];
+  hasUserFacingStreamedReply?: boolean;
   toolMetas: ToolMetaEntry[];
   lastAssistant: AssistantMessage | undefined;
   lastToolError?: LastToolError;
@@ -223,7 +235,7 @@ export function buildEmbeddedRunPayloads(params: {
         : []
   ).filter((text) => !shouldSuppressRawErrorText(text));
 
-  let hasUserFacingAssistantReply = false;
+  let hasUserFacingAssistantReply = Boolean(params.hasUserFacingStreamedReply);
   for (const text of answerTexts) {
     const {
       text: cleanedText,

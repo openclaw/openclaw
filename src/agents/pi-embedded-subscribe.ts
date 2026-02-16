@@ -62,6 +62,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     assistantTextBaseline: 0,
     suppressBlockChunks: false, // Avoid late chunk inserts after final text merge.
     lastReasoningSent: undefined,
+    hadUserFacingReply: false,
     compactionInFlight: false,
     pendingCompactionRetry: 0,
     compactionRetryResolve: undefined,
@@ -498,6 +499,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     if (!params.onBlockReply) {
       return;
     }
+    state.hadUserFacingReply = true;
     const splitResult = replyDirectiveAccumulator.consume(chunk);
     if (!splitResult) {
       return;
@@ -590,6 +592,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     pendingMessagingTargets.clear();
     state.successfulCronAdds = 0;
     state.pendingMessagingMediaUrls.clear();
+    state.hadUserFacingReply = false;
     resetAssistantMessageState(0);
   };
 
@@ -681,6 +684,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     // which is generated AFTER the tool sends the actual answer.
     didSendViaMessagingTool: () => messagingToolSentTexts.length > 0,
     getLastToolError: () => (state.lastToolError ? { ...state.lastToolError } : undefined),
+    didEmitUserFacingReply: () => state.hadUserFacingReply,
     getUsageTotals,
     getCompactionCount: () => compactionCount,
     waitForCompactionRetry: () => {
