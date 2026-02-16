@@ -8,29 +8,32 @@ import {
   type ProviderAuthResult,
 } from "openclaw/plugin-sdk";
 
-const PROVIDER_ID = "openai-codex";
-const PROVIDER_LABEL = "OpenAI Codex CLI";
-const AUTH_FILE = path.join(os.homedir(), ".codex", "auth.json");
+const PROVIDER_ID = "openai-codex-import";
+const PROVIDER_LABEL = "OpenAI Codex CLI Import";
+
+/**
+ * Resolve the Codex auth file path, respecting CODEX_HOME env var like core does.
+ * Called lazily to pick up env var changes.
+ */
+function getAuthFilePath(): string {
+  const codexHome = process.env.CODEX_HOME
+    ? path.resolve(process.env.CODEX_HOME)
+    : path.join(os.homedir(), ".codex");
+  return path.join(codexHome, "auth.json");
+}
 
 /**
  * OpenAI Codex models available via ChatGPT Plus/Pro subscription.
- * These are the models exposed through the Codex CLI OAuth tokens.
+ * Uses openai-codex/ prefix to match core provider namespace and avoid
+ * conflicts with the standard openai/ API key-based provider.
  */
 const CODEX_MODELS = [
-  "openai/gpt-4.1",
-  "openai/gpt-4.1-mini",
-  "openai/gpt-4.1-nano",
-  "openai/gpt-4o",
-  "openai/gpt-4o-mini",
-  "openai/o1",
-  "openai/o1-mini",
-  "openai/o1-pro",
-  "openai/o3",
-  "openai/o3-mini",
-  "openai/o4-mini",
+  "openai-codex/gpt-5.3-codex",
+  "openai-codex/gpt-5.3-codex-spark",
+  "openai-codex/gpt-5.2-codex",
 ] as const;
 
-const DEFAULT_MODEL = "openai/o3";
+const DEFAULT_MODEL = "openai-codex/gpt-5.3-codex";
 
 interface CodexAuthTokens {
   access_token: string;
@@ -44,12 +47,13 @@ interface CodexAuthFile {
 }
 
 /**
- * Read the Codex CLI auth.json file from ~/.codex/auth.json
+ * Read the Codex CLI auth.json file, respecting CODEX_HOME env var.
  */
 function readCodexAuth(): CodexAuthFile | null {
   try {
-    if (!fs.existsSync(AUTH_FILE)) return null;
-    const content = fs.readFileSync(AUTH_FILE, "utf-8");
+    const authFile = getAuthFilePath();
+    if (!fs.existsSync(authFile)) return null;
+    const content = fs.readFileSync(authFile, "utf-8");
     return JSON.parse(content) as CodexAuthFile;
   } catch {
     return null;
@@ -81,13 +85,13 @@ const openaiCodexPlugin = {
       id: PROVIDER_ID,
       label: PROVIDER_LABEL,
       docsPath: "/providers/models",
-      aliases: ["codex", "chatgpt"],
+      aliases: ["codex-import"],
 
       auth: [
         {
           id: "codex-cli",
           label: "Codex CLI Auth",
-          hint: "Use existing Codex CLI authentication from ~/.codex/auth.json",
+          hint: "Import existing Codex CLI authentication (respects CODEX_HOME env var)",
           kind: "custom",
 
           run: async (ctx: ProviderAuthContext): Promise<ProviderAuthResult> => {
@@ -109,7 +113,7 @@ const openaiCodexPlugin = {
 
               spin.stop("Codex auth loaded");
 
-              const profileId = `openai-codex:${auth.tokens.account_id ?? "default"}`;
+              const profileId = `openai-codex-import:${auth.tokens.account_id ?? "default"}`;
               const expires = auth.tokens.expires_at
                 ? auth.tokens.expires_at * 1000
                 : decodeJwtExpiry(auth.tokens.access_token);
@@ -117,6 +121,19 @@ const openaiCodexPlugin = {
               const modelsConfig: Record<string, object> = {};
               for (const model of CODEX_MODELS) {
                 modelsConfig[model] = {};
+              }
+
+              // Validate refresh token - empty/missing refresh tokens cause silent failures
+              if (!auth.tokens.refresh_token) {
+                spin.stop("Invalid Codex auth");
+                await ctx.prompter.note(
+                  "Your Codex CLI auth is missing a refresh token.\n\n" +
+                    "Please re-authenticate: codex logout && codex login",
+                  "Re-authentication required",
+                );
+                throw new Error(
+                  "Codex CLI auth missing refresh token. Run: codex logout && codex login",
+                );
               }
 
               return {
@@ -127,7 +144,7 @@ const openaiCodexPlugin = {
                       type: "oauth",
                       provider: PROVIDER_ID,
                       access: auth.tokens.access_token,
-                      refresh: auth.tokens.refresh_token ?? "",
+                      refresh: auth.tokens.refresh_token,
                       expires: expires ?? Date.now() + 3600000,
                     },
                   },
@@ -141,7 +158,7 @@ const openaiCodexPlugin = {
                 },
                 defaultModel: DEFAULT_MODEL,
                 notes: [
-                  "Using Codex CLI auth from ~/.codex/auth.json",
+                  `Using Codex CLI auth from ${getAuthFilePath()}`,
                   `Available models: ${CODEX_MODELS.join(", ")}`,
                   "Tokens auto-refresh when needed.",
                 ],
