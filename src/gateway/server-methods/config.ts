@@ -31,22 +31,15 @@ import { loadOpenClawPlugins } from "../../plugins/loader.js";
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   validateConfigApplyParams,
   validateConfigGetParams,
   validateConfigPatchParams,
   validateConfigSchemaParams,
   validateConfigSetParams,
 } from "../protocol/index.js";
-
-function resolveBaseHash(params: unknown): string | null {
-  const raw = (params as { baseHash?: unknown })?.baseHash;
-  if (typeof raw !== "string") {
-    return null;
-  }
-  const trimmed = raw.trim();
-  return trimmed ? trimmed : null;
-}
+import { resolveBaseHashParam } from "./base-hash.js";
+import { parseRestartRequestParams } from "./restart-request.js";
+import { assertValidParams } from "./validation.js";
 
 function requireConfigBaseHash(
   params: unknown,
@@ -68,7 +61,7 @@ function requireConfigBaseHash(
     );
     return false;
   }
-  const baseHash = resolveBaseHash(params);
+  const baseHash = resolveBaseHashParam(params);
   if (!baseHash) {
     respond(
       false,
@@ -160,19 +153,7 @@ function resolveConfigRestartRequest(params: unknown): {
   deliveryContext: ReturnType<typeof extractDeliveryInfo>["deliveryContext"];
   threadId: ReturnType<typeof extractDeliveryInfo>["threadId"];
 } {
-  const sessionKey =
-    typeof (params as { sessionKey?: unknown }).sessionKey === "string"
-      ? (params as { sessionKey?: string }).sessionKey?.trim() || undefined
-      : undefined;
-  const note =
-    typeof (params as { note?: unknown }).note === "string"
-      ? (params as { note?: string }).note?.trim() || undefined
-      : undefined;
-  const restartDelayMsRaw = (params as { restartDelayMs?: unknown }).restartDelayMs;
-  const restartDelayMs =
-    typeof restartDelayMsRaw === "number" && Number.isFinite(restartDelayMsRaw)
-      ? Math.max(0, Math.floor(restartDelayMsRaw))
-      : undefined;
+  const { sessionKey, note, restartDelayMs } = parseRestartRequestParams(params);
 
   // Extract deliveryContext + threadId for routing after restart
   // Supports both :thread: (most channels) and :topic: (Telegram)
@@ -258,15 +239,7 @@ function loadSchemaWithPlugins(): ConfigSchemaResponse {
 
 export const configHandlers: GatewayRequestHandlers = {
   "config.get": async ({ params, respond }) => {
-    if (!validateConfigGetParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid config.get params: ${formatValidationErrors(validateConfigGetParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateConfigGetParams, "config.get", respond)) {
       return;
     }
     const snapshot = await readConfigFileSnapshot();
@@ -274,29 +247,13 @@ export const configHandlers: GatewayRequestHandlers = {
     respond(true, redactConfigSnapshot(snapshot, schema.uiHints), undefined);
   },
   "config.schema": ({ params, respond }) => {
-    if (!validateConfigSchemaParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid config.schema params: ${formatValidationErrors(validateConfigSchemaParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateConfigSchemaParams, "config.schema", respond)) {
       return;
     }
     respond(true, loadSchemaWithPlugins(), undefined);
   },
   "config.set": async ({ params, respond }) => {
-    if (!validateConfigSetParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid config.set params: ${formatValidationErrors(validateConfigSetParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateConfigSetParams, "config.set", respond)) {
       return;
     }
     const { snapshot, writeOptions } = await readConfigFileSnapshotForWrite();
@@ -319,15 +276,7 @@ export const configHandlers: GatewayRequestHandlers = {
     );
   },
   "config.patch": async ({ params, respond }) => {
-    if (!validateConfigPatchParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid config.patch params: ${formatValidationErrors(validateConfigPatchParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateConfigPatchParams, "config.patch", respond)) {
       return;
     }
     const { snapshot, writeOptions } = await readConfigFileSnapshotForWrite();
@@ -433,15 +382,7 @@ export const configHandlers: GatewayRequestHandlers = {
     );
   },
   "config.apply": async ({ params, respond }) => {
-    if (!validateConfigApplyParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid config.apply params: ${formatValidationErrors(validateConfigApplyParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateConfigApplyParams, "config.apply", respond)) {
       return;
     }
     const { snapshot, writeOptions } = await readConfigFileSnapshotForWrite();

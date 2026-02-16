@@ -42,6 +42,7 @@ import {
 } from "../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import { buildUntrustedChannelMetadata } from "../../security/channel-metadata.js";
+import { chunkItems } from "../../utils/chunk-items.js";
 import { loadWebMedia } from "../../web/media.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import {
@@ -51,7 +52,7 @@ import {
   normalizeDiscordSlug,
   resolveDiscordChannelConfigWithFallback,
   resolveDiscordGuildEntry,
-  resolveDiscordMemberAllowed,
+  resolveDiscordMemberAccessState,
   resolveDiscordOwnerAllowFrom,
 } from "./allow-list.js";
 import { resolveDiscordChannelInfo } from "./message-utils.js";
@@ -144,17 +145,6 @@ function readDiscordCommandArgs(
     }
   }
   return Object.keys(values).length > 0 ? { values } : undefined;
-}
-
-function chunkItems<T>(items: T[], size: number): T[][] {
-  if (size <= 0) {
-    return [items];
-  }
-  const rows: T[][] = [];
-  for (let i = 0; i < items.length; i += size) {
-    rows.push(items.slice(i, i + size));
-  }
-  return rows;
 }
 
 const DISCORD_COMMAND_ARG_CUSTOM_ID_KEY = "cmdarg";
@@ -667,18 +657,11 @@ async function dispatchDiscordCommandInteraction(params: {
     }
   }
   if (!isDirectMessage) {
-    const channelUsers = channelConfig?.users ?? guildInfo?.users;
-    const channelRoles = channelConfig?.roles ?? guildInfo?.roles;
-    const hasAccessRestrictions =
-      (Array.isArray(channelUsers) && channelUsers.length > 0) ||
-      (Array.isArray(channelRoles) && channelRoles.length > 0);
-    const memberAllowed = resolveDiscordMemberAllowed({
-      userAllowList: channelUsers,
-      roleAllowList: channelRoles,
+    const { hasAccessRestrictions, memberAllowed } = resolveDiscordMemberAccessState({
+      channelConfig,
+      guildInfo,
       memberRoleIds,
-      userId: sender.id,
-      userName: sender.name,
-      userTag: sender.tag,
+      sender,
     });
     const authorizers = useAccessGroups
       ? [

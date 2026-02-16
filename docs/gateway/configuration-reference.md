@@ -1238,6 +1238,8 @@ Variables are case-insensitive. `{think}` is an alias for `{thinkingLevel}`.
 ### Ack reaction
 
 - Defaults to active agent's `identity.emoji`, otherwise `"👀"`. Set `""` to disable.
+- Per-channel overrides: `channels.<channel>.ackReaction`, `channels.<channel>.accounts.<id>.ackReaction`.
+- Resolution order: account → channel → `messages.ackReaction` → identity fallback.
 - Scope: `group-mentions` (default), `group-all`, `direct`, `all`.
 - `removeAckAfterReply`: removes ack after reply (Slack/Discord/Telegram/Google Chat only).
 
@@ -1505,6 +1507,31 @@ Provider auth follows standard order: auth profiles → env vars → `models.pro
   },
 }
 ```
+
+### `tools.sessions`
+
+Controls which sessions can be targeted by the session tools (`sessions_list`, `sessions_history`, `sessions_send`).
+
+Default: `tree` (current session + sessions spawned by it, such as subagents).
+
+```json5
+{
+  tools: {
+    sessions: {
+      // "self" | "tree" | "agent" | "all"
+      visibility: "tree",
+    },
+  },
+}
+```
+
+Notes:
+
+- `self`: only the current session key.
+- `tree`: current session + sessions spawned by the current session (subagents).
+- `agent`: any session belonging to the current agent id (can include other users if you run per-sender sessions under the same agent id).
+- `all`: any session. Cross-agent targeting still requires `tools.agentToAgent`.
+- Sandbox clamp: when the current session is sandboxed and `agents.defaults.sandbox.sessionToolsVisibility="spawned"`, visibility is forced to `tree` even if `tools.sessions.visibility="all"`.
 
 ### `tools.subagents`
 
@@ -2293,12 +2320,16 @@ Current builds no longer include the TCP bridge. Nodes connect over the Gateway 
   cron: {
     enabled: true,
     maxConcurrentRuns: 2,
+    webhook: "https://example.invalid/cron-finished", // optional, must be http:// or https://
+    webhookToken: "replace-with-dedicated-token", // optional bearer token for outbound webhook auth
     sessionRetention: "24h", // duration string or false
   },
 }
 ```
 
 - `sessionRetention`: how long to keep completed cron sessions before pruning. Default: `24h`.
+- `webhook`: finished-run webhook endpoint, only used when the job has `notify: true`.
+- `webhookToken`: dedicated bearer token for webhook auth, if omitted no auth header is sent.
 
 See [Cron Jobs](/automation/cron-jobs).
 
