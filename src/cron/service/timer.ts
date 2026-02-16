@@ -556,7 +556,7 @@ export async function executeJob(
     sessionKey?: string;
   };
   try {
-    let timeoutId: NodeJS.Timeout;
+    let timeoutId: NodeJS.Timeout | undefined;
     coreResult = await Promise.race([
       executeJobCore(state, job),
       new Promise<never>((_, reject) => {
@@ -565,7 +565,7 @@ export async function executeJob(
           jobTimeoutMs,
         );
       }),
-    ]).finally(() => clearTimeout(timeoutId!));
+    ]).finally(() => timeoutId && clearTimeout(timeoutId));
   } catch (err) {
     coreResult = { status: "error", error: String(err) };
   }
