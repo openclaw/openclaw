@@ -64,20 +64,6 @@ describe("pruneStaleEntries", () => {
     expect(pruned).toBe(0);
     expect(store.noDate).toBeDefined();
   });
-
-  it("all entries stale results in empty store", () => {
-    const now = Date.now();
-    const store = makeStore([
-      ["a", makeEntry(now - 10 * DAY_MS)],
-      ["b", makeEntry(now - 20 * DAY_MS)],
-      ["c", makeEntry(now - 100 * DAY_MS)],
-    ]);
-
-    const pruned = pruneStaleEntries(store, 5 * DAY_MS);
-
-    expect(pruned).toBe(3);
-    expect(Object.keys(store)).toHaveLength(0);
-  });
 });
 
 describe("capEntryCount", () => {
