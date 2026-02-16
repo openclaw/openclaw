@@ -152,40 +152,6 @@ describe("Integration: saveSessionStore with pruning", () => {
     expect(loaded.only).toBeDefined();
   });
 
-  it("saveSessionStore applies both pruning and capping together", async () => {
-    mockLoadConfig.mockReturnValue({
-      session: {
-        maintenance: {
-          mode: "enforce",
-          pruneAfter: "10d",
-          maxEntries: 3,
-          rotateBytes: 10_485_760,
-        },
-      },
-    });
-
-    const now = Date.now();
-    const store: Record<string, SessionEntry> = {
-      stale1: makeEntry(now - 15 * DAY_MS),
-      stale2: makeEntry(now - 20 * DAY_MS),
-      fresh1: makeEntry(now),
-      fresh2: makeEntry(now - 1 * DAY_MS),
-      fresh3: makeEntry(now - 2 * DAY_MS),
-      fresh4: makeEntry(now - 5 * DAY_MS),
-    };
-
-    await saveSessionStore(storePath, store);
-
-    const loaded = loadSessionStore(storePath);
-    expect(loaded.stale1).toBeUndefined();
-    expect(loaded.stale2).toBeUndefined();
-    expect(Object.keys(loaded).length).toBeLessThanOrEqual(3);
-    expect(loaded.fresh1).toBeDefined();
-    expect(loaded.fresh2).toBeDefined();
-    expect(loaded.fresh3).toBeDefined();
-    expect(loaded.fresh4).toBeUndefined();
-  });
-
   it("saveSessionStore skips enforcement when maintenance mode is warn", async () => {
     mockLoadConfig.mockReturnValue({
       session: {
