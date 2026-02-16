@@ -59,9 +59,8 @@ export function resolveCronSession(params: {
   }
 
   const sessionEntry: SessionEntry = {
-    // Spread existing entry to preserve conversation context when reusing
-    // (the spread already copies all fields when !isNewSession, no need to re-assign)
-    ...(isNewSession ? undefined : entry),
+    // Preserve existing per-session overrides even when rolling to a new sessionId.
+    ...entry,
     // Always update these core fields
     sessionId,
     updatedAt: params.nowMs,
