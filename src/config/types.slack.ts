@@ -161,6 +161,13 @@ export type SlackAccountConfig = {
    * Slack uses shortcodes (e.g., "eyes") rather than unicode emoji.
    */
   ackReaction?: string;
+  /**
+   * Rate-limit handling policy for bulk Slack API calls.
+   * - "retry" (default): always paginate users.list, retry on 429.
+   * - "fail-fast": use targeted APIs (users.info, users.lookupByEmail) for
+   *   ID/email entries and reject rate-limited bulk calls immediately.
+   */
+  rateLimitPolicy?: "retry" | "fail-fast";
 };
 
 export type SlackConfig = {

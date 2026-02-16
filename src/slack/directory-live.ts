@@ -1,7 +1,7 @@
 import type { DirectoryConfigParams } from "../channels/plugins/directory-config.js";
 import type { ChannelDirectoryEntry } from "../channels/plugins/types.js";
 import { resolveSlackAccount } from "./accounts.js";
-import { createSlackWebClient } from "./client.js";
+import { createSlackWebClient, createSlackWebClientBulk } from "./client.js";
 
 type SlackUser = {
   id?: string;
@@ -34,10 +34,16 @@ type SlackListChannelsResponse = {
   response_metadata?: { next_cursor?: string };
 };
 
-function resolveReadToken(params: DirectoryConfigParams): string | undefined {
+function resolveReadTokenAndPolicy(params: DirectoryConfigParams): {
+  token: string | undefined;
+  rateLimitPolicy: "retry" | "fail-fast" | undefined;
+} {
   const account = resolveSlackAccount({ cfg: params.cfg, accountId: params.accountId });
   const userToken = account.config.userToken?.trim() || undefined;
-  return userToken ?? account.botToken?.trim();
+  return {
+    token: userToken ?? account.botToken?.trim(),
+    rateLimitPolicy: account.config.rateLimitPolicy,
+  };
 }
 
 function normalizeQuery(value?: string | null): string {
@@ -62,11 +68,12 @@ function buildChannelRank(channel: SlackChannel): number {
 export async function listSlackDirectoryPeersLive(
   params: DirectoryConfigParams,
 ): Promise<ChannelDirectoryEntry[]> {
-  const token = resolveReadToken(params);
+  const { token, rateLimitPolicy } = resolveReadTokenAndPolicy(params);
   if (!token) {
     return [];
   }
-  const client = createSlackWebClient(token);
+  const client =
+    rateLimitPolicy === "fail-fast" ? createSlackWebClientBulk(token) : createSlackWebClient(token);
   const query = normalizeQuery(params.query);
   const members: SlackUser[] = [];
   let cursor: string | undefined;
@@ -128,11 +135,12 @@ export async function listSlackDirectoryPeersLive(
 export async function listSlackDirectoryGroupsLive(
   params: DirectoryConfigParams,
 ): Promise<ChannelDirectoryEntry[]> {
-  const token = resolveReadToken(params);
+  const { token, rateLimitPolicy } = resolveReadTokenAndPolicy(params);
   if (!token) {
     return [];
   }
-  const client = createSlackWebClient(token);
+  const client =
+    rateLimitPolicy === "fail-fast" ? createSlackWebClientBulk(token) : createSlackWebClient(token);
   const query = normalizeQuery(params.query);
   const channels: SlackChannel[] = [];
   let cursor: string | undefined;

@@ -291,7 +291,11 @@ async function resolveSlackNames(params: {
   if (!token) {
     return new Map<string, string>();
   }
-  const resolved = await resolveSlackUserAllowlist({ token, entries: params.entries });
+  const resolved = await resolveSlackUserAllowlist({
+    token,
+    entries: params.entries,
+    rateLimitPolicy: account.config.rateLimitPolicy,
+  });
   const map = new Map<string, string>();
   for (const entry of resolved) {
     if (entry.resolved && entry.name) {

@@ -289,6 +289,7 @@ async function promptSlackAllowFrom(params: {
     const results = await resolveSlackUserAllowlist({
       token,
       entries: parts,
+      rateLimitPolicy: resolved.config.rateLimitPolicy,
     }).catch(() => null);
     if (!results) {
       await params.prompter.note("Failed to resolve usernames. Try again.", "Slack allowlist");

@@ -575,6 +575,7 @@ export const SlackAccountSchema = z
     heartbeat: ChannelHeartbeatVisibilitySchema,
     responsePrefix: z.string().optional(),
     ackReaction: z.string().optional(),
+    rateLimitPolicy: z.enum(["retry", "fail-fast"]).optional(),
   })
   .strict()
   .superRefine((value, ctx) => {
