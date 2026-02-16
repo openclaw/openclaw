@@ -1154,10 +1154,10 @@ runSuite("gateway live (dev agent, profile keys)", () => {
     await fs.writeFile(toolProbePath, `nonceA=${nonceA}\nnonceB=${nonceB}\n`);
 
     const port = await getFreeGatewayPort();
-    const server = await startGatewayServer({
-      configPath: cfg.__meta?.path,
-      port,
-      token,
+    const server = await startGatewayServer(port, {
+      bind: "loopback",
+      auth: { mode: "token", token },
+      controlUiEnabled: false,
     });
 
     const client = await connectClient({
