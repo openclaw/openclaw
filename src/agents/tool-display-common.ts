@@ -193,7 +193,8 @@ export function resolveWriteDetail(toolKey: string, args: unknown): string | und
     return undefined;
   }
 
-  const path = resolvePathArg(record) ?? (typeof record.url === "string" ? record.url.trim() : undefined);
+  const path =
+    resolvePathArg(record) ?? (typeof record.url === "string" ? record.url.trim() : undefined);
   if (!path) {
     return undefined;
   }
@@ -217,6 +218,52 @@ export function resolveWriteDetail(toolKey: string, args: unknown): string | und
   }
 
   return `${destinationPrefix} ${path}`;
+}
+
+export function resolveWebSearchDetail(args: unknown): string | undefined {
+  const record = asRecord(args);
+  if (!record) {
+    return undefined;
+  }
+
+  const query = typeof record.query === "string" ? record.query.trim() : undefined;
+  const count =
+    typeof record.count === "number" && Number.isFinite(record.count) && record.count > 0
+      ? Math.floor(record.count)
+      : undefined;
+
+  if (!query) {
+    return undefined;
+  }
+
+  return count !== undefined ? `for "${query}" (top ${count})` : `for "${query}"`;
+}
+
+export function resolveWebFetchDetail(args: unknown): string | undefined {
+  const record = asRecord(args);
+  if (!record) {
+    return undefined;
+  }
+
+  const url = typeof record.url === "string" ? record.url.trim() : undefined;
+  if (!url) {
+    return undefined;
+  }
+
+  const mode = typeof record.extractMode === "string" ? record.extractMode.trim() : undefined;
+  const maxChars =
+    typeof record.maxChars === "number" && Number.isFinite(record.maxChars) && record.maxChars > 0
+      ? Math.floor(record.maxChars)
+      : undefined;
+
+  const suffix = [
+    mode ? `mode ${mode}` : undefined,
+    maxChars !== undefined ? `max ${maxChars} chars` : undefined,
+  ]
+    .filter((value): value is string => Boolean(value))
+    .join(", ");
+
+  return suffix ? `from ${url} (${suffix})` : `from ${url}`;
 }
 
 function stripOuterQuotes(value: string | undefined): string | undefined {
@@ -297,7 +344,7 @@ function binaryName(token: string | undefined): string | undefined {
     return undefined;
   }
   const cleaned = stripOuterQuotes(token) ?? token;
-  const segment = cleaned.split(/[\/]/).at(-1) ?? cleaned;
+  const segment = cleaned.split(/[/]/).at(-1) ?? cleaned;
   return segment.trim().toLowerCase();
 }
 
@@ -371,7 +418,11 @@ function positionalArgs(words: string[], from = 1, optionsWithValue: string[] = 
   return args;
 }
 
-function firstPositional(words: string[], from = 1, optionsWithValue: string[] = []): string | undefined {
+function firstPositional(
+  words: string[],
+  from = 1,
+  optionsWithValue: string[] = [],
+): string | undefined {
   return positionalArgs(words, from, optionsWithValue)[0];
 }
 
@@ -425,7 +476,10 @@ function unwrapShellWrapper(command: string): string {
     return command;
   }
 
-  const inner = words.slice(flagIndex + 1).join(" ").trim();
+  const inner = words
+    .slice(flagIndex + 1)
+    .join(" ")
+    .trim();
   return inner ? (stripOuterQuotes(inner) ?? command) : command;
 }
 
@@ -522,7 +576,7 @@ function stripShellPreamble(command: string): string {
       { index: newlineIndex, length: 1 },
     ]
       .filter((candidate) => candidate.index >= 0)
-      .sort((a, b) => a.index - b.index);
+      .toSorted((a, b) => a.index - b.index);
 
     const first = candidates[0];
     const head = (first ? rest.slice(0, first.index) : rest).trim();
@@ -550,25 +604,6 @@ function summarizeKnownExec(words: string[]): string {
   const bin = binaryName(words[0]) ?? "command";
 
   if (bin === "git") {
-    const subcommands = new Set([
-      "status",
-      "diff",
-      "log",
-      "show",
-      "branch",
-      "checkout",
-      "switch",
-      "commit",
-      "pull",
-      "push",
-      "fetch",
-      "merge",
-      "rebase",
-      "add",
-      "restore",
-      "reset",
-      "stash",
-    ]);
     const globalWithValue = new Set([
       "-C",
       "-c",
@@ -675,7 +710,10 @@ function summarizeKnownExec(words: string[]): string {
   if (bin === "head" || bin === "tail") {
     const lines =
       optionValue(words, ["-n", "--lines"]) ??
-      words.slice(1).find((token) => /^-\d+$/.test(token))?.slice(1);
+      words
+        .slice(1)
+        .find((token) => /^-\d+$/.test(token))
+        ?.slice(1);
     const positional = positionalArgs(words, 1, ["-n", "--lines"]);
     let target = positional.at(-1);
     if (target && /^\d+$/.test(target) && positional.length === 1) {
@@ -791,15 +829,22 @@ function summarizeKnownExec(words: string[]): string {
       return `run ${bin} inline script`;
     }
 
-    const script = firstPositional(words, 1, ["-c", "-e", "--eval", "-m"]);
+    const nodeOptsWithValue = ["-e", "--eval", "-m"];
+    const otherOptsWithValue = ["-c", "-e", "--eval", "-m"];
+    const script = firstPositional(
+      words,
+      1,
+      bin === "node" ? nodeOptsWithValue : otherOptsWithValue,
+    );
     if (!script) {
       return `run ${bin}`;
     }
 
     if (bin === "node") {
-      const mode = words.includes("--check") || words.includes("-c")
-        ? "check js syntax for"
-        : "run node script";
+      const mode =
+        words.includes("--check") || words.includes("-c")
+          ? "check js syntax for"
+          : "run node script";
       return `${mode} ${script}`;
     }
 
@@ -815,7 +860,7 @@ function summarizeKnownExec(words: string[]): string {
   if (!arg || arg.length > 48) {
     return `run ${bin}`;
   }
-  return /^[A-Za-z0-9._\/-]+$/.test(arg) ? `run ${bin} ${arg}` : `run ${bin}`;
+  return /^[A-Za-z0-9._/-]+$/.test(arg) ? `run ${bin} ${arg}` : `run ${bin}`;
 }
 
 function summarizeExecCommand(command: string): string | undefined {

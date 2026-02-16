@@ -7,6 +7,8 @@ import {
   resolveDetailFromKeys,
   resolveExecDetail,
   resolveReadDetail,
+  resolveWebFetchDetail,
+  resolveWebSearchDetail,
   resolveWriteDetail,
   type ToolDisplaySpec as ToolDisplaySpecBase,
 } from "../../../src/agents/tool-display-common.js";
@@ -92,36 +94,12 @@ export function resolveToolDisplay(params: {
     detail = resolveWriteDetail(key, params.args);
   }
 
-  if (!detail && key === "web_search" && params.args && typeof params.args === "object") {
-    const record = params.args as Record<string, unknown>;
-    const query = typeof record.query === "string" ? record.query.trim() : undefined;
-    const count =
-      typeof record.count === "number" && Number.isFinite(record.count) && record.count > 0
-        ? Math.floor(record.count)
-        : undefined;
-    if (query) {
-      detail = count !== undefined ? `for "${query}" (top ${count})` : `for "${query}"`;
-    }
+  if (!detail && key === "web_search") {
+    detail = resolveWebSearchDetail(params.args);
   }
 
-  if (!detail && key === "web_fetch" && params.args && typeof params.args === "object") {
-    const record = params.args as Record<string, unknown>;
-    const url = typeof record.url === "string" ? record.url.trim() : undefined;
-    const mode =
-      typeof record.extractMode === "string" ? record.extractMode.trim() : undefined;
-    const maxChars =
-      typeof record.maxChars === "number" && Number.isFinite(record.maxChars) && record.maxChars > 0
-        ? Math.floor(record.maxChars)
-        : undefined;
-    if (url) {
-      const suffix = [
-        mode ? `mode ${mode}` : undefined,
-        maxChars !== undefined ? `max ${maxChars} chars` : undefined,
-      ]
-        .filter((value): value is string => Boolean(value))
-        .join(", ");
-      detail = suffix ? `from ${url} (${suffix})` : `from ${url}`;
-    }
+  if (!detail && key === "web_fetch") {
+    detail = resolveWebFetchDetail(params.args);
   }
 
   const detailKeys = actionSpec?.detailKeys ?? spec?.detailKeys ?? FALLBACK.detailKeys ?? [];
