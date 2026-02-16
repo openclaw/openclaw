@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveBrewExecutable } from "../infra/brew.js";
-import { runCommandWithTimeout } from "../process/exec.js";
+import { runCommandWithTimeout, type CommandOptions } from "../process/exec.js";
 import { scanDirectoryWithSummary } from "../security/skill-scanner.js";
 import { resolveUserPath } from "../utils.js";
 import { installDownloadSpec } from "./skills-install-download.js";
@@ -224,6 +224,209 @@ async function resolveBrewBinDir(timeoutMs: number, brewExe?: string): Promise<s
   return undefined;
 }
 
+type CommandResult = {
+  code: number | null;
+  stdout: string;
+  stderr: string;
+};
+
+function createInstallFailure(params: {
+  message: string;
+  stdout?: string;
+  stderr?: string;
+  code?: number | null;
+}): SkillInstallResult {
+  return {
+    ok: false,
+    message: params.message,
+    stdout: params.stdout?.trim() ?? "",
+    stderr: params.stderr?.trim() ?? "",
+    code: params.code ?? null,
+  };
+}
+
+function createInstallSuccess(result: CommandResult): SkillInstallResult {
+  return {
+    ok: true,
+    message: "Installed",
+    stdout: result.stdout.trim(),
+    stderr: result.stderr.trim(),
+    code: result.code,
+  };
+}
+
+async function runCommandSafely(
+  argv: string[],
+  optionsOrTimeout: number | CommandOptions,
+): Promise<CommandResult> {
+  try {
+    const result = await runCommandWithTimeout(argv, optionsOrTimeout);
+    return {
+      code: result.code,
+      stdout: result.stdout,
+      stderr: result.stderr,
+    };
+  } catch (err) {
+    return {
+      code: null,
+      stdout: "",
+      stderr: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+async function runBestEffortCommand(
+  argv: string[],
+  optionsOrTimeout: number | CommandOptions,
+): Promise<void> {
+  await runCommandSafely(argv, optionsOrTimeout);
+}
+
+function resolveBrewMissingFailure(spec: SkillInstallSpec): SkillInstallResult {
+  const formula = spec.formula ?? "this package";
+  const hint =
+    process.platform === "linux"
+      ? `Homebrew is not installed. Install it from https://brew.sh or install "${formula}" manually using your system package manager (e.g. apt, dnf, pacman).`
+      : "Homebrew is not installed. Install it from https://brew.sh";
+  return createInstallFailure({ message: `brew not installed — ${hint}` });
+}
+
+async function ensureUvInstalled(params: {
+  spec: SkillInstallSpec;
+  brewExe?: string;
+  timeoutMs: number;
+}): Promise<SkillInstallResult | undefined> {
+  if (params.spec.kind !== "uv" || hasBinary("uv")) {
+    return undefined;
+  }
+
+  if (!params.brewExe) {
+    return createInstallFailure({
+      message:
+        "uv not installed — install manually: https://docs.astral.sh/uv/getting-started/installation/",
+    });
+  }
+
+  const brewResult = await runCommandSafely([params.brewExe, "install", "uv"], {
+    timeoutMs: params.timeoutMs,
+  });
+  if (brewResult.code === 0) {
+    return undefined;
+  }
+
+  return createInstallFailure({
+    message: "Failed to install uv (brew)",
+    ...brewResult,
+  });
+}
+
+async function installGoViaApt(timeoutMs: number): Promise<SkillInstallResult | undefined> {
+  const aptInstallArgv = ["apt-get", "install", "-y", "golang-go"];
+  const aptUpdateArgv = ["apt-get", "update", "-qq"];
+  const aptFailureMessage =
+    "go not installed — automatic install via apt failed. Install manually: https://go.dev/doc/install";
+
+  const isRoot = typeof process.getuid === "function" && process.getuid() === 0;
+  if (isRoot) {
+    // Best effort: fresh containers often need package indexes populated.
+    await runBestEffortCommand(aptUpdateArgv, { timeoutMs });
+    const aptResult = await runCommandSafely(aptInstallArgv, { timeoutMs });
+    if (aptResult.code === 0) {
+      return undefined;
+    }
+    return createInstallFailure({
+      message: aptFailureMessage,
+      ...aptResult,
+    });
+  }
+
+  if (!hasBinary("sudo")) {
+    return createInstallFailure({
+      message:
+        "go not installed — apt-get is available but sudo is not installed. Install manually: https://go.dev/doc/install",
+    });
+  }
+
+  const sudoCheck = await runCommandSafely(["sudo", "-n", "true"], {
+    timeoutMs: 5_000,
+  });
+  if (sudoCheck.code !== 0) {
+    return createInstallFailure({
+      message:
+        "go not installed — apt-get is available but sudo is not usable (missing or requires a password). Install manually: https://go.dev/doc/install",
+      ...sudoCheck,
+    });
+  }
+
+  // Best effort: fresh containers often need package indexes populated.
+  await runBestEffortCommand(["sudo", ...aptUpdateArgv], { timeoutMs });
+  const aptResult = await runCommandSafely(["sudo", ...aptInstallArgv], {
+    timeoutMs,
+  });
+  if (aptResult.code === 0) {
+    return undefined;
+  }
+
+  return createInstallFailure({
+    message: aptFailureMessage,
+    ...aptResult,
+  });
+}
+
+async function ensureGoInstalled(params: {
+  spec: SkillInstallSpec;
+  brewExe?: string;
+  timeoutMs: number;
+}): Promise<SkillInstallResult | undefined> {
+  if (params.spec.kind !== "go" || hasBinary("go")) {
+    return undefined;
+  }
+
+  if (params.brewExe) {
+    const brewResult = await runCommandSafely([params.brewExe, "install", "go"], {
+      timeoutMs: params.timeoutMs,
+    });
+    if (brewResult.code === 0) {
+      return undefined;
+    }
+    return createInstallFailure({
+      message: "Failed to install go (brew)",
+      ...brewResult,
+    });
+  }
+
+  if (hasBinary("apt-get")) {
+    return installGoViaApt(params.timeoutMs);
+  }
+
+  return createInstallFailure({
+    message: "go not installed — install manually: https://go.dev/doc/install",
+  });
+}
+
+async function executeInstallCommand(params: {
+  argv: string[] | null;
+  timeoutMs: number;
+  env?: NodeJS.ProcessEnv;
+}): Promise<SkillInstallResult> {
+  if (!params.argv || params.argv.length === 0) {
+    return createInstallFailure({ message: "invalid install command" });
+  }
+
+  const result = await runCommandSafely(params.argv, {
+    timeoutMs: params.timeoutMs,
+    env: params.env,
+  });
+  if (result.code === 0) {
+    return createInstallSuccess(result);
+  }
+
+  return createInstallFailure({
+    message: formatInstallFailureMessage(result),
+    ...result,
+  });
+}
+
 export async function installSkill(params: SkillInstallRequest): Promise<SkillInstallResult> {
   const timeoutMs = Math.min(Math.max(params.timeoutMs ?? 300_000, 1_000), 900_000);
   const workspaceDir = resolveUserPath(params.workspaceDir);
@@ -275,233 +478,22 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
 
   const brewExe = hasBinary("brew") ? "brew" : resolveBrewExecutable();
   if (spec.kind === "brew" && !brewExe) {
-    const formula = spec.formula ?? "this package";
-    const hint =
-      process.platform === "linux"
-        ? `Homebrew is not installed. Install it from https://brew.sh or install "${formula}" manually using your system package manager (e.g. apt, dnf, pacman).`
-        : "Homebrew is not installed. Install it from https://brew.sh";
-    return withWarnings(
-      {
-        ok: false,
-        message: `brew not installed — ${hint}`,
-        stdout: "",
-        stderr: "",
-        code: null,
-      },
-      warnings,
-    );
-  }
-  if (spec.kind === "uv" && !hasBinary("uv")) {
-    if (brewExe) {
-      const brewResult = await runCommandWithTimeout([brewExe, "install", "uv"], {
-        timeoutMs,
-      });
-      if (brewResult.code !== 0) {
-        return withWarnings(
-          {
-            ok: false,
-            message: "Failed to install uv (brew)",
-            stdout: brewResult.stdout.trim(),
-            stderr: brewResult.stderr.trim(),
-            code: brewResult.code,
-          },
-          warnings,
-        );
-      }
-    } else {
-      return withWarnings(
-        {
-          ok: false,
-          message:
-            "uv not installed — install manually: https://docs.astral.sh/uv/getting-started/installation/",
-          stdout: "",
-          stderr: "",
-          code: null,
-        },
-        warnings,
-      );
-    }
-  }
-  if (!command.argv || command.argv.length === 0) {
-    return withWarnings(
-      {
-        ok: false,
-        message: "invalid install command",
-        stdout: "",
-        stderr: "",
-        code: null,
-      },
-      warnings,
-    );
+    return withWarnings(resolveBrewMissingFailure(spec), warnings);
   }
 
-  if (spec.kind === "brew" && brewExe && command.argv[0] === "brew") {
-    command.argv[0] = brewExe;
+  const uvInstallFailure = await ensureUvInstalled({ spec, brewExe, timeoutMs });
+  if (uvInstallFailure) {
+    return withWarnings(uvInstallFailure, warnings);
   }
 
-  if (spec.kind === "go" && !hasBinary("go")) {
-    if (brewExe) {
-      const brewResult = await runCommandWithTimeout([brewExe, "install", "go"], {
-        timeoutMs,
-      });
-      if (brewResult.code !== 0) {
-        return withWarnings(
-          {
-            ok: false,
-            message: "Failed to install go (brew)",
-            stdout: brewResult.stdout.trim(),
-            stderr: brewResult.stderr.trim(),
-            code: brewResult.code,
-          },
-          warnings,
-        );
-      }
-    } else if (hasBinary("apt-get")) {
-      const aptInstallArgv = ["apt-get", "install", "-y", "golang-go"];
-      const aptUpdateArgv = ["apt-get", "update", "-qq"];
-      const isRoot = typeof process.getuid === "function" && process.getuid() === 0;
+  const goInstallFailure = await ensureGoInstalled({ spec, brewExe, timeoutMs });
+  if (goInstallFailure) {
+    return withWarnings(goInstallFailure, warnings);
+  }
 
-      if (isRoot) {
-        try {
-          // Best effort: fresh containers often need package indexes populated.
-          await runCommandWithTimeout(aptUpdateArgv, { timeoutMs });
-        } catch {
-          // ignore and continue; install command will return actionable stderr on failure
-        }
-
-        let aptResult;
-        try {
-          aptResult = await runCommandWithTimeout(aptInstallArgv, { timeoutMs });
-        } catch (err) {
-          const stderr = err instanceof Error ? err.message : String(err);
-          return withWarnings(
-            {
-              ok: false,
-              message:
-                "go not installed — automatic install via apt failed. Install manually: https://go.dev/doc/install",
-              stdout: "",
-              stderr,
-              code: null,
-            },
-            warnings,
-          );
-        }
-        if (aptResult.code !== 0) {
-          return withWarnings(
-            {
-              ok: false,
-              message:
-                "go not installed — automatic install via apt failed. Install manually: https://go.dev/doc/install",
-              stdout: aptResult.stdout.trim(),
-              stderr: aptResult.stderr.trim(),
-              code: aptResult.code,
-            },
-            warnings,
-          );
-        }
-      } else {
-        // Check for non-interactive sudo before attempting apt — avoids hanging
-        // in containers or environments where sudo is missing or requires a password.
-        if (!hasBinary("sudo")) {
-          return withWarnings(
-            {
-              ok: false,
-              message:
-                "go not installed — apt-get is available but sudo is not installed. Install manually: https://go.dev/doc/install",
-              stdout: "",
-              stderr: "",
-              code: null,
-            },
-            warnings,
-          );
-        }
-
-        let sudoCheck;
-        try {
-          sudoCheck = await runCommandWithTimeout(["sudo", "-n", "true"], {
-            timeoutMs: 5_000,
-          });
-        } catch (err) {
-          const stderr = err instanceof Error ? err.message : String(err);
-          return withWarnings(
-            {
-              ok: false,
-              message:
-                "go not installed — apt-get is available but sudo is not usable (missing or requires a password). Install manually: https://go.dev/doc/install",
-              stdout: "",
-              stderr,
-              code: null,
-            },
-            warnings,
-          );
-        }
-        if (sudoCheck.code !== 0) {
-          return withWarnings(
-            {
-              ok: false,
-              message:
-                "go not installed — apt-get is available but sudo is not usable (missing or requires a password). Install manually: https://go.dev/doc/install",
-              stdout: sudoCheck.stdout.trim(),
-              stderr: sudoCheck.stderr.trim(),
-              code: sudoCheck.code,
-            },
-            warnings,
-          );
-        }
-
-        try {
-          // Best effort: fresh containers often need package indexes populated.
-          await runCommandWithTimeout(["sudo", ...aptUpdateArgv], { timeoutMs });
-        } catch {
-          // ignore and continue; install command will return actionable stderr on failure
-        }
-
-        let aptResult;
-        try {
-          aptResult = await runCommandWithTimeout(["sudo", ...aptInstallArgv], {
-            timeoutMs,
-          });
-        } catch (err) {
-          const stderr = err instanceof Error ? err.message : String(err);
-          return withWarnings(
-            {
-              ok: false,
-              message:
-                "go not installed — automatic install via apt failed. Install manually: https://go.dev/doc/install",
-              stdout: "",
-              stderr,
-              code: null,
-            },
-            warnings,
-          );
-        }
-
-        if (aptResult.code !== 0) {
-          return withWarnings(
-            {
-              ok: false,
-              message:
-                "go not installed — automatic install via apt failed. Install manually: https://go.dev/doc/install",
-              stdout: aptResult.stdout.trim(),
-              stderr: aptResult.stderr.trim(),
-              code: aptResult.code,
-            },
-            warnings,
-          );
-        }
-      }
-    } else {
-      return withWarnings(
-        {
-          ok: false,
-          message: "go not installed — install manually: https://go.dev/doc/install",
-          stdout: "",
-          stderr: "",
-          code: null,
-        },
-        warnings,
-      );
-    }
+  const argv = command.argv ? [...command.argv] : null;
+  if (spec.kind === "brew" && brewExe && argv?.[0] === "brew") {
+    argv[0] = brewExe;
   }
 
   let env: NodeJS.ProcessEnv | undefined;
@@ -512,31 +504,5 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
     }
   }
 
-  const result = await (async () => {
-    const argv = command.argv;
-    if (!argv || argv.length === 0) {
-      return { code: null, stdout: "", stderr: "invalid install command" };
-    }
-    try {
-      return await runCommandWithTimeout(argv, {
-        timeoutMs,
-        env,
-      });
-    } catch (err) {
-      const stderr = err instanceof Error ? err.message : String(err);
-      return { code: null, stdout: "", stderr };
-    }
-  })();
-
-  const success = result.code === 0;
-  return withWarnings(
-    {
-      ok: success,
-      message: success ? "Installed" : formatInstallFailureMessage(result),
-      stdout: result.stdout.trim(),
-      stderr: result.stderr.trim(),
-      code: result.code,
-    },
-    warnings,
-  );
+  return withWarnings(await executeInstallCommand({ argv, timeoutMs, env }), warnings);
 }
