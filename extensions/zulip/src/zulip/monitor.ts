@@ -203,18 +203,31 @@ async function pollEvents(params: {
 }): Promise<ZulipEventsResponse> {
   // Wrap the parent signal with a per-poll timeout so we don't hang forever
   // if the Zulip server goes unresponsive during long-poll.
+  // REDUCED from 90s to 60s for faster recovery from stuck connections
   const POLL_TIMEOUT_MS = 60_000;
   const controller = new AbortController();
-  let aborted = false;
-  const safeAbort = () => {
-    if (!aborted) {
-      aborted = true;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+
+  const onTimeout = () => {
+    if (!controller.signal.aborted) {
       controller.abort();
     }
   };
-  const timer = setTimeout(safeAbort, POLL_TIMEOUT_MS);
-  const onParentAbort = () => safeAbort();
+
+  timer = setTimeout(onTimeout, POLL_TIMEOUT_MS);
+
+  const onParentAbort = () => {
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    if (!controller.signal.aborted) {
+      controller.abort();
+    }
+  };
+
   params.abortSignal?.addEventListener("abort", onParentAbort, { once: true });
+
   try {
     return await zulipRequest<ZulipEventsResponse>({
       auth: params.auth,
@@ -229,7 +242,9 @@ async function pollEvents(params: {
       abortSignal: controller.signal,
     });
   } finally {
-    clearTimeout(timer);
+    if (timer) {
+      clearTimeout(timer);
+    }
     params.abortSignal?.removeEventListener("abort", onParentAbort);
   }
 }
@@ -525,6 +540,24 @@ export async function monitorZulipProvider(
       });
       opts.statusSink?.({ lastInboundAt: Date.now() });
 
+      // Per-handler delivery signal: allows reply delivery to complete even if the monitor
+      // is stopping (e.g. gateway restart). Without this, in-flight HTTP calls to Zulip get
+      // aborted immediately, wasting the LLM tokens already spent generating the response.
+      const DELIVERY_GRACE_MS = 10_000;
+      const DELIVERY_TIMEOUT_MS = 60_000;
+      const deliveryController = new AbortController();
+      const deliverySignal = deliveryController.signal;
+      const deliveryTimer = setTimeout(() => {
+        if (!deliveryController.signal.aborted) deliveryController.abort();
+      }, DELIVERY_TIMEOUT_MS);
+      const onMainAbortForDelivery = () => {
+        // Give in-flight deliveries a grace period to finish before hard abort
+        setTimeout(() => {
+          if (!deliveryController.signal.aborted) deliveryController.abort();
+        }, DELIVERY_GRACE_MS);
+      };
+      abortSignal.addEventListener("abort", onMainAbortForDelivery, { once: true });
+
       const prefix = account.reactions;
       if (prefix.enabled) {
         await bestEffortReaction({
@@ -646,6 +679,8 @@ export async function monitorZulipProvider(
           ...prefixOptions,
           humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId),
           deliver: async (payload: ReplyPayload) => {
+            // Use deliverySignal (not abortSignal) so in-flight replies survive
+            // monitor shutdown with a grace period instead of being killed instantly.
             await deliverReply({
               account,
               auth,
@@ -653,7 +688,7 @@ export async function monitorZulipProvider(
               topic,
               payload,
               cfg,
-              abortSignal,
+              abortSignal: deliverySignal,
             });
             opts.statusSink?.({ lastOutboundAt: Date.now() });
             core.channel.activity.record({
@@ -687,12 +722,21 @@ export async function monitorZulipProvider(
         runtime.error?.(`zulip dispatch failed: ${String(err)}`);
       } finally {
         markDispatchIdle();
+        // Clean up delivery abort controller
+        clearTimeout(deliveryTimer);
+        abortSignal.removeEventListener("abort", onMainAbortForDelivery);
+
         // Stop typing indicator now that the reply has been sent.
         if (typeof msg.stream_id === "number") {
-          stopTypingIndicator({ auth, streamId: msg.stream_id, topic, abortSignal }).catch(
-            () => undefined,
-          );
+          stopTypingIndicator({
+            auth,
+            streamId: msg.stream_id,
+            topic,
+            abortSignal: deliverySignal,
+          }).catch(() => undefined);
         }
+        // Use deliverySignal for final reactions so they can still be posted
+        // during graceful shutdown (the grace period covers these too).
         if (account.reactions.enabled) {
           if (account.reactions.clearOnFinish) {
             await bestEffortReaction({
@@ -701,7 +745,7 @@ export async function monitorZulipProvider(
               op: "remove",
               emojiName: account.reactions.onStart,
               log: (m) => logger.debug?.(m),
-              abortSignal,
+              abortSignal: deliverySignal,
             });
           }
           const finalEmoji = ok ? account.reactions.onSuccess : account.reactions.onFailure;
@@ -711,8 +755,12 @@ export async function monitorZulipProvider(
             op: "add",
             emojiName: finalEmoji,
             log: (m) => logger.debug?.(m),
-            abortSignal,
+            abortSignal: deliverySignal,
           });
+        }
+        // Hard-abort delivery controller if it hasn't fired yet (cleanup)
+        if (!deliveryController.signal.aborted) {
+          deliveryController.abort();
         }
       }
     };
@@ -839,14 +887,33 @@ export async function monitorZulipProvider(
 
           retry = 0;
         } catch (err) {
-          if (stopped || abortSignal.aborted) {
+          // FIX: Only break if explicitly stopped, NOT on abort
+          // Abort errors (timeouts) should trigger queue re-registration
+          if (stopped) {
             break;
           }
+
           const status = extractZulipHttpStatus(err);
           const retryAfterMs = (err as ZulipHttpError).retryAfterMs;
-          if (status !== 429) {
-            queueId = "";
+
+          // FIX: Always clear queueId on ANY error to force re-registration
+          // This prevents stuck queues when fetch times out or aborts
+          queueId = "";
+
+          // Detect timeout/abort errors specifically for better logging
+          const isAbortError =
+            err instanceof Error &&
+            (err.name === "AbortError" ||
+              err.message?.includes("aborted") ||
+              err.message?.includes("timeout") ||
+              err.message?.includes("ETIMEDOUT"));
+
+          if (isAbortError) {
+            logger.warn(
+              `[zulip:${account.accountId}] poll timeout/abort detected (stream=${stream}, stage=${stage}): ${String(err)} - forcing queue re-registration`,
+            );
           }
+
           retry += 1;
           const backoffMs = computeZulipMonitorBackoffMs({
             attempt: retry,
@@ -854,7 +921,7 @@ export async function monitorZulipProvider(
             retryAfterMs,
           });
           logger.warn(
-            `[zulip:${account.accountId}] monitor error (stream=${stream}, stage=${stage}): ${String(err)} (retry in ${backoffMs}ms)`,
+            `[zulip:${account.accountId}] monitor error (stream=${stream}, stage=${stage}, attempt=${retry}): ${String(err)} (retry in ${backoffMs}ms)`,
           );
           await sleep(backoffMs, abortSignal).catch(() => undefined);
         }
