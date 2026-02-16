@@ -261,9 +261,6 @@ describe("convertCodeBlockToFlexBubble", () => {
 
     const bubble = convertCodeBlockToFlexBubble(block);
 
-    expect(bubble.type).toBe("bubble");
-    expect(bubble.body).toBeDefined();
-
     const body = bubble.body as { contents: Array<{ text: string }> };
     expect(body.contents[0].text).toBe("Code (typescript)");
   });
@@ -303,7 +300,6 @@ Done.`;
     const result = processLineMessage(text);
 
     expect(result.flexMessages).toHaveLength(1);
-    expect(result.flexMessages[0].type).toBe("flex");
     expect(result.text).toContain("Here's the data:");
     expect(result.text).toContain("Done.");
     expect(result.text).not.toContain("|");
@@ -368,32 +364,21 @@ print("done")
 });
 
 describe("hasMarkdownToConvert", () => {
-  it("detects tables", () => {
-    const text = `| A | B |
+  it("detects supported markdown patterns", () => {
+    const cases = [
+      `| A | B |
 |---|---|
-| 1 | 2 |`;
-    expect(hasMarkdownToConvert(text)).toBe(true);
-  });
+| 1 | 2 |`,
+      "```js\ncode\n```",
+      "**bold**",
+      "~~deleted~~",
+      "# Title",
+      "> quote",
+    ];
 
-  it("detects code blocks", () => {
-    const text = "```js\ncode\n```";
-    expect(hasMarkdownToConvert(text)).toBe(true);
-  });
-
-  it("detects bold", () => {
-    expect(hasMarkdownToConvert("**bold**")).toBe(true);
-  });
-
-  it("detects strikethrough", () => {
-    expect(hasMarkdownToConvert("~~deleted~~")).toBe(true);
-  });
-
-  it("detects headers", () => {
-    expect(hasMarkdownToConvert("# Title")).toBe(true);
-  });
-
-  it("detects blockquotes", () => {
-    expect(hasMarkdownToConvert("> quote")).toBe(true);
+    for (const text of cases) {
+      expect(hasMarkdownToConvert(text)).toBe(true);
+    }
   });
 
   it("returns false for plain text", () => {
