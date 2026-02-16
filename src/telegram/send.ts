@@ -9,6 +9,7 @@ import type { RetryConfig } from "../infra/retry.js";
 import { loadConfig } from "../config/config.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { logVerbose } from "../globals.js";
+import { t } from "../i18n/index.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
 import { isDiagnosticFlagEnabled } from "../infra/diagnostic-flags.js";
 import { formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
@@ -345,7 +346,7 @@ function wrapTelegramChatNotFoundError(err: unknown, params: { chatId: string; i
   return new Error(
     [
       `Telegram send failed: chat not found (chat_id=${params.chatId}).`,
-      "Likely: bot not started in DM, bot removed from group/channel, group migrated (new -100… id), or wrong bot token.",
+      t("telegram.errors.chat_not_found"),
       `Input was: ${JSON.stringify(params.input)}.`,
     ].join(" "),
   );
