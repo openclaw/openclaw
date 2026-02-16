@@ -339,6 +339,64 @@ function cleanSchemaForGeminiWithDefs(
     }
   }
 
+  // Cloud Code Assist API also rejects anyOf/oneOf in nested schemas.
+  // If simplifyUnionVariants couldn't reduce the union above, flatten it
+  // here as a fallback: pick the first variant's type or use a permissive
+  // schema so the tool declaration is accepted.
+  if (cleaned.anyOf && Array.isArray(cleaned.anyOf)) {
+    const variants = (cleaned.anyOf as Record<string, unknown>[]).filter(
+      (v) => v && typeof v === "object",
+    );
+    const types = new Set(variants.map((v) => v.type).filter(Boolean));
+    if (variants.length === 1) {
+      const merged: Record<string, unknown> = { ...variants[0] };
+      copySchemaMeta(cleaned, merged);
+      return merged;
+    }
+    if (types.size === 1) {
+      const merged: Record<string, unknown> = { type: Array.from(types)[0] };
+      copySchemaMeta(cleaned, merged);
+      return merged;
+    }
+    // Mixed types (e.g. string | array<string>): use first variant's type.
+    // The execute function already handles type coercion at runtime.
+    const first = variants[0];
+    if (first?.type) {
+      const merged: Record<string, unknown> = { type: first.type };
+      copySchemaMeta(cleaned, merged);
+      return merged;
+    }
+    const merged: Record<string, unknown> = {};
+    copySchemaMeta(cleaned, merged);
+    return merged;
+  }
+
+  if (cleaned.oneOf && Array.isArray(cleaned.oneOf)) {
+    const variants = (cleaned.oneOf as Record<string, unknown>[]).filter(
+      (v) => v && typeof v === "object",
+    );
+    const types = new Set(variants.map((v) => v.type).filter(Boolean));
+    if (variants.length === 1) {
+      const merged: Record<string, unknown> = { ...variants[0] };
+      copySchemaMeta(cleaned, merged);
+      return merged;
+    }
+    if (types.size === 1) {
+      const merged: Record<string, unknown> = { type: Array.from(types)[0] };
+      copySchemaMeta(cleaned, merged);
+      return merged;
+    }
+    const first = variants[0];
+    if (first?.type) {
+      const merged: Record<string, unknown> = { type: first.type };
+      copySchemaMeta(cleaned, merged);
+      return merged;
+    }
+    const merged: Record<string, unknown> = {};
+    copySchemaMeta(cleaned, merged);
+    return merged;
+  }
+
   return cleaned;
 }
 
