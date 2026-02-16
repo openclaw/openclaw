@@ -153,17 +153,23 @@ export function extractToolResultMediaPaths(result: unknown): string[] {
       continue;
     }
     if (entry.type === "text" && typeof entry.text === "string") {
-      // Reset lastIndex since MEDIA_TOKEN_RE is global.
-      MEDIA_TOKEN_RE.lastIndex = 0;
-      let match: RegExpExecArray | null;
-      while ((match = MEDIA_TOKEN_RE.exec(entry.text)) !== null) {
-        // Strip surrounding quotes/backticks and whitespace (mirrors cleanCandidate in media/parse).
-        const p = match[1]
-          ?.replace(/^[`"'[{(]+/, "")
-          .replace(/[`"'\]})\\,]+$/, "")
-          .trim();
-        if (p && p.length <= 4096) {
-          paths.push(p);
+      // Only parse lines that start with MEDIA: (after trimming) to avoid
+      // false-matching placeholders like <media:audio> or mid-line mentions.
+      // Mirrors the line-start guard in splitMediaFromOutput (media/parse.ts).
+      for (const line of entry.text.split("\n")) {
+        if (!line.trimStart().startsWith("MEDIA:")) {
+          continue;
+        }
+        MEDIA_TOKEN_RE.lastIndex = 0;
+        let match: RegExpExecArray | null;
+        while ((match = MEDIA_TOKEN_RE.exec(line)) !== null) {
+          const p = match[1]
+            ?.replace(/^[`"'[{(]+/, "")
+            .replace(/[`"'\]})\\,]+$/, "")
+            .trim();
+          if (p && p.length <= 4096) {
+            paths.push(p);
+          }
         }
       }
     }
