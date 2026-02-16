@@ -114,6 +114,7 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
     const replyOpts = await runDefaultsHeartbeat({ model: "ollama/llama3.2:1b" });
     expect(replyOpts).toEqual({
       isHeartbeat: true,
+      suppressToolErrorWarnings: false,
       heartbeatModelOverride: "ollama/llama3.2:1b",
     });
   });
@@ -171,13 +172,14 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
 
   it("does not pass heartbeatModelOverride when no heartbeat model is configured", async () => {
     const replyOpts = await runDefaultsHeartbeat({ model: undefined });
-    expect(replyOpts).toStrictEqual({ isHeartbeat: true });
+    expect(replyOpts).toStrictEqual({ isHeartbeat: true, suppressToolErrorWarnings: false });
   });
 
   it("trims heartbeat model override before passing it downstream", async () => {
     const replyOpts = await runDefaultsHeartbeat({ model: "  ollama/llama3.2:1b  " });
     expect(replyOpts).toEqual({
       isHeartbeat: true,
+      suppressToolErrorWarnings: false,
       heartbeatModelOverride: "ollama/llama3.2:1b",
     });
   });
