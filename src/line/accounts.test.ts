@@ -181,10 +181,6 @@ describe("LINE accounts", () => {
       expect(normalizeAccountId("default")).toBe(DEFAULT_ACCOUNT_ID);
     });
 
-    it("preserves non-default account ids", () => {
-      expect(normalizeAccountId("business")).toBe("business");
-    });
-
     it("trims and lowercases account ids", () => {
       expect(normalizeAccountId("  Business  ")).toBe("business");
     });

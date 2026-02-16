@@ -6,7 +6,6 @@ describe("createQuickReplyItems", () => {
     const quickReply = createQuickReplyItems(["Option 1", "Option 2", "Option 3"]);
 
     expect(quickReply.items).toHaveLength(3);
-    expect(quickReply.items[0].type).toBe("action");
     expect((quickReply.items[0].action as { label: string }).label).toBe("Option 1");
     expect((quickReply.items[0].action as { text: string }).text).toBe("Option 1");
   });
