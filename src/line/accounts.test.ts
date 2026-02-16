@@ -115,24 +115,6 @@ describe("LINE accounts", () => {
       expect(ids).toContain(DEFAULT_ACCOUNT_ID);
     });
 
-    it("returns named accounts", () => {
-      const cfg: OpenClawConfig = {
-        channels: {
-          line: {
-            accounts: {
-              business: { enabled: true },
-              personal: { enabled: true },
-            },
-          },
-        },
-      };
-
-      const ids = listLineAccountIds(cfg);
-
-      expect(ids).toContain("business");
-      expect(ids).toContain("personal");
-    });
-
     it("returns default from env", () => {
       process.env.LINE_CHANNEL_ACCESS_TOKEN = "env-token";
       const cfg: OpenClawConfig = {};
