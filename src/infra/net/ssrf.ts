@@ -1,6 +1,7 @@
 import { lookup as dnsLookupCb, type LookupAddress } from "node:dns";
 import { lookup as dnsLookup } from "node:dns/promises";
 import { Agent, type Dispatcher } from "undici";
+import { normalizeHostname } from "./hostname.js";
 
 type LookupCallback = (
   err: NodeJS.ErrnoException | null,
@@ -24,14 +25,6 @@ export type SsrFPolicy = {
 };
 
 const BLOCKED_HOSTNAMES = new Set(["localhost", "metadata.google.internal"]);
-
-function normalizeHostname(hostname: string): string {
-  const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
-  if (normalized.startsWith("[") && normalized.endsWith("]")) {
-    return normalized.slice(1, -1);
-  }
-  return normalized;
-}
 
 function normalizeHostnameSet(values?: string[]): Set<string> {
   if (!values || values.length === 0) {
