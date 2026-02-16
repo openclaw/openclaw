@@ -93,6 +93,14 @@ const MemorySchema = z
   .strict()
   .optional();
 
+const HttpUrlSchema = z
+  .string()
+  .url()
+  .refine((value) => {
+    const protocol = new URL(value).protocol;
+    return protocol === "http:" || protocol === "https:";
+  }, "Expected http:// or https:// URL");
+
 export const OpenClawSchema = z
   .object({
     $schema: z.string().optional(),
@@ -295,6 +303,8 @@ export const OpenClawSchema = z
         enabled: z.boolean().optional(),
         store: z.string().optional(),
         maxConcurrentRuns: z.number().int().positive().optional(),
+        webhook: HttpUrlSchema.optional(),
+        webhookToken: z.string().optional().register(sensitive),
         sessionRetention: z.union([z.string(), z.literal(false)]).optional(),
       })
       .strict()
@@ -398,10 +408,29 @@ export const OpenClawSchema = z
           .optional(),
         auth: z
           .object({
-            mode: z.union([z.literal("token"), z.literal("password")]).optional(),
+            mode: z
+              .union([z.literal("token"), z.literal("password"), z.literal("trusted-proxy")])
+              .optional(),
             token: z.string().optional().register(sensitive),
             password: z.string().optional().register(sensitive),
             allowTailscale: z.boolean().optional(),
+            rateLimit: z
+              .object({
+                maxAttempts: z.number().optional(),
+                windowMs: z.number().optional(),
+                lockoutMs: z.number().optional(),
+                exemptLoopback: z.boolean().optional(),
+              })
+              .strict()
+              .optional(),
+            trustedProxy: z
+              .object({
+                userHeader: z.string().min(1, "userHeader is required for trusted-proxy mode"),
+                requiredHeaders: z.array(z.string()).optional(),
+                allowUsers: z.array(z.string()).optional(),
+              })
+              .strict()
+              .optional(),
           })
           .strict()
           .optional(),

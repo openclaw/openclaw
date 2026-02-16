@@ -52,6 +52,7 @@ struct RootCanvas: View {
                 CameraFlashOverlay(nonce: self.appModel.cameraFlashNonce)
             }
         }
+        .gatewayTrustPromptAlert()
         .sheet(item: self.$presentedSheet) { sheet in
             switch sheet {
             case .settings:
@@ -255,64 +256,11 @@ private struct CanvasContent: View {
     }
 
     private var statusActivity: StatusPill.Activity? {
-        // Status pill owns transient activity state so it doesn't overlap the connection indicator.
-        if self.appModel.isBackgrounded {
-            return StatusPill.Activity(
-                title: "Foreground required",
-                systemImage: "exclamationmark.triangle.fill",
-                tint: .orange)
-        }
-
-        let gatewayStatus = self.appModel.gatewayStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let gatewayLower = gatewayStatus.lowercased()
-        if gatewayLower.contains("repair") {
-            return StatusPill.Activity(title: "Repairing…", systemImage: "wrench.and.screwdriver", tint: .orange)
-        }
-        if gatewayLower.contains("approval") || gatewayLower.contains("pairing") {
-            return StatusPill.Activity(title: "Approval pending", systemImage: "person.crop.circle.badge.clock")
-        }
-        // Avoid duplicating the primary gateway status ("Connecting…") in the activity slot.
-
-        if self.appModel.screenRecordActive {
-            return StatusPill.Activity(title: "Recording screen…", systemImage: "record.circle.fill", tint: .red)
-        }
-
-        if let cameraHUDText, !cameraHUDText.isEmpty, let cameraHUDKind {
-            let systemImage: String
-            let tint: Color?
-            switch cameraHUDKind {
-            case .photo:
-                systemImage = "camera.fill"
-                tint = nil
-            case .recording:
-                systemImage = "video.fill"
-                tint = .red
-            case .success:
-                systemImage = "checkmark.circle.fill"
-                tint = .green
-            case .error:
-                systemImage = "exclamationmark.triangle.fill"
-                tint = .red
-            }
-            return StatusPill.Activity(title: cameraHUDText, systemImage: systemImage, tint: tint)
-        }
-
-        if self.voiceWakeEnabled {
-            let voiceStatus = self.appModel.voiceWake.statusText
-            if voiceStatus.localizedCaseInsensitiveContains("microphone permission") {
-                return StatusPill.Activity(title: "Mic permission", systemImage: "mic.slash", tint: .orange)
-            }
-            if voiceStatus == "Paused" {
-                // Talk mode intentionally pauses voice wake to release the mic. Don't spam the HUD for that case.
-                if self.appModel.talkMode.isEnabled {
-                    return nil
-                }
-                let suffix = self.appModel.isBackgrounded ? " (background)" : ""
-                return StatusPill.Activity(title: "Voice Wake paused\(suffix)", systemImage: "pause.circle.fill")
-            }
-        }
-
-        return nil
+        StatusActivityBuilder.build(
+            appModel: self.appModel,
+            voiceWakeEnabled: self.voiceWakeEnabled,
+            cameraHUDText: self.cameraHUDText,
+            cameraHUDKind: self.cameraHUDKind)
     }
 }
 

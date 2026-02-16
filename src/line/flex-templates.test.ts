@@ -160,20 +160,12 @@ describe("createNotificationBubble", () => {
     expect(bubble.body).toBeDefined();
   });
 
-  it("applies notification type styling", () => {
-    const successBubble = createNotificationBubble("Success!", { type: "success" });
-    const errorBubble = createNotificationBubble("Error!", { type: "error" });
-
-    expect(successBubble.body).toBeDefined();
-    expect(errorBubble.body).toBeDefined();
-  });
-
   it("includes title when provided", () => {
     const bubble = createNotificationBubble("Details here", {
       title: "Alert Title",
     });
 
-    expect(bubble.body).toBeDefined();
+    expect(bubble.type).toBe("bubble");
   });
 });
 
@@ -188,16 +180,6 @@ describe("createReceiptCard", () => {
     });
 
     expect(card.type).toBe("bubble");
-    expect(card.body).toBeDefined();
-  });
-
-  it("includes total when provided", () => {
-    const card = createReceiptCard({
-      title: "Receipt",
-      items: [{ name: "Item", value: "$10" }],
-      total: { label: "Total", value: "$10" },
-    });
-
     expect(card.body).toBeDefined();
   });
 
@@ -231,15 +213,6 @@ describe("createMediaPlayerCard", () => {
 
     expect(card.hero).toBeDefined();
     expect((card.hero as { url: string }).url).toBe("https://example.com/album.jpg");
-  });
-
-  it("shows playing status", () => {
-    const card = createMediaPlayerCard({
-      title: "Track",
-      isPlaying: true,
-    });
-
-    expect(card.body).toBeDefined();
   });
 
   it("includes playback controls", () => {
@@ -283,16 +256,6 @@ describe("createDeviceControlCard", () => {
     expect(card.type).toBe("bubble");
     expect(card.body).toBeDefined();
     expect(card.footer).toBeDefined();
-  });
-
-  it("shows device status", () => {
-    const card = createDeviceControlCard({
-      deviceName: "Apple TV",
-      status: "Playing",
-      controls: [{ label: "Pause", data: "action=pause" }],
-    });
-
-    expect(card.body).toBeDefined();
   });
 
   it("includes device image", () => {
@@ -358,36 +321,6 @@ describe("createEventCard", () => {
     expect(card.body).toBeDefined();
   });
 
-  it("includes time when provided", () => {
-    const card = createEventCard({
-      title: "Meeting",
-      date: "Jan 24",
-      time: "2:00 PM - 3:00 PM",
-    });
-
-    expect(card.body).toBeDefined();
-  });
-
-  it("includes location when provided", () => {
-    const card = createEventCard({
-      title: "Meeting",
-      date: "Jan 24",
-      location: "Conference Room A",
-    });
-
-    expect(card.body).toBeDefined();
-  });
-
-  it("includes description when provided", () => {
-    const card = createEventCard({
-      title: "Meeting",
-      date: "Jan 24",
-      description: "Discuss Q1 roadmap",
-    });
-
-    expect(card.body).toBeDefined();
-  });
-
   it("includes all optional fields together", () => {
     const card = createEventCard({
       title: "Team Offsite",
@@ -410,16 +343,6 @@ describe("createEventCard", () => {
 
     expect(card.body).toBeDefined();
     expect((card.body as { action?: unknown }).action).toBeDefined();
-  });
-
-  it("includes calendar name when provided", () => {
-    const card = createEventCard({
-      title: "Meeting",
-      date: "Jan 24",
-      calendar: "Work Calendar",
-    });
-
-    expect(card.body).toBeDefined();
   });
 
   it("uses mega size for better readability", () => {
@@ -447,19 +370,6 @@ describe("createAgendaCard", () => {
     expect(card.body).toBeDefined();
   });
 
-  it("limits events to 8", () => {
-    const manyEvents = Array.from({ length: 15 }, (_, i) => ({
-      title: `Event ${i + 1}`,
-    }));
-
-    const card = createAgendaCard({
-      title: "Many Events",
-      events: manyEvents,
-    });
-
-    expect(card.body).toBeDefined();
-  });
-
   it("includes footer when provided", () => {
     const card = createAgendaCard({
       title: "Today",
@@ -468,22 +378,6 @@ describe("createAgendaCard", () => {
     });
 
     expect(card.footer).toBeDefined();
-  });
-
-  it("shows event metadata (time, location, calendar)", () => {
-    const card = createAgendaCard({
-      title: "Schedule",
-      events: [
-        {
-          title: "Meeting",
-          time: "10:00 AM",
-          location: "Room A",
-          calendar: "Work",
-        },
-      ],
-    });
-
-    expect(card.body).toBeDefined();
   });
 });
 

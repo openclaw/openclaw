@@ -122,6 +122,7 @@ export async function addCronJob(state: CronState) {
       description: state.cronForm.description.trim() || undefined,
       agentId: agentId || undefined,
       enabled: state.cronForm.enabled,
+      notify: state.cronForm.notify,
       schedule,
       sessionTarget: state.cronForm.sessionTarget,
       wakeMode: state.cronForm.wakeMode,

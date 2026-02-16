@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { captureEnv } from "../test-utils/env.js";
 import {
   applyAuthProfileConfig,
   applyLitellmProviderConfig,
@@ -40,9 +41,12 @@ const requireAgentDir = () => {
 };
 
 describe("writeOAuthCredentials", () => {
-  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-  const previousAgentDir = process.env.OPENCLAW_AGENT_DIR;
-  const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const envSnapshot = captureEnv([
+    "OPENCLAW_STATE_DIR",
+    "OPENCLAW_AGENT_DIR",
+    "PI_CODING_AGENT_DIR",
+    "OPENCLAW_OAUTH_DIR",
+  ]);
   let tempStateDir: string | null = null;
 
   afterEach(async () => {
@@ -50,22 +54,7 @@ describe("writeOAuthCredentials", () => {
       await fs.rm(tempStateDir, { recursive: true, force: true });
       tempStateDir = null;
     }
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    }
-    if (previousAgentDir === undefined) {
-      delete process.env.OPENCLAW_AGENT_DIR;
-    } else {
-      process.env.OPENCLAW_AGENT_DIR = previousAgentDir;
-    }
-    if (previousPiAgentDir === undefined) {
-      delete process.env.PI_CODING_AGENT_DIR;
-    } else {
-      process.env.PI_CODING_AGENT_DIR = previousPiAgentDir;
-    }
-    delete process.env.OPENCLAW_OAUTH_DIR;
+    envSnapshot.restore();
   });
 
   it("writes auth-profiles.json under OPENCLAW_AGENT_DIR when set", async () => {
@@ -100,9 +89,11 @@ describe("writeOAuthCredentials", () => {
 });
 
 describe("setMinimaxApiKey", () => {
-  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-  const previousAgentDir = process.env.OPENCLAW_AGENT_DIR;
-  const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const envSnapshot = captureEnv([
+    "OPENCLAW_STATE_DIR",
+    "OPENCLAW_AGENT_DIR",
+    "PI_CODING_AGENT_DIR",
+  ]);
   let tempStateDir: string | null = null;
 
   afterEach(async () => {
@@ -110,21 +101,7 @@ describe("setMinimaxApiKey", () => {
       await fs.rm(tempStateDir, { recursive: true, force: true });
       tempStateDir = null;
     }
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    }
-    if (previousAgentDir === undefined) {
-      delete process.env.OPENCLAW_AGENT_DIR;
-    } else {
-      process.env.OPENCLAW_AGENT_DIR = previousAgentDir;
-    }
-    if (previousPiAgentDir === undefined) {
-      delete process.env.PI_CODING_AGENT_DIR;
-    } else {
-      process.env.PI_CODING_AGENT_DIR = previousPiAgentDir;
-    }
+    envSnapshot.restore();
   });
 
   it("writes to OPENCLAW_AGENT_DIR when set", async () => {
@@ -259,7 +236,7 @@ describe("applyMinimaxApiConfig", () => {
     expect(cfg.models?.providers?.minimax?.apiKey).toBe("old-key");
     expect(cfg.models?.providers?.minimax?.models.map((m) => m.id)).toEqual([
       "old-model",
-      "MiniMax-M2.1",
+      "MiniMax-M2.5",
     ]);
   });
 

@@ -480,14 +480,22 @@ export async function runEmbeddedPiAgent(
             enforceFinalTag: params.enforceFinalTag,
           });
 
-          const { aborted, promptError, timedOut, sessionIdUsed, lastAssistant } = attempt;
+          const {
+            aborted,
+            promptError,
+            timedOut,
+            timedOutDuringCompaction,
+            sessionIdUsed,
+            lastAssistant,
+          } = attempt;
           const lastAssistantUsage = normalizeUsage(lastAssistant?.usage as UsageLike);
           const attemptUsage = attempt.attemptUsage ?? lastAssistantUsage;
           mergeUsageIntoAccumulator(usageAccumulator, attemptUsage);
           // Keep prompt size from the latest model call so session totalTokens
           // reflects current context usage, not accumulated tool-loop usage.
           lastRunPromptUsage = lastAssistantUsage ?? attemptUsage;
-          autoCompactionCount += Math.max(0, attempt.compactionCount ?? 0);
+          const attemptCompactionCount = Math.max(0, attempt.compactionCount ?? 0);
+          autoCompactionCount += attemptCompactionCount;
           const formattedAssistantErrorText = lastAssistant
             ? formatAssistantErrorText(lastAssistant, {
                 cfg: params.config,
@@ -530,9 +538,25 @@ export async function runEmbeddedPiAgent(
                 `error=${errorText.slice(0, 200)}`,
             );
             const isCompactionFailure = isCompactionFailureError(errorText);
-            // Attempt auto-compaction on context overflow (not compaction_failure)
+            const hadAttemptLevelCompaction = attemptCompactionCount > 0;
+            // If this attempt already compacted (SDK auto-compaction), avoid immediately
+            // running another explicit compaction for the same overflow trigger.
             if (
               !isCompactionFailure &&
+              hadAttemptLevelCompaction &&
+              overflowCompactionAttempts < MAX_OVERFLOW_COMPACTION_ATTEMPTS
+            ) {
+              overflowCompactionAttempts++;
+              log.warn(
+                `context overflow persisted after in-attempt compaction (attempt ${overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}); retrying prompt without additional compaction for ${provider}/${modelId}`,
+              );
+              continue;
+            }
+            // Attempt explicit overflow compaction only when this attempt did not
+            // already auto-compact.
+            if (
+              !isCompactionFailure &&
+              !hadAttemptLevelCompaction &&
               overflowCompactionAttempts < MAX_OVERFLOW_COMPACTION_ATTEMPTS
             ) {
               if (log.isEnabled("debug")) {
@@ -801,7 +825,9 @@ export async function runEmbeddedPiAgent(
           }
 
           // Treat timeout as potential rate limit (Antigravity hangs on rate limit)
-          const shouldRotate = (!aborted && failoverFailure) || timedOut;
+          // But exclude post-prompt compaction timeouts (model succeeded; no profile issue)
+          const shouldRotate =
+            (!aborted && failoverFailure) || (timedOut && !timedOutDuringCompaction);
 
           if (shouldRotate) {
             if (lastProfileId) {
@@ -897,6 +923,31 @@ export async function runEmbeddedPiAgent(
             toolResultFormat: resolvedToolResultFormat,
             inlineToolResultsAllowed: false,
           });
+
+          // Timeout aborts can leave the run without any assistant payloads.
+          // Emit an explicit timeout error instead of silently completing, so
+          // callers do not lose the turn as an orphaned user message.
+          if (timedOut && !timedOutDuringCompaction && payloads.length === 0) {
+            return {
+              payloads: [
+                {
+                  text:
+                    "Request timed out before a response was generated. " +
+                    "Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
+                  isError: true,
+                },
+              ],
+              meta: {
+                durationMs: Date.now() - started,
+                agentMeta,
+                aborted,
+                systemPromptReport: attempt.systemPromptReport,
+              },
+              didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+              messagingToolSentTexts: attempt.messagingToolSentTexts,
+              messagingToolSentTargets: attempt.messagingToolSentTargets,
+            };
+          }
 
           log.debug(
             `embedded run done: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - started} aborted=${aborted}`,

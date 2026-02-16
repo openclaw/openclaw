@@ -7,13 +7,6 @@ type StubSession = {
 };
 
 describe("subscribeEmbeddedPiSession", () => {
-  const _THINKING_TAG_CASES = [
-    { tag: "think", open: "<think>", close: "</think>" },
-    { tag: "thinking", open: "<thinking>", close: "</thinking>" },
-    { tag: "thought", open: "<thought>", close: "</thought>" },
-    { tag: "antthinking", open: "<antthinking>", close: "</antthinking>" },
-  ] as const;
-
   it("waits for multiple compaction retries before resolving", async () => {
     const listeners: SessionEventHandler[] = [];
     const session = {
@@ -97,6 +90,38 @@ describe("subscribeEmbeddedPiSession", () => {
       { phase: "end", willRetry: false },
     ]);
   });
+
+  it("rejects compaction wait with AbortError when unsubscribed", async () => {
+    const listeners: SessionEventHandler[] = [];
+    const abortCompaction = vi.fn();
+    const session = {
+      isCompacting: true,
+      abortCompaction,
+      subscribe: (listener: SessionEventHandler) => {
+        listeners.push(listener);
+        return () => {};
+      },
+    } as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"];
+
+    const subscription = subscribeEmbeddedPiSession({
+      session,
+      runId: "run-abort-on-unsubscribe",
+    });
+
+    for (const listener of listeners) {
+      listener({ type: "auto_compaction_start" });
+    }
+
+    const waitPromise = subscription.waitForCompactionRetry();
+    subscription.unsubscribe();
+
+    await expect(waitPromise).rejects.toMatchObject({ name: "AbortError" });
+    await expect(subscription.waitForCompactionRetry()).rejects.toMatchObject({
+      name: "AbortError",
+    });
+    expect(abortCompaction).toHaveBeenCalledTimes(1);
+  });
+
   it("emits tool summaries at tool start when verbose is on", async () => {
     let handler: ((evt: unknown) => void) | undefined;
     const session: StubSession = {

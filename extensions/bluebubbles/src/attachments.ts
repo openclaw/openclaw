@@ -2,9 +2,10 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import crypto from "node:crypto";
 import path from "node:path";
 import { resolveBlueBubblesAccount } from "./accounts.js";
+import { postMultipartFormData } from "./multipart.js";
 import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
+import { extractBlueBubblesMessageId, resolveBlueBubblesSendTarget } from "./send-helpers.js";
 import { resolveChatGuidForTarget } from "./send.js";
-import { parseBlueBubblesTarget, normalizeBlueBubblesHandle } from "./targets.js";
 import {
   blueBubblesFetchWithTimeout,
   buildBlueBubblesApiUrl,
@@ -102,52 +103,6 @@ export type SendBlueBubblesAttachmentResult = {
   messageId: string;
 };
 
-function resolveSendTarget(raw: string): BlueBubblesSendTarget {
-  const parsed = parseBlueBubblesTarget(raw);
-  if (parsed.kind === "handle") {
-    return {
-      kind: "handle",
-      address: normalizeBlueBubblesHandle(parsed.to),
-      service: parsed.service,
-    };
-  }
-  if (parsed.kind === "chat_id") {
-    return { kind: "chat_id", chatId: parsed.chatId };
-  }
-  if (parsed.kind === "chat_guid") {
-    return { kind: "chat_guid", chatGuid: parsed.chatGuid };
-  }
-  return { kind: "chat_identifier", chatIdentifier: parsed.chatIdentifier };
-}
-
-function extractMessageId(payload: unknown): string {
-  if (!payload || typeof payload !== "object") {
-    return "unknown";
-  }
-  const record = payload as Record<string, unknown>;
-  const data =
-    record.data && typeof record.data === "object"
-      ? (record.data as Record<string, unknown>)
-      : null;
-  const candidates = [
-    record.messageId,
-    record.guid,
-    record.id,
-    data?.messageId,
-    data?.guid,
-    data?.id,
-  ];
-  for (const candidate of candidates) {
-    if (typeof candidate === "string" && candidate.trim()) {
-      return candidate.trim();
-    }
-    if (typeof candidate === "number" && Number.isFinite(candidate)) {
-      return String(candidate);
-    }
-  }
-  return "unknown";
-}
-
 /**
  * Send an attachment via BlueBubbles API.
  * Supports sending media files (images, videos, audio, documents) to a chat.
@@ -193,7 +148,7 @@ export async function sendBlueBubblesAttachment(params: {
     }
   }
 
-  const target = resolveSendTarget(to);
+  const target = resolveBlueBubblesSendTarget(to);
   const chatGuid = await resolveChatGuidForTarget({
     baseUrl,
     password,
@@ -265,26 +220,12 @@ export async function sendBlueBubblesAttachment(params: {
   // Close the multipart body
   parts.push(encoder.encode(`--${boundary}--\r\n`));
 
-  // Combine all parts into a single buffer
-  const totalLength = parts.reduce((acc, part) => acc + part.length, 0);
-  const body = new Uint8Array(totalLength);
-  let offset = 0;
-  for (const part of parts) {
-    body.set(part, offset);
-    offset += part.length;
-  }
-
-  const res = await blueBubblesFetchWithTimeout(
+  const res = await postMultipartFormData({
     url,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": `multipart/form-data; boundary=${boundary}`,
-      },
-      body,
-    },
-    opts.timeoutMs ?? 60_000, // longer timeout for file uploads
-  );
+    boundary,
+    parts,
+    timeoutMs: opts.timeoutMs ?? 60_000, // longer timeout for file uploads
+  });
 
   if (!res.ok) {
     const errorText = await res.text();
@@ -299,7 +240,7 @@ export async function sendBlueBubblesAttachment(params: {
   }
   try {
     const parsed = JSON.parse(responseBody) as unknown;
-    return { messageId: extractMessageId(parsed) };
+    return { messageId: extractBlueBubblesMessageId(parsed) };
   } catch {
     return { messageId: "ok" };
   }

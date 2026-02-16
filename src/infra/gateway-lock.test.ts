@@ -3,7 +3,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveConfigPath, resolveGatewayLockDir, resolveStateDir } from "../config/paths.js";
 import { acquireGatewayLock, GatewayLockError } from "./gateway-lock.js";
 
@@ -67,41 +67,56 @@ describe("gateway lock", () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-lock-"));
   });
 
+  beforeEach(() => {
+    // Other suites occasionally leave global spies behind (Date.now, setTimeout, etc.).
+    // This test relies on fake timers advancing Date.now and setTimeout deterministically.
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
   afterAll(async () => {
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("blocks concurrent acquisition until release", async () => {
+    // Fake timers can hang on Windows CI when combined with fs open loops.
+    // Keep this test on real timers and use small timeouts.
+    vi.useRealTimers();
     const { env, cleanup } = await makeEnv();
     const lock = await acquireGatewayLock({
       env,
       allowInTests: true,
-      timeoutMs: 80,
-      pollIntervalMs: 5,
+      timeoutMs: 50,
+      pollIntervalMs: 2,
     });
     expect(lock).not.toBeNull();
 
-    await expect(
-      acquireGatewayLock({
-        env,
-        allowInTests: true,
-        timeoutMs: 80,
-        pollIntervalMs: 5,
-      }),
-    ).rejects.toBeInstanceOf(GatewayLockError);
+    const pending = acquireGatewayLock({
+      env,
+      allowInTests: true,
+      timeoutMs: 15,
+      pollIntervalMs: 2,
+    });
+    await expect(pending).rejects.toBeInstanceOf(GatewayLockError);
 
     await lock?.release();
     const lock2 = await acquireGatewayLock({
       env,
       allowInTests: true,
-      timeoutMs: 80,
-      pollIntervalMs: 5,
+      timeoutMs: 30,
+      pollIntervalMs: 2,
     });
     await lock2?.release();
     await cleanup();
   });
 
   it("treats recycled linux pid as stale when start time mismatches", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-06T10:05:00.000Z"));
     const { env, cleanup } = await makeEnv();
     const { lockPath, configPath } = resolveLockPath(env);
     const payload = {
@@ -136,6 +151,7 @@ describe("gateway lock", () => {
   });
 
   it("keeps lock on linux when proc access fails unless stale", async () => {
+    vi.useRealTimers();
     const { env, cleanup } = await makeEnv();
     const { lockPath, configPath } = resolveLockPath(env);
     const payload = {
@@ -154,16 +170,15 @@ describe("gateway lock", () => {
       return readFileSync(filePath as never, encoding as never) as never;
     });
 
-    await expect(
-      acquireGatewayLock({
-        env,
-        allowInTests: true,
-        timeoutMs: 50,
-        pollIntervalMs: 5,
-        staleMs: 10_000,
-        platform: "linux",
-      }),
-    ).rejects.toBeInstanceOf(GatewayLockError);
+    const pending = acquireGatewayLock({
+      env,
+      allowInTests: true,
+      timeoutMs: 15,
+      pollIntervalMs: 2,
+      staleMs: 10_000,
+      platform: "linux",
+    });
+    await expect(pending).rejects.toBeInstanceOf(GatewayLockError);
 
     spy.mockRestore();
 
@@ -183,8 +198,8 @@ describe("gateway lock", () => {
     const lock = await acquireGatewayLock({
       env,
       allowInTests: true,
-      timeoutMs: 80,
-      pollIntervalMs: 5,
+      timeoutMs: 30,
+      pollIntervalMs: 2,
       staleMs: 1,
       platform: "linux",
     });

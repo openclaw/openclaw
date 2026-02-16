@@ -4,14 +4,17 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { captureEnv } from "../test-utils/env.js";
 import { saveMediaSource, setMediaStoreNetworkDepsForTest } from "./store.js";
 
 const HOME = path.join(os.tmpdir(), "openclaw-home-redirect");
-const previousStateDir = process.env.OPENCLAW_STATE_DIR;
 const mockRequest = vi.fn();
 
 describe("media store redirects", () => {
+  let envSnapshot: ReturnType<typeof captureEnv>;
+
   beforeAll(async () => {
+    envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
     await fs.rm(HOME, { recursive: true, force: true });
     process.env.OPENCLAW_STATE_DIR = HOME;
   });
@@ -29,11 +32,7 @@ describe("media store redirects", () => {
 
   afterAll(async () => {
     await fs.rm(HOME, { recursive: true, force: true });
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    }
+    envSnapshot.restore();
     setMediaStoreNetworkDepsForTest();
     vi.clearAllMocks();
   });

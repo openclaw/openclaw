@@ -34,6 +34,7 @@ import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.j
 import { dispatchReplyWithDispatcher } from "../../auto-reply/reply/provider-dispatcher.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
+import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { buildPairingReply } from "../../pairing/pairing-messages.js";
 import {
   readChannelAllowFromStore,
@@ -41,6 +42,7 @@ import {
 } from "../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import { buildUntrustedChannelMetadata } from "../../security/channel-metadata.js";
+import { chunkItems } from "../../utils/chunk-items.js";
 import { loadWebMedia } from "../../web/media.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import {
@@ -50,7 +52,7 @@ import {
   normalizeDiscordSlug,
   resolveDiscordChannelConfigWithFallback,
   resolveDiscordGuildEntry,
-  resolveDiscordMemberAllowed,
+  resolveDiscordMemberAccessState,
   resolveDiscordOwnerAllowFrom,
 } from "./allow-list.js";
 import { resolveDiscordChannelInfo } from "./message-utils.js";
@@ -143,17 +145,6 @@ function readDiscordCommandArgs(
     }
   }
   return Object.keys(values).length > 0 ? { values } : undefined;
-}
-
-function chunkItems<T>(items: T[], size: number): T[][] {
-  if (size <= 0) {
-    return [items];
-  }
-  const rows: T[][] = [];
-  for (let i = 0; i < items.length; i += size) {
-    rows.push(items.slice(i, i + size));
-  }
-  return rows;
 }
 
 const DISCORD_COMMAND_ARG_CUSTOM_ID_KEY = "cmdarg";
@@ -543,11 +534,10 @@ async function dispatchDiscordCommandInteraction(params: {
   const memberRoleIds = Array.isArray(interaction.rawData.member?.roles)
     ? interaction.rawData.member.roles.map((roleId: string) => String(roleId))
     : [];
-  const ownerAllowList = normalizeDiscordAllowList(discordConfig?.dm?.allowFrom ?? [], [
-    "discord:",
-    "user:",
-    "pk:",
-  ]);
+  const ownerAllowList = normalizeDiscordAllowList(
+    discordConfig?.allowFrom ?? discordConfig?.dm?.allowFrom ?? [],
+    ["discord:", "user:", "pk:"],
+  );
   const ownerOk =
     ownerAllowList && user
       ? allowListMatches(ownerAllowList, {
@@ -616,7 +606,7 @@ async function dispatchDiscordCommandInteraction(params: {
     }
   }
   const dmEnabled = discordConfig?.dm?.enabled ?? true;
-  const dmPolicy = discordConfig?.dm?.policy ?? "pairing";
+  const dmPolicy = discordConfig?.dmPolicy ?? discordConfig?.dm?.policy ?? "pairing";
   let commandAuthorized = true;
   if (isDirectMessage) {
     if (!dmEnabled || dmPolicy === "disabled") {
@@ -625,7 +615,10 @@ async function dispatchDiscordCommandInteraction(params: {
     }
     if (dmPolicy !== "open") {
       const storeAllowFrom = await readChannelAllowFromStore("discord").catch(() => []);
-      const effectiveAllowFrom = [...(discordConfig?.dm?.allowFrom ?? []), ...storeAllowFrom];
+      const effectiveAllowFrom = [
+        ...(discordConfig?.allowFrom ?? discordConfig?.dm?.allowFrom ?? []),
+        ...storeAllowFrom,
+      ];
       const allowList = normalizeDiscordAllowList(effectiveAllowFrom, ["discord:", "user:", "pk:"]);
       const permitted = allowList
         ? allowListMatches(allowList, {
@@ -664,18 +657,11 @@ async function dispatchDiscordCommandInteraction(params: {
     }
   }
   if (!isDirectMessage) {
-    const channelUsers = channelConfig?.users ?? guildInfo?.users;
-    const channelRoles = channelConfig?.roles ?? guildInfo?.roles;
-    const hasAccessRestrictions =
-      (Array.isArray(channelUsers) && channelUsers.length > 0) ||
-      (Array.isArray(channelRoles) && channelRoles.length > 0);
-    const memberAllowed = resolveDiscordMemberAllowed({
-      userAllowList: channelUsers,
-      roleAllowList: channelRoles,
+    const { hasAccessRestrictions, memberAllowed } = resolveDiscordMemberAccessState({
+      channelConfig,
+      guildInfo,
       memberRoleIds,
-      userId: sender.id,
-      userName: sender.name,
-      userTag: sender.tag,
+      sender,
     });
     const authorizers = useAccessGroups
       ? [
@@ -812,6 +798,7 @@ async function dispatchDiscordCommandInteraction(params: {
     channel: "discord",
     accountId: route.accountId,
   });
+  const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
 
   let didReply = false;
   await dispatchReplyWithDispatcher({
@@ -825,6 +812,7 @@ async function dispatchDiscordCommandInteraction(params: {
           await deliverDiscordInteractionReply({
             interaction,
             payload,
+            mediaLocalRoots,
             textLimit: resolveTextChunkLimit(cfg, "discord", accountId, {
               fallbackLimit: 2000,
             }),
@@ -859,6 +847,7 @@ async function dispatchDiscordCommandInteraction(params: {
 async function deliverDiscordInteractionReply(params: {
   interaction: CommandInteraction | ButtonInteraction;
   payload: ReplyPayload;
+  mediaLocalRoots?: readonly string[];
   textLimit: number;
   maxLinesPerMessage?: number;
   preferFollowUp: boolean;
@@ -897,7 +886,9 @@ async function deliverDiscordInteractionReply(params: {
   if (mediaList.length > 0) {
     const media = await Promise.all(
       mediaList.map(async (url) => {
-        const loaded = await loadWebMedia(url);
+        const loaded = await loadWebMedia(url, {
+          localRoots: params.mediaLocalRoots,
+        });
         return {
           name: loaded.fileName ?? "upload",
           data: loaded.buffer,

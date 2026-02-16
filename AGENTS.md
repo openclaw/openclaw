@@ -177,8 +177,8 @@ import { describe, it, expect } from "vitest";
 - Create commits with `scripts/committer "<msg>" <file...>`; avoid manual `git add`/`git commit` so staging stays scoped.
 - Follow concise, action-oriented commit messages (e.g., `CLI: add verbose flag to send`).
 - Group related changes; avoid bundling unrelated refactors.
-- Read this when submitting a PR: `docs/help/submitting-a-pr.md` ([Submitting a PR](https://docs.openclaw.ai/help/submitting-a-pr))
-- Read this when submitting an issue: `docs/help/submitting-an-issue.md` ([Submitting an Issue](https://docs.openclaw.ai/help/submitting-an-issue))
+- PR submission template (canonical): `.github/pull_request_template.md`
+- Issue submission templates (canonical): `.github/ISSUE_TEMPLATE/`
 
 ## Commit & PR Guidelines
 
@@ -205,10 +205,20 @@ spinner.stop("Done!");
 
 ### Dependency Injection
 
-```typescript
-import { createDefaultDeps } from "../cli/deps.js";
-const deps = createDefaultDeps();
-```
+## GHSA (Repo Advisory) Patch/Publish
+
+- Fetch: `gh api /repos/openclaw/openclaw/security-advisories/<GHSA>`
+- Latest npm: `npm view openclaw version --userconfig "$(mktemp)"`
+- Private fork PRs must be closed:
+  `fork=$(gh api /repos/openclaw/openclaw/security-advisories/<GHSA> | jq -r .private_fork.full_name)`
+  `gh pr list -R "$fork" --state open` (must be empty)
+- Description newline footgun: write Markdown via heredoc to `/tmp/ghsa.desc.md` (no `"\\n"` strings)
+- Build patch JSON via jq: `jq -n --rawfile desc /tmp/ghsa.desc.md '{summary,severity,description:$desc,vulnerabilities:[...]}' > /tmp/ghsa.patch.json`
+- Patch + publish: `gh api -X PATCH /repos/openclaw/openclaw/security-advisories/<GHSA> --input /tmp/ghsa.patch.json` (publish = include `"state":"published"`; no `/publish` endpoint)
+- If publish fails (HTTP 422): missing `severity`/`description`/`vulnerabilities[]`, or private fork has open PRs
+- Verify: re-fetch; ensure `state=published`, `published_at` set; `jq -r .description | rg '\\\\n'` returns nothing
+
+## Troubleshooting
 
 ### Theme Colors
 
@@ -299,9 +309,45 @@ console.log(theme.error("Error!"));
 
 ## Multi-Agent Safety
 
-- **Do NOT** create/apply/drop git stash unless requested
-- **Do NOT** switch branches unless explicitly requested
-- **Do NOT** modify git worktrees unless requested
-- When user says "commit", scope to your changes only
-- When user says "commit all", commit everything in grouped chunks
-- Auto-resolve formatting-only changes without asking
+- Use the 1password skill; all `op` commands must run inside a fresh tmux session.
+- Sign in: `eval "$(op signin --account my.1password.com)"` (app unlocked + integration on).
+- OTP: `op read 'op://Private/Npmjs/one-time password?attribute=otp'`.
+- Publish: `npm publish --access public --otp="<otp>"` (run from the package dir).
+- Verify without local npmrc side effects: `npm view <pkg> version --userconfig "$(mktemp)"`.
+- Kill the tmux session after publish.
+
+## Plugin Release Fast Path (no core `openclaw` publish)
+
+- Release only already-on-npm plugins. Source list is in `docs/reference/RELEASING.md` under "Current npm plugin list".
+- Run all CLI `op` calls and `npm publish` inside tmux to avoid hangs/interruption:
+  - `tmux new -d -s release-plugins-$(date +%Y%m%d-%H%M%S)`
+  - `eval "$(op signin --account my.1password.com)"`
+- 1Password helpers:
+  - password used by `npm login`:
+    `op item get Npmjs --format=json | jq -r '.fields[] | select(.id=="password").value'`
+  - OTP:
+    `op read 'op://Private/Npmjs/one-time password?attribute=otp'`
+- Fast publish loop (local helper script in `/tmp` is fine; keep repo clean):
+  - compare local plugin `version` to `npm view <name> version`
+  - only run `npm publish --access public --otp="<otp>"` when versions differ
+  - skip if package is missing on npm or version already matches.
+- Keep `openclaw` untouched: never run publish from repo root unless explicitly requested.
+- Post-check for each release:
+  - per-plugin: `npm view @openclaw/<name> version --userconfig "$(mktemp)"` should be `2026.2.16`
+  - core guard: `npm view openclaw version --userconfig "$(mktemp)"` should stay at previous version unless explicitly requested.
+
+## Changelog Release Notes
+
+- When cutting a mac release with beta GitHub prerelease:
+  - Tag `vYYYY.M.D-beta.N` from the release commit (example: `v2026.2.15-beta.1`).
+  - Create prerelease with title `openclaw YYYY.M.D-beta.N`.
+  - Use release notes from `CHANGELOG.md` version section (`Changes` + `Fixes`, no title duplicate).
+  - Attach at least `OpenClaw-YYYY.M.D.zip` and `OpenClaw-YYYY.M.D.dSYM.zip`; include `.dmg` if available.
+
+- Keep top version entries in `CHANGELOG.md` sorted by impact:
+  - `### Changes` first.
+  - `### Fixes` deduped and ranked with user-facing fixes first.
+- Before tagging/publishing, run:
+  - `node --import tsx scripts/release-check.ts`
+  - `pnpm release:check`
+  - `pnpm test:install:smoke` or `OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT=1 pnpm test:install:smoke` for non-root smoke path.

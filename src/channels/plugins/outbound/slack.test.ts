@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../../slack/send.js", () => ({
-  sendMessageSlack: vi.fn().mockResolvedValue({ ts: "1234.5678", channel: "C123" }),
+  sendMessageSlack: vi.fn().mockResolvedValue({ messageId: "1234.5678", channelId: "C123" }),
 }));
 
 vi.mock("../../../plugins/hook-runner-global.js", () => ({
@@ -34,6 +34,46 @@ describe("slack outbound hook wiring", () => {
     expect(sendMessageSlack).toHaveBeenCalledWith("C123", "hello", {
       threadTs: "1111.2222",
       accountId: "default",
+    });
+  });
+
+  it("forwards identity opts when present", async () => {
+    vi.mocked(getGlobalHookRunner).mockReturnValue(null);
+
+    await slackOutbound.sendText({
+      to: "C123",
+      text: "hello",
+      accountId: "default",
+      replyToId: "1111.2222",
+      identity: {
+        name: "My Agent",
+        avatarUrl: "https://example.com/avatar.png",
+        emoji: ":should_not_send:",
+      },
+    });
+
+    expect(sendMessageSlack).toHaveBeenCalledWith("C123", "hello", {
+      threadTs: "1111.2222",
+      accountId: "default",
+      identity: { username: "My Agent", iconUrl: "https://example.com/avatar.png" },
+    });
+  });
+
+  it("forwards icon_emoji only when icon_url is absent", async () => {
+    vi.mocked(getGlobalHookRunner).mockReturnValue(null);
+
+    await slackOutbound.sendText({
+      to: "C123",
+      text: "hello",
+      accountId: "default",
+      replyToId: "1111.2222",
+      identity: { emoji: ":lobster:" },
+    });
+
+    expect(sendMessageSlack).toHaveBeenCalledWith("C123", "hello", {
+      threadTs: "1111.2222",
+      accountId: "default",
+      identity: { iconEmoji: ":lobster:" },
     });
   });
 

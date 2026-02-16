@@ -202,6 +202,28 @@ export function resolveDiscordMemberAllowed(params: {
   return userOk || roleOk;
 }
 
+export function resolveDiscordMemberAccessState(params: {
+  channelConfig?: DiscordChannelConfigResolved | null;
+  guildInfo?: DiscordGuildEntryResolved | null;
+  memberRoleIds: string[];
+  sender: { id: string; name?: string; tag?: string };
+}) {
+  const channelUsers = params.channelConfig?.users ?? params.guildInfo?.users;
+  const channelRoles = params.channelConfig?.roles ?? params.guildInfo?.roles;
+  const hasAccessRestrictions =
+    (Array.isArray(channelUsers) && channelUsers.length > 0) ||
+    (Array.isArray(channelRoles) && channelRoles.length > 0);
+  const memberAllowed = resolveDiscordMemberAllowed({
+    userAllowList: channelUsers,
+    roleAllowList: channelRoles,
+    memberRoleIds: params.memberRoleIds,
+    userId: params.sender.id,
+    userName: params.sender.name,
+    userTag: params.sender.tag,
+  });
+  return { channelUsers, channelRoles, hasAccessRestrictions, memberAllowed } as const;
+}
+
 export function resolveDiscordOwnerAllowFrom(params: {
   channelConfig?: DiscordChannelConfigResolved | null;
   guildInfo?: DiscordGuildEntryResolved | null;
@@ -308,6 +330,12 @@ function resolveDiscordChannelEntryMatch(
   });
 }
 
+function hasConfiguredDiscordChannels(
+  channels: DiscordGuildEntryResolved["channels"] | undefined,
+): channels is NonNullable<DiscordGuildEntryResolved["channels"]> {
+  return Boolean(channels && Object.keys(channels).length > 0);
+}
+
 function resolveDiscordChannelConfigEntry(
   entry: DiscordChannelEntry,
 ): DiscordChannelConfigResolved {
@@ -333,7 +361,7 @@ export function resolveDiscordChannelConfig(params: {
 }): DiscordChannelConfigResolved | null {
   const { guildInfo, channelId, channelName, channelSlug } = params;
   const channels = guildInfo?.channels;
-  if (!channels) {
+  if (!hasConfiguredDiscordChannels(channels)) {
     return null;
   }
   const match = resolveDiscordChannelEntryMatch(channels, {
@@ -366,7 +394,7 @@ export function resolveDiscordChannelConfigWithFallback(params: {
     scope,
   } = params;
   const channels = guildInfo?.channels;
-  if (!channels) {
+  if (!hasConfiguredDiscordChannels(channels)) {
     return null;
   }
   const resolvedParentSlug = parentSlug ?? (parentName ? normalizeDiscordSlug(parentName) : "");

@@ -24,9 +24,6 @@ async function makeStorePath() {
   const storePath = path.join(dir, "jobs.json");
   return {
     storePath,
-    cleanup: async () => {
-      await fs.rm(dir, { recursive: true, force: true });
-    },
   };
 }
 
@@ -118,7 +115,10 @@ describe("Cron issue regressions", () => {
     const result = await cron.run(forceNow.id, "force");
 
     expect(result).toEqual({ ok: true, ran: true });
-    expect(enqueueSystemEvent).toHaveBeenCalledWith("force", { agentId: undefined });
+    expect(enqueueSystemEvent).toHaveBeenCalledWith(
+      "force",
+      expect.objectContaining({ agentId: undefined }),
+    );
 
     const job = await cron.add({
       name: "isolated",
@@ -149,7 +149,183 @@ describe("Cron issue regressions", () => {
     }
 
     cron.stop();
-    await store.cleanup();
+  });
+
+  it("repairs missing nextRunAtMs on non-schedule updates without touching other jobs", async () => {
+    const store = await makeStorePath();
+    const cron = new CronService({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "ok" }),
+    });
+    await cron.start();
+
+    const created = await cron.add({
+      name: "repair-target",
+      schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC" },
+      sessionTarget: "main",
+      payload: { kind: "systemEvent", text: "tick" },
+    });
+    const updated = await cron.update(created.id, {
+      payload: { kind: "systemEvent", text: "tick-2" },
+      state: { nextRunAtMs: undefined },
+    });
+
+    expect(updated.payload.kind).toBe("systemEvent");
+    expect(typeof updated.state.nextRunAtMs).toBe("number");
+    expect(updated.state.nextRunAtMs).toBe(created.state.nextRunAtMs);
+
+    cron.stop();
+  });
+
+  it("does not advance unrelated due jobs when updating another job", async () => {
+    const store = await makeStorePath();
+    const now = Date.parse("2026-02-06T10:05:00.000Z");
+    vi.setSystemTime(now);
+    const cron = new CronService({
+      cronEnabled: false,
+      storePath: store.storePath,
+      log: noopLogger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "ok" }),
+    });
+    await cron.start();
+
+    const dueJob = await cron.add({
+      name: "due-preserved",
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: now },
+      sessionTarget: "main",
+      payload: { kind: "systemEvent", text: "due-preserved" },
+    });
+    const otherJob = await cron.add({
+      name: "other-job",
+      schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC" },
+      sessionTarget: "main",
+      payload: { kind: "systemEvent", text: "other" },
+    });
+
+    const originalDueNextRunAtMs = dueJob.state.nextRunAtMs;
+    expect(typeof originalDueNextRunAtMs).toBe("number");
+
+    // Make dueJob past-due without running timer callbacks.
+    vi.setSystemTime(now + 5 * 60_000);
+
+    await cron.update(otherJob.id, {
+      payload: { kind: "systemEvent", text: "other-updated" },
+    });
+
+    const storeData = JSON.parse(await fs.readFile(store.storePath, "utf8")) as {
+      jobs: Array<{ id: string; state?: { nextRunAtMs?: number } }>;
+    };
+    const persistedDueJob = storeData.jobs.find((job) => job.id === dueJob.id);
+    expect(persistedDueJob?.state?.nextRunAtMs).toBe(originalDueNextRunAtMs);
+
+    cron.stop();
+  });
+
+  it("treats persisted jobs with missing enabled as enabled during update()", async () => {
+    const store = await makeStorePath();
+    const now = Date.parse("2026-02-06T10:05:00.000Z");
+    await fs.writeFile(
+      store.storePath,
+      JSON.stringify(
+        {
+          version: 1,
+          jobs: [
+            {
+              id: "missing-enabled-update",
+              name: "legacy missing enabled",
+              createdAtMs: now - 60_000,
+              updatedAtMs: now - 60_000,
+              schedule: { kind: "cron", expr: "0 */2 * * *", tz: "UTC" },
+              sessionTarget: "main",
+              wakeMode: "next-heartbeat",
+              payload: { kind: "systemEvent", text: "legacy" },
+              state: {},
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const cron = new CronService({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "ok" }),
+    });
+    await cron.start();
+
+    const listed = await cron.list();
+    expect(listed.some((job) => job.id === "missing-enabled-update")).toBe(true);
+
+    const updated = await cron.update("missing-enabled-update", {
+      schedule: { kind: "cron", expr: "0 */3 * * *", tz: "UTC" },
+    });
+
+    expect(updated.state.nextRunAtMs).toBeTypeOf("number");
+    expect(updated.state.nextRunAtMs).toBeGreaterThan(now);
+
+    cron.stop();
+  });
+
+  it("treats persisted due jobs with missing enabled as runnable", async () => {
+    const store = await makeStorePath();
+    const now = Date.parse("2026-02-06T10:05:00.000Z");
+    const dueAt = now - 30_000;
+    await fs.writeFile(
+      store.storePath,
+      JSON.stringify(
+        {
+          version: 1,
+          jobs: [
+            {
+              id: "missing-enabled-due",
+              name: "legacy due job",
+              createdAtMs: dueAt - 60_000,
+              updatedAtMs: dueAt,
+              schedule: { kind: "at", at: new Date(dueAt).toISOString() },
+              sessionTarget: "main",
+              wakeMode: "now",
+              payload: { kind: "systemEvent", text: "missing-enabled-due" },
+              state: { nextRunAtMs: dueAt },
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const enqueueSystemEvent = vi.fn();
+    const cron = new CronService({
+      cronEnabled: false,
+      storePath: store.storePath,
+      log: noopLogger,
+      enqueueSystemEvent,
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "ok" }),
+    });
+    await cron.start();
+
+    const result = await cron.run("missing-enabled-due", "due");
+    expect(result).toEqual({ ok: true, ran: true });
+    expect(enqueueSystemEvent).toHaveBeenCalledWith(
+      "missing-enabled-due",
+      expect.objectContaining({ agentId: undefined }),
+    );
+
+    cron.stop();
   });
 
   it("caps timer delay to 60s for far-future schedules", async () => {
@@ -182,7 +358,6 @@ describe("Cron issue regressions", () => {
 
     cron.stop();
     timeoutSpy.mockRestore();
-    await store.cleanup();
   });
 
   it("re-arms timer without hot-looping when a run is already in progress", async () => {
@@ -216,7 +391,6 @@ describe("Cron issue regressions", () => {
       .filter((d): d is number => typeof d === "number");
     expect(delays).toContain(60_000);
     timeoutSpy.mockRestore();
-    await store.cleanup();
   });
 
   it("skips forced manual runs while a timer-triggered run is in progress", async () => {
@@ -283,7 +457,6 @@ describe("Cron issue regressions", () => {
     await cron.list({ includeDisabled: true });
 
     cron.stop();
-    await store.cleanup();
   });
 
   it("#13845: one-shot jobs with terminal statuses do not re-fire on restart", async () => {
@@ -339,7 +512,6 @@ describe("Cron issue regressions", () => {
       expect(enqueueSystemEvent).not.toHaveBeenCalled();
       cron.stop();
     }
-    await store.cleanup();
   });
 
   it("records per-job start time and duration for batched due jobs", async () => {
@@ -385,7 +557,5 @@ describe("Cron issue regressions", () => {
     expect(secondDone?.state.lastRunAtMs).toBe(dueAt + 50);
     expect(secondDone?.state.lastDurationMs).toBe(20);
     expect(startedAtEvents).toEqual([dueAt, dueAt + 50]);
-
-    await store.cleanup();
   });
 });
