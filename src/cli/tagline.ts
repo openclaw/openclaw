@@ -255,10 +255,13 @@ export function pickTagline(options: TaglineOptions = {}): string {
   const env = options.env ?? process.env;
   const override = env?.OPENCLAW_TAGLINE_INDEX;
   if (override !== undefined) {
-    const parsed = Number.parseInt(override, 10);
-    if (!Number.isNaN(parsed) && parsed >= 0) {
-      const pool = TAGLINES.length > 0 ? TAGLINES : [DEFAULT_TAGLINE];
-      return pool[parsed % pool.length];
+    const overrideStr = String(override).trim();
+    if (/^\d+$/.test(overrideStr)) {
+      const parsed = Number.parseInt(overrideStr, 10);
+      if (parsed >= 0) {
+        const pool = TAGLINES.length > 0 ? TAGLINES : [DEFAULT_TAGLINE];
+        return pool[parsed % pool.length];
+      }
     }
   }
   const pool = activeTaglines(options);

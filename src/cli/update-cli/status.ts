@@ -32,7 +32,9 @@ function formatGitStatusLine(params: {
 }
 
 export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<void> {
-  const timeoutMs = opts.timeout ? Number.parseInt(opts.timeout, 10) * 1000 : undefined;
+  const timeoutStr = typeof opts.timeout === "string" ? opts.timeout.trim() : "";
+  const timeoutSec = timeoutStr && /^\d+$/.test(timeoutStr) ? Number.parseInt(timeoutStr, 10) : NaN;
+  const timeoutMs = Number.isFinite(timeoutSec) ? timeoutSec * 1000 : undefined;
   if (timeoutMs !== undefined && (Number.isNaN(timeoutMs) || timeoutMs <= 0)) {
     defaultRuntime.error("--timeout must be a positive integer (seconds)");
     defaultRuntime.exit(1);

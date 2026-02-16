@@ -115,8 +115,11 @@ export function registerOnboardCommand(program: Command) {
       const installDaemon = resolveInstallDaemonFlag(commandRuntime, {
         installDaemon: Boolean(opts.installDaemon),
       });
+      const gatewayPortStr = typeof opts.gatewayPort === "string" ? opts.gatewayPort.trim() : "";
       const gatewayPort =
-        typeof opts.gatewayPort === "string" ? Number.parseInt(opts.gatewayPort, 10) : undefined;
+        gatewayPortStr && /^\d+$/.test(gatewayPortStr)
+          ? Number.parseInt(gatewayPortStr, 10)
+          : undefined;
       await onboardCommand(
         {
           workspace: opts.workspace as string | undefined,
