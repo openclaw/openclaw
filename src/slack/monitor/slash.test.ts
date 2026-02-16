@@ -6,6 +6,7 @@ vi.mock("../../auto-reply/commands-registry.js", () => {
   const reportCommand = { key: "report", nativeName: "report" };
   const reportCompactCommand = { key: "reportcompact", nativeName: "reportcompact" };
   const reportLongCommand = { key: "reportlong", nativeName: "reportlong" };
+  const unsafeConfirmCommand = { key: "unsafeconfirm", nativeName: "unsafeconfirm" };
 
   return {
     buildCommandTextFromArgs: (
@@ -38,6 +39,9 @@ vi.mock("../../auto-reply/commands-registry.js", () => {
       if (normalized === "reportlong") {
         return reportLongCommand;
       }
+      if (normalized === "unsafeconfirm") {
+        return unsafeConfirmCommand;
+      }
       return undefined;
     },
     listNativeCommandSpecsForConfig: () => [
@@ -62,6 +66,12 @@ vi.mock("../../auto-reply/commands-registry.js", () => {
       {
         name: "reportlong",
         description: "ReportLong",
+        acceptsArgs: true,
+        args: [],
+      },
+      {
+        name: "unsafeconfirm",
+        description: "UnsafeConfirm",
         acceptsArgs: true,
         args: [],
       },
@@ -117,6 +127,15 @@ vi.mock("../../auto-reply/commands-registry.js", () => {
             { value: "week", label: "week" },
             { value: "month", label: "month" },
             { value: "quarter", label: "quarter" },
+          ],
+        };
+      }
+      if (params.command?.key === "unsafeconfirm") {
+        return {
+          arg: { name: "mode_*`~<&>", description: "mode" },
+          choices: [
+            { value: "on", label: "on" },
+            { value: "off", label: "off" },
           ],
         };
       }
@@ -230,6 +249,7 @@ describe("Slack native command argument menus", () => {
   let reportHandler: (args: unknown) => Promise<void>;
   let reportCompactHandler: (args: unknown) => Promise<void>;
   let reportLongHandler: (args: unknown) => Promise<void>;
+  let unsafeConfirmHandler: (args: unknown) => Promise<void>;
   let argMenuHandler: (args: unknown) => Promise<void>;
 
   beforeAll(async () => {
@@ -256,6 +276,11 @@ describe("Slack native command argument menus", () => {
       throw new Error("Missing /reportlong handler");
     }
     reportLongHandler = reportLong;
+    const unsafeConfirm = harness.commands.get("/unsafeconfirm");
+    if (!unsafeConfirm) {
+      throw new Error("Missing /unsafeconfirm handler");
+    }
+    unsafeConfirmHandler = unsafeConfirm;
 
     const argMenu = harness.actions.get("openclaw_cmdarg");
     if (!argMenu) {
@@ -374,6 +399,34 @@ describe("Slack native command argument menus", () => {
     expect(element?.type).toBe("overflow");
     expect(element?.action_id).toBe("openclaw_cmdarg");
     expect(element?.confirm).toBeTruthy();
+  });
+
+  it("escapes mrkdwn characters in confirm dialog text", async () => {
+    const respond = vi.fn().mockResolvedValue(undefined);
+    const ack = vi.fn().mockResolvedValue(undefined);
+
+    await unsafeConfirmHandler({
+      command: {
+        user_id: "U1",
+        user_name: "Ada",
+        channel_id: "C1",
+        channel_name: "directmessage",
+        text: "",
+        trigger_id: "t1",
+      },
+      ack,
+      respond,
+    });
+
+    expect(respond).toHaveBeenCalledTimes(1);
+    const payload = respond.mock.calls[0]?.[0] as { blocks?: Array<{ type: string }> };
+    const actions = findFirstActionsBlock(payload);
+    const element = actions?.elements?.[0] as
+      | { confirm?: { text?: { text?: string } } }
+      | undefined;
+    expect(element?.confirm?.text?.text).toContain(
+      "Run */unsafeconfirm* with *mode\\_\\*\\`\\~&lt;&amp;&gt;* set to this value?",
+    );
   });
 
   it("dispatches the command when a menu button is clicked", async () => {
