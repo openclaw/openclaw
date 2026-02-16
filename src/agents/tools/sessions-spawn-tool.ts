@@ -14,6 +14,11 @@ import { optionalStringEnum } from "../schema/typebox.js";
 import { buildSubagentSystemPrompt } from "../subagent-announce.js";
 import { getSubagentDepthFromSessionStore } from "../subagent-depth.js";
 import { countActiveRunsForSession, registerSubagentRun } from "../subagent-registry.js";
+import {
+  getTraceContextForRun,
+  createChildSpan,
+  setTraceContextForRun,
+} from "../../security/trace-context.js";
 import { jsonResult, readStringParam } from "./common.js";
 import {
   resolveDisplaySessionKey,
@@ -73,6 +78,8 @@ export function createSessionsSpawnTool(opts?: {
   sandboxed?: boolean;
   /** Explicit agent ID override for cron/hook sessions where session key parsing may not work. */
   requesterAgentIdOverride?: string;
+  /** Parent run ID for trace context propagation to child sub-agent runs. */
+  runId?: string;
 }): AnyAgentTool {
   return {
     label: "Sessions",
@@ -267,6 +274,9 @@ export function createSessionsSpawnTool(opts?: {
         maxSpawnDepth,
       });
 
+      const parentTrace = opts?.runId ? getTraceContextForRun(opts.runId) : undefined;
+      const childTrace = parentTrace ? createChildSpan(parentTrace) : undefined;
+
       const childIdem = crypto.randomUUID();
       let childRunId: string = childIdem;
       try {
@@ -308,6 +318,10 @@ export function createSessionsSpawnTool(opts?: {
         });
       }
 
+      if (childTrace) {
+        setTraceContextForRun(childRunId, childTrace);
+      }
+
       registerSubagentRun({
         runId: childRunId,
         childSessionKey,
@@ -319,6 +333,7 @@ export function createSessionsSpawnTool(opts?: {
         label: label || undefined,
         model: resolvedModel,
         runTimeoutSeconds,
+        traceId: childTrace?.traceId,
       });
 
       return jsonResult({

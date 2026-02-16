@@ -29,6 +29,7 @@ export type SubagentRunRecord = {
   cleanupCompletedAt?: number;
   cleanupHandled?: boolean;
   suppressAnnounceReason?: "steer-restart" | "killed";
+  traceId?: string;
 };
 
 const subagentRuns = new Map<string, SubagentRunRecord>();
@@ -412,6 +413,7 @@ export function registerSubagentRun(params: {
   label?: string;
   model?: string;
   runTimeoutSeconds?: number;
+  traceId?: string;
 }) {
   const now = Date.now();
   const cfg = loadConfig();
@@ -435,6 +437,7 @@ export function registerSubagentRun(params: {
     startedAt: now,
     archiveAtMs,
     cleanupHandled: false,
+    traceId: params.traceId,
   });
   ensureListener();
   persistSubagentRuns();

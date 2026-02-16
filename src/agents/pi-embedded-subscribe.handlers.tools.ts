@@ -6,6 +6,8 @@ import type {
 } from "./pi-embedded-subscribe.handlers.types.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { getTraceContextForRun, createChildSpan } from "../security/trace-context.js";
+import { emitSecurityEvent } from "../security/event-logger.js";
 import { normalizeTextForComparison } from "./pi-embedded-helpers.js";
 import { isMessagingTool, isMessagingToolSendAction } from "./pi-embedded-messaging.js";
 import {
@@ -95,6 +97,27 @@ export async function handleToolExecutionStart(
   ctx.log.debug(
     `embedded run tool start: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
   );
+
+  // Emit trace security event for tool call
+  const runTrace = getTraceContextForRun(ctx.params.runId);
+  const toolSpan = runTrace ? createChildSpan(runTrace) : undefined;
+  if (toolSpan) {
+    emitSecurityEvent({
+      eventType: "trace.tool.call",
+      timestamp: new Date().toISOString(),
+      severity: "info",
+      sessionKey: ctx.params.sessionKey,
+      action: "executed",
+      detail: `Tool ${toolName} called`,
+      meta: {
+        toolName,
+        toolCallId,
+        traceId: toolSpan.traceId,
+        spanId: toolSpan.spanId,
+        parentSpanId: toolSpan.parentSpanId,
+      },
+    });
+  }
 
   const shouldEmitToolEvents = ctx.shouldEmitToolResult();
   emitAgentEvent({

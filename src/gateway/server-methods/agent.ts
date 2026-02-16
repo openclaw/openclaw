@@ -12,6 +12,7 @@ import {
   updateSessionStore,
 } from "../../config/sessions.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
+import { createRootTrace, setTraceContextForRun } from "../../security/trace-context.js";
 import {
   resolveAgentDeliveryPlan,
   resolveAgentOutboundTarget,
@@ -449,7 +450,9 @@ export const agentHandlers: GatewayRequestHandlers = {
         });
         bestEffortDeliver = true;
       }
-      registerAgentRunContext(idem, { sessionKey: canonicalSessionKey });
+      const rootTrace = createRootTrace();
+      setTraceContextForRun(idem, rootTrace);
+      registerAgentRunContext(idem, { sessionKey: canonicalSessionKey, traceContext: rootTrace });
     }
 
     const runId = idem;
