@@ -1,7 +1,5 @@
 # Smart Agent Neo
 
-> **Fork of [OpenClaw](https://github.com/openclaw/openclaw)** — rebranded and extended with Morpheus decentralized inference as a first-class provider.
-
 <p align="center">
   <a href="https://github.com/betterbrand/smart-agent-neo/actions/workflows/ci.yml?branch=main"><img src="https://img.shields.io/github/actions/workflow/status/betterbrand/smart-agent-neo/ci.yml?branch=main&style=for-the-badge" alt="CI status"></a>
   <a href="https://github.com/betterbrand/smart-agent-neo/releases"><img src="https://img.shields.io/github/v/release/betterbrand/smart-agent-neo?include_prereleases&style=for-the-badge" alt="GitHub release"></a>
