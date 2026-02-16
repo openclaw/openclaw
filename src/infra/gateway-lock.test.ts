@@ -83,45 +83,32 @@ describe("gateway lock", () => {
   });
 
   it("blocks concurrent acquisition until release", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-02-06T10:05:00.000Z"));
+    // Fake timers can hang on Windows CI when combined with fs open loops.
+    // Keep this test on real timers and use small timeouts.
+    vi.useRealTimers();
     const { env, cleanup } = await makeEnv();
     const lock = await acquireGatewayLock({
       env,
       allowInTests: true,
-      timeoutMs: 20,
-      pollIntervalMs: 1,
+      timeoutMs: 100,
+      pollIntervalMs: 5,
     });
     expect(lock).not.toBeNull();
 
-    let settled = false;
     const pending = acquireGatewayLock({
       env,
       allowInTests: true,
-      timeoutMs: 20,
-      pollIntervalMs: 1,
+      timeoutMs: 100,
+      pollIntervalMs: 5,
     });
-    void pending.then(
-      () => {
-        settled = true;
-      },
-      () => {
-        settled = true;
-      },
-    );
-    // Drive the retry loop without real sleeping.
-    for (let i = 0; i < 20 && !settled; i += 1) {
-      await vi.advanceTimersByTimeAsync(5);
-      await Promise.resolve();
-    }
     await expect(pending).rejects.toBeInstanceOf(GatewayLockError);
 
     await lock?.release();
     const lock2 = await acquireGatewayLock({
       env,
       allowInTests: true,
-      timeoutMs: 20,
-      pollIntervalMs: 1,
+      timeoutMs: 100,
+      pollIntervalMs: 5,
     });
     await lock2?.release();
     await cleanup();

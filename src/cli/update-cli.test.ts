@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { UpdateRunResult } from "../infra/update-runner.js";
+import { captureEnv } from "../test-utils/env.js";
 
 const confirm = vi.fn();
 const select = vi.fn();
@@ -597,7 +598,7 @@ describe("update-cli", () => {
 
   it("updateWizardCommand offers dev checkout and forwards selections", async () => {
     const tempDir = await createCaseDir("openclaw-update-wizard");
-    const previousGitDir = process.env.OPENCLAW_GIT_DIR;
+    const envSnapshot = captureEnv(["OPENCLAW_GIT_DIR"]);
     try {
       setTty(true);
       process.env.OPENCLAW_GIT_DIR = tempDir;
@@ -627,7 +628,7 @@ describe("update-cli", () => {
       const call = vi.mocked(runGatewayUpdate).mock.calls[0]?.[0];
       expect(call?.channel).toBe("dev");
     } finally {
-      process.env.OPENCLAW_GIT_DIR = previousGitDir;
+      envSnapshot.restore();
     }
   });
 });
