@@ -10,6 +10,7 @@ import { normalizeReplyPayloadDirectives } from "./reply-delivery.js";
 import {
   applyReplyThreading,
   filterMessagingToolDuplicates,
+  filterMessagingToolMediaDuplicates,
   isRenderablePayload,
   shouldSuppressMessagingToolReplies,
 } from "./reply-payloads.js";
@@ -27,6 +28,7 @@ export function buildReplyPayloads(params: {
   currentMessageId?: string;
   messageProvider?: string;
   messagingToolSentTexts?: string[];
+  messagingToolSentMediaUrls?: string[];
   messagingToolSentTargets?: Parameters<
     typeof shouldSuppressMessagingToolReplies
   >[0]["messagingToolSentTargets"];
@@ -93,16 +95,22 @@ export function buildReplyPayloads(params: {
     payloads: replyTaggedPayloads,
     sentTexts: messagingToolSentTexts,
   });
+  const mediaFilteredPayloads = filterMessagingToolMediaDuplicates({
+    payloads: dedupedPayloads,
+    sentMediaUrls: params.messagingToolSentMediaUrls ?? [],
+  });
   // Filter out payloads already sent via pipeline or directly during tool flush.
   const filteredPayloads = shouldDropFinalPayloads
     ? []
     : params.blockStreamingEnabled
-      ? dedupedPayloads.filter((payload) => !params.blockReplyPipeline?.hasSentPayload(payload))
+      ? mediaFilteredPayloads.filter(
+          (payload) => !params.blockReplyPipeline?.hasSentPayload(payload),
+        )
       : params.directlySentBlockKeys?.size
-        ? dedupedPayloads.filter(
+        ? mediaFilteredPayloads.filter(
             (payload) => !params.directlySentBlockKeys!.has(createBlockReplyPayloadKey(payload)),
           )
-        : dedupedPayloads;
+        : mediaFilteredPayloads;
   const replyPayloads = suppressMessagingToolReplies ? [] : filteredPayloads;
 
   return {
