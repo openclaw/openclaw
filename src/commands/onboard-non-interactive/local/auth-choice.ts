@@ -5,7 +5,6 @@ import { upsertAuthProfile } from "../../../agents/auth-profiles.js";
 import { normalizeProviderId } from "../../../agents/model-selection.js";
 import { parseDurationMs } from "../../../cli/parse-duration.js";
 import {
-  CLOUDRU_FM_PRESETS,
   CLOUDRU_PROXY_PORT_DEFAULT,
   CLOUDRU_PROXY_SENTINEL_KEY,
   CLOUDRU_CLEAR_ENV_EXTRAS,
