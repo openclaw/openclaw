@@ -487,4 +487,40 @@ export const FIELD_HELP: Record<string, string> = {
     'Direct message access control ("pairing" recommended). "open" requires channels.slack.allowFrom=["*"] (legacy: channels.slack.dm.allowFrom).',
   "channels.slack.dmPolicy":
     'Direct message access control ("pairing" recommended). "open" requires channels.slack.allowFrom=["*"].',
+  "channels.discord.guilds.*.reactionDelivery":
+    'Reaction delivery mode: "deferred" (default) queues reactions for the next inbound message; "immediate" triggers a dedicated agent turn.',
+  "channels.discord.guilds.*.reactionBundleWindowMs":
+    "Debounce window (ms) for bundling multiple reactions to the same message before dispatching (0–60000, default: 2000).",
+  "channels.discord.guilds.*.reactionIncludeMessage":
+    "When true, include the content of the reacted-to message in the agent context (default: false).",
+  "channels.telegram.reactionDelivery":
+    'Reaction delivery mode: "deferred" (default) queues reactions; "immediate" triggers a dedicated agent turn.',
+  "channels.telegram.reactionBundleWindowMs":
+    "Debounce window (ms) for bundling Telegram reactions (0–60000, default: 2000).",
+  "channels.telegram.reactionIncludeMessage":
+    "Include reacted-to message content (not available on Telegram — Bot API does not expose message content in reaction events).",
+  "channels.signal.reactionDelivery":
+    'Reaction delivery mode: "deferred" (default) queues reactions; "immediate" triggers a dedicated agent turn.',
+  "channels.signal.reactionBundleWindowMs":
+    "Debounce window (ms) for bundling Signal reactions (0–60000, default: 2000).",
+  "channels.signal.reactionIncludeMessage":
+    "Include reacted-to message content (not available on Signal — API only provides targetSentTimestamp).",
+  "channels.slack.reactionDelivery":
+    'Reaction delivery mode: "deferred" (default) queues reactions; "immediate" triggers a dedicated agent turn.',
+  "channels.slack.reactionBundleWindowMs":
+    "Debounce window (ms) for bundling Slack reactions (0–60000, default: 2000).",
+  "channels.slack.reactionIncludeMessage":
+    "When true, fetch and include the content of the reacted-to Slack message in the agent context (default: false).",
+  "channels.imessage.reactionDelivery":
+    'Reaction delivery mode: "deferred" (default) queues reactions; "immediate" triggers a dedicated agent turn.',
+  "channels.imessage.reactionBundleWindowMs":
+    "Debounce window (ms) for bundling iMessage reactions (0–60000, default: 2000).",
+  "channels.imessage.reactionIncludeMessage":
+    "When true, include the content of the reacted-to message in the agent context (default: false).",
+  "channels.bluebubbles.reactionDelivery":
+    'Reaction delivery mode: "deferred" (default) queues reactions; "immediate" triggers a dedicated agent turn.',
+  "channels.bluebubbles.reactionBundleWindowMs":
+    "Debounce window (ms) for bundling BlueBubbles reactions (0–60000, default: 2000).",
+  "channels.bluebubbles.reactionIncludeMessage":
+    "When true, include the content of the reacted-to message in the agent context (default: false).",
 };

@@ -21,6 +21,9 @@ export type DiscordGuildEntryResolved = {
   slug?: string;
   requireMention?: boolean;
   reactionNotifications?: "off" | "own" | "all" | "allowlist";
+  reactionDelivery?: "deferred" | "immediate";
+  reactionBundleWindowMs?: number;
+  reactionIncludeMessage?: boolean;
   users?: string[];
   roles?: string[];
   channels?: Record<

@@ -419,7 +419,65 @@ async function handleDiscordReactionEvent(params: {
       return;
     }
 
-    emitReactionWithAuthor(message);
+    if (guildInfo?.reactionDelivery === "immediate") {
+      // Immediate delivery path — bypass deferred helpers and route directly
+      const emojiLabel = formatDiscordReactionEmoji(data.emoji);
+      const actorLabel = formatDiscordUserTag(user);
+      const guildSlug =
+        guildInfo?.slug ||
+        (data.guild?.name
+          ? normalizeDiscordSlug(data.guild.name)
+          : (data.guild_id ?? (isGroupDm ? "group-dm" : "dm")));
+      const channelLabel = channelSlug
+        ? `#${channelSlug}`
+        : channelName
+          ? `#${normalizeDiscordSlug(channelName)}`
+          : `#${data.channel_id}`;
+      const route = resolveAgentRoute({
+        cfg: params.cfg,
+        channel: "discord",
+        accountId: params.accountId,
+        guildId: data.guild_id ?? undefined,
+        memberRoleIds,
+        peer: {
+          kind: isDirectMessage ? "direct" : isGroupDm ? "group" : "channel",
+          id: isDirectMessage ? user.id : data.channel_id,
+        },
+        parentPeer: parentId ? { kind: "channel", id: parentId } : undefined,
+      });
+      const { getReactionDebouncer } = await import("../../infra/reaction-dispatch/index.js");
+      const debouncer = getReactionDebouncer(guildInfo.reactionBundleWindowMs);
+
+      const reactedMessageContent = guildInfo.reactionIncludeMessage
+        ? message?.content || undefined
+        : undefined;
+      const reactedMessageAuthor =
+        guildInfo.reactionIncludeMessage && message?.author
+          ? formatDiscordUserTag(message.author)
+          : undefined;
+
+      await debouncer.enqueue(
+        {
+          emoji: emojiLabel,
+          actorLabel,
+          actorId: user.id,
+          action,
+          ts: Date.now(),
+        },
+        {
+          channel: "discord",
+          accountId: params.accountId,
+          sessionKey: route.sessionKey,
+          messageId: data.message_id,
+          reactedMessageContent,
+          reactedMessageAuthor,
+          conversationLabel: `${guildSlug} ${channelLabel}`,
+        },
+      );
+    } else {
+      // Deferred path — use upstream helper
+      emitReactionWithAuthor(message);
+    }
   } catch (err) {
     params.logger.error(danger(`discord reaction handler failed: ${String(err)}`));
   }

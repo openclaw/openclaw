@@ -250,6 +250,15 @@ export async function runPreparedReply(
   });
   const isGroupSession = sessionEntry?.chatType === "group" || sessionEntry?.chatType === "channel";
   const isMainSession = !isGroupSession && sessionKey === normalizeMainKey(sessionCfg?.mainKey);
+
+  // Drain any pending debounced reactions for this session into system events
+  // so they appear as context in the user's message turn, not a separate turn.
+  const { getReactionDebouncerIfExists } = await import("../../infra/reaction-dispatch/global.js");
+  const reactionDebouncer = getReactionDebouncerIfExists();
+  if (reactionDebouncer) {
+    await reactionDebouncer.drainAllForSession(sessionKey);
+  }
+
   prefixedBodyBase = await prependSystemEvents({
     cfg,
     sessionKey,

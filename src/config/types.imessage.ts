@@ -6,6 +6,7 @@ import type {
 } from "./types.base.js";
 import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
 import type { DmConfig } from "./types.messages.js";
+import type { ReactionDelivery } from "./types.reactions.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
 export type IMessageAccountConfig = {
@@ -75,6 +76,12 @@ export type IMessageAccountConfig = {
       toolsBySender?: GroupToolPolicyBySenderConfig;
     }
   >;
+  /** Reaction delivery mode: "deferred" queues for next message; "immediate" triggers own agent turn. Default: deferred. */
+  reactionDelivery?: ReactionDelivery;
+  /** Debounce window (ms) for bundling multiple reactions to the same message (0–60000). Default: 2000. */
+  reactionBundleWindowMs?: number;
+  /** When true, include the reacted-to message content in the agent context. Default: false. */
+  reactionIncludeMessage?: boolean;
   /** Heartbeat visibility settings for this channel. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
   /** Outbound response prefix override for this channel/account. */

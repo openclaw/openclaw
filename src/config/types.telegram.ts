@@ -9,6 +9,7 @@ import type {
 } from "./types.base.js";
 import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
 import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
+import type { ReactionDelivery } from "./types.reactions.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
 export type TelegramActionConfig = {
@@ -136,6 +137,12 @@ export type TelegramAccountConfig = {
    * - "all": notify agent of all reactions
    */
   reactionNotifications?: "off" | "own" | "all";
+  /** Reaction delivery mode: "deferred" queues for next message; "immediate" triggers own agent turn. Default: deferred. */
+  reactionDelivery?: ReactionDelivery;
+  /** Debounce window (ms) for bundling multiple reactions to the same message (0–60000). Default: 2000. */
+  reactionBundleWindowMs?: number;
+  /** When true, include the reacted-to message content in the agent context (not available on Telegram). */
+  reactionIncludeMessage?: boolean;
   /**
    * Controls agent's reaction capability:
    * - "off": agent cannot react

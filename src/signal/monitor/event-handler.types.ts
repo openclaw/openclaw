@@ -83,6 +83,9 @@ export type SignalEventHandlerDeps = {
   groupPolicy: GroupPolicy;
   reactionMode: SignalReactionNotificationMode;
   reactionAllowlist: string[];
+  reactionDelivery?: "deferred" | "immediate";
+  reactionBundleWindowMs?: number;
+  reactionIncludeMessage?: boolean;
   mediaMaxBytes: number;
   ignoreAttachments: boolean;
   sendReadReceipts: boolean;

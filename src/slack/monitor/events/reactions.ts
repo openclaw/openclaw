@@ -42,10 +42,57 @@ export function registerSlackReactionEvents(params: { ctx: SlackMonitorContext }
         channelId: item.channel,
         channelType,
       });
-      enqueueSystemEvent(text, {
-        sessionKey,
-        contextKey: `slack:reaction:${action}:${item.channel}:${item.ts}:${event.user}:${emojiLabel}`,
-      });
+
+      if (ctx.reactionDelivery === "immediate") {
+        const { getReactionDebouncer } = await import("../../../infra/reaction-dispatch/index.js");
+        const debouncer = getReactionDebouncer(ctx.reactionBundleWindowMs);
+
+        let reactedMessageContent: string | undefined;
+        let reactedMessageAuthor: string | undefined;
+        if (ctx.reactionIncludeMessage && item.channel && item.ts) {
+          try {
+            const history = await ctx.app.client.conversations.history({
+              token: ctx.botToken,
+              channel: item.channel,
+              latest: item.ts,
+              limit: 1,
+              inclusive: true,
+            });
+            const msg = history.messages?.[0];
+            if (msg) {
+              reactedMessageContent = msg.text || undefined;
+              const msgUser = msg.user ? await ctx.resolveUserName(msg.user) : undefined;
+              reactedMessageAuthor = msgUser?.name ?? msg.user;
+            }
+          } catch {
+            // Best-effort message content fetch
+          }
+        }
+
+        await debouncer.enqueue(
+          {
+            emoji: emojiLabel,
+            actorLabel: actorLabel ?? "unknown",
+            actorId: event.user,
+            action: action as "added" | "removed",
+            ts: Date.now(),
+          },
+          {
+            channel: "slack",
+            accountId: ctx.accountId,
+            sessionKey,
+            messageId: item.ts ?? "",
+            reactedMessageContent,
+            reactedMessageAuthor,
+            conversationLabel: channelLabel,
+          },
+        );
+      } else {
+        enqueueSystemEvent(text, {
+          sessionKey,
+          contextKey: `slack:reaction:${action}:${item.channel}:${item.ts}:${event.user}:${emojiLabel}`,
+        });
+      }
     } catch (err) {
       ctx.runtime.error?.(danger(`slack reaction handler failed: ${String(err)}`));
     }
