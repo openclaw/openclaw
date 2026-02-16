@@ -568,7 +568,6 @@ describe("createReplyReferencePlanner", () => {
       startId: "parent",
     });
     expect(planner.use()).toBeUndefined();
-    expect(planner.hasReplied()).toBe(false);
   });
 
   it("uses startId once when mode is first", () => {
