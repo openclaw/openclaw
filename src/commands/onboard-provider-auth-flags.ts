@@ -59,7 +59,7 @@ export const ONBOARD_PROVIDER_AUTH_FLAGS: ReadonlyArray<OnboardProviderAuthFlag>
     optionKey: "aimlapiApiKey",
     authChoice: "aimlapi-api-key",
     cliFlag: "--aimlapi-api-key",
-    cliOption: "--openrouter-api-key <key>",
+    cliOption: "--aimlapi-api-key <key>",
     description: "AI/ML API key",
   },
   {
