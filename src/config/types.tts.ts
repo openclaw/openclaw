@@ -1,4 +1,4 @@
-export type TtsProvider = "elevenlabs" | "openai" | "edge";
+export type TtsProvider = "elevenlabs" | "openai" | "edge" | "sarvam";
 
 export type TtsMode = "final" | "all";
 
@@ -72,6 +72,25 @@ export type TtsConfig = {
     saveSubtitles?: boolean;
     proxy?: string;
     timeoutMs?: number;
+  };
+  /** Sarvam configuration. */
+  sarvam?: {
+    apiKey?: string;
+    baseUrl?: string;
+    /** TTS model id (example: bulbul:v2). */
+    model?: string;
+    /** Speaker id (example: anushka). */
+    speaker?: string;
+    /** Target language code for TTS output (example: en-IN, te-IN, kn-IN). */
+    languageCode?: string;
+    /** Output codec (mp3, wav, pcm). */
+    outputAudioCodec?: string;
+    /** Optional sample rate for output audio. */
+    speechSampleRate?: number;
+    /** Optional speech pace (0.7-1.2). */
+    pace?: number;
+    /** Optional randomness for expressive speech. */
+    temperature?: number;
   };
   /** Optional path for local TTS user preferences JSON. */
   prefsPath?: string;

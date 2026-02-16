@@ -39,6 +39,16 @@ vi.mock("../agents/model-auth.js", () => ({
   requireApiKey: vi.fn((auth: { apiKey?: string }) => auth.apiKey ?? ""),
 }));
 
+vi.mock("../infra/net/ssrf.js", () => ({
+  resolvePinnedHostname: vi.fn(async (hostname: string) => ({
+    hostname,
+    addresses: ["93.184.216.34"],
+    lookup: vi.fn(),
+  })),
+  createPinnedDispatcher: vi.fn(() => ({ close: vi.fn() })),
+  closeDispatcher: vi.fn(async () => {}),
+}));
+
 const { _test, resolveTtsConfig, maybeApplyTtsToPayload, getTtsProvider } = tts;
 
 const {
@@ -149,18 +159,28 @@ describe("tts", () => {
   describe("resolveOutputFormat", () => {
     it("uses Opus for Telegram", () => {
       const output = resolveOutputFormat("telegram");
-      expect(output.openai).toBe("opus");
-      expect(output.elevenlabs).toBe("opus_48000_64");
-      expect(output.extension).toBe(".opus");
-      expect(output.voiceCompatible).toBe(true);
+      expect(output.openai.format).toBe("opus");
+      expect(output.openai.extension).toBe(".opus");
+      expect(output.openai.voiceCompatible).toBe(true);
+      expect(output.elevenlabs.format).toBe("opus_48000_64");
+      expect(output.elevenlabs.extension).toBe(".opus");
+      expect(output.elevenlabs.voiceCompatible).toBe(true);
+      expect(output.sarvam.format).toBe("mp3");
+      expect(output.sarvam.extension).toBe(".mp3");
+      expect(output.sarvam.voiceCompatible).toBe(false);
     });
 
     it("uses MP3 for other channels", () => {
       const output = resolveOutputFormat("discord");
-      expect(output.openai).toBe("mp3");
-      expect(output.elevenlabs).toBe("mp3_44100_128");
-      expect(output.extension).toBe(".mp3");
-      expect(output.voiceCompatible).toBe(false);
+      expect(output.openai.format).toBe("mp3");
+      expect(output.openai.extension).toBe(".mp3");
+      expect(output.openai.voiceCompatible).toBe(false);
+      expect(output.elevenlabs.format).toBe("mp3_44100_128");
+      expect(output.elevenlabs.extension).toBe(".mp3");
+      expect(output.elevenlabs.voiceCompatible).toBe(false);
+      expect(output.sarvam.format).toBe("mp3");
+      expect(output.sarvam.extension).toBe(".mp3");
+      expect(output.sarvam.voiceCompatible).toBe(false);
     });
   });
 
@@ -210,6 +230,14 @@ describe("tts", () => {
       const result = parseTtsDirectives(input, policy);
 
       expect(result.overrides.provider).toBe("edge");
+    });
+
+    it("accepts sarvam as provider override", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true });
+      const input = "Hello [[tts:provider=sarvam]] world";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.overrides.provider).toBe("sarvam");
     });
 
     it("keeps text intact when overrides are disabled", () => {
@@ -404,11 +432,28 @@ describe("tts", () => {
           OPENAI_API_KEY: undefined,
           ELEVENLABS_API_KEY: undefined,
           XI_API_KEY: undefined,
+          SARVAM_API_KEY: undefined,
         },
         () => {
           const config = resolveTtsConfig(baseCfg);
           const provider = getTtsProvider(config, "/tmp/tts-prefs-edge.json");
           expect(provider).toBe("edge");
+        },
+      );
+    });
+
+    it("prefers Sarvam when OpenAI and ElevenLabs are missing", () => {
+      withEnv(
+        {
+          OPENAI_API_KEY: undefined,
+          ELEVENLABS_API_KEY: undefined,
+          XI_API_KEY: undefined,
+          SARVAM_API_KEY: "test-sarvam-key",
+        },
+        () => {
+          const config = resolveTtsConfig(baseCfg);
+          const provider = getTtsProvider(config, "/tmp/tts-prefs-sarvam.json");
+          expect(provider).toBe("sarvam");
         },
       );
     });
