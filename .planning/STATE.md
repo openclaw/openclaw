@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-02-16)
 ## Current Position
 
 Phase: 8 of 8 (Browser, Media & WhatsApp)
-Plan: 1 of 2 in current phase (complete)
-Status: Executing phase 8
-Last activity: 2026-02-16 — 08-01 browser CDP live test verified
+Plan: 2 of 2 in current phase (complete)
+Status: Phase 8 complete
+Last activity: 2026-02-16 — 08-02 Telegram e2e live test verified
 
-Progress: [██████████████████████████░░░░] 88% (16/~17 plans across all milestones)
+Progress: [██████████████████████████████] 100% (17/17 plans across all milestones)
 
 ## Performance Metrics
 
@@ -34,6 +34,7 @@ Progress: [███████████████████████
 | 07-01 | Agent Provider Tests | 3min   | 2     | 0     |
 | 07-02 | Gateway Live Tests   | 6min   | 2     | 2     |
 | 08-01 | Browser CDP Test     | 3min   | 2     | 0     |
+| 08-02 | Telegram E2E Test    | 3min   | 2     | 2     |
 
 ## Accumulated Context
 
@@ -53,6 +54,8 @@ Full decision log in PROJECT.md Key Decisions table.
 - startGatewayServer uses positional (port, opts) form, not object-style
 - CLI backend test environmental skip in Claude Code sessions is acceptable
 - No code changes needed for browser CDP live test — Phase 6 left it correct
+- Direct fetch to Telegram Bot API for e2e test (no grammy dependency in test)
+- Test getMe + sendMessage as proof of bot connectivity and send capability
 
 ### Pending Todos
 
@@ -65,6 +68,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-16
-Stopped at: Completed 08-01-PLAN.md
-Resume with: `/gsd:execute-phase 08-02`
-Resume file: `.planning/phases/08-browser-media-whatsapp/08-02-PLAN.md`
+Stopped at: Completed 08-02-PLAN.md — Phase 8 complete, all v1.1 plans done
+Resume with: Phase 8 verification or v1.1 wrap-up
+Resume file: `.planning/phases/08-browser-media-whatsapp/08-02-SUMMARY.md`
