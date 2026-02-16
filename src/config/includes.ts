@@ -167,10 +167,37 @@ class IncludeProcessor {
   }
 
   private resolvePath(includePath: string): string {
+    const configDir = path.dirname(this.basePath);
     const resolved = path.isAbsolute(includePath)
       ? includePath
-      : path.resolve(path.dirname(this.basePath), includePath);
-    return path.normalize(resolved);
+      : path.resolve(configDir, includePath);
+    const normalized = path.normalize(resolved);
+
+    // SECURITY: Reject paths outside config directory (CWE-22: Path Traversal)
+    if (!normalized.startsWith(configDir + path.sep) && normalized !== configDir) {
+      throw new ConfigIncludeError(
+        `Include path escapes config directory: ${includePath}`,
+        includePath,
+      );
+    }
+
+    // SECURITY: Resolve symlinks and re-validate to prevent symlink bypass
+    try {
+      const real = fs.realpathSync(normalized);
+      if (!real.startsWith(configDir + path.sep) && real !== configDir) {
+        throw new ConfigIncludeError(
+          `Include path resolves outside config directory (symlink): ${includePath}`,
+          includePath,
+        );
+      }
+    } catch (err) {
+      if (err instanceof ConfigIncludeError) {
+        throw err;
+      }
+      // File doesn't exist yet - normalized path check above is sufficient
+    }
+
+    return normalized;
   }
 
   private checkCircular(resolvedPath: string): void {
