@@ -1,7 +1,7 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { describe, it, expect, afterEach } from "vitest";
 
 // We can't easily test downloadLineMedia without mocking the LINE SDK,
 // so test the cleanup behavior by creating temp files directly and
@@ -42,9 +42,7 @@ describe("LINE media temp file cleanup", () => {
   it("unlink on non-existent file does not throw when caught", async () => {
     const filePath = path.join(os.tmpdir(), `line-media-nonexistent-${Date.now()}.jpg`);
     // Should not throw
-    await expect(
-      fs.promises.unlink(filePath).catch(() => {}),
-    ).resolves.toBeUndefined();
+    await expect(fs.promises.unlink(filePath).catch(() => {})).resolves.toBeUndefined();
   });
 
   it("setTimeout.unref exists and is callable", () => {
