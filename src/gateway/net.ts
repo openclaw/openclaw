@@ -210,12 +210,16 @@ export function isTrustedProxyAddress(ip: string | undefined, trustedProxies?: s
   }
 
   return trustedProxies.some((proxy) => {
+    const candidate = proxy.trim();
+    if (!candidate) {
+      return false;
+    }
     // Handle CIDR notation
-    if (proxy.includes("/")) {
-      return ipMatchesCIDR(normalized, proxy);
+    if (candidate.includes("/")) {
+      return ipMatchesCIDR(normalized, candidate);
     }
     // Exact IP match
-    return normalizeIp(proxy) === normalized;
+    return normalizeIp(candidate) === normalized;
   });
 }
 
