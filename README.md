@@ -319,7 +319,6 @@ Runbook: [iOS connect](https://docs.openclaw.ai/platforms/ios).
 - Install: [OpenClaw for Android](https://github.com/irtiq7/OpenClaw-Android).
 
 ## Agent workspace + skills
-## Agent workspace + skills
 
 - Workspace root: `~/.openclaw/workspace` (configurable via `agents.defaults.workspace`).
 - Injected prompt files: `AGENTS.md`, `SOUL.md`, `TOOLS.md`.
