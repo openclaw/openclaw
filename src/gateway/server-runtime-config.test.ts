@@ -1,7 +1,30 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { resolveGatewayRuntimeConfig } from "./server-runtime-config.js";
 
 describe("resolveGatewayRuntimeConfig", () => {
+  let savedToken: string | undefined;
+  let savedPassword: string | undefined;
+
+  beforeEach(() => {
+    savedToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+    savedPassword = process.env.OPENCLAW_GATEWAY_PASSWORD;
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+  });
+
+  afterEach(() => {
+    if (savedToken !== undefined) {
+      process.env.OPENCLAW_GATEWAY_TOKEN = savedToken;
+    } else {
+      delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    }
+    if (savedPassword !== undefined) {
+      process.env.OPENCLAW_GATEWAY_PASSWORD = savedPassword;
+    } else {
+      delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+    }
+  });
+
   describe("trusted-proxy auth mode", () => {
     // This test validates BOTH validation layers:
     // 1. CLI validation in src/cli/gateway-cli/run.ts (line 246)
