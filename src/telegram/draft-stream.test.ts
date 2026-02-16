@@ -86,12 +86,14 @@ describe("createTelegramDraftStream", () => {
     await vi.waitFor(() => expect(api.sendMessage).toHaveBeenCalledWith(123, "Hello", undefined));
   });
 
-  it("omits message_thread_id for dm threads and clears preview on cleanup", async () => {
+  it("includes message_thread_id for dm threads and clears preview on cleanup", async () => {
     const api = createMockDraftApi();
-    const stream = createThreadedDraftStream(api, { id: 1, scope: "dm" });
+    const stream = createThreadedDraftStream(api, { id: 42, scope: "dm" });
 
     stream.update("Hello");
-    await vi.waitFor(() => expect(api.sendMessage).toHaveBeenCalledWith(123, "Hello", undefined));
+    await vi.waitFor(() =>
+      expect(api.sendMessage).toHaveBeenCalledWith(123, "Hello", { message_thread_id: 42 }),
+    );
     await stream.clear();
 
     expect(api.deleteMessage).toHaveBeenCalledWith(123, 17);
