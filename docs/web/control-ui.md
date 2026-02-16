@@ -96,6 +96,10 @@ Cron jobs panel notes:
   - Click **Stop** (calls `chat.abort`)
   - Type `/stop` (or `stop|esc|abort|wait|exit|interrupt`) to abort out-of-band
   - `chat.abort` supports `{ sessionKey }` (no `runId`) to abort all active runs for that session
+- Abort partial retention:
+  - When a run is aborted, partial assistant text can still be shown in the UI
+  - Gateway persists aborted partial assistant text into transcript history when buffered output exists
+  - Persisted entries include abort metadata so transcript consumers can tell abort partials from normal completion output
 
 ## Tailnet access (recommended)
 
