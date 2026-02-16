@@ -51,17 +51,13 @@ import {
   saveSkillApiKey,
   updateSkillEdit,
   updateSkillEnabled,
-  type SkillMessage,
 } from "./controllers/skills.ts";
 import { icons } from "./icons.ts";
 import {
   normalizeBasePath,
   TAB_GROUPS,
-  iconForTab,
-  pathForTab,
   subtitleForTab,
   titleForTab,
-  type Tab,
 } from "./navigation.ts";
 import { renderAgents } from "./views/agents.ts";
 import { renderChannels } from "./views/channels.ts";

@@ -50,7 +50,7 @@ class I18nManager {
         } else {
           return;
         }
-        this.translations[locale] = module[locale.replace("-", "_")] as TranslationMap;
+        this.translations[locale] = module[locale.replace("-", "_")];
       } catch (e) {
         console.error(`Failed to load locale: ${locale}`, e);
         return;
