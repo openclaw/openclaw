@@ -6,7 +6,7 @@ import {
   renderReadingIndicatorGroup,
   renderStreamingGroup,
 } from "../chat/grouped-render.ts";
-import { normalizeMessage, normalizeRoleForGrouping } from "../chat/message-normalizer.ts";
+import { normalizeMessage, normalizeRoleForGrouping, isHeartbeatMessage } from "../chat/message-normalizer.ts";
 import { icons } from "../icons.ts";
 import { detectTextDirection } from "../text-direction.ts";
 import type { SessionsListResult } from "../types.ts";
@@ -557,6 +557,12 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
     }
 
     if (!props.showThinking && normalized.role.toLowerCase() === "toolresult") {
+      continue;
+    }
+
+    // Hide heartbeat-only messages (automated health checks) from the chat.
+    // These contain just "HEARTBEAT_OK" and are not useful to end users.
+    if (isHeartbeatMessage(msg)) {
       continue;
     }
 
