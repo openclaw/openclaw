@@ -123,6 +123,33 @@ describe("google-shared convertTools", () => {
 });
 
 describe("google-shared convertMessages", () => {
+  function expectConsecutiveMessagesNotMerged(params: {
+    modelId: string;
+    first: string;
+    second: string;
+  }) {
+    const model = makeModel(params.modelId);
+    const context = {
+      messages: [
+        {
+          role: "user",
+          content: params.first,
+        },
+        {
+          role: "user",
+          content: params.second,
+        },
+      ],
+    } as unknown as Context;
+
+    const contents = convertMessages(model, context);
+    expect(contents).toHaveLength(2);
+    expect(contents[0].role).toBe("user");
+    expect(contents[1].role).toBe("user");
+    expect(contents[0].parts).toHaveLength(1);
+    expect(contents[1].parts).toHaveLength(1);
+  }
+
   it("keeps thinking blocks when provider/model match", () => {
     const model = makeModel("gemini-1.5-pro");
     const context = {
@@ -170,49 +197,19 @@ describe("google-shared convertMessages", () => {
   });
 
   it("does not merge consecutive user messages for Gemini", () => {
-    const model = makeModel("gemini-1.5-pro");
-    const context = {
-      messages: [
-        {
-          role: "user",
-          content: "Hello",
-        },
-        {
-          role: "user",
-          content: "How are you?",
-        },
-      ],
-    } as unknown as Context;
-
-    const contents = convertMessages(model, context);
-    expect(contents).toHaveLength(2);
-    expect(contents[0].role).toBe("user");
-    expect(contents[1].role).toBe("user");
-    expect(contents[0].parts).toHaveLength(1);
-    expect(contents[1].parts).toHaveLength(1);
+    expectConsecutiveMessagesNotMerged({
+      modelId: "gemini-1.5-pro",
+      first: "Hello",
+      second: "How are you?",
+    });
   });
 
   it("does not merge consecutive user messages for non-Gemini Google models", () => {
-    const model = makeModel("claude-3-opus");
-    const context = {
-      messages: [
-        {
-          role: "user",
-          content: "First",
-        },
-        {
-          role: "user",
-          content: "Second",
-        },
-      ],
-    } as unknown as Context;
-
-    const contents = convertMessages(model, context);
-    expect(contents).toHaveLength(2);
-    expect(contents[0].role).toBe("user");
-    expect(contents[1].role).toBe("user");
-    expect(contents[0].parts).toHaveLength(1);
-    expect(contents[1].parts).toHaveLength(1);
+    expectConsecutiveMessagesNotMerged({
+      modelId: "claude-3-opus",
+      first: "First",
+      second: "Second",
+    });
   });
 
   it("does not merge consecutive model messages for Gemini", () => {

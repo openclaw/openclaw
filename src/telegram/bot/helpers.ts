@@ -1,6 +1,13 @@
 import type { Chat, Message, MessageOrigin, User } from "@grammyjs/types";
+import type { TelegramGroupConfig, TelegramTopicConfig } from "../../config/types.js";
 import type { TelegramStreamMode } from "./types.js";
 import { formatLocationText, type NormalizedLocation } from "../../channels/location.js";
+import { readChannelAllowFromStore } from "../../pairing/pairing-store.js";
+import {
+  firstDefined,
+  normalizeAllowFromWithStore,
+  type NormalizedAllowFrom,
+} from "../bot-access.js";
 
 const TELEGRAM_GENERAL_TOPIC_ID = 1;
 
@@ -8,6 +15,55 @@ export type TelegramThreadSpec = {
   id?: number;
   scope: "dm" | "forum" | "none";
 };
+
+export async function resolveTelegramGroupAllowFromContext(params: {
+  chatId: string | number;
+  accountId?: string;
+  isForum?: boolean;
+  messageThreadId?: number | null;
+  groupAllowFrom?: Array<string | number>;
+  resolveTelegramGroupConfig: (
+    chatId: string | number,
+    messageThreadId?: number,
+  ) => { groupConfig?: TelegramGroupConfig; topicConfig?: TelegramTopicConfig };
+}): Promise<{
+  resolvedThreadId?: number;
+  storeAllowFrom: string[];
+  groupConfig?: TelegramGroupConfig;
+  topicConfig?: TelegramTopicConfig;
+  groupAllowOverride?: Array<string | number>;
+  effectiveGroupAllow: NormalizedAllowFrom;
+  hasGroupAllowOverride: boolean;
+}> {
+  const resolvedThreadId = resolveTelegramForumThreadId({
+    isForum: params.isForum,
+    messageThreadId: params.messageThreadId,
+  });
+  const storeAllowFrom = await readChannelAllowFromStore(
+    "telegram",
+    process.env,
+    params.accountId,
+  ).catch(() => []);
+  const { groupConfig, topicConfig } = params.resolveTelegramGroupConfig(
+    params.chatId,
+    resolvedThreadId,
+  );
+  const groupAllowOverride = firstDefined(topicConfig?.allowFrom, groupConfig?.allowFrom);
+  const effectiveGroupAllow = normalizeAllowFromWithStore({
+    allowFrom: groupAllowOverride ?? params.groupAllowFrom,
+    storeAllowFrom,
+  });
+  const hasGroupAllowOverride = typeof groupAllowOverride !== "undefined";
+  return {
+    resolvedThreadId,
+    storeAllowFrom,
+    groupConfig,
+    topicConfig,
+    groupAllowOverride,
+    effectiveGroupAllow,
+    hasGroupAllowOverride,
+  };
+}
 
 /**
  * Resolve the thread ID for Telegram forum topics.
@@ -141,6 +197,33 @@ export function buildSenderName(msg: Message) {
   return name || undefined;
 }
 
+export function resolveTelegramMediaPlaceholder(
+  msg:
+    | Pick<Message, "photo" | "video" | "video_note" | "audio" | "voice" | "document" | "sticker">
+    | undefined
+    | null,
+): string | undefined {
+  if (!msg) {
+    return undefined;
+  }
+  if (msg.photo) {
+    return "<media:image>";
+  }
+  if (msg.video || msg.video_note) {
+    return "<media:video>";
+  }
+  if (msg.audio || msg.voice) {
+    return "<media:audio>";
+  }
+  if (msg.document) {
+    return "<media:document>";
+  }
+  if (msg.sticker) {
+    return "<media:sticker>";
+  }
+  return undefined;
+}
+
 export function buildSenderLabel(msg: Message, senderId?: number | string) {
   const name = buildSenderName(msg);
   const username = msg.from?.username ? `@${msg.from.username}` : undefined;
@@ -262,15 +345,8 @@ export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
     const replyBody = (replyLike.text ?? replyLike.caption ?? "").trim();
     body = replyBody;
     if (!body) {
-      if (replyLike.photo) {
-        body = "<media:image>";
-      } else if (replyLike.video) {
-        body = "<media:video>";
-      } else if (replyLike.audio || replyLike.voice) {
-        body = "<media:audio>";
-      } else if (replyLike.document) {
-        body = "<media:document>";
-      } else {
+      body = resolveTelegramMediaPlaceholder(replyLike) ?? "";
+      if (!body) {
         const locationData = extractTelegramLocation(replyLike);
         if (locationData) {
           body = formatLocationText(locationData);

@@ -33,6 +33,32 @@ function writeTempPlugin(params: { dir: string; id: string; body: string }): str
   return file;
 }
 
+function appendToolCallAndResult(sm: ReturnType<typeof SessionManager.inMemory>) {
+  sm.appendMessage({
+    role: "assistant",
+    content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+  } as AgentMessage);
+
+  sm.appendMessage({
+    role: "toolResult",
+    toolCallId: "call_1",
+    isError: false,
+    content: [{ type: "text", text: "ok" }],
+    details: { big: "x".repeat(10_000) },
+    // oxlint-disable-next-line typescript/no-explicit-any
+  } as any);
+}
+
+function getPersistedToolResult(sm: ReturnType<typeof SessionManager.inMemory>) {
+  const messages = sm
+    .getEntries()
+    .filter((e) => e.type === "message")
+    .map((e) => (e as { message: AgentMessage }).message);
+
+  // oxlint-disable-next-line typescript/no-explicit-any
+  return messages.find((m) => (m as any).role === "toolResult") as any;
+}
+
 afterEach(() => {
   resetGlobalHookRunner();
 });
@@ -43,28 +69,8 @@ describe("tool_result_persist hook", () => {
       agentId: "main",
       sessionKey: "main",
     });
-
-    sm.appendMessage({
-      role: "assistant",
-      content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
-    } as AgentMessage);
-
-    sm.appendMessage({
-      role: "toolResult",
-      toolCallId: "call_1",
-      isError: false,
-      content: [{ type: "text", text: "ok" }],
-      details: { big: "x".repeat(10_000) },
-      // oxlint-disable-next-line typescript/no-explicit-any
-    } as any);
-
-    const messages = sm
-      .getEntries()
-      .filter((e) => e.type === "message")
-      .map((e) => (e as { message: AgentMessage }).message);
-
-    // oxlint-disable-next-line typescript/no-explicit-any
-    const toolResult = messages.find((m) => (m as any).role === "toolResult") as any;
+    appendToolCallAndResult(sm);
+    const toolResult = getPersistedToolResult(sm);
     expect(toolResult).toBeTruthy();
     expect(toolResult.details).toBeTruthy();
   });
@@ -114,29 +120,8 @@ describe("tool_result_persist hook", () => {
       sessionKey: "main",
     });
 
-    // Tool call (so the guard can infer tool name -> id mapping).
-    sm.appendMessage({
-      role: "assistant",
-      content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
-    } as AgentMessage);
-
-    // Tool result containing a large-ish details payload.
-    sm.appendMessage({
-      role: "toolResult",
-      toolCallId: "call_1",
-      isError: false,
-      content: [{ type: "text", text: "ok" }],
-      details: { big: "x".repeat(10_000) },
-      // oxlint-disable-next-line typescript/no-explicit-any
-    } as any);
-
-    const messages = sm
-      .getEntries()
-      .filter((e) => e.type === "message")
-      .map((e) => (e as { message: AgentMessage }).message);
-
-    // oxlint-disable-next-line typescript/no-explicit-any
-    const toolResult = messages.find((m) => (m as any).role === "toolResult") as any;
+    appendToolCallAndResult(sm);
+    const toolResult = getPersistedToolResult(sm);
     expect(toolResult).toBeTruthy();
 
     // Hook registration should not break baseline persistence semantics.

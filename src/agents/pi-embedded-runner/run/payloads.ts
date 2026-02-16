@@ -218,6 +218,7 @@ export function buildEmbeddedRunPayloads(params: {
         : []
   ).filter((text) => !shouldSuppressRawErrorText(text));
 
+  let hasUserFacingAssistantReply = false;
   for (const text of answerTexts) {
     const {
       text: cleanedText,
@@ -238,22 +239,13 @@ export function buildEmbeddedRunPayloads(params: {
       replyToTag,
       replyToCurrent,
     });
+    hasUserFacingAssistantReply = true;
   }
 
   if (params.lastToolError) {
-    const lastAssistantHasToolCalls =
-      Array.isArray(params.lastAssistant?.content) &&
-      params.lastAssistant?.content.some((block) =>
-        block && typeof block === "object"
-          ? (block as { type?: unknown }).type === "toolCall"
-          : false,
-      );
-    const lastAssistantWasToolUse = params.lastAssistant?.stopReason === "toolUse";
-    const hasUserFacingReply =
-      replyItems.length > 0 && !lastAssistantHasToolCalls && !lastAssistantWasToolUse;
     const shouldShowToolError = shouldShowToolErrorWarning({
       lastToolError: params.lastToolError,
-      hasUserFacingReply,
+      hasUserFacingReply: hasUserFacingAssistantReply,
       suppressToolErrors: Boolean(params.config?.messages?.suppressToolErrors),
     });
 
