@@ -116,6 +116,17 @@ export type RunCronAgentTurnResult = {
    * messages.  See: https://github.com/openclaw/openclaw/issues/15692
    */
   delivered?: boolean;
+
+  // Telemetry (best-effort)
+  model?: string;
+  provider?: string;
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    total_tokens?: number;
+    cache_read_tokens?: number;
+    cache_write_tokens?: number;
+  };
 };
 
 export async function runCronIsolatedAgentTurn(params: {
@@ -470,6 +481,20 @@ export async function runCronIsolatedAgentTurn(params: {
   const payloads = runResult.payloads ?? [];
 
   // Update token+model fields in the session store.
+  // Also collect best-effort telemetry for the cron run log.
+  let telemetry:
+    | {
+        model?: string;
+        provider?: string;
+        usage?: {
+          input_tokens?: number;
+          output_tokens?: number;
+          total_tokens?: number;
+          cache_read_tokens?: number;
+          cache_write_tokens?: number;
+        };
+      }
+    | undefined;
   {
     const usage = runResult.meta.agentMeta?.usage;
     const promptTokens = runResult.meta.agentMeta?.promptTokens;
@@ -500,6 +525,21 @@ export async function runCronIsolatedAgentTurn(params: {
       cronSession.sessionEntry.outputTokens = output;
       cronSession.sessionEntry.totalTokens = totalTokens;
       cronSession.sessionEntry.totalTokensFresh = true;
+
+      telemetry = {
+        model: modelUsed,
+        provider: providerUsed,
+        usage: {
+          input_tokens: input,
+          output_tokens: output,
+          total_tokens: totalTokens,
+        },
+      };
+    } else {
+      telemetry = {
+        model: modelUsed,
+        provider: providerUsed,
+      };
     }
     await persistSessionEntry();
   }
@@ -548,7 +588,7 @@ export async function runCronIsolatedAgentTurn(params: {
         });
       }
       logWarn(`[cron:${params.job.id}] ${resolvedDelivery.error.message}`);
-      return withRunSession({ status: "ok", summary, outputText });
+      return withRunSession({ status: "ok", summary, outputText, ...telemetry });
     }
     if (!resolvedDelivery.to) {
       const message = "cron delivery target is missing";
@@ -561,7 +601,7 @@ export async function runCronIsolatedAgentTurn(params: {
         });
       }
       logWarn(`[cron:${params.job.id}] ${message}`);
-      return withRunSession({ status: "ok", summary, outputText });
+      return withRunSession({ status: "ok", summary, outputText, ...telemetry });
     }
     const identity = resolveAgentOutboundIdentity(cfgWithAgentDefaults, agentId);
 
@@ -639,7 +679,7 @@ export async function runCronIsolatedAgentTurn(params: {
       if (activeSubagentRuns > 0) {
         // Parent orchestration is still in progress; avoid announcing a partial
         // update to the main requester.
-        return withRunSession({ status: "ok", summary, outputText });
+        return withRunSession({ status: "ok", summary, outputText, ...telemetry });
       }
       if (
         (hadActiveDescendants || expectedSubagentFollowup) &&
@@ -649,10 +689,10 @@ export async function runCronIsolatedAgentTurn(params: {
       ) {
         // Descendants existed but no post-orchestration synthesis arrived, so
         // suppress stale parent text like "on it, pulling everything together".
-        return withRunSession({ status: "ok", summary, outputText });
+        return withRunSession({ status: "ok", summary, outputText, ...telemetry });
       }
       if (synthesizedText.toUpperCase() === SILENT_REPLY_TOKEN.toUpperCase()) {
-        return withRunSession({ status: "ok", summary, outputText });
+        return withRunSession({ status: "ok", summary, outputText, ...telemetry });
       }
       try {
         const didAnnounce = await runSubagentAnnounceFlow({
@@ -699,5 +739,5 @@ export async function runCronIsolatedAgentTurn(params: {
     }
   }
 
-  return withRunSession({ status: "ok", summary, outputText, delivered });
+  return withRunSession({ status: "ok", summary, outputText, delivered, ...telemetry });
 }
