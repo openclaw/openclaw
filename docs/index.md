@@ -1,12 +1,20 @@
-# OpenClaw Universe 🦞
+/index.md
+# OpenClaw OS
 
-Welcome to the largest OpenClaw repository on GitHub — a living, expanding universe of agents, experiments, extensions, and systems.
+## Repository Structure
 
-## Explore
-- [Agents](agents/index.md)
-- [Tutorials](tutorials/index.md)
-- [Experiments](experiments/index.md)
-- [Extensions](extensions/index.md)
-- [Pages](pages/001.md)
-
----
+### Top‑Level Folders
+- [Swabble](Swabble/)
+- [apps](apps/)
+- [assets](assets/)
+- [docs](docs/)
+- [extensions](extensions/)
+- [git-hooks](git-hooks/)
+- [packages](packages/)
+- [patches](patches/)
+- [scripts](scripts/)
+- [skills](skills/)
+- [src](src/)
+- [test](test/)
+- [ui](ui/)
+- [vendor](vendor/)
