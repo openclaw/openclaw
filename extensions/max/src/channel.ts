@@ -4,6 +4,7 @@ import {
   DEFAULT_ACCOUNT_ID,
   deleteAccountFromConfigSection,
   formatPairingApproveHint,
+  getChatChannelMeta,
   migrateBaseNameToDefaultAccount,
   normalizeAccountId,
   PAIRING_APPROVED_MESSAGE,
@@ -19,22 +20,9 @@ import { looksLikeMaxTargetId, normalizeMaxMessagingTarget } from "./normalize.j
 import { getMaxRuntime } from "./runtime.js";
 
 // ------------------------------------------------------------------
-// Meta — defined locally since MAX is not yet in CHAT_CHANNEL_ORDER.
-// Once added to the platform registry, switch to getChatChannelMeta("max").
+// Meta — loaded from the platform registry (CHAT_CHANNEL_META)
 // ------------------------------------------------------------------
-const meta = {
-  id: "max",
-  label: "MAX",
-  selectionLabel: "MAX (Bot API)",
-  detailLabel: "MAX Bot",
-  docsPath: "/channels/max",
-  docsLabel: "max",
-  blurb:
-    "Russian super-app by VK Group — pre-installed on all smartphones sold in Russia since Sep 2025.",
-  systemImage: "paperplane",
-  order: 15,
-  quickstartAllowFrom: true,
-} as const;
+const meta = getChatChannelMeta("max");
 
 // ------------------------------------------------------------------
 // Helpers
