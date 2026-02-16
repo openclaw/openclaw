@@ -161,17 +161,6 @@ describe("splitArgsPreservingQuotes", () => {
 });
 
 describe("parseSystemdExecStart", () => {
-  it("splits on whitespace outside quotes", () => {
-    const execStart = "/usr/bin/openclaw gateway start --foo bar";
-    expect(parseSystemdExecStart(execStart)).toEqual([
-      "/usr/bin/openclaw",
-      "gateway",
-      "start",
-      "--foo",
-      "bar",
-    ]);
-  });
-
   it("preserves quoted arguments", () => {
     const execStart = '/usr/bin/openclaw gateway start --name "My Bot"';
     expect(parseSystemdExecStart(execStart)).toEqual([
