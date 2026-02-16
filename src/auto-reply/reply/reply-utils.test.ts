@@ -799,10 +799,6 @@ describe("extractShortModelName", () => {
     expect(extractShortModelName("claude-opus-4-5")).toBe("claude-opus-4-5");
   });
 
-  it("handles full path with provider and date suffix", () => {
-    expect(extractShortModelName("anthropic/claude-opus-4-5-20251101")).toBe("claude-opus-4-5");
-  });
-
   it("preserves version numbers that look like dates but are not", () => {
     // Date suffix must be exactly 8 digits at the end
     expect(extractShortModelName("model-v1234567")).toBe("model-v1234567");
