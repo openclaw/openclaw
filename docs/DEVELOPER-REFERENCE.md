@@ -269,6 +269,9 @@ pnpm vitest run --coverage
 6. **Normalize paths before string comparison** — `path.resolve()` before `===`.
 7. **Derive context from parameters, not global state** — use explicit paths, not env var fallbacks.
 8. **Run FULL `pnpm lint` before every push** — not just changed files. Type-aware linting catches cross-file issues.
+9. **Verify Node built-in imports** — `crypto`, `fs`, `path`, etc. must be imported before use. Easy to miss with `crypto.randomUUID()`.
+10. **Fallback paths must not undo the fix** — if your fix adds a safe path (e.g., temp-file + rename), the fallback/catch must NOT revert to the unsafe pattern you're fixing (e.g., direct `writeFile`).
+11. **Guard window semantics** — when adding time-based guards (e.g., spin-loop prevention), clarify whether you measure from `startedAt`, `endedAt`, or `updatedAt`. Long-running operations can exceed the guard window if anchored to start time.
 
 ---
 
@@ -408,6 +411,8 @@ src/<module>/
 - **Session file writes**: `agents/session-write-lock.ts` provides file-based locking. Concurrent JSONL appends without locking corrupt files.
 - **Gateway config reload**: `gateway/config-reload.ts` uses chokidar debounce. Rapid config changes can trigger multiple reloads.
 - **Telegram media groups**: `bot-updates.ts` aggregates photos with a timeout window. Changing this can split or merge groups incorrectly.
+- **Atomic file writes need atomic fallbacks**: temp-file + rename is safe, but falling back to direct `writeFile` on rename failure reintroduces truncation races. Fallback should retry rename or fail, never bypass the atomic pattern.
+- **SQLite WAL stale readers**: cached `db` connections in WAL mode hold a snapshot. After external writes (e.g., subprocess updates), close and reopen to see new data. Set `db = null` for lazy reopen.
 
 ### Other Landmines
 
