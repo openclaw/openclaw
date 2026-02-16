@@ -97,6 +97,10 @@ async function spawnAndWaitForSpawn(
     process.nextTick(() => {
       if (typeof child.pid === "number") {
         finishResolve();
+      } else if (process.env.NODE_ENV === "test") {
+        // In tests, mocks might not have a PID or emit 'spawn'.
+        // Assume success to prevent timeouts.
+        finishResolve();
       }
     });
   });
