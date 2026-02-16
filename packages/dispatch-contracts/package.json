@@ -1,0 +1,12 @@
+{
+  "name": "dispatch-contracts",
+  "version": "2026.2.6-3",
+  "description": "Shared dispatch contracts and runtime validators for Real Dispatch",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.mjs"
+  },
+  "scripts": {
+    "typecheck": "tsc -p ./tsconfig.typecheck.json --pretty false"
+  }
+}
