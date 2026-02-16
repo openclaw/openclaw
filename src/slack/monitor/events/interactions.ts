@@ -30,7 +30,7 @@ export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContex
   ctx.app.action(
     new RegExp(`^${OPENCLAW_ACTION_PREFIX}`),
     async (args: SlackActionMiddlewareArgs<BlockAction<ButtonAction>>) => {
-      const { ack, body, action, client, respond } = args;
+      const { ack, body, action, respond } = args;
 
       // Acknowledge the action immediately to prevent the warning icon
       await ack();
@@ -102,7 +102,7 @@ export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContex
       }
 
       try {
-        await client.chat.update({
+        await ctx.app.client.chat.update({
           channel: channelId,
           ts: messageTs,
           text: (body.message as { text?: string } | undefined)?.text ?? "",
