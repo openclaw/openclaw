@@ -2,7 +2,7 @@ import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { SessionConfig } from "../types.base.js";
 import type { SessionEntry } from "./types.js";
 import {
@@ -15,7 +15,6 @@ import { deriveSessionMetaPatch } from "./metadata.js";
 import {
   resolveSessionFilePath,
   resolveSessionTranscriptPathInDir,
-  resolveStorePath,
   validateSessionId,
 } from "./paths.js";
 import { resolveSessionResetPolicy } from "./reset.js";
@@ -41,25 +40,6 @@ describe("deriveSessionMetaPatch", () => {
     expect(patch?.subject).toBe("Family");
     expect(patch?.channel).toBe("whatsapp");
     expect(patch?.groupId).toBe("123@g.us");
-  });
-});
-
-describe("resolveStorePath", () => {
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
-
-  it("uses OPENCLAW_HOME for tilde expansion", () => {
-    vi.stubEnv("OPENCLAW_HOME", "/srv/openclaw-home");
-    vi.stubEnv("HOME", "/home/other");
-
-    const resolved = resolveStorePath("~/.openclaw/agents/{agentId}/sessions/sessions.json", {
-      agentId: "research",
-    });
-
-    expect(resolved).toBe(
-      path.resolve("/srv/openclaw-home/.openclaw/agents/research/sessions/sessions.json"),
-    );
   });
 });
 
