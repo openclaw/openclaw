@@ -29,15 +29,23 @@ export type SubagentRunRecord = {
   cleanupCompletedAt?: number;
   cleanupHandled?: boolean;
   suppressAnnounceReason?: "steer-restart" | "killed";
+  /** Number of periodic retry attempts for failed announces. */
+  announceRetryCount?: number;
+  /** Timestamp of the last periodic retry attempt. */
+  lastAnnounceRetryAt?: number;
 };
 
 const subagentRuns = new Map<string, SubagentRunRecord>();
 let sweeper: NodeJS.Timeout | null = null;
+let retryTimer: NodeJS.Timeout | null = null;
 let listenerStarted = false;
 let listenerStop: (() => void) | null = null;
 // Use var to avoid TDZ when init runs across circular imports during bootstrap.
 var restoreAttempted = false;
 const SUBAGENT_ANNOUNCE_TIMEOUT_MS = 120_000;
+const ANNOUNCE_RETRY_INTERVAL_MS = 30_000;
+const ANNOUNCE_RETRY_BASE_DELAY_MS = 30_000;
+const ANNOUNCE_RETRY_MAX_COUNT = 10;
 
 function persistSubagentRuns() {
   try {
@@ -137,6 +145,8 @@ function restoreSubagentRunsOnce() {
     for (const runId of subagentRuns.keys()) {
       resumeSubagentRun(runId);
     }
+    // Start periodic retry for any entries that failed announce previously.
+    maybeStartRetryTimer();
   } catch {
     // ignore restore failures
   }
@@ -203,6 +213,101 @@ async function sweepSubagentRuns() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Periodic announce retry — catches all silent announce failures.
+// Bypasses the resumedRuns dedupe set and uses its own bounded backoff.
+// ---------------------------------------------------------------------------
+
+function announceRetryBackoffMs(retryCount: number): number {
+  // Exponential backoff: 30s, 60s, 120s, 240s, 480s cap
+  const delay = ANNOUNCE_RETRY_BASE_DELAY_MS * Math.pow(2, Math.min(retryCount, 4));
+  return Math.min(delay, 480_000);
+}
+
+function isRetryableEntry(entry: SubagentRunRecord): boolean {
+  return (
+    typeof entry.endedAt === "number" &&
+    entry.endedAt > 0 &&
+    !entry.cleanupCompletedAt &&
+    !entry.cleanupHandled &&
+    (entry.announceRetryCount ?? 0) < ANNOUNCE_RETRY_MAX_COUNT
+  );
+}
+
+function retryFailedAnnounces() {
+  const now = Date.now();
+  for (const [runId, entry] of subagentRuns.entries()) {
+    if (!isRetryableEntry(entry)) {
+      continue;
+    }
+    const retryCount = entry.announceRetryCount ?? 0;
+    const backoff = announceRetryBackoffMs(retryCount);
+    const lastRetry = entry.lastAnnounceRetryAt ?? entry.endedAt ?? 0;
+    if (now - lastRetry < backoff) {
+      continue;
+    }
+    // Gate on beginSubagentCleanup to avoid concurrent announce attempts.
+    if (!beginSubagentCleanup(runId)) {
+      continue;
+    }
+    entry.announceRetryCount = retryCount + 1;
+    entry.lastAnnounceRetryAt = now;
+    persistSubagentRuns();
+    const requesterOrigin = normalizeDeliveryContext(entry.requesterOrigin);
+    void runSubagentAnnounceFlow({
+      childSessionKey: entry.childSessionKey,
+      childRunId: entry.runId,
+      requesterSessionKey: entry.requesterSessionKey,
+      requesterOrigin,
+      requesterDisplayKey: entry.requesterDisplayKey,
+      task: entry.task,
+      timeoutMs: SUBAGENT_ANNOUNCE_TIMEOUT_MS,
+      cleanup: entry.cleanup,
+      waitForCompletion: false,
+      startedAt: entry.startedAt,
+      endedAt: entry.endedAt,
+      label: entry.label,
+      outcome: entry.outcome,
+    }).then((didAnnounce) => {
+      finalizeSubagentCleanup(runId, entry.cleanup, didAnnounce);
+      maybeStopRetryTimer();
+    });
+  }
+  maybeStopRetryTimer();
+}
+
+function startRetryTimer() {
+  if (retryTimer) {
+    return;
+  }
+  retryTimer = setInterval(() => {
+    retryFailedAnnounces();
+  }, ANNOUNCE_RETRY_INTERVAL_MS);
+  retryTimer.unref?.();
+}
+
+function stopRetryTimer() {
+  if (!retryTimer) {
+    return;
+  }
+  clearInterval(retryTimer);
+  retryTimer = null;
+}
+
+function maybeStopRetryTimer() {
+  const hasRetryable = [...subagentRuns.values()].some(isRetryableEntry);
+  if (!hasRetryable) {
+    stopRetryTimer();
+  }
+}
+
+function maybeStartRetryTimer() {
+  const hasRetryable = [...subagentRuns.values()].some(isRetryableEntry);
+  if (hasRetryable) {
+    startRetryTimer();
+  }
+}
+
 function ensureListener() {
   if (listenerStarted) {
     return;
@@ -260,6 +365,8 @@ function finalizeSubagentCleanup(runId: string, cleanup: "delete" | "keep", didA
     entry.cleanupHandled = false;
     resumedRuns.delete(runId);
     persistSubagentRuns();
+    // Ensure periodic retry timer is running to pick this up.
+    maybeStartRetryTimer();
     return;
   }
   if (cleanup === "delete") {
@@ -509,6 +616,7 @@ export function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
   resumedRuns.clear();
   resetAnnounceQueuesForTests();
   stopSweeper();
+  stopRetryTimer();
   restoreAttempted = false;
   if (listenerStop) {
     listenerStop();

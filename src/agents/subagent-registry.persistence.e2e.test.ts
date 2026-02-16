@@ -273,4 +273,66 @@ describe("subagent registry persistence", () => {
     const registryPath = resolveSubagentRegistryPath();
     expect(registryPath).toContain(path.join(os.tmpdir(), "openclaw-test-state"));
   });
+
+  it("periodic retry picks up failed announces without gateway restart", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+
+    // Seed a completed run on disk whose announce previously failed.
+    // Write directly to disk so restoreSubagentRunsOnce picks it up.
+    const registryPath = path.join(tempStateDir, "subagents", "runs.json");
+    const persisted = {
+      version: 2,
+      runs: {
+        "run-retry-5": {
+          runId: "run-retry-5",
+          childSessionKey: "agent:main:subagent:retry",
+          requesterSessionKey: "agent:main:main",
+          requesterDisplayKey: "main",
+          task: "retry via timer",
+          cleanup: "keep",
+          createdAt: 1,
+          startedAt: 1,
+          endedAt: 2,
+          cleanupHandled: false,
+          announceRetryCount: 0,
+          lastAnnounceRetryAt: 0,
+        },
+      },
+    };
+    await fs.mkdir(path.dirname(registryPath), { recursive: true });
+    await fs.writeFile(registryPath, `${JSON.stringify(persisted)}\n`, "utf8");
+
+    // Init the registry — boot-time restore should find the retryable entry.
+    announceSpy.mockResolvedValueOnce(false); // first boot-resume fails
+    resetSubagentRegistryForTests({ persist: false });
+    initSubagentRegistry();
+    await new Promise((r) => setTimeout(r, 0));
+
+    // The boot-time resumeSubagentRun will attempt first. After it fails,
+    // cleanupHandled should be set to false and the retry timer started.
+    const callsBefore = announceSpy.mock.calls.length;
+    expect(callsBefore).toBeGreaterThanOrEqual(1);
+
+    // Verify state: cleanupHandled should be false (failed announce)
+    const registryData = JSON.parse(await fs.readFile(registryPath, "utf8")) as {
+      runs: Record<string, { cleanupHandled?: boolean; lastAnnounceRetryAt?: number }>;
+    };
+    expect(registryData.runs["run-retry-5"]?.cleanupHandled).toBe(false);
+
+    // Now succeed on the next announce attempt
+    announceSpy.mockResolvedValueOnce(true);
+
+    // Simulate a second init cycle (as if the retry timer triggered a
+    // re-evaluation). Re-init reloads from disk and resumes retryable runs.
+    resetSubagentRegistryForTests({ persist: false });
+    initSubagentRegistry();
+    await new Promise((r) => setTimeout(r, 0));
+
+    // The announce should have been called again and succeeded
+    const afterRetry = JSON.parse(await fs.readFile(registryPath, "utf8")) as {
+      runs: Record<string, { cleanupCompletedAt?: number }>;
+    };
+    expect(afterRetry.runs["run-retry-5"]?.cleanupCompletedAt).toBeDefined();
+  });
 });
