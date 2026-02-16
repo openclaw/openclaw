@@ -413,71 +413,43 @@ export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAge
         const cache = new Map<string, Record<string, SessionEntry>>();
 
         let index = 1;
+        const buildListEntry = (entry: SubagentRunRecord, runtimeMs: number) => {
+          const sessionEntry = resolveSessionEntryForKey({
+            cfg,
+            key: entry.childSessionKey,
+            cache,
+          }).entry;
+          const totalTokens = resolveTotalTokens(sessionEntry);
+          const usageText = formatTokenUsageDisplay(sessionEntry);
+          const status = resolveRunStatus(entry);
+          const runtime = formatDurationCompact(runtimeMs);
+          const label = truncateLine(resolveRunLabel(entry), 48);
+          const task = truncateLine(entry.task.trim(), 72);
+          const line = `${index}. ${label} (${resolveModelDisplay(sessionEntry, entry.model)}, ${runtime}${usageText ? `, ${usageText}` : ""}) ${status}${task.toLowerCase() !== label.toLowerCase() ? ` - ${task}` : ""}`;
+          const baseView = {
+            index,
+            runId: entry.runId,
+            sessionKey: entry.childSessionKey,
+            label,
+            task,
+            status,
+            runtime,
+            runtimeMs,
+            model: resolveModelRef(sessionEntry) || entry.model,
+            totalTokens,
+            startedAt: entry.startedAt,
+          };
+          index += 1;
+          return { line, view: entry.endedAt ? { ...baseView, endedAt: entry.endedAt } : baseView };
+        };
         const active = runs
           .filter((entry) => !entry.endedAt)
-          .map((entry) => {
-            const sessionEntry = resolveSessionEntryForKey({
-              cfg,
-              key: entry.childSessionKey,
-              cache,
-            }).entry;
-            const totalTokens = resolveTotalTokens(sessionEntry);
-            const usageText = formatTokenUsageDisplay(sessionEntry);
-            const status = resolveRunStatus(entry);
-            const runtime = formatDurationCompact(now - (entry.startedAt ?? entry.createdAt));
-            const label = truncateLine(resolveRunLabel(entry), 48);
-            const task = truncateLine(entry.task.trim(), 72);
-            const line = `${index}. ${label} (${resolveModelDisplay(sessionEntry, entry.model)}, ${runtime}${usageText ? `, ${usageText}` : ""}) ${status}${task.toLowerCase() !== label.toLowerCase() ? ` - ${task}` : ""}`;
-            const view = {
-              index,
-              runId: entry.runId,
-              sessionKey: entry.childSessionKey,
-              label,
-              task,
-              status,
-              runtime,
-              runtimeMs: now - (entry.startedAt ?? entry.createdAt),
-              model: resolveModelRef(sessionEntry) || entry.model,
-              totalTokens,
-              startedAt: entry.startedAt,
-            };
-            index += 1;
-            return { line, view };
-          });
+          .map((entry) => buildListEntry(entry, now - (entry.startedAt ?? entry.createdAt)));
         const recent = runs
           .filter((entry) => !!entry.endedAt && (entry.endedAt ?? 0) >= recentCutoff)
-          .map((entry) => {
-            const sessionEntry = resolveSessionEntryForKey({
-              cfg,
-              key: entry.childSessionKey,
-              cache,
-            }).entry;
-            const totalTokens = resolveTotalTokens(sessionEntry);
-            const usageText = formatTokenUsageDisplay(sessionEntry);
-            const status = resolveRunStatus(entry);
-            const runtime = formatDurationCompact(
-              (entry.endedAt ?? now) - (entry.startedAt ?? entry.createdAt),
-            );
-            const label = truncateLine(resolveRunLabel(entry), 48);
-            const task = truncateLine(entry.task.trim(), 72);
-            const line = `${index}. ${label} (${resolveModelDisplay(sessionEntry, entry.model)}, ${runtime}${usageText ? `, ${usageText}` : ""}) ${status}${task.toLowerCase() !== label.toLowerCase() ? ` - ${task}` : ""}`;
-            const view = {
-              index,
-              runId: entry.runId,
-              sessionKey: entry.childSessionKey,
-              label,
-              task,
-              status,
-              runtime,
-              runtimeMs: (entry.endedAt ?? now) - (entry.startedAt ?? entry.createdAt),
-              model: resolveModelRef(sessionEntry) || entry.model,
-              totalTokens,
-              startedAt: entry.startedAt,
-              endedAt: entry.endedAt,
-            };
-            index += 1;
-            return { line, view };
-          });
+          .map((entry) =>
+            buildListEntry(entry, (entry.endedAt ?? now) - (entry.startedAt ?? entry.createdAt)),
+          );
 
         const text = buildListText({ active, recent, recentMinutes });
         return jsonResult({
