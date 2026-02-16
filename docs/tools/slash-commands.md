@@ -77,7 +77,7 @@ Text + native (when enabled):
 - `/allowlist` (list/add/remove allowlist entries)
 - `/approve <id> allow-once|allow-always|deny` (resolve exec approval prompts)
 - `/context [list|detail|json]` (explain “context”; `detail` shows per-file + per-tool + per-skill + system prompt size)
-- `/export-session [path]` (alias: `/export`) (export current session to HTML; includes full system prompt)
+- `/export-session [path]` (alias: `/export`) (export current session to HTML with full system prompt)
 - `/whoami` (show your sender id; alias: `/id`)
 - `/subagents list|kill|log|info|send|steer` (inspect, kill, log, or steer sub-agent runs for the current session)
 - `/kill <id|#|all>` (immediately abort one or all running sub-agents for this session; no confirmation message)
