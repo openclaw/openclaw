@@ -624,7 +624,7 @@ export function buildAgentSystemPrompt(params: {
   // Project Context section - only include non-elevated files to save tokens
   const projectContextFiles = validContextFiles.filter((file) => {
     const base = basename(file.path);
-    return specialFiles.get(base) !== file;
+    return !specialFiles.has(base);
   });
 
   if (projectContextFiles.length > 0) {
