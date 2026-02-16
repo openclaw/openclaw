@@ -1,5 +1,5 @@
-import crypto from "node:crypto";
 import type { SandboxBrowserConfig, SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";
+import { hashTextSha256 } from "./hash.js";
 
 type SandboxHashInput = {
   docker: SandboxDockerConfig;
@@ -51,5 +51,5 @@ export function computeSandboxBrowserConfigHash(input: SandboxBrowserHashInput):
 function computeHash(input: unknown): string {
   const payload = normalizeForHash(input);
   const raw = JSON.stringify(payload);
-  return crypto.createHash("sha256").update(raw).digest("hex");
+  return hashTextSha256(raw);
 }
