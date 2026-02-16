@@ -185,10 +185,17 @@ function parseMessageContent(content: string, messageType: string): string {
 }
 
 function checkBotMentioned(event: FeishuMessageEvent, botOpenId?: string): boolean {
-  const mentions = event.message.mentions ?? [];
-  if (mentions.length === 0) return false;
   if (!botOpenId) return false;
-  return mentions.some((m) => m.id.open_id === botOpenId);
+  const mentions = event.message.mentions ?? [];
+  if (mentions.length > 0) {
+    return mentions.some((m) => m.id.open_id === botOpenId);
+  }
+  // Post (rich text) messages may have empty message.mentions when they contain docs/paste
+  if (event.message.message_type === "post") {
+    const mentionedIds = getMentionedOpenIdsFromPost(event.message.content);
+    return mentionedIds.includes(botOpenId);
+  }
+  return false;
 }
 
 function stripBotMention(
@@ -238,8 +245,36 @@ function parseMediaKeys(
 }
 
 /**
+ * Extract mentioned user open_ids from post (rich text) content.
+ * Feishu may not populate message.mentions for post messages (e.g. when pasting docs);
+ * the "at" elements in post body use user_id (open_id). Returns non-empty only for post content.
+ */
+function getMentionedOpenIdsFromPost(content: string): string[] {
+  try {
+    const parsed = JSON.parse(content);
+    const contentBlocks =
+      parsed.content ??
+      parsed.zh_cn?.content ??
+      ([] as Array<Array<{ tag?: string; user_id?: string }>>);
+    const ids: string[] = [];
+    for (const paragraph of contentBlocks) {
+      if (!Array.isArray(paragraph)) continue;
+      for (const element of paragraph) {
+        if (element.tag === "at" && element.user_id && element.user_id !== "all") {
+          ids.push(element.user_id);
+        }
+      }
+    }
+    return ids;
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Parse post (rich text) content and extract embedded image keys.
  * Post structure: { title?: string, content: [[{ tag, text?, image_key?, ... }]] }
+ * or { zh_cn: { title?, content: [...] } } when received from Feishu.
  */
 function parsePostContent(content: string): {
   textContent: string;
@@ -247,8 +282,9 @@ function parsePostContent(content: string): {
 } {
   try {
     const parsed = JSON.parse(content);
-    const title = parsed.title || "";
-    const contentBlocks = parsed.content || [];
+    const locale = parsed.zh_cn ?? parsed;
+    const title = locale.title || "";
+    const contentBlocks = locale.content || [];
     let textContent = title ? `${title}\n\n` : "";
     const imageKeys: string[] = [];
 
@@ -273,11 +309,11 @@ function parsePostContent(content: string): {
     }
 
     return {
-      textContent: textContent.trim() || "[富文本消息]",
+      textContent: textContent.trim() || "[Rich text message]",
       imageKeys,
     };
   } catch {
-    return { textContent: "[富文本消息]", imageKeys: [] };
+    return { textContent: "[Rich text message]", imageKeys: [] };
   }
 }
 
