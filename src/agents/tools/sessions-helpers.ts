@@ -24,13 +24,13 @@ export {
   resolveSessionReference,
   shouldResolveSessionIdInput,
 } from "./sessions-resolution.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { sanitizeUserFacingText } from "../pi-embedded-helpers.js";
 import {
   stripDowngradedToolCallText,
   stripMinimaxToolCallXml,
   stripThinkingTagsFromText,
 } from "../pi-embedded-utils.js";
-import type { OpenClawConfig } from "../../config/config.js";
 
 export type SessionKind = "main" | "group" | "cron" | "hook" | "node" | "other";
 
