@@ -31,6 +31,8 @@ import { recordSentMessage } from "./sent-message-cache.js";
 import { parseTelegramTarget, stripTelegramInternalPrefixes } from "./targets.js";
 import { resolveTelegramVoiceSend } from "./voice.js";
 
+export const TELEGRAM_MAX_POLL_OPTIONS = 10;
+
 type TelegramSendOpts = {
   token?: string;
   accountId?: string;
@@ -998,7 +1000,7 @@ export async function sendPollTelegram(
   const api = opts.api ?? new Bot(token, client ? { client } : undefined).api;
 
   // Normalize the poll input (validates question, options, maxSelections)
-  const normalizedPoll = normalizePollInput(poll, { maxOptions: 10 });
+  const normalizedPoll = normalizePollInput(poll, { maxOptions: TELEGRAM_MAX_POLL_OPTIONS });
 
   const messageThreadId =
     opts.messageThreadId != null ? opts.messageThreadId : target.messageThreadId;

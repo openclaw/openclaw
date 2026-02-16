@@ -18,6 +18,8 @@ export type TelegramActionConfig = {
   editMessage?: boolean;
   /** Enable sticker actions (send and search). */
   sticker?: boolean;
+  /** Enable poll creation via sendPoll. Defaults to true when omitted. */
+  sendPoll?: boolean;
 };
 
 export type TelegramNetworkConfig = {

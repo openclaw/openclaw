@@ -1,6 +1,7 @@
 import type { ChannelMessageActionAdapter, ChannelMessageActionName } from "../types.js";
 import {
   createActionGate,
+  jsonResult,
   readNumberParam,
   readStringArrayParam,
   readStringOrNumberParam,
@@ -9,6 +10,8 @@ import {
 import { handleTelegramAction } from "../../../agents/tools/telegram-actions.js";
 import { listEnabledTelegramAccounts } from "../../../telegram/accounts.js";
 import { isTelegramInlineButtonsEnabled } from "../../../telegram/inline-buttons.js";
+import { sendPollTelegram, TELEGRAM_MAX_POLL_OPTIONS } from "../../../telegram/send.js";
+import { resolveTelegramToken } from "../../../telegram/token.js";
 
 const providerId = "telegram";
 
@@ -59,6 +62,9 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     if (gate("sticker", false)) {
       actions.add("sticker");
       actions.add("sticker-search");
+    }
+    if (gate("sendPoll", true)) {
+      actions.add("poll");
     }
     return Array.from(actions);
   },
@@ -197,6 +203,67 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
         },
         cfg,
       );
+    }
+
+    if (action === "poll") {
+      // Defense-in-depth: listActions already gates on sendPoll, but direct
+      // API calls may bypass listActions, so re-check here.
+      const gate = createActionGate(cfg.channels?.telegram?.actions);
+      if (!gate("sendPoll", true)) {
+        throw new Error("Telegram sendPoll is disabled.");
+      }
+      const to = readStringParam(params, "to", { required: true });
+      const question = readStringParam(params, "pollQuestion", { required: true });
+      if (!question.trim()) {
+        throw new Error("pollQuestion must be a non-empty string.");
+      }
+
+      const options = readStringArrayParam(params, "pollOption", { required: true }) ?? [];
+      const filteredOptions = options.filter((o) => typeof o === "string" && o.trim().length > 0);
+      if (filteredOptions.length < 2 || filteredOptions.length > TELEGRAM_MAX_POLL_OPTIONS) {
+        throw new Error(
+          `Telegram polls require 2–${TELEGRAM_MAX_POLL_OPTIONS} non-empty options, got ${String(filteredOptions.length)}.`,
+        );
+      }
+
+      const durationHours = readNumberParam(params, "pollDurationHours", { integer: true });
+      let durationSeconds: number | undefined;
+      if (durationHours != null) {
+        const secs = Math.trunc(durationHours * 3600);
+        if (Number.isFinite(secs) && secs > 0) {
+          durationSeconds = secs;
+        }
+      }
+
+      const allowMulti = params.pollMulti === true || params.pollMulti === "true";
+
+      const token = resolveTelegramToken(cfg, { accountId }).token;
+      if (!token) {
+        throw new Error(
+          "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
+        );
+      }
+
+      const result = await sendPollTelegram(
+        to,
+        {
+          question,
+          options: filteredOptions,
+          maxSelections: allowMulti ? filteredOptions.length : 1,
+          durationSeconds,
+        },
+        {
+          token,
+          accountId: accountId ?? undefined,
+        },
+      );
+
+      return jsonResult({
+        ok: true,
+        messageId: result.messageId,
+        chatId: result.chatId,
+        pollId: result.pollId,
+      });
     }
 
     throw new Error(`Action ${action} is not supported for provider ${providerId}.`);
