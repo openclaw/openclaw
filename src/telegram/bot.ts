@@ -7,8 +7,7 @@ import type { OpenClawConfig, ReplyToMode } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveTextChunkLimit } from "../auto-reply/chunk.js";
-import { normalizeCommandBody } from "../auto-reply/commands-registry.js";
-import { isAbortTrigger } from "../auto-reply/reply/abort.js";
+import { isAbortRequestText } from "../auto-reply/reply/abort.js";
 import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "../auto-reply/reply/history.js";
 import {
   isNativeCommandsExplicitlyDisabled,
@@ -45,22 +44,6 @@ import {
 } from "./bot/helpers.js";
 import { resolveTelegramFetch } from "./fetch.js";
 import { wasSentByBot } from "./sent-message-cache.js";
-
-function isAbortControlMessage(rawText?: string, botUsername?: string): boolean {
-  if (!rawText) {
-    return false;
-  }
-  const normalized = normalizeCommandBody(
-    rawText,
-    botUsername ? { botUsername } : undefined,
-  ).toLowerCase();
-  if (!normalized) {
-    return false;
-  }
-  const firstToken = normalized.split(/\s+/, 1)[0] ?? "";
-  const command = firstToken.startsWith("/") ? firstToken.slice(1) : firstToken;
-  return isAbortTrigger(command);
-}
 
 export type TelegramBotOptions = {
   token: string;
@@ -107,7 +90,7 @@ export function getTelegramSequentialKey(ctx: {
   const chatId = msg?.chat?.id ?? ctx.chat?.id;
   const rawText = msg?.text ?? msg?.caption;
   const botUsername = ctx.me?.username;
-  if (isAbortControlMessage(rawText, botUsername)) {
+  if (isAbortRequestText(rawText, botUsername ? { botUsername } : undefined)) {
     if (typeof chatId === "number") {
       return `telegram:${chatId}:control`;
     }

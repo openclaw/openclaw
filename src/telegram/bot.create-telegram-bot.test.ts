@@ -145,6 +145,21 @@ describe("createTelegramBot", () => {
         message: { chat: { id: 123 }, text: "stop" },
       }),
     ).toBe("telegram:123:control");
+    expect(
+      getTelegramSequentialKey({
+        message: { chat: { id: 123 }, text: "stop please" },
+      }),
+    ).toBe("telegram:123");
+    expect(
+      getTelegramSequentialKey({
+        message: { chat: { id: 123 }, text: "/abort" },
+      }),
+    ).toBe("telegram:123");
+    expect(
+      getTelegramSequentialKey({
+        message: { chat: { id: 123 }, text: "/abort now" },
+      }),
+    ).toBe("telegram:123");
   });
   it("routes callback_query payloads as messages and answers callbacks", async () => {
     onSpy.mockReset();
