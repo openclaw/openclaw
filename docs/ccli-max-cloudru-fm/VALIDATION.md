@@ -42,7 +42,7 @@ User (Telegram/Web)
 # docker-compose.yml
 services:
   claude-code-proxy:
-    image: legard/claude-code-proxy:latest
+    image: legard/claude-code-proxy:v1.0.0  # Pinned version per ADR-004
     ports:
       - "127.0.0.1:8082:8082"
     environment:

@@ -1,3 +1,5 @@
+> **SUPERSEDED:** This document references ADR-006..013 which were deleted during the v2 ADR rewrite (commit e54143f). ADR-001..005 v2 now cover this scope. Retained for historical context only.
+
 # Shift-Left Testing Analysis: ADR-012 & ADR-013 (Level 4 -- Risk Analysis in Design)
 
 **Date:** 2026-02-13

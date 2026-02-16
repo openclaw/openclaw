@@ -60,7 +60,7 @@ Claude Code CLI -> localhost:8082 (proxy) -> cloud.ru FM API
 git clone https://github.com/dzhechko/openclaw.git
 cd openclaw
 git checkout cloudru-fm
-npm install
+pnpm install
 ```
 
 ### Syncing `cloudru-fm` with upstream

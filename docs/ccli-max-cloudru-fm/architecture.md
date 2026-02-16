@@ -9,7 +9,7 @@ OpenClaw -- серверная платформа для управления AI
 LLM-моделей через Model Context Protocol (MCP), обеспечивает изоляцию тенантов
 и управляет жизненным циклом плагинов.
 
-- TypeScript ES2022, strict mode, Node.js >=20
+- TypeScript ES2022, strict mode, Node.js >=22
 - 9 ограниченных контекстов (bounded contexts) по DDD
 - Result\<T, E\> вместо исключений для явной обработки ошибок
 - Event Sourcing через InProcessEventBus
@@ -402,7 +402,7 @@ active->{disabled, error}, disabled->{active, error}, error->{disabled}.
 | Категория | Технология | Версия |
 |-----------|-----------|--------|
 | Язык | TypeScript (ES2022, strict) | ^5.5.0 |
-| Рантайм | Node.js | >=20.0.0 |
+| Рантайм | Node.js | >=22.12.0 |
 | Логирование | Pino | ^9.0.0 |
 | Тестирование | Vitest | ^2.0.0 |
 | Покрытие | @vitest/coverage-v8 | ^2.0.0 |
@@ -413,9 +413,9 @@ active->{disabled, error}, disabled->{active, error}, error->{disabled}.
 declaration + declarationMap + sourceMap.
 
 ```bash
-npm run build        # tsc -b
-npm test             # vitest run (793 теста, 33 файла)
-npm run lint         # eslint src/ tests/
-npm run typecheck    # tsc --noEmit
-npm run check        # typecheck + test
+pnpm run build        # tsc -b
+pnpm test             # vitest run (793 теста, 33 файла)
+pnpm run lint         # eslint src/ tests/
+pnpm run typecheck    # tsc --noEmit
+pnpm run check        # typecheck + test
 ```

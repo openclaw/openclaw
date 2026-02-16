@@ -4,21 +4,21 @@
 
 | Компонент | Минимальная версия | Примечание |
 |-----------|-------------------|------------|
-| Node.js | >= 20.0.0 | ES2022, ESM-модули |
-| npm | >= 9.0.0 | Поставляется вместе с Node.js |
+| Node.js | >= 22.12.0 | ES2022, ESM-модули |
+| pnpm | >= 10.0.0 | Менеджер пакетов (corepack enable) |
 | TypeScript | ^5.5.0 | Устанавливается как devDependency |
 | Git | >= 2.30 | Для клонирования репозитория |
 
 Проверьте установленные версии:
 
 ```bash
-node --version   # v20.0.0 или выше
-npm --version    # 9.x или выше
+node --version   # v22.12.0 или выше
+pnpm --version   # 10.x или выше
 git --version
 ```
 
-> **Важно:** Проект использует ES-модули (`"type": "module"` в package.json).
-> Node.js 20+ обязателен для полной поддержки ESM и API `import.meta`.
+> **Важно:** Проект использует ES-модули (`"type": "module"` в package.json) и pnpm как менеджер пакетов.
+> Node.js 22+ обязателен для полной поддержки ESM и API `import.meta`. Для активации pnpm: `corepack enable`.
 
 ---
 
@@ -30,14 +30,14 @@ git clone https://github.com/your-org/openclaw-platform.git
 cd openclaw-platform
 
 # Установка зависимостей
-npm install
+pnpm install
 ```
 
 После установки убедитесь, что проект собирается и тесты проходят:
 
 ```bash
-npm run build
-npm test
+pnpm run build
+pnpm test
 ```
 
 ---
@@ -89,27 +89,27 @@ npm test
 ## 5. Сборка проекта
 
 ```bash
-npm run build       # tsc -b            -- компиляция в ./dist
-npm run typecheck   # tsc --noEmit      -- только проверка типов
-npm run check       # typecheck + test  -- полная проверка перед коммитом
-npm run clean       # rm -rf dist/ coverage/
+pnpm run build       # tsc -b            -- компиляция в ./dist
+pnpm run typecheck   # tsc --noEmit      -- только проверка типов
+pnpm run check       # typecheck + test  -- полная проверка перед коммитом
+pnpm run clean       # rm -rf dist/ coverage/
 ```
 
 ---
 
 ## 6. Запуск тестов
 
-Проект использует **Vitest** (738 тестов, 33 тестовых файла):
+Проект использует **Vitest** (793 теста, 33 тестовых файла):
 
 ```bash
 # Запуск всех тестов
-npm test
+pnpm test
 
 # Режим наблюдения (перезапуск при изменениях)
-npm run test:watch
+pnpm run test:watch
 
 # Отчёт о покрытии кода (V8-провайдер)
-npm run test:coverage
+pnpm run test:coverage
 ```
 
 Тесты организованы по bounded-контекстам в директории `tests/`:
@@ -132,7 +132,7 @@ tests/
 ## 7. Линтинг
 
 ```bash
-npm run lint
+pnpm run lint
 ```
 
 Конфигурация ESLint (`eslint.config.js`) использует пресет **`strictTypeChecked`** из `typescript-eslint` -- наиболее строгий набор правил. Ключевые настройки:
@@ -258,9 +258,9 @@ PORT=3000                               # Порт HTTP-сервера
 ```bash
 git clone https://github.com/your-org/openclaw-platform.git
 cd openclaw-platform
-npm install
-npm run build          # Компиляция
-npm test               # Проверка (738 тестов)
+pnpm install
+pnpm run build          # Компиляция
+pnpm test               # Проверка (793 теста)
 cp .env.example .env   # Создайте .env и заполните секреты
 node dist/src/index.js # Запуск
 ```
@@ -274,25 +274,27 @@ node dist/src/index.js # Запуск
 ### Dockerfile
 
 ```dockerfile
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS builder
 WORKDIR /app
 
-COPY package.json package-lock.json ./
-RUN npm ci --ignore-scripts
+RUN corepack enable
+COPY package.json pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
 
 COPY tsconfig.json ./
 COPY src/ ./src/
 
-RUN npm run build
+RUN pnpm run build
 
 # --- Production image ---
-FROM node:20-alpine
+FROM node:22-alpine
 WORKDIR /app
 
 RUN addgroup -S openclaw && adduser -S openclaw -G openclaw
 
-COPY package.json package-lock.json ./
-RUN npm ci --omit=dev --ignore-scripts
+RUN corepack enable
+COPY package.json pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile --prod
 
 COPY --from=builder /app/dist ./dist
 
@@ -309,8 +311,6 @@ CMD ["node", "dist/src/index.js"]
 ### docker-compose.yml
 
 ```yaml
-version: "3.9"
-
 services:
   openclaw:
     build: .
@@ -349,12 +349,12 @@ docker compose down              # Остановка
 SyntaxError: Cannot use import statement outside a module
 ```
 
-**Причина:** Node.js ниже версии 20 не полностью поддерживает ESM.
-**Решение:** Обновите Node.js до 20+. Используйте `nvm` для управления версиями:
+**Причина:** Node.js ниже версии 22 не полностью поддерживает ESM и API, используемые проектом.
+**Решение:** Обновите Node.js до 22+. Используйте `nvm` для управления версиями:
 
 ```bash
-nvm install 20
-nvm use 20
+nvm install 22
+nvm use 22
 ```
 
 ### Ошибки компиляции TypeScript
@@ -371,7 +371,7 @@ error TS2322: Type 'X' is not assignable to type 'Y'
 ```bash
 npx vitest run tests/core/container.test.ts  # Диагностика конкретного файла
 npx vitest run --reporter=verbose            # Подробный вывод
-npm run clean && npm run build               # Очистка кэша сборки
+pnpm run clean && pnpm run build               # Очистка кэша сборки
 ```
 
 ### Конфликт портов

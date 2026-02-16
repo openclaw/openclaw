@@ -186,7 +186,7 @@ options.push({
 ### Quality Gate
 
 - [ ] TypeScript compiles: `tsc --noEmit`
-- [ ] All existing tests pass: `npm test`
+- [ ] All existing tests pass: `pnpm test`
 - [ ] New type values are present in both definition files
 
 ---
@@ -988,11 +988,11 @@ Test setup:
 
 ### Acceptance Criteria
 
-1. All unit tests pass: `npm test`
-2. All integration tests pass: `npm run test:integration`
+1. All unit tests pass: `pnpm test`
+2. All integration tests pass: `pnpm run test:integration`
 3. TypeScript compiles: `tsc --noEmit`
-4. Lint passes: `npm run lint`
-5. Build succeeds: `npm run build`
+4. Lint passes: `pnpm run lint`
+5. Build succeeds: `pnpm run build`
 6. No security issues in generated configs
 7. All QCSD quality gates verified
 

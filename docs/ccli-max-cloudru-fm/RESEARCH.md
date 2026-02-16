@@ -92,7 +92,7 @@ Rate Limit:   15 запросов/сек на ключ
 ```yaml
 services:
   claude-code-proxy:
-    image: legard/claude-code-proxy:latest
+    image: legard/claude-code-proxy:v1.0.0  # Pinned version, not :latest
     container_name: claude-code-proxy
     ports:
       - "127.0.0.1:8082:8082"    # Только localhost!
