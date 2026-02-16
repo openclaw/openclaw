@@ -27,6 +27,18 @@ describe("isSafeRegexPattern", () => {
       expect(isSafeRegexPattern("(a+)+$")).toBe(false);
     });
 
+    it("rejects nested groups ((a+))+", () => {
+      expect(isSafeRegexPattern("((a+))+")).toBe(false);
+    });
+
+    it("rejects curly-brace quantifiers (a{2,10})+", () => {
+      expect(isSafeRegexPattern("(a{2,10})+")).toBe(false);
+    });
+
+    it("rejects curly-brace with nested groups ((a{2,})?)*", () => {
+      expect(isSafeRegexPattern("((a{2,})?)*")).toBe(false);
+    });
+
     it("rejects patterns exceeding 500 characters", () => {
       const longPattern = "a".repeat(501);
       expect(isSafeRegexPattern(longPattern)).toBe(false);

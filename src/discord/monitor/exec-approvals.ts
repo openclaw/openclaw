@@ -361,7 +361,11 @@ export class DiscordExecApprovalHandler {
       if (!session) {
         return false;
       }
-      const matches = config.sessionFilter.some((p) => safePatternMatch(session, p));
+      const matches = config.sessionFilter.some((p) =>
+        safePatternMatch(session, p, {
+          warn: (msg, ctx) => logDebug(`${msg}: ${JSON.stringify(ctx)}`),
+        }),
+      );
       if (!matches) {
         return false;
       }
