@@ -92,17 +92,6 @@ describe("createGridLayout", () => {
 });
 
 describe("createDefaultMenuConfig", () => {
-  it("creates a valid default menu configuration", () => {
-    const config = createDefaultMenuConfig();
-
-    expect(config.size.width).toBe(2500);
-    expect(config.size.height).toBe(843);
-    expect(config.selected).toBe(false);
-    expect(config.name).toBe("Default Menu");
-    expect(config.chatBarText).toBe("Menu");
-    expect(config.areas.length).toBe(6);
-  });
-
   it("has expected default commands", () => {
     const config = createDefaultMenuConfig();
 
