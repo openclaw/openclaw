@@ -10,6 +10,7 @@ import {
   approveChannelPairingCode,
   listChannelPairingRequests,
   readChannelAllowFromStore,
+  readChannelRoleEntries,
   upsertChannelPairingRequest,
 } from "./pairing-store.js";
 
@@ -182,6 +183,31 @@ describe("pairing store", () => {
       const channelScoped = await readChannelAllowFromStore("telegram");
       expect(accountScoped).toContain("12345");
       expect(channelScoped).not.toContain("12345");
+    });
+  });
+
+  it("stores role metadata when role is provided during approval", async () => {
+    await withTempStateDir(async () => {
+      const created = await upsertChannelPairingRequest({
+        channel: "whatsapp",
+        id: "+5511999999999",
+      });
+      expect(created.created).toBe(true);
+
+      const approved = await approveChannelPairingCode({
+        channel: "whatsapp",
+        code: created.code,
+        role: "tenant",
+        approvedBy: "+5511976871674",
+      });
+      expect(approved?.id).toBe("+5511999999999");
+      expect(approved?.roleEntry?.role).toBe("tenant");
+
+      const roles = await readChannelRoleEntries("whatsapp");
+      expect(roles).toHaveLength(1);
+      expect(roles[0]?.id).toBe("+5511999999999");
+      expect(roles[0]?.role).toBe("tenant");
+      expect(roles[0]?.approvedBy).toBe("+5511976871674");
     });
   });
 

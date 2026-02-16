@@ -6,6 +6,7 @@ import { resolvePairingIdLabel } from "../pairing/pairing-labels.js";
 import {
   approveChannelPairingCode,
   listChannelPairingRequests,
+  type PairingApprovalRole,
   type PairingChannel,
 } from "../pairing/pairing-store.js";
 import { defaultRuntime } from "../runtime.js";
@@ -42,6 +43,16 @@ function parseChannel(raw: unknown, channels: PairingChannel[]): PairingChannel 
     return value as PairingChannel;
   }
   throw new Error(`Invalid channel: ${value}`);
+}
+
+function parseRole(raw: unknown): PairingApprovalRole {
+  const role = String(raw ?? "")
+    .trim()
+    .toLowerCase();
+  if (role === "restricted" || role === "tenant" || role === "superadmin") {
+    return role;
+  }
+  throw new Error('Invalid role. Use: "restricted", "tenant", or "superadmin".');
 }
 
 async function notifyApproved(channel: PairingChannel, id: string) {
@@ -119,6 +130,16 @@ export function registerPairingCli(program: Command) {
     .argument("<codeOrChannel>", "Pairing code (or channel when using 2 args)")
     .argument("[code]", "Pairing code (when channel is passed as the 1st arg)")
     .option("--notify", "Notify the requester on the same channel", false)
+    .option("--role <role>", 'Assign access role on approval: "restricted" | "tenant" | "superadmin"')
+    .option(
+      "--approved-by <actor>",
+      "Who approved this request (for audit trail, e.g. +5511999999999)",
+    )
+    .option(
+      "--confirm-superadmin",
+      "Required when assigning role=superadmin",
+      false,
+    )
     .action(async (codeOrChannel, code, opts) => {
       const channelRaw = opts.channel ?? codeOrChannel;
       const resolvedCode = opts.channel ? codeOrChannel : code;
@@ -134,22 +155,36 @@ export function registerPairingCli(program: Command) {
       }
       const channel = parseChannel(channelRaw, channels);
       const accountId = String(opts.account ?? "").trim();
+      const role = opts.role ? parseRole(opts.role) : undefined;
+      if (role === "superadmin" && !opts.confirmSuperadmin) {
+        throw new Error(
+          'Role "superadmin" requires explicit confirmation. Re-run with --confirm-superadmin.',
+        );
+      }
+      const approvedBy = String(opts.approvedBy ?? "").trim() || undefined;
       const approved = accountId
         ? await approveChannelPairingCode({
             channel,
             code: String(resolvedCode),
             accountId,
+            role,
+            approvedBy,
           })
         : await approveChannelPairingCode({
             channel,
             code: String(resolvedCode),
+            role,
+            approvedBy,
           });
       if (!approved) {
         throw new Error(`No pending pairing request found for code: ${String(resolvedCode)}`);
       }
 
+      const roleSuffix = approved.roleEntry
+        ? ` ${theme.muted(`(role: ${approved.roleEntry.role})`)}`
+        : "";
       defaultRuntime.log(
-        `${theme.success("Approved")} ${theme.muted(channel)} sender ${theme.command(approved.id)}.`,
+        `${theme.success("Approved")} ${theme.muted(channel)} sender ${theme.command(approved.id)}.${roleSuffix}`,
       );
 
       if (!opts.notify) {

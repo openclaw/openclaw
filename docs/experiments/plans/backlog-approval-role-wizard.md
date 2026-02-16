@@ -12,7 +12,8 @@ title: "Backlog — Approval Role Wizard"
 
 - [ ] Implementar policy map e schema de validação
 - [ ] Integrar wizard ao fluxo de approve
-- [ ] Implementar confirmação forte para `superadmin`
+- [x] Adicionar suporte inicial a `role` no `pairing approve` (CLI + persistência)
+- [x] Implementar confirmação forte para `superadmin` no CLI (`--confirm-superadmin`)
 - [ ] Criar audit log append-only
 
 ## Next

@@ -44,6 +44,21 @@ type AllowFromStore = {
   allowFrom: string[];
 };
 
+export type PairingApprovalRole = "restricted" | "tenant" | "superadmin";
+
+export type PairingRoleEntry = {
+  id: string;
+  role: PairingApprovalRole;
+  approvedAt: string;
+  approvedBy?: string;
+  accountId?: string;
+};
+
+type PairingRolesStore = {
+  version: 1;
+  entries: PairingRoleEntry[];
+};
+
 function resolveCredentialsDir(env: NodeJS.ProcessEnv = process.env): string {
   const stateDir = resolveStateDir(env, () => resolveRequiredHomeDir(env, os.homedir));
   return resolveOAuthDir(env, stateDir);
@@ -92,6 +107,10 @@ function resolveAllowFromPath(
     resolveCredentialsDir(env),
     `${base}-${safeAccountKey(normalizedAccountId)}-allowFrom.json`,
   );
+}
+
+function resolveRolesPath(channel: PairingChannel, env: NodeJS.ProcessEnv = process.env): string {
+  return path.join(resolveCredentialsDir(env), `${safeChannelKey(channel)}-roles.json`);
 }
 
 async function readJsonFile<T>(
@@ -372,6 +391,73 @@ export async function removeChannelAllowFromStoreEntry(params: {
   });
 }
 
+export async function readChannelRoleEntries(
+  channel: PairingChannel,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<PairingRoleEntry[]> {
+  const filePath = resolveRolesPath(channel, env);
+  const { value } = await readJsonFile<PairingRolesStore>(filePath, {
+    version: 1,
+    entries: [],
+  });
+  const entries = Array.isArray(value.entries) ? value.entries : [];
+  return entries.filter(
+    (entry) =>
+      entry &&
+      typeof entry.id === "string" &&
+      typeof entry.role === "string" &&
+      typeof entry.approvedAt === "string",
+  );
+}
+
+export async function upsertChannelRoleEntry(params: {
+  channel: PairingChannel;
+  id: string;
+  role: PairingApprovalRole;
+  accountId?: string;
+  approvedBy?: string;
+  approvedAt?: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<PairingRoleEntry> {
+  const env = params.env ?? process.env;
+  const filePath = resolveRolesPath(params.channel, env);
+  const approvedAt = params.approvedAt ?? new Date().toISOString();
+  const nextEntry: PairingRoleEntry = {
+    id: params.id.trim(),
+    role: params.role,
+    approvedAt,
+    ...(params.approvedBy?.trim() ? { approvedBy: params.approvedBy.trim() } : {}),
+    ...(params.accountId?.trim() ? { accountId: params.accountId.trim() } : {}),
+  };
+
+  await withFileLock(filePath, { version: 1, entries: [] } satisfies PairingRolesStore, async () => {
+    const { value } = await readJsonFile<PairingRolesStore>(filePath, {
+      version: 1,
+      entries: [],
+    });
+    const current = Array.isArray(value.entries) ? value.entries : [];
+    const normalizedAccountId = String(nextEntry.accountId ?? "").trim().toLowerCase();
+    const idx = current.findIndex((entry) => {
+      if (String(entry.id ?? "").trim() !== nextEntry.id) {
+        return false;
+      }
+      const entryAccountId = String(entry.accountId ?? "").trim().toLowerCase();
+      return entryAccountId === normalizedAccountId;
+    });
+    if (idx >= 0) {
+      current[idx] = nextEntry;
+    } else {
+      current.push(nextEntry);
+    }
+    await writeJsonFile(filePath, {
+      version: 1,
+      entries: current,
+    } satisfies PairingRolesStore);
+  });
+
+  return nextEntry;
+}
+
 export async function listChannelPairingRequests(
   channel: PairingChannel,
   env: NodeJS.ProcessEnv = process.env,
@@ -529,8 +615,10 @@ export async function approveChannelPairingCode(params: {
   channel: PairingChannel;
   code: string;
   accountId?: string;
+  role?: PairingApprovalRole;
+  approvedBy?: string;
   env?: NodeJS.ProcessEnv;
-}): Promise<{ id: string; entry?: PairingRequest } | null> {
+}): Promise<{ id: string; entry?: PairingRequest; roleEntry?: PairingRoleEntry } | null> {
   const env = params.env ?? process.env;
   const code = params.code.trim().toUpperCase();
   if (!code) {
@@ -588,7 +676,19 @@ export async function approveChannelPairingCode(params: {
         accountId: params.accountId?.trim() || entryAccountId,
         env,
       });
-      return { id: entry.id, entry };
+
+      let roleEntry: PairingRoleEntry | undefined;
+      if (params.role) {
+        roleEntry = await upsertChannelRoleEntry({
+          channel: params.channel,
+          id: entry.id,
+          role: params.role,
+          accountId: params.accountId?.trim() || entryAccountId,
+          approvedBy: params.approvedBy,
+          env,
+        });
+      }
+      return { id: entry.id, entry, roleEntry };
     },
   );
 }
