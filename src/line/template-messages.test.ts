@@ -38,27 +38,20 @@ describe("messageAction", () => {
 });
 
 describe("uriAction", () => {
-  it("creates a URI action", () => {
-    const action = uriAction("Visit", "https://example.com");
-
-    expect(action.type).toBe("uri");
-    expect(action.label).toBe("Visit");
+  it("truncates labels and keeps target URL", () => {
+    const action = uriAction("This label is definitely too long", "https://example.com");
+    expect(action.label).toBe("This label is defini");
     expect((action as { uri: string }).uri).toBe("https://example.com");
   });
 });
 
 describe("postbackAction", () => {
-  it("creates a postback action", () => {
-    const action = postbackAction("Select", "action=select&id=1");
-
-    expect(action.type).toBe("postback");
-    expect(action.label).toBe("Select");
-    expect((action as { data: string }).data).toBe("action=select&id=1");
-  });
-
   it("includes displayText when provided", () => {
     const action = postbackAction("Select", "data", "Selected!");
 
+    expect(action.type).toBe("postback");
+    expect(action.label).toBe("Select");
+    expect((action as { data: string }).data).toBe("data");
     expect((action as { displayText: string }).displayText).toBe("Selected!");
   });
 
@@ -71,14 +64,6 @@ describe("postbackAction", () => {
 });
 
 describe("datetimePickerAction", () => {
-  it("creates a datetime picker action", () => {
-    const action = datetimePickerAction("Pick date", "date_selected", "date");
-
-    expect(action.type).toBe("datetimepicker");
-    expect(action.label).toBe("Pick date");
-    expect((action as { mode: string }).mode).toBe("date");
-  });
-
   it("includes min/max/initial when provided", () => {
     const action = datetimePickerAction("Pick", "data", "datetime", {
       initial: "2024-01-01T12:00",
@@ -86,6 +71,9 @@ describe("datetimePickerAction", () => {
       max: "2024-12-31T23:59",
     });
 
+    expect(action.type).toBe("datetimepicker");
+    expect(action.label).toBe("Pick");
+    expect((action as { mode: string }).mode).toBe("datetime");
     expect((action as { initial: string }).initial).toBe("2024-01-01T12:00");
     expect((action as { min: string }).min).toBe("2024-01-01T00:00");
     expect((action as { max: string }).max).toBe("2024-12-31T23:59");
