@@ -1,13 +1,14 @@
 import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { captureEnv } from "../test-utils/env.js";
 import { applyAuthChoiceHuggingface } from "./auth-choice.apply.huggingface.js";
-import { createExitThrowingRuntime, createWizardPrompter } from "./test-wizard-helpers.js";
-
-const authProfilePathFor = (agentDir: string) => path.join(agentDir, "auth-profiles.json");
+import {
+  createExitThrowingRuntime,
+  createWizardPrompter,
+  readAuthProfilesForAgent,
+  setupAuthTestEnv,
+} from "./test-wizard-helpers.js";
 
 function createHuggingfacePrompter(params: {
   text: WizardPrompter["text"];
@@ -25,8 +26,26 @@ function createHuggingfacePrompter(params: {
 }
 
 describe("applyAuthChoiceHuggingface", () => {
-  const envSnapshot = captureEnv(["OPENCLAW_AGENT_DIR", "HF_TOKEN", "HUGGINGFACE_HUB_TOKEN"]);
+  const envSnapshot = captureEnv([
+    "OPENCLAW_STATE_DIR",
+    "OPENCLAW_AGENT_DIR",
+    "PI_CODING_AGENT_DIR",
+    "HF_TOKEN",
+    "HUGGINGFACE_HUB_TOKEN",
+  ]);
   let tempStateDir: string | null = null;
+
+  async function setupTempState() {
+    const env = await setupAuthTestEnv("openclaw-hf-");
+    tempStateDir = env.stateDir;
+    return env.agentDir;
+  }
+
+  async function readAuthProfiles(agentDir: string) {
+    return await readAuthProfilesForAgent<{
+      profiles?: Record<string, { key?: string }>;
+    }>(agentDir);
+  }
 
   afterEach(async () => {
     if (tempStateDir) {
@@ -41,17 +60,14 @@ describe("applyAuthChoiceHuggingface", () => {
       authChoice: "openrouter-api-key",
       config: {},
       prompter: {} as WizardPrompter,
-      runtime: {} as RuntimeEnv,
+      runtime: createExitThrowingRuntime(),
       setDefaultModel: false,
     });
     expect(result).toBeNull();
   });
 
   it("prompts for key and model, then writes config and auth profile", async () => {
-    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hf-"));
-    const agentDir = path.join(tempStateDir, "agent");
-    process.env.OPENCLAW_AGENT_DIR = agentDir;
-    await fs.mkdir(agentDir, { recursive: true });
+    const agentDir = await setupTempState();
 
     const text = vi.fn().mockResolvedValue("hf-test-token");
     const select: WizardPrompter["select"] = vi.fn(
@@ -81,21 +97,14 @@ describe("applyAuthChoiceHuggingface", () => {
       expect.objectContaining({ message: "Default Hugging Face model" }),
     );
 
-    const authProfilePath = authProfilePathFor(agentDir);
-    const raw = await fs.readFile(authProfilePath, "utf8");
-    const parsed = JSON.parse(raw) as {
-      profiles?: Record<string, { key?: string }>;
-    };
+    const parsed = await readAuthProfiles(agentDir);
     expect(parsed.profiles?.["huggingface:default"]?.key).toBe("hf-test-token");
   });
 
   it("does not prompt to reuse env token when opts.token already provided", async () => {
-    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hf-"));
-    const agentDir = path.join(tempStateDir, "agent");
-    process.env.OPENCLAW_AGENT_DIR = agentDir;
+    const agentDir = await setupTempState();
     process.env.HF_TOKEN = "hf-env-token";
     delete process.env.HUGGINGFACE_HUB_TOKEN;
-    await fs.mkdir(agentDir, { recursive: true });
 
     const text = vi.fn().mockResolvedValue("hf-text-token");
     const select: WizardPrompter["select"] = vi.fn(
@@ -121,11 +130,7 @@ describe("applyAuthChoiceHuggingface", () => {
     expect(confirm).not.toHaveBeenCalled();
     expect(text).not.toHaveBeenCalled();
 
-    const authProfilePath = authProfilePathFor(agentDir);
-    const raw = await fs.readFile(authProfilePath, "utf8");
-    const parsed = JSON.parse(raw) as {
-      profiles?: Record<string, { key?: string }>;
-    };
+    const parsed = await readAuthProfiles(agentDir);
     expect(parsed.profiles?.["huggingface:default"]?.key).toBe("hf-opts-token");
   });
 });
