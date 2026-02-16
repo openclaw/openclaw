@@ -386,6 +386,7 @@ export class AcpGatewayAgent implements Agent {
     }
 
     if (state === "final") {
+      if (messageData) await this.handleDeltaEvent(pending.sessionId, messageData);
       this.finishPrompt(pending.sessionId, pending, "end_turn");
       return;
     }
