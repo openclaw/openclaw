@@ -4,6 +4,8 @@ import {
   createAgentToAgentPolicy,
   createSessionVisibilityGuard,
   resolveEffectiveSessionToolsVisibility,
+  resolveSandboxSessionToolsVisibility,
+  resolveSandboxedSessionToolContext,
   resolveSessionToolsVisibility,
 } from "./sessions-access.js";
 
@@ -41,6 +43,43 @@ describe("resolveEffectiveSessionToolsVisibility", () => {
       agents: { defaults: { sandbox: { sessionToolsVisibility: "all" } } },
     } as OpenClawConfig;
     expect(resolveEffectiveSessionToolsVisibility({ cfg, sandboxed: true })).toBe("all");
+  });
+});
+
+describe("sandbox session-tools context", () => {
+  it("defaults sandbox visibility clamp to spawned", () => {
+    expect(resolveSandboxSessionToolsVisibility({} as OpenClawConfig)).toBe("spawned");
+  });
+
+  it("restricts non-subagent sandboxed sessions to spawned visibility", () => {
+    const cfg = {
+      tools: { sessions: { visibility: "all" } },
+      agents: { defaults: { sandbox: { sessionToolsVisibility: "spawned" } } },
+    } as OpenClawConfig;
+    const context = resolveSandboxedSessionToolContext({
+      cfg,
+      agentSessionKey: "agent:main:main",
+      sandboxed: true,
+    });
+
+    expect(context.restrictToSpawned).toBe(true);
+    expect(context.requesterInternalKey).toBe("agent:main:main");
+    expect(context.effectiveRequesterKey).toBe("agent:main:main");
+  });
+
+  it("does not restrict subagent sessions in sandboxed mode", () => {
+    const cfg = {
+      tools: { sessions: { visibility: "all" } },
+      agents: { defaults: { sandbox: { sessionToolsVisibility: "spawned" } } },
+    } as OpenClawConfig;
+    const context = resolveSandboxedSessionToolContext({
+      cfg,
+      agentSessionKey: "agent:main:subagent:abc",
+      sandboxed: true,
+    });
+
+    expect(context.restrictToSpawned).toBe(false);
+    expect(context.requesterInternalKey).toBe("agent:main:subagent:abc");
   });
 });
 
