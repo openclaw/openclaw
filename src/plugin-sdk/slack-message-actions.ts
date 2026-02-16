@@ -130,13 +130,18 @@ export async function handleSlackMessageAction(params: {
     const messageId = readStringParam(actionParams, "messageId", {
       required: true,
     });
-    const content = readStringParam(actionParams, "message", { required: true });
+    const content = readStringParam(actionParams, "message", { allowEmpty: true });
+    const blocks = readSlackBlocksParam(actionParams);
+    if (!content && !blocks) {
+      throw new Error("Slack edit requires message or blocks.");
+    }
     return await invoke(
       {
         action: "editMessage",
         channelId: resolveChannelId(),
         messageId,
-        content,
+        content: content ?? "",
+        blocks,
         accountId,
       },
       cfg,
