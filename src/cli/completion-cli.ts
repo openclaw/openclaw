@@ -95,6 +95,13 @@ function formatCompletionSourceLine(
   binName: string,
   cachePath: string,
 ): string {
+  if (shell === "zsh") {
+    return `if [[ -o interactive ]]; then
+  autoload -Uz compinit
+  (( $+functions[compdef] )) || compinit
+  source "${cachePath}"
+fi`;
+  }
   if (shell === "fish") {
     return `source "${cachePath}"`;
   }
