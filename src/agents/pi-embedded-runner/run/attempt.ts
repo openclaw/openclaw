@@ -880,24 +880,36 @@ export async function runEmbeddedAttempt(
           messages: activeSession.messages,
         });
 
-        // Repair orphaned trailing user messages so new prompts don't violate role ordering.
-        const leafEntry = sessionManager.getLeafEntry();
-        if (leafEntry?.type === "message" && leafEntry.message.role === "user") {
-          if (leafEntry.parentId) {
-            sessionManager.branch(leafEntry.parentId);
-          } else {
-            sessionManager.resetLeaf();
-          }
-          const sessionContext = sessionManager.buildSessionContext();
-          const sanitizedOrphan = transcriptPolicy.normalizeAntigravityThinkingBlocks
-            ? sanitizeAntigravityThinkingBlocks(sessionContext.messages)
-            : sessionContext.messages;
-          activeSession.agent.replaceMessages(sanitizedOrphan);
-          log.warn(
-            `Removed orphaned user message to prevent consecutive user turns. ` +
-              `runId=${params.runId} sessionId=${params.sessionId}`,
-          );
-        }
+        // NOTE: The orphaned user message repair below was causing session amnesia.
+        // When a user message is at the leaf position (e.g. after a failed/aborted
+        // assistant turn, or between heartbeat polls), this code would delete it
+        // before the model could see it — effectively erasing the user's input.
+        // 
+        // The consecutive-user-turn constraint should be handled at the provider
+        // serialization layer (e.g. merging adjacent user messages) rather than
+        // by discarding messages from the session transcript.
+        //
+        // See: https://github.com/openclaw/openclaw/issues/5806
+        //      https://github.com/openclaw/openclaw/issues/4650
+        //      https://github.com/openclaw/openclaw/issues/3815
+        //
+        // const leafEntry = sessionManager.getLeafEntry();
+        // if (leafEntry?.type === "message" && leafEntry.message.role === "user") {
+        //   if (leafEntry.parentId) {
+        //     sessionManager.branch(leafEntry.parentId);
+        //   } else {
+        //     sessionManager.resetLeaf();
+        //   }
+        //   const sessionContext = sessionManager.buildSessionContext();
+        //   const sanitizedOrphan = transcriptPolicy.normalizeAntigravityThinkingBlocks
+        //     ? sanitizeAntigravityThinkingBlocks(sessionContext.messages)
+        //     : sessionContext.messages;
+        //   activeSession.agent.replaceMessages(sanitizedOrphan);
+        //   log.warn(
+        //     `Removed orphaned user message to prevent consecutive user turns. ` +
+        //       `runId=${params.runId} sessionId=${params.sessionId}`,
+        //   );
+        // }
 
         try {
           // Detect and load images referenced in the prompt for vision-capable models.
