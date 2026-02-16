@@ -10,11 +10,11 @@ import type { VoiceCallConfig } from "./config.js";
 import type { CoreConfig } from "./core-bridge.js";
 import type { CallManager } from "./manager.js";
 import type { MediaStreamConfig } from "./media-stream.js";
+import { MediaStreamHandler } from "./media-stream.js";
 import type { VoiceCallProvider } from "./providers/base.js";
+import { OpenAIRealtimeSTTProvider } from "./providers/stt-openai-realtime.js";
 import type { TwilioProvider } from "./providers/twilio.js";
 import type { NormalizedEvent, WebhookContext } from "./types.js";
-import { MediaStreamHandler } from "./media-stream.js";
-import { OpenAIRealtimeSTTProvider } from "./providers/stt-openai-realtime.js";
 
 const MAX_WEBHOOK_BODY_BYTES = 1024 * 1024;
 
@@ -165,9 +165,7 @@ export class VoiceCallWebhookServer {
                 handler.sendMark(streamSid, `greeting-${Date.now()}`);
               }
             });
-          })().catch((err) =>
-            console.warn("[voice-call] Cached greeting playback failed:", err),
-          );
+          })().catch((err) => console.warn("[voice-call] Cached greeting playback failed:", err));
         } else {
           // Fallback: original path with reduced delay
           setTimeout(() => {
