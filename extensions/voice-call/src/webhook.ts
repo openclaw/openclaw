@@ -259,7 +259,9 @@ export class VoiceCallWebhookServer {
           console.log(
             `[voice-call] Reaping stale call ${call.callId} (age: ${Math.round(age / 1000)}s, state: ${call.state})`,
           );
-          void this.manager.endCall(call.callId).catch(() => {});
+          void this.manager.endCall(call.callId).catch((err) => {
+            console.warn(`[voice-call] Reaper failed to end call ${call.callId}:`, err);
+          });
         }
       }
     }, CHECK_INTERVAL_MS);
