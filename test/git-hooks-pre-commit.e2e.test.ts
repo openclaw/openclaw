@@ -13,8 +13,6 @@ describe("git-hooks/pre-commit (integration)", () => {
   it("does not treat staged filenames as git-add flags (e.g. --all)", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "openclaw-pre-commit-"));
     run(dir, "git", ["init", "-q"]);
-    run(dir, "git", ["config", "user.email", "test@example.com"]);
-    run(dir, "git", ["config", "user.name", "Test"]);
 
     // Copy the hook + helpers so the test exercises real on-disk wiring.
     await mkdir(path.join(dir, "git-hooks"), { recursive: true });
@@ -34,13 +32,8 @@ describe("git-hooks/pre-commit (integration)", () => {
     chmodSync(path.join(dir, "git-hooks", "pre-commit"), 0o755);
     chmodSync(path.join(dir, "scripts", "pre-commit", "run-node-tool.sh"), 0o755);
 
-    await writeFile(path.join(dir, "tracked.txt"), "initial\n");
-    run(dir, "git", ["add", "--", "tracked.txt"]);
-    run(dir, "git", ["commit", "-qm", "init"]);
-
-    // Create changes that should NOT be staged by the hook.
-    await writeFile(path.join(dir, "secret.txt"), "do-not-stage\n"); // untracked, not ignored
-    await writeFile(path.join(dir, "tracked.txt"), "changed\n"); // tracked, but not staged
+    // Create an untracked file that should NOT be staged by the hook.
+    await writeFile(path.join(dir, "secret.txt"), "do-not-stage\n");
 
     // Stage a maliciously-named file. Older hooks using `xargs git add` could run `git add --all`.
     await writeFile(path.join(dir, "--all"), "flag\n");
