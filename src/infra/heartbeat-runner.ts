@@ -529,9 +529,25 @@ export async function runHeartbeatOnce(opts: {
       });
       return { status: "skipped", reason: "empty-heartbeat-file" };
     }
-  } catch {
-    // File doesn't exist or can't be read - proceed with heartbeat.
-    // The LLM prompt says "if it exists" so this is expected behavior.
+  } catch (err: unknown) {
+    // If HEARTBEAT.md doesn't exist and there are no pending events to process,
+    // skip the heartbeat entirely to avoid unnecessary API calls/costs.
+    // The default prompt says "Read HEARTBEAT.md if it exists" — when it doesn't,
+    // there's nothing actionable for the LLM to do.
+    if (
+      (err as NodeJS.ErrnoException)?.code === "ENOENT" &&
+      !isExecEventReason &&
+      !isCronEventReason &&
+      !isWakeReason
+    ) {
+      emitHeartbeatEvent({
+        status: "skipped",
+        reason: "no-heartbeat-file",
+        durationMs: Date.now() - startedAt,
+      });
+      return { status: "skipped", reason: "no-heartbeat-file" };
+    }
+    // For other read errors, proceed with heartbeat as before.
   }
 
   const { entry, sessionKey, storePath } = resolveHeartbeatSession(
