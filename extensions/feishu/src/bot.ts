@@ -698,7 +698,6 @@ export async function handleFeishuMessage(params: {
     // Default is one session per group chat; this can be customized with groupSessionScope.
     let peerId = isGroup ? ctx.chatId : ctx.senderOpenId;
     if (isGroup) {
-      const groupConfig = resolveFeishuGroupConfig({ cfg: feishuCfg, groupId: ctx.chatId });
       const legacyTopicSessionMode =
         groupConfig?.topicSessionMode ?? feishuCfg?.topicSessionMode ?? "disabled";
       const groupSessionScope =
