@@ -1618,10 +1618,7 @@
                   "es/platforms/hetzner",
                   "es/platforms/gcp",
                   "es/platforms/macos-vm",
-                  "es/platforms/exe-dev",
-                  "es/railway",
-                  "es/render",
-                  "es/northflank"
+                  "es/platforms/exe-dev"
                 ]
               },
               {
@@ -2111,10 +2108,7 @@
                   "pt-BR/platforms/hetzner",
                   "pt-BR/platforms/gcp",
                   "pt-BR/platforms/macos-vm",
-                  "pt-BR/platforms/exe-dev",
-                  "pt-BR/railway",
-                  "pt-BR/render",
-                  "pt-BR/northflank"
+                  "pt-BR/platforms/exe-dev"
                 ]
               },
               {
