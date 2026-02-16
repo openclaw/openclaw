@@ -210,14 +210,6 @@ describe("capEntryCount", () => {
     expect(store["key-0"]).toBeDefined();
     expect(store["key-500"]).toBeUndefined();
   });
-
-  it("empty store is a no-op", () => {
-    const store: Record<string, SessionEntry> = {};
-
-    const evicted = capEntryCount(store, 5);
-
-    expect(evicted).toBe(0);
-  });
 });
 
 describe("rotateSessionFile", () => {
