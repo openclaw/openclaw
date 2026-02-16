@@ -26,7 +26,7 @@ describe("process supervisor", () => {
       mode: "child",
       argv: [process.execPath, "-e", "setTimeout(() => {}, 10_000)"],
       timeoutMs: 5_000,
-      noOutputTimeoutMs: 45,
+      noOutputTimeoutMs: 35,
       stdinMode: "pipe-closed",
     });
     const exit = await run.wait();
