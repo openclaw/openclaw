@@ -29,6 +29,7 @@ export const XHIGH_MODEL_REFS = [
   "openai-codex/gpt-5.1-codex",
   "github-copilot/gpt-5.2-codex",
   "github-copilot/gpt-5.2",
+  "anthropic/claude-opus-4-6",
 ] as const;
 
 const XHIGH_MODEL_SET = new Set(XHIGH_MODEL_REFS.map((entry) => entry.toLowerCase()));

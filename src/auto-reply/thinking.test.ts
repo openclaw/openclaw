@@ -4,6 +4,7 @@ import {
   listThinkingLevels,
   normalizeReasoningLevel,
   normalizeThinkLevel,
+  supportsXHighThinking,
 } from "./thinking.js";
 
 describe("normalizeThinkLevel", () => {
@@ -56,8 +57,30 @@ describe("listThinkingLevels", () => {
     expect(listThinkingLevels("github-copilot", "gpt-5.2-codex")).toContain("xhigh");
   });
 
+  it("includes xhigh for anthropic claude-opus-4-6", () => {
+    expect(listThinkingLevels("anthropic", "claude-opus-4-6")).toContain("xhigh");
+  });
+
   it("excludes xhigh for non-codex models", () => {
     expect(listThinkingLevels(undefined, "gpt-4.1-mini")).not.toContain("xhigh");
+  });
+});
+
+describe("supportsXHighThinking", () => {
+  it("returns true for anthropic/claude-opus-4-6", () => {
+    expect(supportsXHighThinking("anthropic", "claude-opus-4-6")).toBe(true);
+  });
+
+  it("returns true for codex models", () => {
+    expect(supportsXHighThinking("openai-codex", "gpt-5.3-codex")).toBe(true);
+  });
+
+  it("returns false for anthropic sonnet", () => {
+    expect(supportsXHighThinking("anthropic", "claude-sonnet-4-5")).toBe(false);
+  });
+
+  it("returns false for non-xhigh models", () => {
+    expect(supportsXHighThinking("openai", "gpt-4.1-mini")).toBe(false);
   });
 });
 
