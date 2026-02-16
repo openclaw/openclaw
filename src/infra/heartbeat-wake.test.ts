@@ -279,4 +279,41 @@ describe("heartbeat-wake", () => {
       sessionKey: "agent:ops:discord:channel:alerts",
     });
   });
+
+  it("executes distinct targeted wakes queued in the same coalescing window", async () => {
+    vi.useFakeTimers();
+    const handler = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    setHeartbeatWakeHandler(handler);
+
+    requestHeartbeatNow({
+      reason: "cron:job-a",
+      agentId: "ops",
+      sessionKey: "agent:ops:discord:channel:alerts",
+      coalesceMs: 100,
+    });
+    requestHeartbeatNow({
+      reason: "cron:job-b",
+      agentId: "main",
+      sessionKey: "agent:main:telegram:group:-1001",
+      coalesceMs: 100,
+    });
+
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(handler).toHaveBeenCalledTimes(2);
+    expect(handler.mock.calls.map((call) => call[0])).toEqual(
+      expect.arrayContaining([
+        {
+          reason: "cron:job-a",
+          agentId: "ops",
+          sessionKey: "agent:ops:discord:channel:alerts",
+        },
+        {
+          reason: "cron:job-b",
+          agentId: "main",
+          sessionKey: "agent:main:telegram:group:-1001",
+        },
+      ]),
+    );
+  });
 });
