@@ -141,6 +141,7 @@ export type DiscordModalSpec = {
 
 export type DiscordComponentMessageSpec = {
   text?: string;
+  reusable?: boolean;
   container?: {
     accentColor?: string | number;
     spoiler?: boolean;
@@ -159,6 +160,7 @@ export type DiscordComponentEntry = {
   sessionKey?: string;
   agentId?: string;
   accountId?: string;
+  reusable?: boolean;
   messageId?: string;
   createdAt?: number;
   expiresAt?: number;
@@ -187,6 +189,7 @@ export type DiscordModalEntry = {
   sessionKey?: string;
   agentId?: string;
   accountId?: string;
+  reusable?: boolean;
   messageId?: string;
   createdAt?: number;
   expiresAt?: number;
@@ -542,6 +545,7 @@ export function readDiscordComponentSpec(raw: unknown): DiscordComponentMessageS
     ? blocksRaw.map((entry, idx) => parseComponentBlock(entry, `components.blocks[${idx}]`))
     : undefined;
   const modalRaw = obj.modal;
+  const reusable = typeof obj.reusable === "boolean" ? obj.reusable : undefined;
   let modal: DiscordModalSpec | undefined;
   if (modalRaw !== undefined) {
     const modalObj = requireObject(modalRaw, "components.modal");
@@ -564,6 +568,7 @@ export function readDiscordComponentSpec(raw: unknown): DiscordComponentMessageS
   }
   return {
     text: readOptionalString(obj.text),
+    reusable,
     container:
       typeof obj.container === "object" && obj.container && !Array.isArray(obj.container)
         ? {
@@ -926,6 +931,7 @@ export function buildDiscordComponentMessage(params: {
       sessionKey: params.sessionKey,
       agentId: params.agentId,
       accountId: params.accountId,
+      reusable: entry.reusable ?? params.spec.reusable,
     });
   };
 
@@ -1023,6 +1029,7 @@ export function buildDiscordComponentMessage(params: {
       sessionKey: params.sessionKey,
       agentId: params.agentId,
       accountId: params.accountId,
+      reusable: params.spec.reusable,
     });
 
     const triggerSpec: DiscordComponentButtonSpec = {
