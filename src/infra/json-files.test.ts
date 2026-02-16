@@ -35,7 +35,7 @@ describe("json-files", () => {
       expect(result).toEqual({ ok: true });
     });
 
-    it("sets file mode from options", async () => {
+    it.skipIf(process.platform === "win32")("sets file mode from options", async () => {
       fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-json-files-"));
       const filePath = path.join(fixtureRoot, "secure.json");
 
@@ -46,7 +46,7 @@ describe("json-files", () => {
       expect(stat.mode & 0o777).toBe(0o600);
     });
 
-    it("applies dirMode to created directories", async () => {
+    it.skipIf(process.platform === "win32")("applies dirMode to created directories", async () => {
       fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-json-files-"));
       const nested = path.join(fixtureRoot, "restricted-dir");
       const filePath = path.join(nested, "data.json");
