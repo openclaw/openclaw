@@ -132,10 +132,10 @@
     "description": "Internal tool name leak"
   },
   {
-    "id": "diag_function_call",
-    "text": "function_call",
+    "id": "diag_function_call_json",
+    "text": "\"type\": \"function_call\"",
     "expect": "drop",
-    "description": "Function call scaffolding leak"
+    "description": "JSON function_call scaffolding leak (specific pattern to avoid false positives)"
   },
   {
     "id": "diag_media_prefix",
