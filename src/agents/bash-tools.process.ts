@@ -1,7 +1,10 @@
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
+import { killProcessTree } from "../process/kill-tree.js";
+import { getProcessSupervisor } from "../process/supervisor/index.js";
 import {
+  type ProcessSession,
   deleteSession,
   drainSession,
   getFinishedSession,
@@ -11,13 +14,7 @@ import {
   markExited,
   setJobTtlMs,
 } from "./bash-process-registry.js";
-import {
-  deriveSessionName,
-  killSession,
-  pad,
-  sliceLogLines,
-  truncateMiddle,
-} from "./bash-tools.shared.js";
+import { deriveSessionName, pad, sliceLogLines, truncateMiddle } from "./bash-tools.shared.js";
 import { encodeKeySequence, encodePaste } from "./pty-keys.js";
 
 export type ProcessToolDefaults = {
@@ -107,8 +104,27 @@ export function createProcessTool(
     setJobTtlMs(defaults.cleanupMs);
   }
   const scopeKey = defaults?.scopeKey;
+  const supervisor = getProcessSupervisor();
   const isInScope = (session?: { scopeKey?: string } | null) =>
     !scopeKey || session?.scopeKey === scopeKey;
+
+  const cancelManagedSession = (sessionId: string) => {
+    const record = supervisor.getRecord(sessionId);
+    if (!record || record.state === "exited") {
+      return false;
+    }
+    supervisor.cancel(sessionId, "manual-cancel");
+    return true;
+  };
+
+  const terminateSessionFallback = (session: ProcessSession) => {
+    const pid = session.pid ?? session.child?.pid;
+    if (typeof pid !== "number" || !Number.isFinite(pid) || pid <= 0) {
+      return false;
+    }
+    killProcessTree(pid);
+    return true;
+  };
 
   return {
     name: "process",
@@ -523,10 +539,25 @@ export function createProcessTool(
           if (!scopedSession.backgrounded) {
             return failText(`Session ${params.sessionId} is not backgrounded.`);
           }
-          killSession(scopedSession);
-          markExited(scopedSession, null, "SIGKILL", "failed");
+          const canceled = cancelManagedSession(scopedSession.id);
+          if (!canceled) {
+            const terminated = terminateSessionFallback(scopedSession);
+            if (!terminated) {
+              return failText(
+                `Unable to terminate session ${params.sessionId}: no active supervisor run or process id.`,
+              );
+            }
+            markExited(scopedSession, null, "SIGKILL", "failed");
+          }
           return {
-            content: [{ type: "text", text: `Killed session ${params.sessionId}.` }],
+            content: [
+              {
+                type: "text",
+                text: canceled
+                  ? `Termination requested for session ${params.sessionId}.`
+                  : `Killed session ${params.sessionId}.`,
+              },
+            ],
             details: {
               status: "failed",
               name: scopedSession ? deriveSessionName(scopedSession.command) : undefined,
@@ -555,10 +586,30 @@ export function createProcessTool(
 
         case "remove": {
           if (scopedSession) {
-            killSession(scopedSession);
-            markExited(scopedSession, null, "SIGKILL", "failed");
+            const canceled = cancelManagedSession(scopedSession.id);
+            if (canceled) {
+              // Keep remove semantics deterministic: drop from process registry now.
+              scopedSession.backgrounded = false;
+              deleteSession(params.sessionId);
+            } else {
+              const terminated = terminateSessionFallback(scopedSession);
+              if (!terminated) {
+                return failText(
+                  `Unable to remove session ${params.sessionId}: no active supervisor run or process id.`,
+                );
+              }
+              markExited(scopedSession, null, "SIGKILL", "failed");
+              deleteSession(params.sessionId);
+            }
             return {
-              content: [{ type: "text", text: `Removed session ${params.sessionId}.` }],
+              content: [
+                {
+                  type: "text",
+                  text: canceled
+                    ? `Removed session ${params.sessionId} (termination requested).`
+                    : `Removed session ${params.sessionId}.`,
+                },
+              ],
               details: {
                 status: "failed",
                 name: scopedSession ? deriveSessionName(scopedSession.command) : undefined,

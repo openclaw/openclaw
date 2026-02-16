@@ -8,232 +8,27 @@ import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { CliBackendConfig } from "../../config/types.js";
 import type { EmbeddedContextFile } from "../pi-embedded-helpers.js";
-import { runExec } from "../../process/exec.js";
 import { buildTtsSystemPromptHint } from "../../tts/tts.js";
-import { escapeRegExp, isRecord } from "../../utils.js";
+import { isRecord } from "../../utils.js";
 import { buildModelAliasLines } from "../model-alias-lines.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
 import { detectRuntimeShell } from "../shell-utils.js";
 import { buildSystemPromptParams } from "../system-prompt-params.js";
 import { buildAgentSystemPrompt } from "../system-prompt.js";
+export { buildCliSupervisorScopeKey, resolveCliNoOutputTimeoutMs } from "./reliability.js";
 
 const CLI_RUN_QUEUE = new Map<string, Promise<unknown>>();
-
-function buildLooseArgOrderRegex(tokens: string[]): RegExp {
-  // Scan `ps` output lines. Keep matching flexible, but require whitespace arg boundaries
-  // to avoid substring matches like `codexx` or `/path/to/codexx`.
-  const [head, ...rest] = tokens.map((t) => String(t ?? "").trim()).filter(Boolean);
-  if (!head) {
-    return /$^/;
-  }
-
-  const headEscaped = escapeRegExp(head);
-  const headFragment = `(?:^|\\s)(?:${headEscaped}|\\S+\\/${headEscaped})(?=\\s|$)`;
-  const restFragments = rest.map((t) => `(?:^|\\s)${escapeRegExp(t)}(?=\\s|$)`);
-  return new RegExp([headFragment, ...restFragments].join(".*"));
-}
-
-async function psWithFallback(argsA: string[], argsB: string[]): Promise<string> {
-  try {
-    const { stdout } = await runExec("ps", argsA);
-    return stdout;
-  } catch {
-    // fallthrough
-  }
-  const { stdout } = await runExec("ps", argsB);
-  return stdout;
-}
-
-export async function cleanupResumeProcesses(
-  backend: CliBackendConfig,
-  sessionId: string,
-): Promise<void> {
-  if (process.platform === "win32") {
-    return;
-  }
-  const resumeArgs = backend.resumeArgs ?? [];
-  if (resumeArgs.length === 0) {
-    return;
-  }
-  if (!resumeArgs.some((arg) => arg.includes("{sessionId}"))) {
-    return;
-  }
-  const commandToken = path.basename(backend.command ?? "").trim();
-  if (!commandToken) {
-    return;
-  }
-
-  const resumeTokens = resumeArgs.map((arg) => arg.replaceAll("{sessionId}", sessionId));
-  const pattern = [commandToken, ...resumeTokens]
-    .filter(Boolean)
-    .map((token) => escapeRegExp(token))
-    .join(".*");
-  if (!pattern) {
-    return;
-  }
-
-  try {
-    const stdout = await psWithFallback(
-      ["-axww", "-o", "pid=,ppid=,command="],
-      ["-ax", "-o", "pid=,ppid=,command="],
-    );
-    const patternRegex = buildLooseArgOrderRegex([commandToken, ...resumeTokens]);
-    const toKill: number[] = [];
-
-    for (const line of stdout.split("\n")) {
-      const trimmed = line.trim();
-      if (!trimmed) {
-        continue;
-      }
-      const match = /^(\d+)\s+(\d+)\s+(.*)$/.exec(trimmed);
-      if (!match) {
-        continue;
-      }
-      const pid = Number(match[1]);
-      const ppid = Number(match[2]);
-      const cmd = match[3] ?? "";
-      if (!Number.isFinite(pid)) {
-        continue;
-      }
-      if (ppid !== process.pid) {
-        continue;
-      }
-      if (!patternRegex.test(cmd)) {
-        continue;
-      }
-      toKill.push(pid);
-    }
-
-    if (toKill.length > 0) {
-      const pidArgs = toKill.map((pid) => String(pid));
-      try {
-        await runExec("kill", ["-TERM", ...pidArgs]);
-      } catch {
-        // ignore
-      }
-      await new Promise((resolve) => setTimeout(resolve, 250));
-      try {
-        await runExec("kill", ["-9", ...pidArgs]);
-      } catch {
-        // ignore
-      }
-    }
-  } catch {
-    // ignore errors - best effort cleanup
-  }
-}
-
-function buildSessionMatchers(backend: CliBackendConfig): RegExp[] {
-  const commandToken = path.basename(backend.command ?? "").trim();
-  if (!commandToken) {
-    return [];
-  }
-  const matchers: RegExp[] = [];
-  const sessionArg = backend.sessionArg?.trim();
-  const sessionArgs = backend.sessionArgs ?? [];
-  const resumeArgs = backend.resumeArgs ?? [];
-
-  const addMatcher = (args: string[]) => {
-    if (args.length === 0) {
-      return;
-    }
-    const tokens = [commandToken, ...args];
-    const pattern = tokens
-      .map((token, index) => {
-        const tokenPattern = tokenToRegex(token);
-        return index === 0 ? `(?:^|\\s)${tokenPattern}` : `\\s+${tokenPattern}`;
-      })
-      .join("");
-    matchers.push(new RegExp(pattern));
-  };
-
-  if (sessionArgs.some((arg) => arg.includes("{sessionId}"))) {
-    addMatcher(sessionArgs);
-  } else if (sessionArg) {
-    addMatcher([sessionArg, "{sessionId}"]);
-  }
-
-  if (resumeArgs.some((arg) => arg.includes("{sessionId}"))) {
-    addMatcher(resumeArgs);
-  }
-
-  return matchers;
-}
-
-function tokenToRegex(token: string): string {
-  if (!token.includes("{sessionId}")) {
-    return escapeRegExp(token);
-  }
-  const parts = token.split("{sessionId}").map((part) => escapeRegExp(part));
-  return parts.join("\\S+");
-}
-
-/**
- * Cleanup suspended OpenClaw CLI processes that have accumulated.
- * Only cleans up if there are more than the threshold (default: 10).
- */
-export async function cleanupSuspendedCliProcesses(
-  backend: CliBackendConfig,
-  threshold = 10,
-): Promise<void> {
-  if (process.platform === "win32") {
-    return;
-  }
-  const matchers = buildSessionMatchers(backend);
-  if (matchers.length === 0) {
-    return;
-  }
-
-  try {
-    const stdout = await psWithFallback(
-      ["-axww", "-o", "pid=,ppid=,stat=,command="],
-      ["-ax", "-o", "pid=,ppid=,stat=,command="],
-    );
-    const suspended: number[] = [];
-    for (const line of stdout.split("\n")) {
-      const trimmed = line.trim();
-      if (!trimmed) {
-        continue;
-      }
-      const match = /^(\d+)\s+(\d+)\s+(\S+)\s+(.*)$/.exec(trimmed);
-      if (!match) {
-        continue;
-      }
-      const pid = Number(match[1]);
-      const ppid = Number(match[2]);
-      const stat = match[3] ?? "";
-      const command = match[4] ?? "";
-      if (!Number.isFinite(pid)) {
-        continue;
-      }
-      if (ppid !== process.pid) {
-        continue;
-      }
-      if (!stat.includes("T")) {
-        continue;
-      }
-      if (!matchers.some((matcher) => matcher.test(command))) {
-        continue;
-      }
-      suspended.push(pid);
-    }
-
-    if (suspended.length > threshold) {
-      // Verified locally: stopped (T) processes ignore SIGTERM, so use SIGKILL.
-      await runExec("kill", ["-9", ...suspended.map((pid) => String(pid))]);
-    }
-  } catch {
-    // ignore errors - best effort cleanup
-  }
-}
 export function enqueueCliRun<T>(key: string, task: () => Promise<T>): Promise<T> {
   const prior = CLI_RUN_QUEUE.get(key) ?? Promise.resolve();
   const chained = prior.catch(() => undefined).then(task);
-  const tracked = chained.finally(() => {
-    if (CLI_RUN_QUEUE.get(key) === tracked) {
-      CLI_RUN_QUEUE.delete(key);
-    }
-  });
+  // Keep queue continuity even when a run rejects, without emitting unhandled rejections.
+  const tracked = chained
+    .catch(() => undefined)
+    .finally(() => {
+      if (CLI_RUN_QUEUE.get(key) === tracked) {
+        CLI_RUN_QUEUE.delete(key);
+      }
+    });
   CLI_RUN_QUEUE.set(key, tracked);
   return chained;
 }
