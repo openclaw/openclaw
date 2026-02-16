@@ -301,6 +301,18 @@ export function renderApp(state: AppViewState) {
                 onRefresh: () => loadSessions(state),
                 onPatch: (key, patch) => patchSession(state, key, patch),
                 onDelete: (key) => deleteSession(state, key),
+                onSendMessage: async (sessionKey: string, message: string) => {
+                  try {
+                    await state.gateway?.send("sessions.send", {
+                      targetKey: sessionKey,
+                      message,
+                    });
+                    alert("Message sent successfully!");
+                  } catch (err) {
+                    const errorMsg = err instanceof Error ? err.message : String(err);
+                    alert(`Failed to send message: ${errorMsg}`);
+                  }
+                },
               })
             : nothing
         }
@@ -855,6 +867,19 @@ export function renderApp(state: AppViewState) {
                 onOpenSidebar: (content: string) => state.handleOpenSidebar(content),
                 onCloseSidebar: () => state.handleCloseSidebar(),
                 onSplitRatioChange: (ratio: number) => state.handleSplitRatioChange(ratio),
+                onQuote: (quoted: string) => {
+                  state.chatMessage = quoted + state.chatMessage;
+                  // Focus the textarea
+                  requestAnimationFrame(() => {
+                    const textarea = document.querySelector(
+                      ".chat-input-textarea",
+                    ) as HTMLTextAreaElement;
+                    if (textarea) {
+                      textarea.focus();
+                      textarea.setSelectionRange(quoted.length, quoted.length);
+                    }
+                  });
+                },
                 assistantName: state.assistantName,
                 assistantAvatar: state.assistantAvatar,
               })

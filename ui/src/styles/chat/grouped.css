@@ -140,7 +140,7 @@ img.chat-avatar {
 }
 
 .chat-bubble.has-copy {
-  padding-right: 36px;
+  padding-right: 70px; /* Increased to accommodate both buttons */
 }
 
 .chat-copy-btn {
@@ -227,6 +227,52 @@ img.chat-avatar {
   border-color: var(--ok-subtle);
   background: var(--ok-subtle);
   color: var(--ok);
+}
+
+/* Quote Reply Button */
+.chat-quote-btn {
+  position: absolute;
+  top: 6px;
+  right: 36px; /* Position to the left of copy button */
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--muted);
+  border-radius: var(--radius-md);
+  padding: 4px 6px;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity 120ms ease-out,
+    background 120ms ease-out;
+}
+
+.chat-quote-btn__icon {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  position: relative;
+}
+
+.chat-quote-btn__icon svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.chat-bubble:hover .chat-quote-btn {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.chat-quote-btn:hover {
+  background: var(--bg-hover);
 }
 
 .chat-copy-btn:focus-visible {
