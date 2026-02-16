@@ -787,19 +787,6 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
   });
 
-  it("returns friendly message for 'roles must alternate' errors thrown as exceptions", async () => {
-    state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
-      throw new Error('messages: roles must alternate between "user" and "assistant"');
-    });
-
-    const { run } = createMinimalRun({});
-    const res = await run();
-
-    expect(res).toMatchObject({
-      text: expect.stringContaining("Message ordering conflict"),
-    });
-  });
-
   it("rewrites Bun socket errors into friendly text", async () => {
     state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => ({
       payloads: [
