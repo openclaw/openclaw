@@ -248,6 +248,10 @@ export function buildAgentSystemPrompt(params: {
     subagents: "List, steer, or kill sub-agent runs for this requester session",
     session_status:
       "Show a /status-equivalent status card (usage + time + Reasoning/Verbose/Elevated); use for model-use questions (📊 session_status); optional per-session model override",
+    architect_pipeline:
+      "Manage Architect CEO orchestration state and audit decision gates for multi-agent build loops",
+    venture_studio:
+      "Capture web/forum pain-point research and generate monetized app plans + workflow documents; pair with web_search/web_fetch for source discovery",
     image: "Analyze an image with the configured image model",
   };
 
@@ -275,6 +279,8 @@ export function buildAgentSystemPrompt(params: {
     "sessions_send",
     "subagents",
     "session_status",
+    "architect_pipeline",
+    "venture_studio",
     "image",
   ];
 
