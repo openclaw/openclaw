@@ -47,6 +47,12 @@ type ModalInputSummary = {
   inputValue?: string;
 };
 
+type ModalPrivateMetadata = {
+  sessionKey?: string;
+  channelId?: string;
+  channelType?: string;
+};
+
 function readOptionValues(options: unknown): string[] | undefined {
   if (!Array.isArray(options)) {
     return undefined;
@@ -144,6 +150,53 @@ function summarizeViewState(values: unknown): ModalInputSummary[] {
     }
   }
   return entries;
+}
+
+function parseModalPrivateMetadata(raw: unknown): ModalPrivateMetadata {
+  if (typeof raw !== "string" || raw.trim().length === 0) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const sessionKey =
+      typeof parsed.sessionKey === "string" && parsed.sessionKey.trim().length > 0
+        ? parsed.sessionKey
+        : undefined;
+    const channelId =
+      typeof parsed.channelId === "string" && parsed.channelId.trim().length > 0
+        ? parsed.channelId
+        : undefined;
+    const channelType =
+      typeof parsed.channelType === "string" && parsed.channelType.trim().length > 0
+        ? parsed.channelType
+        : undefined;
+    return { sessionKey, channelId, channelType };
+  } catch {
+    return {};
+  }
+}
+
+function resolveModalSessionRouting(params: {
+  ctx: SlackMonitorContext;
+  privateMetadata: unknown;
+}): { sessionKey: string; channelId?: string; channelType?: string } {
+  const metadata = parseModalPrivateMetadata(params.privateMetadata);
+  if (metadata.sessionKey) {
+    return { sessionKey: metadata.sessionKey };
+  }
+  if (metadata.channelId) {
+    return {
+      sessionKey: params.ctx.resolveSlackSystemEventSessionKey({
+        channelId: metadata.channelId,
+        channelType: metadata.channelType,
+      }),
+      channelId: metadata.channelId,
+      channelType: metadata.channelType,
+    };
+  }
+  return {
+    sessionKey: params.ctx.resolveSlackSystemEventSessionKey({}),
+  };
 }
 
 export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContext }) {
@@ -292,6 +345,7 @@ export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContex
         view?: {
           id?: string;
           callback_id?: string;
+          private_metadata?: string;
           state?: { values?: unknown };
         };
       };
@@ -300,6 +354,10 @@ export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContex
       const userId = typedBody.user?.id ?? "unknown";
       const viewId = typedBody.view?.id;
       const inputs = summarizeViewState(typedBody.view?.state?.values);
+      const sessionRouting = resolveModalSessionRouting({
+        ctx,
+        privateMetadata: typedBody.view?.private_metadata,
+      });
       const eventPayload = {
         interactionType: "view_submission",
         actionId: `view:${callbackId}`,
@@ -307,6 +365,9 @@ export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContex
         viewId,
         userId,
         teamId: typedBody.team?.id,
+        privateMetadata: typedBody.view?.private_metadata,
+        routedChannelId: sessionRouting.channelId,
+        routedChannelType: sessionRouting.channelType,
         inputs,
       };
 
@@ -315,7 +376,7 @@ export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContex
       );
 
       enqueueSystemEvent(`Slack interaction: ${JSON.stringify(eventPayload)}`, {
-        sessionKey: ctx.resolveSlackSystemEventSessionKey({}),
+        sessionKey: sessionRouting.sessionKey,
         contextKey: ["slack:interaction:view", callbackId, viewId, userId]
           .filter(Boolean)
           .join(":"),
@@ -357,6 +418,10 @@ export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContex
       const userId = typedBody.user?.id ?? "unknown";
       const viewId = typedBody.view?.id;
       const inputs = summarizeViewState(typedBody.view?.state?.values);
+      const sessionRouting = resolveModalSessionRouting({
+        ctx,
+        privateMetadata: typedBody.view?.private_metadata,
+      });
       const eventPayload = {
         interactionType: "view_closed",
         actionId: `view:${callbackId}`,
@@ -366,6 +431,8 @@ export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContex
         teamId: typedBody.team?.id,
         isCleared: typedBody.is_cleared === true,
         privateMetadata: typedBody.view?.private_metadata,
+        routedChannelId: sessionRouting.channelId,
+        routedChannelType: sessionRouting.channelType,
         inputs,
       };
 
@@ -376,7 +443,7 @@ export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContex
       );
 
       enqueueSystemEvent(`Slack interaction: ${JSON.stringify(eventPayload)}`, {
-        sessionKey: ctx.resolveSlackSystemEventSessionKey({}),
+        sessionKey: sessionRouting.sessionKey,
         contextKey: ["slack:interaction:view-closed", callbackId, viewId, userId]
           .filter(Boolean)
           .join(":"),
