@@ -25,6 +25,19 @@ describe("parseSandboxBindMount", () => {
       writable: true,
     });
   });
+
+  it("parses Windows drive-letter host paths", () => {
+    expect(parseSandboxBindMount("C:\\Users\\kai\\workspace:/workspace:ro")).toEqual({
+      hostRoot: path.resolve("C:\\Users\\kai\\workspace"),
+      containerRoot: "/workspace",
+      writable: false,
+    });
+    expect(parseSandboxBindMount("D:/data:/workspace-data:rw")).toEqual({
+      hostRoot: path.resolve("D:/data"),
+      containerRoot: "/workspace-data",
+      writable: true,
+    });
+  });
 });
 
 describe("resolveSandboxFsPathWithMounts", () => {
