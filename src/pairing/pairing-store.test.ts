@@ -184,4 +184,38 @@ describe("pairing store", () => {
       expect(channelScoped).not.toContain("12345");
     });
   });
+
+  it("reads legacy channel-scoped allowFrom for default account", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const oauthDir = resolveOAuthDir(process.env, stateDir);
+      await fs.mkdir(oauthDir, { recursive: true });
+      await fs.writeFile(
+        path.join(oauthDir, "telegram-allowFrom.json"),
+        JSON.stringify(
+          {
+            version: 1,
+            allowFrom: ["1001"],
+          },
+          null,
+          2,
+        ) + "\n",
+        "utf8",
+      );
+      await fs.writeFile(
+        path.join(oauthDir, "telegram-default-allowFrom.json"),
+        JSON.stringify(
+          {
+            version: 1,
+            allowFrom: ["1002"],
+          },
+          null,
+          2,
+        ) + "\n",
+        "utf8",
+      );
+
+      const scoped = await readChannelAllowFromStore("telegram", process.env, "default");
+      expect(scoped).toEqual(["1002", "1001"]);
+    });
+  });
 });
