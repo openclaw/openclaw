@@ -31,15 +31,34 @@ type RegisteredViewHandler = (args: {
   };
 }) => Promise<void>;
 
+type RegisteredViewClosedHandler = (args: {
+  ack: () => Promise<void>;
+  body: {
+    user?: { id?: string };
+    team?: { id?: string };
+    view?: {
+      id?: string;
+      callback_id?: string;
+      private_metadata?: string;
+      state?: { values?: Record<string, Record<string, Record<string, unknown>>> };
+    };
+    is_cleared?: boolean;
+  };
+}) => Promise<void>;
+
 function createContext() {
   let handler: RegisteredHandler | null = null;
   let viewHandler: RegisteredViewHandler | null = null;
+  let viewClosedHandler: RegisteredViewClosedHandler | null = null;
   const app = {
     action: vi.fn((_matcher: RegExp, next: RegisteredHandler) => {
       handler = next;
     }),
     view: vi.fn((_matcher: RegExp, next: RegisteredViewHandler) => {
       viewHandler = next;
+    }),
+    viewClosed: vi.fn((_matcher: RegExp, next: RegisteredViewClosedHandler) => {
+      viewClosedHandler = next;
     }),
     client: {
       chat: {
@@ -61,6 +80,7 @@ function createContext() {
     resolveSessionKey,
     getHandler: () => handler,
     getViewHandler: () => viewHandler,
+    getViewClosedHandler: () => viewClosedHandler,
   };
 }
 
@@ -228,6 +248,71 @@ describe("registerSlackInteractionEvents", () => {
       expect.arrayContaining([
         expect.objectContaining({ actionId: "env_select", selectedValues: ["prod"] }),
         expect.objectContaining({ actionId: "notes_input", inputValue: "ship now" }),
+      ]),
+    );
+  });
+
+  it("captures modal close events and enqueues view closed event", async () => {
+    enqueueSystemEventMock.mockReset();
+    const { ctx, getViewClosedHandler, resolveSessionKey } = createContext();
+    registerSlackInteractionEvents({ ctx: ctx as never });
+    const viewClosedHandler = getViewClosedHandler();
+    expect(viewClosedHandler).toBeTruthy();
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    await viewClosedHandler!({
+      ack,
+      body: {
+        user: { id: "U900" },
+        team: { id: "T1" },
+        is_cleared: true,
+        view: {
+          id: "V900",
+          callback_id: "openclaw:deploy_form",
+          private_metadata: "run:123",
+          state: {
+            values: {
+              env_block: {
+                env_select: {
+                  type: "static_select",
+                  selected_option: {
+                    text: { type: "plain_text", text: "Canary" },
+                    value: "canary",
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(ack).toHaveBeenCalled();
+    expect(resolveSessionKey).toHaveBeenCalledWith({});
+    expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
+    const [eventText] = enqueueSystemEventMock.mock.calls[0] as [string];
+    const payload = JSON.parse(eventText.replace("Slack interaction: ", "")) as {
+      interactionType: string;
+      actionId: string;
+      callbackId: string;
+      viewId: string;
+      userId: string;
+      isCleared: boolean;
+      privateMetadata: string;
+      inputs: Array<{ actionId: string; selectedValues?: string[] }>;
+    };
+    expect(payload).toMatchObject({
+      interactionType: "view_closed",
+      actionId: "view:openclaw:deploy_form",
+      callbackId: "openclaw:deploy_form",
+      viewId: "V900",
+      userId: "U900",
+      isCleared: true,
+      privateMetadata: "run:123",
+    });
+    expect(payload.inputs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ actionId: "env_select", selectedValues: ["canary"] }),
       ]),
     );
   });

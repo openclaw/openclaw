@@ -18,7 +18,7 @@ type SelectOption = {
 };
 
 type InteractionSummary = {
-  interactionType?: "block_action" | "view_submission";
+  interactionType?: "block_action" | "view_submission" | "view_closed";
   actionId: string;
   blockId?: string;
   actionType?: string;
@@ -317,6 +317,67 @@ export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContex
       enqueueSystemEvent(`Slack interaction: ${JSON.stringify(eventPayload)}`, {
         sessionKey: ctx.resolveSlackSystemEventSessionKey({}),
         contextKey: ["slack:interaction:view", callbackId, viewId, userId]
+          .filter(Boolean)
+          .join(":"),
+      });
+    },
+  );
+
+  const viewClosed = (
+    ctx.app as unknown as {
+      viewClosed?: (
+        matcher: RegExp,
+        handler: (args: { ack: () => Promise<void>; body: unknown }) => Promise<void>,
+      ) => void;
+    }
+  ).viewClosed;
+  if (typeof viewClosed !== "function") {
+    return;
+  }
+
+  // Handle modal close events so agent workflows can react to cancelled forms.
+  viewClosed(
+    new RegExp(`^${OPENCLAW_ACTION_PREFIX}`),
+    async ({ ack, body }: { ack: () => Promise<void>; body: unknown }) => {
+      await ack();
+
+      const typedBody = body as {
+        user?: { id?: string };
+        team?: { id?: string };
+        view?: {
+          id?: string;
+          callback_id?: string;
+          private_metadata?: string;
+          state?: { values?: unknown };
+        };
+        is_cleared?: boolean;
+      };
+
+      const callbackId = typedBody.view?.callback_id ?? "unknown";
+      const userId = typedBody.user?.id ?? "unknown";
+      const viewId = typedBody.view?.id;
+      const inputs = summarizeViewState(typedBody.view?.state?.values);
+      const eventPayload = {
+        interactionType: "view_closed",
+        actionId: `view:${callbackId}`,
+        callbackId,
+        viewId,
+        userId,
+        teamId: typedBody.team?.id,
+        isCleared: typedBody.is_cleared === true,
+        privateMetadata: typedBody.view?.private_metadata,
+        inputs,
+      };
+
+      ctx.runtime.log?.(
+        `slack:interaction view_closed callback=${callbackId} user=${userId} cleared=${
+          typedBody.is_cleared === true
+        }`,
+      );
+
+      enqueueSystemEvent(`Slack interaction: ${JSON.stringify(eventPayload)}`, {
+        sessionKey: ctx.resolveSlackSystemEventSessionKey({}),
+        contextKey: ["slack:interaction:view-closed", callbackId, viewId, userId]
           .filter(Boolean)
           .join(":"),
       });
