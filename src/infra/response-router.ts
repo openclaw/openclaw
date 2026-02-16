@@ -6,7 +6,7 @@
  */
 
 import { callGateway } from "../gateway/call.js";
-import { logger } from "../logging/logger.js";
+import { getChildLogger } from "../logging/logger.js";
 import {
   onAgentEvent,
   getAgentRunContext,
@@ -14,7 +14,7 @@ import {
   type AgentEventPayload,
 } from "./agent-events.js";
 
-const log = logger.child({ module: "response-router" });
+const log = getChildLogger({ module: "response-router" });
 
 type SkillResponse = {
   kind: "skill_response";

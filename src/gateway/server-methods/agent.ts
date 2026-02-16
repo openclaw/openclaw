@@ -488,6 +488,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           const skillResponse = {
             kind: "skill_response",
             correlationId: skillInvocationCorrelationId,
+            returnToSessionKey: skillInvocationReturnTo,
             output: textContent || result,
             confidence: 0.5, // Default confidence; agents should output structured JSON with confidence
             status: "completed" as const,
@@ -530,6 +531,8 @@ export const agentHandlers: GatewayRequestHandlers = {
           const skillResponse = {
             kind: "skill_response",
             correlationId: skillInvocationCorrelationId,
+            returnToSessionKey: skillInvocationReturnTo,
+            output: undefined,
             error: String(err),
             status: "error" as const,
             timestamp: Date.now(),
