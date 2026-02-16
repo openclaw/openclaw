@@ -128,6 +128,42 @@ describe("discord message actions", () => {
   });
 });
 
+describe("telegram message actions", () => {
+  it("lists poll action when telegram is configured", () => {
+    const cfg = { channels: { telegram: { botToken: "t0" } } } as OpenClawConfig;
+    const actions = telegramMessageActions.listActions?.({ cfg }) ?? [];
+    expect(actions).toContain("poll");
+  });
+
+  it("routes poll with normalized params", async () => {
+    await telegramMessageActions.handleAction({
+      action: "poll",
+      params: {
+        to: "123",
+        pollQuestion: "Ready?",
+        pollOption: ["Yes", "No"],
+        pollMulti: true,
+        pollDurationSeconds: 60,
+      },
+      cfg: { channels: { telegram: { botToken: "tok" } } } as OpenClawConfig,
+      accountId: "ops",
+    });
+
+    expect(handleTelegramAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "poll",
+        to: "123",
+        question: "Ready?",
+        options: ["Yes", "No"],
+        allowMultiselect: true,
+        durationSeconds: 60,
+        accountId: "ops",
+      }),
+      expect.any(Object),
+    );
+  });
+});
+
 describe("handleDiscordMessageAction", () => {
   it("forwards context accountId for send", async () => {
     await handleDiscordMessageAction({
