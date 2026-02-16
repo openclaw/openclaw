@@ -1,4 +1,4 @@
-import type { BlockAction, SlackActionMiddlewareArgs } from "@slack/bolt";
+import type { SlackActionMiddlewareArgs } from "@slack/bolt";
 import type { Block, KnownBlock } from "@slack/web-api";
 import type { SlackMonitorContext } from "../context.js";
 import { enqueueSystemEvent } from "../../../infra/system-events.js";
@@ -55,8 +55,11 @@ function readOptionLabels(options: unknown): string[] | undefined {
   return labels.length > 0 ? labels : undefined;
 }
 
-function summarizeAction(action: BlockAction): Omit<InteractionSummary, "actionId" | "blockId"> {
-  const typed = action as BlockAction & {
+function summarizeAction(
+  action: Record<string, unknown>,
+): Omit<InteractionSummary, "actionId" | "blockId"> {
+  const typed = action as {
+    type?: string;
     selected_option?: SelectOption;
     selected_options?: SelectOption[];
     selected_user?: string;
@@ -92,7 +95,7 @@ function summarizeAction(action: BlockAction): Omit<InteractionSummary, "actionI
     selectedTime: typed.selected_time,
     selectedDateTime:
       typeof typed.selected_date_time === "number" ? typed.selected_date_time : undefined,
-    inputValue: actionType === "plain_text_input" ? typed.value : undefined,
+    inputValue: typed.value,
   };
 }
 
@@ -116,19 +119,30 @@ export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContex
   // with other Slack integrations or future features
   ctx.app.action(
     new RegExp(`^${OPENCLAW_ACTION_PREFIX}`),
-    async (args: SlackActionMiddlewareArgs<BlockAction>) => {
+    async (args: SlackActionMiddlewareArgs) => {
       const { ack, body, action, respond } = args;
+      const typedBody = body as unknown as {
+        user?: { id?: string };
+        channel?: { id?: string };
+        message?: { ts?: string; text?: string; blocks?: unknown[] };
+      };
 
       // Acknowledge the action immediately to prevent the warning icon
       await ack();
 
       // Extract action details using proper Bolt types
-      const actionId = action.action_id;
-      const blockId = action.block_id;
-      const userId = body.user.id;
-      const channelId = body.channel?.id;
-      const messageTs = body.message?.ts;
-      const actionSummary = summarizeAction(action);
+      const typedAction = action as unknown as Record<string, unknown> & {
+        action_id?: string;
+        block_id?: string;
+        type?: string;
+        text?: { text?: string };
+      };
+      const actionId = typedAction.action_id ?? "unknown";
+      const blockId = typedAction.block_id;
+      const userId = typedBody.user?.id ?? "unknown";
+      const channelId = typedBody.channel?.id;
+      const messageTs = typedBody.message?.ts;
+      const actionSummary = summarizeAction(typedAction);
       const eventPayload: InteractionSummary = {
         actionId,
         blockId,
@@ -159,16 +173,16 @@ export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContex
         contextKey,
       });
 
-      const originalBlocks = (body.message as { blocks?: unknown[] } | undefined)?.blocks;
+      const originalBlocks = typedBody.message?.blocks;
       if (!Array.isArray(originalBlocks) || !channelId || !messageTs) {
         return;
       }
 
-      if (action.type !== "button") {
+      if (typedAction.type !== "button") {
         return;
       }
 
-      const buttonText = action.text?.text ?? actionId;
+      const buttonText = typedAction.text?.text ?? actionId;
       let updatedBlocks = originalBlocks.map((block) => {
         const typedBlock = block as InteractionMessageBlock;
         if (typedBlock.type === "actions" && typedBlock.block_id === blockId) {
@@ -203,7 +217,7 @@ export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContex
         await ctx.app.client.chat.update({
           channel: channelId,
           ts: messageTs,
-          text: (body.message as { text?: string } | undefined)?.text ?? "",
+          text: typedBody.message?.text ?? "",
           blocks: updatedBlocks as (Block | KnownBlock)[],
         });
       } catch {
