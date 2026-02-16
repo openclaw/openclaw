@@ -1,6 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { applyConfiguredContextWindows } from "./context.js";
+import { applyConfiguredContextWindows, applyDiscoveredContextWindows } from "./context.js";
 import { createSessionManagerRuntimeRegistry } from "./pi-extensions/session-manager-runtime-registry.js";
+
+describe("applyDiscoveredContextWindows", () => {
+  it("keeps the smallest context window when duplicate model ids are discovered", () => {
+    const cache = new Map<string, number>();
+    applyDiscoveredContextWindows({
+      cache,
+      models: [
+        { id: "claude-sonnet-4-5", contextWindow: 1_000_000 },
+        { id: "claude-sonnet-4-5", contextWindow: 200_000 },
+      ],
+    });
+
+    expect(cache.get("claude-sonnet-4-5")).toBe(200_000);
+  });
+});
 
 describe("applyConfiguredContextWindows", () => {
   it("overrides discovered cache values with explicit models.providers contextWindow", () => {
