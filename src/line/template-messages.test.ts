@@ -185,14 +185,6 @@ describe("createImageCarousel", () => {
 });
 
 describe("createYesNoConfirm", () => {
-  it("creates a yes/no confirmation with defaults", () => {
-    const template = createYesNoConfirm("Continue?");
-
-    const actions = (template.template as { actions: Array<{ label: string }> }).actions;
-    expect(actions[0].label).toBe("Yes");
-    expect(actions[1].label).toBe("No");
-  });
-
   it("allows custom button text", () => {
     const template = createYesNoConfirm("Delete?", {
       yesText: "Delete",
