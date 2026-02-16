@@ -97,7 +97,7 @@ describe("heartbeat transcript pruning", () => {
       const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
 
       // Create a transcript with some existing content
-      await createTranscriptWithContent(transcriptPath, sessionId);
+      const originalContent = await createTranscriptWithContent(transcriptPath, sessionId);
       const originalSize = (await fs.stat(transcriptPath)).size;
 
       // Seed session store
