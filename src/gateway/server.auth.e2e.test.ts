@@ -687,6 +687,7 @@ describe("gateway server auth/connect", () => {
         };
         const res = await connectReq(ws, {
           token: "secret",
+          scopes: ["operator.read"],
           device,
           client: {
             id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
@@ -697,6 +698,8 @@ describe("gateway server auth/connect", () => {
         });
         expect(res.ok).toBe(true);
         expect((res.payload as { auth?: unknown } | undefined)?.auth).toBeUndefined();
+        const health = await rpcReq(ws, "health");
+        expect(health.ok).toBe(true);
         ws.close();
       });
     } finally {
