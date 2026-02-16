@@ -123,6 +123,16 @@ describe("models list/status", () => {
     baseUrl: "https://api.openai.com/v1",
     contextWindow: 128000,
   };
+  const GOOGLE_ANTIGRAVITY_TEMPLATE_BASE = {
+    provider: "google-antigravity",
+    api: "google-gemini-cli",
+    input: ["text", "image"],
+    baseUrl: "https://daily-cloudcode-pa.sandbox.googleapis.com",
+    contextWindow: 200000,
+    maxTokens: 64000,
+    reasoning: true,
+    cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+  };
 
   function setDefaultModel(model: string) {
     loadConfig.mockReturnValue({
@@ -130,9 +140,66 @@ describe("models list/status", () => {
     });
   }
 
+  function configureModelAsConfigured(model: string) {
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          model,
+          models: {
+            [model]: {},
+          },
+        },
+      },
+    });
+  }
+
+  function configureGoogleAntigravityModel(modelId: string) {
+    configureModelAsConfigured(`google-antigravity/${modelId}`);
+  }
+
+  function makeGoogleAntigravityTemplate(id: string, name: string) {
+    return {
+      ...GOOGLE_ANTIGRAVITY_TEMPLATE_BASE,
+      id,
+      name,
+    };
+  }
+
+  function enableGoogleAntigravityAuthProfile() {
+    listProfilesForProvider.mockImplementation((_: unknown, provider: string) =>
+      provider === "google-antigravity"
+        ? ([{ id: "profile-1" }] as Array<Record<string, unknown>>)
+        : [],
+    );
+  }
+
   function parseJsonLog(runtime: ReturnType<typeof makeRuntime>) {
     expect(runtime.log).toHaveBeenCalledTimes(1);
     return JSON.parse(String(runtime.log.mock.calls[0]?.[0]));
+  }
+
+  async function runAvailabilityFallbackCase(params: {
+    setup?: () => void;
+    expectedErrorDetail: string;
+  }) {
+    configureGoogleAntigravityModel("claude-opus-4-6-thinking");
+    enableGoogleAntigravityAuthProfile();
+    const runtime = makeRuntime();
+
+    modelRegistryState.models = [
+      makeGoogleAntigravityTemplate("claude-opus-4-5-thinking", "Claude Opus 4.5 Thinking"),
+    ];
+    modelRegistryState.available = [];
+    params.setup?.();
+    await modelsListCommand({ json: true }, runtime);
+
+    expect(runtime.error).toHaveBeenCalledTimes(1);
+    expect(runtime.error.mock.calls[0]?.[0]).toContain("falling back to auth heuristics");
+    expect(runtime.error.mock.calls[0]?.[0]).toContain(params.expectedErrorDetail);
+    const payload = parseJsonLog(runtime);
+    expect(payload.models[0]?.key).toBe("google-antigravity/claude-opus-4-6-thinking");
+    expect(payload.models[0]?.missing).toBe(false);
+    expect(payload.models[0]?.available).toBe(true);
   }
 
   async function expectZaiProviderFilter(provider: string) {
@@ -159,17 +226,8 @@ describe("models list/status", () => {
     });
     const runtime = makeRuntime();
 
-    const model = {
-      provider: "zai",
-      id: "glm-4.7",
-      name: "GLM-4.7",
-      input: ["text"],
-      baseUrl: "https://api.z.ai/v1",
-      contextWindow: 128000,
-    };
-
-    modelRegistryState.models = [model];
-    modelRegistryState.available = [model];
+    modelRegistryState.models = [ZAI_MODEL];
+    modelRegistryState.available = [ZAI_MODEL];
     await modelsListCommand({ json: true }, runtime);
 
     expect(runtime.log).toHaveBeenCalledTimes(1);
@@ -183,17 +241,8 @@ describe("models list/status", () => {
     });
     const runtime = makeRuntime();
 
-    const model = {
-      provider: "zai",
-      id: "glm-4.7",
-      name: "GLM-4.7",
-      input: ["text"],
-      baseUrl: "https://api.z.ai/v1",
-      contextWindow: 128000,
-    };
-
-    modelRegistryState.models = [model];
-    modelRegistryState.available = [model];
+    modelRegistryState.models = [ZAI_MODEL];
+    modelRegistryState.available = [ZAI_MODEL];
     await modelsListCommand({ plain: true }, runtime);
 
     expect(runtime.log).toHaveBeenCalledTimes(1);
@@ -218,16 +267,7 @@ describe("models list/status", () => {
     });
     const runtime = makeRuntime();
 
-    const model = {
-      provider: "zai",
-      id: "glm-4.7",
-      name: "GLM-4.7",
-      input: ["text"],
-      baseUrl: "https://api.z.ai/v1",
-      contextWindow: 128000,
-    };
-
-    modelRegistryState.models = [model];
+    modelRegistryState.models = [ZAI_MODEL];
     modelRegistryState.available = [];
     await modelsListCommand({ all: true, json: true }, runtime);
 
@@ -237,31 +277,11 @@ describe("models list/status", () => {
   });
 
   it("models list resolves antigravity opus 4.6 thinking from 4.5 template", async () => {
-    loadConfig.mockReturnValue({
-      agents: {
-        defaults: {
-          model: "google-antigravity/claude-opus-4-6-thinking",
-          models: {
-            "google-antigravity/claude-opus-4-6-thinking": {},
-          },
-        },
-      },
-    });
+    configureGoogleAntigravityModel("claude-opus-4-6-thinking");
     const runtime = makeRuntime();
 
     modelRegistryState.models = [
-      {
-        provider: "google-antigravity",
-        id: "claude-opus-4-5-thinking",
-        name: "Claude Opus 4.5 Thinking",
-        api: "google-gemini-cli",
-        input: ["text", "image"],
-        baseUrl: "https://daily-cloudcode-pa.sandbox.googleapis.com",
-        contextWindow: 200000,
-        maxTokens: 64000,
-        reasoning: true,
-        cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
-      },
+      makeGoogleAntigravityTemplate("claude-opus-4-5-thinking", "Claude Opus 4.5 Thinking"),
     ];
     modelRegistryState.available = [];
     await modelsListCommand({ json: true }, runtime);
@@ -275,31 +295,11 @@ describe("models list/status", () => {
   });
 
   it("models list resolves antigravity opus 4.6 (non-thinking) from 4.5 template", async () => {
-    loadConfig.mockReturnValue({
-      agents: {
-        defaults: {
-          model: "google-antigravity/claude-opus-4-6",
-          models: {
-            "google-antigravity/claude-opus-4-6": {},
-          },
-        },
-      },
-    });
+    configureGoogleAntigravityModel("claude-opus-4-6");
     const runtime = makeRuntime();
 
     modelRegistryState.models = [
-      {
-        provider: "google-antigravity",
-        id: "claude-opus-4-5",
-        name: "Claude Opus 4.5",
-        api: "google-gemini-cli",
-        input: ["text", "image"],
-        baseUrl: "https://daily-cloudcode-pa.sandbox.googleapis.com",
-        contextWindow: 200000,
-        maxTokens: 64000,
-        reasoning: true,
-        cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
-      },
+      makeGoogleAntigravityTemplate("claude-opus-4-5", "Claude Opus 4.5"),
     ];
     modelRegistryState.available = [];
     await modelsListCommand({ json: true }, runtime);
@@ -313,30 +313,13 @@ describe("models list/status", () => {
   });
 
   it("models list marks synthesized antigravity opus 4.6 thinking as available when template is available", async () => {
-    loadConfig.mockReturnValue({
-      agents: {
-        defaults: {
-          model: "google-antigravity/claude-opus-4-6-thinking",
-          models: {
-            "google-antigravity/claude-opus-4-6-thinking": {},
-          },
-        },
-      },
-    });
+    configureGoogleAntigravityModel("claude-opus-4-6-thinking");
     const runtime = makeRuntime();
 
-    const template = {
-      provider: "google-antigravity",
-      id: "claude-opus-4-5-thinking",
-      name: "Claude Opus 4.5 Thinking",
-      api: "google-gemini-cli",
-      input: ["text", "image"],
-      baseUrl: "https://daily-cloudcode-pa.sandbox.googleapis.com",
-      contextWindow: 200000,
-      maxTokens: 64000,
-      reasoning: true,
-      cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
-    };
+    const template = makeGoogleAntigravityTemplate(
+      "claude-opus-4-5-thinking",
+      "Claude Opus 4.5 Thinking",
+    );
     modelRegistryState.models = [template];
     modelRegistryState.available = [template];
     await modelsListCommand({ json: true }, runtime);
@@ -349,30 +332,10 @@ describe("models list/status", () => {
   });
 
   it("models list marks synthesized antigravity opus 4.6 (non-thinking) as available when template is available", async () => {
-    loadConfig.mockReturnValue({
-      agents: {
-        defaults: {
-          model: "google-antigravity/claude-opus-4-6",
-          models: {
-            "google-antigravity/claude-opus-4-6": {},
-          },
-        },
-      },
-    });
+    configureGoogleAntigravityModel("claude-opus-4-6");
     const runtime = makeRuntime();
 
-    const template = {
-      provider: "google-antigravity",
-      id: "claude-opus-4-5",
-      name: "Claude Opus 4.5",
-      api: "google-gemini-cli",
-      input: ["text", "image"],
-      baseUrl: "https://daily-cloudcode-pa.sandbox.googleapis.com",
-      contextWindow: 200000,
-      maxTokens: 64000,
-      reasoning: true,
-      cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
-    };
+    const template = makeGoogleAntigravityTemplate("claude-opus-4-5", "Claude Opus 4.5");
     modelRegistryState.models = [template];
     modelRegistryState.available = [template];
     await modelsListCommand({ json: true }, runtime);
@@ -385,35 +348,14 @@ describe("models list/status", () => {
   });
 
   it("models list prefers registry availability over provider auth heuristics", async () => {
-    loadConfig.mockReturnValue({
-      agents: {
-        defaults: {
-          model: "google-antigravity/claude-opus-4-6-thinking",
-          models: {
-            "google-antigravity/claude-opus-4-6-thinking": {},
-          },
-        },
-      },
-    });
-    listProfilesForProvider.mockImplementation((_: unknown, provider: string) =>
-      provider === "google-antigravity"
-        ? ([{ id: "profile-1" }] as Array<Record<string, unknown>>)
-        : [],
-    );
+    configureGoogleAntigravityModel("claude-opus-4-6-thinking");
+    enableGoogleAntigravityAuthProfile();
     const runtime = makeRuntime();
 
-    const template = {
-      provider: "google-antigravity",
-      id: "claude-opus-4-5-thinking",
-      name: "Claude Opus 4.5 Thinking",
-      api: "google-gemini-cli",
-      input: ["text", "image"],
-      baseUrl: "https://daily-cloudcode-pa.sandbox.googleapis.com",
-      contextWindow: 200000,
-      maxTokens: 64000,
-      reasoning: true,
-      cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
-    };
+    const template = makeGoogleAntigravityTemplate(
+      "claude-opus-4-5-thinking",
+      "Claude Opus 4.5 Thinking",
+    );
     modelRegistryState.models = [template];
     modelRegistryState.available = [];
     await modelsListCommand({ json: true }, runtime);
@@ -427,160 +369,39 @@ describe("models list/status", () => {
   });
 
   it("models list falls back to auth heuristics when registry availability is unavailable", async () => {
-    loadConfig.mockReturnValue({
-      agents: {
-        defaults: {
-          model: "google-antigravity/claude-opus-4-6-thinking",
-          models: {
-            "google-antigravity/claude-opus-4-6-thinking": {},
-          },
-        },
+    await runAvailabilityFallbackCase({
+      setup: () => {
+        modelRegistryState.getAvailableError = Object.assign(
+          new Error("availability unsupported: getAvailable failed"),
+          { code: "MODEL_AVAILABILITY_UNAVAILABLE" },
+        );
       },
+      expectedErrorDetail: "getAvailable failed",
     });
-    listProfilesForProvider.mockImplementation((_: unknown, provider: string) =>
-      provider === "google-antigravity"
-        ? ([{ id: "profile-1" }] as Array<Record<string, unknown>>)
-        : [],
-    );
-    modelRegistryState.getAvailableError = Object.assign(
-      new Error("availability unsupported: getAvailable failed"),
-      { code: "MODEL_AVAILABILITY_UNAVAILABLE" },
-    );
-    const runtime = makeRuntime();
-
-    modelRegistryState.models = [
-      {
-        provider: "google-antigravity",
-        id: "claude-opus-4-5-thinking",
-        name: "Claude Opus 4.5 Thinking",
-        api: "google-gemini-cli",
-        input: ["text", "image"],
-        baseUrl: "https://daily-cloudcode-pa.sandbox.googleapis.com",
-        contextWindow: 200000,
-        maxTokens: 64000,
-        reasoning: true,
-        cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
-      },
-    ];
-    modelRegistryState.available = [];
-    await modelsListCommand({ json: true }, runtime);
-
-    expect(runtime.error).toHaveBeenCalledTimes(1);
-    expect(runtime.error.mock.calls[0]?.[0]).toContain("falling back to auth heuristics");
-    expect(runtime.error.mock.calls[0]?.[0]).toContain("getAvailable failed");
-    expect(runtime.log).toHaveBeenCalledTimes(1);
-    const payload = JSON.parse(String(runtime.log.mock.calls[0]?.[0]));
-    expect(payload.models[0]?.key).toBe("google-antigravity/claude-opus-4-6-thinking");
-    expect(payload.models[0]?.missing).toBe(false);
-    expect(payload.models[0]?.available).toBe(true);
   });
 
   it("models list falls back to auth heuristics when getAvailable returns invalid shape", async () => {
-    loadConfig.mockReturnValue({
-      agents: {
-        defaults: {
-          model: "google-antigravity/claude-opus-4-6-thinking",
-          models: {
-            "google-antigravity/claude-opus-4-6-thinking": {},
-          },
-        },
+    await runAvailabilityFallbackCase({
+      setup: () => {
+        modelRegistryState.available = { bad: true } as unknown as Array<Record<string, unknown>>;
       },
+      expectedErrorDetail: "non-array value",
     });
-    listProfilesForProvider.mockImplementation((_: unknown, provider: string) =>
-      provider === "google-antigravity"
-        ? ([{ id: "profile-1" }] as Array<Record<string, unknown>>)
-        : [],
-    );
-    modelRegistryState.available = { bad: true } as unknown as Array<Record<string, unknown>>;
-    const runtime = makeRuntime();
-
-    modelRegistryState.models = [
-      {
-        provider: "google-antigravity",
-        id: "claude-opus-4-5-thinking",
-        name: "Claude Opus 4.5 Thinking",
-        api: "google-gemini-cli",
-        input: ["text", "image"],
-        baseUrl: "https://daily-cloudcode-pa.sandbox.googleapis.com",
-        contextWindow: 200000,
-        maxTokens: 64000,
-        reasoning: true,
-        cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
-      },
-    ];
-    await modelsListCommand({ json: true }, runtime);
-
-    expect(runtime.error).toHaveBeenCalledTimes(1);
-    expect(runtime.error.mock.calls[0]?.[0]).toContain("falling back to auth heuristics");
-    expect(runtime.error.mock.calls[0]?.[0]).toContain("non-array value");
-    expect(runtime.log).toHaveBeenCalledTimes(1);
-    const payload = JSON.parse(String(runtime.log.mock.calls[0]?.[0]));
-    expect(payload.models[0]?.key).toBe("google-antigravity/claude-opus-4-6-thinking");
-    expect(payload.models[0]?.missing).toBe(false);
-    expect(payload.models[0]?.available).toBe(true);
   });
 
   it("models list falls back to auth heuristics when getAvailable throws", async () => {
-    loadConfig.mockReturnValue({
-      agents: {
-        defaults: {
-          model: "google-antigravity/claude-opus-4-6-thinking",
-          models: {
-            "google-antigravity/claude-opus-4-6-thinking": {},
-          },
-        },
+    await runAvailabilityFallbackCase({
+      setup: () => {
+        modelRegistryState.getAvailableError = new Error(
+          "availability unsupported: getAvailable failed",
+        );
       },
+      expectedErrorDetail: "availability unsupported: getAvailable failed",
     });
-    listProfilesForProvider.mockImplementation((_: unknown, provider: string) =>
-      provider === "google-antigravity"
-        ? ([{ id: "profile-1" }] as Array<Record<string, unknown>>)
-        : [],
-    );
-    modelRegistryState.getAvailableError = new Error(
-      "availability unsupported: getAvailable failed",
-    );
-    const runtime = makeRuntime();
-
-    modelRegistryState.models = [
-      {
-        provider: "google-antigravity",
-        id: "claude-opus-4-5-thinking",
-        name: "Claude Opus 4.5 Thinking",
-        api: "google-gemini-cli",
-        input: ["text", "image"],
-        baseUrl: "https://daily-cloudcode-pa.sandbox.googleapis.com",
-        contextWindow: 200000,
-        maxTokens: 64000,
-        reasoning: true,
-        cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
-      },
-    ];
-    modelRegistryState.available = [];
-    await modelsListCommand({ json: true }, runtime);
-
-    expect(runtime.error).toHaveBeenCalledTimes(1);
-    expect(runtime.error.mock.calls[0]?.[0]).toContain("falling back to auth heuristics");
-    expect(runtime.error.mock.calls[0]?.[0]).toContain(
-      "availability unsupported: getAvailable failed",
-    );
-    expect(runtime.log).toHaveBeenCalledTimes(1);
-    const payload = JSON.parse(String(runtime.log.mock.calls[0]?.[0]));
-    expect(payload.models[0]?.key).toBe("google-antigravity/claude-opus-4-6-thinking");
-    expect(payload.models[0]?.missing).toBe(false);
-    expect(payload.models[0]?.available).toBe(true);
   });
 
   it("models list does not treat availability-unavailable code as discovery fallback", async () => {
-    loadConfig.mockReturnValue({
-      agents: {
-        defaults: {
-          model: "google-antigravity/claude-opus-4-6-thinking",
-          models: {
-            "google-antigravity/claude-opus-4-6-thinking": {},
-          },
-        },
-      },
-    });
+    configureGoogleAntigravityModel("claude-opus-4-6-thinking");
     modelRegistryState.getAllError = Object.assign(new Error("model discovery failed"), {
       code: "MODEL_AVAILABILITY_UNAVAILABLE",
     });
@@ -596,21 +417,8 @@ describe("models list/status", () => {
   });
 
   it("models list fails fast when registry model discovery is unavailable", async () => {
-    loadConfig.mockReturnValue({
-      agents: {
-        defaults: {
-          model: "google-antigravity/claude-opus-4-6-thinking",
-          models: {
-            "google-antigravity/claude-opus-4-6-thinking": {},
-          },
-        },
-      },
-    });
-    listProfilesForProvider.mockImplementation((_: unknown, provider: string) =>
-      provider === "google-antigravity"
-        ? ([{ id: "profile-1" }] as Array<Record<string, unknown>>)
-        : [],
-    );
+    configureGoogleAntigravityModel("claude-opus-4-6-thinking");
+    enableGoogleAntigravityAuthProfile();
     modelRegistryState.getAllError = Object.assign(new Error("model discovery unavailable"), {
       code: "MODEL_DISCOVERY_UNAVAILABLE",
     });
@@ -632,18 +440,7 @@ describe("models list/status", () => {
       code: "MODEL_DISCOVERY_UNAVAILABLE",
     });
     modelRegistryState.available = [
-      {
-        provider: "google-antigravity",
-        id: "claude-opus-4-5-thinking",
-        name: "Claude Opus 4.5 Thinking",
-        api: "google-gemini-cli",
-        input: ["text", "image"],
-        baseUrl: "https://daily-cloudcode-pa.sandbox.googleapis.com",
-        contextWindow: 200000,
-        maxTokens: 64000,
-        reasoning: true,
-        cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
-      },
+      makeGoogleAntigravityTemplate("claude-opus-4-5-thinking", "Claude Opus 4.5 Thinking"),
     ];
 
     const { loadModelRegistry } = await import("./models/list.registry.js");

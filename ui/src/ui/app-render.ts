@@ -24,6 +24,7 @@ import {
   runCronJob,
   removeCronJob,
   addCronJob,
+  normalizeCronFormState,
 } from "./controllers/cron.ts";
 import { loadDebug, callDebugMethod } from "./controllers/debug.ts";
 import {
@@ -323,7 +324,8 @@ export function renderApp(state: AppViewState) {
                 channelMeta: state.channelsSnapshot?.channelMeta ?? [],
                 runsJobId: state.cronRunsJobId,
                 runs: state.cronRuns,
-                onFormChange: (patch) => (state.cronForm = { ...state.cronForm, ...patch }),
+                onFormChange: (patch) =>
+                  (state.cronForm = normalizeCronFormState({ ...state.cronForm, ...patch })),
                 onRefresh: () => state.loadCron(),
                 onAdd: () => addCronJob(state),
                 onToggle: (job, enabled) => toggleCronJob(state, job, enabled),

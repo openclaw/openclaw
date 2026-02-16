@@ -1,5 +1,10 @@
 import type { GatewayPlugin } from "@buape/carbon/gateway";
-import { Client, ReadyListener, type BaseMessageInteractiveComponent } from "@buape/carbon";
+import {
+  Client,
+  ReadyListener,
+  type BaseMessageInteractiveComponent,
+  type Modal,
+} from "@buape/carbon";
 import { Routes } from "discord-api-types/v10";
 import { inspect } from "node:util";
 import type { HistoryEntry } from "../../auto-reply/reply/history.js";
@@ -33,7 +38,17 @@ import { fetchDiscordApplicationId } from "../probe.js";
 import { resolveDiscordChannelAllowlist } from "../resolve-channels.js";
 import { resolveDiscordUserAllowlist } from "../resolve-users.js";
 import { normalizeDiscordToken } from "../token.js";
-import { createAgentComponentButton, createAgentSelectMenu } from "./agent-components.js";
+import {
+  createAgentComponentButton,
+  createAgentSelectMenu,
+  createDiscordComponentButton,
+  createDiscordComponentChannelSelect,
+  createDiscordComponentMentionableSelect,
+  createDiscordComponentModal,
+  createDiscordComponentRoleSelect,
+  createDiscordComponentStringSelect,
+  createDiscordComponentUserSelect,
+} from "./agent-components.js";
 import { createExecApprovalButton, DiscordExecApprovalHandler } from "./exec-approvals.js";
 import { createDiscordGatewayPlugin } from "./gateway-plugin.js";
 import { registerGateway, unregisterGateway } from "./gateway-registry.js";
@@ -79,6 +94,26 @@ function summarizeGuilds(entries?: Record<string, unknown>) {
   const sample = keys.slice(0, 4);
   const suffix = keys.length > sample.length ? ` (+${keys.length - sample.length})` : "";
   return `${sample.join(", ")}${suffix}`;
+}
+
+function dedupeSkillCommandsForDiscord(
+  skillCommands: ReturnType<typeof listSkillCommandsForAgents>,
+) {
+  const seen = new Set<string>();
+  const deduped: ReturnType<typeof listSkillCommandsForAgents> = [];
+  for (const command of skillCommands) {
+    const key = command.skillName.trim().toLowerCase();
+    if (!key) {
+      deduped.push(command);
+      continue;
+    }
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(command);
+  }
+  return deduped;
 }
 
 async function deployDiscordCommands(params: {
@@ -355,7 +390,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
 
   const maxDiscordCommands = 100;
   let skillCommands =
-    nativeEnabled && nativeSkillsEnabled ? listSkillCommandsForAgents({ cfg }) : [];
+    nativeEnabled && nativeSkillsEnabled
+      ? dedupeSkillCommandsForDiscord(listSkillCommandsForAgents({ cfg }))
+      : [];
   let commandSpecs = nativeEnabled
     ? listNativeCommandSpecsForConfig(cfg, { skillCommands, provider: "discord" })
     : [];
@@ -410,30 +447,32 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       sessionPrefix,
     }),
   ];
+  const modals: Modal[] = [];
 
   if (execApprovalsHandler) {
     components.push(createExecApprovalButton({ handler: execApprovalsHandler }));
   }
 
   if (agentComponentsEnabled) {
-    components.push(
-      createAgentComponentButton({
-        cfg,
-        accountId: account.accountId,
-        guildEntries,
-        allowFrom,
-        dmPolicy,
-      }),
-    );
-    components.push(
-      createAgentSelectMenu({
-        cfg,
-        accountId: account.accountId,
-        guildEntries,
-        allowFrom,
-        dmPolicy,
-      }),
-    );
+    const componentContext = {
+      cfg,
+      discordConfig: discordCfg,
+      accountId: account.accountId,
+      guildEntries,
+      allowFrom,
+      dmPolicy,
+      runtime,
+      token,
+    };
+    components.push(createAgentComponentButton(componentContext));
+    components.push(createAgentSelectMenu(componentContext));
+    components.push(createDiscordComponentButton(componentContext));
+    components.push(createDiscordComponentStringSelect(componentContext));
+    components.push(createDiscordComponentUserSelect(componentContext));
+    components.push(createDiscordComponentRoleSelect(componentContext));
+    components.push(createDiscordComponentMentionableSelect(componentContext));
+    components.push(createDiscordComponentChannelSelect(componentContext));
+    modals.push(createDiscordComponentModal(componentContext));
   }
 
   class DiscordStatusReadyListener extends ReadyListener {
@@ -465,6 +504,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       commands,
       listeners: [new DiscordStatusReadyListener()],
       components,
+      modals,
     },
     [createDiscordGatewayPlugin({ discordConfig: discordCfg, runtime })],
   );
@@ -648,4 +688,5 @@ async function clearDiscordNativeCommands(params: {
 
 export const __testing = {
   createDiscordGatewayPlugin,
+  dedupeSkillCommandsForDiscord,
 };

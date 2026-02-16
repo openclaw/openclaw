@@ -1,33 +1,17 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
-import { setTelegramRuntime } from "../../extensions/telegram/src/runtime.js";
-import { whatsappPlugin } from "../../extensions/whatsapp/src/channel.js";
-import { setWhatsAppRuntime } from "../../extensions/whatsapp/src/runtime.js";
 import * as replyModule from "../auto-reply/reply.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createPluginRuntime } from "../plugins/runtime/index.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
+import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
 
 // Avoid pulling optional runtime deps during isolated runs.
 vi.mock("jiti", () => ({ createJiti: () => () => ({}) }));
 
-beforeEach(() => {
-  const runtime = createPluginRuntime();
-  setTelegramRuntime(runtime);
-  setWhatsAppRuntime(runtime);
-  setActivePluginRegistry(
-    createTestRegistry([
-      { pluginId: "whatsapp", plugin: whatsappPlugin, source: "test" },
-      { pluginId: "telegram", plugin: telegramPlugin, source: "test" },
-    ]),
-  );
-});
+installHeartbeatRunnerTestRuntime();
 
 describe("resolveHeartbeatIntervalMs", () => {
   async function seedSessionStore(
@@ -82,21 +66,16 @@ describe("resolveHeartbeatIntervalMs", () => {
       replySpy: ReturnType<typeof vi.spyOn>;
     }) => Promise<T>,
   ) {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hb-"));
-    const storePath = path.join(tmpDir, "sessions.json");
-    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
     const prevTelegramToken = process.env.TELEGRAM_BOT_TOKEN;
     process.env.TELEGRAM_BOT_TOKEN = "";
     try {
-      return await fn({ tmpDir, storePath, replySpy });
+      return await withTempHeartbeatSandbox(fn);
     } finally {
-      replySpy.mockRestore();
       if (prevTelegramToken === undefined) {
         delete process.env.TELEGRAM_BOT_TOKEN;
       } else {
         process.env.TELEGRAM_BOT_TOKEN = prevTelegramToken;
       }
-      await fs.rm(tmpDir, { recursive: true, force: true });
     }
   }
 
@@ -187,6 +166,54 @@ describe("resolveHeartbeatIntervalMs", () => {
 
       expect(sendWhatsApp).toHaveBeenCalledTimes(1);
       expect(sendWhatsApp).toHaveBeenCalledWith("+1555", "HEARTBEAT_OK", expect.any(Object));
+    });
+  });
+
+  it("does not deliver HEARTBEAT_OK to telegram when showOk is false", async () => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: {
+              every: "5m",
+              target: "telegram",
+            },
+          },
+        },
+        channels: {
+          telegram: {
+            token: "test-token",
+            allowFrom: ["*"],
+            heartbeat: { showOk: false },
+          },
+        },
+        session: { store: storePath },
+      };
+      const sessionKey = resolveMainSessionKey(cfg);
+
+      await seedSessionStore(storePath, sessionKey, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: "12345",
+      });
+
+      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
+      const sendTelegram = vi.fn().mockResolvedValue({
+        messageId: "m1",
+        toJid: "jid",
+      });
+
+      await runHeartbeatOnce({
+        cfg,
+        deps: {
+          sendTelegram,
+          getQueueSize: () => 0,
+          nowMs: () => 0,
+        },
+      });
+
+      expect(sendTelegram).not.toHaveBeenCalled();
     });
   });
 

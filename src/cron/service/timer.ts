@@ -7,7 +7,6 @@ import { sweepCronRunSessions } from "../session-reaper.js";
 import {
   computeJobNextRunAtMs,
   nextWakeAtMs,
-  recomputeNextRuns,
   recomputeNextRunsForMaintenance,
   resolveJobPayloadTextForMain,
 } from "./jobs.js";
@@ -160,13 +159,13 @@ export function armTimer(state: CronServiceState) {
   // Wake at least once a minute to avoid schedule drift and recover quickly
   // when the process was paused or wall-clock time jumps.
   const clampedDelay = Math.min(delay, MAX_TIMER_DELAY_MS);
-  state.timer = setTimeout(async () => {
-    try {
-      await onTimer(state);
-    } catch (err) {
+  // Intentionally avoid an `async` timer callback:
+  // Vitest's fake-timer helpers can await async callbacks, which would block
+  // tests that simulate long-running jobs. Runtime behavior is unchanged.
+  state.timer = setTimeout(() => {
+    void onTimer(state).catch((err) => {
       state.deps.log.error({ err: String(err) }, "cron: timer tick failed");
-      armTimer(state); // Defensive: ensure next wake is scheduled
-    }
+    });
   }, clampedDelay);
   const nowForLog = state.deps.nowMs();
   const skipLog =
@@ -215,12 +214,10 @@ export async function onTimer(state: CronServiceState) {
     if (state.timer) {
       clearTimeout(state.timer);
     }
-    state.timer = setTimeout(async () => {
-      try {
-        await onTimer(state);
-      } catch (err) {
+    state.timer = setTimeout(() => {
+      void onTimer(state).catch((err) => {
         state.deps.log.error({ err: String(err) }, "cron: timer tick failed");
-      }
+      });
     }, MAX_TIMER_DELAY_MS);
     return;
   }
@@ -329,7 +326,12 @@ export async function onTimer(state: CronServiceState) {
           }
         }
 
-        recomputeNextRuns(state);
+        // Use maintenance-only recompute to avoid advancing past-due
+        // nextRunAtMs values that became due between findDueJobs and this
+        // locked block.  The full recomputeNextRuns would silently skip
+        // those jobs (advancing nextRunAtMs without execution), causing
+        // daily cron schedules to jump 48 h instead of 24 h (#17852).
+        recomputeNextRunsForMaintenance(state);
         await persist(state);
       });
     }

@@ -60,6 +60,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     client,
     channelInfo,
     channelName,
+    messageChannelId,
     isGuildMessage,
     isDirectMessage,
     isGroupDm,
@@ -121,12 +122,12 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       }),
     );
   const ackReactionPromise = shouldAckReaction()
-    ? reactMessageDiscord(message.channelId, message.id, ackReaction, {
+    ? reactMessageDiscord(messageChannelId, message.id, ackReaction, {
         rest: client.rest,
       }).then(
         () => true,
         (err) => {
-          logVerbose(`discord react failed for channel ${message.channelId}: ${String(err)}`);
+          logVerbose(`discord react failed for channel ${messageChannelId}: ${String(err)}`);
           return false;
         },
       )
@@ -136,8 +137,8 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     ? buildDirectLabel(author)
     : buildGuildLabel({
         guild: data.guild ?? undefined,
-        channelName: channelName ?? message.channelId,
-        channelId: message.channelId,
+        channelName: channelName ?? messageChannelId,
+        channelId: messageChannelId,
       });
   const senderLabel = sender.label;
   const isForumParent =
@@ -197,7 +198,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   if (shouldIncludeChannelHistory) {
     combinedBody = buildPendingHistoryContextFromMap({
       historyMap: guildHistories,
-      historyKey: message.channelId,
+      historyKey: messageChannelId,
       limit: historyLimit,
       currentMessage: combinedBody,
       formatEntry: (entry) =>
@@ -205,7 +206,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
           channel: "Discord",
           from: fromLabel,
           timestamp: entry.timestamp,
-          body: `${entry.body} [id:${entry.messageId ?? "unknown"} channel:${message.channelId}]`,
+          body: `${entry.body} [id:${entry.messageId ?? "unknown"} channel:${messageChannelId}]`,
           chatType: "channel",
           senderLabel: entry.sender,
           envelope: envelopeOptions,
@@ -250,13 +251,14 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   const mediaPayload = buildDiscordMediaPayload(mediaList);
   const threadKeys = resolveThreadSessionKeys({
     baseSessionKey,
-    threadId: threadChannel ? message.channelId : undefined,
+    threadId: threadChannel ? messageChannelId : undefined,
     parentSessionKey,
     useSuffix: false,
   });
   const replyPlan = await resolveDiscordAutoThreadReplyPlan({
     client,
     message,
+    messageChannelId,
     isGuildMessage,
     channelConfig,
     threadChannel,
@@ -273,7 +275,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
 
   const effectiveFrom = isDirectMessage
     ? `discord:${author.id}`
-    : (autoThreadContext?.From ?? `discord:channel:${message.channelId}`);
+    : (autoThreadContext?.From ?? `discord:channel:${messageChannelId}`);
   const effectiveTo = autoThreadContext?.To ?? replyTarget;
   if (!effectiveTo) {
     runtime.error?.(danger("discord: missing reply target"));
@@ -282,7 +284,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
 
   const inboundHistory =
     shouldIncludeChannelHistory && historyLimit > 0
-      ? (guildHistories.get(message.channelId) ?? []).map((entry) => ({
+      ? (guildHistories.get(messageChannelId) ?? []).map((entry) => ({
           sender: entry.sender,
           body: entry.body,
           timestamp: entry.timestamp,
@@ -350,13 +352,13 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   if (shouldLogVerbose()) {
     const preview = truncateUtf16Safe(combinedBody, 200).replace(/\n/g, "\\n");
     logVerbose(
-      `discord inbound: channel=${message.channelId} deliver=${deliverTarget} from=${ctxPayload.From} preview="${preview}"`,
+      `discord inbound: channel=${messageChannelId} deliver=${deliverTarget} from=${ctxPayload.From} preview="${preview}"`,
     );
   }
 
   const typingChannelId = deliverTarget.startsWith("channel:")
     ? deliverTarget.slice("channel:".length)
-    : message.channelId;
+    : messageChannelId;
 
   const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
     cfg,
@@ -432,7 +434,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     if (isGuildMessage) {
       clearHistoryEntriesIfEnabled({
         historyMap: guildHistories,
-        historyKey: message.channelId,
+        historyKey: messageChannelId,
         limit: historyLimit,
       });
     }
@@ -449,7 +451,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     ackReactionPromise,
     ackReactionValue: ackReaction,
     remove: async () => {
-      await removeReactionDiscord(message.channelId, message.id, ackReaction, {
+      await removeReactionDiscord(messageChannelId, message.id, ackReaction, {
         rest: client.rest,
       });
     },
@@ -457,7 +459,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       logAckFailure({
         log: logVerbose,
         channel: "discord",
-        target: `${message.channelId}/${message.id}`,
+        target: `${messageChannelId}/${message.id}`,
         error: err,
       });
     },
@@ -465,7 +467,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   if (isGuildMessage) {
     clearHistoryEntriesIfEnabled({
       historyMap: guildHistories,
-      historyKey: message.channelId,
+      historyKey: messageChannelId,
       limit: historyLimit,
     });
   }

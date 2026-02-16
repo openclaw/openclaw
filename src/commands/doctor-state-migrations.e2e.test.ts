@@ -35,6 +35,39 @@ function writeJson5(filePath: string, value: unknown) {
   fs.writeFileSync(filePath, JSON.stringify(value, null, 2), "utf-8");
 }
 
+async function detectAndRunMigrations(params: {
+  root: string;
+  cfg: OpenClawConfig;
+  now?: () => number;
+}) {
+  const detected = await detectLegacyStateMigrations({
+    cfg: params.cfg,
+    env: { OPENCLAW_STATE_DIR: params.root } as NodeJS.ProcessEnv,
+  });
+  await runLegacyStateMigrations({ detected, now: params.now });
+}
+
+function readSessionsStore(targetDir: string) {
+  return JSON.parse(fs.readFileSync(path.join(targetDir, "sessions.json"), "utf-8")) as Record<
+    string,
+    { sessionId: string }
+  >;
+}
+
+async function runAndReadSessionsStore(params: {
+  root: string;
+  cfg: OpenClawConfig;
+  targetDir: string;
+  now?: () => number;
+}) {
+  await detectAndRunMigrations({
+    root: params.root,
+    cfg: params.cfg,
+    now: params.now,
+  });
+  return readSessionsStore(params.targetDir);
+}
+
 describe("doctor legacy state migrations", () => {
   it("migrates legacy sessions into agents/<id>/sessions", async () => {
     const root = await makeTempRoot();
@@ -178,6 +211,42 @@ describe("doctor legacy state migrations", () => {
     expect(fs.existsSync(path.join(oauthDir, "creds.json"))).toBe(false);
   });
 
+  it("migrates legacy Telegram pairing allowFrom store to account-scoped default file", async () => {
+    const root = await makeTempRoot();
+    const cfg: OpenClawConfig = {};
+
+    const oauthDir = path.join(root, "credentials");
+    fs.mkdirSync(oauthDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(oauthDir, "telegram-allowFrom.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          allowFrom: ["123456"],
+        },
+        null,
+        2,
+      ) + "\n",
+      "utf-8",
+    );
+
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+    expect(detected.pairingAllowFrom.hasLegacyTelegram).toBe(true);
+
+    const result = await runLegacyStateMigrations({ detected, now: () => 123 });
+    expect(result.warnings).toEqual([]);
+
+    const target = path.join(oauthDir, "telegram-default-allowFrom.json");
+    expect(fs.existsSync(target)).toBe(true);
+    expect(JSON.parse(fs.readFileSync(target, "utf-8"))).toEqual({
+      version: 1,
+      allowFrom: ["123456"],
+    });
+  });
+
   it("no-ops when nothing detected", async () => {
     const root = await makeTempRoot();
     const cfg: OpenClawConfig = {};
@@ -200,16 +269,13 @@ describe("doctor legacy state migrations", () => {
       "+1555": { sessionId: "a", updatedAt: 10 },
     });
 
-    const detected = await detectLegacyStateMigrations({
-      cfg,
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
-    });
-    await runLegacyStateMigrations({ detected, now: () => 123 });
-
     const targetDir = path.join(root, "agents", "alpha", "sessions");
-    const store = JSON.parse(
-      fs.readFileSync(path.join(targetDir, "sessions.json"), "utf-8"),
-    ) as Record<string, { sessionId: string }>;
+    const store = await runAndReadSessionsStore({
+      root,
+      cfg,
+      targetDir,
+      now: () => 123,
+    });
     expect(store["agent:alpha:main"]?.sessionId).toBe("a");
   });
 
@@ -223,16 +289,13 @@ describe("doctor legacy state migrations", () => {
       "+1666": { sessionId: "b", updatedAt: 20 },
     });
 
-    const detected = await detectLegacyStateMigrations({
-      cfg,
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
-    });
-    await runLegacyStateMigrations({ detected, now: () => 123 });
-
     const targetDir = path.join(root, "agents", "main", "sessions");
-    const store = JSON.parse(
-      fs.readFileSync(path.join(targetDir, "sessions.json"), "utf-8"),
-    ) as Record<string, { sessionId: string }>;
+    const store = await runAndReadSessionsStore({
+      root,
+      cfg,
+      targetDir,
+      now: () => 123,
+    });
     expect(store["agent:main:work"]?.sessionId).toBe("b");
     expect(store["agent:main:main"]).toBeUndefined();
   });
@@ -246,15 +309,12 @@ describe("doctor legacy state migrations", () => {
       "agent:main:main": { sessionId: "fresh", updatedAt: 20 },
     });
 
-    const detected = await detectLegacyStateMigrations({
+    const store = await runAndReadSessionsStore({
+      root,
       cfg,
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+      targetDir,
+      now: () => 123,
     });
-    await runLegacyStateMigrations({ detected, now: () => 123 });
-
-    const store = JSON.parse(
-      fs.readFileSync(path.join(targetDir, "sessions.json"), "utf-8"),
-    ) as Record<string, { sessionId: string }>;
     expect(store["main"]).toBeUndefined();
     expect(store["agent:main:main"]?.sessionId).toBe("fresh");
   });
@@ -268,15 +328,12 @@ describe("doctor legacy state migrations", () => {
       "agent:main:work": { sessionId: "canonical", updatedAt: 10 },
     });
 
-    const detected = await detectLegacyStateMigrations({
+    const store = await runAndReadSessionsStore({
+      root,
       cfg,
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+      targetDir,
+      now: () => 123,
     });
-    await runLegacyStateMigrations({ detected, now: () => 123 });
-
-    const store = JSON.parse(
-      fs.readFileSync(path.join(targetDir, "sessions.json"), "utf-8"),
-    ) as Record<string, { sessionId: string }>;
     expect(store["agent:main:work"]?.sessionId).toBe("legacy");
     expect(store["agent:main:main"]).toBeUndefined();
   });
@@ -289,15 +346,12 @@ describe("doctor legacy state migrations", () => {
       "agent:main:slack:channel:C123": { sessionId: "legacy", updatedAt: 10 },
     });
 
-    const detected = await detectLegacyStateMigrations({
+    const store = await runAndReadSessionsStore({
+      root,
       cfg,
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+      targetDir,
+      now: () => 123,
     });
-    await runLegacyStateMigrations({ detected, now: () => 123 });
-
-    const store = JSON.parse(
-      fs.readFileSync(path.join(targetDir, "sessions.json"), "utf-8"),
-    ) as Record<string, { sessionId: string }>;
     expect(store["agent:main:slack:channel:c123"]?.sessionId).toBe("legacy");
     expect(store["agent:main:slack:channel:C123"]).toBeUndefined();
   });

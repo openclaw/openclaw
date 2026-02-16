@@ -342,6 +342,22 @@ async function runSlashHandler(params: {
   return { respond, ack };
 }
 
+function expectChannelBlockedResponse(respond: ReturnType<typeof vi.fn>) {
+  expect(dispatchMock).not.toHaveBeenCalled();
+  expect(respond).toHaveBeenCalledWith({
+    text: "This channel is not allowed.",
+    response_type: "ephemeral",
+  });
+}
+
+function expectUnauthorizedResponse(respond: ReturnType<typeof vi.fn>) {
+  expect(dispatchMock).not.toHaveBeenCalled();
+  expect(respond).toHaveBeenCalledWith({
+    text: "You are not authorized to use this command.",
+    response_type: "ephemeral",
+  });
+}
+
 describe("slack slash commands channel policy", () => {
   it("allows unlisted channels when groupPolicy is open", async () => {
     const { commands, ctx, account, channelId, channelName } = createPolicyHarness({
@@ -383,11 +399,7 @@ describe("slack slash commands channel policy", () => {
       },
     });
 
-    expect(dispatchMock).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith({
-      text: "This channel is not allowed.",
-      response_type: "ephemeral",
-    });
+    expectChannelBlockedResponse(respond);
   });
 
   it("blocks unlisted channels when groupPolicy is allowlist", async () => {
@@ -407,11 +419,7 @@ describe("slack slash commands channel policy", () => {
       },
     });
 
-    expect(dispatchMock).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith({
-      text: "This channel is not allowed.",
-      response_type: "ephemeral",
-    });
+    expectChannelBlockedResponse(respond);
   });
 });
 
@@ -433,11 +441,7 @@ describe("slack slash commands access groups", () => {
       },
     });
 
-    expect(dispatchMock).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith({
-      text: "You are not authorized to use this command.",
-      response_type: "ephemeral",
-    });
+    expectUnauthorizedResponse(respond);
   });
 
   it("still treats D-prefixed channel ids as DMs when lookup fails", async () => {
@@ -510,10 +514,6 @@ describe("slack slash commands access groups", () => {
       },
     });
 
-    expect(dispatchMock).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith({
-      text: "You are not authorized to use this command.",
-      response_type: "ephemeral",
-    });
+    expectUnauthorizedResponse(respond);
   });
 });
