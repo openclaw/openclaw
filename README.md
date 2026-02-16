@@ -316,6 +316,8 @@ Runbook: [iOS connect](https://docs.openclaw.ai/platforms/ios).
 - Pairs via the same Bridge + pairing flow as iOS.
 - Exposes Canvas, Camera, and Screen capture commands.
 - Runbook: [Android connect](https://docs.openclaw.ai/platforms/android).
+- Download and install OpenClaw for Android [Android Droid](https://github.com/irtiq7/OpenClaw-Android).
+
 
 ## Agent workspace + skills
 
