@@ -4,7 +4,7 @@ import path from "node:path";
 import type { GatewayAuthMode } from "../../config/config.js";
 import type { GatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import {
-  CONFIG_PATH,
+  getConfigPath,
   loadConfig,
   readConfigFileSnapshot,
   resolveStateDir,
@@ -161,7 +161,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   const tokenRaw = toOptionString(opts.token);
 
   const snapshot = await readConfigFileSnapshot().catch(() => null);
-  const configExists = snapshot?.exists ?? fs.existsSync(CONFIG_PATH);
+  const configExists = snapshot?.exists ?? fs.existsSync(getConfigPath());
   const configAuditPath = path.join(resolveStateDir(process.env), "logs", "config-audit.jsonl");
   const mode = cfg.gateway?.mode;
   if (!opts.allowUnconfigured && mode !== "local") {
