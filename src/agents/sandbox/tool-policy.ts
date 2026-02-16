@@ -89,6 +89,9 @@ export function resolveSandboxToolPolicyForAgent(
   // `image` is essential for multimodal workflows; always include it in sandboxed
   // sessions unless explicitly denied.
   if (
+    // Empty allowlist means "allow all" for `isToolAllowed`, so don't inject a
+    // single tool that would accidentally turn it into an explicit allowlist.
+    expandedAllow.length > 0 &&
     !expandedDeny.map((v) => v.toLowerCase()).includes("image") &&
     !expandedAllow.map((v) => v.toLowerCase()).includes("image")
   ) {
