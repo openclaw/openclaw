@@ -4,6 +4,7 @@ import { getSlackSlashMocks, resetSlackSlashMocks } from "./slash.test-harness.j
 vi.mock("../../auto-reply/commands-registry.js", () => {
   const usageCommand = { key: "usage", nativeName: "usage" };
   const reportCommand = { key: "report", nativeName: "report" };
+  const reportLongCommand = { key: "reportlong", nativeName: "reportlong" };
 
   return {
     buildCommandTextFromArgs: (
@@ -30,6 +31,9 @@ vi.mock("../../auto-reply/commands-registry.js", () => {
       if (normalized === "report") {
         return reportCommand;
       }
+      if (normalized === "reportlong") {
+        return reportLongCommand;
+      }
       return undefined;
     },
     listNativeCommandSpecsForConfig: () => [
@@ -45,16 +49,19 @@ vi.mock("../../auto-reply/commands-registry.js", () => {
         acceptsArgs: true,
         args: [],
       },
+      {
+        name: "reportlong",
+        description: "ReportLong",
+        acceptsArgs: true,
+        args: [],
+      },
     ],
     parseCommandArgs: () => ({ values: {} }),
     resolveCommandArgMenu: (params: {
       command?: { key?: string };
       args?: { values?: unknown };
     }) => {
-      if (params.command?.key !== "usage") {
-        if (params.command?.key !== "report") {
-          return null;
-        }
+      if (params.command?.key === "report") {
         const values = (params.args?.values ?? {}) as Record<string, unknown>;
         if (typeof values.period === "string" && values.period.trim()) {
           return null;
@@ -68,6 +75,23 @@ vi.mock("../../auto-reply/commands-registry.js", () => {
             { value: "quarter", label: "quarter" },
             { value: "year", label: "year" },
             { value: "all", label: "all" },
+          ],
+        };
+      }
+      if (params.command?.key === "reportlong") {
+        const values = (params.args?.values ?? {}) as Record<string, unknown>;
+        if (typeof values.period === "string" && values.period.trim()) {
+          return null;
+        }
+        return {
+          arg: { name: "period", description: "period" },
+          choices: [
+            { value: "day", label: "day" },
+            { value: "week", label: "week" },
+            { value: "month", label: "month" },
+            { value: "quarter", label: "quarter" },
+            { value: "year", label: "year" },
+            { value: "x".repeat(90), label: "long" },
           ],
         };
       }
@@ -173,6 +197,7 @@ describe("Slack native command argument menus", () => {
   let harness: ReturnType<typeof createArgMenusHarness>;
   let usageHandler: (args: unknown) => Promise<void>;
   let reportHandler: (args: unknown) => Promise<void>;
+  let reportLongHandler: (args: unknown) => Promise<void>;
   let argMenuHandler: (args: unknown) => Promise<void>;
 
   beforeAll(async () => {
@@ -189,6 +214,11 @@ describe("Slack native command argument menus", () => {
       throw new Error("Missing /report handler");
     }
     reportHandler = report;
+    const reportLong = harness.commands.get("/reportlong");
+    if (!reportLong) {
+      throw new Error("Missing /reportlong handler");
+    }
+    reportLongHandler = reportLong;
 
     const argMenu = harness.actions.get("openclaw_cmdarg");
     if (!argMenu) {
@@ -253,6 +283,32 @@ describe("Slack native command argument menus", () => {
     )?.elements?.[0];
     expect(element?.type).toBe("static_select");
     expect(element?.action_id).toBe("openclaw_cmdarg");
+  });
+
+  it("falls back to buttons when static_select value limit would be exceeded", async () => {
+    const respond = vi.fn().mockResolvedValue(undefined);
+    const ack = vi.fn().mockResolvedValue(undefined);
+
+    await reportLongHandler({
+      command: {
+        user_id: "U1",
+        user_name: "Ada",
+        channel_id: "C1",
+        channel_name: "directmessage",
+        text: "",
+        trigger_id: "t1",
+      },
+      ack,
+      respond,
+    });
+
+    expect(respond).toHaveBeenCalledTimes(1);
+    const payload = respond.mock.calls[0]?.[0] as { blocks?: Array<{ type: string }> };
+    expect(payload.blocks?.[1]?.type).toBe("actions");
+    const firstElement = (
+      payload.blocks?.[1] as { elements?: Array<{ type?: string }> } | undefined
+    )?.elements?.[0];
+    expect(firstElement?.type).toBe("button");
   });
 
   it("dispatches the command when a menu button is clicked", async () => {
