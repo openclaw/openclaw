@@ -64,11 +64,7 @@ async function ensureSandboxWorkspaceLayout(params: {
   return { agentWorkspaceDir, scopeKey, sandboxWorkspaceDir, workspaceDir };
 }
 
-export async function resolveSandboxContext(params: {
-  config?: OpenClawConfig;
-  sessionKey?: string;
-  workspaceDir?: string;
-}): Promise<SandboxContext | null> {
+function resolveSandboxSession(params: { config?: OpenClawConfig; sessionKey?: string }) {
   const rawSessionKey = params.sessionKey?.trim();
   if (!rawSessionKey) {
     return null;
@@ -83,6 +79,19 @@ export async function resolveSandboxContext(params: {
   }
 
   const cfg = resolveSandboxConfigForAgent(params.config, runtime.agentId);
+  return { rawSessionKey, runtime, cfg };
+}
+
+export async function resolveSandboxContext(params: {
+  config?: OpenClawConfig;
+  sessionKey?: string;
+  workspaceDir?: string;
+}): Promise<SandboxContext | null> {
+  const resolved = resolveSandboxSession(params);
+  if (!resolved) {
+    return null;
+  }
+  const { rawSessionKey, cfg } = resolved;
 
   await maybePruneSandboxes(cfg);
 
@@ -152,20 +161,11 @@ export async function ensureSandboxWorkspaceForSession(params: {
   sessionKey?: string;
   workspaceDir?: string;
 }): Promise<SandboxWorkspaceInfo | null> {
-  const rawSessionKey = params.sessionKey?.trim();
-  if (!rawSessionKey) {
+  const resolved = resolveSandboxSession(params);
+  if (!resolved) {
     return null;
   }
-
-  const runtime = resolveSandboxRuntimeStatus({
-    cfg: params.config,
-    sessionKey: rawSessionKey,
-  });
-  if (!runtime.sandboxed) {
-    return null;
-  }
-
-  const cfg = resolveSandboxConfigForAgent(params.config, runtime.agentId);
+  const { rawSessionKey, cfg } = resolved;
 
   const { workspaceDir } = await ensureSandboxWorkspaceLayout({
     cfg,
