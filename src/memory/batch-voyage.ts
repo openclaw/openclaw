@@ -1,6 +1,7 @@
 import { createInterface } from "node:readline";
 import { Readable } from "node:stream";
 import type { VoyageEmbeddingClient } from "./embeddings-voyage.js";
+import { extractBatchErrorMessage, formatUnavailableBatchError } from "./batch-error-utils.js";
 import { postJsonWithRetry } from "./batch-http.js";
 import { applyEmbeddingBatchOutputLine } from "./batch-output.js";
 import { buildBatchHeaders, normalizeBatchBaseUrl, splitBatchRequests } from "./batch-utils.js";
@@ -128,16 +129,9 @@ async function readVoyageBatchError(params: {
       .map((line) => line.trim())
       .filter(Boolean)
       .map((line) => JSON.parse(line) as VoyageBatchOutputLine);
-    const first = lines.find((line) => line.error?.message || line.response?.body?.error);
-    const message =
-      first?.error?.message ??
-      (typeof first?.response?.body?.error?.message === "string"
-        ? first?.response?.body?.error?.message
-        : undefined);
-    return message;
+    return extractBatchErrorMessage(lines);
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return message ? `error file unavailable: ${message}` : undefined;
+    return formatUnavailableBatchError(err);
   }
 }
 
