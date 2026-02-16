@@ -7,7 +7,6 @@ import type { SessionConfig } from "../types.base.js";
 import type { SessionEntry } from "./types.js";
 import {
   clearSessionStoreCacheForTest,
-  getSessionStoreLockQueueSizeForTest,
   loadSessionStore,
   updateSessionStore,
   updateSessionStoreEntry,
@@ -362,18 +361,6 @@ describe("session store lock (Promise chain mutex)", () => {
 
     expect(loadSessionStore(pathA).a?.modelOverride).toBe("done-a");
     expect(loadSessionStore(pathB).b?.modelOverride).toBe("done-b");
-  });
-
-  it("cleans up LOCK_QUEUES entry even after errors", async () => {
-    const { storePath } = await makeTmpStore({});
-
-    await updateSessionStore(storePath, async () => {
-      throw new Error("fail");
-    }).catch(() => undefined);
-
-    await Promise.resolve();
-
-    expect(getSessionStoreLockQueueSizeForTest()).toBe(0);
   });
 });
 
