@@ -9,7 +9,7 @@ title: "Pairing"
 
 Esta página aún no tiene traducción completa al español.
 
-- Ver la versión en inglés: [Open English doc](/start/pairing)
+- Ver la versión en inglés: [Open English doc](/cli/pairing)
 - Volver al inicio en español: [OpenClaw ES](/es)
 
 > Estado: traducción en progreso.

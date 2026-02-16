@@ -9,7 +9,7 @@ title: "Token Use and Costs"
 
 Esta página aún no tiene traducción completa al español.
 
-- Ver la versión en inglés: [Open English doc](/token-use)
+- Ver la versión en inglés: [Open English doc](/reference/token-use)
 - Volver al inicio en español: [OpenClaw ES](/es)
 
 > Estado: traducción en progreso.

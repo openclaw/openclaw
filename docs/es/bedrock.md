@@ -9,7 +9,7 @@ title: "Amazon Bedrock"
 
 Esta página aún no tiene traducción completa al español.
 
-- Ver la versión en inglés: [Open English doc](/bedrock)
+- Ver la versión en inglés: [Open English doc](/providers/bedrock)
 - Volver al inicio en español: [OpenClaw ES](/es)
 
 > Estado: traducción en progreso.
