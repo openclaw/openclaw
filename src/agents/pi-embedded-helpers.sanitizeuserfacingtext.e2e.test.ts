@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { sanitizeUserFacingText } from "./pi-embedded-helpers.js";
+import {
+  downgradeOpenAIReasoningBlocks,
+  isMessagingToolDuplicate,
+  normalizeTextForComparison,
+  sanitizeToolCallId,
+  sanitizeUserFacingText,
+  stripThoughtSignatures,
+} from "./pi-embedded-helpers.js";
 
 describe("sanitizeUserFacingText", () => {
   it("strips final tags", () => {
@@ -112,5 +119,259 @@ describe("sanitizeUserFacingText", () => {
   it("returns empty for whitespace-only input", () => {
     expect(sanitizeUserFacingText("\n\n")).toBe("");
     expect(sanitizeUserFacingText("  \n  ")).toBe("");
+  });
+});
+
+describe("stripThoughtSignatures", () => {
+  it("returns non-array content unchanged", () => {
+    expect(stripThoughtSignatures("hello")).toBe("hello");
+    expect(stripThoughtSignatures(null)).toBe(null);
+    expect(stripThoughtSignatures(undefined)).toBe(undefined);
+    expect(stripThoughtSignatures(123)).toBe(123);
+  });
+  it("removes msg_-prefixed thought_signature from content blocks", () => {
+    const input = [
+      { type: "text", text: "hello", thought_signature: "msg_abc123" },
+      { type: "thinking", thinking: "test", thought_signature: "AQID" },
+    ];
+    const result = stripThoughtSignatures(input);
+
+    expect(result).toHaveLength(2);
+    expect(result[0]).toEqual({ type: "text", text: "hello" });
+    expect(result[1]).toEqual({
+      type: "thinking",
+      thinking: "test",
+      thought_signature: "AQID",
+    });
+    expect("thought_signature" in result[0]).toBe(false);
+    expect("thought_signature" in result[1]).toBe(true);
+  });
+  it("preserves blocks without thought_signature", () => {
+    const input = [
+      { type: "text", text: "hello" },
+      { type: "toolCall", id: "call_1", name: "read", arguments: {} },
+    ];
+    const result = stripThoughtSignatures(input);
+
+    expect(result).toEqual(input);
+  });
+  it("handles mixed blocks with and without thought_signature", () => {
+    const input = [
+      { type: "text", text: "hello", thought_signature: "msg_abc" },
+      { type: "toolCall", id: "call_1", name: "read", arguments: {} },
+      { type: "thinking", thinking: "hmm", thought_signature: "msg_xyz" },
+    ];
+    const result = stripThoughtSignatures(input);
+
+    expect(result).toEqual([
+      { type: "text", text: "hello" },
+      { type: "toolCall", id: "call_1", name: "read", arguments: {} },
+      { type: "thinking", thinking: "hmm" },
+    ]);
+  });
+  it("handles empty array", () => {
+    expect(stripThoughtSignatures([])).toEqual([]);
+  });
+  it("handles null/undefined blocks in array", () => {
+    const input = [null, undefined, { type: "text", text: "hello" }];
+    const result = stripThoughtSignatures(input);
+    expect(result).toEqual([null, undefined, { type: "text", text: "hello" }]);
+  });
+});
+
+describe("sanitizeToolCallId", () => {
+  describe("strict mode (default)", () => {
+    it("keeps valid alphanumeric tool call IDs", () => {
+      expect(sanitizeToolCallId("callabc123")).toBe("callabc123");
+    });
+    it("strips underscores and hyphens", () => {
+      expect(sanitizeToolCallId("call_abc-123")).toBe("callabc123");
+      expect(sanitizeToolCallId("call_abc_def")).toBe("callabcdef");
+    });
+    it("strips invalid characters", () => {
+      expect(sanitizeToolCallId("call_abc|item:456")).toBe("callabcitem456");
+    });
+    it("returns default for empty IDs", () => {
+      expect(sanitizeToolCallId("")).toBe("defaulttoolid");
+    });
+  });
+
+  describe("strict mode (alphanumeric only)", () => {
+    it("strips all non-alphanumeric characters", () => {
+      expect(sanitizeToolCallId("call_abc-123", "strict")).toBe("callabc123");
+      expect(sanitizeToolCallId("call_abc|item:456", "strict")).toBe("callabcitem456");
+      expect(sanitizeToolCallId("whatsapp_login_1768799841527_1", "strict")).toBe(
+        "whatsapplogin17687998415271",
+      );
+    });
+    it("returns default for empty IDs", () => {
+      expect(sanitizeToolCallId("", "strict")).toBe("defaulttoolid");
+    });
+  });
+
+  describe("strict9 mode (Mistral tool call IDs)", () => {
+    it("returns alphanumeric IDs with length 9", () => {
+      const out = sanitizeToolCallId("call_abc|item:456", "strict9");
+      expect(out).toMatch(/^[a-zA-Z0-9]{9}$/);
+    });
+    it("returns default for empty IDs", () => {
+      expect(sanitizeToolCallId("", "strict9")).toMatch(/^[a-zA-Z0-9]{9}$/);
+    });
+  });
+});
+
+describe("downgradeOpenAIReasoningBlocks", () => {
+  it("keeps reasoning signatures when followed by content", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "internal reasoning",
+            thinkingSignature: JSON.stringify({ id: "rs_123", type: "reasoning" }),
+          },
+          { type: "text", text: "answer" },
+        ],
+      },
+    ];
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    expect(downgradeOpenAIReasoningBlocks(input as any)).toEqual(input);
+  });
+
+  it("drops orphaned reasoning blocks without following content", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinkingSignature: JSON.stringify({ id: "rs_abc", type: "reasoning" }),
+          },
+        ],
+      },
+      { role: "user", content: "next" },
+    ];
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    expect(downgradeOpenAIReasoningBlocks(input as any)).toEqual([
+      { role: "user", content: "next" },
+    ]);
+  });
+
+  it("drops object-form orphaned signatures", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinkingSignature: { id: "rs_obj", type: "reasoning" },
+          },
+        ],
+      },
+    ];
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    expect(downgradeOpenAIReasoningBlocks(input as any)).toEqual([]);
+  });
+
+  it("keeps non-reasoning thinking signatures", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "t",
+            thinkingSignature: "reasoning_content",
+          },
+        ],
+      },
+    ];
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    expect(downgradeOpenAIReasoningBlocks(input as any)).toEqual(input);
+  });
+});
+
+describe("normalizeTextForComparison", () => {
+  it("lowercases text", () => {
+    expect(normalizeTextForComparison("Hello World")).toBe("hello world");
+  });
+
+  it("trims whitespace", () => {
+    expect(normalizeTextForComparison("  hello  ")).toBe("hello");
+  });
+
+  it("collapses multiple spaces", () => {
+    expect(normalizeTextForComparison("hello    world")).toBe("hello world");
+  });
+
+  it("strips emoji", () => {
+    expect(normalizeTextForComparison("Hello 👋 World 🌍")).toBe("hello world");
+  });
+
+  it("handles mixed normalization", () => {
+    expect(normalizeTextForComparison("  Hello 👋   WORLD  🌍  ")).toBe("hello world");
+  });
+});
+
+describe("isMessagingToolDuplicate", () => {
+  it("returns false for empty sentTexts", () => {
+    expect(isMessagingToolDuplicate("hello world", [])).toBe(false);
+  });
+
+  it("returns false for short texts", () => {
+    expect(isMessagingToolDuplicate("short", ["short"])).toBe(false);
+  });
+
+  it("detects exact duplicates", () => {
+    expect(
+      isMessagingToolDuplicate("Hello, this is a test message!", [
+        "Hello, this is a test message!",
+      ]),
+    ).toBe(true);
+  });
+
+  it("detects duplicates with different casing", () => {
+    expect(
+      isMessagingToolDuplicate("HELLO, THIS IS A TEST MESSAGE!", [
+        "hello, this is a test message!",
+      ]),
+    ).toBe(true);
+  });
+
+  it("detects duplicates with emoji variations", () => {
+    expect(
+      isMessagingToolDuplicate("Hello! 👋 This is a test message!", [
+        "Hello! This is a test message!",
+      ]),
+    ).toBe(true);
+  });
+
+  it("detects substring duplicates (LLM elaboration)", () => {
+    expect(
+      isMessagingToolDuplicate('I sent the message: "Hello, this is a test message!"', [
+        "Hello, this is a test message!",
+      ]),
+    ).toBe(true);
+  });
+
+  it("detects when sent text contains block reply (reverse substring)", () => {
+    expect(
+      isMessagingToolDuplicate("Hello, this is a test message!", [
+        'I sent the message: "Hello, this is a test message!"',
+      ]),
+    ).toBe(true);
+  });
+
+  it("returns false for non-matching texts", () => {
+    expect(
+      isMessagingToolDuplicate("This is completely different content.", [
+        "Hello, this is a test message!",
+      ]),
+    ).toBe(false);
   });
 });
