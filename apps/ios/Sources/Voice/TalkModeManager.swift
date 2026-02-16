@@ -16,6 +16,7 @@ import Speech
 final class TalkModeManager: NSObject {
     private typealias SpeechRequest = SFSpeechAudioBufferRecognitionRequest
     private static let defaultModelIdFallback = "eleven_v3"
+    private static let redactedConfigSentinel = "__OPENCLAW_REDACTED__"
     var isEnabled: Bool = false
     var isListening: Bool = false
     var isSpeaking: Bool = false
@@ -814,29 +815,24 @@ final class TalkModeManager: NSObject {
     private func subscribeChatIfNeeded(sessionKey: String) async {
         let key = sessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { return }
-        guard let gateway else { return }
         guard !self.chatSubscribedSessionKeys.contains(key) else { return }
 
-        let payload = "{\"sessionKey\":\"\(key)\"}"
-        await gateway.sendEvent(event: "chat.subscribe", payloadJSON: payload)
+        // Operator clients receive chat events without node-style subscriptions.
         self.chatSubscribedSessionKeys.insert(key)
-        self.logger.info("chat.subscribe ok sessionKey=\(key, privacy: .public)")
     }
 
     private func unsubscribeAllChats() async {
-        guard let gateway else { return }
-        let keys = self.chatSubscribedSessionKeys
         self.chatSubscribedSessionKeys.removeAll()
-        for key in keys {
-            let payload = "{\"sessionKey\":\"\(key)\"}"
-            await gateway.sendEvent(event: "chat.unsubscribe", payloadJSON: payload)
-        }
     }
 
     private func buildPrompt(transcript: String) -> String {
         let interrupted = self.lastInterruptedAtSeconds
         self.lastInterruptedAtSeconds = nil
-        return TalkPromptBuilder.build(transcript: transcript, interruptedAtSeconds: interrupted)
+        let includeVoiceDirectiveHint = (UserDefaults.standard.object(forKey: "talk.voiceDirectiveHint.enabled") as? Bool) ?? true
+        return TalkPromptBuilder.build(
+            transcript: transcript,
+            interruptedAtSeconds: interrupted,
+            includeVoiceDirectiveHint: includeVoiceDirectiveHint)
     }
 
     private enum ChatCompletionState: CustomStringConvertible {
@@ -1668,6 +1664,15 @@ extension TalkModeManager {
         return value.allSatisfy { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" }
     }
 
+    private static func normalizedTalkApiKey(_ raw: String?) -> String? {
+        let trimmed = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        guard trimmed != Self.redactedConfigSentinel else { return nil }
+        // Config values may be env placeholders (for example `${ELEVENLABS_API_KEY}`).
+        if trimmed.hasPrefix("${"), trimmed.hasSuffix("}") { return nil }
+        return trimmed
+    }
+
     func reloadConfig() async {
         guard let gateway else { return }
         do {
@@ -1699,7 +1704,15 @@ extension TalkModeManager {
             }
             self.defaultOutputFormat = (talk?["outputFormat"] as? String)?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            self.apiKey = (talk?["apiKey"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let rawConfigApiKey = (talk?["apiKey"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let configApiKey = Self.normalizedTalkApiKey(rawConfigApiKey)
+            let localApiKey = Self.normalizedTalkApiKey(GatewaySettingsStore.loadTalkElevenLabsApiKey())
+            if rawConfigApiKey == Self.redactedConfigSentinel {
+                self.apiKey = (localApiKey?.isEmpty == false) ? localApiKey : nil
+                GatewayDiagnostics.log("talk config apiKey redacted; using local override if present")
+            } else {
+                self.apiKey = (localApiKey?.isEmpty == false) ? localApiKey : configApiKey
+            }
             if let interrupt = talk?["interruptOnSpeech"] as? Bool {
                 self.interruptOnSpeech = interrupt
             }

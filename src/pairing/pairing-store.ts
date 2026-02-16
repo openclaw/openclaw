@@ -7,7 +7,7 @@ import { getPairingAdapter } from "../channels/plugins/pairing.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import { withFileLock as withPathLock } from "../infra/file-lock.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
-import { safeParseJson } from "../utils.js";
+import { readJsonFileWithFallback, writeJsonFileAtomically } from "../plugin-sdk/json-store.js";
 
 const PAIRING_CODE_LENGTH = 8;
 const PAIRING_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -98,31 +98,26 @@ async function readJsonFile<T>(
   filePath: string,
   fallback: T,
 ): Promise<{ value: T; exists: boolean }> {
-  try {
-    const raw = await fs.promises.readFile(filePath, "utf-8");
-    const parsed = safeParseJson<T>(raw);
-    if (parsed == null) {
-      return { value: fallback, exists: true };
-    }
-    return { value: parsed, exists: true };
-  } catch (err) {
-    const code = (err as { code?: string }).code;
-    if (code === "ENOENT") {
-      return { value: fallback, exists: false };
-    }
-    return { value: fallback, exists: false };
-  }
+  return await readJsonFileWithFallback(filePath, fallback);
 }
 
 async function writeJsonFile(filePath: string, value: unknown): Promise<void> {
-  const dir = path.dirname(filePath);
-  await fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
-  const tmp = path.join(dir, `${path.basename(filePath)}.${crypto.randomUUID()}.tmp`);
-  await fs.promises.writeFile(tmp, `${JSON.stringify(value, null, 2)}\n`, {
-    encoding: "utf-8",
+  await writeJsonFileAtomically(filePath, value);
+}
+
+async function readPairingRequests(filePath: string): Promise<PairingRequest[]> {
+  const { value } = await readJsonFile<PairingStore>(filePath, {
+    version: 1,
+    requests: [],
   });
-  await fs.promises.chmod(tmp, 0o600);
-  await fs.promises.rename(tmp, filePath);
+  return Array.isArray(value.requests) ? value.requests : [];
+}
+
+async function readPrunedPairingRequests(filePath: string): Promise<{
+  requests: PairingRequest[];
+  removed: boolean;
+}> {
+  return pruneExpiredRequests(await readPairingRequests(filePath), Date.now());
 }
 
 async function ensureJsonFile(filePath: string, fallback: unknown) {
@@ -206,6 +201,21 @@ function generateUniqueCode(existing: Set<string>): string {
     }
   }
   throw new Error("failed to generate unique pairing code");
+}
+
+function normalizePairingAccountId(accountId?: string): string {
+  return accountId?.trim().toLowerCase() || "";
+}
+
+function requestMatchesAccountId(entry: PairingRequest, normalizedAccountId: string): boolean {
+  if (!normalizedAccountId) {
+    return true;
+  }
+  return (
+    String(entry.meta?.accountId ?? "")
+      .trim()
+      .toLowerCase() === normalizedAccountId
+  );
 }
 
 function normalizeId(value: string | number): string {
@@ -331,17 +341,35 @@ export async function readChannelAllowFromStore(
   return dedupePreserveOrder([...scopedEntries, ...legacyEntries]);
 }
 
+type AllowFromStoreEntryUpdateParams = {
+  channel: PairingChannel;
+  entry: string | number;
+  accountId?: string;
+  env?: NodeJS.ProcessEnv;
+};
+
+async function updateChannelAllowFromStore(
+  params: {
+    apply: (current: string[], normalized: string) => string[] | null;
+  } & AllowFromStoreEntryUpdateParams,
+): Promise<{ changed: boolean; allowFrom: string[] }> {
+  return await updateAllowFromStoreEntry({
+    channel: params.channel,
+    entry: params.entry,
+    accountId: params.accountId,
+    env: params.env,
+    apply: params.apply,
+  });
+}
+
 export async function addChannelAllowFromStoreEntry(params: {
   channel: PairingChannel;
   entry: string | number;
   accountId?: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<{ changed: boolean; allowFrom: string[] }> {
-  return await updateAllowFromStoreEntry({
-    channel: params.channel,
-    entry: params.entry,
-    accountId: params.accountId,
-    env: params.env,
+  return await updateChannelAllowFromStore({
+    ...params,
     apply: (current, normalized) => {
       if (current.includes(normalized)) {
         return null;
@@ -357,11 +385,8 @@ export async function removeChannelAllowFromStoreEntry(params: {
   accountId?: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<{ changed: boolean; allowFrom: string[] }> {
-  return await updateAllowFromStoreEntry({
-    channel: params.channel,
-    entry: params.entry,
-    accountId: params.accountId,
-    env: params.env,
+  return await updateChannelAllowFromStore({
+    ...params,
     apply: (current, normalized) => {
       const next = current.filter((entry) => entry !== normalized);
       if (next.length === current.length) {
@@ -382,16 +407,8 @@ export async function listChannelPairingRequests(
     filePath,
     { version: 1, requests: [] } satisfies PairingStore,
     async () => {
-      const { value } = await readJsonFile<PairingStore>(filePath, {
-        version: 1,
-        requests: [],
-      });
-      const reqs = Array.isArray(value.requests) ? value.requests : [];
-      const nowMs = Date.now();
-      const { requests: prunedExpired, removed: expiredRemoved } = pruneExpiredRequests(
-        reqs,
-        nowMs,
-      );
+      const { requests: prunedExpired, removed: expiredRemoved } =
+        await readPrunedPairingRequests(filePath);
       const { requests: pruned, removed: cappedRemoved } = pruneExcessRequests(
         prunedExpired,
         PAIRING_PENDING_MAX,
@@ -402,14 +419,9 @@ export async function listChannelPairingRequests(
           requests: pruned,
         } satisfies PairingStore);
       }
-      const normalizedAccountId = accountId?.trim().toLowerCase() || "";
+      const normalizedAccountId = normalizePairingAccountId(accountId);
       const filtered = normalizedAccountId
-        ? pruned.filter(
-            (entry) =>
-              String(entry.meta?.accountId ?? "")
-                .trim()
-                .toLowerCase() === normalizedAccountId,
-          )
+        ? pruned.filter((entry) => requestMatchesAccountId(entry, normalizedAccountId))
         : pruned;
       return filtered
         .filter(
@@ -440,10 +452,6 @@ export async function upsertChannelPairingRequest(params: {
     filePath,
     { version: 1, requests: [] } satisfies PairingStore,
     async () => {
-      const { value } = await readJsonFile<PairingStore>(filePath, {
-        version: 1,
-        requests: [],
-      });
       const now = new Date().toISOString();
       const nowMs = Date.now();
       const id = normalizeId(params.id);
@@ -458,7 +466,7 @@ export async function upsertChannelPairingRequest(params: {
           : undefined;
       const meta = normalizedAccountId ? { ...baseMeta, accountId: normalizedAccountId } : baseMeta;
 
-      let reqs = Array.isArray(value.requests) ? value.requests : [];
+      let reqs = await readPairingRequests(filePath);
       const { requests: prunedExpired, removed: expiredRemoved } = pruneExpiredRequests(
         reqs,
         nowMs,
@@ -542,26 +550,13 @@ export async function approveChannelPairingCode(params: {
     filePath,
     { version: 1, requests: [] } satisfies PairingStore,
     async () => {
-      const { value } = await readJsonFile<PairingStore>(filePath, {
-        version: 1,
-        requests: [],
-      });
-      const reqs = Array.isArray(value.requests) ? value.requests : [];
-      const nowMs = Date.now();
-      const { requests: pruned, removed } = pruneExpiredRequests(reqs, nowMs);
-      const normalizedAccountId = params.accountId?.trim().toLowerCase() || "";
+      const { requests: pruned, removed } = await readPrunedPairingRequests(filePath);
+      const normalizedAccountId = normalizePairingAccountId(params.accountId);
       const idx = pruned.findIndex((r) => {
         if (String(r.code ?? "").toUpperCase() !== code) {
           return false;
         }
-        if (!normalizedAccountId) {
-          return true;
-        }
-        return (
-          String(r.meta?.accountId ?? "")
-            .trim()
-            .toLowerCase() === normalizedAccountId
-        );
+        return requestMatchesAccountId(r, normalizedAccountId);
       });
       if (idx < 0) {
         if (removed) {

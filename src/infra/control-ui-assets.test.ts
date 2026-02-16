@@ -28,6 +28,7 @@ vi.mock("node:fs", async (importOriginal) => {
     const resolved = absInMock(p);
     return resolved === fixturesRoot.slice(0, -1) || resolved.startsWith(fixturesRoot);
   };
+  const readFixtureEntry = (p: string) => state.entries.get(absInMock(p));
 
   const wrapped = {
     ...actual,
@@ -38,25 +39,25 @@ vi.mock("node:fs", async (importOriginal) => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         return actual.readFileSync(p as any, encoding as any) as unknown;
       }
-      const entry = state.entries.get(absInMock(p));
-      if (!entry || entry.kind !== "file") {
-        throw new Error(`ENOENT: no such file, open '${p}'`);
+      const entry = readFixtureEntry(p);
+      if (entry?.kind === "file") {
+        return entry.content;
       }
-      return entry.content;
+      throw new Error(`ENOENT: no such file, open '${p}'`);
     },
     statSync: (p: string) => {
       if (!isFixturePath(p)) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         return actual.statSync(p as any) as unknown;
       }
-      const entry = state.entries.get(absInMock(p));
-      if (!entry) {
-        throw new Error(`ENOENT: no such file or directory, stat '${p}'`);
+      const entry = readFixtureEntry(p);
+      if (entry?.kind === "file") {
+        return { isFile: () => true, isDirectory: () => false };
       }
-      return {
-        isFile: () => entry.kind === "file",
-        isDirectory: () => entry.kind === "dir",
-      };
+      if (entry?.kind === "dir") {
+        return { isFile: () => false, isDirectory: () => true };
+      }
+      throw new Error(`ENOENT: no such file or directory, stat '${p}'`);
     },
     realpathSync: (p: string) =>
       isFixturePath(p)

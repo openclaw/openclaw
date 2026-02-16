@@ -1,35 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import type { PluginRegistry } from "./registry.js";
 import { createHookRunner } from "./hooks.js";
-
-function createMockRegistry(
-  hooks: Array<{ hookName: string; handler: (...args: unknown[]) => unknown }>,
-): PluginRegistry {
-  return {
-    hooks: hooks as never[],
-    typedHooks: hooks.map((h) => ({
-      pluginId: "test-plugin",
-      hookName: h.hookName,
-      handler: h.handler,
-      priority: 0,
-      source: "test",
-    })),
-    tools: [],
-    httpHandlers: [],
-    httpRoutes: [],
-    channelRegistrations: [],
-    gatewayHandlers: {},
-    cliRegistrars: [],
-    services: [],
-    providers: [],
-    commands: [],
-  } as unknown as PluginRegistry;
-}
+import { createMockPluginRegistry } from "./hooks.test-helpers.js";
 
 describe("llm hook runner methods", () => {
   it("runLlmInput invokes registered llm_input hooks", async () => {
     const handler = vi.fn();
-    const registry = createMockRegistry([{ hookName: "llm_input", handler }]);
+    const registry = createMockPluginRegistry([{ hookName: "llm_input", handler }]);
     const runner = createHookRunner(registry);
 
     await runner.runLlmInput(
@@ -57,7 +33,7 @@ describe("llm hook runner methods", () => {
 
   it("runLlmOutput invokes registered llm_output hooks", async () => {
     const handler = vi.fn();
-    const registry = createMockRegistry([{ hookName: "llm_output", handler }]);
+    const registry = createMockPluginRegistry([{ hookName: "llm_output", handler }]);
     const runner = createHookRunner(registry);
 
     await runner.runLlmOutput(
@@ -87,7 +63,7 @@ describe("llm hook runner methods", () => {
   });
 
   it("hasHooks returns true for registered llm hooks", () => {
-    const registry = createMockRegistry([{ hookName: "llm_input", handler: vi.fn() }]);
+    const registry = createMockPluginRegistry([{ hookName: "llm_input", handler: vi.fn() }]);
     const runner = createHookRunner(registry);
 
     expect(runner.hasHooks("llm_input")).toBe(true);

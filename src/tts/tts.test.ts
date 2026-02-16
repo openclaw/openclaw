@@ -426,7 +426,9 @@ describe("tts", () => {
       },
     };
 
-    it("skips auto-TTS when inbound audio gating is on and the message is not audio", async () => {
+    const withMockedAutoTtsFetch = async (
+      run: (fetchMock: ReturnType<typeof vi.fn>) => Promise<void>,
+    ) => {
       const prevPrefs = process.env.OPENCLAW_TTS_PREFS;
       process.env.OPENCLAW_TTS_PREFS = `/tmp/tts-test-${Date.now()}.json`;
       const originalFetch = globalThis.fetch;
@@ -435,132 +437,91 @@ describe("tts", () => {
         arrayBuffer: async () => new ArrayBuffer(1),
       }));
       globalThis.fetch = fetchMock as unknown as typeof fetch;
+      try {
+        await run(fetchMock);
+      } finally {
+        globalThis.fetch = originalFetch;
+        process.env.OPENCLAW_TTS_PREFS = prevPrefs;
+      }
+    };
 
-      const payload = { text: "Hello world" };
-      const result = await maybeApplyTtsToPayload({
-        payload,
-        cfg: baseCfg,
-        kind: "final",
-        inboundAudio: false,
+    const taggedCfg = {
+      ...baseCfg,
+      messages: {
+        ...baseCfg.messages,
+        tts: { ...baseCfg.messages.tts, auto: "tagged" },
+      },
+    };
+
+    it("skips auto-TTS when inbound audio gating is on and the message is not audio", async () => {
+      await withMockedAutoTtsFetch(async (fetchMock) => {
+        const payload = { text: "Hello world" };
+        const result = await maybeApplyTtsToPayload({
+          payload,
+          cfg: baseCfg,
+          kind: "final",
+          inboundAudio: false,
+        });
+
+        expect(result).toBe(payload);
+        expect(fetchMock).not.toHaveBeenCalled();
       });
-
-      expect(result).toBe(payload);
-      expect(fetchMock).not.toHaveBeenCalled();
-
-      globalThis.fetch = originalFetch;
-      process.env.OPENCLAW_TTS_PREFS = prevPrefs;
     });
 
     it("skips auto-TTS when markdown stripping leaves text too short", async () => {
-      const prevPrefs = process.env.OPENCLAW_TTS_PREFS;
-      process.env.OPENCLAW_TTS_PREFS = `/tmp/tts-test-${Date.now()}.json`;
-      const originalFetch = globalThis.fetch;
-      const fetchMock = vi.fn(async () => ({
-        ok: true,
-        arrayBuffer: async () => new ArrayBuffer(1),
-      }));
-      globalThis.fetch = fetchMock as unknown as typeof fetch;
+      await withMockedAutoTtsFetch(async (fetchMock) => {
+        const payload = { text: "### **bold**" };
+        const result = await maybeApplyTtsToPayload({
+          payload,
+          cfg: baseCfg,
+          kind: "final",
+          inboundAudio: true,
+        });
 
-      const payload = { text: "### **bold**" };
-      const result = await maybeApplyTtsToPayload({
-        payload,
-        cfg: baseCfg,
-        kind: "final",
-        inboundAudio: true,
+        expect(result).toBe(payload);
+        expect(fetchMock).not.toHaveBeenCalled();
       });
-
-      expect(result).toBe(payload);
-      expect(fetchMock).not.toHaveBeenCalled();
-
-      globalThis.fetch = originalFetch;
-      process.env.OPENCLAW_TTS_PREFS = prevPrefs;
     });
 
     it("attempts auto-TTS when inbound audio gating is on and the message is audio", async () => {
-      const prevPrefs = process.env.OPENCLAW_TTS_PREFS;
-      process.env.OPENCLAW_TTS_PREFS = `/tmp/tts-test-${Date.now()}.json`;
-      const originalFetch = globalThis.fetch;
-      const fetchMock = vi.fn(async () => ({
-        ok: true,
-        arrayBuffer: async () => new ArrayBuffer(1),
-      }));
-      globalThis.fetch = fetchMock as unknown as typeof fetch;
+      await withMockedAutoTtsFetch(async (fetchMock) => {
+        const result = await maybeApplyTtsToPayload({
+          payload: { text: "Hello world" },
+          cfg: baseCfg,
+          kind: "final",
+          inboundAudio: true,
+        });
 
-      const result = await maybeApplyTtsToPayload({
-        payload: { text: "Hello world" },
-        cfg: baseCfg,
-        kind: "final",
-        inboundAudio: true,
+        expect(result.mediaUrl).toBeDefined();
+        expect(fetchMock).toHaveBeenCalledTimes(1);
       });
-
-      expect(result.mediaUrl).toBeDefined();
-      expect(fetchMock).toHaveBeenCalledTimes(1);
-
-      globalThis.fetch = originalFetch;
-      process.env.OPENCLAW_TTS_PREFS = prevPrefs;
     });
 
     it("skips auto-TTS in tagged mode unless a tts tag is present", async () => {
-      const prevPrefs = process.env.OPENCLAW_TTS_PREFS;
-      process.env.OPENCLAW_TTS_PREFS = `/tmp/tts-test-${Date.now()}.json`;
-      const originalFetch = globalThis.fetch;
-      const fetchMock = vi.fn(async () => ({
-        ok: true,
-        arrayBuffer: async () => new ArrayBuffer(1),
-      }));
-      globalThis.fetch = fetchMock as unknown as typeof fetch;
+      await withMockedAutoTtsFetch(async (fetchMock) => {
+        const payload = { text: "Hello world" };
+        const result = await maybeApplyTtsToPayload({
+          payload,
+          cfg: taggedCfg,
+          kind: "final",
+        });
 
-      const cfg = {
-        ...baseCfg,
-        messages: {
-          ...baseCfg.messages,
-          tts: { ...baseCfg.messages.tts, auto: "tagged" },
-        },
-      };
-
-      const payload = { text: "Hello world" };
-      const result = await maybeApplyTtsToPayload({
-        payload,
-        cfg,
-        kind: "final",
+        expect(result).toBe(payload);
+        expect(fetchMock).not.toHaveBeenCalled();
       });
-
-      expect(result).toBe(payload);
-      expect(fetchMock).not.toHaveBeenCalled();
-
-      globalThis.fetch = originalFetch;
-      process.env.OPENCLAW_TTS_PREFS = prevPrefs;
     });
 
     it("runs auto-TTS in tagged mode when tags are present", async () => {
-      const prevPrefs = process.env.OPENCLAW_TTS_PREFS;
-      process.env.OPENCLAW_TTS_PREFS = `/tmp/tts-test-${Date.now()}.json`;
-      const originalFetch = globalThis.fetch;
-      const fetchMock = vi.fn(async () => ({
-        ok: true,
-        arrayBuffer: async () => new ArrayBuffer(1),
-      }));
-      globalThis.fetch = fetchMock as unknown as typeof fetch;
+      await withMockedAutoTtsFetch(async (fetchMock) => {
+        const result = await maybeApplyTtsToPayload({
+          payload: { text: "[[tts:text]]Hello world[[/tts:text]]" },
+          cfg: taggedCfg,
+          kind: "final",
+        });
 
-      const cfg = {
-        ...baseCfg,
-        messages: {
-          ...baseCfg.messages,
-          tts: { ...baseCfg.messages.tts, auto: "tagged" },
-        },
-      };
-
-      const result = await maybeApplyTtsToPayload({
-        payload: { text: "[[tts:text]]Hello world[[/tts:text]]" },
-        cfg,
-        kind: "final",
+        expect(result.mediaUrl).toBeDefined();
+        expect(fetchMock).toHaveBeenCalledTimes(1);
       });
-
-      expect(result.mediaUrl).toBeDefined();
-      expect(fetchMock).toHaveBeenCalledTimes(1);
-
-      globalThis.fetch = originalFetch;
-      process.env.OPENCLAW_TTS_PREFS = prevPrefs;
     });
   });
 });

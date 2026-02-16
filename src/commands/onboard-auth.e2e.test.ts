@@ -1,9 +1,7 @@
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { captureEnv } from "../test-utils/env.js";
 import {
   applyAuthProfileConfig,
   applyLitellmProviderConfig,
@@ -30,38 +28,95 @@ import {
   ZAI_CODING_CN_BASE_URL,
   ZAI_GLOBAL_BASE_URL,
 } from "./onboard-auth.js";
+import {
+  createAuthTestLifecycle,
+  readAuthProfilesForAgent,
+  setupAuthTestEnv,
+} from "./test-wizard-helpers.js";
 
-const authProfilePathFor = (agentDir: string) => path.join(agentDir, "auth-profiles.json");
-const requireAgentDir = () => {
-  const agentDir = process.env.OPENCLAW_AGENT_DIR;
-  if (!agentDir) {
-    throw new Error("OPENCLAW_AGENT_DIR not set");
-  }
-  return agentDir;
-};
+function createLegacyProviderConfig(params: {
+  providerId: string;
+  api: string;
+  modelId?: string;
+  modelName?: string;
+  baseUrl?: string;
+  apiKey?: string;
+}) {
+  return {
+    models: {
+      providers: {
+        [params.providerId]: {
+          baseUrl: params.baseUrl ?? "https://old.example.com",
+          apiKey: params.apiKey ?? "old-key",
+          api: params.api,
+          models: [
+            {
+              id: params.modelId ?? "old-model",
+              name: params.modelName ?? "Old",
+              reasoning: false,
+              input: ["text"],
+              cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 1000,
+              maxTokens: 100,
+            },
+          ],
+        },
+      },
+    },
+  };
+}
+
+const EXPECTED_FALLBACKS = ["anthropic/claude-opus-4-5"] as const;
+
+function createConfigWithFallbacks() {
+  return {
+    agents: {
+      defaults: {
+        model: { fallbacks: [...EXPECTED_FALLBACKS] },
+      },
+    },
+  };
+}
+
+function expectFallbacksPreserved(cfg: ReturnType<typeof applyMinimaxApiConfig>) {
+  expect(cfg.agents?.defaults?.model?.fallbacks).toEqual([...EXPECTED_FALLBACKS]);
+}
+
+function expectPrimaryModelPreserved(cfg: ReturnType<typeof applyMinimaxApiProviderConfig>) {
+  expect(cfg.agents?.defaults?.model?.primary).toBe("anthropic/claude-opus-4-5");
+}
+
+function expectAllowlistContains(
+  cfg: ReturnType<typeof applyOpenrouterProviderConfig>,
+  key: string,
+) {
+  const models = cfg.agents?.defaults?.models ?? {};
+  expect(Object.keys(models)).toContain(key);
+}
+
+function expectAliasPreserved(
+  cfg: ReturnType<typeof applyOpenrouterProviderConfig>,
+  key: string,
+  alias: string,
+) {
+  expect(cfg.agents?.defaults?.models?.[key]?.alias).toBe(alias);
+}
 
 describe("writeOAuthCredentials", () => {
-  const envSnapshot = captureEnv([
+  const lifecycle = createAuthTestLifecycle([
     "OPENCLAW_STATE_DIR",
     "OPENCLAW_AGENT_DIR",
     "PI_CODING_AGENT_DIR",
     "OPENCLAW_OAUTH_DIR",
   ]);
-  let tempStateDir: string | null = null;
 
   afterEach(async () => {
-    if (tempStateDir) {
-      await fs.rm(tempStateDir, { recursive: true, force: true });
-      tempStateDir = null;
-    }
-    envSnapshot.restore();
+    await lifecycle.cleanup();
   });
 
   it("writes auth-profiles.json under OPENCLAW_AGENT_DIR when set", async () => {
-    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-oauth-"));
-    process.env.OPENCLAW_STATE_DIR = tempStateDir;
-    process.env.OPENCLAW_AGENT_DIR = path.join(tempStateDir, "agent");
-    process.env.PI_CODING_AGENT_DIR = process.env.OPENCLAW_AGENT_DIR;
+    const env = await setupAuthTestEnv("openclaw-oauth-");
+    lifecycle.setStateDir(env.stateDir);
 
     const creds = {
       refresh: "refresh-token",
@@ -71,11 +126,9 @@ describe("writeOAuthCredentials", () => {
 
     await writeOAuthCredentials("openai-codex", creds);
 
-    const authProfilePath = authProfilePathFor(requireAgentDir());
-    const raw = await fs.readFile(authProfilePath, "utf8");
-    const parsed = JSON.parse(raw) as {
+    const parsed = await readAuthProfilesForAgent<{
       profiles?: Record<string, OAuthCredentials & { type?: string }>;
-    };
+    }>(env.agentDir);
     expect(parsed.profiles?.["openai-codex:default"]).toMatchObject({
       refresh: "refresh-token",
       access: "access-token",
@@ -83,40 +136,31 @@ describe("writeOAuthCredentials", () => {
     });
 
     await expect(
-      fs.readFile(path.join(tempStateDir, "agents", "main", "agent", "auth-profiles.json"), "utf8"),
+      fs.readFile(path.join(env.stateDir, "agents", "main", "agent", "auth-profiles.json"), "utf8"),
     ).rejects.toThrow();
   });
 });
 
 describe("setMinimaxApiKey", () => {
-  const envSnapshot = captureEnv([
+  const lifecycle = createAuthTestLifecycle([
     "OPENCLAW_STATE_DIR",
     "OPENCLAW_AGENT_DIR",
     "PI_CODING_AGENT_DIR",
   ]);
-  let tempStateDir: string | null = null;
 
   afterEach(async () => {
-    if (tempStateDir) {
-      await fs.rm(tempStateDir, { recursive: true, force: true });
-      tempStateDir = null;
-    }
-    envSnapshot.restore();
+    await lifecycle.cleanup();
   });
 
   it("writes to OPENCLAW_AGENT_DIR when set", async () => {
-    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-minimax-"));
-    process.env.OPENCLAW_STATE_DIR = tempStateDir;
-    process.env.OPENCLAW_AGENT_DIR = path.join(tempStateDir, "custom-agent");
-    process.env.PI_CODING_AGENT_DIR = process.env.OPENCLAW_AGENT_DIR;
+    const env = await setupAuthTestEnv("openclaw-minimax-", { agentSubdir: "custom-agent" });
+    lifecycle.setStateDir(env.stateDir);
 
     await setMinimaxApiKey("sk-minimax-test");
 
-    const customAuthPath = authProfilePathFor(requireAgentDir());
-    const raw = await fs.readFile(customAuthPath, "utf8");
-    const parsed = JSON.parse(raw) as {
+    const parsed = await readAuthProfilesForAgent<{
       profiles?: Record<string, { type?: string; provider?: string; key?: string }>;
-    };
+    }>(env.agentDir);
     expect(parsed.profiles?.["minimax:default"]).toMatchObject({
       type: "api_key",
       provider: "minimax",
@@ -124,7 +168,7 @@ describe("setMinimaxApiKey", () => {
     });
 
     await expect(
-      fs.readFile(path.join(tempStateDir, "agents", "main", "agent", "auth-profiles.json"), "utf8"),
+      fs.readFile(path.join(env.stateDir, "agents", "main", "agent", "auth-profiles.json"), "utf8"),
     ).rejects.toThrow();
   });
 });
@@ -171,14 +215,8 @@ describe("applyMinimaxApiConfig", () => {
   });
 
   it("preserves existing model fallbacks", () => {
-    const cfg = applyMinimaxApiConfig({
-      agents: {
-        defaults: {
-          model: { fallbacks: ["anthropic/claude-opus-4-5"] },
-        },
-      },
-    });
-    expect(cfg.agents?.defaults?.model?.fallbacks).toEqual(["anthropic/claude-opus-4-5"]);
+    const cfg = applyMinimaxApiConfig(createConfigWithFallbacks());
+    expectFallbacksPreserved(cfg);
   });
 
   it("adds model alias", () => {
@@ -209,28 +247,12 @@ describe("applyMinimaxApiConfig", () => {
   });
 
   it("merges existing minimax provider models", () => {
-    const cfg = applyMinimaxApiConfig({
-      models: {
-        providers: {
-          minimax: {
-            baseUrl: "https://old.example.com",
-            apiKey: "old-key",
-            api: "openai-completions",
-            models: [
-              {
-                id: "old-model",
-                name: "Old",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 1000,
-                maxTokens: 100,
-              },
-            ],
-          },
-        },
-      },
-    });
+    const cfg = applyMinimaxApiConfig(
+      createLegacyProviderConfig({
+        providerId: "minimax",
+        api: "openai-completions",
+      }),
+    );
     expect(cfg.models?.providers?.minimax?.baseUrl).toBe("https://api.minimax.io/anthropic");
     expect(cfg.models?.providers?.minimax?.api).toBe("anthropic-messages");
     expect(cfg.models?.providers?.minimax?.apiKey).toBe("old-key");
@@ -280,7 +302,7 @@ describe("applyMinimaxApiProviderConfig", () => {
     const cfg = applyMinimaxApiProviderConfig({
       agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
     });
-    expect(cfg.agents?.defaults?.model?.primary).toBe("anthropic/claude-opus-4-5");
+    expectPrimaryModelPreserved(cfg);
   });
 });
 
@@ -322,7 +344,7 @@ describe("applyZaiProviderConfig", () => {
     const cfg = applyZaiProviderConfig({
       agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
     });
-    expect(cfg.agents?.defaults?.model?.primary).toBe("anthropic/claude-opus-4-5");
+    expectPrimaryModelPreserved(cfg);
   });
 });
 
@@ -341,28 +363,12 @@ describe("applySyntheticConfig", () => {
   });
 
   it("merges existing synthetic provider models", () => {
-    const cfg = applySyntheticProviderConfig({
-      models: {
-        providers: {
-          synthetic: {
-            baseUrl: "https://old.example.com",
-            apiKey: "old-key",
-            api: "openai-completions",
-            models: [
-              {
-                id: "old-model",
-                name: "Old",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 1000,
-                maxTokens: 100,
-              },
-            ],
-          },
-        },
-      },
-    });
+    const cfg = applySyntheticProviderConfig(
+      createLegacyProviderConfig({
+        providerId: "synthetic",
+        api: "openai-completions",
+      }),
+    );
     expect(cfg.models?.providers?.synthetic?.baseUrl).toBe("https://api.synthetic.new/anthropic");
     expect(cfg.models?.providers?.synthetic?.api).toBe("anthropic-messages");
     expect(cfg.models?.providers?.synthetic?.apiKey).toBe("old-key");
@@ -383,28 +389,14 @@ describe("applyXiaomiConfig", () => {
   });
 
   it("merges Xiaomi models and keeps existing provider overrides", () => {
-    const cfg = applyXiaomiProviderConfig({
-      models: {
-        providers: {
-          xiaomi: {
-            baseUrl: "https://old.example.com",
-            apiKey: "old-key",
-            api: "openai-completions",
-            models: [
-              {
-                id: "custom-model",
-                name: "Custom",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 1000,
-                maxTokens: 100,
-              },
-            ],
-          },
-        },
-      },
-    });
+    const cfg = applyXiaomiProviderConfig(
+      createLegacyProviderConfig({
+        providerId: "xiaomi",
+        api: "openai-completions",
+        modelId: "custom-model",
+        modelName: "Custom",
+      }),
+    );
 
     expect(cfg.models?.providers?.xiaomi?.baseUrl).toBe("https://api.xiaomimimo.com/anthropic");
     expect(cfg.models?.providers?.xiaomi?.api).toBe("anthropic-messages");
@@ -427,14 +419,8 @@ describe("applyXaiConfig", () => {
   });
 
   it("preserves existing model fallbacks", () => {
-    const cfg = applyXaiConfig({
-      agents: {
-        defaults: {
-          model: { fallbacks: ["anthropic/claude-opus-4-5"] },
-        },
-      },
-    });
-    expect(cfg.agents?.defaults?.model?.fallbacks).toEqual(["anthropic/claude-opus-4-5"]);
+    const cfg = applyXaiConfig(createConfigWithFallbacks());
+    expectFallbacksPreserved(cfg);
   });
 });
 
@@ -445,28 +431,14 @@ describe("applyXaiProviderConfig", () => {
   });
 
   it("merges xAI models and keeps existing provider overrides", () => {
-    const cfg = applyXaiProviderConfig({
-      models: {
-        providers: {
-          xai: {
-            baseUrl: "https://old.example.com",
-            apiKey: "old-key",
-            api: "anthropic-messages",
-            models: [
-              {
-                id: "custom-model",
-                name: "Custom",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 1000,
-                maxTokens: 100,
-              },
-            ],
-          },
-        },
-      },
-    });
+    const cfg = applyXaiProviderConfig(
+      createLegacyProviderConfig({
+        providerId: "xai",
+        api: "anthropic-messages",
+        modelId: "custom-model",
+        modelName: "Custom",
+      }),
+    );
 
     expect(cfg.models?.providers?.xai?.baseUrl).toBe("https://api.x.ai/v1");
     expect(cfg.models?.providers?.xai?.api).toBe("openai-completions");
@@ -478,8 +450,7 @@ describe("applyXaiProviderConfig", () => {
 describe("applyOpencodeZenProviderConfig", () => {
   it("adds allowlist entry for the default model", () => {
     const cfg = applyOpencodeZenProviderConfig({});
-    const models = cfg.agents?.defaults?.models ?? {};
-    expect(Object.keys(models)).toContain("opencode/claude-opus-4-6");
+    expectAllowlistContains(cfg, "opencode/claude-opus-4-6");
   });
 
   it("preserves existing alias for the default model", () => {
@@ -492,7 +463,7 @@ describe("applyOpencodeZenProviderConfig", () => {
         },
       },
     });
-    expect(cfg.agents?.defaults?.models?.["opencode/claude-opus-4-6"]?.alias).toBe("My Opus");
+    expectAliasPreserved(cfg, "opencode/claude-opus-4-6", "My Opus");
   });
 });
 
@@ -503,22 +474,15 @@ describe("applyOpencodeZenConfig", () => {
   });
 
   it("preserves existing model fallbacks", () => {
-    const cfg = applyOpencodeZenConfig({
-      agents: {
-        defaults: {
-          model: { fallbacks: ["anthropic/claude-opus-4-5"] },
-        },
-      },
-    });
-    expect(cfg.agents?.defaults?.model?.fallbacks).toEqual(["anthropic/claude-opus-4-5"]);
+    const cfg = applyOpencodeZenConfig(createConfigWithFallbacks());
+    expectFallbacksPreserved(cfg);
   });
 });
 
 describe("applyOpenrouterProviderConfig", () => {
   it("adds allowlist entry for the default model", () => {
     const cfg = applyOpenrouterProviderConfig({});
-    const models = cfg.agents?.defaults?.models ?? {};
-    expect(Object.keys(models)).toContain(OPENROUTER_DEFAULT_MODEL_REF);
+    expectAllowlistContains(cfg, OPENROUTER_DEFAULT_MODEL_REF);
   });
 
   it("preserves existing alias for the default model", () => {
@@ -531,34 +495,22 @@ describe("applyOpenrouterProviderConfig", () => {
         },
       },
     });
-    expect(cfg.agents?.defaults?.models?.[OPENROUTER_DEFAULT_MODEL_REF]?.alias).toBe("Router");
+    expectAliasPreserved(cfg, OPENROUTER_DEFAULT_MODEL_REF, "Router");
   });
 });
 
 describe("applyLitellmProviderConfig", () => {
   it("preserves existing baseUrl and api key while adding the default model", () => {
-    const cfg = applyLitellmProviderConfig({
-      models: {
-        providers: {
-          litellm: {
-            baseUrl: "https://litellm.example/v1",
-            apiKey: "  old-key  ",
-            api: "anthropic-messages",
-            models: [
-              {
-                id: "custom-model",
-                name: "Custom",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 1000,
-                maxTokens: 100,
-              },
-            ],
-          },
-        },
-      },
-    });
+    const cfg = applyLitellmProviderConfig(
+      createLegacyProviderConfig({
+        providerId: "litellm",
+        api: "anthropic-messages",
+        modelId: "custom-model",
+        modelName: "Custom",
+        baseUrl: "https://litellm.example/v1",
+        apiKey: "  old-key  ",
+      }),
+    );
 
     expect(cfg.models?.providers?.litellm?.baseUrl).toBe("https://litellm.example/v1");
     expect(cfg.models?.providers?.litellm?.api).toBe("openai-completions");
@@ -577,13 +529,7 @@ describe("applyOpenrouterConfig", () => {
   });
 
   it("preserves existing model fallbacks", () => {
-    const cfg = applyOpenrouterConfig({
-      agents: {
-        defaults: {
-          model: { fallbacks: ["anthropic/claude-opus-4-5"] },
-        },
-      },
-    });
-    expect(cfg.agents?.defaults?.model?.fallbacks).toEqual(["anthropic/claude-opus-4-5"]);
+    const cfg = applyOpenrouterConfig(createConfigWithFallbacks());
+    expectFallbacksPreserved(cfg);
   });
 });

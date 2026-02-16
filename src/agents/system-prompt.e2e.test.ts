@@ -371,6 +371,20 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(`respond with ONLY: ${SILENT_REPLY_TOKEN}`);
   });
 
+  it("includes inline button style guidance when runtime supports inline buttons", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["message"],
+      runtimeInfo: {
+        channel: "telegram",
+        capabilities: ["inlineButtons"],
+      },
+    });
+
+    expect(prompt).toContain("buttons=[[{text,callback_data,style?}]]");
+    expect(prompt).toContain("`style` can be `primary`, `success`, or `danger`");
+  });
+
   it("includes runtime provider capabilities when present", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
