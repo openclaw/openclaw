@@ -593,4 +593,75 @@ describe("slack actions adapter", () => {
     ).rejects.toThrow(/blocks must be valid JSON/i);
     expect(handleSlackAction).not.toHaveBeenCalled();
   });
+
+  it("forwards blocks JSON for edit", async () => {
+    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+    const actions = createSlackActions("slack");
+
+    await actions.handleAction?.({
+      channel: "slack",
+      action: "edit",
+      cfg,
+      params: {
+        channelId: "C1",
+        messageId: "171234.567",
+        message: "",
+        blocks: JSON.stringify([{ type: "divider" }]),
+      },
+    });
+
+    const [params] = handleSlackAction.mock.calls[0] ?? [];
+    expect(params).toMatchObject({
+      action: "editMessage",
+      channelId: "C1",
+      messageId: "171234.567",
+      content: "",
+      blocks: [{ type: "divider" }],
+    });
+  });
+
+  it("forwards blocks arrays for edit", async () => {
+    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+    const actions = createSlackActions("slack");
+
+    await actions.handleAction?.({
+      channel: "slack",
+      action: "edit",
+      cfg,
+      params: {
+        channelId: "C1",
+        messageId: "171234.567",
+        message: "",
+        blocks: [{ type: "section", text: { type: "mrkdwn", text: "updated" } }],
+      },
+    });
+
+    const [params] = handleSlackAction.mock.calls[0] ?? [];
+    expect(params).toMatchObject({
+      action: "editMessage",
+      channelId: "C1",
+      messageId: "171234.567",
+      content: "",
+      blocks: [{ type: "section", text: { type: "mrkdwn", text: "updated" } }],
+    });
+  });
+
+  it("rejects edit when both message and blocks are missing", async () => {
+    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+    const actions = createSlackActions("slack");
+
+    await expect(
+      actions.handleAction?.({
+        channel: "slack",
+        action: "edit",
+        cfg,
+        params: {
+          channelId: "C1",
+          messageId: "171234.567",
+          message: "",
+        },
+      }),
+    ).rejects.toThrow(/edit requires message or blocks/i);
+    expect(handleSlackAction).not.toHaveBeenCalled();
+  });
 });
