@@ -10,6 +10,7 @@ const ROOT_COMMANDS_HINT =
   "Hint: get help on flags and subcommands by calling --help on each command.";
 
 const EXAMPLES = [
+  ["openclaw models --help", "Show detailed help for the models command."],
   [
     "openclaw channels login --verbose",
     "Link personal WhatsApp Web and show QR + connection logs.",
