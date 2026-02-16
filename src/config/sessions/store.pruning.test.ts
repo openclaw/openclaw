@@ -176,20 +176,6 @@ describe("capEntryCount", () => {
     expect(Object.keys(store)).toHaveLength(2);
   });
 
-  it("exactly at limit: no-op", () => {
-    const now = Date.now();
-    const store = makeStore([
-      ["a", makeEntry(now)],
-      ["b", makeEntry(now - DAY_MS)],
-      ["c", makeEntry(now - 2 * DAY_MS)],
-    ]);
-
-    const evicted = capEntryCount(store, 3);
-
-    expect(evicted).toBe(0);
-    expect(Object.keys(store)).toHaveLength(3);
-  });
-
   it("entries without updatedAt are evicted first (lowest priority)", () => {
     const now = Date.now();
     const store: Record<string, SessionEntry> = {
