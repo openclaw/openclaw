@@ -656,7 +656,7 @@ Docs: [Update](/cli/update), [Updating](/install/updating).
 
 `openclaw onboard` is the recommended setup path. In **local mode** it walks you through:
 
-- **Model/auth setup** (Anthropic **setup-token** recommended for Claude subscriptions, OpenAI Codex OAuth supported, API keys optional, LM Studio local models supported)
+- **Model/auth setup** (Anthropic **Claude Code OAuth** or setup-token for Claude subscriptions, OpenAI Codex OAuth supported, API keys optional, LM Studio local models supported)
 - **Workspace** location + bootstrap files
 - **Gateway settings** (bind/port/auth/tailscale)
 - **Providers** (WhatsApp, Telegram, Discord, Mattermost (plugin), Signal, iMessage)
@@ -700,7 +700,12 @@ Copy the token it prints, then choose **Anthropic token (paste setup-token)** in
 
 ### Do you support Claude subscription auth (Claude Pro or Max)
 
-Yes - via **setup-token**. OpenClaw no longer reuses Claude Code CLI OAuth tokens; use a setup-token or an Anthropic API key. Generate the token anywhere and paste it on the gateway host. See [Anthropic](/providers/anthropic) and [OAuth](/concepts/oauth).
+Yes. OpenClaw supports Claude subscription auth via **Claude Code OAuth** (first-class) and **setup-token** (manual fallback).
+
+- Preferred: `openclaw onboard --auth-choice claude-code-cli`
+- Fallback (headless/remote): run `claude setup-token` and paste with `openclaw models auth paste-token --provider anthropic`
+
+See [Anthropic](/providers/anthropic) and [OAuth](/concepts/oauth).
 
 Note: Claude subscription access is governed by Anthropic's terms. For production or multi-user workloads, API keys are usually the safer choice.
 

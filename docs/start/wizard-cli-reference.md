@@ -16,7 +16,7 @@ For the short guide, see [Onboarding Wizard (CLI)](/start/wizard).
 
 Local mode (default) walks you through:
 
-- Model and auth setup (OpenAI Code subscription OAuth, Anthropic API key or setup token, plus MiniMax, GLM, Moonshot, and AI Gateway options)
+- Model and auth setup (Anthropic Claude Code OAuth, Anthropic setup-token/API key, OpenAI Code subscription OAuth, plus MiniMax, GLM, Moonshot, and AI Gateway options)
 - Workspace location and bootstrap files
 - Gateway settings (port, bind, auth, tailscale)
 - Channels and providers (Telegram, WhatsApp, Discord, Google Chat, Mattermost plugin, Signal)
@@ -118,19 +118,20 @@ What you set:
   <Accordion title="Anthropic API key (recommended)">
     Uses `ANTHROPIC_API_KEY` if present or prompts for a key, then saves it for daemon use.
   </Accordion>
-  <Accordion title="Anthropic OAuth (Claude Code CLI)">
-    - macOS: checks Keychain item "Claude Code-credentials"
-    - Linux and Windows: reuses `~/.claude/.credentials.json` if present
+  <Accordion title="Claude Code CLI (local app subscription)">
+    Configures `claude-cli/*` models so OpenClaw can use the official local `claude` CLI
+    (primary or fallback) without an Anthropic API key.
 
-    On macOS, choose "Always Allow" so launchd starts do not block.
+    Ensure `claude` is installed, on PATH, and signed in on the gateway host.
 
   </Accordion>
   <Accordion title="Anthropic token (setup-token paste)">
     Run `claude setup-token` on any machine, then paste the token.
     You can name it; blank uses default.
   </Accordion>
-  <Accordion title="OpenAI Code subscription (Codex CLI reuse)">
-    If `~/.codex/auth.json` exists, the wizard can reuse it.
+  <Accordion title="OpenAI Code (Codex CLI backend)">
+    Optional local CLI path via `codex-cli/*` model refs.
+    Requires a working local Codex CLI login on the host.
   </Accordion>
   <Accordion title="OpenAI Code subscription (OAuth)">
     Browser flow; paste `code#state`.

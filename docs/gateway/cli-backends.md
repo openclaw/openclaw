@@ -1,24 +1,25 @@
 ---
-summary: "CLI backends: text-only fallback via local AI CLIs"
+summary: "CLI backends: text-only runtime via local AI CLIs (primary or fallback)"
 read_when:
-  - You want a reliable fallback when API providers fail
+  - You want to run local AI CLIs as a primary model path or fallback
   - You are running Claude Code CLI or other local AI CLIs and want to reuse them
   - You need a text-only, tool-free path that still supports sessions and images
 title: "CLI Backends"
 ---
 
-# CLI backends (fallback runtime)
+# CLI backends (text-only runtime)
 
-OpenClaw can run **local AI CLIs** as a **text-only fallback** when API providers are down,
-rate-limited, or temporarily misbehaving. This is intentionally conservative:
+OpenClaw can run **local AI CLIs** as a **text-only model path** — either as your
+primary model or as fallback when API providers are down, rate-limited, or
+temporarily misbehaving. This is intentionally conservative:
 
 - **Tools are disabled** (no tool calls).
 - **Text in → text out** (reliable).
 - **Sessions are supported** (so follow-up turns stay coherent).
 - **Images can be passed through** if the CLI accepts image paths.
 
-This is designed as a **safety net** rather than a primary path. Use it when you
-want “always works” text responses without relying on external APIs.
+Use this when you want reliable text responses without depending entirely on
+external APIs.
 
 ## Beginner-friendly quick start
 
@@ -52,6 +53,31 @@ command path:
 ```
 
 That’s it. No keys, no extra auth config needed beyond the CLI itself.
+
+## Using it as a primary model
+
+If you want Claude Code CLI to be the default path (not only fallback), set it as
+`agents.defaults.model.primary`:
+
+```json5
+{
+  agents: {
+    defaults: {
+      model: {
+        primary: "claude-cli/opus-4.6",
+      },
+      models: {
+        "claude-cli/opus-4.6": { alias: "claude" },
+      },
+      cliBackends: {
+        "claude-cli": {
+          command: "/opt/homebrew/bin/claude", // optional if PATH already includes `claude`
+        },
+      },
+    },
+  },
+}
+```
 
 ## Using it as a fallback
 

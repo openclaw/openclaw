@@ -10,7 +10,7 @@ title: "OAuth"
 
 # OAuth
 
-OpenClaw supports “subscription auth” via OAuth for providers that offer it (notably **OpenAI Codex (ChatGPT OAuth)**). For Anthropic subscriptions, use the **setup-token** flow. This page explains:
+OpenClaw supports subscription auth via OAuth for both **Anthropic (Claude Code CLI credentials)** and **OpenAI Codex (ChatGPT OAuth)**. Anthropic also supports the **setup-token** flow as a manual fallback. This page explains:
 
 - how the OAuth **token exchange** works (PKCE)
 - where tokens are **stored** (and why)
@@ -49,9 +49,15 @@ Legacy import-only file (still supported, but not the main store):
 
 All of the above also respect `$OPENCLAW_STATE_DIR` (state dir override). Full reference: [/gateway/configuration](/gateway/configuration#auth-storage-oauth--api-keys)
 
-## Anthropic setup-token (subscription auth)
+## Anthropic Claude subscription auth
 
-Run `claude setup-token` on any machine, then paste it into OpenClaw:
+Preferred path (official Claude Code OAuth credentials via local `claude` CLI):
+
+```bash
+openclaw onboard --auth-choice claude-code-cli
+```
+
+Manual fallback path (setup-token):
 
 ```bash
 openclaw models auth setup-token --provider anthropic
@@ -73,15 +79,19 @@ openclaw models status
 
 OpenClaw’s interactive login flows are implemented in `@mariozechner/pi-ai` and wired into the wizards/commands.
 
-### Anthropic (Claude Pro/Max) setup-token
+### Anthropic (Claude Pro/Max): Claude Code OAuth or setup-token
 
-Flow shape:
+Preferred flow shape (Claude Code OAuth):
+
+1. choose `openclaw onboard --auth-choice claude-code-cli`
+2. OpenClaw uses the local `claude` CLI auth context on the gateway host
+3. run Claude models via `claude-cli/*` as primary or fallback
+
+Manual fallback flow shape (setup-token):
 
 1. run `claude setup-token`
 2. paste the token into OpenClaw
 3. store as a token auth profile (no refresh)
-
-The wizard path is `openclaw onboard` → auth choice `setup-token` (Anthropic).
 
 ### OpenAI Codex (ChatGPT OAuth)
 

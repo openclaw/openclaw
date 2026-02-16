@@ -26,6 +26,13 @@ openclaw onboard --flow manual
 openclaw onboard --mode remote --remote-url ws://gateway-host:18789
 ```
 
+Non-interactive Claude Code CLI (use Claude app subscription as primary model):
+
+```bash
+openclaw onboard --non-interactive \
+  --auth-choice claude-code-cli
+```
+
 Non-interactive custom provider:
 
 ```bash

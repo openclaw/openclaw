@@ -1,15 +1,15 @@
 ---
-summary: "Use Anthropic Claude via API keys or setup-token in OpenClaw"
+summary: "Use Anthropic Claude via Claude Code OAuth, API keys, or setup-token in OpenClaw"
 read_when:
   - You want to use Anthropic models in OpenClaw
-  - You want setup-token instead of API keys
+  - You want Claude Code OAuth or setup-token instead of API keys
 title: "Anthropic"
 ---
 
 # Anthropic (Claude)
 
 Anthropic builds the **Claude** model family and provides access via an API.
-In OpenClaw you can authenticate with an API key or a **setup-token**.
+In OpenClaw you can authenticate with **Claude Code OAuth**, an API key, or a **setup-token**.
 
 ## Option A: Anthropic API key
 
@@ -34,6 +34,24 @@ openclaw onboard --anthropic-api-key "$ANTHROPIC_API_KEY"
   agents: { defaults: { model: { primary: "anthropic/claude-opus-4-6" } } },
 }
 ```
+
+## Option B: Claude subscription via Claude Code OAuth
+
+**Best for:** primary Claude subscription auth without an Anthropic API key.
+
+### CLI setup
+
+```bash
+openclaw onboard --auth-choice claude-code-cli
+```
+
+This configures `claude-cli/*` models so OpenClaw can use the official local
+`claude` CLI auth context on the gateway host.
+
+Notes:
+
+- Ensure `claude` is installed, on PATH, and signed in on the gateway host.
+- Use this as primary (`agents.defaults.model.primary = "claude-cli/..."`) or fallback.
 
 ## Prompt caching (Anthropic API)
 
@@ -101,7 +119,7 @@ with `params.context1m: true` for supported Opus/Sonnet models.
 OpenClaw maps this to `anthropic-beta: context-1m-2025-08-07` on Anthropic
 requests.
 
-## Option B: Claude setup-token
+## Option C: Claude setup-token (manual fallback)
 
 **Best for:** using your Claude subscription.
 
