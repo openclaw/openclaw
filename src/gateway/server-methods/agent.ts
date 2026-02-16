@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
-import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestHandlers } from "./types.js";
 import { listAgentIds } from "../../agents/agent-scope.js";
-import { BARE_SESSION_RESET_PROMPT } from "../../auto-reply/reply/session-reset-prompt.js";
 import { agentCommand } from "../../commands/agent.js";
 import { loadConfig } from "../../config/config.js";
 import {
@@ -19,7 +18,7 @@ import {
   resolveAgentDeliveryPlan,
   resolveAgentOutboundTarget,
 } from "../../infra/outbound/agent-delivery.js";
-import { classifySessionKeyShape, normalizeAgentId } from "../../routing/session-key.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
@@ -51,110 +50,9 @@ import {
 import { formatForLog } from "../ws-log.js";
 import { waitForAgentJob } from "./agent-job.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
-import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
-import { sessionsHandlers } from "./sessions.js";
-
-const RESET_COMMAND_RE = /^\/(new|reset)(?:\s+([\s\S]*))?$/i;
-
-function isGatewayErrorShape(value: unknown): value is { code: string; message: string } {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const candidate = value as { code?: unknown; message?: unknown };
-  return typeof candidate.code === "string" && typeof candidate.message === "string";
-}
-
-async function runSessionResetFromAgent(params: {
-  key: string;
-  reason: "new" | "reset";
-  idempotencyKey: string;
-  context: GatewayRequestHandlerOptions["context"];
-  client: GatewayRequestHandlerOptions["client"];
-  isWebchatConnect: GatewayRequestHandlerOptions["isWebchatConnect"];
-}): Promise<
-  | { ok: true; key: string; sessionId?: string }
-  | { ok: false; error: ReturnType<typeof errorShape> }
-> {
-  return await new Promise((resolve) => {
-    let settled = false;
-    const settle = (
-      result:
-        | { ok: true; key: string; sessionId?: string }
-        | { ok: false; error: ReturnType<typeof errorShape> },
-    ) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      resolve(result);
-    };
-
-    const respond: GatewayRequestHandlerOptions["respond"] = (ok, payload, error) => {
-      if (!ok) {
-        settle({
-          ok: false,
-          error: isGatewayErrorShape(error)
-            ? error
-            : errorShape(ErrorCodes.UNAVAILABLE, String(error ?? "sessions.reset failed")),
-        });
-        return;
-      }
-      const payloadObj = payload as
-        | {
-            key?: unknown;
-            entry?: {
-              sessionId?: unknown;
-            };
-          }
-        | undefined;
-      const key = typeof payloadObj?.key === "string" ? payloadObj.key : params.key;
-      const sessionId =
-        payloadObj?.entry && typeof payloadObj.entry.sessionId === "string"
-          ? payloadObj.entry.sessionId
-          : undefined;
-      settle({ ok: true, key, sessionId });
-    };
-
-    const resetResult = sessionsHandlers["sessions.reset"]({
-      req: {
-        type: "req",
-        id: `${params.idempotencyKey}:reset`,
-        method: "sessions.reset",
-      },
-      params: {
-        key: params.key,
-        reason: params.reason,
-      },
-      context: params.context,
-      client: params.client,
-      isWebchatConnect: params.isWebchatConnect,
-      respond,
-    });
-
-    void (async () => {
-      try {
-        await resetResult;
-        if (!settled) {
-          settle({
-            ok: false,
-            error: errorShape(
-              ErrorCodes.UNAVAILABLE,
-              "sessions.reset completed without returning a response",
-            ),
-          });
-        }
-      } catch (err: unknown) {
-        settle({
-          ok: false,
-          error: errorShape(ErrorCodes.UNAVAILABLE, String(err)),
-        });
-      }
-    })();
-  });
-}
 
 export const agentHandlers: GatewayRequestHandlers = {
-  agent: async ({ params, respond, context, client, isWebchatConnect }) => {
+  agent: async ({ params, respond, context, client }) => {
     const p = params;
     if (!validateAgentParams(p)) {
       respond(
@@ -217,7 +115,24 @@ export const agentHandlers: GatewayRequestHandlers = {
       });
       return;
     }
-    const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(request.attachments);
+    const normalizedAttachments =
+      request.attachments
+        ?.map((a) => ({
+          type: typeof a?.type === "string" ? a.type : undefined,
+          mimeType: typeof a?.mimeType === "string" ? a.mimeType : undefined,
+          fileName: typeof a?.fileName === "string" ? a.fileName : undefined,
+          content:
+            typeof a?.content === "string"
+              ? a.content
+              : ArrayBuffer.isView(a?.content)
+                ? Buffer.from(
+                    a.content.buffer,
+                    a.content.byteOffset,
+                    a.content.byteLength,
+                  ).toString("base64")
+                : undefined,
+        }))
+        .filter((a) => a.content) ?? [];
 
     let message = request.message.trim();
     let images: Array<{ type: "image"; data: string; mimeType: string }> = [];
@@ -233,6 +148,31 @@ export const agentHandlers: GatewayRequestHandlers = {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(err)));
         return;
       }
+    }
+
+    // Inject timestamp into messages that don't already have one.
+    // Channel messages (Discord, Telegram, etc.) get timestamps via envelope
+    // formatting in a separate code path — they never reach this handler.
+    // See: https://github.com/moltbot/moltbot/issues/3658
+    message = injectTimestamp(message, timestampOptsFromConfig(cfg));
+
+    // RFC-A2A-RESPONSE-ROUTING: Parse skill_invocation for A2A response routing.
+    // Extract correlationId, returnTo from skill_invocation messages to route
+    // responses back to the caller session.
+    let skillInvocationCorrelationId: string | undefined;
+    let skillInvocationReturnTo: string | undefined;
+    try {
+      const parsed = JSON.parse(message);
+      if (parsed?.kind === "skill_invocation") {
+        if (typeof parsed.correlationId === "string" && parsed.correlationId.trim()) {
+          skillInvocationCorrelationId = parsed.correlationId.trim();
+        }
+        if (typeof parsed.returnTo === "string" && parsed.returnTo.trim()) {
+          skillInvocationReturnTo = parsed.returnTo.trim();
+        }
+      }
+    } catch {
+      // Not JSON or not skill_invocation - ignore
     }
 
     const isKnownGatewayChannel = (value: string): boolean => isGatewayMessageChannel(value);
@@ -276,21 +216,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       typeof request.sessionKey === "string" && request.sessionKey.trim()
         ? request.sessionKey.trim()
         : undefined;
-    if (
-      requestedSessionKeyRaw &&
-      classifySessionKeyShape(requestedSessionKeyRaw) === "malformed_agent"
-    ) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid agent params: malformed session key "${requestedSessionKeyRaw}"`,
-        ),
-      );
-      return;
-    }
-    let requestedSessionKey =
+    const requestedSessionKey =
       requestedSessionKeyRaw ??
       resolveExplicitAgentSessionKey({
         cfg,
@@ -315,43 +241,6 @@ export const agentHandlers: GatewayRequestHandlers = {
     let bestEffortDeliver = false;
     let cfgForAgent: ReturnType<typeof loadConfig> | undefined;
     let resolvedSessionKey = requestedSessionKey;
-    let skipTimestampInjection = false;
-
-    const resetCommandMatch = message.match(RESET_COMMAND_RE);
-    if (resetCommandMatch && requestedSessionKey) {
-      const resetReason = resetCommandMatch[1]?.toLowerCase() === "new" ? "new" : "reset";
-      const resetResult = await runSessionResetFromAgent({
-        key: requestedSessionKey,
-        reason: resetReason,
-        idempotencyKey: idem,
-        context,
-        client,
-        isWebchatConnect,
-      });
-      if (!resetResult.ok) {
-        respond(false, undefined, resetResult.error);
-        return;
-      }
-      requestedSessionKey = resetResult.key;
-      resolvedSessionId = resetResult.sessionId ?? resolvedSessionId;
-      const postResetMessage = resetCommandMatch[2]?.trim() ?? "";
-      if (postResetMessage) {
-        message = postResetMessage;
-      } else {
-        // Keep bare /new and /reset behavior aligned with chat.send:
-        // reset first, then run a fresh-session greeting prompt in-place.
-        message = BARE_SESSION_RESET_PROMPT;
-        skipTimestampInjection = true;
-      }
-    }
-
-    // Inject timestamp into user-authored messages that don't already have one.
-    // Channel messages (Discord, Telegram, etc.) get timestamps via envelope
-    // formatting in a separate code path — they never reach this handler.
-    // See: https://github.com/moltbot/moltbot/issues/3658
-    if (!skipTimestampInjection) {
-      message = injectTimestamp(message, timestampOptsFromConfig(cfg));
-    }
 
     if (requestedSessionKey) {
       const { cfg, storePath, entry, canonicalKey } = loadSessionEntry(requestedSessionKey);
@@ -401,7 +290,6 @@ export const agentHandlers: GatewayRequestHandlers = {
         providerOverride: entry?.providerOverride,
         label: labelValue,
         spawnedBy: spawnedByValue,
-        spawnDepth: entry?.spawnDepth,
         channel: entry?.channel ?? request.channel?.trim(),
         groupId: resolvedGroupId ?? entry?.groupId,
         groupChannel: resolvedGroupChannel ?? entry?.groupChannel,
@@ -587,6 +475,38 @@ export const agentHandlers: GatewayRequestHandlers = {
           ok: true,
           payload,
         });
+
+        // RFC-A2A-RESPONSE-ROUTING: Route response to returnTo session if this was a skill_invocation.
+        // This enables agent_call responses to flow back to the caller session via the gateway
+        // instead of going to a delivery channel.
+        if (skillInvocationReturnTo && skillInvocationCorrelationId) {
+          const payloads = result?.payloads ?? [];
+          const textContent = payloads
+            .map((p: { text?: string }) => p.text)
+            .filter(Boolean)
+            .join("\n");
+          const skillResponse = {
+            kind: "skill_response",
+            correlationId: skillInvocationCorrelationId,
+            output: textContent || result,
+            confidence: 0.5, // Default confidence; agents should output structured JSON with confidence
+            status: "completed" as const,
+            timestamp: Date.now(),
+          };
+
+          // Store in the global responses map keyed by correlationId for later retrieval
+          context.skillResponses.set(skillInvocationCorrelationId, skillResponse);
+
+          // Store in session-scoped map for efficient session-level queries
+          const sessionResponses =
+            context.skillResponsesBySession.get(skillInvocationReturnTo) ?? [];
+          sessionResponses.push(skillResponse);
+          context.skillResponsesBySession.set(skillInvocationReturnTo, sessionResponses);
+
+          // Deliver to the returnTo session via gateway node messaging
+          context.nodeSendToSession(skillInvocationReturnTo, "skill_response", skillResponse);
+        }
+
         // Send a second res frame (same id) so TS clients with expectFinal can wait.
         // Swift clients will typically treat the first res as the result and ignore this.
         respond(true, payload, undefined, { runId });
@@ -604,6 +524,29 @@ export const agentHandlers: GatewayRequestHandlers = {
           payload,
           error,
         });
+
+        // RFC-A2A-RESPONSE-ROUTING: Route error to returnTo session if this was a skill_invocation.
+        if (skillInvocationReturnTo && skillInvocationCorrelationId) {
+          const skillResponse = {
+            kind: "skill_response",
+            correlationId: skillInvocationCorrelationId,
+            error: String(err),
+            status: "error" as const,
+            timestamp: Date.now(),
+          };
+
+          // Store in the global responses map keyed by correlationId for later retrieval
+          context.skillResponses.set(skillInvocationCorrelationId, skillResponse);
+
+          // Store in session-scoped map for efficient session-level queries
+          const sessionResponses =
+            context.skillResponsesBySession.get(skillInvocationReturnTo) ?? [];
+          sessionResponses.push(skillResponse);
+          context.skillResponsesBySession.set(skillInvocationReturnTo, sessionResponses);
+
+          context.nodeSendToSession(skillInvocationReturnTo, "skill_response", skillResponse);
+        }
+
         respond(false, payload, error, {
           runId,
           error: formatForLog(err),
@@ -629,17 +572,6 @@ export const agentHandlers: GatewayRequestHandlers = {
     const sessionKeyRaw = typeof p.sessionKey === "string" ? p.sessionKey.trim() : "";
     let agentId = agentIdRaw ? normalizeAgentId(agentIdRaw) : undefined;
     if (sessionKeyRaw) {
-      if (classifySessionKeyShape(sessionKeyRaw) === "malformed_agent") {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `invalid agent.identity.get params: malformed session key "${sessionKeyRaw}"`,
-          ),
-        );
-        return;
-      }
       const resolved = resolveAgentIdFromSessionKey(sessionKeyRaw);
       if (agentId && resolved !== agentId) {
         respond(

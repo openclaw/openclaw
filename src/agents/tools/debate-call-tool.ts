@@ -218,7 +218,9 @@ async function invokeAgentSkill(params: {
   });
 
   const messages = Array.isArray(history?.messages) ? history.messages : [];
-  const lastAssistant = messages.filter((m: any) => m?.role === "assistant").pop() as any;
+  const lastAssistant = messages
+    .filter((m: unknown) => (m as { role?: string })?.role === "assistant")
+    .pop() as { content?: unknown } | undefined;
 
   // Use canonical helper to extract text from content blocks
   const raw = extractAssistantText(lastAssistant) ?? "";

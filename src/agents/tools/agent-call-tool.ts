@@ -185,7 +185,7 @@ export function createAgentCallTool(opts?: {
       const input = params.input as Record<string, unknown>;
       const mode = readStringParam(params, "mode") ?? "execute";
       const timeoutSeconds = readNumberParam(params, "timeoutSeconds");
-      const instance = readStringParam(params, "instance"); // Future: federation
+      const _instance = readStringParam(params, "instance"); // Future: federation
 
       // Fix 1: Agent ID validation (must happen early to prevent injection)
       let agentId: string;

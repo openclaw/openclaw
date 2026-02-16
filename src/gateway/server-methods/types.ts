@@ -26,6 +26,16 @@ export type RespondFn = (
   meta?: Record<string, unknown>,
 ) => void;
 
+export type SkillResponse = {
+  correlationId: string;
+  returnToSessionKey: string;
+  output: unknown;
+  confidence?: number;
+  status: "completed" | "error";
+  error?: string;
+  timestamp: number;
+};
+
 export type GatewayRequestContext = {
   deps: ReturnType<typeof createDefaultDeps>;
   cron: CronService;
@@ -83,6 +93,10 @@ export type GatewayRequestContext = {
     prompter: import("../../wizard/prompts.js").WizardPrompter,
   ) => Promise<void>;
   broadcastVoiceWakeChanged: (triggers: string[]) => void;
+  /** RFC-A2A-RESPONSE-ROUTING: Store for pending skill responses keyed by correlationId */
+  skillResponses: Map<string, SkillResponse>;
+  /** RFC-A2A-RESPONSE-ROUTING: Store for skill responses keyed by sessionKey (for session-scoped retrieval) */
+  skillResponsesBySession: Map<string, SkillResponse[]>;
 };
 
 export type GatewayRequestOptions = {
