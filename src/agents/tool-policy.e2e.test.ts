@@ -13,6 +13,21 @@ import {
   TOOL_GROUPS,
 } from "./tool-policy.js";
 
+function createOwnerPolicyTools() {
+  return [
+    {
+      name: "read",
+      // oxlint-disable-next-line typescript/no-explicit-any
+      execute: async () => ({ content: [], details: {} }) as any,
+    },
+    {
+      name: "whatsapp_login",
+      // oxlint-disable-next-line typescript/no-explicit-any
+      execute: async () => ({ content: [], details: {} }) as any,
+    },
+  ] as unknown as AnyAgentTool[];
+}
+
 describe("tool-policy", () => {
   it("expands groups and normalizes aliases", () => {
     const expanded = expandToolGroups(["group:runtime", "BASH", "apply-patch", "group:fs"]);
@@ -52,37 +67,13 @@ describe("tool-policy", () => {
   });
 
   it("strips owner-only tools for non-owner senders", async () => {
-    const tools = [
-      {
-        name: "read",
-        // oxlint-disable-next-line typescript/no-explicit-any
-        execute: async () => ({ content: [], details: {} }) as any,
-      },
-      {
-        name: "whatsapp_login",
-        // oxlint-disable-next-line typescript/no-explicit-any
-        execute: async () => ({ content: [], details: {} }) as any,
-      },
-    ] as unknown as AnyAgentTool[];
-
+    const tools = createOwnerPolicyTools();
     const filtered = applyOwnerOnlyToolPolicy(tools, false);
     expect(filtered.map((t) => t.name)).toEqual(["read"]);
   });
 
   it("keeps owner-only tools for the owner sender", async () => {
-    const tools = [
-      {
-        name: "read",
-        // oxlint-disable-next-line typescript/no-explicit-any
-        execute: async () => ({ content: [], details: {} }) as any,
-      },
-      {
-        name: "whatsapp_login",
-        // oxlint-disable-next-line typescript/no-explicit-any
-        execute: async () => ({ content: [], details: {} }) as any,
-      },
-    ] as unknown as AnyAgentTool[];
-
+    const tools = createOwnerPolicyTools();
     const filtered = applyOwnerOnlyToolPolicy(tools, true);
     expect(filtered.map((t) => t.name)).toEqual(["read", "whatsapp_login"]);
   });

@@ -47,6 +47,30 @@ vi.mock("./onboard-helpers.js", async (importActual) => {
 
 import { promptGatewayConfig } from "./configure.gateway.js";
 
+function makeRuntime(): RuntimeEnv {
+  return {
+    log: vi.fn(),
+    error: vi.fn(),
+    exit: vi.fn(),
+  };
+}
+
+async function runTrustedProxyPrompt(textQueue: Array<string | undefined>) {
+  vi.clearAllMocks();
+  mocks.resolveGatewayPort.mockReturnValue(18789);
+  const selectQueue = ["loopback", "trusted-proxy", "off"];
+  mocks.select.mockImplementation(async () => selectQueue.shift());
+  mocks.text.mockImplementation(async () => textQueue.shift());
+  mocks.buildGatewayAuthConfig.mockImplementation(({ mode, trustedProxy }) => ({
+    mode,
+    trustedProxy,
+  }));
+
+  const result = await promptGatewayConfig({}, makeRuntime());
+  const call = mocks.buildGatewayAuthConfig.mock.calls[0]?.[0];
+  return { result, call };
+}
+
 describe("promptGatewayConfig", () => {
   it("generates a token when the prompt returns undefined", async () => {
     mocks.resolveGatewayPort.mockReturnValue(18789);
@@ -99,33 +123,13 @@ describe("promptGatewayConfig", () => {
   });
 
   it("prompts for trusted-proxy configuration when trusted-proxy mode selected", async () => {
-    vi.clearAllMocks();
-    mocks.resolveGatewayPort.mockReturnValue(18789);
-    // Flow: loopback bind → trusted-proxy auth → tailscale off
-    const selectQueue = ["loopback", "trusted-proxy", "off"];
-    mocks.select.mockImplementation(async () => selectQueue.shift());
-    // Port prompt, userHeader, requiredHeaders, allowUsers, trustedProxies
-    const textQueue = [
+    const { result, call } = await runTrustedProxyPrompt([
       "18789",
       "x-forwarded-user",
       "x-forwarded-proto,x-forwarded-host",
       "nick@example.com",
       "10.0.1.10,192.168.1.5",
-    ];
-    mocks.text.mockImplementation(async () => textQueue.shift());
-    mocks.buildGatewayAuthConfig.mockImplementation(({ mode, trustedProxy }) => ({
-      mode,
-      trustedProxy,
-    }));
-
-    const runtime: RuntimeEnv = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
-
-    const result = await promptGatewayConfig({}, runtime);
-    const call = mocks.buildGatewayAuthConfig.mock.calls[0]?.[0];
+    ]);
 
     expect(call?.mode).toBe("trusted-proxy");
     expect(call?.trustedProxy).toEqual({
@@ -138,26 +142,13 @@ describe("promptGatewayConfig", () => {
   });
 
   it("handles trusted-proxy with no optional fields", async () => {
-    vi.clearAllMocks();
-    mocks.resolveGatewayPort.mockReturnValue(18789);
-    const selectQueue = ["loopback", "trusted-proxy", "off"];
-    mocks.select.mockImplementation(async () => selectQueue.shift());
-    // Port prompt, userHeader (only required), empty requiredHeaders, empty allowUsers, trustedProxies
-    const textQueue = ["18789", "x-remote-user", "", "", "10.0.0.1"];
-    mocks.text.mockImplementation(async () => textQueue.shift());
-    mocks.buildGatewayAuthConfig.mockImplementation(({ mode, trustedProxy }) => ({
-      mode,
-      trustedProxy,
-    }));
-
-    const runtime: RuntimeEnv = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
-
-    const result = await promptGatewayConfig({}, runtime);
-    const call = mocks.buildGatewayAuthConfig.mock.calls[0]?.[0];
+    const { result, call } = await runTrustedProxyPrompt([
+      "18789",
+      "x-remote-user",
+      "",
+      "",
+      "10.0.0.1",
+    ]);
 
     expect(call?.mode).toBe("trusted-proxy");
     expect(call?.trustedProxy).toEqual({

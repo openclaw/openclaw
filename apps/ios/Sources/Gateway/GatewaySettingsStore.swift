@@ -4,6 +4,7 @@ import os
 enum GatewaySettingsStore {
     private static let gatewayService = "ai.openclaw.gateway"
     private static let nodeService = "ai.openclaw.node"
+    private static let talkService = "ai.openclaw.talk"
 
     private static let instanceIdDefaultsKey = "node.instanceId"
     private static let preferredGatewayStableIDDefaultsKey = "gateway.preferredStableID"
@@ -24,6 +25,7 @@ enum GatewaySettingsStore {
     private static let instanceIdAccount = "instanceId"
     private static let preferredGatewayStableIDAccount = "preferredStableID"
     private static let lastDiscoveredGatewayStableIDAccount = "lastDiscoveredStableID"
+    private static let talkElevenLabsApiKeyAccount = "elevenlabs.apiKey"
 
     static func bootstrapPersistence() {
         self.ensureStableInstanceID()
@@ -141,6 +143,27 @@ enum GatewaySettingsStore {
     private enum LastGatewayKind: String {
         case manual
         case discovered
+    }
+
+    static func loadTalkElevenLabsApiKey() -> String? {
+        let value = KeychainStore.loadString(
+            service: self.talkService,
+            account: self.talkElevenLabsApiKeyAccount)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if value?.isEmpty == false { return value }
+        return nil
+    }
+
+    static func saveTalkElevenLabsApiKey(_ apiKey: String?) {
+        let trimmed = apiKey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if trimmed.isEmpty {
+            _ = KeychainStore.delete(service: self.talkService, account: self.talkElevenLabsApiKeyAccount)
+            return
+        }
+        _ = KeychainStore.saveString(
+            trimmed,
+            service: self.talkService,
+            account: self.talkElevenLabsApiKeyAccount)
     }
 
     static func saveLastGatewayConnectionManual(host: String, port: Int, useTLS: Bool, stableID: String) {

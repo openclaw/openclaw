@@ -22,6 +22,21 @@ let configOverride: ReturnType<(typeof import("../config/config.js"))["loadConfi
     scope: "per-sender",
   },
 };
+const defaultOutcomeAnnounce = {
+  task: "do thing",
+  timeoutMs: 1000,
+  cleanup: "keep" as const,
+  waitForCompletion: false,
+  startedAt: 10,
+  endedAt: 20,
+  outcome: { status: "ok" } as const,
+};
+
+async function getSingleAgentCallParams() {
+  await expect.poll(() => agentSpy.mock.calls.length).toBe(1);
+  const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+  return call?.params ?? {};
+}
 
 function loadSessionStoreFixture(): Record<string, Record<string, unknown>> {
   return new Proxy(sessionStore, {
@@ -150,13 +165,7 @@ describe("subagent announce formatting", () => {
       childRunId: "run-456",
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "main",
-      task: "do thing",
-      timeoutMs: 1000,
-      cleanup: "keep",
-      waitForCompletion: false,
-      startedAt: 10,
-      endedAt: 20,
-      outcome: { status: "ok" },
+      ...defaultOutcomeAnnounce,
     });
 
     const call = agentSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
@@ -171,13 +180,7 @@ describe("subagent announce formatting", () => {
       childRunId: "run-direct-idem",
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "main",
-      task: "do thing",
-      timeoutMs: 1000,
-      cleanup: "keep",
-      waitForCompletion: false,
-      startedAt: 10,
-      endedAt: 20,
-      outcome: { status: "ok" },
+      ...defaultOutcomeAnnounce,
     });
 
     const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
@@ -205,13 +208,7 @@ describe("subagent announce formatting", () => {
       childRunId: "run-usage",
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "main",
-      task: "do thing",
-      timeoutMs: 1000,
-      cleanup: "keep",
-      waitForCompletion: false,
-      startedAt: 10,
-      endedAt: 20,
-      outcome: { status: "ok" },
+      ...defaultOutcomeAnnounce,
     });
 
     const call = agentSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
@@ -248,13 +245,7 @@ describe("subagent announce formatting", () => {
       childRunId: "run-789",
       requesterSessionKey: "main",
       requesterDisplayKey: "main",
-      task: "do thing",
-      timeoutMs: 1000,
-      cleanup: "keep",
-      waitForCompletion: false,
-      startedAt: 10,
-      endedAt: 20,
-      outcome: { status: "ok" },
+      ...defaultOutcomeAnnounce,
     });
 
     expect(didAnnounce).toBe(true);
@@ -285,22 +276,14 @@ describe("subagent announce formatting", () => {
       childRunId: "run-999",
       requesterSessionKey: "main",
       requesterDisplayKey: "main",
-      task: "do thing",
-      timeoutMs: 1000,
-      cleanup: "keep",
-      waitForCompletion: false,
-      startedAt: 10,
-      endedAt: 20,
-      outcome: { status: "ok" },
+      ...defaultOutcomeAnnounce,
     });
 
     expect(didAnnounce).toBe(true);
-    await expect.poll(() => agentSpy.mock.calls.length).toBe(1);
-
-    const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
-    expect(call?.params?.channel).toBe("whatsapp");
-    expect(call?.params?.to).toBe("+1555");
-    expect(call?.params?.accountId).toBe("kev");
+    const params = await getSingleAgentCallParams();
+    expect(params.channel).toBe("whatsapp");
+    expect(params.to).toBe("+1555");
+    expect(params.accountId).toBe("kev");
   });
 
   it("keeps queued idempotency unique for same-ms distinct child runs", async () => {
@@ -376,13 +359,7 @@ describe("subagent announce formatting", () => {
       requesterSessionKey: "agent:main:subagent:orchestrator",
       requesterDisplayKey: "agent:main:subagent:orchestrator",
       requesterOrigin: { channel: "whatsapp", to: "+1555", accountId: "acct" },
-      task: "do thing",
-      timeoutMs: 1000,
-      cleanup: "keep",
-      waitForCompletion: false,
-      startedAt: 10,
-      endedAt: 20,
-      outcome: { status: "ok" },
+      ...defaultOutcomeAnnounce,
     });
 
     expect(didAnnounce).toBe(true);
@@ -415,22 +392,14 @@ describe("subagent announce formatting", () => {
       childRunId: "run-thread",
       requesterSessionKey: "main",
       requesterDisplayKey: "main",
-      task: "do thing",
-      timeoutMs: 1000,
-      cleanup: "keep",
-      waitForCompletion: false,
-      startedAt: 10,
-      endedAt: 20,
-      outcome: { status: "ok" },
+      ...defaultOutcomeAnnounce,
     });
 
     expect(didAnnounce).toBe(true);
-    await expect.poll(() => agentSpy.mock.calls.length).toBe(1);
-
-    const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
-    expect(call?.params?.channel).toBe("telegram");
-    expect(call?.params?.to).toBe("telegram:123");
-    expect(call?.params?.threadId).toBe("42");
+    const params = await getSingleAgentCallParams();
+    expect(params.channel).toBe("telegram");
+    expect(params.to).toBe("telegram:123");
+    expect(params.threadId).toBe("42");
   });
 
   it("prefers requesterOrigin.threadId over session entry threadId", async () => {
@@ -458,13 +427,7 @@ describe("subagent announce formatting", () => {
         to: "telegram:123",
         threadId: 99,
       },
-      task: "do thing",
-      timeoutMs: 1000,
-      cleanup: "keep",
-      waitForCompletion: false,
-      startedAt: 10,
-      endedAt: 20,
-      outcome: { status: "ok" },
+      ...defaultOutcomeAnnounce,
     });
 
     expect(didAnnounce).toBe(true);
@@ -495,13 +458,7 @@ describe("subagent announce formatting", () => {
         requesterSessionKey: "main",
         requesterDisplayKey: "main",
         requesterOrigin: { accountId: "acct-a" },
-        task: "do thing",
-        timeoutMs: 1000,
-        cleanup: "keep",
-        waitForCompletion: false,
-        startedAt: 10,
-        endedAt: 20,
-        outcome: { status: "ok" },
+        ...defaultOutcomeAnnounce,
       }),
       runSubagentAnnounceFlow({
         childSessionKey: "agent:main:subagent:test-b",
@@ -509,13 +466,7 @@ describe("subagent announce formatting", () => {
         requesterSessionKey: "main",
         requesterDisplayKey: "main",
         requesterOrigin: { accountId: "acct-b" },
-        task: "do thing",
-        timeoutMs: 1000,
-        cleanup: "keep",
-        waitForCompletion: false,
-        startedAt: 10,
-        endedAt: 20,
-        outcome: { status: "ok" },
+        ...defaultOutcomeAnnounce,
       }),
     ]);
 
@@ -538,13 +489,7 @@ describe("subagent announce formatting", () => {
       requesterSessionKey: "agent:main:main",
       requesterOrigin: { channel: "whatsapp", accountId: "acct-123" },
       requesterDisplayKey: "main",
-      task: "do thing",
-      timeoutMs: 1000,
-      cleanup: "keep",
-      waitForCompletion: false,
-      startedAt: 10,
-      endedAt: 20,
-      outcome: { status: "ok" },
+      ...defaultOutcomeAnnounce,
     });
 
     expect(didAnnounce).toBe(true);
@@ -568,13 +513,7 @@ describe("subagent announce formatting", () => {
       requesterSessionKey: "agent:main:subagent:orchestrator",
       requesterOrigin: { channel: "whatsapp", accountId: "acct-123", to: "+1555" },
       requesterDisplayKey: "agent:main:subagent:orchestrator",
-      task: "do thing",
-      timeoutMs: 1000,
-      cleanup: "keep",
-      waitForCompletion: false,
-      startedAt: 10,
-      endedAt: 20,
-      outcome: { status: "ok" },
+      ...defaultOutcomeAnnounce,
     });
 
     expect(didAnnounce).toBe(true);
@@ -632,13 +571,7 @@ describe("subagent announce formatting", () => {
       childRunId: "run-child",
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "main",
-      task: "do thing",
-      timeoutMs: 1000,
-      cleanup: "keep",
-      waitForCompletion: false,
-      startedAt: 10,
-      endedAt: 20,
-      outcome: { status: "ok" },
+      ...defaultOutcomeAnnounce,
     });
 
     const call = agentSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
@@ -661,13 +594,7 @@ describe("subagent announce formatting", () => {
       childRunId: "run-parent",
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "main",
-      task: "do thing",
-      timeoutMs: 1000,
-      cleanup: "keep",
-      waitForCompletion: false,
-      startedAt: 10,
-      endedAt: 20,
-      outcome: { status: "ok" },
+      ...defaultOutcomeAnnounce,
     });
 
     expect(didAnnounce).toBe(false);
@@ -687,13 +614,7 @@ describe("subagent announce formatting", () => {
       childRunId: "run-leaf",
       requesterSessionKey: "agent:main:subagent:orchestrator",
       requesterDisplayKey: "agent:main:subagent:orchestrator",
-      task: "do thing",
-      timeoutMs: 1000,
-      cleanup: "keep",
-      waitForCompletion: false,
-      startedAt: 10,
-      endedAt: 20,
-      outcome: { status: "ok" },
+      ...defaultOutcomeAnnounce,
     });
 
     expect(didAnnounce).toBe(true);
@@ -771,13 +692,7 @@ describe("subagent announce formatting", () => {
       requesterSessionKey: "agent:main:main",
       requesterOrigin: { channel: " whatsapp ", accountId: " acct-987 " },
       requesterDisplayKey: "main",
-      task: "do thing",
-      timeoutMs: 1000,
-      cleanup: "keep",
-      waitForCompletion: false,
-      startedAt: 10,
-      endedAt: 20,
-      outcome: { status: "ok" },
+      ...defaultOutcomeAnnounce,
     });
 
     expect(didAnnounce).toBe(true);
@@ -806,13 +721,7 @@ describe("subagent announce formatting", () => {
       requesterSessionKey: "main",
       requesterOrigin: { channel: "bluebubbles", to: "bluebubbles:chat_guid:123" },
       requesterDisplayKey: "main",
-      task: "do thing",
-      timeoutMs: 1000,
-      cleanup: "keep",
-      waitForCompletion: false,
-      startedAt: 10,
-      endedAt: 20,
-      outcome: { status: "ok" },
+      ...defaultOutcomeAnnounce,
     });
 
     expect(didAnnounce).toBe(true);

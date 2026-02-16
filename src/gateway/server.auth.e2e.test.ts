@@ -63,10 +63,75 @@ function restoreGatewayToken(prevToken: string | undefined) {
   }
 }
 
+const TEST_OPERATOR_CLIENT = {
+  id: GATEWAY_CLIENT_NAMES.TEST,
+  version: "1.0.0",
+  platform: "test",
+  mode: GATEWAY_CLIENT_MODES.TEST,
+};
+
+function resolveGatewayTokenOrEnv(): string {
+  const token =
+    typeof (testState.gatewayAuth as { token?: unknown } | undefined)?.token === "string"
+      ? ((testState.gatewayAuth as { token?: string }).token ?? undefined)
+      : process.env.OPENCLAW_GATEWAY_TOKEN;
+  expect(typeof token).toBe("string");
+  return String(token ?? "");
+}
+
+async function approvePendingPairingIfNeeded() {
+  const { approveDevicePairing, listDevicePairing } = await import("../infra/device-pairing.js");
+  const list = await listDevicePairing();
+  const pending = list.pending.at(0);
+  expect(pending?.requestId).toBeDefined();
+  if (pending?.requestId) {
+    await approveDevicePairing(pending.requestId);
+  }
+}
+
+function isConnectResMessage(id: string) {
+  return (o: unknown) => {
+    if (!o || typeof o !== "object" || Array.isArray(o)) {
+      return false;
+    }
+    const rec = o as Record<string, unknown>;
+    return rec.type === "res" && rec.id === id;
+  };
+}
+
+async function sendRawConnectReq(
+  ws: WebSocket,
+  params: {
+    id: string;
+    token?: string;
+    device: { id: string; publicKey: string; signature: string; signedAt: number; nonce?: string };
+  },
+) {
+  ws.send(
+    JSON.stringify({
+      type: "req",
+      id: params.id,
+      method: "connect",
+      params: {
+        minProtocol: PROTOCOL_VERSION,
+        maxProtocol: PROTOCOL_VERSION,
+        client: TEST_OPERATOR_CLIENT,
+        caps: [],
+        role: "operator",
+        auth: params.token ? { token: params.token } : undefined,
+        device: params.device,
+      },
+    }),
+  );
+  return onceMessage<{ ok: boolean; payload?: unknown; error?: { message?: string } }>(
+    ws,
+    isConnectResMessage(params.id),
+  );
+}
+
 async function startRateLimitedTokenServerWithPairedDeviceToken() {
   const { loadOrCreateDeviceIdentity } = await import("../infra/device-identity.js");
-  const { approveDevicePairing, getPairedDevice, listDevicePairing } =
-    await import("../infra/device-pairing.js");
+  const { getPairedDevice } = await import("../infra/device-pairing.js");
 
   testState.gatewayAuth = {
     mode: "token",
@@ -79,12 +144,7 @@ async function startRateLimitedTokenServerWithPairedDeviceToken() {
   try {
     const initial = await connectReq(ws, { token: "secret" });
     if (!initial.ok) {
-      const list = await listDevicePairing();
-      const pending = list.pending.at(0);
-      expect(pending?.requestId).toBeDefined();
-      if (pending?.requestId) {
-        await approveDevicePairing(pending.requestId);
-      }
+      await approvePendingPairingIfNeeded();
     }
 
     const identity = loadOrCreateDeviceIdentity();
@@ -100,6 +160,25 @@ async function startRateLimitedTokenServerWithPairedDeviceToken() {
     restoreGatewayToken(prevToken);
     throw err;
   }
+}
+
+async function ensurePairedDeviceTokenForCurrentIdentity(ws: WebSocket): Promise<{
+  identity: { deviceId: string };
+  deviceToken: string;
+}> {
+  const { loadOrCreateDeviceIdentity } = await import("../infra/device-identity.js");
+  const { getPairedDevice } = await import("../infra/device-pairing.js");
+
+  const res = await connectReq(ws, { token: "secret" });
+  if (!res.ok) {
+    await approvePendingPairingIfNeeded();
+  }
+
+  const identity = loadOrCreateDeviceIdentity();
+  const paired = await getPairedDevice(identity.deviceId);
+  const deviceToken = paired?.tokens?.operator?.token;
+  expect(deviceToken).toBeDefined();
+  return { identity: { deviceId: identity.deviceId }, deviceToken: String(deviceToken ?? "") };
 }
 
 describe("gateway server auth/connect", () => {
@@ -179,11 +258,7 @@ describe("gateway server auth/connect", () => {
 
     test("does not grant admin when scopes are omitted", async () => {
       const ws = await openWs(port);
-      const token =
-        typeof (testState.gatewayAuth as { token?: unknown } | undefined)?.token === "string"
-          ? ((testState.gatewayAuth as { token?: string }).token ?? undefined)
-          : process.env.OPENCLAW_GATEWAY_TOKEN;
-      expect(typeof token).toBe("string");
+      const token = resolveGatewayTokenOrEnv();
 
       const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem, signDevicePayload } =
         await import("../infra/device-identity.js");
@@ -202,7 +277,7 @@ describe("gateway server auth/connect", () => {
         role: "operator",
         scopes: [],
         signedAtMs,
-        token: token ?? null,
+        token,
       });
       const device = {
         id: identity.deviceId,
@@ -211,33 +286,10 @@ describe("gateway server auth/connect", () => {
         signedAt: signedAtMs,
       };
 
-      ws.send(
-        JSON.stringify({
-          type: "req",
-          id: "c-no-scopes",
-          method: "connect",
-          params: {
-            minProtocol: PROTOCOL_VERSION,
-            maxProtocol: PROTOCOL_VERSION,
-            client: {
-              id: GATEWAY_CLIENT_NAMES.TEST,
-              version: "1.0.0",
-              platform: "test",
-              mode: GATEWAY_CLIENT_MODES.TEST,
-            },
-            caps: [],
-            role: "operator",
-            auth: token ? { token } : undefined,
-            device,
-          },
-        }),
-      );
-      const connectRes = await onceMessage<{ ok: boolean; payload?: unknown }>(ws, (o) => {
-        if (!o || typeof o !== "object" || Array.isArray(o)) {
-          return false;
-        }
-        const rec = o as Record<string, unknown>;
-        return rec.type === "res" && rec.id === "c-no-scopes";
+      const connectRes = await sendRawConnectReq(ws, {
+        id: "c-no-scopes",
+        token,
+        device,
       });
       expect(connectRes.ok).toBe(true);
       const helloOk = connectRes.payload as
@@ -264,11 +316,7 @@ describe("gateway server auth/connect", () => {
 
     test("rejects device signature when scopes are omitted but signed with admin", async () => {
       const ws = await openWs(port);
-      const token =
-        typeof (testState.gatewayAuth as { token?: unknown } | undefined)?.token === "string"
-          ? ((testState.gatewayAuth as { token?: string }).token ?? undefined)
-          : process.env.OPENCLAW_GATEWAY_TOKEN;
-      expect(typeof token).toBe("string");
+      const token = resolveGatewayTokenOrEnv();
 
       const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem, signDevicePayload } =
         await import("../infra/device-identity.js");
@@ -281,7 +329,7 @@ describe("gateway server auth/connect", () => {
         role: "operator",
         scopes: ["operator.admin"],
         signedAtMs,
-        token: token ?? null,
+        token,
       });
       const device = {
         id: identity.deviceId,
@@ -290,37 +338,11 @@ describe("gateway server auth/connect", () => {
         signedAt: signedAtMs,
       };
 
-      ws.send(
-        JSON.stringify({
-          type: "req",
-          id: "c-no-scopes-signed-admin",
-          method: "connect",
-          params: {
-            minProtocol: PROTOCOL_VERSION,
-            maxProtocol: PROTOCOL_VERSION,
-            client: {
-              id: GATEWAY_CLIENT_NAMES.TEST,
-              version: "1.0.0",
-              platform: "test",
-              mode: GATEWAY_CLIENT_MODES.TEST,
-            },
-            caps: [],
-            role: "operator",
-            auth: token ? { token } : undefined,
-            device,
-          },
-        }),
-      );
-      const connectRes = await onceMessage<{ ok: boolean; error?: { message?: string } }>(
-        ws,
-        (o) => {
-          if (!o || typeof o !== "object" || Array.isArray(o)) {
-            return false;
-          }
-          const rec = o as Record<string, unknown>;
-          return rec.type === "res" && rec.id === "c-no-scopes-signed-admin";
-        },
-      );
+      const connectRes = await sendRawConnectReq(ws, {
+        id: "c-no-scopes-signed-admin",
+        token,
+        device,
+      });
       expect(connectRes.ok).toBe(false);
       expect(connectRes.error?.message ?? "").toContain("device signature invalid");
       await new Promise<void>((resolve) => ws.once("close", () => resolve()));
@@ -712,24 +734,8 @@ describe("gateway server auth/connect", () => {
   });
 
   test("accepts device token auth for paired device", async () => {
-    const { loadOrCreateDeviceIdentity } = await import("../infra/device-identity.js");
-    const { approveDevicePairing, getPairedDevice, listDevicePairing } =
-      await import("../infra/device-pairing.js");
     const { server, ws, port, prevToken } = await startServerWithClient("secret");
-    const res = await connectReq(ws, { token: "secret" });
-    if (!res.ok) {
-      const list = await listDevicePairing();
-      const pending = list.pending.at(0);
-      expect(pending?.requestId).toBeDefined();
-      if (pending?.requestId) {
-        await approveDevicePairing(pending.requestId);
-      }
-    }
-
-    const identity = loadOrCreateDeviceIdentity();
-    const paired = await getPairedDevice(identity.deviceId);
-    const deviceToken = paired?.tokens?.operator?.token;
-    expect(deviceToken).toBeDefined();
+    const { deviceToken } = await ensurePairedDeviceTokenForCurrentIdentity(ws);
 
     ws.close();
 
@@ -810,10 +816,7 @@ describe("gateway server auth/connect", () => {
     const { buildDeviceAuthPayload } = await import("./device-auth.js");
     const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem, signDevicePayload } =
       await import("../infra/device-identity.js");
-    const { approveDevicePairing, getPairedDevice, listDevicePairing } =
-      await import("../infra/device-pairing.js");
-    const { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } =
-      await import("../utils/message-channel.js");
+    const { getPairedDevice } = await import("../infra/device-pairing.js");
     const { server, ws, port, prevToken } = await startServerWithClient("secret");
     const identityDir = await mkdtemp(join(tmpdir(), "openclaw-device-scope-"));
     const identity = loadOrCreateDeviceIdentity(join(identityDir, "device.json"));
@@ -848,12 +851,7 @@ describe("gateway server auth/connect", () => {
       device: buildDevice(["operator.read"]),
     });
     if (!initial.ok) {
-      const list = await listDevicePairing();
-      const pending = list.pending.at(0);
-      expect(pending?.requestId).toBeDefined();
-      if (pending?.requestId) {
-        await approveDevicePairing(pending.requestId);
-      }
+      await approvePendingPairingIfNeeded();
     }
 
     let paired = await getPairedDevice(identity.deviceId);
@@ -883,24 +881,9 @@ describe("gateway server auth/connect", () => {
   });
 
   test("rejects revoked device token", async () => {
-    const { loadOrCreateDeviceIdentity } = await import("../infra/device-identity.js");
-    const { approveDevicePairing, getPairedDevice, listDevicePairing, revokeDeviceToken } =
-      await import("../infra/device-pairing.js");
+    const { revokeDeviceToken } = await import("../infra/device-pairing.js");
     const { server, ws, port, prevToken } = await startServerWithClient("secret");
-    const res = await connectReq(ws, { token: "secret" });
-    if (!res.ok) {
-      const list = await listDevicePairing();
-      const pending = list.pending.at(0);
-      expect(pending?.requestId).toBeDefined();
-      if (pending?.requestId) {
-        await approveDevicePairing(pending.requestId);
-      }
-    }
-
-    const identity = loadOrCreateDeviceIdentity();
-    const paired = await getPairedDevice(identity.deviceId);
-    const deviceToken = paired?.tokens?.operator?.token;
-    expect(deviceToken).toBeDefined();
+    const { identity, deviceToken } = await ensurePairedDeviceTokenForCurrentIdentity(ws);
 
     await revokeDeviceToken({ deviceId: identity.deviceId, role: "operator" });
 
