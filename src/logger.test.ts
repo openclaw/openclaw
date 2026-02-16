@@ -6,7 +6,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "./runtime.js";
 import { isVerbose, isYes, logVerbose, setVerbose, setYes } from "./globals.js";
 import { logDebug, logError, logInfo, logSuccess, logWarn } from "./logger.js";
-import { DEFAULT_LOG_DIR, resetLogger, setLoggerOverride } from "./logging.js";
+import {
+  DEFAULT_LOG_DIR,
+  resetLogger,
+  setLoggerOverride,
+  stripRedundantSubsystemPrefixForConsole,
+} from "./logging.js";
 
 describe("logger helpers", () => {
   afterEach(() => {
@@ -113,6 +118,34 @@ describe("globals", () => {
     expect(isYes()).toBe(true);
     setYes(false);
     expect(isYes()).toBe(false);
+  });
+});
+
+describe("stripRedundantSubsystemPrefixForConsole", () => {
+  it("drops '<subsystem>:' prefix", () => {
+    expect(stripRedundantSubsystemPrefixForConsole("discord: hello", "discord")).toBe("hello");
+  });
+
+  it("drops '<Subsystem>:' prefix case-insensitively", () => {
+    expect(stripRedundantSubsystemPrefixForConsole("WhatsApp: hello", "whatsapp")).toBe("hello");
+  });
+
+  it("drops '<subsystem> ' prefix", () => {
+    expect(stripRedundantSubsystemPrefixForConsole("discord gateway: closed", "discord")).toBe(
+      "gateway: closed",
+    );
+  });
+
+  it("drops '[subsystem]' prefix", () => {
+    expect(stripRedundantSubsystemPrefixForConsole("[discord] connection stalled", "discord")).toBe(
+      "connection stalled",
+    );
+  });
+
+  it("keeps messages that do not start with the subsystem", () => {
+    expect(stripRedundantSubsystemPrefixForConsole("discordant: hello", "discord")).toBe(
+      "discordant: hello",
+    );
   });
 });
 
