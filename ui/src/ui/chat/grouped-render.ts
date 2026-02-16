@@ -1,6 +1,9 @@
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type { AssistantIdentity } from "../assistant-identity.ts";
+
+import type { MessageGroup } from "../types/chat-types.ts";
+import { icons } from "../icons.ts";
 import { toSanitizedMarkdownHtml } from "../markdown.ts";
 import { detectTextDirection } from "../text-direction.ts";
 import type { MessageGroup } from "../types/chat-types.ts";
@@ -12,7 +15,6 @@ import {
 } from "./message-extract.ts";
 import { isToolResultMessage, normalizeRoleForGrouping } from "./message-normalizer.ts";
 import { extractToolCards, renderToolCardSidebar } from "./tool-cards.ts";
-import { icons } from "../icons.ts";
 
 type ImageBlock = {
   url: string;
@@ -258,11 +260,16 @@ function renderGroupedMessage(
     // If no cards extracted, synthesise one from the message text
     const cards = hasToolCards
       ? toolCards
-      : [{
-          kind: "result" as const,
-          name: (typeof m.toolName === "string" && m.toolName) || (typeof m.tool_name === "string" && m.tool_name as string) || "tool",
-          text: extractedText ?? undefined,
-        }];
+      : [
+          {
+            kind: "result" as const,
+            name:
+              (typeof m.toolName === "string" && m.toolName) ||
+              (typeof m.tool_name === "string" && m.tool_name) ||
+              "tool",
+            text: extractedText ?? undefined,
+          },
+        ];
     return html`${cards.map((card) => renderToolCardSidebar(card, onOpenSidebar))}`;
   }
 

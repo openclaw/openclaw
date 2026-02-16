@@ -15,14 +15,6 @@ import type { ChatAttachment, ChatQueueItem } from "../ui-types.ts";
 import { renderMarkdownSidebar } from "./markdown-sidebar.ts";
 import "../components/resizable-divider.ts";
 
-// Module-level state for autosuggest
-let showSlashMenu = false;
-let showAtMenu = false;
-let menuFilter = "";
-
-// Module-level state for queue
-let queueExpanded = false;
-
 // Slash commands
 const SLASH_COMMANDS = [
   { cmd: "/status", desc: "Show session status" },
@@ -74,6 +66,12 @@ export type ChatProps = {
   sessions: SessionsListResult | null;
   // Focus mode
   focusMode: boolean;
+  // Autosuggest state
+  showSlashMenu?: boolean;
+  showAtMenu?: boolean;
+  menuFilter?: string;
+  // Queue state
+  queueExpanded?: boolean;
   // Sidebar state
   sidebarOpen?: boolean;
   sidebarContent?: string | null;
@@ -98,6 +96,12 @@ export type ChatProps = {
   onOpenSidebar?: (content: string) => void;
   onCloseSidebar?: () => void;
   onSplitRatioChange?: (ratio: number) => void;
+  // Autosuggest event handlers
+  onShowSlashMenuChange?: (show: boolean) => void;
+  onShowAtMenuChange?: (show: boolean) => void;
+  onMenuFilterChange?: (filter: string) => void;
+  // Queue event handler
+  onQueueExpandedChange?: (expanded: boolean) => void;
   onChatScroll?: (event: Event) => void;
 };
 
@@ -106,16 +110,34 @@ const FALLBACK_TOAST_DURATION_MS = 8000;
 
 /** Detect system-role messages that should render as dividers instead of bubbles */
 function detectSystemDivider(msg: { role: string; content: string }): string | null {
-  if (msg.role.toLowerCase() !== "system") return null;
+  if (msg.role.toLowerCase() !== "system") {
+    return null;
+  }
   const text = (msg.content ?? "").toLowerCase().trim();
-  if (/new\s+session/i.test(text)) return "NEW SESSION";
-  if (/session\s+(reset|cleared|started)/i.test(text)) return "SESSION RESET";
-  if (/heartbeat/i.test(text) && text.length < 40) return "HEARTBEAT";
-  if (/context\s+(window|limit|truncat)/i.test(text)) return "CONTEXT LIMIT";
-  if (/compaction/i.test(text)) return "COMPACTION";
-  if (/model\s+change/i.test(text)) return "MODEL CHANGE";
-  if (/resumed/i.test(text) && text.length < 40) return "RESUMED";
-  if (/connected/i.test(text) && text.length < 40) return "CONNECTED";
+  if (/new\s+session/i.test(text)) {
+    return "NEW SESSION";
+  }
+  if (/session\s+(reset|cleared|started)/i.test(text)) {
+    return "SESSION RESET";
+  }
+  if (/heartbeat/i.test(text) && text.length < 40) {
+    return "HEARTBEAT";
+  }
+  if (/context\s+(window|limit|truncat)/i.test(text)) {
+    return "CONTEXT LIMIT";
+  }
+  if (/compaction/i.test(text)) {
+    return "COMPACTION";
+  }
+  if (/model\s+change/i.test(text)) {
+    return "MODEL CHANGE";
+  }
+  if (/resumed/i.test(text) && text.length < 40) {
+    return "RESUMED";
+  }
+  if (/connected/i.test(text) && text.length < 40) {
+    return "CONNECTED";
+  }
   return null;
 }
 
@@ -228,8 +250,8 @@ function renderAutosuggestMenu(props: ChatProps, textareaEl: HTMLTextAreaElement
             @click=${() => {
               if (textareaEl) {
                 props.onDraftChange(cmd.cmd + " ");
-                showSlashMenu = false;
-                menuFilter = "";
+                props.onShowSlashMenuChange?.(false);
+                props.onMenuFilterChange?.("");
                 textareaEl.focus();
               }
             }}
@@ -270,8 +292,8 @@ function renderAutosuggestMenu(props: ChatProps, textareaEl: HTMLTextAreaElement
                   const newText =
                     text.substring(0, beforeAt) + `@${shortName} ` + text.substring(cursorPos);
                   props.onDraftChange(newText);
-                  showAtMenu = false;
-                  menuFilter = "";
+                  props.onShowAtMenuChange?.(false);
+                  props.onMenuFilterChange?.("");
                   textareaEl.focus();
                 }
               }}
@@ -438,6 +460,12 @@ export function renderChat(props: ChatProps) {
   const canCompose = props.connected;
   const isBusy = props.sending || props.stream !== null;
   const canAbort = Boolean(props.canAbort && props.onAbort);
+
+  // Local state from props
+  const showSlashMenu = props.showSlashMenu ?? false;
+  const showAtMenu = props.showAtMenu ?? false;
+  const menuFilter = props.menuFilter ?? "";
+  const queueExpanded = props.queueExpanded ?? false;
   const activeSession = props.sessions?.sessions?.find((row) => row.key === props.sessionKey);
   const reasoningLevel = activeSession?.reasoningLevel ?? "off";
   const showReasoning = props.showThinking && reasoningLevel !== "off";
@@ -591,10 +619,10 @@ export function renderChat(props: ChatProps) {
         props.queue.length
           ? html`
             <div class="chat-queue-tab" @click=${() => {
-              queueExpanded = !queueExpanded;
+              props.onQueueExpandedChange?.(!queueExpanded);
             }}>
               <span>Queued (${props.queue.length})</span>
-              <span class="icon-sm" style="width:10px;height:10px;${queueExpanded ? '' : 'transform:rotate(180deg)'}">${icons.arrowDown}</span>
+              <span class="icon-sm" style="width:10px;height:10px;${queueExpanded ? "" : "transform:rotate(180deg)"}">${icons.arrowDown}</span>
             </div>
             ${
               queueExpanded
@@ -651,17 +679,17 @@ export function renderChat(props: ChatProps) {
                     : null;
                   if (firstSuggestion && showSlashMenu) {
                     props.onDraftChange(firstSuggestion.cmd + " ");
-                    showSlashMenu = false;
-                    menuFilter = "";
+                    props.onShowSlashMenuChange?.(false);
+                    props.onMenuFilterChange?.("");
                   }
                   return;
                 }
 
                 // Escape closes menu
                 if (e.key === "Escape" && (showSlashMenu || showAtMenu)) {
-                  showSlashMenu = false;
-                  showAtMenu = false;
-                  menuFilter = "";
+                  props.onShowSlashMenuChange?.(false);
+                  props.onShowAtMenuChange?.(false);
+                  props.onMenuFilterChange?.("");
                   return;
                 }
 
@@ -690,11 +718,11 @@ export function renderChat(props: ChatProps) {
 
                 // Detect slash command
                 if (newValue.startsWith("/")) {
-                  showSlashMenu = true;
-                  showAtMenu = false;
-                  menuFilter = newValue.substring(1);
+                  props.onShowSlashMenuChange?.(true);
+                  props.onShowAtMenuChange?.(false);
+                  props.onMenuFilterChange?.(newValue.substring(1));
                 } else {
-                  showSlashMenu = false;
+                  props.onShowSlashMenuChange?.(false);
                 }
 
                 // Detect @ mention
@@ -705,20 +733,20 @@ export function renderChat(props: ChatProps) {
                 if (lastAtIndex !== -1) {
                   const afterAt = textBeforeCursor.substring(lastAtIndex + 1);
                   if (!afterAt.includes(" ")) {
-                    showAtMenu = true;
-                    showSlashMenu = false;
-                    menuFilter = afterAt;
+                    props.onShowAtMenuChange?.(true);
+                    props.onShowSlashMenuChange?.(false);
+                    props.onMenuFilterChange?.(afterAt);
                   } else {
-                    showAtMenu = false;
+                    props.onShowAtMenuChange?.(false);
                   }
                 } else {
-                  showAtMenu = false;
+                  props.onShowAtMenuChange?.(false);
                 }
               }}
               @paste=${(e: ClipboardEvent) => handlePaste(e, props)}
               placeholder=${composePlaceholder}
             ></textarea>
-            ${renderAutosuggestMenu(props, document.querySelector(".chat-compose__field textarea") as HTMLTextAreaElement)}
+            ${renderAutosuggestMenu(props, textareaEl)}
           </label>
           <div class="chat-compose__actions">
             <button
