@@ -26,8 +26,9 @@ export function isProfileInCooldown(store: AuthProfileStore, profileId: string):
 }
 
 /**
- * Return the soonest time (ms epoch) at which any profile in the given list
- * will exit cooldown, or `null` when none are in cooldown.
+ * Return the soonest `unusableUntil` timestamp (ms epoch) among the given
+ * profiles, or `null` when no profile has a recorded cooldown. Note: the
+ * returned timestamp may be in the past if the cooldown has already expired.
  */
 export function getSoonestCooldownExpiry(
   store: AuthProfileStore,
