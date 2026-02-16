@@ -250,6 +250,31 @@ export const dispatchTelegramMessage = async ({
   };
   let finalizedViaPreviewMessage = false;
 
+  // Buffer reasoning text so it can be sent before the first block/final reply.
+  let reasoningBuffer = "";
+  let reasoningFlushed = false;
+  const flushReasoning = async () => {
+    if (reasoningFlushed || !reasoningBuffer) {
+      return;
+    }
+    reasoningFlushed = true;
+    await deliverReplies({
+      replies: [{ text: reasoningBuffer }],
+      chatId: String(chatId),
+      token: opts.token,
+      runtime,
+      bot,
+      mediaLocalRoots,
+      replyToMode,
+      textLimit,
+      thread: threadSpec,
+      tableMode,
+      chunkMode,
+      linkPreview: telegramCfg.linkPreview,
+      replyQuoteText,
+    });
+  };
+
   let queuedFinal = false;
   try {
     ({ queuedFinal } = await dispatchReplyWithBufferedBlockDispatcher({
@@ -258,6 +283,9 @@ export const dispatchTelegramMessage = async ({
       dispatcherOptions: {
         ...prefixOptions,
         deliver: async (payload, info) => {
+          // Flush buffered reasoning before the first block or final reply,
+          // so thinking content appears before the main text in Telegram.
+          await flushReasoning();
           if (info.kind === "final") {
             await flushDraft();
             const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
@@ -343,6 +371,11 @@ export const dispatchTelegramMessage = async ({
         skillFilter,
         disableBlockStreaming,
         onPartialReply: draftStream ? (payload) => updateDraftFromPartial(payload.text) : undefined,
+        onReasoningStream: (payload) => {
+          if (payload.text) {
+            reasoningBuffer = payload.text;
+          }
+        },
         onModelSelected,
       },
     }));
