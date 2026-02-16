@@ -776,11 +776,7 @@ function renderContextPanel(
         }
       </div>
       <p class="context-weight-desc">
-        ${
-          timeSeriesCursor !== null && timeSeriesCursor !== undefined
-            ? "Current state (not filtered by timeline cursor)"
-            : contextPct || "Base context per message"
-        }
+        ${contextPct || "Base context per message"}
       </p>
       <div class="context-stacked-bar">
         <div class="context-segment system" style="width: ${pct(systemTokens, totalContextTokens).toFixed(1)}%" title="System: ~${formatTokens(systemTokens)}"></div>
