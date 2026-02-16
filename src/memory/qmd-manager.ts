@@ -162,6 +162,9 @@ export class QmdMemoryManager implements MemorySearchManager {
     await fs.mkdir(this.xdgConfigHome, { recursive: true });
     await fs.mkdir(this.xdgCacheHome, { recursive: true });
     await fs.mkdir(path.dirname(this.indexPath), { recursive: true });
+    if (this.sessionExporter) {
+      await fs.mkdir(this.sessionExporter.dir, { recursive: true });
+    }
 
     // QMD stores its ML models under $XDG_CACHE_HOME/qmd/models/.  Because we
     // override XDG_CACHE_HOME to isolate the index per-agent, qmd would not
@@ -257,6 +260,7 @@ export class QmdMemoryManager implements MemorySearchManager {
         }
       }
       try {
+        await this.ensureCollectionPath(collection);
         await this.addCollection(collection.path, collection.name, collection.pattern);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -266,6 +270,21 @@ export class QmdMemoryManager implements MemorySearchManager {
         log.warn(`qmd collection add failed for ${collection.name}: ${message}`);
       }
     }
+  }
+
+  private async ensureCollectionPath(collection: {
+    path: string;
+    pattern: string;
+    kind: "memory" | "custom" | "sessions";
+  }): Promise<void> {
+    if (!this.isDirectoryGlobPattern(collection.pattern)) {
+      return;
+    }
+    await fs.mkdir(collection.path, { recursive: true });
+  }
+
+  private isDirectoryGlobPattern(pattern: string): boolean {
+    return pattern.includes("*") || pattern.includes("?") || pattern.includes("[");
   }
 
   private isCollectionAlreadyExistsError(message: string): boolean {
@@ -843,16 +862,23 @@ export class QmdMemoryManager implements MemorySearchManager {
 
   private pickSessionCollectionName(): string {
     const existing = new Set(this.qmd.collections.map((collection) => collection.name));
-    if (!existing.has("sessions")) {
-      return "sessions";
+    const base = `sessions-${this.sanitizeCollectionNameSegment(this.agentId)}`;
+    if (!existing.has(base)) {
+      return base;
     }
     let counter = 2;
-    let candidate = `sessions-${counter}`;
+    let candidate = `${base}-${counter}`;
     while (existing.has(candidate)) {
       counter += 1;
-      candidate = `sessions-${counter}`;
+      candidate = `${base}-${counter}`;
     }
     return candidate;
+  }
+
+  private sanitizeCollectionNameSegment(input: string): string {
+    const lower = input.toLowerCase().replace(/[^a-z0-9-]+/g, "-");
+    const trimmed = lower.replace(/^-+|-+$/g, "");
+    return trimmed || "agent";
   }
 
   private async resolveDocLocation(
