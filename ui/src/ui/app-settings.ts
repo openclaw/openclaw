@@ -285,7 +285,7 @@ export function syncThemeWithSettings(host: SettingsHost) {
 }
 
 export function syncModeWithSettings(host: SettingsHost) {
-  host.mode = host.settings.mode ?? "basic";
+  host.mode = host.settings.mode ?? "advanced";
 }
 
 export function applyResolvedTheme(host: SettingsHost, resolved: ResolvedTheme) {
