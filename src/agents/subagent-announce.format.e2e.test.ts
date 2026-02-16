@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 
 const agentSpy = vi.fn(async () => ({ runId: "run-main", status: "ok" }));
 const sessionsDeleteSpy = vi.fn();
@@ -222,7 +223,7 @@ describe("subagent announce formatting", () => {
     expect(msg).toContain("[sessionId: child-session-usage]");
     expect(msg).toContain("A completed subagent task is ready for user delivery.");
     expect(msg).toContain(
-      "Reply ONLY: NO_REPLY if this exact result was already delivered to the user in this same turn.",
+      `Reply ONLY: ${SILENT_REPLY_TOKEN} if this exact result was already delivered to the user in this same turn.`,
     );
     expect(msg).toContain("step-0");
     expect(msg).toContain("step-139");
