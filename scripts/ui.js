@@ -11,9 +11,7 @@ const uiDir = path.join(repoRoot, "ui");
 
 function usage() {
   // keep this tiny; it's invoked from npm scripts too
-  process.stderr.write(
-    "Usage: node scripts/ui.js <install|dev|build|test> [...args]\n",
-  );
+  process.stderr.write("Usage: node scripts/ui.js <install|dev|build|test> [...args]\n");
 }
 
 function which(cmd) {
@@ -24,16 +22,11 @@ function which(cmd) {
       .filter(Boolean);
     const extensions =
       process.platform === "win32"
-        ? (process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM")
-            .split(";")
-            .filter(Boolean)
+        ? (process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM").split(";").filter(Boolean)
         : [""];
     for (const entry of paths) {
       for (const ext of extensions) {
-        const candidate = path.join(
-          entry,
-          process.platform === "win32" ? `${cmd}${ext}` : cmd,
-        );
+        const candidate = path.join(entry, process.platform === "win32" ? `${cmd}${ext}` : cmd);
         try {
           if (fs.existsSync(candidate)) {
             return candidate;
@@ -141,11 +134,8 @@ if (action === "install") {
 } else {
   if (!depsInstalled(action === "test" ? "test" : "build")) {
     const installEnv =
-      action === "build"
-        ? { ...process.env, NODE_ENV: "production" }
-        : process.env;
-    const installArgs =
-      action === "build" ? ["install", "--prod"] : ["install"];
+      action === "build" ? { ...process.env, NODE_ENV: "production" } : process.env;
+    const installArgs = action === "build" ? ["install", "--prod"] : ["install"];
     runSync(runner.cmd, installArgs, installEnv);
   }
   run(runner.cmd, ["run", script, ...rest]);
