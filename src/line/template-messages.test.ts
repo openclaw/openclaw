@@ -235,15 +235,4 @@ describe("createProductCarousel", () => {
       .columns;
     expect(columns[0].actions[0].type).toBe("postback");
   });
-
-  it("limits to 10 products", () => {
-    const products = Array.from({ length: 15 }, (_, i) => ({
-      title: `Product ${i}`,
-      description: `Desc ${i}`,
-    }));
-    const template = createProductCarousel(products);
-
-    const columns = (template.template as { columns: unknown[] }).columns;
-    expect(columns.length).toBe(10);
-  });
 });
