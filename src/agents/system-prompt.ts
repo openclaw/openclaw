@@ -147,6 +147,23 @@ function buildVoiceSection(params: { isMinimal: boolean; ttsHint?: string }) {
   return ["## Voice (TTS)", hint, ""];
 }
 
+function buildLlmsTxtSection(params: { isMinimal: boolean; availableTools: Set<string> }) {
+  if (params.isMinimal) {
+    return [];
+  }
+  if (!params.availableTools.has("web_fetch")) {
+    return [];
+  }
+  return [
+    "## llms.txt Discovery",
+    "When exploring a new domain or website (via web_fetch or browser), check for an llms.txt file that describes how AI agents should interact with the site:",
+    "- Try `/llms.txt` or `/.well-known/llms.txt` at the domain root",
+    "- If found, follow its guidance for interacting with that site's content and APIs",
+    "- llms.txt is an emerging standard (like robots.txt for AI) — not all sites have one, so don't warn if missing",
+    "",
+  ];
+}
+
 function buildDocsSection(params: { docsPath?: string; isMinimal: boolean; readToolName: string }) {
   const docsPath = params.docsPath?.trim();
   if (!docsPath || params.isMinimal) {
@@ -546,6 +563,7 @@ export function buildAgentSystemPrompt(params: {
       messageToolHints: params.messageToolHints,
     }),
     ...buildVoiceSection({ isMinimal, ttsHint: params.ttsHint }),
+    ...buildLlmsTxtSection({ isMinimal, availableTools }),
   ];
 
   if (extraSystemPrompt) {
