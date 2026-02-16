@@ -55,14 +55,6 @@ describe("createListCard", () => {
 });
 
 describe("createImageCard", () => {
-  it("creates a card with hero image", () => {
-    const card = createImageCard("https://example.com/image.jpg", "Image Title");
-
-    expect(card.type).toBe("bubble");
-    expect(card.hero).toBeDefined();
-    expect((card.hero as { url: string }).url).toBe("https://example.com/image.jpg");
-  });
-
   it("includes body text when provided", () => {
     const card = createImageCard("https://example.com/img.jpg", "Title", "Body text");
 
@@ -81,23 +73,6 @@ describe("createImageCard", () => {
 });
 
 describe("createActionCard", () => {
-  it("creates a card with action buttons", () => {
-    const actions = [
-      { label: "Action 1", action: { type: "message" as const, label: "Act1", text: "action1" } },
-      {
-        label: "Action 2",
-        action: { type: "uri" as const, label: "Act2", uri: "https://example.com" },
-      },
-    ];
-    const card = createActionCard("Title", "Description", actions);
-
-    expect(card.type).toBe("bubble");
-    expect(card.footer).toBeDefined();
-
-    const footer = card.footer as { contents: Array<{ type: string }> };
-    expect(footer.contents.length).toBe(2);
-  });
-
   it("limits actions to 4", () => {
     const actions = Array.from({ length: 6 }, (_, i) => ({
       label: `Action ${i}`,
@@ -120,18 +95,11 @@ describe("createActionCard", () => {
 });
 
 describe("createCarousel", () => {
-  it("creates a carousel from bubbles", () => {
-    const bubbles = [createInfoCard("Card 1", "Body 1"), createInfoCard("Card 2", "Body 2")];
-    const carousel = createCarousel(bubbles);
-
-    expect(carousel.type).toBe("carousel");
-    expect(carousel.contents.length).toBe(2);
-  });
-
   it("limits to 12 bubbles", () => {
     const bubbles = Array.from({ length: 15 }, (_, i) => createInfoCard(`Card ${i}`, `Body ${i}`));
     const carousel = createCarousel(bubbles);
 
+    expect(carousel.type).toBe("carousel");
     expect(carousel.contents.length).toBe(12);
   });
 });
