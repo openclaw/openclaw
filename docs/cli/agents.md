@@ -19,10 +19,20 @@ Related:
 ```bash
 openclaw agents list
 openclaw agents add work --workspace ~/.openclaw/workspace-work
+openclaw agents add work --workspace ~/.openclaw/workspace-work --bind whatsapp --bind whatsapp:personal
+openclaw agents add ops --workspace ~/.openclaw/workspace-ops --bind telegram:ops
 openclaw agents set-identity --workspace ~/.openclaw/workspace --from-identity
 openclaw agents set-identity --agent main --avatar avatars/openclaw.png
 openclaw agents delete work
 ```
+
+## Routing with `--bind`
+
+Use `--bind <channel[:accountId]>` (repeatable) when adding an agent to set initial routing rules.
+
+- `--bind whatsapp` routes all default WhatsApp traffic to the new agent.
+- `--bind whatsapp:personal` routes only a specific WhatsApp account.
+- Add multiple bindings by repeating the flag: `--bind telegram:team --bind whatsapp`.
 
 ## Identity files
 
