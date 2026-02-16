@@ -248,4 +248,22 @@ describe("compaction-safeguard runtime registry", () => {
     expect(getCompactionSafeguardRuntime(sm1)).toEqual({ maxHistoryShare: 0.3 });
     expect(getCompactionSafeguardRuntime(sm2)).toEqual({ maxHistoryShare: 0.8 });
   });
+
+  it("stores and retrieves model from runtime (fallback for compact.ts workflow)", () => {
+    const sm = {};
+    const model = {
+      id: "claude-opus-4-5",
+      name: "Claude Opus 4.5",
+      provider: "anthropic",
+      api: "anthropic" as const,
+      contextWindow: 200000,
+      maxTokens: 4096,
+      reasoning: false,
+      input: ["text"] as const,
+      cost: { input: 15, output: 75, cacheRead: 0, cacheWrite: 0 },
+    };
+    setCompactionSafeguardRuntime(sm, { model });
+    const retrieved = getCompactionSafeguardRuntime(sm);
+    expect(retrieved?.model).toEqual(model);
+  });
 });
