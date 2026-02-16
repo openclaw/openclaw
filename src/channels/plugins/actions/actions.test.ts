@@ -613,6 +613,26 @@ describe("slack actions adapter", () => {
     expect(handleSlackAction).not.toHaveBeenCalled();
   });
 
+  it("rejects send when both blocks and media are provided", async () => {
+    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+    const actions = createSlackActions("slack");
+
+    await expect(
+      actions.handleAction?.({
+        channel: "slack",
+        action: "send",
+        cfg,
+        params: {
+          to: "channel:C1",
+          message: "",
+          media: "https://example.com/image.png",
+          blocks: JSON.stringify([{ type: "divider" }]),
+        },
+      }),
+    ).rejects.toThrow(/does not support blocks with media/i);
+    expect(handleSlackAction).not.toHaveBeenCalled();
+  });
+
   it("forwards blocks JSON for edit", async () => {
     const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
     const actions = createSlackActions("slack");

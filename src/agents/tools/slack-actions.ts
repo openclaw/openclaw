@@ -185,6 +185,9 @@ export async function handleSlackAction(
         if (!content && !mediaUrl && !blocks) {
           throw new Error("Slack sendMessage requires content, blocks, or mediaUrl.");
         }
+        if (mediaUrl && blocks) {
+          throw new Error("Slack sendMessage does not support blocks with mediaUrl.");
+        }
         const threadTs = resolveThreadTsFromContext(
           readStringParam(params, "threadTs"),
           to,

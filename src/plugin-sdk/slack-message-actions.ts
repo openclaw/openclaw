@@ -41,6 +41,9 @@ export async function handleSlackMessageAction(params: {
     if (!content && !mediaUrl && !blocks) {
       throw new Error("Slack send requires message, blocks, or media.");
     }
+    if (mediaUrl && blocks) {
+      throw new Error("Slack send does not support blocks with media.");
+    }
     const threadId = readStringParam(actionParams, "threadId");
     const replyTo = readStringParam(actionParams, "replyTo");
     return await invoke(

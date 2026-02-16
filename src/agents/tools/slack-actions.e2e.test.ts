@@ -221,6 +221,21 @@ describe("handleSlackAction", () => {
     ).rejects.toThrow(/requires content, blocks, or mediaUrl/i);
   });
 
+  it("rejects blocks combined with mediaUrl", async () => {
+    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+    await expect(
+      handleSlackAction(
+        {
+          action: "sendMessage",
+          to: "channel:C123",
+          blocks: [{ type: "divider" }],
+          mediaUrl: "https://example.com/image.png",
+        },
+        cfg,
+      ),
+    ).rejects.toThrow(/does not support blocks with mediaUrl/i);
+  });
+
   it("passes blocks JSON to editSlackMessage with empty content", async () => {
     const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
     editSlackMessage.mockClear();
