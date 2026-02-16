@@ -84,51 +84,68 @@ const makeContext = (): GatewayRequestContext =>
     logGateway: { info: vi.fn(), error: vi.fn() },
   }) as unknown as GatewayRequestContext;
 
+function mockMainSessionEntry(entry: Record<string, unknown>, cfg: Record<string, unknown> = {}) {
+  mocks.loadSessionEntry.mockReturnValue({
+    cfg,
+    storePath: "/tmp/sessions.json",
+    entry: {
+      sessionId: "existing-session-id",
+      updatedAt: Date.now(),
+      ...entry,
+    },
+    canonicalKey: "agent:main:main",
+  });
+}
+
+function captureUpdatedMainEntry() {
+  let capturedEntry: Record<string, unknown> | undefined;
+  mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+    const store: Record<string, unknown> = {};
+    await updater(store);
+    capturedEntry = store["agent:main:main"] as Record<string, unknown>;
+  });
+  return () => capturedEntry;
+}
+
+async function runMainAgent(message: string, idempotencyKey: string) {
+  const respond = vi.fn();
+  await agentHandlers.agent({
+    params: {
+      message,
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      idempotencyKey,
+    },
+    respond,
+    context: makeContext(),
+    req: { type: "req", id: idempotencyKey, method: "agent" },
+    client: null,
+    isWebchatConnect: () => false,
+  });
+  return respond;
+}
+
 describe("gateway agent handler", () => {
   it("preserves cliSessionIds from existing session entry", async () => {
     const existingCliSessionIds = { "claude-cli": "abc-123-def" };
     const existingClaudeCliSessionId = "abc-123-def";
 
-    mocks.loadSessionEntry.mockReturnValue({
-      cfg: {},
-      storePath: "/tmp/sessions.json",
-      entry: {
-        sessionId: "existing-session-id",
-        updatedAt: Date.now(),
-        cliSessionIds: existingCliSessionIds,
-        claudeCliSessionId: existingClaudeCliSessionId,
-      },
-      canonicalKey: "agent:main:main",
+    mockMainSessionEntry({
+      cliSessionIds: existingCliSessionIds,
+      claudeCliSessionId: existingClaudeCliSessionId,
     });
 
-    let capturedEntry: Record<string, unknown> | undefined;
-    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
-      const store: Record<string, unknown> = {};
-      await updater(store);
-      capturedEntry = store["agent:main:main"] as Record<string, unknown>;
-    });
+    const getCapturedEntry = captureUpdatedMainEntry();
 
     mocks.agentCommand.mockResolvedValue({
       payloads: [{ text: "ok" }],
       meta: { durationMs: 100 },
     });
 
-    const respond = vi.fn();
-    await agentHandlers.agent({
-      params: {
-        message: "test",
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        idempotencyKey: "test-idem",
-      },
-      respond,
-      context: makeContext(),
-      req: { type: "req", id: "1", method: "agent" },
-      client: null,
-      isWebchatConnect: () => false,
-    });
+    await runMainAgent("test", "test-idem");
 
     expect(mocks.updateSessionStore).toHaveBeenCalled();
+    const capturedEntry = getCapturedEntry();
     expect(capturedEntry).toBeDefined();
     expect(capturedEntry?.cliSessionIds).toEqual(existingCliSessionIds);
     expect(capturedEntry?.claudeCliSessionId).toBe(existingClaudeCliSessionId);
@@ -188,45 +205,19 @@ describe("gateway agent handler", () => {
   });
 
   it("handles missing cliSessionIds gracefully", async () => {
-    mocks.loadSessionEntry.mockReturnValue({
-      cfg: {},
-      storePath: "/tmp/sessions.json",
-      entry: {
-        sessionId: "existing-session-id",
-        updatedAt: Date.now(),
-        // No cliSessionIds or claudeCliSessionId
-      },
-      canonicalKey: "agent:main:main",
-    });
+    mockMainSessionEntry({});
 
-    let capturedEntry: Record<string, unknown> | undefined;
-    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
-      const store: Record<string, unknown> = {};
-      await updater(store);
-      capturedEntry = store["agent:main:main"] as Record<string, unknown>;
-    });
+    const getCapturedEntry = captureUpdatedMainEntry();
 
     mocks.agentCommand.mockResolvedValue({
       payloads: [{ text: "ok" }],
       meta: { durationMs: 100 },
     });
 
-    const respond = vi.fn();
-    await agentHandlers.agent({
-      params: {
-        message: "test",
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        idempotencyKey: "test-idem-2",
-      },
-      respond,
-      context: makeContext(),
-      req: { type: "req", id: "2", method: "agent" },
-      client: null,
-      isWebchatConnect: () => false,
-    });
+    await runMainAgent("test", "test-idem-2");
 
     expect(mocks.updateSessionStore).toHaveBeenCalled();
+    const capturedEntry = getCapturedEntry();
     expect(capturedEntry).toBeDefined();
     // Should be undefined, not cause an error
     expect(capturedEntry?.cliSessionIds).toBeUndefined();

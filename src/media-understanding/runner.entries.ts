@@ -271,6 +271,29 @@ export function buildModelDecision(params: {
   };
 }
 
+function resolveEntryRunOptions(params: {
+  capability: MediaUnderstandingCapability;
+  entry: MediaUnderstandingModelConfig;
+  cfg: OpenClawConfig;
+  config?: MediaUnderstandingConfig;
+}): { maxBytes: number; maxChars?: number; timeoutMs: number; prompt: string } {
+  const { capability, entry, cfg } = params;
+  const maxBytes = resolveMaxBytes({ capability, entry, cfg, config: params.config });
+  const maxChars = resolveMaxChars({ capability, entry, cfg, config: params.config });
+  const timeoutMs = resolveTimeoutMs(
+    entry.timeoutSeconds ??
+      params.config?.timeoutSeconds ??
+      cfg.tools?.media?.[capability]?.timeoutSeconds,
+    DEFAULT_TIMEOUT_SECONDS[capability],
+  );
+  const prompt = resolvePrompt(
+    capability,
+    entry.prompt ?? params.config?.prompt ?? cfg.tools?.media?.[capability]?.prompt,
+    maxChars,
+  );
+  return { maxBytes, maxChars, timeoutMs, prompt };
+}
+
 export function formatDecisionSummary(decision: MediaUnderstandingDecision): string {
   const total = decision.attachments.length;
   const success = decision.attachments.filter(
@@ -307,19 +330,12 @@ export async function runProviderEntry(params: {
     throw new Error(`Provider entry missing provider for ${capability}`);
   }
   const providerId = normalizeMediaProviderId(providerIdRaw);
-  const maxBytes = resolveMaxBytes({ capability, entry, cfg, config: params.config });
-  const maxChars = resolveMaxChars({ capability, entry, cfg, config: params.config });
-  const timeoutMs = resolveTimeoutMs(
-    entry.timeoutSeconds ??
-      params.config?.timeoutSeconds ??
-      cfg.tools?.media?.[capability]?.timeoutSeconds,
-    DEFAULT_TIMEOUT_SECONDS[capability],
-  );
-  const prompt = resolvePrompt(
+  const { maxBytes, maxChars, timeoutMs, prompt } = resolveEntryRunOptions({
     capability,
-    entry.prompt ?? params.config?.prompt ?? cfg.tools?.media?.[capability]?.prompt,
-    maxChars,
-  );
+    entry,
+    cfg,
+    config: params.config,
+  });
 
   if (capability === "image") {
     if (!params.agentDir) {
@@ -489,19 +505,12 @@ export async function runCliEntry(params: {
   if (!command) {
     throw new Error(`CLI entry missing command for ${capability}`);
   }
-  const maxBytes = resolveMaxBytes({ capability, entry, cfg, config: params.config });
-  const maxChars = resolveMaxChars({ capability, entry, cfg, config: params.config });
-  const timeoutMs = resolveTimeoutMs(
-    entry.timeoutSeconds ??
-      params.config?.timeoutSeconds ??
-      cfg.tools?.media?.[capability]?.timeoutSeconds,
-    DEFAULT_TIMEOUT_SECONDS[capability],
-  );
-  const prompt = resolvePrompt(
+  const { maxBytes, maxChars, timeoutMs, prompt } = resolveEntryRunOptions({
     capability,
-    entry.prompt ?? params.config?.prompt ?? cfg.tools?.media?.[capability]?.prompt,
-    maxChars,
-  );
+    entry,
+    cfg,
+    config: params.config,
+  });
   const pathResult = await params.cache.getPath({
     attachmentIndex: params.attachmentIndex,
     maxBytes,
