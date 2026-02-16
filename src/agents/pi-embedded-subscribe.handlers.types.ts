@@ -72,6 +72,7 @@ export type EmbeddedPiSubscribeState = {
   messagingToolSentTargets: MessagingToolSend[];
   pendingMessagingTexts: Map<string, string>;
   pendingMessagingTargets: Map<string, MessagingToolSend>;
+  successfulCronAdds: number;
   lastAssistant?: AgentMessage;
 };
 
