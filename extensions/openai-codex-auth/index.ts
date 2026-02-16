@@ -1,12 +1,12 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import {
   emptyPluginConfigSchema,
   type OpenClawPluginApi,
   type ProviderAuthContext,
   type ProviderAuthResult,
 } from "openclaw/plugin-sdk";
-import * as fs from "node:fs";
-import * as path from "node:path";
-import * as os from "node:os";
 
 const PROVIDER_ID = "openai-codex";
 const PROVIDER_LABEL = "OpenAI Codex CLI";
