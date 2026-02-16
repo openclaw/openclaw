@@ -67,6 +67,23 @@ async function setupMongoDBMemory(
   prompter: WizardPrompter,
   isClawMongo: boolean,
 ): Promise<OpenClawConfig> {
+  // --- Auto-Setup: try Docker auto-start BEFORE manual URI prompt ---
+  // Only for ClawMongo; upstream openclaw skips directly to manual URI
+  if (isClawMongo) {
+    try {
+      const { attemptAutoSetup } = await import("./mongodb-auto-setup.js");
+      const autoResult = await attemptAutoSetup(prompter);
+      if (autoResult.success) {
+        // Auto-setup succeeded - use the URI directly, skip manual prompt
+        return continueMongoDBSetup(config, prompter, isClawMongo, autoResult.uri);
+      }
+      // Auto-setup failed but non-fatal - show reason and fall through to manual
+      await prompter.note(autoResult.reason, "Auto-Setup");
+    } catch {
+      // Auto-setup module failed to load or threw - fall through to manual
+    }
+  }
+
   const existingUri = config.memory?.mongodb?.uri?.trim();
   const uri = await prompter.text({
     message: "MongoDB connection URI",
@@ -86,8 +103,20 @@ async function setupMongoDBMemory(
     },
   });
 
-  // Auto-detect deployment profile based on URI
-  let trimmedUri = uri.trim();
+  return continueMongoDBSetup(config, prompter, isClawMongo, uri.trim());
+}
+
+/**
+ * Continue MongoDB setup after a URI has been obtained (either from auto-setup or manual prompt).
+ * Performs topology detection, profile selection, embedding config, and KB import.
+ */
+async function continueMongoDBSetup(
+  config: OpenClawConfig,
+  prompter: WizardPrompter,
+  isClawMongo: boolean,
+  initialUri: string,
+): Promise<OpenClawConfig> {
+  let trimmedUri = initialUri;
   const isAtlas = trimmedUri.includes(".mongodb.net");
 
   // --- Topology Detection (after URI, before profile selection) ---

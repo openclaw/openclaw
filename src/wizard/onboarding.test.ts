@@ -287,6 +287,7 @@ describe("runOnboardingWizard", () => {
         skipProviders: true,
         skipSkills: true,
         skipHealth: true,
+        skipMemory: true,
         skipUi: true,
       },
       runtime,

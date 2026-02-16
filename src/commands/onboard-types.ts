@@ -139,6 +139,7 @@ export type OnboardOptions = {
   skipProviders?: boolean;
   skipSkills?: boolean;
   skipHealth?: boolean;
+  skipMemory?: boolean;
   skipUi?: boolean;
   nodeManager?: NodeManagerChoice;
   remoteUrl?: string;

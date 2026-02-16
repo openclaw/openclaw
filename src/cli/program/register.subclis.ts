@@ -280,6 +280,7 @@ const entries: SubCliEntry[] = [
   {
     name: "kb",
     description: "Knowledge base management (MongoDB)",
+    hasSubcommands: true,
     register: async (program) => {
       const mod = await import("../kb-cli.js");
       mod.registerKBCli(program);

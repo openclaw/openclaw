@@ -74,6 +74,26 @@ export async function configureMemorySection(
     };
   }
 
+  // --- Auto-Setup: try Docker auto-start BEFORE manual URI prompt ---
+  // Only for ClawMongo; upstream openclaw skips directly to manual URI
+  if (isClawMongo) {
+    try {
+      const { attemptAutoSetup } = await import("../wizard/mongodb-auto-setup.js");
+      const { createConfigurePrompterAdapter } =
+        await import("../wizard/configure-prompter-adapter.js");
+      const adapter = createConfigurePrompterAdapter();
+      const autoResult = await attemptAutoSetup(adapter);
+      if (autoResult.success) {
+        // Auto-setup succeeded — skip manual URI prompt, use auto URI
+        return configureMongoDBWithUri(nextConfig, runtime, isClawMongo, autoResult.uri);
+      }
+      // Auto-setup failed - show reason and fall through to manual
+      note(autoResult.reason, "Auto-Setup");
+    } catch {
+      // Auto-setup module not available — fall through to manual
+    }
+  }
+
   // MongoDB configuration
   const existingUri = nextConfig.memory?.mongodb?.uri ?? "";
   const uriInput = guardCancel(
@@ -100,6 +120,19 @@ export async function configureMemorySection(
   );
 
   const uri = String(uriInput ?? "").trim() || existingUri;
+  return configureMongoDBWithUri(nextConfig, runtime, isClawMongo, uri);
+}
+
+/**
+ * Continue MongoDB configuration after a URI has been obtained
+ * (either from auto-setup or manual prompt).
+ */
+async function configureMongoDBWithUri(
+  nextConfig: OpenClawConfig,
+  runtime: RuntimeEnv,
+  isClawMongo: boolean,
+  uri: string,
+): Promise<OpenClawConfig> {
   const isAtlas = uri.includes(".mongodb.net");
   const currentProfile = nextConfig.memory?.mongodb?.deploymentProfile;
   const suggestedProfile: MemoryMongoDBDeploymentProfile =

@@ -458,10 +458,12 @@ export async function runOnboardingWizard(
   // Memory backend selection
   // ClawMongo: always show (MongoDB is the whole point of this package)
   // Upstream openclaw: only in advanced mode
-  const packageName = await resolveOpenClawPackageName();
-  const isClawMongo = packageName === "@romiluz/clawmongo";
-  if (isClawMongo || flow === "advanced") {
-    nextConfig = await setupMemoryBackend(nextConfig, prompter);
+  if (!opts.skipMemory) {
+    const packageName = await resolveOpenClawPackageName();
+    const isClawMongo = packageName === "@romiluz/clawmongo";
+    if (isClawMongo || flow === "advanced") {
+      nextConfig = await setupMemoryBackend(nextConfig, prompter);
+    }
   }
 
   // Customize workspace files for MongoDB backend (non-fatal)
