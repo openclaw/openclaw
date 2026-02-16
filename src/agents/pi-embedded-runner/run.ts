@@ -2,7 +2,9 @@ import fs from "node:fs/promises";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import type { EmbeddedPiAgentMeta, EmbeddedPiRunResult } from "./types.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import {
@@ -26,6 +28,7 @@ import {
   type ResolvedProviderAuth,
 } from "../model-auth.js";
 import { normalizeProviderId } from "../model-selection.js";
+import { resolveModelRefFromString } from "../model-selection.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import {
   formatBillingErrorMessage,
@@ -50,9 +53,6 @@ import { compactEmbeddedPiSessionDirect } from "./compact.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { resolveModel } from "./model.js";
-import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
-import { resolveModelRefFromString } from "../model-selection.js";
 import { runEmbeddedAttempt } from "./run/attempt.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import {
@@ -205,19 +205,27 @@ export async function runEmbeddedPiAgent(
       let modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
       const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
 
+      // Capture original model selection for fallback
+      const originalProvider = provider;
+      const originalModelId = modelId;
+
       // Run before_agent_start hook early for model override.
       // The hook also runs later in attempt.ts for systemPrompt/prependContext;
       // we only extract the model field here so auth resolution uses the right provider.
-      if (params.authProfileIdSource !== "user") {
+      // Skip hook override if user explicitly set model (via /model or authProfile).
+      const hasUserModelOverride =
+        params.authProfileIdSource === "user" ||
+        params.modelSource === "user" ||
+        params.providerSource === "user";
+
+      if (!hasUserModelOverride) {
         const hookRunner = getGlobalHookRunner();
         if (hookRunner?.hasHooks("before_agent_start")) {
           try {
             const hookResult = await hookRunner.runBeforeAgentStart(
               { prompt: params.prompt, messages: undefined },
               {
-                agentId: params.agentId
-                  ? normalizeAgentId(params.agentId)
-                  : undefined,
+                agentId: params.agentId ? normalizeAgentId(params.agentId) : undefined,
                 sessionKey: params.sessionKey,
                 sessionId: params.sessionId,
                 workspaceDir: resolvedWorkspace,
@@ -229,11 +237,17 @@ export async function runEmbeddedPiAgent(
                 raw: hookResult.model.trim(),
                 defaultProvider: provider,
               });
-              provider = ref.ref.provider;
-              modelId = ref.ref.model;
-              log.info(
-                `before_agent_start hook overrode model: ${params.provider ?? DEFAULT_PROVIDER}/${params.model ?? DEFAULT_MODEL} → ${provider}/${modelId}`,
-              );
+              if (ref) {
+                provider = ref.ref.provider;
+                modelId = ref.ref.model;
+                log.info(
+                  `before_agent_start hook overrode model: ${originalProvider}/${originalModelId} → ${provider}/${modelId}`,
+                );
+              } else {
+                log.warn(
+                  `before_agent_start hook returned invalid model string: ${hookResult.model.trim()}; using original model ${originalProvider}/${originalModelId}`,
+                );
+              }
             }
           } catch (hookErr) {
             log.warn(`before_agent_start model override hook failed: ${String(hookErr)}`);
@@ -244,12 +258,19 @@ export async function runEmbeddedPiAgent(
         (params.config?.agents?.defaults?.model?.fallbacks?.length ?? 0) > 0;
       await ensureOpenClawModelsJson(params.config, agentDir);
 
-      const { model, error, authStorage, modelRegistry } = resolveModel(
-        provider,
-        modelId,
-        agentDir,
-        params.config,
-      );
+      let resolveResult = resolveModel(provider, modelId, agentDir, params.config);
+
+      // If hook-provided model doesn't resolve, fall back to original model
+      if (!resolveResult.model && (provider !== originalProvider || modelId !== originalModelId)) {
+        log.warn(
+          `Hook-provided model ${provider}/${modelId} could not be resolved (${resolveResult.error}); falling back to original model ${originalProvider}/${originalModelId}`,
+        );
+        provider = originalProvider;
+        modelId = originalModelId;
+        resolveResult = resolveModel(provider, modelId, agentDir, params.config);
+      }
+
+      const { model, error, authStorage, modelRegistry } = resolveResult;
       if (!model) {
         throw new Error(error ?? `Unknown model: ${provider}/${modelId}`);
       }
