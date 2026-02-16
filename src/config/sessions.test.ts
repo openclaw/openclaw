@@ -469,6 +469,62 @@ describe("sessions", () => {
     }
   });
 
+  it("resolves cross-agent absolute sessionFile paths", () => {
+    const prev = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = "/home/user/.openclaw";
+    try {
+      // Agent bot1 resolves a sessionFile that belongs to agent bot2
+      const sessionFile = resolveSessionFilePath(
+        "sess-1",
+        { sessionFile: "/home/user/.openclaw/agents/bot2/sessions/sess-1.jsonl" },
+        { agentId: "bot1" },
+      );
+      expect(sessionFile).toBe("/home/user/.openclaw/agents/bot2/sessions/sess-1.jsonl");
+    } finally {
+      if (prev === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = prev;
+      }
+    }
+  });
+
+  it("resolves cross-agent paths when OPENCLAW_STATE_DIR differs from stored paths", () => {
+    const prev = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = "/different/state";
+    try {
+      // sessionFile was created under a different state dir than current env
+      const sessionFile = resolveSessionFilePath(
+        "sess-1",
+        { sessionFile: "/original/state/agents/bot2/sessions/sess-1.jsonl" },
+        { agentId: "bot1" },
+      );
+      expect(sessionFile).toBe("/original/state/agents/bot2/sessions/sess-1.jsonl");
+    } finally {
+      if (prev === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = prev;
+      }
+    }
+  });
+
+  it("rejects absolute sessionFile paths outside agent sessions directories", () => {
+    const prev = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = "/home/user/.openclaw";
+    try {
+      expect(() =>
+        resolveSessionFilePath("sess-1", { sessionFile: "/etc/passwd" }, { agentId: "bot1" }),
+      ).toThrow(/within sessions directory/);
+    } finally {
+      if (prev === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = prev;
+      }
+    }
+  });
+
   it("updateSessionStoreEntry merges concurrent patches", async () => {
     const mainSessionKey = "agent:main:main";
     const dir = await createCaseDir("updateSessionStoreEntry");
