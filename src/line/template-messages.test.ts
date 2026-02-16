@@ -7,7 +7,6 @@ import {
   createImageCarousel,
   createImageCarouselColumn,
   createYesNoConfirm,
-  createLinkMenu,
   createProductCarousel,
   messageAction,
   uriAction,
@@ -224,21 +223,6 @@ describe("createYesNoConfirm", () => {
     const actions = (template.template as { actions: Array<{ type: string }> }).actions;
     expect(actions[0].type).toBe("postback");
     expect(actions[1].type).toBe("postback");
-  });
-});
-
-describe("createLinkMenu", () => {
-  it("creates a button menu with URL links", () => {
-    const template = createLinkMenu("Links", "Visit our sites", [
-      { label: "Site 1", url: "https://site1.com" },
-      { label: "Site 2", url: "https://site2.com" },
-    ]);
-
-    expect(template.type).toBe("template");
-
-    const actions = (template.template as { actions: Array<{ type: string }> }).actions;
-    expect(actions[0].type).toBe("uri");
-    expect(actions[1].type).toBe("uri");
   });
 });
 
