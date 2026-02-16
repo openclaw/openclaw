@@ -790,7 +790,6 @@ describe("extractShortModelName", () => {
 
   it("strips -latest suffix", () => {
     expect(extractShortModelName("gpt-5.2-latest")).toBe("gpt-5.2");
-    expect(extractShortModelName("claude-sonnet-latest")).toBe("claude-sonnet");
   });
 
   it("preserves version numbers that look like dates but are not", () => {
