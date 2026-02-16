@@ -236,11 +236,11 @@ function computeNextProfileUsageStats(params: {
     updatedStats.disabledReason = "billing";
   } else if (params.modelId && (params.reason === "rate_limit" || params.reason === "timeout")) {
     // Per-model cooldown: short fixed duration, not exponential.
-    // The Copilot SDK / CLI binary already retried with jittered backoff
-    // (1s → 2s → 4s, up to 3 retries) before the error reached us.
-    // A brief 15s pause is enough for transient rate limits to clear —
-    // matching VS Code Copilot's 10s strategy. This lets model fallback
-    // try other models immediately while the rate-limited one cools off.
+    // By the time an error reaches OpenClaw, the provider SDK/transport
+    // layer has already exhausted its own retries. A brief 15s pause is
+    // enough for transient rate limits to clear — matching VS Code
+    // Copilot's ~10s strategy. Model fallback tries other models
+    // immediately while the rate-limited one cools off.
     const MODEL_COOLDOWN_MS = 15_000;
     const modelCooldowns = { ...updatedStats.modelCooldowns };
     modelCooldowns[params.modelId] = params.now + MODEL_COOLDOWN_MS;
