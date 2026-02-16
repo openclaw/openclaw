@@ -42,7 +42,7 @@ import {
   resolveSessionTranscriptPath,
   updateSessionStore,
 } from "../../config/sessions.js";
-import { registerAgentRunContext } from "../../infra/agent-events.js";
+import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-events.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import { resolveAgentOutboundIdentity } from "../../infra/outbound/identity.js";
 import { logWarn } from "../../logger.js";
@@ -255,11 +255,16 @@ export async function runCronIsolatedAgentTurn(params: {
   };
   const withRunSession = (
     result: Omit<RunCronAgentTurnResult, "sessionId" | "sessionKey">,
-  ): RunCronAgentTurnResult => ({
-    ...result,
-    sessionId: runSessionId,
-    sessionKey: runSessionKey,
-  });
+  ): RunCronAgentTurnResult => {
+    // Clean up in-memory agent run state to prevent memory leaks.
+    // See: https://github.com/openclaw/openclaw/issues/17820
+    clearAgentRunContext(runSessionId);
+    return {
+      ...result,
+      sessionId: runSessionId,
+      sessionKey: runSessionKey,
+    };
+  };
   if (!cronSession.sessionEntry.label?.trim() && baseSessionKey.startsWith("cron:")) {
     const labelSuffix =
       typeof params.job.name === "string" && params.job.name.trim()
