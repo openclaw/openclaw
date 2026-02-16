@@ -50,13 +50,18 @@ export function wrapFetchWithAbortSignal(fetchImpl: typeof fetch): typeof fetch 
     } else {
       signal.addEventListener("abort", onAbort, { once: true });
     }
-    const response = fetchImpl(input, { ...patchedInit, signal: controller.signal });
-    if (typeof signal.removeEventListener === "function") {
-      void response.finally(() => {
+    const cleanup = () => {
+      if (typeof signal.removeEventListener === "function") {
         signal.removeEventListener("abort", onAbort);
-      });
+      }
+    };
+    try {
+      const response = fetchImpl(input, { ...patchedInit, signal: controller.signal });
+      return response.finally(cleanup);
+    } catch (error) {
+      cleanup();
+      throw error;
     }
-    return response;
   }) as FetchWithPreconnect;
 
   const fetchWithPreconnect = fetchImpl as FetchWithPreconnect;

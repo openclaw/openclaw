@@ -50,4 +50,74 @@ describe("wrapFetchWithAbortSignal", () => {
 
     await promise;
   });
+
+  it("does not emit an extra unhandled rejection when wrapped fetch rejects", async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandled);
+
+    const fetchError = new TypeError("fetch failed");
+    const fetchImpl = vi.fn((_input: RequestInfo | URL, _init?: RequestInit) =>
+      Promise.reject(fetchError),
+    );
+    const wrapped = wrapFetchWithAbortSignal(fetchImpl);
+
+    let abortHandler: (() => void) | null = null;
+    const removeEventListener = vi.fn((event: string, handler: () => void) => {
+      if (event === "abort" && abortHandler === handler) {
+        abortHandler = null;
+      }
+    });
+
+    const fakeSignal = {
+      aborted: false,
+      addEventListener: (event: string, handler: () => void) => {
+        if (event === "abort") {
+          abortHandler = handler;
+        }
+      },
+      removeEventListener,
+    } as AbortSignal;
+
+    try {
+      await expect(wrapped("https://example.com", { signal: fakeSignal })).rejects.toBe(fetchError);
+      await Promise.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(unhandled).toEqual([]);
+      expect(removeEventListener).toHaveBeenCalledOnce();
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
+
+  it("cleans up listener and rethrows when fetch throws synchronously", () => {
+    const syncError = new TypeError("sync fetch failure");
+    const fetchImpl = vi.fn(() => {
+      throw syncError;
+    });
+    const wrapped = wrapFetchWithAbortSignal(fetchImpl);
+
+    let abortHandler: (() => void) | null = null;
+    const removeEventListener = vi.fn((event: string, handler: () => void) => {
+      if (event === "abort" && abortHandler === handler) {
+        abortHandler = null;
+      }
+    });
+
+    const fakeSignal = {
+      aborted: false,
+      addEventListener: (event: string, handler: () => void) => {
+        if (event === "abort") {
+          abortHandler = handler;
+        }
+      },
+      removeEventListener,
+    } as AbortSignal;
+
+    expect(() => wrapped("https://example.com", { signal: fakeSignal })).toThrow(syncError);
+    expect(removeEventListener).toHaveBeenCalledOnce();
+  });
 });
