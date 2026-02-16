@@ -1,4 +1,10 @@
 import type { Bot } from "grammy";
+import type { OpenClawConfig, ReplyToMode, TelegramAccountConfig } from "../config/types.js";
+import type { RuntimeEnv } from "../runtime.js";
+import type { TelegramMessageContext } from "./bot-message-context.js";
+import type { TelegramBotOptions } from "./bot.js";
+import type { TelegramStreamMode } from "./bot/types.js";
+import type { TelegramInlineButtons } from "./button-types.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import {
   findModelInCatalog,
@@ -15,17 +21,12 @@ import { logAckFailure, logTypingFailure } from "../channels/logging.js";
 import { createReplyPrefixOptions } from "../channels/reply-prefix.js";
 import { createTypingCallbacks } from "../channels/typing.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
-import type { OpenClawConfig, ReplyToMode, TelegramAccountConfig } from "../config/types.js";
 import { danger, logVerbose } from "../globals.js";
 import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
-import type { RuntimeEnv } from "../runtime.js";
-import type { TelegramMessageContext } from "./bot-message-context.js";
-import type { TelegramBotOptions } from "./bot.js";
 import { deliverReplies } from "./bot/delivery.js";
-import type { TelegramStreamMode } from "./bot/types.js";
-import type { TelegramInlineButtons } from "./button-types.js";
 import { resolveTelegramDraftStreamingChunking } from "./draft-chunking.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
+import { renderTelegramHtmlText } from "./format.js";
 import { editMessageTelegram } from "./send.js";
 import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
 
@@ -319,6 +320,24 @@ export const dispatchTelegramMessage = async ({
               finalText.length <= draftMaxChars &&
               !payload.isError;
             if (canFinalizeViaPreviewEdit) {
+              const previewAppliedText = draftStream?.lastSentText();
+              const finalTextTrimmed = finalText.trimEnd();
+              const hasFinalEditMutation =
+                previewButtons !== undefined || telegramCfg.linkPreview === false;
+              const needsFormattingPass =
+                renderTelegramHtmlText(finalText, { tableMode }) !== finalText;
+              // Skip edit if text already matches and no mutations/formatting needed
+              if (
+                previewAppliedText === finalTextTrimmed &&
+                !hasFinalEditMutation &&
+                !needsFormattingPass
+              ) {
+                await draftStream?.stop();
+                draftStoppedForPreviewEdit = true;
+                finalizedViaPreviewMessage = true;
+                deliveryState.delivered = true;
+                return;
+              }
               await draftStream?.stop();
               draftStoppedForPreviewEdit = true;
               if (

@@ -1,5 +1,5 @@
-import path from "node:path";
 import type { Bot } from "grammy";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { STATE_DIR } from "../config/paths.js";
 
@@ -41,11 +41,12 @@ describe("dispatchTelegramMessage draft streaming", () => {
     editMessageTelegram.mockReset();
   });
 
-  function createDraftStream(messageId?: number) {
+  function createDraftStream(messageId?: number, lastSentText?: string) {
     return {
       update: vi.fn(),
       flush: vi.fn().mockResolvedValue(undefined),
       messageId: vi.fn().mockReturnValue(messageId),
+      lastSentText: vi.fn().mockReturnValue(lastSentText),
       clear: vi.fn().mockResolvedValue(undefined),
       stop: vi.fn().mockResolvedValue(undefined),
       forceNewMessage: vi.fn(),
@@ -273,6 +274,98 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
     expect(draftStream.clear).not.toHaveBeenCalled();
     expect(draftStream.stop).toHaveBeenCalled();
+  });
+
+  it("skips final preview edit when draft already matches final plain text", async () => {
+    const draftStream = createDraftStream(999, "Hello final");
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Hello final" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(editMessageTelegram).not.toHaveBeenCalled();
+    expect(deliverReplies).not.toHaveBeenCalled();
+    expect(draftStream.clear).not.toHaveBeenCalled();
+    expect(draftStream.stop).toHaveBeenCalled();
+  });
+
+  it("still edits preview when markdown formatting pass is needed", async () => {
+    const draftStream = createDraftStream(999, "**bold**");
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "**bold**" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "999" });
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(editMessageTelegram).toHaveBeenCalledWith(123, 999, "**bold**", expect.any(Object));
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("still edits preview when final buttons mutate message markup", async () => {
+    const draftStream = createDraftStream(999, "Hello final");
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        {
+          text: "Hello final",
+          channelData: {
+            telegram: {
+              buttons: [[{ text: "Press", callback_data: "press" }]],
+            },
+          },
+        },
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "999" });
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      999,
+      "Hello final",
+      expect.objectContaining({
+        buttons: [[{ text: "Press", callback_data: "press" }]],
+      }),
+    );
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("still edits preview when linkPreview setting requires final mutation", async () => {
+    const draftStream = createDraftStream(999, "https://example.com");
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "https://example.com" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "999" });
+
+    await dispatchWithContext({
+      context: createContext(),
+      telegramCfg: { linkPreview: false },
+    });
+
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      999,
+      "https://example.com",
+      expect.objectContaining({
+        linkPreview: false,
+      }),
+    );
+    expect(deliverReplies).not.toHaveBeenCalled();
   });
 
   it("falls back to normal delivery when preview final is too long to edit", async () => {

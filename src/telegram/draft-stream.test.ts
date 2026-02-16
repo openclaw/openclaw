@@ -50,11 +50,13 @@ describe("createTelegramDraftStream", () => {
     stream.update("Hello");
     await expectInitialForumSend(api);
     await (api.sendMessage.mock.results[0]?.value as Promise<unknown>);
+    expect(stream.lastSentText()).toBe("Hello");
 
     stream.update("Hello again");
     await stream.flush();
 
     expect(api.editMessageText).toHaveBeenCalledWith(123, 17, "Hello again");
+    expect(stream.lastSentText()).toBe("Hello again");
   });
 
   it("waits for in-flight updates before final flush edit", async () => {
@@ -132,6 +134,33 @@ describe("createTelegramDraftStream", () => {
     // Should have sent a second new message, not edited the first
     expect(api.sendMessage).toHaveBeenCalledTimes(2);
     expect(api.sendMessage).toHaveBeenLastCalledWith(123, "After thinking", undefined);
+  });
+
+  it("keeps lastSentText at the last successful value when an edit fails", async () => {
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 17 }),
+      editMessageText: vi.fn().mockRejectedValue(new Error("edit failed")),
+      deleteMessage: vi.fn().mockResolvedValue(true),
+    };
+    const stream = createTelegramDraftStream({
+      // oxlint-disable-next-line typescript/no-explicit-any
+      api: api as any,
+      chatId: 123,
+      thread: { id: 99, scope: "forum" },
+    });
+
+    stream.update("Hello");
+    await vi.waitFor(() =>
+      expect(api.sendMessage).toHaveBeenCalledWith(123, "Hello", { message_thread_id: 99 }),
+    );
+    await (api.sendMessage.mock.results[0]?.value as Promise<unknown>);
+    expect(stream.lastSentText()).toBe("Hello");
+
+    stream.update("Hello again");
+    await stream.flush();
+
+    expect(api.editMessageText).toHaveBeenCalledWith(123, 17, "Hello again");
+    expect(stream.lastSentText()).toBe("Hello");
   });
 });
 

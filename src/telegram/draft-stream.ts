@@ -9,6 +9,7 @@ export type TelegramDraftStream = {
   update: (text: string) => void;
   flush: () => Promise<void>;
   messageId: () => number | undefined;
+  lastSentText: () => string | undefined;
   clear: () => Promise<void>;
   stop: () => Promise<void>;
   /** Reset internal state so the next update creates a new message instead of editing. */
@@ -146,6 +147,7 @@ export function createTelegramDraftStream(params: {
     update,
     flush: loop.flush,
     messageId: () => streamMessageId,
+    lastSentText: () => lastSentText,
     clear,
     stop,
     forceNewMessage,
