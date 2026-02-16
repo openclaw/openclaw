@@ -147,6 +147,8 @@ function rejectUpgrade(socket: Duplex, status: number, bodyText: string) {
 
 const serversByPort = new Map<number, ChromeExtensionRelayServer>();
 const relayAuthByPort = new Map<number, string>();
+// Track original requested port -> relay when fallback occurs (EADDRINUSE)
+const relayByOriginalPort = new Map<number, ChromeExtensionRelayServer>();
 
 function relayAuthTokenForUrl(url: string): string | null {
   try {
@@ -185,7 +187,7 @@ export async function ensureChromeExtensionRelayServer(opts: {
     throw new Error(`extension relay requires loopback cdpUrl host (got ${info.host})`);
   }
 
-  const existing = serversByPort.get(info.port);
+  const existing = serversByPort.get(info.port) ?? relayByOriginalPort.get(info.port);
   if (existing) {
     return existing;
   }
@@ -752,6 +754,8 @@ export async function ensureChromeExtensionRelayServer(opts: {
     stop: async () => {
       serversByPort.delete(port);
       relayAuthByPort.delete(port);
+      // Also clean up original port mapping if this was a fallback
+      relayByOriginalPort.delete(info.port);
       try {
         extensionWs?.close(1001, "server stopping");
       } catch {
@@ -774,16 +778,21 @@ export async function ensureChromeExtensionRelayServer(opts: {
 
   relayAuthByPort.set(port, relayAuthToken);
   serversByPort.set(port, relay);
+  // If we fell back to a different port, also map the original requested port
+  if (port !== info.port) {
+    relayByOriginalPort.set(info.port, relay);
+  }
   return relay;
 }
 
 export async function stopChromeExtensionRelayServer(opts: { cdpUrl: string }): Promise<boolean> {
   const info = parseBaseUrl(opts.cdpUrl);
-  const existing = serversByPort.get(info.port);
+  const existing = serversByPort.get(info.port) ?? relayByOriginalPort.get(info.port);
   if (!existing) {
     return false;
   }
   await existing.stop();
-  relayAuthByPort.delete(info.port);
+  // Note: stop() cleans up both serversByPort and relayByOriginalPort
+  relayAuthByPort.delete(existing.port);
   return true;
 }
