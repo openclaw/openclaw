@@ -338,7 +338,9 @@ function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronP
     if (existing.kind !== "systemEvent") {
       return buildPayloadFromPatch(patch as CronPayloadPatch & { kind: string });
     }
-    const text = typeof patch.text === "string" ? patch.text : existing.text;
+    // patch may be the kind-less variant which also carries `text`
+    const p = patch as { text?: string };
+    const text = typeof p.text === "string" ? p.text : existing.text;
     return { kind: "systemEvent", text };
   }
 
@@ -346,33 +348,46 @@ function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronP
     return buildPayloadFromPatch(patch as CronPayloadPatch & { kind: string });
   }
 
+  // patch is either { kind: "agentTurn"; ... } or { kind?: undefined; ... } — both carry the same optional fields
+  const p = patch as {
+    message?: string;
+    model?: string;
+    thinking?: string;
+    timeoutSeconds?: number;
+    allowUnsafeExternalContent?: boolean;
+    deliver?: boolean;
+    channel?: string;
+    to?: string;
+    bestEffortDeliver?: boolean;
+  };
+
   const next: Extract<CronPayload, { kind: "agentTurn" }> = { ...existing };
-  if (typeof patch.message === "string") {
-    next.message = patch.message;
+  if (typeof p.message === "string") {
+    next.message = p.message;
   }
-  if (typeof patch.model === "string") {
-    next.model = patch.model;
+  if (typeof p.model === "string") {
+    next.model = p.model;
   }
-  if (typeof patch.thinking === "string") {
-    next.thinking = patch.thinking;
+  if (typeof p.thinking === "string") {
+    next.thinking = p.thinking;
   }
-  if (typeof patch.timeoutSeconds === "number") {
-    next.timeoutSeconds = patch.timeoutSeconds;
+  if (typeof p.timeoutSeconds === "number") {
+    next.timeoutSeconds = p.timeoutSeconds;
   }
-  if (typeof patch.allowUnsafeExternalContent === "boolean") {
-    next.allowUnsafeExternalContent = patch.allowUnsafeExternalContent;
+  if (typeof p.allowUnsafeExternalContent === "boolean") {
+    next.allowUnsafeExternalContent = p.allowUnsafeExternalContent;
   }
-  if (typeof patch.deliver === "boolean") {
-    next.deliver = patch.deliver;
+  if (typeof p.deliver === "boolean") {
+    next.deliver = p.deliver;
   }
-  if (typeof patch.channel === "string") {
-    next.channel = patch.channel;
+  if (typeof p.channel === "string") {
+    next.channel = p.channel;
   }
-  if (typeof patch.to === "string") {
-    next.to = patch.to;
+  if (typeof p.to === "string") {
+    next.to = p.to;
   }
-  if (typeof patch.bestEffortDeliver === "boolean") {
-    next.bestEffortDeliver = patch.bestEffortDeliver;
+  if (typeof p.bestEffortDeliver === "boolean") {
+    next.bestEffortDeliver = p.bestEffortDeliver;
   }
   return next;
 }
