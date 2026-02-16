@@ -27,12 +27,8 @@ const unitIsolatedFilesRaw = [
   "src/browser/server.agent-contract-form-layout-act-commands.test.ts",
   "src/browser/server.skips-default-maxchars-explicitly-set-zero.test.ts",
   "src/browser/server.auth-token-gates-http.test.ts",
-  "src/browser/server-context.remote-tab-ops.test.ts",
-  "src/browser/server-context.ensure-tab-available.prefers-last-target.test.ts",
   // Keep this high-variance heavy file off the unit-fast critical path.
   "src/auto-reply/reply.block-streaming.test.ts",
-  // Integration test is process-heavy and can bottleneck unit-fast.
-  "test/git-hooks-pre-commit.integration.test.ts",
   // Archive extraction/fixture-heavy suite; keep off unit-fast critical path.
   "src/hooks/install.test.ts",
   // Setup-heavy bot bootstrap suite.
