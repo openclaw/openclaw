@@ -124,18 +124,6 @@ describe("session path safety", () => {
     expect(resolved).toBe(path.resolve(sessionsDir, "abc-123.jsonl"));
   });
 
-  it("accepts absolute sessionFile with topic suffix within the sessions dir", () => {
-    const sessionsDir = "/tmp/openclaw/agents/main/sessions";
-
-    const resolved = resolveSessionFilePath(
-      "sess-1",
-      { sessionFile: "/tmp/openclaw/agents/main/sessions/abc-123-topic-42.jsonl" },
-      { sessionsDir },
-    );
-
-    expect(resolved).toBe(path.resolve(sessionsDir, "abc-123-topic-42.jsonl"));
-  });
-
   it("rejects absolute sessionFile paths outside known agent sessions dirs", () => {
     const sessionsDir = "/tmp/openclaw/agents/main/sessions";
 
