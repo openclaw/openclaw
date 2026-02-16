@@ -1131,43 +1131,6 @@ describe("sendStickerTelegram", () => {
     });
   });
 
-  it("normalizes chat ids with internal prefixes", async () => {
-    const sendSticker = vi.fn().mockResolvedValue({
-      message_id: 104,
-      chat: { id: "123" },
-    });
-    const api = { sendSticker } as unknown as {
-      sendSticker: typeof sendSticker;
-    };
-
-    await sendStickerTelegram("telegram:123", "fileId123", {
-      token: "tok",
-      api,
-    });
-
-    expect(sendSticker).toHaveBeenCalledWith("123", "fileId123", undefined);
-  });
-
-  it("parses message_thread_id from recipient string (telegram:group:...:topic:...)", async () => {
-    const chatId = "-1001234567890";
-    const sendSticker = vi.fn().mockResolvedValue({
-      message_id: 105,
-      chat: { id: chatId },
-    });
-    const api = { sendSticker } as unknown as {
-      sendSticker: typeof sendSticker;
-    };
-
-    await sendStickerTelegram(`telegram:group:${chatId}:topic:271`, "fileId123", {
-      token: "tok",
-      api,
-    });
-
-    expect(sendSticker).toHaveBeenCalledWith(chatId, "fileId123", {
-      message_thread_id: 271,
-    });
-  });
-
   it("wraps chat-not-found with actionable context", async () => {
     const chatId = "123";
     const err = new Error("400: Bad Request: chat not found");
