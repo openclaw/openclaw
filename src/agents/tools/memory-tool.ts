@@ -81,12 +81,14 @@ export function createMemorySearchTool(options: {
           status.backend === "qmd"
             ? clampResultsByInjectedChars(decorated, resolved.qmd?.limits.maxInjectedChars)
             : decorated;
+        const searchMode = (status.custom as { searchMode?: string } | undefined)?.searchMode;
         return jsonResult({
           results,
           provider: status.provider,
           model: status.model,
           fallback: status.fallback,
           citations: citationsMode,
+          mode: searchMode,
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
