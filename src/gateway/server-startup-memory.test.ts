@@ -47,6 +47,22 @@ describe("startGatewayMemoryBackend", () => {
     expect(log.warn).not.toHaveBeenCalled();
   });
 
+  it("initializes qmd backend for all agents in agents.list", async () => {
+    const cfg = {
+      agents: { list: [{ id: "ops", default: true }, { id: "helper" }] },
+      memory: { backend: "qmd", qmd: {} },
+    } as OpenClawConfig;
+    const log = { info: vi.fn(), warn: vi.fn() };
+    getMemorySearchManagerMock.mockResolvedValue({ manager: { search: vi.fn() } });
+
+    await startGatewayMemoryBackend({ cfg, log });
+
+    expect(getMemorySearchManagerMock).toHaveBeenCalledWith({ cfg, agentId: "ops" });
+    expect(getMemorySearchManagerMock).toHaveBeenCalledWith({ cfg, agentId: "helper" });
+    expect(getMemorySearchManagerMock).toHaveBeenCalledTimes(2);
+    expect(log.info).toHaveBeenCalledTimes(2);
+  });
+
   it("logs a warning when qmd manager init fails", async () => {
     const cfg = {
       agents: { list: [{ id: "main", default: true }] },
