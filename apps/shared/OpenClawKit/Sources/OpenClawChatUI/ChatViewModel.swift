@@ -190,7 +190,7 @@ public final class OpenClawChatViewModel {
         let decoded = raw.compactMap { item in
             (try? ChatPayloadDecoding.decode(item, as: OpenClawChatMessage.self))
         }
-        return Self.filterHeartbeatNoise(Self.dedupeMessages(decoded))
+        return Self.dedupeMessages(decoded)
     }
 
     private static func messageIdentityKey(for message: OpenClawChatMessage) -> String? {
@@ -275,56 +275,6 @@ public final class OpenClawChatViewModel {
         return result
     }
 
-    private static func filterHeartbeatNoise(_ messages: [OpenClawChatMessage]) -> [OpenClawChatMessage] {
-        messages.filter { !Self.isHeartbeatNoiseMessage($0) }
-    }
-
-    private static func isHeartbeatNoiseMessage(_ message: OpenClawChatMessage) -> Bool {
-        let role = message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let text = message.content.compactMap(\.text).joined(separator: "\n")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return false }
-
-        if role == "assistant", Self.isHeartbeatAckText(text) {
-            return true
-        }
-        if role == "user", Self.isHeartbeatPollText(text) {
-            return true
-        }
-        // Some models occasionally echo the heartbeat prompt text as an assistant reply.
-        if role == "assistant", Self.isHeartbeatPollText(text) {
-            return true
-        }
-        return false
-    }
-
-    private static func isHeartbeatPollText(_ text: String) -> Bool {
-        let lower = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        // Match the default heartbeat prompt without requiring the entire multi-sentence string.
-        return lower.hasPrefix("read heartbeat.md if it exists")
-    }
-
-    private static func isHeartbeatAckText(_ text: String) -> Bool {
-        // Heartbeat acks are intended to be internal. Treat common markup wrappers as equivalent.
-        var t = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if t.isEmpty { return false }
-
-        // Strip a few common wrappers (markdown/HTML) so **HEARTBEAT_OK** or <b>HEARTBEAT_OK</b> still matches.
-        let wrappers = ["**", "__", "`", "<b>", "</b>", "<strong>", "</strong>"]
-        for w in wrappers {
-            t = t.replacingOccurrences(of: w, with: "")
-        }
-        t = t.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        // Allow a tiny amount of padding (some channels append a marker/emoji).
-        if t == "HEARTBEAT_OK" { return true }
-        if t.hasPrefix("HEARTBEAT_OK") {
-            let rest = t.dropFirst("HEARTBEAT_OK".count)
-            return rest.trimmingCharacters(in: .whitespacesAndNewlines).count <= 10
-        }
-        return false
-    }
-
     private static func dedupeKey(for message: OpenClawChatMessage) -> String? {
         guard let timestamp = message.timestamp else { return nil }
         let text = message.content.compactMap(\.text).joined(separator: "\n")
@@ -334,22 +284,14 @@ public final class OpenClawChatViewModel {
     }
 
     private func performSend() async {
-        if self.isSending {
-            chatUILogger.info("performSend ignored: already sending")
-            return
-        }
+        guard !self.isSending else { return }
         let trimmed = self.input.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty && self.attachments.isEmpty {
-            chatUILogger.info("performSend ignored: empty input and no attachments")
+        guard !trimmed.isEmpty || !self.attachments.isEmpty else { return }
+
+        guard self.healthOK else {
+            self.errorText = "Gateway health not OK; cannot send"
             return
         }
-
-        // Health checks are best-effort. If they fail (or the gateway doesn't implement them),
-        // we still attempt to send and let the RPC result determine success.
-        if !self.healthOK {
-            self.errorText = "Gateway health unknown; attempting send anyway"
-        }
-        chatUILogger.info("performSend sending len=\(trimmed.count, privacy: .public) attachments=\(self.attachments.count, privacy: .public) sessionKey=\(self.sessionKey, privacy: .public)")
 
         self.isSending = true
         self.errorText = nil
