@@ -7,6 +7,7 @@ import { resolveThreadParentSessionKey } from "../sessions/session-key-utils.js"
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentConfig, resolveAgentIdFromSessionKey } from "./agent-scope.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "./glob-pattern.js";
+import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
 import { expandToolGroups, normalizeToolName } from "./tool-policy.js";
 
 function makeToolPolicyMatcher(policy: SandboxToolPolicy) {
@@ -112,34 +113,6 @@ type ToolPolicyConfig = {
   profile?: string;
 };
 
-function unionAllow(base?: string[], extra?: string[]) {
-  if (!Array.isArray(extra) || extra.length === 0) {
-    return base;
-  }
-  // If the user is using alsoAllow without an allowlist, treat it as additive on top of
-  // an implicit allow-all policy.
-  if (!Array.isArray(base) || base.length === 0) {
-    return Array.from(new Set(["*", ...extra]));
-  }
-  return Array.from(new Set([...base, ...extra]));
-}
-
-function pickToolPolicy(config?: ToolPolicyConfig): SandboxToolPolicy | undefined {
-  if (!config) {
-    return undefined;
-  }
-  const allow = Array.isArray(config.allow)
-    ? unionAllow(config.allow, config.alsoAllow)
-    : Array.isArray(config.alsoAllow) && config.alsoAllow.length > 0
-      ? unionAllow(undefined, config.alsoAllow)
-      : undefined;
-  const deny = Array.isArray(config.deny) ? config.deny : undefined;
-  if (!allow && !deny) {
-    return undefined;
-  }
-  return { allow, deny };
-}
-
 function normalizeProviderKey(value: string): string {
   return value.trim().toLowerCase();
 }
@@ -237,10 +210,10 @@ export function resolveEffectiveToolPolicy(params: {
   });
   return {
     agentId,
-    globalPolicy: pickToolPolicy(globalTools),
-    globalProviderPolicy: pickToolPolicy(providerPolicy),
-    agentPolicy: pickToolPolicy(agentTools),
-    agentProviderPolicy: pickToolPolicy(agentProviderPolicy),
+    globalPolicy: pickSandboxToolPolicy(globalTools),
+    globalProviderPolicy: pickSandboxToolPolicy(providerPolicy),
+    agentPolicy: pickSandboxToolPolicy(agentTools),
+    agentProviderPolicy: pickSandboxToolPolicy(agentProviderPolicy),
     profile,
     providerProfile: agentProviderPolicy?.profile ?? providerPolicy?.profile,
     // alsoAllow is applied at the profile stage (to avoid being filtered out early).
@@ -313,7 +286,7 @@ export function resolveGroupToolPolicy(params: {
       senderUsername: params.senderUsername,
       senderE164: params.senderE164,
     });
-  return pickToolPolicy(toolsConfig);
+  return pickSandboxToolPolicy(toolsConfig);
 }
 
 export function isToolAllowedByPolicies(
