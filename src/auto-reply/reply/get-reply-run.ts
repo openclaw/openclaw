@@ -260,8 +260,8 @@ export async function runPreparedReply(
     if (reactionDebouncer) {
       await reactionDebouncer.drainAllForSession(sessionKey);
     }
-  } catch {
-    // Non-fatal: reaction drain failure should not block the inbound message.
+  } catch (err) {
+    logVerbose(`reaction drain failed for ${sessionKey}: ${String(err)}`);
   }
 
   prefixedBodyBase = await prependSystemEvents({

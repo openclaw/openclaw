@@ -33,7 +33,9 @@ export async function dispatchReactionEvent(bundle: ReactionBundleContext): Prom
   const { resolveHeartbeatDeliveryTarget } = await import("../outbound/targets.js");
   const { loadSessionStore } = await import("../../config/sessions/store.js");
 
-  // Resolve the session entry to get delivery context
+  // Resolve the session entry to get delivery context.
+  // Note: loadSessionStore reads from disk on each call. This is acceptable
+  // because reactions are debounced, keeping call frequency low.
   const sessionCfg = cfg.session;
   const storePath = resolveStorePath(sessionCfg?.store);
   const sessionStore = loadSessionStore(storePath);
