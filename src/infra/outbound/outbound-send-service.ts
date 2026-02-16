@@ -8,6 +8,7 @@ import { dispatchChannelMessageAction } from "../../channels/plugins/message-act
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
 import { throwIfAborted } from "./abort.js";
 import { sendMessage, sendPoll } from "./message.js";
+import { extractToolPayload } from "./tool-payload.js";
 
 export type OutboundGatewayContext = {
   url?: string;
@@ -22,6 +23,8 @@ export type OutboundSendContext = {
   cfg: OpenClawConfig;
   channel: ChannelId;
   params: Record<string, unknown>;
+  /** Active agent id for per-agent outbound media root scoping. */
+  agentId?: string;
   accountId?: string | null;
   gateway?: OutboundGatewayContext;
   toolContext?: ChannelThreadingToolContext;
@@ -36,30 +39,6 @@ export type OutboundSendContext = {
   abortSignal?: AbortSignal;
   silent?: boolean;
 };
-
-function extractToolPayload(result: AgentToolResult<unknown>): unknown {
-  if (result.details !== undefined) {
-    return result.details;
-  }
-  const textBlock = Array.isArray(result.content)
-    ? result.content.find(
-        (block) =>
-          block &&
-          typeof block === "object" &&
-          (block as { type?: unknown }).type === "text" &&
-          typeof (block as { text?: unknown }).text === "string",
-      )
-    : undefined;
-  const text = (textBlock as { text?: string } | undefined)?.text;
-  if (text) {
-    try {
-      return JSON.parse(text);
-    } catch {
-      return text;
-    }
-  }
-  return result.content ?? result;
-}
 
 export async function executeSendAction(params: {
   ctx: OutboundSendContext;
@@ -116,6 +95,7 @@ export async function executeSendAction(params: {
     cfg: params.ctx.cfg,
     to: params.to,
     content: params.message,
+    agentId: params.ctx.agentId,
     mediaUrl: params.mediaUrl || undefined,
     mediaUrls: params.mediaUrls,
     channel: params.ctx.channel || undefined,
@@ -145,7 +125,10 @@ export async function executePollAction(params: {
   question: string;
   options: string[];
   maxSelections: number;
+  durationSeconds?: number;
   durationHours?: number;
+  threadId?: string;
+  isAnonymous?: boolean;
 }): Promise<{
   handledBy: "plugin" | "core";
   payload: unknown;
@@ -178,8 +161,13 @@ export async function executePollAction(params: {
     question: params.question,
     options: params.options,
     maxSelections: params.maxSelections,
+    durationSeconds: params.durationSeconds ?? undefined,
     durationHours: params.durationHours ?? undefined,
     channel: params.ctx.channel,
+    accountId: params.ctx.accountId ?? undefined,
+    threadId: params.threadId ?? undefined,
+    silent: params.ctx.silent ?? undefined,
+    isAnonymous: params.isAnonymous ?? undefined,
     dryRun: params.ctx.dryRun,
     gateway: params.ctx.gateway,
   });

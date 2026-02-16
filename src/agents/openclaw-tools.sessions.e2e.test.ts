@@ -1,4 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import {
+  addSubagentRunForTests,
+  listSubagentRunsForRequester,
+  resetSubagentRegistryForTests,
+} from "./subagent-registry.js";
 
 const callGatewayMock = vi.fn();
 vi.mock("../gateway/call.js", () => ({
@@ -14,6 +19,10 @@ vi.mock("../config/config.js", async (importOriginal) => {
         mainKey: "main",
         scope: "per-sender",
         agentToAgent: { maxPingPongTurns: 2 },
+      },
+      tools: {
+        // Keep sessions tools permissive in this suite; dedicated visibility tests cover defaults.
+        sessions: { visibility: "all" },
       },
     }),
     resolveGatewayPort: () => 18789,
@@ -72,7 +81,7 @@ describe("sessions tools", () => {
     expect(schemaProp("sessions_send", "timeoutSeconds").type).toBe("number");
     expect(schemaProp("sessions_spawn", "thinking").type).toBe("string");
     expect(schemaProp("sessions_spawn", "runTimeoutSeconds").type).toBe("number");
-    expect(schemaProp("sessions_spawn", "timeoutSeconds").type).toBe("number");
+    expect(schemaProp("subagents", "recentMinutes").type).toBe("number");
   });
 
   it("sessions_list filters kinds and includes messages", async () => {
@@ -671,5 +680,334 @@ describe("sessions tools", () => {
       channel: "discord",
       message: "announce now",
     });
+  });
+
+  it("subagents lists active and recent runs", async () => {
+    resetSubagentRegistryForTests();
+    callGatewayMock.mockReset();
+    const now = Date.now();
+    addSubagentRunForTests({
+      runId: "run-active",
+      childSessionKey: "agent:main:subagent:active",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "investigate auth",
+      cleanup: "keep",
+      createdAt: now - 2 * 60_000,
+      startedAt: now - 2 * 60_000,
+    });
+    addSubagentRunForTests({
+      runId: "run-recent",
+      childSessionKey: "agent:main:subagent:recent",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "summarize findings",
+      cleanup: "keep",
+      createdAt: now - 15 * 60_000,
+      startedAt: now - 14 * 60_000,
+      endedAt: now - 5 * 60_000,
+      outcome: { status: "ok" },
+    });
+    addSubagentRunForTests({
+      runId: "run-old",
+      childSessionKey: "agent:main:subagent:old",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "old completed run",
+      cleanup: "keep",
+      createdAt: now - 90 * 60_000,
+      startedAt: now - 89 * 60_000,
+      endedAt: now - 80 * 60_000,
+      outcome: { status: "ok" },
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: "agent:main:main",
+    }).find((candidate) => candidate.name === "subagents");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing subagents tool");
+    }
+
+    const result = await tool.execute("call-subagents-list", { action: "list" });
+    const details = result.details as {
+      status?: string;
+      active?: unknown[];
+      recent?: unknown[];
+      text?: string;
+    };
+    expect(details.status).toBe("ok");
+    expect(details.active).toHaveLength(1);
+    expect(details.recent).toHaveLength(1);
+    expect(details.text).toContain("active subagents:");
+    expect(details.text).toContain("recent (last 30m):");
+    resetSubagentRegistryForTests();
+  });
+
+  it("subagents list usage separates io tokens from prompt/cache", async () => {
+    resetSubagentRegistryForTests();
+    callGatewayMock.mockReset();
+    const now = Date.now();
+    addSubagentRunForTests({
+      runId: "run-usage-active",
+      childSessionKey: "agent:main:subagent:usage-active",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "wait and check weather",
+      cleanup: "keep",
+      createdAt: now - 2 * 60_000,
+      startedAt: now - 2 * 60_000,
+    });
+
+    const sessionsModule = await import("../config/sessions.js");
+    const loadSessionStoreSpy = vi
+      .spyOn(sessionsModule, "loadSessionStore")
+      .mockImplementation(() => ({
+        "agent:main:subagent:usage-active": {
+          modelProvider: "anthropic",
+          model: "claude-opus-4-6",
+          inputTokens: 12,
+          outputTokens: 1000,
+          totalTokens: 197000,
+        },
+      }));
+
+    try {
+      const tool = createOpenClawTools({
+        agentSessionKey: "agent:main:main",
+      }).find((candidate) => candidate.name === "subagents");
+      expect(tool).toBeDefined();
+      if (!tool) {
+        throw new Error("missing subagents tool");
+      }
+
+      const result = await tool.execute("call-subagents-list-usage", { action: "list" });
+      const details = result.details as {
+        status?: string;
+        text?: string;
+      };
+      expect(details.status).toBe("ok");
+      expect(details.text).toMatch(/tokens 1(\.0)?k \(in 12 \/ out 1(\.0)?k\)/);
+      expect(details.text).toContain("prompt/cache 197k");
+      expect(details.text).not.toContain("1.0k io");
+    } finally {
+      loadSessionStoreSpy.mockRestore();
+      resetSubagentRegistryForTests();
+    }
+  });
+
+  it("subagents steer sends guidance to a running run", async () => {
+    resetSubagentRegistryForTests();
+    callGatewayMock.mockReset();
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "agent") {
+        return { runId: "run-steer-1" };
+      }
+      return {};
+    });
+    addSubagentRunForTests({
+      runId: "run-steer",
+      childSessionKey: "agent:main:subagent:steer",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "prepare release notes",
+      cleanup: "keep",
+      createdAt: Date.now() - 60_000,
+      startedAt: Date.now() - 60_000,
+    });
+
+    const sessionsModule = await import("../config/sessions.js");
+    const loadSessionStoreSpy = vi
+      .spyOn(sessionsModule, "loadSessionStore")
+      .mockImplementation(() => ({
+        "agent:main:subagent:steer": {
+          sessionId: "child-session-steer",
+          updatedAt: Date.now(),
+        },
+      }));
+
+    try {
+      const tool = createOpenClawTools({
+        agentSessionKey: "agent:main:main",
+      }).find((candidate) => candidate.name === "subagents");
+      expect(tool).toBeDefined();
+      if (!tool) {
+        throw new Error("missing subagents tool");
+      }
+
+      const result = await tool.execute("call-subagents-steer", {
+        action: "steer",
+        target: "1",
+        message: "skip changelog and focus on tests",
+      });
+      const details = result.details as { status?: string; runId?: string; text?: string };
+      expect(details.status).toBe("accepted");
+      expect(details.runId).toBe("run-steer-1");
+      expect(details.text).toContain("steered");
+      const steerWaitIndex = callGatewayMock.mock.calls.findIndex(
+        (call) =>
+          (call[0] as { method?: string; params?: { runId?: string } }).method === "agent.wait" &&
+          (call[0] as { method?: string; params?: { runId?: string } }).params?.runId ===
+            "run-steer",
+      );
+      expect(steerWaitIndex).toBeGreaterThanOrEqual(0);
+      const steerRunIndex = callGatewayMock.mock.calls.findIndex(
+        (call) => (call[0] as { method?: string }).method === "agent",
+      );
+      expect(steerRunIndex).toBeGreaterThan(steerWaitIndex);
+      expect(callGatewayMock.mock.calls[steerWaitIndex]?.[0]).toMatchObject({
+        method: "agent.wait",
+        params: { runId: "run-steer", timeoutMs: 5_000 },
+        timeoutMs: 7_000,
+      });
+      expect(callGatewayMock.mock.calls[steerRunIndex]?.[0]).toMatchObject({
+        method: "agent",
+        params: {
+          lane: "subagent",
+          sessionKey: "agent:main:subagent:steer",
+          sessionId: "child-session-steer",
+          timeout: 0,
+        },
+      });
+
+      const trackedRuns = listSubagentRunsForRequester("agent:main:main");
+      expect(trackedRuns).toHaveLength(1);
+      expect(trackedRuns[0].runId).toBe("run-steer-1");
+      expect(trackedRuns[0].endedAt).toBeUndefined();
+    } finally {
+      loadSessionStoreSpy.mockRestore();
+      resetSubagentRegistryForTests();
+    }
+  });
+
+  it("subagents numeric targets follow active-first list ordering", async () => {
+    resetSubagentRegistryForTests();
+    callGatewayMock.mockReset();
+    addSubagentRunForTests({
+      runId: "run-active",
+      childSessionKey: "agent:main:subagent:active",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "active task",
+      cleanup: "keep",
+      createdAt: Date.now() - 120_000,
+      startedAt: Date.now() - 120_000,
+    });
+    addSubagentRunForTests({
+      runId: "run-recent",
+      childSessionKey: "agent:main:subagent:recent",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "recent task",
+      cleanup: "keep",
+      createdAt: Date.now() - 30_000,
+      startedAt: Date.now() - 30_000,
+      endedAt: Date.now() - 10_000,
+      outcome: { status: "ok" },
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: "agent:main:main",
+    }).find((candidate) => candidate.name === "subagents");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing subagents tool");
+    }
+
+    const result = await tool.execute("call-subagents-kill-order", {
+      action: "kill",
+      target: "1",
+    });
+    const details = result.details as { status?: string; runId?: string; text?: string };
+    expect(details.status).toBe("ok");
+    expect(details.runId).toBe("run-active");
+    expect(details.text).toContain("killed");
+
+    resetSubagentRegistryForTests();
+  });
+
+  it("subagents kill stops a running run", async () => {
+    resetSubagentRegistryForTests();
+    callGatewayMock.mockReset();
+    addSubagentRunForTests({
+      runId: "run-kill",
+      childSessionKey: "agent:main:subagent:kill",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "long running task",
+      cleanup: "keep",
+      createdAt: Date.now() - 60_000,
+      startedAt: Date.now() - 60_000,
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: "agent:main:main",
+    }).find((candidate) => candidate.name === "subagents");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing subagents tool");
+    }
+
+    const result = await tool.execute("call-subagents-kill", {
+      action: "kill",
+      target: "1",
+    });
+    const details = result.details as { status?: string; text?: string };
+    expect(details.status).toBe("ok");
+    expect(details.text).toContain("killed");
+    resetSubagentRegistryForTests();
+  });
+
+  it("subagents kill-all cascades through ended parents to active descendants", async () => {
+    resetSubagentRegistryForTests();
+    callGatewayMock.mockReset();
+    const now = Date.now();
+    const endedParentKey = "agent:main:subagent:parent-ended";
+    const activeChildKey = "agent:main:subagent:parent-ended:subagent:worker";
+    addSubagentRunForTests({
+      runId: "run-parent-ended",
+      childSessionKey: endedParentKey,
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "orchestrator",
+      cleanup: "keep",
+      createdAt: now - 120_000,
+      startedAt: now - 120_000,
+      endedAt: now - 60_000,
+      outcome: { status: "ok" },
+    });
+    addSubagentRunForTests({
+      runId: "run-worker-active",
+      childSessionKey: activeChildKey,
+      requesterSessionKey: endedParentKey,
+      requesterDisplayKey: endedParentKey,
+      task: "leaf worker",
+      cleanup: "keep",
+      createdAt: now - 30_000,
+      startedAt: now - 30_000,
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: "agent:main:main",
+    }).find((candidate) => candidate.name === "subagents");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing subagents tool");
+    }
+
+    const result = await tool.execute("call-subagents-kill-all-cascade-ended", {
+      action: "kill",
+      target: "all",
+    });
+    const details = result.details as { status?: string; killed?: number; text?: string };
+    expect(details.status).toBe("ok");
+    expect(details.killed).toBe(1);
+    expect(details.text).toContain("killed 1 subagent");
+
+    const descendants = listSubagentRunsForRequester(endedParentKey);
+    const worker = descendants.find((entry) => entry.runId === "run-worker-active");
+    expect(worker?.endedAt).toBeTypeOf("number");
+    resetSubagentRegistryForTests();
   });
 });

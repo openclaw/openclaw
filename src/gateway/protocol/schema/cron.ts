@@ -1,5 +1,23 @@
-import { Type } from "@sinclair/typebox";
+import { Type, type TSchema } from "@sinclair/typebox";
 import { NonEmptyString } from "./primitives.js";
+
+function cronAgentTurnPayloadSchema(params: { message: TSchema }) {
+  return Type.Object(
+    {
+      kind: Type.Literal("agentTurn"),
+      message: params.message,
+      model: Type.Optional(Type.String()),
+      thinking: Type.Optional(Type.String()),
+      timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1 })),
+      allowUnsafeExternalContent: Type.Optional(Type.Boolean()),
+      deliver: Type.Optional(Type.Boolean()),
+      channel: Type.Optional(Type.String()),
+      to: Type.Optional(Type.String()),
+      bestEffortDeliver: Type.Optional(Type.Boolean()),
+    },
+    { additionalProperties: false },
+  );
+}
 
 export const CronScheduleSchema = Type.Union([
   Type.Object(
@@ -35,21 +53,7 @@ export const CronPayloadSchema = Type.Union([
     },
     { additionalProperties: false },
   ),
-  Type.Object(
-    {
-      kind: Type.Literal("agentTurn"),
-      message: NonEmptyString,
-      model: Type.Optional(Type.String()),
-      thinking: Type.Optional(Type.String()),
-      timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1 })),
-      allowUnsafeExternalContent: Type.Optional(Type.Boolean()),
-      deliver: Type.Optional(Type.Boolean()),
-      channel: Type.Optional(Type.String()),
-      to: Type.Optional(Type.String()),
-      bestEffortDeliver: Type.Optional(Type.Boolean()),
-    },
-    { additionalProperties: false },
-  ),
+  cronAgentTurnPayloadSchema({ message: NonEmptyString }),
 ]);
 
 export const CronPayloadPatchSchema = Type.Union([
@@ -60,39 +64,54 @@ export const CronPayloadPatchSchema = Type.Union([
     },
     { additionalProperties: false },
   ),
-  Type.Object(
-    {
-      kind: Type.Literal("agentTurn"),
-      message: Type.Optional(NonEmptyString),
-      model: Type.Optional(Type.String()),
-      thinking: Type.Optional(Type.String()),
-      timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1 })),
-      allowUnsafeExternalContent: Type.Optional(Type.Boolean()),
-      deliver: Type.Optional(Type.Boolean()),
-      channel: Type.Optional(Type.String()),
-      to: Type.Optional(Type.String()),
-      bestEffortDeliver: Type.Optional(Type.Boolean()),
-    },
-    { additionalProperties: false },
-  ),
+  cronAgentTurnPayloadSchema({ message: Type.Optional(NonEmptyString) }),
 ]);
 
-export const CronDeliverySchema = Type.Object(
+const CronDeliverySharedProperties = {
+  channel: Type.Optional(Type.Union([Type.Literal("last"), NonEmptyString])),
+  bestEffort: Type.Optional(Type.Boolean()),
+};
+
+const CronDeliveryNoopSchema = Type.Object(
   {
-    mode: Type.Union([Type.Literal("none"), Type.Literal("announce")]),
-    channel: Type.Optional(Type.Union([Type.Literal("last"), NonEmptyString])),
+    mode: Type.Literal("none"),
+    ...CronDeliverySharedProperties,
     to: Type.Optional(Type.String()),
-    bestEffort: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );
 
+const CronDeliveryAnnounceSchema = Type.Object(
+  {
+    mode: Type.Literal("announce"),
+    ...CronDeliverySharedProperties,
+    to: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+const CronDeliveryWebhookSchema = Type.Object(
+  {
+    mode: Type.Literal("webhook"),
+    ...CronDeliverySharedProperties,
+    to: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+export const CronDeliverySchema = Type.Union([
+  CronDeliveryNoopSchema,
+  CronDeliveryAnnounceSchema,
+  CronDeliveryWebhookSchema,
+]);
+
 export const CronDeliveryPatchSchema = Type.Object(
   {
-    mode: Type.Optional(Type.Union([Type.Literal("none"), Type.Literal("announce")])),
-    channel: Type.Optional(Type.Union([Type.Literal("last"), NonEmptyString])),
+    mode: Type.Optional(
+      Type.Union([Type.Literal("none"), Type.Literal("announce"), Type.Literal("webhook")]),
+    ),
+    ...CronDeliverySharedProperties,
     to: Type.Optional(Type.String()),
-    bestEffort: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );

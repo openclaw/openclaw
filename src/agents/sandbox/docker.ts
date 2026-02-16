@@ -111,6 +111,7 @@ import { computeSandboxConfigHash } from "./config-hash.js";
 import { DEFAULT_SANDBOX_IMAGE, SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
 import { readRegistry, updateRegistry } from "./registry.js";
 import { resolveSandboxAgentId, resolveSandboxScopeKey, slugifySessionKey } from "./shared.js";
+import { validateSandboxSecurity } from "./validate-sandbox-security.js";
 
 const HOT_CONTAINER_WINDOW_MS = 5 * 60 * 1000;
 
@@ -123,6 +124,24 @@ export async function execDocker(args: string[], opts?: ExecDockerOptions) {
     stderr: result.stderr.toString("utf8"),
     code: result.code,
   };
+}
+
+export async function readDockerContainerLabel(
+  containerName: string,
+  label: string,
+): Promise<string | null> {
+  const result = await execDocker(
+    ["inspect", "-f", `{{ index .Config.Labels "${label}" }}`, containerName],
+    { allowFailure: true },
+  );
+  if (result.code !== 0) {
+    return null;
+  }
+  const raw = result.stdout.trim();
+  if (!raw || raw === "<no value>") {
+    return null;
+  }
+  return raw;
 }
 
 export async function readDockerPort(containerName: string, port: number) {
@@ -222,6 +241,9 @@ export function buildSandboxCreateArgs(params: {
   labels?: Record<string, string>;
   configHash?: string;
 }) {
+  // Runtime security validation: blocks dangerous bind mounts, network modes, and profiles.
+  validateSandboxSecurity(params.cfg);
+
   const createdAtMs = params.createdAtMs ?? Date.now();
   const args = ["create", "--name", params.name];
   args.push("--label", "openclaw.sandbox=1");
@@ -341,21 +363,7 @@ async function createSandboxContainer(params: {
 }
 
 async function readContainerConfigHash(containerName: string): Promise<string | null> {
-  const readLabel = async (label: string) => {
-    const result = await execDocker(
-      ["inspect", "-f", `{{ index .Config.Labels "${label}" }}`, containerName],
-      { allowFailure: true },
-    );
-    if (result.code !== 0) {
-      return null;
-    }
-    const raw = result.stdout.trim();
-    if (!raw || raw === "<no value>") {
-      return null;
-    }
-    return raw;
-  };
-  return await readLabel("openclaw.configHash");
+  return await readDockerContainerLabel(containerName, "openclaw.configHash");
 }
 
 function formatSandboxRecreateHint(params: { scope: SandboxConfig["scope"]; sessionKey: string }) {

@@ -178,6 +178,42 @@ describe("doctor legacy state migrations", () => {
     expect(fs.existsSync(path.join(oauthDir, "creds.json"))).toBe(false);
   });
 
+  it("migrates legacy Telegram pairing allowFrom store to account-scoped default file", async () => {
+    const root = await makeTempRoot();
+    const cfg: OpenClawConfig = {};
+
+    const oauthDir = path.join(root, "credentials");
+    fs.mkdirSync(oauthDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(oauthDir, "telegram-allowFrom.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          allowFrom: ["123456"],
+        },
+        null,
+        2,
+      ) + "\n",
+      "utf-8",
+    );
+
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+    expect(detected.pairingAllowFrom.hasLegacyTelegram).toBe(true);
+
+    const result = await runLegacyStateMigrations({ detected, now: () => 123 });
+    expect(result.warnings).toEqual([]);
+
+    const target = path.join(oauthDir, "telegram-default-allowFrom.json");
+    expect(fs.existsSync(target)).toBe(true);
+    expect(JSON.parse(fs.readFileSync(target, "utf-8"))).toEqual({
+      version: 1,
+      allowFrom: ["123456"],
+    });
+  });
+
   it("no-ops when nothing detected", async () => {
     const root = await makeTempRoot();
     const cfg: OpenClawConfig = {};
@@ -356,7 +392,7 @@ describe("doctor legacy state migrations", () => {
   it("does not warn when legacy state dir is an already-migrated symlink mirror", async () => {
     const root = await makeTempRoot();
     const targetDir = path.join(root, ".openclaw");
-    const legacyDir = path.join(root, ".moltbot");
+    const legacyDir = path.join(root, ".clawdbot");
     fs.mkdirSync(path.join(targetDir, "sessions"), { recursive: true });
     fs.mkdirSync(path.join(targetDir, "agent"), { recursive: true });
     fs.mkdirSync(legacyDir, { recursive: true });
@@ -377,7 +413,7 @@ describe("doctor legacy state migrations", () => {
   it("warns when legacy state dir is empty and target already exists", async () => {
     const root = await makeTempRoot();
     const targetDir = path.join(root, ".openclaw");
-    const legacyDir = path.join(root, ".moltbot");
+    const legacyDir = path.join(root, ".clawdbot");
     fs.mkdirSync(targetDir, { recursive: true });
     fs.mkdirSync(legacyDir, { recursive: true });
 
@@ -395,7 +431,7 @@ describe("doctor legacy state migrations", () => {
   it("warns when legacy state dir contains non-symlink entries and target already exists", async () => {
     const root = await makeTempRoot();
     const targetDir = path.join(root, ".openclaw");
-    const legacyDir = path.join(root, ".moltbot");
+    const legacyDir = path.join(root, ".clawdbot");
     fs.mkdirSync(targetDir, { recursive: true });
     fs.mkdirSync(legacyDir, { recursive: true });
     fs.writeFileSync(path.join(legacyDir, "sessions.json"), "{}", "utf-8");
@@ -414,7 +450,7 @@ describe("doctor legacy state migrations", () => {
   it("does not warn when legacy state dir contains nested symlink mirrors", async () => {
     const root = await makeTempRoot();
     const targetDir = path.join(root, ".openclaw");
-    const legacyDir = path.join(root, ".moltbot");
+    const legacyDir = path.join(root, ".clawdbot");
     fs.mkdirSync(path.join(targetDir, "agents", "main"), { recursive: true });
     fs.mkdirSync(legacyDir, { recursive: true });
     fs.mkdirSync(path.join(legacyDir, "agents"), { recursive: true });
@@ -438,7 +474,7 @@ describe("doctor legacy state migrations", () => {
   it("warns when legacy state dir symlink points outside the target tree", async () => {
     const root = await makeTempRoot();
     const targetDir = path.join(root, ".openclaw");
-    const legacyDir = path.join(root, ".moltbot");
+    const legacyDir = path.join(root, ".clawdbot");
     const outsideDir = path.join(root, ".outside-state");
     fs.mkdirSync(path.join(targetDir, "sessions"), { recursive: true });
     fs.mkdirSync(legacyDir, { recursive: true });
@@ -461,7 +497,7 @@ describe("doctor legacy state migrations", () => {
   it("warns when legacy state dir contains a broken symlink target", async () => {
     const root = await makeTempRoot();
     const targetDir = path.join(root, ".openclaw");
-    const legacyDir = path.join(root, ".moltbot");
+    const legacyDir = path.join(root, ".clawdbot");
     fs.mkdirSync(path.join(targetDir, "sessions"), { recursive: true });
     fs.mkdirSync(legacyDir, { recursive: true });
 
@@ -484,7 +520,7 @@ describe("doctor legacy state migrations", () => {
   it("warns when legacy symlink escapes target tree through second-hop symlink", async () => {
     const root = await makeTempRoot();
     const targetDir = path.join(root, ".openclaw");
-    const legacyDir = path.join(root, ".moltbot");
+    const legacyDir = path.join(root, ".clawdbot");
     const outsideDir = path.join(root, ".outside-state");
     fs.mkdirSync(targetDir, { recursive: true });
     fs.mkdirSync(legacyDir, { recursive: true });

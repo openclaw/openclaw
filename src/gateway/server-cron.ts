@@ -7,6 +7,7 @@ import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import { appendCronRunLog, resolveCronRunLogPath } from "../cron/run-log.js";
 import { CronService } from "../cron/service.js";
 import { resolveCronStorePath } from "../cron/store.js";
+import { normalizeHttpWebhookUrl } from "../cron/webhook-url.js";
 import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
@@ -19,6 +20,43 @@ export type GatewayCronState = {
   storePath: string;
   cronEnabled: boolean;
 };
+
+const CRON_WEBHOOK_TIMEOUT_MS = 10_000;
+
+function redactWebhookUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.origin}${parsed.pathname}`;
+  } catch {
+    return "<invalid-webhook-url>";
+  }
+}
+
+type CronWebhookTarget = {
+  url: string;
+  source: "delivery" | "legacy";
+};
+
+function resolveCronWebhookTarget(params: {
+  delivery?: { mode?: string; to?: string };
+  legacyNotify?: boolean;
+  legacyWebhook?: string;
+}): CronWebhookTarget | null {
+  const mode = params.delivery?.mode?.trim().toLowerCase();
+  if (mode === "webhook") {
+    const url = normalizeHttpWebhookUrl(params.delivery?.to);
+    return url ? { url, source: "delivery" } : null;
+  }
+
+  if (params.legacyNotify) {
+    const legacyUrl = normalizeHttpWebhookUrl(params.legacyWebhook);
+    if (legacyUrl) {
+      return { url: legacyUrl, source: "legacy" };
+    }
+  }
+
+  return null;
+}
 
 export function buildGatewayCronService(params: {
   cfg: ReturnType<typeof loadConfig>;
@@ -50,6 +88,7 @@ export function buildGatewayCronService(params: {
       agentId: agentId ?? defaultAgentId,
     });
   const sessionStorePath = resolveSessionStorePath(defaultAgentId);
+  const warnedLegacyWebhookJobs = new Set<string>();
 
   const cron = new CronService({
     storePath,
@@ -64,7 +103,7 @@ export function buildGatewayCronService(params: {
         cfg: runtimeConfig,
         agentId,
       });
-      enqueueSystemEvent(text, { sessionKey });
+      enqueueSystemEvent(text, { sessionKey, contextKey: opts?.contextKey });
     },
     requestHeartbeatNow,
     runHeartbeatOnce: async (opts) => {
@@ -93,6 +132,71 @@ export function buildGatewayCronService(params: {
     onEvent: (evt) => {
       params.broadcast("cron", evt, { dropIfSlow: true });
       if (evt.action === "finished") {
+        const webhookToken = params.cfg.cron?.webhookToken?.trim();
+        const legacyWebhook = params.cfg.cron?.webhook?.trim();
+        const job = cron.getJob(evt.jobId);
+        const legacyNotify = (job as { notify?: unknown } | undefined)?.notify === true;
+        const webhookTarget = resolveCronWebhookTarget({
+          delivery:
+            job?.delivery && typeof job.delivery.mode === "string"
+              ? { mode: job.delivery.mode, to: job.delivery.to }
+              : undefined,
+          legacyNotify,
+          legacyWebhook,
+        });
+
+        if (!webhookTarget && job?.delivery?.mode === "webhook") {
+          cronLogger.warn(
+            {
+              jobId: evt.jobId,
+              deliveryTo: job.delivery.to,
+            },
+            "cron: skipped webhook delivery, delivery.to must be a valid http(s) URL",
+          );
+        }
+
+        if (webhookTarget?.source === "legacy" && !warnedLegacyWebhookJobs.has(evt.jobId)) {
+          warnedLegacyWebhookJobs.add(evt.jobId);
+          cronLogger.warn(
+            {
+              jobId: evt.jobId,
+              legacyWebhook: redactWebhookUrl(webhookTarget.url),
+            },
+            "cron: deprecated notify+cron.webhook fallback in use, migrate to delivery.mode=webhook with delivery.to",
+          );
+        }
+
+        if (webhookTarget && evt.summary) {
+          const headers: Record<string, string> = {
+            "Content-Type": "application/json",
+          };
+          if (webhookToken) {
+            headers.Authorization = `Bearer ${webhookToken}`;
+          }
+          const abortController = new AbortController();
+          const timeout = setTimeout(() => {
+            abortController.abort();
+          }, CRON_WEBHOOK_TIMEOUT_MS);
+          void fetch(webhookTarget.url, {
+            method: "POST",
+            headers,
+            body: JSON.stringify(evt),
+            signal: abortController.signal,
+          })
+            .catch((err) => {
+              cronLogger.warn(
+                {
+                  err: String(err),
+                  jobId: evt.jobId,
+                  webhookUrl: redactWebhookUrl(webhookTarget.url),
+                },
+                "cron: webhook delivery failed",
+              );
+            })
+            .finally(() => {
+              clearTimeout(timeout);
+            });
+        }
         const logPath = resolveCronRunLogPath({
           storePath,
           jobId: evt.jobId,

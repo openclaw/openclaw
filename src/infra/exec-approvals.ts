@@ -1,15 +1,38 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
-import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
+import { requestJsonlSocket } from "./jsonl-socket.js";
 export * from "./exec-approvals-analysis.js";
 export * from "./exec-approvals-allowlist.js";
 
 export type ExecHost = "sandbox" | "gateway" | "node";
 export type ExecSecurity = "deny" | "allowlist" | "full";
 export type ExecAsk = "off" | "on-miss" | "always";
+
+export type ExecApprovalRequest = {
+  id: string;
+  request: {
+    command: string;
+    cwd?: string | null;
+    host?: string | null;
+    security?: string | null;
+    ask?: string | null;
+    agentId?: string | null;
+    resolvedPath?: string | null;
+    sessionKey?: string | null;
+  };
+  createdAtMs: number;
+  expiresAtMs: number;
+};
+
+export type ExecApprovalResolved = {
+  id: string;
+  decision: ExecApprovalDecision;
+  resolvedBy?: string | null;
+  ts: number;
+};
 
 export type ExecApprovalsDefaults = {
   security?: ExecSecurity;
@@ -57,6 +80,9 @@ export type ExecApprovalsResolved = {
   allowlist: ExecAllowlistEntry[];
   file: ExecApprovalsFile;
 };
+
+// Keep CLI + gateway defaults in sync.
+export const DEFAULT_EXEC_APPROVAL_TIMEOUT_MS = 120_000;
 
 const DEFAULT_SECURITY: ExecSecurity = "deny";
 const DEFAULT_ASK: ExecAsk = "on-miss";
@@ -213,6 +239,24 @@ export function normalizeExecApprovals(file: ExecApprovalsFile): ExecApprovalsFi
     agents,
   };
   return normalized;
+}
+
+export function mergeExecApprovalsSocketDefaults(params: {
+  normalized: ExecApprovalsFile;
+  current?: ExecApprovalsFile;
+}): ExecApprovalsFile {
+  const currentSocketPath = params.current?.socket?.path?.trim();
+  const currentToken = params.current?.socket?.token?.trim();
+  const socketPath =
+    params.normalized.socket?.path?.trim() ?? currentSocketPath ?? resolveExecApprovalsSocketPath();
+  const token = params.normalized.socket?.token?.trim() ?? currentToken ?? "";
+  return {
+    ...params.normalized,
+    socket: {
+      path: socketPath,
+      token,
+    },
+  };
 }
 
 function generateToken(): string {
@@ -474,56 +518,23 @@ export async function requestExecApprovalViaSocket(params: {
     return null;
   }
   const timeoutMs = params.timeoutMs ?? 15_000;
-  return await new Promise((resolve) => {
-    const client = new net.Socket();
-    let settled = false;
-    let buffer = "";
-    const finish = (value: ExecApprovalDecision | null) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      try {
-        client.destroy();
-      } catch {
-        // ignore
-      }
-      resolve(value);
-    };
+  const payload = JSON.stringify({
+    type: "request",
+    token,
+    id: crypto.randomUUID(),
+    request,
+  });
 
-    const timer = setTimeout(() => finish(null), timeoutMs);
-    const payload = JSON.stringify({
-      type: "request",
-      token,
-      id: crypto.randomUUID(),
-      request,
-    });
-
-    client.on("error", () => finish(null));
-    client.connect(socketPath, () => {
-      client.write(`${payload}\n`);
-    });
-    client.on("data", (data) => {
-      buffer += data.toString("utf8");
-      let idx = buffer.indexOf("\n");
-      while (idx !== -1) {
-        const line = buffer.slice(0, idx).trim();
-        buffer = buffer.slice(idx + 1);
-        idx = buffer.indexOf("\n");
-        if (!line) {
-          continue;
-        }
-        try {
-          const msg = JSON.parse(line) as { type?: string; decision?: ExecApprovalDecision };
-          if (msg?.type === "decision" && msg.decision) {
-            clearTimeout(timer);
-            finish(msg.decision);
-            return;
-          }
-        } catch {
-          // ignore
-        }
+  return await requestJsonlSocket({
+    socketPath,
+    payload,
+    timeoutMs,
+    accept: (value) => {
+      const msg = value as { type?: string; decision?: ExecApprovalDecision };
+      if (msg?.type === "decision" && msg.decision) {
+        return msg.decision;
       }
-    });
+      return undefined;
+    },
   });
 }

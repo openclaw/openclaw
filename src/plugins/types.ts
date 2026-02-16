@@ -297,9 +297,12 @@ export type PluginDiagnostic = {
 
 export type PluginHookName =
   | "before_agent_start"
+  | "llm_input"
+  | "llm_output"
   | "agent_end"
   | "before_compaction"
   | "after_compaction"
+  | "before_reset"
   | "message_received"
   | "message_sending"
   | "message_sent"
@@ -315,6 +318,7 @@ export type PluginHookName =
 export type PluginHookAgentContext = {
   agentId?: string;
   sessionKey?: string;
+  sessionId?: string;
   workspaceDir?: string;
   messageProvider?: string;
 };
@@ -330,6 +334,35 @@ export type PluginHookBeforeAgentStartResult = {
   prependContext?: string;
 };
 
+// llm_input hook
+export type PluginHookLlmInputEvent = {
+  runId: string;
+  sessionId: string;
+  provider: string;
+  model: string;
+  systemPrompt?: string;
+  prompt: string;
+  historyMessages: unknown[];
+  imagesCount: number;
+};
+
+// llm_output hook
+export type PluginHookLlmOutputEvent = {
+  runId: string;
+  sessionId: string;
+  provider: string;
+  model: string;
+  assistantTexts: string[];
+  lastAssistant?: unknown;
+  usage?: {
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+    total?: number;
+  };
+};
+
 // agent_end hook
 export type PluginHookAgentEndEvent = {
   messages: unknown[];
@@ -340,14 +373,33 @@ export type PluginHookAgentEndEvent = {
 
 // Compaction hooks
 export type PluginHookBeforeCompactionEvent = {
+  /** Total messages in the session before any truncation or compaction */
   messageCount: number;
+  /** Messages being fed to the compaction LLM (after history-limit truncation) */
+  compactingCount?: number;
   tokenCount?: number;
+  messages?: unknown[];
+  /** Path to the session JSONL transcript. All messages are already on disk
+   *  before compaction starts, so plugins can read this file asynchronously
+   *  and process in parallel with the compaction LLM call. */
+  sessionFile?: string;
+};
+
+// before_reset hook — fired when /new or /reset clears a session
+export type PluginHookBeforeResetEvent = {
+  sessionFile?: string;
+  messages?: unknown[];
+  reason?: string;
 };
 
 export type PluginHookAfterCompactionEvent = {
   messageCount: number;
   tokenCount?: number;
   compactedCount: number;
+  /** Path to the session JSONL transcript. All pre-compaction messages are
+   *  preserved on disk, so plugins can read and process them asynchronously
+   *  without blocking the compaction pipeline. */
+  sessionFile?: string;
 };
 
 // Message context
@@ -477,6 +529,11 @@ export type PluginHookHandlerMap = {
     event: PluginHookBeforeAgentStartEvent,
     ctx: PluginHookAgentContext,
   ) => Promise<PluginHookBeforeAgentStartResult | void> | PluginHookBeforeAgentStartResult | void;
+  llm_input: (event: PluginHookLlmInputEvent, ctx: PluginHookAgentContext) => Promise<void> | void;
+  llm_output: (
+    event: PluginHookLlmOutputEvent,
+    ctx: PluginHookAgentContext,
+  ) => Promise<void> | void;
   agent_end: (event: PluginHookAgentEndEvent, ctx: PluginHookAgentContext) => Promise<void> | void;
   before_compaction: (
     event: PluginHookBeforeCompactionEvent,
@@ -484,6 +541,10 @@ export type PluginHookHandlerMap = {
   ) => Promise<void> | void;
   after_compaction: (
     event: PluginHookAfterCompactionEvent,
+    ctx: PluginHookAgentContext,
+  ) => Promise<void> | void;
+  before_reset: (
+    event: PluginHookBeforeResetEvent,
     ctx: PluginHookAgentContext,
   ) => Promise<void> | void;
   message_received: (

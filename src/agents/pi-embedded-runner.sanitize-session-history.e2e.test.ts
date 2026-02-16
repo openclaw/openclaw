@@ -2,6 +2,11 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as helpers from "./pi-embedded-helpers.js";
+import {
+  makeInMemorySessionManager,
+  makeModelSnapshotEntry,
+  makeReasoningAssistantMessages,
+} from "./pi-embedded-runner.sanitize-session-history.test-harness.js";
 
 type SanitizeSessionHistory =
   typeof import("./pi-embedded-runner/google.js").sanitizeSessionHistory;
@@ -47,7 +52,7 @@ describe("sanitizeSessionHistory e2e smoke", () => {
     );
   });
 
-  it("applies strict tool-call sanitization for openai-responses", async () => {
+  it("keeps images-only sanitize policy without tool-call id rewriting for openai-responses", async () => {
     vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
 
     await sanitizeSessionHistory({
@@ -63,43 +68,21 @@ describe("sanitizeSessionHistory e2e smoke", () => {
       "session:history",
       expect.objectContaining({
         sanitizeMode: "images-only",
-        sanitizeToolCallIds: true,
-        toolCallIdMode: "strict",
+        sanitizeToolCallIds: false,
       }),
     );
   });
 
   it("downgrades openai reasoning blocks when the model snapshot changed", async () => {
-    const sessionEntries: Array<{ type: string; customType: string; data: unknown }> = [
-      {
-        type: "custom",
-        customType: "model-snapshot",
-        data: {
-          timestamp: Date.now(),
-          provider: "anthropic",
-          modelApi: "anthropic-messages",
-          modelId: "claude-3-7",
-        },
-      },
-    ];
-    const sessionManager = {
-      getEntries: vi.fn(() => sessionEntries),
-      appendCustomEntry: vi.fn((customType: string, data: unknown) => {
-        sessionEntries.push({ type: "custom", customType, data });
+    const sessionEntries = [
+      makeModelSnapshotEntry({
+        provider: "anthropic",
+        modelApi: "anthropic-messages",
+        modelId: "claude-3-7",
       }),
-    } as unknown as SessionManager;
-    const messages: AgentMessage[] = [
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "thinking",
-            thinking: "reasoning",
-            thinkingSignature: { id: "rs_test", type: "reasoning" },
-          },
-        ],
-      },
     ];
+    const sessionManager = makeInMemorySessionManager(sessionEntries);
+    const messages = makeReasoningAssistantMessages({ thinkingSignature: "object" });
 
     const result = await sanitizeSessionHistory({
       messages,

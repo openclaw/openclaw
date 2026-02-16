@@ -4,21 +4,21 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
-import type { PluginRegistry } from "../plugins/registry.js";
 import { whatsappPlugin } from "../../extensions/whatsapp/src/channel.js";
+import { BARE_SESSION_RESET_PROMPT } from "../auto-reply/reply/session-reset-prompt.js";
 import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { setRegistry } from "./server.agent.gateway-server-agent.mocks.js";
+import { createRegistry } from "./server.e2e-registry-helpers.js";
 import {
   agentCommand,
   connectOk,
-  getFreePort,
   installGatewayTestHooks,
   onceMessage,
   rpcReq,
-  startGatewayServer,
   startServerWithClient,
   testState,
+  withGatewayServer,
   writeSessionStore,
 } from "./test-helpers.js";
 
@@ -39,50 +39,6 @@ beforeAll(async () => {
 afterAll(async () => {
   ws.close();
   await server.close();
-});
-
-const registryState = vi.hoisted(() => ({
-  registry: {
-    plugins: [],
-    tools: [],
-    channels: [],
-    providers: [],
-    gatewayHandlers: {},
-    httpHandlers: [],
-    httpRoutes: [],
-    cliRegistrars: [],
-    services: [],
-    diagnostics: [],
-  } as PluginRegistry,
-}));
-
-vi.mock("./server-plugins.js", async () => {
-  const { setActivePluginRegistry } = await import("../plugins/runtime.js");
-  return {
-    loadGatewayPlugins: (params: { baseMethods: string[] }) => {
-      setActivePluginRegistry(registryState.registry);
-      return {
-        pluginRegistry: registryState.registry,
-        gatewayMethods: params.baseMethods ?? [],
-      };
-    },
-  };
-});
-
-const _BASE_IMAGE_PNG =
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+X3mIAAAAASUVORK5CYII=";
-
-const createRegistry = (channels: PluginRegistry["channels"]): PluginRegistry => ({
-  plugins: [],
-  tools: [],
-  channels,
-  providers: [],
-  gatewayHandlers: {},
-  httpHandlers: [],
-  httpRoutes: [],
-  cliRegistrars: [],
-  services: [],
-  diagnostics: [],
 });
 
 const createMSTeamsPlugin = (params?: { aliases?: string[] }): ChannelPlugin => ({
@@ -123,13 +79,11 @@ async function useTempSessionStorePath() {
 
 describe("gateway server agent", () => {
   beforeEach(() => {
-    registryState.registry = defaultRegistry;
-    setActivePluginRegistry(defaultRegistry);
+    setRegistry(defaultRegistry);
   });
 
   afterEach(() => {
-    registryState.registry = emptyRegistry;
-    setActivePluginRegistry(emptyRegistry);
+    setRegistry(emptyRegistry);
   });
 
   test("agent falls back when last-channel plugin is unavailable", async () => {
@@ -140,8 +94,7 @@ describe("gateway server agent", () => {
         plugin: createMSTeamsPlugin(),
       },
     ]);
-    registryState.registry = registry;
-    setActivePluginRegistry(registry);
+    setRegistry(registry);
     await useTempSessionStorePath();
     await writeSessionStore({
       entries: {
@@ -179,8 +132,7 @@ describe("gateway server agent", () => {
         plugin: createMSTeamsPlugin({ aliases: ["teams"] }),
       },
     ]);
-    registryState.registry = registry;
-    setActivePluginRegistry(registry);
+    setRegistry(registry);
     await useTempSessionStorePath();
     await writeSessionStore({
       entries: {
@@ -293,6 +245,32 @@ describe("gateway server agent", () => {
     expect(typeof call.sessionId).toBe("string");
   });
 
+  test("agent routes bare /new through session reset before running greeting prompt", async () => {
+    await useTempSessionStorePath();
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main-before-reset",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+    const spy = vi.mocked(agentCommand);
+    const callsBefore = spy.mock.calls.length;
+    const res = await rpcReq(ws, "agent", {
+      message: "/new",
+      sessionKey: "main",
+      idempotencyKey: "idem-agent-new",
+    });
+    expect(res.ok).toBe(true);
+
+    await vi.waitFor(() => expect(spy.mock.calls.length).toBeGreaterThan(callsBefore));
+    const call = spy.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(call.message).toBe(BARE_SESSION_RESET_PROMPT);
+    expect(typeof call.sessionId).toBe("string");
+    expect(call.sessionId).not.toBe("sess-main-before-reset");
+  });
+
   test("agent ack response then final response", { timeout: 8000 }, async () => {
     const ackP = onceMessage(
       ws,
@@ -347,52 +325,50 @@ describe("gateway server agent", () => {
   });
 
   test("agent dedupe survives reconnect", { timeout: 60_000 }, async () => {
-    const port = await getFreePort();
-    const server = await startGatewayServer(port);
+    await withGatewayServer(async ({ port }) => {
+      const dial = async () => {
+        const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+        await new Promise<void>((resolve) => ws.once("open", resolve));
+        await connectOk(ws);
+        return ws;
+      };
 
-    const dial = async () => {
-      const ws = new WebSocket(`ws://127.0.0.1:${port}`);
-      await new Promise<void>((resolve) => ws.once("open", resolve));
-      await connectOk(ws);
-      return ws;
-    };
+      const idem = "reconnect-agent";
+      const ws1 = await dial();
+      const final1P = onceMessage(
+        ws1,
+        (o) => o.type === "res" && o.id === "ag1" && o.payload?.status !== "accepted",
+        6000,
+      );
+      ws1.send(
+        JSON.stringify({
+          type: "req",
+          id: "ag1",
+          method: "agent",
+          params: { message: "hi", idempotencyKey: idem },
+        }),
+      );
+      const final1 = await final1P;
+      ws1.close();
 
-    const idem = "reconnect-agent";
-    const ws1 = await dial();
-    const final1P = onceMessage(
-      ws1,
-      (o) => o.type === "res" && o.id === "ag1" && o.payload?.status !== "accepted",
-      6000,
-    );
-    ws1.send(
-      JSON.stringify({
-        type: "req",
-        id: "ag1",
-        method: "agent",
-        params: { message: "hi", idempotencyKey: idem },
-      }),
-    );
-    const final1 = await final1P;
-    ws1.close();
-
-    const ws2 = await dial();
-    const final2P = onceMessage(
-      ws2,
-      (o) => o.type === "res" && o.id === "ag2" && o.payload?.status !== "accepted",
-      6000,
-    );
-    ws2.send(
-      JSON.stringify({
-        type: "req",
-        id: "ag2",
-        method: "agent",
-        params: { message: "hi again", idempotencyKey: idem },
-      }),
-    );
-    const res = await final2P;
-    expect(res.payload).toEqual(final1.payload);
-    ws2.close();
-    await server.close();
+      const ws2 = await dial();
+      const final2P = onceMessage(
+        ws2,
+        (o) => o.type === "res" && o.id === "ag2" && o.payload?.status !== "accepted",
+        6000,
+      );
+      ws2.send(
+        JSON.stringify({
+          type: "req",
+          id: "ag2",
+          method: "agent",
+          params: { message: "hi again", idempotencyKey: idem },
+        }),
+      );
+      const res = await final2P;
+      expect(res.payload).toEqual(final1.payload);
+      ws2.close();
+    });
   });
 
   test("agent events stream to webchat clients when run context is registered", async () => {

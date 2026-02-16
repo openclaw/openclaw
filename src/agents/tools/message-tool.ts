@@ -22,6 +22,7 @@ import { resolveSessionAgentId } from "../agent-scope.js";
 import { listChannelSupportedActions } from "../channel-tools.js";
 import { channelTargetSchema, channelTargetsSchema, stringEnum } from "../schema/typebox.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
+import { resolveGatewayOptions } from "./gateway.js";
 
 const AllMessageActions = CHANNEL_MESSAGE_ACTION_NAMES;
 const EXPLICIT_TARGET_ACTIONS = new Set<ChannelMessageActionName>([
@@ -45,6 +46,98 @@ function buildRoutingSchema() {
     dryRun: Type.Optional(Type.Boolean()),
   };
 }
+
+const discordComponentEmojiSchema = Type.Object({
+  name: Type.String(),
+  id: Type.Optional(Type.String()),
+  animated: Type.Optional(Type.Boolean()),
+});
+
+const discordComponentOptionSchema = Type.Object({
+  label: Type.String(),
+  value: Type.String(),
+  description: Type.Optional(Type.String()),
+  emoji: Type.Optional(discordComponentEmojiSchema),
+  default: Type.Optional(Type.Boolean()),
+});
+
+const discordComponentButtonSchema = Type.Object({
+  label: Type.String(),
+  style: Type.Optional(stringEnum(["primary", "secondary", "success", "danger", "link"])),
+  url: Type.Optional(Type.String()),
+  emoji: Type.Optional(discordComponentEmojiSchema),
+  disabled: Type.Optional(Type.Boolean()),
+});
+
+const discordComponentSelectSchema = Type.Object({
+  type: Type.Optional(stringEnum(["string", "user", "role", "mentionable", "channel"])),
+  placeholder: Type.Optional(Type.String()),
+  minValues: Type.Optional(Type.Number()),
+  maxValues: Type.Optional(Type.Number()),
+  options: Type.Optional(Type.Array(discordComponentOptionSchema)),
+});
+
+const discordComponentBlockSchema = Type.Object({
+  type: Type.String(),
+  text: Type.Optional(Type.String()),
+  texts: Type.Optional(Type.Array(Type.String())),
+  accessory: Type.Optional(
+    Type.Object({
+      type: Type.String(),
+      url: Type.Optional(Type.String()),
+      button: Type.Optional(discordComponentButtonSchema),
+    }),
+  ),
+  spacing: Type.Optional(stringEnum(["small", "large"])),
+  divider: Type.Optional(Type.Boolean()),
+  buttons: Type.Optional(Type.Array(discordComponentButtonSchema)),
+  select: Type.Optional(discordComponentSelectSchema),
+  items: Type.Optional(
+    Type.Array(
+      Type.Object({
+        url: Type.String(),
+        description: Type.Optional(Type.String()),
+        spoiler: Type.Optional(Type.Boolean()),
+      }),
+    ),
+  ),
+  file: Type.Optional(Type.String()),
+  spoiler: Type.Optional(Type.Boolean()),
+});
+
+const discordComponentModalFieldSchema = Type.Object({
+  type: Type.String(),
+  name: Type.Optional(Type.String()),
+  label: Type.String(),
+  description: Type.Optional(Type.String()),
+  placeholder: Type.Optional(Type.String()),
+  required: Type.Optional(Type.Boolean()),
+  options: Type.Optional(Type.Array(discordComponentOptionSchema)),
+  minValues: Type.Optional(Type.Number()),
+  maxValues: Type.Optional(Type.Number()),
+  minLength: Type.Optional(Type.Number()),
+  maxLength: Type.Optional(Type.Number()),
+  style: Type.Optional(stringEnum(["short", "paragraph"])),
+});
+
+const discordComponentModalSchema = Type.Object({
+  title: Type.String(),
+  triggerLabel: Type.Optional(Type.String()),
+  triggerStyle: Type.Optional(stringEnum(["primary", "secondary", "success", "danger", "link"])),
+  fields: Type.Array(discordComponentModalFieldSchema),
+});
+
+const discordComponentMessageSchema = Type.Object({
+  text: Type.Optional(Type.String()),
+  container: Type.Optional(
+    Type.Object({
+      accentColor: Type.Optional(Type.String()),
+      spoiler: Type.Optional(Type.Boolean()),
+    }),
+  ),
+  blocks: Type.Optional(Type.Array(discordComponentBlockSchema)),
+  modal: Type.Optional(discordComponentModalSchema),
+});
 
 function buildSendSchema(options: { includeButtons: boolean; includeCards: boolean }) {
   const props: Record<string, unknown> = {
@@ -104,6 +197,7 @@ function buildSendSchema(options: { includeButtons: boolean; includeCards: boole
         },
       ),
     ),
+    components: Type.Optional(discordComponentMessageSchema),
   };
   if (!options.includeButtons) {
     delete props.buttons;
@@ -441,10 +535,15 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         params.accountId = accountId;
       }
 
-      const gateway = {
-        url: readStringParam(params, "gatewayUrl", { trim: false }),
-        token: readStringParam(params, "gatewayToken", { trim: false }),
+      const gatewayResolved = resolveGatewayOptions({
+        gatewayUrl: readStringParam(params, "gatewayUrl", { trim: false }),
+        gatewayToken: readStringParam(params, "gatewayToken", { trim: false }),
         timeoutMs: readNumberParam(params, "timeoutMs"),
+      });
+      const gateway = {
+        url: gatewayResolved.url,
+        token: gatewayResolved.token,
+        timeoutMs: gatewayResolved.timeoutMs,
         clientName: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
         clientDisplayName: "agent",
         mode: GATEWAY_CLIENT_MODES.BACKEND,
@@ -475,6 +574,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         defaultAccountId: accountId ?? undefined,
         gateway,
         toolContext,
+        sessionKey: options?.agentSessionKey,
         agentId: options?.agentSessionKey
           ? resolveSessionAgentId({ sessionKey: options.agentSessionKey, config: cfg })
           : undefined,

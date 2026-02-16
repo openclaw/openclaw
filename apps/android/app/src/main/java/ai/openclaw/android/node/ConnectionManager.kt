@@ -26,6 +26,59 @@ class ConnectionManager(
   private val hasRecordAudioPermission: () -> Boolean,
   private val manualTls: () -> Boolean,
 ) {
+  companion object {
+    internal fun resolveTlsParamsForEndpoint(
+      endpoint: GatewayEndpoint,
+      storedFingerprint: String?,
+      manualTlsEnabled: Boolean,
+    ): GatewayTlsParams? {
+      val stableId = endpoint.stableId
+      val stored = storedFingerprint?.trim().takeIf { !it.isNullOrEmpty() }
+      val isManual = stableId.startsWith("manual|")
+
+      if (isManual) {
+        if (!manualTlsEnabled) return null
+        if (!stored.isNullOrBlank()) {
+          return GatewayTlsParams(
+            required = true,
+            expectedFingerprint = stored,
+            allowTOFU = false,
+            stableId = stableId,
+          )
+        }
+        return GatewayTlsParams(
+          required = true,
+          expectedFingerprint = null,
+          allowTOFU = false,
+          stableId = stableId,
+        )
+      }
+
+      // Prefer stored pins. Never let discovery-provided TXT override a stored fingerprint.
+      if (!stored.isNullOrBlank()) {
+        return GatewayTlsParams(
+          required = true,
+          expectedFingerprint = stored,
+          allowTOFU = false,
+          stableId = stableId,
+        )
+      }
+
+      val hinted = endpoint.tlsEnabled || !endpoint.tlsFingerprintSha256.isNullOrBlank()
+      if (hinted) {
+        // TXT is unauthenticated. Do not treat the advertised fingerprint as authoritative.
+        return GatewayTlsParams(
+          required = true,
+          expectedFingerprint = null,
+          allowTOFU = false,
+          stableId = stableId,
+        )
+      }
+
+      return null
+    }
+  }
+
   fun buildInvokeCommands(): List<String> =
     buildList {
       add(OpenClawCanvasCommand.Present.rawValue)
@@ -130,37 +183,6 @@ class ConnectionManager(
 
   fun resolveTlsParams(endpoint: GatewayEndpoint): GatewayTlsParams? {
     val stored = prefs.loadGatewayTlsFingerprint(endpoint.stableId)
-    val hinted = endpoint.tlsEnabled || !endpoint.tlsFingerprintSha256.isNullOrBlank()
-    val manual = endpoint.stableId.startsWith("manual|")
-
-    if (manual) {
-      if (!manualTls()) return null
-      return GatewayTlsParams(
-        required = true,
-        expectedFingerprint = endpoint.tlsFingerprintSha256 ?: stored,
-        allowTOFU = stored == null,
-        stableId = endpoint.stableId,
-      )
-    }
-
-    if (hinted) {
-      return GatewayTlsParams(
-        required = true,
-        expectedFingerprint = endpoint.tlsFingerprintSha256 ?: stored,
-        allowTOFU = stored == null,
-        stableId = endpoint.stableId,
-      )
-    }
-
-    if (!stored.isNullOrBlank()) {
-      return GatewayTlsParams(
-        required = true,
-        expectedFingerprint = stored,
-        allowTOFU = false,
-        stableId = endpoint.stableId,
-      )
-    }
-
-    return null
+    return resolveTlsParamsForEndpoint(endpoint, storedFingerprint = stored, manualTlsEnabled = manualTls())
   }
 }

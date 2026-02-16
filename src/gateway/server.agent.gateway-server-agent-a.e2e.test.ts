@@ -3,8 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
-import type { PluginRegistry } from "../plugins/registry.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { setRegistry } from "./server.agent.gateway-server-agent.mocks.js";
+import { createRegistry } from "./server.e2e-registry-helpers.js";
 import {
   agentCommand,
   connectOk,
@@ -32,39 +32,6 @@ afterAll(async () => {
   await server.close();
 });
 
-const registryState = vi.hoisted(() => ({
-  registry: {
-    plugins: [],
-    tools: [],
-    channels: [],
-    providers: [],
-    gatewayHandlers: {},
-    httpHandlers: [],
-    httpRoutes: [],
-    cliRegistrars: [],
-    services: [],
-    diagnostics: [],
-  } as PluginRegistry,
-}));
-
-vi.mock("./server-plugins.js", async () => {
-  const { setActivePluginRegistry } = await import("../plugins/runtime.js");
-  return {
-    loadGatewayPlugins: (params: { baseMethods: string[] }) => {
-      setActivePluginRegistry(registryState.registry);
-      return {
-        pluginRegistry: registryState.registry,
-        gatewayMethods: params.baseMethods ?? [],
-      };
-    },
-  };
-});
-
-const setRegistry = (registry: PluginRegistry) => {
-  registryState.registry = registry;
-  setActivePluginRegistry(registry);
-};
-
 const BASE_IMAGE_PNG =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+X3mIAAAAASUVORK5CYII=";
 
@@ -74,19 +41,6 @@ function expectChannels(call: Record<string, unknown>, channel: string) {
   const runContext = call.runContext as { messageChannel?: string } | undefined;
   expect(runContext?.messageChannel).toBe(channel);
 }
-
-const createRegistry = (channels: PluginRegistry["channels"]): PluginRegistry => ({
-  plugins: [],
-  tools: [],
-  channels,
-  providers: [],
-  gatewayHandlers: {},
-  httpHandlers: [],
-  httpRoutes: [],
-  cliRegistrars: [],
-  services: [],
-  diagnostics: [],
-});
 
 const createStubChannelPlugin = (params: {
   id: ChannelPlugin["id"];
@@ -229,6 +183,38 @@ describe("gateway server agent", () => {
     expect(call.to).toBeUndefined();
   });
 
+  test("agent preserves spawnDepth on subagent sessions", async () => {
+    setRegistry(defaultRegistry);
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    const storePath = path.join(dir, "sessions.json");
+    testState.sessionStorePath = storePath;
+    await writeSessionStore({
+      entries: {
+        "agent:main:subagent:depth": {
+          sessionId: "sess-sub-depth",
+          updatedAt: Date.now(),
+          spawnedBy: "agent:main:main",
+          spawnDepth: 2,
+        },
+      },
+    });
+
+    const res = await rpcReq(ws, "agent", {
+      message: "hi",
+      sessionKey: "agent:main:subagent:depth",
+      idempotencyKey: "idem-agent-subdepth",
+    });
+    expect(res.ok).toBe(true);
+
+    const raw = await fs.readFile(storePath, "utf-8");
+    const persisted = JSON.parse(raw) as Record<
+      string,
+      { spawnDepth?: number; spawnedBy?: string }
+    >;
+    expect(persisted["agent:main:subagent:depth"]?.spawnDepth).toBe(2);
+    expect(persisted["agent:main:subagent:depth"]?.spawnedBy).toBe("agent:main:main");
+  });
+
   test("agent derives sessionKey from agentId", async () => {
     setRegistry(defaultRegistry);
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
@@ -281,6 +267,20 @@ describe("gateway server agent", () => {
     });
     expect(res.ok).toBe(false);
     expect(res.error?.message).toContain("does not match session key agent");
+
+    const spy = vi.mocked(agentCommand);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  test("agent rejects malformed agent-prefixed session keys", async () => {
+    setRegistry(defaultRegistry);
+    const res = await rpcReq(ws, "agent", {
+      message: "hi",
+      sessionKey: "agent:main",
+      idempotencyKey: "idem-agent-malformed-key",
+    });
+    expect(res.ok).toBe(false);
+    expect(res.error?.message).toContain("malformed session key");
 
     const spy = vi.mocked(agentCommand);
     expect(spy).not.toHaveBeenCalled();
@@ -448,7 +448,7 @@ describe("gateway server agent", () => {
 
     const spy = vi.mocked(agentCommand);
     const call = spy.mock.calls.at(-1)?.[0] as Record<string, unknown>;
-    expect(call.sessionKey).toBe("main");
+    expect(call.sessionKey).toBe("agent:main:main");
     expectChannels(call, "webchat");
     expect(typeof call.message).toBe("string");
     expect(call.message).toContain("what is in the image?");
