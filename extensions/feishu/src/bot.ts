@@ -274,7 +274,6 @@ function getMentionedOpenIdsFromPost(content: string): string[] {
 /**
  * Parse post (rich text) content and extract embedded image keys.
  * Post structure: { title?: string, content: [[{ tag, text?, image_key?, ... }]] }
- * or { zh_cn: { title?, content: [...] } } when received from Feishu.
  */
 function parsePostContent(content: string): {
   textContent: string;
@@ -282,9 +281,8 @@ function parsePostContent(content: string): {
 } {
   try {
     const parsed = JSON.parse(content);
-    const locale = parsed.zh_cn ?? parsed;
-    const title = locale.title || "";
-    const contentBlocks = locale.content || [];
+    const title = parsed.title || "";
+    const contentBlocks = parsed.content || [];
     let textContent = title ? `${title}\n\n` : "";
     const imageKeys: string[] = [];
 
