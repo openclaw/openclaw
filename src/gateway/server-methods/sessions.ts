@@ -46,7 +46,15 @@ import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
 import { assertValidParams } from "./validation.js";
 
 function requireSessionKey(key: unknown, respond: RespondFn): string | null {
-  const normalized = String(key ?? "").trim();
+  const raw =
+    typeof key === "string"
+      ? key
+      : typeof key === "number"
+        ? String(key)
+        : typeof key === "bigint"
+          ? String(key)
+          : "";
+  const normalized = raw.trim();
   if (!normalized) {
     respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "key required"));
     return null;
