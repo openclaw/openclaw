@@ -81,6 +81,27 @@ syno fs ls /volume1/data --offset 0 --limit 50
 
 # 查看文件/文件夹详情
 syno fs info /volume1/homes/admin/file.txt
+
+# 下载文件到当前目录（自动取远程文件名）
+syno fs download /home/share/LogViewEx.exe
+
+# 下载文件到指定本地路径
+syno fs download /home/share/LogViewEx.exe --output ./myfile.exe
+
+# 上传文件到 NAS 目录
+syno fs upload ./local_file.txt /home/share
+
+# 上传并覆盖同名文件
+syno fs upload ./local_file.txt /home/share --overwrite
+
+# 创建文件夹
+syno fs mkdir /home "new_folder"
+
+# 重命名文件或文件夹
+syno fs rename /home/old_name "new_name"
+
+# 删除文件或文件夹
+syno fs delete /home/share/temp.txt
 ```
 
 ### 下载管理（DownloadStation）

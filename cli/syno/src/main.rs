@@ -54,6 +54,16 @@ enum FsCmd {
     Ls(cli::file_station::LsArgs),
     /// Get info about a file or folder
     Info(cli::file_station::InfoArgs),
+    /// Download a file from NAS
+    Download(cli::file_station::DownloadArgs),
+    /// Create a folder
+    Mkdir(cli::file_station::MkdirArgs),
+    /// Rename a file or folder
+    Rename(cli::file_station::RenameArgs),
+    /// Delete a file or folder
+    Delete(cli::file_station::DeleteArgs),
+    /// Upload a local file to NAS
+    Upload(cli::file_station::UploadArgs),
 }
 
 #[derive(Subcommand)]
@@ -121,6 +131,11 @@ async fn main() -> anyhow::Result<()> {
         Commands::Fs(cmd) => match cmd {
             FsCmd::Ls(args) => cli::file_station::ls(&args).await?,
             FsCmd::Info(args) => cli::file_station::info(&args).await?,
+            FsCmd::Download(args) => cli::file_station::download(&args).await?,
+            FsCmd::Mkdir(args) => cli::file_station::mkdir(&args).await?,
+            FsCmd::Rename(args) => cli::file_station::rename(&args).await?,
+            FsCmd::Delete(args) => cli::file_station::delete(&args).await?,
+            FsCmd::Upload(args) => cli::file_station::upload(&args).await?,
         },
         Commands::Dl(cmd) => match cmd {
             DlCmd::Ls => cli::download_station::list().await?,
