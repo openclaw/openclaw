@@ -98,7 +98,7 @@ export function createDialogTool(opts?: {
         await callGateway({
           method: "sessions.patch",
           params: {
-            sessionKey,
+            key: sessionKey,
             activeDialogId: dialogId,
           },
         });

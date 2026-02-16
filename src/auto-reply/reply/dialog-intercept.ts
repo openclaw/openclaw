@@ -34,7 +34,7 @@ export async function checkActiveDialog(params: {
     try {
       await callGateway({
         method: "sessions.patch",
-        params: { sessionKey, activeDialogId: null },
+        params: { key: sessionKey, activeDialogId: null },
       });
     } catch {
       // Best-effort
@@ -60,7 +60,7 @@ export async function checkActiveDialog(params: {
     try {
       await callGateway({
         method: "sessions.patch",
-        params: { sessionKey, activeDialogId: null },
+        params: { key: sessionKey, activeDialogId: null },
       });
     } catch {
       // Best-effort

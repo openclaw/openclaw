@@ -78,6 +78,7 @@ export const SessionsPatchParamsSchema = Type.Object(
     groupActivation: Type.Optional(
       Type.Union([Type.Literal("mention"), Type.Literal("always"), Type.Null()]),
     ),
+    activeDialogId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   },
   { additionalProperties: false },
 );
