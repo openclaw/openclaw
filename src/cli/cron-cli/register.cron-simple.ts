@@ -74,7 +74,7 @@ export function registerCronSimpleCommands(cron: Command) {
         try {
           const limitStr = String(opts.limit ?? "50").trim();
           // Require full digit string (no mixed alphanumeric like "100abc", no decimals)
-          const limitRaw = /^\d+$/.test(limitStr) ? Number.parseInt(limitStr, 10) : undefined;
+          const limitRaw = /^\d+$/.test(limitStr) ? Number.parseInt(limitStr, 10) : NaN;
           const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? limitRaw : 50;
           const id = String(opts.id);
           const res = await callGatewayFromCli("cron.runs", opts, {
