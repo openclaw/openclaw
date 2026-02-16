@@ -204,8 +204,8 @@ export async function startGatewayServer(
     const issues =
       configSnapshot.issues.length > 0
         ? configSnapshot.issues
-            .map((issue) => `${issue.path || "<root>"}: ${issue.message}`)
-            .join("\n")
+          .map((issue) => `${issue.path || "<root>"}: ${issue.message}`)
+          .join("\n")
         : "Unknown validation issue.";
     throw new Error(
       `Invalid config at ${configSnapshot.path}.\n${issues}\nRun "${formatCliCommand("openclaw doctor")}" to repair, then retry.`,
@@ -243,12 +243,12 @@ export async function startGatewayServer(
   const { pluginRegistry, gatewayMethods: baseGatewayMethods } = minimalTestGateway
     ? { pluginRegistry: emptyPluginRegistry, gatewayMethods: baseMethods }
     : loadGatewayPlugins({
-        cfg: cfgAtStart,
-        workspaceDir: defaultWorkspaceDir,
-        log,
-        coreGatewayHandlers,
-        baseMethods,
-      });
+      cfg: cfgAtStart,
+      workspaceDir: defaultWorkspaceDir,
+      log,
+      coreGatewayHandlers,
+      baseMethods,
+    });
   const channelLogs = Object.fromEntries(
     listChannelPlugins().map((plugin) => [plugin.id, logChannels.child(plugin.id)]),
   ) as Record<ChannelId, ReturnType<typeof createSubsystemLogger>>;
@@ -372,6 +372,7 @@ export async function startGatewayServer(
     log,
     logHooks,
     logPlugins,
+    workspaceDir: defaultWorkspaceDir,
   });
   let bonjourStop: (() => Promise<void>) | null = null;
   const nodeRegistry = new NodeRegistry();
@@ -436,22 +437,22 @@ export async function startGatewayServer(
   let skillsRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   const skillsRefreshDelayMs = 30_000;
   const skillsChangeUnsub = minimalTestGateway
-    ? () => {}
+    ? () => { }
     : registerSkillsChangeListener((event) => {
-        if (event.reason === "remote-node") {
-          return;
-        }
-        if (skillsRefreshTimer) {
-          clearTimeout(skillsRefreshTimer);
-        }
-        skillsRefreshTimer = setTimeout(() => {
-          skillsRefreshTimer = null;
-          const latest = loadConfig();
-          void refreshRemoteBinsForConnectedNodes(latest);
-        }, skillsRefreshDelayMs);
-      });
+      if (event.reason === "remote-node") {
+        return;
+      }
+      if (skillsRefreshTimer) {
+        clearTimeout(skillsRefreshTimer);
+      }
+      skillsRefreshTimer = setTimeout(() => {
+        skillsRefreshTimer = null;
+        const latest = loadConfig();
+        void refreshRemoteBinsForConnectedNodes(latest);
+      }, skillsRefreshDelayMs);
+    });
 
-  const noopInterval = () => setInterval(() => {}, 1 << 30);
+  const noopInterval = () => setInterval(() => { }, 1 << 30);
   let tickInterval = noopInterval();
   let healthInterval = noopInterval();
   let dedupeCleanup = noopInterval();
@@ -477,29 +478,29 @@ export async function startGatewayServer(
   const agentUnsub = minimalTestGateway
     ? null
     : onAgentEvent(
-        createAgentEventHandler({
-          broadcast,
-          broadcastToConnIds,
-          nodeSendToSession,
-          agentRunSeq,
-          chatRunState,
-          resolveSessionKeyForRun,
-          clearAgentRunContext,
-          toolEventRecipients,
-        }),
-      );
+      createAgentEventHandler({
+        broadcast,
+        broadcastToConnIds,
+        nodeSendToSession,
+        agentRunSeq,
+        chatRunState,
+        resolveSessionKeyForRun,
+        clearAgentRunContext,
+        toolEventRecipients,
+      }),
+    );
 
   const heartbeatUnsub = minimalTestGateway
     ? null
     : onHeartbeatEvent((evt) => {
-        broadcast("heartbeat", evt, { dropIfSlow: true });
-      });
+      broadcast("heartbeat", evt, { dropIfSlow: true });
+    });
 
   let heartbeatRunner: HeartbeatRunner = minimalTestGateway
     ? {
-        stop: () => {},
-        updateConfig: () => {},
-      }
+      stop: () => { },
+      updateConfig: () => { },
+    }
     : startHeartbeatRunner({ cfg: cfgAtStart });
 
   if (!minimalTestGateway) {
@@ -603,12 +604,12 @@ export async function startGatewayServer(
   const tailscaleCleanup = minimalTestGateway
     ? null
     : await startGatewayTailscaleExposure({
-        tailscaleMode,
-        resetOnExit: tailscaleConfig.resetOnExit,
-        port,
-        controlUiBasePath,
-        logTailscale,
-      });
+      tailscaleMode,
+      resetOnExit: tailscaleConfig.resetOnExit,
+      port,
+      controlUiBasePath,
+      logTailscale,
+    });
 
   let browserControl: Awaited<ReturnType<typeof startBrowserControlServerIfEnabled>> = null;
   if (!minimalTestGateway) {
@@ -636,47 +637,47 @@ export async function startGatewayServer(
   }
 
   const configReloader = minimalTestGateway
-    ? { stop: async () => {} }
+    ? { stop: async () => { } }
     : (() => {
-        const { applyHotReload, requestGatewayRestart } = createGatewayReloadHandlers({
-          deps,
-          broadcast,
-          getState: () => ({
-            hooksConfig,
-            heartbeatRunner,
-            cronState,
-            browserControl,
-          }),
-          setState: (nextState) => {
-            hooksConfig = nextState.hooksConfig;
-            heartbeatRunner = nextState.heartbeatRunner;
-            cronState = nextState.cronState;
-            cron = cronState.cron;
-            cronStorePath = cronState.storePath;
-            browserControl = nextState.browserControl;
-          },
-          startChannel,
-          stopChannel,
-          logHooks,
-          logBrowser,
-          logChannels,
-          logCron,
-          logReload,
-        });
+      const { applyHotReload, requestGatewayRestart } = createGatewayReloadHandlers({
+        deps,
+        broadcast,
+        getState: () => ({
+          hooksConfig,
+          heartbeatRunner,
+          cronState,
+          browserControl,
+        }),
+        setState: (nextState) => {
+          hooksConfig = nextState.hooksConfig;
+          heartbeatRunner = nextState.heartbeatRunner;
+          cronState = nextState.cronState;
+          cron = cronState.cron;
+          cronStorePath = cronState.storePath;
+          browserControl = nextState.browserControl;
+        },
+        startChannel,
+        stopChannel,
+        logHooks,
+        logBrowser,
+        logChannels,
+        logCron,
+        logReload,
+      });
 
-        return startGatewayConfigReloader({
-          initialConfig: cfgAtStart,
-          readSnapshot: readConfigFileSnapshot,
-          onHotReload: applyHotReload,
-          onRestart: requestGatewayRestart,
-          log: {
-            info: (msg) => logReload.info(msg),
-            warn: (msg) => logReload.warn(msg),
-            error: (msg) => logReload.error(msg),
-          },
-          watchPath: CONFIG_PATH,
-        });
-      })();
+      return startGatewayConfigReloader({
+        initialConfig: cfgAtStart,
+        readSnapshot: readConfigFileSnapshot,
+        onHotReload: applyHotReload,
+        onRestart: requestGatewayRestart,
+        log: {
+          info: (msg) => logReload.info(msg),
+          warn: (msg) => logReload.warn(msg),
+          error: (msg) => logReload.error(msg),
+        },
+        watchPath: CONFIG_PATH,
+      });
+    })();
 
   const close = createGatewayCloseHandler({
     bonjourStop,
