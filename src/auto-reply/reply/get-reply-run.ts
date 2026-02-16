@@ -253,10 +253,15 @@ export async function runPreparedReply(
 
   // Drain any pending debounced reactions for this session into system events
   // so they appear as context in the user's message turn, not a separate turn.
-  const { getReactionDebouncerIfExists } = await import("../../infra/reaction-dispatch/global.js");
-  const reactionDebouncer = getReactionDebouncerIfExists();
-  if (reactionDebouncer) {
-    await reactionDebouncer.drainAllForSession(sessionKey);
+  try {
+    const { getReactionDebouncerIfExists } =
+      await import("../../infra/reaction-dispatch/global.js");
+    const reactionDebouncer = getReactionDebouncerIfExists();
+    if (reactionDebouncer) {
+      await reactionDebouncer.drainAllForSession(sessionKey);
+    }
+  } catch {
+    // Non-fatal: reaction drain failure should not block the inbound message.
   }
 
   prefixedBodyBase = await prependSystemEvents({

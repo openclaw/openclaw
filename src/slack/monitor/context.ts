@@ -3,7 +3,7 @@ import type { HistoryEntry } from "../../auto-reply/reply/history.js";
 import { formatAllowlistMatchMeta } from "../../channels/allowlist-match.js";
 import type { OpenClawConfig, SlackReactionNotificationMode } from "../../config/config.js";
 import { resolveSessionKey, type SessionScope } from "../../config/sessions.js";
-import type { DmPolicy, GroupPolicy } from "../../config/types.js";
+import type { DmPolicy, GroupPolicy, ReactionDelivery } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { createDedupeCache } from "../../infra/dedupe.js";
 import { getChildLogger } from "../../logging.js";
@@ -76,7 +76,7 @@ export type SlackMonitorContext = {
   useAccessGroups: boolean;
   reactionMode: SlackReactionNotificationMode;
   reactionAllowlist: Array<string | number>;
-  reactionDelivery: import("../../config/types.reactions.js").ReactionDelivery;
+  reactionDelivery: ReactionDelivery;
   reactionBundleWindowMs?: number;
   reactionIncludeMessage?: boolean;
   replyToMode: "off" | "first" | "all";

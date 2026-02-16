@@ -425,25 +425,30 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         .join(":");
 
       if (deps.reactionDelivery === "immediate") {
-        const { getReactionDebouncer } = await import("../../infra/reaction-dispatch/index.js");
-        const debouncer = getReactionDebouncer(deps.reactionBundleWindowMs);
+        try {
+          const { getReactionDebouncer } = await import("../../infra/reaction-dispatch/index.js");
+          const debouncer = getReactionDebouncer(deps.reactionBundleWindowMs);
 
-        await debouncer.enqueue(
-          {
-            emoji: emojiLabel,
-            actorLabel: senderName,
-            actorId: senderId,
-            action: "added",
-            ts: Date.now(),
-          },
-          {
-            channel: "signal",
-            accountId: deps.accountId,
-            sessionKey: route.sessionKey,
-            messageId,
-            conversationLabel: groupLabel ?? `dm:${senderPeerId}`,
-          },
-        );
+          await debouncer.enqueue(
+            {
+              emoji: emojiLabel,
+              actorLabel: senderName,
+              actorId: senderId,
+              action: "added",
+              ts: Date.now(),
+            },
+            {
+              channel: "signal",
+              accountId: deps.accountId,
+              sessionKey: route.sessionKey,
+              messageId,
+              conversationLabel: groupLabel ?? `dm:${senderPeerId}`,
+            },
+          );
+        } catch {
+          // Fallback to deferred on dispatch failure
+          enqueueSystemEvent(text, { sessionKey: route.sessionKey, contextKey });
+        }
       } else {
         enqueueSystemEvent(text, { sessionKey: route.sessionKey, contextKey });
       }
