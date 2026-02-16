@@ -23,6 +23,7 @@ type InteractionSummary = {
   actionId: string;
   blockId?: string;
   actionType?: string;
+  inputKind?: "text" | "number" | "email" | "url" | "rich_text";
   value?: string;
   selectedValues?: string[];
   selectedLabels?: string[];
@@ -30,6 +31,10 @@ type InteractionSummary = {
   selectedTime?: string;
   selectedDateTime?: number;
   inputValue?: string;
+  inputNumber?: number;
+  inputEmail?: string;
+  inputUrl?: string;
+  richTextValue?: unknown;
   userId?: string;
   teamId?: string;
   triggerId?: string;
@@ -43,6 +48,7 @@ type ModalInputSummary = {
   blockId: string;
   actionId: string;
   actionType?: string;
+  inputKind?: "text" | "number" | "email" | "url" | "rich_text";
   value?: string;
   selectedValues?: string[];
   selectedLabels?: string[];
@@ -50,6 +56,10 @@ type ModalInputSummary = {
   selectedTime?: string;
   selectedDateTime?: number;
   inputValue?: string;
+  inputNumber?: number;
+  inputEmail?: string;
+  inputUrl?: string;
+  richTextValue?: unknown;
 };
 
 function readOptionValues(options: unknown): string[] | undefined {
@@ -108,6 +118,7 @@ function summarizeAction(
     selected_time?: string;
     selected_date_time?: number;
     value?: string;
+    rich_text_value?: unknown;
   };
   const actionType = typed.type;
   const selectedValues = uniqueNonEmptyStrings([
@@ -124,9 +135,38 @@ function summarizeAction(
     ...(typed.selected_option?.text?.text ? [typed.selected_option.text.text] : []),
     ...(readOptionLabels(typed.selected_options) ?? []),
   ]);
+  const inputValue = typeof typed.value === "string" ? typed.value : undefined;
+  const inputNumber =
+    actionType === "number_input" && inputValue != null ? Number.parseFloat(inputValue) : undefined;
+  const parsedNumber = Number.isFinite(inputNumber) ? inputNumber : undefined;
+  const inputEmail =
+    actionType === "email_text_input" && inputValue?.includes("@") ? inputValue : undefined;
+  let inputUrl: string | undefined;
+  if (actionType === "url_text_input" && inputValue) {
+    try {
+      // Normalize to a canonical URL string so downstream handlers do not need to reparse.
+      inputUrl = new URL(inputValue).toString();
+    } catch {
+      inputUrl = undefined;
+    }
+  }
+  const richTextValue = actionType === "rich_text_input" ? typed.rich_text_value : undefined;
+  const inputKind =
+    actionType === "number_input"
+      ? "number"
+      : actionType === "email_text_input"
+        ? "email"
+        : actionType === "url_text_input"
+          ? "url"
+          : actionType === "rich_text_input"
+            ? "rich_text"
+            : inputValue != null
+              ? "text"
+              : undefined;
 
   return {
     actionType,
+    inputKind,
     value: typed.value,
     selectedValues: selectedValues.length > 0 ? selectedValues : undefined,
     selectedLabels: selectedLabels.length > 0 ? selectedLabels : undefined,
@@ -134,7 +174,11 @@ function summarizeAction(
     selectedTime: typed.selected_time,
     selectedDateTime:
       typeof typed.selected_date_time === "number" ? typed.selected_date_time : undefined,
-    inputValue: typed.value,
+    inputValue,
+    inputNumber: parsedNumber,
+    inputEmail,
+    inputUrl,
+    richTextValue,
   };
 }
 
