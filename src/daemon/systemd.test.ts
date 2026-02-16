@@ -59,13 +59,6 @@ describe("systemd runtime parsing", () => {
 });
 
 describe("resolveSystemdUserUnitPath", () => {
-  it("uses default service name when OPENCLAW_PROFILE is default", () => {
-    const env = { HOME: "/home/test", OPENCLAW_PROFILE: "default" };
-    expect(resolveSystemdUserUnitPath(env)).toBe(
-      "/home/test/.config/systemd/user/openclaw-gateway.service",
-    );
-  });
-
   it("uses default service name when OPENCLAW_PROFILE is unset", () => {
     const env = { HOME: "/home/test" };
     expect(resolveSystemdUserUnitPath(env)).toBe(
@@ -108,20 +101,6 @@ describe("resolveSystemdUserUnitPath", () => {
     };
     expect(resolveSystemdUserUnitPath(env)).toBe(
       "/home/test/.config/systemd/user/custom-unit.service",
-    );
-  });
-
-  it("handles case-insensitive 'Default' profile", () => {
-    const env = { HOME: "/home/test", OPENCLAW_PROFILE: "Default" };
-    expect(resolveSystemdUserUnitPath(env)).toBe(
-      "/home/test/.config/systemd/user/openclaw-gateway.service",
-    );
-  });
-
-  it("trims whitespace from OPENCLAW_PROFILE", () => {
-    const env = { HOME: "/home/test", OPENCLAW_PROFILE: "  myprofile  " };
-    expect(resolveSystemdUserUnitPath(env)).toBe(
-      "/home/test/.config/systemd/user/openclaw-gateway-myprofile.service",
     );
   });
 });

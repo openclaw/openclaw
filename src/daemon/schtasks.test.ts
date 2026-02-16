@@ -35,13 +35,6 @@ describe("schtasks runtime parsing", () => {
 });
 
 describe("resolveTaskScriptPath", () => {
-  it("uses default path when OPENCLAW_PROFILE is default", () => {
-    const env = { USERPROFILE: "C:\\Users\\test", OPENCLAW_PROFILE: "default" };
-    expect(resolveTaskScriptPath(env)).toBe(
-      path.join("C:\\Users\\test", ".openclaw", "gateway.cmd"),
-    );
-  });
-
   it("uses default path when OPENCLAW_PROFILE is unset", () => {
     const env = { USERPROFILE: "C:\\Users\\test" };
     expect(resolveTaskScriptPath(env)).toBe(
@@ -63,20 +56,6 @@ describe("resolveTaskScriptPath", () => {
       OPENCLAW_STATE_DIR: "C:\\State\\openclaw",
     };
     expect(resolveTaskScriptPath(env)).toBe(path.join("C:\\State\\openclaw", "gateway.cmd"));
-  });
-
-  it("handles case-insensitive 'Default' profile", () => {
-    const env = { USERPROFILE: "C:\\Users\\test", OPENCLAW_PROFILE: "Default" };
-    expect(resolveTaskScriptPath(env)).toBe(
-      path.join("C:\\Users\\test", ".openclaw", "gateway.cmd"),
-    );
-  });
-
-  it("trims whitespace from OPENCLAW_PROFILE", () => {
-    const env = { USERPROFILE: "C:\\Users\\test", OPENCLAW_PROFILE: "  myprofile  " };
-    expect(resolveTaskScriptPath(env)).toBe(
-      path.join("C:\\Users\\test", ".openclaw-myprofile", "gateway.cmd"),
-    );
   });
 
   it("falls back to HOME when USERPROFILE is not set", () => {

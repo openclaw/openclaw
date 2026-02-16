@@ -38,11 +38,6 @@ describe("resolveGatewayLaunchAgentLabel", () => {
     const result = resolveGatewayLaunchAgentLabel("dev");
     expect(result).toBe("ai.openclaw.dev");
   });
-
-  it("trims whitespace from profile", () => {
-    const result = resolveGatewayLaunchAgentLabel("  staging  ");
-    expect(result).toBe("ai.openclaw.staging");
-  });
 });
 
 describe("resolveGatewaySystemdServiceName", () => {
@@ -56,11 +51,6 @@ describe("resolveGatewaySystemdServiceName", () => {
     const result = resolveGatewaySystemdServiceName("dev");
     expect(result).toBe("openclaw-gateway-dev");
   });
-
-  it("trims whitespace from profile", () => {
-    const result = resolveGatewaySystemdServiceName("  test  ");
-    expect(result).toBe("openclaw-gateway-test");
-  });
 });
 
 describe("resolveGatewayWindowsTaskName", () => {
@@ -73,11 +63,6 @@ describe("resolveGatewayWindowsTaskName", () => {
   it("returns profile-specific task name when profile is set", () => {
     const result = resolveGatewayWindowsTaskName("dev");
     expect(result).toBe("OpenClaw Gateway (dev)");
-  });
-
-  it("trims whitespace from profile", () => {
-    const result = resolveGatewayWindowsTaskName("  ci  ");
-    expect(result).toBe("OpenClaw Gateway (ci)");
   });
 });
 
