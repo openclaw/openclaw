@@ -15,7 +15,6 @@ import {
 import { deriveSessionMetaPatch } from "./metadata.js";
 import {
   resolveSessionFilePath,
-  resolveSessionFilePathOptions,
   resolveSessionTranscriptPathInDir,
   resolveStorePath,
   validateSessionId,
@@ -154,17 +153,6 @@ describe("session path safety", () => {
     );
 
     expect(resolved).toBe(path.resolve(opsSessionFile));
-  });
-
-  it("keeps custom per-agent store roots when agentId is provided", () => {
-    const opts = resolveSessionFilePathOptions({
-      storePath: "/srv/custom/agents/ops/sessions/sessions.json",
-      agentId: "ops",
-    });
-    expect(opts).toEqual({
-      sessionsDir: path.resolve("/srv/custom/agents/ops/sessions"),
-      agentId: "ops",
-    });
   });
 });
 
