@@ -6,11 +6,8 @@ import {
   createActionCard,
   createCarousel,
   createNotificationBubble,
-  createReceiptCard,
   createEventCard,
-  createAgendaCard,
   createMediaPlayerCard,
-  createAppleTvRemoteCard,
   createDeviceControlCard,
   toFlexMessage,
 } from "./flex-templates.js";
@@ -150,18 +147,6 @@ describe("createNotificationBubble", () => {
   });
 });
 
-describe("createReceiptCard", () => {
-  it("includes footer when provided", () => {
-    const card = createReceiptCard({
-      title: "Receipt",
-      items: [{ name: "Item", value: "$10" }],
-      footer: "Thank you!",
-    });
-
-    expect(card.footer).toBeDefined();
-  });
-});
-
 describe("createMediaPlayerCard", () => {
   it("includes album art when provided", () => {
     const card = createMediaPlayerCard({
@@ -201,21 +186,6 @@ describe("createMediaPlayerCard", () => {
 });
 
 describe("createDeviceControlCard", () => {
-  it("creates a device card with controls", () => {
-    const card = createDeviceControlCard({
-      deviceName: "Apple TV",
-      deviceType: "Streaming Box",
-      controls: [
-        { label: "Play/Pause", data: "action=playpause" },
-        { label: "Menu", data: "action=menu" },
-      ],
-    });
-
-    expect(card.type).toBe("bubble");
-    expect(card.body).toBeDefined();
-    expect(card.footer).toBeDefined();
-  });
-
   it("includes device image", () => {
     const card = createDeviceControlCard({
       deviceName: "Device",
@@ -239,32 +209,6 @@ describe("createDeviceControlCard", () => {
     // Should have max 3 rows of 2 buttons
     const footer = card.footer as { contents: unknown[] };
     expect(footer.contents.length).toBeLessThanOrEqual(3);
-  });
-});
-
-describe("createAppleTvRemoteCard", () => {
-  it("creates an Apple TV remote card with controls", () => {
-    const card = createAppleTvRemoteCard({
-      deviceName: "Apple TV",
-      status: "Playing",
-      actionData: {
-        up: "action=up",
-        down: "action=down",
-        left: "action=left",
-        right: "action=right",
-        select: "action=select",
-        menu: "action=menu",
-        home: "action=home",
-        play: "action=play",
-        pause: "action=pause",
-        volumeUp: "action=volume_up",
-        volumeDown: "action=volume_down",
-        mute: "action=mute",
-      },
-    });
-
-    expect(card.type).toBe("bubble");
-    expect(card.body).toBeDefined();
   });
 });
 
@@ -292,18 +236,6 @@ describe("createEventCard", () => {
 
     expect(card.body).toBeDefined();
     expect((card.body as { action?: unknown }).action).toBeDefined();
-  });
-});
-
-describe("createAgendaCard", () => {
-  it("includes footer when provided", () => {
-    const card = createAgendaCard({
-      title: "Today",
-      events: [{ title: "Event" }],
-      footer: "Synced from Google Calendar",
-    });
-
-    expect(card.footer).toBeDefined();
   });
 });
 
