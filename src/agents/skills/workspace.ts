@@ -26,11 +26,126 @@ import {
   resolveSkillInvocationPolicy,
 } from "./frontmatter.js";
 import { resolvePluginSkillDirs } from "./plugin-skills.js";
+import { SkillSemanticIndex, resolveEmbedFn, type SemanticSkillConfig } from "./semantic-index.js";
 import { serializeByKey } from "./serialize.js";
 
 const fsp = fs.promises;
 const skillsLogger = createSubsystemLogger("skills");
 const skillCommandDebugOnce = new Set<string>();
+
+// Cached semantic index for dynamic skill loading
+let cachedSemanticIndex: SkillSemanticIndex | null = null;
+let cachedIndexHash: string | null = null;
+
+/**
+ * Get or create a semantic skill index for the workspace.
+ * Uses caching to avoid rebuilding the index on every request.
+ */
+async function getOrCreateSemanticIndex(
+  entries: SkillEntry[],
+  config?: OpenClawConfig,
+): Promise<SkillSemanticIndex | null> {
+  const dynamicConfig = config?.skills?.dynamicLoading;
+  if (!dynamicConfig?.enabled) {
+    return null;
+  }
+
+  // Create a hash of skill names and mtimes to detect changes (including content)
+  const entriesHash = entries
+    .map((e) => {
+      const stat = fs.statSync(e.skill.filePath);
+      return `${e.skill.name}:${stat.mtimeMs}`;
+    })
+    .sort()
+    .join(",");
+
+  if (cachedSemanticIndex && cachedIndexHash === entriesHash) {
+    skillsLogger.debug("Using cached semantic skill index");
+    return cachedSemanticIndex;
+  }
+
+  // Resolve embedding function from config
+  const provider = dynamicConfig.embeddingProvider ?? "openai";
+  const apiKey = resolveEmbeddingApiKey(provider, config);
+
+  if (!apiKey) {
+    skillsLogger.warn(
+      `No API key found for embedding provider "${provider}". ` +
+        "Falling back to full skill loading.",
+    );
+    return null;
+  }
+
+  const embedFn = resolveEmbedFn(provider, apiKey, dynamicConfig.embeddingModel);
+
+  // Build new index
+  const semanticConfig: Partial<SemanticSkillConfig> = {
+    enabled: true,
+    topK: dynamicConfig.topK ?? 5,
+    minScore: dynamicConfig.minScore ?? 0.3,
+    embeddingModel: dynamicConfig.embeddingModel,
+  };
+
+  const index = new SkillSemanticIndex(semanticConfig);
+
+  try {
+    await index.buildIndex(entries, embedFn);
+    cachedSemanticIndex = index;
+    cachedIndexHash = entriesHash;
+    skillsLogger.info(
+      `Built semantic index for ${entries.length} skills ` +
+        `(provider: ${provider}, topK: ${semanticConfig.topK})`,
+    );
+    return index;
+  } catch (error) {
+    skillsLogger.error(
+      `Failed to build semantic skill index: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return null;
+  }
+}
+
+/**
+ * Resolve API key for embedding provider from config or environment.
+ */
+function resolveEmbeddingApiKey(provider: string, config?: OpenClawConfig): string | undefined {
+  // First check environment variables
+  const envKeys: Record<string, string> = {
+    openai: "OPENAI_API_KEY",
+    voyage: "VOYAGE_API_KEY",
+    anthropic: "VOYAGE_API_KEY", // Anthropic uses Voyage for embeddings
+  };
+
+  const envKey = envKeys[provider.toLowerCase()];
+  if (envKey && process.env[envKey]) {
+    return process.env[envKey];
+  }
+
+  // Fallback to any configured OpenAI key in the config
+  // This is a simplification - real implementation might need
+  // to look up provider-specific keys in config
+  return process.env.OPENAI_API_KEY;
+}
+
+/**
+ * Format a lightweight skill directory for the prompt.
+ * Only includes skill names and one-line descriptions.
+ */
+function formatSkillDirectory(directory: Array<{ name: string; description: string }>): string {
+  if (directory.length === 0) {
+    return "";
+  }
+
+  const lines = directory.map((s) => `- ${s.name}: ${s.description.slice(0, 100)}`);
+
+  return [
+    "## Available Skills (lightweight directory)",
+    "The following skills are installed but not fully loaded.",
+    "Request a skill by name if needed for the current task.",
+    "",
+    ...lines,
+  ].join("\n");
+}
 
 function debugSkillCommandOnce(
   messageKey: string,
@@ -274,6 +389,147 @@ export function buildWorkspaceSkillsPrompt(
   return [remoteNote, formatSkillsForPrompt(promptEntries.map((entry) => entry.skill))]
     .filter(Boolean)
     .join("\n");
+}
+
+/**
+ * Build workspace skills prompt with context-aware dynamic loading.
+ *
+ * When `skills.dynamicLoading.enabled` is true and a userMessage is provided,
+ * this function will:
+ * 1. Build a semantic index of all skills
+ * 2. Search for the top-k most relevant skills based on the user message
+ * 3. Return a prompt containing:
+ *    - Full documentation for relevant skills only
+ *    - A lightweight directory of all other skills
+ *
+ * This dramatically reduces token usage while maintaining skill awareness.
+ *
+ * Falls back to full loading if:
+ * - dynamicLoading is disabled
+ * - userMessage is not provided
+ * - Semantic search fails
+ *
+ * @param workspaceDir - Workspace directory path
+ * @param opts - Options including config and optional userMessage
+ * @returns Skills prompt string
+ */
+export async function buildWorkspaceSkillsPromptAsync(
+  workspaceDir: string,
+  opts?: {
+    config?: OpenClawConfig;
+    managedSkillsDir?: string;
+    bundledSkillsDir?: string;
+    entries?: SkillEntry[];
+    /** If provided, only include skills with these names */
+    skillFilter?: string[];
+    eligibility?: SkillEligibilityContext;
+    /** User message for context-aware skill loading */
+    userMessage?: string;
+  },
+): Promise<string> {
+  const skillEntries = opts?.entries ?? loadSkillEntries(workspaceDir, opts);
+  const eligible = filterSkillEntries(
+    skillEntries,
+    opts?.config,
+    opts?.skillFilter,
+    opts?.eligibility,
+  );
+  const promptEntries = eligible.filter(
+    (entry) => entry.invocation?.disableModelInvocation !== true,
+  );
+
+  const dynamicConfig = opts?.config?.skills?.dynamicLoading;
+  const userMessage = opts?.userMessage?.trim();
+
+  // Check if dynamic loading should be used
+  if (!dynamicConfig?.enabled || !userMessage) {
+    // Fall back to standard full loading
+    const remoteNote = opts?.eligibility?.remote?.note?.trim();
+    return [remoteNote, formatSkillsForPrompt(promptEntries.map((entry) => entry.skill))]
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  // Try to get or create semantic index
+  const semanticIndex = await getOrCreateSemanticIndex(promptEntries, opts?.config);
+
+  if (!semanticIndex) {
+    // Fall back to full loading on index creation failure
+    skillsLogger.debug("Semantic index unavailable, falling back to full loading");
+    const remoteNote = opts?.eligibility?.remote?.note?.trim();
+    return [remoteNote, formatSkillsForPrompt(promptEntries.map((entry) => entry.skill))]
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  try {
+    // Resolve embedding function for search
+    const provider = dynamicConfig.embeddingProvider ?? "openai";
+    const apiKey = resolveEmbeddingApiKey(provider, opts?.config);
+
+    if (!apiKey) {
+      throw new Error(`No API key for provider ${provider}`);
+    }
+
+    const embedFn = resolveEmbedFn(provider, apiKey, dynamicConfig.embeddingModel);
+
+    // Search for relevant skills
+    const relevantEntries = await semanticIndex.search(userMessage, embedFn, dynamicConfig.topK);
+
+    // Get lightweight directory of all skills
+    const directory = semanticIndex.getSkillDirectory();
+
+    // Filter directory to exclude skills that are fully loaded
+    const loadedNames = new Set(relevantEntries.map((e) => e.skill.name));
+    const unloadedDirectory = directory.filter((d) => !loadedNames.has(d.name));
+
+    // Build the combined prompt
+    const parts: string[] = [];
+    const remoteNote = opts?.eligibility?.remote?.note?.trim();
+
+    if (remoteNote) {
+      parts.push(remoteNote);
+    }
+
+    // Add fully loaded relevant skills
+    if (relevantEntries.length > 0) {
+      parts.push("## Loaded Skills (relevant to current context)");
+      parts.push(formatSkillsForPrompt(relevantEntries.map((e) => e.skill)));
+    }
+
+    // Add lightweight directory for other skills
+    if (unloadedDirectory.length > 0) {
+      parts.push(formatSkillDirectory(unloadedDirectory));
+    }
+
+    const prompt = parts.filter(Boolean).join("\n\n");
+
+    skillsLogger.debug(
+      `Dynamic skill loading: ${relevantEntries.length} loaded, ` +
+        `${unloadedDirectory.length} in directory`,
+    );
+
+    return prompt;
+  } catch (error) {
+    // Fall back to full loading on search failure
+    skillsLogger.error(
+      `Semantic skill search failed, falling back to full loading: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    const remoteNote = opts?.eligibility?.remote?.note?.trim();
+    return [remoteNote, formatSkillsForPrompt(promptEntries.map((entry) => entry.skill))]
+      .filter(Boolean)
+      .join("\n");
+  }
+}
+
+/**
+ * Clear the cached semantic skill index.
+ * Call this when skills are added/removed or config changes.
+ */
+export function clearSemanticIndexCache(): void {
+  cachedSemanticIndex = null;
+  cachedIndexHash = null;
+  skillsLogger.debug("Semantic skill index cache cleared");
 }
 
 export function resolveSkillsPromptForRun(params: {

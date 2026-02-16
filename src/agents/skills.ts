@@ -26,12 +26,24 @@ export type {
 export {
   buildWorkspaceSkillSnapshot,
   buildWorkspaceSkillsPrompt,
+  buildWorkspaceSkillsPromptAsync,
   buildWorkspaceSkillCommandSpecs,
+  clearSemanticIndexCache,
   filterWorkspaceSkillEntries,
   loadWorkspaceSkillEntries,
   resolveSkillsPromptForRun,
   syncSkillsToWorkspace,
 } from "./skills/workspace.js";
+
+// Re-export semantic index types and utilities
+export {
+  SkillSemanticIndex,
+  createOpenAIEmbedFn,
+  createVoyageEmbedFn,
+  resolveEmbedFn,
+  type SemanticSkillConfig,
+  type SkillIndexEntry,
+} from "./skills/semantic-index.js";
 
 export function resolveSkillsInstallPreferences(config?: OpenClawConfig): SkillsInstallPreferences {
   const raw = config?.skills?.install;
