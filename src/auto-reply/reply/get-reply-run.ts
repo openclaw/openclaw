@@ -24,7 +24,6 @@ import {
 import { logVerbose } from "../../globals.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
-import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { hasControlCommand } from "../command-detection.js";
 import { buildInboundMediaNote } from "../media-note.js";
 import {
@@ -431,7 +430,11 @@ export async function runPreparedReply(
       blockReplyBreak: resolvedBlockStreamingBreak,
       ownerNumbers: command.ownerList.length > 0 ? command.ownerList : undefined,
       extraSystemPrompt: extraSystemPrompt || undefined,
-      ...(isReasoningTagProvider(provider) ? { enforceFinalTag: true } : {}),
+      // NOTE: enforceFinalTag requires models to wrap response in <final> tags.
+      // Most providers (including ollama) use <think> tags but NOT <final> tags,
+      // so we don't set this automatically. If enabled incorrectly, all response
+      // content gets stripped because stripBlockTags returns empty when no <final>
+      // tags are found. Only enable this for providers known to emit <final> tags.
     },
   };
 
