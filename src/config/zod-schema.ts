@@ -648,7 +648,7 @@ export const OpenClawSchema = z
     if (agents.length === 0) {
       return;
     }
-    const agentIds = new Set(agents.map((agent) => agent.id));
+    const agentIds = new Set(agents.map((agent) => (agent as { id?: unknown })?.id));
 
     const broadcast = cfg.broadcast;
     if (!broadcast) {

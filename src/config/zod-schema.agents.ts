@@ -1,12 +1,11 @@
 import { z } from "zod";
 import { AgentDefaultsSchema } from "./zod-schema.agent-defaults.js";
-import { AgentEntrySchema } from "./zod-schema.agent-runtime.js";
 import { TranscribeAudioSchema } from "./zod-schema.core.js";
 
 export const AgentsSchema = z
   .object({
     defaults: z.lazy(() => AgentDefaultsSchema).optional(),
-    list: z.array(AgentEntrySchema).optional(),
+    list: z.array(z.unknown()).optional(),
   })
   .strict()
   .optional();

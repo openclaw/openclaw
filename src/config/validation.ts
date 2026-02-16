@@ -13,6 +13,7 @@ import { isRecord } from "../utils.js";
 import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-dirs.js";
 import { applyAgentDefaults, applyModelDefaults, applySessionDefaults } from "./defaults.js";
 import { findLegacyConfigIssues } from "./legacy.js";
+import { AgentEntrySchema } from "./zod-schema.agent-runtime.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
 const AVATAR_SCHEME_RE = /^[a-z][a-z0-9+.-]*:/i;
@@ -89,7 +90,9 @@ function validateIdentityAvatar(config: OpenClawConfig): ConfigValidationIssue[]
  */
 export function validateConfigObjectRaw(
   raw: unknown,
-): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
+):
+  | { ok: true; config: OpenClawConfig; warnings: ConfigValidationIssue[] }
+  | { ok: false; issues: ConfigValidationIssue[] } {
   const legacyIssues = findLegacyConfigIssues(raw);
   if (legacyIssues.length > 0) {
     return {
@@ -110,7 +113,32 @@ export function validateConfigObjectRaw(
       })),
     };
   }
-  const duplicates = findDuplicateAgentDirs(validated.data as OpenClawConfig);
+
+  const config = validated.data as OpenClawConfig;
+  const warnings: ConfigValidationIssue[] = [];
+
+  if (Array.isArray(config.agents?.list)) {
+    const validAgents: import("./types.agents.js").AgentConfig[] = [];
+    const list = config.agents?.list as unknown[];
+    for (const [index, agent] of list.entries()) {
+      const res = AgentEntrySchema.safeParse(agent);
+      if (res.success) {
+        validAgents.push(res.data);
+      } else {
+        for (const issue of res.error.issues) {
+          warnings.push({
+            path: `agents.list.${index}.${issue.path.join(".")}`,
+            message: issue.message,
+          });
+        }
+      }
+    }
+    if (config.agents) {
+      config.agents.list = validAgents;
+    }
+  }
+
+  const duplicates = findDuplicateAgentDirs(config);
   if (duplicates.length > 0) {
     return {
       ok: false,
@@ -122,19 +150,22 @@ export function validateConfigObjectRaw(
       ],
     };
   }
-  const avatarIssues = validateIdentityAvatar(validated.data as OpenClawConfig);
+  const avatarIssues = validateIdentityAvatar(config);
   if (avatarIssues.length > 0) {
     return { ok: false, issues: avatarIssues };
   }
   return {
     ok: true,
-    config: validated.data as OpenClawConfig,
+    config,
+    warnings,
   };
 }
 
 export function validateConfigObject(
   raw: unknown,
-): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
+):
+  | { ok: true; config: OpenClawConfig; warnings: ConfigValidationIssue[] }
+  | { ok: false; issues: ConfigValidationIssue[] } {
   const result = validateConfigObjectRaw(raw);
   if (!result.ok) {
     return result;
@@ -142,6 +173,7 @@ export function validateConfigObject(
   return {
     ok: true,
     config: applyModelDefaults(applyAgentDefaults(applySessionDefaults(result.config))),
+    warnings: result.warnings,
   };
 }
 
@@ -194,7 +226,7 @@ function validateConfigObjectWithPluginsBase(
 
   const config = base.config;
   const issues: ConfigValidationIssue[] = [];
-  const warnings: ConfigValidationIssue[] = [];
+  const warnings: ConfigValidationIssue[] = base.warnings || [];
   const hasExplicitPluginsConfig =
     isRecord(raw) && Object.prototype.hasOwnProperty.call(raw, "plugins");
 
