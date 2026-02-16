@@ -405,7 +405,15 @@ export function createAgentCallTool(opts?: {
       });
 
       const messages = Array.isArray(history?.messages) ? history.messages : [];
-      const lastAssistant = messages.filter((m: any) => m?.role === "assistant").pop() as any;
+      const lastAssistant = messages
+        .filter(
+          (m): m is { role?: unknown } =>
+            typeof m === "object" &&
+            m !== null &&
+            "role" in m &&
+            (m as { role?: unknown }).role === "assistant",
+        )
+        .pop();
 
       // Use canonical helper to extract text from content blocks
       const raw = extractAssistantText(lastAssistant) ?? "";

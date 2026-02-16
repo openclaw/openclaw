@@ -275,7 +275,7 @@ async function invokeAgentSkill(params: {
  * Supports both agent IDs (e.g., "rca-agent") and full session keys.
  * Validates both formats strictly.
  */
-async function resolveAgentSession(agentRef: string, requesterAgentId: string): Promise<string> {
+async function resolveAgentSession(agentRef: string, _requesterAgentId: string): Promise<string> {
   // If it looks like a session key, validate and use it directly
   if (isAgentSessionKeyRef(agentRef)) {
     return validateAgentSessionKey(agentRef);
@@ -517,7 +517,7 @@ export function createDebateCallTool(opts?: {
 
               const batchResults = await Promise.all(
                 batch.map(async (critic, batchIdx) => {
-                  const globalIdx = i + batchIdx;
+                  const _globalIdx = i + batchIdx;
                   try {
                     const result = await invokeAgentSkill({
                       sessionKey: batchSessions[batchIdx],
@@ -532,15 +532,18 @@ export function createDebateCallTool(opts?: {
                       requesterSessionKey,
                     });
 
+                    // Safely extract flaws and alternatives from output
+                    const outputObj = result.output as Record<string, unknown> | null | undefined;
+                    const flawsArr = outputObj?.flaws;
+                    const altArr = outputObj?.alternatives;
+                    const flaws = Array.isArray(flawsArr) ? ([...flawsArr] as string[]) : [];
+                    const alternatives = Array.isArray(altArr) ? ([...altArr] as string[]) : [];
+
                     return {
                       agent: critic.agent,
                       output: result.output,
-                      flaws: Array.isArray((result.output as any)?.flaws)
-                        ? (result.output as any).flaws
-                        : [],
-                      alternatives: Array.isArray((result.output as any)?.alternatives)
-                        ? (result.output as any).alternatives
-                        : [],
+                      flaws,
+                      alternatives,
                       confidence: result.confidence,
                     };
                   } catch (err) {
@@ -663,8 +666,8 @@ export function createDebateCallTool(opts?: {
           confidenceHistory: [...confidenceHistory, finalConfidence],
           rounds,
           dissent:
-            typeof (resolution.output as any)?.dissent === "string"
-              ? (resolution.output as any).dissent
+            typeof (resolution.output as Record<string, unknown> | null)?.dissent === "string"
+              ? ((resolution.output as Record<string, unknown>).dissent as string)
               : undefined,
           assumptions: Array.from(new Set([...currentAssumptions, ...resolution.assumptions])),
           correlationId, // RFC: For response routing
