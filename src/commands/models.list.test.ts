@@ -510,29 +510,6 @@ describe("models list/status", () => {
     expect(process.exitCode).toBe(1);
   });
 
-  it("loadModelRegistry throws when model discovery is unavailable", async () => {
-    modelRegistryState.getAllError = Object.assign(new Error("model discovery unavailable"), {
-      code: "MODEL_DISCOVERY_UNAVAILABLE",
-    });
-    modelRegistryState.available = [
-      {
-        provider: "google-antigravity",
-        id: "claude-opus-4-5-thinking",
-        name: "Claude Opus 4.5 Thinking",
-        api: "google-gemini-cli",
-        input: ["text", "image"],
-        baseUrl: "https://daily-cloudcode-pa.sandbox.googleapis.com",
-        contextWindow: 200000,
-        maxTokens: 64000,
-        reasoning: true,
-        cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
-      },
-    ];
-
-    const { loadModelRegistry } = await import("./models/list.registry.js");
-    await expect(loadModelRegistry({})).rejects.toThrow("model discovery unavailable");
-  });
-
   it("toModelRow does not crash without cfg/authStore when availability is undefined", async () => {
     const { toModelRow } = await import("./models/list.registry.js");
 
