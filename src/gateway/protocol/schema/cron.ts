@@ -65,6 +65,22 @@ export const CronPayloadPatchSchema = Type.Union([
     { additionalProperties: false },
   ),
   cronAgentTurnPayloadSchema({ message: Type.Optional(NonEmptyString) }),
+  // Kind-less partial patch: applies fields against the existing payload kind.
+  Type.Object(
+    {
+      message: Type.Optional(NonEmptyString),
+      text: Type.Optional(NonEmptyString),
+      model: Type.Optional(Type.String()),
+      thinking: Type.Optional(Type.String()),
+      timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1 })),
+      allowUnsafeExternalContent: Type.Optional(Type.Boolean()),
+      deliver: Type.Optional(Type.Boolean()),
+      channel: Type.Optional(Type.String()),
+      to: Type.Optional(Type.String()),
+      bestEffortDeliver: Type.Optional(Type.Boolean()),
+    },
+    { additionalProperties: false },
+  ),
 ]);
 
 const CronDeliverySharedProperties = {

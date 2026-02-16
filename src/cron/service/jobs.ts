@@ -7,6 +7,7 @@ import type {
   CronJobPatch,
   CronPayload,
   CronPayloadPatch,
+  CronMessageChannel,
 } from "../types.js";
 import type { CronServiceState } from "./state.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
@@ -317,7 +318,7 @@ export function applyJobPatch(job: CronJob, patch: CronJobPatch) {
   if (!patch.delivery && effectivePayloadKind === "agentTurn" && patch.payload) {
     // Back-compat: legacy clients still update delivery via payload fields.
     const legacyDeliveryPatch = buildLegacyDeliveryPatch(
-      patch.payload as Extract<CronPayloadPatch, { kind: "agentTurn" }>,
+      patch.payload as Parameters<typeof buildLegacyDeliveryPatch>[0],
     );
     if (
       legacyDeliveryPatch &&
@@ -409,9 +410,12 @@ function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronP
   return next;
 }
 
-function buildLegacyDeliveryPatch(
-  payload: Extract<CronPayloadPatch, { kind: "agentTurn" }>,
-): CronDeliveryPatch | null {
+function buildLegacyDeliveryPatch(payload: {
+  deliver?: boolean;
+  to?: string;
+  channel?: CronMessageChannel;
+  bestEffortDeliver?: boolean;
+}): CronDeliveryPatch | null {
   const deliver = payload.deliver;
   const toRaw = typeof payload.to === "string" ? payload.to.trim() : "";
   const hasLegacyHints =
