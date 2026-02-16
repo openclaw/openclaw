@@ -96,4 +96,74 @@ Ignore this.
     expect(result).not.toBeNull();
     expect(result).toContain("[truncated]");
   });
+
+  it("matches section names case-insensitively", async () => {
+    const content = `# Rules
+
+## session startup
+
+Read WORKFLOW_AUTO.md
+
+## Other
+`;
+    fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
+    const result = await readPostCompactionContext(tmpDir);
+    expect(result).not.toBeNull();
+    expect(result).toContain("WORKFLOW_AUTO.md");
+  });
+
+  it("matches H3 headings", async () => {
+    const content = `# Rules
+
+### Session Startup
+
+Read these files.
+
+### Other
+`;
+    fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
+    const result = await readPostCompactionContext(tmpDir);
+    expect(result).not.toBeNull();
+    expect(result).toContain("Read these files");
+  });
+
+  it("skips sections inside code blocks", async () => {
+    const content = `# Rules
+
+\`\`\`markdown
+## Session Startup
+This is inside a code block and should NOT be extracted.
+\`\`\`
+
+## Red Lines
+
+Real red lines here.
+
+## Other
+`;
+    fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
+    const result = await readPostCompactionContext(tmpDir);
+    expect(result).not.toBeNull();
+    expect(result).toContain("Real red lines here");
+    expect(result).not.toContain("inside a code block");
+  });
+
+  it("includes sub-headings within a section", async () => {
+    const content = `## Red Lines
+
+### Rule 1
+Never do X.
+
+### Rule 2
+Never do Y.
+
+## Other Section
+`;
+    fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
+    const result = await readPostCompactionContext(tmpDir);
+    expect(result).not.toBeNull();
+    expect(result).toContain("Rule 1");
+    expect(result).toContain("Rule 2");
+    expect(result).not.toContain("Other Section");
+  });
 });
