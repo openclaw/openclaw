@@ -321,12 +321,13 @@ describe("buildAgentSystemPrompt", () => {
         { path: "IDENTITY.md", content: "Bravo" },
       ],
     });
-
     expect(prompt).toContain("# Project Context");
     expect(prompt).toContain("## AGENTS.md");
     expect(prompt).toContain("Alpha");
-    expect(prompt).toContain("## IDENTITY.md");
+    // IDENTITY.md is now elevated to its own section
+    expect(prompt).toContain("## Identity");
     expect(prompt).toContain("Bravo");
+    expect(prompt).not.toContain("## IDENTITY.md");
   });
 
   it("ignores context files with missing or blank paths", () => {
@@ -354,11 +355,20 @@ describe("buildAgentSystemPrompt", () => {
         { path: "dir\\SOUL.md", content: "Persona Windows" },
       ],
     });
-
+    // Soul.md elevated to Doctrine section with new preamble
+    expect(prompt).toContain("## Doctrine");
     expect(prompt).toContain(
-      "If SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it.",
+      "Embody the persona and tone defined below to keep the assistant's unique voice.",
+    );
+    expect(prompt).toContain("Persona");
+    // Duplicate soul.md from different path is suppressed (has-based filter)
+    expect(prompt).not.toContain("Persona Windows");
+    // Old preamble is gone
+    expect(prompt).not.toContain(
+      "If SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies",
     );
   });
+
 
   it("summarizes the message tool when available", () => {
     const prompt = buildAgentSystemPrompt({
