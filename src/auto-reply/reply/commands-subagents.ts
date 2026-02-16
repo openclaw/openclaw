@@ -10,6 +10,7 @@ import {
   markSubagentRunForSteerRestart,
   replaceSubagentRunAfterSteer,
 } from "../../agents/subagent-registry.js";
+import { spawnSubagentDirect } from "../../agents/subagent-spawn.js";
 import {
   extractAssistantText,
   resolveInternalSessionKey,
@@ -47,7 +48,7 @@ const COMMAND = "/subagents";
 const COMMAND_KILL = "/kill";
 const COMMAND_STEER = "/steer";
 const COMMAND_TELL = "/tell";
-const ACTIONS = new Set(["list", "kill", "log", "send", "steer", "info", "help"]);
+const ACTIONS = new Set(["list", "kill", "log", "send", "steer", "info", "spawn", "help"]);
 const RECENT_WINDOW_MINUTES = 30;
 const SUBAGENT_TASK_PREVIEW_MAX = 110;
 const STEER_ABORT_SETTLE_TIMEOUT_MS = 5_000;
@@ -192,6 +193,7 @@ function buildSubagentsHelp() {
     "- /subagents info <id|#>",
     "- /subagents send <id|#> <message>",
     "- /subagents steer <id|#> <message>",
+    "- /subagents spawn <agentId> <task> [--model <model>] [--thinking <level>]",
     "- /kill <id|#|all>",
     "- /steer <id|#> <message>",
     "- /tell <id|#> <message>",
@@ -641,6 +643,57 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
         text:
           replyText ?? `✅ Sent to ${formatRunLabel(resolved.entry)} (run ${runId.slice(0, 8)}).`,
       },
+    };
+  }
+
+  if (action === "spawn") {
+    const agentId = restTokens[0];
+    // Parse remaining tokens: task text with optional --model and --thinking flags.
+    const taskParts: string[] = [];
+    let model: string | undefined;
+    let thinking: string | undefined;
+    for (let i = 1; i < restTokens.length; i++) {
+      if (restTokens[i] === "--model" && i + 1 < restTokens.length) {
+        i += 1;
+        model = restTokens[i];
+      } else if (restTokens[i] === "--thinking" && i + 1 < restTokens.length) {
+        i += 1;
+        thinking = restTokens[i];
+      } else {
+        taskParts.push(restTokens[i]);
+      }
+    }
+    const task = taskParts.join(" ").trim();
+    if (!agentId || !task) {
+      return {
+        shouldContinue: false,
+        reply: {
+          text: "Usage: /subagents spawn <agentId> <task> [--model <model>] [--thinking <level>]",
+        },
+      };
+    }
+
+    const result = await spawnSubagentDirect(
+      { task, agentId, model, thinking, cleanup: "keep" },
+      {
+        agentSessionKey: requesterKey,
+        agentChannel: params.command.channel,
+        agentAccountId: params.ctx.AccountId,
+        agentTo: params.command.to,
+        agentThreadId: params.ctx.MessageThreadId,
+      },
+    );
+    if (result.status === "accepted") {
+      return {
+        shouldContinue: false,
+        reply: {
+          text: `Spawned subagent ${agentId} (session ${result.childSessionKey}, run ${result.runId?.slice(0, 8)}).${result.warning ? ` Warning: ${result.warning}` : ""}`,
+        },
+      };
+    }
+    return {
+      shouldContinue: false,
+      reply: { text: `Spawn failed: ${result.error ?? result.status}` },
     };
   }
 
