@@ -53,6 +53,30 @@ function resolveAbortTarget(params: {
   return { entry: undefined, key: targetSessionKey, sessionId: undefined };
 }
 
+async function applyAbortTarget(params: {
+  abortTarget: ReturnType<typeof resolveAbortTarget>;
+  sessionStore?: Record<string, SessionEntry>;
+  storePath?: string;
+  abortKey?: string;
+}) {
+  const { abortTarget } = params;
+  if (abortTarget.sessionId) {
+    abortEmbeddedPiRun(abortTarget.sessionId);
+  }
+  if (abortTarget.entry && params.sessionStore && abortTarget.key) {
+    abortTarget.entry.abortedLastRun = true;
+    abortTarget.entry.updatedAt = Date.now();
+    params.sessionStore[abortTarget.key] = abortTarget.entry;
+    if (params.storePath) {
+      await updateSessionStore(params.storePath, (store) => {
+        store[abortTarget.key] = abortTarget.entry;
+      });
+    }
+  } else if (params.abortKey) {
+    setAbortMemory(params.abortKey, true);
+  }
+}
+
 export const handleActivationCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
     return null;
@@ -304,27 +328,18 @@ export const handleStopCommand: CommandHandler = async (params, allowTextCommand
     sessionEntry: params.sessionEntry,
     sessionStore: params.sessionStore,
   });
-  if (abortTarget.sessionId) {
-    abortEmbeddedPiRun(abortTarget.sessionId);
-  }
   const cleared = clearSessionQueues([abortTarget.key, abortTarget.sessionId]);
   if (cleared.followupCleared > 0 || cleared.laneCleared > 0) {
     logVerbose(
       `stop: cleared followups=${cleared.followupCleared} lane=${cleared.laneCleared} keys=${cleared.keys.join(",")}`,
     );
   }
-  if (abortTarget.entry && params.sessionStore && abortTarget.key) {
-    abortTarget.entry.abortedLastRun = true;
-    abortTarget.entry.updatedAt = Date.now();
-    params.sessionStore[abortTarget.key] = abortTarget.entry;
-    if (params.storePath) {
-      await updateSessionStore(params.storePath, (store) => {
-        store[abortTarget.key] = abortTarget.entry;
-      });
-    }
-  } else if (params.command.abortKey) {
-    setAbortMemory(params.command.abortKey, true);
-  }
+  await applyAbortTarget({
+    abortTarget,
+    sessionStore: params.sessionStore,
+    storePath: params.storePath,
+    abortKey: params.command.abortKey,
+  });
 
   // Trigger internal hook for stop command
   const hookEvent = createInternalHookEvent(
@@ -361,20 +376,11 @@ export const handleAbortTrigger: CommandHandler = async (params, allowTextComman
     sessionEntry: params.sessionEntry,
     sessionStore: params.sessionStore,
   });
-  if (abortTarget.sessionId) {
-    abortEmbeddedPiRun(abortTarget.sessionId);
-  }
-  if (abortTarget.entry && params.sessionStore && abortTarget.key) {
-    abortTarget.entry.abortedLastRun = true;
-    abortTarget.entry.updatedAt = Date.now();
-    params.sessionStore[abortTarget.key] = abortTarget.entry;
-    if (params.storePath) {
-      await updateSessionStore(params.storePath, (store) => {
-        store[abortTarget.key] = abortTarget.entry;
-      });
-    }
-  } else if (params.command.abortKey) {
-    setAbortMemory(params.command.abortKey, true);
-  }
+  await applyAbortTarget({
+    abortTarget,
+    sessionStore: params.sessionStore,
+    storePath: params.storePath,
+    abortKey: params.command.abortKey,
+  });
   return { shouldContinue: false, reply: { text: "⚙️ Agent was aborted." } };
 };

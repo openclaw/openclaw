@@ -56,3 +56,55 @@ describe("NVIDIA provider", () => {
     expect(modelIds).toContain("nvidia/mistral-nemo-minitron-8b-8k-instruct");
   });
 });
+
+describe("MiniMax implicit provider (#15275)", () => {
+  it("should use anthropic-messages API for API-key provider", async () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    const envSnapshot = captureEnv(["MINIMAX_API_KEY"]);
+    process.env.MINIMAX_API_KEY = "test-key";
+
+    try {
+      const providers = await resolveImplicitProviders({ agentDir });
+      expect(providers?.minimax).toBeDefined();
+      expect(providers?.minimax?.api).toBe("anthropic-messages");
+      expect(providers?.minimax?.baseUrl).toBe("https://api.minimax.io/anthropic");
+    } finally {
+      envSnapshot.restore();
+    }
+  });
+});
+
+describe("vLLM provider", () => {
+  it("should not include vllm when no API key is configured", async () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    const envSnapshot = captureEnv(["VLLM_API_KEY"]);
+    delete process.env.VLLM_API_KEY;
+
+    try {
+      const providers = await resolveImplicitProviders({ agentDir });
+      expect(providers?.vllm).toBeUndefined();
+    } finally {
+      envSnapshot.restore();
+    }
+  });
+
+  it("should include vllm when VLLM_API_KEY is set", async () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    const envSnapshot = captureEnv(["VLLM_API_KEY"]);
+    process.env.VLLM_API_KEY = "test-key";
+
+    try {
+      const providers = await resolveImplicitProviders({ agentDir });
+
+      expect(providers?.vllm).toBeDefined();
+      expect(providers?.vllm?.apiKey).toBe("VLLM_API_KEY");
+      expect(providers?.vllm?.baseUrl).toBe("http://127.0.0.1:8000/v1");
+      expect(providers?.vllm?.api).toBe("openai-completions");
+
+      // Note: discovery is disabled in test environments (VITEST check)
+      expect(providers?.vllm?.models).toEqual([]);
+    } finally {
+      envSnapshot.restore();
+    }
+  });
+});
