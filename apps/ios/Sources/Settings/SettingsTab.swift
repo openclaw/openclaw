@@ -15,6 +15,7 @@ struct SettingsTab: View {
     @AppStorage("voiceWake.enabled") private var voiceWakeEnabled: Bool = false
     @AppStorage("talk.enabled") private var talkEnabled: Bool = false
     @AppStorage("talk.button.enabled") private var talkButtonEnabled: Bool = true
+    @AppStorage("talk.voiceDirectiveHint.enabled") private var talkVoiceDirectiveHintEnabled: Bool = true
     @AppStorage("camera.enabled") private var cameraEnabled: Bool = true
     @AppStorage("location.enabledMode") private var locationEnabledModeRaw: String = OpenClawLocationMode.off.rawValue
     @AppStorage("location.preciseEnabled") private var locationPreciseEnabled: Bool = true
@@ -253,6 +254,10 @@ struct SettingsTab: View {
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                         Text("Use this local override when gateway config redacts talk.apiKey for mobile clients.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                        Toggle("Voice Directive Hint", isOn: self.$talkVoiceDirectiveHintEnabled)
+                        Text("Include ElevenLabs voice switching instructions in the Talk Mode prompt. Disable to save tokens.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                         // Keep this separate so users can hide the side bubble without disabling Talk Mode.
