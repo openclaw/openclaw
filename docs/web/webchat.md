@@ -25,6 +25,8 @@ Status: the macOS/iOS SwiftUI chat UI talks directly to the Gateway WebSocket.
 
 - The UI connects to the Gateway WebSocket and uses `chat.history`, `chat.send`, and `chat.inject`.
 - `chat.inject` appends an assistant note directly to the transcript and broadcasts it to the UI (no agent run).
+- Aborted runs can keep partial assistant output visible in the UI.
+- Gateway persists aborted partial assistant text into transcript history when buffered output exists, and marks those entries with abort metadata.
 - History is always fetched from the gateway (no local file watching).
 - If the gateway is unreachable, WebChat is read-only.
 
