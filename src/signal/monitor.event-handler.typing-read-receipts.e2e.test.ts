@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createBaseSignalEventHandlerDeps } from "./monitor/event-handler.test-harness.js";
 
 const sendTypingMock = vi.fn();
 const sendReadReceiptMock = vi.fn();
@@ -37,39 +38,19 @@ describe("signal event handler typing + read receipts", () => {
 
   it("sends typing + read receipt for allowed DMs", async () => {
     const { createSignalEventHandler } = await import("./monitor/event-handler.js");
-    const handler = createSignalEventHandler({
-      // oxlint-disable-next-line typescript/no-explicit-any
-      runtime: { log: () => {}, error: () => {} } as any,
-      cfg: {
-        messages: { inbound: { debounceMs: 0 } },
-        channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
-        // oxlint-disable-next-line typescript/no-explicit-any
-      } as any,
-      baseUrl: "http://localhost",
-      account: "+15550009999",
-      accountId: "default",
-      blockStreaming: false,
-      historyLimit: 0,
-      groupHistories: new Map(),
-      textLimit: 4000,
-      dmPolicy: "open",
-      allowFrom: ["*"],
-      groupAllowFrom: ["*"],
-      groupPolicy: "open",
-      reactionMode: "off",
-      reactionAllowlist: [],
-      mediaMaxBytes: 1024,
-      ignoreAttachments: true,
-      sendReadReceipts: true,
-      readReceiptsViaDaemon: false,
-      fetchAttachment: async () => null,
-      deliverReplies: async () => {},
-      resolveSignalReactionTargets: () => [],
-      // oxlint-disable-next-line typescript/no-explicit-any
-      isSignalReactionMessage: () => false as any,
-      shouldEmitSignalReactionNotification: () => false,
-      buildSignalReactionSystemEventText: () => "reaction",
-    });
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: { inbound: { debounceMs: 0 } },
+          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+        },
+        account: "+15550009999",
+        blockStreaming: false,
+        historyLimit: 0,
+        groupHistories: new Map(),
+        sendReadReceipts: true,
+      }),
+    );
 
     await handler({
       event: "receive",

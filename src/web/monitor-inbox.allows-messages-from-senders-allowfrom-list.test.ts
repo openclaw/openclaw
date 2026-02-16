@@ -11,6 +11,63 @@ import {
 } from "./monitor-inbox.test-harness.js";
 
 const nowSeconds = (offsetMs = 0) => Math.floor((Date.now() + offsetMs) / 1000);
+const DEFAULT_MESSAGES_CFG = {
+  messagePrefix: undefined,
+  responsePrefix: undefined,
+} as const;
+
+async function expectOutboundDmSkipsPairing(params: {
+  selfChatMode: boolean;
+  messageId: string;
+  body: string;
+}) {
+  mockLoadConfig.mockReturnValue({
+    channels: {
+      whatsapp: {
+        dmPolicy: "pairing",
+        selfChatMode: params.selfChatMode,
+      },
+    },
+    messages: DEFAULT_MESSAGES_CFG,
+  });
+
+  const onMessage = vi.fn();
+  const listener = await monitorWebInbox({
+    verbose: false,
+    accountId: DEFAULT_ACCOUNT_ID,
+    authDir: getAuthDir(),
+    onMessage,
+  });
+  const sock = getSock();
+
+  try {
+    sock.ev.emit("messages.upsert", {
+      type: "notify",
+      messages: [
+        {
+          key: {
+            id: params.messageId,
+            fromMe: true,
+            remoteJid: "999@s.whatsapp.net",
+          },
+          message: { conversation: params.body },
+          messageTimestamp: nowSeconds(),
+        },
+      ],
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(onMessage).not.toHaveBeenCalled();
+    expect(upsertPairingRequestMock).not.toHaveBeenCalled();
+    expect(sock.sendMessage).not.toHaveBeenCalled();
+  } finally {
+    mockLoadConfig.mockReturnValue({
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      messages: DEFAULT_MESSAGES_CFG,
+    });
+    await listener.close();
+  }
+}
 
 describe("web monitor inbox", () => {
   installWebMonitorInboxUnitTestHooks();
@@ -207,115 +264,19 @@ describe("web monitor inbox", () => {
   });
 
   it("skips pairing replies for outbound DMs in same-phone mode", async () => {
-    mockLoadConfig.mockReturnValue({
-      channels: {
-        whatsapp: {
-          dmPolicy: "pairing",
-          selfChatMode: true,
-        },
-      },
-      messages: {
-        messagePrefix: undefined,
-        responsePrefix: undefined,
-      },
+    await expectOutboundDmSkipsPairing({
+      selfChatMode: true,
+      messageId: "fromme-1",
+      body: "hello",
     });
-
-    const onMessage = vi.fn();
-    const listener = await monitorWebInbox({
-      verbose: false,
-      accountId: DEFAULT_ACCOUNT_ID,
-      authDir: getAuthDir(),
-      onMessage,
-    });
-    const sock = getSock();
-
-    const upsert = {
-      type: "notify",
-      messages: [
-        {
-          key: {
-            id: "fromme-1",
-            fromMe: true,
-            remoteJid: "999@s.whatsapp.net",
-          },
-          message: { conversation: "hello" },
-          messageTimestamp: nowSeconds(),
-        },
-      ],
-    };
-
-    sock.ev.emit("messages.upsert", upsert);
-    await new Promise((resolve) => setImmediate(resolve));
-
-    expect(onMessage).not.toHaveBeenCalled();
-    expect(upsertPairingRequestMock).not.toHaveBeenCalled();
-    expect(sock.sendMessage).not.toHaveBeenCalled();
-
-    mockLoadConfig.mockReturnValue({
-      channels: { whatsapp: { allowFrom: ["*"] } },
-      messages: {
-        messagePrefix: undefined,
-        responsePrefix: undefined,
-      },
-    });
-
-    await listener.close();
   });
 
   it("skips pairing replies for outbound DMs when same-phone mode is disabled", async () => {
-    mockLoadConfig.mockReturnValue({
-      channels: {
-        whatsapp: {
-          dmPolicy: "pairing",
-          selfChatMode: false,
-        },
-      },
-      messages: {
-        messagePrefix: undefined,
-        responsePrefix: undefined,
-      },
+    await expectOutboundDmSkipsPairing({
+      selfChatMode: false,
+      messageId: "fromme-2",
+      body: "hello again",
     });
-
-    const onMessage = vi.fn();
-    const listener = await monitorWebInbox({
-      verbose: false,
-      accountId: DEFAULT_ACCOUNT_ID,
-      authDir: getAuthDir(),
-      onMessage,
-    });
-    const sock = getSock();
-
-    const upsert = {
-      type: "notify",
-      messages: [
-        {
-          key: {
-            id: "fromme-2",
-            fromMe: true,
-            remoteJid: "999@s.whatsapp.net",
-          },
-          message: { conversation: "hello again" },
-          messageTimestamp: nowSeconds(),
-        },
-      ],
-    };
-
-    sock.ev.emit("messages.upsert", upsert);
-    await new Promise((resolve) => setImmediate(resolve));
-
-    expect(onMessage).not.toHaveBeenCalled();
-    expect(upsertPairingRequestMock).not.toHaveBeenCalled();
-    expect(sock.sendMessage).not.toHaveBeenCalled();
-
-    mockLoadConfig.mockReturnValue({
-      channels: { whatsapp: { allowFrom: ["*"] } },
-      messages: {
-        messagePrefix: undefined,
-        responsePrefix: undefined,
-      },
-    });
-
-    await listener.close();
   });
 
   it("handles append messages by marking them read but skipping auto-reply", async () => {

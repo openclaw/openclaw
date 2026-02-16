@@ -1,7 +1,5 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createBaseDiscordMessageContext } from "./message-handler.test-harness.js";
 
 const reactMessageDiscord = vi.fn(async () => {});
 const removeReactionDiscord = vi.fn(async () => {});
@@ -35,71 +33,6 @@ vi.mock("../../auto-reply/reply/reply-dispatcher.js", () => ({
 
 const { processDiscordMessage } = await import("./message-handler.process.js");
 
-async function createBaseContext(overrides: Record<string, unknown> = {}) {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discord-"));
-  const storePath = path.join(dir, "sessions.json");
-  return {
-    cfg: { messages: { ackReaction: "👀" }, session: { store: storePath } },
-    discordConfig: {},
-    accountId: "default",
-    token: "token",
-    runtime: { log: () => {}, error: () => {} },
-    guildHistories: new Map(),
-    historyLimit: 0,
-    mediaMaxBytes: 1024,
-    textLimit: 4000,
-    replyToMode: "off",
-    ackReactionScope: "group-mentions",
-    groupPolicy: "open",
-    data: { guild: { id: "g1", name: "Guild" } },
-    client: { rest: {} },
-    message: {
-      id: "m1",
-      channelId: "c1",
-      timestamp: new Date().toISOString(),
-      attachments: [],
-    },
-    messageChannelId: "c1",
-    author: {
-      id: "U1",
-      username: "alice",
-      discriminator: "0",
-      globalName: "Alice",
-    },
-    channelInfo: { name: "general" },
-    channelName: "general",
-    isGuildMessage: true,
-    isDirectMessage: false,
-    isGroupDm: false,
-    commandAuthorized: true,
-    baseText: "hi",
-    messageText: "hi",
-    wasMentioned: false,
-    shouldRequireMention: true,
-    canDetectMention: true,
-    effectiveWasMentioned: true,
-    shouldBypassMention: false,
-    threadChannel: null,
-    threadParentId: undefined,
-    threadParentName: undefined,
-    threadParentType: undefined,
-    threadName: undefined,
-    displayChannelSlug: "general",
-    guildInfo: null,
-    guildSlug: "guild",
-    channelConfig: null,
-    baseSessionKey: "agent:main:discord:guild:g1",
-    route: {
-      agentId: "main",
-      channel: "discord",
-      accountId: "default",
-      sessionKey: "agent:main:discord:guild:g1",
-      mainSessionKey: "agent:main:main",
-    },
-    ...overrides,
-  };
-}
-
 beforeEach(() => {
   reactMessageDiscord.mockClear();
   removeReactionDiscord.mockClear();
@@ -107,7 +40,7 @@ beforeEach(() => {
 
 describe("processDiscordMessage ack reactions", () => {
   it("skips ack reactions for group-mentions when mentions are not required", async () => {
-    const ctx = await createBaseContext({
+    const ctx = await createBaseDiscordMessageContext({
       shouldRequireMention: false,
       effectiveWasMentioned: false,
       sender: { label: "user" },
@@ -120,7 +53,7 @@ describe("processDiscordMessage ack reactions", () => {
   });
 
   it("sends ack reactions for mention-gated guild messages when mentioned", async () => {
-    const ctx = await createBaseContext({
+    const ctx = await createBaseDiscordMessageContext({
       shouldRequireMention: true,
       effectiveWasMentioned: true,
       sender: { label: "user" },
@@ -133,7 +66,7 @@ describe("processDiscordMessage ack reactions", () => {
   });
 
   it("uses preflight-resolved messageChannelId when message.channelId is missing", async () => {
-    const ctx = await createBaseContext({
+    const ctx = await createBaseDiscordMessageContext({
       message: {
         id: "m1",
         timestamp: new Date().toISOString(),

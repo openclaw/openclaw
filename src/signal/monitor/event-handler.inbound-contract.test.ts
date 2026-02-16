@@ -1,57 +1,31 @@
 import { describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../../auto-reply/templating.js";
+import { buildDispatchInboundCaptureMock } from "../../../test/helpers/dispatch-inbound-capture.js";
 import { expectInboundContextContract } from "../../../test/helpers/inbound-contract.js";
 
 let capturedCtx: MsgContext | undefined;
 
 vi.mock("../../auto-reply/dispatch.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../auto-reply/dispatch.js")>();
-  const dispatchInboundMessage = vi.fn(async (params: { ctx: MsgContext }) => {
-    capturedCtx = params.ctx;
-    return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+  return buildDispatchInboundCaptureMock(actual, (ctx) => {
+    capturedCtx = ctx as MsgContext;
   });
-  return {
-    ...actual,
-    dispatchInboundMessage,
-    dispatchInboundMessageWithDispatcher: dispatchInboundMessage,
-    dispatchInboundMessageWithBufferedDispatcher: dispatchInboundMessage,
-  };
 });
 
 import { createSignalEventHandler } from "./event-handler.js";
+import { createBaseSignalEventHandlerDeps } from "./event-handler.test-harness.js";
 
 describe("signal createSignalEventHandler inbound contract", () => {
   it("passes a finalized MsgContext to dispatchInboundMessage", async () => {
     capturedCtx = undefined;
 
-    const handler = createSignalEventHandler({
-      // oxlint-disable-next-line typescript/no-explicit-any
-      runtime: { log: () => {}, error: () => {} } as any,
-      // oxlint-disable-next-line typescript/no-explicit-any
-      cfg: { messages: { inbound: { debounceMs: 0 } } } as any,
-      baseUrl: "http://localhost",
-      accountId: "default",
-      historyLimit: 0,
-      groupHistories: new Map(),
-      textLimit: 4000,
-      dmPolicy: "open",
-      allowFrom: ["*"],
-      groupAllowFrom: ["*"],
-      groupPolicy: "open",
-      reactionMode: "off",
-      reactionAllowlist: [],
-      mediaMaxBytes: 1024,
-      ignoreAttachments: true,
-      sendReadReceipts: false,
-      readReceiptsViaDaemon: false,
-      fetchAttachment: async () => null,
-      deliverReplies: async () => {},
-      resolveSignalReactionTargets: () => [],
-      // oxlint-disable-next-line typescript/no-explicit-any
-      isSignalReactionMessage: () => false as any,
-      shouldEmitSignalReactionNotification: () => false,
-      buildSignalReactionSystemEventText: () => "reaction",
-    });
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        // oxlint-disable-next-line typescript/no-explicit-any
+        cfg: { messages: { inbound: { debounceMs: 0 } } } as any,
+        historyLimit: 0,
+      }),
+    );
 
     await handler({
       event: "receive",
