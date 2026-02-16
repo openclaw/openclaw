@@ -974,7 +974,7 @@ type TelegramPollOpts = {
   messageThreadId?: number;
   /** Send message silently (no notification). Defaults to false. */
   silent?: boolean;
-  /** Whether votes are anonymous. Defaults to true (Telegram default). */
+  /** Whether votes are anonymous. Defaults to false (public poll). */
   isAnonymous?: boolean;
 };
 
@@ -1032,7 +1032,7 @@ export async function sendPollTelegram(
   // sendPoll(chat_id, question, options, other?, signal?)
   const pollParams = {
     allows_multiple_answers: normalizedPoll.maxSelections > 1,
-    is_anonymous: opts.isAnonymous ?? true,
+    is_anonymous: opts.isAnonymous ?? false,
     ...(durationSeconds !== undefined ? { open_period: durationSeconds } : {}),
     ...(Object.keys(threadParams).length > 0 ? threadParams : {}),
     ...(opts.silent === true ? { disable_notification: true } : {}),
