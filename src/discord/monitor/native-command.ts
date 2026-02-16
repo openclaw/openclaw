@@ -52,7 +52,7 @@ import {
   normalizeDiscordSlug,
   resolveDiscordChannelConfigWithFallback,
   resolveDiscordGuildEntry,
-  resolveDiscordMemberAllowed,
+  resolveDiscordMemberAccessState,
   resolveDiscordOwnerAllowFrom,
 } from "./allow-list.js";
 import { resolveDiscordChannelInfo } from "./message-utils.js";
@@ -657,18 +657,11 @@ async function dispatchDiscordCommandInteraction(params: {
     }
   }
   if (!isDirectMessage) {
-    const channelUsers = channelConfig?.users ?? guildInfo?.users;
-    const channelRoles = channelConfig?.roles ?? guildInfo?.roles;
-    const hasAccessRestrictions =
-      (Array.isArray(channelUsers) && channelUsers.length > 0) ||
-      (Array.isArray(channelRoles) && channelRoles.length > 0);
-    const memberAllowed = resolveDiscordMemberAllowed({
-      userAllowList: channelUsers,
-      roleAllowList: channelRoles,
+    const { hasAccessRestrictions, memberAllowed } = resolveDiscordMemberAccessState({
+      channelConfig,
+      guildInfo,
       memberRoleIds,
-      userId: sender.id,
-      userName: sender.name,
-      userTag: sender.tag,
+      sender,
     });
     const authorizers = useAccessGroups
       ? [
