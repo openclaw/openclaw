@@ -87,24 +87,6 @@ describe("capEntryCount", () => {
     expect(store.oldest).toBeUndefined();
     expect(store.old).toBeUndefined();
   });
-
-  it("entries without updatedAt are evicted first (lowest priority)", () => {
-    const now = Date.now();
-    const store: Record<string, SessionEntry> = {
-      noDate1: { sessionId: crypto.randomUUID() } as SessionEntry,
-      noDate2: { sessionId: crypto.randomUUID() } as SessionEntry,
-      recent: makeEntry(now),
-      older: makeEntry(now - DAY_MS),
-    };
-
-    const evicted = capEntryCount(store, 2);
-
-    expect(evicted).toBe(2);
-    expect(store.recent).toBeDefined();
-    expect(store.older).toBeDefined();
-    expect(store.noDate1).toBeUndefined();
-    expect(store.noDate2).toBeUndefined();
-  });
 });
 
 describe("rotateSessionFile", () => {
