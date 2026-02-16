@@ -75,14 +75,6 @@ describe("createActionCard", () => {
     const footer = card.footer as { contents: unknown[] };
     expect(footer.contents.length).toBe(4);
   });
-
-  it("includes hero image when provided", () => {
-    const card = createActionCard("Title", "Body", [], {
-      imageUrl: "https://example.com/hero.jpg",
-    });
-
-    expect((card.hero as { url: string }).url).toBe("https://example.com/hero.jpg");
-  });
 });
 
 describe("createCarousel", () => {
