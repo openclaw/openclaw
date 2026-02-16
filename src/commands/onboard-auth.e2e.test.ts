@@ -1,8 +1,8 @@
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { captureEnv } from "../test-utils/env.js";
 import {
   applyAuthProfileConfig,
   applyLitellmProviderConfig,
@@ -29,20 +29,45 @@ import {
   ZAI_CODING_CN_BASE_URL,
   ZAI_GLOBAL_BASE_URL,
 } from "./onboard-auth.js";
+import { readAuthProfilesForAgent, setupAuthTestEnv } from "./test-wizard-helpers.js";
 
-const authProfilePathFor = (agentDir: string) => path.join(agentDir, "auth-profiles.json");
-const requireAgentDir = () => {
-  const agentDir = process.env.OPENCLAW_AGENT_DIR;
-  if (!agentDir) {
-    throw new Error("OPENCLAW_AGENT_DIR not set");
-  }
-  return agentDir;
-};
+function createLegacyProviderConfig(params: {
+  providerId: string;
+  api: string;
+  modelId?: string;
+  modelName?: string;
+}) {
+  return {
+    models: {
+      providers: {
+        [params.providerId]: {
+          baseUrl: "https://old.example.com",
+          apiKey: "old-key",
+          api: params.api,
+          models: [
+            {
+              id: params.modelId ?? "old-model",
+              name: params.modelName ?? "Old",
+              reasoning: false,
+              input: ["text"],
+              cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 1000,
+              maxTokens: 100,
+            },
+          ],
+        },
+      },
+    },
+  };
+}
 
 describe("writeOAuthCredentials", () => {
-  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-  const previousAgentDir = process.env.OPENCLAW_AGENT_DIR;
-  const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const envSnapshot = captureEnv([
+    "OPENCLAW_STATE_DIR",
+    "OPENCLAW_AGENT_DIR",
+    "PI_CODING_AGENT_DIR",
+    "OPENCLAW_OAUTH_DIR",
+  ]);
   let tempStateDir: string | null = null;
 
   afterEach(async () => {
@@ -50,29 +75,12 @@ describe("writeOAuthCredentials", () => {
       await fs.rm(tempStateDir, { recursive: true, force: true });
       tempStateDir = null;
     }
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    }
-    if (previousAgentDir === undefined) {
-      delete process.env.OPENCLAW_AGENT_DIR;
-    } else {
-      process.env.OPENCLAW_AGENT_DIR = previousAgentDir;
-    }
-    if (previousPiAgentDir === undefined) {
-      delete process.env.PI_CODING_AGENT_DIR;
-    } else {
-      process.env.PI_CODING_AGENT_DIR = previousPiAgentDir;
-    }
-    delete process.env.OPENCLAW_OAUTH_DIR;
+    envSnapshot.restore();
   });
 
   it("writes auth-profiles.json under OPENCLAW_AGENT_DIR when set", async () => {
-    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-oauth-"));
-    process.env.OPENCLAW_STATE_DIR = tempStateDir;
-    process.env.OPENCLAW_AGENT_DIR = path.join(tempStateDir, "agent");
-    process.env.PI_CODING_AGENT_DIR = process.env.OPENCLAW_AGENT_DIR;
+    const env = await setupAuthTestEnv("openclaw-oauth-");
+    tempStateDir = env.stateDir;
 
     const creds = {
       refresh: "refresh-token",
@@ -82,11 +90,9 @@ describe("writeOAuthCredentials", () => {
 
     await writeOAuthCredentials("openai-codex", creds);
 
-    const authProfilePath = authProfilePathFor(requireAgentDir());
-    const raw = await fs.readFile(authProfilePath, "utf8");
-    const parsed = JSON.parse(raw) as {
+    const parsed = await readAuthProfilesForAgent<{
       profiles?: Record<string, OAuthCredentials & { type?: string }>;
-    };
+    }>(env.agentDir);
     expect(parsed.profiles?.["openai-codex:default"]).toMatchObject({
       refresh: "refresh-token",
       access: "access-token",
@@ -100,9 +106,11 @@ describe("writeOAuthCredentials", () => {
 });
 
 describe("setMinimaxApiKey", () => {
-  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-  const previousAgentDir = process.env.OPENCLAW_AGENT_DIR;
-  const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const envSnapshot = captureEnv([
+    "OPENCLAW_STATE_DIR",
+    "OPENCLAW_AGENT_DIR",
+    "PI_CODING_AGENT_DIR",
+  ]);
   let tempStateDir: string | null = null;
 
   afterEach(async () => {
@@ -110,36 +118,18 @@ describe("setMinimaxApiKey", () => {
       await fs.rm(tempStateDir, { recursive: true, force: true });
       tempStateDir = null;
     }
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    }
-    if (previousAgentDir === undefined) {
-      delete process.env.OPENCLAW_AGENT_DIR;
-    } else {
-      process.env.OPENCLAW_AGENT_DIR = previousAgentDir;
-    }
-    if (previousPiAgentDir === undefined) {
-      delete process.env.PI_CODING_AGENT_DIR;
-    } else {
-      process.env.PI_CODING_AGENT_DIR = previousPiAgentDir;
-    }
+    envSnapshot.restore();
   });
 
   it("writes to OPENCLAW_AGENT_DIR when set", async () => {
-    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-minimax-"));
-    process.env.OPENCLAW_STATE_DIR = tempStateDir;
-    process.env.OPENCLAW_AGENT_DIR = path.join(tempStateDir, "custom-agent");
-    process.env.PI_CODING_AGENT_DIR = process.env.OPENCLAW_AGENT_DIR;
+    const env = await setupAuthTestEnv("openclaw-minimax-", { agentSubdir: "custom-agent" });
+    tempStateDir = env.stateDir;
 
     await setMinimaxApiKey("sk-minimax-test");
 
-    const customAuthPath = authProfilePathFor(requireAgentDir());
-    const raw = await fs.readFile(customAuthPath, "utf8");
-    const parsed = JSON.parse(raw) as {
+    const parsed = await readAuthProfilesForAgent<{
       profiles?: Record<string, { type?: string; provider?: string; key?: string }>;
-    };
+    }>(env.agentDir);
     expect(parsed.profiles?.["minimax:default"]).toMatchObject({
       type: "api_key",
       provider: "minimax",
@@ -232,28 +222,12 @@ describe("applyMinimaxApiConfig", () => {
   });
 
   it("merges existing minimax provider models", () => {
-    const cfg = applyMinimaxApiConfig({
-      models: {
-        providers: {
-          minimax: {
-            baseUrl: "https://old.example.com",
-            apiKey: "old-key",
-            api: "openai-completions",
-            models: [
-              {
-                id: "old-model",
-                name: "Old",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 1000,
-                maxTokens: 100,
-              },
-            ],
-          },
-        },
-      },
-    });
+    const cfg = applyMinimaxApiConfig(
+      createLegacyProviderConfig({
+        providerId: "minimax",
+        api: "openai-completions",
+      }),
+    );
     expect(cfg.models?.providers?.minimax?.baseUrl).toBe("https://api.minimax.io/anthropic");
     expect(cfg.models?.providers?.minimax?.api).toBe("anthropic-messages");
     expect(cfg.models?.providers?.minimax?.apiKey).toBe("old-key");
@@ -364,28 +338,12 @@ describe("applySyntheticConfig", () => {
   });
 
   it("merges existing synthetic provider models", () => {
-    const cfg = applySyntheticProviderConfig({
-      models: {
-        providers: {
-          synthetic: {
-            baseUrl: "https://old.example.com",
-            apiKey: "old-key",
-            api: "openai-completions",
-            models: [
-              {
-                id: "old-model",
-                name: "Old",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 1000,
-                maxTokens: 100,
-              },
-            ],
-          },
-        },
-      },
-    });
+    const cfg = applySyntheticProviderConfig(
+      createLegacyProviderConfig({
+        providerId: "synthetic",
+        api: "openai-completions",
+      }),
+    );
     expect(cfg.models?.providers?.synthetic?.baseUrl).toBe("https://api.synthetic.new/anthropic");
     expect(cfg.models?.providers?.synthetic?.api).toBe("anthropic-messages");
     expect(cfg.models?.providers?.synthetic?.apiKey).toBe("old-key");
@@ -406,28 +364,14 @@ describe("applyXiaomiConfig", () => {
   });
 
   it("merges Xiaomi models and keeps existing provider overrides", () => {
-    const cfg = applyXiaomiProviderConfig({
-      models: {
-        providers: {
-          xiaomi: {
-            baseUrl: "https://old.example.com",
-            apiKey: "old-key",
-            api: "openai-completions",
-            models: [
-              {
-                id: "custom-model",
-                name: "Custom",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 1000,
-                maxTokens: 100,
-              },
-            ],
-          },
-        },
-      },
-    });
+    const cfg = applyXiaomiProviderConfig(
+      createLegacyProviderConfig({
+        providerId: "xiaomi",
+        api: "openai-completions",
+        modelId: "custom-model",
+        modelName: "Custom",
+      }),
+    );
 
     expect(cfg.models?.providers?.xiaomi?.baseUrl).toBe("https://api.xiaomimimo.com/anthropic");
     expect(cfg.models?.providers?.xiaomi?.api).toBe("anthropic-messages");
@@ -468,28 +412,14 @@ describe("applyXaiProviderConfig", () => {
   });
 
   it("merges xAI models and keeps existing provider overrides", () => {
-    const cfg = applyXaiProviderConfig({
-      models: {
-        providers: {
-          xai: {
-            baseUrl: "https://old.example.com",
-            apiKey: "old-key",
-            api: "anthropic-messages",
-            models: [
-              {
-                id: "custom-model",
-                name: "Custom",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 1000,
-                maxTokens: 100,
-              },
-            ],
-          },
-        },
-      },
-    });
+    const cfg = applyXaiProviderConfig(
+      createLegacyProviderConfig({
+        providerId: "xai",
+        api: "anthropic-messages",
+        modelId: "custom-model",
+        modelName: "Custom",
+      }),
+    );
 
     expect(cfg.models?.providers?.xai?.baseUrl).toBe("https://api.x.ai/v1");
     expect(cfg.models?.providers?.xai?.api).toBe("openai-completions");

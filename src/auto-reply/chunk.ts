@@ -298,7 +298,7 @@ function splitByNewline(
   return lines;
 }
 
-export function chunkText(text: string, limit: number): string[] {
+function resolveChunkEarlyReturn(text: string, limit: number): string[] | undefined {
   if (!text) {
     return [];
   }
@@ -307,6 +307,14 @@ export function chunkText(text: string, limit: number): string[] {
   }
   if (text.length <= limit) {
     return [text];
+  }
+  return undefined;
+}
+
+export function chunkText(text: string, limit: number): string[] {
+  const early = resolveChunkEarlyReturn(text, limit);
+  if (early) {
+    return early;
   }
 
   const chunks: string[] = [];
@@ -346,14 +354,9 @@ export function chunkText(text: string, limit: number): string[] {
 }
 
 export function chunkMarkdownText(text: string, limit: number): string[] {
-  if (!text) {
-    return [];
-  }
-  if (limit <= 0) {
-    return [text];
-  }
-  if (text.length <= limit) {
-    return [text];
+  const early = resolveChunkEarlyReturn(text, limit);
+  if (early) {
+    return early;
   }
 
   const chunks: string[] = [];

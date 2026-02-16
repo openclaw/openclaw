@@ -17,6 +17,29 @@ function extractAgentDefaultModelFallbacks(model: unknown): string[] | undefined
   return Array.isArray(fallbacks) ? fallbacks.map((v) => String(v)) : undefined;
 }
 
+export function applyOnboardAuthAgentModelsAndProviders(
+  cfg: OpenClawConfig,
+  params: {
+    agentModels: Record<string, AgentModelEntryConfig>;
+    providers: Record<string, ModelProviderConfig>;
+  },
+): OpenClawConfig {
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models: params.agentModels,
+      },
+    },
+    models: {
+      mode: cfg.models?.mode ?? "merge",
+      providers: params.providers,
+    },
+  };
+}
+
 export function applyAgentDefaultModelPrimary(
   cfg: OpenClawConfig,
   primary: string,
@@ -66,35 +89,18 @@ export function applyProviderConfigWithDefaultModels(
         ? existingModels
         : [...existingModels, ...defaultModels]
       : defaultModels;
-
-  const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as {
-    apiKey?: string;
-  };
-
-  const normalizedApiKey = typeof existingApiKey === "string" ? existingApiKey.trim() : undefined;
-
-  providers[params.providerId] = {
-    ...existingProviderRest,
-    baseUrl: params.baseUrl,
+  providers[params.providerId] = buildProviderConfig({
+    existingProvider,
     api: params.api,
-    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
-    models: mergedModels.length > 0 ? mergedModels : defaultModels,
-  };
+    baseUrl: params.baseUrl,
+    mergedModels,
+    fallbackModels: defaultModels,
+  });
 
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...cfg.agents?.defaults,
-        models: params.agentModels,
-      },
-    },
-    models: {
-      mode: cfg.models?.mode ?? "merge",
-      providers,
-    },
-  };
+  return applyOnboardAuthAgentModelsAndProviders(cfg, {
+    agentModels: params.agentModels,
+    providers,
+  });
 }
 
 export function applyProviderConfigWithDefaultModel(
@@ -116,4 +122,65 @@ export function applyProviderConfigWithDefaultModel(
     defaultModels: [params.defaultModel],
     defaultModelId: params.defaultModelId ?? params.defaultModel.id,
   });
+}
+
+export function applyProviderConfigWithModelCatalog(
+  cfg: OpenClawConfig,
+  params: {
+    agentModels: Record<string, AgentModelEntryConfig>;
+    providerId: string;
+    api: ModelApi;
+    baseUrl: string;
+    catalogModels: ModelDefinitionConfig[];
+  },
+): OpenClawConfig {
+  const providers = { ...cfg.models?.providers } as Record<string, ModelProviderConfig>;
+  const existingProvider = providers[params.providerId] as ModelProviderConfig | undefined;
+  const existingModels: ModelDefinitionConfig[] = Array.isArray(existingProvider?.models)
+    ? existingProvider.models
+    : [];
+
+  const catalogModels = params.catalogModels;
+  const mergedModels =
+    existingModels.length > 0
+      ? [
+          ...existingModels,
+          ...catalogModels.filter(
+            (model) => !existingModels.some((existing) => existing.id === model.id),
+          ),
+        ]
+      : catalogModels;
+  providers[params.providerId] = buildProviderConfig({
+    existingProvider,
+    api: params.api,
+    baseUrl: params.baseUrl,
+    mergedModels,
+    fallbackModels: catalogModels,
+  });
+
+  return applyOnboardAuthAgentModelsAndProviders(cfg, {
+    agentModels: params.agentModels,
+    providers,
+  });
+}
+
+function buildProviderConfig(params: {
+  existingProvider: ModelProviderConfig | undefined;
+  api: ModelApi;
+  baseUrl: string;
+  mergedModels: ModelDefinitionConfig[];
+  fallbackModels: ModelDefinitionConfig[];
+}): ModelProviderConfig {
+  const { apiKey: existingApiKey, ...existingProviderRest } = (params.existingProvider ?? {}) as {
+    apiKey?: string;
+  };
+  const normalizedApiKey = typeof existingApiKey === "string" ? existingApiKey.trim() : undefined;
+
+  return {
+    ...existingProviderRest,
+    baseUrl: params.baseUrl,
+    api: params.api,
+    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
+    models: params.mergedModels.length > 0 ? params.mergedModels : params.fallbackModels,
+  };
 }

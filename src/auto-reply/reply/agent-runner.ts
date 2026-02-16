@@ -157,22 +157,26 @@ export async function runReplyAgent(params: {
           buffer: createAudioAsVoiceBuffer({ isAudioPayload }),
         })
       : null;
+  const touchActiveSessionEntry = async () => {
+    if (!activeSessionEntry || !activeSessionStore || !sessionKey) {
+      return;
+    }
+    const updatedAt = Date.now();
+    activeSessionEntry.updatedAt = updatedAt;
+    activeSessionStore[sessionKey] = activeSessionEntry;
+    if (storePath) {
+      await updateSessionStoreEntry({
+        storePath,
+        sessionKey,
+        update: async () => ({ updatedAt }),
+      });
+    }
+  };
 
   if (shouldSteer && isStreaming) {
     const steered = queueEmbeddedPiMessage(followupRun.run.sessionId, followupRun.prompt);
     if (steered && !shouldFollowup) {
-      if (activeSessionEntry && activeSessionStore && sessionKey) {
-        const updatedAt = Date.now();
-        activeSessionEntry.updatedAt = updatedAt;
-        activeSessionStore[sessionKey] = activeSessionEntry;
-        if (storePath) {
-          await updateSessionStoreEntry({
-            storePath,
-            sessionKey,
-            update: async () => ({ updatedAt }),
-          });
-        }
-      }
+      await touchActiveSessionEntry();
       typing.cleanup();
       return undefined;
     }
@@ -180,18 +184,7 @@ export async function runReplyAgent(params: {
 
   if (isActive && (shouldFollowup || resolvedQueue.mode === "steer")) {
     enqueueFollowupRun(queueKey, followupRun, resolvedQueue);
-    if (activeSessionEntry && activeSessionStore && sessionKey) {
-      const updatedAt = Date.now();
-      activeSessionEntry.updatedAt = updatedAt;
-      activeSessionStore[sessionKey] = activeSessionEntry;
-      if (storePath) {
-        await updateSessionStoreEntry({
-          storePath,
-          sessionKey,
-          update: async () => ({ updatedAt }),
-        });
-      }
-    }
+    await touchActiveSessionEntry();
     typing.cleanup();
     return undefined;
   }
@@ -457,6 +450,7 @@ export async function runReplyAgent(params: {
           promptTokens,
           total: totalTokens,
         },
+        lastCallUsage: runResult.meta.agentMeta?.lastCallUsage,
         context: {
           limit: contextTokensUsed,
           used: totalTokens,

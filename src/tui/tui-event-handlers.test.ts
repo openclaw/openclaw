@@ -364,7 +364,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(loadHistory).toHaveBeenCalledTimes(1);
   });
 
-  it("does not reload history or clear active run when another run final arrives mid-stream", () => {
+  function createConcurrentRunHarness(localContent = "partial") {
     const state = makeState({ activeChatRunId: "run-active" });
     const { chatLog, tui, setActivityStatus, loadHistory, isLocalRunId, forgetLocalRunId } =
       makeContext(state);
@@ -382,8 +382,15 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       runId: "run-active",
       sessionKey: state.currentSessionKey,
       state: "delta",
-      message: { content: "partial" },
+      message: { content: localContent },
     });
+
+    return { state, chatLog, setActivityStatus, loadHistory, handleChatEvent };
+  }
+
+  it("does not reload history or clear active run when another run final arrives mid-stream", () => {
+    const { state, chatLog, setActivityStatus, loadHistory, handleChatEvent } =
+      createConcurrentRunHarness("partial");
 
     loadHistory.mockClear();
     setActivityStatus.mockClear();
@@ -410,25 +417,8 @@ describe("tui-event-handlers: handleAgentEvent", () => {
   });
 
   it("suppresses non-local empty final placeholders during concurrent runs", () => {
-    const state = makeState({ activeChatRunId: "run-active" });
-    const { chatLog, tui, setActivityStatus, loadHistory, isLocalRunId, forgetLocalRunId } =
-      makeContext(state);
-    const { handleChatEvent } = createEventHandlers({
-      chatLog,
-      tui,
-      state,
-      setActivityStatus,
-      loadHistory,
-      isLocalRunId,
-      forgetLocalRunId,
-    });
-
-    handleChatEvent({
-      runId: "run-active",
-      sessionKey: state.currentSessionKey,
-      state: "delta",
-      message: { content: "local stream" },
-    });
+    const { state, chatLog, loadHistory, handleChatEvent } =
+      createConcurrentRunHarness("local stream");
 
     loadHistory.mockClear();
     chatLog.finalizeAssistant.mockClear();

@@ -33,6 +33,7 @@ struct SettingsTab: View {
     @State private var lastLocationModeRaw: String = OpenClawLocationMode.off.rawValue
     @State private var gatewayToken: String = ""
     @State private var gatewayPassword: String = ""
+    @State private var talkElevenLabsApiKey: String = ""
     @AppStorage("gateway.setupCode") private var setupCode: String = ""
     @State private var setupStatusText: String?
     @State private var manualGatewayPortText: String = ""
@@ -235,6 +236,12 @@ struct SettingsTab: View {
                             .onChange(of: self.talkEnabled) { _, newValue in
                                 self.appModel.setTalkEnabled(newValue)
                             }
+                        SecureField("Talk ElevenLabs API Key (optional)", text: self.$talkElevenLabsApiKey)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                        Text("Use this local override when gateway config redacts talk.apiKey for mobile clients.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                         // Keep this separate so users can hide the side bubble without disabling Talk Mode.
                         Toggle("Show Talk Button", isOn: self.$talkButtonEnabled)
 
@@ -304,7 +311,7 @@ struct SettingsTab: View {
                 }
             }
             .onAppear {
-                self.localIPAddress = Self.primaryIPv4Address()
+                self.localIPAddress = NetworkInterfaces.primaryIPv4Address()
                 self.lastLocationModeRaw = self.locationEnabledModeRaw
                 self.syncManualPortText()
                 let trimmedInstanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -312,6 +319,7 @@ struct SettingsTab: View {
                     self.gatewayToken = GatewaySettingsStore.loadGatewayToken(instanceId: trimmedInstanceId) ?? ""
                     self.gatewayPassword = GatewaySettingsStore.loadGatewayPassword(instanceId: trimmedInstanceId) ?? ""
                 }
+                self.talkElevenLabsApiKey = GatewaySettingsStore.loadTalkElevenLabsApiKey() ?? ""
                 // Keep setup front-and-center when disconnected; keep things compact once connected.
                 self.gatewayExpanded = !self.isGatewayConnected
                 self.selectedAgentPickerId = self.appModel.selectedAgentId ?? ""
@@ -341,6 +349,9 @@ struct SettingsTab: View {
                 let instanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !instanceId.isEmpty else { return }
                 GatewaySettingsStore.saveGatewayPassword(trimmed, instanceId: instanceId)
+            }
+            .onChange(of: self.talkElevenLabsApiKey) { _, newValue in
+                GatewaySettingsStore.saveTalkElevenLabsApiKey(newValue)
             }
             .onChange(of: self.manualGatewayPort) { _, _ in
                 self.syncManualPortText()
@@ -590,15 +601,6 @@ struct SettingsTab: View {
         }
     }
 
-    private struct SetupPayload: Codable {
-        var url: String?
-        var host: String?
-        var port: Int?
-        var tls: Bool?
-        var token: String?
-        var password: String?
-    }
-
     private func applySetupCodeAndConnect() async {
         self.setupStatusText = nil
         guard self.applySetupCode() else { return }
@@ -626,7 +628,7 @@ struct SettingsTab: View {
             return false
         }
 
-        guard let payload = self.decodeSetupPayload(raw: raw) else {
+        guard let payload = GatewaySetupCode.decode(raw: raw) else {
             self.setupStatusText = "Setup code not recognized."
             return false
         }
@@ -727,67 +729,14 @@ struct SettingsTab: View {
     }
 
     private static func probeTCP(host: String, port: Int, timeoutSeconds: Double) async -> Bool {
-        guard let nwPort = NWEndpoint.Port(rawValue: UInt16(port)) else { return false }
-        let endpointHost = NWEndpoint.Host(host)
-        let connection = NWConnection(host: endpointHost, port: nwPort, using: .tcp)
-        return await withCheckedContinuation { cont in
-            let queue = DispatchQueue(label: "gateway.preflight")
-            let finished = OSAllocatedUnfairLock(initialState: false)
-            let finish: @Sendable (Bool) -> Void = { ok in
-                let shouldResume = finished.withLock { flag -> Bool in
-                    if flag { return false }
-                    flag = true
-                    return true
-                }
-                guard shouldResume else { return }
-                connection.cancel()
-                cont.resume(returning: ok)
-            }
-            connection.stateUpdateHandler = { state in
-                switch state {
-                case .ready:
-                    finish(true)
-                case .failed, .cancelled:
-                    finish(false)
-                default:
-                    break
-                }
-            }
-            connection.start(queue: queue)
-            queue.asyncAfter(deadline: .now() + timeoutSeconds) {
-                finish(false)
-            }
-        }
+        await TCPProbe.probe(
+            host: host,
+            port: port,
+            timeoutSeconds: timeoutSeconds,
+            queueLabel: "gateway.preflight")
     }
 
-    private func decodeSetupPayload(raw: String) -> SetupPayload? {
-        if let payload = decodeSetupPayloadFromJSON(raw) {
-            return payload
-        }
-        if let decoded = decodeBase64Payload(raw),
-           let payload = decodeSetupPayloadFromJSON(decoded)
-        {
-            return payload
-        }
-        return nil
-    }
-
-    private func decodeSetupPayloadFromJSON(_ json: String) -> SetupPayload? {
-        guard let data = json.data(using: .utf8) else { return nil }
-        return try? JSONDecoder().decode(SetupPayload.self, from: data)
-    }
-
-    private func decodeBase64Payload(_ raw: String) -> String? {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        let normalized = trimmed
-            .replacingOccurrences(of: "-", with: "+")
-            .replacingOccurrences(of: "_", with: "/")
-        let padding = normalized.count % 4
-        let padded = padding == 0 ? normalized : normalized + String(repeating: "=", count: 4 - padding)
-        guard let data = Data(base64Encoded: padded) else { return nil }
-        return String(data: data, encoding: .utf8)
-    }
+    // (GatewaySetupCode) decode raw setup codes.
 
     private func connectManual() async {
         let host = self.manualGatewayHost.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -850,44 +799,6 @@ struct SettingsTab: View {
             return "Connected, but some controls are restricted for nodes. This is expected."
         }
         return nil
-    }
-
-    private static func primaryIPv4Address() -> String? {
-        var addrList: UnsafeMutablePointer<ifaddrs>?
-        guard getifaddrs(&addrList) == 0, let first = addrList else { return nil }
-        defer { freeifaddrs(addrList) }
-
-        var fallback: String?
-        var en0: String?
-
-        for ptr in sequence(first: first, next: { $0.pointee.ifa_next }) {
-            let flags = Int32(ptr.pointee.ifa_flags)
-            let isUp = (flags & IFF_UP) != 0
-            let isLoopback = (flags & IFF_LOOPBACK) != 0
-            let name = String(cString: ptr.pointee.ifa_name)
-            let family = ptr.pointee.ifa_addr.pointee.sa_family
-            if !isUp || isLoopback || family != UInt8(AF_INET) { continue }
-
-            var addr = ptr.pointee.ifa_addr.pointee
-            var buffer = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-            let result = getnameinfo(
-                &addr,
-                socklen_t(ptr.pointee.ifa_addr.pointee.sa_len),
-                &buffer,
-                socklen_t(buffer.count),
-                nil,
-                0,
-                NI_NUMERICHOST)
-            guard result == 0 else { continue }
-            let len = buffer.prefix { $0 != 0 }
-            let bytes = len.map { UInt8(bitPattern: $0) }
-            guard let ip = String(bytes: bytes, encoding: .utf8) else { continue }
-
-            if name == "en0" { en0 = ip; break }
-            if fallback == nil { fallback = ip }
-        }
-
-        return en0 ?? fallback
     }
 
     private static func hasTailnetIPv4() -> Bool {

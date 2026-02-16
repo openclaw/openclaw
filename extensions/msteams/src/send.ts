@@ -374,6 +374,45 @@ async function sendTextWithMedia(
   };
 }
 
+type ProactiveActivityParams = {
+  adapter: MSTeamsProactiveContext["adapter"];
+  appId: string;
+  ref: MSTeamsProactiveContext["ref"];
+  activity: Record<string, unknown>;
+  errorPrefix: string;
+};
+
+async function sendProactiveActivity({
+  adapter,
+  appId,
+  ref,
+  activity,
+  errorPrefix,
+}: ProactiveActivityParams): Promise<string> {
+  const baseRef = buildConversationReference(ref);
+  const proactiveRef = {
+    ...baseRef,
+    activityId: undefined,
+  };
+
+  let messageId = "unknown";
+  try {
+    await adapter.continueConversation(appId, proactiveRef, async (ctx) => {
+      const response = await ctx.sendActivity(activity);
+      messageId = extractMessageId(response) ?? "unknown";
+    });
+    return messageId;
+  } catch (err) {
+    const classification = classifyMSTeamsSendError(err);
+    const hint = formatMSTeamsSendErrorHint(classification);
+    const status = classification.statusCode ? ` (HTTP ${classification.statusCode})` : "";
+    throw new Error(
+      `${errorPrefix} failed${status}: ${formatUnknownError(err)}${hint ? ` (${hint})` : ""}`,
+      { cause: err },
+    );
+  }
+}
+
 /**
  * Send a poll (Adaptive Card) to a Teams conversation or user.
  */
@@ -409,27 +448,13 @@ export async function sendPollMSTeams(
   };
 
   // Send poll via proactive conversation (Adaptive Cards require direct activity send)
-  const baseRef = buildConversationReference(ref);
-  const proactiveRef = {
-    ...baseRef,
-    activityId: undefined,
-  };
-
-  let messageId = "unknown";
-  try {
-    await adapter.continueConversation(appId, proactiveRef, async (ctx) => {
-      const response = await ctx.sendActivity(activity);
-      messageId = extractMessageId(response) ?? "unknown";
-    });
-  } catch (err) {
-    const classification = classifyMSTeamsSendError(err);
-    const hint = formatMSTeamsSendErrorHint(classification);
-    const status = classification.statusCode ? ` (HTTP ${classification.statusCode})` : "";
-    throw new Error(
-      `msteams poll send failed${status}: ${formatUnknownError(err)}${hint ? ` (${hint})` : ""}`,
-      { cause: err },
-    );
-  }
+  const messageId = await sendProactiveActivity({
+    adapter,
+    appId,
+    ref,
+    activity,
+    errorPrefix: "msteams poll send",
+  });
 
   log.info("sent poll", { conversationId, pollId: pollCard.pollId, messageId });
 
@@ -469,27 +494,13 @@ export async function sendAdaptiveCardMSTeams(
   };
 
   // Send card via proactive conversation
-  const baseRef = buildConversationReference(ref);
-  const proactiveRef = {
-    ...baseRef,
-    activityId: undefined,
-  };
-
-  let messageId = "unknown";
-  try {
-    await adapter.continueConversation(appId, proactiveRef, async (ctx) => {
-      const response = await ctx.sendActivity(activity);
-      messageId = extractMessageId(response) ?? "unknown";
-    });
-  } catch (err) {
-    const classification = classifyMSTeamsSendError(err);
-    const hint = formatMSTeamsSendErrorHint(classification);
-    const status = classification.statusCode ? ` (HTTP ${classification.statusCode})` : "";
-    throw new Error(
-      `msteams card send failed${status}: ${formatUnknownError(err)}${hint ? ` (${hint})` : ""}`,
-      { cause: err },
-    );
-  }
+  const messageId = await sendProactiveActivity({
+    adapter,
+    appId,
+    ref,
+    activity,
+    errorPrefix: "msteams card send",
+  });
 
   log.info("sent adaptive card", { conversationId, messageId });
 

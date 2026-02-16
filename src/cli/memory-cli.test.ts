@@ -29,6 +29,12 @@ afterEach(async () => {
 });
 
 describe("memory cli", () => {
+  function expectCliSync(sync: ReturnType<typeof vi.fn>) {
+    expect(sync).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: "cli", force: false, progress: expect.any(Function) }),
+    );
+  }
+
   it("prints vector status when available", async () => {
     const { registerMemoryCli } = await import("./memory-cli.js");
     const { defaultRuntime } = await import("../runtime.js");
@@ -244,9 +250,7 @@ describe("memory cli", () => {
     registerMemoryCli(program);
     await program.parseAsync(["memory", "status", "--index"], { from: "user" });
 
-    expect(sync).toHaveBeenCalledWith(
-      expect.objectContaining({ reason: "cli", force: false, progress: expect.any(Function) }),
-    );
+    expectCliSync(sync);
     expect(probeEmbeddingAvailability).toHaveBeenCalled();
     expect(close).toHaveBeenCalled();
   });
@@ -269,9 +273,7 @@ describe("memory cli", () => {
     registerMemoryCli(program);
     await program.parseAsync(["memory", "index"], { from: "user" });
 
-    expect(sync).toHaveBeenCalledWith(
-      expect.objectContaining({ reason: "cli", force: false, progress: expect.any(Function) }),
-    );
+    expectCliSync(sync);
     expect(close).toHaveBeenCalled();
     expect(log).toHaveBeenCalledWith("Memory index updated (main).");
   });
@@ -298,9 +300,7 @@ describe("memory cli", () => {
     registerMemoryCli(program);
     await program.parseAsync(["memory", "index"], { from: "user" });
 
-    expect(sync).toHaveBeenCalledWith(
-      expect.objectContaining({ reason: "cli", force: false, progress: expect.any(Function) }),
-    );
+    expectCliSync(sync);
     expect(log).toHaveBeenCalledWith(expect.stringContaining("QMD index: "));
     expect(log).toHaveBeenCalledWith("Memory index updated (main).");
     expect(close).toHaveBeenCalled();
@@ -329,9 +329,7 @@ describe("memory cli", () => {
     registerMemoryCli(program);
     await program.parseAsync(["memory", "index"], { from: "user" });
 
-    expect(sync).toHaveBeenCalledWith(
-      expect.objectContaining({ reason: "cli", force: false, progress: expect.any(Function) }),
-    );
+    expectCliSync(sync);
     expect(error).toHaveBeenCalledWith(
       expect.stringContaining("Memory index failed (main): QMD index file is empty"),
     );
@@ -360,9 +358,7 @@ describe("memory cli", () => {
     registerMemoryCli(program);
     await program.parseAsync(["memory", "index"], { from: "user" });
 
-    expect(sync).toHaveBeenCalledWith(
-      expect.objectContaining({ reason: "cli", force: false, progress: expect.any(Function) }),
-    );
+    expectCliSync(sync);
     expect(close).toHaveBeenCalled();
     expect(error).toHaveBeenCalledWith(
       expect.stringContaining("Memory manager close failed: close boom"),

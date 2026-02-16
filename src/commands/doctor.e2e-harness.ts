@@ -116,6 +116,11 @@ export const detectLegacyStateMigrations = vi.fn().mockResolvedValue({
     targetDir: "/tmp/oauth/whatsapp/default",
     hasLegacy: false,
   },
+  pairingAllowFrom: {
+    legacyTelegramPath: "/tmp/oauth/telegram-allowFrom.json",
+    targetTelegramPath: "/tmp/oauth/telegram-default-allowFrom.json",
+    hasLegacyTelegram: false,
+  },
   preview: [],
 }) as unknown as MockFn;
 
@@ -305,6 +310,11 @@ export async function arrangeLegacyStateMigrationTest(): Promise<{
       legacyDir: "/tmp/oauth",
       targetDir: "/tmp/oauth/whatsapp/default",
       hasLegacy: false,
+    },
+    pairingAllowFrom: {
+      legacyTelegramPath: "/tmp/oauth/telegram-allowFrom.json",
+      targetTelegramPath: "/tmp/oauth/telegram-default-allowFrom.json",
+      hasLegacyTelegram: false,
     },
     preview: ["- Legacy sessions detected"],
   });

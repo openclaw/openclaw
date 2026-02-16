@@ -49,6 +49,16 @@ describe("redactSensitiveText", () => {
     expect(output).toBe("123456…cdef");
   });
 
+  it("masks Telegram Bot API URL tokens", () => {
+    const input =
+      "GET https://api.telegram.org/bot123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef/getMe HTTP/1.1";
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: defaults,
+    });
+    expect(output).toBe("GET https://api.telegram.org/bot123456…cdef/getMe HTTP/1.1");
+  });
+
   it("redacts short tokens fully", () => {
     const input = "TOKEN=shortvalue";
     const output = redactSensitiveText(input, {
