@@ -202,6 +202,30 @@ export function resolveDiscordMemberAllowed(params: {
   return userOk || roleOk;
 }
 
+export function resolveDiscordMemberAccessState(params: {
+  channelConfig?: DiscordChannelConfigResolved | null;
+  guildInfo?: DiscordGuildEntryResolved | null;
+  memberRoleIds: string[];
+  sender: { id: string; name?: string; tag?: string };
+}): { memberAllowed: boolean; ownerAllowFrom?: string[] } {
+  const userAllowList = params.channelConfig?.users ?? params.guildInfo?.users;
+  const roleAllowList = params.channelConfig?.roles ?? params.guildInfo?.roles;
+  const memberAllowed = resolveDiscordMemberAllowed({
+    userAllowList,
+    roleAllowList,
+    memberRoleIds: params.memberRoleIds,
+    userId: params.sender.id,
+    userName: params.sender.name,
+    userTag: params.sender.tag,
+  });
+  const ownerAllowFrom = resolveDiscordOwnerAllowFrom({
+    channelConfig: params.channelConfig,
+    guildInfo: params.guildInfo,
+    sender: params.sender,
+  });
+  return { memberAllowed, ownerAllowFrom };
+}
+
 export function resolveDiscordOwnerAllowFrom(params: {
   channelConfig?: DiscordChannelConfigResolved | null;
   guildInfo?: DiscordGuildEntryResolved | null;

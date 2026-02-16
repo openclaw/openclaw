@@ -1,5 +1,6 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { DiscordActionConfig } from "../../config/config.js";
+import { readDiscordComponentSpec } from "../../discord/components.js";
 import {
   createThreadDiscord,
   deleteMessageDiscord,
@@ -15,6 +16,7 @@ import {
   removeOwnReactionsDiscord,
   removeReactionDiscord,
   searchMessagesDiscord,
+  sendDiscordComponentMessage,
   sendMessageDiscord,
   sendPollDiscord,
   sendStickerDiscord,
@@ -231,17 +233,48 @@ export async function handleDiscordMessagingAction(
       const to = readStringParam(params, "to", { required: true });
       const asVoice = params.asVoice === true;
       const silent = params.silent === true;
+      const rawComponents = params.components;
+      const componentSpec =
+        rawComponents && typeof rawComponents === "object" && !Array.isArray(rawComponents)
+          ? readDiscordComponentSpec(rawComponents)
+          : null;
       const content = readStringParam(params, "content", {
-        required: !asVoice,
+        required: !asVoice && !componentSpec,
         allowEmpty: true,
       });
       const mediaUrl =
         readStringParam(params, "mediaUrl", { trim: false }) ??
         readStringParam(params, "path", { trim: false }) ??
         readStringParam(params, "filePath", { trim: false });
+      const filename = readStringParam(params, "filename");
       const replyTo = readStringParam(params, "replyTo");
-      const embeds =
-        Array.isArray(params.embeds) && params.embeds.length > 0 ? params.embeds : undefined;
+      const rawEmbeds = params.embeds;
+      const embeds = Array.isArray(rawEmbeds) ? rawEmbeds : undefined;
+      const sessionKey = readStringParam(params, "__sessionKey");
+      const agentId = readStringParam(params, "__agentId");
+
+      if (componentSpec) {
+        if (asVoice) {
+          throw new Error("Discord components cannot be sent as voice messages.");
+        }
+        if (embeds?.length) {
+          throw new Error("Discord components cannot include embeds.");
+        }
+        const normalizedContent = content?.trim() ? content : undefined;
+        const payload = componentSpec.text
+          ? componentSpec
+          : { ...componentSpec, text: normalizedContent };
+        const result = await sendDiscordComponentMessage(to, payload, {
+          ...(accountId ? { accountId } : {}),
+          silent,
+          replyTo: replyTo ?? undefined,
+          sessionKey: sessionKey ?? undefined,
+          agentId: agentId ?? undefined,
+          mediaUrl: mediaUrl ?? undefined,
+          filename: filename ?? undefined,
+        });
+        return jsonResult({ ok: true, result, components: true });
+      }
 
       // Handle voice message sending
       if (asVoice) {

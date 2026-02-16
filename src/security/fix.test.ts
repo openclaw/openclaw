@@ -246,6 +246,9 @@ describe("security fix", () => {
     const sessionsStorePath = path.join(sessionsDir, "sessions.json");
     await fs.writeFile(sessionsStorePath, "{}\n", "utf-8");
     await fs.chmod(sessionsStorePath, 0o644);
+    const transcriptPath = path.join(sessionsDir, "sess-main.jsonl");
+    await fs.writeFile(transcriptPath, '{"type":"session"}\n', "utf-8");
+    await fs.chmod(transcriptPath, 0o644);
 
     const env = {
       ...process.env,
@@ -260,6 +263,7 @@ describe("security fix", () => {
     expectPerms((await fs.stat(allowFromPath)).mode & 0o777, 0o600);
     expectPerms((await fs.stat(authProfilesPath)).mode & 0o777, 0o600);
     expectPerms((await fs.stat(sessionsStorePath)).mode & 0o777, 0o600);
+    expectPerms((await fs.stat(transcriptPath)).mode & 0o777, 0o600);
     expectPerms((await fs.stat(includePath)).mode & 0o777, 0o600);
   });
 });

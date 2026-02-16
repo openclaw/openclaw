@@ -163,6 +163,25 @@ describe("normalizeCronJobCreate", () => {
     expect(delivery.to).toBe("7200373102");
   });
 
+  it("normalizes webhook delivery mode and target URL", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "webhook delivery",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "hello" },
+      delivery: {
+        mode: " WeBhOoK ",
+        to: " https://example.invalid/cron ",
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const delivery = normalized.delivery as Record<string, unknown>;
+    expect(delivery.mode).toBe("webhook");
+    expect(delivery.to).toBe("https://example.invalid/cron");
+  });
+
   it("defaults isolated agentTurn delivery to announce", () => {
     const normalized = normalizeCronJobCreate({
       name: "default-announce",

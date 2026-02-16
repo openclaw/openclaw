@@ -313,4 +313,41 @@ describe("pairing store", () => {
       });
     });
   });
+
+  it("stores allowFrom entries per account when accountId is provided", async () => {
+    await withTempStateDir(async () => {
+      await addChannelAllowFromStoreEntry({
+        channel: "telegram",
+        accountId: "yy",
+        entry: "12345",
+      });
+
+      const accountScoped = await readChannelAllowFromStore("telegram", process.env, "yy");
+      const channelScoped = await readChannelAllowFromStore("telegram");
+      expect(accountScoped).toContain("12345");
+      expect(channelScoped).not.toContain("12345");
+    });
+  });
+
+  it("approves pairing codes into account-scoped allowFrom via pairing metadata", async () => {
+    await withTempStateDir(async () => {
+      const created = await upsertChannelPairingRequest({
+        channel: "telegram",
+        accountId: "yy",
+        id: "12345",
+      });
+      expect(created.created).toBe(true);
+
+      const approved = await approveChannelPairingCode({
+        channel: "telegram",
+        code: created.code,
+      });
+      expect(approved?.id).toBe("12345");
+
+      const accountScoped = await readChannelAllowFromStore("telegram", process.env, "yy");
+      const channelScoped = await readChannelAllowFromStore("telegram");
+      expect(accountScoped).toContain("12345");
+      expect(channelScoped).not.toContain("12345");
+    });
+  });
 });

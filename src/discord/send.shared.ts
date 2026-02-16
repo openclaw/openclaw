@@ -33,6 +33,11 @@ type DiscordRecipient =
       id: string;
     };
 
+export function stripUndefinedFields<T extends Record<string, unknown>>(value: T): T {
+  const entries = Object.entries(value).filter(([, entry]) => entry !== undefined);
+  return Object.fromEntries(entries) as T;
+}
+
 function normalizeReactionEmoji(raw: string) {
   const trimmed = raw.trim();
   if (!trimmed) {
