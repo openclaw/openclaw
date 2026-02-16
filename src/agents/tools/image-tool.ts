@@ -376,7 +376,7 @@ export function createImageTool(options?: {
     description,
     parameters: Type.Object({
       prompt: Type.Optional(Type.String()),
-      image: Type.Union([Type.String(), Type.Array(Type.String())]),
+      image: Type.String({ description: "Image path or URL (pass multiple as comma-separated)" }),
       model: Type.Optional(Type.String()),
       maxBytesMb: Type.Optional(Type.Number()),
       maxImages: Type.Optional(Type.Number()),
