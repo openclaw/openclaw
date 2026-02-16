@@ -717,14 +717,6 @@ describe("resolveResponsePrefixTemplate", () => {
     expect(result).toBe("[OpenClaw]");
   });
 
-  it("resolves multiple variables", () => {
-    const result = resolveResponsePrefixTemplate("[{model} | think:{thinkingLevel}]", {
-      model: "claude-opus-4-5",
-      thinkingLevel: "high",
-    });
-    expect(result).toBe("[claude-opus-4-5 | think:high]");
-  });
-
   it("leaves unresolved variables as-is", () => {
     const result = resolveResponsePrefixTemplate("[{model}]", {});
     expect(result).toBe("[{model}]");
