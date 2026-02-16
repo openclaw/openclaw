@@ -47,3 +47,12 @@ export async function readErrorResponse(res: Response): Promise<string | undefin
     return undefined;
   }
 }
+
+export async function assertOkOrThrowHttpError(res: Response, label: string): Promise<void> {
+  if (res.ok) {
+    return;
+  }
+  const detail = await readErrorResponse(res);
+  const suffix = detail ? `: ${detail}` : "";
+  throw new Error(`${label} (HTTP ${res.status})${suffix}`);
+}
