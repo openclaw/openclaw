@@ -52,11 +52,7 @@ function normalizeAllowEntry(entry: string): string {
 }
 
 function formatAllowEntry(entry: string): string {
-  const trimmed = entry.trim();
-  if (!trimmed) {
-    return "";
-  }
-  return trimmed.replace(/^max:/i, "").toLowerCase();
+  return normalizeAllowEntry(entry) || "";
 }
 
 function parseReplyToMessageId(replyToId?: string | null) {
@@ -226,9 +222,9 @@ export const maxPlugin: ChannelPlugin<ResolvedMaxAccount, MaxProbe> = {
     chunker: (text, limit) => getMaxRuntime().channel.text.chunkMarkdownText(text, limit),
     chunkerMode: "markdown",
     textChunkLimit: 4000,
-    sendText: async ({ to, text, accountId, replyToId }) => {
+    sendText: async ({ to, text, accountId, deps, replyToId }) => {
       const send =
-        getMaxRuntime().channel.max?.sendMessageMax ??
+        deps?.sendMax ?? getMaxRuntime().channel.max?.sendMessageMax ??
         (() => {
           throw new Error("MAX runtime sendMessageMax not available");
         });
@@ -241,9 +237,9 @@ export const maxPlugin: ChannelPlugin<ResolvedMaxAccount, MaxProbe> = {
       });
       return { channel: "max", ...result };
     },
-    sendMedia: async ({ to, text, mediaUrl, accountId, replyToId }) => {
+    sendMedia: async ({ to, text, mediaUrl, accountId, deps, replyToId }) => {
       const send =
-        getMaxRuntime().channel.max?.sendMessageMax ??
+        deps?.sendMax ?? getMaxRuntime().channel.max?.sendMessageMax ??
         (() => {
           throw new Error("MAX runtime sendMessageMax not available");
         });

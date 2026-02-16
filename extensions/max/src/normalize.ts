@@ -25,19 +25,19 @@ export function looksLikeMaxTargetId(raw: string): boolean {
 }
 
 /** Normalize a MAX messaging target to canonical form. */
-export function normalizeMaxMessagingTarget(raw: string): string | null {
+export function normalizeMaxMessagingTarget(raw: string): string | undefined {
   const trimmed = raw.trim();
   if (!trimmed) {
-    return null;
+    return undefined;
   }
   // Strip "max:" prefix
   const stripped = trimmed.replace(/^max:/i, "").trim();
   if (!stripped) {
-    return null;
+    return undefined;
   }
   // Must be a valid numerical ID
   if (/^-?\d+$/.test(stripped)) {
     return stripped;
   }
-  return null;
+  return undefined;
 }
