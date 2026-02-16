@@ -41,7 +41,7 @@ describe("runCommandWithTimeout", () => {
       [process.execPath, "-e", "setTimeout(() => {}, 10_000)"],
       {
         timeoutMs: 5_000,
-        noOutputTimeoutMs: 120,
+        noOutputTimeoutMs: 100,
       },
     );
 
