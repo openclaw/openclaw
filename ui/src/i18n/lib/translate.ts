@@ -1,5 +1,5 @@
-import type { Locale, TranslationMap } from "./types";
-import { en } from "../locales/en";
+import type { Locale, TranslationMap } from "./types.ts";
+import { en } from "../locales/en.ts";
 
 type Subscriber = (locale: Locale) => void;
 
@@ -40,11 +40,11 @@ class I18nManager {
       try {
         let module;
         if (locale === "zh-CN") {
-          module = await import("../locales/zh-CN");
+          module = await import("../locales/zh-CN.ts");
         } else if (locale === "zh-TW") {
-          module = await import("../locales/zh-TW");
+          module = await import("../locales/zh-TW.ts");
         } else if (locale === "pt-BR") {
-          module = await import("../locales/pt-BR");
+          module = await import("../locales/pt-BR.ts");
         } else {
           return;
         }

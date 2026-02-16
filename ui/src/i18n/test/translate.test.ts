@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { i18n, t } from "../lib/translate";
+import { i18n, t } from "../lib/translate.ts";
 
 describe("i18n", () => {
   beforeEach(() => {
