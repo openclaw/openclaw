@@ -6,6 +6,35 @@ describe("probeTelegram retry logic", () => {
   const timeoutMs = 5000;
   let fetchMock: Mock;
 
+  function mockGetMeSuccess() {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: vi.fn().mockResolvedValue({
+        ok: true,
+        result: { id: 123, username: "test_bot" },
+      }),
+    });
+  }
+
+  function mockGetWebhookInfoSuccess() {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: vi.fn().mockResolvedValue({ ok: true, result: { url: "" } }),
+    });
+  }
+
+  async function expectSuccessfulProbe(expectedCalls: number, retryCount = 0) {
+    const probePromise = probeTelegram(token, timeoutMs);
+    for (let i = 0; i < retryCount; i += 1) {
+      await vi.advanceTimersByTimeAsync(1000);
+    }
+
+    const result = await probePromise;
+    expect(result.ok).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(expectedCalls);
+    expect(result.bot?.username).toBe("test_bot");
+  }
+
   beforeEach(() => {
     vi.useFakeTimers();
     fetchMock = vi.fn();
@@ -18,57 +47,18 @@ describe("probeTelegram retry logic", () => {
   });
 
   it("should succeed if the first attempt succeeds", async () => {
-    const mockResponse = {
-      ok: true,
-      json: vi.fn().mockResolvedValue({
-        ok: true,
-        result: { id: 123, username: "test_bot" },
-      }),
-    };
-    fetchMock.mockResolvedValueOnce(mockResponse);
-
-    // Mock getWebhookInfo which is also called
-    fetchMock.mockResolvedValueOnce({
-      ok: true,
-      json: vi.fn().mockResolvedValue({ ok: true, result: { url: "" } }),
-    });
-
-    const result = await probeTelegram(token, timeoutMs);
-
-    expect(result.ok).toBe(true);
-    expect(fetchMock).toHaveBeenCalledTimes(2); // getMe + getWebhookInfo
-    expect(result.bot?.username).toBe("test_bot");
+    mockGetMeSuccess();
+    mockGetWebhookInfoSuccess();
+    await expectSuccessfulProbe(2);
   });
 
   it("should retry and succeed if first attempt fails but second succeeds", async () => {
     // 1st attempt: Network error
     fetchMock.mockRejectedValueOnce(new Error("Network timeout"));
 
-    // 2nd attempt: Success
-    fetchMock.mockResolvedValueOnce({
-      ok: true,
-      json: vi.fn().mockResolvedValue({
-        ok: true,
-        result: { id: 123, username: "test_bot" },
-      }),
-    });
-
-    // getWebhookInfo
-    fetchMock.mockResolvedValueOnce({
-      ok: true,
-      json: vi.fn().mockResolvedValue({ ok: true, result: { url: "" } }),
-    });
-
-    const probePromise = probeTelegram(token, timeoutMs);
-
-    // Fast-forward 1 second for the retry delay
-    await vi.advanceTimersByTimeAsync(1000);
-
-    const result = await probePromise;
-
-    expect(result.ok).toBe(true);
-    expect(fetchMock).toHaveBeenCalledTimes(3); // fail getMe, success getMe, getWebhookInfo
-    expect(result.bot?.username).toBe("test_bot");
+    mockGetMeSuccess();
+    mockGetWebhookInfoSuccess();
+    await expectSuccessfulProbe(3, 1);
   });
 
   it("should retry twice and succeed on the third attempt", async () => {
@@ -77,32 +67,9 @@ describe("probeTelegram retry logic", () => {
     // 2nd attempt: Network error
     fetchMock.mockRejectedValueOnce(new Error("Network error 2"));
 
-    // 3rd attempt: Success
-    fetchMock.mockResolvedValueOnce({
-      ok: true,
-      json: vi.fn().mockResolvedValue({
-        ok: true,
-        result: { id: 123, username: "test_bot" },
-      }),
-    });
-
-    // getWebhookInfo
-    fetchMock.mockResolvedValueOnce({
-      ok: true,
-      json: vi.fn().mockResolvedValue({ ok: true, result: { url: "" } }),
-    });
-
-    const probePromise = probeTelegram(token, timeoutMs);
-
-    // Fast-forward for two retries
-    await vi.advanceTimersByTimeAsync(1000);
-    await vi.advanceTimersByTimeAsync(1000);
-
-    const result = await probePromise;
-
-    expect(result.ok).toBe(true);
-    expect(fetchMock).toHaveBeenCalledTimes(4); // fail, fail, success, webhook
-    expect(result.bot?.username).toBe("test_bot");
+    mockGetMeSuccess();
+    mockGetWebhookInfoSuccess();
+    await expectSuccessfulProbe(4, 2);
   });
 
   it("should fail after 3 unsuccessful attempts", async () => {

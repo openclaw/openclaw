@@ -679,17 +679,8 @@ describe("resolveDiscordReplyDeliveryPlan", () => {
 });
 
 describe("maybeCreateDiscordAutoThread", () => {
-  it("returns existing thread ID when creation fails due to race condition", async () => {
-    const client = {
-      rest: {
-        post: async () => {
-          throw new Error("A thread has already been created on this message");
-        },
-        get: async () => ({ thread: { id: "existing-thread" } }),
-      },
-    } as unknown as Client;
-
-    const result = await maybeCreateDiscordAutoThread({
+  function createAutoThreadParams(client: Client) {
+    return {
       client,
       message: {
         id: "m1",
@@ -702,7 +693,20 @@ describe("maybeCreateDiscordAutoThread", () => {
       threadChannel: null,
       baseText: "hello",
       combinedBody: "hello",
-    });
+    };
+  }
+
+  it("returns existing thread ID when creation fails due to race condition", async () => {
+    const client = {
+      rest: {
+        post: async () => {
+          throw new Error("A thread has already been created on this message");
+        },
+        get: async () => ({ thread: { id: "existing-thread" } }),
+      },
+    } as unknown as Client;
+
+    const result = await maybeCreateDiscordAutoThread(createAutoThreadParams(client));
 
     expect(result).toBe("existing-thread");
   });
@@ -717,20 +721,7 @@ describe("maybeCreateDiscordAutoThread", () => {
       },
     } as unknown as Client;
 
-    const result = await maybeCreateDiscordAutoThread({
-      client,
-      message: {
-        id: "m1",
-        channelId: "parent",
-      } as unknown as import("./listeners.js").DiscordMessageEvent["message"],
-      isGuildMessage: true,
-      channelConfig: {
-        autoThread: true,
-      } as unknown as DiscordChannelConfigResolved,
-      threadChannel: null,
-      baseText: "hello",
-      combinedBody: "hello",
-    });
+    const result = await maybeCreateDiscordAutoThread(createAutoThreadParams(client));
 
     expect(result).toBeUndefined();
   });
