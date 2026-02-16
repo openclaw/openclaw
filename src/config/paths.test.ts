@@ -78,19 +78,12 @@ describe("state + config path candidates", () => {
       path.join(resolvedHome, ".openclaw", "openclaw.json"),
       path.join(resolvedHome, ".openclaw", "clawdbot.json"),
       path.join(resolvedHome, ".openclaw", "moldbot.json"),
-      path.join(resolvedHome, ".openclaw", "moltbot.json"),
       path.join(resolvedHome, ".clawdbot", "openclaw.json"),
       path.join(resolvedHome, ".clawdbot", "clawdbot.json"),
       path.join(resolvedHome, ".clawdbot", "moldbot.json"),
-      path.join(resolvedHome, ".clawdbot", "moltbot.json"),
       path.join(resolvedHome, ".moldbot", "openclaw.json"),
       path.join(resolvedHome, ".moldbot", "clawdbot.json"),
       path.join(resolvedHome, ".moldbot", "moldbot.json"),
-      path.join(resolvedHome, ".moldbot", "moltbot.json"),
-      path.join(resolvedHome, ".moltbot", "openclaw.json"),
-      path.join(resolvedHome, ".moltbot", "clawdbot.json"),
-      path.join(resolvedHome, ".moltbot", "moldbot.json"),
-      path.join(resolvedHome, ".moltbot", "moltbot.json"),
     ];
     expect(candidates).toEqual(expected);
   });
@@ -120,6 +113,29 @@ describe("state + config path candidates", () => {
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
+  });
+
+  it("does not include .moltbot paths in config candidates", () => {
+    const candidates = resolveDefaultConfigCandidates({} as NodeJS.ProcessEnv, () => "/home/node");
+    expect(candidates.some((c) => c.includes("moltbot"))).toBe(false);
+  });
+
+  it("resolves state dir to .openclaw even when .moltbot exists", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-docker-"));
+    await fs.mkdir(path.join(root, ".moltbot"), { recursive: true });
+    expect(resolveStateDir({} as NodeJS.ProcessEnv, () => root)).toBe(path.join(root, ".openclaw"));
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("ignores legacy .clawdbot/moltbot.json when .openclaw mount exists", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-docker-"));
+    await fs.mkdir(path.join(root, ".openclaw"), { recursive: true });
+    await fs.mkdir(path.join(root, ".clawdbot"), { recursive: true });
+    await fs.writeFile(path.join(root, ".clawdbot", "moltbot.json"), "{}", "utf-8");
+    expect(resolveConfigPathCandidate({} as NodeJS.ProcessEnv, () => root)).not.toContain(
+      "moltbot",
+    );
+    await fs.rm(root, { recursive: true, force: true });
   });
 
   it("respects state dir overrides when config is missing", async () => {
