@@ -77,6 +77,7 @@ apps/ios/*.mobileprovision
 docs/.local/
 IDENTITY.md
 USER.md
+CLAUDE.local.md
 .tgz
 .idea
 
