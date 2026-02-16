@@ -8,6 +8,12 @@ import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { formatHelpExamples } from "../help-format.js";
+import {
+  addDebugOption,
+  addJsonOption,
+  addTimeoutOption,
+  addVerboseOption,
+} from "../option-builders.js";
 import { parsePositiveIntOrUndefined } from "./helpers.js";
 
 function resolveVerbose(opts: { verbose?: boolean; debug?: boolean }): boolean {
@@ -25,16 +31,31 @@ function parseTimeoutMs(timeout: unknown): number | null | undefined {
 }
 
 export function registerStatusHealthSessionsCommands(program: Command) {
-  program
-    .command("status")
-    .description("Show channel health and recent session recipients")
-    .option("--json", "Output JSON instead of text", false)
-    .option("--all", "Full diagnosis (read-only, pasteable)", false)
-    .option("--usage", "Show model provider usage/quota snapshots", false)
-    .option("--deep", "Probe channels (WhatsApp Web + Telegram + Discord + Slack + Signal)", false)
-    .option("--timeout <ms>", "Probe timeout in milliseconds", "10000")
-    .option("--verbose", "Verbose logging", false)
-    .option("--debug", "Alias for --verbose", false)
+  const status = addDebugOption(
+    addVerboseOption(
+      addTimeoutOption(
+        addJsonOption(
+          program
+            .command("status")
+            .description("Show channel health and recent session recipients")
+            .option("--all", "Full diagnosis (read-only, pasteable)", false)
+            .option("--usage", "Show model provider usage/quota snapshots", false)
+            .option(
+              "--deep",
+              "Probe channels (WhatsApp Web + Telegram + Discord + Slack + Signal)",
+              false,
+            ),
+          "Output JSON instead of text",
+        ),
+        {
+          description: "Probe timeout in milliseconds",
+          defaultValue: "10000",
+        },
+      ),
+    ),
+  );
+
+  status
     .addHelpText(
       "after",
       () =>
@@ -77,13 +98,22 @@ export function registerStatusHealthSessionsCommands(program: Command) {
       });
     });
 
-  program
-    .command("health")
-    .description("Fetch health from the running gateway")
-    .option("--json", "Output JSON instead of text", false)
-    .option("--timeout <ms>", "Connection timeout in milliseconds", "10000")
-    .option("--verbose", "Verbose logging", false)
-    .option("--debug", "Alias for --verbose", false)
+  const health = addDebugOption(
+    addVerboseOption(
+      addTimeoutOption(
+        addJsonOption(
+          program.command("health").description("Fetch health from the running gateway"),
+          "Output JSON instead of text",
+        ),
+        {
+          description: "Connection timeout in milliseconds",
+          defaultValue: "10000",
+        },
+      ),
+    ),
+  );
+
+  health
     .addHelpText(
       "after",
       () =>
@@ -108,13 +138,18 @@ export function registerStatusHealthSessionsCommands(program: Command) {
       });
     });
 
-  program
-    .command("sessions")
-    .description("List stored conversation sessions")
-    .option("--json", "Output as JSON", false)
-    .option("--verbose", "Verbose logging", false)
-    .option("--store <path>", "Path to session store (default: resolved from config)")
-    .option("--active <minutes>", "Only show sessions updated within the past N minutes")
+  const sessions = addVerboseOption(
+    addJsonOption(
+      program
+        .command("sessions")
+        .description("List stored conversation sessions")
+        .option("--store <path>", "Path to session store (default: resolved from config)")
+        .option("--active <minutes>", "Only show sessions updated within the past N minutes"),
+      "Output as JSON",
+    ),
+  );
+
+  sessions
     .addHelpText(
       "after",
       () =>

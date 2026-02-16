@@ -14,6 +14,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
+import { addJsonOption } from "../option-builders.js";
 
 function resolveInstallDaemonFlag(
   command: unknown,
@@ -81,34 +82,36 @@ export function registerOnboardCommand(program: Command) {
     command.option(providerFlag.cliOption, providerFlag.description);
   }
 
-  command
-    .option("--custom-base-url <url>", "Custom provider base URL")
-    .option("--custom-api-key <key>", "Custom provider API key (optional)")
-    .option("--custom-model-id <id>", "Custom provider model ID")
-    .option("--custom-provider-id <id>", "Custom provider ID (optional; auto-derived by default)")
-    .option(
-      "--custom-compatibility <mode>",
-      "Custom provider API compatibility: openai|anthropic (default: openai)",
-    )
-    .option("--gateway-port <port>", "Gateway port")
-    .option("--gateway-bind <mode>", "Gateway bind: loopback|tailnet|lan|auto|custom")
-    .option("--gateway-auth <mode>", "Gateway auth: token|password")
-    .option("--gateway-token <token>", "Gateway token (token auth)")
-    .option("--gateway-password <password>", "Gateway password (password auth)")
-    .option("--remote-url <url>", "Remote Gateway WebSocket URL")
-    .option("--remote-token <token>", "Remote Gateway token (optional)")
-    .option("--tailscale <mode>", "Tailscale: off|serve|funnel")
-    .option("--tailscale-reset-on-exit", "Reset tailscale serve/funnel on exit")
-    .option("--install-daemon", "Install gateway service")
-    .option("--no-install-daemon", "Skip gateway service install")
-    .option("--skip-daemon", "Skip gateway service install")
-    .option("--daemon-runtime <runtime>", "Daemon runtime: node|bun")
-    .option("--skip-channels", "Skip channel setup")
-    .option("--skip-skills", "Skip skills setup")
-    .option("--skip-health", "Skip health check")
-    .option("--skip-ui", "Skip Control UI/TUI prompts")
-    .option("--node-manager <name>", "Node manager for skills: npm|pnpm|bun")
-    .option("--json", "Output JSON summary", false);
+  addJsonOption(
+    command
+      .option("--custom-base-url <url>", "Custom provider base URL")
+      .option("--custom-api-key <key>", "Custom provider API key (optional)")
+      .option("--custom-model-id <id>", "Custom provider model ID")
+      .option("--custom-provider-id <id>", "Custom provider ID (optional; auto-derived by default)")
+      .option(
+        "--custom-compatibility <mode>",
+        "Custom provider API compatibility: openai|anthropic (default: openai)",
+      )
+      .option("--gateway-port <port>", "Gateway port")
+      .option("--gateway-bind <mode>", "Gateway bind: loopback|tailnet|lan|auto|custom")
+      .option("--gateway-auth <mode>", "Gateway auth: token|password")
+      .option("--gateway-token <token>", "Gateway token (token auth)")
+      .option("--gateway-password <password>", "Gateway password (password auth)")
+      .option("--remote-url <url>", "Remote Gateway WebSocket URL")
+      .option("--remote-token <token>", "Remote Gateway token (optional)")
+      .option("--tailscale <mode>", "Tailscale: off|serve|funnel")
+      .option("--tailscale-reset-on-exit", "Reset tailscale serve/funnel on exit")
+      .option("--install-daemon", "Install gateway service")
+      .option("--no-install-daemon", "Skip gateway service install")
+      .option("--skip-daemon", "Skip gateway service install")
+      .option("--daemon-runtime <runtime>", "Daemon runtime: node|bun")
+      .option("--skip-channels", "Skip channel setup")
+      .option("--skip-skills", "Skip skills setup")
+      .option("--skip-health", "Skip health check")
+      .option("--skip-ui", "Skip Control UI/TUI prompts")
+      .option("--node-manager <name>", "Node manager for skills: npm|pnpm|bun"),
+    "Output JSON summary",
+  );
 
   command.action(async (opts, commandRuntime) => {
     await runCommandWithRuntime(defaultRuntime, async () => {
