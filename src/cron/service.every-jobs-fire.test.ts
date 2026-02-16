@@ -190,12 +190,14 @@ describe("CronService interval/cron jobs fire on time", () => {
     });
 
     await cron.start();
-    for (let minute = 1; minute <= 6; minute++) {
+    // Perf: a few recomputation cycles are enough to catch legacy "every" drift.
+    for (let minute = 1; minute <= 3; minute++) {
       vi.setSystemTime(new Date(nowMs + minute * 60_000));
       const minuteRun = await cron.run("minute-cron", "force");
       expect(minuteRun).toEqual({ ok: true, ran: true });
     }
 
+    // "every" cadence is 2m; verify it stays due at the 6-minute boundary.
     vi.setSystemTime(new Date(nowMs + 6 * 60_000));
     const sfRun = await cron.run("legacy-every", "due");
     expect(sfRun).toEqual({ ok: true, ran: true });

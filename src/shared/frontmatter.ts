@@ -58,3 +58,42 @@ export function resolveOpenClawManifestBlock(params: {
     return undefined;
   }
 }
+
+export type OpenClawManifestRequires = {
+  bins: string[];
+  anyBins: string[];
+  env: string[];
+  config: string[];
+};
+
+export function resolveOpenClawManifestRequires(
+  metadataObj: Record<string, unknown>,
+): OpenClawManifestRequires | undefined {
+  const requiresRaw =
+    typeof metadataObj.requires === "object" && metadataObj.requires !== null
+      ? (metadataObj.requires as Record<string, unknown>)
+      : undefined;
+  if (!requiresRaw) {
+    return undefined;
+  }
+  return {
+    bins: normalizeStringList(requiresRaw.bins),
+    anyBins: normalizeStringList(requiresRaw.anyBins),
+    env: normalizeStringList(requiresRaw.env),
+    config: normalizeStringList(requiresRaw.config),
+  };
+}
+
+export function resolveOpenClawManifestInstall<T>(
+  metadataObj: Record<string, unknown>,
+  parseInstallSpec: (input: unknown) => T | undefined,
+): T[] {
+  const installRaw = Array.isArray(metadataObj.install) ? (metadataObj.install as unknown[]) : [];
+  return installRaw
+    .map((entry) => parseInstallSpec(entry))
+    .filter((entry): entry is T => Boolean(entry));
+}
+
+export function resolveOpenClawManifestOs(metadataObj: Record<string, unknown>): string[] {
+  return normalizeStringList(metadataObj.os);
+}

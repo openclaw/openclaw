@@ -138,6 +138,8 @@ export type MediaToolsConfig = {
 
 export type ToolProfileId = "minimal" | "coding" | "messaging" | "full";
 
+export type SessionsToolsVisibility = "self" | "tree" | "agent" | "all";
+
 export type ToolPolicyConfig = {
   allow?: string[];
   /**
@@ -452,6 +454,21 @@ export type ToolsConfig = {
     enabled?: boolean;
     /** Allowlist of agent ids or patterns (implementation-defined). */
     allow?: string[];
+  };
+  /**
+   * Session tool visibility controls which sessions can be targeted by session tools
+   * (sessions_list, sessions_history, sessions_send).
+   *
+   * Default: "tree" (current session + spawned subagent sessions).
+   */
+  sessions?: {
+    /**
+     * - "self": only the current session
+     * - "tree": current session + sessions spawned by this session (default)
+     * - "agent": any session belonging to the current agent id (can include other users)
+     * - "all": any session (cross-agent still requires tools.agentToAgent)
+     */
+    visibility?: SessionsToolsVisibility;
   };
   /** Elevated exec permissions for the host machine. */
   elevated?: {

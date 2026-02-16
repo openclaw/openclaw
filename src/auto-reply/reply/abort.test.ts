@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import {
   getAbortMemory,
   getAbortMemorySizeForTest,
+  isAbortRequestText,
   isAbortTrigger,
   resetAbortMemoryForTest,
   setAbortMemory,
@@ -73,6 +74,17 @@ describe("abort detection", () => {
     expect(isAbortTrigger("hello")).toBe(false);
     // /stop is NOT matched by isAbortTrigger - it's handled separately
     expect(isAbortTrigger("/stop")).toBe(false);
+  });
+
+  it("isAbortRequestText aligns abort command semantics", () => {
+    expect(isAbortRequestText("/stop")).toBe(true);
+    expect(isAbortRequestText("stop")).toBe(true);
+    expect(isAbortRequestText("/stop@openclaw_bot", { botUsername: "openclaw_bot" })).toBe(true);
+
+    expect(isAbortRequestText("/status")).toBe(false);
+    expect(isAbortRequestText("stop please")).toBe(false);
+    expect(isAbortRequestText("/abort")).toBe(false);
+    expect(isAbortRequestText("/abort now")).toBe(false);
   });
 
   it("removes abort memory entry when flag is reset", () => {

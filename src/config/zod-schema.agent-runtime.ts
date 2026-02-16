@@ -125,6 +125,58 @@ export const SandboxDockerSchema = z
     binds: z.array(z.string()).optional(),
   })
   .strict()
+  .superRefine((data, ctx) => {
+    if (data.binds) {
+      for (let i = 0; i < data.binds.length; i += 1) {
+        const bind = data.binds[i]?.trim() ?? "";
+        if (!bind) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["binds", i],
+            message: "Sandbox security: bind mount entry must be a non-empty string.",
+          });
+          continue;
+        }
+        const firstColon = bind.indexOf(":");
+        const source = (firstColon <= 0 ? bind : bind.slice(0, firstColon)).trim();
+        if (!source.startsWith("/")) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["binds", i],
+            message:
+              `Sandbox security: bind mount "${bind}" uses a non-absolute source path "${source}". ` +
+              "Only absolute POSIX paths are supported for sandbox binds.",
+          });
+        }
+      }
+    }
+    if (data.network?.trim().toLowerCase() === "host") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["network"],
+        message:
+          'Sandbox security: network mode "host" is blocked. Use "bridge" or "none" instead.',
+      });
+    }
+    if (data.seccompProfile?.trim().toLowerCase() === "unconfined") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["seccompProfile"],
+        message:
+          'Sandbox security: seccomp profile "unconfined" is blocked. ' +
+          "Use a custom seccomp profile file or omit this setting.",
+      });
+    }
+    if (data.apparmorProfile?.trim().toLowerCase() === "unconfined") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["apparmorProfile"],
+        message:
+          'Sandbox security: apparmor profile "unconfined" is blocked. ' +
+          "Use a named AppArmor profile or omit this setting.",
+      });
+    }
+  })
   .optional();
 
 export const SandboxBrowserSchema = z
@@ -499,6 +551,12 @@ export const ToolsSchema = z
     web: ToolsWebSchema,
     media: ToolsMediaSchema,
     links: ToolsLinksSchema,
+    sessions: z
+      .object({
+        visibility: z.enum(["self", "tree", "agent", "all"]).optional(),
+      })
+      .strict()
+      .optional(),
     message: z
       .object({
         allowCrossContextSend: z.boolean().optional(),
