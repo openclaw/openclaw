@@ -30,22 +30,22 @@ import { getMattermostRuntime } from "./runtime.js";
 
 const mattermostMessageActions: ChannelMessageActionAdapter = {
   listActions: ({ cfg }) => {
-    const accounts = listMattermostAccountIds(cfg)
+    const actionsConfig = cfg.channels?.mattermost?.actions as { reactions?: boolean } | undefined;
+    const baseReactions = actionsConfig?.reactions;
+    const hasReactionCapableAccount = listMattermostAccountIds(cfg)
       .map((accountId) => resolveMattermostAccount({ cfg, accountId }))
       .filter((account) => account.enabled)
-      .filter((account) => Boolean(account.botToken?.trim() && account.baseUrl?.trim()));
+      .filter((account) => Boolean(account.botToken?.trim() && account.baseUrl?.trim()))
+      .some((account) => {
+        const accountActions = account.config.actions as { reactions?: boolean } | undefined;
+        return (accountActions?.reactions ?? baseReactions ?? true) !== false;
+      });
 
-    if (accounts.length === 0) {
+    if (!hasReactionCapableAccount) {
       return [];
     }
 
-    const actions: ChannelMessageActionName[] = [];
-    const actionsConfig = cfg.channels?.mattermost?.actions as { reactions?: boolean } | undefined;
-    const reactionsEnabled = actionsConfig?.reactions !== false;
-    if (reactionsEnabled) {
-      actions.push("react");
-    }
-    return actions;
+    return ["react"];
   },
   supportsAction: ({ action }) => {
     return action === "react";
@@ -57,7 +57,8 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
     // Check reactions gate: per-account config takes precedence over base config
     const mmBase = cfg?.channels?.mattermost as Record<string, unknown> | undefined;
     const accounts = mmBase?.accounts as Record<string, Record<string, unknown>> | undefined;
-    const acctConfig = accountId && accounts ? accounts[accountId] : undefined;
+    const resolvedAccountId = accountId ?? resolveDefaultMattermostAccountId(cfg);
+    const acctConfig = accounts?.[resolvedAccountId];
     const acctActions = acctConfig?.actions as { reactions?: boolean } | undefined;
     const baseActions = mmBase?.actions as { reactions?: boolean } | undefined;
     const reactionsEnabled = acctActions?.reactions ?? baseActions?.reactions ?? true;
@@ -88,7 +89,7 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
         cfg,
         postId,
         emojiName,
-        accountId: accountId ?? undefined,
+        accountId: resolvedAccountId,
       });
       if (!result.ok) {
         throw new Error(result.error);
@@ -105,7 +106,7 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
       cfg,
       postId,
       emojiName,
-      accountId: accountId ?? undefined,
+      accountId: resolvedAccountId,
     });
     if (!result.ok) {
       throw new Error(result.error);

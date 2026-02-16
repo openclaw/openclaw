@@ -59,16 +59,9 @@ type CreateMattermostConnectOnceOpts = {
 export const defaultMattermostWebSocketFactory: MattermostWebSocketFactory = (url) =>
   new WebSocket(url) as MattermostWebSocketLike;
 
-export function parsePostedEvent(
-  data: WebSocket.RawData,
+export function parsePostedPayload(
+  payload: MattermostEventPayload,
 ): { payload: MattermostEventPayload; post: MattermostPost } | null {
-  const raw = rawDataToString(data);
-  let payload: MattermostEventPayload;
-  try {
-    payload = JSON.parse(raw) as MattermostEventPayload;
-  } catch {
-    return null;
-  }
   if (payload.event !== "posted") {
     return null;
   }
@@ -90,6 +83,19 @@ export function parsePostedEvent(
     return null;
   }
   return { payload, post };
+}
+
+export function parsePostedEvent(
+  data: WebSocket.RawData,
+): { payload: MattermostEventPayload; post: MattermostPost } | null {
+  const raw = rawDataToString(data);
+  let payload: MattermostEventPayload;
+  try {
+    payload = JSON.parse(raw) as MattermostEventPayload;
+  } catch {
+    return null;
+  }
+  return parsePostedPayload(payload);
 }
 
 export function createMattermostConnectOnce(
@@ -160,7 +166,7 @@ export function createMattermostConnectOnce(
           if (payload.event !== "posted") {
             return;
           }
-          const parsed = parsePostedEvent(data);
+          const parsed = parsePostedPayload(payload);
           if (!parsed) {
             return;
           }
