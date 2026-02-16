@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-02-15)
 ## Current Position
 
 Phase: 4 of 5 (Output Controls & Execution Tracing)
-Plan: 1 of 2 in current phase
-Status: In progress
-Last activity: 2026-02-16 — Completed 04-01 (Output CSP filtering)
+Plan: 2 of 2 in current phase
+Status: Phase complete
+Last activity: 2026-02-16 — Completed 04-02 (Execution tracing)
 
-Progress: [███████████████░░░░░] 75%
+Progress: [████████████████░░░░] 80%
 
 ## Performance Metrics
 
@@ -31,7 +31,7 @@ Progress: [███████████████░░░░░] 75%
 | 01    | 3/3   | 19min | 6min     |
 | 02    | 2/2   | 12min | 6min     |
 | 03    | 2/2   | 8min  | 4min     |
-| 04    | 1/2   | 3min  | 3min     |
+| 04    | 2/2   | 10min | 5min     |
 
 **Recent Trend:**
 
@@ -43,6 +43,7 @@ _Updated after each plan completion_
 | Phase 03 P01 | 3min | 2 tasks | 5 files |
 | Phase 03 P02 | 5min | 2 tasks | 7 files |
 | Phase 04 P01 | 3min | 2 tasks | 5 files |
+| Phase 04 P02 | 7min | 2 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -65,6 +66,8 @@ Recent decisions affecting current work:
 - [03-02]: Auto-inference of channels/providers capabilities from manifest fields
 - [04-01]: Regex-based detect+redact rule pattern for output CSP composability
 - [04-01]: CSP placed after sanitizeUserFacingText, before LINE directives — fail-open delivery with fail-loud logging
+- [04-02]: Run-keyed trace storage in separate Map parallel to agent-events to avoid circular imports
+- [04-02]: RunId threaded through tool creation chain for spawn-time trace context lookup
 
 ### Pending Todos
 
@@ -78,5 +81,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-16
-Stopped at: Completed 04-01-PLAN.md
+Stopped at: Completed 04-02-PLAN.md (Phase 04 complete)
 Resume file: None
