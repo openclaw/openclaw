@@ -44,8 +44,10 @@ export async function readPostCompactionContext(workspaceDir: string): Promise<s
 }
 
 /**
- * Extract named H2 sections from markdown content.
- * Matches "## SectionName" and captures until the next "## " or end of string.
+ * Extract named sections from markdown content.
+ * Matches H2 (##) or H3 (###) headings case-insensitively.
+ * Skips content inside fenced code blocks.
+ * Captures until the next heading of same or higher level, or end of string.
  */
 function extractSections(content: string, sectionNames: string[]): string[] {
   const results: string[] = [];
@@ -54,21 +56,54 @@ function extractSections(content: string, sectionNames: string[]): string[] {
   for (const name of sectionNames) {
     let sectionLines: string[] = [];
     let inSection = false;
+    let sectionLevel = 0;
+    let inCodeBlock = false;
 
     for (const line of lines) {
-      // Check if this is the start of our target section
-      if (line.match(new RegExp(`^##\\s+${escapeRegExp(name)}\\s*$`))) {
-        inSection = true;
-        sectionLines = [line];
+      // Track fenced code blocks
+      if (line.trimStart().startsWith("```")) {
+        inCodeBlock = !inCodeBlock;
+        if (inSection) {
+          sectionLines.push(line);
+        }
         continue;
       }
 
-      // If we're in the section, check if we've hit another H2 heading
-      if (inSection) {
-        if (line.match(/^##\s+/)) {
-          // Hit another H2 heading, stop collecting
-          break;
+      // Skip heading detection inside code blocks
+      if (inCodeBlock) {
+        if (inSection) {
+          sectionLines.push(line);
         }
+        continue;
+      }
+
+      // Check if this line is a heading
+      const headingMatch = line.match(/^(#{2,3})\s+(.+?)\s*$/);
+
+      if (headingMatch) {
+        const level = headingMatch[1].length; // 2 or 3
+        const headingText = headingMatch[2];
+
+        if (!inSection) {
+          // Check if this is our target section (case-insensitive)
+          if (headingText.toLowerCase() === name.toLowerCase()) {
+            inSection = true;
+            sectionLevel = level;
+            sectionLines = [line];
+            continue;
+          }
+        } else {
+          // We're in section — stop if we hit a heading of same or higher level
+          if (level <= sectionLevel) {
+            break;
+          }
+          // Lower-level heading (e.g., ### inside ##) — include it
+          sectionLines.push(line);
+          continue;
+        }
+      }
+
+      if (inSection) {
         sectionLines.push(line);
       }
     }
@@ -79,8 +114,4 @@ function extractSections(content: string, sectionNames: string[]): string[] {
   }
 
   return results;
-}
-
-function escapeRegExp(str: string): string {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
