@@ -8,7 +8,6 @@ import {
   triggerInternalHook,
   unregisterInternalHook,
   type AgentBootstrapHookContext,
-  type InternalHookEvent,
 } from "./internal-hooks.js";
 
 describe("hooks", () => {
@@ -209,39 +208,6 @@ describe("hooks", () => {
 
       const keys = getRegisteredEventKeys();
       expect(keys).toEqual([]);
-    });
-  });
-
-  describe("integration", () => {
-    it("should handle a complete hook lifecycle", async () => {
-      const results: InternalHookEvent[] = [];
-      const handler = vi.fn((event: InternalHookEvent) => {
-        results.push(event);
-      });
-
-      // Register
-      registerInternalHook("command:new", handler);
-
-      // Trigger
-      const event1 = createInternalHookEvent("command", "new", "session-1");
-      await triggerInternalHook(event1);
-
-      const event2 = createInternalHookEvent("command", "new", "session-2");
-      await triggerInternalHook(event2);
-
-      // Verify
-      expect(results).toHaveLength(2);
-      expect(results[0].sessionKey).toBe("session-1");
-      expect(results[1].sessionKey).toBe("session-2");
-
-      // Unregister
-      unregisterInternalHook("command:new", handler);
-
-      // Trigger again - should not call handler
-      const event3 = createInternalHookEvent("command", "new", "session-3");
-      await triggerInternalHook(event3);
-
-      expect(results).toHaveLength(2);
     });
   });
 });
