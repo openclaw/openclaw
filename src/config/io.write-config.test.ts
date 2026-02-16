@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
-import { withTempHome } from "./home-env.test-harness.js";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { captureEnv } from "../test-utils/env.js";
 import { createConfigIO } from "./io.js";
 
 describe("config io write", () => {
@@ -9,6 +10,51 @@ describe("config io write", () => {
     warn: () => {},
     error: () => {},
   };
+
+  let fixtureRoot = "";
+  let caseId = 0;
+
+  async function withTempHome(prefix: string, fn: (home: string) => Promise<void>): Promise<void> {
+    const safePrefix = prefix.trim().replace(/[^a-zA-Z0-9._-]+/g, "-") || "tmp";
+    const home = path.join(fixtureRoot, `${safePrefix}${caseId++}`);
+    await fs.mkdir(path.join(home, ".openclaw"), { recursive: true });
+
+    const snapshot = captureEnv([
+      "HOME",
+      "USERPROFILE",
+      "HOMEDRIVE",
+      "HOMEPATH",
+      "OPENCLAW_STATE_DIR",
+    ]);
+    process.env.HOME = home;
+    process.env.USERPROFILE = home;
+    process.env.OPENCLAW_STATE_DIR = path.join(home, ".openclaw");
+
+    if (process.platform === "win32") {
+      const match = home.match(/^([A-Za-z]:)(.*)$/);
+      if (match) {
+        process.env.HOMEDRIVE = match[1];
+        process.env.HOMEPATH = match[2] || "\\";
+      }
+    }
+
+    try {
+      await fn(home);
+    } finally {
+      snapshot.restore();
+    }
+  }
+
+  beforeAll(async () => {
+    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-config-io-"));
+  });
+
+  afterAll(async () => {
+    if (!fixtureRoot) {
+      return;
+    }
+    await fs.rm(fixtureRoot, { recursive: true, force: true });
+  });
 
   it("persists caller changes onto resolved config without leaking runtime defaults", async () => {
     await withTempHome("openclaw-config-io-", async (home) => {

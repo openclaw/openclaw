@@ -1,6 +1,11 @@
 import type { CronJobCreate, CronJobPatch } from "./types.js";
 import { sanitizeAgentId } from "../routing/session-key.js";
 import { isRecord } from "../utils.js";
+import {
+  buildDeliveryFromLegacyPayload,
+  hasLegacyDeliveryHints,
+  stripLegacyDeliveryFields,
+} from "./legacy-delivery.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
 import { migrateLegacyCronPayload } from "./payload-migration.js";
 import { inferLegacyName } from "./service/normalize.js";
@@ -74,10 +79,18 @@ function coercePayload(payload: UnknownRecord) {
   if (!next.kind) {
     const hasMessage = typeof next.message === "string" && next.message.trim().length > 0;
     const hasText = typeof next.text === "string" && next.text.trim().length > 0;
+    const hasAgentTurnHint =
+      typeof next.model === "string" ||
+      typeof next.thinking === "string" ||
+      typeof next.timeoutSeconds === "number" ||
+      typeof next.allowUnsafeExternalContent === "boolean";
     if (hasMessage) {
       next.kind = "agentTurn";
     } else if (hasText) {
       next.kind = "systemEvent";
+    } else if (hasAgentTurnHint) {
+      // Accept partial agentTurn payload patches that only tweak agent-turn-only fields.
+      next.kind = "agentTurn";
     }
   }
   if (typeof next.message === "string") {
@@ -163,53 +176,6 @@ function coerceDelivery(delivery: UnknownRecord) {
     }
   }
   return next;
-}
-
-function hasLegacyDeliveryHints(payload: UnknownRecord) {
-  if (typeof payload.deliver === "boolean") {
-    return true;
-  }
-  if (typeof payload.bestEffortDeliver === "boolean") {
-    return true;
-  }
-  if (typeof payload.to === "string" && payload.to.trim()) {
-    return true;
-  }
-  return false;
-}
-
-function buildDeliveryFromLegacyPayload(payload: UnknownRecord): UnknownRecord {
-  const deliver = payload.deliver;
-  const mode = deliver === false ? "none" : "announce";
-  const channelRaw =
-    typeof payload.channel === "string" ? payload.channel.trim().toLowerCase() : "";
-  const toRaw = typeof payload.to === "string" ? payload.to.trim() : "";
-  const next: UnknownRecord = { mode };
-  if (channelRaw) {
-    next.channel = channelRaw;
-  }
-  if (toRaw) {
-    next.to = toRaw;
-  }
-  if (typeof payload.bestEffortDeliver === "boolean") {
-    next.bestEffort = payload.bestEffortDeliver;
-  }
-  return next;
-}
-
-function stripLegacyDeliveryFields(payload: UnknownRecord) {
-  if ("deliver" in payload) {
-    delete payload.deliver;
-  }
-  if ("channel" in payload) {
-    delete payload.channel;
-  }
-  if ("to" in payload) {
-    delete payload.to;
-  }
-  if ("bestEffortDeliver" in payload) {
-    delete payload.bestEffortDeliver;
-  }
 }
 
 function unwrapJob(raw: UnknownRecord) {

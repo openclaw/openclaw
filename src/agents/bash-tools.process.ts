@@ -65,8 +65,9 @@ const processSchema = Type.Object({
   offset: Type.Optional(Type.Number({ description: "Log offset" })),
   limit: Type.Optional(Type.Number({ description: "Log length" })),
   timeout: Type.Optional(
-    Type.Union([Type.Number(), Type.String()], {
+    Type.Number({
       description: "For poll: wait up to this many milliseconds before returning",
+      minimum: 0,
     }),
   ),
 });
@@ -84,6 +85,18 @@ function resolvePollWaitMs(value: unknown) {
     }
   }
   return 0;
+}
+
+function failText(text: string): AgentToolResult<unknown> {
+  return {
+    content: [
+      {
+        type: "text",
+        text,
+      },
+    ],
+    details: { status: "failed" },
+  };
 }
 
 export function createProcessTool(
@@ -126,7 +139,7 @@ export function createProcessTool(
         eof?: boolean;
         offset?: number;
         limit?: number;
-        timeout?: number | string;
+        timeout?: unknown;
       };
 
       if (params.action === "list") {
@@ -258,26 +271,10 @@ export function createProcessTool(
                 },
               };
             }
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `No session found for ${params.sessionId}`,
-                },
-              ],
-              details: { status: "failed" },
-            };
+            return failText(`No session found for ${params.sessionId}`);
           }
           if (!scopedSession.backgrounded) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `Session ${params.sessionId} is not backgrounded.`,
-                },
-              ],
-              details: { status: "failed" },
-            };
+            return failText(`Session ${params.sessionId} is not backgrounded.`);
           }
           const pollWaitMs = resolvePollWaitMs(params.timeout);
           if (pollWaitMs > 0 && !scopedSession.exited) {
@@ -521,26 +518,10 @@ export function createProcessTool(
 
         case "kill": {
           if (!scopedSession) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `No active session found for ${params.sessionId}`,
-                },
-              ],
-              details: { status: "failed" },
-            };
+            return failText(`No active session found for ${params.sessionId}`);
           }
           if (!scopedSession.backgrounded) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `Session ${params.sessionId} is not backgrounded.`,
-                },
-              ],
-              details: { status: "failed" },
-            };
+            return failText(`Session ${params.sessionId} is not backgrounded.`);
           }
           killSession(scopedSession);
           markExited(scopedSession, null, "SIGKILL", "failed");

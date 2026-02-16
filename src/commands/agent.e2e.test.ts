@@ -196,6 +196,71 @@ describe("agentCommand", () => {
     });
   });
 
+  it("uses default fallback list for session model overrides", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      fs.mkdirSync(path.dirname(store), { recursive: true });
+      fs.writeFileSync(
+        store,
+        JSON.stringify(
+          {
+            "agent:main:subagent:test": {
+              sessionId: "session-subagent",
+              updatedAt: Date.now(),
+              providerOverride: "anthropic",
+              modelOverride: "claude-opus-4-5",
+            },
+          },
+          null,
+          2,
+        ),
+      );
+
+      mockConfig(home, store, {
+        model: {
+          primary: "openai/gpt-4.1-mini",
+          fallbacks: ["openai/gpt-5.2"],
+        },
+        models: {
+          "anthropic/claude-opus-4-5": {},
+          "openai/gpt-4.1-mini": {},
+          "openai/gpt-5.2": {},
+        },
+      });
+
+      vi.mocked(loadModelCatalog).mockResolvedValueOnce([
+        { id: "claude-opus-4-5", name: "Opus", provider: "anthropic" },
+        { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
+        { id: "gpt-5.2", name: "GPT-5.2", provider: "openai" },
+      ]);
+      vi.mocked(runEmbeddedPiAgent)
+        .mockRejectedValueOnce(Object.assign(new Error("rate limited"), { status: 429 }))
+        .mockResolvedValueOnce({
+          payloads: [{ text: "ok" }],
+          meta: {
+            durationMs: 5,
+            agentMeta: { sessionId: "session-subagent", provider: "openai", model: "gpt-5.2" },
+          },
+        });
+
+      await agentCommand(
+        {
+          message: "hi",
+          sessionKey: "agent:main:subagent:test",
+        },
+        runtime,
+      );
+
+      const attempts = vi
+        .mocked(runEmbeddedPiAgent)
+        .mock.calls.map((call) => ({ provider: call[0]?.provider, model: call[0]?.model }));
+      expect(attempts).toEqual([
+        { provider: "anthropic", model: "claude-opus-4-5" },
+        { provider: "openai", model: "gpt-5.2" },
+      ]);
+    });
+  });
+
   it("keeps explicit sessionKey even when sessionId exists elsewhere", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
