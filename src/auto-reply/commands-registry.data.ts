@@ -529,12 +529,31 @@ function buildChatCommands(): ChatCommandDefinition[] {
       category: "options",
       args: [
         {
-          name: "options",
-          description: "host=... security=... ask=... node=...",
+          name: "host",
+          description: "sandbox, gateway, or node",
+          type: "string",
+          choices: ["sandbox", "gateway", "node"],
+        },
+        {
+          name: "security",
+          description: "deny, allowlist, or full",
+          type: "string",
+          choices: ["deny", "allowlist", "full"],
+        },
+        {
+          name: "ask",
+          description: "off, on-miss, or always",
+          type: "string",
+          choices: ["off", "on-miss", "always"],
+        },
+        {
+          name: "node",
+          description: "Node id or name",
           type: "string",
         },
       ],
       argsParsing: "none",
+      formatArgs: COMMAND_ARG_FORMATTERS.exec,
     }),
     defineChatCommand({
       key: "model",
