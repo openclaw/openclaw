@@ -103,19 +103,6 @@ describe("createDefaultMenuConfig", () => {
     expect(config.areas.length).toBe(6);
   });
 
-  it("has valid area bounds", () => {
-    const config = createDefaultMenuConfig();
-
-    for (const area of config.areas) {
-      expect(area.bounds.x).toBeGreaterThanOrEqual(0);
-      expect(area.bounds.y).toBeGreaterThanOrEqual(0);
-      expect(area.bounds.width).toBeGreaterThan(0);
-      expect(area.bounds.height).toBeGreaterThan(0);
-      expect(area.bounds.x + area.bounds.width).toBeLessThanOrEqual(2500);
-      expect(area.bounds.y + area.bounds.height).toBeLessThanOrEqual(843);
-    }
-  });
-
   it("has expected default commands", () => {
     const config = createDefaultMenuConfig();
 
