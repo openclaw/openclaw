@@ -44,9 +44,7 @@ export type AuthChoice =
   | "github-copilot"
   | "copilot-proxy"
   | "qwen-portal"
-  | "xai-api-key"
-  | "qianfan-api-key"
-  | "custom-api-key"
+  | "x402"
   | "skip";
 export type AuthChoiceGroupId =
   | "openai"

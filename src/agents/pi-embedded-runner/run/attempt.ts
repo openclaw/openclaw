@@ -66,6 +66,7 @@ import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import { resolveTranscriptPolicy } from "../../transcript-policy.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
+import { maybeWrapStreamFnWithX402Payment } from "../../x402-payment.js";
 import { isRunnerAbortError } from "../abort.js";
 import { appendCacheTtlTimestamp, isCacheTtlEligibleProvider } from "../cache-ttl.js";
 import { buildEmbeddedExtensionPaths } from "../extensions.js";
@@ -633,6 +634,14 @@ export async function runEmbeddedAttempt(
           activeSession.agent.streamFn,
         );
       }
+
+      activeSession.agent.streamFn =
+        maybeWrapStreamFnWithX402Payment({
+          streamFn: activeSession.agent.streamFn,
+          provider: params.provider,
+          config: params.config,
+          apiKey: params.providerApiKey,
+        }) ?? activeSession.agent.streamFn;
 
       try {
         const prior = await sanitizeSessionHistory({

@@ -18,6 +18,7 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   model: Model<Api>;
   authStorage: AuthStorage;
   modelRegistry: ModelRegistry;
+  providerApiKey?: string;
   thinkLevel: ThinkLevel;
 };
 

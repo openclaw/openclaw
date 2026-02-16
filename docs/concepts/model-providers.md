@@ -127,6 +127,37 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 Use `models.providers` (or `models.json`) to add **custom** providers or
 OpenAI/Anthropic‑compatible proxies.
 
+### Daydreams Router (x402)
+
+Daydreams Router (x402) uses wallet-signed ERC-2612 permits and a router base URL.
+It lets you pay for inference with USDC.
+
+- Provider: `x402`
+- Auth: wallet private key (stored in auth profiles)
+- Example model: `x402/anthropic:claude-opus-4-5`
+- CLI: `clawdbot onboard --auth-choice x402`
+
+```json5
+{
+  models: {
+    mode: "merge",
+    providers: {
+      x402: {
+        baseUrl: "https://ai.xgate.run/v1",
+        api: "anthropic-messages",
+        authHeader: false,
+        models: [{ id: "anthropic:claude-opus-4-5", name: "Claude Opus 4.5" }]
+      }
+    }
+  },
+  plugins: {
+    entries: {
+      "daydreams-x402-auth": { config: { permitCap: 10, network: "eip155:8453" } }
+    }
+  }
+}
+```
+
 ### Moonshot AI (Kimi)
 
 Moonshot uses OpenAI-compatible endpoints, so configure it as a custom provider:

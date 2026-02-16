@@ -64,7 +64,22 @@ export async function applyAuthChoicePluginProvider(
     return { config: nextConfig };
   }
 
-  const method = pickAuthMethod(provider, options.methodId) ?? provider.auth[0];
+  let method = pickAuthMethod(provider, options.methodId);
+  if (!method) {
+    if (provider.auth.length === 1) {
+      method = provider.auth[0];
+    } else if (provider.auth.length > 1) {
+      const chosen = await params.prompter.select({
+        message: `Auth method for ${options.label}`,
+        options: provider.auth.map((m) => ({
+          value: m.id,
+          label: m.label,
+          hint: m.hint,
+        })),
+      });
+      method = provider.auth.find((m) => m.id === String(chosen)) ?? provider.auth[0];
+    }
+  }
   if (!method) {
     await params.prompter.note(`${options.label} auth method missing.`, options.label);
     return { config: nextConfig };

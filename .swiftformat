@@ -9,6 +9,7 @@
 # Imports / extensions
 --importgrouping testable-bottom
 --extensionacl on-declarations
+--disable sortImports,redundantProperty,docComments,redundantViewBuilder,wrapPropertyBodies,wrapFunctionBodies,environmentEntry,conditionalAssignment,blankLinesBetweenScopes,indent,trailingSpace,spaceAroundParens,wrap,trailingCommas
 
 # Indentation
 --indent 4

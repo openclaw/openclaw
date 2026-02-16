@@ -98,9 +98,148 @@ Notes:
 
 ## Full reference
 
-For detailed step-by-step breakdowns, non-interactive scripting, Signal setup,
-RPC API, and a full list of config fields the wizard writes, see the
-[Wizard Reference](/reference/wizard).
+Use `--non-interactive` to automate or script onboarding:
+
+```bash
+moltbot onboard --non-interactive \
+  --mode local \
+  --auth-choice apiKey \
+  --anthropic-api-key "$ANTHROPIC_API_KEY" \
+  --gateway-port 18789 \
+  --gateway-bind loopback \
+  --install-daemon \
+  --daemon-runtime node \
+  --skip-skills
+```
+
+Add `--json` for a machine‑readable summary.
+
+Gemini example:
+
+```bash
+moltbot onboard --non-interactive \
+  --mode local \
+  --auth-choice gemini-api-key \
+  --gemini-api-key "$GEMINI_API_KEY" \
+  --gateway-port 18789 \
+  --gateway-bind loopback
+```
+
+Z.AI example:
+
+```bash
+moltbot onboard --non-interactive \
+  --mode local \
+  --auth-choice zai-api-key \
+  --zai-api-key "$ZAI_API_KEY" \
+  --gateway-port 18789 \
+  --gateway-bind loopback
+```
+
+Vercel AI Gateway example:
+
+```bash
+moltbot onboard --non-interactive \
+  --mode local \
+  --auth-choice ai-gateway-api-key \
+  --ai-gateway-api-key "$AI_GATEWAY_API_KEY" \
+  --gateway-port 18789 \
+  --gateway-bind loopback
+```
+
+Moonshot example:
+
+```bash
+moltbot onboard --non-interactive \
+  --mode local \
+  --auth-choice moonshot-api-key \
+  --moonshot-api-key "$MOONSHOT_API_KEY" \
+  --gateway-port 18789 \
+  --gateway-bind loopback
+```
+
+Synthetic example:
+
+```bash
+moltbot onboard --non-interactive \
+  --mode local \
+  --auth-choice synthetic-api-key \
+  --synthetic-api-key "$SYNTHETIC_API_KEY" \
+  --gateway-port 18789 \
+  --gateway-bind loopback
+```
+
+OpenCode Zen example:
+
+```bash
+moltbot onboard --non-interactive \
+  --mode local \
+  --auth-choice opencode-zen \
+  --opencode-zen-api-key "$OPENCODE_API_KEY" \
+  --gateway-port 18789 \
+  --gateway-bind loopback
+```
+
+Daydreams Router (x402) example (interactive):
+
+```bash
+clawdbot onboard \
+  --mode local \
+  --auth-choice x402 \
+  --gateway-port 18789 \
+  --gateway-bind loopback
+```
+
+Add agent (non‑interactive) example:
+
+```bash
+moltbot agents add work \
+  --workspace ~/clawd-work \
+  --model openai/gpt-5.2 \
+  --bind whatsapp:biz \
+  --non-interactive \
+  --json
+```
+
+## Gateway wizard RPC
+
+The Gateway exposes the wizard flow over RPC (`wizard.start`, `wizard.next`, `wizard.cancel`, `wizard.status`).
+Clients (macOS app, Control UI) can render steps without re‑implementing onboarding logic.
+
+## Signal setup (signal-cli)
+
+The wizard can install `signal-cli` from GitHub releases:
+- Downloads the appropriate release asset.
+- Stores it under `~/.clawdbot/tools/signal-cli/<version>/`.
+- Writes `channels.signal.cliPath` to your config.
+
+Notes:
+- JVM builds require **Java 21**.
+- Native builds are used when available.
+- Windows uses WSL2; signal-cli install follows the Linux flow inside WSL.
+
+## What the wizard writes
+
+Typical fields in `~/.clawdbot/moltbot.json`:
+- `agents.defaults.workspace`
+- `agents.defaults.model` / `models.providers` (if Minimax chosen)
+- `gateway.*` (mode, bind, auth, tailscale)
+- `channels.telegram.botToken`, `channels.discord.token`, `channels.signal.*`, `channels.imessage.*`
+- Channel allowlists (Slack/Discord/Matrix/Microsoft Teams) when you opt in during the prompts (names resolve to IDs when possible).
+- `skills.install.nodeManager`
+- `wizard.lastRunAt`
+- `wizard.lastRunVersion`
+- `wizard.lastRunCommit`
+- `wizard.lastRunCommand`
+- `wizard.lastRunMode`
+
+`moltbot agents add` writes `agents.list[]` and optional `bindings`.
+
+WhatsApp credentials go under `~/.clawdbot/credentials/whatsapp/<accountId>/`.
+Sessions are stored under `~/.clawdbot/agents/<agentId>/sessions/`.
+
+Some channels are delivered as plugins. When you pick one during onboarding, the wizard
+will prompt to install it (npm or a local path) before it can be configured.
 
 ## Related docs
 

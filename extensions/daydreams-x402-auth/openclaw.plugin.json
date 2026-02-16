@@ -1,0 +1,28 @@
+{
+  "id": "daydreams-x402-auth",
+  "providers": ["x402"],
+  "uiHints": {
+    "permitCap": {
+      "label": "Permit Cap (USD)",
+      "help": "Maximum USDC spend authorized per permit. Example: 10 = $10.00"
+    },
+    "network": {
+      "label": "Network (CAIP-2)",
+      "help": "Examples: eip155:8453 (Base), eip155:1 (Ethereum)",
+      "advanced": true
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "permitCap": {
+        "type": "number",
+        "minimum": 0.01
+      },
+      "network": {
+        "type": "string"
+      }
+    }
+  }
+}

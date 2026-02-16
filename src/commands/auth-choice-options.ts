@@ -9,6 +9,25 @@ export type AuthChoiceOption = {
   label: string;
   hint?: string;
 };
+
+export type AuthChoiceGroupId =
+  | "openai"
+  | "anthropic"
+  | "google"
+  | "copilot"
+  | "openrouter"
+  | "ai-gateway"
+  | "cloudflare-ai-gateway"
+  | "moonshot"
+  | "zai"
+  | "xiaomi"
+  | "opencode-zen"
+  | "minimax"
+  | "synthetic"
+  | "venice"
+  | "qwen"
+  | "x402";
+
 export type AuthChoiceGroup = {
   value: AuthChoiceGroupId;
   label: string;
@@ -113,52 +132,10 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["opencode-zen"],
   },
   {
-    value: "xiaomi",
-    label: "Xiaomi",
-    hint: "API key",
-    choices: ["xiaomi-api-key"],
-  },
-  {
-    value: "synthetic",
-    label: "Synthetic",
-    hint: "Anthropic-compatible (multi-model)",
-    choices: ["synthetic-api-key"],
-  },
-  {
-    value: "together",
-    label: "Together AI",
-    hint: "API key",
-    choices: ["together-api-key"],
-  },
-  {
-    value: "huggingface",
-    label: "Hugging Face",
-    hint: "Inference API (HF token)",
-    choices: ["huggingface-api-key"],
-  },
-  {
-    value: "venice",
-    label: "Venice AI",
-    hint: "Privacy-focused (uncensored models)",
-    choices: ["venice-api-key"],
-  },
-  {
-    value: "litellm",
-    label: "LiteLLM",
-    hint: "Unified LLM gateway (100+ providers)",
-    choices: ["litellm-api-key"],
-  },
-  {
-    value: "cloudflare-ai-gateway",
-    label: "Cloudflare AI Gateway",
-    hint: "Account ID + Gateway ID + API key",
-    choices: ["cloudflare-ai-gateway-api-key"],
-  },
-  {
-    value: "custom",
-    label: "Custom Provider",
-    hint: "Any OpenAI or Anthropic compatible endpoint",
-    choices: ["custom-api-key"],
+    value: "x402",
+    label: "Daydreams Router (x402)",
+    hint: "Permit-signed USDC payments",
+    choices: ["x402"],
   },
 ];
 
@@ -322,7 +299,109 @@ export function buildAuthChoiceOptions(params: {
   includeSkip: boolean;
 }): AuthChoiceOption[] {
   void params.store;
-  const options: AuthChoiceOption[] = [...BASE_AUTH_CHOICE_OPTIONS];
+  const options: AuthChoiceOption[] = [];
+
+  options.push({
+    value: "token",
+    label: "Anthropic token (paste setup-token)",
+    hint: "run `claude setup-token` elsewhere, then paste the token here",
+  });
+
+  options.push({
+    value: "openai-codex",
+    label: "OpenAI Codex (ChatGPT OAuth)",
+  });
+  options.push({ value: "chutes", label: "Chutes (OAuth)" });
+  options.push({ value: "openai-api-key", label: "OpenAI API key" });
+  options.push({ value: "xai-api-key", label: "xAI (Grok) API key" });
+  options.push({
+    value: "qianfan-api-key",
+    label: "Qianfan API key",
+  });
+  options.push({ value: "openrouter-api-key", label: "OpenRouter API key" });
+  options.push({
+    value: "ai-gateway-api-key",
+    label: "Vercel AI Gateway API key",
+  });
+  options.push({
+    value: "cloudflare-ai-gateway-api-key",
+    label: "Cloudflare AI Gateway",
+    hint: "Account ID + Gateway ID + API key",
+  });
+  options.push({
+    value: "moonshot-api-key",
+    label: "Kimi API key (.ai)",
+  });
+  options.push({
+    value: "moonshot-api-key-cn",
+    label: "Kimi API key (.cn)",
+  });
+  options.push({
+    value: "kimi-code-api-key",
+    label: "Kimi Code API key (subscription)",
+  });
+  options.push({ value: "synthetic-api-key", label: "Synthetic API key" });
+  options.push({
+    value: "venice-api-key",
+    label: "Venice AI API key",
+    hint: "Privacy-focused inference (uncensored models)",
+  });
+  options.push({
+    value: "together-api-key",
+    label: "Together AI API key",
+    hint: "Access to Llama, DeepSeek, Qwen, and more open models",
+  });
+  options.push({
+    value: "github-copilot",
+    label: "GitHub Copilot (GitHub device login)",
+    hint: "Uses GitHub device flow",
+  });
+  options.push({ value: "gemini-api-key", label: "Google Gemini API key" });
+  options.push({
+    value: "google-antigravity",
+    label: "Google Antigravity OAuth",
+    hint: "Uses the bundled Antigravity auth plugin",
+  });
+  options.push({
+    value: "google-gemini-cli",
+    label: "Google Gemini CLI OAuth",
+    hint: "Uses the bundled Gemini CLI auth plugin",
+  });
+  options.push({ value: "zai-api-key", label: "Z.AI (GLM 4.7) API key" });
+  options.push({
+    value: "xiaomi-api-key",
+    label: "Xiaomi API key",
+  });
+  options.push({
+    value: "minimax-portal",
+    label: "MiniMax OAuth",
+    hint: "Oauth plugin for MiniMax",
+  });
+  options.push({ value: "qwen-portal", label: "Qwen OAuth" });
+  options.push({
+    value: "x402",
+    label: "Daydreams Router (x402)",
+    hint: "Wallet-signed ERC-2612 permits for USDC",
+  });
+  options.push({
+    value: "copilot-proxy",
+    label: "Copilot Proxy (local)",
+    hint: "Local proxy for VS Code Copilot models",
+  });
+  options.push({ value: "apiKey", label: "Anthropic API key" });
+  // Token flow is currently Anthropic-only; use CLI for advanced providers.
+  options.push({
+    value: "opencode-zen",
+    label: "OpenCode Zen (multi-model proxy)",
+    hint: "Claude, GPT, Gemini via opencode.ai/zen",
+  });
+  options.push({ value: "minimax-api", label: "MiniMax M2.1" });
+  options.push({
+    value: "minimax-api-lightning",
+    label: "MiniMax M2.1 Lightning",
+    hint: "Faster, higher output cost",
+  });
+  options.push({ value: "custom-api-key", label: "Custom Provider" });
 
   if (params.includeSkip) {
     options.push({ value: "skip", label: "Skip for now" });
