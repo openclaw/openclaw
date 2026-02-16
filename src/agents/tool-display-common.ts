@@ -483,7 +483,10 @@ function unwrapShellWrapper(command: string): string {
   return inner ? (stripOuterQuotes(inner) ?? command) : command;
 }
 
-function firstTopLevelStage(command: string): string {
+function scanTopLevelChars(
+  command: string,
+  visit: (char: string, index: number) => boolean | void,
+): void {
   let quote: '"' | "'" | undefined;
   let escaped = false;
 
@@ -511,52 +514,39 @@ function firstTopLevelStage(command: string): string {
       continue;
     }
 
-    if (char === ";") {
-      return command.slice(0, i);
-    }
-    if ((char === "&" || char === "|") && command[i + 1] === char) {
-      return command.slice(0, i);
+    if (visit(char, i) === false) {
+      return;
     }
   }
+}
 
-  return command;
+function firstTopLevelStage(command: string): string {
+  let splitIndex = -1;
+  scanTopLevelChars(command, (char, index) => {
+    if (char === ";") {
+      splitIndex = index;
+      return false;
+    }
+    if ((char === "&" || char === "|") && command[index + 1] === char) {
+      splitIndex = index;
+      return false;
+    }
+    return true;
+  });
+  return splitIndex >= 0 ? command.slice(0, splitIndex) : command;
 }
 
 function splitTopLevelPipes(command: string): string[] {
   const parts: string[] = [];
-  let quote: '"' | "'" | undefined;
-  let escaped = false;
   let start = 0;
 
-  for (let i = 0; i < command.length; i += 1) {
-    const char = command[i];
-
-    if (escaped) {
-      escaped = false;
-      continue;
+  scanTopLevelChars(command, (char, index) => {
+    if (char === "|" && command[index - 1] !== "|" && command[index + 1] !== "|") {
+      parts.push(command.slice(start, index));
+      start = index + 1;
     }
-    if (char === "\\") {
-      escaped = true;
-      continue;
-    }
-
-    if (quote) {
-      if (char === quote) {
-        quote = undefined;
-      }
-      continue;
-    }
-
-    if (char === '"' || char === "'") {
-      quote = char;
-      continue;
-    }
-
-    if (char === "|" && command[i - 1] !== "|" && command[i + 1] !== "|") {
-      parts.push(command.slice(start, i));
-      start = i + 1;
-    }
-  }
+    return true;
+  });
 
   parts.push(command.slice(start));
   return parts.map((part) => part.trim()).filter((part) => part.length > 0);
