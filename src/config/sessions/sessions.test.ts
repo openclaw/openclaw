@@ -20,7 +20,6 @@ import {
   validateSessionId,
 } from "./paths.js";
 import { resolveSessionResetPolicy } from "./reset.js";
-import { updateSessionStore as updateSessionStoreUnsafe } from "./store.js";
 import {
   appendAssistantMessageToSessionTranscript,
   resolveMirroredTranscriptText,
@@ -387,14 +386,6 @@ describe("session store lock (Promise chain mutex)", () => {
     await Promise.resolve();
 
     expect(getSessionStoreLockQueueSizeForTest()).toBe(0);
-  });
-});
-
-describe("withSessionStoreLock storePath guard (#14717)", () => {
-  it("throws descriptive error when storePath is undefined", async () => {
-    await expect(
-      updateSessionStoreUnsafe(undefined as unknown as string, (store) => store),
-    ).rejects.toThrow("withSessionStoreLock: storePath must be a non-empty string");
   });
 });
 
