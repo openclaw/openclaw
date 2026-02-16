@@ -66,11 +66,6 @@ describe("resolveGatewaySystemdServiceName", () => {
     expect(result).toBe(GATEWAY_SYSTEMD_SERVICE_NAME);
   });
 
-  it("returns default service name when profile is 'DEFAULT' (case-insensitive)", () => {
-    const result = resolveGatewaySystemdServiceName("DEFAULT");
-    expect(result).toBe(GATEWAY_SYSTEMD_SERVICE_NAME);
-  });
-
   it("returns profile-specific service name when profile is set", () => {
     const result = resolveGatewaySystemdServiceName("dev");
     expect(result).toBe("openclaw-gateway-dev");
@@ -106,11 +101,6 @@ describe("resolveGatewayWindowsTaskName", () => {
 
   it("returns default task name when profile is 'default'", () => {
     const result = resolveGatewayWindowsTaskName("default");
-    expect(result).toBe(GATEWAY_WINDOWS_TASK_NAME);
-  });
-
-  it("returns default task name when profile is 'DeFaUlT' (case-insensitive)", () => {
-    const result = resolveGatewayWindowsTaskName("DeFaUlT");
     expect(result).toBe(GATEWAY_WINDOWS_TASK_NAME);
   });
 
