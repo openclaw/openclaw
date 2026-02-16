@@ -26,6 +26,16 @@ const NOISE_PATTERNS = [
   // System/XML markup
   /^<[a-z-]+>[\s\S]*<\/[a-z-]+>$/i,
 
+  // --- Imperative instructions / commands (contextual, not standalone knowledge) ---
+  // "Let's uninstall X", "Let's switch to X", "Let's completely remove X"
+  /^let'?s\s+(completely\s+)?(uninstall|install|remove|delete|set up|configure|update|change|switch|replace|move|migrate|upgrade|downgrade|enable|disable|stop|start|restart|revert|rollback|undo|redo|rebuild|refactor|rewrite|clean up|fix|patch|deploy)/i,
+  // "Yes, ensure we're using X", "Yes switch to X", "Yes deliver to X"
+  /^(ok|okay|yes|yeah|yep|sure|right|alright|go ahead)[,.]?\s+(deliver|send|ensure|make sure|use|switch|change|update|move|enable|disable|remove|delete|install|uninstall|set up|configure)/i,
+  // "Can you/please uninstall X", "Go ahead and remove X", "Ok go ahead and remove X"
+  /^(ok[,.]?\s+)?(can you|could you|please|go ahead and)\s+(completely\s+)?(uninstall|install|remove|delete|set up|configure|update|change|switch|replace|move|migrate|upgrade|downgrade|enable|disable|stop|start|restart)/i,
+  // Short tool/config change directives: "Use chatterbox instead", "Switch to port 4123"
+  /^(use|switch to|change to|move to|replace with|swap to|go with|try|enable|disable)\s+\S+\s+(instead|rather|now|from now on|going forward)?\s*[.!?]*$/i,
+
   // --- Session reset prompts (from /new and /reset commands) ---
   /^A new session was started via/i,
 
