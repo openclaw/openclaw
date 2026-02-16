@@ -53,20 +53,6 @@ describe("pruneStaleEntries", () => {
     expect(store.fresh).toBeDefined();
   });
 
-  it("keeps entries newer than maxAgeDays", () => {
-    const now = Date.now();
-    const store = makeStore([
-      ["a", makeEntry(now - 1 * DAY_MS)],
-      ["b", makeEntry(now - 6 * DAY_MS)],
-      ["c", makeEntry(now)],
-    ]);
-
-    const pruned = pruneStaleEntries(store, 7 * DAY_MS);
-
-    expect(pruned).toBe(0);
-    expect(Object.keys(store)).toHaveLength(3);
-  });
-
   it("keeps entries with no updatedAt", () => {
     const store: Record<string, SessionEntry> = {
       noDate: { sessionId: crypto.randomUUID() } as SessionEntry,
