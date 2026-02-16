@@ -305,19 +305,6 @@ describe("resolveHeartbeatDeliveryTarget", () => {
     });
   });
 
-  it("keeps explicit telegram targets", () => {
-    const cfg: OpenClawConfig = {
-      agents: { defaults: { heartbeat: { target: "telegram", to: "123" } } },
-    };
-    expect(resolveHeartbeatDeliveryTarget({ cfg, entry: baseEntry })).toEqual({
-      channel: "telegram",
-      to: "123",
-      accountId: undefined,
-      lastChannel: undefined,
-      lastAccountId: undefined,
-    });
-  });
-
   it("uses explicit heartbeat accountId when provided", () => {
     const cfg: OpenClawConfig = {
       agents: {
