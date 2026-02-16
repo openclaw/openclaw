@@ -50,8 +50,17 @@ function resolveRunner() {
   return null;
 }
 
+function winCmd(cmd, args) {
+  // .cmd/.bat files on Windows can't be spawned directly — route through cmd.exe
+  if (process.platform === "win32" && /\.(cmd|bat)$/i.test(cmd)) {
+    return { cmd: process.env.COMSPEC || "cmd.exe", args: ["/c", cmd, ...args] };
+  }
+  return { cmd, args };
+}
+
 function run(cmd, args) {
-  const child = spawn(cmd, args, {
+  const resolved = winCmd(cmd, args);
+  const child = spawn(resolved.cmd, resolved.args, {
     cwd: uiDir,
     stdio: "inherit",
     env: process.env,
@@ -65,7 +74,8 @@ function run(cmd, args) {
 }
 
 function runSync(cmd, args, envOverride) {
-  const result = spawnSync(cmd, args, {
+  const resolved = winCmd(cmd, args);
+  const result = spawnSync(resolved.cmd, resolved.args, {
     cwd: uiDir,
     stdio: "inherit",
     env: envOverride ?? process.env,
