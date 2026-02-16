@@ -1404,4 +1404,174 @@ describe("gateway server auth/connect", () => {
   });
 
   // Remaining tests require isolated gateway state.
+
+  describe("trusted-proxy auth", () => {
+    test("allows trusted-proxy connection without device identity", async () => {
+      testState.gatewayBind = "lan";
+      testState.gatewayAuth = {
+        mode: "trusted-proxy",
+        trustedProxy: { userHeader: "x-forwarded-user" },
+      };
+      const { writeConfigFile } = await import("../config/config.js");
+      await writeConfigFile({
+        gateway: { trustedProxies: ["127.0.0.1"] },
+      });
+
+      await withGatewayServer(async ({ port }) => {
+        const ws = new WebSocket(`ws://127.0.0.1:${port}`, {
+          headers: {
+            origin: "https://localhost",
+            "x-forwarded-user": "testuser",
+          },
+        });
+        await new Promise<void>((resolve) => ws.once("open", resolve));
+
+        const res = await connectReq(ws, {
+          device: null,
+          skipDefaultAuth: true,
+          client: {
+            id: GATEWAY_CLIENT_NAMES.TEST,
+            version: "1.0.0",
+            platform: "test",
+            mode: GATEWAY_CLIENT_MODES.TEST,
+          },
+        });
+        expect(res.ok).toBe(true);
+        ws.close();
+      });
+    });
+
+    test("allows trusted-proxy control ui with device identity (no pairing)", async () => {
+      testState.gatewayBind = "lan";
+      testState.gatewayControlUi = { allowInsecureAuth: true };
+      testState.gatewayAuth = {
+        mode: "trusted-proxy",
+        trustedProxy: { userHeader: "x-forwarded-user" },
+      };
+      const { writeConfigFile } = await import("../config/config.js");
+      await writeConfigFile({
+        gateway: { trustedProxies: ["127.0.0.1"] },
+      });
+
+      await withGatewayServer(async ({ port }) => {
+        const ws = new WebSocket(`ws://127.0.0.1:${port}`, {
+          headers: {
+            origin: "http://127.0.0.1",
+            "x-forwarded-user": "testuser",
+          },
+        });
+        const challengePromise = onceMessage<{ payload?: unknown }>(
+          ws,
+          (o) => o.type === "event" && o.event === "connect.challenge",
+        );
+        await new Promise<void>((resolve) => ws.once("open", resolve));
+        const challenge = await challengePromise;
+        const nonce = (challenge.payload as { nonce?: unknown } | undefined)?.nonce;
+        expect(typeof nonce).toBe("string");
+
+        const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem, signDevicePayload } =
+          await import("../infra/device-identity.js");
+        const identity = loadOrCreateDeviceIdentity();
+        const scopes = ["operator.admin"];
+        const signedAtMs = Date.now();
+        const payload = buildDeviceAuthPayload({
+          deviceId: identity.deviceId,
+          clientId: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+          clientMode: GATEWAY_CLIENT_MODES.WEBCHAT,
+          role: "operator",
+          scopes,
+          signedAtMs,
+          nonce: String(nonce),
+        });
+        const device = {
+          id: identity.deviceId,
+          publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+          signature: signDevicePayload(identity.privateKeyPem, payload),
+          signedAt: signedAtMs,
+          nonce: String(nonce),
+        };
+
+        const res = await connectReq(ws, {
+          skipDefaultAuth: true,
+          scopes,
+          device,
+          client: {
+            id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+            version: "1.0.0",
+            platform: "web",
+            mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+          },
+        });
+        expect(res.ok).toBe(true);
+        ws.close();
+      });
+    });
+
+    test("rejects trusted-proxy connection from untrusted IP", async () => {
+      testState.gatewayBind = "lan";
+      testState.gatewayAuth = {
+        mode: "trusted-proxy",
+        trustedProxy: { userHeader: "x-forwarded-user" },
+      };
+      const { writeConfigFile } = await import("../config/config.js");
+      await writeConfigFile({
+        gateway: { trustedProxies: ["10.0.0.1"] }, // test connects from 127.0.0.1, not trusted
+      });
+
+      await withGatewayServer(async ({ port }) => {
+        const ws = new WebSocket(`ws://127.0.0.1:${port}`, {
+          headers: {
+            origin: "https://localhost",
+            "x-forwarded-user": "testuser",
+          },
+        });
+        await new Promise<void>((resolve) => ws.once("open", resolve));
+
+        const res = await connectReq(ws, {
+          device: null,
+          skipDefaultAuth: true,
+          client: {
+            id: GATEWAY_CLIENT_NAMES.TEST,
+            version: "1.0.0",
+            platform: "test",
+            mode: GATEWAY_CLIENT_MODES.TEST,
+          },
+        });
+        expect(res.ok).toBe(false);
+        ws.close();
+      });
+    });
+
+    test("rejects trusted-proxy connection with missing user header", async () => {
+      testState.gatewayBind = "lan";
+      testState.gatewayAuth = {
+        mode: "trusted-proxy",
+        trustedProxy: { userHeader: "x-forwarded-user" },
+      };
+      const { writeConfigFile } = await import("../config/config.js");
+      await writeConfigFile({
+        gateway: { trustedProxies: ["127.0.0.1"] },
+      });
+
+      await withGatewayServer(async ({ port }) => {
+        const ws = new WebSocket(`ws://127.0.0.1:${port}`, {
+          headers: { origin: "https://localhost" }, // no x-forwarded-user header
+        });
+        await new Promise<void>((resolve) => ws.once("open", resolve));
+
+        const res = await connectReq(ws, {
+          device: null,
+          skipDefaultAuth: true,
+          client: {
+            id: GATEWAY_CLIENT_NAMES.TEST,
+            version: "1.0.0",
+            platform: "test",
+            mode: GATEWAY_CLIENT_MODES.TEST,
+          },
+        });
+        expect(res.ok).toBe(false);
+        ws.close();
+      });
+    });
+  });
 });
