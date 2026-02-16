@@ -256,8 +256,6 @@ export async function runCronIsolatedAgentTurn(params: {
   const withRunSession = (
     result: Omit<RunCronAgentTurnResult, "sessionId" | "sessionKey">,
   ): RunCronAgentTurnResult => {
-    // Clean up in-memory agent run state to prevent memory leaks.
-    // See: https://github.com/openclaw/openclaw/issues/17820
     clearAgentRunContext(runSessionId);
     return {
       ...result,
