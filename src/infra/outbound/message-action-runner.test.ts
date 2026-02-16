@@ -740,6 +740,77 @@ describe("runMessageAction card-only send behavior", () => {
   });
 });
 
+describe("runMessageAction components parsing", () => {
+  const handleAction = vi.fn(async ({ params }: { params: Record<string, unknown> }) =>
+    jsonResult({
+      ok: true,
+      components: params.components ?? null,
+    }),
+  );
+
+  const componentsPlugin: ChannelPlugin = {
+    id: "discord",
+    meta: {
+      id: "discord",
+      label: "Discord",
+      selectionLabel: "Discord",
+      docsPath: "/channels/discord",
+      blurb: "Discord components send test plugin.",
+    },
+    capabilities: { chatTypes: ["direct"] },
+    config: {
+      listAccountIds: () => ["default"],
+      resolveAccount: () => ({}),
+      isConfigured: () => true,
+    },
+    actions: {
+      listActions: () => ["send"],
+      supportsAction: ({ action }) => action === "send",
+      handleAction,
+    },
+  };
+
+  beforeEach(() => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "discord",
+          source: "test",
+          plugin: componentsPlugin,
+        },
+      ]),
+    );
+    handleAction.mockClear();
+  });
+
+  afterEach(() => {
+    setActivePluginRegistry(createTestRegistry([]));
+    vi.clearAllMocks();
+  });
+
+  it("parses components JSON strings before plugin dispatch", async () => {
+    const components = {
+      text: "hello",
+      buttons: [{ label: "A", customId: "a" }],
+    };
+    const result = await runMessageAction({
+      cfg: {} as OpenClawConfig,
+      action: "send",
+      params: {
+        channel: "discord",
+        target: "channel:123",
+        message: "hi",
+        components: JSON.stringify(components),
+      },
+      dryRun: false,
+    });
+
+    expect(result.kind).toBe("send");
+    expect(handleAction).toHaveBeenCalled();
+    expect(result.payload).toMatchObject({ ok: true, components });
+  });
+});
+
 describe("runMessageAction accountId defaults", () => {
   const handleAction = vi.fn(async () => jsonResult({ ok: true }));
   const accountPlugin: ChannelPlugin = {
