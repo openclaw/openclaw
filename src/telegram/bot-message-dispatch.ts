@@ -347,9 +347,8 @@ export const dispatchTelegramMessage = async ({
       },
     }));
   } finally {
-    if (!finalizedViaPreviewMessage) {
-      await draftStream?.clear();
-    }
+    // Only stop the stream here; clear after all delivery attempts (including fallback)
+    // to avoid race condition where preview message is deleted before final message is sent.
     draftStream?.stop();
   }
   let sentFallback = false;
@@ -370,6 +369,12 @@ export const dispatchTelegramMessage = async ({
       replyQuoteText,
     });
     sentFallback = result.delivered;
+  }
+
+  // Clear draft stream after all delivery attempts (including potential fallback).
+  // This ensures we don't delete the preview message before the final message is sent.
+  if (!finalizedViaPreviewMessage) {
+    await draftStream?.clear();
   }
 
   const hasFinalResponse = queuedFinal || sentFallback;
