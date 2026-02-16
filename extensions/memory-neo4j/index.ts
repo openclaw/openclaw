@@ -32,7 +32,6 @@ import { isSemanticDuplicate, rateImportance } from "./extractor.js";
 import { extractUserMessages, extractAssistantMessages } from "./message-utils.js";
 import { Neo4jMemoryClient } from "./neo4j-client.js";
 import { hybridSearch } from "./search.js";
-import { runSleepCycle } from "./sleep-cycle.js";
 
 // ============================================================================
 // Plugin Definition
@@ -386,9 +385,6 @@ const memoryNeo4jPlugin = {
     const sessionLastSeen = new Map<string, number>();
     let lastTtlSweep = Date.now();
 
-    // Auto sleep cycle state
-    let lastSleepCycleAt = 0;
-    let sleepCycleRunning = false;
     const sleepAbortController = new AbortController();
 
     /** Evict stale entries from session tracking maps older than SESSION_TTL_MS. */
@@ -728,36 +724,6 @@ const memoryNeo4jPlugin = {
           extractionConfig,
           api.logger,
         );
-
-        // Auto sleep cycle: fire-and-forget if interval has elapsed
-        if (
-          cfg.sleepCycle.auto &&
-          !sleepCycleRunning &&
-          Date.now() - lastSleepCycleAt >= cfg.sleepCycle.autoIntervalMs
-        ) {
-          sleepCycleRunning = true;
-          void (async () => {
-            try {
-              api.logger.info("memory-neo4j: [auto-sleep] starting background sleep cycle");
-              const t0 = Date.now();
-              const result = await runSleepCycle(db, embeddings, extractionConfig, api.logger, {
-                abortSignal: sleepAbortController.signal,
-                decayCurves: Object.keys(cfg.decayCurves).length > 0 ? cfg.decayCurves : undefined,
-              });
-              lastSleepCycleAt = Date.now();
-              api.logger.info(
-                `memory-neo4j: [auto-sleep] complete in ${((Date.now() - t0) / 1000).toFixed(1)}s` +
-                  ` — dedup=${result.dedup.memoriesMerged}, extracted=${result.extraction.succeeded},` +
-                  ` decayed=${result.decay.memoriesPruned}, credentials=${result.credentialScan.credentialsFound}` +
-                  (result.aborted ? " (aborted)" : ""),
-              );
-            } catch (err) {
-              api.logger.warn(`memory-neo4j: [auto-sleep] failed: ${String(err)}`);
-            } finally {
-              sleepCycleRunning = false;
-            }
-          })();
-        }
       });
     }
 

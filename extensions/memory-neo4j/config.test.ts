@@ -474,14 +474,6 @@ describe("memoryNeo4jConfigSchema.parse", () => {
       expect(config.sleepCycle.auto).toBe(true);
     });
 
-    it("should default sleepCycle.autoIntervalMs to 6 hours (21600000)", () => {
-      const config = memoryNeo4jConfigSchema.parse({
-        neo4j: { uri: "bolt://localhost:7687", password: "" },
-        embedding: { provider: "ollama" },
-      });
-      expect(config.sleepCycle.autoIntervalMs).toBe(21600000);
-    });
-
     it("should respect explicit sleepCycle.auto = false", () => {
       const config = memoryNeo4jConfigSchema.parse({
         neo4j: { uri: "bolt://localhost:7687", password: "" },
@@ -491,33 +483,13 @@ describe("memoryNeo4jConfigSchema.parse", () => {
       expect(config.sleepCycle.auto).toBe(false);
     });
 
-    it("should respect explicit sleepCycle.autoIntervalMs", () => {
+    it("should still accept autoIntervalMs without error (backwards compat)", () => {
       const config = memoryNeo4jConfigSchema.parse({
         neo4j: { uri: "bolt://localhost:7687", password: "" },
         embedding: { provider: "ollama" },
         sleepCycle: { autoIntervalMs: 3600000 },
       });
-      expect(config.sleepCycle.autoIntervalMs).toBe(3600000);
-    });
-
-    it("should throw when sleepCycle.autoIntervalMs is not positive", () => {
-      expect(() =>
-        memoryNeo4jConfigSchema.parse({
-          neo4j: { uri: "bolt://localhost:7687", password: "" },
-          embedding: { provider: "ollama" },
-          sleepCycle: { autoIntervalMs: 0 },
-        }),
-      ).toThrow("sleepCycle.autoIntervalMs must be positive");
-    });
-
-    it("should throw when sleepCycle.autoIntervalMs is negative", () => {
-      expect(() =>
-        memoryNeo4jConfigSchema.parse({
-          neo4j: { uri: "bolt://localhost:7687", password: "" },
-          embedding: { provider: "ollama" },
-          sleepCycle: { autoIntervalMs: -1000 },
-        }),
-      ).toThrow("sleepCycle.autoIntervalMs must be positive");
+      expect(config.sleepCycle.auto).toBe(true);
     });
 
     it("should reject unknown sleepCycle keys", () => {

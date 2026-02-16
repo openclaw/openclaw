@@ -64,7 +64,6 @@ export type MemoryNeo4jConfig = {
   decayCurves: Record<string, { halfLifeDays: number }>;
   sleepCycle: {
     auto: boolean;
-    autoIntervalMs: number;
   };
 };
 
@@ -359,15 +358,6 @@ export const memoryNeo4jConfigSchema = {
     const sleepCycleRaw = cfg.sleepCycle as Record<string, unknown> | undefined;
     assertAllowedKeys(sleepCycleRaw ?? {}, ["auto", "autoIntervalMs"], "sleepCycle config");
     const sleepCycleAuto = sleepCycleRaw?.auto !== false; // enabled by default
-    const sleepCycleAutoIntervalMs =
-      typeof sleepCycleRaw?.autoIntervalMs === "number"
-        ? sleepCycleRaw.autoIntervalMs
-        : 6 * 60 * 60 * 1000; // 6 hours
-    if (sleepCycleAutoIntervalMs <= 0) {
-      throw new Error(
-        `sleepCycle.autoIntervalMs must be positive, got: ${sleepCycleAutoIntervalMs}`,
-      );
-    }
 
     return {
       neo4j: {
@@ -401,7 +391,6 @@ export const memoryNeo4jConfigSchema = {
       decayCurves,
       sleepCycle: {
         auto: sleepCycleAuto,
-        autoIntervalMs: sleepCycleAutoIntervalMs,
       },
     };
   },

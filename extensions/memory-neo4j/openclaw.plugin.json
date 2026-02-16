@@ -82,11 +82,7 @@
     },
     "sleepCycle.auto": {
       "label": "Auto Sleep Cycle",
-      "help": "Automatically run memory consolidation (dedup, extraction, decay) in the background (default: on)"
-    },
-    "sleepCycle.autoIntervalMs": {
-      "label": "Sleep Cycle Interval (ms)",
-      "help": "Minimum time between automatic sleep cycles (default: 6 hours = 21600000)"
+      "help": "Automatically run memory consolidation (dedup, extraction, decay) daily at 3:00 AM local time (default: on)"
     }
   },
   "configSchema": {
@@ -201,8 +197,7 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "auto": { "type": "boolean" },
-          "autoIntervalMs": { "type": "number", "minimum": 60000 }
+          "auto": { "type": "boolean" }
         }
       }
     },
