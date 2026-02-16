@@ -78,9 +78,10 @@ export async function getReplyFromConfig(
 
   // Merge per-agent config (e.g. thinkingDefault) with global defaults.
   const perAgentConfig = resolveAgentConfig(cfg, agentId);
-  const agentCfg = perAgentConfig?.thinkingDefault
-    ? { ...cfg.agents?.defaults, thinkingDefault: perAgentConfig.thinkingDefault }
-    : cfg.agents?.defaults;
+  const agentCfg =
+    perAgentConfig?.thinkingDefault != null
+      ? { ...cfg.agents?.defaults, thinkingDefault: perAgentConfig.thinkingDefault }
+      : cfg.agents?.defaults;
 
   const sessionCfg = cfg.session;
   const { defaultProvider, defaultModel, aliasIndex } = resolveDefaultModel({
