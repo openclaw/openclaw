@@ -24,6 +24,10 @@ function parseLimit(value: unknown): number | null {
   if (!raw) {
     return null;
   }
+  // Require full digit string (no mixed alphanumeric like "100abc", no decimals)
+  if (!/^\d+$/.test(raw)) {
+    return null;
+  }
   const parsed = Number.parseInt(raw, 10);
   if (!Number.isFinite(parsed) || parsed <= 0) {
     return null;
