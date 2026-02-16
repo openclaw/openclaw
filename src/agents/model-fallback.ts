@@ -219,12 +219,47 @@ function resolveFallbackCandidates(params: {
 }
 
 const lastProbeAttempt = new Map<string, number>();
-const MIN_PROBE_INTERVAL_MS = 30_000; // 30 seconds between probes per provider
+const MIN_PROBE_INTERVAL_MS = 30_000; // 30 seconds between probes per key
+const PROBE_MARGIN_MS = 2 * 60 * 1000;
+const PROBE_SCOPE_DELIMITER = "::";
+
+function resolveProbeThrottleKey(provider: string, agentDir?: string): string {
+  const scope = String(agentDir ?? "").trim();
+  return scope ? `${scope}${PROBE_SCOPE_DELIMITER}${provider}` : provider;
+}
+
+function shouldProbePrimaryDuringCooldown(params: {
+  isPrimary: boolean;
+  hasFallbackCandidates: boolean;
+  now: number;
+  throttleKey: string;
+  authStore: ReturnType<typeof ensureAuthProfileStore>;
+  profileIds: string[];
+}): boolean {
+  if (!params.isPrimary || !params.hasFallbackCandidates) {
+    return false;
+  }
+
+  const lastProbe = lastProbeAttempt.get(params.throttleKey) ?? 0;
+  if (params.now - lastProbe < MIN_PROBE_INTERVAL_MS) {
+    return false;
+  }
+
+  const soonest = getSoonestCooldownExpiry(params.authStore, params.profileIds);
+  if (soonest === null || !Number.isFinite(soonest)) {
+    return true;
+  }
+
+  // Probe when cooldown already expired or within the configured margin.
+  return params.now >= soonest - PROBE_MARGIN_MS;
+}
 
 /** @internal – exposed for unit tests only */
 export const _probeThrottleInternals = {
   lastProbeAttempt,
   MIN_PROBE_INTERVAL_MS,
+  PROBE_MARGIN_MS,
+  resolveProbeThrottleKey,
 } as const;
 
 export async function runWithModelFallback<T>(params: {
@@ -264,27 +299,18 @@ export async function runWithModelFallback<T>(params: {
       if (profileIds.length > 0 && !isAnyProfileAvailable) {
         // All profiles for this provider are in cooldown.
         // For the primary model (i === 0), probe it if the soonest cooldown
-        // expiry is close (within 2 minutes) or already past. This avoids
-        // staying on a fallback model long after the rate-limit window clears
-        // when exponential backoff cooldowns exceed the actual provider limit.
-        const isPrimary = i === 0;
-        const shouldProbe =
-          isPrimary &&
-          hasFallbackCandidates &&
-          (() => {
-            const lastProbe = lastProbeAttempt.get(candidate.provider) ?? 0;
-            if (Date.now() - lastProbe < MIN_PROBE_INTERVAL_MS) {
-              return false; // throttled
-            }
-            const soonest = getSoonestCooldownExpiry(authStore, profileIds);
-            if (soonest === null || !Number.isFinite(soonest)) {
-              return true;
-            }
-            const now = Date.now();
-            // Probe when cooldown already expired or within 2 min of expiry
-            const PROBE_MARGIN_MS = 2 * 60 * 1000;
-            return now >= soonest - PROBE_MARGIN_MS;
-          })();
+        // expiry is close or already past. This avoids staying on a fallback
+        // model long after the real rate-limit window clears.
+        const now = Date.now();
+        const probeThrottleKey = resolveProbeThrottleKey(candidate.provider, params.agentDir);
+        const shouldProbe = shouldProbePrimaryDuringCooldown({
+          isPrimary: i === 0,
+          hasFallbackCandidates,
+          now,
+          throttleKey: probeThrottleKey,
+          authStore,
+          profileIds,
+        });
         if (!shouldProbe) {
           // Skip without attempting
           attempts.push({
@@ -298,7 +324,7 @@ export async function runWithModelFallback<T>(params: {
         // Primary model probe: attempt it despite cooldown to detect recovery.
         // If it fails, the error is caught below and we fall through to the
         // next candidate as usual.
-        lastProbeAttempt.set(candidate.provider, Date.now());
+        lastProbeAttempt.set(probeThrottleKey, now);
       }
     }
     try {

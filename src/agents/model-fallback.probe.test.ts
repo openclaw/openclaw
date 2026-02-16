@@ -284,42 +284,6 @@ describe("runWithModelFallback – probe logic", () => {
     expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini");
   });
 
-  it("single candidate (no fallbacks) → no probe, normal skip behavior", async () => {
-    const cfg = makeCfg({
-      agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-4.1-mini",
-            fallbacks: [], // no fallbacks
-          },
-        },
-      },
-    } as Partial<OpenClawConfig>);
-
-    // Cooldown expires within probe margin
-    const almostExpired = NOW + 30 * 1000;
-    mockedGetSoonestCooldownExpiry.mockReturnValue(almostExpired);
-
-    const run = vi.fn().mockResolvedValue("should-not-probe");
-
-    // With single candidate + hasFallbackCandidates === false,
-    // shouldProbe is false → skip with rate_limit
-    await expect(
-      runWithModelFallback({
-        cfg,
-        provider: "openai",
-        model: "gpt-4.1-mini",
-        fallbacksOverride: [],
-        run,
-      }),
-    ).rejects.toThrow();
-
-    // run should still be called once (single candidate, no fallbacks = try it directly?
-    // Actually with all profiles in cooldown and no fallback candidates,
-    // it skips the primary and throws "all candidates exhausted"
-    // Let's verify the attempt shows rate_limit
-  });
-
   it("single candidate skips with rate_limit and exhausts candidates", async () => {
     const cfg = makeCfg({
       agents: {
@@ -332,27 +296,48 @@ describe("runWithModelFallback – probe logic", () => {
       },
     } as Partial<OpenClawConfig>);
 
-    // Cooldown within probe margin — but probe only applies when hasFallbackCandidates
     const almostExpired = NOW + 30 * 1000;
     mockedGetSoonestCooldownExpiry.mockReturnValue(almostExpired);
 
     const run = vi.fn().mockResolvedValue("unreachable");
 
-    try {
-      await runWithModelFallback({
+    await expect(
+      runWithModelFallback({
         cfg,
         provider: "openai",
         model: "gpt-4.1-mini",
         fallbacksOverride: [],
         run,
-      });
-      // Should not reach here
-      expect.unreachable("should have thrown");
-    } catch {
-      // With no fallbacks and all profiles in cooldown,
-      // shouldProbe = isPrimary && hasFallbackCandidates(false) && ... = false
-      // So it skips, then exhausts all candidates
-      expect(run).not.toHaveBeenCalled();
-    }
+      }),
+    ).rejects.toThrow("All models failed");
+
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("scopes probe throttling by agentDir to avoid cross-agent suppression", async () => {
+    const cfg = makeCfg();
+    const almostExpired = NOW + 30 * 1000;
+    mockedGetSoonestCooldownExpiry.mockReturnValue(almostExpired);
+
+    const run = vi.fn().mockResolvedValue("probed-ok");
+
+    await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      agentDir: "/tmp/agent-a",
+      run,
+    });
+
+    await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      agentDir: "/tmp/agent-b",
+      run,
+    });
+
+    expect(run).toHaveBeenNthCalledWith(1, "openai", "gpt-4.1-mini");
+    expect(run).toHaveBeenNthCalledWith(2, "openai", "gpt-4.1-mini");
   });
 });
