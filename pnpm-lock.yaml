@@ -161,8 +161,8 @@ importers:
         specifier: 0.1.7-alpha.2
         version: 0.1.7-alpha.2
       tar:
-        specifier: 7.5.7
-        version: 7.5.7
+        specifier: 7.5.9
+        version: 7.5.9
       tslog:
         specifier: ^4.10.2
         version: 4.10.2
