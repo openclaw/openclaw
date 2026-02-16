@@ -7,6 +7,7 @@ import {
   resolveControlUiDistIndexPathForRoot,
 } from "./control-ui-assets.js";
 import { detectPackageManager as detectPackageManagerImpl } from "./detect-package-manager.js";
+import { readPackageName, readPackageVersion } from "./package-json.js";
 import { trimLogTail } from "./restart-sentinel.js";
 import {
   channelToNpmTag,
@@ -129,27 +130,6 @@ function buildStartDirs(opts: UpdateRunnerOptions): string[] {
     dirs.push(proc);
   }
   return Array.from(new Set(dirs));
-}
-
-async function readPackageVersion(root: string) {
-  try {
-    const raw = await fs.readFile(path.join(root, "package.json"), "utf-8");
-    const parsed = JSON.parse(raw) as { version?: string };
-    return typeof parsed?.version === "string" ? parsed.version : null;
-  } catch {
-    return null;
-  }
-}
-
-async function readPackageName(root: string) {
-  try {
-    const raw = await fs.readFile(path.join(root, "package.json"), "utf-8");
-    const parsed = JSON.parse(raw) as { name?: string };
-    const name = parsed?.name?.trim();
-    return name ? name : null;
-  } catch {
-    return null;
-  }
 }
 
 async function readBranchName(
