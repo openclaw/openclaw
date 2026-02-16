@@ -694,19 +694,37 @@ export async function handleFeishuMessage(params: {
     const feishuFrom = `feishu:${ctx.senderOpenId}`;
     const feishuTo = isGroup ? `chat:${ctx.chatId}` : `user:${ctx.senderOpenId}`;
 
-    // Resolve peer ID for session routing
-    // When topicSessionMode is enabled, messages within a topic (identified by root_id)
-    // get a separate session from the main group chat.
+    // Resolve peer ID for session routing.
+    // Default is one session per group chat; this can be customized with groupSessionScope.
     let peerId = isGroup ? ctx.chatId : ctx.senderOpenId;
-    if (isGroup && ctx.rootId) {
+    if (isGroup) {
       const groupConfig = resolveFeishuGroupConfig({ cfg: feishuCfg, groupId: ctx.chatId });
-      const topicSessionMode =
+      const legacyTopicSessionMode =
         groupConfig?.topicSessionMode ?? feishuCfg?.topicSessionMode ?? "disabled";
-      if (topicSessionMode === "enabled") {
-        // Use chatId:topic:rootId as peer ID for topic-scoped sessions
-        peerId = `${ctx.chatId}:topic:${ctx.rootId}`;
-        log(`feishu[${account.accountId}]: topic session isolation enabled, peer=${peerId}`);
+      const groupSessionScope =
+        groupConfig?.groupSessionScope ??
+        feishuCfg?.groupSessionScope ??
+        (legacyTopicSessionMode === "enabled" ? "group_topic" : "group");
+
+      switch (groupSessionScope) {
+        case "group_sender":
+          peerId = `${ctx.chatId}:sender:${ctx.senderOpenId}`;
+          break;
+        case "group_topic":
+          peerId = ctx.rootId ? `${ctx.chatId}:topic:${ctx.rootId}` : ctx.chatId;
+          break;
+        case "group_topic_sender":
+          peerId = ctx.rootId
+            ? `${ctx.chatId}:topic:${ctx.rootId}:sender:${ctx.senderOpenId}`
+            : `${ctx.chatId}:sender:${ctx.senderOpenId}`;
+          break;
+        case "group":
+        default:
+          peerId = ctx.chatId;
+          break;
       }
+
+      log(`feishu[${account.accountId}]: group session scope=${groupSessionScope}, peer=${peerId}`);
     }
 
     let route = core.channel.routing.resolveAgentRoute({
