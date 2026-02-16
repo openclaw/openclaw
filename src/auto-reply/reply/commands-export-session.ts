@@ -25,28 +25,8 @@ import { loadSessionStore } from "../../config/sessions/store.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { buildTtsSystemPromptHint } from "../../tts/tts.js";
 
-// Find pi-coding-agent export-html templates by traversing node_modules
-function findPiExportDir(): string {
-  // Start from this file's directory and look for node_modules
-  const thisDir = path.dirname(fileURLToPath(import.meta.url));
-  let current = thisDir;
-  while (current !== path.dirname(current)) {
-    const candidate = path.join(
-      current,
-      "node_modules",
-      "@mariozechner",
-      "pi-coding-agent",
-      "dist",
-      "core",
-      "export-html",
-    );
-    if (fs.existsSync(candidate)) {
-      return candidate;
-    }
-    current = path.dirname(current);
-  }
-  throw new Error("Could not find @mariozechner/pi-coding-agent export-html templates");
-}
+// Export HTML templates are bundled with this module
+const EXPORT_HTML_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "export-html");
 
 interface SessionData {
   header: SessionHeader | null;
@@ -56,17 +36,8 @@ interface SessionData {
   tools?: Array<{ name: string; description?: string; parameters?: unknown }>;
 }
 
-let cachedExportDir: string | null = null;
-
-function getExportDir(): string {
-  if (!cachedExportDir) {
-    cachedExportDir = findPiExportDir();
-  }
-  return cachedExportDir;
-}
-
 function loadTemplate(fileName: string): string {
-  return fs.readFileSync(path.join(getExportDir(), fileName), "utf-8");
+  return fs.readFileSync(path.join(EXPORT_HTML_DIR, fileName), "utf-8");
 }
 
 function generateHtml(sessionData: SessionData): string {
