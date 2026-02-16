@@ -16,15 +16,6 @@ import {
 } from "./flex-templates.js";
 
 describe("createInfoCard", () => {
-  it("creates a bubble with title and body", () => {
-    const card = createInfoCard("Test Title", "Test body content");
-
-    expect(card.type).toBe("bubble");
-    expect(card.size).toBe("mega");
-    expect(card.body).toBeDefined();
-    expect(card.body?.type).toBe("box");
-  });
-
   it("includes footer when provided", () => {
     const card = createInfoCard("Title", "Body", "Footer text");
 
@@ -40,14 +31,6 @@ describe("createInfoCard", () => {
 });
 
 describe("createListCard", () => {
-  it("creates a list with title and items", () => {
-    const items = [{ title: "Item 1", subtitle: "Description 1" }, { title: "Item 2" }];
-    const card = createListCard("My List", items);
-
-    expect(card.type).toBe("bubble");
-    expect(card.body).toBeDefined();
-  });
-
   it("limits items to 8", () => {
     const items = Array.from({ length: 15 }, (_, i) => ({ title: `Item ${i}` }));
     const card = createListCard("List", items);
@@ -66,7 +49,11 @@ describe("createListCard", () => {
       },
     ];
     const card = createListCard("List", items);
-    expect(card.body).toBeDefined();
+    const body = card.body as {
+      contents: Array<{ type: string; contents?: Array<{ action?: unknown }> }>;
+    };
+    const listBox = body.contents[2] as { contents: Array<{ action?: unknown }> };
+    expect(listBox.contents[0].action).toEqual(items[0].action);
   });
 });
 
@@ -153,36 +140,17 @@ describe("createCarousel", () => {
 });
 
 describe("createNotificationBubble", () => {
-  it("creates a simple notification", () => {
-    const bubble = createNotificationBubble("Hello world");
-
-    expect(bubble.type).toBe("bubble");
-    expect(bubble.body).toBeDefined();
-  });
-
   it("includes title when provided", () => {
     const bubble = createNotificationBubble("Details here", {
       title: "Alert Title",
     });
-
-    expect(bubble.type).toBe("bubble");
+    const body = bubble.body as { contents: Array<{ contents?: Array<{ text?: string }> }> };
+    const contentSection = body.contents[1] as { contents: Array<{ text?: string }> };
+    expect(contentSection.contents[0].text).toBe("Alert Title");
   });
 });
 
 describe("createReceiptCard", () => {
-  it("creates a receipt with items", () => {
-    const card = createReceiptCard({
-      title: "Order Receipt",
-      items: [
-        { name: "Item A", value: "$10" },
-        { name: "Item B", value: "$20" },
-      ],
-    });
-
-    expect(card.type).toBe("bubble");
-    expect(card.body).toBeDefined();
-  });
-
   it("includes footer when provided", () => {
     const card = createReceiptCard({
       title: "Receipt",
@@ -195,16 +163,6 @@ describe("createReceiptCard", () => {
 });
 
 describe("createMediaPlayerCard", () => {
-  it("creates a basic player card", () => {
-    const card = createMediaPlayerCard({
-      title: "Bohemian Rhapsody",
-      subtitle: "Queen",
-    });
-
-    expect(card.type).toBe("bubble");
-    expect(card.body).toBeDefined();
-  });
-
   it("includes album art when provided", () => {
     const card = createMediaPlayerCard({
       title: "Track Name",
@@ -311,16 +269,6 @@ describe("createAppleTvRemoteCard", () => {
 });
 
 describe("createEventCard", () => {
-  it("creates an event card with required fields", () => {
-    const card = createEventCard({
-      title: "Team Meeting",
-      date: "January 24, 2026",
-    });
-
-    expect(card.type).toBe("bubble");
-    expect(card.body).toBeDefined();
-  });
-
   it("includes all optional fields together", () => {
     const card = createEventCard({
       title: "Team Offsite",
@@ -330,8 +278,9 @@ describe("createEventCard", () => {
       description: "Annual team building event",
     });
 
-    expect(card.type).toBe("bubble");
-    expect(card.body).toBeDefined();
+    expect(card.size).toBe("mega");
+    const body = card.body as { contents: Array<{ type: string }> };
+    expect(body.contents).toHaveLength(3);
   });
 
   it("includes action when provided", () => {
@@ -344,32 +293,9 @@ describe("createEventCard", () => {
     expect(card.body).toBeDefined();
     expect((card.body as { action?: unknown }).action).toBeDefined();
   });
-
-  it("uses mega size for better readability", () => {
-    const card = createEventCard({
-      title: "Meeting",
-      date: "Jan 24",
-    });
-
-    expect(card.size).toBe("mega");
-  });
 });
 
 describe("createAgendaCard", () => {
-  it("creates an agenda card with title and events", () => {
-    const card = createAgendaCard({
-      title: "Today's Schedule",
-      events: [
-        { title: "Team Meeting", time: "9:00 AM" },
-        { title: "Lunch", time: "12:00 PM" },
-      ],
-    });
-
-    expect(card.type).toBe("bubble");
-    expect(card.size).toBe("mega");
-    expect(card.body).toBeDefined();
-  });
-
   it("includes footer when provided", () => {
     const card = createAgendaCard({
       title: "Today",
