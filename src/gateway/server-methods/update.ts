@@ -9,24 +9,12 @@ import {
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import { runGatewayUpdate } from "../../infra/update-runner.js";
-import {
-  ErrorCodes,
-  errorShape,
-  formatValidationErrors,
-  validateUpdateRunParams,
-} from "../protocol/index.js";
+import { validateUpdateRunParams } from "../protocol/index.js";
+import { assertValidParams } from "./validation.js";
 
 export const updateHandlers: GatewayRequestHandlers = {
   "update.run": async ({ params, respond }) => {
-    if (!validateUpdateRunParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid update.run params: ${formatValidationErrors(validateUpdateRunParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateUpdateRunParams, "update.run", respond)) {
       return;
     }
     const sessionKey =
