@@ -254,10 +254,15 @@ async function requestOpenAiVerification(params: {
   const resolvedUrl = isAzureUrl(params.baseUrl)
     ? transformAzureUrl(params.baseUrl, params.modelId)
     : params.baseUrl;
-  const endpoint = new URL(
+  const endpointUrl = new URL(
     "chat/completions",
     resolvedUrl.endsWith("/") ? resolvedUrl : `${resolvedUrl}/`,
-  ).href;
+  );
+  // Azure requires api-version query parameter
+  if (isAzureUrl(params.baseUrl)) {
+    endpointUrl.searchParams.set("api-version", "2024-10-21");
+  }
+  const endpoint = endpointUrl.href;
   try {
     const res = await fetchWithTimeout(
       endpoint,
@@ -290,8 +295,15 @@ async function requestAnthropicVerification(params: {
   const resolvedUrl = isAzureUrl(params.baseUrl)
     ? transformAzureUrl(params.baseUrl, params.modelId)
     : params.baseUrl;
-  const endpoint = new URL("messages", resolvedUrl.endsWith("/") ? resolvedUrl : `${resolvedUrl}/`)
-    .href;
+  const endpointUrl = new URL(
+    "messages",
+    resolvedUrl.endsWith("/") ? resolvedUrl : `${resolvedUrl}/`,
+  );
+  // Azure requires api-version query parameter
+  if (isAzureUrl(params.baseUrl)) {
+    endpointUrl.searchParams.set("api-version", "2024-10-21");
+  }
+  const endpoint = endpointUrl.href;
   try {
     const res = await fetchWithTimeout(
       endpoint,
