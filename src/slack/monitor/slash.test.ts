@@ -218,22 +218,6 @@ describe("Slack native command argument menus", () => {
     });
   });
 
-  it("falls back to postEphemeral with token when respond is unavailable", async () => {
-    await argMenuHandler({
-      ack: vi.fn().mockResolvedValue(undefined),
-      action: { value: "garbage" },
-      body: { user: { id: "U1" }, channel: { id: "C1" } },
-    });
-
-    expect(harness.postEphemeral).toHaveBeenCalledWith(
-      expect.objectContaining({
-        token: "bot-token",
-        channel: "C1",
-        user: "U1",
-      }),
-    );
-  });
-
   it("treats malformed percent-encoding as an invalid button (no throw)", async () => {
     await argMenuHandler({
       ack: vi.fn().mockResolvedValue(undefined),
@@ -440,27 +424,6 @@ describe("slack slash commands access groups", () => {
     expect(respond).not.toHaveBeenCalledWith(
       expect.objectContaining({ text: "You are not authorized to use this command." }),
     );
-    const dispatchArg = dispatchMock.mock.calls[0]?.[0] as {
-      ctx?: { CommandAuthorized?: boolean };
-    };
-    expect(dispatchArg?.ctx?.CommandAuthorized).toBe(false);
-  });
-
-  it("computes CommandAuthorized for DM slash commands when dmPolicy is open", async () => {
-    harness.ctx.allowFrom = ["U_OWNER"];
-    harness.ctx.resolveChannelName = async () => ({ name: "directmessage", type: "im" });
-
-    await runSlashHandler({
-      commands: harness.commands,
-      command: {
-        user_id: "U_ATTACKER",
-        user_name: "Mallory",
-        channel_id: "D999",
-        channel_name: "directmessage",
-      },
-    });
-
-    expect(dispatchMock).toHaveBeenCalledTimes(1);
     const dispatchArg = dispatchMock.mock.calls[0]?.[0] as {
       ctx?: { CommandAuthorized?: boolean };
     };

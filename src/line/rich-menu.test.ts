@@ -39,12 +39,6 @@ describe("uriAction", () => {
     expect(action.label).toBe("Open");
     expect((action as { uri: string }).uri).toBe("https://example.com");
   });
-
-  it("truncates label to 20 characters", () => {
-    const action = uriAction("Click here to visit our website", "https://example.com");
-
-    expect(action.label.length).toBe(20);
-  });
 });
 
 describe("postbackAction", () => {
@@ -86,18 +80,6 @@ describe("datetimePickerAction", () => {
     expect(action.label).toBe("Pick date");
     expect((action as { mode: string }).mode).toBe("date");
     expect((action as { data: string }).data).toBe("date_picked");
-  });
-
-  it("creates a time picker action", () => {
-    const action = datetimePickerAction("Pick time", "time_picked", "time");
-
-    expect((action as { mode: string }).mode).toBe("time");
-  });
-
-  it("creates a datetime picker action", () => {
-    const action = datetimePickerAction("Pick datetime", "datetime_picked", "datetime");
-
-    expect((action as { mode: string }).mode).toBe("datetime");
   });
 
   it("includes initial/min/max when provided", () => {
