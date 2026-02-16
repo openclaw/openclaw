@@ -1,4 +1,5 @@
 import type { AllowlistMatch } from "../channels/allowlist-match.js";
+import { resolveAllowlistMatchCandidates } from "../channels/allowlist-match.js";
 
 export type NormalizedAllowFrom = {
   entries: string[];
@@ -93,14 +94,9 @@ export const resolveSenderAllowMatch = (params: {
   senderUsername?: string;
 }): AllowFromMatch => {
   const { allow, senderId } = params;
-  if (allow.hasWildcard) {
-    return { allowed: true, matchKey: "*", matchSource: "wildcard" };
-  }
-  if (!allow.hasEntries) {
-    return { allowed: false };
-  }
-  if (senderId && allow.entries.includes(senderId)) {
-    return { allowed: true, matchKey: senderId, matchSource: "id" };
-  }
-  return { allowed: false };
+  const allowList = allow.hasWildcard ? ["*", ...allow.entries] : allow.entries;
+  return resolveAllowlistMatchCandidates({
+    allowList,
+    candidates: [{ value: senderId, source: "id" }],
+  });
 };
