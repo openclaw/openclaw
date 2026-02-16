@@ -52,6 +52,80 @@ describe("discord message actions", () => {
 
     expect(actions).not.toContain("channel-create");
   });
+
+  it("lists moderation actions when per-account config enables them", () => {
+    const cfg = {
+      channels: {
+        discord: {
+          accounts: {
+            vime: { token: "d1", actions: { moderation: true } },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const actions = discordMessageActions.listActions?.({ cfg }) ?? [];
+
+    expect(actions).toContain("timeout");
+    expect(actions).toContain("kick");
+    expect(actions).toContain("ban");
+  });
+
+  it("lists moderation when one account enables and another omits", () => {
+    const cfg = {
+      channels: {
+        discord: {
+          accounts: {
+            ops: { token: "d1", actions: { moderation: true } },
+            chat: { token: "d2" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const actions = discordMessageActions.listActions?.({ cfg }) ?? [];
+
+    expect(actions).toContain("timeout");
+    expect(actions).toContain("kick");
+    expect(actions).toContain("ban");
+  });
+
+  it("omits moderation when all accounts omit it", () => {
+    const cfg = {
+      channels: {
+        discord: {
+          accounts: {
+            ops: { token: "d1" },
+            chat: { token: "d2" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const actions = discordMessageActions.listActions?.({ cfg }) ?? [];
+
+    // moderation defaults to false, so without explicit true it stays hidden
+    expect(actions).not.toContain("timeout");
+    expect(actions).not.toContain("kick");
+    expect(actions).not.toContain("ban");
+  });
+
+  it("shallow merge: account actions object replaces base entirely", () => {
+    // Base has reactions: false, account has actions: { moderation: true }
+    // Shallow merge replaces the whole actions object, so reactions defaults to true
+    const cfg = {
+      channels: {
+        discord: {
+          actions: { reactions: false },
+          accounts: {
+            vime: { token: "d1", actions: { moderation: true } },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const actions = discordMessageActions.listActions?.({ cfg }) ?? [];
+
+    // vime's actions override replaces entire actions object; reactions defaults to true
+    expect(actions).toContain("react");
+    expect(actions).toContain("timeout");
+  });
 });
 
 describe("handleDiscordMessageAction", () => {
@@ -323,6 +397,39 @@ describe("telegramMessageActions", () => {
     ).rejects.toThrow();
 
     expect(handleTelegramAction).not.toHaveBeenCalled();
+  });
+
+  it("lists sticker actions when per-account config enables them", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          accounts: {
+            media: { botToken: "tok", actions: { sticker: true } },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const actions = telegramMessageActions.listActions({ cfg });
+
+    expect(actions).toContain("sticker");
+    expect(actions).toContain("sticker-search");
+  });
+
+  it("omits sticker when all accounts omit it", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          accounts: {
+            a: { botToken: "tok1" },
+            b: { botToken: "tok2" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const actions = telegramMessageActions.listActions({ cfg });
+
+    expect(actions).not.toContain("sticker");
+    expect(actions).not.toContain("sticker-search");
   });
 
   it("accepts numeric messageId and channelId for reactions", async () => {

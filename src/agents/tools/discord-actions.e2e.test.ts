@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import type { DiscordActionConfig } from "../../config/config.js";
+import type { DiscordActionConfig, OpenClawConfig } from "../../config/config.js";
 import { handleDiscordGuildAction } from "./discord-actions-guild.js";
 import { handleDiscordMessagingAction } from "./discord-actions-messaging.js";
 import { handleDiscordModerationAction } from "./discord-actions-moderation.js";
+import { handleDiscordAction } from "./discord-actions.js";
 
 const createChannelDiscord = vi.fn(async () => ({
   id: "new-channel",
@@ -594,5 +595,67 @@ describe("handleDiscordModerationAction", () => {
       }),
       { accountId: "ops" },
     );
+  });
+});
+
+describe("handleDiscordAction per-account gating", () => {
+  it("allows moderation when account config enables it", async () => {
+    const cfg = {
+      channels: {
+        discord: {
+          accounts: {
+            ops: { token: "tok-ops", actions: { moderation: true } },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await handleDiscordAction(
+      { action: "timeout", guildId: "G1", userId: "U1", durationMinutes: 5, accountId: "ops" },
+      cfg,
+    );
+    expect(timeoutMemberDiscord).toHaveBeenCalledWith(
+      expect.objectContaining({ guildId: "G1", userId: "U1" }),
+      { accountId: "ops" },
+    );
+  });
+
+  it("blocks moderation when account omits it", async () => {
+    const cfg = {
+      channels: {
+        discord: {
+          accounts: {
+            chat: { token: "tok-chat" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      handleDiscordAction(
+        { action: "timeout", guildId: "G1", userId: "U1", durationMinutes: 5, accountId: "chat" },
+        cfg,
+      ),
+    ).rejects.toThrow(/Discord moderation is disabled/);
+  });
+
+  it("uses account-merged config, not top-level config", async () => {
+    // Top-level has no moderation, but the account does
+    const cfg = {
+      channels: {
+        discord: {
+          token: "tok-base",
+          accounts: {
+            ops: { token: "tok-ops", actions: { moderation: true } },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await handleDiscordAction(
+      { action: "kick", guildId: "G1", userId: "U1", accountId: "ops" },
+      cfg,
+    );
+    expect(kickMemberDiscord).toHaveBeenCalled();
   });
 });
