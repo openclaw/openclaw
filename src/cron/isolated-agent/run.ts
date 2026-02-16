@@ -149,10 +149,14 @@ export async function runCronIsolatedAgentTurn(params: {
     params.cfg.agents?.defaults,
     agentOverrideRest as Partial<AgentDefaultsConfig>,
   );
+  // Merge agent model override with defaults instead of replacing, so that
+  // `fallbacks` from `agents.defaults.model` are preserved when the agent
+  // (or its per-cron model pin) only specifies `primary`.
+  const existingModel = agentCfg.model && typeof agentCfg.model === "object" ? agentCfg.model : {};
   if (typeof overrideModel === "string") {
-    agentCfg.model = { primary: overrideModel };
+    agentCfg.model = { ...existingModel, primary: overrideModel };
   } else if (overrideModel) {
-    agentCfg.model = overrideModel;
+    agentCfg.model = { ...existingModel, ...overrideModel };
   }
   const cfgWithAgentDefaults: OpenClawConfig = {
     ...params.cfg,
