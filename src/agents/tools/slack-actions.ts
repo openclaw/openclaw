@@ -176,6 +176,8 @@ export async function handleSlackAction(
         const to = readStringParam(params, "to", { required: true });
         const content = readStringParam(params, "content", { required: true });
         const mediaUrl = readStringParam(params, "mediaUrl");
+        const replyBroadcast =
+          typeof params.replyBroadcast === "boolean" ? params.replyBroadcast : undefined;
         const threadTs = resolveThreadTsFromContext(
           readStringParam(params, "threadTs"),
           to,
@@ -185,6 +187,7 @@ export async function handleSlackAction(
           ...writeOpts,
           mediaUrl: mediaUrl ?? undefined,
           threadTs: threadTs ?? undefined,
+          replyBroadcast,
         });
 
         // Keep "first" mode consistent even when the agent explicitly provided

@@ -15,6 +15,7 @@ import {
   normalizeAccountId,
   normalizeSlackMessagingTarget,
   PAIRING_APPROVED_MESSAGE,
+  readBooleanParam,
   readNumberParam,
   readStringParam,
   resolveDefaultSlackAccountId,
@@ -247,6 +248,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
         const mediaUrl = readStringParam(params, "media", { trim: false });
         const threadId = readStringParam(params, "threadId");
         const replyTo = readStringParam(params, "replyTo");
+        const broadcast = readBooleanParam(params, "broadcast");
         return await getSlackRuntime().channel.slack.handleSlackAction(
           {
             action: "sendMessage",
@@ -255,6 +257,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
             mediaUrl: mediaUrl ?? undefined,
             accountId: accountId ?? undefined,
             threadTs: threadId ?? replyTo ?? undefined,
+            replyBroadcast: broadcast ?? undefined,
           },
           cfg,
           toolContext,

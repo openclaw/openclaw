@@ -41,6 +41,7 @@ type SlackSendOpts = {
   client?: WebClient;
   threadTs?: string;
   identity?: SlackSendIdentity;
+  replyBroadcast?: boolean;
 };
 
 function hasCustomIdentity(identity?: SlackSendIdentity): boolean {
@@ -78,12 +79,14 @@ async function postSlackMessageBestEffort(params: {
   channelId: string;
   text: string;
   threadTs?: string;
+  replyBroadcast?: boolean;
   identity?: SlackSendIdentity;
 }) {
   const basePayload = {
     channel: params.channelId,
     text: params.text,
     thread_ts: params.threadTs,
+    reply_broadcast: params.replyBroadcast,
   };
   try {
     // Slack Web API types model icon_url and icon_emoji as mutually exclusive.
@@ -272,6 +275,7 @@ export async function sendMessageSlack(
         channelId,
         text: chunk,
         threadTs: opts.threadTs,
+        replyBroadcast: opts.replyBroadcast,
         identity: opts.identity,
       });
       lastMessageId = response.ts ?? lastMessageId;
@@ -283,6 +287,7 @@ export async function sendMessageSlack(
         channelId,
         text: chunk,
         threadTs: opts.threadTs,
+        replyBroadcast: opts.replyBroadcast,
         identity: opts.identity,
       });
       lastMessageId = response.ts ?? lastMessageId;
