@@ -1,4 +1,4 @@
-import type { WebClient } from "@slack/web-api";
+import type { Block, KnownBlock, WebClient } from "@slack/web-api";
 import { loadConfig } from "../config/config.js";
 import { logVerbose } from "../globals.js";
 import { resolveSlackAccount } from "./accounts.js";
@@ -147,7 +147,11 @@ export async function listSlackReactions(
 export async function sendSlackMessage(
   to: string,
   content: string,
-  opts: SlackActionClientOpts & { mediaUrl?: string; threadTs?: string } = {},
+  opts: SlackActionClientOpts & {
+    mediaUrl?: string;
+    threadTs?: string;
+    blocks?: (Block | KnownBlock)[];
+  } = {},
 ) {
   return await sendMessageSlack(to, content, {
     accountId: opts.accountId,
@@ -155,6 +159,7 @@ export async function sendSlackMessage(
     mediaUrl: opts.mediaUrl,
     client: opts.client,
     threadTs: opts.threadTs,
+    blocks: opts.blocks,
   });
 }
 
