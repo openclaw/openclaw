@@ -285,7 +285,7 @@ function resolveDiscordForwardedMessagesText(message: Message): string {
   return forwardedBlocks.join("\n\n");
 }
 
-export function resolveDiscordMessageSnapshots(message: Message): DiscordMessageSnapshot[] {
+function resolveDiscordMessageSnapshots(message: Message): DiscordMessageSnapshot[] {
   const rawData = (message as { rawData?: { message_snapshots?: unknown } }).rawData;
   const snapshots =
     rawData?.message_snapshots ??
