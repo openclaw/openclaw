@@ -213,9 +213,9 @@ export const spixiPlugin: ChannelPlugin<ResolvedSpixiAccount> = {
           }
           log?.info(`[${account.accountId}] Received Friend Request from: ${sender}`);
 
-          // Check if in allowFrom
           const allowFrom = (config.allowFrom || []).map((a: string) => a.toLowerCase().trim());
-          if (sender && allowFrom.includes(sender.toLowerCase())) {
+          const isAllowed = allowFrom.includes("*") || (sender && allowFrom.includes(sender.toLowerCase()));
+          if (sender && isAllowed) {
             log?.info(
               `[${account.accountId}] Auto-accepting friend request from allowed sender: ${sender}`,
             );
