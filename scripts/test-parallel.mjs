@@ -27,8 +27,16 @@ const unitIsolatedFilesRaw = [
   "src/browser/server.agent-contract-form-layout-act-commands.test.ts",
   "src/browser/server.skips-default-maxchars-explicitly-set-zero.test.ts",
   "src/browser/server.auth-token-gates-http.test.ts",
-  "src/browser/server-context.remote-tab-ops.test.ts",
-  "src/browser/server-context.ensure-tab-available.prefers-last-target.test.ts",
+  // Keep this high-variance heavy file off the unit-fast critical path.
+  "src/auto-reply/reply.block-streaming.test.ts",
+  // Archive extraction/fixture-heavy suite; keep off unit-fast critical path.
+  "src/hooks/install.test.ts",
+  // Setup-heavy bot bootstrap suite.
+  "src/telegram/bot.create-telegram-bot.test.ts",
+  // Medium-heavy bot behavior suite; move off unit-fast critical path.
+  "src/telegram/bot.test.ts",
+  // Slack slash registration tests are setup-heavy and can bottleneck unit-fast.
+  "src/slack/monitor/slash.test.ts",
   // Uses process-level unhandledRejection listeners; keep it off vmForks to avoid cross-file leakage.
   "src/imessage/monitor.shutdown.unhandled-rejection.test.ts",
 ];
@@ -165,7 +173,7 @@ const defaultWorkerBudget =
             unit: Math.max(2, Math.min(8, Math.floor(localWorkers / 2))),
             unitIsolated: 1,
             extensions: Math.max(1, Math.min(4, Math.floor(localWorkers / 4))),
-            gateway: 1,
+            gateway: 2,
           };
 
 // Keep worker counts predictable for local runs; trim macOS CI workers to avoid worker crashes/OOM.

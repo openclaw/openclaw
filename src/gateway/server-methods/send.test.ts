@@ -46,6 +46,19 @@ const makeContext = (): GatewayRequestContext =>
     dedupe: new Map(),
   }) as unknown as GatewayRequestContext;
 
+async function runSend(params: Record<string, unknown>) {
+  const respond = vi.fn();
+  await sendHandlers.send({
+    params: params as never,
+    respond,
+    context: makeContext(),
+    req: { type: "req", id: "1", method: "send" },
+    client: null,
+    isWebchatConnect: () => false,
+  });
+  return { respond };
+}
+
 describe("gateway send mirroring", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -54,19 +67,11 @@ describe("gateway send mirroring", () => {
   it("accepts media-only sends without message", async () => {
     mocks.deliverOutboundPayloads.mockResolvedValue([{ messageId: "m-media", channel: "slack" }]);
 
-    const respond = vi.fn();
-    await sendHandlers.send({
-      params: {
-        to: "channel:C1",
-        mediaUrl: "https://example.com/a.png",
-        channel: "slack",
-        idempotencyKey: "idem-media-only",
-      },
-      respond,
-      context: makeContext(),
-      req: { type: "req", id: "1", method: "send" },
-      client: null,
-      isWebchatConnect: () => false,
+    const { respond } = await runSend({
+      to: "channel:C1",
+      mediaUrl: "https://example.com/a.png",
+      channel: "slack",
+      idempotencyKey: "idem-media-only",
     });
 
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
@@ -83,19 +88,11 @@ describe("gateway send mirroring", () => {
   });
 
   it("rejects empty sends when neither text nor media is present", async () => {
-    const respond = vi.fn();
-    await sendHandlers.send({
-      params: {
-        to: "channel:C1",
-        message: "   ",
-        channel: "slack",
-        idempotencyKey: "idem-empty",
-      },
-      respond,
-      context: makeContext(),
-      req: { type: "req", id: "1", method: "send" },
-      client: null,
-      isWebchatConnect: () => false,
+    const { respond } = await runSend({
+      to: "channel:C1",
+      message: "   ",
+      channel: "slack",
+      idempotencyKey: "idem-empty",
     });
 
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
@@ -109,19 +106,11 @@ describe("gateway send mirroring", () => {
   });
 
   it("returns actionable guidance when channel is internal webchat", async () => {
-    const respond = vi.fn();
-    await sendHandlers.send({
-      params: {
-        to: "x",
-        message: "hi",
-        channel: "webchat",
-        idempotencyKey: "idem-webchat",
-      },
-      respond,
-      context: makeContext(),
-      req: { type: "req", id: "1", method: "send" },
-      client: null,
-      isWebchatConnect: () => false,
+    const { respond } = await runSend({
+      to: "x",
+      message: "hi",
+      channel: "webchat",
+      idempotencyKey: "idem-webchat",
     });
 
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
@@ -144,20 +133,12 @@ describe("gateway send mirroring", () => {
   it("does not mirror when delivery returns no results", async () => {
     mocks.deliverOutboundPayloads.mockResolvedValue([]);
 
-    const respond = vi.fn();
-    await sendHandlers.send({
-      params: {
-        to: "channel:C1",
-        message: "hi",
-        channel: "slack",
-        idempotencyKey: "idem-1",
-        sessionKey: "agent:main:main",
-      },
-      respond,
-      context: makeContext(),
-      req: { type: "req", id: "1", method: "send" },
-      client: null,
-      isWebchatConnect: () => false,
+    await runSend({
+      to: "channel:C1",
+      message: "hi",
+      channel: "slack",
+      idempotencyKey: "idem-1",
+      sessionKey: "agent:main:main",
     });
 
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
@@ -172,21 +153,13 @@ describe("gateway send mirroring", () => {
   it("mirrors media filenames when delivery succeeds", async () => {
     mocks.deliverOutboundPayloads.mockResolvedValue([{ messageId: "m1", channel: "slack" }]);
 
-    const respond = vi.fn();
-    await sendHandlers.send({
-      params: {
-        to: "channel:C1",
-        message: "caption",
-        mediaUrl: "https://example.com/files/report.pdf?sig=1",
-        channel: "slack",
-        idempotencyKey: "idem-2",
-        sessionKey: "agent:main:main",
-      },
-      respond,
-      context: makeContext(),
-      req: { type: "req", id: "1", method: "send" },
-      client: null,
-      isWebchatConnect: () => false,
+    await runSend({
+      to: "channel:C1",
+      message: "caption",
+      mediaUrl: "https://example.com/files/report.pdf?sig=1",
+      channel: "slack",
+      idempotencyKey: "idem-2",
+      sessionKey: "agent:main:main",
     });
 
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
@@ -203,20 +176,12 @@ describe("gateway send mirroring", () => {
   it("mirrors MEDIA tags as attachments", async () => {
     mocks.deliverOutboundPayloads.mockResolvedValue([{ messageId: "m2", channel: "slack" }]);
 
-    const respond = vi.fn();
-    await sendHandlers.send({
-      params: {
-        to: "channel:C1",
-        message: "Here\nMEDIA:https://example.com/image.png",
-        channel: "slack",
-        idempotencyKey: "idem-3",
-        sessionKey: "agent:main:main",
-      },
-      respond,
-      context: makeContext(),
-      req: { type: "req", id: "1", method: "send" },
-      client: null,
-      isWebchatConnect: () => false,
+    await runSend({
+      to: "channel:C1",
+      message: "Here\nMEDIA:https://example.com/image.png",
+      channel: "slack",
+      idempotencyKey: "idem-3",
+      sessionKey: "agent:main:main",
     });
 
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
@@ -233,20 +198,12 @@ describe("gateway send mirroring", () => {
   it("lowercases provided session keys for mirroring", async () => {
     mocks.deliverOutboundPayloads.mockResolvedValue([{ messageId: "m-lower", channel: "slack" }]);
 
-    const respond = vi.fn();
-    await sendHandlers.send({
-      params: {
-        to: "channel:C1",
-        message: "hi",
-        channel: "slack",
-        idempotencyKey: "idem-lower",
-        sessionKey: "agent:main:slack:channel:C123",
-      },
-      respond,
-      context: makeContext(),
-      req: { type: "req", id: "1", method: "send" },
-      client: null,
-      isWebchatConnect: () => false,
+    await runSend({
+      to: "channel:C1",
+      message: "hi",
+      channel: "slack",
+      idempotencyKey: "idem-lower",
+      sessionKey: "agent:main:slack:channel:C123",
     });
 
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
@@ -261,19 +218,11 @@ describe("gateway send mirroring", () => {
   it("derives a target session key when none is provided", async () => {
     mocks.deliverOutboundPayloads.mockResolvedValue([{ messageId: "m3", channel: "slack" }]);
 
-    const respond = vi.fn();
-    await sendHandlers.send({
-      params: {
-        to: "channel:C1",
-        message: "hello",
-        channel: "slack",
-        idempotencyKey: "idem-4",
-      },
-      respond,
-      context: makeContext(),
-      req: { type: "req", id: "1", method: "send" },
-      client: null,
-      isWebchatConnect: () => false,
+    await runSend({
+      to: "channel:C1",
+      message: "hello",
+      channel: "slack",
+      idempotencyKey: "idem-4",
     });
 
     expect(mocks.recordSessionMetaFromInbound).toHaveBeenCalled();

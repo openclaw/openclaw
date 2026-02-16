@@ -1,7 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { TelegramInlineButtonsScope } from "../config/types.telegram.js";
 import { listTelegramAccountIds, resolveTelegramAccount } from "./accounts.js";
-import { parseTelegramTarget } from "./targets.js";
 
 const DEFAULT_INLINE_BUTTONS_SCOPE: TelegramInlineButtonsScope = "allowlist";
 
@@ -65,17 +64,4 @@ export function isTelegramInlineButtonsEnabled(params: {
   );
 }
 
-export function resolveTelegramTargetChatType(target: string): "direct" | "group" | "unknown" {
-  if (!target.trim()) {
-    return "unknown";
-  }
-  const parsed = parseTelegramTarget(target);
-  const chatId = parsed.chatId.trim();
-  if (!chatId) {
-    return "unknown";
-  }
-  if (/^-?\d+$/.test(chatId)) {
-    return chatId.startsWith("-") ? "group" : "direct";
-  }
-  return "unknown";
-}
+export { resolveTelegramTargetChatType } from "./targets.js";

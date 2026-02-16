@@ -123,6 +123,41 @@ const runtime = {
   exit: vi.fn(),
 };
 
+function createRuntime() {
+  return {
+    log: vi.fn(),
+    error: vi.fn(),
+    exit: vi.fn(),
+  };
+}
+
+async function withAgentScopeOverrides<T>(
+  overrides: {
+    primary?: string;
+    fallbacks?: string[];
+    agentDir?: string;
+  },
+  run: () => Promise<T>,
+) {
+  const originalPrimary = mocks.resolveAgentModelPrimary.getMockImplementation();
+  const originalFallbacks = mocks.resolveAgentModelFallbacksOverride.getMockImplementation();
+  const originalAgentDir = mocks.resolveAgentDir.getMockImplementation();
+
+  mocks.resolveAgentModelPrimary.mockReturnValue(overrides.primary);
+  mocks.resolveAgentModelFallbacksOverride.mockReturnValue(overrides.fallbacks);
+  if (overrides.agentDir) {
+    mocks.resolveAgentDir.mockReturnValue(overrides.agentDir);
+  }
+
+  try {
+    return await run();
+  } finally {
+    mocks.resolveAgentModelPrimary.mockImplementation(originalPrimary);
+    mocks.resolveAgentModelFallbacksOverride.mockImplementation(originalFallbacks);
+    mocks.resolveAgentDir.mockImplementation(originalAgentDir);
+  }
+}
+
 describe("modelsStatusCommand auth overview", () => {
   it("includes masked auth sources in JSON output", async () => {
     await modelsStatusCommand({ json: true }, runtime as never);
@@ -160,69 +195,49 @@ describe("modelsStatusCommand auth overview", () => {
   });
 
   it("uses agent overrides and reports sources", async () => {
-    const localRuntime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
-    const originalPrimary = mocks.resolveAgentModelPrimary.getMockImplementation();
-    const originalFallbacks = mocks.resolveAgentModelFallbacksOverride.getMockImplementation();
-    const originalAgentDir = mocks.resolveAgentDir.getMockImplementation();
-
-    mocks.resolveAgentModelPrimary.mockReturnValue("openai/gpt-4");
-    mocks.resolveAgentModelFallbacksOverride.mockReturnValue(["openai/gpt-3.5"]);
-    mocks.resolveAgentDir.mockReturnValue("/tmp/openclaw-agent-custom");
-
-    try {
-      await modelsStatusCommand({ json: true, agent: "Jeremiah" }, localRuntime as never);
-      expect(mocks.resolveAgentDir).toHaveBeenCalledWith(expect.anything(), "jeremiah");
-      const payload = JSON.parse(String((localRuntime.log as vi.Mock).mock.calls[0][0]));
-      expect(payload.agentId).toBe("jeremiah");
-      expect(payload.agentDir).toBe("/tmp/openclaw-agent-custom");
-      expect(payload.defaultModel).toBe("openai/gpt-4");
-      expect(payload.fallbacks).toEqual(["openai/gpt-3.5"]);
-      expect(payload.modelConfig).toEqual({
-        defaultSource: "agent",
-        fallbacksSource: "agent",
-      });
-    } finally {
-      mocks.resolveAgentModelPrimary.mockImplementation(originalPrimary);
-      mocks.resolveAgentModelFallbacksOverride.mockImplementation(originalFallbacks);
-      mocks.resolveAgentDir.mockImplementation(originalAgentDir);
-    }
+    const localRuntime = createRuntime();
+    await withAgentScopeOverrides(
+      {
+        primary: "openai/gpt-4",
+        fallbacks: ["openai/gpt-3.5"],
+        agentDir: "/tmp/openclaw-agent-custom",
+      },
+      async () => {
+        await modelsStatusCommand({ json: true, agent: "Jeremiah" }, localRuntime as never);
+        expect(mocks.resolveAgentDir).toHaveBeenCalledWith(expect.anything(), "jeremiah");
+        const payload = JSON.parse(String((localRuntime.log as vi.Mock).mock.calls[0][0]));
+        expect(payload.agentId).toBe("jeremiah");
+        expect(payload.agentDir).toBe("/tmp/openclaw-agent-custom");
+        expect(payload.defaultModel).toBe("openai/gpt-4");
+        expect(payload.fallbacks).toEqual(["openai/gpt-3.5"]);
+        expect(payload.modelConfig).toEqual({
+          defaultSource: "agent",
+          fallbacksSource: "agent",
+        });
+      },
+    );
   });
 
   it("labels defaults when --agent has no overrides", async () => {
-    const localRuntime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
-    const originalPrimary = mocks.resolveAgentModelPrimary.getMockImplementation();
-    const originalFallbacks = mocks.resolveAgentModelFallbacksOverride.getMockImplementation();
-
-    mocks.resolveAgentModelPrimary.mockReturnValue(undefined);
-    mocks.resolveAgentModelFallbacksOverride.mockReturnValue(undefined);
-
-    try {
-      await modelsStatusCommand({ agent: "main" }, localRuntime as never);
-      const output = (localRuntime.log as vi.Mock).mock.calls
-        .map((call) => String(call[0]))
-        .join("\n");
-      expect(output).toContain("Default (defaults)");
-      expect(output).toContain("Fallbacks (0) (defaults)");
-    } finally {
-      mocks.resolveAgentModelPrimary.mockImplementation(originalPrimary);
-      mocks.resolveAgentModelFallbacksOverride.mockImplementation(originalFallbacks);
-    }
+    const localRuntime = createRuntime();
+    await withAgentScopeOverrides(
+      {
+        primary: undefined,
+        fallbacks: undefined,
+      },
+      async () => {
+        await modelsStatusCommand({ agent: "main" }, localRuntime as never);
+        const output = (localRuntime.log as vi.Mock).mock.calls
+          .map((call) => String(call[0]))
+          .join("\n");
+        expect(output).toContain("Default (defaults)");
+        expect(output).toContain("Fallbacks (0) (defaults)");
+      },
+    );
   });
 
   it("throws when agent id is unknown", async () => {
-    const localRuntime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
+    const localRuntime = createRuntime();
     await expect(modelsStatusCommand({ agent: "unknown" }, localRuntime as never)).rejects.toThrow(
       'Unknown agent id "unknown".',
     );
@@ -230,11 +245,7 @@ describe("modelsStatusCommand auth overview", () => {
   it("exits non-zero when auth is missing", async () => {
     const originalProfiles = { ...mocks.store.profiles };
     mocks.store.profiles = {};
-    const localRuntime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
+    const localRuntime = createRuntime();
     const originalEnvImpl = mocks.resolveEnvApiKey.getMockImplementation();
     mocks.resolveEnvApiKey.mockImplementation(() => null);
 

@@ -9,10 +9,22 @@
     "openclaw",
     "vector-search"
   ],
+  "homepage": "https://github.com/openclaw/openclaw#readme",
+  "bugs": {
+    "url": "https://github.com/openclaw/openclaw/issues"
+  },
   "license": "MIT",
   "author": "romiluz",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/openclaw/openclaw.git"
+  },
   "bin": {
     "openclaw": "openclaw.mjs"
+  },
+  "directories": {
+    "doc": "docs",
+    "test": "test"
   },
   "files": [
     "CHANGELOG.md",
@@ -167,7 +179,7 @@
     "sharp": "^0.34.5",
     "signal-utils": "^0.21.1",
     "sqlite-vec": "0.1.7-alpha.2",
-    "tar": "7.5.7",
+    "tar": "7.5.9",
     "tslog": "^4.10.2",
     "undici": "^7.22.0",
     "ws": "^8.19.0",
@@ -184,14 +196,14 @@
     "@types/proper-lockfile": "^4.1.4",
     "@types/qrcode-terminal": "^0.12.2",
     "@types/ws": "^8.18.1",
-    "@typescript/native-preview": "7.0.0-dev.20260214.1",
+    "@typescript/native-preview": "7.0.0-dev.20260215.1",
     "@vitest/coverage-v8": "^4.0.18",
     "lit": "^3.3.2",
     "mongodb-memory-server": "^11.0.1",
     "ollama": "^0.6.3",
     "oxfmt": "0.32.0",
     "oxlint": "^1.47.0",
-    "oxlint-tsgolint": "^0.12.2",
+    "oxlint-tsgolint": "^0.13.0",
     "rolldown": "1.0.0-rc.4",
     "tsdown": "^0.20.3",
     "tsx": "^4.21.0",
@@ -213,7 +225,7 @@
       "form-data": "2.5.4",
       "qs": "6.14.2",
       "@sinclair/typebox": "0.34.48",
-      "tar": "7.5.7",
+      "tar": "7.5.9",
       "tough-cookie": "4.1.3"
     },
     "onlyBuiltDependencies": [
