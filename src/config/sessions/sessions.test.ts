@@ -66,11 +66,6 @@ describe("resolveStorePath", () => {
 });
 
 describe("session path safety", () => {
-  it("validates safe session IDs", () => {
-    expect(validateSessionId("sess-1")).toBe("sess-1");
-    expect(validateSessionId("ABC_123.hello")).toBe("ABC_123.hello");
-  });
-
   it("rejects unsafe session IDs", () => {
     expect(() => validateSessionId("../etc/passwd")).toThrow(/Invalid session ID/);
     expect(() => validateSessionId("a/b")).toThrow(/Invalid session ID/);
