@@ -120,7 +120,7 @@ function isTailnetIPv4(address: string): boolean {
   return a === 100 && b >= 64 && b <= 127;
 }
 
-function pickLanIPv4(): string | null {
+function pickMatchingIPv4(predicate: (address: string) => boolean): string | null {
   const nets = os.networkInterfaces();
   for (const entries of Object.values(nets)) {
     if (!entries) {
@@ -137,7 +137,7 @@ function pickLanIPv4(): string | null {
       if (!address) {
         continue;
       }
-      if (isPrivateIPv4(address)) {
+      if (predicate(address)) {
         return address;
       }
     }
@@ -145,29 +145,12 @@ function pickLanIPv4(): string | null {
   return null;
 }
 
+function pickLanIPv4(): string | null {
+  return pickMatchingIPv4(isPrivateIPv4);
+}
+
 function pickTailnetIPv4(): string | null {
-  const nets = os.networkInterfaces();
-  for (const entries of Object.values(nets)) {
-    if (!entries) {
-      continue;
-    }
-    for (const entry of entries) {
-      const family = entry?.family;
-      // Check for IPv4 (string "IPv4" on Node 18+, number 4 on older)
-      const isIpv4 = family === "IPv4" || String(family) === "4";
-      if (!entry || entry.internal || !isIpv4) {
-        continue;
-      }
-      const address = entry.address?.trim() ?? "";
-      if (!address) {
-        continue;
-      }
-      if (isTailnetIPv4(address)) {
-        return address;
-      }
-    }
-  }
-  return null;
+  return pickMatchingIPv4(isTailnetIPv4);
 }
 
 async function resolveTailnetHost(api: OpenClawPluginApi): Promise<string | null> {

@@ -1,8 +1,9 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
+import type { IncomingMessage } from "node:http";
 import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk";
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
+import { createMockServerResponse } from "../../../src/test-utils/mock-http-response.js";
 import { verifyGoogleChatRequest } from "./auth.js";
 import { handleGoogleChatWebhookRequest, registerGoogleChatWebhookTarget } from "./monitor.js";
 
@@ -35,24 +36,6 @@ function createWebhookRequest(params: {
   });
 
   return req;
-}
-
-function createWebhookResponse(): ServerResponse & { body?: string } {
-  const headers: Record<string, string> = {};
-  const res = {
-    headersSent: false,
-    statusCode: 200,
-    setHeader: (key: string, value: string) => {
-      headers[key.toLowerCase()] = value;
-      return res;
-    },
-    end: (body?: string) => {
-      res.headersSent = true;
-      res.body = body;
-      return res;
-    },
-  } as unknown as ServerResponse & { body?: string };
-  return res;
 }
 
 const baseAccount = (accountId: string) =>
@@ -105,7 +88,7 @@ describe("Google Chat webhook routing", () => {
     const { sinkA, sinkB, unregister } = registerTwoTargets();
 
     try {
-      const res = createWebhookResponse();
+      const res = createMockServerResponse();
       const handled = await handleGoogleChatWebhookRequest(
         createWebhookRequest({
           authorization: "Bearer test-token",
@@ -131,7 +114,7 @@ describe("Google Chat webhook routing", () => {
     const { sinkA, sinkB, unregister } = registerTwoTargets();
 
     try {
-      const res = createWebhookResponse();
+      const res = createMockServerResponse();
       const handled = await handleGoogleChatWebhookRequest(
         createWebhookRequest({
           authorization: "Bearer test-token",
