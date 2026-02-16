@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
+import type { SandboxToolPolicy } from "./sandbox/types.js";
 import type { AnyAgentTool } from "./tools/common.js";
+import { isToolAllowed, resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
 import { TOOL_POLICY_CONFORMANCE } from "./tool-policy.conformance.js";
 import {
   applyOwnerOnlyToolPolicy,
@@ -92,5 +95,90 @@ describe("TOOL_POLICY_CONFORMANCE", () => {
 
   it("is JSON-serializable", () => {
     expect(() => JSON.stringify(TOOL_POLICY_CONFORMANCE)).not.toThrow();
+  });
+});
+
+describe("sandbox tool policy", () => {
+  it("allows all tools with * allow", () => {
+    const policy: SandboxToolPolicy = { allow: ["*"], deny: [] };
+    expect(isToolAllowed(policy, "browser")).toBe(true);
+  });
+
+  it("denies all tools with * deny", () => {
+    const policy: SandboxToolPolicy = { allow: [], deny: ["*"] };
+    expect(isToolAllowed(policy, "read")).toBe(false);
+  });
+
+  it("supports wildcard patterns", () => {
+    const policy: SandboxToolPolicy = { allow: ["web_*"] };
+    expect(isToolAllowed(policy, "web_fetch")).toBe(true);
+    expect(isToolAllowed(policy, "read")).toBe(false);
+  });
+
+  it("applies deny before allow", () => {
+    const policy: SandboxToolPolicy = { allow: ["*"], deny: ["web_*"] };
+    expect(isToolAllowed(policy, "web_fetch")).toBe(false);
+    expect(isToolAllowed(policy, "read")).toBe(true);
+  });
+
+  it("treats empty allowlist as allow-all (with deny exceptions)", () => {
+    const policy: SandboxToolPolicy = { allow: [], deny: ["web_*"] };
+    expect(isToolAllowed(policy, "web_fetch")).toBe(false);
+    expect(isToolAllowed(policy, "read")).toBe(true);
+  });
+
+  it("expands tool groups + aliases in patterns", () => {
+    const policy: SandboxToolPolicy = {
+      allow: ["group:fs", "BASH"],
+      deny: ["apply_*"],
+    };
+    expect(isToolAllowed(policy, "read")).toBe(true);
+    expect(isToolAllowed(policy, "exec")).toBe(true);
+    expect(isToolAllowed(policy, "apply_patch")).toBe(false);
+  });
+
+  it("normalizes whitespace + case", () => {
+    const policy: SandboxToolPolicy = { allow: [" WEB_* "] };
+    expect(isToolAllowed(policy, "WEB_FETCH")).toBe(true);
+  });
+});
+
+describe("resolveSandboxToolPolicyForAgent", () => {
+  it("keeps allow-all semantics when allow is []", () => {
+    const cfg = {
+      tools: { sandbox: { tools: { allow: [], deny: ["browser"] } } },
+    } as unknown as OpenClawConfig;
+
+    const resolved = resolveSandboxToolPolicyForAgent(cfg, undefined);
+    expect(resolved.sources.allow).toEqual({
+      source: "global",
+      key: "tools.sandbox.tools.allow",
+    });
+    expect(resolved.allow).toEqual([]);
+    expect(resolved.deny).toEqual(["browser"]);
+
+    const policy: SandboxToolPolicy = { allow: resolved.allow, deny: resolved.deny };
+    expect(isToolAllowed(policy, "read")).toBe(true);
+    expect(isToolAllowed(policy, "browser")).toBe(false);
+  });
+
+  it("auto-adds image to explicit allowlists unless denied", () => {
+    const cfg = {
+      tools: { sandbox: { tools: { allow: ["read"], deny: ["browser"] } } },
+    } as unknown as OpenClawConfig;
+
+    const resolved = resolveSandboxToolPolicyForAgent(cfg, undefined);
+    expect(resolved.allow).toEqual(["read", "image"]);
+    expect(resolved.deny).toEqual(["browser"]);
+  });
+
+  it("does not auto-add image when explicitly denied", () => {
+    const cfg = {
+      tools: { sandbox: { tools: { allow: ["read"], deny: ["image"] } } },
+    } as unknown as OpenClawConfig;
+
+    const resolved = resolveSandboxToolPolicyForAgent(cfg, undefined);
+    expect(resolved.allow).toEqual(["read"]);
+    expect(resolved.deny).toEqual(["image"]);
   });
 });
