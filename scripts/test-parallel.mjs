@@ -35,6 +35,10 @@ const unitIsolatedFilesRaw = [
   "test/git-hooks-pre-commit.integration.test.ts",
   // Archive extraction/fixture-heavy suite; keep off unit-fast critical path.
   "src/hooks/install.test.ts",
+  // Setup-heavy bot bootstrap suite.
+  "src/telegram/bot.create-telegram-bot.test.ts",
+  // Slack slash registration tests are setup-heavy and can bottleneck unit-fast.
+  "src/slack/monitor/slash.test.ts",
   // Uses process-level unhandledRejection listeners; keep it off vmForks to avoid cross-file leakage.
   "src/imessage/monitor.shutdown.unhandled-rejection.test.ts",
 ];
