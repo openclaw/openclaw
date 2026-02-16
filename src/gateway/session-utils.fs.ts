@@ -306,32 +306,7 @@ export function readSessionTitleFieldsFromTranscript(
     // Tail (last message preview)
     let lastMessagePreview: string | null = null;
     try {
-      const readStart = Math.max(0, size - LAST_MSG_MAX_BYTES);
-      const readLen = Math.min(size, LAST_MSG_MAX_BYTES);
-      const buf = Buffer.alloc(readLen);
-      fs.readSync(fd, buf, 0, readLen, readStart);
-
-      const chunk = buf.toString("utf-8");
-      const lines = chunk.split(/\r?\n/).filter((l) => l.trim());
-      const tailLines = lines.slice(-LAST_MSG_MAX_LINES);
-
-      for (let i = tailLines.length - 1; i >= 0; i--) {
-        const line = tailLines[i];
-        try {
-          const parsed = JSON.parse(line);
-          const msg = parsed?.message as TranscriptMessage | undefined;
-          if (msg?.role !== "user" && msg?.role !== "assistant") {
-            continue;
-          }
-          const text = extractTextFromContent(msg.content);
-          if (text) {
-            lastMessagePreview = text;
-            break;
-          }
-        } catch {
-          // skip malformed
-        }
-      }
+      lastMessagePreview = readLastMessagePreviewFromOpenTranscript({ fd, size });
     } catch {
       // ignore tail read errors
     }
@@ -430,6 +405,38 @@ export function readFirstUserMessageFromTranscript(
 const LAST_MSG_MAX_BYTES = 16384;
 const LAST_MSG_MAX_LINES = 20;
 
+function readLastMessagePreviewFromOpenTranscript(params: {
+  fd: number;
+  size: number;
+}): string | null {
+  const readStart = Math.max(0, params.size - LAST_MSG_MAX_BYTES);
+  const readLen = Math.min(params.size, LAST_MSG_MAX_BYTES);
+  const buf = Buffer.alloc(readLen);
+  fs.readSync(params.fd, buf, 0, readLen, readStart);
+
+  const chunk = buf.toString("utf-8");
+  const lines = chunk.split(/\r?\n/).filter((l) => l.trim());
+  const tailLines = lines.slice(-LAST_MSG_MAX_LINES);
+
+  for (let i = tailLines.length - 1; i >= 0; i--) {
+    const line = tailLines[i];
+    try {
+      const parsed = JSON.parse(line);
+      const msg = parsed?.message as TranscriptMessage | undefined;
+      if (msg?.role !== "user" && msg?.role !== "assistant") {
+        continue;
+      }
+      const text = extractTextFromContent(msg.content);
+      if (text) {
+        return text;
+      }
+    } catch {
+      // skip malformed
+    }
+  }
+  return null;
+}
+
 export function readLastMessagePreviewFromTranscript(
   sessionId: string,
   storePath: string | undefined,
@@ -450,31 +457,7 @@ export function readLastMessagePreviewFromTranscript(
     if (size === 0) {
       return null;
     }
-
-    const readStart = Math.max(0, size - LAST_MSG_MAX_BYTES);
-    const readLen = Math.min(size, LAST_MSG_MAX_BYTES);
-    const buf = Buffer.alloc(readLen);
-    fs.readSync(fd, buf, 0, readLen, readStart);
-
-    const chunk = buf.toString("utf-8");
-    const lines = chunk.split(/\r?\n/).filter((l) => l.trim());
-    const tailLines = lines.slice(-LAST_MSG_MAX_LINES);
-
-    for (let i = tailLines.length - 1; i >= 0; i--) {
-      const line = tailLines[i];
-      try {
-        const parsed = JSON.parse(line);
-        const msg = parsed?.message as TranscriptMessage | undefined;
-        if (msg?.role === "user" || msg?.role === "assistant") {
-          const text = extractTextFromContent(msg.content);
-          if (text) {
-            return text;
-          }
-        }
-      } catch {
-        // skip malformed
-      }
-    }
+    return readLastMessagePreviewFromOpenTranscript({ fd, size });
   } catch {
     // file error
   } finally {
