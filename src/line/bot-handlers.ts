@@ -17,7 +17,8 @@ import {
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
 } from "../pairing/pairing-store.js";
-import { firstDefined, isSenderAllowed, normalizeAllowFromWithStore } from "./bot-access.js";
+import { firstDefined } from "../utils.js";
+import { isSenderAllowed, normalizeAllowFromWithStore } from "./bot-access.js";
 import {
   getLineSourceInfo,
   buildLineMessageContext,

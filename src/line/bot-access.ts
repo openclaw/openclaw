@@ -33,15 +33,6 @@ export const normalizeAllowFromWithStore = (params: {
   return normalizeAllowFrom(combined);
 };
 
-export const firstDefined = <T>(...values: Array<T | undefined>) => {
-  for (const value of values) {
-    if (typeof value !== "undefined") {
-      return value;
-    }
-  }
-  return undefined;
-};
-
 export const isSenderAllowed = (params: {
   allow: NormalizedAllowFrom;
   senderId?: string;
