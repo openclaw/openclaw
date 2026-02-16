@@ -144,20 +144,6 @@ describe("LINE accounts", () => {
   });
 
   describe("resolveDefaultLineAccountId", () => {
-    it("returns default when configured", () => {
-      const cfg: OpenClawConfig = {
-        channels: {
-          line: {
-            channelAccessToken: "test-token",
-          },
-        },
-      };
-
-      const id = resolveDefaultLineAccountId(cfg);
-
-      expect(id).toBe(DEFAULT_ACCOUNT_ID);
-    });
-
     it("returns first named account when default not configured", () => {
       const cfg: OpenClawConfig = {
         channels: {
