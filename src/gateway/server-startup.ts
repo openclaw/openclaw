@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import type { CliDeps } from "../cli/deps.js";
 import type { loadConfig } from "../config/config.js";
 import type { loadOpenClawPlugins } from "../plugins/loader.js";
@@ -17,6 +18,9 @@ import {
 import { loadInternalHooks } from "../hooks/loader.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { type PluginServicesHandle, startPluginServices } from "../plugins/services.js";
+import { verifyAuditLogChain } from "../security/audit-log-verify.js";
+import { resolveAuditLogPath } from "../security/audit-log.js";
+import { emitSecurityEvent } from "../security/event-logger.js";
 import { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import {
   scheduleRestartSentinelWake,
@@ -39,6 +43,29 @@ export async function startGatewaySidecars(params: {
   logChannels: { info: (msg: string) => void; error: (msg: string) => void };
   logBrowser: { error: (msg: string) => void };
 }) {
+  // Verify security audit log integrity (non-blocking)
+  const auditLogPath = resolveAuditLogPath();
+  if (existsSync(auditLogPath)) {
+    verifyAuditLogChain(auditLogPath)
+      .then((result) => {
+        if (!result.valid) {
+          params.log.warn(
+            `Security audit log tamper detected at entry ${result.failedAtSeq}: ${result.error}`,
+          );
+          emitSecurityEvent({
+            eventType: "policy.violation",
+            timestamp: new Date().toISOString(),
+            severity: "critical",
+            action: "detected",
+            detail: `Audit log integrity check failed at entry ${result.failedAtSeq}: ${result.error}`,
+          });
+        }
+      })
+      .catch((err) => {
+        params.log.warn(`Security audit log verification failed: ${String(err)}`);
+      });
+  }
+
   // Start OpenClaw browser control server (unless disabled via config).
   let browserControl: Awaited<ReturnType<typeof startBrowserControlServerIfEnabled>> = null;
   try {
