@@ -200,20 +200,6 @@ async function autoCloseDuplicates(): Promise<void> {
       )} days)`
     );
 
-    const commentsAfterDupe = comments.filter(
-      (comment) => new Date(comment.created_at) > dupeCommentDate
-    );
-    console.log(
-      `[DEBUG] Issue #${issue.number} - ${commentsAfterDupe.length} comments after duplicate detection`
-    );
-
-    if (commentsAfterDupe.length > 0) {
-      console.log(
-        `[DEBUG] Issue #${issue.number} - has activity after duplicate comment, skipping`
-      );
-      continue;
-    }
-
     console.log(
       `[DEBUG] Issue #${issue.number} - checking reactions on duplicate comment...`
     );
@@ -225,17 +211,16 @@ async function autoCloseDuplicates(): Promise<void> {
       `[DEBUG] Issue #${issue.number} - duplicate comment has ${reactions.length} reactions`
     );
 
-    const authorThumbsDown = reactions.some(
-      (reaction) =>
-        reaction.user.id === issue.user.id && reaction.content === "-1"
+    const hasThumbsDown = reactions.some(
+      (reaction) => reaction.content === "-1"
     );
     console.log(
-      `[DEBUG] Issue #${issue.number} - author thumbs down reaction: ${authorThumbsDown}`
+      `[DEBUG] Issue #${issue.number} - thumbs down reaction: ${hasThumbsDown}`
     );
 
-    if (authorThumbsDown) {
+    if (hasThumbsDown) {
       console.log(
-        `[DEBUG] Issue #${issue.number} - author disagreed with duplicate detection, skipping`
+        `[DEBUG] Issue #${issue.number} - someone disagreed with duplicate detection, skipping`
       );
       continue;
     }
