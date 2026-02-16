@@ -1,3 +1,4 @@
+import { resolveDmPolicy, resolveGroupPolicy } from "../../channels/policy-resolve.js";
 import { loadConfig } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
 import { buildPairingReply } from "../../pairing/pairing-messages.js";
@@ -38,7 +39,10 @@ export async function checkInboundAccessControl(params: {
     cfg,
     accountId: params.accountId,
   });
-  const dmPolicy = account.dmPolicy ?? "pairing";
+  const dmPolicy = resolveDmPolicy({
+    accountPolicy: account.dmPolicy,
+    defaultPolicy: "pairing",
+  });
   const configuredAllowFrom = account.allowFrom;
   const storeAllowFrom = await readChannelAllowFromStore(
     "whatsapp",
@@ -83,7 +87,10 @@ export async function checkInboundAccessControl(params: {
   // - "disabled": block all group messages entirely
   // - "allowlist": only allow group messages from senders in groupAllowFrom/allowFrom
   const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
-  const groupPolicy = account.groupPolicy ?? defaultGroupPolicy ?? "open";
+  const groupPolicy = resolveGroupPolicy({
+    accountPolicy: account.groupPolicy,
+    defaultPolicy: defaultGroupPolicy ?? "open",
+  });
   if (params.group && groupPolicy === "disabled") {
     logVerbose("Blocked group message (groupPolicy: disabled)");
     return {
