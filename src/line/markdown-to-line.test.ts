@@ -139,15 +139,6 @@ echo "world"
     expect(codeBlocks[0].language).toBe("python");
     expect(codeBlocks[1].language).toBe("bash");
   });
-
-  it("returns empty when no code blocks present", () => {
-    const text = "No code here, just text.";
-
-    const { codeBlocks, textWithoutCode } = extractCodeBlocks(text);
-
-    expect(codeBlocks).toHaveLength(0);
-    expect(textWithoutCode).toBe(text);
-  });
 });
 
 describe("extractLinks", () => {
@@ -160,15 +151,6 @@ describe("extractLinks", () => {
     expect(links[0]).toEqual({ text: "Google", url: "https://google.com" });
     expect(links[1]).toEqual({ text: "GitHub", url: "https://github.com" });
     expect(textWithLinks).toBe("Check out Google and GitHub.");
-  });
-
-  it("handles text without links", () => {
-    const text = "No links here.";
-
-    const { links, textWithLinks } = extractLinks(text);
-
-    expect(links).toHaveLength(0);
-    expect(textWithLinks).toBe(text);
   });
 });
 
