@@ -56,6 +56,8 @@ export type {
   ChannelThreadingContext,
   ChannelThreadingToolContext,
   ChannelToolSend,
+  BaseProbeResult,
+  BaseTokenResolution,
 } from "../channels/plugins/types.js";
 export type { ChannelConfigSchema, ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export type {
@@ -82,6 +84,15 @@ export type { OpenClawConfig as ClawdbotConfig } from "../config/config.js";
 
 export type { FileLockHandle, FileLockOptions } from "./file-lock.js";
 export { acquireFileLock, withFileLock } from "./file-lock.js";
+export { normalizeWebhookPath, resolveWebhookPath } from "./webhook-path.js";
+export type { AgentMediaPayload } from "./agent-media-payload.js";
+export { buildAgentMediaPayload } from "./agent-media-payload.js";
+export {
+  buildBaseChannelStatusSummary,
+  collectStatusIssuesFromLastError,
+  createDefaultChannelRuntimeState,
+} from "./status-helpers.js";
+export { buildOauthProviderAuthResult } from "./provider-auth-result.js";
 export type { ChannelDock } from "../channels/dock.js";
 export { getChatChannelMeta } from "../channels/registry.js";
 export type {
@@ -122,6 +133,10 @@ export {
   MarkdownTableModeSchema,
   normalizeAllowFrom,
   requireOpenAllowFrom,
+  TtsAutoSchema,
+  TtsConfigSchema,
+  TtsModeSchema,
+  TtsProviderSchema,
 } from "../config/zod-schema.core.js";
 export { ToolPolicySchema } from "../config/zod-schema.agent-runtime.js";
 export type { RuntimeEnv } from "../runtime.js";
@@ -228,7 +243,10 @@ export {
   listWhatsAppDirectoryPeersFromConfig,
 } from "../channels/plugins/directory-config.js";
 export type { AllowlistMatch } from "../channels/plugins/allowlist-match.js";
-export { formatAllowlistMatchMeta } from "../channels/plugins/allowlist-match.js";
+export {
+  formatAllowlistMatchMeta,
+  resolveAllowlistMatchSimple,
+} from "../channels/plugins/allowlist-match.js";
 export { optionalStringEnum, stringEnum } from "../agents/schema/typebox.js";
 export type { PollInput } from "../polls.js";
 

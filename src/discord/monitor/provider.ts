@@ -7,7 +7,14 @@ import type { OpenClawConfig, ReplyToMode } from "../../config/config.js";
 import { resolveTextChunkLimit } from "../../auto-reply/chunk.js";
 import { listNativeCommandSpecsForConfig } from "../../auto-reply/commands-registry.js";
 import { listSkillCommandsForAgents } from "../../auto-reply/skill-commands.js";
-import { mergeAllowlist, summarizeMapping } from "../../channels/allowlists/resolve-utils.js";
+import {
+  addAllowlistUserEntriesFromConfigEntry,
+  buildAllowlistResolutionSummary,
+  mergeAllowlist,
+  resolveAllowlistIdAdditions,
+  patchAllowlistUsersInConfigEntries,
+  summarizeMapping,
+} from "../../channels/allowlists/resolve-utils.js";
 import {
   isNativeCommandsExplicitlyDisabled,
   resolveNativeCommandsEnabled,
@@ -73,6 +80,26 @@ function summarizeGuilds(entries?: Record<string, unknown>) {
   const sample = keys.slice(0, 4);
   const suffix = keys.length > sample.length ? ` (+${keys.length - sample.length})` : "";
   return `${sample.join(", ")}${suffix}`;
+}
+
+function dedupeSkillCommandsForDiscord(
+  skillCommands: ReturnType<typeof listSkillCommandsForAgents>,
+) {
+  const seen = new Set<string>();
+  const deduped: ReturnType<typeof listSkillCommandsForAgents> = [];
+  for (const command of skillCommands) {
+    const key = command.skillName.trim().toLowerCase();
+    if (!key) {
+      deduped.push(command);
+      continue;
+    }
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(command);
+  }
+  return deduped;
 }
 
 async function deployDiscordCommands(params: {
@@ -286,17 +313,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
           entries: allowEntries.map((entry) => String(entry)),
           fetcher: proxyFetch,
         });
-        const mapping: string[] = [];
-        const unresolved: string[] = [];
-        const additions: string[] = [];
-        for (const entry of resolvedUsers) {
-          if (entry.resolved && entry.id) {
-            mapping.push(`${entry.input}→${entry.id}`);
-            additions.push(entry.id);
-          } else {
-            unresolved.push(entry.input);
-          }
-        }
+        const { mapping, unresolved, additions } = buildAllowlistResolutionSummary(resolvedUsers);
         allowFrom = mergeAllowlist({ existing: allowFrom, additions });
         summarizeMapping("discord users", mapping, unresolved, runtime);
       } catch (err) {
@@ -312,30 +329,10 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         if (!guild || typeof guild !== "object") {
           continue;
         }
-        const users = (guild as { users?: Array<string | number> }).users;
-        if (Array.isArray(users)) {
-          for (const entry of users) {
-            const trimmed = String(entry).trim();
-            if (trimmed && trimmed !== "*") {
-              userEntries.add(trimmed);
-            }
-          }
-        }
+        addAllowlistUserEntriesFromConfigEntry(userEntries, guild);
         const channels = (guild as { channels?: Record<string, unknown> }).channels ?? {};
         for (const channel of Object.values(channels)) {
-          if (!channel || typeof channel !== "object") {
-            continue;
-          }
-          const channelUsers = (channel as { users?: Array<string | number> }).users;
-          if (!Array.isArray(channelUsers)) {
-            continue;
-          }
-          for (const entry of channelUsers) {
-            const trimmed = String(entry).trim();
-            if (trimmed && trimmed !== "*") {
-              userEntries.add(trimmed);
-            }
-          }
+          addAllowlistUserEntriesFromConfigEntry(userEntries, channel);
         }
       }
 
@@ -346,13 +343,8 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
             entries: Array.from(userEntries),
             fetcher: proxyFetch,
           });
-          const resolvedMap = new Map(resolvedUsers.map((entry) => [entry.input, entry]));
-          const mapping = resolvedUsers
-            .filter((entry) => entry.resolved && entry.id)
-            .map((entry) => `${entry.input}→${entry.id}`);
-          const unresolved = resolvedUsers
-            .filter((entry) => !entry.resolved)
-            .map((entry) => entry.input);
+          const { resolvedMap, mapping, unresolved } =
+            buildAllowlistResolutionSummary(resolvedUsers);
 
           const nextGuilds = { ...guildEntries };
           for (const [guildKey, guildConfig] of Object.entries(guildEntries ?? {})) {
@@ -362,41 +354,15 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
             const nextGuild = { ...guildConfig } as Record<string, unknown>;
             const users = (guildConfig as { users?: Array<string | number> }).users;
             if (Array.isArray(users) && users.length > 0) {
-              const additions: string[] = [];
-              for (const entry of users) {
-                const trimmed = String(entry).trim();
-                const resolved = resolvedMap.get(trimmed);
-                if (resolved?.resolved && resolved.id) {
-                  additions.push(resolved.id);
-                }
-              }
+              const additions = resolveAllowlistIdAdditions({ existing: users, resolvedMap });
               nextGuild.users = mergeAllowlist({ existing: users, additions });
             }
             const channels = (guildConfig as { channels?: Record<string, unknown> }).channels ?? {};
             if (channels && typeof channels === "object") {
-              const nextChannels: Record<string, unknown> = { ...channels };
-              for (const [channelKey, channelConfig] of Object.entries(channels)) {
-                if (!channelConfig || typeof channelConfig !== "object") {
-                  continue;
-                }
-                const channelUsers = (channelConfig as { users?: Array<string | number> }).users;
-                if (!Array.isArray(channelUsers) || channelUsers.length === 0) {
-                  continue;
-                }
-                const additions: string[] = [];
-                for (const entry of channelUsers) {
-                  const trimmed = String(entry).trim();
-                  const resolved = resolvedMap.get(trimmed);
-                  if (resolved?.resolved && resolved.id) {
-                    additions.push(resolved.id);
-                  }
-                }
-                nextChannels[channelKey] = {
-                  ...channelConfig,
-                  users: mergeAllowlist({ existing: channelUsers, additions }),
-                };
-              }
-              nextGuild.channels = nextChannels;
+              nextGuild.channels = patchAllowlistUsersInConfigEntries({
+                entries: channels,
+                resolvedMap,
+              });
             }
             nextGuilds[guildKey] = nextGuild;
           }
@@ -443,7 +409,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
 
   const maxDiscordCommands = 100;
   let skillCommands =
-    nativeEnabled && nativeSkillsEnabled ? listSkillCommandsForAgents({ cfg }) : [];
+    nativeEnabled && nativeSkillsEnabled
+      ? dedupeSkillCommandsForDiscord(listSkillCommandsForAgents({ cfg }))
+      : [];
   let commandSpecs = nativeEnabled
     ? listNativeCommandSpecsForConfig(cfg, { skillCommands, provider: "discord" })
     : [];
@@ -736,4 +704,5 @@ async function clearDiscordNativeCommands(params: {
 
 export const __testing = {
   createDiscordGatewayPlugin,
+  dedupeSkillCommandsForDiscord,
 };

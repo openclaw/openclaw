@@ -22,6 +22,40 @@ export function registerBrowserFilesAndDownloadsCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
 ) {
+  const runDownloadCommand = async (
+    cmd: Command,
+    opts: { timeoutMs?: unknown; targetId?: unknown },
+    request: { path: string; body: Record<string, unknown> },
+  ) => {
+    const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
+    try {
+      const timeoutMs = Number.isFinite(opts.timeoutMs) ? Number(opts.timeoutMs) : undefined;
+      const result = await callBrowserRequest<{ download: { path: string } }>(
+        parent,
+        {
+          method: "POST",
+          path: request.path,
+          query: profile ? { profile } : undefined,
+          body: {
+            ...request.body,
+            targetId:
+              typeof opts.targetId === "string" ? opts.targetId.trim() || undefined : undefined,
+            timeoutMs,
+          },
+        },
+        { timeoutMs: timeoutMs ?? 20000 },
+      );
+      if (parent?.json) {
+        defaultRuntime.log(JSON.stringify(result, null, 2));
+        return;
+      }
+      defaultRuntime.log(`downloaded: ${shortenHomePath(result.download.path)}`);
+    } catch (err) {
+      defaultRuntime.error(danger(String(err)));
+      defaultRuntime.exit(1);
+    }
+  };
+
   browser
     .command("upload")
     .description("Arm file upload for the next file chooser")
@@ -85,32 +119,12 @@ export function registerBrowserFilesAndDownloadsCommands(
       (v: string) => Number(v),
     )
     .action(async (outPath: string | undefined, opts, cmd) => {
-      const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
-      try {
-        const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : undefined;
-        const result = await callBrowserRequest<{ download: { path: string } }>(
-          parent,
-          {
-            method: "POST",
-            path: "/wait/download",
-            query: profile ? { profile } : undefined,
-            body: {
-              path: outPath?.trim() || undefined,
-              targetId: opts.targetId?.trim() || undefined,
-              timeoutMs,
-            },
-          },
-          { timeoutMs: timeoutMs ?? 20000 },
-        );
-        if (parent?.json) {
-          defaultRuntime.log(JSON.stringify(result, null, 2));
-          return;
-        }
-        defaultRuntime.log(`downloaded: ${shortenHomePath(result.download.path)}`);
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-      }
+      await runDownloadCommand(cmd, opts, {
+        path: "/wait/download",
+        body: {
+          path: outPath?.trim() || undefined,
+        },
+      });
     });
 
   browser
@@ -128,33 +142,13 @@ export function registerBrowserFilesAndDownloadsCommands(
       (v: string) => Number(v),
     )
     .action(async (ref: string, outPath: string, opts, cmd) => {
-      const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
-      try {
-        const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : undefined;
-        const result = await callBrowserRequest<{ download: { path: string } }>(
-          parent,
-          {
-            method: "POST",
-            path: "/download",
-            query: profile ? { profile } : undefined,
-            body: {
-              ref,
-              path: outPath,
-              targetId: opts.targetId?.trim() || undefined,
-              timeoutMs,
-            },
-          },
-          { timeoutMs: timeoutMs ?? 20000 },
-        );
-        if (parent?.json) {
-          defaultRuntime.log(JSON.stringify(result, null, 2));
-          return;
-        }
-        defaultRuntime.log(`downloaded: ${shortenHomePath(result.download.path)}`);
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-      }
+      await runDownloadCommand(cmd, opts, {
+        path: "/download",
+        body: {
+          ref,
+          path: outPath,
+        },
+      });
     });
 
   browser

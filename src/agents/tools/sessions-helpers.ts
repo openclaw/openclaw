@@ -1,6 +1,10 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
-import { isAcpSessionKey, normalizeMainKey } from "../../routing/session-key.js";
+import {
+  isAcpSessionKey,
+  isSubagentSessionKey,
+  normalizeMainKey,
+} from "../../routing/session-key.js";
 import { sanitizeUserFacingText } from "../pi-embedded-helpers.js";
 import {
   stripDowngradedToolCallText,
@@ -40,6 +44,62 @@ export type SessionListRow = {
   messages?: unknown[];
 };
 
+export type SessionToolsVisibility = "self" | "tree" | "agent" | "all";
+
+export function resolveSessionToolsVisibility(cfg: OpenClawConfig): SessionToolsVisibility {
+  const raw = (cfg.tools as { sessions?: { visibility?: unknown } } | undefined)?.sessions
+    ?.visibility;
+  const value = typeof raw === "string" ? raw.trim().toLowerCase() : "";
+  if (value === "self" || value === "tree" || value === "agent" || value === "all") {
+    return value;
+  }
+  return "tree";
+}
+
+export function resolveEffectiveSessionToolsVisibility(params: {
+  cfg: OpenClawConfig;
+  sandboxed: boolean;
+}): SessionToolsVisibility {
+  const visibility = resolveSessionToolsVisibility(params.cfg);
+  if (!params.sandboxed) {
+    return visibility;
+  }
+  const sandboxClamp = params.cfg.agents?.defaults?.sandbox?.sessionToolsVisibility ?? "spawned";
+  if (sandboxClamp === "spawned" && visibility !== "tree") {
+    return "tree";
+  }
+  return visibility;
+}
+
+export async function listSpawnedSessionKeys(params: {
+  requesterSessionKey: string;
+  limit?: number;
+}): Promise<Set<string>> {
+  const limit =
+    typeof params.limit === "number" && Number.isFinite(params.limit)
+      ? Math.max(1, Math.floor(params.limit))
+      : 500;
+  try {
+    const list = await callGateway<{ sessions: Array<{ key?: unknown }> }>({
+      method: "sessions.list",
+      params: {
+        includeGlobal: false,
+        includeUnknown: false,
+        limit,
+        spawnedBy: params.requesterSessionKey,
+      },
+    });
+    const sessions = Array.isArray(list?.sessions) ? list.sessions : [];
+    const keys = sessions
+      .map((entry) => (typeof entry?.key === "string" ? entry.key : ""))
+      .map((value) => value.trim())
+      .filter(Boolean);
+    return new Set(keys);
+  } catch {
+    return new Set();
+  }
+}
+
 function normalizeKey(value?: string) {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
@@ -67,6 +127,39 @@ export function resolveInternalSessionKey(params: { key: string; alias: string; 
     return params.alias;
   }
   return params.key;
+}
+
+export function resolveSandboxSessionToolsVisibility(cfg: OpenClawConfig): "spawned" | "all" {
+  return cfg.agents?.defaults?.sandbox?.sessionToolsVisibility ?? "spawned";
+}
+
+export function resolveSandboxedSessionToolContext(params: {
+  cfg: OpenClawConfig;
+  agentSessionKey?: string;
+  sandboxed?: boolean;
+}): {
+  mainKey: string;
+  alias: string;
+  visibility: "spawned" | "all";
+  requesterInternalKey: string | undefined;
+  restrictToSpawned: boolean;
+} {
+  const { mainKey, alias } = resolveMainSessionAlias(params.cfg);
+  const visibility = resolveSandboxSessionToolsVisibility(params.cfg);
+  const requesterInternalKey =
+    typeof params.agentSessionKey === "string" && params.agentSessionKey.trim()
+      ? resolveInternalSessionKey({
+          key: params.agentSessionKey,
+          alias,
+          mainKey,
+        })
+      : undefined;
+  const restrictToSpawned =
+    params.sandboxed === true &&
+    visibility === "spawned" &&
+    !!requesterInternalKey &&
+    !isSubagentSessionKey(requesterInternalKey);
+  return { mainKey, alias, visibility, requesterInternalKey, restrictToSpawned };
 }
 
 export type AgentToAgentPolicy = {

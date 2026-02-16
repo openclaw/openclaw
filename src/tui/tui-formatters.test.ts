@@ -45,6 +45,24 @@ describe("extractTextFromMessage", () => {
     expect(text).toBe("first\nsecond");
   });
 
+  it("preserves internal newlines for string content", () => {
+    const text = extractTextFromMessage({
+      role: "assistant",
+      content: "Line 1\nLine 2\nLine 3",
+    });
+
+    expect(text).toBe("Line 1\nLine 2\nLine 3");
+  });
+
+  it("preserves internal newlines for text blocks", () => {
+    const text = extractTextFromMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "Line 1\nLine 2\nLine 3" }],
+    });
+
+    expect(text).toBe("Line 1\nLine 2\nLine 3");
+  });
+
   it("places thinking before content when included", () => {
     const text = extractTextFromMessage(
       {
@@ -141,5 +159,28 @@ describe("sanitizeRenderableText", () => {
     const longestSegment = Math.max(...sanitized.split(/\s+/).map((segment) => segment.length));
 
     expect(longestSegment).toBeLessThanOrEqual(32);
+  });
+
+  it("preserves long filesystem paths verbatim for copy safety", () => {
+    const input =
+      "/Users/jasonshawn/PerfectXiao/a_very_long_directory_name_designed_specifically_to_test_the_line_wrapping_issue/file.txt";
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toBe(input);
+  });
+
+  it("preserves long urls verbatim for copy safety", () => {
+    const input =
+      "https://example.com/this/is/a/very/long/url/segment/that/should/remain/contiguous/when/rendered";
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toBe(input);
+  });
+
+  it("preserves long file-like underscore tokens for copy safety", () => {
+    const input = "administrators_authorized_keys_with_extra_suffix".repeat(2);
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toBe(input);
   });
 });

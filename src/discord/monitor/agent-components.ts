@@ -24,7 +24,7 @@ import {
   resolveDiscordAllowListMatch,
   resolveDiscordChannelConfigWithFallback,
   resolveDiscordGuildEntry,
-  resolveDiscordMemberAllowed,
+  resolveDiscordMemberAccessState,
 } from "./allow-list.js";
 import { formatDiscordUserTag } from "./format.js";
 
@@ -35,6 +35,10 @@ type DiscordUser = Parameters<typeof formatDiscordUserTag>[0];
 
 type AgentComponentInteraction = ButtonInteraction | StringSelectMenuInteraction;
 
+type ComponentInteractionContext = NonNullable<
+  Awaited<ReturnType<typeof resolveComponentInteractionContext>>
+>;
+
 type DiscordChannelContext = {
   channelName: string | undefined;
   channelSlug: string;
@@ -44,6 +48,44 @@ type DiscordChannelContext = {
   parentName: string | undefined;
   parentSlug: string;
 };
+
+function resolveAgentComponentRoute(params: {
+  ctx: AgentComponentContext;
+  rawGuildId: string | undefined;
+  memberRoleIds: string[];
+  isDirectMessage: boolean;
+  userId: string;
+  channelId: string;
+  parentId: string | undefined;
+}) {
+  return resolveAgentRoute({
+    cfg: params.ctx.cfg,
+    channel: "discord",
+    accountId: params.ctx.accountId,
+    guildId: params.rawGuildId,
+    memberRoleIds: params.memberRoleIds,
+    peer: {
+      kind: params.isDirectMessage ? "direct" : "channel",
+      id: params.isDirectMessage ? params.userId : params.channelId,
+    },
+    parentPeer: params.parentId ? { kind: "channel", id: params.parentId } : undefined,
+  });
+}
+
+async function ackComponentInteraction(params: {
+  interaction: AgentComponentInteraction;
+  replyOpts: { ephemeral?: boolean };
+  label: string;
+}) {
+  try {
+    await params.interaction.reply({
+      content: "✓",
+      ...params.replyOpts,
+    });
+  } catch (err) {
+    logError(`${params.label}: failed to acknowledge interaction: ${String(err)}`);
+  }
+}
 
 function resolveDiscordChannelContext(
   interaction: AgentComponentInteraction,
@@ -69,6 +111,70 @@ function resolveDiscordChannelContext(
   }
 
   return { channelName, channelSlug, channelType, isThread, parentId, parentName, parentSlug };
+}
+
+async function resolveComponentInteractionContext(params: {
+  interaction: AgentComponentInteraction;
+  label: string;
+}): Promise<{
+  channelId: string;
+  user: DiscordUser;
+  username: string;
+  userId: string;
+  replyOpts: { ephemeral?: boolean };
+  rawGuildId: string | undefined;
+  isDirectMessage: boolean;
+  memberRoleIds: string[];
+} | null> {
+  const { interaction, label } = params;
+
+  // Use interaction's actual channel_id (trusted source from Discord)
+  // This prevents channel spoofing attacks
+  const channelId = interaction.rawData.channel_id;
+  if (!channelId) {
+    logError(`${label}: missing channel_id in interaction`);
+    return null;
+  }
+
+  const user = interaction.user;
+  if (!user) {
+    logError(`${label}: missing user in interaction`);
+    return null;
+  }
+
+  let didDefer = false;
+  // Defer immediately to satisfy Discord's 3-second interaction ACK requirement.
+  // We use an ephemeral deferred reply so subsequent interaction.reply() calls
+  // can safely edit the original deferred response.
+  try {
+    await interaction.defer({ ephemeral: true });
+    didDefer = true;
+  } catch (err) {
+    logError(`${label}: failed to defer interaction: ${String(err)}`);
+  }
+  const replyOpts = didDefer ? {} : { ephemeral: true };
+
+  const username = formatUsername(user);
+  const userId = user.id;
+
+  // P1 FIX: Use rawData.guild_id as source of truth - interaction.guild can be null
+  // when guild is not cached even though guild_id is present in rawData
+  const rawGuildId = interaction.rawData.guild_id;
+  const isDirectMessage = !rawGuildId;
+  const memberRoleIds = Array.isArray(interaction.rawData.member?.roles)
+    ? interaction.rawData.member.roles.map((roleId: string) => String(roleId))
+    : [];
+
+  return {
+    channelId,
+    user,
+    username,
+    userId,
+    replyOpts,
+    rawGuildId,
+    isDirectMessage,
+    memberRoleIds,
+  };
 }
 
 async function ensureGuildComponentMemberAllowed(params: {
@@ -111,15 +217,15 @@ async function ensureGuildComponentMemberAllowed(params: {
     scope: channelCtx.isThread ? "thread" : "channel",
   });
 
-  const channelUsers = channelConfig?.users ?? guildInfo?.users;
-  const channelRoles = channelConfig?.roles ?? guildInfo?.roles;
-  const memberAllowed = resolveDiscordMemberAllowed({
-    userAllowList: channelUsers,
-    roleAllowList: channelRoles,
+  const { memberAllowed } = resolveDiscordMemberAccessState({
+    channelConfig,
+    guildInfo,
     memberRoleIds,
-    userId: user.id,
-    userName: user.username,
-    userTag: user.discriminator ? `${user.username}#${user.discriminator}` : undefined,
+    sender: {
+      id: user.id,
+      name: user.username,
+      tag: user.discriminator ? `${user.username}#${user.discriminator}` : undefined,
+    },
   });
   if (memberAllowed) {
     return true;
@@ -135,6 +241,40 @@ async function ensureGuildComponentMemberAllowed(params: {
     // Interaction may have expired
   }
   return false;
+}
+
+async function ensureAgentComponentInteractionAllowed(params: {
+  ctx: AgentComponentContext;
+  interaction: AgentComponentInteraction;
+  channelId: string;
+  rawGuildId: string | undefined;
+  memberRoleIds: string[];
+  user: DiscordUser;
+  replyOpts: { ephemeral?: boolean };
+  componentLabel: string;
+  unauthorizedReply: string;
+}): Promise<{ parentId: string | undefined } | null> {
+  const guildInfo = resolveDiscordGuildEntry({
+    guild: params.interaction.guild ?? undefined,
+    guildEntries: params.ctx.guildEntries,
+  });
+  const channelCtx = resolveDiscordChannelContext(params.interaction);
+  const memberAllowed = await ensureGuildComponentMemberAllowed({
+    interaction: params.interaction,
+    guildInfo,
+    channelId: params.channelId,
+    rawGuildId: params.rawGuildId,
+    channelCtx,
+    memberRoleIds: params.memberRoleIds,
+    user: params.user,
+    replyOpts: params.replyOpts,
+    componentLabel: params.componentLabel,
+    unauthorizedReply: params.unauthorizedReply,
+  });
+  if (!memberAllowed) {
+    return null;
+  }
+  return { parentId: channelCtx.parentId };
 }
 
 export type AgentComponentContext = {
@@ -285,6 +425,34 @@ async function ensureDmComponentAuthorized(params: {
   return false;
 }
 
+async function resolveInteractionContextWithDmAuth(params: {
+  ctx: AgentComponentContext;
+  interaction: AgentComponentInteraction;
+  label: string;
+  componentLabel: string;
+}): Promise<ComponentInteractionContext | null> {
+  const interactionCtx = await resolveComponentInteractionContext({
+    interaction: params.interaction,
+    label: params.label,
+  });
+  if (!interactionCtx) {
+    return null;
+  }
+  if (interactionCtx.isDirectMessage) {
+    const authorized = await ensureDmComponentAuthorized({
+      ctx: params.ctx,
+      interaction: params.interaction,
+      user: interactionCtx.user,
+      componentLabel: params.componentLabel,
+      replyOpts: interactionCtx.replyOpts,
+    });
+    if (!authorized) {
+      return null;
+    }
+  }
+  return interactionCtx;
+}
+
 export class AgentComponentButton extends Button {
   label = AGENT_BUTTON_KEY;
   customId = `${AGENT_BUTTON_KEY}:seed=1`;
@@ -314,93 +482,52 @@ export class AgentComponentButton extends Button {
 
     const { componentId } = parsed;
 
-    // P1 FIX: Use interaction's actual channel_id instead of trusting customId
-    // This prevents channel ID spoofing attacks where an attacker crafts a button
-    // with a different channelId to inject events into other sessions
-    const channelId = interaction.rawData.channel_id;
-    if (!channelId) {
-      logError("agent button: missing channel_id in interaction");
-      return;
-    }
-
-    const user = interaction.user;
-    if (!user) {
-      logError("agent button: missing user in interaction");
-      return;
-    }
-
-    let didDefer = false;
-    // Defer immediately to satisfy Discord's 3-second interaction ACK requirement.
-    // We use an ephemeral deferred reply so subsequent interaction.reply() calls
-    // can safely edit the original deferred response.
-    try {
-      await interaction.defer({ ephemeral: true });
-      didDefer = true;
-    } catch (err) {
-      logError(`agent button: failed to defer interaction: ${String(err)}`);
-    }
-    const replyOpts = didDefer ? {} : { ephemeral: true };
-
-    const username = formatUsername(user);
-    const userId = user.id;
-
-    // P1 FIX: Use rawData.guild_id as source of truth - interaction.guild can be null
-    // when guild is not cached even though guild_id is present in rawData
-    const rawGuildId = interaction.rawData.guild_id;
-    const isDirectMessage = !rawGuildId;
-    const memberRoleIds = Array.isArray(interaction.rawData.member?.roles)
-      ? interaction.rawData.member.roles.map((roleId: string) => String(roleId))
-      : [];
-
-    if (isDirectMessage) {
-      const authorized = await ensureDmComponentAuthorized({
-        ctx: this.ctx,
-        interaction,
-        user,
-        componentLabel: "button",
-        replyOpts,
-      });
-      if (!authorized) {
-        return;
-      }
-    }
-
-    // P2 FIX: Check user allowlist before processing component interaction
-    // This prevents unauthorized users from injecting system events
-    const guildInfo = resolveDiscordGuildEntry({
-      guild: interaction.guild ?? undefined,
-      guildEntries: this.ctx.guildEntries,
-    });
-    const channelCtx = resolveDiscordChannelContext(interaction);
-    const { parentId } = channelCtx;
-    const memberAllowed = await ensureGuildComponentMemberAllowed({
+    const interactionCtx = await resolveInteractionContextWithDmAuth({
+      ctx: this.ctx,
       interaction,
-      guildInfo,
+      label: "agent button",
+      componentLabel: "button",
+    });
+    if (!interactionCtx) {
+      return;
+    }
+    const {
+      channelId,
+      user,
+      username,
+      userId,
+      replyOpts,
+      rawGuildId,
+      isDirectMessage,
+      memberRoleIds,
+    } = interactionCtx;
+
+    // Check user allowlist before processing component interaction
+    // This prevents unauthorized users from injecting system events.
+    const allowed = await ensureAgentComponentInteractionAllowed({
+      ctx: this.ctx,
+      interaction,
       channelId,
       rawGuildId,
-      channelCtx,
       memberRoleIds,
       user,
       replyOpts,
       componentLabel: "button",
       unauthorizedReply: "You are not authorized to use this button.",
     });
-    if (!memberAllowed) {
+    if (!allowed) {
       return;
     }
+    const { parentId } = allowed;
 
-    // Resolve route with full context (guildId, proper peer kind, parentPeer)
-    const route = resolveAgentRoute({
-      cfg: this.ctx.cfg,
-      channel: "discord",
-      accountId: this.ctx.accountId,
-      guildId: rawGuildId,
+    const route = resolveAgentComponentRoute({
+      ctx: this.ctx,
+      rawGuildId,
       memberRoleIds,
-      peer: {
-        kind: isDirectMessage ? "direct" : "channel",
-        id: isDirectMessage ? userId : channelId,
-      },
-      parentPeer: parentId ? { kind: "channel", id: parentId } : undefined,
+      isDirectMessage,
+      userId,
+      channelId,
+      parentId,
     });
 
     const eventText = `[Discord component: ${componentId} clicked by ${username} (${userId})]`;
@@ -412,15 +539,7 @@ export class AgentComponentButton extends Button {
       contextKey: `discord:agent-button:${channelId}:${componentId}:${userId}`,
     });
 
-    // Acknowledge the interaction
-    try {
-      await interaction.reply({
-        content: "✓",
-        ...replyOpts,
-      });
-    } catch (err) {
-      logError(`agent button: failed to acknowledge interaction: ${String(err)}`);
-    }
+    await ackComponentInteraction({ interaction, replyOpts, label: "agent button" });
   }
 }
 
@@ -452,95 +571,55 @@ export class AgentSelectMenu extends StringSelectMenu {
 
     const { componentId } = parsed;
 
-    // Use interaction's actual channel_id (trusted source from Discord)
-    // This prevents channel spoofing attacks
-    const channelId = interaction.rawData.channel_id;
-    if (!channelId) {
-      logError("agent select: missing channel_id in interaction");
-      return;
-    }
-
-    const user = interaction.user;
-    if (!user) {
-      logError("agent select: missing user in interaction");
-      return;
-    }
-
-    let didDefer = false;
-    // Defer immediately to satisfy Discord's 3-second interaction ACK requirement.
-    // We use an ephemeral deferred reply so subsequent interaction.reply() calls
-    // can safely edit the original deferred response.
-    try {
-      await interaction.defer({ ephemeral: true });
-      didDefer = true;
-    } catch (err) {
-      logError(`agent select: failed to defer interaction: ${String(err)}`);
-    }
-    const replyOpts = didDefer ? {} : { ephemeral: true };
-
-    const username = formatUsername(user);
-    const userId = user.id;
-
-    // P1 FIX: Use rawData.guild_id as source of truth - interaction.guild can be null
-    // when guild is not cached even though guild_id is present in rawData
-    const rawGuildId = interaction.rawData.guild_id;
-    const isDirectMessage = !rawGuildId;
-    const memberRoleIds = Array.isArray(interaction.rawData.member?.roles)
-      ? interaction.rawData.member.roles.map((roleId: string) => String(roleId))
-      : [];
-
-    if (isDirectMessage) {
-      const authorized = await ensureDmComponentAuthorized({
-        ctx: this.ctx,
-        interaction,
-        user,
-        componentLabel: "select menu",
-        replyOpts,
-      });
-      if (!authorized) {
-        return;
-      }
-    }
-
-    // Check user allowlist before processing component interaction
-    const guildInfo = resolveDiscordGuildEntry({
-      guild: interaction.guild ?? undefined,
-      guildEntries: this.ctx.guildEntries,
-    });
-    const channelCtx = resolveDiscordChannelContext(interaction);
-    const { parentId } = channelCtx;
-    const memberAllowed = await ensureGuildComponentMemberAllowed({
+    const interactionCtx = await resolveInteractionContextWithDmAuth({
+      ctx: this.ctx,
       interaction,
-      guildInfo,
+      label: "agent select",
+      componentLabel: "select menu",
+    });
+    if (!interactionCtx) {
+      return;
+    }
+    const {
+      channelId,
+      user,
+      username,
+      userId,
+      replyOpts,
+      rawGuildId,
+      isDirectMessage,
+      memberRoleIds,
+    } = interactionCtx;
+
+    // Check user allowlist before processing component interaction.
+    const allowed = await ensureAgentComponentInteractionAllowed({
+      ctx: this.ctx,
+      interaction,
       channelId,
       rawGuildId,
-      channelCtx,
       memberRoleIds,
       user,
       replyOpts,
       componentLabel: "select",
       unauthorizedReply: "You are not authorized to use this select menu.",
     });
-    if (!memberAllowed) {
+    if (!allowed) {
       return;
     }
+    const { parentId } = allowed;
 
     // Extract selected values
     const values = interaction.values ?? [];
     const valuesText = values.length > 0 ? ` (selected: ${values.join(", ")})` : "";
 
-    // Resolve route with full context (guildId, proper peer kind, parentPeer)
-    const route = resolveAgentRoute({
-      cfg: this.ctx.cfg,
-      channel: "discord",
-      accountId: this.ctx.accountId,
-      guildId: rawGuildId,
+    const route = resolveAgentComponentRoute({
+      ctx: this.ctx,
+      rawGuildId,
       memberRoleIds,
-      peer: {
-        kind: isDirectMessage ? "direct" : "channel",
-        id: isDirectMessage ? userId : channelId,
-      },
-      parentPeer: parentId ? { kind: "channel", id: parentId } : undefined,
+      isDirectMessage,
+      userId,
+      channelId,
+      parentId,
     });
 
     const eventText = `[Discord select menu: ${componentId} interacted by ${username} (${userId})${valuesText}]`;
@@ -552,15 +631,7 @@ export class AgentSelectMenu extends StringSelectMenu {
       contextKey: `discord:agent-select:${channelId}:${componentId}:${userId}`,
     });
 
-    // Acknowledge the interaction
-    try {
-      await interaction.reply({
-        content: "✓",
-        ...replyOpts,
-      });
-    } catch (err) {
-      logError(`agent select: failed to acknowledge interaction: ${String(err)}`);
-    }
+    await ackComponentInteraction({ interaction, replyOpts, label: "agent select" });
   }
 }
 

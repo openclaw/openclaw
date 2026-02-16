@@ -50,19 +50,7 @@ function sortScanResults(results: ModelScanResult[]): ModelScanResult[] {
       return aToolLatency - bToolLatency;
     }
 
-    const aCtx = a.contextLength ?? 0;
-    const bCtx = b.contextLength ?? 0;
-    if (aCtx !== bCtx) {
-      return bCtx - aCtx;
-    }
-
-    const aParams = a.inferredParamB ?? 0;
-    const bParams = b.inferredParamB ?? 0;
-    if (aParams !== bParams) {
-      return bParams - aParams;
-    }
-
-    return a.modelRef.localeCompare(b.modelRef);
+    return compareScanMetadata(a, b);
   });
 }
 
@@ -74,20 +62,24 @@ function sortImageResults(results: ModelScanResult[]): ModelScanResult[] {
       return aLatency - bLatency;
     }
 
-    const aCtx = a.contextLength ?? 0;
-    const bCtx = b.contextLength ?? 0;
-    if (aCtx !== bCtx) {
-      return bCtx - aCtx;
-    }
-
-    const aParams = a.inferredParamB ?? 0;
-    const bParams = b.inferredParamB ?? 0;
-    if (aParams !== bParams) {
-      return bParams - aParams;
-    }
-
-    return a.modelRef.localeCompare(b.modelRef);
+    return compareScanMetadata(a, b);
   });
+}
+
+function compareScanMetadata(a: ModelScanResult, b: ModelScanResult): number {
+  const aCtx = a.contextLength ?? 0;
+  const bCtx = b.contextLength ?? 0;
+  if (aCtx !== bCtx) {
+    return bCtx - aCtx;
+  }
+
+  const aParams = a.inferredParamB ?? 0;
+  const bParams = b.inferredParamB ?? 0;
+  if (aParams !== bParams) {
+    return bParams - aParams;
+  }
+
+  return a.modelRef.localeCompare(b.modelRef);
 }
 
 function buildScanHint(result: ModelScanResult): string {

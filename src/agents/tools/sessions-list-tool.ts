@@ -4,15 +4,17 @@ import type { AnyAgentTool } from "./common.js";
 import { loadConfig } from "../../config/config.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { callGateway } from "../../gateway/call.js";
-import { isSubagentSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { jsonResult, readStringArrayParam } from "./common.js";
 import {
   createAgentToAgentPolicy,
   classifySessionKind,
   deriveChannel,
+  listSpawnedSessionKeys,
   resolveDisplaySessionKey,
+  resolveEffectiveSessionToolsVisibility,
   resolveInternalSessionKey,
-  resolveMainSessionAlias,
+  resolveSandboxedSessionToolContext,
   type SessionListRow,
   stripToolMessages,
 } from "./sessions-helpers.js";
@@ -23,10 +25,6 @@ const SessionsListToolSchema = Type.Object({
   activeMinutes: Type.Optional(Type.Number({ minimum: 1 })),
   messageLimit: Type.Optional(Type.Number({ minimum: 0 })),
 });
-
-function resolveSandboxSessionToolsVisibility(cfg: ReturnType<typeof loadConfig>) {
-  return cfg.agents?.defaults?.sandbox?.sessionToolsVisibility ?? "spawned";
-}
 
 export function createSessionsListTool(opts?: {
   agentSessionKey?: string;
@@ -40,21 +38,17 @@ export function createSessionsListTool(opts?: {
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const cfg = loadConfig();
-      const { mainKey, alias } = resolveMainSessionAlias(cfg);
-      const visibility = resolveSandboxSessionToolsVisibility(cfg);
-      const requesterInternalKey =
-        typeof opts?.agentSessionKey === "string" && opts.agentSessionKey.trim()
-          ? resolveInternalSessionKey({
-              key: opts.agentSessionKey,
-              alias,
-              mainKey,
-            })
-          : undefined;
-      const restrictToSpawned =
-        opts?.sandboxed === true &&
-        visibility === "spawned" &&
-        requesterInternalKey &&
-        !isSubagentSessionKey(requesterInternalKey);
+      const { mainKey, alias, requesterInternalKey, restrictToSpawned } =
+        resolveSandboxedSessionToolContext({
+          cfg,
+          agentSessionKey: opts?.agentSessionKey,
+          sandboxed: opts?.sandboxed,
+        });
+      const effectiveRequesterKey = requesterInternalKey ?? alias;
+      const visibility = resolveEffectiveSessionToolsVisibility({
+        cfg,
+        sandboxed: opts?.sandboxed === true,
+      });
 
       const kindsRaw = readStringArrayParam(params, "kinds")?.map((value) =>
         value.trim().toLowerCase(),
@@ -85,15 +79,19 @@ export function createSessionsListTool(opts?: {
           activeMinutes,
           includeGlobal: !restrictToSpawned,
           includeUnknown: !restrictToSpawned,
-          spawnedBy: restrictToSpawned ? requesterInternalKey : undefined,
+          spawnedBy: restrictToSpawned ? effectiveRequesterKey : undefined,
         },
       });
 
       const sessions = Array.isArray(list?.sessions) ? list.sessions : [];
       const storePath = typeof list?.path === "string" ? list.path : undefined;
       const a2aPolicy = createAgentToAgentPolicy(cfg);
-      const requesterAgentId = resolveAgentIdFromSessionKey(requesterInternalKey);
+      const requesterAgentId = resolveAgentIdFromSessionKey(effectiveRequesterKey);
       const rows: SessionListRow[] = [];
+      const spawnedKeys =
+        visibility === "tree"
+          ? await listSpawnedSessionKeys({ requesterSessionKey: effectiveRequesterKey })
+          : null;
 
       for (const entry of sessions) {
         if (!entry || typeof entry !== "object") {
@@ -106,8 +104,20 @@ export function createSessionsListTool(opts?: {
 
         const entryAgentId = resolveAgentIdFromSessionKey(key);
         const crossAgent = entryAgentId !== requesterAgentId;
-        if (crossAgent && !a2aPolicy.isAllowed(requesterAgentId, entryAgentId)) {
-          continue;
+        if (crossAgent) {
+          if (visibility !== "all") {
+            continue;
+          }
+          if (!a2aPolicy.isAllowed(requesterAgentId, entryAgentId)) {
+            continue;
+          }
+        } else {
+          if (visibility === "self" && key !== effectiveRequesterKey) {
+            continue;
+          }
+          if (visibility === "tree" && key !== effectiveRequesterKey && !spawnedKeys?.has(key)) {
+            continue;
+          }
         }
 
         if (key === "unknown") {

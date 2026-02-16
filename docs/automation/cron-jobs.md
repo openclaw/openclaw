@@ -27,6 +27,7 @@ Troubleshooting: [/automation/troubleshooting](/automation/troubleshooting)
   - **Main session**: enqueue a system event, then run on the next heartbeat.
   - **Isolated**: run a dedicated agent turn in `cron:<jobId>`, with delivery (announce by default or none).
 - Wakeups are first-class: a job can request “wake now” vs “next heartbeat”.
+- Webhook posting is opt-in per job: set `notify: true` and configure `cron.webhook`.
 
 ## Quick start (actionable)
 
@@ -288,7 +289,7 @@ Notes:
 - `schedule.at` accepts ISO 8601 (timezone optional; treated as UTC when omitted).
 - `everyMs` is milliseconds.
 - `sessionTarget` must be `"main"` or `"isolated"` and must match `payload.kind`.
-- Optional fields: `agentId`, `description`, `enabled`, `deleteAfterRun` (defaults to true for `at`),
+- Optional fields: `agentId`, `description`, `enabled`, `notify`, `deleteAfterRun` (defaults to true for `at`),
   `delivery`.
 - `wakeMode` defaults to `"now"` when omitted.
 
@@ -333,9 +334,18 @@ Notes:
     enabled: true, // default true
     store: "~/.openclaw/cron/jobs.json",
     maxConcurrentRuns: 1, // default 1
+    webhook: "https://example.invalid/cron-finished", // optional finished-run webhook endpoint
+    webhookToken: "replace-with-dedicated-webhook-token", // optional, do not reuse gateway auth token
   },
 }
 ```
+
+Webhook behavior:
+
+- The Gateway posts finished run events to `cron.webhook` only when the job has `notify: true`.
+- Payload is the cron finished event JSON.
+- If `cron.webhookToken` is set, auth header is `Authorization: Bearer <cron.webhookToken>`.
+- If `cron.webhookToken` is not set, no `Authorization` header is sent.
 
 Disable cron entirely:
 

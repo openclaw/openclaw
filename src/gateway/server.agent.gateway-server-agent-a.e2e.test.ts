@@ -3,8 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
-import type { PluginRegistry } from "../plugins/registry.js";
 import { setRegistry } from "./server.agent.gateway-server-agent.mocks.js";
+import { createRegistry } from "./server.e2e-registry-helpers.js";
 import {
   agentCommand,
   connectOk,
@@ -41,19 +41,6 @@ function expectChannels(call: Record<string, unknown>, channel: string) {
   const runContext = call.runContext as { messageChannel?: string } | undefined;
   expect(runContext?.messageChannel).toBe(channel);
 }
-
-const createRegistry = (channels: PluginRegistry["channels"]): PluginRegistry => ({
-  plugins: [],
-  tools: [],
-  channels,
-  providers: [],
-  gatewayHandlers: {},
-  httpHandlers: [],
-  httpRoutes: [],
-  cliRegistrars: [],
-  services: [],
-  diagnostics: [],
-});
 
 const createStubChannelPlugin = (params: {
   id: ChannelPlugin["id"];
@@ -196,6 +183,38 @@ describe("gateway server agent", () => {
     expect(call.to).toBeUndefined();
   });
 
+  test("agent preserves spawnDepth on subagent sessions", async () => {
+    setRegistry(defaultRegistry);
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    const storePath = path.join(dir, "sessions.json");
+    testState.sessionStorePath = storePath;
+    await writeSessionStore({
+      entries: {
+        "agent:main:subagent:depth": {
+          sessionId: "sess-sub-depth",
+          updatedAt: Date.now(),
+          spawnedBy: "agent:main:main",
+          spawnDepth: 2,
+        },
+      },
+    });
+
+    const res = await rpcReq(ws, "agent", {
+      message: "hi",
+      sessionKey: "agent:main:subagent:depth",
+      idempotencyKey: "idem-agent-subdepth",
+    });
+    expect(res.ok).toBe(true);
+
+    const raw = await fs.readFile(storePath, "utf-8");
+    const persisted = JSON.parse(raw) as Record<
+      string,
+      { spawnDepth?: number; spawnedBy?: string }
+    >;
+    expect(persisted["agent:main:subagent:depth"]?.spawnDepth).toBe(2);
+    expect(persisted["agent:main:subagent:depth"]?.spawnedBy).toBe("agent:main:main");
+  });
+
   test("agent derives sessionKey from agentId", async () => {
     setRegistry(defaultRegistry);
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
@@ -248,6 +267,20 @@ describe("gateway server agent", () => {
     });
     expect(res.ok).toBe(false);
     expect(res.error?.message).toContain("does not match session key agent");
+
+    const spy = vi.mocked(agentCommand);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  test("agent rejects malformed agent-prefixed session keys", async () => {
+    setRegistry(defaultRegistry);
+    const res = await rpcReq(ws, "agent", {
+      message: "hi",
+      sessionKey: "agent:main",
+      idempotencyKey: "idem-agent-malformed-key",
+    });
+    expect(res.ok).toBe(false);
+    expect(res.error?.message).toContain("malformed session key");
 
     const spy = vi.mocked(agentCommand);
     expect(spy).not.toHaveBeenCalled();

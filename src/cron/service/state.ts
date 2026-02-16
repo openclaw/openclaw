@@ -46,6 +46,7 @@ export type CronServiceDeps = {
     text: string,
     opts?: {
       agentId?: string;
+      contextKey?: string;
       /** Origin context for routing replies back to where the job was created */
       origin?: CronOrigin;
       /** Delivery mode: "origin" (default) or "current" */

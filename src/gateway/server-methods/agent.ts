@@ -16,7 +16,7 @@ import {
   resolveAgentDeliveryPlan,
   resolveAgentOutboundTarget,
 } from "../../infra/outbound/agent-delivery.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
+import { classifySessionKeyShape, normalizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
@@ -48,6 +48,7 @@ import {
 import { formatForLog } from "../ws-log.js";
 import { waitForAgentJob } from "./agent-job.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
+import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { sessionsHandlers } from "./sessions.js";
 
 const RESET_COMMAND_RE = /^\/(new|reset)(?:\s+([\s\S]*))?$/i;
@@ -127,8 +128,9 @@ async function runSessionResetFromAgent(params: {
       respond,
     });
 
-    void Promise.resolve(resetResult)
-      .then(() => {
+    void (async () => {
+      try {
+        await resetResult;
         if (!settled) {
           settle({
             ok: false,
@@ -138,13 +140,13 @@ async function runSessionResetFromAgent(params: {
             ),
           });
         }
-      })
-      .catch((err: unknown) => {
+      } catch (err: unknown) {
         settle({
           ok: false,
           error: errorShape(ErrorCodes.UNAVAILABLE, String(err)),
         });
-      });
+      }
+    })();
   });
 }
 
@@ -212,24 +214,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       });
       return;
     }
-    const normalizedAttachments =
-      request.attachments
-        ?.map((a) => ({
-          type: typeof a?.type === "string" ? a.type : undefined,
-          mimeType: typeof a?.mimeType === "string" ? a.mimeType : undefined,
-          fileName: typeof a?.fileName === "string" ? a.fileName : undefined,
-          content:
-            typeof a?.content === "string"
-              ? a.content
-              : ArrayBuffer.isView(a?.content)
-                ? Buffer.from(
-                    a.content.buffer,
-                    a.content.byteOffset,
-                    a.content.byteLength,
-                  ).toString("base64")
-                : undefined,
-        }))
-        .filter((a) => a.content) ?? [];
+    const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(request.attachments);
 
     let message = request.message.trim();
     let images: Array<{ type: "image"; data: string; mimeType: string }> = [];
@@ -288,6 +273,20 @@ export const agentHandlers: GatewayRequestHandlers = {
       typeof request.sessionKey === "string" && request.sessionKey.trim()
         ? request.sessionKey.trim()
         : undefined;
+    if (
+      requestedSessionKeyRaw &&
+      classifySessionKeyShape(requestedSessionKeyRaw) === "malformed_agent"
+    ) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid agent params: malformed session key "${requestedSessionKeyRaw}"`,
+        ),
+      );
+      return;
+    }
     let requestedSessionKey =
       requestedSessionKeyRaw ??
       resolveExplicitAgentSessionKey({
@@ -399,6 +398,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         providerOverride: entry?.providerOverride,
         label: labelValue,
         spawnedBy: spawnedByValue,
+        spawnDepth: entry?.spawnDepth,
         channel: entry?.channel ?? request.channel?.trim(),
         groupId: resolvedGroupId ?? entry?.groupId,
         groupChannel: resolvedGroupChannel ?? entry?.groupChannel,
@@ -615,6 +615,17 @@ export const agentHandlers: GatewayRequestHandlers = {
     const sessionKeyRaw = typeof p.sessionKey === "string" ? p.sessionKey.trim() : "";
     let agentId = agentIdRaw ? normalizeAgentId(agentIdRaw) : undefined;
     if (sessionKeyRaw) {
+      if (classifySessionKeyShape(sessionKeyRaw) === "malformed_agent") {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `invalid agent.identity.get params: malformed session key "${sessionKeyRaw}"`,
+          ),
+        );
+        return;
+      }
       const resolved = resolveAgentIdFromSessionKey(sessionKeyRaw);
       if (agentId && resolved !== agentId) {
         respond(

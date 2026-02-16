@@ -1,7 +1,7 @@
-import OpenClawKit
 import Foundation
 import Network
 import Observation
+import OpenClawKit
 import OSLog
 
 @MainActor
@@ -18,7 +18,10 @@ public final class GatewayDiscoveryModel {
     }
 
     public struct DiscoveredGateway: Identifiable, Equatable, Sendable {
-        public var id: String { self.stableID }
+        public var id: String {
+            self.stableID
+        }
+
         public var displayName: String
         // Resolved service endpoint (SRV + A/AAAA). Used for routing; do not trust TXT for routing.
         public var serviceHost: String?
@@ -326,43 +329,9 @@ public final class GatewayDiscoveryModel {
     }
 
     private func updateStatusText() {
-        let states = Array(self.statesByDomain.values)
-        if states.isEmpty {
-            self.statusText = self.browsers.isEmpty ? "Idle" : "Setup"
-            return
-        }
-
-        if let failed = states.first(where: { state in
-            if case .failed = state { return true }
-            return false
-        }) {
-            if case let .failed(err) = failed {
-                self.statusText = "Failed: \(err)"
-                return
-            }
-        }
-
-        if let waiting = states.first(where: { state in
-            if case .waiting = state { return true }
-            return false
-        }) {
-            if case let .waiting(err) = waiting {
-                self.statusText = "Waiting: \(err)"
-                return
-            }
-        }
-
-        if states.contains(where: { if case .ready = $0 { true } else { false } }) {
-            self.statusText = "Searching…"
-            return
-        }
-
-        if states.contains(where: { if case .setup = $0 { true } else { false } }) {
-            self.statusText = "Setup"
-            return
-        }
-
-        self.statusText = "Searching…"
+        self.statusText = GatewayDiscoveryStatusText.make(
+            states: Array(self.statesByDomain.values),
+            hasBrowsers: !self.browsers.isEmpty)
     }
 
     private static func txtDictionary(from result: NWBrowser.Result) -> [String: String] {
