@@ -1,5 +1,6 @@
 import net from "node:net";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { stripAnsi } from "../terminal/ansi.js";
 
 const runCommandWithTimeoutMock = vi.hoisted(() => vi.fn());
 
@@ -24,7 +25,7 @@ describe("ports helpers", () => {
     await new Promise((resolve) => server.listen(0, resolve));
     const port = (server.address() as net.AddressInfo).port;
     await expect(ensurePortAvailable(port)).rejects.toBeInstanceOf(PortInUseError);
-    server.close();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 
   it("handlePortError exits nicely on EADDRINUSE", async () => {
@@ -37,8 +38,28 @@ describe("ports helpers", () => {
     await handlePortError(new PortInUseError(1234, "details"), 1234, "context", runtime).catch(
       () => {},
     );
-    expect(runtime.error).toHaveBeenCalled();
+    const messages = runtime.error.mock.calls.map((call) => stripAnsi(String(call[0] ?? "")));
+    expect(messages.join("\n")).toContain("context failed: port 1234 is already in use.");
+    expect(messages.join("\n")).toContain("Resolve by stopping the process");
     expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("prints an OpenClaw-specific hint when port details look like another OpenClaw instance", async () => {
+    const runtime = {
+      error: vi.fn(),
+      log: vi.fn(),
+      exit: vi.fn() as unknown as (code: number) => never,
+    };
+
+    await handlePortError(
+      new PortInUseError(18789, "node dist/index.js openclaw gateway"),
+      18789,
+      "gateway start",
+      runtime,
+    ).catch(() => {});
+
+    const messages = runtime.error.mock.calls.map((call) => stripAnsi(String(call[0] ?? "")));
+    expect(messages.join("\n")).toContain("another OpenClaw instance is already running");
   });
 
   it("classifies ssh and gateway listeners", () => {
@@ -87,7 +108,7 @@ describeUnix("inspectPortUsage", () => {
       expect(result.status).toBe("busy");
       expect(result.errors?.some((err) => err.includes("ENOENT"))).toBe(true);
     } finally {
-      server.close();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   });
 });
