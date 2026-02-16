@@ -72,7 +72,7 @@ class MemoryManagerEmbeddingOps {
   }
 
   private loadEmbeddingCache(hashes: string[]): Map<string, number[]> {
-    if (!this.cache.enabled) {
+    if (!this.cache.enabled || !this.provider) {
       return new Map();
     }
     if (hashes.length === 0) {
@@ -114,7 +114,7 @@ class MemoryManagerEmbeddingOps {
   }
 
   private upsertEmbeddingCache(entries: Array<{ hash: string; embedding: number[] }>): void {
-    if (!this.cache.enabled) {
+    if (!this.cache.enabled || !this.provider) {
       return;
     }
     if (entries.length === 0) {
@@ -245,6 +245,9 @@ class MemoryManagerEmbeddingOps {
     entry: MemoryFileEntry | SessionFileEntry,
     source: MemorySource,
   ): Promise<number[][]> {
+    if (!this.provider) {
+      return this.embedChunksInBatches(chunks);
+    }
     if (this.provider.id === "openai" && this.openAi) {
       return this.embedChunksWithOpenAiBatch(chunks, entry, source);
     }
@@ -423,7 +426,7 @@ class MemoryManagerEmbeddingOps {
         method: "POST",
         url: OPENAI_BATCH_ENDPOINT,
         body: {
-          model: this.openAi?.model ?? this.provider.model,
+          model: this.openAi?.model ?? this.provider?.model ?? "text-embedding-3-small",
           input: chunk.text,
         },
       }),
@@ -493,6 +496,9 @@ class MemoryManagerEmbeddingOps {
     if (texts.length === 0) {
       return [];
     }
+    if (!this.provider) {
+      throw new Error("Cannot embed batch in FTS-only mode (no embedding provider)");
+    }
     let attempt = 0;
     let delayMs = EMBEDDING_RETRY_BASE_DELAY_MS;
     while (true) {
@@ -532,7 +538,7 @@ class MemoryManagerEmbeddingOps {
   }
 
   private resolveEmbeddingTimeout(kind: "query" | "batch"): number {
-    const isLocal = this.provider.id === "local";
+    const isLocal = this.provider?.id === "local";
     if (kind === "query") {
       return isLocal ? EMBEDDING_QUERY_TIMEOUT_LOCAL_MS : EMBEDDING_QUERY_TIMEOUT_REMOTE_MS;
     }
@@ -540,6 +546,9 @@ class MemoryManagerEmbeddingOps {
   }
 
   private async embedQueryWithTimeout(text: string): Promise<number[]> {
+    if (!this.provider) {
+      throw new Error("Cannot embed query in FTS-only mode (no embedding provider)");
+    }
     const timeoutMs = this.resolveEmbeddingTimeout("query");
     log.debug("memory embeddings: query start", { provider: this.provider.id, timeoutMs });
     return await this.withTimeout(
@@ -685,6 +694,15 @@ class MemoryManagerEmbeddingOps {
     entry: MemoryFileEntry | SessionFileEntry,
     options: { source: MemorySource; content?: string },
   ) {
+    // FTS-only mode: skip indexing if no provider
+    if (!this.provider) {
+      log.debug("Skipping embedding indexing in FTS-only mode", {
+        path: entry.path,
+        source: options.source,
+      });
+      return;
+    }
+
     const content = options.content ?? (await fs.readFile(entry.absPath, "utf-8"));
     const chunks = enforceEmbeddingMaxInputTokens(
       this.provider,
