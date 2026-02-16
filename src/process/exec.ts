@@ -139,6 +139,7 @@ export async function runCommandWithTimeout(
     cwd,
     env: resolvedEnv,
     windowsVerbatimArguments,
+    windowsHide: true,
     ...(shouldSpawnWithShell({ resolvedCommand, platform: process.platform })
       ? { shell: true }
       : {}),
