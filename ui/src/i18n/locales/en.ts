@@ -59,6 +59,7 @@ export const en: TranslationMap = {
       token: "Gateway Token",
       password: "Password (not stored)",
       sessionKey: "Default Session Key",
+      language: "Language",
       connectHint: "Click Connect to apply connection changes.",
     },
     snapshot: {
@@ -103,5 +104,11 @@ export const en: TranslationMap = {
     thinkingToggle: "Toggle assistant thinking/working output",
     focusToggle: "Toggle focus mode (hide sidebar + page header)",
     onboardingDisabled: "Disabled during onboarding",
+  },
+  languages: {
+    en: "English",
+    zhCN: "简体中文 (Simplified Chinese)",
+    zhTW: "繁體中文 (Traditional Chinese)",
+    ptBR: "Português (Brazilian Portuguese)",
   },
 };
