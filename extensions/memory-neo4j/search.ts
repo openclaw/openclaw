@@ -112,6 +112,7 @@ type FusedCandidate = {
   importance: number;
   createdAt: string;
   rrfScore: number;
+  taskId?: string;
   signals: {
     vector: SignalAttribution;
     bm25: SignalAttribution;
@@ -151,7 +152,7 @@ export function fuseWithConfidenceRRF(
   // Collect all unique candidate IDs with their metadata
   const candidateMetadata = new Map<
     string,
-    { text: string; category: string; importance: number; createdAt: string }
+    { text: string; category: string; importance: number; createdAt: string; taskId?: string }
   >();
 
   for (const signal of signals) {
@@ -162,6 +163,7 @@ export function fuseWithConfidenceRRF(
           category: entry.category,
           importance: entry.importance,
           createdAt: entry.createdAt,
+          taskId: entry.taskId,
         });
       }
     }
@@ -196,6 +198,7 @@ export function fuseWithConfidenceRRF(
       importance: meta.importance,
       createdAt: meta.createdAt,
       rrfScore,
+      taskId: meta.taskId,
       signals,
     });
   }
@@ -288,6 +291,7 @@ export async function hybridSearch(
     importance: r.importance,
     createdAt: r.createdAt,
     score: Math.min(1, r.rrfScore * normalizer), // Normalize to 0-1
+    taskId: r.taskId,
     signals: r.signals,
   }));
 

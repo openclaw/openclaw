@@ -12,6 +12,7 @@
  * 5.  NOISE CLEANUP - Remove dangerous pattern memories
  * 5b. CREDENTIAL SCAN - Remove memories containing leaked credentials
  * 6.  TASK LEDGER - Archive stale tasks in TASKS.md
+ * 7.  TASK-MEMORY CLEANUP - Remove task-noise memories for completed tasks
  *
  * Research basis:
  * - ACT-R memory model for retrieval-based importance
@@ -19,6 +20,8 @@
  * - MemGPT/Letta for tiered memory architecture
  */
 
+import fs from "node:fs/promises";
+import path from "node:path";
 import type { ExtractionConfig } from "./config.js";
 import type { Embeddings } from "./embeddings.js";
 import type { Neo4jMemoryClient } from "./neo4j-client.js";
@@ -29,8 +32,13 @@ import {
   resolveConflict,
   runBackgroundExtraction,
 } from "./extractor.js";
+import { callOpenRouter } from "./llm-client.js";
 import { makePairKey } from "./schema.js";
-import { reviewAndArchiveStaleTasks, type StaleTaskResult } from "./task-ledger.js";
+import {
+  parseTaskLedger,
+  reviewAndArchiveStaleTasks,
+  type StaleTaskResult,
+} from "./task-ledger.js";
 
 /**
  * Sleep Cycle Result - aggregated stats from all phases.
@@ -92,6 +100,12 @@ export type SleepCycleResult = {
     archivedCount: number;
     archivedIds: string[];
   };
+  // Phase 7: Task-Memory Cleanup
+  taskMemoryCleanup: {
+    tasksChecked: number;
+    memoriesEvaluated: number;
+    memoriesRemoved: number;
+  };
   // Overall
   durationMs: number;
   aborted: boolean;
@@ -133,6 +147,10 @@ export type SleepCycleOptions = {
   workspaceDir?: string; // Workspace dir for TASKS.md (default: resolved from env)
   staleTaskMaxAgeMs?: number; // Max age before task is stale (default: 24h)
 
+  // Phase 7: Task-Memory Cleanup
+  skipTaskMemoryCleanup?: boolean; // Skip task-memory cleanup (default: false)
+  taskMemoryMaxAgeDays?: number; // Only check tasks completed within this many days (default: 7)
+
   // Progress callback
   onPhaseStart?: (
     phase:
@@ -146,7 +164,8 @@ export type SleepCycleOptions = {
       | "cleanup"
       | "noiseCleanup"
       | "credentialScan"
-      | "taskLedger",
+      | "taskLedger"
+      | "taskMemoryCleanup",
   ) => void;
   onProgress?: (phase: string, message: string) => void;
 };
@@ -214,11 +233,67 @@ export function detectCredential(text: string): string | null {
 }
 
 // ============================================================================
+// Task-Memory Classification
+// ============================================================================
+
+/**
+ * Use LLM to classify whether a memory is "lasting" (valuable independent
+ * of the completed task) or "noise" (only useful while the task was active).
+ *
+ * Conservative: returns "lasting" on any failure to avoid deleting valuable memories.
+ */
+export async function classifyTaskMemory(
+  memoryText: string,
+  taskTitle: string,
+  config: ExtractionConfig,
+  abortSignal?: AbortSignal,
+): Promise<"lasting" | "noise"> {
+  if (!config.enabled) {
+    return "lasting";
+  }
+
+  try {
+    const content = await callOpenRouter(
+      config,
+      [
+        {
+          role: "system",
+          content: `A task titled "${taskTitle}" has been completed. The following memory was created during this task.
+
+Classify this memory:
+- "lasting" if it contains a decision, preference, fact, or knowledge that is valuable INDEPENDENT of the task
+- "noise" if it contains task progress, debugging steps, intermediate state, or context that is only useful while the task was active
+
+When in doubt, choose "lasting". It is better to keep some noise than to delete valuable knowledge.
+
+Return JSON: {"classification": "lasting"|"noise", "reason": "brief explanation"}`,
+        },
+        { role: "user", content: memoryText },
+      ],
+      abortSignal,
+    );
+
+    if (!content) {
+      return "lasting";
+    }
+
+    const parsed = JSON.parse(content) as { classification?: string };
+    if (parsed.classification === "noise") {
+      return "noise";
+    }
+    return "lasting";
+  } catch {
+    // On any failure, keep the memory (conservative)
+    return "lasting";
+  }
+}
+
+// ============================================================================
 // Sleep Cycle Implementation
 // ============================================================================
 
 /**
- * Run the full sleep cycle - six phases of memory consolidation.
+ * Run the full sleep cycle - seven phases of memory consolidation.
  */
 export async function runSleepCycle(
   db: Neo4jMemoryClient,
@@ -246,6 +321,8 @@ export async function runSleepCycle(
     singleUseTagMinAgeDays = 14,
     workspaceDir,
     staleTaskMaxAgeMs,
+    skipTaskMemoryCleanup = false,
+    taskMemoryMaxAgeDays = 7,
     onPhaseStart,
     onProgress,
   } = options;
@@ -261,6 +338,7 @@ export async function runSleepCycle(
     cleanup: { entitiesRemoved: 0, tagsRemoved: 0, singleUseTagsRemoved: 0 },
     credentialScan: { memoriesScanned: 0, credentialsFound: 0, memoriesRemoved: 0 },
     taskLedger: { staleCount: 0, archivedCount: 0, archivedIds: [] },
+    taskMemoryCleanup: { tasksChecked: 0, memoriesEvaluated: 0, memoriesRemoved: 0 },
     durationMs: 0,
     aborted: false,
   };
@@ -927,6 +1005,155 @@ export async function runSleepCycle(
     }
   } else if (!workspaceDir) {
     logger.info("memory-neo4j: [sleep] Phase 6: Task Ledger Cleanup — SKIPPED (no workspace dir)");
+  }
+
+  // --------------------------------------------------------------------------
+  // Phase 7: Task-Memory Cleanup
+  // Cross-references completed tasks (from TASKS.md) with stored memories.
+  // For each completed task (within the last N days), searches for memories
+  // mentioning that task and uses LLM to classify them as "lasting" (keep)
+  // vs "noise" (delete). This prevents stale task-specific memories from
+  // being recalled after tasks are done.
+  // --------------------------------------------------------------------------
+  if (!abortSignal?.aborted && workspaceDir && config.enabled && !skipTaskMemoryCleanup) {
+    onPhaseStart?.("taskMemoryCleanup");
+    logger.info("memory-neo4j: [sleep] Phase 7: Task-Memory Cleanup");
+
+    try {
+      const tasksPath = path.join(workspaceDir, "TASKS.md");
+      let tasksContent: string | null = null;
+      try {
+        tasksContent = await fs.readFile(tasksPath, "utf-8");
+      } catch {
+        // TASKS.md doesn't exist — skip
+      }
+
+      if (tasksContent) {
+        const ledger = parseTaskLedger(tasksContent);
+        const now = new Date();
+        const maxAgeMs = taskMemoryMaxAgeDays * 24 * 60 * 60 * 1000;
+
+        // Filter to recently completed tasks (within maxAgeDays)
+        const recentCompleted = ledger.completedTasks.filter((task) => {
+          // Use the "Completed" field, "Updated" field, or "Started" field as date source
+          const dateStr =
+            task.details?.match(/Completed:\s*(\S+)/)?.[1] || task.updated || task.started;
+          if (!dateStr) {
+            return false;
+          }
+          // Try to parse date — accept formats like "2026-02-16", "2026-02-16 09:15"
+          const cleaned = dateStr
+            .trim()
+            .replace(/\s+[A-Z]{2,5}$/, "")
+            .replace(/^(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2})/, "$1T$2");
+          const date = new Date(cleaned);
+          if (Number.isNaN(date.getTime())) {
+            return false;
+          }
+          return now.getTime() - date.getTime() <= maxAgeMs;
+        });
+
+        result.taskMemoryCleanup.tasksChecked = recentCompleted.length;
+
+        if (recentCompleted.length > 0) {
+          onProgress?.(
+            "taskMemoryCleanup",
+            `Found ${recentCompleted.length} recently completed tasks to check`,
+          );
+
+          // Collect all memories to evaluate across all tasks (dedup by id)
+          const memoriesToEvaluate = new Map<
+            string,
+            { id: string; text: string; category: string; taskTitle: string }
+          >();
+
+          for (const task of recentCompleted) {
+            if (abortSignal?.aborted) break;
+
+            // Build keywords from task ID and title words
+            const keywords = [task.id];
+            const titleWords = task.title
+              .split(/\s+/)
+              .filter((w) => w.length > 3)
+              .map((w) => w.replace(/[^a-zA-Z0-9-]/g, ""))
+              .filter((w) => w.length > 3);
+            keywords.push(...titleWords);
+
+            const matches = await db.searchMemoriesByKeywords(keywords, 50, agentId);
+
+            for (const mem of matches) {
+              // Skip core memories — those are user-curated
+              if (mem.category === "core") continue;
+              if (!memoriesToEvaluate.has(mem.id)) {
+                memoriesToEvaluate.set(mem.id, { ...mem, taskTitle: task.title });
+              }
+            }
+          }
+
+          // Classify memories in parallel batches using LLM
+          const toEvaluate = [...memoriesToEvaluate.values()];
+          result.taskMemoryCleanup.memoriesEvaluated = toEvaluate.length;
+
+          if (toEvaluate.length > 0) {
+            onProgress?.("taskMemoryCleanup", `Evaluating ${toEvaluate.length} memories with LLM`);
+          }
+
+          const toRemove: string[] = [];
+
+          for (let i = 0; i < toEvaluate.length && !abortSignal?.aborted; i += llmConcurrency) {
+            const batch = toEvaluate.slice(i, i + llmConcurrency);
+
+            const outcomes = await Promise.allSettled(
+              batch.map((mem) => classifyTaskMemory(mem.text, mem.taskTitle, config, abortSignal)),
+            );
+
+            for (let k = 0; k < outcomes.length; k++) {
+              const outcome = outcomes[k];
+              const mem = batch[k];
+
+              if (outcome.status === "fulfilled" && outcome.value === "noise") {
+                toRemove.push(mem.id);
+                onProgress?.(
+                  "taskMemoryCleanup",
+                  `Noise: "${mem.text.slice(0, 60)}..." (task: ${mem.taskTitle})`,
+                );
+              } else if (outcome.status === "fulfilled" && outcome.value === "lasting") {
+                onProgress?.("taskMemoryCleanup", `Lasting: "${mem.text.slice(0, 60)}..."`);
+              }
+              // On failure, keep the memory (conservative)
+            }
+          }
+
+          // Remove noise memories
+          if (toRemove.length > 0 && !abortSignal?.aborted) {
+            for (const id of toRemove) {
+              if (abortSignal?.aborted) break;
+              await db.invalidateMemory(id);
+            }
+            result.taskMemoryCleanup.memoriesRemoved = toRemove.length;
+            onProgress?.("taskMemoryCleanup", `Invalidated ${toRemove.length} task-noise memories`);
+          }
+        } else {
+          onProgress?.("taskMemoryCleanup", "No recently completed tasks found");
+        }
+      } else {
+        onProgress?.("taskMemoryCleanup", "TASKS.md not found — skipped");
+      }
+
+      logger.info(
+        `memory-neo4j: [sleep] Phase 7 complete — ${result.taskMemoryCleanup.tasksChecked} tasks checked, ${result.taskMemoryCleanup.memoriesEvaluated} memories evaluated, ${result.taskMemoryCleanup.memoriesRemoved} removed`,
+      );
+    } catch (err) {
+      logger.warn(`memory-neo4j: [sleep] Phase 7 error: ${String(err)}`);
+    }
+  } else if (!workspaceDir) {
+    logger.info("memory-neo4j: [sleep] Phase 7: Task-Memory Cleanup — SKIPPED (no workspace dir)");
+  } else if (!config.enabled) {
+    logger.info(
+      "memory-neo4j: [sleep] Phase 7: Task-Memory Cleanup — SKIPPED (extraction not enabled)",
+    );
+  } else if (skipTaskMemoryCleanup) {
+    logger.info("memory-neo4j: [sleep] Phase 7: Task-Memory Cleanup — SKIPPED (disabled)");
   }
 
   result.durationMs = Date.now() - startTime;

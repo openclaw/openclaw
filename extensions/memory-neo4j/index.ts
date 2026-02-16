@@ -32,6 +32,8 @@ import { isSemanticDuplicate, rateImportance } from "./extractor.js";
 import { extractUserMessages, extractAssistantMessages } from "./message-utils.js";
 import { Neo4jMemoryClient } from "./neo4j-client.js";
 import { hybridSearch } from "./search.js";
+import { isRelatedToCompletedTask, loadCompletedTaskKeywords } from "./task-filter.js";
+import { parseTaskLedger } from "./task-ledger.js";
 
 // ============================================================================
 // Plugin Definition
@@ -185,16 +187,21 @@ const memoryNeo4jPlugin = {
               }),
             ),
             category: Type.Optional(stringEnum(MEMORY_CATEGORIES)),
+            taskId: Type.Optional(
+              Type.String({ description: "Optional task ID to link memory to (e.g., TASK-001)" }),
+            ),
           }),
           async execute(_toolCallId: string, params: unknown) {
             const {
               text,
               importance = 0.7,
               category = "other",
+              taskId,
             } = params as {
               text: string;
               importance?: number;
               category?: MemoryCategory;
+              taskId?: string;
             };
 
             // 1. Generate embedding
@@ -232,6 +239,8 @@ const memoryNeo4jPlugin = {
               extractionStatus: extractionConfig.enabled ? "pending" : "skipped",
               agentId,
               sessionKey,
+              // Layer 3: Pass through taskId if provided by the agent
+              ...(taskId ? { taskId } : {}),
             });
 
             // 4. Extraction is deferred to sleep cycle (like human memory consolidation)
@@ -557,6 +566,49 @@ const memoryNeo4jPlugin = {
             results = results.filter((r) => !coreIds.has(r.id));
           }
 
+          // Feature 3: Filter out memories related to completed tasks
+          const workspaceDir = ctx.workspaceDir;
+          if (workspaceDir) {
+            try {
+              const completedTasks = await loadCompletedTaskKeywords(workspaceDir);
+              if (completedTasks.length > 0) {
+                const before = results.length;
+                results = results.filter((r) => !isRelatedToCompletedTask(r.text, completedTasks));
+                if (results.length < before) {
+                  api.logger.debug?.(
+                    `memory-neo4j: task-filter removed ${before - results.length} memories related to completed tasks`,
+                  );
+                }
+              }
+            } catch (err) {
+              api.logger.debug?.(`memory-neo4j: task-filter skipped: ${String(err)}`);
+            }
+          }
+
+          // Layer 3: Filter out memories linked to completed tasks by taskId
+          // This complements Layer 1's keyword-based filter with precise taskId matching
+          if (workspaceDir) {
+            try {
+              const fs = await import("node:fs/promises");
+              const path = await import("node:path");
+              const tasksPath = path.default.join(workspaceDir, "TASKS.md");
+              const content = await fs.default.readFile(tasksPath, "utf-8");
+              const ledger = parseTaskLedger(content);
+              const completedTaskIds = new Set(ledger.completedTasks.map((t) => t.id));
+              if (completedTaskIds.size > 0) {
+                const before = results.length;
+                results = results.filter((r) => !r.taskId || !completedTaskIds.has(r.taskId));
+                if (results.length < before) {
+                  api.logger.debug?.(
+                    `memory-neo4j: taskId-filter removed ${before - results.length} memories linked to completed tasks`,
+                  );
+                }
+              }
+            } catch {
+              // TASKS.md doesn't exist or can't be read — skip taskId filter
+            }
+          }
+
           const totalMs = performance.now() - t0;
           api.logger.info?.(
             `memory-neo4j: [bench] auto-recall ${totalMs.toFixed(0)}ms total (search=${(tSearch - t0).toFixed(0)}ms), ${results.length} results`,
@@ -723,6 +775,7 @@ const memoryNeo4jPlugin = {
           embeddings,
           extractionConfig,
           api.logger,
+          ctx.workspaceDir, // Layer 3: pass workspace dir for task auto-tagging
         );
       });
     }
@@ -757,6 +810,51 @@ const memoryNeo4jPlugin = {
 };
 
 // ============================================================================
+// Layer 3: TASKS.md cache for auto-capture task tagging
+// ============================================================================
+
+/** Cached result of TASKS.md parsing for auto-capture task tagging. */
+let _taskLedgerCache: { activeTaskId: string | undefined; expiresAt: number } | null = null;
+const TASK_LEDGER_CACHE_TTL_MS = 60_000; // 60 seconds
+
+/**
+ * Get the active task ID from TASKS.md (if exactly one active task).
+ * Results are cached with a 60-second TTL to avoid re-parsing on every message.
+ */
+async function getActiveTaskIdForCapture(
+  workspaceDir: string | undefined,
+  logger: Logger,
+): Promise<string | undefined> {
+  const now = Date.now();
+  if (_taskLedgerCache && now < _taskLedgerCache.expiresAt) {
+    return _taskLedgerCache.activeTaskId;
+  }
+
+  let activeTaskId: string | undefined;
+  if (workspaceDir) {
+    try {
+      const fs = await import("node:fs/promises");
+      const path = await import("node:path");
+      const tasksPath = path.default.join(workspaceDir, "TASKS.md");
+      const content = await fs.default.readFile(tasksPath, "utf-8");
+      const ledger = parseTaskLedger(content);
+      // Only auto-tag when there's exactly one active task to avoid ambiguity
+      if (ledger.activeTasks.length === 1) {
+        activeTaskId = ledger.activeTasks[0].id;
+      }
+    } catch {
+      // TASKS.md doesn't exist or can't be read — no auto-tagging
+    }
+  }
+
+  _taskLedgerCache = { activeTaskId, expiresAt: now + TASK_LEDGER_CACHE_TTL_MS };
+  return activeTaskId;
+}
+
+// Exported for testing
+export { _taskLedgerCache, getActiveTaskIdForCapture as _getActiveTaskIdForCapture };
+
+// ============================================================================
 // Auto-capture pipeline (fire-and-forget from agent_end hook)
 // ============================================================================
 
@@ -776,6 +874,7 @@ async function captureMessage(
   extractionConfig: import("./config.js").ExtractionConfig,
   logger: Logger,
   precomputedVector?: number[],
+  taskId?: string, // Layer 3: optional task ID for auto-tagging
 ): Promise<{ stored: boolean; semanticDeduped: boolean }> {
   // For assistant messages, rate importance first (before embedding) to skip early.
   // When extraction is disabled, rateImportance returns 0.5 (the fallback), so we
@@ -835,6 +934,8 @@ async function captureMessage(
     extractionStatus: extractionConfig.enabled ? "pending" : "skipped",
     agentId,
     sessionKey,
+    // Layer 3: auto-tag with active task ID when available
+    ...(taskId ? { taskId } : {}),
   });
   return { stored: true, semanticDeduped: false };
 }
@@ -851,6 +952,7 @@ async function runAutoCapture(
   embeddings: import("./embeddings.js").Embeddings,
   extractionConfig: import("./config.js").ExtractionConfig,
   logger: Logger,
+  workspaceDir?: string, // Layer 3: workspace dir for task auto-tagging
 ): Promise<void> {
   try {
     const t0 = performance.now();
@@ -890,6 +992,9 @@ async function runAutoCapture(
     const vectors = allTexts.length > 0 ? await embeddings.embedBatch(allTexts) : [];
     const tEmbed = performance.now();
 
+    // Layer 3: Detect active task for auto-tagging
+    const activeTaskId = await getActiveTaskIdForCapture(workspaceDir, logger);
+
     // Process each with pre-computed vector
     for (let i = 0; i < allMeta.length; i++) {
       try {
@@ -906,6 +1011,7 @@ async function runAutoCapture(
           extractionConfig,
           logger,
           vectors[i],
+          activeTaskId, // Layer 3: auto-tag with active task ID
         );
         if (result.stored) stored++;
         if (result.semanticDeduped) semanticDeduped++;

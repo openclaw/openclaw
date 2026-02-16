@@ -42,6 +42,7 @@ export type MemoryNode = {
   sessionKey?: string;
   retrievalCount: number;
   lastRetrievedAt?: string;
+  taskId?: string; // Optional link to TASKS.md task (e.g., "TASK-001")
 };
 
 export type EntityNode = {
@@ -103,6 +104,7 @@ export type SearchSignalResult = {
   importance: number;
   createdAt: string;
   score: number;
+  taskId?: string; // Optional link to TASKS.md task (e.g., "TASK-001")
 };
 
 export type SignalAttribution = {
@@ -117,6 +119,7 @@ export type HybridSearchResult = {
   importance: number;
   createdAt: string;
   score: number;
+  taskId?: string; // Optional link to TASKS.md task (e.g., "TASK-001")
   signals?: {
     vector: SignalAttribution;
     bm25: SignalAttribution;
@@ -138,6 +141,7 @@ export type StoreMemoryInput = {
   extractionStatus: ExtractionStatus;
   agentId: string;
   sessionKey?: string;
+  taskId?: string; // Optional link to TASKS.md task (e.g., "TASK-001")
 };
 
 export type MergeEntityInput = {
