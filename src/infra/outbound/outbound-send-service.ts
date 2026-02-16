@@ -61,6 +61,13 @@ function extractToolPayload(result: AgentToolResult<unknown>): unknown {
   return result.content ?? result;
 }
 
+function hasStructuredComponents(params: Record<string, unknown>): boolean {
+  const rawComponents = params.components;
+  return (
+    Boolean(rawComponents) && typeof rawComponents === "object" && !Array.isArray(rawComponents)
+  );
+}
+
 export async function executeSendAction(params: {
   ctx: OutboundSendContext;
   to: string;
@@ -108,6 +115,12 @@ export async function executeSendAction(params: {
         payload: extractToolPayload(handled),
         toolResult: handled,
       };
+    }
+
+    if (params.ctx.channel === "discord" && hasStructuredComponents(params.ctx.params)) {
+      throw new Error(
+        "Discord component sends require channel plugin handling; generic send fallback is disabled.",
+      );
     }
   }
 
