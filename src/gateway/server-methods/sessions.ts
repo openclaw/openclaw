@@ -498,4 +498,46 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       undefined,
     );
   },
+
+  /**
+   * sessions.send - Internal method for delivering messages to sessions
+   * Used by A2A response routing to deliver skill_response/skill_timeout
+   */
+  "sessions.send": async ({ params, respond, context }) => {
+    const p = params as { sessionKey?: unknown; message?: unknown; deliver?: unknown };
+    const sessionKey = typeof p.sessionKey === "string" ? p.sessionKey.trim() : "";
+    const message = typeof p.message === "string" ? p.message : "";
+    // Note: deliver parameter reserved for future channel delivery enhancement
+
+    if (!sessionKey) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "sessionKey required"));
+      return;
+    }
+
+    if (!message) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "message required"));
+      return;
+    }
+
+    // Parse the message to determine event type
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(message);
+    } catch {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "message must be valid JSON"),
+      );
+      return;
+    }
+
+    const kind = typeof parsed.kind === "string" ? parsed.kind : "chat";
+    const event = kind === "skill_response" || kind === "skill_timeout" ? "skill_response" : "chat";
+
+    // Send to the target session via nodeSendToSession
+    context.nodeSendToSession(sessionKey, event, parsed);
+
+    respond(true, { ok: true, delivered: true }, undefined);
+  },
 };
