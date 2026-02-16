@@ -28,6 +28,7 @@ import { isMemoryPath, normalizeExtraMemoryPaths } from "./internal.js";
 import { memoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
 import { searchKeyword, searchVector } from "./manager-search.js";
 import { memoryManagerSyncOps } from "./manager-sync-ops.js";
+import { extractKeywords } from "./query-expansion.js";
 const SNIPPET_MAX_CHARS = 700;
 const VECTOR_TABLE = "chunks_vec";
 const FTS_TABLE = "chunks_fts";
@@ -233,8 +234,34 @@ export class MemoryIndexManager implements MemorySearchManager {
         log.warn("memory search: no provider and FTS unavailable");
         return [];
       }
-      const ftsResults = await this.searchKeyword(cleaned, candidates).catch(() => []);
-      return ftsResults.filter((entry) => entry.score >= minScore).slice(0, maxResults);
+
+      // Extract keywords for better FTS matching on conversational queries
+      // e.g., "that thing we discussed about the API" → ["discussed", "API"]
+      const keywords = extractKeywords(cleaned);
+      const searchTerms = keywords.length > 0 ? keywords : [cleaned];
+
+      // Search with each keyword and merge results
+      const resultSets = await Promise.all(
+        searchTerms.map((term) => this.searchKeyword(term, candidates).catch(() => [])),
+      );
+
+      // Merge and deduplicate results, keeping highest score for each chunk
+      const seenIds = new Map<string, (typeof resultSets)[0][0]>();
+      for (const results of resultSets) {
+        for (const result of results) {
+          const existing = seenIds.get(result.id);
+          if (!existing || result.score > existing.score) {
+            seenIds.set(result.id, result);
+          }
+        }
+      }
+
+      const merged = [...seenIds.values()]
+        .toSorted((a, b) => b.score - a.score)
+        .filter((entry) => entry.score >= minScore)
+        .slice(0, maxResults);
+
+      return merged;
     }
 
     const keywordResults = hybrid.enabled
