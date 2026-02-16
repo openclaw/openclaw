@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: install-smoke-${{ github.event.pull_request.number || github.sha }}
+  group: install-smoke-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
