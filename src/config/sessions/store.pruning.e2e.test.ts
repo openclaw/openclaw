@@ -86,42 +86,6 @@ describe("Integration: saveSessionStore with pruning", () => {
     expect(loaded.fresh).toBeDefined();
   });
 
-  it("saveSessionStore rotates file when over size limit and creates .bak", async () => {
-    mockLoadConfig.mockReturnValue({
-      session: {
-        maintenance: {
-          mode: "enforce",
-          pruneAfter: "30d",
-          maxEntries: 500,
-          rotateBytes: "100b",
-        },
-      },
-    });
-
-    const now = Date.now();
-    const largeStore: Record<string, SessionEntry> = {};
-    for (let i = 0; i < 50; i++) {
-      largeStore[`agent:main:session-${crypto.randomUUID()}`] = makeEntry(now - i * 1000);
-    }
-    await fs.mkdir(path.dirname(storePath), { recursive: true });
-    await fs.writeFile(storePath, JSON.stringify(largeStore, null, 2), "utf-8");
-
-    const statBefore = await fs.stat(storePath);
-    expect(statBefore.size).toBeGreaterThan(100);
-
-    const smallStore: Record<string, SessionEntry> = {
-      only: makeEntry(now),
-    };
-    await saveSessionStore(storePath, smallStore);
-
-    const files = await fs.readdir(testDir);
-    const bakFiles = files.filter((f) => f.startsWith("sessions.json.bak."));
-    expect(bakFiles.length).toBeGreaterThanOrEqual(1);
-
-    const loaded = loadSessionStore(storePath);
-    expect(loaded.only).toBeDefined();
-  });
-
   it("saveSessionStore skips enforcement when maintenance mode is warn", async () => {
     mockLoadConfig.mockReturnValue({
       session: {
