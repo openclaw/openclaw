@@ -10,7 +10,7 @@ import { createTypingCallbacks } from "../../../channels/typing.js";
 import { resolveStorePath, updateLastRoute } from "../../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../../globals.js";
 import { removeSlackReaction } from "../../actions.js";
-import { resolveSlackThreadTargets } from "../../threading.js";
+import { resolveSlackThreadContext, resolveSlackThreadTargets } from "../../threading.js";
 import { createSlackReplyDeliveryPlan, deliverReplies } from "../replies.js";
 
 export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessage) {
@@ -39,6 +39,10 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     message,
     replyToMode: ctx.replyToMode,
   });
+  const { isThreadReply } = resolveSlackThreadContext({
+    message,
+    replyToMode: ctx.replyToMode,
+  });
 
   const messageTs = message.ts ?? message.event_ts;
   const incomingThreadTs = message.thread_ts;
@@ -52,6 +56,8 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     incomingThreadTs,
     messageTs,
     hasRepliedRef,
+    chatType: prepared.isDirectMessage ? "direct" : "channel",
+    isThreadReply,
   });
 
   const typingTarget = statusThreadTs ? `${message.channel}/${statusThreadTs}` : message.channel;
