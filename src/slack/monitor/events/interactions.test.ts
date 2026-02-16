@@ -30,6 +30,10 @@ type RegisteredViewHandler = (args: {
     view?: {
       id?: string;
       callback_id?: string;
+      root_view_id?: string;
+      previous_view_id?: string;
+      external_id?: string;
+      hash?: string;
       state?: { values?: Record<string, Record<string, Record<string, unknown>>> };
     };
   };
@@ -44,6 +48,10 @@ type RegisteredViewClosedHandler = (args: {
       id?: string;
       callback_id?: string;
       private_metadata?: string;
+      root_view_id?: string;
+      previous_view_id?: string;
+      external_id?: string;
+      hash?: string;
       state?: { values?: Record<string, Record<string, Record<string, unknown>>> };
     };
     is_cleared?: boolean;
@@ -604,6 +612,10 @@ describe("registerSlackInteractionEvents", () => {
         view: {
           id: "V123",
           callback_id: "openclaw:deploy_form",
+          root_view_id: "VROOT",
+          previous_view_id: "VPREV",
+          external_id: "deploy-ext-1",
+          hash: "view-hash-1",
           private_metadata: JSON.stringify({ channelId: "D123", channelType: "im" }),
           state: {
             values: {
@@ -642,6 +654,11 @@ describe("registerSlackInteractionEvents", () => {
       viewId: string;
       userId: string;
       routedChannelId?: string;
+      rootViewId?: string;
+      previousViewId?: string;
+      externalId?: string;
+      viewHash?: string;
+      isStackedView?: boolean;
       inputs: Array<{ actionId: string; selectedValues?: string[]; inputValue?: string }>;
     };
     expect(payload).toMatchObject({
@@ -651,6 +668,11 @@ describe("registerSlackInteractionEvents", () => {
       viewId: "V123",
       userId: "U777",
       routedChannelId: "D123",
+      rootViewId: "VROOT",
+      previousViewId: "VPREV",
+      externalId: "deploy-ext-1",
+      viewHash: "view-hash-1",
+      isStackedView: true,
     });
     expect(payload.inputs).toEqual(
       expect.arrayContaining([
@@ -939,6 +961,10 @@ describe("registerSlackInteractionEvents", () => {
         view: {
           id: "V900",
           callback_id: "openclaw:deploy_form",
+          root_view_id: "VROOT900",
+          previous_view_id: "VPREV900",
+          external_id: "deploy-ext-900",
+          hash: "view-hash-900",
           private_metadata: JSON.stringify({ sessionKey: "agent:main:slack:channel:C99" }),
           state: {
             values: {
@@ -972,6 +998,11 @@ describe("registerSlackInteractionEvents", () => {
       userId: string;
       isCleared: boolean;
       privateMetadata: string;
+      rootViewId?: string;
+      previousViewId?: string;
+      externalId?: string;
+      viewHash?: string;
+      isStackedView?: boolean;
       inputs: Array<{ actionId: string; selectedValues?: string[] }>;
     };
     expect(payload).toMatchObject({
@@ -982,6 +1013,11 @@ describe("registerSlackInteractionEvents", () => {
       userId: "U900",
       isCleared: true,
       privateMetadata: JSON.stringify({ sessionKey: "agent:main:slack:channel:C99" }),
+      rootViewId: "VROOT900",
+      previousViewId: "VPREV900",
+      externalId: "deploy-ext-900",
+      viewHash: "view-hash-900",
+      isStackedView: true,
     });
     expect(payload.inputs).toEqual(
       expect.arrayContaining([
