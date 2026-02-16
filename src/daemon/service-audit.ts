@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveLaunchAgentPlistPath } from "./launchd.js";
+import { isBunRuntime, isNodeRuntime } from "./runtime-detect.js";
 import {
   isSystemNodePath,
   isVersionManagedNodePath,
@@ -198,16 +199,6 @@ function auditGatewayCommand(programArguments: string[] | undefined, issues: Ser
       level: "aggressive",
     });
   }
-}
-
-function isNodeRuntime(execPath: string): boolean {
-  const base = path.basename(execPath).toLowerCase();
-  return base === "node" || base === "node.exe";
-}
-
-function isBunRuntime(execPath: string): boolean {
-  const base = path.basename(execPath).toLowerCase();
-  return base === "bun" || base === "bun.exe";
 }
 
 function getPathModule(platform: NodeJS.Platform) {
