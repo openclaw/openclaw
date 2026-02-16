@@ -213,7 +213,7 @@ describe("registerSlackInteractionEvents", () => {
         blocks: [
           {
             type: "context",
-            elements: [{ type: "mrkdwn", text: ":white_check_mark: *Canary* selected" }],
+            elements: [{ type: "mrkdwn", text: ":white_check_mark: *Canary* selected by <@U555>" }],
           },
         ],
       }),
@@ -314,7 +314,10 @@ describe("registerSlackInteractionEvents", () => {
           {
             type: "context",
             elements: [
-              { type: "mrkdwn", text: ":white_check_mark: *Alpha, Beta, Gamma +1* selected" },
+              {
+                type: "mrkdwn",
+                text: ":white_check_mark: *Alpha, Beta, Gamma +1* selected by <@U222>",
+              },
             ],
           },
         ],
@@ -423,7 +426,9 @@ describe("registerSlackInteractionEvents", () => {
         blocks: [
           {
             type: "context",
-            elements: [{ type: "mrkdwn", text: ":white_check_mark: *2026-02-16* selected" }],
+            elements: [
+              { type: "mrkdwn", text: ":white_check_mark: *2026-02-16* selected by <@U333>" },
+            ],
           },
           expect.anything(),
           expect.anything(),
@@ -438,7 +443,7 @@ describe("registerSlackInteractionEvents", () => {
         blocks: [
           {
             type: "context",
-            elements: [{ type: "mrkdwn", text: ":white_check_mark: *14:30* selected" }],
+            elements: [{ type: "mrkdwn", text: ":white_check_mark: *14:30* selected by <@U333>" }],
           },
         ],
       }),
@@ -454,7 +459,9 @@ describe("registerSlackInteractionEvents", () => {
             elements: [
               {
                 type: "mrkdwn",
-                text: `:white_check_mark: *${new Date(selectedDateTimeEpoch * 1000).toISOString()}* selected`,
+                text: `:white_check_mark: *${new Date(
+                  selectedDateTimeEpoch * 1000,
+                ).toISOString()}* selected by <@U333>`,
               },
             ],
           },
