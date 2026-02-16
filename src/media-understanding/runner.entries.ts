@@ -25,6 +25,7 @@ import {
   DEFAULT_TIMEOUT_SECONDS,
 } from "./defaults.js";
 import { MediaUnderstandingSkipError } from "./errors.js";
+import { fileExists } from "./fs.js";
 import { extractGeminiResponse } from "./output-extract.js";
 import { describeImageWithModel } from "./providers/image.js";
 import { getMediaUnderstandingProvider, normalizeMediaProviderId } from "./providers/index.js";
@@ -127,18 +128,6 @@ function resolveWhisperCppOutputPath(args: string[]): string | null {
     return null;
   }
   return `${outputBase}.txt`;
-}
-
-async function fileExists(filePath?: string | null): Promise<boolean> {
-  if (!filePath) {
-    return false;
-  }
-  try {
-    await fs.stat(filePath);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 async function resolveCliOutput(params: {

@@ -1,6 +1,7 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isPidAlive } from "../shared/pid-alive.js";
 
 type LockFilePayload = {
   pid: number;
@@ -46,18 +47,6 @@ function resolveCleanupState(): CleanupState {
     };
   }
   return proc[CLEANUP_STATE_KEY];
-}
-
-function isAlive(pid: number): boolean {
-  if (!Number.isFinite(pid) || pid <= 0) {
-    return false;
-  }
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 /**
@@ -162,24 +151,25 @@ export async function acquireSessionWriteLock(params: {
   }
   const normalizedSessionFile = path.join(normalizedDir, path.basename(sessionFile));
   const lockPath = `${normalizedSessionFile}.lock`;
+  const release = async () => {
+    const current = HELD_LOCKS.get(normalizedSessionFile);
+    if (!current) {
+      return;
+    }
+    current.count -= 1;
+    if (current.count > 0) {
+      return;
+    }
+    HELD_LOCKS.delete(normalizedSessionFile);
+    await current.handle.close();
+    await fs.rm(current.lockPath, { force: true });
+  };
 
   const held = HELD_LOCKS.get(normalizedSessionFile);
   if (held) {
     held.count += 1;
     return {
-      release: async () => {
-        const current = HELD_LOCKS.get(normalizedSessionFile);
-        if (!current) {
-          return;
-        }
-        current.count -= 1;
-        if (current.count > 0) {
-          return;
-        }
-        HELD_LOCKS.delete(normalizedSessionFile);
-        await current.handle.close();
-        await fs.rm(current.lockPath, { force: true });
-      },
+      release,
     };
   }
 
@@ -195,19 +185,7 @@ export async function acquireSessionWriteLock(params: {
       );
       HELD_LOCKS.set(normalizedSessionFile, { count: 1, handle, lockPath });
       return {
-        release: async () => {
-          const current = HELD_LOCKS.get(normalizedSessionFile);
-          if (!current) {
-            return;
-          }
-          current.count -= 1;
-          if (current.count > 0) {
-            return;
-          }
-          HELD_LOCKS.delete(normalizedSessionFile);
-          await current.handle.close();
-          await fs.rm(current.lockPath, { force: true });
-        },
+        release,
       };
     } catch (err) {
       const code = (err as { code?: unknown }).code;
@@ -217,7 +195,7 @@ export async function acquireSessionWriteLock(params: {
       const payload = await readLockPayload(lockPath);
       const createdAt = payload?.createdAt ? Date.parse(payload.createdAt) : NaN;
       const stale = !Number.isFinite(createdAt) || Date.now() - createdAt > staleMs;
-      const alive = payload?.pid ? isAlive(payload.pid) : false;
+      const alive = payload?.pid ? isPidAlive(payload.pid) : false;
       if (stale || !alive) {
         await fs.rm(lockPath, { force: true });
         continue;
