@@ -1,11 +1,11 @@
 import type { BrowserActionPathResult, BrowserActionTargetOk } from "./client-actions-types.js";
+import { buildProfileQuery, withBaseUrl } from "./client-actions-url.js";
+import { fetchBrowserJson } from "./client-fetch.js";
 import type {
   BrowserConsoleMessage,
   BrowserNetworkRequest,
   BrowserPageError,
 } from "./pw-session.js";
-import { buildProfileQuery, withBaseUrl } from "./client-actions-url.js";
-import { fetchBrowserJson } from "./client-fetch.js";
 
 function buildQuerySuffix(params: Array<[string, string | boolean | undefined]>): string {
   const query = new URLSearchParams();

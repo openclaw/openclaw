@@ -1,8 +1,6 @@
 // @ts-nocheck
 // oxlint-disable eslint/no-unused-vars, typescript/no-explicit-any
 import fs from "node:fs/promises";
-import type { SessionFileEntry } from "./session-files.js";
-import type { MemorySource } from "./types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runGeminiEmbeddingBatches, type GeminiBatchRequest } from "./batch-gemini.js";
 import {
@@ -21,6 +19,8 @@ import {
   type MemoryChunk,
   type MemoryFileEntry,
 } from "./internal.js";
+import type { SessionFileEntry } from "./session-files.js";
+import type { MemorySource } from "./types.js";
 
 const VECTOR_TABLE = "chunks_vec";
 const FTS_TABLE = "chunks_fts";

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import type { TuiStateAccess } from "./tui-types.js";
 import { createSessionActions } from "./tui-session-actions.js";
+import type { TuiStateAccess } from "./tui-types.js";
 
 describe("tui session actions", () => {
   it("queues session refreshes and applies the latest result", async () => {

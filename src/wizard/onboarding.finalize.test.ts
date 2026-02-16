@@ -4,8 +4,8 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OnboardOptions } from "../commands/onboard-types.js";
 import type { RuntimeEnv } from "../runtime.js";
-import type { WizardPrompter } from "./prompts.js";
 import { finalizeOnboardingWizard } from "./onboarding.finalize.js";
+import type { WizardPrompter } from "./prompts.js";
 
 const mocks = vi.hoisted(() => ({
   detectBrowserOpenSupport: vi.fn(async () => ({ ok: true })),

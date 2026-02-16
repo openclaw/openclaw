@@ -1,7 +1,7 @@
 import type { RuntimeEnv, WizardPrompter } from "openclaw/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
-import type { CoreConfig } from "./types.js";
 import { ircOnboardingAdapter } from "./onboarding.js";
+import type { CoreConfig } from "./types.js";
 
 describe("irc onboarding", () => {
   it("configures host and nick via onboarding prompts", async () => {

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { SpawnSubagentResult } from "../../agents/subagent-spawn.js";
 import { resetSubagentRegistryForTests } from "../../agents/subagent-registry.js";
+import type { SpawnSubagentResult } from "../../agents/subagent-spawn.js";
 
 const hoisted = vi.hoisted(() => {
   const spawnSubagentDirectMock = vi.fn();

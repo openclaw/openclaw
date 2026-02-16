@@ -1,12 +1,5 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import type { RuntimeEnv } from "../runtime.js";
-import type {
-  LinqMediaPart,
-  LinqMessageReceivedData,
-  LinqTextPart,
-  LinqWebhookEvent,
-} from "./types.js";
 import { resolveHumanDelayConfig } from "../agents/identity.js";
 import { hasControlCommand } from "../auto-reply/command-detection.js";
 import { dispatchInboundMessage } from "../auto-reply/dispatch.js";
@@ -32,9 +25,16 @@ import {
   upsertChannelPairingRequest,
 } from "../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { resolveLinqAccount } from "./accounts.js";
 import { markAsReadLinq, sendMessageLinq, startTypingLinq } from "./send.js";
+import type {
+  LinqMediaPart,
+  LinqMessageReceivedData,
+  LinqTextPart,
+  LinqWebhookEvent,
+} from "./types.js";
 
 export type MonitorLinqOpts = {
   accountId?: string;

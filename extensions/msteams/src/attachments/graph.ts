@@ -1,9 +1,3 @@
-import type {
-  MSTeamsAccessTokenProvider,
-  MSTeamsAttachmentLike,
-  MSTeamsGraphMediaResult,
-  MSTeamsInboundMedia,
-} from "./types.js";
 import { getMSTeamsRuntime } from "../runtime.js";
 import { downloadMSTeamsAttachments } from "./download.js";
 import {
@@ -13,6 +7,12 @@ import {
   normalizeContentType,
   resolveAllowedHosts,
 } from "./shared.js";
+import type {
+  MSTeamsAccessTokenProvider,
+  MSTeamsAttachmentLike,
+  MSTeamsGraphMediaResult,
+  MSTeamsInboundMedia,
+} from "./types.js";
 
 type GraphHostedContent = {
   id?: string | null;

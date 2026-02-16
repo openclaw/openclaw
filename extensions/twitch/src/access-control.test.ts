@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { TwitchAccountConfig, TwitchChatMessage } from "./types.js";
 import { checkTwitchAccessControl, extractMentions } from "./access-control.js";
+import type { TwitchAccountConfig, TwitchChatMessage } from "./types.js";
 
 describe("checkTwitchAccessControl", () => {
   const mockAccount: TwitchAccountConfig = {

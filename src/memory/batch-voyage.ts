@@ -1,12 +1,12 @@
 import { createInterface } from "node:readline";
 import { Readable } from "node:stream";
-import type { VoyageEmbeddingClient } from "./embeddings-voyage.js";
 import { extractBatchErrorMessage, formatUnavailableBatchError } from "./batch-error-utils.js";
 import { postJsonWithRetry } from "./batch-http.js";
 import { applyEmbeddingBatchOutputLine } from "./batch-output.js";
 import { runEmbeddingBatchGroups } from "./batch-runner.js";
 import { uploadBatchJsonlFile } from "./batch-upload.js";
 import { buildBatchHeaders, normalizeBatchBaseUrl } from "./batch-utils.js";
+import type { VoyageEmbeddingClient } from "./embeddings-voyage.js";
 
 /**
  * Voyage Batch API Input Line format.

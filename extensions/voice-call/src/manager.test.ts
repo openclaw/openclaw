@@ -1,6 +1,8 @@
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { VoiceCallConfigSchema } from "./config.js";
+import { CallManager } from "./manager.js";
 import type { VoiceCallProvider } from "./providers/base.js";
 import type {
   HangupCallInput,
@@ -13,8 +15,6 @@ import type {
   WebhookContext,
   WebhookVerificationResult,
 } from "./types.js";
-import { VoiceCallConfigSchema } from "./config.js";
-import { CallManager } from "./manager.js";
 
 class FakeProvider implements VoiceCallProvider {
   readonly name = "plivo" as const;

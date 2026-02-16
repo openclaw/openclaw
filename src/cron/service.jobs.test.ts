@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { CronJob, CronJobPatch } from "./types.js";
 import { applyJobPatch } from "./service/jobs.js";
+import type { CronJob, CronJobPatch } from "./types.js";
 
 describe("applyJobPatch", () => {
   it("clears delivery when switching to main session", () => {

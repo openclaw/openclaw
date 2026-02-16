@@ -10,9 +10,9 @@
  * ```
  */
 
-import JSON5 from "json5";
 import fs from "node:fs";
 import path from "node:path";
+import JSON5 from "json5";
 import { isPlainObject } from "../utils.js";
 
 export const INCLUDE_KEY = "$include";

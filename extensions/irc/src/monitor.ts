@@ -1,5 +1,4 @@
 import type { RuntimeEnv } from "openclaw/plugin-sdk";
-import type { CoreConfig, IrcInboundMessage } from "./types.js";
 import { resolveIrcAccount } from "./accounts.js";
 import { connectIrcClient, type IrcClient } from "./client.js";
 import { buildIrcConnectOptions } from "./connect-options.js";
@@ -7,6 +6,7 @@ import { handleIrcInbound } from "./inbound.js";
 import { isChannelTarget } from "./normalize.js";
 import { makeIrcMessageId } from "./protocol.js";
 import { getIrcRuntime } from "./runtime.js";
+import type { CoreConfig, IrcInboundMessage } from "./types.js";
 
 export type IrcMonitorOptions = {
   accountId?: string;

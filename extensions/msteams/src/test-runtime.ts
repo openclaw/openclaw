@@ -1,6 +1,6 @@
-import type { PluginRuntime } from "openclaw/plugin-sdk";
 import os from "node:os";
 import path from "node:path";
+import type { PluginRuntime } from "openclaw/plugin-sdk";
 
 export const msteamsRuntimeStub = {
   state: {

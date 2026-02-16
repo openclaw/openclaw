@@ -1,12 +1,12 @@
 import type { ClawdbotConfig } from "openclaw/plugin-sdk";
-import type { MentionTarget } from "./mention.js";
-import type { FeishuSendResult, ResolvedFeishuAccount } from "./types.js";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
+import type { MentionTarget } from "./mention.js";
 import { buildMentionedMessage, buildMentionedCardContent } from "./mention.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { assertFeishuMessageApiSuccess, toFeishuSendResult } from "./send-result.js";
 import { resolveReceiveIdType, normalizeFeishuTarget } from "./targets.js";
+import type { FeishuSendResult, ResolvedFeishuAccount } from "./types.js";
 
 export type FeishuMessageInfo = {
   messageId: string;

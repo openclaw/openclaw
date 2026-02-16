@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import type { OpenClawConfig } from "../config/config.js";
-import type { LinqAccountConfig } from "./types.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
+import type { LinqAccountConfig } from "./types.js";
 
 export type ResolvedLinqAccount = {
   accountId: string;
