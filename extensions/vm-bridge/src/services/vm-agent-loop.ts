@@ -111,11 +111,22 @@ export function createVmAgentLoop(options: VmAgentLoopOptions) {
     let previousFailure: string | null = null;
     const logEntries: string[] = [];
 
+    // --- Fetch DB schema for execution context ---
+    let schemaContext: string | null = null;
+    try {
+      schemaContext = await fetchDbSchema(bridge, full.system_ref ?? {});
+    } catch (err) {
+      logger.warn(`[vm-agent-loop] Failed to fetch DB schema for #${full.id}: ${err}`);
+    }
+    if (!schemaContext && full.system_ref?.ec2_instance_id) {
+      logger.warn(`[vm-agent-loop] No DB schema available for #${full.id} — executing without schema context`);
+    }
+
     while (attemptCount < full.max_attempts) {
       attemptCount++;
 
       // --- Execute (SSH/Bash — no Chrome) ---
-      const execPrompt = buildExecPrompt(full, attachments, previousFailure, attemptCount);
+      const execPrompt = buildExecPrompt(full, attachments, previousFailure, attemptCount, schemaContext);
       let execResult: McpCallResult;
 
       try {
@@ -257,13 +268,22 @@ export function createVmAgentLoop(options: VmAgentLoopOptions) {
 // Prompt builders
 // ---------------------------------------------------------------------------
 
-function buildExecPrompt(
+export function buildExecPrompt(
   contract: Contract,
   attachments: Array<{ fileId: string; content: unknown }>,
   previousFailure: string | null,
   attemptNumber: number,
+  schemaContext?: string | null,
 ): string {
   const parts: string[] = [];
+
+  // Schema first — so the agent understands the data model before reading the task
+  if (schemaContext) {
+    parts.push("--- Database Schema ---");
+    parts.push("Use this schema to understand how the application stores data. Make changes that respect this structure.");
+    parts.push(schemaContext);
+    parts.push("");
+  }
 
   parts.push(`Execute the following task:\n\n${contract.intent}`);
 
@@ -305,6 +325,71 @@ function buildExecPrompt(
   }
 
   return parts.join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// DB schema introspection
+// ---------------------------------------------------------------------------
+
+export async function fetchDbSchema(
+  bridge: BridgeClient,
+  systemRef: Record<string, unknown>,
+): Promise<string | null> {
+  const instanceId = systemRef.ec2_instance_id as string | undefined;
+  if (!instanceId) return null;
+
+  const repoPath = (systemRef.repo_path as string) ?? "/opt/app";
+
+  // Strategy 1: Read Prisma schema directly (preferred — includes relationships, enums, comments)
+  const prismaPrompt = [
+    `Connect to EC2 instance ${instanceId} via SSM.`,
+    `Read the Prisma schema file: cat ${repoPath}/prisma/schema.prisma`,
+    "",
+    "Return the FULL file contents, no commentary.",
+  ].join("\n");
+
+  try {
+    const prismaResult = await bridge.task(prismaPrompt, { chrome: false, timeout: 60 });
+    if (prismaResult.success && prismaResult.result) {
+      const text = typeof prismaResult.result === "string"
+        ? prismaResult.result
+        : JSON.stringify(prismaResult.result);
+      if (text.includes("model ") && text.includes("@@map")) {
+        return text;
+      }
+    }
+  } catch {
+    // Fall through to MySQL introspection
+  }
+
+  // Strategy 2: MySQL introspection (fallback — no relationships or enums)
+  const mysqlPrompt = [
+    `Connect to EC2 instance ${instanceId} via SSM and inspect the application database schema.`,
+    `The application code is at ${repoPath}.`,
+    "",
+    "Steps:",
+    "1. Find the database connection config in the application (check .env, config files, or environment variables)",
+    "2. Connect to the database (likely MySQL on RDS)",
+    "3. List all tables: SHOW TABLES",
+    "4. For each table, run: DESCRIBE <table_name>",
+    "5. Return the results as plain text in this format:",
+    "   TABLE: <name> (<column1> <type>, <column2> <type>, ...)",
+    "",
+    "Return ONLY the schema listing, no commentary.",
+  ].join("\n");
+
+  try {
+    const result = await bridge.task(mysqlPrompt, { chrome: false, timeout: 60 });
+    if (result.success && result.result) {
+      const text = typeof result.result === "string"
+        ? result.result
+        : JSON.stringify(result.result);
+      return text;
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 type QaCheckItem = { id: string; description: string; nav: string; pass_if: string };

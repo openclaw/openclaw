@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { createVmAgentLoop, buildQaPrompt, parseQaPassed } from "./vm-agent-loop.js";
+import { createVmAgentLoop, buildQaPrompt, parseQaPassed, buildExecPrompt, fetchDbSchema } from "./vm-agent-loop.js";
 import type { Db, Contract } from "../db.js";
 import type { BridgeClient } from "../bridge-client.js";
 
@@ -1185,7 +1185,8 @@ describe("two-step execution: SSH execute + Chrome QA", () => {
     await loop.start({ logger });
 
     const taskCalls = (bridge.task as ReturnType<typeof vi.fn>).mock.calls;
-    const execPrompt = taskCalls[0][0] as string;
+    // taskCalls[0] = Prisma schema fetch, taskCalls[1] = MySQL schema fallback, taskCalls[2] = exec prompt
+    const execPrompt = taskCalls[2][0] as string;
 
     expect(execPrompt).toContain("i-0eb126d7105e24581");
     expect(execPrompt).toContain("/opt/gbp-app/current");
@@ -1334,6 +1335,287 @@ describe("structured QA checklist", () => {
     it("falls back to keyword matching when qa_doc is null", () => {
       expect(parseQaPassed("PASS. Verified.", null)).toBe(true);
       expect(parseQaPassed("FAILED to verify", null)).toBe(false);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Block 11: DB schema context in execution prompt
+// ---------------------------------------------------------------------------
+
+const SAMPLE_SCHEMA = [
+  "TABLE: recipients (id, email, name, type, active, createdAt, updatedAt)",
+  "TABLE: location_contacts (id, locationId, email, name, alertTypes, active)",
+  "TABLE: locations (id, name, brand, department, city, state)",
+].join("\n");
+
+const SAMPLE_PRISMA_SCHEMA = `model EmailRecipient {
+  id    String @id @default(cuid())
+  email String @unique @map("email")
+  name  String? @map("name")
+  type  String @map("recipient_type") // 'monthly', 'all'
+  active Boolean @default(true)
+  @@map("email_recipients")
+}
+
+model LocationContact {
+  id         String @id @default(cuid())
+  locationId String @map("location_id")
+  contactType String @map("contact_type") // 'daily', 'weekly', 'all'
+  email      String @map("email")
+  name       String? @map("name")
+  active     Boolean @default(true)
+  location   Location @relation(fields: [locationId], references: [id])
+  @@map("location_contacts")
+}`;
+
+describe("DB schema context in execution prompt", () => {
+  describe("buildExecPrompt", () => {
+    it("includes schema context when provided", () => {
+      const contract = makeContract({
+        system_ref: { ec2_instance_id: "i-abc123", repo_path: "/opt/app" },
+      });
+      const prompt = buildExecPrompt(contract, [], null, 1, SAMPLE_SCHEMA);
+
+      expect(prompt).toContain("--- Database Schema ---");
+      expect(prompt).toContain("TABLE: recipients");
+      expect(prompt).toContain("TABLE: location_contacts");
+      expect(prompt).toContain("TABLE: locations");
+    });
+
+    it("omits schema section when schemaContext is null", () => {
+      const contract = makeContract({
+        system_ref: { ec2_instance_id: "i-abc123", repo_path: "/opt/app" },
+      });
+      const prompt = buildExecPrompt(contract, [], null, 1, null);
+
+      expect(prompt).not.toContain("Database Schema");
+    });
+
+    it("omits schema section when schemaContext is empty string", () => {
+      const contract = makeContract();
+      const prompt = buildExecPrompt(contract, [], null, 1, "");
+
+      expect(prompt).not.toContain("Database Schema");
+    });
+
+    it("places schema before the task instruction so agent reads it first", () => {
+      const contract = makeContract({
+        intent: "Add jshearer to recipients",
+        system_ref: { ec2_instance_id: "i-abc123" },
+      });
+      const prompt = buildExecPrompt(contract, [], null, 1, SAMPLE_SCHEMA);
+
+      const schemaPos = prompt.indexOf("--- Database Schema ---");
+      const taskPos = prompt.indexOf("Execute the following task:");
+      expect(schemaPos).toBeGreaterThan(-1);
+      expect(taskPos).toBeGreaterThan(-1);
+      expect(schemaPos).toBeLessThan(taskPos);
+    });
+  });
+
+  describe("fetchDbSchema", () => {
+    it("prefers Prisma schema when available", async () => {
+      const bridge = createMockBridge({
+        task: vi.fn(async () => ({
+          success: true,
+          result: SAMPLE_PRISMA_SCHEMA,
+        })),
+      });
+
+      const schema = await fetchDbSchema(bridge, {
+        ec2_instance_id: "i-0eb126d7105e24581",
+        repo_path: "/opt/gbp-app/current",
+      });
+
+      expect(schema).toContain("model EmailRecipient");
+      expect(schema).toContain("model LocationContact");
+      expect(schema).toContain("@@map");
+      // Only 1 call needed — Prisma succeeded
+      expect(bridge.task).toHaveBeenCalledTimes(1);
+      const taskCall = (bridge.task as ReturnType<typeof vi.fn>).mock.calls[0];
+      expect(taskCall[0]).toContain("schema.prisma");
+      expect(taskCall[0]).toContain("i-0eb126d7105e24581");
+      expect(taskCall[1].chrome).toBe(false);
+    });
+
+    it("falls back to MySQL DESCRIBE when Prisma schema not found", async () => {
+      let callCount = 0;
+      const bridge = createMockBridge({
+        task: vi.fn(async () => {
+          callCount++;
+          if (callCount === 1) {
+            // Prisma file not found
+            return { success: true, result: "No such file or directory" };
+          }
+          // MySQL fallback
+          return { success: true, result: SAMPLE_SCHEMA };
+        }),
+      });
+
+      const schema = await fetchDbSchema(bridge, {
+        ec2_instance_id: "i-0eb126d7105e24581",
+        repo_path: "/opt/gbp-app/current",
+      });
+
+      expect(schema).toContain("TABLE: recipients");
+      // 2 calls: Prisma (failed) + MySQL (succeeded)
+      expect(bridge.task).toHaveBeenCalledTimes(2);
+      const mysqlCall = (bridge.task as ReturnType<typeof vi.fn>).mock.calls[1];
+      expect(mysqlCall[0]).toContain("SHOW TABLES");
+    });
+
+    it("returns null when both strategies fail", async () => {
+      const bridge = createMockBridge({
+        task: vi.fn(async () => ({
+          success: false,
+          error: "SSH connection refused",
+        })),
+      });
+
+      const schema = await fetchDbSchema(bridge, {
+        ec2_instance_id: "i-0eb126d7105e24581",
+        repo_path: "/opt/gbp-app/current",
+      });
+
+      expect(schema).toBeNull();
+    });
+
+    it("returns null when no ec2_instance_id in system_ref", async () => {
+      const bridge = createMockBridge();
+
+      const schema = await fetchDbSchema(bridge, {});
+
+      expect(schema).toBeNull();
+      // Should NOT have called bridge.task at all
+      expect(bridge.task).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("executeContract integration", () => {
+    it("fetches DB schema and includes it in exec prompt", async () => {
+      const contract = makeContract({
+        id: 90,
+        system_ref: {
+          ec2_instance_id: "i-0eb126d7105e24581",
+          repo_path: "/opt/gbp-app/current",
+          chrome_profile: "default",
+        },
+      });
+      const claimed = makeContract({ ...contract, state: "IMPLEMENTING", claimed_by: HOSTNAME });
+
+      let taskCallCount = 0;
+      const bridge = createMockBridge({
+        task: vi.fn(async (prompt: string, opts: Record<string, unknown>) => {
+          taskCallCount++;
+          if (taskCallCount === 1) {
+            // First call = Prisma schema fetch (succeeds)
+            return { success: true, result: SAMPLE_PRISMA_SCHEMA };
+          }
+          // Subsequent calls = execution + QA
+          return { success: true, result: "Task completed. PASS. Verified." };
+        }),
+      });
+
+      const db = createMockDb({
+        pollContracts: vi.fn(async () => [contract]),
+        claimContract: vi.fn(async () => claimed),
+        getContract: vi.fn(async () => claimed),
+        updateContract: vi.fn(async () => claimed),
+      });
+
+      const logger = makeLogger();
+      const loop = createVmAgentLoop({ hostname: HOSTNAME, pollIntervalMs: POLL_MS, db, bridge });
+      await loop.start({ logger });
+
+      // bridge.task: 1) Prisma schema, 2) execution, 3) QA
+      const taskCalls = (bridge.task as ReturnType<typeof vi.fn>).mock.calls;
+      expect(taskCalls.length).toBeGreaterThanOrEqual(3);
+
+      // Second call (execution) should contain the Prisma schema
+      const execPrompt = taskCalls[1][0] as string;
+      expect(execPrompt).toContain("--- Database Schema ---");
+      expect(execPrompt).toContain("model EmailRecipient");
+      expect(execPrompt).toContain("model LocationContact");
+
+      await loop.stop({ logger });
+    });
+
+    it("still executes when schema fetch fails", async () => {
+      const contract = makeContract({
+        id: 91,
+        system_ref: {
+          ec2_instance_id: "i-0eb126d7105e24581",
+          repo_path: "/opt/gbp-app/current",
+          chrome_profile: "default",
+        },
+      });
+      const claimed = makeContract({ ...contract, state: "IMPLEMENTING", claimed_by: HOSTNAME });
+
+      let taskCallCount = 0;
+      const bridge = createMockBridge({
+        task: vi.fn(async () => {
+          taskCallCount++;
+          // First 2 calls = schema fetch (Prisma fails, MySQL fails)
+          if (taskCallCount <= 2) {
+            return { success: false, error: "SSH timeout" };
+          }
+          return { success: true, result: "Task completed. PASS. Verified." };
+        }),
+      });
+
+      const db = createMockDb({
+        pollContracts: vi.fn(async () => [contract]),
+        claimContract: vi.fn(async () => claimed),
+        getContract: vi.fn(async () => claimed),
+        updateContract: vi.fn(async () => claimed),
+      });
+
+      const logger = makeLogger();
+      const loop = createVmAgentLoop({ hostname: HOSTNAME, pollIntervalMs: POLL_MS, db, bridge });
+      await loop.start({ logger });
+
+      // Execution should still proceed (schema failure is non-fatal)
+      const taskCalls = (bridge.task as ReturnType<typeof vi.fn>).mock.calls;
+      // Prisma fail (1) + MySQL fail (2) + execution (3) + QA (4)
+      expect(taskCalls.length).toBeGreaterThanOrEqual(4);
+
+      // Exec prompt (3rd call) should NOT contain schema (both failed)
+      const execPrompt = taskCalls[2][0] as string;
+      expect(execPrompt).not.toContain("--- Database Schema ---");
+
+      // Warning should be logged
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining("schema"),
+      );
+
+      await loop.stop({ logger });
+    });
+
+    it("skips schema fetch when contract has no ec2_instance_id", async () => {
+      const contract = makeContract({
+        id: 92,
+        system_ref: { chrome_profile: "vvg" },
+      });
+      const claimed = makeContract({ ...contract, state: "IMPLEMENTING", claimed_by: HOSTNAME });
+
+      const bridge = createMockBridge();
+      const db = createMockDb({
+        pollContracts: vi.fn(async () => [contract]),
+        claimContract: vi.fn(async () => claimed),
+        getContract: vi.fn(async () => claimed),
+        updateContract: vi.fn(async () => claimed),
+      });
+
+      const logger = makeLogger();
+      const loop = createVmAgentLoop({ hostname: HOSTNAME, pollIntervalMs: POLL_MS, db, bridge });
+      await loop.start({ logger });
+
+      // Only 2 task calls: execution + QA (no schema fetch)
+      const taskCalls = (bridge.task as ReturnType<typeof vi.fn>).mock.calls;
+      expect(taskCalls.length).toBe(2);
+
+      await loop.stop({ logger });
     });
   });
 });
