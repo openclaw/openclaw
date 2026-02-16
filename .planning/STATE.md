@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-02-16)
 
 **Core value:** Inbound messages from any channel cannot manipulate the agent into leaking system prompts, accessing unauthorized tools, exfiltrating user data, or affecting other channels' sessions.
-**Current focus:** Phase 7 — Agent & Gateway Live Tests
+**Current focus:** Phase 8 — Browser, Media & WhatsApp Live Tests
 
 ## Current Position
 
-Phase: 7 of 8 (Agent & Gateway Live Tests)
-Plan: 2 of 2 in current phase (complete)
-Status: Phase 7 complete
-Last activity: 2026-02-16 — 07-02 gateway live tests fixed and verified
+Phase: 8 of 8 (Browser, Media & WhatsApp)
+Plan: 1 of 2 in current phase (complete)
+Status: Executing phase 8
+Last activity: 2026-02-16 — 08-01 browser CDP live test verified
 
-Progress: [████████████████████████░░░░░░] 82% (15/~17 plans across all milestones)
+Progress: [██████████████████████████░░░░] 88% (16/~17 plans across all milestones)
 
 ## Performance Metrics
 
@@ -33,6 +33,7 @@ Progress: [███████████████████████
 | 06-02 | Live Test Reporter | 4min     | 2     | 2     |
 | 07-01 | Agent Provider Tests | 3min   | 2     | 0     |
 | 07-02 | Gateway Live Tests   | 6min   | 2     | 2     |
+| 08-01 | Browser CDP Test     | 3min   | 2     | 0     |
 
 ## Accumulated Context
 
@@ -51,6 +52,7 @@ Full decision log in PROJECT.md Key Decisions table.
 - GatewayClient constructor requires GATEWAY_CLIENT_NAMES enum (not raw string) and clientDisplayName field
 - startGatewayServer uses positional (port, opts) form, not object-style
 - CLI backend test environmental skip in Claude Code sessions is acceptable
+- No code changes needed for browser CDP live test — Phase 6 left it correct
 
 ### Pending Todos
 
@@ -63,6 +65,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-16
-Stopped at: Phase 8 context gathered
-Resume with: `/gsd:plan-phase 8`
-Resume file: `.planning/phases/08-browser-media-whatsapp/08-CONTEXT.md`
+Stopped at: Completed 08-01-PLAN.md
+Resume with: `/gsd:execute-phase 08-02`
+Resume file: `.planning/phases/08-browser-media-whatsapp/08-02-PLAN.md`
