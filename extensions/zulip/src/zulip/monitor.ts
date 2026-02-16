@@ -862,8 +862,14 @@ export async function monitorZulipProvider(
           }
 
           const list = events.events ?? [];
-          if (typeof events.last_event_id === "number") {
-            lastEventId = events.last_event_id;
+          // Update lastEventId from individual event IDs. The /api/v1/events
+          // response does NOT include a top-level last_event_id field — only
+          // /api/v1/register does. Without this, lastEventId stays at -1 forever,
+          // causing every poll to replay ALL events since queue registration.
+          for (const evt of list) {
+            if (typeof evt.id === "number" && evt.id > lastEventId) {
+              lastEventId = evt.id;
+            }
           }
 
           const messages = list
