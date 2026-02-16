@@ -1,5 +1,5 @@
-import { isNonRetryableAbort } from "./abort-classifier.js";
 import { sleep } from "../utils.js";
+import { isNonRetryableAbort } from "./abort-classifier.js";
 
 export type RetryConfig = {
   attempts?: number;

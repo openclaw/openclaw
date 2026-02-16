@@ -4,8 +4,8 @@ import path from "node:path";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { OutboundChannel } from "./targets.js";
-import { isNonRetryableAbort } from "../abort-classifier.js";
 import { resolveStateDir } from "../../config/paths.js";
+import { isNonRetryableAbort } from "../abort-classifier.js";
 
 const QUEUE_DIRNAME = "delivery-queue";
 const FAILED_DIRNAME = "failed";
@@ -294,9 +294,7 @@ export async function recoverPendingDeliveries(opts: {
       // Restart/user aborts should not be retried — move straight to failed/.
       // See: https://github.com/openclaw/openclaw/issues/17589
       if (isNonRetryableAbort(err)) {
-        opts.log.warn(
-          `Non-retryable abort for delivery ${entry.id} — moving to failed/`,
-        );
+        opts.log.warn(`Non-retryable abort for delivery ${entry.id} — moving to failed/`);
         try {
           await moveToFailed(entry.id, opts.stateDir);
         } catch {
