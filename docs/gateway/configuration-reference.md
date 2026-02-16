@@ -317,6 +317,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
       textChunkLimit: 4000,
       chunkMode: "length",
       mediaMaxMb: 20,
+      rateLimitPolicy: "retry", // retry (default) | fail-fast
     },
   },
 }
@@ -325,6 +326,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 - **Socket mode** requires both `botToken` and `appToken` (`SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN` for default account env fallback).
 - **HTTP mode** requires `botToken` plus `signingSecret` (at root or per-account).
 - `configWrites: false` blocks Slack-initiated config writes.
+- `rateLimitPolicy: "fail-fast"` uses targeted APIs (`users.info`, `conversations.info`) for ID entries instead of paginating all workspace users/channels. Prevents 429 retry loops from starving the WebSocket connection on large workspaces.
 - Use `user:<id>` (DM) or `channel:<id>` for delivery targets.
 
 **Reaction notification modes:** `off`, `own` (default), `all`, `allowlist` (from `reactionAllowlist`).

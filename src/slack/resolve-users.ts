@@ -1,5 +1,5 @@
 import type { WebClient } from "@slack/web-api";
-import { createSlackWebClient } from "./client.js";
+import { createSlackWebClient, createSlackWebClientBulk } from "./client.js";
 
 export type SlackUserLookup = {
   id: string;
@@ -271,7 +271,11 @@ export async function resolveSlackUserAllowlist(params: {
   client?: WebClient;
   rateLimitPolicy?: "retry" | "fail-fast";
 }): Promise<SlackUserResolution[]> {
-  const client = params.client ?? createSlackWebClient(params.token);
+  const client =
+    params.client ??
+    (params.rateLimitPolicy === "fail-fast"
+      ? createSlackWebClientBulk(params.token)
+      : createSlackWebClient(params.token));
 
   if (params.rateLimitPolicy === "fail-fast") {
     return resolveViaTargetedApis(client, params.entries);
