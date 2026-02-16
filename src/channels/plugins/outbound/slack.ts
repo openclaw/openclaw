@@ -54,7 +54,7 @@ async function sendSlackOutboundMessage(params: {
   accountId?: string | null;
   deps?: { sendSlack?: typeof sendMessageSlack } | null;
   replyToId?: string | null;
-  threadId?: unknown;
+  threadId?: string | number | null;
   identity?: OutboundIdentity;
 }) {
   const send = params.deps?.sendSlack ?? sendMessageSlack;
