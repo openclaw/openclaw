@@ -67,7 +67,7 @@ describe("request_orchestrator tool", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockCallGateway.mockResolvedValue({
-      sessions: [{ key: "agent:main:main" }],
+      key: "agent:main:main",
     });
     mockGetRunByChildKey.mockReturnValue({
       requesterSessionKey: "agent:main:main",
@@ -116,7 +116,7 @@ describe("request_orchestrator tool", () => {
   });
 
   it("fails fast when parent unavailable", async () => {
-    mockCallGateway.mockResolvedValue({ sessions: [] });
+    mockCallGateway.mockResolvedValue({});
     const tool = createRequestOrchestratorTool({
       agentSessionKey: "agent:main:subagent:child-1",
     });
@@ -234,6 +234,19 @@ describe("request_orchestrator tool", () => {
     const text = (result as { content: Array<{ text: string }> }).content[0]?.text ?? "";
     const payload = JSON.parse(text);
     expect(payload.status).toBe("cancelled");
+  });
+
+  it("uses runtime abort signal from execute context", async () => {
+    const controller = new AbortController();
+    const tool = createRequestOrchestratorTool({
+      agentSessionKey: "agent:main:subagent:child-1",
+    });
+    await tool.execute("tc-1", { message: "help" }, controller.signal);
+    expect(mockWaitForResolution).toHaveBeenCalledWith(
+      "req_test-123",
+      expect.any(Number),
+      controller.signal,
+    );
   });
 
   it("enforces max pending per child cap", async () => {

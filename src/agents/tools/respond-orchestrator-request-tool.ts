@@ -1,10 +1,12 @@
 import { Type } from "@sinclair/typebox";
 import type { AnyAgentTool } from "./common.js";
+import { loadConfig } from "../../config/config.js";
 import {
   getOrchestratorRequest,
   resolveOrchestratorRequest,
 } from "../orchestrator-request-registry.js";
 import { jsonResult, readStringParam } from "./common.js";
+import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
 
 const RespondOrchestratorRequestSchema = Type.Object({
   requestId: Type.String({ minLength: 1 }),
@@ -25,6 +27,12 @@ export function createRespondOrchestratorRequestTool(opts?: {
       const response = readStringParam(params, "response", { required: true });
 
       const callerSessionKey = opts?.agentSessionKey?.trim() ?? "";
+      if (!callerSessionKey) {
+        return jsonResult({
+          status: "forbidden",
+          error: "Caller session key is required to respond to orchestrator requests.",
+        });
+      }
 
       // Look up request
       const request = getOrchestratorRequest(requestId);
@@ -35,10 +43,16 @@ export function createRespondOrchestratorRequestTool(opts?: {
         });
       }
 
+      if (request.status === "timeout") {
+        return jsonResult({
+          status: "expired",
+          error: `Request ${requestId} has expired`,
+        });
+      }
+
       // Check if already resolved
       if (
         request.status === "resolved" ||
-        request.status === "timeout" ||
         request.status === "cancelled" ||
         request.status === "orphaned"
       ) {
@@ -49,7 +63,19 @@ export function createRespondOrchestratorRequestTool(opts?: {
       }
 
       // Authorize: caller must be the designated parent
-      if (callerSessionKey && request.parentSessionKey !== callerSessionKey) {
+      const cfg = loadConfig();
+      const { mainKey, alias } = resolveMainSessionAlias(cfg);
+      const callerInternalKey = resolveInternalSessionKey({
+        key: callerSessionKey,
+        alias,
+        mainKey,
+      });
+      const parentInternalKey = resolveInternalSessionKey({
+        key: request.parentSessionKey,
+        alias,
+        mainKey,
+      });
+      if (parentInternalKey !== callerInternalKey) {
         return jsonResult({
           status: "forbidden",
           error: "Only the designated parent can respond to this request.",
@@ -58,16 +84,23 @@ export function createRespondOrchestratorRequestTool(opts?: {
 
       // Resolve
       try {
-        resolveOrchestratorRequest(requestId, response, callerSessionKey);
+        resolveOrchestratorRequest(requestId, response, callerInternalKey);
         return jsonResult({
           status: "ok",
           requestId,
           message: "Request resolved successfully.",
         });
       } catch (err) {
+        const errorText = err instanceof Error ? err.message : String(err);
+        if (/expired/i.test(errorText)) {
+          return jsonResult({
+            status: "expired",
+            error: errorText,
+          });
+        }
         return jsonResult({
           status: "error",
-          error: err instanceof Error ? err.message : String(err),
+          error: errorText,
         });
       }
     },

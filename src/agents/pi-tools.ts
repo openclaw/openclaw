@@ -168,6 +168,12 @@ export function createOpenClawCodingTools(options?: {
   disableMessageTool?: boolean;
   /** Whether the sender is an owner (required for owner-only tools). */
   senderIsOwner?: boolean;
+  /** Current run id for tool-level telemetry/context. */
+  runId?: string;
+  /** Max run duration in milliseconds for timeout-aware tools. */
+  runTimeoutMs?: number;
+  /** Run start timestamp (ms since epoch) for timeout-aware tools. */
+  runStartedAt?: number;
 }): AnyAgentTool[] {
   const execToolName = "exec";
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
@@ -382,6 +388,10 @@ export function createOpenClawCodingTools(options?: {
       requireExplicitMessageTarget: options?.requireExplicitMessageTarget,
       disableMessageTool: options?.disableMessageTool,
       requesterAgentIdOverride: agentId,
+      runId: options?.runId,
+      runTimeoutMs: options?.runTimeoutMs,
+      runStartedAt: options?.runStartedAt,
+      abortSignal: options?.abortSignal,
     }),
   ];
   // Security: treat unknown/undefined as unauthorized (opt-in, not opt-out)

@@ -38,8 +38,8 @@ export type SessionListRow = {
   lastAccountId?: string;
   transcriptPath?: string;
   messages?: unknown[];
-  runStatus?: string;
-  blockedReason?: string;
+  runStatus?: "running" | "blocked" | "input_required" | "idle" | "completed" | "error" | "timeout";
+  blockedReason?: "awaiting_orchestrator" | "compaction" | "unknown";
   pendingRequestCount?: number;
 };
 

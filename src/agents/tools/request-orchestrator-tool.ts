@@ -10,8 +10,11 @@ import {
   waitForResolution,
   getOrchestratorRequest,
 } from "../orchestrator-request-registry.js";
+import { optionalStringEnum } from "../schema/typebox.js";
 import { getRunByChildKey } from "../subagent-registry.js";
 import { jsonResult, readStringParam, readNumberParam } from "./common.js";
+
+const ORCHESTRATOR_PRIORITIES = ["normal", "high"] as const;
 
 const RequestOrchestratorSchema = Type.Object({
   message: Type.String({
@@ -28,8 +31,38 @@ const RequestOrchestratorSchema = Type.Object({
       description: "Max wait time. Default: 300",
     }),
   ),
-  priority: Type.Optional(Type.Union([Type.Literal("normal"), Type.Literal("high")])),
+  priority: optionalStringEnum(ORCHESTRATOR_PRIORITIES),
 });
+
+function isAbortSignal(value: unknown): value is AbortSignal {
+  return value instanceof AbortSignal;
+}
+
+function combineAbortSignals(a?: AbortSignal, b?: AbortSignal): AbortSignal | undefined {
+  if (!a && !b) {
+    return undefined;
+  }
+  if (a && !b) {
+    return a;
+  }
+  if (b && !a) {
+    return b;
+  }
+  if (a?.aborted) {
+    return a;
+  }
+  if (b?.aborted) {
+    return b;
+  }
+  if (typeof AbortSignal.any === "function" && isAbortSignal(a) && isAbortSignal(b)) {
+    return AbortSignal.any([a, b]);
+  }
+  const controller = new AbortController();
+  const onAbort = () => controller.abort();
+  a?.addEventListener("abort", onAbort, { once: true });
+  b?.addEventListener("abort", onAbort, { once: true });
+  return controller.signal;
+}
 
 export function createRequestOrchestratorTool(opts?: {
   agentSessionKey?: string;
@@ -44,11 +77,12 @@ export function createRequestOrchestratorTool(opts?: {
     description:
       "Request input from the parent orchestrator. Blocks until the parent responds, times out, or the run is aborted.",
     parameters: RequestOrchestratorSchema,
-    execute: async (_toolCallId, args) => {
+    execute: async (_toolCallId, args, signal) => {
       const params = args as Record<string, unknown>;
       const message = readStringParam(params, "message", { required: true });
       const context = readStringParam(params, "context");
-      const timeoutSeconds = readNumberParam(params, "timeoutSeconds") ?? 300;
+      const timeoutSecondsRaw = readNumberParam(params, "timeoutSeconds") ?? 300;
+      const timeoutSeconds = Math.max(10, Math.min(3600, Math.floor(timeoutSecondsRaw)));
       const priority = (params.priority as "normal" | "high") === "high" ? "high" : "normal";
 
       const currentSessionKey = opts?.agentSessionKey?.trim() ?? "";
@@ -74,15 +108,16 @@ export function createRequestOrchestratorTool(opts?: {
       // 3. Check parent availability (best-effort)
       let parentAvailable = true;
       try {
-        const sessions = await callGateway<{ sessions: Array<{ key: string }> }>({
-          method: "sessions.list",
-          params: { limit: 500 },
+        const resolved = await callGateway<{ key?: string }>({
+          method: "sessions.resolve",
+          params: {
+            key: parentSessionKey,
+          },
           timeoutMs: 5_000,
         });
-        const sessionList = Array.isArray(sessions?.sessions) ? sessions.sessions : [];
-        parentAvailable = sessionList.some((s) => s.key === parentSessionKey);
+        parentAvailable = typeof resolved?.key === "string" && resolved.key.trim().length > 0;
       } catch {
-        // If we can't check, assume available
+        parentAvailable = false;
       }
 
       if (!parentAvailable) {
@@ -96,7 +131,13 @@ export function createRequestOrchestratorTool(opts?: {
       const requestedTimeoutMs = timeoutSeconds * 1000;
       let effectiveTimeoutMs = requestedTimeoutMs;
 
-      if (opts?.runTimeoutMs && opts?.runStartedAt) {
+      if (
+        typeof opts?.runTimeoutMs === "number" &&
+        Number.isFinite(opts.runTimeoutMs) &&
+        opts.runTimeoutMs > 0 &&
+        typeof opts?.runStartedAt === "number" &&
+        Number.isFinite(opts.runStartedAt)
+      ) {
         const elapsed = Date.now() - opts.runStartedAt;
         const remainingMs = opts.runTimeoutMs - elapsed;
         const bufferMs = 30_000;
@@ -108,6 +149,7 @@ export function createRequestOrchestratorTool(opts?: {
         }
         effectiveTimeoutMs = Math.min(requestedTimeoutMs, remainingMs - bufferMs);
       }
+      const effectiveTimeoutSeconds = Math.max(1, Math.floor(effectiveTimeoutMs / 1000));
 
       // 5. Create request record
       let requestId: string;
@@ -137,10 +179,10 @@ export function createRequestOrchestratorTool(opts?: {
         `From: ${currentSessionKey}`,
         run.label ? `Label: "${run.label}"` : undefined,
         `Priority: ${priority}`,
-        `Timeout: ${timeoutSeconds}s${timeoutAt ? ` (expires at ${timeoutAt})` : ""}`,
+        `Timeout: ${effectiveTimeoutSeconds}s${timeoutAt ? ` (expires at ${timeoutAt})` : ""}`,
         "",
         `Question: ${message}`,
-        context ? `\nContext: ${context}` : undefined,
+        context ? `Context: ${context}` : undefined,
         "",
         "---",
         `Respond: respond_orchestrator_request(requestId="${requestId}", response="your guidance")`,
@@ -182,7 +224,12 @@ export function createRequestOrchestratorTool(opts?: {
 
       // 8. Block on resolution
       try {
-        const resolved = await waitForResolution(requestId, effectiveTimeoutMs, opts?.abortSignal);
+        const combinedAbortSignal = combineAbortSignals(signal, opts?.abortSignal);
+        const resolved = await waitForResolution(
+          requestId,
+          effectiveTimeoutMs,
+          combinedAbortSignal,
+        );
 
         return jsonResult({
           status: resolved.status,

@@ -214,6 +214,7 @@ export async function runEmbeddedAttempt(
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   const prevCwd = process.cwd();
   const runAbortController = new AbortController();
+  const runStartedAt = Date.now();
 
   log.debug(
     `embedded run start: runId=${params.runId} sessionId=${params.sessionId} provider=${params.provider} model=${params.modelId} thinking=${params.thinkLevel} messageChannel=${params.messageChannel ?? params.messageProvider ?? "unknown"}`,
@@ -314,6 +315,9 @@ export async function runEmbeddedAttempt(
           requireExplicitMessageTarget:
             params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
           disableMessageTool: params.disableMessageTool,
+          runId: params.runId,
+          runTimeoutMs: params.timeoutMs,
+          runStartedAt,
         });
     const tools = sanitizeToolsForGoogle({ tools: toolsRaw, provider: params.provider });
     logToolSchemasForGoogle({ tools, provider: params.provider });

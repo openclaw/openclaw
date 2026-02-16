@@ -59,6 +59,14 @@ export function createOpenClawTools(options?: {
   modelHasVision?: boolean;
   /** Explicit agent ID override for cron/hook sessions. */
   requesterAgentIdOverride?: string;
+  /** Current run id for tool-level telemetry/context. */
+  runId?: string;
+  /** Max run duration in milliseconds for timeout-aware tools. */
+  runTimeoutMs?: number;
+  /** Run start timestamp (ms since epoch) for timeout-aware tools. */
+  runStartedAt?: number;
+  /** Run abort signal for long-running blocking tools. */
+  abortSignal?: AbortSignal;
   /** Require explicit message targets (no implicit last-route sends). */
   requireExplicitMessageTarget?: boolean;
   /** If true, omit the message tool from the tool list. */
@@ -156,6 +164,10 @@ export function createOpenClawTools(options?: {
     }),
     createRequestOrchestratorTool({
       agentSessionKey: options?.agentSessionKey,
+      runId: options?.runId,
+      runTimeoutMs: options?.runTimeoutMs,
+      runStartedAt: options?.runStartedAt,
+      abortSignal: options?.abortSignal,
     }),
     createRespondOrchestratorRequestTool({
       agentSessionKey: options?.agentSessionKey,

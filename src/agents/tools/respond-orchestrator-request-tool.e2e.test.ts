@@ -106,7 +106,7 @@ describe("respond_orchestrator_request tool", () => {
       response: "answer",
     });
     const payload = parseResult(result);
-    expect(payload.status).toBe("already_resolved");
+    expect(payload.status).toBe("expired");
   });
 
   it("wakes blocked child tool call", async () => {
@@ -147,7 +147,23 @@ describe("respond_orchestrator_request tool", () => {
       response: "answer",
     });
     const payload = parseResult(result);
-    expect(payload.status).toBe("error");
+    expect(payload.status).toBe("expired");
     expect(payload.error).toMatch(/expired/i);
+  });
+
+  it("rejects when caller session key is missing", async () => {
+    mockGetRequest.mockReturnValue({
+      requestId: "req_abc123",
+      status: "pending",
+      parentSessionKey: "agent:main:main",
+    });
+
+    const tool = createRespondOrchestratorRequestTool();
+    const result = await tool.execute("tc-1", {
+      requestId: "req_abc123",
+      response: "answer",
+    });
+    const payload = parseResult(result);
+    expect(payload.status).toBe("forbidden");
   });
 });
