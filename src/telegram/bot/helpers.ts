@@ -197,6 +197,33 @@ export function buildSenderName(msg: Message) {
   return name || undefined;
 }
 
+export function resolveTelegramMediaPlaceholder(
+  msg:
+    | Pick<Message, "photo" | "video" | "video_note" | "audio" | "voice" | "document" | "sticker">
+    | undefined
+    | null,
+): string | undefined {
+  if (!msg) {
+    return undefined;
+  }
+  if (msg.photo) {
+    return "<media:image>";
+  }
+  if (msg.video || msg.video_note) {
+    return "<media:video>";
+  }
+  if (msg.audio || msg.voice) {
+    return "<media:audio>";
+  }
+  if (msg.document) {
+    return "<media:document>";
+  }
+  if (msg.sticker) {
+    return "<media:sticker>";
+  }
+  return undefined;
+}
+
 export function buildSenderLabel(msg: Message, senderId?: number | string) {
   const name = buildSenderName(msg);
   const username = msg.from?.username ? `@${msg.from.username}` : undefined;
@@ -318,15 +345,8 @@ export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
     const replyBody = (replyLike.text ?? replyLike.caption ?? "").trim();
     body = replyBody;
     if (!body) {
-      if (replyLike.photo) {
-        body = "<media:image>";
-      } else if (replyLike.video) {
-        body = "<media:video>";
-      } else if (replyLike.audio || replyLike.voice) {
-        body = "<media:audio>";
-      } else if (replyLike.document) {
-        body = "<media:document>";
-      } else {
+      body = resolveTelegramMediaPlaceholder(replyLike) ?? "";
+      if (!body) {
         const locationData = extractTelegramLocation(replyLike);
         if (locationData) {
           body = formatLocationText(locationData);
