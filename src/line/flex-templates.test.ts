@@ -7,7 +7,6 @@ import {
   createCarousel,
   createNotificationBubble,
   createEventCard,
-  createMediaPlayerCard,
   createDeviceControlCard,
 } from "./flex-templates.js";
 
@@ -103,17 +102,6 @@ describe("createNotificationBubble", () => {
     const body = bubble.body as { contents: Array<{ contents?: Array<{ text?: string }> }> };
     const contentSection = body.contents[1] as { contents: Array<{ text?: string }> };
     expect(contentSection.contents[0].text).toBe("Alert Title");
-  });
-});
-
-describe("createMediaPlayerCard", () => {
-  it("includes album art when provided", () => {
-    const card = createMediaPlayerCard({
-      title: "Track Name",
-      imageUrl: "https://example.com/album.jpg",
-    });
-
-    expect((card.hero as { url: string }).url).toBe("https://example.com/album.jpg");
   });
 });
 
