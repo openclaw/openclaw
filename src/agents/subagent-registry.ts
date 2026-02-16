@@ -436,6 +436,8 @@ export function replaceSubagentRunAfterSteer(params: {
     cleanupCompletedAt: undefined,
     cleanupHandled: false,
     suppressAnnounceReason: undefined,
+    announceRetryCount: undefined,
+    lastAnnounceRetryAt: undefined,
     archiveAtMs,
     runTimeoutSeconds,
   };
