@@ -47,7 +47,7 @@ export async function readPostCompactionContext(workspaceDir: string): Promise<s
  * Extract named H2 sections from markdown content.
  * Matches "## SectionName" and captures until the next "## " or end of string.
  */
-function extractSections(content: string, sectionNames: string[]): string[] {
+export function extractSections(content: string, sectionNames: string[]): string[] {
   const results: string[] = [];
   const lines = content.split("\n");
 
