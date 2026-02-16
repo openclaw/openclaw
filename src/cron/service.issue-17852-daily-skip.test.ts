@@ -39,14 +39,8 @@ describe("issue #17852 - daily cron jobs should not skip days", () => {
     };
   }
 
-  it("recomputeNextRunsForMaintenance should NOT advance past-due nextRunAtMs", () => {
-    // Simulate: job scheduled for 3:00 AM, timer processing happens at 3:00:01
-    // The job was NOT executed in this tick (e.g., it became due between
-    // findDueJobs and the post-execution block).
-    const threeAM = Date.parse("2026-02-16T03:00:00.000Z");
-    const now = threeAM + 1_000; // 3:00:01
-
-    const job: CronJob = {
+  function createDailyThreeAmJob(threeAM: number): CronJob {
+    return {
       id: "daily-job",
       name: "daily 3am",
       enabled: true,
@@ -56,9 +50,19 @@ describe("issue #17852 - daily cron jobs should not skip days", () => {
       createdAtMs: threeAM - DAY_MS,
       updatedAtMs: threeAM - DAY_MS,
       state: {
-        nextRunAtMs: threeAM, // Past-due by 1 second
+        nextRunAtMs: threeAM,
       },
     };
+  }
+
+  it("recomputeNextRunsForMaintenance should NOT advance past-due nextRunAtMs", () => {
+    // Simulate: job scheduled for 3:00 AM, timer processing happens at 3:00:01
+    // The job was NOT executed in this tick (e.g., it became due between
+    // findDueJobs and the post-execution block).
+    const threeAM = Date.parse("2026-02-16T03:00:00.000Z");
+    const now = threeAM + 1_000; // 3:00:01
+
+    const job = createDailyThreeAmJob(threeAM);
 
     const state = createMockState([job], now);
     recomputeNextRunsForMaintenance(state);
@@ -75,19 +79,7 @@ describe("issue #17852 - daily cron jobs should not skip days", () => {
     const threeAM = Date.parse("2026-02-16T03:00:00.000Z");
     const now = threeAM + 1_000; // 3:00:01
 
-    const job: CronJob = {
-      id: "daily-job",
-      name: "daily 3am",
-      enabled: true,
-      schedule: { kind: "cron", expr: "0 3 * * *", tz: "UTC" },
-      payload: { kind: "systemEvent", text: "daily task" },
-      sessionTarget: "main",
-      createdAtMs: threeAM - DAY_MS,
-      updatedAtMs: threeAM - DAY_MS,
-      state: {
-        nextRunAtMs: threeAM, // Past-due by 1 second
-      },
-    };
+    const job = createDailyThreeAmJob(threeAM);
 
     const state = createMockState([job], now);
     recomputeNextRuns(state);
