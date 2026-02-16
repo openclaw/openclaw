@@ -249,15 +249,15 @@ function buildChatCommands(): ChatCommandDefinition[] {
     defineChatCommand({
       key: "subagents",
       nativeName: "subagents",
-      description: "List, kill, log, or steer subagent runs for this session.",
+      description: "List, kill, log, spawn, or steer subagent runs for this session.",
       textAlias: "/subagents",
       category: "management",
       args: [
         {
           name: "action",
-          description: "list | kill | log | info | send | steer",
+          description: "list | kill | log | info | send | steer | spawn",
           type: "string",
-          choices: ["list", "kill", "log", "info", "send", "steer"],
+          choices: ["list", "kill", "log", "info", "send", "steer", "spawn"],
         },
         {
           name: "target",
