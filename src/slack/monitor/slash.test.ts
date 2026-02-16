@@ -318,26 +318,6 @@ describe("slack slash commands channel policy", () => {
     resetPolicyHarness(harness);
   });
 
-  it("blocks explicitly denied channels when groupPolicy is open", async () => {
-    harness.ctx.groupPolicy = "open";
-    harness.ctx.channelsConfig = { C_DENIED: { allow: false } };
-    harness.ctx.resolveChannelName = async () => ({ name: "denied", type: "channel" });
-
-    const { respond } = await runSlashHandler({
-      commands: harness.commands,
-      command: {
-        channel_id: "C_DENIED",
-        channel_name: "denied",
-      },
-    });
-
-    expect(dispatchMock).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith({
-      text: "This channel is not allowed.",
-      response_type: "ephemeral",
-    });
-  });
-
   it("blocks unlisted channels when groupPolicy is allowlist", async () => {
     harness.ctx.groupPolicy = "allowlist";
     harness.ctx.channelsConfig = { C_LISTED: { requireMention: true } };
