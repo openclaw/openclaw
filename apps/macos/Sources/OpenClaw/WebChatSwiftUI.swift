@@ -339,12 +339,6 @@ final class WebChatSwiftUIWindowController {
         effectView.autoresizingMask = [.width, .height]
         let rootView = effectView
 
-        controller.view.wantsLayer = true
-        controller.view.layer?.cornerCurve = .continuous
-        controller.view.layer?.cornerRadius = cornerRadius
-        controller.view.layer?.masksToBounds = true
-        controller.view.layer?.backgroundColor = NSColor.clear.cgColor
-
         hosting.view.translatesAutoresizingMaskIntoConstraints = false
         hosting.view.wantsLayer = true
         hosting.view.layer?.cornerCurve = .continuous
