@@ -1,20 +1,10 @@
-/index.md
-# OpenClaw OS
+# OpenClaw Module
 
-## Repository Structure
+Welcome to this module of OpenClaw.
 
-### Top‑Level Folders
-- [Swabble](Swabble/)
-- [apps](apps/)
-- [assets](assets/)
-- [docs](docs/)
-- [extensions](extensions/)
-- [git-hooks](git-hooks/)
-- [packages](packages/)
-- [patches](patches/)
-- [scripts](scripts/)
-- [skills](skills/)
-- [src](src/)
-- [test](test/)
-- [ui](ui/)
-- [vendor](vendor/)
+## Navigation
+- [Home](/)
+- [Up One Level](../)
+
+## Contents
+This section will expand as this module grows.
